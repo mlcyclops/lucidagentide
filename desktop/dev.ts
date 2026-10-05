@@ -63,14 +63,14 @@ import {
   decodeWireFrames, foldArtifacts, storeArtifact, type ArtifactIo, type ArtifactKind, type CompositionInput,
   type CreatorArtifact,
 } from "./creator_image.ts"; // CREATOR-IMG (ADR-0291): generation, mixing, sheets, GIFs, memes
-import { decodeTimelineDoc, openEditor, saveEdit, type EditorIo } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): the follow-along audio editor
+import { decodeTimelineDoc, measureEditorAlignment, openEditor, saveEdit, type EditorIo } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): the follow-along audio editor
 import { decodeMixGraph, mixerTracks, renderAndSaveMix } from "./creator_mixer.ts"; // CREATOR-5 (ADR-0289): the mixer
 import { openComfyProgress, runRenderPipeline, type PipelineDeps, type ScanVerdict } from "./creator_pipeline.ts"; // CREATOR-3 (ADR-0287): the video/3D pipeline + its /ws telemetry
 import { blenderJobNeed, runBlenderRender, type SpawnLike } from "./creator_blender.ts"; // CREATOR-3: Blender background renders
 import { manifestCapabilities, parseModelManifest, reconcileManifest } from "../harness/creator/model_manifest.ts"; // CREATOR-3: declared models, reconciled against the probe
 import type { MediaKind } from "../harness/creator/comfy_stream.ts"; // CREATOR-3: the closed media kinds
 import { scanAndDecide } from "../harness/security/gate.ts"; // CREATOR-3: the fail-closed gate every artifact's metadata passes
-import { ProbeCache, probeProvider, type ProbeDeps, type ProbeResult } from "./creator_probe.ts"; // CREATOR-1 (ADR-0292): capability probes
+import { ProbeCache, probeProvider, type ProbeDeps, type ProbeResult, type WhistleProbeAnswer } from "./creator_probe.ts"; // CREATOR-1 (ADR-0292): capability probes
 import { DriftActivityLog, DriftClient, defaultDriftExePaths, driftSessionEndpointDef, driftSessionPath, driftSessionStatus, parseDriftSession, planDriftLibraryImport, type DriftActivityEntry, type DriftSessionState } from "./creator_drift.ts"; // CREATOR-DRIFT: CutWire Drift over its localhost agent protocol
 import { driftOpPolicy, isDriftMutation, summarizeDriftCall } from "../harness/creator/drift_policy.ts"; // CREATOR-DRIFT: the shared CUI / mutation policy
 import {
@@ -97,7 +97,10 @@ import { digestSpokenReply } from "../harness/voice/spoken_digest.ts"; // P-VOIC
 import { parseVoiceEndpointConfig } from "../harness/voice/voice_endpoint.ts"; // P-VOICE.7: portable endpoint contract
 import { activateVoiceEndpoint, importVoiceEndpoint, removeVoiceEndpoint, type VoiceSettings } from "./settings_store.ts";
 import { enclaveHostSet, httpHost, lockdownEgressExempt, lockdownVoiceVerdict, type VoiceKind } from "./lockdown_route.ts"; // CUI lockdown: cloud voice refused, loopback/enclave engines allowed
-import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, sttTransportFailed } from "../harness/voice/transcription.ts";
+import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, WhistleSttBackend, sttTransportFailed } from "../harness/voice/transcription.ts";
+import { WhistleClient, type WhistleTranscriber } from "../harness/voice/whistle_client.ts"; // CREATOR-WHISTLE (ADR-0432): the one in-process STT worker
+import { WHISTLE_ASSETS, WHISTLE_MODEL_SHA256, resolveWhistleDir, verifyWhistleAsset } from "./whistle_assets.ts"; // CREATOR-WHISTLE: pinned assets
+import { stageWhistleAssets } from "./whistle_stage.ts"; // CREATOR-WHISTLE: dev-run staging of the pinned assets
 import { installWhisper, removeWhisperModel, shouldAutostartWhisper, startWhisper, stopWhisper, whisperStatus as whisperRuntimeStatus, type WhisperRuntimeDeps } from "./whisper_runtime.ts"; // P-STT.2b: managed offline Whisper
 import { downloadWhisperModel, resolveWhisperBin, spawnWhisperServer } from "./whisper_manager.ts";
 import { stageWhisperBinary } from "./whisper_binary_stage.ts"; // P-STT.7: dev-run pinned-binary staging
@@ -196,6 +199,14 @@ async function transcribeClip(audio: Uint8Array, mimeType?: string, language?: s
     const er = await new ElevenLabsSttBackend({ apiKey: key }).transcribe(audio, topts);
     return { text: er.text, note: er.note ?? "" };
   }
+  // CREATOR-WHISTLE (ADR-0432 decision 4): the in-process model. No server, no port; a missing or
+  // mismatched asset is the note, never a silent fall-through to whisper.
+  if (v.sttProvider === "whistle") {
+    const w = await whistleClient();
+    if (!w.ok) return { text: "", note: `Whistle STT unavailable (${w.reason})` };
+    const wr = await new WhistleSttBackend(whistleTranscriber(w.client)).transcribe(audio, topts);
+    return { text: wr.text, note: wr.note };
+  }
   let r = await new WhisperCppSttBackend({ baseUrl: v.sttUrl }).transcribe(audio, topts);
   if (sttTransportFailed(r)) r = await new OpenAiCompatibleSttBackend({ baseUrl: v.sttUrl, apiKey: process.env.OPENAI_API_KEY, model: process.env.LUCID_STT_MODEL || "whisper-1" }).transcribe(audio, topts);
   return { text: r.text, note: r.note ?? "" };
@@ -220,6 +231,114 @@ function voiceLockdownRefusal(kind: VoiceKind, engine: string, v: VoiceSettings,
 }
 
 function whisperModelDir(): string { return join(homedir(), ".omp", "whisper"); }
+
+// ── CREATOR-WHISTLE (ADR-0432): the in-process STT + word-timing model ──────────────────────────────
+// One worker for the whole engine (the model is process-global and not thread-safe), started on the first
+// align / probe / STT call, never at boot. Resolution mirrors whisper: LUCID_WHISTLE_DIR, then the
+// packaged <resources>/whistle, then ~/.omp/whistle, which a dev run stages ON DEMAND from the pinned
+// URLs once. All three files are hashed and checked against the pins before the first needle_load; a
+// mismatch, a failed download or a dead worker is a NAMED reason, retried on the next call, never cached.
+const WHISTLE_STAGED_DIR = join(homedir(), ".omp", "whistle");
+
+function whistleDir(): string | null {
+  const r = resolveWhistleDir({
+    env: process.env,
+    exists: existsSync,
+    resourcesPath: process.env.LUCID_RESOURCES || engineDesktopDir(import.meta.dir, process.execPath, existsSync),
+    stagedDir: WHISTLE_STAGED_DIR,
+  });
+  return r ? r.dir : null;
+}
+
+/** Null until a dev run has tried to stage; then the result of that ONE attempt (a failure is the probe's
+ *  not-installed detail). */
+let whistleStage: Promise<{ ok: boolean; reason: string }> | null = null;
+
+/** The staged-or-bundled dir, staging once on a dev run that has none. `reason` names why there is none. */
+async function ensureWhistleDir(): Promise<{ ok: true; dir: string } | { ok: false; reason: string }> {
+  const found = whistleDir();
+  if (found) return { ok: true, dir: found };
+  if (!whistleStage) {
+    whistleStage = stageWhistleAssets({}, WHISTLE_STAGED_DIR).then((r) => {
+      if (r.ok) console.log(`[whistle] staged ${r.staged.length ? r.staged.join(", ") : "nothing new"} in ${r.dir}`);
+      else console.warn(`[whistle] staging failed: ${r.reason}`);
+      return { ok: r.ok, reason: r.ok ? "" : r.reason };
+    });
+  }
+  const staged = await whistleStage;
+  const after = staged.ok ? whistleDir() : null;
+  if (after) return { ok: true, dir: after };
+  return { ok: false, reason: staged.ok ? `Whistle assets are missing from ${WHISTLE_STAGED_DIR}` : staged.reason };
+}
+
+type WhistleReady = { ok: true; client: WhistleClient } | { ok: false; reason: string };
+let whistleLive: WhistleClient | null = null;
+let whistleStarting: Promise<WhistleReady> | null = null;
+
+async function startWhistle(): Promise<WhistleReady> {
+  const dir = await ensureWhistleDir();
+  if (!dir.ok) return dir;
+  const bytes: Uint8Array[] = [];
+  for (const spec of WHISTLE_ASSETS) {
+    let data: Uint8Array;
+    try { data = new Uint8Array(readFileSync(join(dir.dir, spec.name))); }
+    catch (e) { return { ok: false, reason: `${spec.name}: cannot read (${e instanceof Error ? e.message : String(e)})` }; }
+    const hasher = new Bun.CryptoHasher("sha256");
+    hasher.update(data);
+    const verdict = verifyWhistleAsset(spec, data, hasher.digest("hex"));
+    if (!verdict.ok) return { ok: false, reason: verdict.reason };
+    bytes.push(data);
+  }
+  try {
+    const client = await WhistleClient.start({ gluePath: join(dir.dir, WHISTLE_ASSETS[0]!.name), wasm: bytes[1]!, cact: bytes[2]!, modelSha256: WHISTLE_MODEL_SHA256 });
+    whistleLive = client;
+    console.log(`[whistle] worker ready (${dir.dir})`);
+    return { ok: true, client };
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** The live worker, or the reason there is none. A success is cached; a failure is not (the next call
+ *  verifies and starts again); a worker that dies mid-call is dropped by `whistleTranscriber`. */
+async function whistleClient(): Promise<WhistleReady> {
+  if (whistleLive) return { ok: true, client: whistleLive };
+  if (!whistleStarting) {
+    whistleStarting = startWhistle().finally(() => { whistleStarting = null; });
+  }
+  return whistleStarting;
+}
+
+/** A transcriber view of the live client that forgets the client when the worker reports itself dead, so
+ *  the next caller starts a fresh one instead of talking to a corpse. */
+function whistleTranscriber(client: WhistleClient): WhistleTranscriber {
+  return {
+    modelSha256: client.modelSha256,
+    async transcribe(pcm, opts) {
+      try { return await client.transcribe(pcm, opts); }
+      catch (e) {
+        if (e instanceof Error && /Whistle worker/.test(e.message) && whistleLive === client) { whistleLive = null; client.close(); }
+        throw e;
+      }
+    },
+  };
+}
+
+/** The probe's witness (creator_probe.ts `probeWhistle`): assets resolved and verified, worker started, one
+ *  second of silence decoded to empty text. Anything else is the exact reason, verbatim. */
+async function whistleProbe(): Promise<WhistleProbeAnswer> {
+  const dir = await ensureWhistleDir();
+  if (!dir.ok) return { state: "not-installed", detail: dir.reason, version: "" };
+  const w = await whistleClient();
+  if (!w.ok) return { state: "unreachable", detail: w.reason, version: "" };
+  try {
+    const t = await whistleTranscriber(w.client).transcribe(new Float32Array(16000), { wordTimestamps: false });
+    if (t.text.trim()) return { state: "unreachable", detail: "Whistle answered non-empty text for silence", version: "" };
+    return { state: "ready", detail: `Verified ${WHISTLE_ASSETS.length} pinned assets in ${dir.dir}; transcribed 1 s of silence to empty text.`, version: `whistle ${WHISTLE_MODEL_SHA256.slice(0, 12)}` };
+  } catch (e) {
+    return { state: "unreachable", detail: e instanceof Error ? e.message : String(e), version: "" };
+  }
+}
 
 // P-VOICE.7: the same-machine handoff mailbox. The DGX Loader's "Send to LUCID" writes
 // <home>/.omp/voice_endpoints/<id>.json (ADR-0017 in that repo); LUCID auto-scans on every endpoints
@@ -958,6 +1077,7 @@ const probeDeps: ProbeDeps = {
   driftSession: driftSessionState,
   platform: process.platform,
   env: process.env,
+  whistle: whistleProbe, // CREATOR-WHISTLE (ADR-0432): the engine's own in-process witness
 };
 
 function creatorRegistryData(): CreatorRegistryData {
@@ -4601,6 +4721,33 @@ return Bun.serve({
           buckets: typeof b.buckets === "number" ? b.buckets : undefined,
         });
         return json({ ok: r.ok, error: r.error, session: r.session });
+      }
+      // CREATOR-WHISTLE (ADR-0432 decision 4): measure the word timing of one library track with the
+      // in-process model. The track is read by id (no upload), refused by name exactly as the editor
+      // refuses it, and the answer carries the mapped `measured` items plus what the model heard. There is
+      // no creatorGate: the provider has no endpoint and its registry posture is on-device (checked, not
+      // assumed), so nothing leaves the process. Admission still goes through the job ledger: a 3 minute
+      // take is ~45 s of CPU, and a hot box refuses with the measured reason.
+      if (p === "/api/creator/align" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator editor is only in the Creator build." });
+        const b = await readBody<{ trackId?: unknown; text?: unknown; language?: unknown }>(req).catch(() => null);
+        if (!b) return json({ ok: false, error: "That align request was not JSON." });
+        if (creatorSpec("whistle").cui.posture !== "on-device") return json({ ok: false, error: "Whistle is not registered as on-device, so the alignment is refused." });
+        const trackId = typeof b.trackId === "string" ? b.trackId.trim() : "";
+        const w = await whistleClient();
+        if (!w.ok) return json({ ok: false, error: w.reason });
+        const track = foldLibrary(libraryIo.readText(libraryLedger(CREATOR_DIR))).find((t) => t.id === trackId);
+        const admit = await admitCreatorJob("align", `align: ${track?.title || trackId || "(no track)"}`.slice(0, 80), "whistle", { gpu: false });
+        if (!admit.ok) return json({ ok: false, error: admit.reason, data: { jobId: admit.jobId } });
+        const r = await measureEditorAlignment(libraryIo, CREATOR_DIR, {
+          trackId,
+          text: typeof b.text === "string" ? b.text : undefined,
+          language: typeof b.language === "string" ? b.language : undefined,
+        }, whistleTranscriber(w.client));
+        finishJob(jobIo, CREATOR_DIR, admit.jobId, r.ok ? "done" : "failed", r.ok ? "" : r.error);
+        if (!r.ok) return json({ ok: false, error: r.error, data: { jobId: admit.jobId } });
+        const { trackId: id, items, note, alignedBy, matched, interpolated, transcript, language, windows } = r;
+        return json({ ok: true, data: { trackId: id, items, note, alignedBy, matched, interpolated, transcript, language, windows, jobId: admit.jobId } });
       }
       // CREATOR-2: save an edit. The document is gated off the wire fail-closed (one malformed word refuses
       // the body), then rendered and APPENDED as a remix - the edited track keeps its bytes and its row.
