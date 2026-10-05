@@ -265,6 +265,8 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 - 🏷️ **Showback-ready** - built for teams that need to attribute AI costs to projects or users
 - 🪪 **AI-authored code ledger** - a tamper-evident count of *which model wrote which lines*, per repo and identity (authorship attribution, not just git activity)
 
+The Main GUI ledger records only live, successfully completed write and edit calls from the Main session, not shared utility sessions. Edit counts come from omp's applied diff, including every `replace_all` occurrence; preview truncation does not reduce them. Failed, rejected, quarantined, cancelled, and replayed calls add no sample. Writes retain the existing convention: all written content lines are additions. Existing historical samples are not rewritten. See ADR-0432 and `make demo-P-LOC.5`.
+
 > **🏛️ Enterprise rollups (premium, coming soon).** A separately-licensed add-on rolls this showback
 > up into executive **BI dashboards** - Power BI (GCC-High), QuickSight, Looker, SharePoint, or an
 > airgap-friendly single-file HTML view - and adds **loop-efficiency and ROI** reporting per model and
