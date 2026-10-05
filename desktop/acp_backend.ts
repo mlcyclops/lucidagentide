@@ -25,7 +25,8 @@ import { currentWorkspace } from "./workspace.ts";
 import { PendingWrites } from "./checkout_owners.ts"; // P-OWN.1: ownership only for writes that completed
 import { PREVIEW_ACTIVITY, previewActivityLabel, type PreviewActivityKind } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
 import { extractToolImages } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): images out of tool results
-import { recordAiLoc } from "./ailoc_log.ts"; // P-LOC.4 (ADR-0211): GUI-owned AI-LOC ledger the dashboard reads
+import { AiLocCaptureTracker } from "./ailoc_capture.ts";
+import { toolCode } from "./tool_code.ts";
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
 import { flavorInfo, normalizeUiMode, resolveBuildFlavor, uiModePosture, type UiMode } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279)
@@ -552,6 +553,7 @@ class Backend {
   // session's task to the other writers (the user's last prompt, clipped).
   onAuthoredPath: ((path: string) => void) | null = null;
   private readonly pendingWrites = new PendingWrites();
+  private readonly aiLoc = new AiLocCaptureTracker();
   checkoutBriefing: (() => Promise<string>) | null = null;
   /** ADR-0414: drains the operator notes still waiting for "master" into a block that opens the next
    *  prompt ("" when none). dev.ts wires interject_store.carryPendingNotes. */
@@ -992,6 +994,16 @@ class Backend {
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
+          // P-LOC.5: exclude history and shared utility sessions, whose model is not Main's.
+          const notificationSessionId = typeof params?.sessionId === "string" ? params.sessionId : this.sessionId;
+          if (!this.replaying && this.sessionId && notificationSessionId === this.sessionId &&
+              (u?.sessionUpdate === "tool_call" || u?.sessionUpdate === "tool_call_update")) {
+            const a = attribution();
+            this.aiLoc.observe(notificationSessionId, u, {
+              model: this.activeModel() || lastModel(), identity: a.identity,
+              identitySource: a.source, repo: currentWorkspace(),
+            });
+          }
           switch (u?.sessionUpdate) {
             case "agent_message_chunk": if (u.content?.type === "text") this.emit({ type: "token", text: u.content.text }); break;
             // P-ACP.1 (ADR-0027): the model's reasoning stream. omp emits these BEFORE the answer when
@@ -1027,30 +1039,10 @@ class Backend {
                 // job-coordination calls on background subagents (omp 18 moved them from the task tool to
                 // the `hub` tool) are internal bookkeeping while a task runs - no separate tool chips.
               } else {
-                // P-CHAT.1 (ADR-0104): carry the tool's authored code for the chat's inline preview. A
-                // write's `content`, or an edit's `oldText`/`newText` (→ diff). Bounded so a huge file can't
-                // bloat the event stream; the content is already gate-scanned (it's the same tool_call text).
-                const CODE_CAP = 64 * 1024;
-                const clip = (s: unknown) => (typeof s === "string" ? s.slice(0, CODE_CAP) : undefined);
-                // The agent often writes/edits with a RELATIVE path (relative to the workspace it runs in).
-                // Preview + "Open in editor" need an ABSOLUTE path, so resolve any relative path against the
-                // workspace here (a path that's already file://, a URL, or OS-absolute is left untouched).
-                const absPath = absWorkspacePath; // P-PREVIEW.11 (ADR-0308): shared with openPreview() below
-                const codePath = absPath(typeof ri.path === "string" ? ri.path : typeof ri.file_path === "string" ? ri.file_path : "");
-                let code: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } | undefined;
-                if (typeof ri.content === "string") code = { path: codePath, content: clip(ri.content) };
-                // `replace` mode (ADR-0105, our configured edit tool) sends `edits: [{ old_text, new_text }]`
-                // (one call may bundle several hunks) — join them into one before/after pair for the diff.
-                // camelCase + top-level are kept as fallbacks for other edit-tool variants.
-                else if (Array.isArray(ri.edits) && ri.edits.length) {
-                  const olds = ri.edits.map((e: any) => String(e?.old_text ?? e?.oldText ?? "")).join("\n");
-                  const news = ri.edits.map((e: any) => String(e?.new_text ?? e?.newText ?? "")).join("\n");
-                  code = { path: codePath, oldText: clip(olds) ?? "", newText: clip(news) ?? "" };
-                }
-                else if (typeof ri.old_text === "string" || typeof ri.new_text === "string") code = { path: codePath, oldText: clip(ri.old_text) ?? "", newText: clip(ri.new_text) ?? "" };
-                else if (typeof ri.oldText === "string" || typeof ri.newText === "string") code = { path: codePath, oldText: clip(ri.oldText) ?? "", newText: clip(ri.newText) ?? "" };
-                // omp's default `hashline` edit sends a patch in a single `input` string (kept for completeness).
-                else if (typeof ri.input === "string" && (u.kind === "edit" || /\bedit\b/i.test(String(u.title ?? "")))) code = { path: codePath, patch: clip(ri.input) };
+                // Display previews are bounded. P-LOC.5 counts the successful result independently.
+                const absPath = absWorkspacePath;
+                const code = toolCode(u, absPath);
+                const codePath = code?.path ?? absPath(typeof ri.path === "string" ? ri.path : typeof ri.file_path === "string" ? ri.file_path : "");
                 // P-EVAL.4 (ADR-0318): carry omp's toolCallId so the real tool name (self-reported by the
                 // tool_meta extension, which is the only place it exists) can be joined onto this call.
                 const callId = typeof u.toolCallId === "string" ? u.toolCallId : "";
@@ -1062,22 +1054,10 @@ class Backend {
                 // P-PROGRESS.1: a call that arrives already terminal never gets a tool_call_update; settle its
                 // step now so the live row does not spin forever.
                 if (callId && !this.openCalls.has(callId)) { this.stepsDone++; this.emit({ type: "tool-meta", id: callId, name: String(u.kind ?? "tool"), ok: u.status === "completed", elapsedMs: 0 }); }
-                // P-LOC.4 (ADR-0211): mirror this authored write/edit into the GUI-owned AI-LOC ledger the
-                // dashboard reads. The gate ALSO records it into agent_obs.duckdb (the BI system-of-record),
-                // but the omp child holds that DuckDB read-write for the whole session, so the desktop can't
-                // read it live — this JSONL is the live-readable copy (same linediff count as the chat chip).
+                // P-OWN.1: ownership also waits for a completed write, independently of the AI-LOC ledger.
                 if (code) {
-                  // P-OWN.1: the path becomes this session's only once the call completes (tool_call_update below).
                   const now = code.path ? this.pendingWrites.opened(callId, code.path, u.status) : null;
                   if (now && this.onAuthoredPath) { try { this.onAuthoredPath(now); } catch { /* the ledger never breaks the chat */ } }
-                  const a = attribution();
-                  recordAiLoc({
-                    model: this.activeModel() || lastModel(),
-                    identity: a.identity, identitySource: a.source, repo: currentWorkspace(),
-                    filePath: code.path || undefined, tool: String(u.kind ?? "edit"),
-                    code: { content: code.content, oldText: code.oldText, newText: code.newText, patch: code.patch },
-                    sessionId: this.sessionId ?? undefined,
-                  });
                 }
                 // P-PREVIEW.2 (ADR-0096): if this write/edit produced a browser-previewable file, tell the UI
                 // so it can auto-surface it in the Preview panel. Pure detection (previewablePath); the path
@@ -1704,6 +1684,7 @@ class Backend {
     this.turnSink = null;
     this.askActive = false;
     this.openCalls.clear();
+    this.aiLoc.clear();
     this.chatGate.end();
     try { for (const fn of this.permPending.values()) fn(null); }
     finally { turn?.finish(); }
@@ -1717,8 +1698,13 @@ class Backend {
     this.clearTurnRecovery();
     await this.start();
     await this.releaseOtherSession(this.acp!, id);
-    await this.acp!.request("session/load", { sessionId: id, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }).catch(() => {});
-    this.sessionId = id;
+    this.replaying = true;
+    try {
+      await this.acp!.request("session/load", { sessionId: id, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }).catch(() => {});
+      this.sessionId = id;
+    } finally {
+      this.replaying = false;
+    }
   }
 
   async newSession(): Promise<void> {
@@ -1748,7 +1734,8 @@ class Backend {
     // Drop any parked permission (deny) but KEEP permissionMode — the user's Ask choice survives a respawn.
     for (const [, fn] of this.permPending) fn(null);
     this.permPending.clear(); this.pendingPerms = 0; this.askActive = false;
-    this.openCalls.clear(); // P-STALL.2: a respawn orphans any tracked calls
+    this.openCalls.clear();
+    this.aiLoc.clear(); // P-STALL.2: a respawn orphans any tracked calls
   }
 
   // P-STALL.2 (ADR-0263): there is NO time-based turn cutoff anymore. P-STALL.1's 10-minute silence
@@ -1771,6 +1758,7 @@ class Backend {
     const turn = new LiveTurn<ChatEvent>(options?.prompt ?? text, this.sessionId, () => pendingSnapshot(this.openCalls, Date.now()), options?.requestId);
     this.recoveryTurn = turn;
     this.openCalls.clear();
+    this.aiLoc.clear();
     turn.attach(onEventRaw, options?.signal);
     const onEvent = (e: ChatEvent) => turn.emit(e);
     let lockBlocked = false; // ADR-0217: the turn was refused because AskSage lockdown couldn't be satisfied
@@ -1828,7 +1816,8 @@ class Backend {
     this.turnSink = sink; // P-RECOVER.1: what clearTurnRecovery may release
     this.streamArm = arm; // P-HEALTH.3: a tool-call streaming beat is activity, exactly like an ACP update
     this.turnStartedAtMs = Date.now(); // P-INTERJECT.1: the /api/processes master-turn start stamp
-    this.openCalls.clear(); // P-STALL.2: fresh turn, fresh pending-call set
+    this.openCalls.clear();
+    this.aiLoc.clear(); // P-STALL.2: fresh turn, fresh pending-call set
     this.pulse.reset(); // P-LIVENESS.1: a new turn never inherits the last one's evidence
     this.recoverMark.clear(); // P-HEALTH.2: a new run never inherits a previous run's recovery marker
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
@@ -1946,6 +1935,7 @@ class Backend {
       if (this.recoveryTurn === turn) {
       this.writeClaims.endTurn("master"); // P-WAIT.1: the files this turn wrote are free for other workers
       this.openCalls.clear(); // P-STALL.2: pending-call tracking is per-turn
+      this.aiLoc.clear();
       this.askActive = false;
       this.chatGate.end(); // P-KG-INGEST.3: chat turn done → release any extraction waiting to resume
       // Fail-closed: any permission still parked at turn's end (stall/disconnect) is denied.
@@ -2006,6 +1996,7 @@ class Backend {
         this.turnStartedAtMs = null;
         this.askActive = false;
         this.openCalls.clear();
+        this.aiLoc.clear();
         this.chatGate.end();
         for (const fn of this.permPending.values()) fn(null);
       }
@@ -2649,6 +2640,7 @@ class Backend {
     for (const fn of this.permPending.values()) fn(null);
     this.permPending.clear(); this.pendingPerms = 0;
     this.openCalls.clear();
+    this.aiLoc.clear();
     console.error(`[recover] master agent process is gone; starting a replacement${this.reviveId ? " and resuming the same chat session" : ""}`);
   }
 

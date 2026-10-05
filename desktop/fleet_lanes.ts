@@ -43,6 +43,7 @@ import { stopCallProcesses, workerProcesses } from "./call_pulse_proc.ts"; // P-
 import type { ProcRow } from "./leftover_reaper.ts";
 import { WriteClaims, type WaitView } from "./write_claims.ts"; // P-WAIT.1: file-scoped write waits
 import { toolInput, toolIntent } from "./tool_input.ts"; // P-PROGRESS.1: one extractor for lanes and the master
+import { toolCode } from "./tool_code.ts";
 import { laneHoldsSession, type OwnerLane } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
 import type { RepoContext } from "./repo_identity.ts";
 // P-REMOTE.16 (ADR-0431): the rich turn shapes a remote guest replays, and the desktop's one diffstat
@@ -1326,10 +1327,9 @@ export class FleetLaneManager {
           if (title && lane.liveTools.length < 40) lane.liveTools.push(title.slice(0, 160));
           trackToolCall(lane.openCalls, u, lane.lastActivityAt); // P-HEALTH.1: this call is now awaited
           this.#deps.repo?.observe(typeof params?.sessionId === "string" ? params.sessionId : lane.sessionId, u, lane.cwd); // P-REPO.1
-          // P-FLEET.L3 (mirrors P-CHAT.1): the authored code rides the CALL's rawInput - a write's
-          // `content`, an edit's `edits[{old_text,new_text}]` joined into one before/after pair, or omp's
-          // hashline patch in a single `input` string. Relative paths resolve against the LANE's cwd.
-          const code = this.#toolCode(lane, u);
+          // P-FLEET.L3 (mirrors P-CHAT.1): shared extraction handles writes, replacement pairs, and
+          // patches. Resolve relative paths against this LANE's cwd, never the master's workspace.
+          const code = toolCode(u, (path) => !path || /^(file:\/\/|https?:\/\/|[A-Za-z]:[\\/]|\/|\\\\|~[\\/])/i.test(path) ? path : join(lane.cwd, path), CODE_CAP);
           // P-OWN.1: an authored path becomes this lane's in the checkout ownership ledger (path only) once
           // the call COMPLETES: a denied or failed edit must not make the lane the owner of another's file.
           // A call that arrives already completed settles at once; otherwise the terminal update above does.
@@ -1418,29 +1418,6 @@ export class FleetLaneManager {
       lane.pending?.resolve(false);
       if (lane.status !== "stopped") this.#setStatus(lane, lane.busy ? "error" : "stopped");
     };
-  }
-
-  /** P-FLEET.L3 (mirrors acp_backend's P-CHAT.1 extraction): the code a write/edit call authored, from
-   *  its rawInput. Returns undefined for tools with no authored code (read/search/bash). The content is
-   *  already gate-scanned - it is the same tool_call text the in-omp gate saw. */
-  #toolCode(lane: Lane, u: { kind?: unknown; title?: unknown; rawInput?: unknown; input?: unknown }): LaneToolCode | undefined {
-    const riRaw = u.rawInput ?? u.input;
-    if (!riRaw || typeof riRaw !== "object") return undefined;
-    const ri = riRaw as Record<string, unknown>;
-    const clip = (s: unknown) => (typeof s === "string" ? s.slice(0, CODE_CAP) : undefined);
-    // The agent writes/edits with paths relative to ITS workspace - the lane's cwd, not the master's.
-    const rawPath = typeof ri.path === "string" ? ri.path : typeof ri.file_path === "string" ? ri.file_path : "";
-    const path = !rawPath || /^(file:\/\/|https?:\/\/|[A-Za-z]:[\\/]|\/|\\\\|~[\\/])/i.test(rawPath) ? rawPath : join(lane.cwd, rawPath);
-    if (typeof ri.content === "string") return { path, content: clip(ri.content) };
-    if (Array.isArray(ri.edits) && ri.edits.length) {
-      const olds = ri.edits.map((e) => String((e as Record<string, unknown>)?.old_text ?? (e as Record<string, unknown>)?.oldText ?? "")).join("\n");
-      const news = ri.edits.map((e) => String((e as Record<string, unknown>)?.new_text ?? (e as Record<string, unknown>)?.newText ?? "")).join("\n");
-      return { path, oldText: clip(olds) ?? "", newText: clip(news) ?? "" };
-    }
-    if (typeof ri.old_text === "string" || typeof ri.new_text === "string") return { path, oldText: clip(ri.old_text) ?? "", newText: clip(ri.new_text) ?? "" };
-    if (typeof ri.oldText === "string" || typeof ri.newText === "string") return { path, oldText: clip(ri.oldText) ?? "", newText: clip(ri.newText) ?? "" };
-    if (typeof ri.input === "string" && (u.kind === "edit" || /\bedit\b/i.test(String(u.title ?? "")))) return { path, patch: clip(ri.input) };
-    return undefined;
   }
 
   #askUser(lane: Lane, summary: string, kind: string): Promise<boolean> {
