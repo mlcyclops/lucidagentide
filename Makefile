@@ -382,7 +382,7 @@ demo-P-REMOTE.13: ## P-REMOTE.13 (ADR-0251): the invisible hourly reconnect - gr
 	$(BUN) run desktop/scripts/demo_p_remote_13.ts
 
 .PHONY: demo-P-REMOTE.16
-demo-P-REMOTE.16: ## P-REMOTE.16 (ADR-0431): the phone resumes with exactly what it missed - REAL gated relay + host + socket + guest + viewer + history. Fresh join gets rich seq turns (thinking, edit with code, ok/elapsed, +/-); the diff drilldown renders with hostile code escaped; on-device history round-trips, rejects another room, stores nothing under CUI; an unlock with since=2 receives only seq 3 + the in-flight seq 4 and merges without duplicates; a planned pre-cap rotation re-hellos, replays nothing, keeps the guest live; a short-absence probe is answered by the relay pong
+demo-P-REMOTE.16: ## P-REMOTE.16 (ADR-0436): the phone resumes with exactly what it missed - REAL gated relay + host + socket + guest + viewer + history. Fresh join gets rich seq turns (thinking, edit with code, ok/elapsed, +/-); the diff drilldown renders with hostile code escaped; on-device history round-trips, rejects another room, stores nothing under CUI; an unlock with since=2 receives only seq 3 + the in-flight seq 4 and merges without duplicates; a planned pre-cap rotation re-hellos, replays nothing, keeps the guest live; a short-absence probe is answered by the relay pong
 	$(BUN) run harness/scripts/demo_premote16.ts
 	$(BUN) test $(TEST_IGNORES) desktop/collab/turn_journal.test.ts desktop/collab/host.test.ts desktop/collab/guest.test.ts desktop/collab/pwa_view.test.ts desktop/collab/pwa_history.test.ts desktop/collab/relay_client.test.ts desktop/collab/relay_server.test.ts
 
