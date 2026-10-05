@@ -6,7 +6,8 @@
 // keystones (no lost or duplicated leaf, stable ids) live in hub_spaces.test.ts (P-TUI.3).
 
 import { describe, expect, test } from "bun:test";
-import { agentTableLines, deckLines, fmtElapsed, kgPages, modelCatalog, fitBlock, spaceTableLines, type HubData, type HubSpace } from "./hub_tui.ts";
+import { agentTableLines, clickTarget, deckLines, fmtElapsed, kgPages, modelCatalog, fitBlock, paneRects, railLine, railRows, spaceTableLines, type HubData, type HubGeometry, type HubSpace } from "./hub_tui.ts";
+import { Spaces } from "./hub_spaces.ts";
 
 describe("fitBlock", () => {
   test("pads and clips to exact geometry, including overlong and missing rows", () => {
@@ -192,5 +193,78 @@ describe("spaces deck (P-TUI.4)", () => {
     const rows = deckLines("spaces", data, 60, 0, "", [{ id: "s", name: "two\nline", panes: 2, focused: false }]);
     expect(rows.every((l) => !l.includes("\n"))).toBe(true);
     expect(rows.some((l) => l.includes("two line"))).toBe(true);
+  });
+});
+
+// P-TUI.5: the rail and click routing. Headless runs cannot send a real mouse event, so the meaning of
+// a click is a pure function of the rendered geometry and is pinned here.
+describe("rail (P-TUI.5)", () => {
+  const model = () => {
+    const h = new Spaces();
+    h.createTab(undefined, "agents");
+    h.split(undefined, "right");
+    h.rebind("s1:p2", "agent", { id: "lane-a", name: "a" });
+    h.rebind("s1:p3", "agent", { id: "lane-a", name: "a" }); // the same lane twice is ONE lane
+    h.create("a-very-long-space-name-that-cannot-fit");
+    h.focusTab("s1:t2");
+    return h;
+  };
+
+  test("rows: SPACES header, each space with its tabs beneath, then the AGENTS seam header", () => {
+    const rows = railRows(model());
+    expect(rows.map((r) => (r.kind === "space" || r.kind === "tab" ? `${r.kind}:${r.id}` : r.kind))).toEqual([
+      "gap", "spaces-head", "space:s1", "tab:s1:t1", "tab:s1:t2", "space:s2", "tab:s2:t1", "gap", "agents-head",
+    ]);
+    const t2 = rows[4]!;
+    expect(t2.kind === "tab" && [t2.focused, t2.lanes, t2.panes, t2.last]).toEqual([true, ["lane-a"], 2, true]);
+    const s2 = rows[5]!;
+    expect(s2.kind === "space" && s2.focused).toBe(false);
+    expect(rows.at(-1)).toEqual({ kind: "agents-head", count: null });
+    expect(railRows(model(), 4).at(-1)).toEqual({ kind: "agents-head", count: 4 });
+  });
+
+  test("lines are exactly the rail width; a long name ellipsizes instead of wrapping", () => {
+    const rows = railRows(model());
+    const lines = rows.map((r) => railLine(r, 27));
+    for (const l of lines) expect(Bun.stringWidth(l)).toBe(27);
+    expect(lines[2]).toContain("▎◆ main");
+    expect(lines[4]).toMatch(/└ agents\s+◎1 2▣ $/);
+    expect(lines[5]).toContain(" ◇ a-very-long");
+    expect(lines[5]).toContain("…");
+    expect(lines[5]).toMatch(/1▣ $/);
+    expect(lines[8]).toContain("◎ AGENTS");
+  });
+
+  test("pane rectangles split with the renderer's floor arithmetic", () => {
+    const h = new Spaces();
+    h.split(undefined, "right");
+    h.resize("s1:p1", "R", 10); // ratio 0.6
+    h.split("s1:p2", "down");
+    expect(paneRects(h.tab.tree, 101, 30)).toEqual([
+      { index: 0, x: 0, y: 0, w: 60, h: 30 },
+      { index: 1, x: 60, y: 0, w: 41, h: 15 },
+      { index: 2, x: 60, y: 15, w: 41, h: 15 },
+    ]);
+  });
+
+  test("click routing: rail rows act on their space/tab, the rest falls through to the pane below", () => {
+    const h = model();
+    const rail = railRows(h);
+    const g: HubGeometry = { left: 28, rail, top: 1, height: 38, panes: paneRects(h.tab.tree, 112, 38) };
+    expect(clickTarget(g, 5, 1 + 2)).toEqual({ kind: "space", id: "s1", row: 2 });
+    expect(clickTarget(g, 20, 1 + 3)).toEqual({ kind: "tab", id: "s1:t1", row: 3 });
+    expect(clickTarget(g, 0, 1 + 6)).toEqual({ kind: "tab", id: "s2:t1", row: 6 });
+    expect(clickTarget(g, 3, 1 + 1)).toEqual({ kind: "spaces-head", row: 1 });
+    expect(clickTarget(g, 3, 1 + 0)).toBeNull(); // a gap row
+    expect(clickTarget(g, 3, 1 + 8)).toBeNull(); // the AGENTS header (E2 adds its rows below it)
+    expect(clickTarget(g, 3, 1 + 20)).toBeNull(); // empty rail space
+    expect(clickTarget(g, 28, 5)).toEqual({ kind: "pane", index: 0 }); // first column right of the rail
+    expect(clickTarget(g, 28 + 56, 5)).toEqual({ kind: "pane", index: 1 });
+    expect(clickTarget(g, 50, 0)).toBeNull(); // the top bar
+    expect(clickTarget(g, 50, 39)).toBeNull(); // the status bar
+    // Rail closed: the deck list column takes no clicks; panes still do.
+    const closed: HubGeometry = { ...g, left: 20, rail: null };
+    expect(clickTarget(closed, 5, 3)).toBeNull();
+    expect(clickTarget(closed, 20, 3)).toEqual({ kind: "pane", index: 0 });
   });
 });

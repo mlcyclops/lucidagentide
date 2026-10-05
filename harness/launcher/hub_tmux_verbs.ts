@@ -1,16 +1,20 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-TUI.3 (ADR-0436): the ONE command parser for the hub control plane. `lucid hub <args>` on the CLI,
-// the control server's /cmd body, and the TUI's `:` prompt all turn argv into a HubOp here, so a verb
-// cannot mean one thing typed and another thing scripted. Two vocabularies map onto the same ops:
+// P-TUI.3 (ADR-0436) + P-TUI.5 (ADR-0433): the ONE command parser for the hub control plane.
+// `lucid hub <args>` on the CLI, the control server's /cmd body, and the TUI's `:` prompt all turn argv
+// into a HubOp here, so a verb cannot mean one thing typed and another thing scripted. Two
+// vocabularies map onto the same ops:
 //
-//   grouped:  status | space <list|create|rename|close|focus> | pane <list|split|close|focus|zoom|
-//             rebind|swap|resize|read|send> | agent <list|spawn|prompt|status|read|cancel>
-//   tmux:     split-window select-pane kill-pane swap-pane resize-pane new-window kill-window
-//             rename-window select-window list-panes list-windows send-keys
+//   grouped:  status | space <list|create|rename|close|focus> | tab <list|create|rename|close|focus> |
+//             pane <list|split|close|focus|zoom|rebind|swap|resize|read|send> |
+//             agent <list|spawn|prompt|status|read|cancel>
+//   tmux:     split-window select-pane kill-pane swap-pane resize-pane list-panes send-keys
+//             new-window kill-window rename-window select-window list-windows         (window = TAB)
+//             new-session kill-session rename-session switch-client list-sessions     (session = SPACE)
 //
-// Spaces are tmux windows; panes are panes (ids s1:p2). Pure: no I/O, nothing executes here.
+// Spaces are tmux sessions, tabs are tmux windows, panes are panes (ids s1, s1:t2, s1:p2). Pure: no
+// I/O, nothing executes here.
 
 import { HubOpError } from "./hub_spaces.ts";
 
@@ -21,7 +25,12 @@ export type HubOp =
   | { op: "space.rename"; target?: string; name: string }
   | { op: "space.close"; target?: string }
   | { op: "space.focus"; target: string }
-  | { op: "pane.list"; space?: string; all: boolean }
+  | { op: "tab.list"; space?: string; all: boolean }
+  | { op: "tab.create"; space?: string; name?: string }
+  | { op: "tab.rename"; target?: string; name: string }
+  | { op: "tab.close"; target?: string }
+  | { op: "tab.focus"; target: string }
+  | { op: "pane.list"; space?: string; tab?: string; all: boolean }
   | { op: "pane.split"; target?: string; dir: "right" | "down" }
   | { op: "pane.close"; target?: string }
   | { op: "pane.focus"; target: string }
@@ -39,9 +48,11 @@ export type HubOp =
   | { op: "agent.cancel"; lane: string };
 
 export const HUB_USAGE =
-  "lucid hub [status | space list|create|rename|close|focus | pane list|split|close|focus|zoom|rebind|swap|resize|read|send | " +
-  "agent list|spawn|prompt|status|read|cancel | split-window|select-pane|kill-pane|swap-pane|resize-pane|new-window|kill-window|" +
-  "rename-window|select-window|list-panes|list-windows|send-keys]";
+  "lucid hub [status | space list|create|rename|close|focus | tab list|create|rename|close|focus | " +
+  "pane list|split|close|focus|zoom|rebind|swap|resize|read|send | agent list|spawn|prompt|status|read|cancel | " +
+  "split-window|select-pane|kill-pane|swap-pane|resize-pane|list-panes|send-keys | " +
+  "new-window|kill-window|rename-window|select-window|list-windows (tabs) | " +
+  "new-session|kill-session|rename-session|switch-client|list-sessions (spaces)]";
 
 const usage = (msg: string): HubOpError => new HubOpError("usage", `${msg} (usage: ${HUB_USAGE})`);
 
@@ -134,6 +145,24 @@ function spaceGroup(cmd: string | undefined, args: readonly string[]): HubOp {
   throw usage(`unknown space command "${cmd ?? ""}"`);
 }
 
+function tabGroup(cmd: string | undefined, args: readonly string[]): HubOp {
+  const { f, pos } = flags(args, ["-t", "-n"]);
+  const t = val(f, "-t");
+  switch (cmd) {
+    // `tab list` is every tab (like `pane list`); -t narrows to one space.
+    case "list": none(pos); return t === undefined ? { op: "tab.list", all: true } : { op: "tab.list", space: t, all: false };
+    case "create": {
+      if (pos.length > 1) throw usage("one name");
+      const name = val(f, "-n") ?? pos[0];
+      return { op: "tab.create", ...(t === undefined ? {} : { space: t }), ...(name === undefined ? {} : { name }) };
+    }
+    case "rename": return { op: "tab.rename", target: t, name: one(pos, "name") };
+    case "close": return { op: "tab.close", target: t ?? (pos.length ? one(pos, "tab") : undefined) };
+    case "focus": return { op: "tab.focus", target: t ?? one(pos, "tab") };
+  }
+  throw usage(`unknown tab command "${cmd ?? ""}"`);
+}
+
 function paneGroup(cmd: string | undefined, args: readonly string[]): HubOp {
   switch (cmd) {
     case "split": return splitOp(args);
@@ -194,6 +223,7 @@ export function parseHubCommand(argv: readonly string[]): HubOp {
   switch (verb) {
     case "status": none([...rest]); return { op: "status" };
     case "space": return spaceGroup(rest[0], rest.slice(1));
+    case "tab": return tabGroup(rest[0], rest.slice(1));
     case "pane": return paneGroup(rest[0], rest.slice(1));
     case "agent": return agentGroup(rest[0], rest.slice(1));
     // ---- tmux vocabulary ----
@@ -203,21 +233,45 @@ export function parseHubCommand(argv: readonly string[]): HubOp {
     case "swap-pane": return paneGroup("swap", rest);
     case "resize-pane": return resizeOp(rest);
     case "send-keys": return keysOp(rest);
+    // window = TAB (in the active space unless -t names one).
     case "new-window": {
-      const { f, pos } = flags(rest, ["-n"]);
-      none(pos);
-      const name = val(f, "-n");
-      return name === undefined ? { op: "space.create" } : { op: "space.create", name };
+      none(flags(rest, ["-n", "-t"]).pos); // a name is -n only, like tmux
+      return tabGroup("create", rest);
     }
-    case "kill-window": return spaceGroup("close", rest);
-    case "rename-window": return spaceGroup("rename", rest);
-    case "select-window": return spaceGroup("focus", rest);
-    case "list-windows": return spaceGroup("list", rest);
-    case "list-panes": {
+    case "kill-window": return tabGroup("close", rest);
+    case "rename-window": return tabGroup("rename", rest);
+    case "select-window": return tabGroup("focus", rest);
+    case "list-windows": {
+      // tmux: the current session's windows; -a every window; -t a session.
       const { f, pos } = flags(rest, ["-t"], ["-a"]);
       none(pos);
+      return f["-a"] ? { op: "tab.list", all: true } : { op: "tab.list", space: val(f, "-t") ?? "", all: false };
+    }
+    // session = SPACE.
+    case "new-session": {
+      const { f, pos } = flags(rest, ["-s"]);
+      none(pos);
+      const name = val(f, "-s");
+      return name === undefined ? { op: "space.create" } : { op: "space.create", name };
+    }
+    case "kill-session": return spaceGroup("close", rest);
+    case "rename-session": return spaceGroup("rename", rest);
+    case "switch-client": {
+      const { f, pos } = flags(rest, ["-t"]);
+      none(pos);
       const t = val(f, "-t");
-      return f["-a"] ? { op: "pane.list", all: true } : { op: "pane.list", space: t ?? "", all: false };
+      if (t === undefined) throw usage("switch-client needs -t <space>");
+      return { op: "space.focus", target: t };
+    }
+    case "list-sessions": none([...rest]); return { op: "space.list" };
+    case "list-panes": {
+      // tmux: the current window's panes; -s the current session's; -a every pane; -t a window.
+      const { f, pos } = flags(rest, ["-t"], ["-a", "-s"]);
+      none(pos);
+      const t = val(f, "-t");
+      if (f["-a"]) return { op: "pane.list", all: true };
+      if (f["-s"]) return { op: "pane.list", space: t ?? "", all: false };
+      return { op: "pane.list", tab: t ?? "", all: false };
     }
   }
   throw usage(`unknown command "${verb ?? ""}"`);
