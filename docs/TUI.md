@@ -75,10 +75,14 @@ in-process (invariant 4). The TUI holds the UI token, never the agent token.
   side by side (chat next to Security next to Fleet). A persistent status line
   names the attached engine and carries a red badge when a security block or lane
   approval is pending anywhere.
-- **Palette.** `Ctrl+K` opens the same command palette the GUI has: the 39 omp slash
-  commands (`/api/commands`) plus hub actions ("spawn lane", "start goal run",
-  "export brief as POA&M"). The palette is the escape hatch that keeps rare actions
-  from needing dedicated keys.
+- **Palette (P-TUI.6, ADR-0435).** `Ctrl+K` (or `:palette`) opens a centered fuzzy finder over
+  ONE fused list: spaces (switch), tabs shown as `space › tab` (focus), agents (Enter attaches
+  the lane into the focused pane), and decks (rebind the focused pane). The scorer is a pure
+  subsequence matcher (hub_palette.ts): rank by consecutive-run length, then word-boundary hits,
+  then the shorter target; case-insensitive. Arrows or `ctrl+n`/`ctrl+p` move, Enter acts, Esc
+  closes, and the palette only opens from hub-owned focus (the same guard as the `:` prompt), so
+  a composer never loses keystrokes to it. The GUI's omp slash commands and hub actions ("spawn
+  lane", "start goal run", "export brief as POA&M") are a later increment of this same surface.
 - **Approvals interrupt everywhere.** A gate block, a chat permission request, or a
   lane's pending approval raises a modal on whatever deck is open, with the same
   approve / dismiss / explain choices as the GUI toast. Fail-closed rules identical:
@@ -120,6 +124,13 @@ in-process (invariant 4). The TUI holds the UI token, never the agent token.
   a space or tab row focuses it, a pane focuses the pane. `B` puts the keyboard on the rail
   (`j`/`k`, `⏎` focus, `r` rename inline, `n` new tab, or a new space on the SPACES header,
   `esc` back to the panes).
+- **The deck strip (P-TUI.6, ADR-0435).** One line at the bottom, directly above the status bar:
+  every deck as `digit glyph name count`, the same live counts the deck sidebar's badges carry
+  (Security quarantined, Fleet/Agents lanes, Sessions on disk, Spaces). The focused pane's deck is
+  highlighted; digits 1-9,0 keep rebinding the focused pane and the strip makes them discoverable;
+  a click on an entry rebinds too. On narrow terminals the strip drops names first, then glyphs,
+  then counts - the digits stay. With the rail open the strip is the one deck surface (the deck
+  sidebar only renders while the rail is closed), so the decks live in one consistent place.
 
 ## Capability map
 
@@ -214,7 +225,9 @@ One per session, each with its own ADR and `make demo-*`:
   shipped with the P-TUI.1 hub; queue reorder and stop are still open.
 - **P-TUI.4** Sessions, timeline, memory, usage decks.
 - **P-TUI.5** Settings decks (providers, MCP, agents, whitelist, voice, whisper).
-- **P-TUI.6** Goal, reports, automations decks; POA&M/.ckl export to path.
+- **P-TUI.6** The deck strip + the fuzzy palette (shipped, ADR-0435; the numbers drifted from
+  this plan as operator direction reshaped 4-6). The goal/reports/automations decks and the
+  POA&M/.ckl export move to a later number.
 - **P-TUI.7** KB and personal KG decks (reusing `kb_cli` cores; CUI confirm flows).
 - **P-TUI.8** Builder, skills, workspace decks (`$EDITOR` seam).
 - **P-TUI.9** Media: inline images, voice capture, TTS playback, preview

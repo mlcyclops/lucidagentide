@@ -27,6 +27,14 @@
 // overlay turns on SGR mouse reporting, a click on a rail row focuses that space or tab, a click on a
 // pane focuses the pane. Row geometry -> action is pure (railRows, paneRects, clickTarget).
 //
+// P-TUI.6 (ADR-0435): a one-line DECK STRIP sits directly above the status line - every deck as
+// `digit glyph name count` with the same live counts the old deck sidebar badges carried, the
+// focused pane's deck highlighted, names then glyphs then counts dropping as the terminal narrows
+// (invariant 11: truncate, never wrap). With the rail open the strip is the ONE deck surface; a
+// click on an entry rebinds the focused pane. And the FUZZY PALETTE (ctrl+k or `:palette`,
+// hub_palette.ts): one fused, scored list of spaces, tabs, agents and decks; Enter acts, Esc
+// closes, and it only ever opens from hub-owned focus (the same guard as the `:` prompt).
+//
 // The colors are the desktop design system (styles.css → the P-THEME.1 palette), so the hub and the
 // gated `lucid tui` read as one product: LUCID magenta chrome, cyan focus, the styles.css status hues.
 
@@ -36,6 +44,7 @@ import { join } from "node:path";
 import { discoveryDir, listDiscoveries, verifyDiscovery, type EngineDiscovery } from "../../desktop/engine_discovery.ts";
 import { agentPrioritiesPath, agentRailLine, HubAgentsPanel, laneLocations, statusGlyph, type AgentRow, type AgentsPanelRow, type GlyphHue } from "./hub_agents_panel.ts";
 import { createHubExecutor, startHubControl } from "./hub_control.ts";
+import { buildPaletteItems, filterPalette, type PaletteItem } from "./hub_palette.ts";
 import { HubOpError, leaves, loadSpaces, saveSpaces, Spaces, spacePanes, spacesPath, type PaneDeck, type PaneLeaf, type PaneNode } from "./hub_spaces.ts";
 import { parseHubCommand, tokenize, type HubOp } from "./hub_tmux_verbs.ts";
 
@@ -249,19 +258,25 @@ export function paneRects(node: PaneNode, w: number, h: number, x = 0, y = 0, ri
 
 /** The frame's clickable geometry as last rendered: a left column `left` cells wide (the rail when
  *  `rail` is set, else the deck list), body rows from screen row `top` for `height` rows. */
-export interface HubGeometry { left: number; rail: RailRow[] | null; top: number; height: number; panes: PaneRect[] }
+export interface HubGeometry { left: number; rail: RailRow[] | null; top: number; height: number; panes: PaneRect[]; strip?: { row: number; cells: readonly StripCell[] } | null }
 
 export type HubClick =
   | { kind: "space"; id: string; row: number }
   | { kind: "tab"; id: string; row: number }
   | { kind: "spaces-head"; row: number }
   | { kind: "pane"; index: number }
-  | { kind: "agent"; id: string; row: number };
+  | { kind: "agent"; id: string; row: number }
+  | { kind: "deck"; id: DeckId };
 
 /** What a left click at 0-based screen (col,row) means. Rail rows map to their space/tab; anything
  *  right of the rail falls through to the pane under it; chrome, gaps and headers-without-action are
  *  null (a click there does nothing). */
 export function clickTarget(g: HubGeometry, col: number, row: number): HubClick | null {
+  // The strip row (below the pane region, above the status line): a cell rebinds the focused pane.
+  if (g.strip && row === g.strip.row && col >= 0) {
+    const cell = g.strip.cells.find((c) => col >= c.x && col < c.x + c.w);
+    return cell ? { kind: "deck", id: cell.id } : null;
+  }
   const y = row - g.top;
   if (y < 0 || y >= g.height || col < 0) return null;
   if (col < g.left) {
@@ -274,6 +289,58 @@ export function clickTarget(g: HubGeometry, col: number, row: number): HubClick 
   const x = col - g.left;
   const hit = g.panes.find((p) => x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + p.h);
   return hit ? { kind: "pane", index: hit.index } : null;
+}
+
+// ---- P-TUI.6: the deck strip ---------------------------------------------------------------------
+// One line, bottom of the hub, directly above the status line: every deck as `digit glyph name
+// count`, the same live counts the sidebar badges carry. Pure: entries from HubData, cells with
+// exact column geometry (the click seam reads them), truncation by LEVEL - names drop first, then
+// glyphs, then counts, so a narrow terminal keeps the digits that still rebind panes.
+
+/** One deck's strip entry: the digit key, glyph, title, live count (null = no count for this deck),
+ *  and whether the count is an ALERT (quarantined blocks pending). */
+export interface StripEntry { id: DeckId; key: string; icon: string; title: string; count: string | null; alert: boolean }
+
+/** The entries with the SAME counts the sidebar badges show: Security quarantined (alert when > 0),
+ *  Fleet/Agents lanes, Sessions on disk, Spaces client-side (visible before the first answer). */
+export function deckStripEntries(data: HubData | null, spacesCount: number): StripEntry[] {
+  return DECKS.map((d) => {
+    let count: string | null = null;
+    let alert = false;
+    if (d.id === "spaces") count = String(spacesCount);
+    else if (data) {
+      if (d.id === "security") { const n = quarantineOf(data).length; count = String(n); alert = n > 0; }
+      else if (d.id === "fleet" || d.id === "agents") count = String(arr(data.fleet.lanes).length);
+      else if (d.id === "sessions") count = String(data.sessions.length);
+    }
+    return { id: d.id, key: d.key, icon: d.icon, title: d.title, count, alert };
+  });
+}
+
+/** A strip cell as rendered: plain text plus its exact screen column span (paint never moves it). */
+export interface StripCell { id: DeckId; text: string; x: number; w: number }
+
+/** Lay the strip out at `width`: the first LEVEL that fits wins (0 full, 1 names dropped, 2 glyphs
+ *  dropped, 3 counts dropped - digits always stay), then trailing cells that STILL overflow are
+ *  dropped whole (never clipped mid-cell). One leading space; two spaces between cells. */
+export function deckStrip(entries: readonly StripEntry[], width: number): { level: number; cells: StripCell[] } {
+  for (let level = 0; ; level++) {
+    const texts = entries.map((e) => {
+      const head = level === 0 ? `${e.key} ${e.icon} ${e.title}` : level === 1 ? `${e.key} ${e.icon}` : e.key;
+      return level < 3 && e.count !== null ? `${head} ${e.count}` : head;
+    });
+    const total = 1 + texts.reduce((n, t) => n + Bun.stringWidth(t), 0) + 2 * Math.max(0, texts.length - 1);
+    if (total > width && level < 3) continue;
+    const cells: StripCell[] = [];
+    let x = 1;
+    for (const [i, e] of entries.entries()) {
+      const w = Bun.stringWidth(texts[i]!);
+      if (x + w > width) break; // graceful: whole trailing cells drop, never a sheared one
+      cells.push({ id: e.id, text: texts[i]!, x, w });
+      x += w + 2;
+    }
+    return { level, cells };
+  }
 }
 
 /** Pure deck bodies: plain rows (no ANSI - styling is a later pass), each row one physical line. */
@@ -534,6 +601,8 @@ export class HubComponent implements Component {
   #watchers: Record<string, AbortController> = {};
   #prompt: { lane: string; text: string } | null = null;
   #picker: { lane: string; models: ModelOption[]; sel: number; filter: string; busy?: boolean } | null = null;
+  /** The fuzzy palette (P-TUI.6): query + selection; null = closed. Items are rebuilt per frame. */
+  #palette: { query: string; sel: number } | null = null;
   #promptKind: "agent" | "wl-add" | "kg-filter" | "command" | "space-rename" | "tab-rename" = "agent";
   #kgFilter = "";
   #reader: { title: string; rows: string[] } | null = null;
@@ -756,6 +825,20 @@ export class HubComponent implements Component {
       this.#ui.requestRender();
       return;
     }
+    // The palette (P-TUI.6): owns the keyboard until Enter (act) or Esc (close). It only ever
+    // OPENS from hub-owned focus (the ctrl+k branch below, the same guard as the `:` prompt), so
+    // input meant for an attached agent pane's composer never lands here.
+    if (this.#palette) {
+      const pal = this.#palette;
+      if (matchesKey(data, "escape")) { this.#palette = null; this.#ui.requestRender(); return; }
+      if (matchesKey(data, "backspace")) { pal.query = pal.query.slice(0, -1); pal.sel = 0; this.#ui.requestRender(); return; }
+      if (matchesKey(data, "down") || matchesKey(data, "ctrl+n")) pal.sel = Math.min(Math.max(0, this.#paletteMatches().length - 1), pal.sel + 1);
+      else if (matchesKey(data, "up") || matchesKey(data, "ctrl+p")) pal.sel = Math.max(0, pal.sel - 1);
+      else if (isEnter) { this.#paletteEnter(); return; }
+      else { for (const ch of data) if (ch >= " " && ch !== "\u007f") pal.query += ch; pal.sel = 0; }
+      this.#ui.requestRender();
+      return;
+    }
     // Prompt mode: the focused agent pane owns the keyboard until Enter (send) or Esc (cancel).
     // Pasted/chunked input arrives as one string, so walk it char by char; a newline inside a
     // chunk submits what was typed before it (terminal paste semantics). An EMPTY enter is a
@@ -837,6 +920,7 @@ export class HubComponent implements Component {
     else if (data === "b") { sp.setRail(!sp.rail); if (!sp.rail) this.#railFocus = false; }
     else if (data === "B") { if (!sp.rail) sp.setRail(true); this.#railFocus = true; this.#railSel = this.#focusedTabRow(); }
     else if (data === ":") { this.#promptKind = "command"; this.#prompt = { lane: "", text: "" }; }
+    else if (matchesKey(data, "ctrl+k")) this.#palette = { query: "", sel: 0 };
     else if (data === "x" && this.#focusedDeck() === "agents") { void this.#dismissLane(); return; }
     else if (data === "x" && this.#focusedDeck() === "spaces") { this.#closeSpace(); return; }
     else if (data === "x") {
@@ -1020,6 +1104,13 @@ export class HubComponent implements Component {
     this.#prompt = null;
     if (!text) { this.#ui.requestRender(); return; }
     try {
+      if (kind === "command" && text === "palette") {
+        // The TUI-only alias: `:palette` opens the same overlay as ctrl+k (a headless hub has no
+        // palette, so this never reaches the shared executor's vocabulary).
+        this.#palette = { query: "", sel: 0 };
+        this.#ui.requestRender();
+        return;
+      }
       if (kind === "command") {
         // Same parser + executor as `lucid hub <cmd>`: what works typed works scripted.
         const r = await this.exec(parseHubCommand(tokenize(text)));
@@ -1199,12 +1290,22 @@ export class HubComponent implements Component {
   }
 
   /** A left click at 0-based screen (col,row): a rail row focuses its space/tab and puts the keyboard
-   *  on the rail; a pane takes focus. A modal surface (help, reader, picker, a composer) owns input
-   *  until it closes, so a stray click never edits or dismisses it. */
+   *  on the rail; a pane takes focus; a deck-strip cell rebinds the focused pane. A modal surface
+   *  (help, reader, picker, palette, a composer) owns input until it closes, so a stray click never
+   *  edits or dismisses it. */
   #click(col: number, row: number): void {
-    if (this.#help || this.#reader || this.#picker || this.#prompt || !this.#geom) return;
+    if (this.#help || this.#reader || this.#picker || this.#palette || this.#prompt || !this.#geom) return;
     const hit = clickTarget(this.#geom, col, row);
     if (!hit) return;
+    // The strip (P-TUI.6): a click on an entry rebinds the focused pane to that deck - the same
+    // semantics as its digit key, now discoverable by pointer.
+    if (hit.kind === "deck") {
+      this.#spaces.rebind(undefined, hit.id);
+      this.#selected = 0; this.#scroll = 0;
+      this.#status = `deck → ${DECKS.find((d) => d.id === hit.id)!.title}`;
+      this.#ui.requestRender();
+      return;
+    }
     if (hit.kind === "pane") {
       if (hit.index !== this.#focus) { this.#focus = hit.index; this.#selected = 0; this.#scroll = 0; }
       this.#railFocus = false;
@@ -1339,6 +1440,8 @@ export class HubComponent implements Component {
       ["Decks", ""],
       ["  1-9, 0", "put that deck in the focused pane"],
       ["  j / k or ↓ / ↑", "move the row selection"],
+      ["  ctrl+k", "the palette: fuzzy-find spaces, tabs, agents, decks"],
+      ["  (bottom strip)", "every deck + its live count · click an entry to rebind"],
       ["", ""],
       ["Agents (decks 3 + 9)", ""],
       ["  n", "spawn a NEW agent (on the Fleet deck)"],
@@ -1480,6 +1583,62 @@ export class HubComponent implements Component {
     return fitBlock([...Array(padTop).fill(""), ...box.map((l) => padLeft + l)], w, h);
   }
 
+  // -- P-TUI.6: the palette (hub_palette.ts holds the pure scorer and builders) ---------------------
+
+  /** The fused list under the current query: spaces, tabs, agents (live lanes), decks. */
+  #paletteMatches(): PaletteItem[] {
+    const items = buildPaletteItems(this.#spaces, arr(this.#data?.fleet.lanes).map(rec));
+    return filterPalette(items, this.#palette?.query ?? "");
+  }
+
+  /** Enter: act on the selected row and close. Space/tab focus, agent attaches into the focused
+   *  pane (the existing ADR-0420 bind via the panel, which also selects its rail row), deck rebinds.
+   *  A model refusal (HubOpError) surfaces verbatim, like every other hub verb. */
+  #paletteEnter(): void {
+    const pick = this.#paletteMatches()[this.#palette!.sel];
+    this.#palette = null;
+    if (!pick) { this.#status = "nothing matched - the palette closed"; this.#ui.requestRender(); return; }
+    try {
+      if (pick.kind === "space") { this.#selected = 0; this.#scroll = 0; this.#status = `space → ${this.#spaces.focus(pick.id).name}`; }
+      else if (pick.kind === "tab") { this.#selected = 0; this.#scroll = 0; this.#status = `tab → ${this.#spaces.focusTab(pick.id).name}`; }
+      else if (pick.kind === "agent") { this.#agents.selected = pick.id; this.#agents.attach(pick.id); return; }
+      else { this.#spaces.rebind(undefined, pick.id as DeckId); this.#selected = 0; this.#scroll = 0; this.#status = `deck → ${pick.label}`; }
+    } catch (err) {
+      if (!(err instanceof HubOpError)) throw err;
+      this.#status = `refused: ${err.message}`;
+    }
+    this.#ui.requestRender();
+  }
+
+  /** The palette overlay, centered like the picker: query row, then the ranked rows - icon + label
+   *  on the left (ellipsized, never wrapped: invariant 11), the dim action hint on the right. */
+  #paletteBlock(w: number, h: number): string[] {
+    const pal = this.#palette!;
+    const matches = this.#paletteMatches();
+    pal.sel = Math.min(pal.sel, Math.max(0, matches.length - 1));
+    const boxW = Math.min(74, w - 4);
+    const maxRows = Math.max(3, h - 8);
+    const from = Math.max(0, Math.min(pal.sel - Math.floor(maxRows / 2), matches.length - maxRows));
+    const slice = matches.slice(from, from + maxRows);
+    const innerW = boxW - 4;
+    const queryCut = truncateToWidth(pal.query, boxW - 8);
+    const queryRow = ACCENT.bold("› ") + TXT(queryCut) + ACCENT("▌") + " ".repeat(Math.max(0, boxW - 7 - Bun.stringWidth(queryCut)));
+    const rows = slice.length
+      ? slice.map((m, i) => {
+          const hint = ` ${m.hint} `;
+          const label = truncateToWidth(` ${m.icon} ${m.label}`, Math.max(4, innerW - Bun.stringWidth(hint) - 1));
+          const pad = " ".repeat(Math.max(1, innerW - Bun.stringWidth(label) - Bun.stringWidth(hint)));
+          return from + i === pal.sel ? chalk.inverse(TXT(label + pad + hint)) : TXT(label) + TXT_3(pad + hint);
+        })
+      : [TXT_3("  nothing matches - backspace edits, esc closes" + " ".repeat(Math.max(0, innerW - 47)))];
+    const title = " ◆ palette · ⇅ or ⌃n/⌃p move · ⏎ act · esc ";
+    const top = ACCENT("╭─") + ACCENT_2.bold(title) + ACCENT("─".repeat(Math.max(0, boxW - 3 - Bun.stringWidth(title))) + "╮");
+    const box = [top, ACCENT("│") + " " + queryRow + " " + ACCENT("│"), ...rows.map((r) => ACCENT("│") + " " + r + " " + ACCENT("│")), ACCENT("╰" + "─".repeat(boxW - 2) + "╯")];
+    const padTop = Math.max(0, Math.floor((h - box.length) / 2));
+    const padLeft = " ".repeat(Math.max(0, Math.floor((w - boxW) / 2)));
+    return fitBlock([...Array(padTop).fill(""), ...box.map((l) => padLeft + l)], w, h);
+  }
+
 
   #pane(leaf: PaneLeaf, w: number, h: number, focused: boolean): string[] {
     if (leaf.deck === "agent") return this.#agentPane(leaf, w, h, focused);
@@ -1546,22 +1705,43 @@ export class HubComponent implements Component {
     return [top, ...rows, bottom];
   }
 
+  /** The deck strip (P-TUI.6): entries + exact cell geometry at this width; the painted line and
+   *  the click cells come from the SAME layout, so what you see is what a click hits. */
+  #strip(width: number): { line: string; cells: StripCell[] } {
+    const entries = deckStripEntries(this.#data, this.#spaceRows().length);
+    const { cells } = deckStrip(entries, width);
+    const focused = this.#focusedDeck();
+    let line = " ";
+    let plainW = 1;
+    for (const [i, c] of cells.entries()) {
+      const e = entries.find((x) => x.id === c.id)!;
+      line += (i ? "  " : "") + (c.id === focused ? ACCENT_2.bold(c.text) : e.alert ? RED(c.text) : TXT_3(c.text));
+      plainW = c.x + c.w;
+    }
+    return { line: line + " ".repeat(Math.max(0, width - plainW)), cells };
+  }
+
   render(width: number): readonly string[] {
     const height = Math.max(10, this.#ui.terminal.rows);
-    const bodyH = height - 2;
-    // The rail replaces the deck list while open; both need room for the panes beside them.
+    // One row for the top bar, one for the deck strip, one for the status line.
+    const bodyH = height - 3;
+    // The rail replaces the deck list while open; both need room for the panes beside them. The
+    // strip stays either way: with the rail open it is the ONE deck surface (operator direction).
     const railOn = this.#spaces.rail && width >= 72;
     const left = railOn ? RAIL_W : width >= 72 ? SIDEBAR_W : 0;
     const paneW = width - left;
     const tree: PaneNode = this.#zoom ? this.#focusedLeaf() : this.#tree;
     const ring = { i: this.#zoom ? this.#focus : 0 };
-    const overlaid = !!(this.#reader || this.#picker || this.#help);
-    const panes = this.#reader ? this.#readerBlock(paneW, bodyH) : this.#picker ? this.#pickerBlock(paneW, bodyH) : this.#help ? this.#helpBlock(paneW, bodyH) : this.#renderNode(tree, paneW, bodyH, ring);
+    const overlaid = !!(this.#reader || this.#picker || this.#palette || this.#help);
+    const panes = this.#reader ? this.#readerBlock(paneW, bodyH) : this.#picker ? this.#pickerBlock(paneW, bodyH) : this.#palette ? this.#paletteBlock(paneW, bodyH) : this.#help ? this.#helpBlock(paneW, bodyH) : this.#renderNode(tree, paneW, bodyH, ring);
     const rail = railOn ? this.#railRows() : null;
-    // What a click hits is decided against THIS frame (top bar = screen row 0, body from row 1).
+    const strip = this.#strip(width);
+    // What a click hits is decided against THIS frame (top bar = screen row 0, body from row 1,
+    // the strip on the row under the body).
     this.#geom = {
       left, rail, top: 1, height: bodyH,
       panes: overlaid ? [] : this.#zoom ? [{ index: this.#spaces.pane().index, x: 0, y: 0, w: paneW, h: bodyH }] : paneRects(this.#tree, paneW, bodyH),
+      strip: { row: 1 + bodyH, cells: strip.cells },
     };
     const column = rail ? this.#railBlock(rail, bodyH) : left ? this.#sidebarBlock(bodyH) : null;
     const body = column ? column.map((s, i) => s + (panes[i] ?? "")) : panes;
@@ -1575,11 +1755,11 @@ export class HubComponent implements Component {
           : this.#prompt && (this.#promptKind === "space-rename" || this.#promptKind === "tab-rename")
             ? ` rename ${this.#promptKind === "space-rename" ? "space" : "tab"}: ${this.#prompt.text}▌  (⏎ save · esc cancel)`
           : "";
-    const hint = this.#reader ? " j/k scroll · ctrl+u/d page · esc closes the page" : this.#help ? " any key closes help" : composing || ` ${DECK_HINTS[this.#prompt ? "prompting" : this.#railFocus && railOn ? "rail" : this.#focusedDeck()]} · ? help`;
+    const hint = this.#reader ? " j/k scroll · ctrl+u/d page · esc closes the page" : this.#help ? " any key closes help" : this.#palette ? " palette: type to filter · ⇅ or ⌃n/⌃p move · ⏎ act · esc closes" : composing || ` ${DECK_HINTS[this.#prompt ? "prompting" : this.#railFocus && railOn ? "rail" : this.#focusedDeck()]} · ⌃k palette · ? help`;
     const leftPlain = truncateToWidth(composing || (this.#status ? ` ${this.#status}` : hint), Math.max(0, width - Bun.stringWidth(rightPlain) - 1));
     const pad = Math.max(1, width - Bun.stringWidth(leftPlain) - Bun.stringWidth(rightPlain));
     const statusBar = (this.#status ? AMBER(leftPlain) : TXT_3(leftPlain)) + " ".repeat(pad) + TXT_3(rightPlain);
-    return [this.#topBar(width), ...body, statusBar];
+    return [this.#topBar(width), ...body, strip.line, statusBar];
   }
 }
 
