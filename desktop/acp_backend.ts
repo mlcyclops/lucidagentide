@@ -25,7 +25,7 @@ import { currentWorkspace } from "./workspace.ts";
 import { PendingWrites } from "./checkout_owners.ts"; // P-OWN.1: ownership only for writes that completed
 import { PREVIEW_ACTIVITY, previewActivityLabel, type PreviewActivityKind } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
 import { extractToolImages } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): images out of tool results
-import { recordAiLoc } from "./ailoc_log.ts"; // P-LOC.4 (ADR-0211): GUI-owned AI-LOC ledger the dashboard reads
+import { isInternalUri, recordAiLoc } from "./ailoc_log.ts"; // P-LOC.4 (ADR-0211): GUI-owned AI-LOC ledger the dashboard reads
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
 import { flavorInfo, normalizeUiMode, resolveBuildFlavor, uiModePosture, type UiMode } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279)
@@ -1036,9 +1036,17 @@ class Backend {
                 // Preview + "Open in editor" need an ABSOLUTE path, so resolve any relative path against the
                 // workspace here (a path that's already file://, a URL, or OS-absolute is left untouched).
                 const absPath = absWorkspacePath; // P-PREVIEW.11 (ADR-0308): shared with openPreview() below
-                const codePath = absPath(typeof ri.path === "string" ? ri.path : typeof ri.file_path === "string" ? ri.file_path : "");
+                const rawPath = typeof ri.path === "string" ? ri.path : typeof ri.file_path === "string" ? ri.file_path : "";
+                // #483: xd:// device calls (and other internal URIs: local://, agent://, skill://, ...)
+                // send JSON `content` to a scheme path. They are tool INVOCATIONS, not authored workspace
+                // files - never build `code` for them: no AI-LOC sample, no ownership claim, no inline
+                // diff, and no preview below. (Before this guard, `xd://knowledge_search` was resolved
+                // against the workspace into `<workspace>/xd:/knowledge_search` and counted as code.)
+                const internalUri = isInternalUri(rawPath);
+                const codePath = absPath(rawPath);
                 let code: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } | undefined;
-                if (typeof ri.content === "string") code = { path: codePath, content: clip(ri.content) };
+                if (internalUri) { /* device/internal-URI call: never authored code */ }
+                else if (typeof ri.content === "string") code = { path: codePath, content: clip(ri.content) };
                 // `replace` mode (ADR-0105, our configured edit tool) sends `edits: [{ old_text, new_text }]`
                 // (one call may bundle several hunks) — join them into one before/after pair for the diff.
                 // camelCase + top-level are kept as fallbacks for other edit-tool variants.
@@ -1087,7 +1095,7 @@ class Backend {
                 // A CUSTOM tool's name does NOT survive as `u.kind` (ACP maps it to "other"); omp renders the
                 // call title as `"preview_open: <path>"`, so preview_open must be matched against the TITLE.
                 // A write/edit, by contrast, keeps a real `kind` ("edit"), which previewablePath keys on.
-                const pvRaw = previewOpenPath(String(u.title ?? ""), ri) ?? previewablePath(String(u.kind ?? u.title ?? ""), ri);
+                const pvRaw = internalUri ? undefined : previewOpenPath(String(u.title ?? ""), ri) ?? previewablePath(String(u.kind ?? u.title ?? ""), ri);
                 const pv = pvRaw ? absPath(pvRaw) : pvRaw; // resolve a relative write path to absolute so the panel can render it
                 if (pv) this.emit({ type: "preview-available", path: pv });
                 // P-PREVIEW.6a (ADR-0153): the agent is looking at / testing the live preview (screenshot,
