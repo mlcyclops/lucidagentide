@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-TUI.3 (ADR-0431) + P-TUI.5 (ADR-0433): the hub's SPACES model. A space is a named group of TABS
+// P-TUI.3 (ADR-0436) + P-TUI.5 (ADR-0433): the hub's SPACES model. A space is a named group of TABS
 // (tmux: a session; herdr: a workspace), and a tab is one root layout holding its own binary split
 // tree of panes (tmux: a window). Pure state, no I/O except the two persistence helpers at the
 // bottom, so the TUI keys, the rail, the `:` prompt and the control server all drive ONE model.

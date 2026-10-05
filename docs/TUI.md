@@ -89,7 +89,7 @@ in-process (invariant 4). The TUI holds the UI token, never the agent token.
 - **`$EDITOR` replaces Monaco.** Anywhere the GUI opens the embedded editor (design
   doc, agent specs, skill studio drafts), the TUI writes a temp file, opens
   `$EDITOR`, and posts the result back through the same save route.
-- **Spaces, tabs and the control plane (P-TUI.3, ADR-0431; P-TUI.5, ADR-0433).** The hub
+- **Spaces, tabs and the control plane (P-TUI.3, ADR-0436; P-TUI.5, ADR-0433).** The hub
   holds named spaces (tmux sessions); each space holds named tabs (tmux windows), and each tab
   has its own split tree. Ids never come back meaning something else: spaces `s1`, tabs
   `s1:t2`, panes `s1:p2` (pane ids are per space, not per tab). `:` opens a command prompt.
