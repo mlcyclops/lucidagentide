@@ -22,7 +22,8 @@
 
 import type * as TS from "typescript";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { listSourceFiles, resolveImport } from "./code_graph.ts";
 
@@ -32,14 +33,37 @@ export interface SymbolGraph { level: "symbol"; nodes: SymNode[]; edges: SymEdge
 
 const symbolPath = (root: string) => join(root, ".omp", "codegraph-symbol.json");
 
-/** Lazily resolve the TypeScript compiler at runtime. Returns null (never throws) if the package is missing
- *  or broken, so a bad `typescript` install degrades ONLY the symbol graph rather than the whole engine. */
+/** Lazily resolve the TypeScript compiler at runtime. Returns null (never throws) if no usable install
+ *  exists, so a bad `typescript` package degrades ONLY the symbol graph rather than the whole engine.
+ *
+ *  TS 7 (the Go port) changed the package layout: its root entry resolves fine but exports only version
+ *  fields (`./lib/version.cjs`), so a bare require hands back a stub with no `createSourceFile` and the
+ *  graph silently builds empty (PR #351's held desktop bump; the root pin since #353 has the same layout).
+ *  So every candidate is validated for the classic API, and resolution probes BOTH entry locations per
+ *  install, nearest first: the package root (TS 6's full compiler) and `lib/typescript.js` (the TS 6
+ *  layout's real entry file, absent from TS 7). A TS 7 install that shadows a TS 6 further up the chain
+ *  is skipped instead of poisoning the graph. No usable install anywhere: null, the same fail-soft as a
+ *  missing package (packaging regression v1.9.0). */
 let tsHandle: typeof TS | null | undefined; // undefined = not tried yet; null = tried and unavailable
+
+/** A module only counts as the compiler when it has the classic API the parser needs. */
+const asCompiler = (mod: unknown): typeof TS | null =>
+  typeof (mod as Partial<typeof TS> | null | undefined)?.createSourceFile === "function" ? (mod as typeof TS) : null;
+
 export function loadTs(): typeof TS | null {
   if (tsHandle !== undefined) return tsHandle;
-  try { tsHandle = createRequire(import.meta.url)("typescript") as typeof TS; }
-  catch { tsHandle = null; }
-  return tsHandle;
+  const req = createRequire(import.meta.url);
+  try { const m = asCompiler(req("typescript")); if (m) return (tsHandle = m); } catch { /* keep probing */ }
+  for (let dir = dirname(fileURLToPath(import.meta.url)); ; ) {
+    const pkg = join(dir, "node_modules", "typescript");
+    for (const entry of [pkg, join(pkg, "lib", "typescript.js")]) {
+      try { const m = asCompiler(req(entry)); if (m) return (tsHandle = m); } catch { /* next candidate */ }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return (tsHandle = null); // compiler unavailable: fail-soft, the graph degrades to empty
 }
 
 /** The fail-soft result when the compiler can't be loaded: a valid, empty symbol graph. */
