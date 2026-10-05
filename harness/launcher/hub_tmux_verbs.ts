@@ -45,11 +45,12 @@ export type HubOp =
   | { op: "agent.prompt"; lane: string; text: string }
   | { op: "agent.status"; lane: string }
   | { op: "agent.read"; lane: string; turns: number }
-  | { op: "agent.cancel"; lane: string };
+  | { op: "agent.cancel"; lane: string }
+  | { op: "agent.priority"; lane: string; n: number };
 
 export const HUB_USAGE =
   "lucid hub [status | space list|create|rename|close|focus | tab list|create|rename|close|focus | " +
-  "pane list|split|close|focus|zoom|rebind|swap|resize|read|send | agent list|spawn|prompt|status|read|cancel | " +
+  "pane list|split|close|focus|zoom|rebind|swap|resize|read|send | agent list|spawn|prompt|status|read|cancel|priority | " +
   "split-window|select-pane|kill-pane|swap-pane|resize-pane|list-panes|send-keys | " +
   "new-window|kill-window|rename-window|select-window|list-windows (tabs) | " +
   "new-session|kill-session|rename-session|switch-client|list-sessions (spaces)]";
@@ -213,6 +214,11 @@ function agentGroup(cmd: string | undefined, args: readonly string[]): HubOp {
     case "status": return { op: "agent.status", lane: one(pos, "lane") };
     case "read": return { op: "agent.read", lane: one(pos, "lane"), turns: int(val(f, "-n"), 20, 1, 200, "-n") };
     case "cancel": return { op: "agent.cancel", lane: one(pos, "lane") };
+    case "priority": {
+      // DISPLAY ORDER in the hub's agents panel, not scheduling: the engine never sees this number.
+      if (pos.length !== 2) throw usage("agent priority <name|id> <1-9> (display order in the agents panel, not scheduling)");
+      return { op: "agent.priority", lane: pos[0]!, n: int(pos[1], 0, 1, 9, "priority (display order, 1-9)") };
+    }
   }
   throw usage(`unknown agent command "${cmd ?? ""}"`);
 }

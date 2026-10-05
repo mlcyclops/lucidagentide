@@ -1286,6 +1286,11 @@ demo-P-TUI.5: demo-P-TUI.4 ## P-TUI.5 (ADR-0433): spaces hold TABS and a persist
 	$(BUN) run desktop/scripts/demo_p_tui_5.ts
 	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_spaces.test.ts harness/launcher/hub_tmux_verbs.test.ts harness/launcher/hub_control.test.ts harness/launcher/hub_tui.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-P-TUI.5e2
+demo-P-TUI.5e2: demo-P-TUI.5 ## P-TUI.5 E2 (ADR-0434): the rail's AGENTS panel + priority. Every fleet lane is one rail row - status glyph colored by the LaneStatus vocabulary (blocked-on-a-human amber and first among equals), name, model short-name, space:tab of its live pane, elapsed, p<n> badge - sorted priority DESC then status then name (hub_agents_panel.ts, pure and unit-tested). Priority is a user-set 1-9 PER LANE NAME in hub-agent-priorities.json (v1, 0600, beside hub-spaces.json): a digit on the selected row, or `lucid hub agent priority <name|id> <1-9>` - DISPLAY ORDER only, never scheduling. Click once selects, click again (or Enter) attaches via the existing ADR-0420 bind, c cancels via /api/fleet/cancel; approvals are never answered from the panel. Proves it with the REAL headless hub, engine (house fake ACP agent) and CLI, plus the real SGR input path.
+	$(BUN) run desktop/scripts/demo_p_tui_5e2.ts
+	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_agents_panel.test.ts harness/launcher/hub_tui.test.ts harness/launcher/hub_tmux_verbs.test.ts harness/launcher/hub_control.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-P-FLEET.WT1
 demo-P-FLEET.WT1: ## P-FLEET.WT1: a lane can run in its OWN git worktree (spawn option, the user accepts the merge-conflict risk): a new branch lucid/<name>-<id> from HEAD in <repo>.lucid-worktrees/<slug> beside the repo, the lane starting in the same subfolder the user picked; the original checkout is untouched, so the shared-checkout coordination (write waits, sweep refusals, check-ins) does not apply; a refused spawn removes the worktree, branch and folder it just made; not-a-repo and no-commits are named refusals.
 	$(BUN) test $(TEST_IGNORES) desktop/lane_worktree.test.ts
