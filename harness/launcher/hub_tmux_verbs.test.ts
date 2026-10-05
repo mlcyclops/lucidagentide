@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-TUI.3 (ADR-0431) + P-TUI.5 (ADR-0433): one parser for the CLI, the control server and the `:`
+// P-TUI.3 (ADR-0436) + P-TUI.5 (ADR-0433): one parser for the CLI, the control server and the `:`
 // prompt. tmux muscle memory must land on the op a tmux user expects (split-window -h is SIDE BY SIDE,
 // the default is stacked; a window is a TAB and a session is a SPACE), and anything malformed must be
 // a usage error, never a silently different command.
