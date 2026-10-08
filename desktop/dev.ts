@@ -112,6 +112,8 @@ import { repoAsset, resolvedRepo } from "./repo_root.ts"; // P-SANDBOX.8: the bu
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
 import { clearAllOauthCredentials, clearDisabledCredential, credentialSnapshot, disconnectCredential, landedFreshCredential } from "./auth_vault.ts";
 import { clearOauthFailure, extractOauthFailure, getOauthFailure, recordOauthFailure } from "./oauth_failure.ts";
+import { DeviceCodeScanner, deviceUrlAllowed, isShowCodeLogin, vaultProviderFor } from "./device_code.ts"; // P-PROV.3: OpenAI device-code sign-in
+import { mxcHost, resetMxcProbeCache, runMxcHostPrepElevated } from "./mxc_runtime.ts"; // P-MXC.1 (ADR-0441): the MXC executor posture + host prep
 import { GUIDE_FILES } from "./guides_manifest.ts";
 import { ARCADE_GAMES } from "./arcade_games.ts";
 import { approveBlock, dismissAllBlocks, dismissBlock, liveBlocks } from "./security_log.ts";
@@ -424,7 +426,7 @@ function whisperDeps(): WhisperRuntimeDeps {
   };
 }
 import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedSandboxFoldersLocked, managedSandboxLocksOn, skipAllowed } from "./managed_config.ts";
-import { planModeChange, refuseGrantPath, refuseUserFolderAdd, runtimeFolderView, sandboxControlView, type ModeRequest, type RuntimeFolderView, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
+import { mxcHostPrepSteps, planModeChange, refuseGrantPath, refuseUserFolderAdd, runtimeFolderView, sandboxControlView, type ModeRequest, type RuntimeFolderView, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
 import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, gitExe, loopbackExempted, parseOmpShellPath, prependPathOverlay, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12/.13
 import { runningEgressProxyUrl } from "../harness/runs/egress_proxy.ts";
 import { runBrokeredGit } from "./git_broker.ts"; // P-SANDBOX.17 (ADR-0399)
@@ -2156,11 +2158,16 @@ const oauthBrokers = new Map<string, ReturnType<typeof Bun.spawn>>();
 // github.com) and BLOCKS on stdin before it ever prints the device URL. So for github-copilot we must feed
 // that first line up front, or the login hangs at the prompt and no URL surfaces. `promptAnswer` is that
 // line (the GHE domain, or "" for github.com); it's written to stdin immediately after spawn.
-function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string }> {
+function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string; code?: string }> {
+  // P-PROV.3: a login ALIAS (`openai-codex-device`) files its credential under its target provider
+  // (`openai-codex`), so every vault read and the failure note use the stored id; otherwise a successful
+  // device login reads as "no credential landed" and the OpenAI card never learns why a failed one died.
+  const vaultId = vaultProviderFor(oauthId);
+  const showCode = isShowCodeLogin(oauthId);
   // Snapshot the vault BEFORE the broker runs, so the exit handler below can tell whether a genuinely
   // fresh token landed rather than trusting the broker's exit code. Read-only; absent row => not present.
-  const beforeCred = credentialSnapshot(oauthId);
-  clearOauthFailure(oauthId); // a fresh attempt owns the failure slot - stale reasons never linger
+  const beforeCred = credentialSnapshot(vaultId);
+  clearOauthFailure(vaultId); // a fresh attempt owns the failure slot - stale reasons never linger
   let proc: ReturnType<typeof Bun.spawn>;
   try { proc = Bun.spawn([ompBin(), "auth-broker", "login", oauthId], { stdout: "pipe", stderr: "pipe", stdin: "pipe" }); }
   // stdin: "pipe" (NOT "ignore") — the broker reads stdin as a fallback for pasting the auth code.
@@ -2197,23 +2204,26 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
   const dec = new TextDecoder();
   let out = "", err = "";
   proc.exited.then(() => {
-    if (!landedFreshCredential(beforeCred, credentialSnapshot(oauthId))) {
-      const f = recordOauthFailure(oauthId, extractOauthFailure(out, err));
+    if (!landedFreshCredential(beforeCred, credentialSnapshot(vaultId))) {
+      const f = recordOauthFailure(vaultId, extractOauthFailure(out, err));
       console.error(`[oauth] ${oauthId} login left no new credential - not respawning omp: ${f.message}`);
       return;
     }
-    clearOauthFailure(oauthId);
+    clearOauthFailure(vaultId);
     // omp's login writes the fresh token but may leave a stale `disabled_cause` from a prior logout,
     // so the just-fetched credential stays ignored. Clear that one flag (token blob untouched) so the
     // login actually "sticks", THEN respawn omp to pick up the now-active provider.
-    const r = clearDisabledCredential(oauthId);
+    const r = clearDisabledCredential(vaultId);
     if (r.cleared) console.log(`[oauth] re-enabled ${oauthId} after login (cleared stale disabled flag)`);
     console.log(`[oauth] ${oauthId} credential landed - respawning omp so its models surface`);
     backend.restart();
   }).catch(() => { /* ignore */ });
-  const { promise, resolve } = Promise.withResolvers<{ started: boolean; url: string; output: string }>();
+  const { promise, resolve } = Promise.withResolvers<{ started: boolean; url: string; output: string; code?: string }>();
   {
     let done = false, ended = 0;
+    // P-PROV.3: show-the-code flows carry the one-time code in the stream; the guarded scanner (device_code.ts,
+    // issue #490) only accepts a standalone code after the official instruction, bounded across chunks.
+    const codes = showCode ? new DeviceCodeScanner() : null;
     const finish = (url: string) => {
       if (done) return; done = true;
       if (!url && loadSettings().developerMode) {
@@ -2221,20 +2231,34 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
         // browser. Log what we DID see so it's diagnosable (which omp, and its output on each stream).
         console.error(`[oauth] no URL from broker for ${oauthId} via ${ompBin()} — stdout=${JSON.stringify(out.slice(0, 200))} stderr=${JSON.stringify(err.slice(0, 200))}`);
       }
-      resolve({ started: true, url, output: (out || err).slice(0, 600) });
+      // A device broker may only hand the UI an ALLOWLISTED https URL (the renderer opens it); anything
+      // else is reported in the output text, never opened. Non-device flows keep today's behaviour.
+      const safeUrl = showCode && url && !deviceUrlAllowed(oauthId, url) ? "" : url;
+      if (showCode && url && !safeUrl) console.error(`[oauth] ${oauthId} printed a sign-in URL outside its allowlist; not opening it`);
+      const code = codes?.code ?? undefined;
+      resolve({ started: true, url: safeUrl, output: (out || err).slice(0, 600), ...(code ? { code } : {}) });
     };
     // Match a COMPLETE url (followed by whitespace) so a chunk boundary mid-URL can't resolve a truncated
     // link; scan BOTH streams — omp prints the URL to stdout today, but tolerate a future move to stderr.
     // `m[1]` is `string | undefined` under noUncheckedIndexedAccess, and finish() takes a string: an
     // unguarded m[1] fails the desktop server typecheck AND would hand the caller `undefined` as a URL.
-    const scan = () => { const m = (out + "\n" + err).match(/(https?:\/\/\S+?)(?=\s)/); if (m?.[1]) finish(m[1]); };
+    // A show-the-code flow waits for BOTH the URL and the code (they arrive within one print), with a
+    // short grace after the URL so a split chunk cannot leave the card with a link and no code.
+    let urlSeen = "";
+    const scan = () => {
+      const m = (out + "\n" + err).match(/(https?:\/\/\S+?)(?=\s)/);
+      if (!m?.[1]) return;
+      if (!codes) { finish(m[1]); return; }
+      if (codes.code) { finish(m[1]); return; }
+      if (!urlSeen) { urlSeen = m[1]; setTimeout(() => finish(urlSeen), 5_000); }
+    };
     // Drain stdout + stderr fully (never stop) so the broker can't block on a full pipe; grab the URL when it appears.
     (async () => {
-      try { for await (const c of proc.stdout as ReadableStream<Uint8Array>) { out += dec.decode(c); scan(); } } catch { /* stream ended */ }
+      try { for await (const c of proc.stdout as ReadableStream<Uint8Array>) { const s = dec.decode(c); out += s; codes?.push(s); scan(); } } catch { /* stream ended */ }
       if (++ended === 2) finish(""); // both streams hit EOF without a URL
     })();
     (async () => {
-      try { for await (const c of proc.stderr as ReadableStream<Uint8Array>) { err += dec.decode(c); scan(); } } catch { /* ended */ }
+      try { for await (const c of proc.stderr as ReadableStream<Uint8Array>) { const s = dec.decode(c); err += s; codes?.push(s); scan(); } } catch { /* ended */ }
       if (++ended === 2) finish("");
     })();
     setTimeout(() => finish(""), 60_000); // 60s — OTP/MFA flows need time (phone unlock, SMS delay)
@@ -2428,6 +2452,29 @@ return Bun.serve({
       // P-SANDBOX.12 (ADR-0390): the Security panel's sandbox switch. Off is a LUCID setting (no admin);
       // On registers the loopback exemption behind UAC when it is missing; "unregister" removes it. Every
       // change is audited, and the agent is restarted so the next spawn takes the new posture.
+      // P-MXC.1 (ADR-0441 decision 5): the operator's one elevated step for the MXC executor. The steps come
+      // from the LIVE view (what --probe still recommends, plus the loopback exemption when a network-on
+      // session needs it); they run behind one UAC prompt, and the truth is re-read afterwards. Audited; the
+      // agent restarts so the next spawn takes the new posture.
+      if (p === "/api/security/mxc/prepare" && req.method === "POST") {
+        const before = sandboxControlNow();
+        const steps = mxcHostPrepSteps(before);
+        if (!steps) return json({ ok: true, data: { changed: false, detail: before.mxc?.staged ? "the host is already prepared" : "the MXC executor is not staged on this host" } });
+        const m = mxcHost({ resourcesPath: process.env.LUCID_RESOURCES || undefined });
+        if (!m.host) return json({ ok: true, data: { changed: false, detail: m.reason } });
+        const launched = runMxcHostPrepElevated(m.executors.prep, steps);
+        resetMxcProbeCache(); resetLoopbackExemptCache();
+        const after = sandboxControlNow();
+        const remaining = mxcHostPrepSteps(after);
+        const changed = launched && !remaining;
+        const detail = changed
+          ? "the host is prepared - the agent restarts inside the MXC container"
+          : !launched ? "the administrator prompt was declined or a step failed - nothing changed"
+          : `the prompt ran but the host still needs: ${[remaining?.systemDrive && "prepare-system-drive", remaining?.nullDevice && "prepare-null-device", remaining?.loopback && "the loopback exemption"].filter(Boolean).join(", ")}`;
+        emitSecurityEvent({ category: "approval", type: "sandbox_host_prep", decision: changed ? "allow" : "block", severity: "medium", tool: "wxc-host-prep", reason: detail.slice(0, 200) });
+        if (changed) backend.restart();
+        return json({ ok: true, data: { changed, detail } });
+      }
       if (p === "/api/security/sandbox/mode" && req.method === "POST") {
         const b = await readBody<{ mode?: unknown }>(req);
         const mode = String(b.mode ?? "");
@@ -6540,13 +6587,23 @@ console.log(`\n  ◆ LucidAgentIDE desktop renderer (dev)\n  → http://localhos
 function sandboxControlNow(): SandboxControlView {
   const helper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : "";
   const helperBundled = !!helper && existsSync(helper);
+  // P-MXC.1 (ADR-0441): the MXC executor's posture rides the same view: staged + verified, its tier, and the
+  // elevated steps still pending (the "Prepare host" button). The loopback exemption is shared with the helper.
+  let mxc: SandboxControlView["mxc"];
+  if (process.platform === "win32") {
+    const m = mxcHost({ resourcesPath: process.env.LUCID_RESOURCES || undefined });
+    mxc = m.host
+      ? { staged: true, tier: m.host.tier, prepNeeded: m.probe.prepNeeded, loopbackNeeded: m.host.tier !== "base-container" && !loopbackExempted(), source: m.executors.source }
+      : { staged: false, prepNeeded: [], loopbackNeeded: false };
+  }
   return sandboxControlView({
     platform: process.platform,
     helperBundled,
     mode: loadSettings().sandboxWindowsMode,
     policyRequiresIsolation: managedSandboxLocksOn(managedConfig().config), // P-SANDBOX.14: either policy knob
-    registered: helperBundled && loopbackExempted(),
+    registered: (helperBundled || !!mxc?.staged) && loopbackExempted(),
     foldersLocked: managedSandboxFoldersLocked(managedConfig().config),
+    mxc,
   });
 }
 

@@ -27,7 +27,7 @@ const joinBlocks = (blocks: readonly string[]): string => blocks.join("\u0000");
 
 // The omp version this regression is pinned to (R-02). A silent dependency bump trips the assertion
 // below; R-01's scheduled omp-compat CI reruns the suite against candidate versions before adopting.
-const SUPPORTED_OMP = "18.4.4";
+const SUPPORTED_OMP = "18.8.6";
 // pi-tui joined at 18.2.6: omp 18.2.5 moved the status-line context-usage helpers there, so it must
 // bump in lockstep with the other four (omp-compat.mjs enforces the same five-way agreement).
 // pi-catalog joined with R-07 (#347): harness/omp/provider_catalog.test.ts pins its provider universe.

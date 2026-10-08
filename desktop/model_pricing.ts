@@ -22,6 +22,11 @@ const TABLE: [RegExp, Price][] = [
   [/nano/, { inPerM: 0.05, outPerM: 0.40 }],
   [/lite/, { inPerM: 0.10, outPerM: 0.40 }],
   [/\bmini\b/, { inPerM: 0.25, outPerM: 2.00 }], // \b so it never matches the "mini" inside "geMINI"
+  // Haiku 5.5 (2026-10-08, from omp 18.8.6's catalog: anthropic and vercel-ai-gateway's dotted
+  // `claude-haiku-5.5`): $0.10/$0.50 per Mtok (cache read $0.01 / write $0.125; above 100K input tokens
+  // the tier is $0.50/$2.50, which Price cannot express, so the base rate is the estimate). Must precede
+  // the generic /haiku/ row, which stays the $0.80/$4 Haiku 4.5 estimate. Same version tail as Sonnet 5.5.
+  [/haiku-?5[-.]5(\b|[-.])/, { inPerM: 0.10, outPerM: 0.50 }],
   [/haiku/, { inPerM: 0.80, outPerM: 4.00 }],
   [/flash/, { inPerM: 0.30, outPerM: 2.50 }],
   [/oss/, { inPerM: 0.10, outPerM: 0.40 }],

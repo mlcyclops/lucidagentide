@@ -88,6 +88,8 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 <p align="center"><sub>v2.3.0 promoted fifteen public betas to stable; v2.3.1 adds four new games to Preview &gt; Games. The download buttons above, Homebrew and the in-app updater all move to 2.3.1. <a href="#-lucid-v230-is-here"><b>What's in it, how to update, and how to report a bug with screenshots and logs</b></a> · <a href="#-whats-new-in-v231"><b>What's new in 2.3.1</b></a>.</sub></p>
 
+<p align="center"><sub><b>Next up: v2.4.0, as public betas first.</b> Like 2.3.0, the next release ships as GitHub prereleases (<code>v2.4.0-beta.N</code>) before anything reaches stable installs: the download buttons above, the in-app updater and the Homebrew cask stay on 2.3.1 until 2.4.0 is promoted. <a href="#-v240-ships-as-betas-first"><b>What the betas carry and how to track them</b></a>.</sub></p>
+
 </td>
 </tr>
 </table>
@@ -124,6 +126,20 @@ personalization internals are proprietary and intentionally undocumented here - 
 </div>
 
 ---
+
+## 🧪 v2.4.0 ships as betas first
+
+> **Nothing changes for a working install until 2.4.0 is promoted.** The next release is built and tested in the open the way 2.3.0 was: each `v2.4.0-beta.N` is a GitHub **prerelease**. It is never offered to stable installs by the in-app updater, the Homebrew cask stays pinned to 2.3.1, and the rolling `latest` download links at the top of this page keep pointing at 2.3.1. When the betas have settled, 2.4.0 is promoted and everything moves at once.
+
+**Tracking the betas.** Watch the [releases page](https://github.com/mlcyclops/lucidagentide/releases) (GitHub's *Watch > Custom > Releases* includes prereleases), and each beta gets its own *What's new in v2.4.0-beta.N* section below, newest first, with an install link. Installing a beta over 2.3.1 keeps your settings, sessions and keys; going back is installing 2.3.1 over it. Bugs go to the [issue template](https://github.com/mlcyclops/lucidagentide/issues/new?template=bug_report.yml) with the beta number, and [how to pull your logs](#how-to-pull-your-logs) applies unchanged.
+
+**What the first 2.4.0 betas carry** (each with its ADR in [DECISIONS.md](DECISIONS.md); the per-beta notes start at [What's new in v2.4.0-beta.1](#-whats-new-in-v240-beta1-prerelease)):
+
+- **🪐 Claude Haiku 5.5 on omp 18.8.6** at $0.10/$0.50 per Mtok with a 1M window; it becomes the recommended checker model when your account lists it. The omp move also brings Anthropic prompt-cache fixes and sturdier OAuth refresh. *(P-MODEL.7, ADR-0442)*
+- **🔑 OpenAI sign-in by device code.** The OpenAI card gains **Connect with a device code** for hosts where the browser callback never comes back (a blocked localhost port or a proxy 403): LUCID shows a short code you type on OpenAI's device page. The normal sign-in is unchanged. *(P-PROV.3, ADR-0444)*
+- **🛡️ Microsoft eXecution Container behind the Windows sandbox.** Microsoft's signed MXC executor is tried before LUCID's own AppContainer helper, with the same switch, folders and audit; **Security > Runtime sandbox** gains a one-prompt **Prepare host (administrator)** for the two Windows steps it needs. Betas prove it on Windows 10 and Windows 11 24H2 before the old helper is retired. *(P-MXC.1, ADR-0441)*
+- **🧩 Fleet fixes you reported:** the lane catch-up buttons stay in view until the newest line, right-click Paste lands in the lane you clicked, lane thinking is readable, the lane scrollbar is clear of the resize handle, and a new lane tiles the panel instead of spilling sideways.
+- **🗓 Scheduled jobs (in progress).** CRON-style jobs that wake a Fleet lane while you are away, with a Jobs tile on the right rail and a day-by-hour hover. Planned for a later 2.4.0 beta ([#497](https://github.com/mlcyclops/lucidagentide/issues/497), ADR-0443).
 
 ## 🚀 LUCID v2.3.0 is here
 
@@ -293,6 +309,19 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 - **🪐 Gravity Gambit: Orbital Golf** - sling a probe around planets into a wormhole across ten sectors with par scoring. A portrait panel turns the course so the sling still aims where you pull. *(P-GAME.8)*
 - **🔊 Silent Fathom: Sonar Descent** - a sonar-stealth dive through five generated cave zones: the cave is black until you ping, and the leviathans hunt by sound. *(P-GAME.9)*
 - **🪝 Skyhook: Cascade Run** - a grappling momentum runner: latch crystal anchors, swing, and release to fling ahead of the collapsing Cascade. Tuned after playtests: every anchor is within rope reach of the floor, the rope keeps your swing off the floor, a slightly late release still flies, and the Cascade lets a lead stand. *(P-GAME.10)*
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.4.0-beta.1 (prerelease)
+
+> **🪐 Claude Haiku 5.5, OpenAI sign-in by device code, and Microsoft's container behind the Windows sandbox.** Beta.1 opens the 2.4.0 train: omp moves to 18.8.6 for Claude Haiku 5.5, the OpenAI card gains a device-code sign-in for hosts where the browser callback never returns, Microsoft's signed eXecution Container is tried before LUCID's own AppContainer helper, and five Fleet grid fixes you reported land.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.4.0-beta.1](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.4.0-beta.1). Still a beta: not offered to stable installs, Homebrew stays on 2.3.1, the rolling `latest` links are untouched. Installing it over 2.3.1 keeps your settings, sessions and sign-ins; no provider asks you to sign in again.
+
+- **🪐 Claude Haiku 5.5 in the picker** - omp 18.8.6 catalogs `claude-haiku-5-5` ($0.10/$0.50 per Mtok, cache read $0.01, 1M context, 128K output, adaptive thinking) under Anthropic and the Vercel gateway; LUCID adds its cost card and the 1M window, and it becomes the recommended checker model once your account lists it. The omp move also brings Anthropic prompt-cache fixes and sturdier OAuth refresh (a transient refresh failure no longer ends a session). *(P-MODEL.7, [ADR-0442](DECISIONS.md))*
+- **🛡️ Three new omp providers, reviewed** - `factory-droid` and `snowflake` list as allied aggregators; `helmcode` (an EU gateway) resells China-origin open-weight models as bare names, and its `glm5.3` now sits behind the sovereignty acknowledgement with the rest. The weekly omp compatibility probe runs again (it had been failing on its own regex since 18.4.4, #491). *(P-MODEL.7)*
+- **🔑 OpenAI: Connect with a device code** - beside the normal sign-in, for a blocked localhost callback or a proxy answering 403: LUCID shows a short code you type on OpenAI's device page, nothing is pasted back, and the code is read from omp's broker with the guards from #490 (never a code-shaped path, never a URL outside `auth.openai.com`). The redirect sign-in is unchanged. The device and Copilot sign-in boxes also render in Settings again, not only in the Provider Hub. *(P-PROV.3, [ADR-0444](DECISIONS.md))*
+- **🛡️ Microsoft eXecution Container behind the Windows sandbox** - Microsoft's signed MXC executor (MIT, v1.0.0) is tried before LUCID's AppContainer helper, with the same switch, folder grants, egress proxy and audit, and it runs under the same container identity so your one-time loopback registration carries over. On Windows 10 and un-updated Windows 11 it needs two administrator steps the executor itself reports; **Security > Runtime sandbox** shows **Prepare host (administrator)**, one prompt for all of them, and MXC is not used until they are done. The old helper stays until MXC has proven itself on both tiers. *(P-MXC.1, [ADR-0441](DECISIONS.md))*
+- **🧩 Fleet grid fixes** - the lane catch-up buttons stay pinned to the viewport until you reach the newest line (they used to scroll away with the transcript) with centred chevrons; right-click Paste of an image lands in the lane you clicked, not the main composer; lane thinking is readable; the lane scrollbar sits clear of the right-edge resize handle; a new lane tiles the panel (three across at 1,200 px) instead of growing to its longest line and spilling sideways.
+- **📋 Report: unattended lane jobs** - scheduled jobs that wake a Fleet lane while you are away, with a Jobs tile on the right rail, are designed and tracked for a later 2.4.0 beta ([#497](https://github.com/mlcyclops/lucidagentide/issues/497), [#498](https://github.com/mlcyclops/lucidagentide/issues/498), [ADR-0443](DECISIONS.md)). Until then: keep the window open, set the lane's model and folder, stage the prompt in that lane, and turn auto-mode on for that lane only.
 
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0
 

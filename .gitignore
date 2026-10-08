@@ -139,3 +139,7 @@ lucidaddon_audit/
 # so the next one is safe too.
 lucid-support-*.zip
 tools/lucid-support-*.zip
+
+# bundled Microsoft eXecution Container executors (ADR-0441): staged per-arch by build/fetch-mxc.ts, never committed
+desktop/mxc/*
+!desktop/mxc/.gitkeep
