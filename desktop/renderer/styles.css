@@ -2402,6 +2402,56 @@ body.lucid-capturing #toasts{visibility:hidden}
 .richtip .rt-link{display:inline-flex;align-items:center;gap:5px;margin-top:10px;font-size:12px;font-weight:600;
   color:var(--accent-2);text-decoration:none}
 .richtip .rt-link:hover{text-decoration:underline}
+/* P-SCHED.2 (ADR-0443): the Jobs tile's premium hover. The card widens to hold the 7x24 week grid (today
+   first); a filled cell is one fire, a brighter one several; the next five runs follow as single-line rows
+   (invariant 11: each cell of a row ellipsises, none wraps). */
+.richtip:has(.jg){width:360px}
+.jg{display:grid;grid-template-columns:22px repeat(7,1fr);gap:2px;margin-top:9px;align-items:stretch}
+.jg-h{font-size:10px;color:var(--txt-3);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-bottom:2px}
+.jg-hr{font-size:9.5px;color:var(--txt-4);font-family:var(--mono);line-height:7px;text-align:right;padding-right:3px}
+.jg-c{height:7px;border-radius:2px;background:var(--bg-2);border:1px solid var(--line-soft)}
+.jg-c.one{background:color-mix(in srgb,var(--accent) 55%,var(--bg-2));border-color:var(--accent)}
+.jg-c.many{background:var(--accent-2);border-color:var(--accent-2)}
+.jn{display:flex;flex-direction:column;gap:3px;margin-top:9px}
+.jn-row{display:grid;grid-template-columns:72px minmax(0,1fr) minmax(0,1.2fr) minmax(0,.8fr);gap:6px;font-size:11px;color:var(--txt-2);align-items:center}
+.jn-row>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.jn-when{font-family:var(--mono);color:var(--txt)}
+.jn-name{color:var(--txt);font-weight:600}
+.jn-lane,.jn-repo{color:var(--txt-3)}
+/* The Jobs sheet (the mkt-scrim modal family). */
+.jobs-card{position:relative;width:min(760px,94vw);max-height:86vh;overflow:auto;background:var(--bg-1);border:1px solid var(--line-strong);border-radius:var(--r-lg);padding:16px 18px 18px;box-shadow:0 20px 60px rgb(var(--sh-rgb) / .5);animation:rise var(--t-slow,.24s) var(--ease-out)}
+.jobs-head{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;margin-bottom:12px}
+.jobs-title{display:inline-flex;align-items:center;gap:7px;font-size:15px;font-weight:650;color:var(--txt);white-space:nowrap}
+.jobs-sub{font-size:12px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jobs-body{display:flex;flex-direction:column;gap:14px}
+.jobs-list{display:flex;flex-direction:column;gap:8px}
+.job-row{border:1px solid var(--line);border-radius:10px;background:var(--bg-2);padding:9px 11px;display:flex;flex-direction:column;gap:5px;min-width:0}
+.job-head{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:8px;align-items:center}
+.job-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--txt)}
+.job-meta{font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.job-target{position:relative;padding-left:17px;font-size:11.5px;color:var(--txt-2)}
+.job-target>.ic{position:absolute;left:0;top:2px;color:var(--txt-4)}
+.job-target>span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.job-prompt{font-size:12px;color:var(--txt-2);line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.job-acts{display:flex;gap:6px;flex-wrap:wrap}
+.job-hist{display:flex;flex-direction:column;gap:2px;border-top:1px dashed var(--line-soft);padding-top:5px}
+.job-run{font-size:11px;color:var(--txt-3);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.job-form{border:1px solid var(--line);border-radius:10px;background:var(--bg-2);padding:11px 12px;display:flex;flex-direction:column;gap:8px}
+.job-form-h{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:650;color:var(--txt)}
+.job-f{display:grid;grid-template-columns:72px minmax(0,1fr);gap:8px;align-items:start;font-size:12px;color:var(--txt-2)}
+.job-f>span{padding-top:7px;color:var(--txt-3);white-space:nowrap}
+.job-f textarea{resize:vertical;font-family:inherit}
+.job-when{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.job-time{width:110px}
+.job-cron{width:200px;font-family:var(--mono)}
+.job-days{display:inline-flex;gap:8px;flex-wrap:wrap;font-size:11.5px}
+.job-days label{display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
+.job-next{grid-column:2;font-size:11.5px;color:var(--txt-3);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:4px}
+.job-opts{display:flex;flex-direction:column;gap:4px;min-width:0}
+.job-opts label{display:block;font-size:12px;color:var(--txt-2);line-height:1.6}
+.job-num{width:70px}
+.job-form-acts{display:flex;gap:10px;align-items:center}
+.job-form-err{font-size:12px;color:var(--red-txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 
 /* premium per-model hover card (model picker) */
 .modeltip{position:fixed;z-index:135;width:266px;pointer-events:none;background:var(--bg-4);

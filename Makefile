@@ -1244,6 +1244,11 @@ demo-P-MODEL.7: ## P-MODEL.7 (ADR-0442): Claude Haiku 5.5 on omp 18.8.6. The six
 	node -e 'import("./.github/scripts/omp-compat.mjs").then(m=>{const fs=require("fs");const src=fs.readFileSync("harness/prompt/prefix_compaction.test.ts","utf8");const cur=m.currentPin(JSON.parse(fs.readFileSync("package.json","utf8")),src);const out=m.migrateCandidateSource(src,cur,"99.0.0");if(!out.includes("const SUPPORTED_OMP = \"99.0.0\";"))throw new Error("probe migration lost the pin");console.log("omp-compat probe migrates the override-form regression from "+cur+" OK")})'
 	$(BUN) run harness/scripts/demo02_prefix_hash.ts
 
+.PHONY: demo-P-SCHED.1
+demo-P-SCHED.1: ## P-SCHED.1 + .2 (ADR-0443, issue #497): scheduled jobs that wake a Fleet lane while the operator is away. A pure local-time cron (Vixie day rule, @hourly/@daily/@weekly, DST-safe), a 0600 per-user job store (created disarmed, 60 min cap, missed = run once within 2 h), and a 30 s scheduler that prompts a live idle lane through its queue, waits on a busy one, brings a gone lane back from the ledger, applies the job's auto-mode snapshot only for the run, cancels at the cap, and suspends a job whose folder is gone. The rail gains a Jobs tile after LUCID points with a 7-day by hour hover and a sheet (add / arm / run now / history / delete); /api/jobs* is UI-token only. Proves cron, store, scheduler over fakes, and the tile/hover builders.
+	$(BUN) run harness/scripts/demo_p_sched_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/cron.test.ts desktop/scheduled_jobs.test.ts desktop/renderer/jobs_view.test.ts desktop/origin_guard.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-P-LEGIBLE.1
 demo-P-LEGIBLE.1: ## P-LEGIBLE.1 (ADR-0384, issue #302): legible to Defender / Agent 365 without a content path. Each launch writes a metadata-only local-agent manifest (Defender's vendor / relatedProcess / autoApprove / mcpServers / localMcps vocabulary) to userData; MCP entries keep only name, type, URL origin or command basename, so no header, arg, env, path or query can leak. No hook seam, no listener, gate untouched.
 	$(BUN) test $(TEST_IGNORES) desktop/local_agent_manifest.test.ts harness/adr_numbering.test.ts

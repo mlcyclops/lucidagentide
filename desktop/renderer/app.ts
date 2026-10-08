@@ -91,6 +91,8 @@ import { imageFileName } from "./chat_images.ts"; // P-IMG.1 (ADR-0208): inline 
 import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
 import { expandCommandBody, expandInlineCommands, slashTokenBeforeCaret, type UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1/.2: user "/" commands, body-wide
 import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
+import { cadenceToCron, jobRowHtml, jobsHoverHtml, jobsSheetHtml, jobsTile, nextThree, type CadenceKind, type JobsData } from "./jobs_view.ts"; // P-SCHED.2 (ADR-0443)
+import { describeCron } from "../cron.ts"; // P-SCHED.1: the same cron math the engine runs
 import { exportActionPlan } from "./kg_export.ts";
 import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } from "../collab/webrtc_session.ts"; // P-COLLAB.15/.16/.17: WebRTC diagnostics
 // Diagnostic hooks (no side effects unless invoked): __lucidWebrtcSelfTest proves the renderer-side WebRTC
@@ -243,6 +245,7 @@ const state = {
   memory: null as MemorySnapshot | null,
   ledger: null as import("./bridge.ts").UsageLedger | null, // P10.2 cross-model usage ledger
   codeActivity: null as import("./bridge.ts").CodeActivity | null, // ADR-0030 P-CODE.1 git workspace diffstat
+  jobs: null as JobsData | null, // P-SCHED.2 (ADR-0443): the scheduled-jobs snapshot the rail tile and hover read
   config: [] as ConfigOption[],
   configCached: false, // P-IDE.1d: current config came from the local cache; live refresh pending
   configWarming: false, // P-IDE.1d: a warm cycle is in flight (session still starting); picker shows the spinner
@@ -3741,6 +3744,11 @@ function renderMetricsRail(): void {
     })(),
   ];
 
+  // P-SCHED.2 (ADR-0443): the Jobs tile, after LUCID points, only once a job exists (no dead zero tile).
+  // Its hover is the hoverable rich card (the week grid), not the one-line tip, so it is attached below.
+  const jobsT = jobsTile(state.jobs, Date.now());
+  if (jobsT) rows.push({ n: jobsT.n, label: jobsT.label, cls: "c", tip: jobsT.tip, attn: jobsT.attn });
+
   // Signature: value + attention state per tile. Unchanged → leave the DOM alone (keep the pulse smooth).
   const sig = rows.map((t) => `${t.label}:${t.n}:${t.attn ? 1 : 0}`).join("|");
   if (sig === lastRailSig) return;
@@ -3750,10 +3758,110 @@ function renderMetricsRail(): void {
   tiles.innerHTML = rows.map((t) => {
     const changed = railPrimed && prevMetrics[t.label] !== undefined && prevMetrics[t.label] !== t.n;
     prevMetrics[t.label] = t.n;
-    const cl = `tile ${t.cls}${changed ? " changed" : ""}${t.attn ? " attn" : ""}`;
-    return `<div class="${cl}" data-tip="${esc(t.label)}|${esc(t.tip)}" data-tip-side="left"><div class="n">${esc(t.n)}</div><div class="l">${esc(t.label)}</div></div>`;
+    const cl = `tile ${t.cls}${changed ? " changed" : ""}${t.attn ? " attn" : ""}${t.label === "jobs" ? " tile-jobs" : ""}`;
+    const tip = t.label === "jobs" ? "" : ` data-tip="${esc(t.label)}|${esc(t.tip)}" data-tip-side="left"`;
+    return `<div class="${cl}"${tip} data-tile="${esc(t.label)}"><div class="n">${esc(t.n)}</div><div class="l">${esc(t.label)}</div></div>`;
   }).join("");
   railPrimed = true;
+  const jobsEl = tiles.querySelector('[data-tile="jobs"]') as HTMLElement | null;
+  if (jobsEl && state.jobs) {
+    attachRichTip(jobsEl, jobsHoverHtml(state.jobs, Date.now()));
+    jobsEl.style.cursor = "pointer";
+    jobsEl.addEventListener("click", () => { void openJobsSheet(); });
+  }
+}
+
+// ── P-SCHED.1/.2 (ADR-0443): scheduled lane jobs - the rail's data, the sheet ─────────────────────────
+let jobsTimer: number | undefined;
+/** Refresh the jobs snapshot the tile and hover read; re-paints the rail when it changed. */
+async function refreshJobs(): Promise<void> {
+  const data = await bridge.jobsList().catch(() => null);
+  if (!data) return;
+  const changed = JSON.stringify(data) !== JSON.stringify(state.jobs);
+  state.jobs = data;
+  if (changed) { lastRailSig = ""; renderMetricsRail(); }
+}
+function startJobsPolling(): void {
+  if (jobsTimer) return;
+  void refreshJobs();
+  jobsTimer = window.setInterval(() => void refreshJobs(), 60_000);
+}
+
+/** The Jobs sheet: list, arm / run / history / delete, and the add form with a live next-three readout. */
+async function openJobsSheet(): Promise<void> {
+  if ($("#jobsModal")) return;
+  const [data, targets] = await Promise.all([bridge.jobsList().catch(() => null), bridge.jobsTargets().catch(() => null)]);
+  if (!data) { showToast({ tone: "warn", title: "Scheduled jobs", desc: "The engine did not answer.", actions: [{ label: "OK" }], timeout: 4000 }); return; }
+  const tlist = targets?.targets ?? [];
+  const ov = el(`<div id="jobsModal" class="mkt-scrim"><div class="jobs-card" role="dialog" aria-label="Scheduled jobs">${jobsSheetHtml(data, tlist, Date.now())}</div></div>`);
+  const close = () => { ov.remove(); document.removeEventListener("keydown", onKey); void refreshJobs(); };
+  const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.preventDefault(); close(); } };
+  const redraw = async () => {
+    const fresh = await bridge.jobsList().catch(() => null);
+    if (!fresh) return;
+    state.jobs = fresh;
+    const list = ov.querySelector(".jobs-list");
+    if (list) list.innerHTML = fresh.jobs.map((j) => jobRowHtml(j, Date.now(), fresh.running.includes(j.id))).join("") || `<div class="cfg-empty">No jobs yet. Add one below; it starts disarmed.</div>`;
+    lastRailSig = ""; renderMetricsRail();
+  };
+  const form = ov.querySelector("[data-job-form]") as HTMLFormElement | null;
+  const nextOut = ov.querySelector("[data-job-next]") as HTMLElement | null;
+  const readCron = (): string | null => {
+    if (!form) return null;
+    const fd = new FormData(form);
+    const kind = String(fd.get("kind") ?? "daily") as CadenceKind;
+    const days = fd.getAll("day").map((d) => Number(d));
+    return cadenceToCron(kind, String(fd.get("hhmm") ?? ""), days, String(fd.get("cron") ?? ""));
+  };
+  const paintNext = () => {
+    if (!form || !nextOut) return;
+    const kind = String(new FormData(form).get("kind") ?? "daily");
+    (form.querySelector("[data-job-days]") as HTMLElement).hidden = kind !== "weekly";
+    (form.querySelector('[name="cron"]') as HTMLElement).hidden = kind !== "cron";
+    (form.querySelector('[name="hhmm"]') as HTMLElement).hidden = kind === "cron";
+    const cron = readCron();
+    nextOut.textContent = cron ? `Next: ${nextThree(cron, Date.now()).join(" · ") || "never"}` : "Pick a time (and at least one day).";
+  };
+  form?.addEventListener("input", paintNext);
+  form?.addEventListener("change", paintNext);
+  paintNext();
+  form?.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const fd = new FormData(form);
+    const err = ov.querySelector("[data-job-err]") as HTMLElement | null;
+    const cron = readCron();
+    if (!cron) { if (err) err.textContent = "Pick a valid time, day set, or cron expression."; return; }
+    const t = tlist.find((x) => x.laneId === String(fd.get("target")));
+    if (!t) { if (err) err.textContent = "Pick a lane (spawn one in Fleet first)."; return; }
+    const spec = {
+      name: String(fd.get("name") ?? ""), prompt: String(fd.get("prompt") ?? ""), cron,
+      target: { laneId: t.laneId, name: t.name, cwd: t.cwd, model: t.model, repo: t.repo },
+      autoApprove: fd.get("autoApprove") === "on", armed: fd.get("armed") === "on",
+      maxMinutes: Number(fd.get("maxMinutes") ?? 60), missed: String(fd.get("missed") ?? "run-once"),
+    };
+    void (async () => {
+      const r = await bridge.jobsCreate(spec);
+      if (!r) { if (err) err.textContent = "The engine refused the job (see the toast)."; return; }
+      if (err) err.textContent = "";
+      form.reset(); paintNext();
+      await redraw();
+      showToast({ title: spec.armed ? "Job armed" : "Job saved (disarmed)", desc: spec.armed ? `${spec.name} fires ${describeCron(cron)}. LUCID must stay open.` : `Arm ${spec.name} when you are ready; it never fires until then.`, actions: [{ label: "OK" }], timeout: 5000 });
+    })();
+  });
+  ov.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t === ov || t.closest("[data-jobs-close]")) { close(); return; }
+    const arm = t.closest("[data-job-arm]") as HTMLElement | null;
+    if (arm) { void bridge.jobsUpdate(arm.dataset.jobArm!, { armed: arm.dataset.armTo === "1" }).then(redraw); return; }
+    const run = t.closest("[data-job-run]") as HTMLElement | null;
+    if (run) { void bridge.jobsRun(run.dataset.jobRun!).then((r) => { showToast(r?.started ? { title: "Job started", desc: "Watch the lane in Fleet.", actions: [{ label: "OK" }], timeout: 3000 } : { tone: "warn", title: "Job not started", desc: "It may be running already.", actions: [{ label: "OK" }], timeout: 4000 }); return redraw(); }); return; }
+    const hist = t.closest("[data-job-hist]") as HTMLElement | null;
+    if (hist) { const box = hist.closest(".job-row")?.querySelector(".job-hist") as HTMLElement | null; if (box) { box.hidden = !box.hidden; hist.setAttribute("aria-expanded", String(!box.hidden)); } return; }
+    const del = t.closest("[data-job-del]") as HTMLElement | null;
+    if (del) { void bridge.jobsDelete(del.dataset.jobDel!).then(redraw); return; }
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.append(ov);
 }
 function setInspectorRail(rail: boolean): void {
   state.inspectorRail = rail;
@@ -17771,6 +17879,7 @@ const palette = createPalette(() => {
     { id: "mkt", title: "Open Plugin Marketplace", icon: "market", hint: "popup", run: () => openMarketplace() }, // P-MARKET.1
     { id: "kgpacks", title: "Browse Role KG Packs", icon: "package", hint: "popup", run: () => openKgPacks() }, // P-KGPACK.5 (ADR-0205)
     { id: "sysres", title: "Open System resources", icon: "gauge", hint: "popup", run: () => void openResourcePanelLive() }, // P-SYSRES.1
+    { id: "jobs", title: "Scheduled jobs", icon: "calendar", hint: "wake a Fleet lane while you are away", run: () => void openJobsSheet() }, // P-SCHED.2 (ADR-0443)
     // P-LOC.3 (ADR-0095): a discoverable entry point for the AI-authored code ledger — opens Memory with
     // the section expanded, so it no longer has to be hunted for inside the panel.
     { id: "ailoc", title: "Open AI-authored code ledger", icon: "savings", hint: "panel", run: () => { OPEN.add("mem.ailoc"); focusInspector("memory"); } },
@@ -19028,6 +19137,7 @@ function initResize(): void {
 buildShell();
 void renderSessions();
 initTooltips();
+startJobsPolling(); // P-SCHED.2 (ADR-0443): the Jobs tile appears once a job exists
 wire();
 initZoom();
 initResize();

@@ -133,7 +133,10 @@ import { browserProcesses, setBrowserProcessSource, type ProcessView } from "./p
 import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, failAllBrowserCommands, getBrowserStatus, lastBrowserActivityAt, latestBrowserShot, setBrowserStatus, setLatestBrowserShot, waitBrowserResult } from "./browser_control.ts"; // P-BROWSER.1 (wave 2): agent-browser mailbox + status
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: shared combo parse, so a typo fails fast at the route
 import { isBrowserAction, isBrowserPageShape } from "./browser_snapshot.ts"; // P-JEV.4 (ADR-0379): the policy's act/snapshot shapes
-import { appendLaneLedger, listTimeline } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline
+import { appendLaneLedger, listTimeline, readLaneLedger } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline; P-SCHED.1 reads it to recover a job's lane
+import { JobScheduler, type LedgerHit } from "./job_scheduler.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs
+import { createJob, loadJobs, normalizeJobSpec, saveJobs, updateJob, nextFireAt } from "./scheduled_jobs.ts"; // P-SCHED.1
+import { firesBetween } from "./cron.ts"; // P-SCHED.1
 import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth, typesafeKeySet, type ProviderAuthSnapshot } from "./auth_status.ts";
 import { parseJudgmentReport } from "../harness/judgment/trace_schema.ts"; // P-JEV.2 (ADR-0377): the loopback boundary for judgment traces
@@ -1735,6 +1738,42 @@ const fleet: FleetLaneManager = new FleetLaneManager({
 // P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
 // /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
 fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
+// P-SCHED.1 (ADR-0443): scheduled lane jobs. The scheduler sees the fleet only through these six edges:
+// the live lane list, "is it busy", the manager's own prompt path, Recover (the orbit's path: name,
+// folder, model and the recorded session from the ledger), the per-lane auto-mode switch, and cancel.
+function ledgerLookup(target: { laneId?: string; name: string; cwd: string }): LedgerHit | null {
+  const rows = readLaneLedger();
+  const same = (a: string, b: string) => a.replace(/[\\/]+$/, "").toLowerCase() === b.replace(/[\\/]+$/, "").toLowerCase();
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i]!;
+    if ((target.laneId && r.laneId === target.laneId) || (r.name === target.name && same(r.cwd, target.cwd))) {
+      return { laneId: r.laneId, name: r.name, cwd: r.cwd, model: r.model, sessionId: r.sessionId };
+    }
+  }
+  return null;
+}
+const jobScheduler = new JobScheduler({
+  lanes: async () => (await fleet.status()).lanes.map((l) => ({ id: l.id, name: l.name, cwd: l.cwd, model: l.model, status: l.status, autoApprove: l.autoApprove })),
+  laneBusy: (id) => fleet.laneRunning(id),
+  prompt: (laneId, text, sink) => fleet.prompt(laneId, text, sink),
+  recover: async (hit) => {
+    let resume: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } | undefined;
+    if (hit.sessionId) {
+      const page = sessionMessages(hit.sessionId, TRANSCRIPT_MAX_TURNS);
+      const transcript: LaneTurnRecord[] = [];
+      for (const m of page.messages) if ((m.role === "user" || m.role === "assistant") && m.text.trim()) transcript.push({ role: m.role, text: m.text });
+      resume = { sessionId: hit.sessionId, transcript, turns: page.userTotal };
+    }
+    const r = await fleet.spawn({ cwd: hit.cwd, name: hit.name, model: hit.model, ...(resume ? { resume } : {}) });
+    return r.ok && r.lane ? { ok: true, lane: { id: r.lane.id, name: r.lane.name, cwd: r.lane.cwd, model: r.lane.model, status: r.lane.status, autoApprove: r.lane.autoApprove } } : { ok: false, reason: r.reason };
+  },
+  ledgerLookup,
+  setAuto: (laneId, on) => { fleet.setAuto(laneId, on); },
+  cancel: (laneId) => { fleet.cancel(laneId); },
+  audit: (e) => {
+    emitSecurityEvent({ category: "exec", type: "scheduled_job", decision: e.outcome === "error" || e.outcome === "timeout" || e.outcome === "suspended" ? "block" : "allow", severity: e.outcome === "started" || e.outcome === "ok" ? "info" : "medium", tool: "scheduled_job", reason: `${e.name} [${e.jobId}] ${e.outcome}${e.laneId ? ` lane ${e.laneId}` : ""}${e.note ? `: ${e.note}` : ""}`.slice(0, 200) });
+  },
+});
 /** P-SWITCH.2 (ADR-0404): the live spoke holding session `id`, if any (Main's own claim is checked by the
  *  lane manager itself, through masterSessionId above). */
 function spokeHolding(id: string): SessionLiveSpoke | null {
@@ -5788,6 +5827,73 @@ return Bun.serve({
       // P-FLEET.L1/L2: the local lane fleet. Status is metadata (lanes + pressure evidence); prompt streams
       // the lane's turn as NDJSON exactly like /api/chat; answer resolves a pending approval (fail-closed on
       // silence).
+      // P-SCHED.1 (ADR-0443): scheduled lane jobs. UI token only (never in AGENT_ROUTES): a prompt-injected
+      // transcript must not be able to arm a 3:00 AM run of itself. The list carries each job's next fire
+      // and the next seven days of fires for the rail tile's day-by-hour hover.
+      if (p === "/api/jobs" && req.method === "GET") {
+        const now = Date.now();
+        const jobs = loadJobs().map((j) => ({ ...j, nextFireAt: j.armed && !j.suspended ? nextFireAt(j, now) : null }));
+        const upcoming = jobs.flatMap((j) => (j.armed && !j.suspended ? firesBetween(j.cron, new Date(now), new Date(now + 7 * 86_400_000), 64).map((d) => ({ at: d.getTime(), jobId: j.id, name: j.name, lane: j.target.name, repo: j.target.repo ?? j.target.cwd.split(/[\\/]/).filter(Boolean).pop() ?? "" })) : []))
+          .sort((a, b) => a.at - b.at).slice(0, 200);
+        return json({ ok: true, data: { jobs, running: jobScheduler.running(), upcoming } });
+      }
+      if (p === "/api/jobs" && req.method === "POST") {
+        const v = normalizeJobSpec(await readBody<unknown>(req));
+        if (!v.ok) return json({ ok: false, error: v.reason });
+        const job = createJob(v.spec);
+        saveJobs([job, ...loadJobs()]);
+        emitSecurityEvent({ category: "exec", type: "scheduled_job", decision: "allow", severity: "info", tool: "scheduled_job", reason: `created ${job.name} [${job.id}] ${job.cron}${job.armed ? " armed" : " disarmed"}`.slice(0, 200) });
+        return json({ ok: true, data: job });
+      }
+      if (p === "/api/jobs/update" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; patch?: unknown }>(req);
+        const id = String(b.id ?? "");
+        const patch = (b.patch && typeof b.patch === "object" ? b.patch : {}) as Record<string, unknown>;
+        const current = loadJobs().find((j) => j.id === id);
+        if (!current) return json({ ok: false, error: "no such job" });
+        const merged = normalizeJobSpec({ name: current.name, prompt: current.prompt, target: current.target, cron: current.cron, armed: current.armed, autoApprove: current.autoApprove, maxMinutes: current.maxMinutes, missed: current.missed, ...patch });
+        if (!merged.ok) return json({ ok: false, error: merged.reason });
+        // Arming a suspended job is the user saying "I fixed it": the suspension clears and the cursor
+        // restarts from now, so the fires missed while suspended are not owed.
+        const rearmed = merged.spec.armed && (!current.armed || current.suspended);
+        const job = updateJob(id, (j) => ({ ...j, ...merged.spec, ...(rearmed ? { suspended: undefined, lastFireAt: Date.now() } : {}) }));
+        emitSecurityEvent({ category: "exec", type: "scheduled_job", decision: "allow", severity: "info", tool: "scheduled_job", reason: `updated ${merged.spec.name} [${id}]${"armed" in patch ? (merged.spec.armed ? " armed" : " disarmed") : ""}`.slice(0, 200) });
+        return json({ ok: true, data: job });
+      }
+      if (p === "/api/jobs/delete" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        const id = String(b.id ?? "");
+        const before = loadJobs();
+        const after = before.filter((j) => j.id !== id);
+        if (after.length === before.length) return json({ ok: false, error: "no such job" });
+        saveJobs(after);
+        emitSecurityEvent({ category: "exec", type: "scheduled_job", decision: "allow", severity: "info", tool: "scheduled_job", reason: `deleted [${id}]` });
+        return json({ ok: true, data: { deleted: true } });
+      }
+      if (p === "/api/jobs/run" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        const job = loadJobs().find((j) => j.id === String(b.id ?? ""));
+        if (!job) return json({ ok: false, error: "no such job" });
+        if (jobScheduler.running().includes(job.id)) return json({ ok: false, error: "this job is running right now" });
+        // Run now is a manual fire: it does not move the schedule's cursor past a future fire.
+        void jobScheduler.fire(job, job.lastFireAt ?? job.createdAt, Date.now(), true);
+        return json({ ok: true, data: { started: true } });
+      }
+      // The lanes a job can target: live lanes first, then every lane the ledger remembers (newest line
+      // per lane id), so a job can name a lane that is not running right now.
+      if (p === "/api/jobs/targets" && req.method === "GET") {
+        const live = (await fleet.status()).lanes.filter((l) => l.status !== "stopped").map((l) => ({ laneId: l.id, name: l.name, cwd: l.cwd, model: l.model, live: true, repo: l.repo?.remote ?? l.repo?.root ?? undefined }));
+        const seen = new Set(live.map((l) => l.laneId));
+        const remembered: { laneId: string; name: string; cwd: string; model?: string; live: boolean; repo?: string }[] = [];
+        const rows = readLaneLedger();
+        for (let i = rows.length - 1; i >= 0 && remembered.length < 60; i--) {
+          const r = rows[i]!;
+          if (seen.has(r.laneId)) continue;
+          seen.add(r.laneId);
+          remembered.push({ laneId: r.laneId, name: r.name, cwd: r.cwd, model: r.model, live: false });
+        }
+        return json({ ok: true, data: { targets: [...live, ...remembered] } });
+      }
       if (p === "/api/fleet/status") return json({ ok: true, data: await fleet.status() });
       // P-TUI.2: open `lucid hub` in a new terminal window, attached to THIS engine. UI token only (never in
       // AGENT_ROUTES): one fixed command, no argument from the request, never inside the agent sandbox.
@@ -6580,6 +6686,8 @@ await refreshRecall();
 // P-GOAL.5 (ADR-0047): arm the in-process automation scheduler. It only ticks while this dev server
 // (and thus the app) is running; nothing is registered with the OS, so closing the app stops it.
 backend.startAutomationScheduler();
+// P-SCHED.1 (ADR-0443): the scheduled LANE jobs tick beside it, same envelope (only while the app runs).
+jobScheduler.start();
 
 console.log(`\n  ◆ LucidAgentIDE desktop renderer (dev)\n  → http://localhost:${server.port}\n`);
 

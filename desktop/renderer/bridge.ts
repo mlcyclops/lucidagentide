@@ -282,6 +282,7 @@ export interface ConfigOption {
 // at this one boundary, like ChatEvent).
 import type { ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1 (DOM-free, types only)
 import type { NetView } from "./net_status.ts"; // P-NETSTAT.1 (ADR-0423): the network indicator's view (owned there)
+import type { JobsData, JobTargetView, JobView } from "./jobs_view.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs (owned there)
 export type { NetView };
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
 export type { ProgressView, WaitView };
@@ -790,6 +791,13 @@ export interface BrowserStatusView { active: boolean; title: string; url: string
 export interface LucidBridge {
   isElectron: boolean;
   security(): Promise<SecuritySnapshot | null>;
+  /** P-SCHED.1 (ADR-0443): scheduled lane jobs (UI token only). */
+  jobsList(): Promise<JobsData | null>;
+  jobsTargets(): Promise<{ targets: JobTargetView[] } | null>;
+  jobsCreate(spec: unknown): Promise<JobView | null>;
+  jobsUpdate(id: string, patch: Record<string, unknown>): Promise<JobView | null>;
+  jobsDelete(id: string): Promise<{ deleted: boolean } | null>;
+  jobsRun(id: string): Promise<{ started: boolean } | null>;
   /** Release one quarantined call - the audited fail-closed override (ADR-0019 C). */
   securityApprove(id: string): Promise<BlockRecord | null>;
   /** P-SANDBOX.8: revoke one standing directory grant (helper --revoke-acl + store removal). */
@@ -1679,6 +1687,12 @@ export const bridge: LucidBridge = {
   sandboxGrantRevoke: (path) => post("/api/security/sandbox-grant/revoke", { path }),
   sandboxMode: (mode) => post("/api/security/sandbox/mode", { mode }),
   mxcPrepare: () => post("/api/security/mxc/prepare", {}),
+  jobsList: () => getData("/api/jobs"),
+  jobsTargets: () => getData("/api/jobs/targets"),
+  jobsCreate: (spec) => post("/api/jobs", spec),
+  jobsUpdate: (id, patch) => post("/api/jobs/update", { id, patch }),
+  jobsDelete: (id) => post("/api/jobs/delete", { id }),
+  jobsRun: (id) => post("/api/jobs/run", { id }),
   sandboxGrantAdd: (mode) => post("/api/security/sandbox-grant/add", { mode }),
   securityDismiss: (id) => post("/api/security/dismiss", { id }),
   securityDismissAll: () => post("/api/security/dismiss-all", {}),
