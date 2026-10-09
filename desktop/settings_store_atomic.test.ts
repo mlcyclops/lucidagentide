@@ -5,7 +5,7 @@
 // corrupt file is recovered (never silently treated as an empty profile that the next save persists).
 
 import { test, expect, describe, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync, existsSync, openSync, renameSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync, existsSync, renameSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { load, save, setSandboxWindowsMode, setDeveloperMode, _setSettingsIoForTest } from "./settings_store.ts";
@@ -121,7 +121,7 @@ describe("P-SETTINGS.1 never an empty profile (review fixes, 2026-10-09)", () =>
   test("a profile that stays locked is an error, never {}, so no setter can save over it", () => {
     const { file } = scratch();
     save(PROFILE);
-    _setSettingsIoForTest({ openSync: (() => { throw errno("EPERM", "open"); }) as unknown as typeof openSync });
+    _setSettingsIoForTest({ openFault: () => { throw errno("EPERM", "open"); } });
     expect(() => load()).toThrow(/cannot be read/);
     expect(() => setDeveloperMode(true)).toThrow(/cannot be read/);
     _setSettingsIoForTest(null);
@@ -133,12 +133,7 @@ describe("P-SETTINGS.1 never an empty profile (review fixes, 2026-10-09)", () =>
     scratch();
     save(PROFILE);
     let refusals = 2;
-    _setSettingsIoForTest({
-      openSync: ((path: string, flags: string) => {
-        if (refusals-- > 0) throw errno("EBUSY", "open");
-        return openSync(path, flags);
-      }) as unknown as typeof openSync,
-    });
+    _setSettingsIoForTest({ openFault: () => { if (refusals-- > 0) throw errno("EBUSY", "open"); } });
     expect(load()).toEqual(PROFILE);
   });
 

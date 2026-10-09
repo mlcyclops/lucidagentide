@@ -586,8 +586,10 @@ const bakFile = (file: string): string => `${file}.bak`;
 const errCode = (e: unknown): string | undefined => (e as NodeJS.ErrnoException | undefined)?.code;
 
 /** The fs calls whose Windows failure modes P-SETTINGS.1 must survive. Production always uses node:fs;
- *  tests swap entries through _setSettingsIoForTest to hold a lock or land a concurrent save on cue. */
-const realIo = { openSync, renameSync, statSync };
+ *  tests swap entries through _setSettingsIoForTest to hold a lock or land a concurrent save on cue.
+ *  The open is NOT swappable: `openFault` runs just before the real openSync and can only throw, so the
+ *  descriptor that is fstat'd and read stays visibly an openSync handle (CodeQL js/file-system-race). */
+const realIo = { renameSync, statSync, openFault: null as ((file: string) => void) | null };
 const io = { ...realIo };
 /** Test-only: replace some of the fs calls above; null restores node:fs. */
 export function _setSettingsIoForTest(patch: Partial<typeof realIo> | null): void { Object.assign(io, realIo, patch ?? {}); }
@@ -601,11 +603,11 @@ function parseSettings(text: string): GuiSettings {
 
 /** Windows briefly refuses an open or a rename while another handle (antivirus, OneDrive, a second
  *  reader) holds the file; retry a few times before treating the failure as real. */
+const RETRYABLE = ["EPERM", "EBUSY", "EACCES"];
 function withRetry<T>(op: () => T): T {
   for (let attempt = 0; ; attempt++) {
     try { return op(); } catch (e) {
-      const code = errCode(e);
-      if (attempt >= 9 || (code !== "EPERM" && code !== "EBUSY" && code !== "EACCES")) throw e;
+      if (attempt >= 9 || !RETRYABLE.includes(errCode(e) ?? "")) throw e;
       Bun.sleepSync(15);
     }
   }
@@ -677,7 +679,13 @@ function recoverCorrupt(file: string, err: unknown, read: { st: Stats; bytes: Bu
 function loadFile(file: string, mayReread: boolean): GuiSettings {
   let read: { st: Stats; bytes: Buffer };
   try {
-    const fd = withRetry(() => io.openSync(file, "r"));
+    let fd: number;
+    for (let attempt = 0; ; attempt++) { // withRetry inlined: fd must stay a direct openSync handle
+      try { io.openFault?.(file); fd = openSync(file, "r"); break; } catch (e) {
+        if (attempt >= 9 || !RETRYABLE.includes(errCode(e) ?? "")) throw e;
+        Bun.sleepSync(15);
+      }
+    }
     try {
       const st = fstatSync(fd);
       if (loadMemo && loadMemo.file === file && loadMemo.mtimeMs === st.mtimeMs && loadMemo.size === st.size) {
