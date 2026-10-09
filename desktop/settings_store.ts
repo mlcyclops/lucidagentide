@@ -12,7 +12,7 @@
 // (OAuth is handled separately via omp's own credential vault / auth-broker -
 //  that's the more secure path and omp owns the storage there.)
 
-import { closeSync, fchmodSync, fstatSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, fchmodSync, fstatSync, fsyncSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
@@ -572,8 +572,21 @@ export function setLocalProviderEnabled(id: string, enabled: boolean): void {
 //     bytes, never a torn file), after copying the last good file to `<file>.bak`.
 //   - load() treats a corrupt file as corrupt, not empty: it keeps the bad bytes aside as
 //     `<file>.corrupt-<ts>`, restores `<file>.bak` if that parses, and only then falls back to {}.
+//   - Review fixes (2026-10-09): only a MISSING file is {}. A file that exists but cannot be opened or
+//     read (a lock that outlives the retries, a permission or I/O error) throws, so no read-modify-save
+//     can persist an empty profile over it. A parsed backup is served even when the primary cannot be
+//     rewritten. Recovery acts only on the file that failed to parse: if another writer replaced the
+//     path after the read, the replacement is loaded, never renamed aside or overwritten.
 let loadMemo: { file: string; mtimeMs: number; size: number; s: GuiSettings } | null = null;
 const bakFile = (file: string): string => `${file}.bak`;
+const errCode = (e: unknown): string | undefined => (e as NodeJS.ErrnoException | undefined)?.code;
+
+/** The fs calls whose Windows failure modes P-SETTINGS.1 must survive. Production always uses node:fs;
+ *  tests swap entries through _setSettingsIoForTest to hold a lock or land a concurrent save on cue. */
+const realIo = { openSync, renameSync, statSync };
+const io = { ...realIo };
+/** Test-only: replace some of the fs calls above; null restores node:fs. */
+export function _setSettingsIoForTest(patch: Partial<typeof realIo> | null): void { Object.assign(io, realIo, patch ?? {}); }
 
 /** Parse settings bytes; anything that is not a JSON object is corrupt (throws). */
 function parseSettings(text: string): GuiSettings {
@@ -582,11 +595,12 @@ function parseSettings(text: string): GuiSettings {
   return v as GuiSettings;
 }
 
-/** Windows refuses a rename while another handle is briefly open on the target; retry a few times. */
-function renameRetry(from: string, to: string): void {
+/** Windows briefly refuses an open or a rename while another handle (antivirus, OneDrive, a second
+ *  reader) holds the file; retry a few times before treating the failure as real. */
+function withRetry<T>(op: () => T): T {
   for (let attempt = 0; ; attempt++) {
-    try { renameSync(from, to); return; } catch (e) {
-      const code = (e as NodeJS.ErrnoException).code;
+    try { return op(); } catch (e) {
+      const code = errCode(e);
       if (attempt >= 9 || (code !== "EPERM" && code !== "EBUSY" && code !== "EACCES")) throw e;
       Bun.sleepSync(15);
     }
@@ -605,7 +619,7 @@ function writeAtomic(path: string, text: string): { mtimeMs: number; size: numbe
       fsyncSync(fd);
       st = fstatSync(fd); // rename keeps mtime + size, so this keys the memo for the final file
     } finally { closeSync(fd); }
-    renameRetry(tmp, path);
+    withRetry(() => io.renameSync(tmp, path));
     return st;
   } catch (e) {
     try { unlinkSync(tmp); } catch { /* already renamed or never created */ }
@@ -613,34 +627,74 @@ function writeAtomic(path: string, text: string): { mtimeMs: number; size: numbe
   }
 }
 
-/** The primary file is unreadable: keep its bytes for forensics, then restore the backup if it parses. */
-function recoverCorrupt(file: string, err: unknown): GuiSettings {
-  try { renameRetry(file, `${file}.corrupt-${Date.now()}`); } catch { /* keep going: the backup still helps */ }
+/** True while `file` is still the exact file whose bytes were read (same identity, size and mtime). */
+function samePrimary(file: string, read: Stats): boolean {
+  try {
+    const now = io.statSync(file);
+    return now.ino === read.ino && now.size === read.size && now.mtimeMs === read.mtimeMs;
+  } catch { return false; } // gone or unreadable: not ours to touch
+}
+
+/** The primary parsed as corrupt: restore the backup if it parses, keep the bad bytes for forensics, and
+ *  never act on a path another writer replaced after the read (that writer's save would be lost). */
+function recoverCorrupt(file: string, err: unknown, read: { st: Stats; bytes: Buffer }, mayReread: boolean): GuiSettings {
+  if (!samePrimary(file, read.st)) {
+    if (mayReread) return loadFile(file, false);
+    throw new Error(`settings: ${file} kept changing during corrupt-file recovery; refusing to guess`);
+  }
   let restored: GuiSettings | null = null;
   try { restored = parseSettings(readFileSync(bakFile(file), "utf8")); } catch { /* no usable backup */ }
-  console.error(`[settings] ${file} was unreadable (${String((err as Error)?.message ?? err).slice(0, 120)}); ` +
-    (restored ? `restored the last good copy from ${bakFile(file)}.` : "no usable backup, starting from defaults."));
-  if (!restored) { loadMemo = null; return {}; }
-  const st = writeAtomic(file, JSON.stringify(restored, null, 2));
-  loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: restored };
+  const why = String((err as Error)?.message ?? err).slice(0, 120);
+  const kept = `${file}.corrupt-${Date.now()}`;
+  if (!restored) {
+    // Nothing to restore: move the bad file aside (copy it if the rename is refused) and start from defaults.
+    try { withRetry(() => io.renameSync(file, kept)); } catch {
+      try { writeFileSync(kept, read.bytes, { flag: "wx", mode: 0o600 }); } catch { /* best effort */ }
+    }
+    console.error(`[settings] ${file} was unreadable (${why}); no usable backup, starting from defaults.`);
+    loadMemo = null;
+    return {};
+  }
+  // A copy, not a rename: the restore below replaces the primary atomically, so the path is never empty.
+  try { writeFileSync(kept, read.bytes, { flag: "wx", mode: 0o600 }); } catch { /* best effort */ }
+  console.error(`[settings] ${file} was unreadable (${why}); restored the last good copy from ${bakFile(file)}.`);
+  try {
+    const st = writeAtomic(file, JSON.stringify(restored, null, 2));
+    loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: restored };
+  } catch (e) {
+    // A lock outlived the retries. The parsed backup is still the user's profile: serve it, never {},
+    // and let the next load() finish the restore.
+    loadMemo = null;
+    console.error(`[settings] could not rewrite ${file} from the backup (${errCode(e) ?? String(e).slice(0, 120)}); serving the backup until it can be.`);
+  }
   return structuredClone(restored);
 }
 
-export function load(): GuiSettings {
-  const file = settingsFile();
-  let fd: number;
-  try { fd = openSync(file, "r"); } catch { return {}; } // missing (first run, or the user deleted it) -> {}
+function loadFile(file: string, mayReread: boolean): GuiSettings {
+  let read: { st: Stats; bytes: Buffer };
   try {
+    const fd = withRetry(() => io.openSync(file, "r"));
     try {
       const st = fstatSync(fd);
-      if (!loadMemo || loadMemo.file !== file || loadMemo.mtimeMs !== st.mtimeMs || loadMemo.size !== st.size) {
-        loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: parseSettings(readFileSync(fd, "utf8")) };
+      if (loadMemo && loadMemo.file === file && loadMemo.mtimeMs === st.mtimeMs && loadMemo.size === st.size) {
+        return structuredClone(loadMemo.s);
       }
+      read = { st, bytes: readFileSync(fd) };
     } finally { closeSync(fd); }
-    return structuredClone(loadMemo.s);
   } catch (e) {
-    try { return recoverCorrupt(file, e); } catch { return {}; }
+    if (errCode(e) === "ENOENT") return {}; // missing (first run, or the user deleted it) -> {}
+    // It exists but cannot be opened or read (a lock that outlived the retries, a permission or I/O
+    // error). An empty profile here is what the next read-modify-save would persist over it.
+    throw new Error(`settings: ${file} exists but cannot be read (${errCode(e) ?? String(e).slice(0, 120)}); refusing to treat it as an empty profile`, { cause: e });
   }
+  let s: GuiSettings;
+  try { s = parseSettings(read.bytes.toString("utf8")); } catch (e) { return recoverCorrupt(file, e, read, mayReread); }
+  loadMemo = { file, mtimeMs: read.st.mtimeMs, size: read.st.size, s };
+  return structuredClone(s);
+}
+
+export function load(): GuiSettings {
+  return loadFile(settingsFile(), true);
 }
 
 export function save(s: GuiSettings): void {

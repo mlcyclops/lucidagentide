@@ -5,10 +5,10 @@
 // corrupt file is recovered (never silently treated as an empty profile that the next save persists).
 
 import { test, expect, describe, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync, existsSync, openSync, renameSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { load, save, setSandboxWindowsMode, setDeveloperMode } from "./settings_store.ts";
+import { load, save, setSandboxWindowsMode, setDeveloperMode, _setSettingsIoForTest } from "./settings_store.ts";
 
 const dirs: string[] = [];
 const prevEnv = process.env.LUCID_GUI_SETTINGS_FILE;
@@ -20,6 +20,7 @@ function scratch(): { dir: string; file: string } {
   return { dir, file };
 }
 afterEach(() => {
+  _setSettingsIoForTest(null);
   if (prevEnv === undefined) delete process.env.LUCID_GUI_SETTINGS_FILE;
   else process.env.LUCID_GUI_SETTINGS_FILE = prevEnv;
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
@@ -108,5 +109,66 @@ describe("P-SETTINGS.1 corrupt-file recovery", () => {
     setSandboxWindowsMode("off");
     for (let i = 0; i < 50; i++) setDeveloperMode(i % 2 === 0);
     expect(load().sandboxWindowsMode).toBe("off");
+  });
+});
+
+// The Windows failure modes (an antivirus or OneDrive handle, a second process saving) are forced on cue
+// through the store's fs seam, because a real lock cannot be held deterministically from a test.
+const errno = (code: string, syscall: string): NodeJS.ErrnoException =>
+  Object.assign(new Error(`${code}: simulated, ${syscall}`), { code, syscall });
+
+describe("P-SETTINGS.1 never an empty profile (review fixes, 2026-10-09)", () => {
+  test("a profile that stays locked is an error, never {}, so no setter can save over it", () => {
+    const { file } = scratch();
+    save(PROFILE);
+    _setSettingsIoForTest({ openSync: (() => { throw errno("EPERM", "open"); }) as unknown as typeof openSync });
+    expect(() => load()).toThrow(/cannot be read/);
+    expect(() => setDeveloperMode(true)).toThrow(/cannot be read/);
+    _setSettingsIoForTest(null);
+    expect(load()).toEqual(PROFILE);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(PROFILE);
+  });
+
+  test("a brief lock on open is retried, not reported", () => {
+    scratch();
+    save(PROFILE);
+    let refusals = 2;
+    _setSettingsIoForTest({
+      openSync: ((path: string, flags: string) => {
+        if (refusals-- > 0) throw errno("EBUSY", "open");
+        return openSync(path, flags);
+      }) as unknown as typeof openSync,
+    });
+    expect(load()).toEqual(PROFILE);
+  });
+
+  test("a parsed backup is served even when the corrupt primary cannot be rewritten", () => {
+    const { dir, file } = scratch();
+    save(PROFILE); save(PROFILE);
+    writeFileSync(file, "{\"username\": \"Ni");
+    _setSettingsIoForTest({ renameSync: (() => { throw errno("EPERM", "rename"); }) as unknown as typeof renameSync });
+    expect(quiet(() => load())).toEqual(PROFILE);
+    _setSettingsIoForTest(null);
+    expect(quiet(() => load())).toEqual(PROFILE); // the next load finishes the restore
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(PROFILE);
+    expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+
+  test("recovery never overwrites a profile another process saved after the corrupt read", () => {
+    const { dir, file } = scratch();
+    save(PROFILE); save(PROFILE);
+    writeFileSync(file, "{\"username\": \"Ni");
+    const NEWER = { ...PROFILE, username: "saved by the other process" };
+    let raced = false;
+    // The other process's atomic save lands after the corrupt read, just as recovery re-checks the path.
+    _setSettingsIoForTest({
+      statSync: ((path: string) => {
+        if (!raced) { raced = true; writeFileSync(`${file}.other`, JSON.stringify(NEWER)); renameSync(`${file}.other`, file); }
+        return statSync(path);
+      }) as unknown as typeof statSync,
+    });
+    expect(quiet(() => load())).toEqual(NEWER);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(NEWER);
+    expect(readdirSync(dir).filter((f) => f.startsWith("lucid-gui.json.corrupt-"))).toEqual([]);
   });
 });
