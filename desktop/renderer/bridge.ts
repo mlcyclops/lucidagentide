@@ -17,7 +17,7 @@ import type { AgentRunTrace, TraceSummary } from "../../harness/agent/trace.ts";
 import { isSystemStatus, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1: resource guard view (types owned there - layering rule)
 import { isCreatorResources, type CreatorResourcesView } from "./creator_monitor.ts"; // CREATOR-0 (ADR-0283): odometer view types live there
 import { isCreatorStudio, type CreatorStudioView } from "./creator_studio.ts"; // CREATOR-0 (ADR-0282): Studio view types live there
-import { isEditorSession, type EditorSession } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): editor session view type lives there
+import { isEditorAlignData, isEditorSession, type EditorAlignData, type EditorSession } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): editor session view type lives there
 import { isPipelineRunView, type PipelineRunView } from "./creator_pipeline.ts"; // CREATOR-3 (ADR-0287): the render run view + its fail-closed shape gate
 import { isMixerTracksPayload, isRenderMixReport, type MixerTracksPayload, type RenderMixResult } from "./creator_mixer.ts"; // CREATOR-5 (ADR-0289): mixer view types live there
 import type { TimelineDoc } from "../../harness/creator/timeline.ts"; // CREATOR-2: the pure timeline document, edited in the renderer
@@ -169,7 +169,9 @@ export interface SecuritySnapshot {
   sandbox?: SandboxStatusView;
 }
 export interface SandboxStateView {
-  backend: "bwrap" | "seatbelt" | "appcontainer" | "noop" | null;
+  backend: "bwrap" | "seatbelt" | "appcontainer" | "mxc" | "noop" | null;
+  /** P-MXC.1 (ADR-0441): MXC's isolation tier when backend is `mxc`. */
+  tier?: "base-container" | "appcontainer-bfs" | "appcontainer-dacl";
   isolated: boolean; disclosed: boolean; platform: string;
   execBlocked: string | null; proxied: boolean; at: string;
 }
@@ -177,7 +179,11 @@ export interface SandboxBlockView { host: string; channel: string; type: string;
 // P-SANDBOX.8: one user-approved standing directory grant (AppContainer ACE), listed with Revoke.
 export interface SandboxGrantView { path: string; mode: "rx" | "rw"; grantedAt: string; reason: string }
 // P-SANDBOX.12 (ADR-0390): what the panel's sandbox switch may offer (see desktop/sandbox_control.ts).
-export interface SandboxControlView { available: boolean; userOff: boolean; policyLocked: boolean; registered: boolean; foldersLocked?: boolean }
+export interface SandboxControlView {
+  available: boolean; userOff: boolean; policyLocked: boolean; registered: boolean; foldersLocked?: boolean;
+  /** P-MXC.1 (ADR-0441): the MXC executor on this host and the elevated steps it still needs. */
+  mxc?: { staged: boolean; tier?: string; prepNeeded: string[]; loopbackNeeded: boolean; source?: string };
+}
 // P-SANDBOX.13 (ADR-0391): a folder LUCID itself grants the contained agent (listed read-only in the panel).
 export interface RuntimeFolderView { path: string; mode: "rx" | "rw"; why: string }
 export interface SandboxStatusView { state: SandboxStateView | null; egressBlocks: SandboxBlockView[]; grants?: SandboxGrantView[]; control?: SandboxControlView; runtimeFolders?: RuntimeFolderView[] }
@@ -276,6 +282,7 @@ export interface ConfigOption {
 // at this one boundary, like ChatEvent).
 import type { ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1 (DOM-free, types only)
 import type { NetView } from "./net_status.ts"; // P-NETSTAT.1 (ADR-0423): the network indicator's view (owned there)
+import type { JobsData, JobTargetView, JobView } from "./jobs_view.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs (owned there)
 export type { NetView };
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
 export type { ProgressView, WaitView };
@@ -399,7 +406,7 @@ export interface JudgmentView {
 }
 // P-VOICE.1 (ADR-0115): voice config + the voice lists behind the pickers.
 export interface VoiceSettingsView {
-  sttProvider: "elevenlabs" | "whisper";
+  sttProvider: "elevenlabs" | "whisper" | "whistle";
   sttUrl: string;
   /** P-VOICE.6: base URL of the self-hosted dots.tts service (SSH forward / proxy of the DGX's :8084). */
   dotsTtsUrl?: string;
@@ -564,6 +571,9 @@ export interface KbPackImportView {
 export interface ProviderFieldAuth { env: string; label: string; placeholder?: string; secret?: boolean; set: boolean; value?: string; last4?: string }
 export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
+  /** P-PROV.3: a device-code broker for the same account (OpenAI `openai-codex-device`); the card offers it
+   *  as "Connect with a device code" beside the redirect sign-in. */
+  deviceOauthId?: string;
   oauthActive: boolean; oauthIdentity?: string; keySet: boolean; keyLast4?: string;
   fields?: ProviderFieldAuth[];
   /** Why the LAST OAuth attempt died after the browser said "success" (server-side broker exited
@@ -781,11 +791,20 @@ export interface BrowserStatusView { active: boolean; title: string; url: string
 export interface LucidBridge {
   isElectron: boolean;
   security(): Promise<SecuritySnapshot | null>;
+  /** P-SCHED.1 (ADR-0443): scheduled lane jobs (UI token only). */
+  jobsList(): Promise<JobsData | null>;
+  jobsTargets(): Promise<{ targets: JobTargetView[] } | null>;
+  jobsCreate(spec: unknown): Promise<JobView | null>;
+  jobsUpdate(id: string, patch: Record<string, unknown>): Promise<JobView | null>;
+  jobsDelete(id: string): Promise<{ deleted: boolean } | null>;
+  jobsRun(id: string): Promise<{ started: boolean } | null>;
   /** Release one quarantined call - the audited fail-closed override (ADR-0019 C). */
   securityApprove(id: string): Promise<BlockRecord | null>;
   /** P-SANDBOX.8: revoke one standing directory grant (helper --revoke-acl + store removal). */
   sandboxGrantRevoke(path: string): Promise<{ revoked: boolean; detail: string } | null>;
   sandboxMode(mode: "off" | "auto" | "unregister"): Promise<{ changed: boolean; detail: string; control?: SandboxControlView } | null>;
+  /** P-MXC.1 (ADR-0441): run the MXC host prep (one administrator prompt); the agent restarts on success. */
+  mxcPrepare(): Promise<{ changed: boolean; detail: string } | null>;
   sandboxGrantAdd(mode: "rx" | "rw"): Promise<{ added: boolean; cancelled?: boolean; path?: string; detail: string } | null>;
   securityDismiss(id: string): Promise<BlockRecord | null>;
   /** Bulk-acknowledge every active gate block. Releases NOTHING: each call stays blocked, audit kept. */
@@ -1200,7 +1219,9 @@ export interface LucidBridge {
   guides(): Promise<Record<string, string> | null>;
   arcadeGames(): Promise<Record<string, string> | null>;
   saveKey(env: string, key: string): Promise<AuthStatus | null>;
-  oauthLogin(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string } | null>;
+  /** P-PROV.3: `code` is set for show-the-code brokers (the one-time code the user types on the provider's
+   *  page); `url` is empty when a device broker printed a URL outside its allowlist. */
+  oauthLogin(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string; code?: string } | null>;
   oauthLogout(oauthId: string): Promise<AuthStatus | null>;
   /** Sign out of ALL OAuth providers at once (clears orphaned/unreachable logins too). Returns refreshed status. */
   oauthLogoutAll(): Promise<AuthStatus | null>;
@@ -1371,6 +1392,9 @@ export interface LucidBridge {
   // half-finished edit.
   creatorEditorOpen(opts: { trackId: string; text?: string; buckets?: number }): Promise<{ ok: boolean; error?: string; session?: EditorSession } | null>;
   creatorEditorSave(opts: { trackId: string; doc: TimelineDoc; title: string; prompt?: string }): Promise<{ ok: boolean; error?: string; trackId?: string } | null>;
+  // CREATOR-WHISTLE (ADR-0432): measure word timing in-process. The renderer posts a trackId only; the
+  // 17 MB model never crosses to the sandbox. A refusal is the route's own named reason.
+  creatorEditorAlign(opts: { trackId: string; text?: string; language?: string }): Promise<{ ok: boolean; error?: string; data?: EditorAlignData }>;
   // CREATOR-5 (ADR-0289): the mixer touches the server exactly twice - once to LIST which library tracks
   // can play together (plus the format the mix will run at, which the pane never guesses), once to
   // RENDER. Every level, pan, fade, and ramp in between is applied in the renderer against the same pure
@@ -1662,6 +1686,13 @@ export const bridge: LucidBridge = {
   securityApprove: (id) => post("/api/security/approve", { id }),
   sandboxGrantRevoke: (path) => post("/api/security/sandbox-grant/revoke", { path }),
   sandboxMode: (mode) => post("/api/security/sandbox/mode", { mode }),
+  mxcPrepare: () => post("/api/security/mxc/prepare", {}),
+  jobsList: () => getData("/api/jobs"),
+  jobsTargets: () => getData("/api/jobs/targets"),
+  jobsCreate: (spec) => post("/api/jobs", spec),
+  jobsUpdate: (id, patch) => post("/api/jobs/update", { id, patch }),
+  jobsDelete: (id) => post("/api/jobs/delete", { id }),
+  jobsRun: (id) => post("/api/jobs/run", { id }),
   sandboxGrantAdd: (mode) => post("/api/security/sandbox-grant/add", { mode }),
   securityDismiss: (id) => post("/api/security/dismiss", { id }),
   securityDismissAll: () => post("/api/security/dismiss-all", {}),
@@ -2233,6 +2264,18 @@ export const bridge: LucidBridge = {
       const body = await res.json() as { ok?: boolean; error?: string; trackId?: string };
       return { ok: !!body.ok, error: body.error, trackId: body.trackId };
     } catch { return { ok: false, error: "The audio editor did not answer." }; }
+  },
+  // CREATOR-WHISTLE (ADR-0432): the measured alignment. Same fail-closed gate as open: a payload this
+  // build cannot read is a named refusal, and the pane keeps its derived document.
+  creatorEditorAlign: async (opts) => {
+    try {
+      const res = await fetch("/api/creator/align", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(opts) });
+      const body = await res.json() as { ok?: boolean; error?: string; data?: unknown };
+      if (!body.ok) return { ok: false, error: body.error ?? "Whistle refused without a reason." };
+      return isEditorAlignData(body.data)
+        ? { ok: true, data: body.data }
+        : { ok: false, error: "Whistle answered with an alignment this build cannot read." };
+    } catch { return { ok: false, error: "The alignment route did not answer." }; }
   },
   // CREATOR-5 (ADR-0289): both gates are fail-closed. A tracks payload this build cannot read paints
   // NOTHING (null), rather than a mixer sitting on a format nobody reported; a report missing its own

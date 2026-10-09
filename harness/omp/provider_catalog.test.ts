@@ -27,21 +27,32 @@
 //   - apple: Apple Foundation Models, on-device and keyless (macOS 27+, Apple silicon, ids discovered at
 //     runtime). No egress, so no sovereignty exposure; listed on macOS builds only, never on Windows or
 //     Linux (`providerAllowedOnPlatform` in desktop/renderer/model_families.ts).
+//
+// 18.4.4 -> 18.8.6 (P-MODEL.7) ADDED three, reviewed 2026-10-08:
+//   - factory-droid: Factory (U.S.) Droid's model registry behind a WorkOS device-code login; it proxies
+//     Claude, GPT and Gemini upstreams. Allied-origin aggregator, same posture as cursor/devin: listed,
+//     no gate, routed by the user's own Factory account.
+//   - helmcode: Helmcode (EU-hosted OpenAI-compatible gateway, API key). Its plan models are open-weight
+//     China-origin ids resold as bare names (`deepseek-v4-flash`, `glm5.3`, `qwen3.6`) beside `gemma4` and
+//     frontier resales. Gated per MODEL, not per provider: `isChinaModel` grew a `glm<digit>` tail so the
+//     hyphen-less `glm5.3` lands behind the ACKNOWLEDGE like every other GLM spelling.
+//   - snowflake: Snowflake Cortex (U.S.), Claude in the customer's own Snowflake account via Snowflake
+//     OAuth (PKCE, loopback 54551). Tenant-hosted allied provider, no gate.
 
 import { expect, test } from "bun:test";
 import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog";
 
-// Pinned universe at @oh-my-pi/pi-catalog 18.4.4 (the exact version package.json pins). Sorted, 82 ids.
+// Pinned universe at @oh-my-pi/pi-catalog 18.8.6 (the exact version package.json pins). Sorted, 85 ids.
 const PINNED_PROVIDER_IDS = [
 	"abliteration", "aiand", "aimlapi", "alibaba-coding-plan", "alibaba-token-plan", "amazon-bedrock",
 	"anthropic", "apple", "azure", "baseten", "bedrock-mantle", "cerebras", "charm-hyper", "cline-pass",
 	"cloudflare-ai-gateway", "commandcode", "coreweave", "cursor", "deepinfra", "deepseek", "devin",
-	"firepass", "fireworks", "github-copilot", "gitlab-duo", "gitlab-duo-agent", "gmi-cloud", "google",
-	"google-antigravity", "google-gemini-cli", "google-vertex", "groq", "huggingface", "kilo",
+	"factory-droid", "firepass", "fireworks", "github-copilot", "gitlab-duo", "gitlab-duo-agent", "gmi-cloud", "google",
+	"google-antigravity", "google-gemini-cli", "google-vertex", "groq", "helmcode", "huggingface", "kilo",
 	"kimi-code", "litellm", "lm-studio", "local", "meta", "minimax", "minimax-code", "minimax-code-cn",
 	"mistral", "moonshot", "muse-code", "nanogpt", "novita", "nvidia", "ollama", "ollama-cloud", "openai",
 	"openai-codex", "opencode-go", "opencode-zen", "openrouter", "qianfan", "qwen-portal", "sakana",
-	"siliconflow", "siliconflow-cn", "singularityapi-dev", "singularityapi-tech", "stepfun", "synthetic", "together",
+	"siliconflow", "siliconflow-cn", "singularityapi-dev", "singularityapi-tech", "snowflake", "stepfun", "synthetic", "together",
 	"typesafe", "umans", "venice", "vercel-ai-gateway", "vllm", "wafer-serverless", "web", "xai",
 	"xai-oauth", "xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp",
 	"yolo-auto", "zai", "zenmux", "zhipu-coding-plan",

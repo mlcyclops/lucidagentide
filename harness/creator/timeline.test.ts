@@ -12,7 +12,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildWav, parseWav, type WavFormat } from "../brief/tts_backend.ts";
 import {
-  DERIVED_CONFIDENCE_CEILING, SILENCE_SOURCE, alignFromVendor, canRedo, canUndo, clipAt, commit,
+  DERIVED_CONFIDENCE_CEILING, SILENCE_SOURCE, alignFromMeasured, alignFromVendor, canRedo, canUndo, clipAt, commit,
   deleteSpan, deriveAlignment, docDurationMs, docFromSource, durationOfWav, frameEnergy, itemAt,
   lockToText, moveSpan, newHistory, redo, renderTimeline, replaceSpan, setItemLock, spanOf, speechRuns,
   splitItem, tokenizeWords, trimClip, undo, validateDoc, waveformPeaks,
@@ -192,6 +192,87 @@ describe("alignment provenance", () => {
     expect(e.length).toBeGreaterThan(5);
     expect(speechRuns(e)).toHaveLength(1); // a 40ms gap is below minGapMs, so it is one run
     expect(speechRuns(e, { minGapMs: 20 })).toHaveLength(2);
+  });
+});
+
+describe("measured alignment (ADR-0432)", () => {
+  const heard = (...spec: readonly [string, number, number, number][]) =>
+    spec.map(([word, startMs, endMs, probability]) => ({ word, startMs, endMs, probability }));
+  const FOUR = heard(["the", 0, 100, 0.9], ["quick", 100, 250, 0.8], ["brown", 250, 400, 0.95], ["fox", 400, 500, 0.7]);
+
+  test("an exact match is all measured, with the model's probabilities as confidence", () => {
+    const a = alignFromMeasured("the quick brown fox", FOUR, 600, "Whistle");
+    expect(a.items.map((i) => i.source)).toEqual(["measured", "measured", "measured", "measured"]);
+    expect(a.items.map((i) => i.confidence)).toEqual([0.9, 0.8, 0.95, 0.7]);
+    expect(a.items.map((i) => [i.startMs, i.endMs])).toEqual([[0, 100], [100, 250], [250, 400], [400, 500]]);
+    expect(a.items.map((i) => i.id)).toEqual(["item-1", "item-2", "item-3", "item-4"]);
+    expect(a.items.every((i) => i.locked === false)).toBe(true);
+    expect(a).toMatchObject({ matched: 4, interpolated: 0 });
+  });
+
+  test("one substituted word becomes a derived item interpolated between its neighbours", () => {
+    const a = alignFromMeasured("the quick brown fox", heard(["the", 0, 100, 0.9], ["thick", 100, 250, 0.6], ["brown", 250, 400, 0.95], ["fox", 400, 500, 0.7]), 600, "Whistle");
+    expect(a.items.map((i) => i.source)).toEqual(["measured", "derived", "measured", "measured"]);
+    const quick = a.items[1]!;
+    expect(quick.text).toBe("quick");
+    expect(quick.confidence).toBeLessThanOrEqual(DERIVED_CONFIDENCE_CEILING);
+    expect(quick.startMs).toBeGreaterThanOrEqual(100);
+    expect(quick.endMs).toBeLessThanOrEqual(250);
+    expect(quick.endMs).toBeGreaterThan(quick.startMs);
+    expect(a).toMatchObject({ matched: 3, interpolated: 1 });
+  });
+
+  test("a word the model missed at the tail is derived and bounded by the clip end", () => {
+    const a = alignFromMeasured("the quick brown fox jumps", FOUR, 600, "Whistle");
+    const tail = a.items[4]!;
+    expect(tail).toMatchObject({ text: "jumps", source: "derived" });
+    expect(tail.startMs).toBeGreaterThanOrEqual(500);
+    expect(tail.endMs).toBe(600);
+    expect(tail.confidence).toBeLessThanOrEqual(DERIVED_CONFIDENCE_CEILING);
+  });
+
+  test("an extra word the model heard creates no item", () => {
+    const a = alignFromMeasured("the brown fox", FOUR, 600, "Whistle");
+    expect(a.items.map((i) => i.text)).toEqual(["the", "brown", "fox"]);
+    expect(a.items.every((i) => i.source === "measured")).toBe(true);
+    expect(a.items.map((i) => i.startMs)).toEqual([0, 250, 400]);
+    expect(a).toMatchObject({ matched: 3, interpolated: 0 });
+  });
+
+  test("case and punctuation differences still match", () => {
+    const a = alignFromMeasured("The quick, brown... \"Fox\"!", FOUR, 600, "Whistle");
+    expect(a.items.every((i) => i.source === "measured")).toBe(true);
+    expect(a.items.map((i) => i.text)).toEqual(["The", "quick,", "brown...", "\"Fox\"!"]);
+    expect(a.matched).toBe(4);
+  });
+
+  test("several unmatched words share the gap by length, in order, and the doc validates", () => {
+    const a = alignFromMeasured("the a bb ccc fox", heard(["the", 0, 100, 0.9], ["fox", 400, 500, 0.7]), 600, "Whistle");
+    expect(a.items.map((i) => i.source)).toEqual(["measured", "derived", "derived", "derived", "measured"]);
+    expect(a.items.map((i) => [i.startMs, i.endMs])).toEqual([[0, 100], [100, 150], [150, 250], [250, 400], [400, 500]]);
+    const doc = docFromSource({ sourceId: "take-1", fmt: FMT, durationMs: 600, items: a.items });
+    expect(validateDoc(doc)).toEqual([]);
+  });
+
+  test("the note names the provider and the counts", () => {
+    const a = alignFromMeasured("the quick brown fox jumps", FOUR, 600, "Whistle");
+    expect(a.note).toBe("measured in-process by Whistle: 4 of 5 words matched, 1 interpolated");
+  });
+
+  test("validateDoc rejects a measured confidence above 1 and out-of-order items", () => {
+    const { doc } = fixture();
+    const over: TimelineDoc = { ...doc, items: [{ ...doc.items[0]!, source: "measured", confidence: 1.2 }] };
+    expect(validateDoc(over)[0]).toContain("out-of-range confidence");
+    const shuffled: TimelineDoc = { ...doc, items: [doc.items[1]!, doc.items[0]!, doc.items[2]!, doc.items[3]!] };
+    expect(validateDoc(shuffled)[0]).toContain("before the item preceding it");
+  });
+
+  test("docFromSource carries alignedBy, and leaves it absent when not given", () => {
+    const alignedBy = { provider: "whistle", modelSha256: "b6e02f048568ac5d01a2042556c658061e699acbc0aa2a1439f52f3d461dffeb" };
+    const doc = docFromSource({ sourceId: "take-1", fmt: FMT, durationMs: 600, items: [], alignedBy });
+    expect(doc.alignedBy).toEqual(alignedBy);
+    expect(validateDoc(doc)).toEqual([]);
+    expect("alignedBy" in docFromSource({ sourceId: "take-1", fmt: FMT, durationMs: 600, items: [] })).toBe(false);
   });
 });
 
