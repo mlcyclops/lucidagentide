@@ -27,7 +27,7 @@ const joinBlocks = (blocks: readonly string[]): string => blocks.join("\u0000");
 
 // The omp version this regression is pinned to (R-02). A silent dependency bump trips the assertion
 // below; R-01's scheduled omp-compat CI reruns the suite against candidate versions before adopting.
-const SUPPORTED_OMP = "18.4.4";
+const SUPPORTED_OMP = "18.8.6";
 // pi-tui joined at 18.2.6: omp 18.2.5 moved the status-line context-usage helpers there, so it must
 // bump in lockstep with the other four (omp-compat.mjs enforces the same five-way agreement).
 // pi-catalog joined with R-07 (#347): harness/omp/provider_catalog.test.ts pins its provider universe.
@@ -87,4 +87,6 @@ test("R-02: auto-compaction never mutates the frozen prefix (layers 1-4)", async
 	} finally {
 		cleanup();
 	}
-});
+	// Seven echo turns plus a real compaction through omp 18.8.6 take ~5 s on the hosted Windows
+	// runner (6.2 s observed on PR #499), past bun's 5 s default; the budget is for load, not a stall.
+}, 30_000);

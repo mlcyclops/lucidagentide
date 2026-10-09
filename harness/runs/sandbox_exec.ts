@@ -39,6 +39,9 @@ import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { win32 as win32Path } from "node:path";
 import type { ProfileCaps } from "./profiles.ts";
+// P-MXC.1 (ADR-0441): the MXC backend lives in its own file and imports only TYPES (plus proxyChildEnv)
+// from here, so this value import is the single direction the cycle runs at module init.
+import { MxcBackend, type MxcHost } from "./sandbox_mxc.ts";
 
 /** Presence probe for a binary on PATH. Injectable so tests never depend on the host. */
 export type WhichFn = (bin: string) => boolean;
@@ -408,7 +411,8 @@ export interface SandboxPlan {
 }
 
 export interface SandboxBackend {
-  readonly name: "bwrap" | "seatbelt" | "appcontainer" | "noop";
+  /** P-MXC.1 (ADR-0441): `mxc` is the Microsoft eXecution Container executor (sandbox_mxc.ts). */
+  readonly name: "bwrap" | "seatbelt" | "appcontainer" | "mxc" | "noop";
   /** true ⇒ this backend provides REAL OS-level containment (namespaces), not a passthrough. */
   readonly isolates: boolean;
   available(): boolean;
@@ -647,7 +651,7 @@ export class NoopBackend implements SandboxBackend {
 export function sandboxDisclosure(platform: NodeJS.Platform = process.platform): string {
   return (
     `[sandbox] exec is NOT runtime-isolated on this platform (${platform}) - no sandbox backend available. ` +
-    `The argv gate + in-process scanner gate still apply (ADR-0157 P-SANDBOX.1; Linux bwrap + macOS Seatbelt lead; Windows AppContainer needs a WORKING lucid-appcontainer helper - missing here, or it failed its containment probe).`
+    `The argv gate + in-process scanner gate still apply (ADR-0157 P-SANDBOX.1; Linux bwrap + macOS Seatbelt lead; Windows needs a WORKING container runtime - the MXC executor (ADR-0441) or the lucid-appcontainer helper - and neither is staged here, or both failed their containment probe).`
   );
 }
 
@@ -671,6 +675,11 @@ export interface ResolveBackendOpts {
    *  (desktop resolves `<repo>/bin/lucid-appcontainer.exe` via repo_root and passes it ONLY when it
    *  exists on disk). Absent ⇒ bare-name PATH lookup, which is the dev loop. */
   appContainerHelper?: string;
+  /** P-MXC.1 (ADR-0441): the verified MXC executor on this host, when the caller has one (desktop resolves
+   *  the staged `wxc-exec.exe`, checks its hash against the pin and reads its tier with `--probe`; it
+   *  passes this ONLY when all three held and the network precondition for the profile is met). Tried
+   *  BEFORE the first-party helper; its round-trip probe decides, like every other backend's. */
+  mxc?: MxcHost;
 }
 
 /** Pick the backend for this platform. PURE given its inputs (platform/which/probe injectable). */
@@ -678,6 +687,10 @@ export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution
   const platform = opts.platform ?? process.platform;
   const which = opts.which ?? defaultWhich;
   const probe = opts.probe ?? defaultProbe;
+  if (platform === "win32" && opts.mxc) {
+    const mxc = new MxcBackend(opts.mxc);
+    if (mxc.available()) return { ok: true, backend: mxc, disclosed: false };
+  }
   if (platform === "linux") {
     const bwrap = new BwrapBackend(which, probe);
     if (bwrap.available()) return { ok: true, backend: bwrap, disclosed: false };

@@ -34,6 +34,14 @@ describe("listPrice tiers", () => {
     expect(listPrice("anthropic/claude-opus-5-5")).toEqual({ inPerM: 4, outPerM: 20 });
     expect(listPrice("anthropic/claude-opus-5")).toEqual({ inPerM: 5, outPerM: 25 }); // Opus 5 unchanged
   });
+  test("Haiku 5.5 (P-MODEL.7) carries its cataloged $0.10/$0.50 on both route spellings; Haiku 4.5 keeps $0.80/$4", () => {
+    for (const id of ["anthropic/claude-haiku-5-5", "vercel-ai-gateway/anthropic/claude-haiku-5.5", "claude-haiku-5-5"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 0.10, outPerM: 0.50 });
+    }
+    for (const id of ["anthropic/claude-haiku-4-5", "anthropic/claude-haiku-4-5-20251001", "anthropic/claude-haiku-5-50"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 0.80, outPerM: 4.00 });
+    }
+  });
   test("Sonnet 5.5 (P-MODEL.6) carries its cataloged $2/$10 on every route spelling; other Sonnets keep $3/$15", () => {
     for (const id of ["anthropic/claude-sonnet-5-5", "amazon-bedrock/global.anthropic.claude-sonnet-5-5",
                       "google-vertex/claude-sonnet-5-5@default", "openrouter/anthropic/claude-sonnet-5.5",
