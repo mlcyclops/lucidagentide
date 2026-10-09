@@ -87,4 +87,6 @@ test("R-02: auto-compaction never mutates the frozen prefix (layers 1-4)", async
 	} finally {
 		cleanup();
 	}
-});
+	// Seven echo turns plus a real compaction through omp 18.8.6 take ~5 s on the hosted Windows
+	// runner (6.2 s observed on PR #499), past bun's 5 s default; the budget is for load, not a stall.
+}, 30_000);

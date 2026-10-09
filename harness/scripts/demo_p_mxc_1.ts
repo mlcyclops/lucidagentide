@@ -19,7 +19,7 @@
 //
 // Run: bun run harness/scripts/demo_p_mxc_1.ts
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { MXC_ASSETS } from "../runs/mxc_assets.ts";
@@ -64,8 +64,7 @@ ok(decoded.network.egress.default === "deny", "egress.default is deny in the emi
 console.log("\n[f] a flipped byte refuses before any child starts");
 {
   const spec = MXC_ASSETS.find((a) => a.platform === "win32-x64" && a.name === "wxc-exec.exe")!;
-  const dir = join(tmpdir(), "lucid-mxc-demo-flip");
-  mkdirSync(dir, { recursive: true });
+  const dir = mkdtempSync(join(tmpdir(), "lucid-mxc-demo-flip-"));
   const bytes = Buffer.alloc(spec.bytes, 7);
   writeFileSync(join(dir, "wxc-exec.exe"), bytes);
   writeFileSync(join(dir, "wxc-host-prep.exe"), "not the tool");
