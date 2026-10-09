@@ -7,12 +7,14 @@
 // prompt / unparseable / thrown-decision all DENY — fail-closed, invariant #3), the DNS wire handling
 // (QNAME parse + REFUSED reply that kills a `gethostbyname` exfil), and the live proxy on loopback
 // (DNS deny ⇒ REFUSED without touching the upstream; DNS allow ⇒ forwarded; CONNECT deny ⇒ 403;
-// CONNECT allow ⇒ tunnelled; kill-the-proxy ⇒ nothing resolves/connects). The decision brain is
+// CONNECT allow ⇒ tunnelled; absolute-form plain HTTP (ADR-0445) deny ⇒ 403 never dialed, allow ⇒
+// forwarded and streamed; kill-the-proxy ⇒ nothing resolves/connects). The decision brain is
 // injected so the pure tests never touch disk; the socket tests use only 127.0.0.1.
 
 import { afterEach, expect, test } from "bun:test";
 import { createSocket } from "node:dgram";
 import { connect as tcpConnect, createServer as createTcpServer, type Server as TcpServer } from "node:net";
+import { createServer as createHttpServer, type Server as HttpServer, type ServerResponse } from "node:http";
 import {
   buildRefusal,
   decideEgress,
@@ -190,11 +192,127 @@ test("CONNECT: a DENIED target is refused with 403, no tunnel opened", async () 
   expect(proxy.events.at(-1)?.decision.action).toBe("deny");
 });
 
-test("CONNECT: a plain (non-CONNECT) proxied request is rejected — only tunnels are mediated (fail-closed)", async () => {
-  proxy = new EgressProxy({ decide: allowOnly(["evil.example"]) });
+/** Write `send` to the proxy and collect every byte until the proxy closes the connection. */
+function exchange(port: number, send: string, onData?: (soFar: string) => void): Promise<string> {
+  const { promise, resolve, reject } = Promise.withResolvers<string>();
+  const s = tcpConnect({ host: "127.0.0.1", port }, () => s.write(send));
+  let buf = "";
+  s.on("data", (d) => { buf += d.toString("latin1"); onData?.(buf); });
+  s.once("close", () => resolve(buf));
+  s.once("error", reject);
+  return promise;
+}
+
+/** Listen on an ephemeral loopback port; resolves with the bound port. */
+function listen(srv: TcpServer | HttpServer): Promise<number> {
+  const { promise, resolve } = Promise.withResolvers<number>();
+  srv.listen(0, "127.0.0.1", () => {
+    const addr = srv.address();
+    resolve(typeof addr === "object" && addr ? addr.port : 0);
+  });
+  return promise;
+}
+
+/** A TCP listener that records every accepted dial: the listener-level proof a denied target was never
+ *  contacted. `sentinel()` makes one dial of our own and resolves once it is accepted; accepts are FIFO, so
+ *  any earlier dial by the proxy would already be counted by then (no sleep, no guessed delay). */
+async function countingListener(): Promise<{ port: number; dials: () => number; sentinel: () => Promise<void> }> {
+  let n = 0;
+  let onAccept: (() => void) | null = null;
+  const srv = createTcpServer((sock) => { n++; sock.destroy(); onAccept?.(); });
+  servers.push(srv);
+  const port = await listen(srv);
+  const sentinel = () => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    onAccept = resolve;
+    tcpConnect({ host: "127.0.0.1", port }).on("error", () => {});
+    return promise;
+  };
+  return { port, dials: () => n, sentinel };
+}
+
+test("HTTP forward: origin-form (or any non-http absolute form) is refused 400 and logged as a deny (fail-closed)", async () => {
+  proxy = new EgressProxy({ decide: allowOnly(["127.0.0.1"]) });
   const ep = await proxy.start();
-  const resp = await connectExpect(ep.httpPort, "GET http://evil.example/x HTTP/1.1\r\n\r\n");
-  expect(resp).toContain("405");
+  for (const req of ["GET /relative HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", "GET ftp://127.0.0.1/x HTTP/1.1\r\n\r\n", "BREW http://[nope HTTP/1.1\r\n\r\n"]) {
+    const resp = await exchange(ep.httpPort, req);
+    expect(resp).toStartWith("HTTP/1.1 400 Bad Request");
+    expect(resp).toContain("only CONNECT tunnels and absolute-form http:// requests are mediated");
+    expect(proxy.events.at(-1)).toMatchObject({ channel: "connect", decision: { action: "deny", reason: "unsupported-request" } });
+  }
+  const huge = await exchange(ep.httpPort, `GET http://127.0.0.1/ HTTP/1.1\r\nX-Pad: ${"a".repeat(70_000)}`); // head never ends
+  expect(huge).toStartWith("HTTP/1.1 431");
+});
+
+test("HTTP forward: a DENIED (or undecidable) absolute-form target gets the CONNECT 403 and is NEVER dialed", async () => {
+  const dest = await countingListener();
+  const brains: DecideFn[] = [allowOnly([]), () => { throw new Error("brain down"); }];
+  for (const decide of brains) {
+    proxy = new EgressProxy({ decide });
+    const ep = await proxy.start();
+    const resp = await exchange(ep.httpPort, `GET http://127.0.0.1:${dest.port}/v1/models HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n`);
+    expect(resp).toStartWith("HTTP/1.1 403 Forbidden");
+    expect(resp).toContain("127.0.0.1 denied");
+    expect(proxy.events.at(-1)).toMatchObject({ channel: "connect", decision: { action: "deny", host: "127.0.0.1" } });
+    await proxy.stop();
+    proxy = null;
+  }
+  await dest.sentinel();
+  expect(dest.dials()).toBe(1); // only our own sentinel: the proxy never dialed the denied target
+});
+
+test("HTTP forward: an ALLOWED absolute-form GET streams a chunked response end-to-end, unbuffered", async () => {
+  let seen: Record<string, unknown> = {};
+  let streaming: ServerResponse | null = null;
+  const srv = createHttpServer((req, res) => {
+    seen = { url: req.url, host: req.headers.host, connection: req.headers.connection, proxyConn: req.headers["proxy-connection"] };
+    res.writeHead(200, { "content-type": "text/event-stream" }); // no content-length ⇒ chunked
+    res.write("data: FIRST\n\n");
+    streaming = res;
+  });
+  const port = await listen(srv);
+  proxy = new EgressProxy({ decide: allowOnly(["127.0.0.1"]) });
+  const ep = await proxy.start();
+  let released = false;
+  const resp = await exchange(ep.httpPort, `GET http://127.0.0.1:${port}/api/chat?stream=1 HTTP/1.1\r\nHost: wrong\r\nProxy-Connection: keep-alive\r\n\r\n`, (soFar) => {
+    // SECOND is only sent after FIRST reached the client: a buffering proxy would deadlock here and time out.
+    if (!released && soFar.includes("data: FIRST")) { released = true; streaming?.end("data: SECOND\n\n"); }
+  });
+  srv.close();
+  expect(resp).toStartWith("HTTP/1.1 200 OK");
+  expect(resp.toLowerCase()).toContain("transfer-encoding: chunked");
+  expect(resp).toContain("data: FIRST");
+  expect(resp).toContain("data: SECOND");
+  expect(seen).toEqual({ url: "/api/chat?stream=1", host: `127.0.0.1:${port}`, connection: "close", proxyConn: undefined });
+  expect(proxy.events.at(-1)).toMatchObject({ channel: "connect", decision: { action: "allow", host: "127.0.0.1" } });
+});
+
+test("HTTP forward: an allowed POST body (the model-request shape) reaches the upstream intact", async () => {
+  const body = JSON.stringify({ model: "llama3", messages: [{ role: "user", content: "x".repeat(200_000) }] });
+  let got = "";
+  const srv = createHttpServer((req, res) => {
+    req.setEncoding("latin1");
+    req.on("data", (c) => (got += c));
+    req.on("end", () => res.end(`len=${got.length}`));
+  });
+  const port = await listen(srv);
+  proxy = new EgressProxy({ decide: allowOnly(["127.0.0.1"]) });
+  const ep = await proxy.start();
+  const resp = await exchange(ep.httpPort, `POST http://127.0.0.1:${port}/api/chat HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`);
+  srv.close();
+  expect(resp).toContain(`len=${body.length}`);
+  expect(got).toBe(body);
+});
+
+test("HTTP forward: an allowed target that refuses the dial gets 502, never a silent pass", async () => {
+  const dead = createTcpServer();
+  const deadPort = await listen(dead);
+  const closed = Promise.withResolvers<void>();
+  dead.close(() => closed.resolve()); // free the port: nothing listens there now
+  await closed.promise;
+  proxy = new EgressProxy({ decide: allowOnly(["127.0.0.1"]) });
+  const ep = await proxy.start();
+  expect(await exchange(ep.httpPort, `GET http://127.0.0.1:${deadPort}/ HTTP/1.1\r\n\r\n`)).toStartWith("HTTP/1.1 502 Bad Gateway");
 });
 
 test("CONNECT: an ALLOWED target tunnels through to the destination (200 + relayed bytes)", async () => {
@@ -225,6 +343,7 @@ test("kill-the-proxy: after stop() the endpoint is gone and nothing resolves or 
   expect(proxy.endpoint()).toBeNull();
   await expect(udpRoundTrip(ep.dnsPort, dnsQuery("pypi.org"), 400)).rejects.toThrow(); // no resolver answers
   await expect(connectExpect(ep.httpPort, "CONNECT pypi.org:443 HTTP/1.1\r\n\r\n", 400)).rejects.toThrow();
+  await expect(connectExpect(ep.httpPort, "GET http://pypi.org/simple/ HTTP/1.1\r\n\r\n", 400)).rejects.toThrow(); // plain HTTP dies with it
   proxy = null; // already stopped
 });
 
