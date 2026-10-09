@@ -5,9 +5,10 @@
 //
 // Microsoft Defender for Endpoint inventories local AI agents (Assets > AI agents > Local agents, the
 // `AgentsInfo` advanced-hunting table with `Platform == "LocalAgents"`). An agent it does not recognize
-// is invisible there, which in an Agent 365 shop reads as shadow AI. Defender's discovery list is
-// maintained by Microsoft, and Microsoft publishes no vendor-writable manifest format or enrollment API,
-// so no file we write enrolls us and nothing documents Defender reading this one. It is an ADVISORY,
+// is absent there, not flagged: the Shadow AI page is a fixed catalog of named agents (ADR-0437).
+// Defender's discovery list is maintained by Microsoft, and Microsoft publishes no vendor-writable
+// manifest format or enrollment API, so no file we write enrolls us and nothing documents Defender
+// reading this one. It is an ADVISORY,
 // LUCID-defined file (schema `lucid.local-agent-manifest/1`) whose field names borrow the vocabulary of the profile
 // Defender builds for supported agents (vendor, version, relatedProcess, autoApprove, mcpServers,
 // localMcps). It sits at a stable per-user path (<userData>, e.g. %APPDATA%\lucidagentide-desktop for
