@@ -13,7 +13,7 @@
 //      exfil channel is dead); an allowed query is forwarded + relayed (pip/apt still resolve);
 //   3. live HTTP proxy: a denied CONNECT gets 403; an allowed one tunnels through (pip install over https
 //      works); an absolute-form plain-HTTP request (a LAN model server under HTTP_PROXY) goes through the
-//      SAME decision: denied ⇒ 403 with the target never dialed, allowed ⇒ forwarded and streamed (ADR-0432);
+//      SAME decision: denied ⇒ 403 with the target never dialed, allowed ⇒ forwarded and streamed (ADR-0445);
 //   4. proxy DEAD ⇒ egress denied but LOCAL EXEC still runs (wrap falls back to --unshare-net, not refuse);
 //   5. the spawn is WIRED: an isolating backend + a started proxy ⇒ omp wrapped in bwrap with HTTP(S)_PROXY
 //      set and the child steered at the proxy; a proxy that fails to start ⇒ network-off fallback, still spawns.

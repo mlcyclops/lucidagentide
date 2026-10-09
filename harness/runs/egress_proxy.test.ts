@@ -7,7 +7,7 @@
 // prompt / unparseable / thrown-decision all DENY — fail-closed, invariant #3), the DNS wire handling
 // (QNAME parse + REFUSED reply that kills a `gethostbyname` exfil), and the live proxy on loopback
 // (DNS deny ⇒ REFUSED without touching the upstream; DNS allow ⇒ forwarded; CONNECT deny ⇒ 403;
-// CONNECT allow ⇒ tunnelled; absolute-form plain HTTP (ADR-0432) deny ⇒ 403 never dialed, allow ⇒
+// CONNECT allow ⇒ tunnelled; absolute-form plain HTTP (ADR-0445) deny ⇒ 403 never dialed, allow ⇒
 // forwarded and streamed; kill-the-proxy ⇒ nothing resolves/connects). The decision brain is
 // injected so the pure tests never touch disk; the socket tests use only 127.0.0.1.
 

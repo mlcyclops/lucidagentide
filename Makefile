@@ -675,7 +675,7 @@ demo-P-SANDBOX.1: ## P-SANDBOX.1 (ADR-0157): the runtime execution boundary — 
 	$(BUN) run harness/scripts/demo_p_sandbox_1.ts
 
 .PHONY: demo-P-SANDBOX.2
-demo-P-SANDBOX.2: ## P-SANDBOX.2 (ADR-0166, ADR-0432): mediated subprocess egress: a loopback DNS + HTTP proxy (CONNECT tunnels and absolute-form plain-HTTP forwards) decided by the agent's own egressDecisionDetailed brain (only allow passes; prompt/foreign-ccTLD/IP-literal/unparseable/thrown all DENY). Live: denied gethostbyname → REFUSED, upstream never contacted; allowed → forwarded; a denied plain-HTTP request → 403, target never dialed; allowed → streamed. Proxy dead ⇒ egress denied but local exec still runs; wired at the omp spawn (HTTP(S)_PROXY + resolv.conf steer)
+demo-P-SANDBOX.2: ## P-SANDBOX.2 (ADR-0166, ADR-0445): mediated subprocess egress: a loopback DNS + HTTP proxy (CONNECT tunnels and absolute-form plain-HTTP forwards) decided by the agent's own egressDecisionDetailed brain (only allow passes; prompt/foreign-ccTLD/IP-literal/unparseable/thrown all DENY). Live: denied gethostbyname → REFUSED, upstream never contacted; allowed → forwarded; a denied plain-HTTP request → 403, target never dialed; allowed → streamed. Proxy dead ⇒ egress denied but local exec still runs; wired at the omp spawn (HTTP(S)_PROXY + resolv.conf steer)
 	$(BUN) run harness/scripts/demo_p_sandbox_2.ts
 
 .PHONY: demo-P-SANDBOX.3

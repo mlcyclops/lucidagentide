@@ -12,7 +12,7 @@
 //
 // This module is the middle path: for `canNetwork:true` the sandbox's only route out is a LOOPBACK
 // DNS resolver + HTTP proxy that the harness runs (CONNECT tunnels and absolute-form plain-HTTP forwards,
-// ADR-0432). Every DNS query, CONNECT and plain-HTTP forward is decided
+// ADR-0445). Every DNS query, CONNECT and plain-HTTP forward is decided
 // by the EXACT SAME brain the agent's own browser/web tools already use — `egressDecisionDetailed`
 // (ADR-0062/0106/0108) — so subprocess egress obeys the SAME curated whitelist (P-NETWL), managed
 // ceiling (P-ENT.1), and posture (P-NETWL.5) the user already curates. `gethostbyname` on a TXT record
@@ -57,7 +57,7 @@ export interface EgressProxyDecision {
 
 /** One mediated reach-out, kept in an in-memory ring so tests/demos (and, in P-SANDBOX.3, the Security
  *  panel) can observe what the proxy saw. `channel` distinguishes a DNS query from the HTTP proxy
- *  listener; `connect` covers both CONNECT tunnels and absolute-form plain-HTTP forwards (ADR-0432). */
+ *  listener; `connect` covers both CONNECT tunnels and absolute-form plain-HTTP forwards (ADR-0445). */
 export interface ProxyEvent {
   channel: "dns" | "connect";
   decision: EgressProxyDecision;
@@ -377,7 +377,7 @@ export class EgressProxy {
       const line = head.split("\r\n", 1)[0] ?? "";
       const m = /^CONNECT\s+(\S+)\s+HTTP\/1\.[01]/i.exec(line);
       if (!m) {
-        this.forward(client, chunk); // ADR-0432: absolute-form plain HTTP, same brain; anything else refused
+        this.forward(client, chunk); // ADR-0445: absolute-form plain HTTP, same brain; anything else refused
         return;
       }
       const target = m[1]!;
@@ -411,7 +411,7 @@ export class EgressProxy {
     });
   }
 
-  /** ADR-0432: forward one absolute-form plain-HTTP request (`GET http://host:port/path HTTP/1.1`), the
+  /** ADR-0445: forward one absolute-form plain-HTTP request (`GET http://host:port/path HTTP/1.1`), the
    *  shape local model servers (ollama, llama.cpp, vLLM) receive from a client under HTTP_PROXY. The
    *  host goes through the SAME `decideHost` as CONNECT; deny ⇒ 403 and the target is never dialed. The
    *  head is buffered (capped) only to rewrite it to origin-form with `Connection: close`; bodies in both
@@ -422,7 +422,7 @@ export class EgressProxy {
       client.removeListener("data", onData);
       const line = buf.toString("latin1").split("\r\n", 1)[0] ?? "";
       this.record("connect", { action: "deny", host: hostFromAbsoluteUri(line), reason: "unsupported-request", via: "fail-closed" });
-      client.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\nLUCID egress proxy: only CONNECT tunnels and absolute-form http:// requests are mediated (ADR-0166, ADR-0432).\r\n`);
+      client.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\nLUCID egress proxy: only CONNECT tunnels and absolute-form http:// requests are mediated (ADR-0166, ADR-0445).\r\n`);
     };
     const onData = (more: Buffer) => {
       buf = Buffer.concat([buf, more]);
