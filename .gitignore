@@ -79,6 +79,14 @@ desktop/runtimes/*
 desktop/whisper/*
 !desktop/whisper/.gitkeep
 
+# bundled Whistle model + Needle wasm engine (ADR-0432): staged by build/fetch-whistle.ts, never committed
+desktop/whistle/*
+!desktop/whistle/.gitkeep
+!desktop/whistle/README.md
+
+# root build output (e.g. dist/lucid-appcontainer.exe): rebuildable, never committed
+/dist/
+
 # Local-only: contains real personal data (PII) — never commit
 tools/seed_personal_facts.ts
 
@@ -131,3 +139,7 @@ lucidaddon_audit/
 # so the next one is safe too.
 lucid-support-*.zip
 tools/lucid-support-*.zip
+
+# bundled Microsoft eXecution Container executors (ADR-0441): staged per-arch by build/fetch-mxc.ts, never committed
+desktop/mxc/*
+!desktop/mxc/.gitkeep

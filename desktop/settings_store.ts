@@ -168,8 +168,9 @@ export interface GuiSettings {
   // sovereignty control is `asksageOnly` (lockdown) + the fail-closed backend clamp (ADR-0217).
   govconCui?: boolean;
   // P-VOICE.1 (ADR-0115): voice (TTS/STT) config.
-  // sttProvider: mic engine — "elevenlabs" (cloud Scribe) or "whisper" (offline, air-gap/DoD). Default whisper.
-  sttProvider?: "elevenlabs" | "whisper";
+  // sttProvider: mic engine - "elevenlabs" (cloud Scribe), "whisper" (offline, air-gap/DoD) or "whistle"
+  // (CREATOR-WHISTLE, ADR-0432: in-process, ships with LUCID). Default whisper.
+  sttProvider?: SttProvider;
   // sttUrl: the offline OpenAI-compatible Whisper server (whisper.cpp / faster-whisper). Default :9000.
   sttUrl?: string;
   // ttsProvider: default engine for the brief podcast + read-aloud.
@@ -334,8 +335,11 @@ import type { VoiceEndpointConfig } from "../harness/voice/voice_endpoint.ts"; /
 import { applyReadAloudPatch, effectiveReadAloud, touchesReadAloud } from "./voice_flags.ts"; // P-VOICE.8 (ADR-0400)
 
 // P-VOICE.1 (ADR-0115): voice (TTS/STT) config. Effective values with defaults, for the server + UI.
+export type SttProvider = "elevenlabs" | "whisper" | "whistle";
+const STT_PROVIDERS: Record<SttProvider, true> = { elevenlabs: true, whisper: true, whistle: true };
+
 export interface VoiceSettings {
-  sttProvider: "elevenlabs" | "whisper";
+  sttProvider: SttProvider;
   sttUrl: string;
   ttsProvider: "elevenlabs" | "openai-tts" | "local-tts" | "dots-tts";
   /** P-VOICE.6: base URL of the self-hosted dots.tts service (SSH forward / proxy of the DGX's :8084). */
@@ -363,7 +367,7 @@ export function voiceSettings(): VoiceSettings {
   const perProvider = s.ttsVoices?.[ttsProvider];
   const readAloud = effectiveReadAloud(s);
   return {
-    sttProvider: s.sttProvider === "elevenlabs" ? "elevenlabs" : "whisper", // offline is the safe default
+    sttProvider: s.sttProvider && STT_PROVIDERS[s.sttProvider] ? s.sttProvider : "whisper", // offline is the safe default
     sttUrl: s.sttUrl || process.env.LUCID_STT_URL || "http://localhost:9000",
     ttsProvider,
     ttsVoice: perProvider ?? (ttsProvider === "elevenlabs" ? s.ttsVoice ?? "" : ""),
@@ -424,7 +428,7 @@ export function removeVoiceEndpoint(id: string): VoiceSettings {
  *  voice independently and each engine keeps its own remembered voice. */
 export function setVoiceSettings(patch: Partial<VoiceSettings>): VoiceSettings {
   const s = load();
-  if (patch.sttProvider) s.sttProvider = patch.sttProvider === "elevenlabs" ? "elevenlabs" : "whisper";
+  if (patch.sttProvider) s.sttProvider = STT_PROVIDERS[patch.sttProvider] ? patch.sttProvider : "whisper";
   if (patch.sttUrl !== undefined) s.sttUrl = patch.sttUrl.trim() || undefined;
   if (patch.ttsProvider) s.ttsProvider = patch.ttsProvider;
   if (patch.ttsVoice !== undefined) {
