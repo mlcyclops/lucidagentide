@@ -46,6 +46,8 @@ import { bannedJudges, judgeBanEnv } from "../harness/judgment/judge_bans.ts"; /
 import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
 import { managedAsksageOnly, managedConfig, managedRequireIsolation, managedSandboxFoldersLocked, managedSandboxLocksOn, modelAllowed } from "./managed_config.ts";
 import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, gitExe, loopbackExempted, parseOmpShellPath, prependPathOverlay, resolveBackend, runtimeProbeVerdict, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
+import type { MxcHost } from "../harness/runs/sandbox_mxc.ts"; // P-MXC.1 (ADR-0441)
+import { mxcHost } from "./mxc_runtime.ts"; // P-MXC.1 (ADR-0441): the staged, verified MXC executor
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
@@ -849,8 +851,9 @@ class Backend {
     // P-SANDBOX.12 (ADR-0390): the user's Off switch (a LUCID setting, no admin needed). Managed
     // require-isolation wins: a policy-required sandbox is never turned off from the panel. P-SANDBOX.14
     // (ADR-0394): so does a managed sandbox.allowUserOff === false.
-    const userOff = acBundled && userTurnedSandboxOff(loadSettings().sandboxWindowsMode, managedSandboxLocksOn(managedConfig().config));
-    if (userOff) console.error("[sandbox] the Windows AppContainer is turned OFF in the Security panel - this session runs as the disclosed passthrough (ADR-0390).");
+    const offSwitch = process.platform === "win32" && userTurnedSandboxOff(loadSettings().sandboxWindowsMode, managedSandboxLocksOn(managedConfig().config));
+    const userOff = acBundled && offSwitch;
+    if (offSwitch) console.error("[sandbox] the Windows sandbox is turned OFF in the Security panel - this session runs as the disclosed passthrough (ADR-0390).");
     const acUsable = acBundled && !userOff && (!profileCaps.canNetwork || loopbackExempted());
     if (acBundled && !userOff && !acUsable) {
       console.error(
@@ -858,9 +861,31 @@ class Backend {
           `Enable full Windows isolation once, from an elevated shell: "${acHelper}" --register-loopback  (then restart LUCID).`,
       );
     }
+    // P-MXC.1 (ADR-0441): the Microsoft eXecution Container executor is tried BEFORE the first-party
+    // helper when it is staged, verified against the pin and answered --probe. Same Off switch; the same
+    // loopback precondition for a network-on profile on the AppContainer (DACL) tier, because MXC runs under
+    // the helper's moniker and reaches the egress proxy only through that one-time exemption; the kernel
+    // tier (BaseContainer) takes an explicit host-loopback allow and needs no exemption.
+    let mxc: MxcHost | undefined;
+    if (process.platform === "win32" && !offSwitch) {
+      const m = mxcHost({ resourcesPath: process.env.LUCID_RESOURCES || undefined });
+      if (m.host) {
+        const loopbackOk = !profileCaps.canNetwork || m.host.tier === "base-container" || loopbackExempted();
+        // The executor's own --probe names the elevated steps the host still needs (system-drive metadata,
+        // the NUL device). Until they are done, cmd.exe / node / bun subprocesses die with EPERM inside the
+        // container, so a committed MXC would light the pill and break every exec: not offered, and said so.
+        const prepOk = m.probe.prepNeeded.length === 0;
+        if (loopbackOk && prepOk) mxc = m.host;
+        else if (!prepOk) console.error(`[sandbox] the MXC executor is staged (${m.host.tier}) but this host still needs: ${m.probe.prepNeeded.join(", ")} - not offered until "Prepare host" has run (Security panel, administrator).`);
+        else console.error(`[sandbox] the MXC executor is staged (${m.host.tier}) but the loopback exemption is NOT registered - this network-on session cannot use it. Use "Prepare host" in the Security panel once (administrator).`);
+      } else if (loadSettings().developerMode) {
+        console.error(`[sandbox] MXC not offered: ${m.reason}`);
+      }
+    }
     const res = resolveBackend({
       requireIsolation: managedRequireIsolation(managedConfig().config),
       appContainerHelper: acUsable ? acHelper! : undefined,
+      mxc,
     });
     if (!res.ok) {
       this.sandboxExecBlock = res.reason;
@@ -877,7 +902,7 @@ class Backend {
     // P-SANDBOX.9 (ADR-0386): an AppContainer child reads NOTHING it was not granted, so the contained
     // omp also needs the repo tree, the bun runtime its shim execs, and rw on ~/.omp (+ a temp dir in it).
     let acGrants: ReturnType<typeof appContainerRuntimeGrants> | undefined;
-    if (res.backend.name === "appcontainer") {
+    if (res.backend.name === "appcontainer" || res.backend.name === "mxc") {
       // P-SANDBOX.11 (ADR-0389): a shellPath pinned in omp's config must be reachable inside the container.
       let shellPath: string | null = null;
       try { shellPath = parseOmpShellPath(readFileSync(join(homedir(), ".omp", "agent", "config.yml"), "utf8")); } catch { /* no config: omp discovers a shell itself */ }
@@ -898,7 +923,7 @@ class Backend {
     // P-SANDBOX.10 (ADR-0387): presence and a stdio round trip are not "chat works". Before committing
     // to the AppContainer, prove the REAL runtime boots through the SAME wrap. A failure keeps chat up on
     // the disclosed passthrough (or blocks exec under managed require-isolation), with the reason logged.
-    if (res.backend.name === "appcontainer") {
+    if (res.backend.name === "appcontainer" || res.backend.name === "mxc") {
       const ctx = { workspace: currentWorkspace(), proxy, ...acGrants };
       const verdict = await appContainerRuntimeProbe(res.backend.wrap([argv[0]!, "--version"], profileCaps, ctx));
       if (!verdict.ok) {
@@ -911,12 +936,12 @@ class Backend {
       }
     }
     this.sandboxExecBlock = null;
-    setSandboxState({ backend: res.backend.name, isolated: d.isolated, disclosed: d.disclosed, platform: process.platform, execBlocked: null, proxied: !!proxy, at });
+    setSandboxState({ backend: res.backend.name, ...(mxc && res.backend.name === "mxc" ? { tier: mxc.tier } : {}), isolated: d.isolated, disclosed: d.disclosed, platform: process.platform, execBlocked: null, proxied: !!proxy, at });
     if (d.disclosed) console.error(sandboxDisclosure());
     // P-SANDBOX.17 (ADR-0399): Git for Windows cannot start inside the AppContainer, so the contained agent's
     // `git` is the broker shim (tools/git-broker/git.cmd), which asks the engine to run the real git.
-    const gitShim = res.backend.name === "appcontainer" ? prependPathOverlay(process.env, join(resolvedRepo().root, "tools", "git-broker")) : {};
-    return { cmd: d.plan.cmd, args: d.plan.args, env: { ...d.plan.env, ...gitShim }, contained: res.backend.name === "appcontainer" };
+    const gitShim = res.backend.name === "appcontainer" || res.backend.name === "mxc" ? prependPathOverlay(process.env, join(resolvedRepo().root, "tools", "git-broker")) : {};
+    return { cmd: d.plan.cmd, args: d.plan.args, env: { ...d.plan.env, ...gitShim }, contained: res.backend.name === "appcontainer" || res.backend.name === "mxc" };
   }
 
   private async start(): Promise<void> {

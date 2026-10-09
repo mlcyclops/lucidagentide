@@ -170,9 +170,11 @@ export function isAuxiliaryModel(value: string): boolean { return /tab_flash|tab
  *  P-MODEL.6: StepFun (omp 18.4's `stepfun` provider, and its ids resold as `stepfun/…` / `stepfun-ai/…`
  *  by aggregators) by name, and a bare StepFun id (`step-3.7-flash`, `step-5-preview`, `step-r1-v-mini`)
  *  only where a path segment STARTS with `step-` and a version digit (or `r` + digit) follows, so
- *  `step-by-step`, `multistep-2` or `footstep-3` never gate. */
+ *  `step-by-step`, `multistep-2` or `footstep-3` never gate.
+ *  P-MODEL.7: omp 18.8's `helmcode` (an EU gateway) resells GLM as the bare id `glm5.3`, no hyphen, which
+ *  the `glm(-|\b)` tail missed; a version digit straight after `glm` now gates too. */
 export function isChinaModel(value: string): boolean {
-  return /deepseek|kimi|moonshot|minimax|(^|[-/])glm(-|\b)|zhipu|qwen|ernie|hunyuan|doubao|(^|[-/])yi-|01-ai|stepfun|(^|\/)step-r?\d/i.test(value);
+  return /deepseek|kimi|moonshot|minimax|(^|[-/])glm(-|\d|\b)|zhipu|qwen|ernie|hunyuan|doubao|(^|[-/])yi-|01-ai|stepfun|(^|\/)step-r?\d/i.test(value);
 }
 
 /** The GPT-5.x/4.x numeric version (e.g. 5.4), or null for non-versioned GPT (o-series, gpt-oss). */
