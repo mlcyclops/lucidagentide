@@ -21,7 +21,7 @@ PY         := $(UV) run --project $(SIDECAR_DIR) python
 # ---------------------------------------------------------------------------
 
 .PHONY: install
-install: install-harness install-sidecar install-hooks ## Install harness + sidecar deps + git hooks
+install: install-harness install-desktop install-sidecar install-hooks ## Install harness + desktop + sidecar deps + git hooks
 
 .PHONY: install-hooks
 install-hooks: ## Point git at .githooks/ so the pre-commit license-header hook runs
@@ -31,6 +31,10 @@ install-hooks: ## Point git at .githooks/ so the pre-commit license-header hook 
 .PHONY: install-harness
 install-harness: ## Install Bun/TypeScript harness deps
 	$(BUN) install
+
+.PHONY: install-desktop
+install-desktop: ## Install desktop deps. Load-bearing for the symbol graph: desktop pins typescript 6 (the runtime compiler API), while the root pin is the TS 7 Go CLI whose package root exports only version fields. Without this install, loadTs() finds no usable compiler and P-KG-SYM.1 builds empty graphs (CI installs desktop deps; make install must match).
+	cd desktop && $(BUN) install
 
 .PHONY: install-sidecar
 install-sidecar: ## Create/sync the pinned Python sidecar venv
