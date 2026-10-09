@@ -91,6 +91,8 @@ import { imageFileName } from "./chat_images.ts"; // P-IMG.1 (ADR-0208): inline 
 import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
 import { expandCommandBody, expandInlineCommands, slashTokenBeforeCaret, type UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1/.2: user "/" commands, body-wide
 import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
+import { cadenceToCron, jobRowHtml, jobsHoverHtml, jobsSheetHtml, jobsTile, nextThree, type CadenceKind, type JobsData } from "./jobs_view.ts"; // P-SCHED.2 (ADR-0443)
+import { describeCron } from "../cron.ts"; // P-SCHED.1: the same cron math the engine runs
 import { exportActionPlan } from "./kg_export.ts";
 import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } from "../collab/webrtc_session.ts"; // P-COLLAB.15/.16/.17: WebRTC diagnostics
 // Diagnostic hooks (no side effects unless invoked): __lucidWebrtcSelfTest proves the renderer-side WebRTC
@@ -243,6 +245,7 @@ const state = {
   memory: null as MemorySnapshot | null,
   ledger: null as import("./bridge.ts").UsageLedger | null, // P10.2 cross-model usage ledger
   codeActivity: null as import("./bridge.ts").CodeActivity | null, // ADR-0030 P-CODE.1 git workspace diffstat
+  jobs: null as JobsData | null, // P-SCHED.2 (ADR-0443): the scheduled-jobs snapshot the rail tile and hover read
   config: [] as ConfigOption[],
   configCached: false, // P-IDE.1d: current config came from the local cache; live refresh pending
   configWarming: false, // P-IDE.1d: a warm cycle is in flight (session still starting); picker shows the spinner
@@ -330,6 +333,8 @@ const MODEL_CTX: Record<string, number> = {
   "claude-haiku-4-5": 200_000,
   // Sonnet 5.5 (omp 18.4.4 catalog): 1M context, 128K max output.
   "claude-sonnet-5-5": 1_000_000,
+  // Haiku 5.5 (omp 18.8.6 catalog): 1M context, 128K max output, adaptive thinking.
+  "claude-haiku-5-5": 1_000_000,
   "gpt-6-astra": 1_000_000, "gpt-6-sol": 1_000_000, "gpt-6-luna": 1_000_000,
   // Grok 4.6 / 4.7 (omp 18.2.10 catalog, xai + xai-oauth): 500K context.
   "grok-4.7": 500_000, "grok-4.6": 500_000,
@@ -3739,6 +3744,11 @@ function renderMetricsRail(): void {
     })(),
   ];
 
+  // P-SCHED.2 (ADR-0443): the Jobs tile, after LUCID points, only once a job exists (no dead zero tile).
+  // Its hover is the hoverable rich card (the week grid), not the one-line tip, so it is attached below.
+  const jobsT = jobsTile(state.jobs, Date.now());
+  if (jobsT) rows.push({ n: jobsT.n, label: jobsT.label, cls: "c", tip: jobsT.tip, attn: jobsT.attn });
+
   // Signature: value + attention state per tile. Unchanged → leave the DOM alone (keep the pulse smooth).
   const sig = rows.map((t) => `${t.label}:${t.n}:${t.attn ? 1 : 0}`).join("|");
   if (sig === lastRailSig) return;
@@ -3748,10 +3758,110 @@ function renderMetricsRail(): void {
   tiles.innerHTML = rows.map((t) => {
     const changed = railPrimed && prevMetrics[t.label] !== undefined && prevMetrics[t.label] !== t.n;
     prevMetrics[t.label] = t.n;
-    const cl = `tile ${t.cls}${changed ? " changed" : ""}${t.attn ? " attn" : ""}`;
-    return `<div class="${cl}" data-tip="${esc(t.label)}|${esc(t.tip)}" data-tip-side="left"><div class="n">${esc(t.n)}</div><div class="l">${esc(t.label)}</div></div>`;
+    const cl = `tile ${t.cls}${changed ? " changed" : ""}${t.attn ? " attn" : ""}${t.label === "jobs" ? " tile-jobs" : ""}`;
+    const tip = t.label === "jobs" ? "" : ` data-tip="${esc(t.label)}|${esc(t.tip)}" data-tip-side="left"`;
+    return `<div class="${cl}"${tip} data-tile="${esc(t.label)}"><div class="n">${esc(t.n)}</div><div class="l">${esc(t.label)}</div></div>`;
   }).join("");
   railPrimed = true;
+  const jobsEl = tiles.querySelector('[data-tile="jobs"]') as HTMLElement | null;
+  if (jobsEl && state.jobs) {
+    attachRichTip(jobsEl, jobsHoverHtml(state.jobs, Date.now()));
+    jobsEl.style.cursor = "pointer";
+    jobsEl.addEventListener("click", () => { void openJobsSheet(); });
+  }
+}
+
+// ── P-SCHED.1/.2 (ADR-0443): scheduled lane jobs - the rail's data, the sheet ─────────────────────────
+let jobsTimer: number | undefined;
+/** Refresh the jobs snapshot the tile and hover read; re-paints the rail when it changed. */
+async function refreshJobs(): Promise<void> {
+  const data = await bridge.jobsList().catch(() => null);
+  if (!data) return;
+  const changed = JSON.stringify(data) !== JSON.stringify(state.jobs);
+  state.jobs = data;
+  if (changed) { lastRailSig = ""; renderMetricsRail(); }
+}
+function startJobsPolling(): void {
+  if (jobsTimer) return;
+  void refreshJobs();
+  jobsTimer = window.setInterval(() => void refreshJobs(), 60_000);
+}
+
+/** The Jobs sheet: list, arm / run / history / delete, and the add form with a live next-three readout. */
+async function openJobsSheet(): Promise<void> {
+  if ($("#jobsModal")) return;
+  const [data, targets] = await Promise.all([bridge.jobsList().catch(() => null), bridge.jobsTargets().catch(() => null)]);
+  if (!data) { showToast({ tone: "warn", title: "Scheduled jobs", desc: "The engine did not answer.", actions: [{ label: "OK" }], timeout: 4000 }); return; }
+  const tlist = targets?.targets ?? [];
+  const ov = el(`<div id="jobsModal" class="mkt-scrim"><div class="jobs-card" role="dialog" aria-label="Scheduled jobs">${jobsSheetHtml(data, tlist, Date.now())}</div></div>`);
+  const close = () => { ov.remove(); document.removeEventListener("keydown", onKey); void refreshJobs(); };
+  const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.preventDefault(); close(); } };
+  const redraw = async () => {
+    const fresh = await bridge.jobsList().catch(() => null);
+    if (!fresh) return;
+    state.jobs = fresh;
+    const list = ov.querySelector(".jobs-list");
+    if (list) list.innerHTML = fresh.jobs.map((j) => jobRowHtml(j, Date.now(), fresh.running.includes(j.id))).join("") || `<div class="cfg-empty">No jobs yet. Add one below; it starts disarmed.</div>`;
+    lastRailSig = ""; renderMetricsRail();
+  };
+  const form = ov.querySelector("[data-job-form]") as HTMLFormElement | null;
+  const nextOut = ov.querySelector("[data-job-next]") as HTMLElement | null;
+  const readCron = (): string | null => {
+    if (!form) return null;
+    const fd = new FormData(form);
+    const kind = String(fd.get("kind") ?? "daily") as CadenceKind;
+    const days = fd.getAll("day").map((d) => Number(d));
+    return cadenceToCron(kind, String(fd.get("hhmm") ?? ""), days, String(fd.get("cron") ?? ""));
+  };
+  const paintNext = () => {
+    if (!form || !nextOut) return;
+    const kind = String(new FormData(form).get("kind") ?? "daily");
+    (form.querySelector("[data-job-days]") as HTMLElement).hidden = kind !== "weekly";
+    (form.querySelector('[name="cron"]') as HTMLElement).hidden = kind !== "cron";
+    (form.querySelector('[name="hhmm"]') as HTMLElement).hidden = kind === "cron";
+    const cron = readCron();
+    nextOut.textContent = cron ? `Next: ${nextThree(cron, Date.now()).join(" · ") || "never"}` : "Pick a time (and at least one day).";
+  };
+  form?.addEventListener("input", paintNext);
+  form?.addEventListener("change", paintNext);
+  paintNext();
+  form?.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const fd = new FormData(form);
+    const err = ov.querySelector("[data-job-err]") as HTMLElement | null;
+    const cron = readCron();
+    if (!cron) { if (err) err.textContent = "Pick a valid time, day set, or cron expression."; return; }
+    const t = tlist.find((x) => x.laneId === String(fd.get("target")));
+    if (!t) { if (err) err.textContent = "Pick a lane (spawn one in Fleet first)."; return; }
+    const spec = {
+      name: String(fd.get("name") ?? ""), prompt: String(fd.get("prompt") ?? ""), cron,
+      target: { laneId: t.laneId, name: t.name, cwd: t.cwd, model: t.model, repo: t.repo },
+      autoApprove: fd.get("autoApprove") === "on", armed: fd.get("armed") === "on",
+      maxMinutes: Number(fd.get("maxMinutes") ?? 60), missed: String(fd.get("missed") ?? "run-once"),
+    };
+    void (async () => {
+      const r = await bridge.jobsCreate(spec);
+      if (!r) { if (err) err.textContent = "The engine refused the job (see the toast)."; return; }
+      if (err) err.textContent = "";
+      form.reset(); paintNext();
+      await redraw();
+      showToast({ title: spec.armed ? "Job armed" : "Job saved (disarmed)", desc: spec.armed ? `${spec.name} fires ${describeCron(cron)}. LUCID must stay open.` : `Arm ${spec.name} when you are ready; it never fires until then.`, actions: [{ label: "OK" }], timeout: 5000 });
+    })();
+  });
+  ov.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t === ov || t.closest("[data-jobs-close]")) { close(); return; }
+    const arm = t.closest("[data-job-arm]") as HTMLElement | null;
+    if (arm) { void bridge.jobsUpdate(arm.dataset.jobArm!, { armed: arm.dataset.armTo === "1" }).then(redraw); return; }
+    const run = t.closest("[data-job-run]") as HTMLElement | null;
+    if (run) { void bridge.jobsRun(run.dataset.jobRun!).then((r) => { showToast(r?.started ? { title: "Job started", desc: "Watch the lane in Fleet.", actions: [{ label: "OK" }], timeout: 3000 } : { tone: "warn", title: "Job not started", desc: "It may be running already.", actions: [{ label: "OK" }], timeout: 4000 }); return redraw(); }); return; }
+    const hist = t.closest("[data-job-hist]") as HTMLElement | null;
+    if (hist) { const box = hist.closest(".job-row")?.querySelector(".job-hist") as HTMLElement | null; if (box) { box.hidden = !box.hidden; hist.setAttribute("aria-expanded", String(!box.hidden)); } return; }
+    const del = t.closest("[data-job-del]") as HTMLElement | null;
+    if (del) { void bridge.jobsDelete(del.dataset.jobDel!).then(redraw); return; }
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.append(ov);
 }
 function setInspectorRail(rail: boolean): void {
   state.inspectorRail = rail;
@@ -3771,7 +3881,7 @@ function setInspectorRail(rail: boolean): void {
 const PROV_HINTS: Record<string, string> = {
   typesafe: `Jev, TypeSafe AI's hosted System One judgment model (no released weights; API only). Get your key at <a href="https://console.typesafe.ai/" target="_blank" rel="noopener">console.typesafe.ai \u2197</a>. A judgment sends conversation text and tool output to api.typesafe.ai, so under AskSage lockdown LUCID pins judgments to your gov-routed models instead.`,
   elevenlabs: `Cloud voice (paid) for read-aloud, the podcast, and speech-to-text. New to ElevenLabs? <a href="https://try.elevenlabs.io/nru4d3mgw8b5" target="_blank" rel="noopener">Create an account \u2197</a>, then get your key at <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener">API keys \u2197</a>. Billed per character: a brief/AAR narration (~2-3k chars) runs <b>~$0.10-$0.30</b>; one reply is a few cents. Audio leaves the device, so for air-gap/DoD use offline Whisper / Kokoro below.`,
-  openai: "OAuth signs in your ChatGPT / Codex subscription (those models). For the full commercial catalog - gpt-4o, o-series - add an OPENAI_API_KEY below.",
+  openai: "OAuth signs in your ChatGPT / Codex subscription (those models). If the browser sign-in never comes back (a blocked localhost callback, a proxy answering 403), use <b>Connect with a device code</b>: LUCID shows a short code you type on OpenAI's device page. For the full commercial catalog - gpt-4o, o-series - add an OPENAI_API_KEY below.",
   google: "OAuth uses the Gemini CLI / Code Assist tier. <b>Workspace / Enterprise Google accounts</b> also need a <b>GCP project ID</b> below (personal accounts leave it blank) - without it the sign-in aborts. For the full commercial Gemini catalog, add a GEMINI_API_KEY. For the enterprise-governed backend (Gemini for Google Cloud), use the <b>Gemini Enterprise</b> card below.",
   anthropic: "OAuth signs in your Claude subscription. For pay-as-you-go API access, add an ANTHROPIC_API_KEY below.",
   xai: "OAuth signs in via your X / xAI account. Which Grok models are available depends on your plan (Premium+, SuperGrok, or API). If models appear but return empty replies, check your subscription at <b>console.x.ai</b>.",
@@ -3833,7 +3943,12 @@ function provCard(p: ProviderAuth): string {
   const oauthRow = p.canOauth
     ? `<div class="prov-row">${p.oauthActive
         ? `<span class="prov-id">${esc(p.oauthIdentity ?? "connected")}</span><button class="btn-mini danger" data-oauth-logout="${esc(p.oauthId)}">Disconnect</button>`
-        : `<button class="btn-mini ok" data-oauth="${esc(p.oauthId)}">${icon("expand", 12)} Connect via OAuth</button>`}</div>`
+        : `<button class="btn-mini ok" data-oauth="${esc(p.oauthId)}">${icon("expand", 12)} Connect via OAuth</button>${p.deviceOauthId
+            // P-PROV.3: the same account through a device code - for hosts where the browser callback
+            // (loopback port 1455) is blocked or answers 403 behind a proxy. Shows a short code to type
+            // on the provider's page; nothing is pasted back.
+            ? `<button class="btn-mini" data-oauth="${esc(p.deviceOauthId)}" data-tip="Connect with a device code|Use this when the normal sign-in opens the browser but never comes back (a blocked localhost callback or a proxy 403). LUCID shows a short code; you type it on the provider's device page.">${icon("command", 12)} Connect with a device code</button>`
+            : ""}`}</div>`
     : "";
   // Why the LAST sign-in attempt died (server kept the broker's error; cleared on retry/success).
   // `.set-note` is the block-paragraph pattern (icon absolutely positioned, text flows) - never flex prose.
@@ -17331,7 +17446,10 @@ function wire(): void {
     const guide = t.closest("[data-guide]") as HTMLElement | null;
     if (guide) { await openGuide(guide.dataset.guide!); return; }
     const oauth = t.closest("[data-oauth]") as HTMLElement | null;
-    if (oauth) { await startProviderOauth(oauth.dataset.oauth!, oauth.closest(".set-card"), () => void renderSettings()); return; }
+    // P-PROV.3: since P-ACCT.1 nested the provider cards, the OAuth row lives in `.prov-body` under a
+    // `<details>`, not in a `.set-card`; anchoring there is what makes the device-code / Copilot boxes
+    // actually appear in Settings (they only ever rendered in the hub before).
+    if (oauth) { await startProviderOauth(oauth.dataset.oauth!, (oauth.closest(".prov-body") ?? oauth.closest(".set-card")) as HTMLElement | null, () => void renderSettings()); return; }
     const logout = t.closest("[data-oauth-logout]") as HTMLElement | null;
     if (logout) { await bridge.oauthLogout(logout.dataset.oauthLogout!); void renderSettings(); return; }
     const logoutAll = t.closest("[data-oauth-logout-all]") as HTMLElement | null;
@@ -17401,6 +17519,19 @@ function wire(): void {
         showToast(r?.changed
           ? { title: mode === "off" ? "Sandbox off" : mode === "auto" ? "Sandbox on" : "Registration removed", desc: r.detail, actions: [{ label: "OK" }], timeout: 5000 }
           : { tone: "warn", title: "Sandbox unchanged", desc: r?.detail || "The change did not apply.", actions: [{ label: "OK" }], timeout: 6000 });
+      })();
+      return;
+    }
+    // P-MXC.1 (ADR-0441): Prepare host. One administrator prompt; the engine re-reads the real state.
+    const mxcPrep = (e.target as HTMLElement).closest("[data-mxc-prepare]") as HTMLElement | null;
+    if (mxcPrep) {
+      (mxcPrep as HTMLButtonElement).disabled = true;
+      void (async () => {
+        const r = await bridge.mxcPrepare();
+        await refresh();
+        showToast(r?.changed
+          ? { title: "Host prepared", desc: r.detail, actions: [{ label: "OK" }], timeout: 6000 }
+          : { tone: "warn", title: "Host not prepared", desc: r?.detail || "The step did not apply.", actions: [{ label: "OK" }], timeout: 8000 });
       })();
       return;
     }
@@ -17557,9 +17688,9 @@ function wire(): void {
   });
   // P-SECACK.1 (ADR-0170): right-click Cut/Copy/Paste/Select-all on the prompt bar and every other
   // text field - Electron ships no native context menu, so mouse-only clipboard flows were impossible.
-  // Image paste goes through the SAME staged-thumbnail path as Ctrl+V (P-VISION.1).
+  // An image paste is replayed as a `paste` event on the right-clicked field, so the main composer's
+  // listener above and a fleet lane's own listener each stage it exactly as Ctrl+V does (P-VISION.1).
   installTextContextMenu({
-    onImages: (imgs) => stageImageFiles(imgs),
     toast: (t) => showToast({ title: t.title, desc: t.desc, tone: t.tone, actions: [{ label: "OK" }], timeout: 3200 }),
   });
   // P-COPY.1 (ADR-0203): the code-block Copy button, delegated on document so it fires wherever code renders.
@@ -17748,6 +17879,7 @@ const palette = createPalette(() => {
     { id: "mkt", title: "Open Plugin Marketplace", icon: "market", hint: "popup", run: () => openMarketplace() }, // P-MARKET.1
     { id: "kgpacks", title: "Browse Role KG Packs", icon: "package", hint: "popup", run: () => openKgPacks() }, // P-KGPACK.5 (ADR-0205)
     { id: "sysres", title: "Open System resources", icon: "gauge", hint: "popup", run: () => void openResourcePanelLive() }, // P-SYSRES.1
+    { id: "jobs", title: "Scheduled jobs", icon: "calendar", hint: "wake a Fleet lane while you are away", run: () => void openJobsSheet() }, // P-SCHED.2 (ADR-0443)
     // P-LOC.3 (ADR-0095): a discoverable entry point for the AI-authored code ledger — opens Memory with
     // the section expanded, so it no longer has to be hunted for inside the panel.
     { id: "ailoc", title: "Open AI-authored code ledger", icon: "savings", hint: "panel", run: () => { OPEN.add("mem.ailoc"); focusInspector("memory"); } },
@@ -17965,7 +18097,8 @@ async function pollOauthThenRefresh(oauthId: string): Promise<void> {
   const check = async (): Promise<boolean> => {
     if (resolved) return true;
     const a = await bridge.auth();
-    const prov = [...(a?.gateway ?? []), ...(a?.majors ?? []), ...(a?.others ?? [])].find((x) => x.oauthId === oauthId);
+    // P-PROV.3: a device alias (`openai-codex-device`) lands on the card whose `deviceOauthId` it is.
+    const prov = [...(a?.gateway ?? []), ...(a?.majors ?? []), ...(a?.others ?? [])].find((x) => x.oauthId === oauthId || x.deviceOauthId === oauthId);
     // The broker exited WITHOUT a credential: stop spinning and say why. The browser's "Authentication
     // Successful" page renders before the token exchange + provider onboarding run, so this toast is
     // the user's ONLY evidence of what actually failed (e.g. Google's "requires GOOGLE_CLOUD_PROJECT"
@@ -18259,6 +18392,9 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   "claude-sonnet-5-5": { exp: 2, iq: 4, eff: "The Claude 5.5 family's balanced tier at $2/$10 per Mtok, half Opus 5.5's rate, with a 1M context window.", best: "Everyday coding, refactors, and code review at a workhorse price.", ctx: "1M" },
   "claude-sonnet-4-6": { exp: 2, iq: 4, eff: "The best all-round speed-to-cost-to-quality balance.", best: "Everyday coding, refactors, code review.", ctx: "1M" },
   "claude-sonnet-4-5": { exp: 2, iq: 4, eff: "Strong balanced workhorse (prior Sonnet).", best: "Everyday coding; a version pin.", ctx: "1M" },
+  // P-MODEL.7: Haiku 5.5 (omp 18.8.6 catalog): $0.10/$0.50 per Mtok, 1M context, 128K output, adaptive
+  // thinking from low to max, image input. The fast tier of the 5.5 family; Haiku 4.5 stays as the pin.
+  "claude-haiku-5-5": { exp: 1, iq: 3, eff: "The Claude 5.5 family's fast tier at $0.10/$0.50 per Mtok, with a 1M context window and adaptive thinking.", best: "Quick edits, lookups, checkers, and high-volume subagent work.", ctx: "1M" },
   "claude-haiku-4-5": { exp: 1, iq: 3, eff: "Fastest and cheapest Claude - excellent tokens-per-dollar.", best: "Quick edits, lookups, high-volume tasks.", ctx: "200K" },
   // P-MODEL.2: GPT-6 (codename astra) is OpenAI's current flagship and the first to ship a 1M context.
   // It rolls out in stages, so it may be absent from a given account's list; when the provider offers it
@@ -18488,8 +18624,47 @@ let pickerMemo: { key: string; html: string } | null = null;
 // Google) complete silently via the localhost callback. GitHub Copilot is its own two-step (domain → code).
 // `cardEl` is the container the device/copilot input boxes attach to (a Settings .set-card or a hub
 // .provhub-config); `refresh` re-renders the caller's surface after the browser step.
-const DEVICE_FLOW_IDS: Record<string, true> = { "xai-oauth": true, "openai-codex-device": true };
+const DEVICE_FLOW_IDS: Record<string, true> = { "xai-oauth": true };
+// P-PROV.3: show-the-code flows. The broker prints a one-time code the user types ON the provider's device
+// page (OpenAI's Codex device flow); the engine reads it with the guarded parser (desktop/device_code.ts,
+// issue #490) and hands it back as `code`. Nothing is pasted into LUCID, so these never get the paste box.
+const SHOW_CODE_FLOW_IDS: Record<string, { name: string; page: string }> = {
+  "openai-codex-device": { name: "OpenAI", page: "auth.openai.com/codex/device" },
+};
 async function startProviderOauth(oauthId: string, cardEl: HTMLElement | null, refresh: () => void): Promise<void> {
+  const showCode = SHOW_CODE_FLOW_IDS[oauthId];
+  if (showCode) {
+    const box = cardEl ? ((cardEl.querySelector(".oauth-showcode-box") as HTMLElement | null) ?? el(`<div class="oauth-showcode-box set-note"></div>`)) : null;
+    if (box && cardEl && !box.isConnected) cardEl.appendChild(box);
+    if (box) box.innerHTML = `${icon("info", 12)} <span>Starting the ${esc(showCode.name)} device sign-in\u2026</span>`;
+    const r = await bridge.oauthLogin(oauthId);
+    if (!r?.started || (!r.url && !r.code)) {
+      const why = r?.output?.trim().slice(0, 240) || "the login helper printed no sign-in page";
+      if (box) box.innerHTML = `${icon("shield", 12)} <b>Device sign-in did not start:</b> <span>${esc(why)}</span>`;
+      showToast({ tone: "danger", title: "Couldn't start the device sign-in", desc: why, actions: [{ label: "OK" }], timeout: 8000 });
+      return;
+    }
+    if (r.url) void openAuthUrl(r.url);
+    // Code first and large: it is the one thing the user has to carry to the other page. The URL is the
+    // allowlisted device page only (the engine blanks anything else); a copy button for both.
+    if (box) {
+      box.innerHTML = `${icon("command", 12)} <b>Enter this code on ${esc(showCode.page)}:</b>
+        <div class="oauth-showcode"><code class="oauth-code">${esc(r.code ?? "code not shown yet")}</code>${r.code ? `<button class="btn-mini" data-copy-code="${esc(r.code)}">${icon("copy", 11)} Copy code</button>` : ""}${r.url ? `<button class="btn-mini" data-open-url="${esc(r.url)}">${icon("expand", 11)} Open sign-in page</button>` : ""}</div>
+        <span>${r.code ? "The page opened in your browser; sign in to your ChatGPT account and type the code. This card updates on its own once the credential lands." : "The helper has not printed the code yet. Click Connect with a device code again in a moment; if it never appears, use Connect via OAuth."}</span>`;
+      box.querySelector("[data-copy-code]")?.addEventListener("click", () => { void navigator.clipboard.writeText(r.code ?? "").then(() => showToast({ title: "Code copied", desc: "Paste it on the device page.", timeout: 1800 })); });
+      box.querySelector("[data-open-url]")?.addEventListener("click", () => { if (r.url) void openAuthUrl(r.url); });
+    }
+    showToast({
+      title: r.code ? `Your code: ${r.code}` : "Finish the device sign-in in your browser",
+      desc: r.code ? `Type it on ${showCode.page}, then approve the sign-in.` : "Follow the opened page.",
+      actions: r.url ? authUrlActions(r.url) : [{ label: "OK" }],
+      timeout: 0,
+    });
+    // No early re-render here: it would rebuild the card and take the code off the screen while the user
+    // is still typing it. The poll re-renders once the credential lands (or the broker fails).
+    void pollOauthThenRefresh(oauthId);
+    return;
+  }
   if (oauthId === "github-copilot") {
     // GitHub Copilot (ADR-0210): the broker first asks for a GitHub Enterprise domain (blank = github.com),
     // then prints a one-time code the user enters ON GitHub's device page (nothing is pasted back here).
@@ -18962,6 +19137,7 @@ function initResize(): void {
 buildShell();
 void renderSessions();
 initTooltips();
+startJobsPolling(); // P-SCHED.2 (ADR-0443): the Jobs tile appears once a job exists
 wire();
 initZoom();
 initResize();

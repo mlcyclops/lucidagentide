@@ -169,7 +169,9 @@ export interface SecuritySnapshot {
   sandbox?: SandboxStatusView;
 }
 export interface SandboxStateView {
-  backend: "bwrap" | "seatbelt" | "appcontainer" | "noop" | null;
+  backend: "bwrap" | "seatbelt" | "appcontainer" | "mxc" | "noop" | null;
+  /** P-MXC.1 (ADR-0441): MXC's isolation tier when backend is `mxc`. */
+  tier?: "base-container" | "appcontainer-bfs" | "appcontainer-dacl";
   isolated: boolean; disclosed: boolean; platform: string;
   execBlocked: string | null; proxied: boolean; at: string;
 }
@@ -177,7 +179,11 @@ export interface SandboxBlockView { host: string; channel: string; type: string;
 // P-SANDBOX.8: one user-approved standing directory grant (AppContainer ACE), listed with Revoke.
 export interface SandboxGrantView { path: string; mode: "rx" | "rw"; grantedAt: string; reason: string }
 // P-SANDBOX.12 (ADR-0390): what the panel's sandbox switch may offer (see desktop/sandbox_control.ts).
-export interface SandboxControlView { available: boolean; userOff: boolean; policyLocked: boolean; registered: boolean; foldersLocked?: boolean }
+export interface SandboxControlView {
+  available: boolean; userOff: boolean; policyLocked: boolean; registered: boolean; foldersLocked?: boolean;
+  /** P-MXC.1 (ADR-0441): the MXC executor on this host and the elevated steps it still needs. */
+  mxc?: { staged: boolean; tier?: string; prepNeeded: string[]; loopbackNeeded: boolean; source?: string };
+}
 // P-SANDBOX.13 (ADR-0391): a folder LUCID itself grants the contained agent (listed read-only in the panel).
 export interface RuntimeFolderView { path: string; mode: "rx" | "rw"; why: string }
 export interface SandboxStatusView { state: SandboxStateView | null; egressBlocks: SandboxBlockView[]; grants?: SandboxGrantView[]; control?: SandboxControlView; runtimeFolders?: RuntimeFolderView[] }
@@ -276,6 +282,7 @@ export interface ConfigOption {
 // at this one boundary, like ChatEvent).
 import type { ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1 (DOM-free, types only)
 import type { NetView } from "./net_status.ts"; // P-NETSTAT.1 (ADR-0423): the network indicator's view (owned there)
+import type { JobsData, JobTargetView, JobView } from "./jobs_view.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs (owned there)
 export type { NetView };
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
 export type { ProgressView, WaitView };
@@ -564,6 +571,9 @@ export interface KbPackImportView {
 export interface ProviderFieldAuth { env: string; label: string; placeholder?: string; secret?: boolean; set: boolean; value?: string; last4?: string }
 export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
+  /** P-PROV.3: a device-code broker for the same account (OpenAI `openai-codex-device`); the card offers it
+   *  as "Connect with a device code" beside the redirect sign-in. */
+  deviceOauthId?: string;
   oauthActive: boolean; oauthIdentity?: string; keySet: boolean; keyLast4?: string;
   fields?: ProviderFieldAuth[];
   /** Why the LAST OAuth attempt died after the browser said "success" (server-side broker exited
@@ -781,11 +791,20 @@ export interface BrowserStatusView { active: boolean; title: string; url: string
 export interface LucidBridge {
   isElectron: boolean;
   security(): Promise<SecuritySnapshot | null>;
+  /** P-SCHED.1 (ADR-0443): scheduled lane jobs (UI token only). */
+  jobsList(): Promise<JobsData | null>;
+  jobsTargets(): Promise<{ targets: JobTargetView[] } | null>;
+  jobsCreate(spec: unknown): Promise<JobView | null>;
+  jobsUpdate(id: string, patch: Record<string, unknown>): Promise<JobView | null>;
+  jobsDelete(id: string): Promise<{ deleted: boolean } | null>;
+  jobsRun(id: string): Promise<{ started: boolean } | null>;
   /** Release one quarantined call - the audited fail-closed override (ADR-0019 C). */
   securityApprove(id: string): Promise<BlockRecord | null>;
   /** P-SANDBOX.8: revoke one standing directory grant (helper --revoke-acl + store removal). */
   sandboxGrantRevoke(path: string): Promise<{ revoked: boolean; detail: string } | null>;
   sandboxMode(mode: "off" | "auto" | "unregister"): Promise<{ changed: boolean; detail: string; control?: SandboxControlView } | null>;
+  /** P-MXC.1 (ADR-0441): run the MXC host prep (one administrator prompt); the agent restarts on success. */
+  mxcPrepare(): Promise<{ changed: boolean; detail: string } | null>;
   sandboxGrantAdd(mode: "rx" | "rw"): Promise<{ added: boolean; cancelled?: boolean; path?: string; detail: string } | null>;
   securityDismiss(id: string): Promise<BlockRecord | null>;
   /** Bulk-acknowledge every active gate block. Releases NOTHING: each call stays blocked, audit kept. */
@@ -1200,7 +1219,9 @@ export interface LucidBridge {
   guides(): Promise<Record<string, string> | null>;
   arcadeGames(): Promise<Record<string, string> | null>;
   saveKey(env: string, key: string): Promise<AuthStatus | null>;
-  oauthLogin(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string } | null>;
+  /** P-PROV.3: `code` is set for show-the-code brokers (the one-time code the user types on the provider's
+   *  page); `url` is empty when a device broker printed a URL outside its allowlist. */
+  oauthLogin(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string; code?: string } | null>;
   oauthLogout(oauthId: string): Promise<AuthStatus | null>;
   /** Sign out of ALL OAuth providers at once (clears orphaned/unreachable logins too). Returns refreshed status. */
   oauthLogoutAll(): Promise<AuthStatus | null>;
@@ -1665,6 +1686,13 @@ export const bridge: LucidBridge = {
   securityApprove: (id) => post("/api/security/approve", { id }),
   sandboxGrantRevoke: (path) => post("/api/security/sandbox-grant/revoke", { path }),
   sandboxMode: (mode) => post("/api/security/sandbox/mode", { mode }),
+  mxcPrepare: () => post("/api/security/mxc/prepare", {}),
+  jobsList: () => getData("/api/jobs"),
+  jobsTargets: () => getData("/api/jobs/targets"),
+  jobsCreate: (spec) => post("/api/jobs", spec),
+  jobsUpdate: (id, patch) => post("/api/jobs/update", { id, patch }),
+  jobsDelete: (id) => post("/api/jobs/delete", { id }),
+  jobsRun: (id) => post("/api/jobs/run", { id }),
   sandboxGrantAdd: (mode) => post("/api/security/sandbox-grant/add", { mode }),
   securityDismiss: (id) => post("/api/security/dismiss", { id }),
   securityDismissAll: () => post("/api/security/dismiss-all", {}),

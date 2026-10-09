@@ -23,7 +23,7 @@ export const CTX_WINDOW: Record<string, number> = {
   "claude-fable-5-1": 1_000_000, "claude-mythos-5-1": 1_000_000, "gpt-6-astra": 1_000_000,
   "claude-fable-5": 1_000_000, "claude-opus-5-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
   "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
-  "claude-haiku-4-5": 200_000, "claude-sonnet-5-5": 1_000_000,
+  "claude-haiku-4-5": 200_000, "claude-sonnet-5-5": 1_000_000, "claude-haiku-5-5": 1_000_000,
   "gpt-5.2": 256_000, "gpt-5.5": 256_000, "gpt-5.4": 256_000, "gpt-5.1": 256_000, "gpt-5": 256_000,
   "gpt-5-mini": 256_000, "gpt-4.1": 1_000_000, "gpt-o3": 200_000, "gpt-o3-mini": 200_000, "gpt-o4-mini": 200_000,
   "google-claude-45-opus": 200_000, "google-claude-45-sonnet": 200_000,

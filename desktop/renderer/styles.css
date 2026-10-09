@@ -2402,6 +2402,56 @@ body.lucid-capturing #toasts{visibility:hidden}
 .richtip .rt-link{display:inline-flex;align-items:center;gap:5px;margin-top:10px;font-size:12px;font-weight:600;
   color:var(--accent-2);text-decoration:none}
 .richtip .rt-link:hover{text-decoration:underline}
+/* P-SCHED.2 (ADR-0443): the Jobs tile's premium hover. The card widens to hold the 7x24 week grid (today
+   first); a filled cell is one fire, a brighter one several; the next five runs follow as single-line rows
+   (invariant 11: each cell of a row ellipsises, none wraps). */
+.richtip:has(.jg){width:360px}
+.jg{display:grid;grid-template-columns:22px repeat(7,1fr);gap:2px;margin-top:9px;align-items:stretch}
+.jg-h{font-size:10px;color:var(--txt-3);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-bottom:2px}
+.jg-hr{font-size:9.5px;color:var(--txt-4);font-family:var(--mono);line-height:7px;text-align:right;padding-right:3px}
+.jg-c{height:7px;border-radius:2px;background:var(--bg-2);border:1px solid var(--line-soft)}
+.jg-c.one{background:color-mix(in srgb,var(--accent) 55%,var(--bg-2));border-color:var(--accent)}
+.jg-c.many{background:var(--accent-2);border-color:var(--accent-2)}
+.jn{display:flex;flex-direction:column;gap:3px;margin-top:9px}
+.jn-row{display:grid;grid-template-columns:72px minmax(0,1fr) minmax(0,1.2fr) minmax(0,.8fr);gap:6px;font-size:11px;color:var(--txt-2);align-items:center}
+.jn-row>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.jn-when{font-family:var(--mono);color:var(--txt)}
+.jn-name{color:var(--txt);font-weight:600}
+.jn-lane,.jn-repo{color:var(--txt-3)}
+/* The Jobs sheet (the mkt-scrim modal family). */
+.jobs-card{position:relative;width:min(760px,94vw);max-height:86vh;overflow:auto;background:var(--bg-1);border:1px solid var(--line-strong);border-radius:var(--r-lg);padding:16px 18px 18px;box-shadow:0 20px 60px rgb(var(--sh-rgb) / .5);animation:rise var(--t-slow,.24s) var(--ease-out)}
+.jobs-head{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;margin-bottom:12px}
+.jobs-title{display:inline-flex;align-items:center;gap:7px;font-size:15px;font-weight:650;color:var(--txt);white-space:nowrap}
+.jobs-sub{font-size:12px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jobs-body{display:flex;flex-direction:column;gap:14px}
+.jobs-list{display:flex;flex-direction:column;gap:8px}
+.job-row{border:1px solid var(--line);border-radius:10px;background:var(--bg-2);padding:9px 11px;display:flex;flex-direction:column;gap:5px;min-width:0}
+.job-head{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:8px;align-items:center}
+.job-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--txt)}
+.job-meta{font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.job-target{position:relative;padding-left:17px;font-size:11.5px;color:var(--txt-2)}
+.job-target>.ic{position:absolute;left:0;top:2px;color:var(--txt-4)}
+.job-target>span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.job-prompt{font-size:12px;color:var(--txt-2);line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.job-acts{display:flex;gap:6px;flex-wrap:wrap}
+.job-hist{display:flex;flex-direction:column;gap:2px;border-top:1px dashed var(--line-soft);padding-top:5px}
+.job-run{font-size:11px;color:var(--txt-3);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.job-form{border:1px solid var(--line);border-radius:10px;background:var(--bg-2);padding:11px 12px;display:flex;flex-direction:column;gap:8px}
+.job-form-h{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:650;color:var(--txt)}
+.job-f{display:grid;grid-template-columns:72px minmax(0,1fr);gap:8px;align-items:start;font-size:12px;color:var(--txt-2)}
+.job-f>span{padding-top:7px;color:var(--txt-3);white-space:nowrap}
+.job-f textarea{resize:vertical;font-family:inherit}
+.job-when{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.job-time{width:110px}
+.job-cron{width:200px;font-family:var(--mono)}
+.job-days{display:inline-flex;gap:8px;flex-wrap:wrap;font-size:11.5px}
+.job-days label{display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
+.job-next{grid-column:2;font-size:11.5px;color:var(--txt-3);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:4px}
+.job-opts{display:flex;flex-direction:column;gap:4px;min-width:0}
+.job-opts label{display:block;font-size:12px;color:var(--txt-2);line-height:1.6}
+.job-num{width:70px}
+.job-form-acts{display:flex;gap:10px;align-items:center}
+.job-form-err{font-size:12px;color:var(--red-txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 
 /* premium per-model hover card (model picker) */
 .modeltip{position:fixed;z-index:135;width:266px;pointer-events:none;background:var(--bg-4);
@@ -3558,7 +3608,13 @@ body.preview-open .thread{font-size:.9em}
 .abadge.warn{background:color-mix(in srgb,var(--amber) 18%,transparent);color:var(--amber-txt);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--amber) 32%,transparent)}
 .abadge.danger{background:color-mix(in srgb,var(--red) 16%,transparent);color:var(--red-txt);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--red) 32%,transparent)}
 .prov-body{display:flex;flex-direction:column;gap:8px}
-.prov-row{display:flex;align-items:center;gap:8px}
+.prov-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+/* P-PROV.3: the OpenAI device-code card. The code is the payload the user carries to the other page, so it
+   is large, monospace and selectable; the buttons sit beside it on one wrapping row. The note itself stays
+   a block paragraph (.set-note), never flex prose (invariant 11). */
+.oauth-showcode{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0}
+.oauth-code{font-family:var(--mono);font-size:20px;font-weight:700;letter-spacing:.12em;color:var(--txt);
+  background:var(--bg-0);border:1px solid var(--line-strong);border-radius:8px;padding:6px 12px;user-select:all;white-space:nowrap}
 /* "Sign out of all providers" footer — a quiet, right-aligned reset under the provider cards. */
 .prov-signout{display:flex;justify-content:flex-end;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
 /* ── P-ACCT.1: nested collapsible provider cards + named account rows ─────────────────────────
@@ -4633,9 +4689,18 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 /* P-FLEET.L13: per-lane catch-up buttons, the same pair the main composer carries (single chevron steps a
    page and keeps a line of overlap, double chevron runs to the newest line). Smaller than the chat's 34px
    because they float inside a card, and inset from the right so they never sit on top of the widened
-   scrollbar above. They live in the transcript's own stacking context (.fleet-out is position:relative). */
-.fleet-jump{position:absolute;right:20px;z-index:5;width:24px;height:24px;border-radius:50%;
-  display:grid;place-items:center;cursor:pointer;color:var(--accent);
+   scrollbar above. They are anchored to .fleet-out-wrap, a position:relative SIBLING wrapper around the
+   scroller, never to the scroller itself: an absolute child of an overflow:auto box scrolls with its
+   content, so the pair used to slide out of view as soon as the reader scrolled down. `padding:0` is
+   load-bearing too: the UA button padding (1px 6px) left a 10px content box for a 13px icon, and the
+   overflowing icon no longer sat centred in the circle. */
+.fleet-out-wrap{position:relative;display:flex;flex-direction:column;min-height:0;margin-right:12px}
+/* `margin-right:12px` on the wrapper is the scrollbar fix: the card's EAST resize handle is a 12px
+   absolutely positioned strip on the card's right edge (z-index 4), and the transcript's 14px scrollbar
+   used to sit under it, so a grab for the thumb started a width drag instead (user report). Insetting
+   the scroller by the handle's width puts the whole track clear of the handle; both stay full size. */
+.fleet-jump{position:absolute;right:20px;z-index:5;width:24px;height:24px;padding:0;border-radius:50%;
+  display:grid;place-items:center;line-height:0;cursor:pointer;color:var(--accent);
   border:1px solid color-mix(in srgb,var(--accent) 50%,var(--line));background:var(--bg-2);
   box-shadow:0 3px 10px rgb(var(--sh-rgb) / .4);opacity:0;transform:translateY(4px);pointer-events:none;
   transition:opacity var(--t) var(--ease-out),transform var(--t) var(--ease-out),background var(--t),color var(--t)}
@@ -4646,11 +4711,15 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-jump-end{bottom:10px}
 /* A card the user has sized by its TOP edge sets an inline height; the transcript then owns the slack
    instead of staying pinned at 180px, which is the whole point of dragging the edge. */
+.fleet-card[style*="height"] .fleet-out-wrap{flex:1}
 .fleet-card[style*="height"] .fleet-out{max-height:none;flex:1}
 .fleet-out-empty{display:flex;align-items:center;min-width:0;color:var(--txt-4);font-size:11px}
 .fleet-out-empty span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fleet-turn-user{flex:none;color:var(--accent-2);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fleet-think{white-space:pre-wrap;word-break:break-word;color:var(--txt-4);font-size:11px;line-height:1.45;border-left:2px solid var(--line-strong);padding:1px 0 1px 7px}
+/* Thinking reads at --txt-2, not the --txt-4 ghost tint: at 11px inside a card the dimmest ramp step was
+   unreadable (user report), and a reader following a lane's reasoning needs the words, not a hint. One
+   step brighter than the main thread's .reasoning-body because the lane text is smaller. */
+.fleet-think{white-space:pre-wrap;word-break:break-word;color:var(--txt-2);font-size:11.5px;line-height:1.5;border-left:2px solid color-mix(in srgb,var(--accent) 35%,var(--line-strong));padding:1px 0 1px 8px}
 .fleet-text{white-space:pre-wrap;word-break:break-word}
 .fleet-md{word-break:break-word}
 .fleet-md p{margin:0 0 4px}
