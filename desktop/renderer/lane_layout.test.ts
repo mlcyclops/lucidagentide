@@ -10,7 +10,7 @@
 import { describe, expect, it } from "bun:test";
 import { clampToViewport } from "./share_dock.ts";
 import {
-  widthFromDrag, maxCardW, heightFromDrag, clampSize, snapSlot, reorder, reconcile, loadLayout, saveLayout,
+  widthFromDrag, maxCardW, defaultCardW, heightFromDrag, clampSize, snapSlot, reorder, reconcile, loadLayout, saveLayout,
   resizeShape,
   CARD_COL_W, CARD_GAP, CARD_MIN_H, CARD_MAX_H, CARD_MIN_W, CARD_MAX_W, CARD_DEF_W,
   type CardRect, type LaneLayout,
@@ -80,6 +80,42 @@ describe("maxCardW (P-FLEET.L12)", () => {
     expect(maxCardW(Number.NaN)).toBe(CARD_MAX_W);
     expect(maxCardW(Number.POSITIVE_INFINITY)).toBe(CARD_MAX_W);
     expect(maxCardW(undefined as unknown as number)).toBe(CARD_MAX_W);
+  });
+});
+
+describe("defaultCardW: an unsized card tiles the panel, never max-content", () => {
+  it("fits as many default columns as the body holds and shares the slack between them", () => {
+    // 1180px body: three 300px cards + two 10px gaps = 920 fit, four do not, so three columns of 386.
+    expect(defaultCardW(1180)).toBe(386);
+    // Exactly three columns with no slack stays at the default width.
+    expect(defaultCardW(3 * CARD_DEF_W + 2 * CARD_GAP)).toBe(CARD_DEF_W);
+    // One px short of a fourth column still tiles three; one px more tiles four.
+    expect(defaultCardW(4 * CARD_DEF_W + 3 * CARD_GAP - 1)).toBe(Math.floor((4 * CARD_DEF_W + 3 * CARD_GAP - 1 - 2 * CARD_GAP) / 3));
+    expect(defaultCardW(4 * CARD_DEF_W + 3 * CARD_GAP)).toBe(CARD_DEF_W);
+  });
+
+  it("the tiled row always FITS: cols * w + gaps never exceeds the body (floor, not round)", () => {
+    for (let body = CARD_DEF_W; body <= 2000; body += 7) {
+      const w = defaultCardW(body);
+      const cols = Math.floor((body + CARD_GAP) / (CARD_DEF_W + CARD_GAP));
+      expect(cols * w + (cols - 1) * CARD_GAP).toBeLessThanOrEqual(body);
+      expect(w).toBeGreaterThanOrEqual(CARD_DEF_W);
+    }
+  });
+
+  it("a body narrower than one default card is one full-width column, floored at the minimum", () => {
+    expect(defaultCardW(280)).toBe(280);
+    expect(defaultCardW(100)).toBe(CARD_MIN_W);
+  });
+
+  it("never exceeds the panel's own ceiling", () => {
+    for (const w of [280, 500, 1180, 3000]) expect(defaultCardW(w)).toBeLessThanOrEqual(maxCardW(w));
+  });
+
+  it("an UNMEASURABLE body falls back to the default width, not the minimum", () => {
+    expect(defaultCardW(0)).toBe(CARD_DEF_W);
+    expect(defaultCardW(Number.NaN)).toBe(CARD_DEF_W);
+    expect(defaultCardW(-1)).toBe(CARD_DEF_W);
   });
 });
 

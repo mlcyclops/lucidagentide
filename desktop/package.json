@@ -1,7 +1,7 @@
 {
   "name": "lucidagentide-desktop",
   "private": true,
-  "version": "2.3.1",
+  "version": "2.4.0-beta.1",
   "trustedDependencies": [
     "electron",
     "@resvg/resvg-js"
@@ -18,6 +18,8 @@
     "runtimes:win": "bun run build/fetch-runtimes.ts",
     "runtimes:linux": "bun run build/fetch-runtimes.ts",
     "whisper": "bun run build/fetch-whisper.ts",
+    "whistle": "bun run build/fetch-whistle.ts",
+    "mxc": "bun run build/fetch-mxc.ts",
     "compile-lucid": "bun build --compile ../harness/launcher/lucid_acp.ts --outfile ../bin/lucid && bun run natives",
     "compile-engine": "bun build --compile dev.ts --outfile ../bin/lucid-engine --external '*.node' --external 'omp-legacy-pi-modules'",
     "compile-appcontainer": "bun build --compile ../tools/appcontainer/lucid_appcontainer.ts --target=bun-windows-x64 --outfile ../bin/lucid-appcontainer.exe",
@@ -29,14 +31,14 @@
     "web:creator": "bun run creator_dev.ts",
     "web": "bun run dev.ts",
     "typecheck": "tsc --noEmit",
-    "dist:mac": "bun run runtimes:mac && bun run whisper && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --mac pkg --arm64 --publish never && electron-builder --mac pkg --x64 --publish never && electron-builder --mac zip --arm64 --x64 --publish never",
-    "dist:win": "bun run runtimes:win && bun run whisper && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && bun run compile-appcontainer && electron-builder --win --publish never",
-    "dist:linux": "bun run runtimes:linux && bun run whisper && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --linux --publish never",
-    "dist": "bun run runtimes && bun run whisper && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --publish never",
-    "dist:win:creator": "bun run runtimes:win && bun run whisper && bun run icons && bun run build:creator && bun run compile-lucid && bun run build-renderer && bun run compile-engine && bun run compile-appcontainer && electron-builder --win --config build/electron-builder.creator.cjs --publish never",
-    "dist:mac:creator": "bun run runtimes:mac && bun run whisper && bun run icons && bun run build:creator && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --mac zip --arm64 --x64 --config build/electron-builder.creator.cjs --publish never",
-    "dist:linux:creator": "bun run runtimes:linux && bun run whisper && bun run icons && bun run build:creator && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --linux --config build/electron-builder.creator.cjs --publish never",
-    "dist:linux:arm": "bun run runtimes:linux && bun run whisper && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --linux AppImage --arm64 --publish never"
+    "dist:mac": "bun run runtimes:mac && bun run whisper && bun run whistle && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --mac pkg --arm64 --publish never && electron-builder --mac pkg --x64 --publish never && electron-builder --mac zip --arm64 --x64 --publish never",
+    "dist:win": "bun run runtimes:win && bun run whisper && bun run whistle && bun run mxc && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && bun run compile-appcontainer && electron-builder --win --publish never",
+    "dist:linux": "bun run runtimes:linux && bun run whisper && bun run whistle && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --linux --publish never",
+    "dist": "bun run runtimes && bun run whisper && bun run whistle && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --publish never",
+    "dist:win:creator": "bun run runtimes:win && bun run whisper && bun run whistle && bun run icons && bun run build:creator && bun run compile-lucid && bun run build-renderer && bun run compile-engine && bun run compile-appcontainer && electron-builder --win --config build/electron-builder.creator.cjs --publish never",
+    "dist:mac:creator": "bun run runtimes:mac && bun run whisper && bun run whistle && bun run icons && bun run build:creator && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --mac zip --arm64 --x64 --config build/electron-builder.creator.cjs --publish never",
+    "dist:linux:creator": "bun run runtimes:linux && bun run whisper && bun run whistle && bun run icons && bun run build:creator && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --linux --config build/electron-builder.creator.cjs --publish never",
+    "dist:linux:arm": "bun run runtimes:linux && bun run whisper && bun run whistle && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --linux AppImage --arm64 --publish never"
   },
   "build": {
     "appId": "com.lucidagentide.desktop",
@@ -72,6 +74,24 @@
         ]
       },
       {
+        "from": "whistle",
+        "to": "whistle",
+        "filter": [
+          "**/*",
+          "!README.md",
+          "!.gitkeep"
+        ]
+      },
+      {
+        "from": "mxc",
+        "to": "mxc",
+        "filter": [
+          "**/*",
+          "!.cache/**",
+          "!.gitkeep"
+        ]
+      },
+      {
         "from": "..",
         "to": "repo",
         "filter": [
@@ -96,6 +116,7 @@
           "!node_modules/**/*.d.ts",
           "node_modules/@oh-my-pi/pi-coding-agent/src/tools/browser/declarations.d.ts",
           "node_modules/@oh-my-pi/pi-coding-agent/src/tools/computer/declarations.d.ts",
+          "node_modules/@oh-my-pi/pi-coding-agent/src/archive/declarations.d.ts",
           "!node_modules/.bin/**",
           "node_modules/.bin/omp*",
           "!node_modules/onnxruntime-node/**",

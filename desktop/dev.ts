@@ -63,14 +63,14 @@ import {
   decodeWireFrames, foldArtifacts, storeArtifact, type ArtifactIo, type ArtifactKind, type CompositionInput,
   type CreatorArtifact,
 } from "./creator_image.ts"; // CREATOR-IMG (ADR-0291): generation, mixing, sheets, GIFs, memes
-import { decodeTimelineDoc, openEditor, saveEdit, type EditorIo } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): the follow-along audio editor
+import { decodeTimelineDoc, measureEditorAlignment, openEditor, saveEdit, type EditorIo } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): the follow-along audio editor
 import { decodeMixGraph, mixerTracks, renderAndSaveMix } from "./creator_mixer.ts"; // CREATOR-5 (ADR-0289): the mixer
 import { openComfyProgress, runRenderPipeline, type PipelineDeps, type ScanVerdict } from "./creator_pipeline.ts"; // CREATOR-3 (ADR-0287): the video/3D pipeline + its /ws telemetry
 import { blenderJobNeed, runBlenderRender, type SpawnLike } from "./creator_blender.ts"; // CREATOR-3: Blender background renders
 import { manifestCapabilities, parseModelManifest, reconcileManifest } from "../harness/creator/model_manifest.ts"; // CREATOR-3: declared models, reconciled against the probe
 import type { MediaKind } from "../harness/creator/comfy_stream.ts"; // CREATOR-3: the closed media kinds
 import { scanAndDecide } from "../harness/security/gate.ts"; // CREATOR-3: the fail-closed gate every artifact's metadata passes
-import { ProbeCache, probeProvider, type ProbeDeps, type ProbeResult } from "./creator_probe.ts"; // CREATOR-1 (ADR-0292): capability probes
+import { ProbeCache, probeProvider, type ProbeDeps, type ProbeResult, type WhistleProbeAnswer } from "./creator_probe.ts"; // CREATOR-1 (ADR-0292): capability probes
 import { DriftActivityLog, DriftClient, defaultDriftExePaths, driftSessionEndpointDef, driftSessionPath, driftSessionStatus, parseDriftSession, planDriftLibraryImport, type DriftActivityEntry, type DriftSessionState } from "./creator_drift.ts"; // CREATOR-DRIFT: CutWire Drift over its localhost agent protocol
 import { driftOpPolicy, isDriftMutation, summarizeDriftCall } from "../harness/creator/drift_policy.ts"; // CREATOR-DRIFT: the shared CUI / mutation policy
 import {
@@ -97,7 +97,10 @@ import { digestSpokenReply } from "../harness/voice/spoken_digest.ts"; // P-VOIC
 import { parseVoiceEndpointConfig } from "../harness/voice/voice_endpoint.ts"; // P-VOICE.7: portable endpoint contract
 import { activateVoiceEndpoint, importVoiceEndpoint, removeVoiceEndpoint, type VoiceSettings } from "./settings_store.ts";
 import { enclaveHostSet, httpHost, lockdownEgressExempt, lockdownVoiceVerdict, type VoiceKind } from "./lockdown_route.ts"; // CUI lockdown: cloud voice refused, loopback/enclave engines allowed
-import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, sttTransportFailed } from "../harness/voice/transcription.ts";
+import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, WhistleSttBackend, sttTransportFailed } from "../harness/voice/transcription.ts";
+import { WhistleClient, type WhistleTranscriber } from "../harness/voice/whistle_client.ts"; // CREATOR-WHISTLE (ADR-0432): the one in-process STT worker
+import { WHISTLE_ASSETS, WHISTLE_MODEL_SHA256, resolveWhistleDir, verifyWhistleAsset } from "./whistle_assets.ts"; // CREATOR-WHISTLE: pinned assets
+import { stageWhistleAssets } from "./whistle_stage.ts"; // CREATOR-WHISTLE: dev-run staging of the pinned assets
 import { installWhisper, removeWhisperModel, shouldAutostartWhisper, startWhisper, stopWhisper, whisperStatus as whisperRuntimeStatus, type WhisperRuntimeDeps } from "./whisper_runtime.ts"; // P-STT.2b: managed offline Whisper
 import { downloadWhisperModel, resolveWhisperBin, spawnWhisperServer } from "./whisper_manager.ts";
 import { stageWhisperBinary } from "./whisper_binary_stage.ts"; // P-STT.7: dev-run pinned-binary staging
@@ -109,6 +112,8 @@ import { repoAsset, resolvedRepo } from "./repo_root.ts"; // P-SANDBOX.8: the bu
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
 import { clearAllOauthCredentials, clearDisabledCredential, credentialSnapshot, disconnectCredential, landedFreshCredential } from "./auth_vault.ts";
 import { clearOauthFailure, extractOauthFailure, getOauthFailure, recordOauthFailure } from "./oauth_failure.ts";
+import { DeviceCodeScanner, deviceUrlAllowed, isShowCodeLogin, vaultProviderFor } from "./device_code.ts"; // P-PROV.3: OpenAI device-code sign-in
+import { mxcHost, resetMxcProbeCache, runMxcHostPrepElevated } from "./mxc_runtime.ts"; // P-MXC.1 (ADR-0441): the MXC executor posture + host prep
 import { GUIDE_FILES } from "./guides_manifest.ts";
 import { ARCADE_GAMES } from "./arcade_games.ts";
 import { approveBlock, dismissAllBlocks, dismissBlock, liveBlocks } from "./security_log.ts";
@@ -128,7 +133,10 @@ import { browserProcesses, setBrowserProcessSource, type ProcessView } from "./p
 import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, failAllBrowserCommands, getBrowserStatus, lastBrowserActivityAt, latestBrowserShot, setBrowserStatus, setLatestBrowserShot, waitBrowserResult } from "./browser_control.ts"; // P-BROWSER.1 (wave 2): agent-browser mailbox + status
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: shared combo parse, so a typo fails fast at the route
 import { isBrowserAction, isBrowserPageShape } from "./browser_snapshot.ts"; // P-JEV.4 (ADR-0379): the policy's act/snapshot shapes
-import { appendLaneLedger, listTimeline } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline
+import { appendLaneLedger, listTimeline, readLaneLedger } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline; P-SCHED.1 reads it to recover a job's lane
+import { JobScheduler, type LedgerHit } from "./job_scheduler.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs
+import { createJob, loadJobs, normalizeJobSpec, saveJobs, updateJob, nextFireAt } from "./scheduled_jobs.ts"; // P-SCHED.1
+import { firesBetween } from "./cron.ts"; // P-SCHED.1
 import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth, typesafeKeySet, type ProviderAuthSnapshot } from "./auth_status.ts";
 import { parseJudgmentReport } from "../harness/judgment/trace_schema.ts"; // P-JEV.2 (ADR-0377): the loopback boundary for judgment traces
@@ -196,6 +204,14 @@ async function transcribeClip(audio: Uint8Array, mimeType?: string, language?: s
     const er = await new ElevenLabsSttBackend({ apiKey: key }).transcribe(audio, topts);
     return { text: er.text, note: er.note ?? "" };
   }
+  // CREATOR-WHISTLE (ADR-0432 decision 4): the in-process model. No server, no port; a missing or
+  // mismatched asset is the note, never a silent fall-through to whisper.
+  if (v.sttProvider === "whistle") {
+    const w = await whistleClient();
+    if (!w.ok) return { text: "", note: `Whistle STT unavailable (${w.reason})` };
+    const wr = await new WhistleSttBackend(whistleTranscriber(w.client)).transcribe(audio, topts);
+    return { text: wr.text, note: wr.note };
+  }
   let r = await new WhisperCppSttBackend({ baseUrl: v.sttUrl }).transcribe(audio, topts);
   if (sttTransportFailed(r)) r = await new OpenAiCompatibleSttBackend({ baseUrl: v.sttUrl, apiKey: process.env.OPENAI_API_KEY, model: process.env.LUCID_STT_MODEL || "whisper-1" }).transcribe(audio, topts);
   return { text: r.text, note: r.note ?? "" };
@@ -220,6 +236,114 @@ function voiceLockdownRefusal(kind: VoiceKind, engine: string, v: VoiceSettings,
 }
 
 function whisperModelDir(): string { return join(homedir(), ".omp", "whisper"); }
+
+// ── CREATOR-WHISTLE (ADR-0432): the in-process STT + word-timing model ──────────────────────────────
+// One worker for the whole engine (the model is process-global and not thread-safe), started on the first
+// align / probe / STT call, never at boot. Resolution mirrors whisper: LUCID_WHISTLE_DIR, then the
+// packaged <resources>/whistle, then ~/.omp/whistle, which a dev run stages ON DEMAND from the pinned
+// URLs once. All three files are hashed and checked against the pins before the first needle_load; a
+// mismatch, a failed download or a dead worker is a NAMED reason, retried on the next call, never cached.
+const WHISTLE_STAGED_DIR = join(homedir(), ".omp", "whistle");
+
+function whistleDir(): string | null {
+  const r = resolveWhistleDir({
+    env: process.env,
+    exists: existsSync,
+    resourcesPath: process.env.LUCID_RESOURCES || engineDesktopDir(import.meta.dir, process.execPath, existsSync),
+    stagedDir: WHISTLE_STAGED_DIR,
+  });
+  return r ? r.dir : null;
+}
+
+/** Null until a dev run has tried to stage; then the result of that ONE attempt (a failure is the probe's
+ *  not-installed detail). */
+let whistleStage: Promise<{ ok: boolean; reason: string }> | null = null;
+
+/** The staged-or-bundled dir, staging once on a dev run that has none. `reason` names why there is none. */
+async function ensureWhistleDir(): Promise<{ ok: true; dir: string } | { ok: false; reason: string }> {
+  const found = whistleDir();
+  if (found) return { ok: true, dir: found };
+  if (!whistleStage) {
+    whistleStage = stageWhistleAssets({}, WHISTLE_STAGED_DIR).then((r) => {
+      if (r.ok) console.log(`[whistle] staged ${r.staged.length ? r.staged.join(", ") : "nothing new"} in ${r.dir}`);
+      else console.warn(`[whistle] staging failed: ${r.reason}`);
+      return { ok: r.ok, reason: r.ok ? "" : r.reason };
+    });
+  }
+  const staged = await whistleStage;
+  const after = staged.ok ? whistleDir() : null;
+  if (after) return { ok: true, dir: after };
+  return { ok: false, reason: staged.ok ? `Whistle assets are missing from ${WHISTLE_STAGED_DIR}` : staged.reason };
+}
+
+type WhistleReady = { ok: true; client: WhistleClient } | { ok: false; reason: string };
+let whistleLive: WhistleClient | null = null;
+let whistleStarting: Promise<WhistleReady> | null = null;
+
+async function startWhistle(): Promise<WhistleReady> {
+  const dir = await ensureWhistleDir();
+  if (!dir.ok) return dir;
+  const bytes: Uint8Array[] = [];
+  for (const spec of WHISTLE_ASSETS) {
+    let data: Uint8Array;
+    try { data = new Uint8Array(readFileSync(join(dir.dir, spec.name))); }
+    catch (e) { return { ok: false, reason: `${spec.name}: cannot read (${e instanceof Error ? e.message : String(e)})` }; }
+    const hasher = new Bun.CryptoHasher("sha256");
+    hasher.update(data);
+    const verdict = verifyWhistleAsset(spec, data, hasher.digest("hex"));
+    if (!verdict.ok) return { ok: false, reason: verdict.reason };
+    bytes.push(data);
+  }
+  try {
+    const client = await WhistleClient.start({ gluePath: join(dir.dir, WHISTLE_ASSETS[0]!.name), wasm: bytes[1]!, cact: bytes[2]!, modelSha256: WHISTLE_MODEL_SHA256 });
+    whistleLive = client;
+    console.log(`[whistle] worker ready (${dir.dir})`);
+    return { ok: true, client };
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** The live worker, or the reason there is none. A success is cached; a failure is not (the next call
+ *  verifies and starts again); a worker that dies mid-call is dropped by `whistleTranscriber`. */
+async function whistleClient(): Promise<WhistleReady> {
+  if (whistleLive) return { ok: true, client: whistleLive };
+  if (!whistleStarting) {
+    whistleStarting = startWhistle().finally(() => { whistleStarting = null; });
+  }
+  return whistleStarting;
+}
+
+/** A transcriber view of the live client that forgets the client when the worker reports itself dead, so
+ *  the next caller starts a fresh one instead of talking to a corpse. */
+function whistleTranscriber(client: WhistleClient): WhistleTranscriber {
+  return {
+    modelSha256: client.modelSha256,
+    async transcribe(pcm, opts) {
+      try { return await client.transcribe(pcm, opts); }
+      catch (e) {
+        if (e instanceof Error && /Whistle worker/.test(e.message) && whistleLive === client) { whistleLive = null; client.close(); }
+        throw e;
+      }
+    },
+  };
+}
+
+/** The probe's witness (creator_probe.ts `probeWhistle`): assets resolved and verified, worker started, one
+ *  second of silence decoded to empty text. Anything else is the exact reason, verbatim. */
+async function whistleProbe(): Promise<WhistleProbeAnswer> {
+  const dir = await ensureWhistleDir();
+  if (!dir.ok) return { state: "not-installed", detail: dir.reason, version: "" };
+  const w = await whistleClient();
+  if (!w.ok) return { state: "unreachable", detail: w.reason, version: "" };
+  try {
+    const t = await whistleTranscriber(w.client).transcribe(new Float32Array(16000), { wordTimestamps: false });
+    if (t.text.trim()) return { state: "unreachable", detail: "Whistle answered non-empty text for silence", version: "" };
+    return { state: "ready", detail: `Verified ${WHISTLE_ASSETS.length} pinned assets in ${dir.dir}; transcribed 1 s of silence to empty text.`, version: `whistle ${WHISTLE_MODEL_SHA256.slice(0, 12)}` };
+  } catch (e) {
+    return { state: "unreachable", detail: e instanceof Error ? e.message : String(e), version: "" };
+  }
+}
 
 // P-VOICE.7: the same-machine handoff mailbox. The DGX Loader's "Send to LUCID" writes
 // <home>/.omp/voice_endpoints/<id>.json (ADR-0017 in that repo); LUCID auto-scans on every endpoints
@@ -305,7 +429,7 @@ function whisperDeps(): WhisperRuntimeDeps {
   };
 }
 import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedSandboxFoldersLocked, managedSandboxLocksOn, skipAllowed } from "./managed_config.ts";
-import { planModeChange, refuseGrantPath, refuseUserFolderAdd, runtimeFolderView, sandboxControlView, type ModeRequest, type RuntimeFolderView, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
+import { mxcHostPrepSteps, planModeChange, refuseGrantPath, refuseUserFolderAdd, runtimeFolderView, sandboxControlView, type ModeRequest, type RuntimeFolderView, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
 import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, gitExe, loopbackExempted, parseOmpShellPath, prependPathOverlay, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12/.13
 import { runningEgressProxyUrl } from "../harness/runs/egress_proxy.ts";
 import { runBrokeredGit } from "./git_broker.ts"; // P-SANDBOX.17 (ADR-0399)
@@ -958,6 +1082,7 @@ const probeDeps: ProbeDeps = {
   driftSession: driftSessionState,
   platform: process.platform,
   env: process.env,
+  whistle: whistleProbe, // CREATOR-WHISTLE (ADR-0432): the engine's own in-process witness
 };
 
 function creatorRegistryData(): CreatorRegistryData {
@@ -1613,6 +1738,42 @@ const fleet: FleetLaneManager = new FleetLaneManager({
 // P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
 // /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
 fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
+// P-SCHED.1 (ADR-0443): scheduled lane jobs. The scheduler sees the fleet only through these six edges:
+// the live lane list, "is it busy", the manager's own prompt path, Recover (the orbit's path: name,
+// folder, model and the recorded session from the ledger), the per-lane auto-mode switch, and cancel.
+function ledgerLookup(target: { laneId?: string; name: string; cwd: string }): LedgerHit | null {
+  const rows = readLaneLedger();
+  const same = (a: string, b: string) => a.replace(/[\\/]+$/, "").toLowerCase() === b.replace(/[\\/]+$/, "").toLowerCase();
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i]!;
+    if ((target.laneId && r.laneId === target.laneId) || (r.name === target.name && same(r.cwd, target.cwd))) {
+      return { laneId: r.laneId, name: r.name, cwd: r.cwd, model: r.model, sessionId: r.sessionId };
+    }
+  }
+  return null;
+}
+const jobScheduler = new JobScheduler({
+  lanes: async () => (await fleet.status()).lanes.map((l) => ({ id: l.id, name: l.name, cwd: l.cwd, model: l.model, status: l.status, autoApprove: l.autoApprove })),
+  laneBusy: (id) => fleet.laneRunning(id),
+  prompt: (laneId, text, sink) => fleet.prompt(laneId, text, sink),
+  recover: async (hit) => {
+    let resume: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } | undefined;
+    if (hit.sessionId) {
+      const page = sessionMessages(hit.sessionId, TRANSCRIPT_MAX_TURNS);
+      const transcript: LaneTurnRecord[] = [];
+      for (const m of page.messages) if ((m.role === "user" || m.role === "assistant") && m.text.trim()) transcript.push({ role: m.role, text: m.text });
+      resume = { sessionId: hit.sessionId, transcript, turns: page.userTotal };
+    }
+    const r = await fleet.spawn({ cwd: hit.cwd, name: hit.name, model: hit.model, ...(resume ? { resume } : {}) });
+    return r.ok && r.lane ? { ok: true, lane: { id: r.lane.id, name: r.lane.name, cwd: r.lane.cwd, model: r.lane.model, status: r.lane.status, autoApprove: r.lane.autoApprove } } : { ok: false, reason: r.reason };
+  },
+  ledgerLookup,
+  setAuto: (laneId, on) => { fleet.setAuto(laneId, on); },
+  cancel: (laneId) => { fleet.cancel(laneId); },
+  audit: (e) => {
+    emitSecurityEvent({ category: "exec", type: "scheduled_job", decision: e.outcome === "error" || e.outcome === "timeout" || e.outcome === "suspended" ? "block" : "allow", severity: e.outcome === "started" || e.outcome === "ok" ? "info" : "medium", tool: "scheduled_job", reason: `${e.name} [${e.jobId}] ${e.outcome}${e.laneId ? ` lane ${e.laneId}` : ""}${e.note ? `: ${e.note}` : ""}`.slice(0, 200) });
+  },
+});
 /** P-SWITCH.2 (ADR-0404): the live spoke holding session `id`, if any (Main's own claim is checked by the
  *  lane manager itself, through masterSessionId above). */
 function spokeHolding(id: string): SessionLiveSpoke | null {
@@ -2036,11 +2197,16 @@ const oauthBrokers = new Map<string, ReturnType<typeof Bun.spawn>>();
 // github.com) and BLOCKS on stdin before it ever prints the device URL. So for github-copilot we must feed
 // that first line up front, or the login hangs at the prompt and no URL surfaces. `promptAnswer` is that
 // line (the GHE domain, or "" for github.com); it's written to stdin immediately after spawn.
-function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string }> {
+function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string; code?: string }> {
+  // P-PROV.3: a login ALIAS (`openai-codex-device`) files its credential under its target provider
+  // (`openai-codex`), so every vault read and the failure note use the stored id; otherwise a successful
+  // device login reads as "no credential landed" and the OpenAI card never learns why a failed one died.
+  const vaultId = vaultProviderFor(oauthId);
+  const showCode = isShowCodeLogin(oauthId);
   // Snapshot the vault BEFORE the broker runs, so the exit handler below can tell whether a genuinely
   // fresh token landed rather than trusting the broker's exit code. Read-only; absent row => not present.
-  const beforeCred = credentialSnapshot(oauthId);
-  clearOauthFailure(oauthId); // a fresh attempt owns the failure slot - stale reasons never linger
+  const beforeCred = credentialSnapshot(vaultId);
+  clearOauthFailure(vaultId); // a fresh attempt owns the failure slot - stale reasons never linger
   let proc: ReturnType<typeof Bun.spawn>;
   try { proc = Bun.spawn([ompBin(), "auth-broker", "login", oauthId], { stdout: "pipe", stderr: "pipe", stdin: "pipe" }); }
   // stdin: "pipe" (NOT "ignore") — the broker reads stdin as a fallback for pasting the auth code.
@@ -2077,23 +2243,26 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
   const dec = new TextDecoder();
   let out = "", err = "";
   proc.exited.then(() => {
-    if (!landedFreshCredential(beforeCred, credentialSnapshot(oauthId))) {
-      const f = recordOauthFailure(oauthId, extractOauthFailure(out, err));
+    if (!landedFreshCredential(beforeCred, credentialSnapshot(vaultId))) {
+      const f = recordOauthFailure(vaultId, extractOauthFailure(out, err));
       console.error(`[oauth] ${oauthId} login left no new credential - not respawning omp: ${f.message}`);
       return;
     }
-    clearOauthFailure(oauthId);
+    clearOauthFailure(vaultId);
     // omp's login writes the fresh token but may leave a stale `disabled_cause` from a prior logout,
     // so the just-fetched credential stays ignored. Clear that one flag (token blob untouched) so the
     // login actually "sticks", THEN respawn omp to pick up the now-active provider.
-    const r = clearDisabledCredential(oauthId);
+    const r = clearDisabledCredential(vaultId);
     if (r.cleared) console.log(`[oauth] re-enabled ${oauthId} after login (cleared stale disabled flag)`);
     console.log(`[oauth] ${oauthId} credential landed - respawning omp so its models surface`);
     backend.restart();
   }).catch(() => { /* ignore */ });
-  const { promise, resolve } = Promise.withResolvers<{ started: boolean; url: string; output: string }>();
+  const { promise, resolve } = Promise.withResolvers<{ started: boolean; url: string; output: string; code?: string }>();
   {
     let done = false, ended = 0;
+    // P-PROV.3: show-the-code flows carry the one-time code in the stream; the guarded scanner (device_code.ts,
+    // issue #490) only accepts a standalone code after the official instruction, bounded across chunks.
+    const codes = showCode ? new DeviceCodeScanner() : null;
     const finish = (url: string) => {
       if (done) return; done = true;
       if (!url && loadSettings().developerMode) {
@@ -2101,20 +2270,34 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
         // browser. Log what we DID see so it's diagnosable (which omp, and its output on each stream).
         console.error(`[oauth] no URL from broker for ${oauthId} via ${ompBin()} — stdout=${JSON.stringify(out.slice(0, 200))} stderr=${JSON.stringify(err.slice(0, 200))}`);
       }
-      resolve({ started: true, url, output: (out || err).slice(0, 600) });
+      // A device broker may only hand the UI an ALLOWLISTED https URL (the renderer opens it); anything
+      // else is reported in the output text, never opened. Non-device flows keep today's behaviour.
+      const safeUrl = showCode && url && !deviceUrlAllowed(oauthId, url) ? "" : url;
+      if (showCode && url && !safeUrl) console.error(`[oauth] ${oauthId} printed a sign-in URL outside its allowlist; not opening it`);
+      const code = codes?.code ?? undefined;
+      resolve({ started: true, url: safeUrl, output: (out || err).slice(0, 600), ...(code ? { code } : {}) });
     };
     // Match a COMPLETE url (followed by whitespace) so a chunk boundary mid-URL can't resolve a truncated
     // link; scan BOTH streams — omp prints the URL to stdout today, but tolerate a future move to stderr.
     // `m[1]` is `string | undefined` under noUncheckedIndexedAccess, and finish() takes a string: an
     // unguarded m[1] fails the desktop server typecheck AND would hand the caller `undefined` as a URL.
-    const scan = () => { const m = (out + "\n" + err).match(/(https?:\/\/\S+?)(?=\s)/); if (m?.[1]) finish(m[1]); };
+    // A show-the-code flow waits for BOTH the URL and the code (they arrive within one print), with a
+    // short grace after the URL so a split chunk cannot leave the card with a link and no code.
+    let urlSeen = "";
+    const scan = () => {
+      const m = (out + "\n" + err).match(/(https?:\/\/\S+?)(?=\s)/);
+      if (!m?.[1]) return;
+      if (!codes) { finish(m[1]); return; }
+      if (codes.code) { finish(m[1]); return; }
+      if (!urlSeen) { urlSeen = m[1]; setTimeout(() => finish(urlSeen), 5_000); }
+    };
     // Drain stdout + stderr fully (never stop) so the broker can't block on a full pipe; grab the URL when it appears.
     (async () => {
-      try { for await (const c of proc.stdout as ReadableStream<Uint8Array>) { out += dec.decode(c); scan(); } } catch { /* stream ended */ }
+      try { for await (const c of proc.stdout as ReadableStream<Uint8Array>) { const s = dec.decode(c); out += s; codes?.push(s); scan(); } } catch { /* stream ended */ }
       if (++ended === 2) finish(""); // both streams hit EOF without a URL
     })();
     (async () => {
-      try { for await (const c of proc.stderr as ReadableStream<Uint8Array>) { err += dec.decode(c); scan(); } } catch { /* ended */ }
+      try { for await (const c of proc.stderr as ReadableStream<Uint8Array>) { const s = dec.decode(c); err += s; codes?.push(s); scan(); } } catch { /* ended */ }
       if (++ended === 2) finish("");
     })();
     setTimeout(() => finish(""), 60_000); // 60s — OTP/MFA flows need time (phone unlock, SMS delay)
@@ -2308,6 +2491,29 @@ return Bun.serve({
       // P-SANDBOX.12 (ADR-0390): the Security panel's sandbox switch. Off is a LUCID setting (no admin);
       // On registers the loopback exemption behind UAC when it is missing; "unregister" removes it. Every
       // change is audited, and the agent is restarted so the next spawn takes the new posture.
+      // P-MXC.1 (ADR-0441 decision 5): the operator's one elevated step for the MXC executor. The steps come
+      // from the LIVE view (what --probe still recommends, plus the loopback exemption when a network-on
+      // session needs it); they run behind one UAC prompt, and the truth is re-read afterwards. Audited; the
+      // agent restarts so the next spawn takes the new posture.
+      if (p === "/api/security/mxc/prepare" && req.method === "POST") {
+        const before = sandboxControlNow();
+        const steps = mxcHostPrepSteps(before);
+        if (!steps) return json({ ok: true, data: { changed: false, detail: before.mxc?.staged ? "the host is already prepared" : "the MXC executor is not staged on this host" } });
+        const m = mxcHost({ resourcesPath: process.env.LUCID_RESOURCES || undefined });
+        if (!m.host) return json({ ok: true, data: { changed: false, detail: m.reason } });
+        const launched = runMxcHostPrepElevated(m.executors.prep, steps);
+        resetMxcProbeCache(); resetLoopbackExemptCache();
+        const after = sandboxControlNow();
+        const remaining = mxcHostPrepSteps(after);
+        const changed = launched && !remaining;
+        const detail = changed
+          ? "the host is prepared - the agent restarts inside the MXC container"
+          : !launched ? "the administrator prompt was declined or a step failed - nothing changed"
+          : `the prompt ran but the host still needs: ${[remaining?.systemDrive && "prepare-system-drive", remaining?.nullDevice && "prepare-null-device", remaining?.loopback && "the loopback exemption"].filter(Boolean).join(", ")}`;
+        emitSecurityEvent({ category: "approval", type: "sandbox_host_prep", decision: changed ? "allow" : "block", severity: "medium", tool: "wxc-host-prep", reason: detail.slice(0, 200) });
+        if (changed) backend.restart();
+        return json({ ok: true, data: { changed, detail } });
+      }
       if (p === "/api/security/sandbox/mode" && req.method === "POST") {
         const b = await readBody<{ mode?: unknown }>(req);
         const mode = String(b.mode ?? "");
@@ -4602,6 +4808,33 @@ return Bun.serve({
         });
         return json({ ok: r.ok, error: r.error, session: r.session });
       }
+      // CREATOR-WHISTLE (ADR-0432 decision 4): measure the word timing of one library track with the
+      // in-process model. The track is read by id (no upload), refused by name exactly as the editor
+      // refuses it, and the answer carries the mapped `measured` items plus what the model heard. There is
+      // no creatorGate: the provider has no endpoint and its registry posture is on-device (checked, not
+      // assumed), so nothing leaves the process. Admission still goes through the job ledger: a 3 minute
+      // take is ~45 s of CPU, and a hot box refuses with the measured reason.
+      if (p === "/api/creator/align" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator editor is only in the Creator build." });
+        const b = await readBody<{ trackId?: unknown; text?: unknown; language?: unknown }>(req).catch(() => null);
+        if (!b) return json({ ok: false, error: "That align request was not JSON." });
+        if (creatorSpec("whistle").cui.posture !== "on-device") return json({ ok: false, error: "Whistle is not registered as on-device, so the alignment is refused." });
+        const trackId = typeof b.trackId === "string" ? b.trackId.trim() : "";
+        const w = await whistleClient();
+        if (!w.ok) return json({ ok: false, error: w.reason });
+        const track = foldLibrary(libraryIo.readText(libraryLedger(CREATOR_DIR))).find((t) => t.id === trackId);
+        const admit = await admitCreatorJob("align", `align: ${track?.title || trackId || "(no track)"}`.slice(0, 80), "whistle", { gpu: false });
+        if (!admit.ok) return json({ ok: false, error: admit.reason, data: { jobId: admit.jobId } });
+        const r = await measureEditorAlignment(libraryIo, CREATOR_DIR, {
+          trackId,
+          text: typeof b.text === "string" ? b.text : undefined,
+          language: typeof b.language === "string" ? b.language : undefined,
+        }, whistleTranscriber(w.client));
+        finishJob(jobIo, CREATOR_DIR, admit.jobId, r.ok ? "done" : "failed", r.ok ? "" : r.error);
+        if (!r.ok) return json({ ok: false, error: r.error, data: { jobId: admit.jobId } });
+        const { trackId: id, items, note, alignedBy, matched, interpolated, transcript, language, windows } = r;
+        return json({ ok: true, data: { trackId: id, items, note, alignedBy, matched, interpolated, transcript, language, windows, jobId: admit.jobId } });
+      }
       // CREATOR-2: save an edit. The document is gated off the wire fail-closed (one malformed word refuses
       // the body), then rendered and APPENDED as a remix - the edited track keeps its bytes and its row.
       if (p === "/api/creator/editor/save" && req.method === "POST") {
@@ -5594,6 +5827,73 @@ return Bun.serve({
       // P-FLEET.L1/L2: the local lane fleet. Status is metadata (lanes + pressure evidence); prompt streams
       // the lane's turn as NDJSON exactly like /api/chat; answer resolves a pending approval (fail-closed on
       // silence).
+      // P-SCHED.1 (ADR-0443): scheduled lane jobs. UI token only (never in AGENT_ROUTES): a prompt-injected
+      // transcript must not be able to arm a 3:00 AM run of itself. The list carries each job's next fire
+      // and the next seven days of fires for the rail tile's day-by-hour hover.
+      if (p === "/api/jobs" && req.method === "GET") {
+        const now = Date.now();
+        const jobs = loadJobs().map((j) => ({ ...j, nextFireAt: j.armed && !j.suspended ? nextFireAt(j, now) : null }));
+        const upcoming = jobs.flatMap((j) => (j.armed && !j.suspended ? firesBetween(j.cron, new Date(now), new Date(now + 7 * 86_400_000), 64).map((d) => ({ at: d.getTime(), jobId: j.id, name: j.name, lane: j.target.name, repo: j.target.repo ?? j.target.cwd.split(/[\\/]/).filter(Boolean).pop() ?? "" })) : []))
+          .sort((a, b) => a.at - b.at).slice(0, 200);
+        return json({ ok: true, data: { jobs, running: jobScheduler.running(), upcoming } });
+      }
+      if (p === "/api/jobs" && req.method === "POST") {
+        const v = normalizeJobSpec(await readBody<unknown>(req));
+        if (!v.ok) return json({ ok: false, error: v.reason });
+        const job = createJob(v.spec);
+        saveJobs([job, ...loadJobs()]);
+        emitSecurityEvent({ category: "exec", type: "scheduled_job", decision: "allow", severity: "info", tool: "scheduled_job", reason: `created ${job.name} [${job.id}] ${job.cron}${job.armed ? " armed" : " disarmed"}`.slice(0, 200) });
+        return json({ ok: true, data: job });
+      }
+      if (p === "/api/jobs/update" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; patch?: unknown }>(req);
+        const id = String(b.id ?? "");
+        const patch = (b.patch && typeof b.patch === "object" ? b.patch : {}) as Record<string, unknown>;
+        const current = loadJobs().find((j) => j.id === id);
+        if (!current) return json({ ok: false, error: "no such job" });
+        const merged = normalizeJobSpec({ name: current.name, prompt: current.prompt, target: current.target, cron: current.cron, armed: current.armed, autoApprove: current.autoApprove, maxMinutes: current.maxMinutes, missed: current.missed, ...patch });
+        if (!merged.ok) return json({ ok: false, error: merged.reason });
+        // Arming a suspended job is the user saying "I fixed it": the suspension clears and the cursor
+        // restarts from now, so the fires missed while suspended are not owed.
+        const rearmed = merged.spec.armed && (!current.armed || current.suspended);
+        const job = updateJob(id, (j) => ({ ...j, ...merged.spec, ...(rearmed ? { suspended: undefined, lastFireAt: Date.now() } : {}) }));
+        emitSecurityEvent({ category: "exec", type: "scheduled_job", decision: "allow", severity: "info", tool: "scheduled_job", reason: `updated ${merged.spec.name} [${id}]${"armed" in patch ? (merged.spec.armed ? " armed" : " disarmed") : ""}`.slice(0, 200) });
+        return json({ ok: true, data: job });
+      }
+      if (p === "/api/jobs/delete" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        const id = String(b.id ?? "");
+        const before = loadJobs();
+        const after = before.filter((j) => j.id !== id);
+        if (after.length === before.length) return json({ ok: false, error: "no such job" });
+        saveJobs(after);
+        emitSecurityEvent({ category: "exec", type: "scheduled_job", decision: "allow", severity: "info", tool: "scheduled_job", reason: `deleted [${id}]` });
+        return json({ ok: true, data: { deleted: true } });
+      }
+      if (p === "/api/jobs/run" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        const job = loadJobs().find((j) => j.id === String(b.id ?? ""));
+        if (!job) return json({ ok: false, error: "no such job" });
+        if (jobScheduler.running().includes(job.id)) return json({ ok: false, error: "this job is running right now" });
+        // Run now is a manual fire: it does not move the schedule's cursor past a future fire.
+        void jobScheduler.fire(job, job.lastFireAt ?? job.createdAt, Date.now(), true);
+        return json({ ok: true, data: { started: true } });
+      }
+      // The lanes a job can target: live lanes first, then every lane the ledger remembers (newest line
+      // per lane id), so a job can name a lane that is not running right now.
+      if (p === "/api/jobs/targets" && req.method === "GET") {
+        const live = (await fleet.status()).lanes.filter((l) => l.status !== "stopped").map((l) => ({ laneId: l.id, name: l.name, cwd: l.cwd, model: l.model, live: true, repo: l.repo?.remote ?? l.repo?.root ?? undefined }));
+        const seen = new Set(live.map((l) => l.laneId));
+        const remembered: { laneId: string; name: string; cwd: string; model?: string; live: boolean; repo?: string }[] = [];
+        const rows = readLaneLedger();
+        for (let i = rows.length - 1; i >= 0 && remembered.length < 60; i--) {
+          const r = rows[i]!;
+          if (seen.has(r.laneId)) continue;
+          seen.add(r.laneId);
+          remembered.push({ laneId: r.laneId, name: r.name, cwd: r.cwd, model: r.model, live: false });
+        }
+        return json({ ok: true, data: { targets: [...live, ...remembered] } });
+      }
       if (p === "/api/fleet/status") return json({ ok: true, data: await fleet.status() });
       // P-TUI.2: open `lucid hub` in a new terminal window, attached to THIS engine. UI token only (never in
       // AGENT_ROUTES): one fixed command, no argument from the request, never inside the agent sandbox.
@@ -6386,6 +6686,8 @@ await refreshRecall();
 // P-GOAL.5 (ADR-0047): arm the in-process automation scheduler. It only ticks while this dev server
 // (and thus the app) is running; nothing is registered with the OS, so closing the app stops it.
 backend.startAutomationScheduler();
+// P-SCHED.1 (ADR-0443): the scheduled LANE jobs tick beside it, same envelope (only while the app runs).
+jobScheduler.start();
 
 console.log(`\n  ◆ LucidAgentIDE desktop renderer (dev)\n  → http://localhost:${server.port}\n`);
 
@@ -6393,13 +6695,23 @@ console.log(`\n  ◆ LucidAgentIDE desktop renderer (dev)\n  → http://localhos
 function sandboxControlNow(): SandboxControlView {
   const helper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : "";
   const helperBundled = !!helper && existsSync(helper);
+  // P-MXC.1 (ADR-0441): the MXC executor's posture rides the same view: staged + verified, its tier, and the
+  // elevated steps still pending (the "Prepare host" button). The loopback exemption is shared with the helper.
+  let mxc: SandboxControlView["mxc"];
+  if (process.platform === "win32") {
+    const m = mxcHost({ resourcesPath: process.env.LUCID_RESOURCES || undefined });
+    mxc = m.host
+      ? { staged: true, tier: m.host.tier, prepNeeded: m.probe.prepNeeded, loopbackNeeded: m.host.tier !== "base-container" && !loopbackExempted(), source: m.executors.source }
+      : { staged: false, prepNeeded: [], loopbackNeeded: false };
+  }
   return sandboxControlView({
     platform: process.platform,
     helperBundled,
     mode: loadSettings().sandboxWindowsMode,
     policyRequiresIsolation: managedSandboxLocksOn(managedConfig().config), // P-SANDBOX.14: either policy knob
-    registered: helperBundled && loopbackExempted(),
+    registered: (helperBundled || !!mxc?.staged) && loopbackExempted(),
     foldersLocked: managedSandboxFoldersLocked(managedConfig().config),
+    mxc,
   });
 }
 
