@@ -162,7 +162,7 @@ function row(p: MarketPlugin): string {
   const dl = fmtDownloads(p.downloads);
   return `<div class="mkt-row" data-mkt-id="${esc(p.id)}">
     <div class="mkt-main">
-      <div class="mkt-name">${esc(p.name)}${statusChip(p.status)}<span class="mkt-cat">${esc(p.category)}</span>${dl ? `<span class="mkt-dl" title="Obsidian community downloads">${icon("download", 12)}${esc(dl)}</span>` : ""}</div>
+      <div class="mkt-name"><span class="mkt-title" title="${esc(p.name)}">${esc(p.name)}</span><div class="mkt-badges">${statusChip(p.status)}<span class="mkt-cat" title="${esc(p.category)}">${esc(p.category)}</span>${dl ? `<span class="mkt-dl" title="Obsidian community downloads">${icon("download", 12)}${esc(dl)}</span>` : ""}</div></div>
       <div class="mkt-desc">${esc(p.desc)}</div>
       <div class="mkt-plan">${icon("bulb", 12)}${esc(p.lucidPlan)}</div>
     </div>

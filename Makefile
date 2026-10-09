@@ -21,7 +21,7 @@ PY         := $(UV) run --project $(SIDECAR_DIR) python
 # ---------------------------------------------------------------------------
 
 .PHONY: install
-install: install-harness install-sidecar install-hooks ## Install harness + sidecar deps + git hooks
+install: install-harness install-desktop install-sidecar install-hooks ## Install harness + desktop + sidecar deps + git hooks
 
 .PHONY: install-hooks
 install-hooks: ## Point git at .githooks/ so the pre-commit license-header hook runs
@@ -31,6 +31,10 @@ install-hooks: ## Point git at .githooks/ so the pre-commit license-header hook 
 .PHONY: install-harness
 install-harness: ## Install Bun/TypeScript harness deps
 	$(BUN) install
+
+.PHONY: install-desktop
+install-desktop: ## Install desktop deps. Load-bearing for the symbol graph: desktop pins typescript 6 (the runtime compiler API), while the root pin is the TS 7 Go CLI whose package root exports only version fields. Without this install, loadTs() finds no usable compiler and P-KG-SYM.1 builds empty graphs (CI installs desktop deps; make install must match).
+	cd desktop && $(BUN) install
 
 .PHONY: install-sidecar
 install-sidecar: ## Create/sync the pinned Python sidecar venv
@@ -475,6 +479,11 @@ demo-P-PERF.3: ## P-PERF.3 (ADR-0130): KG layout continuity — re-open is a sta
 demo-P-PERF.4: ## P-PERF.4 (ADR-0131): incremental session index (warm polls parse nothing) + tail-first transcript pages + AC-only prefetch gate
 	$(BUN) run desktop/scripts/demo_p_perf_4.ts
 
+.PHONY: demo-P-SETTINGS.1
+demo-P-SETTINGS.1: ## P-SETTINGS.1 (ADR-0439): settings are never silently wiped - atomic temp+fsync+rename save with a last-good .bak; a corrupt file is kept aside and restored from the backup, never read as an empty profile. Real processes: 25 hard kills of a saving writer, a concurrent reader never sees a torn file, the 2026-10-05 0-byte file keeps the Windows sandbox opt-out
+	$(BUN) run desktop/scripts/demo_p_settings_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/settings_store_atomic.test.ts
+
 .PHONY: demo-P-PERF.5
 demo-P-PERF.5: ## P-PERF.5 (ADR-0132): switch hygiene - optimistic model switch, debounced lastModel write-behind (read-your-writes), memoized settings load, memoized picker
 	$(BUN) run desktop/scripts/demo_p_perf_5.ts
@@ -662,6 +671,10 @@ demo-P-DESIGN.1: ## P-DESIGN.1 (ADR-0154): the agent honors a workspace DESIGN.m
 demo-P-MARKET.1: ## P-MARKET.1 (ADR-0158): the Plugin Marketplace popup - Excalidraw pinned first, then Obsidian's top-ranked integrations by community downloads; searchable scrim-modal on the About//goal conventions; rows only open their GitHub repo (installs are P-MARKET.2)
 	$(BUN) run desktop/scripts/demo_p_market_1.ts
 
+.PHONY: demo-P-MARKET.1c
+demo-P-MARKET.1c: ## P-MARKET.1c (ADR-0446): live catalog title layout at desktop and narrow widths; set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL for an isolated QA browser and engine
+	$(BUN) run desktop/scripts/demo_p_market_1c.mjs
+
 .PHONY: demo-P-FIGMA.1
 demo-P-FIGMA.1: ## P-FIGMA.1 (ADR-0154): /figma — parse a Figma file URL → key, walk the doc → top frames (capped), build a design-board HTML with frames inlined as PNG data URLs (names escaped, only data:image src) for the sandboxed preview
 	$(BUN) run desktop/scripts/demo_p_figma_1.ts
@@ -675,7 +688,7 @@ demo-P-SANDBOX.1: ## P-SANDBOX.1 (ADR-0157): the runtime execution boundary — 
 	$(BUN) run harness/scripts/demo_p_sandbox_1.ts
 
 .PHONY: demo-P-SANDBOX.2
-demo-P-SANDBOX.2: ## P-SANDBOX.2 (ADR-0166): mediated subprocess egress — a loopback DNS + CONNECT proxy decided by the agent's own egressDecisionDetailed brain (only allow passes; prompt/foreign-ccTLD/IP-literal/unparseable/thrown all DENY). Live: denied gethostbyname → REFUSED, upstream never contacted; allowed → forwarded. Proxy dead ⇒ egress denied but local exec still runs; wired at the omp spawn (HTTP(S)_PROXY + resolv.conf steer)
+demo-P-SANDBOX.2: ## P-SANDBOX.2 (ADR-0166, ADR-0445): mediated subprocess egress: a loopback DNS + HTTP proxy (CONNECT tunnels and absolute-form plain-HTTP forwards) decided by the agent's own egressDecisionDetailed brain (only allow passes; prompt/foreign-ccTLD/IP-literal/unparseable/thrown all DENY). Live: denied gethostbyname → REFUSED, upstream never contacted; allowed → forwarded; a denied plain-HTTP request → 403, target never dialed; allowed → streamed. Proxy dead ⇒ egress denied but local exec still runs; wired at the omp spawn (HTTP(S)_PROXY + resolv.conf steer)
 	$(BUN) run harness/scripts/demo_p_sandbox_2.ts
 
 .PHONY: demo-P-SANDBOX.3
