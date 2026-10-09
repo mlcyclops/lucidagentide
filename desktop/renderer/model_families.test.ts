@@ -162,6 +162,10 @@ describe("P-IDE.1c - gov / auxiliary / china detection", () => {
       expect(isChinaModel(w)).toBe(false);
     }
   });
+  it("P-MODEL.7: helmcode's bare `glm5.3` (no hyphen) gates like every other GLM spelling; `gemma4` beside it does not", () => {
+    for (const c of ["helmcode/glm5.3", "helmcode/deepseek-v4-flash", "helmcode/qwen3.6", "openrouter/glm5"]) expect(isChinaModel(c)).toBe(true);
+    for (const w of ["helmcode/gemma4", "helmcode/claude-sonnet-5-5", "acme/glmnet-1", "vendor/paradigm-7"]) expect(isChinaModel(w)).toBe(false);
+  });
 });
 
 describe("sortGovFirstByLevel", () => {

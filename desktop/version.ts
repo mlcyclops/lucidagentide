@@ -595,4 +595,13 @@
 // v2.3.1 = v2.3.0 plus four arcade games (P-GAME.7-10, #442): Chroma Cadence, Gravity Gambit, Silent
 //            Fathom and Skyhook in Preview > Games, sound off by default in the action games, Silent Fathom's
 //            stored best never written through innerHTML (CodeQL js/xss-through-dom). A plain stable tag.
-export const APP_VERSION = "2.3.1";
+// v2.4.0-beta.1 = 2.3.1 plus the first 2.4.0 train. MODELS: omp 18.4.4 -> 18.8.6 (ADR-0442), Claude Haiku
+//            5.5 ($0.10/$0.50, 1M, the recommended checker once listed), the compat probe fixed (#491), R-07
+//            re-pinned at 85 providers with helmcode's bare `glm5.3` behind the China-origin acknowledgement.
+//            AUTH: OpenAI "Connect with a device code" through omp's `openai-codex-device`, read with the #490
+//            guards (ADR-0444). SANDBOX: Microsoft eXecution Container tried before the AppContainer helper,
+//            one-prompt "Prepare host (administrator)" in Security > Runtime sandbox (P-MXC.1, ADR-0441).
+//            FLEET: catch-up buttons pinned to the viewport, right-click Paste lands in the lane, readable
+//            thinking, the scrollbar clear of the resize handle, new lanes tile the panel.
+//            PRERELEASE on the beta channel: dash-tagged, never marked latest, cask stays on 2.3.1.
+export const APP_VERSION = "2.4.0-beta.1";

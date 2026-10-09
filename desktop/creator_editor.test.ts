@@ -5,9 +5,11 @@ import { describe, expect, test } from "bun:test";
 import { buildWav, parseWav, type WavFormat } from "../harness/brief/tts_backend.ts";
 import { DERIVED_CONFIDENCE_CEILING, docDurationMs, replaceSpan, type TimelineDoc } from "../harness/creator/timeline.ts";
 import { addTrack, foldLibrary, libraryAudioDir, libraryLedger, type CreatorTrack, type TrackOrigin } from "./creator_library.ts";
+import type { WhistleOptions, WhistleTranscript, WhistleWord } from "../harness/voice/whistle.ts";
+import type { WhistleTranscriber } from "../harness/voice/whistle_client.ts";
 import {
-  DEFAULT_PEAK_BUCKETS, MAX_WIRE_CLIPS, MAX_WIRE_ITEMS, NO_TEXT_NOTE, decodeTimelineDoc, editorStageDir,
-  openEditor, saveEdit, type EditorIo,
+  DEFAULT_PEAK_BUCKETS, MAX_ALIGN_KEYWORDS, MAX_WIRE_CLIPS, MAX_WIRE_ITEMS, NO_TEXT_NOTE, decodeTimelineDoc, editorStageDir,
+  measureEditorAlignment, openEditor, saveEdit, type EditorIo,
 } from "./creator_editor.ts";
 
 const BASE = "/data";
@@ -331,5 +333,134 @@ describe("the document on the wire", () => {
     expect(r.error).toBeUndefined();
     expect(r.trackId).toBeTruthy();
     expect(foldLibrary(io.ledger())).toHaveLength(2);
+  });
+
+  test("a Whistle-measured document saves with its measured words and alignedBy intact; a bad alignedBy refuses", () => {
+    const { io, track, session } = opened();
+    const sha = "b6e02f048568ac5d01a2042556c658061e699acbc0aa2a1439f52f3d461dffeb";
+    const measured = {
+      ...session.doc,
+      items: session.doc.items.map((it, i) => (i === 0 ? { ...it, source: "measured", confidence: 0.93 } : it)),
+      alignedBy: { provider: "whistle", modelSha256: sha },
+    };
+    const r = decodeTimelineDoc(JSON.parse(JSON.stringify(measured)));
+    if (!r.ok) throw new Error(r.error);
+    expect(r.doc.items[0]).toMatchObject({ source: "measured", confidence: 0.93 });
+    expect(r.doc.alignedBy).toEqual({ provider: "whistle", modelSha256: sha });
+    expect(saveEdit(io, BASE, { trackId: track.id, doc: r.doc, title: "Measured" }).error).toBeUndefined();
+
+    const refusal = { ok: false, error: "that timeline's alignedBy is not a provider plus a sha256" };
+    expect(decodeTimelineDoc({ ...measured, alignedBy: { provider: "whistle", modelSha256: "b6e02f" } })).toMatchObject(refusal);
+    expect(decodeTimelineDoc({ ...measured, alignedBy: "whistle" })).toMatchObject(refusal);
+  });
+});
+
+// CREATOR-WHISTLE (ADR-0432): the measured alignment through a FAKE transcriber. No model is loaded; what
+// is pinned is the audio shaping, the text rule, the keyword bias, the refusals, and the result shape.
+describe("measureEditorAlignment (CREATOR-WHISTLE, ADR-0432)", () => {
+  interface FakeCall { samples: number; opts: WhistleOptions | undefined }
+  function fakeTranscriber(words: WhistleWord[], text = words.map((w) => w.word).join(" "), reject?: string): WhistleTranscriber & { calls: FakeCall[] } {
+    const calls: FakeCall[] = [];
+    return {
+      calls,
+      modelSha256: "b6e02f048568",
+      async transcribe(pcm: Float32Array, opts?: WhistleOptions): Promise<WhistleTranscript> {
+        calls.push({ samples: pcm.length, opts });
+        if (reject) throw new Error(reject);
+        return { text, language: "en", ttftMs: 5, decodeTps: 30, words, windows: 1 };
+      },
+    };
+  }
+  const HEARD: WhistleWord[] = [
+    { word: "One", startMs: 0, endMs: 200, probability: 0.95 },
+    { word: "two", startMs: 350, endMs: 550, probability: 0.9 },
+    { word: "three,", startMs: 700, endMs: 900, probability: 0.85 },
+    { word: "four.", startMs: 1050, endMs: 1250, probability: 0.8 },
+  ];
+
+  test("an 8 kHz track is resampled to 16 kHz for the model only, and every word comes back measured", async () => {
+    const io = fakeIo();
+    const track = seed(io, { name: "vox.wav", bytes: speechWav(MONO_8K), title: "Vox" });
+    const t = fakeTranscriber(HEARD);
+    const r = await measureEditorAlignment(io, BASE, { trackId: track.id, text: LYRIC, language: "en" }, t);
+    if (!r.ok) throw new Error(r.error);
+    expect(t.calls).toHaveLength(1);
+    expect(t.calls[0]!.samples).toBe(1400 * 16); // 1400 ms at 16 kHz
+    expect(t.calls[0]!.opts).toEqual({ keywords: ["one", "two", "three", "four"], language: "en", wordTimestamps: true });
+    expect(r.trackId).toBe(track.id);
+    expect(r.items.map((i) => i.source)).toEqual(["measured", "measured", "measured", "measured"]);
+    expect(r.items.map((i) => i.confidence)).toEqual([0.95, 0.9, 0.85, 0.8]);
+    expect(r.items[1]).toMatchObject({ text: "two", startMs: 350, endMs: 550 });
+    expect(r.matched).toBe(4);
+    expect(r.interpolated).toBe(0);
+    expect(r.note).toBe("measured in-process by Whistle: 4 of 4 words matched, 0 interpolated");
+    expect(r.alignedBy).toEqual({ provider: "whistle", modelSha256: "b6e02f048568" });
+    expect(r.transcript).toBe("One two three, four.");
+    expect(r.language).toBe("en");
+    expect(r.windows).toBe(1);
+    // The library bytes are untouched: the resample fed the model and nothing else.
+    expect(parseWav(io.files.get(audioPath(track))!).fmt.sampleRate).toBe(8000);
+  });
+
+  test("a 44.1 kHz stereo track is folded to mono 16 kHz", async () => {
+    const io = fakeIo();
+    const track = seed(io, { name: "wide.wav", bytes: speechWav(STEREO_44K), title: "Wide" });
+    const t = fakeTranscriber(HEARD);
+    const r = await measureEditorAlignment(io, BASE, { trackId: track.id, text: LYRIC }, t);
+    expect(r.ok).toBe(true);
+    expect(t.calls[0]!.samples).toBe(Math.round((Math.round(1.4 * 44100) * 16000) / 44100));
+    expect(t.calls[0]!.opts?.language).toBeUndefined();
+  });
+
+  test("a substituted word falls back to a derived item and the counts say so", async () => {
+    const io = fakeIo();
+    const track = seed(io, { name: "vox.wav", bytes: speechWav(MONO_8K), title: "Vox", lyrics: LYRIC });
+    const heard = HEARD.map((w, i) => (i === 2 ? { ...w, word: "free" } : w));
+    const r = await measureEditorAlignment(io, BASE, { trackId: track.id }, fakeTranscriber(heard));
+    if (!r.ok) throw new Error(r.error);
+    expect(r.items.map((i) => i.source)).toEqual(["measured", "measured", "derived", "measured"]);
+    expect(r.items[2]!.confidence).toBeLessThanOrEqual(DERIVED_CONFIDENCE_CEILING);
+    expect(r.matched).toBe(3);
+    expect(r.interpolated).toBe(1);
+  });
+
+  test("keywords are distinct, normalized, and capped at MAX_ALIGN_KEYWORDS", async () => {
+    const io = fakeIo();
+    const track = seed(io, { name: "vox.wav", bytes: speechWav(MONO_8K), title: "Vox" });
+    const t = fakeTranscriber(HEARD);
+    const many = Array.from({ length: 100 }, (_, i) => `W${i}`).join(" ");
+    await measureEditorAlignment(io, BASE, { trackId: track.id, text: `Hello, hello! HELLO "world" ${many}` }, t);
+    const kw = t.calls[0]!.opts?.keywords ?? [];
+    expect(kw.slice(0, 2)).toEqual(["hello", "world"]);
+    expect(kw).toHaveLength(MAX_ALIGN_KEYWORDS);
+    expect(new Set(kw).size).toBe(MAX_ALIGN_KEYWORDS);
+  });
+
+  test("no text refuses with NO_TEXT_NOTE before the model is asked", async () => {
+    const io = fakeIo();
+    const track = seed(io, { name: "vox.wav", bytes: speechWav(MONO_8K), title: "Vox" });
+    const t = fakeTranscriber(HEARD);
+    const r = await measureEditorAlignment(io, BASE, { trackId: track.id }, t);
+    expect(r).toEqual({ ok: false, error: NO_TEXT_NOTE });
+    expect(t.calls).toHaveLength(0);
+  });
+
+  test("the editor's audio refusals apply verbatim: mime, bit depth, unknown id", async () => {
+    const io = fakeIo();
+    const t = fakeTranscriber(HEARD);
+    const mp3 = seed(io, { name: "song.mp3", bytes: new TextEncoder().encode("ID3-bytes"), title: "Neon Skyline" });
+    expect(await measureEditorAlignment(io, BASE, { trackId: mp3.id, text: LYRIC }, t)).toEqual({ ok: false, error: 'the editor works on 16-bit PCM WAV; "Neon Skyline" is audio/mpeg' });
+    const fmt: WavFormat = { channels: 1, sampleRate: 8000, bitsPerSample: 24 };
+    const hires = seed(io, { name: "hires.wav", bytes: buildWav(fmt, pcmMs(500, 9000, fmt)), title: "Hi-Res" });
+    expect(await measureEditorAlignment(io, BASE, { trackId: hires.id, text: LYRIC }, t)).toEqual({ ok: false, error: 'the editor works on 16-bit PCM WAV; "Hi-Res" is 24-bit' });
+    expect(await measureEditorAlignment(io, BASE, { trackId: "trk404", text: LYRIC }, t)).toEqual({ ok: false, error: "no track trk404" });
+    expect(t.calls).toHaveLength(0);
+  });
+
+  test("a rejecting worker becomes { ok:false } with its reason, never a throw", async () => {
+    const io = fakeIo();
+    const track = seed(io, { name: "vox.wav", bytes: speechWav(MONO_8K), title: "Vox" });
+    const r = await measureEditorAlignment(io, BASE, { trackId: track.id, text: LYRIC }, fakeTranscriber(HEARD, "", "Whistle worker exited (code 1)"));
+    expect(r).toEqual({ ok: false, error: "Whistle worker exited (code 1)" });
   });
 });

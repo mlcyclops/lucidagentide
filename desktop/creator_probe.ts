@@ -71,6 +71,17 @@ export interface ProbeDeps {
   /** Platform and env for the default executable paths (process.platform / process.env in the engine). */
   readonly platform?: string;
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /** CREATOR-WHISTLE (ADR-0432): the engine's own in-process check, supplied by dev.ts: it resolves the
+   *  staged assets, verifies their hashes, starts the worker, and transcribes a second of silence. The
+   *  registry row never stands in for it: with no checker the probe says not-installed. */
+  readonly whistle?: () => Promise<WhistleProbeAnswer>;
+}
+
+export interface WhistleProbeAnswer {
+  readonly state: "ready" | "not-installed" | "unreachable";
+  /** The verify/start/transcribe reason verbatim, or what ready proved. */
+  readonly detail: string;
+  readonly version: string;
 }
 
 const result = (
@@ -229,6 +240,17 @@ export function probeBuiltIn(deps: ProbeDeps, providerId: CreatorProviderId, att
   return result(providerId, "ready", "Built into the renderer: no endpoint, no credential, no network.", startedAt, deps.now(), attested);
 }
 
+/** Whistle: no endpoint and no executable, so the engine's own checker is the only honest witness. `ready`
+ *  attests both capabilities because the one call that proved it (a decode) is the same call both use. */
+export async function probeWhistle(deps: ProbeDeps): Promise<ProbeResult> {
+  const startedAt = deps.now();
+  if (!deps.whistle) return result("whistle", "not-installed", "Whistle assets are not staged on this engine.", startedAt, deps.now());
+  let answer: WhistleProbeAnswer;
+  try { answer = await deps.whistle(); }
+  catch (e) { return result("whistle", "unreachable", e instanceof Error ? e.message : String(e), startedAt, deps.now()); }
+  return result("whistle", answer.state, answer.detail, startedAt, deps.now(), answer.state === "ready" ? ["stt", "alignment"] : [], answer.version);
+}
+
 /** Probe one provider, choosing the adapter its transports imply. */
 export async function probeProvider(deps: ProbeDeps, providerId: CreatorProviderId, endpoints: readonly CreatorEndpointDef[]): Promise<ProbeResult> {
   const ep = endpoints.find((e) => e.enabled && e.providerId === providerId);
@@ -243,6 +265,8 @@ export async function probeProvider(deps: ProbeDeps, providerId: CreatorProvider
       return ep
         ? probeHttpService(deps, "dots-tts", ep, { paths: ["/v1/models", "/health", "/"], attestOnOk: ["tts"] })
         : result("dots-tts", "skipped", "No dots.tts server is declared yet.", deps.now(), deps.now());
+    case "whistle":
+      return probeWhistle(deps);
     case "suno":
       return ep
         ? probeHttpService(deps, "suno", ep, { paths: ["/v1/models", "/"] })
