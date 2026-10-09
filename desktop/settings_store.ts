@@ -12,7 +12,7 @@
 // (OAuth is handled separately via omp's own credential vault / auth-broker -
 //  that's the more secure path and omp owns the storage there.)
 
-import { closeSync, fchmodSync, fstatSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, fchmodSync, fstatSync, fsyncSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
@@ -559,38 +559,158 @@ export function setLocalProviderEnabled(id: string, enabled: boolean): void {
 // P-PERF.5 (ADR-0132): load() used to read + JSON.parse the file on EVERY call - and nearly every
 // request handler calls it (often several times). Memoize the parse on the file's mtime; callers get a
 // structuredClone so today's read-modify-save pattern keeps its exact semantics (every load() is an
-// independent object - a caller mutating without save() can never corrupt the memo). A missing or
-// corrupt file is just {}.
+// independent object - a caller mutating without save() can never corrupt the memo). A missing file is
+// just {}; a corrupt one is NOT (P-SETTINGS.1, see below).
 // Memo key = mtime AND size: two writes can land in the same mtime tick, but a content change almost
 // always changes the byte length too. (Residual blind spot - same-ms, same-size external rewrite -
 // is accepted: this process is the file's only writer in practice.)
 // stat and read/write go through ONE file descriptor (fstat on the open fd), so the metadata the memo
 // is keyed on always describes the exact bytes read/written - no check-then-use race (js/file-system-race).
+//
+// P-SETTINGS.1 (ADR-0439): the settings file must never be silently wiped. save() used to open the
+// file with "w" (truncate) and write in place, and load() turned ANY read/parse failure into {}. An
+// engine killed mid-save (the window's frozen-engine restart does exactly that), or a load() racing a
+// save(), saw an empty profile; the next read-modify-save then persisted that empty profile, onboarding
+// re-ran, and every setting (Windows sandbox off, model, keys) silently reverted to its default. Now:
+//   - save() writes a temp file, fsyncs it, and renames it over the original (readers see old or new
+//     bytes, never a torn file), after copying the last good file to `<file>.bak`.
+//   - load() treats a corrupt file as corrupt, not empty: it keeps the bad bytes aside as
+//     `<file>.corrupt-<ts>`, restores `<file>.bak` if that parses, and only then falls back to {}.
+//   - Review fixes (2026-10-09): only a MISSING file is {}. A file that exists but cannot be opened or
+//     read (a lock that outlives the retries, a permission or I/O error) throws, so no read-modify-save
+//     can persist an empty profile over it. A parsed backup is served even when the primary cannot be
+//     rewritten. Recovery acts only on the file that failed to parse: if another writer replaced the
+//     path after the read, the replacement is loaded, never renamed aside or overwritten.
 let loadMemo: { file: string; mtimeMs: number; size: number; s: GuiSettings } | null = null;
-export function load(): GuiSettings {
-  const file = settingsFile();
+const bakFile = (file: string): string => `${file}.bak`;
+const errCode = (e: unknown): string | undefined => (e as NodeJS.ErrnoException | undefined)?.code;
+
+/** The fs calls whose Windows failure modes P-SETTINGS.1 must survive. Production always uses node:fs;
+ *  tests swap entries through _setSettingsIoForTest to hold a lock or land a concurrent save on cue. */
+const realIo = { openSync, renameSync, statSync };
+const io = { ...realIo };
+/** Test-only: replace some of the fs calls above; null restores node:fs. */
+export function _setSettingsIoForTest(patch: Partial<typeof realIo> | null): void { Object.assign(io, realIo, patch ?? {}); }
+
+/** Parse settings bytes; anything that is not a JSON object is corrupt (throws). */
+function parseSettings(text: string): GuiSettings {
+  const v: unknown = JSON.parse(text);
+  if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("settings file is not a JSON object");
+  return v as GuiSettings;
+}
+
+/** Windows briefly refuses an open or a rename while another handle (antivirus, OneDrive, a second
+ *  reader) holds the file; retry a few times before treating the failure as real. */
+function withRetry<T>(op: () => T): T {
+  for (let attempt = 0; ; attempt++) {
+    try { return op(); } catch (e) {
+      const code = errCode(e);
+      if (attempt >= 9 || (code !== "EPERM" && code !== "EBUSY" && code !== "EACCES")) throw e;
+      Bun.sleepSync(15);
+    }
+  }
+}
+
+/** Write `text` to `path` atomically (temp + fsync + rename). Returns the written file's stat. */
+function writeAtomic(path: string, text: string): { mtimeMs: number; size: number } {
+  const tmp = `${path}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
   try {
-    const fd = openSync(file, "r"); // throws when missing -> {}
+    const fd = openSync(tmp, "w", 0o600);
+    let st: { mtimeMs: number; size: number };
+    try {
+      writeFileSync(fd, text, "utf8");
+      try { fchmodSync(fd, 0o600); } catch { /* best-effort on Windows */ }
+      fsyncSync(fd);
+      st = fstatSync(fd); // rename keeps mtime + size, so this keys the memo for the final file
+    } finally { closeSync(fd); }
+    withRetry(() => io.renameSync(tmp, path));
+    return st;
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* already renamed or never created */ }
+    throw e;
+  }
+}
+
+/** True while `file` is still the exact file whose bytes were read (same identity, size and mtime). */
+function samePrimary(file: string, read: Stats): boolean {
+  try {
+    const now = io.statSync(file);
+    return now.ino === read.ino && now.size === read.size && now.mtimeMs === read.mtimeMs;
+  } catch { return false; } // gone or unreadable: not ours to touch
+}
+
+/** The primary parsed as corrupt: restore the backup if it parses, keep the bad bytes for forensics, and
+ *  never act on a path another writer replaced after the read (that writer's save would be lost). */
+function recoverCorrupt(file: string, err: unknown, read: { st: Stats; bytes: Buffer }, mayReread: boolean): GuiSettings {
+  if (!samePrimary(file, read.st)) {
+    if (mayReread) return loadFile(file, false);
+    throw new Error(`settings: ${file} kept changing during corrupt-file recovery; refusing to guess`);
+  }
+  let restored: GuiSettings | null = null;
+  try { restored = parseSettings(readFileSync(bakFile(file), "utf8")); } catch { /* no usable backup */ }
+  const why = String((err as Error)?.message ?? err).slice(0, 120);
+  const kept = `${file}.corrupt-${Date.now()}`;
+  if (!restored) {
+    // Nothing to restore: move the bad file aside (copy it if the rename is refused) and start from defaults.
+    try { withRetry(() => io.renameSync(file, kept)); } catch {
+      try { writeFileSync(kept, read.bytes, { flag: "wx", mode: 0o600 }); } catch { /* best effort */ }
+    }
+    console.error(`[settings] ${file} was unreadable (${why}); no usable backup, starting from defaults.`);
+    loadMemo = null;
+    return {};
+  }
+  // A copy, not a rename: the restore below replaces the primary atomically, so the path is never empty.
+  try { writeFileSync(kept, read.bytes, { flag: "wx", mode: 0o600 }); } catch { /* best effort */ }
+  console.error(`[settings] ${file} was unreadable (${why}); restored the last good copy from ${bakFile(file)}.`);
+  try {
+    const st = writeAtomic(file, JSON.stringify(restored, null, 2));
+    loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: restored };
+  } catch (e) {
+    // A lock outlived the retries. The parsed backup is still the user's profile: serve it, never {},
+    // and let the next load() finish the restore.
+    loadMemo = null;
+    console.error(`[settings] could not rewrite ${file} from the backup (${errCode(e) ?? String(e).slice(0, 120)}); serving the backup until it can be.`);
+  }
+  return structuredClone(restored);
+}
+
+function loadFile(file: string, mayReread: boolean): GuiSettings {
+  let read: { st: Stats; bytes: Buffer };
+  try {
+    const fd = withRetry(() => io.openSync(file, "r"));
     try {
       const st = fstatSync(fd);
-      if (!loadMemo || loadMemo.file !== file || loadMemo.mtimeMs !== st.mtimeMs || loadMemo.size !== st.size) {
-        loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: JSON.parse(readFileSync(fd, "utf8")) as GuiSettings };
+      if (loadMemo && loadMemo.file === file && loadMemo.mtimeMs === st.mtimeMs && loadMemo.size === st.size) {
+        return structuredClone(loadMemo.s);
       }
+      read = { st, bytes: readFileSync(fd) };
     } finally { closeSync(fd); }
-    return structuredClone(loadMemo.s);
-  } catch { return {}; }
+  } catch (e) {
+    if (errCode(e) === "ENOENT") return {}; // missing (first run, or the user deleted it) -> {}
+    // It exists but cannot be opened or read (a lock that outlived the retries, a permission or I/O
+    // error). An empty profile here is what the next read-modify-save would persist over it.
+    throw new Error(`settings: ${file} exists but cannot be read (${errCode(e) ?? String(e).slice(0, 120)}); refusing to treat it as an empty profile`, { cause: e });
+  }
+  let s: GuiSettings;
+  try { s = parseSettings(read.bytes.toString("utf8")); } catch (e) { return recoverCorrupt(file, e, read, mayReread); }
+  loadMemo = { file, mtimeMs: read.st.mtimeMs, size: read.st.size, s };
+  return structuredClone(s);
 }
+
+export function load(): GuiSettings {
+  return loadFile(settingsFile(), true);
+}
+
 export function save(s: GuiSettings): void {
   const file = settingsFile();
-  const fd = openSync(file, "w");
+  // Keep the previous generation as the backup, but never let a corrupt primary overwrite a good backup.
   try {
-    writeFileSync(fd, JSON.stringify(s, null, 2), "utf8");
-    try { fchmodSync(fd, 0o600); } catch { /* best-effort on Windows */ }
-    try {
-      const st = fstatSync(fd);
-      loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: structuredClone(s) };
-    } catch { loadMemo = null; }
-  } finally { closeSync(fd); }
+    const prev = readFileSync(file, "utf8");
+    parseSettings(prev);
+    writeAtomic(bakFile(file), prev);
+  } catch { /* first save, or the primary is unreadable: leave the existing backup alone */ }
+  const st = writeAtomic(file, JSON.stringify(s, null, 2));
+  loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: structuredClone(s) };
 }
 
 /** Push stored keys + AskSage base URL into process.env so child `omp acp`

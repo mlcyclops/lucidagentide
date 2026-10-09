@@ -479,6 +479,11 @@ demo-P-PERF.3: ## P-PERF.3 (ADR-0130): KG layout continuity — re-open is a sta
 demo-P-PERF.4: ## P-PERF.4 (ADR-0131): incremental session index (warm polls parse nothing) + tail-first transcript pages + AC-only prefetch gate
 	$(BUN) run desktop/scripts/demo_p_perf_4.ts
 
+.PHONY: demo-P-SETTINGS.1
+demo-P-SETTINGS.1: ## P-SETTINGS.1 (ADR-0439): settings are never silently wiped - atomic temp+fsync+rename save with a last-good .bak; a corrupt file is kept aside and restored from the backup, never read as an empty profile. Real processes: 25 hard kills of a saving writer, a concurrent reader never sees a torn file, the 2026-10-05 0-byte file keeps the Windows sandbox opt-out
+	$(BUN) run desktop/scripts/demo_p_settings_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/settings_store_atomic.test.ts
+
 .PHONY: demo-P-PERF.5
 demo-P-PERF.5: ## P-PERF.5 (ADR-0132): switch hygiene - optimistic model switch, debounced lastModel write-behind (read-your-writes), memoized settings load, memoized picker
 	$(BUN) run desktop/scripts/demo_p_perf_5.ts
