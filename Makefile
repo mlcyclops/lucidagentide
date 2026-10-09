@@ -663,7 +663,7 @@ demo-P-MARKET.1: ## P-MARKET.1 (ADR-0158): the Plugin Marketplace popup - Excali
 	$(BUN) run desktop/scripts/demo_p_market_1.ts
 
 .PHONY: demo-P-MARKET.1c
-demo-P-MARKET.1c: ## P-MARKET.1c (ADR-0433): live catalog title layout at desktop and narrow widths; set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL for an isolated QA browser and engine
+demo-P-MARKET.1c: ## P-MARKET.1c (ADR-0446): live catalog title layout at desktop and narrow widths; set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL for an isolated QA browser and engine
 	$(BUN) run desktop/scripts/demo_p_market_1c.mjs
 
 .PHONY: demo-P-FIGMA.1
