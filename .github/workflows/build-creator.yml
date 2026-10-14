@@ -117,6 +117,7 @@ jobs:
 
       # An EMPTY CSC_LINK is not the same as unset: electron-builder treats '' as a cert path and dies.
       # Export the signing vars ONLY when a real cert secret exists.
+      # Windows prefers Azure Artifact Signing (P-RELEASE.6, ADR-0447), exactly as build-desktop.yml does.
       - name: Configure code-signing (only when a cert secret exists)
         shell: bash
         env:
@@ -124,9 +125,12 @@ jobs:
           MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         run: |
           if [[ "$RUNNER_OS" == "macOS" && -n "$MAC_CSC_LINK" ]]; then
             { echo "CSC_LINK=$MAC_CSC_LINK"; echo "CSC_KEY_PASSWORD=$MAC_CSC_KEY_PASSWORD"; } >> "$GITHUB_ENV"
+          elif [[ "$RUNNER_OS" == "Windows" && -n "$AZURE_CLIENT_ID" ]]; then
+            echo "LUCID_WIN_AZURE_SIGN=1" >> "$GITHUB_ENV"
           elif [[ "$RUNNER_OS" == "Windows" && -n "$WIN_CSC_LINK" ]]; then
             { echo "CSC_LINK=$WIN_CSC_LINK"; echo "CSC_KEY_PASSWORD=$WIN_CSC_KEY_PASSWORD"; } >> "$GITHUB_ENV"
           fi
@@ -139,8 +143,29 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Azure Artifact Signing credentials, Windows build only; consulted only when LUCID_WIN_AZURE_SIGN=1.
+          AZURE_TENANT_ID: ${{ runner.os == 'Windows' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ runner.os == 'Windows' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ runner.os == 'Windows' && secrets.AZURE_CLIENT_SECRET || '' }}
           # softprops attaches the release; don't let electron-builder also upload.
           GH_TOKEN: ""
+
+      # P-RELEASE.6 (ADR-0447): the same signature proof as build-desktop.yml, against CREATOR bytes.
+      - name: Verify Authenticode signatures (Windows, Azure Artifact Signing)
+        if: runner.os == 'Windows' && env.LUCID_WIN_AZURE_SIGN == '1'
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          $files = @(Get-ChildItem release-creator -File | Where-Object { $_.Extension -eq '.exe' }) + @(Get-ChildItem release-creator/win-unpacked -File -Filter *.exe)
+          if ($files.Count -eq 0) { throw "no Windows artifacts found under desktop/release-creator" }
+          $bad = 0
+          foreach ($f in $files) {
+            $s = Get-AuthenticodeSignature -LiteralPath $f.FullName
+            $subject = if ($s.SignerCertificate) { $s.SignerCertificate.Subject } else { '<none>' }
+            Write-Host "$($s.Status)  $subject  ts=$([bool]$s.TimeStamperCertificate)  $($f.Name)"
+            if ($s.Status -ne 'Valid' -or $subject -notlike 'CN=TECHLEAD 187 LLC,*' -or -not $s.TimeStamperCertificate) { $bad++ }
+          }
+          if ($bad -gt 0) { throw "$bad Windows artifact(s) are not validly signed and timestamped by TECHLEAD 187 LLC" }
 
       # The three release gates that protect Agent bytes, pointed at CREATOR bytes. All three scripts
       # default to desktop/release; Creator packages into desktop/release-creator, so without

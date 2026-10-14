@@ -196,6 +196,10 @@ jobs:
       # '' as a cert path, resolves it to the project dir, and dies "<projectDir> not a file" (only the
       # pkg target trips this — the zip/app path short-circuits on identity:null). So export CSC_LINK /
       # CSC_KEY_PASSWORD ONLY when a real cert secret exists; never as empty strings.
+      # Windows prefers Azure Artifact Signing (P-RELEASE.6, ADR-0447): when AZURE_CLIENT_ID exists, the
+      # switch below makes desktop/build/win-signing.cjs add win.azureSignOptions, and electron-builder
+      # then FAILS rather than ship unsigned if the Azure credentials are incomplete. The .pfx path stays
+      # as the fallback for a fork that brings its own certificate.
       - name: Configure code-signing (only when a cert secret exists)
         shell: bash
         env:
@@ -203,9 +207,12 @@ jobs:
           MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         run: |
           if [[ "$RUNNER_OS" == "macOS" && -n "$MAC_CSC_LINK" ]]; then
             { echo "CSC_LINK=$MAC_CSC_LINK"; echo "CSC_KEY_PASSWORD=$MAC_CSC_KEY_PASSWORD"; } >> "$GITHUB_ENV"
+          elif [[ "$RUNNER_OS" == "Windows" && -n "$AZURE_CLIENT_ID" ]]; then
+            echo "LUCID_WIN_AZURE_SIGN=1" >> "$GITHUB_ENV"
           elif [[ "$RUNNER_OS" == "Windows" && -n "$WIN_CSC_LINK" ]]; then
             { echo "CSC_LINK=$WIN_CSC_LINK"; echo "CSC_KEY_PASSWORD=$WIN_CSC_KEY_PASSWORD"; } >> "$GITHUB_ENV"
           fi
@@ -222,8 +229,33 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Azure Artifact Signing credentials (EnvironmentCredential), read by Invoke-TrustedSigning. Handed
+          # to the Windows build only; consulted only when LUCID_WIN_AZURE_SIGN=1.
+          AZURE_TENANT_ID: ${{ runner.os == 'Windows' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ runner.os == 'Windows' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ runner.os == 'Windows' && secrets.AZURE_CLIENT_SECRET || '' }}
           # softprops attaches the release; don't let electron-builder also upload.
           GH_TOKEN: ""
+
+      # P-RELEASE.6 (ADR-0447): when Azure signing was switched on, prove it took before anything uploads.
+      # Every installer plus the app exe must carry a VALID Authenticode signature from the Artifact
+      # Signing profile AND a timestamp (the certificate itself lives 72 hours). The appx needs no line
+      # here: signtool refuses an appx whose publisher differs from the certificate, failing the build.
+      - name: Verify Authenticode signatures (Windows, Azure Artifact Signing)
+        if: runner.os == 'Windows' && env.LUCID_WIN_AZURE_SIGN == '1'
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          $files = @(Get-ChildItem release -File | Where-Object { $_.Extension -in '.exe', '.msi' }) + @(Get-ChildItem release/win-unpacked -File -Filter *.exe)
+          if ($files.Count -eq 0) { throw "no Windows artifacts found under desktop/release" }
+          $bad = 0
+          foreach ($f in $files) {
+            $s = Get-AuthenticodeSignature -LiteralPath $f.FullName
+            $subject = if ($s.SignerCertificate) { $s.SignerCertificate.Subject } else { '<none>' }
+            Write-Host "$($s.Status)  $subject  ts=$([bool]$s.TimeStamperCertificate)  $($f.Name)"
+            if ($s.Status -ne 'Valid' -or $subject -notlike 'CN=TECHLEAD 187 LLC,*' -or -not $s.TimeStamperCertificate) { $bad++ }
+          }
+          if ($bad -gt 0) { throw "$bad Windows artifact(s) are not validly signed and timestamped by TECHLEAD 187 LLC" }
 
       # Air-gap gate (ADR-0225): prove the PACKAGED app is self-contained — omp + the scanner's Python
       # resolve and RUN from bundled resources, so an air-gapped host works cold with no `bun add -g` /

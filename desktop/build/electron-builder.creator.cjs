@@ -89,4 +89,5 @@ cfg.linux = {
 cfg.deb = { ...cfg.deb, artifactName: "lucidcreator-desktop_${version}_${arch}.${ext}" };
 cfg.rpm = { ...cfg.rpm, artifactName: "lucidcreator-desktop-${version}.${arch}.${ext}" };
 
-module.exports = cfg;
+// P-RELEASE.6 (ADR-0447): the same Azure Artifact Signing switch as the Agent Windows build.
+module.exports = require("./win-signing.cjs").withWindowsSigning(cfg);

@@ -32,7 +32,7 @@
     "web": "bun run dev.ts",
     "typecheck": "tsc --noEmit",
     "dist:mac": "bun run runtimes:mac && bun run whisper && bun run whistle && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --mac pkg --arm64 --publish never && electron-builder --mac pkg --x64 --publish never && electron-builder --mac zip --arm64 --x64 --publish never",
-    "dist:win": "bun run runtimes:win && bun run whisper && bun run whistle && bun run mxc && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && bun run compile-appcontainer && electron-builder --win --publish never",
+    "dist:win": "bun run runtimes:win && bun run whisper && bun run whistle && bun run mxc && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && bun run compile-appcontainer && electron-builder --win --config build/electron-builder.win.cjs --publish never",
     "dist:linux": "bun run runtimes:linux && bun run whisper && bun run whistle && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --linux --publish never",
     "dist": "bun run runtimes && bun run whisper && bun run whistle && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && electron-builder --publish never",
     "dist:win:creator": "bun run runtimes:win && bun run whisper && bun run whistle && bun run icons && bun run build:creator && bun run compile-lucid && bun run build-renderer && bun run compile-engine && bun run compile-appcontainer && electron-builder --win --config build/electron-builder.creator.cjs --publish never",
@@ -218,7 +218,7 @@
     },
     "appx": {
       "identityName": "TechLead187.LucidAgent",
-      "publisher": "CN=TechLead 187 LLC",
+      "publisher": "CN=TECHLEAD 187 LLC, O=TECHLEAD 187 LLC, L=Sun City Center, S=Florida, C=US",
       "publisherDisplayName": "TechLead 187 LLC",
       "applicationId": "LucidAgent",
       "displayName": "Lucid Agent",
