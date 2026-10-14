@@ -135,6 +135,12 @@ jobs:
             { echo "CSC_LINK=$WIN_CSC_LINK"; echo "CSC_KEY_PASSWORD=$WIN_CSC_KEY_PASSWORD"; } >> "$GITHUB_ENV"
           fi
 
+      # Same race as build-desktop.yml: stage the signing tools once, hash-verified, before signing.
+      - name: Stage Azure Artifact Signing tools (Windows)
+        if: runner.os == 'Windows' && env.LUCID_WIN_AZURE_SIGN == '1'
+        shell: pwsh
+        run: ./desktop/build/stage-trusted-signing.ps1
+
       - name: Build Creator installer (${{ matrix.script }})
         run: bun run ${{ matrix.script }}
         working-directory: desktop
