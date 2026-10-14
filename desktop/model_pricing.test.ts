@@ -24,6 +24,13 @@ describe("listPrice tiers", () => {
     expect(listPrice("google/gemini-3-pro").inPerM).toBe(1.25);
     expect(listPrice("openai-codex/gpt-5.5").inPerM).toBe(1.25);
   });
+  test("Gemini 4 Argon (P-MODEL.8) is estimated at the $4/$20 standard rate; other Gemini rows unchanged", () => {
+    for (const id of ["google/gemini-4-argon", "gemini-4-argon", "openrouter/google/gemini-4-argon"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 4, outPerM: 20 });
+    }
+    expect(listPrice("google/gemini-3.8-flash")).toEqual({ inPerM: 0.30, outPerM: 2.50 });
+    expect(listPrice("google/gemini-3.1-pro-preview")).toEqual({ inPerM: 1.25, outPerM: 10 });
+  });
   // P-MODEL.2: the three rows added for the current catalog. Each is order-sensitive, so these assertions
   // are really guarding TABLE's ordering: a future insert above them silently re-prices the flagships.
   test("Opus 5 is priced at its own halved rate, NOT the generic Opus row", () => {

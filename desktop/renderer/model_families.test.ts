@@ -410,13 +410,40 @@ describe("P-MODEL.2 - preferredDefaultModel (the curated fresh-install default)"
     expect(preferredDefaultModel(mk("deepseek/deepseek-v3", "asksage-query/rag"))).toBeNull();
     expect(preferredDefaultModel(mk("stepfun/step-5-preview", "openrouter/stepfun/step-3.7-flash"))).toBeNull(); // P-MODEL.6: StepFun is China-gated
   });
-  it("no curated entry can ever select a small/fast model", () => {
+  it("no curated entry can ever select a small/fast model except the exact Gemini 3.8 Flash id", () => {
     for (const pat of DEFAULT_MODEL_PREFERENCE) {
-      for (const small of ["claude-opus-5-mini", "claude-opus-5-5-mini", "gpt-6-mini", "gpt-6-nano", "gpt-5.6-mini", "gemini-3.1-pro-lite", "claude-fable-5-lite"]) {
+      for (const small of ["claude-opus-5-mini", "claude-opus-5-5-mini", "gpt-6-mini", "gpt-6-nano", "gpt-5.6-mini", "gemini-3.1-pro-lite", "claude-fable-5-lite",
+                           "gemini-3.8-flash-lite", "gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-3.7-flash", "gemini-3.1-flash-lite"]) {
         expect(pat.test(small)).toBe(false);
       }
     }
     expect(preferredDefaultModel(mk("openai-codex/gpt-6-mini", "openai-codex/gpt-6-astra"))?.value).toBe("openai-codex/gpt-6-astra");
+  });
+});
+
+describe("P-MODEL.8 - Gemini 4 Argon is the flagship, Gemini 3.8 Flash the Gemini default", () => {
+  const mk = (...values: string[]): ModelOption[] => values.map((value) => ({ value, name: value }));
+  // The Google API-key catalog as omp discovers it from GET /v1beta/models (2026-10-14), chat routes only.
+  const GOOGLE = mk("google/gemini-2.5-pro", "google/gemini-3.1-pro-preview", "google/gemini-3.5-flash",
+    "google/gemini-3.7-flash", "google/gemini-3.8-flash", "google/gemini-3.8-flash-lite-tts", "google/gemini-4-argon");
+
+  it("Argon ranks as a flagship and leads the Gemini group, above 3.1 Pro", () => {
+    expect(capabilityTier("google/gemini-4-argon")).toBe(2);
+    expect(capabilityTier("google/gemini-4-argon-lite")).toBe(0); // the small-model test still runs first
+    expect(capabilityTier("google/gemini-3.8-flash")).toBe(0);
+    expect(sortGovFirstByLevel(GOOGLE)[0]!.value).toBe("google/gemini-4-argon");
+    expect(topModel(GOOGLE)?.value).toBe("google/gemini-4-argon");
+  });
+  it("a Google-only install opens on 3.8 Flash, never on the expensive Argon or a Pro", () => {
+    expect(preferredDefaultModel(GOOGLE)?.value).toBe("google/gemini-3.8-flash");
+    expect(preferredDefaultModel(mk("google/gemini-3-8-flash", "google/gemini-4-argon"))?.value).toBe("google/gemini-3-8-flash");
+  });
+  it("without 3.8 Flash the Gemini pick falls to 3.1 Pro, not an older Flash", () => {
+    expect(preferredDefaultModel(mk("google/gemini-3.7-flash", "google/gemini-3.1-pro-preview"))?.value).toBe("google/gemini-3.1-pro-preview");
+  });
+  it("a curated Claude or GPT flagship still outranks the Gemini default", () => {
+    expect(preferredDefaultModel([...GOOGLE, ...mk("anthropic/claude-opus-5-5")])?.value).toBe("anthropic/claude-opus-5-5");
+    expect(preferredDefaultModel([...GOOGLE, ...mk("openai-codex/gpt-6-sol")])?.value).toBe("openai-codex/gpt-6-sol");
   });
 });
 

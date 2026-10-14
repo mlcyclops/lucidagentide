@@ -70,6 +70,11 @@ const TABLE: [RegExp, Price][] = [
   // (cache read $0.50), rising to $4/$12 once a prompt exceeds 200K input tokens. Price has no tier
   // fields, so the base rate is the estimate; metered usage supersedes it as with every row here.
   [/grok-?4[.-][67](\b|[-.])/, { inPerM: 2.0, outPerM: 6.0 }],
+  // P-MODEL.8: Gemini 4 Argon (2026-09-30) launched at an INTRODUCTORY $2/$10 per Mtok (cached input 95%
+  // off) and Google says the standard rate is $4/$20, with no date. The estimate uses the standard rate:
+  // a /goal budget sized on the promo would silently halve once it ends, and Argon already writes about
+  // 2x the output tokens per task of its peers. Metered usage supersedes this after the first run.
+  [/gemini-?\d+(?:\.\d+)?-argon/, { inPerM: 4.0, outPerM: 20.0 }],
   [/gemini/, { inPerM: 1.25, outPerM: 10.0 }],
 ];
 const DEFAULT_PRICE: Price = { inPerM: 3.00, outPerM: 15.0 }; // sonnet-ish, when nothing matches

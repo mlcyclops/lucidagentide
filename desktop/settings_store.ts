@@ -954,6 +954,9 @@ export function resetJudgeBans(): GuiSettings {
 /** P-JEV.1: the omp `--config` overlay LUCID rewrites at every spawn, beside the settings file so the
  *  LUCID_GUI_SETTINGS_FILE isolation seam isolates it too. */
 export function judgmentOverlayFile(): string { return join(dirname(settingsFile()), "lucid-judgment.yml"); }
+/** P-MODEL.8 (ADR-0448): the omp `--config` overlay carrying the heavy model roles (model_roles.ts). Same
+ *  directory and isolation seam as the judgment overlay. */
+export function modelRolesOverlayFile(): string { return join(dirname(settingsFile()), "lucid-model-roles.yml"); }
 /** ADR-0221: the stored embeddings config (non-secret), or null when semantic search was never set up. */
 export type StoredEmbeddingsConfig = NonNullable<GuiSettings["embeddings"]>;
 export function embeddingsConfig(): StoredEmbeddingsConfig | null { return load().embeddings ?? null; }

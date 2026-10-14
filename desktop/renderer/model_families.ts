@@ -238,6 +238,7 @@ export function capabilityTier(value: string): 0 | 1 | 2 {
   const gv = gptVersion(s);
   if (gv !== null && gv >= 5) return 2;                                   // gpt-5/6/7… incl. tier codenames
   if (/opus|pro|max|fable|mythos|ultra|grok|gpt-o/.test(s)) return 2;     // `grok` folded in from startup_model
+  if (/gemini-\d+(?:\.\d+)?-argon/.test(s)) return 2;                     // P-MODEL.8: Gemini 4 Argon, Google's flagship (no "pro" in the id)
   return 1;
 }
 /** Compare two model ids by LEVEL — highest capability first, then newest version, then alpha. Unlike
@@ -269,12 +270,23 @@ export function topModel<T extends { value: string }>(models: readonly T[], acce
 // than a decision. Landing a new flagship is now a deliberate one-line edit HERE, reviewed like any other
 // product choice, and can never be an emergent property of a number.
 
+/** P-MODEL.8: the ONE deliberate small-tier default. When Google is the provider on offer, the session
+ *  opens on Gemini 3.8 Flash, not on a Pro and never on Gemini 4 Argon: Argon is the flagship
+ *  (capabilityTier 2) but bills heavily (about 2x the output tokens per task of its peers, at an
+ *  introductory rate Google says will double), so it is reserved for the heavy omp roles instead of every
+ *  turn (desktop/model_roles.ts). Exact id, end-anchored: it admits `gemini-3.8-flash` / `gemini-3-8-flash`
+ *  and nothing else (no -lite, -tts, -live), which is why preferredDefaultModel exempts it from the
+ *  small-model guard. */
+export const GEMINI_DEFAULT = /gemini-3[-.]8-flash(?![\w.-])/;
+
 /** P-MODEL.2: the ordered list of ids we deliberately want a FRESH install to open on, best first.
  *  Matched UNANCHORED against the provider-stripped, lowercased id (`bareId`, hence no `i` flag), so a gov
  *  copy (`asksage-anthropic/google-claude-fable-5`) hits the same entry as the direct route and the two are
  *  separated by cmpModelsByLevel. Every entry ends in `(?![\w.-])` = "the id stops here", so
  *  `claude-opus-5` can never also match `claude-opus-5-mini` at the wrong rank, and each optional
- *  tier-codename group excludes the small-model tokens so no entry can select a tier-0 model. */
+ *  tier-codename group excludes the small-model tokens so no entry can select a tier-0 model, with ONE
+ *  deliberate exception, GEMINI_DEFAULT. Google sits below every Claude/GPT flagship, so a Gemini default
+ *  only applies when no curated Anthropic/OpenAI model is on offer. */
 export const DEFAULT_MODEL_PREFERENCE: readonly RegExp[] = [
   /claude-opus-5[-.]5(?![\w.-])/,                                       // Opus 5.5 (2026-09-22): Fable-5.1-level on most work, 40% cheaper to run than Opus 5
   /claude-opus-5(?![\w.-])/,                                            // Opus 5: 1M ctx Anthropic flagship, the prior house default
@@ -295,6 +307,7 @@ export const DEFAULT_MODEL_PREFERENCE: readonly RegExp[] = [
   /claude-sonnet-5(?![\w.-])/,
   /gpt-5[-.]6(?:-(?!mini|nano|lite|flash|oss)[a-z]+)?(?![\w.-])/,       // 5.6 + the gov tier codenames (luna/sol/terra)
   /claude-opus-4[-.]8(?![\w.-])/,
+  GEMINI_DEFAULT,
   /gemini-3[-.]1-pro(?:-(?!mini|nano|lite|flash|oss)[a-z]+)?(?![\w.-])/, // the gov gateway exposes it as …-pro-com
 ];
 
@@ -316,10 +329,11 @@ export function preferredDefaultModel<T extends { value: string }>(
   if (!survivors.length) return null;
   for (const pat of DEFAULT_MODEL_PREFERENCE) {
     // The capabilityTier guard is belt-and-braces: no curated entry may EVER resolve to a small model, even
-    // if a vendor invents a suffix ("-tiny") that a pattern happens to admit before we notice.
+    // if a vendor invents a suffix ("-tiny") that a pattern happens to admit before we notice. The one
+    // exemption is GEMINI_DEFAULT, an exact id chosen BECAUSE it is the fast tier (P-MODEL.8).
     let best: T | null = null;
     for (const m of survivors) {
-      if (!pat.test(bareId(m.value)) || capabilityTier(m.value) === 0) continue;
+      if (!pat.test(bareId(m.value)) || (capabilityTier(m.value) === 0 && pat !== GEMINI_DEFAULT)) continue;
       if (!best || cmpModelsByLevel(m.value, best.value) < 0) best = m;
     }
     if (best) return best;

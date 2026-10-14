@@ -347,6 +347,8 @@ const MODEL_CTX: Record<string, number> = {
   "aws-bedrock-claude-45-sonnet-gov": 200_000, "claude-opus-4": 200_000, "claude-sonnet-4": 200_000,
   "google-gemini-3.1-pro-com": 1_000_000, "google-gemini-3.5-flash-gov": 1_000_000,
   "google-gemini-2.5-pro": 1_000_000, "google-gemini-2.5-flash": 1_000_000,
+  // P-MODEL.8: Gemini 4 Argon and 3.8 Flash on the API-key route: 1M input per Google's /v1beta/models.
+  "gemini-4-argon": 1_000_000, "gemini-3.8-flash": 1_000_000,
   "rag": 256_000,
 };
 // Provider-prefixed ids (`xai-oauth/grok-4.7`, `openai-codex/gpt-6-sol`) fall back to the bare id, the
@@ -18450,7 +18452,13 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   "gemini-3.1-pro-preview": { exp: 4, iq: 5, eff: "Preview of Gemini 3.1 Pro - flagship reasoning, 1M context.", best: "Complex reasoning + huge-context analysis (preview).", ctx: "1M" },
   "gemini-3-pro": { exp: 4, iq: 5, eff: "Gemini 3 Pro - top-tier reasoning, 1M context.", best: "Hard bugs, architecture, complex reasoning.", ctx: "1M" },
   "gemini-3-pro-preview": { exp: 4, iq: 5, eff: "Preview of Gemini 3 Pro - top-tier reasoning, 1M context.", best: "Complex reasoning + architecture (preview).", ctx: "1M" },
-  "gemini-3.8-flash": { exp: 1, iq: 3, eff: "Fast, cost-efficient Gemini 3.8 Flash, the current Flash line; 1M context.", best: "Quick edits, lookups, high-volume long-context tasks.", ctx: "1M" },
+  // P-MODEL.8: Gemini 4 Argon (2026-09-30) is Google's flagship. `exp: 5` is the real bill, not the
+  // sticker: $2/$10 per Mtok is an introductory rate Google says rises to $4/$20 (undated), and Artificial
+  // Analysis measured about 62K output tokens per task against GPT-6 Astra's 27K. So it is never the
+  // default; a Gemini session opens on 3.8 Flash and hands Thinking / Architect / Subtask work to Argon
+  // (desktop/model_roles.ts). Output is capped at 32,768 tokens on the API today.
+  "gemini-4-argon": { exp: 5, iq: 5, eff: "Google's flagship Gemini 4 Argon, 1M context. Expensive: an introductory $2/$10 per Mtok that Google says will double, and about twice the output tokens per task of its peers.", best: "Hard engineering, deep research, architecture, and subagent work. LUCID routes those to it from a Gemini session.", ctx: "1M" },
+  "gemini-3.8-flash": { exp: 1, iq: 3, eff: "Fast, cost-efficient Gemini 3.8 Flash, the current Flash line and LUCID's Gemini default; 1M context.", best: "Everyday turns, quick edits, lookups, high-volume long-context tasks.", ctx: "1M" },
   "gemini-3.5-flash": { exp: 1, iq: 3, eff: "Fast, cost-efficient Gemini 3.5 Flash; 1M context.", best: "Quick edits, lookups, high-volume long-context tasks.", ctx: "1M" },
   "gemini-3-flash": { exp: 1, iq: 3, eff: "Fast, cost-efficient Gemini 3 Flash; 1M context.", best: "Quick edits, lookups, high-volume tasks.", ctx: "1M" },
   "gemini-3-flash-preview": { exp: 1, iq: 3, eff: "Preview of Gemini 3 Flash - fast + cheap; 1M context.", best: "Quick edits + high-volume tasks (preview).", ctx: "1M" },

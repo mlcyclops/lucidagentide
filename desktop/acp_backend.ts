@@ -40,7 +40,8 @@ import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, resolveOmpBin } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
 import { gatePath, gateRefusal, repoAsset, resolvedRepo } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
-import { asksageOnly, attribution, checkerModel, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
+import { asksageOnly, attribution, checkerModel, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, modelRolesOverlayFile, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
+import { heavyRoleModel, writeModelRolesOverlay } from "./model_roles.ts"; // P-MODEL.8 (ADR-0448)
 import { judgeChain, resolveJudgmentProvider, writeJudgmentOverlay, type ResolvedJudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374) + P-JEV.5 (ADR-0416)
 import { bannedJudges, judgeBanEnv } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416): local judges that failed more than once
 import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
@@ -249,7 +250,11 @@ function ompConfigArgs(): string[] {
   // P-JEV.5 (ADR-0416): the judgment extension in the child skips a banned local judge in-process and counts
   // new failures against the same list; children inherit process.env, so this is set here, at every spawn.
   Object.assign(process.env, judgeBanEnv(plan.localProviders, plan.banned));
-  return [...args, "--config", overlay];
+  // P-MODEL.8 (ADR-0448): a Gemini session's Thinking / Architect / Subtask roles go to Gemini 4 Argon.
+  // Rewritten every spawn (an empty map when it does not apply) so a stale role never survives a switch.
+  const roles = modelRolesOverlayFile();
+  writeModelRolesOverlay(roles, heavyRoleModel({ chatModel: lastModel(), locked: asksageOnly() || managedAsksageOnly(), allowed: modelAllowed }));
+  return [...args, "--config", overlay, "--config", roles];
 }
 
 /** P-JEV.5 (ADR-0416): everything the judge chain is built from, read live: the stored choice under the

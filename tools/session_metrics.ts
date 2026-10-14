@@ -30,10 +30,14 @@ export const CTX_WINDOW: Record<string, number> = {
   "aws-bedrock-claude-45-sonnet-gov": 200_000, "claude-opus-4": 200_000, "claude-sonnet-4": 200_000,
   "google-gemini-3.1-pro-com": 1_000_000, "google-gemini-3.5-flash-gov": 1_000_000,
   "google-gemini-2.5-pro": 1_000_000, "google-gemini-2.5-flash": 1_000_000,
+  // P-MODEL.8: Gemini 4 Argon and 3.8 Flash on the API-key route (`google/…`): 1M input per Google's
+  // /v1beta/models (outputTokenLimit 32,768 for Argon, 65,536 for Flash).
+  "gemini-4-argon": 1_000_000, "gemini-3.8-flash": 1_000_000,
   "rag": 256_000,
 };
 export const shortModelId = (m: string): string => m.replace(/^anthropic\//, "").replace(/^asksage-[a-z]+\//, "");
-export const ctxWindow = (model: string): number => CTX_WINDOW[shortModelId(model)] ?? CTX_WINDOW[model] ?? 200_000;
+// The bare-id fallback matches app.ts modelCtx: `google/gemini-4-argon` otherwise never hit its row.
+export const ctxWindow = (model: string): number => CTX_WINDOW[shortModelId(model)] ?? CTX_WINDOW[model] ?? CTX_WINDOW[model.replace(/^[^/]*\//, "")] ?? 200_000;
 
 // ── omp session transcript ────────────────────────────────────────────────────
 export interface Turn {
