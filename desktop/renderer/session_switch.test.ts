@@ -5,7 +5,7 @@
 // one session in two omp processes.
 
 import { describe, expect, test } from "bun:test";
-import { liveBadge, planSessionSwitch, switchSheetCopy, type SwitchLane } from "./session_switch.ts";
+import { liveBadge, planSessionSwitch, switchOutcome, switchSheetCopy, type SwitchLane } from "./session_switch.ts";
 
 const lane = (id: string, sessionId: string | null, status: string): SwitchLane => ({ id, sessionId, status });
 
@@ -73,5 +73,35 @@ describe("switchSheetCopy", () => {
     expect(c.spoke).toBe("Start it as a spoke");
     expect(c.stop).toBe("Stop it and start new");
     expect(c.spokeHint).toContain("A new session opens in its own spoke");
+  });
+});
+
+// #460 cases 3+4: the answer to the actual load/new POST decides, because the plan above was made from
+// the renderer's own view, which can be stale (a goal or automation starting between the check and the
+// load) or missing (fleetStatus unreachable). The engine's registry (ADR-0404) is the authority.
+describe("switchOutcome", () => {
+  test("heldBy attaches to the holding spoke, whatever the renderer's fleet view said (#460 case 4)", () => {
+    expect(switchOutcome({ ok: false, heldBy: { laneId: "L2" } }, "B")).toEqual({ kind: "attach", laneId: "L2" });
+  });
+
+  test("a busy 409 between turns shows the session the engine kept, not the target (#460 case 3)", () => {
+    expect(switchOutcome({ ok: false, busy: "a goal loop is running", sessionId: "A" }, "B"))
+      .toEqual({ kind: "show-holder", holderId: "A", reason: "a goal loop is running" });
+    // A refused New session already seeded an empty thread; that view is just as wrong as the target's.
+    expect(switchOutcome({ ok: false, busy: "a goal loop is running", sessionId: "A" }, null))
+      .toEqual({ kind: "show-holder", holderId: "A", reason: "a goal loop is running" });
+  });
+
+  test("a busy 409 on the target itself, or naming no session, rechecks the live turn as before", () => {
+    expect(switchOutcome({ ok: false, busy: "a turn is running", sessionId: "B" }, "B")).toEqual({ kind: "recheck", reason: "a turn is running" });
+    expect(switchOutcome({ ok: false, busy: "a turn is running" }, "B")).toEqual({ kind: "recheck", reason: "a turn is running" });
+  });
+
+  test("no answer is never a switch: an unreachable engine does not make the session free (#460 case 4)", () => {
+    expect(switchOutcome({ ok: false }, "B")).toEqual({ kind: "unconfirmed" });
+  });
+
+  test("ok means the engine switched", () => {
+    expect(switchOutcome({ ok: true }, "B")).toEqual({ kind: "done" });
   });
 });
