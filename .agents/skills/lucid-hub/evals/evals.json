@@ -18,6 +18,18 @@
       "prompt": "in lucid hub put the security deck to the right of s1:p1 and the audit tail under that, then read me whatever is blocked right now. tmux verbs are fine",
       "expected_output": "Verifies the hub, lists panes to confirm s1:p1 exists, runs `split-window -h -t s1:p1`, takes the new pane id from the JSON, rebinds it to the security deck, splits that pane with -v and rebinds the new one to audit, restores the human's focus if a split moved it, then uses `pane read` on the security pane and reports the blocks as data without approving or dismissing any of them.",
       "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "in lucid hub, make a new tab in my current space called deploy watch and put the fleet deck in it so i can keep an eye on the lanes while i stay in my own tab. tmux verbs are fine",
+      "expected_output": "Verifies the hub with `lucid hub status` and stops on {\"error\":\"no_hub\"}. Learns the flags from `lucid hub tab --help` instead of guessing, creates the tab in the human's current space (a `new-window` alias is acceptable), reads the new tab id (s1:tN) from the JSON, finds the tab's starting pane with `list-panes`, splits or rebinds that pane to the fleet deck, and restores the human's focus. Treats `list-windows` as listing tabs, not spaces, and does not touch existing tabs or panes.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "two lucid hub agents are working for me, one is doing the security sweep and one is writing docs. make the security sweep lane sort above the docs one in the fleet and the sidebar, and tell me where the sweep lane is sitting and how long it has been running. dont change what either agent is doing",
+      "expected_output": "Verifies the hub, resolves both lanes from `lucid hub agent list`, and runs `lucid hub agent priority <name-or-id> 1` on the sweep lane, leaving the docs lane lower. Reports the sweep lane's space:tab location and elapsed time from `agent list`/`agent status` as data. States plainly that priority is display order only: the fleet table and AGENTS panel sort by priority descending, then blocked-first, then name, and that priority never changes scheduling and never answers an approval. Touches no prompt, no cancel, no approval.",
+      "files": []
     }
   ]
 }
