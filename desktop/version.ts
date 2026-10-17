@@ -612,4 +612,19 @@
 //            titles on one readable line (#493, P-MARKET.1c, ADR-0446). ALSO: the symbol graph skips a
 //            TypeScript 7 stub (#486), Windows delete verbs are named destructive (#455), and the
 //            Defender / Agent 365 runbook is corrected (#461, ADR-0437). PRERELEASE: cask stays on 2.3.1.
-export const APP_VERSION = "2.4.0-beta.2";
+// v2.4.0 = beta.1 and beta.2 promoted to STABLE, plus everything merged since beta.2. SIGNED WINDOWS
+//            RELEASE (the headline): every Windows artifact (NSIS Setup, portable, MSI, AppX, the app exe and
+//            each bundled exe) is Authenticode-signed through Azure Artifact Signing with the certificate
+//            `CN=TECHLEAD 187 LLC` and RFC 3161 timestamped; the UAC prompt, Explorer's Details tab, Programs
+//            and Features, the AppX listing and the About dialog all name TECHLEAD 187 LLC (one string); the
+//            in-app updater refuses an update not signed by that publisher; a release run that cannot sign
+//            FAILS instead of shipping unsigned (P-RELEASE.6/.7, ADR-0447/0450). SmartScreen's "Windows
+//            protected your PC" is reputation-based and fades as signed downloads accumulate. macOS is still
+//            unsigned (no Apple certificate yet), so mac auto-update stays on Homebrew. MODELS: Gemini 4 Argon
+//            is the Gemini flagship (1M context), Gemini 3.8 Flash the Gemini default; on a Gemini session
+//            omp's heavy roles (thinking/plan/subagents) run on Argon (P-MODEL.8, ADR-0448). CONTROLLER: a
+//            paired external controller gets its own token scope (argon2id-hashed pairing store) and
+//            `/api/controller/*` on loopback only, supervised lanes only, every prompt through the
+//            fail-closed scanner first (P-CTRL.2, ADR-0438). A plain v2.4.0 tag, marked Latest, so the
+//            download buttons, the electron-updater feed and the Homebrew cask all follow it.
+export const APP_VERSION = "2.4.0";

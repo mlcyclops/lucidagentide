@@ -13,10 +13,32 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-10-09, v2.4.0-beta.2 prerelease; stable is v2.3.1)
+## Current state (2026-10-17, v2.4.0 stable)
 
 The original build plan (Increment 0-2 + Phases 2-7) closed long ago; work is
-now product increments, each with its own ADR. **v2.4.0-beta.2** (2026-10-09)
+now product increments, each with its own ADR. **v2.4.0** (2026-10-17) is the
+stable release: beta.1 and beta.2 promoted plus everything merged to master
+since beta.2, tagged `v2.4.0` and marked Latest, so the download buttons, the
+electron-updater feed and the Homebrew cask all move to it (the update-cask
+job pins stable tags). It is the first release whose Windows installers are
+Authenticode-signed: P-RELEASE.6 (ADR-0447) + P-RELEASE.7 (ADR-0450) sign the
+NSIS Setup, portable, MSI, AppX, the app exe and every bundled exe through
+Azure Artifact Signing with `CN=TECHLEAD 187 LLC`, RFC 3161 timestamped; the
+UAC prompt, Explorer's Details tab, Programs and Features, the AppX listing
+and the About dialog all name TECHLEAD 187 LLC (one string); the in-app
+updater refuses an update not signed by that publisher, and a release run
+that cannot sign fails instead of shipping unsigned. SmartScreen's "Windows
+protected your PC" is reputation-based and fades as signed downloads
+accumulate. macOS is still unsigned (no Apple certificate yet), so mac
+auto-update still goes through Homebrew. Also in 2.4.0: P-MODEL.8 (ADR-0448:
+Gemini 4 Argon is the Gemini flagship with 1M context, Gemini 3.8 Flash the
+Gemini default, and a Gemini session runs omp's thinking/plan/subagent roles
+on Argon) and P-CTRL.2 (ADR-0438: a paired external controller gets its own
+token scope in an argon2id-hashed pairing store and `/api/controller/*` on
+loopback only, supervised lanes only, prompts through the fail-closed scanner
+first). P-CTRL-RO.1 (ADR-0449) is spec only, no code. The scoped test gate
+measures 517 files / 6936 tests at the tag (locally 6932 pass, 4 skip). The
+2.4.0 beta channel stopped here. **v2.4.0-beta.2** (2026-10-09)
 is beta.1 plus six reviewed PRs: #494 (P-SETTINGS.1, ADR-0439: atomic settings
 save with a last-good backup, a corrupt file restored from it, and a file that
 exists but cannot be read reported instead of served as an empty profile),
@@ -26,9 +48,9 @@ line), #486 (the symbol graph skips a TypeScript 7 stub), #455 (Windows delete
 verbs named destructive) and #461 (ADR-0437: the Defender / Agent 365 runbook
 corrected). **v2.4.0-beta.1** (2026-10-09) opened the 2.4.0 train: omp 18.8.6
 with Claude Haiku 5.5, OpenAI device-code sign-in, MXC behind the Windows
-sandbox, scheduled jobs and Fleet grid fixes. Betas are GitHub prereleases:
-never offered to stable installs, and the cask and `latest` links stay on
-2.3.1 until 2.4.0 is promoted. The hub stack (#466-#480, #463, #473, #468),
+sandbox, scheduled jobs and Fleet grid fixes. Both betas were GitHub
+prereleases: never offered to stable installs, with the cask and `latest`
+links on 2.3.1 until 2.4.0 promoted them. The hub stack (#466-#480, #463, #473, #468),
 #488, #492 and #457 wait on review fixes; the review recommends closing #489
 (superseded by #492) and #351 (TypeScript 7 drops the compiler API).
 **v2.3.1** (2026-10-01) is
