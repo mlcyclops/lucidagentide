@@ -89,7 +89,9 @@ try {
   let frame = hub.render(140).join("\n");
   assert(frame.includes("◎ Agents"), "key 9 rebinds the focused pane to the Agents deck");
   assert(frame.includes("no agents running"), "an empty fleet teaches the spawn and attach keys");
-  assert(frame.includes("▦ Spaces"), "the sidebar lists the Spaces deck too");
+  hub.handleInput("b"); // P-TUI.5: the spaces rail is open by default; closed, the deck list shows
+  assert(hub.render(140).join("\n").includes("▦ Spaces"), "the sidebar lists the Spaces deck too");
+  hub.handleInput("b");
 
   console.log("\n[2] n spawns a REAL lane (the existing spawn flow opens it HERE); 9 shows its row");
   hub.handleInput("n");

@@ -10,7 +10,8 @@
 //       squatter never receives a token
 //   [2] the headless hub publishes hub-discovery-<pid>.json (0600) and wins the nonce handshake
 //   [3] split-window via the CLI changes the tree; pane read returns the rendered pane text
-//   [4] spaces: new-window / select-window / rename / kill round-trip; last space refuses; ids never reused
+//   [4] spaces: new-session / switch-client / rename-session / kill-session round-trip (P-TUI.5,
+//       ADR-0433: a tmux SESSION is a space, a window is a tab); last space refuses; ids never reused
 //   [5] agent ops proxy to the live engine's /api/fleet routes (list, spawn, prompt, read, cancel)
 //   [6] control auth: wrong token 403, browser Origin 403
 //   [7] SIGTERM removes the discovery file; the layout restores on the next launch
@@ -114,17 +115,17 @@ try {
   assert(sk.code === 1 && sk.err.error === "not_agent", "send-keys into a deck pane is refused: the hub keymap (approve, whitelist) is not scriptable");
 
   console.log("\n[4] spaces round-trip");
-  const nw = await hub<SpaceRow>("new-window", "-n", "work");
-  assert(nw.code === 0 && nw.out.id === "s2" && nw.out.active, "new-window -n work -> s2, now active");
-  const sw = await hub<SpaceRow>("select-window", "-t", "s1");
-  assert(sw.code === 0 && sw.out.active, "select-window -t s1 switches back");
-  const rw = await hub<SpaceRow>("rename-window", "-t", "s2", "ops");
-  assert(rw.out.name === "ops", "rename-window -t s2 ops");
-  const lw = await hub<SpaceRow[]>("list-windows");
-  assert(lw.out.map((s) => `${s.id}:${s.name}:${s.active}`).join() === "s1:main:true,s2:ops:false", "list-windows: s1 main (active), s2 ops");
-  const kw = await hub<{ closed: string }>("kill-window", "-t", "s2");
-  assert(kw.code === 0 && kw.out.closed === "s2", "kill-window -t s2");
-  const kl = await hub("kill-window");
+  const nw = await hub<SpaceRow>("new-session", "-s", "work");
+  assert(nw.code === 0 && nw.out.id === "s2" && nw.out.active, "new-session -s work -> s2, now active");
+  const sw = await hub<SpaceRow>("switch-client", "-t", "s1");
+  assert(sw.code === 0 && sw.out.active, "switch-client -t s1 switches back");
+  const rw = await hub<SpaceRow>("rename-session", "-t", "s2", "ops");
+  assert(rw.out.name === "ops", "rename-session -t s2 ops");
+  const lw = await hub<SpaceRow[]>("list-sessions");
+  assert(lw.out.map((s) => `${s.id}:${s.name}:${s.active}`).join() === "s1:main:true,s2:ops:false", "list-sessions: s1 main (active), s2 ops");
+  const kw = await hub<{ closed: string }>("kill-session", "-t", "s2");
+  assert(kw.code === 0 && kw.out.closed === "s2", "kill-session -t s2");
+  const kl = await hub("kill-session");
   assert(kl.code === 1 && kl.err.error === "last_space", "closing the last space refuses (last_space)");
   await hub("kill-pane", "-t", "s1:p2");
   const sv = await hub<{ pane: string; layout: string }>("split-window", "-v");

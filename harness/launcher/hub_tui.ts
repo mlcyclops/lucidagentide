@@ -12,8 +12,8 @@
 // this client scans nothing and releases nothing by itself; the Security deck's a/i call the same
 // audited human-only routes as the GUI panel.
 //
-// Keys: | split right, - split down, tab/shift+tab focus ring, z zoom, x close, b sidebar,
-// 1-6 rebind the focused pane, j/k select rows, a approve / i dismiss (Security), r refresh, q quit.
+// Keys: | split right, - split down, tab/shift+tab focus ring, z zoom, x close, b rail, B rail keys,
+// 1-9,0 rebind the focused pane, j/k select rows, a approve / i dismiss (Security), r refresh, q quit.
 // Chat deck, palette and directional focus/resize are the rest of P-TUI.1.
 //
 // P-TUI.3 (ADR-0436): the layout lives in SPACES (hub_spaces.ts: named root layouts, stable pane ids
@@ -21,15 +21,21 @@
 // loopback control server (hub_control.ts) lets an agent drive this hub. `lucid hub --headless` is
 // this same hub with no terminal attached.
 //
+// P-TUI.5 (ADR-0433): spaces hold TABS (hub_spaces.ts v2), and a persistent left RAIL lists every
+// space with its tabs beneath (focus marker, pane counts, live lane badges), with an AGENTS region
+// under it for the sibling increment to fill (RailAgentsPanel). Clicks are live: pi-tui's fullscreen
+// overlay turns on SGR mouse reporting, a click on a rail row focuses that space or tab, a click on a
+// pane focuses the pane. Row geometry -> action is pure (railRows, paneRects, clickTarget).
+//
 // The colors are the desktop design system (styles.css → the P-THEME.1 palette), so the hub and the
 // gated `lucid tui` read as one product: LUCID magenta chrome, cyan focus, the styles.css status hues.
 
 import chalk from "@oh-my-pi/pi-utils/chalk";
-import { matchesKey, ProcessTerminal, TUI, truncateToWidth, type Component } from "@oh-my-pi/pi-tui";
+import { matchesKey, parseSgrMouse, ProcessTerminal, TUI, truncateToWidth, type Component } from "@oh-my-pi/pi-tui";
 import { join } from "node:path";
 import { discoveryDir, listDiscoveries, verifyDiscovery, type EngineDiscovery } from "../../desktop/engine_discovery.ts";
 import { createHubExecutor, startHubControl } from "./hub_control.ts";
-import { HubOpError, leaves, loadSpaces, saveSpaces, Spaces, spacesPath, type PaneDeck, type PaneLeaf, type PaneNode } from "./hub_spaces.ts";
+import { HubOpError, leaves, loadSpaces, saveSpaces, Spaces, spacePanes, spacesPath, type PaneDeck, type PaneLeaf, type PaneNode } from "./hub_spaces.ts";
 import { parseHubCommand, tokenize, type HubOp } from "./hub_tmux_verbs.ts";
 
 // styles.css palette (desktop/renderer/styles.css) - the single source of the brand.
@@ -139,6 +145,121 @@ export function spaceTableLines(spaces: readonly HubSpace[], selected: number): 
     return `${i === selected ? "▸" : " "} ${s.focused ? "●" : " "} ${truncateToWidth(s.name, 28).padEnd(28)} ${panes} pane${panes === 1 ? "" : "s"}`;
   });
   return ["", ...rows, "", "  ⏎ focus · n new · r rename · x close"];
+}
+
+// ---- P-TUI.5: the rail (spaces + tabs, then the AGENTS region) and click hit-testing -------------
+// Pure on purpose: a headless run cannot send a real mouse event, so what a click MEANS is decided
+// here from row geometry alone and unit-tested; the component only forwards (col,row) and acts.
+
+/** One physical rail line. The rail is a column of these, top to bottom, 1:1 with screen rows. */
+export type RailRow =
+  | { kind: "gap" }
+  | { kind: "spaces-head"; count: number }
+  | { kind: "space"; id: string; name: string; focused: boolean; panes: number }
+  | { kind: "tab"; id: string; space: string; name: string; active: boolean; focused: boolean; panes: number; lanes: string[]; last: boolean }
+  | { kind: "agents-head"; count: number | null };
+
+/** The seam for the rail's AGENTS region (P-TUI.5 E2, branch feat/p-tui.5-agents-panel). This
+ *  increment renders only the section header (with rows().length when a panel is attached); E2 draws
+ *  rows() under it, adds its click branch to clickTarget, and routes clicks and priority keys here. */
+export interface RailAgentsPanel {
+  rows(): { id: string; name: string; location: string; status: string; priority: number }[];
+  onClick(id: string): void;
+  onPriority(id: string, n: number): void;
+}
+
+/** The rail's rows from the model: SPACES header, each space with its tabs indented beneath, then the
+ *  AGENTS header. `agents` = the attached panel's row count, null when none is attached. */
+export function railRows(spaces: Spaces, agents: number | null = null): RailRow[] {
+  const rows: RailRow[] = [{ kind: "gap" }, { kind: "spaces-head", count: spaces.spaces.length }];
+  for (const s of spaces.spaces) {
+    const focused = s.id === spaces.active;
+    rows.push({ kind: "space", id: s.id, name: s.name, focused, panes: spacePanes(s) });
+    s.tabs.forEach((t, i) => {
+      const ring = leaves(t.tree);
+      const lanes = [...new Set(ring.flatMap((l) => (l.deck === "agent" && l.lane ? [l.lane] : [])))];
+      rows.push({ kind: "tab", id: t.id, space: s.id, name: t.name, active: s.activeTab === t.id, focused: focused && s.activeTab === t.id, panes: ring.length, lanes, last: i === s.tabs.length - 1 });
+    });
+  }
+  rows.push({ kind: "gap" }, { kind: "agents-head", count: agents });
+  return rows;
+}
+
+/** Painters for the parts of a rail line. Identity = plain text (tests); the hub passes colors. */
+export interface RailPaint {
+  head(s: string, row: RailRow): string;
+  mark(s: string, row: RailRow): string;
+  name(s: string, row: RailRow): string;
+  lanes(s: string, row: RailRow): string;
+  count(s: string, row: RailRow): string;
+}
+const PLAIN = (s: string): string => s;
+const PLAIN_PAINT: RailPaint = { head: PLAIN, mark: PLAIN, name: PLAIN, lanes: PLAIN, count: PLAIN };
+
+/** One rail line, exactly `w` cells wide: marker + name on the left (the name ellipsizes, never
+ *  wraps: invariant 11), badges on the right. The LUCID glyph family, not bullets: ◆ marks the focused
+ *  space (◇ the others) behind an accent bar, ▦ heads SPACES, ◎ heads AGENTS and badges a tab's lanes,
+ *  ▣ counts panes. */
+export function railLine(row: RailRow, w: number, paint: RailPaint = PLAIN_PAINT): string {
+  let mark = "";
+  let name = "";
+  let lanes = "";
+  let count = "";
+  switch (row.kind) {
+    case "gap": return " ".repeat(w);
+    case "spaces-head": mark = " ▦ "; name = "SPACES"; count = `${row.count} `; break;
+    case "agents-head": mark = " ◎ "; name = "AGENTS"; count = row.count === null ? "" : `${row.count} `; break;
+    case "space": mark = `${row.focused ? "▎◆" : " ◇"} `; name = row.name; count = `${row.panes}▣ `; break;
+    case "tab": mark = `   ${row.last ? "└" : "├"} `; name = row.name; lanes = row.lanes.length ? `◎${row.lanes.length} ` : ""; count = `${row.panes}▣ `; break;
+  }
+  const room = Math.max(1, w - Bun.stringWidth(mark) - Bun.stringWidth(lanes) - Bun.stringWidth(count) - 1);
+  const cut = truncateToWidth(name, room);
+  const pad = Math.max(1, w - Bun.stringWidth(mark) - Bun.stringWidth(cut) - Bun.stringWidth(lanes) - Bun.stringWidth(count));
+  const head = row.kind === "spaces-head" || row.kind === "agents-head";
+  return head
+    ? paint.head(mark + cut, row) + " ".repeat(pad) + paint.count(count, row)
+    : paint.mark(mark, row) + paint.name(cut, row) + " ".repeat(pad) + paint.lanes(lanes, row) + paint.count(count, row);
+}
+
+/** A pane's screen rectangle inside the pane region; `index` is its place in the focus ring. */
+export interface PaneRect { index: number; x: number; y: number; w: number; h: number }
+
+/** Pane rectangles for a tree, with the SAME floor arithmetic the renderer splits by. */
+export function paneRects(node: PaneNode, w: number, h: number, x = 0, y = 0, ring = { i: 0 }): PaneRect[] {
+  if (node.kind === "leaf") return [{ index: ring.i++, x, y, w, h }];
+  if (node.dir === "v") {
+    const wa = Math.floor(w * (node.ratio ?? 0.5));
+    return [...paneRects(node.a, wa, h, x, y, ring), ...paneRects(node.b, w - wa, h, x + wa, y, ring)];
+  }
+  const ha = Math.floor(h * (node.ratio ?? 0.5));
+  return [...paneRects(node.a, w, ha, x, y, ring), ...paneRects(node.b, w, h - ha, x, y + ha, ring)];
+}
+
+/** The frame's clickable geometry as last rendered: a left column `left` cells wide (the rail when
+ *  `rail` is set, else the deck list), body rows from screen row `top` for `height` rows. */
+export interface HubGeometry { left: number; rail: RailRow[] | null; top: number; height: number; panes: PaneRect[] }
+
+export type HubClick =
+  | { kind: "space"; id: string; row: number }
+  | { kind: "tab"; id: string; row: number }
+  | { kind: "spaces-head"; row: number }
+  | { kind: "pane"; index: number };
+
+/** What a left click at 0-based screen (col,row) means. Rail rows map to their space/tab; anything
+ *  right of the rail falls through to the pane under it; chrome, gaps and headers-without-action are
+ *  null (a click there does nothing). */
+export function clickTarget(g: HubGeometry, col: number, row: number): HubClick | null {
+  const y = row - g.top;
+  if (y < 0 || y >= g.height || col < 0) return null;
+  if (col < g.left) {
+    const r = g.rail?.[y];
+    if (r?.kind === "space" || r?.kind === "tab") return { kind: r.kind, id: r.id, row: y };
+    if (r?.kind === "spaces-head") return { kind: "spaces-head", row: y };
+    return null;
+  }
+  const x = col - g.left;
+  const hit = g.panes.find((p) => x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + p.h);
+  return hit ? { kind: "pane", index: hit.index } : null;
 }
 
 /** Pure deck bodies: plain rows (no ANSI - styling is a later pass), each row one physical line. */
@@ -277,7 +398,7 @@ export function pickerMatches(pk: { models: ModelOption[]; filter: string }): Mo
 }
 
 /** The status-bar teaching line, per focused surface: what THIS pane responds to right now. */
-export const DECK_HINTS: Record<DeckId | "agent" | "prompting", string> = {
+export const DECK_HINTS: Record<DeckId | "agent" | "prompting" | "rail", string> = {
   overview: "| - split · tab focus · 1-9,0 decks",
   security: "j/k select · a approve · i dismiss",
   fleet: "n new agent · j/k select · ⏎ open agent here",
@@ -290,6 +411,7 @@ export const DECK_HINTS: Record<DeckId | "agent" | "prompting", string> = {
   spaces: "j/k select · ⏎ focus · n new space · r rename · x close space",
   agent: "⏎ prompt · m model · j/k scroll · G live · y/s/d answer ask · x close",
   prompting: "type your prompt · ⏎ send · esc cancel",
+  rail: "rail: j/k select · ⏎ focus · r rename · n new tab (new space on ▦ SPACES) · esc back to panes",
 };
 
 /** Style one plain deck row (widths already fixed - only color changes here, never geometry). */
@@ -362,6 +484,7 @@ interface HubUi { requestRender(): void; terminal: { rows: number } }
 
 const POLL_MS = 2000;
 const SIDEBAR_W = 20;
+const RAIL_W = 28;
 
 export class HubComponent implements Component {
   readonly #ui: HubUi;
@@ -372,13 +495,19 @@ export class HubComponent implements Component {
   readonly #done = Promise.withResolvers<void>();
   readonly #spaces: Spaces;
   readonly #exec: (op: HubOp) => Promise<unknown>;
-  // The focused space's tree/focus/zoom: every pane key below reads and writes the ACTIVE space.
-  get #tree(): PaneNode { return this.#spaces.current.tree; }
-  get #focus(): number { return this.#spaces.current.focus; }
-  set #focus(i: number) { this.#spaces.current.focus = i; }
-  get #zoom(): boolean { return this.#spaces.current.zoom; }
-  set #zoom(z: boolean) { this.#spaces.current.zoom = z; }
-  #sidebar = true;
+  // The focused tab's tree/focus/zoom: every pane key below reads and writes the tab on screen.
+  get #tree(): PaneNode { return this.#spaces.tab.tree; }
+  get #focus(): number { return this.#spaces.tab.focus; }
+  set #focus(i: number) { this.#spaces.tab.focus = i; }
+  get #zoom(): boolean { return this.#spaces.tab.zoom; }
+  set #zoom(z: boolean) { this.#spaces.tab.zoom = z; }
+  /** The keyboard is on the rail (B or a rail click); esc or a pane click hands it back. */
+  #railFocus = false;
+  #railSel = 0; // rail row index (railRows), meaningful while #railFocus
+  /** Clickable geometry of the last rendered frame (null before the first render). */
+  #geom: HubGeometry | null = null;
+  /** The rail's AGENTS region (P-TUI.5 E2 attaches it); null renders the header alone. */
+  agentsPanel: RailAgentsPanel | null = null;
   #help = false;
   #selected = 0;
   #scroll = 0; // agent-pane scrollback offset, lines up from the live tail (0 = follow)
@@ -389,7 +518,7 @@ export class HubComponent implements Component {
   #watchers: Record<string, AbortController> = {};
   #prompt: { lane: string; text: string } | null = null;
   #picker: { lane: string; models: ModelOption[]; sel: number; filter: string; busy?: boolean } | null = null;
-  #promptKind: "agent" | "wl-add" | "kg-filter" | "command" | "space-rename" = "agent";
+  #promptKind: "agent" | "wl-add" | "kg-filter" | "command" | "space-rename" | "tab-rename" = "agent";
   #kgFilter = "";
   #reader: { title: string; rows: string[] } | null = null;
   #data: HubData | null = null;
@@ -574,6 +703,14 @@ export class HubComponent implements Component {
   }
 
   handleInput(data: string): void {
+    // Mouse reports come FIRST, before any mode: with reporting on, every pointer move is an input
+    // event, and one must never close help, type "[<0;12;5M" into a composer or a filter, or reach
+    // the keymap. Only a left-button press acts (clicks only: no drag, no wheel, no hover).
+    if (data.startsWith("\x1b[<")) {
+      const ev = parseSgrMouse(data);
+      if (ev?.leftClick) this.#click(ev.col, ev.row);
+      return;
+    }
     // Enter arrives as \r, \n or \r\n depending on the terminal's line discipline; byte-exact
     // matching silently killed the key on CRLF terminals (field report 2026-09-28).
     const isEnter = data === "\r" || data === "\n" || data === "\r\n" || matchesKey(data, "enter");
@@ -631,6 +768,22 @@ export class HubComponent implements Component {
       return;
     }
     if (matchesKey(data, "ctrl+c") || data === "q") { this.#done.resolve(); return; }
+    // Rail keys, while the keyboard is on the rail. Anything else falls through to the pane keymap.
+    if (this.#railFocus && this.#spaces.rail) {
+      const rows = this.#railRows();
+      if (matchesKey(data, "escape")) { this.#railFocus = false; this.#ui.requestRender(); return; }
+      if (data === "j" || data === "k" || matchesKey(data, "down") || matchesKey(data, "up")) {
+        const step = data === "j" || matchesKey(data, "down") ? 1 : -1;
+        for (let i = this.#railSel + step; i >= 0 && i < rows.length; i += step)
+          if (rows[i]!.kind === "space" || rows[i]!.kind === "tab" || rows[i]!.kind === "spaces-head") { this.#railSel = i; break; }
+        this.#ui.requestRender();
+        return;
+      }
+      const row = rows[this.#railSel];
+      if (isEnter) { this.#railActivate(row); return; }
+      if (data === "r") { this.#railRename(row); return; }
+      if (data === "n") { this.#railCreate(row); return; }
+    }
     if (data === "?") { this.#help = true; this.#ui.requestRender(); return; }
     const count = leaves(this.#tree).length;
     const sp = this.#spaces;
@@ -638,7 +791,8 @@ export class HubComponent implements Component {
     else if (matchesKey(data, "tab")) { this.#focus = (this.#focus + 1) % count; this.#selected = 0; this.#scroll = 0; }
     else if (matchesKey(data, "shift+tab")) { this.#focus = (this.#focus + count - 1) % count; this.#selected = 0; this.#scroll = 0; }
     else if (data === "z") this.#zoom = !this.#zoom;
-    else if (data === "b") this.#sidebar = !this.#sidebar;
+    else if (data === "b") { sp.setRail(!sp.rail); if (!sp.rail) this.#railFocus = false; }
+    else if (data === "B") { if (!sp.rail) sp.setRail(true); this.#railFocus = true; this.#railSel = this.#focusedTabRow(); }
     else if (data === ":") { this.#promptKind = "command"; this.#prompt = { lane: "", text: "" }; }
     else if (data === "x" && this.#focusedDeck() === "agents") { void this.#dismissLane(); return; }
     else if (data === "x" && this.#focusedDeck() === "spaces") { this.#closeSpace(); return; }
@@ -827,10 +981,11 @@ export class HubComponent implements Component {
         // Same parser + executor as `lucid hub <cmd>`: what works typed works scripted.
         const r = await this.exec(parseHubCommand(tokenize(text)));
         this.#status = `:${text} → ${truncateToWidth(JSON.stringify(r) ?? "ok", 120)}`;
-      } else if (kind === "space-rename") {
-        // p.lane carries the SPACE id here; a refused rename (HubOpError) surfaces verbatim in the catch.
-        this.#spaces.rename(p.lane, text);
-        this.#status = `space renamed → ${text}`;
+      } else if (kind === "space-rename" || kind === "tab-rename") {
+        // p.lane carries the SPACE or TAB id here; a refused rename (HubOpError) surfaces verbatim in the catch.
+        if (kind === "space-rename") this.#spaces.rename(p.lane, text);
+        else this.#spaces.renameTab(p.lane, text);
+        this.#status = `${kind === "space-rename" ? "space" : "tab"} renamed → ${text}`;
       } else if (kind === "wl-add") {
         // Same audited whitelist route the GUI settings panel drives (P-NETWL.2). IP/CIDR-looking
         // input files as an ip entry; anything else is a domain pattern. Internal zone, standing.
@@ -844,7 +999,7 @@ export class HubComponent implements Component {
         this.#status = "prompt sent";
       }
     } catch (err) {
-      this.#status = kind === "command" ? `:${text} → ${err instanceof HubOpError ? err.code : "error"}: ${err instanceof Error ? err.message : String(err)}` : kind === "space-rename" ? `rename refused: ${err instanceof Error ? err.message : String(err)}` : `${kind === "wl-add" ? "whitelist" : "prompt"} failed: ${err instanceof Error ? err.message : String(err)}`;
+      this.#status = kind === "command" ? `:${text} → ${err instanceof HubOpError ? err.code : "error"}: ${err instanceof Error ? err.message : String(err)}` : kind === "space-rename" || kind === "tab-rename" ? `rename refused: ${err instanceof Error ? err.message : String(err)}` : `${kind === "wl-add" ? "whitelist" : "prompt"} failed: ${err instanceof Error ? err.message : String(err)}`;
     }
     await this.refresh();
   }
@@ -896,7 +1051,7 @@ export class HubComponent implements Component {
 
   /** The deck's rows: a projection of the model (pane count from each tree, focus from `active`). */
   #spaceRows(): HubSpace[] {
-    return this.#spaces.spaces.map((s) => ({ id: s.id, name: s.name, panes: leaves(s.tree).length, focused: s.id === this.#spaces.active }));
+    return this.#spaces.spaces.map((s) => ({ id: s.id, name: s.name, panes: spacePanes(s), focused: s.id === this.#spaces.active }));
   }
 
   #selectedSpace(): HubSpace | null {
@@ -944,6 +1099,94 @@ export class HubComponent implements Component {
       this.#status = `close refused: ${err instanceof Error ? err.message : String(err)}`;
     }
     this.#ui.requestRender();
+  }
+
+  // -- P-TUI.5: the rail. Every verb is the model's; a refusal surfaces verbatim. -------------------
+
+  #railRows(): RailRow[] {
+    return railRows(this.#spaces, this.agentsPanel ? this.agentsPanel.rows().length : null);
+  }
+
+  /** The rail row of the tab on screen: where the keyboard lands on B and after a create. */
+  #focusedTabRow(): number {
+    return Math.max(0, this.#railRows().findIndex((r) => r.kind === "tab" && r.focused));
+  }
+
+  #railDo(f: () => string): void {
+    try { this.#status = f(); } catch (err) {
+      if (!(err instanceof HubOpError)) throw err;
+      this.#status = `refused: ${err.message}`;
+    }
+    this.#ui.requestRender();
+  }
+
+  /** ⏎ or a click: focus that space or tab. The header only selects (n creates a space there). */
+  #railActivate(row: RailRow | undefined): void {
+    if (row?.kind === "space" || row?.kind === "tab") { this.#selected = 0; this.#scroll = 0; }
+    if (row?.kind === "space") this.#railDo(() => `space → ${this.#spaces.focus(row.id).name}`);
+    else if (row?.kind === "tab") this.#railDo(() => `tab → ${this.#spaces.focusTab(row.id).name}`);
+    else this.#ui.requestRender();
+  }
+
+  /** r: rename inline through the same composer the Spaces deck uses (lane carries the id). */
+  #railRename(row: RailRow | undefined): void {
+    if (row?.kind === "space" || row?.kind === "tab") {
+      this.#promptKind = row.kind === "space" ? "space-rename" : "tab-rename";
+      this.#prompt = { lane: row.id, text: row.name };
+    } else this.#status = "r renames the selected space or tab row";
+    this.#ui.requestRender();
+  }
+
+  /** n: a new tab under the selected space (or the selected tab's space); a new space on the header. */
+  #railCreate(row: RailRow | undefined): void {
+    if (row?.kind !== "space" && row?.kind !== "tab" && row?.kind !== "spaces-head") { this.#ui.requestRender(); return; }
+    this.#railDo(() => {
+      const msg = row.kind === "spaces-head"
+        ? `created space ${this.#spaces.create().name}`
+        : `created tab ${this.#spaces.createTab(row.kind === "space" ? row.id : row.space).name} in ${row.kind === "space" ? row.name : this.#spaces.current.name}`;
+      this.#railSel = this.#focusedTabRow();
+      this.#selected = 0; this.#scroll = 0;
+      return msg;
+    });
+  }
+
+  /** A left click at 0-based screen (col,row): a rail row focuses its space/tab and puts the keyboard
+   *  on the rail; a pane takes focus. A modal surface (help, reader, picker, a composer) owns input
+   *  until it closes, so a stray click never edits or dismisses it. */
+  #click(col: number, row: number): void {
+    if (this.#help || this.#reader || this.#picker || this.#prompt || !this.#geom) return;
+    const hit = clickTarget(this.#geom, col, row);
+    if (!hit) return;
+    if (hit.kind === "pane") {
+      if (hit.index !== this.#focus) { this.#focus = hit.index; this.#selected = 0; this.#scroll = 0; }
+      this.#railFocus = false;
+      this.#ui.requestRender();
+      return;
+    }
+    this.#railFocus = true;
+    this.#railSel = hit.row;
+    this.#railActivate(this.#geom.rail?.[hit.row]);
+  }
+
+  /** The rail column, exactly RAIL_W wide per row. The selected row (keyboard on the rail) inverts. */
+  #railBlock(rows: readonly RailRow[], h: number): string[] {
+    const w = RAIL_W - 1;
+    const lanes = arr(this.#data?.fleet.lanes).map(rec);
+    // A tab's ◎ badge is live: amber while one of its agents waits on you, green while one works.
+    const laneHue = (ids: string[]) => {
+      const mine = lanes.filter((l) => ids.includes(str(l.id)));
+      return mine.some((l) => rec(l.pendingApproval).summary) ? AMBER : mine.some((l) => str(l.status) === "working") ? GREEN : ACCENT_2;
+    };
+    const paint: RailPaint = {
+      head: (s) => ACCENT_2.bold(s),
+      mark: (s, r) => (r.kind === "space" && r.focused ? ACCENT(s) : TXT_3(s)),
+      name: (s, r) => (r.kind === "space" ? (r.focused ? TXT.bold(s) : TXT(s)) : r.kind === "tab" ? (r.focused ? CYAN.bold(s) : r.active ? TXT(s) : TXT_3(s)) : s),
+      lanes: (s, r) => (r.kind === "tab" ? laneHue(r.lanes)(s) : s),
+      count: (s) => TXT_3(s),
+    };
+    const body = rows.slice(0, h).map((r, i) => (this.#railFocus && i === this.#railSel ? chalk.inverse(TXT(railLine(r, w))) : railLine(r, w, paint)));
+    while (body.length < h) body.push(" ".repeat(w));
+    return body.map((l) => l + LINE("│"));
   }
 
   /** Remove the selected whitelist entry - standing access leaves the ledger the moment you say so. */
@@ -1022,7 +1265,14 @@ export class HubComponent implements Component {
       ["  tab / shift+tab", "move focus around the ring"],
       ["  z", "zoom the focused pane (again to unzoom)"],
       ["  x", "close the focused pane"],
-      ["  b", "show / hide the deck sidebar"],
+      ["  b", "open / close the spaces rail (closed: the deck list)"],
+      ["", ""],
+      ["Rail (b)", ""],
+      ["  click", "a space or tab focuses it · a pane focuses it"],
+      ["  B", "put the keyboard on the rail · esc gives it back"],
+      ["  j / k · ⏎", "select a row · focus that space or tab"],
+      ["  r", "rename the selected space or tab (inline)"],
+      ["  n", "new tab in that space (on ▦ SPACES: new space)"],
       ["", ""],
       ["Decks", ""],
       ["  1-9, 0", "put that deck in the focused pane"],
@@ -1210,8 +1460,9 @@ export class HubComponent implements Component {
       ACCENT.bold(" ◆ LUCID ") + TXT("HUB") +
       TXT_3(`  ·  engine 127.0.0.1:${this.#engine.port} · v${this.#engine.version}${this.#spawned ? " · spawned by hub" : ""}`);
     const right = q > 0 ? RED.bold(`⛨ ${q} blocked `) : "";
-    // The spaces, tmux-window style: the active one bracketed in the focus color.
-    const tabs = this.#spaces.spaces.map((s) => (s.id === this.#spaces.active ? CYAN.bold(`[${s.name}]`) : TXT_3(s.name))).join(" ");
+    // The active space and its tabs, tmux-status style: the tab on screen bracketed in the focus color.
+    const cur = this.#spaces.current;
+    const tabs = `${TXT(cur.name)} ${TXT_3("›")} ${cur.tabs.map((t) => (t.id === cur.activeTab ? CYAN.bold(`[${t.name}]`) : TXT_3(t.name))).join(" ")}`;
     const brandCut = truncateToWidth(`${brand}  ${tabs}`, Math.max(0, width - Bun.stringWidth(right) - 1));
     const pad = Math.max(1, width - Bun.stringWidth(brandCut) - Bun.stringWidth(right));
     return brandCut + " ".repeat(pad) + right;
@@ -1236,12 +1487,22 @@ export class HubComponent implements Component {
   render(width: number): readonly string[] {
     const height = Math.max(10, this.#ui.terminal.rows);
     const bodyH = height - 2;
-    const sidebarOn = this.#sidebar && width >= 72;
-    const paneW = sidebarOn ? width - SIDEBAR_W : width;
+    // The rail replaces the deck list while open; both need room for the panes beside them.
+    const railOn = this.#spaces.rail && width >= 72;
+    const left = railOn ? RAIL_W : width >= 72 ? SIDEBAR_W : 0;
+    const paneW = width - left;
     const tree: PaneNode = this.#zoom ? this.#focusedLeaf() : this.#tree;
     const ring = { i: this.#zoom ? this.#focus : 0 };
+    const overlaid = !!(this.#reader || this.#picker || this.#help);
     const panes = this.#reader ? this.#readerBlock(paneW, bodyH) : this.#picker ? this.#pickerBlock(paneW, bodyH) : this.#help ? this.#helpBlock(paneW, bodyH) : this.#renderNode(tree, paneW, bodyH, ring);
-    const body = sidebarOn ? this.#sidebarBlock(bodyH).map((s, i) => s + (panes[i] ?? "")) : panes;
+    const rail = railOn ? this.#railRows() : null;
+    // What a click hits is decided against THIS frame (top bar = screen row 0, body from row 1).
+    this.#geom = {
+      left, rail, top: 1, height: bodyH,
+      panes: overlaid ? [] : this.#zoom ? [{ index: this.#spaces.pane().index, x: 0, y: 0, w: paneW, h: bodyH }] : paneRects(this.#tree, paneW, bodyH),
+    };
+    const column = rail ? this.#railBlock(rail, bodyH) : left ? this.#sidebarBlock(bodyH) : null;
+    const body = column ? column.map((s, i) => s + (panes[i] ?? "")) : panes;
     const rightPlain = `${this.#engine.flavor} engine · lucid hub `;
     const composing = this.#prompt && this.#promptKind === "wl-add"
       ? ` add host to whitelist: ${this.#prompt.text}▌  (⏎ save · esc cancel)`
@@ -1249,10 +1510,10 @@ export class HubComponent implements Component {
         ? ` filter pages: ${this.#prompt.text}▌  (live · ⏎ keep · esc clear)`
         : this.#prompt && this.#promptKind === "command"
           ? ` :${this.#prompt.text}▌  (⏎ run · esc cancel)`
-          : this.#prompt && this.#promptKind === "space-rename"
-            ? ` rename space: ${this.#prompt.text}▌  (⏎ save · esc cancel)`
+          : this.#prompt && (this.#promptKind === "space-rename" || this.#promptKind === "tab-rename")
+            ? ` rename ${this.#promptKind === "space-rename" ? "space" : "tab"}: ${this.#prompt.text}▌  (⏎ save · esc cancel)`
           : "";
-    const hint = this.#reader ? " j/k scroll · ctrl+u/d page · esc closes the page" : this.#help ? " any key closes help" : composing || ` ${DECK_HINTS[this.#prompt ? "prompting" : this.#focusedDeck()]} · ? help`;
+    const hint = this.#reader ? " j/k scroll · ctrl+u/d page · esc closes the page" : this.#help ? " any key closes help" : composing || ` ${DECK_HINTS[this.#prompt ? "prompting" : this.#railFocus && railOn ? "rail" : this.#focusedDeck()]} · ? help`;
     const leftPlain = truncateToWidth(composing || (this.#status ? ` ${this.#status}` : hint), Math.max(0, width - Bun.stringWidth(rightPlain) - 1));
     const pad = Math.max(1, width - Bun.stringWidth(leftPlain) - Bun.stringWidth(rightPlain));
     const statusBar = (this.#status ? AMBER(leftPlain) : TXT_3(leftPlain)) + " ".repeat(pad) + TXT_3(rightPlain);
@@ -1315,7 +1576,10 @@ export async function runHubCli(env: Readonly<Record<string, string | undefined>
   const control = startHubControl({ dir, exec: (op) => component.exec(op) });
   const quit = () => component.quit();
   for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(sig, quit);
-  const overlay = tui?.showOverlay(component, { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0, fullscreen: true, mouseTracking: false });
+  // mouseTracking: pi-tui turns SGR click reporting on while this fullscreen overlay holds the screen
+  // and off again on hide/stop (and its terminal teardown resets it on a crash), so the parent shell
+  // gets its native selection back on quit.
+  const overlay = tui?.showOverlay(component, { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0, fullscreen: true, mouseTracking: true });
   if (tui) { tui.setFocus(component); tui.start(); }
   else process.stdout.write(JSON.stringify({ hub: "ready", pid: process.pid, port: control.discovery.port, engine: attached.engine.port }) + "\n");
   try {
