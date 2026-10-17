@@ -10,7 +10,7 @@
 
 import { bridge, type AccountsSnapshot, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import type { TurnStatus } from "./chat_events.ts";
-import { liveBadge, planSessionSwitch, spokeNameFor, switchSheetCopy } from "./session_switch.ts"; // P-SWITCH.1 (ADR-0403), P-SWITCH.2 (ADR-0404)
+import { currentSwitchPreflight, liveBadge, planSessionSwitch, spokeNameFor, switchOutcome, switchSheetCopy } from "./session_switch.ts"; // P-SWITCH.1 (ADR-0403), P-SWITCH.2 (ADR-0404)
 import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
 // P-RECOVER.1 (ADR-0385): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
 import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
@@ -11129,23 +11129,35 @@ async function resumeSession(id: string, opts: { loaded?: boolean; force?: boole
     renderThread(null); // no cache AND the fetch failed -> a fresh empty thread
   }
   if (!opts.loaded) {
-    const r = await bridge.resumeSession(id, { force: opts.force });
-    if (r.heldBy) {
-      // P-SWITCH.2 (ADR-0404): a spoke already runs this session. Nothing was loaded; drive that spoke.
-      if (owner === turnViewEpoch) void promoteLane(r.heldBy.laneId);
-      return false;
-    }
-    if (r.busy) {
-      // Main started working between the check and the load (or the check never answered). Nothing was
-      // stopped: go back to Main's live turn, then let the user choose.
-      if (owner === turnViewEpoch) { void recoverMasterTurn(); showSwitchSheet(id, r.busy); }
+    // #460 cases 3+4: the engine's answer is the authority (ADR-0404). openSession's plan came from the
+    // renderer's own busy/fleet view, which can be stale or missing; whatever it guessed, what happens
+    // next is decided by what the engine said.
+    const out = switchOutcome(await bridge.resumeSession(id, { force: opts.force }), id);
+    if (out.kind !== "done") {
+      if (owner !== turnViewEpoch) return false;
+      if (out.kind === "attach") {
+        // P-SWITCH.2 (ADR-0404): a spoke already runs this session. Nothing was loaded; drive that spoke.
+        void promoteLane(out.laneId);
+      } else if (out.kind === "unconfirmed") {
+        // #460 case 4: no answer (unreachable, or an error that is not the 409). The engine may still
+        // hold anything, so never pretend the switch happened: keep Send blocked and offer the retry.
+        showTurnReconnect("The engine did not confirm the session switch. Reconnect to check before sending.", () => void resumeSession(id, opts));
+      } else {
+        // Main started working between the check and the load. Nothing was stopped. #460 case 3: between
+        // turns recoverMasterTurn has nothing to adopt and left the TARGET's transcript on screen while
+        // the engine kept the old session, so reload the session the 409 names instead (a turn that DID
+        // start meanwhile is adopted by the same path). Then let the user choose on the sheet.
+        if (out.kind === "show-holder") void resumeSession(out.holderId, { loaded: true });
+        else void recoverMasterTurn();
+        showSwitchSheet(id, out.reason);
+      }
       return false;
     }
   }
   if (owner !== turnViewEpoch) return false;
   setRecoveryChecking(false); state.streaming = false; setSendEnabled();
   void loadSessionMode(); // ADR-0219: reflect THIS session's CUI/Search mode + banner
-  $("#input")?.focus();
+  if (!switchSheet) $("#input")?.focus(); // the P-SWITCH.1 sheet owns focus: Enter must keep taking its safe choice
   return !!page || !!shownSig;
 }
 
@@ -11160,7 +11172,12 @@ const cachedSessionInfo = (id: string | null): SessionInfo | undefined =>
 
 /** Every user-initiated "open this session" (the sidebar row) comes through here. */
 async function openSession(id: string): Promise<void> {
-  const [main, fleet] = await Promise.all([bridge.sessionBusy().catch(() => null), bridge.fleetStatus().catch(() => null)]);
+  // #460 case 5 (the #392 review): the generation is taken synchronously inside currentSwitchPreflight,
+  // BEFORE the two preflights can land, so clicking A then B quickly always ends on B: A's preflight
+  // resolves to null here and its stale plan is never applied.
+  const pre = await currentSwitchPreflight(Promise.all([bridge.sessionBusy().catch(() => null), bridge.fleetStatus().catch(() => null)]));
+  if (!pre) return; // a newer click owns the switch; this one is discarded unapplied
+  const [main, fleet] = pre;
   const plan = planSessionSwitch({ busy: main?.busy ?? null, mainSessionId: main?.sessionId ?? null, targetId: id, lanes: fleet?.lanes ?? [] });
   if (plan.kind === "promote") { void promoteLane(plan.laneId); return; }
   if (plan.kind === "refuse") { showToast({ tone: "warn", title: "This session is running in a spoke", desc: plan.reason, actions: [{ label: "OK" }], timeout: 8000 }); return; }
@@ -17834,7 +17851,14 @@ function newSession(force = false): void {
   resetAgentPreviewLane(); // P-PREVIEW.19 (ADR-0339): the agent's preview belongs to the conversation that ended
   void bridge.newSession({ force }).then((r) => {
     if (owner !== turnViewEpoch) return;
-    if (r.busy) { void recoverMasterTurn(); showSwitchSheet(null, r.busy); return; } // nothing was stopped
+    const out = switchOutcome(r, null);
+    if (out.kind === "show-holder" || out.kind === "recheck") { // refused: nothing was stopped
+      // #460 case 3: the seeded empty thread is not what the engine holds; show the kept session.
+      if (out.kind === "show-holder") void resumeSession(out.holderId, { loaded: true });
+      else void recoverMasterTurn();
+      showSwitchSheet(null, out.reason);
+      return;
+    }
     setRecoveryChecking(false); setSendEnabled(); void loadSessionMode();
   });
   renderStatus(); $("#input")?.focus();
