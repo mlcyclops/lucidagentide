@@ -8,7 +8,7 @@
   ],
   "description": "Electron desktop shell for LucidAgentIDE + omp — gated agent chat + live security/memory dashboards.",
   "homepage": "https://github.com/mlcyclops/lucidagentide",
-  "author": "TechLead 187 LLC <support@lucidagentide.com>",
+  "author": "TECHLEAD 187 LLC <support@lucidagentide.com>",
   "main": "dist/main.js",
   "scripts": {
     "build": "bun build main.ts --target=node --format=cjs --external electron --outfile dist/main.js && bun build preload.ts --target=node --format=cjs --external electron --outfile dist/preload.js",
@@ -219,7 +219,7 @@
     "appx": {
       "identityName": "TechLead187.LucidAgent",
       "publisher": "CN=TECHLEAD 187 LLC, O=TECHLEAD 187 LLC, L=Sun City Center, S=Florida, C=US",
-      "publisherDisplayName": "TechLead 187 LLC",
+      "publisherDisplayName": "TECHLEAD 187 LLC",
       "applicationId": "LucidAgent",
       "displayName": "Lucid Agent",
       "artifactName": "LucidAgent-${version}-x64.${ext}"
@@ -230,8 +230,8 @@
         "Name": "Lucid Agent"
       },
       "category": "Development",
-      "maintainer": "TechLead 187 LLC <support@lucidagentide.com>",
-      "vendor": "TechLead 187 LLC",
+      "maintainer": "TECHLEAD 187 LLC <support@lucidagentide.com>",
+      "vendor": "TECHLEAD 187 LLC",
       "synopsis": "Sovereignty-aware, fail-closed AI coding IDE",
       "target": [
         "AppImage",

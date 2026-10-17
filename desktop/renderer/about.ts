@@ -74,8 +74,8 @@ export function aboutHtml(version: string): string {
       <div class="about-brand">
         ${techLeadLogo()}
         <div class="about-brand-txt">
-          <b>TechLead&nbsp;187&nbsp;LLC</b>
-          <span>© 2026 TechLead 187 LLC · All rights reserved</span>
+          <b>TECHLEAD&nbsp;187&nbsp;LLC</b>
+          <span>© 2026 TECHLEAD 187 LLC · All rights reserved</span>
         </div>
       </div>
 
@@ -85,7 +85,7 @@ export function aboutHtml(version: string): string {
         <div class="about-lic-row"><span>Change date</span><b>2030-06-27 → MPL-2.0</b></div>
       </div>
       <p class="about-fine">
-        *Except offering a hosted or embedded product competitive with TechLead 187 LLC. BUSL-1.1 is
+        *Except offering a hosted or embedded product competitive with TECHLEAD 187 LLC. BUSL-1.1 is
         <b>source-available, not OSI open-source</b>; each version converts to the Mozilla Public License 2.0
         on its Change Date. See the bundled <span class="about-mono">LICENSE</span> for the full terms.
       </p>

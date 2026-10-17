@@ -1,10 +1,27 @@
 # Signing, notarization & auto-update
 
-The desktop app builds **unsigned by default** — the GitHub Actions workflow
-([`build-desktop.yml`](../.github/workflows/build-desktop.yml)) produces working
-installers with zero certificates. Signing is **opt-in**: add the secrets below
-and the same workflow signs (and, on macOS, notarizes) automatically. Auto-update
+**Every released Windows build is Authenticode-signed by TECHLEAD 187 LLC.**
+A *release run* of [`build-desktop.yml`](../.github/workflows/build-desktop.yml)
+or [`build-creator.yml`](../.github/workflows/build-creator.yml) is any run
+whose bytes reach a GitHub Release: a `v*` / `creator-v*` tag push, a
+`publish_latest` dispatch, or a `beta_release` dispatch. On such a run the
+Windows leg **fails** when no signer is configured, twice over: the "Configure
+code-signing" step exits non-zero, and `build/win-signing.cjs` throws inside
+electron-builder's own config load (`LUCID_RELEASE_RUN=1`). That is P-RELEASE.7
+(ADR-0450); `make demo-P-RELEASE.7` proves it. A plain test dispatch (no
+publish, no tag) may still build unsigned, so forks and secretless runs keep
+producing working installers.
+
+macOS is not yet signed or notarized (no Apple certificate); add the Apple
+secrets below and the same workflow signs and notarizes automatically. Auto-update
 works either way, but macOS auto-update *requires* a signed build.
+
+The publisher is one string everywhere a user can see it: the certificate's CN
+`TECHLEAD 187 LLC` is also `package.json` `author` (which becomes the exe and
+installer `CompanyName`, the NSIS Add/Remove Programs publisher and the default
+copyright), `appx.publisherDisplayName`, the Linux `vendor`/`maintainer`, the
+updater's `publisherName`, and the About dialog. CI's "Verify Authenticode
+signatures" step checks the signature **and** the `CompanyName` on every exe.
 
 ## How auto-update works
 
@@ -58,7 +75,9 @@ not secrets and live in [`build/win-signing.cjs`](build/win-signing.cjs):
 
 How it behaves:
 
-- **No `AZURE_CLIENT_ID`:** the Windows build is unsigned, exactly as before.
+- **No `AZURE_CLIENT_ID` (and no `WIN_CSC_LINK`):** a test dispatch builds
+  unsigned; a release run (tag, `publish_latest`, `beta_release`) **fails**
+  before the build starts (P-RELEASE.7).
 - **`AZURE_CLIENT_ID` present:** electron-builder signs every exe, the msi and
   the appx through `Invoke-TrustedSigning`, RFC 3161 timestamped (the
   certificates live 72 hours and renew daily). If the other two secrets are
