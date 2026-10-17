@@ -109,7 +109,8 @@ describe("the priority store", () => {
   const path = agentPrioritiesPath(dir);
   test("round-trips 0600 and drops off-shape values on read", () => {
     savePriorities(path, { api: 5, web: 2 });
-    expect(statSync(path).mode & 0o777).toBe(0o600);
+    // POSIX mode bits only: Windows reports 0666 for every file (same skip as hub_control.test.ts).
+    if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(loadPriorities(path)).toEqual({ api: 5, web: 2 });
     writeFileSync(path, JSON.stringify({ v: 1, priorities: { api: 3, bad: "high", zero: 0, big: 10, frac: 2.5 } }));
     expect(loadPriorities(path)).toEqual({ api: 3 });
