@@ -148,6 +148,10 @@ export interface HubHost {
   refresh(): Promise<void>;
   /** Something changed: redraw. */
   changed(): void;
+  /** P-TUI.5 E2: persist a lane's 1-9 priority badge (hub_agents_panel.ts). Display order in the
+   *  agents panel ONLY - nothing on the engine or a lane's turn reads it. Throws HubOpError on a
+   *  bad n. */
+  setAgentPriority(name: string, n: number): number;
 }
 
 const SUBMIT_KEYS = ["Enter", "C-m", "KPEnter"];
@@ -302,6 +306,11 @@ export function createHubExecutor(host: HubHost): (op: HubOp) => Promise<unknown
       case "agent.cancel": {
         const l = await lane(op.lane);
         return { lane: l.id, result: await engine("/api/fleet/cancel", { laneId: l.id }) };
+      }
+      case "agent.priority": {
+        const l = await lane(op.lane);
+        const name = String(l.name ?? l.id);
+        return { lane: l.id, name, priority: host.setAgentPriority(name, op.n), note: "display order in the hub's agents panel, not scheduling" };
       }
     }
   }

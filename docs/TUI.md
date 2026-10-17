@@ -106,7 +106,16 @@ in-process (invariant 4). The TUI holds the UI token, never the agent token.
 - **The rail (P-TUI.5).** A left column lists every space with its tabs indented beneath:
   `◆` and an accent bar mark the focused space, the tab on screen is cyan, each row counts its
   panes (`3▣`), and a tab hosting agent panes carries a `◎n` badge (green while one works,
-  amber while one waits on you). Below it sits the AGENTS section. `b` opens or closes the
+  amber while one waits on you). Below it sits the AGENTS section (P-TUI.5 E2, ADR-0434):
+  every fleet lane as one row - status glyph in the LaneStatus hues (waiting-on-you amber,
+  working green, error red), name, model short-name, the `space:tab` hosting its live pane,
+  elapsed, and a `p<n>` badge - sorted by priority (highest first), then status (a lane
+  waiting on a human outranks its equals), then name. Priority is a user-set 1-9 per lane
+  NAME, saved in `hub-agent-priorities.json`: select a row and press a digit, or
+  `lucid hub agent priority <name|id> <1-9>`. It is DISPLAY ORDER only, never scheduling -
+  the engine and the lanes never see it. Click a row once to select it, click again (or `⏎`)
+  to attach that agent into the focused pane; `c` cancels its running turn via the existing
+  route. Approval prompts are never answered from the panel. `b` opens or closes the
   rail (closed, the deck list is back; the choice is saved in `hub-spaces.json`). Clicks work:
   a space or tab row focuses it, a pane focuses the pane. `B` puts the keyboard on the rail
   (`j`/`k`, `⏎` focus, `r` rename inline, `n` new tab, or a new space on the SPACES header,

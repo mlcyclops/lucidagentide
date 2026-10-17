@@ -34,6 +34,7 @@ import chalk from "@oh-my-pi/pi-utils/chalk";
 import { matchesKey, parseSgrMouse, ProcessTerminal, TUI, truncateToWidth, type Component } from "@oh-my-pi/pi-tui";
 import { join } from "node:path";
 import { discoveryDir, listDiscoveries, verifyDiscovery, type EngineDiscovery } from "../../desktop/engine_discovery.ts";
+import { agentPrioritiesPath, agentRailLine, HubAgentsPanel, laneLocations, statusGlyph, type AgentRow, type AgentsPanelRow, type GlyphHue } from "./hub_agents_panel.ts";
 import { createHubExecutor, startHubControl } from "./hub_control.ts";
 import { HubOpError, leaves, loadSpaces, saveSpaces, Spaces, spacePanes, spacesPath, type PaneDeck, type PaneLeaf, type PaneNode } from "./hub_spaces.ts";
 import { parseHubCommand, tokenize, type HubOp } from "./hub_tmux_verbs.ts";
@@ -157,20 +158,22 @@ export type RailRow =
   | { kind: "spaces-head"; count: number }
   | { kind: "space"; id: string; name: string; focused: boolean; panes: number }
   | { kind: "tab"; id: string; space: string; name: string; active: boolean; focused: boolean; panes: number; lanes: string[]; last: boolean }
-  | { kind: "agents-head"; count: number | null };
+  | { kind: "agents-head"; count: number | null }
+  | { kind: "agent"; row: AgentsPanelRow & Partial<AgentRow> };
 
-/** The seam for the rail's AGENTS region (P-TUI.5 E2, branch feat/p-tui.5-agents-panel). This
- *  increment renders only the section header (with rows().length when a panel is attached); E2 draws
- *  rows() under it, adds its click branch to clickTarget, and routes clicks and priority keys here. */
+/** The seam for the rail's AGENTS region (P-TUI.5 E2, branch feat/p-tui.5-agents-panel): rows are
+ *  drawn under the AGENTS header, clicks and priority keys route here. The hub binds its own
+ *  HubAgentsPanel (hub_agents_panel.ts) at construction; the seam stays the narrow contract. */
 export interface RailAgentsPanel {
-  rows(): { id: string; name: string; location: string; status: string; priority: number }[];
+  rows(): AgentsPanelRow[];
   onClick(id: string): void;
   onPriority(id: string, n: number): void;
 }
 
 /** The rail's rows from the model: SPACES header, each space with its tabs indented beneath, then the
- *  AGENTS header. `agents` = the attached panel's row count, null when none is attached. */
-export function railRows(spaces: Spaces, agents: number | null = null): RailRow[] {
+ *  AGENTS header and (E2) the attached panel's rows. `agents` = the panel's rows (or, legacy, just
+ *  their count); null when no panel is attached. */
+export function railRows(spaces: Spaces, agents: number | readonly (AgentsPanelRow & Partial<AgentRow>)[] | null = null): RailRow[] {
   const rows: RailRow[] = [{ kind: "gap" }, { kind: "spaces-head", count: spaces.spaces.length }];
   for (const s of spaces.spaces) {
     const focused = s.id === spaces.active;
@@ -181,7 +184,9 @@ export function railRows(spaces: Spaces, agents: number | null = null): RailRow[
       rows.push({ kind: "tab", id: t.id, space: s.id, name: t.name, active: s.activeTab === t.id, focused: focused && s.activeTab === t.id, panes: ring.length, lanes, last: i === s.tabs.length - 1 });
     });
   }
-  rows.push({ kind: "gap" }, { kind: "agents-head", count: agents });
+  const n = agents === null ? null : typeof agents === "number" ? agents : agents.length;
+  rows.push({ kind: "gap" }, { kind: "agents-head", count: n });
+  if (agents !== null && typeof agents !== "number") for (const a of agents) rows.push({ kind: "agent", row: a });
   return rows;
 }
 
@@ -207,6 +212,13 @@ export function railLine(row: RailRow, w: number, paint: RailPaint = PLAIN_PAINT
   let count = "";
   switch (row.kind) {
     case "gap": return " ".repeat(w);
+    case "agent":
+      return agentRailLine(row.row, w, {
+        glyph: (s) => paint.mark(s, row),
+        name: (s) => paint.name(s, row),
+        meta: (s) => paint.lanes(s, row),
+        badge: (s) => paint.count(s, row),
+      });
     case "spaces-head": mark = " ▦ "; name = "SPACES"; count = `${row.count} `; break;
     case "agents-head": mark = " ◎ "; name = "AGENTS"; count = row.count === null ? "" : `${row.count} `; break;
     case "space": mark = `${row.focused ? "▎◆" : " ◇"} `; name = row.name; count = `${row.panes}▣ `; break;
@@ -243,7 +255,8 @@ export type HubClick =
   | { kind: "space"; id: string; row: number }
   | { kind: "tab"; id: string; row: number }
   | { kind: "spaces-head"; row: number }
-  | { kind: "pane"; index: number };
+  | { kind: "pane"; index: number }
+  | { kind: "agent"; id: string; row: number };
 
 /** What a left click at 0-based screen (col,row) means. Rail rows map to their space/tab; anything
  *  right of the rail falls through to the pane under it; chrome, gaps and headers-without-action are
@@ -254,6 +267,7 @@ export function clickTarget(g: HubGeometry, col: number, row: number): HubClick 
   if (col < g.left) {
     const r = g.rail?.[y];
     if (r?.kind === "space" || r?.kind === "tab") return { kind: r.kind, id: r.id, row: y };
+    if (r?.kind === "agent") return { kind: "agent", id: r.row.id, row: y };
     if (r?.kind === "spaces-head") return { kind: "spaces-head", row: y };
     return null;
   }
@@ -411,7 +425,7 @@ export const DECK_HINTS: Record<DeckId | "agent" | "prompting" | "rail", string>
   spaces: "j/k select · ⏎ focus · n new space · r rename · x close space",
   agent: "⏎ prompt · m model · j/k scroll · G live · y/s/d answer ask · x close",
   prompting: "type your prompt · ⏎ send · esc cancel",
-  rail: "rail: j/k select · ⏎ focus · r rename · n new tab (new space on ▦ SPACES) · esc back to panes",
+  rail: "rail: j/k select · ⏎ focus (agent row: attach) · r rename · n new · agent: 1-9 priority · c cancel · esc",
 };
 
 /** Style one plain deck row (widths already fixed - only color changes here, never geometry). */
@@ -495,6 +509,8 @@ export class HubComponent implements Component {
   readonly #done = Promise.withResolvers<void>();
   readonly #spaces: Spaces;
   readonly #exec: (op: HubOp) => Promise<unknown>;
+  /** The concrete AGENTS panel behind the agentsPanel seam (attach/cancel/priority verbs). */
+  readonly #agents: HubAgentsPanel;
   // The focused tab's tree/focus/zoom: every pane key below reads and writes the tab on screen.
   get #tree(): PaneNode { return this.#spaces.tab.tree; }
   get #focus(): number { return this.#spaces.tab.focus; }
@@ -526,13 +542,27 @@ export class HubComponent implements Component {
   #timer: NodeJS.Timeout | undefined;
   #disposed = false;
 
-  constructor(ui: HubUi, engine: EngineDiscovery, opts: { spawned?: boolean; spaces?: Spaces } = {}) {
+  constructor(ui: HubUi, engine: EngineDiscovery, opts: { spawned?: boolean; spaces?: Spaces; prioritiesPath?: string } = {}) {
     this.#ui = ui;
     this.#engine = engine;
     this.#spawned = !!opts.spawned;
     this.#base = `http://127.0.0.1:${engine.port}`;
     this.#token = engine.token;
     this.#spaces = opts.spaces ?? new Spaces();
+    // P-TUI.5 E2: the AGENTS panel rides the same lane snapshot the decks render; attach and cancel
+    // are the EXISTING mechanisms (ADR-0420 bind; /api/fleet/cancel). Approvals are never answered here.
+    this.#agents = new HubAgentsPanel({
+      lanes: () => arr(this.#data?.fleet.lanes).map(rec),
+      locations: () => laneLocations(this.#spaces.spaces),
+      attach: (id, name) => {
+        this.#spaces.rebind(undefined, "agent", { id, name });
+        this.#status = `agent → ${name}`;
+        void this.refresh();
+      },
+      cancel: (id, name) => { void this.#cancelLaneById(id, name); },
+      path: opts.prioritiesPath ?? agentPrioritiesPath(discoveryDir(process.env)),
+    });
+    this.agentsPanel = this.#agents;
     this.#exec = createHubExecutor({
       spaces: this.#spaces,
       engine: { base: this.#base, token: engine.token, port: engine.port, version: engine.version, flavor: engine.flavor },
@@ -540,6 +570,7 @@ export class HubComponent implements Component {
       paneText: (id, w, n) => this.paneText(id, w, n),
       refresh: () => this.refresh(),
       changed: () => this.#ui.requestRender(),
+      setAgentPriority: (name, n) => this.#agents.setPriorityByName(name, n),
     });
   }
 
@@ -775,11 +806,23 @@ export class HubComponent implements Component {
       if (data === "j" || data === "k" || matchesKey(data, "down") || matchesKey(data, "up")) {
         const step = data === "j" || matchesKey(data, "down") ? 1 : -1;
         for (let i = this.#railSel + step; i >= 0 && i < rows.length; i += step)
-          if (rows[i]!.kind === "space" || rows[i]!.kind === "tab" || rows[i]!.kind === "spaces-head") { this.#railSel = i; break; }
+          if (rows[i]!.kind === "space" || rows[i]!.kind === "tab" || rows[i]!.kind === "spaces-head" || rows[i]!.kind === "agent") { this.#railSel = i; break; }
         this.#ui.requestRender();
         return;
       }
       const row = rows[this.#railSel];
+      // Agent rows (P-TUI.5 E2): ⏎ attaches into the focused pane, c cancels the lane's turn via the
+      // existing route, a digit sets its priority badge (DISPLAY ORDER only, never scheduling).
+      if (row?.kind === "agent") {
+        if (isEnter) { this.#agents.attach(row.row.id); return; }
+        if (data === "c") { this.#agents.cancel(row.row.id); return; }
+        if (/^[1-9]$/.test(data)) {
+          this.#agents.onPriority(row.row.id, Number(data));
+          this.#status = `priority p${data} → ${row.row.name} (display order only)`;
+          this.#ui.requestRender();
+          return;
+        }
+      }
       if (isEnter) { this.#railActivate(row); return; }
       if (data === "r") { this.#railRename(row); return; }
       if (data === "n") { this.#railCreate(row); return; }
@@ -1012,17 +1055,22 @@ export class HubComponent implements Component {
     return lanes[Math.min(this.#selected, lanes.length - 1)] ?? null;
   }
 
-  /** `c`: cancel the selected lane's RUNNING turn - /api/fleet/cancel, the GUI's own route. */
-  async #cancelLane(): Promise<void> {
-    const lane = this.#selectedLane();
-    if (!lane) { this.#status = "no agent selected - n spawns one"; this.#ui.requestRender(); return; }
+  /** `c`: cancel a lane's RUNNING turn - /api/fleet/cancel, the GUI's own route. The Agents deck
+   *  and the rail's agents panel both land here; approvals are never answered from either. */
+  async #cancelLaneById(id: string, name: string): Promise<void> {
     try {
-      const r = rec(await this.#post("/api/fleet/cancel", { laneId: str(lane.id) }));
-      this.#status = r.ok === false ? `cancel refused: ${str(r.reason ?? "no running turn")}` : `cancelled ${str(lane.name)}'s turn`;
+      const r = rec(await this.#post("/api/fleet/cancel", { laneId: id }));
+      this.#status = r.ok === false ? `cancel refused: ${str(r.reason ?? "no running turn")}` : `cancelled ${name}'s turn`;
     } catch (err) {
       this.#status = `cancel failed: ${err instanceof Error ? err.message : String(err)}`;
     }
     await this.refresh();
+  }
+
+  async #cancelLane(): Promise<void> {
+    const lane = this.#selectedLane();
+    if (!lane) { this.#status = "no agent selected - n spawns one"; this.#ui.requestRender(); return; }
+    await this.#cancelLaneById(str(lane.id), str(lane.name));
   }
 
   /** `x` on Agents: dismiss the selected STOPPED lane (/api/fleet/remove, never force). A live lane
@@ -1104,7 +1152,7 @@ export class HubComponent implements Component {
   // -- P-TUI.5: the rail. Every verb is the model's; a refusal surfaces verbatim. -------------------
 
   #railRows(): RailRow[] {
-    return railRows(this.#spaces, this.agentsPanel ? this.agentsPanel.rows().length : null);
+    return railRows(this.#spaces, this.agentsPanel ? this.agentsPanel.rows() : null);
   }
 
   /** The rail row of the tab on screen: where the keyboard lands on B and after a create. */
@@ -1163,6 +1211,15 @@ export class HubComponent implements Component {
       this.#ui.requestRender();
       return;
     }
+    // Agent rows (P-TUI.5 E2): the first click selects, a click on the selected row attaches - the
+    // panel's own toggle (HubAgentsPanel.onClick). Never an approval answer.
+    if (hit.kind === "agent") {
+      this.#railFocus = true;
+      this.#railSel = hit.row;
+      this.agentsPanel?.onClick(hit.id);
+      this.#ui.requestRender();
+      return;
+    }
     this.#railFocus = true;
     this.#railSel = hit.row;
     this.#railActivate(this.#geom.rail?.[hit.row]);
@@ -1177,12 +1234,15 @@ export class HubComponent implements Component {
       const mine = lanes.filter((l) => ids.includes(str(l.id)));
       return mine.some((l) => rec(l.pendingApproval).summary) ? AMBER : mine.some((l) => str(l.status) === "working") ? GREEN : ACCENT_2;
     };
+    // Agent-row hues: the LaneStatus vocabulary via statusGlyph (attention amber, busy green,
+    // error red, settled dim); the click-selected row's name reads cyan like a focused tab.
+    const hue: Record<GlyphHue, (s: string) => string> = { attention: AMBER, busy: GREEN, error: RED, ok: TXT_3, off: TXT_3, unknown: TXT_3 };
     const paint: RailPaint = {
       head: (s) => ACCENT_2.bold(s),
-      mark: (s, r) => (r.kind === "space" && r.focused ? ACCENT(s) : TXT_3(s)),
-      name: (s, r) => (r.kind === "space" ? (r.focused ? TXT.bold(s) : TXT(s)) : r.kind === "tab" ? (r.focused ? CYAN.bold(s) : r.active ? TXT(s) : TXT_3(s)) : s),
-      lanes: (s, r) => (r.kind === "tab" ? laneHue(r.lanes)(s) : s),
-      count: (s) => TXT_3(s),
+      mark: (s, r) => (r.kind === "agent" ? hue[statusGlyph(r.row.status).hue](s) : r.kind === "space" && r.focused ? ACCENT(s) : TXT_3(s)),
+      name: (s, r) => (r.kind === "agent" ? (this.#agents.selected === r.row.id ? CYAN.bold(s) : TXT(s)) : r.kind === "space" ? (r.focused ? TXT.bold(s) : TXT(s)) : r.kind === "tab" ? (r.focused ? CYAN.bold(s) : r.active ? TXT(s) : TXT_3(s)) : s),
+      lanes: (s, r) => (r.kind === "tab" ? laneHue(r.lanes)(s) : r.kind === "agent" ? TXT_3(s) : s),
+      count: (s, r) => (r.kind === "agent" && r.row.priority >= 1 ? ACCENT_2(s) : TXT_3(s)),
     };
     const body = rows.slice(0, h).map((r, i) => (this.#railFocus && i === this.#railSel ? chalk.inverse(TXT(railLine(r, w))) : railLine(r, w, paint)));
     while (body.length < h) body.push(" ".repeat(w));
@@ -1273,6 +1333,8 @@ export class HubComponent implements Component {
       ["  j / k · ⏎", "select a row · focus that space or tab"],
       ["  r", "rename the selected space or tab (inline)"],
       ["  n", "new tab in that space (on ▦ SPACES: new space)"],
+      ["  on an agent row", "⏎ attach it here · c cancel its turn"],
+      ["  1-9", "its priority badge (display order only)"],
       ["", ""],
       ["Decks", ""],
       ["  1-9, 0", "put that deck in the focused pane"],

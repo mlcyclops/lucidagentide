@@ -61,6 +61,10 @@ describe("grouped vocabulary", () => {
     [["agent", "spawn", "--cwd", "/tmp/x", "--name", "a"], { op: "agent.spawn", cwd: "/tmp/x", name: "a" }],
     [["agent", "prompt", "lane-1", "fix", "the", "-v", "flag"], { op: "agent.prompt", lane: "lane-1", text: "fix the -v flag" }],
     [["agent", "read", "lane-1", "-n", "3"], { op: "agent.read", lane: "lane-1", turns: 3 }],
+    // P-TUI.5 E2: display order in the agents panel, never scheduling; out-of-range clamps like -n.
+    [["agent", "priority", "api", "5"], { op: "agent.priority", lane: "api", n: 5 }],
+    [["agent", "priority", "lane-1", "0"], { op: "agent.priority", lane: "lane-1", n: 1 }],
+    [["agent", "priority", "lane-1", "12"], { op: "agent.priority", lane: "lane-1", n: 9 }],
   ] as const)("%j", (argv, op) => expect(p(argv)).toEqual(op as never));
 });
 
@@ -69,6 +73,7 @@ describe("malformed input is a usage error", () => {
     [[]], [["nope"]], [["split-window", "-x"]], [["split-window", "-h", "-v"]], [["select-pane"]],
     [["resize-pane", "-L", "-R"]], [["resize-pane", "-L", "abc"]], [["swap-pane", "-t", "s1:p1"]],
     [["send-keys", "-t", "s1:p1"]], [["agent", "prompt", "lane-1"]], [["pane", "read", "-n"]], [["status", "extra"]],
+    [["agent", "priority", "api"]], [["agent", "priority", "api", "high"]], [["agent", "priority", "api", "5", "x"]],
     [["new-window", "work"]], [["switch-client"]], [["tab", "rename", "-t", "s1:t1"]], [["tab", "nope"]], [["list-sessions", "x"]],
   ] as const)("%j", (argv) => expect(err([...argv])).toBe("usage"));
 });
