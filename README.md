@@ -78,17 +78,17 @@ personalization internals are proprietary and intentionally undocumented here - 
 <tr>
 <td align="center">
 
-# 🚀 LUCID v2.3.1 is here
+# 🚀 LUCID v2.4.0 is here
 
-<p align="center"><b>🛡️ a Windows sandbox that chat actually works inside</b> · <b>🧭 Jev typed judgment</b> · <b>🖱 a browser agent that reads before it clicks</b> · <b>🪐 Claude Opus 5.5 and Sonnet 5.5, GPT-6 Astra / Sol / Luna, Grok 4.7</b> · <b>📶 network problems reported as network problems</b> · <b>🌳 fleet lanes in their own worktree</b> · <b>🖥 <code>lucid hub</code> in your terminal</b> · <b>🕹 new in 2.3.1: four arcade games</b></p>
+<p align="center"><b>✍️ Windows installers signed by TECHLEAD 187 LLC</b> · <b>🪐 Gemini 4 Argon and Gemini 3.8 Flash, Claude Haiku 5.5</b> · <b>🎮 a paired controller with its own token scope</b> · <b>🔑 OpenAI sign-in by device code</b> · <b>🛡️ Microsoft's container behind the Windows sandbox</b> · <b>🗓 scheduled jobs</b> · <b>🛟 settings that survive a crash</b> · <b>🌐 LAN model servers through the sandbox</b></p>
 
-<a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.1"><img src="https://img.shields.io/badge/Download-v2.3.1-c64bd6?style=for-the-badge&logo=github&logoColor=white" alt="Download LUCID v2.3.1" /></a>
+<a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.4.0"><img src="https://img.shields.io/badge/Download-v2.4.0-c64bd6?style=for-the-badge&logo=github&logoColor=white" alt="Download LUCID v2.4.0" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/issues/new?template=bug_report.yml"><img src="https://img.shields.io/badge/Found%20a%20bug%3F-Open%20an%20issue-d73a49?style=for-the-badge&logo=github&logoColor=white" alt="Found a bug? Open an issue" /></a>
 <a href="#how-to-pull-your-logs"><img src="https://img.shields.io/badge/How%20to-pull%20your%20logs-555555?style=for-the-badge" alt="How to pull your logs" /></a>
 
-<p align="center"><sub>v2.3.0 promoted fifteen public betas to stable; v2.3.1 adds four new games to Preview &gt; Games. The download buttons above, Homebrew and the in-app updater all move to 2.3.1. <a href="#-lucid-v230-is-here"><b>What's in it, how to update, and how to report a bug with screenshots and logs</b></a> · <a href="#-whats-new-in-v231"><b>What's new in 2.3.1</b></a>.</sub></p>
+<p align="center"><sub>v2.4.0 promotes the two public betas to stable and is the first LUCID release whose Windows installers are signed by TECHLEAD 187 LLC. The download buttons above, Homebrew and the in-app updater all move to 2.4.0. <a href="#-whats-new-in-v240"><b>What's new in 2.4.0</b></a> · <a href="#-lucid-v230-is-here"><b>How to update, and how to report a bug with screenshots and logs</b></a>.</sub></p>
 
-<p align="center"><sub><b>Next up: v2.4.0, as public betas first.</b> Like 2.3.0, the next release ships as GitHub prereleases (<code>v2.4.0-beta.N</code>) before anything reaches stable installs: the download buttons above, the in-app updater and the Homebrew cask stay on 2.3.1 until 2.4.0 is promoted. <a href="#-v240-ships-as-betas-first"><b>What the betas carry and how to track them</b></a>.</sub></p>
+<p align="center"><sub><b>The 2.4.0 beta channel stopped here.</b> Both prereleases (<code>v2.4.0-beta.1</code>, <code>v2.4.0-beta.2</code>) are promoted into 2.4.0; installing 2.4.0 over either keeps your settings, sessions and keys. <a href="#-v240-shipped-as-betas-first"><b>What the betas carried</b></a>.</sub></p>
 
 </td>
 </tr>
@@ -127,13 +127,13 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
-## 🧪 v2.4.0 ships as betas first
+## 🧪 v2.4.0 shipped as betas first
 
-> **Nothing changes for a working install until 2.4.0 is promoted.** The next release is built and tested in the open the way 2.3.0 was: each `v2.4.0-beta.N` is a GitHub **prerelease**. It is never offered to stable installs by the in-app updater, the Homebrew cask stays pinned to 2.3.1, and the rolling `latest` download links at the top of this page keep pointing at 2.3.1. When the betas have settled, 2.4.0 is promoted and everything moves at once.
+> **The 2.4.0 beta channel stopped here.** v2.4.0 was built and tested in the open the way 2.3.0 was: each `v2.4.0-beta.N` was a GitHub **prerelease**, never offered to stable installs by the in-app updater, with the Homebrew cask pinned to 2.3.1 and the rolling `latest` download links pointing at 2.3.1. With beta.1 and beta.2 settled, 2.4.0 is promoted and everything has moved at once: the download buttons at the top of this page, the in-app updater and the cask all point at 2.4.0 ([What's new in v2.4.0](#-whats-new-in-v240)).
 
-**Tracking the betas.** Watch the [releases page](https://github.com/mlcyclops/lucidagentide/releases) (GitHub's *Watch > Custom > Releases* includes prereleases), and each beta gets its own *What's new in v2.4.0-beta.N* section below, newest first, with an install link. Installing a beta over 2.3.1 keeps your settings, sessions and keys; going back is installing 2.3.1 over it. Bugs go to the [issue template](https://github.com/mlcyclops/lucidagentide/issues/new?template=bug_report.yml) with the beta number, and [how to pull your logs](#how-to-pull-your-logs) applies unchanged.
+**If you ran a beta.** Installing 2.4.0 over beta.1 or beta.2 keeps your settings, sessions and keys; the in-app updater on a beta offers 2.4.0 like any stable install. The per-beta sections below (*What's new in v2.4.0-beta.N*, newest first) stay as the record of what was promoted. Bugs go to the [issue template](https://github.com/mlcyclops/lucidagentide/issues/new?template=bug_report.yml), and [how to pull your logs](#how-to-pull-your-logs) applies unchanged.
 
-**What the first 2.4.0 betas carry** (each with its ADR in [DECISIONS.md](DECISIONS.md); the per-beta notes start at [What's new in v2.4.0-beta.2](#-whats-new-in-v240-beta2-prerelease)):
+**What the 2.4.0 betas carried** (each with its ADR in [DECISIONS.md](DECISIONS.md); the per-beta notes start at [What's new in v2.4.0-beta.2](#-whats-new-in-v240-beta2-prerelease)):
 
 - **🪐 Claude Haiku 5.5 on omp 18.8.6** at $0.10/$0.50 per Mtok with a 1M window; it becomes the recommended checker model when your account lists it. The omp move also brings Anthropic prompt-cache fixes and sturdier OAuth refresh. *(P-MODEL.7, ADR-0442)*
 - **🔑 OpenAI sign-in by device code.** The OpenAI card gains **Connect with a device code** for hosts where the browser callback never comes back (a blocked localhost port or a proxy 403): LUCID shows a short code you type on OpenAI's device page. The normal sign-in is unchanged. *(P-PROV.3, ADR-0444)*
@@ -145,7 +145,7 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ## 🚀 LUCID v2.3.0 is here
 
-> **v2.3.0 is the stable release that fifteen public betas built.** Everything below was tested in the open as a GitHub prerelease, fixed against the reports you filed, and now ships to everyone. **v2.3.1** follows it with four new arcade games ([what's new in 2.3.1](#-whats-new-in-v231)); the download buttons at the top of this page, the Homebrew cask and the in-app updater all point at 2.3.1.
+> **v2.3.0 is the stable release that fifteen public betas built.** Everything below was tested in the open as a GitHub prerelease, fixed against the reports you filed, and now ships to everyone. **v2.3.1** follows it with four new arcade games ([what's new in 2.3.1](#-whats-new-in-v231)), and **v2.4.0** promotes the next two betas with the first signed Windows installers ([what's new in 2.4.0](#-whats-new-in-v240)); the download buttons at the top of this page, the Homebrew cask and the in-app updater all point at 2.4.0.
 
 ### The headlines
 
@@ -166,8 +166,8 @@ The full detail, beta by beta, is in [What's new in v2.3.0](#-whats-new-in-v230)
 
 ### Install or update
 
-1. **Already on LUCID?** On Windows the in-app updater offers 2.3.1. On macOS run `brew update && brew upgrade --cask lucidagentide` (Homebrew is the macOS update channel, see [Homebrew](#homebrew-macos)). On Linux, download the new AppImage, `.deb` or `.rpm` and install it over the old one. If you ran a beta, installing 2.3.1 over it keeps your settings, sessions and keys.
-2. **New install:** use the download buttons at the top of this page, or open the **[v2.3.1 release](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.1)** and pick the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
+1. **Already on LUCID?** On Windows the in-app updater offers 2.4.0, the first update whose installer carries the TECHLEAD 187 LLC signature (the updater checks it before installing). On macOS run `brew update && brew upgrade --cask lucidagentide` (Homebrew is the macOS update channel, see [Homebrew](#homebrew-macos)). On Linux, download the new AppImage, `.deb` or `.rpm` and install it over the old one. If you ran a 2.4.0 beta, installing 2.4.0 over it keeps your settings, sessions and keys.
+2. **New install:** use the download buttons at the top of this page, or open the **[v2.4.0 release](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.4.0)** and pick the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
 
 ### Upgrade notes and known issues
 
@@ -298,6 +298,19 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 > are in this source-available core (managed-config + an audit-export interface); the policy templates and SIEM
 > connectors are a separately-licensed add-on. Metadata-only by construction - no code, prompts, or CUI
 > leave the host.
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.4.0
+
+> **✍️ The first signed Windows release.** v2.4.0 is beta.1 and beta.2 promoted to stable, plus everything merged since beta.2: every Windows installer and executable is now Authenticode-signed by **TECHLEAD 187 LLC**, Gemini 4 Argon and Gemini 3.8 Flash join the picker, and a paired external controller gets its own token scope. It is the first stable release since v2.3.1.
+>
+> **➡️ Install it:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.4.0](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.4.0). It is the repository's Latest release: the download buttons, the in-app updater and Homebrew follow it. Installing it over beta.1, beta.2 or 2.3.1 keeps your settings, sessions and sign-ins.
+
+- **✍️ Windows installers signed by TECHLEAD 187 LLC** - the NSIS Setup, the portable `.exe`, the MSI, the AppX, the app executable and every bundled executable are signed through Azure Artifact Signing with the certificate `CN=TECHLEAD 187 LLC` and RFC 3161 timestamped, so the signature stays valid after the certificate expires. What you see: the UAC prompt names **TECHLEAD 187 LLC** as the verified publisher instead of "Unknown publisher", and the same name appears in Explorer's Details tab, Programs and Features, the AppX listing and the About dialog. SmartScreen's "Windows protected your PC" is reputation-based, not signature-based: it fades as signed downloads accumulate, and *More info > Run anyway* shows the publisher until then. The in-app updater now **refuses an update that is not signed by that publisher**, and a release run that cannot sign **fails instead of shipping unsigned**. macOS is still unsigned (no Apple certificate yet), so mac auto-update still goes through Homebrew. *(P-RELEASE.6, P-RELEASE.7, [ADR-0447](DECISIONS.md), [ADR-0450](DECISIONS.md))*
+- **🪐 Gemini 4 Argon and Gemini 3.8 Flash** - Gemini 4 Argon is the Gemini flagship with a 1M context window and Gemini 3.8 Flash is the Gemini default; on a Gemini session omp's heavy roles (thinking, plan, subagents) run on Argon. *(P-MODEL.8, [ADR-0448](DECISIONS.md))*
+- **🎮 A paired controller with its own token scope** - an external controller you pair gets a token of its own (the pairing store is argon2id-hashed) and talks only to `/api/controller/*` on loopback; it can drive supervised Fleet lanes only, and every prompt it sends passes the fail-closed scanner before anything runs. *(P-CTRL.2, [ADR-0438](DECISIONS.md))*
+- **📦 And everything from the betas** - Claude Haiku 5.5 on omp 18.8.6, OpenAI sign-in by device code, Microsoft's eXecution Container behind the Windows sandbox, scheduled jobs, the Fleet grid fixes, settings that survive a killed engine and LAN model servers through the egress proxy: see [What's new in v2.4.0-beta.1](#-whats-new-in-v240-beta1-prerelease) and [What's new in v2.4.0-beta.2](#-whats-new-in-v240-beta2-prerelease).
 
 ---
 
@@ -1346,7 +1359,15 @@ Obsidian-vault export), AI-authorship attribution, one-command import, a read-wr
 the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
 guards), a local **RAG knowledge spine** + the **compiled KB** with hybrid retrieval, the governed **skills
 directory** + **Skill Studio**, **local & hybrid providers**, the **Agent Builder**, the **agent firewall**,
-and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v2.3.1):** four
+and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v2.4.0):** the first
+**signed Windows release**: every installer and executable Authenticode-signed by **TECHLEAD 187 LLC**
+through Azure Artifact Signing, RFC 3161 timestamped, the updater pinned to that publisher and a release that
+cannot sign failing instead of shipping unsigned *(P-RELEASE.6/.7, ADR-0447, ADR-0450)*; **Gemini 4 Argon**
+as the Gemini flagship and **Gemini 3.8 Flash** as the Gemini default *(P-MODEL.8, ADR-0448)*; a **paired
+controller with its own token scope** on loopback, supervised lanes only, scanner first *(P-CTRL.2,
+ADR-0438)*; plus the two 2.4.0 betas promoted: Claude Haiku 5.5 on omp 18.8.6, OpenAI device-code sign-in,
+Microsoft's eXecution Container behind the Windows sandbox, scheduled jobs, atomic settings and LAN model
+servers through the egress proxy *(ADR-0439..0446)*. **v2.3.1** added four
 single-file arcade games in Preview (**Chroma Cadence**, **Gravity Gambit**, **Silent Fathom**, **Skyhook**),
 each fitted to the panel, with sound off by default in the action games and a stored best that can never
 reach the page as markup *(P-GAME.7-.10)*. **v2.3.0** promoted fifteen public betas to stable: a **Windows AppContainer sandbox that chat actually works inside**, with a
@@ -1442,7 +1463,7 @@ reads ~1-8 s → ~0-2 ms, idle server CPU ~29% → ~8%); and the **Preview panel
 every model** with bring-your-own-embeddings, server-side **gov lockdown**, the KG-pack marketplace, and the
 overloaded-provider fallback; v1.11.0 brought E2E-encrypted **live collaboration**.)*
 
-**6,200+ tests**: the repo's scoped gate measures **460 files / 6,190 tests** at v2.3.1 (scope defined by
+**6,900+ tests**: the repo's scoped gate measures **517 files / 6,936 tests** at v2.4.0 (scope defined by
 exclusion, ADR-0303) plus the Python sidecar's 57, with `tsc --noEmit` clean on the shipping projects. The
 table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-session log.
 
@@ -1450,6 +1471,7 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **v2.4.0 batch** | **✍️ The first signed Windows release, two betas promoted** - `ADR-0438..0450`. **SIGNING** (`P-RELEASE.6/.7`, ADR-0447/0450): every Windows artifact (NSIS Setup, portable, MSI, AppX, the app exe and each bundled exe) is Authenticode-signed through Azure Artifact Signing with `CN=TECHLEAD 187 LLC` and RFC 3161 timestamped; the UAC prompt, Explorer's Details tab, Programs and Features, the AppX listing and the About dialog all carry the one publisher string; the in-app updater refuses an update not signed by that publisher, and a release run that cannot sign fails instead of shipping unsigned (SmartScreen reputation accrues as signed downloads accumulate; macOS stays unsigned on Homebrew until an Apple certificate exists). **MODELS** (`P-MODEL.8`, ADR-0448): Gemini 4 Argon is the Gemini flagship (1M context), Gemini 3.8 Flash the Gemini default, and a Gemini session runs omp's thinking/plan/subagent roles on Argon. **CONTROLLER** (`P-CTRL.2`, ADR-0438): a paired external controller gets its own token scope (argon2id-hashed pairing store) and `/api/controller/*` on loopback only, supervised lanes only, every prompt through the fail-closed scanner first. **PROMOTED**: beta.1 (Claude Haiku 5.5 on omp 18.8.6, OpenAI device-code sign-in, MXC behind the Windows sandbox, scheduled jobs, Fleet grid fixes) and beta.2 (atomic settings with a last-good backup, LAN model servers through the egress proxy, catalog titles on one line). Scoped gate at the tag: 517 files / 6,936 tests. | [ADR-0438..0450](DECISIONS.md) |
 | **v2.3.1 batch** | **🕹 Four arcade games** - `P-GAME.7..10`. Chroma Cadence (rhythm, with an audio-sync suggestion from measured tap error), Gravity Gambit (orbital golf, the course turns on a portrait panel), Silent Fathom (sonar stealth, the view zooms out so the sub sees as far as it is heard) and Skyhook (grappling runner, retuned after playtests: anchors always in rope reach of the floor, a self-clearing rope, late-release grace, a Cascade that lets a lead stand). Each is a single self-contained HTML file behind the arcade gate (BUSL header, inline script only, no external assets, no em dashes) with a playtest handle and a headless demo. Sound starts off in the three action games; Silent Fathom's stored best is kept to whole numbers and written as text (a CodeQL `js/xss-through-dom` fix). | P-GAME.7..10 |
 | **v2.3.0 batch** | **🚀 Fifteen betas promoted to stable** - `ADR-0373..0424`, beta.1 through beta.15 released as the repository's Latest: the tag build attaches the installers and the electron-updater feed, and the Homebrew cask is pinned to 2.3.0 (by PR #445: the update-cask job's direct push to master is refused by the master ruleset). **SANDBOX**: the Windows AppContainer runs the agent for real (the pill lights only after the contained runtime boots), with a switch, Windows folder-picker grants, Group Policy keys, and a helper that skips grants already on disk so it answers the handshake in time; Linux bubblewrap binds the packaged install root for `.deb`/`.rpm` installs. **JUDGMENT**: Jev typed judgment and the `browser_run` browser policy, off by default with a breaker for a judge that cannot answer. **MODELS**: omp 18.4.4 with Claude Opus 5.5 (default) and Sonnet 5.5, GPT-6 Astra / Sol / Luna, Grok 4.7, StepFun behind the China-origin gate, several accounts per provider, login-named rows. **FLEET**: lanes in their own git worktree, same-file-only waits, one owner per session, repo chips, pushes that arrive or say why. **STATUS**: a network indicator with a stand-by card, a long write is not a stall, evidence-based stuck marks, `lucid hub` in the terminal, Stop that stops. | [ADR-0373..0424](DECISIONS.md) |
 | **v2.3.0-beta.1 batch** | **🧭 Jev, the Jev browser policy, named accounts, and the Agent Mode pass** - `ADR-0373..0379`, shipped as a **prerelease** that never touches the rolling `latest` channel or the Homebrew cask. **JEV**: a typed-judgment engine (choice with per-option probabilities and confidence, yes/no probability, score over ordered levels) wired as omp's judgment backend, with a Settings card for the TypeSafe key and backend switch pinned to `llm` under AskSage lockdown, a per-turn trace under every reply naming the question, the typed answer, the backend and the latency, and a frozen prompt policy so "use Jev" is understood. **BROWSER**: `browser_run`, a TypeScript port of browser-use/jev-ultrafast: an isolated-world DOM snapshot becomes an indexed element table, one judgment picks the operation plus a target per operation, only the matching head executes through the existing input path after a freshness re-check, and every typed string is a caller-supplied named value (no text-generating model, page content can never become input). **ACCOUNTS**: several OAuth identities or named keys per provider, switchable from Settings and the Provider Hub. **AGENT MODE**: Regular/Max model tier in the title bar (and the drag-region bug that swallowed its clicks), the preview-link whiteout fixed by one navigation policy, the game cabinet, omp pinned to 18.2.6. Install: [releases/tag/v2.3.0-beta.1](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.3.0-beta.1). | [ADR-0373](DECISIONS.md), [ADR-0374](DECISIONS.md), [ADR-0375](DECISIONS.md), [ADR-0376](DECISIONS.md), [ADR-0377](DECISIONS.md), [ADR-0378](DECISIONS.md), [ADR-0379](DECISIONS.md) |
