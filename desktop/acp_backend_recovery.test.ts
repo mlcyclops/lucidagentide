@@ -204,6 +204,36 @@ describe("switch guard", () => {
   }, 30_000);
 });
 
+// #460 case 1 (P-SWITCH.1 follow-up): the sheet's "Stop it and switch" (force: true) goes straight to
+// loadSession/newSession. Before the fix nothing set goalCancelled, so the maker TURN was cancelled
+// (clearTurnRecovery) but the LOOP lived on: its checker or next maker iteration then ran inside the
+// newly loaded session. The switch must stop the loop and wait for it to unwind BEFORE touching the
+// session. Agent-kind automations (startAgentRun, not Main's session) are #460 case 2, not covered here.
+describe("forced switch during a goal loop (#460 case 1)", () => {
+  for (const [label, switchSession] of [
+    ["loadSession", () => backend.loadSession("fake-session-1")],
+    ["newSession", () => backend.newSession()],
+  ] as const) {
+    test(`${label} during a goal loop stops the loop before the session changes`, async () => {
+      process.env.FAKE_ACP_MODE = "hang";
+      const events: string[] = [];
+      const loop = backend.runGoal({ goal: "keep improving the tests", condition: "never met", maxIters: 3 }, (e) => { events.push(e.type); });
+      await until(() => trace().some((t) => t.method === "session/prompt"));
+      expect(backend.switchBlocker()).toBe("a goal loop is running");
+      await switchSession();
+      // The loop has FULLY unwound by the time the switch resolves: cancelled, reported, done.
+      expect(backend.isGoalRunning()).toBe(false);
+      await loop;
+      expect(events).toContain("goal-stop");
+      expect(events).toContain("done");
+      // And the agent only ever saw the maker's single (cancelled) prompt: no checker completion and no
+      // second iteration reached the newly loaded session.
+      expect(trace().filter((t) => t.method === "session/prompt")).toHaveLength(1);
+      expect(backend.switchBlocker()).toBeNull();
+    }, 30_000);
+  }
+});
+
 describe("master child revival", () => {
   test("a dead master child is revived by the next prompt, resuming the same session", async () => {
     process.env.FAKE_ACP_MODE = "crash";

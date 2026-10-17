@@ -283,6 +283,8 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 - 🏷️ **Showback-ready** - built for teams that need to attribute AI costs to projects or users
 - 🪪 **AI-authored code ledger** - a tamper-evident count of *which model wrote which lines*, per repo and identity (authorship attribution, not just git activity)
 
+The Main GUI ledger records only live, successfully completed write and edit calls from the Main session, not shared utility sessions. Edit counts come from omp's applied diff, including every `replace_all` occurrence; preview truncation does not reduce them. Failed, rejected, quarantined, cancelled, and replayed calls add no sample. Writes retain the existing convention: all written content lines are additions. Existing historical samples are not rewritten. See ADR-0451 and `make demo-P-LOC.5`.
+
 > **🏛️ Enterprise rollups (premium, coming soon).** A separately-licensed add-on rolls this showback
 > up into executive **BI dashboards** - Power BI (GCC-High), QuickSight, Looker, SharePoint, or an
 > airgap-friendly single-file HTML view - and adds **loop-efficiency and ROI** reporting per model and
@@ -1303,11 +1305,16 @@ brew install --cask lucidagentide
 ```
 
 `brew trust` is required on Homebrew 6+, which refuses to load casks from a third-party tap until you
-explicitly trust it (older Homebrew skips this step). The cask installs a `.pkg`: `installer(8)` places the
-app in `/Applications` **without** the macOS quarantine flag, so it launches with **no Gatekeeper prompt**
-even though the build is unsigned/not-notarized (a `postflight` strips quarantine as belt-and-suspenders, so
-there is no manual `xattr` step). The cask serves both Apple Silicon and Intel automatically. To remove it
+explicitly trust it (older Homebrew skips this step). The cask unpacks the release `.zip` and copies
+`LucidAgentIDE.app` into `/Applications` itself (an `app` cask: no `installer(8)`, no package-trust
+step, nothing like the deprecated `allow_untrusted` flow), then a `postflight` strips the macOS
+quarantine flag, so the unsigned/not-notarized build still launches with **no Gatekeeper prompt** and
+no manual `xattr` step. The cask serves both Apple Silicon and Intel automatically. To remove it
 later: `brew uninstall --cask lucidagentide` (add `--zap` to also delete app data).
+
+The install also puts two commands on your PATH: `lucid` (the fail-closed launcher)
+and `lucid-hub` (a shim that execs `lucid hub`), so the terminal hub works from any
+terminal, including inside herdr.
 
 ## <img src=".github/assets/icons/onboarding-animated.svg" width="28" align="top" alt=""> Onboarding
 

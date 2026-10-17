@@ -64,6 +64,10 @@ Everything security-relevant is unchanged: loopback bind, Origin/Host checks whe
 they apply, `x-lucid-token` on every request, and the omp child still loads the gate
 in-process (invariant 4). The TUI holds the UI token, never the agent token.
 
+On a Homebrew install, `lucid` and `lucid-hub` are both on PATH (`lucid-hub` execs
+`lucid hub`), so the hub starts from any terminal, including inside herdr, with no
+bundle path and no `bun` invocation.
+
 ## Interaction model
 
 - **Panes, not pages.** The hub is a pane multiplexer in the herdr/tmux idiom: split
