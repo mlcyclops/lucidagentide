@@ -410,6 +410,10 @@ demo-P-LOC.3: ## P-LOC.3 (ADR-0095): the AI-authored code ledger is discoverable
 demo-P-LOC.4: ## P-LOC.4 (ADR-0211): AI-authored lines reach the UI again - the gate holds agent_obs.duckdb read-write for the whole session, so the desktop's READ_ONLY aiLocSummary() lock-failed -> null -> "none yet" despite rows in the DB. Fix (mirrors turns/security/latency logs): the desktop appends every edit to a GUI-owned JSONL it can read live (same linediff count as the chat chip); the dashboard aggregates that lock-free. Proves count (write/edit/patch) + record (no-op on 0 lines) + read/aggregate roll-up + empty-null
 	$(BUN) run desktop/scripts/demo_p_loc_4.ts
 
+.PHONY: demo-P-LOC.5
+demo-P-LOC.5: ## P-LOC.5 (ADR-0451): completion-only AI-LOC from real gated omp tools, canonical edit previews, actual diff counts
+	$(BUN) run desktop/scripts/demo_p_loc_5.ts
+
 demo-P-PREVIEW.1: ## P-PREVIEW.1 (ADR-0096): in-app browser preview - resolver renders local files the agent builds, gates remote (egress, P-PREVIEW.3), blocks the ambiguous; panel + screenshot-to-chat seam
 	$(BUN) run desktop/scripts/demo_p_preview_1.ts
 
@@ -1347,3 +1351,6 @@ demo-CREATOR-DRIFT: ## CREATOR-DRIFT (ADR-0430): CutWire Drift (GPL-3.0 Qt + FFm
 demo-CREATOR-WHISTLE: ## CREATOR-WHISTLE (ADR-0432): word timing measured IN-PROCESS by the pinned Whistle model (Needle wasm, no socket import): the three assets verify by size and sha256 and a one-byte flip refuses the load by name and both hashes, the real model transcribes a 16 kHz fixture at 90%+ token match with monotonic word times, a clip over 30 s is windowed with no word split, one substituted word becomes the ONE derived item capped at 0.7, load and transcribe make zero network attempts, a hot CPU refuses the align job with the measured reason, confidence 1.2 is rejected, and a scratch Creator engine's POST /api/creator/align returns a validated, model-pinned document the editor paints with measured chips. Fails (exit 1) when the assets are missing
 	$(BUN) run harness/scripts/demo_creator_whistle.ts
 	$(BUN) test $(TEST_IGNORES) harness/voice/whistle.test.ts harness/voice/whistle_client.test.ts harness/voice/resample.test.ts harness/voice/transcription.test.ts harness/creator/timeline.test.ts desktop/whistle_assets.test.ts desktop/whistle_stage.test.ts desktop/creator_registry.test.ts desktop/creator_probe.test.ts desktop/creator_editor.test.ts desktop/renderer/creator_editor.test.ts desktop/lockdown_route.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-BREW.1
+demo-P-BREW.1: ## P-BREW.1: the Homebrew cask is an app cask over the release .zip - no pkg stanza, no allow_untrusted / package trust (deprecated in Homebrew 6), pinned per-arch sha256, and the cask url / electron-builder artifactName / update-cask job all name the same zips
+	$(BUN) run tools/cask_check.ts

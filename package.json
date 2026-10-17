@@ -7,7 +7,8 @@
   "description": "Security/provenance/memory harness built AROUND oh-my-pi (omp). Extend, never fork. See CLAUDE.md.",
   "type": "module",
   "bin": {
-    "lucid": "harness/launcher/lucid_acp.ts"
+    "lucid": "harness/launcher/lucid_acp.ts",
+    "lucid-hub": "harness/launcher/lucid_hub_bin.ts"
   },
   "engines": {
     "bun": ">=1.3.0"
