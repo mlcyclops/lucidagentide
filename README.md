@@ -78,15 +78,15 @@ personalization internals are proprietary and intentionally undocumented here - 
 <tr>
 <td align="center">
 
-# 🚀 LUCID v2.4.0 is here
+# 🚀 LUCID v2.4.1 is here
 
 <p align="center"><b>✍️ Windows installers signed by TECHLEAD 187 LLC</b> · <b>🪐 Gemini 4 Argon and Gemini 3.8 Flash, Claude Haiku 5.5</b> · <b>🎮 a paired controller with its own token scope</b> · <b>🔑 OpenAI sign-in by device code</b> · <b>🛡️ Microsoft's container behind the Windows sandbox</b> · <b>🗓 scheduled jobs</b> · <b>🛟 settings that survive a crash</b> · <b>🌐 LAN model servers through the sandbox</b></p>
 
-<a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.4.0"><img src="https://img.shields.io/badge/Download-v2.4.0-c64bd6?style=for-the-badge&logo=github&logoColor=white" alt="Download LUCID v2.4.0" /></a>
+<a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.4.1"><img src="https://img.shields.io/badge/Download-v2.4.1-c64bd6?style=for-the-badge&logo=github&logoColor=white" alt="Download LUCID v2.4.1" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/issues/new?template=bug_report.yml"><img src="https://img.shields.io/badge/Found%20a%20bug%3F-Open%20an%20issue-d73a49?style=for-the-badge&logo=github&logoColor=white" alt="Found a bug? Open an issue" /></a>
 <a href="#how-to-pull-your-logs"><img src="https://img.shields.io/badge/How%20to-pull%20your%20logs-555555?style=for-the-badge" alt="How to pull your logs" /></a>
 
-<p align="center"><sub>v2.4.0 promotes the two public betas to stable and is the first LUCID release whose Windows installers are signed by TECHLEAD 187 LLC. The download buttons above, Homebrew and the in-app updater all move to 2.4.0. <a href="#-whats-new-in-v240"><b>What's new in 2.4.0</b></a> · <a href="#-lucid-v230-is-here"><b>How to update, and how to report a bug with screenshots and logs</b></a>.</sub></p>
+<p align="center"><sub>v2.4.1 is v2.4.0 plus the #460 session-switch fixes, honest AI-LOC counting and the Homebrew app cask; installers stay signed by TECHLEAD 187 LLC. The download buttons above, Homebrew and the in-app updater all move to 2.4.1. <a href="#-whats-new-in-v241"><b>What's new in 2.4.1</b></a> · <a href="#-whats-new-in-v240"><b>What's new in 2.4.0</b></a> · <a href="#-lucid-v230-is-here"><b>How to update, and how to report a bug with screenshots and logs</b></a>.</sub></p>
 
 <p align="center"><sub><b>The 2.4.0 beta channel stopped here.</b> Both prereleases (<code>v2.4.0-beta.1</code>, <code>v2.4.0-beta.2</code>) are promoted into 2.4.0; installing 2.4.0 over either keeps your settings, sessions and keys. <a href="#-v240-shipped-as-betas-first"><b>What the betas carried</b></a>.</sub></p>
 
@@ -166,8 +166,8 @@ The full detail, beta by beta, is in [What's new in v2.3.0](#-whats-new-in-v230)
 
 ### Install or update
 
-1. **Already on LUCID?** On Windows the in-app updater offers 2.4.0, the first update whose installer carries the TECHLEAD 187 LLC signature (the updater checks it before installing). On macOS run `brew update && brew upgrade --cask lucidagentide` (Homebrew is the macOS update channel, see [Homebrew](#homebrew-macos)). On Linux, download the new AppImage, `.deb` or `.rpm` and install it over the old one. If you ran a 2.4.0 beta, installing 2.4.0 over it keeps your settings, sessions and keys.
-2. **New install:** use the download buttons at the top of this page, or open the **[v2.4.0 release](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.4.0)** and pick the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
+1. **Already on LUCID?** On Windows the in-app updater offers 2.4.1; its installer carries the TECHLEAD 187 LLC signature (the updater checks it before installing). On macOS run `brew update && brew upgrade --cask lucidagentide` (Homebrew is the macOS update channel, see [Homebrew](#homebrew-macos); from 2.4.1 the cask is an app cask that also puts `lucid` and `lucid-hub` on PATH). On Linux, download the new AppImage, `.deb` or `.rpm` and install it over the old one. Installing 2.4.1 over 2.4.0, a 2.4.0 beta or 2.3.1 keeps your settings, sessions and keys.
+2. **New install:** use the download buttons at the top of this page, or open the **[v2.4.1 release](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.4.1)** and pick the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
 
 ### Upgrade notes and known issues
 
@@ -300,6 +300,35 @@ The Main GUI ledger records only live, successfully completed write and edit cal
 > are in this source-available core (managed-config + an audit-export interface); the policy templates and SIEM
 > connectors are a separately-licensed add-on. Metadata-only by construction - no code, prompts, or CUI
 > leave the host.
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.4.1
+
+> **🔧 A patch release: session switching that keeps its word, honest AI-LOC counting, a Homebrew app cask.** v2.4.1 is v2.4.0 plus the bug fixes merged since (#514, #516): the five session-switch failures reported in #460 are closed, the AI-LOC ledger counts only edits and writes that actually completed, and the macOS cask installs the app from the release `.zip` and puts `lucid` on PATH. No new product surface beyond that launcher convenience; the Windows installers stay signed by **TECHLEAD 187 LLC**.
+>
+> **➡️ Install it:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.4.1](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.4.1). It is the repository's Latest release: the download buttons, the in-app updater and Homebrew follow it. Installing it over 2.4.0, a 2.4.0 beta or 2.3.1 keeps your settings, sessions and sign-ins.
+
+**Session switching (#460, cases 1-5)**
+
+- **🛑 "Stop it and switch" really stops the loop** - a forced session switch now stops a running `/goal` loop and waits for it to unwind before the session changes. Before, the maker turn was cancelled but the loop lived on inside the newly loaded session. *(#507, case 1)*
+- **🤖 Agent automations no longer block a switch** - the "an automation is running" blocker fires only for automations that own Main's session (goal-kind). Agent-kind automations run in their own child pipeline and no longer refuse a switch. *(#509, case 2)*
+- **📡 The engine's answer decides what the thread shows** - a busy `409` between turns reloads the holder's transcript, a held `409` attaches to the holding spoke per the [ADR-0404](DECISIONS.md) registry, and no answer is never treated as a completed switch. *(#510, cases 3 and 4)*
+- **⏱ A late preflight cannot win** - clicking session A then B quickly can no longer let A's late preflight land on top of B: `openSession` takes a generation number before any await and discards superseded plans. *(#511, case 5)*
+
+**AI-LOC ledger**
+
+- **🔗 Internal URIs are not code** - `xd://` device calls, and other internal URIs such as `local://`, `agent://` and `skill://`, are never counted as AI-authored code in the AI-LOC ledger or shown as an inline diff or preview. *(#489, fixes #483)*
+- **✅ Only completed edits count** - the ledger counts only successfully completed edits and writes, using the tool's actual result diff (per-file results when present); blocked, failed and duplicate completions add nothing. Edit previews in chat and Fleet share one canonical extractor. *(#492, P-LOC.5, [ADR-0451](DECISIONS.md))*
+
+**Homebrew (macOS)**
+
+- **🍺 An app cask over the release `.zip`** - the cask no longer wraps the `.pkg` (no deprecated `allow_untrusted`) and is pinned per release; the `.pkg` assets still ship for MDM. A `make demo-P-BREW.1` check pins the naming contract. *(#453)*
+- **⌨️ `lucid` on PATH, plus `lucid-hub`** - a Homebrew install puts `lucid` on your PATH and adds a `lucid-hub` command wrapper. *(#468)*
+
+**CI**
+
+- **⏲ Explicit test budgets** - the four tests the Windows CI gate was killing under load now carry explicit budgets. *(#513)*
 
 ---
 
@@ -1366,7 +1395,14 @@ Obsidian-vault export), AI-authorship attribution, one-command import, a read-wr
 the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
 guards), a local **RAG knowledge spine** + the **compiled KB** with hybrid retrieval, the governed **skills
 directory** + **Skill Studio**, **local & hybrid providers**, the **Agent Builder**, the **agent firewall**,
-and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v2.4.0):** the first
+and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v2.4.1):** a patch
+release on 2.4.0: the five **session-switch** failures of #460 closed (a forced switch stops the `/goal` loop
+and waits for it to unwind, only goal-kind automations block a switch, the engine's 409 answer decides what
+the thread shows, a late preflight cannot win) *(#507, #509, #510, #511)*; an **honest AI-LOC ledger** that
+counts only completed edits and writes from the tool's result diff and never counts `xd://` or other internal
+URIs *(#489, #492, P-LOC.5, ADR-0451)*; the **Homebrew cask as an app cask** over the release `.zip` with
+`lucid` and `lucid-hub` on PATH *(#453, #468)*; explicit budgets for four Windows CI tests *(#513)*.
+**v2.4.0** was the first
 **signed Windows release**: every installer and executable Authenticode-signed by **TECHLEAD 187 LLC**
 through Azure Artifact Signing, RFC 3161 timestamped, the updater pinned to that publisher and a release that
 cannot sign failing instead of shipping unsigned *(P-RELEASE.6/.7, ADR-0447, ADR-0450)*; **Gemini 4 Argon**
@@ -1470,7 +1506,7 @@ reads ~1-8 s → ~0-2 ms, idle server CPU ~29% → ~8%); and the **Preview panel
 every model** with bring-your-own-embeddings, server-side **gov lockdown**, the KG-pack marketplace, and the
 overloaded-provider fallback; v1.11.0 brought E2E-encrypted **live collaboration**.)*
 
-**6,900+ tests**: the repo's scoped gate measures **517 files / 6,936 tests** at v2.4.0 (scope defined by
+**6,900+ tests**: the repo's scoped gate measures **518 files / 6,958 tests** at v2.4.1 (scope defined by
 exclusion, ADR-0303) plus the Python sidecar's 57, with `tsc --noEmit` clean on the shipping projects. The
 table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-session log.
 
@@ -1478,6 +1514,7 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **v2.4.1 batch** | **🔧 Patch release: session switching, honest AI-LOC, Homebrew app cask** - bug fixes only (#514, #516). **SWITCHING** (#460 cases 1-5): "Stop it and switch" stops a running `/goal` loop and waits for it to unwind before the session changes (#507); the "an automation is running" blocker fires only for goal-kind automations that own Main's session, agent-kind ones in their own child pipeline no longer refuse a switch (#509); the engine's answer to a load/new is the authority for what the thread shows: a busy 409 between turns reloads the holder's transcript, a held 409 attaches to the holding spoke per the ADR-0404 registry, no answer is never a completed switch (#510); `openSession` takes a generation number before any await and discards superseded plans, so a late preflight for session A cannot win over B (#511). **AI-LOC**: `xd://` device calls and other internal URIs (`local://`, `agent://`, `skill://`) are never counted as AI-authored code or shown as an inline diff/preview (#489, #483); the ledger counts only successfully completed edits and writes from the tool's actual result diff (per-file results when present), blocked, failed and duplicate completions add nothing, and chat + Fleet edit previews share one canonical extractor (`P-LOC.5`, ADR-0451, #492). **HOMEBREW**: the cask is an app cask over the release `.zip` (no pkg, no deprecated `allow_untrusted`), pinned per release, the `.pkg` assets still shipped for MDM, with a `make demo-P-BREW.1` naming-contract check (#453); Homebrew installs put `lucid` on PATH and add a `lucid-hub` wrapper (#468). **CI**: explicit budgets for the four tests the Windows gate killed under load (#513). Scoped gate: 518 files / 6,958 tests. | [ADR-0451](DECISIONS.md) |
 | **v2.4.0 batch** | **✍️ The first signed Windows release, two betas promoted** - `ADR-0438..0450`. **SIGNING** (`P-RELEASE.6/.7`, ADR-0447/0450): every Windows artifact (NSIS Setup, portable, MSI, AppX, the app exe and each bundled exe) is Authenticode-signed through Azure Artifact Signing with `CN=TECHLEAD 187 LLC` and RFC 3161 timestamped; the UAC prompt, Explorer's Details tab, Programs and Features, the AppX listing and the About dialog all carry the one publisher string; the in-app updater refuses an update not signed by that publisher, and a release run that cannot sign fails instead of shipping unsigned (SmartScreen reputation accrues as signed downloads accumulate; macOS stays unsigned on Homebrew until an Apple certificate exists). **MODELS** (`P-MODEL.8`, ADR-0448): Gemini 4 Argon is the Gemini flagship (1M context), Gemini 3.8 Flash the Gemini default, and a Gemini session runs omp's thinking/plan/subagent roles on Argon. **CONTROLLER** (`P-CTRL.2`, ADR-0438): a paired external controller gets its own token scope (argon2id-hashed pairing store) and `/api/controller/*` on loopback only, supervised lanes only, every prompt through the fail-closed scanner first. **PROMOTED**: beta.1 (Claude Haiku 5.5 on omp 18.8.6, OpenAI device-code sign-in, MXC behind the Windows sandbox, scheduled jobs, Fleet grid fixes) and beta.2 (atomic settings with a last-good backup, LAN model servers through the egress proxy, catalog titles on one line). Scoped gate at the tag: 517 files / 6,936 tests. | [ADR-0438..0450](DECISIONS.md) |
 | **v2.3.1 batch** | **🕹 Four arcade games** - `P-GAME.7..10`. Chroma Cadence (rhythm, with an audio-sync suggestion from measured tap error), Gravity Gambit (orbital golf, the course turns on a portrait panel), Silent Fathom (sonar stealth, the view zooms out so the sub sees as far as it is heard) and Skyhook (grappling runner, retuned after playtests: anchors always in rope reach of the floor, a self-clearing rope, late-release grace, a Cascade that lets a lead stand). Each is a single self-contained HTML file behind the arcade gate (BUSL header, inline script only, no external assets, no em dashes) with a playtest handle and a headless demo. Sound starts off in the three action games; Silent Fathom's stored best is kept to whole numbers and written as text (a CodeQL `js/xss-through-dom` fix). | P-GAME.7..10 |
 | **v2.3.0 batch** | **🚀 Fifteen betas promoted to stable** - `ADR-0373..0424`, beta.1 through beta.15 released as the repository's Latest: the tag build attaches the installers and the electron-updater feed, and the Homebrew cask is pinned to 2.3.0 (by PR #445: the update-cask job's direct push to master is refused by the master ruleset). **SANDBOX**: the Windows AppContainer runs the agent for real (the pill lights only after the contained runtime boots), with a switch, Windows folder-picker grants, Group Policy keys, and a helper that skips grants already on disk so it answers the handshake in time; Linux bubblewrap binds the packaged install root for `.deb`/`.rpm` installs. **JUDGMENT**: Jev typed judgment and the `browser_run` browser policy, off by default with a breaker for a judge that cannot answer. **MODELS**: omp 18.4.4 with Claude Opus 5.5 (default) and Sonnet 5.5, GPT-6 Astra / Sol / Luna, Grok 4.7, StepFun behind the China-origin gate, several accounts per provider, login-named rows. **FLEET**: lanes in their own git worktree, same-file-only waits, one owner per session, repo chips, pushes that arrive or say why. **STATUS**: a network indicator with a stand-by card, a long write is not a stall, evidence-based stuck marks, `lucid hub` in the terminal, Stop that stops. | [ADR-0373..0424](DECISIONS.md) |

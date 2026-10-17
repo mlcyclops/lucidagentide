@@ -13,13 +13,38 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-10-17, v2.4.0 stable)
+## Current state (2026-10-17, v2.4.1 stable)
 
 The original build plan (Increment 0-2 + Phases 2-7) closed long ago; work is
-now product increments, each with its own ADR. **v2.4.0** (2026-10-17) is the
+now product increments, each with its own ADR. **v2.4.1** (2026-10-17) is the
+stable release: 2.4.0 plus the bug fixes merged to master the same day via
+#514 and #516, tagged `v2.4.1` and marked Latest, so the download buttons,
+the electron-updater feed and the Homebrew cask all move to it. No new
+product surface beyond a launcher convenience. SWITCHING (#460, cases 1-5):
+#507 makes "Stop it and switch" stop a running /goal loop and wait for it to
+unwind before the session changes (the maker turn used to be cancelled while
+the loop lived on inside the newly loaded session); #509 limits the "an
+automation is running" blocker to goal-kind automations that own Main's
+session, agent-kind ones run in their own child pipeline and no longer refuse
+a switch; #510 makes the engine's answer to a load/new the authority for what
+the thread shows (a busy 409 between turns reloads the holder's transcript, a
+held 409 attaches to the holding spoke per the ADR-0404 registry, no answer
+is never a completed switch); #511 gives openSession a generation number
+taken before any await so a superseded plan (click A then B quickly) is
+discarded. AI-LOC: #489 keeps xd:// device calls and other internal URIs
+(local://, agent://, skill://) out of the AI-LOC ledger and the inline
+diff/preview (#483); #492 (P-LOC.5, ADR-0451) counts only successfully
+completed edits and writes from the tool's actual result diff (per-file
+results when present), blocked, failed and duplicate completions add nothing,
+and chat + fleet edit previews share one canonical extractor. HOMEBREW: #453
+makes the cask an app cask over the release .zip (no pkg, no deprecated
+allow_untrusted), pinned per release, the .pkg assets still shipped for MDM,
+with a `make demo-P-BREW.1` naming-contract check; #468 puts `lucid` on PATH
+and adds a `lucid-hub` wrapper. CI: #513 gives explicit budgets to the four
+tests the Windows gate was killing under load. The scoped test gate measures
+518 files / 6958 tests at v2.4.1. **v2.4.0** (2026-10-17) was the previous
 stable release: beta.1 and beta.2 promoted plus everything merged to master
-since beta.2, tagged `v2.4.0` and marked Latest, so the download buttons, the
-electron-updater feed and the Homebrew cask all move to it (the update-cask
+since beta.2, tagged `v2.4.0` and marked Latest at the time (the update-cask
 job pins stable tags). It is the first release whose Windows installers are
 Authenticode-signed: P-RELEASE.6 (ADR-0447) + P-RELEASE.7 (ADR-0450) sign the
 NSIS Setup, portable, MSI, AppX, the app exe and every bundled exe through
@@ -50,9 +75,10 @@ corrected). **v2.4.0-beta.1** (2026-10-09) opened the 2.4.0 train: omp 18.8.6
 with Claude Haiku 5.5, OpenAI device-code sign-in, MXC behind the Windows
 sandbox, scheduled jobs and Fleet grid fixes. Both betas were GitHub
 prereleases: never offered to stable installs, with the cask and `latest`
-links on 2.3.1 until 2.4.0 promoted them. The hub stack (#466-#480, #463, #473, #468),
-#488, #492 and #457 wait on review fixes; the review recommends closing #489
-(superseded by #492) and #351 (TypeScript 7 drops the compiler API).
+links on 2.3.1 until 2.4.0 promoted them. Of the PRs that waited on review
+fixes at the 2.4.0 cut, #468, #489, #492 and #453 landed in 2.4.1; the hub
+stack (#466-#480, #463, #473), #488 and #457 still wait, and the review
+recommends closing #351 (TypeScript 7 drops the compiler API).
 **v2.3.1** (2026-10-01) is
 v2.3.0 plus #442: four arcade games (P-GAME.7-10: Chroma Cadence, Gravity
 Gambit, Silent Fathom, Skyhook), sound off by default in the action games, and

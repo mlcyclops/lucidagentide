@@ -627,4 +627,23 @@
 //            `/api/controller/*` on loopback only, supervised lanes only, every prompt through the
 //            fail-closed scanner first (P-CTRL.2, ADR-0438). A plain v2.4.0 tag, marked Latest, so the
 //            download buttons, the electron-updater feed and the Homebrew cask all follow it.
-export const APP_VERSION = "2.4.0";
+// v2.4.1 = 2.4.0 plus bug fixes (#514, #516); no new product surface beyond a launcher convenience.
+//            SESSION SWITCHING (#460, cases 1-5): "Stop it and switch" stops a running /goal loop and waits
+//            for it to unwind before the session changes (#507); the "an automation is running" blocker only
+//            fires for goal-kind automations that own Main's session, agent-kind ones run in their own child
+//            pipeline and no longer refuse a switch (#509); the engine's answer to a load/new is the authority
+//            for what the thread shows: a busy 409 between turns reloads the holder's transcript, a held 409
+//            attaches to the holding spoke per the ADR-0404 registry, and no answer is never a completed
+//            switch (#510); clicking session A then B quickly can no longer let A's late preflight win,
+//            openSession takes a generation number before any await and discards superseded plans (#511).
+//            AI-LOC: xd:// device calls and other internal URIs (local://, agent://, skill://) are never
+//            counted as AI-authored code or shown as an inline diff/preview (#489, #483); the ledger counts
+//            only successfully COMPLETED edits and writes from the tool's actual result diff (per-file results
+//            when present), blocked, failed and duplicate completions add nothing, and chat + fleet edit
+//            previews share one canonical extractor (#492, P-LOC.5, ADR-0451). HOMEBREW: the cask is an app
+//            cask over the release .zip (no pkg, no deprecated allow_untrusted), pinned per release, with the
+//            .pkg assets still shipped for MDM and a `make demo-P-BREW.1` naming check (#453); Homebrew
+//            installs put `lucid` on PATH and add a `lucid-hub` wrapper (#468). CI: explicit budgets for the
+//            four tests the Windows gate killed under load (#513). A plain v2.4.1 tag, marked Latest, so the
+//            download buttons, the electron-updater feed and the Homebrew cask all follow it.
+export const APP_VERSION = "2.4.1";
