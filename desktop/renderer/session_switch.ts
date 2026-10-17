@@ -67,6 +67,38 @@ export function planSessionSwitch(s: SwitchState): SwitchPlan {
   return s.busy ? { kind: "ask", reason: s.busy } : { kind: "load" };
 }
 
+/** The engine's answer to the actual load/new POST, as the bridge reports it. `sessionId` is the session
+ *  the busy 409 says Main kept; `heldBy` is the spoke the held 409 says runs it. */
+export interface SwitchAnswer { ok: boolean; busy?: string; sessionId?: string; heldBy?: { laneId: string } }
+
+/** #460 cases 3+4: what the renderer does with that answer. `planSessionSwitch` only guessed from the
+ *  renderer's own view, which can be stale (a goal or automation starting between the check and the load,
+ *  a lane whose stop was never confirmed) or missing (fleetStatus unreachable). The engine's registry
+ *  (ADR-0404) is the authority, so the answer, not the guess, decides what the thread shows next. */
+export type SwitchOutcome =
+  /** The engine switched. */
+  | { kind: "done" }
+  /** 409 heldBy: a live spoke holds the session; drive that spoke instead (#460 case 4). */
+  | { kind: "attach"; laneId: string }
+  /** 409 busy naming another session: the engine kept THAT one. Between turns there is no turn to adopt,
+   *  so only reloading the holder's transcript puts the view back on what the engine holds (#460 case 3). */
+  | { kind: "show-holder"; holderId: string; reason: string }
+  /** 409 busy on the target itself, or naming nothing: the view already matches; probe the live turn. */
+  | { kind: "recheck"; reason: string }
+  /** No answer (unreachable, or an error that is not the 409): the engine may still hold anything.
+   *  Never treat it as a completed switch; fail closed (#460 case 4). */
+  | { kind: "unconfirmed" };
+
+export function switchOutcome(r: SwitchAnswer, targetId: string | null): SwitchOutcome {
+  if (r.heldBy) return { kind: "attach", laneId: r.heldBy.laneId };
+  if (r.busy) {
+    return r.sessionId && r.sessionId !== targetId
+      ? { kind: "show-holder", holderId: r.sessionId, reason: r.busy }
+      : { kind: "recheck", reason: r.busy };
+  }
+  return r.ok ? { kind: "done" } : { kind: "unconfirmed" };
+}
+
 /** Every string the switch sheet shows. `target` is null for New session. Titles are plain text: the caller
  *  sets them with textContent, never as HTML. */
 export interface SwitchSheetCopy { title: string; body: string; spoke: string; spokeHint: string; stop: string; stay: string }
