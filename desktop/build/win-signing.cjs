@@ -42,8 +42,30 @@ function azureSigningEnabled(env = process.env) {
   return env.LUCID_WIN_AZURE_SIGN === "1";
 }
 
+// P-RELEASE.7 (ADR-0450): a RELEASE run is any run whose Windows bytes reach a GitHub Release (a tag
+// push, a publish_latest or beta_release dispatch). CI sets LUCID_RELEASE_RUN=1 on exactly those runs.
+function releaseRun(env = process.env) {
+  return env.LUCID_RELEASE_RUN === "1";
+}
+
+// True when SOME Windows signer is configured: Azure Artifact Signing, or the .pfx fallback
+// (electron-builder reads CSC_LINK itself).
+function windowsSignerConfigured(env = process.env) {
+  return azureSigningEnabled(env) || Boolean(env.CSC_LINK);
+}
+
 // Returns cfg unchanged when signing is off; otherwise a copy whose `win` block signs through Azure.
+// A release run with no signer THROWS here, inside electron-builder's own config load, so the gate is
+// the build itself and not only the workflow step in front of it: unsigned Windows bytes never reach a
+// Release even if the workflow is edited or run some other way. Test builds stay free to be unsigned.
 function withWindowsSigning(cfg, env = process.env) {
+  if (releaseRun(env) && !windowsSignerConfigured(env)) {
+    throw new Error(
+      "P-RELEASE.7: this is a release run (LUCID_RELEASE_RUN=1) but no Windows signer is configured. " +
+        "Stable, beta and rolling-latest Windows builds must be Authenticode-signed by TECHLEAD 187 LLC: " +
+        "set LUCID_WIN_AZURE_SIGN=1 with the Azure Artifact Signing credentials, or CSC_LINK for the .pfx fallback.",
+    );
+  }
   if (!azureSigningEnabled(env)) return cfg;
   const win = cfg.win || {};
   return {
@@ -56,4 +78,12 @@ function withWindowsSigning(cfg, env = process.env) {
   };
 }
 
-module.exports = { AZURE_ARTIFACT_SIGNING, CERTIFICATE_SUBJECT, PUBLISHER_NAME, azureSigningEnabled, withWindowsSigning };
+module.exports = {
+  AZURE_ARTIFACT_SIGNING,
+  CERTIFICATE_SUBJECT,
+  PUBLISHER_NAME,
+  azureSigningEnabled,
+  releaseRun,
+  windowsSignerConfigured,
+  withWindowsSigning,
+};
