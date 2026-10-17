@@ -235,6 +235,8 @@ describe("forced switch during a goal loop (#460 case 1)", () => {
       expect(backend.switchBlocker()).toBeNull();
     }, 30_000);
   }
+});
+
 // #460 case 2: the blocker must scope to automations that OWN Main's ACP session. A goal-kind automation
 // runs through runGoal on Main, so switching would stop it: it blocks. An agent-kind automation runs
 // through startAgentRun() in its own child pipeline, so a switch would not stop it: it must never block.

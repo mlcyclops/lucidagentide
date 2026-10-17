@@ -10,7 +10,7 @@
 
 import { bridge, type AccountsSnapshot, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import type { TurnStatus } from "./chat_events.ts";
-import { liveBadge, planSessionSwitch, spokeNameFor, switchOutcome, switchSheetCopy } from "./session_switch.ts"; // P-SWITCH.1 (ADR-0403), P-SWITCH.2 (ADR-0404)
+import { currentSwitchPreflight, liveBadge, planSessionSwitch, spokeNameFor, switchOutcome, switchSheetCopy } from "./session_switch.ts"; // P-SWITCH.1 (ADR-0403), P-SWITCH.2 (ADR-0404)
 import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
 // P-RECOVER.1 (ADR-0385): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
 import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
@@ -11172,7 +11172,12 @@ const cachedSessionInfo = (id: string | null): SessionInfo | undefined =>
 
 /** Every user-initiated "open this session" (the sidebar row) comes through here. */
 async function openSession(id: string): Promise<void> {
-  const [main, fleet] = await Promise.all([bridge.sessionBusy().catch(() => null), bridge.fleetStatus().catch(() => null)]);
+  // #460 case 5 (the #392 review): the generation is taken synchronously inside currentSwitchPreflight,
+  // BEFORE the two preflights can land, so clicking A then B quickly always ends on B: A's preflight
+  // resolves to null here and its stale plan is never applied.
+  const pre = await currentSwitchPreflight(Promise.all([bridge.sessionBusy().catch(() => null), bridge.fleetStatus().catch(() => null)]));
+  if (!pre) return; // a newer click owns the switch; this one is discarded unapplied
+  const [main, fleet] = pre;
   const plan = planSessionSwitch({ busy: main?.busy ?? null, mainSessionId: main?.sessionId ?? null, targetId: id, lanes: fleet?.lanes ?? [] });
   if (plan.kind === "promote") { void promoteLane(plan.laneId); return; }
   if (plan.kind === "refuse") { showToast({ tone: "warn", title: "This session is running in a spoke", desc: plan.reason, actions: [{ label: "OK" }], timeout: 8000 }); return; }

@@ -4,8 +4,10 @@
 // P-SWITCH.1 (ADR-0403): opening a session never stops Main's work unless the user chose to, and never puts
 // one session in two omp processes.
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { liveBadge, planSessionSwitch, switchOutcome, switchSheetCopy, type SwitchLane } from "./session_switch.ts";
+import { currentSwitchPreflight, liveBadge, planSessionSwitch, switchOutcome, switchSheetCopy, type SwitchLane } from "./session_switch.ts";
 
 const lane = (id: string, sessionId: string | null, status: string): SwitchLane => ({ id, sessionId, status });
 
@@ -103,5 +105,44 @@ describe("switchOutcome", () => {
 
   test("ok means the engine switched", () => {
     expect(switchOutcome({ ok: true }, "B")).toEqual({ kind: "done" });
+  });
+});
+
+// #460 case 5 (the #392 review): "openSession awaits two preflights before any epoch check, so clicking
+// A then B quickly can let A's late plan win. Take a generation number before the await." The generation
+// lives inside currentSwitchPreflight, taken synchronously at the call, so it can never be taken late.
+describe("currentSwitchPreflight (#460 case 5: a superseded open's plan is discarded)", () => {
+  test("a single uncontested open gets its preflight result back unchanged", async () => {
+    expect(await currentSwitchPreflight(Promise.resolve("preflight"))).toBe("preflight");
+  });
+
+  test("THE BUG: click A, then B while A's preflight is in flight - A's late result must not win", async () => {
+    let landA!: (v: string) => void;
+    const a = currentSwitchPreflight(new Promise<string>((resolve) => { landA = resolve; })); // A's preflight hangs at the engine
+    const b = currentSwitchPreflight(Promise.resolve("B")); // B is clicked before A's preflight lands
+    expect(await b).toBe("B"); // the newest click proceeds with its own plan
+    landA("A"); // A's preflight finally lands, after B already decided
+    expect(await a).toBeNull(); // superseded: A's stale result is discarded, its plan never applied
+  });
+
+  test("the newest click wins even when its preflight lands second", async () => {
+    let landB!: (v: string) => void;
+    const a = currentSwitchPreflight(Promise.resolve("A"));
+    const b = currentSwitchPreflight(new Promise<string>((resolve) => { landB = resolve; })); // B clicked right after A
+    expect(await a).toBeNull(); // A's preflight landed first, but B is the newer intent
+    landB("B");
+    expect(await b).toBe("B");
+  });
+
+  test("openSession wires the guard around its preflights, with no earlier await (pinned at the source)", () => {
+    const src = readFileSync(join(import.meta.dir, "app.ts"), "utf8");
+    const start = src.indexOf("async function openSession");
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf("\n}", start));
+    const code = body.split("\n").filter((line) => !line.trim().startsWith("//")).join("\n");
+    // The first await in openSession is the guarded Promise.all of the two preflights: the generation
+    // is taken synchronously inside currentSwitchPreflight, before sessionBusy/fleetStatus can land.
+    expect(code.indexOf("await")).toBe(code.indexOf("await currentSwitchPreflight(Promise.all([bridge.sessionBusy"));
+    expect(code).toContain("if (!pre) return;");
   });
 });

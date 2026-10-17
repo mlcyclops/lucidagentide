@@ -99,6 +99,22 @@ export function switchOutcome(r: SwitchAnswer, targetId: string | null): SwitchO
   return r.ok ? { kind: "done" } : { kind: "unconfirmed" };
 }
 
+// #460 case 5 (from the #392 review): openSession awaits its two preflights (sessionBusy, fleetStatus)
+// before deciding, and nothing orders those landings. Click A then B quickly and A's preflight can land
+// after B's, so A's stale plan would win and load A over the B the user asked for last. The fix is a
+// generation number taken BEFORE the await. It lives inside this wrapper so a caller cannot take it
+// late: every call supersedes all earlier calls still in flight, and a superseded preflight resolves to
+// null, its plan never applied. Module-level on purpose: there is one Main, so one switch at a time.
+let switchGeneration = 0;
+
+/** Await `preflight` and return its result, or null when a later open started while it was in flight.
+ *  Null means a newer click owns the switch and this one must be discarded without acting. */
+export async function currentSwitchPreflight<T>(preflight: Promise<T>): Promise<T | null> {
+  const generation = ++switchGeneration;
+  const result = await preflight;
+  return generation === switchGeneration ? result : null;
+}
+
 /** Every string the switch sheet shows. `target` is null for New session. Titles are plain text: the caller
  *  sets them with textContent, never as HTML. */
 export interface SwitchSheetCopy { title: string; body: string; spoke: string; spokeHint: string; stop: string; stay: string }
