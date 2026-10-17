@@ -25,6 +25,9 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resetSandboxStatus } from "./sandbox_status.ts";
 import { listIncidents } from "./incident_store.ts"; // no HOME-derived state at module load, so static is safe
+import { createAutomation } from "./automations.ts"; // pure store: workspace paths are per-call arguments
+import { saveSpecFile } from "../harness/agent/file_store.ts"; // same: no HOME-derived state at module load
+import { newSpecId, SPEC_VERSION, type AgentSpec } from "../harness/agent/spec.ts";
 
 const REPO = join(import.meta.dir, "..");
 const FAKE_AGENT = join(REPO, "harness", "mcp", "testing", "fake_acp_agent.ts");
@@ -232,6 +235,45 @@ describe("forced switch during a goal loop (#460 case 1)", () => {
       expect(backend.switchBlocker()).toBeNull();
     }, 30_000);
   }
+// #460 case 2: the blocker must scope to automations that OWN Main's ACP session. A goal-kind automation
+// runs through runGoal on Main, so switching would stop it: it blocks. An agent-kind automation runs
+// through startAgentRun() in its own child pipeline, so a switch would not stop it: it must never block.
+describe("switch blocker scope: automations (#460 case 2)", () => {
+  test("an agent-kind automation (startAgentRun, not Main's session) never blocks a switch", async () => {
+    const spec: AgentSpec = {
+      spec_id: newSpecId(), spec_version: SPEC_VERSION, name: "crm-logger", mode: "built-agent",
+      tools: [], egress: [], selfEdit: "individual",
+      nodes: [{ id: "a", kind: "prompt", label: "Log", prompt: "Log it" }], edges: [],
+      created_at: 1, updated_at: 1,
+    };
+    saveSpecFile(WS, spec); // no trust sidecar: a locally saved spec reads back trusted, so the gate runs it
+    expect(createAutomation(WS, {
+      goal: "Run agent: crm-logger", cadence: { kind: "interval", everyMin: 30 },
+      kind: "agent", agentSpecId: spec.spec_id, agentPrompt: "log new opportunities", agentModel: "haiku",
+    }, "autoAgentSwitch", Date.now())).not.toBeNull();
+    const run = backend.runAutomation("autoAgentSwitch");
+    // No await before this probe: runAutomation is suspended at its `await startAgentRun(...)` and the
+    // finally that clears autoRunning is a queued continuation, so the flag is still true right here.
+    expect(backend.switchBlocker()).toBeNull();
+    const r = await run;
+    expect(r.ran).toBe(true);
+    // The run must have ENTERED startAgentRun: the gate's refusals ("suspended: ...", "refused: ...") end
+    // runAutomation before its first await, which would make the probe above vacuously green.
+    expect(r.result ?? "").not.toMatch(/^(suspended|refused)/);
+    expect(backend.switchBlocker()).toBeNull();
+  }, 30_000);
+
+  test("a goal-kind automation owns Main and still blocks the switch", async () => {
+    process.env.FAKE_ACP_MODE = "hang";
+    expect(createAutomation(WS, { goal: "sweep the queue", cadence: { kind: "interval", everyMin: 30 } }, "autoGoalSwitch", Date.now())).not.toBeNull();
+    const run = backend.runAutomation("autoGoalSwitch");
+    await until(() => trace().some((t) => t.method === "session/prompt")); // the maker turn reached the agent
+    expect(backend.switchBlocker()).toBe("a goal loop is running"); // runGoal drives Main: still blocked
+    backend.cancelGoal();
+    const r = await run;
+    expect(r.ran).toBe(true);
+    expect(backend.switchBlocker()).toBeNull();
+  }, 30_000);
 });
 
 describe("master child revival", () => {
