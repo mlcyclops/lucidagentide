@@ -24,13 +24,29 @@ export interface SandboxControlView {
   registered: boolean;
   /** P-SANDBOX.14 (ADR-0394): managed policy stops users adding folders; the panel shows a note instead. */
   foldersLocked: boolean;
+  /** P-MXC.1 (ADR-0441): the Microsoft eXecution Container executor on this host. `prepNeeded` lists the
+   *  elevated one-time steps the executor still recommends; `loopbackNeeded` is the moniker exemption a
+   *  network-on session needs on the AppContainer tier (never on the kernel tier). */
+  mxc?: { staged: boolean; tier?: string; prepNeeded: string[]; loopbackNeeded: boolean; source?: string };
 }
 
 /** `policyRequiresIsolation` is "policy keeps the switch on" (managedSandboxLocksOn: exec.requireIsolation
- *  OR sandbox.allowUserOff === false). */
-export function sandboxControlView(i: { platform: string; helperBundled: boolean; mode?: SandboxWindowsMode; policyRequiresIsolation: boolean; registered: boolean; foldersLocked?: boolean }): SandboxControlView {
-  const available = i.platform === "win32" && i.helperBundled;
-  return { available, userOff: available && i.mode === "off" && !i.policyRequiresIsolation, policyLocked: i.policyRequiresIsolation, registered: available && i.registered, foldersLocked: !!i.foldersLocked };
+ *  OR sandbox.allowUserOff === false). The switch is offered when EITHER container runtime is on this host. */
+export function sandboxControlView(i: { platform: string; helperBundled: boolean; mode?: SandboxWindowsMode; policyRequiresIsolation: boolean; registered: boolean; foldersLocked?: boolean; mxc?: SandboxControlView["mxc"] }): SandboxControlView {
+  const available = i.platform === "win32" && (i.helperBundled || !!i.mxc?.staged);
+  return {
+    available, userOff: available && i.mode === "off" && !i.policyRequiresIsolation, policyLocked: i.policyRequiresIsolation,
+    registered: available && i.registered, foldersLocked: !!i.foldersLocked,
+    ...(i.mxc ? { mxc: i.mxc } : {}),
+  };
+}
+
+/** PURE: which elevated steps "Prepare host" runs, from the live view. Empty means nothing to do. */
+export function mxcHostPrepSteps(v: SandboxControlView): { systemDrive: boolean; nullDevice: boolean; loopback: boolean } | null {
+  const m = v.mxc;
+  if (!m?.staged) return null;
+  const steps = { systemDrive: m.prepNeeded.includes("prepare-system-drive"), nullDevice: m.prepNeeded.includes("prepare-null-device"), loopback: m.loopbackNeeded };
+  return steps.systemDrive || steps.nullDevice || steps.loopback ? steps : null;
 }
 
 /** Does this spawn honor the user's Off? Only when policy does not require isolation (policy wins). */

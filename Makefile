@@ -21,7 +21,7 @@ PY         := $(UV) run --project $(SIDECAR_DIR) python
 # ---------------------------------------------------------------------------
 
 .PHONY: install
-install: install-harness install-sidecar install-hooks ## Install harness + sidecar deps + git hooks
+install: install-harness install-desktop install-sidecar install-hooks ## Install harness + desktop + sidecar deps + git hooks
 
 .PHONY: install-hooks
 install-hooks: ## Point git at .githooks/ so the pre-commit license-header hook runs
@@ -31,6 +31,10 @@ install-hooks: ## Point git at .githooks/ so the pre-commit license-header hook 
 .PHONY: install-harness
 install-harness: ## Install Bun/TypeScript harness deps
 	$(BUN) install
+
+.PHONY: install-desktop
+install-desktop: ## Install desktop deps. Load-bearing for the symbol graph: desktop pins typescript 6 (the runtime compiler API), while the root pin is the TS 7 Go CLI whose package root exports only version fields. Without this install, loadTs() finds no usable compiler and P-KG-SYM.1 builds empty graphs (CI installs desktop deps; make install must match).
+	cd desktop && $(BUN) install
 
 .PHONY: install-sidecar
 install-sidecar: ## Create/sync the pinned Python sidecar venv
@@ -475,6 +479,11 @@ demo-P-PERF.3: ## P-PERF.3 (ADR-0130): KG layout continuity — re-open is a sta
 demo-P-PERF.4: ## P-PERF.4 (ADR-0131): incremental session index (warm polls parse nothing) + tail-first transcript pages + AC-only prefetch gate
 	$(BUN) run desktop/scripts/demo_p_perf_4.ts
 
+.PHONY: demo-P-SETTINGS.1
+demo-P-SETTINGS.1: ## P-SETTINGS.1 (ADR-0439): settings are never silently wiped - atomic temp+fsync+rename save with a last-good .bak; a corrupt file is kept aside and restored from the backup, never read as an empty profile. Real processes: 25 hard kills of a saving writer, a concurrent reader never sees a torn file, the 2026-10-05 0-byte file keeps the Windows sandbox opt-out
+	$(BUN) run desktop/scripts/demo_p_settings_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/settings_store_atomic.test.ts
+
 .PHONY: demo-P-PERF.5
 demo-P-PERF.5: ## P-PERF.5 (ADR-0132): switch hygiene - optimistic model switch, debounced lastModel write-behind (read-your-writes), memoized settings load, memoized picker
 	$(BUN) run desktop/scripts/demo_p_perf_5.ts
@@ -662,6 +671,10 @@ demo-P-DESIGN.1: ## P-DESIGN.1 (ADR-0154): the agent honors a workspace DESIGN.m
 demo-P-MARKET.1: ## P-MARKET.1 (ADR-0158): the Plugin Marketplace popup - Excalidraw pinned first, then Obsidian's top-ranked integrations by community downloads; searchable scrim-modal on the About//goal conventions; rows only open their GitHub repo (installs are P-MARKET.2)
 	$(BUN) run desktop/scripts/demo_p_market_1.ts
 
+.PHONY: demo-P-MARKET.1c
+demo-P-MARKET.1c: ## P-MARKET.1c (ADR-0446): live catalog title layout at desktop and narrow widths; set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL for an isolated QA browser and engine
+	$(BUN) run desktop/scripts/demo_p_market_1c.mjs
+
 .PHONY: demo-P-FIGMA.1
 demo-P-FIGMA.1: ## P-FIGMA.1 (ADR-0154): /figma — parse a Figma file URL → key, walk the doc → top frames (capped), build a design-board HTML with frames inlined as PNG data URLs (names escaped, only data:image src) for the sandboxed preview
 	$(BUN) run desktop/scripts/demo_p_figma_1.ts
@@ -675,7 +688,7 @@ demo-P-SANDBOX.1: ## P-SANDBOX.1 (ADR-0157): the runtime execution boundary — 
 	$(BUN) run harness/scripts/demo_p_sandbox_1.ts
 
 .PHONY: demo-P-SANDBOX.2
-demo-P-SANDBOX.2: ## P-SANDBOX.2 (ADR-0166): mediated subprocess egress — a loopback DNS + CONNECT proxy decided by the agent's own egressDecisionDetailed brain (only allow passes; prompt/foreign-ccTLD/IP-literal/unparseable/thrown all DENY). Live: denied gethostbyname → REFUSED, upstream never contacted; allowed → forwarded. Proxy dead ⇒ egress denied but local exec still runs; wired at the omp spawn (HTTP(S)_PROXY + resolv.conf steer)
+demo-P-SANDBOX.2: ## P-SANDBOX.2 (ADR-0166, ADR-0445): mediated subprocess egress: a loopback DNS + HTTP proxy (CONNECT tunnels and absolute-form plain-HTTP forwards) decided by the agent's own egressDecisionDetailed brain (only allow passes; prompt/foreign-ccTLD/IP-literal/unparseable/thrown all DENY). Live: denied gethostbyname → REFUSED, upstream never contacted; allowed → forwarded; a denied plain-HTTP request → 403, target never dialed; allowed → streamed. Proxy dead ⇒ egress denied but local exec still runs; wired at the omp spawn (HTTP(S)_PROXY + resolv.conf steer)
 	$(BUN) run harness/scripts/demo_p_sandbox_2.ts
 
 .PHONY: demo-P-SANDBOX.3
@@ -1031,6 +1044,9 @@ demo-preview-open: ## P-PREVIEW.11 (ADR-0308): the agent's `preview_open` opens 
 .PHONY: demo-release-identity
 demo-release-identity: ## P-RELEASE.4 (ADR-0307): the release-identity gate - CI reads each artifact's EMBEDDED identity before upload (pkg bundle id + payload .app path + version out of the xar Distribution/PackageInfo, deb package name out of the gunzipped ar control member, rpm name out of the 96-byte lead, the updater feed's declared path because both flavors emit a file named latest.yml, filename stem for the rest) and FAILS the build on a mismatch; the demo proves the swap case - correct Agent filenames wrapping Creator bytes, invisible to every name check - plus fail-closed on an empty/missing dir and an unaccounted-for file
 	$(BUN) run desktop/scripts/demo_release_identity.ts
+.PHONY: demo-P-RELEASE.6
+demo-P-RELEASE.6: ## P-RELEASE.6 (ADR-0447): Windows Authenticode through Azure Artifact Signing - runs both workflows' real Configure step on every secret combination (Azure wins, the .pfx is the fallback, secretless and non-Windows never switch it on) and resolves both Windows configs through electron-builder's own getConfig (signing off: no azureSignOptions; on: exact account/profile/timestamp + updater publisherName, Creator keeps Creator identity), and pins the appx publisher to the certificate subject; LUCID_DEMO_AZ=1 also checks the live profile's certificate
+	$(BUN) run desktop/scripts/demo_p_release_6.ts
 .PHONY: demo-office
 demo-office: ## P-OFFICE.1 (ADR-0306): Word/Excel/PowerPoint through the pinned OfficeCLI binary as a GATED skill - the skill is version-pinned and forbids the piped `curl | bash` installer (which exec_policy independently classifies T4 always-prompt), exec_policy grades officecli by subcommand (view/get safe T0, create/add/set/remove/close T1, install/watch T2, an unknown verb fail-closed T3), and the live create -> add -> view outline -> view html -> close round-trip runs wherever the pinned binary is installed and prints a VISIBLE skip where it is not
 	$(BUN) run desktop/scripts/demo_office.ts
@@ -1229,8 +1245,37 @@ demo-P-MODEL.4: ## P-MODEL.4 (ADR-0383): GPT-6 Sol and Luna. omp 18.2.7 -> 18.2.
 demo-P-MODEL.6: ## P-MODEL.6 (ADR-0422): Claude Sonnet 5.5 on omp 18.4.4. The six-package pin moves 18.2.10 -> 18.4.4 (three API moves: keys.setRuntime, cfg*.override, JudgeDeps.purpose); LUCID adds Sonnet 5.5's $2/$10 row on every route spelling, the 1M window, a card, and a default rank above Sonnet 5 below every flagship. R-07 re-pinned: StepFun gates behind the China-origin ACKNOWLEDGE and never resolves in lockdown; omp's on-device apple provider lists on darwin only (providerAllowedOnPlatform, engine platform via build-info).
 	$(BUN) test $(TEST_IGNORES) harness/omp/provider_catalog.test.ts harness/prompt/prefix_compaction.test.ts harness/testing/echo.test.ts harness/prompt/prompt_audit.test.ts harness/omp/browser_extension.test.ts harness/hooks/quarantine_hook.test.ts desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/renderer/agent_flow.test.ts desktop/startup_model.test.ts desktop/checker_model.test.ts desktop/build_flavor.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-P-MXC.1
+demo-P-MXC.1: ## P-MXC.1 (ADR-0441): Microsoft eXecution Container behind the sandbox seam, Windows first. The pinned, hash-verified `wxc-exec.exe` (staged by `bun run mxc`, bundled under <resources>/mxc) is tried before the first-party helper; the request rides argv as --config-base64 (no file), the command as a vector; proxy env rides inside the request; raw egress is in no mapping; mediated mode on the AppContainer tier runs under the helper's moniker so ADR-0174's one loopback exemption serves both. The executor's own --probe gates the offer: pending host prep (system-drive metadata, NUL device) keeps MXC unoffered and the Security panel grows "Prepare host (administrator)", one UAC prompt for all three steps. Proves a-f and i on the REAL executor where staged, the seam order and the posture everywhere.
+	$(BUN) test $(TEST_IGNORES) harness/runs/sandbox_mxc.test.ts harness/runs/sandbox_exec.test.ts desktop/mxc_runtime.test.ts desktop/sandbox_control.test.ts desktop/sandbox_status.test.ts desktop/renderer/sandbox_panel.test.ts harness/adr_numbering.test.ts
+	$(BUN) run harness/scripts/demo_p_mxc_1.ts
+
+.PHONY: demo-P-PROV.3
+demo-P-PROV.3: ## P-PROV.3 (ADR-0444): OpenAI sign-in by device code. The OpenAI card offers "Connect with a device code" beside the redirect sign-in, running omp's `openai-codex-device` alias (no loopback :1455, the fix for a blocked callback or a proxy 403). The engine reads the one-time code with the guarded parser from issue #490 (ANSI stripped, only a standalone code AFTER the official instruction, bounded across chunks, URL allowlisted to auth.openai.com), files the credential under openai-codex, and the card shows the code large with Copy and Open; nothing is pasted back. Proven on the real broker in a browser smoke.
+	$(BUN) test $(TEST_IGNORES) desktop/device_code.test.ts desktop/auth_status.test.ts desktop/auth_vault.test.ts desktop/oauth_failure.test.ts desktop/renderer/provider_hub.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-MODEL.7
+demo-P-MODEL.7: ## P-MODEL.7 (ADR-0442): Claude Haiku 5.5 on omp 18.8.6. The six-package pin moves 18.4.4 -> 18.8.6 (no API moves; one packaging re-include for omp's archive declarations.d.ts); LUCID adds Haiku 5.5's $0.10/$0.50 row on both route spellings, the 1M window, a card, and it becomes the recommended checker when listed. R-07 re-pinned at 85 ids: factory-droid and snowflake listed as allied aggregators, helmcode's bare `glm5.3` gates behind the China-origin ACKNOWLEDGE. The omp-compat probe recognises the ADR-0422 override spelling again (issue #491), proven by migrating the real regression file.
+	$(BUN) test $(TEST_IGNORES) harness/omp/provider_catalog.test.ts harness/prompt/prefix_compaction.test.ts harness/testing/echo.test.ts harness/prompt/prompt_audit.test.ts desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/renderer/agent_flow.test.ts desktop/startup_model.test.ts desktop/checker_model.test.ts desktop/packaged_boot.test.ts harness/adr_numbering.test.ts
+	node -e 'import("./.github/scripts/omp-compat.mjs").then(m=>{const fs=require("fs");const src=fs.readFileSync("harness/prompt/prefix_compaction.test.ts","utf8");const cur=m.currentPin(JSON.parse(fs.readFileSync("package.json","utf8")),src);const out=m.migrateCandidateSource(src,cur,"99.0.0");if(!out.includes("const SUPPORTED_OMP = \"99.0.0\";"))throw new Error("probe migration lost the pin");console.log("omp-compat probe migrates the override-form regression from "+cur+" OK")})'
+	$(BUN) run harness/scripts/demo02_prefix_hash.ts
+
+.PHONY: demo-P-MODEL.8
+demo-P-MODEL.8: ## P-MODEL.8 (ADR-0448): Gemini 4 Argon is the Gemini flagship (capability tier 2, first in the Gemini section, $4/$20 standard-rate estimate, exp 5 card) and Gemini 3.8 Flash is the Gemini default (the one exempt small-tier curated entry). A direct Gemini session's omp Thinking / Architect / Subtask roles (slow, plan, task) resolve to Argon, then the session's Flash, via a per-spawn --config overlay; Claude/GPT sessions, lockdown and an org deny get none. Live discovery self-skips without a GEMINI_API_KEY.
+	$(BUN) test $(TEST_IGNORES) desktop/model_roles.test.ts desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/checker_model.test.ts desktop/startup_model.test.ts desktop/renderer/agent_flow.test.ts harness/adr_numbering.test.ts
+	$(BUN) run desktop/scripts/demo_p_model_8.ts
+
+.PHONY: demo-P-SCHED.1
+demo-P-SCHED.1: ## P-SCHED.1 + .2 (ADR-0443, issue #497): scheduled jobs that wake a Fleet lane while the operator is away. A pure local-time cron (Vixie day rule, @hourly/@daily/@weekly, DST-safe), a 0600 per-user job store (created disarmed, 60 min cap, missed = run once within 2 h), and a 30 s scheduler that prompts a live idle lane through its queue, waits on a busy one, brings a gone lane back from the ledger, applies the job's auto-mode snapshot only for the run, cancels at the cap, and suspends a job whose folder is gone. The rail gains a Jobs tile after LUCID points with a 7-day by hour hover and a sheet (add / arm / run now / history / delete); /api/jobs* is UI-token only. Proves cron, store, scheduler over fakes, and the tile/hover builders.
+	$(BUN) run harness/scripts/demo_p_sched_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/cron.test.ts desktop/scheduled_jobs.test.ts desktop/renderer/jobs_view.test.ts desktop/origin_guard.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-P-LEGIBLE.1
 demo-P-LEGIBLE.1: ## P-LEGIBLE.1 (ADR-0384, issue #302): legible to Defender / Agent 365 without a content path. Each launch writes a metadata-only local-agent manifest (Defender's vendor / relatedProcess / autoApprove / mcpServers / localMcps vocabulary) to userData; MCP entries keep only name, type, URL origin or command basename, so no header, arg, env, path or query can leak. No hook seam, no listener, gate untouched.
+	$(BUN) test $(TEST_IGNORES) desktop/local_agent_manifest.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-LEGIBLE.2
+demo-P-LEGIBLE.2: ## P-LEGIBLE.2 (ADR-0437, issue #302): the Defender / Agent 365 runbook corrected against Microsoft's sources (Entra Agent ID matters to Global Secure Access, not the Defender inventory; Shadow AI is a fixed catalog; Agent Registration API is Global-cloud only). Docs only: re-proves the metadata-only manifest shape and ADR numbering, gate untouched.
 	$(BUN) test $(TEST_IGNORES) desktop/local_agent_manifest.test.ts harness/adr_numbering.test.ts
 
 .PHONY: demo-P-SWITCH.1
@@ -1294,3 +1339,8 @@ demo-P-CTRL.2: ## P-CTRL.2 (ADR-0438; design ADR-0425, issue #449): the controll
 demo-CREATOR-DRIFT: ## CREATOR-DRIFT (ADR-0430): CutWire Drift (GPL-3.0 Qt + FFmpeg video editor) as a Creator provider over its OWN localhost agent protocol, never spawned or scripted. The session Drift writes when the user turns on Agent access is discovered and folded into an on-device declaration whose status never carries the token; the probe is honest (not-installed, installed-but-Agent-access-off with the enable steps, unauthorized without echoing the token, ready with the version and only the attested set); the egress hiding inside Drift (cloud voices, the marketplace, ElevenLabs transcription) is refused BY NAME under CUI lockdown, recursively inside apply({ops}); an apply batch is one undo step reported exactly as Drift reports it (done / stopped / failed); an export lands in the library by its MAGIC BYTES, never its extension. The agent gets drift_status / drift_read / drift_apply / drift_export (project text fenced as untrusted data); the Studio gets a Drift tab with a live collaboration feed and Undo. Proven against a fake Drift speaking the real wire format.
 	$(BUN) run desktop/scripts/demo_creator_drift.ts
 	$(BUN) test $(TEST_IGNORES) harness/creator/drift_policy.test.ts desktop/creator_drift.test.ts desktop/creator_probe.test.ts desktop/creator_registry.test.ts harness/omp/drift_extension.test.ts desktop/renderer/creator_drift_view.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-CREATOR-WHISTLE
+demo-CREATOR-WHISTLE: ## CREATOR-WHISTLE (ADR-0432): word timing measured IN-PROCESS by the pinned Whistle model (Needle wasm, no socket import): the three assets verify by size and sha256 and a one-byte flip refuses the load by name and both hashes, the real model transcribes a 16 kHz fixture at 90%+ token match with monotonic word times, a clip over 30 s is windowed with no word split, one substituted word becomes the ONE derived item capped at 0.7, load and transcribe make zero network attempts, a hot CPU refuses the align job with the measured reason, confidence 1.2 is rejected, and a scratch Creator engine's POST /api/creator/align returns a validated, model-pinned document the editor paints with measured chips. Fails (exit 1) when the assets are missing
+	$(BUN) run harness/scripts/demo_creator_whistle.ts
+	$(BUN) test $(TEST_IGNORES) harness/voice/whistle.test.ts harness/voice/whistle_client.test.ts harness/voice/resample.test.ts harness/voice/transcription.test.ts harness/creator/timeline.test.ts desktop/whistle_assets.test.ts desktop/whistle_stage.test.ts desktop/creator_registry.test.ts desktop/creator_probe.test.ts desktop/creator_editor.test.ts desktop/renderer/creator_editor.test.ts desktop/lockdown_route.test.ts harness/adr_numbering.test.ts

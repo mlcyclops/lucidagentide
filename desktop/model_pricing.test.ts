@@ -24,6 +24,13 @@ describe("listPrice tiers", () => {
     expect(listPrice("google/gemini-3-pro").inPerM).toBe(1.25);
     expect(listPrice("openai-codex/gpt-5.5").inPerM).toBe(1.25);
   });
+  test("Gemini 4 Argon (P-MODEL.8) is estimated at the $4/$20 standard rate; other Gemini rows unchanged", () => {
+    for (const id of ["google/gemini-4-argon", "gemini-4-argon", "openrouter/google/gemini-4-argon"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 4, outPerM: 20 });
+    }
+    expect(listPrice("google/gemini-3.8-flash")).toEqual({ inPerM: 0.30, outPerM: 2.50 });
+    expect(listPrice("google/gemini-3.1-pro-preview")).toEqual({ inPerM: 1.25, outPerM: 10 });
+  });
   // P-MODEL.2: the three rows added for the current catalog. Each is order-sensitive, so these assertions
   // are really guarding TABLE's ordering: a future insert above them silently re-prices the flagships.
   test("Opus 5 is priced at its own halved rate, NOT the generic Opus row", () => {
@@ -33,6 +40,14 @@ describe("listPrice tiers", () => {
   test("Opus 5.5 is priced at its own $4/$20 rate, NOT the Opus 5 row whose `[-.]` tail would eat it", () => {
     expect(listPrice("anthropic/claude-opus-5-5")).toEqual({ inPerM: 4, outPerM: 20 });
     expect(listPrice("anthropic/claude-opus-5")).toEqual({ inPerM: 5, outPerM: 25 }); // Opus 5 unchanged
+  });
+  test("Haiku 5.5 (P-MODEL.7) carries its cataloged $0.10/$0.50 on both route spellings; Haiku 4.5 keeps $0.80/$4", () => {
+    for (const id of ["anthropic/claude-haiku-5-5", "vercel-ai-gateway/anthropic/claude-haiku-5.5", "claude-haiku-5-5"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 0.10, outPerM: 0.50 });
+    }
+    for (const id of ["anthropic/claude-haiku-4-5", "anthropic/claude-haiku-4-5-20251001", "anthropic/claude-haiku-5-50"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 0.80, outPerM: 4.00 });
+    }
   });
   test("Sonnet 5.5 (P-MODEL.6) carries its cataloged $2/$10 on every route spelling; other Sonnets keep $3/$15", () => {
     for (const id of ["anthropic/claude-sonnet-5-5", "amazon-bedrock/global.anthropic.claude-sonnet-5-5",

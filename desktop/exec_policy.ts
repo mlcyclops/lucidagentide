@@ -109,7 +109,13 @@ function base(tok: string): string {
 
 // ── the graded risk ladder (ADR-0067): T0 read-only · T1 local-mutate · T2 reach-out · T3 destructive ──
 const REACH_OUT = new Set(["curl", "wget", "nc", "ncat", "netcat", "scp", "sftp", "rsync", "telnet", "ftp"]);
-const DESTRUCTIVE = new Set(["rm", "rmdir", "chmod", "chown", "chgrp", "kill", "killall", "pkill", "shred", "truncate", "ssh"]);
+const DESTRUCTIVE = new Set([
+  "rm", "rmdir", "chmod", "chown", "chgrp", "kill", "killall", "pkill", "shred", "truncate", "ssh",
+  // Windows delete verbs (cmd builtins + PowerShell cmdlet/alias). Windows shells are case-insensitive;
+  // base() already lowercases argv0 and strips `.exe`, so DEL / Del / Remove-Item / remove-item all land
+  // on these lowercase entries (issue #449, the "fix first" gap).
+  "del", "erase", "rd", "remove-item", "ri",
+]);
 const LOCAL_MUTATE = new Set(["mkdir", "touch", "ln", "cp", "mv", "tee", "sed", "awk", "patch"]);
 const PKG = /^(npm|pnpm|yarn|pip|pip3|pipx|apt|apt-get|yum|dnf|brew|gem|cargo|go|bundle|composer)$/;
 const PKG_MUTATE = /\b(install|add|upgrade|update|i|get|remove|uninstall)\b/;

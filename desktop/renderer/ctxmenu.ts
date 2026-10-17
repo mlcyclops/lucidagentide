@@ -61,8 +61,6 @@ type Field = HTMLTextAreaElement | HTMLInputElement;
 const TEXTUAL_INPUTS: Record<string, true> = { "": true, text: true, search: true, url: true, tel: true, email: true, password: true };
 
 export interface CtxMenuDeps {
-  /** Stage pasted image files (the composer's P-VISION.1 path). Return true if consumed. */
-  onImages?: (files: File[]) => boolean;
   /** Surface a clipboard-refused notice (browser dev server; Electron always grants). */
   toast?: (t: { title: string; desc: string; tone?: "warn" }) => void;
 }
@@ -73,6 +71,27 @@ let closeListeners: (() => void) | null = null;
 function closeCtxMenu(): void {
   openMenu?.remove(); openMenu = null;
   closeListeners?.(); closeListeners = null;
+}
+
+/** Image items on the async clipboard as File objects; empty when there are none or access is refused. */
+async function clipboardImageFiles(): Promise<File[]> {
+  const items = await navigator.clipboard.read().catch(() => null);
+  const files: File[] = [];
+  for (const it of items ?? []) {
+    const type = it.types.find((t) => t.startsWith("image/"));
+    if (type) files.push(new File([await it.getType(type)], "pasted-image" + (type === "image/png" ? ".png" : ""), { type }));
+  }
+  return files;
+}
+
+/** Dispatch a real, cancelable `paste` carrying `files` on `field`. Returns true when a handler consumed
+ *  it (called preventDefault), exactly the contract the composer and lane paste listeners already honour
+ *  for Ctrl+V. */
+function replayPaste(field: HTMLElement, files: File[]): boolean {
+  const dt = new DataTransfer();
+  for (const f of files) dt.items.add(f);
+  const ev = new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true });
+  return !field.dispatchEvent(ev);
 }
 
 async function runAction(act: CtxAction, field: Field, deps: CtxMenuDeps): Promise<void> {
@@ -92,15 +111,13 @@ async function runAction(act: CtxAction, field: Field, deps: CtxMenuDeps): Promi
     }
     case "paste": {
       try {
-        // Image clipboard (snipping tool) → the composer's staged-thumbnail path, same as Ctrl+V.
-        if (deps.onImages && typeof navigator.clipboard.read === "function") {
-          const items = await navigator.clipboard.read().catch(() => null);
-          const files: File[] = [];
-          for (const it of items ?? []) {
-            const type = it.types.find((t) => t.startsWith("image/"));
-            if (type) files.push(new File([await it.getType(type)], "pasted-image" + (type === "image/png" ? ".png" : ""), { type }));
-          }
-          if (files.length && deps.onImages(files)) break;
+        // Image clipboard (snipping tool): replay it as a `paste` event on THIS field, so whichever
+        // handler owns the field (the main composer's thumbnail strip, a fleet lane's per-card strip)
+        // stages it exactly as Ctrl+V would. A single app-level "stage images" callback used to send a
+        // lane's right-click paste into the main prompt bar; the field decides, not the menu.
+        if (typeof navigator.clipboard.read === "function") {
+          const files = await clipboardImageFiles();
+          if (files.length && replayPaste(field, files)) break;
         }
         const text = await navigator.clipboard.readText();
         if (!text) break;

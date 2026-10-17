@@ -17,12 +17,16 @@
 //
 // Metadata only (invariant: never raw scanned content) — a backend name, a boolean, a host, a reason.
 
-export type SandboxBackendName = "bwrap" | "seatbelt" | "appcontainer" | "noop";
+/** P-MXC.1 (ADR-0441): `mxc` is the Microsoft eXecution Container executor on Windows. */
+export type SandboxBackendName = "bwrap" | "seatbelt" | "appcontainer" | "mxc" | "noop";
 
 /** The resolved runtime-sandbox posture for the current omp session. `backend` is null only when the
  *  resolution REFUSED (managed require-isolation with no backend) — then `execBlocked` carries why. */
 export interface SandboxState {
   backend: SandboxBackendName | null;
+  /** P-MXC.1: MXC's isolation tier when `backend === "mxc"` (`base-container` is the kernel tier on
+   *  Windows 11 24H2+, `appcontainer-dacl` the AppContainer fallback every Windows 10 host gets). */
+  tier?: "base-container" | "appcontainer-bfs" | "appcontainer-dacl";
   /** true ⇒ real OS-level containment (bwrap/Seatbelt); false ⇒ disclosed passthrough or blocked. */
   isolated: boolean;
   /** true ⇒ the disclosed, un-isolated passthrough is in use (the loud "not runtime-isolated" state). */

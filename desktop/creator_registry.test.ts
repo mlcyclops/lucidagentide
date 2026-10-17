@@ -230,6 +230,31 @@ describe("the free / self-hosted additions and the paid catalog", () => {
     expect(spec("classcad").note).toContain("CLASSCAD_SHARE=off");
     expect(spec("oda-drawings").capabilities.every((c) => c.status === "planned")).toBe(true);
   });
+
+  // CREATOR-WHISTLE (ADR-0432 decision 6)
+  test("Whistle is an in-engine provider: no endpoint, no key, on-device, sitting right after dots.tts", () => {
+    expect(spec("whistle")).toMatchObject({
+      name: "Whistle (in-process)", group: "audio", kind: "local-service", transports: ["in-engine"], authKind: "none",
+      consentRequired: false, docsUrl: "https://huggingface.co/Cactus-Compute/whistle", cui: { posture: "on-device" },
+    });
+    expect(spec("whistle").secretEnv).toBeUndefined();
+    expect(spec("whistle").capabilities.map((c) => [c.id, c.status, c.surface])).toEqual([["stt", "available", "runtime"], ["alignment", "available", "runtime"]]);
+    expect(spec("whistle").note).toContain("no socket imports");
+    const ids = CREATOR_INTEGRATIONS.map((s) => s.id);
+    expect(ids.indexOf("whistle")).toBe(ids.indexOf("dots-tts") + 1);
+    expect(CREATOR_PROVIDER_IDS.indexOf("whistle")).toBe(CREATOR_PROVIDER_IDS.indexOf("dots-tts") + 1);
+  });
+
+  test("an in-engine transport needs no declaration: the row folds to built-in with both runtime capabilities usable", () => {
+    expect(foldProviderStatus(spec("whistle"), { endpoints: [], secretPresent: false })).toMatchObject({ state: "built-in", usable: ["stt", "alignment"], endpointCount: 0 });
+    expect(foldProviderStatus(spec("whistle"), { endpoints: [], secretPresent: false, locked: true }).cui).toMatchObject({ allowed: true, posture: "on-device" });
+  });
+
+  test("dots.tts alignment is available because Whistle measures it, and the detail says dots.tts emits none itself", () => {
+    const align = spec("dots-tts").capabilities.find((c) => c.id === "alignment")!;
+    expect(align.status).toBe("available");
+    expect(align.detail).toBe("Measured in-process by Whistle; dots.tts itself emits no timestamps.");
+  });
 });
 
 describe("enclave attestation and the CUI fold", () => {

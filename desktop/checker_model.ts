@@ -92,7 +92,7 @@ function provider(value: string): string {
  *  prefers the cheaper family, e.g. sonnet over opus, and "max" tiers rank last). */
 function sizePenalty(name: string): number {
   const n = name.toLowerCase();
-  if (/opus|ultra|-max\b/.test(n)) return 400;
+  if (/opus|ultra|-max\b|-argon\b/.test(n)) return 400; // P-MODEL.8: Gemini 4 Argon bills like an Opus
   if (/\bpro\b|-pro\b/.test(n)) return 150;
   return 0;
 }

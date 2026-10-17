@@ -25,6 +25,12 @@ describe("recommendCheckerModel", () => {
     expect(r!.why).toContain("anthropic");
   });
 
+  test("P-MODEL.7: once the account lists Haiku 5.5 it outranks Haiku 4.5 as the checker, and Opus 5.5 never is one", () => {
+    const list = [...ANTHROPIC, opt("anthropic/claude-haiku-5-5"), opt("anthropic/claude-opus-5-5")];
+    const r = recommendCheckerModel(list, "anthropic/claude-opus-5-5");
+    expect(r!.value).toBe("anthropic/claude-haiku-5-5");
+  });
+
   test("openai maker → newest *mini* (small) over nano (weaker) and over the full gpt-5.5 (overkill)", () => {
     const r = recommendCheckerModel(OPENAI, "openai-codex/gpt-5.5");
     expect(r!.value).toBe("openai-codex/gpt-5.4-mini");

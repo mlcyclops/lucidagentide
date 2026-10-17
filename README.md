@@ -88,6 +88,8 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 <p align="center"><sub>v2.3.0 promoted fifteen public betas to stable; v2.3.1 adds four new games to Preview &gt; Games. The download buttons above, Homebrew and the in-app updater all move to 2.3.1. <a href="#-lucid-v230-is-here"><b>What's in it, how to update, and how to report a bug with screenshots and logs</b></a> · <a href="#-whats-new-in-v231"><b>What's new in 2.3.1</b></a>.</sub></p>
 
+<p align="center"><sub><b>Next up: v2.4.0, as public betas first.</b> Like 2.3.0, the next release ships as GitHub prereleases (<code>v2.4.0-beta.N</code>) before anything reaches stable installs: the download buttons above, the in-app updater and the Homebrew cask stay on 2.3.1 until 2.4.0 is promoted. <a href="#-v240-ships-as-betas-first"><b>What the betas carry and how to track them</b></a>.</sub></p>
+
 </td>
 </tr>
 </table>
@@ -124,6 +126,22 @@ personalization internals are proprietary and intentionally undocumented here - 
 </div>
 
 ---
+
+## 🧪 v2.4.0 ships as betas first
+
+> **Nothing changes for a working install until 2.4.0 is promoted.** The next release is built and tested in the open the way 2.3.0 was: each `v2.4.0-beta.N` is a GitHub **prerelease**. It is never offered to stable installs by the in-app updater, the Homebrew cask stays pinned to 2.3.1, and the rolling `latest` download links at the top of this page keep pointing at 2.3.1. When the betas have settled, 2.4.0 is promoted and everything moves at once.
+
+**Tracking the betas.** Watch the [releases page](https://github.com/mlcyclops/lucidagentide/releases) (GitHub's *Watch > Custom > Releases* includes prereleases), and each beta gets its own *What's new in v2.4.0-beta.N* section below, newest first, with an install link. Installing a beta over 2.3.1 keeps your settings, sessions and keys; going back is installing 2.3.1 over it. Bugs go to the [issue template](https://github.com/mlcyclops/lucidagentide/issues/new?template=bug_report.yml) with the beta number, and [how to pull your logs](#how-to-pull-your-logs) applies unchanged.
+
+**What the first 2.4.0 betas carry** (each with its ADR in [DECISIONS.md](DECISIONS.md); the per-beta notes start at [What's new in v2.4.0-beta.2](#-whats-new-in-v240-beta2-prerelease)):
+
+- **🪐 Claude Haiku 5.5 on omp 18.8.6** at $0.10/$0.50 per Mtok with a 1M window; it becomes the recommended checker model when your account lists it. The omp move also brings Anthropic prompt-cache fixes and sturdier OAuth refresh. *(P-MODEL.7, ADR-0442)*
+- **🔑 OpenAI sign-in by device code.** The OpenAI card gains **Connect with a device code** for hosts where the browser callback never comes back (a blocked localhost port or a proxy 403): LUCID shows a short code you type on OpenAI's device page. The normal sign-in is unchanged. *(P-PROV.3, ADR-0444)*
+- **🛡️ Microsoft eXecution Container behind the Windows sandbox.** Microsoft's signed MXC executor is tried before LUCID's own AppContainer helper, with the same switch, folders and audit; **Security > Runtime sandbox** gains a one-prompt **Prepare host (administrator)** for the two Windows steps it needs. Betas prove it on Windows 10 and Windows 11 24H2 before the old helper is retired. *(P-MXC.1, ADR-0441)*
+- **🧩 Fleet fixes you reported:** the lane catch-up buttons stay in view until the newest line, right-click Paste lands in the lane you clicked, lane thinking is readable, the lane scrollbar is clear of the resize handle, and a new lane tiles the panel instead of spilling sideways.
+- **🗓 Scheduled jobs.** CRON-style jobs that wake a Fleet lane while you are away (daily, weekly or a cron line), created disarmed, with a Jobs tile on the right rail, a day-by-hour hover for the week and a sheet to add, arm, run now and read the history. LUCID must stay open for a job to run; keep-alive and tool sign-in refresh follow in later betas ([#497](https://github.com/mlcyclops/lucidagentide/issues/497)). *(P-SCHED.1/.2, ADR-0443)*
+- **🛟 Settings that survive a crash** *(beta.2)*. Saves are atomic with a last-good copy kept beside them, so an engine killed mid-save can no longer reset your profile, re-run onboarding or switch the Windows sandbox back on; a settings file that cannot be read is reported, never treated as empty. *(P-SETTINGS.1, ADR-0439)*
+- **🌐 LAN model servers through the egress proxy** *(beta.2)*. Plain-`http://` model servers (ollama, llama.cpp, vLLM) get the same allow/deny as HTTPS instead of a flat 405. *(P-SANDBOX.19, ADR-0445)*
 
 ## 🚀 LUCID v2.3.0 is here
 
@@ -293,6 +311,30 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 - **🪐 Gravity Gambit: Orbital Golf** - sling a probe around planets into a wormhole across ten sectors with par scoring. A portrait panel turns the course so the sling still aims where you pull. *(P-GAME.8)*
 - **🔊 Silent Fathom: Sonar Descent** - a sonar-stealth dive through five generated cave zones: the cave is black until you ping, and the leviathans hunt by sound. *(P-GAME.9)*
 - **🪝 Skyhook: Cascade Run** - a grappling momentum runner: latch crystal anchors, swing, and release to fling ahead of the collapsing Cascade. Tuned after playtests: every anchor is within rope reach of the floor, the rope keeps your swing off the floor, a slightly late release still flies, and the Cascade lets a lead stand. *(P-GAME.10)*
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.4.0-beta.2 (prerelease)
+
+> **🛟 Settings that survive a crash, and LAN model servers through the sandbox.** Beta.2 folds six reviewed pull requests into beta.1: a killed or frozen engine can no longer reset your settings, plain-HTTP model servers on your network get the same allow/deny as HTTPS through LUCID's egress proxy, and catalog names stop wrapping.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.4.0-beta.2](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.4.0-beta.2). Still a beta: not offered to stable installs, Homebrew stays on 2.3.1, the rolling `latest` links are untouched. Installing it over beta.1 or 2.3.1 keeps your settings, sessions and sign-ins.
+
+- **🛟 Your settings survive a killed engine** - settings are saved atomically now (a temporary file, flushed, then renamed into place) with the last good copy kept beside them. When the window restarted a frozen engine in the middle of a save, the old in-place write could leave an empty file that LUCID read as "no settings": onboarding ran again and the Windows sandbox opt-out silently switched back on. Now a damaged file is set aside and the last good copy restored, and a settings file that exists but cannot be read (held by antivirus or OneDrive) is reported instead of treated as empty, so nothing is saved over it. *(P-SETTINGS.1, [ADR-0439](DECISIONS.md), #494)*
+- **🌐 LAN model servers work through the egress proxy** - when the agent's traffic goes through LUCID's egress proxy (sandboxed runs), a model served over plain `http://` (ollama, llama.cpp or vLLM on another machine) failed every turn with `405 ... only CONNECT tunnels are mediated`. Plain-HTTP requests now get the same decision as HTTPS: an allowed host streams through, any other host gets a 403 that names it, and nothing is dialed before the decision. A private LAN address is allowed under allow-all; under a whitelist it needs an entry or a standing approval, as HTTPS does. *(P-SANDBOX.19, [ADR-0445](DECISIONS.md), #471)*
+- **📚 Catalog names on one line** - Role KG Pack and Plugin Marketplace names no longer wrap onto three or four lines beside their badges: each name takes the full row, a long one ends in an ellipsis with the full name on hover, and the badges sit below. *(P-MARKET.1c, [ADR-0446](DECISIONS.md), #493)*
+- **🧰 Also** - Windows delete commands (`del`, `erase`, `rd`, `Remove-Item`, `ri`) are named as destructive in the command policy; they were already treated as high-risk, so no verdict changes (#455). The Defender / Agent 365 coexistence runbook is corrected against Microsoft's current documentation (#461, [ADR-0437](DECISIONS.md)). For contributors: a fresh checkout's symbol graph no longer builds empty when TypeScript 7 shadows the TypeScript 6 compiler, and `make install` now installs the desktop dependencies too (#486).
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.4.0-beta.1 (prerelease)
+
+> **🪐 Claude Haiku 5.5, OpenAI sign-in by device code, and Microsoft's container behind the Windows sandbox.** Beta.1 opens the 2.4.0 train: omp moves to 18.8.6 for Claude Haiku 5.5, the OpenAI card gains a device-code sign-in for hosts where the browser callback never returns, Microsoft's signed eXecution Container is tried before LUCID's own AppContainer helper, scheduled jobs wake a Fleet lane while you are away, and five Fleet grid fixes you reported land.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.4.0-beta.1](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.4.0-beta.1). Still a beta: not offered to stable installs, Homebrew stays on 2.3.1, the rolling `latest` links are untouched. Installing it over 2.3.1 keeps your settings, sessions and sign-ins; no provider asks you to sign in again.
+
+- **🪐 Claude Haiku 5.5 in the picker** - omp 18.8.6 catalogs `claude-haiku-5-5` ($0.10/$0.50 per Mtok, cache read $0.01, 1M context, 128K output, adaptive thinking) under Anthropic and the Vercel gateway; LUCID adds its cost card and the 1M window, and it becomes the recommended checker model once your account lists it. The omp move also brings Anthropic prompt-cache fixes and sturdier OAuth refresh (a transient refresh failure no longer ends a session). *(P-MODEL.7, [ADR-0442](DECISIONS.md))*
+- **🛡️ Three new omp providers, reviewed** - `factory-droid` and `snowflake` list as allied aggregators; `helmcode` (an EU gateway) resells China-origin open-weight models as bare names, and its `glm5.3` now sits behind the sovereignty acknowledgement with the rest. The weekly omp compatibility probe runs again (it had been failing on its own regex since 18.4.4, #491). *(P-MODEL.7)*
+- **🔑 OpenAI: Connect with a device code** - beside the normal sign-in, for a blocked localhost callback or a proxy answering 403: LUCID shows a short code you type on OpenAI's device page, nothing is pasted back, and the code is read from omp's broker with the guards from #490 (never a code-shaped path, never a URL outside `auth.openai.com`). The redirect sign-in is unchanged. The device and Copilot sign-in boxes also render in Settings again, not only in the Provider Hub. *(P-PROV.3, [ADR-0444](DECISIONS.md))*
+- **🛡️ Microsoft eXecution Container behind the Windows sandbox** - Microsoft's signed MXC executor (MIT, v1.0.0) is tried before LUCID's AppContainer helper, with the same switch, folder grants, egress proxy and audit, and it runs under the same container identity so your one-time loopback registration carries over. On Windows 10 and un-updated Windows 11 it needs two administrator steps the executor itself reports; **Security > Runtime sandbox** shows **Prepare host (administrator)**, one prompt for all of them, and MXC is not used until they are done. The old helper stays until MXC has proven itself on both tiers. *(P-MXC.1, [ADR-0441](DECISIONS.md))*
+- **🧩 Fleet grid fixes** - the lane catch-up buttons stay pinned to the viewport until you reach the newest line (they used to scroll away with the transcript) with centred chevrons; right-click Paste of an image lands in the lane you clicked, not the main composer; lane thinking is readable; the lane scrollbar sits clear of the right-edge resize handle; a new lane tiles the panel (three across at 1,200 px) instead of growing to its longest line and spilling sideways.
+- **🗓 Scheduled jobs that wake a Fleet lane** - a **Jobs** tile under LUCID points on the right rail: hover for the week as a day-by-hour grid with the next five runs (repo, job, lane), click to add a job (name, the lane picked from live and remembered lanes, prompt, every day / weekdays / cron with a live next-three readout, a minute cap, what to do with a missed fire). Jobs start disarmed. When one fires, a live lane gets the prompt through its queue once it is idle (a human's turn is never preempted), a closed lane is brought back from the ledger with its name, folder, model and session, the job's own auto-mode choice applies only for that run, and every start, result, wait and timeout is in the Security panel's audit. A job whose folder is gone suspends with the reason. `/api/jobs` is reachable by you alone, never by an agent. LUCID must stay open for a job to run; keep-alive and tool sign-in refresh follow ([#497](https://github.com/mlcyclops/lucidagentide/issues/497), [#498](https://github.com/mlcyclops/lucidagentide/issues/498)). *(P-SCHED.1/.2, [ADR-0443](DECISIONS.md))*
 
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.3.0
 
@@ -953,7 +995,7 @@ working memory - lives in the **tail after the cache breakpoint**. Untrusted byt
 | **Scan** | `scanner-sidecar/` (pure Unicode) behind NDJSON | finds zero-width, bidi, tag-block, homoglyph, PUA, `Cf` |
 | **Decide** | `gate.ts` → `scanAndDecide` | any scan failure ⇒ **block / quarantine** (never "safe") |
 | **Gate** | `harness/omp/security_extension.ts` (omp pre-hook) | runs **in-process** on every tool call |
-| **Contain** | `harness/runs/sandbox_exec.ts` (bwrap · Seatbelt; Windows AppContainer = enterprise) + `egress_proxy.ts` | an approved process runs **runtime-isolated**; subprocess DNS/CONNECT is **mediated + audited** (fail-closed) |
+| **Contain** | `harness/runs/sandbox_exec.ts` (bwrap · Seatbelt; Windows AppContainer = enterprise) + `egress_proxy.ts` | an approved process runs **runtime-isolated**; subprocess DNS, CONNECT and plain-HTTP requests are **mediated + audited** (fail-closed) |
 | **Label** | closed set `trusted · untrusted · suspicious · quarantined` | no other values exist |
 | **Promote** | `promotion_gate.ts` | suspicious/quarantined sources can't enter semantic memory |
 | **Export** | `safe_export.ts` | invisibles escaped to `\u{..}`; raw referenced by `sha256`, never inline |
@@ -974,8 +1016,9 @@ once `bash` / `pip` / `python` is approved and executing, a malicious dependency
 exfiltrating over a DNS lookup that no argv classifier can catch. LUCID closes that hole *beneath* the gate:
 an approved process is **OS-isolated** (Linux **bubblewrap** · macOS **Seatbelt**, picked per platform; where
 none is available LUCID says so out loud and the org can require isolation to **fail-closed** instead), and
-its network is not raw but **mediated** - every subprocess DNS query and CONNECT is routed through a loopback
-proxy and decided by the **same** curated egress policy your browser tools already use. So a lookup to a
+its network is not raw but **mediated** - every subprocess DNS query, HTTPS CONNECT tunnel and plain-HTTP request (a
+LAN model server at `http://host:11434`, say) is routed through a loopback proxy and decided by the **same** curated
+egress policy your browser tools already use. So a lookup to a
 non-whitelisted or foreign-country host is **refused and audited** (a metadata-only `egress` event to your
 SIEM), while `pip install requests` still resolves and works. The whole posture - which backend is active,
 whether egress is mediated, and every reach-out the proxy refused - is visible in the Security panel.

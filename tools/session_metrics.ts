@@ -23,17 +23,21 @@ export const CTX_WINDOW: Record<string, number> = {
   "claude-fable-5-1": 1_000_000, "claude-mythos-5-1": 1_000_000, "gpt-6-astra": 1_000_000,
   "claude-fable-5": 1_000_000, "claude-opus-5-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
   "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
-  "claude-haiku-4-5": 200_000, "claude-sonnet-5-5": 1_000_000,
+  "claude-haiku-4-5": 200_000, "claude-sonnet-5-5": 1_000_000, "claude-haiku-5-5": 1_000_000,
   "gpt-5.2": 256_000, "gpt-5.5": 256_000, "gpt-5.4": 256_000, "gpt-5.1": 256_000, "gpt-5": 256_000,
   "gpt-5-mini": 256_000, "gpt-4.1": 1_000_000, "gpt-o3": 200_000, "gpt-o3-mini": 200_000, "gpt-o4-mini": 200_000,
   "google-claude-45-opus": 200_000, "google-claude-45-sonnet": 200_000,
   "aws-bedrock-claude-45-sonnet-gov": 200_000, "claude-opus-4": 200_000, "claude-sonnet-4": 200_000,
   "google-gemini-3.1-pro-com": 1_000_000, "google-gemini-3.5-flash-gov": 1_000_000,
   "google-gemini-2.5-pro": 1_000_000, "google-gemini-2.5-flash": 1_000_000,
+  // P-MODEL.8: Gemini 4 Argon and 3.8 Flash on the API-key route (`google/…`): 1M input per Google's
+  // /v1beta/models (outputTokenLimit 32,768 for Argon, 65,536 for Flash).
+  "gemini-4-argon": 1_000_000, "gemini-3.8-flash": 1_000_000,
   "rag": 256_000,
 };
 export const shortModelId = (m: string): string => m.replace(/^anthropic\//, "").replace(/^asksage-[a-z]+\//, "");
-export const ctxWindow = (model: string): number => CTX_WINDOW[shortModelId(model)] ?? CTX_WINDOW[model] ?? 200_000;
+// The bare-id fallback matches app.ts modelCtx: `google/gemini-4-argon` otherwise never hit its row.
+export const ctxWindow = (model: string): number => CTX_WINDOW[shortModelId(model)] ?? CTX_WINDOW[model] ?? CTX_WINDOW[model.replace(/^[^/]*\//, "")] ?? 200_000;
 
 // ── omp session transcript ────────────────────────────────────────────────────
 export interface Turn {

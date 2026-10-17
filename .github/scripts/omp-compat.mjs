@@ -13,7 +13,12 @@ const REGRESSION = "harness/prompt/prefix_compaction.test.ts";
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SUPPORTED = /^const SUPPORTED_OMP = "([^"]+)";\r?$/gm;
 const LEGACY = 'session.settings.set("compaction.strategy", "context-full");';
-const ORDERED = 'session.settings.set("compaction.methodOrder", ["soft"]);';
+// omp 18.4 removed `Settings.set`; the regression writes the registered setting through its own
+// `override` (ADR-0422). The probe failed every run from 18.4.4 on (issue #491: "18.6.1 fails") because
+// it still looked for the `Settings.set` spelling and threw before installing a candidate. Both
+// spellings are recognised, so the pre-18.4 history still migrates and the current one is found.
+const ORDERED = 'cfgCompactionMethodOrder.override(session.settings, ["soft"]);';
+const COMPACTION_SETTING = /(?:session\.settings\.set\("compaction\.(?:strategy|methodOrder)"|cfgCompactionMethodOrder\.override\(session\.settings,)[^\r\n]*/g;
 
 export function exactVersion(value) {
 	if (typeof value !== "string" || !VERSION.test(value)) {
@@ -56,7 +61,7 @@ export function migrateCandidateSource(source, current, target) {
 	if (supportedPin(source) !== current) throw new Error("Candidate regression no longer matches the pre-install pin");
 	const before = orderedCompaction(current) ? ORDERED : LEGACY;
 	const after = orderedCompaction(target) ? ORDERED : LEGACY;
-	const settings = source.match(/session\.settings\.set\("compaction\.(?:strategy|methodOrder)"[^\r\n]*/g) ?? [];
+	const settings = source.match(COMPACTION_SETTING) ?? [];
 	if (settings.length !== 1 || settings[0] !== before) {
 		throw new Error("Unexpected compaction configuration; review upstream changes instead of weakening the regression");
 	}

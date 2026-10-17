@@ -22,6 +22,11 @@ const TABLE: [RegExp, Price][] = [
   [/nano/, { inPerM: 0.05, outPerM: 0.40 }],
   [/lite/, { inPerM: 0.10, outPerM: 0.40 }],
   [/\bmini\b/, { inPerM: 0.25, outPerM: 2.00 }], // \b so it never matches the "mini" inside "geMINI"
+  // Haiku 5.5 (2026-10-08, from omp 18.8.6's catalog: anthropic and vercel-ai-gateway's dotted
+  // `claude-haiku-5.5`): $0.10/$0.50 per Mtok (cache read $0.01 / write $0.125; above 100K input tokens
+  // the tier is $0.50/$2.50, which Price cannot express, so the base rate is the estimate). Must precede
+  // the generic /haiku/ row, which stays the $0.80/$4 Haiku 4.5 estimate. Same version tail as Sonnet 5.5.
+  [/haiku-?5[-.]5(\b|[-.])/, { inPerM: 0.10, outPerM: 0.50 }],
   [/haiku/, { inPerM: 0.80, outPerM: 4.00 }],
   [/flash/, { inPerM: 0.30, outPerM: 2.50 }],
   [/oss/, { inPerM: 0.10, outPerM: 0.40 }],
@@ -65,6 +70,11 @@ const TABLE: [RegExp, Price][] = [
   // (cache read $0.50), rising to $4/$12 once a prompt exceeds 200K input tokens. Price has no tier
   // fields, so the base rate is the estimate; metered usage supersedes it as with every row here.
   [/grok-?4[.-][67](\b|[-.])/, { inPerM: 2.0, outPerM: 6.0 }],
+  // P-MODEL.8: Gemini 4 Argon (2026-09-30) launched at an INTRODUCTORY $2/$10 per Mtok (cached input 95%
+  // off) and Google says the standard rate is $4/$20, with no date. The estimate uses the standard rate:
+  // a /goal budget sized on the promo would silently halve once it ends, and Argon already writes about
+  // 2x the output tokens per task of its peers. Metered usage supersedes this after the first run.
+  [/gemini-?\d+(?:\.\d+)?-argon/, { inPerM: 4.0, outPerM: 20.0 }],
   [/gemini/, { inPerM: 1.25, outPerM: 10.0 }],
 ];
 const DEFAULT_PRICE: Price = { inPerM: 3.00, outPerM: 15.0 }; // sonnet-ish, when nothing matches

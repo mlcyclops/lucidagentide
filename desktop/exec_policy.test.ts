@@ -199,6 +199,70 @@ describe("classifyCommand — graded tier ladder", () => {
   test("eval is T3", () => { expect(classifyEval().tier).toBe("T3"); });
 });
 
+// ── issue #449 (the "fix first" gap): Windows delete verbs are DESTRUCTIVE (T3) ─────────────────────
+// Windows shells accept verbs case-insensitively (DEL, Del, Remove-Item, remove-item). base() lowercases
+// argv0 and strips `.exe`, so the lowercase DESTRUCTIVE entries must catch every casing a Windows shell
+// would run, while benign lookalikes (a word CONTAINING del, a path segment rd/) stay unflagged and the
+// POSIX verbs keep their exact prior tiers.
+describe("classifyCommand: Windows delete verbs are destructive T3 (issue #449)", () => {
+  const winDelete = [
+    "del file.txt", "erase file.txt", "rd /s /q build", "rmdir build",
+    "Remove-Item old.log", "ri old.log",
+  ];
+  for (const cmd of winDelete) {
+    test(`destructive: ${cmd}`, () => {
+      const c = classifyCommand(cmd);
+      expect(c.risk).toBe("risky");
+      expect(c.tier).toBe("T3");
+      expect(c.alwaysPrompt).toBe(false);
+    });
+  }
+
+  test("mixed case matches the way a Windows shell accepts it", () => {
+    const cased = [
+      "DEL file.txt", "Del file.txt", "ERASE f.txt", "Erase f.txt",
+      "RD /S /Q build", "Rd build", "RMDIR build",
+      "Remove-Item -Recurse pkg", "remove-item pkg", "REMOVE-ITEM pkg", "RI pkg",
+    ];
+    for (const cmd of cased) {
+      const c = classifyCommand(cmd);
+      expect(c.risk).toBe("risky");
+      expect(c.tier).toBe("T3");
+    }
+  });
+
+  test("argv0 keys are normalized lowercase (pinnable)", () => {
+    expect(classifyCommand("DEL file.txt").key).toBe("del");
+    expect(classifyCommand("Remove-Item old.log").key).toBe("remove-item");
+    expect(classifyCommand("RD build").key).toBe("rd");
+  });
+
+  test("a .exe suffix and a path prefix still resolve the verb", () => {
+    expect(classifyCommand("del.exe file.txt").tier).toBe("T3");
+    expect(classifyCommand("C:\\Windows\\System32\\Remove-Item.exe x").tier).toBe("T3");
+  });
+
+  test("benign lookalikes stay unflagged: a word containing del, a path segment rd/", () => {
+    for (const cmd of [
+      "cat delta.log", "grep delete src/file.ts", "ls rd/", "cat rd/readme.md",
+      "echo erased", "head -n 5 model.del", "stat ri.json",
+    ]) {
+      const c = classifyCommand(cmd);
+      expect(c.risk).toBe("safe");
+      expect(c.tier).toBe("T0");
+    }
+  });
+
+  test("POSIX cases unchanged: rm/rmdir T3, rm -rf still catastrophic T4", () => {
+    expect(classifyCommand("rm file.txt").tier).toBe("T3");
+    expect(classifyCommand("rmdir dir").tier).toBe("T3");
+    expect(classifyCommand("shred secret.txt").tier).toBe("T3");
+    const cat = classifyCommand("rm -rf node_modules");
+    expect(cat.tier).toBe("T4");
+    expect(cat.alwaysPrompt).toBe(true);
+  });
+});
+
 // ── P-OFFICE.1 (ADR-0306, decision 3): officecli is tiered by SUBCOMMAND ─────────────────────────────
 // officecli is an external binary, so before this it fail-closed to T3 for EVERY call - a document read
 // weighed the same as `rm`. The table splits it: read (view/get) T0, workspace document write T1,

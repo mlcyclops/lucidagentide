@@ -168,3 +168,23 @@ test("the Runtime sandbox section never renders an em dash", () => {
     expect(h).not.toContain("\u2014");
   }
 });
+
+test("P-MXC.1 (ADR-0441): the MXC backend is named with its tier, and the pending host prep gets its one button", () => {
+  const h = renderSandboxSection(st({ backend: "mxc", tier: "appcontainer-dacl", proxied: true }));
+  expect(h).toContain("Microsoft eXecution Container");
+  expect(h).toContain("AppContainer tier");
+  const prep = renderSandboxSection({
+    ...st({ backend: "noop", isolated: false, disclosed: true }),
+    control: { available: true, userOff: false, policyLocked: false, registered: false, mxc: { staged: true, tier: "appcontainer-dacl", prepNeeded: ["prepare-null-device"], loopbackNeeded: true } },
+  });
+  expect(prep).toContain("data-mxc-prepare");
+  expect(prep).toContain("NUL device");
+  expect(prep).toContain("loopback exemption");
+  expect(prep).not.toContain("system-drive root");
+  const ready = renderSandboxSection({
+    ...st({ backend: "mxc", tier: "base-container", proxied: true }),
+    control: { available: true, userOff: false, policyLocked: false, registered: true, mxc: { staged: true, tier: "base-container", prepNeeded: [], loopbackNeeded: false } },
+  });
+  expect(ready).not.toContain("data-mxc-prepare");
+  expect(ready).toContain("the host is prepared");
+});

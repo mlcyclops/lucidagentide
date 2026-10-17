@@ -16,8 +16,8 @@
 //
 // Pure fold + guarded operations over injected IO, so the state machine is unit-testable with no disk.
 
-export type CreatorJobKind = "probe" | "image" | "sheet" | "gif" | "meme" | "render" | "build" | "test";
-export const CREATOR_JOB_KINDS: readonly CreatorJobKind[] = ["probe", "image", "sheet", "gif", "meme", "render", "build", "test"] as const;
+export type CreatorJobKind = "probe" | "image" | "sheet" | "gif" | "meme" | "render" | "build" | "test" | "align";
+export const CREATOR_JOB_KINDS: readonly CreatorJobKind[] = ["probe", "image", "sheet", "gif", "meme", "render", "build", "test", "align"] as const;
 
 export type CreatorJobState = "queued" | "running" | "done" | "failed" | "cancelled" | "refused";
 export const CREATOR_JOB_STATES: readonly CreatorJobState[] = ["queued", "running", "done", "failed", "cancelled", "refused"] as const;

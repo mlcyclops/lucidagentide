@@ -58,6 +58,22 @@ export function maxCardW(bodyW: number): number {
   return Math.max(CARD_MIN_W, Math.min(CARD_MAX_W, Math.floor(body)));
 }
 
+/** The width an UNSIZED card (one the user has never dragged) takes: the panel tiled into as many
+ *  default-width columns as fit, each column sharing the slack. Without this the card's flex basis was
+ *  `auto`, i.e. its max-content width, so one long code line or URL in a transcript made a fresh lane as
+ *  wide as the whole panel and pushed every other card to the next row (reported as "massive
+ *  horizontally"). Three default cards and two gaps fit a 1180px body, so each takes 386px; a 700px body
+ *  tiles two at 345px; a body narrower than one default card becomes one full-width column.
+ *  Unmeasured (0 / NaN) falls back to the default width rather than the minimum, for the same reason
+ *  maxCardW does. */
+export function defaultCardW(bodyW: number): number {
+  const body = num(bodyW, 0);
+  if (!(body > 0)) return CARD_DEF_W;
+  const cols = Math.max(1, Math.floor((body + CARD_GAP) / (CARD_DEF_W + CARD_GAP)));
+  // Floored, never rounded: a half-pixel up on each of three columns is a row that no longer fits.
+  return clampInt(Math.floor((body - CARD_GAP * (cols - 1)) / cols), CARD_MIN_W, maxCardW(body));
+}
+
 /** Right-edge drag -> width in PX. `dx` is px from the drag origin and moves the edge 1:1: no track, no
  *  deadzone, no rounding to a span. Clamped to [CARD_MIN_W, min(CARD_MAX_W, maxW)]. */
 export function widthFromDrag(startW: number, dx: number, maxW: number): number {

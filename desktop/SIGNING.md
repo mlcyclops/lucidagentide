@@ -28,14 +28,67 @@ pick it up on next launch.
 
 > **macOS:** Squirrel.Mac refuses to apply **unsigned** updates — mac auto-update
 > only works once you add the Apple signing secrets below. Windows (NSIS)
-> auto-updates unsigned (SmartScreen may still warn until you sign).
+> auto-updates either way; once signed, the updater also checks that each
+> update is signed by TECHLEAD 187 LLC.
 
 ## GitHub repository secrets
 
 Add under **Settings → Secrets and variables → Actions**. All are optional;
 omit a group to skip that platform's signing.
 
-### Windows — Authenticode
+### Windows: Authenticode via Azure Artifact Signing (what this repo uses)
+
+Windows builds (Agent and Creator) are signed by **Azure Artifact Signing**
+(formerly Trusted Signing), ADR-0447. The account and certificate profile are
+not secrets and live in [`build/win-signing.cjs`](build/win-signing.cjs):
+
+| Setting | Value |
+| --- | --- |
+| Endpoint | `https://eus.codesigning.azure.net/` (East US) |
+| Account | `techlead187signing` (resource group `rg-tl187-codesigning`) |
+| Certificate profile | `techlead187-public` (Public Trust, identity validation `978e38c4-…`) |
+| Certificate subject | `CN=TECHLEAD 187 LLC, O=TECHLEAD 187 LLC, L=Sun City Center, S=Florida, C=US` |
+| Signer identity | Entra app `lucid-ci-signer` (client id `3fd18477-69f8-47c7-bdc9-97098ff5c876`), role **Artifact Signing Certificate Profile Signer** scoped to the profile only |
+
+| Secret | Value |
+| --- | --- |
+| `AZURE_TENANT_ID` | Entra tenant id (`5c55c021-336f-4429-b737-c18c8157146d`) |
+| `AZURE_CLIENT_ID` | `lucid-ci-signer`'s client id. Its presence is the switch: the workflow sets `LUCID_WIN_AZURE_SIGN=1` |
+| `AZURE_CLIENT_SECRET` | A client secret of `lucid-ci-signer` (expires **2027-10-14**; rotate before then) |
+
+How it behaves:
+
+- **No `AZURE_CLIENT_ID`:** the Windows build is unsigned, exactly as before.
+- **`AZURE_CLIENT_ID` present:** electron-builder signs every exe, the msi and
+  the appx through `Invoke-TrustedSigning`, RFC 3161 timestamped (the
+  certificates live 72 hours and renew daily). If the other two secrets are
+  missing the build **fails** rather than ship unsigned, and the "Verify
+  Authenticode signatures" step fails the job unless every installer and the
+  app exe is `Valid`, signed by `CN=TECHLEAD 187 LLC` and timestamped.
+- `app-update.yml` carries `publisherName: TECHLEAD 187 LLC`, so an installed
+  signed app refuses an update signed by anyone else.
+- `appx.publisher` in `package.json` must equal the certificate subject byte
+  for byte. If the identity validation is ever renewed with different details,
+  update both `build/win-signing.cjs` and `appx.publisher` (and note that a new
+  publisher makes MSIX see a new app).
+
+Rotate the client secret (it is piped straight into GitHub, never displayed):
+
+```bash
+az ad app credential reset --id 3fd18477-69f8-47c7-bdc9-97098ff5c876 \
+  --display-name github-actions-signing --years 1 --append --query password -o tsv \
+  | gh secret set AZURE_CLIENT_SECRET -R mlcyclops/lucidagentide
+```
+
+**SmartScreen.** Signing replaces "Unknown publisher" with **TECHLEAD 187 LLC**
+immediately. The "Windows protected your PC" screen is reputation-based and
+fades as signed downloads accumulate; no certificate type skips it. If a signed
+release keeps warning, submit it at <https://www.microsoft.com/wdsi> as a
+software developer.
+
+### Windows: Authenticode with your own `.pfx` (fallback, e.g. a fork)
+
+Used only when `AZURE_CLIENT_ID` is absent.
 
 | Secret | Value |
 | --- | --- |
@@ -61,7 +114,9 @@ and runs `notarytool`; the hardened-runtime entitlements are already in
 electron-builder reads the same env vars locally:
 
 ```bash
-# Windows (PowerShell): $env:CSC_LINK=...; $env:CSC_KEY_PASSWORD=...
+# Windows, Azure Artifact Signing (PowerShell, on Windows only):
+#   $env:LUCID_WIN_AZURE_SIGN="1"; $env:AZURE_TENANT_ID=...; $env:AZURE_CLIENT_ID=...; $env:AZURE_CLIENT_SECRET=...
+# Windows, your own .pfx (PowerShell): $env:CSC_LINK=...; $env:CSC_KEY_PASSWORD=...
 # macOS/Linux:
 export CSC_LINK="$(base64 -w0 cert.p12)"
 export CSC_KEY_PASSWORD="…"

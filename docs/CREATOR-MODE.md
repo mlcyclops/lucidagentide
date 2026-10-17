@@ -245,7 +245,15 @@ Registered providers, and what is true about each as of 2026:
   isolation. Studio project-timeline editing is **vendor app only**. Cloud egress applies.
 - **dots.tts (local)** - 2B continuous autoregressive TTS at 48 kHz, Apache-2.0, with zero-shot cloning from
   a reference clip plus transcript, on your own GPU. LUCID ships no Python for it (invariant 2): you run the
-  server and register its URL. No official timestamp output.
+  server and register its URL. No official timestamp output: word timing is measured in-process by Whistle.
+- **Whistle (in-process)** - the zero-install speech-to-text and word-timing model (Cactus Compute,
+  Apache-2.0, 16.9 MB model plus a 0.9 MB WASM engine) that ships with LUCID and runs in a worker inside the
+  engine: no server, no port, no Python, and no network path (its wasm import table has no socket import).
+  Seven languages (en, de, fr, es, it, nl, pl), 30 s windows, CPU only. It backs the `whistle` STT choice in
+  Voice settings and `POST /api/creator/align`, which gives the follow-along editor `measured` word chips with
+  the model's per-word probability. Probe: `not-installed` until the pinned assets are staged, `unreachable`
+  on a hash mismatch or a dead worker (reason quoted), `ready` only after it decodes a second of silence to
+  empty text.
 - **Suno** - see the next section.
 - **ComfyUI** - workflow submission, live progress and previews over the websocket, artifact fetch, image
   and video and 3D nodes **as installed on that server**. Capability comes from a live `/object_info` probe,
@@ -361,6 +369,15 @@ What the editor will and will not claim about timing is the important part:
 
 Edits are non-destructive by construction: the track you opened keeps every one of its bytes and its row in
 the ledger, and the save is an append. Proof: `make demo-CREATOR-2`.
+
+- **Words Whistle heard are labeled `measured`** (ADR-0432, CREATOR-WHISTLE). When you open a take, the
+  editor shows the `derived` alignment first, then asks the engine to measure it: Whistle (Apache-2.0,
+  16.9 MB, WASM, ships with LUCID) runs inside the engine with no server, no port and no network path, and
+  returns a start, an end and a probability per word. A measured word wears a solid underline and its
+  confidence is the model's probability. A word the model heard differently from the text you pasted stays
+  `derived`, interpolated between its measured neighbours and capped at 70%. The note above the strip says
+  how many words matched and how many were interpolated. Seven languages (en, de, fr, es, it, nl, pl);
+  anything else keeps the `derived` alignment. Proof: `make demo-CREATOR-WHISTLE`.
 
 ## Mixing: layering takes into one file
 

@@ -46,7 +46,7 @@ import { agedProgress, humanMs, progressLine, STREAMING_MS, withoutEstimate, typ
 import { ringView, statusDetail, statusEta, statusRing } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
 // P-FLEET.L9: ALL card + dock geometry. This file does pointer plumbing and nothing else.
-import { CARD_DEF_W, clampSize, heightFromDrag, loadLayout, maxCardW, reconcile, reorder, resizeShape, saveLayout, snapSlot, widthFromDrag, type CardRect, type CardSize, type LaneLayout } from "./lane_layout.ts";
+import { CARD_DEF_W, clampSize, defaultCardW, heightFromDrag, loadLayout, maxCardW, reconcile, reorder, resizeShape, saveLayout, snapSlot, widthFromDrag, type CardRect, type CardSize, type LaneLayout } from "./lane_layout.ts";
 // P-TOKENS.1: the lane's context-fill chip escalates on the SAME thresholds as the composer's token button.
 import { fmtTokens, fmtUsd, meterBadge, newMeter, onUsage, type MeterState } from "./token_meter.ts";
 import type { ChipKind } from "./answer_chips.ts";
@@ -333,9 +333,13 @@ const DRAG_SLOP = 4;
 
 /** The widest a card may be right now. Every width clamp is measured against THIS, so a card can never
  *  persist wider than the panel it lives in. */
-function maxCols(): number {
+function maxCols(): number { return maxCardW(gridWidth()); }
+
+/** The grid body's measured width in px; 0 while the panel is hidden or not yet laid out (the pure
+ *  helpers treat 0 as "unmeasured", never as "zero wide"). */
+function gridWidth(): number {
   const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
-  return maxCardW(grid ? Math.round(grid.getBoundingClientRect().width) : 0);
+  return grid ? Math.round(grid.getBoundingClientRect().width) : 0;
 }
 
 /** The size a drag starts from: the persisted entry if the user has sized this card, else its MEASURED
@@ -350,8 +354,10 @@ function startSize(card: HTMLElement): CardSize {
   return clampSize({ w: Math.round(r.width) || CARD_DEF_W, h: Math.round(r.height) }, hi);
 }
 
-/** A sized card carries its width and height INLINE; an unsized one carries neither, so it keeps the
- *  container's own sizing and its content-driven height.
+/** A sized card carries its width and height INLINE; an unsized one takes the panel's TILE width
+ *  (lane_layout.defaultCardW: as many default columns as fit, sharing the slack) and keeps its
+ *  content-driven height. The tile width is re-derived on every apply, so a dock resize re-tiles the
+ *  unsized cards while the user-sized ones only re-clamp.
  *
  *  P-FLEET.L12: the width is a flex BASIS, not a grid span. `0 1 Wpx` is deliberate in both numbers:
  *  grow 0 so a card never stretches to fill a short row (the user sized it, that size is the answer), and
@@ -359,7 +365,7 @@ function startSize(card: HTMLElement): CardSize {
 function applySize(run: LaneRun | undefined): void {
   const card = run?.card; if (!card) return;
   const s = layout.size[run.view.id];
-  if (!s) { card.style.flex = ""; card.style.height = ""; return; }
+  if (!s) { card.style.flex = `0 1 ${defaultCardW(gridWidth())}px`; card.style.height = ""; return; }
   const c = clampSize(s, maxCols());
   card.style.flex = `0 1 ${c.w}px`;
   card.style.height = `${c.h}px`;
@@ -541,7 +547,7 @@ function startCardDrag(e: PointerEvent, head: HTMLElement, fromGrip: boolean): v
 function onLaneJumpClick(ev: Event): void {
   const btn = (ev.target as HTMLElement | null)?.closest("[data-lane-jump]") as HTMLElement | null;
   if (!btn) return;
-  const out = btn.closest("[data-fleet-out]") as HTMLElement | null;
+  const out = btn.closest(".fleet-out-wrap")?.querySelector("[data-fleet-out]") as HTMLElement | null;
   if (!out) return;
   ev.preventDefault();
   ev.stopPropagation(); // never let a jump click reach the card header's drag-to-reorder gesture
@@ -742,18 +748,22 @@ function buildCard(run: LaneRun): HTMLElement {
     </div>
     <button class="repo-chip fleet-repo" data-fleet-repo type="button" hidden aria-label="This lane's repository and push target"></button>
     <div class="fleet-card-main">
-      <div class="fleet-out" data-fleet-out>
+      <div class="fleet-out-wrap">
+        <div class="fleet-out" data-fleet-out>
+          <div class="fleet-out-empty" data-lane-empty hidden><span data-lane-empty-txt></span></div>
+          <div data-lane-live hidden>
+            <div class="fleet-think" data-lane-think hidden></div>
+            <div class="fleet-text" data-lane-text hidden><span data-lane-txt></span><span class="fleet-cursor">\u258b</span></div>
+          </div>
+        </div>
         <!-- P-FLEET.L13: the same catch-up pair the main composer carries. Single chevron steps ONE page
-             keeping a line of overlap, double chevron runs to the newest line. They are inside the
-             scroller (which is position:relative) so they float over the transcript, and they stay
-             hidden until there is more than a lane-sized threshold below the fold. -->
+             keeping a line of overlap, double chevron runs to the newest line. They are SIBLINGS of the
+             scroller, not children: an absolutely positioned child of a scroll container scrolls away with
+             its content, which is exactly how they used to vanish mid-transcript. The wrapper is the
+             position:relative anchor, so they stay pinned over the bottom-right of the viewport until the
+             reader is within the lane's own at-the-bottom threshold. -->
         <button class="fleet-jump fleet-jump-page" data-lane-jump="page" type="button" aria-label="Scroll down one page" title="Down one page">${icon("chevronDown", 13)}</button>
         <button class="fleet-jump fleet-jump-end" data-lane-jump="end" type="button" aria-label="Scroll to the newest line" title="Jump to the end">${icon("chevronsDown", 13)}</button>
-        <div class="fleet-out-empty" data-lane-empty hidden><span data-lane-empty-txt></span></div>
-        <div data-lane-live hidden>
-          <div class="fleet-think" data-lane-think hidden></div>
-          <div class="fleet-text" data-lane-text hidden><span data-lane-txt></span><span class="fleet-cursor">\u258b</span></div>
-        </div>
       </div>
       <div class="fleet-approve" data-fleet-approve hidden>
         <span class="fleet-approve-txt" data-fleet-approve-txt></span>
@@ -1219,7 +1229,7 @@ function paintOutput(run: LaneRun): void {
   const card = run.card; if (!card) return;
   const out = $("[data-fleet-out]", card) as HTMLElement | null; if (!out) return;
   const live = $("[data-lane-live]", out) as HTMLElement | null; if (!live) return;
-  const nearBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 28;
+  const nearBottom = out.scrollHeight - out.scrollTop - out.clientHeight < LANE_JUMP_SHOW_PX;
   syncTurns(run, out, live);
   paintLive(run, live);
   const empty = $("[data-lane-empty]", out) as HTMLElement | null;
@@ -1233,11 +1243,14 @@ function paintOutput(run: LaneRun): void {
 }
 
 /** P-FLEET.L13: show or hide a lane's catch-up buttons. Driven by the SHARED rule (scroll_jump.ts) that
- *  the main chat thread uses, on the lane threshold: a 180px transcript would essentially never clear the
- *  chat's 140px bar, so the pair would have been dead weight. */
+ *  the main chat thread uses, on the lane threshold: the buttons live until the reader is at the bottom
+ *  by the same measure the lane uses to auto-follow new tokens (paintOutput's nearBottom), so they never
+ *  vanish while there is still unread transcript below. The buttons are siblings of the scroller (see
+ *  buildCard), so they are looked up on the wrapper, not inside `out`. */
 function syncLaneJump(out: HTMLElement): void {
   const show = shouldShowJump(out, LANE_JUMP_SHOW_PX);
-  for (const b of out.querySelectorAll<HTMLElement>("[data-lane-jump]")) b.classList.toggle("show", show);
+  const wrap = out.parentElement ?? out;
+  for (const b of wrap.querySelectorAll<HTMLElement>("[data-lane-jump]")) b.classList.toggle("show", show);
 }
 
 /** The transcript's own line height, for the page step's line of overlap. Measured off a real rendered

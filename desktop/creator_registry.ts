@@ -20,11 +20,11 @@ import { cuiProviderVerdict, type CuiVerdict } from "./cui_policy.ts";
 
 /** Closed set of provider ids. A new provider is a deliberate registry change. */
 export type CreatorProviderId =
-  | "elevenlabs" | "dots-tts" | "suno" | "comfyui" | "threejs" | "blender" | "unreal"
+  | "elevenlabs" | "dots-tts" | "whistle" | "suno" | "comfyui" | "threejs" | "blender" | "unreal"
   | "hyperframes" | "dgx-avatar" | "heygen" | "dgx-vision" | "design" | "drift"
   | "dgx-cad" | "pdf-markup" | "autodesk-aps" | "bluebeam-studio" | "classcad" | "oda-drawings";
 export const CREATOR_PROVIDER_IDS: readonly CreatorProviderId[] = [
-  "elevenlabs", "dots-tts", "suno", "comfyui", "threejs", "blender", "unreal",
+  "elevenlabs", "dots-tts", "whistle", "suno", "comfyui", "threejs", "blender", "unreal",
   "hyperframes", "dgx-avatar", "heygen", "dgx-vision", "design", "drift",
   "dgx-cad", "pdf-markup", "autodesk-aps", "bluebeam-studio", "classcad", "oda-drawings",
 ] as const;
@@ -58,8 +58,14 @@ export interface CreatorCuiPosture {
 }
 
 /** How LUCID reaches the provider. `child-process` runs a declared executable through the existing
- *  exec-approval path; `in-renderer` never leaves the sandboxed renderer. */
-export type CreatorTransport = "https" | "websocket" | "local-http" | "child-process" | "in-renderer";
+ *  exec-approval path; `in-renderer` never leaves the sandboxed renderer; `in-engine` runs inside the
+ *  engine process itself (CREATOR-WHISTLE: a WASM model in a Bun worker, no port, no child process). */
+export type CreatorTransport = "https" | "websocket" | "local-http" | "child-process" | "in-renderer" | "in-engine";
+
+/** Transports that reach nothing outside the app: no endpoint to declare, no probe of a socket. */
+const ENDPOINTLESS_TRANSPORTS: Record<CreatorTransport, boolean> = {
+  https: false, websocket: false, "local-http": false, "child-process": false, "in-renderer": true, "in-engine": true,
+};
 
 export type CreatorAuthKind = "none" | "apikey" | "bearer" | "local";
 
@@ -147,10 +153,31 @@ const DOTS_TTS: CreatorIntegrationSpec = {
     { id: "tts", status: "available", surface: "local", detail: "2B continuous autoregressive TTS at 48 kHz, Apache-2.0, served on your own GPU." },
     { id: "voice-clone", status: "available", surface: "local", detail: "Zero-shot cloning from a reference clip plus its transcript; nothing leaves your hardware." },
     { id: "streaming-audio", status: "available", surface: "local", detail: "Streaming generation through the runtime's stream API or an SGLang Omni server." },
-    { id: "alignment", status: "planned", surface: "local", detail: "No official timestamp output; LUCID derives alignment locally for the follow-along editor." },
+    { id: "alignment", status: "available", surface: "local", detail: "Measured in-process by Whistle; dots.tts itself emits no timestamps." },
     { id: "music", status: "planned", surface: "local", detail: "Out of scope for dots.tts; use a music model or provider instead." },
   ],
   note: "Linux and macOS Python runtime, CUDA or MPS. LUCID talks to a server YOU run and ships no Python for it (invariant 2).",
+  cui: { posture: "on-device" },
+};
+
+// CREATOR-WHISTLE (ADR-0432 decision 6): the zero-install STT + word-timing model. It is not a server
+// and not a child process: the Needle WASM engine runs in a worker inside the engine itself, so there is
+// no endpoint to declare, no port to probe, and (by its import table, pinned in harness/voice/whistle.test.ts)
+// no network path at all. The probe asks the worker to transcribe a second of silence before it says ready.
+const WHISTLE: CreatorIntegrationSpec = {
+  id: "whistle",
+  name: "Whistle (in-process)",
+  group: "audio",
+  kind: "local-service",
+  transports: ["in-engine"],
+  authKind: "none",
+  consentRequired: false,
+  docsUrl: "https://huggingface.co/Cactus-Compute/whistle",
+  capabilities: [
+    { id: "stt", status: "available", surface: "runtime", detail: "16.9 MB, 7 languages, 30 s windows, CPU only, ships with LUCID." },
+    { id: "alignment", status: "available", surface: "runtime", detail: "Word start, end and probability from the decoder's cross-attention." },
+  ],
+  note: "Ships with LUCID: 16.9 MB Apache-2.0 model and a 0.9 MB WASM engine, no server, no port, no network path (the module has no socket imports).",
   cui: { posture: "on-device" },
 };
 
@@ -503,7 +530,7 @@ const ODA_DRAWINGS: CreatorIntegrationSpec = {
 };
 
 export const CREATOR_INTEGRATIONS: readonly CreatorIntegrationSpec[] = [
-  ELEVENLABS, DOTS_TTS, SUNO, COMFYUI, THREEJS, BLENDER, UNREAL,
+  ELEVENLABS, DOTS_TTS, WHISTLE, SUNO, COMFYUI, THREEJS, BLENDER, UNREAL,
   HYPERFRAMES, DGX_AVATAR, HEYGEN, DGX_VISION, DESIGN, DRIFT,
   DGX_CAD, PDF_MARKUP, AUTODESK_APS, BLUEBEAM_STUDIO, CLASSCAD, ODA_DRAWINGS,
 ] as const;
@@ -660,7 +687,7 @@ export function providerCuiVerdict(spec: CreatorIntegrationSpec, endpoints: read
 export function foldProviderStatus(spec: CreatorIntegrationSpec, ctx: CreatorProviderContext): CreatorProviderStatus {
   const enabled = ctx.endpoints.filter((e) => e.enabled && e.providerId === spec.id);
   const locked = ctx.locked === true;
-  const needsEndpoint = spec.transports.some((t) => t !== "in-renderer");
+  const needsEndpoint = spec.transports.some((t) => !ENDPOINTLESS_TRANSPORTS[t]);
   const needsSecret = spec.authKind === "apikey" || spec.authKind === "bearer";
   const state: CreatorProviderState = !needsEndpoint ? "built-in"
     : enabled.length === 0 ? "needs-endpoint"

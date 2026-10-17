@@ -20,8 +20,10 @@
 export const JUMP_SHOW_PX = 140;
 
 /** A lane transcript is a fraction of the window's height, so it needs its own, smaller threshold: 140px
- *  of overflow in a 180px-tall scroller means the buttons would essentially never appear. */
-export const LANE_JUMP_SHOW_PX = 48;
+ *  of overflow in a 180px-tall scroller means the buttons would essentially never appear. 28px is the same
+ *  distance at which the lane treats the reader as "at the bottom" and auto-follows new tokens, so the
+ *  buttons stay up until that point: never gone while a line of transcript is still below the fold. */
+export const LANE_JUMP_SHOW_PX = 28;
 
 function num(v: unknown, fallback: number): number {
   const n = Number(v);
