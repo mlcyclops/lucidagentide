@@ -207,7 +207,7 @@ describe("ndjsonStream observer lifetime", () => {
       execution.resolve();
       await reader.cancel();
     }
-  }, 25_000);
+  }, 60_000); // the first ping lands at the real 15 s interval; 25 s starved on a loaded Windows runner
 
   test.each(["request abort", "reader cancel and request abort"])("real HTTP %s disconnects only the subscriber", async mode => {
     const turn = new LiveTurn<TokenEvent>("prompt", "session", () => []);

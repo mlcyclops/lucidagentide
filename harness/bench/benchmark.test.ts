@@ -43,7 +43,7 @@ test("a byte-stable prefix caches: only the first request misses", async () => {
   expect(s.hits).toBe(4); // 5 requests, 1 unique prefix -> 4 hits
   expect(s.hitRate).toBeCloseTo(0.8);
   expect(s.cacheReadTokens).toBeGreaterThan(0);
-});
+}, 30_000); // first test pays DuckDB native warmup; a loaded Windows runner exceeds the 5 s default
 
 test("ANTI-PATTERN: volatile-in-prefix busts the cache every request", async () => {
   const s = await runBenchmark(db, reqs, { suite: "x", version: "1v", model: "m", prefixBuilder: volatilePrefixBuilder });
