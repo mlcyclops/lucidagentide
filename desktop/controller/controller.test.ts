@@ -76,7 +76,9 @@ describe("controller token: hashed, revocable, never stored in the clear", () =>
     const file = join(dir, "controller-pairings.json");
     const raw = readFileSync(file, "utf8");
     expect(raw).not.toContain(token);
-    expect(raw).not.toContain(token.split("_").at(-1)!);
+    // the WHOLE secret (base64url can contain "_", and a short post-split fragment can collide
+    // with the PHC hash bytes by chance, which made this assertion flaky)
+    expect(raw).not.toContain(token.split("_").slice(2).join("_"));
     expect(JSON.parse(raw).pairings[0].hash).toStartWith("$argon2id$");
     if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
     // a fresh engine (new store over the same file) still accepts it
@@ -101,6 +103,30 @@ describe("controller token: hashed, revocable, never stored in the clear", () =>
     expect(await broken.verify(token)).toBeNull();
     expect((await broken.pair("again", ws)).ok).toBe(false);
     expect(readFileSync(file, "utf8")).toBe("{torn");
+  });
+
+  test("P-CTRL-RO.1a (ADR-0451): a read-only pairing round-trips; a legacy pairing loads as not read-only", async () => {
+    const file = join(dir, "controller-pairings.json");
+    const store = new PairingStore(file);
+    const minted = await store.pair("observer", ws, true);
+    if (!minted.ok) throw new Error(minted.error);
+    expect(minted.pairing.readOnly).toBe(true);
+    expect(JSON.parse(readFileSync(file, "utf8")).pairings[0].readOnly).toBe(true);
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
+    // a fresh engine (new store over the same file) keeps the capability on the verified pairing
+    expect((await new PairingStore(file).verify(minted.token))?.readOnly).toBe(true);
+    // a pairing minted without the flag persists no field at all and loads as not read-only
+    const writer = await store.pair("writer", ws);
+    if (!writer.ok) throw new Error(writer.error);
+    const raw = JSON.parse(readFileSync(file, "utf8")) as { pairings: Pairing[] };
+    expect("readOnly" in raw.pairings[1]!).toBe(false);
+    expect((await new PairingStore(file).verify(writer.token))?.readOnly).toBeUndefined();
+    // widening in place is impossible: no store API mutates the flag, and a hand-edited non-boolean
+    // value makes the store malformed, which refuses every token (fail-closed, the ADR-0438 rule)
+    raw.pairings[0]!.readOnly = "yes" as never;
+    writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
+    expect(await new PairingStore(file).verify(minted.token)).toBeNull();
+    expect(await new PairingStore(file).verify(writer.token)).toBeNull();
   });
 });
 

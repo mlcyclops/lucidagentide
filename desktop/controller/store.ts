@@ -27,6 +27,10 @@ export interface Pairing {
   createdAt: string;
   /** Lane ids this pairing spawned: the ONLY lanes it can see or act on. */
   lanes: string[];
+  /** P-CTRL-RO.1a (ADR-0451; design ADR-0449): issued for observation only. Set when the pairing is
+   *  minted and never widened in place (no store API mutates it); granting write scope means unpair
+   *  and re-pair. Absent on pairings minted before this field existed; absent means not read-only. */
+  readOnly?: boolean;
 }
 
 /** `lucidctl_<16 hex id>_<43 base64url secret>`; the id lets verify() hash against one record, not all. */
@@ -57,14 +61,15 @@ export class PairingStore {
     }
   }
 
-  /** Mint a pairing and its token. The token is returned ONCE and never stored in the clear. */
-  async pair(name: string, workspace: string): Promise<{ ok: true; pairing: Pairing; token: string } | { ok: false; error: string }> {
+  /** Mint a pairing and its token. The token is returned ONCE and never stored in the clear.
+   *  `readOnly` (P-CTRL-RO.1a) marks an observation-only pairing; it is persisted only when true. */
+  async pair(name: string, workspace: string, readOnly = false): Promise<{ ok: true; pairing: Pairing; token: string } | { ok: false; error: string }> {
     if (this.#broken) return { ok: false, error: this.#broken };
     if (!PAIRING_NAME_RE.test(name)) return { ok: false, error: "invalid pairing name" };
     if (this.#pairings.some((p) => p.name === name)) return { ok: false, error: "a pairing with that name exists" };
     const id = randomBytes(8).toString("hex");
     const token = `lucidctl_${id}_${randomBytes(32).toString("base64url")}`;
-    const pairing: Pairing = { id, name, workspace, hash: await Bun.password.hash(token, { algorithm: "argon2id" }), createdAt: new Date().toISOString(), lanes: [] };
+    const pairing: Pairing = { id, name, workspace, hash: await Bun.password.hash(token, { algorithm: "argon2id" }), createdAt: new Date().toISOString(), lanes: [], ...(readOnly ? { readOnly: true } : {}) };
     this.#pairings.push(pairing);
     this.#save();
     return { ok: true, pairing, token };
@@ -112,5 +117,6 @@ export class PairingStore {
 function isPairing(v: unknown): v is Pairing {
   const p = v as Pairing;
   return !!p && typeof p.id === "string" && typeof p.name === "string" && typeof p.workspace === "string" && typeof p.hash === "string"
-    && typeof p.createdAt === "string" && Array.isArray(p.lanes) && p.lanes.every((l) => typeof l === "string");
+    && typeof p.createdAt === "string" && Array.isArray(p.lanes) && p.lanes.every((l) => typeof l === "string")
+    && (p.readOnly === undefined || typeof p.readOnly === "boolean");
 }

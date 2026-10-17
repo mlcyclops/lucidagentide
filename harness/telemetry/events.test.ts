@@ -71,6 +71,19 @@ test("P-CTRL.1 (ADR-0426): the seven controller_* names are contract-valid and e
   expect(events).toHaveLength(names.length);
 });
 
+test("P-CTRL-RO.1a (ADR-0451): controller_read is contract-valid, emits, and near-misses raise", () => {
+  const { tel, events } = collector();
+  const rec = tel.emit("controller_read", { pairing: "p1", tool: "fleet.list_agents", lane_id: "lane-1", bytes: 112, redactions: 0 });
+  expect(rec.event).toBe("controller_read");
+  expect(rec.run_id).toBe("run-1");
+  expect(rec.session_id).toBe("sess-1");
+  expect(events).toHaveLength(1);
+  // A near-miss controller_* name is still unknown (fail-closed, invariant #8).
+  expect(() => tel.emit("controller_reed" as never)).toThrow(UnknownEventError);
+  expect(() => tel.emit("controller_readd" as never)).toThrow(UnknownEventError);
+  expect(events).toHaveLength(1);
+});
+
 test("the file sink writes parseable NDJSON", () => {
   const dir = mkdtempSync(join(tmpdir(), "events-test-"));
   try {
