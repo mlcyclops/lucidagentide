@@ -1,30 +1,12 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-TUI.1 (part): the hub's pure keystones. The pane tree must never lose or duplicate a leaf
-// (a lost pane is a lost capability view), fitBlock must hold exact geometry (one sheared row
-// breaks every pane to its right), and deck rows must survive hostile engine strings.
+// P-TUI.1 (part): the hub's pure keystones. fitBlock must hold exact geometry (one sheared row breaks
+// every pane to its right), and deck rows must survive hostile engine strings. The pane tree's own
+// keystones (no lost or duplicated leaf, stable ids) live in hub_spaces.test.ts (P-TUI.3).
 
 import { describe, expect, test } from "bun:test";
-import { closeLeaf, deckLines, kgPages, modelCatalog, fitBlock, leaves, mapLeaf, type HubData, type PaneNode } from "./hub_tui.ts";
-
-const leaf = (deck: "overview" | "security" | "fleet"): PaneNode => ({ kind: "leaf", deck });
-
-describe("pane tree", () => {
-  test("split replaces the focused leaf and keeps every other leaf in ring order", () => {
-    let tree: PaneNode = leaf("overview");
-    tree = mapLeaf(tree, 0, (l) => ({ kind: "split", dir: "v", a: l, b: leaf("security") }));
-    tree = mapLeaf(tree, 1, (l) => ({ kind: "split", dir: "h", a: l, b: leaf("fleet") }));
-    expect(leaves(tree).map((l) => l.deck)).toEqual(["overview", "security", "fleet"]);
-  });
-
-  test("closing a middle pane hands its region to the sibling; the last pane refuses", () => {
-    let tree: PaneNode = { kind: "split", dir: "v", a: leaf("overview"), b: { kind: "split", dir: "h", a: leaf("security"), b: leaf("fleet") } };
-    const closed = closeLeaf(tree, 1)!;
-    expect(leaves(closed).map((l) => l.deck)).toEqual(["overview", "fleet"]);
-    expect(closeLeaf(leaf("overview"), 0)).toBeNull();
-  });
-});
+import { deckLines, kgPages, modelCatalog, fitBlock, type HubData } from "./hub_tui.ts";
 
 describe("fitBlock", () => {
   test("pads and clips to exact geometry, including overlong and missing rows", () => {
