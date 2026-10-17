@@ -594,6 +594,9 @@ class Backend {
   // the first DUE automation through runGoal. `autoRunning` guards against a tick overlapping itself.
   private autoTimer: ReturnType<typeof setInterval> | null = null;
   private autoRunning = false;
+  // #460 case 2: true only while the RUNNING automation drives Main's ACP session (every kind except
+  // "agent", which runs through startAgentRun's own child pipeline). Only that kind may block a switch.
+  private autoOwnsMain = false;
   private static readonly AUTO_TICK_MS = 30_000;
   private askActive = false;            // true only during a chat turn (never the util `complete()`)
   // P-EXEC.1 (ADR-0066): the in-memory allow-turn scope — risky programs the user OK'd for the rest of
@@ -1688,10 +1691,11 @@ class Backend {
    *  work right now, or null when nothing would be lost. loadSession/newSession run clearTurnRecovery,
    *  which cancels a live turn (ADR-0385, and correctly so), so the HTTP routes ask this first and refuse
    *  unless the caller explicitly chose to stop. A loop or automation outranks the turn it is running
-   *  because it is the bigger thing the user would lose. */
+   *  because it is the bigger thing the user would lose. Only an automation that OWNS Main blocks: an
+   *  agent-kind run lives in startAgentRun's own child, so a switch stops nothing of it (#460 case 2). */
   switchBlocker(): string | null {
     if (this.goalActive) return "a goal loop is running";
-    if (this.autoRunning) return "an automation is running";
+    if (this.autoRunning && this.autoOwnsMain) return "an automation is running";
     if (this.askActive || this.recoveryTurn?.running) return "a turn is running";
     return null;
   }
@@ -2304,6 +2308,7 @@ class Backend {
     const a: Automation | undefined = listAutomations(ws).find((x) => x.id === id);
     if (!a) return { ran: false };
     this.autoRunning = true;
+    this.autoOwnsMain = a.kind !== "agent"; // agent runs live in startAgentRun's child, never Main's session
     // Stamp lastRunAt up-front so a slow run can't be re-fired by the next tick before it finishes.
     updateAutomation(ws, id, { lastRunAt: Date.now() });
     // P-AGENT.14 (ADR-0142): scheduled BUILT-AGENT runs. Fail-closed gate first: only a trusted, loadable,
@@ -2335,6 +2340,7 @@ class Backend {
         result = `error: ${e instanceof Error ? e.message : String(e)}`;
       } finally {
         this.autoRunning = false;
+        this.autoOwnsMain = false;
         updateAutomation(ws, id, { lastRunAt: Date.now(), lastResult: result.slice(0, 200) });
       }
       return { ran: true, result };
@@ -2353,6 +2359,7 @@ class Backend {
       result = `error: ${String((e as Error)?.message ?? e)}`;
     } finally {
       this.autoRunning = false;
+      this.autoOwnsMain = false;
       updateAutomation(ws, id, { lastRunAt: Date.now(), lastResult: result.slice(0, 200) });
     }
     return { ran: true, result };
