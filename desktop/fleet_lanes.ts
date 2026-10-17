@@ -345,6 +345,9 @@ interface Lane {
   pending: { summary: string; kind: string; resolve: (allow: boolean) => void } | null;
   /** P-FLEET.L6: approve every ask without a human (per-lane; initialized from the manager default). */
   autoApprove: boolean;
+  /** P-CTRL.2 (ADR-0438): a controller lane is pinned supervised. Neither the fleet-wide auto default nor a
+   *  per-lane auto switch reaches it; auto for controller lanes needs the P-CTRL.4 consent, not a toggle. */
+  supervised: boolean;
   /** P-FLEET.L6: ask kinds the user granted for this lane's lifetime via scope "session". */
   sessionAllow: Set<string>;
   /** A prompt turn is in flight (one at a time per lane). */
@@ -439,7 +442,7 @@ export class FleetLaneManager {
    *  model) when it advertises loadSession; otherwise the caller's transcript (read from the on-disk
    *  session) rides the next prompt as the fallback preamble, exactly like an in-place respawn. Either
    *  way the transcript seeds what the composer shows on promote, and `turns` keeps the count honest. */
-  async spawn(opts: { cwd: string; model?: string; name?: string; resume?: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }> {
+  async spawn(opts: { cwd: string; model?: string; name?: string; supervised?: boolean; resume?: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }> {
     const cwd = (opts.cwd ?? "").trim();
     if (!cwd) return { ok: false, reason: `not a directory: ""` };
     const claim = this.#claimRefusal(opts.resume?.sessionId ?? null);
@@ -487,7 +490,8 @@ export class FleetLaneManager {
       hubSessionId: this.#hub(), // P-SWITCH.3: born under the hub of the moment, kept for life
       sinks: new Set(),
       pending: null,
-      autoApprove: this.#autoDefault,
+      autoApprove: opts.supervised ? false : this.#autoDefault,
+      supervised: opts.supervised === true,
       sessionAllow: new Set(),
       busy: false,
       openCalls: new Map(),
@@ -763,6 +767,7 @@ export class FleetLaneManager {
   setAuto(laneId: string, on: boolean): { ok: boolean; lane?: LaneView; reason?: string } {
     const lane = this.#lanes.get(laneId);
     if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
+    if (on && lane.supervised) return { ok: false, reason: "a controller lane stays supervised - auto needs the controller consent (P-CTRL.4)" };
     lane.autoApprove = on;
     if (on) lane.pending?.resolve(true);
     return { ok: true, lane: this.#view(lane) };
@@ -772,6 +777,7 @@ export class FleetLaneManager {
   setAutoAll(on: boolean): void {
     this.#autoDefault = on;
     for (const lane of this.#lanes.values()) {
+      if (lane.supervised) continue;
       lane.autoApprove = on;
       if (on) lane.pending?.resolve(true);
     }

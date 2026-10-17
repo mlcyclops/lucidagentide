@@ -108,14 +108,21 @@ export interface ApiAuthInput {
   queryRoutes: ReadonlySet<string>;
   /** Routes the agent's token opens. Every other route refuses it. */
   agentRoutes: ReadonlySet<string>;
+  /** P-CTRL.2 (ADR-0438): routes a paired controller's token opens. Every other route refuses it. */
+  controllerRoutes?: ReadonlySet<string>;
+  /** P-CTRL.2: the HEADER token verified against a live pairing (async argon2id, so the caller does it).
+   *  Never from `?t=`: a controller token is header-only. */
+  controllerAuthorized?: boolean;
 }
 
 /** PURE: may this /api request proceed? The UI token works in the header everywhere and as `?t=` on the query
- *  routes (unchanged from ADR-0024). The agent token works (header or `?t=`) ONLY on agentRoutes. Anything
- *  else, including an empty or unset token, is refused (fail-closed). */
+ *  routes (unchanged from ADR-0024). The agent token works (header or `?t=`) ONLY on agentRoutes. A controller
+ *  token works (header only) ONLY on controllerRoutes. Anything else, including an empty or unset token, is
+ *  refused (fail-closed). */
 export function apiAuthorized(i: ApiAuthInput): boolean {
   const query = i.queryRoutes.has(i.path) ? i.queryToken : null;
   if (tokenValid(i.headerToken, i.uiToken) || tokenValid(query, i.uiToken)) return true;
+  if (i.controllerRoutes?.has(i.path)) return i.controllerAuthorized === true;
   if (!i.agentRoutes.has(i.path)) return false;
   return tokenValid(i.headerToken, i.agentToken) || tokenValid(i.queryToken, i.agentToken);
 }

@@ -24751,6 +24751,24 @@ Still open, unchanged: the MASTER chat deck (the composer on the engine's own se
 - Not done, on purpose: no change to the Cloud Run timeout (3600 s is the platform maximum; the rotation is the fix), no seq on lane turns (lane-sync replaces), no persistence of lane history, no seeding of the master journal with turns from before the share started, and no change to MyHome's PC host (not in either repository).
 
 **Consequences.** `make demo-P-REMOTE.16` (harness/scripts/demo_premote16.ts) proves it over a REAL gated relay with the REAL host, socket, guest, viewer and history modules: a fresh join receives rich turns with seq (thinking, an edit with code, ok/elapsed, +2/-1); the phone renders the diff drilldown with hostile code escaped; history round-trips, rejects another room and stores nothing for a CUI posture; a phone that unlocks with `since=2` receives ONLY seq 3 and the in-flight seq 4 (with its tool input), merges them into one list with no duplicate turns, and the live bubble settles in place when `done` lands; a planned rotation re-hellos with `since=4`, replays nothing, leaves the items untouched and the guest live; a short-absence probe is answered by the pong and causes no reconnect. MyHome's `socket.js` was driven headless against the same relay (state `connecting>ready>down>ready` across a rotation with the peer count unchanged, pong consumed). 1012 tests across desktop/collab + fleet_lanes pass; `relay_client.test.ts` had a pre-existing 1-in-6 flake from a one-macrotask flush against off-thread WebCrypto, now a 20 ms wait. Deploy prerequisites, in order: the hosted relay image (pong), the desktop host (journal + rotation), the PWA at /remote and MyHome at /myhome (website repo). Until the relay is redeployed, phones probe without a pong and rotate on every unlock, which the seq replay makes cheap. Refs ADR-0226/0227 (hourly re-auth), ADR-0251 (grace presentation), ADR-0348 (stale shell), P-PWA-FOCUS.1/.2.
+
+## ADR-0438 -- P-CTRL.2: the controller policy core - a third token scope, a hashed pairing store, and /api/controller/* on the loopback engine, supervised only (2026-10-04)
+
+**Status:** Accepted.
+
+**Context.** ADR-0425 (P-CTRL.0, accepted 2026-10-04, full text in issue #449) designs an external controller (Hermes Agent) that drives LUCID lanes through one policy core, and ADR-0426 (P-CTRL.1) froze the seven `controller_*` event names. This is step 2 of that plan: the core itself, reachable on the loopback engine only. The TLS gateway is P-CTRL.3 and auto consent is P-CTRL.4; neither is here. Numbering note: master holds ADR-0427 through 0431, open PR branches hold 0432 through 0435, and the renumbering fixes claimed 0436 and 0437, so this ADR takes 0438 to keep the ADR-0304 merge collision away. 0432 to 0437 are skipped on this branch on purpose, not missing.
+
+**Decision.**
+- **Third token scope.** `apiAuthorized` (`desktop/origin_guard.ts`) gains `controllerRoutes` and `controllerAuthorized`. The engine verifies the `x-lucid-token` HEADER against the pairing store only for a path in `CONTROLLER_ROUTES` (`/api/controller/{lanes,spawn,prompt,status,result,cancel}`) and only when it is not the UI token; a verified token opens those six paths and nothing else. `?t=` never carries it. The UI token still reaches every route, but a controller route with no verified pairing answers `403 forbidden`, so the UI token cannot act as a controller either.
+- **Token and store (`desktop/controller/store.ts`).** A token is `lucidctl_<16 hex id>_<256-bit base64url secret>`. The id picks one record, so verify hashes once rather than once per pairing. Only an argon2id PHC hash (`Bun.password`, built into Bun, no new dependency) is stored, in `<LUCID_DATA_ROOT or ~/.omp>/controller-pairings.json`, written 0600 through temp + rename. The ADR-0425 text said SHA-256; argon2id was chosen on the operator's instruction for this increment, and a leaked store file is now a brute-force job instead of a lookup. The plaintext token exists in exactly one place: the reply to `/api/controller/pair`. A store that exists but does not parse refuses every token and every pair or unpair, and is never overwritten, so a torn file cannot silently drop or replace pairings.
+- **Pairing is human.** `/api/controller/pair` (`{name, workspace}`) and `/api/controller/unpair` (`{name}`) are UI-token routes outside `CONTROLLER_ROUTES`. The workspace must be an existing absolute folder and is stored resolved through `realpath`. Unpair revokes the token at once; the lanes it spawned stay in the fleet for the human.
+- **Routes (`desktop/controller/routes.ts`, one `handleController` entry for every future transport).** `lanes` lists only the pairing's own lanes, with no cwd, model or ask summary (`awaitingApproval` carries the ask's kind only). `spawn` accepts an optional `name` and nothing else; `cwd`, `model`, `repoUrl`, `pat`, `worktree` and `sessionId` are refused as malformed. The lane runs in the pairing's workspace, at most two live per pairing (429 beyond). `prompt` (`{laneId, text}`, text up to 32,000 chars) runs `scanAndDecide` with the strict default policy before anything reaches the lane; a quarantine or a dead scanner answers 422, and a clean prompt starts the turn detached with the LUCID provenance preamble from ADR-0425 and answers 202 with the turn's `runId`. `status`, `result` (assistant turns from `since`) and `cancel` complete the set. A lane another controller owns, the user's own lane and a missing lane all answer the same 404. Bad JSON, an unknown key, a non-string value, an oversize prompt or an unexpected query parameter answer 400.
+- **Supervised, enforced in the fleet.** `FleetLaneManager.spawn` takes `supervised: true` for controller lanes: the lane starts with auto off, `setAutoAll` skips it, and `setAuto(lane, true)` refuses it with a reason. Without this, a human flipping fleet-wide auto would have silently turned every controller lane into an auto lane, which is P-CTRL.4's consent gate bypassed by a toggle.
+- **Events.** `pair` emits `controller_paired`, `unpair` emits `controller_unpaired`, and `prompt` emits `controller_turn_started` or `controller_turn_blocked` (with `verdict`, `fail_closed` and a finding count), through the validated `Telemetry` envelope into the engine's `lucid-events.ndjson`. Turn events carry the turn's run_id and the lane's omp session id; pairing events carry `controller:<pairing id>` as the session. No event carries a token or prompt text. The audit write happens before the turn starts, so a turn whose audit line cannot be written never runs.
+- **Routes with no event, on purpose.** `lanes`, `status` and `result` are reads. `spawn` and `cancel` change state but none of the seven frozen names fits them; the spawn is already recorded in the durable lane-session ledger (`appendLaneLedger`). Inventing names here would change the frozen `EventName` contract inside a non-contract increment (invariant #8 plus AGENTS.md's frozen-files rule), so a `controller_lane_spawned` / `controller_turn_cancelled` pair, if wanted, is its own increment and ADR.
+- **Not built here:** `close` (the seventh ADR-0425 MCP verb; the operator's P-CTRL.2 brief lists six lane routes), the gateway and `/mcp` (P-CTRL.3), auto consent, the judge ruling and the dial clamp (P-CTRL.4), staging copies (P-CTRL.5), and any renderer surface (P-CTRL.6). Result indices are positions in the lane's capped replay transcript (40 turns); a controller that falls further behind loses the oldest.
+
+**Consequences.** `make demo-P-CTRL.2` (`desktop/scripts/demo_p_ctrl_2.ts`) boots the REAL engine on loopback with a scratch data root and HOME, pairs two controllers, and proves: the store holds only argon2id hashes at 0600; the controller token is 403 on `/api/security/approve`, `/api/fleet/answer`, `/api/fleet/auto`, `/api/fleet/spawn`, `/api/fleet/status`, `/api/settings` and `/api/controller/unpair`; a one-character-off token, the token in `?t=` and the bare UI token are 403 on controller routes; spawn into the paired workspace starts a real omp lane that fleet-wide auto does not reach and per-lane auto refuses; each controller and the user's lane are mutually invisible; a hidden-Unicode prompt is quarantined by the real scanner sidecar; a clean prompt starts a turn and status, result and cancel answer; after the demo kills the engine's scanner process the next prompt is refused as scan unavailable; unpair makes the token 403 at once while the other pairing still works; and every controller event carries run_id and session_id with no token or prompt text in the log. `desktop/controller/controller.test.ts` covers the token round trip, tamper, revoke, reload and malformed-store refusal, scope isolation, the spawn allow-list and two-lane cap, the quarantine and dead-scanner paths through the real `scanAndDecide`, the preamble, per-route events, and the 403 matrix. Invariants: #1 no omp change; #2 no Python added; #3 scan unavailable refuses the prompt, an unknown token or pairing is 403 with no detail, a malformed store refuses everything, approvals stay human; #4 the in-omp gate still gates every tool call a controller lane makes; #5 and #6 the preamble and the prompt ride the lane's user turn in the tail, never the prefix; #7 no new trust label; #8 only frozen names are emitted; #9 pairings, lanes and turns carry stable ids; #10 no DuckDB change. Refs ADR-0425, ADR-0426, issue #449.
 ## ADR-0437 -- P-LEGIBLE.2: the Defender / Agent 365 runbook, corrected against the sources (2026-10-04, issue #302)
 
 (Numbered 0437: drafted as 0427, which master gave to CREATOR-DGX; 0428 to 0436 were then taken on master or by open PRs.)
@@ -24926,6 +24944,140 @@ What exists for unattended runs today, all built: P-GOAL.5 automations (ADR-0047
 
 **Consequences.** A user behind a proxy or with port 1455 blocked signs in to ChatGPT/Codex from LUCID without a loopback callback. Risk named: the instruction phrasing is omp's, so an upstream rewording makes the card say "code not shown yet" (the broker still works through the toast's Open button plus the terminal-visible code in developer mode); the parser accepts two phrasings and the demo pins both. Relates to ADR-0210 (device-code UIs), ADR-0375 (nested provider cards), ADR-0442 (why after the bump), issue #490.
 
+## ADR-0449 -- P-CTRL-RO.1: a read-only MCP introspection seam for an external orchestrator, the first exposed controller transport (SCOPE/PLAN) (2026-10-09)
+
+**Numbering.** Drafted as ADR-0447 and renumbered at merge (2026-10-17): master gave 0447 to P-RELEASE.6 and 0448 to P-MODEL.8 while this branch was open, so this takes 0449.
+
+**Status:** Proposed (2026-10-09). Scopes Phase 1 only (read-only introspection). Phase 2
+(gated state-changing verbs) and Phase 3 (off-host signed-token orchestration) are recorded
+here as the roadmap but are deferred to their own increments and ADRs. Builds on ADR-0425
+(P-CTRL.0, the controller trust model), ADR-0426 (P-CTRL.1, the frozen controller_* events),
+and ADR-0438 (P-CTRL.2, the loopback policy core); it adds no new trust surface those did not
+already reason about, it exposes a strict SUBSET of P-CTRL.2 over a new transport.
+
+**Context.** ADR-0425 designed a controller surface for one external agent (Hermes) and
+ADR-0438 built its policy core on the loopback engine: a third token scope in
+`desktop/origin_guard.ts` (`controllerAuthorized`), an argon2id-hashed pairing store
+(`desktop/controller/store.ts`, 0600), and `/api/controller/*` routes
+(`desktop/controller/routes.ts`) whose `lanes`, `status` and `result` entries are already
+reads scoped to the pairing's own lanes. What does not exist yet is any MCP transport: P-CTRL.3
+plans a gateway that exposes all seven verbs at once, read and write together. A new need has
+arrived: an external MCP orchestrator (for example Claude via Dispatch) should be able to
+OBSERVE LUCID and its fleet on the next beta, to answer "what is running, what state is it in,
+what has it done lately", with no ability to change anything. Shipping observation first, before
+any state-changing verb crosses an MCP boundary, is both what the operator wants and strictly
+safer than P-CTRL.3's all-verbs gateway. This ADR therefore re-cuts the arc: a read-only MCP
+profile is the FIRST exposed controller transport; the write verbs wait for Phase 2.
+
+**Decision.**
+- **Shape.** A new MCP server exposes exactly three read-only tools, reusing the dependency-free
+  `McpStdioServer` (`harness/mcp/mcp_server.ts`) that already backs `lucid mcp-serve`. It is a
+  CLIENT of the running engine: it reads `engine-discovery-<port>.json` for port and nonce only
+  (never the file's UI token), wins the ADR-0305 health handshake (ADR-0419), and calls a
+  read-only slice of `/api/controller/*` with a controller token from its environment. No engine,
+  no token, a failed handshake or a revoked pairing is an `isError` result naming the cause; it
+  never spawns an engine and never falls back to another credential.
+- **Three read-only tools, default-deny.** The MCP surface is a closed set of three:
+  - `fleet.list_agents` -> the pairing's own lanes (maps to `/api/controller/lanes`): lane id,
+    human label, status, created-at. No cwd, no model, no repo, no prompt text.
+  - `agent.get_status` (`{laneId}`) -> one owned lane's state (maps to `/api/controller/status`):
+    `idle | working | awaiting_approval | blocked | error`, and when awaiting, the pending ask's
+    KIND only (never its contents). A lane another pairing owns, a user lane, or a missing lane
+    all return the same not-found.
+  - `fleet.tail_logs` (`{laneId, sinceSeq?}`) -> a metadata-only activity tail for one owned lane:
+    status transitions, the lane's tool-trail (tool name, risk tier, path, block/allow; the same
+    projection the ADR-0425 judge sees), and assistant turn text since `sinceSeq`. It NEVER returns
+    file contents, prompt/assignment text, secrets, vault material, environment, or any
+    UNTRUSTED_CONTENT body. Redaction is fail-closed: a field the projector cannot prove safe to
+    emit is omitted, not guessed.
+  No `spawn`, `prompt`, `cancel`, `close`, `pair`, `unpair`, `answer`, `approve`, `auto`, or any
+  settings/vault/provider/MCP/agent-registry route is reachable over this transport. The set is a
+  literal allow-list in the MCP server and, independently, in the engine route guard, so a
+  controller token used directly with curl gets the same three reads and nothing else.
+- **Auth: the P-CTRL.2 controller token, narrowed to a read scope.** This seam does NOT mint a new
+  credential kind. It reuses the controller token and pairing store from ADR-0438, with a
+  per-pairing `readOnly: true` capability so a pairing issued for observation can never be widened
+  to writes without a human re-pair. `apiAuthorized` gains a `controllerReadRoutes` subset:
+  a token on a read-only pairing opens only `{lanes, status, logs}` and is 403 on every write
+  controller route as well as on every UI/agent route. Header only, never `?t=`.
+- **Transport is loopback in Phase 1.** The MCP server attaches over the discovery-file handshake
+  on `127.0.0.1`, exactly as `lucid hub` and `lucid mcp-serve` do. ADR-0022 is unchanged: no new
+  listener leaves loopback in this phase. An off-host orchestrator is Phase 3 (the ADR-0425
+  gateway/relay transports), not this ADR.
+- **Audit, metadata-only.** Every read emits one audit record (pairing id, tool, lane id, byte
+  count returned, redaction count; never lane contents, never a token). Because inventing a new
+  name in `EventName` touches a frozen contract (invariant #8, as ADR-0438 noted when it left its
+  own reads eventless), the audit record is added as a single frozen-contract sub-step:
+  `controller_read` enters `EVENT_NAMES` the way P-CTRL.1 added its seven names, with its own demo
+  that an unknown name still raises. The audit write happens before the response is returned, so a
+  read whose audit line cannot be written returns nothing (fail-closed).
+
+**Threat model under read-only.** A compromised or hostile orchestrator holding a read-only
+controller token can: enumerate the paired pairing's OWN lanes, read their status, and read their
+metadata activity tail and assistant text. That is the entire blast radius, and it is pure
+information disclosure bounded to one workspace the human named at pairing time. It CANNOT: spawn
+or prompt a lane, cancel or close one, answer or dismiss an approval, turn auto mode on, change any
+setting, read another pairing's or the user's lanes, read file contents, secrets, the vault,
+providers, or environment, register an MCP server or agent, or reach the engine's own `/api` (the
+controller scope never opens it). The residual risk is exfiltration of what a lane's assistant text
+and tool-trail reveal: whatever an observed lane surfaces can reach the orchestrator and its
+onward channels. Mitigations: pairing names the workspace so the human consents to exactly that
+exposure; `fleet.tail_logs` redacts contents/secrets/untrusted bodies fail-closed; the transport is
+loopback-only in Phase 1 (no network reach at all); a read-only pairing cannot be widened in place;
+rate and response-size limits bound a scraping orchestrator; every read is audited. On one machine
+as one OS user the same ADR-0396/ADR-0425 caveat holds: a process that can read the discovery file
+already holds the UI token, so the read scope bounds what the orchestrator MODEL is offered and what
+a leaked read-only token can do, not what a hostile local process could already do.
+
+**Phased roadmap (this ADR scopes Phase 1 only).**
+- **Phase 1 (this ADR, P-CTRL-RO.1): read-only introspection.** The three tools above, loopback,
+  bearer controller token on a read-only pairing, metadata-only audit. No state change anywhere.
+- **Phase 2 (deferred, future ADR): gated state-changing verbs, human-in-the-loop + audit.** Expose
+  `spawn`/`prompt`/`cancel` from the P-CTRL.2 core over MCP, each still fail-closed scanned
+  (ADR-0438), approvals still human (ADR-0425), every mutation audited through the frozen
+  controller_* events. This is the write counterpart; it reuses ADR-0438 wholesale and does not
+  belong in a read-only increment.
+- **Phase 3 (deferred, public gateway ADR + private ADR-A024): off-host signed-token orchestration.**
+  The ADR-0425 LAN/VPN gateway (TLS + pinned mTLS + bearer) or the E2E relay, plus SIGNED CAPABILITY
+  TOKENS so an orchestrator on another host presents a short-lived, scope-stamped, signed grant
+  rather than a long-lived secret. The signing + verification discipline and the SIEM audit export
+  are add-on concerns and land in the private repo as ADR-A024, reusing the ECDSA P-256/SHA-256
+  primitives of ADR-A015/A016/A021 and the SIEM shapes of ADR-A011.
+
+**Plan (one increment per session).**
+- **P-CTRL-RO.1a (contract):** `controller_read` enters `EVENT_NAMES` in `harness/contracts.ts`
+  (tail-appended, nothing reordered), plus the `readOnly` pairing capability in the store type.
+  Demo: the name emits with stable ids, a typo still raises; a read-only pairing round-trips.
+- **P-CTRL-RO.1b (engine):** `controllerReadRoutes` in `desktop/origin_guard.ts`; the read-only
+  pairing flag in `desktop/controller/store.ts`; the `fleet.tail_logs` projector + redaction in
+  `desktop/controller/routes.ts`; the audit record. Demo against the REAL engine: a read-only token
+  opens `lanes`/`status`/`logs` and is 403 on `spawn`/`prompt`/`cancel`/`answer`/`approve`/`auto`
+  and on `/api/settings`; `tail_logs` never emits a file body or a secret from a seeded lane;
+  another pairing's and a user's lanes are invisible; a revoked pairing is refused; an audit line
+  precedes every response.
+- **P-CTRL-RO.1c (`lucid mcp-serve --read-only`):** the three-tool MCP server over the
+  discovery-file handshake. Demo: a scripted stdio MCP client against the real engine lists lanes,
+  reads a status and a log tail, and gets an `isError` naming the cause when the engine is down,
+  the token is revoked, or a write tool is requested.
+- **P-CTRL-RO.1d (renderer):** the pairing card gains a "read-only (observe)" pairing kind and the
+  `orchestrator:<name>` observe chip on lanes. Rebuild `app.bundle.js` and grep the served bytes
+  per AGENTS.md.
+
+**Invariants.** #1: no omp change; this is an engine client plus an MCP server. #2: no Python
+added. #3: fail-closed holds on auth (unknown/revoked token refused), on the store (a malformed
+pairing file refuses every token, per ADR-0438), on redaction (unsure field omitted), and on audit
+(a read whose audit cannot be written returns nothing). #4: untouched; a read makes no tool call.
+#5/#6: no untrusted body is emitted and nothing enters the prefix; reads add no prompt. #7: no new
+trust label. #8: the one new event name lands through its own contract sub-step (1a). #9: pairings,
+lanes and turns carry stable ids. #10: no DuckDB schema change. ADR-0022: no non-loopback listener
+in this phase.
+
+**Relates to.** ADR-0425 (controller trust model, approvals-stay-human, the gateway/relay transports
+Phase 3 adopts), ADR-0426 / ADR-0438 (the frozen events and the loopback policy core this subsets),
+ADR-0305/0419 (the discovery-file health handshake the MCP client wins), ADR-0022 (loopback bind),
+ADR-0147 (the Agent Firewall MCP pattern), ADR-0396 (the agent-token scope precedent), and the
+deferred private ADR-A024 (signed capability tokens + SIEM export for Phase 3). AGENTS.md invariants
+#3 (fail-closed), #5 (delimited/late untrusted), #8 (frozen events).
 
 ## ADR-0447 -- P-RELEASE.6: Windows Authenticode through Azure Artifact Signing, one env switch for both flavors (2026-10-14)
 
