@@ -590,6 +590,9 @@ class Backend {
   // P-GOAL.2 (ADR-0046): a /goal loop is running, and a request to stop it after the current iteration.
   private goalActive = false;
   private goalCancelled = false;
+  /** #460 case 1: resolves when runGoal has FULLY unwound (goalActive false, report written, `done`
+   *  emitted), so a forced session switch can wait for the loop instead of racing it. Null when idle. */
+  private goalSettled: Promise<void> | null = null;
   // P-GOAL.5 (ADR-0047): in-process automation scheduler. A timer ticks while the app is open and runs
   // the first DUE automation through runGoal. `autoRunning` guards against a tick overlapping itself.
   private autoTimer: ReturnType<typeof setInterval> | null = null;
@@ -1744,6 +1747,11 @@ class Backend {
 
   /** Resume a past session so the next prompt continues it. */
   async loadSession(id: string): Promise<void> {
+    // #460 case 1 (P-SWITCH.1 follow-up): a running /goal loop (or a Main-owned automation, which runs
+    // through runGoal) is stopped and FULLY unwound before the session changes. Only forced or
+    // destructive callers reach here while a loop runs: the unforced HTTP routes already refused via
+    // switchBlocker(), so this never widens a plain switch into a work-cancelling path (#390).
+    await this.stopGoalForSwitch();
     this.clearTurnRecovery();
     await this.start();
     await this.releaseOtherSession(this.acp!, id);
@@ -1752,6 +1760,7 @@ class Backend {
   }
 
   async newSession(): Promise<void> {
+    await this.stopGoalForSwitch(); // #460 case 1: same contract as loadSession above
     this.clearTurnRecovery();
     await this.start();
     if (this.sessionId) await this.acp!.request("session/close", { sessionId: this.sessionId }).catch(() => {});
@@ -2058,6 +2067,8 @@ class Backend {
     const prevMode = this.permissionMode;
     this.permissionMode = "auto"; // unattended: auto-approve tool calls (the gate still scans every one)
     this.goalActive = true; this.goalCancelled = false;
+    let settleGoal: () => void = () => {};
+    this.goalSettled = new Promise<void>((r) => { settleGoal = r; });
     // P-GOAL.13 (ADR-0067): the loop's exec policy is the per-command-type DIAL, clamped by the managed
     // loop ceiling (ADR-0068, tighten-only). An unset dial defaults to the safest posture (T0 only).
     const loopMax = managedConfig().config?.security?.loop?.maxAutoTier;
@@ -2209,6 +2220,10 @@ class Backend {
       } catch { /* the report never blocks the loop's completion */ }
       // P-GOAL.13: clear the loop's exec posture so a later interactive turn isn't governed by a stale dial.
       this.loopDial = null; this.loopBlocks = []; this.loopIter = 0;
+      // #460 case 1: release the forced-switch waiter. Placed before the `done` emit on purpose: both run
+      // in this same synchronous frame, so `done` still reaches the stream before any waiter resumes, and
+      // a theoretical throw from the emit can never strand the waiter until its timeout.
+      this.goalSettled = null; settleGoal();
       onEvent({ type: "done" });
     }
   }
@@ -2231,6 +2246,23 @@ class Backend {
   cancelGoal(): void { if (this.goalActive) { this.goalCancelled = true; this.cancel(); } }
   /** Whether a /goal loop is currently running (so the UI routes Stop to cancelGoal, not cancelChat). */
   isGoalRunning(): boolean { return this.goalActive; }
+
+  /** #460 case 1 (P-SWITCH.1 follow-up): stop the running /goal loop, or a Main-owned automation (those
+   *  run through runGoal), and WAIT for it to unwind before the caller touches the session. Cancelling
+   *  alone is not enough: the forced switch previously cancelled only the maker TURN (clearTurnRecovery),
+   *  goalCancelled stayed false, and the loop's checker or next iteration then ran inside the newly
+   *  loaded session. Bounded so a wedged unwind can never hang the switch; goalCancelled stays true, so
+   *  a late-waking loop still exits at its next checkpoint without doing any work. No-op when idle. */
+  async stopGoalForSwitch(timeoutMs = 15_000): Promise<void> {
+    if (!this.goalActive) return;
+    this.cancelGoal();
+    const settled = this.goalSettled;
+    if (!settled) return;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, timeoutMs);
+      void settled.then(() => { clearTimeout(timer); resolve(); });
+    });
+  }
 
   /** P-GOAL.10 (ADR-0055): the cross-run evaluation surface — aggregate stats over the run-log plus the
    *  most-recent runs for a compact history view. Reads the workspace's `.omp/loops/run-log.jsonl`. */
