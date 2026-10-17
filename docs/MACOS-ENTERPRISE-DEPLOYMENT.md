@@ -51,15 +51,17 @@ brew uninstall --zap --cask lucidagentide
 
 Line by line: `trust` is required on Homebrew 6+ (which refuses casks from
 untrusted third-party taps; older Homebrew has no such command, skip it),
-`install` places the `.pkg` with no Gatekeeper prompt, `upgrade` replaces the
+`install` copies the app bundle out of the release `.zip` with no Gatekeeper prompt, `upgrade` replaces the
 app in place and keeps user data, `uninstall` removes the app only, and
 `--zap` also deletes user data. The blocks in this file carry no `#` comments
 on purpose: stock macOS zsh does not strip comments from pasted interactive
 commands, it passes them as extra arguments (which is how a pasted trailing
 comment once broke `brew trust` in the field - keep it that way).
 
-The cask uses `allow_untrusted` (legal in a third-party tap) so `installer`
-accepts the unsigned pkg, and strips any quarantine flag in a `postflight`.
+The cask is an `app` cask over the `.zip` bundle: no `installer(8)`, no package
+trust (the old `allow_untrusted` pkg flow is deprecated in Homebrew 6), and a
+`postflight` strips the quarantine flag so the unsigned build launches clean.
+The `.pkg` release assets remain for the MDM sections below.
 
 ## 2. Verify the package before fleet deployment
 
