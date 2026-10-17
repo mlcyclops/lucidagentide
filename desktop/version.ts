@@ -646,4 +646,22 @@
 //            installs put `lucid` on PATH and add a `lucid-hub` wrapper (#468). CI: explicit budgets for the
 //            four tests the Windows gate killed under load (#513). A plain v2.4.1 tag, marked Latest, so the
 //            download buttons, the electron-updater feed and the Homebrew cask all follow it.
-export const APP_VERSION = "2.4.1";
+// v2.5.0-beta.1 = 2.4.1 plus the `lucid hub` terminal train (#515). P-TUI.3 (ADR-0436): the hub CONTROL
+//            PLANE: `lucid hub` holds named spaces with stable ids (s1, s1:p2); one verb parser serves the
+//            CLI, the `:` prompt and a loopback, ephemeral-port, token + nonce gated control server (0600
+//            discovery file, removed on exit, reachable only while a hub runs); `lucid hub <cmd>` drives a
+//            running hub from any terminal or agent (status, space/pane/agent verbs and the tmux verbs
+//            split-window, select-pane, kill-pane, swap-pane, resize-pane, new-window, kill-window,
+//            rename-window, select-window, list-panes, list-windows, send-keys). P-TUI.4: Agents (key 9)
+//            and Spaces (key 0) DECKS join the hub ring, every fleet lane a row with status, model, elapsed.
+//            P-TUI.5 (ADR-0433): spaces hold TABS (s1:t1), tmux window = tab and session = space (the v1
+//            window = space alias is gone), a persistent left RAIL (toggle `b`) with SGR mouse clicks.
+//            P-TUI.5 E2 (ADR-0434): the rail's AGENTS panel, one clickable row per lane, a user-set display
+//            PRIORITY 1-9 per lane name (digit key on the rail or `lucid hub agent priority <name|id> <1-9>`),
+//            blocked-on-a-human lanes first in each band. P-TUI.6 (ADR-0435): a one-line DECK STRIP above
+//            the status bar with live counts and digit shortcuts, and a fuzzy PALETTE (ctrl+k, `:palette`)
+//            over the hub's verbs. The `lucid-hub` agent skill (contract v2). Hub demos proven on macOS; on
+//            Windows the hub runs but its demos do not yet. PRERELEASE: a GitHub prerelease, never marked
+//            Latest; the Homebrew cask and stable installs stay on 2.4.1, a beta install updates to the next
+//            beta. Scoped gate 522 files / 7060 tests.
+export const APP_VERSION = "2.5.0-beta.1";

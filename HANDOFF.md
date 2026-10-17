@@ -13,7 +13,23 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-10-17, v2.4.1 stable)
+## Current state (2026-10-17, v2.4.1 stable, v2.5.0-beta.1 prerelease)
+
+**v2.5.0-beta.1** (2026-10-17, branch `release/v2.5.0-beta.1`) is a GitHub
+prerelease on top of 2.4.1 carrying the `lucid hub` terminal train integrated
+in #515: the hub control plane with named spaces, stable ids and a loopback,
+token + nonce gated control server driven by `lucid hub <cmd>` (P-TUI.3,
+ADR-0436); the Agents and Spaces decks (P-TUI.4); tabs inside spaces (tmux
+window = tab, session = space) behind a persistent left rail with SGR mouse
+clicks (P-TUI.5, ADR-0433); the rail's Agents panel with a per-lane display
+priority 1-9 (P-TUI.5 E2, ADR-0434); the deck strip and the `ctrl+k` palette
+(P-TUI.6, ADR-0435); and the `lucid-hub` agent skill (contract v2). Beta
+rules: never marked Latest, the Homebrew cask and stable installs stay on
+2.4.1, a beta install updates to the next beta; installing it over 2.4.1
+keeps settings, sessions and keys, and going back is installing 2.4.1 over
+it. The hub's end-to-end demos are proven on macOS; on Windows the hub works
+but its demos do not run yet (a stderr line from the managed-config registry
+probe). Scoped gate: 522 files / 7060 tests.
 
 The original build plan (Increment 0-2 + Phases 2-7) closed long ago; work is
 now product increments, each with its own ADR. **v2.4.1** (2026-10-17) is the
