@@ -45,7 +45,7 @@ const RED = chalk.hex("#ef5f5f");
 
 // ---- decks -------------------------------------------------------------------------------------
 
-export type DeckId = "overview" | "security" | "fleet" | "sessions" | "audit" | "usage" | "network" | "kg";
+export type DeckId = "overview" | "security" | "fleet" | "sessions" | "audit" | "usage" | "network" | "kg" | "agents" | "spaces";
 export const DECKS: readonly { id: DeckId; key: string; title: string; icon: string }[] = [
   { id: "overview", key: "1", title: "Overview", icon: "◆" },
   { id: "security", key: "2", title: "Security", icon: "⛨" },
@@ -55,6 +55,9 @@ export const DECKS: readonly { id: DeckId; key: string; title: string; icon: str
   { id: "usage", key: "6", title: "Usage", icon: "$" },
   { id: "network", key: "7", title: "Network", icon: "⇄" },
   { id: "kg", key: "8", title: "Knowledge", icon: "◈" },
+  // P-TUI.4: the herdr-parity surfaces - the agent table and the spaces list.
+  { id: "agents", key: "9", title: "Agents", icon: "◎" },
+  { id: "spaces", key: "0", title: "Spaces", icon: "▦" },
 ];
 
 /** The engine payload slices the decks draw. Fetched as unknown, narrowed field by field:
@@ -92,8 +95,54 @@ export function kgPages(data: HubData | null, filter: string): Record<string, un
   return f ? pages.filter((p) => str(p.title).toLowerCase().includes(f) || str(p.slug).toLowerCase().includes(f)) : pages;
 }
 
+// ---- P-TUI.4: the Spaces deck's row shape ------------------------------------------------------
+// The deck renders a PROJECTION of the P-TUI.3 Spaces model (hub_spaces.ts): one row per space,
+// pane count derived from its tree, focus derived from the model's active id. The pure builder
+// below sees only this shape, so it stays testable without the model.
+export interface HubSpace { id: string; name: string; panes: number; focused: boolean }
+
+/** Elapsed-since for the Agents table: how long an agent has been alive, herdr-style. */
+export function fmtElapsed(startMs: number, now = Date.now()): string {
+  if (!Number.isFinite(startMs) || startMs <= 0 || now < startMs) return "?";
+  const s = Math.floor((now - startMs) / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86_400) return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
+  return `${Math.floor(s / 86_400)}d`;
+}
+
+/** The Agents deck's table rows (pure): name, status (the LaneStatus vocabulary verbatim), elapsed
+ *  since spawn, model, repo#branch (+ ·wt for a linked worktree) when the lane's background repo
+ *  probe has landed. One lane is ONE row; every cell truncates, never wraps (invariant 11). */
+export function agentTableLines(lanes: Record<string, unknown>[], selected: number, now = Date.now()): string[] {
+  if (lanes.length === 0)
+    return ["", "  no agents running", "", "  n  spawn a new agent in this workspace", "  ⏎  attach the selected agent into this pane"];
+  const head = `  ${"agent".padEnd(14)} ${"status".padEnd(14)} ${"elapsed".padStart(7)}  ${"model".padEnd(26)} repo`;
+  const rows = lanes.map((l, i) => {
+    const rv = rec(rec(l.repo).repo);
+    const repoName = str(rv.name);
+    const branch = str(rv.branch);
+    const repoCell = repoName !== "?" && repoName
+      ? `${repoName}${branch !== "?" && branch ? `#${branch}` : ""}${rv.worktree === true ? " ·wt" : ""}`
+      : "";
+    const ask = rec(l.pendingApproval).summary ? " · WAITING ON YOU" : "";
+    return `${i === selected ? "▸" : " "} ${truncateToWidth(str(l.name), 14).padEnd(14)} ${str(l.status).padEnd(14)} ${fmtElapsed(Number(l.createdAt), now).padStart(7)}  ${truncateToWidth(str(l.model), 26).padEnd(26)} ${repoCell}${ask}`;
+  });
+  return ["", head, "", ...rows];
+}
+
+/** The Spaces deck's rows (pure): focus marker, name, pane count. */
+export function spaceTableLines(spaces: readonly HubSpace[], selected: number): string[] {
+  if (spaces.length === 0) return ["", "  no spaces yet - n creates one"];
+  const rows = spaces.map((s, i) => {
+    const panes = Number.isFinite(s.panes) ? s.panes : 0;
+    return `${i === selected ? "▸" : " "} ${s.focused ? "●" : " "} ${truncateToWidth(s.name, 28).padEnd(28)} ${panes} pane${panes === 1 ? "" : "s"}`;
+  });
+  return ["", ...rows, "", "  ⏎ focus · n new · r rename · x close"];
+}
+
 /** Pure deck bodies: plain rows (no ANSI - styling is a later pass), each row one physical line. */
-export function deckLines(deck: DeckId, data: HubData | null, width: number, selected: number, filter = ""): string[] {
+export function deckLines(deck: DeckId, data: HubData | null, width: number, selected: number, filter = "", spaces: readonly HubSpace[] = []): string[] {
   if (!data) return ["loading from the engine…"];
   const w = Math.max(8, width);
   // One row is ONE physical line: engine strings (session titles, findings) can carry newlines,
@@ -199,6 +248,10 @@ export function deckLines(deck: DeckId, data: HubData | null, width: number, sel
         return t(`${i === selected ? "▸" : " "} [${trust}] ${str(p.title)} (${str(p.degree)})${arrow}`);
       })];
     }
+    case "agents":
+      return agentTableLines(arr(data.fleet.lanes).map(rec), selected).map(t);
+    case "spaces":
+      return spaceTableLines(spaces, selected).map(t);
   }
 }
 
@@ -225,7 +278,7 @@ export function pickerMatches(pk: { models: ModelOption[]; filter: string }): Mo
 
 /** The status-bar teaching line, per focused surface: what THIS pane responds to right now. */
 export const DECK_HINTS: Record<DeckId | "agent" | "prompting", string> = {
-  overview: "| - split · tab focus · 1-6 decks",
+  overview: "| - split · tab focus · 1-9,0 decks",
   security: "j/k select · a approve · i dismiss",
   fleet: "n new agent · j/k select · ⏎ open agent here",
   sessions: "j/k select · ⏎ resume session as a live agent",
@@ -233,6 +286,8 @@ export const DECK_HINTS: Record<DeckId | "agent" | "prompting", string> = {
   usage: "r refresh",
   network: "w whitelist a host · j/k select · D remove · t toggle allow-all",
   kg: "j/k select · ⏎ read page · / filter · c switch KG",
+  agents: "j/k select · ⏎ attach here · n spawn · c cancel turn · x dismiss stopped",
+  spaces: "j/k select · ⏎ focus · n new space · r rename · x close space",
   agent: "⏎ prompt · m model · j/k scroll · G live · y/s/d answer ask · x close",
   prompting: "type your prompt · ⏎ send · esc cancel",
 };
@@ -251,6 +306,13 @@ export function colorizeRow(deck: DeckId, row: string): string {
       .replace(/\[trusted\]/, (m) => GREEN(m))
       .replace(/\[(untrusted|suspicious)\]/, (m) => AMBER(m))
       .replace(/\[quarantined\]/, (m) => RED(m));
+  // The Agents table carries the status mid-row at a fixed column (the LaneStatus vocabulary).
+  if (deck === "agents")
+    return row
+      .replace(/\b(working|starting)\b/, (m) => GREEN(m))
+      .replace(/\b(error|stopped)\b/, (m) => RED(m))
+      .replace(/\b(needs-approval|awaiting-input)\b/, (m) => AMBER(m))
+      .replace(/WAITING ON YOU/, (m) => AMBER(m));
   return row;
 }
 
@@ -327,7 +389,7 @@ export class HubComponent implements Component {
   #watchers: Record<string, AbortController> = {};
   #prompt: { lane: string; text: string } | null = null;
   #picker: { lane: string; models: ModelOption[]; sel: number; filter: string; busy?: boolean } | null = null;
-  #promptKind: "agent" | "wl-add" | "kg-filter" | "command" = "agent";
+  #promptKind: "agent" | "wl-add" | "kg-filter" | "command" | "space-rename" = "agent";
   #kgFilter = "";
   #reader: { title: string; rows: string[] } | null = null;
   #data: HubData | null = null;
@@ -578,6 +640,8 @@ export class HubComponent implements Component {
     else if (data === "z") this.#zoom = !this.#zoom;
     else if (data === "b") this.#sidebar = !this.#sidebar;
     else if (data === ":") { this.#promptKind = "command"; this.#prompt = { lane: "", text: "" }; }
+    else if (data === "x" && this.#focusedDeck() === "agents") { void this.#dismissLane(); return; }
+    else if (data === "x" && this.#focusedDeck() === "spaces") { this.#closeSpace(); return; }
     else if (data === "x") {
       try { sp.closePane(); } catch (e) { if (!(e instanceof HubOpError)) throw e; this.#status = "last pane - q quits"; }
     } else if (DECKS.some((d) => d.key === data)) {
@@ -592,9 +656,12 @@ export class HubComponent implements Component {
     } else if (matchesKey(data, "ctrl+u") && this.#focusedDeck() === "agent") this.#scroll += 10;
     else if (matchesKey(data, "ctrl+d") && this.#focusedDeck() === "agent") this.#scroll = Math.max(0, this.#scroll - 10);
     else if (data === "G" && this.#focusedDeck() === "agent") this.#scroll = 0;
+    else if (data === "r" && this.#focusedDeck() === "spaces") { this.#startRenameSpace(); return; }
     else if (data === "r") { void this.refresh(); return; }
     else if (data === "a" || data === "i") { void this.#judge(data === "a"); return; }
+    else if (data === "n" && this.#focusedDeck() === "spaces") { this.#createSpace(); return; }
     else if (data === "n") { void this.#spawnAgent(null); return; }
+    else if (data === "c" && this.#focusedDeck() === "agents") { void this.#cancelLane(); return; }
     else if (data === "w" && this.#focusedDeck() === "network") { this.#promptKind = "wl-add"; this.#prompt = { lane: "", text: "" }; }
     else if (data === "D" && this.#focusedDeck() === "network") { void this.#removeWhitelistEntry(); return; }
     else if (data === "t" && this.#focusedDeck() === "network") { void this.#togglePosture(); return; }
@@ -670,7 +737,8 @@ export class HubComponent implements Component {
       if (this.#pendingApprovalLane()) { this.#status = "this agent is waiting on the ask above - answer it: y allow once · s allow for session · d deny"; this.#ui.requestRender(); return; }
       this.#promptKind = "agent"; this.#prompt = { lane: leaf.lane, text: "" }; this.#scroll = 0; this.#ui.requestRender(); return;
     }
-    if (leaf.deck === "fleet" && this.#data) {
+    // P-TUI.4: the Agents table attaches exactly like Fleet - the ADR-0420 live-agent-pane bind.
+    if ((leaf.deck === "fleet" || leaf.deck === "agents") && this.#data) {
       const lanes = arr(this.#data.fleet.lanes).map(rec);
       const lane = lanes[Math.min(this.#selected, lanes.length - 1)];
       if (!lane) { this.#status = "no agent selected - n spawns one"; this.#ui.requestRender(); return; }
@@ -678,6 +746,7 @@ export class HubComponent implements Component {
       await this.refresh();
       return;
     }
+    if (leaf.deck === "spaces") { this.#focusSpace(); return; }
     if (leaf.deck === "sessions" && this.#data) {
       const s = this.#data.sessions.map(rec);
       const sess = s[Math.min(this.#selected, s.length - 1)];
@@ -758,6 +827,10 @@ export class HubComponent implements Component {
         // Same parser + executor as `lucid hub <cmd>`: what works typed works scripted.
         const r = await this.exec(parseHubCommand(tokenize(text)));
         this.#status = `:${text} → ${truncateToWidth(JSON.stringify(r) ?? "ok", 120)}`;
+      } else if (kind === "space-rename") {
+        // p.lane carries the SPACE id here; a refused rename (HubOpError) surfaces verbatim in the catch.
+        this.#spaces.rename(p.lane, text);
+        this.#status = `space renamed → ${text}`;
       } else if (kind === "wl-add") {
         // Same audited whitelist route the GUI settings panel drives (P-NETWL.2). IP/CIDR-looking
         // input files as an ip entry; anything else is a domain pattern. Internal zone, standing.
@@ -771,9 +844,106 @@ export class HubComponent implements Component {
         this.#status = "prompt sent";
       }
     } catch (err) {
-      this.#status = kind === "command" ? `:${text} → ${err instanceof HubOpError ? err.code : "error"}: ${err instanceof Error ? err.message : String(err)}` : `${kind === "wl-add" ? "whitelist" : "prompt"} failed: ${err instanceof Error ? err.message : String(err)}`;
+      this.#status = kind === "command" ? `:${text} → ${err instanceof HubOpError ? err.code : "error"}: ${err instanceof Error ? err.message : String(err)}` : kind === "space-rename" ? `rename refused: ${err instanceof Error ? err.message : String(err)}` : `${kind === "wl-add" ? "whitelist" : "prompt"} failed: ${err instanceof Error ? err.message : String(err)}`;
     }
     await this.refresh();
+  }
+
+  // -- P-TUI.4: Agents deck verbs (existing fleet routes only; approvals are NEVER answered here) --
+
+  /** The Agents table's selected lane, from the same /api/fleet/status rows the deck renders. */
+  #selectedLane(): Record<string, unknown> | null {
+    const lanes = arr(this.#data?.fleet.lanes).map(rec);
+    return lanes[Math.min(this.#selected, lanes.length - 1)] ?? null;
+  }
+
+  /** `c`: cancel the selected lane's RUNNING turn - /api/fleet/cancel, the GUI's own route. */
+  async #cancelLane(): Promise<void> {
+    const lane = this.#selectedLane();
+    if (!lane) { this.#status = "no agent selected - n spawns one"; this.#ui.requestRender(); return; }
+    try {
+      const r = rec(await this.#post("/api/fleet/cancel", { laneId: str(lane.id) }));
+      this.#status = r.ok === false ? `cancel refused: ${str(r.reason ?? "no running turn")}` : `cancelled ${str(lane.name)}'s turn`;
+    } catch (err) {
+      this.#status = `cancel failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    await this.refresh();
+  }
+
+  /** `x` on Agents: dismiss the selected STOPPED lane (/api/fleet/remove, never force). A live lane
+   *  is refused client-side with the way out named; the engine's own refusal surfaces verbatim too. */
+  async #dismissLane(): Promise<void> {
+    const lane = this.#selectedLane();
+    if (!lane) { this.#status = "no agent selected"; this.#ui.requestRender(); return; }
+    const status = str(lane.status);
+    if (!["done", "error", "stopped"].includes(status)) {
+      this.#status = `x dismisses a STOPPED agent - ${str(lane.name)} is ${status} (c cancels its turn)`;
+      this.#ui.requestRender();
+      return;
+    }
+    try {
+      const r = rec(await this.#post("/api/fleet/remove", { laneId: str(lane.id) }));
+      if (r.ok === false) { this.#status = `dismiss refused: ${str(r.reason ?? "engine said no")}`; }
+      else { this.#status = `dismissed ${str(lane.name)}`; this.#selected = Math.max(0, this.#selected - 1); }
+    } catch (err) {
+      this.#status = `dismiss failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    await this.refresh();
+  }
+
+  // -- P-TUI.4: Spaces deck verbs over the P-TUI.3 model (hub_spaces.ts). Every refusal is the
+  // model's own HubOpError message, surfaced verbatim - never a local guess. ------------------------
+
+  /** The deck's rows: a projection of the model (pane count from each tree, focus from `active`). */
+  #spaceRows(): HubSpace[] {
+    return this.#spaces.spaces.map((s) => ({ id: s.id, name: s.name, panes: leaves(s.tree).length, focused: s.id === this.#spaces.active }));
+  }
+
+  #selectedSpace(): HubSpace | null {
+    const rows = this.#spaceRows();
+    return rows[Math.min(this.#selected, rows.length - 1)] ?? null;
+  }
+
+  #createSpace(): void {
+    try {
+      this.#status = `created space ${this.#spaces.create().name}`;
+    } catch (err) {
+      this.#status = `new space refused: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    this.#ui.requestRender();
+  }
+
+  #focusSpace(): void {
+    const sp = this.#selectedSpace();
+    if (!sp) { this.#status = "no space selected - n creates one"; this.#ui.requestRender(); return; }
+    try {
+      this.#spaces.focus(sp.id);
+      this.#status = `space → ${sp.name}`;
+    } catch (err) {
+      this.#status = `focus refused: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    this.#ui.requestRender();
+  }
+
+  #startRenameSpace(): void {
+    const sp = this.#selectedSpace();
+    if (!sp) { this.#status = "no space selected - n creates one"; this.#ui.requestRender(); return; }
+    this.#promptKind = "space-rename";
+    this.#prompt = { lane: sp.id, text: sp.name }; // lane carries the space id through the composer
+    this.#ui.requestRender();
+  }
+
+  #closeSpace(): void {
+    const sp = this.#selectedSpace();
+    if (!sp) { this.#status = "no space selected"; this.#ui.requestRender(); return; }
+    try {
+      this.#spaces.close(sp.id);
+      this.#status = `closed space ${sp.name}`;
+      this.#selected = Math.max(0, this.#selected - 1);
+    } catch (err) {
+      this.#status = `close refused: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    this.#ui.requestRender();
   }
 
   /** Remove the selected whitelist entry - standing access leaves the ledger the moment you say so. */
@@ -810,10 +980,13 @@ export class HubComponent implements Component {
   // -- render ------------------------------------------------------------------------------------
 
   #badge(id: DeckId): string {
+    // The Spaces count is client-side state - it shows even before the first engine answer.
+    if (id === "spaces") return TXT_3(String(this.#spaceRows().length));
     if (!this.#data) return "";
     if (id === "security") { const n = quarantineOf(this.#data).length; return n ? RED(String(n)) : GREEN("0"); }
     if (id === "fleet") return TXT_3(String(arr(this.#data.fleet.lanes).length));
     if (id === "sessions") return TXT_3(String(this.#data.sessions.length));
+    if (id === "agents") return TXT_3(String(arr(this.#data.fleet.lanes).length));
     return "";
   }
 
@@ -852,13 +1025,15 @@ export class HubComponent implements Component {
       ["  b", "show / hide the deck sidebar"],
       ["", ""],
       ["Decks", ""],
-      ["  1-6", "put that deck in the focused pane"],
+      ["  1-9, 0", "put that deck in the focused pane"],
       ["  j / k or ↓ / ↑", "move the row selection"],
       ["", ""],
-      ["Agents", ""],
+      ["Agents (decks 3 + 9)", ""],
       ["  n", "spawn a NEW agent (on the Fleet deck)"],
-      ["  ⏎ on Fleet", "open the selected agent in this pane"],
+      ["  ⏎ on Fleet/Agents", "attach the selected agent into this pane"],
       ["  ⏎ on Sessions", "resume that session as a live agent"],
+      ["  c on Agents", "cancel the selected agent's turn"],
+      ["  x on Agents", "dismiss a STOPPED agent (done/error/stopped)"],
       ["  ⏎ on an agent", "type a prompt · ⏎ sends · esc cancels"],
       ["  y / s / d", "answer a parked ask: once / session / deny"],
       ["  m", "switch the agent's model (picker)"],
@@ -867,6 +1042,11 @@ export class HubComponent implements Component {
       ["  ⏎", "read the selected page"],
       ["  /", "filter pages as you type"],
       ["  c", "switch the active knowledge graph"],
+      ["", ""],
+      ["Spaces (deck 0)", ""],
+      ["  ⏎", "focus the selected space"],
+      ["  n", "create a space · r rename it (inline)"],
+      ["  x", "close it (the last space refuses)"],
       ["", ""],
       ["Security", ""],
       ["  a", "approve the selected block (audited release)"],
@@ -993,8 +1173,8 @@ export class HubComponent implements Component {
     if (leaf.deck === "agent") return this.#agentPane(leaf, w, h, focused);
     const deck = leaf.deck;
     const meta = DECKS.find((d) => d.id === deck)!;
-    const badge = deck === "security" ? quarantineOf(this.#data).length : deck === "fleet" ? arr(this.#data?.fleet.lanes).length : deck === "sessions" ? this.#data?.sessions.length ?? 0 : 0;
-    const body = fitBlock(deckLines(deck, this.#data, w - 4, focused ? this.#selected : -1, this.#kgFilter), w - 4, h - 2);
+    const badge = deck === "security" ? quarantineOf(this.#data).length : deck === "fleet" || deck === "agents" ? arr(this.#data?.fleet.lanes).length : deck === "sessions" ? this.#data?.sessions.length ?? 0 : deck === "spaces" ? this.#spaceRows().length : 0;
+    const body = fitBlock(deckLines(deck, this.#data, w - 4, focused ? this.#selected : -1, this.#kgFilter, deck === "spaces" ? this.#spaceRows() : []), w - 4, h - 2);
     const paint = focused ? CYAN : LINE;
     const title = ` ${meta.icon} ${meta.title}${badge ? ` · ${badge}` : ""} `;
     const titlePainted = focused ? ACCENT_2.bold(title) : TXT_3(title);
@@ -1069,6 +1249,8 @@ export class HubComponent implements Component {
         ? ` filter pages: ${this.#prompt.text}▌  (live · ⏎ keep · esc clear)`
         : this.#prompt && this.#promptKind === "command"
           ? ` :${this.#prompt.text}▌  (⏎ run · esc cancel)`
+          : this.#prompt && this.#promptKind === "space-rename"
+            ? ` rename space: ${this.#prompt.text}▌  (⏎ save · esc cancel)`
           : "";
     const hint = this.#reader ? " j/k scroll · ctrl+u/d page · esc closes the page" : this.#help ? " any key closes help" : composing || ` ${DECK_HINTS[this.#prompt ? "prompting" : this.#focusedDeck()]} · ? help`;
     const leftPlain = truncateToWidth(composing || (this.#status ? ` ${this.#status}` : hint), Math.max(0, width - Bun.stringWidth(rightPlain) - 1));

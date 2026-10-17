@@ -6,7 +6,7 @@
 // keystones (no lost or duplicated leaf, stable ids) live in hub_spaces.test.ts (P-TUI.3).
 
 import { describe, expect, test } from "bun:test";
-import { deckLines, kgPages, modelCatalog, fitBlock, type HubData } from "./hub_tui.ts";
+import { agentTableLines, deckLines, fmtElapsed, kgPages, modelCatalog, fitBlock, spaceTableLines, type HubData, type HubSpace } from "./hub_tui.ts";
 
 describe("fitBlock", () => {
   test("pads and clips to exact geometry, including overlong and missing rows", () => {
@@ -104,5 +104,93 @@ describe("knowledge deck", () => {
     expect(filtered.some((l) => l.includes("Prompt prefix"))).toBe(true);
     expect(filtered.some((l) => l.includes("Fail-closed gate ("))).toBe(false);
     expect(kgPages(kgData, "gate").map((p) => p.page_id)).toEqual(["p1"]);
+  });
+});
+
+// P-TUI.4: the herdr-parity decks' pure row builders. One lane / one space is ONE physical row
+// (invariant 11: cells truncate, never wrap), the LaneStatus vocabulary passes through verbatim,
+// and off-shape or hostile engine strings degrade to "?" rows, never a crash.
+describe("agents deck (P-TUI.4)", () => {
+  const NOW = 1_700_000_000_000;
+  const lane = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: "lane_1", name: "scout", status: "working", model: "claude-haiku-4-5",
+    createdAt: NOW - 125_000, turns: 3, ...over,
+  });
+
+  test("a full lane renders name, verbatim status, elapsed, model and repo#branch", () => {
+    const repo = { repo: { name: "lucidagentide", branch: "feat/p-tui.4-decks", worktree: true } };
+    const rows = agentTableLines([lane({ repo })], 0, NOW);
+    const row = rows.find((l) => l.startsWith("▸"))!;
+    expect(row).toContain("scout");
+    expect(row).toContain("working");
+    expect(row).toContain("2m");
+    expect(row).toContain("claude-haiku-4-5");
+    expect(row).toContain("lucidagentide#feat/p-tui.4-decks ·wt");
+  });
+
+  test("status vocabulary passes through verbatim; a parked ask is flagged", () => {
+    const rows = agentTableLines([lane({ status: "needs-approval", pendingApproval: { summary: "run rm", kind: "exec" } })], -1, NOW);
+    expect(rows.at(-1)).toContain("needs-approval");
+    expect(rows.at(-1)).toContain("WAITING ON YOU");
+  });
+
+  test("no repo probe yet means an empty repo cell, never '?' debris", () => {
+    const row = agentTableLines([lane()], 0, NOW).find((l) => l.startsWith("▸"))!;
+    expect(row).not.toContain("undefined");
+    expect(row.trimEnd().endsWith("claude-haiku-4-5")).toBe(true);
+  });
+
+  test("a hostile lane name (newline, tab) still renders as ONE physical row via deckLines", () => {
+    const data = { fleet: { lanes: [lane({ name: "evil\nname\ttab" })] }, build: {}, security: {}, sessions: [], audit: {}, usage: {}, whitelist: [], posture: {}, config: [], kg: {}, kgGraph: null } as unknown as HubData;
+    const rows = deckLines("agents", data, 60, 0);
+    expect(rows.every((l) => !l.includes("\n") && !l.includes("\t"))).toBe(true);
+  });
+
+  test("no lanes teaches the spawn and attach keys", () => {
+    const rows = agentTableLines([], 0, NOW);
+    expect(rows.join("\n")).toContain("n  spawn");
+    expect(rows.join("\n")).toContain("attach the selected agent");
+  });
+
+  test("an off-shape lane degrades to '?' cells, never a crash", () => {
+    const rows = agentTableLines([{ bogus: true }], 0, NOW);
+    expect(rows.find((l) => l.startsWith("▸"))).toContain("?");
+  });
+});
+
+describe("fmtElapsed (P-TUI.4)", () => {
+  const NOW = 1_700_000_000_000;
+  test("buckets: seconds, minutes, hours+minutes, days; bad input is '?'", () => {
+    expect(fmtElapsed(NOW - 42_000, NOW)).toBe("42s");
+    expect(fmtElapsed(NOW - 5 * 60_000, NOW)).toBe("5m");
+    expect(fmtElapsed(NOW - (2 * 3600_000 + 13 * 60_000), NOW)).toBe("2h13m");
+    expect(fmtElapsed(NOW - 3 * 86_400_000, NOW)).toBe("3d");
+    expect(fmtElapsed(Number.NaN, NOW)).toBe("?");
+    expect(fmtElapsed(0, NOW)).toBe("?");
+    expect(fmtElapsed(NOW + 1000, NOW)).toBe("?"); // a clock from the future stays honest
+  });
+});
+
+describe("spaces deck (P-TUI.4)", () => {
+  const spaces: HubSpace[] = [
+    { id: "sp1", name: "main", panes: 3, focused: true },
+    { id: "sp2", name: "review", panes: 1, focused: false },
+  ];
+
+  test("rows carry the focus marker, the cursor and the pane count (singular/plural)", () => {
+    const rows = spaceTableLines(spaces, 1);
+    expect(rows.some((l) => l.includes("●") && l.includes("main") && l.includes("3 panes"))).toBe(true);
+    const sel = rows.find((l) => l.startsWith("▸"))!;
+    expect(sel).toContain("review");
+    expect(sel).toContain("1 pane");
+    expect(sel).not.toContain("1 panes");
+  });
+
+  test("no spaces teaches the create key; a hostile name stays one row via deckLines", () => {
+    expect(spaceTableLines([], 0).join("\n")).toContain("n creates one");
+    const data = { fleet: { lanes: [] }, build: {}, security: {}, sessions: [], audit: {}, usage: {}, whitelist: [], posture: {}, config: [], kg: {}, kgGraph: null } as unknown as HubData;
+    const rows = deckLines("spaces", data, 60, 0, "", [{ id: "s", name: "two\nline", panes: 2, focused: false }]);
+    expect(rows.every((l) => !l.includes("\n"))).toBe(true);
+    expect(rows.some((l) => l.includes("two line"))).toBe(true);
   });
 });
