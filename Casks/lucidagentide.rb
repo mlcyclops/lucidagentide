@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 cask "lucidagentide" do
   arch arm: "arm64", intel: "x64"
 
@@ -33,6 +35,15 @@ cask "lucidagentide" do
   # The .pkg release assets still exist for MDM fleets (Jamf/Munki/Intune), see
   # docs/MACOS-ENTERPRISE-DEPLOYMENT.md; the cask just no longer uses them.
   app "LucidAgentIDE.app"
+  # The compiled fail-closed launcher ships INSIDE the app bundle: desktop/package.json
+  # compile-lucid writes ../bin/lucid and the extraResources "repo" copy packs bin/**/* into
+  # Contents/Resources/repo. Put it on PATH for Homebrew installs, plus a lucid-hub command
+  # wrapper that execs `lucid hub "$@"`, so the terminal hub runs from any terminal
+  # (including inside herdr) without typing the bundle path.
+  binary "#{appdir}/LucidAgentIDE.app/Contents/Resources/repo/bin/lucid"
+  command_wrapper "lucid-hub",
+                  executable: "#{appdir}/LucidAgentIDE.app/Contents/Resources/repo/bin/lucid",
+                  args:       ["hub"]
 
   # Homebrew quarantines the downloaded zip and the copied app inherits the flag,
   # which would make Gatekeeper refuse the unsigned build on first launch. Strip it
