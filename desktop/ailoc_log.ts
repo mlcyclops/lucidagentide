@@ -58,11 +58,21 @@ export function countCode(code: AiLocCode): { added: number; removed: number } {
   return { added: 0, removed: 0 };
 }
 
+/** True for internal tool/device URIs: xd:// device calls, local://, agent://, skill://, artifact://,
+ *  proc://, mcp://, and friends (#483). Writing to one of these is a tool INVOCATION (e.g. JSON args
+ *  sent to an xd:// device), never authored workspace code. file:// and http(s):// are NOT internal:
+ *  they stay real file/web paths. */
+export function isInternalUri(p: string): boolean {
+  const m = /^([a-z][a-z0-9+.-]*):\/\//i.exec(p);
+  return !!m && !/^(file|https?)$/i.test(m[1]!);
+}
+
 /** Record one AI-authored edit. Fully guarded — any failure is swallowed so the chat is never affected.
  *  A no-op (returns null) when the edit counts zero lines (read/search/bash, or an empty change). `logPath`
  *  is injectable for tests. */
 export function recordAiLoc(c: AiLocCapture, opts: { logPath?: string } = {}): AiLocSample | null {
   try {
+    if (c.filePath && isInternalUri(c.filePath)) return null; // #483: device/internal-URI call, not authored code
     const { added, removed } = countCode(c.code);
     if (added === 0 && removed === 0) return null;
     const sample: AiLocSample = {

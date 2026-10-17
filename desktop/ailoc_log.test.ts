@@ -10,7 +10,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { countCode, recordAiLoc } from "./ailoc_log.ts";
+import { countCode, isInternalUri, recordAiLoc } from "./ailoc_log.ts";
 import { aggregateAiLoc, readAiLocSamples } from "./ailoc_read.ts";
 
 const dirs: string[] = [];
@@ -43,6 +43,18 @@ describe("recordAiLoc → readAiLocSamples (the lock-free ledger)", () => {
     expect(samples).toHaveLength(1);
     expect(samples[0]!.added).toBe(2);
     expect(samples[0]!.model).toBe("m");
+  });
+  test("an xd:// device call records ZERO lines; a real edit still counts (#483)", () => {
+    const p = log();
+    // the device-call shape from the bug report: JSON args written as `content` to an xd:// path
+    expect(recordAiLoc({ model: "m", identity: "i", identitySource: "email", repo: "/w", filePath: "xd://knowledge_search", tool: "execute", code: { content: '{"q":"refund for an opened robotics kit"}' } }, { logPath: p })).toBeNull();
+    expect(recordAiLoc({ model: "m", identity: "i", identitySource: "email", repo: "/w", filePath: "/w/a.ts", tool: "edit", code: { oldText: "a\n", newText: "a\nb\n" } }, { logPath: p })).not.toBeNull();
+    const samples = readAiLocSamples(p);
+    expect(samples).toHaveLength(1);
+    expect(samples[0]!.filePath).toBe("/w/a.ts");
+    // classification: every internal scheme is excluded; real paths and file/http(s) are not
+    for (const u of ["xd://knowledge_search", "local://notes.md", "agent://abc123", "skill://caveman", "artifact://x", "proc://1", "mcp://res"]) expect(isInternalUri(u)).toBe(true);
+    for (const u of ["src/app.ts", "/w/a.ts", "C:\\w\\a.ts", "file:///w/a.ts", "https://example.com/x.html", ""]) expect(isInternalUri(u)).toBe(false);
   });
   test("an empty/absent log reads as []", () => {
     expect(readAiLocSamples(join(tmpdir(), "does-not-exist-ailoc.jsonl"))).toEqual([]);
