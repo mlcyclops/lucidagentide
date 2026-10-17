@@ -1537,9 +1537,10 @@ async function getData(path: string): Promise<any> {
 async function post(path: string, body: unknown): Promise<any> {
   try { return (await (await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) })).json())?.data ?? null; } catch { return null; }
 }
-/** P-SWITCH.1 (ADR-0403): the outcome of asking Main to open or start a session. `busy` is set only by the
- *  engine's 409 refusal; any other failure is `ok: false` without it (the caller's old best-effort path). */
-export interface SessionSwitchResult { ok: boolean; busy?: string; heldBy?: { laneId: string; name: string } }
+/** P-SWITCH.1 (ADR-0403): the outcome of asking Main to open or start a session. `busy` (with `sessionId`,
+ *  the session Main kept) and `heldBy` come only from the engine's 409 refusal; any other failure is a
+ *  bare `ok: false`, which is NOT a completed switch (#460 case 4: the engine may still hold anything). */
+export interface SessionSwitchResult { ok: boolean; busy?: string; sessionId?: string; heldBy?: { laneId: string; name: string } }
 async function postSessionSwitch(path: string, body: unknown): Promise<SessionSwitchResult> {
   try {
     const r = await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) });
@@ -1547,7 +1548,7 @@ async function postSessionSwitch(path: string, body: unknown): Promise<SessionSw
       const j = await r.json().catch(() => null);
       // P-SWITCH.2 (ADR-0404): a live spoke holds the session; the caller attaches to it instead.
       if (typeof j?.heldBy?.laneId === "string") return { ok: false, heldBy: { laneId: j.heldBy.laneId, name: String(j.heldBy.name ?? "") } };
-      return { ok: false, busy: typeof j?.busy === "string" && j.busy ? j.busy : "Main is busy" };
+      return { ok: false, busy: typeof j?.busy === "string" && j.busy ? j.busy : "Main is busy", sessionId: typeof j?.sessionId === "string" && j.sessionId ? j.sessionId : undefined };
     }
     return { ok: r.ok };
   } catch { return { ok: false }; }

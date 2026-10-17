@@ -207,7 +207,7 @@ describe("kb_pack - a dead scanner is our fault, not the pack's", () => {
     expect(typeof env.scannerDirExists).toBe("boolean");
     expect(typeof env.repoProven).toBe("boolean");
     expect(env.platform).toBe(`${process.platform}-${process.arch}`);
-  });
+  }, 30_000); // real seed + zip export + gated import; a loaded Windows runner exceeds the 5 s default
 
   test("a SUCCESSFUL import writes no failure log and returns no logPath", async () => {
     // Otherwise the file a user is told to send fills with noise from imports that worked.
