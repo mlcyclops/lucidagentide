@@ -389,12 +389,19 @@ jobs:
   # per release (version + per-arch sha256) because the in-app updater cannot install updates
   # on the unsigned mac build (ADR-0246), which makes `brew upgrade` the working macOS update
   # channel - so the pin must move with every release, automatically. This job rewrites the
-  # pin from the tag's uploaded release assets and pushes it to master, so `brew update` sees
-  # the new version the moment the release is live. Fail-closed: a missing asset or checksum
-  # fails the job loudly instead of leaving the cask silently stale (the pre-fix failure mode:
-  # the cask tracked the rolling "latest" release, which tag builds never refresh, so
-  # `brew install` served a weeks-old build - see ADR-0258).
+  # pin from the tag's uploaded release assets and OPENS A PULL REQUEST against master (branch
+  # `chore/cask-<tag>`), so `brew update` sees the new version as soon as that PR merges.
+  # It used to push master directly; the repository ruleset refuses that ("Changes must be made
+  # through a pull request"), which turned every stable tag's run red (v2.3.1, v2.4.0) and left
+  # the pin to a hand-made PR. Fail-closed: a missing asset or checksum fails the job loudly
+  # instead of leaving the cask silently stale (the pre-fix failure mode: the cask tracked the
+  # rolling "latest" release, which tag builds never refresh, so `brew install` served a
+  # weeks-old build - see ADR-0258).
   # Stable tags only: a beta tag (`v2.3.0-beta.1`) must not move every `brew upgrade` user onto the beta.
+  # Token: a PR pushed with the workflow's own GITHUB_TOKEN gets NO CI runs (GitHub never triggers
+  # workflows from that token), so it cannot satisfy the required checks and needs an admin merge.
+  # Add a fine-grained PAT (contents + pull-requests: write) as the CASK_PR_TOKEN secret and the
+  # PR gets CI like any other and merges normally; without it the job still opens the PR and says so.
   update-cask:
     name: Pin the Homebrew cask to this release
     needs: build
@@ -402,14 +409,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
         with:
           ref: master
+          token: ${{ secrets.CASK_PR_TOKEN || github.token }}
 
-      - name: Rewrite Casks/lucidagentide.rb from the release assets
+      - name: Rewrite Casks/lucidagentide.rb from the release assets and open the pin PR
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.CASK_PR_TOKEN || github.token }}
+          HAS_PAT: ${{ secrets.CASK_PR_TOKEN != '' }}
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF#refs/tags/}"
@@ -448,10 +458,24 @@ jobs:
           grep -q "${X64}" Casks/lucidagentide.rb
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BRANCH="chore/cask-${TAG}"
+          git checkout -b "$BRANCH"
           git add Casks/lucidagentide.rb
           git commit -m "chore(brew): pin cask to ${TAG} (auto, update-cask job)"
-          git pull --rebase origin master
-          git push origin master
+          # A rerun of this job rebuilds the same pin; force-update the branch rather than fail on it.
+          git push --force origin "HEAD:refs/heads/${BRANCH}"
+          EXISTING=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "pin PR already open: #${EXISTING}"; exit 0
+          fi
+          if [ "$HAS_PAT" = "true" ]; then
+            NOTE="Opened with CASK_PR_TOKEN, so CI runs on it; merge when green."
+          else
+            NOTE="Opened with the workflow's GITHUB_TOKEN, which never triggers CI, so the required checks will not appear: merge with \`gh pr merge --admin --merge\`, or add a CASK_PR_TOKEN secret (fine-grained PAT, contents + pull-requests: write) so future pin PRs get CI."
+          fi
+          gh pr create --repo "$GITHUB_REPOSITORY" --base master --head "$BRANCH" \
+            --title "chore(brew): pin cask to ${TAG}" \
+            --body "Automated by the update-cask job of build-desktop.yml for the ${TAG} release: version ${V}, per-arch sha256 from the release assets' API digests. ${NOTE}"
 
   # Rolling "latest" release — every successful build (both platforms) publishes the newest
   # installers to a single `latest`-tagged release, so the README download buttons
