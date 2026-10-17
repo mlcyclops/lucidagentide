@@ -39,9 +39,11 @@ describe("sessionMode (ADR-0219)", () => {
     setSessionMode("sess-X", "bogus");
     expect(sessionMode("sess-X")).toBe("cui");
   });
+  // 250 writes exercise the REAL persist path (fsync + rename each); a loaded Windows runner
+  // needs well over bun's 5 s default (observed 5.6-6.4 s in CI), so the budget is explicit.
   test("the map is pruned to a bounded size (oldest dropped, newest kept)", () => {
     for (let i = 0; i < 250; i++) setSessionMode(`s${i}`, "search");
     expect(sessionMode("s0")).toBe("cui");      // oldest pruned → back to the default
     expect(sessionMode("s249")).toBe("search"); // newest kept
-  });
+  }, 30_000);
 });
