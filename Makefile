@@ -1338,6 +1338,11 @@ demo-P-CTRL.2: ## P-CTRL.2 (ADR-0438; design ADR-0425, issue #449): the controll
 	$(BUN) run desktop/scripts/demo_p_ctrl_2.ts
 	$(BUN) test $(TEST_IGNORES) desktop/controller/controller.test.ts desktop/origin_guard.test.ts harness/telemetry/events.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-P-CTRL-RO.1a
+demo-P-CTRL-RO.1a: ## P-CTRL-RO.1a (ADR-0451; design ADR-0449, issue #449): the read-only controller contract sub-step. controller_read is tail-appended to the frozen EventName contract and emits through the real Telemetry envelope with the stable run/session ids; a typo'd controller_* name still raises UnknownEventError and writes nothing (invariant #8); a pairing minted read-only round-trips the 0600 argon2id store with the capability intact; a legacy pairing without the flag loads as not read-only; a hand-edited non-boolean flag makes the store malformed so every token is refused (fail-closed). No guard, route or listener changes here (those are 1b+).
+	$(BUN) run desktop/scripts/demo_p_ctrl_ro_1a.ts
+	$(BUN) test $(TEST_IGNORES) harness/telemetry/events.test.ts desktop/controller/controller.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-CREATOR-DRIFT
 demo-CREATOR-DRIFT: ## CREATOR-DRIFT (ADR-0430): CutWire Drift (GPL-3.0 Qt + FFmpeg video editor) as a Creator provider over its OWN localhost agent protocol, never spawned or scripted. The session Drift writes when the user turns on Agent access is discovered and folded into an on-device declaration whose status never carries the token; the probe is honest (not-installed, installed-but-Agent-access-off with the enable steps, unauthorized without echoing the token, ready with the version and only the attested set); the egress hiding inside Drift (cloud voices, the marketplace, ElevenLabs transcription) is refused BY NAME under CUI lockdown, recursively inside apply({ops}); an apply batch is one undo step reported exactly as Drift reports it (done / stopped / failed); an export lands in the library by its MAGIC BYTES, never its extension. The agent gets drift_status / drift_read / drift_apply / drift_export (project text fenced as untrusted data); the Studio gets a Drift tab with a live collaboration feed and Undo. Proven against a fake Drift speaking the real wire format.
 	$(BUN) run desktop/scripts/demo_creator_drift.ts

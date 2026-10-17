@@ -146,6 +146,10 @@ export const EVENT_NAMES = [
   "controller_auto_consented",
   "controller_auto_revoked",
   "controller_ruling",
+  // P-CTRL-RO.1a (ADR-0451; design ADR-0449, issue #449) - the read-only introspection audit record,
+  // one per controller read. Metadata ONLY: pairing id, tool, lane id, byte count returned, redaction
+  // count - never lane contents and never a token.
+  "controller_read",
 ] as const;
 export type EventName = (typeof EVENT_NAMES)[number];
 
