@@ -24944,7 +24944,9 @@ What exists for unattended runs today, all built: P-GOAL.5 automations (ADR-0047
 
 **Consequences.** A user behind a proxy or with port 1455 blocked signs in to ChatGPT/Codex from LUCID without a loopback callback. Risk named: the instruction phrasing is omp's, so an upstream rewording makes the card say "code not shown yet" (the broker still works through the toast's Open button plus the terminal-visible code in developer mode); the parser accepts two phrasings and the demo pins both. Relates to ADR-0210 (device-code UIs), ADR-0375 (nested provider cards), ADR-0442 (why after the bump), issue #490.
 
-## ADR-0447 -- P-CTRL-RO.1: a read-only MCP introspection seam for an external orchestrator, the first exposed controller transport (SCOPE/PLAN) (2026-10-09)
+## ADR-0449 -- P-CTRL-RO.1: a read-only MCP introspection seam for an external orchestrator, the first exposed controller transport (SCOPE/PLAN) (2026-10-09)
+
+**Numbering.** Drafted as ADR-0447 and renumbered at merge (2026-10-17): master gave 0447 to P-RELEASE.6 and 0448 to P-MODEL.8 while this branch was open, so this takes 0449.
 
 **Status:** Proposed (2026-10-09). Scopes Phase 1 only (read-only introspection). Phase 2
 (gated state-changing verbs) and Phase 3 (off-host signed-token orchestration) are recorded

@@ -3,7 +3,7 @@
 
 # PDR: P-CTRL-RO.1 - read-only MCP introspection seam (Phase 1)
 
-Implements ADR-0447. Phase 1 only: read-only introspection for an external MCP orchestrator
+Implements ADR-0449. Phase 1 only: read-only introspection for an external MCP orchestrator
 (for example Claude via Dispatch). No state-changing command ships in this PDR.
 
 ## Preconditions
