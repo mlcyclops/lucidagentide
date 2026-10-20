@@ -3,8 +3,9 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  AOS_STALL_AFTER_MS, agentStatus, aosLiveness, chargeLanes, control, newGoal, spentUsd, tick, validateGoalInput,
-  type AosHeartbeat, type AosLaneInput,
+  AOS_STALL_AFTER_MS, addTask, agentStatus, aosLiveness, chargeLanes, control, newGoal, parseCheckVerdict, planTasks, recoverTasks,
+  setTaskCheck, spentUsd, taskTurnEnded, tick, validateGoalInput, validateTaskInput,
+  type AosGoal, type AosHeartbeat, type AosLaneInput,
 } from "./aos.ts";
 
 const T0 = 1_000_000_000;
@@ -117,5 +118,112 @@ describe("control (pause / resume / cancel at any time; dismiss a finished goal)
   });
   test("an open goal cannot be dismissed, only cancelled", () => {
     expect(control(goal(), HB, "dismiss", T0).ok).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------------------ P-AOS.2: tasks
+
+const idle = (id: string): AosLaneInput => lane(id, 0, { busy: false, status: "awaiting-input" });
+const TASK = { title: "fix the dock", prompt: "make the timeline dock render rows", outputContract: "a passing branch", checks: ["$ bun test", "rows show within 3 s"], assignee: "a", dependsOn: [] as string[] };
+function withTasks(...specs: Partial<typeof TASK>[]): AosGoal {
+  let g = goal();
+  for (const spec of specs) {
+    const v = validateTaskInput({ ...TASK, ...spec }, g, ["a", "b"]);
+    if (!v.ok) throw new Error(v.error);
+    g = addTask(g, v.input, T0);
+  }
+  return g;
+}
+
+describe("validateTaskInput (section 6: an output contract and at least one acceptance check)", () => {
+  test("no deliverable, no checks, an unknown spoke, or a dependency that does not exist is refused", () => {
+    const g = goal();
+    expect(validateTaskInput({ ...TASK, outputContract: " " }, g, ["a"]).ok).toBe(false);
+    expect(validateTaskInput({ ...TASK, checks: ["", " "] }, g, ["a"]).ok).toBe(false);
+    expect(validateTaskInput({ ...TASK, assignee: "zz" }, g, ["a"]).ok).toBe(false);
+    expect(validateTaskInput({ ...TASK, dependsOn: ["t-9"] }, g, ["a"]).ok).toBe(false);
+    expect(validateTaskInput(TASK, null, ["a"]).ok).toBe(false);
+  });
+  test("a line starting with \"$ \" is a command the spoke runs; any other line is a person's check", () => {
+    const v = validateTaskInput(TASK, goal(), ["a"]);
+    expect(v.ok && v.input.checks).toEqual([{ kind: "command", text: "bun test" }, { kind: "human", text: "rows show within 3 s" }]);
+  });
+});
+
+describe("planTasks (Dispatch)", () => {
+  test("a task waits for its dependency; a failed dependency cancels it", () => {
+    let g = withTasks({}, { dependsOn: ["t-1"], assignee: "b" });
+    let r = planTasks(g, [idle("a"), idle("b")], T0);
+    expect(r.dispatch.map((d) => d.taskId)).toEqual(["t-1"]);
+    expect(r.goal.tasks[1]!.status).toBe("pending");
+    g = { ...r.goal, tasks: r.goal.tasks.map((t) => (t.id === "t-1" ? { ...t, status: "failed" as const } : t)) };
+    r = planTasks(g, [idle("a"), idle("b")], T0);
+    expect(r.goal.tasks[1]).toMatchObject({ status: "cancelled", lastFailure: "dependency t-1 did not complete" });
+  });
+  test("one running task per spoke, and a busy spoke gets nothing", () => {
+    const g = withTasks({}, {});
+    const first = planTasks(g, [idle("a")], T0);
+    expect(first.dispatch.length).toBe(1);
+    expect(planTasks(first.goal, [idle("a")], T0).dispatch).toEqual([]);
+    expect(planTasks(g, [lane("a", 0)], T0).dispatch).toEqual([]); // busy
+  });
+  test("a blocked goal dispatches nothing", () => {
+    const g = { ...withTasks({}), spend: { a: { last: 0, total: 0 } } };
+    const r = tick(g, HB, [{ ...idle("a"), cost: 50 }], T0 + 1000);
+    expect(r.goal?.status).toBe("blocked");
+    expect(r.dispatch).toEqual([]);
+  });
+});
+
+describe("taskTurnEnded (verify before done, fail-closed)", () => {
+  const started = (): AosGoal => planTasks(withTasks({}), [idle("a")], T0).goal;
+  test("work, then a verification turn; passing commands leave the person's check for review; the tick completes it", () => {
+    const w = taskTurnEnded(started(), "t-1", "work", { ok: true, text: "Fixed the scan." }, T0 + 1);
+    expect(w.dispatch.map((d) => d.turn)).toEqual(["verify"]);
+    const v = taskTurnEnded(w.goal, "t-1", "verify", { ok: true, text: 'Ran it. {"checks":[{"id":"k1","pass":true,"detail":"exit 0"}]}' }, T0 + 2);
+    expect(v.goal.tasks[0]).toMatchObject({ status: "needs_review", result: "Fixed the scan." });
+    const done = setTaskCheck(v.goal, "t-1", "k2", true, T0 + 3);
+    expect(done.ok && done.goal.tasks[0]!.status).toBe("done");
+  });
+  test("a verification reply without a verdict fails the check; the retry carries the reason; the last attempt fails the task", () => {
+    const w = taskTurnEnded(started(), "t-1", "work", { ok: true, text: "done" }, T0 + 1);
+    const v = taskTurnEnded(w.goal, "t-1", "verify", { ok: true, text: "All good, trust me." }, T0 + 2);
+    expect(v.goal.tasks[0]).toMatchObject({ status: "ready", attempts: 1 });
+    expect(v.goal.tasks[0]!.lastFailure).toContain("no verdict");
+    const again = planTasks(v.goal, [idle("a")], T0 + 3);
+    expect(again.dispatch[0]!.text).toContain("The previous attempt did not pass");
+    const err = taskTurnEnded(again.goal, "t-1", "work", { ok: false, error: "lane is stopped" }, T0 + 4);
+    expect(err.goal.tasks[0]).toMatchObject({ status: "failed", attempts: 2 });
+  });
+  test("a person's rejection is a failed attempt, and a command check cannot be ticked by hand", () => {
+    const w = taskTurnEnded(started(), "t-1", "work", { ok: true, text: "done" }, T0 + 1);
+    const v = taskTurnEnded(w.goal, "t-1", "verify", { ok: true, text: '{"checks":[{"id":"k1","pass":true}]}' }, T0 + 2);
+    expect(setTaskCheck(v.goal, "t-1", "k1", true, T0 + 3).ok).toBe(false);
+    const rejected = setTaskCheck(v.goal, "t-1", "k2", false, T0 + 3);
+    expect(rejected.ok && rejected.goal.tasks[0]).toMatchObject({ status: "ready", lastFailure: "a reviewer rejected: rows show within 3 s" });
+  });
+  test("an outcome for a task no longer running (cancelled meanwhile) changes nothing", () => {
+    const g = started();
+    const cancelled = { ...g, tasks: g.tasks.map((t) => ({ ...t, status: "cancelled" as const })) };
+    expect(taskTurnEnded(cancelled, "t-1", "work", { ok: true, text: "x" }, T0 + 1).goal).toBe(cancelled);
+  });
+});
+
+describe("parseCheckVerdict", () => {
+  test("finds the JSON inside prose, honors braces inside strings, and fails anything not explicitly passing", () => {
+    const v = parseCheckVerdict('Output: {"checks":[{"id":"k1","pass":true,"detail":"printed {ok}"},{"id":"k2","pass":"yes"}]} end', ["k1", "k2", "k3"]);
+    expect(v.k1).toEqual({ passed: true, detail: "printed {ok}" });
+    expect(v.k2!.passed).toBe(false);
+    expect(v.k3!.passed).toBe(false);
+  });
+});
+
+describe("goal lifecycle reaches tasks", () => {
+  test("cancelling the goal cancels its open tasks; an engine restart sends a mid-turn task back to ready", () => {
+    const g = planTasks(withTasks({}, { assignee: "b" }), [idle("a"), lane("b", 0)], T0).goal; // b is busy: its task stays ready
+    const c = control(g, HB, "cancel", T0 + 1);
+    expect(c.ok && c.goal?.tasks.map((t) => t.status)).toEqual(["cancelled", "cancelled"]);
+    const r = recoverTasks(g, T0 + 2);
+    expect(r.tasks[0]).toMatchObject({ status: "ready", attempts: 1, lastFailure: "the engine restarted during this task's turn" });
   });
 });

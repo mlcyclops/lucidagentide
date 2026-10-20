@@ -1743,7 +1743,19 @@ const fleet: FleetLaneManager = new FleetLaneManager({
 fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
 // P-AOS.1 (ADR-0452): the AOS-1 orchestrator state. Its heartbeat is this engine's own pulse: an orbit that
 // sees it age past 1.5x / 3x the interval is looking at a frozen or dead engine.
-const fleetGoal = new FleetGoal({ lanes: () => fleet.goalLanes() });
+const fleetGoal = new FleetGoal({
+  lanes: () => fleet.goalLanes(),
+  // P-AOS.2 (ADR-0453): a dispatched task turn rides the fleet's own prompt path (gate, approvals, write
+  // claims and the card's live stream all apply), and resolves with the turn's text or its error.
+  dispatch: async (laneId, text) => {
+    const turn = { text: "", error: "" };
+    await fleet.prompt(laneId, text, (e) => {
+      if (e.type === "token") turn.text += e.text;
+      else if (e.type === "error") turn.error = e.message;
+    });
+    return turn.error ? { ok: false, error: turn.error } : { ok: true, text: turn.text };
+  },
+});
 fleetGoal.start();
 // P-SCHED.1 (ADR-0443): scheduled lane jobs. The scheduler sees the fleet only through these six edges:
 // the live lane list, "is it busy", the manager's own prompt path, Recover (the orbit's path: name,
@@ -5931,6 +5943,17 @@ return Bun.serve({
       if (p === "/api/fleet/goal/control" && req.method === "POST") {
         const b = await readBody<{ action?: unknown }>(req);
         return json({ ok: true, data: fleetGoal.control(b.action) });
+      }
+      // P-AOS.2 (ADR-0453): tasks under the goal. UI token only, like the goal: a person writes the task,
+      // ticks its human checks, and cancels it.
+      if (p === "/api/fleet/goal/task" && req.method === "POST") return json({ ok: true, data: fleetGoal.addTask(await readBody<unknown>(req)) });
+      if (p === "/api/fleet/goal/task/check" && req.method === "POST") {
+        const b = await readBody<{ taskId?: unknown; checkId?: unknown; passed?: unknown }>(req);
+        return json({ ok: true, data: fleetGoal.taskCheck(b.taskId, b.checkId, b.passed) });
+      }
+      if (p === "/api/fleet/goal/task/cancel" && req.method === "POST") {
+        const b = await readBody<{ taskId?: unknown }>(req);
+        return json({ ok: true, data: fleetGoal.cancelTask(b.taskId) });
       }
       // P-TUI.2: open `lucid hub` in a new terminal window, attached to THIS engine. UI token only (never in
       // AGENT_ROUTES): one fixed command, no argument from the request, never inside the agent sandbox.

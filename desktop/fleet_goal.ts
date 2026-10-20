@@ -6,15 +6,17 @@
 // file then rename), and an in-memory heartbeat that beats every AOS_INTERVAL_S. The heartbeat is the
 // engine's own pulse, so an observer that sees it age past 1.5x / 3x the interval is looking at a frozen
 // or dead engine (the failure P-TL.4 found: a synchronous scan blocking the event loop for seconds).
-// All the rules live in aos.ts; this file is clock, timer and disk.
+// All the rules live in aos.ts; this file is clock, timer and disk, plus (P-AOS.2, ADR-0453) running the
+// prompts the heartbeat dispatches to spokes and feeding each turn's outcome back to the task rules.
 
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
-  AOS_INTERVAL_S, control, newGoal, parseGoal, setCriterion, spentUsd, tick, validateGoalInput,
-  type AosControl, type AosGoal, type AosHeartbeat, type AosLaneInput, type AosSnapshot,
+  AOS_INTERVAL_S, addTask, cancelTask, control, newGoal, parseGoal, recoverTasks, setCriterion, setTaskCheck, spentUsd, taskTurnEnded, tick,
+  validateGoalInput, validateTaskInput,
+  type AosControl, type AosDispatch, type AosGoal, type AosHeartbeat, type AosLaneInput, type AosSnapshot, type AosTurnOutcome,
 } from "./aos.ts";
 
 export const FLEET_GOAL_PATH = (): string => join(homedir(), ".omp", "lucid-fleet-goal.json");
@@ -22,6 +24,8 @@ export const FLEET_GOAL_PATH = (): string => join(homedir(), ".omp", "lucid-flee
 export interface FleetGoalDeps {
   /** The lanes the heartbeat observes (synchronous: a tick never awaits). */
   lanes: () => AosLaneInput[];
+  /** P-AOS.2: send one prompt to a spoke and resolve when its turn ends (the fleet's own prompt path). */
+  dispatch?: (laneId: string, text: string) => Promise<AosTurnOutcome>;
   now?: () => number;
   path?: string;
 }
@@ -34,16 +38,20 @@ export class FleetGoal {
   #agents: AosSnapshot["agents"] = [];
   #timer: Timer | null = null;
   readonly #lanes: () => AosLaneInput[];
+  readonly #dispatch: FleetGoalDeps["dispatch"];
   readonly #now: () => number;
   readonly #path: string;
 
   constructor(deps: FleetGoalDeps) {
     this.#lanes = deps.lanes;
+    this.#dispatch = deps.dispatch;
     this.#now = deps.now ?? Date.now;
     this.#path = deps.path ?? FLEET_GOAL_PATH();
     let text = "";
     try { text = readFileSync(this.#path, "utf8"); } catch { /* no goal yet */ }
     this.#goal = text ? parseGoal(text) : null;
+    // A task that was mid-turn lost that turn with the previous engine.
+    if (this.#goal) { const g = recoverTasks(this.#goal, this.#now()); if (g !== this.#goal) { this.#save(g); this.#goal = g; } }
     this.#hb = { seq: 0, ts: 0, intervalS: AOS_INTERVAL_S, status: "running", lastTickMs: 0, consecutiveErrors: 0 };
   }
 
@@ -70,6 +78,7 @@ export class FleetGoal {
       if (r.changed) this.#save(r.goal);
       this.#goal = r.goal;
       this.#hb = { ...r.heartbeat, lastTickMs: Math.max(0, this.#now() - t0), consecutiveErrors: 0 };
+      for (const d of r.dispatch) void this.#run(d);
     } catch (e) {
       this.#hb = { ...this.#hb, consecutiveErrors: this.#hb.consecutiveErrors + 1 };
       console.error(`[aos] heartbeat tick failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -127,6 +136,53 @@ export class FleetGoal {
     this.#hb = r.heartbeat;
     if (action === "resume") this.beat();
     return { ok: true, data: this.snapshot() };
+  }
+
+  /** P-AOS.2: add a task to the open goal; the beat that follows dispatches it if its spoke is idle. */
+  addTask(raw: unknown): Reply {
+    const v = validateTaskInput(raw, this.#goal, this.#lanes().map((l) => l.id));
+    if (!v.ok) return v;
+    return this.#commit(addTask(this.#goal!, v.input, this.#now()), true);
+  }
+
+  /** P-AOS.2: a person ticks or rejects a human acceptance check. */
+  taskCheck(taskId: unknown, checkId: unknown, passed: unknown): Reply {
+    if (typeof taskId !== "string" || typeof checkId !== "string" || typeof passed !== "boolean") return { ok: false, error: "check needs taskId, checkId and passed: true|false" };
+    const r = setTaskCheck(this.#goal, taskId, checkId, passed, this.#now());
+    return r.ok ? this.#commit(r.goal, true) : r;
+  }
+
+  cancelTask(taskId: unknown): Reply {
+    if (typeof taskId !== "string") return { ok: false, error: "cancel needs a taskId" };
+    const r = cancelTask(this.#goal, taskId, this.#now());
+    return r.ok ? this.#commit(r.goal, true) : r;
+  }
+
+  /** Save then adopt a changed goal; `beat` runs a tick at once so promotion and dispatch do not wait. */
+  #commit(goal: AosGoal, beat: boolean): Reply {
+    const saved = this.#save(goal);
+    if (!saved.ok) return saved;
+    this.#goal = goal;
+    if (beat) this.beat();
+    return { ok: true, data: this.snapshot() };
+  }
+
+  /** Run one dispatched turn and feed its outcome back. The goal may have been replaced while the turn
+   *  ran (dismissed, a new one set): an outcome for another goal is dropped, never applied by task id. */
+  async #run(d: AosDispatch): Promise<void> {
+    const goalId = this.#goal?.id;
+    let outcome: AosTurnOutcome;
+    if (!this.#dispatch) outcome = { ok: false, error: "this engine cannot prompt spokes" };
+    else {
+      try { outcome = await this.#dispatch(d.laneId, d.text); } catch (e) { outcome = { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+    }
+    if (!this.#goal || this.#goal.id !== goalId) return;
+    const r = taskTurnEnded(this.#goal, d.taskId, d.turn, outcome, this.#now());
+    if (r.goal === this.#goal) return;
+    if (!this.#save(r.goal).ok) console.error(`[aos] could not save task ${d.taskId}'s outcome`);
+    this.#goal = r.goal;
+    for (const next of r.dispatch) void this.#run(next);
+    this.beat(); // the spoke is free: a waiting task (or a dependent one) can start now
   }
 
   /** Persist the goal (null deletes the file). Temp file then rename, so a crash mid-write leaves the

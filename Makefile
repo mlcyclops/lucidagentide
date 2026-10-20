@@ -586,6 +586,11 @@ demo-P-AOS.1: ## P-AOS.1 (ADR-0452): one standing fleet goal (AOS-1) with a mand
 	$(BUN) run harness/scripts/demo_paos1.ts
 	$(BUN) test $(TEST_IGNORES) desktop/aos.test.ts desktop/fleet_goal.test.ts
 
+.PHONY: demo-P-AOS.2
+demo-P-AOS.2: ## P-AOS.2 (ADR-0453): tasks under the fleet goal - a deliverable and a check required, the heartbeat dispatches one task per spoke in dependency order, command checks verified in a separate fail-closed turn, retries with the reason up to the limit, human review completes a task, restart never strands one mid-turn.
+	$(BUN) run harness/scripts/demo_paos2.ts
+	$(BUN) test $(TEST_IGNORES) desktop/aos.test.ts desktop/fleet_goal.test.ts
+
 .PHONY: demo-P-STEPTEXT.1
 demo-P-STEPTEXT.1: ## P-STEPTEXT.1: narration resumed after a tool call starts a new paragraph (master + lanes, stream and saved answer), the answer's tool chips interleave between the steps again, and a subagent row names a looping model ("model output degenerated") instead of painting "!!!!", with a scout's structured yield shown as its final step.
 	$(BUN) run harness/scripts/demo_psteptext1.ts

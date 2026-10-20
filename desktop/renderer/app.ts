@@ -16807,6 +16807,9 @@ function wire(): void {
     fleetGoalSet: bridge.fleetGoalSet,
     fleetGoalCriterion: bridge.fleetGoalCriterion,
     fleetGoalControl: bridge.fleetGoalControl,
+    fleetTaskAdd: bridge.fleetTaskAdd, // P-AOS.2 (ADR-0453): tasks under the goal
+    fleetTaskCheck: bridge.fleetTaskCheck,
+    fleetTaskCancel: bridge.fleetTaskCancel,
     fleetAnswer: bridge.fleetAnswer,
     fleetRespawn: bridge.fleetRespawn,
     fleetStop: bridge.fleetStop, // P-FLEET.L20: close a spoke from its node or the banner (stop, then dismiss)

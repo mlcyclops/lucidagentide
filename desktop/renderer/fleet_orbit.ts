@@ -27,7 +27,7 @@ import { cycleSpoke, ghostKey, ghostSpokes, hubLanes, ORBIT_FPS_FLOOR, ORBIT_NOD
 import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new spokes open on the last spoke's model; colliding names show the route
 import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
-import { beatLine, goalButtonHtml, goalButtonTip, goalPanelHtml, goalSnapshot, onGoalPanelClick, paintHubGoal, refreshGoal, stalledLanes, type OrbitGoalDeps } from "./orbit_goal.ts"; // P-AOS.1 (ADR-0452)
+import { beatLine, goalButtonHtml, goalButtonTip, goalPanelHtml, goalSnapshot, onGoalPanelClick, paintHubGoal, refreshGoal, stalledLanes, taskFormHtml, type OrbitGoalDeps } from "./orbit_goal.ts"; // P-AOS.1 (ADR-0452), P-AOS.2 (ADR-0453)
 
 export interface FleetOrbitDeps extends OrbitGoalDeps {
   /** P-TUI.2: open `lucid hub` in a new terminal window (app.ts toasts a refusal). */
@@ -941,13 +941,32 @@ function paintGoalPanel(): void {
   const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
   if (!box) return;
   const s = goalSnapshot();
-  // The set form is painted once per opening: a poll must never wipe what the user is typing.
   const g = s?.goal;
-  const sig = g && s ? JSON.stringify([g.updatedAt, g.status, g.blockedReason, s.heartbeat.status, s.spentUsd.toFixed(2), Math.floor(s.elapsedS / 60), s.agents.map((a) => `${a.laneId}:${a.status}`)]) : "form";
+  const close = `<button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button>`;
+  // No goal: the set form, painted once per opening, so a poll never wipes what the user is typing (and
+  // a "reading" line until the engine first answers).
+  if (!g || !s) {
+    const want = s ? "form" : "loading";
+    if (goalSig === want) return;
+    goalSig = want;
+    box.dataset.goalId = "";
+    box.innerHTML = goalPanelHtml(Date.now(), close);
+    (box.querySelector("[data-goal-title]") as HTMLInputElement | null)?.focus();
+    return;
+  }
+  // P-AOS.2: the goal and its board repaint on change; the add-task form keeps its own host, painted
+  // once per goal, so the same rule holds for a task being typed while the board moves.
+  let main = box.querySelector("[data-goal-main]") as HTMLElement | null;
+  if (!main || box.dataset.goalId !== `${g.id}:${g.status}`) {
+    box.dataset.goalId = `${g.id}:${g.status}`;
+    box.innerHTML = `<div class="orbit-goal-main" data-goal-main></div><div data-task-form-host>${taskFormHtml()}</div>`;
+    main = box.querySelector("[data-goal-main]") as HTMLElement;
+    goalSig = "";
+  }
+  const sig = JSON.stringify([g.updatedAt, g.status, g.blockedReason, s.heartbeat.status, s.spentUsd.toFixed(2), Math.floor(s.elapsedS / 60), s.agents.map((a) => `${a.laneId}:${a.status}`)]);
   if (sig === goalSig) return;
   goalSig = sig;
-  box.innerHTML = goalPanelHtml(Date.now(), `<button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button>`);
-  if (!g) (box.querySelector("[data-goal-title]") as HTMLInputElement | null)?.focus();
+  main.innerHTML = goalPanelHtml(Date.now(), close);
 }
 
 /** P-REPO.1: when the hub last asked for Main's repo. */

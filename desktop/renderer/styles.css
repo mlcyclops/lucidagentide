@@ -6260,6 +6260,38 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-goal-agent[data-agent="stalled"] small{color:var(--amber-txt,var(--amber))}
 .orbit-goal-agent[data-agent="errored"] i{background:var(--red)}
 .orbit-goal-ctl{margin-top:8px;padding:0 4px;flex-wrap:wrap}
+/* P-AOS.2 (ADR-0453): the task board. A row's title ellipsizes beside nowrap chips; checks are block
+   paragraphs beside a flex:none dot (invariant #11). */
+.orbit-task{margin:2px 0;padding:7px 8px;border-radius:9px;border:1px solid var(--line-soft);background:var(--bg-1)}
+.orbit-task-head{display:flex;align-items:center;gap:7px}
+.orbit-task-head>i{flex:none;width:7px;height:7px;border-radius:50%;background:var(--txt-4)}
+.orbit-task-head b{flex:1;min-width:0;font-size:12.5px;font-weight:500;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orbit-task-chip{flex:none;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis;font-family:var(--mono);
+  font-size:10px;color:var(--txt-3);padding:1px 7px;border-radius:999px;border:1px solid var(--line)}
+.orbit-task[data-task-status="running"] .orbit-task-head>i{background:var(--cyan);animation:hudpulse 1.6s ease-in-out infinite}
+.orbit-task[data-task-status="needs_review"]{border-color:rgb(var(--amber-rgb) / .5)}
+.orbit-task[data-task-status="needs_review"] .orbit-task-head>i{background:var(--amber)}
+.orbit-task[data-task-status="done"] .orbit-task-head>i{background:var(--green)}
+.orbit-task[data-task-status="failed"] .orbit-task-head>i{background:var(--red)}
+.orbit-task[data-task-status="cancelled"],.orbit-task[data-task-status="done"]{opacity:.72}
+.orbit-view.static .orbit-task-head>i{animation:none}
+.orbit-task-sub{padding:2px 0 0 14px;font-size:10.5px;color:var(--txt-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orbit-task-why{margin:4px 0 0 14px;font-size:11.5px;line-height:1.45;color:var(--amber-txt,var(--amber))}
+.orbit-task-checks{display:flex;flex-direction:column;gap:2px;margin:5px 0 0 14px}
+.orbit-task-check{position:relative;padding-left:14px;font-size:11.5px;line-height:1.45;color:var(--txt-2)}
+.orbit-task-check>i{position:absolute;left:0;top:5px;width:6px;height:6px;border-radius:50%;border:1px solid var(--txt-4)}
+.orbit-task-check[data-check="pass"]>i{background:var(--green);border-color:var(--green)}
+.orbit-task-check[data-check="fail"]>i{background:var(--red);border-color:var(--red)}
+.orbit-task-check code{font-family:var(--mono);font-size:10.5px;color:var(--txt);word-break:break-all}
+.orbit-task-check small{display:block;color:var(--txt-4);font-size:10.5px}
+.orbit-task-ask{display:flex;gap:6px;margin-top:4px}
+.orbit-task-result{margin:5px 0 0 14px;font-size:11.5px;color:var(--txt-3)}
+.orbit-task-result summary{cursor:pointer;color:var(--txt-4);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase}
+.orbit-task-result p{margin:4px 0 0;line-height:1.5;white-space:pre-wrap}
+.orbit-task-new{margin:8px 4px 0}
+.orbit-task-deps{display:flex;flex-direction:column;gap:2px;letter-spacing:normal;text-transform:none}
+.orbit-task-dep{display:grid;grid-template-columns:auto 1fr;gap:7px;align-items:center;font-size:12px;color:var(--txt-2)}
+.orbit-task-dep span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .orbit-panel .orbit-ghost-err{padding:2px 6px}
 /* P-SWITCH.3 (ADR-0410): the Other hubs panel. A hub row (title, count, Open), then its spokes as pips
    on their own line so the row's label never shares a flex track with prose. */

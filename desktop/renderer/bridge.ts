@@ -1056,6 +1056,10 @@ export interface LucidBridge {
   fleetGoalSet(input: { title: string; criteria: string[]; maxUsd: number; maxHours: number }): Promise<FleetGoalReply | null>;
   fleetGoalCriterion(id: string, met: boolean): Promise<FleetGoalReply | null>;
   fleetGoalControl(action: AosControl): Promise<FleetGoalReply | null>;
+  /** P-AOS.2 (ADR-0453): tasks under the goal. A check line starting with "$ " is a command the spoke runs. */
+  fleetTaskAdd(input: { title: string; prompt: string; outputContract: string; checks: string[]; assignee: string; dependsOn: string[] }): Promise<FleetGoalReply | null>;
+  fleetTaskCheck(taskId: string, checkId: string, passed: boolean): Promise<FleetGoalReply | null>;
+  fleetTaskCancel(taskId: string): Promise<FleetGoalReply | null>;
   /** P-REPO.1 (ADR-0406): the repo Main works on and where its commits go. */
   repoContext(): Promise<RepoContext | null>;
   /** P-REPO.1: local folders a spoke can start in (workspace, lanes, recents, checkouts beside them). */
@@ -1853,6 +1857,9 @@ export const bridge: LucidBridge = {
   fleetGoalSet: (input) => post("/api/fleet/goal", input),
   fleetGoalCriterion: (id, met) => post("/api/fleet/goal/criterion", { id, met }),
   fleetGoalControl: (action) => post("/api/fleet/goal/control", { action }),
+  fleetTaskAdd: (input) => post("/api/fleet/goal/task", input), // P-AOS.2 (ADR-0453)
+  fleetTaskCheck: (taskId, checkId, passed) => post("/api/fleet/goal/task/check", { taskId, checkId, passed }),
+  fleetTaskCancel: (taskId) => post("/api/fleet/goal/task/cancel", { taskId }),
   repoContext: () => getData("/api/repo/context"), // P-REPO.1 (ADR-0406)
   repoChoices: () => getData("/api/repo/choices"),
   repoGithub: (refresh) => getData(`/api/repo/github${refresh ? "?refresh=1" : ""}`),
