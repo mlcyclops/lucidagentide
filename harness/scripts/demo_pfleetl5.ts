@@ -81,7 +81,7 @@ console.log("2) chats, lanes, and ingest from different workspaces merge into ON
   writeSession("enc-beta", "lane.jsonl", { id: readLaneLedger(ledgerPath)[0]!.sessionId, cwd: "C:/work/beta", user: "run the nightly migration", assistant: "migration complete, 42 rows", atSec: 4_000 });
   writeSession("enc-alpha", "probe.jsonl", { id: "s-old", cwd: "C:/work/alpha", user: "quick question", atSec: 1_000 });
   __resetSessionIndex();
-  const page = listTimeline({}, sessionsRoot, ledgerPath);
+  const page = await listTimeline({}, sessionsRoot, ledgerPath);
   if (page.total !== 3) fail(`expected 3 rows, got ${page.total}`);
   if (page.entries.map((e) => e.sessionId).join("|") !== "s-master|" + readLaneLedger(ledgerPath)[0]!.sessionId + "|s-old") fail(`order broke: ${page.entries.map((e) => e.sessionId).join("|")}`);
   const lane = page.entries[1]!;
@@ -104,7 +104,7 @@ console.log("4) a torn ledger line skips; a missing ledger just means unlabeled 
   writeFileSync(ledgerPath, readLaneLedger(ledgerPath).map((r) => JSON.stringify(r)).join("\n") + '\n{"torn": tr\n');
   const rows = readLaneLedger(ledgerPath);
   if (rows.length !== 2) fail("the torn tail must not eat the good lines");
-  const unlabeled = listTimeline({}, sessionsRoot, join(root, "absent.jsonl"));
+  const unlabeled = await listTimeline({}, sessionsRoot, join(root, "absent.jsonl"));
   if (unlabeled.entries.some((e) => e.kind === "lane")) fail("without a ledger, rows are chats - never invented lanes");
   ok("torn tail skipped; ledgerless rows degrade to plain chats, nothing throws");
 }

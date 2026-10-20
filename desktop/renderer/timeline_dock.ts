@@ -189,7 +189,12 @@ const onWinResize = (): void => {
 async function refresh(): Promise<void> {
   if (!deps || !dock) return;
   showSelfTest = storage().get(TL_JUNK_KEY) === "1";
+  // The engine walks every workspace's history to answer (seconds on a large corpus): say so, rather
+  // than open onto a blank pane that reads as "no sessions". A re-scan keeps the rows already shown.
+  const pending = $("#tlList", dock) as HTMLElement | null;
+  if (pending && !pending.querySelector(".tl-row")) pending.innerHTML = `<div class="tl-loading"><span>Reading the session history on this machine\u2026</span></div>`;
   const page = await deps.timelineList(PAGE, 0, showSelfTest).catch(() => null);
+  if (!dock) return; // closed while the engine answered
   const list = $("#tlList", dock) as HTMLElement | null;
   const count = $("#tlCount", dock) as HTMLElement | null;
   if (!page) {

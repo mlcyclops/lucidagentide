@@ -72,7 +72,7 @@ import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannab
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
-import { slowPhaseLabel, slowToastCopy } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
+import { slowPhaseLabel, slowToastCopy, snapshotPhaseLabel, STARTING_AGENT_PHASE } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
 import { addQueued, nextHold, pushRecovery, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery
 import { delegationSettled, filterRunsForBatch, mergeRunSamples, runEta, type RunSample, type TimedRun } from "./subagent_filter.ts"; // P-TASK.5a: scope each delegation card to ITS batch's runs
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
@@ -2360,6 +2360,9 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   let turnId = opts.turnId;
   let terminal = false, stopped = false, settled = false, connecting = false;
   let adopted = !!opts.turnId;
+  // The stream re-joined a running turn (adopted on open, or re-attached after a drop). Only then may a
+  // turn-snapshot say "Reconnected": a fresh send's own stream opens with a snapshot too.
+  let rejoined = adopted;
   // P-RECOVER.1 (ADR-0385): a real prompt always opens with a turn-snapshot, so a stream error BEFORE one
   // means the engine refused the send ("A chat turn is already running") and no turn exists.
   let sawSnapshot = false, refused = false;
@@ -2525,7 +2528,8 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   const intent = classifyIntent(text);
   const thinkLine = pickLine("think", intent);
   const writeLine = pickLine("write", intent);
-  let phase = pickLine("warm", intent), sawTool = false, tok = 0, cost = 0;
+  const warmLine = pickLine("warm", intent);
+  let phase = warmLine, sawTool = false, tok = 0, cost = 0;
   // P-TPS.1 (ADR-0044): output-token speedometer for THIS turn. startTTFT now (at
   // submit), start() so deltas count; the first content delta calls stopTTFT() to
   // freeze TTFT and align the rate clock to first-token. Estimate strategy - ACP
@@ -2652,6 +2656,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   const onEvent = (e: ChatEvent) => {
     if (!owns() || settled) return;
     if (e.type === "connection") {
+      rejoined = true; // the next snapshot arrives on the re-attach stream
       setPhase(e.message); paintHud();
       // P-RECOVER.1 (ADR-0385): find out WHY instead of reconnecting blind (master turns; a lane owns its child).
       if (!opts.laneId) superviseRecovery({ kind: "connection", state: e.state }, true, turnHooks);
@@ -2715,7 +2720,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       permCards.clear(); voiceApproval = null;
       speechCursor = buf.length; speechFedAt = buf.length;
       streamEl.innerHTML = renderMarkdown(buf) + (snapshot.running ? `<span class="cursor"></span>` : "");
-      setPhase(snapshot.pending.length ? slowPhaseLabel(Date.now() - t0, snapshot.pending) : snapshot.running ? "Reconnected" : "Finishing reply");
+      setPhase(snapshotPhaseLabel(snapshot, rejoined, phase));
       paintHud(); scrollChat();
       return;
     }
@@ -2780,7 +2785,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     }
     // P-PROGRESS.1: the engine's progress view (every few seconds and on every settled call). Never activity;
     // the strip under the HUD paints it and ages it locally until the next one.
-    else if (e.type === "progress") { progress = e.progress; progressAt = Date.now(); paintProgress(); }
+    else if (e.type === "progress") { if (phase === STARTING_AGENT_PHASE) setPhase(warmLine); /* the engine ticks only once the prompt reached the model */ progress = e.progress; progressAt = Date.now(); paintProgress(); }
     // P-WAIT.1: one of this turn's writes waits for a file another worker's running turn is editing. Say
     // whom it waits for and which file. The next real event replaces the phase.
     else if (e.type === "waiting") { setPhase(`Waiting for ${e.wait.on.name} to finish with ${e.wait.file}`); paintHud(); scrollChat(); }
@@ -2901,6 +2906,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
         if (!owns()) return;
         if (!canAdoptTurn(status, turnId)) throw new Error("The original turn is no longer available; Stop to release this composer");
       }
+      rejoined = true;
       await run((sink) => bridge.attachChat(turnId, sink));
     } catch (error) { if (owns()) showTurnReconnect(`Unable to reconnect: ${error instanceof Error ? error.message : String(error)}`, () => void reconnect()); }
   };

@@ -262,7 +262,8 @@ async function refreshGhosts(): Promise<void> {
   const gen = ++ghostGen;
   const d = deps;
   // The WHOLE ledger, every page: a spoke whose latest run sits past page one is still recoverable.
-  const entries = await readAllPages((limit, offset) => d.timelineList(limit, offset).catch(() => null));
+  // Lane rows only (ghostSpokes reads nothing else): paging the full corpus cost ~18 engine-side scans.
+  const entries = await readAllPages((limit, offset) => d.timelineList(limit, offset, false, "lane").catch(() => null));
   // A failed read keeps the ledger we had (a partial one would silently drop ghosts); a newer read wins.
   if (!entries || gen !== ghostGen) return;
   ghostLedger = entries;

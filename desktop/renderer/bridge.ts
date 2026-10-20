@@ -1070,7 +1070,8 @@ export interface LucidBridge {
   fleetDrain(laneId: string, onEvent: (e: LaneEvent) => void): Promise<void>;
   // P-FLEET.L5: the reviewable timeline (list + open-a-point). Transcript reads are tail-limited.
   // `includeSelfTest` opts the repo's own echo/demo throwaways back in; they are hidden by default.
-  timelineList(limit?: number, offset?: number, includeSelfTest?: boolean): Promise<TimelinePage | null>;
+  // `kind` narrows the listing to one kind before paging (the orbit reads lane rows only).
+  timelineList(limit?: number, offset?: number, includeSelfTest?: boolean, kind?: TimelineKind): Promise<TimelinePage | null>;
   timelineSession(id: string, limit?: number): Promise<{ messages: { role: string; text: string; turn?: number }[]; total: number; userTotal: number } | null>;
   /** P-FLEET.L4: re-send the lane's last prompt, streaming like fleetPrompt (recovers an error lane first). */
   fleetRetry(laneId: string, onEvent: (e: LaneEvent) => void): Promise<void>;
@@ -1844,7 +1845,7 @@ export const bridge: LucidBridge = {
   repoGithub: (refresh) => getData(`/api/repo/github${refresh ? "?refresh=1" : ""}`),
   fleetSpawn: (opts) => post("/api/fleet/spawn", opts),
   hubOpen: () => post("/api/hub/open", {}),
-  timelineList: (limit = 100, offset = 0, includeSelfTest = false) => getData(`/api/timeline?limit=${limit}&offset=${offset}${includeSelfTest ? "&selfTest=1" : ""}`), // P-FLEET.L5
+  timelineList: (limit = 100, offset = 0, includeSelfTest = false, kind) => getData(`/api/timeline?limit=${limit}&offset=${offset}${includeSelfTest ? "&selfTest=1" : ""}${kind ? `&kind=${kind}` : ""}`), // P-FLEET.L5
   timelineSession: (id, limit = 40) => post("/api/timeline/session", { id, limit }), // P-FLEET.L5
   fleetPrompt: (laneId, text, onEvent, images) => {
     // The lane stream carries LaneEvent lines; the reader's own fallback events (token/done) are

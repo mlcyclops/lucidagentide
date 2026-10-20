@@ -9,6 +9,7 @@
 // New GUI chats write new files here, so they appear on the next poll.
 
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
@@ -102,13 +103,14 @@ interface IndexEntry { mtimeMs: number; size: number; scwd: string; meta: Omit<S
 const sessionIndex = new Map<string, IndexEntry>();
 let indexParses = 0; // test seam: how many files were actually (re)parsed
 
-/** Parse one session .jsonl into list metadata. `meta: null` = an empty/probe session (cached too, so
- *  it isn't re-parsed every poll just to be skipped again). */
-function parseSessionFile(p: string, f: string): { scwd: string; meta: Omit<SessionInfo, "updatedAt"> | null } {
+/** Parse one session .jsonl's TEXT into list metadata. `meta: null` = an empty/probe session (cached
+ *  too, so it isn't re-parsed every poll just to be skipped again). Takes text rather than a path so
+ *  the timeline's async scan can read the file off the event loop. */
+function parseSessionText(text: string, f: string): { scwd: string; meta: Omit<SessionInfo, "updatedAt"> | null } {
   indexParses++;
   let id = "", scwd = "", model = "", title = "", turns = 0;
   let kind: "chat" | "kg-ingest" = "chat";
-  for (const ln of readFileSync(p, "utf8").split("\n")) {
+  for (const ln of text.split("\n")) {
     if (!ln) continue;
     let o: any;
     try { o = JSON.parse(ln); } catch { continue; }
@@ -146,7 +148,7 @@ export function canonicalModelId(model: string, provider?: unknown): string {
 }
 
 export function __sessionIndexStats(): { parses: number; entries: number } { return { parses: indexParses, entries: sessionIndex.size }; }
-export function __resetSessionIndex(): void { sessionIndex.clear(); indexParses = 0; }
+export function __resetSessionIndex(): void { sessionIndex.clear(); allScans.clear(); indexParses = 0; }
 
 export function listSessions(cwd: string = currentWorkspace(), root: string = join(homedir(), ".omp", "agent", "sessions")): SessionList {
   if (!existsSync(root)) return { sessions: [], ingest: [] };
@@ -165,7 +167,7 @@ export function listSessions(cwd: string = currentWorkspace(), root: string = jo
           seen.add(p);
           let e = sessionIndex.get(p);
           if (!e || e.mtimeMs !== st.mtimeMs || e.size !== st.size) {
-            e = { mtimeMs: st.mtimeMs, size: st.size, ...parseSessionFile(p, f) };
+            e = { mtimeMs: st.mtimeMs, size: st.size, ...parseSessionText(readFileSync(p, "utf8"), f) };
             sessionIndex.set(p, e);
           }
           if (!e.meta || norm(e.scwd) !== want) continue;
@@ -189,32 +191,60 @@ export function listSessions(cwd: string = currentWorkspace(), root: string = jo
  *  to the current one like the sidebar. */
 export interface SessionRow extends SessionInfo { cwd: string }
 
+/** How long a finished all-workspace scan answers repeat callers. A real corpus is ~13k files, and even
+ *  warm a scan is ~1.5 s of stats; the Timeline dock and the orbit's ghost read land together at boot,
+ *  and a paged read asks once per page, so they share one scan instead of each paying for their own. */
+const ALL_SCAN_REUSE_MS = 2_000;
+/** Files stat'ed / read concurrently: parallel enough to beat the sequential scan, bounded so a cold
+ *  scan never holds hundreds of multi-MB transcripts in memory at once. */
+const ALL_SCAN_BATCH = 64;
+/** Per root: the in-flight (doneAt null) or recently finished scan. Single-flight + short reuse. */
+const allScans = new Map<string, { rows: Promise<SessionRow[]>; doneAt: number | null }>();
+
 /** Every parseable session on disk, across ALL workspaces, newest first, uncapped. Rides the SAME
- *  mtime+size index as listSessions (P-PERF.4), so a timeline poll re-parses only what changed. */
-export function listAllSessions(root: string = join(homedir(), ".omp", "agent", "sessions")): SessionRow[] {
+ *  mtime+size index as listSessions (P-PERF.4), so a timeline read re-parses only what changed. ASYNC,
+ *  unlike the sidebar's per-workspace listing: this walks every workspace the machine has ever had, and
+ *  doing that synchronously froze the whole engine for seconds per call (11 s cold, 1.5-2.6 s warm on
+ *  a 13k-session corpus), starving the Timeline dock's own request behind the orbit's paged reads.
+ *  Concurrent and back-to-back callers share one scan (ALL_SCAN_REUSE_MS). */
+export function listAllSessions(root: string = join(homedir(), ".omp", "agent", "sessions")): Promise<SessionRow[]> {
+  const hit = allScans.get(root);
+  if (hit && (hit.doneAt === null || Date.now() - hit.doneAt < ALL_SCAN_REUSE_MS)) return hit.rows;
+  const scan: { rows: Promise<SessionRow[]>; doneAt: number | null } = { rows: scanAllSessions(root), doneAt: null };
+  allScans.set(root, scan);
+  scan.rows.then(
+    () => { scan.doneAt = Date.now(); },
+    () => { if (allScans.get(root) === scan) allScans.delete(root); },
+  );
+  return scan.rows;
+}
+
+async function scanAllSessions(root: string): Promise<SessionRow[]> {
   if (!existsSync(root)) return [];
   const all: SessionRow[] = [];
   const seen = new Set<string>();
-  for (const d of readdirSync(root)) {
+  let dirs: string[];
+  try { dirs = await readdir(root); } catch { return []; }
+  for (const d of dirs) {
     const dir = join(root, d);
-    try {
-      if (!statSync(dir).isDirectory()) continue;
-      for (const f of readdirSync(dir)) {
-        if (!f.endsWith(".jsonl")) continue;
+    let files: string[];
+    try { files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl")); } catch { continue; } // not a dir / unreadable
+    for (let i = 0; i < files.length; i += ALL_SCAN_BATCH) {
+      await Promise.all(files.slice(i, i + ALL_SCAN_BATCH).map(async (f) => {
         const p = join(dir, f);
         try {
-          const st = statSync(p);
+          const st = await stat(p);
           seen.add(p);
           let e = sessionIndex.get(p);
           if (!e || e.mtimeMs !== st.mtimeMs || e.size !== st.size) {
-            e = { mtimeMs: st.mtimeMs, size: st.size, ...parseSessionFile(p, f) };
+            e = { mtimeMs: st.mtimeMs, size: st.size, ...parseSessionText(await readFile(p, "utf8"), f) };
             sessionIndex.set(p, e);
           }
-          if (!e.meta) continue; // empty/probe session
+          if (!e.meta) return; // empty/probe session
           all.push({ ...e.meta, updatedAt: st.mtimeMs, cwd: e.scwd });
         } catch { /* skip unreadable file */ }
-      }
-    } catch { /* skip dir */ }
+      }));
+    }
   }
   for (const k of sessionIndex.keys()) if (k.startsWith(root) && !seen.has(k)) sessionIndex.delete(k);
   all.sort((a, b) => b.updatedAt - a.updatedAt);

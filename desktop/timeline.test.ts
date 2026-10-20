@@ -10,8 +10,8 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendLaneLedger, buildTimeline, isSelfTestSession, listTimeline, readLaneLedger } from "./timeline.ts";
-import { __resetSessionIndex } from "./sessions.ts";
+import { appendLaneLedger, buildTimeline, isSelfTestSession, isTimelineKind, listTimeline, readLaneLedger } from "./timeline.ts";
+import { __resetSessionIndex, __sessionIndexStats } from "./sessions.ts";
 import type { LaneSessionRecord } from "./fleet_lanes.ts";
 
 const tmp: string[] = [];
@@ -40,13 +40,13 @@ function fixtureRoot(): string {
 const rec = (o: Partial<LaneSessionRecord> = {}): LaneSessionRecord =>
   ({ at: 1_000, laneId: "lane-abc123", name: "worker", cwd: "C:/repos/beta", sessionId: "s-lane", event: "spawn", ...o });
 
-test("sessions from different workspaces merge newest-first, lanes labeled through the ledger", () => {
+test("sessions from different workspaces merge newest-first, lanes labeled through the ledger", async () => {
   const root = fixtureRoot();
   writeSession(root, "enc-alpha", "a.jsonl", { id: "s-chat", cwd: "C:/repos/alpha", user: "fix the login bug", atSec: 3_000 });
   writeSession(root, "enc-beta", "b.jsonl", { id: "s-lane", cwd: "C:/repos/beta", user: "run the migration", atSec: 2_000 });
   const page = buildTimeline(
     // reuse the real corpus reader so the fixture shape is honest
-    listTimeline({}, root, join(root, "no-ledger.jsonl")).entries.map((e) => ({ id: e.sessionId, title: e.title, model: e.model, turns: e.turns, kind: "chat" as const, updatedAt: e.updatedAt, cwd: e.cwd })),
+    (await listTimeline({}, root, join(root, "no-ledger.jsonl"))).entries.map((e) => ({ id: e.sessionId, title: e.title, model: e.model, turns: e.turns, kind: "chat" as const, updatedAt: e.updatedAt, cwd: e.cwd })),
     [rec()],
   );
   expect(page.total).toBe(2);
@@ -58,17 +58,48 @@ test("sessions from different workspaces merge newest-first, lanes labeled throu
   expect(page.entries[1]!.laneId).toBe("lane-abc123");
 }, 15_000);
 
-test("listTimeline end-to-end: corpus + ledger from disk, ingest classified by the parser", () => {
+test("listTimeline end-to-end: corpus + ledger from disk, ingest classified by the parser", async () => {
   const root = fixtureRoot();
   const ledger = join(root, "lanes.jsonl");
   writeSession(root, "enc-a", "chat.jsonl", { id: "s-1", cwd: "C:/w/alpha", user: "hello there", atSec: 5_000 });
   writeSession(root, "enc-b", "lane.jsonl", { id: "s-2", cwd: "C:/w/beta", user: "lane work", atSec: 4_000 });
   appendLaneLedger(rec({ sessionId: "s-2", name: "etl", laneId: "lane-e1" }), ledger);
-  const page = listTimeline({}, root, ledger);
+  const page = await listTimeline({}, root, ledger);
   expect(page.entries.map((e) => e.sessionId)).toEqual(["s-1", "s-2"]);
   expect(page.entries[1]!.kind).toBe("lane");
   expect(page.entries[1]!.laneName).toBe("etl");
   expect(page.entries[0]!.kind).toBe("chat");
+});
+
+// The Timeline dock read empty on a real 13k-session corpus: every /api/timeline call re-walked every
+// workspace SYNCHRONOUSLY, and the orbit paged the whole corpus 500 rows at a time at boot just to find
+// its lane rows, so the engine froze for ~30 s with the dock's own request queued behind it.
+test("concurrent timeline readers share ONE corpus scan instead of each re-walking it", async () => {
+  const root = fixtureRoot();
+  const ledger = join(root, "lanes.jsonl");
+  writeSession(root, "enc-a", "a.jsonl", { id: "s-1", cwd: "C:/w/alpha", user: "first chat", atSec: 5_000 });
+  writeSession(root, "enc-b", "b.jsonl", { id: "s-2", cwd: "C:/w/beta", user: "second chat", atSec: 4_000 });
+  __resetSessionIndex();
+  const pages = await Promise.all([listTimeline({}, root, ledger), listTimeline({ limit: 1 }, root, ledger), listTimeline({ offset: 1 }, root, ledger)]);
+  expect(__sessionIndexStats().parses).toBe(2); // two files, parsed once between three readers
+  expect(pages.map((p) => p.entries.map((e) => e.sessionId))).toEqual([["s-1", "s-2"], ["s-1"], ["s-2"]]);
+  expect(pages.every((p) => p.total === 2)).toBe(true);
+});
+
+test("kind narrows BEFORE paging: a lane-only read gets every lane in one page, counted within the kind", () => {
+  const sessions = [
+    ...Array.from({ length: 6 }, (_, i) => ({ id: `c-${i}`, title: `chat ${i}`, model: "m", turns: 4, kind: "chat" as const, updatedAt: 100 - i, cwd: "C:/w/alpha" })),
+    { id: "s-lane", title: "lane work", model: "m", turns: 4, kind: "chat" as const, updatedAt: 1, cwd: "C:/repos/beta" },
+    { id: "s-echo", title: "ping", model: "m", turns: 1, kind: "chat" as const, updatedAt: 0, cwd: "C:/tmp/omp-echo-abc" },
+  ];
+  const ledger = [rec(), rec({ sessionId: "s-echo", laneId: "lane-echo", name: "echo" })];
+  const lanes = buildTimeline(sessions, ledger, { kind: "lane", limit: 2 });
+  expect(lanes.entries.map((e) => e.sessionId)).toEqual(["s-lane"]); // the oldest row, yet on page one
+  expect(lanes.total).toBe(1);
+  expect(lanes.selfTest).toBe(1); // the echo lane is held back and counted within the kind
+  expect(buildTimeline(sessions, ledger, { kind: "chat" }).total).toBe(6);
+  expect(isTimelineKind("lane")).toBe(true);
+  expect(isTimelineKind("lanes")).toBe(false); // a typo is refused at the route, never widened to all
 });
 
 test("the LATEST ledger record names the lane; spawn+respawn count as laneEvents", () => {
