@@ -177,12 +177,11 @@ export class FleetGoal {
       try { outcome = await this.#dispatch(d.laneId, d.text); } catch (e) { outcome = { ok: false, error: e instanceof Error ? e.message : String(e) }; }
     }
     if (!this.#goal || this.#goal.id !== goalId) return;
-    const r = taskTurnEnded(this.#goal, d.taskId, d.turn, outcome, this.#now());
-    if (r.goal === this.#goal) return;
-    if (!this.#save(r.goal).ok) console.error(`[aos] could not save task ${d.taskId}'s outcome`);
-    this.#goal = r.goal;
-    for (const next of r.dispatch) void this.#run(next);
-    this.beat(); // the spoke is free: a waiting task (or a dependent one) can start now
+    const goal = taskTurnEnded(this.#goal, d.taskId, d.turn, outcome, this.#now());
+    if (goal === this.#goal) return;
+    if (!this.#save(goal).ok) console.error(`[aos] could not save task ${d.taskId}'s outcome`);
+    this.#goal = goal;
+    this.beat(); // Recheck pause and current budgets before dispatching verification or more work.
   }
 
   /** Persist the goal (null deletes the file). Temp file then rename, so a crash mid-write leaves the

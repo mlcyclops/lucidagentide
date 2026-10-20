@@ -177,35 +177,38 @@ describe("planTasks (Dispatch)", () => {
 
 describe("taskTurnEnded (verify before done, fail-closed)", () => {
   const started = (): AosGoal => planTasks(withTasks({}), [idle("a")], T0).goal;
-  test("work, then a verification turn; passing commands leave the person's check for review; the tick completes it", () => {
-    const w = taskTurnEnded(started(), "t-1", "work", { ok: true, text: "Fixed the scan." }, T0 + 1);
-    expect(w.dispatch.map((d) => d.turn)).toEqual(["verify"]);
-    const v = taskTurnEnded(w.goal, "t-1", "verify", { ok: true, text: 'Ran it. {"checks":[{"id":"k1","pass":true,"detail":"exit 0"}]}' }, T0 + 2);
-    expect(v.goal.tasks[0]).toMatchObject({ status: "needs_review", result: "Fixed the scan." });
-    const done = setTaskCheck(v.goal, "t-1", "k2", true, T0 + 3);
+  const verifying = (): AosGoal => {
+    const queued = taskTurnEnded(started(), "t-1", "work", { ok: true, text: "Fixed the scan." }, T0 + 1);
+    return planTasks(queued, [idle("a")], T0 + 2).goal;
+  };
+  test("work queues verification without consuming another attempt; passing commands still require human review", () => {
+    const queued = taskTurnEnded(started(), "t-1", "work", { ok: true, text: "Fixed the scan." }, T0 + 1);
+    expect(queued.tasks[0]).toMatchObject({ status: "ready", turn: "verify", attempts: 1 });
+    const scheduled = planTasks(queued, [idle("a")], T0 + 2);
+    expect(scheduled.goal.tasks[0]).toMatchObject({ status: "running", turn: "verify", attempts: 1 });
+    const v = taskTurnEnded(scheduled.goal, "t-1", "verify", { ok: true, text: 'Ran it. {"checks":[{"id":"k1","pass":true,"detail":"exit 0"}]}' }, T0 + 3);
+    expect(v.tasks[0]).toMatchObject({ status: "needs_review", result: "Fixed the scan." });
+    const done = setTaskCheck(v, "t-1", "k2", true, T0 + 4);
     expect(done.ok && done.goal.tasks[0]!.status).toBe("done");
   });
-  test("a verification reply without a verdict fails the check; the retry carries the reason; the last attempt fails the task", () => {
-    const w = taskTurnEnded(started(), "t-1", "work", { ok: true, text: "done" }, T0 + 1);
-    const v = taskTurnEnded(w.goal, "t-1", "verify", { ok: true, text: "All good, trust me." }, T0 + 2);
-    expect(v.goal.tasks[0]).toMatchObject({ status: "ready", attempts: 1 });
-    expect(v.goal.tasks[0]!.lastFailure).toContain("no verdict");
-    const again = planTasks(v.goal, [idle("a")], T0 + 3);
-    expect(again.dispatch[0]!.text).toContain("The previous attempt did not pass");
-    const err = taskTurnEnded(again.goal, "t-1", "work", { ok: false, error: "lane is stopped" }, T0 + 4);
-    expect(err.goal.tasks[0]).toMatchObject({ status: "failed", attempts: 2 });
+  test("a missing verification verdict retries work; the last failed attempt terminates the task", () => {
+    const v = taskTurnEnded(verifying(), "t-1", "verify", { ok: true, text: "All good, trust me." }, T0 + 3);
+    expect(v.tasks[0]).toMatchObject({ status: "ready", turn: null, attempts: 1 });
+    const again = planTasks(v, [idle("a")], T0 + 4);
+    expect(again.goal.tasks[0]).toMatchObject({ status: "running", turn: "work", attempts: 2 });
+    const err = taskTurnEnded(again.goal, "t-1", "work", { ok: false, error: "lane is stopped" }, T0 + 5);
+    expect(err.tasks[0]).toMatchObject({ status: "failed", attempts: 2 });
   });
   test("a person's rejection is a failed attempt, and a command check cannot be ticked by hand", () => {
-    const w = taskTurnEnded(started(), "t-1", "work", { ok: true, text: "done" }, T0 + 1);
-    const v = taskTurnEnded(w.goal, "t-1", "verify", { ok: true, text: '{"checks":[{"id":"k1","pass":true}]}' }, T0 + 2);
-    expect(setTaskCheck(v.goal, "t-1", "k1", true, T0 + 3).ok).toBe(false);
-    const rejected = setTaskCheck(v.goal, "t-1", "k2", false, T0 + 3);
-    expect(rejected.ok && rejected.goal.tasks[0]).toMatchObject({ status: "ready", lastFailure: "a reviewer rejected: rows show within 3 s" });
+    const v = taskTurnEnded(verifying(), "t-1", "verify", { ok: true, text: '{"checks":[{"id":"k1","pass":true}]}' }, T0 + 3);
+    expect(setTaskCheck(v, "t-1", "k1", true, T0 + 4).ok).toBe(false);
+    const rejected = setTaskCheck(v, "t-1", "k2", false, T0 + 4);
+    expect(rejected.ok && rejected.goal.tasks[0]).toMatchObject({ status: "ready", turn: null, attempts: 1 });
   });
   test("an outcome for a task no longer running (cancelled meanwhile) changes nothing", () => {
     const g = started();
     const cancelled = { ...g, tasks: g.tasks.map((t) => ({ ...t, status: "cancelled" as const })) };
-    expect(taskTurnEnded(cancelled, "t-1", "work", { ok: true, text: "x" }, T0 + 1).goal).toBe(cancelled);
+    expect(taskTurnEnded(cancelled, "t-1", "work", { ok: true, text: "x" }, T0 + 1)).toBe(cancelled);
   });
 });
 

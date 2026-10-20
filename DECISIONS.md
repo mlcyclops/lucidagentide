@@ -25236,3 +25236,17 @@ Two traps found by measurement before writing anything:
 **Not in this increment.** Plan (the heartbeat inventing tasks toward unmet criteria; a person writes them), artifacts, and the AOS event log (frozen EventName, its own ADR). A command check's verdict is reported by the spoke that ran it, not observed by the engine: the same trust as the /goal checker, recorded here rather than claimed stronger. Overlapping write scopes are not serialized at dispatch: two tasks on two spokes in one folder run side by side, with LUCID's per-file write claims (ADR-0417) making a conflicting write wait, which is the existing fleet rule.
 
 **Consequences.** The goal now drives work instead of only tracking it, and nothing reaches done without passing its checks. `make demo-P-AOS.2` proves dispatch order, dependency gating, one-task-per-spoke, the verify turn, fail-closed parsing, retry with the reason, the attempt limit, human review, and restart recovery against the real store with a scripted dispatch seam.
+
+## ADR-0454: P-AOS.2a, verification shares heartbeat admission (2026-10-20)
+
+**Status:** Accepted. Local fix to ADR-0453; not published or installed.
+
+**Problem.** Work completion directly dispatched a verification turn, bypassing pause, newly exhausted spend/time budgets and an achieved goal. The heartbeat guarded new work but not that continuation. A controlled runtime probe reproduced both pause and spend-blocked bypasses.
+
+**Decision.** `taskTurnEnded` records outcomes only and returns the updated goal. Successful work requiring command checks becomes `ready` with `turn: "verify"`; its result and attempt count are persisted. `planTasks`, reached only through an admitted heartbeat in the engine, dispatches that verification without incrementing attempts. Completion then triggers a heartbeat so current lane spend, elapsed time, pause, terminal goals and spoke availability are checked before any new turn. No direct completion-to-dispatch path remains. This reuses existing task fields and adds no EventName, database migration or prompt-prefix change.
+
+**Lifecycle.** Resume admits queued verification once, without replaying completed work. A queued verification survives process restart; an actually running turn still uses the existing interrupted-attempt recovery rule. Cancellation wins over late outcomes. As before, heartbeat pause is process-local and does not survive engine restart; persisted waiting work does. Do not run mixed-version engines against the same goal file or downgrade an engine with queued verification, because the prior scheduler interpreted every ready task as new work.
+
+**Limits.** This is admission control for future turns, not cancellation of an already executing spoke or an exact dollar ceiling. Previously admitted calls can continue and incur cost. Verification remains the same spoke's reported result, not an engine-observed exit code. No new runner, automatic planning, retry policy or budget override is introduced.
+
+**Verification.** Focused regressions cover pause, spend/time exhaustion observed at completion without a preceding heartbeat, achieved/cancelled goals, resume without a second work attempt, and durable queued verification. The original runtime counterexample now dispatches only the work turn while paused or blocked. The existing P-AOS.2 end-to-end demonstration still passes with its scripted spoke seam.

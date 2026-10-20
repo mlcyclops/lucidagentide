@@ -64,20 +64,89 @@ test("the heartbeat beats from the first tick, and a pause holds the goal while 
 });
 
 test("a task runs end to end through the dispatch seam: work turn, verification turn, review, done", async () => {
-  const sent: { laneId: string; text: string }[] = [];
   const replies: AosTurnOutcome[] = [{ ok: true, text: "Fixed it." }, { ok: true, text: '{"checks":[{"id":"k1","pass":true,"detail":"exit 0"}]}' }];
   const lanes: AosLaneInput[] = [{ id: "a", name: "api", status: "awaiting-input", busy: false, lastActivityAt: 1_000_000, cost: 0 }];
   const dir = mkdtempSync(join(tmpdir(), "lucid-goal-"));
   dirs.push(dir);
-  const g = new FleetGoal({ lanes: () => lanes, path: join(dir, "goal.json"), now: () => 1_000_000, dispatch: async (laneId, text) => { sent.push({ laneId, text }); return replies.shift()!; } });
+  const g = new FleetGoal({ lanes: () => lanes, path: join(dir, "goal.json"), now: () => 1_000_000, dispatch: async () => replies.shift()! });
   g.set(INPUT);
   const add = g.addTask({ title: "fix", prompt: "fix the dock", outputContract: "a green test", checks: ["$ bun test", "rows render"], assignee: "a", dependsOn: [] });
   expect(add.ok).toBe(true);
   await Bun.sleep(10); // both turns resolve on microtasks
-  expect(sent.map((s) => s.text.split("\n")[0])).toEqual(['[Fleet goal "ship the beta", task t-1: fix]', "[Task t-1 verification] You are verifying, not working. Run each command below EXACTLY as written in this folder. Do not modify any file and do not try to fix anything. Then reply with ONLY one line of strict JSON: {\"checks\":[{\"id\":\"k1\",\"pass\":true,\"detail\":\"exit code and a short reason\"}]} with one entry per command; \"pass\" is true only when the command exited 0."]);
+
   expect(g.snapshot().goal?.tasks[0]?.status).toBe("needs_review");
   const done = g.taskCheck("t-1", "k2", true);
   expect(done.ok && done.data.goal?.tasks[0]?.status).toBe("done");
+});
+
+function deferredTaskStore() {
+  const dir = mkdtempSync(join(tmpdir(), "lucid-goal-boundary-"));
+  dirs.push(dir);
+  const path = join(dir, "goal.json");
+  const clock = { now: 1_000_000 };
+  const lanes: AosLaneInput[] = [{ id: "a", name: "api", status: "awaiting-input", busy: false, lastActivityAt: clock.now, cost: 0 }];
+  const turns: PromiseWithResolvers<AosTurnOutcome>[] = [];
+  const make = () => new FleetGoal({ lanes: () => lanes, path, now: () => clock.now, dispatch: () => {
+    const turn = Promise.withResolvers<AosTurnOutcome>();
+    turns.push(turn);
+    return turn.promise;
+  } });
+  const engine = make();
+  engine.set(INPUT);
+  engine.addTask({ title: "fix", prompt: "fix the dock", outputContract: "a green test", checks: ["$ bun test", "rows render"], assignee: "a", dependsOn: [] });
+  const finish = async (index: number, text: string) => {
+    turns[index]!.resolve({ ok: true, text });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  };
+  return { engine, make, clock, lanes, turns, finish };
+}
+
+test.each(["pause", "spend", "time", "achieved", "cancel"] as const)("work completion cannot dispatch verification across the %s boundary", async (boundary) => {
+  const s = deferredTaskStore();
+  expect(s.turns).toHaveLength(1);
+  switch (boundary) {
+    case "pause": s.engine.control("pause"); break;
+    case "spend": s.lanes[0]!.cost = INPUT.maxUsd; break;
+    case "time": s.clock.now += INPUT.maxHours * 3600_000; break;
+    case "achieved": s.engine.criterion("c1", true); s.engine.criterion("c2", true); break;
+    case "cancel": s.engine.control("cancel"); break;
+  }
+  // Spend/time have not had a heartbeat yet: completion must observe their CURRENT values.
+  await s.finish(0, "Work is complete.");
+  expect(s.turns).toHaveLength(1);
+  const snapshot = s.engine.snapshot();
+  if (boundary === "pause") expect(snapshot.heartbeat.status).toBe("paused");
+  else expect(snapshot.goal?.status).toBe(boundary === "cancel" ? "cancelled" : boundary === "achieved" ? "achieved" : "blocked");
+  expect(snapshot.goal?.tasks[0]).toMatchObject(boundary === "cancel"
+    ? { status: "cancelled", turn: null }
+    : { status: "ready", turn: "verify", attempts: 1, result: "Work is complete." });
+});
+
+test("resume dispatches queued verification once, without rerunning completed work or charging another attempt", async () => {
+  const s = deferredTaskStore();
+  s.engine.control("pause");
+  await s.finish(0, "Work is complete.");
+  s.engine.control("resume");
+  s.engine.beat();
+  expect(s.turns).toHaveLength(2);
+  expect(s.engine.snapshot().goal?.tasks[0]).toMatchObject({ status: "running", turn: "verify", attempts: 1, result: "Work is complete." });
+  await s.finish(1, '{"checks":[{"id":"k1","pass":true}]}');
+  expect(s.engine.snapshot().goal?.tasks[0]?.status).toBe("needs_review");
+  s.engine.taskCheck("t-1", "k2", true);
+  expect(s.engine.snapshot().goal?.tasks[0]?.status).toBe("done");
+});
+
+test("queued verification survives restart without replaying work or consuming a retry", async () => {
+  const s = deferredTaskStore();
+  s.engine.control("pause");
+  await s.finish(0, "Saved work result.");
+  const restarted = s.make();
+  expect(restarted.snapshot().goal?.tasks[0]).toMatchObject({ status: "ready", turn: "verify", attempts: 1, result: "Saved work result." });
+  restarted.beat();
+  expect(s.turns).toHaveLength(2);
+  expect(restarted.snapshot().goal?.tasks[0]).toMatchObject({ status: "running", turn: "verify", attempts: 1 });
+  await s.finish(1, '{"checks":[{"id":"k1","pass":true}]}');
+  expect(restarted.snapshot().goal?.tasks[0]?.status).toBe("needs_review");
 });
 
 test("an outcome that lands after its goal was replaced is dropped, never applied by task id", async () => {

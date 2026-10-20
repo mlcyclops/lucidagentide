@@ -50,7 +50,7 @@ export interface AosTask {
   status: AosTaskStatus;
   attempts: number;
   maxAttempts: number;
-  /** Which turn is running: the work, or the verification of its command checks. */
+  /** The running turn, or "verify" while ready and awaiting scheduler admission after completed work. */
   turn: "work" | "verify" | null;
   /** The spoke's one-paragraph result from the last work turn. */
   result: string | null;
@@ -459,33 +459,33 @@ export function planTasks(goal: AosGoal, lanes: readonly AosLaneInput[], now: nu
     if (!lane) { g = withTask(g, { ...t, status: "failed", lastFailure: "its spoke is gone", updatedAt: now }); continue; }
     const laneTaken = lane.busy || lane.status === "stopped" || g.tasks.some((x) => x.assignee === lane.id && x.status === "running") || dispatch.some((d) => d.laneId === lane.id);
     if (laneTaken) continue;
-    t = { ...t, status: "running", turn: "work", attempts: t.attempts + 1, updatedAt: now };
+    const turn = t.turn === "verify" ? "verify" : "work";
+    t = { ...t, status: "running", turn, attempts: t.attempts + (turn === "work" ? 1 : 0), updatedAt: now };
     g = withTask(g, t);
-    dispatch.push({ taskId: t.id, laneId: lane.id, turn: "work", text: workPrompt(g, t) });
+    dispatch.push({ taskId: t.id, laneId: lane.id, turn, text: turn === "verify" ? verifyPrompt(t) : workPrompt(g, t) });
   }
   return { goal: g, dispatch };
 }
 
-/** A dispatched turn ended. Work turn: on to verification (command checks), review (human checks), or a
- *  failed attempt. Verify turn: the fail-closed verdict decides. A task cancelled meanwhile is left alone. */
-export function taskTurnEnded(goal: AosGoal, taskId: string, turn: "work" | "verify", outcome: AosTurnOutcome, now: number): { goal: AosGoal; dispatch: AosDispatch[] } {
+/** Record a dispatched turn's outcome. Completed work queues verification durably; only the heartbeat
+ *  may dispatch it after checking pause, current budgets and goal state. Cancellation wins over late outcomes. */
+export function taskTurnEnded(goal: AosGoal, taskId: string, turn: "work" | "verify", outcome: AosTurnOutcome, now: number): AosGoal {
   const t = goal.tasks.find((x) => x.id === taskId);
-  if (!t || t.status !== "running" || t.turn !== turn) return { goal, dispatch: [] };
-  if (!outcome.ok) return { goal: withTask(goal, failAttempt(t, `the spoke's turn failed: ${outcome.error.slice(0, 200)}`, now)), dispatch: [] };
+  if (!t || t.status !== "running" || t.turn !== turn) return goal;
+  if (!outcome.ok) return withTask(goal, failAttempt(t, `the spoke's turn failed: ${outcome.error.slice(0, 200)}`, now));
   if (turn === "work") {
     const done = { ...t, result: outcome.text.trim().slice(-AOS_RESULT_MAX) || null, updatedAt: now };
     if (done.acceptance.some((c) => c.kind === "command")) {
-      const v = { ...done, turn: "verify" as const };
-      return { goal: withTask(goal, v), dispatch: [{ taskId: t.id, laneId: t.assignee, turn: "verify", text: verifyPrompt(v) }] };
+      return withTask(goal, { ...done, status: "ready", turn: "verify" });
     }
-    return { goal: withTask(goal, afterCommands(done, now)), dispatch: [] };
+    return withTask(goal, afterCommands(done, now));
   }
   const ids = t.acceptance.filter((c) => c.kind === "command").map((c) => c.id);
   const verdict = parseCheckVerdict(outcome.text, ids);
   const checked = { ...t, acceptance: t.acceptance.map((c) => (verdict[c.id] ? { ...c, passed: verdict[c.id]!.passed, detail: verdict[c.id]!.detail } : c)), updatedAt: now };
   const failed = checked.acceptance.filter((c) => c.kind === "command" && c.passed !== true);
-  if (failed.length) return { goal: withTask(goal, failAttempt(checked, failed.map((c) => `\`${c.text}\`: ${c.detail}`).join("; "), now)), dispatch: [] };
-  return { goal: withTask(goal, afterCommands(checked, now)), dispatch: [] };
+  if (failed.length) return withTask(goal, failAttempt(checked, failed.map((c) => `\`${c.text}\`: ${c.detail}`).join("; "), now));
+  return withTask(goal, afterCommands(checked, now));
 }
 
 /** A person ticks or rejects a human check. A rejection is a failed attempt (retried with the reason);
