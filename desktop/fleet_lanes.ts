@@ -45,6 +45,7 @@ import { WriteClaims, type WaitView } from "./write_claims.ts"; // P-WAIT.1: fil
 import { toolInput, toolIntent } from "./tool_input.ts"; // P-PROGRESS.1: one extractor for lanes and the master
 import { toolCode } from "./tool_code.ts";
 import { StepTextJoiner } from "./step_text.ts"; // P-STEPTEXT.1: a paragraph break between a turn's tool steps
+import type { AosLaneInput } from "./aos.ts"; // P-AOS.1 (ADR-0452): the fleet goal's view of a lane
 import { laneHoldsSession, type OwnerLane } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
 import type { RepoContext } from "./repo_identity.ts";
 // P-REMOTE.16 (ADR-0431): the rich turn shapes a remote guest replays, and the desktop's one diffstat
@@ -1005,6 +1006,14 @@ export class FleetLaneManager {
       if (lane.status === "stopped") continue;
       out.push({ id: lane.id, name: lane.name, cwd: lane.cwd, task: (lane.lastPrompt ?? "").replace(/\s+/g, " ").trim().slice(0, 200), running: lane.busy });
     }
+    return out;
+  }
+
+  /** P-AOS.1 (ADR-0452): what the fleet goal's heartbeat observes of every lane. Synchronous: a tick
+   *  never awaits. `cost` is omp's cumulative session cost from the last usage_update. */
+  goalLanes(): AosLaneInput[] {
+    const out: AosLaneInput[] = [];
+    for (const lane of this.#lanes.values()) out.push({ id: lane.id, name: lane.name, status: lane.status, busy: lane.busy, lastActivityAt: lane.lastActivityAt, cost: lane.lastUsage?.cost ?? 0 });
     return out;
   }
 

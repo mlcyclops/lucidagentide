@@ -27,8 +27,9 @@ import { cycleSpoke, ghostKey, ghostSpokes, hubLanes, ORBIT_FPS_FLOOR, ORBIT_NOD
 import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new spokes open on the last spoke's model; colliding names show the route
 import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
+import { beatLine, goalButtonHtml, goalButtonTip, goalPanelHtml, goalSnapshot, onGoalPanelClick, paintHubGoal, refreshGoal, stalledLanes, type OrbitGoalDeps } from "./orbit_goal.ts"; // P-AOS.1 (ADR-0452)
 
-export interface FleetOrbitDeps {
+export interface FleetOrbitDeps extends OrbitGoalDeps {
   /** P-TUI.2: open `lucid hub` in a new terminal window (app.ts toasts a refusal). */
   hubOpen: () => Promise<unknown>;
   fleetStatus: LucidBridge["fleetStatus"];
@@ -294,7 +295,7 @@ function paintGhosts(): void {
 // spokes, P-SWITCH.3). All are children of the stage, so the fleet stays visible behind them and no
 // popover positioning is involved.
 
-type OrbitPanel = "ghosts" | "spawn" | "hubs";
+type OrbitPanel = "ghosts" | "spawn" | "hubs" | "goal";
 let openedPanel: OrbitPanel | null = null;
 
 function togglePanel(which: OrbitPanel): void {
@@ -308,6 +309,7 @@ function togglePanel(which: OrbitPanel): void {
   if (openedPanel === "ghosts") { paintGhostPanel(); void refreshGhosts(); }
   if (openedPanel === "spawn") paintSpawnPanel();
   if (openedPanel === "hubs") paintHubsPanel();
+  if (openedPanel === "goal") { goalSig = ""; paintGoalPanel(); }
 }
 
 // ------------------------------------------------------ P-SWITCH.3 (ADR-0410): the other hubs' spokes
@@ -434,6 +436,10 @@ function onPanelClick(t: HTMLElement): boolean {
   if (t.closest("[data-orbit-panel-close]")) { togglePanel(openedPanel ?? "ghosts"); return true; }
   if (t.closest("[data-ghost-archopen]")) { archOpen = !archOpen; paintGhostPanel(); return true; }
   if (t.closest("[data-ghost-hidopen]")) { hidOpen = !hidOpen; paintGhostPanel(); return true; }
+  if (openedPanel === "goal" && deps && view) {
+    const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
+    if (box && onGoalPanelClick(t, box, deps, () => { goalSig = ""; paintGoal(); })) return true;
+  }
   const row = t.closest("[data-ghost-i]") as HTMLElement | null;
   if (row) {
     const kind = row.dataset.ghostList;
@@ -681,6 +687,9 @@ export function openFleetOrbit(): void {
   requestAnimationFrame(() => view?.classList.add("open"));
   void refresh(true);
   if (pollTimer == null) pollTimer = window.setInterval(() => void refresh(false), POLL_MS);
+  // P-AOS.1: liveness is recomputed locally every second from the last beat, so a frozen engine (whose
+  // poll never answers) still turns the heartbeat late, then dead, without waiting on that engine.
+  if (beatTimer == null) beatTimer = window.setInterval(paintBeat, 1000);
   window.addEventListener("resize", onResize);
   window.addEventListener("keydown", onKey, true);
 }
@@ -693,6 +702,7 @@ export function closeFleetOrbit(): void {
   const v = view;
   window.setTimeout(() => { v.hidden = true; }, 220);
   if (pollTimer != null) { window.clearInterval(pollTimer); pollTimer = null; }
+  if (beatTimer != null) { window.clearInterval(beatTimer); beatTimer = null; }
   window.removeEventListener("resize", onResize);
   window.removeEventListener("keydown", onKey, true);
   // Cards are kept (cheap, and reopening repaints instantly); only the census reconcile mutates them.
@@ -718,6 +728,7 @@ function buildView(): HTMLElement {
       <span class="orbit-headgap"></span>
       <button class="btn-mini orbit-btn" data-orbit-hubs hidden data-tip="Other hubs|Spokes still running under your other sessions. Each session is its own hub: a new session starts empty, and the spokes you started before stay with the session that started them. Open a hub to make that session Main and see its spokes here.">${icon("share", 13)} Other hubs <b class="orbit-ghost-n" data-orbit-hubsn></b></button>
       <button class="btn-mini orbit-btn" data-orbit-recover hidden data-tip="Historical spokes|Every lane that ever ran, remembered by the durable ledger. Recover one and it rejoins the orbit under its old name, folder and model, with its conversation loaded; hide one and it waits in the Hidden section.">${icon("restore", 13)} Recover <b class="orbit-ghost-n" data-orbit-ghostn></b></button>
+      <button class="btn-mini orbit-btn orbit-goal-btn" data-orbit-goal></button>
       <button class="btn-mini orbit-btn" data-orbit-spawn data-tip="New spoke|Create it right here: name, folder (real OS browser) and model, or paste a repo URL to clone it first.">${icon("plus", 13)} New spoke</button>
       <button class="btn-mini orbit-btn" data-orbit-mode data-tip="Motion vs Lite|Lite is the SAME hub and spoke as a still page: no motion, no blur - for machines without GPU compositing. Auto-picked (reduced-motion, software renderer, low memory, or a measured frame rate under 30); your click here overrules the probe both ways."></button>
       <button class="btn-mini orbit-btn" data-orbit-hubterm data-tip="Terminal hub|Open lucid hub in a new terminal window: this fleet as tmux-style panes (Fleet, Security, Sessions, Audit, Usage and a live agent pane), attached to this app. Also runs as lucid hub from any terminal.">${icon("terminal", 13)} Terminal</button>
@@ -729,6 +740,7 @@ function buildView(): HTMLElement {
       <svg class="orbit-svg" data-orbit-svg aria-hidden="true"></svg>
       <div class="orbit-hub" data-orbit-hub role="button" tabindex="0">
         <span class="orbit-hub-ping" aria-hidden="true"></span><span class="orbit-hub-ping p2" aria-hidden="true"></span>
+        <span class="orbit-hub-goal" aria-hidden="true"></span>
         <div class="orbit-hub-core">
           <span class="orbit-hub-mark">${piMark}</span>
           <b>Main</b>
@@ -777,6 +789,7 @@ function onViewClick(ev: Event): void {
   if (t.closest("[data-orbit-grid]")) { closeFleetOrbit(); deps?.openGrid(); return; }
   const hubBtn = t.closest("[data-orbit-hubterm]") as HTMLButtonElement | null; // P-TUI.2
   if (hubBtn) { void openHubFrom(hubBtn, () => deps?.hubOpen()); return; }
+  if (t.closest("[data-orbit-goal]")) { togglePanel("goal"); return; }
   if (t.closest("[data-orbit-spawn]")) { togglePanel("spawn"); return; }
   if (t.closest("[data-orbit-panel]")) { onPanelClick(t); return; }
   if (t.closest("[data-orbit-hub]")) { goHome(); return; }
@@ -846,6 +859,7 @@ async function answer(laneId: string, allow: boolean, scope: ApprovalScope = "on
 
 async function refresh(first: boolean): Promise<void> {
   if (!deps || !view || view.hidden) return;
+  void refreshGoal(deps).then(paintGoal); // P-AOS.1: its own request, so a slow status never delays the beat
   const s = await deps.fleetStatus();
   if (!s || !view || view.hidden) return;
   lastStatus = s;
@@ -884,6 +898,56 @@ function paintHead(s: FleetStatusView): void {
   const hudNext = `cpu ${pct(s.resources.cpuPct)} \u00b7 mem ${pct(s.resources.memPct)}`;
   if (hud.textContent !== hudNext) hud.textContent = hudNext;
   hud.classList.toggle("hot", hot);
+}
+
+// ------------------------------------------------------------ P-AOS.1 (ADR-0452): the fleet goal
+//
+// The model and the panel live in orbit_goal.ts; this section only places them: the header button, the
+// hub ring, the stalled marks on spokes, and the side panel.
+
+let beatTimer: number | null = null;
+/** Spokes the heartbeat reaped as stalled, read by paintNode. */
+let stalled = new Set<string>();
+/** What the open goal panel last painted; an unchanged poll leaves the panel (and its focus) alone. */
+let goalSig = "";
+
+function paintGoal(): void {
+  if (!view) return;
+  stalled = stalledLanes();
+  for (const [id, entry] of nodes) entry.card.classList.toggle("aos-stalled", stalled.has(id));
+  paintBeat();
+  if (openedPanel === "goal") paintGoalPanel();
+}
+
+/** Every second: the header dot and the hub ring follow the heartbeat's age; the panel's beat line too. */
+function paintBeat(): void {
+  if (!view) return;
+  const now = Date.now();
+  const btn = $("[data-orbit-goal]", view) as HTMLElement | null;
+  if (btn) {
+    const html = goalButtonHtml(now);
+    if (btn.innerHTML !== html) btn.innerHTML = html;
+    const tip = goalButtonTip(now);
+    if (btn.dataset.tip !== tip) btn.dataset.tip = tip;
+  }
+  const hub = $("[data-orbit-hub]", view) as HTMLElement | null;
+  if (hub) paintHubGoal(hub, now);
+  const line = $("[data-goal-beat]", view) as HTMLElement | null;
+  if (line) { const t = beatLine(now); if (line.textContent !== t) line.textContent = t; }
+}
+
+function paintGoalPanel(): void {
+  if (openedPanel !== "goal" || !view) return;
+  const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
+  if (!box) return;
+  const s = goalSnapshot();
+  // The set form is painted once per opening: a poll must never wipe what the user is typing.
+  const g = s?.goal;
+  const sig = g && s ? JSON.stringify([g.updatedAt, g.status, g.blockedReason, s.heartbeat.status, s.spentUsd.toFixed(2), Math.floor(s.elapsedS / 60), s.agents.map((a) => `${a.laneId}:${a.status}`)]) : "form";
+  if (sig === goalSig) return;
+  goalSig = sig;
+  box.innerHTML = goalPanelHtml(Date.now(), `<button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button>`);
+  if (!g) (box.querySelector("[data-goal-title]") as HTMLInputElement | null)?.focus();
 }
 
 /** P-REPO.1: when the hub last asked for Main's repo. */
@@ -987,7 +1051,7 @@ function buildNode(lane: LaneView): HTMLElement {
 /** Repaint a card in place. Text writes are guarded so an unchanged poll costs nothing and never
  *  restarts a running glow animation. */
 function paintNode(card: HTMLElement, lane: LaneView): void {
-  const cls = `orbit-node lane-${lane.status}${lane.promoted ? " promoted" : ""}`;
+  const cls = `orbit-node lane-${lane.status}${lane.promoted ? " promoted" : ""}${stalled.has(lane.id) ? " aos-stalled" : ""}`;
   const keep = card.classList.contains("orbit-enter") ? " orbit-enter" : "";
   if (card.getAttribute("class") !== cls + keep) card.setAttribute("class", cls + keep);
   setText(card, ".orbit-name", lane.name);

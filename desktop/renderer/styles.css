@@ -5936,6 +5936,28 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
   will-change:transform,opacity}
 .orbit-hub-ping.p2{animation-delay:1.6s}
 @keyframes orbitPing{from{transform:scale(1);opacity:.7}to{transform:scale(1.9);opacity:0}}
+/* P-AOS.1 (ADR-0452): the fleet goal on the hub. The ring is the criteria progress; its color follows the
+   goal's status, and the pings follow the heartbeat's liveness (recomputed every second from the last
+   beat): amber when late, gone when dead, with the core's rim turning red. */
+.orbit-hub-goal{position:absolute;width:166px;height:166px;border-radius:50%;pointer-events:none;opacity:0;
+  background:conic-gradient(var(--goal-c,var(--green)) calc(var(--goal-pct,0) * 1%),color-mix(in srgb,var(--line) 75%,transparent) 0);
+  -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));
+  mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));
+  transition:opacity var(--t)}
+.orbit-hub.has-goal .orbit-hub-goal{opacity:1}
+.orbit-hub[data-goal="blocked"]{--goal-c:var(--amber)}
+.orbit-hub[data-goal="cancelled"]{--goal-c:var(--txt-4)}
+.orbit-hub[data-liveness="late"] .orbit-hub-ping{border-color:rgb(var(--amber-rgb) / .65)}
+.orbit-hub[data-liveness="dead"] .orbit-hub-ping{animation:none;opacity:0}
+.orbit-hub[data-liveness="dead"] .orbit-hub-core{border-color:color-mix(in srgb,var(--red) 60%,var(--line))}
+/* The header's Goal button: a heartbeat dot (flex:none), the icon, one label. */
+.orbit-goal-dot{display:inline-block;flex:none;width:7px;height:7px;border-radius:50%;background:var(--txt-4)}
+.orbit-goal-dot[data-liveness="dead"]{background:var(--red)}
+.orbit-goal-dot[data-liveness="alive"]{background:var(--green);box-shadow:0 0 6px rgb(var(--green-rgb) / .7);animation:hudpulse 1.6s ease-in-out infinite}
+.orbit-goal-dot[data-liveness="late"]{background:var(--amber);box-shadow:0 0 6px rgb(var(--amber-rgb) / .7)}
+.orbit-view.static .orbit-goal-dot{animation:none}
+/* A spoke the heartbeat reaped: running a turn, silent past the stall line. */
+.orbit-node.aos-stalled .orbit-node-card{outline:1px dashed var(--amber);outline-offset:3px}
 /* Spoke cards. Positioned by --tx/--ty off dead center; the transform TRANSITION is the fly-out, the
    fly-home, and every reseat when the census changes - one property, every animation. */
 .orbit-node{position:absolute;left:50%;top:50%;width:172px;z-index:3;cursor:pointer;
@@ -6193,6 +6215,51 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-spawn-row{display:flex;align-items:center;gap:6px}
 .orbit-spawn-row input{flex:1;min-width:0}
 .orbit-spawn-go{color:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
+/* P-AOS.1 (ADR-0452): the Fleet goal panel. Reuses the spawn form's fields; every row keeps one text
+   child (or a label that ellipsizes beside nowrap chips), invariant #11. */
+.orbit-spawn-l textarea{width:100%;background:var(--bg-2);border:1px solid var(--line);border-radius:8px;color:var(--txt);
+  font:inherit;font-size:12px;padding:7px 9px;letter-spacing:normal;text-transform:none;resize:vertical;min-height:72px}
+.orbit-spawn-l textarea:focus{outline:none;border-color:var(--accent)}
+.orbit-goal-caps{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+.orbit-goal-beat{display:flex;align-items:center;gap:8px;margin:0 4px 6px;padding:6px 9px;border-radius:8px;
+  background:var(--bg-2);font-family:var(--mono);font-size:10.5px;color:var(--txt-3)}
+.orbit-goal-beat span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orbit-goal-beat[data-liveness="late"]{color:var(--amber-txt,var(--amber))}
+.orbit-goal-beat[data-liveness="dead"]{color:var(--red)}
+.orbit-goal-lede{margin:2px 4px 6px;font-size:12px;line-height:1.5;color:var(--txt-3)}
+.orbit-goal-title{display:flex;align-items:center;gap:8px;padding:4px 4px 2px}
+.orbit-goal-title b{flex:1;min-width:0;font-size:14px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orbit-goal-pill{flex:none;white-space:nowrap;font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:2px 8px;
+  border-radius:999px;border:1px solid var(--line);color:var(--txt-3)}
+.orbit-goal-title[data-goal-status="active"] .orbit-goal-pill{color:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
+.orbit-goal-title[data-goal-status="blocked"] .orbit-goal-pill{color:var(--amber-txt,var(--amber));border-color:rgb(var(--amber-rgb) / .5)}
+.orbit-goal-title[data-goal-status="achieved"] .orbit-goal-pill{color:var(--green);border-color:rgb(var(--green-rgb) / .5)}
+.orbit-goal-why{margin:2px 4px 4px;font-size:12px;line-height:1.5;color:var(--amber-txt,var(--amber))}
+.orbit-goal-bar{height:6px;margin:6px 4px 2px;border-radius:999px;background:var(--bg-2);overflow:hidden}
+.orbit-goal-bar i{display:block;height:100%;width:calc(var(--goal-pct,0) * 1%);border-radius:inherit;
+  background:linear-gradient(90deg,var(--accent),var(--green));transition:width var(--t)}
+.orbit-goal-sub{padding:0 4px 4px;font-family:var(--mono);font-size:10.5px;color:var(--txt-4);white-space:nowrap}
+.orbit-goal-list{display:flex;flex-direction:column;gap:2px}
+.orbit-goal-crit{display:grid;grid-template-columns:auto 1fr;gap:9px;align-items:start;padding:6px 8px;border-radius:8px;
+  font-size:12.5px;line-height:1.45;color:var(--txt-2);cursor:pointer}
+.orbit-goal-crit:hover{background:var(--bg-2)}
+.orbit-goal-crit input{margin-top:3px;accent-color:var(--green)}
+.orbit-goal-crit.met span{color:var(--txt-4);text-decoration:line-through}
+.orbit-goal-budget{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:6px 4px;padding:8px 10px;border-radius:8px;
+  background:var(--bg-2);font-size:11.5px;white-space:nowrap}
+.orbit-goal-budget span{color:var(--txt-4);font-size:10px;letter-spacing:.1em;text-transform:uppercase;align-self:center}
+.orbit-goal-budget b{font-family:var(--mono);font-weight:500;color:var(--txt-2);overflow:hidden;text-overflow:ellipsis}
+.orbit-goal-h2{padding-top:8px}
+.orbit-goal-roster{display:flex;flex-direction:column;gap:2px}
+.orbit-goal-agent{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:8px}
+.orbit-goal-agent i{flex:none;width:7px;height:7px;border-radius:50%;background:var(--txt-4)}
+.orbit-goal-agent b{flex:1;min-width:0;font-size:12px;font-weight:500;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orbit-goal-agent small{flex:none;white-space:nowrap;font-family:var(--mono);font-size:10.5px;color:var(--txt-4)}
+.orbit-goal-agent[data-agent="running"] i{background:var(--cyan)}
+.orbit-goal-agent[data-agent="stalled"] i{background:var(--amber)}
+.orbit-goal-agent[data-agent="stalled"] small{color:var(--amber-txt,var(--amber))}
+.orbit-goal-agent[data-agent="errored"] i{background:var(--red)}
+.orbit-goal-ctl{margin-top:8px;padding:0 4px;flex-wrap:wrap}
 .orbit-panel .orbit-ghost-err{padding:2px 6px}
 /* P-SWITCH.3 (ADR-0410): the Other hubs panel. A hub row (title, count, Open), then its spokes as pips
    on their own line so the row's label never shares a flex track with prose. */

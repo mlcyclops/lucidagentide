@@ -16803,6 +16803,10 @@ function wire(): void {
   initFleetOrbit({
     hubOpen: openTerminalHub, // P-TUI.2
     fleetStatus: bridge.fleetStatus,
+    fleetGoal: bridge.fleetGoal, // P-AOS.1 (ADR-0452): the standing fleet goal + the AOS-1 heartbeat
+    fleetGoalSet: bridge.fleetGoalSet,
+    fleetGoalCriterion: bridge.fleetGoalCriterion,
+    fleetGoalControl: bridge.fleetGoalControl,
     fleetAnswer: bridge.fleetAnswer,
     fleetRespawn: bridge.fleetRespawn,
     fleetStop: bridge.fleetStop, // P-FLEET.L20: close a spoke from its node or the banner (stop, then dismiss)

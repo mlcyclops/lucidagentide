@@ -285,6 +285,10 @@ import type { NetView } from "./net_status.ts"; // P-NETSTAT.1 (ADR-0423): the n
 import type { JobsData, JobTargetView, JobView } from "./jobs_view.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs (owned there)
 export type { NetView };
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
+import type { AosControl, AosSnapshot } from "../aos.ts"; // P-AOS.1 (ADR-0452): the fleet goal (types only, owned there)
+export type { AosControl, AosSnapshot };
+/** P-AOS.1: a fleet-goal change: the new snapshot, or the engine's refusal in words. */
+export type FleetGoalReply = { ok: true; data: AosSnapshot } | { ok: false; error: string };
 export type { ProgressView, WaitView };
 export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
 /** Approval scope: "once" answers only the pending ask; "session" also allows every same-kind ask for
@@ -1047,6 +1051,11 @@ export interface LucidBridge {
   cancelGoal(): Promise<unknown>; // P-GOAL.2: stop a running /goal loop
   // P-FLEET.L1/L2: local lanes - concurrent headless LUCID agents in the fleet grid dashboard.
   fleetStatus(): Promise<FleetStatusView | null>;
+  /** P-AOS.1 (ADR-0452): the standing fleet goal, its heartbeat and the lanes as AOS-1 agents. */
+  fleetGoal(): Promise<AosSnapshot | null>;
+  fleetGoalSet(input: { title: string; criteria: string[]; maxUsd: number; maxHours: number }): Promise<FleetGoalReply | null>;
+  fleetGoalCriterion(id: string, met: boolean): Promise<FleetGoalReply | null>;
+  fleetGoalControl(action: AosControl): Promise<FleetGoalReply | null>;
   /** P-REPO.1 (ADR-0406): the repo Main works on and where its commits go. */
   repoContext(): Promise<RepoContext | null>;
   /** P-REPO.1: local folders a spoke can start in (workspace, lanes, recents, checkouts beside them). */
@@ -1840,6 +1849,10 @@ export const bridge: LucidBridge = {
   cancelGoal: () => post("/api/goal/cancel", {}),
   // P-FLEET.L1: the fleet grid's lane API. The prompt stream reuses the chat NDJSON reader.
   fleetStatus: () => getData("/api/fleet/status"),
+  fleetGoal: () => getData("/api/fleet/goal"), // P-AOS.1 (ADR-0452)
+  fleetGoalSet: (input) => post("/api/fleet/goal", input),
+  fleetGoalCriterion: (id, met) => post("/api/fleet/goal/criterion", { id, met }),
+  fleetGoalControl: (action) => post("/api/fleet/goal/control", { action }),
   repoContext: () => getData("/api/repo/context"), // P-REPO.1 (ADR-0406)
   repoChoices: () => getData("/api/repo/choices"),
   repoGithub: (refresh) => getData(`/api/repo/github${refresh ? "?refresh=1" : ""}`),

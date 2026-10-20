@@ -581,6 +581,11 @@ demo-P-FLEET.L4: ## P-FLEET.L4 (ADR-0274): lanes that SURVIVE - no lane turn clo
 demo-P-FLEET.L5: ## P-FLEET.L5 (ADR-0274): histories + the reviewable TIMELINE - every lane spawn/recovery NAMES its omp session in a durable JSONL ledger (~/.omp/lucid-fleet-lanes.jsonl), so the .jsonl histories omp already persists become attributable; one timeline surface merges master chats + lane sessions + kg-ingest throwaways across EVERY workspace, newest first, lanes labeled with their names (latest ledger record wins); a stopped lane's transcript still opens (review is an index over existing files, never a second recording); torn ledger lines skip and a missing ledger degrades labels, never the surface
 	$(BUN) run harness/scripts/demo_pfleetl5.ts
 
+.PHONY: demo-P-AOS.1
+demo-P-AOS.1: ## P-AOS.1 (ADR-0452): one standing fleet goal (AOS-1) with a mandatory budget, a heartbeat any observer reads as alive / late / dead, stalled spokes reaped, spend since the start blocking at the cap, human-verified criteria achieving the goal, durable across restarts.
+	$(BUN) run harness/scripts/demo_paos1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/aos.test.ts desktop/fleet_goal.test.ts
+
 .PHONY: demo-P-STEPTEXT.1
 demo-P-STEPTEXT.1: ## P-STEPTEXT.1: narration resumed after a tool call starts a new paragraph (master + lanes, stream and saved answer), the answer's tool chips interleave between the steps again, and a subagent row names a looping model ("model output degenerated") instead of painting "!!!!", with a scout's structured yield shown as its final step.
 	$(BUN) run harness/scripts/demo_psteptext1.ts
