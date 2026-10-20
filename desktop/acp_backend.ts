@@ -11,6 +11,7 @@
 // (DECISIONS ADR-0006).
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { StepTextJoiner } from "./step_text.ts"; // P-STEPTEXT.1: a paragraph break between a turn's tool steps
 import { designDocPath, designInvariantsBlock, isDesignDocPath } from "./design_doc.ts"; // P-DESIGN.1/.2 (ADR-0154): honor DESIGN.md + detect writes
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -625,6 +626,8 @@ class Backend {
   // keyed by toolCallId - snapshot rides on every { type:"slow" } notice so the user can SEE what a
   // long-quiet turn is still waiting on. Cleared at turn boundaries + restart.
   private openCalls = new Map<string, PendingCall>();
+  /** The current turn's assistant text across its tool steps; reset at each turn start. */
+  private stepText = new StepTextJoiner();
   private static readonly PERM_MS = 300_000; // 5 min to decide, then fail-closed (deny)
   // -- P-PROGRESS.1: progress and the estimate; P-WAIT.1: the file-scoped write claims ---------------------
   /** Turn and tool lengths behind the estimate. dev.ts hands in the instance shared with the fleet lanes
@@ -1042,7 +1045,7 @@ class Backend {
             });
           }
           switch (u?.sessionUpdate) {
-            case "agent_message_chunk": if (u.content?.type === "text") this.emit({ type: "token", text: u.content.text }); break;
+            case "agent_message_chunk": if (u.content?.type === "text") this.emit({ type: "token", text: this.stepText.text(String(u.content.text ?? "")) }); break;
             // P-ACP.1 (ADR-0027): the model's reasoning stream. omp emits these BEFORE the answer when
             // thinking is on; without this case they were dropped, so the whole reasoning phase showed
             // nothing and the answer then arrived in a burst (the "big dump"). Surface them so the UI
@@ -1050,6 +1053,7 @@ class Backend {
             // the personalization distiller learns from, and never persisted.
             case "agent_thought_chunk": if (u.content?.type === "text") this.emit({ type: "thinking", text: u.content.text }); break;
             case "tool_call": {
+              this.stepText.tool(); // every call, job-coordination ones included: text after it is a new message
               trackToolCall(this.openCalls, u, Date.now()); // P-STALL.2: this call is now awaited
               // P-REPO.1 (ADR-0406): which repo this session works on. Keyed by the notification's own
               // session id so a session/load replay (which streams before this.sessionId is set) counts too.
@@ -1867,6 +1871,7 @@ class Backend {
     this.turnSink = sink; // P-RECOVER.1: what clearTurnRecovery may release
     this.streamArm = arm; // P-HEALTH.3: a tool-call streaming beat is activity, exactly like an ACP update
     this.turnStartedAtMs = Date.now(); // P-INTERJECT.1: the /api/processes master-turn start stamp
+    this.stepText.reset();
     this.openCalls.clear();
     this.aiLoc.clear(); // P-STALL.2: fresh turn, fresh pending-call set
     this.pulse.reset(); // P-LIVENESS.1: a new turn never inherits the last one's evidence

@@ -44,6 +44,7 @@ import type { ProcRow } from "./leftover_reaper.ts";
 import { WriteClaims, type WaitView } from "./write_claims.ts"; // P-WAIT.1: file-scoped write waits
 import { toolInput, toolIntent } from "./tool_input.ts"; // P-PROGRESS.1: one extractor for lanes and the master
 import { toolCode } from "./tool_code.ts";
+import { StepTextJoiner } from "./step_text.ts"; // P-STEPTEXT.1: a paragraph break between a turn's tool steps
 import { laneHoldsSession, type OwnerLane } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
 import type { RepoContext } from "./repo_identity.ts";
 // P-REMOTE.16 (ADR-0431): the rich turn shapes a remote guest replays, and the desktop's one diffstat
@@ -375,6 +376,8 @@ interface Lane {
   transcript: LaneTurnRecord[];
   /** Assistant text accumulating during the CURRENT turn; folded into `transcript` when it settles. */
   liveText: string;
+  /** The current turn's text across its tool steps (reset with liveText). */
+  stepText: StepTextJoiner;
   /** Compact tool titles for the current turn, folded with the assistant text. */
   liveTools: string[];
   /** P-REMOTE.16: the current turn's thinking, fed from the same chunk the card renders; folded as `thinking`. */
@@ -502,6 +505,7 @@ export class FleetLaneManager {
       promoted: false,
       transcript: [],
       liveText: "",
+      stepText: new StepTextJoiner(),
       liveTools: [],
       liveThinking: "",
       liveToolRecords: [],
@@ -568,6 +572,7 @@ export class FleetLaneManager {
     lane.lastPrompt = text;
     lane.lastImages = images;
     lane.liveText = "";
+    lane.stepText.reset();
     lane.liveTools = [];
     lane.liveThinking = "";
     lane.liveToolRecords = [];
@@ -1277,6 +1282,7 @@ export class FleetLaneManager {
       this.#record(lane, rec);
     }
     lane.liveText = "";
+    lane.stepText.reset();
     lane.liveTools = [];
     lane.liveThinking = "";
     lane.liveToolRecords = [];
@@ -1294,7 +1300,7 @@ export class FleetLaneManager {
       switch (u?.sessionUpdate) {
         case "agent_message_chunk":
           if (u.content?.type === "text") {
-            const text = String(u.content.text);
+            const text = lane.stepText.text(String(u.content.text));
             lane.liveText += text; // recovery memory rides the same stream the card renders
             this.#emit(lane, { type: "token", text });
           }
@@ -1330,6 +1336,7 @@ export class FleetLaneManager {
             this.#emit(lane, { type: "tool", id, name, detail: title, status: u.status === "completed" ? "done" : "failed", elapsedMs });
             break;
           }
+          lane.stepText.tool(); // text after a new call is a new model message
           if (title && lane.liveTools.length < 40) lane.liveTools.push(title.slice(0, 160));
           trackToolCall(lane.openCalls, u, lane.lastActivityAt); // P-HEALTH.1: this call is now awaited
           this.#deps.repo?.observe(typeof params?.sessionId === "string" ? params.sessionId : lane.sessionId, u, lane.cwd); // P-REPO.1
