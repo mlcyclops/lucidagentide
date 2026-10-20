@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## PR #521 CodeQL: session scans read through one file handle
+- **shipped:** CodeQL flagged 2 high `js/file-system-race` alerts on the PR at `desktop/sessions.ts` (listSessions and P-TL.4's async scanAllSessions stat'ed a session path, then read it by path). Both now open the file once and take size/mtime from that handle (`fstatSync` / `FileHandle.stat`) before reading through it; `indexedEntry` holds the shared mtime+size index rule. Measured on this machine's 12,959-session corpus: cold scan 7.8 s -> 8.0 s, warm 1.33 s -> 1.43 s, sidebar warm 1.29 s -> 1.52 s (the price of an open per file instead of a stat).
+- **stubbed:** nothing.
+- **next:** if the sidebar's extra ~0.2 s matters, move `listSessions` onto the async single-flight scan the Timeline uses.
+
 ## Preview zoom moves in whole 10% steps
 - **shipped:** the Preview's - / + buttons multiplied by 1.1 and the wheel scaled continuously, so the readout landed on values like 214%. New pure `desktop/renderer/preview_zoom.ts`: `stepPreviewZoom` moves one whole 10-point step on the grid (an off-grid zoom snaps the way you asked: 214% -> 220% / 210%; float noise rounded; clamped 25%-400%, and up from 25% is 30%), and `PreviewWheelSteps` makes one mouse notch one step at any display scaling (a notch reports 80 px at 125%, which a 100 px accumulator missed in the first live run) while small trackpad deltas add up to 100 px per step. Live in a browser on a fresh engine (:5354): reset 100%, + 110%, + 120%, - 110%, Ctrl+wheel up 120%, 130%, down 120%; the existing `verifyPreviewPan` drive passed all 14 of its checks (ten + clicks now land on exactly 200%). 4 new tests.
 - **stubbed:** nothing. The app-wide text zoom (header - / +) already steps by 0.1 and is unchanged.

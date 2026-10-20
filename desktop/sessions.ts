@@ -8,8 +8,8 @@
 // and derive a title (first user message), model, turn count, and last-modified.
 // New GUI chats write new files here, so they appear on the next poll.
 
-import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { open, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
@@ -148,6 +148,16 @@ export function canonicalModelId(model: string, provider?: unknown): string {
 }
 
 export function __sessionIndexStats(): { parses: number; entries: number } { return { parses: indexParses, entries: sessionIndex.size }; }
+/** The index entry for `p` given its handle's stat: the cached one when size and mtime still match,
+ *  else a fresh parse of `text` (a string, or a thunk so an index hit never reads the file). */
+function indexedEntry(p: string, f: string, st: { mtimeMs: number; size: number }, text: string | (() => string)): IndexEntry {
+  const hit = sessionIndex.get(p);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit;
+  const e: IndexEntry = { mtimeMs: st.mtimeMs, size: st.size, ...parseSessionText(typeof text === "string" ? text : text(), f) };
+  sessionIndex.set(p, e);
+  return e;
+}
+
 export function __resetSessionIndex(): void { sessionIndex.clear(); allScans.clear(); indexParses = 0; }
 
 export function listSessions(cwd: string = currentWorkspace(), root: string = join(homedir(), ".omp", "agent", "sessions")): SessionList {
@@ -163,15 +173,13 @@ export function listSessions(cwd: string = currentWorkspace(), root: string = jo
         if (!f.endsWith(".jsonl")) continue;
         const p = join(dir, f);
         try {
-          const st = statSync(p);
+          // One handle for the size/mtime check and the read: nothing can swap the file in between.
+          const fd = openSync(p, "r");
+          let e: IndexEntry;
+          try { e = indexedEntry(p, f, fstatSync(fd), () => readFileSync(fd, "utf8")); } finally { closeSync(fd); }
           seen.add(p);
-          let e = sessionIndex.get(p);
-          if (!e || e.mtimeMs !== st.mtimeMs || e.size !== st.size) {
-            e = { mtimeMs: st.mtimeMs, size: st.size, ...parseSessionText(readFileSync(p, "utf8"), f) };
-            sessionIndex.set(p, e);
-          }
           if (!e.meta || norm(e.scwd) !== want) continue;
-          all.push({ ...e.meta, updatedAt: st.mtimeMs });
+          all.push({ ...e.meta, updatedAt: e.mtimeMs });
         } catch { /* skip unreadable file */ }
       }
     } catch { /* skip dir */ }
@@ -233,15 +241,17 @@ async function scanAllSessions(root: string): Promise<SessionRow[]> {
       await Promise.all(files.slice(i, i + ALL_SCAN_BATCH).map(async (f) => {
         const p = join(dir, f);
         try {
-          const st = await stat(p);
+          // One handle for the size/mtime check and the read, as in listSessions.
+          const h = await open(p, "r");
+          let e: IndexEntry;
+          try {
+            const st = await h.stat();
+            const hit = sessionIndex.get(p);
+            e = hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size ? hit : indexedEntry(p, f, st, await h.readFile("utf8"));
+          } finally { await h.close(); }
           seen.add(p);
-          let e = sessionIndex.get(p);
-          if (!e || e.mtimeMs !== st.mtimeMs || e.size !== st.size) {
-            e = { mtimeMs: st.mtimeMs, size: st.size, ...parseSessionText(await readFile(p, "utf8"), f) };
-            sessionIndex.set(p, e);
-          }
           if (!e.meta) return; // empty/probe session
-          all.push({ ...e.meta, updatedAt: st.mtimeMs, cwd: e.scwd });
+          all.push({ ...e.meta, updatedAt: e.mtimeMs, cwd: e.scwd });
         } catch { /* skip unreadable file */ }
       }));
     }
