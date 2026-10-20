@@ -13,7 +13,21 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-10-17, v2.4.1 stable, v2.5.0-beta.1 prerelease)
+## Current state (2026-10-20, v2.4.1 stable, v2.5.0-beta.2 prerelease)
+
+**v2.5.0-beta.2** (2026-10-20, branch `release/v2.5.0-beta.2`) is the next
+GitHub prerelease: beta.1 plus #521. It brings the fleet goal (P-AOS.1,
+ADR-0452): LUCID's own binding of AOS-1, one standing goal with success
+criteria and a mandatory spend + time budget, a 10 s engine heartbeat the
+orbit reads as alive / late / dead, and stalled spokes reaped; and tasks
+under it (P-AOS.2, ADR-0453): an output contract and acceptance checks per
+task, one task per idle spoke in dependency order, command checks verified in
+a separate fail-closed turn, human review in the orbit, retries with the
+reason up to the limit. Also: the Timeline dock no longer opens blank on a
+large corpus (P-TL.4), the first turn no longer reads "Reconnected", a turn's
+tool steps read as separate paragraphs (P-STEPTEXT.1), the Preview zoom moves
+in whole 10% steps, and session files are read through one handle (CodeQL).
+Same beta rules as beta.1. Gate: 527 files / 7128 tests.
 
 **v2.5.0-beta.1** (2026-10-17, branch `release/v2.5.0-beta.1`) is a GitHub
 prerelease on top of 2.4.1 carrying the `lucid hub` terminal train integrated

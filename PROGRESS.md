@@ -4,6 +4,11 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 -----
 
+## Release cut: v2.5.0-beta.2 (prerelease): the AOS-1 fleet goal and verified tasks
+- **shipped (2026-10-20, v2.5.0-beta.2):** v2.5.0-beta.1 plus #521 (P-TL.4 Timeline + first-turn fixes, P-STEPTEXT.1 step paragraphs, P-AOS.1 fleet goal + heartbeat ADR-0452, P-AOS.2 verified tasks ADR-0453, Preview zoom in 10% steps, the sessions.ts CodeQL fix). Version bumped in desktop/package.json, desktop/version.ts, the bug report template, hub_screenshots.ts and HANDOFF.md; README banner, "What's new in v2.5.0-beta.2", the summary paragraph and the batch row. Cut as a beta_release dispatch (ADR-0395): tag v2.5.0-beta.2 on master, prerelease, never latest, cask stays on 2.4.1.
+- **stubbed:** carried from beta.1: the P-TUI hub demos still do not run on a Windows host (managed_config's `reg query` stderr line). From #521: task command-check verdicts are spoke-reported, not engine-observed; no AOS event log yet.
+- **next:** install the beta on Windows and drive a goal with two spokes and dependent tasks end to end; then engine-observed command checks, and the 2.5.0 stable date.
+
 ## PR #521 CodeQL: session scans read through one file handle
 - **shipped:** CodeQL flagged 2 high `js/file-system-race` alerts on the PR at `desktop/sessions.ts` (listSessions and P-TL.4's async scanAllSessions stat'ed a session path, then read it by path). Both now open the file once and take size/mtime from that handle (`fstatSync` / `FileHandle.stat`) before reading through it; `indexedEntry` holds the shared mtime+size index rule. Measured on this machine's 12,959-session corpus: cold scan 7.8 s -> 8.0 s, warm 1.33 s -> 1.43 s, sidebar warm 1.29 s -> 1.52 s (the price of an open per file instead of a stat).
 - **stubbed:** nothing.

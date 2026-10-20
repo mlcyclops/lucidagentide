@@ -664,4 +664,17 @@
 //            Windows the hub runs but its demos do not yet. PRERELEASE: a GitHub prerelease, never marked
 //            Latest; the Homebrew cask and stable installs stay on 2.4.1, a beta install updates to the next
 //            beta. Scoped gate 522 files / 7060 tests.
-export const APP_VERSION = "2.5.0-beta.1";
+// v2.5.0-beta.2 = 2.5.0-beta.1 plus #521. P-AOS.1 (ADR-0452): one standing FLEET GOAL (AOS-1, MIT,
+//            github.com/tomtomsatnav/agent-orchestration-standard) with success criteria and a mandatory
+//            spend + time budget, a 10 s engine HEARTBEAT any observer reads as alive / late / dead, stalled
+//            spokes reaped; on the orbit a Goal button, a hub progress ring whose pings follow liveness, and
+//            a goal panel. P-AOS.2 (ADR-0453): TASKS under the goal, each with an output contract and
+//            acceptance checks, dispatched one per idle spoke in dependency order, command checks verified
+//            in a separate fail-closed turn, human review in the orbit, retries with the reason up to the
+//            limit. P-TL.4: the Timeline dock no longer opens blank on a large corpus (the session scan is
+//            async and single-flight), and the first turn no longer reads "Reconnected". P-STEPTEXT.1: a
+//            turn's tool steps read as separate paragraphs again; a subagent whose model loops is named,
+//            not quoted. The Preview zoom moves in whole 10% steps. Session files are read through one
+//            handle (CodeQL js/file-system-race). PRERELEASE: never marked Latest; the Homebrew cask and
+//            stable installs stay on 2.4.1, a beta install updates to the next beta. Gate 527 files / 7128 tests.
+export const APP_VERSION = "2.5.0-beta.2";
