@@ -28,6 +28,7 @@ import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
 import { GUIDE_FILES } from "../guides_manifest.ts"; // P-GUIDE.2: provider id -> bundled advisor guide
 import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from "../preview_resolve.ts";
+import { PREVIEW_ZOOM_MAX, PREVIEW_ZOOM_MIN, PreviewWheelSteps, stepPreviewZoom } from "./preview_zoom.ts"; // whole-10% Preview zoom steps
 import { PREVIEW_KIND_ICON, isAutoPreviewPath, laneTabId, previewKindLabel, previewPathKind, removeLaneTab, upsertLaneTab, type PreviewTab } from "./preview_tabs.ts";
 import { roleIcon } from "./role_icons.ts";
 import { budgetWindowState, providerBudgetRows, providerHasApiKey, providerKeywords } from "./budget_gate.ts";
@@ -8916,7 +8917,7 @@ function wirePreviewPan(): void {
     $("#prevPan")?.focus({ preventScroll: true });
   }, true);
 }
-const PREVIEW_ZOOM_MIN = 0.25, PREVIEW_ZOOM_MAX = 4;
+const previewWheelSteps = new PreviewWheelSteps();
 const previewZoom = (): number => prevZoomByLane.get(prevLane) ?? 1;
 function syncPreviewZoomControls(): void {
   const pan = $("#prevPan") as HTMLButtonElement | null;
@@ -8947,13 +8948,16 @@ function setPreviewZoom(value: number): void {
 function wheelPreviewZoom(delta: unknown, mode: unknown): void {
   if (typeof delta !== "number" || !Number.isFinite(delta) || !delta || (mode !== 0 && mode !== 1 && mode !== 2)) return;
   const pixels = Math.max(-120, Math.min(120, delta * (mode === 1 ? 16 : mode === 2 ? 120 : 1)));
-  setPreviewZoom(previewZoom() * Math.exp(-pixels * 0.002));
+  // Whole 10% steps: wheel travel accumulates, and each notch's worth moves one step on the grid.
+  let zoom = previewZoom();
+  for (let n = previewWheelSteps.feed(pixels); n !== 0; n -= Math.sign(n)) zoom = stepPreviewZoom(zoom, n > 0 ? 1 : -1);
+  if (zoom !== previewZoom()) setPreviewZoom(zoom);
 }
 function wirePreviewZoom(): void {
   wirePreviewPan();
-  $("#prevZoomOut")?.addEventListener("click", () => setPreviewZoom(previewZoom() / 1.1));
+  $("#prevZoomOut")?.addEventListener("click", () => setPreviewZoom(stepPreviewZoom(previewZoom(), -1)));
   $("#prevZoomReset")?.addEventListener("click", () => setPreviewZoom(1));
-  $("#prevZoomIn")?.addEventListener("click", () => setPreviewZoom(previewZoom() * 1.1));
+  $("#prevZoomIn")?.addEventListener("click", () => setPreviewZoom(stepPreviewZoom(previewZoom(), 1)));
   $("#prevWheelZoom")?.addEventListener("click", () => {
     if (prevWheelZoomByLane.has(prevLane)) prevWheelZoomByLane.delete(prevLane); else prevWheelZoomByLane.add(prevLane);
     syncPreviewZoomControls(); sendPreviewZoomMode();
