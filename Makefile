@@ -581,6 +581,20 @@ demo-P-FLEET.L4: ## P-FLEET.L4 (ADR-0274): lanes that SURVIVE - no lane turn clo
 demo-P-FLEET.L5: ## P-FLEET.L5 (ADR-0274): histories + the reviewable TIMELINE - every lane spawn/recovery NAMES its omp session in a durable JSONL ledger (~/.omp/lucid-fleet-lanes.jsonl), so the .jsonl histories omp already persists become attributable; one timeline surface merges master chats + lane sessions + kg-ingest throwaways across EVERY workspace, newest first, lanes labeled with their names (latest ledger record wins); a stopped lane's transcript still opens (review is an index over existing files, never a second recording); torn ledger lines skip and a missing ledger degrades labels, never the surface
 	$(BUN) run harness/scripts/demo_pfleetl5.ts
 
+.PHONY: demo-P-AOS.1
+demo-P-AOS.1: ## P-AOS.1 (ADR-0452): one standing fleet goal (AOS-1) with a mandatory budget, a heartbeat any observer reads as alive / late / dead, stalled spokes reaped, spend since the start blocking at the cap, human-verified criteria achieving the goal, durable across restarts.
+	$(BUN) run harness/scripts/demo_paos1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/aos.test.ts desktop/fleet_goal.test.ts
+
+.PHONY: demo-P-AOS.2
+demo-P-AOS.2: ## P-AOS.2 (ADR-0453): tasks under the fleet goal - a deliverable and a check required, the heartbeat dispatches one task per spoke in dependency order, command checks verified in a separate fail-closed turn, retries with the reason up to the limit, human review completes a task, restart never strands one mid-turn.
+	$(BUN) run harness/scripts/demo_paos2.ts
+	$(BUN) test $(TEST_IGNORES) desktop/aos.test.ts desktop/fleet_goal.test.ts
+
+.PHONY: demo-P-STEPTEXT.1
+demo-P-STEPTEXT.1: ## P-STEPTEXT.1: narration resumed after a tool call starts a new paragraph (master + lanes, stream and saved answer), the answer's tool chips interleave between the steps again, and a subagent row names a looping model ("model output degenerated") instead of painting "!!!!", with a scout's structured yield shown as its final step.
+	$(BUN) run harness/scripts/demo_psteptext1.ts
+
 .PHONY: demo-P-FLEET.L7
 demo-P-FLEET.L7: ## P-FLEET.L7: lane tool-call FIDELITY + a transcript that survives its own stream - a code-less call (bash/read/search) now carries the bounded, code-stripped rawInput so "the command used" is drillable (before L7 the chevron had literally nothing to open), an edit still carries `code` and never a duplicate `input`, hasBody and laneChipBody agree BY CONSTRUCTION so a dead chevron is impossible, a lane chip DELEGATES kind/detail/diffstat to the same answer_chips.toolChip the master composer uses (the two surfaces cannot disagree), ids are monotone and never reused (the precondition for patching DOM instead of the innerHTML-per-token rebuild that destroyed mid-stream text selection and slammed every open tool call shut), an oversized command or diff is clipped AND SAYS SO, and the lane forwards omp's MEASURED context/window/cost while inventing no output figure
 	$(BUN) run harness/scripts/demo_pfleetl7.ts

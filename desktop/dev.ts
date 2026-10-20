@@ -133,7 +133,8 @@ import { browserProcesses, setBrowserProcessSource, type ProcessView } from "./p
 import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, failAllBrowserCommands, getBrowserStatus, lastBrowserActivityAt, latestBrowserShot, setBrowserStatus, setLatestBrowserShot, waitBrowserResult } from "./browser_control.ts"; // P-BROWSER.1 (wave 2): agent-browser mailbox + status
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: shared combo parse, so a typo fails fast at the route
 import { isBrowserAction, isBrowserPageShape } from "./browser_snapshot.ts"; // P-JEV.4 (ADR-0379): the policy's act/snapshot shapes
-import { appendLaneLedger, listTimeline, readLaneLedger } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline; P-SCHED.1 reads it to recover a job's lane
+import { FleetGoal } from "./fleet_goal.ts"; // P-AOS.1 (ADR-0452): the standing fleet goal + the AOS-1 heartbeat
+import { appendLaneLedger, isTimelineKind, listTimeline, readLaneLedger } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline; P-SCHED.1 reads it to recover a job's lane
 import { JobScheduler, type LedgerHit } from "./job_scheduler.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs
 import { createJob, loadJobs, normalizeJobSpec, saveJobs, updateJob, nextFireAt } from "./scheduled_jobs.ts"; // P-SCHED.1
 import { firesBetween } from "./cron.ts"; // P-SCHED.1
@@ -1740,6 +1741,22 @@ const fleet: FleetLaneManager = new FleetLaneManager({
 // P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
 // /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
 fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
+// P-AOS.1 (ADR-0452): the AOS-1 orchestrator state. Its heartbeat is this engine's own pulse: an orbit that
+// sees it age past 1.5x / 3x the interval is looking at a frozen or dead engine.
+const fleetGoal = new FleetGoal({
+  lanes: () => fleet.goalLanes(),
+  // P-AOS.2 (ADR-0453): a dispatched task turn rides the fleet's own prompt path (gate, approvals, write
+  // claims and the card's live stream all apply), and resolves with the turn's text or its error.
+  dispatch: async (laneId, text) => {
+    const turn = { text: "", error: "" };
+    await fleet.prompt(laneId, text, (e) => {
+      if (e.type === "token") turn.text += e.text;
+      else if (e.type === "error") turn.error = e.message;
+    });
+    return turn.error ? { ok: false, error: turn.error } : { ok: true, text: turn.text };
+  },
+});
+fleetGoal.start();
 // P-SCHED.1 (ADR-0443): scheduled lane jobs. The scheduler sees the fleet only through these six edges:
 // the live lane list, "is it busy", the manager's own prompt path, Recover (the orbit's path: name,
 // folder, model and the recorded session from the ledger), the per-lane auto-mode switch, and cancel.
@@ -5829,11 +5846,15 @@ return Bun.serve({
       // newest first. Reading a point reuses the same transcript reader the sidebar resume uses; the
       // injected user-turn preamble is already stripped for display there (issue #52).
       // `?selfTest=1` opts the repo's own echo/demo throwaways back IN (held back by default).
+      // `?kind=lane|chat|ingest` narrows to one kind before paging (the orbit reads lanes only).
       if (p === "/api/timeline") {
         const limit = Number(url.searchParams.get("limit") ?? 100);
         const offset = Number(url.searchParams.get("offset") ?? 0);
         const includeSelfTest = url.searchParams.get("selfTest") === "1";
-        return json({ ok: true, data: listTimeline({ limit: Number.isFinite(limit) ? limit : 100, offset: Number.isFinite(offset) ? offset : 0, includeSelfTest }) });
+        const kindParam = url.searchParams.get("kind");
+        const kind = kindParam === null ? undefined : isTimelineKind(kindParam) ? kindParam : null;
+        if (kind === null) return Response.json({ ok: false, error: "kind must be chat, lane, or ingest" }, { status: 400 });
+        return json({ ok: true, data: await listTimeline({ limit: Number.isFinite(limit) ? limit : 100, offset: Number.isFinite(offset) ? offset : 0, includeSelfTest, ...(kind ? { kind } : {}) }) });
       }
       if (p === "/api/timeline/session" && req.method === "POST") {
         const b = await readBody<{ id?: unknown; limit?: unknown }>(req);
@@ -5911,6 +5932,29 @@ return Bun.serve({
         return json({ ok: true, data: { targets: [...live, ...remembered] } });
       }
       if (p === "/api/fleet/status") return json({ ok: true, data: await fleet.status() });
+      // P-AOS.1 (ADR-0452): the standing fleet goal. UI token only (never AGENT_ROUTES): criteria are verified
+      // and the goal is paused, resumed or cancelled by the human, per AOS-1 section 7.
+      if (p === "/api/fleet/goal" && req.method === "GET") return json({ ok: true, data: fleetGoal.snapshot() });
+      if (p === "/api/fleet/goal" && req.method === "POST") return json({ ok: true, data: fleetGoal.set(await readBody<unknown>(req)) });
+      if (p === "/api/fleet/goal/criterion" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; met?: unknown }>(req);
+        return json({ ok: true, data: fleetGoal.criterion(b.id, b.met) });
+      }
+      if (p === "/api/fleet/goal/control" && req.method === "POST") {
+        const b = await readBody<{ action?: unknown }>(req);
+        return json({ ok: true, data: fleetGoal.control(b.action) });
+      }
+      // P-AOS.2 (ADR-0453): tasks under the goal. UI token only, like the goal: a person writes the task,
+      // ticks its human checks, and cancels it.
+      if (p === "/api/fleet/goal/task" && req.method === "POST") return json({ ok: true, data: fleetGoal.addTask(await readBody<unknown>(req)) });
+      if (p === "/api/fleet/goal/task/check" && req.method === "POST") {
+        const b = await readBody<{ taskId?: unknown; checkId?: unknown; passed?: unknown }>(req);
+        return json({ ok: true, data: fleetGoal.taskCheck(b.taskId, b.checkId, b.passed) });
+      }
+      if (p === "/api/fleet/goal/task/cancel" && req.method === "POST") {
+        const b = await readBody<{ taskId?: unknown }>(req);
+        return json({ ok: true, data: fleetGoal.cancelTask(b.taskId) });
+      }
       // P-TUI.2: open `lucid hub` in a new terminal window, attached to THIS engine. UI token only (never in
       // AGENT_ROUTES): one fixed command, no argument from the request, never inside the agent sandbox.
       if (p === "/api/hub/open" && req.method === "POST") return json({ ok: true, data: await openHubWindow(resolvedRepo().root, process.env.LUCID_RESOURCES ?? "") });

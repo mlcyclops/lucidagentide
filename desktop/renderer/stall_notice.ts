@@ -8,12 +8,36 @@
 // work (subagent fan-outs routinely run longer than any fixed clock), so the copy no longer names a
 // cap: the turn waits as long as the work takes, Stop is the way out, and each notice now NAMES the
 // open tool calls / spawned subagent tasks the turn is waiting on. Pure so the wording (and the
-// minute math) is unit-testable.
+// minute math) is unit-testable. The turn-snapshot phase lives here too: it shares the pending-work
+// wording and decides whether an opening snapshot may say "Reconnected" (only a re-joined stream).
+
+import type { TurnSnapshot } from "./chat_events.ts";
 
 /** One pending call as carried on the { type:"slow" } event (chat_events.ts). */
 export interface SlowPending {
   label: string;
   elapsedMs: number;
+}
+
+/** The HUD phase while a fresh send waits for the agent session to exist (the omp child spawning and
+ *  session/new on the first send after launch, a new session, or an agent restart). The engine's first
+ *  `progress` tick, which starts only once the prompt is handed to the model, replaces it. */
+export const STARTING_AGENT_PHASE = "Starting the agent\u2026";
+
+/** The HUD phase for a { type:"turn-snapshot" }. Every chat stream OPENS with one (LiveTurn.attach), so a
+ *  snapshot alone is not a reconnect: only a stream that re-joined the turn (adopted on open, or
+ *  re-attached after a drop) may say "Reconnected". A fresh send keeps its own phase, or names the agent
+ *  start while the turn has no session yet. */
+export function snapshotPhaseLabel(
+  snapshot: Pick<TurnSnapshot, "running" | "sessionId" | "startedAt" | "pending">,
+  rejoined: boolean,
+  current: string,
+  now = Date.now(),
+): string {
+  if (snapshot.pending.length) return slowPhaseLabel(now - snapshot.startedAt, snapshot.pending);
+  if (!snapshot.running) return "Finishing reply";
+  if (rejoined) return "Reconnected";
+  return snapshot.sessionId ? current : STARTING_AGENT_PHASE;
 }
 
 /** The HUD phase line while the provider is silent. Repeats/updates each notice; when the turn is
