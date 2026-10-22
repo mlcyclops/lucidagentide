@@ -24,6 +24,7 @@ import { join } from "node:path";
 import { connectHub, startHubControl } from "../../harness/launcher/hub_control.ts";
 import { loadSpaces, saveSpaces, spacesPath } from "../../harness/launcher/hub_spaces.ts";
 import { DECKS, HubComponent, findEngine, railRows, type RailRow } from "../../harness/launcher/hub_tui.ts";
+import { isolatedHome, POSIX_MODES, POSIX_SIGNALS } from "./demo_fake_omp.ts"; // runs on Windows too
 
 function assert(cond: unknown, msg: string): void {
   if (!cond) { console.error("  \u2717 " + msg); process.exit(1); }
@@ -38,7 +39,7 @@ const dataRoot = mkdtempSync(join(tmpdir(), "lucid-tui5-"));
 const home = mkdtempSync(join(tmpdir(), "lucid-tui5-home-"));
 const repo = join(import.meta.dir, "..", "..");
 const lucid = join(repo, "harness", "launcher", "lucid_acp.ts");
-const env = { ...process.env, LUCID_DATA_ROOT: dataRoot, HOME: home };
+const env = { ...process.env, LUCID_DATA_ROOT: dataRoot, ...isolatedHome(home) };
 const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("") });
 const enginePort = probe.port!;
 probe.stop(true);
@@ -126,7 +127,7 @@ try {
   const lp = await hub<PaneRow[]>("list-panes");
   assert(lp.out.map((p) => `${p.tab}/${p.id}`).join() === "s1:t2/s1:p4", "list-panes = the current TAB's panes");
   const saved = JSON.parse(readFileSync(layoutFile, "utf8")) as { v: number };
-  assert(saved.v === 2 && (statSync(layoutFile).mode & 0o777) === 0o600, "hub-spaces.json is now v2, still 0600");
+  assert(saved.v === 2 && (!POSIX_MODES || (statSync(layoutFile).mode & 0o777) === 0o600), "hub-spaces.json is now v2, still 0600");
 
   console.log("\n[4] SIGTERM + relaunch: the tabs come back");
   const before = (await hub<TabRow[]>("tab", "list")).out;
@@ -138,7 +139,12 @@ try {
   assert(again.out.id === "s1:t4", "the tab counter survived the restart (s1:t3 is never re-minted)");
   await hub("kill-window", "-t", "s1:t4");
   await stopHub();
-  assert(!existsSync(join(dataRoot, `hub-discovery-${hubProc!.pid}.json`)), "the headless hub removed its discovery file");
+  if (POSIX_SIGNALS) assert(!existsSync(join(dataRoot, `hub-discovery-${hubProc!.pid}.json`)), "the headless hub removed its discovery file");
+  else {
+    // Windows: no SIGTERM delivery, so the file stays; it must be inert (the CLI refuses it at the handshake).
+    const gone = await hub("status");
+    assert(gone.code === 1, "no SIGTERM on Windows: the stale discovery file is inert, the CLI finds no hub");
+  }
 
   console.log("\n[5] the rail, in-process on the same layout file and a live control server");
   const spaces = loadSpaces(layoutFile, isDeck);
@@ -210,5 +216,10 @@ try {
   try { (hubProc as Bun.Subprocess | null)?.kill(); } catch { /* gone */ }
   try { engineProc.kill(); } catch { /* gone */ }
   await engineProc.exited;
-  for (const d of [dataRoot, home]) rmSync(d, { recursive: true, force: true });
+  await (hubProc as Bun.Subprocess | null)?.exited;
+  // Temp dirs only: a Windows file lock that outlives the processes (indexer, AV scan) must not turn a
+  // passing demo into a failure.
+  for (const d of [dataRoot, home]) {
+    try { rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch (e) { console.warn(`  (temp dir left behind: ${d}: ${e instanceof Error ? e.message : String(e)})`); }
+  }
 }

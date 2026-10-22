@@ -17,14 +17,14 @@
 //
 // Run with: bun run desktop/scripts/demo_p_tui_5e2.ts
 
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { agentPrioritiesPath, loadPriorities, HubAgentsPanel } from "../../harness/launcher/hub_agents_panel.ts";
 import { connectHub } from "../../harness/launcher/hub_control.ts";
 import { loadSpaces, Spaces, spacesPath, saveSpaces } from "../../harness/launcher/hub_spaces.ts";
 import { DECKS, HubComponent, findEngine, railRows } from "../../harness/launcher/hub_tui.ts";
+import { buildFakeOmp, isolatedHome, POSIX_MODES } from "./demo_fake_omp.ts"; // runs on Windows too
 
 function assert(cond: unknown, msg: string): void {
   if (!cond) throw new Error(`FAIL: ${msg}`);
@@ -45,14 +45,8 @@ probe.stop(true);
 
 // The engine's omp child is the house fake ACP agent (the demo-P-TUI.4 pattern): routes, lane
 // manager, gate and discovery stay real; only the model behind the lane is fake.
-const fakeOmp = join(dataRoot, "bin", "omp");
-mkdirSync(join(dataRoot, "bin"), { recursive: true });
-writeFileSync(fakeOmp, `#!/usr/bin/env bun
-if (process.argv.includes("--version")) { console.log("fake-omp 0.0.0"); process.exit(0); }
-await import(${JSON.stringify(pathToFileURL(join(repo, "harness", "mcp", "testing", "fake_acp_agent.ts")).href)});
-`, { mode: 0o755 });
-chmodSync(fakeOmp, 0o755);
-const env = { ...process.env, LUCID_DATA_ROOT: dataRoot, HOME: home, LUCID_OMP_BIN: fakeOmp };
+const fakeOmp = buildFakeOmp(dataRoot, repo); // runs on Windows too (demo_fake_omp.ts)
+const env = { ...process.env, LUCID_DATA_ROOT: dataRoot, ...isolatedHome(home), LUCID_OMP_BIN: fakeOmp };
 
 interface HubErr { error?: string; message?: string }
 
@@ -88,7 +82,7 @@ try {
   assert(byId.code === 0 && byId.out.name === "api", "the lane resolves by id too (the executor's own lane lookup)");
   const storePath = agentPrioritiesPath(dataRoot);
   const stored = JSON.parse(readFileSync(storePath, "utf8")) as { v: number; priorities: Record<string, number> };
-  assert(stored.v === 1 && stored.priorities.web === 7 && stored.priorities.api === 2 && (statSync(storePath).mode & 0o777) === 0o600,
+  assert(stored.v === 1 && stored.priorities.web === 7 && stored.priorities.api === 2 && (!POSIX_MODES || (statSync(storePath).mode & 0o777) === 0o600),
     "hub-agent-priorities.json: v1, keyed by lane name, 0600, beside hub-spaces.json");
   const nf = await hub("agent", "priority", "nope", "5");
   assert(nf.code === 1 && nf.err.error === "not_found", "a lane the engine does not know is not_found");
@@ -134,7 +128,8 @@ try {
   frame();
   view.handleInput(sgr(5, rowOf(sb.out.lane.id))); // select web's row (one click)
   view.handleInput("c");
-  await sleep(200);
+  // The cancel is a real round trip to the engine; give a loaded runner (Windows) up to 5 s, not 200 ms.
+  for (let i = 0; i < 50 && !frame().at(-1)!.includes("cancel"); i++) await sleep(100);
   assert(frame().at(-1)!.includes("cancel"), "c routes the lane's turn to /api/fleet/cancel (the refusal or the cancel surfaces verbatim)");
   view.dispose();
 
@@ -143,5 +138,5 @@ try {
   try { (hubProc as Bun.Subprocess | null)?.kill(); } catch { /* gone */ }
   try { engineProc.kill(); } catch { /* gone */ }
   await engineProc.exited;
-  for (const d of [dataRoot, home]) rmSync(d, { recursive: true, force: true });
+  for (const d of [dataRoot, home]) rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

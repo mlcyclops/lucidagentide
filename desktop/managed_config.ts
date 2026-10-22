@@ -387,7 +387,11 @@ export function parseRegistryPolicy(regOutput: string): ManagedConfig | null {
 function registryConfig(): { config: ManagedConfig | null; path: string | null } {
   if (process.platform !== "win32") return { config: null, path: null };
   try {
-    const out = execFileSync("reg", ["query", GPO_KEY, "/s"], { encoding: "utf8", windowsHide: true, timeout: 4000 });
+    // stderr is discarded: with no policy key (the normal unmanaged case) reg.exe prints "ERROR: The system
+    // was unable to find the specified registry key or value." and, inherited, that line leaked onto every
+    // caller's stderr (the `lucid` CLI's JSON error stream included). The catch below already maps the
+    // non-zero exit to "unmanaged".
+    const out = execFileSync("reg", ["query", GPO_KEY, "/s"], { encoding: "utf8", windowsHide: true, timeout: 4000, stdio: ["ignore", "pipe", "ignore"] });
     const cfg = parseRegistryPolicy(out);
     return cfg ? { config: cfg, path: GPO_KEY } : { config: null, path: null };
   } catch { return { config: null, path: null }; }

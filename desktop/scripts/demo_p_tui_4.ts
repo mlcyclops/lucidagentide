@@ -16,11 +16,11 @@
 //
 // Run with: bun run desktop/scripts/demo_p_tui_4.ts
 
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { HubComponent, findEngine } from "../../harness/launcher/hub_tui.ts";
+import { buildFakeOmp, isolatedHome } from "./demo_fake_omp.ts"; // runs on Windows too
 
 function assert(cond: unknown, msg: string): void {
   if (!cond) { console.error("  \u2717 " + msg); process.exit(1); }
@@ -55,17 +55,11 @@ probe.stop(true);
 // in this temp HOME has no provider, so the real omp child dies at boot and the spawn is refused.
 // LUCID_OMP_BIN steers the engine's same ompBin() resolution at an executable wrapper around
 // harness/mcp/testing/fake_acp_agent.ts; routes, lane manager, gate and discovery stay real.
-const fakeOmp = join(dataRoot, "bin", "omp");
-mkdirSync(join(dataRoot, "bin"), { recursive: true });
-writeFileSync(fakeOmp, `#!/usr/bin/env bun
-if (process.argv.includes("--version")) { console.log("fake-omp 0.0.0"); process.exit(0); }
-await import(${JSON.stringify(pathToFileURL(join(repo, "harness", "mcp", "testing", "fake_acp_agent.ts")).href)});
-`);
-chmodSync(fakeOmp, 0o755);
+const fakeOmp = buildFakeOmp(dataRoot, repo); // runs on Windows too (demo_fake_omp.ts)
 
 const engineProc = Bun.spawn(["bun", join(repo, "desktop", "dev.ts")], {
   cwd: repo,
-  env: { ...process.env, PORT: String(enginePort), LUCID_DATA_ROOT: dataRoot, HOME: home, LUCID_OMP_BIN: fakeOmp },
+  env: { ...process.env, PORT: String(enginePort), LUCID_DATA_ROOT: dataRoot, ...isolatedHome(home), LUCID_OMP_BIN: fakeOmp },
   stdout: "pipe", stderr: "pipe",
 });
 
@@ -164,6 +158,6 @@ try {
 } finally {
   engineProc.kill("SIGTERM");
   await engineProc.exited;
-  rmSync(dataRoot, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
+  rmSync(dataRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

@@ -23,6 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findEngine } from "../../harness/launcher/hub_tui.ts";
 import { connectHub, hubDiscoveryPath } from "../../harness/launcher/hub_control.ts";
+import { isolatedHome, POSIX_MODES, POSIX_SIGNALS } from "./demo_fake_omp.ts"; // runs on Windows too
 
 function assert(cond: unknown, msg: string): void {
   if (!cond) { console.error("  \u2717 " + msg); process.exit(1); }
@@ -38,7 +39,7 @@ const home = mkdtempSync(join(tmpdir(), "lucid-tui3-home-"));
 const work = mkdtempSync(join(tmpdir(), "lucid-tui3-work-"));
 const repo = join(import.meta.dir, "..", "..");
 const lucid = join(repo, "harness", "launcher", "lucid_acp.ts");
-const env = { ...process.env, LUCID_DATA_ROOT: dataRoot, HOME: home };
+const env = { ...process.env, LUCID_DATA_ROOT: dataRoot, ...isolatedHome(home) };
 const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("") });
 const enginePort = probe.port!;
 probe.stop(true);
@@ -91,7 +92,7 @@ try {
   await startHub();
   const files = readdirSync(dataRoot).filter((n) => /^hub-discovery-\d+\.json$/.test(n));
   const own = hubDiscoveryPath(dataRoot, hubProc!.pid);
-  assert(existsSync(own) && (statSync(own).mode & 0o777) === 0o600, `hub-discovery-${hubProc!.pid}.json is 0600 (beside ${files.length - 1} planted files)`);
+  assert(existsSync(own) && (!POSIX_MODES || (statSync(own).mode & 0o777) === 0o600), `hub-discovery-${hubProc!.pid}.json is 0600 (beside ${files.length - 1} planted files)`);
   const st = await hub<{ engine: { port: number }; spaces: SpaceRow[]; focused: string }>("status");
   assert(st.code === 0 && st.out.engine.port === enginePort, `status answers through the handshake, attached to engine :${enginePort}`);
   assert(st.out.spaces.length === 1 && st.out.focused === "s1:p1", "one space, one pane: s1:p1");
@@ -166,7 +167,7 @@ try {
   const before = (await hub<PaneRow[]>("list-panes", "-a")).out;
   hubProc!.kill("SIGTERM");
   await hubProc!.exited;
-  assert(!existsSync(own), "the discovery file is removed on exit");
+  assert(!POSIX_SIGNALS || !existsSync(own), POSIX_SIGNALS ? "the discovery file is removed on exit" : "no SIGTERM on Windows: the discovery file stays, and the next check proves it is inert");
   const gone = await hub("status");
   assert(gone.code === 1 && gone.err.error === "no_hub", "and the CLI says no_hub again");
   await startHub();
@@ -181,5 +182,10 @@ try {
   try { (hubProc as Bun.Subprocess | null)?.kill(); } catch { /* gone */ }
   try { engineProc.kill(); } catch { /* gone */ }
   await engineProc.exited;
-  for (const d of [dataRoot, home, work]) rmSync(d, { recursive: true, force: true });
+  await (hubProc as Bun.Subprocess | null)?.exited;
+  // Temp dirs only: a Windows file lock that outlives the processes (indexer, AV scan) must not turn a
+  // passing demo into a failure.
+  for (const d of [dataRoot, home, work]) {
+    try { rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch (e) { console.warn(`  (temp dir left behind: ${d}: ${e instanceof Error ? e.message : String(e)})`); }
+  }
 }

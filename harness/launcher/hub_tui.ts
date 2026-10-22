@@ -41,7 +41,7 @@
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { matchesKey, parseSgrMouse, ProcessTerminal, TUI, truncateToWidth, type Component } from "@oh-my-pi/pi-tui";
 import { join } from "node:path";
-import { discoveryDir, listDiscoveries, verifyDiscovery, type EngineDiscovery } from "../../desktop/engine_discovery.ts";
+import { discoveryDir, listDiscoveries, pruneStaleDiscovery, verifyDiscovery, type EngineDiscovery } from "../../desktop/engine_discovery.ts";
 import { agentPrioritiesPath, agentRailLine, HubAgentsPanel, laneLocations, statusGlyph, type AgentRow, type AgentsPanelRow, type GlyphHue } from "./hub_agents_panel.ts";
 import { createHubExecutor, startHubControl } from "./hub_control.ts";
 import { buildPaletteItems, filterPalette, type PaletteItem } from "./hub_palette.ts";
@@ -1767,8 +1767,9 @@ export class HubComponent implements Component {
 
 /** Find and PROVE an engine via the discovery seam; null when none verifies (fail-closed). */
 export async function findEngine(env: Readonly<Record<string, string | undefined>>): Promise<EngineDiscovery | null> {
-  for (const { discovery } of listDiscoveries(discoveryDir(env))) {
+  for (const { path, discovery } of listDiscoveries(discoveryDir(env))) {
     if (await verifyDiscovery(discovery)) return discovery;
+    pruneStaleDiscovery(path, discovery); // a killed engine's file goes once its process is gone
   }
   return null;
 }

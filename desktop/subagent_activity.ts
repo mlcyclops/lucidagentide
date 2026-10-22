@@ -76,11 +76,11 @@ function proseLabel(text: string): string {
   return clip(text, LABEL_CAP);
 }
 
-/** A tool call's one-line label: the model's own intent note (`_i`) when present, else the most
- *  path/command-shaped argument. */
+/** A tool call's one-line label: the model's own intent note when present (omp now sends it as `i`;
+ *  older transcripts carry `_i`), else the most path/command-shaped argument. */
 function toolLabel(args: Record<string, unknown> | undefined): string {
   if (!args || typeof args !== "object") return "";
-  for (const k of ["_i", "path", "file_path", "command", "url", "pattern", "query", "title"]) {
+  for (const k of ["i", "_i", "path", "file_path", "command", "url", "pattern", "query", "title"]) {
     const v = (args as Record<string, unknown>)[k];
     if (typeof v === "string" && v.trim()) return clip(v, 120);
   }
