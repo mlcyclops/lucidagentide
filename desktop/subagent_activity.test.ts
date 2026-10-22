@@ -62,6 +62,14 @@ describe("parseSubagentTranscript", () => {
     expect(p.tools).toBe(2);
     expect(p.steps.length).toBeGreaterThan(0);
   });
+  test("a tool step reads the agent's intent (omp's current `i`, and the older `_i`) before its path", () => {
+    const p = parseSubagentTranscript([
+      msg("assistant", [{ type: "toolCall", name: "read", arguments: { i: "Reading the registry reader", path: "desktop/managed_config.ts" } }]),
+      msg("assistant", [{ type: "toolCall", name: "grep", arguments: { _i: "Finding reg query", pattern: "reg" } }]),
+      msg("assistant", [{ type: "toolCall", name: "read", arguments: { path: "desktop/dev.ts" } }]),
+    ].join("\n"));
+    expect(p.steps.map((s) => s.label)).toEqual(["Reading the registry reader", "Finding reg query", "desktop/dev.ts"]);
+  });
   test("a scout's structured yield ({ data: {...} }) is still the run's last step", () => {
     const p = parseSubagentTranscript([
       msg("assistant", [{ type: "toolCall", name: "grep", arguments: { pattern: "fleet" } }]),
