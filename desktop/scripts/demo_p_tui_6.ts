@@ -16,13 +16,13 @@
 //
 // Run with: bun run desktop/scripts/demo_p_tui_6.ts
 
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { buildPaletteItems, filterPalette } from "../../harness/launcher/hub_palette.ts";
 import { Spaces } from "../../harness/launcher/hub_spaces.ts";
 import { HubComponent, findEngine } from "../../harness/launcher/hub_tui.ts";
+import { buildFakeOmp, isolatedHome } from "./demo_fake_omp.ts"; // runs on Windows too
 
 function assert(cond: unknown, msg: string): void {
   if (!cond) throw new Error(`FAIL: ${msg}`);
@@ -42,14 +42,8 @@ probe.stop(true);
 
 // The engine's omp child is the house fake ACP agent (the demo-P-TUI.4 pattern): routes, lane
 // manager, gate and discovery stay real; only the model behind the lane is fake.
-const fakeOmp = join(dataRoot, "bin", "omp");
-mkdirSync(join(dataRoot, "bin"), { recursive: true });
-writeFileSync(fakeOmp, `#!/usr/bin/env bun
-if (process.argv.includes("--version")) { console.log("fake-omp 0.0.0"); process.exit(0); }
-await import(${JSON.stringify(pathToFileURL(join(repo, "harness", "mcp", "testing", "fake_acp_agent.ts")).href)});
-`, { mode: 0o755 });
-chmodSync(fakeOmp, 0o755);
-const env = { ...process.env, LUCID_DATA_ROOT: dataRoot, HOME: home, LUCID_OMP_BIN: fakeOmp };
+const fakeOmp = buildFakeOmp(dataRoot, repo); // runs on Windows too (demo_fake_omp.ts)
+const env = { ...process.env, LUCID_DATA_ROOT: dataRoot, ...isolatedHome(home), LUCID_OMP_BIN: fakeOmp };
 
 const engineProc = Bun.spawn(["bun", join(repo, "desktop", "dev.ts")], {
   cwd: repo, env: { ...env, PORT: String(enginePort) }, stdout: "ignore", stderr: "ignore",
@@ -182,5 +176,5 @@ try {
 } finally {
   try { engineProc.kill(); } catch { /* gone */ }
   await engineProc.exited;
-  for (const d of [dataRoot, home]) rmSync(d, { recursive: true, force: true });
+  for (const d of [dataRoot, home]) rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }
