@@ -136,7 +136,7 @@ import { isBrowserAction, isBrowserPageShape } from "./browser_snapshot.ts"; // 
 import { FleetGoal } from "./fleet_goal.ts"; // P-AOS.1 (ADR-0452): the standing fleet goal + the AOS-1 heartbeat
 import { appendLaneLedger, isTimelineKind, listTimeline, readLaneLedger } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline; P-SCHED.1 reads it to recover a job's lane
 import { JobScheduler, type LedgerHit } from "./job_scheduler.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs
-import { createJob, loadJobs, normalizeJobSpec, saveJobs, updateJob, nextFireAt } from "./scheduled_jobs.ts"; // P-SCHED.1
+import { createJob as createScheduledJob, jobTargetRepo, loadJobs, normalizeJobSpec, saveJobs, updateJob, nextFireAt } from "./scheduled_jobs.ts"; // P-SCHED.1 (aliased: creator_jobs.ts exports a createJob too, and the second import silently replaced the first at runtime)
 import { firesBetween } from "./cron.ts"; // P-SCHED.1
 import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth, typesafeKeySet, type ProviderAuthSnapshot } from "./auth_status.ts";
@@ -5877,7 +5877,7 @@ return Bun.serve({
       if (p === "/api/jobs" && req.method === "POST") {
         const v = normalizeJobSpec(await readBody<unknown>(req));
         if (!v.ok) return json({ ok: false, error: v.reason });
-        const job = createJob(v.spec);
+        const job = createScheduledJob(v.spec);
         saveJobs([job, ...loadJobs()]);
         emitSecurityEvent({ category: "exec", type: "scheduled_job", decision: "allow", severity: "info", tool: "scheduled_job", reason: `created ${job.name} [${job.id}] ${job.cron}${job.armed ? " armed" : " disarmed"}`.slice(0, 200) });
         return json({ ok: true, data: job });
@@ -5919,7 +5919,7 @@ return Bun.serve({
       // The lanes a job can target: live lanes first, then every lane the ledger remembers (newest line
       // per lane id), so a job can name a lane that is not running right now.
       if (p === "/api/jobs/targets" && req.method === "GET") {
-        const live = (await fleet.status()).lanes.filter((l) => l.status !== "stopped").map((l) => ({ laneId: l.id, name: l.name, cwd: l.cwd, model: l.model, live: true, repo: l.repo?.remote ?? l.repo?.root ?? undefined }));
+        const live = (await fleet.status()).lanes.filter((l) => l.status !== "stopped").map((l) => ({ laneId: l.id, name: l.name, cwd: l.cwd, model: l.model, live: true, repo: jobTargetRepo(l.repo?.repo ?? null) }));
         const seen = new Set(live.map((l) => l.laneId));
         const remembered: { laneId: string; name: string; cwd: string; model?: string; live: boolean; repo?: string }[] = [];
         const rows = readLaneLedger();
