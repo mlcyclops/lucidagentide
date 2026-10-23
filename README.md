@@ -90,7 +90,7 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 <p align="center"><sub><b>The 2.4.0 beta channel stopped here.</b> Both prereleases (<code>v2.4.0-beta.1</code>, <code>v2.4.0-beta.2</code>) are promoted into 2.4.0; installing 2.4.0 over either keeps your settings, sessions and keys. <a href="#-v240-shipped-as-betas-first"><b>What the betas carried</b></a>.</sub></p>
 
-<p align="center"><sub><b>🧪 The 2.5.0 beta channel is open.</b> <code>v2.5.0-beta.2</code> is out as a prerelease: a fleet goal with a live heartbeat and verified tasks on the orbit (AOS-1), on top of beta.1's <code>lucid hub</code> terminal train. Stable installs and Homebrew stay on 2.4.1. <a href="#-whats-new-in-v250-beta2-prerelease"><b>What's new in 2.5.0-beta.2</b></a> · <a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.0-beta.2"><b>Get the prerelease</b></a>.</sub></p>
+<p align="center"><sub><b>🧪 The 2.5.0 beta channel is open.</b> <code>v2.5.0-beta.3</code> is out as a prerelease: fixes on top of beta.2's AOS-1 fleet goal and beta.1's <code>lucid hub</code> terminal train, including the agent's headed browser that came up as a white box. Stable installs and Homebrew stay on 2.4.1. <a href="#-whats-new-in-v250-beta3-prerelease"><b>What's new in 2.5.0-beta.3</b></a> · <a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.0-beta.3"><b>Get the prerelease</b></a>.</sub></p>
 
 </td>
 </tr>
@@ -302,6 +302,21 @@ The Main GUI ledger records only live, successfully completed write and edit cal
 > are in this source-available core (managed-config + an audit-export interface); the policy templates and SIEM
 > connectors are a separately-licensed add-on. Metadata-only by construction - no code, prompts, or CUI
 > leave the host.
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.5.0-beta.3 (prerelease)
+
+> **🔧 Fixes only.** Beta.3 is beta.2 plus #523 and #526.
+>
+> **➡️ Install the newest prerelease:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.5.0-beta.3](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.0-beta.3). Same beta rules: a GitHub prerelease never marked Latest, Homebrew and stable installs stay on 2.4.1, a beta install updates to the next beta; installing it over 2.4.1 or an earlier beta keeps your settings, sessions and keys.
+
+- **🪟 The agent's browser shows up** - when the agent opened a visible browser for you (a sign-in page, say), Windows showed a blank white box with no frame and no close button. omp now starts its browser helper without a console, which made Chrome start hidden again; the engine now shows that window, once and without stealing focus. *(P-BROWSER.5, [ADR-0456](DECISIONS.md))*
+- **🎬 Creator jobs are recorded again** - probes and avatar, CAD and vision renders were silently never written to the Creator job list.
+- **📅 Jobs show their repo** - the Jobs sheet's lane targets carry their repo again.
+- **🧭 Subagent rows say what the agent is doing** - the intent line, not just a file path.
+- **🧰 Hub demos on Windows, tidy discovery files** - the `lucid hub` demos pass on Windows, and discovery files left by killed engines are cleaned up.
+- **🧪 Also in this beta** - everything in [What's new in v2.5.0-beta.2](#-whats-new-in-v250-beta2-prerelease). Gate: 528 files, 7135 tests.
 
 ---
 
@@ -1431,8 +1446,8 @@ Obsidian-vault export), AI-authorship attribution, one-command import, a read-wr
 the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
 guards), a local **RAG knowledge spine** + the **compiled KB** with hybrid retrieval, the governed **skills
 directory** + **Skill Studio**, **local & hybrid providers**, the **Agent Builder**, the **agent firewall**,
-and the **runtime execution boundary** (OS-isolated exec + mediated egress). **v2.5.0-beta.2 (prerelease)**
-adds the AOS-1 fleet goal, heartbeat and verified tasks on the orbit (P-AOS.1/.2, ADR-0452/0453) to
+and the **runtime execution boundary** (OS-isolated exec + mediated egress). **v2.5.0-beta.3 (prerelease)**
+adds fixes (the agent's headed browser shown again, ADR-0456) to beta.2's AOS-1 fleet goal, heartbeat and verified tasks on the orbit (P-AOS.1/.2, ADR-0452/0453), which sit on
 beta.1's `lucid hub` terminal train (spaces, tabs, rail, decks, palette and a loopback control server;
 P-TUI.3..6, ADR-0433..0436), for beta installs only. **Newest (v2.4.1):** a patch
 release on 2.4.0: the five **session-switch** failures of #460 closed (a forced switch stops the `/goal` loop
@@ -1553,6 +1568,7 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **v2.5.0-beta.3 batch** | **🔧 Prerelease: fixes** - beta.2 plus #523 and #526. **BROWSER** (`P-BROWSER.5`, ADR-0456): omp 18.8 spawns its daemon broker console-less, so the shared headed Chromium was born hidden (a white, frameless box); the engine now shows that window on Windows, once and without activation. **CREATOR**: a shadowed `createJob` import sent every Creator job to the scheduled-jobs factory; they reach the Creator ledger again. **JOBS**: targets carry their repo. **SUBAGENTS**: rows read omp's `i` intent. **WINDOWS**: the `lucid hub` demos pass; stale engine-discovery files are pruned. Prerelease, never Latest: the cask and stable installs stay on 2.4.1. Gate 528 files / 7135 tests. | [ADR-0456](DECISIONS.md) |
 | **v2.5.0-beta.2 batch** | **🎯 Prerelease: the AOS-1 fleet goal and verified tasks** - beta.1 plus #521. **GOAL** (`P-AOS.1`, ADR-0452): one standing goal with criteria and a mandatory spend + time budget, spend charged per lane since the goal started, `blocked` with the reason over budget; a 10 s engine heartbeat the orbit reads as alive / late / dead every second; stalled spokes reaped at 5 min of mid-turn silence; Goal button, hub progress ring, goal panel. **TASKS** (`P-AOS.2`, ADR-0453): output contract + acceptance checks per task, one task per idle spoke in dependency order through `fleet.prompt`, command checks in a separate fail-closed verification turn, human review, retries with the reason up to 2 attempts, restart recovery. **FIXES**: Timeline async single-flight scan (`P-TL.4`), first-turn status line, step paragraphs (`P-STEPTEXT.1`), Preview zoom in 10% steps, session reads through one handle (CodeQL). Prerelease, never Latest: the cask and stable installs stay on 2.4.1. Gate 527 files / 7128 tests. | [ADR-0452..0453](DECISIONS.md) |
 | **v2.5.0-beta.1 batch** | **🧪 Prerelease: the `lucid hub` terminal train** - 2.4.1 plus #515. **CONTROL PLANE** (`P-TUI.3`, ADR-0436): named spaces with stable ids (`s1`, `s1:p2`); one verb parser for the CLI, the `:` prompt and a loopback, ephemeral-port, token + nonce gated control server (0600 discovery file, removed on exit); `lucid hub <cmd>` drives a running hub from any terminal or agent with status/space/pane/agent verbs and the tmux verbs. **DECKS** (`P-TUI.4`): Agents (key 9) and Spaces (key 0) join the hub ring. **TABS + RAIL** (`P-TUI.5`, ADR-0433): spaces hold tabs (`s1:t1`), tmux window = tab and session = space, a persistent left rail (toggle `b`) with SGR mouse clicks. **AGENTS PANEL** (`P-TUI.5 E2`, ADR-0434): one clickable row per lane, a user-set priority 1-9 per lane name, blocked-on-a-human lanes first in each band. **DECK STRIP + PALETTE** (`P-TUI.6`, ADR-0435): live counts with digit shortcuts above the status bar, a fuzzy `ctrl+k` palette over the hub's verbs. The `lucid-hub` agent skill (contract v2). Demos proven on macOS; on Windows the hub works but its demos do not run yet. A GitHub prerelease, never Latest: the cask and stable installs stay on 2.4.1. Scoped gate 522 files / 7060 tests. | [ADR-0433..0436](DECISIONS.md) |
 | **v2.4.1 batch** | **🔧 Patch release: session switching, honest AI-LOC, Homebrew app cask** - bug fixes only (#514, #516). **SWITCHING** (#460 cases 1-5): "Stop it and switch" stops a running `/goal` loop and waits for it to unwind before the session changes (#507); the "an automation is running" blocker fires only for goal-kind automations that own Main's session, agent-kind ones in their own child pipeline no longer refuse a switch (#509); the engine's answer to a load/new is the authority for what the thread shows: a busy 409 between turns reloads the holder's transcript, a held 409 attaches to the holding spoke per the ADR-0404 registry, no answer is never a completed switch (#510); `openSession` takes a generation number before any await and discards superseded plans, so a late preflight for session A cannot win over B (#511). **AI-LOC**: `xd://` device calls and other internal URIs (`local://`, `agent://`, `skill://`) are never counted as AI-authored code or shown as an inline diff/preview (#489, #483); the ledger counts only successfully completed edits and writes from the tool's actual result diff (per-file results when present), blocked, failed and duplicate completions add nothing, and chat + Fleet edit previews share one canonical extractor (`P-LOC.5`, ADR-0451, #492). **HOMEBREW**: the cask is an app cask over the release `.zip` (no pkg, no deprecated `allow_untrusted`), pinned per release, the `.pkg` assets still shipped for MDM, with a `make demo-P-BREW.1` naming-contract check (#453); Homebrew installs put `lucid` on PATH and add a `lucid-hub` wrapper (#468). **CI**: explicit budgets for the four tests the Windows gate killed under load (#513). Scoped gate: 518 files / 6,958 tests. | [ADR-0451](DECISIONS.md) |

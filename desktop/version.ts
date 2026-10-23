@@ -677,4 +677,13 @@
 //            not quoted. The Preview zoom moves in whole 10% steps. Session files are read through one
 //            handle (CodeQL js/file-system-race). PRERELEASE: never marked Latest; the Homebrew cask and
 //            stable installs stay on 2.4.1, a beta install updates to the next beta. Gate 527 files / 7128 tests.
-export const APP_VERSION = "2.5.0-beta.2";
+// v2.5.0-beta.3 = 2.5.0-beta.2 plus #523 and #526. P-BROWSER.5 (ADR-0456): the agent's headed browser no
+//            longer comes up as a white, frameless box: omp 18.8 spawns its daemon broker console-less, so
+//            the shared headed Chromium was born hidden again; the engine now shows that window on Windows.
+//            Creator jobs (probes, avatar, CAD and vision renders) are recorded in the Creator ledger again
+//            (a shadowed createJob import sent them to the scheduled-jobs factory). The Jobs sheet shows
+//            each target's repo. Subagent rows show the agent's intent. The `lucid hub` demos run on
+//            Windows (the registry probe's stderr line no longer precedes the CLI's JSON). Stale
+//            engine-discovery files of killed engines are pruned. PRERELEASE: never marked Latest; the
+//            Homebrew cask and stable installs stay on 2.4.1. Gate 528 files / 7135 tests.
+export const APP_VERSION = "2.5.0-beta.3";
