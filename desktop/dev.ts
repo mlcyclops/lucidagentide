@@ -583,7 +583,7 @@ import { CONTROLLER_ROUTES, handleController, type ControllerDeps } from "./cont
 import { PairingStore, type Pairing } from "./controller/store.ts"; // P-CTRL.2: the hashed pairing store
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
-import { addReportToKg, agentRecall, agentRetain, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unlockPersonalWithKey, unrelateEntities } from "./personal.ts";
+import { addReportToKg, agentRecall, agentRetain, changePersonalPassphrase, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unlockPersonalWithKey, unrelateEntities } from "./personal.ts";
 import { EXPLAIN_SYSTEM, explainCommand, explainUserPrompt } from "./explain_command.ts";
 import type { PersonalScope } from "../harness/personal/store.ts";
 import { readEditorFile, saveEditorFile } from "./editor.ts";
@@ -5719,6 +5719,8 @@ return Bun.serve({
       if (p === "/api/personal/unlock" && req.method === "POST") { const b = await readBody<{ passphrase?: unknown }>(req); return json({ ok: true, data: unlockPersonal(String(b.passphrase ?? "")) }); }
       // P-KGBIO.1 (ADR-0454): the desktop main process hands over the DEK a Windows Hello / Touch ID check released.
       if (p === "/api/personal/unlock-key" && req.method === "POST") { const b = await readBody<{ dek?: unknown }>(req); return json({ ok: true, data: unlockPersonalWithKey(String(b.dek ?? "")) }); }
+      // P-KGPASS.1 (ADR-0455): change the main or CUI store's passphrase (a DEK re-wrap; both passphrases stay in this handler).
+      if (p === "/api/personal/passphrase" && req.method === "POST") { const b = await readBody<{ which?: unknown; current?: unknown; next?: unknown }>(req); return json({ ok: true, data: changePersonalPassphrase(b.which === "cui" ? "cui" : "main", String(b.current ?? ""), String(b.next ?? "")) }); }
       if (p === "/api/personal/lock" && req.method === "POST") return json({ ok: true, data: lockPersonal() });
       if (p === "/api/personal/scope" && req.method === "POST") { const b = await readBody<{ scope?: unknown }>(req); return json({ ok: true, data: setScope(String(b.scope ?? "personal") as any) }); }
       // P9.5a: the isolated CUI store has its OWN setup/unlock/lock (separate file + passphrase).

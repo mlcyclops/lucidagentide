@@ -596,6 +596,11 @@ demo-P-KGBIO.1: ## P-KGBIO.1 (ADR-0454): unlock the knowledge graph with Windows
 	$(BUN) run desktop/scripts/demo_p_kgbio_1.ts
 	$(BUN) test $(TEST_IGNORES) harness/personal/protectors.test.ts desktop/kg_device_unlock.test.ts
 
+.PHONY: demo-P-KGPASS.1
+demo-P-KGPASS.1: ## P-KGPASS.1 (ADR-0455): change the knowledge graph passphrase (main and CUI) - a re-wrap of the same data key under a fresh salt, refused while locked or with a wrong current passphrase, the old passphrase revoked, the graph intact, Windows Hello / Touch ID unlock carried over, CUI keeps its own passphrase.
+	$(BUN) run desktop/scripts/demo_p_kgpass_1.ts
+	$(BUN) test $(TEST_IGNORES) harness/personal/personal.test.ts desktop/kg_device_unlock.test.ts
+
 .PHONY: demo-P-STEPTEXT.1
 demo-P-STEPTEXT.1: ## P-STEPTEXT.1: narration resumed after a tool call starts a new paragraph (master + lanes, stream and saved answer), the answer's tool chips interleave between the steps again, and a subagent row names a looping model ("model output degenerated") instead of painting "!!!!", with a scout's structured yield shown as its final step.
 	$(BUN) run harness/scripts/demo_psteptext1.ts

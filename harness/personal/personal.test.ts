@@ -6,7 +6,7 @@
 // holds the user's private personalization graph. Wrong key / tampering MUST fail.
 
 import { afterAll, expect, test } from "bun:test";
-import { existsSync, rmSync, statSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Telemetry, type TelemetryEvent } from "../telemetry/events.ts";
@@ -107,6 +107,36 @@ test("store: work/personal facts are scoped; graph filters; combined is the unio
   expect(s.graph({ scope: "combined" }).facts.length).toBe(2);
   expect(s.graph().facts.length).toBe(2); // default = combined (work + personal)
   expect(s.scopeCounts()).toEqual({ work: 1, personal: 1, cui: 0 });
+});
+
+// ── P-KGPASS.1 (ADR-0455): passphrase change is a re-wrap ──────────────────────────
+test("store: changing the passphrase revokes the old one, keeps the data and the DEK", () => {
+  const path = tmp();
+  const s = PersonalStore.createWithPassphrase(path, "old-passphrase-1");
+  s.addFact({ entityId: s.upsertEntity("k", "user:goal", "trusted"), statement: "ship P-KGPASS.1", trustLabel: "trusted" });
+  s.save();
+  const envBefore = JSON.parse(readFileSync(path, "utf8"));
+  const dek = decrypt(envBefore.wrappedDek, deriveKey("old-passphrase-1", Buffer.from(envBefore.kdf.salt, "base64"), envBefore.kdf.iters));
+  expect(s.changePassphrase("old-passphrase-1", "new-passphrase-2")).toBe(true);
+  expect(JSON.parse(readFileSync(path, "utf8")).kdf.salt).not.toBe(envBefore.kdf.salt); // fresh salt
+  expect(PersonalStore.openWithKey(path, dek).graph().facts.length).toBe(1); // same DEK: a re-wrap, not a re-key
+  expect(() => PersonalStore.openWithPassphrase(path, "old-passphrase-1")).toThrow();
+  const reopened = PersonalStore.openWithPassphrase(path, "new-passphrase-2");
+  expect(reopened.graph().facts[0]?.statement).toBe("ship P-KGPASS.1");
+  // a later save from the SAME open instance must keep the new envelope, not resurrect the old one
+  s.addFact({ entityId: s.upsertEntity("k2", "user:goal", "trusted"), statement: "second", trustLabel: "trusted" });
+  s.save();
+  expect(() => PersonalStore.openWithPassphrase(path, "old-passphrase-1")).toThrow();
+  expect(PersonalStore.openWithPassphrase(path, "new-passphrase-2").graph().facts.length).toBe(2);
+});
+
+test("store: a wrong current passphrase changes nothing; a keystore store refuses", () => {
+  const path = tmp();
+  const s = PersonalStore.createWithPassphrase(path, "old-passphrase-1");
+  const before = readFileSync(path, "utf8");
+  expect(s.changePassphrase("not-the-passphrase", "new-passphrase-2")).toBe(false);
+  expect(readFileSync(path, "utf8")).toBe(before);
+  expect(() => PersonalStore.createWithKey(tmp(), randomKey()).changePassphrase("a", "b")).toThrow();
 });
 
 // ── keystore-custody store (OS keystore hands us the unsealed DEK) ────────────────

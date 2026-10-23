@@ -18,7 +18,7 @@ import { CUI_STORE_VERSION, PersonalStore, type PersonalGraph, type PersonalScop
 import { LOCKED_READ_REASON, LOCKED_WRITE_REASON, searchGraph, vetAgentWrite, type KgHit, type KgQuery } from "../harness/personal/agent_kg.ts";
 import { load, personalAuditPath, personalCuiArchiveDir, personalCuiStorePath, personalProtectorsPath, personalStorePath, personalVaultDir, setPersonalization, setPersonalScope } from "./settings_store.ts";
 // ADR-0454: the main store's Lucid Vault Protector Spec v1 file (password + Windows Hello / Touch ID protectors)
-import { createProtectors, ProtectorError, readProtectors, unlockWithPassword, writeProtectors, type ProtectorDoc } from "../harness/personal/protectors.ts";
+import { createProtectors, ProtectorError, readProtectors, rewrapPassword, unlockWithPassword, writeProtectors, type ProtectorDoc } from "../harness/personal/protectors.ts";
 import { randomKey } from "../harness/personal/crypto.ts";
 import { buildRecall, buildRecallFromGraph } from "../harness/personal/recall.ts";
 import { distillTurn, heuristicExtractor, modelExtractor, type CompleteFn, type Extractor } from "../harness/personal/distiller.ts";
@@ -114,6 +114,43 @@ export function unlockPersonal(passphrase: string): { ok: boolean; error?: strin
   catch (e) { return { ok: false, error: e instanceof ProtectorError && e.code !== "auth" ? `The store's protector file is unusable: ${e.message}.` : "Wrong passphrase, or the store could not be read." }; }
   try { store = PersonalStore.openWithKey(personalStorePath(), vmk); return { ok: true }; }
   catch { vmk.fill(0); return { ok: false, error: "The protector file does not belong to this store." }; }
+}
+
+/** P-KGPASS.1 (ADR-0455): change the passphrase of the main or the CUI store. The store must be unlocked (the
+ *  open store owns the envelope it saves) and the current passphrase is re-proven. A re-wrap, never a re-key:
+ *  - main: the protector file's password entry is re-wrapped (spec `rewrap_password`; every device protector
+ *    keeps working), then the store envelope is re-wrapped too, so the old passphrase opens neither and an
+ *    older build still opens the store with the new one. Protector file first: a crash between the two writes
+ *    leaves the NEW passphrase working (unlock prefers the protector file).
+ *  - cui: the CUI store's own envelope only (it has no protector file; ADR-0014).
+ *  Passphrases never leave here. */
+export function changePersonalPassphrase(which: "main" | "cui", current: string, next: string): { ok: boolean; error?: string } {
+  const target = which === "cui" ? cuiStore : store;
+  if (!target) return { ok: false, error: `Unlock your ${which === "cui" ? "CUI store" : "store"} first.` };
+  if (!next || next.length < 8) return { ok: false, error: "The new passphrase must be at least 8 characters." };
+  if (next === current) return { ok: false, error: "The new passphrase is the same as the current one." };
+  const wrong = { ok: false, error: "The current passphrase is wrong." };
+  try {
+    if (which === "cui") return target.changePassphrase(current, next) ? { ok: true } : wrong;
+    const doc = readProtectors(personalProtectorsPath());
+    if (!doc) { // never migrated (a failed write at unlock): change the envelope, then migrate under the new passphrase
+      if (!target.changePassphrase(current, next)) return wrong;
+      migrateToProtectors(next);
+      return { ok: true };
+    }
+    let vmk: Buffer;
+    try { vmk = unlockWithPassword(doc, current); } catch (e) { if (e instanceof ProtectorError && e.code === "auth") return wrong; throw e; }
+    try {
+      // Both copies must carry the same passphrase before either is replaced.
+      const envelopeDek = PersonalStore.unwrapPassphraseDek(personalStorePath(), current);
+      const same = envelopeDek.equals(vmk);
+      envelopeDek.fill(0);
+      if (!same) return { ok: false, error: "The store and its protector file disagree - nothing was changed." };
+      writeProtectors(personalProtectorsPath(), rewrapPassword(doc, vmk, next));
+    } finally { vmk.fill(0); }
+    if (!target.changePassphrase(current, next)) return { ok: false, error: "The protector file was changed but the store envelope was not - unlock with the new passphrase, then change it again." };
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
 }
 
 /** Spec §7 migration: the envelope's DEK becomes the VMK unchanged. Written, then re-read and re-proven; a

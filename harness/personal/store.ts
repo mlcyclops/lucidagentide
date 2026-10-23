@@ -252,6 +252,26 @@ export class PersonalStore {
     writeFileSync(this.#path, JSON.stringify(env), { encoding: "utf8", mode: 0o600 });
     try { chmodSync(this.#path, 0o600); } catch { /* best-effort on Windows */ }
   }
+  /** P-KGPASS.1 (ADR-0455): change the passphrase of an OPEN passphrase-custodied store. A re-wrap: the
+   *  DEK is unchanged (no re-key), and it is wrapped again under a KEK from the new
+   *  passphrase with a FRESH salt (and the current KDF_ITERS), and the envelope is saved. Returns false,
+   *  changing nothing, when `current` is not the passphrase. THROWS for a non-passphrase store. */
+  changePassphrase(current: string, next: string): boolean {
+    if (this.#custody !== "passphrase" || !this.#kdf || !this.#wrappedDek) throw new Error("store is not passphrase-sealed");
+    const oldKek = deriveKey(current, Buffer.from(this.#kdf.salt, "base64"), this.#kdf.iters);
+    let proven: Buffer | null = null;
+    try { proven = decrypt(this.#wrappedDek, oldKek); } catch { return false; } // GCM auth: wrong passphrase
+    finally { oldKek.fill(0); }
+    const same = proven.equals(this.#dek);
+    proven.fill(0);
+    if (!same) return false;
+    const salt = randomSalt();
+    const kek = deriveKey(next, salt, KDF_ITERS);
+    try { this.#wrappedDek = encrypt(this.#dek, kek); } finally { kek.fill(0); }
+    this.#kdf = { algo: "pbkdf2-hmac-sha256", iters: KDF_ITERS, salt: salt.toString("base64") };
+    this.save();
+    return true;
+  }
   /** Zero the in-memory key (call when locking the store). */
   lock(): void { this.#dek.fill(0); }
 }
