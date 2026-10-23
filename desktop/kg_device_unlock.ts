@@ -5,37 +5,40 @@
 //
 // P-KGBIO.1 (ADR-0454): unlock the personal knowledge graph with the OS's own user verification -
 // Windows Hello (face camera, fingerprint, or Hello PIN) or macOS Touch ID / Apple Watch - instead of
-// typing the passphrase every launch. The passphrase stays the root of custody: it creates the store,
-// it is the only way to ENROLL a device unlock, and it always still opens the store. A device unlock is a
-// second, OS-gated copy of the store's data-encryption key (DEK), kept next to the store as
-// `lucid-personal.kg.device.json`:
+// typing the passphrase every launch. Each mechanism is a PROTECTOR in the store's Lucid Vault Protector
+// Spec v1 file (harness/personal/protectors.ts; the Hub's protectors.json format): one more AES-256-GCM
+// wrapping of the store key (the spec's VMK), bound to its entry by the AAD. The password protector stays
+// the mandatory recovery root: it is the only way to ENROLL a device protector, and it always still opens
+// the store.
 //
-//   wrappedDek = AES-256-GCM(DEK, KEK)            KEK never touches disk in the clear
-//   Windows:  KEK = HKDF-SHA256(sig, salt)        sig = a Windows Hello (TPM-backed, non-exportable RSA) key's
-//                                                 PKCS#1 v1.5 signature over a random per-enrollment challenge.
-//                                                 Deterministic, and only producible after a live Hello check.
-//   macOS:    KEK = random, sealed by safeStorage (Keychain, bound to the app's code signature) and only
-//             unsealed after systemPreferences.promptTouchID (Touch ID, a paired Apple Watch, or the login
-//             password). That is an app-enforced gate, not a hardware binding; the ADR says so.
+//   hello             spec §4.1. A Windows Hello KeyCredential (TPM-backed, non-exportable RSA) signs the
+//                     entry's random 32-byte `challenge`; KEK = HKDF-SHA256(signature, info
+//                     "lucid-vmk-v1|hello"). PKCS#1 v1.5 is deterministic, and the signature exists only
+//                     after a live Hello check. Entry fields: challenge, key_name.
+//   keychain-touchid  IDE interim, NOT the spec's `sep` (§4.4): a random KEK sealed by safeStorage (Keychain,
+//                     bound to the app's code signature) and released after systemPreferences.promptTouchID
+//                     (Touch ID, a paired Apple Watch, or the login password). An app-enforced gate, not a
+//                     hardware binding; the ADR says so. Entry field: sealed_kek.
+//   auto_unlock       IDE field on a device entry: unlock with that check as LUCID opens.
 //
-// MAIN-PROCESS ONLY. The DEK is derived here from the passphrase at enrollment, released here after the OS
-// check, and handed to the engine's /api/personal/unlock-key over loopback. It never reaches the renderer.
-// The CUI store is deliberately out of scope (ADR-0014: returning to CUI requires its passphrase).
+// MAIN-PROCESS ONLY. The VMK is unwrapped here (password at enrollment, the OS check at unlock) and handed
+// to the engine's /api/personal/unlock-key over loopback. It never reaches the renderer. The CUI store has
+// no protector file and is never device-unlocked (ADR-0014: returning to CUI requires its passphrase).
 //
-// Dependency-injected (provider + io) so it unit-tests with no TPM, no Keychain, and no real filesystem.
+// The provider is injected, so this unit-tests with no TPM and no Keychain.
 
-import { createHash, hkdfSync, randomBytes } from "node:crypto";
-import { decrypt, deriveKey, encrypt, KEY_LEN, type Sealed } from "../harness/personal/crypto.ts";
-import type { Envelope } from "../harness/personal/store.ts";
+import { hkdfSync, randomBytes } from "node:crypto";
+import { KEY_LEN } from "../harness/personal/crypto.ts";
+import {
+  newEntry, ProtectorError, readProtectors, unlockWithPassword, unwrapEntry, vmkCheckOk, withoutProtector, withProtector, writeProtectors,
+  type ProtectorDoc, type ProtectorEntry, type ProtectorType,
+} from "../harness/personal/protectors.ts";
 import { runToText } from "./native_dialog.ts";
 
-export const DEVICE_UNLOCK_VERSION = "lucid-kg-device.v1" as const;
-const MAIN_STORE_VERSION = "personal-kg.v1"; // the CUI store (personal-cui.v1) is never device-unlocked
-
-export type DeviceProviderKind = "windows-hello" | "macos-touch-id";
+export type DeviceProtectorType = Exclude<ProtectorType, "password">;
 
 /** Why a device unlock did not produce a key. `cancelled` is the user's choice and is never an error toast. */
-export type DeviceUnlockCode = "unsupported" | "cancelled" | "not-enrolled" | "stale" | "wrong-passphrase" | "no-store" | "failed";
+export type DeviceUnlockCode = "unsupported" | "cancelled" | "not-enrolled" | "mismatch" | "wrong-passphrase" | "no-store" | "failed";
 
 export class DeviceUnlockError extends Error {
   constructor(readonly code: DeviceUnlockCode, message: string) { super(message); this.name = "DeviceUnlockError"; }
@@ -43,152 +46,123 @@ export class DeviceUnlockError extends Error {
 
 /** One OS-verification mechanism. Every create/open shows exactly one OS prompt. */
 export interface DeviceKeyProvider {
-  readonly kind: DeviceProviderKind;
+  readonly type: DeviceProtectorType;
   /** User-facing name: "Windows Hello", "Touch ID". */
   readonly label: string;
   available(): Promise<boolean>;
-  /** Enroll: create the OS-bound secret and return the 32-byte KEK plus the NON-secret params to recover it. */
-  create(storeId: string): Promise<{ kek: Buffer; params: Record<string, string> }>;
+  /** Enroll: create the OS-bound secret for entry `entryId`; return the 32-byte KEK and the entry's PUBLIC fields. */
+  create(entryId: string): Promise<{ kek: Buffer; fields: Record<string, string> }>;
   /** Recover the KEK after a live OS check. Throws DeviceUnlockError (cancelled / not-enrolled / failed). */
-  open(params: Record<string, string>): Promise<Buffer>;
-  /** Remove any OS-side key material. Best-effort; the record file is removed by the caller regardless. */
-  destroy(params: Record<string, string>): Promise<void>;
-}
-
-/** The on-disk device-unlock record. Nothing in it opens the store without the OS check. */
-export interface DeviceRecord {
-  v: typeof DEVICE_UNLOCK_VERSION;
-  provider: DeviceProviderKind;
-  /** Fingerprint of the store's passphrase envelope: a re-created store is detected as stale WITHOUT a prompt. */
-  storeId: string;
-  params: Record<string, string>;
-  wrappedDek: Sealed;
-  /** Unlock with the OS check as LUCID opens (the default once enrolled). */
-  autoUnlock: boolean;
-  createdAt: string;
+  open(entry: ProtectorEntry): Promise<Buffer>;
+  /** Remove any OS-side key material. Best-effort; the entry is removed by the caller regardless. */
+  destroy(entry: ProtectorEntry): Promise<void>;
 }
 
 export interface DeviceStatus {
   /** This machine offers a usable OS verification (Hello configured / Touch ID present). */
   supported: boolean;
-  provider: DeviceProviderKind | null;
+  provider: DeviceProtectorType | null;
   label: string | null;
+  /** The protector file holds an entry of this provider's type. */
   enrolled: boolean;
   autoUnlock: boolean;
-  /** A record exists but belongs to a different (re-created) store; it is ignored until re-enrolled. */
-  stale: boolean;
+  /** Set when the protector file exists but is unusable (fail closed: nothing is offered). */
+  problem: string | null;
 }
 
-export interface DeviceIo {
-  /** File text, or null when absent/unreadable. One read; never exists-then-read (TOCTOU). */
-  read(path: string): string | null;
-  write(path: string, text: string): void;
-  remove(path: string): void;
-}
-
-/** Stable, non-secret fingerprint of a passphrase-sealed store (format + KDF salt). */
-export function storeIdOf(env: Pick<Envelope, "v" | "kdf">): string {
-  return createHash("sha256").update(`${env.v}\n${env.kdf?.salt ?? ""}`).digest("hex").slice(0, 32);
-}
-
-function parseEnvelope(text: string | null): Envelope {
-  if (text === null) throw new DeviceUnlockError("no-store", "There is no knowledge graph store yet - create one with a passphrase first.");
-  let env: Envelope;
-  try { env = JSON.parse(text) as Envelope; } catch { throw new DeviceUnlockError("failed", "The knowledge graph store could not be read."); }
-  if (env.v !== MAIN_STORE_VERSION) throw new DeviceUnlockError("failed", `Device unlock only covers the main store (file is ${String(env.v)}).`);
-  return env;
-}
-
-/** Recover the DEK from the passphrase envelope. THROWS wrong-passphrase (GCM auth) - the passphrase proof. */
-export function dekFromPassphrase(storeText: string | null, passphrase: string): { dek: Buffer; storeId: string } {
-  const env = parseEnvelope(storeText);
-  if (env.custody !== "passphrase" || !env.kdf || !env.wrappedDek) throw new DeviceUnlockError("failed", "This store is not passphrase-sealed.");
-  const kek = deriveKey(passphrase, Buffer.from(env.kdf.salt, "base64"), env.kdf.iters);
-  try { return { dek: decrypt(env.wrappedDek, kek), storeId: storeIdOf(env) }; }
-  catch { throw new DeviceUnlockError("wrong-passphrase", "Wrong passphrase."); }
-  finally { kek.fill(0); }
-}
-
-function parseRecord(text: string | null): DeviceRecord | null {
-  if (text === null) return null;
-  try {
-    const r = JSON.parse(text) as DeviceRecord;
-    if (r?.v !== DEVICE_UNLOCK_VERSION || !r.wrappedDek || typeof r.storeId !== "string" || !r.params) return null;
-    return r;
-  } catch { return null; }
-}
-
-/** The device unlock for one store. `provider` is null where the platform has no supported mechanism. */
+/** The device protector for the main store's protector file. `provider` is null where the platform has none. */
 export class KgDeviceUnlock {
-  constructor(private readonly deps: {
-    provider: DeviceKeyProvider | null;
-    io: DeviceIo;
-    storePath: () => string;
-    recordPath: () => string;
-  }) {}
+  constructor(private readonly deps: { provider: DeviceKeyProvider | null; protectorsPath: () => string }) {}
 
-  #record(): DeviceRecord | null { return parseRecord(this.deps.io.read(this.deps.recordPath())); }
-  #currentStoreId(): string | null {
-    try { const env = parseEnvelope(this.deps.io.read(this.deps.storePath())); return env.custody === "passphrase" && env.kdf ? storeIdOf(env) : null; }
-    catch { return null; }
+  /** The protector file, or a DeviceUnlockError: none yet (no-store) or unusable (failed). */
+  #doc(): ProtectorDoc {
+    let doc: ProtectorDoc | null;
+    try { doc = readProtectors(this.deps.protectorsPath()); }
+    catch (e) { throw new DeviceUnlockError("failed", `The store's protector file is unusable: ${(e as Error).message}.`); }
+    if (!doc) throw new DeviceUnlockError("no-store", "Unlock your knowledge graph with its passphrase first.");
+    return doc;
+  }
+  #provider(): DeviceKeyProvider {
+    if (!this.deps.provider) throw new DeviceUnlockError("unsupported", "Device unlock is not available on this machine.");
+    return this.deps.provider;
   }
 
   async status(): Promise<DeviceStatus> {
     const p = this.deps.provider;
     const supported = p ? await p.available().catch(() => false) : false;
-    const rec = this.#record();
-    const matches = !!rec && !!p && rec.provider === p.kind && rec.storeId === this.#currentStoreId();
-    return {
-      supported, provider: p?.kind ?? null, label: p?.label ?? null,
-      enrolled: matches, autoUnlock: matches && rec!.autoUnlock, stale: !!rec && !matches,
-    };
+    let entry: ProtectorEntry | undefined;
+    let problem: string | null = null;
+    try { entry = p ? this.#doc().protectors.find((e) => e.type === p.type) : undefined; }
+    catch (e) { if ((e as DeviceUnlockError).code !== "no-store") problem = (e as Error).message; }
+    return { supported, provider: p?.type ?? null, label: p?.label ?? null, enrolled: !!entry, autoUnlock: !!entry && entry.auto_unlock !== false, problem };
   }
 
-  /** Enroll (or re-enroll) this device. Proves the passphrase, shows ONE OS prompt, persists the record, and
-   *  returns the DEK so the caller can unlock the engine right away. Replaces any prior record + OS key. */
+  /** Enroll (or re-enroll) this device: prove the passphrase through the password protector, show ONE OS
+   *  prompt, and add the entry (replacing this type's previous one, whose OS key is then destroyed). Returns
+   *  the VMK, which the caller owns and must zero. */
   async enroll(passphrase: string, opts: { autoUnlock?: boolean } = {}): Promise<Buffer> {
-    const p = this.deps.provider;
-    if (!p || !(await p.available().catch(() => false))) throw new DeviceUnlockError("unsupported", "Device unlock is not available on this machine.");
-    const { dek, storeId } = dekFromPassphrase(this.deps.io.read(this.deps.storePath()), passphrase);
-    const prior = this.#record();
-    if (prior && prior.provider === p.kind && prior.storeId !== storeId) await p.destroy(prior.params).catch(() => {});
-    const { kek, params } = await p.create(storeId);
+    const p = this.#provider();
+    if (!(await p.available().catch(() => false))) throw new DeviceUnlockError("unsupported", `${p.label} is not set up on this device.`);
+    let vmk: Buffer;
+    try { vmk = unlockWithPassword(this.#doc(), passphrase); }
+    catch (e) {
+      if (e instanceof DeviceUnlockError) throw e;
+      throw e instanceof ProtectorError && e.code === "auth" ? new DeviceUnlockError("wrong-passphrase", "Wrong passphrase.") : new DeviceUnlockError("failed", (e as Error).message);
+    }
     try {
-      const rec: DeviceRecord = {
-        v: DEVICE_UNLOCK_VERSION, provider: p.kind, storeId, params, wrappedDek: encrypt(dek, kek),
-        autoUnlock: opts.autoUnlock ?? true, createdAt: new Date().toISOString(),
-      };
-      this.deps.io.write(this.deps.recordPath(), JSON.stringify(rec));
-      return dek;
-    } finally { kek.fill(0); }
+      const id = randomBytes(8).toString("hex");
+      const { kek, fields } = await p.create(id);
+      let entry: ProtectorEntry;
+      try { entry = newEntry(kek, vmk, p.type, p.label, { ...fields, auto_unlock: opts.autoUnlock ?? true }, id); } finally { kek.fill(0); }
+      // Re-read after the prompt: the file may have changed while the user looked at the camera. The entry is
+      // added only to a document whose vmk_check this VMK still satisfies.
+      const doc = this.#doc();
+      if (!vmkCheckOk(vmk, doc.vmk_check)) throw new DeviceUnlockError("failed", "The store's key changed while enrolling - try again.");
+      const prior = doc.protectors.find((e) => e.type === p.type);
+      writeProtectors(this.deps.protectorsPath(), withProtector(doc, entry));
+      if (prior) await p.destroy(prior).catch(() => {});
+      return vmk;
+    } catch (e) { vmk.fill(0); throw e; }
   }
 
-  /** One OS prompt -> the store DEK. Throws DeviceUnlockError; never prompts for a stale record. */
+  /** One OS prompt -> the VMK, proven against the file's vmk_check. Throws DeviceUnlockError. */
   async unlock(): Promise<Buffer> {
-    const p = this.deps.provider;
-    if (!p) throw new DeviceUnlockError("unsupported", "Device unlock is not available on this machine.");
-    const rec = this.#record();
-    if (!rec || rec.provider !== p.kind) throw new DeviceUnlockError("not-enrolled", `${p.label} unlock is not set up - unlock with your passphrase and turn it on.`);
-    if (rec.storeId !== this.#currentStoreId()) throw new DeviceUnlockError("stale", `Your knowledge graph store changed since ${p.label} unlock was set up - unlock with your passphrase and turn it on again.`);
-    const kek = await p.open(rec.params);
-    try { return decrypt(rec.wrappedDek, kek); }
-    catch { throw new DeviceUnlockError("stale", `The ${p.label} key no longer matches - unlock with your passphrase and turn it on again.`); }
+    const p = this.#provider();
+    let doc: ProtectorDoc;
+    try { doc = this.#doc(); }
+    catch (e) { throw (e as DeviceUnlockError).code === "no-store" ? new DeviceUnlockError("not-enrolled", `${p.label} unlock is not set up.`) : e; }
+    const entry = doc.protectors.find((e) => e.type === p.type);
+    if (!entry) throw new DeviceUnlockError("not-enrolled", `${p.label} unlock is not set up - unlock with your passphrase and turn it on.`);
+    const kek = await p.open(entry);
+    try { return unwrapEntry(doc, entry, kek); }
+    catch { throw new DeviceUnlockError("mismatch", `The ${p.label} key no longer matches - unlock with your passphrase and turn ${p.label} unlock on again.`); }
     finally { kek.fill(0); }
   }
 
-  /** Flip auto-unlock-at-launch on an enrolled record. Returns false when there is nothing enrolled. */
+  /** Flip auto-unlock-at-launch on the enrolled entry (a public field; the wrap is untouched). */
   setAutoUnlock(on: boolean): boolean {
-    const rec = this.#record();
-    if (!rec) return false;
-    this.deps.io.write(this.deps.recordPath(), JSON.stringify({ ...rec, autoUnlock: on }));
+    const found = this.#enrolledEntry();
+    if (!found) return false;
+    writeProtectors(this.deps.protectorsPath(), withProtector(found.doc, { ...found.entry, auto_unlock: on }));
     return true;
   }
 
-  /** Turn device unlock off: remove the OS key (best-effort) and the record. The passphrase is unaffected. */
+  /** Turn device unlock off: drop the entry, then remove the OS key (best-effort). The password is unaffected. */
   async forget(): Promise<void> {
-    const rec = this.#record();
-    if (rec && this.deps.provider && rec.provider === this.deps.provider.kind) await this.deps.provider.destroy(rec.params).catch(() => {});
-    this.deps.io.remove(this.deps.recordPath());
+    const found = this.#enrolledEntry();
+    if (!found) return;
+    writeProtectors(this.deps.protectorsPath(), withoutProtector(found.doc, found.p.type));
+    await found.p.destroy(found.entry).catch(() => {});
+  }
+
+  /** This provider's entry in a readable protector file, or null. */
+  #enrolledEntry(): { p: DeviceKeyProvider; doc: ProtectorDoc; entry: ProtectorEntry } | null {
+    const p = this.deps.provider;
+    if (!p) return null;
+    let doc: ProtectorDoc;
+    try { doc = this.#doc(); } catch { return null; }
+    const entry = doc.protectors.find((e) => e.type === p.type);
+    return entry ? { p, doc, entry } : null;
   }
 }
 
@@ -196,7 +170,8 @@ export class KgDeviceUnlock {
 
 /** Stdout marker so host noise can never be read as a result. */
 export const HELLO_MARK = "LUCID_HELLO::";
-const HKDF_INFO = "lucid-kg-device.v1/windows-hello";
+/** HKDF-SHA256 parameters for the hello KEK (spec §4.1 leaves them open; the Hub's Phase 2 must match). */
+const HELLO_HKDF_INFO = "lucid-vmk-v1|hello";
 
 /** The PowerShell 5.1 script (exported for tests). Inputs arrive by env var, never by string splicing:
  *  LUCID_HELLO_OP = available | create | sign | delete, LUCID_HELLO_KEY, LUCID_HELLO_CHALLENGE (base64).
@@ -274,21 +249,22 @@ export const powershellHelloRunner: HelloRunner = async (env) => {
 
 export function windowsHelloProvider(run: HelloRunner = powershellHelloRunner): DeviceKeyProvider {
   const call = async (env: Record<string, string>): Promise<HelloReply> => { const r = await run(env); return parseHelloReply(r.stdout, r.stderr); };
-  const sign = async (op: "create" | "sign", params: Record<string, string>): Promise<Buffer> => {
-    const r = await call({ LUCID_HELLO_OP: op, LUCID_HELLO_KEY: params.keyName ?? "", LUCID_HELLO_CHALLENGE: params.challenge ?? "" });
+  const sign = async (op: "create" | "sign", keyName: string, challenge: string): Promise<Buffer> => {
+    const r = await call({ LUCID_HELLO_OP: op, LUCID_HELLO_KEY: keyName, LUCID_HELLO_CHALLENGE: challenge });
     if (!r.ok || !r.signature) throw helloError(r);
-    return Buffer.from(hkdfSync("sha256", Buffer.from(r.signature, "base64"), Buffer.from(params.salt ?? "", "base64"), HKDF_INFO, KEY_LEN));
+    return Buffer.from(hkdfSync("sha256", Buffer.from(r.signature, "base64"), Buffer.alloc(0), HELLO_HKDF_INFO, KEY_LEN));
   };
   return {
-    kind: "windows-hello",
+    type: "hello",
     label: "Windows Hello",
     available: async () => { const r = await call({ LUCID_HELLO_OP: "available" }); return r.ok && r.available === true; },
-    create: async (storeId) => {
-      const params = { keyName: `LUCID Knowledge Graph ${storeId.slice(0, 12)}`, challenge: randomBytes(32).toString("base64"), salt: randomBytes(32).toString("base64") };
-      return { kek: await sign("create", params), params };
+    create: async (entryId) => {
+      // One Hello key per entry: re-enrolling creates a new key, and only then is the old entry's key deleted.
+      const fields = { key_name: `LucidVault-ide-${entryId}`, challenge: randomBytes(32).toString("base64") };
+      return { kek: await sign("create", fields.key_name, fields.challenge), fields };
     },
-    open: (params) => sign("sign", params),
-    destroy: async (params) => { await call({ LUCID_HELLO_OP: "delete", LUCID_HELLO_KEY: params.keyName ?? "" }); },
+    open: (entry) => sign("sign", String(entry.key_name ?? ""), String(entry.challenge ?? "")),
+    destroy: async (entry) => { await call({ LUCID_HELLO_OP: "delete", LUCID_HELLO_KEY: String(entry.key_name ?? "") }); },
   };
 }
 
@@ -313,19 +289,19 @@ export function macTouchIdProvider(auth: MacAuthLike, seal: MacSealLike): Device
     catch (e) { throw new DeviceUnlockError("cancelled", `Touch ID did not complete: ${String((e as Error)?.message ?? e)}`); }
   };
   return {
-    kind: "macos-touch-id",
+    type: "keychain-touchid",
     label: "Touch ID",
     available: async () => { try { return auth.canPromptTouchID() && seal.isEncryptionAvailable(); } catch { return false; } },
     create: async () => {
       await prompt(); // enrollment proves presence the same way unlock will
       const kek = randomBytes(KEY_LEN);
-      return { kek, params: { sealedKek: seal.encryptString(kek.toString("base64")).toString("base64") } };
+      return { kek, fields: { sealed_kek: seal.encryptString(kek.toString("base64")).toString("base64") } };
     },
-    open: async (params) => {
+    open: async (entry) => {
       await prompt();
-      try { return Buffer.from(seal.decryptString(Buffer.from(params.sealedKek ?? "", "base64")), "base64"); }
+      try { return Buffer.from(seal.decryptString(Buffer.from(String(entry.sealed_kek ?? ""), "base64")), "base64"); }
       catch { throw new DeviceUnlockError("not-enrolled", "The Keychain no longer holds LUCID's Touch ID key - unlock with your passphrase and turn Touch ID unlock on again."); }
     },
-    destroy: async () => { /* the sealed KEK lives only in the record, which the caller removes */ },
+    destroy: async () => { /* the sealed KEK lives only in the entry, which the caller removes */ },
   };
 }

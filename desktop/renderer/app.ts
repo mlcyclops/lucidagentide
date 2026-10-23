@@ -5998,13 +5998,14 @@ function personalDeviceHtml(): string {
   if (!d?.provider) return "";
   const label = esc(d.label ?? "");
   const wrap = (inner: string) => `<div class="pdevice" style="margin-top:10px;border-top:1px solid var(--line-soft);padding-top:10px">${inner}</div>`;
+  if (d.problem) return wrap(`<div class="set-note warn">${icon("shield", 12)} <span>${label} unlock is unavailable: ${esc(d.problem)}</span></div>`);
   if (!d.supported) return wrap(`<div class="set-note">${icon("info", 12)} <span>${label} isn't set up on this device. Set it up in your system settings to unlock your graph without typing the passphrase.</span></div>`);
   if (d.enrolled) {
     return wrap(`<label class="set-toggle"><input type="checkbox" id="personalDeviceAuto" ${d.autoUnlock ? "checked" : ""}/>
         <span><b>Unlock with ${label} when LUCID opens</b> - one ${label} check at launch (with a face camera, just look at it). The passphrase still works, and the CUI store always asks for its own.</span></label>
       <button class="btn-mini" id="personalDeviceForget" data-tip="Turn off ${label} unlock|Removes the ${label} key LUCID created and its sealed copy of your store key. Your passphrase is unaffected.">${icon("shield", 12)} Turn off ${label} unlock</button>`);
   }
-  return wrap(`<div class="set-note">${icon("shield", 12)} <span>${d.stale ? `Your store changed since ${label} unlock was set up. Turn it on again to keep using it.` : `Skip the passphrase: unlock with ${label} (face, fingerprint, or PIN). Confirm your passphrase once to turn it on.`}</span></div>
+  return wrap(`<div class="set-note">${icon("shield", 12)} <span>Skip the passphrase: unlock with ${label} (face, fingerprint, or PIN). Confirm your passphrase once to turn it on.</span></div>
     <div class="prov-row"><input id="personalDevicePass" class="prov-key" type="password" placeholder="Passphrase" autocomplete="current-password" />
       <button class="btn-mini ok" id="personalDeviceEnroll">${icon("shield", 12)} Turn on ${label}</button></div>`);
 }
@@ -10804,14 +10805,19 @@ function renderKgLocked(canvas: HTMLElement, device: KgDeviceStatus | null): voi
     const pass = input.value;
     if (!pass.trim()) { err.textContent = "Enter your passphrase."; err.hidden = false; input.focus(); return; }
     unlockBtn.disabled = true; unlockBtn.innerHTML = `${icon("refresh", 12, "spin")} Unlocking…`;
-    // Enrolling proves the passphrase AND unlocks; if the OS check is cancelled or fails, the plain unlock runs.
-    if (($("#kgDeviceRemember", canvas) as HTMLInputElement | null)?.checked) {
-      const e = await bridge.kgDeviceEnroll(pass);
-      if (e.ok) { showToast({ tone: "ok", title: `Unlocked - ${device?.label ?? "device"} unlock is on`, desc: "Next time LUCID opens it asks for that instead of your passphrase.", timeout: 3200 }); void hydratePersonal(); void renderKnowledge(); return; }
-      if (e.code !== "cancelled" && e.code !== "wrong-passphrase") showToast({ tone: "warn", title: `Couldn't turn on ${device?.label ?? "device unlock"}`, desc: e.error, timeout: 5000 });
-    }
     const r = await bridge.personalUnlock(pass).catch(() => null);
-    if (r?.ok) { showToast({ title: "Unlocked", desc: "Your graph is decrypted for this session.", timeout: 2000 }); void renderKnowledge(); return; }
+    if (r?.ok) {
+      // ADR-0454: unlock FIRST (it writes the protector file for a store that has none yet), then add the device
+      // protector; a cancelled or failed OS check leaves the graph unlocked by the passphrase.
+      if (($("#kgDeviceRemember", canvas) as HTMLInputElement | null)?.checked) {
+        const e = await bridge.kgDeviceEnroll(pass);
+        if (e.ok) showToast({ tone: "ok", title: `Unlocked - ${device?.label ?? "device"} unlock is on`, desc: "Next time LUCID opens it asks for that instead of your passphrase.", timeout: 3200 });
+        else if (e.code !== "cancelled") showToast({ tone: "warn", title: `Unlocked, but ${device?.label ?? "device unlock"} is not on`, desc: e.error, timeout: 5000 });
+        void hydratePersonal();
+      } else showToast({ title: "Unlocked", desc: "Your graph is decrypted for this session.", timeout: 2000 });
+      void renderKnowledge();
+      return;
+    }
     err.textContent = r?.error ? r.error : "Incorrect passphrase. Try again."; err.hidden = false;
     unlockBtn.disabled = false; unlockBtn.innerHTML = `${icon("shield", 12)} Unlock`;
     input.select(); input.focus();

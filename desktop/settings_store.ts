@@ -256,9 +256,10 @@ export function personalBaseDir(): string {
 export function personalStorePath(base = personalBaseDir()): string {
   return join(base, "lucid-personal.kg.enc");
 }
-/** P-KGBIO.1 (ADR-0454): the Windows Hello / Touch ID device-unlock record for the main store. */
-export function personalDeviceUnlockPath(base = personalBaseDir()): string {
-  return join(base, "lucid-personal.kg.device.json");
+/** P-KGBIO.1 (ADR-0454): the main store's Lucid Vault Protector Spec v1 file (the Hub's `protectors.json`
+ *  format): the mandatory password protector plus any Windows Hello / Touch ID protector. */
+export function personalProtectorsPath(base = personalBaseDir()): string {
+  return join(base, "lucid-personal.kg.protectors.json");
 }
 /** The SEPARATE encrypted CUI store (P9.5a, ADR-0014) — its own file, DEK, and passphrase, so
  *  one key never decrypts both CUI and non-CUI. */

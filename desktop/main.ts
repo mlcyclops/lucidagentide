@@ -35,8 +35,8 @@ import { incidentDir, recordIncident } from "./incident_store.ts"; // P-RECOVER.
 import { logTail } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385): one line-aligned tail reader
 import type { IncidentEvent, IncidentInput, IncidentProcess } from "./incident_report.ts";
 import { backfillCanonicalFromInstance, seedInstanceFromCanonical } from "./oscrypt_seed.ts"; // one safeStorage key across port-keyed instances
-import { listLocalProviders, embeddingsConfig, personalBaseDir, personalDeviceUnlockPath, personalStorePath } from "./settings_store.ts";
-import { DeviceUnlockError, KgDeviceUnlock, macTouchIdProvider, windowsHelloProvider, type DeviceIo } from "./kg_device_unlock.ts"; // P-KGBIO.1 (ADR-0454)
+import { listLocalProviders, embeddingsConfig, personalBaseDir, personalProtectorsPath } from "./settings_store.ts";
+import { DeviceUnlockError, KgDeviceUnlock, macTouchIdProvider, windowsHelloProvider } from "./kg_device_unlock.ts"; // P-KGBIO.1 (ADR-0454)
 import type { AuthKind } from "./network_whitelist.ts";
 import { gitEnvNameFromRef } from "./git_url.ts"; // P-FLEET.L2: host-scoped git creds, vault ref -> env name
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: agent key combos, parsed by one shared rule
@@ -804,23 +804,16 @@ ipcMain.handle("lucid:credDelete", (_e, ref: unknown) => { try { return deleteCr
 ipcMain.handle("lucid:credEncryptionAvailable", () => { try { return safeStorage.isEncryptionAvailable(); } catch { return false; } });
 
 // P-KGBIO.1 (ADR-0454): unlock the personal knowledge graph with Windows Hello (face, fingerprint, PIN) or
-// Touch ID / Apple Watch. The DEK is derived from the passphrase at enrollment and released after the OS
-// check, both HERE in main; it reaches the engine over loopback (/api/personal/unlock-key) and never the
-// renderer. The standard build's personal dir is the engine's default; the Creator flavor relocates it via
-// the engine env only, so main resolves the same dir itself.
+// Touch ID / Apple Watch, each a protector in the store's Protector Spec v1 file. The VMK is unwrapped
+// HERE in main (password at enrollment, the OS check at unlock); it reaches the engine over loopback
+// (/api/personal/unlock-key) and never the renderer. The standard build's personal dir is the engine's
+// default; the Creator flavor relocates it via the engine env only, so main resolves the same dir itself.
 const PERSONAL_DIR = (): string => BUILD.creatorBuild ? (process.env.LUCID_PERSONAL_DIR || join(app.getPath("userData"), "personal")) : personalBaseDir();
-const KG_DEVICE_IO: DeviceIo = {
-  read: (p) => { try { return readFileSync(p, "utf8"); } catch { return null; } },
-  write: (p, text) => writeFileSync(p, text, { encoding: "utf8", mode: 0o600 }),
-  remove: (p) => rmSync(p, { force: true }),
-};
 const kgDevice = new KgDeviceUnlock({
   provider: process.platform === "win32" ? windowsHelloProvider()
     : process.platform === "darwin" ? macTouchIdProvider(systemPreferences, safeStorage)
     : null,
-  io: KG_DEVICE_IO,
-  storePath: () => personalStorePath(PERSONAL_DIR()),
-  recordPath: () => personalDeviceUnlockPath(PERSONAL_DIR()),
+  protectorsPath: () => personalProtectorsPath(PERSONAL_DIR()),
 });
 type KgDeviceReply = { ok: true } | { ok: false; code: string; error: string };
 const kgDeviceFail = (e: unknown): KgDeviceReply => e instanceof DeviceUnlockError
