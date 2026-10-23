@@ -13,7 +13,17 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-10-20, v2.4.1 stable, v2.5.0-beta.2 prerelease)
+## Current state (2026-10-23, v2.4.1 stable, v2.5.0-beta.3 prerelease)
+
+**v2.5.0-beta.3** (2026-10-23, branch `release/v2.5.0-beta.3`) is beta.2 plus
+#523 and #526, fixes only: the agent's headed browser no longer comes up as a
+white, frameless box (P-BROWSER.5, ADR-0456: omp 18.8 spawns its broker
+without a console, so the shared headed Chromium was born hidden again and
+the engine now shows its window on Windows); Creator jobs are recorded in the
+Creator ledger again (a shadowed `createJob` import); the Jobs sheet shows
+each target's repo; subagent rows show the agent's intent; the `lucid hub`
+demos run on Windows; stale engine-discovery files are pruned. Same beta rules
+as beta.1. Gate: 528 files / 7135 tests.
 
 **v2.5.0-beta.2** (2026-10-20, branch `release/v2.5.0-beta.2`) is the next
 GitHub prerelease: beta.1 plus #521. It brings the fleet goal (P-AOS.1,
