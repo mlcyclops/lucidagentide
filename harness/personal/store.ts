@@ -11,6 +11,8 @@
 //   - passphrase custody: the DEK is wrapped by a PBKDF2-HMAC-SHA256 key-encryption key.
 //   - keystore custody:   the DEK is sealed by the OS keystore (Electron safeStorage) by
 //                         the desktop main process, and handed to openWithKey() unsealed.
+// A passphrase-custodied store can ALSO be opened with its DEK via openWithKey(): the desktop's
+// device unlock (Windows Hello / Touch ID, ADR-0454) keeps a second, OS-gated copy of the DEK.
 // Format is versioned `personal-kg.v1` (its own frozen contract; a bump re-encrypts).
 
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -59,8 +61,10 @@ export interface PersonalGraph {
   exports?: PersonalExportEvent[];
 }
 
-type Custody = "passphrase" | "keystore";
-interface Envelope {
+export type Custody = "passphrase" | "keystore";
+/** The on-disk JSON document (`personal-kg.v1` / `personal-cui.v1`). Exported as a TYPE for the
+ *  desktop main process, which reads the passphrase envelope to enroll a device unlock (ADR-0454). */
+export interface Envelope {
   v: StoreVersion;
   custody: Custody;
   kdf?: { algo: "pbkdf2-hmac-sha256"; iters: number; salt: string };
@@ -124,14 +128,17 @@ export class PersonalStore {
     s.save();
     return s;
   }
-  /** Open a keystore-custodied store with the DEK the OS keystore unsealed. */
+  /** Open a store with its raw DEK, whatever sealed that DEK at rest. A keystore-custodied store gets
+   *  the DEK the OS keystore unsealed; a passphrase-custodied store can get the DEK a device unlock
+   *  (P-KGBIO.1, ADR-0454) released, and keeps its passphrase envelope (kdf + wrappedDek) on save, so
+   *  the passphrase still opens it. THROWS on a wrong key (GCM auth) or a format-variant mismatch. */
   static openWithKey(path: string, dek: Buffer, opts: { telemetry?: Telemetry; version?: StoreVersion } = {}): PersonalStore {
     const version = opts.version ?? STORE_VERSION;
     const env = readEnvelope(path, version);
-    if (env.custody !== "keystore") throw new Error("store is not keystore-sealed");
+    if (env.custody === "passphrase" && (!env.kdf || !env.wrappedDek)) throw new Error("passphrase store is missing its key envelope");
     const graph = decodeGraph(decrypt(env.data, dek)); // throws on a wrong key
-    opts.telemetry?.emit(version === CUI_STORE_VERSION ? "personal_cui_store_unlocked" : "personal_store_unlocked", { custody: "keystore", entities: graph.entities.length, facts: graph.facts.length });
-    return new PersonalStore(path, dek, "keystore", graph, version);
+    opts.telemetry?.emit(version === CUI_STORE_VERSION ? "personal_cui_store_unlocked" : "personal_store_unlocked", { custody: env.custody, entities: graph.entities.length, facts: graph.facts.length });
+    return new PersonalStore(path, dek, env.custody, graph, version, env.kdf, env.wrappedDek);
   }
 
   static exists(path: string): boolean { return existsSync(path); }

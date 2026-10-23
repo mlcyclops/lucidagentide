@@ -251,9 +251,14 @@ export const ASKSAGE_DEFAULT_LIMIT = 200_000;
 export function personalBaseDir(): string {
   return process.env.LUCID_PERSONAL_DIR || join(homedir(), ".omp");
 }
-/** Default on-disk location of the encrypted personalization store (P9.1) — work + personal. */
-export function personalStorePath(): string {
-  return join(personalBaseDir(), "lucid-personal.kg.enc");
+/** Default on-disk location of the encrypted personalization store (P9.1) — work + personal. `base` lets
+ *  the Electron main process resolve the Creator flavor's relocated dir (set only in the engine's env). */
+export function personalStorePath(base = personalBaseDir()): string {
+  return join(base, "lucid-personal.kg.enc");
+}
+/** P-KGBIO.1 (ADR-0454): the Windows Hello / Touch ID device-unlock record for the main store. */
+export function personalDeviceUnlockPath(base = personalBaseDir()): string {
+  return join(base, "lucid-personal.kg.device.json");
 }
 /** The SEPARATE encrypted CUI store (P9.5a, ADR-0014) — its own file, DEK, and passphrase, so
  *  one key never decrypts both CUI and non-CUI. */

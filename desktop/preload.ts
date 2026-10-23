@@ -35,6 +35,14 @@ contextBridge.exposeInMainWorld("lucid", {
   credList: () => ipcRenderer.invoke("lucid:credList"),
   credDelete: (ref: string) => ipcRenderer.invoke("lucid:credDelete", ref),
   credEncryptionAvailable: (): Promise<boolean> => ipcRenderer.invoke("lucid:credEncryptionAvailable"),
+  // P-KGBIO.1 (ADR-0454): Windows Hello / Touch ID unlock of the knowledge graph. Main holds the key path;
+  // the renderer only ever sees status and { ok, code, error }.
+  kgDeviceStatus: () => ipcRenderer.invoke("lucid:kgDeviceStatus"),
+  kgDeviceEnroll: (input: { passphrase: string; autoUnlock?: boolean }) => ipcRenderer.invoke("lucid:kgDeviceEnroll", input),
+  kgDeviceUnlock: () => ipcRenderer.invoke("lucid:kgDeviceUnlock"),
+  kgDeviceAuto: (on: boolean): Promise<boolean> => ipcRenderer.invoke("lucid:kgDeviceAuto", on),
+  kgDeviceForget: (): Promise<boolean> => ipcRenderer.invoke("lucid:kgDeviceForget"),
+  onKgDeviceUnlocked: (cb: (r: { ok: boolean; code?: string; error?: string; label?: string | null }) => void): void => { ipcRenderer.on("lucid:kgDeviceUnlocked", (_e, r) => cb(r)); },
   // P-PREVIEW.1 (ADR-0096): capture the preview region of the window → PNG data URL (main uses capturePage).
   capturePreview: (rect: { x: number; y: number; width: number; height: number }): Promise<string | null> => ipcRenderer.invoke("lucid:capturePreview", rect),
   // Open an external http(s) URL in the OS default browser (OAuth sign-in) — reliable path that doesn't

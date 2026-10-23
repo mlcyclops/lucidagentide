@@ -10,7 +10,7 @@
 // browser build and the desktop app share one real backend. The preload only
 // adds native window controls + crisp zoom.
 
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, safeStorage, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, safeStorage, shell, systemPreferences } from "electron";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -35,7 +35,8 @@ import { incidentDir, recordIncident } from "./incident_store.ts"; // P-RECOVER.
 import { logTail } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385): one line-aligned tail reader
 import type { IncidentEvent, IncidentInput, IncidentProcess } from "./incident_report.ts";
 import { backfillCanonicalFromInstance, seedInstanceFromCanonical } from "./oscrypt_seed.ts"; // one safeStorage key across port-keyed instances
-import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
+import { listLocalProviders, embeddingsConfig, personalBaseDir, personalDeviceUnlockPath, personalStorePath } from "./settings_store.ts";
+import { DeviceUnlockError, KgDeviceUnlock, macTouchIdProvider, windowsHelloProvider, type DeviceIo } from "./kg_device_unlock.ts"; // P-KGBIO.1 (ADR-0454)
 import type { AuthKind } from "./network_whitelist.ts";
 import { gitEnvNameFromRef } from "./git_url.ts"; // P-FLEET.L2: host-scoped git creds, vault ref -> env name
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: agent key combos, parsed by one shared rule
@@ -448,7 +449,7 @@ function startDevServer(): void {
     LUCID_CRED_VAULT_DIR: CRED_DIR(),
     ...(BUILD.creatorBuild ? {
       LUCID_GUI_SETTINGS_FILE: process.env.LUCID_GUI_SETTINGS_FILE || join(app.getPath("userData"), "lucid-gui.json"),
-      LUCID_PERSONAL_DIR: process.env.LUCID_PERSONAL_DIR || join(app.getPath("userData"), "personal"),
+      LUCID_PERSONAL_DIR: PERSONAL_DIR(),
       LUCID_CREATOR_DIR: process.env.LUCID_CREATOR_DIR || join(app.getPath("userData"), "creator"),
       LUCID_RELAY_PORT: process.env.LUCID_RELAY_PORT || String(BUILD.defaultRelayPort),
       LUCID_WHISPER_PORT: process.env.LUCID_WHISPER_PORT || String(BUILD.defaultWhisperPort),
@@ -618,6 +619,7 @@ function createWindow(): void {
   // P-KGMARKET.4: once the renderer is up, flush any lucid://auth URL that arrived during a cold launch.
   win.webContents.on("did-finish-load", () => {
     if (pendingAuthUrl) { win?.webContents.send("lucid:authCallback", pendingAuthUrl); pendingAuthUrl = null; }
+    void kgAutoUnlock(); // P-KGBIO.1 (ADR-0454): once per run, Windows Hello / Touch ID unlock at launch
   });
   win.loadURL(`http://localhost:${PORT}`);
   // P-RECOVER.1 (ADR-0385): a Windows log off or shutdown arrives as session-end; it is a deliberate
@@ -800,6 +802,84 @@ ipcMain.handle("lucid:credRotateFile", async (e, input: { ref: string }) => {
 ipcMain.handle("lucid:credList", () => { try { return listCredentials(VAULT_IO, CRED_DIR()); } catch { return []; } });
 ipcMain.handle("lucid:credDelete", (_e, ref: unknown) => { try { return deleteCredential(VAULT_IO, CRED_DIR(), typeof ref === "string" ? ref : ""); } catch { return false; } });
 ipcMain.handle("lucid:credEncryptionAvailable", () => { try { return safeStorage.isEncryptionAvailable(); } catch { return false; } });
+
+// P-KGBIO.1 (ADR-0454): unlock the personal knowledge graph with Windows Hello (face, fingerprint, PIN) or
+// Touch ID / Apple Watch. The DEK is derived from the passphrase at enrollment and released after the OS
+// check, both HERE in main; it reaches the engine over loopback (/api/personal/unlock-key) and never the
+// renderer. The standard build's personal dir is the engine's default; the Creator flavor relocates it via
+// the engine env only, so main resolves the same dir itself.
+const PERSONAL_DIR = (): string => BUILD.creatorBuild ? (process.env.LUCID_PERSONAL_DIR || join(app.getPath("userData"), "personal")) : personalBaseDir();
+const KG_DEVICE_IO: DeviceIo = {
+  read: (p) => { try { return readFileSync(p, "utf8"); } catch { return null; } },
+  write: (p, text) => writeFileSync(p, text, { encoding: "utf8", mode: 0o600 }),
+  remove: (p) => rmSync(p, { force: true }),
+};
+const kgDevice = new KgDeviceUnlock({
+  provider: process.platform === "win32" ? windowsHelloProvider()
+    : process.platform === "darwin" ? macTouchIdProvider(systemPreferences, safeStorage)
+    : null,
+  io: KG_DEVICE_IO,
+  storePath: () => personalStorePath(PERSONAL_DIR()),
+  recordPath: () => personalDeviceUnlockPath(PERSONAL_DIR()),
+});
+type KgDeviceReply = { ok: true } | { ok: false; code: string; error: string };
+const kgDeviceFail = (e: unknown): KgDeviceReply => e instanceof DeviceUnlockError
+  ? { ok: false, code: e.code, error: e.message }
+  : { ok: false, code: "failed", error: String((e as Error)?.message ?? e) };
+/** The `data` object of an engine `{ ok, data }` reply, or null for anything else. */
+async function engineData(res: Response | null): Promise<Record<string, unknown> | null> {
+  const body: unknown = await res?.json().catch(() => null);
+  if (!body || typeof body !== "object" || !("data" in body)) return null;
+  const { data } = body;
+  return data && typeof data === "object" ? { ...data } : null;
+}
+/** Hand a released DEK to the engine, then zero main's copy. */
+async function engineUnlockWithKey(dek: Buffer): Promise<KgDeviceReply> {
+  try {
+    const d = await engineData(await fetch(`http://localhost:${PORT}/api/personal/unlock-key`, {
+      method: "POST", headers: { "x-lucid-token": MAIN_TOKEN, "content-type": "application/json" },
+      body: JSON.stringify({ dek: dek.toString("base64") }),
+    }));
+    return d?.ok === true ? { ok: true } : { ok: false, code: "failed", error: typeof d?.error === "string" ? d.error : "The engine did not accept the key." };
+  } catch { return { ok: false, code: "failed", error: "The LUCID engine is not reachable." }; }
+  finally { dek.fill(0); }
+}
+async function kgDeviceUnlockEngine(): Promise<KgDeviceReply> {
+  try { return await engineUnlockWithKey(await kgDevice.unlock()); } catch (e) { return kgDeviceFail(e); }
+}
+// Same gate as the UI token: only the app window's own engine document may drive the device unlock (the agent
+// browser window shares the preload, and a page it visits must not be able to pop a Hello prompt).
+const fromAppWindow = (e: Electron.IpcMainInvokeEvent): boolean =>
+  !!win && !win.isDestroyed() && e.sender === win.webContents && isEngineDocument(e.senderFrame?.url, PORT);
+ipcMain.handle("lucid:kgDeviceStatus", (e) => (fromAppWindow(e) ? kgDevice.status().catch(() => null) : null));
+ipcMain.handle("lucid:kgDeviceEnroll", async (e, input: { passphrase?: unknown; autoUnlock?: unknown }): Promise<KgDeviceReply> => {
+  if (!fromAppWindow(e)) return { ok: false, code: "failed", error: "refused" };
+  try {
+    const dek = await kgDevice.enroll(String(input?.passphrase ?? ""), { autoUnlock: input?.autoUnlock !== false });
+    return await engineUnlockWithKey(dek); // enrolling from the locked screen also unlocks; already unlocked is a no-op
+  } catch (err) { return kgDeviceFail(err); }
+});
+ipcMain.handle("lucid:kgDeviceUnlock", (e) => (fromAppWindow(e) ? kgDeviceUnlockEngine() : { ok: false, code: "failed", error: "refused" }));
+ipcMain.handle("lucid:kgDeviceAuto", (e, on: unknown) => (fromAppWindow(e) ? kgDevice.setAutoUnlock(on === true) : false));
+ipcMain.handle("lucid:kgDeviceForget", async (e) => {
+  if (!fromAppWindow(e)) return false;
+  await kgDevice.forget().catch(() => {});
+  return true;
+});
+/** Once per app run, as the window first loads: an enrolled, auto-unlock device with a locked store gets
+ *  ONE OS prompt (with Windows Hello face recognition that is just looking at the camera). The renderer is
+ *  told the outcome so it can re-render; a cancel is quiet and the passphrase field stays available. */
+let kgAutoUnlockTried = false;
+async function kgAutoUnlock(): Promise<void> {
+  if (kgAutoUnlockTried) return;
+  kgAutoUnlockTried = true;
+  const st = await kgDevice.status().catch(() => null);
+  if (!st?.enrolled || !st.autoUnlock) return;
+  const p = await engineData(await fetch(`http://localhost:${PORT}/api/personal`, { headers: { "x-lucid-token": MAIN_TOKEN } }).catch(() => null));
+  if (p?.enabled !== true || p.configured !== true || p.unlocked !== false) return;
+  const r = await kgDeviceUnlockEngine();
+  if (win && !win.isDestroyed()) win.webContents.send("lucid:kgDeviceUnlocked", { ...r, label: st.label });
+}
 // P-NETWL.2 (ADR-0106): upload an auth file (token / PEM / API-key / config) straight into the vault. The
 // file is picked + read + encrypted ENTIRELY in main - the secret bytes never cross to the renderer (unlike a
 // paste flow). Returns the credential metadata (+ the source filename as a default label) or { error }.

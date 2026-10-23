@@ -87,6 +87,18 @@ export function unlockPersonal(passphrase: string): { ok: boolean; error?: strin
   catch { return { ok: false, error: "Wrong passphrase, or the store could not be read." }; }
 }
 
+/** P-KGBIO.1 (ADR-0454): unlock the main store with its DEK, released by the desktop main process after a
+ *  Windows Hello / Touch ID check. Already unlocked -> no-op (never swaps the live store out from under a
+ *  turn). The key is zeroed here on any failure; on success the store owns it. Main store only (never CUI). */
+export function unlockPersonalWithKey(dekB64: string): { ok: boolean; error?: string } {
+  if (store) return { ok: true };
+  if (!PersonalStore.exists(personalStorePath())) return { ok: false, error: "No store yet - set a passphrase to create one." };
+  const dek = Buffer.from(dekB64, "base64");
+  if (dek.length !== 32) { dek.fill(0); return { ok: false, error: "Malformed key." }; }
+  try { store = PersonalStore.openWithKey(personalStorePath(), dek); return { ok: true }; }
+  catch { dek.fill(0); return { ok: false, error: "That key does not open this store." }; }
+}
+
 // P-VAULT-HINT.2 (ADR-0080): last-known ACTIVE fact counts, captured IN MEMORY at lock time — NEVER
 // written to disk (no plaintext-count leak) and never a decrypt. Enriches the locked-vault hint; null
 // until the vault is locked at least once this session (a fresh locked start → boolean hint).
