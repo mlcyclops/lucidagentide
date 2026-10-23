@@ -8,7 +8,7 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type AccountsSnapshot, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
+import { bridge, type AccountsSnapshot, type AgentRunReply, type KgDeviceStatus, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import type { TurnStatus } from "./chat_events.ts";
 import { currentSwitchPreflight, liveBadge, planSessionSwitch, spokeNameFor, switchOutcome, switchSheetCopy } from "./session_switch.ts"; // P-SWITCH.1 (ADR-0403), P-SWITCH.2 (ADR-0404)
 import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
@@ -5750,6 +5750,8 @@ let personalKgs: KgListItem[] = [];
 let personalKgPages: Record<string, number> = {};
 let personalCountsBusy = false;
 let personalHydrationGeneration = 0;
+// P-KGBIO.1 (ADR-0454): Windows Hello / Touch ID unlock status from main (null in a plain browser).
+let personalDevice: KgDeviceStatus | null = null;
 
 /** The hero KG row, mirroring the LUCID Agent hero button in the Profile card. It opens the EXISTING KG
  *  picker (select / rename / seed from a folder / import a .lkgpack / the Role KG Packs catalog / new KG),
@@ -5772,8 +5774,9 @@ function kgHeroBtnHtml(): string {
  *  along because the tiles need it; per-KG PAGE COUNTS do not, and are filled in a second pass. */
 async function hydratePersonal(): Promise<void> {
   const generation = ++personalHydrationGeneration;
-  const [p, kgv] = await Promise.all([bridge.personal(), bridge.kbList().catch(() => null)]);
+  const [p, kgv, device] = await Promise.all([bridge.personal(), bridge.kbList().catch(() => null), bridge.kgDeviceStatus()]);
   if (generation !== personalHydrationGeneration) return;
+  personalDevice = device;
   if (kgv) personalKgs = kgv.kgs.map((k) => ({ kg_id: k.kg_id, name: k.name, active: k.kg_id === kgv.activeId, read_only: k.read_only, source_kind: k.source_kind }));
   fillSec("personal", secPersonal(p));
   void fillPersonalKgCounts(p, generation);
@@ -5965,6 +5968,7 @@ function secPersonal(p: PersonalStatus | null): string {
         <button class="btn-mini ok" id="personalSetup">${icon("shield", 12)} Create</button></div>`;
   } else if (!p.unlocked) {
     inner = `<div class="set-note">${icon("info", 12)} Your store is locked. Enter your passphrase to unlock it this session.</div>
+      ${personalDevice?.enrolled ? `<button class="btn-mini ok" id="personalDeviceUnlock" data-tip="${esc(personalDevice.label ?? "")}|Verify with ${esc(personalDevice.label ?? "")} instead of typing the passphrase.">${icon("shield", 12)} Unlock with ${esc(personalDevice.label ?? "")}</button>` : ""}
       <div class="prov-row"><input id="personalPass" class="prov-key" type="password" placeholder="Passphrase" autocomplete="current-password" />
         <button class="btn-mini ok" id="personalUnlock">${icon("shield", 12)} Unlock</button></div>`;
   } else {
@@ -5982,9 +5986,28 @@ function secPersonal(p: PersonalStatus | null): string {
       ${p.legacyCuiInMain > 0 ? `<div class="set-note warn">${icon("info", 12)} <span>${p.legacyCuiInMain} legacy CUI fact(s) sit in the main store from before isolation - not recalled or exported. ${p.cuiUnlocked ? `<button class="btn-mini" id="cuiMigrate" data-tip="Move into the isolated store|Relocates these cui facts (ids + timestamps preserved) into the separate CUI store, then removes them from the main store. Audited.">${icon("shield", 11)} Move into the CUI store</button>` : "Select CUI and unlock its store to move them into isolation."}</span></div>` : ""}
       <label class="set-toggle" style="margin-top:10px;border-top:1px solid var(--line-soft);padding-top:10px"><input type="checkbox" id="personalAiToggle" ${p.aiExtract ? "checked" : ""}/>
         <span><b>Richer graph (uses the model)</b> - extract semantic facts &amp; relationships with the model instead of offline patterns, so related ideas connect across turns. Costs one extra model call per turn. Off by default.</span></label>
+      ${personalDeviceHtml()}
       <button class="btn-mini pscope-lock" id="personalLock" data-tip="Lock everything|Wipes BOTH in-memory keys (main + CUI). You'll re-enter your passphrase to use personalization again this session - nothing is learned or recalled while locked." data-tip-side="top">${icon("shield", 12)} Lock</button>`;
   }
   return card(toggle + inner);
+}
+/** P-KGBIO.1 (ADR-0454): the device-unlock block of the unlocked Personalization card. Empty in a plain
+ *  browser and on platforms with no provider; a configured-but-absent Hello/Touch ID gets a setup hint. */
+function personalDeviceHtml(): string {
+  const d = personalDevice;
+  if (!d?.provider) return "";
+  const label = esc(d.label ?? "");
+  const wrap = (inner: string) => `<div class="pdevice" style="margin-top:10px;border-top:1px solid var(--line-soft);padding-top:10px">${inner}</div>`;
+  if (d.problem) return wrap(`<div class="set-note warn">${icon("shield", 12)} <span>${label} unlock is unavailable: ${esc(d.problem)}</span></div>`);
+  if (!d.supported) return wrap(`<div class="set-note">${icon("info", 12)} <span>${label} isn't set up on this device. Set it up in your system settings to unlock your graph without typing the passphrase.</span></div>`);
+  if (d.enrolled) {
+    return wrap(`<label class="set-toggle"><input type="checkbox" id="personalDeviceAuto" ${d.autoUnlock ? "checked" : ""}/>
+        <span><b>Unlock with ${label} when LUCID opens</b> - one ${label} check at launch (with a face camera, just look at it). The passphrase still works, and the CUI store always asks for its own.</span></label>
+      <button class="btn-mini" id="personalDeviceForget" data-tip="Turn off ${label} unlock|Removes the ${label} key LUCID created and its sealed copy of your store key. Your passphrase is unaffected.">${icon("shield", 12)} Turn off ${label} unlock</button>`);
+  }
+  return wrap(`<div class="set-note">${icon("shield", 12)} <span>Skip the passphrase: unlock with ${label} (face, fingerprint, or PIN). Confirm your passphrase once to turn it on.</span></div>
+    <div class="prov-row"><input id="personalDevicePass" class="prov-key" type="password" placeholder="Passphrase" autocomplete="current-password" />
+      <button class="btn-mini ok" id="personalDeviceEnroll">${icon("shield", 12)} Turn on ${label}</button></div>`);
 }
 // The isolated CUI store's own setup/unlock/lock (P9.5a, ADR-0014). Its own file + passphrase
 // + DEK, so one key never decrypts both CUI and non-CUI. Auto-locks when CUI is deselected.
@@ -10471,7 +10494,11 @@ async function renderKnowledge(): Promise<void> {
   if (!status?.enabled) return gate("Personalization is off. Enable it in Settings to build a knowledge graph.");
   if (!status.unlocked) {
     // Configured-but-locked → unlock right here (no trip to Settings). Not yet set up → Settings.
-    if (status.configured) return renderKgLocked(canvas as HTMLElement);
+    if (status.configured) {
+      const device = await bridge.kgDeviceStatus();
+      if (!kgOpen || generation !== kgRenderGeneration) return;
+      return renderKgLocked(canvas as HTMLElement, device);
+    }
     return gate("Personalization isn't set up yet. Create a passphrase in Settings to start your private graph.");
   }
   // P-SYSRES.1 (ADR-0182): hard-pause the CPU-heavy graph build while the machine is starved. Checked
@@ -10740,16 +10767,20 @@ async function openCodeFile(id: string): Promise<void> {
 }
 // Inline unlock for the Knowledge graph - enter the passphrase here instead of going to Settings.
 // Validates (non-empty), warns on Caps Lock, and has a show/hide toggle. On success the graph mounts.
-function renderKgLocked(canvas: HTMLElement): void {
+function renderKgLocked(canvas: HTMLElement, device: KgDeviceStatus | null): void {
   const side = $("#kgSide") as HTMLElement | null; if (side) { side.hidden = true; side.innerHTML = ""; }
+  // P-KGBIO.1 (ADR-0454): an enrolled device gets a one-click OS check; a capable one offers to enroll.
+  const label = esc(device?.label ?? "");
   canvas.innerHTML = `<div class="kg-empty kg-unlock">
     ${icon("shield", 30)}
-    <div>Your store is locked. Enter your passphrase to unlock it for this session.</div>
+    <div>Your store is locked. ${device?.enrolled ? `Unlock with ${label} or your passphrase.` : "Enter your passphrase to unlock it for this session."}</div>
+    ${device?.enrolled ? `<button id="kgDeviceUnlock" class="btn-mini ok kg-unlock-btn">${icon("shield", 12)} Unlock with ${label}</button>` : ""}
     <div class="kg-unlock-field">
       <input id="kgPass" type="password" class="prov-key" placeholder="Passphrase" autocomplete="off" spellcheck="false" aria-label="Passphrase" />
       <button id="kgPassShow" class="kg-eye" type="button" data-tip="Show / hide passphrase" aria-label="Show passphrase" aria-pressed="false">${icon("eye", 15)}</button>
     </div>
     <button id="kgUnlock" class="btn-mini ok kg-unlock-btn">${icon("shield", 12)} Unlock</button>
+    ${device?.supported && !device.enrolled ? `<label class="set-toggle kg-device-remember"><input type="checkbox" id="kgDeviceRemember"/><span>Use ${label} next time (unlocks automatically when LUCID opens)</span></label>` : ""}
     <div id="kgCaps" class="kg-unlock-hint caps" hidden>${icon("info", 11)} Caps Lock is on</div>
     <div id="kgPassErr" class="kg-unlock-hint err" hidden></div>
     <div class="kg-unlock-note">Your passphrase is never stored or sent anywhere - it decrypts the store in memory for this session only.</div>
@@ -10775,13 +10806,32 @@ function renderKgLocked(canvas: HTMLElement): void {
     if (!pass.trim()) { err.textContent = "Enter your passphrase."; err.hidden = false; input.focus(); return; }
     unlockBtn.disabled = true; unlockBtn.innerHTML = `${icon("refresh", 12, "spin")} Unlocking…`;
     const r = await bridge.personalUnlock(pass).catch(() => null);
-    if (r?.ok) { showToast({ title: "Unlocked", desc: "Your graph is decrypted for this session.", timeout: 2000 }); void renderKnowledge(); return; }
+    if (r?.ok) {
+      // ADR-0454: unlock FIRST (it writes the protector file for a store that has none yet), then add the device
+      // protector; a cancelled or failed OS check leaves the graph unlocked by the passphrase.
+      if (($("#kgDeviceRemember", canvas) as HTMLInputElement | null)?.checked) {
+        const e = await bridge.kgDeviceEnroll(pass);
+        if (e.ok) showToast({ tone: "ok", title: `Unlocked - ${device?.label ?? "device"} unlock is on`, desc: "Next time LUCID opens it asks for that instead of your passphrase.", timeout: 3200 });
+        else if (e.code !== "cancelled") showToast({ tone: "warn", title: `Unlocked, but ${device?.label ?? "device unlock"} is not on`, desc: e.error, timeout: 5000 });
+        void hydratePersonal();
+      } else showToast({ title: "Unlocked", desc: "Your graph is decrypted for this session.", timeout: 2000 });
+      void renderKnowledge();
+      return;
+    }
     err.textContent = r?.error ? r.error : "Incorrect passphrase. Try again."; err.hidden = false;
     unlockBtn.disabled = false; unlockBtn.innerHTML = `${icon("shield", 12)} Unlock`;
     input.select(); input.focus();
   };
   unlockBtn.addEventListener("click", () => void doUnlock());
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); void doUnlock(); } });
+  const deviceBtn = $("#kgDeviceUnlock", canvas) as HTMLButtonElement | null;
+  deviceBtn?.addEventListener("click", async () => {
+    deviceBtn.disabled = true; deviceBtn.innerHTML = `${icon("refresh", 12, "spin")} Waiting for ${label}…`;
+    const r = await bridge.kgDeviceUnlock();
+    if (r.ok) { showToast({ title: `Unlocked with ${device?.label ?? "device"}`, desc: "Your graph is decrypted for this session.", timeout: 2000 }); void renderKnowledge(); return; }
+    if (r.code !== "cancelled") { err.textContent = r.error; err.hidden = false; }
+    deviceBtn.disabled = false; deviceBtn.innerHTML = `${icon("shield", 12)} Unlock with ${label}`;
+  });
   input.focus();
 }
 function renderKgSide(id: string | null): void {
@@ -17400,6 +17450,32 @@ function wire(): void {
       void hydratePersonal();
       return;
     }
+    // ── P-KGBIO.1 (ADR-0454): Windows Hello / Touch ID unlock ──
+    const deviceLabel = personalDevice?.label ?? "Device";
+    if (t.closest("#personalDeviceUnlock")) {
+      const r = await bridge.kgDeviceUnlock();
+      if (r.ok) showToast({ title: `Unlocked with ${deviceLabel}`, desc: "Unlocked for this session.", timeout: 2400 });
+      else if (r.code !== "cancelled") showToast({ tone: "warn", title: `${deviceLabel} didn't unlock`, desc: r.error, meta: "your passphrase still works", actions: [{ label: "OK" }], timeout: 5000 });
+      void hydratePersonal();
+      return;
+    }
+    if (t.closest("#personalDeviceEnroll")) {
+      const pass = ($("#personalDevicePass", $("#setBody")!) as HTMLInputElement)?.value ?? "";
+      if (!pass) { showToast({ tone: "warn", title: "Enter your passphrase", desc: `Confirm it once to turn on ${deviceLabel} unlock.`, timeout: 3000 }); return; }
+      const r = await bridge.kgDeviceEnroll(pass);
+      if (r.ok) showToast({ tone: "ok", title: `${deviceLabel} unlock is on`, desc: "LUCID will ask for it when it opens instead of your passphrase.", actions: [{ label: "OK" }], timeout: 3600 });
+      else if (r.code !== "cancelled") showToast({ tone: "warn", title: `Couldn't turn on ${deviceLabel}`, desc: r.error, actions: [{ label: "OK" }], timeout: 5000 });
+      void hydratePersonal();
+      return;
+    }
+    const autoBox = t.closest("#personalDeviceAuto");
+    if (autoBox instanceof HTMLInputElement) { await bridge.kgDeviceAuto(autoBox.checked); void hydratePersonal(); return; }
+    if (t.closest("#personalDeviceForget")) {
+      await bridge.kgDeviceForget();
+      showToast({ title: `${deviceLabel} unlock is off`, desc: "Its key and sealed copy are removed; your passphrase is unchanged.", timeout: 3000 });
+      void hydratePersonal();
+      return;
+    }
     // ── Isolated CUI store (P9.5a): its own setup / unlock / lock ──
     if (t.closest("#cuiSetup") || t.closest("#cuiUnlock")) {
       const setup = !!t.closest("#cuiSetup");
@@ -19219,6 +19295,15 @@ onNetChange(() => {
 // listen for the lucid://auth deep link the OS forwards after hosted sign-in. A plain public build has no
 // config → "off" → the fail-closed nullProvider, so nothing here changes the storefront's behavior.
 initMarket(readMarketBootConfig());
+// P-KGBIO.1 (ADR-0454): main ran the launch-time Windows Hello / Touch ID check. Refresh whatever shows the
+// store's state; a cancel is quiet (the passphrase field is still there), any other failure says why.
+bridge.onKgDeviceUnlocked((r) => {
+  const label = r.label ?? "Device unlock";
+  if (r.ok) showToast({ tone: "ok", title: `Unlocked with ${label}`, desc: "Your knowledge graph is decrypted for this session.", timeout: 2400 });
+  else if (r.code !== "cancelled") showToast({ tone: "warn", title: `${label} didn't unlock your graph`, desc: r.error, meta: "your passphrase still works", actions: [{ label: "OK" }], timeout: 6000 });
+  void hydratePersonal();
+  void renderKnowledge();
+});
 try {
   (window as unknown as { lucid?: { onAuthCallback?: (cb: (url: string) => void) => void } }).lucid?.onAuthCallback?.((url) => {
     if (!handleAuthCallback(url)) return;

@@ -591,6 +591,11 @@ demo-P-AOS.2: ## P-AOS.2 (ADR-0453): tasks under the fleet goal - a deliverable 
 	$(BUN) run harness/scripts/demo_paos2.ts
 	$(BUN) test $(TEST_IGNORES) desktop/aos.test.ts desktop/fleet_goal.test.ts
 
+.PHONY: demo-P-KGBIO.1
+demo-P-KGBIO.1: ## P-KGBIO.1 (ADR-0454): unlock the knowledge graph with Windows Hello (face, fingerprint, PIN) or Touch ID / Apple Watch as Lucid Vault Protector Spec v1 entries (the Hub's protectors.json format, pinned by a Hub-written fixture) - an existing store migrates with zero re-encryption, the passphrase is needed to turn it on and still opens the store, one OS check releases the key to the engine, an unknown protector-file version fails closed. LUCID_DEMO_REAL_HELLO=1 on Windows uses the real Hello prompt.
+	$(BUN) run desktop/scripts/demo_p_kgbio_1.ts
+	$(BUN) test $(TEST_IGNORES) harness/personal/protectors.test.ts desktop/kg_device_unlock.test.ts
+
 .PHONY: demo-P-STEPTEXT.1
 demo-P-STEPTEXT.1: ## P-STEPTEXT.1: narration resumed after a tool call starts a new paragraph (master + lanes, stream and saved answer), the answer's tool chips interleave between the steps again, and a subagent row names a looping model ("model output degenerated") instead of painting "!!!!", with a scout's structured yield shown as its final step.
 	$(BUN) run harness/scripts/demo_psteptext1.ts

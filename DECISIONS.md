@@ -25236,3 +25236,39 @@ Two traps found by measurement before writing anything:
 **Not in this increment.** Plan (the heartbeat inventing tasks toward unmet criteria; a person writes them), artifacts, and the AOS event log (frozen EventName, its own ADR). A command check's verdict is reported by the spoke that ran it, not observed by the engine: the same trust as the /goal checker, recorded here rather than claimed stronger. Overlapping write scopes are not serialized at dispatch: two tasks on two spokes in one folder run side by side, with LUCID's per-file write claims (ADR-0417) making a conflicting write wait, which is the existing fleet rule.
 
 **Consequences.** The goal now drives work instead of only tracking it, and nothing reaches done without passing its checks. `make demo-P-AOS.2` proves dispatch order, dependency gating, one-task-per-spoke, the verify turn, fail-closed parsing, retry with the reason, the attempt limit, human review, and restart recovery against the real store with a scripted dispatch seam.
+
+## ADR-0454 -- P-KGBIO.1: unlock the knowledge graph with Windows Hello or Touch ID (2026-10-22)
+
+**Status:** Accepted -- BUILT.
+
+**Context.** The personal knowledge graph (ADR-0010, P9.1) is passphrase-custodied, and nothing caches the passphrase, so every launch asks for it again. Users with Windows Hello (face camera, fingerprint, PIN) or Touch ID / Apple Watch want the OS's own user verification to unlock it, and want that to happen as LUCID opens. The design already exists: LUCIDMeetingHub#3 (Vault Quick Unlock) proposes one key hierarchy for the Hub and the IDE, the "Lucid Vault Protector Spec v1" (`docs/VAULT_QUICK_UNLOCK_PROPOSAL.md` §3-§4). The Hub shipped Phase 1 in `src/vault_protectors.py`: the VMK, the mandatory password protector, and password change as a re-wrap. Its §6 Option A asks the IDE to implement the identical format. The store's random DEK is already the spec's VMK.
+
+**Decision.**
+- **The spec's file, byte-compatible with the Hub.** `harness/personal/protectors.ts` implements Spec v1 as the Hub ships it:
+  - `{ version: 1, vmk_check, protectors: [...] }`, where `vmk_check` is a Fernet token of `LUCID_VMK_V1` under the VMK, proving a candidate key before any data opens;
+  - every wrap is AES-256-GCM `ct||tag` with AAD `lucid-vmk-v1|<id>|<type>`, so a blob cannot be moved between entries;
+  - exactly one `password` protector (pbkdf2-sha256, 600k, 32-byte salt);
+  - fail closed on an unknown version or type, a missing field, a duplicate id, an absurd iteration count, or a malformed file;
+  - atomic, fsync'd writes.
+  The main store's file is `lucid-personal.kg.protectors.json` next to it. A file written by the Hub's own Python is pinned as a test fixture, and a two-way cross-check ran both directions (each side opened the other's file and refused a wrong password).
+- **Protector-first unlock and migration (spec §7).** `unlockPersonal` opens through the protector file when it exists, and a malformed or unsupported file is fatal: there is no fall back to the store envelope, which would downgrade the unlock. With no protector file, the envelope opens the store and its DEK becomes the VMK unchanged. It is written to a new protector file, then re-read and re-proven, with zero re-encryption. The store file is not rewritten, so an older build still opens it. As in the Hub, retiring the legacy path is the passphrase change's job (ADR-0455). Setup writes the store, then the protector file; a fresh setup replaces an orphaned file and any device entry in it.
+- **Windows Hello = the spec's `hello` protector (§4.1).**
+  - A `KeyCredential` (TPM-backed, non-exportable RSA), one per entry (`key_name` `LucidVault-ide-<entry id>`), signs the entry's random 32-byte `challenge`.
+  - `KEK = HKDF-SHA256(signature, salt = empty, info = "lucid-vmk-v1|hello")`. §4.1 leaves the HKDF parameters open; these are the IDE's, recorded so the Hub's Phase 2 matches. PKCS#1 v1.5 is deterministic, and the real run reproduced the key from a second signature.
+  - Driven through in-box PowerShell 5.1 WinRT (`-EncodedCommand`, env inputs, a stdout marker line), the folder-dialog posture (ADR-0265). It brings the Windows Security dialog to the front, because the request comes from a windowless child.
+  - Re-enrolling creates a new key and only then deletes the old entry's.
+- **macOS = `keychain-touchid`, deliberately NOT the spec's `sep` (§4.4).** A random KEK sealed by `safeStorage` (Keychain, bound to the app's code signature) is released only after `systemPreferences.promptTouchID` (Touch ID, a paired Apple Watch, or the login password). That is an app-enforced gate, not a Secure Enclave key with `.biometryCurrentSet`, so it carries its own type name and is never read as `sep`. The real `sep` protector needs a native module and a keychain-access-groups entitlement.
+- **`auto_unlock`** is an IDE field on a device entry (the Hub validator ignores fields it does not use). Once per run, when the window first loads, an enrolled entry with it on (the default) and a locked, enabled store gets exactly one OS prompt; with a Hello face camera the user only looks at it. A cancel is quiet and the passphrase stays.
+- **Main-process only.** `desktop/kg_device_unlock.ts` runs in Electron main: it proves the passphrase through the password protector at enrollment, unwraps the VMK after the OS check, and hands it to the engine over loopback (`POST /api/personal/unlock-key`). The renderer sees only status and `{ ok, code, error }`. The IPC answers only the app window's own engine document (the ADR-0396 token gate), so a page in the agent browser window cannot pop a Hello prompt. `openWithKey` accepts any custody and keeps a passphrase store's KDF envelope on save.
+- **UI.** Settings shows "Turn on Windows Hello" (passphrase once), the "Unlock with … when LUCID opens" toggle, and "Turn off". The locked graph view has "Unlock with Windows Hello" and "Use Windows Hello next time"; the latter unlocks with the passphrase first (which migrates), then adds the protector. An unusable protector file is shown as such and nothing is offered.
+- **CUI is out of scope.** The CUI store has no protector file. ADR-0014 requires its own passphrase to return to it.
+- **No new EventName.** `personal_store_unlocked` carries the store's custody, unchanged.
+
+**Not in this increment.**
+- The spec's remote-session policy (§5: lock on remote connect, refuse quick unlock in an RDP session) and auto-lock on idle, screen lock, or sleep. Windows itself does not serve Hello prompts inside an RDP session (§4.1).
+- CAC (`piv`, §4.2) and FIDO2 (§4.3).
+- The real `sep` protector; Watch-only Macs; Linux (no provider; the option is hidden).
+- A native helper in place of PowerShell. Under Constrained Language Mode (Smart App Control / WDAC), the WinRT projection is blocked and the option reports itself unavailable with that reason.
+- Main and the engine both write the protector file, each atomically, on user-driven actions; a lost update needs two of them in the same instant.
+
+**Consequences.** One OS check replaces typing the passphrase at each launch, and the IDE and the Hub now share one protector format, so a CAC or FIDO2 protector built for either lands in the other without a format change. Losing the Hello key or the entry costs nothing, because the password protector opens the store. Copying the file without the user's Hello gesture on that TPM gets nothing on Windows. On macOS it is as strong as the app's Keychain ACL plus the Touch ID gate. `make demo-P-KGBIO.1` proves the migration with zero re-encryption, enrollment needing the passphrase, one check releasing a key the engine accepts, the password protector still working, turn-off, and fail-closed on an unknown version, against a real store with a scripted verifier; `LUCID_DEMO_REAL_HELLO=1` runs it with the real Windows Hello prompt.
