@@ -166,6 +166,7 @@ import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_R
 import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
 import { ensureHiddenConsole, ompWindowsHide } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): a hidden console the omp children share
 import { setDefaultWindowsHide } from "./acp.ts";
+import { HeadedBrowserRevealer } from "./headed_browser_reveal.ts"; // P-BROWSER.5 (ADR-0456): show the headed browser omp's broker spawns hidden
 import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { discoveryHeaders, MAX_DISCOVERY_BYTES, parseDiscoveredModels, providerEnvVar, providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
@@ -1667,6 +1668,9 @@ delete process.env.LUCID_MAIN_TOKEN;
   if (con.allocated) console.error(`[console] hidden console window allocated for the agent's children${con.hidden ? "" : " (WARNING: it could not be hidden)"}`);
   else if (process.platform === "win32" && !con.window) console.error(`[console] no console window for the agent's children (${con.reason ?? "unknown"}): windows the agent opens may stay hidden`);
 }
+// P-BROWSER.5 (ADR-0456): omp 18.8 spawns its broker detached and console-less, so the console above no longer
+// reaches the shared headed Chromium: it is born hidden again (a white, frameless rectangle). Show it.
+new HeadedBrowserRevealer().start();
 // P-SANDBOX.15 (ADR-0396): the omp children's OWN token. Every LUCID_*_URL handed to a child carries this,
 // never TOKEN, and the engine accepts it only on AGENT_ROUTES (below), so the agent cannot reach human-only
 // routes such as /api/security/approve or the sandbox switch.
