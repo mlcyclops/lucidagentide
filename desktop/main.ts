@@ -10,7 +10,7 @@
 // browser build and the desktop app share one real backend. The preload only
 // adds native window controls + crisp zoom.
 
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, safeStorage, shell, systemPreferences } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, safeStorage, shell } from "electron";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -36,7 +36,7 @@ import { logTail } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385): one l
 import type { IncidentEvent, IncidentInput, IncidentProcess } from "./incident_report.ts";
 import { backfillCanonicalFromInstance, seedInstanceFromCanonical } from "./oscrypt_seed.ts"; // one safeStorage key across port-keyed instances
 import { listLocalProviders, embeddingsConfig, personalBaseDir, personalProtectorsPath } from "./settings_store.ts";
-import { DeviceUnlockError, KgDeviceUnlock, macTouchIdProvider, windowsHelloProvider } from "./kg_device_unlock.ts"; // P-KGBIO.1 (ADR-0454)
+import { DeviceUnlockError, helperSepRunner, KgDeviceUnlock, macSecureEnclaveProvider, windowsHelloProvider } from "./kg_device_unlock.ts"; // P-KGBIO.1 (ADR-0454)
 import type { AuthKind } from "./network_whitelist.ts";
 import { gitEnvNameFromRef } from "./git_url.ts"; // P-FLEET.L2: host-scoped git creds, vault ref -> env name
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: agent key combos, parsed by one shared rule
@@ -804,14 +804,14 @@ ipcMain.handle("lucid:credDelete", (_e, ref: unknown) => { try { return deleteCr
 ipcMain.handle("lucid:credEncryptionAvailable", () => { try { return safeStorage.isEncryptionAvailable(); } catch { return false; } });
 
 // P-KGBIO.1 (ADR-0454): unlock the personal knowledge graph with Windows Hello (face, fingerprint, PIN) or
-// Touch ID / Apple Watch, each a protector in the store's Protector Spec v1 file. The VMK is unwrapped
+// Touch ID (a Secure Enclave key, via bin/lucid-sep), each a protector in the store's Protector Spec v1 file. The VMK is unwrapped
 // HERE in main (password at enrollment, the OS check at unlock); it reaches the engine over loopback
 // (/api/personal/unlock-key) and never the renderer. The standard build's personal dir is the engine's
 // default; the Creator flavor relocates it via the engine env only, so main resolves the same dir itself.
 const PERSONAL_DIR = (): string => BUILD.creatorBuild ? (process.env.LUCID_PERSONAL_DIR || join(app.getPath("userData"), "personal")) : personalBaseDir();
 const kgDevice = new KgDeviceUnlock({
   provider: process.platform === "win32" ? windowsHelloProvider()
-    : process.platform === "darwin" ? macTouchIdProvider(systemPreferences, safeStorage)
+    : process.platform === "darwin" ? macSecureEnclaveProvider(helperSepRunner(() => join(REPO, "bin", "lucid-sep")))
     : null,
   protectorsPath: () => personalProtectorsPath(PERSONAL_DIR()),
 });

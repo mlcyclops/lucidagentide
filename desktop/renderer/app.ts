@@ -6002,10 +6002,10 @@ function personalDeviceHtml(): string {
   if (!d.supported) return wrap(`<div class="set-note">${icon("info", 12)} <span>${label} isn't set up on this device. Set it up in your system settings to unlock your graph without typing the passphrase.</span></div>`);
   if (d.enrolled) {
     return wrap(`<label class="set-toggle"><input type="checkbox" id="personalDeviceAuto" ${d.autoUnlock ? "checked" : ""}/>
-        <span><b>Unlock with ${label} when LUCID opens</b> - one ${label} check at launch (with a face camera, just look at it). The passphrase still works, and the CUI store always asks for its own.</span></label>
+        <span><b>Unlock with ${label} when LUCID opens</b> - one ${label} check at launch (${d.provider === "sep" ? "your fingerprint; there is no password fallback" : "with a face camera, just look at it"}). The passphrase still works, and the CUI store always asks for its own.</span></label>
       <button class="btn-mini" id="personalDeviceForget" data-tip="Turn off ${label} unlock|Removes the ${label} key LUCID created and its sealed copy of your store key. Your passphrase is unaffected.">${icon("shield", 12)} Turn off ${label} unlock</button>`);
   }
-  return wrap(`<div class="set-note">${icon("shield", 12)} <span>Skip the passphrase: unlock with ${label} (face, fingerprint, or PIN). Confirm your passphrase once to turn it on.</span></div>
+  return wrap(`<div class="set-note">${icon("shield", 12)} <span>Skip the passphrase: unlock with ${label} (${d.provider === "sep" ? "a key in this Mac's Secure Enclave that only your current fingerprints can use" : "face, fingerprint, or PIN"}). Confirm your passphrase once to turn it on.</span></div>
     <div class="prov-row"><input id="personalDevicePass" class="prov-key" type="password" placeholder="Passphrase" autocomplete="current-password" />
       <button class="btn-mini ok" id="personalDeviceEnroll">${icon("shield", 12)} Turn on ${label}</button></div>`);
 }

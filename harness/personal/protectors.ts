@@ -25,10 +25,9 @@ import { closeSync, fsyncSync, openSync, readFileSync, renameSync, writeSync } f
 import { deriveKey, KDF_ITERS, KEY_LEN } from "./crypto.ts";
 
 export const PROTECTORS_VERSION = 1 as const;
-/** The types this build can unwrap. `hello` is spec §4.1. `keychain-touchid` is an IDE-only interim type
- *  (a safeStorage-sealed KEK behind promptTouchID), deliberately NOT named `sep`: it is not the spec's
- *  Secure Enclave protector (§4.4) and must never be read as one. */
-export const PROTECTOR_TYPES = ["password", "hello", "keychain-touchid"] as const;
+/** The types this build can unwrap: the mandatory `password`, `hello` (Windows Hello, spec §4.1) and `sep`
+ *  (macOS Secure Enclave behind Touch ID, spec §4.4). */
+export const PROTECTOR_TYPES = ["password", "hello", "sep"] as const;
 export type ProtectorType = (typeof PROTECTOR_TYPES)[number];
 
 const VMK_CHECK_PLAINTEXT = "LUCID_VMK_V1";
@@ -47,7 +46,7 @@ export interface ProtectorEntry {
   nonce: string;
   /** password only */
   kdf?: { alg: typeof PASSWORD_KDF_ALG; iterations: number; salt: string };
-  /** Type-specific public fields (hello: challenge, key_name; keychain-touchid: sealed_kek) and the IDE's
+  /** Type-specific public fields (hello: challenge, key_name; sep: se_key, eph_pub) and the IDE's
    *  `auto_unlock` preference. The Hub validator ignores fields it does not use. */
   [field: string]: unknown;
 }
@@ -191,7 +190,7 @@ export function parseProtectors(text: string): ProtectorDoc {
       b64(k, "salt");
     }
     if (type === "hello") { b64(e, "challenge"); field(e, "key_name"); }
-    if (type === "keychain-touchid") b64(e, "sealed_kek");
+    if (type === "sep") { b64(e, "se_key"); b64(e, "eph_pub"); }
   }
   if (list.filter((e) => (e as ProtectorEntry).type === "password").length !== 1) throw new ProtectorError("format", "a vault must carry exactly one password protector - it is the mandatory recovery path");
   return doc as ProtectorDoc;

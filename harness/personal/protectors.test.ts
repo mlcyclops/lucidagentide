@@ -57,7 +57,7 @@ test("the vmk_check proves the key: an entry from another vault is refused befor
 test("fail closed on every malformed or unknown shape", () => {
   expect(codeOf(() => parseProtectors("not json"))).toBe("format");
   expect(codeOf(() => parseProtectors(mutate((d) => { d.version = 2; })))).toBe("version");
-  expect(codeOf(() => parseProtectors(mutate((d) => { d.protectors[0].type = "sep"; })))).toBe("unsupported");
+  expect(codeOf(() => parseProtectors(mutate((d) => { d.protectors[0].type = "piv"; })))).toBe("unsupported"); // CAC: not built yet
   expect(codeOf(() => parseProtectors(mutate((d) => { delete d.vmk_check; })))).toBe("format");
   expect(codeOf(() => parseProtectors(mutate((d) => { d.protectors = []; })))).toBe("format");
   expect(codeOf(() => parseProtectors(mutate((d) => { d.protectors.push({ ...d.protectors[0] }); })))).toBe("format"); // duplicate id

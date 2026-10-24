@@ -4,7 +4,7 @@
 // desktop/kg_device_unlock.ts
 //
 // P-KGBIO.1 (ADR-0454): unlock the personal knowledge graph with the OS's own user verification -
-// Windows Hello (face camera, fingerprint, or Hello PIN) or macOS Touch ID / Apple Watch - instead of
+// Windows Hello (face camera, fingerprint, or Hello PIN) or macOS Touch ID (Secure Enclave) - instead of
 // typing the passphrase every launch. Each mechanism is a PROTECTOR in the store's Lucid Vault Protector
 // Spec v1 file (harness/personal/protectors.ts; the Hub's protectors.json format): one more AES-256-GCM
 // wrapping of the store key (the spec's VMK), bound to its entry by the AAD. The password protector stays
@@ -15,19 +15,23 @@
 //                     entry's random 32-byte `challenge`; KEK = HKDF-SHA256(signature, info
 //                     "lucid-vmk-v1|hello"). PKCS#1 v1.5 is deterministic, and the signature exists only
 //                     after a live Hello check. Entry fields: challenge, key_name.
-//   keychain-touchid  IDE interim, NOT the spec's `sep` (§4.4): a random KEK sealed by safeStorage (Keychain,
-//                     bound to the app's code signature) and released after systemPreferences.promptTouchID
-//                     (Touch ID, a paired Apple Watch, or the login password). An app-enforced gate, not a
-//                     hardware binding; the ADR says so. Entry field: sealed_kek.
+//   sep               spec §4.4. A Secure Enclave P-256 key-agreement key (CryptoKit, access control
+//                     `.privateKeyUsage | .biometryCurrentSet`: Touch ID with the CURRENT fingers, no password
+//                     fallback; adding a fingerprint kills the key). Created by bin/lucid-sep
+//                     (tools/macsep/lucid_sep.swift). The private key never leaves the enclave; its opaque
+//                     `se_key` blob works only on this Mac. KEK = HKDF-SHA256(ECDH(eph, enclave key), info
+//                     "lucid-vmk-v1|sep"): the ephemeral private half is discarded at enrollment, so only a
+//                     live Touch ID match inside the enclave can redo the agreement. Entry fields: se_key,
+//                     eph_pub.
 //   auto_unlock       IDE field on a device entry: unlock with that check as LUCID opens.
 //
 // MAIN-PROCESS ONLY. The VMK is unwrapped here (password at enrollment, the OS check at unlock) and handed
 // to the engine's /api/personal/unlock-key over loopback. It never reaches the renderer. The CUI store has
 // no protector file and is never device-unlocked (ADR-0014: returning to CUI requires its passphrase).
 //
-// The provider is injected, so this unit-tests with no TPM and no Keychain.
+// The provider is injected, so this unit-tests with no TPM and no Secure Enclave.
 
-import { hkdfSync, randomBytes } from "node:crypto";
+import { createECDH, hkdfSync, randomBytes } from "node:crypto";
 import { KEY_LEN } from "../harness/personal/crypto.ts";
 import {
   newEntry, ProtectorError, readProtectors, unlockWithPassword, unwrapEntry, vmkCheckOk, withoutProtector, withProtector, writeProtectors,
@@ -216,18 +220,23 @@ try {
 `;
 }
 
-export interface HelloReply { ok: boolean; status?: string; error?: string; available?: boolean; signature?: string }
+/** One reply line from a native bridge (the Windows Hello PowerShell script or bin/lucid-sep). */
+export interface BridgeReply {
+  ok: boolean; status?: string; error?: string; available?: boolean;
+  signature?: string; // hello
+  se_key?: string; public_key?: string; shared?: string; // sep
+}
 
-/** Parse the helper's marker line (exported for tests). Missing marker -> a failed reply carrying stderr. */
-export function parseHelloReply(stdout: string, stderr = ""): HelloReply {
-  const at = stdout.lastIndexOf(HELLO_MARK);
+/** Parse a bridge's marker line (exported for tests). Missing marker -> a failed reply carrying stderr. */
+export function parseBridgeReply(mark: string, stdout: string, stderr = ""): BridgeReply {
+  const at = stdout.lastIndexOf(mark);
   if (at < 0) return { ok: false, status: /language mode/i.test(stderr) ? "ConstrainedLanguage" : "NoReply", error: stderr.trim().slice(0, 200) };
-  try { return JSON.parse(stdout.slice(at + HELLO_MARK.length).split(/\r?\n/, 1)[0] ?? "") as HelloReply; }
+  try { return JSON.parse(stdout.slice(at + mark.length).split(/\r?\n/, 1)[0] ?? "") as BridgeReply; }
   catch { return { ok: false, status: "NoReply" }; }
 }
 
 /** Map a non-ok helper reply to the error the UI shows (exported for tests). */
-export function helloError(r: HelloReply): DeviceUnlockError {
+export function helloError(r: BridgeReply): DeviceUnlockError {
   switch (r.status) {
     case "UserCanceled": return new DeviceUnlockError("cancelled", "Windows Hello was cancelled.");
     case "UserPrefersPassword": return new DeviceUnlockError("cancelled", "Use your passphrase instead.");
@@ -248,7 +257,7 @@ export const powershellHelloRunner: HelloRunner = async (env) => {
 };
 
 export function windowsHelloProvider(run: HelloRunner = powershellHelloRunner): DeviceKeyProvider {
-  const call = async (env: Record<string, string>): Promise<HelloReply> => { const r = await run(env); return parseHelloReply(r.stdout, r.stderr); };
+  const call = async (env: Record<string, string>): Promise<BridgeReply> => { const r = await run(env); return parseBridgeReply(HELLO_MARK, r.stdout, r.stderr); };
   const sign = async (op: "create" | "sign", keyName: string, challenge: string): Promise<Buffer> => {
     const r = await call({ LUCID_HELLO_OP: op, LUCID_HELLO_KEY: keyName, LUCID_HELLO_CHALLENGE: challenge });
     if (!r.ok || !r.signature) throw helloError(r);
@@ -268,40 +277,64 @@ export function windowsHelloProvider(run: HelloRunner = powershellHelloRunner): 
   };
 }
 
-// ── macOS: Touch ID / Apple Watch gate over a safeStorage-sealed KEK ──────────────────────────────────────
+// ── macOS: a Secure Enclave key behind Touch ID (spec §4.4 `sep`), via bin/lucid-sep ──────────────────────
 
-/** The slices of Electron's systemPreferences + safeStorage this provider uses. */
-export interface MacAuthLike {
-  canPromptTouchID(): boolean;
-  promptTouchID(reason: string): Promise<void>;
+/** Stdout marker of bin/lucid-sep. */
+export const SEP_MARK = "LUCID_SEP::";
+/** HKDF-SHA256 parameters for the sep KEK (spec §4.4 leaves them open; the Hub's Mac protector must match). */
+const SEP_HKDF_INFO = "lucid-vmk-v1|sep";
+const SEP_REASON = "unlock your LUCID knowledge graph";
+
+/** Map a non-ok helper reply to the error the UI shows (exported for tests). */
+export function sepError(r: BridgeReply): DeviceUnlockError {
+  switch (r.status) {
+    case "cancelled": return new DeviceUnlockError("cancelled", "Touch ID was cancelled.");
+    case "lockout": return new DeviceUnlockError("failed", "Touch ID is locked out after too many attempts. Unlock with your passphrase; Touch ID comes back once you unlock the Mac with its password.");
+    case "not-available": return new DeviceUnlockError("unsupported", "Touch ID is not available right now (no enrolled fingerprint, or no logged-in desktop session).");
+    case "invalid-key": return new DeviceUnlockError("not-enrolled", "The Touch ID key no longer works, usually because the enrolled fingerprints changed. Unlock with your passphrase and turn Touch ID unlock on again.");
+    default: return new DeviceUnlockError("failed", `Touch ID did not complete${r.error ? `: ${r.error}` : r.status ? ` (${r.status})` : ""}.`);
+  }
 }
-export interface MacSealLike {
-  isEncryptionAvailable(): boolean;
-  encryptString(plainText: string): Buffer;
-  decryptString(encrypted: Buffer): string;
+
+export type SepRunner = (env: Record<string, string>) => Promise<{ stdout: string; stderr: string }>;
+
+/** The real runner: the bundled helper, resolved at call time (main learns the repo root at app ready). A
+ *  missing helper reads as no reply, so the option is simply unavailable. */
+export function helperSepRunner(helperPath: () => string): SepRunner {
+  return async (env) => { const r = await runToText([helperPath()], { env }); return { stdout: r.stdout, stderr: r.stderr }; };
 }
 
-const TOUCH_ID_REASON = "unlock your LUCID knowledge graph";
-
-export function macTouchIdProvider(auth: MacAuthLike, seal: MacSealLike): DeviceKeyProvider {
-  const prompt = async (): Promise<void> => {
-    try { await auth.promptTouchID(TOUCH_ID_REASON); }
-    catch (e) { throw new DeviceUnlockError("cancelled", `Touch ID did not complete: ${String((e as Error)?.message ?? e)}`); }
+export function macSecureEnclaveProvider(run: SepRunner): DeviceKeyProvider {
+  const call = async (env: Record<string, string>): Promise<BridgeReply> => { const r = await run(env); return parseBridgeReply(SEP_MARK, r.stdout, r.stderr); };
+  const kekOf = (shared: Buffer): Buffer => Buffer.from(hkdfSync("sha256", shared, Buffer.alloc(0), SEP_HKDF_INFO, KEY_LEN));
+  /** One Touch ID prompt: the enclave redoes ECDH(enclave key, eph_pub). */
+  const agree = async (seKey: string, ephPub: string): Promise<Buffer> => {
+    const r = await call({ LUCID_SEP_OP: "agree", LUCID_SEP_KEY: seKey, LUCID_SEP_PEER: ephPub, LUCID_SEP_REASON: SEP_REASON });
+    if (!r.ok || !r.shared) throw sepError(r);
+    const shared = Buffer.from(r.shared, "base64");
+    try { return kekOf(shared); } finally { shared.fill(0); }
   };
   return {
-    type: "keychain-touchid",
+    type: "sep",
     label: "Touch ID",
-    available: async () => { try { return auth.canPromptTouchID() && seal.isEncryptionAvailable(); } catch { return false; } },
+    available: async () => { const r = await call({ LUCID_SEP_OP: "available" }); return r.ok && r.available === true; },
     create: async () => {
-      await prompt(); // enrollment proves presence the same way unlock will
-      const kek = randomBytes(KEY_LEN);
-      return { kek, fields: { sealed_kek: seal.encryptString(kek.toString("base64")).toString("base64") } };
+      const r = await call({ LUCID_SEP_OP: "create" }); // no prompt: creating the key needs no match
+      if (!r.ok || !r.se_key || !r.public_key) throw sepError(r);
+      const eph = createECDH("prime256v1");
+      eph.generateKeys();
+      const shared = eph.computeSecret(Buffer.from(r.public_key, "base64"));
+      const kek = kekOf(shared);
+      shared.fill(0);
+      const fields = { se_key: r.se_key, eph_pub: eph.getPublicKey("base64") }; // the ephemeral private half is dropped here
+      // One Touch ID match now, so turning it on proves the enclave reproduces the key with the current fingers.
+      const proof = await agree(fields.se_key, fields.eph_pub).catch((e: unknown) => { kek.fill(0); throw e; });
+      const same = proof.equals(kek);
+      proof.fill(0);
+      if (!same) { kek.fill(0); throw new DeviceUnlockError("failed", "The Secure Enclave did not reproduce the key - Touch ID unlock was not turned on."); }
+      return { kek, fields };
     },
-    open: async (entry) => {
-      await prompt();
-      try { return Buffer.from(seal.decryptString(Buffer.from(String(entry.sealed_kek ?? ""), "base64")), "base64"); }
-      catch { throw new DeviceUnlockError("not-enrolled", "The Keychain no longer holds LUCID's Touch ID key - unlock with your passphrase and turn Touch ID unlock on again."); }
-    },
-    destroy: async () => { /* the sealed KEK lives only in the entry, which the caller removes */ },
+    open: (entry) => agree(String(entry.se_key ?? ""), String(entry.eph_pub ?? "")),
+    destroy: async () => { /* the enclave key exists only as the entry's se_key blob, which the caller removes */ },
   };
 }

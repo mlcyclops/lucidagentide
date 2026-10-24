@@ -10,11 +10,11 @@ import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHash, hkdfSync } from "node:crypto";
+import { createECDH, createHash, hkdfSync, randomBytes, type ECDH } from "node:crypto";
 import { PersonalStore } from "../harness/personal/store.ts";
 import { readProtectors, unlockWithPassword } from "../harness/personal/protectors.ts";
 import {
-  DeviceUnlockError, helloError, HELLO_MARK, KgDeviceUnlock, macTouchIdProvider, parseHelloReply, windowsHelloProvider,
+  DeviceUnlockError, helloError, HELLO_MARK, KgDeviceUnlock, macSecureEnclaveProvider, parseBridgeReply, SEP_MARK, sepError, windowsHelloProvider,
   type DeviceKeyProvider, type DeviceUnlockCode,
 } from "./kg_device_unlock.ts";
 import { lockPersonal, personalStatus, setupPersonal, unlockPersonal, unlockPersonalWithKey } from "./personal.ts";
@@ -183,10 +183,11 @@ test("no provider, an unavailable one, or an unusable file: nothing is offered a
 });
 
 // ── Windows Hello bridge (the PowerShell half runs only on a real machine; see the demo) ──
-test("hello reply: the marker line wins over host noise; no marker reads as failure", () => {
-  expect(parseHelloReply(`WARNING: noise\r\n${HELLO_MARK}{"ok":true,"signature":"c2ln"}\r\n`)).toEqual({ ok: true, signature: "c2ln" });
-  expect(parseHelloReply("", "Cannot invoke method. Method invocation is supported only on core types in this language mode.").status).toBe("ConstrainedLanguage");
-  expect(parseHelloReply("garbage").ok).toBe(false);
+test("bridge reply: the marker line wins over host noise; no marker reads as failure", () => {
+  expect(parseBridgeReply(HELLO_MARK, `WARNING: noise\r\n${HELLO_MARK}{"ok":true,"signature":"c2ln"}\r\n`)).toEqual({ ok: true, signature: "c2ln" });
+  expect(parseBridgeReply(HELLO_MARK, "", "Cannot invoke method. Method invocation is supported only on core types in this language mode.").status).toBe("ConstrainedLanguage");
+  expect(parseBridgeReply(SEP_MARK, `${HELLO_MARK}{"ok":true}`).ok).toBe(false); // another bridge's marker is not an answer
+  expect(parseBridgeReply(HELLO_MARK, "garbage").ok).toBe(false);
 });
 
 test("hello statuses map to what the UI does with them", () => {
@@ -209,13 +210,65 @@ test("windows provider: one Hello key per entry; KEK = HKDF(signature) so the sa
   expect(seen[1]?.LUCID_HELLO_OP).toBe("sign");
 });
 
-test("touch id provider: the sealed KEK is released only after the prompt succeeds", async () => {
-  let allow = true;
-  const seal = { isEncryptionAvailable: () => true, encryptString: (s: string) => Buffer.from(`sealed:${s}`), decryptString: (b: Buffer) => b.toString().slice(7) };
-  const p = macTouchIdProvider({ canPromptTouchID: () => true, promptTouchID: async () => { if (!allow) throw new Error("User canceled"); } }, seal);
+// ── macOS Secure Enclave bridge: a fake enclave doing real P-256 ECDH, the private half kept "inside" it ──
+function fakeEnclave() {
+  const keys = new Map<string, ECDH>();
+  const state = { prompts: 0, deny: null as string | null, skew: false };
+  const reply = (o: object) => ({ stdout: `noise\n${SEP_MARK}${JSON.stringify(o)}\n`, stderr: "" });
+  const run = async (env: Record<string, string>) => {
+    if (env.LUCID_SEP_OP === "available") return reply({ ok: true, available: true });
+    if (env.LUCID_SEP_OP === "create") {
+      const k = createECDH("prime256v1"); k.generateKeys();
+      const handle = randomBytes(24).toString("base64");
+      keys.set(handle, k);
+      return reply({ ok: true, se_key: handle, public_key: k.getPublicKey("base64") });
+    }
+    state.prompts++;
+    if (state.deny) return reply({ ok: false, status: state.deny });
+    const k = keys.get(env.LUCID_SEP_KEY ?? "");
+    if (!k) return reply({ ok: false, status: "invalid-key" }); // e.g. the fingerprints changed
+    const shared = k.computeSecret(Buffer.from(env.LUCID_SEP_PEER ?? "", "base64"));
+    if (state.skew) shared[0]! ^= 1;
+    return reply({ ok: true, shared: shared.toString("base64") });
+  };
+  return { run, keys, state };
+}
+
+test("sep provider: KEK = HKDF(ECDH with the enclave key); one Touch ID match at enrollment proves it", async () => {
+  const enclave = fakeEnclave();
+  const p = macSecureEnclaveProvider(enclave.run);
   const { kek, fields } = await p.create("id");
-  const entry = { id: "id", type: "keychain-touchid" as const, created: "", label: "", wrapped_vmk: "", nonce: "", ...fields };
+  expect(enclave.state.prompts).toBe(1); // the enrollment proof
+  const ecdh = enclave.keys.get(fields.se_key!)!.computeSecret(Buffer.from(fields.eph_pub!, "base64"));
+  expect(kek.equals(Buffer.from(hkdfSync("sha256", ecdh, Buffer.alloc(0), "lucid-vmk-v1|sep", 32)))).toBe(true);
+  const entry = { id: "id", type: "sep" as const, created: "", label: "", wrapped_vmk: "", nonce: "", ...fields };
   expect((await p.open(entry)).equals(kek)).toBe(true);
-  allow = false;
+  expect(enclave.state.prompts).toBe(2);
+});
+
+test("sep provider: cancel, a dead key and a wrong enclave answer each fail the way the UI expects", async () => {
+  const enclave = fakeEnclave();
+  const p = macSecureEnclaveProvider(enclave.run);
+  const { fields } = await p.create("id");
+  const entry = { id: "id", type: "sep" as const, created: "", label: "", wrapped_vmk: "", nonce: "", ...fields };
+  enclave.state.deny = "cancelled";
   expect(await codeOf(() => p.open(entry))).toBe("cancelled");
+  expect(await codeOf(() => p.create("id2"))).toBe("cancelled"); // a cancelled enrollment proof enrolls nothing
+  enclave.state.deny = null;
+  enclave.keys.clear();
+  expect(await codeOf(() => p.open(entry))).toBe("not-enrolled");
+  enclave.state.skew = true;
+  expect(await codeOf(() => p.create("id3"))).toBe("failed");
+  expect(sepError({ ok: false, status: "lockout" }).code).toBe("failed");
+  expect(sepError({ ok: false, status: "not-available" }).code).toBe("unsupported");
+  expect(await macSecureEnclaveProvider(async () => ({ stdout: "", stderr: "spawn ENOENT" })).available()).toBe(false); // missing helper
+});
+
+test("sep end to end: Touch ID enrolls beside the password protector and unlocks the engine", async () => {
+  const enclave = fakeEnclave();
+  const du = new KgDeviceUnlock({ provider: macSecureEnclaveProvider(enclave.run), protectorsPath });
+  (await du.enroll(PASS)).fill(0);
+  expect(doc()!.protectors.map((e) => e.type)).toEqual(["password", "sep"]);
+  expect(await du.status()).toMatchObject({ provider: "sep", label: "Touch ID", enrolled: true, autoUnlock: true });
+  expect(unlockPersonalWithKey((await du.unlock()).toString("base64")).ok).toBe(true);
 });
