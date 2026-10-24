@@ -6002,10 +6002,13 @@ function personalDeviceHtml(): string {
   if (!d.supported) return wrap(`<div class="set-note">${icon("info", 12)} <span>${label} isn't set up on this device. Set it up in your system settings to unlock your graph without typing the passphrase.</span></div>`);
   if (d.enrolled) {
     return wrap(`<label class="set-toggle"><input type="checkbox" id="personalDeviceAuto" ${d.autoUnlock ? "checked" : ""}/>
-        <span><b>Unlock with ${label} when LUCID opens</b> - one ${label} check at launch (${d.provider === "sep" ? "your fingerprint; there is no password fallback" : "with a face camera, just look at it"}). The passphrase still works, and the CUI store always asks for its own.</span></label>
+        <span><b>Unlock with ${label} when LUCID opens</b> - one ${label} check at launch (${d.provider === "sep" ? (d.companion ? "your fingerprint, or a double-click on your unlocked Apple Watch; there is no password fallback" : "your fingerprint; there is no password fallback") : "with a face camera, just look at it"}). The passphrase still works, and the CUI store always asks for its own.</span></label>
+      ${d.provider === "sep" ? `<div class="set-note">${icon("info", 12)} <span>${d.companion ? "Your Apple Watch is also allowed." : "Apple Watch is not allowed."} To change that, turn ${label} unlock off and on again.</span></div>` : ""}
       <button class="btn-mini" id="personalDeviceForget" data-tip="Turn off ${label} unlock|Removes the ${label} key LUCID created and its sealed copy of your store key. Your passphrase is unaffected.">${icon("shield", 12)} Turn off ${label} unlock</button>`);
   }
   return wrap(`<div class="set-note">${icon("shield", 12)} <span>Skip the passphrase: unlock with ${label} (${d.provider === "sep" ? "a key in this Mac's Secure Enclave that only your current fingerprints can use" : "face, fingerprint, or PIN"}). Confirm your passphrase once to turn it on.</span></div>
+    ${d.companionAvailable ? `<label class="set-toggle"><input type="checkbox" id="personalDeviceCompanion"/>
+      <span><b>Also allow my Apple Watch</b> - a double-click on your unlocked watch, worn near this Mac, unlocks too. It proves the watch is near, not that the person at the Mac is you, so it is weaker than a fingerprint. Off by default.</span></label>` : ""}
     <div class="prov-row"><input id="personalDevicePass" class="prov-key" type="password" placeholder="Passphrase" autocomplete="current-password" />
       <button class="btn-mini ok" id="personalDeviceEnroll">${icon("shield", 12)} Turn on ${label}</button></div>`);
 }
@@ -17462,8 +17465,9 @@ function wire(): void {
     if (t.closest("#personalDeviceEnroll")) {
       const pass = ($("#personalDevicePass", $("#setBody")!) as HTMLInputElement)?.value ?? "";
       if (!pass) { showToast({ tone: "warn", title: "Enter your passphrase", desc: `Confirm it once to turn on ${deviceLabel} unlock.`, timeout: 3000 }); return; }
-      const r = await bridge.kgDeviceEnroll(pass);
-      if (r.ok) showToast({ tone: "ok", title: `${deviceLabel} unlock is on`, desc: "LUCID will ask for it when it opens instead of your passphrase.", actions: [{ label: "OK" }], timeout: 3600 });
+      const companion = ($("#personalDeviceCompanion", $("#setBody")!) as HTMLInputElement | null)?.checked === true;
+      const r = await bridge.kgDeviceEnroll(pass, { companion });
+      if (r.ok) showToast({ tone: "ok", title: `${companion ? "Touch ID or Apple Watch" : deviceLabel} unlock is on`, desc: "LUCID will ask for it when it opens instead of your passphrase.", actions: [{ label: "OK" }], timeout: 3600 });
       else if (r.code !== "cancelled") showToast({ tone: "warn", title: `Couldn't turn on ${deviceLabel}`, desc: r.error, actions: [{ label: "OK" }], timeout: 5000 });
       void hydratePersonal();
       return;

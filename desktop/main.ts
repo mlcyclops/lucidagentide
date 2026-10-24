@@ -845,10 +845,10 @@ async function kgDeviceUnlockEngine(): Promise<KgDeviceReply> {
 const fromAppWindow = (e: Electron.IpcMainInvokeEvent): boolean =>
   !!win && !win.isDestroyed() && e.sender === win.webContents && isEngineDocument(e.senderFrame?.url, PORT);
 ipcMain.handle("lucid:kgDeviceStatus", (e) => (fromAppWindow(e) ? kgDevice.status().catch(() => null) : null));
-ipcMain.handle("lucid:kgDeviceEnroll", async (e, input: { passphrase?: unknown; autoUnlock?: unknown }): Promise<KgDeviceReply> => {
+ipcMain.handle("lucid:kgDeviceEnroll", async (e, input: { passphrase?: unknown; autoUnlock?: unknown; companion?: unknown }): Promise<KgDeviceReply> => {
   if (!fromAppWindow(e)) return { ok: false, code: "failed", error: "refused" };
   try {
-    const dek = await kgDevice.enroll(String(input?.passphrase ?? ""), { autoUnlock: input?.autoUnlock !== false });
+    const dek = await kgDevice.enroll(String(input?.passphrase ?? ""), { autoUnlock: input?.autoUnlock !== false, companion: input?.companion === true });
     return await engineUnlockWithKey(dek); // enrolling from the locked screen also unlocks; already unlocked is a no-op
   } catch (err) { return kgDeviceFail(err); }
 });

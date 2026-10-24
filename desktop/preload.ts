@@ -38,7 +38,7 @@ contextBridge.exposeInMainWorld("lucid", {
   // P-KGBIO.1 (ADR-0454): Windows Hello / Touch ID unlock of the knowledge graph. Main holds the key path;
   // the renderer only ever sees status and { ok, code, error }.
   kgDeviceStatus: () => ipcRenderer.invoke("lucid:kgDeviceStatus"),
-  kgDeviceEnroll: (input: { passphrase: string; autoUnlock?: boolean }) => ipcRenderer.invoke("lucid:kgDeviceEnroll", input),
+  kgDeviceEnroll: (input: { passphrase: string; autoUnlock?: boolean; companion?: boolean }) => ipcRenderer.invoke("lucid:kgDeviceEnroll", input),
   kgDeviceUnlock: () => ipcRenderer.invoke("lucid:kgDeviceUnlock"),
   kgDeviceAuto: (on: boolean): Promise<boolean> => ipcRenderer.invoke("lucid:kgDeviceAuto", on),
   kgDeviceForget: (): Promise<boolean> => ipcRenderer.invoke("lucid:kgDeviceForget"),

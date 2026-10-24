@@ -1268,7 +1268,7 @@ export interface LucidBridge {
   personalLock(): Promise<PersonalStatus | null>;
   // P-KGBIO.1 (ADR-0454): device unlock (desktop app only; null / unsupported in a plain browser)
   kgDeviceStatus(): Promise<KgDeviceStatus | null>;
-  kgDeviceEnroll(passphrase: string, autoUnlock?: boolean): Promise<KgDeviceReply>;
+  kgDeviceEnroll(passphrase: string, opts?: { autoUnlock?: boolean; companion?: boolean }): Promise<KgDeviceReply>;
   kgDeviceUnlock(): Promise<KgDeviceReply>;
   kgDeviceAuto(on: boolean): Promise<boolean>;
   kgDeviceForget(): Promise<boolean>;
@@ -1541,7 +1541,7 @@ interface NativeShell {
   credEncryptionAvailable?(): Promise<boolean>;
   // P-KGBIO.1 (ADR-0454): Windows Hello / Touch ID unlock of the knowledge graph (main holds the key path).
   kgDeviceStatus?(): Promise<KgDeviceStatus | null>;
-  kgDeviceEnroll?(input: { passphrase: string; autoUnlock?: boolean }): Promise<KgDeviceReply>;
+  kgDeviceEnroll?(input: { passphrase: string; autoUnlock?: boolean; companion?: boolean }): Promise<KgDeviceReply>;
   kgDeviceUnlock?(): Promise<KgDeviceReply>;
   kgDeviceAuto?(on: boolean): Promise<boolean>;
   kgDeviceForget?(): Promise<boolean>;
@@ -2109,7 +2109,7 @@ export const bridge: LucidBridge = {
   personalUnlock: (passphrase) => post("/api/personal/unlock", { passphrase }),
   personalLock: () => post("/api/personal/lock", {}),
   kgDeviceStatus: () => (shell?.kgDeviceStatus ? shell.kgDeviceStatus().catch(() => null) : Promise.resolve(null)),
-  kgDeviceEnroll: (passphrase, autoUnlock) => (shell?.kgDeviceEnroll ? shell.kgDeviceEnroll({ passphrase, autoUnlock }) : Promise.resolve(KG_DEVICE_DESKTOP_ONLY)),
+  kgDeviceEnroll: (passphrase, opts) => (shell?.kgDeviceEnroll ? shell.kgDeviceEnroll({ passphrase, ...opts }) : Promise.resolve(KG_DEVICE_DESKTOP_ONLY)),
   kgDeviceUnlock: () => (shell?.kgDeviceUnlock ? shell.kgDeviceUnlock() : Promise.resolve(KG_DEVICE_DESKTOP_ONLY)),
   kgDeviceAuto: (on) => (shell?.kgDeviceAuto ? shell.kgDeviceAuto(on) : Promise.resolve(false)),
   kgDeviceForget: () => (shell?.kgDeviceForget ? shell.kgDeviceForget() : Promise.resolve(false)),

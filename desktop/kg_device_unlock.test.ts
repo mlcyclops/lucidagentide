@@ -201,7 +201,7 @@ test("windows provider: one Hello key per entry; KEK = HKDF(signature) so the sa
   const seen: Record<string, string>[] = [];
   const sig = Buffer.from("deterministic-rsa-pkcs1-signature").toString("base64");
   const p = windowsHelloProvider(async (env) => { seen.push(env); return { stdout: `${HELLO_MARK}${JSON.stringify({ ok: true, signature: sig })}\n`, stderr: "" }; });
-  const { kek, fields } = await p.create("0123456789abcdef");
+  const { kek, fields } = await p.create("0123456789abcdef", { companion: false });
   expect(seen[0]).toMatchObject({ LUCID_HELLO_OP: "create", LUCID_HELLO_KEY: "LucidVault-ide-0123456789abcdef", LUCID_HELLO_CHALLENGE: fields.challenge });
   expect(Buffer.from(fields.challenge!, "base64").length).toBe(32);
   expect(kek.equals(Buffer.from(hkdfSync("sha256", Buffer.from(sig, "base64"), Buffer.alloc(0), "lucid-vmk-v1|hello", 32)))).toBe(true);
@@ -211,13 +211,14 @@ test("windows provider: one Hello key per entry; KEK = HKDF(signature) so the sa
 });
 
 // ── macOS Secure Enclave bridge: a fake enclave doing real P-256 ECDH, the private half kept "inside" it ──
-function fakeEnclave() {
+function fakeEnclave(opts: { watch?: boolean } = {}) {
   const keys = new Map<string, ECDH>();
-  const state = { prompts: 0, deny: null as string | null, skew: false };
+  const state = { prompts: 0, deny: null as string | null, skew: false, createdWithWatch: [] as boolean[] };
   const reply = (o: object) => ({ stdout: `noise\n${SEP_MARK}${JSON.stringify(o)}\n`, stderr: "" });
   const run = async (env: Record<string, string>) => {
-    if (env.LUCID_SEP_OP === "available") return reply({ ok: true, available: true });
+    if (env.LUCID_SEP_OP === "available") return reply({ ok: true, available: true, watch: opts.watch === true });
     if (env.LUCID_SEP_OP === "create") {
+      state.createdWithWatch.push(env.LUCID_SEP_WATCH === "1");
       const k = createECDH("prime256v1"); k.generateKeys();
       const handle = randomBytes(24).toString("base64");
       keys.set(handle, k);
@@ -237,7 +238,7 @@ function fakeEnclave() {
 test("sep provider: KEK = HKDF(ECDH with the enclave key); one Touch ID match at enrollment proves it", async () => {
   const enclave = fakeEnclave();
   const p = macSecureEnclaveProvider(enclave.run);
-  const { kek, fields } = await p.create("id");
+  const { kek, fields } = await p.create("id", { companion: false });
   expect(enclave.state.prompts).toBe(1); // the enrollment proof
   const ecdh = enclave.keys.get(fields.se_key!)!.computeSecret(Buffer.from(fields.eph_pub!, "base64"));
   expect(kek.equals(Buffer.from(hkdfSync("sha256", ecdh, Buffer.alloc(0), "lucid-vmk-v1|sep", 32)))).toBe(true);
@@ -249,16 +250,16 @@ test("sep provider: KEK = HKDF(ECDH with the enclave key); one Touch ID match at
 test("sep provider: cancel, a dead key and a wrong enclave answer each fail the way the UI expects", async () => {
   const enclave = fakeEnclave();
   const p = macSecureEnclaveProvider(enclave.run);
-  const { fields } = await p.create("id");
+  const { fields } = await p.create("id", { companion: false });
   const entry = { id: "id", type: "sep" as const, created: "", label: "", wrapped_vmk: "", nonce: "", ...fields };
   enclave.state.deny = "cancelled";
   expect(await codeOf(() => p.open(entry))).toBe("cancelled");
-  expect(await codeOf(() => p.create("id2"))).toBe("cancelled"); // a cancelled enrollment proof enrolls nothing
+  expect(await codeOf(() => p.create("id2", { companion: false }))).toBe("cancelled"); // a cancelled enrollment proof enrolls nothing
   enclave.state.deny = null;
   enclave.keys.clear();
   expect(await codeOf(() => p.open(entry))).toBe("not-enrolled");
   enclave.state.skew = true;
-  expect(await codeOf(() => p.create("id3"))).toBe("failed");
+  expect(await codeOf(() => p.create("id3", { companion: false }))).toBe("failed");
   expect(sepError({ ok: false, status: "lockout" }).code).toBe("failed");
   expect(sepError({ ok: false, status: "not-available" }).code).toBe("unsupported");
   expect(await macSecureEnclaveProvider(async () => ({ stdout: "", stderr: "spawn ENOENT" })).available()).toBe(false); // missing helper
@@ -270,5 +271,24 @@ test("sep end to end: Touch ID enrolls beside the password protector and unlocks
   (await du.enroll(PASS)).fill(0);
   expect(doc()!.protectors.map((e) => e.type)).toEqual(["password", "sep"]);
   expect(await du.status()).toMatchObject({ provider: "sep", label: "Touch ID", enrolled: true, autoUnlock: true });
+  expect(unlockPersonalWithKey((await du.unlock()).toString("base64")).ok).toBe(true);
+});
+
+test("apple watch is opt-in at enrollment, refused when no watch is set up, and named in the status", async () => {
+  const noWatch = new KgDeviceUnlock({ provider: macSecureEnclaveProvider(fakeEnclave().run), protectorsPath });
+  expect((await noWatch.status()).companionAvailable).toBe(false);
+  expect(await codeOf(() => noWatch.enroll(PASS, { companion: true }))).toBe("unsupported");
+
+  const enclave = fakeEnclave({ watch: true });
+  const du = new KgDeviceUnlock({ provider: macSecureEnclaveProvider(enclave.run), protectorsPath });
+  (await du.enroll(PASS)).fill(0); // default: Touch ID only
+  expect(enclave.state.createdWithWatch).toEqual([false]);
+  expect(await du.status()).toMatchObject({ companionAvailable: true, companion: false, label: "Touch ID" });
+
+  (await du.enroll(PASS, { companion: true })).fill(0); // turning it on again with the watch allowed
+  expect(enclave.state.createdWithWatch).toEqual([false, true]);
+  const entry = doc()!.protectors.find((e) => e.type === "sep")!;
+  expect(entry).toMatchObject({ companion: true, label: "Touch ID or Apple Watch" });
+  expect(await du.status()).toMatchObject({ enrolled: true, companion: true, label: "Touch ID or Apple Watch" });
   expect(unlockPersonalWithKey((await du.unlock()).toString("base64")).ok).toBe(true);
 });

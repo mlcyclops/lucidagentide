@@ -9,12 +9,14 @@
 // an opaque `dataRepresentation` that only THIS Mac's enclave can use, so it can be stored in the protector
 // entry without any keychain entitlement (the release builds are ad-hoc signed). Every use of the key - an
 // ECDH key agreement - requires a live Touch ID match with the CURRENT enrolled fingers (adding a fingerprint
-// invalidates the key). There is no password fallback. The process must run in the logged-in desktop
-// session (LUCID's own child process is); from a bare SSH session the prompt cannot be shown.
+// invalidates the key). Opt-in, the key ALSO accepts a double-click on the user's unlocked, worn Apple Watch
+// (`.or .companion`; `.watch` before macOS 15). There is no password fallback either way. The process must
+// run in the logged-in desktop session (LUCID's own child process is); from a bare SSH session the prompt
+// cannot be shown.
 //
 // Protocol: inputs by environment variable, one result line on stdout prefixed `LUCID_SEP::` + JSON.
-//   LUCID_SEP_OP=available                      -> {ok, available}
-//   LUCID_SEP_OP=create                         -> {ok, se_key, public_key}           (no prompt)
+//   LUCID_SEP_OP=available                      -> {ok, available, watch}
+//   LUCID_SEP_OP=create   LUCID_SEP_WATCH=0|1   -> {ok, se_key, public_key}           (no prompt)
 //   LUCID_SEP_OP=agree    LUCID_SEP_KEY, LUCID_SEP_PEER (x963 b64), LUCID_SEP_REASON
 //                                               -> {ok, shared}                       (one biometric prompt)
 // Failures: {ok:false, status, error}. status: cancelled | not-available | invalid-key | lockout | failed.
@@ -52,12 +54,20 @@ switch env["LUCID_SEP_OP"] ?? "" {
 case "available":
     let ctx = LAContext()
     let bio = ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
-    emit(["ok": true, "available": SecureEnclave.isAvailable && bio && ctx.biometryType == .touchID])
+    let watch: Bool
+    if #available(macOS 15.0, *) { watch = LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithCompanion, error: nil) }
+    else { watch = LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithWatch, error: nil) }
+    emit(["ok": true, "available": SecureEnclave.isAvailable && bio && ctx.biometryType == .touchID, "watch": watch])
 
 case "create":
     guard SecureEnclave.isAvailable else { fail("not-available", "this Mac has no Secure Enclave") }
+    var flags: SecAccessControlCreateFlags = [.privateKeyUsage, .biometryCurrentSet]
+    if env["LUCID_SEP_WATCH"] == "1" {
+        if #available(macOS 15.0, *) { flags = [.privateKeyUsage, .biometryCurrentSet, .or, .companion] }
+        else { flags = [.privateKeyUsage, .biometryCurrentSet, .or, .watch] }
+    }
     var cfErr: Unmanaged<CFError>?
-    guard let access = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, [.privateKeyUsage, .biometryCurrentSet], &cfErr) else {
+    guard let access = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, flags, &cfErr) else {
         fail("failed", "access control: \(cfErr?.takeRetainedValue().localizedDescription ?? "unknown")")
     }
     do {

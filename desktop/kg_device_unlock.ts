@@ -54,8 +54,11 @@ export interface DeviceKeyProvider {
   /** User-facing name: "Windows Hello", "Touch ID". */
   readonly label: string;
   available(): Promise<boolean>;
-  /** Enroll: create the OS-bound secret for entry `entryId`; return the 32-byte KEK and the entry's PUBLIC fields. */
-  create(entryId: string): Promise<{ kek: Buffer; fields: Record<string, string> }>;
+  /** A paired companion (Apple Watch) can also satisfy the check, and the name then shown. Absent = none. */
+  readonly companion?: { label: string; available(): Promise<boolean> };
+  /** Enroll: create the OS-bound secret for entry `entryId`, accepting the companion when asked; return the
+   *  32-byte KEK and the entry's PUBLIC fields. */
+  create(entryId: string, opts: { companion: boolean }): Promise<{ kek: Buffer; fields: Record<string, string> }>;
   /** Recover the KEK after a live OS check. Throws DeviceUnlockError (cancelled / not-enrolled / failed). */
   open(entry: ProtectorEntry): Promise<Buffer>;
   /** Remove any OS-side key material. Best-effort; the entry is removed by the caller regardless. */
@@ -70,6 +73,10 @@ export interface DeviceStatus {
   /** The protector file holds an entry of this provider's type. */
   enrolled: boolean;
   autoUnlock: boolean;
+  /** A companion (Apple Watch) is set up on this machine, so enrollment can offer it. */
+  companionAvailable: boolean;
+  /** The enrolled entry also accepts the companion. */
+  companion: boolean;
   /** Set when the protector file exists but is unusable (fail closed: nothing is offered). */
   problem: string | null;
 }
@@ -98,15 +105,23 @@ export class KgDeviceUnlock {
     let problem: string | null = null;
     try { entry = p ? this.#doc().protectors.find((e) => e.type === p.type) : undefined; }
     catch (e) { if ((e as DeviceUnlockError).code !== "no-store") problem = (e as Error).message; }
-    return { supported, provider: p?.type ?? null, label: p?.label ?? null, enrolled: !!entry, autoUnlock: !!entry && entry.auto_unlock !== false, problem };
+    const companionAvailable = p?.companion ? await p.companion.available().catch(() => false) : false;
+    const companion = entry?.companion === true;
+    return {
+      supported, provider: p?.type ?? null, label: companion && p?.companion ? p.companion.label : (p?.label ?? null),
+      enrolled: !!entry, autoUnlock: !!entry && entry.auto_unlock !== false, companionAvailable, companion, problem,
+    };
   }
 
   /** Enroll (or re-enroll) this device: prove the passphrase through the password protector, show ONE OS
    *  prompt, and add the entry (replacing this type's previous one, whose OS key is then destroyed). Returns
-   *  the VMK, which the caller owns and must zero. */
-  async enroll(passphrase: string, opts: { autoUnlock?: boolean } = {}): Promise<Buffer> {
+   *  the VMK, which the caller owns and must zero. `companion` also accepts a paired Apple Watch; it is fixed
+   *  into the OS key at creation, so changing it later is a re-enrollment (passphrase again). */
+  async enroll(passphrase: string, opts: { autoUnlock?: boolean; companion?: boolean } = {}): Promise<Buffer> {
     const p = this.#provider();
     if (!(await p.available().catch(() => false))) throw new DeviceUnlockError("unsupported", `${p.label} is not set up on this device.`);
+    const companion = opts.companion === true;
+    if (companion && !(p.companion && await p.companion.available().catch(() => false))) throw new DeviceUnlockError("unsupported", "Apple Watch unlock is not set up on this Mac (System Settings > Touch ID & Password > Apple Watch).");
     let vmk: Buffer;
     try { vmk = unlockWithPassword(this.#doc(), passphrase); }
     catch (e) {
@@ -115,9 +130,10 @@ export class KgDeviceUnlock {
     }
     try {
       const id = randomBytes(8).toString("hex");
-      const { kek, fields } = await p.create(id);
+      const { kek, fields } = await p.create(id, { companion });
+      const label = companion && p.companion ? p.companion.label : p.label;
       let entry: ProtectorEntry;
-      try { entry = newEntry(kek, vmk, p.type, p.label, { ...fields, auto_unlock: opts.autoUnlock ?? true }, id); } finally { kek.fill(0); }
+      try { entry = newEntry(kek, vmk, p.type, label, { ...fields, auto_unlock: opts.autoUnlock ?? true, ...(companion ? { companion: true } : {}) }, id); } finally { kek.fill(0); }
       // Re-read after the prompt: the file may have changed while the user looked at the camera. The entry is
       // added only to a document whose vmk_check this VMK still satisfies.
       const doc = this.#doc();
@@ -224,7 +240,7 @@ try {
 export interface BridgeReply {
   ok: boolean; status?: string; error?: string; available?: boolean;
   signature?: string; // hello
-  se_key?: string; public_key?: string; shared?: string; // sep
+  se_key?: string; public_key?: string; shared?: string; watch?: boolean; // sep
 }
 
 /** Parse a bridge's marker line (exported for tests). Missing marker -> a failed reply carrying stderr. */
@@ -318,8 +334,10 @@ export function macSecureEnclaveProvider(run: SepRunner): DeviceKeyProvider {
     type: "sep",
     label: "Touch ID",
     available: async () => { const r = await call({ LUCID_SEP_OP: "available" }); return r.ok && r.available === true; },
-    create: async () => {
-      const r = await call({ LUCID_SEP_OP: "create" }); // no prompt: creating the key needs no match
+    // Opt-in: the key ALSO accepts a double-click on the user's unlocked, worn Apple Watch (`.or .companion`).
+    companion: { label: "Touch ID or Apple Watch", available: async () => { const r = await call({ LUCID_SEP_OP: "available" }); return r.ok && r.watch === true; } },
+    create: async (_id, opts) => {
+      const r = await call({ LUCID_SEP_OP: "create", LUCID_SEP_WATCH: opts.companion ? "1" : "0" }); // no prompt: creating the key needs no match
       if (!r.ok || !r.se_key || !r.public_key) throw sepError(r);
       const eph = createECDH("prime256v1");
       eph.generateKeys();
