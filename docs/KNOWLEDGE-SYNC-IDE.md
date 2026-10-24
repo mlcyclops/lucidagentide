@@ -33,10 +33,15 @@ changes them.
 
 Facts that shape the design:
 
-- **Only the first device holds the user private key.** `SyncIdentity.create(generate_user_key=True)` stores
-  `user_priv`; an enrollee only adopts `user_pub` (`adopt_user_key`), and `Enrollment.approve` needs
+- **On Hub `main`, only the first device holds the user private key.** `SyncIdentity.create(generate_user_key=True)`
+  stores `user_priv`; an enrollee only adopts `user_pub` (`adopt_user_key`), and `Enrollment.approve` needs
   `build_cert`, which signs with `user_priv`. Whichever install is set up first is the only one that can pair
-  new devices.
+  new devices. LUCIDMeetingHub#40 (open, review requested) adds two ways out: a **second approver** and a
+  **recovery kit** (§4.1).
+- **On Hub `main`, revocation does not reach the other devices** (LUCIDMeetingHub#39, reproduced with three
+  devices): the new epoch is never wrapped to the devices that remain, the revoked certificate is re-adopted
+  from `devices/` on the next poll, and no other device learns of it. #40 fixes this with signed removal
+  records; the IDE implements the fixed behavior, not `main`'s.
 - **Every app install is its own device.** The Hub and the IDE on one machine are two devices of one user,
   each with its own signing and wrapping keys. That is what keeps the two apps independent: neither reads the
   other's vault.
@@ -74,7 +79,7 @@ The IDE also consumes the Hub's `knowledge.chunk` and `meeting.index`, which ret
 
 - **First device: the IDE on the user's main desktop** (owner ruling 3, "the IDE owns first-run identity").
   The Hub keeps its ability to generate a key for Hub-only users (`create(generate_user_key=True)`), unchanged.
-- The IDE stores `device_sign_priv`, `device_wrap_priv`, `user_priv` (first device only) and the epoch keys
+- The IDE stores `device_sign_priv`, `device_wrap_priv`, `user_priv` (approvers only) and the epoch keys
   **inside the encrypted personal store, under the VMK** (#524). It does not use a plaintext identity file.
   - A locked knowledge graph pauses sync, with the same "sync paused: locked" semantics as the Hub.
   - A Windows Hello or Touch ID unlock resumes it.
@@ -85,12 +90,26 @@ The IDE also consumes the Hub's `knowledge.chunk` and `meeting.index`, which ret
   2. The key holder approves the code shown on both screens.
   3. The new device claims its certificate and wrapped epoch from `devices/` and `epochs/`.
   The IDE implements both halves, so IDE↔IDE, IDE↔Hub and Hub↔Hub all pair the same way.
-- **Open (Q1):** with one key holder, losing that machine means no new devices can be paired until a new
-  user key is minted. Options:
-  - (a) accept it and document the reset;
-  - (b) let the user export `user_priv` sealed under their passphrase as a recovery file;
-  - (c) certify a second "approver" device.
-  I recommend (a) for v1.
+- **Who holds the user key (Q1): two approvers plus a recovery kit, as built in LUCIDMeetingHub#40.** With one
+  key holder, losing that machine meant no device could be paired or revoked again. The IDE implements the
+  same three folder records as the Hub, byte-compatible, so either app can play either role:
+  - **Removal record** `devices/revoked/<device fp>.json`, signed by the user key:
+    `{device, revoked, order (µs), by, user, epoch, excluded[]}`. Every device applies removals before
+    adopting certificates, never re-adopts a removed device, and refuses its items. Key holders wrap every
+    epoch they hold to every certified device lacking it, and ONLY key holders do (a device that has not
+    seen a removal yet could otherwise forward the new epoch to the removed device). A device seals nothing
+    until it holds an epoch minted after every removal it knows of. Two approvers removing devices
+    concurrently settle on one more epoch excluding both.
+  - **Approver record** `devices/approvers/<device fp>.json`: `user_priv` wrapped to that one device's
+    certified X25519 key (HKDF info `lucid/user/wrap/v1`, AAD `<user fp>|<device fp>`), signed by the user
+    key. Revoking an approver cannot take the key back; the UI warns, and the answer to a lost approver is a
+    new identity.
+  - **Recovery kit**: a file plus a 160-bit code shown once. It seals `user_priv` and the held epoch keys
+    (HKDF-SHA256 info `lucid/recovery/v1`, ChaCha20-Poly1305, header as AAD), and restores onto an enrolled
+    or a fresh device. It is kept off the sync folder.
+  - **Recommended setup for this user:** the IDE on the desktop creates the identity; the IDE on the Mac is
+    promoted to second approver once paired; a recovery kit is exported at setup and stored apart from its
+    code. Losing both approvers and the kit is the remaining reset: a new identity, then re-pair.
 
 ### 4.2 Transport
 
@@ -174,6 +193,10 @@ addendum would:
    natural keys, merge policies and frozen `body_v: 1` bodies above. This is not an envelope change (§8).
 2. Add `scope: "cui"` on `kg.fact` to the §4.1 refusals, refused by name with a sentence.
 3. State that `session.chunk` bodies above 32 KB MUST go out of line (§6.1).
+4. Add the device-management records from LUCIDMeetingHub#40 to §6 (folder layout): `devices/revoked/`,
+   `devices/approvers/`, the recovery kit format, and the epoch rules (only key holders re-share; seal
+   nothing until an epoch excludes every known removal). #40 does not edit the pinned spec either, so this
+   addendum is where both apps' implementations get their normative text.
 
 The Hub then needs only to know the new classes exist and skip them (§7 handshake: unknown class → skip that
 class, sync the rest) until it wants to consume them. The Hub's pre-meeting brief reading `kg.fact` is a
@@ -184,8 +207,8 @@ natural later consumer.
 | # | Increment | Depends on |
 |---|---|---|
 | **S0** | Spec addendum (§4.6), co-owned docs PR in both repos, pins bumped together | this review |
-| **S1** | IDE sync core: identity, epochs, folder enrollment, journal reader + fold, cursors, §6.1 blobs. Proven two-way against the Hub's Python (a Hub-written journal folds in the IDE and vice versa), with the Hub's convergence property test ported | #457 (L1 envelope), #524 (VMK for key custody) |
-| **S2** | Pairing + folder UX in Settings (L5): create the user key or join with a pairing code, pick the sync folder, device list, revoke, status | S1 |
+| **S1** | IDE sync core: identity, epochs, folder enrollment, removal/approver records and epoch re-sharing (Hub#40 semantics), recovery kit format, journal reader + fold, cursors, §6.1 blobs. Proven two-way against the Hub's Python (a Hub-written journal folds in the IDE and vice versa; a Hub removal is honored by the IDE and vice versa; a Hub-made kit restores into the IDE), with the Hub's convergence and three-device removal tests ported | #457 (L1 envelope), #524 (VMK for key custody), LUCIDMeetingHub#40 |
+| **S2** | Pairing + folder UX in Settings (L5): create the user key or join with a pairing code, pick the sync folder, device list with approver chip, make approver, revoke (with the approver warning), recovery kit export/restore, status | S1 |
 | **S3** | `kg.*` emit + fold; two-device demo over a real folder: a fact learned on the PC is recalled on the Mac; forget propagates; CUI refused | S0, S2 |
 | **S4** | `session.index` (on), then `session.chunk` (opt-in), read-only remote sessions in the timeline | S0, S2 |
 | **S5** | L3: Knowledge panel ingests Hub `knowledge.chunk` and `meeting.index` | S1 |
@@ -201,14 +224,20 @@ S1-S3 is the minimum for "one knowledge graph on every machine". S4 adds session
 - **A stolen NAS copy is useless** without a device's wrap key, which lives only inside that device's
   VMK-sealed store.
 - **A device thief with the unlocked laptop reads what that device can read,** as today. Revoking the device
-  mints a new epoch; it stops future access only, and the UI says so (Hub decision 10).
+  mints a new epoch that every remaining device receives and the stolen one never does; it stops future
+  access only, and the UI says so (Hub decision 10). If the stolen device was an approver it keeps the user
+  key, so the answer there is a new identity, and the UI says that too.
+- **A recovery kit plus its code is the whole account** up to the day it was made: keep them apart and off
+  the folder. The code is random (160 bits), so the kit has no password to brute-force.
 - **Anyone who can write to the folder** can try to inject items. Items are signed by certified device keys,
   and an unknown device or a bad signature is rejected (`verify_item_author`). They can also delete or
   truncate files: that is denial of service, not disclosure, and the local copy survives.
 
 ## 7. Questions for the owner
 
-- **Q1** Who holds the user key, and the recovery story (§4.1): accept single-holder for v1?
+- **Q1** (proposed answer, §4.1) The user key is held by up to two approvers, with a recovery kit as the
+  backstop, exactly as LUCIDMeetingHub#40 builds it; single-holder is no longer recommended. Confirm, and
+  review #40 (it also fixes revocation, #39).
 - **Q2** Confirm the new classes, and that `kg.*` bodies freeze at v1 now (unlike `memory.fact`, the graph's
   shape is the IDE's own and is known).
 - **Q3** CUI and sessions: record a compartment tag per turn so CUI-scoped sessions can be excluded, or
