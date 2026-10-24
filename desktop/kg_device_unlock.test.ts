@@ -17,7 +17,7 @@ import {
   DeviceUnlockError, helloError, HELLO_MARK, KgDeviceUnlock, macSecureEnclaveProvider, parseBridgeReply, SEP_MARK, sepError, windowsHelloProvider,
   type DeviceKeyProvider, type DeviceUnlockCode,
 } from "./kg_device_unlock.ts";
-import { lockPersonal, personalStatus, setupPersonal, unlockPersonal, unlockPersonalWithKey } from "./personal.ts";
+import { changePersonalPassphrase, lockPersonal, personalStatus, setupPersonal, unlockPersonal, unlockPersonalWithKey } from "./personal.ts";
 
 const PASS = "correct-horse-battery";
 let dir = "";
@@ -180,6 +180,37 @@ test("no provider, an unavailable one, or an unusable file: nothing is offered a
   expect((await du.status()).problem).toContain("unusable");
   expect(await codeOf(() => du.unlock())).toBe("failed");
   expect(f.calls.open).toBe(0);
+});
+
+// ── P-KGPASS.1 (ADR-0455): a passphrase change re-wraps the password protector and the envelope ──
+test("changing the main passphrase revokes the old one everywhere and keeps Windows Hello working", async () => {
+  const f = fakeProvider();
+  const du = new KgDeviceUnlock({ provider: f.p, protectorsPath });
+  (await du.enroll(PASS)).fill(0);
+  const helloBefore = JSON.stringify(doc()!.protectors.find((e) => e.type === "hello"));
+  expect(changePersonalPassphrase("main", PASS, "a-new-passphrase").ok).toBe(false); // locked: refused
+  expect(unlockPersonal(PASS).ok).toBe(true);
+  expect(changePersonalPassphrase("main", "wrong-current", "a-new-passphrase").error).toContain("wrong");
+  expect(changePersonalPassphrase("main", PASS, "short").ok).toBe(false);
+  expect(changePersonalPassphrase("main", PASS, "a-new-passphrase").ok).toBe(true);
+  expect(JSON.stringify(doc()!.protectors.find((e) => e.type === "hello"))).toBe(helloBefore); // device entry untouched
+  lockPersonal();
+  expect(unlockPersonal(PASS).ok).toBe(false);
+  expect(() => PersonalStore.openWithPassphrase(storePath(), PASS)).toThrow(); // the envelope revoked it too
+  expect(PersonalStore.openWithPassphrase(storePath(), "a-new-passphrase").graph().facts.length).toBe(0); // older builds: new one
+  expect(unlockPersonalWithKey((await du.unlock()).toString("base64")).ok).toBe(true);
+});
+
+test("a never-migrated store changes its envelope and then migrates under the new passphrase", () => {
+  for (const p of [storePath(), protectorsPath()]) rmSync(p, { force: true });
+  legacyStore();
+  expect(unlockPersonal(PASS).ok).toBe(true);
+  rmSync(protectorsPath()); // as if the migration write had failed
+  expect(changePersonalPassphrase("main", PASS, "a-new-passphrase").ok).toBe(true);
+  expect(unlockWithPassword(doc()!, "a-new-passphrase").length).toBe(32);
+  lockPersonal();
+  expect(unlockPersonal(PASS).ok).toBe(false);
+  expect(unlockPersonal("a-new-passphrase").ok).toBe(true);
 });
 
 // ── Windows Hello bridge (the PowerShell half runs only on a real machine; see the demo) ──

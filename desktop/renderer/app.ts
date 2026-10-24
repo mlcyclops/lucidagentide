@@ -5987,9 +5987,23 @@ function secPersonal(p: PersonalStatus | null): string {
       <label class="set-toggle" style="margin-top:10px;border-top:1px solid var(--line-soft);padding-top:10px"><input type="checkbox" id="personalAiToggle" ${p.aiExtract ? "checked" : ""}/>
         <span><b>Richer graph (uses the model)</b> - extract semantic facts &amp; relationships with the model instead of offline patterns, so related ideas connect across turns. Costs one extra model call per turn. Off by default.</span></label>
       ${personalDeviceHtml()}
+      ${passphraseChangeHtml("main")}
       <button class="btn-mini pscope-lock" id="personalLock" data-tip="Lock everything|Wipes BOTH in-memory keys (main + CUI). You'll re-enter your passphrase to use personalization again this session - nothing is learned or recalled while locked." data-tip-side="top">${icon("shield", 12)} Lock</button>`;
   }
   return card(toggle + inner);
+}
+/** P-KGPASS.1 (ADR-0455): the collapsed "Change passphrase" form for the main or the CUI store. The same
+ *  markup serves both; the click handler reads the fields inside its own <details>. */
+function passphraseChangeHtml(which: "main" | "cui"): string {
+  const what = which === "cui" ? "CUI passphrase" : "passphrase";
+  return `<details class="ppass" data-which="${which}" style="margin-top:10px">
+    <summary class="btn-mini">${icon("shield", 12)} Change ${what}</summary>
+    <div class="set-note">${icon("info", 12)} <span>Your store's key stays the same; it is re-sealed under the new ${what}, and the old one stops opening the store.${which === "main" ? " Windows Hello / Touch ID unlock keeps working." : ""}</span></div>
+    <div class="prov-row"><input class="prov-key ppass-cur" type="password" placeholder="Current ${what}" autocomplete="current-password" /></div>
+    <div class="prov-row"><input class="prov-key ppass-new" type="password" placeholder="New ${what} (min 8 chars)" autocomplete="new-password" /></div>
+    <div class="prov-row"><input class="prov-key ppass-confirm" type="password" placeholder="Confirm new ${what}" autocomplete="new-password" />
+      <button class="btn-mini ok ppass-save">${icon("shield", 12)} Change</button></div>
+  </details>`;
 }
 /** P-KGBIO.1 (ADR-0454): the device-unlock block of the unlocked Personalization card. Empty in a plain
  *  browser and on platforms with no provider; a configured-but-absent Hello/Touch ID gets a setup hint. */
@@ -6035,7 +6049,8 @@ function secCui(p: import("./bridge.ts").PersonalStatus): string {
     <div class="set-note ok">${icon("check", 12)} CUI store unlocked for this session. It auto-locks when you switch away from CUI.</div>
     <div class="pscope-cui-actions">
       <button class="btn-mini" id="cuiLock" data-tip="Lock the CUI store|Wipes only the CUI key. Your main store stays unlocked.">${shield} Lock CUI</button>
-      ${destroy}</div></div>`;
+      ${destroy}</div>
+    ${passphraseChangeHtml("cui")}</div>`;
 }
 function openSettings(): void {
   closeKnowledge();
@@ -17451,6 +17466,20 @@ function wire(): void {
       await bridge.personalLock();
       showToast({ title: "Locked", desc: "Both in-memory keys (main + CUI) were wiped; unlock again to use it.", actions: [{ label: "OK" }], timeout: 2400 });
       void hydratePersonal();
+      return;
+    }
+    // ── P-KGPASS.1 (ADR-0455): change the main or CUI passphrase ──
+    const ppass = t.closest(".ppass-save")?.closest(".ppass");
+    if (ppass instanceof HTMLElement) {
+      const which = ppass.dataset.which === "cui" ? "cui" : "main";
+      const field = (cls: string) => ($(cls, ppass) as HTMLInputElement | null)?.value ?? "";
+      const [current, next, confirm] = [field(".ppass-cur"), field(".ppass-new"), field(".ppass-confirm")];
+      if (!current || !next) { showToast({ tone: "warn", title: "Fill in both passphrases", desc: "Enter the current one and the new one.", timeout: 3000 }); return; }
+      if (next !== confirm) { showToast({ tone: "warn", title: "The new passphrases don't match", desc: "Type the new passphrase the same way twice.", timeout: 3000 }); return; }
+      const r = await bridge.personalChangePassphrase(which, current, next);
+      if (r?.ok) showToast({ tone: "ok", title: which === "cui" ? "CUI passphrase changed" : "Passphrase changed", desc: "Use the new one from now on; the old one no longer opens the store.", actions: [{ label: "OK" }], timeout: 4000 });
+      else showToast({ tone: "warn", title: "Couldn't change the passphrase", desc: r?.error ?? "Try again.", actions: [{ label: "OK" }], timeout: 5000 });
+      if (r?.ok) void hydratePersonal();
       return;
     }
     // ── P-KGBIO.1 (ADR-0454): Windows Hello / Touch ID unlock ──

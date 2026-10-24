@@ -1266,6 +1266,8 @@ export interface LucidBridge {
   personalSetup(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
   personalUnlock(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
   personalLock(): Promise<PersonalStatus | null>;
+  // P-KGPASS.1 (ADR-0455): change the main or CUI store's passphrase (the store must be unlocked)
+  personalChangePassphrase(which: "main" | "cui", current: string, next: string): Promise<{ ok: boolean; error?: string } | null>;
   // P-KGBIO.1 (ADR-0454): device unlock (desktop app only; null / unsupported in a plain browser)
   kgDeviceStatus(): Promise<KgDeviceStatus | null>;
   kgDeviceEnroll(passphrase: string, opts?: { autoUnlock?: boolean; companion?: boolean }): Promise<KgDeviceReply>;
@@ -2108,6 +2110,7 @@ export const bridge: LucidBridge = {
   personalSetup: (passphrase) => post("/api/personal/setup", { passphrase }),
   personalUnlock: (passphrase) => post("/api/personal/unlock", { passphrase }),
   personalLock: () => post("/api/personal/lock", {}),
+  personalChangePassphrase: (which, current, next) => post("/api/personal/passphrase", { which, current, next }),
   kgDeviceStatus: () => (shell?.kgDeviceStatus ? shell.kgDeviceStatus().catch(() => null) : Promise.resolve(null)),
   kgDeviceEnroll: (passphrase, opts) => (shell?.kgDeviceEnroll ? shell.kgDeviceEnroll({ passphrase, ...opts }) : Promise.resolve(KG_DEVICE_DESKTOP_ONLY)),
   kgDeviceUnlock: () => (shell?.kgDeviceUnlock ? shell.kgDeviceUnlock() : Promise.resolve(KG_DEVICE_DESKTOP_ONLY)),
