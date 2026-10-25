@@ -6,7 +6,7 @@ Three lines per session: **shipped / stubbed / next** (CLAUDE.md session ritual)
 
 ## Release cut: creator-v0.1.2 - Creator beside Agent, plus OpenFilm
 - **shipped (2026-10-24, creator-v0.1.2):** CREATOR-OPENFILM (ADR-0457) and P-PORTGUARD.4 (ADR-0458) merged to master through a release PR and tagged `creator-v0.1.2`, which build-creator.yml builds for Windows, macOS and Linux and attaches to its own Release (make_latest false). Creator's version comes from the tag; no committed version field moves, and Agent's line is untouched.
-- **stubbed:** nothing new. The installer ACL grant and the packaged-marker precedence get their first real exercise in this build's Windows installer.
+- **stubbed:** nothing new. The installer ACL grant and the packaged-marker precedence get their first real exercise in this build's Windows installer. The first tag build found two release defects (ADR-0459): the Windows-signer gate fired on Creator's macOS and Linux runners, and fetch-whisper extracted its archive before the write finished; both fixed, the partial release deleted and the tag re-cut.
 - **next:** install LucidCreator-Setup.exe 0.1.2 over 0.1.1 on the zombie-SID machine, launch it from an Agent terminal and with 5320 taken, then publish the rolling `creator-latest` feed (it has never been published, so installed Creators have no update source yet).
 
 ## P-PORTGUARD.4 (ADR-0458): Creator beside Agent, and a busy default port moves the bind, not the install

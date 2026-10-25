@@ -74,7 +74,7 @@ function runConfigure(script: string, env: Record<string, string>): ConfigureRes
 interface Resolved { appId: string; azure: Record<string, string> | null; publisherName: unknown }
 // electron-builder's getConfig, run where electron-builder runs (Node). Returns null when the config
 // load itself fails, which is exactly what a release run without a signer must do.
-function resolve(configFile: string, env: Record<string, string>): { resolved: Resolved | null; stderr: string } {
+function resolve(configFile: string, env: Record<string, string>, cliArgs: readonly string[] = []): { resolved: Resolved | null; stderr: string } {
   const electron = desktopRequire("electron") as string;
   const code = `
     const { getConfig } = require("app-builder-lib/out/util/config/config.js");
@@ -89,7 +89,7 @@ function resolve(configFile: string, env: Record<string, string>): { resolved: R
   delete clean.LUCID_WIN_AZURE_SIGN;
   delete clean.LUCID_RELEASE_RUN;
   delete clean.CSC_LINK;
-  const r = spawnSync(electron, ["-e", code], { cwd: DESKTOP, env: { ...clean, ...env }, encoding: "utf8" });
+  const r = spawnSync(electron, ["-e", code, ...(cliArgs.length ? ["--", ...cliArgs] : [])], { cwd: DESKTOP, env: { ...clean, ...env }, encoding: "utf8" });
   const marker = r.stdout.lastIndexOf("@@");
   if (r.status !== 0 || marker < 0) return { resolved: null, stderr: r.stderr };
   return { resolved: JSON.parse(r.stdout.slice(marker + 2)) as Resolved, stderr: r.stderr };
@@ -147,6 +147,15 @@ for (const [file, appId] of [
   assert(blocked.resolved === null && blocked.stderr.includes("P-RELEASE.7"), `${file}: electron-builder's getConfig FAILS on a release run with no signer`);
   const ok = resolve(file, { LUCID_RELEASE_RUN: "1", LUCID_WIN_AZURE_SIGN: "1" });
   assert(ok.resolved?.appId === appId && ok.resolved.azure?.certificateProfileName === signing.AZURE_ARTIFACT_SIGNING.certificateProfileName && ok.resolved.publisherName === PUB, `${file}: a signed release run resolves to ${appId} with the Azure profile and publisher ${PUB}`);
+}
+// ADR-0459: Creator's mac and Linux builds load the same overlay; a Windows signer is not theirs to need.
+for (const args of [["--mac", "zip"], ["--linux"]]) {
+  const r = resolve("build/electron-builder.creator.cjs", { LUCID_RELEASE_RUN: "1" }, args);
+  assert(r.resolved?.appId === "com.lucidcreator.desktop" && r.resolved.azure === null, `build/electron-builder.creator.cjs: a ${args[0]} release run with no Windows signer resolves (it emits no Windows bytes)`);
+}
+for (const args of [["--win"], ["--mac", "--win"], ["-mw"]]) {
+  const r = resolve("build/electron-builder.creator.cjs", { LUCID_RELEASE_RUN: "1" }, args);
+  assert(r.resolved === null && r.stderr.includes("P-RELEASE.7"), `build/electron-builder.creator.cjs: a release run that can emit Windows bytes (${args.join(" ")}) still FAILS with no signer`);
 }
 
 console.log("\n[3] One publisher identity on every install-facing surface");
