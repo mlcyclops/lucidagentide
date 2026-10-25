@@ -103,14 +103,15 @@ jobs:
           node -e "const fs=require('fs'),p=require('./package.json');p.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$V"
           echo "Creator build version = $V"
 
-      # ADR-0459: the creator-v0.1.2 Linux job filled the runner's disk building the rpm (fpm: "Disk quota
-      # exceeded") after the AppImage and deb. Drop preinstalled toolchains this build never uses.
-      - name: Free disk space (Linux)
+      # ADR-0459: fpm stages the whole app under the temp dir to build the rpm, and on the current Ubuntu
+      # runner that failed with "Disk quota exceeded" (EDQUOT) while / still had 104 GB free: the default
+      # temp dir is quota-limited, not the disk. Point TMPDIR (fpm and electron-builder honor it) at the
+      # job's disk-backed temp directory.
+      - name: Use a disk-backed temp dir (Linux)
         if: runner.os == 'Linux'
         run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
-          df -h /
+          df -h /tmp "$RUNNER_TEMP"
+          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       # electron-builder's deb/rpm targets shell out to fpm; building an .rpm on the Ubuntu runner
       # needs the `rpm` toolchain (rpmbuild), which isn't installed by default. No-op elsewhere.
