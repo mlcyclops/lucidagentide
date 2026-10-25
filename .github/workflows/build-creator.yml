@@ -103,6 +103,15 @@ jobs:
           node -e "const fs=require('fs'),p=require('./package.json');p.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$V"
           echo "Creator build version = $V"
 
+      # ADR-0459: the creator-v0.1.2 Linux job filled the runner's disk building the rpm (fpm: "Disk quota
+      # exceeded") after the AppImage and deb. Drop preinstalled toolchains this build never uses.
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+
       # electron-builder's deb/rpm targets shell out to fpm; building an .rpm on the Ubuntu runner
       # needs the `rpm` toolchain (rpmbuild), which isn't installed by default. No-op elsewhere.
       - name: Install rpm tooling (Linux)
@@ -131,7 +140,9 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           RELEASE_RUN: ${{ (startsWith(github.ref, 'refs/tags/') || inputs.publish_latest) && '1' || '' }}
         run: |
-          if [[ "$RELEASE_RUN" == "1" ]]; then
+          # ADR-0459: Windows only. The Creator overlay (and the identity gate that reads it) loads on every
+          # runner, and the gate this marks guards Windows bytes; a macOS/Linux job has no Windows signer.
+          if [[ "$RELEASE_RUN" == "1" && "$RUNNER_OS" == "Windows" ]]; then
             echo "LUCID_RELEASE_RUN=1" >> "$GITHUB_ENV"
           fi
           if [[ "$RUNNER_OS" == "macOS" && -n "$MAC_CSC_LINK" ]]; then
