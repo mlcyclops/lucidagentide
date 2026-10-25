@@ -51,7 +51,10 @@ jobs:
           - os: windows-latest
             label: Creator Windows (NSIS + portable, x64)
             script: dist:win:creator
-          - os: ubuntu-latest
+          # ADR-0459: pinned. ubuntu-latest moved to ubuntu-26.04 (October 2026), where /tmp is a 7.9 GB tmpfs
+          # (fpm: "Disk quota exceeded" staging the rpm) and, with TMPDIR moved to disk, rpmbuild still
+          # failed. creator-v0.1.1 and every Agent release so far were built on ubuntu-24.04.
+          - os: ubuntu-24.04
             label: Creator Linux (AppImage + deb + rpm, x64)
             script: dist:linux:creator
     runs-on: ${{ matrix.os }}
@@ -102,16 +105,6 @@ jobs:
           # Build-time only: package.json in git is untouched.
           node -e "const fs=require('fs'),p=require('./package.json');p.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$V"
           echo "Creator build version = $V"
-
-      # ADR-0459: fpm stages the whole app under the temp dir to build the rpm, and on the current Ubuntu
-      # runner that failed with "Disk quota exceeded" (EDQUOT) while / still had 104 GB free: the default
-      # temp dir is quota-limited, not the disk. Point TMPDIR (fpm and electron-builder honor it) at the
-      # job's disk-backed temp directory.
-      - name: Use a disk-backed temp dir (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          df -h /tmp "$RUNNER_TEMP"
-          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       # electron-builder's deb/rpm targets shell out to fpm; building an .rpm on the Ubuntu runner
       # needs the `rpm` toolchain (rpmbuild), which isn't installed by default. No-op elsewhere.
