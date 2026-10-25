@@ -74,7 +74,7 @@ function runConfigure(script: string, env: Record<string, string>): ConfigureRes
 interface Resolved { appId: string; azure: Record<string, string> | null; publisherName: unknown }
 // electron-builder's getConfig, run where electron-builder runs (Node). Returns null when the config
 // load itself fails, which is exactly what a release run without a signer must do.
-function resolve(configFile: string, env: Record<string, string>, cliArgs: readonly string[] = []): { resolved: Resolved | null; stderr: string } {
+function resolve(configFile: string, env: Record<string, string>): { resolved: Resolved | null; stderr: string } {
   const electron = desktopRequire("electron") as string;
   const code = `
     const { getConfig } = require("app-builder-lib/out/util/config/config.js");
@@ -89,7 +89,7 @@ function resolve(configFile: string, env: Record<string, string>, cliArgs: reado
   delete clean.LUCID_WIN_AZURE_SIGN;
   delete clean.LUCID_RELEASE_RUN;
   delete clean.CSC_LINK;
-  const r = spawnSync(electron, ["-e", code, ...(cliArgs.length ? ["--", ...cliArgs] : [])], { cwd: DESKTOP, env: { ...clean, ...env }, encoding: "utf8" });
+  const r = spawnSync(electron, ["-e", code], { cwd: DESKTOP, env: { ...clean, ...env }, encoding: "utf8" });
   const marker = r.stdout.lastIndexOf("@@");
   if (r.status !== 0 || marker < 0) return { resolved: null, stderr: r.stderr };
   return { resolved: JSON.parse(r.stdout.slice(marker + 2)) as Resolved, stderr: r.stderr };
@@ -124,8 +124,13 @@ for (const [wf, inputs] of [
   const test = runConfigure(script, { RUNNER_OS: "Windows", RELEASE_RUN: "" });
   assert(test.status === 0 && test.ghEnv.trim() === "", `${wf}: a Windows TEST dispatch with no secret -> nothing exported, builds unsigned as before`);
 
-  const mac = runConfigure(script, { RUNNER_OS: "macOS", RELEASE_RUN: "1" });
-  assert(mac.status === 0 && !mac.ghEnv.includes("CSC_LINK") && mac.ghEnv.includes("LUCID_RELEASE_RUN=1"), `${wf}: a macOS RELEASE run is not gated (no Apple certificate yet), it is only marked`);
+  for (const os of ["macOS", "Linux"]) {
+    const other = runConfigure(script, { RUNNER_OS: os, RELEASE_RUN: "1" });
+    assert(other.status === 0 && !other.ghEnv.includes("CSC_LINK"), `${wf}: a ${os} RELEASE run is not gated (no Windows bytes, no Apple certificate yet)`);
+    // ADR-0459: Creator's overlay (which carries the Windows gate) loads on every runner, so its workflow marks
+    // ONLY the Windows job; Agent's mac/Linux jobs never load win-signing, so its marking is inert there.
+    if (wf === "build-creator.yml") assert(!other.ghEnv.includes("LUCID_RELEASE_RUN"), `${wf}: ...and NOT marked, so the Creator overlay and the identity gate load on ${os}`);
+  }
 }
 
 console.log("\n[2] win-signing.cjs enforces the same rule inside electron-builder's config load");
@@ -147,15 +152,6 @@ for (const [file, appId] of [
   assert(blocked.resolved === null && blocked.stderr.includes("P-RELEASE.7"), `${file}: electron-builder's getConfig FAILS on a release run with no signer`);
   const ok = resolve(file, { LUCID_RELEASE_RUN: "1", LUCID_WIN_AZURE_SIGN: "1" });
   assert(ok.resolved?.appId === appId && ok.resolved.azure?.certificateProfileName === signing.AZURE_ARTIFACT_SIGNING.certificateProfileName && ok.resolved.publisherName === PUB, `${file}: a signed release run resolves to ${appId} with the Azure profile and publisher ${PUB}`);
-}
-// ADR-0459: Creator's mac and Linux builds load the same overlay; a Windows signer is not theirs to need.
-for (const args of [["--mac", "zip"], ["--linux"]]) {
-  const r = resolve("build/electron-builder.creator.cjs", { LUCID_RELEASE_RUN: "1" }, args);
-  assert(r.resolved?.appId === "com.lucidcreator.desktop" && r.resolved.azure === null, `build/electron-builder.creator.cjs: a ${args[0]} release run with no Windows signer resolves (it emits no Windows bytes)`);
-}
-for (const args of [["--win"], ["--mac", "--win"], ["-mw"]]) {
-  const r = resolve("build/electron-builder.creator.cjs", { LUCID_RELEASE_RUN: "1" }, args);
-  assert(r.resolved === null && r.stderr.includes("P-RELEASE.7"), `build/electron-builder.creator.cjs: a release run that can emit Windows bytes (${args.join(" ")}) still FAILS with no signer`);
 }
 
 console.log("\n[3] One publisher identity on every install-facing surface");
