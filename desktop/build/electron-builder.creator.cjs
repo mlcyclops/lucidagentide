@@ -90,4 +90,11 @@ cfg.deb = { ...cfg.deb, artifactName: "lucidcreator-desktop_${version}_${arch}.$
 cfg.rpm = { ...cfg.rpm, artifactName: "lucidcreator-desktop-${version}.${arch}.${ext}" };
 
 // P-RELEASE.6 (ADR-0447): the same Azure Artifact Signing switch as the Agent Windows build.
-module.exports = require("./win-signing.cjs").withWindowsSigning(cfg);
+// ADR-0459: unlike Agent (whose mac and Linux builds never load electron-builder.win.cjs), Creator builds
+// ALL THREE platforms through this one file, so the P-RELEASE.7 gate threw on the macOS and Linux runners
+// of the first Creator tag after it landed (creator-v0.1.2) for want of a WINDOWS signer. The gate is
+// skipped only when the command names --mac and/or --linux and NOT --win; any other invocation (bare,
+// combined short flags, a programmatic load) is treated as able to emit Windows bytes and stays gated.
+const argv = process.argv;
+const nonWindowsOnly = (argv.includes("--mac") || argv.includes("--linux")) && !argv.includes("--win") && !argv.includes("--windows");
+module.exports = nonWindowsOnly ? cfg : require("./win-signing.cjs").withWindowsSigning(cfg);

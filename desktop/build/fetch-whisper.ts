@@ -81,7 +81,9 @@ async function doPrebuilt(spec: Extract<WhisperBinarySpec, { kind: "prebuilt" }>
   const work = join(tmpdir(), `lucid-whisper-${Date.now()}`);
   const archive = join(work, spec.asset);
   mkdirSync(work, { recursive: true });
-  Bun.write(archive, buf);
+  // Awaited (ADR-0459): unawaited, tar could read a half-written archive ("gzip: unexpected end of file"),
+  // which failed the creator-v0.1.2 Linux build after the size and hash had already verified.
+  await Bun.write(archive, buf);
   const extractDir = join(work, "x");
   await extract(archive, extractDir);
 
