@@ -35,6 +35,16 @@ describe("classifyPortHolder", () => {
     expect(classifyPortHolder(sq({ name: "lucid-engine-proxy" }), SELF).kind).toBe("foreign");
     expect(classifyPortHolder(sq({ name: "my-lucid-engine" }), SELF).kind).toBe("foreign");
   });
+  test("an engine whose parent app is still running is LIVE, never offered for reaping; a dead parent is an orphan", () => {
+    // The field case: Creator, launched with the Agent's inherited identity, found the Agent's running engine on 5319.
+    const engine = { pid: 30984, name: "lucid-engine", startedAt: null, command: null, parentPid: 28400 };
+    expect(classifyPortHolder(engine, SELF, (p) => p === 28400)).toEqual({ kind: "live", pid: 30984, parentPid: 28400, evidence: "process name lucid-engine" });
+    expect(classifyPortHolder(engine, SELF, () => false).kind).toBe("ours");
+    // Unknown parent keeps ADR-0382: the user decides.
+    expect(classifyPortHolder({ ...engine, parentPid: null }, SELF, () => true).kind).toBe("ours");
+    // A foreign listener stays foreign whatever its parent.
+    expect(classifyPortHolder({ ...engine, name: "python", command: "python -m http.server" }, SELF, () => true).kind).toBe("foreign");
+  });
   test("no attribution, no pid, or our own pid is unknown, never ours", () => {
     expect(classifyPortHolder(null, SELF)).toEqual({ kind: "unknown" });
     expect(classifyPortHolder(sq({ pid: null, name: "lucid-engine" }), SELF)).toEqual({ kind: "unknown" });

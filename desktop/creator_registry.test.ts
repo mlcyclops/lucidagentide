@@ -177,8 +177,25 @@ describe("the free / self-hosted additions and the paid catalog", () => {
     expect(spec("pdf-markup").group).toBe("cad");
   });
 
+  test("OpenFilm is an on-device child process, right after HyperFrames, whose note names what never runs", () => {
+    expect(spec("openfilm")).toMatchObject({
+      name: "OpenFilm (local)", group: "video", kind: "local-app", transports: ["child-process"], authKind: "local",
+      consentRequired: false, docsUrl: "https://github.com/openfilm/openfilm", cui: { posture: "on-device" },
+    });
+    expect(spec("openfilm").capabilities.map((c) => [c.id, c.status, c.surface])).toEqual([
+      ["video-compose", "available", "cli"], ["render-animation", "available", "cli"], ["runtime-feedback", "available", "cli"],
+    ]);
+    expect(CREATOR_PROVIDER_IDS.indexOf("openfilm")).toBe(CREATOR_PROVIDER_IDS.indexOf("hyperframes") + 1);
+    const ids = CREATOR_INTEGRATIONS.map((s) => s.id);
+    expect(ids.indexOf("openfilm")).toBe(ids.indexOf("hyperframes") + 1);
+    const note = spec("openfilm").note;
+    for (const word of ["MIT", "fixed-argv", "look and render", "get", "open", "update", "skill", "Studio server", "telemetry", "update check", "browser opening"]) {
+      expect(note).toContain(word);
+    }
+  });
+
   test("a DGX service claims nothing usable until its /health probe attests it; pdf-markup is built in", () => {
-    for (const id of ["dgx-avatar", "dgx-cad", "hyperframes"]) {
+    for (const id of ["dgx-avatar", "dgx-cad", "hyperframes", "openfilm"]) {
       expect(foldProviderStatus(spec(id), { endpoints: [], secretPresent: false }).usable).toEqual([]);
     }
     const cad: CreatorEndpointDef = { id: "nick-dgx-cad", providerId: "dgx-cad", label: "CAD", baseUrl: "http://127.0.0.1:8089", zone: "internal", enclave: true, enabled: true };

@@ -228,6 +228,11 @@ const DESIGN_EXT = repoAsset("harness", "omp", "design_extension.ts");
 // in dev.ts). MASTER ONLY, like the Design suite: there is one editor. Self-skips when LUCID_DRIFT_CALL_URL is
 // absent, which is every non-Creator build.
 const DRIFT_EXT = repoAsset("harness", "omp", "drift_extension.ts");
+// CREATOR-OPENFILM (ADR-0457): openfilm_look / openfilm_render / openfilm_job run OpenFilm's look and render as
+// fixed-argv engine jobs through the /api/creator/openfilm/* routes (job ledger, artifact library, governor, CUI
+// gate all live in dev.ts). MASTER ONLY, like the Drift tools. Self-skips unless LUCID_OPENFILM_LOOK_URL,
+// LUCID_OPENFILM_RENDER_URL and LUCID_OPENFILM_JOB_URL are all set, which is every non-Creator build.
+const OPENFILM_EXT = repoAsset("harness", "omp", "openfilm_extension.ts");
 // P-HEALTH.3: a liveness beat while the model streams a tool call's arguments, which omp's ACP mapper never
 // forwards, so the stall watchdog stops reading a long write as a wedged session. Master AND lanes; each
 // beat names its omp session id, so the engine credits the right one. Fail-soft, self-skips when
@@ -1006,6 +1011,7 @@ class Backend {
         const browserArgs = existsSync(BROWSER_EXT) ? ["-e", BROWSER_EXT] : []; // P-BROWSER.1: master-only, see BROWSER_EXT
         const designArgs = existsSync(DESIGN_EXT) ? ["-e", DESIGN_EXT] : []; // Design suite: master-only, see DESIGN_EXT
         const driftArgs = existsSync(DRIFT_EXT) ? ["-e", DRIFT_EXT] : []; // CREATOR-DRIFT: master-only, see DRIFT_EXT
+        const openfilmArgs = existsSync(OPENFILM_EXT) ? ["-e", OPENFILM_EXT] : []; // CREATOR-OPENFILM: master-only, see OPENFILM_EXT
         const ownArgs = [...(existsSync(CHECKIN_EXT) ? ["-e", CHECKIN_EXT] : []), ...(existsSync(COMMIT_GATE_EXT) ? ["-e", COMMIT_GATE_EXT] : [])]; // P-OWN.1
         // P-EVAL.4 (ADR-0318): last of the observability extensions. Loaded AFTER the gates so its hooks
         // see the same calls the gates already ruled on, and it can never sit between a tool and its gate.
@@ -1022,7 +1028,7 @@ class Backend {
         // log, and the session ran UNGATED while every surface reported healthy. start() rejects, so the
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...designArgs, ...driftArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
+        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
         // P-SANDBOX.16 (ADR-0397): a git the host never put on PATH (MinGit, scoop, GitHub Desktop's copy)

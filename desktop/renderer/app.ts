@@ -165,8 +165,8 @@ import { runCapture, type FrameDecoder } from "./capture_driver.ts"; // CREATOR-
 import { framePlan } from "../../harness/creator/frame_capture.ts"; // CREATOR-3: the deterministic plan the capture steps
 import { creatorFlyoutHtml, pressureRailHtml, type CreatorResourcesView } from "./creator_monitor.ts";
 import { creatorStudioHtml, cuiBannerHtml, type CreatorStudioView } from "./creator_studio.ts";
-// Creator free stack: Video (dgx-avatar + HyperFrames), CAD (dgx-cad), Markup (on-device PDF annotations).
-import { creatorVideoHtml, hyperframesRenderBlock, videoRenderBlock, type AvatarEngine, type CreatorVideoView, type VideoEndpointView } from "./creator_video.ts";
+// Creator free stack: Video (dgx-avatar + HyperFrames + OpenFilm), CAD (dgx-cad), Markup (on-device PDF annotations).
+import { creatorVideoHtml, hyperframesRenderBlock, openfilmBlock, openfilmJobOutcome, videoRenderBlock, type AvatarEngine, type CreatorVideoView, type VideoEndpointView } from "./creator_video.ts";
 import { CAD_OUTPUTS, SAMPLE_CADQUERY, cadRunBlock, creatorCadHtml, type CreatorCadView } from "./creator_cad.ts";
 // CREATOR-DRIFT: the CutWire Drift pane (collaborative edit over Drift's own localhost agent protocol).
 import { DRIFT_ASK_PROMPTS, creatorDriftHtml, driftConnectBlock, driftExportBlock, driftExportTarget, driftInspectFromPayload, newestUndoableIsAgent, type CreatorDriftView, type DriftActivityView, type DriftStatusView } from "./creator_drift_view.ts";
@@ -6090,6 +6090,7 @@ async function renderCreatorStudio(): Promise<void> {
   if (state.studioTab === "video") {
     body.innerHTML = studioTabsHtml() + creatorVideoHtml(state.creatorVideo);
     paintCreatorVideo();
+    paintOpenfilmSheets();
     return;
   }
   if (state.studioTab === "cad") {
@@ -6149,6 +6150,7 @@ async function loadCreatorVideo(): Promise<void> {
   const prev = state.creatorVideo;
   const endpoints = creatorProviderEndpoints(studio, "dgx-avatar");
   const hf = studio?.providers.find((p) => p.id === "hyperframes");
+  const of = studio?.providers.find((p) => p.id === "openfilm");
   const voiceList = (voices?.voices ?? []).map((x) => ({ id: x.voiceId, name: x.name }));
   state.creatorVideo = {
     lockdown: studio?.cui?.lockdown === true,
@@ -6178,6 +6180,19 @@ async function loadCreatorVideo(): Promise<void> {
       jobId: prev?.hyperframes.jobId ?? "",
       status: prev?.hyperframes.status ?? "",
       statusTone: prev?.hyperframes.statusTone ?? "",
+    },
+    openfilm: {
+      cui: of?.cui,
+      projectDir: prev?.openfilm.projectDir ?? "",
+      format: prev?.openfilm.format ?? "mp4",
+      fps: prev?.openfilm.fps ?? 30,
+      fourK: prev?.openfilm.fourK ?? false,
+      blur: prev?.openfilm.blur ?? false,
+      jobId: prev?.openfilm.jobId ?? "",
+      lookJobId: prev?.openfilm.lookJobId ?? "",
+      status: prev?.openfilm.status ?? "",
+      statusTone: prev?.openfilm.statusTone ?? "",
+      look: prev?.openfilm.look ?? null,
     },
     jobs: studio?.jobs ?? [],
   };
@@ -6276,6 +6291,70 @@ function pollHyperframesJob(jobId: string): void {
       hyperframes: { ...cur.hyperframes, status: ok ? "HyperFrames render complete; the video is in the Creator library." : `HyperFrames ${job.state}: ${job.error || "no reason given"}`, statusTone: ok ? "ok" : "error" },
     });
   }, 3000);
+}
+
+// CREATOR-OPENFILM (ADR-0457): Look and Render each start one engine job and poll its own route until it
+// settles. The look verdict is film-derived text and is painted only through the escaping card builder.
+const OPENFILM_POLL_MS = 2500;
+const openfilmPollTimer = { look: 0, render: 0 };
+
+async function runOpenfilm(kind: "look" | "render"): Promise<void> {
+  const v = state.creatorVideo;
+  if (!v || openfilmBlock(v, kind)) return;
+  const of = v.openfilm;
+  const projectDir = of.projectDir.trim();
+  patchCreatorVideo({ openfilm: { ...of, status: kind === "look" ? "Starting the OpenFilm look on this machine..." : "Starting the OpenFilm render on this machine...", statusTone: "", ...(kind === "look" ? { look: null, lookJobId: "" } : {}) } });
+  const r = kind === "look"
+    ? await bridge.creatorOpenfilmLook({ projectDir })
+    : await bridge.creatorOpenfilmRender({ projectDir, format: of.format, fps: of.fps, fourK: of.fourK, blur: of.blur });
+  const cur = state.creatorVideo;
+  if (!cur) return;
+  if (!r.ok || !r.data) { patchCreatorVideo({ openfilm: { ...cur.openfilm, status: r.error ?? "The OpenFilm runner did not answer.", statusTone: "error" } }); return; }
+  const jobId = r.data.jobId;
+  const what = kind === "look" ? "Looking" : "Rendering";
+  patchCreatorVideo({ openfilm: { ...cur.openfilm, ...(kind === "look" ? { lookJobId: jobId } : { jobId }), status: `${what} (job ${jobId}). ${r.data.note}`.trim(), statusTone: "" } });
+  pollOpenfilmJob(kind, jobId, 0);
+}
+
+/** Poll one OpenFilm job until it settles. Five missed answers in a row end the poll with that said plainly. */
+function pollOpenfilmJob(kind: "look" | "render", jobId: string, misses: number): void {
+  clearTimeout(openfilmPollTimer[kind]);
+  const watching = () => { const of = state.creatorVideo?.openfilm; return (kind === "look" ? of?.lookJobId : of?.jobId) === jobId; };
+  openfilmPollTimer[kind] = window.setTimeout(async () => {
+    if (!watching()) return;
+    const r = await bridge.creatorOpenfilmJob(jobId);
+    const cur = state.creatorVideo;
+    if (!cur || !watching()) return;
+    if (!r.ok || !r.data) {
+      if (misses + 1 >= 5) { patchCreatorVideo({ openfilm: { ...cur.openfilm, status: `Stopped watching OpenFilm job ${jobId}: ${r.error ?? "no answer"}`, statusTone: "error" } }); return; }
+      pollOpenfilmJob(kind, jobId, misses + 1);
+      return;
+    }
+    const out = openfilmJobOutcome(r.data);
+    if (!out.settled) { patchCreatorVideo({ openfilm: { ...cur.openfilm, status: out.status, statusTone: "" } }); pollOpenfilmJob(kind, jobId, 0); return; }
+    patchCreatorVideo({
+      ...(out.artifactId ? { artifactId: out.artifactId } : {}),
+      openfilm: { ...cur.openfilm, status: out.status, statusTone: out.statusTone, ...(kind === "look" ? { look: out.look } : {}) },
+    });
+    const studio = await refreshCreatorRegistry();
+    patchCreatorVideo({ jobs: studio?.jobs ?? [] });
+  }, OPENFILM_POLL_MS);
+}
+
+/** Contact sheets load like the result video: artifact bytes fetched once per id, set as a DOM property. */
+const openfilmSheetSrc = new Map<string, string>();
+function paintOpenfilmSheets(): void {
+  for (const img of document.querySelectorAll<HTMLImageElement>("img[data-cvd-sheet]")) {
+    const id = img.dataset.cvdSheet ?? "";
+    if (!id) continue;
+    const cached = openfilmSheetSrc.get(id);
+    if (cached) { img.src = cached; continue; }
+    void bridge.creatorArtifactData(id).then((d) => {
+      if (!d?.dataUrl) { img.alt = `The contact sheet ${id} could not be read from the library.`; return; }
+      openfilmSheetSrc.set(id, d.dataUrl);
+      for (const now of document.querySelectorAll<HTMLImageElement>("img[data-cvd-sheet]")) if (now.dataset.cvdSheet === id) now.src = d.dataUrl;
+    });
+  }
 }
 
 /** Set the result video's bytes as a DOM PROPERTY (the P-VISION.1 idiom), fetched once per artifact. */
@@ -6647,6 +6726,7 @@ function syncStudioField(t: HTMLElement): boolean {
   const checked = t instanceof HTMLInputElement && t.checked;
   if (v && t.id.startsWith("cvd")) {
     const hf = v.hyperframes;
+    const of = v.openfilm;
     const patch: Partial<CreatorVideoView> | null =
       t.id === "cvdEndpoint" ? { endpointId: val }
       : t.id === "cvdTemplate" ? { templatePath: val }
@@ -6658,6 +6738,11 @@ function syncStudioField(t: HTMLElement): boolean {
       : t.id === "cvdHfDir" ? { hyperframes: { ...hf, projectDir: val } }
       : t.id === "cvdHfFormat" && (val === "mp4" || val === "webm" || val === "mov") ? { hyperframes: { ...hf, format: val } }
       : t.id === "cvdHfQuality" && (val === "draft" || val === "standard" || val === "high") ? { hyperframes: { ...hf, quality: val } }
+      : t.id === "cvdOfDir" ? { openfilm: { ...of, projectDir: val } }
+      : t.id === "cvdOfFormat" && (val === "mp4" || val === "webm" || val === "mov") ? { openfilm: { ...of, format: val } }
+      : t.id === "cvdOfFps" ? { openfilm: { ...of, fps: val.trim() ? Number(val) : Number.NaN } }
+      : t.id === "cvdOfFourK" ? { openfilm: { ...of, fourK: checked } }
+      : t.id === "cvdOfBlur" ? { openfilm: { ...of, blur: checked } }
       : null;
     if (!patch) return false;
     state.creatorVideo = { ...v, ...patch };
@@ -6701,6 +6786,8 @@ function refreshStudioGates(): void {
   if (state.creatorVideo) {
     gate("avatar", videoRenderBlock(state.creatorVideo), "#cvdRender", "Ready to render.");
     gate("hf", hyperframesRenderBlock(state.creatorVideo), "#cvdHfRender", "Ready to render.");
+    gate("of", openfilmBlock(state.creatorVideo), "#cvdOfRender", "Ready to look or render.");
+    gate("of-look", openfilmBlock(state.creatorVideo, "look"), "#cvdOfLook", "Ready to look.");
   }
   if (state.creatorCad) gate("cad-run", cadRunBlock(state.creatorCad), "#ccadRun", "Ready to run (approval required).");
   if (state.creatorDrift) gate("drift-export", driftExportBlock(state.creatorDrift), "[data-cdr-export]", "Ready to export.");
@@ -16436,6 +16523,8 @@ function wire(): void {
     if (t.closest("[data-cvd-templates]")) { void listAvatarTemplates(); return; }
     if (t.closest("#cvdRender")) { void runAvatarRender(); return; }
     if (t.closest("#cvdHfRender")) { void runHyperframesRender(); return; }
+    if (t.closest("#cvdOfLook")) { void runOpenfilm("look"); return; }
+    if (t.closest("#cvdOfRender")) { void runOpenfilm("render"); return; }
     // CREATOR-DRIFT: the Drift pane's buttons.
     if (t.closest("[data-cdr-probe]")) { void runCreatorProbe("drift").then(() => loadCreatorDrift()); return; }
     if (t.closest("[data-cdr-refresh]")) { void loadCreatorDrift(); return; }
@@ -19240,6 +19329,15 @@ try {
 // rail entry, Resources tab). A standard build never renders them, and a failed call reveals nothing.
 void bridge.buildInfo().then((info) => {
   state.buildInfo = info;
+  // P-PORTGUARD.4 (ADR-0458): the engine moved off a busy default port. Say where it runs and why.
+  if (info && typeof info.portRolledFrom === "number") {
+    showToast({
+      tone: "info",
+      title: `${info.displayName} is running on port ${info.port}`,
+      desc: `Port ${info.portRolledFrom}, its usual port, is in use${info.portRollHolder ? ` by ${info.portRollHolder}` : ""}. Your settings, keys and sessions are unchanged; the next launch tries port ${info.portRolledFrom} again.`,
+      timeout: 15000,
+    });
+  }
   if (!info?.creatorBuild) return;
   const tab = $("#inspResTab"); if (tab) tab.hidden = false;
   const studio = $("#railStudio"); if (studio) studio.hidden = false;

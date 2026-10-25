@@ -43,6 +43,9 @@
   "build": {
     "appId": "com.lucidagentide.desktop",
     "productName": "LucidAgentIDE",
+    "extraMetadata": {
+      "lucidBuildFlavor": "agent"
+    },
     "directories": {
       "output": "release",
       "buildResources": "build"

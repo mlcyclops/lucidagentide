@@ -21,11 +21,11 @@ import { cuiProviderVerdict, type CuiVerdict } from "./cui_policy.ts";
 /** Closed set of provider ids. A new provider is a deliberate registry change. */
 export type CreatorProviderId =
   | "elevenlabs" | "dots-tts" | "whistle" | "suno" | "comfyui" | "threejs" | "blender" | "unreal"
-  | "hyperframes" | "dgx-avatar" | "heygen" | "dgx-vision" | "design" | "drift"
+  | "hyperframes" | "openfilm" | "dgx-avatar" | "heygen" | "dgx-vision" | "design" | "drift"
   | "dgx-cad" | "pdf-markup" | "autodesk-aps" | "bluebeam-studio" | "classcad" | "oda-drawings";
 export const CREATOR_PROVIDER_IDS: readonly CreatorProviderId[] = [
   "elevenlabs", "dots-tts", "whistle", "suno", "comfyui", "threejs", "blender", "unreal",
-  "hyperframes", "dgx-avatar", "heygen", "dgx-vision", "design", "drift",
+  "hyperframes", "openfilm", "dgx-avatar", "heygen", "dgx-vision", "design", "drift",
   "dgx-cad", "pdf-markup", "autodesk-aps", "bluebeam-studio", "classcad", "oda-drawings",
 ] as const;
 
@@ -309,6 +309,26 @@ const HYPERFRAMES: CreatorIntegrationSpec = {
   cui: { posture: "on-device" },
 };
 
+// OpenFilm (MIT, github.com/openfilm/openfilm) is an HTML film format plus a CLI: `look` checks that the same
+// t draws the same picture and writes a contact sheet, `render` encodes the film. CREATOR-OPENFILM (ADR-0457).
+const OPENFILM: CreatorIntegrationSpec = {
+  id: "openfilm",
+  name: "OpenFilm (local)",
+  group: "video",
+  kind: "local-app",
+  transports: ["child-process"],
+  authKind: "local",
+  consentRequired: false,
+  docsUrl: "https://github.com/openfilm/openfilm",
+  capabilities: [
+    { id: "video-compose", status: "available", surface: "cli", detail: "openfilm render turns a film.html (tracks of page, video, image, and sound clips) into MP4, WebM, or MOV with headless Chromium and FFmpeg." },
+    { id: "render-animation", status: "available", surface: "cli", detail: "Pages draw by window.film.frame(t): the same t draws the same picture, so a render is deterministic." },
+    { id: "runtime-feedback", status: "available", surface: "cli", detail: "openfilm look draws a contact sheet twice in shuffled orders and reports nondeterministic frames, page errors, failed fonts, missing sounds, and cut-off text." },
+  ],
+  note: "MIT CLI run as a fixed-argv child process: only look and render ever run (get, open, update, skill, skills, and doctor never do), no Studio server is spawned (LUCID marks the project as shown first), and telemetry, the update check, and browser opening are off. Declare node.exe plus node_modules/openfilm/bin/openfilm.mjs as its first arg; npx and shell shims are refused.",
+  cui: { posture: "on-device" },
+};
+
 const DGX_AVATAR: CreatorIntegrationSpec = {
   id: "dgx-avatar",
   name: "DGX avatar render",
@@ -531,7 +551,7 @@ const ODA_DRAWINGS: CreatorIntegrationSpec = {
 
 export const CREATOR_INTEGRATIONS: readonly CreatorIntegrationSpec[] = [
   ELEVENLABS, DOTS_TTS, WHISTLE, SUNO, COMFYUI, THREEJS, BLENDER, UNREAL,
-  HYPERFRAMES, DGX_AVATAR, HEYGEN, DGX_VISION, DESIGN, DRIFT,
+  HYPERFRAMES, OPENFILM, DGX_AVATAR, HEYGEN, DGX_VISION, DESIGN, DRIFT,
   DGX_CAD, PDF_MARKUP, AUTODESK_APS, BLUEBEAM_STUDIO, CLASSCAD, ODA_DRAWINGS,
 ] as const;
 

@@ -55,6 +55,18 @@
   Pop $R0
 !macroend
 
+# P-PORTGUARD.4 (ADR-0458): Electron refuses to start (FATAL install_dir_access: "Sandboxed processes
+# cannot read <dir>") when the install dir's ACL carries an AppContainer package SID but no entry for ALL
+# APPLICATION PACKAGES. Per-user installs under %LOCALAPPDATA%\Programs inherit such a SID on machines
+# where anything once granted an AppContainer access there (the ADR-0246 zombie SID), and the check runs
+# in C++ before any app code, so only the installer can fix it. The grant is the one Electron names and
+# the read/execute access Windows already gives every AppContainer on Program Files. It runs on every
+# install and update, because an NSIS update recreates the folder.
+!macro customInstall
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$INSTDIR" /grant *S-1-15-2-1:(OI)(CI)(RX) /Q'
+  Pop $0
+!macroend
+
 !macro customUnInstall
   # An auto-update runs the old uninstaller with --updated; the app is still installed, so keep it.
   ${ifNot} ${isUpdated}

@@ -14,7 +14,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, saf
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { connect } from "node:net";
+import { connect, createServer } from "node:net";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
@@ -46,26 +46,48 @@ import { installAppNavigation, openExternalHttp } from "./navigation_policy.ts";
 import { isEngineDocument } from "./origin_guard.ts"; // P-SANDBOX.15 (ADR-0396): the UI token goes only to our own window
 import { installCliForwarder } from "./cli_forwarder.ts"; // P-TUI.2: `lucid hub` from any terminal on an installed machine
 
+// P-PORTGUARD.4 (ADR-0458): every LUCID engine exports its own LUCID_* env (identity, data root, vault dir,
+// token'd loopback URLs, its main's pid) to the agent's shells and terminals. An app launched from one of
+// them (an agent asked to "open Creator") inherited all of it: the other app's flavor, its vault directory,
+// its engine's URLs and tokens. LUCID_MAIN_PID is only ever set by a LUCID main for ITS engine, so seeing
+// it here means this process was started inside another LUCID's tree: drop the inherited LUCID_* before
+// anything reads them. LUCID_PORT stays (no engine sets it; it is only ever the launcher's own choice).
+// Under another LUCID a deliberate override cannot be told from a leak, so dev overrides need a clean shell.
+if (process.env.LUCID_MAIN_PID) {
+  const inherited = Object.keys(process.env).filter((k) => k.startsWith("LUCID_") && k !== "LUCID_PORT");
+  for (const k of inherited) delete process.env[k];
+  console.log(`[main] started inside another LUCID's process tree: ignored ${inherited.length} inherited LUCID_* variable(s)`);
+}
+
 // CREATOR-0 (ADR-0279): resolve the BUILD FLAVOR before anything reads an identity-derived path.
-// Order: an explicit env var (launcher / dev run), then the packaged package.json's `lucidBuildFlavor`
-// (electron-builder extraMetadata), then the standard Agent build. Renaming the app is what actually
-// separates the two products on disk (userData, the single-instance lock, and the Windows os_crypt key
-// all key on the app name), so it happens FIRST and only for the Creator flavor - the standard build's
-// paths must not move by a single byte.
+// Order (ADR-0458): the packaged package.json's `lucidBuildFlavor` (electron-builder extraMetadata), then
+// the env var (a dev run; build-creator.ts bakes it into the Creator dev bundle), then the standard Agent
+// build. Renaming the app is what actually separates the two products on disk (userData, the
+// single-instance lock, and the Windows os_crypt key all key on the app name), so it happens FIRST and only
+// for the Creator flavor - the standard build's paths must not move by a single byte.
 const packagedBuildFlavor = ((): string => {
   try {
     const meta = JSON.parse(readFileSync(join(app.getAppPath(), "package.json"), "utf8")) as { lucidBuildFlavor?: unknown };
     return typeof meta.lucidBuildFlavor === "string" ? meta.lucidBuildFlavor : "";
   } catch { return ""; }
 })();
-const BUILD = flavorInfo(resolveBuildFlavor(process.env, packagedBuildFlavor));
+// The literal `process.env.LUCID_BUILD_FLAVOR` is what build-creator.ts's define replaces, so a dev Creator
+// bundle carries "creator" baked in; passing `process.env` itself (as before ADR-0458) left the define with
+// nothing to replace, and `start:creator` ran as the Agent.
+const BUILD = flavorInfo(resolveBuildFlavor({ LUCID_BUILD_FLAVOR: process.env.LUCID_BUILD_FLAVOR }, packagedBuildFlavor));
 if (BUILD.creatorBuild) {
   app.setName(BUILD.productName);
   if (process.platform === "win32") { try { app.setAppUserModelId(BUILD.appId); } catch { /* taskbar grouping only */ } }
 }
 
 const DEFAULT_PORT = BUILD.defaultPort;
-const PORT = Number(process.env.LUCID_PORT ?? DEFAULT_PORT);
+// P-PORTGUARD.4 (ADR-0458): two ports. IDENTITY_PORT is the port this instance is KEYED on (userData suffix,
+// os_crypt seeding, the deep-link claim): the flavor default, or an explicit LUCID_PORT. PORT is where the
+// engine actually binds: it starts as IDENTITY_PORT and moves only when the default is busy at launch
+// (rollOffBusyPort), WITHOUT moving the identity, so a roll never strands settings, vault or sessions.
+const PORT_EXPLICIT = typeof process.env.LUCID_PORT === "string" && process.env.LUCID_PORT.trim() !== "";
+const IDENTITY_PORT = Number(process.env.LUCID_PORT ?? DEFAULT_PORT);
+let PORT = IDENTITY_PORT;
 // A LUCID on a NON-DEFAULT port is a deliberately separate instance: LucidAgentIDE.bat rolls a free port
 // when 5319 is taken, precisely so a dev build can run beside an installed one. Electron's single-instance
 // lock (below, ADR-0206) is keyed on the userData directory and knows nothing about the port, so without
@@ -75,7 +97,7 @@ const PORT = Number(process.env.LUCID_PORT ?? DEFAULT_PORT);
 // OAuth deep-link still re-focuses the primary app rather than spawning an engine.
 // Must run before requestSingleInstanceLock() and before anything resolves a userData path.
 const CANONICAL_USER_DATA = app.getPath("userData"); // the unsuffixed install identity - owns the one true safeStorage key
-if (PORT !== DEFAULT_PORT) app.setPath("userData", `${app.getPath("userData")}-${PORT}`);
+if (IDENTITY_PORT !== DEFAULT_PORT) app.setPath("userData", `${app.getPath("userData")}-${IDENTITY_PORT}`);
 // safeStorage on Windows is Chromium os_crypt: its AES key lives in `<userData>/Local State`, so the
 // per-port userData above silently gave EVERY instance its own encryption key while the credential vault
 // (~/.omp/lucid-cred-vault) is global. A key stored on port A was undecryptable on port B: readCredential
@@ -86,7 +108,7 @@ if (PORT !== DEFAULT_PORT) app.setPath("userData", `${app.getPath("userData")}-$
 // seed just means this instance mints its own key (the pre-fix behavior).
 const localStatePath = (dir: string): string => join(dir, "Local State");
 function readTextBestEffort(p: string): string { try { return readFileSync(p, "utf8"); } catch { return ""; } }
-if (process.platform === "win32" && PORT !== DEFAULT_PORT) {
+if (process.platform === "win32" && IDENTITY_PORT !== DEFAULT_PORT) {
   try {
     const instPath = localStatePath(app.getPath("userData"));
     const seed = seedInstanceFromCanonical(readTextBestEffort(localStatePath(CANONICAL_USER_DATA)), readTextBestEffort(instPath));
@@ -467,7 +489,7 @@ function startDevServer(): void {
     // P-BROWSER.1 (wave 2): LUCID_MAIN_TOKEN is the per-launch capability token, minted HERE (below)
     // and adopted by dev.ts as THE token - the only channel that lets this parent process authenticate
     // its agent-browser poll loop against the child's /api/browser routes.
-    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, ...meetingsEnv, ...flavorEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_MAIN_TOKEN: MAIN_TOKEN, LUCID_ENGINE_NONCE: ENGINE_NONCE, LUCID_MAIN_PID: String(process.pid), LUCID_HOST_EXE: basename(process.execPath) /* P-LEGIBLE.1: the manifest's relatedProcess */ },
+    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, ...meetingsEnv, ...flavorEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_IDENTITY_PORT: String(IDENTITY_PORT) /* ADR-0458: the resume file follows identity, not a rolled bind */, LUCID_PORT_ROLL_HOLDER: portRoll?.holder ?? "", LUCID_MAIN_TOKEN: MAIN_TOKEN, LUCID_ENGINE_NONCE: ENGINE_NONCE, LUCID_MAIN_PID: String(process.pid), LUCID_HOST_EXE: basename(process.execPath) /* P-LEGIBLE.1: the manifest's relatedProcess */ },
     // NOT "inherit": in a packaged GUI app the Electron main has no console, so inheriting
     // makes the console-subsystem Bun allocate its OWN console window (the black pop-up).
     // Pipe instead + windowsHide so no window ever appears; forward output for dev runs.
@@ -560,7 +582,7 @@ function portAccepting(): Promise<boolean> {
 async function reapOrphanedEngine(): Promise<boolean> {
   if (!(await portAccepting())) return true;
   const observed = await probePortOwner();
-  const holder = classifyPortHolder(observed, process.pid);
+  const holder = classifyPortHolder(observed, process.pid, pidAlive);
   if (holder.kind !== "ours" || !observed) return true;
   const d = orphanDialog({ port: PORT, productName: BUILD.productName, observed, evidence: holder.evidence });
   appendEngineLog(`\n--- ${new Date().toISOString()} orphaned engine on port ${PORT} (P-PORTGUARD.3) ---\n${d.detail}\n`);
@@ -583,13 +605,57 @@ async function reapOrphanedEngine(): Promise<boolean> {
   return true;
 }
 
+/** Is `pid` running? EPERM means it exists but belongs to someone else, which still counts. */
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }
+}
+
+/** A loopback port the OS says is free right now (bind 0, read it, release it). null if none. */
+function pickFreeLoopbackPort(): Promise<number | null> {
+  const { promise, resolve } = Promise.withResolvers<number | null>();
+  const srv = createServer();
+  srv.once("error", () => resolve(null));
+  srv.listen(0, "127.0.0.1", () => {
+    const addr = srv.address();
+    const port = addr && typeof addr === "object" ? addr.port : null;
+    srv.close(() => resolve(port));
+  });
+  return promise;
+}
+
+/** This launch's roll. The engine gets the holder (LUCID_PORT_ROLL_HOLDER) and /api/build-info reports it,
+ *  so the window says where it runs and why: a native box shown during renderer startup was dismissed
+ *  before anyone could read it. */
+let portRoll: { from: number; to: number; holder: string } | null = null;
+/** P-PORTGUARD.4 (ADR-0458): the default port is busy at launch (another program, or another LIVE LUCID),
+ *  so the engine binds a free loopback port instead. Only the BIND moves: userData, the vault key, the
+ *  single-instance lock and the deep-link claim stay on IDENTITY_PORT, which is what ADR-0305 refused
+ *  to move silently. It is never silent either: engine.log names the holder and the window says where
+ *  this instance runs. An explicit LUCID_PORT is the user's own choice and is never rolled (the ADR-0305
+ *  dialog still reports it). Returns what happened, or null when nothing moved. */
+async function rollOffBusyPort(): Promise<{ from: number; to: number; holder: string } | null> {
+  if (PORT_EXPLICIT || !(await portAccepting())) return null;
+  const observed = await probePortOwner();
+  const kind = classifyPortHolder(observed, process.pid, pidAlive).kind;
+  const who = observed ? `${observed.name ?? "unknown program"} (pid ${observed.pid ?? "unknown"})` : "a program that could not be identified";
+  const holder = kind === "live" ? `another running LUCID engine, ${who}` : who;
+  const to = await pickFreeLoopbackPort();
+  const from = PORT;
+  appendEngineLog(`\n--- ${new Date().toISOString()} default port busy (P-PORTGUARD.4) ---\n- Port ${from} is held by ${holder}.\n${formatSquatter(observed).join("\n")}\n`);
+  if (to === null) { appendEngineLog("- No free loopback port could be reserved; the engine tries the default and reports the bind.\n"); return null; }
+  PORT = to;
+  if (runLedger) saveRunLedger({ ...runLedger, port: to }); // the next launch's recovery looks where this engine really is
+  appendEngineLog(`- The engine binds port ${to} instead. Settings, vault and sessions stay on this install's own identity.\n`);
+  return { from, to, holder };
+}
+
 function createWindow(): void {
   // Runtime window icon (taskbar/dev). Packaged Win/mac use the exe/app icon
   // baked in by electron-builder; this covers the dev run and Linux.
   const iconPath = join(app.getAppPath(), "build", "icon.png");
   win = new BrowserWindow({
     width: 1320, height: 860, minWidth: 940, minHeight: 600,
-    frame: false, backgroundColor: "#0a0b0f", show: false, title: "Lucid Agent",
+    frame: false, backgroundColor: "#0a0b0f", show: false, title: BUILD.displayName,
     ...(existsSync(iconPath) ? { icon: iconPath } : {}),
     // `plugins` enables Chromium's BUILT-IN PDF viewer, and nothing else: NPAPI and PPAPI are long gone
     // from Chromium, so the internal PDF reader is the only "plugin" this flag can still turn on. It
@@ -1247,7 +1313,7 @@ ipcMain.on("lucid:win", (e, action: string) => {
 // re-focuses the running app and hands it the URL (rather than spawning a second engine).
 // Only the DEFAULT-port instance claims the lucid:// scheme. A side-by-side test instance registering it
 // would silently steal the OAuth callback from the app the user actually signed in from.
-if (PORT === DEFAULT_PORT) {
+if (IDENTITY_PORT === DEFAULT_PORT) {
   if (process.defaultApp && process.argv.length >= 2) {
     app.setAsDefaultProtocolClient(AUTH_PROTOCOL, process.execPath, [resolve(process.argv[1]!)]); // dev
   } else {
@@ -1322,7 +1388,7 @@ app.whenReady().then(async () => {
   // the canonical dir has no key, so adopt the key Chromium just minted for THIS instance as the
   // canonical one - every later instance then seeds from it (module-load seed above). Never overwrites
   // an existing canonical key. Best-effort: a miss self-heals on a later launch.
-  if (process.platform === "win32" && PORT !== DEFAULT_PORT) {
+  if (process.platform === "win32" && IDENTITY_PORT !== DEFAULT_PORT) {
     try {
       const canonPath = localStatePath(CANONICAL_USER_DATA);
       const fill = backfillCanonicalFromInstance(readTextBestEffort(canonPath), readTextBestEffort(localStatePath(app.getPath("userData"))));
@@ -1341,6 +1407,9 @@ app.whenReady().then(async () => {
   // P-PORTGUARD.3 (ADR-0382): an engine WE left behind (a build before the parent watch, or a crash it
   // could not observe) is offered for reaping before the bind is even attempted. Quit = leave it alone.
   if (!(await reapOrphanedEngine())) { splash?.close(); markRunClean(); app.exit(0); return; }
+  // P-PORTGUARD.4 (ADR-0458): still busy (a foreign program, another live LUCID, or an orphan the user
+  // stopped that did not let go) -> bind a free port instead of failing. The handshake below still applies.
+  portRoll = await rollOffBusyPort();
   startDevServer();
   const serverUp = await waitForServer();
   // P-PORTGUARD.1 (ADR-0305): a FOREIGN process answered the engine port. Never render it - the window
