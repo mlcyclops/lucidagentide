@@ -7,6 +7,8 @@
 //   * dgx-avatar: a talking-head render on a DGX enclave box (MuseTalk / EchoMimic), optionally composed
 //     with a HyperFrames title card and estimated-timing captions, through POST /api/creator/avatar/render.
 //   * HyperFrames: render a local HTML composition project to video with the pinned CLI on this machine.
+//   * OpenFilm (ADR-0457): `look` (same t, same picture check + contact sheet) and `render` of a local
+//     film.html project with the user's openfilm CLI on this machine; the verdict text is untrusted data.
 //
 // The pane states WHY Render is disabled before the click (`videoRenderBlock`), with the same CUI verdict
 // the server enforces, so a refusal is read up front instead of discovered after a failed round trip.
@@ -24,6 +26,64 @@ export interface VideoEndpointView { id: string; label: string; cui?: CuiVerdict
 export type AvatarEngine = "musetalk" | "echomimic";
 export type HyperframesFormat = "mp4" | "webm" | "mov";
 export type HyperframesQuality = "draft" | "standard" | "high";
+export type OpenfilmFormat = "mp4" | "webm" | "mov";
+
+/** GET /api/creator/openfilm/job `look`: every string is film-derived and UNTRUSTED (rendered as data). */
+export interface OpenfilmLookVerdictView {
+  ok: boolean;
+  exitCode: number | null;
+  head: string;
+  errors: string[];
+  warnings: string[];
+  passed: string[];
+  notes: string[];
+  /** Artifact ids of the stored contact-sheet / frame PNGs. */
+  sheets: string[];
+}
+export type OpenfilmJobState = "queued" | "running" | "done" | "failed" | "cancelled" | "refused" | "unknown";
+/** GET /api/creator/openfilm/job */
+export interface OpenfilmJobView {
+  jobId: string;
+  kind: "look" | "render";
+  state: OpenfilmJobState;
+  error: string;
+  artifacts: string[];
+  look: OpenfilmLookVerdictView | null;
+}
+
+const OPENFILM_STATES: Record<OpenfilmJobState, true> = { queued: true, running: true, done: true, failed: true, cancelled: true, refused: true, unknown: true };
+const isStringList = (x: unknown): x is string[] => Array.isArray(x) && x.every((s) => typeof s === "string");
+
+function isOpenfilmLook(d: unknown): d is OpenfilmLookVerdictView {
+  if (!d || typeof d !== "object") return false;
+  const o = d as Record<string, unknown>;
+  return typeof o.ok === "boolean" && (o.exitCode === null || typeof o.exitCode === "number") && typeof o.head === "string"
+    && isStringList(o.errors) && isStringList(o.warnings) && isStringList(o.passed) && isStringList(o.notes) && isStringList(o.sheets);
+}
+
+/** Wire guard for GET /api/creator/openfilm/job: a payload this pane cannot read is refused, never half-painted. */
+export function isOpenfilmJob(d: unknown): d is OpenfilmJobView {
+  if (!d || typeof d !== "object") return false;
+  const o = d as Record<string, unknown>;
+  return typeof o.jobId === "string" && (o.kind === "look" || o.kind === "render") && typeof o.state === "string" && Object.hasOwn(OPENFILM_STATES, o.state)
+    && typeof o.error === "string" && isStringList(o.artifacts) && (o.look === null || isOpenfilmLook(o.look));
+}
+
+export interface OpenfilmPaneView {
+  cui?: CuiVerdictView;
+  projectDir: string;
+  format: OpenfilmFormat;
+  fps: number;
+  fourK: boolean;
+  blur: boolean;
+  /** The render job being watched. */
+  jobId: string;
+  /** The look job being watched. */
+  lookJobId: string;
+  status: string;
+  statusTone: "" | "ok" | "error";
+  look: OpenfilmLookVerdictView | null;
+}
 
 export interface CreatorVideoView {
   lockdown: boolean;
@@ -47,6 +107,7 @@ export interface CreatorVideoView {
   /** The artifact the player shows (the avatar result or a finished HyperFrames job). */
   artifactId: string;
   hyperframes: { cui?: CuiVerdictView; projectDir: string; format: HyperframesFormat; quality: HyperframesQuality; jobId: string; status: string; statusTone: "" | "ok" | "error" };
+  openfilm: OpenfilmPaneView;
   jobs: readonly JobView[];
 }
 
@@ -70,6 +131,63 @@ export function hyperframesRenderBlock(v: CreatorVideoView): string {
   if (!hf.projectDir.trim()) return "Enter the HyperFrames project directory (the folder holding index.html).";
   return "";
 }
+
+/** Why the OpenFilm Render (or, with "look", the Look) button is disabled, or "". FPS only gates a render. */
+export function openfilmBlock(v: CreatorVideoView, action: "look" | "render" = "render"): string {
+  const of = v.openfilm;
+  if (of.cui && !of.cui.allowed) return `Refused under CUI lockdown: ${of.cui.reason}`;
+  if (!of.projectDir.trim()) return "Enter the OpenFilm project directory (the folder holding film.html).";
+  if (action === "render" && !(Number.isInteger(of.fps) && of.fps >= 1 && of.fps <= 240)) return "FPS must be a whole number from 1 to 240.";
+  return "";
+}
+
+/** What a settled (or still running) OpenFilm job means for the pane: the status line, the look verdict
+ *  to show, and the video to play. `settled` is false while the job is still queued or running. */
+export function openfilmJobOutcome(job: OpenfilmJobView): { settled: boolean; status: string; statusTone: "" | "ok" | "error"; look: OpenfilmLookVerdictView | null; artifactId: string } {
+  const what = job.kind === "look" ? "look" : "render";
+  const look = job.kind === "look" ? job.look : null;
+  if (job.state === "queued" || job.state === "running") {
+    return { settled: false, status: `OpenFilm ${what} ${job.state} (job ${job.jobId}).`, statusTone: "", look: null, artifactId: "" };
+  }
+  if (job.state === "unknown") {
+    return { settled: true, status: `OpenFilm ${what} job ${job.jobId} is no longer known to the engine.`, statusTone: "error", look: null, artifactId: "" };
+  }
+  if (job.state !== "done") {
+    return { settled: true, status: `OpenFilm ${what} ${job.state}: ${job.error || "no reason given"}`, statusTone: "error", look, artifactId: "" };
+  }
+  if (job.kind === "render") {
+    const artifactId = job.artifacts[0] ?? "";
+    return artifactId
+      ? { settled: true, status: "OpenFilm render complete; the video is in the Creator library.", statusTone: "ok", look: null, artifactId }
+      : { settled: true, status: "OpenFilm render finished but stored no video.", statusTone: "error", look: null, artifactId: "" };
+  }
+  if (!look) return { settled: true, status: "OpenFilm look finished; the engine restarted since, so the verdict is gone. Run Look again.", statusTone: "error", look: null, artifactId: "" };
+  return look.ok
+    ? { settled: true, status: "Look passed: the same t drew the same picture.", statusTone: "ok", look, artifactId: "" }
+    : { settled: true, status: "Look found film errors.", statusTone: "error", look, artifactId: "" };
+}
+
+/** The look verdict card. Every verdict string is untrusted film text: escaped, one block paragraph each. */
+export function openfilmLookHtml(look: OpenfilmLookVerdictView | null, jobId: string): string {
+  if (!look) return "";
+  const para = (cls: string, ic: string, text: string) => `<p class="${cls}">${ic ? icon(ic, 13) : ""}${esc(text)}</p>`;
+  const verdict = look.ok ? "Look passed" : "Look found errors";
+  const sheets = look.sheets.map((id) =>
+    `<img class="cvd-video" data-cvd-sheet="${esc(id)}" alt="${esc(`OpenFilm contact sheet ${id}`)}" title="${esc(id)}" />`).join("");
+  return `<div class="cpl-run${look.ok ? " ok" : " bad"}">
+    <div class="cpl-run-row">
+      <span class="cpl-run-verdict" title="${esc(look.head)}">${esc(look.head ? `${verdict}: ${look.head}` : verdict)}</span>
+      <span class="cpl-run-job" title="${esc(jobId)}">${esc(jobId)}</span>
+    </div>
+    ${look.errors.map((e) => para("cpl-run-error", "alertBadge", e)).join("")}
+    ${look.warnings.map((w) => para("cpl-gate", "alertBadge", w)).join("")}
+    ${look.passed.map((p) => para("cpl-run-note", "", `Passed: ${p}`)).join("")}
+    ${look.notes.map((n) => para("cpl-run-progress", "", n)).join("")}
+    ${sheets}
+  </div>`;
+}
+
+const OPENFILM_FORMATS: readonly (readonly [OpenfilmFormat, string])[] = [["mp4", "mp4"], ["webm", "webm (transparent)"], ["mov", "mov (transparent)"]];
 
 const ENGINE_LABEL: Record<AvatarEngine, string> = { musetalk: "MuseTalk", echomimic: "EchoMimic" };
 
@@ -112,6 +230,9 @@ export function creatorVideoHtml(v: CreatorVideoView | null): string {
     : `<input class="prov-key cvd-grow" id="cvdVoice" value="${esc(v.voice)}" placeholder="dots-tts voice id" spellcheck="false" />`;
   const hf = v.hyperframes;
   const hfBlock = hyperframesRenderBlock(v);
+  const of = v.openfilm;
+  const ofBlock = openfilmBlock(v);
+  const ofLookBlock = openfilmBlock(v, "look");
   return `<div class="cpl-pane cvd-pane">
     <section class="cim-gen">
       <div class="cim-tools-h"><span class="cim-tools-t">${icon("user", 14)}<span>Avatar video (DGX enclave)</span></span></div>
@@ -146,6 +267,22 @@ export function creatorVideoHtml(v: CreatorVideoView | null): string {
         <button type="button" class="cpl-go" id="cvdHfRender"${hfBlock ? " disabled" : ""}>${icon("bolt", 12)} Render</button>
       </div>
       ${hf.status ? `<p class="cpl-status${hf.statusTone ? ` ${hf.statusTone}` : ""}">${esc(hf.status)}</p>` : ""}
+    </section>
+    <section class="cim-gen">
+      <div class="cim-tools-h"><span class="cim-tools-t">${icon("eye", 14)}<span>OpenFilm film (on-device)</span></span></div>
+      <p class="cim-hint">Checks and renders a local OpenFilm project (a folder with film.html) with your openfilm CLI, headless Chromium and FFmpeg on this machine. The get, open and update commands are never run.</p>
+      <div class="cim-row"><span class="cim-lbl">Project</span><input class="prov-key cvd-grow" id="cvdOfDir" value="${esc(of.projectDir)}" placeholder="C:\\path\\to\\film" spellcheck="false" /></div>
+      <div class="cim-row"><span class="cim-lbl">Format</span><select class="prov-key" id="cvdOfFormat">${OPENFILM_FORMATS.map(([f, label]) => option(f, label, of.format)).join("")}</select>
+        <span class="cim-lbl">FPS</span><input class="prov-key" id="cvdOfFps" type="number" min="1" max="240" step="1" value="${Number.isFinite(of.fps) ? String(of.fps) : ""}" /></div>
+      <label class="cim-row cvd-check"><input type="checkbox" id="cvdOfFourK"${of.fourK ? " checked" : ""} /><span>4K</span></label>
+      <label class="cim-row cvd-check"><input type="checkbox" id="cvdOfBlur"${of.blur ? " checked" : ""} /><span>Motion blur</span></label>
+      <div class="cpl-form-row">
+        <span class="cpl-status${ofBlock ? "" : " ok"}" data-gate="of">${esc(ofBlock || "Ready to look or render.")}</span>
+        <button type="button" class="btn-mini" id="cvdOfLook"${ofLookBlock ? " disabled" : ""}>${icon("eye", 12)} Look</button>
+        <button type="button" class="cpl-go" id="cvdOfRender"${ofBlock ? " disabled" : ""}>${icon("bolt", 12)} Render</button>
+      </div>
+      ${of.status ? `<p class="cpl-status${of.statusTone ? ` ${of.statusTone}` : ""}">${esc(of.status)}</p>` : ""}
+      ${openfilmLookHtml(of.look, of.lookJobId)}
     </section>
     <section class="cst-group"><h4 class="cst-h4">Recent jobs</h4>${creatorJobsHtml(v.jobs)}</section>
   </div>`;

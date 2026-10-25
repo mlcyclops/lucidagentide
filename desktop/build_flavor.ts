@@ -106,13 +106,16 @@ export function flavorInfo(flavor: BuildFlavor): BuildFlavorInfo {
   return flavor === "creator" ? CREATOR_FLAVOR : AGENT_FLAVOR;
 }
 
-/** Resolution order: an explicit env var (launcher / dev run / CI), then the packaged package.json's
- *  `lucidBuildFlavor` (electron-builder extraMetadata), then the standard build. */
+/** Resolution order (P-PORTGUARD.4, ADR-0458): the packaged package.json's `lucidBuildFlavor`
+ *  (electron-builder extraMetadata) FIRST, then the env var (dev run / CI), then the standard build. A
+ *  packaged app's identity is fixed when it is packaged: every LUCID engine exports its own
+ *  LUCID_BUILD_FLAVOR to the agent's shells and terminals, so with env first a Creator launched from an
+ *  Agent terminal became a second Agent, hit the Agent's lock and port, and offered to kill its engine. */
 export function resolveBuildFlavor(env: Readonly<Record<string, string | undefined>> | null | undefined, packageFlavor?: unknown): BuildFlavor {
-  const fromEnv = typeof env?.LUCID_BUILD_FLAVOR === "string" ? env.LUCID_BUILD_FLAVOR.trim() : "";
-  if (fromEnv) return normalizeBuildFlavor(fromEnv);
   const fromPkg = typeof packageFlavor === "string" ? packageFlavor.trim() : "";
   if (fromPkg) return normalizeBuildFlavor(fromPkg);
+  const fromEnv = typeof env?.LUCID_BUILD_FLAVOR === "string" ? env.LUCID_BUILD_FLAVOR.trim() : "";
+  if (fromEnv) return normalizeBuildFlavor(fromEnv);
   return "agent";
 }
 
@@ -159,6 +162,10 @@ export interface BuildInfoView {
   /** P-MODEL.6: the ENGINE's `process.platform` (where omp runs), for platform-bound providers such as
    *  omp's on-device `apple`, which the picker lists on darwin only. */
   readonly platform: string;
+  /** P-PORTGUARD.4 (ADR-0458): the port this instance was moved OFF at launch because it was busy, or
+   *  null when it runs where it should. `portRollHolder` names what held it (process name and pid). */
+  readonly portRolledFrom: number | null;
+  readonly portRollHolder: string;
 }
 
 export interface BuildRuntimeInfo {
@@ -168,6 +175,8 @@ export interface BuildRuntimeInfo {
   readonly settingsFile: string;
   readonly personalDir: string;
   readonly platform: string;
+  readonly portRolledFrom?: number | null;
+  readonly portRollHolder?: string;
 }
 
 export function buildInfoView(info: BuildFlavorInfo, runtime: BuildRuntimeInfo): BuildInfoView {
@@ -187,5 +196,7 @@ export function buildInfoView(info: BuildFlavorInfo, runtime: BuildRuntimeInfo):
     vaultScope: info.flavor,
     features: info.features,
     platform: runtime.platform,
+    portRolledFrom: runtime.portRolledFrom ?? null,
+    portRollHolder: runtime.portRollHolder ?? "",
   };
 }

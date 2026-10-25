@@ -56,7 +56,12 @@ import {
   VISION_MAX_IMAGE_BYTES, type VisionImage, type VisionRemoteRow,
 } from "./creator_dgx_vision.ts"; // Design suite: DGX vision service client (design contract section 4)
 import { DESIGN_STATE_MAX_BYTES, DesignStore, planDesignExport, planHyperframesExport } from "./creator_design.ts"; // Design suite: state, agent-op queue, export validation
-import { planHyperframesRender, preflightHyperframes, runHyperframesRender, type HyperframesFormat, type HyperframesQuality, type HyperframesSpawn } from "./creator_hyperframes.ts"; // local HyperFrames renders
+// The child spawn shape is HyperFrames' (OpenfilmSpawn is the same type); one spawn helper serves both CLIs.
+import { planHyperframesRender, preflightHyperframes, runHyperframesRender, type HyperframesFormat, type HyperframesQuality, type HyperframesSpawn as CreatorChildSpawn } from "./creator_hyperframes.ts"; // local HyperFrames renders
+import {
+  planOpenfilmLook, planOpenfilmRender, preflightOpenfilm, runOpenfilmLook, runOpenfilmRender,
+  type OpenfilmDeps, type OpenfilmDirEntry, type OpenfilmFormat, type OpenfilmLookVerdict,
+} from "./creator_openfilm.ts"; // CREATOR-OPENFILM (ADR-0457): local OpenFilm look + render
 import { addTrack, foldLibrary, libraryLedger, libraryStats, removeTrack, trackAudio, updateTrack, type CreatorTrack, type LibraryIo, type LibraryStats, type TrackOrigin } from "./creator_library.ts"; // CREATOR-0 (ADR-0281)
 import {
   ComfyClient, applyWorkflowTemplate, artifactDir, artifactLedger, buildGif, buildSpriteSheet, decodePngDataUrl,
@@ -1358,8 +1363,8 @@ async function visionJobView(jobId: string): Promise<VisionJobReply> {
   return { ok: true, data: { jobId, state: "done", progress: 1, message: s.message, result } };
 }
 
-/** HyperFrames runs as a fixed argument vector with an explicit env (never the engine's). No shell. */
-const hyperframesSpawn: HyperframesSpawn = async (argv, opts) => {
+/** HyperFrames and OpenFilm run as a fixed argument vector with an explicit env (never the engine's). No shell. */
+const creatorChildSpawn: CreatorChildSpawn = async (argv, opts) => {
   const proc = Bun.spawn([...argv], { cwd: opts.cwd, env: opts.env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
   const timer = setTimeout(() => { try { proc.kill(); } catch { /* already exited */ } }, opts.timeoutMs);
   try {
@@ -1367,6 +1372,36 @@ const hyperframesSpawn: HyperframesSpawn = async (argv, opts) => {
     return { code, stdout: stdout.slice(-20_000), stderr: stderr.slice(-20_000) };
   } finally { clearTimeout(timer); }
 };
+
+// CREATOR-OPENFILM (ADR-0457): the look verdicts this engine produced, keyed by job id. Bounded; the oldest goes
+// first. Job state, error, and artifacts are the ledger's; only the parsed verdict lives here.
+const OPENFILM_VERDICTS_MAX = 64;
+const openfilmVerdicts = new Map<string, OpenfilmLookVerdict>();
+function rememberOpenfilmVerdict(jobId: string, verdict: OpenfilmLookVerdict): void {
+  openfilmVerdicts.delete(jobId);
+  openfilmVerdicts.set(jobId, verdict);
+  while (openfilmVerdicts.size > OPENFILM_VERDICTS_MAX) {
+    const oldest = openfilmVerdicts.keys().next().value;
+    if (oldest === undefined) break;
+    openfilmVerdicts.delete(oldest);
+  }
+}
+
+/** The OpenFilm runners' real I/O: node:fs, the shared child spawn, and the Creator job + artifact ledgers. */
+function openfilmDeps(): OpenfilmDeps {
+  return {
+    spawn: creatorChildSpawn,
+    exists: (path) => existsSync(path),
+    readText: (path) => readFileSync(path, "utf8"),
+    readBytes: (path) => new Uint8Array(readFileSync(path)),
+    fileSize: (path) => statSync(path).size,
+    listDir: (dir) => readdirSync(dir, { withFileTypes: true })
+      .map((d): OpenfilmDirEntry => ({ name: d.name, kind: d.isDirectory() ? "dir" : d.isFile() ? "file" : "other" })),
+    writeText: (path, text) => writeFileSync(path, text),
+    ensureDir: (dir) => { mkdirSync(dir, { recursive: true }); },
+    jobIo, artifactIo, env: process.env, now: () => Date.now(),
+  };
+}
 
 // ---- CREATOR-1: jobs ----
 
@@ -1697,6 +1732,9 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/creator/design/manifest", "/api/creator/design/ops", "/api/creator/design/ops/result",
   // CREATOR-DRIFT: the drift_status / drift_read / drift_apply / drift_export tools (harness/omp/drift_extension.ts).
   "/api/creator/drift/status", "/api/creator/drift/call", "/api/creator/drift/library",
+  // CREATOR-OPENFILM (ADR-0457): the openfilm_look / openfilm_render / openfilm_job tools. Each route still runs
+  // the Creator build check, the CUI gate, the project scan, and the governor exactly as the UI's call does.
+  "/api/creator/openfilm/look", "/api/creator/openfilm/render", "/api/creator/openfilm/job",
   "/api/browser/open", "/api/browser/capture", "/api/browser/scroll", "/api/browser/close",
   "/api/browser/shot", "/api/browser/click", "/api/browser/type", "/api/browser/drag", "/api/browser/keys",
   "/api/browser/snapshot", "/api/browser/act", // P-JEV.4 (ADR-0379): the browser_run policy loop
@@ -1851,7 +1889,12 @@ setInterval(() => {
 // P-RECOVER.1 (ADR-0385): the master session the PREVIOUS engine process was talking to, read here, once,
 // BEFORE the persister below is wired (the backend can only write the file through it, so nothing in this
 // process can overwrite the record first). /api/recovery/state offers it for resume after an unclean exit.
-const LAST_SESSION_FILE = lastSessionPath(PORT);
+// P-PORTGUARD.4 (ADR-0458): keyed on the instance's IDENTITY port, so an engine Electron moved off a busy
+// default port still resumes the session the same install recorded last time. Honored only from the
+// Electron main that spawned THIS engine: an engine started from an agent shell inherits that shell's LUCID
+// env and must not write another instance's resume file.
+const IDENTITY_PORT = process.env.LUCID_MAIN_PID === String(process.ppid) ? Number(process.env.LUCID_IDENTITY_PORT) || PORT : PORT;
+const LAST_SESSION_FILE = lastSessionPath(IDENTITY_PORT);
 const PREVIOUS_SESSION = readLastSession(LAST_SESSION_FILE);
 backend.configureRecovery({ persistSession: (sessionId) => { writeLastSession(LAST_SESSION_FILE, { sessionId, cwd: currentWorkspace(), at: Date.now() }); } });
 // P-PWA-FOCUS.1: the lane-to-guest tap. ONE persistent observer, registered here at module scope right
@@ -4071,6 +4114,7 @@ return Bun.serve({
           settingsFile: process.env.LUCID_GUI_SETTINGS_FILE || join(homedir(), ".omp", "lucid-gui.json"),
           personalDir: personalBaseDir(),
           platform: process.platform,
+          ...(IDENTITY_PORT !== PORT ? { portRolledFrom: IDENTITY_PORT, portRollHolder: (process.env.LUCID_PORT_ROLL_HOLDER || "").slice(0, 200) } : {}),
         }) });
       }
       // CREATOR-0 (ADR-0283): normalized CPU/GPU/memory telemetry for the odometer rail. Creator builds
@@ -4412,7 +4456,7 @@ return Bun.serve({
         if (!admit.ok) return json({ ok: false, error: admit.reason, data: { jobId: admit.jobId } });
         try { mkdirSync(outDir, { recursive: true }); } catch { /* the runner reports a missing output */ }
         void runHyperframesRender({
-          spawn: hyperframesSpawn, exists: (path) => existsSync(path), readText: (path) => readFileSync(path, "utf8"),
+          spawn: creatorChildSpawn, exists: (path) => existsSync(path), readText: (path) => readFileSync(path, "utf8"),
           readBytes: (path) => new Uint8Array(readFileSync(path)), ensureDir: (dir) => mkdirSync(dir, { recursive: true }),
           jobIo, artifactIo, env: process.env, now: () => Date.now(),
         }, CREATOR_DIR, admit.jobId, planned.plan, { label, note: pre.note })
@@ -4420,6 +4464,79 @@ return Bun.serve({
           .catch((e) => { finishJob(jobIo, CREATOR_DIR, admit.jobId, "failed", String(e).slice(0, 300)); })
           .finally(() => { try { rmSync(outDir, { recursive: true, force: true }); } catch { /* the library copy is the record */ } });
         return json({ ok: true, data: { jobId: admit.jobId, note: pre.note } });
+      }
+      // CREATOR-OPENFILM (ADR-0457): `openfilm look` (determinism + film check, contact-sheet PNGs) and `openfilm
+      // render` of a local film folder on THIS machine. Fixed argv, forced opt-outs, .film/opened written first so no
+      // Studio server is spawned, path-confined, every page scanned for external URLs; the job returns at once.
+      if ((p === "/api/creator/openfilm/look" || p === "/api/creator/openfilm/render") && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator video tools are only in the Creator build." });
+        const isLook = p === "/api/creator/openfilm/look";
+        const b = await readBody<Record<string, unknown>>(req).catch(() => null);
+        if (!b || typeof b !== "object" || Array.isArray(b)) return json({ ok: false, error: "That OpenFilm request was not JSON." });
+        const ep = creatorEndpointFor("openfilm", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
+        if (!ep?.command) return json({ ok: false, error: "No OpenFilm executable is declared. Add it in Creator Studio first." });
+        const cuiOf = creatorGate("openfilm", ep);
+        if (!cuiOf.allowed) return json(cuiRefusal(cuiOf));
+        const projectDir = typeof b.projectDir === "string" ? b.projectDir : "";
+        const roots = managedWorkspaceRoots() ?? [];
+        const format: OpenfilmFormat = b.format === "webm" || b.format === "mov" ? b.format : "mp4";
+        const outDir = join(CREATOR_DIR, "openfilm", `of_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`);
+        // A present-but-mistyped field reaches the planner as is, so it is refused rather than silently dropped.
+        const planned = isLook
+          ? planOpenfilmLook({
+            exe: ep.command, prefixArgs: ep.args, projectDir, roots,
+            at: b.at == null ? undefined : b.at as number,
+            range: b.range == null ? undefined : b.range as [number, number],
+            count: b.count == null ? undefined : b.count as number,
+          })
+          : planOpenfilmRender({
+            exe: ep.command, prefixArgs: ep.args, projectDir, roots, outPath: join(outDir, `render.${format}`), format,
+            fps: b.fps == null ? undefined : b.fps as number, fourK: b.fourK === true, blur: b.blur === true,
+          });
+        if (!planned.ok) return json({ ok: false, error: planned.error });
+        const locked = creatorLocked();
+        const deps = openfilmDeps();
+        const pre = preflightOpenfilm(deps, planned.plan, ep.command, locked);
+        if (!pre.ok) {
+          if (pre.stage === "external-refs") emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "creator-cui-lockdown", reason: `OpenFilm ${isLook ? "look" : "render"} refused under CUI lockdown: external URLs in ${planned.plan.projectDir}`.slice(0, 200) });
+          return json({ ok: false, error: pre.error, data: { stage: pre.stage } });
+        }
+        const name = basename(planned.plan.projectDir);
+        const label = isLook ? `OpenFilm look: ${name}` : `OpenFilm ${format}: ${name}`;
+        const admit = await admitCreatorJob(isLook ? "test" : "render", label, "openfilm");
+        if (!admit.ok) return json({ ok: false, error: admit.reason, data: { jobId: admit.jobId } });
+        const runOpts = { label, home: join(CREATOR_DIR, "openfilm", "home"), locked, note: pre.note };
+        const settle = (stage: string, ok: boolean, error: string): void => { if (!ok) console.warn(`[creator] openfilm ${admit.jobId} ${stage}: ${error}`); };
+        const crashed = (e: unknown): void => { finishJob(jobIo, CREATOR_DIR, admit.jobId, "failed", String(e).slice(0, 300)); };
+        if (planned.plan.kind === "look") {
+          void runOpenfilmLook(deps, CREATOR_DIR, admit.jobId, planned.plan, runOpts)
+            .then((r) => { if (r.verdict) rememberOpenfilmVerdict(admit.jobId, r.verdict); settle(r.stage, r.ok, r.error); })
+            .catch(crashed);
+        } else {
+          try { mkdirSync(outDir, { recursive: true }); } catch { /* the runner reports a missing output */ }
+          void runOpenfilmRender(deps, CREATOR_DIR, admit.jobId, planned.plan, runOpts)
+            .then((r) => settle(r.stage, r.ok, r.error))
+            .catch(crashed)
+            .finally(() => { try { rmSync(outDir, { recursive: true, force: true }); } catch { /* the library copy is the record */ } });
+        }
+        return json({ ok: true, data: { jobId: admit.jobId, note: pre.note } });
+      }
+      // CREATOR-OPENFILM: one job's view. State, error, and artifacts come from the job ledger; the look verdict
+      // from this engine's bounded memory (null after a restart, or for a render).
+      if (p === "/api/creator/openfilm/job") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator video tools are only in the Creator build." });
+        const jobId = url.searchParams.get("jobId") ?? "";
+        if (!jobId) return json({ ok: false, error: "Name the OpenFilm job (jobId)." });
+        const job = listJobs(jobIo, CREATOR_DIR).find((j) => j.id === jobId);
+        if (!job || job.provider !== "openfilm") return json({ ok: false, error: "No OpenFilm job has that id." });
+        const kind = job.kind === "test" ? "look" : "render";
+        return json({
+          ok: true,
+          data: {
+            jobId: job.id, kind, state: job.state, error: job.error, artifacts: [...job.artifacts],
+            look: kind === "look" ? openfilmVerdicts.get(job.id) ?? null : null,
+          },
+        });
       }
       // DGX CAD (contract 2c): inspect a DXF / DWG / IFC / STEP file on the box. The origin guard requires a
       // JSON content type on every POST, so the bytes ride either as the raw body (sent with content-type
@@ -6606,6 +6723,8 @@ return Bun.serve({
       // the token from main over IPC instead. Only a standalone browser dev run (`bun run web`) still injects.
       if (rel === "index.html" || rel === "trainer.html") {
         const html = (await Bun.file(join(ROOT, rel)).text())
+          // ADR-0458: the window and taskbar title is the page title, so Creator beside Agent reads "Lucid Creator".
+          .replace("<title>Lucid Agent</title>", `<title>${BUILD.displayName}</title>`)
           .replace("</head>", HAS_MAIN ? "</head>" : `  <meta name="lucid-token" content="${TOKEN}">\n</head>`);
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
       }
@@ -6721,6 +6840,11 @@ if (BUILD.creatorBuild) {
   process.env.LUCID_DRIFT_STATUS_URL = `http://127.0.0.1:${server.port}/api/creator/drift/status?t=${AGENT_TOKEN}`;
   process.env.LUCID_DRIFT_CALL_URL = `http://127.0.0.1:${server.port}/api/creator/drift/call?t=${AGENT_TOKEN}`;
   process.env.LUCID_DRIFT_LIBRARY_URL = `http://127.0.0.1:${server.port}/api/creator/drift/library?t=${AGENT_TOKEN}`;
+  // CREATOR-OPENFILM (ADR-0457): openfilm_look / openfilm_render / openfilm_job (harness/omp/openfilm_extension.ts).
+  // The job URL already carries ?t=; callers append &jobId=<encoded id>.
+  process.env.LUCID_OPENFILM_LOOK_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/look?t=${AGENT_TOKEN}`;
+  process.env.LUCID_OPENFILM_RENDER_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/render?t=${AGENT_TOKEN}`;
+  process.env.LUCID_OPENFILM_JOB_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/job?t=${AGENT_TOKEN}`;
 }
 // P-INTERJECT.1: the omp children (master + lanes) reach this server for mid-turn operator notes.
 // LUCID_DEV_URL is the bare base URL from the shared contract; LUCID_INTERJECT_URL is the ready-to-use

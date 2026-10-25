@@ -326,6 +326,26 @@ describe("the DGX Loader services and HyperFrames", () => {
     expect(calls).toHaveLength(1);
   });
 
+  test("OpenFilm is probed with `--version` on node plus its CLI entry; shims, npx, and refused subcommands never run", async () => {
+    const calls: string[][] = [];
+    const of = ep({ id: "of", providerId: "openfilm", baseUrl: undefined, command: "C:/node/node.exe", args: ["C:/of/node_modules/openfilm/bin/openfilm.mjs"] });
+    const r = await probeProvider(deps({ exec: (argv) => { calls.push([...argv]); return "0.2.5\n"; } }), "openfilm", [of]);
+    expect(calls).toEqual([["C:/node/node.exe", "C:/of/node_modules/openfilm/bin/openfilm.mjs", "--version"]]);
+    expect(r.state).toBe("ready");
+    expect(r.version).toBe("0.2.5");
+    expect([...r.attested].sort()).toEqual(["render-animation", "runtime-feedback", "video-compose"]);
+    const exec = (argv: readonly string[]): string => { calls.push([...argv]); return ""; };
+    for (const bad of [
+      { ...of, command: "C:/of/node_modules/.bin/openfilm.cmd", args: [] },
+      { ...of, command: "C:/node/npx.exe", args: ["openfilm"] },
+      { ...of, args: ["C:/of/node_modules/openfilm/bin/openfilm.mjs", "GET"] },
+    ]) {
+      expect((await probeProvider(deps({ exec }), "openfilm", [bad])).state).toBe("not-installed");
+    }
+    expect(calls).toHaveLength(1);
+    expect((await probeProvider(deps({ exec }), "openfilm", [])).state).toBe("skipped");
+  });
+
   test("paid catalog entries are never called, and pdf-markup is built in", async () => {
     let fetched = 0;
     const d = deps({ fetchImpl: async () => { fetched += 1; return jsonRes({}); }, secret: () => "a-key-that-is-present" });

@@ -22,9 +22,13 @@
 
 import type { SquatterInfo } from "./port_guard.ts";
 
+/** `live` (P-PORTGUARD.4, ADR-0458): a LUCID engine whose parent app is still running, i.e. another live
+ *  LUCID (the other flavor launched with the wrong identity, or a second dev run). It is never an orphan
+ *  and is never offered for reaping. */
 export type PortHolder =
   | { kind: "free" }
   | { kind: "ours"; pid: number; evidence: string }
+  | { kind: "live"; pid: number; parentPid: number; evidence: string }
   | { kind: "foreign" }
   | { kind: "unknown" };
 
@@ -37,15 +41,23 @@ const DEV_FALLBACK = /\bbun(?:\.exe)?["']?\s+run\s+["']?desktop[\\/]dev\.ts\b/i;
 /**
  * Decide whether the process holding the port is one of ours. `selfPid` is the caller's own pid,
  * which can never be an orphan (a probe that returns it would mean the port is ours already).
+ * `isAlive` reports whether a pid is running. A LUCID engine whose recorded parent is alive belongs to
+ * a live app, so it is `live`, never `ours`. A reused parent pid errs the same way: the engine is left
+ * running rather than killed. An unknown parent keeps the ADR-0382 behavior (the user decides).
  */
-export function classifyPortHolder(observed: SquatterInfo | null, selfPid: number): PortHolder {
+export function classifyPortHolder(observed: SquatterInfo | null, selfPid: number, isAlive: (pid: number) => boolean = () => false): PortHolder {
   if (!observed) return { kind: "unknown" };
   const { pid, name, command } = observed;
   if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0 || pid === selfPid) return { kind: "unknown" };
-  if (name && ENGINE_NAME.test(name.trim())) return { kind: "ours", pid, evidence: `process name ${name}` };
-  if (command && ENGINE_IN_COMMAND.test(command)) return { kind: "ours", pid, evidence: `command ${command}` };
-  if (command && DEV_FALLBACK.test(command)) return { kind: "ours", pid, evidence: `command ${command}` };
-  return { kind: "foreign" };
+  const evidence = name && ENGINE_NAME.test(name.trim()) ? `process name ${name}`
+    : command && (ENGINE_IN_COMMAND.test(command) || DEV_FALLBACK.test(command)) ? `command ${command}`
+      : "";
+  if (!evidence) return { kind: "foreign" };
+  const parentPid = observed.parentPid;
+  if (typeof parentPid === "number" && Number.isInteger(parentPid) && parentPid > 0 && parentPid !== selfPid && isAlive(parentPid)) {
+    return { kind: "live", pid, parentPid, evidence };
+  }
+  return { kind: "ours", pid, evidence };
 }
 
 /** The command that ends an orphan AND its children (the omp session, whisper) on Windows. POSIX has

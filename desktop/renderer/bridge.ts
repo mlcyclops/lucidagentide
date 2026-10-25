@@ -29,7 +29,7 @@ import {
 export type { EngineProbe, EngineRestartView, IncidentOutcome, IncidentView, RecoveryRecoverView, RecoveryResumeView, RecoveryStateView };
 import type { MixGraph } from "../../harness/creator/mix.ts"; // CREATOR-5: the pure mix graph, edited in the renderer
 // Creator free stack: the Video and CAD panes own their view types and shape gates (layering rule).
-import type { AvatarEngine, AvatarJobStatusView, AvatarTemplatesView, HyperframesFormat, HyperframesQuality } from "./creator_video.ts";
+import { isOpenfilmJob, type AvatarEngine, type AvatarJobStatusView, type AvatarTemplatesView, type HyperframesFormat, type HyperframesQuality, type OpenfilmFormat, type OpenfilmJobView } from "./creator_video.ts";
 import { isCadInspect, isCadModelResult, type CadInspectView, type CadModelResultView, type CadOutput } from "./creator_cad.ts";
 import { isDriftCall, isDriftStatus, type DriftCallView, type DriftStatusView } from "./creator_drift_view.ts"; // CREATOR-DRIFT
 // Design suite: the pane owns its wire types and gates; the document model is the pure engine's.
@@ -74,6 +74,10 @@ export interface BuildInfoView {
   features: { creatorMode: boolean; integrationRegistry: boolean; localMonitoring: boolean; cpuGpuOdometer: boolean; creatorLibrary: boolean };
   /** P-MODEL.6: the engine's `process.platform`. Absent from an older engine, which reads as unknown. */
   platform?: string;
+  /** P-PORTGUARD.4 (ADR-0458): the busy port this launch moved off, and what held it. Absent or null when
+   *  the instance runs on its own port. */
+  portRolledFrom?: number | null;
+  portRollHolder?: string;
 }
 
 /** CREATOR-IMG (ADR-0291): one model a live probe found on the configured image server. */
@@ -1426,6 +1430,10 @@ export interface LucidBridge {
   creatorAvatarRender(input: CreatorAvatarRenderInput): Promise<CreatorCall<{ jobId: string; remoteJobId: string }>>;
   creatorAvatarJob(jobId: string): Promise<CreatorCall<AvatarJobStatusView>>;
   creatorHyperframesRender(input: { projectDir: string; format?: HyperframesFormat; quality?: HyperframesQuality }): Promise<CreatorCall<{ jobId: string }>>;
+  // CREATOR-OPENFILM (ADR-0457): look / render a local film.html project; both settle through creatorOpenfilmJob.
+  creatorOpenfilmLook(input: { projectDir: string; endpointId?: string; at?: number; range?: [number, number]; count?: number }): Promise<CreatorCall<{ jobId: string; note: string }>>;
+  creatorOpenfilmRender(input: { projectDir: string; endpointId?: string; format?: OpenfilmFormat; fps?: number; fourK?: boolean; blur?: boolean }): Promise<CreatorCall<{ jobId: string; note: string }>>;
+  creatorOpenfilmJob(jobId: string): Promise<CreatorCall<OpenfilmJobView>>;
   // CREATOR-DRIFT: CutWire Drift over its own localhost agent protocol. `since` narrows the activity feed
   // to entries newer than that seq; the token never crosses this bridge.
   creatorDriftStatus(since?: number): Promise<CreatorCall<DriftStatusView>>;
@@ -2339,6 +2347,12 @@ export const bridge: LucidBridge = {
       "The avatar service did not answer."),
   creatorHyperframesRender: (input) =>
     creatorCall("/api/creator/hyperframes/render", jsonInit(input), (d): d is { jobId: string } => hasString(d, "jobId"), "The HyperFrames renderer did not answer."),
+  creatorOpenfilmLook: (input) =>
+    creatorCall("/api/creator/openfilm/look", jsonInit(input), (d): d is { jobId: string; note: string } => hasString(d, "jobId") && hasString(d, "note"), "The OpenFilm runner did not answer."),
+  creatorOpenfilmRender: (input) =>
+    creatorCall("/api/creator/openfilm/render", jsonInit(input), (d): d is { jobId: string; note: string } => hasString(d, "jobId") && hasString(d, "note"), "The OpenFilm runner did not answer."),
+  creatorOpenfilmJob: (jobId) =>
+    creatorCall(`/api/creator/openfilm/job?jobId=${encodeURIComponent(jobId)}`, {}, isOpenfilmJob, "The OpenFilm runner did not answer."),
   // CREATOR-DRIFT: the Drift status, one tool call through the engine's CUI gate, and the library import.
   creatorDriftStatus: (since) =>
     creatorCall(`/api/creator/drift/status${since !== undefined ? `?since=${encodeURIComponent(String(since))}` : ""}`, {}, isDriftStatus, "The engine did not answer about Drift."),
