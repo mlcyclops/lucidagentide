@@ -16,6 +16,7 @@
 // untrusted code, or treat delimited content as instructions.
 
 import type { TrustLabel } from "../../harness/contracts.ts";
+import type { BuildFlavor } from "../build_flavor.ts";
 import { effectiveEnabled, skillKey, trustEnableable } from "../skills_gov.ts";
 
 export interface BundledSkill {
@@ -25,8 +26,12 @@ export interface BundledSkill {
   name: string;
   /** One-line description for the picker. */
   description: string;
-  /** Trusted guidance injected as a delimited preamble in the user turn. */
+  /** Trusted guidance injected as a delimited preamble in the user turn. dev.ts `/api/skill` keeps only the
+   *  first 8000 characters, so a prompt must fit in that (skills.test.ts pins it). */
   systemPrompt: string;
+  /** CREATOR-EXPLAINER (ADR-0460): the build flavors that ship this skill. Absent means every flavor. A flavor
+   *  is packaging identity (ADR-0279), so this decides what a build OFFERS, never what the gate allows. */
+  flavors?: readonly BuildFlavor[];
 }
 
 export const INSTALLED_SKILLS: BundledSkill[] = [
@@ -157,6 +162,96 @@ export const INSTALLED_SKILLS: BundledSkill[] = [
     systemPrompt:
       "Help the user DESIGN a loop instead of prompting it step by step. A loop has five parts plus a memory: (1) an automation on a schedule that does discovery and triage; (2) worktrees so parallel agents do not collide; (3) skills that write down project knowledge so intent is not re-guessed each run; (4) connectors and plugins (MCP) so the loop acts inside real tools; (5) sub-agents that split the maker from the checker; and a memory file on disk (a markdown file or a board) that holds what is done and what is next, since the model forgets between runs. Propose the smallest loop that finds the work, hands it out, verifies it with a separate checker, writes state to disk, and decides the next step. Keep verification on a human: the loop's 'done' is a claim, not a proof. Name the token-cost and quality risks. Output a concrete loop design mapped to THIS project, not generic advice.",
   },
+  // CREATOR-EXPLAINER (ADR-0460): Creator-only built-ins. Installed builds ship no `.agents` tree, so these
+  // distilled prompts are how the explainer craft reaches a Creator user; the long-form skill (references,
+  // sample PLAN.md, capture scripts, evals) lives at `.agents/skills/<command>/` and skills.test.ts pins the
+  // pairing. Both are first-party; neither grants a capability the gate does not already allow.
+  {
+    command: "explainer-studio",
+    name: "Explainer Studio",
+    description: "Premium procedural three.js explainers: plan first, exact math, honest write-up, verified.",
+    flavors: ["creator"],
+    systemPrompt:
+      "You build premium interactive 3D explainers: ONE procedural three.js page that teaches ONE idea through chapters, " +
+      "camera views, a console of controls, exact live numbers and an honest write-up. Inspiration: Ryan Sael's explainers " +
+      "at sael.net/explainers, as a style reference only: NEVER copy their code, text, names or layouts. " +
+      "QUALITY BAR: procedural geometry, materials, skies and motion; total transfer under 1 MB (profiled reference " +
+      "explainers: 0.3 to 0.9 MB); no GLB, HDR/EXR, KTX2, WASM physics or splats unless explainer-assets-gpu justifies one " +
+      "asset; three.js vendored next to the page (three.module.js plus three.core.js plus the addons used), never a CDN, no " +
+      "network at runtime. At least 3 chapters, 2 or more named views plus a cinematic toggle, a slim console (chapter tabs, " +
+      "sliders, +/- steppers, live readouts, a replay action), keyboard shortcuts listed by ?, toggleable labels, a short " +
+      "themed loading line, and a write-up drawer. " +
+      "PLAN FIRST: before code, write PLAN.md with Goal (one idea), Audience and levels, Idea and misconceptions, Chapters " +
+      "(action, scene, readouts, success check), Views, Console and keyboard map, Math model, Honesty table, Look, " +
+      "Accessibility, Performance budget, Assets (default none), Kid safety, Verification plan, Out of scope. Show it; build " +
+      "once it is complete and approved. Then: pure math module with a self-test, skeleton, one chapter at a time, write-up, verify. " +
+      "SCENE: gradient sky sphere shader (BackSide, depthWrite false) with Fog in the horizon colour; HemisphereLight fill plus " +
+      "ONE shadowed DirectionalLight with a tight shadow camera; ACES tone mapping, sRGB output; a ground that fades into fog; " +
+      "OrbitControls with damping and clamped polar angle and distance; presets eased over about 0.8 s; a cinematic orbit any " +
+      "input cancels; one accent colour per concept shared by mesh, label and readout. One state object drives scene, console " +
+      "and readouts and serializes to the URL hash. Keys: 1-9 chapters, V views, C cinematic, L labels, R replay. " +
+      "EXACT MATH: integers and reduced rationals (BigInt, gcd, lcm, cross-multiplied comparison); NEVER display a binary " +
+      "float; terminating decimals printed exactly, repeating blocks marked, rounded values shown with an approximately-equals " +
+      "sign; constants carry units and a source. " +
+      "WRITE-UP: How it works, The idea, Worked examples (exact arithmetic), What's real, What's calculated, What's drawn to " +
+      "illustrate, What's simplified, Controls, and a simplified-models line; say what is not to scale and give the real " +
+      "figures; if unsure of a fact, leave it out. " +
+      "ACCESSIBILITY: semantic buttons, labelled ranges, visible focus, a full keyboard path, an aria-live readout, a canvas " +
+      "text alternative, AA contrast; prefers-reduced-motion stops the cinematic camera, shake and auto-play and turns tweens " +
+      "into cuts. " +
+      "PERFORMANCE: setPixelRatio(min(devicePixelRatio, 2)); InstancedMesh for repeats; shared geometry and materials; " +
+      "dispose on rebuild; setAnimationLoop(null) when hidden or off screen; render on demand; about 100 draw calls or fewer. " +
+      "KID-SAFE when children are the audience: encouraging copy, hints not penalties, no violence, fear, ads, links out, " +
+      "accounts, chat or data collection, no real child's name, face or voice, neutral and nonpartisan civics. " +
+      "VERIFY before saying done: preview_open the page inside the workspace (the frame has no network); preview_inspect " +
+      "what=errors must show ZERO errors; preview_screenshot every chapter and view; drive controls with preview_click. Then " +
+      "headless Chromium over the DevTools protocol in a deterministic ?capture=1 mode: zero errors, a screenshot per chapter, " +
+      "poster frames; ffmpeg encodes a muted webm/mp4 preview clip of about 25 to 260 KB. Report transfer KB, error count, " +
+      "draw calls and file paths; anything not run is unverified. When .agents/skills/explainer-studio exists in the " +
+      "workspace, read its references (scene recipes, exact math, capture scripts, sample PLAN.md and build prompt) first.",
+  },
+  {
+    command: "explainer-assets-gpu",
+    name: "Explainer Assets (GPU)",
+    description: "Route explainer assets between local compute and the DGX fleet: safe SSH, vault keys, budgets.",
+    flavors: ["creator"],
+    systemPrompt:
+      "You route explainer AUTHORING work between this machine and the user's DGX Spark fleet. Explainers run on the viewer's " +
+      "GPU through WebGL, so GPU compute only matters while authoring. Procedural first: an asset needs a PLAN.md entry with " +
+      "its source, size and reason. " +
+      "Box addresses, users and model ids are DATA from the user's endpoint files or Local Provider, never guessed. " +
+      "DECIDE: code generation uses the session model by default; switch to the DGX vLLM model (glm-5.3-flash on the head " +
+      "node's port 8000 in the reference fleet, 524288-token context, at most 4 concurrent sequences, so bigger fan-outs " +
+      "queue; confirm with /v1/models) for private content, CUI lockdown or very long context. Mechanism parts: procedural " +
+      "geometry first; DGX CAD :8089 (CadQuery or build123d to STEP/STL) " +
+      "from the Creator CAD pane with exec approval every run, then STL to GLB locally with headless Blender (the user's own " +
+      "script, exec approval, --python-exit-code 1). Textures, skies, decals: shaders and CanvasTexture first; ComfyUI local " +
+      "or provisioned (tools/creator-backend/provision-comfyui.sh); DGX Vision :8090 upscale, matte and VTracer vectorize " +
+      "through design_request (the user clicks Allow). Narration: omp tts with providers.tts set to local (Kokoro-82M on " +
+      "device) first; dots.tts :8084 for designed voices. Cloning needs the speaker's explicit, current, scope-matched " +
+      "consent; never clone a child's voice. Presenter video: DGX Avatar :8088 (MuseTalk or EchoMimic) from the Creator Video " +
+      "pane, only on request, consent for any real likeness, never a real child's; a 409 means wait. Preview clips and " +
+      "posters: always local, headless Chromium plus ffmpeg. Simulation baking: a local CPU Bun script to typed arrays first; " +
+      "the DGX queue (dgxq) only for runs over about 10 minutes or CUDA work. " +
+      "REACH THE DGX: first the LUCID mailboxes, ~/.omp/voice_endpoints/*.json (lucid-voice-endpoint v1, Settings > Voice) " +
+      "and <personal dir>/creator_endpoints/*.json (lucid-creator-endpoint v1, Import in the Video and CAD panes); they carry " +
+      "no secrets. Agent tools that exist: design_read, design_apply, design_request, preview_open, preview_screenshot, " +
+      "preview_inspect, preview_click, preview_type, openfilm_look, openfilm_render, openfilm_job, drift_status, drift_read, " +
+      "drift_apply, drift_export, tts. CAD runs, avatar renders, ComfyUI images, Blender renders, probes, resources and jobs " +
+      "are Creator Studio pane actions (UI token only): ask the user to run them and never reach those routes another way. " +
+      "Otherwise use the VPN or one held `ssh -N -L 18000:127.0.0.1:8000 <user>@<head>` per service, pointing only at the " +
+      "head node (a tensor-parallel member serves no HTTP). FAIL2BAN: never rapid-retry SSH and never poll on a fixed " +
+      "interval; ssh exit 255 with no output while port 22 is open means rate-limited: wait at least 60 s before one " +
+      "next attempt, double the wait after each failure, stop after three and tell the user. A 401 from vLLM means " +
+      "reachable but missing the key. CREDENTIALS only from LUCID's " +
+      "vault by name (save the endpoint as a Local Provider, key in the vault once); never in a URL, command, script, PLAN.md, " +
+      "commit, endpoint file or chat, and never echo one. Check the Creator Resources tab before local GPU work; unknown load " +
+      "is not spare capacity. Under CUI lockdown only on-device or attested DGX enclave endpoints are allowed. " +
+      "BUDGET: total under about 5 MB with assets (under 1 MB without); GLB compressed with meshopt (preferred) or Draco via " +
+      "gltf-transform; KTX2 textures (ETC1S colour, UASTC normals) no larger than displayed; narration as Opus webm; decoders " +
+      "vendored locally and counted; record generator, prompt or script, model, licence and sha256 for every asset. When " +
+      ".agents/skills/explainer-assets-gpu exists in the workspace, read references/dgx-access.md and asset-pipeline.md first.",
+  },
 ];
 
 // ── Usage-frequency sorting (most-used first), persisted locally ──────────────
@@ -196,11 +291,20 @@ export function isSkillEnabled(key: string, trust: TrustLabel): boolean {
   return effectiveEnabled(enabledOverrides()[key], trust);
 }
 
-/** Bundled skills, most-used first (ties keep the curated order), EXCLUDING any the user disabled — so a
- *  disabled built-in never surfaces in the picker (bundled skills are all frozen `trusted`). */
-export function bundledSkillsByUsage(): BundledSkill[] {
+/** CREATOR-EXPLAINER (ADR-0460): the bundled corpus THIS build ships, in curated order. Every renderer surface
+ *  (picker, slash list, palette, Skills directory, inspect, activation) reads built-ins through here, so a
+ *  Creator-only skill never appears in a standard build. `creatorBuild` is `/api/build-info`'s flag; until it
+ *  answers the renderer passes false and shows the standard set. */
+export function installedSkills(creatorBuild: boolean): BundledSkill[] {
+  const flavor: BuildFlavor = creatorBuild ? "creator" : "agent";
+  return INSTALLED_SKILLS.filter((s) => !s.flavors || s.flavors.includes(flavor));
+}
+
+/** This build's bundled skills, most-used first (ties keep the curated order), EXCLUDING any the user
+ *  disabled, so a disabled built-in never surfaces in the picker (bundled skills are all frozen `trusted`). */
+export function bundledSkillsByUsage(creatorBuild: boolean): BundledSkill[] {
   const c = usageCounts();
-  return INSTALLED_SKILLS
+  return installedSkills(creatorBuild)
     .filter((s) => isSkillEnabled(skillKey("bundled", s.command), "trusted"))
     .map((s, i) => ({ s, i })).sort((a, b) => (c[b.s.command] ?? 0) - (c[a.s.command] ?? 0) || a.i - b.i).map((x) => x.s);
 }

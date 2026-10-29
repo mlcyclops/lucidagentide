@@ -130,7 +130,7 @@ import { DICTATION_DEFAULTS, dictationTick, downmixMono, encodeWavPcm16, mergeTr
 import { buildHubSections, configuredProviderCount, credentialedProviderIds, HUB_NON_MODEL_EXCLUDE, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
 import { LOCAL_MODEL_PRESETS } from "./local_presets.ts"; // P-LOCAL.4: one-click local-model presets in the hub
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
-import { INSTALLED_SKILLS, bumpSkillUsage, bundledSkillsByUsage, isSkillEnabled, setSkillEnabled, taskProforma } from "./skills.ts";
+import { bumpSkillUsage, bundledSkillsByUsage, installedSkills, isSkillEnabled, setSkillEnabled, taskProforma } from "./skills.ts"; // ADR-0460: flavor-gated built-ins
 import { renderSkillInspect, renderSkillsDirectory, renderStudioCandidate, skillsDirSig, type SkillDirRow } from "./skills_dir.ts"; // P-SKILL.4 (ADR-0097) / P-SKILL.5 (ADR-0101)
 import { skillKey, type SkillRoot, trustEnableable } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097)
 import { CHECKER_TOKENS_PER_ITER, MAKER_TOKENS_PER_ITER, estimateGoalCost, estimateGoalTokens, formatTokens, formatUSD } from "../loop_estimate.ts";
@@ -7827,7 +7827,7 @@ function closeSkills(): void {
  *  Bundled skills are identified by their kebab `command`; discovered ones come from the cached or fresh list. */
 function skillRowsFrom(discovered: SkillView[]): SkillDirRow[] {
   const rows: SkillDirRow[] = [];
-  for (const s of INSTALLED_SKILLS) {
+  for (const s of installedSkills(!!state.buildInfo?.creatorBuild)) {
     const key = skillKey("bundled", s.command);
     rows.push({ key, name: s.command, description: s.description, root: "bundled", trust: "trusted", invocation: s.command, removable: false, enabled: isSkillEnabled(key, "trusted"), enableable: true, fileBacked: false });
   }
@@ -7900,7 +7900,7 @@ async function openSkillInspect(name: string, root: SkillRoot): Promise<void> {
   if ($("#skInspectModal")) return;
   let view: SkillInspectView;
   if (root === "bundled") {
-    const s = INSTALLED_SKILLS.find((x) => x.command === name);
+    const s = installedSkills(!!state.buildInfo?.creatorBuild).find((x) => x.command === name);
     view = s ? { ok: true, name, root: "bundled", trust: "trusted", body: s.systemPrompt, resources: [] } : { ok: false, name, reason: "unknown built-in skill" };
   } else {
     view = (await bridge.skillInspect(name)) ?? { ok: false, name, reason: "unavailable" };
@@ -12678,7 +12678,7 @@ function useSkill(name: string): void {
 }
 /** Bundled skill: activate it - its trusted guidance rides the next user turn until cleared. */
 async function activateBundledSkill(command: string): Promise<void> {
-  const s = INSTALLED_SKILLS.find((x) => x.command === command); if (!s) return;
+  const s = installedSkills(!!state.buildInfo?.creatorBuild).find((x) => x.command === command); if (!s) return;
   if (!isSkillEnabled(skillKey("bundled", command), "trusted")) { showToast({ tone: "warn", title: `${s.name} is disabled`, desc: "Enable it in the Skills directory (rail \u203a Skills) to use it.", timeout: 2800 }); return; } // P-SKILL.4
   state.activeSkill = { command: s.command, name: s.name };
   bumpSkillUsage(command); updateSkillButton();
@@ -13981,7 +13981,7 @@ function loadRunWith(ov: HTMLElement): void {
   // Goal Loop / Loop Engineering / Plan are excluded). Trusted guidance that rides every loop turn.
   const skillSel = $("#goalSkill", ov) as HTMLSelectElement | null;
   if (skillSel) {
-    const loopSkills = bundledSkillsByUsage().filter((s) => !GOAL_SKILL_DENY.has(s.command));
+    const loopSkills = bundledSkillsByUsage(!!state.buildInfo?.creatorBuild).filter((s) => !GOAL_SKILL_DENY.has(s.command));
     skillSel.innerHTML = `<option value="">None</option>` + loopSkills.map((s) => `<option value="${esc(s.command)}">${esc(s.name)}</option>`).join("");
     skillSel.value = GOAL_SKILL_DENY.has(state.activeSkill?.command ?? "") ? "" : (state.activeSkill?.command ?? "");
   }
@@ -14971,7 +14971,7 @@ function slashSource(): SlashItem[] {
   // P-CMD.1: create your OWN reusable "/" command by describing it — LUCID interviews you, then saves it.
   out.push({ label: "/command", hint: "Create your own /command: describe it, LUCID interviews you and saves it", kind: "command", complete: "/command ", uses: 8500 + (uses["command"] ?? 0) });
   out.push({ label: "/figma", hint: "Import a Figma design into the Preview and have the agent review it", kind: "command", activate: "figma", uses: 8900 + (uses["figma"] ?? 0) }); // P-FIGMA.1 (ADR-0154)
-  for (const s of bundledSkillsByUsage()) out.push({ label: s.name, hint: s.description, kind: "bundled", activate: s.command, uses: uses[s.command] ?? 0 });
+  for (const s of bundledSkillsByUsage(!!state.buildInfo?.creatorBuild)) out.push({ label: s.name, hint: s.description, kind: "bundled", activate: s.command, uses: uses[s.command] ?? 0 });
   // P-SKILL.4: a disabled or flagged project skill is never offered in the picker (same decision the
   // delivery path uses). A user can still type /skill:<name> raw (omp resolves it), but LUCID won't suggest it.
   for (const s of state.skills) { if (!isSkillEnabled(skillKey(s.root, s.name), s.trust)) continue; out.push({ label: `/skill:${s.name}`, hint: s.description || s.source, kind: "project", complete: `/skill:${s.name} `, uses: 0 }); }
@@ -15053,7 +15053,7 @@ function openSkillDropdown(anchor: HTMLElement): void {
   cfgClose?.();
   const active = state.activeSkill?.command;
   const taskRow = `<div class="cfg-opt" data-task="1" data-tip="Delegate sub-tasks to isolated subagents (omp Task tool)|Appends a template" data-tip-side="left"><span class="tick">${icon("bolt", 13)}</span><span class="nm">/task: delegate to subagents</span></div>`;
-  const bundledRows = bundledSkillsByUsage().map((s) =>
+  const bundledRows = bundledSkillsByUsage(!!state.buildInfo?.creatorBuild).map((s) =>
     `<div class="cfg-opt ${s.command === active ? "on" : ""}" data-bundled="${esc(s.command)}" data-tip="${esc(s.description)}|Built-in skill" data-tip-side="left"><span class="tick">${icon("check", 13)}</span><span class="nm">${esc(s.name)}</span><span class="id">${esc(s.description.slice(0, 40))}</span></div>`).join("");
   const clearSec = active
     ? `<div class="cfg-sec"><div class="cfg-list"><div class="cfg-opt" data-clearskill="1" data-tip="Stop the active bundled skill" data-tip-side="left"><span class="tick">${icon("close", 13)}</span><span class="nm">Clear active skill (${esc(state.activeSkill!.name)})</span></div></div></div>`
@@ -18034,7 +18034,7 @@ const palette = createPalette(() => {
   for (const c of state.commands) acts.push({ id: "cmd:" + c.name, title: `/${c.name}${c.hint ? " " + c.hint : ""}`, icon: "command", hint: (c.description ?? "omp").slice(0, 26), run: () => runCommand(c) });
   // P-IDE.2: bundled skills + /task proforma, then project (omp-native) skills.
   acts.push({ id: "task", title: "/task - delegate to subagents", icon: "bolt", hint: "proforma", run: () => insertTaskProforma() });
-  for (const s of INSTALLED_SKILLS) acts.push({ id: "bskill:" + s.command, title: `Skill: ${s.name}`, icon: "bolt", hint: s.command === state.activeSkill?.command ? "active" : s.description.slice(0, 24), run: () => void activateBundledSkill(s.command) });
+  for (const s of installedSkills(!!state.buildInfo?.creatorBuild)) acts.push({ id: "bskill:" + s.command, title: `Skill: ${s.name}`, icon: "bolt", hint: s.command === state.activeSkill?.command ? "active" : s.description.slice(0, 24), run: () => void activateBundledSkill(s.command) });
   for (const s of state.skills) acts.push({ id: "skill:" + s.name, title: `Project skill: ${s.name}`, icon: "bolt", hint: (s.description ?? "").slice(0, 26), run: () => useSkill(s.name) });
   return acts;
 });
