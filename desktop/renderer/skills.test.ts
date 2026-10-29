@@ -7,8 +7,11 @@
 // localStorage stub since bun's test env has none.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { bundledSkillsByUsage, INSTALLED_SKILLS, isSkillEnabled, setSkillEnabled } from "./skills.ts";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { bundledSkillsByUsage, INSTALLED_SKILLS, installedSkills, isSkillEnabled, setSkillEnabled } from "./skills.ts";
 import { skillKey } from "../skills_gov.ts";
+import { BUILD_FLAVORS } from "../build_flavor.ts";
 
 const store = new Map<string, string>();
 const stub: Storage = {
@@ -57,15 +60,99 @@ describe("setSkillEnabled — persist + fail-closed on flagged", () => {
   });
 });
 
-describe("bundledSkillsByUsage — a disabled built-in never surfaces", () => {
-  test("all built-ins are present by default", () => {
-    expect(bundledSkillsByUsage().length).toBe(INSTALLED_SKILLS.length);
+describe("bundledSkillsByUsage: a disabled built-in never surfaces", () => {
+  test("every built-in this build ships is present by default", () => {
+    for (const creatorBuild of [false, true]) {
+      expect(bundledSkillsByUsage(creatorBuild).length).toBe(installedSkills(creatorBuild).length);
+    }
   });
   test("disabling one built-in drops exactly it from the picker list", () => {
     const victim = INSTALLED_SKILLS[0]!.command;
     setSkillEnabled(skillKey("bundled", victim), "trusted", false);
-    const listed = bundledSkillsByUsage().map((s) => s.command);
+    const listed = bundledSkillsByUsage(false).map((s) => s.command);
     expect(listed).not.toContain(victim);
-    expect(listed.length).toBe(INSTALLED_SKILLS.length - 1);
+    expect(listed.length).toBe(installedSkills(false).length - 1);
   });
+});
+
+// CREATOR-EXPLAINER (ADR-0460): the explainer skills ship built in to the Creator build only.
+const CREATOR_ONLY = ["explainer-studio", "explainer-assets-gpu"] as const;
+const commands = (creatorBuild: boolean) => installedSkills(creatorBuild).map((s) => s.command);
+
+describe("installedSkills: flavor-gated built-ins (ADR-0460)", () => {
+  test("the explainer skills are built in to Creator and absent from the standard Agent build", () => {
+    for (const c of CREATOR_ONLY) {
+      expect(commands(true)).toContain(c);
+      expect(commands(false)).not.toContain(c);
+      expect(bundledSkillsByUsage(true).map((s) => s.command)).toContain(c);
+      expect(bundledSkillsByUsage(false).map((s) => s.command)).not.toContain(c);
+    }
+  });
+  test("flavor-neutral built-ins ship in both builds, in curated order", () => {
+    const neutral = INSTALLED_SKILLS.filter((s) => !s.flavors).map((s) => s.command);
+    expect(commands(false)).toEqual(neutral);
+    expect(commands(true).filter((c) => neutral.includes(c))).toEqual(neutral);
+    expect(commands(true).length).toBe(neutral.length + CREATOR_ONLY.length);
+  });
+  test("every flavor flag names a real flavor and commands stay unique kebab ids", () => {
+    for (const s of INSTALLED_SKILLS) {
+      for (const f of s.flavors ?? []) expect(BUILD_FLAVORS).toContain(f);
+      expect(s.command).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+    }
+    expect(new Set(INSTALLED_SKILLS.map((s) => s.command)).size).toBe(INSTALLED_SKILLS.length);
+  });
+});
+
+// The house text rules: no em or en dash (CLAUDE.md writing style) and no hidden unicode (the set
+// creator_dgx_vision.ts untrustedText drops: C0/C1 controls, zero-width, bidi, word joiners, BOM, plus soft
+// hyphen and tag characters). A bundled prompt bypasses the scanner, so it must be clean by construction.
+const DASH = /[\u2013\u2014]/;
+const HIDDEN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]|[\u{E0000}-\u{E007F}]/u;
+const PROMPT_CAP = 8000; // dev.ts /api/skill keeps only the first 8000 characters of a prompt
+
+describe("built-in text passes the em-dash and hidden-unicode rules", () => {
+  test("every built-in name, description, and prompt", () => {
+    for (const s of INSTALLED_SKILLS) {
+      for (const text of [s.name, s.description, s.systemPrompt]) {
+        expect(DASH.test(text)).toBe(false);
+        expect(HIDDEN.test(text)).toBe(false);
+      }
+    }
+  });
+  test("every built-in prompt fits the delivery cap, so nothing is silently truncated", () => {
+    for (const s of INSTALLED_SKILLS) expect(s.systemPrompt.length).toBeLessThanOrEqual(PROMPT_CAP);
+  });
+  test("the guards themselves catch what they claim to", () => {
+    expect(DASH.test("a \u2014 b")).toBe(true);
+    for (const ch of ["\u200b", "\u202e", "\u2066", "\ufeff", "\u00ad", "\u{E0041}", "\u0007"]) expect(HIDDEN.test(`x${ch}y`)).toBe(true);
+    expect(HIDDEN.test("plain text\twith a tab\nand a newline")).toBe(false);
+  });
+});
+
+// The long-form skill under .agents/skills/<command>/ is the reviewed source the bundled prompt distills.
+const SKILLS_ROOT = join(import.meta.dir, "..", "..", ".agents", "skills");
+function filesUnder(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? filesUnder(join(dir, e.name)) : [join(dir, e.name)]));
+}
+
+describe("each Creator built-in pairs with its first-party .agents skill", () => {
+  for (const c of CREATOR_ONLY) {
+    test(`${c}: SKILL.md frontmatter, references, evals, provenance, and clean text`, () => {
+      const dir = join(SKILLS_ROOT, c);
+      const body = readFileSync(join(dir, "SKILL.md"), "utf8");
+      expect(body.startsWith("---\n") || body.startsWith("---\r\n")).toBe(true);
+      expect(body).toMatch(new RegExp(`^name: ${c}\\r?$`, "m"));
+      expect(body).toMatch(/^description: .{80,}/m);
+      for (const ref of body.match(/references\/[a-z0-9-]+\.md/g) ?? []) expect(statSync(join(dir, ref)).isFile()).toBe(true);
+      const evals = JSON.parse(readFileSync(join(dir, "evals", "evals.json"), "utf8")) as { skill_name: string; evals: unknown[] };
+      expect(evals.skill_name).toBe(c);
+      expect(evals.evals.length).toBeGreaterThanOrEqual(3);
+      expect(readFileSync(join(SKILLS_ROOT, "SOURCES.md"), "utf8")).toContain(`\`${c}\``);
+      for (const f of filesUnder(dir)) {
+        const text = readFileSync(f, "utf8");
+        expect({ f, dash: DASH.test(text) }).toEqual({ f, dash: false });
+        expect({ f, hidden: HIDDEN.test(text) }).toEqual({ f, hidden: false });
+      }
+    });
+  }
 });
