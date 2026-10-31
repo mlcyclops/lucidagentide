@@ -25283,7 +25283,7 @@ Two traps found by measurement before writing anything:
 
 ## ADR-0461 -- P-PLUGINS.1: a Plugins flyout in the Preview panel with PREMIUM and FREE, Civilian and Government (2026-10-31)
 
-**Status:** Accepted -- PROPOSED. Plan: P-PLUGINS (ADR-0461 to ADR-0466). Supersedes the ADR-0158/0181 `#scrim` marketplace popup.
+**Status:** Accepted -- BUILT (2026-10-31). Plan: P-PLUGINS (ADR-0461 to ADR-0466). Supersedes the ADR-0158/0181 `#scrim` marketplace popup. Proof: `bun test desktop/renderer/plugin_catalog.test.ts desktop/renderer/plugins_flyout.test.ts` (94 pass with the market tests); drawer screenshots in dark and light. On sale: pathfinder, myhome, agentictrade187, quantum-cloak; the other four show Coming soon.
 
 **Context.** Premium LUCID apps (Pathfinder, MyHome, AgenticTrade187, HomeschoolTutor, Tactical GenAI Trainer, LUCID Meeting Hub, RAPID-SURVEY, Quantum Cloak) are to be sold and installed inside LUCID Agent, next to free integrations (Excalidraw, Obsidian, Git, Mermaid, Pandoc, Gitleaks, Semgrep, Trivy, Zotero, LanguageTool). The marketplace today is a static `#scrim` modal of GitHub links (`desktop/renderer/marketplace.ts`). The Preview panel is hard-capped at 50vw (`styles.css` `#preview`, `initResize`), too narrow for a card grid.
 
@@ -25295,7 +25295,7 @@ Two traps found by measurement before writing anything:
 
 ## ADR-0462 -- P-PLUGINS.2: the `.lplugin` package, its gates, and three runtime kinds (2026-10-31)
 
-**Status:** Accepted -- PROPOSED.
+**Status:** Accepted -- BUILT (2026-10-31). Proof: `bun desktop/scripts/demo_p_plugins_2.ts` (SMOKE OK) and 81 tests. A dependency's raw U+200C in Pathfinder's bundle was refused at the scan gate; the fix was ASCII-only bundles in the plugin build, not a weaker scanner.
 
 **Context.** KB Packs (ADR-0205) are data; plugins are code. The pack import already has four fail-closed gates (manifest, SHA-256, Ed25519 origin signature, scanner) in `desktop/kb_pack.ts` and a signed-download path (ADR-0206).
 
@@ -25307,25 +25307,25 @@ Two traps found by measurement before writing anything:
 
 ## ADR-0463 -- P-PLUGINS.3: plugins are sold on the KB Pack rails at $29.99 one-time (2026-10-31)
 
-**Status:** Accepted -- PROPOSED. Extends ADR-0206/0223/0333 in `lucidagentIDEaddon/entitlements`.
+**Status:** Accepted -- BUILT (2026-10-31), Stripe TEST mode. Extends ADR-0206/0223/0333 in `lucidagentIDEaddon/entitlements`. Proof: a test-mode Checkout for pathfinder ($29.99, 4242 card) produced an active entitlement and a purchases row; getPackDownload's signed URL installed through every ADR-0462 gate in a dev engine; the plugin started and the agent called `mcp__pathfinder_lookup_zip`. Live prices wait for a signed IDE release.
 
 **Decision.** (1) Catalog rows gain `kind: "plugin"`; one Stripe Product per plugin, one-time Price 2999 USD cents, lookup key `PLG-<SLUG>-OTF`, promotion codes allowed; Checkout links the plugin license. (2) Same entitlement path `entitlements/{uid}/packs/{id}` (no second store). An active `premium-all` entitlement (owner grant) satisfies every premium plugin id in `getEntitlement` and `getPackDownload`. (3) Downloads: 5-minute signed URL to `gs://lucid-agent-packs/plugins/<id>.lplugin.zip`. (4) Perpetual and lifetime updates: an installed plugin runs offline; entitlement is checked only at install and update. (5) Stripe objects are created in test mode first; live only after an end-to-end test purchase in a signed build.
 
 ## ADR-0464 -- P-PLUGINS.4: the LUCID Premium Plugin License (2026-10-31)
 
-**Status:** Accepted -- PROPOSED (Pathfinder done: Pathfinder#21, #22).
+**Status:** Accepted -- BUILT (2026-10-31): Pathfinder, MyHome, AgenticTrade187, Quantum Cloak, HomeschoolTutor, Tactical GenAI Trainer, RAPID-SURVEY and LUCID Meeting Hub (TECHLEAD 187 LLC; built by COO Enrique Mertins) carry the license; text published at lucid-agent.web.app/legal/plugins and shown at Checkout.
 
 **Decision.** Every premium plugin is proprietary under the "LUCID Premium Plugin License" (Copyright TECHLEAD 187 LLC, all rights reserved; perpetual, single user, non-transferable, use inside LUCID Agent only; no redistribution, resale, reverse engineering, or license-check circumvention; no warranty; Florida law). It ships as `LICENSE` in each repo and package, is shown before Checkout and in the card details, and is published at `/legal/plugins`. Attorney review before live sales.
 
 ## ADR-0465 -- P-PLUGINS.5: Government plugins need verified access before purchase (2026-10-31)
 
-**Status:** Accepted -- PROPOSED.
+**Status:** Accepted -- BUILT (2026-10-31). Proof: live createCheckout for rapid-survey without access returns FAILED_PRECONDITION gov-verification-required; a non-.gov request lands as pending for an owner decision.
 
 **Decision.** Government cards (RAPID-SURVEY, Quantum Cloak) show "Request access" until the account is verified. A verified `.gov` or `.mil` email is approved automatically; anyone else submits organization, role, and CAGE or UEI, and an owner approves or declines in the Marketplace Dashboard (ADR-0466). `createCheckout` refuses a government item without an approved record. Mission Forge is not listed (VGIT built it for USSOCOM J8). MDMP Engine and Joint Planning Engine appear as Black Arrow Systems partner cards that link out.
 
 ## ADR-0466 -- P-PLUGINS.6: an owner-only Marketplace Dashboard behind a double-click on the L (2026-10-31)
 
-**Status:** Accepted -- PROPOSED. Lives in `lucidagentIDEaddon` (website + entitlements).
+**Status:** Accepted -- BUILT (2026-10-31). Lives in `lucidagentIDEaddon` (website + entitlements). The page is lucid-agent.web.app/admin/marketplace: lucid-agents.com is the Cloud Run marketing origin and is not a Firebase sign-in domain, so the L's double-click navigates there. Proof: as a signed-in non-owner every owner callable returns PERMISSION_DENIED "Owner only." and Firestore reads of purchases, adminAudit and govAccess return 403. New callables needed an explicit allUsers run.invoker binding (sign-in is enforced inside each function).
 
 **Decision.** (1) Page `/admin/marketplace` on Firebase Hosting (`website/firebase-public/admin/marketplace/`). A double-click or double-tap on the L brand mark of lucid-agents.com navigates there; the marketing page loads no auth code. (2) Owners: `nicholas.chadwick.ctr@gmail.com`, `nick@techlead187.com`, `eryl@techlead187.com`, each with `email_verified == true`. Firestore rules give owners read on every entitlement, `purchases`, `adminAudit`, and `govAccess`; no client writes for anyone. Every change is a callable guarded by `assertOwner()` (allowlist + verified email + sign-in within 12 hours) that writes `adminAudit`. (3) `stripeWebhook` also writes `purchases/{eventId}`; entitlements gain `email` and `kind`; revenue history is read from Stripe. (4) Views: revenue (MRR from active subscriptions, one-time revenue by month, totals, refunds; canvas chart ported from AgenticTrade187 `ui/chartpop.js`; 3/6/12-month projection from trailing growth as a dashed line with a shaded band and a growth slider), purchases, users (search, owned items), grant or revoke one item or `premium-all` with a reason (additive, never overwrites a paid entitlement), and the Government queue.
 
