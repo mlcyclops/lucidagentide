@@ -21,6 +21,7 @@ import { DEFAULT_JUDGMENT_PROVIDER, parseJudgmentProvider, type JudgmentProvider
 import { bannedJudges, noteJudgeOutcome, type JudgeFailureLedger } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416)
 import { validAccountName, type StoredAccount } from "./account_policy.ts"; // P-ACCT.1 (ADR-0375)
 import { remoteAgentMcpServers } from "../harness/mcp/registry.ts";
+import { pluginMcpServers } from "./plugins/mcp.ts"; // P-PLUGINS.2 (ADR-0462)
 import { DEFAULT_RELAY_URL } from "@oh-my-pi/pi-wire"; // P-COLLAB.3: the public-relay fallback origin
 import { sanitizeModelCompat, validateLocalProvider, type LocalModelDef, type LocalProviderDef } from "./local_providers.ts";
 import { validateCreatorEndpoint, type CreatorEndpointDef } from "./creator_registry.ts"; // CREATOR-0 (ADR-0282)
@@ -505,7 +506,8 @@ export function mcpServersForAcp(): Record<string, unknown>[] {
     .map((e) => ({ type: e.transport, name: e.name, url: e.url, headers: e.token ? [{ name: "Authorization", value: `Bearer ${e.token}` }] : [] }));
   // P-AGENTFW.1 (ADR-0147): enabled remote ACP agents (hermes/openclaw) attach as stdio "agent-firewall"
   // MCP servers — omp spawns `lucid agent-firewall --conn <id>`, which scans both directions fail-closed.
-  return [...http, ...remoteAgentMcpServers()];
+  // P-PLUGINS.2 (ADR-0462): every RUNNING plugin that declares `mcp` (desktop/plugins/mcp.ts).
+  return [...http, ...remoteAgentMcpServers(), ...pluginMcpServers()];
 }
 export function setPersonalScope(scope: GuiSettings["personalScope"]): GuiSettings {
   const s = load(); s.personalScope = scope; save(s); return s;

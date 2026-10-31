@@ -123,6 +123,19 @@ describe("the app window can never be navigated away from", () => {
     f.emit("will-frame-navigate", fromHost);
     expect(fromHost.defaultPrevented).toBe(false);
   });
+  test("P-PLUGINS.2: a plugin frame may move within its own loopback origin and nowhere else", () => {
+    const f = fakeContents();
+    const plugin = { url: "http://localhost:47200/home" };
+    const within = { ...fakeEvent({ isMainFrame: false, initiator: { id: "plugin" } }), frame: plugin, url: "http://localhost:47200/settings" };
+    f.emit("will-frame-navigate", within);
+    expect(within.defaultPrevented).toBe(false);
+    const away = { ...fakeEvent({ isMainFrame: false, initiator: { id: "plugin" } }), frame: plugin, url: "https://example.com/" };
+    f.emit("will-frame-navigate", away);
+    expect(away.defaultPrevented).toBe(true);
+    const preview = { ...fakeEvent({ isMainFrame: false, initiator: { id: "preview" } }), frame: { url: "http://localhost:5319/preview" }, url: "http://localhost:5319/preview/next" };
+    f.emit("will-frame-navigate", preview);
+    expect(preview.defaultPrevented).toBe(true);
+  });
 });
 
 describe("startup retry never restarts a running app", () => {

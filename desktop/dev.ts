@@ -558,6 +558,8 @@ import { kbScanner, kbStore, kgEntry, listKgs, activeKgId, createKg, renameKg, s
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.ts"
+import { installPluginFromUrl, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462)
+import { PluginRuntime, resolvePluginNode } from "./plugins/runtime.ts" // P-PLUGINS.2 (ADR-0462)
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
 import { retrieveKnowledge, type RetrieveMode, type RetrieveArgs } from "../harness/kb/retrieve.ts"
@@ -1954,6 +1956,15 @@ function laneImages(raw: unknown): { data: string; mimeType: string }[] {
 process.on("exit", () => { try { fleet.stopAll(); } catch { /* dying anyway */ } });
 process.on("SIGINT", () => { try { fleet.stopAll(); } catch { /* dying */ } process.exit(0); });
 process.on("SIGTERM", () => { try { fleet.stopAll(); } catch { /* dying */ } process.exit(0); });
+// P-PLUGINS.2 (ADR-0462): installed plugins run as engine children (server kind under Electron's Node,
+// LUCID_ELECTRON_EXE from main). A running plugin's MCP server joins omp's session config, so a change
+// respawns omp exactly like an /api/mcp edit. The SIGINT/SIGTERM handlers above exit through "exit".
+const plugins = new PluginRuntime({
+  nodeExe: () => resolvePluginNode(DESKTOP_DIR),
+  agentBin: () => ompBin(),
+  onMcpChange: () => backend.restart(),
+});
+process.on("exit", () => { try { plugins.stopAllSync(); } catch { /* dying anyway */ } });
 // P-PREVIEW.3a-shot (ADR-0096): latest PNG of the rendered preview, pushed by the renderer after each render
 // (Electron capturePage → /api/preview/shot-cache) and read by the agent's preview_screenshot tool. In-memory.
 let latestPreviewShot: string | null = null;
@@ -1970,7 +1981,7 @@ setBrowserProcessSource(() => {
 });
 // P-PREVIEW.6b (ADR-0153): relay for the agent's read-only DOM inspect of the sandboxed preview.
 const inspectRelay = new InspectRelay();
-const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
+const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".mp4": "video/mp4", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
 // Text-ish types take a charset; binary (images/fonts) must not (a bogus "image/png; charset" suffix).
 const isTextCT = (ct: string) => /^(text\/|application\/(javascript|json)|image\/svg)/.test(ct);
 
@@ -2414,7 +2425,7 @@ return Bun.serve({
   hostname: "127.0.0.1", // H1 (ADR-0022): loopback only — this control plane handles keys/passphrases.
   // ADR-0305 invariant: the window only renders the nonce-verified LOOPBACK engine; this bind is load-bearing.
   idleTimeout: 60,
-  async fetch(req) {
+  async fetch(req, srv) {
     const url = new URL(req.url);
     const p = url.pathname;
     let ctrlPairing: Pairing | null = null;
@@ -5800,6 +5811,33 @@ return Bun.serve({
         const url = String(b.url ?? "");
         if (!url) return json({ ok: true, data: { ok: false, error: "url is required" } });
         return json({ ok: true, data: await installPackFromUrl(url) });
+      }
+      // P-PLUGINS.2 (ADR-0462): `.lplugin` plugins. Install runs every gate fail-closed (download, manifest,
+      // hash, signature, authenticode, scan; desktop/plugins/install.ts) and stops a running copy before the
+      // version pointer moves; start/stop drive desktop/plugins/runtime.ts; uninstall keeps the data dir
+      // unless keepData is explicitly false.
+      if (p === "/api/plugins" && req.method === "GET") return json({ ok: true, data: { plugins: plugins.list() } });
+      if (p === "/api/plugins/license" && req.method === "GET") return json({ ok: true, data: readPluginLicense(url.searchParams.get("id") ?? "") });
+      if (p === "/api/plugins/install-from-url" && req.method === "POST") {
+        srv.timeout(req, 0); // a large package (download + per-file scan) can outlast the 60 s idle limit
+        const b = await readBody<{ url?: unknown; expectId?: unknown }>(req);
+        const r = await installPluginFromUrl(String(b.url ?? ""), String(b.expectId ?? ""), { beforeSwitch: async (id) => { await plugins.stop(id); } });
+        return json({ ok: true, data: r.ok ? { ok: true, id: r.id, version: r.version } : r });
+      }
+      if (p === "/api/plugins/start" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        return json({ ok: true, data: await plugins.start(String(b.id ?? "")) });
+      }
+      if (p === "/api/plugins/stop" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        return json({ ok: true, data: await plugins.stop(String(b.id ?? "")) });
+      }
+      if (p === "/api/plugins/uninstall" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; keepData?: unknown }>(req);
+        const id = String(b.id ?? "");
+        const stopped = await plugins.stop(id);
+        if (!stopped.ok) return json({ ok: true, data: stopped });
+        return json({ ok: true, data: uninstallPlugin(id, b.keepData !== false) });
       }
       // P-SKILLREG.2 (ADR-0102): the PUBLISH seam. Reads a codified skill's SKILL.md and publishes it as a
       // versioned artifact to the configured targets (fail-safe fan-out). Public ships the LOCAL publisher;
