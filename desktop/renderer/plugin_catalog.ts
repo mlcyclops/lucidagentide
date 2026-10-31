@@ -104,9 +104,9 @@ export const PREMIUM_PLUGINS: PremiumPlugin[] = [
   },
   {
     id: "quantum-cloak", name: "Quantum Cloak", section: "government", sale: "buy", lookupKey: "PLG-QCLOAK-OTF", available: true,
-    kicker: "Post-quantum training sim",
-    pitch: "DoW MLWE Training Simulator v2.0: shows how to send a secret math problem to a supercomputer using lattices and homomorphic gates without revealing the underlying data.",
-    lucid: "Runs fully offline in a Preview tab. Its tools let the agent run the same lattice simulations, compare parameter sets, and explain each phase.",
+    kicker: "Quantum comms and computing trainer",
+    pitch: "Eleven narrated 3-D modules on real simulators: qubits and Bell tests, BB84 and E91 key distribution over real fiber, circuits and Grover search, and blind quantum computing on lattice encryption, with practice, hints and mastery tracking.",
+    lucid: "Runs in a Preview tab; only the narration audio streams from Google Cloud Storage. Its tools let the agent simulate circuits, run QKD links and lattice scenarios, quiz you with practice items, and explain any term.",
     media: { loop: true, poster: "webp", glyph: "spark", tone: "violet" },
   },
   {
