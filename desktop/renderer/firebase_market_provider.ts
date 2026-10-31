@@ -12,7 +12,7 @@
 // is pure request/response and fully testable. It is registered into `market_gate` ONLY when a config is
 // supplied (managed config); with none, the fail-closed nullProvider stays and the storefront is a hint.
 
-import type { AuthState, Entitlement, PackLicensing } from "../../harness/market/entitlement.ts";
+import { parseGovAccessStatus, type AuthState, type Entitlement, type GovAccessRequest, type PackLicensing } from "../../harness/market/entitlement.ts";
 import { registerMarketProvider, type EntitlementProvider } from "./market_gate.ts";
 
 export interface FirebaseMarketConfig {
@@ -51,16 +51,30 @@ export function makeFirebaseMarketProvider(cfg: FirebaseMarketConfig): Entitleme
       try { return await callable<Entitlement | null>(base, "getEntitlement", token, { packId }); }
       catch { return null; }
     },
-    checkoutUrl: async (packId: string, _licensing: PackLicensing) => {
+    checkoutUrl: async (packId: string, licensing: PackLicensing) => {
       const token = await auth.getIdToken();
       if (!token) return null;
-      try { return (await callable<{ url: string }>(base, "createCheckout", token, { packId }))?.url ?? null; }
+      try { return (await callable<{ url: string }>(base, "createCheckout", token, { packId, licensing }))?.url ?? null; }
       catch { return null; }
     },
     downloadUrl: async (packId: string) => {
       const token = await auth.getIdToken();
       if (!token) return null;
       try { return (await callable<{ url: string }>(base, "getPackDownload", token, { packId }))?.url ?? null; }
+      catch { return null; }
+    },
+    // P-PLUGINS.5 (ADR-0465): the government-access record. Signed out or any error reads as "none", so a
+    // failed lookup can only ever hide the Buy button, never show it.
+    govAccess: async () => {
+      const token = await auth.getIdToken();
+      if (!token) return "none";
+      try { return parseGovAccessStatus(await callable<unknown>(base, "getGovAccess", token, {})); }
+      catch { return "none"; }
+    },
+    requestGovAccess: async (req: GovAccessRequest) => {
+      const token = await auth.getIdToken();
+      if (!token) return null;
+      try { return parseGovAccessStatus(await callable<unknown>(base, "requestGovAccess", token, req)); }
       catch { return null; }
     },
   };

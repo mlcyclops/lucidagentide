@@ -19,7 +19,7 @@
 import { previewAutoSurfaces, previewKindOf, type PreviewKind } from "../preview_resolve.ts"; // P-PREVIEW.12: the ONE kind table
 export type { PreviewKind };
 
-export interface PreviewTab { id: string; label: string; path: string; kind: "yours" | "agent" | "lane" }
+export interface PreviewTab { id: string; label: string; path: string; kind: "yours" | "agent" | "lane" | "plugin" }
 
 /** At most this many DYNAMIC lane tabs; past it the oldest lane tab is evicted. */
 export const LANE_TAB_CAP = 8;
@@ -44,6 +44,18 @@ export function upsertLaneTab(tabs: PreviewTab[], laneId: string, laneName: stri
     lanes--;
     return false;
   });
+}
+
+/** P-PLUGINS.1 (ADR-0461): the tab a running plugin lives under ("plugin:" + id - never collides with a lane). */
+export const pluginTabId = (pluginId: string): string => `plugin:${pluginId}`;
+
+/** P-PLUGINS.1: add or refresh a running plugin's tab, whose `path` is the plugin's loopback URL. Re-opening a
+ *  plugin refreshes its tab in place. Plugin tabs are not lane tabs: the lane cap never evicts them. */
+export function upsertPluginTab(tabs: PreviewTab[], pluginId: string, name: string, url: string): PreviewTab[] {
+  const id = pluginTabId(pluginId);
+  return tabs.some((t) => t.id === id)
+    ? tabs.map((t) => (t.id === id ? { ...t, label: name, path: url } : t))
+    : [...tabs, { id, label: name, path: url, kind: "plugin" }];
 }
 
 /** Drop a lane's tab (no-op when absent). Returns a NEW array. */

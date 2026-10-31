@@ -23,6 +23,22 @@ export interface Entitlement {
   state: EntitlementState;
   method?: PurchaseMethod;
   expiresAt?: string;   // ISO; when present and in the past, the entitlement is treated as lapsed
+  /** P-PLUGINS.1 (ADR-0461): for a plugin id, the newest published package version (drives "Update"). Absent
+   *  or null for packs and for a plugin with nothing published; never part of the ownership decision. */
+  latestVersion?: string | null;
+}
+
+/** P-PLUGINS.5 (ADR-0465): the caller's government-access record, as `getGovAccess` reports it. */
+export type GovAccessStatus = "none" | "pending" | "approved" | "declined";
+
+/** What `requestGovAccess` takes. A verified .gov/.mil email is approved server-side without the rest. */
+export interface GovAccessRequest { organization: string; role: string; cage?: string; uei?: string; note?: string }
+
+/** Read a gov-access status off an untrusted reply. Anything unrecognized is "none" (fail-closed: an unknown
+ *  answer never reads as approval). */
+export function parseGovAccessStatus(v: unknown): GovAccessStatus {
+  const s = (v as { status?: unknown } | null | undefined)?.status;
+  return s === "approved" || s === "pending" || s === "declined" ? s : "none";
 }
 
 export interface AuthState { signedIn: boolean; email?: string }
