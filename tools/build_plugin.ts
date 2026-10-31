@@ -141,12 +141,15 @@ export function bakePublicKey(source: string, spkiB64: string): string {
 /** Create the publisher keypair once (never overwrite) and bake its public half into the IDE. */
 export function initPublisherKey(keyPath: string, bakeFile = BAKED_KEY_FILE): { created: boolean; keyId: string; spkiB64: string } {
   let created = false;
-  if (!existsSync(keyPath)) {
-    mkdirSync(dirname(keyPath), { recursive: true });
-    try { chmodSync(dirname(keyPath), 0o700); } catch { /* best effort on Windows */ }
+  mkdirSync(dirname(keyPath), { recursive: true });
+  try { chmodSync(dirname(keyPath), 0o700); } catch { /* best effort on Windows */ }
+  // Exclusive create ("wx") is the only existence check: no check-then-write window, never overwrites a key.
+  try {
     const { privateKey } = generateKeyPairSync("ed25519");
     writeFileSync(keyPath, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600, flag: "wx" });
     created = true;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
   }
   const der = createPublicKey(loadPrivateKey(keyPath)).export({ type: "spki", format: "der" });
   const spkiB64 = der.toString("base64");
