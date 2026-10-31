@@ -29,7 +29,7 @@ import { aiLocHasData } from "../ailoc_view.ts";
 import { GUIDE_FILES } from "../guides_manifest.ts"; // P-GUIDE.2: provider id -> bundled advisor guide
 import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from "../preview_resolve.ts";
 import { PREVIEW_ZOOM_MAX, PREVIEW_ZOOM_MIN, PreviewWheelSteps, stepPreviewZoom } from "./preview_zoom.ts"; // whole-10% Preview zoom steps
-import { PREVIEW_KIND_ICON, isAutoPreviewPath, laneTabId, previewKindLabel, previewPathKind, removeLaneTab, upsertLaneTab, type PreviewTab } from "./preview_tabs.ts";
+import { PREVIEW_KIND_ICON, isAutoPreviewPath, laneTabId, pluginTabId, previewKindLabel, previewPathKind, removeLaneTab, upsertLaneTab, upsertPluginTab, type PreviewTab } from "./preview_tabs.ts";
 import { roleIcon } from "./role_icons.ts";
 import { budgetWindowState, providerBudgetRows, providerHasApiKey, providerKeywords } from "./budget_gate.ts";
 import { cachedSessions, cachedShareSnapshot, cachedSkills, cachedTranscript, setCachedSessions, setCachedShareSnapshot, setCachedSkills, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
@@ -50,7 +50,7 @@ import { agedProgress, DurationHistory, ETA_ESTIMATING, estimateFromSamples, eta
 import { ringView, setStatusDetail, setStatusEta, setStatusRing, shownEta, statusDetail, statusEta, statusRing } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
 import { foldSummary, QUICK_MS, stepFate, stepKey } from "./tool_fold.ts"; // P-PROGRESS.2: which tool steps get a row, and what the rest fold into
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (type only: the module itself is engine-side)
-import { MARKET_PLUGINS, marketplaceHtml, marketRowsHtml } from "./marketplace.ts"; // P-MARKET.1 (ADR-0158)
+import { createPluginsFlyout } from "./plugins_flyout.ts"; // P-PLUGINS.1 (ADR-0461): replaces the ADR-0158 marketplace modal
 import { KG_PACKS, kgPacksHtml, kgPackRowsHtml, type KgPack } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
 import { getMarketProvider } from "./market_gate.ts"; // P-KGMARKET.1 (ADR-0206)
 // P-KGMARKET.5 (ADR-0333): the KG-header Packs button, and the pending-checkout policy that lets a purchase
@@ -419,7 +419,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="trainer" data-tip="Trainer|Extract expert know-how into the coverage map, then drill it with lesson-based mini-games" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="agentBuilder" data-tip="Agent Builder|Design an AI agent on a visual workflow canvas - LUCID builds the gated code for you" data-tip-icon="spark">${icon("spark", 20)}</button>
         <button class="rail-btn" data-rail="skills" data-tip="Skills|Every agent skill - built-in, project, curated - in one directory: source, trust label, enable/disable, inspect & re-scan through the gate" data-tip-icon="bulb">${icon("bulb", 20)}</button>
-        <button class="rail-btn" id="railMarket" data-tip="Plugin Marketplace|Curated integrations ordered by community popularity - Excalidraw, Git, Remotely Save & more" data-tip-icon="market">${icon("market", 20)}</button>
+        <button class="rail-btn" id="railMarket" data-plg-toggle data-tip="Free plugins|Integrations that come with LUCID: Excalidraw, Git, Obsidian, Whisper and more. Premium apps are one tab over." data-tip-icon="plugins">${icon("plugins", 20)}</button>
         <button class="rail-btn" id="railReports" data-tip="Engineering Reports|Generate a role-tailored engineering brief (with podcast audio), and browse every past loop After-Action Report + brief" data-tip-icon="report">${icon("report", 20)}</button>
         <button class="rail-btn" id="railShare" data-tip="Share session (live)|Invite someone to watch this session live, end-to-end encrypted through your relay - view-only" data-tip-icon="share">${icon("share", 20)}<span class="rail-live-dot" id="railShareDot" hidden></span></button>
         <!-- CREATOR-0 (ADR-0282): Creator Studio. Present ONLY in a Creator build (revealed by /api/build-info). -->
@@ -606,6 +606,7 @@ function buildShell(): void {
                labels drop and the icons stay. Everything else lives in #prevMore, which is real DOM
                (its buttons keep their ids and their init-time listeners) shown as a popover on demand. -->
           <div class="kg-tools">
+            <button class="btn-mini prev-plugins" id="prevPlugins" data-plg-toggle aria-haspopup="dialog" data-tip="Plugins|Premium LUCID apps and free integrations. Installed apps open here in their own tab.">${icon("plugins", 14)}<span class="bl">Plugins</span></button>
             <button class="btn-mini" id="prevReload" data-tip="Reload the preview">${icon("refresh", 13)}<span class="bl">Reload</span></button>
             <button class="btn-mini" id="prevDevice" data-tip="Device viewport|Preview at phone or tablet size (portrait / landscape) - for reviewing a PWA or a mobile / responsive layout.">${devSvg("phone-portrait", 14)}<span class="bl">Device</span>${icon("chevron", 10)}</button>
             <button class="btn-mini" id="prevExternal" hidden data-tip="Open in your browser|Pop the file shown here out into your default browser, full size. It runs there as an ordinary local file, outside this sandbox and with normal network access, so use it for pages you trust (your own, or the bundled games). Desktop app only.">${icon("link", 13)}<span class="bl">Browser</span></button>
@@ -8736,6 +8737,7 @@ function openPreviewFile(path: string): void {
   loadPreview(path, "yours");
 }
 function closePreview(): void {
+  if (document.querySelector(".plg-layer")) pluginsFlyout.close(); // P-PLUGINS.1: the drawer belongs to the panel
   closeArcadeMenu?.();
   setPreviewPan(false);
   if (pendingAgentPreviewPath) dismissedAgentPreviews.add(pendingAgentPreviewPath);
@@ -8929,7 +8931,7 @@ let prevLane: PrevLane = "yours";
 /** The dynamic lane tabs' iframes, keyed by tab id - created on demand, removed with their tab. */
 const laneTabFrames = new Map<string, HTMLIFrameElement>();
 const laneFrame = (l: PrevLane = prevLane): HTMLIFrameElement | null =>
-  l.startsWith("lane:") ? (laneTabFrames.get(l) ?? null) : $(l === "agent" ? "#prevFrameA" : "#prevFrame") as HTMLIFrameElement | null;
+  l.startsWith("lane:") || l.startsWith("plugin:") ? (laneTabFrames.get(l) ?? null) : $(l === "agent" ? "#prevFrameA" : "#prevFrame") as HTMLIFrameElement | null;
 const prevPathByLane: Record<string, string> = { yours: "", agent: "" };
 const prevKindByLane: Record<string, string> = { yours: "", agent: "" };
 const prevZoomByLane = new Map<PrevLane, number>();
@@ -9244,13 +9246,15 @@ function renderPrevTabs(): void {
   // kind. Invariant 11: the icon is `flex: none` and the label is the row's ONE text child, kept on a
   // single nowrap-ellipsis line.
   const lanes = prevLaneTabs.map((t) => {
-    const kind = previewPathKind(t.path);
-    const kindIcon = kind ? icon(PREVIEW_KIND_ICON[kind], 10, "prev-tab-kind") : "";
-    const tip = kind ? `${t.path} (${previewKindLabel(kind)})` : t.path;
+    // P-PLUGINS.1 (ADR-0462): a plugin tab holds a running app at a loopback URL, not a file of some kind.
+    const plugin = t.kind === "plugin";
+    const kind = plugin ? null : previewPathKind(t.path);
+    const kindIcon = plugin ? icon("plugins", 10, "prev-tab-kind") : kind ? icon(PREVIEW_KIND_ICON[kind], 10, "prev-tab-kind") : "";
+    const tip = plugin ? `${t.label} plugin at ${t.path}` : kind ? `${t.path} (${previewKindLabel(kind)})` : t.path;
     return `<button type="button" class="prev-tab prev-tab-lane${act(t.id)}" data-lane="${esc(t.id)}" title="${esc(tip)}">` +
       kindIcon +
       `<span class="prev-tab-lbl">${esc(t.label)}</span>` +
-      `<span class="prev-tab-x" data-close="${esc(t.id)}" title="Close this lane's preview tab">${icon("close", 10)}</span>` +
+      `<span class="prev-tab-x" data-close="${esc(t.id)}" title="${plugin ? "Close this tab and stop the plugin" : "Close this lane's preview tab"}">${icon("close", 10)}</span>` +
       `</button>`;
   }).join("");
   strip.innerHTML =
@@ -9286,7 +9290,10 @@ function dropLaneTabFrame(tabId: string): void {
 /** Close a lane tab (the X): registry + iframe + per-lane state go together; if it was the active tab,
  *  fall back the same way openPreview picks its reveal (yours-with-content, else agent, else yours). */
 function closeLaneTab(tabId: string): void {
-  prevLaneTabs = removeLaneTab(prevLaneTabs, tabId.startsWith("lane:") ? tabId.slice(5) : tabId);
+  if (tabId.startsWith("plugin:")) { // P-PLUGINS.1 (ADR-0462): closing a plugin's tab stops the plugin
+    prevLaneTabs = prevLaneTabs.filter((t) => t.id !== tabId);
+    void bridge.pluginsStop(tabId.slice("plugin:".length)).catch(() => null);
+  } else prevLaneTabs = removeLaneTab(prevLaneTabs, tabId.startsWith("lane:") ? tabId.slice(5) : tabId);
   dropLaneTabFrame(tabId);
   if (prevLane === tabId) switchPrevLane(prevPathByLane.yours ? "yours" : (prevPathByLane.agent ? "agent" : "yours"));
   renderPrevTabs();
@@ -16137,33 +16144,61 @@ function openJoinPanel(): void {
   if (dockState.minimized) { dockState.minimized = false; persist(); } // a fresh open always SHOWS the dock
 }
 
-// P-MARKET.1 (ADR-0158): the Plugin Marketplace popup - a curated, searchable catalog (Excalidraw pinned
-// first, then Obsidian's top-ranked integrations by community downloads). Same conventions as About:
-// single instance; closes on the X, a backdrop click, or Escape. The catalog is static - the only live
-// action is opening a row's GitHub repo in the system browser; installs are P-MARKET.2 (gated).
-function openMarketplace(): void {
-  if ($("#mktModal")) return; // already open - don't stack
-  const ov = el(`<div id="mktModal" class="mkt-scrim">${marketplaceHtml(MARKET_PLUGINS, "")}</div>`);
-  const close = () => { ov.remove(); document.removeEventListener("keydown", onKey); };
-  const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.preventDefault(); close(); } };
-  ov.addEventListener("click", (ev) => {
-    const t = ev.target as HTMLElement;
-    const repo = t.closest("[data-mkt-repo]") as HTMLElement | null;
-    if (repo) { window.open(repo.dataset.mktRepo!, "_blank", "noopener"); return; }
-    if (t === ov || t.closest("[data-mkt-close]")) close(); // backdrop or the X
-  });
-  ov.addEventListener("input", (ev) => { // live search: re-render just the rows
-    const t = ev.target as HTMLElement;
-    if (t.id !== "mktSearch") return;
-    const list = ov.querySelector("#mktList");
-    if (list) list.innerHTML = marketRowsHtml(MARKET_PLUGINS, (t as HTMLInputElement).value);
-  });
-  document.addEventListener("keydown", onKey);
-  document.body.append(ov);
-  (ov.querySelector("#mktSearch") as HTMLInputElement | null)?.focus();
+// P-PLUGINS.1 (ADR-0461): the Plugins drawer. It slides out of the Preview panel's left edge, so every entry
+// point opens the Preview panel first. The ADR-0158 marketplace modal is gone; its rail button and palette
+// entry now open the drawer on FREE, where its catalog lives.
+const pluginsFlyout = createPluginsFlyout({
+  provider: getMarketProvider,
+  user: marketUser,
+  beginSignIn: () => beginSignIn(),
+  pluginsList: () => bridge.pluginsList(),
+  installFromUrl: (url, id) => bridge.pluginsInstallFromUrl(url, id),
+  start: (id) => bridge.pluginsStart(id),
+  license: (id) => bridge.pluginsLicense(id),
+  openExternal: (url) => void openAuthUrl(url),
+  openPluginTab: (id, name, url) => openPluginTab(id, name, url),
+  toast: showToast,
+  anchor: () => $("#preview") as HTMLElement | null,
+  minLeft: railWidth,
+  storage: localStorage,
+  now: Date.now,
+});
+function openPluginsDrawer(tier?: "premium" | "free"): void {
+  const from = document.activeElement as HTMLElement | null; // openPreview may move focus; Esc returns here
+  if (!previewOpen) openPreview();
+  pluginsFlyout.open(tier, from);
+}
+/** Scripts, same-origin storage, forms, popups and downloads: what a real app needs. Safe to combine because the
+ *  plugin's origin is never the renderer's, so allow-same-origin cannot reach this window. */
+const PLUGIN_FRAME_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-downloads";
+/** A running plugin in its own Preview tab (ADR-0462). Its iframe is cross-origin to the renderer (its own
+ *  loopback port), so it gets a real origin for its storage and API calls without reaching this window. */
+function openPluginTab(pluginId: string, name: string, url: string): void {
+  const id = pluginTabId(pluginId);
+  prevLaneTabs = upsertPluginTab(prevLaneTabs, pluginId, name, url);
+  renderPrevTabs();
+  let f = laneTabFrames.get(id);
+  if (!f?.isConnected) {
+    const stage = $("#prevStage");
+    if (!stage) return;
+    f = document.createElement("iframe");
+    f.className = "preview-frame";
+    f.setAttribute("sandbox", PLUGIN_FRAME_SANDBOX);
+    f.setAttribute("allow", "clipboard-write");
+    f.setAttribute("referrerpolicy", "no-referrer");
+    f.title = `${name} plugin`;
+    if (prevDevice !== "desktop") { const d = PREV_DEVICES[prevDevice]; f.style.width = `${d.w}px`; f.style.height = `${d.h}px`; }
+    stage.appendChild(f);
+    laneTabFrames.set(id, f);
+  }
+  f.src = url;
+  prevPathByLane[id] = url;
+  prevKindByLane[id] = "plugin";
+  if (!previewOpen) openPreview({ reveal: id });
+  else switchPrevLane(id);
 }
 
-// P-KGPACK.5 (ADR-0205): the Role KG Packs storefront (public SKU surface). Mirrors openMarketplace: a scrim
+// P-KGPACK.5 (ADR-0205): the Role KG Packs storefront (public SKU surface). A scrim
 // modal with live search; "Get pack" opens the product page; "Import a pack you own" routes a .lkgpack
 // through the P-KGPACK.4 gate (importPackFlow). The packs themselves live in the private add-on repo.
 function openKgPacks(): void {
@@ -16461,7 +16496,9 @@ function wire(): void {
   // (the titlebar "Commands" button was removed - the palette opens from the rail glyph #railCmd + Ctrl/⌘+K)
   $("#cmdkBtn")?.addEventListener("click", () => palette.show());
   $("#railAbout")?.addEventListener("click", () => openAbout());
-  $("#railMarket")?.addEventListener("click", () => openMarketplace()); // P-MARKET.1 (ADR-0158)
+  $("#railMarket")?.addEventListener("click", () => openPluginsDrawer("free")); // P-PLUGINS.1 (ADR-0461): the old marketplace entry
+  $("#prevPlugins")?.addEventListener("click", (e) => pluginsFlyout.toggle(e.currentTarget as HTMLElement)); // P-PLUGINS.1
+  window.addEventListener("focus", () => pluginsFlyout.onWindowFocus()); // P-PLUGINS.1: finish a checkout done in the browser
   // CREATOR-0 (ADR-0282): the Creator Studio rail entry + its whole delegated surface.
   $("#railStudio")?.addEventListener("click", () => openCreatorStudio());
   $("#studioClose")?.addEventListener("click", () => closeCreatorStudio());
@@ -18008,7 +18045,7 @@ const palette = createPalette(() => {
     { id: "prov", title: "Connect a provider…", icon: "expand", hint: "providers", run: () => openProviderHub() }, // P-PROV.2: Provider Hub
     { id: "sec", title: "Open Security panel", icon: "shield", hint: "panel", run: () => focusInspector("security") },
     { id: "mem", title: "Open Memory & context panel", icon: "savings", hint: "panel", run: () => focusInspector("memory") },
-    { id: "mkt", title: "Open Plugin Marketplace", icon: "market", hint: "popup", run: () => openMarketplace() }, // P-MARKET.1
+    { id: "mkt", title: "Open Plugins", icon: "plugins", hint: "drawer", run: () => openPluginsDrawer() }, // P-PLUGINS.1 (ADR-0461)
     { id: "kgpacks", title: "Browse Role KG Packs", icon: "package", hint: "popup", run: () => openKgPacks() }, // P-KGPACK.5 (ADR-0205)
     { id: "sysres", title: "Open System resources", icon: "gauge", hint: "popup", run: () => void openResourcePanelLive() }, // P-SYSRES.1
     { id: "jobs", title: "Scheduled jobs", icon: "calendar", hint: "wake a Fleet lane while you are away", run: () => void openJobsSheet() }, // P-SCHED.2 (ADR-0443)
@@ -19311,6 +19348,7 @@ initMarket(readMarketBootConfig());
 try {
   (window as unknown as { lucid?: { onAuthCallback?: (cb: (url: string) => void) => void } }).lucid?.onAuthCallback?.((url) => {
     if (!handleAuthCallback(url)) return;
+    if (pluginsFlyout.onSignedIn()) return; // P-PLUGINS.1: a plugin purchase interrupted by sign-in picks up here
     // P-KGMARKET.5 (ADR-0333): finish the purchase the user started, instead of telling them to find the
     // row again. ONE SHOT and time-boxed: this deep link also lands for a LUCID Remote sign-in and for a
     // Google Drive authorisation, so a stale intent must never open a payment page nobody asked for.
