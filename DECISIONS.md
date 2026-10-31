@@ -25280,3 +25280,53 @@ Two traps found by measurement before writing anything:
 **Decision.** (1) build-creator.yml exports `LUCID_RELEASE_RUN=1` on the Windows runner only. The marker has no consumer but the Windows-signing gate, and the overlay that carries the gate loads on every runner and inside `release-identity-gate.ts`. A first attempt that skipped the gate by electron-builder argv (`--mac`/`--linux` without `--win`) got the macOS build through and then failed the identity gate, which loads the overlay with no such argv: the marker belongs to the runner, not to whoever reads the overlay. The overlay itself is unchanged and still fails closed wherever the marker is set. (2) `fetch-whisper.ts` awaits the archive write before extracting. (3) The re-cut's Linux job then failed building the rpm with fpm `Errno::EDQUOT` (Disk quota exceeded) after the AppImage and deb. Freeing 18 GB of preinstalled toolchains did not help (/ had 104 GB free). The run log showed the cause: `ubuntu-latest` had moved to `ubuntu-26.04`, where /tmp is a 7.9 GB tmpfs. Moving TMPDIR to disk got fpm past the quota and rpmbuild then failed on that image (stderr truncated by electron-builder). creator-v0.1.1 and the last Agent release (2026-10-23) were built on `ubuntu-24.04`, so the Creator Linux job is pinned to `ubuntu-24.04` and the workarounds are dropped. Agent's build-desktop.yml still says `ubuntu-latest` and will meet the same image at its next release.
 
 **Consequences.** The P-RELEASE.7 demo pins that a Creator macOS or Linux release run is neither gated nor marked, while Windows release runs still fail with no signer and the overlay still fails its config load on any marked run. The partial `creator-v0.1.2` releases (Windows assets only, from commits before these fixes) were deleted and the tag re-cut on the fixed commit, the precedent `creator-v0.1.0` set when its first build found a packaging defect.
+
+## ADR-0461 -- P-PLUGINS.1: a Plugins flyout in the Preview panel with PREMIUM and FREE, Civilian and Government (2026-10-31)
+
+**Status:** Accepted -- PROPOSED. Plan: P-PLUGINS (ADR-0461 to ADR-0466). Supersedes the ADR-0158/0181 `#scrim` marketplace popup.
+
+**Context.** Premium LUCID apps (Pathfinder, MyHome, AgenticTrade187, HomeschoolTutor, Tactical GenAI Trainer, LUCID Meeting Hub, RAPID-SURVEY, Quantum Cloak) are to be sold and installed inside LUCID Agent, next to free integrations (Excalidraw, Obsidian, Git, Mermaid, Pandoc, Gitleaks, Semgrep, Trivy, Zotero, LanguageTool). The marketplace today is a static `#scrim` modal of GitHub links (`desktop/renderer/marketplace.ts`). The Preview panel is hard-capped at 50vw (`styles.css` `#preview`, `initResize`), too narrow for a card grid.
+
+**Decision.** (1) A "Plugins" button in the Preview toolbar opens a drawer that slides out from the Preview panel's left edge over the chat, width `min(1180px, 88vw)`, closed by Esc, the button, or a click outside; the 50vw cap on the panel itself is unchanged. (2) A segmented PREMIUM | FREE toggle, default PREMIUM, last choice remembered. PREMIUM has a Civilian and a Government section. (3) Cards follow the techlead187.com workshop cards (`.ws-app`): a muted 720x406 loop with a webp poster that plays only while visible, title, mono kicker, pitch, a "With LUCID Agent" line, and a state button (Buy $29.99, Sign in, Installing, Open, Update, Request access, Visit partner). Media ships in the app (offline). (4) Partner cards (MDMP Engine, Joint Planning Engine: Black Arrow Systems) and LEAPS (live subscription) link out and are never sold through LUCID. (5) The `#scrim` marketplace modal is removed; its entry point opens the drawer on FREE, and `MARKET_PLUGINS` becomes the FREE catalog.
+
+**Not adopted.** Raising the Preview panel cap (the chat column keeps at least half the window). A separate window (loses the preview context the plugins open into).
+
+**Consequences.** One catalog module feeds the drawer; the install path is ADR-0462, purchase ADR-0463, license ADR-0464, Government access ADR-0465.
+
+## ADR-0462 -- P-PLUGINS.2: the `.lplugin` package, its gates, and three runtime kinds (2026-10-31)
+
+**Status:** Accepted -- PROPOSED.
+
+**Context.** KB Packs (ADR-0205) are data; plugins are code. The pack import already has four fail-closed gates (manifest, SHA-256, Ed25519 origin signature, scanner) in `desktop/kb_pack.ts` and a signed-download path (ADR-0206).
+
+**Decision.** (1) Package: `<id>-<version>.lplugin.zip` holding `lucid-plugin.json`, `LICENSE`, the payload, and `signature` (Ed25519 over the canonical manifest, which lists every file's SHA-256). Built and signed by `tools/build_plugin.ts`. (2) Manifest `lucid-plugin.json` (schema 1): `id`, `name`, `version`, `publisher`, `license`, `tier` (premium | free), `section` (civilian | government), `kind` (web | server | daemon), `entry` (web: `{ root, index }`; server: `{ main, healthPath }`, run by Electron's Node via `ELECTRON_RUN_AS_NODE`; daemon: `{ exe, args, healthPath }`), optional `mcp` (`{ command, args }` relative to the package root), `ai: { provider: "lucid" }`, `permissions`, and `files` (path -> sha256, written by the packer). (3) Gates, all fail-closed: manifest schema; every file hash; a valid signature from a trusted key is REQUIRED for tier premium (unsigned premium never installs); Windows executables must carry the TECHLEAD 187 LLC Authenticode signature (ADR-0450); the existing scanner over text files. (4) Install to `userData/plugins/<id>/<version>/`; data in `userData/plugin-data/<id>/`, kept across updates and on uninstall unless the user removes it. (5) Runtime: the engine starts a plugin on a port-guard loopback port (ADR-0458) with env `PORT`, `HOST=127.0.0.1`, `LUCID_PLUGIN_ID`, `LUCID_PLUGIN_DATA`, `LUCID_AGENT_BIN` (the bundled omp, so plugin AI runs through LUCID Agent), waits for `healthPath`, and opens it in a Preview tab; web kind is served by the engine from the package root on its own loopback origin. Stop on request and at quit. (6) A manifest `mcp` entry is registered with the agent so the agent can drive the plugin. (7) Bridge routes: `GET /api/plugins`, `POST /api/plugins/install-from-url`, `/start`, `/stop`, `/uninstall`; every attempt is logged to `~/.omp/lucid-plugins.jsonl`.
+
+**Not adopted.** Running plugin servers inside the sandboxed preview iframe (Node apps cannot run there). Allowing unsigned premium packages. A per-plugin Electron shell (doubles the runtime size).
+
+**Consequences.** Premium plugins use the user's LUCID provider instead of their own Gemini or Anthropic keys.
+
+## ADR-0463 -- P-PLUGINS.3: plugins are sold on the KB Pack rails at $29.99 one-time (2026-10-31)
+
+**Status:** Accepted -- PROPOSED. Extends ADR-0206/0223/0333 in `lucidagentIDEaddon/entitlements`.
+
+**Decision.** (1) Catalog rows gain `kind: "plugin"`; one Stripe Product per plugin, one-time Price 2999 USD cents, lookup key `PLG-<SLUG>-OTF`, promotion codes allowed; Checkout links the plugin license. (2) Same entitlement path `entitlements/{uid}/packs/{id}` (no second store). An active `premium-all` entitlement (owner grant) satisfies every premium plugin id in `getEntitlement` and `getPackDownload`. (3) Downloads: 5-minute signed URL to `gs://lucid-agent-packs/plugins/<id>.lplugin.zip`. (4) Perpetual and lifetime updates: an installed plugin runs offline; entitlement is checked only at install and update. (5) Stripe objects are created in test mode first; live only after an end-to-end test purchase in a signed build.
+
+## ADR-0464 -- P-PLUGINS.4: the LUCID Premium Plugin License (2026-10-31)
+
+**Status:** Accepted -- PROPOSED (Pathfinder done: Pathfinder#21, #22).
+
+**Decision.** Every premium plugin is proprietary under the "LUCID Premium Plugin License" (Copyright TECHLEAD 187 LLC, all rights reserved; perpetual, single user, non-transferable, use inside LUCID Agent only; no redistribution, resale, reverse engineering, or license-check circumvention; no warranty; Florida law). It ships as `LICENSE` in each repo and package, is shown before Checkout and in the card details, and is published at `/legal/plugins`. Attorney review before live sales.
+
+## ADR-0465 -- P-PLUGINS.5: Government plugins need verified access before purchase (2026-10-31)
+
+**Status:** Accepted -- PROPOSED.
+
+**Decision.** Government cards (RAPID-SURVEY, Quantum Cloak) show "Request access" until the account is verified. A verified `.gov` or `.mil` email is approved automatically; anyone else submits organization, role, and CAGE or UEI, and an owner approves or declines in the Marketplace Dashboard (ADR-0466). `createCheckout` refuses a government item without an approved record. Mission Forge is not listed (VGIT built it for USSOCOM J8). MDMP Engine and Joint Planning Engine appear as Black Arrow Systems partner cards that link out.
+
+## ADR-0466 -- P-PLUGINS.6: an owner-only Marketplace Dashboard behind a double-click on the L (2026-10-31)
+
+**Status:** Accepted -- PROPOSED. Lives in `lucidagentIDEaddon` (website + entitlements).
+
+**Decision.** (1) Page `/admin/marketplace` on Firebase Hosting (`website/firebase-public/admin/marketplace/`). A double-click or double-tap on the L brand mark of lucid-agents.com navigates there; the marketing page loads no auth code. (2) Owners: `nicholas.chadwick.ctr@gmail.com`, `nick@techlead187.com`, `eryl@techlead187.com`, each with `email_verified == true`. Firestore rules give owners read on every entitlement, `purchases`, `adminAudit`, and `govAccess`; no client writes for anyone. Every change is a callable guarded by `assertOwner()` (allowlist + verified email + sign-in within 12 hours) that writes `adminAudit`. (3) `stripeWebhook` also writes `purchases/{eventId}`; entitlements gain `email` and `kind`; revenue history is read from Stripe. (4) Views: revenue (MRR from active subscriptions, one-time revenue by month, totals, refunds; canvas chart ported from AgenticTrade187 `ui/chartpop.js`; 3/6/12-month projection from trailing growth as a dashed line with a shaded band and a growth slider), purchases, users (search, owned items), grant or revoke one item or `premium-all` with a reason (additive, never overwrites a paid entitlement), and the Government queue.
+
+**Consequences.** Replaces the claim-only check on `grantEntitlement` with `assertOwner()`. The double-click is a shortcut, not a control; the rules and callables are the control.
