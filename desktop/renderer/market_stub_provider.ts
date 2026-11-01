@@ -12,7 +12,7 @@
 // entitled and nothing is granted, exactly like production. The download itself, when wired, still flows
 // through the P-KGPACK.4 verify + re-scan import gate — a stub grants access, not trust.
 
-import type { AuthState, Entitlement, PackLicensing } from "../../harness/market/entitlement.ts";
+import type { AuthState, Entitlement, GovAccessRequest, GovAccessStatus, PackLicensing } from "../../harness/market/entitlement.ts";
 import type { EntitlementProvider } from "./market_gate.ts";
 
 /** A tiny "which packs does this user own" ledger. In-memory by default; a real dev build could persist it. */
@@ -50,6 +50,7 @@ export interface StubProviderOpts {
 export function makeStubMarketProvider(opts: StubProviderOpts): EntitlementProvider {
   const ledger = opts.ledger ?? memoryLedger();
   const signedIn = () => opts.getUser().signedIn === true;
+  let gov: GovAccessStatus = "none";
   return {
     configured: () => true,
     auth: async () => opts.getUser(),
@@ -62,5 +63,13 @@ export function makeStubMarketProvider(opts: StubProviderOpts): EntitlementProvi
     },
     downloadUrl: async (packId: string): Promise<string | null> =>
       signedIn() && ledger.has(packId) ? (opts.downloadUrlFor?.(packId) ?? null) : null,
+    // P-PLUGINS.5 (ADR-0465): the backend rule, offline. A .gov/.mil sign-in is approved on request; anyone else
+    // waits as "pending" (in dev there is no owner to decide). Signed out: nothing, same as production.
+    govAccess: async () => (signedIn() ? gov : "none"),
+    requestGovAccess: async (req: GovAccessRequest): Promise<GovAccessStatus | null> => {
+      if (!signedIn() || !req.organization.trim() || !req.role.trim()) return null;
+      gov = /\.(gov|mil)$/i.test(opts.getUser().email ?? "") ? "approved" : "pending";
+      return gov;
+    },
   };
 }

@@ -67,6 +67,51 @@ export function readZipEntriesMatching(buf: Buffer, match: (basename: string) =>
   return out;
 }
 
+/** Decompress EVERY entry, keeping its FULL in-archive name (not the basename), for a package whose
+ *  folder layout matters (`.lplugin`, ADR-0462). Directory entries (a name ending in "/") are skipped.
+ *  Bounded against zip bombs: the declared uncompressed total must fit `maxTotalBytes`, and inflation is
+ *  capped at each entry's declared size, so a lying header throws instead of exhausting memory. Names
+ *  are returned raw; validating them (traversal, absolute paths) is the caller's gate. Throws on a
+ *  corrupt zip, zip64, encryption, or an unsupported method. */
+export function readAllZipEntries(buf: Buffer, opts: { maxTotalBytes: number; maxEntries?: number }): { name: string; data: Buffer }[] {
+  const eocd = findEOCD(buf);
+  if (eocd < 0) throw new Error("not a zip file");
+  let off = buf.readUInt32LE(eocd + 16);
+  const count = buf.readUInt16LE(eocd + 10);
+  if (count === 0xffff || off === 0xffffffff) throw new Error("zip64 archives are not supported");
+  if (count > (opts.maxEntries ?? 20_000)) throw new Error(`too many entries (${count})`);
+  const out: { name: string; data: Buffer }[] = [];
+  let total = 0;
+  for (let i = 0; i < count; i++) {
+    if (off + 46 > buf.length || buf.readUInt32LE(off) !== CEN_SIG) throw new Error("corrupt central directory");
+    const flags = buf.readUInt16LE(off + 8);
+    const method = buf.readUInt16LE(off + 10);
+    const cSize = buf.readUInt32LE(off + 20);
+    const uSize = buf.readUInt32LE(off + 24);
+    const nameLen = buf.readUInt16LE(off + 28), extraLen = buf.readUInt16LE(off + 30), commentLen = buf.readUInt16LE(off + 32);
+    const localOff = buf.readUInt32LE(off + 42);
+    const name = buf.toString("utf8", off + 46, off + 46 + nameLen);
+    off += 46 + nameLen + extraLen + commentLen;
+    if (flags & 0x1) throw new Error(`encrypted entry: ${name}`);
+    if (cSize === 0xffffffff || uSize === 0xffffffff || localOff === 0xffffffff) throw new Error("zip64 entries are not supported");
+    if (name.endsWith("/")) continue;
+    total += uSize;
+    if (total > opts.maxTotalBytes) throw new Error(`archive expands past the ${opts.maxTotalBytes}-byte limit`);
+    if (localOff + 30 > buf.length || buf.readUInt32LE(localOff) !== 0x04034b50) throw new Error(`corrupt local header: ${name}`);
+    const lNameLen = buf.readUInt16LE(localOff + 26), lExtraLen = buf.readUInt16LE(localOff + 28);
+    const dataStart = localOff + 30 + lNameLen + lExtraLen;
+    if (dataStart + cSize > buf.length) throw new Error(`truncated entry: ${name}`);
+    const comp = buf.subarray(dataStart, dataStart + cSize);
+    let data: Buffer;
+    if (method === 0) data = Buffer.from(comp);
+    else if (method === 8) data = uSize === 0 ? Buffer.alloc(0) : inflateRawSync(comp, { maxOutputLength: uSize });
+    else throw new Error(`unsupported zip compression method ${method}`);
+    if (data.length !== uSize) throw new Error(`size mismatch: ${name}`);
+    out.push({ name, data });
+  }
+  return out;
+}
+
 /** Decompress the first entry whose basename equals `filename` (case-insensitive), or null if
  *  absent. Throws on a corrupt zip or an unsupported compression method. */
 export function readZipEntry(buf: Buffer, filename: string): Buffer | null {

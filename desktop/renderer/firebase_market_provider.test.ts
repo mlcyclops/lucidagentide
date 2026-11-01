@@ -66,6 +66,29 @@ describe("makeFirebaseMarketProvider", () => {
     expect(calls).toHaveLength(0);
   });
 
+  test("checkout sends the licensing the contract names (createCheckout({ packId, licensing }))", async () => {
+    reply = () => ({ ok: true, body: { result: { url: "https://x/co" } } });
+    await signedIn().checkoutUrl("pathfinder", "one-time");
+    expect(calls[0]!.body).toEqual({ data: { packId: "pathfinder", licensing: "one-time" } });
+  });
+
+  test("government access: a known status passes through; an error, junk, or no token reads as none", async () => {
+    reply = (n) => ({ ok: true, body: { result: { status: n === "getGovAccess" ? "approved" : "pending" } } });
+    const p = signedIn();
+    expect(await p.govAccess()).toBe("approved");
+    expect(await p.requestGovAccess({ organization: "Army", role: "S3", cage: "1ABC2" })).toBe("pending");
+    expect(calls[1]!.body).toEqual({ data: { organization: "Army", role: "S3", cage: "1ABC2" } });
+    reply = () => ({ ok: true, body: { result: { status: "granted-by-magic" } } });
+    expect(await p.govAccess()).toBe("none");
+    reply = () => ({ ok: false, body: { error: { message: "permission-denied" } } });
+    expect(await p.govAccess()).toBe("none");
+    expect(await p.requestGovAccess({ organization: "Army", role: "S3" })).toBeNull();
+    const out = signedIn({ user: { signedIn: false }, token: null });
+    const before = calls.length;
+    expect(await out.govAccess()).toBe("none");
+    expect(calls.length).toBe(before);
+  });
+
   test("a callable error resolves to null (fail-safe; the decision core re-checks fail-closed)", async () => {
     reply = () => ({ ok: false, body: { error: { message: "permission-denied" } } });
     const p = signedIn();

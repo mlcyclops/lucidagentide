@@ -1249,7 +1249,8 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .kb-side-hd{display:flex;align-items:center;gap:8px;font-size:14px;margin-bottom:6px}
 .kb-side-kind{font-size:11px;color:var(--txt-3);margin-bottom:8px}
 
-/* P-MARKET.1 (ADR-0158): the Plugin Marketplace popup — scrim + centered modal, same family as figma/goal. */
+/* P-MARKET.1 (ADR-0158): the catalog scrim + centered modal (same family as figma/goal). The Plugin Marketplace
+   that introduced it became the Plugins drawer (ADR-0461); Role KG Packs and the other modals still use it. */
 .mkt-scrim{position:fixed;inset:0;z-index:200;background:rgb(var(--sh-rgb) / .55);display:grid;place-items:center;animation:fade var(--t) var(--ease)}
 .mkt-modal{width:min(600px,93vw);background:var(--bg-1);border:1px solid var(--line-strong);border-radius:16px;padding:20px;
   box-shadow:0 20px 60px rgb(var(--sh-rgb) / .55);display:flex;flex-direction:column;gap:9px;animation:rise var(--t-slow) var(--ease-out);
@@ -1272,7 +1273,6 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .mkt-title{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mkt-badges{display:flex;flex-wrap:wrap;align-items:center;gap:7px;min-width:0}
 .mkt-cat{max-width:100%;box-sizing:border-box;overflow:hidden;text-overflow:ellipsis;font-size:10.5px;color:var(--txt-4);border:1px solid var(--line);border-radius:999px;padding:1px 8px;white-space:nowrap}
-.mkt-dl{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;font-family:var(--mono);color:var(--txt-3);white-space:nowrap}
 .mkt-chip{font-size:10px;font-weight:650;letter-spacing:.03em;text-transform:uppercase;border-radius:999px;padding:1.5px 8px;white-space:nowrap}
 .mkt-featured{color:var(--accent-2);background:var(--accent-dim);border:1px solid color-mix(in srgb,var(--accent) 35%,var(--line))}
 .mkt-builtin{color:var(--green);background:color-mix(in srgb,var(--green) 12%,transparent);border:1px solid color-mix(in srgb,var(--green) 35%,var(--line))}
@@ -1284,6 +1284,121 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   border-radius:8px;padding:6px 11px;cursor:pointer;white-space:nowrap;transition:background var(--t),color var(--t),border-color var(--t)}
 .mkt-repo:hover{background:var(--accent-dim);color:var(--txt);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
 .mkt-empty{padding:22px 0;text-align:center;font-size:12.5px;color:var(--txt-3)}
+
+/* P-PLUGINS.1 (ADR-0461): the Plugins drawer. Fixed over the chat with its right edge on the Preview panel's left
+   edge (plugins_flyout.ts sets left/top/width/height). Slides out of that edge: a clip-path reveal plus a short
+   travel, both switched off under prefers-reduced-motion. Cards port the techlead187.com `.ws-app` card onto the
+   palette tokens, so every theme gets them. Container queries pick 1 to 4 columns from the DRAWER's width. */
+.plg-layer{position:fixed;inset:0;z-index:115;pointer-events:none}
+.plg-drawer{position:fixed;pointer-events:auto;display:flex;flex-direction:column;container-type:inline-size;
+  background:var(--bg-1);border:1px solid var(--line-strong);border-right:0;border-radius:14px 0 0 14px;
+  box-shadow:-24px 0 60px -24px rgb(var(--sh-rgb) / .6),inset 0 1px 0 rgb(var(--tint-rgb) / .04);
+  clip-path:inset(0 0 0 100%);transform:translateX(28px);opacity:.6;
+  transition:clip-path var(--t-slow) var(--ease-out),transform var(--t-slow) var(--ease-out),opacity var(--t) var(--ease)}
+.plg-layer.plg-in .plg-drawer{clip-path:inset(0 0 0 0);transform:none;opacity:1}
+.plg-layer.plg-out .plg-drawer{clip-path:inset(0 0 0 100%);transform:translateX(28px);opacity:0;transition-duration:var(--t)}
+@media (prefers-reduced-motion:reduce){.plg-drawer{transition:none}}
+.plg-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 14px 12px 18px;border-bottom:1px solid var(--line)}
+.plg-title{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:650;color:var(--txt);white-space:nowrap}
+.plg-title .ic{color:var(--accent-2)}
+.plg-seg{display:flex;gap:3px;background:var(--bg-2);border:1px solid var(--line);border-radius:9px;padding:3px}
+.plg-seg button{border:0;background:transparent;color:var(--txt-3);font:inherit;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+  padding:6px 14px;border-radius:7px;cursor:pointer;transition:background var(--t),color var(--t),box-shadow var(--t)}
+.plg-seg button:hover{color:var(--txt-2)}
+.plg-seg button[aria-selected="true"]{background:var(--bg-4);color:var(--txt);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 40%,var(--line))}
+.plg-seg button:focus-visible,.plg-act:focus-visible,.plg-lic:focus-visible,.plg-inline:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.plg-search{flex:1 1 160px;max-width:300px;margin-left:auto;box-sizing:border-box;padding:7px 11px;border:1px solid var(--line-strong);border-radius:9px;
+  background:var(--bg-2);color:var(--txt);font:inherit;font-size:12.5px;outline:none;transition:border-color var(--t)}
+.plg-search:focus{border-color:color-mix(in srgb,var(--accent) 45%,var(--line-strong))}
+.plg-body{flex:1;min-height:0;overflow-y:auto;scrollbar-gutter:stable;padding:14px 18px 22px;outline:none}
+.plg-lede{margin:0 0 14px;font-size:13px;line-height:1.55;color:var(--txt-2);max-width:880px}
+.plg-inline{border:0;background:none;padding:0;font:inherit;color:var(--cyan);cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.plg-sec+.plg-sec{margin-top:26px}
+.plg-h{margin:0 0 4px;font-family:var(--mono);font-size:11.5px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--accent-2)}
+.plg-sec-sub{margin:0 0 12px;font-size:12.5px;color:var(--txt-3)}
+.plg-h+.plg-grid{margin-top:10px}
+.plg-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
+@container (min-width:560px){.plg-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@container (min-width:840px){.plg-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@container (min-width:1100px){.plg-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.plg-empty{padding:30px 0;text-align:center;font-size:13px;color:var(--txt-3)}
+.plg-card{display:flex;flex-direction:column;min-width:0;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--bg-elev);
+  transition:border-color var(--t),transform var(--t) var(--ease-out),box-shadow var(--t)}
+.plg-card:hover{border-color:rgb(var(--cyan-rgb) / .45);transform:translateY(-3px);box-shadow:0 14px 30px -18px rgb(var(--sh-rgb) / .7)}
+@media (prefers-reduced-motion:reduce){.plg-card:hover{transform:none}}
+.plg-shot{line-height:0;border-bottom:1px solid var(--line-soft);background:var(--bg-sunk)}
+.plg-shot video,.plg-shot img,.plg-shot .plg-gen{display:block;width:100%;height:auto;aspect-ratio:16/9;object-fit:cover;object-position:top}
+.plg-cbody{display:flex;flex-direction:column;flex:1;padding:13px 15px 14px}
+.plg-name{font-size:16px;font-weight:700;letter-spacing:-.01em;color:var(--txt)}
+.plg-kind{display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;margin-top:3px;font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--cyan)}
+.plg-chip{font-family:var(--font);font-size:9.5px;font-weight:700;letter-spacing:.06em;border-radius:999px;padding:1.5px 7px;border:1px solid var(--line);color:var(--txt-3);background:var(--bg-3)}
+.plg-chip[data-status="featured"]{color:var(--accent-2);background:var(--accent-dim);border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
+.plg-chip[data-status="built-in"]{color:var(--green);background:rgb(var(--green-rgb) / .12);border-color:rgb(var(--green-rgb) / .35)}
+.plg-pitch{margin:9px 0 0;font-size:13px;line-height:1.5;color:var(--txt-2)}
+.plg-lucid{margin:10px 0 0;padding:8px 10px;border-left:2px solid rgb(var(--accent-2-rgb) / .55);background:rgb(var(--accent-rgb) / .06);border-radius:0 8px 8px 0;
+  font-size:12.5px;line-height:1.45;color:var(--txt-2)}
+.plg-lucid>span{display:block;margin-bottom:2px;font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent-2)}
+.plg-foot-slot{margin-top:auto}
+.plg-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line-soft)}
+.plg-meta{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:11px;color:var(--txt-3);white-space:nowrap}
+.plg-lic{display:inline-flex;align-items:center;gap:4px;border:0;background:none;padding:0;font:inherit;font-size:11.5px;color:var(--cyan);cursor:pointer}
+.plg-lic:hover{text-decoration:underline;text-underline-offset:3px}
+.plg-act{margin-left:auto;display:inline-flex;align-items:center;gap:6px;flex:none;white-space:nowrap;font:inherit;font-size:12.5px;font-weight:650;
+  padding:7px 13px;border-radius:9px;border:1px solid color-mix(in srgb,var(--accent) 50%,var(--line));background:var(--accent-dim);color:var(--txt);cursor:pointer;
+  transition:background var(--t),border-color var(--t),color var(--t),box-shadow var(--t)}
+.plg-act:hover{background:rgb(var(--accent-rgb) / .28);box-shadow:0 0 0 1px rgb(var(--accent-2-rgb) / .25),0 6px 18px -8px rgb(var(--accent-2-rgb) / .6)}
+.plg-act[data-kind="open"],.plg-act[data-kind="install"]{border-color:rgb(var(--green-rgb) / .5);background:rgb(var(--green-rgb) / .14)}
+.plg-act[data-kind="open"]:hover,.plg-act[data-kind="install"]:hover{background:rgb(var(--green-rgb) / .24);box-shadow:none}
+.plg-act[data-kind="update"]{border-color:rgb(var(--amber-rgb) / .55);background:rgb(var(--amber-rgb) / .14)}
+.plg-act[data-kind="visit"],.plg-act[data-kind="signin"]{border-color:var(--line-strong);background:var(--bg-3);color:var(--txt-2)}
+.plg-act[data-kind="visit"]:hover,.plg-act[data-kind="signin"]:hover{color:var(--txt);background:var(--bg-4);box-shadow:none}
+.plg-act:disabled{cursor:default;opacity:.7;box-shadow:none;background:var(--bg-3);border-color:var(--line)}
+.plg-act[aria-busy="true"]::before{content:"";width:10px;height:10px;border-radius:50%;border:2px solid rgb(var(--accent-2-rgb) / .3);border-top-color:var(--accent-2);animation:spin .8s linear infinite}
+.plg-act-static{cursor:default;border-color:rgb(var(--green-rgb) / .35);background:rgb(var(--green-rgb) / .1);color:var(--green)}
+.plg-act-static:hover{background:rgb(var(--green-rgb) / .1);box-shadow:none}
+.plg-note{margin:8px 0 0;font-size:12px;line-height:1.45;color:var(--txt-2)}
+.plg-note[data-tone="danger"]{color:var(--red-txt)}
+.plg-note[data-tone="ok"]{color:var(--green)}
+.plg-gov{display:flex;align-items:flex-start;gap:12px;margin:2px 0 14px;padding:12px 14px;border:1px solid rgb(var(--blue-rgb) / .35);border-radius:12px;background:rgb(var(--blue-rgb) / .07)}
+.plg-gov[data-status="approved"]{border-color:rgb(var(--green-rgb) / .4);background:rgb(var(--green-rgb) / .08)}
+.plg-gov[data-status="declined"]{border-color:rgb(var(--amber-rgb) / .45);background:rgb(var(--amber-rgb) / .08)}
+.plg-gov>p,.plg-gov-main>p{flex:1;margin:0;font-size:12.5px;line-height:1.5;color:var(--txt-2)}
+.plg-gov-ic{flex:none;color:var(--blue);margin-top:1px}
+.plg-gov-main{flex:1;min-width:0}
+.plg-govform{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}
+@container (max-width:620px){.plg-govform{grid-template-columns:minmax(0,1fr)}}
+.plg-govform label,.plg-accept{display:flex;flex-direction:column;gap:4px;font-size:11.5px;font-weight:600;color:var(--txt-3)}
+.plg-govform .plg-wide,.plg-govform .plg-form-err,.plg-govform .plg-form-row{grid-column:1/-1}
+.plg-govform input,.plg-govform textarea{box-sizing:border-box;width:100%;padding:7px 9px;border:1px solid var(--line-strong);border-radius:8px;background:var(--bg-1);color:var(--txt);font:inherit;font-size:12.5px;outline:none;resize:vertical}
+.plg-govform input:focus,.plg-govform textarea:focus{border-color:color-mix(in srgb,var(--accent) 45%,var(--line-strong))}
+.plg-form-err{margin:0;min-height:1em;font-size:12px;color:var(--red-txt)}
+.plg-form-row{display:flex;align-items:center;justify-content:flex-end;gap:10px}
+.plg-form-row .plg-act{margin-left:0}
+.plg-sheet-scrim{position:absolute;inset:0;z-index:2;display:grid;place-items:center;padding:20px;background:rgb(var(--scrim-rgb) / .55);border-radius:inherit;animation:fade var(--t) var(--ease)}
+.plg-sheet{width:min(520px,100%);max-height:100%;overflow:auto;box-sizing:border-box;display:flex;flex-direction:column;gap:10px;padding:18px 20px;
+  background:var(--bg-1);border:1px solid var(--line-strong);border-radius:14px;box-shadow:0 20px 60px rgb(var(--sh-rgb) / .55);animation:rise var(--t-slow) var(--ease-out)}
+.plg-sheet-wide{width:min(760px,100%)}
+.plg-sheet-h{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:15px;color:var(--txt)}
+.plg-sheet-price{margin:0;font-size:13px;line-height:1.5;color:var(--txt)}
+.plg-sheet-sub{margin:4px 0 0;font-size:12px;font-weight:650;color:var(--txt-3)}
+.plg-sheet-list{margin:0;padding-left:18px;font-size:12.5px;line-height:1.55;color:var(--txt-2)}
+.plg-accept{flex-direction:row;align-items:center;gap:8px;font-size:12.5px;color:var(--txt);margin-top:2px;cursor:pointer}
+.plg-accept input{accent-color:var(--accent)}
+.plg-license{margin:0;max-height:52vh;overflow:auto;padding:12px;border:1px solid var(--line);border-radius:9px;background:var(--bg-code);color:var(--txt-code);
+  font-family:var(--mono);font-size:11.5px;line-height:1.5;white-space:pre-wrap}
+/* Generated posters: drawn from the plugin's glyph and ONE palette token, so they track every theme. */
+.plg-gen{--tone:var(--cyan-rgb)}
+.plg-tone-accent{--tone:var(--accent-rgb)} .plg-tone-cyan{--tone:var(--cyan-rgb)} .plg-tone-green{--tone:var(--green-rgb)}
+.plg-tone-amber{--tone:var(--amber-rgb)} .plg-tone-blue{--tone:var(--blue-rgb)} .plg-tone-violet{--tone:var(--violet-rgb)}
+.plg-gen-bg{fill:var(--bg-sunk)}
+.plg-gen-s0{stop-color:rgb(var(--tone) / .42)} .plg-gen-s1{stop-color:rgb(var(--tone) / 0)}
+.plg-gen-grid{fill:none;stroke:rgb(var(--tone) / .11);stroke-width:1}
+.plg-gen-ring{fill:none;stroke:rgb(var(--tone) / .28);stroke-width:1.5}
+.plg-gen-ring2{stroke-dasharray:4 9;stroke:rgb(var(--tone) / .4)}
+.plg-gen-glyph{color:rgb(var(--tone));stroke:currentColor;filter:drop-shadow(0 0 10px rgb(var(--tone) / .45))}
+.plg-gen-tag{font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:.24em;fill:rgb(var(--tone))}
+.plg-gen-name{font-family:var(--font);font-size:36px;font-weight:700;letter-spacing:-.01em;fill:var(--txt)}
+.btn-mini.prev-plugins{border-color:color-mix(in srgb,var(--accent) 40%,var(--line));color:var(--accent-2)}
 
 /* P-SYSRES.1 (ADR-0182): the resource-guard blocked card + the System resources panel. */
 .sysres-blocked .sysres-why{margin:2px 0 0;padding-left:18px;text-align:left;font-size:12px;color:var(--txt-3);line-height:1.5}

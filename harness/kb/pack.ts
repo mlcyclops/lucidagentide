@@ -57,8 +57,9 @@ export function sha256Bytes(buf: Buffer | Uint8Array): string {
 /** Deterministic JSON with recursively-sorted keys — a stable byte payload independent of construction order.
  *  Mirrors JSON.stringify's undefined handling EXACTLY (objects drop undefined-valued keys, arrays coerce
  *  undefined → null) so the sign-time payload equals the payload re-derived after a JSON round-trip to disk
- *  (a divergence there silently breaks every signature). */
-function stableStringify(v: unknown): string {
+ *  (a divergence there silently breaks every signature). Shared with the `.lplugin` manifest
+ *  (harness/plugins/package.ts) so both signed formats canonicalize identically. */
+export function stableStringify(v: unknown): string {
   if (v === null || v === undefined || typeof v !== "object") return JSON.stringify(v ?? null);
   if (Array.isArray(v)) return "[" + v.map((x) => stableStringify(x === undefined ? null : x)).join(",") + "]";
   const o = v as Record<string, unknown>;

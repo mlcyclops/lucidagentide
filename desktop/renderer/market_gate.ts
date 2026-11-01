@@ -10,7 +10,7 @@
 // `getMarketProvider()` returns `nullProvider`: not signed in, nothing entitled, no checkout/download URL —
 // so "Get pack" degrades to opening the product page and NOTHING is ever pulled without entitlement.
 
-import type { AuthState, Entitlement, PackLicensing } from "../../harness/market/entitlement.ts";
+import type { AuthState, Entitlement, GovAccessRequest, GovAccessStatus, PackLicensing } from "../../harness/market/entitlement.ts";
 
 /** The transport the storefront calls. A registered provider talks to the private Firebase functions; the
  *  default null provider answers fail-closed. All methods are best-effort — a thrown/absent answer is treated
@@ -24,17 +24,23 @@ export interface EntitlementProvider {
   entitlement(packId: string): Promise<Entitlement | null>;
   /** A Stripe Checkout URL to open for this pack + licensing, or null if unavailable. */
   checkoutUrl(packId: string, licensing: PackLicensing): Promise<string | null>;
-  /** A short-lived signed URL to the .lkgpack, issued ONLY when entitled; null otherwise. */
+  /** A short-lived signed URL to the .lkgpack / .lplugin package, issued ONLY when entitled; null otherwise. */
   downloadUrl(packId: string): Promise<string | null>;
+  /** P-PLUGINS.5 (ADR-0465): the signed-in user's government-access record; "none" when unknown. */
+  govAccess(): Promise<GovAccessStatus>;
+  /** P-PLUGINS.5: file a government-access request; the resulting status, or null when it could not be sent. */
+  requestGovAccess(req: GovAccessRequest): Promise<GovAccessStatus | null>;
 }
 
-/** The fail-closed default: no identity, no entitlement, no URLs. */
+/** The fail-closed default: no identity, no entitlement, no URLs, no government access. */
 export const nullProvider: EntitlementProvider = {
   configured: () => false,
   auth: async () => ({ signedIn: false }),
   entitlement: async () => null,
   checkoutUrl: async () => null,
   downloadUrl: async () => null,
+  govAccess: async () => "none",
+  requestGovAccess: async () => null,
 };
 
 let registered: EntitlementProvider | null = null;
