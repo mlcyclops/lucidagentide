@@ -58,7 +58,8 @@ jobs:
           - os: windows-latest
             label: Windows (NSIS + portable + MSI + AppX, x64)
             script: dist:win
-          - os: ubuntu-latest
+          # ADR-0459: pinned. ubuntu-latest moved to 26.04, whose 7.9 GB tmpfs /tmp fails rpm packaging.
+          - os: ubuntu-24.04
             label: Linux (AppImage + deb + rpm, x64)
             script: dist:linux
           # P-ARM64.B: GitHub's native arm64 Linux runner, so no cross-build and no QEMU. Everything

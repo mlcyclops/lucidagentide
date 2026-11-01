@@ -686,4 +686,10 @@
 //            Windows (the registry probe's stderr line no longer precedes the CLI's JSON). Stale
 //            engine-discovery files of killed engines are pruned. PRERELEASE: never marked Latest; the
 //            Homebrew cask and stable installs stay on 2.4.1. Gate 528 files / 7135 tests.
-export const APP_VERSION = "2.5.0-beta.3";
+// v2.5.0-beta.4 = 2.5.0-beta.3 plus P-PLUGINS (ADR-0461 to ADR-0466, #537 to #540): the Plugins drawer in
+//            the Preview panel (Premium and Free, Civilian and Government), signed .lplugin install with
+//            manifest, hash, signature and scanner gates, $29.99 Stripe checkout through the LUCID account,
+//            the Government access gate, and the owner Marketplace Dashboard. The Linux x64 release leg is
+//            pinned to ubuntu-24.04 (ADR-0459). PRERELEASE: never marked Latest; the Homebrew cask and stable
+//            installs stay on 2.4.1, a beta install updates to the next beta.
+export const APP_VERSION = "2.5.0-beta.4";
