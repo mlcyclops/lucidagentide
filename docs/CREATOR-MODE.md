@@ -891,6 +891,12 @@ Built so far on this branch:
 - **CREATOR-OPENFILM** (ADR-0457) - OpenFilm films (`film.html` plus `frame(t)` pages) checked by
   `openfilm look` and rendered by `openfilm render` as fixed-argv jobs, the Video pane's OpenFilm row, and the
   `openfilm_look` / `openfilm_render` / `openfilm_job` agent tools. Proof: `make demo-CREATOR-OPENFILM`.
+- **CREATOR-EXPLAINER** (ADR-0460) - two Creator-only built-in skills: **Explainer Studio** (plan-first,
+  procedural three.js explainers under 1 MB with exact math, an honest write-up, and Preview plus headless
+  Chromium verification) and **Explainer Assets (GPU)** (when to use this machine or the DGX fleet for code,
+  CAD parts, textures, narration, presenter video, clips, and baking, and how to reach the DGX safely). The
+  long form, with references and evals, is in `.agents/skills/explainer-studio` and
+  `.agents/skills/explainer-assets-gpu`. Proof: `cd desktop && bun test renderer/skills.test.ts`.
 
 ## Checking that the Creator engine actually works
 
