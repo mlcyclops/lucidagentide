@@ -120,6 +120,37 @@ The drawer is plain language at the audience's reading level, with these section
 line that the scene uses simplified models. Scale is the most common lie in a 3D scene: if sizes or distances
 are not to scale, say so and give the real figures.
 
+## Screen layout (laptop, tablet, phone held sideways)
+
+Explainers often run inside an app's frame, and on tablets and phones. Overlays (title, chapter tabs,
+toolbar, caption, console, mascot or bubble, your own panels) must never cover each other or wrap into extra
+rows. Measure; never place an overlay with fixed pixel offsets, because the header height changes with the
+frame.
+
+- **Measured header modes.** Measure the real tabs and tools and pick the first mode that fits: `split`
+  (title card left, toolbar right, one row each), `bar` (one full-width bar: title and toolbar on row 1, tabs
+  on row 2), or `stack` (a full-width title card, toolbar on its own row).
+- **Compact steps before any wrap.** Shed extras in order: c1 key chips and long button words; c2 the
+  subtitle and some padding; c3 tighter tabs, views and tools; c4 camera views become a drop-down; c5 the
+  write-up button keeps only its icon. If c5 still does not fit, tabs become one swipeable row. Never several
+  rows.
+- **Caption band.** The caption centers in the free band between the console and any docked panel. With no
+  band of at least about 200 px, draw it above them and fade it after about 6 s on short frames.
+- **Console.** Bounded under the header (never taller than the space below it); its rows scroll and never
+  shrink. Squashed rows (a math block shrunk to a sliver) are a real bug on short frames.
+- **Own panels.** Publish the layout as CSS variables on the root (edge gap, header bottom, console right and
+  top, mascot top) plus a layout event, and dock each own panel so the caption keeps clear of it. Example:
+  `top: var(--head-b); max-height: calc(var(--mascot-t) - var(--head-b) - var(--gap)); overflow: auto`. A panel
+  may fold down to its name when it would hit the bubble.
+- **Label de-collision.** Floating scene labels that would overlap are nudged apart; the nearest label keeps
+  its spot.
+- **Short-screen tiers.** 620 px tall or less: everything one size smaller and a smaller gap. 440 px tall or
+  less (phones held sideways): the console becomes a left column. 720 px wide or less and taller (phones held
+  upright): the console spans the bottom and the mascot sits just above it.
+- **Audit matrix.** In headless Chromium, measure every overlay and label rectangle at 1084x740, 1024x768,
+  768x1024, 844x390 and 667x375, for every chapter at every level. Pass: no overlaps, nothing off screen, one
+  row of tabs and one of tools, zero page errors. Report the counts.
+
 ## Accessibility and reduced motion
 
 - Semantic `<button>`, labelled `<input type="range">`, visible focus, no keyboard traps, logical tab order.
@@ -157,7 +188,7 @@ are not to scale, say so and give the real figures.
    and confirm the readouts changed.
 2. **Headless Chromium** (for artifacts and CI): load the page from a loopback static server over the
    DevTools protocol, fail on any exception, console error, or failed request, and save one screenshot per
-   chapter plus poster frames.
+   chapter plus poster frames. Run the screen-layout audit matrix in the same pass.
 3. **Preview clip:** render frames deterministically and encode a short muted clip with ffmpeg (VP9 webm or
    H.264 mp4, about 25 to 260 KB), plus a poster image.
 4. **Report** the measured transfer size, the console error count, `renderer.info` numbers, and the paths of

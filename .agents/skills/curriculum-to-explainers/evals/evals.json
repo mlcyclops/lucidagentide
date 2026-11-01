@@ -1,0 +1,29 @@
+{
+  "skill_name": "curriculum-to-explainers",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "we have the whole year of her course guides downloaded. figure out what explainers to build next",
+      "expected_output": "Builds a private curriculum map from the mirror (lesson, unit, week, objectives in its own words, vocabulary), then a committable topic-level backlog in its own words with no source text or brand. Applies the selection rule (spatial or dynamic, taught within 8 weeks, not already covered) and routes the rest to study helpers, practice, stories, or podcasts.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "build all six of those explainers at once with subagents",
+      "expected_output": "Plans the wave as lead, writes one shared contract, and spawns one subagent per explainer, each editing only its own new folder and reporting shared changes instead of making them. Integrates the catalog once, runs the tests once, then runs the overlay audit at 1084x740, 1024x768, 768x1024, 844x390 and 667x375 for every chapter at both levels.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "just paste the practice problems from the guide into the explainer, it's faster",
+      "expected_output": "Declines: the guide is copyrighted and only topics, skills, order and dates may be used. Writes original problems that teach the same skill.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "the explainers look fine on my laptop, we're done",
+      "expected_output": "Does not accept a single-size check. Runs the audit matrix across all five sizes, every chapter, both levels, and reports overlaps, off-screen overlays, wrapped rows, label collisions and page errors with counts.",
+      "files": []
+    }
+  ]
+}
