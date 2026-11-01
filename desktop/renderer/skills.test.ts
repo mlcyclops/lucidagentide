@@ -76,7 +76,7 @@ describe("bundledSkillsByUsage: a disabled built-in never surfaces", () => {
 });
 
 // CREATOR-EXPLAINER (ADR-0460): the explainer skills ship built in to the Creator build only.
-// CREATOR-CURRICULUM (ADR-0461) adds the three curriculum crafts under the same rules.
+// CREATOR-CURRICULUM (ADR-0467) adds the three curriculum crafts under the same rules.
 const CREATOR_ONLY = [
   "explainer-studio", "explainer-assets-gpu",
   "curriculum-guide-mirror", "curriculum-to-explainers", "notebooklm-podcast-studio",

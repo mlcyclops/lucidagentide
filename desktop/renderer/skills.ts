@@ -261,7 +261,7 @@ export const INSTALLED_SKILLS: BundledSkill[] = [
       "vendored locally and counted; record generator, prompt or script, model, licence and sha256 for every asset. When " +
       ".agents/skills/explainer-assets-gpu exists in the workspace, read references/dgx-access.md and asset-pipeline.md first.",
   },
-  // CREATOR-CURRICULUM (ADR-0461): the curriculum crafts, generic and first-party, under ADR-0460's rules.
+  // CREATOR-CURRICULUM (ADR-0467): the curriculum crafts, generic and first-party, under ADR-0460's rules.
   {
     command: "curriculum-guide-mirror",
     name: "Curriculum Guide Mirror",
