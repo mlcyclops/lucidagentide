@@ -105,7 +105,7 @@ export const PREMIUM_PLUGINS: PremiumPlugin[] = [
   {
     id: "quantum-cloak", name: "Quantum Cloak", section: "government", sale: "buy", lookupKey: "PLG-QCLOAK-OTF", available: true,
     kicker: "Quantum comms and computing trainer",
-    pitch: "Eleven narrated 3-D modules on real simulators: qubits and Bell tests, BB84 and E91 key distribution over real fiber, circuits and Grover search, and blind quantum computing on lattice encryption, with practice, hints and mastery tracking.",
+    pitch: "Thirty narrated 3-D modules on real simulators: qubits and Bell tests, QKD over fiber and satellites and the attacks on it, Shor and Grover, error correction, the NIST post-quantum standards and migration deadlines, plus capstone missions, with practice, hints and mastery tracking.",
     lucid: "Runs in a Preview tab; only the narration audio streams from Google Cloud Storage. Its tools let the agent simulate circuits, run QKD links and lattice scenarios, quiz you with practice items, and explain any term.",
     media: { loop: true, poster: "webp", glyph: "spark", tone: "violet" },
   },
