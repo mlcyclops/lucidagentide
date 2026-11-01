@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 import type { WebContents } from "electron";
+import { pluginOrigin } from "./plugins/ports.ts";
 
 /** The OS opener accepts absolute HTTP(S) URLs, never local files or protocol handlers. */
 export function externalHttpUrl(value: unknown): string | null {
@@ -19,6 +20,12 @@ export async function openExternalHttp(value: unknown, open: (url: string) => Pr
   const url = externalHttpUrl(value);
   if (!url) return false;
   try { await open(url); return true; } catch { return false; }
+}
+
+/** A subframe currently showing a plugin page navigating to the SAME plugin origin. Pure. */
+export function pluginSelfNavigation(fromUrl: unknown, toUrl: unknown): boolean {
+  const from = pluginOrigin(fromUrl);
+  return !!from && from === pluginOrigin(toUrl);
 }
 
 type AppContents = Pick<WebContents, "on" | "setWindowOpenHandler" | "mainFrame" | "isDestroyed" | "loadURL">;
@@ -51,8 +58,11 @@ export function installAppNavigation(
   });
   // Only the host may assign a frame's src. Preview scripts/forms must not turn navigation
   // into unapproved network egress. The opaque sandbox and frame CSP remain unchanged.
+  // P-PLUGINS.2 (ADR-0462): the one exception is a plugin page moving within its OWN loopback origin
+  // (a link or form inside the app), which reaches nothing new.
   contents.on("will-frame-navigate", (event) => {
-    if (!event.isMainFrame && event.initiator !== contents.mainFrame) event.preventDefault();
+    if (event.isMainFrame || event.initiator === contents.mainFrame) return;
+    if (!pluginSelfNavigation(event.frame?.url, event.url)) event.preventDefault();
   });
   contents.on("will-redirect", (event) => {
     if (event.isMainFrame || event.initiator !== contents.mainFrame) event.preventDefault();

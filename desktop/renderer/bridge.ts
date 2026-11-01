@@ -574,6 +574,27 @@ export interface KbPackImportView {
    *  file the user sends for support instead of asking them to reproduce a stage name from memory. */
   logPath?: string;
 }
+// P-PLUGINS.2 (ADR-0462): installed `.lplugin` plugins and their runtime (desktop/plugins/*). Every
+// running kind is opened at `url` (http://localhost:<port>/, the plugin's own loopback origin).
+export type PluginKind = "web" | "server" | "daemon";
+export type PluginState = "installed" | "running" | "starting" | "error";
+export type PluginGate = "manifest" | "hash" | "signature" | "authenticode" | "scan" | "download";
+export interface InstalledPluginView {
+  id: string; name: string; version: string; kind: PluginKind;
+  tier: "premium" | "free"; section: "civilian" | "government";
+  state: PluginState; url?: string; error?: string;
+  /** The manifest's license id, e.g. "LUCID-Premium-Plugin-1.0"; the text comes from pluginsLicense. */
+  license: string;
+  /** The plugin registers agent tools (MCP) while it runs. */
+  hasMcp: boolean;
+}
+export interface PluginsListView { plugins: InstalledPluginView[] }
+export type PluginInstallView =
+  | { ok: true; id: string; version: string }
+  | { ok: false; gate: PluginGate; reason: string; logPath?: string };
+export type PluginStartView = { ok: true; url: string } | { ok: false; error: string };
+export type PluginActionView = { ok: true } | { ok: false; error: string };
+export interface PluginLicenseView { ok: boolean; id?: string; version?: string; text?: string; error?: string }
 // P-PROV.1 (ADR-0210): extra per-provider config env (Azure resource/version, Vertex project/location/ADC,
 // Gemini-Enterprise project). Non-secret fields echo `value` to pre-fill; secret fields report `last4`.
 export interface ProviderFieldAuth { env: string; label: string; placeholder?: string; secret?: boolean; set: boolean; value?: string; last4?: string }
@@ -1165,6 +1186,14 @@ export interface LucidBridge {
   kbPackImport(input: { path: string }): Promise<KbPackImportView | null>;
   // P-KGMARKET.4 (ADR-0206): download a signed .lkgpack.zip URL and install it through the gate (read-only).
   kbPackInstallFromUrl(url: string): Promise<KbPackImportView | null>;
+  // P-PLUGINS.2 (ADR-0462): install (every gate fail-closed), run, stop and remove `.lplugin` plugins.
+  pluginsList(): Promise<PluginsListView | null>;
+  pluginsInstallFromUrl(url: string, expectId: string): Promise<PluginInstallView | null>;
+  pluginsStart(id: string): Promise<PluginStartView | null>;
+  pluginsStop(id: string): Promise<PluginActionView | null>;
+  /** keepData defaults to true: the plugin's data dir survives unless the user asks to delete it. */
+  pluginsUninstall(id: string, keepData?: boolean): Promise<PluginActionView | null>;
+  pluginsLicense(id: string): Promise<PluginLicenseView | null>;
   // P-CMD.1 (ADR-0146): user-authored "/" slash commands (workspace .omp/commands/). Create validates +
   // scans fail-closed server-side. `list` = stored commands; `create` returns the persisted command or errors.
   userCommands(): Promise<UserCommand[]>;
@@ -1957,6 +1986,12 @@ export const bridge: LucidBridge = {
   kbPackExport: (input) => post("/api/kb/pack/export", input),
   kbPackImport: (input) => post("/api/kb/pack/import", input),
   kbPackInstallFromUrl: (url) => post("/api/kb/pack/install-from-url", { url }),
+  pluginsList: () => getData("/api/plugins"),
+  pluginsInstallFromUrl: (url, expectId) => post("/api/plugins/install-from-url", { url, expectId }),
+  pluginsStart: (id) => post("/api/plugins/start", { id }),
+  pluginsStop: (id) => post("/api/plugins/stop", { id }),
+  pluginsUninstall: (id, keepData = true) => post("/api/plugins/uninstall", { id, keepData }),
+  pluginsLicense: (id) => getData(`/api/plugins/license?id=${encodeURIComponent(id)}`),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
   clearActiveSkill: () => post("/api/skill", { clear: true }),
   skillActivated: (command, name, source) => post("/api/skill/activated", { command, name, source }),

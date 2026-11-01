@@ -44,8 +44,8 @@ export async function verifyCatalogTitles(page) {
     for (const width of [1280, 375]) {
       await page.setViewport({ width, height: 720 });
       for (const [command, modal, search, query] of [
+        // P-PLUGINS.1 (ADR-0461) retired the Plugin Marketplace modal; its catalog is the Plugins drawer's FREE tab.
         ["Browse Role KG Packs", "#kgpackModal", "#kgpackSearch", "Senior Proposal Manager"],
-        ["Open Plugin Marketplace", "#mktModal", "#mktSearch", "Zotero"],
       ]) {
         await open(command, modal);
         const snapshot = await inspect(modal);
@@ -87,6 +87,6 @@ if (import.meta.main) {
     const page = (await browser.pages()).find(page => page.url() === url);
     if (!page) throw new Error(`No existing QA page at ${url}`);
     console.log(JSON.stringify(await verifyCatalogTitles(page), null, 2));
-    console.log("P-MARKET.1c passed: live pack and plugin titles stay on one line, badges wrap below, full tooltips and search survive.");
+    console.log("P-MARKET.1c passed: live pack titles stay on one line, badges wrap below, full tooltips and search survive.");
   } finally { await browser.disconnect(); }
 }
