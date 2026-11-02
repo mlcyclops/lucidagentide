@@ -13,7 +13,32 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-10-23, v2.4.1 stable, v2.5.0-beta.3 prerelease)
+## Current state (2026-11-01, v2.5.0 stable)
+
+**v2.5.0** (2026-11-01, branch `release/v2.5.0-cut`) is the stable release:
+2.5.0-beta.1 through beta.4 promoted plus everything merged to master since
+beta.4, tagged `v2.5.0` and marked Latest, so the download buttons, the
+electron-updater feed and the Homebrew cask (after its `chore/cask-v2.5.0`
+PR merges) all move to it. It carries the `lucid hub` control plane and
+terminal train (beta.1), the AOS-1 fleet goal with heartbeat and verified
+tasks (beta.2), the headed-browser fix and the beta.3 fixes, and the Plugins
+drawer in the Preview panel with the premium plugin marketplace (P-PLUGINS,
+ADR-0461 to ADR-0466, beta.4). Since beta.4: the Creator-only curriculum and
+explainer built-ins (CREATOR-CURRICULUM, ADR-0467; CREATOR-EXPLAINER,
+ADR-0460), which do not appear in the Agent build, and P-RELEASE.9
+(ADR-0468): the air-gap gate compares Authenticode image digests, so the two
+separately signed copies of one bun (`bun-win32-x64.exe` and its `bun.exe`
+alias) pass; proven by signed test run 41381896437, all four legs green, with
+Windows printing "plain bun alias OK - same image as bun-win32-x64.exe".
+Installing 2.5.0 over 2.4.1 or any 2.5.0 beta keeps settings, sessions and
+keys. The beta paragraphs below describe what each prerelease added.
+
+**v2.5.0-beta.4** (#541) is beta.3 plus P-PLUGINS (ADR-0461 to
+ADR-0466, #537 to #540): the Plugins drawer in the Preview panel (Premium and
+Free, Civilian and Government), signed `.lplugin` install with manifest,
+hash, signature and scanner gates, $29.99 Stripe checkout through the LUCID
+account, the Government access gate, and the owner Marketplace Dashboard.
+The Linux x64 release leg is pinned to ubuntu-24.04 (ADR-0459).
 
 **v2.5.0-beta.3** (2026-10-23, branch `release/v2.5.0-beta.3`) is beta.2 plus
 #523 and #526, fixes only: the agent's headed browser no longer comes up as a
@@ -56,10 +81,9 @@ but its demos do not run yet (a stderr line from the managed-config registry
 probe). Scoped gate: 522 files / 7060 tests.
 
 The original build plan (Increment 0-2 + Phases 2-7) closed long ago; work is
-now product increments, each with its own ADR. **v2.4.1** (2026-10-17) is the
-stable release: 2.4.0 plus the bug fixes merged to master the same day via
-#514 and #516, tagged `v2.4.1` and marked Latest, so the download buttons,
-the electron-updater feed and the Homebrew cask all move to it. No new
+now product increments, each with its own ADR. **v2.4.1** (2026-10-17) was the
+previous stable release: 2.4.0 plus the bug fixes merged to master the same
+day via #514 and #516, tagged `v2.4.1` and marked Latest at the time. No new
 product surface beyond a launcher convenience. SWITCHING (#460, cases 1-5):
 #507 makes "Stop it and switch" stop a running /goal loop and wait for it to
 unwind before the session changes (the maker turn used to be cancelled while

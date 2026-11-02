@@ -692,4 +692,11 @@
 //            the Government access gate, and the owner Marketplace Dashboard. The Linux x64 release leg is
 //            pinned to ubuntu-24.04 (ADR-0459). PRERELEASE: never marked Latest; the Homebrew cask and stable
 //            installs stay on 2.4.1, a beta install updates to the next beta.
-export const APP_VERSION = "2.5.0-beta.4";
+// v2.5.0 = 2.5.0-beta.1 through beta.4 promoted to stable, plus CREATOR-CURRICULUM (ADR-0467: three
+//            Creator-only curriculum built-ins beside the ADR-0460 explainer skills, absent from the Agent
+//            build) and P-RELEASE.9 (ADR-0468): the air-gap gate compares Authenticode image digests
+//            (desktop/build/pe_image.ts), so `bun-win32-x64.exe` and its `bun.exe` alias, signed by two
+//            separate calls whose timestamped signatures differ by a few bytes, still pass as one image;
+//            proven by signed test run 41381896437 (all four legs green). A plain v2.5.0 tag, marked Latest,
+//            so the download buttons, the electron-updater feed and the Homebrew cask all follow it.
+export const APP_VERSION = "2.5.0";
