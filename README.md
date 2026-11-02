@@ -78,19 +78,17 @@ personalization internals are proprietary and intentionally undocumented here - 
 <tr>
 <td align="center">
 
-# 🚀 LUCID v2.4.1 is here
+# 🚀 LUCID v2.5.0 is here
 
-<p align="center"><b>✍️ Windows installers signed by TECHLEAD 187 LLC</b> · <b>🪐 Gemini 4 Argon and Gemini 3.8 Flash, Claude Haiku 5.5</b> · <b>🎮 a paired controller with its own token scope</b> · <b>🔑 OpenAI sign-in by device code</b> · <b>🛡️ Microsoft's container behind the Windows sandbox</b> · <b>🗓 scheduled jobs</b> · <b>🛟 settings that survive a crash</b> · <b>🌐 LAN model servers through the sandbox</b></p>
+<p align="center"><b>🧩 a Plugins drawer with premium plugins</b> · <b>🎯 one fleet goal with a heartbeat and verified tasks</b> · <b>🕹 <code>lucid hub</code> as a control plane any agent can drive</b> · <b>✍️ Windows installers signed by TECHLEAD 187 LLC</b> · <b>🪐 Gemini 4 Argon and Gemini 3.8 Flash, Claude Haiku 5.5</b> · <b>🎮 a paired controller with its own token scope</b> · <b>🔑 OpenAI sign-in by device code</b> · <b>🛡️ Microsoft's container behind the Windows sandbox</b> · <b>🗓 scheduled jobs</b> · <b>🛟 settings that survive a crash</b> · <b>🌐 LAN model servers through the sandbox</b></p>
 
-<a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.4.1"><img src="https://img.shields.io/badge/Download-v2.4.1-c64bd6?style=for-the-badge&logo=github&logoColor=white" alt="Download LUCID v2.4.1" /></a>
+<a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.0"><img src="https://img.shields.io/badge/Download-v2.5.0-c64bd6?style=for-the-badge&logo=github&logoColor=white" alt="Download LUCID v2.5.0" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/issues/new?template=bug_report.yml"><img src="https://img.shields.io/badge/Found%20a%20bug%3F-Open%20an%20issue-d73a49?style=for-the-badge&logo=github&logoColor=white" alt="Found a bug? Open an issue" /></a>
 <a href="#how-to-pull-your-logs"><img src="https://img.shields.io/badge/How%20to-pull%20your%20logs-555555?style=for-the-badge" alt="How to pull your logs" /></a>
 
-<p align="center"><sub>v2.4.1 is v2.4.0 plus the #460 session-switch fixes, honest AI-LOC counting and the Homebrew app cask; installers stay signed by TECHLEAD 187 LLC. The download buttons above, Homebrew and the in-app updater all move to 2.4.1. <a href="#-whats-new-in-v241"><b>What's new in 2.4.1</b></a> · <a href="#-whats-new-in-v240"><b>What's new in 2.4.0</b></a> · <a href="#-lucid-v230-is-here"><b>How to update, and how to report a bug with screenshots and logs</b></a>.</sub></p>
+<p align="center"><sub>v2.5.0 promotes the four 2.5.0 betas to stable: the <code>lucid hub</code> control plane, the AOS-1 fleet goal with verified tasks, the Plugins drawer and premium plugin marketplace; installers stay signed by TECHLEAD 187 LLC. The download buttons above, Homebrew and the in-app updater all move to 2.5.0. <a href="#-whats-new-in-v250"><b>What's new in 2.5.0</b></a> · <a href="#-whats-new-in-v241"><b>What's new in 2.4.1</b></a> · <a href="#-lucid-v230-is-here"><b>How to update, and how to report a bug with screenshots and logs</b></a>.</sub></p>
 
-<p align="center"><sub><b>The 2.4.0 beta channel stopped here.</b> Both prereleases (<code>v2.4.0-beta.1</code>, <code>v2.4.0-beta.2</code>) are promoted into 2.4.0; installing 2.4.0 over either keeps your settings, sessions and keys. <a href="#-v240-shipped-as-betas-first"><b>What the betas carried</b></a>.</sub></p>
-
-<p align="center"><sub><b>🧪 The 2.5.0 beta channel is open.</b> <code>v2.5.0-beta.3</code> is out as a prerelease: fixes on top of beta.2's AOS-1 fleet goal and beta.1's <code>lucid hub</code> terminal train, including the agent's headed browser that came up as a white box. Stable installs and Homebrew stay on 2.4.1. <a href="#-whats-new-in-v250-beta3-prerelease"><b>What's new in 2.5.0-beta.3</b></a> · <a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.0-beta.3"><b>Get the prerelease</b></a>.</sub></p>
+<p align="center"><sub><b>The 2.5.0 beta channel stopped here.</b> All four prereleases (<code>v2.5.0-beta.1</code> through <code>v2.5.0-beta.4</code>) are promoted into 2.5.0; installing 2.5.0 over any of them or over 2.4.1 keeps your settings, sessions and keys. <a href="#-whats-new-in-v250-beta3-prerelease"><b>What the betas carried</b></a>.</sub></p>
 
 </td>
 </tr>
@@ -147,7 +145,7 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ## 🚀 LUCID v2.3.0 is here
 
-> **v2.3.0 is the stable release that fifteen public betas built.** Everything below was tested in the open as a GitHub prerelease, fixed against the reports you filed, and now ships to everyone. **v2.3.1** follows it with four new arcade games ([what's new in 2.3.1](#-whats-new-in-v231)), and **v2.4.0** promotes the next two betas with the first signed Windows installers ([what's new in 2.4.0](#-whats-new-in-v240)); the download buttons at the top of this page, the Homebrew cask and the in-app updater all point at 2.4.0.
+> **v2.3.0 is the stable release that fifteen public betas built.** Everything below was tested in the open as a GitHub prerelease, fixed against the reports you filed, and now ships to everyone. **v2.3.1** follows it with four new arcade games ([what's new in 2.3.1](#-whats-new-in-v231)), and **v2.4.0** promotes the next two betas with the first signed Windows installers ([what's new in 2.4.0](#-whats-new-in-v240)), and **v2.5.0** promotes four more betas with the Plugins drawer, the AOS-1 fleet goal and the `lucid hub` control plane ([what's new in 2.5.0](#-whats-new-in-v250)); the download buttons at the top of this page, the Homebrew cask and the in-app updater all point at 2.5.0.
 
 ### The headlines
 
@@ -168,8 +166,8 @@ The full detail, beta by beta, is in [What's new in v2.3.0](#-whats-new-in-v230)
 
 ### Install or update
 
-1. **Already on LUCID?** On Windows the in-app updater offers 2.4.1; its installer carries the TECHLEAD 187 LLC signature (the updater checks it before installing). On macOS run `brew update && brew upgrade --cask lucidagentide` (Homebrew is the macOS update channel, see [Homebrew](#homebrew-macos); from 2.4.1 the cask is an app cask that also puts `lucid` and `lucid-hub` on PATH). On Linux, download the new AppImage, `.deb` or `.rpm` and install it over the old one. Installing 2.4.1 over 2.4.0, a 2.4.0 beta or 2.3.1 keeps your settings, sessions and keys.
-2. **New install:** use the download buttons at the top of this page, or open the **[v2.4.1 release](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.4.1)** and pick the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
+1. **Already on LUCID?** On Windows the in-app updater offers 2.5.0; its installer carries the TECHLEAD 187 LLC signature (the updater checks it before installing). On macOS run `brew update && brew upgrade --cask lucidagentide` (Homebrew is the macOS update channel, see [Homebrew](#homebrew-macos); the cask is an app cask that also puts `lucid` and `lucid-hub` on PATH). On Linux, download the new AppImage, `.deb` or `.rpm` and install it over the old one. Installing 2.5.0 over 2.4.1, 2.4.0 or a 2.5.0 beta keeps your settings, sessions and keys.
+2. **New install:** use the download buttons at the top of this page, or open the **[v2.5.0 release](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.0)** and pick the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
 
 ### Upgrade notes and known issues
 
@@ -302,6 +300,40 @@ The Main GUI ledger records only live, successfully completed write and edit cal
 > are in this source-available core (managed-config + an audit-export interface); the policy templates and SIEM
 > connectors are a separately-licensed add-on. Metadata-only by construction - no code, prompts, or CUI
 > leave the host.
+
+---
+
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.5.0
+
+> **🧩 Plugins, a fleet goal, and a terminal hub any agent can drive.** v2.5.0 is beta.1 through beta.4 promoted to stable, plus everything merged since beta.4: the `lucid hub` control plane, the AOS-1 fleet goal with a heartbeat and verified tasks, the headed-browser fix, and the Plugins drawer with the premium plugin marketplace. The Windows installers stay signed by **TECHLEAD 187 LLC**.
+>
+> **➡️ Install it:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.5.0](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.0). It is the repository's Latest release: the download buttons, the in-app updater and Homebrew follow it. Installing it over 2.4.1, 2.4.0 or a 2.5.0 beta keeps your settings, sessions and sign-ins.
+
+**Plugins (beta.4)**
+
+- **🧩 A Plugins drawer in the Preview panel** - a Plugins button opens a drawer with Premium and Free tabs and Civilian and Government plugins; the old marketplace modal's rows move to Free beside the built-ins. *(P-PLUGINS.1, [ADR-0461](DECISIONS.md))*
+- **🔏 Signed plugin packages** - a `.lplugin` installs only through fail-closed manifest, hash, signature and scanner gates, and a running plugin opens in its own Preview tab. *(P-PLUGINS.2, [ADR-0462](DECISIONS.md))*
+- **🛒 Premium plugins at $29.99** - checkout through Stripe and your LUCID account, a Government access gate, and an owner Marketplace Dashboard. *(P-PLUGINS.3-6, [ADR-0463 to ADR-0466](DECISIONS.md))*
+
+**Fleet (beta.2)**
+
+- **🎯 One fleet goal with a heartbeat** - a standing goal with success criteria and a mandatory spend and time budget, a 10 s engine heartbeat the orbit reads as alive, late or dead, and stalled spokes reaped. *(P-AOS.1, [ADR-0452](DECISIONS.md))*
+- **✅ Verified tasks** - tasks under the goal with an output contract and acceptance checks, one per idle spoke in dependency order, command checks verified in a separate fail-closed turn, and your review in the orbit. *(P-AOS.2, [ADR-0453](DECISIONS.md))*
+
+**The `lucid hub` terminal (beta.1)**
+
+- **🕹 A control plane** - named spaces with stable ids, tabs behind a clickable rail, Agents and Spaces decks, a per-lane priority, a deck strip and a fuzzy palette, all driven by `lucid hub <cmd>` through a loopback, token-gated control server, with the `lucid-hub` agent skill. *(P-TUI.3-6, [ADR-0433 to ADR-0436](DECISIONS.md))*
+
+**Fixes (beta.2 and beta.3)**
+
+- **🪟 The agent's browser shows up** - the headed browser no longer comes up as a white, frameless box on Windows. *(P-BROWSER.5, [ADR-0456](DECISIONS.md))*
+- **🕘 Timeline, first turn, steps and zoom** - the Timeline no longer opens blank on a large corpus, the first turn no longer reads "Reconnected", tool steps read as separate paragraphs, the Preview zoom moves in 10% steps, and Creator jobs reach the Creator ledger again. *(P-TL.4, P-STEPTEXT.1)*
+
+**Release**
+
+- **🧪 A sturdier signed-build gate** - the air-gap check compares Authenticode image digests, so the two separately signed copies of the bundled bun pass as the same image; proven by a signed test run with all four legs green. *(P-RELEASE.9, [ADR-0468](DECISIONS.md))*
+
+The per-beta notes below stay as the record of what was promoted.
 
 ---
 
@@ -1446,10 +1478,13 @@ Obsidian-vault export), AI-authorship attribution, one-command import, a read-wr
 the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
 guards), a local **RAG knowledge spine** + the **compiled KB** with hybrid retrieval, the governed **skills
 directory** + **Skill Studio**, **local & hybrid providers**, the **Agent Builder**, the **agent firewall**,
-and the **runtime execution boundary** (OS-isolated exec + mediated egress). **v2.5.0-beta.3 (prerelease)**
-adds fixes (the agent's headed browser shown again, ADR-0456) to beta.2's AOS-1 fleet goal, heartbeat and verified tasks on the orbit (P-AOS.1/.2, ADR-0452/0453), which sit on
-beta.1's `lucid hub` terminal train (spaces, tabs, rail, decks, palette and a loopback control server;
-P-TUI.3..6, ADR-0433..0436), for beta installs only. **Newest (v2.4.1):** a patch
+and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v2.5.0):** four
+betas promoted to stable: the **Plugins drawer** in the Preview panel with signed `.lplugin` installs and
+the premium plugin marketplace *(P-PLUGINS, ADR-0461..0466)*; the **AOS-1 fleet goal**, heartbeat and
+verified tasks on the orbit *(P-AOS.1/.2, ADR-0452/0453)*; the **`lucid hub` terminal train** (spaces, tabs,
+rail, decks, palette and a loopback control server; P-TUI.3..6, ADR-0433..0436); the agent's headed browser
+shown again *(ADR-0456)*; and an air-gap gate that accepts two signatures of one bun *(P-RELEASE.9,
+ADR-0468)*. **v2.4.1** was a patch
 release on 2.4.0: the five **session-switch** failures of #460 closed (a forced switch stops the `/goal` loop
 and waits for it to unwind, only goal-kind automations block a switch, the engine's 409 answer decides what
 the thread shows, a late preflight cannot win) *(#507, #509, #510, #511)*; an **honest AI-LOC ledger** that
@@ -1560,7 +1595,7 @@ reads ~1-8 s → ~0-2 ms, idle server CPU ~29% → ~8%); and the **Preview panel
 every model** with bring-your-own-embeddings, server-side **gov lockdown**, the KG-pack marketplace, and the
 overloaded-provider fallback; v1.11.0 brought E2E-encrypted **live collaboration**.)*
 
-**6,900+ tests**: the repo's scoped gate measures **518 files / 6,958 tests** at v2.4.1 (scope defined by
+**7,100+ tests**: the repo's scoped gate measures **528 files / 7,135 tests** at v2.5.0-beta.3 (scope defined by
 exclusion, ADR-0303) plus the Python sidecar's 57, with `tsc --noEmit` clean on the shipping projects. The
 table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-session log.
 
@@ -1568,6 +1603,7 @@ table below is the recent slice; [`PROGRESS.md`](PROGRESS.md) has the full per-s
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **v2.5.0 batch** | **🧩 Four betas promoted to stable** - beta.1 through beta.4 plus everything merged since beta.4, released as the repository's Latest. **PLUGINS** (`P-PLUGINS.1-6`, ADR-0461..0466): the Plugins drawer in the Preview panel (Premium and Free, Civilian and Government), signed `.lplugin` install with manifest, hash, signature and scanner gates, $29.99 Stripe checkout through the LUCID account, the Government access gate and the owner Marketplace Dashboard. **FLEET** (`P-AOS.1/.2`, ADR-0452/0453): one standing fleet goal with a mandatory spend + time budget, a 10 s heartbeat, and verified tasks. **HUB** (`P-TUI.3..6`, ADR-0433..0436): the `lucid hub` control plane, decks, tabs, rail, palette. **FIXES**: the headed browser shown again (ADR-0456), Creator jobs in the Creator ledger, Timeline and first-turn fixes. **CREATOR**: explainer and curriculum built-ins for the Creator build only (ADR-0460, ADR-0467). **RELEASE** (`P-RELEASE.9`, ADR-0468): the air-gap gate compares Authenticode image digests, so the two separately signed copies of one bun pass. | [ADR-0452..0468](DECISIONS.md) |
 | **v2.5.0-beta.3 batch** | **🔧 Prerelease: fixes** - beta.2 plus #523 and #526. **BROWSER** (`P-BROWSER.5`, ADR-0456): omp 18.8 spawns its daemon broker console-less, so the shared headed Chromium was born hidden (a white, frameless box); the engine now shows that window on Windows, once and without activation. **CREATOR**: a shadowed `createJob` import sent every Creator job to the scheduled-jobs factory; they reach the Creator ledger again. **JOBS**: targets carry their repo. **SUBAGENTS**: rows read omp's `i` intent. **WINDOWS**: the `lucid hub` demos pass; stale engine-discovery files are pruned. Prerelease, never Latest: the cask and stable installs stay on 2.4.1. Gate 528 files / 7135 tests. | [ADR-0456](DECISIONS.md) |
 | **v2.5.0-beta.2 batch** | **🎯 Prerelease: the AOS-1 fleet goal and verified tasks** - beta.1 plus #521. **GOAL** (`P-AOS.1`, ADR-0452): one standing goal with criteria and a mandatory spend + time budget, spend charged per lane since the goal started, `blocked` with the reason over budget; a 10 s engine heartbeat the orbit reads as alive / late / dead every second; stalled spokes reaped at 5 min of mid-turn silence; Goal button, hub progress ring, goal panel. **TASKS** (`P-AOS.2`, ADR-0453): output contract + acceptance checks per task, one task per idle spoke in dependency order through `fleet.prompt`, command checks in a separate fail-closed verification turn, human review, retries with the reason up to 2 attempts, restart recovery. **FIXES**: Timeline async single-flight scan (`P-TL.4`), first-turn status line, step paragraphs (`P-STEPTEXT.1`), Preview zoom in 10% steps, session reads through one handle (CodeQL). Prerelease, never Latest: the cask and stable installs stay on 2.4.1. Gate 527 files / 7128 tests. | [ADR-0452..0453](DECISIONS.md) |
 | **v2.5.0-beta.1 batch** | **🧪 Prerelease: the `lucid hub` terminal train** - 2.4.1 plus #515. **CONTROL PLANE** (`P-TUI.3`, ADR-0436): named spaces with stable ids (`s1`, `s1:p2`); one verb parser for the CLI, the `:` prompt and a loopback, ephemeral-port, token + nonce gated control server (0600 discovery file, removed on exit); `lucid hub <cmd>` drives a running hub from any terminal or agent with status/space/pane/agent verbs and the tmux verbs. **DECKS** (`P-TUI.4`): Agents (key 9) and Spaces (key 0) join the hub ring. **TABS + RAIL** (`P-TUI.5`, ADR-0433): spaces hold tabs (`s1:t1`), tmux window = tab and session = space, a persistent left rail (toggle `b`) with SGR mouse clicks. **AGENTS PANEL** (`P-TUI.5 E2`, ADR-0434): one clickable row per lane, a user-set priority 1-9 per lane name, blocked-on-a-human lanes first in each band. **DECK STRIP + PALETTE** (`P-TUI.6`, ADR-0435): live counts with digit shortcuts above the status bar, a fuzzy `ctrl+k` palette over the hub's verbs. The `lucid-hub` agent skill (contract v2). Demos proven on macOS; on Windows the hub works but its demos do not run yet. A GitHub prerelease, never Latest: the cask and stable installs stay on 2.4.1. Scoped gate 522 files / 7060 tests. | [ADR-0433..0436](DECISIONS.md) |
