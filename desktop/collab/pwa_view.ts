@@ -21,6 +21,7 @@
 import type { ChatEvent, FleetLaneStatus } from "../renderer/chat_events.ts";
 import { toolChip } from "../renderer/answer_chips.ts"; // P-REMOTE.9: reuse the desktop's +/- diffstat convention
 import { laneChipBody } from "../renderer/lane_transcript.ts"; // P-REMOTE.16: the SAME drilldown rows a fleet lane card shows (linediff + 400-row cap)
+import { parseImageDataUrl } from "../renderer/image_data_url.ts"; // the strict raster data-URL check a pasted image passes
 import type { CollabSessionHeader, CollabTranscriptTurn, WelcomeFrame } from "./frames.ts";
 import type { GuestPhase, GuestView } from "./guest.ts";
 import type { ProcessView } from "../process_view.ts"; // P-PWA-FLEET.1: pure process rows (type-only)
@@ -98,7 +99,7 @@ const COARSE_KINDS: Record<string, true> = { edit: true, execute: true, read: tr
 function toolItem(t: { id?: string; name: string; detail: string; code?: ViewToolCode; input?: string; intent?: string; ok?: boolean; elapsedMs?: number; add?: number; del?: number }, seq?: number): ViewItem {
   const chip = toolChip(t.name, t.detail, t.code);
   const code = clipCode(t.code);
-  const stat = chip.diffstat ?? (typeof t.add === "number" || typeof t.del === "number" ? { add: t.add ?? 0, del: t.del ?? 0 } : null);
+  const stat = chip.diffstat ?? (typeof t.add === "number" || typeof t.del === "number" ? { add: typeof t.add === "number" ? t.add : 0, del: typeof t.del === "number" ? t.del : 0 } : null);
   return {
     kind: "tool", name: t.name, detail: chip.detail,
     ...(seq !== undefined ? { seq } : {}),
@@ -158,7 +159,7 @@ export function foldEvent(items: ViewItem[], e: ChatEvent, seq?: number): ViewIt
       return out;
     }
     case "subagent":
-      out.push({ kind: "subagent", ...tag, agent: e.agent, title: e.title, count: e.assignments.length });
+      out.push({ kind: "subagent", ...tag, agent: e.agent, title: e.title, count: Array.isArray(e.assignments) ? e.assignments.length : 0 });
       return out;
     case "block":
       out.push({ kind: "block", ...tag, reason: e.reason, severity: e.severity });
@@ -176,6 +177,9 @@ export function foldEvent(items: ViewItem[], e: ChatEvent, seq?: number): ViewIt
     case "preview-snapshot": {
       // P-PREVIEW-PWA.1: a preview capture from the host. Stable id = its index among previews (they only
       // append), so the PWA can re-hydrate its <img> src on every transcript re-render.
+      // The phone uses this as an <img> src AND as the Save link's href, so only a strict raster data URL (the
+      // check a pasted image passes) is kept. A javascript:, http(s): or malformed value is dropped, never shown.
+      if (typeof e.image !== "string" || !parseImageDataUrl(e.image)) return out;
       const n = out.reduce((c, i) => c + (i.kind === "preview" ? 1 : 0), 0);
       out.push({ kind: "preview", ...tag, image: e.image, ...(e.label ? { label: e.label } : {}), id: `shot-${n}` });
       return out;
@@ -329,7 +333,7 @@ export function renderLaneCard(lane: FleetLaneStatus): string {
     // role/tabindex ship in the markup rather than being hydrated afterwards, so the row is reachable by
     // keyboard on the very first paint.
     `<div class="lane-row" role="button" tabindex="0" data-focus-lane="${id}" aria-label="Watch lane ${escapeHtml(lane.name)}"><span class="lane-dot" data-status="${status}"></span><span class="lane-name">${escapeHtml(lane.name)}</span><span class="lane-status">${status}</span></div>` +
-    `<div class="lane-meta"><span class="lane-cwd">${escapeHtml(laneCwdName(lane.cwd))}</span><span class="lane-turns">${lane.turns} turn${lane.turns === 1 ? "" : "s"}</span></div>` +
+    `<div class="lane-meta"><span class="lane-cwd">${escapeHtml(laneCwdName(lane.cwd))}</span><span class="lane-turns">${Number.isFinite(lane.turns) ? lane.turns : 0} turn${lane.turns === 1 ? "" : "s"}</span></div>` +
     pend +
     drive +
     `</div>`;
@@ -570,7 +574,7 @@ export function buildTurnReport(items: ViewItem[], view: { header: CollabSession
 
 /** Render the report as mobile-friendly, screenshot-friendly CARDS (all host text escaped). */
 export function renderReportHtml(r: TurnReport): string {
-  const ctx = r.contextPct != null ? `${r.contextPct}%` : "-";
+  const ctx = typeof r.contextPct === "number" && Number.isFinite(r.contextPct) ? `${r.contextPct}%` : "-";
   const filesRows = r.files.length
     ? r.files.map((f) => `<div class="rp-row"><span class="rp-path">${escapeHtml(f.path)}</span><span class="rp-stat"><span class="add">+${f.add}</span> <span class="del">\u2212${f.del}</span></span></div>`).join("")
     : `<div class="rp-empty">No files changed this run.</div>`;
