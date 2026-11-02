@@ -726,6 +726,17 @@ export class FleetLaneManager {
     return { ok: true };
   }
 
+  /** P-QUEUE-IMG.1 (ADR-0469): Update on a staged chip. Removes the item and hands back its FULL text and
+   *  its own images (the status view only carries a clipped preview and a count), so the card composer can
+   *  load exactly what was staged for editing. Out-of-range is a refusal, never a different item. */
+  queueTake(laneId: string, index: number): { ok: boolean; item?: { text: string; images: LaneImage[] }; reason?: string } {
+    const lane = this.#lanes.get(laneId);
+    if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
+    if (!Number.isInteger(index) || index < 0 || index >= lane.queue.length) return { ok: false, reason: "that staged prompt already ran or was removed" };
+    const [item] = lane.queue.splice(index, 1);
+    return { ok: true, item: { text: item!.text, images: item!.images.slice() } };
+  }
+
   /** Move a staged prompt one slot up (-1) or down (+1). Out-of-range is a quiet no-op. */
   queueMove(laneId: string, index: number, dir: -1 | 1): { ok: boolean } {
     const lane = this.#lanes.get(laneId);

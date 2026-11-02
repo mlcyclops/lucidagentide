@@ -1108,6 +1108,8 @@ export interface LucidBridge {
   /** P-FLEET.L3: the staged-prompt queue - manager-owned; drain streams the next item like a prompt. */
   fleetQueueAdd(laneId: string, text: string, images?: LaneImage[]): Promise<{ ok: boolean; queued?: number; reason?: string } | null>;
   fleetQueueRemove(laneId: string, index: number): Promise<{ ok: boolean } | null>;
+  /** P-QUEUE-IMG.1 (ADR-0469): remove a staged item and return its full text + its own images (Update). */
+  fleetQueueTake(laneId: string, index: number): Promise<{ ok: boolean; item?: { text: string; images: LaneImage[] }; reason?: string } | null>;
   fleetQueueMove(laneId: string, index: number, dir: -1 | 1): Promise<{ ok: boolean } | null>;
   fleetDrain(laneId: string, onEvent: (e: LaneEvent) => void): Promise<void>;
   // P-FLEET.L5: the reviewable timeline (list + open-a-point). Transcript reads are tail-limited.
@@ -1955,6 +1957,7 @@ export const bridge: LucidBridge = {
   },
   fleetQueueAdd: (laneId, text, images) => post("/api/fleet/queue", { laneId, text, ...(images?.length ? { images } : {}) }),
   fleetQueueRemove: (laneId, index) => post("/api/fleet/queue/remove", { laneId, index }),
+  fleetQueueTake: (laneId, index) => post("/api/fleet/queue/take", { laneId, index }),
   fleetQueueMove: (laneId, index, dir) => post("/api/fleet/queue/move", { laneId, index, dir }),
   fleetDrain: (laneId, onEvent) => {
     const sink = onEvent as (e: ChatEvent) => void; // same tagged-union unification as fleetPrompt
