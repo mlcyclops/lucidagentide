@@ -15,10 +15,11 @@
 // a bidi/homoglyph sample → the expected findings, all under the bundled interpreter.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, delimiter as PATH_SEP, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type ArchTag, type Plat, resolveResourcesDir } from "./packaged_tree.ts";
+import { imageDigest } from "./pe_image.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // desktop/build
 const PLAT = process.platform; // "win32" | "linux" | "darwin"
@@ -102,30 +103,26 @@ if (!existsSync(bunPlain)) fail(`plain bun alias missing: ${bunPlain} — omp's 
 // arch-matched one), which surfaced four steps later as `runtimes/bun: 1: Syntax error: ")" unexpected`
 // when /bin/sh got ENOEXEC and fell back to parsing the ELF as a script. Comparing against the
 // arch-suffixed binary names the fault directly instead of leaving a shell parse error as the evidence.
-const plainStat = statSync(bunPlain);
-const archStat = statSync(bunBin);
-if (plainStat.size !== archStat.size) {
+// ADR-0467: compare every byte EXCEPT the Authenticode signature. A signed Windows build signs the two
+// copies separately, and two signatures of one bun can differ in length (v2.5.0-beta.4: 86102320 vs
+// 86102312 bytes), so a size check failed a correct build. imageDigest still hashes the whole program,
+// headers and machine type included, so another arch's bun differs exactly as before.
+let plainDigest = "";
+let archDigest = "";
+try {
+  plainDigest = imageDigest(bunPlain);
+  archDigest = imageDigest(bunBin);
+} catch (e) {
+  fail(`could not read the bun binaries as executables: ${(e as Error).message}`);
+}
+if (plainDigest !== archDigest) {
   fail(
-    `plain bun alias is not a copy of ${basename(bunBin)}: ${plainStat.size} bytes vs ${archStat.size}. ` +
+    `plain bun alias is not a copy of ${basename(bunBin)} (${statSync(bunPlain).size} vs ${statSync(bunBin).size} bytes; ` +
+      `image sha256 ${plainDigest.slice(0, 16)} vs ${archDigest.slice(0, 16)}, signatures excluded). ` +
       `It is almost certainly another arch's bun, which cannot exec here (fetch-runtimes must alias bun-${PLAT}-${ARCH}).`,
   );
 }
-/** The first 64 bytes of a file, read WITHOUT loading it: these binaries are ~60 MB each and only the
- *  ELF/PE header is being compared. */
-function execHeader(p: string): string {
-  const fd = openSync(p, "r");
-  try {
-    const buf = Buffer.alloc(64);
-    readSync(fd, buf, 0, 64, 0);
-    return buf.toString("hex");
-  } finally {
-    closeSync(fd);
-  }
-}
-if (execHeader(bunPlain) !== execHeader(bunBin)) {
-  fail(`plain bun alias has a different executable header than ${basename(bunBin)} — wrong arch or a corrupt copy`);
-}
-console.log(`  plain bun alias OK - byte-matched copy of ${basename(bunBin)}`);
+console.log(`  plain bun alias OK - same image as ${basename(bunBin)} (sha256 ${archDigest.slice(0, 16)}, signatures excluded)`);
 // Run the shim with ONLY the bundled runtimes dir up front, and SCRUB any other bun from PATH, so a green
 // run proves the shim reaches omp through the BUNDLED bun — not a global one the CI/dev box happens to have.
 const scrubbed = (process.env.PATH ?? "").split(PATH_SEP).filter((d) => !existsSync(join(d, `bun${EXE}`)) || d === dirname(bunBin)).join(PATH_SEP);
