@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Tests for build/pe_image.ts (ADR-0467): the air-gap gate's "same bun" comparison.
+// Tests for build/pe_image.ts (ADR-0468): the air-gap gate's "same bun" comparison.
 //
 // The regression: v2.5.0-beta.4's Windows release leg failed because electron-builder Azure-signed
 // bun-win32-x64.exe and its plain bun.exe alias separately, the two signatures came out 8 bytes apart,

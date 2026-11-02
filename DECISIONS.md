@@ -25358,7 +25358,8 @@ Two traps found by measurement before writing anything:
 **Not adopted.** (a) Naming the source school or its endpoints: the crafts are general, and a brand in a trusted prompt would date it and invite copying. (b) A headless or API NotebookLM path: rejected by ADR-0070. (c) Bundling the explainer kit itself: it belongs to the project; the skill carries the rules.
 
 **Consequences.** A Creator build offers five Creator-only built-ins; a standard build offers none of them. Every prompt fits the delivery cap. The guides keep copyrighted material out of repos and packages by rule, not by code: nothing here adds a capability, a route, or a gate change.
-## ADR-0467 -- P-RELEASE.9: the air-gap gate compares the plain bun alias to the arch bun with Authenticode signatures excluded (2026-11-01)
+
+## ADR-0468 -- P-RELEASE.9: the air-gap gate compares the plain bun alias to the arch bun with Authenticode signatures excluded (2026-11-01)
 
 **Status:** Accepted -- BUILT. Proof: `bun test desktop/build/pe_image.test.ts` and a signed Windows build whose air-gap smoke prints `plain bun alias OK - same image as bun-win32-x64.exe`. Amends the alias check of ADR-0364; no change to fetch-runtimes, signing or what ships.
 

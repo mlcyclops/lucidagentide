@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/build/pe_image.ts - P-RELEASE.9 (ADR-0467): "is this file the same program as that one",
+// desktop/build/pe_image.ts - P-RELEASE.9 (ADR-0468): "is this file the same program as that one",
 // answered so an Authenticode signature does not count as a difference.
 //
 // The air-gap gate proves the plain `bun[.exe]` alias is a copy of THIS arch's bun (ADR-0364: the arm64

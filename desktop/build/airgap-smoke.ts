@@ -103,7 +103,7 @@ if (!existsSync(bunPlain)) fail(`plain bun alias missing: ${bunPlain} — omp's 
 // arch-matched one), which surfaced four steps later as `runtimes/bun: 1: Syntax error: ")" unexpected`
 // when /bin/sh got ENOEXEC and fell back to parsing the ELF as a script. Comparing against the
 // arch-suffixed binary names the fault directly instead of leaving a shell parse error as the evidence.
-// ADR-0467: compare every byte EXCEPT the Authenticode signature. A signed Windows build signs the two
+// ADR-0468: compare every byte EXCEPT the Authenticode signature. A signed Windows build signs the two
 // copies separately, and two signatures of one bun can differ in length (v2.5.0-beta.4: 86102320 vs
 // 86102312 bytes), so a size check failed a correct build. imageDigest still hashes the whole program,
 // headers and machine type included, so another arch's bun differs exactly as before.
