@@ -74,7 +74,7 @@ import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptim
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy, snapshotPhaseLabel, STARTING_AGENT_PHASE } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
-import { addQueued, nextHold, pushRecovery, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery
+import { addQueued, editQueued, nextHold, pushRecovery, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery
 import { delegationSettled, filterRunsForBatch, mergeRunSamples, runEta, type RunSample, type TimedRun } from "./subagent_filter.ts"; // P-TASK.5a: scope each delegation card to ITS batch's runs
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView, KbPackImportView, PersonalGraphData } from "./bridge.ts";
@@ -2308,7 +2308,10 @@ async function send(): Promise<void> {
   // P-FLEET.L8: the same when the ATTACHED LANE is mid-turn. The engine runs one turn per lane and refused
   // a second prompt with a lone error the composer never showed, which left the bubble on "Connection
   // lost" and muted the watch: the lane looked dead while it was working.
+  // P-QUEUE-IMG.1 (ADR-0469): the composer's images stay in the composer while the chooser is open; Queue
+  // moves them into the staged item, so they never ride the prompt after it.
   if (turnInFlight()) { ta.value = ""; autosize(ta); setSendEnabled(); openQueueChooser(text); return; }
+  restageBefore = null; // sent, not re-staged: an Update's old slot no longer applies
   // P-NETSTAT.1 (ADR-0423): with no network at all, sending would only manufacture an error that blames
   // the model. Hold the prompt in the transcript behind a stand-by card; it goes out once the link is
   // stable (or on "Send now"). Main only: a lane's turn runs in its own process with its own recovery.
@@ -3003,7 +3006,9 @@ function setSendEnabled(): void {
 /** P-INTERJECT.2 (was P-ACP.4): the staged-prompt STACK above the composer - one chip per item, in run
  *  order. Each chip: a mode badge ("next turn" hold / "mid-turn" push record), the ellipsized text with
  *  the full prompt in its title, Push now on hold items (interject the running turn instead of waiting),
- *  and remove. Every label is its own nowrap span (invariant #11). */
+ *  and remove. Every label is its own nowrap span (invariant #11).
+ *  P-QUEUE-IMG.1 (ADR-0469): an item's own images show as small thumbs (click one to copy it into the
+ *  composer), and a hold item has Update, which pulls its text and images back into the composer. */
 function renderQueued(): void {
   let stack = $("#queuedChip");
   if (!state.queuedItems.length) { stack?.remove(); return; }
@@ -3013,34 +3018,96 @@ function renderQueued(): void {
     row.before(stack); // sits above the composer row, inside .composer-wrap
   }
   const idle = !turnInFlight();
-  stack.innerHTML = state.queuedItems.map((q, i) => `<div class="q-pill" data-tip="${q.mode === "hold" ? (stopHoldsQueue ? "Held because you pressed Stop - it waits until you send" : "Sends automatically when the current turn ends") : "Already pushed into the running turn - kept as a record"}">
+  stack.innerHTML = state.queuedItems.map((q, i) => {
+    const n = q.atts?.length ?? 0;
+    const imgs = n ? `<span class="q-imgs" data-tip="${n} image${n === 1 ? "" : "s"} ride with this prompt|Click one to copy it into the composer">${q.atts!.map((_, j) => `<button class="q-thumb" type="button" data-q-img="${i}:${j}" aria-label="Copy image ${j + 1} into the composer"><img class="q-thumb-img" alt="" /></button>`).join("")}</span>` : "";
+    // Push now is text-only (the interject wire carries no images), so an item with images never pushes:
+    // it stays staged and runs WITH its images as the next turn. The button explains instead of acting.
+    const push = q.mode !== "hold" ? ""
+      : idle ? `<button class="q-push" data-q-push="${i}" data-tip="Send now|Send this as the next turn">Send now</button>`
+      : n ? `<button class="q-push q-push-off" data-q-push="${i}" aria-disabled="true" data-tip="Push now is text only|This prompt carries images, so it runs with them as the next turn">Push now</button>`
+      : `<button class="q-push" data-q-push="${i}" data-tip="Push now|Interject this into the running turn instead of waiting">Push now</button>`;
+    const edit = q.mode === "hold" ? `<button class="q-push q-edit" data-q-edit="${i}" data-tip="Update|Pull this prompt and its images back into the composer to edit">Update</button>` : "";
+    return `<div class="q-pill" data-tip="${q.mode === "hold" ? (stopHoldsQueue ? "Held because you pressed Stop - it waits until you send" : "Sends automatically when the current turn ends") : "Already pushed into the running turn - kept as a record"}">
       <span class="q-label">${q.mode === "hold" ? "next turn" : "mid-turn"}</span>
+      ${imgs}
       <span class="q-text" data-q-i="${i}"></span>
-      ${q.mode === "hold" ? (idle ? `<button class="q-push" data-q-push="${i}" data-tip="Send now|Send this as the next turn">Send now</button>` : `<button class="q-push" data-q-push="${i}" data-tip="Push now|Interject this into the running turn instead of waiting">Push now</button>`) : ""}
+      ${edit}${push}
       <button class="q-cancel" data-q-x="${i}" data-tip="Remove staged prompt">${icon("close", 12)}</button>
-    </div>`).join("");
-  // Prompt text is user content: set it as a DOM property, never interpolated into the HTML string.
-  state.queuedItems.forEach((q, i) => { const t = $(`.q-text[data-q-i="${i}"]`, stack!) as HTMLElement | null; if (t) { t.textContent = q.text; t.title = q.text; } });
+    </div>`;
+  }).join("");
+  // Prompt text and image data are user content: set as DOM properties, never interpolated into HTML.
+  state.queuedItems.forEach((q, i) => {
+    const t = $(`.q-text[data-q-i="${i}"]`, stack!) as HTMLElement | null; if (t) { t.textContent = q.text; t.title = q.text; }
+    (q.atts ?? []).forEach((a, j) => { const img = $(`[data-q-img="${i}:${j}"] .q-thumb-img`, stack!) as HTMLImageElement | null; if (img) img.src = a.dataUrl; });
+  });
   $$("[data-q-x]", stack).forEach((b) => b.addEventListener("click", () => {
     const i = Number((b as HTMLElement).dataset.qX);
     state.queuedItems = state.queuedItems.filter((_, n) => n !== i);
     renderQueued(); ($("#input") as HTMLTextAreaElement)?.focus();
   }));
+  $$("[data-q-edit]", stack).forEach((b) => b.addEventListener("click", () => editStagedPrompt(Number((b as HTMLElement).dataset.qEdit))));
+  $$("[data-q-img]", stack).forEach((b) => b.addEventListener("click", () => {
+    const [i, j] = ((b as HTMLElement).dataset.qImg ?? "").split(":").map(Number);
+    const a = state.queuedItems[i!]?.atts?.[j!]; if (!a) return;
+    // A copy, re-validated like any paste (fail-closed): the staged prompt keeps its own image.
+    const r = acceptAttachment(state.attachments, a.dataUrl, `att_${++attSeq}`, a.name);
+    if (!r.ok || !r.attachment) { showToast({ tone: "warn", title: "Couldn't copy image", desc: r.reason ?? "" }); return; }
+    state.attachments.push(r.attachment); renderComposerThumbs();
+    showToast({ title: "Image copied to the composer", desc: "It rides with the next prompt you send or stage. The staged prompt keeps its own copy.", timeout: 2500 });
+  }));
   $$("[data-q-push]", stack).forEach((b) => b.addEventListener("click", () => {
     const i = Number((b as HTMLElement).dataset.qPush);
     const item = state.queuedItems[i]; if (!item) return;
+    if (turnInFlight() && item.atts?.length) {
+      showToast({ tone: "warn", title: "Push now is text only", desc: "A mid-turn push cannot carry images. This prompt stays staged and runs with its images as the next turn.", timeout: 5000 });
+      return;
+    }
     state.queuedItems = state.queuedItems.filter((_, n) => n !== i);
     renderQueued();
     // Nothing running (e.g. after Stop): the staged prompt becomes the next turn, unless the user has a
-    // draft in the composer, which is never clobbered (it stays staged instead).
+    // draft in the composer (text or images), which is never clobbered (it stays staged instead).
     if (!turnInFlight()) {
-      const ta = $("#input") as HTMLTextAreaElement | null;
-      if (!ta || ta.value.trim()) { state.queuedItems = [...state.queuedItems.slice(0, i), item, ...state.queuedItems.slice(i)]; renderQueued(); return; }
-      ta.value = item.text; setSendEnabled(); void send();
+      if (composerHasDraft()) { state.queuedItems = [...state.queuedItems.slice(0, i), item, ...state.queuedItems.slice(i)]; renderQueued(); return; }
+      loadComposer(item); void send();
       return;
     }
     void pushMidTurn(item.text, i);
   }));
+}
+
+/** P-QUEUE-IMG.1 (ADR-0469): the composer holds something the user is writing - text OR images. Every
+ *  path that would load a staged prompt into the composer refuses rather than overwrite or merge into it. */
+function composerHasDraft(): boolean {
+  const ta = $("#input") as HTMLTextAreaElement | null;
+  return !ta || !!ta.value.trim() || state.attachments.length > 0;
+}
+
+/** P-QUEUE-IMG.1 (ADR-0469): put a staged item's text AND its own images into the composer (the caller has
+ *  checked composerHasDraft). A following send() carries exactly these images, nothing else. */
+function loadComposer(item: QueuedItem): void {
+  const ta = $("#input") as HTMLTextAreaElement | null; if (!ta) return;
+  ta.value = item.text; autosize(ta);
+  state.attachments = (item.atts ?? []).slice();
+  renderComposerThumbs(); // also refreshes send-enabled
+}
+
+/** P-QUEUE-IMG.1 (ADR-0469): Update re-stages at the old slot - just ahead of the item that followed the
+ *  one pulled out (null: it was last). Consumed by the next stage; cleared by a send that does not stage. */
+let restageBefore: QueuedItem | null = null;
+
+/** P-QUEUE-IMG.1 (ADR-0469): Update on a staged "next turn" pill - the item leaves the stack and its text
+ *  and images go back into the composer, removable, with room to paste more. A draft is never touched. */
+function editStagedPrompt(i: number): void {
+  const ta = $("#input") as HTMLTextAreaElement | null; if (!ta) return;
+  const r = editQueued(state.queuedItems, i, { text: ta.value, atts: state.attachments.length });
+  if (!r.ok) {
+    if (r.code === "draft") showToast({ tone: "warn", title: "Composer has a draft", desc: "Update never overwrites what you are writing. Send, stage or clear the composer, then press Update.", timeout: 5000 });
+    return;
+  }
+  state.queuedItems = r.rest; restageBefore = r.before; renderQueued();
+  loadComposer(r.item); ta.focus();
+  showToast({ title: "Staged prompt back in the composer", desc: "Edit the text or its images. Staged again, it keeps its place in the stack.", timeout: 3000 });
 }
 /** A deliberate Stop halts the staged queue as well as the turn: a prompt held behind the stopped turn stays
  *  staged (visible, pushable) instead of starting a new turn the moment this one ends. Set here, before the
@@ -3076,10 +3143,9 @@ function releaseHeldPrompt(): void {
   if (stopHoldsQueue) return; // the user pressed Stop: nothing starts again until they send
   const nq = nextHold(state.queuedItems);
   if (!nq.item) return;
-  const ta = $("#input") as HTMLTextAreaElement | null;
-  if (!ta || ta.value.trim()) return;
+  if (composerHasDraft()) return; // P-QUEUE-IMG.1: pasted images are a draft too; never swept into this send
   state.queuedItems = nq.rest; renderQueued();
-  ta.value = nq.item.text; setSendEnabled(); void send();
+  loadComposer(nq.item); void send(); // the item's OWN images ride with it (ADR-0469)
 }
 
 /** P-INTERJECT.2: interject a note into the RUNNING turn (the attached lane's, or the master's) + leave a
@@ -3095,7 +3161,7 @@ async function pushMidTurn(text: string, at = state.queuedItems.length): Promise
   // flag set, and a send() with it set would open the chooser again for a turn that no longer exists.
   if (r.code === "idle" && laneId) laneTurnLive = false;
   const ta = $("#input") as HTMLTextAreaElement | null;
-  const plan = pushRecovery(r.code, r.reason, { draft: !ta || !!ta.value.trim(), ownTurnOpen: state.streaming });
+  const plan = pushRecovery(r.code, r.reason, { draft: composerHasDraft(), ownTurnOpen: state.streaming });
   if (ta && plan.keep !== "stage") {
     ta.value = text; autosize(ta); setSendEnabled();
     if (plan.keep === "send") void send(); else ta.focus();
@@ -3298,8 +3364,6 @@ function demoteLane(): void {
   const held = nextHold(state.queuedItems);
   if (held.item) {
     state.queuedItems = state.queuedItems.filter((q) => q.mode !== "hold"); renderQueued();
-    const ta = $("#input") as HTMLTextAreaElement | null;
-    if (ta && !ta.value.trim()) { ta.value = held.item.text; autosize(ta); setSendEnabled(); }
     showToast({ tone: "warn", title: "Staged prompt not sent", desc: "It was waiting for the lane's turn to end. It is back in the composer; reattach the lane to send it there.", timeout: 7000 });
   }
   // Leaving mid-turn: freeze the half-written bubble rather than stranding it in a "running" state that
@@ -3317,6 +3381,9 @@ function demoteLane(): void {
     showToast({ tone: "warn", title: "The lane still shows as attached", desc: "The composer is back on the main chat, but the fleet did not confirm the release. It will reconcile on the next fleet poll.", actions: [{ label: "OK" }], timeout: 6000 });
   }).catch(() => { /* best-effort: fleetDemote is idempotent and the next poll reconciles */ });
   swapAttachments(was, MASTER_TARGET);
+  // P-QUEUE-IMG.1 (ADR-0469): the held prompt comes back WITH its own images, after the swap, so they land
+  // in the composer the user is now looking at instead of being parked under the lane.
+  if (held.item && !composerHasDraft()) loadComposer(held.item);
   state.composerTarget = MASTER_TARGET;
   state.liveUsage = null; // P-FLEET.L17: the lane's samples leave with it; the master's next turn refills.
   // Restore BEFORE the notice: renderThread clears the thread, so a notice appended first would be wiped.
@@ -3541,13 +3608,22 @@ function openQueueChooser(text: string): void {
   ($("[data-qc-hold]", ch) as HTMLElement).addEventListener("click", () => {
     closeQueueChooser();
     if (!turnInFlight()) { resend(); return; }
-    const r = addQueued(state.queuedItems, text, "hold");
-    if (r.ok) { state.queuedItems = r.items; renderQueued(); }
+    // P-QUEUE-IMG.1 (ADR-0469): the images in the composer move INTO this item and leave the composer, so
+    // they run with this prompt and never ride whatever is sent next. An Update re-stage keeps its slot.
+    const r = addQueued(state.queuedItems, text, "hold", { atts: state.attachments, before: restageBefore });
+    if (r.ok) { state.queuedItems = r.items; restageBefore = null; state.attachments = []; renderComposerThumbs(); renderQueued(); }
     else showToast({ tone: "warn", title: "Not staged", desc: `${r.reason ?? "refused"}.`, timeout: 5000 });
   });
   ($("[data-qc-push]", ch) as HTMLElement).addEventListener("click", () => {
+    // P-QUEUE-IMG.1: a mid-turn push is text only. With images in the composer it would leave them behind
+    // for the next prompt, so the chooser stays open and says so instead.
+    if (turnInFlight() && state.attachments.length) {
+      showToast({ tone: "warn", title: "Push mid-turn is text only", desc: "A push cannot carry images. Queue it for the next turn to send them together, or remove the images to push the text.", timeout: 6000 });
+      return;
+    }
     closeQueueChooser();
     if (!turnInFlight()) { resend(); return; }
+    restageBefore = null;
     void pushMidTurn(text);
   });
   ($("[data-qc-x]", ch) as HTMLElement).addEventListener("click", () => {
@@ -16884,6 +16960,7 @@ function wire(): void {
     fleetRespawn: bridge.fleetRespawn, // P-FLEET.L4: revive in place, memory carried
     fleetQueueAdd: bridge.fleetQueueAdd, // P-FLEET.L3: stage a prompt while the lane is busy
     fleetQueueRemove: bridge.fleetQueueRemove,
+    fleetQueueTake: bridge.fleetQueueTake, // P-QUEUE-IMG.1: Update pulls a staged item + its images back
     fleetQueueMove: bridge.fleetQueueMove,
     fleetDrain: bridge.fleetDrain, // P-FLEET.L3: stream the next staged prompt when idle
     fleetWatch: bridge.fleetWatch, // P-FLEET.L11: the card FOLLOWS a lane the main composer is driving

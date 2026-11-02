@@ -10,10 +10,15 @@
 // so they stay testable without a browser.
 
 import type { InterjectResult } from "./bridge.ts";
+import type { Attachment } from "./composer_attachments.ts";
 
 export interface QueuedItem {
   text: string;
   mode: "hold" | "push";
+  /** P-QUEUE-IMG.1 (ADR-0469): the images pasted into the composer when THIS prompt was staged. The item
+   *  owns them: they leave the composer at staging and go out with this item (drain, Send now), never with
+   *  whatever the composer sends next. Absent means text only. */
+  atts?: Attachment[];
 }
 
 export interface AddQueuedResult {
@@ -22,16 +27,36 @@ export interface AddQueuedResult {
   reason?: string;
 }
 
-/** Stage a prompt. Trims; refuses empty text, an exact duplicate of the LAST staged item (double-Enter
- *  protection - a deliberate repeat elsewhere in the stack is allowed), and a full queue. Never mutates
- *  `items` - the caller swaps in the returned array. */
-export function addQueued(items: QueuedItem[], text: string, mode: "hold" | "push", cap = 8): AddQueuedResult {
+/** Stage a prompt. Trims; refuses an item with neither text nor images, an exact text-only duplicate of
+ *  the LAST staged item (double-Enter protection - a deliberate repeat elsewhere in the stack, or the same
+ *  words with images, is allowed), and a full queue. `atts` become the item's own images. `before` re-stages
+ *  an item pulled out by Update at its old slot: it lands just ahead of the item that followed it, or at the
+ *  end when that item is gone (ran, or removed) or was null. Never mutates `items` - the caller swaps in the
+ *  returned array. */
+export function addQueued(items: QueuedItem[], text: string, mode: "hold" | "push", opts: { atts?: Attachment[]; before?: QueuedItem | null; cap?: number } = {}): AddQueuedResult {
   const t = text.trim();
-  if (!t) return { items, ok: false, reason: "empty prompt" };
+  const atts = opts.atts ?? [];
+  const cap = opts.cap ?? 8;
+  if (!t && !atts.length) return { items, ok: false, reason: "empty prompt" };
   const last = items[items.length - 1];
-  if (last && last.text === t) return { items, ok: false, reason: "already staged (same as the last item)" };
+  if (last && last.text === t && !atts.length) return { items, ok: false, reason: "already staged (same as the last item)" };
   if (items.length >= cap) return { items, ok: false, reason: `queue is full (${cap} staged)` };
-  return { items: [...items, { text: t, mode }], ok: true };
+  const item: QueuedItem = atts.length ? { text: t, mode, atts: atts.slice() } : { text: t, mode };
+  const at = opts.before ? items.indexOf(opts.before) : -1;
+  return { items: at < 0 ? [...items, item] : [...items.slice(0, at), item, ...items.slice(at)], ok: true };
+}
+
+/** P-QUEUE-IMG.1 (ADR-0469): Update on a staged "next turn" item. It leaves the queue and its text and its
+ *  own images go back into the composer for editing. Refused (nothing moves) when the composer holds a
+ *  draft, text OR images, because a draft is never overwritten or merged into; and for a "push" record,
+ *  which already went into the running turn. `before` is the item that followed it, for addQueued to
+ *  re-stage the edited prompt in the same slot. */
+export function editQueued(items: QueuedItem[], i: number, draft: { text: string; atts: number }): { ok: true; item: QueuedItem; rest: QueuedItem[]; before: QueuedItem | null } | { ok: false; code: "gone" | "pushed" | "draft" } {
+  const item = items[i];
+  if (!item) return { ok: false, code: "gone" };
+  if (item.mode !== "hold") return { ok: false, code: "pushed" };
+  if (draft.text.trim() || draft.atts > 0) return { ok: false, code: "draft" };
+  return { ok: true, item, rest: items.filter((_, n) => n !== i), before: items[i + 1] ?? null };
 }
 
 /** ADR-0414: where a refused Push puts the user's text. There is deliberately no "drop": `send` runs it
