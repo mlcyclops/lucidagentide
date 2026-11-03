@@ -130,6 +130,7 @@ import { DICTATION_DEFAULTS, dictationTick, downmixMono, encodeWavPcm16, mergeTr
 import { buildHubSections, configuredProviderCount, credentialedProviderIds, HUB_NON_MODEL_EXCLUDE, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
 import { LOCAL_MODEL_PRESETS } from "./local_presets.ts"; // P-LOCAL.4: one-click local-model presets in the hub
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
+import { installVaultEnvPanel, offerVaultEnvImport, VAULT_ENV_SEC, vaultEnvBodyHtml } from "./vault_env_panel.ts"; // P-VAULT-ENV.1 (ADR-0477)
 import { bumpSkillUsage, bundledSkillsByUsage, installedSkills, isSkillEnabled, setSkillEnabled, taskProforma } from "./skills.ts"; // ADR-0460: flavor-gated built-ins
 import { renderSkillInspect, renderSkillsDirectory, renderStudioCandidate, skillsDirSig, type SkillDirRow } from "./skills_dir.ts"; // P-SKILL.4 (ADR-0097) / P-SKILL.5 (ADR-0101)
 import { skillKey, type SkillRoot, trustEnableable } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097)
@@ -5673,6 +5674,7 @@ function settingsShell(): string {
     setSkel("mcp", "MCP connectors", "model context protocol", true),
     setSkel("agents", "Remote agents", "hermes · openclaw · ACP firewall", true), // P-AGENTFW.2 (ADR-0149)
     setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
+    setCard(VAULT_ENV_SEC, "Import from .env", "workspace secrets · names only", vaultEnvBodyHtml(), true), // P-VAULT-ENV.1 (ADR-0477)
     setSkel("others", "More providers", "", true),
     setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
     setSkel("judgment", "Judgment", "None by default \u00b7 Jev \u00b7 your models", true), // P-JEV.1 (ADR-0374) + P-JEV.5
@@ -10995,6 +10997,7 @@ function renderWorkspaceBar(): void {
   if (!bar) return;
   if (!w) { bar.hidden = true; return; }
   bar.hidden = false;
+  void offerVaultEnvImport(w.current, openSettings); // P-VAULT-ENV.1: once per workspace with a .env
   // P-REPO.1 (ADR-0406): under the workspace name, the repo Main actually works in (it can be a checkout
   // inside the workspace folder) and where its commits go - ONLY when it pushes to a hosted remote. A plain
   // folder or a local-only repo shows just the workspace name: nothing to warn about.
@@ -16884,6 +16887,7 @@ function wire(): void {
     applyVoiceDockShape();
   });
   void bridge.voiceSettings().then((v) => { if (v) { state.voice = v; updateVoiceChip(); } });
+  installVaultEnvPanel(); // P-VAULT-ENV.1 (ADR-0477): the Settings "Import from .env" card's buttons
   // P-FLEET.L1: the fleet grid dashboard - headless local lanes as streaming mini agent windows.
   initFleetGrid({
     hubOpen: openTerminalHub, // P-TUI.2

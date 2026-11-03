@@ -1581,7 +1581,7 @@ function readToken(): string {
   return (document.querySelector('meta[name="lucid-token"]') as HTMLMetaElement | null)?.content ?? "";
 }
 const TOKEN = readToken();
-const authHeaders = (extra?: Record<string, string>): Record<string, string> =>
+export const authHeaders = (extra?: Record<string, string>): Record<string, string> =>
   ({ ...(TOKEN ? { "x-lucid-token": TOKEN } : {}), ...extra });
 
 async function getData(path: string): Promise<any> {

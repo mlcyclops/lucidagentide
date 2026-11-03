@@ -170,6 +170,7 @@ import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 /
 import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: Meeting Hub client; loading it takes LUCID_MEETING_HUB_TOKEN out of process.env before any child spawns
 import { handleVaultRoutes } from "./vault_routes.ts"; // P-VAULT-V2.1 (ADR-0474): /api/vault/*; loading it takes LUCID_VAULT_MAIN_TOKEN out of process.env
 import { applyVaultEnv } from "./vault_env.ts"; // P-VAULT-V2.1 (ADR-0474): engine-side credential env
+import { workspaceSecretEnv } from "./vault_env_import.ts"; // P-VAULT-ENV.1 (ADR-0477): a lane's workspace-scoped secrets
 import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
 import { ensureHiddenConsole, ompWindowsHide } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): a hidden console the omp children share
 import { setDefaultWindowsHide } from "./acp.ts";
@@ -1777,7 +1778,7 @@ const fleet: FleetLaneManager = new FleetLaneManager({
   argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger,
   masterSessionId: () => backend.currentSessionId(), // P-SWITCH.2 (ADR-0404): one session, one owner
   claims: backend.writeClaims, history: backend.durations, // P-WAIT.1: one set of file claims, P-PROGRESS.1: one estimate history, with the master
-  env: (laneId) => ({ ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }),
+  env: (laneId, cwd) => ({ ...workspaceSecretEnv(cwd) /* P-VAULT-ENV.1 */, ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }),
   interject: (laneId, text) => { addInterject(laneId, text); },
   carriedNotes: carryPendingNotes, // ADR-0414: notes no tool step picked up ride the lane's next prompt
   // P-OWN.1: a spoke's authored path lands in the ledger; its prompts open with the checkout briefing.

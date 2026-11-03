@@ -25,6 +25,7 @@ import { isValidRef } from "./cred_vault.ts";
 import { isEnvName, VAULT_KINDS, type VaultKind } from "./engine_vault.ts";
 import { tokenValid } from "./origin_guard.ts";
 import { applyVaultEnv } from "./vault_env.ts";
+import { handleVaultEnvRoutes } from "./vault_env_routes.ts";
 import {
   credList, credViewOf, importLegacyCredential, isVaultRef, mintCredRef, vaultDelete, vaultGet, vaultList, vaultPut, vaultRotate,
   vaultStatus, workspaceRef,
@@ -202,6 +203,7 @@ async function mainRoute(req: Request, p: string): Promise<Response | null> {
  *  slice's own module can serve it). */
 export async function handleVaultRoutes(req: Request, p: string, ctx: VaultRouteCtx): Promise<Response | null> {
   if (!p.startsWith("/api/vault/")) return null;
+  const envRoute = await handleVaultEnvRoutes(req, p, ctx); if (envRoute) return envRoute; // P-VAULT-ENV.1 (ADR-0477)
   const isMain = p.startsWith("/api/vault/main/");
   if (!isMain && !VAULT_UI_ROUTES.includes(p)) return null;
   if (!tokenValid(req.headers.get("x-lucid-token"), ctx.uiToken)) return fail(403, "forbidden");
