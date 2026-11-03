@@ -60,6 +60,18 @@ lucid-agents.json
 # ...but these are first-party SOURCE files (the Agent Builder secret guardrail), not secrets:
 !**/secret_guard.ts
 !**/secret_guard.test.ts
+# P-SECRET-INTAKE.1 (ADR-0476) source, tests and docs: code that COLLECTS secrets, never a secret itself.
+!desktop/secret_intake.ts
+!desktop/secret_intake.test.ts
+!desktop/secret_intake_view.ts
+!desktop/secret_routes.ts
+!desktop/secret_fallback.ts
+!desktop/secret_fallback.test.ts
+!desktop/renderer/secret_intake.ts
+!harness/omp/secret_intake_extension.ts
+!harness/omp/secret_intake_extension.test.ts
+!.agents/skills/secret-intake/
+!docs/adr-drafts/ADR-0476-P-SECRET-INTAKE.1.md
 
 # desktop electron-builder output
 desktop/release/
