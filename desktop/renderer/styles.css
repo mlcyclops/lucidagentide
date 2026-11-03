@@ -6688,3 +6688,15 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 @media (prefers-reduced-motion: reduce){
   .hud-eta[data-state="estimating"],.sa-eta[data-state="estimating"],.subagent-eta[data-state="estimating"]{animation:none}
 }
+
+/* P-VAULT-UI.1 (ADR-0475): Settings > Credential vault. Invariant 11: the row label owns the header's free
+   space and ellipsizes; every metadata line is a block that never wraps. */
+.vault-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vault-row .prov-h{margin-bottom:6px}
+.vault-line{font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.vault-ref{font-family:var(--mono)}
+.vault-row .prov-row{margin-top:8px}
+.vault-strength:empty{display:none}
+.vault-strength[data-score="0"],.vault-strength[data-score="1"]{color:var(--red-txt)}
+.vault-strength[data-score="2"]{color:var(--cyan-txt)}
+.vault-strength[data-score="3"],.vault-strength[data-score="4"]{color:var(--green-txt)}

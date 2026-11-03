@@ -731,6 +731,23 @@ ipcMain.handle("lucid:pickFile", async (e, opts: unknown) => {
   return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
 });
 
+// P-VAULT-UI.1 (ADR-0475): native SAVE dialog for a text file the renderer already holds (the encrypted
+// `.lucidvault` backup: ciphertext, never a plaintext secret). The user picks the path; main writes the text
+// there owner-only (0600 where the OS honors it). Returns the path, null on cancel, or { error }.
+ipcMain.handle("lucid:saveTextFile", async (e, opts: unknown) => {
+  const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+  const o = (opts ?? {}) as { title?: unknown; defaultName?: unknown; filters?: unknown; text?: unknown };
+  if (typeof o.text !== "string") return { error: "nothing to save" };
+  const filters = Array.isArray(o.filters) ? (o.filters as { name: string; extensions: string[] }[]) : undefined;
+  const r = await dialog.showSaveDialog(w!, {
+    title: typeof o.title === "string" ? o.title : "Save file",
+    ...(typeof o.defaultName === "string" && o.defaultName ? { defaultPath: basename(o.defaultName) } : {}),
+    ...(filters ? { filters } : {}),
+  });
+  if (r.canceled || !r.filePath) return null;
+  try { writeFileSync(r.filePath, o.text, { encoding: "utf8", mode: 0o600 }); return r.filePath; } catch (err) { return { error: (err instanceof Error ? err.message : String(err)).slice(0, 200) }; }
+});
+
 // P-NETWL.1 (ADR-0106): the legacy safeStorage credential vault (cred_vault.ts), main-only because Electron's
 // safeStorage is. P-VAULT-V2.1 (ADR-0474): it is now only READ (env injection for entries not yet migrated)
 // and drained into the engine vault (migrateLegacyCreds); every new credential goes to the engine. The
