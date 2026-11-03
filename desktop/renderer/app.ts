@@ -15,6 +15,7 @@ import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_rest
 // P-RECOVER.1 (ADR-0385): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
 import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
 import { REPORT_SAVED, clearRecoveryNotice, openIncidentSubmit, showIncidentNotice, showRecoveryNotice, type NoticeAction } from "./incident_notice.ts";
+import { mountSecretIntake, showSecretRequest } from "./secret_intake.ts"; // P-SECRET-INTAKE.1 (ADR-0476): the agent's secret dialog
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { externalHttpUrl } from "../navigation_policy.ts";
 import type { MascotInputs } from "./mascot.ts"; // One session-reactive sprite: composer or Arcade.
@@ -2832,6 +2833,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     else if (e.type === "design-available") showToast({ tone: "ok", title: "DESIGN.md is ready", desc: "The agent wrote your design invariants. Review + edit them in the IDE.", actions: [{ label: "Review in the IDE", kind: "ok", run: () => void openDesignInIde() }], timeout: 10000 }); // P-FIGMA.2 (ADR-0154)
     else if (e.type === "agent-builder-open") openAgentBuilderWithSpec(e.spec); // P-AGENT.8.2
     else if (e.type === "slash-command-created") void onSlashCommandCreated(e.command); // P-CMD.1
+    else if (e.type === "secret-request") showSecretRequest(e.request); // P-SECRET-INTAKE.1 (ADR-0476)
     // `used`/`size`/`cost` are the only figures the provider reports over ACP. While attached to a lane
     // these are that lane's own samples, which is why the ring and the rail both follow the attachment.
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
@@ -19330,6 +19332,7 @@ initResize();
 seedThread();
 void recoverMasterTurn();
 void startupRecovery(); // P-RECOVER.1 (ADR-0385): resume the previous session after an unclean exit, report either way
+mountSecretIntake(); // P-SECRET-INTAKE.1 (ADR-0476): re-open a secret request still waiting after a reload
 // Sessions panel: remember your choice across launches; default OPEN so a past
 // conversation is one click away (it used to start collapsed → expand-then-click felt like
 // a double-click). Collapse it once and it stays collapsed.

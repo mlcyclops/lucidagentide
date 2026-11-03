@@ -170,6 +170,7 @@ import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 /
 import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: Meeting Hub client; loading it takes LUCID_MEETING_HUB_TOKEN out of process.env before any child spawns
 import { handleVaultRoutes } from "./vault_routes.ts"; // P-VAULT-V2.1 (ADR-0474): /api/vault/*; loading it takes LUCID_VAULT_MAIN_TOKEN out of process.env
 import { applyVaultEnv } from "./vault_env.ts"; // P-VAULT-V2.1 (ADR-0474): engine-side credential env
+import { handleSecretRoutes, SECRET_AGENT_ROUTE } from "./secret_routes.ts"; // P-SECRET-INTAKE.1 (ADR-0476): /api/secret/*
 import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
 import { ensureHiddenConsole, ompWindowsHide } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): a hidden console the omp children share
 import { setDefaultWindowsHide } from "./acp.ts";
@@ -1732,6 +1733,7 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/agent/beat",         // P-HEALTH.3: the stream_beat extension says a tool call is still being written
   "/api/judgment/trace",     // P-JEV.2 (ADR-0377): the judgment extension reports each typed judgment
   "/api/kg/recall", "/api/kg/retain", // P-KG.3: the memory_recall / memory_retain tools
+  SECRET_AGENT_ROUTE,        // P-SECRET-INTAKE.1 (ADR-0476): request_secret parks here until the user answers (never a value back)
   // Design suite: design_read / design_apply / design_request. The agent reads a manifest REBUILT from the
   // validated document and queues ops; it can never push state, ack batches, or export (UI token only).
   "/api/creator/design/manifest", "/api/creator/design/ops", "/api/creator/design/ops/result",
@@ -2466,6 +2468,7 @@ return Bun.serve({
     try {
       if (p.startsWith("/api/controller/")) return await handleController(req, p, ctrlPairing, controllerDeps);
       const vr = await handleVaultRoutes(req, p, { uiToken: TOKEN }); if (vr) return vr; // P-VAULT-V2.1 (ADR-0474)
+      const sr = await handleSecretRoutes(req, p, { uiToken: TOKEN, agentToken: AGENT_TOKEN, srv, emit: (r) => backend.requestSecretDialog(r) }); if (sr) return sr; // P-SECRET-INTAKE.1 (ADR-0476)
       if (p === "/app.js") {
         const { js } = await bundleApp();
         return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
@@ -6856,6 +6859,7 @@ process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/
 // claim here. Same token'd convention as LUCID_FLEET_STATUS_URL; the endpoint applies NOTHING without a
 // fresh matching approval parked by the desktop's grant dialog (fail-closed, defense in depth).
 process.env.LUCID_SANDBOX_GRANT_URL = `http://127.0.0.1:${server.port}/api/sandbox/grant?t=${AGENT_TOKEN}`;
+process.env.LUCID_SECRET_REQUEST_URL = `http://127.0.0.1:${server.port}${SECRET_AGENT_ROUTE}?t=${AGENT_TOKEN}`; // P-SECRET-INTAKE.1 (ADR-0476): request_secret
 // P-SANDBOX.17 (ADR-0399): tools/git-broker/git_shim.ts POSTs the contained agent's git calls here.
 process.env.LUCID_GIT_URL = `http://127.0.0.1:${server.port}/api/git/exec?t=${AGENT_TOKEN}`;
 // P-EVAL.4 (ADR-0318): the tool_meta extension POSTs {id,name,ok?} here for every tool call, because the

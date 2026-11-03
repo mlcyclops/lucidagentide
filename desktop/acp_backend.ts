@@ -94,6 +94,7 @@ import { agentBuilderOpenSpec } from "../harness/agent/handoff.ts"; // P-AGENT.8
 import type { AgentSpec } from "../harness/agent/spec.ts";
 import { slashCommandCreateDraft } from "../harness/commands/handoff.ts"; // P-CMD.1: chat -> user slash command
 import type { UserCommand } from "../harness/commands/spec.ts";
+import type { SecretRequestView } from "./secret_intake_view.ts"; // P-SECRET-INTAKE.1 (ADR-0476)
 import { gateDenyReason } from "./gate_audit.ts";
 import { type ElicitationAnswer, type ExecChoice, type ExecClass, classifyCommand, classifyEval, elicitationAnswer, elicitationOptions, execStore, execVerdict, recordExec } from "./exec_policy.ts";
 import { toolFailureCommand, toolFailureDetail, toolFailureReason } from "./tool_failure.ts";
@@ -207,6 +208,11 @@ const COMMIT_GATE_EXT = repoAsset("harness", "omp", "commit_gate_extension.ts");
 // lanes driving one shared window would fight over it (same rationale that keeps preview off lanes).
 // The extension self-skips when LUCID_BROWSER_URL is absent (no Electron main = no window executor).
 const BROWSER_EXT = repoAsset("harness", "omp", "browser_extension.ts");
+// P-SECRET-INTAKE.1 (ADR-0476): `request_secret` asks the USER for a secret through the LUCID dialog and
+// stores it in the engine vault; the model only ever gets {stored, ref, envName} or {stored:false, reason}.
+// MASTER ONLY: the dialog rides the master turn's event stream (requestSecretDialog). Self-skips when
+// LUCID_SECRET_REQUEST_URL is absent.
+const SECRET_INTAKE_EXT = repoAsset("harness", "omp", "secret_intake_extension.ts");
 // P-EVAL.4 (ADR-0318): reports the REAL tool name (+ pass/fail) of every tool call over a token'd
 // loopback URL, because omp's ACP tool_call update carries only a coarse `kind` and an intent-shadowed
 // title (ADR-0308) - so the chat's chips and the engineering report's per-tool breakdown had degraded to
@@ -482,6 +488,7 @@ export type ChatEvent =
   | { type: "design-available"; path: string } // P-FIGMA.2 (ADR-0154): the agent wrote/updated DESIGN.md → offer to pop it out in the IDE
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
+  | { type: "secret-request"; request: SecretRequestView } // P-SECRET-INTAKE.1 (ADR-0476): show the secret dialog (names only, never a value)
   | { type: "usage"; used: number; size: number; cost: number }
   // P-STALL.1 (ADR-0186) / P-STALL.2 (ADR-0263): the provider has emitted NOTHING for waitedMs — the UI
   // shows "still waiting" instead of a frozen pane. Repeats each silent 2-min mark; any real activity
@@ -751,6 +758,14 @@ class Backend {
     this.emit({ type: "preview-activity", label: PREVIEW_ACTIVITY[kind] });
   }
 
+  /** P-SECRET-INTAKE.1 (ADR-0476): show the secret dialog for a parked `request_secret` call (dev.ts
+   *  /api/secret/request -> secret_intake.ts). Emits into the ACTIVE turn's stream like the approval cards;
+   *  the view names what is asked and why, never a value. A renderer that missed it re-syncs from
+   *  /api/secret/pending. */
+  requestSecretDialog(request: SecretRequestView): void {
+    this.emit({ type: "secret-request", request });
+  }
+
   /** P-EVAL.4 (ADR-0318): relay a self-reported tool name (and, on the result report, its pass/fail) into
    *  the ACTIVE turn's event stream. Called by dev.ts /api/tool/meta, which the tool_meta omp extension
    *  POSTs to.
@@ -1009,6 +1024,7 @@ class Backend {
         const knowledgeArgs = existsSync(KNOWLEDGE_EXT) ? ["-e", KNOWLEDGE_EXT] : []; // ADR-0220: knowledge_search (non-AskSage RAG)
         const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
         const browserArgs = existsSync(BROWSER_EXT) ? ["-e", BROWSER_EXT] : []; // P-BROWSER.1: master-only, see BROWSER_EXT
+        const secretArgs = existsSync(SECRET_INTAKE_EXT) ? ["-e", SECRET_INTAKE_EXT] : []; // P-SECRET-INTAKE.1: master-only, see SECRET_INTAKE_EXT
         const designArgs = existsSync(DESIGN_EXT) ? ["-e", DESIGN_EXT] : []; // Design suite: master-only, see DESIGN_EXT
         const driftArgs = existsSync(DRIFT_EXT) ? ["-e", DRIFT_EXT] : []; // CREATOR-DRIFT: master-only, see DRIFT_EXT
         const openfilmArgs = existsSync(OPENFILM_EXT) ? ["-e", OPENFILM_EXT] : []; // CREATOR-OPENFILM: master-only, see OPENFILM_EXT
@@ -1028,7 +1044,7 @@ class Backend {
         // log, and the session ran UNGATED while every surface reported healthy. start() rejects, so the
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
+        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...secretArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
         // P-SANDBOX.16 (ADR-0397): a git the host never put on PATH (MinGit, scoop, GitHub Desktop's copy)

@@ -62,7 +62,7 @@ const kindOf = (v: unknown): VaultKind | null => VAULT_KINDS.find((k) => k === v
 
 /** After a write: re-resolve the engine-side credential env (vault_env.ts), and keep a settings-style
  *  `key:<ENV>` ref live in process.env the way settings_store.setKey does. Never fails the write. */
-function afterWrite(ref: string): void {
+export function afterWrite(ref: string): void {
   try {
     if (ref.startsWith("key:") && isEnvName(ref.slice(4))) {
       const v = vaultGet(ref);
@@ -77,7 +77,7 @@ function afterWrite(ref: string): void {
 
 /** The ref a UI put lands under when it names none: `key:<ENV>` (or the workspace-scoped `ws:` ref) for
  *  an env name, else `secret:<label slug>`, suffixed until it is free (a label never clobbers an entry). */
-function derivedRef(envName: string, workspace: string | undefined, label: string): string {
+export function derivedRef(envName: string, workspace: string | undefined, label: string): string {
   if (envName) return workspace ? workspaceRef(workspace, envName) : `key:${envName}`;
   const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "secret";
   const taken = new Set(vaultList().map((m) => m.ref));

@@ -40,6 +40,8 @@ import {
 import type { DesignDoc } from "../../harness/creator/design/types.ts";
 import type { AgentManifest } from "../../harness/creator/design/agent_view.ts";
 import type { CuiVerdictView } from "./creator_studio.ts";
+// P-SECRET-INTAKE.1 (ADR-0476): the secret dialog's wire types and store-answer gate (pure, shared with the engine).
+import { isSecretStoredView, type SecretCallResult, type SecretManagerAnswer, type SecretManagerOutcome, type SecretRequestView } from "../secret_intake_view.ts";
 
 /** One Creator free-stack call: the payload on success, the server's own words on refusal, and the CUI
  *  verdict when the lockdown is what refused it. */
@@ -1354,6 +1356,19 @@ export interface LucidBridge {
   credList(): Promise<CredMetaView[]>;
   credDelete(ref: string): Promise<boolean>;
   credEncryptionAvailable(): Promise<boolean>;
+  // P-SECRET-INTAKE.1 (ADR-0476): the agent-triggered secret dialog (UI token). A value goes IN only; every
+  // answer is metadata (ref, kind, label, env name, last-4).
+  secretPending(): Promise<SecretRequestView[]>;
+  secretSubmit(id: string, value: string): Promise<SecretCallResult>;
+  /** The engine reads the picked file itself (Electron's native picker returns a path). */
+  secretSubmitFile(id: string, path: string): Promise<SecretCallResult>;
+  secretCancel(id: string): Promise<boolean>;
+  /** Open the user-only text file in the OS editor; the path is for the dialog only. */
+  secretFallback(id: string): Promise<{ ok: true; path: string } | { ok: false; error: string }>;
+  /** Wait until the text file was saved, read, wiped and deleted. */
+  secretFallbackWait(id: string): Promise<SecretCallResult>;
+  secretManagerInfo(): Promise<{ enterprise: boolean; note: string } | null>;
+  secretManagerRecord(input: { answer: SecretManagerAnswer; name?: string; config?: Record<string, string> }): Promise<SecretManagerOutcome | null>;
   // P-NETWL.2 (ADR-0106): curated network-whitelist CRUD (persisted server-side; non-secret).
   whitelistList(): Promise<WhitelistEntryView[]>;
   whitelistUpsert(entry: Partial<WhitelistEntryView>): Promise<WhitelistEntryView | null>;
@@ -1615,6 +1630,23 @@ async function getTimed(path: string, ms: number): Promise<unknown> {
   try { return (await (await fetch(path, { cache: "no-store", headers: authHeaders(), signal: AbortSignal.timeout(ms) })).json())?.data ?? null; } catch { return null; }
 }
 const PROBE_TIMEOUT_MS = 5_000;
+/** P-SECRET-INTAKE.1 (ADR-0476): one store call of the secret dialog. Keeps the engine's refusal words and
+ *  code (empty / refused / not-found / file / fallback) so the dialog can offer the text-file fallback. */
+async function secretStore(path: string, body: unknown): Promise<SecretCallResult> {
+  try {
+    const res = await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) });
+    const j: unknown = await res.json();
+    const data = j && typeof j === "object" && "data" in j ? j.data : null;
+    if (j && typeof j === "object" && "ok" in j && j.ok === true && isSecretStoredView(data)) {
+      return { ok: true, ref: data.ref, kind: data.kind, label: data.label, envName: data.envName, last4: data.last4 };
+    }
+    const error = j && typeof j === "object" && "error" in j && typeof j.error === "string" ? j.error : `the engine answered ${res.status}`;
+    const code = j && typeof j === "object" && "code" in j && typeof j.code === "string" ? j.code : "refused";
+    return { ok: false, error, code };
+  } catch {
+    return { ok: false, error: "the LUCID engine could not be reached", code: "unreachable" };
+  }
+}
 
 /** Creator free stack: read the route's `{ ok, data, error }`, keep the server's refusal words (and the CUI
  *  verdict when the lockdown refused), and refuse a payload the pane cannot read instead of painting half. */
@@ -2169,6 +2201,40 @@ export const bridge: LucidBridge = {
   credList: () => (shell?.credList ? shell.credList() : Promise.resolve([])), // P-NETWL.1
   credDelete: (ref) => (shell?.credDelete ? shell.credDelete(ref) : Promise.resolve(false)), // P-NETWL.1
   credEncryptionAvailable: () => (shell?.credEncryptionAvailable ? shell.credEncryptionAvailable() : Promise.resolve(false)), // P-NETWL.1
+  // P-SECRET-INTAKE.1 (ADR-0476): the agent-triggered secret dialog.
+  secretPending: async () => {
+    const d: unknown = await getData("/api/secret/pending");
+    const list = d && typeof d === "object" && "requests" in d && Array.isArray(d.requests) ? d.requests : [];
+    return list.filter((r): r is SecretRequestView => !!r && typeof r === "object" && typeof Reflect.get(r, "id") === "string" && typeof Reflect.get(r, "name") === "string");
+  },
+  secretSubmit: (id, value) => secretStore("/api/secret/submit", { id, value }),
+  secretSubmitFile: (id, path) => secretStore("/api/secret/submit-file", { id, path }),
+  secretCancel: async (id) => {
+    const d: unknown = await post("/api/secret/cancel", { id });
+    return !!d && typeof d === "object" && "cancelled" in d && d.cancelled === true;
+  },
+  secretFallback: async (id) => {
+    try {
+      const res = await fetch("/api/secret/fallback", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ id }) });
+      const j: unknown = await res.json();
+      const data = j && typeof j === "object" && "data" in j ? j.data : null;
+      const path = data && typeof data === "object" && "path" in data && typeof data.path === "string" ? data.path : "";
+      if (path) return { ok: true, path };
+      const error = j && typeof j === "object" && "error" in j && typeof j.error === "string" ? j.error : "the text file could not be prepared";
+      return { ok: false, error };
+    } catch { return { ok: false, error: "the LUCID engine could not be reached" }; }
+  },
+  secretFallbackWait: (id) => secretStore("/api/secret/fallback/wait", { id }),
+  secretManagerInfo: async () => {
+    const d: unknown = await getData("/api/secret/manager");
+    if (!d || typeof d !== "object" || !("enterprise" in d)) return null;
+    return { enterprise: d.enterprise === true, note: "note" in d && typeof d.note === "string" ? d.note : "" };
+  },
+  secretManagerRecord: async (input) => {
+    const d: unknown = await post("/api/secret/manager", input);
+    if (!d || typeof d !== "object" || !("detail" in d) || typeof d.detail !== "string") return null;
+    return { saved: "saved" in d && d.saved === true, recorded: "recorded" in d && d.recorded === true, enterprise: "enterprise" in d && d.enterprise === true, detail: d.detail };
+  },
   whitelistList: async () => (await getData("/api/whitelist")) ?? [], // P-NETWL.2
   whitelistUpsert: (entry) => post("/api/whitelist", entry), // P-NETWL.2
   whitelistRemove: async (id) => { await post("/api/whitelist/remove", { id }); }, // P-NETWL.2
