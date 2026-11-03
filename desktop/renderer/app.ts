@@ -68,7 +68,9 @@ import { findRelayFile, createRelayFile, readRelayFile, updateRelayFile, shareRe
 import { toolfailGroupHtml, type ToolFailEntry } from "./toolfail_group.ts"; // P-TOOLFAIL.2 (ADR-0163)
 import { APP_VERSION } from "../version.ts";
 import { renderMarkdown } from "./markdown.ts";
-import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
+import { type GraphHandle, type GraphHooks, type GraphPerfOpts, KIND_COLOR, kindColor, kindLabel, mountGraph } from "./graph.ts";
+import { mountOrbitGraph, type OrbitView } from "./graph_orbit.ts"; // P-KG-ORBIT.1 (ADR-0470): the Orbit engine
+import { rankNodes, type RankedNode } from "./kg_search.ts"; // P-KG-ORBIT.1: ranked "Find a node" results
 import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannable QR of the invite link
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
@@ -551,9 +553,12 @@ function buildShell(): void {
         <div class="set-head">
           <div class="set-title" data-tip="Knowledge Graph|Your private, encrypted personalization graph - nodes, edges, drill-down.">KG <span class="set-sub" id="kgScopeLbl"></span></div>
           <div class="kg-tools">
-            <input id="kgSearch" class="kg-search" type="search" placeholder="Find a node…" spellcheck="false" autocomplete="off" data-tip="Find a node|Type to highlight + center matching nodes. Esc clears." />
+            <input id="kgSearch" class="kg-search" type="search" placeholder="Find a node…" spellcheck="false" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="kgResults" data-tip="Find a node|Type to highlight + center matching nodes and list the best matches. Arrow keys + Enter open one. Esc clears." />
             <div class="seg kg-lens" data-kg-lens>
               <button class="on" data-lens="kind">Kind</button><button data-lens="trust">Trust</button>
+            </div>
+            <div class="seg kg-lens" data-kg-engine data-tip="Graph view|Flat: the force-directed map. Orbit: a 3D view where height is the dependency layer; select a node to see what it depends on (upstream) and what depends on it (downstream).">
+              <button class="on" data-engine="flat">Flat</button><button data-engine="orbit">Orbit</button>
             </div>
             <button class="btn-mini" id="kgPerf" data-tip="Performance mode|Auto adapts rendering to battery + CPU: on battery the graph goes calm (no particle flow, shorter settle, capped nodes); LOW battery pauses the visualization entirely - the agent still uses your knowledge. Click to cycle auto → full → reduced → minimal.">${icon("gauge", 13)} Auto</button>
             <button class="btn-mini" id="kgViews" data-tip="Graph views & tools · dropdown|Opens a menu with three options: Relate nodes (author your own relationships), Code graph (this workspace as a file/symbol graph), and Compiled KB (the knowledge base as a page graph). The label shows the graph you're viewing.">${icon("graph", 13)} <span id="kgViewsLbl">Personal</span> <span class="kgv-caret">▾</span></button>
@@ -576,6 +581,7 @@ function buildShell(): void {
           <div class="resizer resizer-l kg-side-resizer" id="kgSideResizer" data-resize="kgside" data-tip="Drag to resize the panel" data-tip-side="left" hidden></div>
           <div class="kg-side" id="kgSide"></div>
         </div>
+        <div class="kg-results" id="kgResults" role="listbox" aria-label="Matching nodes" hidden></div>
       </aside>
 
       <!-- P-MEET.1: the Meetings fly-out - a THIN client of the Lucid Meeting Hub on loopback (its only
@@ -8014,6 +8020,27 @@ let kgForceRender = false; // P-PERF.2: one-shot "Render anyway" override of the
 // only, per the ADR-0084 privacy boundary: entity-id-keyed positions are structural metadata of the
 // encrypted store and never touch disk. Keyed per graph (personal vs code:file vs code:symbol).
 const kgLayoutCache = new Map<string, Map<string, { x: number; y: number }>>();
+// P-KG-ORBIT.1 (ADR-0470): which engine draws #kgCanvas, the flat force graph (default) or the 3D Orbit
+// view, persisted like the other renderer view prefs. Each engine keeps its own per-graph cache (flat: the
+// node positions above; orbit: the camera), so switching never feeds one engine the other's layout.
+type KgEngine = "flat" | "orbit";
+let kgEngine: KgEngine = (() => { try { return localStorage.getItem("lucid.kgEngine") === "orbit" ? "orbit" : "flat"; } catch { return "flat"; } })();
+const kgOrbitViews = new Map<string, OrbitView>();
+/** Mount `data` into #kgCanvas with the active engine. `cacheKey` names the graph (personal, kb:<id>, code:<level>). */
+function mountKgGraph(canvas: HTMLElement, data: PersonalGraphData, onSelect: (id: string | null) => void, hooks: GraphHooks, perf: GraphPerfOpts, cacheKey: string): GraphHandle {
+  if (kgEngine === "orbit") {
+    return mountOrbitGraph(canvas, data, onSelect, {
+      forceCalm: !!perf.forceCalm || !!perf.staticLayout,
+      view: kgOrbitViews.get(cacheKey),
+      onView: (v) => kgOrbitViews.set(cacheKey, v),
+    });
+  }
+  return mountGraph(canvas, data, onSelect, hooks, {
+    ...perf, // P-PERF.3: seed from + harvest into the per-graph layout cache (no re-explosion on re-open)
+    positions: kgLayoutCache.get(cacheKey),
+    onPositions: (pos) => kgLayoutCache.set(cacheKey, pos),
+  });
+}
 let kgData: PersonalGraphData | null = null;
 let kgLens: "kind" | "trust" = "kind";
 let kgOpen = false;
@@ -10586,11 +10613,7 @@ async function renderKnowledge(): Promise<void> {
   // FULL (search, facts, signature); only the DRAWN subset is capped.
   const gOpts = graphOpts(perfWatch.tier());
   const { data: kgDraw, capped: kgCapped } = capGraph(kgData, gOpts.nodeCap);
-  kgHandle = mountGraph(canvas as HTMLElement, kgDraw, (id) => renderKgSide(id), { onRelate: relateNodes, onRelatePick: onRelatePick }, {
-    ...gOpts, // P-PERF.3: seed from + harvest into the per-graph layout cache (no re-explosion on re-open)
-    positions: kgLayoutCache.get("personal"),
-    onPositions: (pos) => kgLayoutCache.set("personal", pos),
-  });
+  kgHandle = mountKgGraph(canvas as HTMLElement, kgDraw, (id) => renderKgSide(id), { onRelate: relateNodes, onRelatePick: onRelatePick }, gOpts, "personal");
   if (kgCapped && scopeLbl) scopeLbl.textContent += ` · top ${kgDraw.nodes.length} of ${kgData.nodes.length} nodes`;
   showKgCenter(true); syncKgSideOpen();
   if (kgRelateMode) { kgHandle.setRelateMode(true); onRelatePick([]); } // preserve relate mode across a live remount
@@ -10674,12 +10697,7 @@ async function renderKbGraph(): Promise<void> {
   if (!g) { canvas.innerHTML = `<div class="kg-empty">${icon("report", 30)}<div>Couldn't load the graph preview. Your imported pack is still installed. Reopen this view to retry.</div></div>`; return; }
   if (!g.pages.length) { canvas.innerHTML = `<div class="kg-empty">${icon("report", 30)}<div>This knowledge graph is empty. Import a document to add pages.</div></div>`; return; }
   kgData = kbToGraphData(g);
-  const cacheKey = `kb:${g.kgId}`;
-  kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => void renderKbSide(id), {}, {
-    staticLayout: true,
-    positions: kgLayoutCache.get(cacheKey),
-    onPositions: (pos) => kgLayoutCache.set(cacheKey, pos),
-  });
+  kgHandle = mountKgGraph(canvas as HTMLElement, kgData, (id) => void renderKbSide(id), {}, { staticLayout: true }, `kb:${g.kgId}`);
   kgHandle.setLens(kgLens);
   const query = ($("#kgSearch") as HTMLInputElement | null)?.value.trim();
   if (query) kgHandle.setSearch(matchNodes(kgData.nodes, query));
@@ -10745,12 +10763,10 @@ async function renderCodeGraph(ingest: boolean, level: "file" | "symbol" = codeG
   }
   codeGraphRoot = data.root || "";
   kgData = { nodes, edges, facts: [] };
-  kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderCodeSide(id), {}, {
-    ...gOpts, // P-PERF.3: same layout continuity for the code graph, keyed by level
-    positions: kgLayoutCache.get(`code:${level}`),
-    onPositions: (pos) => kgLayoutCache.set(`code:${level}`, pos),
-  });
+  kgHandle = mountKgGraph(canvas as HTMLElement, kgData, (id) => renderCodeSide(id), {}, gOpts, `code:${level}`); // P-PERF.3: layout continuity keyed by level
   kgHandle.setLens(kgLens);
+  const cq = ($("#kgSearch") as HTMLInputElement | null)?.value.trim(); // P-KG-ORBIT.1: keep an active search across an engine switch
+  if (cq) kgHandle.setSearch(matchNodes(kgData.nodes, cq));
   kgSig = kgSignature(kgData);
   updateCodeGraphButtons(true, data);
   showKgCenter(true); syncKgSideOpen();
@@ -16408,12 +16424,87 @@ function wire(): void {
     if (b) void openCodeFile(b.dataset.cgOpen!);
   });
   // P-KG-SEARCH.1: live node search - highlight + center matches as you type (Esc clears).
-  $("#kgSearch")?.addEventListener("input", (e) => {
-    const q = (e.target as HTMLInputElement).value;
+  // P-KG-ORBIT.1 (ADR-0470): plus a ranked results list under the box. Arrow keys move, Enter or a click
+  // picks: the active engine selects + focuses the node and its existing side panel opens (the mount's
+  // onSelect: renderKgSide / renderKbSide / renderCodeSide).
+  const kgSearchEl = $("#kgSearch") as HTMLInputElement; // static markup, like #kgClose above
+  const kgResEl = $("#kgResults") as HTMLElement;
+  let kgHits: RankedNode[] = [];
+  let kgHitAt = 0;
+  const hideKgResults = (): void => {
+    kgHits = [];
+    kgResEl.hidden = true; kgResEl.innerHTML = "";
+    kgSearchEl.setAttribute("aria-expanded", "false");
+  };
+  const paintKgResults = (): void => {
+    const q = kgSearchEl.value.trim();
+    if (!q) { hideKgResults(); return; }
+    kgResEl.innerHTML = kgHits.length
+      ? kgHits.map((h, i) => {
+        const dot = kgEngine === "orbit" ? kindColor(h.kind) : KIND_COLOR[kindLabel(h.kind)] ?? "#888";
+        const sub = kgCodeMode ? h.id : kindLabel(h.kind); // code nodes show their path; personal / KB ids are opaque
+        return `<button type="button" class="kg-res${i === kgHitAt ? " on" : ""}" role="option" aria-selected="${i === kgHitAt}" data-kg-res="${i}" title="${esc(h.id)}">`
+          + `<i class="kg-res-dot" style="background:${dot}"></i><span class="kg-res-txt"><span class="kg-res-name">${esc(h.name)}</span><span class="kg-res-path">${esc(sub)}</span></span></button>`;
+      }).join("")
+      : `<div class="kg-res-none">No matching nodes</div>`;
+    const aside = $("#knowledge") as HTMLElement, a = aside.getBoundingClientRect(), r = kgSearchEl.getBoundingClientRect();
+    const w = Math.min(420, Math.max(300, r.width), a.width - 16);
+    kgResEl.style.width = `${w}px`;
+    kgResEl.style.top = `${Math.round(r.bottom - a.top + 4)}px`;
+    kgResEl.style.left = `${Math.round(Math.max(8, Math.min(r.left - a.left, a.width - w - 8)))}px`;
+    kgResEl.hidden = false;
+    kgSearchEl.setAttribute("aria-expanded", "true");
+    kgResEl.querySelector(".kg-res.on")?.scrollIntoView({ block: "nearest" });
+  };
+  const pickKgHit = (i: number): void => {
+    const h = kgHits[i];
+    if (!h) return;
+    kgSearchEl.value = ""; // the pick replaces the search: the highlight clears so the selection reads
+    hideKgResults();
+    kgHandle?.setSearch(null);
+    kgHandle?.select(h.id);
+  };
+  kgSearchEl.addEventListener("input", () => {
+    const q = kgSearchEl.value;
     kgHandle?.setSearch(q.trim() ? matchNodes(kgData?.nodes ?? [], q) : null);
+    kgHits = rankNodes(kgData?.nodes ?? [], q, 12); kgHitAt = 0;
+    paintKgResults();
   });
-  $("#kgSearch")?.addEventListener("keydown", (e) => {
-    if ((e as KeyboardEvent).key === "Escape") { (e.target as HTMLInputElement).value = ""; kgHandle?.setSearch(null); }
+  kgSearchEl.addEventListener("keydown", (e) => {
+    const k = e.key;
+    if (k === "Escape") { kgSearchEl.value = ""; kgHandle?.setSearch(null); hideKgResults(); return; }
+    if ((k === "ArrowDown" || k === "ArrowUp") && kgHits.length) {
+      e.preventDefault();
+      kgHitAt = (kgHitAt + (k === "ArrowDown" ? 1 : kgHits.length - 1)) % kgHits.length;
+      paintKgResults();
+      return;
+    }
+    if (k === "Enter" && kgHits.length) { e.preventDefault(); pickKgHit(kgHitAt); }
+  });
+  kgSearchEl.addEventListener("focus", () => {
+    if (!kgSearchEl.value.trim()) return;
+    kgHits = rankNodes(kgData?.nodes ?? [], kgSearchEl.value, 12); kgHitAt = 0;
+    paintKgResults();
+  });
+  kgSearchEl.addEventListener("blur", () => hideKgResults());
+  kgResEl.addEventListener("mousedown", (e) => e.preventDefault()); // keep focus in the box so the click lands
+  kgResEl.addEventListener("click", (e) => {
+    const row = (e.target as HTMLElement).closest("[data-kg-res]") as HTMLElement | null;
+    if (row) pickKgHit(Number(row.dataset.kgRes));
+  });
+  // P-KG-ORBIT.1 (ADR-0470): the Flat | Orbit engine toggle remounts whatever graph is on the canvas.
+  const paintKgEngine = (): void => $$("[data-kg-engine] button").forEach((b) => b.classList.toggle("on", (b as HTMLElement).dataset.engine === kgEngine));
+  paintKgEngine();
+  $("[data-kg-engine]")?.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest("[data-engine]") as HTMLElement | null;
+    if (!b) return;
+    const next: KgEngine = b.dataset.engine === "orbit" ? "orbit" : "flat";
+    if (next === kgEngine) return;
+    kgEngine = next;
+    try { localStorage.setItem("lucid.kgEngine", next); } catch { /* the choice still applies for this session */ }
+    paintKgEngine();
+    hideKgResults();
+    if (kgOpen) void (kbGraphMode ? renderKbGraph() : kgCodeMode ? renderCodeGraph(false) : renderKnowledge());
   });
   // P-PERF.2: the performance-mode chip - cycle auto -> full -> reduced -> minimal; auto follows battery/CPU.
   $("#kgPerf")?.addEventListener("click", () => {

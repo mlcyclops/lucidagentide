@@ -292,3 +292,98 @@ describe("ADR-0183 presettle (the off-screen settle)", () => {
     expect(after).not.toEqual(before); // settleDone's grace didn't instantly bail at frames > 30
   });
 });
+
+// ───────────── P-KG-FLAT.1 (ADR-0471): a readable flat view for big graphs ─────────────
+
+import { ISOLATE_GRAVITY, LABEL_ALL_SCALE, MAX_SPEED, hubIds, robustBox, seedOrder, spiralPoint, zoomLod } from "./kg_ops.ts";
+
+/** Deterministic preferential-attachment graph with a share of unlinked nodes (a personal-KG shape). */
+function kgLike(n: number, isolated: number): { springs: Array<[number, number]>; counts: number[] } {
+  const springs: Array<[number, number]> = [], counts = new Array<number>(n).fill(0);
+  const linked = n - isolated;
+  for (let i = 1; i < linked; i++) {
+    const to = (i * 7919) % i === 0 ? 0 : Math.floor(Math.sqrt((i * 7919) % (i * i))); // biased toward early (busy) nodes
+    springs.push([i, Math.min(to, i - 1)]); counts[i]!++; counts[Math.min(to, i - 1)]!++;
+  }
+  return { springs, counts };
+}
+
+describe("ADR-0471 seedOrder", () => {
+  test("a permutation: linked components contiguous in BFS order, busiest component first, unlinked nodes last", () => {
+    // component A: 0-1-2 (busiest root 1), component B: 3-4, unlinked: 5, 6
+    const order = seedOrder(7, [[0, 1], [1, 2], [3, 4]], [1, 2, 1, 1, 1, 0, 0]);
+    expect([...order].sort()).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(order[0]).toBe(1); // the busiest node roots the first component
+    expect(new Set(order.slice(0, 3))).toEqual(new Set([0, 1, 2]));
+    expect(new Set(order.slice(3, 5))).toEqual(new Set([3, 4]));
+    expect(new Set(order.slice(5))).toEqual(new Set([5, 6]));
+  });
+  test("ignores self loops and out-of-range indices; a 20k chain runs without recursion", () => {
+    expect(seedOrder(3, [[0, 0], [1, 9]], [0, 0, 0]).length).toBe(3);
+    const chain = Array.from({ length: 19_999 }, (_, i) => [i, i + 1] as [number, number]);
+    expect(seedOrder(20_000, chain, new Array(20_000).fill(1)).length).toBe(20_000);
+  });
+});
+
+describe("ADR-0471 stepForces guards", () => {
+  test("stacked nodes separate without being flung: no speed above MAX_SPEED", () => {
+    const bodies = [body(300, 300), body(300.01, 300), body(300, 300.02)];
+    stepForces(bodies, [], 300, 300, 0);
+    for (const b of bodies) expect(Math.hypot(b.vx, b.vy)).toBeLessThanOrEqual(MAX_SPEED + 1e-9);
+  });
+  test("in a linked graph an unlinked node is pulled in harder than a linked one at the same distance", () => {
+    // Node 0 sits far left of the center; node 3 sits straight below it at the spring's rest length
+    // (72 + 8 + 8), so linking 0-3 adds no x force: the only x difference is the centering pull.
+    const pullOf = (springs: Array<[number, number]>) => {
+      const bodies = [body(0, 300), body(1000, 300), body(1072, 300), body(0, 388)];
+      stepForces(bodies, springs, 500, 300, 200);
+      return bodies[0]!.vx;
+    };
+    expect(ISOLATE_GRAVITY).toBeGreaterThan(1);
+    expect(pullOf([[1, 2]])).toBeGreaterThan(pullOf([[1, 2], [0, 3]]));
+  });
+});
+
+describe("ADR-0471 cold mount of a big graph stays readable (the dust-cloud regression)", () => {
+  test("spiral seeding + presettle keeps a 600-node graph near the panel scale, not at the 0.05 floor", () => {
+    const n = 600, { springs, counts } = kgLike(n, 120);
+    const order = seedOrder(n, springs, counts);
+    const bodies: SimBody[] = new Array(n);
+    order.forEach((idx, k) => { const p = spiralPoint(k, 450, 375); bodies[idx] = body(p.x, p.y, 7 + Math.min(15, counts[idx]! * 2.5)); });
+    let t = 0; // fixed iteration budget via the injectable clock: deterministic across machines
+    presettle(bodies, springs, 450, 375, { settle: 480, frames: 0, deadlineMs: 60, now: () => (t += 1) });
+    const fit = fitTransform(robustBox(bodies)!, 900, 750)!;
+    expect(fit.sc).toBeGreaterThan(0.3);
+    for (const b of bodies) expect(Math.hypot(b.x - 450, b.y - 375)).toBeLessThan(3000);
+  });
+});
+
+describe("ADR-0471 robustBox", () => {
+  test("a big graph's box ignores a far straggler; a small graph and the exact extent agree", () => {
+    const big = [...Array.from({ length: 100 }, (_, i) => ({ x: i % 10 * 10, y: Math.floor(i / 10) * 10, r: 5 })), { x: 50_000, y: 50_000, r: 5 }];
+    const bb = robustBox(big, 0.02, 0)!;
+    expect(bb.maxX).toBeLessThan(200);
+    const small = [{ x: 0, y: 0, r: 5 }, { x: 1000, y: 10, r: 5 }];
+    expect(robustBox(small, 0.02, 0)).toEqual({ minX: -5, maxX: 1005, minY: -5, maxY: 15 });
+    expect(robustBox([])).toBeNull();
+  });
+});
+
+describe("ADR-0471 zoomLod + hubIds", () => {
+  test("all labels at and above LABEL_ALL_SCALE; zoomed out, labels and dots grow but stay capped", () => {
+    expect(zoomLod(LABEL_ALL_SCALE).allLabels).toBe(true);
+    expect(zoomLod(1.4)).toEqual({ allLabels: true, labelScale: 1, nodeGrow: 1 });
+    const far = zoomLod(0.3);
+    expect(far.allLabels).toBe(false);
+    expect(far.labelScale).toBeGreaterThan(1); expect(far.labelScale).toBeLessThanOrEqual(2.6);
+    expect(far.nodeGrow).toBeGreaterThan(1); expect(far.nodeGrow).toBeLessThanOrEqual(2.2);
+    expect(zoomLod(0.01).labelScale).toBe(2.6);
+  });
+  test("hubIds keeps max(10, 3%) of the busiest nodes", () => {
+    const nodes = Array.from({ length: 1000 }, (_, i) => ({ id: "n" + i, count: i }));
+    const hubs = hubIds(nodes);
+    expect(hubs.size).toBe(30);
+    expect(hubs.has("n999")).toBe(true); expect(hubs.has("n0")).toBe(false);
+    expect(hubIds(nodes.slice(0, 5)).size).toBe(5);
+  });
+});
