@@ -603,6 +603,7 @@ import { listDir } from "./fs_browse.ts";
 import { pickFolderNative } from "./native_dialog.ts"; // P-FS.2 (ADR-0265): real OS folder dialog for the browser build
 import { DIAL_TYPES, type LoopDial } from "./exec_policy.ts";
 import { audit } from "./audit_export.ts";
+import { handleComplianceRoutes } from "./compliance_routes.ts"; // P-COMPLY.1 (ADR-0479)
 import { isRiskTier, managedWorkspaceRoots } from "./managed_config.ts";
 import { apiAuthorized, isAllowedRequest, reqShape, tokenValid } from "./origin_guard.ts";
 
@@ -2810,6 +2811,7 @@ return Bun.serve({
       // P-ENT.2 (ADR-0069): the unified security-event stream (metadata-only, OCSF-ready) + per-sink
       // delivery status, for the in-app dashboard. Read-only; the file sink is the SIEM export source.
       if (p === "/api/audit") return json({ ok: true, data: { events: audit.recent(100), sinks: audit.sinkStatuses() } });
+      const compliance = await handleComplianceRoutes(req, p); if (compliance) return compliance;
       // P-BRIEF.3 (ADR-0072): generate the Executive Engineering Update from the repo's own logs. Pure +
       // air-gap (reads DECISIONS.md/PROGRESS.md from the repo root); returns the written brief + the
       // two-host podcast script. Audio synthesis (a TTS backend) is a later slice; this is the brief.

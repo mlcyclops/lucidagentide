@@ -1,0 +1,100 @@
+# Copyright (c) 2026 TechLead 187 LLC
+# SPDX-License-Identifier: BUSL-1.1
+#
+# P-COMPLY.1 (ADR-0479): the NIST SP 800-171 Rev 3 release evidence package.
+#
+# On every release tag (v*) and on demand, produce and upload as artifacts:
+#   - sbom.cdx.json        CycloneDX SBOM of the lockfiles (bun.lock, desktop/bun.lock,
+#                          extensions/vscode/bun.lock, scanner-sidecar/uv.lock) via cdxgen, pinned.
+#                          harness/maintainer/sbom.ts is manifest-level (declared deps only, no
+#                          transitive tree), so it is not used as the release SBOM.
+#   - gitleaks.json        secret scan of the full git history, values redacted (--redact).
+#   - osv-results.json     osv-scanner over the same lockfiles.
+#   - evidence/            tools/compliance/evidence.ts on the runner (--skip-os-probes: a CI runner
+#                          is not a LUCID host; host evidence is collected per evidence-guide.md).
+#
+# Scanner findings do not fail the job: its output is evidence for the assessor and the POA&M, and each
+# scanner's exit code is recorded in tool-exit-codes.txt beside its report. Tools are pinned by version and
+# downloaded binaries are verified against the SHA-256 published on their release page.
+
+name: Compliance evidence
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compliance-evidence-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CDXGEN_VERSION: "12.9.0"
+  GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" # gitleaks_8.30.1_linux_x64.tar.gz
+  OSV_SCANNER_VERSION: "2.7.0"
+  OSV_SCANNER_SHA256: "160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b" # osv-scanner_linux_amd64
+
+jobs:
+  evidence:
+    name: SBOM, secrets scan, OSV, evidence report
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # gitleaks scans the whole history
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2" # desktop/build/fetch-runtimes.ts BUN_VERSION
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Prepare output
+        run: mkdir -p out && : > out/tool-exit-codes.txt
+
+      - name: CycloneDX SBOM (cdxgen)
+        run: |
+          set +e
+          npx --yes "@cyclonedx/cdxgen@${CDXGEN_VERSION}" -r -t js -t python \
+            --exclude "vendor/**" --exclude "desktop/release/**" --exclude "lucidaddon_audit/**" \
+            -o out/sbom.cdx.json .
+          echo "cdxgen=$?" >> out/tool-exit-codes.txt
+
+      - name: Secrets scan (gitleaks, redacted)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum --check -
+          tar -xzf gitleaks.tar.gz gitleaks
+          set +e
+          ./gitleaks git --redact --no-banner --report-format json --report-path out/gitleaks.json .
+          echo "gitleaks=$?" >> out/tool-exit-codes.txt
+
+      - name: Dependency vulnerabilities (osv-scanner)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o osv-scanner "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  osv-scanner" | sha256sum --check -
+          chmod +x osv-scanner
+          set +e
+          ./osv-scanner scan source --format json --output out/osv-results.json \
+            -L bun.lock -L desktop/bun.lock -L extensions/vscode/bun.lock -L scanner-sidecar/uv.lock
+          echo "osv-scanner=$?" >> out/tool-exit-codes.txt
+
+      - name: Evidence report (runner)
+        # Unlike the scanners, a failure here is a LUCID bug, so it fails the job (upload still runs).
+        run: bun run tools/compliance/evidence.ts --skip-os-probes --out out/evidence
+
+      - name: Upload evidence package
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compliance-evidence-${{ github.ref_name }}
+          path: out/
+          if-no-files-found: warn
+          retention-days: 90
