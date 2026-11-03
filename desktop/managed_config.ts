@@ -99,11 +99,19 @@ export interface ManagedSandboxPolicy {
   lockUserFolders?: boolean;
 }
 
+/** ADR-0473 (P-FIPS.1): cryptography governance. `requireFips: true` makes every crypto operation of
+ *  harness/crypto/fips_crypto.ts fail closed (FipsRequiredError) unless a FIPS 140-validated OS module
+ *  performs it; there is no non-validated fallback. Tighten-only, like every managed knob. */
+export interface ManagedCryptoPolicy {
+  requireFips?: boolean;
+}
+
 export interface ManagedSecurity {
   exec?: ManagedExecPolicy;
   egress?: ManagedEgressPolicy;
   loop?: ManagedLoopPolicy;
   sandbox?: ManagedSandboxPolicy;
+  crypto?: ManagedCryptoPolicy;
 }
 
 /** SIEM/audit sink configuration, consumed by ADR-0069 (P-ENT.2). Schema only here; the dispatcher +
@@ -348,7 +356,12 @@ export function parseRegistryPolicy(regOutput: string): ManagedConfig | null {
   const sbRw = list("SandboxReadWriteFolders"); if (sbRw) sandbox.readWriteFolders = sbRw;
   const sbLock = bool("SandboxLockFolders"); if (sbLock !== undefined) sandbox.lockUserFolders = sbLock;
 
+  // ADR-0473 (P-FIPS.1): require a FIPS 140-validated crypto module.
+  const crypto: ManagedCryptoPolicy = { ...(cfg.security?.crypto ?? {}) };
+  const cryptoFips = bool("CryptoRequireFips"); if (cryptoFips !== undefined) crypto.requireFips = cryptoFips;
+
   const security: ManagedSecurity = { ...(cfg.security ?? {}) };
+  if (Object.keys(crypto).length) security.crypto = crypto;
   if (Object.keys(sandbox).length) security.sandbox = sandbox;
   if (Object.keys(exec).length) security.exec = exec;
   if (Object.keys(egress).length) security.egress = egress;
@@ -405,7 +418,7 @@ export function mergeManaged(base: ManagedConfig | null, over: ManagedConfig | n
   const merged: ManagedConfig = { ...base, ...over };
   if (base.security || over.security) {
     const sec: ManagedSecurity = { ...(base.security ?? {}), ...(over.security ?? {}) };
-    for (const k of ["exec", "egress", "loop", "sandbox"] as const) {
+    for (const k of ["exec", "egress", "loop", "sandbox", "crypto"] as const) {
       const b = base.security?.[k]; const o = over.security?.[k];
       if (b || o) (sec as Record<string, unknown>)[k] = { ...(b ?? {}), ...(o ?? {}) };
     }
@@ -459,6 +472,13 @@ export function managedAsksageOnly(mc: ManagedConfig | null = managedConfig().co
  *  passthrough). Pure when given `mc`. */
 export function managedRequireIsolation(mc: ManagedConfig | null = managedConfig().config): boolean {
   return !!mc?.security?.exec?.requireIsolation;
+}
+
+/** ADR-0473 (P-FIPS.1): whether managed policy REQUIRES a FIPS 140-validated crypto module
+ *  (`security.crypto.requireFips === true`, GPO flat value `CryptoRequireFips`). Only a literal true
+ *  counts. Pure when given `mc`. */
+export function managedRequireFips(mc: ManagedConfig | null = managedConfig().config): boolean {
+  return mc?.security?.crypto?.requireFips === true;
 }
 
 /** P-SANDBOX.14 (ADR-0394): does policy keep the Windows sandbox switch ON? Either knob does:
