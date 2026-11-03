@@ -22,23 +22,13 @@ import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import { defaultAuditPath } from "./audit_export.ts";
 import { clampPosture } from "./egress_policy.ts";
+import { cryptoInfo, type CryptoProviderInfo } from "../harness/crypto/fips_crypto.ts";
 import { engineVaultDir, readVault, vaultStatus } from "./engine_vault.ts";
 import { managedAsksageOnly, managedConfig, managedRequireIsolation, managedSandboxFoldersLocked, managedSandboxLocksOn, type ManagedConfig } from "./managed_config.ts";
 import { loadWhitelist } from "./network_whitelist.ts";
 import { APP_VERSION } from "./version.ts";
 
-// ── Contract A / Contract D types ─────────────────────────────────────────────────────────────────────
-
-/** Contract A (P-FIPS.1, harness/crypto/fips_crypto.ts). Mirrored here until that module lands; the parent
- *  replaces this with `import type { CryptoProviderInfo } from "../harness/crypto/fips_crypto.ts"`. */
-export type CryptoModule = "windows-cng" | "macos-corecrypto" | "openssl-fips" | "bun-boringssl";
-export interface CryptoProviderInfo {
-  module: CryptoModule;
-  fips: boolean;
-  detail: string;
-  osFipsPolicy: boolean | null;
-  required: boolean;
-}
+// ── Contract D types (Contract A's CryptoProviderInfo is imported from fips_crypto.ts) ──────────────
 
 export type CheckStatus = "pass" | "fail" | "partial" | "customer" | "n/a";
 
@@ -275,19 +265,6 @@ function run(cmd: string, args: string[], env?: Record<string, string>): Promise
 
 const firstLine = (s: string): string => s.trim().split(/\r?\n/)[0]?.slice(0, 200) ?? "";
 
-/** Windows FipsAlgorithmPolicy / Linux kernel FIPS mode. null = unknown or not applicable (macOS). */
-export async function osFipsPolicy(): Promise<boolean | null> {
-  if (process.platform === "win32") {
-    const r = await run("reg", ["query", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Lsa\\FipsAlgorithmPolicy", "/v", "Enabled"]);
-    const hex = /Enabled\s+REG_DWORD\s+0x([0-9a-f]+)/i.exec(r.out)?.[1];
-    return hex ? parseInt(hex, 16) !== 0 : null;
-  }
-  if (process.platform === "linux") {
-    try { return readFileSync("/proc/sys/crypto/fips_enabled", "utf8").trim() === "1"; } catch { return null; }
-  }
-  return null;
-}
-
 /** Parse `manage-bde -status <drive>` output. */
 export function parseManageBde(out: string): DiskStatus {
   const state = /Protection Status:\s*Protection (On|Off)/i.exec(out)?.[1]?.toLowerCase();
@@ -394,37 +371,18 @@ function userAsksageOnly(settingsFile: string): boolean {
 }
 
 /** ── INTEGRATION ADAPTER (the only place Contracts A and B are read) ─────────────────────────────────
- *  Contract A: `cryptoInfo()` from harness/crypto/fips_crypto.ts (P-FIPS.1, ADR-0473).
- *  Contract B: `vaultStatus()` (no args, with `entries`) from desktop/engine_vault.ts (P-VAULT-V2.1).
- *  Neither is on this branch yet. Until the parent wires them: crypto is loaded dynamically when present,
- *  else reported honestly as Bun BoringSSL (fips:false); the vault uses the P-VAULT-KEYS.1 API. */
-export async function platformProbes(mc: ManagedConfig | null, settingsFile: string): Promise<{ crypto: CryptoProviderInfo; vault: VaultFacts }> {
-  let crypto: CryptoProviderInfo | null = null;
-  try {
-    // Dynamic on purpose: fips_crypto.ts does not exist on this branch, so a static import cannot compile.
-    // The parent replaces this block with a static `import { cryptoInfo }` when P-FIPS.1 merges.
-    const spec = "../harness/crypto/fips_crypto.ts";
-    const mod = (await import(spec)) as { cryptoInfo?: () => CryptoProviderInfo };
-    if (typeof mod.cryptoInfo === "function") crypto = mod.cryptoInfo();
-  } catch { /* P-FIPS.1 not installed on this build */ }
-  crypto ??= {
-    module: "bun-boringssl",
-    fips: false,
-    detail: "node:crypto in Bun (BoringSSL), not a FIPS 140-validated module; the P-FIPS.1 provider is not installed on this build",
-    osFipsPolicy: await osFipsPolicy(),
-    // Contract A's managed knob `security.crypto.requireFips`; ManagedSecurity gains the field in P-FIPS.1.
-    required: process.env.LUCID_FIPS_REQUIRED === "1"
-      || (mc?.security as unknown as { crypto?: { requireFips?: unknown } } | undefined)?.crypto?.requireFips === true,
-  };
-
+ *  Contract A: `cryptoInfo()` from harness/crypto/fips_crypto.ts (P-FIPS.1, ADR-0473); it reads the managed
+ *  `security.crypto.requireFips` knob itself. The vault is read for the settings file being assessed (the
+ *  CLI can point at any profile), with the v2 entry count (P-VAULT-V2.1, ADR-0474). */
+export async function platformProbes(settingsFile: string): Promise<{ crypto: CryptoProviderInfo; vault: VaultFacts }> {
   const dir = engineVaultDir(settingsFile);
   const st = vaultStatus(dir);
   let entries: number | null = null;
   try {
     const v = readVault(dir);
-    if (!v.problem) entries = Object.keys(v.secrets).length;
+    if (!v.problem) entries = Object.keys(v.entries).length;
   } catch { entries = null; }
-  return { crypto, vault: { custody: st.custody, state: st.state, entries, ...(st.detail ? { detail: st.detail } : {}) } };
+  return { crypto: cryptoInfo(), vault: { custody: st.custody, state: st.state, entries, ...(st.detail ? { detail: st.detail } : {}) } };
 }
 
 function auditFacts(mc: ManagedConfig | null): AuditFacts {
@@ -466,7 +424,7 @@ export async function gatherProbes(opts: GatherOptions = {}): Promise<Compliance
   // The file settings_store.ts reads, through the same LUCID_GUI_SETTINGS_FILE seam.
   const settingsFile = process.env.LUCID_GUI_SETTINGS_FILE || join(homedir(), ".omp", "lucid-gui.json");
   const [{ crypto, vault }, disk, signing] = await Promise.all([
-    platformProbes(mc, settingsFile),
+    platformProbes(settingsFile),
     opts.skipOsProbes ? { status: "unknown" as const, detail: "OS probes skipped" } : diskEncryption(),
     opts.skipOsProbes ? { target: opts.installer ?? null, status: "unknown" as const, signer: null, detail: "OS probes skipped" } : signingFacts(opts.installer),
   ]);
