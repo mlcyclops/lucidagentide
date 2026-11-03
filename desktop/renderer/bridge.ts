@@ -1558,6 +1558,8 @@ interface NativeShell {
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
   // P-NETWL.1 (ADR-0106): native file picker + OS-encrypted credential vault (Electron-only).
   pickFile?(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
+  // P-VAULT-UI.1 (ADR-0475): native save dialog; path, null on cancel, or { error }.
+  saveTextFile?(opts: { title?: string; defaultName?: string; filters?: { name: string; extensions: string[] }[]; text: string }): Promise<string | { error: string } | null>;
   credStore?(input: { ref?: string; kind: string; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }): Promise<CredMetaView | { error: string }>;
   credStoreFile?(input: { kind: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }): Promise<CredMetaView | { error: string } | null>;
   credRotate?(input: { ref: string; secret: string; expiresAt?: number }): Promise<CredMetaView | { error: string }>;
@@ -1581,7 +1583,7 @@ function readToken(): string {
   return (document.querySelector('meta[name="lucid-token"]') as HTMLMetaElement | null)?.content ?? "";
 }
 const TOKEN = readToken();
-const authHeaders = (extra?: Record<string, string>): Record<string, string> =>
+export const authHeaders = (extra?: Record<string, string>): Record<string, string> =>
   ({ ...(TOKEN ? { "x-lucid-token": TOKEN } : {}), ...extra });
 
 async function getData(path: string): Promise<any> {
