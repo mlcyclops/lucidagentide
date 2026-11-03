@@ -35,6 +35,7 @@ import { isEnvName, VAULT_KINDS, type VaultKind } from "./engine_vault.ts";
 import { tokenValid } from "./origin_guard.ts";
 import { applyVaultEnv } from "./vault_env.ts";
 import { handleVaultDestRoutes } from "./vault_dest_routes.ts"; // P-VAULT-DEST.1 (ADR-0478): /api/vault/destinations*, /push, /pull
+import { handleVaultEnvRoutes } from "./vault_env_routes.ts";
 import {
   credList, credViewOf, importLegacyCredential, isVaultRef, mintCredRef, vaultDelete, vaultGet, vaultList, vaultPut, vaultRotate,
   vaultStatus, workspaceRef,
@@ -213,6 +214,7 @@ function mainRoute(req: Request, p: string, b: Record<string, unknown>): Respons
 export async function handleVaultRoutes(req: Request, p: string, ctx: VaultRouteCtx): Promise<Response | null> {
   if (!p.startsWith("/api/vault/")) return null;
   const dr = await handleVaultDestRoutes(req, p, ctx); if (dr) return dr; // P-VAULT-DEST.1 (ADR-0478)
+  const envRoute = await handleVaultEnvRoutes(req, p, ctx); if (envRoute) return envRoute; // P-VAULT-ENV.1 (ADR-0477)
   const isMain = p.startsWith("/api/vault/main/");
   if (!isMain && !VAULT_UI_ROUTES.includes(p)) return null;
   if (!tokenValid(req.headers.get("x-lucid-token"), ctx.uiToken)) return fail(403, "forbidden");

@@ -23,6 +23,7 @@ import type { IncidentEvent, IncidentKind, IncidentOutcome } from "./incident_re
 import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts"; // P-FLEET.L14 (ADR-0337): one shared definition
 import { AGENT_BUILDER_POLICY, BUILD_POLICY, DATA_INTEGRATION_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, JEV_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
+import { workspaceSecretEnv } from "./vault_env_import.ts"; // P-VAULT-ENV.1 (ADR-0477): the workspace's scoped secrets
 import { PendingWrites } from "./checkout_owners.ts"; // P-OWN.1: ownership only for writes that completed
 import { PREVIEW_ACTIVITY, previewActivityLabel, type PreviewActivityKind } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
 import { extractToolImages } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): images out of tool results
@@ -1052,7 +1053,9 @@ class Backend {
         // shim, P-SANDBOX.17).
         const planSetsPath = Object.keys(spawnPlan.env).some((k) => k.toUpperCase() === "PATH");
         const gitEnv = process.platform === "win32" && !planSetsPath ? prependPathOverlay(process.env, gitCmdDir()) : {};
-        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), { ...spawnPlan.env, ...gitEnv, ...interjectChildEnv("master") }, spawnPlan.contained ? { windowsHide: true } : {});
+        // P-VAULT-ENV.1 (ADR-0477): this workspace's scoped secrets, under everything the plan sets.
+        const wsCwd = currentWorkspace();
+        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, wsCwd, { ...workspaceSecretEnv(wsCwd), ...spawnPlan.env, ...gitEnv, ...interjectChildEnv("master") }, spawnPlan.contained ? { windowsHide: true } : {});
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
