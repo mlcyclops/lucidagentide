@@ -1402,6 +1402,11 @@ demo-P-VAULT-KEYS.1: ## P-VAULT-KEYS.1 (ADR-0472): provider keys, named-account 
 	$(BUN) run desktop/scripts/demo_p_vault_keys_1.ts
 	$(BUN) test $(TEST_IGNORES) desktop/engine_vault.test.ts desktop/settings_vault.test.ts desktop/settings_store_atomic.test.ts desktop/auth_status.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-P-FIPS.1
+demo-P-FIPS.1: ## P-FIPS.1 (ADR-0473): AES-256-GCM, PBKDF2-HMAC-SHA256, SHA-256, HMAC-SHA256 and the DRBG run in the OS FIPS 140 module (Windows CNG / Apple corecrypto / OpenSSL FIPS provider) after power-on known-answer tests; output is byte-identical to node:crypto so personal-kg.v1 stores open unchanged; fips is claimed only by the documented rule; LUCID_FIPS_REQUIRED=1 or managed security.crypto.requireFips fails every op closed when no validated module is usable; the Node (Electron main) bundle never loads bun:ffi
+	$(BUN) run desktop/scripts/demo_p_fips_1.ts
+	$(BUN) test $(TEST_IGNORES) harness/crypto/fips_crypto.test.ts harness/personal/personal.test.ts desktop/managed_config.test.ts
+
 .PHONY: demo-P-BREW.1
 demo-P-BREW.1: ## P-BREW.1: the Homebrew cask is an app cask over the release .zip - no pkg stanza, no allow_untrusted / package trust (deprecated in Homebrew 6), pinned per-arch sha256, and the cask url / electron-builder artifactName / update-cask job all name the same zips
 	$(BUN) run tools/cask_check.ts
