@@ -5326,7 +5326,9 @@ return Bun.serve({
       if (p === "/api/auth") return json({ ok: true, data: authWithOauthErrors() });
       if (p === "/api/auth/key" && req.method === "POST") {
         const { env, key } = await readBody<{ env?: unknown; key?: unknown }>(req);
-        setKey(String(env), String(key ?? ""));
+        // P-VAULT-KEYS.1 (ADR-0472): a key the OS vault cannot take is refused, never written in plaintext.
+        try { setKey(String(env), String(key ?? "")); }
+        catch (e) { return json({ ok: false, error: clientError(e, "the key could not be stored in the OS vault - nothing was saved") }); }
         backend.restart(); // pick up the new env on next turn
         return json({ ok: true, data: providerAuth() });
       }
@@ -6210,12 +6212,12 @@ return Bun.serve({
         const on = b.on === true;
         if (on && !loadSettings().fleetAutoRiskAcceptedAt) {
           if (b.acceptRisk !== true) return json({ ok: false, error: "full auto-mode needs an explicit risk acceptance first" });
-          saveSettings({ ...loadSettings(), fleetAutoRiskAcceptedAt: Date.now() });
+          const accepted = loadSettings(); accepted.fleetAutoRiskAcceptedAt = Date.now(); saveSettings(accepted); // a load()-sourced object: secret deltas stay exact (ADR-0472)
         }
         const laneId = typeof b.laneId === "string" && b.laneId ? b.laneId : "";
         if (laneId) return json({ ok: true, data: fleet.setAuto(laneId, on) });
         fleet.setAutoAll(on);
-        saveSettings({ ...loadSettings(), fleetAutoApprove: on });
+        const s = loadSettings(); s.fleetAutoApprove = on; saveSettings(s);
         return json({ ok: true, data: { ok: true } });
       }
       if (p === "/api/fleet/cancel" && req.method === "POST") {

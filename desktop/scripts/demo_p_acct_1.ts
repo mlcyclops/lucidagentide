@@ -22,6 +22,9 @@ import { Database } from "bun:sqlite";
 // env set first anyway so no accidental early read touches the real file).
 const settingsFile = join(tmpdir(), `lucid-acct-demo-${process.pid}.json`);
 process.env.LUCID_GUI_SETTINGS_FILE = settingsFile;
+// P-VAULT-KEYS.1: the keys saved below go to the engine vault; give it its own dir, not the shared %TEMP%/lucid-engine-vault.
+const vaultDir = join(tmpdir(), `lucid-acct-demo-vault-${process.pid}`);
+process.env.LUCID_ENGINE_VAULT_DIR = vaultDir;
 
 import { deriveAccounts, LUCID_INACTIVE_CAUSE, oauthAccountId } from "../account_policy.ts";
 import { activateOauthIdentity, listOauthRows, parkAllOauth } from "../auth_vault.ts";
@@ -104,6 +107,7 @@ try {
 } finally {
   try { rmSync(dbPath, { force: true }); } catch { /* windows handle lag */ }
   try { rmSync(settingsFile, { force: true }); } catch { /* ditto */ }
+  try { rmSync(vaultDir, { recursive: true, force: true }); } catch { /* ditto */ }
 }
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);

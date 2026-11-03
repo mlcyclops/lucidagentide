@@ -1,0 +1,472 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
+// desktop/engine_vault.ts
+//
+// P-VAULT-KEYS.1 (ADR-0472): the ENGINE-side OS vault for the secrets settings_store.ts used to keep in
+// plaintext in lucid-gui.json (provider API keys, named-account keys, MCP bearer tokens, the TURN
+// credential). The Electron-main vault (cred_vault.ts, safeStorage) cannot serve them: the engine is a
+// separate Bun process, and it also runs headless (lucid hub, `bun run dev.ts`, bin/lucid-engine, fleet
+// lanes) where no Electron main exists. So the engine opens its own vault:
+//
+//   - one random 32-byte MASTER KEY per vault directory, held by the OS for the current user:
+//       win32  DPAPI CryptProtectData (CurrentUser), ciphertext in <dir>/master.dpapi, via bun:ffi
+//       darwin Keychain generic password (service "LUCID Engine Vault"), via /usr/bin/security
+//       linux  Secret Service (libsecret), via secret-tool
+//   - the secrets themselves sealed with AES-256-GCM under that key in <dir>/secrets.v1.json.
+//
+// Several engines can share one vault (installed app, dev port, hub engine, fleet lanes), so every write
+// is a DELTA (refs to set, refs to delete) applied under an owner-token `secrets.lock` to a map read
+// fresh from disk and decrypted inside the lock: an engine never writes back a map it did not just
+// decrypt, so it can neither drop another engine's key nor resurrect one another engine deleted.
+//
+// Fail-closed rules: a secrets file that cannot be decrypted is never overwritten (updateVault sets it
+// aside first), a master key that exists but cannot be read is never replaced, and this module never
+// writes a plaintext secret anywhere. Outside Bun (Electron main bundles settings_store.ts with
+// --target=node) every entry point reports `unavailable` without touching a vault file.
+
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { dirname, join, resolve } from "node:path";
+import { errCode, RETRYABLE, withRetry, writeAtomic } from "./atomic_file.ts";
+
+/** AAD for every sealed record and the DPAPI entropy: binds the bytes to this format and purpose. */
+export const VAULT_AAD = "lucid-engine-vault-v1";
+export const SECRETS_FILE = "secrets.v1.json";
+const MASTER_DPAPI = "master.dpapi";
+const MASTER_LOCK = "master.lock";
+const SECRETS_LOCK = "secrets.lock";
+/** A lock is stale only when older than this AND its owner pid is gone. Well above the longest backend
+ *  call a holder makes (SPAWN_TIMEOUT_MS), so a slow Keychain prompt never loses its lock. */
+const LOCK_STALE_MS = 60_000;
+/** How long a caller waits for a held lock before giving up with an error (never proceeding without it). */
+const LOCK_WAIT_MS = 45_000;
+const KEYCHAIN_SERVICE = "LUCID Engine Vault";
+const LIBSECRET_SERVICE = "lucid-engine-vault";
+const SECURITY_BIN = "/usr/bin/security";
+const CRYPTPROTECT_UI_FORBIDDEN = 0x1;
+const SPAWN_TIMEOUT_MS = 15_000;
+
+export type VaultBackendKind = "dpapi" | "keychain" | "libsecret";
+export type VaultCustody = VaultBackendKind | "plaintext-file";
+export type VaultState = "ok" | "unavailable" | "unreadable";
+export interface VaultStatus { custody: VaultCustody; state: VaultState; detail?: string }
+
+/** Why a master key is not in hand. `absent` = no record exists (safe to create one); `unavailable` = the
+ *  backend cannot be reached; `unreadable` = a record may exist but could not be read (never replace it). */
+export interface MasterMiss { missing: "absent" | "unavailable" | "unreadable"; detail?: string }
+export type MasterRead = Buffer | MasterMiss;
+/** One OS key store bound to one vault directory. Injectable (`_setVaultBackendForTest`). */
+export interface OsKeyStore { readonly kind: VaultBackendKind; read(): MasterRead; create(key: Buffer): boolean }
+export type OsKeyStoreFactory = (vaultDir: string) => OsKeyStore | null;
+
+/** The vault directory for a settings file: `LUCID_ENGINE_VAULT_DIR`, else beside the settings file, so the
+ *  LUCID_GUI_SETTINGS_FILE isolation seam (tests, Creator, Fleet profiles) isolates the vault too. */
+export function engineVaultDir(settingsFile: string): string {
+  return resolve(process.env.LUCID_ENGINE_VAULT_DIR || join(dirname(settingsFile), "lucid-engine-vault"));
+}
+const secretsPath = (dir: string): string => join(dir, SECRETS_FILE);
+/** Key id: the first 16 hex of sha256(master key). Lets a reader detect the wrong key before decrypting. */
+const kidOf = (key: Buffer): string => createHash("sha256").update(key).digest("hex").slice(0, 16);
+/** Keychain / Secret Service account for a vault dir: one master key per directory. */
+const accountFor = (dir: string): string => `master-v1-${createHash("sha256").update(resolve(dir)).digest("hex").slice(0, 16)}`;
+const NO_BUN: VaultStatus = { custody: "plaintext-file", state: "unavailable", detail: "not running under Bun (Electron main never opens the engine vault)" };
+const EMPTY: Readonly<Record<string, string>> = Object.freeze({});
+
+// ── sealing ────────────────────────────────────────────────────────────────────────────────────────
+
+export interface SealedSecrets { v: 1; alg: "A256GCM"; kid: string; iv: string; tag: string; ct: string }
+
+export function sealSecrets(key: Buffer, secrets: Record<string, string>): SealedSecrets {
+  const iv = randomBytes(12);
+  const c = createCipheriv("aes-256-gcm", key, iv);
+  c.setAAD(Buffer.from(VAULT_AAD, "utf8"));
+  const ct = Buffer.concat([c.update(JSON.stringify(secrets), "utf8"), c.final()]);
+  return { v: 1, alg: "A256GCM", kid: kidOf(key), iv: iv.toString("base64"), tag: c.getAuthTag().toString("base64"), ct: ct.toString("base64") };
+}
+
+/** Open a sealed record. Throws (with a reason) on a wrong key, a short or altered record, or bad shape. */
+export function openSealed(key: Buffer, sealed: unknown): Record<string, string> {
+  const s = sealed as Partial<SealedSecrets> | null;
+  if (!s || typeof s !== "object" || s.v !== 1 || s.alg !== "A256GCM" || typeof s.kid !== "string" || typeof s.iv !== "string" || typeof s.tag !== "string" || typeof s.ct !== "string") {
+    throw new Error("not a v1 sealed secrets record");
+  }
+  const kid = kidOf(key);
+  if (s.kid !== kid) throw new Error(`sealed under a different master key (kid ${s.kid}, this account's key is ${kid})`);
+  const iv = Buffer.from(s.iv, "base64");
+  const tag = Buffer.from(s.tag, "base64");
+  if (iv.length !== 12 || tag.length !== 16) throw new Error("malformed iv or tag");
+  let text: string;
+  try {
+    const d = createDecipheriv("aes-256-gcm", key, iv);
+    d.setAAD(Buffer.from(VAULT_AAD, "utf8"));
+    d.setAuthTag(tag);
+    text = Buffer.concat([d.update(Buffer.from(s.ct, "base64")), d.final()]).toString("utf8");
+  } catch { throw new Error("authentication failed (the record was altered or truncated)"); }
+  const parsed: unknown = JSON.parse(text);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("sealed content is not a map");
+  const out: Record<string, string> = {};
+  for (const [ref, v] of Object.entries(parsed)) {
+    if (typeof v !== "string") throw new Error(`sealed value for ${ref} is not a string`);
+    out[ref] = v;
+  }
+  return out;
+}
+
+// ── backends ───────────────────────────────────────────────────────────────────────────────────────
+
+/** The slice of bun:ffi this module uses, typed locally so the Node-typed Electron program never needs
+ *  bun:ffi's declarations. */
+interface BunFfi {
+  dlopen(lib: string, symbols: Record<string, { args: unknown[]; returns: unknown }>): { symbols: Record<string, unknown> };
+  FFIType: { ptr: unknown; u32: unknown; i32: unknown };
+  ptr(view: ArrayBufferView): number;
+  toArrayBuffer(p: number, byteOffset: number, byteLength: number): ArrayBuffer;
+}
+type DpapiFn = (pIn: number, desc: null, pEntropy: number, reserved: null, prompt: null, flags: number, pOut: number) => number;
+export interface Dpapi { protect(data: Uint8Array): Buffer | null; unprotect(blob: Uint8Array): Buffer | null }
+
+let dpapiApi: Dpapi | null | undefined;
+/** DPAPI (CurrentUser scope) through bun:ffi, or null off Windows / outside Bun / when the DLLs cannot be
+ *  bound. bun:ffi is required lazily under an opaque specifier: main.ts is bundled with --target=node and
+ *  must neither resolve nor load it. */
+export function dpapi(): Dpapi | null {
+  if (dpapiApi !== undefined) return dpapiApi;
+  dpapiApi = null;
+  if (typeof Bun === "undefined" || process.platform !== "win32") return null;
+  try {
+    const spec = "bun:ffi";
+    const ffi = require(spec) as BunFfi;
+    const sig = { args: [ffi.FFIType.ptr, ffi.FFIType.ptr, ffi.FFIType.ptr, ffi.FFIType.ptr, ffi.FFIType.ptr, ffi.FFIType.u32, ffi.FFIType.ptr], returns: ffi.FFIType.i32 };
+    const crypt = ffi.dlopen("crypt32.dll", { CryptProtectData: sig, CryptUnprotectData: sig }).symbols as { CryptProtectData: DpapiFn; CryptUnprotectData: DpapiFn };
+    const k32 = ffi.dlopen("kernel32.dll", { LocalFree: { args: [ffi.FFIType.ptr], returns: ffi.FFIType.ptr } }).symbols as { LocalFree: (p: number) => unknown };
+    const entropy = new Uint8Array(Buffer.from(VAULT_AAD, "utf8"));
+    // DATA_BLOB on 64-bit Windows: { DWORD cbData; 4 bytes padding; BYTE* pbData } = 16 bytes.
+    const blobOf = (data: Uint8Array): Uint8Array => {
+      const b = new Uint8Array(16);
+      const dv = new DataView(b.buffer);
+      dv.setUint32(0, data.byteLength, true);
+      dv.setBigUint64(8, BigInt(ffi.ptr(data)), true);
+      return b;
+    };
+    const run = (fn: DpapiFn, input: Uint8Array): Buffer | null => {
+      const data = new Uint8Array(input); // an own, offset-0 copy that stays referenced through the call
+      const inBlob = blobOf(data);
+      const entBlob = blobOf(entropy);
+      const out = new Uint8Array(16);
+      try {
+        if (!fn(ffi.ptr(inBlob), null, ffi.ptr(entBlob), null, null, CRYPTPROTECT_UI_FORBIDDEN, ffi.ptr(out))) return null;
+        const dv = new DataView(out.buffer);
+        const cb = dv.getUint32(0, true);
+        const p = Number(dv.getBigUint64(8, true));
+        if (!p) return null;
+        const view = new Uint8Array(ffi.toArrayBuffer(p, 0, cb));
+        try { return Buffer.from(view); } finally { view.fill(0); k32.LocalFree(p); }
+      } finally { data.fill(0); }
+    };
+    dpapiApi = { protect: (d) => run(crypt.CryptProtectData, d), unprotect: (b) => run(crypt.CryptUnprotectData, b) };
+  } catch (e) {
+    console.error(`[vault] DPAPI could not be bound (${String((e as Error)?.message ?? e).slice(0, 120)})`);
+  }
+  return dpapiApi;
+}
+
+function decodeKey(text: string): MasterRead {
+  const key = Buffer.from(text.trim(), "base64");
+  return key.length === 32 ? key : { missing: "unreadable", detail: "the stored master key is malformed" };
+}
+
+function dpapiStore(dir: string): OsKeyStore | null {
+  const api = dpapi();
+  if (!api) return null;
+  const file = join(dir, MASTER_DPAPI);
+  return {
+    kind: "dpapi",
+    read() {
+      let blob: Buffer;
+      try { blob = withRetry(() => readFileSync(file)); } catch (e) {
+        return errCode(e) === "ENOENT" ? { missing: "absent" } : { missing: "unreadable", detail: `${MASTER_DPAPI}: ${errCode(e) ?? String(e).slice(0, 80)}` };
+      }
+      const key = api.unprotect(blob);
+      if (!key) return { missing: "unreadable", detail: "DPAPI could not decrypt the master key (a different Windows user or machine?)" };
+      if (key.length !== 32) { key.fill(0); return { missing: "unreadable", detail: "the master key has the wrong length" }; }
+      return key;
+    },
+    create(key) {
+      const blob = api.protect(key);
+      if (!blob) return false;
+      try { writeAtomic(file, blob); return true; } catch { return false; }
+    },
+  };
+}
+
+function keychainStore(dir: string): OsKeyStore | null {
+  if (!existsSync(SECURITY_BIN)) return null;
+  const account = accountFor(dir);
+  return {
+    kind: "keychain",
+    read() {
+      const r = spawnSync(SECURITY_BIN, ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w"], { encoding: "utf8", timeout: SPAWN_TIMEOUT_MS });
+      if (r.error) return { missing: "unavailable", detail: `security: ${errCode(r.error) ?? r.error.message}` };
+      if (r.status === 44) return { missing: "absent" }; // errSecItemNotFound
+      if (r.status !== 0) return { missing: "unreadable", detail: `security exited ${r.status}: ${(r.stderr ?? "").trim().slice(0, 120)}` };
+      return decodeKey(r.stdout ?? "");
+    },
+    create(key) {
+      // The secret travels on stdin to `security -i`, never on argv (argv is visible to other processes).
+      const line = `add-generic-password -s "${KEYCHAIN_SERVICE}" -a "${account}" -l "${KEYCHAIN_SERVICE}" -w "${key.toString("base64")}"\nquit\n`;
+      const r = spawnSync(SECURITY_BIN, ["-i"], { input: line, encoding: "utf8", timeout: SPAWN_TIMEOUT_MS });
+      return !r.error && r.status === 0;
+    },
+  };
+}
+
+function libsecretStore(dir: string): OsKeyStore {
+  const account = accountFor(dir);
+  return {
+    kind: "libsecret",
+    read() {
+      const r = spawnSync("secret-tool", ["lookup", "service", LIBSECRET_SERVICE, "account", account], { encoding: "utf8", timeout: SPAWN_TIMEOUT_MS });
+      if (r.error) return { missing: "unavailable", detail: `secret-tool: ${errCode(r.error) ?? r.error.message}` };
+      const stderr = (r.stderr ?? "").trim();
+      if (r.status === 0 && (r.stdout ?? "").trim()) return decodeKey(r.stdout ?? "");
+      if (r.status === 1 && !stderr) return { missing: "absent" }; // lookup found no matching item
+      return { missing: "unavailable", detail: `secret-tool exited ${r.status}${stderr ? `: ${stderr.slice(0, 120)}` : ""}` };
+    },
+    create(key) {
+      const r = spawnSync("secret-tool", ["store", "--label=LUCID engine vault", "service", LIBSECRET_SERVICE, "account", account], { input: key.toString("base64"), encoding: "utf8", timeout: SPAWN_TIMEOUT_MS });
+      return !r.error && r.status === 0;
+    },
+  };
+}
+
+const defaultFactory: OsKeyStoreFactory = (dir) => {
+  if (process.platform === "win32") return dpapiStore(dir);
+  if (process.platform === "darwin") return keychainStore(dir);
+  if (process.platform === "linux") return libsecretStore(dir);
+  return null;
+};
+let factory: OsKeyStoreFactory = defaultFactory;
+const stores = new Map<string, OsKeyStore | null>();
+/** `fileSig` = the secrets file (`<mtimeMs>:<size>`, or "none") a MISS was observed against. */
+const masters = new Map<string, { at: number; read: MasterRead; fileSig: string }>();
+const reads = new Map<string, { mtimeMs: number; size: number; kid: string; secrets: Readonly<Record<string, string>> }>();
+/** A secrets file (by `<mtimeMs>:<size>`) that this master key could not open: not retried until either changes. */
+const failures = new Map<string, { sig: string; kid: string; problem: string }>();
+/** How long a miss is trusted before the backend is asked again (spawning `security` per load is not free). */
+const MISS_TTL_MS: Record<MasterMiss["missing"], number> = { absent: 5_000, unavailable: 30_000, unreadable: 30_000 };
+const NO_FILE = "none";
+
+/** Test-only: replace the OS backend (a factory returning null = no backend); null restores the real one.
+ *  Clears every cache so the next call sees the new backend. */
+export function _setVaultBackendForTest(f: OsKeyStoreFactory | null): void {
+  factory = f ?? defaultFactory;
+  stores.clear(); masters.clear(); reads.clear(); failures.clear();
+}
+
+function storeFor(dir: string): OsKeyStore | null {
+  if (!stores.has(dir)) stores.set(dir, factory(dir));
+  return stores.get(dir) ?? null;
+}
+
+/** The master key for reading. A cached key is reused; a cached MISS is trusted only within its TTL and only
+ *  against the same secrets file it was observed with (`fileSig`): once another engine creates or rewrites
+ *  the vault, the backend is asked again, so a stale "absent" can never hide that engine's keys. */
+function masterForRead(dir: string, store: OsKeyStore, fileSig: string): MasterRead {
+  const hit = masters.get(dir);
+  if (hit && Buffer.isBuffer(hit.read)) return hit.read;
+  if (hit && !Buffer.isBuffer(hit.read) && hit.fileSig === fileSig && Date.now() - hit.at < MISS_TTL_MS[hit.read.missing]) return hit.read;
+  const read = store.read();
+  masters.set(dir, { at: Date.now(), read, fileSig });
+  return read;
+}
+
+const pidAlive = (pid: number): boolean => {
+  try { process.kill(pid, 0); return true; } catch (e) { return errCode(e) === "EPERM"; } // EPERM: alive, not ours to signal
+};
+
+/** Run `fn` holding an exclusive owner-token lock file (`wx` create; body `{ pid, token, ts }`). A held lock
+ *  is taken over only when it is older than `staleMs` AND its owner pid is gone; a lock still owned by a
+ *  live process is waited for, up to `timeoutMs`, then this throws (it never proceeds without the lock).
+ *  Release unlinks the file only while it still carries OUR token. */
+export function withFileLock<T>(path: string, fn: () => T, opts: { timeoutMs?: number; staleMs?: number } = {}): T {
+  const timeoutMs = opts.timeoutMs ?? LOCK_WAIT_MS;
+  const staleMs = opts.staleMs ?? LOCK_STALE_MS;
+  const token = randomBytes(12).toString("hex");
+  const deadline = Date.now() + timeoutMs;
+  let pause = 10;
+  for (;;) {
+    let fd: number | null = null;
+    try { fd = openSync(path, "wx", 0o600); } catch (e) {
+      const code = errCode(e) ?? "";
+      // EPERM/EACCES/EBUSY: Windows refuses the create while a released lock is still pending delete.
+      if (code !== "EEXIST" && !RETRYABLE.includes(code)) throw new Error(`lock ${path}: ${code || String(e).slice(0, 80)}`, { cause: e });
+    }
+    if (fd !== null) {
+      try { writeFileSync(fd, JSON.stringify({ pid: process.pid, token, ts: Date.now() })); } finally { closeSync(fd); }
+      try { return fn(); } finally {
+        try { if (readFileSync(path, "utf8").includes(token)) unlinkSync(path); } catch { /* already gone */ }
+      }
+    }
+    let holder = "a lock being released";
+    try {
+      const raw = readFileSync(path, "utf8");
+      const st = statSync(path);
+      let info: { pid?: unknown; ts?: unknown } = {};
+      try { info = JSON.parse(raw); } catch { /* the owner is between its create and its write */ }
+      const ts = typeof info.ts === "number" ? info.ts : st.mtimeMs;
+      const pid = typeof info.pid === "number" ? info.pid : 0;
+      holder = pid ? `pid ${pid}` : "an unknown process";
+      if (Date.now() - ts > staleMs && !(pid && pidAlive(pid)) && readFileSync(path, "utf8") === raw) {
+        unlinkSync(path); // its owner died holding it
+        continue;
+      }
+    } catch { /* released (or pending delete on Windows) between our create and our read: back off, retry */ }
+    if (Date.now() > deadline) throw new Error(`lock ${path} is held by ${holder}; gave up after ${timeoutMs} ms`);
+    Bun.sleepSync(pause);
+    pause = Math.min(pause * 2, 200);
+  }
+}
+
+/** Read the master key, creating it when (and only when) no record exists. Creation runs under the
+ *  `master.lock` owner-token lock and re-reads afterwards, so two engines racing at first start agree on
+ *  one key. A record that exists but cannot be read is reported, never replaced. */
+export function ensureMasterKey(store: OsKeyStore, dir: string): MasterRead {
+  const first = store.read();
+  if (Buffer.isBuffer(first) || first.missing !== "absent") return first;
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return withFileLock(join(dir, MASTER_LOCK), (): MasterRead => {
+    const r = store.read();
+    if (Buffer.isBuffer(r) || r.missing !== "absent") return r;
+    const key = randomBytes(32);
+    const created = store.create(key);
+    key.fill(0);
+    if (!created) return { missing: "unavailable", detail: `${store.kind} refused to store a new master key` };
+    const stored = store.read(); // the stored record, not the local copy, is the truth both racers agree on
+    return Buffer.isBuffer(stored) || stored.missing !== "absent" ? stored : { missing: "unavailable", detail: `${store.kind} stored the master key but cannot read it back` };
+  });
+}
+
+// ── the vault ──────────────────────────────────────────────────────────────────────────────────────
+
+export interface VaultRead {
+  /** A sealed secrets file is on disk. */
+  exists: boolean;
+  /** The decrypted map (empty when absent or unreadable). Frozen: callers copy values out. */
+  secrets: Readonly<Record<string, string>>;
+  /** Set when the file exists but cannot be opened: the vault is `unreadable` and must be left alone. */
+  problem?: string;
+}
+
+/** Read and decrypt the vault. Never creates anything. Memoized on the file's mtime + size (and the master
+ *  key id), so engines sharing the directory see each other's writes on their next load. */
+export function readVault(vaultDir: string): VaultRead {
+  if (typeof Bun === "undefined") return { exists: false, secrets: EMPTY };
+  const dir = resolve(vaultDir);
+  let fd: number;
+  for (let attempt = 0; ; attempt++) { // withRetry inlined: fstat and read stay on a direct openSync handle
+    try { fd = openSync(secretsPath(dir), "r"); break; } catch (e) {
+      if (attempt < 9 && RETRYABLE.includes(errCode(e) ?? "")) { Bun.sleepSync(15); continue; }
+      if (errCode(e) === "ENOENT") return { exists: false, secrets: EMPTY };
+      return { exists: true, secrets: EMPTY, problem: `${SECRETS_FILE} cannot be read (${errCode(e) ?? String(e).slice(0, 80)})` };
+    }
+  }
+  try {
+    const st = fstatSync(fd);
+    const store = storeFor(dir);
+    if (!store) return { exists: true, secrets: EMPTY, problem: `no OS vault backend on ${process.platform}` };
+    const sig = `${st.mtimeMs}:${st.size}`;
+    let master = masterForRead(dir, store, sig);
+    const memo = reads.get(dir);
+    if (Buffer.isBuffer(master) && memo && memo.mtimeMs === st.mtimeMs && memo.size === st.size && memo.kid === kidOf(master)) return { exists: true, secrets: memo.secrets };
+    const bad = failures.get(dir);
+    if (Buffer.isBuffer(master) && bad && bad.sig === sig && bad.kid === kidOf(master)) return { exists: true, secrets: EMPTY, problem: bad.problem };
+    const sealed: unknown = (() => { try { return JSON.parse(readFileSync(fd, "utf8")); } catch { return null; } })();
+    // A cached key that no longer opens the file (another engine replaced the vault) is re-read once.
+    for (let attempt = 0; ; attempt++) {
+      if (!Buffer.isBuffer(master)) {
+        return { exists: true, secrets: EMPTY, problem: master.missing === "absent" ? "the master key for this vault is missing" : `the master key could not be read (${master.detail ?? master.missing})` };
+      }
+      const key: Buffer = master;
+      try {
+        const secrets = Object.freeze(openSealed(key, sealed));
+        reads.set(dir, { mtimeMs: st.mtimeMs, size: st.size, kid: kidOf(key), secrets });
+        return { exists: true, secrets };
+      } catch (e) {
+        if (attempt === 0) { masters.delete(dir); master = masterForRead(dir, store, sig); continue; }
+        const problem = `${SECRETS_FILE} could not be decrypted: ${String((e as Error)?.message ?? e).slice(0, 160)}`;
+        failures.set(dir, { sig, kid: kidOf(key), problem });
+        return { exists: true, secrets: EMPTY, problem };
+      }
+    }
+  } finally { closeSync(fd); }
+}
+
+/** A change to the vault: refs to set (to these values) and refs to delete. Refs it does not name keep
+ *  whatever the vault holds, whoever wrote them. */
+export interface VaultDelta { set: Record<string, string>; del: string[] }
+
+/** Apply `delta` to the vault under `secrets.lock`: the current map is read FRESH from disk and decrypted
+ *  inside the lock, the delta is applied to it, the result is sealed, written atomically, read back and
+ *  verified, and only then is the lock released. Creates the master key on first use. An existing file
+ *  this account's (successfully read) master key cannot open is renamed aside to
+ *  `secrets.v1.json.unreadable-<ts>` and the delta applies to an empty map; it is never overwritten. A
+ *  master key that cannot be read throws. Throws on any failure, so a caller may strip its plaintext copy
+ *  only after this returns. Returns the map now in the vault (unchanged maps are not rewritten). */
+export function updateVault(vaultDir: string, delta: VaultDelta): Readonly<Record<string, string>> {
+  if (typeof Bun === "undefined") throw new Error(NO_BUN.detail);
+  const dir = resolve(vaultDir);
+  const store = storeFor(dir);
+  if (!store) throw new Error(`no OS vault backend on ${process.platform}`);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return withFileLock(join(dir, SECRETS_LOCK), () => {
+    const master = ensureMasterKey(store, dir); // fresh from the OS: never a cached miss or an old key
+    if (!Buffer.isBuffer(master)) {
+      masters.delete(dir);
+      throw new Error(`the vault master key is ${master.missing}${master.detail ? ` (${master.detail})` : ""}`);
+    }
+    masters.set(dir, { at: Date.now(), read: master, fileSig: NO_FILE });
+    const file = secretsPath(dir);
+    let prior: Buffer | null = null;
+    try { prior = withRetry(() => readFileSync(file)); } catch (e) { if (errCode(e) !== "ENOENT") throw e; }
+    let current: Record<string, string> = {};
+    if (prior) {
+      try { current = openSealed(master, JSON.parse(prior.toString("utf8"))); } catch (e) {
+        const aside = `${file}.unreadable-${Date.now()}`;
+        withRetry(() => renameSync(file, aside));
+        console.error(`[vault] ${file} could not be opened with this account's master key (${String((e as Error)?.message ?? e).slice(0, 160)}); kept it as ${aside} and started a fresh vault.`);
+        prior = null;
+      }
+    }
+    const next: Record<string, string> = { ...current };
+    for (const ref of delta.del) delete next[ref];
+    Object.assign(next, delta.set);
+    const refs = Object.keys(next);
+    if (prior && refs.length === Object.keys(current).length && refs.every((r) => current[r] === next[r])) return Object.freeze(next);
+    const st = writeAtomic(file, JSON.stringify(sealSecrets(master, next), null, 2));
+    const back = openSealed(master, JSON.parse(readFileSync(file, "utf8")));
+    if (Object.keys(back).length !== refs.length || refs.some((r) => back[r] !== next[r])) {
+      throw new Error("the vault did not read back what was written");
+    }
+    const frozen = Object.freeze(back);
+    reads.set(dir, { mtimeMs: st.mtimeMs, size: st.size, kid: kidOf(master), secrets: frozen });
+    return frozen;
+  });
+}
+
+/** Custody of the vault for a directory, for the Settings note and the logs. `ok` means secrets are (or
+ *  on the next save will be) sealed by the OS backend. Without a secrets file, a backend that cannot be
+ *  reached reports `unavailable` (nothing is lost; saves stay in the user-only file). */
+export function vaultStatus(vaultDir: string): VaultStatus {
+  if (typeof Bun === "undefined") return NO_BUN;
+  const dir = resolve(vaultDir);
+  const store = storeFor(dir);
+  const v = readVault(dir);
+  if (v.problem) return { custody: store?.kind ?? "plaintext-file", state: "unreadable", detail: v.problem };
+  if (!store) return { custody: "plaintext-file", state: "unavailable", detail: `no OS vault backend on ${process.platform}` };
+  if (v.exists) return { custody: store.kind, state: "ok" };
+  const m = masterForRead(dir, store, NO_FILE);
+  if (Buffer.isBuffer(m) || m.missing === "absent") return { custody: store.kind, state: "ok" };
+  return { custody: "plaintext-file", state: "unavailable", detail: m.detail ?? `master key ${m.missing}` };
+}

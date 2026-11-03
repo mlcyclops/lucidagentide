@@ -141,7 +141,7 @@ import { distillTopic, nextThinkingCue } from "../../harness/voice/thinking_cues
 import { SpeechQueue } from "./speech_queue.ts"; // P-VOICE.2: ordered, cancellable playback of those sentences
 import { applyReadAloudPatch, touchesReadAloud } from "../voice_flags.ts"; // P-VOICE.8 (ADR-0400): one rule for the read-aloud flags, shared with the engine
 import { VoiceEqualizer } from "./voice_eq.ts"; // P-VOICE.4 (ADR-0248): the glowing spectrum analyser
-import type { AuthStatus, ElevenVoiceView, JudgmentView, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
+import type { AuthStatus, ElevenVoiceView, JudgmentView, KeyVaultStatus, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
 import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type GraphEdge, type StoreChange } from "../../harness/brief/change_graph.ts"; // P-REPORT.8: report annex graphs
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
 import { DIGEST_MIN_CHARS } from "../../harness/voice/spoken_digest.ts"; // P-VOICE.6: slow-engine spoken digest
@@ -4875,7 +4875,17 @@ function secProviders(auth: import("./bridge.ts").AuthStatus | null): string {
   // P-PROV.2: a prominent jump to the dedicated Provider Hub (every provider omp offers, with logos, in one
   // discoverable popup) so providers aren't buried in this collapsed card.
   const hubBtn = `<div class="prov-hubopen"><button class="btn-mini ok" id="openProvHub">${icon("expand", 12)} Open the Provider Hub</button><span class="set-note">All providers in one place - native logos, OAuth or API key, open-weight &amp; regional behind an acknowledgement.</span></div>`;
-  return setCard("providers", "Providers", "U.S. frontier \u00b7 key or OAuth", hubBtn + providerQuotaNotice() + cards + signoutAll, true);
+  return setCard("providers", "Providers", "U.S. frontier \u00b7 key or OAuth", hubBtn + keyCustodyNote(auth?.vault) + providerQuotaNotice() + cards + signoutAll, true);
+}
+// P-VAULT-KEYS.1 (ADR-0472): one quiet line on where saved keys live. `.set-note` is block prose (icon
+// absolutely positioned, text flows), never a flex row (invariant #11).
+const KEY_NOT_SAVED = "The OS vault could not store it, so nothing was saved. Check that you are signed in to this account's keychain, then try again.";
+const KEY_VAULT_NAMES: Record<"dpapi" | "keychain" | "libsecret", string> = { dpapi: "Windows DPAPI", keychain: "macOS Keychain", libsecret: "Linux Secret Service" };
+function keyCustodyNote(v: KeyVaultStatus | undefined): string {
+  if (!v) return "";
+  if (v.state === "unreadable") return `<div class="set-note warn">${icon("shield", 12)} Saved keys could not be decrypted on this account. Re-enter them to store them again.</div>`;
+  if (v.state === "ok" && v.custody !== "plaintext-file") return `<div class="set-note">${icon("shield", 12)} Keys are encrypted by the OS vault (${KEY_VAULT_NAMES[v.custody]}).</div>`;
+  return `<div class="set-note">${icon("info", 12)} No OS vault on this system: keys are kept in a user-only file.</div>`;
 }
 // P-IDE.1c (ADR-0029): data-sovereignty unlock for China-origin models. Renders ONLY when omp actually
 // exposes such a model (else an empty, preserved anchor). Hidden-by-default; the user must type
@@ -17314,7 +17324,8 @@ function wire(): void {
       const inp = $(`.prov-key[data-env="${env}"]`, $("#setBody")!) as HTMLInputElement | null;
       const val = inp?.value.trim() ?? "";
       if (!val) { showToast({ tone: "warn", title: "Nothing to save", desc: "Paste a key first.", actions: [{ label: "OK" }], timeout: 2000 }); return; }
-      await bridge.saveKey(env, val);
+      // P-VAULT-KEYS.1: null = the engine refused (the OS vault could not take the key; nothing was saved).
+      if (!(await bridge.saveKey(env, val))) { showToast({ tone: "danger", title: `${env} not saved`, desc: KEY_NOT_SAVED, actions: [{ label: "OK" }], timeout: 6000 }); return; }
       showToast({ title: `${env} saved`, desc: "Stored on this machine and passed to omp. New turns use it.", actions: [{ label: "OK" }], timeout: 2800 });
       void renderSettings();
       if (env === "ASKSAGE_API_KEY") { await loadConfig(); await loadAsksage(); } // surface gov models + usage
@@ -19041,7 +19052,7 @@ function openProviderHub(onClose?: () => void): void {
       const env = save.dataset.savekey!;
       const val = ($(`.prov-key[data-env="${env}"]`, body) as HTMLInputElement | null)?.value.trim() ?? "";
       if (!val) { showToast({ tone: "warn", title: "Nothing to save", desc: "Paste a key first.", timeout: 2000 }); return; }
-      await bridge.saveKey(env, val);
+      if (!(await bridge.saveKey(env, val))) { showToast({ tone: "danger", title: `${env} not saved`, desc: KEY_NOT_SAVED, timeout: 6000 }); return; }
       showToast({ title: `${env} saved`, desc: "Stored on this machine and passed to omp. New turns use it.", timeout: 2800 });
       await refreshAuth(); await loadConfig(); redraw();
       return;
