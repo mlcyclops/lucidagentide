@@ -7,14 +7,17 @@
 // secret value. The OS backend is an in-memory fake (_setVaultBackendForTest); every path is a temp dir.
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { _setVaultBackendForTest, readVault, sealSecrets, SECRETS_FILE, type OsKeyStore } from "./engine_vault.ts";
+import {
+  VAULT_AUTH_HEADER, VAULT_MAC_HEADER, VAULT_NONCE_HEADER, vaultRequestMac, vaultResponseMac, type MacPrimitives,
+} from "./cred_engine_client.ts";
+import { _setVaultBackendForTest, readVault, sealEntries, sealSecrets, SECRETS_FILE, type OsKeyStore } from "./engine_vault.ts";
 import { load } from "./settings_store.ts";
 import { _resetVaultEnvForTest } from "./vault_env.ts";
-import { handleVaultRoutes, VAULT_MAIN_TOKEN_HEADER } from "./vault_routes.ts";
+import { handleVaultRoutes } from "./vault_routes.ts";
 import {
   vaultDelete, vaultExportEntries, vaultGet, vaultImportEntries, vaultList, vaultPut, vaultRotate, vaultStatus, workspaceRef,
 } from "./vault_store.ts";
@@ -186,6 +189,23 @@ describe("fail-closed", () => {
     expect(aside).toHaveLength(1);
     expect(readFileSync(join(vault, aside[0]!)).equals(before)).toBe(true);
   });
+
+  test("a file in a newer format (v3) is unreadable and never touched: no set-aside, every write refused", async () => {
+    const { vault } = scratch();
+    const store = useFakeStore(randomBytes(32));
+    mkdirSync(vault, { recursive: true });
+    // Another engine on a newer build wrote this vault: same master key, envelope `v: 3`.
+    const newer = { ...sealEntries(store.key()!, {}), v: 3 };
+    writeFileSync(join(vault, SECRETS_FILE), JSON.stringify(newer, null, 2));
+    const before = readFileSync(join(vault, SECRETS_FILE));
+    expect(readVault(vault).problem).toMatch(/newer LUCID build.*v3/);
+    expect(vaultStatus().state).toBe("unreadable");
+    expect(() => vaultPut({ ref: "b_ref", value: "value-B-000000000002", kind: "token", source: "typed" })).toThrow(/newer LUCID build/);
+    expect(() => vaultDelete("b_ref")).toThrow();
+    expect(() => load()).not.toThrow();
+    expect(readFileSync(join(vault, SECRETS_FILE)).equals(before)).toBe(true);
+    expect(readdirSync(vault).some((f) => f.includes(".unreadable-"))).toBe(false);
+  });
 });
 
 const UI = "ui-token-0123456789abcdef0123456789abcdef";
@@ -197,6 +217,21 @@ function uiReq(path: string, body?: unknown, headers: Record<string, string> = {
     method: body === undefined ? "GET" : "POST",
     headers: { "content-type": "application/json", ...headers },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+}
+const NODE_MAC: MacPrimitives = {
+  hmac: (k, d) => createHmac("sha256", k).update(d).digest(),
+  sha256: (d) => createHash("sha256").update(d).digest(),
+};
+/** A main-only request signed the way Electron main signs it (`key` = the vault token the MAC uses). */
+function mainReq(path: string, body?: unknown, opts: { ui?: string; key?: string } = {}): Request {
+  const method = body === undefined ? "GET" : "POST";
+  const sent = body === undefined ? "" : JSON.stringify(body);
+  const nonce = randomBytes(32);
+  return uiReq(path, body, {
+    "x-lucid-token": opts.ui ?? UI,
+    [VAULT_NONCE_HEADER]: nonce.toString("hex"),
+    [VAULT_AUTH_HEADER]: vaultRequestMac(NODE_MAC, opts.key ?? MAIN, method, path, nonce, Buffer.from(sent, "utf8")).toString("hex"),
   });
 }
 
@@ -245,13 +280,28 @@ describe("routes", () => {
     expect(query!.status).toBe(403);
     const noVaultToken = await handleVaultRoutes(uiReq("/api/vault/main/list"), "/api/vault/main/list", CTX);
     expect(noVaultToken!.status).toBe(403);
-    const agentMain = await handleVaultRoutes(uiReq("/api/vault/main/list", undefined, { "x-lucid-token": AGENT, [VAULT_MAIN_TOKEN_HEADER]: MAIN }), "/api/vault/main/list", CTX);
+    // The old shape (the raw vault token in a header) no longer opens anything: only a request MAC does.
+    const rawToken = await handleVaultRoutes(uiReq("/api/vault/main/list", undefined, { "x-lucid-token": UI, "x-lucid-vault-token": MAIN }), "/api/vault/main/list", CTX);
+    expect(rawToken!.status).toBe(403);
+    const agentMain = await handleVaultRoutes(mainReq("/api/vault/main/list", undefined, { ui: AGENT }), "/api/vault/main/list", CTX);
     expect(agentMain!.status).toBe(403);
-    const headless = await handleVaultRoutes(uiReq("/api/vault/main/list", undefined, { "x-lucid-token": UI, [VAULT_MAIN_TOKEN_HEADER]: "" }), "/api/vault/main/list", { uiToken: UI, mainToken: "" });
+    const wrongKey = await handleVaultRoutes(mainReq("/api/vault/main/list", undefined, { key: "not-the-vault-token" }), "/api/vault/main/list", CTX);
+    expect(wrongKey!.status).toBe(403);
+    const headless = await handleVaultRoutes(mainReq("/api/vault/main/list"), "/api/vault/main/list", { uiToken: UI, mainToken: "" });
     expect(headless!.status).toBe(403); // no Electron main: the main-only routes are closed
-    const mainOk = await handleVaultRoutes(uiReq("/api/vault/main/list", undefined, { "x-lucid-token": UI, [VAULT_MAIN_TOKEN_HEADER]: MAIN }), "/api/vault/main/list", CTX);
+    const signed = mainReq("/api/vault/main/list");
+    const mainOk = await handleVaultRoutes(signed, "/api/vault/main/list", CTX);
     expect(mainOk!.status).toBe(200);
-    expect(await mainOk!.text()).not.toContain("value-A-original");
+    const text = Buffer.from(await mainOk!.arrayBuffer());
+    expect(text.toString("utf8")).not.toContain("value-A-original");
+    // The reply is signed over the request nonce and its exact body.
+    const nonce = Buffer.from(signed.headers.get(VAULT_NONCE_HEADER)!, "hex");
+    expect(mainOk!.headers.get(VAULT_MAC_HEADER)).toBe(vaultResponseMac(NODE_MAC, MAIN, nonce, text).toString("hex"));
+    // A body altered in transit (same nonce, same MAC header) does not verify.
+    const tampered = mainReq("/api/vault/main/delete", { ref: "a_ref" });
+    const swapped = new Request(tampered.url, { method: "POST", headers: tampered.headers, body: JSON.stringify({ ref: "other_ref" }) });
+    expect((await handleVaultRoutes(swapped, "/api/vault/main/delete", CTX))!.status).toBe(403);
+    expect(vaultGet("a_ref")).toBe("value-A-original-0001");
     expect(await handleVaultRoutes(uiReq("/api/other"), "/api/other", CTX)).toBeNull();
     expect(await handleVaultRoutes(uiReq("/api/vault/backup"), "/api/vault/backup", CTX)).toBeNull(); // a later slice's route
   });

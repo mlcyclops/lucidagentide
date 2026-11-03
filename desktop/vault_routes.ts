@@ -8,11 +8,16 @@
 // outside /api/vault/ returns null untouched. Two surfaces:
 //
 //   UI (Contract B), header UI token only: GET /api/vault/list, POST /api/vault/put|rotate|delete.
-//   Main-only, header UI token AND the per-launch vault token Electron main minted
+//   Main-only, header UI token AND a request MAC keyed by the per-launch vault token Electron main minted
 //   (LUCID_VAULT_MAIN_TOKEN, taken out of process.env the moment this module loads, so no omp, fleet or
 //   scanner child inherits it and the renderer never receives it): /api/vault/main/status|list|store|
 //   rotate|delete|import. This is how bridge.cred* (through main's IPC handlers) and the safeStorage
-//   migration reach the vault; a headless engine has no main, so these answer 403.
+//   migration reach the vault; a headless engine has no main, so these answer 403. Every reply to an
+//   authenticated main request carries `x-lucid-vault-mac` (HMAC-SHA256 over the request nonce and the
+//   reply body; layout in cred_engine_client.ts), which main verifies before trusting the reply.
+//   What the vault token protects is that channel (the migration, which deletes safeStorage sources, and
+//   main's file-picker credential path), NOT the ref namespace: the UI routes can write, rotate and delete
+//   legacy refs too, and the Settings vault list relies on that.
 //
 // None of these paths is in dev.ts AGENT_ROUTES or QUERY_TOKEN_ROUTES, and this module re-checks the
 // header token itself (a `?t=` query token is never accepted here), so the agent token cannot reach
@@ -21,6 +26,10 @@
 // line or an event. Shape: `{ ok: true, data }` or `{ ok: false, error }` with a 4xx/5xx status.
 
 import { realpathSync } from "node:fs";
+import { hmacSha256, sha256 } from "../harness/crypto/fips_crypto.ts"; // P-FIPS.1 (ADR-0473): Contract A
+import {
+  VAULT_AUTH_HEADER, VAULT_MAC_HEADER, VAULT_NONCE_HEADER, vaultRequestMac, vaultResponseMac, type MacPrimitives,
+} from "./cred_engine_client.ts"; // the one definition of the main <-> engine MAC layout
 import { isValidRef } from "./cred_vault.ts";
 import { isEnvName, VAULT_KINDS, type VaultKind } from "./engine_vault.ts";
 import { tokenValid } from "./origin_guard.ts";
@@ -33,7 +42,7 @@ import {
 const MAIN_VAULT_TOKEN = process.env.LUCID_VAULT_MAIN_TOKEN ?? "";
 delete process.env.LUCID_VAULT_MAIN_TOKEN;
 
-export const VAULT_MAIN_TOKEN_HEADER = "x-lucid-vault-token";
+const FIPS_MAC: MacPrimitives = { hmac: hmacSha256, sha256 };
 export const VAULT_UI_ROUTES: readonly string[] = ["/api/vault/list", "/api/vault/put", "/api/vault/rotate", "/api/vault/delete"];
 export const VAULT_MAIN_ROUTES: readonly string[] = [
   "/api/vault/main/status", "/api/vault/main/list", "/api/vault/main/store", "/api/vault/main/rotate", "/api/vault/main/delete", "/api/vault/main/import",
@@ -144,14 +153,14 @@ async function uiRoute(req: Request, p: string): Promise<Response | null> {
   return null;
 }
 
-async function mainRoute(req: Request, p: string): Promise<Response | null> {
+/** `b` is the request body, already read (and covered by the verified request MAC). */
+function mainRoute(req: Request, p: string, b: Record<string, unknown>): Response | null {
   if (p === "/api/vault/main/status") {
     const s = vaultStatus();
     return ok({ available: s.state === "ok", custody: s.custody, state: s.state, fips: s.crypto.fips, entries: s.entries });
   }
   if (p === "/api/vault/main/list") return ok(credList());
   if (req.method !== "POST") return VAULT_MAIN_ROUTES.includes(p) ? fail(405, "method not allowed") : null;
-  const b = await body(req);
   if (p === "/api/vault/main/store") {
     const secret = str(b.secret);
     if (!secret) return fail(400, "empty-secret");
@@ -205,10 +214,37 @@ export async function handleVaultRoutes(req: Request, p: string, ctx: VaultRoute
   const isMain = p.startsWith("/api/vault/main/");
   if (!isMain && !VAULT_UI_ROUTES.includes(p)) return null;
   if (!tokenValid(req.headers.get("x-lucid-token"), ctx.uiToken)) return fail(403, "forbidden");
-  if (isMain && !tokenValid(req.headers.get(VAULT_MAIN_TOKEN_HEADER), ctx.mainToken ?? MAIN_VAULT_TOKEN)) return fail(403, "forbidden");
+  if (!isMain) {
+    try { return await uiRoute(req, p); } catch (e) { return fail(500, errText(e)); }
+  }
+  // Main-only (security review VAULT-TRANSPORT-LOCALHOST): the request must carry a fresh nonce and a MAC
+  // under the vault token (the token itself is never sent), and every reply to it is signed, so Electron
+  // main can tell this engine's answer from any other peer's. A request that fails here gets an unsigned
+  // 403, which main treats as a refusal.
+  const token = ctx.mainToken ?? MAIN_VAULT_TOKEN;
+  const nonceHex = req.headers.get(VAULT_NONCE_HEADER) ?? "";
+  if (!token || !/^[0-9a-f]{64}$/.test(nonceHex)) return fail(403, "forbidden");
+  const nonce = Buffer.from(nonceHex, "hex");
+  let raw: Buffer;
+  try { raw = Buffer.from(await req.arrayBuffer()); } catch { return fail(400, "unreadable request body"); }
+  let res: Response | null;
   try {
-    return isMain ? await mainRoute(req, p) : await uiRoute(req, p);
+    const expected = vaultRequestMac(FIPS_MAC, token, req.method, p, nonce, raw).toString("hex");
+    if (!tokenValid(req.headers.get(VAULT_AUTH_HEADER), expected)) return fail(403, "forbidden");
+    let parsed: unknown = null;
+    try { parsed = raw.length ? JSON.parse(raw.toString("utf8")) : null; } catch { /* not JSON: treated as an empty body */ }
+    const b = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+    res = mainRoute(req, p, b);
   } catch (e) {
-    return fail(500, errText(e));
+    res = fail(500, errText(e));
+  }
+  if (!res) return null;
+  try {
+    const out = Buffer.from(await res.arrayBuffer());
+    const headers = new Headers(res.headers);
+    headers.set(VAULT_MAC_HEADER, vaultResponseMac(FIPS_MAC, token, nonce, out).toString("hex"));
+    return new Response(new Uint8Array(out), { status: res.status, headers });
+  } catch (e) {
+    return fail(500, `the reply could not be signed: ${errText(e)}`); // unsigned: main refuses it (fail-closed)
   }
 }

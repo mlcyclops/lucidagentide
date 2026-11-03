@@ -192,14 +192,17 @@ export function mintCredRef(kind: string, at = Date.now()): string {
 /** The non-secret fields of a legacy safeStorage CredMeta, as main reads them from `<ref>.meta.json`. */
 export interface LegacyCredMeta { kind?: unknown; label?: unknown; createdAt?: unknown; rotatedAt?: unknown; expiresAt?: unknown; rotationIntervalDays?: unknown }
 /** stored = written now; present = the vault already held this exact value (a re-run after a crash);
- *  superseded = the vault holds a DIFFERENT value for the ref, written after the migration began (the
- *  engine copy wins: every write since this slice goes to the engine). */
-export type LegacyImportOutcome = "stored" | "present" | "superseded";
+ *  On a DIFFERENT value for the ref, newer wins (security review MIGRATION-SUPERSEDED-DELETE), comparing
+ *  the legacy CredMeta date (rotatedAt ?? createdAt) with the entry's updatedAt: replaced = the legacy value
+ *  was newer and now holds the ref; superseded = the engine value is as new or newer (or the legacy copy
+ *  carries no date) and stays. Either way the vault holds the winner before main deletes the source. */
+export type LegacyImportOutcome = "stored" | "present" | "replaced" | "superseded";
 
 /** Migration step for ONE safeStorage credential (main hands it over; vault_routes.ts main-only route).
  *  Same ref, CredMeta fields kept (createdAt -> addedAt), source "migrated-safestorage". Refuses unless
  *  the vault is `ok` (a background migration never sets an unreadable vault aside), and verifies by
- *  reading the vault back before reporting success: main deletes the source only after that. */
+ *  reading the vault back (it must hold the winning value) before reporting success: main deletes the
+ *  source only after that. */
 export function importLegacyCredential(ref: string, value: string, legacy: LegacyCredMeta): { outcome: LegacyImportOutcome; meta: VaultEntryMeta } {
   if (!isValidRef(ref)) throw new Error("invalid credential ref");
   if (typeof value !== "string" || !value) throw new Error("refusing to store an empty value");
@@ -218,15 +221,20 @@ export function importLegacyCredential(ref: string, value: string, legacy: Legac
     expiresAt: finite(legacy.expiresAt),
     rotationIntervalDays: finite(legacy.rotationIntervalDays),
   };
+  const legacyAt = rotatedAt ?? finite(legacy.createdAt);
   let outcome = "stored" as LegacyImportOutcome; // assigned inside the locked plan below
+  let winner = value; // the value the vault must hold afterwards
   mutateVault(keyVaultDir(), (current) => {
     const prev = current[ref];
-    if (prev) { outcome = prev.value === value ? "present" : "superseded"; return { set: {}, del: [] }; }
-    outcome = "stored";
-    return { set: { [ref]: value }, del: [], meta: { [ref]: patch }, source: "migrated-safestorage" };
+    if (prev && prev.value === value) { outcome = "present"; return { set: {}, del: [] }; }
+    if (prev && !(legacyAt !== undefined && legacyAt > prev.updatedAt)) { outcome = "superseded"; winner = prev.value; return { set: {}, del: [] }; }
+    outcome = prev ? "replaced" : "stored";
+    // A replaced entry keeps its own addedAt and source; the legacy dates say when this value was set.
+    const meta: VaultMetaPatch = prev ? { ...patch, addedAt: prev.addedAt, source: prev.source, updatedAt: legacyAt } : patch;
+    return { set: { [ref]: value }, del: [], meta: { [ref]: meta }, source: "migrated-safestorage" };
   });
   const back = readVault(keyVaultDir());
   const entry = back.entries[ref];
-  if (back.problem || !entry || (outcome !== "superseded" && entry.value !== value)) throw new Error("the vault did not read back the migrated credential");
+  if (back.problem || !entry || entry.value !== winner) throw new Error("the vault did not read back the migrated credential");
   return { outcome, meta: metaOf(entry) };
 }

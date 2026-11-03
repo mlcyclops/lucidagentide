@@ -295,7 +295,7 @@ let engineRestartInFlight: Promise<EngineRestartResult> | null = null;
 /** One nonce-checked health probe: true only when OUR engine answers (a squatter never counts). */
 async function engineAnswersHealth(): Promise<boolean> {
   try {
-    const res = await fetch(`http://localhost:${PORT}/api/health`, { signal: AbortSignal.timeout(3000) });
+    const res = await fetch(`http://127.0.0.1:${PORT}/api/health`, { signal: AbortSignal.timeout(3000) });
     const text = await res.text();
     let body: unknown = text;
     try { body = JSON.parse(text); } catch { /* healthVerdict fails closed on the raw text */ }
@@ -528,7 +528,7 @@ async function waitForServer(timeoutMs = 30000): Promise<ServerWait> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`http://localhost:${PORT}/api/health`);
+      const res = await fetch(`http://127.0.0.1:${PORT}/api/health`);
       const text = await res.text();
       let body: unknown = text;
       try { body = JSON.parse(text); } catch { /* healthVerdict fails closed on the raw text */ }
@@ -676,12 +676,15 @@ function createWindow(): void {
     );
     Menu.buildFromTemplate(template).popup({ window: win ?? undefined });
   });
-  installAppNavigation(win.webContents, `http://localhost:${PORT}/`, (url) => shell.openExternal(url));
+  // ADR-0474 security review VAULT-TRANSPORT-LOCALHOST: every main-to-engine fetch and the window load use
+  // 127.0.0.1, the engine's bind address. `localhost` can resolve to [::1] first, a socket any local
+  // process may own, which would then receive the UI token and render as our window.
+  installAppNavigation(win.webContents, `http://127.0.0.1:${PORT}/`, (url) => shell.openExternal(url));
   // P-KGMARKET.4: once the renderer is up, flush any lucid://auth URL that arrived during a cold launch.
   win.webContents.on("did-finish-load", () => {
     if (pendingAuthUrl) { win?.webContents.send("lucid:authCallback", pendingAuthUrl); pendingAuthUrl = null; }
   });
-  win.loadURL(`http://localhost:${PORT}`);
+  win.loadURL(`http://127.0.0.1:${PORT}`);
   // P-RECOVER.1 (ADR-0385): a Windows log off or shutdown arrives as session-end; it is a deliberate
   // exit, so it must not surface as an unclean-shutdown incident on the next launch.
   win.on("session-end", () => markRunClean());
@@ -795,7 +798,7 @@ function prepareCredEnv(): Record<string, string> {
 // on load) and this process hold: the renderer and the agent never see it.
 const VAULT_MAIN_TOKEN = randomBytes(32).toString("hex");
 const legacyCredVault = (): LegacyCredVault => ({ ss: ELECTRON_SAFE_STORAGE, io: VAULT_IO, dir: CRED_DIR() });
-const engineVault = () => engineCredClient({ baseUrl: `http://localhost:${PORT}`, uiToken: MAIN_TOKEN, vaultToken: VAULT_MAIN_TOKEN });
+const engineVault = () => engineCredClient({ baseUrl: `http://127.0.0.1:${PORT}`, uiToken: MAIN_TOKEN, vaultToken: VAULT_MAIN_TOKEN });
 /** Move what is left in safeStorage into the engine vault (cred_engine_client.ts: import, engine verifies,
  *  only then delete). Runs after the engine answers its health check; idempotent; never throws. */
 async function migrateLegacyCreds(): Promise<void> {
@@ -914,7 +917,7 @@ html.lucid-snap-flash { animation: lucidAgentBreathe 3.2s ease-in-out infinite, 
 `;
 async function browserApiPost(path: string, body: unknown): Promise<void> {
   try {
-    await fetch(`http://localhost:${PORT}${path}`, {
+    await fetch(`http://127.0.0.1:${PORT}${path}`, {
       method: "POST",
       headers: { "x-lucid-token": MAIN_TOKEN, "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -1182,7 +1185,7 @@ async function agentBrowserTick(): Promise<void> {
   if (agentPollBusy) return;
   agentPollBusy = true;
   try {
-    const res = await fetch(`http://localhost:${PORT}/api/browser/commands`, { headers: { "x-lucid-token": MAIN_TOKEN } });
+    const res = await fetch(`http://127.0.0.1:${PORT}/api/browser/commands`, { headers: { "x-lucid-token": MAIN_TOKEN } });
     if (!res.ok) return;
     const parsed: unknown = await res.json().catch(() => null);
     const data = parsed && typeof parsed === "object" && "data" in parsed ? parsed.data : null;

@@ -10,7 +10,8 @@
 //      secret value is left in either file or in the vault dir; keys load unchanged and reach process.env.
 //   2) a second engine process sharing the directory reads the same keys (no re-entry).
 //   3) Windows only: with master.dpapi gone the vault is unreadable; load() serves no vaulted key and
-//      rewrites nothing; re-entering a key sets the old vault aside and starts a fresh one.
+//      rewrites nothing; re-entering a key is refused (no new master key over sealed data, ADR-0474), and
+//      only after the explicit reset (the sealed file moved out) does a fresh vault take it.
 //   4) Electron main safety: engine_vault.ts bundled for Node reports `unavailable` and never reads a vault
 //      file (run under Node when it is on PATH); main.ts still bundles with --target=node.
 // On a host with no usable OS vault the demo checks the documented fallback instead (keys stay in the file).
@@ -103,14 +104,24 @@ try {
       if (!readFileSync(sealed).equals(sealedBytes) || !readFileSync(file).equals(fileBytes)) fail("an unreadable vault and the settings file must be left untouched");
       ok("master key gone: the vault reads as unreadable, no key is served, neither file is rewritten");
 
-      const quietErr = console.error; console.error = () => {};
-      try { setKey("LUCID_DEMO_VAULT_KEY", "sk-demo-REENTERED-0005"); } finally { console.error = quietErr; }
-      const aside = readdirSync(vault).filter((f) => f.startsWith("secrets.v1.json.unreadable-"));
-      if (aside.length !== 1 || !readFileSync(join(vault, aside[0]!)).equals(sealedBytes)) fail("the unreadable vault must be kept aside, byte for byte");
+      // ADR-0474 security review VAULT-MASTER-RECREATE: no new master key is minted over sealed data.
+      let refused = "";
+      try { setKey("LUCID_DEMO_VAULT_KEY", "sk-demo-REENTERED-0005"); } catch (e) { refused = String((e as Error)?.message ?? e); }
+      if (!/master key missing for an existing vault/.test(refused)) fail(`re-entering a key without the master key must be refused, got ${refused || "success"}`);
+      if (existsSync(join(vault, "master.dpapi")) || !readFileSync(sealed).equals(sealedBytes)) fail("a refused write must mint no key and leave the sealed vault untouched");
+      if (readFileSync(file, "utf8").includes("sk-demo-REENTERED-0005")) fail("a refused key must not land in lucid-gui.json");
+      ok("re-entering a key with the master key gone is refused: no new key, the sealed vault untouched");
+
+      // The explicit reset: the user moves the orphaned sealed file out of the vault directory.
+      const kept = join(dir, "secrets.v1.json.orphaned");
+      writeFileSync(kept, sealedBytes);
+      rmSync(sealed);
+      setKey("LUCID_DEMO_VAULT_KEY", "sk-demo-REENTERED-0005");
       const fourth = await engine();
-      if (fourth.status.state !== "ok" || fourth.settings.keys?.LUCID_DEMO_VAULT_KEY !== "sk-demo-REENTERED-0005") fail("the re-entered key must load from a fresh vault");
+      if (fourth.status.state !== "ok" || fourth.settings.keys?.LUCID_DEMO_VAULT_KEY !== "sk-demo-REENTERED-0005") fail("after the explicit reset the re-entered key must load from a fresh vault");
       if (readFileSync(file, "utf8").includes("sk-demo-REENTERED-0005")) fail("the re-entered key must not land in lucid-gui.json");
-      ok("re-entering a key set the old vault aside (kept, not overwritten) and started a fresh one");
+      if (!readFileSync(kept).equals(sealedBytes)) fail("the moved-out sealed file must be kept byte for byte");
+      ok("after the explicit reset (sealed file moved out) a fresh vault takes the re-entered key");
     }
   }
 

@@ -10,12 +10,13 @@
 // bridge cred* calls round-trip through the routes without a value ever coming back.
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { createHash, createHmac } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   credDeleteEverywhere, credListMerged, credRotateEngine, credStoreEngine, engineCredClient, migrateCredVault,
-  type EngineCredClient, type LegacyCredVault,
+  VAULT_MAC_HEADER, VAULT_NONCE_HEADER, vaultResponseMac, type EngineCredClient, type LegacyCredVault,
 } from "./cred_engine_client.ts";
 import { credEnvPlan } from "./cred_env.ts";
 import { listCredentials, readCredential, storeCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
@@ -100,7 +101,7 @@ function routeClient(bodies: string[] = [], opts: { down?: boolean } = {}): Engi
     bodies.push(text);
     return new Response(text, { status: res.status, headers: res.headers });
   };
-  return engineCredClient({ baseUrl: "http://localhost:1", uiToken: UI, vaultToken: MAIN, fetch: shim as unknown as typeof fetch });
+  return engineCredClient({ baseUrl: "http://127.0.0.1:1", uiToken: UI, vaultToken: MAIN, fetch: shim as unknown as typeof fetch });
 }
 
 const T0 = 1_760_000_000_000;
@@ -218,6 +219,78 @@ describe("safeStorage -> engine vault migration", () => {
     expect(r.migrated).toEqual(["figma_pat"]);
     expect(vaultGet("figma_pat")).toBe("figd_NEWER_IN_ENGINE_0000007");
     expect(io.files.has(`${credDir}/figma_pat.bin`)).toBe(false);
+  });
+
+  test("newer wins on a value mismatch, both directions; the source goes only once the vault holds the winner", async () => {
+    const { credDir } = scratch();
+    useFakeStore();
+    const io = memIo();
+    const v: LegacyCredVault = { ss: SS, io, dir: credDir };
+    const now = Date.now();
+    // figma_pat: the engine copy is older than the safeStorage one (an older build kept writing safeStorage).
+    vaultPut({ ref: "figma_pat", value: "figd_OLDER_IN_ENGINE_0000010", kind: "apikey", source: "typed" });
+    storeCredential(SS, io, credDir, { ref: "figma_pat", kind: "apikey", secret: "figd_NEWER_IN_SAFESTORAGE_11", createdAt: now + 60_000 }); // rotatedAt = createdAt
+    // git_pat: the engine copy is newer than the safeStorage one.
+    storeCredential(SS, io, credDir, { ref: "git_pat", kind: "apikey", secret: "ghp_OLDER_IN_SAFESTORAGE_012", createdAt: now - 86_400_000 });
+    vaultPut({ ref: "git_pat", value: "ghp_NEWER_IN_ENGINE_000000013", kind: "apikey", source: "typed" });
+    const outcomes: Record<string, string> = {};
+    const base = routeClient();
+    const traced: EngineCredClient = { ...base, importLegacy: async (item) => { const r = await base.importLegacy(item); outcomes[item.ref] = r.outcome; return r; } };
+    const r = await quiet(() => migrateCredVault(v, traced));
+    expect(r.migrated.sort()).toEqual(["figma_pat", "git_pat"]);
+    expect(outcomes).toEqual({ figma_pat: "replaced", git_pat: "superseded" });
+    expect(vaultGet("figma_pat")).toBe("figd_NEWER_IN_SAFESTORAGE_11");
+    expect(vaultGet("git_pat")).toBe("ghp_NEWER_IN_ENGINE_000000013");
+    expect(vaultList().find((m) => m.ref === "figma_pat")).toMatchObject({ source: "typed", updatedAt: now + 60_000 });
+    expect(io.files.has(`${credDir}/figma_pat.bin`)).toBe(false);
+    expect(io.files.has(`${credDir}/git_pat.bin`)).toBe(false);
+  });
+
+  test("an unauthenticated reply (no MAC, a wrong MAC, a body altered after signing) is a refusal: nothing is deleted", async () => {
+    const { credDir } = scratch();
+    useFakeStore();
+    const io = memIo();
+    const v: LegacyCredVault = { ss: SS, io, dir: credDir };
+    seed(v, ["figma_pat", "git_pat"]);
+    const removed: string[] = [];
+    io.onRemove = (p) => removed.push(p);
+    const engine = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const req = new Request(input, init);
+      return (await handleVaultRoutes(req, new URL(req.url).pathname, { uiToken: UI, mainToken: MAIN }))!;
+    };
+    // The status check reaches the real engine; only the import reply is forged, claiming `verified: true`.
+    const forging = (forge: (init: RequestInit | undefined, ref: string) => Promise<Response>) =>
+      async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        if (!String(input).endsWith("/import")) return engine(input, init);
+        return forge(init, JSON.parse(String(init?.body)).ref);
+      };
+    const claim = (ref: string): string => JSON.stringify({ ok: true, data: { ref, outcome: "stored", verified: true } });
+    const NODE_MAC = { hmac: (k: Buffer, d: Buffer) => createHmac("sha256", k).update(d).digest(), sha256: (d: Buffer) => createHash("sha256").update(d).digest() };
+    // A peer that is not the engine (e.g. squatting on [::1]:PORT) answering with no MAC ...
+    const unsigned = forging(async (_init, ref) => new Response(claim(ref), { status: 200 }));
+    // ... with a MAC made under some other key ...
+    const wrongKey = forging(async (init, ref) => {
+      const nonce = Buffer.from(new Headers(init?.headers).get(VAULT_NONCE_HEADER)!, "hex");
+      const mac = vaultResponseMac(NODE_MAC, "a-guessed-token", nonce, Buffer.from(claim(ref), "utf8"));
+      return new Response(claim(ref), { status: 200, headers: { [VAULT_MAC_HEADER]: mac.toString("hex") } });
+    });
+    // ... or the real engine's signed reply with its body changed in transit (one byte is enough).
+    const altered = forging(async (init) => {
+      const res = await engine("http://127.0.0.1:1/api/vault/main/import", init);
+      return new Response(`${await res.text()} `, { status: res.status, headers: res.headers });
+    });
+    for (const f of [unsigned, wrongKey, altered]) {
+      const client = engineCredClient({ baseUrl: "http://127.0.0.1:1", uiToken: UI, vaultToken: MAIN, fetch: f as unknown as typeof fetch });
+      const r = await quiet(() => migrateCredVault(v, client));
+      expect(r.migrated).toEqual([]);
+      expect(r.kept.map((k) => k.ref)).toEqual(["figma_pat", "git_pat"]);
+      expect(r.kept.every((k) => /not authenticated/.test(k.reason))).toBe(true);
+    }
+    expect(removed).toEqual([]);
+    expect(io.files.has(`${credDir}/figma_pat.bin`)).toBe(true);
+    expect(io.files.has(`${credDir}/git_pat.bin`)).toBe(true);
+    // The same vault through the real, signing engine migrates: the refusals above were the MAC, not the data.
+    expect((await quiet(() => migrateCredVault(v, routeClient()))).migrated).toEqual(["figma_pat", "git_pat"]);
   });
 
   test("the Creator root migrates into ITS engine vault only", async () => {

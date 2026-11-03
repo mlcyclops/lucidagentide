@@ -142,6 +142,38 @@ describe("vault files", () => {
     expect(readVault(dir).secrets).toEqual({ "key:NEW": "n" });
   });
 
+  test("a missing master key over an existing sealed file is refused: no key is minted, nothing is set aside", () => {
+    const dir = scratch();
+    useStore(fakeStore(randomBytes(32)));
+    put(dir, MAP);
+    const before = readFileSync(join(dir, SECRETS_FILE));
+    const empty = fakeStore(); // the key record is gone (a deleted master.dpapi, a dismissed keyring)
+    useStore(empty);
+    expect(vaultStatus(dir).state).toBe("unreadable");
+    expect(() => put(dir, { "key:NEW": "n" })).toThrow(/master key missing for an existing vault/);
+    expect(empty.creates).toBe(0);
+    expect(readFileSync(join(dir, SECRETS_FILE)).equals(before)).toBe(true);
+    expect(readdirSync(dir).some((f) => f.includes(".unreadable-"))).toBe(false);
+  });
+
+  test("a set-aside .unreadable- copy with no key record also refuses a new key; moving it out is the reset", () => {
+    const dir = scratch();
+    mkdirSync(dir, { recursive: true });
+    const aside = join(dir, `${SECRETS_FILE}.unreadable-1700000000000`);
+    writeFileSync(aside, JSON.stringify(sealSecrets(randomBytes(32), MAP)));
+    const empty = fakeStore();
+    useStore(empty);
+    expect(vaultStatus(dir)).toMatchObject({ state: "unreadable" });
+    expect(vaultStatus(dir).detail).toContain("master key missing");
+    expect(() => put(dir, { "key:NEW": "n" })).toThrow(/master key missing for an existing vault/);
+    expect(empty.creates).toBe(0);
+    rmSync(aside); // the explicit reset: the orphaned sealed data leaves the directory
+    useStore(empty);
+    put(dir, { "key:NEW": "n" });
+    expect(empty.creates).toBe(1);
+    expect(readVault(dir).secrets).toEqual({ "key:NEW": "n" });
+  });
+
   test("no OS backend: unavailable, plaintext-file custody, and nothing is created", () => {
     const dir = scratch();
     useStore(null);
@@ -174,6 +206,8 @@ describe("owner-token lock", () => {
     expect(withFileLock(lock, () => { sawOurs = readFileSync(lock, "utf8"); return 7; }, { timeoutMs: 2_000 })).toBe(7);
     expect(JSON.parse(sawOurs).pid).toBe(process.pid);
     expect(existsSync(lock)).toBe(false);
+    // The takeover renamed the stale lock to a private name and deleted only that: nothing is left over.
+    expect(readdirSync(join(lock, "..")).filter((f) => f.includes(".stale-"))).toEqual([]);
   });
 
   test("a FRESH lock of a dead owner is still waited for (stale needs age AND a dead pid)", async () => {

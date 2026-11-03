@@ -9,11 +9,13 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createCipheriv, createDecipheriv, createHash, createHmac, pbkdf2Sync } from "node:crypto";
-import { release } from "node:os";
-import { managedRequireFips, mergeManaged, parseRegistryPolicy } from "../../desktop/managed_config.ts";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { release, tmpdir } from "node:os";
+import { join } from "node:path";
+import { __resetManagedCache, managedRequireFips, mergeManaged, parseRegistryPolicy } from "../../desktop/managed_config.ts";
 import { decrypt, deriveKey, encrypt, KDF_ITERS, KEY_LEN, type Sealed } from "../personal/crypto.ts";
 import {
-  _forceModuleForTest, aesGcmDecrypt, aesGcmEncrypt, CryptoAuthError, cryptoInfo, cryptoSelfTest, fipsRequired,
+  _forceModuleForTest, aesGcmDecrypt, aesGcmEncrypt, corecryptoClaim, CryptoAuthError, cryptoInfo, cryptoSelfTest, fipsRequired,
   FipsRequiredError, hmacSha256, pbkdf2Sha256, randomBytes, sha256, windowsCngClaim,
 } from "./fips_crypto.ts";
 
@@ -60,14 +62,19 @@ describe("module selection and self-test", () => {
     expect(info.required).toBe(false);
     expect(typeof info.osFipsPolicy === "boolean").toBe(true); // reg.exe answered on a real host
     expect(info.detail).toContain(release());
-    if (info.osFipsPolicy === true) expect(info.fips).toBe(true);
     const build = Number(release().split(".")[2]);
+    // The claim always follows windowsCngClaim; an unlisted build is never claimed, whatever the policy.
+    if (windowsCngClaim(null, build, null).basis.includes("is not a Microsoft-listed")) expect(info.fips).toBe(false);
     // Only Windows 11 22H2 (22621) and Server 2022 (20348) are claimed without the policy.
-    if (build !== 22621 && build !== 20348) expect(info.fips).toBe(info.osFipsPolicy === true);
+    else if (build !== 22621 && build !== 20348) expect(info.fips).toBe(info.osFipsPolicy === true);
   });
 
-  test("windowsCngClaim: policy on, or a listed auto-self-test build at its patch level; nothing else", () => {
-    expect(windowsCngClaim(true, 19045, 6456).fips).toBe(true);           // Windows 10 22H2, policy on
+  test("windowsCngClaim: a listed build AND (policy on, or its auto-self-test patch level); nothing else", () => {
+    expect(windowsCngClaim(true, 19045, 6456).fips).toBe(false);          // Windows 10 22H2, policy on: unlisted, not claimed
+    expect(windowsCngClaim(true, 19044, 6456).fips).toBe(false);          // Windows 10 21H2: not mapped to the 19041 module
+    expect(windowsCngClaim(true, 19041, 1415).fips).toBe(true);           // Windows 10 2004 (CMVP #4536), policy on
+    expect(windowsCngClaim(true, 19043, 2364).basis).toContain("#4825");
+    expect(windowsCngClaim(true, 26100, 7171).fips).toBe(false);          // Windows 11 24H2, policy on: unlisted
     expect(windowsCngClaim(false, 19045, 6456).fips).toBe(false);         // Windows 10 22H2, policy off: unlisted
     expect(windowsCngClaim(null, 19045, 6456).fips).toBe(false);          // policy unknown: never claimed
     expect(windowsCngClaim(false, 19043, 2364).fips).toBe(false);         // listed Windows 10 21H1, self-tests need the policy
@@ -78,6 +85,18 @@ describe("module selection and self-test", () => {
     expect(windowsCngClaim(false, 26100, 7171).fips).toBe(false);         // Windows 11 24H2: not a listed release
     expect(windowsCngClaim(false, 26100, 7171).basis).toContain("not claimed");
     expect(windowsCngClaim(true, 26100, 7171).basis).toContain("not a Microsoft-listed");
+  });
+
+  test("corecryptoClaim: only a Darwin release and architecture with an active CMVP certificate", () => {
+    expect(corecryptoClaim("23.6.0", "arm64")).toMatchObject({ fips: true });   // macOS 14 Sonoma, Apple silicon (#5216)
+    expect(corecryptoClaim("23.6.0", "arm64").basis).toContain("#5216");
+    expect(corecryptoClaim("24.1.0", "x64").basis).toContain("#5217");          // macOS 15 Sequoia, Intel
+    expect(corecryptoClaim("21.6.0", "x64").fips).toBe(true);                    // macOS 12 Monterey, Intel (#4951)
+    expect(corecryptoClaim("21.6.0", "arm64").fips).toBe(false);                 // no active Apple silicon certificate
+    expect(corecryptoClaim("25.0.0", "arm64").fips).toBe(false);                 // macOS 26: not (yet) validated
+    expect(corecryptoClaim("19.6.0", "x64").fips).toBe(false);                   // macOS 10.15: not in the table
+    expect(corecryptoClaim("garbage", "arm64").fips).toBe(false);
+    expect(corecryptoClaim("25.0.0", "arm64").basis).toContain("not claimed");
   });
 });
 
@@ -239,6 +258,35 @@ describe("managed policy security.crypto.requireFips", () => {
     const merged = mergeManaged(reg, { security: { exec: { lock: true } } });
     expect(managedRequireFips(merged)).toBe(true);
     expect(merged?.security?.exec?.lock).toBe(true);
+  });
+
+  test("monotonic: a policy file requiring FIPS fails closed without the env flag; a `false` file never relaxes the env flag", () => {
+    const savedCfg = process.env.LUCID_MANAGED_CONFIG;
+    const root = mkdtempSync(join(tmpdir(), "lucid-fips-mono-"));
+    const file = (name: string, requireFips: boolean): string => {
+      const p = join(root, name);
+      writeFileSync(p, JSON.stringify({ security: { crypto: { requireFips } } }));
+      return p;
+    };
+    try {
+      _forceModuleForTest("bun-boringssl");
+      delete process.env.LUCID_FIPS_REQUIRED;
+      process.env.LUCID_MANAGED_CONFIG = file("on.json", true);
+      __resetManagedCache();
+      expect(fipsRequired()).toBe(true);
+      expect(() => sha256(Buffer.from("abc"))).toThrow(/LUCID_MANAGED_CONFIG/);
+      process.env.LUCID_MANAGED_CONFIG = file("off.json", false);
+      process.env.LUCID_FIPS_REQUIRED = "1";
+      __resetManagedCache();
+      expect(fipsRequired()).toBe(true);
+      expect(() => sha256(Buffer.from("abc"))).toThrow(FipsRequiredError);
+    } finally {
+      if (savedCfg === undefined) delete process.env.LUCID_MANAGED_CONFIG; else process.env.LUCID_MANAGED_CONFIG = savedCfg;
+      delete process.env.LUCID_FIPS_REQUIRED;
+      __resetManagedCache();
+      _forceModuleForTest(null);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

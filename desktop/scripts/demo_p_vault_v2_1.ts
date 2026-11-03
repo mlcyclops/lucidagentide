@@ -13,7 +13,8 @@
 //   2) an engine launched the way Electron main launches it (LUCID_MAIN_TOKEN + LUCID_VAULT_MAIN_TOKEN):
 //      main's side (cred_engine_client.ts) migrates a safeStorage vault (a stand-in SafeStorageLike over
 //      real files): each entry is imported, verified by the engine, and only then deleted; a marker lists
-//      the refs; a second run is a no-op; bridge cred* store/list/rotate/delete round-trip.
+//      the refs; a second run is a no-op; bridge cred* store/list/rotate/delete round-trip. Every main-only
+//      reply is MAC-checked: a forged `verified: true` without the engine's reply MAC deletes nothing.
 // Exit code 0 = every check held.
 
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -165,6 +166,15 @@ try {
   // Bun's `typeof fetch` also carries `preconnect`; the client only ever calls it as a function.
   const client = engineCredClient({ baseUrl: engine.base, uiToken: mainToken, vaultToken, fetch: capturing as unknown as typeof fetch });
   const legacy: LegacyCredVault = { ss: SS, io: FS_IO, dir: paths.cred };
+  // ADR-0474 security review: a reply without the engine's MAC (a peer answering `verified: true` to every
+  // import, as a socket squatting on [::1]:PORT could) is a refusal, and nothing is deleted.
+  const forging = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    if (!String(input).endsWith("/api/vault/main/import")) return capturing(input, init);
+    const ref: unknown = JSON.parse(String(init?.body ?? "{}")).ref;
+    return new Response(JSON.stringify({ ok: true, data: { ref, outcome: "stored", verified: true } }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const forged = await migrateCredVault(legacy, engineCredClient({ baseUrl: engine.base, uiToken: mainToken, vaultToken, fetch: forging as unknown as typeof fetch }));
+  check(forged.migrated.length === 0 && forged.kept.length === 2 && readdirSync(paths.cred).filter((f) => f.endsWith(".bin")).length === 2, "a forged `verified: true` without the engine's reply MAC is refused: no safeStorage entry is deleted");
   const report = await migrateCredVault(legacy, client);
   check(report.migrated.sort().join(",") === "figma_pat,git_pat_github_com" && report.kept.length === 0, "both safeStorage entries were imported, verified by the engine, then deleted");
   check(!readdirSync(paths.cred).some((f) => f.endsWith(".bin")) && !!report.marker && existsSync(report.marker), "no .bin is left; a migrated-<ts>.json marker exists");

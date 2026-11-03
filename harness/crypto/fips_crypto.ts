@@ -9,14 +9,16 @@
 //   win32  Windows CNG (bcrypt.dll) through bun:ffi
 //   darwin Apple corecrypto through CommonCrypto (libcommonCrypto.dylib) through bun:ffi
 //   linux  OpenSSL 3 (libcrypto.so.3) through bun:ffi, ONLY when its FIPS provider is active
-// `fips` is reported true only when the claim is justified: on Windows when the OS FIPS mode policy is on
-// or the build is a Microsoft-listed validated release that self-tests without it (windowsCngClaim); on
-// Linux only with the OpenSSL FIPS provider active. CNG on an unlisted build with the policy off still
-// performs the operations, but reports `fips: false` (and so fails closed when FIPS is required).
-// Anything else (Electron main / Node, a module that cannot be bound, a failed self-test) falls back to
-// node:crypto ("bun-boringssl") and reports `fips: false`. When fipsRequired() (env LUCID_FIPS_REQUIRED=1
-// or managed policy security.crypto.requireFips) and no validated module is usable, every operation
-// throws FipsRequiredError: there is no silent non-validated path.
+// `fips` is reported true only when the claim is justified: on Windows when the build is a Microsoft-listed
+// validated release AND it runs in approved mode (the OS FIPS mode policy is on, or the build self-tests
+// without it; windowsCngClaim); on macOS only for a Darwin release and architecture whose corecrypto module
+// holds an active CMVP certificate (corecryptoClaim); on Linux only with the OpenSSL FIPS provider active.
+// CNG or corecrypto outside those rules still performs the operations, but reports `fips: false` (and so
+// fails closed when FIPS is required). Anything else (Electron main / Node, a module that cannot be bound,
+// a failed self-test) falls back to node:crypto ("bun-boringssl") and reports `fips: false`. When
+// fipsRequired() (env LUCID_FIPS_REQUIRED=1 or ANY managed policy source setting requireFips: the GPO
+// registry, the machine policy file, the LUCID_MANAGED_CONFIG file) and no validated module is usable,
+// every operation throws FipsRequiredError: there is no silent non-validated path.
 //
 // AES-256-GCM and PBKDF2 are deterministic, so every module produces byte-identical output for the same
 // inputs: existing ciphertext needs no re-encryption, swapping the module IS the migration.
@@ -29,7 +31,7 @@
 import { spawnSync } from "node:child_process";
 import { createCipheriv, createDecipheriv, createHash, createHmac, pbkdf2Sync, randomBytes as nodeRandomBytes } from "node:crypto";
 import { release } from "node:os";
-import { managedConfig, managedRequireFips } from "../../desktop/managed_config.ts";
+import { managedRequireFipsBy } from "../../desktop/managed_config.ts";
 
 export type CryptoModule = "windows-cng" | "macos-corecrypto" | "openssl-fips" | "bun-boringssl";
 export interface CryptoProviderInfo {
@@ -240,7 +242,7 @@ function cngProvider(ffi: BunFfi, claim: { fips: boolean; basis: string }): Prov
   return {
     module: "windows-cng",
     fips: claim.fips,
-    detail: `Windows CNG (bcrypt.dll over bcryptprimitives.dll, Windows ${release()}): AES-256-GCM, PBKDF2-HMAC-SHA256, SHA-256, HMAC-SHA256 and the system-preferred DRBG; ${claim.basis}; see CMVP for the module certificate of your OS build`,
+    detail: `Windows CNG (bcrypt.dll over bcryptprimitives.dll, Windows ${release()}): AES-256-GCM, PBKDF2-HMAC-SHA256, SHA-256, HMAC-SHA256 and the system-preferred DRBG; ${claim.basis}`,
     random(n) {
       const out = new Uint8Array(Math.max(n, 1));
       check(s.BCryptGenRandom(null, ffi.ptr(out), n, BCRYPT_USE_SYSTEM_PREFERRED_RNG), "BCryptGenRandom");
@@ -307,13 +309,19 @@ function windowsFipsPolicy(): boolean | null {
 }
 
 /** Windows releases Microsoft lists as having a FIPS 140 validated Cryptographic Primitives Library
- *  (bcryptprimitives.dll, the user-mode CNG module), by build number, per
- *  learn.microsoft.com/windows/security/security-foundations/certification/fips-140-validation. */
+ *  (bcryptprimitives.dll, the user-mode CNG module), by build number, with that module's CMVP certificate,
+ *  per learn.microsoft.com/windows/security/security-foundations/certification/fips-140-validation and its
+ *  per-release pages (validations/fips-140-windows10, -windows11, -windows-server-2016/2019/2022), read
+ *  2026-11-03. Enablement-package builds are NOT mapped to their base module: Microsoft lists Windows 10
+ *  20H2 (19042) and 21H1 (19043) as their own validations (#4825), but lists neither 21H2 (19044) nor 22H2
+ *  (19045), and nothing on those pages says they inherit the 19041 module (#4536), so they are not claimed.
+ *  Editions are not checked: 19042/19043 are validated for Pro and Enterprise only (ADR-0473 residual). */
 const CNG_LISTED_RELEASES: Readonly<Record<number, string>> = {
-  10240: "Windows 10 1507", 10586: "Windows 10 1511", 14393: "Windows 10 1607 / Server 2016", 15063: "Windows 10 1703",
-  16299: "Windows 10 1709", 17134: "Windows 10 1803", 17763: "Windows 10 1809 / Server 2019", 18362: "Windows 10 1903",
-  18363: "Windows 10 1909", 19041: "Windows 10 2004", 19042: "Windows 10 20H2", 19043: "Windows 10 21H1",
-  20348: "Windows Server 2022", 22000: "Windows 11 21H2", 22621: "Windows 11 22H2",
+  10240: "Windows 10 1507 (CMVP #2606)", 10586: "Windows 10 1511 (CMVP #2606)", 14393: "Windows 10 1607 / Server 2016 (CMVP #2937)",
+  15063: "Windows 10 1703 (CMVP #3095)", 16299: "Windows 10 1709 (CMVP #3197)", 17134: "Windows 10 1803 (CMVP #3197)",
+  17763: "Windows 10 1809 / Server 2019 (CMVP #3197)", 18362: "Windows 10 1903 (CMVP #4536)", 18363: "Windows 10 1909 (CMVP #4536)",
+  19041: "Windows 10 2004 (CMVP #4536)", 19042: "Windows 10 20H2 (CMVP #4825)", 19043: "Windows 10 21H1 (CMVP #4825)",
+  20348: "Windows Server 2022 (CMVP #4825; #5410 from build 20348.1668)", 22000: "Windows 11 21H2 (CMVP #4825)", 22621: "Windows 11 22H2 (CMVP #5410)",
 };
 /** The listed releases whose module runs its FIPS 140 self-tests WITHOUT the legacy FIPS policy: Microsoft
  *  made that automatic in the April 2024 quality updates KB5036893 (OS build 22621.3447) and KB5036909
@@ -325,19 +333,21 @@ const CNG_AUTO_SELFTEST: Readonly<Record<number, { minUbr: number; cert: string 
 };
 
 /** Whether operations performed by Windows CNG may be reported as FIPS 140 validated (pure; the rule of
- *  ADR-0473). True when (a) the OS FIPS policy is on (FipsAlgorithmPolicy\Enabled = 1: the administrator
- *  put Windows in its FIPS approved mode, which also enables the module self-tests), or (b) the build is
- *  a Microsoft-listed validated release that runs the self-tests without the policy (CNG_AUTO_SELFTEST at
- *  or above its patch level). Anything else (an unlisted build such as Windows 10 22H2 or Windows 11 24H2
- *  with the policy off, or an unknown policy) is NOT claimed. `basis` is the human reason either way. */
+ *  ADR-0473). BOTH must hold: (1) the build is a Microsoft-listed validated release (CNG_LISTED_RELEASES),
+ *  and (2) its module runs in approved mode: the OS FIPS policy is on (FipsAlgorithmPolicy\Enabled = 1,
+ *  which also enables the self-tests), or the build self-tests without the policy (CNG_AUTO_SELFTEST at or
+ *  above its patch level). The policy puts CNG in its approved mode but cannot make an unvalidated module
+ *  version validated, so an unlisted build (Windows 10 21H2/22H2, Windows 11 23H2/24H2) is never claimed,
+ *  policy or not; neither is an unknown policy. `basis` is the human reason either way. */
 export function windowsCngClaim(policy: boolean | null, build: number, ubr: number | null): { fips: boolean; basis: string } {
   const listed = CNG_LISTED_RELEASES[build];
-  const listing = listed ? `${listed} is a Microsoft-listed FIPS 140 validated release` : `build ${build} is not a Microsoft-listed FIPS 140 validated release`;
-  if (policy === true) return { fips: true, basis: `the Windows FIPS mode policy is on (FipsAlgorithmPolicy\\Enabled=1); ${listing}` };
+  const policyText = policy === true ? "the Windows FIPS mode policy is on (FipsAlgorithmPolicy\\Enabled=1)" : policy === false ? "the Windows FIPS mode policy is off" : "the Windows FIPS mode policy could not be read";
+  if (!listed) return { fips: false, basis: `not claimed as FIPS 140 validated: build ${build} is not a Microsoft-listed FIPS 140 validated release (${policyText})` };
+  const listing = `${listed} is a Microsoft-listed FIPS 140 validated release`;
+  if (policy === true) return { fips: true, basis: `${policyText}; ${listing}` };
   const auto = CNG_AUTO_SELFTEST[build];
   if (auto && ubr !== null && ubr >= auto.minUbr) return { fips: true, basis: `${listing} (${auto.cert}) whose module self-tests run without the FIPS policy at build ${build}.${ubr}` };
-  const policyText = policy === false ? "the Windows FIPS mode policy is off" : "the Windows FIPS mode policy could not be read";
-  return { fips: false, basis: `not claimed as FIPS 140 validated: ${policyText} and ${listing}${auto ? ` but build ${build}.${ubr ?? "?"} predates its automatic self-tests (${build}.${auto.minUbr})` : listed ? " whose self-tests need that policy" : ""}; enable "System cryptography: Use FIPS compliant algorithms" to run CNG in its approved mode` };
+  return { fips: false, basis: `not claimed as FIPS 140 validated: ${policyText} and ${listing}${auto ? ` but build ${build}.${ubr ?? "?"} predates its automatic self-tests (${build}.${auto.minUbr})` : " whose self-tests need that policy"}; enable "System cryptography: Use FIPS compliant algorithms" to run CNG in its approved mode` };
 }
 
 /** The running Windows build (10.0.<build>) and update build revision (UBR), for windowsCngClaim. */
@@ -361,6 +371,35 @@ const kCCAlgorithmAES = 0;
 const kCCPBKDF2 = 2;
 const kCCPRFHmacAlgSHA256 = 3;
 const kCCHmacAlgSHA256 = 2;
+
+/** macOS releases (by Darwin major) whose user-space corecrypto module (the one CommonCrypto calls) holds
+ *  an ACTIVE CMVP certificate, per architecture, read 2026-11-03 from the CMVP validated-modules search
+ *  (vendor Apple, status Active) and each certificate's Security Policy "Tested Operational Environments":
+ *  macOS 11 Big Sur: v11.1 [Intel, User] #4389, v11.1 [Apple silicon, User] #4391
+ *  macOS 12 Monterey: v12 [Intel, User] #4951 (no active Apple silicon user-space certificate)
+ *  macOS 13 Ventura: v13.0 [Intel, User] #5348, v13.0 [Apple silicon, User] #5065
+ *  macOS 14 Sonoma: v14.0 [Intel, User] #5201, v14.0 [Apple silicon, User] #5216
+ *  macOS 15 Sequoia: v18.3 [Intel, User] #5217, 18.3 [Apple silicon, User] #5184
+ *  A release (or architecture) not in this table, such as macOS 26 before its certificate is issued, is
+ *  not claimed: Apple submits each release, but "in process" is not "validated". */
+const CORECRYPTO_VALIDATED: Readonly<Record<number, { name: string; x64?: string; arm64?: string }>> = {
+  20: { name: "macOS 11 Big Sur", x64: "CMVP #4389", arm64: "CMVP #4391" },
+  21: { name: "macOS 12 Monterey", x64: "CMVP #4951" },
+  22: { name: "macOS 13 Ventura", x64: "CMVP #5348", arm64: "CMVP #5065" },
+  23: { name: "macOS 14 Sonoma", x64: "CMVP #5201", arm64: "CMVP #5216" },
+  24: { name: "macOS 15 Sequoia", x64: "CMVP #5217", arm64: "CMVP #5184" },
+};
+
+/** Whether operations performed by Apple corecrypto (through CommonCrypto) may be reported as FIPS 140
+ *  validated (pure; ADR-0473): only for a Darwin release and architecture in CORECRYPTO_VALIDATED.
+ *  corecrypto has no separate FIPS mode and self-tests at load, so no policy enters the rule. */
+export function corecryptoClaim(darwinRelease: string, arch: string): { fips: boolean; basis: string } {
+  const major = Number(darwinRelease.split(".")[0]);
+  const row = Number.isInteger(major) ? CORECRYPTO_VALIDATED[major] : undefined;
+  const cert = row ? (arch === "arm64" ? row.arm64 : arch === "x64" ? row.x64 : undefined) : undefined;
+  if (row && cert) return { fips: true, basis: `the ${row.name} user-space corecrypto module for ${arch === "arm64" ? "Apple silicon" : "Intel"} is FIPS 140 validated (${cert}; see its Security Policy for the approved mode)` };
+  return { fips: false, basis: `not claimed as FIPS 140 validated: no active CMVP certificate is listed for the user-space corecrypto module of Darwin ${darwinRelease} on ${arch}` };
+}
 
 function corecryptoProvider(ffi: BunFfi): Provider {
   const P = "ptr", U32 = "u32", U64 = "u64", I32 = "i32";
@@ -397,10 +436,11 @@ function corecryptoProvider(ffi: BunFfi): Provider {
   const big = BigInt;
   const ok = (status: number, what: string): void => { if (status !== 0) throw new Error(`${what} failed (status ${status})`); };
 
+  const claim = corecryptoClaim(release(), process.arch);
   return {
     module: "macos-corecrypto",
-    fips: true,
-    detail: `Apple corecrypto through CommonCrypto (Darwin ${release()}): AES-256-GCM, PBKDF2-HMAC-SHA256, SHA-256, HMAC-SHA256 and the system DRBG; claimed because Apple submits corecrypto (which has no separate FIPS mode and self-tests at load) for FIPS 140 validation for each macOS release; see CMVP for the module certificate of your OS build`,
+    fips: claim.fips,
+    detail: `Apple corecrypto through CommonCrypto (Darwin ${release()}): AES-256-GCM, PBKDF2-HMAC-SHA256, SHA-256, HMAC-SHA256 and the system DRBG; ${claim.basis}`,
     random(n) {
       const out = new Uint8Array(Math.max(n, 1));
       ok(cc.CCRandomGenerateBytes(ffi.ptr(out), big(n)), "CCRandomGenerateBytes");
@@ -718,18 +758,27 @@ function resolveProvider(): Resolved {
  *  resolved one is not. Re-evaluated on every call so a policy change applies without a restart. */
 function active(): Provider {
   const { provider } = resolveProvider();
-  if (!provider.fips && fipsRequired()) {
-    const by = process.env.LUCID_FIPS_REQUIRED === "1" ? "LUCID_FIPS_REQUIRED=1" : "managed policy security.crypto.requireFips";
-    throw new FipsRequiredError(`FIPS 140-validated cryptography is required (${by}) but no validated module is usable: ${provider.detail}`);
+  if (!provider.fips) {
+    const by = fipsRequiredBy();
+    if (by.length) throw new FipsRequiredError(`FIPS 140-validated cryptography is required (${by.join("; ")}) but no validated module is usable: ${provider.detail}`);
   }
   return provider;
 }
 
+/** Every source that requires FIPS right now: env LUCID_FIPS_REQUIRED=1 plus each managed policy source
+ *  that sets requireFips (managedRequireFipsBy reads the GPO registry, the machine policy file and the
+ *  LUCID_MANAGED_CONFIG file independently). An OR: a source can add the requirement, none can remove it. */
+function fipsRequiredBy(): string[] {
+  return [...(process.env.LUCID_FIPS_REQUIRED === "1" ? ["LUCID_FIPS_REQUIRED=1"] : []), ...managedRequireFipsBy()];
+}
+
 // ── public API (Contract A) ───────────────────────────────────────────────────────────────────────────
 
-/** env LUCID_FIPS_REQUIRED=1 OR managed policy security.crypto.requireFips === true (desktop/managed_config.ts). */
+/** env LUCID_FIPS_REQUIRED=1 OR any managed policy source with security.crypto.requireFips === true
+ *  (the GPO registry, the machine policy file, the LUCID_MANAGED_CONFIG file; desktop/managed_config.ts).
+ *  Monotonic: no source can turn off what another one requires. */
 export function fipsRequired(): boolean {
-  return process.env.LUCID_FIPS_REQUIRED === "1" || managedRequireFips(managedConfig().config);
+  return fipsRequiredBy().length > 0;
 }
 
 /** Which module performs the operations, whether it is FIPS-validated, and the OS policy. Never throws. */

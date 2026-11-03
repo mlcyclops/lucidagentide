@@ -101,7 +101,9 @@ export interface ManagedSandboxPolicy {
 
 /** ADR-0473 (P-FIPS.1): cryptography governance. `requireFips: true` makes every crypto operation of
  *  harness/crypto/fips_crypto.ts fail closed (FipsRequiredError) unless a FIPS 140-validated OS module
- *  performs it; there is no non-validated fallback. Tighten-only, like every managed knob. */
+ *  performs it; there is no non-validated fallback. Tighten-only by construction: fips_crypto.ts reads it
+ *  from each source on its own (managedRequireFipsBy) and ORs them, so `false` in one source never
+ *  overrides `true` in another. */
 export interface ManagedCryptoPolicy {
   requireFips?: boolean;
 }
@@ -208,17 +210,18 @@ export interface UpdatePolicy {
   feedUrl?: string;
 }
 
+/** The canonical admin-only machine policy path for this platform. */
+function machinePolicyPath(): string {
+  if (process.platform === "win32") return join(process.env.ProgramData || "C:\\ProgramData", "LucidAgentIDE", "managed-config.json");
+  if (process.platform === "darwin") return "/Library/Application Support/LucidAgentIDE/managed-config.json";
+  return "/etc/lucidagentide/managed-config.json";
+}
+
 function candidatePaths(): string[] {
   const list: string[] = [];
   const envPath = process.env.LUCID_MANAGED_CONFIG; // MDM may point us at an explicit path
   if (envPath) list.push(envPath);
-  if (process.platform === "win32") {
-    list.push(join(process.env.ProgramData || "C:\\ProgramData", "LucidAgentIDE", "managed-config.json"));
-  } else if (process.platform === "darwin") {
-    list.push("/Library/Application Support/LucidAgentIDE/managed-config.json");
-  } else {
-    list.push("/etc/lucidagentide/managed-config.json");
-  }
+  list.push(machinePolicyPath());
   return list;
 }
 
@@ -229,6 +232,8 @@ function trustworthy(path: string): boolean {
 }
 
 let cached: { config: ManagedConfig | null; path: string | null } | undefined;
+/** The GPO registry policy, read (reg.exe spawned) once per process and shared by both readers. */
+let cachedRegistry: { config: ManagedConfig | null; path: string | null } | undefined;
 
 /** First trustworthy policy FILE candidate (the canonical MDM channel). Null ⇒ no file policy. */
 function fileConfig(): { config: ManagedConfig | null; path: string | null } {
@@ -247,13 +252,56 @@ function fileConfig(): { config: ManagedConfig | null; path: string | null } {
 export function managedConfig(): { config: ManagedConfig | null; path: string | null } {
   if (cached) return cached;
   const file = fileConfig();
-  const reg = registryConfig(); // win32-only; null elsewhere
+  const reg = (cachedRegistry ??= registryConfig()); // win32-only; null elsewhere
   const config = mergeManaged(reg.config, file.config); // file overlays registry
   return (cached = { config, path: file.path ?? reg.path });
 }
 
+/** One policy file parsed on its own (no trust or precedence rule: see managedRequireFipsBy). */
+function policyFileAt(path: string): ManagedConfig | null {
+  try {
+    const c: unknown = JSON.parse(readFileSync(path, "utf8"));
+    return c && typeof c === "object" && !Array.isArray(c) ? (c as ManagedConfig) : null;
+  } catch { return null; }
+}
+
+/** The policy sources requireFips is read from, each on its own. */
+export interface FipsPolicySources {
+  registry: ManagedConfig | null;
+  machineFile: ManagedConfig | null;
+  envFile: ManagedConfig | null;
+}
+
+/** ADR-0473 (P-FIPS.1, security review FIPS-POLICY-LOOSENABLE): the sources that REQUIRE a FIPS
+ *  140-validated module. Monotonic by construction: requireFips is the OR of the GPO registry
+ *  (`CryptoRequireFips`), the canonical machine policy file and the LUCID_MANAGED_CONFIG file, each read
+ *  independently, so no single source (in particular a user-chosen LUCID_MANAGED_CONFIG file saying
+ *  `requireFips: false`) can turn off a mandate another source sets. Pure. */
+export function requireFipsFrom(s: FipsPolicySources): string[] {
+  const by: string[] = [];
+  if (managedRequireFips(s.registry)) by.push(`GPO ${GPO_KEY}\\CryptoRequireFips`);
+  if (managedRequireFips(s.machineFile)) by.push("the machine policy file security.crypto.requireFips");
+  if (managedRequireFips(s.envFile)) by.push("the LUCID_MANAGED_CONFIG policy file security.crypto.requireFips");
+  return by;
+}
+
+let cachedFipsBy: string[] | undefined;
+/** requireFipsFrom over the live sources (cached like managedConfig; __resetManagedCache re-reads). A
+ *  source can only ADD the requirement, so no trust check is needed to honor it: the most a forged file
+ *  can do is make this host stricter. */
+export function managedRequireFipsBy(): string[] {
+  if (cachedFipsBy) return cachedFipsBy;
+  const machine = machinePolicyPath();
+  const envPath = process.env.LUCID_MANAGED_CONFIG;
+  return (cachedFipsBy = requireFipsFrom({
+    registry: (cachedRegistry ??= registryConfig()).config,
+    machineFile: existsSync(machine) ? policyFileAt(machine) : null,
+    envFile: envPath && existsSync(envPath) ? policyFileAt(envPath) : null,
+  }));
+}
+
 /** Test-only: drop the cache so a freshly-written policy file is re-read. */
-export function __resetManagedCache(): void { cached = undefined; }
+export function __resetManagedCache(): void { cached = undefined; cachedRegistry = undefined; cachedFipsBy = undefined; }
 
 /** Does `email` satisfy the managed allowed-domains policy? (true when no policy / no email check.) */
 export function emailDomainAllowed(email: string): boolean {
@@ -476,7 +524,8 @@ export function managedRequireIsolation(mc: ManagedConfig | null = managedConfig
 
 /** ADR-0473 (P-FIPS.1): whether managed policy REQUIRES a FIPS 140-validated crypto module
  *  (`security.crypto.requireFips === true`, GPO flat value `CryptoRequireFips`). Only a literal true
- *  counts. Pure when given `mc`. */
+ *  counts. Pure when given `mc`. Reads ONE config; the enforced requirement is managedRequireFipsBy (the
+ *  OR over every source), never this applied to the merged config. */
 export function managedRequireFips(mc: ManagedConfig | null = managedConfig().config): boolean {
   return mc?.security?.crypto?.requireFips === true;
 }

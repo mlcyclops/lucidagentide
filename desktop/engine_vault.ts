@@ -29,12 +29,13 @@
 // decrypt, so it can neither drop another engine's key nor resurrect one another engine deleted.
 //
 // Fail-closed rules: a secrets file that cannot be decrypted is never overwritten (updateVault sets it
-// aside first), a master key that exists but cannot be read is never replaced, a FIPS-required refusal is
+// aside first), a master key that exists but cannot be read is never replaced, no master key is minted
+// while sealed data is on disk, a file in a newer format is never set aside, a FIPS-required refusal is
 // never mistaken for an unreadable file, and this module never writes a plaintext secret anywhere. Outside
 // Bun (Electron main bundles settings_store.ts with --target=node) every entry point reports `unavailable`
 // without touching a vault file.
 
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { aesGcmDecrypt, aesGcmEncrypt, FipsRequiredError, randomBytes, sha256 } from "../harness/crypto/fips_crypto.ts"; // P-FIPS.1 (ADR-0473)
@@ -182,10 +183,38 @@ export function sealEntries(key: Buffer, entries: VaultEntries): SealedSecrets {
 
 export interface OpenedVault { version: 1 | 2; entries: Record<string, VaultEntry> }
 
+/** The newest envelope `v` this build reads. */
+export const VAULT_FORMAT_MAX = 2;
+/** A sealed file whose envelope `v` is newer than VAULT_FORMAT_MAX (security review VAULT-V2-MIXED-ENGINE):
+ *  another engine on a newer build owns that format. It is unreadable here, and this build never sets it
+ *  aside or writes over it. */
+export class VaultFormatTooNewError extends Error {
+  constructor(readonly version: number) {
+    super(`${SECRETS_FILE} was written by a newer LUCID build (vault format v${version}; this build reads up to v${VAULT_FORMAT_MAX}): it is left untouched and this build refuses to write to it; update LUCID`);
+    this.name = "VaultFormatTooNewError";
+  }
+}
+
+const MASTER_MISSING = "master key missing for an existing vault";
+/** Sealed vault data in `dir`: the secrets file and every set-aside `.unreadable-<ts>` copy. Only a missing
+ *  directory counts as none; any other listing error throws (a key is never minted on a guess). */
+function sealedFilesIn(dir: string): string[] {
+  let names: string[];
+  try { names = readdirSync(dir); } catch (e) {
+    if (errCode(e) === "ENOENT") return [];
+    throw new Error(`cannot list the vault directory ${dir} (${errCode(e) ?? String(e).slice(0, 80)})`, { cause: e });
+  }
+  return names.filter((n) => n === SECRETS_FILE || n.startsWith(`${SECRETS_FILE}.unreadable-`)).sort();
+}
+
 /** Open a sealed v1 or v2 record. v1 entries get synthesized metadata stamped `upgradeAt` with source
  *  "migrated-settings". Throws (with a reason) on a wrong key, a short or altered record, or bad shape; a
- *  FIPS-required refusal is rethrown as the FipsRequiredError it is. */
+ *  record in a newer format throws VaultFormatTooNewError before any key check; a FIPS-required refusal
+ *  is rethrown as the FipsRequiredError it is. */
 export function openVault(key: Buffer, sealed: unknown, upgradeAt: number): OpenedVault {
+  if (sealed && typeof sealed === "object" && "v" in sealed && typeof sealed.v === "number" && Number.isInteger(sealed.v) && sealed.v > VAULT_FORMAT_MAX) {
+    throw new VaultFormatTooNewError(sealed.v);
+  }
   const s = sealed as Partial<SealedSecrets> | null;
   if (!s || typeof s !== "object" || (s.v !== 1 && s.v !== 2) || s.alg !== "A256GCM" || typeof s.kid !== "string" || typeof s.iv !== "string" || typeof s.tag !== "string" || typeof s.ct !== "string") {
     throw new Error("not a v1 or v2 sealed secrets record");
@@ -346,11 +375,22 @@ function libsecretStore(dir: string): OsKeyStore {
   return {
     kind: "libsecret",
     read() {
-      const r = spawnSync("secret-tool", ["lookup", "service", LIBSECRET_SERVICE, "account", account], { encoding: "utf8", timeout: SPAWN_TIMEOUT_MS });
+      const lookupArgs = ["lookup", "service", LIBSECRET_SERVICE, "account", account];
+      const r = spawnSync("secret-tool", lookupArgs, { encoding: "utf8", timeout: SPAWN_TIMEOUT_MS });
       if (r.error) return { missing: "unavailable", detail: `secret-tool: ${errCode(r.error) ?? r.error.message}` };
       const stderr = (r.stderr ?? "").trim();
       if (r.status === 0 && (r.stdout ?? "").trim()) return decodeKey(r.stdout ?? "");
-      if (r.status === 1 && !stderr) return { missing: "absent" }; // lookup found no matching item
+      if (r.status === 1 && !stderr) {
+        // lookup also exits 1, silently, for an item in a LOCKED collection (a dismissed unlock prompt), so
+        // exit 1 alone never proves absence (security review VAULT-MASTER-RECREATE). `search --unlock`
+        // asks to unlock and lists matching items, locked or not: none listed is the only "absent".
+        const s = spawnSync("secret-tool", ["search", "--unlock", "service", LIBSECRET_SERVICE, "account", account], { encoding: "utf8", timeout: SPAWN_TIMEOUT_MS });
+        if (s.error || s.status !== 0) return { missing: "unavailable", detail: `secret-tool search: ${s.error ? errCode(s.error) ?? s.error.message : `exited ${s.status}: ${(s.stderr ?? "").trim().slice(0, 120)}`}` };
+        if (!(s.stdout ?? "").trim()) return { missing: "absent" };
+        const again = spawnSync("secret-tool", lookupArgs, { encoding: "utf8", timeout: SPAWN_TIMEOUT_MS });
+        if (!again.error && again.status === 0 && (again.stdout ?? "").trim()) return decodeKey(again.stdout ?? "");
+        return { missing: "unreadable", detail: "the Secret Service holds the master key item but it is locked (the keyring unlock was dismissed?)" };
+      }
       return { missing: "unavailable", detail: `secret-tool exited ${r.status}${stderr ? `: ${stderr.slice(0, 120)}` : ""}` };
     },
     create(key) {
@@ -437,9 +477,22 @@ export function withFileLock<T>(path: string, fn: () => T, opts: { timeoutMs?: n
       const ts = typeof info.ts === "number" ? info.ts : st.mtimeMs;
       const pid = typeof info.pid === "number" ? info.pid : 0;
       holder = pid ? `pid ${pid}` : "an unknown process";
-      if (Date.now() - ts > staleMs && !(pid && pidAlive(pid)) && readFileSync(path, "utf8") === raw) {
-        unlinkSync(path); // its owner died holding it
-        continue;
+      if (Date.now() - ts > staleMs && !(pid && pidAlive(pid))) {
+        // Its owner died holding it. Take it over atomically (security review VAULT-LOCK-STALE-TAKEOVER): a
+        // check-then-unlink could delete a lock another waiter created in between. Rename moves whatever
+        // file is at `path` right now to a name only we know; only if that file is still the stale lock
+        // we judged is it deleted. Anything else is someone's fresh lock: it is put back (a hard link never
+        // replaces a newer lock that already took the name; without hard links, only if the name is free)
+        // and we back off.
+        const moved = `${path}.stale-${token}`;
+        renameSync(path, moved);
+        if (readFileSync(moved, "utf8") === raw) {
+          unlinkSync(moved);
+          continue;
+        }
+        try { linkSync(moved, path); unlinkSync(moved); } catch {
+          if (existsSync(path)) unlinkSync(moved); else renameSync(moved, path);
+        }
       }
     } catch { /* released (or pending delete on Windows) between our create and our read: back off, retry */ }
     if (Date.now() > deadline) throw new Error(`lock ${path} is held by ${holder}; gave up after ${timeoutMs} ms`);
@@ -450,10 +503,11 @@ export function withFileLock<T>(path: string, fn: () => T, opts: { timeoutMs?: n
 
 /** Read the master key, creating it when (and only when) no record exists. Creation runs under the
  *  `master.lock` owner-token lock and re-reads afterwards, so two engines racing at first start agree on
- *  one key. A record that exists but cannot be read is reported, never replaced. */
-export function ensureMasterKey(store: OsKeyStore, dir: string): MasterRead {
+ *  one key. A record that exists but cannot be read is reported, never replaced. `mayCreate: false` reads
+ *  only: an absent record stays `absent` (mutateVault passes it whenever sealed data is on disk). */
+export function ensureMasterKey(store: OsKeyStore, dir: string, opts: { mayCreate?: boolean } = {}): MasterRead {
   const first = store.read();
-  if (Buffer.isBuffer(first) || first.missing !== "absent") return first;
+  if (Buffer.isBuffer(first) || first.missing !== "absent" || opts.mayCreate === false) return first;
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   return withFileLock(join(dir, MASTER_LOCK), (): MasterRead => {
     const r = store.read();
@@ -525,6 +579,7 @@ export function readVault(vaultDir: string): VaultRead {
       } catch (e) {
         const fips = fipsRefusal(e);
         if (fips) return { exists: true, secrets: EMPTY, entries: NO_ENTRIES, problem: fips }; // not cached: policy may change
+        if (e instanceof VaultFormatTooNewError) return { exists: true, secrets: EMPTY, entries: NO_ENTRIES, problem: e.message };
         if (attempt === 0) { masters.delete(dir); master = masterForRead(dir, store, sig); continue; }
         const problem = `${SECRETS_FILE} could not be decrypted: ${String((e as Error)?.message ?? e).slice(0, 160)}`;
         failures.set(dir, { sig, kid: kidOf(key), problem });
@@ -552,10 +607,13 @@ export interface VaultDelta { set: Record<string, string>; del: string[]; meta?:
 
 /** Apply `delta` to the vault under `secrets.lock`: the current map is read FRESH from disk and decrypted
  *  inside the lock, the delta is applied to it, the result is sealed, written atomically, read back and
- *  verified, and only then is the lock released. Creates the master key on first use. An existing file
- *  this account's (successfully read) master key cannot open is renamed aside to
- *  `secrets.v1.json.unreadable-<ts>` and the delta applies to an empty map; it is never overwritten. A
- *  master key that cannot be read throws, and so does a FIPS-required refusal (the file is left alone).
+ *  verified, and only then is the lock released. Creates the master key on first use, and ONLY then: with
+ *  `secrets.v1.json` or any `.unreadable-<ts>` copy on disk and no key record, this throws ("master key
+ *  missing for an existing vault") instead of minting one (the explicit reset is moving those files out).
+ *  An existing file this account's (successfully read) master key cannot open is renamed aside to
+ *  `secrets.v1.json.unreadable-<ts>` and the delta applies to an empty map; it is never overwritten. A file
+ *  in a newer format (VaultFormatTooNewError) is never set aside: the write throws and the file is left
+ *  alone. A master key that cannot be read throws, and so does a FIPS-required refusal (the file is left alone).
  *  Throws on any failure, so a caller may strip its plaintext copy only after this returns. Returns the
  *  map now in the vault (unchanged maps are not rewritten). */
 export function updateVault(vaultDir: string, delta: VaultDelta): Readonly<Record<string, string>> {
@@ -571,9 +629,15 @@ export function mutateVault(vaultDir: string, plan: (current: VaultEntries) => V
   if (!store) throw new Error(`no OS vault backend on ${process.platform}`);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   return withFileLock(join(dir, SECRETS_LOCK), () => {
-    const master = ensureMasterKey(store, dir); // fresh from the OS: never a cached miss or an old key
+    // Security review VAULT-MASTER-RECREATE: a key is minted only for a directory holding no sealed data.
+    // Inside secrets.lock no other engine can create or set aside a secrets file, so this check holds.
+    const sealed = sealedFilesIn(dir);
+    const master = ensureMasterKey(store, dir, { mayCreate: sealed.length === 0 }); // fresh from the OS: never a cached miss or an old key
     if (!Buffer.isBuffer(master)) {
       masters.delete(dir);
+      if (master.missing === "absent" && sealed.length) {
+        throw new Error(`${MASTER_MISSING} (${sealed.join(", ")} in ${dir}): a new master key is never minted over sealed data; restore the OS key record, or move those files out of the directory to start an empty vault (ADR-0474)`);
+      }
       throw new Error(`the vault master key is ${master.missing}${master.detail ? ` (${master.detail})` : ""}`);
     }
     masters.set(dir, { at: Date.now(), read: master, fileSig: NO_FILE });
@@ -585,6 +649,7 @@ export function mutateVault(vaultDir: string, plan: (current: VaultEntries) => V
     if (prior) {
       try { current = openVault(master, JSON.parse(prior.toString("utf8")), now).entries; } catch (e) {
         if (e instanceof FipsRequiredError) throw e; // a policy refusal says nothing about the file: never set it aside
+        if (e instanceof VaultFormatTooNewError) throw e; // another engine's newer format: unreadable here, never touched
         const aside = `${file}.unreadable-${Date.now()}`;
         withRetry(() => renameSync(file, aside));
         console.error(`[vault] ${file} could not be opened with this account's master key (${String((e as Error)?.message ?? e).slice(0, 160)}); kept it as ${aside} and started a fresh vault.`);
@@ -637,6 +702,12 @@ export function vaultStatus(vaultDir: string): VaultStatus {
   if (!store) return { custody: "plaintext-file", state: "unavailable", detail: `no OS vault backend on ${process.platform}` };
   if (v.exists) return { custody: store.kind, state: "ok" };
   const m = masterForRead(dir, store, NO_FILE);
-  if (Buffer.isBuffer(m) || m.missing === "absent") return { custody: store.kind, state: "ok" };
+  if (Buffer.isBuffer(m)) return { custody: store.kind, state: "ok" };
+  if (m.missing === "absent") {
+    // Set-aside sealed files with no key record: a write would be refused (mutateVault), so say so.
+    let sealed: string[];
+    try { sealed = sealedFilesIn(dir); } catch (e) { return { custody: store.kind, state: "unreadable", detail: String((e as Error)?.message ?? e).slice(0, 160) }; }
+    return sealed.length ? { custody: store.kind, state: "unreadable", detail: `${MASTER_MISSING} (${sealed.join(", ")})` } : { custody: store.kind, state: "ok" };
+  }
   return { custody: "plaintext-file", state: "unavailable", detail: m.detail ?? `master key ${m.missing}` };
 }

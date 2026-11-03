@@ -792,7 +792,9 @@ function persist(file: string, s: GuiSettings, source: VaultSource = "typed"): b
       vaulted = true;
     } else if (!empty) {
       // Unreadable: a real change starts a fresh vault (the old record is set aside), and that vault must
-      // receive every secret this object holds, not just the change.
+      // receive every secret this object holds, not just the change. Only when this account's master key
+      // is readable: with the key record missing over sealed data, or a file in a newer format,
+      // updateVault throws and nothing is written (ADR-0474 security review).
       updateVault(dir, { set: current, del: [], source });
       vaulted = true;
     } // Unreadable and nothing secret changed: leave every secret-related byte as it is.
