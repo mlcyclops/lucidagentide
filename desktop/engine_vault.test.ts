@@ -62,17 +62,18 @@ describe("sealing", () => {
 });
 
 describe("vault files", () => {
-  test("the first write creates one master key and a v1 file; later writes are deltas", () => {
+  test("the first write creates one master key and a v2 file; later writes are deltas", () => {
     const dir = scratch();
     const store = fakeStore();
     useStore(store);
     expect(vaultStatus(dir)).toEqual({ custody: "dpapi", state: "ok" });
-    expect(readVault(dir)).toEqual({ exists: false, secrets: {} });
+    expect(readVault(dir)).toEqual({ exists: false, secrets: {}, entries: {} });
     put(dir, MAP);
     expect(store.creates).toBe(1);
     const raw = JSON.parse(readFileSync(join(dir, SECRETS_FILE), "utf8"));
     expect(Object.keys(raw).sort()).toEqual(["alg", "ct", "iv", "kid", "tag", "v"]);
-    expect(readVault(dir)).toEqual({ exists: true, secrets: MAP });
+    expect(raw.v).toBe(2); // P-VAULT-V2.1 (ADR-0474): the engine writes only v2
+    expect(readVault(dir)).toMatchObject({ exists: true, secrets: MAP, version: 2 });
     put(dir, { "key:A": "1" }); // refs the delta does not name are kept
     expect(store.creates).toBe(1);
     expect(readVault(dir).secrets).toEqual({ ...MAP, "key:A": "1" });

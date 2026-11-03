@@ -21,8 +21,9 @@ import { initAutoUpdate } from "./updater.ts";
 import { ensureRuntimes, findBun, needsBootstrap, ompResolution } from "./runtime.ts";
 import { ompUnavailableReport } from "./omp_bin.ts"; // P-OMP-BOOT.1 (ADR-0357): the one-shot loud boot report
 import { createSplash, setSplashStatus } from "./splash.ts";
-import { deleteCredential, listCredentials, readCredential, rotateCredential, storeCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
-import { MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: the Meeting Hub pairing bearer's vault ref
+import { listCredentials, readCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
+import { credDeleteEverywhere, credListMerged, credRotateEngine, credStoreEngine, engineCredClient, migrateCredVault, type LegacyCredVault, type StoreInput } from "./cred_engine_client.ts"; // P-VAULT-V2.1 (ADR-0474)
+import { credEnvPlan } from "./cred_env.ts"; // P-VAULT-V2.1 (ADR-0474): the one credential -> env plan
 import { bestEngineLine, classifyEngineFailure, isProtectedInstallRoot, probeDirWritable, type WriteProbe } from "./engine_boot.ts";
 import { resolveEngineSpawn } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): prefer the compiled engine binary
 import { materializeLocalProviders, registerLocalProviderEgress } from "./local_providers_runtime.ts";
@@ -36,8 +37,6 @@ import { logTail } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385): one l
 import type { IncidentEvent, IncidentInput, IncidentProcess } from "./incident_report.ts";
 import { backfillCanonicalFromInstance, seedInstanceFromCanonical } from "./oscrypt_seed.ts"; // one safeStorage key across port-keyed instances
 import { listLocalProviders, embeddingsConfig } from "./settings_store.ts";
-import type { AuthKind } from "./network_whitelist.ts";
-import { gitEnvNameFromRef } from "./git_url.ts"; // P-FLEET.L2: host-scoped git creds, vault ref -> env name
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: agent key combos, parsed by one shared rule
 import { BROWSER_POLICY_WORLD, SNAPSHOT_JS, freshnessJs, isBrowserAction, isBrowserPageShape, settleJs, targetJs, type BrowserAction, type BrowserFreshness } from "./browser_snapshot.ts"; // P-JEV.4 (ADR-0379): the Jev policy's page scripts
 import { captureCropFromCssRect } from "./preview_capture.ts"; // P-PREVIEW.1: CSS-px rect -> DIP crop (zoom-aware)
@@ -369,6 +368,7 @@ async function restartEngineNow(trigger: string): Promise<EngineRestartResult> {
   const reason = ok ? "restarted" : up.status === "foreign" ? "port-foreign" : "engine-down";
   events.push({ at: Date.now(), what: ok ? "The new engine answered its health check." : up.status === "foreign" ? `Another program answered on port ${PORT}; it is not ${BUILD.productName}'s engine and was not shown.` : "The new engine did not answer its health check in time." });
   appendEngineLog(`- Restart ${ok ? "succeeded" : `failed (${reason})`}.\n`);
+  if (ok) void migrateLegacyCreds(); // P-VAULT-V2.1 (ADR-0474): an engine that was down at boot migrates now
   const meta = recordIncident({
     ...incidentIdentity(),
     kind: "engine-unreachable",
@@ -443,19 +443,15 @@ function startDevServer(): void {
   // main-only. So MAIN materializes the Local Providers here — writes omp's ~/.omp/agent/models.yml and
   // resolves each provider's secret from the vault — and injects the keys into the dev child's env (models.yml
   // holds only the env-var NAME; omp resolves it from this env). Best-effort: never blocks the server start.
+  // P-VAULT-V2.1 (ADR-0474): the engine resolves the same providers from its own vault too (vault_env.ts),
+  // so a provider whose key already migrated out of safeStorage is routed by the engine's models.yml rewrite.
   const lpEnv = prepareLocalProviders();
-  // P-FIGMA.1 (ADR-0154): the Figma PAT lives in the OS-encrypted vault (main-only). Inject it into the dev
-  // child as LUCID_FIGMA_TOKEN so /api/figma/import can call api.figma.com server-side — the key never reaches
-  // the renderer or the agent. (A freshly-entered token is passed in the first import request; this covers
-  // subsequent sessions.) Best-effort — never blocks the server start.
-  const figmaEnv = prepareFigmaToken();
-  // ADR-0216: the vault-backed git PAT (ref "git_pat"), injected as LUCID_GIT_PAT so cloneRepo can authenticate
-  // a PRIVATE clone from the Settings button - the same vault→env-into-dev-child path as Figma/Local Providers.
-  const gitEnv = prepareGitToken();
-  const embeddingsEnv = prepareEmbeddingsToken(); // ADR-0221: vault→env for the embeddings endpoint key
-  // P-MEET.1: the Meetings panel's Hub pairing bearer (ref "meeting_hub_token"), same vault→env-into-dev-child
-  // path. A token claimed DURING this session is held in the engine's memory; this covers every later launch.
-  const meetingsEnv = prepareMeetingHubToken();
+  // P-FIGMA.1 / ADR-0216 / P-FLEET.L2 / ADR-0221 / P-MEET.1: the credentials STILL in safeStorage, injected
+  // under the env names cred_env.ts defines (LUCID_FIGMA_TOKEN, LUCID_GIT_PAT[_<HOST>], LUCID_EMBEDDINGS_KEY,
+  // LUCID_MEETING_HUB_TOKEN). P-VAULT-V2.1 (ADR-0474): once an entry migrates into the engine vault its
+  // safeStorage copy is gone and the engine resolves the same name itself; this keeps the first boot after
+  // the upgrade (and any entry not yet migrated) working exactly as before. Best-effort, never blocks start.
+  const credEnv = prepareCredEnv();
   // CREATOR-0 (ADR-0279): the engine child learns its own identity and its own data roots. The standard
   // build gets ONLY the descriptive vars (no path relocation), so its on-disk layout is untouched; the
   // Creator build additionally isolates GUI settings, Personal Knowledge, the creator data root, and the
@@ -489,7 +485,7 @@ function startDevServer(): void {
     // P-BROWSER.1 (wave 2): LUCID_MAIN_TOKEN is the per-launch capability token, minted HERE (below)
     // and adopted by dev.ts as THE token - the only channel that lets this parent process authenticate
     // its agent-browser poll loop against the child's /api/browser routes.
-    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, ...meetingsEnv, ...flavorEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_IDENTITY_PORT: String(IDENTITY_PORT) /* ADR-0458: the resume file follows identity, not a rolled bind */, LUCID_PORT_ROLL_HOLDER: portRoll?.holder ?? "", LUCID_MAIN_TOKEN: MAIN_TOKEN, LUCID_ENGINE_NONCE: ENGINE_NONCE, LUCID_MAIN_PID: String(process.pid), LUCID_HOST_EXE: basename(process.execPath) /* P-LEGIBLE.1: the manifest's relatedProcess */, LUCID_ELECTRON_EXE: process.execPath /* P-PLUGINS.2 (ADR-0462): server plugins run under this binary with ELECTRON_RUN_AS_NODE */ },
+    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...credEnv, ...flavorEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_IDENTITY_PORT: String(IDENTITY_PORT) /* ADR-0458: the resume file follows identity, not a rolled bind */, LUCID_PORT_ROLL_HOLDER: portRoll?.holder ?? "", LUCID_MAIN_TOKEN: MAIN_TOKEN, LUCID_VAULT_MAIN_TOKEN: VAULT_MAIN_TOKEN /* P-VAULT-V2.1: main-only vault routes */, LUCID_ENGINE_NONCE: ENGINE_NONCE, LUCID_MAIN_PID: String(process.pid), LUCID_HOST_EXE: basename(process.execPath) /* P-LEGIBLE.1: the manifest's relatedProcess */, LUCID_ELECTRON_EXE: process.execPath /* P-PLUGINS.2 (ADR-0462): server plugins run under this binary with ELECTRON_RUN_AS_NODE */ },
     // NOT "inherit": in a packaged GUI app the Electron main has no console, so inheriting
     // makes the console-subsystem Bun allocate its OWN console window (the black pop-up).
     // Pipe instead + windowsHide so no window ever appears; forward output for dev runs.
@@ -732,10 +728,10 @@ ipcMain.handle("lucid:pickFile", async (e, opts: unknown) => {
   return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
 });
 
-// P-NETWL.1 (ADR-0106): the OS-encrypted credential vault (cred_vault.ts) lives in the main process because
-// Electron's safeStorage is main-only. The renderer can STORE, LIST, and DELETE secrets; it can never READ a
-// plaintext back (decrypt stays here, for future request injection). storeCredential FAIL-CLOSES if OS
-// encryption is unavailable - the handler surfaces { error } rather than ever writing plaintext.
+// P-NETWL.1 (ADR-0106): the legacy safeStorage credential vault (cred_vault.ts), main-only because Electron's
+// safeStorage is. P-VAULT-V2.1 (ADR-0474): it is now only READ (env injection for entries not yet migrated)
+// and drained into the engine vault (migrateLegacyCreds); every new credential goes to the engine. The
+// renderer can STORE, LIST, ROTATE and DELETE; it can never READ a plaintext back.
 // CREATOR-0 (ADR-0279): the Creator flavor gets its OWN vault root inside its userData. Two reasons:
 // a standard-build provider key must not silently become creative-media egress credit, and on Windows
 // the safeStorage key lives per profile directory, so a shared vault path across two app identities
@@ -780,76 +776,42 @@ function prepareLocalProviders(): Record<string, string> {
     return r.childEnv;
   } catch (err) { console.error("[LOCAL_PROVIDERS] prepare failed:", err); return {}; }
 }
-// P-FIGMA.1 (ADR-0154): read the Figma PAT from the vault (ref "figma_pat") and expose it to the dev child as
-// LUCID_FIGMA_TOKEN, so the Figma REST calls happen server-side without the secret ever reaching the renderer.
-const FIGMA_PAT_REF = "figma_pat";
-function prepareFigmaToken(): Record<string, string> {
+// P-FIGMA.1 (ADR-0154), ADR-0216, P-FLEET.L2, ADR-0221, P-MEET.1: the safeStorage credentials the engine
+// reads from its env (Figma PAT, git PATs generic and per host, embeddings key, Meeting Hub bearer; the
+// engine's meetings_hub.ts takes the bearer out of process.env on load). The ref -> name rules live in
+// cred_env.ts, shared with the engine's own resolution (vault_env.ts). A ref that cannot be decrypted is
+// skipped. Secrets never reach the renderer or the agent.
+function prepareCredEnv(): Record<string, string> {
   try {
-    const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), FIGMA_PAT_REF);
-    return tok ? { LUCID_FIGMA_TOKEN: tok } : {};
+    return credEnvPlan({
+      refs: () => listCredentials(VAULT_IO, CRED_DIR()).map((m) => m.ref),
+      read: (ref) => readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), ref),
+    }, embeddingsConfig());
   } catch { return {}; }
 }
-// ADR-0216: read the git personal access token from the vault (ref "git_pat") and expose it to the dev child as
-// LUCID_GIT_PAT, so cloneRepo can clone a PRIVATE repo from the Settings "Clone" button without an interactive
-// credential prompt. The secret never reaches the renderer or the agent. (A freshly-entered PAT is also passed
-// inline on the first clone request; this covers subsequent sessions.) Best-effort — never blocks server start.
-//
-// P-FLEET.L2: the fleet's repo field saves a token PER HOST (vault ref `git_pat_<host_slug>`, minted by
-// git_url.gitCredRef). Every such ref is injected under its own name - `LUCID_GIT_PAT_GITHUB_COM`,
-// `LUCID_GIT_PAT_DEV_AZURE_COM`, `LUCID_GIT_PAT_GITLAB_MYCORP_COM` - which is what lets workspace.ts hand a
-// token ONLY to the host it was saved for, self-hosted GitLab/Azure DevOps Server included. Enumerating the
-// vault costs one directory read at launch; a ref we cannot decrypt is simply skipped.
-const GIT_PAT_REF = "git_pat";
-function prepareGitToken(): Record<string, string> {
-  const env: Record<string, string> = {};
-  try {
-    const legacy = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), GIT_PAT_REF);
-    if (legacy) env.LUCID_GIT_PAT = legacy;
-  } catch { /* best-effort */ }
-  try {
-    for (const meta of listCredentials(VAULT_IO, CRED_DIR())) {
-      const name = gitEnvNameFromRef(meta.ref);
-      if (!name) continue;
-      const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), meta.ref);
-      if (tok) env[name] = tok;
-    }
-  } catch { /* best-effort */ }
-  return env;
+// P-VAULT-V2.1 (ADR-0474): the credential store is the ENGINE vault now (FIPS-routed crypto under an
+// OS-held master key; safeStorage is not a FIPS 140-validated module). Main reaches it over the engine's
+// main-only routes with the UI token plus this per-launch vault token, which only the engine (env, removed
+// on load) and this process hold: the renderer and the agent never see it.
+const VAULT_MAIN_TOKEN = randomBytes(32).toString("hex");
+const legacyCredVault = (): LegacyCredVault => ({ ss: ELECTRON_SAFE_STORAGE, io: VAULT_IO, dir: CRED_DIR() });
+const engineVault = () => engineCredClient({ baseUrl: `http://localhost:${PORT}`, uiToken: MAIN_TOKEN, vaultToken: VAULT_MAIN_TOKEN });
+/** Move what is left in safeStorage into the engine vault (cred_engine_client.ts: import, engine verifies,
+ *  only then delete). Runs after the engine answers its health check; idempotent; never throws. */
+async function migrateLegacyCreds(): Promise<void> {
+  const r = await migrateCredVault(legacyCredVault(), engineVault());
+  if (!r.migrated.length && !r.kept.length) return;
+  const line = `[vault] safeStorage -> engine vault: ${r.migrated.length} moved${r.kept.length ? `, ${r.kept.length} kept (${r.kept.map((k) => `${k.ref}: ${k.reason}`).join("; ").slice(0, 400)})` : ""}`;
+  console.error(line);
+  appendEngineLog(line + "\n");
 }
-// ADR-0221: read the embeddings endpoint's API key from the vault (ref = settings.embeddings.vaultRef) and expose
-// it to the dev child as LUCID_EMBEDDINGS_KEY, so the ApiEmbedder can authenticate a cloud endpoint (OpenAI/Azure)
-// without the secret reaching the renderer. A local no-auth Ollama needs no key. Best-effort — never blocks start.
-function prepareEmbeddingsToken(): Record<string, string> {
-  try {
-    const cfg = embeddingsConfig();
-    if (!cfg?.enabled || !cfg.vaultRef || (cfg.authKind !== "bearer" && cfg.authKind !== "apikey")) return {};
-    const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), cfg.vaultRef);
-    return tok ? { LUCID_EMBEDDINGS_KEY: tok } : {};
-  } catch { return {}; }
-}
-// P-MEET.1: read the Meeting Hub pairing bearer from the vault and expose it to the dev child as
-// LUCID_MEETING_HUB_TOKEN, so the Meetings panel's calls to the loopback Hub are authenticated
-// server-side. Same shape as the Figma PAT: the renderer only ever sees rendered meeting rows. The
-// engine's meetings_hub.ts moves it into module state and deletes it from process.env on load, so
-// the engine's own omp/fleet/scanner children never inherit it.
-// Best-effort - a missing/unpairable token just leaves the panel in its "pair with the Hub" state.
-function prepareMeetingHubToken(): Record<string, string> {
-  try {
-    const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), MEETING_HUB_CRED_REF);
-    return tok ? { LUCID_MEETING_HUB_TOKEN: tok } : {};
-  } catch { return {}; }
-}
-ipcMain.handle("lucid:credStore", (_e, input: { ref?: string; kind: AuthKind; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => {
-  try { return storeCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { ...input, createdAt: Date.now() }); }
-  catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
-});
-// P-KEYS.2 (ADR-0107): rotate a stored secret IN PLACE (same ref), by paste or by file. Fail-closed: throws
-// (surfaced as {error}) if OS encryption is unavailable, leaving the old secret intact; the secret bytes for
-// the file path are read + re-encrypted in main, never crossing to the renderer.
-ipcMain.handle("lucid:credRotate", (_e, input: { ref: string; secret: string; expiresAt?: number }) => {
-  try { return rotateCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { ...input, rotatedAt: Date.now() }) ?? { error: "not-found" }; }
-  catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
-});
+// P-NETWL.1 / P-KEYS.2 / P-VAULT-V2.1: the bridge cred* calls keep their names and shapes; the store behind
+// them is the engine vault. Fail-closed: an engine refusal (no OS backend, FIPS refusal, engine down) is an
+// { error }, never a safeStorage or plaintext fallback.
+ipcMain.handle("lucid:credStore", (_e, input: StoreInput) => credStoreEngine(engineVault(), legacyCredVault(), input));
+// P-KEYS.2 (ADR-0107): rotate a stored secret IN PLACE (same ref), by paste or by file. The old secret stays
+// intact on any failure; the secret bytes for the file path are read in main, never crossing to the renderer.
+ipcMain.handle("lucid:credRotate", (_e, input: { ref: string; secret: string; expiresAt?: number }) => credRotateEngine(engineVault(), legacyCredVault(), input));
 ipcMain.handle("lucid:credRotateFile", async (e, input: { ref: string }) => {
   try {
     const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
@@ -860,16 +822,17 @@ ipcMain.handle("lucid:credRotateFile", async (e, input: { ref: string }) => {
     });
     if (r.canceled || !r.filePaths[0]) return null;
     const secret = readFileSync(r.filePaths[0], "utf8");
-    return rotateCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { ref: input.ref, secret, rotatedAt: Date.now() }) ?? { error: "not-found" };
+    return await credRotateEngine(engineVault(), legacyCredVault(), { ref: input.ref, secret });
   } catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
 });
-ipcMain.handle("lucid:credList", () => { try { return listCredentials(VAULT_IO, CRED_DIR()); } catch { return []; } });
-ipcMain.handle("lucid:credDelete", (_e, ref: unknown) => { try { return deleteCredential(VAULT_IO, CRED_DIR(), typeof ref === "string" ? ref : ""); } catch { return false; } });
-ipcMain.handle("lucid:credEncryptionAvailable", () => { try { return safeStorage.isEncryptionAvailable(); } catch { return false; } });
+ipcMain.handle("lucid:credList", () => credListMerged(engineVault(), legacyCredVault()));
+ipcMain.handle("lucid:credDelete", (_e, ref: unknown) => credDeleteEverywhere(engineVault(), legacyCredVault(), typeof ref === "string" ? ref : ""));
+// "Can a credential be stored right now?": the engine vault is usable (custody ok).
+ipcMain.handle("lucid:credEncryptionAvailable", async () => { try { return (await engineVault().status()).available; } catch { return false; } });
 // P-NETWL.2 (ADR-0106): upload an auth file (token / PEM / API-key / config) straight into the vault. The
 // file is picked + read + encrypted ENTIRELY in main - the secret bytes never cross to the renderer (unlike a
 // paste flow). Returns the credential metadata (+ the source filename as a default label) or { error }.
-ipcMain.handle("lucid:credStoreFile", async (e, input: { kind: AuthKind; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => {
+ipcMain.handle("lucid:credStoreFile", async (e, input: { kind: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => {
   try {
     const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
     const r = await dialog.showOpenDialog(w!, {
@@ -881,7 +844,7 @@ ipcMain.handle("lucid:credStoreFile", async (e, input: { kind: AuthKind; label?:
     const p = r.filePaths[0];
     const secret = readFileSync(p, "utf8");
     const label = input.label && input.label.trim() ? input.label : p.replace(/^.*[\\/]/, ""); // default label = filename
-    return storeCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { kind: input.kind, secret, label, createdAt: Date.now(), expiresAt: input.expiresAt, rotationIntervalDays: input.rotationIntervalDays });
+    return await credStoreEngine(engineVault(), legacyCredVault(), { kind: input.kind, secret, label, expiresAt: input.expiresAt, rotationIntervalDays: input.rotationIntervalDays });
   } catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
 });
 
@@ -1450,6 +1413,7 @@ app.whenReady().then(async () => {
   // P-BROWSER.1 (wave 2): start the agent-browser command poll once the server answered /api/health.
   // Started even on a timeout - the loop is fail-quiet and a late-starting server self-heals into it.
   startAgentBrowserLoop();
+  if (serverUp.status === "ready") void migrateLegacyCreds(); // P-VAULT-V2.1 (ADR-0474): safeStorage -> engine vault
   splash?.close();
   // Don't leave the user staring at a black window with no explanation: if the local engine never
   // came up (e.g. no usable bun runtime), say so. The window keeps retrying via did-fail-load, so a

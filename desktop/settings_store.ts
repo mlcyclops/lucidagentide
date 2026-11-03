@@ -22,7 +22,7 @@ import { randomUUID } from "node:crypto";
 import { homedir, hostname } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { errCode, RETRYABLE, withRetry, writeAtomic as writeFileAtomic } from "./atomic_file.ts";
-import { engineVaultDir, readVault, updateVault, vaultStatus, type VaultDelta, type VaultStatus } from "./engine_vault.ts"; // P-VAULT-KEYS.1 (ADR-0472)
+import { engineVaultDir, readVault, updateVault, vaultStatus, type VaultDelta, type VaultSource, type VaultStatus } from "./engine_vault.ts"; // P-VAULT-KEYS.1 (ADR-0472), P-VAULT-V2.1 (ADR-0474)
 import { emailDomainAllowed, managedConfig, skipAllowed } from "./managed_config.ts";
 import { DEFAULT_JUDGMENT_PROVIDER, parseJudgmentProvider, type JudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374) + P-JEV.5
 import { bannedJudges, noteJudgeOutcome, type JudgeFailureLedger } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416)
@@ -764,27 +764,28 @@ function hydrateSecrets(s: GuiSettings, vault: Readonly<Record<string, string>>)
 // spread copy) has no baseline: its secrets are set and nothing is deleted.
 const baselines = new WeakMap<GuiSettings, Record<string, string | undefined>>();
 
-function deltaFor(s: GuiSettings, current: Record<string, string>): VaultDelta {
+function deltaFor(s: GuiSettings, current: Record<string, string>, source: VaultSource): VaultDelta {
   const base = baselines.get(s);
-  if (!base) return { set: { ...current }, del: [] };
+  if (!base) return { set: { ...current }, del: [], source };
   const set: Record<string, string> = {};
   for (const [ref, v] of Object.entries(current)) if (base[ref] !== v) set[ref] = v;
   const del = Object.keys(base).filter((ref) => base[ref] !== undefined && current[ref] === undefined);
-  return { set, del };
+  return { set, del, source };
 }
 
 /** Write `s`: secrets to the vault first, then the file without them. Returns true when the file was
  *  written stripped. The plaintext fallback (file keeps its secrets, 0600) is decided BEFORE any write and
  *  only when the vault was already not usable; a vault write that fails throws, and the file is left
  *  untouched, so a failed write can never push a secret into lucid-gui.json. A crash between the two
- *  writes leaves the secrets in both places, which is safe: the file value wins on load and moves. */
-function persist(file: string, s: GuiSettings): boolean {
+ *  writes leaves the secrets in both places, which is safe: the file value wins on load and moves.
+ *  `source` (P-VAULT-V2.1) is the provenance a ref NEW to the vault is recorded with. */
+function persist(file: string, s: GuiSettings, source: VaultSource = "typed"): boolean {
   const dir = engineVaultDir(file);
   const current = secretsOf(s);
   const status = vaultStatus(dir);
   let vaulted = false;
   if (status.state !== "unavailable") {
-    const delta = deltaFor(s, current);
+    const delta = deltaFor(s, current, source);
     const empty = Object.keys(delta.set).length === 0 && delta.del.length === 0;
     if (status.state === "ok") {
       if (!empty) updateVault(dir, delta);
@@ -792,7 +793,7 @@ function persist(file: string, s: GuiSettings): boolean {
     } else if (!empty) {
       // Unreadable: a real change starts a fresh vault (the old record is set aside), and that vault must
       // receive every secret this object holds, not just the change.
-      updateVault(dir, { set: current, del: [] });
+      updateVault(dir, { set: current, del: [], source });
       vaulted = true;
     } // Unreadable and nothing secret changed: leave every secret-related byte as it is.
   }
@@ -865,7 +866,7 @@ function migratePlaintext(file: string, s: GuiSettings): void {
   const dir = engineVaultDir(file);
   if (Date.now() < migrateRetryAt || vaultStatus(dir).state !== "ok") return;
   try {
-    if (persist(file, s)) {
+    if (persist(file, s, "migrated-settings")) {
       scrubAfterMigration(file, dir, Object.values(secretsOf(s)));
       console.error(`[settings] moved saved keys and tokens from ${file} into the OS vault (${vaultStatus(dir).custody}).`);
       return;
@@ -913,7 +914,13 @@ export function save(s: GuiSettings): void {
 
 /** P-VAULT-KEYS.1: where saved keys live for this settings file (the Settings note; never a secret). */
 export function keyVaultStatus(): VaultStatus {
-  return vaultStatus(engineVaultDir(settingsFile()));
+  return vaultStatus(keyVaultDir());
+}
+
+/** P-VAULT-V2.1 (ADR-0474): the engine vault directory for this settings file (the one vault every
+ *  engine-side secret lives in: settings keys, migrated safeStorage credentials, new credentials). */
+export function keyVaultDir(): string {
+  return engineVaultDir(settingsFile());
 }
 
 /** Push stored keys + AskSage base URL into process.env so child `omp acp`
