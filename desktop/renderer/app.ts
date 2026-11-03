@@ -8,7 +8,7 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type AccountsSnapshot, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SessionSearch, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
+import { bridge, type AccountsSnapshot, type ArchivePolicyView, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SessionSearch, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import type { TurnStatus } from "./chat_events.ts";
 import { currentSwitchPreflight, liveBadge, planSessionSwitch, spokeNameFor, switchOutcome, switchSheetCopy } from "./session_switch.ts"; // P-SWITCH.1 (ADR-0403), P-SWITCH.2 (ADR-0404)
 import { markTerms } from "./session_search.ts"; // P-SESS-SEARCH.1 (ADR-0469)
@@ -704,11 +704,18 @@ function sessRow(s: SessionInfo & { snippet?: string }, active: boolean, query =
   const badge = liveBadge(s.live);
   // P-SESS-SEARCH.1: a spoke session that is not live still says which spoke ran it (shown only with Spokes on).
   const spokeLine = !badge && s.spoke ? `<div class="sess-live">spoke "${esc(s.spoke)}"</div>` : "";
+  // P-SESS-ARCHIVE.1 (ADR-0471): an archived row says so and offers Restore; a live row offers Archive.
+  const archLine = s.archived ? `<div class="sess-live sess-archived">archived \u00b7 opening it restores it</div>` : "";
+  const archBtn = s.archived
+    ? `<button class="sess-del sess-arch" data-restore="${esc(s.id)}" data-tip="Restore|Back to the sessions list. Opening it does the same." aria-label="Restore session" tabindex="-1">${icon("restore", 13)}</button>`
+    : `<button class="sess-del sess-arch" data-archive="${esc(s.id)}" data-tip="Archive|Moves it to the Archived group. Nothing is deleted: search still finds it, and opening it brings it back." aria-label="Archive session" tabindex="-1">${icon("archive", 13)}</button>`;
   return `<div class="sess ${active ? "active" : ""}" data-sid="${esc(s.id)}" data-tip="${esc(s.title)}|${esc(modelLabel(s.model))} · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}${badge ? ` · ${esc(badge.text)}` : ""}" data-tip-side="right">
       <div class="t">${query ? markTerms(s.title, query) : esc(s.title)}</div>
       <div class="m"><b>${esc(modelLabel(s.model))}</b> · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}</div>
       ${badge ? `<div class="sess-live sess-live-${badge.tone}">${esc(badge.text)}</div>` : spokeLine}
+      ${archLine}
       ${s.snippet ? `<div class="sess-snip">${markTerms(s.snippet, query)}</div>` : ""}
+      ${badge ? "" : archBtn}
       <button class="sess-del" data-del="${esc(s.id)}" data-tip="Delete session" aria-label="Delete session" tabindex="-1">${icon("trash", 13)}</button>
     </div>`;
 }
@@ -781,7 +788,100 @@ function renderSessionList(data: SessionList): void {
       </div>
       <div class="sess-group-body" ${ingestExpanded ? "" : "hidden"}>${ingest.map((s) => sessRow(s, false)).join("")}</div>
     </div>` : "";
-  list.innerHTML = chats + ingestGroup;
+  list.innerHTML = chats + ingestGroup + archivedGroup(data.archived ?? 0);
+}
+
+// P-SESS-ARCHIVE.1 (ADR-0471): the Archived group. Collapsed by default; its rows load when it opens (the
+// count rides the normal list). The sliders button opens the auto-archive rule.
+let archExpanded = false;
+let archivedList: SessionInfo[] | null = null;
+function archivedGroup(n: number): string {
+  const rows = archExpanded
+    ? (archivedList ? (archivedList.length ? archivedList.map((s) => sessRow(s, false)).join("") : `<div class="side-empty">Nothing archived yet.</div>`) : `<div class="side-empty">Loading archived sessions\u2026</div>`)
+    : "";
+  return `<div class="sess-group">
+      <div class="sess-group-head">
+        <button class="sess-group-toggle" data-arch-toggle aria-expanded="${archExpanded}" data-tip="Archived sessions|Moved out of the way so the list and startup stay fast. Nothing is deleted; search finds them and opening one restores it.">
+          <span class="sess-group-chev ${archExpanded ? "open" : ""}">${icon("chevron", 12)}</span> Archived <span class="sess-group-count">${n}</span>
+        </button>
+        <button class="sess-group-clear sess-arch-rule" data-arch-rule data-tip="Auto-archive|Archive sessions you have not touched for a while, automatically or right now.">${icon("sliders", 12)}</button>
+      </div>
+      <div class="sess-group-body" ${archExpanded ? "" : "hidden"}>${rows}</div>
+    </div>`;
+}
+
+async function archiveOne(id: string): Promise<void> {
+  const r = await bridge.archiveSession(id).catch(() => null);
+  if (!r?.ok) { showToast({ tone: "warn", title: "Couldn't archive", desc: r?.error ?? "The engine did not answer.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+  archivedList = null;
+  showToast({ title: "Session archived", desc: "It is in the Archived group. Search still finds it.", actions: [{ label: "Undo", run: () => void restoreOne(id) }], timeout: 5000 });
+  void renderSessions();
+}
+
+async function restoreOne(id: string): Promise<void> {
+  const r = await bridge.restoreSession(id).catch(() => null);
+  if (!r?.ok) { showToast({ tone: "warn", title: "Couldn't restore", desc: r?.error ?? "The engine did not answer.", actions: [{ label: "OK" }], timeout: 6000 }); return; }
+  archivedList = null;
+  if (archExpanded) void loadArchived();
+  void renderSessions();
+}
+
+async function loadArchived(): Promise<void> {
+  const r = await bridge.archivedSessions().catch(() => null);
+  archivedList = r?.sessions ?? [];
+  if (!sessQuery && lastSessionList) renderSessionList(lastSessionList);
+}
+
+/** The auto-archive rule: on/off, the two ages, how many sessions it matches now, and Archive now. */
+async function openArchiveRule(anchor: HTMLElement): Promise<void> {
+  const st = await bridge.archivePolicy().catch(() => null);
+  if (!st) { showToast({ tone: "warn", title: "Auto-archive", desc: "The engine did not answer.", actions: [{ label: "OK" }], timeout: 5000 }); return; }
+  const last = st.lastRun ? `Last pass ${relTime(st.lastRun.at)}: ${st.lastRun.archived} archived${st.lastRun.skipped ? `, ${st.lastRun.skipped} in use and skipped` : ""}.` : "No pass has run since LUCID started.";
+  const p = popover(anchor, `<div class="arch-pop">
+      <div class="arch-pop-h">${icon("archive", 14)} <b>Auto-archive</b></div>
+      <label class="arch-pop-row"><input type="checkbox" data-ap-auto ${st.policy.auto ? "checked" : ""}/> <span>Archive automatically (at start, then every 6 hours)</span></label>
+      <label class="arch-pop-row"><span>Sessions untouched for</span> <input type="number" min="1" max="3650" data-ap-days value="${st.policy.days}"/> <span>days</span></label>
+      <label class="arch-pop-row"><span>Spoke and empty sessions after</span> <input type="number" min="1" max="3650" data-ap-spoke value="${st.policy.spokeDays}"/> <span>days</span></label>
+      <p class="arch-pop-note" data-ap-preview>${st.wouldArchive} session${st.wouldArchive === 1 ? "" : "s"} match the saved rule now. ${esc(last)}</p>
+      <p class="arch-pop-note">Covers every workspace. Sessions open in Main or any spoke are never moved, and nothing is deleted.</p>
+      <div class="arch-pop-actions"><button class="btn-mini" data-ap-save>Save</button><button class="btn-mini" data-ap-now>Save and archive now</button></div>
+    </div>`);
+  const read = (): ArchivePolicyView => ({
+    auto: ($("[data-ap-auto]", p.node) as HTMLInputElement).checked,
+    days: Number(($("[data-ap-days]", p.node) as HTMLInputElement).value),
+    spokeDays: Number(($("[data-ap-spoke]", p.node) as HTMLInputElement).value),
+  });
+  p.node.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t.closest("[data-ap-save]")) {
+      void bridge.archivePolicy(read()).then((s) => {
+        const prev = $("[data-ap-preview]", p.node);
+        if (s && prev) prev.textContent = `Saved. ${s.wouldArchive} session${s.wouldArchive === 1 ? "" : "s"} match the rule now.`;
+      });
+      return;
+    }
+    if (t.closest("[data-ap-now]")) {
+      p.close();
+      void (async () => {
+        const s = await bridge.archivePolicy(read()).catch(() => null);
+        if (!s) return;
+        showToast({
+          title: `Archive ${s.wouldArchive} session${s.wouldArchive === 1 ? "" : "s"}?`,
+          desc: `Sessions untouched for ${s.policy.days} days (spoke and empty ones after ${s.policy.spokeDays}) move to the Archived group, in every workspace. Nothing is deleted.`,
+          actions: [
+            { label: "Cancel" },
+            { label: "Archive", run: async () => {
+              const r = await bridge.archiveNow().catch(() => null);
+              archivedList = null;
+              showToast({ title: r ? `Archived ${r.archived} session${r.archived === 1 ? "" : "s"}` : "Archive did not run", desc: r?.skipped ? `${r.skipped} were in use and stay where they are.` : "", timeout: 4000 });
+              void renderSessions();
+            } },
+          ],
+          timeout: 0,
+        });
+      })();
+    }
+  });
 }
 async function renderSessions(): Promise<void> {
   const list = $("#sessList");
@@ -801,6 +901,8 @@ async function renderSessions(): Promise<void> {
   }
   paintSpokesToggle(data.hiddenSpokes);
   renderSessionList(data);
+  // P-SESS-ARCHIVE.1: an open Archived group re-reads when the count moved (opened, restored, auto-archived).
+  if (archExpanded && archivedList && archivedList.length !== (data.archived ?? 0)) void loadArchived();
   setCachedSessions(data); // refresh the cache for next launch
   void warmTranscripts(data); // P-PERF.4: AC-only idle prefetch (no-op on battery tiers)
 }
@@ -11337,7 +11439,7 @@ async function resumeSession(id: string, opts: { loaded?: boolean; force?: boole
 /** The sidebar's cached row for a session (title for the sheet, model for its spoke). P-SESS-SEARCH.1: a
  *  session opened from search results may be older than the cached 40, so the last hits answer too. */
 const cachedSessionInfo = (id: string | null): SessionInfo | undefined =>
-  id ? cachedSessions<SessionList>()?.sessions.find((s) => s.id === id) ?? lastSearchHits.find((s) => s.id === id) : undefined;
+  id ? cachedSessions<SessionList>()?.sessions.find((s) => s.id === id) ?? lastSearchHits.find((s) => s.id === id) ?? archivedList?.find((s) => s.id === id) : undefined;
 
 /** Every user-initiated "open this session" (the sidebar row) comes through here. */
 async function openSession(id: string): Promise<void> {
@@ -17993,6 +18095,14 @@ function wire(): void {
     const t = e.target as HTMLElement;
     if (t.closest("[data-ingest-clear]")) { e.stopPropagation(); confirmClearIngest(); return; } // P-KG-INGEST.2
     if (t.closest("[data-ingest-toggle]")) { ingestExpanded = !ingestExpanded; void renderSessions(); return; } // P-KG-INGEST.1b
+    // P-SESS-ARCHIVE.1 (ADR-0471)
+    if (t.closest("[data-arch-toggle]")) { archExpanded = !archExpanded; if (archExpanded) { archivedList = null; void loadArchived(); } if (lastSessionList) renderSessionList(lastSessionList); return; }
+    const rule = t.closest("[data-arch-rule]") as HTMLElement | null;
+    if (rule) { e.stopPropagation(); void openArchiveRule(rule); return; }
+    const arch = t.closest("[data-archive]") as HTMLElement | null;
+    if (arch?.dataset.archive) { e.stopPropagation(); void archiveOne(arch.dataset.archive); return; }
+    const rest = t.closest("[data-restore]") as HTMLElement | null;
+    if (rest?.dataset.restore) { e.stopPropagation(); void restoreOne(rest.dataset.restore); return; }
     const del = t.closest(".sess-del") as HTMLElement | null;
     if (del?.dataset.del) { e.stopPropagation(); confirmDeleteSession(del.dataset.del); return; }
     const s = t.closest(".sess") as HTMLElement | null;

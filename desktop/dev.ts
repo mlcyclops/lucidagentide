@@ -143,7 +143,8 @@ import { appendLaneLedger, isTimelineKind, laneSessionNames, listTimeline, readL
 import { JobScheduler, type LedgerHit } from "./job_scheduler.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs
 import { createJob as createScheduledJob, jobTargetRepo, loadJobs, normalizeJobSpec, saveJobs, updateJob, nextFireAt } from "./scheduled_jobs.ts"; // P-SCHED.1 (aliased: creator_jobs.ts exports a createJob too, and the second import silently replaced the first at runtime)
 import { firesBetween } from "./cron.ts"; // P-SCHED.1
-import { clearIngestSessions, deleteSession, listSessions, searchSessions, sessionMessages, type SpokeFilter } from "./sessions.ts";
+import { LIVE_HEARTBEAT_MS, otherEnginesSessions, publishLiveSessions, withdrawLiveSessions } from "./live_sessions.ts"; // P-SESS-ARCHIVE.1: sessions other engines hold
+import { archivedSessions, archivePolicy, archiveSession, autoArchive, clearIngestSessions, deleteSession, flushSessionIndex, listSessions, restoreSession, searchSessions, sessionMessages, type ArchiveRun, type SpokeFilter } from "./sessions.ts";
 import { providerAuth, typesafeKeySet, type ProviderAuthSnapshot } from "./auth_status.ts";
 import { parseJudgmentReport } from "../harness/judgment/trace_schema.ts"; // P-JEV.2 (ADR-0377): the loopback boundary for judgment traces
 import { openHubWindow } from "./hub_launch.ts"; // P-TUI.2: the Fleet view's Terminal hub button
@@ -1837,6 +1838,52 @@ const jobScheduler = new JobScheduler({
     emitSecurityEvent({ category: "exec", type: "scheduled_job", decision: e.outcome === "error" || e.outcome === "timeout" || e.outcome === "suspended" ? "block" : "allow", severity: e.outcome === "started" || e.outcome === "ok" ? "info" : "medium", tool: "scheduled_job", reason: `${e.name} [${e.jobId}] ${e.outcome}${e.laneId ? ` lane ${e.laneId}` : ""}${e.note ? `: ${e.note}` : ""}`.slice(0, 200) });
   },
 });
+/** P-SESS-ARCHIVE.1 (ADR-0471): sessions archiving must never move: Main's, and every spoke's (a stopped spoke
+ *  resumes its session on respawn). Moving a file omp appends to would split the session in two. */
+function ownSessionIds(): Set<string> {
+  const ids = new Set<string>();
+  const main = backend.currentSessionId();
+  if (main) ids.add(main);
+  for (const l of fleet.owners()) if (l.sessionId) ids.add(l.sessionId);
+  return ids;
+}
+/** This engine's sessions plus every session another running engine publishes (live_sessions.ts): omp does
+ *  not keep a session file open, so the OS would let another engine's session be moved out from under it. */
+function liveSessionIds(): Set<string> {
+  const ids = ownSessionIds();
+  for (const id of otherEnginesSessions()) ids.add(id);
+  return ids;
+}
+let liveHeartbeat: Timer | null = null;
+/** Publish what this engine holds, now and every LIVE_HEARTBEAT_MS; withdrawn on exit. */
+function startLiveHeartbeat(): void {
+  publishLiveSessions(ownSessionIds());
+  liveHeartbeat = setInterval(() => publishLiveSessions(ownSessionIds()), LIVE_HEARTBEAT_MS);
+  liveHeartbeat.unref();
+  process.on("exit", () => { withdrawLiveSessions(); flushSessionIndex(); });
+}
+/** The last archive pass (automatic or Archive now), for the policy panel. */
+let lastArchiveRun: (ArchiveRun & { at: number }) | null = null;
+const AUTO_ARCHIVE_FIRST_MS = 120_000;
+const AUTO_ARCHIVE_EVERY_MS = 6 * 3_600_000;
+let autoArchiveTimer: Timer | null = null;
+/** (Re)arm the auto-archive pass: first two minutes after start (or after the rule is saved), then every six
+ *  hours, only while the rule is on. Unref'd: it never keeps the engine alive. */
+function scheduleAutoArchive(): void {
+  if (autoArchiveTimer) { clearTimeout(autoArchiveTimer); autoArchiveTimer = null; }
+  const tick = (delay: number): void => {
+    autoArchiveTimer = setTimeout(() => {
+      const policy = archivePolicy(loadSettings().sessionArchive);
+      if (!policy.auto) { autoArchiveTimer = null; return; }
+      try { lastArchiveRun = { at: Date.now(), ...autoArchive(policy, liveSessionIds(), laneSessionNames()) }; flushSessionIndex(); }
+      catch (e) { console.error(`[archive] auto-archive pass failed: ${e instanceof Error ? e.message : String(e)}`); }
+      tick(AUTO_ARCHIVE_EVERY_MS);
+    }, delay);
+    autoArchiveTimer.unref();
+  };
+  if (archivePolicy(loadSettings().sessionArchive).auto) tick(AUTO_ARCHIVE_FIRST_MS);
+}
+
 /** P-SWITCH.2 (ADR-0404): the live spoke holding session `id`, if any (Main's own claim is checked by the
  *  lane manager itself, through masterSessionId above). */
 function spokeHolding(id: string): SessionLiveSpoke | null {
@@ -5074,7 +5121,7 @@ return Bun.serve({
           return json({ ok: true, data: { ...found, hits: withLiveState(found.hits, main, lanes) } });
         }
         const list = listSessions(undefined, undefined, filter);
-        return json({ ok: true, data: { sessions: withLiveState(list.sessions, main, lanes), ingest: list.ingest, hiddenSpokes: list.hiddenSpokes } });
+        return json({ ok: true, data: { sessions: withLiveState(list.sessions, main, lanes), ingest: list.ingest, hiddenSpokes: list.hiddenSpokes, archived: list.archived } });
       }
       if (p === "/api/sessions/ingest/clear" && req.method === "POST") return json({ ok: true, data: clearIngestSessions() }); // P-KG-INGEST.2
       if (p === "/api/session" && url.searchParams.get("id")) { // P-PERF.4: tail-first page (limit=0 = all)
@@ -5097,8 +5144,43 @@ return Bun.serve({
         if (held) return sessionHeld(held);
         const busy = force === true ? null : backend.switchBlocker();
         if (busy) return switchRefused(busy, backend.currentSessionId());
+        // P-SESS-ARCHIVE.1 (ADR-0471): omp loads only from the sessions folder, and a load it cannot find is
+        // swallowed (acp_backend.loadSession), so an archived session comes back BEFORE the load.
+        const back = restoreSession(String(id));
+        // Not 409: that status means "busy or held" to the client. Any other non-2xx is a plain failed switch.
+        if (!back.ok && back.error !== "session not found") return Response.json({ ok: false, error: `Could not restore the archived session: ${back.error}` }, { status: 422, headers: { "cache-control": "no-store" } });
         await backend.loadSession(String(id));
+        publishLiveSessions(ownSessionIds()); // other engines must not archive it from this moment
         return json({ ok: true });
+      }
+      // P-SESS-ARCHIVE.1 (ADR-0471): archive / restore one session, the Archived group, the auto-archive rule.
+      if (p === "/api/session/archive" && req.method === "POST") {
+        const { id } = await readBody<{ id?: unknown }>(req);
+        const sid = String(id ?? "");
+        if (ownSessionIds().has(sid)) return json({ ok: true, data: { ok: false, error: "This session is open in Main or a spoke. Switch away from it (or stop the spoke) first." } });
+        if (otherEnginesSessions().has(sid)) return json({ ok: true, data: { ok: false, error: "This session is open in another LUCID window. Switch away from it there first." } });
+        return json({ ok: true, data: archiveSession(sid, { cwd: currentWorkspace() }) });
+      }
+      if (p === "/api/session/restore" && req.method === "POST") {
+        const { id } = await readBody<{ id?: unknown }>(req);
+        return json({ ok: true, data: restoreSession(String(id ?? "")) });
+      }
+      if (p === "/api/sessions/archived") return json({ ok: true, data: { sessions: archivedSessions().slice(0, 300) } });
+      if (p === "/api/sessions/archive-policy") {
+        if (req.method === "POST") {
+          const s = loadSettings();
+          s.sessionArchive = archivePolicy(await readBody<unknown>(req));
+          saveSettings(s);
+          scheduleAutoArchive();
+        }
+        const policy = archivePolicy(loadSettings().sessionArchive);
+        const preview = autoArchive(policy, liveSessionIds(), laneSessionNames(), { dryRun: true });
+        return json({ ok: true, data: { policy, wouldArchive: preview.candidates, lastRun: lastArchiveRun } });
+      }
+      if (p === "/api/sessions/archive-now" && req.method === "POST") {
+        lastArchiveRun = { at: Date.now(), ...autoArchive(archivePolicy(loadSettings().sessionArchive), liveSessionIds(), laneSessionNames()) };
+        flushSessionIndex();
+        return json({ ok: true, data: lastArchiveRun });
       }
       if (p === "/api/session/delete" && req.method === "POST") {
         const { id } = await readBody<{ id?: unknown }>(req);
@@ -6009,7 +6091,9 @@ return Bun.serve({
         const { force } = await readBody<{ force?: unknown }>(req).catch(() => ({ force: undefined }));
         const busy = force === true ? null : backend.switchBlocker(); // P-SWITCH.1 (ADR-0403)
         if (busy) return switchRefused(busy, backend.currentSessionId());
-        await backend.newSession(); await refreshRecall(); return json({ ok: true });
+        await backend.newSession(); await refreshRecall();
+        publishLiveSessions(ownSessionIds()); // P-SESS-ARCHIVE.1: other engines see the switch now, not at the next beat
+        return json({ ok: true });
       }
       // P-FLEET.L5 (ADR-0274): the reviewable timeline - every session on this machine (master chats,
       // lane sessions labeled through the durable ledger, ingest throwaways), across ALL workspaces,
@@ -6158,6 +6242,9 @@ return Bun.serve({
         const sessionId = typeof b.sessionId === "string" ? b.sessionId.trim() : "";
         let resume: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } | undefined;
         if (sessionId) {
+          // P-SESS-ARCHIVE.1: a ghost spoke whose session was archived comes back with its file.
+          const back = restoreSession(sessionId);
+          if (!back.ok && back.error !== "session not found") return json({ ok: true, data: { ok: false, reason: `Could not restore the archived session: ${back.error}` } });
           const page = sessionMessages(sessionId, TRANSCRIPT_MAX_TURNS);
           const transcript: LaneTurnRecord[] = [];
           for (const m of page.messages) if ((m.role === "user" || m.role === "assistant") && m.text.trim()) transcript.push({ role: m.role, text: m.text });
@@ -6857,6 +6944,8 @@ process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retr
 // P-FLEET.L1: the master agent's fleet_status tool (omp subprocess) GETs this to see local lane status -
 // metadata only (lane replies render in the fleet dashboard, never through this URL).
 process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/status?t=${AGENT_TOKEN}`;
+startLiveHeartbeat(); // P-SESS-ARCHIVE.1 (ADR-0471): tell other engines which sessions must not be archived
+scheduleAutoArchive(); // P-SESS-ARCHIVE.1: only does anything while the rule is on
 // P-SANDBOX.8: the sandbox_grant_dir tool (omp subprocess) POSTs its user-approved {path,mode,reason}
 // claim here. Same token'd convention as LUCID_FLEET_STATUS_URL; the endpoint applies NOTHING without a
 // fresh matching approval parked by the desktop's grant dialog (fail-closed, defense in depth).
