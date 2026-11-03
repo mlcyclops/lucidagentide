@@ -511,9 +511,12 @@ export interface EvalReportResult { kind: string; id: string; rel: string | null
 export interface ModeOption { id: string; name: string; description?: string }
 export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "creator" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
 export interface OmpCommand { name: string; description?: string; hint?: string }
-export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest"; live?: SessionLive }
+export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest"; live?: SessionLive; spoke?: string }
 // P-KG-INGEST.1b (ADR-0076): chats, with throwaway extraction sessions split into a collapsible group.
-export interface SessionList { sessions: SessionInfo[]; ingest: SessionInfo[] }
+// P-SESS-SEARCH.1 (ADR-0469): `hiddenSpokes` = spoke sessions held back while the Spokes toggle is off.
+export interface SessionList { sessions: SessionInfo[]; ingest: SessionInfo[]; hiddenSpokes?: number }
+/** P-SESS-SEARCH.1: a sidebar search across every session of the workspace (mirrors desktop/sessions.ts). */
+export interface SessionSearch { hits: (SessionInfo & { snippet?: string })[]; total: number; hiddenSpokes: number }
 // P-SKILL.1 (ADR-0045): per-file result of a gated skill import (mirrors desktop/skills_import.ts).
 export interface SkillImportResult { ok: boolean; name: string; written?: boolean; path?: string; blocked?: boolean; reason?: string; trustLabel?: string; findings?: number }
 
@@ -1207,7 +1210,9 @@ export interface LucidBridge {
   clearActiveSkill(): Promise<{ active: string } | null>;
   // P-IDE.3: record a skill activation as telemetry (metadata only).
   skillActivated(command: string, name: string, source: "bundled" | "project" | "task"): Promise<unknown>;
-  sessions(): Promise<SessionList | null>;
+  sessions(spokes?: boolean): Promise<SessionList | null>;
+  /** P-SESS-SEARCH.1: title, model, spoke name, and conversation text; `spokes` shows spoke sessions. */
+  searchSessions(q: string, spokes: boolean): Promise<SessionSearch | null>;
   // P-PERF.4: tail-first transcript page - `limit` returns only the last N messages (+ the true total).
   // P-RESUME.1 (ADR-0171): user messages carry their `turn` ordinal; `steps` is the restored agent
   // activity (thinking/tool/failure groups) recorded in the lucid-steps sidecar, keyed by that ordinal.
@@ -1995,9 +2000,10 @@ export const bridge: LucidBridge = {
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
   clearActiveSkill: () => post("/api/skill", { clear: true }),
   skillActivated: (command, name, source) => post("/api/skill/activated", { command, name, source }),
-  sessions: async () => {
+  searchSessions: (q, spokes) => getData(`/api/sessions/search?q=${encodeURIComponent(q)}${spokes ? "&spokes=1" : ""}`),
+  sessions: async (spokes = false) => {
     try {
-      const r = await fetch("/api/sessions", { cache: "no-store", headers: authHeaders() });
+      const r = await fetch(`/api/sessions${spokes ? "?spokes=1" : ""}`, { cache: "no-store", headers: authHeaders() });
       if (r.status === 404) return null; // server predates the sessions route → out of date
       const data = (await r.json())?.data;
       // Tolerate an older server that returned a bare array (pre-1b): wrap it as { sessions, ingest }.
