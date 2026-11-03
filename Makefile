@@ -857,6 +857,15 @@ license-headers: ## Apply the BUSL-1.1 SPDX header to first-party source (idempo
 license-check: ## Fail if any first-party source file is missing the BUSL-1.1 header (CI guard)
 	$(BUN) run tools/license_headers.ts --check
 
+EVIDENCE_OUT ?= compliance-evidence
+.PHONY: compliance-evidence
+compliance-evidence: ## P-COMPLY.1 (ADR-0479): NIST SP 800-171 r3 host evidence -> $(EVIDENCE_OUT)/evidence.json + evidence.md (read-only)
+	$(BUN) run tools/compliance/evidence.ts --out $(EVIDENCE_OUT)
+
+.PHONY: compliance-matrix
+compliance-matrix: ## P-COMPLY.1: re-render docs/compliance/control-matrix-r3.md from the CSV
+	$(BUN) run tools/compliance/matrix.ts
+
 .PHONY: clean
 clean: ## Remove build/test artifacts (keeps committed source + DBs)
 	rm -rf node_modules/.cache .bun 2>/dev/null || true
