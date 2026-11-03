@@ -4318,6 +4318,15 @@ pre:hover .code-copy-btn,pre:focus-within .code-copy-btn{opacity:1}
 .lp-apply-row{display:flex;align-items:center;gap:9px;margin:8px 0 2px;flex-wrap:wrap}
 .lp-apply-note{font-size:11px;color:var(--txt-2)}
 .lp-add-row .lp-auth-sel{flex:0 0 auto;max-width:52%}
+/* P-VAULT-DEST.1 (ADR-0478): Settings → Vault destinations (Enterprise); reuses the .lp-* row/add-form look */
+.vd-ttl{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vd-actions{display:flex;flex-wrap:wrap;gap:6px;padding:0 10px 8px}
+.vd-auto{padding:0 10px 8px}
+.vd-last{padding:0 10px 8px;margin-top:0}
+.vd-last.vd-bad{color:var(--amber)}
+.vd-result{margin:0 10px 9px}
+.vd-client{display:flex;flex-direction:column;gap:6px}
+.vd-client[hidden]{display:none}
 .lp-add-row #lpKey{flex:1;min-width:0}
 .ab-cred-row{display:flex;flex-direction:column;gap:6px;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-sm);padding:8px 9px}
 .ab-cred-head{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--txt)}

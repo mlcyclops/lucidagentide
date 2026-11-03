@@ -18,7 +18,7 @@
 // never resolved from the open workspace — a cloned repo cannot plant a "connector" and have LUCID run it.
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { repoAsset } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): never import.meta.dir
 
 /** The add-on checkout root: env override first, else the documented sibling folder.
@@ -86,6 +86,48 @@ export function runConnector(name: string, verb: string, artifactFile: string, t
     };
   } catch (e) {
     return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** A connector reply with every field the connector sent (`reply`), for verbs whose reply carries more
+ *  than `{ ok, detail }` (the kms destination verbs, ADR-A032: `pushed`, `items`, `pulled`). */
+export interface ConnectorReply extends ConnectorResult {
+  /** The parsed one-line JSON object, or null when the connector printed none. */
+  reply: Record<string, unknown> | null;
+}
+
+/** P-VAULT-DEST.1 (ADR-0478): the async form of runConnector, so a slow connector never blocks the engine's
+ *  event loop. Same `bun <dir>/src/cli.ts <verb> --file <artifact>` contract. A connector that fails closed
+ *  exits 1 AND prints its one JSON line (ADR-A032), so the line is parsed whatever the exit code: ok is true
+ *  only for exit 0 with `ok: true`, and `detail` is the connector's own reason when it gave one. */
+export async function runConnectorReply(name: string, verb: string, artifactFile: string, timeoutMs = 60_000): Promise<ConnectorReply> {
+  const st = connectorStatus(name);
+  if (!st.installed || !st.dir) return { ok: false, detail: st.note, reply: null };
+  const dir = resolve(st.dir); // a relative LUCID_ADDON_DIR must not be re-resolved against the child's cwd
+  try {
+    const proc = Bun.spawn(["bun", join(dir, "src", "cli.ts"), verb, "--file", artifactFile], {
+      cwd: dir,
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: timeoutMs,
+      killSignal: "SIGKILL",
+    });
+    const [out, err, exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    const lastLine = out.trim().split("\n").at(-1)?.trim() ?? "";
+    let reply: Record<string, unknown> | null = null;
+    try {
+      const parsed: unknown = JSON.parse(lastLine);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) reply = parsed as Record<string, unknown>;
+    } catch { /* no JSON line: reported below */ }
+    if (!reply) {
+      const why = exitCode !== 0 ? err.trim() || out.trim() || `connector exited ${exitCode}` : `connector reply was not JSON: ${lastLine.slice(0, 200)}`;
+      return { ok: false, detail: why.slice(0, 500), reply: null };
+    }
+    const ok = exitCode === 0 && reply.ok === true;
+    const detail = typeof reply.detail === "string" ? reply.detail : ok ? "done" : `connector reported failure (exit ${exitCode})`;
+    return { ok, detail: detail.slice(0, 500), reply };
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : String(e), reply: null };
   }
 }
 

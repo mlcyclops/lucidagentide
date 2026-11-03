@@ -49,6 +49,23 @@ function readable(): VaultRead {
   return v;
 }
 
+/** P-VAULT-DEST.1 (ADR-0478): observers of a stored value (vaultPut, vaultRotate), e.g. destination
+ *  auto-backup. They get metadata only, never the value, after the write is verified; a throwing observer
+ *  never fails the write. Restore and destination pull (vaultImportEntries) and the safeStorage migration
+ *  do not notify: they bring values in, they are not new secrets. */
+export type VaultWriteListener = (meta: VaultEntryMeta) => void;
+const writeListeners = new Set<VaultWriteListener>();
+/** Subscribe to stored values; returns the unsubscribe function. */
+export function onVaultWrite(fn: VaultWriteListener): () => void {
+  writeListeners.add(fn);
+  return () => { writeListeners.delete(fn); };
+}
+function notifyWrite(meta: VaultEntryMeta): void {
+  for (const fn of writeListeners) {
+    try { fn(meta); } catch (e) { console.error(`[vault] a write observer failed: ${String((e as Error)?.message ?? e).slice(0, 200)}`); }
+  }
+}
+
 /** Every entry's metadata (never a value), by ref. Empty when the vault is absent or unreadable
  *  (vaultStatus() says which). */
 export function vaultList(): VaultEntryMeta[] {
@@ -80,7 +97,9 @@ export function vaultPut(input: VaultPutInput): VaultEntryMeta {
   });
   const stored = entries[ref];
   if (!stored || stored.value !== value) throw new Error("the vault did not keep the value");
-  return metaOf(stored);
+  const meta = metaOf(stored);
+  notifyWrite(meta);
+  return meta;
 }
 
 /** Replace the value of an EXISTING ref in place (same ref, kind, label, addedAt; rotatedAt = now).
@@ -99,7 +118,9 @@ export function vaultRotate(ref: string, value: string, opts: { expiresAt?: numb
   if (!found) return null;
   const stored = entries[ref];
   if (!stored || stored.value !== value) throw new Error("the vault did not keep the value");
-  return metaOf(stored);
+  const meta = metaOf(stored);
+  notifyWrite(meta);
+  return meta;
 }
 
 /** Delete one ref. False when it was not there. Throws (changing nothing) when the vault is unreadable. */

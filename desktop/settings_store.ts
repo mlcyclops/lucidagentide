@@ -239,6 +239,24 @@ export interface GuiSettings {
   // CREATOR-0 (ADR-0283): remote monitoring targets (a DGX Spark, a GPU VM) - a DCGM/Prometheus exporter
   // or a LUCID JSON agent URL plus an optional vault credential NAME. Never a secret value.
   creatorTargets?: CreatorRemoteTargetDef[];
+  // P-VAULT-DEST.1 (ADR-0478, Contract C): enterprise secrets-manager destinations the vault backs up to.
+  // NON-SECRET config only (vault name, cloud, auth mode, tenant/client ids); a client secret is named by
+  // `clientSecretRef`, a vault ref, and resolved just-in-time per call. Read and written by vault_destinations.ts.
+  vaultDestinations?: VaultDestination[];
+}
+
+/** P-VAULT-DEST.1 (Contract C): the kinds of enterprise secrets manager a destination can be. */
+export type VaultDestinationKind = "azure-kv" | "aws-sm" | "gcp-sm" | "hashicorp-vault";
+/** P-VAULT-DEST.1 (Contract C): one stored destination. `config` is NON-SECRET (for azure-kv: vaultName,
+ *  cloud, auth, tenantId?, clientId?, clientSecretRef? = a vault ref, never the secret). Validated and
+ *  written only by vault_destinations.ts. */
+export interface VaultDestination {
+  id: string;
+  name: string;
+  kind: VaultDestinationKind;
+  config: Record<string, string>;
+  autoBackup?: boolean;
+  addedAt: number;
 }
 
 /** CREATOR-0: the stored shape of a remote monitoring target. Mirrors creator_monitor's RemoteTargetDef

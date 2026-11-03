@@ -89,6 +89,7 @@ import type { MeetingTodoView } from "./bridge.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
 import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
 import { localProvidersCardBody, draftFromForm, modelsFieldValue, providerWithDiscovered } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135) / P-LOCAL.6: Settings → Local Providers
+import { hydrateVaultDestinations } from "./vault_dest_ui.ts"; import { VAULT_DEST_SEC, VAULT_DEST_SUB, VAULT_DEST_TITLE } from "./vault_dest_card.ts"; // P-VAULT-DEST.1 (ADR-0478): Settings → Vault destinations (Enterprise)
 import { acceptAttachment, promptImageBlocks, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "./composer_attachments.ts"; // P-VISION.1 (ADR-0136): pasted images
 import { imageFileName } from "./chat_images.ts"; // P-IMG.1 (ADR-0208): inline render + download of tool images
 import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
@@ -5677,6 +5678,7 @@ function settingsShell(): string {
     setSkel("agents", "Remote agents", "hermes · openclaw · ACP firewall", true), // P-AGENTFW.2 (ADR-0149)
     setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
     setSkel("vault", "Credential vault", "names only \u00b7 encrypted backup", true), // P-VAULT-UI.1 (ADR-0475)
+    setSkel(VAULT_DEST_SEC, VAULT_DEST_TITLE, VAULT_DEST_SUB, true), // P-VAULT-DEST.1 (ADR-0478); collapsed by default
     setSkel("others", "More providers", "", true),
     setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
     setSkel("judgment", "Judgment", "None by default \u00b7 Jev \u00b7 your models", true), // P-JEV.1 (ADR-0374) + P-JEV.5
@@ -5726,6 +5728,7 @@ function hydrateSettings(): void {
   void hydrateLocalProviders(); // P-LOCAL.3 (ADR-0135)
   hydrateWhitelist(); // P-NETWL.2 (ADR-0106)
   void hydrateVaultSettings(); // P-VAULT-UI.1 (ADR-0475)
+  void hydrateVaultDestinations(); // P-VAULT-DEST.1 (ADR-0478)
   void bridge.asksage().then(async (a) => {
     if (a) state.asksage = a;
     fillSec("asksage", secAsksage(a, null)); // paint immediately (token readout shows a spinner)

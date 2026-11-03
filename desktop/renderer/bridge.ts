@@ -1369,6 +1369,10 @@ export interface LucidBridge {
   secretFallbackWait(id: string): Promise<SecretCallResult>;
   secretManagerInfo(): Promise<{ enterprise: boolean; note: string } | null>;
   secretManagerRecord(input: { answer: SecretManagerAnswer; name?: string; config?: Record<string, string> }): Promise<SecretManagerOutcome | null>;
+  /** P-VAULT-DEST.1 (ADR-0478): one engine vault route (/api/vault/destinations*, /push, /pull, /list); GET
+   *  when `body` is undefined. Answers the route's own `{ ok, data }` / `{ ok: false, error }`; `T` is the
+   *  route's documented data shape. Responses carry metadata only, never a secret value. */
+  vaultDest<T>(path: string, body?: unknown): Promise<{ ok: boolean; data?: T; error?: string }>;
   // P-NETWL.2 (ADR-0106): curated network-whitelist CRUD (persisted server-side; non-secret).
   whitelistList(): Promise<WhitelistEntryView[]>;
   whitelistUpsert(entry: Partial<WhitelistEntryView>): Promise<WhitelistEntryView | null>;
@@ -2236,6 +2240,17 @@ export const bridge: LucidBridge = {
     const d: unknown = await post("/api/secret/manager", input);
     if (!d || typeof d !== "object" || !("detail" in d) || typeof d.detail !== "string") return null;
     return { saved: "saved" in d && d.saved === true, recorded: "recorded" in d && d.recorded === true, enterprise: "enterprise" in d && d.enterprise === true, detail: d.detail };
+  },
+  vaultDest: async <T>(path: string, body?: unknown): Promise<{ ok: boolean; data?: T; error?: string }> => { // P-VAULT-DEST.1 (ADR-0478)
+    try {
+      const res = await fetch(path, body === undefined
+        ? { cache: "no-store", headers: authHeaders() }
+        : { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) });
+      const j: unknown = await res.json().catch(() => null);
+      // The engine's own vault route envelope; the caller names the documented data shape it reads.
+      if (j && typeof j === "object" && "ok" in j) { const envelope = j as { ok: boolean; data?: T; error?: string }; return envelope; }
+      return { ok: false, error: `the engine answered HTTP ${res.status}` };
+    } catch { return { ok: false, error: "the engine did not answer" }; }
   },
   whitelistList: async () => (await getData("/api/whitelist")) ?? [], // P-NETWL.2
   whitelistUpsert: (entry) => post("/api/whitelist", entry), // P-NETWL.2
