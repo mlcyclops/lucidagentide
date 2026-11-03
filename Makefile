@@ -1402,6 +1402,11 @@ demo-P-VAULT-KEYS.1: ## P-VAULT-KEYS.1 (ADR-0472): provider keys, named-account 
 	$(BUN) run desktop/scripts/demo_p_vault_keys_1.ts
 	$(BUN) test $(TEST_IGNORES) desktop/engine_vault.test.ts desktop/settings_vault.test.ts desktop/settings_store_atomic.test.ts desktop/auth_status.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-P-VAULT-V2.1
+demo-P-VAULT-V2.1: ## P-VAULT-V2.1 (ADR-0474): one engine vault. Sealed format v2 with per-entry metadata (v1 read and upgraded on the first real write), the Electron safeStorage credential vault migrated into it (import, engine read-back, only then delete; crash-safe, idempotent), credentials resolved engine-side under the env names main injected, and the vault API (/api/vault/list|put|rotate|delete, UI token only; main-only routes behind a per-launch vault token). Real engines in a scratch dir: no route response ever carries a value
+	$(BUN) run desktop/scripts/demo_p_vault_v2_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/vault_v2.test.ts desktop/cred_migration.test.ts desktop/engine_vault.test.ts desktop/settings_vault.test.ts desktop/cred_vault.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-P-FIPS.1
 demo-P-FIPS.1: ## P-FIPS.1 (ADR-0473): AES-256-GCM, PBKDF2-HMAC-SHA256, SHA-256, HMAC-SHA256 and the DRBG run in the OS FIPS 140 module (Windows CNG / Apple corecrypto / OpenSSL FIPS provider) after power-on known-answer tests; output is byte-identical to node:crypto so personal-kg.v1 stores open unchanged; fips is claimed only by the documented rule; LUCID_FIPS_REQUIRED=1 or managed security.crypto.requireFips fails every op closed when no validated module is usable; the Node (Electron main) bundle never loads bun:ffi
 	$(BUN) run desktop/scripts/demo_p_fips_1.ts

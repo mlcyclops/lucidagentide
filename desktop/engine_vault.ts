@@ -15,24 +15,36 @@
 //       linux  Secret Service (libsecret), via secret-tool
 //   - the secrets themselves sealed with AES-256-GCM under that key in <dir>/secrets.v1.json.
 //
+// P-VAULT-V2.1 (ADR-0474): format v2. The sealed plaintext is `{ entries: { [ref]: VaultEntryMeta & { value } } }`,
+// so every secret carries non-secret metadata (kind, label, source, dates, env name, last-4). A v1 record
+// (a bare `{ ref: value }` map) is still read; its entries get synthesized metadata (source
+// "migrated-settings") and the file is rewritten as v2 on the first write that changes something. The file
+// name stays `secrets.v1.json` (the envelope's `v` field is the format version), so a vault directory never
+// holds two competing files. All AES-GCM, SHA-256 and random bytes go through harness/crypto/fips_crypto.ts
+// (P-FIPS.1, ADR-0473): the bytes are identical to node:crypto, so no record needs re-encryption.
+//
 // Several engines can share one vault (installed app, dev port, hub engine, fleet lanes), so every write
 // is a DELTA (refs to set, refs to delete) applied under an owner-token `secrets.lock` to a map read
 // fresh from disk and decrypted inside the lock: an engine never writes back a map it did not just
 // decrypt, so it can neither drop another engine's key nor resurrect one another engine deleted.
 //
 // Fail-closed rules: a secrets file that cannot be decrypted is never overwritten (updateVault sets it
-// aside first), a master key that exists but cannot be read is never replaced, and this module never
-// writes a plaintext secret anywhere. Outside Bun (Electron main bundles settings_store.ts with
-// --target=node) every entry point reports `unavailable` without touching a vault file.
+// aside first), a master key that exists but cannot be read is never replaced, a FIPS-required refusal is
+// never mistaken for an unreadable file, and this module never writes a plaintext secret anywhere. Outside
+// Bun (Electron main bundles settings_store.ts with --target=node) every entry point reports `unavailable`
+// without touching a vault file.
 
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
+import { aesGcmDecrypt, aesGcmEncrypt, FipsRequiredError, randomBytes, sha256 } from "../harness/crypto/fips_crypto.ts"; // P-FIPS.1 (ADR-0473)
 import { errCode, RETRYABLE, withRetry, writeAtomic } from "./atomic_file.ts";
+import { deriveLast4 } from "./cred_vault.ts";
 
-/** AAD for every sealed record and the DPAPI entropy: binds the bytes to this format and purpose. */
+/** AAD for v1 sealed records and the DPAPI entropy (never changes: it binds every existing master key). */
 export const VAULT_AAD = "lucid-engine-vault-v1";
+/** AAD for v2 sealed records: binds the format version, so a v2 record relabelled `v: 1` fails to open. */
+export const VAULT_AAD_V2 = "lucid-engine-vault-v2";
 export const SECRETS_FILE = "secrets.v1.json";
 const MASTER_DPAPI = "master.dpapi";
 const MASTER_LOCK = "master.lock";
@@ -68,29 +80,115 @@ export function engineVaultDir(settingsFile: string): string {
 }
 const secretsPath = (dir: string): string => join(dir, SECRETS_FILE);
 /** Key id: the first 16 hex of sha256(master key). Lets a reader detect the wrong key before decrypting. */
-const kidOf = (key: Buffer): string => createHash("sha256").update(key).digest("hex").slice(0, 16);
+const kidOf = (key: Buffer): string => sha256(key).toString("hex").slice(0, 16);
 /** Keychain / Secret Service account for a vault dir: one master key per directory. */
-const accountFor = (dir: string): string => `master-v1-${createHash("sha256").update(resolve(dir)).digest("hex").slice(0, 16)}`;
+const accountFor = (dir: string): string => `master-v1-${sha256(Buffer.from(resolve(dir), "utf8")).toString("hex").slice(0, 16)}`;
 const NO_BUN: VaultStatus = { custody: "plaintext-file", state: "unavailable", detail: "not running under Bun (Electron main never opens the engine vault)" };
 const EMPTY: Readonly<Record<string, string>> = Object.freeze({});
+const NO_ENTRIES: VaultEntries = Object.freeze({});
+/** A FIPS-required refusal (P-FIPS.1): reported as such, never treated as an unreadable record. */
+const fipsRefusal = (e: unknown): string | null => (e instanceof FipsRequiredError ? `FIPS mode refused the operation: ${e.message}` : null);
+
+// ── entries and metadata (P-VAULT-V2.1, ADR-0474, Contract B) ──────────────────────────────────────
+
+export type VaultKind = "apikey" | "token" | "bearer" | "pat" | "oauth" | "password" | "basic" | "pem" | "jwt" | "saml" | "json" | "other";
+export const VAULT_KINDS: readonly VaultKind[] = ["apikey", "token", "bearer", "pat", "oauth", "password", "basic", "pem", "jwt", "saml", "json", "other"];
+export type VaultSource = "typed" | "migrated-settings" | "migrated-safestorage" | "env-import" | "agent-request" | "restore" | "destination-pull";
+export const VAULT_SOURCES: readonly VaultSource[] = ["typed", "migrated-settings", "migrated-safestorage", "env-import", "agent-request", "restore", "destination-pull"];
+/** Non-secret metadata of one vault entry. Safe for the UI (last-4 included); never the value. */
+export interface VaultEntryMeta {
+  ref: string; label: string; kind: VaultKind; source: VaultSource;
+  scope?: { workspace?: string };
+  envName?: string;
+  addedAt: number; updatedAt: number; rotatedAt?: number; expiresAt?: number; rotationIntervalDays?: number;
+  last4?: string;
+}
+/** One sealed entry: metadata plus the secret. Engine-internal only. */
+export interface VaultEntry extends VaultEntryMeta { value: string }
+export type VaultEntries = Readonly<Record<string, Readonly<VaultEntry>>>;
+/** Metadata a write may set for a ref (`ref` is the map key, `last4` is always derived from the value). */
+export type VaultMetaPatch = Partial<Omit<VaultEntryMeta, "ref" | "last4">>;
+
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+export const isEnvName = (s: unknown): s is string => typeof s === "string" && s.length <= 128 && ENV_NAME_RE.test(s);
+/** Last-4 for the UI, never for a secret shorter than 12 characters. PEM-aware (identifies the key body). */
+export function vaultLast4(value: string, kind: VaultKind): string | undefined {
+  return value.length >= 12 ? deriveLast4(value, kind === "pem" ? "pem" : undefined) : undefined;
+}
+/** Kind, label and env name a ref implies when nothing else says (v1 upgrade, settings_store writes). */
+export function inferMeta(ref: string): { kind: VaultKind; label: string; envName?: string } {
+  if (ref.startsWith("key:")) { const env = ref.slice(4); return { kind: "apikey", label: env, ...(isEnvName(env) ? { envName: env } : {}) }; }
+  if (ref.startsWith("account:")) return { kind: "apikey", label: ref };
+  if (ref.startsWith("mcp:")) return { kind: "bearer", label: ref };
+  if (ref === "turn:credential") return { kind: "password", label: "TURN credential" };
+  if (ref.startsWith("oauth:")) return { kind: "oauth", label: ref };
+  const ws = /^ws:[0-9a-f]{16}:(.+)$/.exec(ref);
+  if (ws && isEnvName(ws[1])) return { kind: "apikey", label: ws[1], envName: ws[1] };
+  return { kind: "other", label: ref };
+}
+const finite = (n: unknown): number | undefined => (typeof n === "number" && Number.isFinite(n) ? n : undefined);
+
+/** Build one entry in canonical field order (so a sealed record and its read-back compare byte-for-byte). */
+function canonEntry(ref: string, value: string, m: Partial<VaultEntryMeta>, fallbackAt: number, fallbackSource: VaultSource): VaultEntry {
+  const inferred = inferMeta(ref);
+  const kind = VAULT_KINDS.find((k) => k === m.kind) ?? inferred.kind;
+  const addedAt = finite(m.addedAt) ?? fallbackAt;
+  const e: VaultEntry = {
+    ref,
+    label: typeof m.label === "string" && m.label.trim() ? m.label.slice(0, 200) : inferred.label,
+    kind,
+    source: VAULT_SOURCES.find((s) => s === m.source) ?? fallbackSource,
+    addedAt,
+    updatedAt: finite(m.updatedAt) ?? addedAt,
+    value,
+  };
+  const ws = m.scope && typeof m.scope === "object" && typeof m.scope.workspace === "string" && m.scope.workspace ? m.scope.workspace : undefined;
+  if (ws) e.scope = { workspace: ws };
+  const envName = m.envName === undefined ? inferred.envName : m.envName;
+  if (isEnvName(envName)) e.envName = envName;
+  const rotatedAt = finite(m.rotatedAt); if (rotatedAt !== undefined) e.rotatedAt = rotatedAt;
+  const expiresAt = finite(m.expiresAt); if (expiresAt !== undefined) e.expiresAt = expiresAt;
+  const interval = finite(m.rotationIntervalDays); if (interval !== undefined && interval > 0) e.rotationIntervalDays = interval;
+  const last4 = vaultLast4(value, kind); if (last4) e.last4 = last4;
+  return e;
+}
+/** The metadata of an entry (the value dropped). */
+export function metaOf(e: VaultEntry): VaultEntryMeta {
+  const { value: _value, ...meta } = e;
+  return meta;
+}
 
 // ── sealing ────────────────────────────────────────────────────────────────────────────────────────
 
-export interface SealedSecrets { v: 1; alg: "A256GCM"; kid: string; iv: string; tag: string; ct: string }
+/** The on-disk envelope, unchanged since v1; `v` is the plaintext format version. */
+export interface SealedSecrets { v: 1 | 2; alg: "A256GCM"; kid: string; iv: string; tag: string; ct: string }
 
-export function sealSecrets(key: Buffer, secrets: Record<string, string>): SealedSecrets {
+function seal(key: Buffer, v: 1 | 2, plaintext: string): SealedSecrets {
   const iv = randomBytes(12);
-  const c = createCipheriv("aes-256-gcm", key, iv);
-  c.setAAD(Buffer.from(VAULT_AAD, "utf8"));
-  const ct = Buffer.concat([c.update(JSON.stringify(secrets), "utf8"), c.final()]);
-  return { v: 1, alg: "A256GCM", kid: kidOf(key), iv: iv.toString("base64"), tag: c.getAuthTag().toString("base64"), ct: ct.toString("base64") };
+  const { ct, tag } = aesGcmEncrypt(key, iv, Buffer.from(plaintext, "utf8"), Buffer.from(v === 2 ? VAULT_AAD_V2 : VAULT_AAD, "utf8"));
+  return { v, alg: "A256GCM", kid: kidOf(key), iv: iv.toString("base64"), tag: tag.toString("base64"), ct: ct.toString("base64") };
 }
 
-/** Open a sealed record. Throws (with a reason) on a wrong key, a short or altered record, or bad shape. */
-export function openSealed(key: Buffer, sealed: unknown): Record<string, string> {
+/** Seal a v1 record (a bare `{ ref: value }` map). The engine itself only writes v2; this writer exists
+ *  so tests and tools can produce the format every pre-ADR-0474 vault holds. */
+export function sealSecrets(key: Buffer, secrets: Record<string, string>): SealedSecrets {
+  return seal(key, 1, JSON.stringify(secrets));
+}
+
+/** Seal a v2 record: every entry with its metadata. */
+export function sealEntries(key: Buffer, entries: VaultEntries): SealedSecrets {
+  return seal(key, 2, JSON.stringify({ entries }));
+}
+
+export interface OpenedVault { version: 1 | 2; entries: Record<string, VaultEntry> }
+
+/** Open a sealed v1 or v2 record. v1 entries get synthesized metadata stamped `upgradeAt` with source
+ *  "migrated-settings". Throws (with a reason) on a wrong key, a short or altered record, or bad shape; a
+ *  FIPS-required refusal is rethrown as the FipsRequiredError it is. */
+export function openVault(key: Buffer, sealed: unknown, upgradeAt: number): OpenedVault {
   const s = sealed as Partial<SealedSecrets> | null;
-  if (!s || typeof s !== "object" || s.v !== 1 || s.alg !== "A256GCM" || typeof s.kid !== "string" || typeof s.iv !== "string" || typeof s.tag !== "string" || typeof s.ct !== "string") {
-    throw new Error("not a v1 sealed secrets record");
+  if (!s || typeof s !== "object" || (s.v !== 1 && s.v !== 2) || s.alg !== "A256GCM" || typeof s.kid !== "string" || typeof s.iv !== "string" || typeof s.tag !== "string" || typeof s.ct !== "string") {
+    throw new Error("not a v1 or v2 sealed secrets record");
   }
   const kid = kidOf(key);
   if (s.kid !== kid) throw new Error(`sealed under a different master key (kid ${s.kid}, this account's key is ${kid})`);
@@ -99,18 +197,39 @@ export function openSealed(key: Buffer, sealed: unknown): Record<string, string>
   if (iv.length !== 12 || tag.length !== 16) throw new Error("malformed iv or tag");
   let text: string;
   try {
-    const d = createDecipheriv("aes-256-gcm", key, iv);
-    d.setAAD(Buffer.from(VAULT_AAD, "utf8"));
-    d.setAuthTag(tag);
-    text = Buffer.concat([d.update(Buffer.from(s.ct, "base64")), d.final()]).toString("utf8");
-  } catch { throw new Error("authentication failed (the record was altered or truncated)"); }
+    text = aesGcmDecrypt(key, iv, Buffer.from(s.ct, "base64"), tag, Buffer.from(s.v === 2 ? VAULT_AAD_V2 : VAULT_AAD, "utf8")).toString("utf8");
+  } catch (e) {
+    if (e instanceof FipsRequiredError) throw e;
+    throw new Error("authentication failed (the record was altered or truncated)");
+  }
   const parsed: unknown = JSON.parse(text);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("sealed content is not a map");
-  const out: Record<string, string> = {};
-  for (const [ref, v] of Object.entries(parsed)) {
-    if (typeof v !== "string") throw new Error(`sealed value for ${ref} is not a string`);
-    out[ref] = v;
+  const entries: Record<string, VaultEntry> = {};
+  if (s.v === 1) {
+    for (const [ref, v] of Object.entries(parsed)) {
+      if (typeof v !== "string") throw new Error(`sealed value for ${ref} is not a string`);
+      entries[ref] = canonEntry(ref, v, {}, upgradeAt, "migrated-settings");
+    }
+    return { version: 1, entries };
   }
+  const raw = "entries" in parsed ? parsed.entries : null;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("sealed v2 content has no entries map");
+  for (const [ref, e] of Object.entries(raw)) {
+    if (!e || typeof e !== "object" || !("value" in e) || typeof e.value !== "string") throw new Error(`sealed entry ${ref} has no string value`);
+    const stored: Partial<VaultEntryMeta> = e; // canonEntry validates every field it keeps
+    entries[ref] = canonEntry(ref, e.value, stored, upgradeAt, "migrated-settings");
+  }
+  return { version: 2, entries };
+}
+
+/** The `{ ref: value }` map of a sealed v1 or v2 record. Same failure rules as openVault. */
+export function openSealed(key: Buffer, sealed: unknown): Record<string, string> {
+  return valuesOf(openVault(key, sealed, 0).entries);
+}
+
+function valuesOf(entries: VaultEntries): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [ref, e] of Object.entries(entries)) out[ref] = e.value;
   return out;
 }
 
@@ -251,7 +370,7 @@ let factory: OsKeyStoreFactory = defaultFactory;
 const stores = new Map<string, OsKeyStore | null>();
 /** `fileSig` = the secrets file (`<mtimeMs>:<size>`, or "none") a MISS was observed against. */
 const masters = new Map<string, { at: number; read: MasterRead; fileSig: string }>();
-const reads = new Map<string, { mtimeMs: number; size: number; kid: string; secrets: Readonly<Record<string, string>> }>();
+const reads = new Map<string, { mtimeMs: number; size: number; kid: string; version: 1 | 2; secrets: Readonly<Record<string, string>>; entries: VaultEntries }>();
 /** A secrets file (by `<mtimeMs>:<size>`) that this master key could not open: not retried until either changes. */
 const failures = new Map<string, { sig: string; kid: string; problem: string }>();
 /** How long a miss is trusted before the backend is asked again (spawning `security` per load is not free). */
@@ -353,68 +472,99 @@ export function ensureMasterKey(store: OsKeyStore, dir: string): MasterRead {
 export interface VaultRead {
   /** A sealed secrets file is on disk. */
   exists: boolean;
-  /** The decrypted map (empty when absent or unreadable). Frozen: callers copy values out. */
+  /** The decrypted `{ ref: value }` map (empty when absent or unreadable). Frozen: callers copy values out. */
   secrets: Readonly<Record<string, string>>;
+  /** The same entries with their metadata (v1 records carry synthesized metadata). Frozen. */
+  entries: VaultEntries;
+  /** The format of the file on disk (absent when there is no readable file). */
+  version?: 1 | 2;
   /** Set when the file exists but cannot be opened: the vault is `unreadable` and must be left alone. */
   problem?: string;
 }
 
 /** Read and decrypt the vault. Never creates anything. Memoized on the file's mtime + size (and the master
- *  key id), so engines sharing the directory see each other's writes on their next load. */
+ *  key id), so engines sharing the directory see each other's writes on their next load. A v1 file is
+ *  served with metadata stamped at its mtime; it becomes v2 on the next write that changes something. */
 export function readVault(vaultDir: string): VaultRead {
-  if (typeof Bun === "undefined") return { exists: false, secrets: EMPTY };
+  if (typeof Bun === "undefined") return { exists: false, secrets: EMPTY, entries: NO_ENTRIES };
   const dir = resolve(vaultDir);
   let fd: number;
   for (let attempt = 0; ; attempt++) { // withRetry inlined: fstat and read stay on a direct openSync handle
     try { fd = openSync(secretsPath(dir), "r"); break; } catch (e) {
       if (attempt < 9 && RETRYABLE.includes(errCode(e) ?? "")) { Bun.sleepSync(15); continue; }
-      if (errCode(e) === "ENOENT") return { exists: false, secrets: EMPTY };
-      return { exists: true, secrets: EMPTY, problem: `${SECRETS_FILE} cannot be read (${errCode(e) ?? String(e).slice(0, 80)})` };
+      if (errCode(e) === "ENOENT") return { exists: false, secrets: EMPTY, entries: NO_ENTRIES };
+      return { exists: true, secrets: EMPTY, entries: NO_ENTRIES, problem: `${SECRETS_FILE} cannot be read (${errCode(e) ?? String(e).slice(0, 80)})` };
     }
   }
   try {
     const st = fstatSync(fd);
     const store = storeFor(dir);
-    if (!store) return { exists: true, secrets: EMPTY, problem: `no OS vault backend on ${process.platform}` };
+    if (!store) return { exists: true, secrets: EMPTY, entries: NO_ENTRIES, problem: `no OS vault backend on ${process.platform}` };
     const sig = `${st.mtimeMs}:${st.size}`;
     let master = masterForRead(dir, store, sig);
     const memo = reads.get(dir);
-    if (Buffer.isBuffer(master) && memo && memo.mtimeMs === st.mtimeMs && memo.size === st.size && memo.kid === kidOf(master)) return { exists: true, secrets: memo.secrets };
+    if (Buffer.isBuffer(master) && memo && memo.mtimeMs === st.mtimeMs && memo.size === st.size && memo.kid === kidOf(master)) {
+      return { exists: true, secrets: memo.secrets, entries: memo.entries, version: memo.version };
+    }
     const bad = failures.get(dir);
-    if (Buffer.isBuffer(master) && bad && bad.sig === sig && bad.kid === kidOf(master)) return { exists: true, secrets: EMPTY, problem: bad.problem };
-    const sealed: unknown = (() => { try { return JSON.parse(readFileSync(fd, "utf8")); } catch { return null; } })();
+    if (Buffer.isBuffer(master) && bad && bad.sig === sig && bad.kid === kidOf(master)) return { exists: true, secrets: EMPTY, entries: NO_ENTRIES, problem: bad.problem };
+    let sealed: unknown = null;
+    try { sealed = JSON.parse(readFileSync(fd, "utf8")); } catch { /* openVault names the bad shape */ }
     // A cached key that no longer opens the file (another engine replaced the vault) is re-read once.
     for (let attempt = 0; ; attempt++) {
       if (!Buffer.isBuffer(master)) {
-        return { exists: true, secrets: EMPTY, problem: master.missing === "absent" ? "the master key for this vault is missing" : `the master key could not be read (${master.detail ?? master.missing})` };
+        return { exists: true, secrets: EMPTY, entries: NO_ENTRIES, problem: master.missing === "absent" ? "the master key for this vault is missing" : `the master key could not be read (${master.detail ?? master.missing})` };
       }
       const key: Buffer = master;
       try {
-        const secrets = Object.freeze(openSealed(key, sealed));
-        reads.set(dir, { mtimeMs: st.mtimeMs, size: st.size, kid: kidOf(key), secrets });
-        return { exists: true, secrets };
+        const opened = openVault(key, sealed, st.mtimeMs);
+        const entries = freezeEntries(opened.entries);
+        const secrets = Object.freeze(valuesOf(entries));
+        reads.set(dir, { mtimeMs: st.mtimeMs, size: st.size, kid: kidOf(key), version: opened.version, secrets, entries });
+        return { exists: true, secrets, entries, version: opened.version };
       } catch (e) {
+        const fips = fipsRefusal(e);
+        if (fips) return { exists: true, secrets: EMPTY, entries: NO_ENTRIES, problem: fips }; // not cached: policy may change
         if (attempt === 0) { masters.delete(dir); master = masterForRead(dir, store, sig); continue; }
         const problem = `${SECRETS_FILE} could not be decrypted: ${String((e as Error)?.message ?? e).slice(0, 160)}`;
         failures.set(dir, { sig, kid: kidOf(key), problem });
-        return { exists: true, secrets: EMPTY, problem };
+        return { exists: true, secrets: EMPTY, entries: NO_ENTRIES, problem };
       }
     }
+  } catch (e) {
+    const fips = fipsRefusal(e); // sha256 (key id, Keychain account) refused before any decrypt
+    if (fips) return { exists: true, secrets: EMPTY, entries: NO_ENTRIES, problem: fips };
+    throw e;
   } finally { closeSync(fd); }
 }
 
+function freezeEntries(entries: Record<string, VaultEntry>): VaultEntries {
+  for (const e of Object.values(entries)) Object.freeze(e);
+  return Object.freeze(entries);
+}
+
 /** A change to the vault: refs to set (to these values) and refs to delete. Refs it does not name keep
- *  whatever the vault holds, whoever wrote them. */
-export interface VaultDelta { set: Record<string, string>; del: string[] }
+ *  whatever the vault holds, whoever wrote them. `meta[ref]` sets metadata for a ref in `set` (fields it
+ *  leaves out keep the stored value, or the inferred default for a new ref); `source` is the source a NEW
+ *  ref gets when its patch names none (default "typed"). A ref whose value and metadata come out equal is
+ *  left as it is (its `updatedAt` does not move). */
+export interface VaultDelta { set: Record<string, string>; del: string[]; meta?: Record<string, VaultMetaPatch>; source?: VaultSource }
 
 /** Apply `delta` to the vault under `secrets.lock`: the current map is read FRESH from disk and decrypted
  *  inside the lock, the delta is applied to it, the result is sealed, written atomically, read back and
  *  verified, and only then is the lock released. Creates the master key on first use. An existing file
  *  this account's (successfully read) master key cannot open is renamed aside to
  *  `secrets.v1.json.unreadable-<ts>` and the delta applies to an empty map; it is never overwritten. A
- *  master key that cannot be read throws. Throws on any failure, so a caller may strip its plaintext copy
- *  only after this returns. Returns the map now in the vault (unchanged maps are not rewritten). */
+ *  master key that cannot be read throws, and so does a FIPS-required refusal (the file is left alone).
+ *  Throws on any failure, so a caller may strip its plaintext copy only after this returns. Returns the
+ *  map now in the vault (unchanged maps are not rewritten). */
 export function updateVault(vaultDir: string, delta: VaultDelta): Readonly<Record<string, string>> {
+  return Object.freeze(valuesOf(mutateVault(vaultDir, () => delta)));
+}
+
+/** updateVault with the delta computed INSIDE the lock from the freshly decrypted entries, for writes that
+ *  depend on what the vault holds right now (newer-wins imports, rotate-if-present). Same guarantees. */
+export function mutateVault(vaultDir: string, plan: (current: VaultEntries) => VaultDelta): VaultEntries {
   if (typeof Bun === "undefined") throw new Error(NO_BUN.detail);
   const dir = resolve(vaultDir);
   const store = storeFor(dir);
@@ -428,30 +578,45 @@ export function updateVault(vaultDir: string, delta: VaultDelta): Readonly<Recor
     }
     masters.set(dir, { at: Date.now(), read: master, fileSig: NO_FILE });
     const file = secretsPath(dir);
+    const now = Date.now();
     let prior: Buffer | null = null;
     try { prior = withRetry(() => readFileSync(file)); } catch (e) { if (errCode(e) !== "ENOENT") throw e; }
-    let current: Record<string, string> = {};
+    let current: Record<string, VaultEntry> = {};
     if (prior) {
-      try { current = openSealed(master, JSON.parse(prior.toString("utf8"))); } catch (e) {
+      try { current = openVault(master, JSON.parse(prior.toString("utf8")), now).entries; } catch (e) {
+        if (e instanceof FipsRequiredError) throw e; // a policy refusal says nothing about the file: never set it aside
         const aside = `${file}.unreadable-${Date.now()}`;
         withRetry(() => renameSync(file, aside));
         console.error(`[vault] ${file} could not be opened with this account's master key (${String((e as Error)?.message ?? e).slice(0, 160)}); kept it as ${aside} and started a fresh vault.`);
         prior = null;
+        current = {};
       }
     }
-    const next: Record<string, string> = { ...current };
+    const delta = plan(freezeEntries(structuredClone(current)));
+    const next: Record<string, VaultEntry> = { ...current };
     for (const ref of delta.del) delete next[ref];
-    Object.assign(next, delta.set);
+    for (const [ref, value] of Object.entries(delta.set)) {
+      if (typeof value !== "string" || !value) throw new Error(`refusing to store an empty value for ${ref}`);
+      const prev = current[ref];
+      // An explicit `undefined` in a patch means "not given", never "clear the stored field".
+      const patch: VaultMetaPatch = Object.fromEntries(Object.entries(delta.meta?.[ref] ?? {}).filter(([, v]) => v !== undefined));
+      const base: Partial<VaultEntryMeta> = prev ? metaOf(prev) : { source: delta.source ?? "typed", addedAt: now };
+      const merged = canonEntry(ref, value, { ...base, ...patch, updatedAt: prev?.updatedAt ?? now }, now, delta.source ?? "typed");
+      const same = prev !== undefined && JSON.stringify(merged) === JSON.stringify(prev);
+      next[ref] = same ? prev : canonEntry(ref, value, { ...base, ...patch, updatedAt: patch.updatedAt ?? now }, now, delta.source ?? "typed");
+    }
     const refs = Object.keys(next);
-    if (prior && refs.length === Object.keys(current).length && refs.every((r) => current[r] === next[r])) return Object.freeze(next);
-    const st = writeAtomic(file, JSON.stringify(sealSecrets(master, next), null, 2));
-    const back = openSealed(master, JSON.parse(readFileSync(file, "utf8")));
-    if (Object.keys(back).length !== refs.length || refs.some((r) => back[r] !== next[r])) {
+    const unchanged = refs.length === Object.keys(current).length && refs.every((r) => current[r] === next[r]);
+    // Nothing to write: a v1 file stays v1 until a real change, and an empty no-op never creates a file.
+    if (unchanged && (prior || refs.length === 0)) return freezeEntries(next);
+    const st = writeAtomic(file, JSON.stringify(sealEntries(master, next), null, 2));
+    const back = openVault(master, JSON.parse(readFileSync(file, "utf8")), now).entries;
+    if (Object.keys(back).length !== refs.length || refs.some((r) => JSON.stringify(back[r]) !== JSON.stringify(next[r]))) {
       throw new Error("the vault did not read back what was written");
     }
-    const frozen = Object.freeze(back);
-    reads.set(dir, { mtimeMs: st.mtimeMs, size: st.size, kid: kidOf(master), secrets: frozen });
-    return frozen;
+    const entries = freezeEntries(back);
+    reads.set(dir, { mtimeMs: st.mtimeMs, size: st.size, kid: kidOf(master), version: 2, secrets: Object.freeze(valuesOf(entries)), entries });
+    return entries;
   });
 }
 
@@ -461,7 +626,12 @@ export function updateVault(vaultDir: string, delta: VaultDelta): Readonly<Recor
 export function vaultStatus(vaultDir: string): VaultStatus {
   if (typeof Bun === "undefined") return NO_BUN;
   const dir = resolve(vaultDir);
-  const store = storeFor(dir);
+  let store: OsKeyStore | null;
+  try { store = storeFor(dir); } catch (e) {
+    const fips = fipsRefusal(e);
+    if (fips) return { custody: "plaintext-file", state: "unreadable", detail: fips };
+    throw e;
+  }
   const v = readVault(dir);
   if (v.problem) return { custody: store?.kind ?? "plaintext-file", state: "unreadable", detail: v.problem };
   if (!store) return { custody: "plaintext-file", state: "unavailable", detail: `no OS vault backend on ${process.platform}` };
