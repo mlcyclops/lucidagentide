@@ -90,7 +90,7 @@ export function runConnector(name: string, verb: string, artifactFile: string, t
 }
 
 /** A connector reply with every field the connector sent (`reply`), for verbs whose reply carries more
- *  than `{ ok, detail }` (the kms destination verbs, ADR-A032: `pushed`, `items`, `pulled`). */
+ *  than `{ ok, detail }` (the kms destination verbs, ADR-A044: `pushed`, `items`, `pulled`). */
 export interface ConnectorReply extends ConnectorResult {
   /** The parsed one-line JSON object, or null when the connector printed none. */
   reply: Record<string, unknown> | null;
@@ -98,7 +98,7 @@ export interface ConnectorReply extends ConnectorResult {
 
 /** P-VAULT-DEST.1 (ADR-0478): the async form of runConnector, so a slow connector never blocks the engine's
  *  event loop. Same `bun <dir>/src/cli.ts <verb> --file <artifact>` contract. A connector that fails closed
- *  exits 1 AND prints its one JSON line (ADR-A032), so the line is parsed whatever the exit code: ok is true
+ *  exits 1 AND prints its one JSON line (ADR-A044), so the line is parsed whatever the exit code: ok is true
  *  only for exit 0 with `ok: true`, and `detail` is the connector's own reason when it gave one. */
 export async function runConnectorReply(name: string, verb: string, artifactFile: string, timeoutMs = 60_000): Promise<ConnectorReply> {
   const st = connectorStatus(name);

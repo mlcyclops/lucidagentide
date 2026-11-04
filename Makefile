@@ -1417,7 +1417,7 @@ demo-P-VAULT-V2.1: ## P-VAULT-V2.1 (ADR-0474): one engine vault. Sealed format v
 	$(BUN) test $(TEST_IGNORES) desktop/vault_v2.test.ts desktop/cred_migration.test.ts desktop/engine_vault.test.ts desktop/settings_vault.test.ts desktop/cred_vault.test.ts harness/adr_numbering.test.ts
 
 .PHONY: demo-P-VAULT-DEST.1
-demo-P-VAULT-DEST.1: ## P-VAULT-DEST.1 (ADR-0478): enterprise vault destinations, core half. Settings "Vault destinations (Enterprise)" over /api/vault/destinations*, /api/vault/push, /api/vault/pull (UI token only); requests to the add-on kms connector (put/list/pull/check, ADR-A032) written 0600 in a private temp dir and wiped after every call; name mapping char for char the add-on's; auto-backup on vaultPut/vaultRotate; honest not-installed state. Real engines in a scratch dir (set LUCID_ADDON_DIR to the add-on checkout): no route response or log line carries a value
+demo-P-VAULT-DEST.1: ## P-VAULT-DEST.1 (ADR-0478): enterprise vault destinations, core half. Settings "Vault destinations (Enterprise)" over /api/vault/destinations*, /api/vault/push, /api/vault/pull (UI token only); requests to the add-on kms connector (put/list/pull/check, ADR-A044) written 0600 in a private temp dir and wiped after every call; name mapping char for char the add-on's; auto-backup on vaultPut/vaultRotate; honest not-installed state. Real engines in a scratch dir (set LUCID_ADDON_DIR to the add-on checkout): no route response or log line carries a value
 	$(BUN) run desktop/scripts/demo_p_vault_dest_1.ts
 	$(BUN) test $(TEST_IGNORES) desktop/vault_destinations.test.ts desktop/renderer/vault_dest_card.test.ts desktop/vault_v2.test.ts desktop/addon_seam.test.ts
 

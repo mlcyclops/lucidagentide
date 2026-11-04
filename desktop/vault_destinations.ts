@@ -6,12 +6,12 @@
 // P-VAULT-DEST.1 (ADR-0478, Contract C): the core half of enterprise vault destinations. The user's
 // engine vault (vault_store.ts) can be backed up to the customer's own secrets manager (Azure Key Vault
 // today), listed there, and pulled back newer-wins. The network side is the PRIVATE add-on's kms
-// connector (lucidagentIDEaddon, ADR-A032): this module never talks to a cloud. It keeps the non-secret
+// connector (lucidagentIDEaddon, ADR-A044): this module never talks to a cloud. It keeps the non-secret
 // destination config in settings (`vaultDestinations`), builds each request, and hands it to the
 // connector through the add-on seam (addon_seam.ts runConnectorReply, `bun connectors/kms/src/cli.ts
 // <verb> --file <req>`).
 //
-// The file contract (ADR-A014 / ADR-A032): every request is written 0600 (flag wx) into a fresh user-only
+// The file contract (ADR-A014 / ADR-A044): every request is written 0600 (flag wx) into a fresh user-only
 // dir from secret_fallback.ts createUserOnlyDir (a private, non-synced temp base; POSIX 0700 or a
 // verified Windows ACL; no such dir = a DestinationError(500) and nothing written), and the whole dir is
 // overwritten and removed right after the call, on success, on a connector failure and on a throw. A dir
@@ -68,7 +68,7 @@ export class DestinationError extends Error {
   }
 }
 
-// ── Name mapping (Contract C; char for char the add-on's azureSecretName, ADR-A032) ──────────────────
+// ── Name mapping (Contract C; char for char the add-on's azureSecretName, ADR-A044) ──────────────────
 
 /** `lucid-` + the vault ref with every char outside [0-9A-Za-z-] replaced by `-`, cut to 127. Nothing is
  *  trimmed or collapsed, so the core and the connector always derive the same name. Throws when nothing
