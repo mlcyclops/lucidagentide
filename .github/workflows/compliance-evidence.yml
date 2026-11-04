@@ -55,7 +55,7 @@ jobs:
         run: bun install
 
       - name: Prepare output
-        run: mkdir -p out && : > out/tool-exit-codes.txt
+        run: mkdir -p out && touch out/tool-exit-codes.txt
 
       - name: CycloneDX SBOM (cdxgen)
         run: |
