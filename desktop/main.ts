@@ -27,6 +27,7 @@ import { bestEngineLine, classifyEngineFailure, isProtectedInstallRoot, probeDir
 import { resolveEngineSpawn } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): prefer the compiled engine binary
 import { materializeLocalProviders, registerLocalProviderEgress } from "./local_providers_runtime.ts";
 import { GPU_SANDBOX_FLAG_FILE, GPU_SANDBOX_SWITCH, decideGpuAction, gpuDeathLogLine, relaunchArgs } from "./gpu_watchdog.ts";
+import { decideRendererAction, freshRendererWatch, rendererGoneLogLine, rendererResponsivenessLogLine } from "./renderer_watchdog.ts";
 import { formatPortIncident, formatSquatter, healthVerdict, ownerProbeSpec, parseOwnerProbe, type HealthVerdict, type SquatterInfo } from "./port_guard.ts"; // P-PORTGUARD.1 (ADR-0305): the engine port handshake
 import { classifyPortHolder, orphanDialog, reapSpec } from "./orphan_engine.ts"; // P-PORTGUARD.3 (ADR-0382): reap our own orphan, after a warning
 import { assessPreviousRun, freshLedger, markClean, readLedgerText, runLedgerPath, withEngine, writeLedger, type PreviousRun, type RunLedger } from "./run_ledger.ts"; // P-RECOVER.1 (ADR-0385)
@@ -649,7 +650,12 @@ async function rollOffBusyPort(): Promise<{ from: number; to: number; holder: st
   return { from, to, holder };
 }
 
+// P-RECOVER.4 (ADR-0481): reload bookkeeping for the main window's renderer watchdog (pure core:
+// renderer_watchdog.ts). Reset whenever a window is created, so a reopened window starts with a full cap.
+let rendererWatch = freshRendererWatch();
+
 function createWindow(): void {
+  rendererWatch = freshRendererWatch();
   // Runtime window icon (taskbar/dev). Packaged Win/mac use the exe/app icon
   // baked in by electron-builder; this covers the dev run and Linux.
   const iconPath = join(app.getAppPath(), "build", "icon.png");
@@ -665,6 +671,26 @@ function createWindow(): void {
     webPreferences: { preload: preloadPath(), contextIsolation: true, nodeIntegration: false, plugins: true },
   });
   win.once("ready-to-show", () => { firstWindowRendered = true; win!.show(); }); // ADR-0246: past here a GPU death is not the boot brick
+  // P-RECOVER.4 (ADR-0481): a dead renderer used to leave the frameless window painting only its background
+  // with no way back (no menu accelerator, the close button lived in the renderer, a second launch only
+  // focuses an existing window). Log the reason + exit code (the only evidence of WHY it died) and load the
+  // app again after a backoff, capped per minute so a renderer that dies at boot cannot loop. The engine and
+  // its agent sessions are untouched: only the window's document is recreated.
+  const thisWin = win;
+  thisWin.webContents.on("render-process-gone", (_e, details) => {
+    if (thisWin.isDestroyed()) return; // the window is closing: its renderer exiting is expected
+    const r = decideRendererAction(details, rendererWatch, Date.now());
+    rendererWatch = r.state;
+    appendEngineLog(rendererGoneLogLine(details, r, new Date().toISOString()));
+    if (r.action !== "reload") return;
+    setTimeout(() => {
+      if (thisWin.isDestroyed()) return;
+      // PORT is read at reload time: it is where the engine binds NOW (a launch-time roll, ADR-0458, is in it).
+      void thisWin.loadURL(`http://localhost:${PORT}`).catch((err: unknown) => appendEngineLog(`[renderer-watchdog] reload failed: ${err instanceof Error ? err.message : String(err)}\n`));
+    }, r.delayMs);
+  });
+  thisWin.webContents.on("unresponsive", () => appendEngineLog(rendererResponsivenessLogLine("unresponsive", new Date().toISOString())));
+  thisWin.webContents.on("responsive", () => appendEngineLog(rendererResponsivenessLogLine("responsive", new Date().toISOString())));
   // Spell-check suggestions: Electron's spellchecker underlines misspellings but the app must build the
   // correction menu itself. Only intercept when there's a misspelled word (so we don't fight Monaco's own
   // context menu elsewhere); offer the dictionary suggestions + "Add to dictionary".
