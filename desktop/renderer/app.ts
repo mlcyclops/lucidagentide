@@ -16956,6 +16956,20 @@ function wire(): void {
     fleetRemove: bridge.fleetRemove,
     fleetSpawn: bridge.fleetSpawn, // P-FLEET.L17 recovery: respawn a historical spoke by its old identity
     timelineList: bridge.timelineList, // P-FLEET.L17 recovery: the P-FLEET.L5 durable ledger feeds the ghosts
+    // P-IDE-SPOKES.1 (ADR-0487): remote spokes from the remote-spokes hub plugin, through the engine.
+    remoteSpokes: bridge.remoteSpokes,
+    remoteSpokeRecall: bridge.remoteSpokeRecall,
+    remoteSpokeApprovals: bridge.remoteSpokeApprovals,
+    remoteSpokeDecide: bridge.remoteSpokeDecide,
+    remoteSpokeAct: bridge.remoteSpokeAct,
+    startRemoteSpokes: async () => {
+      const r = await bridge.pluginsStart("remote-spokes");
+      if (!r || !r.ok) showToast({ title: "Remote Spokes did not start", desc: r ? r.error : "The engine did not answer.", tone: "danger" });
+    },
+    openRemoteSpokesPanel: () => void bridge.pluginsStart("remote-spokes").then((r) => {
+      if (!r || !r.ok) { showToast({ title: "Remote Spokes did not start", desc: r ? r.error : "The engine did not answer.", tone: "danger" }); return; }
+      openPluginTab("remote-spokes", "Remote Spokes", r.url);
+    }),
     repoChoices: bridge.repoChoices, // P-REPO.1 (ADR-0406): the New spoke panel picks a repo instead of typing
     repoGithub: bridge.repoGithub,
     repoContext: bridge.repoContext, // P-REPO.1: the hub names Main's repo

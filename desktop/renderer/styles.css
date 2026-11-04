@@ -6425,6 +6425,57 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-hubrow-lanes .fleet-pip{font-size:11px;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis}
 .orbit-btn.waiting .orbit-ghost-n{color:var(--amber-txt,var(--amber));background:rgb(var(--amber-rgb) / .14)}
 
+/* ── P-IDE-SPOKES.1 (ADR-0487): remote spokes on the orbit ──
+   Another machine, so visibly not a local lane: a dashed frame, a "remote" tag, a dashed spoke line. The hues
+   are the shared state hues (--lane, as every card uses): red stuck (parked on a human: the one that pulses;
+   or failed), amber might be stuck (the hub has not heard from it), cyan working, blue online and ready. */
+.orbit-node.remote .orbit-node-card{border-style:dashed;border-color:var(--lane,var(--line))}
+.orbit-remote-tag{flex:none;display:inline-flex;align-items:center;gap:3px;font-size:9px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--blue-txt);white-space:nowrap}
+.orbit-node.rs-approval,.fleet-pip.rs-approval,.rs-state.rs-approval{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .55)}
+.orbit-node.rs-approval .orbit-node-card::after{box-shadow:0 0 18px 3px rgb(var(--red-rgb) / .6);animation:orbitGlow 1.6s ease-in-out infinite}
+.orbit-node.rs-stuck,.fleet-pip.rs-stuck,.rs-state.rs-stuck{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .4)}
+.orbit-node.rs-maybe,.fleet-pip.rs-maybe,.rs-state.rs-maybe{--lane:var(--amber);--lane-dim:rgb(var(--amber-rgb) / .4)}
+.orbit-node.rs-busy,.fleet-pip.rs-busy,.rs-state.rs-busy{--lane:var(--cyan);--lane-dim:rgb(var(--cyan-rgb) / .35)}
+.orbit-node.rs-busy .orbit-led,.fleet-pip.rs-busy i{animation:hudpulse 2.2s ease-in-out infinite}
+.orbit-node.rs-ready,.fleet-pip.rs-ready,.rs-state.rs-ready{--lane:var(--blue);--lane-dim:rgb(var(--blue-rgb) / .4)}
+.orbit-node.rs-checking,.fleet-pip.rs-checking,.rs-state.rs-checking{--lane:var(--txt-4)}
+.orbit-line.remote{stroke:var(--line-strong);stroke-dasharray:3 6}
+.orbit-line.remote.rs-approval{stroke:var(--red);stroke-width:2.5;animation:orbitLineRed 1.6s ease-in-out infinite}
+.orbit-line.remote.rs-stuck{stroke:rgb(var(--red-rgb) / .6)}
+.orbit-line.remote.rs-maybe{stroke:rgb(var(--amber-rgb) / .7)}
+.orbit-line.remote.rs-busy{stroke:rgb(var(--cyan-rgb) / .75);stroke-width:2}
+.orbit-line.remote.rs-ready{stroke:rgb(var(--blue-rgb) / .7)}
+.orbit-view.static .orbit-line.remote{animation:none}
+.fleet-pip.rs-pip{border:0;background:none;padding:0;font:inherit;color:var(--txt-2)}
+.rs-hubrow small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The per-spoke panel. Every text run is its own block (invariant 11: no prose as flex siblings). */
+.rs-state{margin-left:2px;padding:1px 7px;border-radius:999px;font-size:10px;white-space:nowrap;
+  color:var(--txt);border:1px solid var(--lane,var(--line));background:color-mix(in srgb,var(--lane,var(--bg-3)) 14%,transparent)}
+.rs-note{margin:0 4px 6px;font-size:11px;line-height:1.5;color:var(--txt-3)}
+.rs-note.bad{color:var(--red-txt,var(--red))}
+.rs-sec-h{display:flex;align-items:center;gap:6px;margin:10px 4px 4px;font-size:10px;font-weight:700;
+  letter-spacing:.05em;text-transform:uppercase;color:var(--txt-4)}
+.rs-sec-h>span{flex:1;min-width:0;white-space:nowrap}
+.rs-sec-h .btn-mini{flex:none;text-transform:none;letter-spacing:0;font-weight:500}
+.rs-task .btn-mini{flex:none;white-space:nowrap}
+.rs-dot-working{border-color:var(--cyan)}
+.rs-dot-awaiting_approval{border-color:var(--red);border-style:solid}
+.rs-dot-idle{border-color:var(--blue)}
+.rs-dot-error{border-color:var(--red)}
+.rs-form textarea,.orbit-spawn-more textarea{width:100%;box-sizing:border-box;resize:vertical;font:inherit;font-size:12px}
+.rs-pre{margin:4px 0 0;padding:6px 8px;max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;
+  font-family:var(--mono);font-size:11px;line-height:1.45;color:var(--txt-2);background:var(--bg-sunk,var(--bg-2));border-radius:7px}
+.rs-entry,.rs-ask{margin:0 4px 8px;padding:7px 8px;border:1px solid var(--line);border-radius:9px}
+.rs-entry.trust-suspicious{border-color:rgb(var(--amber-rgb) / .45)}
+.rs-entry.trust-quarantined,.rs-ask.quarantined{border-color:rgb(var(--red-rgb) / .45);background:var(--red-dim)}
+.rs-entry-h{display:flex;align-items:center;gap:6px;min-width:0;font-size:10.5px;color:var(--txt-3)}
+.rs-entry-h>span:last-child{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rs-entry-h .pill{flex:none}
+.rs-ask-h{font-size:12px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rs-ask .orbit-spawn-row{gap:6px;align-items:center}
+.btn-mini.armed,.orbit-ghost-x.armed{color:var(--on-fill);background:var(--red);border-color:var(--red)}
+
 /* P-FLEET.L17: the grid card header is now a takeover surface too (click = the orbit's spoke click;
    the grip alone keeps the reorder gesture). The pointer cursor says so; controls override it. */
 .fleet-card[data-lane] .fleet-card-head{cursor:pointer}

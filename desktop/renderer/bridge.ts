@@ -290,6 +290,7 @@ import type { JobsData, JobTargetView, JobView } from "./jobs_view.ts"; // P-SCH
 export type { NetView };
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
 import type { AosControl, AosSnapshot } from "../aos.ts"; // P-AOS.1 (ADR-0452): the fleet goal (types only, owned there)
+import type { RecallView, RemoteActionView, RemoteApprovalsView, RemoteHubView } from "./remote_spokes_model.ts"; // P-IDE-SPOKES.1 (ADR-0487): owned there
 export type { AosControl, AosSnapshot };
 /** P-AOS.1: a fleet-goal change: the new snapshot, or the engine's refusal in words. */
 export type FleetGoalReply = { ok: true; data: AosSnapshot } | { ok: false; error: string };
@@ -1129,6 +1130,15 @@ export interface LucidBridge {
   /** P-FLEET.L4: revive an error/stopped lane in place - same id, transcript memory carried. */
   fleetRespawn(laneId: string): Promise<{ ok: boolean; lane?: LaneView; reason?: string } | null>;
   fleetAnswer(laneId: string, allow: boolean, scope?: ApprovalScope): Promise<{ ok: boolean } | null>;
+  /** P-IDE-SPOKES.1 (ADR-0487): the remote-spokes hub plugin's spokes, scopes and actions, through the engine.
+   *  Recall and parked actions come back scanned; recalled text is shown as text and enters a prompt only as the
+   *  delimited `context`. Every action is re-gated by the hub certificate's scopes engine-side. */
+  remoteSpokes(): Promise<RemoteHubView | null>;
+  remoteSpokeRecall(node: string, task?: string): Promise<RecallView | null>;
+  remoteSpokeApprovals(node: string): Promise<RemoteApprovalsView | null>;
+  remoteSpokeDecide(input: { node: string; task: string; ask: string; digest: string; allow: boolean }): Promise<RemoteActionView | null>;
+  /** submit {node, text, name?}; followup {node, task, text}; cancel and close {node, task}. */
+  remoteSpokeAct(op: "submit" | "followup" | "cancel" | "close", input: { node: string; task?: string; text?: string; name?: string }): Promise<RemoteActionView | null>;
   /** Full auto-mode. laneId omitted = ALL lanes + persisted default for new ones. The server refuses
    *  on=true unless the risk was accepted before or acceptRisk is true (which persists the acceptance). */
   fleetAuto(opts: { laneId?: string; on: boolean; acceptRisk?: boolean }): Promise<{ ok: boolean } | null>;
@@ -1940,6 +1950,11 @@ export const bridge: LucidBridge = {
   },
   fleetRespawn: (laneId) => post("/api/fleet/respawn", { laneId }),
   fleetAnswer: (laneId, allow, scope) => post("/api/fleet/answer", { laneId, allow, ...(scope ? { scope } : {}) }),
+  remoteSpokes: () => getData("/api/remote-spokes"), // P-IDE-SPOKES.1 (ADR-0487)
+  remoteSpokeRecall: (node, task) => post("/api/remote-spokes/recall", { node, ...(task ? { task } : {}) }),
+  remoteSpokeApprovals: (node) => getData(`/api/remote-spokes/approvals?node=${encodeURIComponent(node)}`),
+  remoteSpokeDecide: (input) => post("/api/remote-spokes/decide", input),
+  remoteSpokeAct: (op, input) => post(`/api/remote-spokes/${op}`, input),
   fleetAuto: (opts) => post("/api/fleet/auto", opts),
   fleetCancel: (laneId) => post("/api/fleet/cancel", { laneId }),
   fleetStop: (laneId) => post("/api/fleet/stop", { laneId }),

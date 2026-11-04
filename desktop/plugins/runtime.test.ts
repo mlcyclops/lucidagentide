@@ -102,6 +102,29 @@ describe("server plugins", () => {
     expect(again.ok && again.url).toBe(url);
   }, 60_000);
 
+  // ADR-0487: the engine's own way into a server plugin. The token exists only while the plugin runs, only the
+  // plugin process holds it (never its MCP child, never the renderer's list), and a restart mints a new one.
+  test("hostEndpoint hands the engine a per-launch token the plugin accepts and nothing else carries", async () => {
+    expect((await installPluginBytes(buildServerFixture(KEY), "fixture-server", deps)).ok).toBe(true);
+    const rt = makeRuntime();
+    expect(rt.hostEndpoint("fixture-server")).toBeNull();
+    expect((await rt.start("fixture-server")).ok).toBe(true);
+    const ep = rt.hostEndpoint("fixture-server");
+    expect(ep?.token).toMatch(/^[0-9a-f]{64}$/);
+    const check = (token: string) => fetch(`${ep!.url}/host/check`, { headers: { "x-lucid-host-token": token } }).then((r) => r.status);
+    expect(await check(ep!.token)).toBe(204);
+    expect(await check("0".repeat(64))).toBe(403);
+    expect(pluginMcpServers()[0]!.env.map((e) => e.name)).not.toContain("LUCID_PLUGIN_HOST_TOKEN");
+    expect(JSON.stringify(rt.list())).not.toContain(ep!.token);
+
+    expect(await rt.stop("fixture-server")).toEqual({ ok: true });
+    expect(rt.hostEndpoint("fixture-server")).toBeNull();
+    expect((await rt.start("fixture-server")).ok).toBe(true);
+    const next = rt.hostEndpoint("fixture-server");
+    expect(next?.token).not.toBe(ep!.token);
+    expect(await fetch(`${next!.url}/host/check`, { headers: { "x-lucid-host-token": ep!.token } }).then((r) => r.status)).toBe(403);
+  }, 60_000);
+
   test("a crash after start flips the state to error and unregisters MCP", async () => {
     expect((await installPluginBytes(buildServerFixture(KEY), "fixture-server", deps)).ok).toBe(true);
     const rt = makeRuntime();
