@@ -209,7 +209,9 @@ export function buildReport(p: ComplianceProbes): ComplianceReport {
   return { ...p, checks };
 }
 
-const cell = (s: string): string => s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+// Markdown table cell: backslash FIRST (else a trailing "\" escapes the cell's closing pipe), then pipe,
+// then flatten newlines. Same rule as loop_preflight.esc (CodeQL #119: incomplete escaping).
+const cell = (s: string): string => s.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 
 /** Pure: the human-readable companion of evidence.json. */
 export function renderMarkdown(r: ComplianceReport): string {

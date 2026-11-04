@@ -127,6 +127,13 @@ describe("buildReport (Contract D shape)", () => {
     for (const c of r.checks) expect(md).toContain(`| ${c.id} |`);
     expect(md.includes("\u2014")).toBe(false);
   });
+
+  test("table cells escape backslash before pipe (CodeQL #119: incomplete escaping)", () => {
+    const r = buildReport(probes());
+    const md = renderMarkdown({ ...r, checks: [{ ...r.checks[0]!, evidence: "C:\\tmp\\ | bad\nnext" }] });
+    // A trailing backslash must NOT be left able to escape the pipe that follows it.
+    expect(md).toContain("| C:\\\\tmp\\\\ \\| bad next |");
+  });
 });
 
 describe("status logic", () => {

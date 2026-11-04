@@ -195,6 +195,7 @@ export async function handleSecretRoutes(req: Request, p: string, ctx: SecretRou
     }
     return null;
   } catch (e) {
-    return fail(500, String((e as Error)?.message ?? e).slice(0, 240));
+    // CodeQL #120 (js/stack-trace-exposure, P-SEC.1): an Error's message only, never the thrown value or stack.
+    return fail(500, e instanceof Error ? e.message.slice(0, 240) : "internal error");
   }
 }

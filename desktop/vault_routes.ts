@@ -65,7 +65,14 @@ const reply = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 const ok = (data: unknown): Response => reply(200, { ok: true, data });
 const fail = (status: number, error: string): Response => reply(status, { ok: false, error });
-const errText = (e: unknown): string => String((e as Error)?.message ?? e).slice(0, 240);
+/** The client-safe text of a caught error. CodeQL #123 (js/stack-trace-exposure, P-SEC.1 / ADR-0209): only
+ *  an Error's own `message` (the vault modules' curated, value-free reasons) reaches a reply, never the
+ *  thrown value itself or its stack; anything else is logged here and answered with a fixed string. */
+function errText(e: unknown): string {
+  if (e instanceof Error) return e.message.slice(0, 240);
+  console.error("[vault] a non-Error value was thrown");
+  return "internal error";
+}
 
 async function body(req: Request): Promise<Record<string, unknown>> {
   const raw: unknown = await req.json().catch(() => null);

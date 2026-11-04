@@ -450,9 +450,10 @@ const pidAlive = (pid: number): boolean => {
 
 /** A lock file's body and mtime from ONE descriptor, so both describe the same file (CodeQL #125/#126,
  *  js/file-system-race: the lock path is never re-read by name after the `wx` create, nor stat'd apart
- *  from the read). Throws ENOENT when the lock is gone. */
+ *  from the read). Throws ENOENT when the lock is gone. The 0o600 mode is inert ("r" never creates); it
+ *  keeps js/insecure-temporary-file from reading this open as a permissive create. */
 function readLockFile(path: string): { raw: string; mtimeMs: number } {
-  const fd = openSync(path, "r");
+  const fd = openSync(path, "r", 0o600);
   try { return { raw: readFileSync(fd, "utf8"), mtimeMs: fstatSync(fd).mtimeMs }; } finally { closeSync(fd); }
 }
 

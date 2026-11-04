@@ -22,7 +22,7 @@
 // The path never reaches the agent: it goes to the dialog only, so the user knows which file to save.
 // Values never reach a log line here; only the refusal reasons are logged by the caller.
 
-import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeSync, type Stats } from "node:fs";
+import { chmodSync, closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { isSyncedPath, type SyncedPathEnv } from "./synced_path.ts";
@@ -232,8 +232,14 @@ export function sweepOrphanTempDirs(prefixes: readonly string[], opts: { include
         if (!lstatSync(dir).isDirectory()) continue;
         let pid = Number.NaN;
         try {
+          // CodeQL #128 (js/file-system-race): open the marker once and read through that descriptor; the
+          // lstat AFTER the open still refuses a symlinked marker, and nothing is re-opened by name. The 0o600
+          // mode is inert for "r" (see wipeAndDelete, CodeQL #124).
           const marker = join(dir, OWNER_MARKER);
-          if (lstatSync(marker).isFile()) pid = Number.parseInt(readFileSync(marker, "utf8").trim(), 10);
+          const fd = openSync(marker, "r", 0o600);
+          try {
+            if (fstatSync(fd).isFile() && lstatSync(marker).isFile()) pid = Number.parseInt(readFileSync(fd, "utf8").trim(), 10);
+          } finally { closeSync(fd); }
         } catch { /* no marker: an orphan from before markers, or a half-made dir */ }
         if (pid === process.pid ? !opts.includeOwn : Number.isInteger(pid) && pid > 0 && pidAlive(pid)) { kept++; continue; }
         for (const f of readdirSync(dir)) {
@@ -272,17 +278,24 @@ export function decodeSecretFile(buf: Buffer): string {
  *  sees the file between the overwrite and the delete. Best effort on copy-on-write or wear-levelled
  *  storage, which may keep the old blocks; the directory being user-only bounds that exposure. */
 export function wipeAndDelete(file: string, hooks: { afterOverwrite?: (file: string) => void } = {}): void {
-  if (!existsSync(file)) return;
-  const size = statSync(file).size;
-  if (size > 0) {
-    const fd = openSync(file, "r+");
-    try {
+  // CodeQL #129 (js/file-system-race): no exists/stat by name before the open; the file is opened once and
+  // sized from that descriptor, and a missing file is the open's own ENOENT. CodeQL #124
+  // (js/insecure-temporary-file): "r+" never creates a file, so the 0o600 mode is inert; it is stated so no
+  // open of a temp-dir path in this module carries a permissive default.
+  let fd: number;
+  try { fd = openSync(file, "r+", 0o600); } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return;
+    throw e;
+  }
+  try {
+    const size = fstatSync(fd).size;
+    if (size > 0) {
       const zeros = Buffer.alloc(Math.min(size, 1 << 20));
       for (let at = 0; at < size; at += zeros.length) writeSync(fd, zeros, 0, Math.min(zeros.length, size - at), at);
       fsyncSync(fd);
-    } finally {
-      closeSync(fd);
     }
+  } finally {
+    closeSync(fd);
   }
   hooks.afterOverwrite?.(file);
   rmSync(file, { force: true });
@@ -323,14 +336,25 @@ export function startFallback(opts: FallbackOptions): FallbackSession {
   };
   const tick = () => {
     if (done) return;
-    let st: Stats;
-    try { st = statSync(file); } catch { return; } // not there right now (an editor mid-save): look again
-    if (st.size === 0) { lastKey = ""; return; }
-    if (st.size > MAX_SECRET_FILE_BYTES) { finish({ error: "the file is larger than a secret should be, so it was wiped and deleted unread" }); return; }
-    const key = `${st.size}:${st.mtimeMs}`;
-    if (key !== lastKey) { lastKey = key; return; } // wait one more poll: the save must be stable
-    let buf: Buffer;
-    try { buf = readFileSync(file); } catch { return; }
+    // CodeQL #130 (js/file-system-race): size, mtime and bytes come from ONE descriptor, never a stat by name
+    // then a read by name. It is closed before finish() wipes and deletes the file. The 0o600 mode is inert
+    // for "r" (see wipeAndDelete, CodeQL #124).
+    let fd: number;
+    try { fd = openSync(file, "r", 0o600); } catch { return; } // not there right now (an editor mid-save): look again
+    let buf: Buffer | null = null;
+    let tooBig = false;
+    try {
+      const st = fstatSync(fd);
+      if (st.size === 0) lastKey = "";
+      else if (st.size > MAX_SECRET_FILE_BYTES) tooBig = true;
+      else {
+        const key = `${st.size}:${st.mtimeMs}`;
+        if (key !== lastKey) lastKey = key; // wait one more poll: the save must be stable
+        else buf = readFileSync(fd);
+      }
+    } catch { return; } finally { closeSync(fd); }
+    if (tooBig) { finish({ error: "the file is larger than a secret should be, so it was wiped and deleted unread" }); return; }
+    if (!buf) return;
     const text = decodeSecretFile(buf);
     buf.fill(0);
     if (!text.trim()) { lastKey = ""; return; } // whitespace only: keep waiting for the real paste

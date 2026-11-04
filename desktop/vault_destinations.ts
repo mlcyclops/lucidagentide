@@ -35,12 +35,12 @@
 // memory for the Settings view.
 
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { connectorStatus, connectorVersion, runConnectorReply, type ConnectorReply } from "./addon_seam.ts";
 import { isEnvName, VAULT_KINDS, type VaultEntryMeta, type VaultKind } from "./engine_vault.ts";
 import { mayHoldGlobalEnv } from "./env_name_policy.ts";
-import { createUserOnlyDir } from "./secret_fallback.ts";
+import { createUserOnlyDir, wipeAndDelete } from "./secret_fallback.ts";
 import { load, save, type VaultDestination, type VaultDestinationKind } from "./settings_store.ts";
 import { applyVaultEnv } from "./vault_env.ts";
 import { isVaultRef, onVaultWrite, vaultExportEntries, vaultGet, vaultImportEntries, vaultList, type VaultExportEntry } from "./vault_store.ts";
@@ -262,8 +262,9 @@ export function scrubValues(text: string, secrets: readonly string[]): string {
 function wipeDir(dir: string): void {
   try {
     for (const name of readdirSync(dir)) {
-      const p = join(dir, name);
-      try { writeFileSync(p, Buffer.alloc(statSync(p).size)); } catch { /* removed below regardless */ }
+      // CodeQL #131 (js/file-system-race): no stat by name before the overwrite; wipeAndDelete opens the
+      // file once and sizes and zeroes it through that descriptor.
+      try { wipeAndDelete(join(dir, name)); } catch { /* removed below regardless */ }
     }
   } catch { /* the dir is gone or unreadable: removal below */ }
   for (let i = 0; i < 2 && existsSync(dir); i++) {

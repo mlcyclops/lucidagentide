@@ -31,7 +31,7 @@
 //     only an assignment whose value matches a digest: what LUCID wrote, never a value the user wrote.
 // Values never reach a log line, an HTTP response or an event: only names, counts and last-4.
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync } from "node:fs";
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { hmacSha256, randomBytes } from "../harness/crypto/fips_crypto.ts";
@@ -104,16 +104,35 @@ function envFileOf(workspace: string, file: string): string {
  *  `.env` as a link to `~/.aws/credentials`, and its lines would parse. Used by scan, import, blank,
  *  materialize and the journal re-blank. */
 function readEnvFileSafe(ws: string, path: string): string | null {
-  let st;
-  try { st = lstatSync(path); } catch (e) {
-    if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+  const name = basename(path);
+  const notRegular = `${name} is not a regular file (a link, folder or device); it was not read`;
+  // CodeQL #132 (js/file-system-race): open ONCE and judge and read that descriptor; the path is never
+  // re-opened after a check. O_NOFOLLOW refuses a link at the open and O_NONBLOCK keeps a FIFO from blocking
+  // it (POSIX; both are 0 on Windows). The lstat runs AFTER the open and must name the same file (dev/ino)
+  // as the descriptor, so a link swapped in or out between the two is refused, never read. No O_CREAT, so
+  // the 0o600 mode is inert (stated for js/insecure-temporary-file).
+  let fd: number;
+  try { fd = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0), 0o600); } catch (e) {
+    // Name what the open refused: a link (O_NOFOLLOW's ELOOP, or a dangling one, which is not "no file":
+    // a later write through it would land outside the workspace), a folder or a device is refused as such.
+    let link;
+    try { link = lstatSync(path); } catch {
+      if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+      throw e;
+    }
+    if (!link.isFile()) throw new Error(notRegular);
     throw e;
   }
-  const name = basename(path);
-  if (!st.isFile()) throw new Error(`${name} is not a regular file (a link, folder or device); it was not read`);
-  if (st.size > MAX_ENV_BYTES) throw new Error(`${name} is larger than ${MAX_ENV_BYTES / 1024} KiB; it was not read`);
-  if (norm(dirname(realpathSync(path))) !== norm(ws)) throw new Error(`${name} does not sit directly in the workspace; it was not read`);
-  return readFileSync(path, "utf8");
+  try {
+    const st = fstatSync(fd);
+    const link = lstatSync(path);
+    if (!st.isFile() || !link.isFile() || link.dev !== st.dev || link.ino !== st.ino) throw new Error(notRegular);
+    if (st.size > MAX_ENV_BYTES) throw new Error(`${name} is larger than ${MAX_ENV_BYTES / 1024} KiB; it was not read`);
+    if (norm(dirname(realpathSync(path))) !== norm(ws)) throw new Error(`${name} does not sit directly in the workspace; it was not read`);
+    return readFileSync(fd, "utf8");
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function git(cwd: string, args: string[]): { code: number; out: string } | null {

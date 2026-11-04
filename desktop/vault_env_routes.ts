@@ -51,6 +51,8 @@ export async function handleVaultEnvRoutes(req: Request, p: string, ctx: VaultRo
     }
     return reply(200, { ok: true, data: unmaterializeEnvFile(ws, file) });
   } catch (e) {
-    return reply(400, { ok: false, error: String((e as Error)?.message ?? e).slice(0, 240) });
+    // CodeQL #122 (js/stack-trace-exposure, P-SEC.1): an Error's message only (vault_env_import's curated,
+    // value-free reasons), never the thrown value or its stack.
+    return reply(400, { ok: false, error: e instanceof Error ? e.message.slice(0, 240) : "internal error" });
   }
 }

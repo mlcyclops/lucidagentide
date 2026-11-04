@@ -94,6 +94,7 @@ export async function handleVaultDestRoutes(req: Request, p: string, ctx: VaultD
     return await route(req, p);
   } catch (e) {
     if (e instanceof DestinationError) return fail(e.status, e.message.slice(0, 400));
-    return fail(500, String((e as Error)?.message ?? e).slice(0, 300));
+    // CodeQL #121 (js/stack-trace-exposure, P-SEC.1): an Error's message only, never the thrown value or stack.
+    return fail(500, e instanceof Error ? e.message.slice(0, 300) : "internal error");
   }
 }
