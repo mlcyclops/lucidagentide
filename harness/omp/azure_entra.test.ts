@@ -300,6 +300,43 @@ describe("an Entra-signed Azure OpenAI turn end to end", () => {
     expect(imdsHits).toBe(hitsAfterDenial + 1);
   });
 
+  // The remote spoke (add-on ADR-A049) reaches the account BY NAME through its egress proxy: HTTPS_PROXY set,
+  // only IMDS in NO_PROXY. The request must carry that proxy; a host listed in NO_PROXY must go direct.
+  test("the Entra request to the account goes through HTTPS_PROXY unless NO_PROXY names the host", async () => {
+    const ACCOUNT_HOST = "lucid-spoke-aoai-7f3k.openai.azure.com";
+    const imdsUrl = `http://127.0.0.1:${imds.port}/metadata/identity/oauth2/token`;
+    const sent: Array<{ url: string; proxy: string | undefined; auth: string | null; apiKey: string | null }> = [];
+    const transport = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.startsWith(imdsUrl)) return globalThis.fetch(url, init);
+      const proxy = init && "proxy" in init && typeof init.proxy === "string" ? init.proxy : undefined;
+      const headers = new Headers(init?.headers);
+      sent.push({ url, proxy, auth: headers.get("authorization"), apiKey: headers.get("api-key") });
+      return new Response(sse(), { headers: { "content-type": "text/event-stream" } });
+    }) as typeof globalThis.fetch;
+    const saved = { HTTPS_PROXY: process.env.HTTPS_PROXY, NO_PROXY: process.env.NO_PROXY };
+    try {
+      process.env.HTTPS_PROXY = "http://127.0.0.1:3128";
+      const calls: Registration[] = [];
+      registerAzureEntra(
+        { registerProvider: (name, config) => calls.push({ name, config }) },
+        { AZURE_OPENAI_AUTH_MODE: "managed-identity", AZURE_OPENAI_BASE_URL: `https://${ACCOUNT_HOST}/openai/v1` },
+        { imdsEndpoint: imdsUrl, now: () => clock, log: () => {}, fetch: transport },
+      );
+      const reg = calls[0]!;
+
+      process.env.NO_PROXY = "localhost,127.0.0.1,::1,169.254.169.254"; // the spoke's egress.env for an Azure model
+      expect((await turn(reg)).stopReason).toBe("stop");
+      expect(sent[0]).toEqual({ url: `https://${ACCOUNT_HOST}/openai/v1/responses?api-version=v1`, proxy: "http://127.0.0.1:3128", auth: "Bearer eyJ-SECRET-1", apiKey: null });
+
+      process.env.NO_PROXY = `localhost,127.0.0.1,${ACCOUNT_HOST}`;
+      expect((await turn(reg)).stopReason).toBe("stop");
+      expect(sent[1]?.proxy).toBeUndefined();
+    } finally {
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
+  });
+
   test("a failed sign-in ends the turn with a clear error, sends nothing to Azure, and leaks no token", async () => {
     const reg = register(entraEnv()).calls[0]!;
     await turn(reg); // holds eyJ-SECRET-n
