@@ -5793,3 +5793,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-03/04, branch `feat/p-ctrl-remote-approval`, local):** ADR-0476 (16c39be3) remote pairings with a tier policy and approvals the engine verifies against the paired root; ADR-0477 (04392437) the same verifier accepts a hub certified by a root-signed delegation within its limits. 219 tests in the touched areas, 3 typechecks clean; live on the add-on's remote spokes (VM 218, DGX Spark).
 - **stubbed:** controller `close` verb (two lanes per pairing), lanes that survive an engine restart, user presence on approve.
 - **next:** push the branch at end of day; upgrade the live spokes to 04392437 with the add-on's `upgrade-core.sh`.
+
+## P-CTRL-NONCE (ADR-0484): a nonce-only discovery record for controller clients
+- **shipped (2026-11-04, branch `feat/rs-discovery`, local):** dev.ts also publishes `engine-nonce-<port>.json` (port, nonce, pid, version, flavor, startedAt; never the UI token), 0600 beside the token file by default, or 0640 in `LUCID_DISCOVERY_NONCE_GROUP` under `LUCID_DISCOVERY_NONCE_DIR`; a strict reader that refuses a record carrying a token; `verifyDiscovery` works from either. `make demo-P-CTRL-NONCE` extends the P-TUI.0 demo: a controller client proves the real engine from the record and reads its controller lanes; a squatter fails; the token file is unchanged. ADR-0449's spec now names the record.
+- **stubbed:** no core controller client reads it yet (`lucid mcp-serve` is still a spec); the group mode is POSIX only.
+- **next:** the add-on (ADR-A048) moves the spoke agent to its own user on the record; build `lucid mcp-serve` on `listNonceRecords`.

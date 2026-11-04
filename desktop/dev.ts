@@ -15,7 +15,7 @@ import { join, dirname, basename } from "node:path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { ndjsonStream } from "./chat_stream.ts";
 import { ENGINE_EXIT_PORT_BUSY } from "./engine_boot.ts"; // P-PORTGUARD.2: the bind-failure exit code main classifies on
-import { discoveryDir, discoveryPath, removeDiscovery, writeDiscovery } from "./engine_discovery.ts"; // P-TUI.0 (ADR-0419)
+import { discoveryDir, discoveryPath, nonceDir, noncePath, removeDiscovery, resolveNonceGroup, writeDiscovery, writeNonceRecord, type EngineNonceRecord } from "./engine_discovery.ts"; // P-TUI.0 (ADR-0419), ADR-0484
 import { parentAlive, parentWatchConfig } from "./parent_watch.ts"; // P-PORTGUARD.2: never outlive the Electron main
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
@@ -6822,16 +6822,26 @@ return Bun.serve({
 if (!process.env.LUCID_ENGINE_NONCE) process.env.LUCID_ENGINE_NONCE = randomBytes(16).toString("hex");
 const ENGINE_PORT = server.port ?? PORT; // Bun types port as optional (unix-socket servers); a TCP bind always has one
 const DISCOVERY_PATH = discoveryPath(discoveryDir(process.env), ENGINE_PORT);
+// ADR-0484: the nonce-only record (no UI token) for controller clients, owner-only by default; shared with
+// LUCID_DISCOVERY_NONCE_GROUP (0640) in LUCID_DISCOVERY_NONCE_DIR when the operator names them.
+const NONCE_PATH = noncePath(nonceDir(process.env), ENGINE_PORT);
+const LAUNCH: EngineNonceRecord = {
+  v: 1, pid: process.pid, port: ENGINE_PORT, nonce: process.env.LUCID_ENGINE_NONCE,
+  version: APP_VERSION, flavor: BUILD.flavor, startedAt: new Date().toISOString(),
+};
 try {
-  writeDiscovery(DISCOVERY_PATH, {
-    v: 1, pid: process.pid, port: ENGINE_PORT, nonce: process.env.LUCID_ENGINE_NONCE,
-    token: TOKEN, version: APP_VERSION, flavor: BUILD.flavor, startedAt: new Date().toISOString(),
-  });
+  writeDiscovery(DISCOVERY_PATH, { ...LAUNCH, token: TOKEN });
 } catch (err) {
   // Advisory seam: a client that finds no file falls back to spawning its own engine. Never fatal.
   console.error(`[discovery] could not publish ${DISCOVERY_PATH}: ${String(err)}`);
 }
-process.on("exit", () => removeDiscovery(DISCOVERY_PATH));
+try {
+  writeNonceRecord(NONCE_PATH, LAUNCH, resolveNonceGroup(process.env.LUCID_DISCOVERY_NONCE_GROUP));
+} catch (err) {
+  // Fail-closed: an unknown group or a refused chown publishes no record, never a wrongly shared one.
+  console.error(`[discovery] could not publish ${NONCE_PATH}: ${String(err)}`);
+}
+process.on("exit", () => { removeDiscovery(DISCOVERY_PATH); removeDiscovery(NONCE_PATH); });
 
 // P-PREVIEW.3a-shot (ADR-0096): hand the omp subprocess a ready-to-use URL (real bound port + token) for the
 // agent's preview_screenshot tool to fetch the cached shot. omp is spawned later (lazily, by acp_backend in
