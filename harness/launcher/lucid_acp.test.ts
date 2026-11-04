@@ -76,6 +76,18 @@ test("--isolate adds the config overlay; omitted otherwise", () => {
   expect(noAsksage.filter((x) => x === "-e").length).toBe(1); // gate only when asksage absent
 });
 
+test("the Azure Entra ID extension (ADR-0485) rides after asksage in both the ACP and the TUI command", () => {
+  const a = assets("/repo");
+  expect(a.azureEntra.replace(/\\/g, "/")).toBe("/repo/harness/omp/azure_entra_extension.ts");
+  expect(existsSync(join(repoRoot(), "harness", "omp", "azure_entra_extension.ts"))).toBe(true);
+  for (const args of [buildAcpArgs({ gate: a.gate, asksage: a.asksage, azureEntra: a.azureEntra }), buildTuiArgs({ gate: a.gate, asksage: a.asksage, azureEntra: a.azureEntra })]) {
+    const i = args.indexOf(a.azureEntra);
+    expect(args[i - 1]).toBe("-e");
+    expect(i).toBeGreaterThan(args.indexOf(a.asksage));
+    expect(args.indexOf(a.gate)).toBeLessThan(i); // the gate stays the first -e
+  }
+});
+
 test("APPENDED_POLICY is byte-identical to acp_backend's DELEGATION+BUILD order (invariant #6)", () => {
   expect(APPENDED_POLICY).toBe(`${DELEGATION_POLICY}\n\n${BUILD_POLICY}`);
   expect(APPENDED_POLICY.indexOf("<delegation>")).toBeLessThan(APPENDED_POLICY.indexOf("<build>"));
