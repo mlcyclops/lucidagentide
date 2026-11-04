@@ -2910,7 +2910,9 @@ class Backend {
           // gets the same refusal as the chat spawn. Returning null degrades to the shared (also gated)
           // connection; it never becomes an ungated shortcut. Logged because the catch below is silent.
           if (!GATE) { console.error(`[acp:util] ${gateRefusal()}`); return null; }
-          const acp = spawned = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...(existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []), ...ompConfigArgs()], currentWorkspace());
+          // Security review residual: the util child inherits the engine env (global provider keys, credential
+          // env) and runs real tools, so it gets the same fail-closed redaction hook as master and lanes, last.
+          const acp = spawned = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...(existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []), ...(existsSync(VAULT_REDACT_EXT) ? ["-e", VAULT_REDACT_EXT] : []), ...ompConfigArgs()], currentWorkspace(), vaultRedactEnv({}));
           // A util completion is TEXT-ONLY: collect assistant text into the active sink, ignore everything
           // else (no tool calls, no permissions, no gate-block surfacing — that's the chat connection's job).
           acp.onNotify = (method: string, params: any) => {
