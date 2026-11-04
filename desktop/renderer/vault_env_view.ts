@@ -27,6 +27,8 @@ export interface EnvImportResult {
   imported: Array<{ name: string; ref: string; slot: EnvScanRow["slot"]; envName: string }>;
   skipped: Array<{ name: string; reason: string }>;
   blanked: boolean; gitignored: boolean; committed: boolean | null;
+  /** A blank or .gitignore step that failed after the store, and why (never a value). */
+  fileProblem?: string;
 }
 
 /** The Settings card name (`data-sec`). */
@@ -98,13 +100,17 @@ export function vaultEnvScanHtml(scan: EnvScan): string {
     </details>`;
 }
 
-/** The toast text for an import, by counts and names only. */
-export function importSummary(r: EnvImportResult): { title: string; desc: string } {
+/** The toast for an import, by counts and names only: warn when nothing moved or a file action failed. */
+export function importSummary(r: EnvImportResult): { title: string; desc: string; tone: "ok" | "warn" } {
   const n = r.imported.length;
   const parts = [`${n} secret${n === 1 ? "" : "s"} moved into the vault${n ? `: ${r.imported.map((i) => i.name).join(", ")}` : ""}.`];
   if (r.skipped.length) parts.push(`Skipped ${r.skipped.map((s) => `${s.name} (${s.reason})`).join(", ")}.`);
   if (r.blanked) parts.push("The file now keeps NAME= placeholders only.");
   if (r.gitignored) parts.push("Added to .gitignore.");
+  // v2.5.1 upgrade review VAULT-ENV-IMPORT-POSTSTORE-THROW: a blank or .gitignore step that failed after
+  // the store is said as such, never as a refused import.
+  if (r.fileProblem) parts.push(n ? `They are in the vault, but ${r.fileProblem}.` : `${r.fileProblem}.`);
   if (n) parts.push("New agent sessions in this workspace receive them; restart a running one to pick them up now.");
-  return { title: n ? "Imported from .env" : "Nothing imported", desc: parts.join(" ") };
+  const title = !n ? "Nothing imported" : r.fileProblem ? "Imported from .env, file not updated" : "Imported from .env";
+  return { title, desc: parts.join(" "), tone: n && !r.fileProblem ? "ok" : "warn" };
 }

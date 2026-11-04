@@ -47,7 +47,8 @@ async function runAction(sec: Element, action: string): Promise<void> {
     const r = await call<EnvImportResult>("/api/vault/env/import", { names, confirmReplace, blank, gitignore });
     if (!r.ok) { showToast({ tone: "danger", title: "Import refused", desc: `${r.error}. Nothing in the file was changed.`, timeout: 8000 }); return; }
     const s = importSummary(r.data);
-    showToast({ tone: r.data.imported.length ? "ok" : "warn", title: s.title, desc: s.desc, timeout: 8000 });
+    // v2.5.1 upgrade review VAULT-ENV-IMPORT-POSTSTORE-THROW: the tone is the summary's (warn on a fileProblem).
+    showToast({ tone: s.tone, title: s.title, desc: s.desc, timeout: 8000 });
     if (r.data.committed && r.data.imported.length) {
       showToast({ tone: "danger", title: "Rotate these secrets", desc: "This .env file was committed to git at some point. Removing it does not clean the history, so anyone with the repository can still read the old values. Issue new keys at each provider.", timeout: 15000 });
     }

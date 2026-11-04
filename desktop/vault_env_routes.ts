@@ -39,15 +39,17 @@ export async function handleVaultEnvRoutes(req: Request, p: string, ctx: VaultRo
   const file = typeof b.file === "string" && b.file ? b.file : DEFAULT_ENV_FILE;
   const ws = currentWorkspace();
   try {
-    if (p === "/api/vault/env/scan") return reply(200, { ok: true, data: scanEnvFile(ws, file) });
+    // v2.5.1 upgrade review VAULT-ENV-SCAN-SYNC-GIT: scan, import and materialize run their git probes
+    // async; each is awaited here so a rejection still lands in the catch below.
+    if (p === "/api/vault/env/scan") return reply(200, { ok: true, data: await scanEnvFile(ws, file) });
     if (p === "/api/vault/env/import") {
       const strings = (v: unknown): string[] | undefined => (Array.isArray(v) ? v.filter((n): n is string => typeof n === "string") : undefined);
       const opts = { names: strings(b.names), confirmReplace: strings(b.confirmReplace), blank: b.blank === true, gitignore: b.gitignore === true };
-      return reply(200, { ok: true, data: importEnvFile(ws, file, opts) });
+      return reply(200, { ok: true, data: await importEnvFile(ws, file, opts) });
     }
     if (p === "/api/vault/env/materialize") {
       const minutes = typeof b.minutes === "number" ? b.minutes : undefined;
-      return reply(200, { ok: true, data: materializeEnvFile(ws, file, minutes) });
+      return reply(200, { ok: true, data: await materializeEnvFile(ws, file, minutes) });
     }
     return reply(200, { ok: true, data: unmaterializeEnvFile(ws, file) });
   } catch (e) {

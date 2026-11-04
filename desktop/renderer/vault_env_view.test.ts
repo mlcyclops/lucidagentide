@@ -103,7 +103,26 @@ test("importSummary names what moved and what was skipped, never more", () => {
     blanked: true, gitignored: true, committed: false,
   });
   expect(s.title).toBe("Imported from .env");
+  expect(s.tone).toBe("ok");
   expect(s.desc).toContain("1 secret moved into the vault: A.");
   expect(s.desc).toContain("PATH (reserved name)");
-  expect(importSummary({ imported: [], skipped: [], blanked: false, gitignored: false, committed: null }).title).toBe("Nothing imported");
+  const none = importSummary({ imported: [], skipped: [], blanked: false, gitignored: false, committed: null });
+  expect(none.title).toBe("Nothing imported");
+  expect(none.tone).toBe("warn");
+});
+
+// v2.5.1 upgrade review VAULT-ENV-IMPORT-POSTSTORE-THROW
+test("importSummary says the names were imported when a file action failed after the store, in a warn tone", () => {
+  const s = importSummary({
+    imported: [{ name: "A", ref: "ws:x:A", slot: "workspace", envName: "A" }], skipped: [],
+    blanked: false, gitignored: false, committed: false,
+    fileProblem: ".env was not blanked and may still hold the values (EPERM: locked); .env was not added to .gitignore (EACCES: denied)",
+  });
+  expect(s.tone).toBe("warn");
+  expect(s.title).toBe("Imported from .env, file not updated");
+  expect(s.desc).toContain("1 secret moved into the vault: A.");
+  expect(s.desc).toContain("They are in the vault, but .env was not blanked and may still hold the values (EPERM: locked)");
+  expect(s.desc).toContain(".env was not added to .gitignore (EACCES: denied).");
+  expect(s.desc).not.toContain("placeholders only");
+  expect(s.desc).not.toContain("Added to .gitignore.");
 });

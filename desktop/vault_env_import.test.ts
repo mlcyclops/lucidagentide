@@ -95,10 +95,10 @@ const leaks = (text: string): string[] => Object.entries(V).filter(([, v]) =>
 ).map(([k]) => k);
 
 describe("scan", () => {
-  test("names, slots, last-4 and status; never a value", () => {
+  test("names, slots, last-4 and status; never a value", async () => {
     const root = scratch(); useFakeStore();
     const ws = workspace(root, "app", ENV_TEXT);
-    const s = scanEnvFile(ws);
+    const s = await scanEnvFile(ws);
     expect(leaks(JSON.stringify(s))).toEqual([]);
     const by = Object.fromEntries(s.rows.map((r) => [r.name, r]));
     expect(by.GITHUB_TOKEN).toMatchObject({ slot: "git-host", ref: "git_pat_github_com", host: "github.com", last4: "001A", status: "new" });
@@ -136,7 +136,7 @@ describe("import", () => {
     expect(process.env.GROQ_API_KEY).toBe(V.groq);
     // workspace secrets never go into the engine's own env
     expect(process.env.STRIPE_SECRET_KEY).toBeUndefined();
-    const again = scanEnvFile(ws);
+    const again = await scanEnvFile(ws);
     expect(again.rows.filter((x) => !x.blocked).every((x) => x.status === "same")).toBe(true);
   });
 
@@ -177,7 +177,7 @@ describe("import", () => {
     const root = scratch();
     _setVaultBackendForTest(() => null);
     const ws = workspace(root, "app", ENV_TEXT);
-    await quiet(() => expect(() => importEnvFile(ws, ".env", { blank: true, gitignore: true })).toThrow());
+    await quiet(() => expect(importEnvFile(ws, ".env", { blank: true, gitignore: true })).rejects.toThrow());
     expect(readFileSync(join(ws, ".env"), "utf8")).toBe(ENV_TEXT);
     expect(existsSync(join(ws, ".gitignore"))).toBe(false);
   });
@@ -189,16 +189,38 @@ describe("import", () => {
     const r = await quiet(() => importEnvFile(ws, ".env", { gitignore: true }));
     expect(r.gitignored).toBe(true);
     expect(readFileSync(join(ws, ".gitignore"), "utf8")).toMatch(/^node_modules\n# .*\n\/\.env\n$/);
-    expect(isIgnored(ws, ".env")).toBe(true);
+    expect(await isIgnored(ws, ".env")).toBe(true);
     expect((await quiet(() => importEnvFile(ws, ".env", { gitignore: true }))).gitignored).toBe(false);
   });
 
-  test("only .env files directly in the workspace are read", () => {
+  // v2.5.1 upgrade review VAULT-ENV-IMPORT-POSTSTORE-THROW
+  test("a blank that fails after the store is reported in fileProblem; the names stay imported and in the vault", async () => {
+    const root = scratch(); useFakeStore();
+    const text = `STRIPE_SECRET_KEY=${V.stripe}\nGROQ_API_KEY=${V.groq}\n`;
+    const ws = workspace(root, "app", text);
+    writeFileSync(join(ws, ".gitignore"), "node_modules\n");
+    _setMaterializeRenameForTest(() => { throw new Error("EPERM: the file is locked"); });
+    const r = await quiet(async () => {
+      try { return await importEnvFile(ws, ".env", { blank: true, gitignore: true }); } finally { _setMaterializeRenameForTest(null); }
+    });
+    expect(r.imported.map((i) => i.name).sort()).toEqual(["GROQ_API_KEY", "STRIPE_SECRET_KEY"]);
+    expect(r.blanked).toBe(false);
+    expect(r.fileProblem).toContain(".env was not blanked");
+    expect(r.fileProblem).toContain("the file is locked");
+    expect(r.gitignored).toBe(true); // the other file action still ran
+    expect(leaks(JSON.stringify(r))).toEqual([]);
+    expect(vaultGet(workspaceRef(ws, "STRIPE_SECRET_KEY"))).toBe(V.stripe);
+    expect(vaultGet("key:GROQ_API_KEY")).toBe(V.groq);
+    expect(process.env.GROQ_API_KEY).toBe(V.groq);
+    expect(readFileSync(join(ws, ".env"), "utf8")).toBe(text); // not blanked
+  });
+
+  test("only .env files directly in the workspace are read", async () => {
     const root = scratch(); useFakeStore();
     const ws = workspace(root, "app", "A=1\n");
-    expect(() => scanEnvFile(ws, "../outside.env")).toThrow(/only a \.env file/);
-    expect(() => scanEnvFile(ws, "secrets.txt")).toThrow(/only a \.env file/);
-    expect(scanEnvFile(ws, ".env.local").exists).toBe(false);
+    await expect(scanEnvFile(ws, "../outside.env")).rejects.toThrow(/only a \.env file/);
+    await expect(scanEnvFile(ws, "secrets.txt")).rejects.toThrow(/only a \.env file/);
+    expect((await scanEnvFile(ws, ".env.local")).exists).toBe(false);
   });
 
   // Wave B security review SECRET-INTAKE-ENVNAME-UNRESTRICTED: env_name_policy.ts is the one rule.
@@ -206,7 +228,7 @@ describe("import", () => {
     const root = scratch(); useFakeStore();
     const reserved = ["NODE_OPTIONS", "HTTPS_PROXY", "OPENAI_BASE_URL", "GIT_SSH_COMMAND", "PYTHONPATH", "REQUESTS_CA_BUNDLE", "LUCID_X"];
     const ws = workspace(root, "app", reserved.map((n) => `${n}=${V.stripe}`).join("\n") + "\n");
-    const s = scanEnvFile(ws);
+    const s = await scanEnvFile(ws);
     expect(s.rows.map((r) => [r.name, r.blocked])).toEqual(reserved.map((n) => [n, "reserved name"]));
     const r = await quiet(() => importEnvFile(ws));
     expect(r.imported).toEqual([]);
@@ -220,7 +242,7 @@ describe("import", () => {
     await quiet(() => importEnvFile(ws));
     const other = "gsk_FAKEfakeFAKEfake0000009Z";
     writeFileSync(join(ws, ".env"), `GROQ_API_KEY=${other}\n`);
-    expect(scanEnvFile(ws).rows[0]).toMatchObject({ slot: "provider-key", status: "replaces" });
+    expect((await scanEnvFile(ws)).rows[0]).toMatchObject({ slot: "provider-key", status: "replaces" });
     const r = await quiet(() => importEnvFile(ws, ".env", { names: ["GROQ_API_KEY"] }));
     expect(r.imported).toEqual([]);
     expect(r.skipped[0]!.name).toBe("GROQ_API_KEY");
@@ -232,21 +254,21 @@ describe("import", () => {
   });
 
   // VAULT-ENV-SYMLINK-FOLLOW
-  test("a .env symlink is refused, never followed", () => {
+  test("a .env symlink is refused, never followed", async () => {
     const root = scratch(); useFakeStore();
     const ws = workspace(root, "app");
     const target = join(root, "credentials");
     writeFileSync(target, `aws_secret_access_key=${V.stripe}\n`);
     try { symlinkSync(target, join(ws, ".env"), "file"); }
     catch { return; } // the platform refuses links here; nothing to test
-    expect(() => scanEnvFile(ws)).toThrow(/not a regular file/);
-    expect(() => importEnvFile(ws)).toThrow(/not a regular file/);
+    await expect(scanEnvFile(ws)).rejects.toThrow(/not a regular file/);
+    await expect(importEnvFile(ws)).rejects.toThrow(/not a regular file/);
   });
 
-  test("an oversize .env is refused before it is read", () => {
+  test("an oversize .env is refused before it is read", async () => {
     const root = scratch(); useFakeStore();
     const ws = workspace(root, "app", `A=${"x".repeat(300 * 1024)}\n`);
-    expect(() => scanEnvFile(ws)).toThrow(/larger than 256 KiB/);
+    await expect(scanEnvFile(ws)).rejects.toThrow(/larger than 256 KiB/);
   });
 
   // VAULT-DEST-AUTOBACKUP-GAP (import part)
@@ -278,18 +300,18 @@ describe.skipIf(!gitOk)("committed-file detection", () => {
     writeFileSync(join(ws, "README"), "x");
     expect(git(ws, "add", "README")).toBe(true);
     expect(git(ws, "commit", "-q", "-m", "init")).toBe(true);
-    expect(gitEverCommitted(ws, ".env")).toBe(false);
-    expect(scanEnvFile(ws).committed).toBe(false);
-    expect(isIgnored(ws, ".env")).toBe(false);
+    expect(await gitEverCommitted(ws, ".env")).toBe(false);
+    expect((await scanEnvFile(ws)).committed).toBe(false);
+    expect(await isIgnored(ws, ".env")).toBe(false);
 
     expect(git(ws, "add", ".env")).toBe(true);
     expect(git(ws, "commit", "-q", "-m", "oops")).toBe(true);
     expect(git(ws, "rm", "-q", "--cached", ".env")).toBe(true);
     expect(git(ws, "commit", "-q", "-m", "remove")).toBe(true);
-    expect(gitEverCommitted(ws, ".env")).toBe(true);
+    expect(await gitEverCommitted(ws, ".env")).toBe(true);
     const r = await quiet(() => importEnvFile(ws, ".env", { gitignore: true }));
     expect(r.committed).toBe(true); // the UI tells the user to ROTATE
-    expect(isIgnored(ws, ".env")).toBe(true); // git's own check-ignore agrees with what was written
+    expect(await isIgnored(ws, ".env")).toBe(true); // git's own check-ignore agrees with what was written
   });
 
   // VAULT-ENV-IMPORT-OVERWRITE-GLOBAL: a repository's file never fills the user's global slots.
@@ -299,7 +321,7 @@ describe.skipIf(!gitOk)("committed-file detection", () => {
     const ws = workspace(root, "repo", `OPENAI_API_KEY=${openai}\nGITHUB_TOKEN=${V.gh}\n`);
     expect(git(ws, "init", "-q")).toBe(true); // not ignored inside a repository: tracked
     const before = process.env.OPENAI_API_KEY;
-    const s = scanEnvFile(ws);
+    const s = await scanEnvFile(ws);
     expect(s.tracked).toBe(true);
     const by = Object.fromEntries(s.rows.map((r) => [r.name, r]));
     expect(by.OPENAI_API_KEY).toMatchObject({ slot: "workspace", ref: workspaceRef(ws, "OPENAI_API_KEY"), envName: "OPENAI_API_KEY", fromRepo: true });
@@ -313,11 +335,11 @@ describe.skipIf(!gitOk)("committed-file detection", () => {
     expect(vaultList().find((m) => m.ref === workspaceRef(ws, "OPENAI_API_KEY"))!.label).toContain("from the repository");
   });
 
-  test("outside a repository the answer is unknown, not false", () => {
+  test("outside a repository the answer is unknown, not false", async () => {
     const root = scratch(); useFakeStore();
     const ws = workspace(root, "plain", "A=1\n");
-    expect(gitEverCommitted(ws, ".env")).toBeNull();
-    expect(scanEnvFile(ws).committed).toBeNull();
+    expect(await gitEverCommitted(ws, ".env")).toBeNull();
+    expect((await scanEnvFile(ws)).committed).toBeNull();
   });
 });
 
@@ -378,7 +400,7 @@ describe("write .env temporarily", () => {
     const root = scratch(); useFakeStore();
     const ws = workspace(root, "app", `# keep\nSTRIPE_SECRET_KEY=${V.stripe}\nDB_PASSWORD="${V.db}"\nOTHER=plain\n`);
     await quiet(() => importEnvFile(ws, ".env", { names: ["STRIPE_SECRET_KEY", "DB_PASSWORD"], blank: true }));
-    expect(() => materializeEnvFile(ws)).toThrow(/not git-ignored/);
+    await expect(materializeEnvFile(ws)).rejects.toThrow(/not git-ignored/);
     writeFileSync(join(ws, ".gitignore"), ".env\n");
     const m = await quiet(() => materializeEnvFile(ws, ".env", 5));
     expect(m.names).toEqual(["DB_PASSWORD", "STRIPE_SECRET_KEY"]);
@@ -408,7 +430,7 @@ describe("write .env temporarily", () => {
     const root = scratch(); useFakeStore();
     const ws = await ready(root, join("OneDrive", "app"));
     const before = readFileSync(join(ws, ".env"), "utf8");
-    expect(() => materializeEnvFile(ws)).toThrow(/synced by a cloud client/);
+    await expect(materializeEnvFile(ws)).rejects.toThrow(/synced by a cloud client/);
     expect(readFileSync(join(ws, ".env"), "utf8")).toBe(before);
     expect(existsSync(join(root, "data", "vault-env-materialized.json"))).toBe(false);
   });
@@ -446,7 +468,7 @@ describe("write .env temporarily", () => {
     writeFileSync(join(ws, ".env"), before); // the user's own value, typed in after the import
     _setMaterializeRenameForTest(() => { throw new Error("the engine died before the rename"); });
     try {
-      expect(() => materializeEnvFile(ws, ".env", 5)).toThrow(/died before the rename/);
+      await expect(materializeEnvFile(ws, ".env", 5)).rejects.toThrow(/died before the rename/);
     } finally { _setMaterializeRenameForTest(null); }
     expect(readFileSync(join(ws, ".env"), "utf8")).toBe(before);
     const journal = journalOf(root) as Array<{ names: string[] }>;
@@ -568,5 +590,24 @@ describe("routes", () => {
     expect(bad!.status).toBe(400);
     const get = await handleVaultRoutes(new Request("http://127.0.0.1:1/api/vault/env/scan", { headers: { "x-lucid-token": UI } }), "/api/vault/env/scan", CTX);
     expect(get!.status).toBe(405);
+  });
+
+  // v2.5.1 upgrade review VAULT-ENV-IMPORT-POSTSTORE-THROW: never a 400 ("nothing was changed") once stored.
+  test("import answers 200 with fileProblem when the blank fails after the store", async () => {
+    const root = scratch(); useFakeStore();
+    const ws = workspace(root, "app", `STRIPE_SECRET_KEY=${V.stripe}\n`);
+    await quiet(() => setWorkspace(ws));
+    _setMaterializeRenameForTest(() => { throw new Error("EBUSY: the file is locked"); });
+    const res = await quiet(async () => {
+      try { return await handleVaultRoutes(req("/api/vault/env/import", { names: ["STRIPE_SECRET_KEY"], blank: true }), "/api/vault/env/import", CTX); }
+      finally { _setMaterializeRenameForTest(null); }
+    });
+    expect(res!.status).toBe(200);
+    const text = await res!.text();
+    expect(leaks(text)).toEqual([]);
+    const data = JSON.parse(text).data;
+    expect(data).toMatchObject({ imported: [{ name: "STRIPE_SECRET_KEY", slot: "workspace" }], blanked: false, gitignored: false });
+    expect(data.fileProblem).toContain(".env was not blanked");
+    expect(vaultGet(workspaceRef(ws, "STRIPE_SECRET_KEY"))).toBe(V.stripe);
   });
 });

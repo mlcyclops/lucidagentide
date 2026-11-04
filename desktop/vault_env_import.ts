@@ -9,7 +9,8 @@
 //     plus whether the file is git-ignored and whether git history ever held it. Never a value.
 //   - importEnvFile: every chosen name into its slot in ONE locked vault write (vault_store vaultPutMany:
 //     all or nothing, verified, every write observer told per entry), then (each opt-in) blank the file to
-//     `NAME=` placeholders and add it to `.gitignore`. A failed store blanks nothing. A row that would
+//     `NAME=` placeholders and add it to `.gitignore`. A failed store blanks nothing; a file action that
+//     fails after the store is reported (EnvImportResult.fileProblem), never thrown. A row that would
 //     REPLACE a saved global provider key or git host token is never pre-ticked and is imported only when
 //     its name is in `confirmReplace`. A `.env` git tracks (committed, or not ignored in a repository)
 //     came from whoever wrote the repository: its provider and git names become `ws:` overrides of this
@@ -135,31 +136,43 @@ function readEnvFileSafe(ws: string, path: string): string | null {
   }
 }
 
-function git(cwd: string, args: string[]): { code: number; out: string } | null {
+const GIT_TIMEOUT_MS = 15_000;
+
+// v2.5.1 upgrade review VAULT-ENV-SCAN-SYNC-GIT: the probes were Bun.spawnSync on the engine's event loop,
+// and the renderer offers a scan once per workspace on open, so `git log --all` on a large repository or a
+// slow drive stalled every request the engine served. Now async: killed after GIT_TIMEOUT_MS, and a killed
+// or failed probe is null ("git cannot say"). stderr is not read, so it is not piped (a full pipe would
+// block git).
+async function git(cwd: string, args: string[]): Promise<{ code: number; out: string } | null> {
   try {
-    const r = Bun.spawnSync([gitExe(), ...args], {
-      cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 15_000, windowsHide: true,
+    const p = Bun.spawn([gitExe(), ...args], {
+      cwd, stdin: "ignore", stdout: "pipe", stderr: "ignore", windowsHide: true,
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
     });
-    return { code: r.exitCode ?? 1, out: r.stdout.toString() };
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; try { p.kill(); } catch { /* already exited */ } }, GIT_TIMEOUT_MS);
+    try {
+      const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
+      return timedOut ? null : { code, out };
+    } finally { clearTimeout(timer); }
   } catch { return null; }
 }
-const insideGit = (workspace: string): boolean => git(workspace, ["rev-parse", "--is-inside-work-tree"])?.out.trim() === "true";
+const insideGit = async (workspace: string): Promise<boolean> => (await git(workspace, ["rev-parse", "--is-inside-work-tree"]))?.out.trim() === "true";
 
 /** Did any commit on any ref ever contain `file` (relative to `workspace`)? Null when git cannot say.
  *  Removing the file now does not remove it from that history: the caller warns to ROTATE. */
-export function gitEverCommitted(workspace: string, file: string): boolean | null {
-  if (!insideGit(workspace)) return null;
-  const r = git(workspace, ["log", "--all", "--format=%H", "-n", "1", "--", file]);
+export async function gitEverCommitted(workspace: string, file: string): Promise<boolean | null> {
+  if (!(await insideGit(workspace))) return null;
+  const r = await git(workspace, ["log", "--all", "--format=%H", "-n", "1", "--", file]);
   if (!r || r.code !== 0) return null;
   return r.out.trim().length > 0;
 }
 
 /** Is `file` ignored? Git's own answer inside a repository (`check-ignore`); outside one, whether the
  *  workspace `.gitignore` names it (exactly, rooted, or by a `.env*` / `.env.*` pattern). */
-export function isIgnored(workspace: string, file: string): boolean {
-  if (insideGit(workspace)) {
-    const r = git(workspace, ["check-ignore", "-q", "--", file]);
+export async function isIgnored(workspace: string, file: string): Promise<boolean> {
+  if (await insideGit(workspace)) {
+    const r = await git(workspace, ["check-ignore", "-q", "--", file]);
     if (r && (r.code === 0 || r.code === 1)) return r.code === 0; // 128 = git failed: read the file below
   }
   const gi = join(workspace, ".gitignore");
@@ -169,8 +182,8 @@ export function isIgnored(workspace: string, file: string): boolean {
 }
 
 /** Append `/<file>` to the workspace's `.gitignore` (created when absent). False when already ignored. */
-export function ensureGitignored(workspace: string, file: string): boolean {
-  if (isIgnored(workspace, file)) return false;
+export async function ensureGitignored(workspace: string, file: string): Promise<boolean> {
+  if (await isIgnored(workspace, file)) return false;
   const gi = join(workspace, ".gitignore");
   const prev = existsSync(gi) ? readFileSync(gi, "utf8") : "";
   const eol = prev.includes("\r\n") ? "\r\n" : "\n";
@@ -181,18 +194,27 @@ export function ensureGitignored(workspace: string, file: string): boolean {
 
 interface PlannedRow { row: EnvScanRow; value: string }
 
-function plan(workspace: string, file: string): { scan: EnvScan; rows: PlannedRow[] } {
+async function plan(workspace: string, file: string): Promise<{ scan: EnvScan; rows: PlannedRow[] }> {
   const ws = realWorkspace(workspace);
   const path = envFileOf(ws, file);
+  // v2.5.1 upgrade review VAULT-ENV-SCAN-SYNC-GIT: the async git probes run BEFORE the file and the vault
+  // are read, so a scan is never older than its probes and an import stores right after its vault read,
+  // with no await between (a row's "replaces" status cannot go stale under it). No file, nothing to
+  // import: skip the probes (the one-time offer scans every workspace once).
+  let present = true;
+  try { lstatSync(path); } catch (e) { present = (e as NodeJS.ErrnoException)?.code !== "ENOENT"; }
+  const probedGit = present && await insideGit(ws);
+  const [probedIgnored, probedCommitted]: [boolean, boolean | null] = present
+    ? await Promise.all([isIgnored(ws, file), probedGit ? gitEverCommitted(ws, file) : null])
+    : [false, null];
   const text = readEnvFileSafe(ws, path);
   const exists = text !== null;
   const parsed = parseDotEnv(text ?? "");
   const vault = readVault(keyVaultDir());
   if (vault.problem) throw new Error(`the vault is unreadable: ${vault.problem}`);
-  // No file, nothing to import: skip the git probes (the one-time offer scans every workspace once).
-  const isGit = exists && insideGit(ws);
-  const ignored = exists ? isIgnored(ws, file) : false;
-  const committed = isGit ? gitEverCommitted(ws, file) : null;
+  const isGit = exists && probedGit;
+  const ignored = exists && probedIgnored;
+  const committed = isGit ? probedCommitted : null;
   const tracked = committed === true || (isGit && !ignored);
   const providers = providerKeyEnvs();
   const filled = new Map<string, string>(); // ref -> the name that fills it (first-ranked wins)
@@ -229,8 +251,8 @@ function plan(workspace: string, file: string): { scan: EnvScan; rows: PlannedRo
 }
 
 /** Names, slots, last-4 and status of each entry of `<workspace>/<file>`. Never a value. */
-export function scanEnvFile(workspace: string, file: string = DEFAULT_ENV_FILE): EnvScan {
-  return plan(workspace, file).scan;
+export async function scanEnvFile(workspace: string, file: string = DEFAULT_ENV_FILE): Promise<EnvScan> {
+  return (await plan(workspace, file)).scan;
 }
 
 export interface EnvImportOptions {
@@ -251,12 +273,16 @@ export interface EnvImportResult {
   gitignored: boolean;
   /** Git history held the file: its values must be ROTATED (removal does not clean history). */
   committed: boolean | null;
+  /** An opt-in file action (blank, .gitignore) that failed after the store, and why (a message, never a
+   *  value). The imported names ARE in the vault; `blanked` / `gitignored` say what was done. */
+  fileProblem?: string;
 }
 
 /** Import into the vault, then the opt-in file actions. Throws (blanking and ignoring nothing) when the
- *  vault refuses the write or does not hand every value back. */
-export function importEnvFile(workspace: string, file: string = DEFAULT_ENV_FILE, opts: EnvImportOptions = {}): EnvImportResult {
-  const { scan, rows } = plan(workspace, file);
+ *  vault refuses the write or does not hand every value back. A file action that fails after that never
+ *  throws: the result names it in `fileProblem`. */
+export async function importEnvFile(workspace: string, file: string = DEFAULT_ENV_FILE, opts: EnvImportOptions = {}): Promise<EnvImportResult> {
+  const { scan, rows } = await plan(workspace, file);
   if (!scan.exists) throw new Error(`${file} was not found in the workspace`);
   const want = opts.names ? new Set(opts.names) : null;
   const confirmed = new Set(opts.confirmReplace ?? []);
@@ -296,18 +322,32 @@ export function importEnvFile(workspace: string, file: string = DEFAULT_ENV_FILE
     for (const { row, value } of take) if (row.slot === "provider-key") process.env[row.envName] = value;
     try { applyVaultEnv(); } catch (e) { console.error(`[vault-env] env refresh after .env import failed: ${String((e as Error)?.message ?? e).slice(0, 160)}`); }
   }
+  // v2.5.1 upgrade review VAULT-ENV-IMPORT-POSTSTORE-THROW: the file actions run after the store, so a
+  // failed one no longer throws (the route answered 400 and the card said nothing was changed while the
+  // secrets were in the vault and provider keys in process.env). It is reported in fileProblem and its
+  // flag stays false; the other action still runs.
   const path = envFileOf(scan.workspace, file);
+  const problems: string[] = [];
   let blanked = false;
   if (opts.blank && take.length) {
-    const text = readEnvFileSafe(scan.workspace, path) ?? "";
-    const next = blankDotEnv(text, new Set(take.map((t) => t.row.name)));
-    if (next !== text) { writeAtomic(path, next); blanked = true; }
+    try {
+      const text = readEnvFileSafe(scan.workspace, path) ?? "";
+      const next = blankDotEnv(text, new Set(take.map((t) => t.row.name)));
+      if (next !== text) { writeAtomic(path, next, envRename); blanked = true; }
+    } catch (e) { problems.push(`${file} was not blanked and may still hold the values (${String((e as Error)?.message ?? e).slice(0, 160)})`); }
   }
-  const gitignored = opts.gitignore ? ensureGitignored(scan.workspace, file) : false;
-  console.error(`[vault-env] imported ${take.length} name(s) from ${file}: ${take.map((t) => t.row.name).join(", ") || "none"}${blanked ? " (file blanked)" : ""}`);
+  let gitignored = false;
+  if (opts.gitignore) {
+    try { gitignored = await ensureGitignored(scan.workspace, file); } catch (e) {
+      problems.push(`${file} was not added to .gitignore (${String((e as Error)?.message ?? e).slice(0, 160)})`);
+    }
+  }
+  const fileProblem = problems.join("; ");
+  console.error(`[vault-env] imported ${take.length} name(s) from ${file}: ${take.map((t) => t.row.name).join(", ") || "none"}${blanked ? " (file blanked)" : ""}${fileProblem ? `; ${fileProblem}` : ""}`);
   return {
     imported: take.map(({ row }) => ({ name: row.name, ref: row.ref, slot: row.slot, envName: row.envName })),
     skipped, blanked, gitignored, committed: scan.committed,
+    ...(fileProblem ? { fileProblem } : {}),
   };
 }
 
@@ -367,10 +407,11 @@ const journalFile = (): string => journalOverride ?? join(process.env.LUCID_DATA
 /** Test-only: put the journal somewhere else (null = the data root again). */
 export function _setMaterializeJournalForTest(path: string | null): void { journalOverride = path; }
 
-/** The rename that lands a materialize's `.env` write (atomic_file.ts writeAtomic). Only tests swap it. */
+/** The rename that lands a materialize's `.env` write and an import's blank (atomic_file.ts writeAtomic).
+ *  Only tests swap it. */
 let envRename: (from: string, to: string) => void = renameSync;
 /** Test-only: fail (or observe) the `.env` write of a materialize after its journal entry is down, the
- *  window a crash can hit (null = node:fs again). */
+ *  window a crash can hit, or an import's blank after its store (null = node:fs again). */
 export function _setMaterializeRenameForTest(fn: ((from: string, to: string) => void) | null): void { envRename = fn ?? renameSync; }
 
 const DIGEST_RE = /^[0-9a-f]{32}:[0-9a-f]{64}$/;
@@ -481,14 +522,17 @@ const quoteEnv = (v: string): string =>
  *  `NAME=` lines are filled in place, missing names appended. Refused in a synced folder and unless the
  *  file is git-ignored. Journaled before the write; re-blanked when the timer fires, on request, at
  *  graceful shutdown (unmaterializeAll) or at the next engine start (reblankMaterializedJournal). */
-export function materializeEnvFile(workspace: string, file: string = DEFAULT_ENV_FILE, minutes = 15): { path: string; names: string[]; until: number } {
+export async function materializeEnvFile(workspace: string, file: string = DEFAULT_ENV_FILE, minutes = 15): Promise<{ path: string; names: string[]; until: number }> {
   const ws = realWorkspace(workspace);
   const path = envFileOf(ws, file);
+  // v2.5.1 upgrade review VAULT-ENV-SCAN-SYNC-GIT: the async ignore probe runs before the file is read,
+  // so the text rewritten below is never older than it (no await between the read and the write).
+  const ignored = await isIgnored(ws, file);
   const current = readEnvFileSafe(ws, path);
   if (isSyncedPath(ws) || isSyncedPath(current !== null ? realpathSync(path) : ws)) {
     throw new Error(`${file} was not written: this folder is synced by a cloud client, which would upload the plaintext file and keep versions of it even after it is blanked again`);
   }
-  if (!isIgnored(ws, file)) throw new Error(`${file} is not git-ignored; add it to .gitignore first`);
+  if (!ignored) throw new Error(`${file} is not git-ignored; add it to .gitignore first`);
   const env = workspaceSecretEnv(ws);
   const names = Object.keys(env).sort();
   if (!names.length) throw new Error("this workspace has no workspace-scoped secrets to write");
