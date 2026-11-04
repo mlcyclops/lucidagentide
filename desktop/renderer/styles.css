@@ -3027,19 +3027,23 @@ body.preview-open .thread{font-size:.9em}
 .cg-side-h{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--txt-1);margin-bottom:3px}
 .cg-side-h b{color:var(--txt)}
 /* P-KG-CODE.1d: file paths are clickable buttons that open the file in the IDE */
-.cg-open{display:block;width:100%;text-align:left;background:none;border:0;padding:0;margin:0;font-family:var(--mono);font-size:11px;color:var(--txt-2);word-break:break-all;line-height:1.4;cursor:pointer;transition:color var(--t)}
+/* Invariant 11: each path is ONE line. The file name (.cg-open-base) holds its width; the directory, or a
+   symbol's file, ellipsizes first. No raw text sits beside the spans (both are elements). */
+.cg-open{display:flex;width:100%;min-width:0;text-align:left;background:none;border:0;padding:0;margin:0;font-family:var(--mono);font-size:11px;color:var(--txt-2);white-space:nowrap;line-height:1.4;cursor:pointer;transition:color var(--t)}
+.cg-open-dir{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--txt-3)}
+.cg-open-base{flex:0 0 auto;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .cg-open:hover{color:var(--accent-2);text-decoration:underline;text-underline-offset:2px}
 .cg-side-path.cg-open{font-size:10.5px;color:var(--txt-3);margin-bottom:12px}
 .cg-side-path.cg-open:hover{color:var(--accent-2)}
 .cg-side-sec{margin-bottom:12px}
 .cg-side-lbl{display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-3);font-weight:700;margin-bottom:5px}
 .cg-side-list{margin:0;padding-left:26px;display:flex;flex-direction:column;gap:3px;list-style:decimal}
-.cg-side-list li{font-family:var(--mono);font-size:11px;color:var(--txt-2);word-break:break-all}
+.cg-side-list li{font-family:var(--mono);font-size:11px;color:var(--txt-2);min-width:0}
 .cg-side-list li::marker{color:var(--accent-2);font-weight:700;font-family:var(--sans,inherit)}
 .cg-side-none{font-size:11px;color:var(--txt-4);font-style:italic}
 /* P-KG-SYM.1: symbol-node bits + the file hint after a symbol name */
 .cg-side-kind{font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent-2);border:1px solid color-mix(in srgb,var(--accent-2) 30%,var(--line));border-radius:5px;padding:1px 5px;font-family:var(--sans,inherit)}
-.cg-open-file{color:var(--txt-4);font-size:9.5px}
+.cg-open-file{flex:0 1 auto;min-width:0;margin-left:6px;overflow:hidden;text-overflow:ellipsis;color:var(--txt-4);font-size:9.5px}
 /* the "build a code graph" level picker */
 .cg-picker{width:min(660px,95vw)}
 .cg-levels{display:flex;flex-direction:column;gap:14px;margin:14px 0 8px}
@@ -3416,7 +3420,7 @@ body.preview-open .thread{font-size:.9em}
 .kg-svg.kg-form{animation:kgForm .3s var(--ease-out)}
 @keyframes kgForm{from{opacity:0}to{opacity:1}}
 @media (prefers-reduced-motion: reduce){.kg-svg.kg-form{animation:none}}
-.kg-edge{fill:none;stroke:var(--line-strong);stroke-width:1.1;opacity:.32;stroke-linecap:round;transition:opacity var(--t)}
+.kg-edge{fill:none;stroke:var(--line-strong);stroke-width:1.1;opacity:.32;stroke-linecap:round;transition:opacity var(--t);vector-effect:non-scaling-stroke}
 .kg-part{opacity:.8;filter:drop-shadow(0 0 2.5px currentColor)}
 /* shared soft glow over the whole node layer - one cheap filter, not one per node */
 .kg-nodes{filter:url(#kgGlow)}
@@ -3436,6 +3440,44 @@ body.preview-open .thread{font-size:.9em}
 .kg-search{flex:1 1 96px;min-width:0;max-width:170px;padding:4px 9px;font-size:12px;border-radius:7px;border:1px solid var(--line);background:var(--bg-0);color:var(--txt);outline:none;transition:border-color var(--t) var(--ease),max-width var(--t) var(--ease)}
 .kg-search:focus{border-color:var(--accent);max-width:210px}
 .kg-search::placeholder{color:var(--txt-3)}
+/* P-KG-ORBIT.1 (ADR-0470): the ranked "Find a node" results under the search box. Each row is a dot plus ONE
+   block text element (name over path), both single-line ellipsized (invariant 11). */
+.kg-results{position:absolute;z-index:30;max-height:340px;overflow:auto;background:var(--bg-2);border:1px solid var(--line-strong);border-radius:10px;padding:4px;box-shadow:0 12px 32px -12px rgb(var(--sh-rgb) / .7)}
+.kg-results[hidden]{display:none}
+.kg-res{display:flex;align-items:center;gap:9px;width:100%;border:0;background:transparent;text-align:left;padding:6px 8px;border-radius:7px;cursor:pointer;color:var(--txt-2)}
+.kg-res.on,.kg-res:hover{background:var(--bg-4);color:var(--txt)}
+.kg-res-dot{flex:none;width:9px;height:9px;border-radius:50%}
+.kg-res-txt{display:block;flex:1;min-width:0}
+.kg-res-name{display:block;font-size:12.5px;font-weight:600;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kg-res-path{display:block;font-family:var(--mono);font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kg-res-none{padding:8px 10px;font-size:12px;color:var(--txt-4)}
+/* P-KG-ORBIT.1 (ADR-0470): the Orbit engine - a canvas plus DOM overlays (selection HUD, kind legend, axis note). */
+.orb{position:absolute;inset:0;z-index:1}
+.orb-cv{display:block;width:100%;height:100%;touch-action:none}
+.orb-hud{position:absolute;top:12px;left:12px;z-index:3;width:260px;max-width:calc(100% - 24px);max-height:calc(100% - 96px);overflow:auto;padding:10px 12px;border-radius:10px;
+  background:color-mix(in srgb,var(--bg-2) 92%,transparent);border:1px solid var(--line);box-shadow:0 10px 26px -14px rgb(var(--sh-rgb) / .7);font-size:12px;color:var(--txt-2)}
+.orb-hud[hidden],.orb-hint[hidden],.orb-back[hidden],.orb-sec[hidden]{display:none}
+.orb-hud-name{font-size:13px;font-weight:700;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:8px}
+.seg.orb-dir{margin-bottom:8px}
+.orb-dir button{flex:1;padding:4px 6px;white-space:nowrap}
+.orb-hud-count{font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:8px}
+.orb-up{color:#5ec8f2;font-weight:600}
+.orb-down{color:#e8b23c;font-weight:600}
+.orb-sec{margin-bottom:8px}
+.orb-sec-lbl{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-3);font-weight:700;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orb-row{display:flex;align-items:center;gap:7px;width:100%;border:0;background:transparent;color:var(--txt-2);font-size:12px;padding:3px 6px;border-radius:6px;cursor:pointer;text-align:left}
+.orb-row:hover{background:var(--bg-3);color:var(--txt)}
+.orb-row-txt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orb-dot{flex:none;display:inline-block;width:8px;height:8px;border-radius:50%}
+.orb-more{font-size:11px;color:var(--txt-4);padding:2px 6px;font-style:italic;white-space:nowrap}
+.orb-legend{position:absolute;left:12px;bottom:12px;z-index:3;display:flex;flex-wrap:wrap;gap:5px;max-width:calc(100% - 80px)}
+.orb-chip{display:flex;align-items:center;gap:6px;white-space:nowrap;border:1px solid var(--line);background:color-mix(in srgb,var(--bg-2) 92%,transparent);border-radius:999px;padding:3px 9px;font-size:11px;color:var(--txt-2);cursor:pointer;transition:opacity var(--t),border-color var(--t)}
+.orb-chip:hover{border-color:var(--line-strong);color:var(--txt)}
+.orb-chip-txt{white-space:nowrap}
+.orb-chip.off{opacity:.45}
+.orb-chip.off .orb-dot{background:transparent!important;box-shadow:inset 0 0 0 1px var(--txt-4)}
+.orb-axis{position:absolute;top:12px;right:14px;z-index:2;font-size:10.5px;color:var(--txt-4);white-space:nowrap;pointer-events:none}
+.orb-hint{position:absolute;top:40px;left:50%;transform:translateX(-50%);z-index:4;max-width:calc(100% - 24px);padding:6px 12px;border-radius:8px;background:var(--bg-2);border:1px solid var(--accent);color:var(--txt);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* P-KG-REL.1: relate mode - crosshair cursor, picked-node ring, and the cursor-following ghost edge */
 .kg-relating .kg-node,.kg-relating .kg-svg{cursor:crosshair}
 .kg-node.rel circle{stroke:var(--accent);stroke-width:2.5;transform:scale(1.1)}
@@ -3451,7 +3493,10 @@ body.preview-open .thread{font-size:.9em}
 .kg-relate-label::placeholder{color:var(--txt-3)}
 .kg-relate-bar .btn-mini{margin-left:auto}
 .kg-relate-bar .btn-mini+.btn-mini{margin-left:6px}
-.kg-label{fill:var(--txt-2);font-size:9.5px;font-family:inherit;text-anchor:middle;paint-order:stroke;stroke:var(--bg-0);stroke-width:3px;stroke-linejoin:round;transition:fill var(--t)}
+.kg-label{fill:var(--txt-2);font-size:calc(9.5px * var(--kg-ls,1));font-family:inherit;text-anchor:middle;paint-order:stroke;stroke:var(--bg-0);stroke-width:calc(3px * var(--kg-ls,1));stroke-linejoin:round;transition:fill var(--t)}
+/* P-KG-FLAT.1 (ADR-0471): zoomed out, only hubs and the nodes you are working with keep a label */
+.kg-svg.kg-lod .kg-node:not(.hub):not(.sel):not(.match):not(.rel):not(:hover) .kg-label{display:none}
+.kg-svg.kg-lod .kg-node.hub .kg-label{fill:var(--txt)}
 .kg-node:hover .kg-label,.kg-node.sel .kg-label{fill:var(--txt)}
 .kg-side-head{display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13.5px}
 .kg-side-head b{color:var(--txt);min-width:0;overflow:hidden;text-overflow:ellipsis}

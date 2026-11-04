@@ -18,14 +18,25 @@
 // while the user is actually dragging a node.
 
 import type { GraphNode, PersonalGraphData } from "./bridge.ts";
-import { fitTransform, frameWork, nodeAtPoint, presettle, settleDone, settleStart, stepForces, togglePick } from "./kg_ops.ts";
+import { type FitBox, fitTransform, frameWork, hubIds, nodeAtPoint, presettle, robustBox, seedOrder, settleDone, settleStart, spiralPoint, stepForces, togglePick, zoomLod } from "./kg_ops.ts";
 
-const KIND_COLOR: Record<string, string> = {
+export const KIND_COLOR: Record<string, string> = {
   preference: "#46c8dc", interest: "#7ef0a8", decision: "#5e8df2", behavior: "#e8b23c",
   personality: "#e07bf0", skill: "#9bd2e0", goal: "#f3b8ff", relationship: "#84e3a6", link: "#aeb4c6",
 };
-const TRUST_COLOR: Record<string, string> = { trusted: "#46d27e", untrusted: "#5e8df2", suspicious: "#e8b23c", quarantined: "#ef5f5f" };
+export const TRUST_COLOR: Record<string, string> = { trusted: "#46d27e", untrusted: "#5e8df2", suspicious: "#e8b23c", quarantined: "#ef5f5f" };
 export const kindLabel = (k: string): string => k.replace(/^user:/, "");
+// P-KG-ORBIT.1 (ADR-0470): a stable hue for kinds outside KIND_COLOR (code-graph directories and symbol
+// kinds), so the orbit view and the search dropdown can tell kinds apart. The flat view keeps its grey.
+const KIND_PALETTE = ["#46c8dc", "#7ef0a8", "#5e8df2", "#e8b23c", "#e07bf0", "#f3b8ff", "#84e3a6", "#f08a5d", "#9bd2e0", "#c3e86b", "#ff9db0", "#b39cff"];
+export function kindColor(kind: string): string {
+  const k = kindLabel(kind);
+  const known = KIND_COLOR[k];
+  if (known) return known;
+  let h = 0;
+  for (let i = 0; i < k.length; i++) h = (Math.imul(h, 31) + k.charCodeAt(i)) >>> 0;
+  return KIND_PALETTE[h % KIND_PALETTE.length]!;
+}
 
 interface SimNode extends GraphNode { x: number; y: number; vx: number; vy: number; r: number }
 // P-KG-REL.1 (ADR-0075): callbacks for user-authored relationships. onRelate fires on a drag from one
@@ -36,6 +47,7 @@ export interface GraphHandle {
   setRelateMode: (on: boolean) => void; clearRelatePicks: () => void;
   setSearch: (ids: Set<string> | null) => void; // P-KG-SEARCH.1: highlight + center matching nodes
   setCalm: (on: boolean) => void; // P-PERF.2: live calm toggle (plug/unplug) - no remount, layout preserved
+  select: (id: string | null) => void; // P-KG-ORBIT.1: select + bring a node into view, firing onSelect (search dropdown)
 }
 // P-PERF.2 (ADR-0129): per-mount fidelity knobs from the power/spec tier (see perf_tier.ts graphOpts).
 // P-PERF.3 (ADR-0130): layout continuity - `positions` seeds nodes from a previous mount (a fully seeded
@@ -76,17 +88,20 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   let searchIds: Set<string> | null = null; // P-KG-SEARCH.1: matching nodes (null = no active search)
 
   // P-PERF.3: seed from the previous layout when we have it - a returning node lands where the user
-  // last saw it; only genuinely NEW nodes take the circle seeding (and then only they need to settle).
+  // last saw it; only genuinely NEW nodes take the spiral seeding (and then only they need to settle).
+  // P-KG-FLAT.1 (ADR-0471): a cold node starts on a sunflower spiral in BFS order (linked nodes side by
+  // side, unlinked ones on the rim) instead of a 130 px ring, which exploded big graphs into dust.
   let seededCount = 0;
+  const dataIx = new Map(data.nodes.map((n, i) => [n.id, i]));
+  const dataSprings = data.edges.flatMap((e) => { const a = dataIx.get(e.from), b = dataIx.get(e.to); return a === undefined || b === undefined ? [] : [[a, b] as const]; });
+  const seedRank = new Array<number>(data.nodes.length);
+  seedOrder(data.nodes.length, dataSprings, data.nodes.map((n) => n.count)).forEach((idx, k) => { seedRank[idx] = k; });
   const nodes: SimNode[] = data.nodes.map((n, i) => {
+    const r = 7 + Math.min(15, n.count * 2.5);
     const p = perf.positions?.get(n.id);
-    if (p) { seededCount++; return { ...n, x: p.x, y: p.y, vx: 0, vy: 0, r: 7 + Math.min(15, n.count * 2.5) }; }
-    if (staticLayout) {
-      const angle = i * Math.PI * (3 - Math.sqrt(5)), radius = 52 * Math.sqrt(i);
-      return { ...n, x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius, vx: 0, vy: 0, r: 7 + Math.min(15, n.count * 2.5) };
-    }
-    const a = (i / Math.max(1, data.nodes.length)) * Math.PI * 2;
-    return { ...n, x: cx + Math.cos(a) * 130 + (i % 7) * 4, y: cy + Math.sin(a) * 130 + (i % 5) * 4, vx: 0, vy: 0, r: 7 + Math.min(15, n.count * 2.5) };
+    if (p) { seededCount++; return { ...n, x: p.x, y: p.y, vx: 0, vy: 0, r }; }
+    const s = staticLayout ? spiralPoint(i, cx, cy, 52) : spiralPoint(seedRank[i]!, cx, cy);
+    return { ...n, x: s.x, y: s.y, vx: 0, vy: 0, r };
   });
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const edges = data.edges.filter((e) => byId.has(e.from) && byId.has(e.to));
@@ -98,7 +113,9 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   };
   let springs = staticLayout ? [] : buildSprings();
 
-  const colorOf = (n: SimNode): string => (lens === "trust" ? TRUST_COLOR[n.trust] : KIND_COLOR[kindLabel(n.kind)]) ?? "#888";
+  // P-KG-FLAT.1: unknown kinds (code-graph dirs, symbol kinds, KB page kinds) get the same stable hue as
+  // in Orbit instead of one flat grey, so the flat view reads by kind too.
+  const colorOf = (n: SimNode): string => (lens === "trust" ? TRUST_COLOR[n.trust] ?? "#888" : kindColor(n.kind));
 
   const svg = make("svg"); svg.setAttribute("class", "kg-svg"); svg.setAttribute("width", "100%"); svg.setAttribute("height", "100%");
 
@@ -139,13 +156,35 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
     return { e, path, parts };
   });
 
-  const elFor = new Map<string, { g: SVGGElement; c: SVGCircleElement }>();
-  for (const n of nodes) {
+  const elFor = new Map<string, { g: SVGGElement; c: SVGCircleElement; t: SVGTextElement }>();
+  const mkNodeEl = (n: SimNode) => {
     const g = make("g"); g.setAttribute("class", "kg-node"); (g as SVGGElement & { dataset: DOMStringMap }).dataset.id = n.id;
-    const c = make("circle"); c.setAttribute("r", String(n.r));
-    const t = make("text"); t.setAttribute("class", "kg-label"); t.setAttribute("y", String(-n.r - 5)); t.textContent = n.name.length > 22 ? n.name.slice(0, 21) + "…" : n.name;
-    g.append(c, t); nodeG.append(g); elFor.set(n.id, { g, c });
-  }
+    const c = make("circle");
+    const t = make("text"); t.setAttribute("class", "kg-label");
+    t.textContent = n.name.length > 22 ? n.name.slice(0, 21) + "…" : n.name;
+    g.append(c, t); nodeG.append(g); elFor.set(n.id, { g, c, t });
+  };
+  for (const n of nodes) mkNodeEl(n);
+
+  // P-KG-FLAT.1 (ADR-0471): zoom level of detail. Zoomed out, every label used to render as an
+  // unreadable smear and dots shrank to specks; now dots keep a tappable size, label text grows against
+  // the zoom-out, and only hubs (plus hovered / selected / matched / picked nodes, via CSS) keep a label.
+  let hubs = hubIds(nodes);
+  let lodScale = -1;
+  const sizeNodes = (force = false) => {
+    if (!force && lodScale > 0 && Math.abs(scale - lodScale) < lodScale * 0.04) return; // ignore tiny zoom jitter
+    lodScale = scale;
+    const lod = zoomLod(scale);
+    svg.classList.toggle("kg-lod", !lod.allLabels);
+    svg.style.setProperty("--kg-ls", lod.labelScale.toFixed(2));
+    for (const n of nodes) {
+      const e = elFor.get(n.id); if (!e) continue;
+      const rr = n.r * lod.nodeGrow;
+      e.c.setAttribute("r", rr.toFixed(1));
+      e.t.setAttribute("y", (-rr - 5 * lod.labelScale).toFixed(1));
+      e.g.classList.toggle("hub", hubs.has(n.id));
+    }
+  };
 
   // quadratic-bezier helpers (a gentle, consistent curve per edge)
   const ctrl = (a: SimNode, b: SimNode): [number, number] => {
@@ -177,6 +216,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
       e.g.classList.toggle("dim", !!searchIds && !searchIds.has(n.id)); // ...and dim the rest
     }
     vp.setAttribute("transform", `translate(${tx.toFixed(1)},${ty.toFixed(1)}) scale(${scale.toFixed(3)})`);
+    sizeNodes();
   };
   // The CHEAP pass: move the flow particles along each edge's cached curve. Keeps the graph looking alive
   // without re-deriving any geometry. Skipped entirely under reduced-motion (particles are hidden).
@@ -198,11 +238,13 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   // ── smooth zoom-to-fit (eased toward a target transform over a few frames) ──
   let fitT: { sc: number; tx: number; ty: number } | null = null;
   const computeFit = (subset?: SimNode[], snap = false) => {
-    const fitNodes = subset && subset.length ? subset : nodes; // P-KG-SEARCH.1: fit to matches when given
-    if (!fitNodes.length) return;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const n of fitNodes) { minX = Math.min(minX, n.x - n.r); minY = Math.min(minY, n.y - n.r); maxX = Math.max(maxX, n.x + n.r); maxY = Math.max(maxY, n.y + n.r); }
-    const t = fitTransform({ minX, minY, maxX, maxY }, W, H); // low min-scale floor → big graphs actually fit (#112)
+    let box: FitBox | null;
+    if (subset && subset.length) { // P-KG-SEARCH.1: fit exactly to the matches
+      box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+      for (const n of subset) { box.minX = Math.min(box.minX, n.x - n.r); box.minY = Math.min(box.minY, n.y - n.r); box.maxX = Math.max(box.maxX, n.x + n.r); box.maxY = Math.max(box.maxY, n.y + n.r); }
+    } else box = robustBox(nodes); // P-KG-FLAT.1: a few stragglers no longer shrink the whole graph
+    if (!box) return;
+    const t = fitTransform(box, W, H); // low min-scale floor → big graphs actually fit (#112)
     if (!t) return;
     // P-KGVIZ.1: a snapped fit opens the view AT the final center - no camera glide on a formed mount.
     if (snap) { scale = t.sc; tx = t.tx; ty = t.ty; fitT = null; return; }
@@ -264,7 +306,13 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   const reheat = () => { if (!staticLayout && !stopped && frames > SETTLE - 160) { frames = SETTLE - 160; kick(); } };
 
   let pan: { x: number; y: number } | null = null, moved = false;
-  const toGraph = (ev: MouseEvent): [number, number] => { const r = svg.getBoundingClientRect(); return [(ev.clientX - r.left - tx) / scale, (ev.clientY - r.top - ty) / scale]; };
+  // Pointer offset in layout px: the bounding rect is visual px, which differ under an ancestor CSS `zoom`
+  // (the browser build's app zoom), so a dragged node or the wheel anchor drifted off the cursor.
+  const svgPoint = (ev: MouseEvent): [number, number] => {
+    const r = svg.getBoundingClientRect(), k = r.width ? svg.clientWidth / r.width : 1;
+    return [(ev.clientX - r.left) * k, (ev.clientY - r.top) * k];
+  };
+  const toGraph = (ev: MouseEvent): [number, number] => { const [mx, my] = svgPoint(ev); return [(mx - tx) / scale, (my - ty) / scale]; };
   const onDown = (ev: MouseEvent) => {
     moved = false; fitT = null;
     const t = (ev.target as Element).closest(".kg-node") as (SVGGElement & { dataset: DOMStringMap }) | null;
@@ -293,7 +341,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   };
   const onWheel = (ev: WheelEvent) => {
     ev.preventDefault(); fitT = null; userMoved = true;
-    const r = svg.getBoundingClientRect(), mx = ev.clientX - r.left, my = ev.clientY - r.top;
+    const [mx, my] = svgPoint(ev);
     const ns = Math.max(0.3, Math.min(3, scale * Math.exp(-ev.deltaY * 0.0015)));
     tx = mx - (mx - tx) * (ns / scale); ty = my - (my - ty) * (ns / scale); scale = ns; paint();
   };
@@ -326,13 +374,6 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   // Position-preserving merge of fresh data into the LIVE simulation (issue #54 follow-up): keep
   // existing nodes AND their x/y (so the layout doesn't jump), add new nodes near the centre so they
   // animate in, drop removed ones, then rebuild the cheap edge layer. Reheats so new nodes settle.
-  const mkNodeEl = (n: SimNode) => {
-    const g = make("g"); g.setAttribute("class", "kg-node"); (g as SVGGElement & { dataset: DOMStringMap }).dataset.id = n.id;
-    const c = make("circle"); c.setAttribute("r", String(n.r));
-    const t = make("text"); t.setAttribute("class", "kg-label"); t.setAttribute("y", String(-n.r - 5));
-    t.textContent = n.name.length > 22 ? n.name.slice(0, 21) + "…" : n.name;
-    g.append(c, t); nodeG.append(g); elFor.set(n.id, { g, c });
-  };
   const update = (next: PersonalGraphData) => {
     const incoming = new Map(next.nodes.map((n) => [n.id, n]));
     for (let i = nodes.length - 1; i >= 0; i--) { // drop removed nodes
@@ -345,11 +386,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
       if (ex) {
         ex.name = nd.name; ex.kind = nd.kind; ex.trust = nd.trust; ex.count = nd.count; ex.r = r;
         const el = elFor.get(nd.id);
-        if (el) {
-          el.c.setAttribute("r", String(r));
-          const lbl = el.g.querySelector(".kg-label") as SVGTextElement | null;
-          if (lbl) { lbl.textContent = nd.name.length > 22 ? nd.name.slice(0, 21) + "…" : nd.name; lbl.setAttribute("y", String(-r - 5)); }
-        }
+        if (el) el.t.textContent = nd.name.length > 22 ? nd.name.slice(0, 21) + "…" : nd.name; // radius + label offset: sizeNodes below
       } else {
         const sn: SimNode = { ...nd, x: cx + (Math.random() - 0.5) * 60, y: cy + (Math.random() - 0.5) * 60, vx: 0, vy: 0, r };
         nodes.push(sn); byId.set(sn.id, sn); mkNodeEl(sn);
@@ -369,6 +406,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
     // whole graph for 160 visible frames). Newcomers nestle among inertia-pinned neighbors silently.
     if (!staticLayout && !drag) { presettle(nodes, springs, cx, cy, { settle: SETTLE, frames: Math.max(0, SETTLE - 160), deadlineMs: 200 }); frames = SETTLE; }
     else reheat(); // mid-drag: keep the live sim (the hold must stay under the cursor)
+    hubs = hubIds(nodes); sizeNodes(true); // new radii, labels and hub set at the current zoom
     paint();
   };
 
@@ -399,6 +437,15 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
       partG.style.display = on ? "none" : "";
       if (!on) kick(); // particles need the loop running again (it may have parked while calm)
       paint();
+    },
+    select(id) { // P-KG-ORBIT.1: the search dropdown's pick - select, glide the node to the center, open its panel
+      if (!id) { if (sel) { sel = null; onSelect(null); paint(); } return; }
+      const n = byId.get(id);
+      if (!n) { onSelect(id); return; } // not drawn (capped out): the side panel still opens
+      sel = id; userMoved = true;
+      const sc = Math.max(scale, 1);
+      fitT = { sc, tx: W / 2 - n.x * sc, ty: H / 2 - n.y * sc }; kick();
+      onSelect(id); paint();
     },
   };
 }
