@@ -23,6 +23,7 @@ import type { Api, AssistantMessage, Context, FetchImpl, Model, SimpleStreamOpti
 import { createInitialResponsesAssistantMessage } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { getProxyForUrl } from "@oh-my-pi/pi-ai/utils/proxy";
 
 /** Selects the sign-in: `key` (default, omp's own path), `managed-identity`, or `azure-cli`. */
 export const AZURE_AUTH_MODE_ENV = "AZURE_OPENAI_AUTH_MODE";
@@ -237,13 +238,20 @@ export function createTokenSource(config: AzureEntraConfig, deps: EntraSourceDep
 }
 
 /** The request transport for one turn: Azure's key header out, the Entra bearer in, and a 401 drops the
- *  held token so the next turn signs in again. */
-export function bearerFetch(token: string, source: EntraTokenSource, base: FetchImpl): FetchImpl {
+ *  held token so the next turn signs in again. The proxy is chosen by omp's own resolver (`PI_PROXY_<PROVIDER>`,
+ *  `PI_PROXY`, `HTTPS_PROXY`, honoring `NO_PROXY` and never for local or metadata hosts) and set on the request
+ *  explicitly, so a host that must reach the account through an egress proxy (the remote spoke, add-on
+ *  ADR-A049) does not depend on the runtime's own reading of the proxy environment. A proxy omp's transport
+ *  already set wins. */
+export function bearerFetch(token: string, source: EntraTokenSource, base: FetchImpl, provider: string): FetchImpl {
   return async (input, init) => {
     const headers = new Headers(init?.headers);
     headers.delete("api-key");
     headers.set("Authorization", `Bearer ${token}`);
-    const res = await base(input, { ...init, headers });
+    const given = init && "proxy" in init && typeof init.proxy === "string" && init.proxy ? init.proxy : undefined;
+    const proxy = given ?? getProxyForUrl(provider, new URL(input instanceof Request ? input.url : input.toString()));
+    const next: RequestInit & { proxy?: string } = { ...init, headers, ...(proxy ? { proxy } : {}) };
+    const res = await base(input, next);
     if (res.status === 401) source.invalidate();
     return res;
   };
@@ -290,7 +298,7 @@ export function makeAzureEntraStream(deps: AzureEntraStreamDeps) {
       const inner = streamSimple(
         { ...target, baseUrl: model.baseUrl, ...(model.headers ? { headers: model.headers } : {}) },
         context,
-        { ...options, apiKey: ENTRA_KEY_PLACEHOLDER, fetch: bearerFetch(token, deps.source, deps.fetch ?? globalThis.fetch), maxInFlightRequests: {} },
+        { ...options, apiKey: ENTRA_KEY_PLACEHOLDER, fetch: bearerFetch(token, deps.source, deps.fetch ?? globalThis.fetch, model.provider), maxInFlightRequests: {} },
       );
       out.forwardLocalWorkFrom(inner);
       try {
