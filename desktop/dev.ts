@@ -2189,13 +2189,17 @@ function agentScanner(): ScannerClient {
 
 // P-CTRL.2 (ADR-0438): the external-controller policy core. Pairings (hashed tokens, fixed workspace, owned
 // lanes) persist owner-only under the engine data root; the prompt scan reuses the fail-closed agent scanner.
-// ADR-0482: each controller lane's restart record sits beside the pairings.
+// ADR-0482: each controller lane's restart record sits beside the pairings. The restore gate is shut from here,
+// before the server binds, until the boot-time restore (near the end of this file) settles, so a controller that
+// asks in between waits for the full lane list instead of reading a half-restored one.
+const controllerRestore = Promise.withResolvers<void>();
 const controllerDeps: ControllerDeps = {
   store: new PairingStore(join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "controller-pairings.json")),
   lanes: new ControllerLaneStore(join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "controller-lanes.json")),
   fleet,
   scan: (text) => scanAndDecide(agentScanner(), text),
   sink: EVENTS_LOG_PATH,
+  restoring: controllerRestore.promise,
 };
 
 // P-AGENT.9/.10/.17: the ONE gated import path — every external spec (share file, n8n workflow, template)
@@ -6930,11 +6934,12 @@ backend.startAutomationScheduler();
 // P-SCHED.1 (ADR-0443): the scheduled LANE jobs tick beside it, same envelope (only while the app runs).
 jobScheduler.start();
 // ADR-0482: controller lanes the previous engine ran come back idle on their own lane ids and omp sessions (after
-// the child env above is set, so a restored lane is wired like a new one). Detached: the bind never waits on omp.
+// the child env above is set, so a restored lane is wired like a new one). Detached: the bind never waits on omp;
+// controller routes do (the gate set with controllerDeps), and open when this settles, success or not.
 void restoreControllerLanes(controllerDeps).then(
   (back) => { if (back.length) console.log(`[controller] restored ${back.length} lane(s): ${back.join(", ")}`); },
   (e) => console.warn("[controller] lane restore failed:", e),
-);
+).finally(() => { controllerDeps.restoring = null; controllerRestore.resolve(); });
 
 console.log(`\n  ◆ LucidAgentIDE desktop renderer (dev)\n  → http://localhost:${server.port}\n`);
 

@@ -72,6 +72,30 @@ export interface ControllerDeps {
   scan(text: string): Promise<GateDecision>;
   /** Where controller events append (the engine's EVENTS_LOG_PATH; a collector in tests). */
   sink: string | EventSink;
+  /** ADR-0482: set from engine start until the boot-time lane restore has finished (dev.ts sets it before the
+   *  server binds and clears it when restoreControllerLanes settles). While set, every route waits for it (at most
+   *  `restoreWaitMs`, default RESTORE_WAIT_MS) and then answers 503, so no client ever sees a half-restored
+   *  lane list and mistakes a lane still coming back for one that ended. */
+  restoring?: Promise<unknown> | null;
+  restoreWaitMs?: number;
+}
+
+/** How long a controller request waits for the boot-time lane restore before it is told to retry. Below the spoke
+ *  agent's 20 s request timeout, so it gets a clear 503 rather than a dropped connection. */
+export const RESTORE_WAIT_MS = 15_000;
+export const RESTORING_ERROR = "the engine is restoring controller lanes after a restart; retry shortly";
+
+/** True once the restore has settled (or none is running), false when the wait ran out first. */
+async function restoreSettled(deps: ControllerDeps): Promise<boolean> {
+  const pending = deps.restoring;
+  if (!pending) return true;
+  const clock = Promise.withResolvers<boolean>();
+  const timer = setTimeout(() => clock.resolve(false), deps.restoreWaitMs ?? RESTORE_WAIT_MS);
+  try {
+    return await Promise.race([pending.then(() => true, () => true), clock.promise]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Validated (UnknownEventError on an off-enum name) and stamped with run_id/session_id (invariant #8). A
@@ -164,6 +188,11 @@ export const controllerPreamble = (name: string) =>
 /** The one entry point. `pairing` is the header token's verified pairing (null for the UI token or none). */
 export async function handleController(req: Request, path: string, pairing: Pairing | null, deps: ControllerDeps): Promise<Response> {
   const url = new URL(req.url);
+  // ADR-0482: nothing answers from a half-restored engine. A lane list read before the restore finished would show
+  // a lane that is still coming back as gone, and a controller would end its task (seen live on the Azure spoke).
+  // Human routes wait too: an unpair racing the restore could leave a revoked pairing's lane running. The 403 for a
+  // request with no pairing does not depend on lanes, but waiting for it costs nothing and keeps one rule.
+  if (!(await restoreSettled(deps))) return reply(503, { ok: false, error: RESTORING_ERROR });
 
   // ── Human routes (UI token; the controller token never reaches these, apiAuthorized refuses it) ───────────
   if (path === "/api/controller/pair") {

@@ -21,7 +21,7 @@ import type { TelemetryEvent } from "../../harness/telemetry/events.ts";
 import { FleetLaneManager } from "../fleet_lanes.ts";
 import type { SystemSnapshot } from "../system_profile.ts";
 import { ControllerLaneStore } from "./lane_store.ts";
-import { handleController, INTERRUPTED_NOTE, restoreControllerLanes, type ControllerDeps } from "./routes.ts";
+import { handleController, INTERRUPTED_NOTE, restoreControllerLanes, RESTORING_ERROR, type ControllerDeps } from "./routes.ts";
 import { PairingStore, type Pairing } from "./store.ts";
 
 const FAKE = join(import.meta.dir, "..", "..", "harness", "mcp", "testing", "fake_acp_agent.ts");
@@ -227,6 +227,42 @@ describe("ADR-0482: lanes survive an engine restart", () => {
     // the cap counts the restored lane
     expect((await b.call("spawn", pairing, {})).status).toBe(200);
     expect((await b.call("spawn", pairing, {})).status).toBe(429);
+  }, TIMEOUT);
+
+  test("a controller that lists lanes while the restore is still running gets the full set, never a half list", async () => {
+    const { token, laneId, b } = await diedMidTurn({ loadSession: true });
+    const pairing = (await b.store.verify(token))!;
+    // As dev.ts does: the gate is shut before anything can ask, and the restore starts later (here: on release).
+    const start = Promise.withResolvers<void>();
+    const restore = start.promise.then(() => restoreControllerLanes(b.deps));
+    b.deps.restoring = restore.finally(() => { b.deps.restoring = null; });
+    // Both requests are in flight before the restore has spawned anything; without the gate they would answer
+    // with no lanes and a 404, which is what made a live spoke mark its task stopped.
+    const listing = b.call("lanes", pairing);
+    const status = b.call("status", pairing, undefined, `?laneId=${laneId}`);
+    start.resolve();
+    const listed = await listing;
+    expect(listed.status).toBe(200);
+    expect((listed.json.data!.lanes as { id: string }[]).map((l) => l.id)).toEqual([laneId]);
+    expect((await status).status).toBe(200);
+    expect(await restore).toEqual([laneId]);
+  }, TIMEOUT);
+
+  test("a restore that outlasts the wait answers 503 restoring (every route), and the routes open when it ends", async () => {
+    const e = engine(temp("data"));
+    const { pairing } = await e.pairRemote(realpathSync(temp("ws")));
+    const stuck = Promise.withResolvers<void>();
+    e.deps.restoring = stuck.promise;
+    // The production wait is RESTORE_WAIT_MS; a short one keeps this test from sitting on a real 15 s clock.
+    e.deps.restoreWaitMs = 50;
+    for (const [path, who] of [["lanes", pairing], ["spawn", pairing], ["lanes", null]] as const) {
+      const r = await e.call(path, who, path === "spawn" ? {} : undefined);
+      expect([r.status, r.json.error]).toEqual([503, RESTORING_ERROR]);
+    }
+    expect((await e.fleet.status()).lanes).toEqual([]); // the refused spawn started nothing
+    stuck.resolve();
+    e.deps.restoring = null;
+    expect((await e.call("lanes", pairing)).status).toBe(200);
   }, TIMEOUT);
 
   test("without session/load the lane gets a fresh session that carries the recorded transcript", async () => {
