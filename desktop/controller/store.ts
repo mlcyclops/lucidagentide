@@ -27,6 +27,20 @@ export interface Pairing {
   createdAt: string;
   /** Lane ids this pairing spawned: the ONLY lanes it can see or act on. */
   lanes: string[];
+  /** P-CTRL-REMOTE.1 (ADR-0476): set by the human at pairing time, never by the controller. Its lanes run the
+   *  tiered remote policy and accept decisions verified against `root`. */
+  remote?: RemotePolicy;
+}
+
+export interface RemotePolicy {
+  /** The owner root's P-256 public key, base64url SPKI DER. */
+  root: string;
+  /** How long a parked ask waits for a remote decision before it is denied (1 to 24). */
+  approvalHours: number;
+  /** Run the off-task check before a T0/T1 action runs on its own. */
+  offTask: boolean;
+  /** The newest root-signed CRL this engine has seen. Only ever moves forward. */
+  crl: { version: number; serials: string[] };
 }
 
 /** `lucidctl_<16 hex id>_<43 base64url secret>`; the id lets verify() hash against one record, not all. */
@@ -58,13 +72,14 @@ export class PairingStore {
   }
 
   /** Mint a pairing and its token. The token is returned ONCE and never stored in the clear. */
-  async pair(name: string, workspace: string): Promise<{ ok: true; pairing: Pairing; token: string } | { ok: false; error: string }> {
+  async pair(name: string, workspace: string, remote?: RemotePolicy): Promise<{ ok: true; pairing: Pairing; token: string } | { ok: false; error: string }> {
     if (this.#broken) return { ok: false, error: this.#broken };
     if (!PAIRING_NAME_RE.test(name)) return { ok: false, error: "invalid pairing name" };
     if (this.#pairings.some((p) => p.name === name)) return { ok: false, error: "a pairing with that name exists" };
+    if (remote && !isRemotePolicy(remote)) return { ok: false, error: "invalid remote policy" };
     const id = randomBytes(8).toString("hex");
     const token = `lucidctl_${id}_${randomBytes(32).toString("base64url")}`;
-    const pairing: Pairing = { id, name, workspace, hash: await Bun.password.hash(token, { algorithm: "argon2id" }), createdAt: new Date().toISOString(), lanes: [] };
+    const pairing: Pairing = { id, name, workspace, hash: await Bun.password.hash(token, { algorithm: "argon2id" }), createdAt: new Date().toISOString(), lanes: [], ...(remote ? { remote } : {}) };
     this.#pairings.push(pairing);
     this.#save();
     return { ok: true, pairing, token };
@@ -101,6 +116,19 @@ export class PairingStore {
     this.#save();
   }
 
+  /** The pairing that spawned `laneId`, for audit lines raised inside the fleet (P-CTRL-REMOTE.1). */
+  pairingForLane(laneId: string): Pairing | null {
+    return this.#pairings.find((p) => p.lanes.includes(laneId)) ?? null;
+  }
+
+  /** Record a newer CRL for a remote pairing. An older or equal version changes nothing (tighten only). */
+  advanceCrl(pairingId: string, crl: { version: number; serials: string[] }): void {
+    const p = this.#pairings.find((x) => x.id === pairingId);
+    if (!p?.remote || crl.version <= p.remote.crl.version) return;
+    p.remote.crl = { version: crl.version, serials: [...crl.serials] };
+    this.#save();
+  }
+
   #save(): void {
     mkdirSync(dirname(this.#file), { recursive: true, mode: 0o700 });
     const tmp = `${this.#file}.tmp-${process.pid}`;
@@ -112,5 +140,13 @@ export class PairingStore {
 function isPairing(v: unknown): v is Pairing {
   const p = v as Pairing;
   return !!p && typeof p.id === "string" && typeof p.name === "string" && typeof p.workspace === "string" && typeof p.hash === "string"
-    && typeof p.createdAt === "string" && Array.isArray(p.lanes) && p.lanes.every((l) => typeof l === "string");
+    && typeof p.createdAt === "string" && Array.isArray(p.lanes) && p.lanes.every((l) => typeof l === "string")
+    && (p.remote === undefined || isRemotePolicy(p.remote));
+}
+
+function isRemotePolicy(v: unknown): v is RemotePolicy {
+  const r = v as RemotePolicy;
+  return !!r && typeof r.root === "string" && /^[A-Za-z0-9_-]{40,400}$/.test(r.root)
+    && Number.isInteger(r.approvalHours) && r.approvalHours >= 1 && r.approvalHours <= 24 && typeof r.offTask === "boolean"
+    && !!r.crl && Number.isSafeInteger(r.crl.version) && r.crl.version >= 0 && Array.isArray(r.crl.serials) && r.crl.serials.every((s) => typeof s === "string");
 }

@@ -22,11 +22,14 @@ import type { EventName } from "../../harness/contracts.ts";
 import type { GateDecision } from "../../harness/security/gate.ts";
 import { Telemetry, type EventSink } from "../../harness/telemetry/events.ts";
 import type { LaneEvent, LaneView } from "../fleet_lanes.ts";
-import { PAIRING_NAME_RE, type Pairing, type PairingStore } from "./store.ts";
+import { DEFAULT_APPROVAL_HOURS, MAX_APPROVAL_HOURS, p256FromSpki, verifyRemoteDecision, type RemoteAsk } from "./remote_policy.ts";
+import { PAIRING_NAME_RE, type Pairing, type PairingStore, type RemotePolicy } from "./store.ts";
 
 /** Routes the controller token opens. pair/unpair are NOT here: they stay on the UI token. */
 export const CONTROLLER_ROUTES: ReadonlySet<string> = new Set(
-  ["lanes", "spawn", "prompt", "status", "result", "cancel"].map((r) => `/api/controller/${r}`),
+  // ask, decide, deny: P-CTRL-REMOTE.1 (ADR-0476). The controller can read a remote ask and deny it; an allow
+  // needs a decision the engine verifies against the paired root, so the controller only carries it.
+  ["lanes", "spawn", "prompt", "status", "result", "cancel", "ask", "decide", "deny"].map((r) => `/api/controller/${r}`),
 );
 
 /** ADR-0425: at most two controller-owned live lanes per pairing. */
@@ -36,7 +39,9 @@ const MAX_PROMPT_CHARS = 32_000;
 export interface ControllerDeps {
   store: PairingStore;
   fleet: {
-    spawn(opts: { cwd: string; name?: string; supervised: true }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }>;
+    spawn(opts: { cwd: string; name?: string; supervised: true; remote?: { approvalHours: number; offTask: boolean } }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }>;
+    pendingAsk(laneId: string): RemoteAsk | null;
+    answerAsk(laneId: string, askId: string, allow: boolean): { ok: boolean };
     prompt(laneId: string, text: string, sink: (e: LaneEvent) => void): Promise<void>;
     status(): Promise<{ lanes: LaneView[] }>;
     laneTranscript(laneId: string): { role: "user" | "assistant"; text: string }[];
@@ -53,6 +58,13 @@ export interface ControllerDeps {
  *  failed write throws, so a prompt whose audit line cannot be written never starts. */
 function emit(deps: ControllerDeps, event: EventName, ids: { runId: string; sessionId: string }, fields: Record<string, unknown>): void {
   new Telemetry({ runId: ids.runId, sessionId: ids.sessionId, sink: deps.sink }).emit(event, fields);
+}
+
+/** P-CTRL-REMOTE.1 (ADR-0476): the audit line for a tier-policy verdict raised inside the fleet. Throws when it
+ *  cannot be written, so the fleet refuses the action rather than run it unrecorded. Metadata only. */
+export function auditTierVerdict(deps: ControllerDeps, laneId: string, v: { ruling: string; tier: string; reason: string }): void {
+  const p = deps.store.pairingForLane(laneId);
+  emit(deps, "controller_ruling", { runId: Snowflake.next(), sessionId: `controller:${p?.id ?? "unknown"}` }, { pairing: p?.name ?? "", lane_id: laneId, ruling: v.ruling, tier: v.tier, reason: v.reason.slice(0, 200), backend: "tier-policy" });
 }
 
 /** Absolute, an existing folder, symlinks resolved; null otherwise. */
@@ -82,6 +94,13 @@ async function strictBody(req: Request, keys: string[], required: string[]): Pro
   return b as Record<string, string>;
 }
 
+/** The exact body of each lane-scoped POST route; any other lane-scoped POST takes `laneId` only. */
+const BODY_KEYS: Record<string, { allowed: string[]; required: string[] }> = {
+  "/api/controller/prompt": { allowed: ["laneId", "text"], required: ["laneId", "text"] },
+  "/api/controller/decide": { allowed: ["laneId", "askId", "decision", "cert", "crl"], required: ["laneId", "askId", "decision", "cert"] },
+  "/api/controller/deny": { allowed: ["laneId", "askId"], required: ["laneId", "askId"] },
+};
+
 /** The pairing's own lanes that still exist in the fleet. */
 async function ownLanes(deps: ControllerDeps, pairing: Pairing): Promise<LaneView[]> {
   const { lanes } = await deps.fleet.status();
@@ -101,11 +120,19 @@ export async function handleController(req: Request, path: string, pairing: Pair
 
   // ── Human routes (UI token; the controller token never reaches these, apiAuthorized refuses it) ───────────
   if (path === "/api/controller/pair") {
-    const b = await strictBody(req, ["name", "workspace"], ["name", "workspace"]);
+    const b = await strictBody(req, ["name", "workspace", "approverRoot", "approvalHours", "offTask"], ["name", "workspace"]);
     if (!b || !PAIRING_NAME_RE.test(b.name!)) return malformed();
     const workspace = await resolveWorkspace(b.workspace!);
     if (!workspace) return reply(400, { ok: false, error: "workspace must be an existing absolute folder" });
-    const r = await deps.store.pair(b.name!, workspace);
+    // P-CTRL-REMOTE.1 (ADR-0476): a human pairing a REMOTE controller names the owner root whose certified hubs
+    // may decide this pairing's parked asks. Without it the pairing is the plain supervised P-CTRL.2 kind.
+    let remote: RemotePolicy | undefined;
+    if (b.approverRoot !== undefined) {
+      const hours = b.approvalHours === undefined ? DEFAULT_APPROVAL_HOURS : Number(b.approvalHours);
+      if (!p256FromSpki(b.approverRoot) || !Number.isInteger(hours) || hours < 1 || hours > MAX_APPROVAL_HOURS || (b.offTask !== undefined && b.offTask !== "on" && b.offTask !== "off")) return malformed();
+      remote = { root: b.approverRoot, approvalHours: hours, offTask: b.offTask !== "off", crl: { version: 0, serials: [] } };
+    } else if (b.approvalHours !== undefined || b.offTask !== undefined) return malformed();
+    const r = await deps.store.pair(b.name!, workspace, remote);
     if (!r.ok) return reply(409, { ok: false, error: r.error });
     emit(deps, "controller_paired", { runId: Snowflake.next(), sessionId: `controller:${r.pairing.id}` }, { pairing: r.pairing.name, pairing_id: r.pairing.id });
     // The token rides this reply once and nowhere else.
@@ -133,14 +160,15 @@ export async function handleController(req: Request, path: string, pairing: Pair
     if (!b || (b.name !== undefined && !PAIRING_NAME_RE.test(b.name))) return malformed();
     const live = (await ownLanes(deps, pairing)).filter((l) => l.status !== "stopped");
     if (live.length >= MAX_LANES_PER_PAIRING) return reply(429, { ok: false, error: `at most ${MAX_LANES_PER_PAIRING} lanes per pairing` });
-    const r = await deps.fleet.spawn({ cwd: pairing.workspace, ...(b.name ? { name: b.name } : {}), supervised: true });
+    const r = await deps.fleet.spawn({ cwd: pairing.workspace, ...(b.name ? { name: b.name } : {}), supervised: true, ...(pairing.remote ? { remote: { approvalHours: pairing.remote.approvalHours, offTask: pairing.remote.offTask } } : {}) });
     if (!r.ok || !r.lane) return reply(503, { ok: false, error: r.reason ?? "lane did not start" });
     deps.store.addLane(pairing.id, r.lane.id);
     return reply(200, { ok: true, data: { lane: laneOut(r.lane) } });
   }
 
   // Every remaining route names one lane, and it must be this pairing's.
-  const b = req.method === "GET" ? null : await strictBody(req, path === "/api/controller/prompt" ? ["laneId", "text"] : ["laneId"], path === "/api/controller/prompt" ? ["laneId", "text"] : ["laneId"]);
+  const keys = BODY_KEYS[path] ?? { allowed: ["laneId"], required: ["laneId"] };
+  const b = req.method === "GET" ? null : await strictBody(req, keys.allowed, keys.required);
   const laneId = req.method === "GET" ? url.searchParams.get("laneId") : b?.laneId;
   if (!laneId) return malformed();
   // ownLanes() filters to this pairing's lanes, so a foreign lane and a missing one are the same 404.
@@ -161,6 +189,41 @@ export async function handleController(req: Request, path: string, pairing: Pair
     // controller that falls 40 turns behind loses the oldest ones. Turn-stable ids if that ever matters.
     const turns = deps.fleet.laneTranscript(laneId).map((t, index) => ({ index, ...t })).filter((t) => t.role === "assistant" && t.index >= Number(sinceRaw)).map(({ index, text }) => ({ index, text }));
     return reply(200, { ok: true, data: { turns, running: deps.fleet.laneRunning(laneId) === true } });
+  }
+
+  // ── P-CTRL-REMOTE.1 (ADR-0476): remote decisions on a parked ask ────────────────────────────────────────
+  if (path === "/api/controller/ask") {
+    if (req.method !== "GET" || [...url.searchParams.keys()].some((k) => k !== "laneId")) return malformed();
+    return reply(200, { ok: true, data: { ask: deps.fleet.pendingAsk(laneId) } });
+  }
+
+  if (path === "/api/controller/deny") {
+    // Refusing is always safe, so the controller may do it on its own (an expired wait, a cancelled task).
+    if (!b) return malformed();
+    const r = deps.fleet.answerAsk(laneId, b.askId!, false);
+    if (!r.ok) return reply(409, { ok: false, error: "no such open ask" });
+    emit(deps, "controller_ruling", ids, { pairing: pairing.name, lane_id: laneId, ruling: "controller_denied", backend: "remote-approval" });
+    return reply(200, { ok: true, data: { allow: false } });
+  }
+
+  if (path === "/api/controller/decide") {
+    if (!b) return malformed();
+    if (!pairing.remote) return reply(409, { ok: false, error: "this pairing has no approver root" });
+    const ask = deps.fleet.pendingAsk(laneId);
+    if (!ask || ask.id !== b.askId) return reply(409, { ok: false, error: "no such open ask" });
+    const v = verifyRemoteDecision({ decision: b.decision!, cert: b.cert!, ...(b.crl !== undefined ? { crl: b.crl } : {}) }, pairing.remote.root, pairing.remote.crl, { lane: laneId, ask: ask.id, digest: ask.digest });
+    if (!v.ok) {
+      if (v.crl) deps.store.advanceCrl(pairing.id, v.crl);
+      emit(deps, "controller_ruling", ids, { pairing: pairing.name, lane_id: laneId, ruling: "remote_refused", tier: ask.tier, backend: "remote-approval", reason: v.reason });
+      return reply(403, { ok: false, error: v.reason });
+    }
+    deps.store.advanceCrl(pairing.id, v.crl);
+    // The audit line lands before the action is released, as for a prompt (a decision that cannot be recorded
+    // never takes effect).
+    emit(deps, "controller_ruling", ids, { pairing: pairing.name, lane_id: laneId, ruling: v.allow ? "remote_approved" : "remote_denied", tier: ask.tier, backend: "remote-approval", approver: v.approver });
+    const r = deps.fleet.answerAsk(laneId, ask.id, v.allow);
+    if (!r.ok) return reply(409, { ok: false, error: "the ask closed before the decision landed" });
+    return reply(200, { ok: true, data: { allow: v.allow, approver: v.approver } });
   }
 
   if (path === "/api/controller/cancel") {

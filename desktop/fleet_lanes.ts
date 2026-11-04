@@ -32,6 +32,7 @@ import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts";
 // P-FLEET.L15 (ADR-0338): the SHARED answerer for omp's form elicitation. The lane used to hand-roll this
 // and got both the options path and the response shape wrong, denying every gated tool call.
 import { elicitationAnswer } from "./exec_policy.ts";
+import { askDigest, canonical, classifyAsk, MAX_REMOTE_INPUT, type RemoteAsk } from "./controller/remote_policy.ts";
 import { FLEET_PRESSURE_PCT, FLEET_SUSTAIN_MS, laneAdmission, pressureOf, pushSample, type LaneAdmission, type PressureSample } from "./fleet_resources.ts";
 import { sampleSystem, type SystemSnapshot } from "./system_profile.ts";
 import { HEALTH_PROBE_NOTE, healthVerdict, newEpisode, onActivity, onProbe, onRecover, type HealthEpisode } from "./health_watch.ts";
@@ -144,6 +145,8 @@ export type LaneEvent =
   | { type: "permission"; summary: string; kind: string }
   /** P-FLEET.L6: an ask was granted WITHOUT a human - full auto-mode or a standing session allow. */
   | { type: "auto-approved"; summary: string; mode: "auto" | "session" }
+  /** P-CTRL-REMOTE.1 (ADR-0476): a remote lane's tier policy ran an action on its own or refused it outright. */
+  | { type: "policy"; verdict: "allowed" | "blocked"; summary: string; tier: string; reason: string }
   /** P-FLEET.L7: the provider's context accounting for THIS lane, so a promoted lane can drive the
    *  composer's token meter with its own figures instead of the master's. `used`/`size` are context
    *  tokens and window; `cost` is USD. All three are MEASURED: the lane emits nothing until omp reports. */
@@ -287,7 +290,16 @@ export interface FleetLaneDeps {
   /** P-REPO.1 (ADR-0406): the repo tracker (repo_probe.ts). `observe` sees every tool_call, `peek` is a
    *  synchronous cached read for the status view. Optional: without it a lane simply reports no repo. */
   repo?: RepoTracker;
+  /** P-CTRL-REMOTE.1 (ADR-0476): does `action` belong to the lane's assignment? Asked before a T0/T1 action
+   *  runs on its own in a remote lane whose pairing turned the check on. Tighten only: anything but "on"
+   *  (including a missing checker or a failure) sends the action to a remote human instead. */
+  offTask?: (lane: { id: string; model: string; assignment: string }, action: string) => Promise<"on" | "off" | "unknown">;
+  /** P-CTRL-REMOTE.1: one audit line per remote-policy verdict (dev.ts emits controller_ruling). Metadata only. */
+  remoteAudit?: (laneId: string, verdict: { ruling: "tier_auto" | "tier_blocked" | "parked" | "off_task"; tier: string; reason: string }) => void;
 }
+
+/** P-CTRL-REMOTE.1: a remote lane's policy, fixed at spawn from its pairing. */
+interface RemoteLanePolicy { approvalMs: number; offTask: boolean }
 
 /** P-REPO.1: what the lane manager needs from the repo tracker. */
 export interface RepoTracker {
@@ -344,8 +356,11 @@ interface Lane {
   hubSessionId: string | null;
   /** Live event sinks (the streaming mini window). */
   sinks: Set<(e: LaneEvent) => void>;
-  /** The unanswered permission ask, if any. Resolving it answers the remote. */
-  pending: { summary: string; kind: string; resolve: (allow: boolean) => void } | null;
+  /** The unanswered permission ask, if any. Resolving it answers the remote. `ask` is set on a remote lane:
+   *  the bounded view and digest a remote decision must name (P-CTRL-REMOTE.1). */
+  pending: { summary: string; kind: string; resolve: (allow: boolean) => void; ask?: RemoteAsk } | null;
+  /** P-CTRL-REMOTE.1 (ADR-0476): set from the pairing's human-chosen policy; null for every other lane. */
+  remote: RemoteLanePolicy | null;
   /** P-FLEET.L6: approve every ask without a human (per-lane; initialized from the manager default). */
   autoApprove: boolean;
   /** P-CTRL.2 (ADR-0438): a controller lane is pinned supervised. Neither the fleet-wide auto default nor a
@@ -418,7 +433,7 @@ export class FleetLaneManager {
    *  lane.sinks alone because a lane that does not exist yet has no sink set to join - spawn() replays
    *  this set onto every new lane. */
   readonly #observers = new Set<LaneObserver>();
-  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & Pick<FleetLaneDeps, "recordLaneSession" | "env" | "interject" | "carriedNotes" | "onWrite" | "preface" | "repo"> & { masterSessionId?: () => string | null; sample: () => Promise<SystemSnapshot>; statDir: (path: string) => Promise<boolean>; statDirMs?: number; now: () => number };
+  readonly #deps: Required<Pick<FleetLaneDeps, "argv" | "masterModel">> & Pick<FleetLaneDeps, "recordLaneSession" | "env" | "interject" | "carriedNotes" | "onWrite" | "preface" | "repo" | "offTask" | "remoteAudit"> & { masterSessionId?: () => string | null; sample: () => Promise<SystemSnapshot>; statDir: (path: string) => Promise<boolean>; statDirMs?: number; now: () => number };
   /** The rolling pressure window admission reads. Fed by #sampler (and by any status poll that arrives
    *  between ticks), trimmed by pushSample - never a full session's history. */
   #history: PressureSample[] = [];
@@ -432,7 +447,7 @@ export class FleetLaneManager {
   constructor(deps: FleetLaneDeps) {
     this.#claims = deps.claims ?? new WriteClaims({ now: deps.now ?? Date.now });
     this.#durations = deps.history ?? new DurationHistory();
-    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, ...(deps.masterSessionId ? { masterSessionId: deps.masterSessionId } : {}), sample: deps.sample ?? (() => sampleSystem()), statDir: deps.statDir ?? (async (p) => (await stat(p)).isDirectory()), ...(deps.statDirMs ? { statDirMs: deps.statDirMs } : {}), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}), ...(deps.carriedNotes ? { carriedNotes: deps.carriedNotes } : {}), ...(deps.onWrite ? { onWrite: deps.onWrite } : {}), ...(deps.preface ? { preface: deps.preface } : {}), ...(deps.repo ? { repo: deps.repo } : {}) };
+    this.#deps = { argv: deps.argv, masterModel: deps.masterModel, ...(deps.masterSessionId ? { masterSessionId: deps.masterSessionId } : {}), sample: deps.sample ?? (() => sampleSystem()), statDir: deps.statDir ?? (async (p) => (await stat(p)).isDirectory()), ...(deps.statDirMs ? { statDirMs: deps.statDirMs } : {}), now: deps.now ?? Date.now, ...(deps.recordLaneSession ? { recordLaneSession: deps.recordLaneSession } : {}), ...(deps.env ? { env: deps.env } : {}), ...(deps.interject ? { interject: deps.interject } : {}), ...(deps.carriedNotes ? { carriedNotes: deps.carriedNotes } : {}), ...(deps.onWrite ? { onWrite: deps.onWrite } : {}), ...(deps.preface ? { preface: deps.preface } : {}), ...(deps.repo ? { repo: deps.repo } : {}), ...(deps.offTask ? { offTask: deps.offTask } : {}), ...(deps.remoteAudit ? { remoteAudit: deps.remoteAudit } : {}) };
   }
 
   /** P-SWITCH.3 (ADR-0410): the hub right now. A throwing or absent dep is a nameless hub, never a crash. */
@@ -447,7 +462,7 @@ export class FleetLaneManager {
    *  model) when it advertises loadSession; otherwise the caller's transcript (read from the on-disk
    *  session) rides the next prompt as the fallback preamble, exactly like an in-place respawn. Either
    *  way the transcript seeds what the composer shows on promote, and `turns` keeps the count honest. */
-  async spawn(opts: { cwd: string; model?: string; name?: string; supervised?: boolean; resume?: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }> {
+  async spawn(opts: { cwd: string; model?: string; name?: string; supervised?: boolean; remote?: { approvalHours: number; offTask: boolean }; resume?: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }> {
     const cwd = (opts.cwd ?? "").trim();
     if (!cwd) return { ok: false, reason: `not a directory: ""` };
     const claim = this.#claimRefusal(opts.resume?.sessionId ?? null);
@@ -497,6 +512,7 @@ export class FleetLaneManager {
       pending: null,
       autoApprove: opts.supervised ? false : this.#autoDefault,
       supervised: opts.supervised === true,
+      remote: opts.supervised && opts.remote ? { approvalMs: opts.remote.approvalHours * 3_600_000, offTask: opts.remote.offTask } : null,
       sessionAllow: new Set(),
       busy: false,
       openCalls: new Map(),
@@ -768,6 +784,21 @@ export class FleetLaneManager {
     return { ok: true };
   }
 
+  /** P-CTRL-REMOTE.1 (ADR-0476): the open remote ask of a remote lane, or null. */
+  pendingAsk(laneId: string): RemoteAsk | null {
+    return this.#lanes.get(laneId)?.pending?.ask ?? null;
+  }
+
+  /** P-CTRL-REMOTE.1: answer ONE specific remote ask. An answer for an ask that is no longer open (answered,
+   *  timed out, replaced by a newer ask) changes nothing, so a late or replayed decision never lands on a
+   *  different action. Remote asks never build session grants. */
+  answerAsk(laneId: string, askId: string, allow: boolean): { ok: boolean } {
+    const pending = this.#lanes.get(laneId)?.pending;
+    if (!pending?.ask || pending.ask.id !== askId) return { ok: false };
+    pending.resolve(allow);
+    return { ok: true };
+  }
+
   /** P-FLEET.L6: flip one lane's full auto-mode. Turning it ON with an ask open resolves that ask as an
    *  ALLOW - the human just granted everything, the pending ask rides along. The in-omp security gate
    *  (invariant 4) still scans every tool call in auto mode; only the human approval step goes away. */
@@ -798,6 +829,9 @@ export class FleetLaneManager {
   cancel(laneId: string): { ok: boolean } {
     const lane = this.#lanes.get(laneId);
     if (!lane?.sessionId) return { ok: false };
+    // An open ask dies as a DENY first: omp waits on that answer, so a cancel that left it open kept the lane
+    // parked until the approval timer (observed on a headless remote spoke, P-CTRL-REMOTE.1).
+    lane.pending?.resolve(false);
     lane.client.notify("session/cancel", { sessionId: lane.sessionId });
     return { ok: true };
   }
@@ -1415,6 +1449,9 @@ export class FleetLaneManager {
           const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
           return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
         };
+        // P-CTRL-REMOTE.1 (ADR-0476): a remote lane never consults auto mode or session grants; its pairing's
+        // tier policy decides, and what it does not allow outright waits for a verified remote decision.
+        if (lane.remote) return (await this.#remoteAsk(lane, tc, summary, kind)) ? pick() : { outcome: { outcome: "cancelled" } };
         if (lane.autoApprove || lane.sessionAllow.has(kind)) {
           this.#emit(lane, { type: "auto-approved", summary, mode: lane.autoApprove ? "auto" : "session" });
           return pick();
@@ -1442,7 +1479,48 @@ export class FleetLaneManager {
     };
   }
 
-  #askUser(lane: Lane, summary: string, kind: string): Promise<boolean> {
+  /** P-CTRL-REMOTE.1 (ADR-0476): decide one ask of a remote lane. T0/T1 inside the workspace run on their own
+   *  (after the off-task check when the pairing asked for it); known destructive and catastrophic actions are
+   *  refused with no way to approve them; everything else parks until a verified remote decision, a controller
+   *  deny, or the pairing's approval window ends (deny). Resolves true only for an allow. */
+  async #remoteAsk(lane: Lane, toolCall: unknown, summary: string, kind: string): Promise<boolean> {
+    const policy = lane.remote!;
+    const cls = classifyAsk(toolCall, lane.cwd);
+    const tc = toolCall && typeof toolCall === "object" ? (toolCall as Record<string, unknown>) : {};
+    const input = canonical(tc.rawInput ?? null);
+    // An audit line that cannot be written refuses the action (never runs or parks it unrecorded).
+    const audit = (ruling: "tier_auto" | "tier_blocked" | "parked" | "off_task", reason = cls.reason): boolean => {
+      try { this.#deps.remoteAudit?.(lane.id, { ruling, tier: cls.tier, reason }); return true; } catch { return false; }
+    };
+    if (cls.action === "block") {
+      audit("tier_blocked");
+      this.#emit(lane, { type: "policy", verdict: "blocked", summary, tier: cls.tier, reason: cls.reason });
+      return false;
+    }
+    let reason = cls.reason;
+    if (cls.action === "auto") {
+      const verdict = !policy.offTask ? "on"
+        : this.#deps.offTask ? await this.#deps.offTask({ id: lane.id, model: lane.model, assignment: lane.lastPrompt ?? "" }, `${summary}\n${input}`).catch(() => "unknown" as const) : "unknown";
+      if (verdict === "on") {
+        if (!audit("tier_auto")) return false;
+        this.#emit(lane, { type: "policy", verdict: "allowed", summary, tier: cls.tier, reason: cls.reason });
+        return true;
+      }
+      reason = `${cls.reason}; the off-task check answered "${verdict}"`;
+      if (!audit("off_task", reason)) return false;
+    }
+    if (input.length > MAX_REMOTE_INPUT) {
+      audit("tier_blocked", `${reason}; too large to show for a remote decision`);
+      this.#emit(lane, { type: "policy", verdict: "blocked", summary, tier: cls.tier, reason: "too large to show for a remote decision" });
+      return false;
+    }
+    const now = this.#deps.now();
+    const ask: RemoteAsk = { id: randomUUID().replace(/-/g, ""), digest: askDigest(kind, summary, input), kind, title: summary, input, tier: cls.tier, reason, openedAt: now, expiresAt: now + policy.approvalMs };
+    if (!audit("parked", reason)) return false;
+    return this.#askUser(lane, summary, kind, { ask, timeoutMs: policy.approvalMs });
+  }
+
+  #askUser(lane: Lane, summary: string, kind: string, remote?: { ask: RemoteAsk; timeoutMs: number }): Promise<boolean> {
     lane.pending?.resolve(false); // never two open asks - the older one dies as a deny
     const gate = Promise.withResolvers<boolean>();
     const resolve = (allow: boolean) => {
@@ -1451,8 +1529,8 @@ export class FleetLaneManager {
       if (lane.status === "needs-approval") this.#setStatus(lane, lane.busy ? "working" : "awaiting-input");
       gate.resolve(allow);
     };
-    const timer = setTimeout(() => resolve(false), APPROVAL_TIMEOUT_MS);
-    lane.pending = { summary, kind, resolve };
+    const timer = setTimeout(() => resolve(false), remote?.timeoutMs ?? APPROVAL_TIMEOUT_MS);
+    lane.pending = { summary, kind, resolve, ...(remote ? { ask: remote.ask } : {}) };
     this.#setStatus(lane, "needs-approval");
     this.#emit(lane, { type: "permission", summary, kind });
     return gate.promise;

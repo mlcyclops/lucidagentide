@@ -587,7 +587,8 @@ function markWorkspaceSetupAsked(path: string): void {
   saveSettings(s);
 }
 import { EVENTS_LOG_PATH, recordSkillActivated } from "./skills_log.ts";
-import { CONTROLLER_ROUTES, handleController, type ControllerDeps } from "./controller/routes.ts"; // P-CTRL.2 (ADR-0438)
+import { auditTierVerdict, CONTROLLER_ROUTES, handleController, type ControllerDeps } from "./controller/routes.ts"; // P-CTRL.2 (ADR-0438)
+import { OFF_TASK_SYSTEM, offTaskPrompt, parseOffTask } from "./controller/remote_policy.ts"; // P-CTRL-REMOTE.1 (ADR-0476)
 import { PairingStore, type Pairing } from "./controller/store.ts"; // P-CTRL.2: the hashed pairing store
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
@@ -1781,6 +1782,11 @@ const fleet: FleetLaneManager = new FleetLaneManager({
   onWrite: (lane, path) => checkouts.recordWrite({ id: lane.id, name: lane.name }, path, lane.cwd),
   preface: (lane): Promise<string> => checkouts.briefingFor(lane.id, lane.cwd),
   repo: { observe: observeToolCall, peek: peekRepoContext }, // P-REPO.1 (ADR-0406)
+  // P-CTRL-REMOTE.1 (ADR-0476): the off-task check runs as a one-shot completion on the lane's own model (the
+  // util connection, never the chat turn). Tighten only: "" (any failure) parses as unknown, which parks.
+  offTask: async (lane, action) => parseOffTask(await backend.complete(OFF_TASK_SYSTEM, offTaskPrompt(lane.assignment, action), { model: lane.model, idleMs: 20_000 })),
+  // Throws when the line cannot be written; the fleet then refuses the action instead of running it unaudited.
+  remoteAudit: (laneId, v) => auditTierVerdict(controllerDeps, laneId, v),
 });
 // P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
 // /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.

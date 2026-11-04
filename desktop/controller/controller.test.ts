@@ -49,6 +49,8 @@ function rig(scan: (t: string) => Promise<GateDecision> = async () => CLEAN) {
       laneTranscript: () => [{ role: "user", text: "q" }, { role: "assistant", text: "a0" }, { role: "user", text: "q2" }, { role: "assistant", text: "a1" }],
       laneRunning: () => false,
       cancel: () => ({ ok: true }),
+      pendingAsk: () => null,
+      answerAsk: () => ({ ok: false }),
     },
     scan,
     sink: (e) => events.push(e),
