@@ -56,7 +56,9 @@ async function drawerSmoke() {
     if (!page) throw new Error(`No existing QA page at ${url}`);
     await page.click("#railMarket");
     await page.waitForSelector(".plg-drawer", { visible: true });
-    await page.click('[data-plg-tier="installed"]');
+    // A DOM click: in headless Edge (2026-11-04) a coordinate click on the tab right after the rail click did not
+    // switch tabs, while the same click dispatched on the element did.
+    await page.$eval('.plg-drawer [data-plg-tier="installed"]', (el) => el.click());
     const card = `[data-plg-card="${ID}"][data-plg-source="private"]`;
     await page.waitForSelector(`${card} .plg-chip[data-status="unsigned"]`, { visible: true });
     const chip = await page.$eval(`${card} .plg-chip`, (el) => el.textContent);
