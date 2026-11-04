@@ -14,13 +14,16 @@
 //   [5] a clean exit removes the file: SIGTERM on POSIX; on Windows, where kill() is TerminateProcess and
 //       no handler runs, the parent watch (LUCID_MAIN_PID, the path the Electron launch really uses),
 //       which exits through process.exit(0) and so runs the "exit" handler
+// ADR-0484 adds the nonce-only record: the engine also publishes engine-nonce-<port>.json (no UI token) into
+// LUCID_DISCOVERY_NONCE_DIR, shared with LUCID_DISCOVERY_NONCE_GROUP (0640) on POSIX, and a controller client
+// that holds only a controller token finds, proves and drives the engine from that record alone.
 //
 // Run with: bun run desktop/scripts/demo_p_tui_0.ts
 
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listDiscoveries, verifyDiscovery } from "../engine_discovery.ts";
+import { listDiscoveries, listNonceRecords, verifyDiscovery } from "../engine_discovery.ts";
 
 function assert(cond: unknown, msg: string): void {
   if (!cond) { console.error("  \u2717 " + msg); process.exit(1); }
@@ -31,7 +34,11 @@ console.log("== #ADR-0419 P-TUI.0: the engine discovery seam ==\n");
 
 const dataRoot = mkdtempSync(join(tmpdir(), "lucid-tui0-"));
 const home = mkdtempSync(join(tmpdir(), "lucid-tui0-home-"));
+const nonceRoot = mkdtempSync(join(tmpdir(), "lucid-tui0-nonce-"));
+const workspace = mkdtempSync(join(tmpdir(), "lucid-tui0-ws-"));
 const repo = join(import.meta.dir, "..", "..");
+// The group a controller client's OS user would belong to; this process's own primary group stands in for it.
+const nonceGid = process.platform === "win32" ? null : process.getgid!();
 
 // A concrete free port: the engine's H2 Origin/Host gate (ADR-0022) checks the Host header against
 // its CONFIGURED port, so PORT=0 would 403 every request. Probe-bind, read, release, reuse.
@@ -48,6 +55,9 @@ const engine = Bun.spawn(["bun", join(repo, "desktop", "dev.ts")], {
     PORT: String(enginePort), // the discovery file, not this script's knowledge, is what a client reads
     LUCID_DATA_ROOT: dataRoot,
     HOME: home, // scratch settings/ledgers; nothing of the operator's ~/.omp is touched
+    USERPROFILE: home,
+    LUCID_DISCOVERY_NONCE_DIR: nonceRoot,
+    ...(nonceGid !== null ? { LUCID_DISCOVERY_NONCE_GROUP: String(nonceGid) } : {}),
     ...(parent ? { LUCID_MAIN_PID: String(parent.pid), LUCID_PARENT_WATCH_MS: "250" } : {}),
   },
   stdout: "pipe",
@@ -70,9 +80,29 @@ try {
   assert(discovery.port === enginePort, `the file carries the real bound port (${discovery.port})`);
   if (process.platform !== "win32")
     assert((statSync(path).mode & 0o777) === 0o600, "the file is owner-only (0600) - it carries the UI token");
+  const records = listNonceRecords(nonceRoot);
+  assert(records.length === 1, "exactly one engine-nonce-<port>.json appeared under LUCID_DISCOVERY_NONCE_DIR (ADR-0484)");
+  const { path: recordPath, record } = records[0]!;
+  assert(record.port === enginePort && record.nonce === discovery.nonce && record.pid === engine.pid, "the record names the same launch: port, nonce and pid");
+  assert(!readFileSync(recordPath, "utf8").includes(discovery.token) && !("token" in JSON.parse(readFileSync(recordPath, "utf8"))), "the record carries no UI token");
+  if (nonceGid !== null) {
+    assert((statSync(recordPath).mode & 0o777) === 0o640, "the record is 0640: readable by the named group");
+    assert(statSync(recordPath).gid === nonceGid, `the record belongs to LUCID_DISCOVERY_NONCE_GROUP (gid ${nonceGid})`);
+  }
 
   console.log("\n[2] a client proves the engine is ours via the ADR-0305 handshake");
   assert(await verifyDiscovery(discovery), "GET /api/health echoed the file's nonce -> healthVerdict \"ours\"");
+  assert(await verifyDiscovery(record), "a controller client wins the same handshake from the nonce-only record");
+  const pair = await fetch(`http://127.0.0.1:${discovery.port}/api/controller/pair`, {
+    method: "POST", headers: { "x-lucid-token": discovery.token, "content-type": "application/json" },
+    body: JSON.stringify({ name: "tui0-controller", workspace }),
+  });
+  const paired: unknown = await pair.json();
+  const data = paired && typeof paired === "object" && "data" in paired ? paired.data : null;
+  const controllerToken = data && typeof data === "object" && "token" in data && typeof data.token === "string" ? data.token : "";
+  assert(pair.ok && controllerToken !== "", "the human pairs a controller with the UI token (a human route)");
+  const lanes = await fetch(`http://127.0.0.1:${record.port}/api/controller/lanes`, { headers: { "x-lucid-token": controllerToken } });
+  assert(lanes.status === 200, "the controller client, holding only the record and its controller token, reads /api/controller/lanes");
 
   console.log("\n[3] two clients, one engine: the published token opens a token-gated route for both");
   const info = (n: string) =>
@@ -94,12 +124,14 @@ try {
   });
   try {
     assert(!(await verifyDiscovery(discovery)), "the recycled port answers health but cannot echo the nonce -> not ours, fail-closed");
+    assert(!(await verifyDiscovery(record)), "the nonce-only record fails the same way: a controller client sends its token nowhere");
   } finally {
     squatter.stop(true);
   }
 
   console.log("\n[5] a clean exit removed the file");
   assert(listDiscoveries(dataRoot).length === 0, `${parent ? "the parent watch" : "SIGTERM"} ran the exit handler; no discovery file is left behind`);
+  assert(listNonceRecords(nonceRoot).length === 0, "and no nonce-only record either");
 
   console.log("\nP-TUI.0 demo: PASS");
 } finally {
@@ -107,4 +139,6 @@ try {
   try { parent?.kill(); } catch { /* already gone */ }
   rmSync(dataRoot, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
+  rmSync(nonceRoot, { recursive: true, force: true });
+  rmSync(workspace, { recursive: true, force: true });
 }
