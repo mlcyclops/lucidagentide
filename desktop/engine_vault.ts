@@ -94,8 +94,10 @@ const fipsRefusal = (e: unknown): string | null => (e instanceof FipsRequiredErr
 
 export type VaultKind = "apikey" | "token" | "bearer" | "pat" | "oauth" | "password" | "basic" | "pem" | "jwt" | "saml" | "json" | "other";
 export const VAULT_KINDS: readonly VaultKind[] = ["apikey", "token", "bearer", "pat", "oauth", "password", "basic", "pem", "jwt", "saml", "json", "other"];
-export type VaultSource = "typed" | "migrated-settings" | "migrated-safestorage" | "env-import" | "agent-request" | "restore" | "destination-pull";
-export const VAULT_SOURCES: readonly VaultSource[] = ["typed", "migrated-settings", "migrated-safestorage", "env-import", "agent-request", "restore", "destination-pull"];
+/** `migrated-agentdb` and `oauth-login` (P-VAULT-KEYS.2, ADR-0480): an omp credential row moved out of
+ *  ~/.omp/agent/agent.db, and one written by a sign-in or token refresh through the engine's auth broker. */
+export type VaultSource = "typed" | "migrated-settings" | "migrated-safestorage" | "env-import" | "agent-request" | "restore" | "destination-pull" | "migrated-agentdb" | "oauth-login";
+export const VAULT_SOURCES: readonly VaultSource[] = ["typed", "migrated-settings", "migrated-safestorage", "env-import", "agent-request", "restore", "destination-pull", "migrated-agentdb", "oauth-login"];
 /** Non-secret metadata of one vault entry. Safe for the UI (last-4 included); never the value. */
 export interface VaultEntryMeta {
   ref: string; label: string; kind: VaultKind; source: VaultSource;

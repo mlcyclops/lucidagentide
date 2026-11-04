@@ -3,13 +3,15 @@
 
 // P-ACCT.1 (ADR-0375): named provider ACCOUNTS - the pure policy layer.
 //
-// A provider can hold several credentials at once: omp's vault (agent.db, table auth_credentials)
-// stores one OAuth row PER IDENTITY (identity_key, e.g. "email:alice@work.com"), and LUCID's settings
-// store can hold several named API keys. omp picks among ACTIVE rows automatically (usage-ranked,
-// session-sticky) and offers no manual pin, so LUCID switches accounts with omp's own soft-disable
-// column: rows parked by LUCID carry disabled_cause = LUCID_INACTIVE_CAUSE, active selection in omp is
-// `WHERE disabled_cause IS NULL`, and omp never clears the column itself (its "delete" SETS it). A row
-// omp disabled for its own reason (logout, rotation) is NOT ours to resurrect and is never listed.
+// A provider can hold several credentials at once: omp's credential table (auth_credentials; sealed in
+// the engine vault behind LUCID's auth broker under P-VAULT-KEYS.2 / ADR-0480, agent.db under its kill
+// switch, same schema and the same column semantics either way) stores one OAuth row PER IDENTITY
+// (identity_key, e.g. "email:alice@work.com"), and LUCID's settings store can hold several named API keys.
+// omp picks among ACTIVE rows automatically (usage-ranked, session-sticky) and offers no manual pin, so
+// LUCID switches accounts with omp's own soft-disable column: rows parked by LUCID carry
+// disabled_cause = LUCID_INACTIVE_CAUSE, active selection in omp is `WHERE disabled_cause IS NULL`, and
+// omp never clears the column itself (its "delete" SETS it). A row omp disabled for its own reason
+// (logout, rotation) is NOT ours to resurrect and is never listed.
 //
 // Precedence fact this module leans on (pi-ai auth-storage.ts): a stored OAuth credential BEATS an env
 // var API key. So "use my key account" must park every active OAuth row for that provider, and "use my
@@ -47,8 +49,8 @@ export interface AccountView {
   removable: boolean;
 }
 
-/** One OAuth row as auth_vault reads it from agent.db (already filtered to oauth rows whose
- *  disabled_cause is NULL or LUCID's). */
+/** One OAuth row as auth_vault reads it from omp's credential table (already filtered to oauth rows
+ *  whose disabled_cause is NULL or LUCID's). */
 export interface OauthRowLite {
   identityKey: string | null;
   disabledCause: string | null;

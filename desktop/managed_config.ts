@@ -114,6 +114,9 @@ export interface ManagedSecurity {
   loop?: ManagedLoopPolicy;
   sandbox?: ManagedSandboxPolicy;
   crypto?: ManagedCryptoPolicy;
+  /** P-VAULT-KEYS.2 (ADR-0480) kill switch: `false` keeps omp's OAuth credentials on the old path
+   *  (~/.omp/agent/agent.db) instead of the engine vault behind LUCID's in-process auth broker. */
+  oauthVault?: boolean;
 }
 
 /** SIEM/audit sink configuration, consumed by ADR-0069 (P-ENT.2). Schema only here; the dispatcher +

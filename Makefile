@@ -1416,6 +1416,11 @@ demo-P-VAULT-V2.1: ## P-VAULT-V2.1 (ADR-0474): one engine vault. Sealed format v
 	$(BUN) run desktop/scripts/demo_p_vault_v2_1.ts
 	$(BUN) test $(TEST_IGNORES) desktop/vault_v2.test.ts desktop/cred_migration.test.ts desktop/engine_vault.test.ts desktop/settings_vault.test.ts desktop/cred_vault.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-P-VAULT-KEYS.2
+demo-P-VAULT-KEYS.2: ## P-VAULT-KEYS.2 (ADR-0480): omp's OAuth credentials leave ~/.omp/agent/agent.db for the engine vault, served to every omp child by omp's OWN auth broker running in the engine (127.0.0.1, per-launch bearer token, no access-token snapshot cache). Real engines and a real `omp acp` in a scratch dir: the rows move without a re-login and agent.db keeps no plaintext, status/accounts/disconnect act on the sealed rows, omp lists models only through the broker and refuses a wrong token, no token in any file, log or response. Kill switch LUCID_OAUTH_VAULT=0 / managed security.oauthVault=false.
+	$(BUN) run desktop/scripts/demo_p_vault_keys_2.ts
+	$(BUN) test $(TEST_IGNORES) desktop/oauth_vault_store.test.ts desktop/oauth_migration.test.ts desktop/oauth_broker.test.ts desktop/auth_vault.test.ts desktop/account_policy.test.ts desktop/auth_status.test.ts desktop/vault_settings_view.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-P-VAULT-DEST.1
 demo-P-VAULT-DEST.1: ## P-VAULT-DEST.1 (ADR-0478): enterprise vault destinations, core half. Settings "Vault destinations (Enterprise)" over /api/vault/destinations*, /api/vault/push, /api/vault/pull (UI token only); requests to the add-on kms connector (put/list/pull/check, ADR-A032) written 0600 in a private temp dir and wiped after every call; name mapping char for char the add-on's; auto-backup on vaultPut/vaultRotate; honest not-installed state. Real engines in a scratch dir (set LUCID_ADDON_DIR to the add-on checkout): no route response or log line carries a value
 	$(BUN) run desktop/scripts/demo_p_vault_dest_1.ts

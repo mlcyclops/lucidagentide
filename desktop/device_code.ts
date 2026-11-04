@@ -21,7 +21,10 @@
 //     from its code, or a code split mid-token, still resolves once the rest arrives;
 //   - expose only the code and an ALLOWLISTED device URL; never the raw transcript.
 //
-// Pure and DOM-free so it is unit-tested headless; dev.ts owns the broker process.
+// Pure and DOM-free so it is unit-tested headless; dev.ts owns the broker process. P-VAULT-KEYS.2
+// (ADR-0480): with the OAuth vault on, that "process" is the engine's in-process sign-in
+// (oauth_broker.ts inProcessLogin), which drives the same omp flow and prints the same text, so this
+// parser reads it unchanged and the credential lands sealed in the vault under the alias's target id.
 
 /** Login aliases: broker ids whose credential lands under ANOTHER provider id (omp's `storeCredentialsAs`,
  *  pi-ai `registry/oauth/types.ts`). The vault snapshot, the stale-disabled clear and the failure note

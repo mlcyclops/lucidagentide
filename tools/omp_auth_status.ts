@@ -18,11 +18,15 @@
 // db, locked, schema drift in a future omp) prints a skip notice and exits 0 for
 // display, or exit 2 ("unknown") for --check. This is a convenience display, NOT
 // the security gate — the fail-closed law applies to the scanner, not to this.
+// P-VAULT-KEYS.2 (ADR-0480): with the OAuth vault on, the rows live sealed in the engine vault (LUCID's
+// auth broker serves them to omp); without an explicit .db path this lists those too, never a token.
 
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { Database } from "bun:sqlite";
+import { openOfflineOauthRows } from "../desktop/oauth_vault_store.ts";
+import { oauthRowsTarget } from "../desktop/oauth_rows_target.ts";
 
 type Cred = {
   provider: string;
@@ -40,6 +44,8 @@ function vaultPath(): string {
   return join(homedir(), ".omp", "agent", "agent.db");
 }
 
+const CRED_SQL = "select provider, credential_type, identity_key, disabled_cause from auth_credentials";
+
 /** Read credentials read-only; null on any failure (missing/locked/schema drift). */
 function readCreds(): Cred[] | null {
   const p = vaultPath();
@@ -47,9 +53,7 @@ function readCreds(): Cred[] | null {
   try {
     const db = new Database(p, { readonly: true });
     try {
-      return db
-        .query("select provider, credential_type, identity_key, disabled_cause from auth_credentials")
-        .all() as Cred[];
+      return db.query<Cred, []>(CRED_SQL).all();
     } finally {
       db.close();
     }
@@ -58,7 +62,17 @@ function readCreds(): Cred[] | null {
   }
 }
 
-const creds = readCreds();
+/** The rows sealed in the engine vault (P-VAULT-KEYS.2); null when credentials are on the agent.db path. */
+function readVaultCreds(): Cred[] | null {
+  if (args.some((a) => !a.startsWith("--") && a.toLowerCase().endsWith(".db"))) return null;
+  const vault = openOfflineOauthRows();
+  if (!vault) return null;
+  try { return oauthRowsTarget()?.db.query<Cred, []>(CRED_SQL).all() ?? null; } catch { return null; } finally { vault.close(); }
+}
+
+const fromDb = readCreds();
+const fromVault = readVaultCreds();
+const creds = fromDb === null && fromVault === null ? null : [...(fromVault ?? []), ...(fromDb ?? [])];
 
 // --check <provider>: exit 0 if an active (non-disabled) credential exists.
 const ci = args.indexOf("--check");

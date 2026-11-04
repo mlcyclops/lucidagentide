@@ -116,6 +116,7 @@ import { addGrant, applyGrantAce, consumePending, loadGrants, managedPolicyFolde
 import { repoAsset, resolvedRepo } from "./repo_root.ts"; // P-SANDBOX.8: the bundled lucid-appcontainer helper, probed-root resolved (ADR-0356)
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
 import { clearAllOauthCredentials, clearDisabledCredential, credentialSnapshot, disconnectCredential, landedFreshCredential } from "./auth_vault.ts";
+import { bootOauthVault, oauthVaultActive, startOauthLoginProcess, type OauthLoginProcess } from "./oauth_broker.ts"; // P-VAULT-KEYS.2 (ADR-0480): omp's auth broker over the engine vault
 import { clearOauthFailure, extractOauthFailure, getOauthFailure, recordOauthFailure } from "./oauth_failure.ts";
 import { DeviceCodeScanner, deviceUrlAllowed, isShowCodeLogin, vaultProviderFor } from "./device_code.ts"; // P-PROV.3: OpenAI device-code sign-in
 import { mxcHost, resetMxcProbeCache, runMxcHostPrepElevated } from "./mxc_runtime.ts"; // P-MXC.1 (ADR-0441): the MXC executor posture + host prep
@@ -632,6 +633,7 @@ import type { CuiDesignation } from "../harness/export/vault_export.ts";
 
 applyEnv(); // make stored API keys available to a spawned omp acp
 applyVaultEnv(); // P-VAULT-V2.1 (ADR-0474): credentials the engine vault holds, under the env names main used to inject
+await bootOauthVault(); // P-VAULT-KEYS.2 (ADR-0480): agent.db's OAuth rows into the vault, broker URL + token into every omp spawn's env
 if (loadSettings().headroomEnabled) startHeadroom(); // resume the opt-in compression proxy
 
 // P-COLLAB.3 (ADR-0192): the one live-share host for this backend. Real deps: a CollabSocket over the
@@ -2286,7 +2288,9 @@ function authWithOauthErrors(): ProviderAuthSnapshot {
 // a reference (no GC), drain both streams in the background, and resolve once we see the auth URL.
 // Map keyed by oauthId — lets us look up a running broker to send a device code to its stdin
 // (xAI, GitHub, etc. use device-authorization flows where the user copies a code from the browser).
-const oauthBrokers = new Map<string, ReturnType<typeof Bun.spawn>>();
+// P-VAULT-KEYS.2 (ADR-0480): with the OAuth vault on, the "broker" is an in-process sign-in against the
+// engine's auth broker (oauth_broker.ts) with the same streams and stdin protocol, so the token lands sealed.
+const oauthBrokers = new Map<string, OauthLoginProcess>();
 // GitHub Copilot's broker (ADR-0210) begins with an `onPrompt` for the GitHub Enterprise domain (blank =
 // github.com) and BLOCKS on stdin before it ever prints the device URL. So for github-copilot we must feed
 // that first line up front, or the login hangs at the prompt and no URL surfaces. `promptAnswer` is that
@@ -2301,8 +2305,8 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
   // fresh token landed rather than trusting the broker's exit code. Read-only; absent row => not present.
   const beforeCred = credentialSnapshot(vaultId);
   clearOauthFailure(vaultId); // a fresh attempt owns the failure slot - stale reasons never linger
-  let proc: ReturnType<typeof Bun.spawn>;
-  try { proc = Bun.spawn([ompBin(), "auth-broker", "login", oauthId], { stdout: "pipe", stderr: "pipe", stdin: "pipe" }); }
+  let proc: OauthLoginProcess;
+  try { proc = startOauthLoginProcess(oauthId, () => Bun.spawn([ompBin(), "auth-broker", "login", oauthId], { stdout: "pipe", stderr: "pipe", stdin: "pipe" })); }
   // stdin: "pipe" (NOT "ignore") — the broker reads stdin as a fallback for pasting the auth code.
   // "ignore" closes stdin immediately → broker sees EOF → shuts down its callback server
   // before the browser redirect arrives. "pipe" keeps it open; for device-flow providers (xAI)
@@ -2313,8 +2317,7 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
   oauthBrokers.set(oauthId, proc);
   // Answer the broker's leading prompt (Copilot's enterprise-domain question) so the device URL can appear.
   if (promptAnswer !== undefined) {
-    const sink = proc.stdin;
-    if (sink && typeof sink !== "number") { try { sink.write(new TextEncoder().encode(promptAnswer.trim() + "\n")); } catch { /* broker may have exited */ } }
+    try { proc.stdin.write(new TextEncoder().encode(promptAnswer.trim() + "\n")); } catch { /* broker may have exited */ }
   }
   proc.exited.finally(() => { if (oauthBrokers.get(oauthId) === proc) oauthBrokers.delete(oauthId); });
   // On a SUCCESSFUL login the credential lands in omp's vault, but the already-running omp child built
@@ -2403,9 +2406,7 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
 function sendOauthCode(oauthId: string, code: string): { sent: boolean; reason?: string } {
   const proc = oauthBrokers.get(oauthId);
   if (!proc) return { sent: false, reason: "no broker running for " + oauthId };
-  const sink = proc.stdin; // Bun types this number | FileSink | undefined; the broker spawns with stdin:"pipe" → FileSink
-  if (!sink || typeof sink === "number") return { sent: false, reason: "broker stdin is not writable" };
-  try { sink.write(new TextEncoder().encode(code.trim() + "\n")); return { sent: true }; }
+  try { proc.stdin.write(new TextEncoder().encode(code.trim() + "\n")); return { sent: true }; }
   // js/stack-trace-exposure: log detail server-side, return a generic reason to the client (goes via json()).
   catch (e) { console.error(`[oauth] send code failed for ${oauthId}:`, e); return { sent: false, reason: "could not send code" }; }
 }
@@ -5369,7 +5370,9 @@ return Bun.serve({
         // soft-disables and can time out on a cold/reinstalled box, leaving the row "connected". Deleting the
         // credential row is what actually clears the login (the token lives in that row's `data`), so the
         // Settings status reflects it regardless of whether the omp spawn succeeded.
-        Bun.spawnSync([ompBin(), "auth-broker", "logout", id], { timeout: 4000 });
+        // P-VAULT-KEYS.2 (ADR-0480): on the vault path omp's logout CLI only knows agent.db; the delete below
+        // removes the sealed row and the broker pushes the change to every omp child.
+        if (!oauthVaultActive()) Bun.spawnSync([ompBin(), "auth-broker", "logout", id], { timeout: 4000 });
         disconnectCredential(id);
         return json({ ok: true, data: providerAuth() });
       }

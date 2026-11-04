@@ -46,6 +46,8 @@ const SOURCE_LABEL: Readonly<Record<string, string>> = {
   "agent-request": "Agent request",
   restore: "Restore",
   "destination-pull": "Destination pull",
+  "migrated-agentdb": "Migrated (omp agent.db)",
+  "oauth-login": "Sign-in",
 };
 export const sourceLabel = (s: string): string => SOURCE_LABEL[s] ?? s;
 
@@ -113,7 +115,7 @@ function row(m: VaultMetaView): string {
       <div class="vault-line">${esc(whereUsed(m))}</div>
       <div class="vault-line">${dates}</div>
       <div class="prov-row">
-        <button class="btn-mini" data-vault-rotate="${ref}" data-tip="Rotate|Replace the stored value in place. The reference stays the same, so everything using it keeps working.">${icon("refresh", 12)} Rotate</button>
+        ${m.ref.startsWith("oauth:") ? "" /* P-VAULT-KEYS.2: a sign-in is renewed by signing in again, never by typing a value */ : `<button class="btn-mini" data-vault-rotate="${ref}" data-tip="Rotate|Replace the stored value in place. The reference stays the same, so everything using it keeps working.">${icon("refresh", 12)} Rotate</button>`}
         <button class="btn-mini danger" data-vault-remove="${ref}" data-tip="Remove|Delete this secret from the vault. Anything that uses it stops working until it is entered again.">${icon("close", 12)} Remove</button>
       </div></div>`;
 }

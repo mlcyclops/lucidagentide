@@ -3,14 +3,16 @@
 
 // desktop/auth_status.ts
 //
-// Per-provider auth status for the Settings page: reads omp's credential vault
-// (~/.omp/agent/agent.db → auth_credentials) for OAuth/subscription logins, and
-// the local key store + env for API keys. Returns masked status only.
+// Per-provider auth status for the Settings page: reads omp's credential table
+// (`auth_credentials`: the engine vault's when the OAuth vault is on, P-VAULT-KEYS.2 / ADR-0480, else
+// ~/.omp/agent/agent.db) for OAuth/subscription logins, and the local key store + env for API keys.
+// Returns masked status only.
 
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { oauthRowsTarget } from "./oauth_rows_target.ts";
 import { keyVaultStatus, load } from "./settings_store.ts";
 import type { VaultStatus } from "./engine_vault.ts";
 
@@ -151,12 +153,21 @@ export const OTHERS: Provider[] = [
   { id: "typesafe", name: "TypeSafe · Jev judgment", env: "TYPESAFE_API_KEY", oauthId: "", canOauth: false },
 ];
 
-function vaultRows(): any[] {
+interface CredentialStatusRow { provider: string; credential_type: string; identity_key: string | null; disabled_cause: string | null }
+const STATUS_SQL = "select provider, credential_type, identity_key, disabled_cause from auth_credentials";
+
+/** omp's credential rows (no token columns): the engine vault's table when the OAuth vault is on
+ *  (P-VAULT-KEYS.2, ADR-0480), else ~/.omp/agent/agent.db. */
+function vaultRows(): CredentialStatusRow[] {
+  const target = oauthRowsTarget();
+  if (target) {
+    try { return target.db.query<CredentialStatusRow, []>(STATUS_SQL).all(); } catch { return []; }
+  }
   const p = join(homedir(), ".omp", "agent", "agent.db");
   if (!existsSync(p)) return [];
   try {
     const db = new Database(p, { readonly: true });
-    try { return db.query("select provider, credential_type, identity_key, disabled_cause from auth_credentials").all() as any[]; }
+    try { return db.query<CredentialStatusRow, []>(STATUS_SQL).all(); }
     finally { db.close(); }
   } catch { return []; }
 }
