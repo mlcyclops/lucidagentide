@@ -68,10 +68,22 @@ describe("mapHubSnapshot: the hub, its scopes and every spoke", () => {
   test("a set-up hub lists its spokes with the actions its certificate's scopes allow", () => {
     const v = mapHubSnapshot({ hub: { node: HUB, label: "workstation", scopes: ["recall", "drive", "root-ish"] }, spokes: [{ node: NODE, label: "vm-218", reachable: true, tasks: [] }, { node: "bad" }] });
     expect(v).toEqual({
-      available: true, hub: { node: HUB, label: "workstation", scopes: ["recall", "drive"] },
+      available: true, hub: { node: HUB, label: "workstation", scopes: ["recall", "drive"], presence: null },
       actions: { recall: true, drive: true, approve: false, deny: true },
       spokes: [{ node: NODE, label: "vm-218", state: "idle", lanes: null, model: null, tasks: [], checkedAt: null }],
     });
+  });
+
+  test("the hub's presence kind is passed on only when it is a known one (ADR-0488: password asks the IDE)", () => {
+    const kind = (presence: unknown) => {
+      const v = mapHubSnapshot({ hub: { node: HUB, label: "workstation", scopes: ["approve"], presence }, spokes: [] });
+      return v.available ? v.hub.presence : "unavailable";
+    };
+    expect(kind("password")).toBe("password");
+    expect(kind("windows-hello")).toBe("windows-hello");
+    expect(kind("none")).toBe("none");
+    expect(kind("retina-scan")).toBeNull();
+    expect(kind(undefined)).toBeNull();
   });
 
   test("no hub yet is the setup state, with the plugin's own error when the hub failed to open", () => {

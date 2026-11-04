@@ -56,7 +56,8 @@ function decision(hub: Node, lane: string, ask: RemoteAsk, allow: boolean, over:
 
 // ── ADR-0488: a fake user-presence authenticator (the add-on's presence.ts after the gesture) ─────────────
 interface Authenticator { priv: KeyObject; ref: { kind: PresenceKind; spki: string } }
-/** Windows Hello's key credential is RSA 2048 (PKCS#1 v1.5 / SHA-256); the Secure Enclave's is P-256. */
+/** Windows Hello's key credential is RSA 2048 (PKCS#1 v1.5 / SHA-256); the Secure Enclave's and the password
+ *  kind's are P-256. */
 function authenticator(kind: PresenceKind): Authenticator {
   const { privateKey, publicKey } = kind === "windows-hello" ? generateKeyPairSync("rsa", { modulusLength: 2048 }) : generateKeyPairSync("ec", { namedCurve: "prime256v1" });
   return { priv: privateKey, ref: { kind, spki: b64u(publicKey.export({ type: "spki", format: "der" })) } };
@@ -379,6 +380,21 @@ describe("a pairing that requires user presence", () => {
     expect(await r.settled(laneId)).toContain(ALLOWED);
   }, TIMEOUT);
 
+  test("accepts an allow with the evidence of a password-unwrapped presence key (kind password)", async () => {
+    const r = rig({ presence: "required" });
+    const { pairing, laneId } = await r.setup();
+    const hub = key(), pw = authenticator("password"), c = cert(r.root, hub, ["approve"], { presence: pw.ref });
+    const { parked } = await r.askFor(pairing, laneId, { kind: "execute", title: "bun test", rawInput: { command: "bun test" } });
+    expect(parked).not.toBeNull();
+    const bare = await r.call("decide", pairing, { laneId, askId: parked!.id, decision: decision(hub, laneId, parked!, true), cert: c.token });
+    expect(bare.status).toBe(403);
+    expect(bare.json.error).toBe("this pairing requires user presence and the approval carries no presence evidence");
+    const ok = await r.call("decide", pairing, { laneId, askId: parked!.id, decision: presentDecision(hub, laneId, parked!, true, pw), cert: c.token });
+    expect(ok.status).toBe(200);
+    expect(ok.json.data).toEqual({ allow: true, approver: hub.id, presence: "password" });
+    expect(await r.settled(laneId)).toContain(ALLOWED);
+  }, TIMEOUT);
+
   test("presence evidence is bound to one decision: moved onto the next ask it is refused; a signed deny needs none", async () => {
     const r = rig({ presence: "required" });
     const { pairing, laneId } = await r.setup();
@@ -425,6 +441,17 @@ describe("verifyRemoteDecision and presence keys", () => {
       .toMatchObject({ ok: true, presence: "macos-secure-enclave" });
     for (const bad of [{ kind: "windows-hello", spki: mac.ref.spki }, { kind: "macos-secure-enclave", spki: hello.ref.spki }, { kind: "webauthn", spki: mac.ref.spki }, { ...mac.ref, extra: 1 }]) {
       const v = verifyRemoteDecision({ decision: presentDecision(hub, "L", ask, true, mac), cert: cert(root, hub, ["approve"], { presence: bad }).token }, root.spki, fresh, required);
+      expect(v).toEqual({ ok: false, reason: "the approver certificate names a malformed presence key" });
+    }
+  });
+
+  test("a password kind's P-256 key counts; under kind password an RSA or another curve's key is a malformed certificate", () => {
+    const root = key(), hub = key(), pw = authenticator("password"), hello = authenticator("windows-hello");
+    expect(verifyRemoteDecision({ decision: presentDecision(hub, "L", ask, true, pw), cert: cert(root, hub, ["approve"], { presence: pw.ref }).token }, root.spki, fresh, required))
+      .toMatchObject({ ok: true, allow: true, presence: "password" });
+    const otherCurves = ["secp384r1", "secp521r1"].map((namedCurve) => b64u(generateKeyPairSync("ec", { namedCurve }).publicKey.export({ type: "spki", format: "der" })));
+    for (const spki of [hello.ref.spki, ...otherCurves]) {
+      const v = verifyRemoteDecision({ decision: presentDecision(hub, "L", ask, true, pw), cert: cert(root, hub, ["approve"], { presence: { kind: "password", spki } }).token }, root.spki, fresh, required);
       expect(v).toEqual({ ok: false, reason: "the approver certificate names a malformed presence key" });
     }
   });

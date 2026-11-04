@@ -238,3 +238,35 @@ describe("parked actions: scanned like recall, and a flagged one can only be den
     ]);
   });
 });
+
+describe("ADR-0488 amendment: a password hub's Approve carries the presence password through, once", () => {
+  const SECRET = "correct horse battery staple";
+  const hubOf = (presence: string) => ({ hub: { node: HUB, label: "workstation", scopes: ["recall", "drive", "approve"], presence }, spokes: [{ node: NODE, label: "azure-eastus", reachable: true, checkedAt: 1, tasks: [] }] });
+
+  test("an allow needs the password and forwards it only in the decide body; a deny never carries it", async () => {
+    const r = rig({ hub: hubOf("password"), approvals: [ask()] });
+    expect((await r.call("GET", "/api/remote-spokes")).data).toMatchObject({ available: true, hub: { presence: "password" } });
+    const decide = (b: Record<string, unknown>) => r.call("POST", "/api/remote-spokes/decide", { node: NODE, task: TASK, ask: "ask-1", digest: DIGEST, ...b });
+    expect((await decide({ allow: true })).data).toEqual({ ok: false, error: "this hub approves with its presence password: type it to sign the approval" });
+    expect((await decide({ allow: true, password: "" })).data).toEqual({ ok: false, error: "this hub approves with its presence password: type it to sign the approval" });
+    expect((await decide({ allow: true, password: "x".repeat(1025) })).data).toEqual({ ok: false, error: "the presence password is at most 1024 characters" });
+    expect(r.forwarded()).toEqual([]); // refused before the plugin is asked anything
+    const ok = await decide({ allow: true, password: SECRET });
+    expect(ok.data).toMatchObject({ ok: true });
+    expect(ok.text).not.toContain(SECRET);
+    expect((await decide({ allow: false, password: SECRET })).data).toMatchObject({ ok: true });
+    const sent = r.forwarded().filter((c) => c.path.endsWith("/decide")).map((c) => c.body);
+    expect(sent).toEqual([
+      { task: TASK, ask: "ask-1", digest: DIGEST, allow: true, password: SECRET },
+      { task: TASK, ask: "ask-1", digest: DIGEST, allow: false },
+    ]);
+    // Only the decide forward ever held it: not the approvals re-read, not the hub summary.
+    expect(r.calls.filter((c) => JSON.stringify(c.body ?? null).includes(SECRET))).toHaveLength(1);
+  });
+
+  test("a hub of another kind is not sent a password even when one is typed", async () => {
+    const r = rig({ hub: hubOf("windows-hello"), approvals: [ask()] });
+    expect((await r.call("POST", "/api/remote-spokes/decide", { node: NODE, task: TASK, ask: "ask-1", digest: DIGEST, allow: true, password: SECRET })).data).toMatchObject({ ok: true });
+    expect(r.forwarded().filter((c) => c.path.endsWith("/decide")).map((c) => c.body)).toEqual([{ task: TASK, ask: "ask-1", digest: DIGEST, allow: true }]);
+  });
+});

@@ -48,8 +48,14 @@ export interface RemoteSpokeView {
   error?: string;
 }
 
+/** How the hub proves user presence on approve (ADR-0488, add-on ADR-A052): `password` needs the hub's password
+ *  typed for every Approve (the orbit asks for it and the engine passes it through once); the platform kinds ask
+ *  on the hub machine itself; `none` approves without evidence. null: not set up, or not reported. */
+export const HUB_PRESENCE = ["password", "windows-hello", "macos-secure-enclave", "none"] as const;
+export type HubPresence = (typeof HUB_PRESENCE)[number];
+
 export type RemoteHubView =
-  | { available: true; hub: { node: string; label: string; scopes: HubScope[] }; actions: HubActions; spokes: RemoteSpokeView[] }
+  | { available: true; hub: { node: string; label: string; scopes: HubScope[]; presence: HubPresence | null }; actions: HubActions; spokes: RemoteSpokeView[] }
   | { available: false; plugin: "missing" | "stopped" | "running"; reason: string };
 
 export const NODE_RE = /^n_[0-9a-f]{32}$/;
@@ -122,7 +128,8 @@ export function mapHubSnapshot(raw: unknown): RemoteHubView {
   const granted: unknown[] = Array.isArray(hub.scopes) ? hub.scopes : [];
   const scopes = HUB_SCOPES.filter((s) => granted.includes(s));
   const spokes = Array.isArray(r.spokes) ? r.spokes.map(mapSpokeRow).filter((s): s is RemoteSpokeView => s !== null) : [];
-  return { available: true, hub: { node: hub.node, label: clip(hub.label, 64) ?? hub.node.slice(0, 12), scopes }, actions: hubActions(scopes), spokes };
+  const presence = HUB_PRESENCE.find((k) => k === hub.presence) ?? null;
+  return { available: true, hub: { node: hub.node, label: clip(hub.label, 64) ?? hub.node.slice(0, 12), scopes, presence }, actions: hubActions(scopes), spokes };
 }
 
 // ---------------------------------------------------------------------------------------- display rules
