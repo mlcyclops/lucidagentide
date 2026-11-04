@@ -173,6 +173,7 @@ import { applyVaultEnv, vaultRedactEnv } from "./vault_env.ts"; // P-VAULT-V2.1 
 import { handleVaultBackupRoutes } from "./vault_backup_routes.ts"; // P-VAULT-UI.1 (ADR-0475): /api/vault/backup|restore
 import { configureSecretRequestEndpoint, handleSecretRoutes, SECRET_AGENT_ROUTE } from "./secret_routes.ts"; // P-SECRET-INTAKE.1 (ADR-0476): /api/secret/*
 import { workspaceSecretEnv } from "./vault_env_import.ts"; // P-VAULT-ENV.1 (ADR-0477): a lane's workspace-scoped secrets
+import { upsertVaultDestination } from "./vault_destinations.ts"; // ADR-0476 x ADR-0478: a remembered secrets manager becomes a destination
 import { vaultStartupCleanup } from "./vault_lifecycle.ts"; // security review: plaintext a dead engine left behind
 import { mayHoldGlobalEnv } from "./env_name_policy.ts"; // security review SECRET-INTAKE-ENVNAME-UNRESTRICTED: the one reserved-name rule
 import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
@@ -2479,7 +2480,7 @@ return Bun.serve({
       if (p.startsWith("/api/controller/")) return await handleController(req, p, ctrlPairing, controllerDeps);
       const vr = await handleVaultRoutes(req, p, { uiToken: TOKEN }); if (vr) return vr; // P-VAULT-V2.1 (ADR-0474)
       const vb = await handleVaultBackupRoutes(req, p, { uiToken: TOKEN }); if (vb) return vb; // P-VAULT-UI.1 (ADR-0475)
-      const sr = await handleSecretRoutes(req, p, { uiToken: TOKEN, srv, emit: (r) => backend.requestSecretDialog(r) }); if (sr) return sr; // P-SECRET-INTAKE.1 (ADR-0476)
+      const sr = await handleSecretRoutes(req, p, { uiToken: TOKEN, srv, emit: (r) => backend.requestSecretDialog(r), destinations: { upsert: upsertVaultDestination } }); if (sr) return sr; // P-SECRET-INTAKE.1 (ADR-0476)
       if (p === "/app.js") {
         const { js } = await bundleApp();
         return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
