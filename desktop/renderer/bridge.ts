@@ -1354,7 +1354,8 @@ export interface LucidBridge {
   credRotate(input: { ref: string; secret: string; expiresAt?: number }): Promise<CredMetaView | { error: string }>;
   credRotateFile(input: { ref: string }): Promise<CredMetaView | { error: string } | null>;
   credList(): Promise<CredMetaView[]>;
-  credDelete(ref: string): Promise<boolean>;
+  // security review CRED-DELETE-ENGINE-DOWN: an { error } means the credential was NOT removed.
+  credDelete(ref: string): Promise<{ deleted: boolean } | { error: string }>;
   credEncryptionAvailable(): Promise<boolean>;
   // P-SECRET-INTAKE.1 (ADR-0476): the agent-triggered secret dialog (UI token). A value goes IN only; every
   // answer is metadata (ref, kind, label, env name, last-4).
@@ -1585,7 +1586,7 @@ interface NativeShell {
   credRotate?(input: { ref: string; secret: string; expiresAt?: number }): Promise<CredMetaView | { error: string }>;
   credRotateFile?(input: { ref: string }): Promise<CredMetaView | { error: string } | null>;
   credList?(): Promise<CredMetaView[]>;
-  credDelete?(ref: string): Promise<boolean>;
+  credDelete?(ref: string): Promise<{ deleted: boolean } | { error: string }>;
   credEncryptionAvailable?(): Promise<boolean>;
 }
 declare global { interface Window { lucid?: NativeShell } }
@@ -2206,7 +2207,7 @@ export const bridge: LucidBridge = {
   credRotate: (input) => (shell?.credRotate ? shell.credRotate(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-KEYS.2
   credRotateFile: (input) => (shell?.credRotateFile ? shell.credRotateFile(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-KEYS.2
   credList: () => (shell?.credList ? shell.credList() : Promise.resolve([])), // P-NETWL.1
-  credDelete: (ref) => (shell?.credDelete ? shell.credDelete(ref) : Promise.resolve(false)), // P-NETWL.1
+  credDelete: (ref) => (shell?.credDelete ? shell.credDelete(ref) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-NETWL.1 (fail-closed in browser)
   credEncryptionAvailable: () => (shell?.credEncryptionAvailable ? shell.credEncryptionAvailable() : Promise.resolve(false)), // P-NETWL.1
   // P-SECRET-INTAKE.1 (ADR-0476): the agent-triggered secret dialog.
   secretPending: async () => {

@@ -24,18 +24,20 @@
 //   - materializeEnvFile / unmaterializeEnvFile: the explicit "write .env temporarily" action for tools
 //     that only read a file. Never the default; refused unless the file is git-ignored, and refused in a
 //     folder a cloud client syncs (it would upload and keep versions of the plaintext). Every write is
-//     journaled first (path, names, until; never a value) under the data root, so the file is re-blanked
-//     by its timer, on request, at graceful shutdown (unmaterializeAll, called through main's
-//     /api/vault/main/shutdown) or at the next engine start after a crash or a hard kill
-//     (reblankMaterializedJournal, vault_lifecycle.ts).
+//     journaled first (path, names, until and a keyed digest of each written value; never a value) under
+//     the data root, so the file is re-blanked by its timer, on request, at graceful shutdown
+//     (unmaterializeAll, called through main's /api/vault/main/shutdown) or at the next engine start
+//     after a crash or a hard kill (reblankMaterializedJournal, vault_lifecycle.ts). A re-blank empties
+//     only an assignment whose value matches a digest: what LUCID wrote, never a value the user wrote.
 // Values never reach a log line, an HTTP response or an event: only names, counts and last-4.
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
+import { hmacSha256, randomBytes } from "../harness/crypto/fips_crypto.ts";
 import { gitExe } from "../harness/runs/sandbox_exec.ts";
 import { writeAtomic } from "./atomic_file.ts";
-import { blankDotEnv, mapEnvName, parseDotEnv, type DotEnvProblem, type EnvSlotKind } from "./env_file.ts";
+import { blankDotEnv, mapEnvName, parseDotEnv, type DotEnvAssignment, type DotEnvProblem, type EnvSlotKind } from "./env_file.ts";
 import { mayHoldWorkspaceEnv, providerKeyEnvs } from "./env_name_policy.ts";
 import { isEnvName, readVault, vaultLast4, type VaultKind, type VaultMetaPatch } from "./engine_vault.ts";
 import { keyVaultDir } from "./settings_store.ts";
@@ -328,29 +330,65 @@ export function workspaceSecretEnv(cwd: string): Record<string, string> {
 
 // ── "write .env temporarily" (never the default) ─────────────────────────────────────────────────────
 
-interface JournalEntry { path: string; names: string[]; until: number }
+// security review VAULT-ENV-JOURNAL-UNCOMMITTED: a record names the values LUCID wrote, not only their
+// names. `digests` holds `<salt hex>:<HMAC-SHA256(salt, "NAME=value") hex>` for each written value (a
+// fresh 16-byte salt per materialize; never a value), and every re-blank empties only an assignment whose
+// value matches one. A crash between the journal and the `.env` write, or a value the user typed over
+// LUCID's afterwards, is left as it is (it was never LUCID's); a value LUCID wrote is always emptied.
+interface JournalEntry { path: string; names: string[]; until: number; digests: string[] }
 interface Materialized extends JournalEntry { timer: Timer }
 const materialized = new Map<string, Materialized>();
 let exitHooked = false;
 
-// The materialize journal: which files hold written values (path, names, until; NEVER a value), so an
-// engine that was hard-killed or crashed re-blanks them at its next start. Written before the plaintext.
+// The materialize journal: which files hold written values (path, names, until, value digests; NEVER a
+// value), so an engine that was hard-killed or crashed re-blanks them at its next start. Written before
+// the plaintext.
 let journalOverride: string | null = null;
 const journalFile = (): string => journalOverride ?? join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "vault-env-materialized.json");
 /** Test-only: put the journal somewhere else (null = the data root again). */
 export function _setMaterializeJournalForTest(path: string | null): void { journalOverride = path; }
+
+/** The rename that lands a materialize's `.env` write (atomic_file.ts writeAtomic). Only tests swap it. */
+let envRename: (from: string, to: string) => void = renameSync;
+/** Test-only: fail (or observe) the `.env` write of a materialize after its journal entry is down, the
+ *  window a crash can hit (null = node:fs again). */
+export function _setMaterializeRenameForTest(fn: ((from: string, to: string) => void) | null): void { envRename = fn ?? renameSync; }
+
+const DIGEST_RE = /^[0-9a-f]{32}:[0-9a-f]{64}$/;
+const digestOf = (salt: Buffer, name: string, value: string): string =>
+  `${salt.toString("hex")}:${hmacSha256(salt, Buffer.from(`${name}=${value}`, "utf8")).toString("hex")}`;
+
+/** The digest of `e` an assignment's value matches (it is a value LUCID wrote), else null. */
+function ownDigest(e: JournalEntry): (a: DotEnvAssignment) => string | null {
+  const have = new Set(e.digests);
+  const salts = [...new Set(e.digests.map((d) => d.slice(0, 32)))].map((s) => Buffer.from(s, "hex"));
+  return (a) => {
+    if (!a.value) return null;
+    for (const s of salts) { const d = digestOf(s, a.name, a.value); if (have.has(d)) return d; }
+    return null;
+  };
+}
+
+/** One record of everything `list` holds for a path: every name and digest; the last one's until. */
+function mergeEntries(...list: Array<JournalEntry | undefined>): JournalEntry | undefined {
+  const es = list.filter((e): e is JournalEntry => !!e);
+  const last = es[es.length - 1];
+  if (!last) return undefined;
+  return { path: last.path, until: last.until, names: [...new Set(es.flatMap((e) => e.names))].sort(), digests: [...new Set(es.flatMap((e) => e.digests))] };
+}
 
 function readJournal(): JournalEntry[] {
   let raw: unknown;
   try { raw = JSON.parse(readFileSync(journalFile(), "utf8")); } catch { return []; }
   return (Array.isArray(raw) ? raw : []).filter((e): e is JournalEntry =>
     !!e && typeof e.path === "string" && typeof e.until === "number"
-    && Array.isArray(e.names) && e.names.every((n: unknown) => typeof n === "string" && isEnvName(n)));
+    && Array.isArray(e.names) && e.names.every((n: unknown) => typeof n === "string" && isEnvName(n))
+    && Array.isArray(e.digests) && e.digests.every((d: unknown) => typeof d === "string" && DIGEST_RE.test(d)));
 }
 function writeJournal(entries: JournalEntry[]): void {
   const f = journalFile();
   mkdirSync(dirname(f), { recursive: true });
-  writeAtomic(f, JSON.stringify(entries.map(({ path, names, until }) => ({ path, names, until }))));
+  writeAtomic(f, JSON.stringify(entries.map(({ path, names, until, digests }) => ({ path, names, until, digests }))));
 }
 /** Record (or, with null, drop) the journal entry of `path`. Throws when the journal cannot be written. */
 function journalSet(path: string, entry: JournalEntry | null): void {
@@ -358,12 +396,17 @@ function journalSet(path: string, entry: JournalEntry | null): void {
   writeJournal(entry ? [...rest, entry] : rest);
 }
 
-/** Blank `names` in the `.env` at `path` (in the realpath workspace `ws`) through readEnvFileSafe. True
- *  when the file changed; false when it is absent or held no value for them. Throws on a refusal. */
-function reblankAt(ws: string, path: string, names: readonly string[]): boolean {
+/** Blank, in the `.env` at `path` (in the realpath workspace `ws`, through readEnvFileSafe), every value
+ *  the record `pick` says LUCID wrote, or with a name set every assignment of those names. True when the
+ *  file changed; false when it is absent or held none of them. Throws on a refusal. */
+function reblankAt(ws: string, path: string, pick: JournalEntry | ReadonlySet<string>): boolean {
   const text = readEnvFileSafe(ws, path);
   if (text === null) return false;
-  const next = blankDotEnv(text, new Set(names));
+  let next: string;
+  if ("digests" in pick) {
+    const own = ownDigest(pick);
+    next = blankDotEnv(text, (a) => own(a) !== null);
+  } else next = blankDotEnv(text, pick);
   if (next === text) return false;
   writeAtomic(path, next);
   return true;
@@ -378,7 +421,7 @@ function reblankEntries(list: JournalEntry[]): { reblanked: number; failed: numb
     try {
       if (!existsSync(e.path)) continue; // gone: nothing left to blank
       const ws = realWorkspace(dirname(e.path));
-      if (reblankAt(ws, envFileOf(ws, basename(e.path)), e.names)) reblanked++;
+      if (reblankAt(ws, envFileOf(ws, basename(e.path)), e)) reblanked++;
     } catch (err) {
       failed++;
       keep.push(e);
@@ -405,8 +448,9 @@ export function reblankMaterializedJournal(): { reblanked: number; failed: numbe
  *  now or still journaled, and clear both records. Never throws. */
 export function unmaterializeAll(): { reblanked: number; failed: number } {
   const all = new Map<string, JournalEntry>();
-  for (const e of readJournal()) all.set(norm(e.path), e);
-  for (const [k, m] of materialized) { clearTimeout(m.timer); all.set(k, m); }
+  for (const e of readJournal()) all.set(norm(e.path), mergeEntries(all.get(norm(e.path)), e)!);
+  // security review VAULT-ENV-MATERIALIZE-UNION: both records merged; neither replaces what the other lists.
+  for (const [k, m] of materialized) { clearTimeout(m.timer); all.set(k, mergeEntries(all.get(k), m)!); }
   materialized.clear();
   return reblankEntries([...all.values()]);
 }
@@ -444,13 +488,24 @@ export function materializeEnvFile(workspace: string, file: string = DEFAULT_ENV
   const until = Date.now() + mins * 60_000;
   const key = norm(path);
   const prev = materialized.get(key);
+  const salt = randomBytes(16);
+  const wrote = parseDotEnv(out).assignments.filter((a) => a.value && names.includes(a.name)).map((a) => digestOf(salt, a.name, a.value));
   // The journal first: no plaintext is written that a crash would leave without a record to re-blank.
-  journalSet(path, { path, names: [...new Set([...(prev?.names ?? []), ...names])], until });
-  writeAtomic(path, out);
+  // security review VAULT-ENV-MATERIALIZE-UNION: the record keeps every earlier write of this file (a
+  // name since removed from the vault still holds the value written then) next to this one; the digests
+  // make it safe to journal before the write, since a crash before the rename leaves no matching value.
+  const prepared = mergeEntries(readJournal().find((e) => norm(e.path) === key), prev, { path, names, until, digests: [...new Set(wrote)] })!;
+  journalSet(path, prepared);
+  writeAtomic(path, out, envRename);
+  // Written: keep exactly the digests of values the file now holds (a value rewritten since is gone).
+  const own = ownDigest(prepared);
+  const held = parseDotEnv(out).assignments.flatMap((a) => { const d = own(a); return d ? [{ name: a.name, d }] : []; });
+  const committed: JournalEntry = { path, until, names: [...new Set(held.map((h) => h.name))].sort(), digests: [...new Set(held.map((h) => h.d))] };
+  try { journalSet(path, committed); } catch (e) { console.error(`[vault-env] could not update the materialize journal (the earlier, wider record stays): ${String((e as Error)?.message ?? e).slice(0, 160)}`); }
   if (prev) clearTimeout(prev.timer);
   const timer = setTimeout(() => { try { unmaterializeEnvFile(ws, file); } catch (e) { console.error(`[vault-env] could not re-blank ${file}: ${String((e as Error)?.message ?? e).slice(0, 160)}`); } }, mins * 60_000);
   timer.unref?.();
-  materialized.set(key, { path, names, until, timer });
+  materialized.set(key, { ...committed, timer });
   if (!exitHooked) {
     exitHooked = true;
     // Best-effort only (a hard kill never runs it): the journal and the next start's re-blank are the guarantee.
@@ -460,15 +515,17 @@ export function materializeEnvFile(workspace: string, file: string = DEFAULT_ENV
   return { path: relative(ws, path) || file, names, until };
 }
 
-/** Blank the names a materialize wrote (or, with nothing recorded, every workspace-secret name). */
+/** Blank the values a materialize wrote, by the in-memory and the journaled record together (or, with
+ *  nothing recorded, every workspace-secret name). */
 export function unmaterializeEnvFile(workspace: string, file: string = DEFAULT_ENV_FILE): { blanked: boolean; names: string[] } {
   const ws = realWorkspace(workspace);
   const path = envFileOf(ws, file);
   const key = norm(path);
   const rec = materialized.get(key);
   const exists = existsSync(path);
-  const names = rec?.names ?? readJournal().find((e) => norm(e.path) === key)?.names ?? Object.keys(workspaceSecretEnv(ws));
-  const blanked = exists && reblankAt(ws, path, names); // a refusal throws and keeps both records
+  const entry = mergeEntries(readJournal().find((e) => norm(e.path) === key), rec);
+  const names = entry?.names ?? Object.keys(workspaceSecretEnv(ws));
+  const blanked = exists && reblankAt(ws, path, entry ?? new Set(names)); // a refusal throws and keeps both records
   if (rec) clearTimeout(rec.timer);
   materialized.delete(key);
   try { journalSet(path, null); } catch (e) { console.error(`[vault-env] could not update the materialize journal: ${String((e as Error)?.message ?? e).slice(0, 160)}`); }

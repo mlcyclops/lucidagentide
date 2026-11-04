@@ -28,7 +28,7 @@ import { bestEngineLine, classifyEngineFailure, isProtectedInstallRoot, probeDir
 import { resolveEngineSpawn } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): prefer the compiled engine binary
 import { materializeLocalProviders, registerLocalProviderEgress } from "./local_providers_runtime.ts";
 import { GPU_SANDBOX_FLAG_FILE, GPU_SANDBOX_SWITCH, decideGpuAction, gpuDeathLogLine, relaunchArgs } from "./gpu_watchdog.ts";
-import { decideRendererAction, freshRendererWatch, rendererGoneLogLine, rendererResponsivenessLogLine } from "./renderer_watchdog.ts";
+import { decideReloadRetry, decideRendererAction, engineAppUrl, freshRendererWatch, reloadFailedLogLine, rendererGoneLogLine, rendererResponsivenessLogLine } from "./renderer_watchdog.ts";
 import { formatPortIncident, formatSquatter, healthVerdict, ownerProbeSpec, parseOwnerProbe, type HealthVerdict, type SquatterInfo } from "./port_guard.ts"; // P-PORTGUARD.1 (ADR-0305): the engine port handshake
 import { classifyPortHolder, orphanDialog, reapSpec } from "./orphan_engine.ts"; // P-PORTGUARD.3 (ADR-0382): reap our own orphan, after a warning
 import { assessPreviousRun, freshLedger, markClean, readLedgerText, runLedgerPath, withEngine, writeLedger, type PreviousRun, type RunLedger } from "./run_ledger.ts"; // P-RECOVER.1 (ADR-0385)
@@ -688,13 +688,23 @@ function createWindow(): void {
     const r = decideRendererAction(details, rendererWatch, Date.now());
     rendererWatch = r.state;
     appendEngineLog(rendererGoneLogLine(details, r, new Date().toISOString()));
-    if (r.action !== "reload") return;
+    if (r.action === "reload") scheduleReload(r.delayMs);
+  });
+  // P-RECOVER.4 (ADR-0481) upgrade review RELOAD-RETRY / RELOAD-ORIGIN: the reload uses the same
+  // 127.0.0.1 app URL as the first load, and a failed load retries under the same per-minute cap.
+  function scheduleReload(delayMs: number): void {
     setTimeout(() => {
       if (thisWin.isDestroyed()) return;
       // PORT is read at reload time: it is where the engine binds NOW (a launch-time roll, ADR-0458, is in it).
-      void thisWin.loadURL(`http://localhost:${PORT}`).catch((err: unknown) => appendEngineLog(`[renderer-watchdog] reload failed: ${err instanceof Error ? err.message : String(err)}\n`));
-    }, r.delayMs);
-  });
+      thisWin.loadURL(engineAppUrl(PORT)).catch((err: unknown) => {
+        if (thisWin.isDestroyed()) return;
+        const retry = decideReloadRetry(rendererWatch, Date.now());
+        rendererWatch = retry.state;
+        appendEngineLog(reloadFailedLogLine(err instanceof Error ? err.message : String(err), retry, new Date().toISOString()));
+        if (retry.action === "reload") scheduleReload(retry.delayMs);
+      });
+    }, delayMs);
+  }
   thisWin.webContents.on("unresponsive", () => appendEngineLog(rendererResponsivenessLogLine("unresponsive", new Date().toISOString())));
   thisWin.webContents.on("responsive", () => appendEngineLog(rendererResponsivenessLogLine("responsive", new Date().toISOString())));
   // Spell-check suggestions: Electron's spellchecker underlines misspellings but the app must build the
@@ -715,12 +725,12 @@ function createWindow(): void {
   // ADR-0474 security review VAULT-TRANSPORT-LOCALHOST: every main-to-engine fetch and the window load use
   // 127.0.0.1, the engine's bind address. `localhost` can resolve to [::1] first, a socket any local
   // process may own, which would then receive the UI token and render as our window.
-  installAppNavigation(win.webContents, `http://127.0.0.1:${PORT}/`, (url) => shell.openExternal(url));
+  installAppNavigation(win.webContents, `${engineAppUrl(PORT)}/`, (url) => shell.openExternal(url));
   // P-KGMARKET.4: once the renderer is up, flush any lucid://auth URL that arrived during a cold launch.
   win.webContents.on("did-finish-load", () => {
     if (pendingAuthUrl) { win?.webContents.send("lucid:authCallback", pendingAuthUrl); pendingAuthUrl = null; }
   });
-  win.loadURL(`http://127.0.0.1:${PORT}`);
+  win.loadURL(engineAppUrl(PORT));
   // P-RECOVER.1 (ADR-0385): a Windows log off or shutdown arrives as session-end; it is a deliberate
   // exit, so it must not surface as an unclean-shutdown incident on the next launch.
   win.on("session-end", () => markRunClean());

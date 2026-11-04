@@ -97,9 +97,10 @@ export function parseDotEnv(text: string): DotEnvParse {
   return { assignments, entries: order.map((n) => last.get(n)!), problems };
 }
 
-/** Replace the chosen names' assignments with `NAME=` placeholders (all names when `names` is omitted).
- *  Indentation and an `export ` prefix are kept; every other line is untouched, byte for byte. */
-export function blankDotEnv(text: string, names?: ReadonlySet<string>): string {
+/** Replace the chosen assignments with `NAME=` placeholders: every assignment of a name in the `names`
+ *  set, each assignment the predicate picks, or all of them when `names` is omitted. Indentation and an
+ *  `export ` prefix are kept; every other line is untouched, byte for byte. */
+export function blankDotEnv(text: string, names?: ReadonlySet<string> | ((a: DotEnvAssignment) => boolean)): string {
   const src = String(text ?? "");
   const bom = src.startsWith("\uFEFF") ? "\uFEFF" : "";
   const eol = src.includes("\r\n") ? "\r\n" : "\n";
@@ -107,7 +108,7 @@ export function blankDotEnv(text: string, names?: ReadonlySet<string>): string {
   const { assignments } = parseDotEnv(src);
   const replace = new Map<number, { endLine: number; text: string }>();
   for (const a of assignments) {
-    if (names && !names.has(a.name)) continue;
+    if (names && !(typeof names === "function" ? names(a) : names.has(a.name))) continue;
     const indent = /^\s*/.exec(lines[a.startLine - 1] ?? "")?.[0] ?? "";
     replace.set(a.startLine, { endLine: a.endLine, text: `${indent}${a.exported ? "export " : ""}${a.name}=` });
   }

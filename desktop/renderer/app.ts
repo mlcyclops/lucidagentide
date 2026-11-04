@@ -10993,7 +10993,12 @@ async function saveGitPat(): Promise<void> {
   showToast({ tone: "ok", title: "Git token saved", desc: "Stored encrypted. Private-repo clones will use it now and in future sessions.", timeout: 4000 });
 }
 async function clearGitPat(): Promise<void> {
-  if (bridge.isElectron && bridge.credDelete) await bridge.credDelete("git_pat").catch(() => false);
+  if (bridge.isElectron && bridge.credDelete) {
+    // security review CRED-DELETE-ENGINE-DOWN: only a confirmed delete clears anything; otherwise the token
+    // is still stored (and re-applied next launch), so the session copy and the "saved" indicator stay.
+    const r = await bridge.credDelete("git_pat").catch((e: unknown) => ({ error: `not removed, engine unavailable (${String((e as Error)?.message ?? e)})` }));
+    if ("error" in r) { showToast({ tone: "danger", title: "Git token not removed", desc: String(r.error), timeout: 6000 }); return; }
+  }
   sessionGitPat = "";
   state.creds = await bridge.credList().catch(() => state.creds.filter((c) => c.ref !== "git_pat"));
   hydrateSettings();

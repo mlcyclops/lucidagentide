@@ -396,12 +396,44 @@ describe("bridge cred* through the main-only routes", () => {
     expect(io.files.has(`${credDir}/cred_dgx.bin`)).toBe(false);
     expect(await credRotateEngine(client, v, { ref: "cred_nope", secret: "x".repeat(20) })).toEqual({ error: "not-found" });
 
-    expect(await quiet(() => credDeleteEverywhere(client, v, stored.ref))).toBe(true);
-    expect(await credDeleteEverywhere(client, v, stored.ref)).toBe(false);
+    expect(await quiet(() => credDeleteEverywhere(client, v, stored.ref))).toEqual({ deleted: true });
+    expect(await credDeleteEverywhere(client, v, stored.ref)).toEqual({ deleted: false });
     expect(vaultGet(stored.ref)).toBeUndefined();
 
     const all = bodies.join("\n");
     for (const s of ["BRIDGE.STORED", "BRIDGE.ROTATED", "BRIDGE_RESAVED", "ROTATEDDGX", "LEGACYDGXKEY"]) expect(all).not.toContain(s);
+  });
+
+  test("security review CRED-DELETE-ENGINE-DOWN: delete is a failure unless the engine answered; a legacy-only copy counts once the engine confirms it holds none", async () => {
+    const { credDir } = scratch();
+    useFakeStore();
+    const io = memIo();
+    const v: LegacyCredVault = { ss: SS, io, dir: credDir };
+    seed(v, ["git_pat"]); // a legacy safeStorage copy is present
+    await quiet(() => credStoreEngine(routeClient(), { ss: SS, io: memIo(), dir: "/nowhere" }, { ref: "git_pat", kind: "apikey", secret: "ghp_ENGINE_HOLDS_THIS_000020" }));
+    expect(vaultGet("git_pat")).toBe("ghp_ENGINE_HOLDS_THIS_000020");
+
+    // Engine unreachable: not removed, said why, and nothing touched in either store.
+    const down = await quiet(() => credDeleteEverywhere(routeClient([], { down: true }), v, "git_pat"));
+    expect(down).toEqual({ error: expect.stringContaining("not removed, engine unavailable") });
+    expect(vaultGet("git_pat")).toBe("ghp_ENGINE_HOLDS_THIS_000020");
+    expect(readCredential(SS, io, credDir, "git_pat")).toBe(CREDS.git_pat.secret);
+
+    // Engine answers: both copies go, success.
+    expect(await quiet(() => credDeleteEverywhere(routeClient(), v, "git_pat"))).toEqual({ deleted: true });
+    expect(vaultGet("git_pat")).toBeUndefined();
+    expect(io.files.has(`${credDir}/git_pat.bin`)).toBe(false);
+
+    // Legacy-only (not yet migrated): success because the engine confirmed it has no such ref.
+    seed(v, ["figma_pat"]);
+    expect(await quiet(() => credDeleteEverywhere(routeClient(), v, "figma_pat"))).toEqual({ deleted: true });
+    expect(io.files.has(`${credDir}/figma_pat.bin`)).toBe(false);
+
+    // A safeStorage copy that cannot be removed would still be injected by main: not removed either.
+    seed(v, ["embeddings_key"]);
+    io.onRemove = (p) => { if (p.endsWith("embeddings_key.bin")) throw new Error("EBUSY"); };
+    expect(await quiet(() => credDeleteEverywhere(routeClient(), v, "embeddings_key"))).toEqual({ error: expect.stringContaining("not removed") });
+    expect(io.files.has(`${credDir}/embeddings_key.bin`)).toBe(true);
   });
 
   test("fail-closed: with no OS vault the store is an { error } and nothing lands in safeStorage", async () => {

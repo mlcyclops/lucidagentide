@@ -12,9 +12,12 @@ import {
   RENDERER_MAX_RELOADS,
   RENDERER_RELOAD_DELAYS_MS,
   RENDERER_RELOAD_WINDOW_MS,
+  decideReloadRetry,
   decideRendererAction,
+  engineAppUrl,
   freshRendererWatch,
   isRendererDeath,
+  reloadFailedLogLine,
   rendererGoneLogLine,
   rendererResponsivenessLogLine,
   type RendererWatchState,
@@ -115,6 +118,46 @@ describe("decideRendererAction", () => {
 
   test("the delay table has one entry per allowed reload", () => {
     expect(RENDERER_RELOAD_DELAYS_MS.length).toBe(RENDERER_MAX_RELOADS);
+  });
+});
+
+// P-RECOVER.4 (ADR-0481) upgrade review RELOAD-RETRY: a failed reload retries with backoff under the SAME cap.
+describe("decideReloadRetry", () => {
+  test("a failed reload after one death retries with the next backoff step", () => {
+    const first = decideRendererAction(crashed, freshRendererWatch(), T0);
+    const r = decideReloadRetry(first.state, T0 + first.delayMs + 10);
+    expect(r.action).toBe("reload");
+    expect(r.attempt).toBe(2);
+    expect(r.delayMs).toBe(RENDERER_RELOAD_DELAYS_MS[1]);
+  });
+
+  test("deaths and failed-reload retries share one cap; past it the retry gives up", () => {
+    let s = decideRendererAction(crashed, freshRendererWatch(), T0).state;
+    const actions: string[] = [];
+    for (let i = 1; i <= RENDERER_MAX_RELOADS + 3; i++) {
+      const r = decideReloadRetry(s, T0 + i * 100);
+      actions.push(r.action);
+      s = r.state;
+    }
+    expect(actions.filter((a) => a === "reload").length).toBe(RENDERER_MAX_RELOADS - 1);
+    expect(actions.slice(RENDERER_MAX_RELOADS - 1).every((a) => a === "give-up")).toBe(true);
+    expect(decideRendererAction(crashed, s, T0 + 5000).action).toBe("give-up");
+  });
+
+  test("retry log lines say retrying or NOT retried", () => {
+    const r = decideReloadRetry(freshRendererWatch(), T0);
+    expect(reloadFailedLogLine("ERR_CONNECTION_REFUSED", r, "t")).toContain(`retrying in ${r.delayMs}ms`);
+    const { state } = deaths(RENDERER_MAX_RELOADS, 10);
+    const g = decideReloadRetry(state, T0 + 100);
+    expect(reloadFailedLogLine("x", g, "t")).toContain("NOT retried");
+  });
+});
+
+// P-RECOVER.4 (ADR-0481) upgrade review RELOAD-ORIGIN: the reload goes to the IPv4 loopback the engine binds.
+describe("engineAppUrl", () => {
+  test("is the 127.0.0.1 origin, never localhost", () => {
+    expect(engineAppUrl(8787)).toBe("http://127.0.0.1:8787");
+    expect(new URL(engineAppUrl(8787)).hostname).toBe("127.0.0.1");
   });
 });
 

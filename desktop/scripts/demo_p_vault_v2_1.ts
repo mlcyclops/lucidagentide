@@ -188,7 +188,8 @@ try {
   check((await credListMerged(client, legacy)).length === 3, "bridge credList shows the engine's credentials");
   const rotated = await credRotateEngine(client, legacy, { ref, secret: BRIDGE[1] });
   check(!("error" in rotated) && rotated.last4 === "T.06", "bridge credRotate rotates in place");
-  check(await credDeleteEverywhere(client, legacy, ref), "bridge credDelete removes it");
+  const removed = await credDeleteEverywhere(client, legacy, ref);
+  check("deleted" in removed && removed.deleted, "bridge credDelete removes it");
   check(plaintextUnder(paths.vault, [...UI_SECRET, ...Object.values(LEGACY), ...BRIDGE]).length === 0, "no value is in the vault directory in the clear");
   const leaked = [...UI_SECRET, ...Object.values(LEGACY), ...BRIDGE].filter((s) => bodies.some((b) => b.includes(s)));
   check(leaked.length === 0, `no route response (${bodies.length} checked) carried a secret value`);

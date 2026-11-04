@@ -17,11 +17,11 @@ import { engineCredClient } from "./cred_engine_client.ts";
 import { _setVaultBackendForTest, type OsKeyStore } from "./engine_vault.ts";
 import { _resetVaultEnvForTest } from "./vault_env.ts";
 import {
-  _resetMaterializedForTest, _setMaterializeJournalForTest, gitEverCommitted, importEnvFile, isIgnored, materializeEnvFile,
-  owningWorkspace, reblankMaterializedJournal, scanEnvFile, unmaterializeAll, unmaterializeEnvFile, workspaceSecretEnv,
+  _resetMaterializedForTest, _setMaterializeJournalForTest, _setMaterializeRenameForTest, gitEverCommitted, importEnvFile, isIgnored,
+  materializeEnvFile, owningWorkspace, reblankMaterializedJournal, scanEnvFile, unmaterializeAll, unmaterializeEnvFile, workspaceSecretEnv,
 } from "./vault_env_import.ts";
 import { handleVaultRoutes } from "./vault_routes.ts";
-import { onVaultWrite, vaultGet, vaultList, workspaceRef } from "./vault_store.ts";
+import { onVaultWrite, vaultDelete, vaultGet, vaultList, workspaceRef } from "./vault_store.ts";
 import { setWorkspace } from "./workspace.ts";
 
 const ENV_KEYS = [
@@ -435,6 +435,82 @@ describe("write .env temporarily", () => {
     expect(await quiet(() => unmaterializeAll())).toEqual({ reblanked: 1, failed: 0 });
     expect(readFileSync(join(ws, ".env"), "utf8")).not.toContain(V.stripe);
     expect(journalOf(root)).toEqual([]);
+  });
+
+  // security review VAULT-ENV-JOURNAL-UNCOMMITTED
+  test("a crash between the journal and the .env write never blanks a value LUCID did not write", async () => {
+    const root = scratch(); useFakeStore();
+    const ws = await ready(root, "app");
+    const mine = "sk_test_" + "USERownLOCALvalue000077";
+    const before = `STRIPE_SECRET_KEY=${mine}\nOTHER=plain\n`;
+    writeFileSync(join(ws, ".env"), before); // the user's own value, typed in after the import
+    _setMaterializeRenameForTest(() => { throw new Error("the engine died before the rename"); });
+    try {
+      expect(() => materializeEnvFile(ws, ".env", 5)).toThrow(/died before the rename/);
+    } finally { _setMaterializeRenameForTest(null); }
+    expect(readFileSync(join(ws, ".env"), "utf8")).toBe(before);
+    const journal = journalOf(root) as Array<{ names: string[] }>;
+    expect(journal).toHaveLength(1); // journaled before a write that never landed
+    expect(journal[0]!.names).toEqual(["STRIPE_SECRET_KEY"]);
+    expect(leaks(JSON.stringify(journal))).toEqual([]);
+    _resetMaterializedForTest(); // the engine died: no timer, no in-memory record
+    expect(await quiet(() => reblankMaterializedJournal())).toEqual({ reblanked: 0, failed: 0 });
+    expect(readFileSync(join(ws, ".env"), "utf8")).toBe(before);
+    expect(journalOf(root)).toEqual([]);
+  });
+
+  /** A workspace holding two imported ws: secrets, its .env blanked and git-ignored. */
+  const readyTwo = async (root: string): Promise<string> => {
+    const ws = workspace(root, "app", `STRIPE_SECRET_KEY=${V.stripe}\nDB_PASSWORD="${V.db}"\n`);
+    await quiet(() => importEnvFile(ws, ".env", { names: ["STRIPE_SECRET_KEY", "DB_PASSWORD"], blank: true }));
+    writeFileSync(join(ws, ".gitignore"), ".env\n");
+    return ws;
+  };
+
+  // security review VAULT-ENV-JOURNAL-UNCOMMITTED
+  test("a re-blank empties the values LUCID wrote and keeps a value the user typed over one", async () => {
+    const root = scratch(); useFakeStore();
+    const ws = await readyTwo(root);
+    await quiet(() => materializeEnvFile(ws, ".env", 5));
+    const mine = "my-own-local-db-password";
+    writeFileSync(join(ws, ".env"), readFileSync(join(ws, ".env"), "utf8").replace(/^DB_PASSWORD=.*$/m, `DB_PASSWORD=${mine}`));
+    _resetMaterializedForTest(); // the engine died: no timer, no in-memory record
+    expect(await quiet(() => reblankMaterializedJournal())).toEqual({ reblanked: 1, failed: 0 });
+    const text = readFileSync(join(ws, ".env"), "utf8");
+    expect(text).not.toContain(V.stripe);
+    expect(text).toContain("STRIPE_SECRET_KEY=\n");
+    expect(text).toContain(`DB_PASSWORD=${mine}\n`);
+    expect(journalOf(root)).toEqual([]);
+  });
+
+  // security review VAULT-ENV-MATERIALIZE-UNION
+  describe("a secret removed from the vault between two writes of the same file is still blanked", () => {
+    const twoWrites = async (root: string): Promise<string> => {
+      const ws = await readyTwo(root);
+      await quiet(() => materializeEnvFile(ws, ".env", 5));
+      expect(vaultDelete(workspaceRef(ws, "DB_PASSWORD"))).toBe(true);
+      const again = await quiet(() => materializeEnvFile(ws, ".env", 5));
+      expect(again.names).toEqual(["STRIPE_SECRET_KEY"]);
+      expect(readFileSync(join(ws, ".env"), "utf8")).toContain(V.db); // the first write's value is still there
+      return ws;
+    };
+
+    test("by its timer (or on request)", async () => {
+      const root = scratch(); useFakeStore();
+      const ws = await twoWrites(root);
+      const back = unmaterializeEnvFile(ws); // what the timer runs
+      expect(back).toEqual({ blanked: true, names: ["DB_PASSWORD", "STRIPE_SECRET_KEY"] });
+      expect(leaks(readFileSync(join(ws, ".env"), "utf8"))).toEqual([]);
+      expect(journalOf(root)).toEqual([]);
+    });
+
+    test("at graceful shutdown", async () => {
+      const root = scratch(); useFakeStore();
+      const ws = await twoWrites(root);
+      expect(await quiet(() => unmaterializeAll())).toEqual({ reblanked: 1, failed: 0 });
+      expect(leaks(readFileSync(join(ws, ".env"), "utf8"))).toEqual([]);
+      expect(journalOf(root)).toEqual([]);
+    });
   });
 
   test("VAULT-ENV-MATERIALIZE-SYNCED: main's graceful shutdown call re-blanks before the kill", async () => {

@@ -67,6 +67,14 @@ export function isRendererDeath(d: RendererGoneDetails): boolean {
  *  sliding window is testable. */
 export function decideRendererAction(d: RendererGoneDetails, s: RendererWatchState, nowMs: number): RendererDecision {
   if (!isRendererDeath(d)) return { action: "ignore", attempt: 0, delayMs: 0, state: s };
+  return decideReloadRetry(s, nowMs);
+}
+
+/** P-RECOVER.4 (ADR-0481) upgrade review RELOAD-RETRY: a delayed loadURL that FAILED (the engine briefly
+ *  down) is not a recovered window. installAppNavigation's did-fail-load retry only covers the first boot,
+ *  so the watchdog retries itself, charging each retry against the SAME sliding-window cap and delay table
+ *  as a renderer death: never more than RENDERER_MAX_RELOADS loads per window, then "give-up". */
+export function decideReloadRetry(s: RendererWatchState, nowMs: number): RendererDecision {
   const recent = s.reloadsAt.filter((t) => nowMs - t < RENDERER_RELOAD_WINDOW_MS);
   if (recent.length >= RENDERER_MAX_RELOADS) return { action: "give-up", attempt: recent.length, delayMs: 0, state: { reloadsAt: recent } };
   const attempt = recent.length + 1;
@@ -84,6 +92,23 @@ export function rendererGoneLogLine(d: RendererGoneDetails, r: RendererDecision,
     return `${head} -> NOT reloaded: ${r.attempt} reloads in the last ${RENDERER_RELOAD_WINDOW_MS / 1000}s (cap ${RENDERER_MAX_RELOADS}); the window is left as it is, relaunch LUCID\n`;
   }
   return `${head} -> reloading the app in ${r.delayMs}ms (reload #${r.attempt} of ${RENDERER_MAX_RELOADS} per ${RENDERER_RELOAD_WINDOW_MS / 1000}s)\n`;
+}
+
+/** The engine log line for a failed watchdog reload and what happens next. */
+export function reloadFailedLogLine(err: string, r: RendererDecision, whenIso: string): string {
+  const head = `[renderer-watchdog] ${whenIso} reload failed: ${err}`;
+  if (r.action === "give-up") {
+    return `${head} -> NOT retried: ${r.attempt} reloads in the last ${RENDERER_RELOAD_WINDOW_MS / 1000}s (cap ${RENDERER_MAX_RELOADS}); the window is left as it is, relaunch LUCID\n`;
+  }
+  return `${head} -> retrying in ${r.delayMs}ms (reload #${r.attempt} of ${RENDERER_MAX_RELOADS} per ${RENDERER_RELOAD_WINDOW_MS / 1000}s)\n`;
+}
+
+/** P-RECOVER.4 (ADR-0481) upgrade review RELOAD-ORIGIN: the ONE app URL every privileged main-window load
+ *  uses (first load, navigation policy, watchdog reload). The engine binds only IPv4 loopback; `localhost`
+ *  can resolve to [::1] first, a socket any local process may own, which would then render inside our
+ *  window with the preload bridge (ADR-0474 VAULT-TRANSPORT-LOCALHOST). */
+export function engineAppUrl(port: number): string {
+  return `http://127.0.0.1:${port}`;
 }
 
 /** An unresponsive renderer is a long synchronous task, not a death: it is logged, never reloaded. */

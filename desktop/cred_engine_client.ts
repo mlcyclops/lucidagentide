@@ -272,11 +272,24 @@ export async function credRotateEngine(client: EngineCredClient, v: LegacyCredVa
   } catch (e) { return { error: String((e as Error)?.message ?? e) }; }
 }
 
-/** Delete from both stores; true when either held it. */
-export async function credDeleteEverywhere(client: EngineCredClient, v: LegacyCredVault, ref: string): Promise<boolean> {
-  let engine = false;
-  try { engine = await client.remove(ref); } catch { /* engine down: the legacy delete still runs */ }
+/** What a delete did: `{ deleted }` (true when either store held it) only once the engine answered for
+ *  the ref and no safeStorage copy is left; otherwise an `{ error }` and the credential is NOT removed. */
+export type CredDeleteResult = { deleted: boolean } | { error: string };
+
+/** Delete from both stores. The engine vault is authoritative: its answer comes first, and nothing is
+ *  touched without it. */
+export async function credDeleteEverywhere(client: EngineCredClient, v: LegacyCredVault, ref: string): Promise<CredDeleteResult> {
+  // security review CRED-DELETE-ENGINE-DOWN (P-VAULT-V2.1, ADR-0474): an unreachable or refusing engine
+  // used to be swallowed, so deleting a legacy copy (or nothing) still read as done while the engine entry
+  // stayed and was re-applied on the next launch. No engine answer = not removed, and the legacy copy is
+  // left too, so what the caller still shows is what is still stored.
+  let engine: boolean;
+  try { engine = await client.remove(ref); } catch (e) {
+    const why = String((e as Error)?.message ?? e);
+    return { error: e instanceof EngineVaultError && e.status !== 0 ? `not removed: the engine vault refused (${why})` : `not removed, engine unavailable (${why})` };
+  }
   let legacy = false;
-  try { legacy = deleteCredential(v.io, v.dir, ref); } catch { /* best-effort, as before */ }
-  return engine || legacy;
+  try { legacy = deleteCredential(v.io, v.dir, ref); } catch { /* checked below */ }
+  if (isValidRef(ref) && v.io.exists(`${v.dir}/${ref}.bin`)) return { error: "not removed: the safeStorage copy could not be deleted" };
+  return { deleted: engine || legacy };
 }
