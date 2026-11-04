@@ -198,6 +198,8 @@ export const TRANSCRIPT_MAX_TURNS = 40;
 const TRANSCRIPT_MAX_TURN_CHARS = 8_000;
 /** P-REMOTE.16: tool records kept per recorded turn (the compact `[ran: ...]` titles keep their own 40 cap). */
 const TRANSCRIPT_MAX_TOOLS = 64;
+/** The one lane id shape: what spawn mints, and all a caller-chosen id may be (ADR-0482). */
+export const LANE_ID_RE = /^lane-[0-9a-f]{8}$/;
 /** P-FLEET.L3: staged prompts per lane. Mirrors P-FLEET.1's job-queue cap - past it, refuse loudly. */
 const QUEUE_MAX = 8;
 /** P-FLEET.L3: cap on authored code carried per tool event. Lane cards are compact; the master's chat
@@ -461,10 +463,15 @@ export class FleetLaneManager {
    *  child loads it natively (`session/load`, which replays the history and restores the session's
    *  model) when it advertises loadSession; otherwise the caller's transcript (read from the on-disk
    *  session) rides the next prompt as the fallback preamble, exactly like an in-place respawn. Either
-   *  way the transcript seeds what the composer shows on promote, and `turns` keeps the count honest. */
-  async spawn(opts: { cwd: string; model?: string; name?: string; supervised?: boolean; remote?: { approvalHours: number; offTask: boolean }; resume?: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }> {
+   *  way the transcript seeds what the composer shows on promote, and `turns` keeps the count honest.
+   *
+   *  ADR-0482/0483 `id`: the lane id, chosen by the caller. The controller names its lanes before they exist (a
+   *  remote lane's review branch is `remote/<lane id>`) and brings a lane back after a restart under the id its
+   *  controller holds. It must have the engine's own `lane-<8 hex>` shape and be free. */
+  async spawn(opts: { cwd: string; id?: string; model?: string; name?: string; supervised?: boolean; remote?: { approvalHours: number; offTask: boolean }; resume?: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }> {
     const cwd = (opts.cwd ?? "").trim();
     if (!cwd) return { ok: false, reason: `not a directory: ""` };
+    if (opts.id !== undefined && (!LANE_ID_RE.test(opts.id) || this.#lanes.has(opts.id))) return { ok: false, reason: `lane id "${opts.id}" is malformed or in use` };
     const claim = this.#claimRefusal(opts.resume?.sessionId ?? null);
     if (claim) return { ok: false, reason: claim };
     // P-FLEET.L16 (the frozen "Spawning\u2026" button): this used to be a bare statSync. On a cloud-backed
@@ -488,7 +495,9 @@ export class FleetLaneManager {
     const admission = await this.#admission();
     if (!admission.ok) return { ok: false, reason: admission.reason };
 
-    let id = `lane-${randomUUID().slice(0, 8)}`;
+    // Checked again after the awaits above: a second spawn naming the same id may have taken it meanwhile.
+    if (opts.id !== undefined && this.#lanes.has(opts.id)) return { ok: false, reason: `lane id "${opts.id}" is in use` };
+    let id = opts.id ?? `lane-${randomUUID().slice(0, 8)}`;
     while (this.#lanes.has(id)) id = `lane-${randomUUID().slice(0, 8)}`;
     const t = this.#deps.now();
     // P-GATE-PATH.1 (ADR-0356): the argv thunk REFUSES when the security gate is not on disk (there is

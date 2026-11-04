@@ -21,6 +21,7 @@ import type { TelemetryEvent } from "../../harness/telemetry/events.ts";
 import { FleetLaneManager } from "../fleet_lanes.ts";
 import type { SystemSnapshot } from "../system_profile.ts";
 import { askDigest, canonical, classifyAsk, parseOffTask, verifyRemoteDecision, type RemoteAsk } from "./remote_policy.ts";
+import { ControllerLaneStore } from "./lane_store.ts";
 import { handleController, type ControllerDeps } from "./routes.ts";
 import { PairingStore, type Pairing } from "./store.ts";
 
@@ -64,14 +65,15 @@ function rig(opts: { offTask?: "on" | "off" | "unknown"; offTaskOn?: boolean } =
   const root = key();
   const events: TelemetryEvent[] = [];
   const rulings: string[] = [];
-  const store = new PairingStore(join(mkdtempSync(join(dir, "rig-")), "controller-pairings.json"));
+  const rigDir = mkdtempSync(join(dir, "rig-"));
+  const store = new PairingStore(join(rigDir, "controller-pairings.json"));
   fleet?.stopAll();
   fleet = new FleetLaneManager({
     argv: () => ({ cmd: "bun", args: [FAKE] }), masterModel: () => "m", sample: async () => healthy,
     ...(opts.offTask ? { offTask: async () => opts.offTask! } : {}),
     remoteAudit: (_laneId, v) => { rulings.push(v.ruling); },
   });
-  const deps: ControllerDeps = { store, fleet, scan: async () => CLEAN, sink: (e) => events.push(e) };
+  const deps: ControllerDeps = { store, lanes: new ControllerLaneStore(join(rigDir, "controller-lanes.json")), fleet, scan: async () => CLEAN, sink: (e) => events.push(e) };
   const call = async (path: string, pairing: Pairing | null, body?: unknown, query = "") => {
     const req = new Request(`http://127.0.0.1/api/controller/${path}${query}`, body === undefined ? {} : { method: "POST", body: JSON.stringify(body) });
     const res = await handleController(req, `/api/controller/${path}`, pairing, deps);

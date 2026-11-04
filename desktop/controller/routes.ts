@@ -6,7 +6,7 @@
 // Every /api/controller/* route lands here, so the limits hold for any transport (loopback curl today, the
 // P-CTRL.3 gateway and P-CTRL.7 relay later):
 //   - pair / unpair are HUMAN routes (UI token). Pairing fixes the workspace; the token is shown once.
-//   - lanes, spawn, prompt, status, result, cancel need a live pairing (the controller token, header only).
+//   - lanes, spawn, prompt, status, result, cancel, close need a live pairing (the controller token, header only).
 //     Anything else answers 403 "forbidden" with no detail.
 //   - A controller sees and acts on ONLY the lanes it spawned. A foreign or unknown lane is the same 404.
 //   - spawn takes a name and nothing else: the lane runs in the pairing's workspace, pinned SUPERVISED (every
@@ -14,14 +14,27 @@
 //   - prompt text goes through the fail-closed scan before it reaches a lane. Scan unavailable == refused.
 //   - Malformed anything (bad JSON, extra keys, wrong types, oversize text) is refused, never coerced.
 // Events are metadata only (pairing, lane, verdict, counts); prompt text and tokens never reach them.
+//
+// Lane lifecycle (ADR-0481/0482/0483):
+//   - close ends one of the controller's OWN lanes: an open parked ask is denied, a running turn is cancelled, the
+//     lane is removed, and its slot frees (the two-lane cap counts live lanes only).
+//   - a controller lane's identity is recorded (lane_store.ts), so after an engine restart it comes back idle on
+//     the same lane id and omp session; a turn that was running is reported interrupted, never re-run. A pairing
+//     revoked meanwhile gets nothing back.
+//   - a REMOTE pairing's lane in a git workspace works in its own worktree on `remote/<lane id>`; the tier
+//     policy's workspace boundary is that worktree (the lane's cwd). Close commits what is left there onto the
+//     branch, removes the worktree and keeps the branch.
 
+import { randomBytes } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import type { EventName } from "../../harness/contracts.ts";
 import type { GateDecision } from "../../harness/security/gate.ts";
 import { Telemetry, type EventSink } from "../../harness/telemetry/events.ts";
-import type { LaneEvent, LaneView } from "../fleet_lanes.ts";
+import type { LaneEvent, LaneTurnRecord, LaneView } from "../fleet_lanes.ts";
+import { closeLaneWorktree, createRemoteLaneWorktree, removeLaneWorktree } from "../lane_worktree.ts";
+import type { ControllerLane, ControllerLaneStore } from "./lane_store.ts";
 import { DEFAULT_APPROVAL_HOURS, MAX_APPROVAL_HOURS, p256FromSpki, verifyRemoteDecision, type RemoteAsk } from "./remote_policy.ts";
 import { PAIRING_NAME_RE, type Pairing, type PairingStore, type RemotePolicy } from "./store.ts";
 
@@ -29,17 +42,24 @@ import { PAIRING_NAME_RE, type Pairing, type PairingStore, type RemotePolicy } f
 export const CONTROLLER_ROUTES: ReadonlySet<string> = new Set(
   // ask, decide, deny: P-CTRL-REMOTE.1 (ADR-0476). The controller can read a remote ask and deny it; an allow
   // needs a decision the engine verifies against the paired root, so the controller only carries it.
-  ["lanes", "spawn", "prompt", "status", "result", "cancel", "ask", "decide", "deny"].map((r) => `/api/controller/${r}`),
+  // close: ADR-0481.
+  ["lanes", "spawn", "prompt", "status", "result", "cancel", "close", "ask", "decide", "deny"].map((r) => `/api/controller/${r}`),
 );
 
 /** ADR-0425: at most two controller-owned live lanes per pairing. */
 export const MAX_LANES_PER_PAIRING = 2;
 const MAX_PROMPT_CHARS = 32_000;
 
+/** ADR-0482: the reply a turn an engine restart cut off gets in the lane's transcript (what `result` returns). */
+export const INTERRUPTED_NOTE = "[LUCID] This turn was interrupted by an engine restart and was not re-run. Send a follow-up to continue.";
+
 export interface ControllerDeps {
   store: PairingStore;
+  /** ADR-0482: what each controller lane needs to come back after an engine restart. */
+  lanes: ControllerLaneStore;
   fleet: {
-    spawn(opts: { cwd: string; name?: string; supervised: true; remote?: { approvalHours: number; offTask: boolean } }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }>;
+    spawn(opts: { cwd: string; id: string; name?: string; model?: string; supervised: true; remote?: { approvalHours: number; offTask: boolean }; resume?: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }>;
+    remove(laneId: string, force: boolean): { ok: boolean; reason?: string };
     pendingAsk(laneId: string): RemoteAsk | null;
     answerAsk(laneId: string, askId: string, allow: boolean): { ok: boolean };
     prompt(laneId: string, text: string, sink: (e: LaneEvent) => void): Promise<void>;
@@ -107,8 +127,35 @@ async function ownLanes(deps: ControllerDeps, pairing: Pairing): Promise<LaneVie
   return lanes.filter((l) => pairing.lanes.includes(l.id));
 }
 
-/** What a controller may see of a lane: no cwd, no model, no ask summary (only its kind). */
-const laneOut = (l: LaneView) => ({ id: l.id, name: l.name, status: l.status, turns: l.turns, ...(l.pendingApproval ? { awaitingApproval: l.pendingApproval.kind } : {}) });
+/** What a controller may see of a lane: no cwd, no model, no ask summary (only its kind). ADR-0483: the review
+ *  branch a remote lane's work lands on. ADR-0482: when the turn an engine restart interrupted had started. */
+const laneOut = (l: LaneView, rec: ControllerLane | null) => ({
+  id: l.id, name: l.name, status: l.status, turns: l.turns, ...(l.pendingApproval ? { awaitingApproval: l.pendingApproval.kind } : {}),
+  ...(rec?.worktree ? { reviewBranch: rec.worktree.branch } : {}), ...(rec?.interrupted ? { interrupted: rec.interrupted } : {}),
+});
+
+/** ADR-0481/0483: a controller lane is over (closed, dismissed by the human, or not coming back after a restart).
+ *  Its ownership and its restart record go; a review worktree is committed onto its branch and removed, the
+ *  branch kept. The lane itself must already be gone from the fleet. */
+async function retireLane(deps: ControllerDeps, laneId: string, pairingId: string | null, why: string): Promise<{ reviewBranch?: string; commit?: string | null; worktreeKept?: string }> {
+  const rec = deps.lanes.get(laneId);
+  if (pairingId) deps.store.removeLane(pairingId, laneId);
+  deps.lanes.delete(laneId);
+  if (!rec?.worktree) return {};
+  const c = await closeLaneWorktree(rec.worktree, `LUCID: remote lane ${laneId} ${why}\n\nWhat the lane left uncommitted in its review worktree, committed by the engine so removing the worktree loses nothing.`);
+  return c.ok ? { reviewBranch: rec.worktree.branch, commit: c.commit } : { reviewBranch: rec.worktree.branch, worktreeKept: c.reason };
+}
+
+/** ADR-0482: record a settled controller turn (transcript, turns, session, model) and drop its in-flight mark. A
+ *  lane closed meanwhile stays gone; a newer turn that already started keeps its own mark and records itself. */
+async function settleLane(deps: ControllerDeps, laneId: string, runId: string): Promise<void> {
+  const view = (await deps.fleet.status()).lanes.find((l) => l.id === laneId);
+  const rec = deps.lanes.get(laneId);
+  if (!rec || rec.inFlight?.runId !== runId) return;
+  const settled: ControllerLane = { ...rec, transcript: deps.fleet.laneTranscript(laneId), ...(view ? { sessionId: view.sessionId, model: view.model, turns: view.turns } : {}) };
+  delete settled.inFlight;
+  deps.lanes.put(settled);
+}
 
 /** The LUCID-authored provenance preamble (ADR-0425): the lane's model learns who sent the turn. */
 export const controllerPreamble = (name: string) =>
@@ -152,18 +199,33 @@ export async function handleController(req: Request, path: string, pairing: Pair
 
   if (path === "/api/controller/lanes") {
     if (req.method !== "GET" || url.search) return malformed();
-    return reply(200, { ok: true, data: { lanes: (await ownLanes(deps, pairing)).map(laneOut) } });
+    return reply(200, { ok: true, data: { lanes: (await ownLanes(deps, pairing)).map((l) => laneOut(l, deps.lanes.get(l.id))) } });
   }
 
   if (path === "/api/controller/spawn") {
     const b = await strictBody(req, ["name"], []);
     if (!b || (b.name !== undefined && !PAIRING_NAME_RE.test(b.name))) return malformed();
+    // ADR-0482: a lane that could not be recorded would silently not come back after a restart.
+    if (deps.lanes.broken) return reply(503, { ok: false, error: deps.lanes.broken });
     const live = (await ownLanes(deps, pairing)).filter((l) => l.status !== "stopped");
     if (live.length >= MAX_LANES_PER_PAIRING) return reply(429, { ok: false, error: `at most ${MAX_LANES_PER_PAIRING} lanes per pairing` });
-    const r = await deps.fleet.spawn({ cwd: pairing.workspace, ...(b.name ? { name: b.name } : {}), supervised: true, ...(pairing.remote ? { remote: { approvalHours: pairing.remote.approvalHours, offTask: pairing.remote.offTask } } : {}) });
-    if (!r.ok || !r.lane) return reply(503, { ok: false, error: r.reason ?? "lane did not start" });
-    deps.store.addLane(pairing.id, r.lane.id);
-    return reply(200, { ok: true, data: { lane: laneOut(r.lane) } });
+    // The id comes first: a remote lane's review branch is named after it before the lane exists.
+    const id = `lane-${randomBytes(4).toString("hex")}`;
+    // ADR-0483: a remote pairing's lane in a git workspace gets its own worktree on `remote/<lane id>`. Not a git
+    // repository (or no git here): null, and the lane runs in the workspace itself. A repository git cannot make a
+    // worktree in (no commit yet, a clash) refuses the spawn: the review branch is what a remote lane promises.
+    const wt = pairing.remote ? await createRemoteLaneWorktree(pairing.workspace, id) : null;
+    if (wt && !wt.ok) return reply(503, { ok: false, error: wt.reason });
+    const cwd = wt?.ok ? wt.laneCwd : pairing.workspace;
+    const r = await deps.fleet.spawn({ id, cwd, ...(b.name ? { name: b.name } : {}), supervised: true, ...(pairing.remote ? { remote: { approvalHours: pairing.remote.approvalHours, offTask: pairing.remote.offTask } } : {}) });
+    if (!r.ok || !r.lane) {
+      if (wt?.ok) await removeLaneWorktree(wt);
+      return reply(503, { ok: false, error: r.reason ?? "lane did not start" });
+    }
+    deps.store.addLane(pairing.id, id);
+    const rec: ControllerLane = { id, pairingId: pairing.id, name: r.lane.name, cwd, model: r.lane.model, sessionId: r.lane.sessionId, turns: 0, transcript: [], ...(wt?.ok ? { worktree: { root: wt.root, path: wt.path, branch: wt.branch } } : {}) };
+    deps.lanes.put(rec);
+    return reply(200, { ok: true, data: { lane: laneOut(r.lane, rec) } });
   }
 
   // Every remaining route names one lane, and it must be this pairing's.
@@ -178,7 +240,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
 
   if (path === "/api/controller/status") {
     if (req.method !== "GET" || [...url.searchParams.keys()].some((k) => k !== "laneId")) return malformed();
-    return reply(200, { ok: true, data: { lane: laneOut(lane), running: deps.fleet.laneRunning(laneId) === true } });
+    return reply(200, { ok: true, data: { lane: laneOut(lane, deps.lanes.get(laneId)), running: deps.fleet.laneRunning(laneId) === true } });
   }
 
   if (path === "/api/controller/result") {
@@ -231,6 +293,24 @@ export async function handleController(req: Request, path: string, pairing: Pair
     return reply(200, { ok: true, data: deps.fleet.cancel(laneId) });
   }
 
+  // ── ADR-0481: close one of this pairing's lanes ─────────────────────────────────────────────────────────
+  // A busy lane is cancelled, then closed (not refused): close is the controller's final word on its own lane, a
+  // parked ask means the lane is mid-turn anyway, and nothing on disk is lost (a remote lane's work is committed
+  // onto its review branch; the omp session log stays). Audit lines land before the effect.
+  if (path === "/api/controller/close") {
+    if (!b) return malformed();
+    const cancelledTurn = deps.fleet.laneRunning(laneId) === true;
+    const ask = deps.fleet.pendingAsk(laneId);
+    if (ask) {
+      emit(deps, "controller_ruling", ids, { pairing: pairing.name, lane_id: laneId, ruling: "controller_denied", tier: ask.tier, backend: "remote-approval", reason: "the lane was closed" });
+      deps.fleet.answerAsk(laneId, ask.id, false);
+    }
+    emit(deps, "controller_ruling", ids, { pairing: pairing.name, lane_id: laneId, ruling: "lane_closed", backend: "lane-lifecycle", ...(cancelledTurn ? { reason: "its running turn was cancelled" } : {}) });
+    deps.fleet.remove(laneId, true);
+    const review = await retireLane(deps, laneId, pairing.id, `closed by controller "${pairing.name}"`);
+    return reply(200, { ok: true, data: { closed: laneId, cancelledTurn, ...(ask ? { deniedAsk: ask.id } : {}), ...review } });
+  }
+
   // /api/controller/prompt
   if (!b || !b.text || b.text.length > MAX_PROMPT_CHARS) return malformed();
   if (deps.fleet.laneRunning(laneId)) return reply(409, { ok: false, error: "lane is busy - one turn at a time" });
@@ -240,8 +320,69 @@ export async function handleController(req: Request, path: string, pairing: Pair
     return reply(422, { ok: false, error: verdict.failClosed ? "refused: the security scan is unavailable" : "refused: the security scan quarantined this prompt", verdict: verdict.trustLabel });
   }
   emit(deps, "controller_turn_started", ids, { pairing: pairing.name, lane_id: laneId, verdict: verdict.trustLabel, findings: verdict.findings.length });
+  const wire = controllerPreamble(pairing.name) + b.text;
+  // ADR-0482: marked in flight before it starts, settled when it ends. An engine that dies in between leaves the
+  // mark, and the next boot reports the turn interrupted instead of running it again. A new turn clears the
+  // previous interruption.
+  const rec = deps.lanes.get(laneId);
+  if (rec) {
+    delete rec.interrupted;
+    deps.lanes.put({ ...rec, inFlight: { runId: ids.runId, at: new Date().toISOString(), text: wire } });
+  }
   // Detached: the turn does not depend on this request (or the controller's process) staying alive. The lane
   // records its own transcript; `result` reads it.
-  void deps.fleet.prompt(laneId, controllerPreamble(pairing.name) + b.text, () => {});
+  // A settle that cannot be written leaves the in-flight mark: the worst case is a finished turn reported as
+  // interrupted after a restart, never a turn run twice.
+  void deps.fleet.prompt(laneId, wire, () => {}).finally(() => settleLane(deps, laneId, ids.runId)).catch(() => {});
   return reply(202, { ok: true, data: { runId: ids.runId, verdict: verdict.trustLabel } });
+}
+
+/** ADR-0482: at engine boot, bring every recorded controller lane back, idle, under its own lane id, on its own
+ *  omp session (session/load when omp offers it; otherwise a fresh session that carries the recorded transcript
+ *  as memory, the P-FLEET.L4 fallback). A turn that was running when the engine died is NOT re-run: it is closed
+ *  in the transcript with INTERRUPTED_NOTE and the lane reports `interrupted`. A lane whose pairing was revoked
+ *  (or no longer owns it), or that cannot start again, is retired like a close. Nothing is touched while either
+ *  store is broken. Returns the lane ids that came back. */
+export async function restoreControllerLanes(deps: ControllerDeps): Promise<string[]> {
+  if (deps.store.broken || deps.lanes.broken) return [];
+  const back: string[] = [];
+  for (const rec of deps.lanes.all()) {
+    const pairing = deps.store.byId(rec.pairingId);
+    const ids = { runId: Snowflake.next(), sessionId: rec.sessionId ?? `controller:${rec.pairingId}` };
+    if (!pairing || !pairing.lanes.includes(rec.id)) {
+      const review = await retireLane(deps, rec.id, pairing?.id ?? null, "ended: its pairing was revoked before the engine restarted");
+      emit(deps, "controller_ruling", ids, { pairing: pairing?.name ?? "", lane_id: rec.id, ruling: "lane_not_restored", backend: "lane-lifecycle", reason: "pairing revoked", ...(review.reviewBranch ? { branch: review.reviewBranch } : {}) });
+      continue;
+    }
+    const transcript: LaneTurnRecord[] = rec.inFlight
+      ? [...rec.transcript, { role: "user", text: rec.inFlight.text }, { role: "assistant", text: INTERRUPTED_NOTE, error: "interrupted by an engine restart" }]
+      : rec.transcript;
+    const r = await deps.fleet.spawn({
+      id: rec.id, cwd: rec.cwd, name: rec.name, model: rec.model, supervised: true,
+      ...(pairing.remote ? { remote: { approvalHours: pairing.remote.approvalHours, offTask: pairing.remote.offTask } } : {}),
+      ...(rec.sessionId ? { resume: { sessionId: rec.sessionId, transcript, turns: rec.turns } } : {}),
+    });
+    if (!r.ok || !r.lane) {
+      const review = await retireLane(deps, rec.id, pairing.id, "ended: it could not start again after an engine restart");
+      emit(deps, "controller_ruling", ids, { pairing: pairing.name, lane_id: rec.id, ruling: "lane_not_restored", backend: "lane-lifecycle", reason: (r.reason ?? "lane did not start").slice(0, 200), ...(review.reviewBranch ? { branch: review.reviewBranch } : {}) });
+      continue;
+    }
+    const restored: ControllerLane = { ...rec, transcript, sessionId: r.lane.sessionId, model: r.lane.model, ...(rec.inFlight ? { interrupted: rec.inFlight.at } : {}) };
+    delete restored.inFlight;
+    deps.lanes.put(restored);
+    emit(deps, "controller_ruling", { ...ids, sessionId: r.lane.sessionId ?? ids.sessionId }, { pairing: pairing.name, lane_id: rec.id, ruling: "lane_restored", backend: "lane-lifecycle", ...(rec.inFlight ? { reason: "a running turn was interrupted" } : {}) });
+    back.push(rec.id);
+  }
+  // Every other lane id a pairing held ended with the previous engine; its slot and its id go.
+  deps.store.retainLanes(new Set(back));
+  return back;
+}
+
+/** ADR-0481: the human dismissed a controller lane from the fleet (it is already gone there). The lane is over
+ *  for its controller too: it does not come back after a restart, and a review worktree ends like a close. */
+export async function forgetControllerLane(deps: ControllerDeps, laneId: string): Promise<void> {
+  const pairing = deps.store.pairingForLane(laneId);
+  if (!pairing && !deps.lanes.get(laneId)) return;
+  await retireLane(deps, laneId, pairing?.id ?? null, "dismissed by the user");
+  emit(deps, "controller_ruling", { runId: Snowflake.next(), sessionId: `controller:${pairing?.id ?? "unknown"}` }, { pairing: pairing?.name ?? "", lane_id: laneId, ruling: "lane_closed", backend: "lane-lifecycle", reason: "dismissed by the user" });
 }
