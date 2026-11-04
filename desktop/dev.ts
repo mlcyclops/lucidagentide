@@ -168,6 +168,14 @@ import { InspectRelay } from "./preview_inspect_relay.ts"; // P-PREVIEW.6b: agen
 import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type BoardFrame } from "./figma_client.ts"; // P-FIGMA.1 (ADR-0154)
 import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 / P-DESIGN.1 (ADR-0154)
 import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: Meeting Hub client; loading it takes LUCID_MEETING_HUB_TOKEN out of process.env before any child spawns
+import { handleVaultRoutes } from "./vault_routes.ts"; // P-VAULT-V2.1 (ADR-0474): /api/vault/*; loading it takes LUCID_VAULT_MAIN_TOKEN out of process.env
+import { applyVaultEnv, vaultRedactEnv } from "./vault_env.ts"; // P-VAULT-V2.1 (ADR-0474): engine-side credential env; security review: a lane's redaction names
+import { handleVaultBackupRoutes } from "./vault_backup_routes.ts"; // P-VAULT-UI.1 (ADR-0475): /api/vault/backup|restore
+import { configureSecretRequestEndpoint, handleSecretRoutes, SECRET_AGENT_ROUTE } from "./secret_routes.ts"; // P-SECRET-INTAKE.1 (ADR-0476): /api/secret/*
+import { workspaceSecretEnv } from "./vault_env_import.ts"; // P-VAULT-ENV.1 (ADR-0477): a lane's workspace-scoped secrets
+import { upsertVaultDestination } from "./vault_destinations.ts"; // ADR-0476 x ADR-0478: a remembered secrets manager becomes a destination
+import { vaultStartupCleanup } from "./vault_lifecycle.ts"; // security review: plaintext a dead engine left behind
+import { mayHoldGlobalEnv } from "./env_name_policy.ts"; // security review SECRET-INTAKE-ENVNAME-UNRESTRICTED: the one reserved-name rule
 import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
 import { ensureHiddenConsole, ompWindowsHide } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): a hidden console the omp children share
 import { setDefaultWindowsHide } from "./acp.ts";
@@ -603,6 +611,7 @@ import { listDir } from "./fs_browse.ts";
 import { pickFolderNative } from "./native_dialog.ts"; // P-FS.2 (ADR-0265): real OS folder dialog for the browser build
 import { DIAL_TYPES, type LoopDial } from "./exec_policy.ts";
 import { audit } from "./audit_export.ts";
+import { handleComplianceRoutes } from "./compliance_routes.ts"; // P-COMPLY.1 (ADR-0479)
 import { isRiskTier, managedWorkspaceRoots } from "./managed_config.ts";
 import { apiAuthorized, isAllowedRequest, reqShape, tokenValid } from "./origin_guard.ts";
 
@@ -624,7 +633,9 @@ import { Db } from "../harness/memory/db.ts";
 import type { ImportVendor } from "../harness/personal/import_adapters.ts";
 import type { CuiDesignation } from "../harness/export/vault_export.ts";
 
-applyEnv(); // make stored API keys available to a spawned omp acp
+vaultStartupCleanup(); // security review: re-blank a `.env` and wipe secret temp folders a killed or crashed engine left, before anything else
+applyEnv(mayHoldGlobalEnv); // make stored API keys available to a spawned omp acp (never under a reserved env name)
+applyVaultEnv(); // P-VAULT-V2.1 (ADR-0474): credentials the engine vault holds, under the env names main used to inject
 if (loadSettings().headroomEnabled) startHeadroom(); // resume the opt-in compression proxy
 
 // P-COLLAB.3 (ADR-0192): the one live-share host for this backend. Real deps: a CollabSocket over the
@@ -1774,7 +1785,10 @@ const fleet: FleetLaneManager = new FleetLaneManager({
   argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger,
   masterSessionId: () => backend.currentSessionId(), // P-SWITCH.2 (ADR-0404): one session, one owner
   claims: backend.writeClaims, history: backend.durations, // P-WAIT.1: one set of file claims, P-PROGRESS.1: one estimate history, with the master
-  env: (laneId) => ({ ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }),
+  env: (laneId, cwd) => {
+    const wsSecrets = workspaceSecretEnv(cwd); // P-VAULT-ENV.1; vaultRedactEnv: the lane's tool results hide them (security review)
+    return { ...wsSecrets, ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId), ...vaultRedactEnv(wsSecrets) };
+  },
   interject: (laneId, text) => { addInterject(laneId, text); },
   carriedNotes: carryPendingNotes, // ADR-0414: notes no tool step picked up ride the lane's next prompt
   // P-OWN.1: a spoke's authored path lands in the ledger; its prompts open with the checkout briefing.
@@ -2439,7 +2453,9 @@ return Bun.serve({
     // OWN CSP applies instead of the renderer's strict inherited one). An iframe `src` GET cannot send a
     // custom header, so this ONE endpoint also accepts the per-launch token as a `?t=` query param — same
     // token, still behind the loopback (H1) + Origin/Host/CSRF (H2) gate above. Every other /api needs the header.
-    if (p.startsWith("/api/") && p !== "/api/health") {
+    // Security review SECRET-INTAKE-REQUESTER-SPOOF: /api/secret/request takes only a requester token in
+    // the header (the master's own, never AGENT_TOKEN or a `?t=`), which handleSecretRoutes checks itself.
+    if (p.startsWith("/api/") && p !== "/api/health" && p !== SECRET_AGENT_ROUTE) {
       // `/api/preview/serve` (iframe src) and `/api/preview/shot` (fetched by the omp subprocess, which
       // inherits a ready URL incl. the token via LUCID_PREVIEW_SHOT_URL) can't set a header, so they also
       // accept the per-launch token as a `?t=` query param — same token, still behind the H1/H2 gate above.
@@ -2462,6 +2478,9 @@ return Bun.serve({
     }
     try {
       if (p.startsWith("/api/controller/")) return await handleController(req, p, ctrlPairing, controllerDeps);
+      const vr = await handleVaultRoutes(req, p, { uiToken: TOKEN }); if (vr) return vr; // P-VAULT-V2.1 (ADR-0474)
+      const vb = await handleVaultBackupRoutes(req, p, { uiToken: TOKEN }); if (vb) return vb; // P-VAULT-UI.1 (ADR-0475)
+      const sr = await handleSecretRoutes(req, p, { uiToken: TOKEN, srv, emit: (r) => backend.requestSecretDialog(r), destinations: { upsert: upsertVaultDestination } }); if (sr) return sr; // P-SECRET-INTAKE.1 (ADR-0476)
       if (p === "/app.js") {
         const { js } = await bundleApp();
         return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
@@ -2810,6 +2829,7 @@ return Bun.serve({
       // P-ENT.2 (ADR-0069): the unified security-event stream (metadata-only, OCSF-ready) + per-sink
       // delivery status, for the in-app dashboard. Read-only; the file sink is the SIEM export source.
       if (p === "/api/audit") return json({ ok: true, data: { events: audit.recent(100), sinks: audit.sinkStatuses() } });
+      const compliance = await handleComplianceRoutes(req, p); if (compliance) return compliance;
       // P-BRIEF.3 (ADR-0072): generate the Executive Engineering Update from the repo's own logs. Pure +
       // air-gap (reads DECISIONS.md/PROGRESS.md from the repo root); returns the written brief + the
       // two-host podcast script. Audio synthesis (a TTS backend) is a later slice; this is the brief.
@@ -5326,7 +5346,9 @@ return Bun.serve({
       if (p === "/api/auth") return json({ ok: true, data: authWithOauthErrors() });
       if (p === "/api/auth/key" && req.method === "POST") {
         const { env, key } = await readBody<{ env?: unknown; key?: unknown }>(req);
-        setKey(String(env), String(key ?? ""));
+        // P-VAULT-KEYS.1 (ADR-0472): a key the OS vault cannot take is refused, never written in plaintext.
+        try { setKey(String(env), String(key ?? "")); }
+        catch (e) { return json({ ok: false, error: clientError(e, "the key could not be stored in the OS vault - nothing was saved") }); }
         backend.restart(); // pick up the new env on next turn
         return json({ ok: true, data: providerAuth() });
       }
@@ -6210,12 +6232,12 @@ return Bun.serve({
         const on = b.on === true;
         if (on && !loadSettings().fleetAutoRiskAcceptedAt) {
           if (b.acceptRisk !== true) return json({ ok: false, error: "full auto-mode needs an explicit risk acceptance first" });
-          saveSettings({ ...loadSettings(), fleetAutoRiskAcceptedAt: Date.now() });
+          const accepted = loadSettings(); accepted.fleetAutoRiskAcceptedAt = Date.now(); saveSettings(accepted); // a load()-sourced object: secret deltas stay exact (ADR-0472)
         }
         const laneId = typeof b.laneId === "string" && b.laneId ? b.laneId : "";
         if (laneId) return json({ ok: true, data: fleet.setAuto(laneId, on) });
         fleet.setAutoAll(on);
-        saveSettings({ ...loadSettings(), fleetAutoApprove: on });
+        const s = loadSettings(); s.fleetAutoApprove = on; saveSettings(s);
         return json({ ok: true, data: { ok: true } });
       }
       if (p === "/api/fleet/cancel" && req.method === "POST") {
@@ -6850,6 +6872,9 @@ process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/
 // claim here. Same token'd convention as LUCID_FLEET_STATUS_URL; the endpoint applies NOTHING without a
 // fresh matching approval parked by the desktop's grant dialog (fail-closed, defense in depth).
 process.env.LUCID_SANDBOX_GRANT_URL = `http://127.0.0.1:${server.port}/api/sandbox/grant?t=${AGENT_TOKEN}`;
+// P-SECRET-INTAKE.1 (ADR-0476): request_secret. Not in process.env (security review SECRET-INTAKE-REQUESTER-SPOOF):
+// only the master spawn gets the URL and its own token (acp_backend.ts, secret_routes.masterSecretRequestEnv).
+configureSecretRequestEndpoint(`http://127.0.0.1:${server.port}`);
 // P-SANDBOX.17 (ADR-0399): tools/git-broker/git_shim.ts POSTs the contained agent's git calls here.
 process.env.LUCID_GIT_URL = `http://127.0.0.1:${server.port}/api/git/exec?t=${AGENT_TOKEN}`;
 // P-EVAL.4 (ADR-0318): the tool_meta extension POSTs {id,name,ok?} here for every tool call, because the

@@ -11,7 +11,8 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { load } from "./settings_store.ts";
+import { keyVaultStatus, load } from "./settings_store.ts";
+import type { VaultStatus } from "./engine_vault.ts";
 
 // P-PROV.1 (ADR-0210): extra per-provider config env beyond the single primary key. Azure OpenAI and
 // Vertex/Gemini-Enterprise need MORE than one value (resource/base/version; project/location/ADC path),
@@ -35,8 +36,9 @@ export interface ProviderAuth {
   oauthError?: { message: string; at: number };
 }
 
-/** The full per-section auth snapshot `/api/auth` returns (mirrored as AuthStatus in bridge.ts). */
-export interface ProviderAuthSnapshot { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[] }
+/** The full per-section auth snapshot `/api/auth` returns (mirrored as AuthStatus in bridge.ts). `vault`
+ *  (P-VAULT-KEYS.1, ADR-0472) says where saved keys live: custody + state only, never a secret. */
+export interface ProviderAuthSnapshot { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[]; vault: VaultStatus }
 
 // The AskSage gov gateway (ADR-0007): API-key only, key in keys.ASKSAGE_API_KEY. Surfaced ABOVE the
 // Providers section in its own card (it routes through an accredited gov proxy, not a direct provider).
@@ -190,5 +192,5 @@ export function providerAuth(): ProviderAuthSnapshot {
       ...(fields ? { fields } : {}),
     };
   };
-  return { gateway: GATEWAY.map(map), majors: MAJORS.map(map), others: OTHERS.map(map) };
+  return { gateway: GATEWAY.map(map), majors: MAJORS.map(map), others: OTHERS.map(map), vault: keyVaultStatus() };
 }
