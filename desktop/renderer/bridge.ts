@@ -597,7 +597,8 @@ export type PluginActionView = { ok: true } | { ok: false; error: string };
 export interface PluginLicenseView { ok: boolean; id?: string; version?: string; text?: string; error?: string }
 // P-PROV.1 (ADR-0210): extra per-provider config env (Azure resource/version, Vertex project/location/ADC,
 // Gemini-Enterprise project). Non-secret fields echo `value` to pre-fill; secret fields report `last4`.
-export interface ProviderFieldAuth { env: string; label: string; placeholder?: string; secret?: boolean; set: boolean; value?: string; last4?: string }
+// `options` (ADR-0485): a closed choice rendered as a select, the first option being the unset default.
+export interface ProviderFieldAuth { env: string; label: string; placeholder?: string; secret?: boolean; options?: { value: string; label: string }[]; set: boolean; value?: string; last4?: string }
 export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
   /** P-PROV.3: a device-code broker for the same account (OpenAI `openai-codex-device`); the card offers it

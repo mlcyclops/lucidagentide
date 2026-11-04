@@ -121,6 +121,8 @@ export interface LaunchAssets {
   mcpResultGate: string;
   /** The AskSage gov-gateway provider extension — no-op without ASKSAGE_API_KEY. */
   asksage: string;
+  /** The Azure OpenAI Entra ID sign-in extension (ADR-0485), no-op unless AZURE_OPENAI_AUTH_MODE asks. */
+  azureEntra: string;
   /** The LUCID skin extension (P-THEME.1) — cosmetic, fail-open; skins the TUI session only. */
   lucidTheme: string;
   /** The LUCID welcome extension (P-BRAND.1) — cosmetic, fail-open; paints the LUCID banner over omp's
@@ -134,7 +136,7 @@ export interface LaunchAssets {
 
 export function assets(repo: string = repoRoot()): LaunchAssets {
   const omp = (f: string) => join(repo, "harness", "omp", f);
-  return { repo, gate: omp("security_extension.ts"), asksage: omp("asksage_extension.ts"), acpConfig: omp("acp_config.yml"), mcpResultGate: omp("mcp_result_gate.ts"), lucidTheme: omp("lucid_theme_extension.ts"), lucidWelcome: omp("lucid_welcome_extension.ts"), lucidTuiConfig: omp("lucid_tui.config.yml") };
+  return { repo, gate: omp("security_extension.ts"), asksage: omp("asksage_extension.ts"), azureEntra: omp("azure_entra_extension.ts"), acpConfig: omp("acp_config.yml"), mcpResultGate: omp("mcp_result_gate.ts"), lucidTheme: omp("lucid_theme_extension.ts"), lucidWelcome: omp("lucid_welcome_extension.ts"), lucidTuiConfig: omp("lucid_tui.config.yml") };
 }
 
 /** Resolve the omp binary: explicit env → the bundled copy in the repo node_modules → the user's bun
@@ -158,6 +160,8 @@ export interface BuildArgsOpts {
   gate: string;
   /** Included when present; a missing asksage extension is not security-critical, so it's omitted, not fatal. */
   asksage?: string;
+  /** The Azure OpenAI Entra ID extension (ADR-0485); included when present, like asksage. */
+  azureEntra?: string;
   acpConfig?: string;
   /** The MCP tool-result gate extension (P-MCP-GATE.1); included when present. */
   mcpResultGate?: string;
@@ -170,6 +174,7 @@ export function buildAcpArgs(o: BuildArgsOpts): string[] {
   const args = ["acp", "-e", o.gate];
   if (o.mcpResultGate) args.push("-e", o.mcpResultGate);
   if (o.asksage) args.push("-e", o.asksage);
+  if (o.azureEntra) args.push("-e", o.azureEntra);
   if (o.isolate && o.acpConfig) args.push("--isolate", o.acpConfig);
   args.push("--append-system-prompt", APPENDED_POLICY);
   return args;
@@ -179,6 +184,8 @@ export interface BuildTuiOpts {
   gate: string;
   /** Included when present; a missing asksage extension is not security-critical, so it's omitted, not fatal. */
   asksage?: string;
+  /** The Azure OpenAI Entra ID extension (ADR-0485); included when present, like asksage. */
+  azureEntra?: string;
   /** The MCP tool-result gate extension (P-MCP-GATE.1, ADR-0152); included when present so `lucid tui`
    *  scans external MCP tool results exactly like `lucid acp`. */
   mcpResultGate?: string;
@@ -202,6 +209,7 @@ export function buildTuiArgs(o: BuildTuiOpts): string[] {
   const args = ["-e", o.gate];
   if (o.mcpResultGate) args.push("-e", o.mcpResultGate);
   if (o.asksage) args.push("-e", o.asksage);
+  if (o.azureEntra) args.push("-e", o.azureEntra);
   if (o.lucidTheme) args.push("-e", o.lucidTheme);
   if (o.lucidWelcome) args.push("-e", o.lucidWelcome);
   if (o.quietConfig) args.push("--config", o.quietConfig);
@@ -334,7 +342,8 @@ export async function runAcp(o: RunAcpOpts = {}): Promise<number> {
 
   const omp = resolveOmp(env, a.repo);
   const asksage = existsSync(a.asksage) ? a.asksage : undefined;
-  const args = buildAcpArgs({ gate: a.gate, asksage, acpConfig: a.acpConfig, isolate: o.isolate, mcpResultGate: existsSync(a.mcpResultGate) ? a.mcpResultGate : undefined });
+  const azureEntra = existsSync(a.azureEntra) ? a.azureEntra : undefined;
+  const args = buildAcpArgs({ gate: a.gate, asksage, azureEntra, acpConfig: a.acpConfig, isolate: o.isolate, mcpResultGate: existsSync(a.mcpResultGate) ? a.mcpResultGate : undefined });
   const cwd = o.cwd ?? env.LUCID_WORKSPACE ?? process.cwd();
   const spawnFn = o.spawnFn ?? ((c, ar, op) => nodeSpawn(c, ar, op as never) as unknown as SpawnedLike);
 
@@ -379,6 +388,7 @@ export async function runTui(o: RunTuiOpts = {}): Promise<number> {
 
   const omp = resolveOmp(env, a.repo);
   const asksage = existsSync(a.asksage) ? a.asksage : undefined;
+  const azureEntra = existsSync(a.azureEntra) ? a.azureEntra : undefined;
   const mcpResultGate = existsSync(a.mcpResultGate) ? a.mcpResultGate : undefined;
   const lucidTheme = existsSync(a.lucidTheme) ? a.lucidTheme : undefined;
   // P-BRAND.1 (issue #314): the LUCID welcome replaces omp's own welcome box. `LUCID_WELCOME=off` restores
@@ -387,7 +397,7 @@ export async function runTui(o: RunTuiOpts = {}): Promise<number> {
   const wantWelcome = !/^(off|0|false)$/i.test((env.LUCID_WELCOME ?? "").trim());
   const lucidWelcome = wantWelcome && existsSync(a.lucidWelcome) ? a.lucidWelcome : undefined;
   const quietConfig = wantWelcome && existsSync(a.lucidTuiConfig) ? a.lucidTuiConfig : undefined;
-  const args = buildTuiArgs({ gate: a.gate, asksage, mcpResultGate, lucidTheme, lucidWelcome, quietConfig, passthru: o.passthru });
+  const args = buildTuiArgs({ gate: a.gate, asksage, azureEntra, mcpResultGate, lucidTheme, lucidWelcome, quietConfig, passthru: o.passthru });
   const cwd = o.cwd ?? env.LUCID_WORKSPACE ?? process.cwd();
   const spawnFn = o.spawnFn ?? ((c, ar, op) => nodeSpawn(c, ar, op as never) as unknown as SpawnedLike);
 

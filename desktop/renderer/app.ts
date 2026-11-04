@@ -3896,7 +3896,7 @@ const PROV_HINTS: Record<string, string> = {
   anthropic: "OAuth signs in your Claude subscription. For pay-as-you-go API access, add an ANTHROPIC_API_KEY below.",
   xai: "OAuth signs in via your X / xAI account. Which Grok models are available depends on your plan (Premium+, SuperGrok, or API). If models appear but return empty replies, check your subscription at <b>console.x.ai</b>.",
   "github-copilot": "OAuth signs in your <b>GitHub Copilot</b> subscription (Individual, or the Business / Enterprise add-on many orgs enable on their plan) and enables its model catalog - GPT, Claude and Gemini families via Copilot. Device-code flow: click Connect, then paste the code shown in the browser. On a self-hosted <b>GitHub Enterprise</b>, enter your GHE domain when prompted (blank = github.com).",
-  azure: "<b>Azure OpenAI</b> (your Microsoft tenant's own deployments). Paste the <b>AZURE_OPENAI_API_KEY</b>, then set <b>Resource name</b> (or a full base URL). API version defaults to <b>v1</b>; use the deployment map only if your Azure deployment names differ from the model ids.",
+  azure: "<b>Azure OpenAI</b> (your Microsoft tenant's own deployments). Set <b>Resource name</b> (or a full base URL), then choose the <b>Sign-in</b>: an <b>API key</b> pasted above, or <b>Microsoft Entra ID</b> with no key at all: the VM's <b>managed identity</b> (enter a client ID only for a user-assigned identity) or your <b>Azure CLI</b> login (<code>az login</code> as the user LUCID runs as). Entra needs the <b>Cognitive Services OpenAI User</b> role on the resource; LUCID keeps the short-lived token in memory and renews it before it expires. API version defaults to <b>v1</b>; use the deployment map only if your Azure deployment names differ from the model ids.",
   "google-vertex": "<b>Gemini Enterprise</b> - Google's current name for the enterprise Gemini backend formerly called <b>Vertex AI</b>. For the OAuth path, leave the key box blank and sign in with Google Cloud: run <code>gcloud auth application-default login</code> in your terminal (or point to a service-account JSON), then set the <b>project</b> + <b>location</b> below - omp picks up those credentials automatically. A <b>GOOGLE_CLOUD_API_KEY</b> in the key box is the non-OAuth alternative. This is the enterprise-governed path, distinct from the consumer AI Studio key on the Gemini card.",
   perplexity: "Paste a Perplexity API key for Sonar models. (Pro/Max OAuth is interactive email-OTP - it can't run through this app, so use a key here.)",
 };
@@ -3988,9 +3988,14 @@ function provCard(p: ProviderAuth): string {
       ? (f.set ? `saved ••${esc(f.last4 ?? "")} - type to replace` : `Paste ${esc(f.env)}…`)
       : esc(f.placeholder ?? f.env);
     const val = !f.secret && f.value ? ` value="${esc(f.value)}"` : "";
+    // ADR-0485: a closed-choice field (Azure's sign-in mode) is a select on the same data-env/data-savekey
+    // path; an unset one shows its first option, which is the default the engine applies.
+    const control = f.options
+      ? `<select class="prov-key" data-env="${esc(f.env)}">${f.options.map((o) => `<option value="${esc(o.value)}"${o.value === f.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`
+      : `<input type="${f.secret ? "password" : "text"}" class="prov-key" data-env="${esc(f.env)}" placeholder="${fill}"${val} />`;
     return `<div class="prov-row prov-field">
         <label class="prov-field-label" title="${esc(f.env)}">${esc(f.label)}</label>
-        <input type="${f.secret ? "password" : "text"}" class="prov-key" data-env="${esc(f.env)}" placeholder="${fill}"${val} />
+        ${control}
         <button class="btn-mini ok" data-savekey="${esc(f.env)}">${icon("check", 12)} Save</button>
         ${f.set ? `<button class="btn-mini" data-clearkey="${esc(f.env)}">Clear</button>` : ""}
       </div>`;

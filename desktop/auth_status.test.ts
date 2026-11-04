@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AZURE_AUTH_MODE_ENV, AZURE_AUTH_MODES, AZURE_CLIENT_ID_ENV } from "../harness/omp/azure_entra.ts";
 import { MAJORS, providerAuth, type Provider } from "./auth_status.ts";
 
 const find = (id: string): Provider | undefined => MAJORS.find((m) => m.id === id);
@@ -33,6 +34,17 @@ describe("provider descriptors (ADR-0210)", () => {
     expect(envs).toContain("AZURE_OPENAI_RESOURCE_NAME");
     expect(envs).toContain("AZURE_OPENAI_BASE_URL");
     expect(envs).toContain("AZURE_OPENAI_API_VERSION");
+  });
+
+  test("Azure OpenAI (ADR-0485): the Sign-in choice offers exactly the modes the engine accepts, key first", () => {
+    const az = find("azure");
+    const mode = az?.fields?.find((f) => f.env === AZURE_AUTH_MODE_ENV);
+    expect(mode?.options?.map((o) => o.value)).toEqual([...AZURE_AUTH_MODES]);
+    expect(mode?.options?.[0]?.value).toBe("key"); // unset = key, omp's unchanged default
+    expect(mode?.secret).toBeUndefined();
+    const clientId = az?.fields?.find((f) => f.env === AZURE_CLIENT_ID_ENV);
+    expect(clientId).toBeDefined();
+    expect(clientId?.secret).toBeUndefined(); // an identity's client id is not a credential
   });
 
   test("Google Vertex (Gemini Enterprise): key OR ADC (project + location + credentials)", () => {
@@ -77,6 +89,16 @@ describe("providerAuth() field reporting", () => {
     const unsetField = az!.fields?.find((f) => f.env === "AZURE_OPENAI_BASE_URL");
     expect(unsetField?.set).toBe(false);
     expect(unsetField?.value).toBeUndefined();
+  });
+
+  test("an Entra sign-in with no key reports the chosen mode and client id, and the card reads configured", () => {
+    setEnv("AZURE_OPENAI_AUTH_MODE", "managed-identity");
+    setEnv("AZURE_OPENAI_CLIENT_ID", "0b6f1a52-3c1d-4e8f-9a7b-2d4c6e8f0a1b");
+    const az = providerAuth().majors.find((m) => m.id === "azure")!;
+    expect(az.keySet).toBe(false);
+    expect(az.fields?.find((f) => f.env === "AZURE_OPENAI_AUTH_MODE")?.value).toBe("managed-identity");
+    expect(az.fields?.find((f) => f.env === "AZURE_OPENAI_CLIENT_ID")?.value).toBe("0b6f1a52-3c1d-4e8f-9a7b-2d4c6e8f0a1b");
+    expect(az.fields?.some((f) => f.set)).toBe(true); // provStatusBadges: "configured", not "not set"
   });
 
   test("GOOGLE_CLOUD_PROJECT set → the Gemini card's field reports it", () => {
