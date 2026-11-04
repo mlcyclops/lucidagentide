@@ -587,7 +587,8 @@ function markWorkspaceSetupAsked(path: string): void {
   saveSettings(s);
 }
 import { EVENTS_LOG_PATH, recordSkillActivated } from "./skills_log.ts";
-import { auditTierVerdict, CONTROLLER_ROUTES, handleController, type ControllerDeps } from "./controller/routes.ts"; // P-CTRL.2 (ADR-0438)
+import { auditTierVerdict, CONTROLLER_ROUTES, forgetControllerLane, handleController, restoreControllerLanes, type ControllerDeps } from "./controller/routes.ts"; // P-CTRL.2 (ADR-0438); lane lifecycle ADR-0481/0482
+import { ControllerLaneStore } from "./controller/lane_store.ts"; // ADR-0482: controller lanes survive a restart
 import { OFF_TASK_SYSTEM, offTaskPrompt, parseOffTask } from "./controller/remote_policy.ts"; // P-CTRL-REMOTE.1 (ADR-0476)
 import { PairingStore, type Pairing } from "./controller/store.ts"; // P-CTRL.2: the hashed pairing store
 import { recentTurns } from "./turns_log.ts";
@@ -2188,8 +2189,10 @@ function agentScanner(): ScannerClient {
 
 // P-CTRL.2 (ADR-0438): the external-controller policy core. Pairings (hashed tokens, fixed workspace, owned
 // lanes) persist owner-only under the engine data root; the prompt scan reuses the fail-closed agent scanner.
+// ADR-0482: each controller lane's restart record sits beside the pairings.
 const controllerDeps: ControllerDeps = {
   store: new PairingStore(join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "controller-pairings.json")),
+  lanes: new ControllerLaneStore(join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "controller-lanes.json")),
   fleet,
   scan: (text) => scanAndDecide(agentScanner(), text),
   sink: EVENTS_LOG_PATH,
@@ -6238,7 +6241,13 @@ return Bun.serve({
       // dismissed lane is still reviewable on the timeline.
       if (p === "/api/fleet/remove" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown; force?: unknown }>(req);
-        return json({ ok: true, data: fleet.remove(String(b.laneId ?? ""), b.force === true) });
+        const laneId = String(b.laneId ?? "");
+        const existed = fleet.laneRunning(laneId) !== null;
+        const r = fleet.remove(laneId, b.force === true);
+        // ADR-0481: a dismissed controller lane is over for its controller too (it does not come back after a
+        // restart, and a remote lane's review worktree is committed onto its branch and removed).
+        if (existed && r.ok) await forgetControllerLane(controllerDeps, laneId);
+        return json({ ok: true, data: r });
       }
       if (p === "/api/fleet/model" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown; model?: unknown }>(req);
@@ -6920,6 +6929,12 @@ await refreshRecall();
 backend.startAutomationScheduler();
 // P-SCHED.1 (ADR-0443): the scheduled LANE jobs tick beside it, same envelope (only while the app runs).
 jobScheduler.start();
+// ADR-0482: controller lanes the previous engine ran come back idle on their own lane ids and omp sessions (after
+// the child env above is set, so a restored lane is wired like a new one). Detached: the bind never waits on omp.
+void restoreControllerLanes(controllerDeps).then(
+  (back) => { if (back.length) console.log(`[controller] restored ${back.length} lane(s): ${back.join(", ")}`); },
+  (e) => console.warn("[controller] lane restore failed:", e),
+);
 
 console.log(`\n  ◆ LucidAgentIDE desktop renderer (dev)\n  → http://localhost:${server.port}\n`);
 

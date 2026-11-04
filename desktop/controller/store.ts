@@ -116,6 +116,36 @@ export class PairingStore {
     this.#save();
   }
 
+  /** Why the store refuses everything (an unreadable or malformed file), or null. The boot-time lane restore
+   *  (ADR-0482) touches nothing while it is set, so a torn file never reads as "every pairing was revoked". */
+  get broken(): string | null {
+    return this.#broken;
+  }
+
+  /** ADR-0481: a closed lane is no longer this pairing's; its slot and its id are gone. */
+  removeLane(pairingId: string, laneId: string): void {
+    const p = this.#pairings.find((x) => x.id === pairingId);
+    if (!p || !p.lanes.includes(laneId)) return;
+    p.lanes = p.lanes.filter((l) => l !== laneId);
+    this.#save();
+  }
+
+  /** ADR-0482: at boot, keep only the lane ids that came back. The rest ended with the previous engine. */
+  retainLanes(keep: ReadonlySet<string>): void {
+    if (this.#broken) return;
+    let changed = false;
+    for (const p of this.#pairings) {
+      const kept = p.lanes.filter((l) => keep.has(l));
+      if (kept.length !== p.lanes.length) { p.lanes = kept; changed = true; }
+    }
+    if (changed) this.#save();
+  }
+
+  /** The live pairing with this id (a revoked pairing is gone), for the boot-time lane restore (ADR-0482). */
+  byId(pairingId: string): Pairing | null {
+    return this.#pairings.find((p) => p.id === pairingId) ?? null;
+  }
+
   /** The pairing that spawned `laneId`, for audit lines raised inside the fleet (P-CTRL-REMOTE.1). */
   pairingForLane(laneId: string): Pairing | null {
     return this.#pairings.find((p) => p.lanes.includes(laneId)) ?? null;

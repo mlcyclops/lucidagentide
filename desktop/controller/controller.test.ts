@@ -13,6 +13,7 @@ import { ScanUnavailableError, type ScannerClient } from "../../harness/security
 import type { TelemetryEvent } from "../../harness/telemetry/events.ts";
 import type { LaneView } from "../fleet_lanes.ts";
 import { apiAuthorized } from "../origin_guard.ts";
+import { ControllerLaneStore } from "./lane_store.ts";
 import { CONTROLLER_ROUTES, controllerPreamble, handleController, type ControllerDeps } from "./routes.ts";
 import { PairingStore, type Pairing } from "./store.ts";
 
@@ -37,13 +38,15 @@ function rig(scan: (t: string) => Promise<GateDecision> = async () => CLEAN) {
   const prompts: { laneId: string; text: string }[] = [];
   const spawns: { cwd: string; name?: string; supervised: true }[] = [];
   const events: TelemetryEvent[] = [];
-  let n = 0;
   const view = (id: string, name: string, cwd: string): LaneView => ({ id, name, cwd, model: "m", status: "awaiting-input", createdAt: 0, lastActivityAt: 0, turns: 0, canRetry: false, respawns: 0, autoApprove: false, sessionAllow: [], sessionId: `sess-${id}`, hubSessionId: null, queued: [], promoted: false, openCalls: 0 });
   lanes.set("lane-user", view("lane-user", "user's own", "/home/u/secret"));
+  const removed: string[] = [];
   const deps: ControllerDeps = {
     store,
+    lanes: new ControllerLaneStore(join(dir, "controller-lanes.json")),
     fleet: {
-      spawn: async (o) => { spawns.push(o); const l = view(`lane-${++n}`, o.name ?? "x", o.cwd); lanes.set(l.id, l); return { ok: true, lane: l }; },
+      spawn: async (o) => { spawns.push(o); const l = view(o.id, o.name ?? "x", o.cwd); lanes.set(l.id, l); return { ok: true, lane: l }; },
+      remove: (laneId) => { removed.push(laneId); lanes.delete(laneId); return { ok: true }; },
       prompt: async (laneId, text) => { prompts.push({ laneId, text }); },
       status: async () => ({ lanes: [...lanes.values()] }),
       laneTranscript: () => [{ role: "user", text: "q" }, { role: "assistant", text: "a0" }, { role: "user", text: "q2" }, { role: "assistant", text: "a1" }],
@@ -67,7 +70,7 @@ function rig(scan: (t: string) => Promise<GateDecision> = async () => CLEAN) {
     expect(r.status).toBe(200);
     return { token: r.body.data.token as string, pairing: (await store.verify(r.body.data.token))! };
   };
-  return { store, lanes, prompts, spawns, events, call, pair };
+  return { store, lanes, prompts, spawns, removed, events, call, pair };
 }
 
 describe("controller token: hashed, revocable, never stored in the clear", () => {
@@ -123,8 +126,12 @@ describe("scope isolation", () => {
       expect((await r.call("result", a.pairing, undefined, `?laneId=${foreign}`)).status).toBe(404);
       expect((await r.call("cancel", a.pairing, { laneId: foreign })).status).toBe(404);
       expect((await r.call("prompt", a.pairing, { laneId: foreign, text: "hi" })).status).toBe(404);
+      // ADR-0481: closing someone else's lane (or the user's, or none) is the same not-found as every route.
+      const close = await r.call("close", a.pairing, { laneId: foreign });
+      expect([close.status, close.body]).toEqual([404, { ok: false, error: "unknown lane" } as never]);
     }
     expect(r.prompts).toEqual([]);
+    expect(r.removed).toEqual([]);
     expect((await r.call("status", b.pairing, undefined, `?laneId=${lb}`)).status).toBe(200);
   });
 
@@ -137,7 +144,33 @@ describe("scope isolation", () => {
     expect((await r.call("spawn", pairing, "{not json")).status).toBe(400);
     expect((await r.call("spawn", pairing, {})).status).toBe(200);
     expect((await r.call("spawn", pairing, {})).status).toBe(200);
+    const third = await r.call("spawn", pairing, {});
+    expect([third.status, third.body.error]).toEqual([429, "at most 2 lanes per pairing"]);
+  });
+
+  test("ADR-0481: close ends the controller's own lane, frees its slot, and leaves no restart record", async () => {
+    const r = rig();
+    const { pairing } = await r.pair("hermes");
+    const one = (await r.call("spawn", pairing, {})).body.data.lane.id;
+    const two = (await r.call("spawn", pairing, {})).body.data.lane.id;
     expect((await r.call("spawn", pairing, {})).status).toBe(429);
+    for (const bad of [{}, { laneId: one, force: "yes" }, { laneId: 5 }]) expect((await r.call("close", pairing, bad)).status).toBe(400);
+    const closed = await r.call("close", pairing, { laneId: one });
+    expect(closed.status).toBe(200);
+    expect(closed.body.data).toEqual({ closed: one, cancelledTurn: false } as never);
+    expect(r.removed).toEqual([one]);
+    // the slot is free, the closed lane is gone from every route, and its ownership went with it
+    expect((await r.call("lanes", pairing)).body.data.lanes.map((l) => l.id)).toEqual([two]);
+    expect((await r.call("status", pairing, undefined, `?laneId=${one}`)).status).toBe(404);
+    expect((await r.call("close", pairing, { laneId: one })).status).toBe(404);
+    expect(r.store.pairingForLane(one)).toBeNull();
+    const three = await r.call("spawn", pairing, {});
+    expect(three.status).toBe(200);
+    expect((await r.call("spawn", pairing, {})).status).toBe(429);
+    // a reloaded lane store (the next boot) no longer holds the closed lane
+    const ids = new ControllerLaneStore(join(dir, "controller-lanes.json")).all().map((l) => l.id).sort();
+    expect(ids).toEqual([two, three.body.data.lane.id].sort());
+    expect(r.events.filter((e) => e.event === "controller_ruling")).toEqual([expect.objectContaining({ ruling: "lane_closed", lane_id: one, pairing: "hermes", backend: "lane-lifecycle" })]);
   });
 
   test("result returns assistant turns from `since`", async () => {

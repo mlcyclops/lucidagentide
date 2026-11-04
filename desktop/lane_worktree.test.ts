@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { worktreePlan } from "./lane_worktree.ts";
+import { remoteWorktreePlan, worktreePlan } from "./lane_worktree.ts";
 
 const root = join("C:", "work", "myrepo");
 
@@ -18,6 +18,11 @@ describe("worktreePlan", () => {
     expect(p.path.startsWith(root + (root.includes("\\") ? "\\" : "/"))).toBe(false);
     expect(p.laneCwd).toBe(join(p.path, "desktop", "renderer"));
     expect(worktreePlan(root, root, "x", "1").laneCwd).toBe(worktreePlan(root, root, "x", "1").path);
+  });
+
+  test("ADR-0483: a remote lane's review worktree is named after its lane id, on remote/<lane id>", () => {
+    const p = remoteWorktreePlan(root, join(root, "app"), "lane-1a2b3c4d");
+    expect(p).toEqual({ path: join("C:", "work", "myrepo.lucid-worktrees", "remote-lane-1a2b3c4d"), branch: "remote/lane-1a2b3c4d", laneCwd: join("C:", "work", "myrepo.lucid-worktrees", "remote-lane-1a2b3c4d", "app") });
   });
 
   test("any lane name becomes a valid branch and folder name", () => {
