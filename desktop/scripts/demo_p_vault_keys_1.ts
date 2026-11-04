@@ -71,6 +71,8 @@ try {
   writeFileSync(`${file}.bak`, JSON.stringify(LEGACY, null, 2));
   const first = await engine();
   if (first.status.state !== "ok") {
+    // CI (vault-backends.yml) proves the real Keychain / Secret Service: there the fallback is a failure.
+    if (process.env.LUCID_REQUIRE_OS_VAULT === "1") fail(`LUCID_REQUIRE_OS_VAULT=1 but the OS vault is ${first.status.state} (${first.status.custody}, ${first.status.detail ?? "no detail"})`);
     console.log(`   no usable OS vault on this host (${first.status.custody}, ${first.status.detail ?? first.status.state}): checking the fallback`);
     if (!Bun.deepEquals(first.settings, LEGACY)) fail("the fallback must serve the settings unchanged");
     if (!readFileSync(file, "utf8").includes(SECRET.key)) fail("the fallback must keep the key in the user-only file");
