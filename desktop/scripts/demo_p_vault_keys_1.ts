@@ -54,11 +54,11 @@ delete process.env.LUCID_ENGINE_VAULT_DIR;
 delete process.env.LUCID_DEMO_VAULT_KEY;
 const env = { ...process.env, LUCID_GUI_SETTINGS_FILE: file };
 
-async function engine(): Promise<{ settings: GuiSettings; env: string | null; status: VaultStatus }> {
+async function engine(): Promise<{ settings: GuiSettings; env: string | null; status: VaultStatus; stderr: string }> {
   const p = Bun.spawn([process.execPath, import.meta.path, "--engine"], { env, stdout: "pipe", stderr: "pipe" });
   const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
   if ((await p.exited) !== 0) fail(`the engine process failed: ${err.slice(0, 400)}`);
-  return JSON.parse(out.trim().split("\n").pop() ?? "{}");
+  return { ...JSON.parse(out.trim().split("\n").pop() ?? "{}"), stderr: err.trim() };
 }
 const plaintextIn = (path: string): string[] => {
   const text = readFileSync(path, "latin1");
@@ -82,7 +82,7 @@ try {
     if (first.env !== SECRET.key) fail("applyEnv must still export the provider key for the omp child");
     for (const path of [file, `${file}.bak`]) {
       const left = plaintextIn(path);
-      if (left.length) fail(`${path} still holds ${left.length} plaintext secret(s)`);
+      if (left.length) fail(`${path} still holds ${left.length} plaintext secret(s); engine stderr: ${first.stderr || "(none)"}`);
     }
     const vaultFiles = readdirSync(vault);
     if (process.platform === "win32" && !vaultFiles.includes("master.dpapi")) fail("the DPAPI-protected master key must be on disk");
