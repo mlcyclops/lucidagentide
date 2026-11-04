@@ -5793,3 +5793,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-03/04, branch `feat/p-ctrl-remote-approval`, local):** ADR-0476 (16c39be3) remote pairings with a tier policy and approvals the engine verifies against the paired root; ADR-0477 (04392437) the same verifier accepts a hub certified by a root-signed delegation within its limits. 219 tests in the touched areas, 3 typechecks clean; live on the add-on's remote spokes (VM 218, DGX Spark).
 - **stubbed:** controller `close` verb (two lanes per pairing), lanes that survive an engine restart, user presence on approve.
 - **next:** push the branch at end of day; upgrade the live spokes to 04392437 with the add-on's `upgrade-core.sh`.
+
+## User presence on remote approve (P-CTRL-REMOTE.2)
+- **shipped (2026-11-04, branch `feat/rs-presence`, local):** ADR-0488: a remote pairing may require user presence; the engine then releases an allow only with presence evidence (a Windows Hello or Secure Enclave key's signature over that one decision) from the presence key the approver's certificate names; a deny needs none. `make demo-P-CTRL-REMOTE.2`. Add-on half: ADR-A052 on `rs/presence`.
+- **stubbed:** no TPM or Secure Enclave attestation check (the engine trusts the key the root certified); the real Hello and Touch ID prompts are proven only by the owner's first run on each hub.
+- **next:** set up presence on the workstation and MacBook hubs, renew their certificates, then re-pair the spokes with presence `required`.

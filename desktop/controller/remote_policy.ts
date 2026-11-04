@@ -21,6 +21,13 @@
 // this ask id and this ask's digest, is in date, and was made against a CRL no newer than the engine holds.
 // The controller only carries the bytes. It can deny on its own (refusing is always safe) but never approve.
 //
+// User presence (ADR-0488): a pairing may require it. Then an ALLOW verifies only when the approver certificate
+// names a presence key (`presence: {kind, spki}`, certified by the same root or delegate) and the decision carries
+// `presence`, that key's signature over `presenceChallenge(decision)`: a domain prefix and the sha256 of the
+// decision without that field, so the evidence is bound to this one decision (lane, ask, digest, approver, time)
+// and cannot be moved to another. The key is one the platform uses only after a gesture (Windows Hello, a Secure
+// Enclave key with user presence). A deny never needs it. Evidence a decision carries is always checked.
+//
 // Formats are the remote-spoke add-on's (TechLead187/lucidagentIDEaddon remote-spoke/src/identity.ts):
 // `<base64url(JSON payload bytes)>.<base64url(ECDSA P-256 / SHA-256 DER signature over those bytes)>`.
 
@@ -176,9 +183,11 @@ function openCompact(token: unknown, key: KeyObject): Record<string, unknown> | 
 
 export interface CrlState { version: number; serials: string[] }
 export interface DecisionInput { decision: string; cert: string; crl?: string }
-export interface Expected { lane: string; ask: string; digest: string }
+/** `presence`: the pairing requires user-presence evidence on an allow (ADR-0488). */
+export interface Expected { lane: string; ask: string; digest: string; presence: boolean }
+/** `presence`: the kind of presence key whose evidence verified, or null when the decision carried none. */
 export type DecisionResult =
-  | { ok: true; allow: boolean; approver: string; label: string; crl: CrlState }
+  | { ok: true; allow: boolean; approver: string; label: string; presence: PresenceKind | null; crl: CrlState }
   | { ok: false; reason: string; crl?: CrlState };
 
 /** Verify a remote decision against the paired root. `crl` in the result is the newest CRL now known, for the
@@ -200,7 +209,7 @@ export function verifyRemoteDecision(input: DecisionInput, rootSpki: string, hel
   return r.ok ? { ...r, crl } : { ...r, ...(crl !== held ? { crl } : {}) };
 }
 
-function checkDecision(input: DecisionInput, root: KeyObject, rootId: string, crl: CrlState, expected: Expected, nowSec: number): { ok: true; allow: boolean; approver: string; label: string } | { ok: false; reason: string } {
+function checkDecision(input: DecisionInput, root: KeyObject, rootId: string, crl: CrlState, expected: Expected, nowSec: number): { ok: true; allow: boolean; approver: string; label: string; presence: PresenceKind | null } | { ok: false; reason: string } {
   const opened = openApproverCert(input.cert, root, rootId, crl, nowSec);
   if (!opened.ok) return opened;
   const cert = opened.cert;
@@ -217,7 +226,20 @@ function checkDecision(input: DecisionInput, root: KeyObject, rootId: string, cr
   if (d.lane !== expected.lane || d.ask !== expected.ask || d.digest !== expected.digest) return { ok: false, reason: "the decision is for a different action" };
   if (!isInt(d.iat) || !isInt(d.exp) || d.iat > nowSec + CLOCK_SKEW_SEC || d.exp <= nowSec || d.exp - d.iat > MAX_DECISION_LIFETIME_SEC) return { ok: false, reason: "the decision is not in date" };
   if (!isInt(d.crl) || d.crl > crl.version) return { ok: false, reason: `the approver saw CRL v${String(d.crl)}; send that CRL with the decision` };
-  return { ok: true, allow: d.allow, approver: cert.node, label: typeof cert.label === "string" ? cert.label.slice(0, 64) : "" };
+
+  // ADR-0488: user presence. The certificate's presence key is certified with the hub; its evidence is checked
+  // whenever a decision carries it, and required on an allow when the pairing says so.
+  const presenceKey = cert.presence === undefined ? null : presenceKeyOf(cert.presence);
+  if (cert.presence !== undefined && !presenceKey) return { ok: false, reason: "the approver certificate names a malformed presence key" };
+  let presence: PresenceKind | null = null;
+  if (d.presence !== undefined) {
+    if (!presenceKey) return { ok: false, reason: "the decision carries presence evidence but the approver certificate names no presence key" };
+    if (!verifyPresence(presenceKey.key, d)) return { ok: false, reason: "the presence evidence does not verify for this decision" };
+    presence = presenceKey.kind;
+  } else if (expected.presence && d.allow) {
+    return { ok: false, reason: presenceKey ? "this pairing requires user presence and the approval carries no presence evidence" : "this pairing requires user presence and the approver certificate names no presence key" };
+  }
+  return { ok: true, allow: d.allow, approver: cert.node, label: typeof cert.label === "string" ? cert.label.slice(0, 64) : "", presence };
 }
 
 // ── Delegated approver certificates (ADR-0477, amends ADR-0476) ────────────────────────────────────────
@@ -242,7 +264,7 @@ const LABEL_RE = /^[\x20-\x7e]{1,64}$/;
 const REGION_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const DOMAIN_RE = /^(?=.{1,190}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 const EMAIL_RE = /^[a-z0-9._%+-]{1,64}@(?=.{1,190}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
-const CERT_KEYS = ["v", "typ", "serial", "root", "node", "role", "label", "spki", "scopes", "iat", "exp", "user", "classification", "region", "issuer", "delegation"];
+const CERT_KEYS = ["v", "typ", "serial", "root", "node", "role", "label", "spki", "scopes", "iat", "exp", "user", "classification", "region", "issuer", "delegation", "presence"];
 const DELEGATION_KEYS = ["v", "typ", "root", "serial", "id", "label", "spki", "may", "limits", "iat", "exp"];
 /** The add-on's delegation payload (remote-spoke/src/identity.ts `Delegation`), as `delegationProblem` admits it. */
 interface Delegation {
@@ -351,4 +373,46 @@ function userProblem(u: Record<string, unknown>): string | null {
   if (u.name !== undefined && (typeof u.name !== "string" || !LABEL_RE.test(u.name))) return "user name must be 1 to 64 printable ASCII characters";
   if (u.clearances !== undefined && !distinctList(u.clearances, (c) => CLASSIFICATIONS.includes(c))) return "clearances must be a list of distinct classifications";
   return null;
+}
+
+// ── User presence on approve (ADR-0488) ────────────────────────────────────────────────────────────────
+//
+// The add-on's remote-spoke/src/presence.ts: a hub's presence key is made on that machine by the platform's
+// user-verification store and used only after a gesture. `windows-hello`: a Windows Hello key credential
+// (KeyCredentialManager; RSA 2048, PKCS#1 v1.5 / SHA-256, TPM-held where the machine has one).
+// `macos-secure-enclave`: a Secure Enclave P-256 key whose access control requires user presence (Touch ID or the
+// login password), ECDSA / SHA-256 DER. The engine cannot see the gesture; it checks that the key the root
+// certified for this hub signed this decision. What the platform enforces about that key is the ADR's stated limit.
+
+export type PresenceKind = "windows-hello" | "macos-secure-enclave";
+const PRESENCE_KINDS: readonly string[] = ["windows-hello", "macos-secure-enclave"];
+const PRESENCE_PREFIX = "lucid-presence-v1:";
+
+/** The presence key a hub certificate names (`{kind, spki}`, base64url SPKI DER), or null when it is not one of
+ *  the two kinds with its key type (RSA of at least 2048 bits for Windows Hello, P-256 for the Secure Enclave). */
+function presenceKeyOf(v: unknown): { kind: PresenceKind; key: KeyObject } | null {
+  if (!isObject(v) || !exactKeys(v, ["kind", "spki"]) || typeof v.kind !== "string" || !PRESENCE_KINDS.includes(v.kind)) return null;
+  if (typeof v.spki !== "string" || !/^[A-Za-z0-9_-]{40,1200}$/.test(v.spki)) return null;
+  let k: KeyObject;
+  try { k = createPublicKey({ key: Buffer.from(v.spki, "base64url"), format: "der", type: "spki" }); } catch { return null; }
+  const details = k.asymmetricKeyDetails;
+  const fits = v.kind === "windows-hello"
+    ? k.asymmetricKeyType === "rsa" && (details?.modulusLength ?? 0) >= 2048
+    : k.asymmetricKeyType === "ec" && details?.namedCurve === "prime256v1";
+  return fits ? { kind: v.kind as PresenceKind, key: k } : null;
+}
+
+/** The bytes a presence key signs for one decision: a domain prefix and the sha256 hex of the canonical decision
+ *  payload without its `presence` field. Any other lane, ask, digest, approver, verdict or time is another
+ *  challenge, so evidence cannot be replayed onto another decision. */
+export function presenceChallenge(decision: Record<string, unknown>): Buffer {
+  const rest: Record<string, unknown> = { ...decision };
+  delete rest.presence;
+  return Buffer.from(PRESENCE_PREFIX + createHash("sha256").update(canonical(rest)).digest("hex"));
+}
+
+function verifyPresence(key: KeyObject, decision: Record<string, unknown>): boolean {
+  const sig = decision.presence;
+  if (typeof sig !== "string" || !/^[A-Za-z0-9_-]{16,1400}$/.test(sig)) return false;
+  try { return verify("sha256", presenceChallenge(decision), key, Buffer.from(sig, "base64url")); } catch { return false; }
 }

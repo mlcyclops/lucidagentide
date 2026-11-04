@@ -41,6 +41,9 @@ export interface RemotePolicy {
   offTask: boolean;
   /** The newest root-signed CRL this engine has seen. Only ever moves forward. */
   crl: { version: number; serials: string[] };
+  /** ADR-0488: every remote allow must carry user-presence evidence from a presence key the approver's
+   *  certificate names. Absent: not required (also every pairing stored before ADR-0488). */
+  presence?: "required";
 }
 
 /** `lucidctl_<16 hex id>_<43 base64url secret>`; the id lets verify() hash against one record, not all. */
@@ -148,5 +151,6 @@ function isRemotePolicy(v: unknown): v is RemotePolicy {
   const r = v as RemotePolicy;
   return !!r && typeof r.root === "string" && /^[A-Za-z0-9_-]{40,400}$/.test(r.root)
     && Number.isInteger(r.approvalHours) && r.approvalHours >= 1 && r.approvalHours <= 24 && typeof r.offTask === "boolean"
-    && !!r.crl && Number.isSafeInteger(r.crl.version) && r.crl.version >= 0 && Array.isArray(r.crl.serials) && r.crl.serials.every((s) => typeof s === "string");
+    && !!r.crl && Number.isSafeInteger(r.crl.version) && r.crl.version >= 0 && Array.isArray(r.crl.serials) && r.crl.serials.every((s) => typeof s === "string")
+    && (r.presence === undefined || r.presence === "required");
 }
