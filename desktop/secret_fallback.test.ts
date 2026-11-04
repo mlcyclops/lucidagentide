@@ -11,8 +11,8 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  createUserOnlyFile, decodeSecretFile, editorCommand, FallbackRefused, icaclsUserOnly, isUserOnly, MAX_SECRET_FILE_BYTES,
-  parseIcaclsTrustees, parseWhoamiUser, privateTempBase, startFallback, wipeAndDelete,
+  createUserOnlyDir, createUserOnlyFile, decodeSecretFile, editorCommand, FALLBACK_DIR_PREFIX, FallbackRefused, icaclsUserOnly, isUserOnly,
+  MAX_SECRET_FILE_BYTES, parseIcaclsTrustees, parseWhoamiUser, privateTempBase, startFallback, sweepOrphanTempDirs, wipeAndDelete,
 } from "./secret_fallback.ts";
 import { isSyncedPath } from "./synced_path.ts";
 
@@ -59,6 +59,49 @@ describe("createUserOnlyFile", () => {
     const base = dir();
     expect(() => createUserOnlyFile({ label: "x", bases: [base], restrict: () => {}, userOnly: () => false })).toThrow(FallbackRefused);
     expect(readdirSync(base)).toEqual([]);
+  });
+});
+
+describe("createUserOnlyDir and sweepOrphanTempDirs (SECRET-FALLBACK-ORPHAN, VAULT-DEST-REQFILE-PERMS-ORPHAN)", () => {
+  const seams = { restrict: () => {}, userOnly: () => true };
+  const leftover = (base: string, name: string, pid: number | null): string => {
+    const d = join(base, name);
+    mkdirSync(d);
+    writeFileSync(join(d, "put.request.json"), "sk-live-LEFTOVER-PLAINTEXT-000001");
+    if (pid !== null) writeFileSync(join(d, "owner.pid"), String(pid));
+    return d;
+  };
+
+  test("refuses when the userOnly seam says false and leaves nothing", () => {
+    const base = dir();
+    expect(() => createUserOnlyDir("lucid-vdest-", { bases: [base], restrict: () => {}, userOnly: () => false })).toThrow(FallbackRefused);
+    expect(readdirSync(base)).toEqual([]);
+  });
+
+  test("the dir holds an owner marker with this pid", () => {
+    const base = dir();
+    const d = createUserOnlyDir(FALLBACK_DIR_PREFIX, { bases: [base], ...seams });
+    expect(readFileSync(join(d, "owner.pid"), "utf8")).toBe(String(process.pid));
+  });
+
+  test("wipes then removes orphans, keeps a live other owner, takes own dirs only with includeOwn", () => {
+    const base = dir();
+    const dead = Bun.spawnSync([process.execPath, "-e", ""]).pid;
+    const unmarked = leftover(base, `${FALLBACK_DIR_PREFIX}orphan1`, null);
+    const deadOwned = leftover(base, "lucid-vdest-dead01", dead);
+    const live = leftover(base, "lucid-vdest-live01", process.ppid);
+    const unrelated = leftover(base, "other-dir-keep", null);
+    const own = createUserOnlyDir("lucid-vdest-", { bases: [base], ...seams });
+    const seen: string[] = [];
+    const r = sweepOrphanTempDirs([FALLBACK_DIR_PREFIX, "lucid-vdest-"], { bases: [base], afterOverwrite: (f) => { seen.push(readFileSync(f, "utf8")); } });
+    expect(r).toEqual({ removed: 2, kept: 2 });
+    for (const d of [unmarked, deadOwned]) expect(existsSync(d)).toBe(false);
+    for (const d of [live, unrelated, own]) expect(existsSync(d)).toBe(true);
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    for (const s of seen) expect(/^\0*$/.test(s)).toBe(true); // zeroed before removal
+    expect(sweepOrphanTempDirs(["lucid-vdest-"], { bases: [base], includeOwn: true })).toEqual({ removed: 1, kept: 1 });
+    expect(existsSync(own)).toBe(false);
+    expect(existsSync(live)).toBe(true);
   });
 });
 

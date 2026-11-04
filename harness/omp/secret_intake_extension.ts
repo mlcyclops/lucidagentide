@@ -6,8 +6,11 @@
 // paste it into chat or a file; the value goes from the dialog into the engine vault and never reaches the
 // model.
 //
-// HOW IT REACHES THE ENGINE: the dev.ts env-URL convention (cf. LUCID_SANDBOX_GRANT_URL). The child
-// inherits LUCID_SECRET_REQUEST_URL (`.../api/secret/request?t=<AGENT_TOKEN>`) and POSTs the request; the
+// HOW IT REACHES THE ENGINE: the MASTER spawn env alone carries LUCID_SECRET_REQUEST_URL (no token in it)
+// and LUCID_SECRET_REQUEST_TOKEN, a master-only token the engine binds to the "Main agent" label (security
+// review SECRET-INTAKE-REQUESTER-SPOOF; desktop/secret_routes.ts). Both are read once at load and deleted
+// from this process's env, so the commands the agent runs (bash, a repo's npm scripts) never inherit
+// them. The tool POSTs with the token in the `x-lucid-token` header (never in the URL); the
 // engine shows the dialog in the master turn and answers `{pending, id}` after each short hold until the
 // user answers, cancels, or the 10-minute deadline passes, so the tool polls `{ id }` (no single request
 // outlives an idle or fetch timeout). Aborting the tool call (the user pressed Stop) sends `{ id, withdraw }`
@@ -19,7 +22,8 @@
 // a `value` or any other extra argument the model invents is dropped before the request leaves.
 //
 // NEVER THROWS: registration is wrapped, and a dead engine is a returned `stored:false`. Registers nothing
-// without LUCID_SECRET_REQUEST_URL, so a plain `omp` run never sees the tool.
+// without LUCID_SECRET_REQUEST_URL and LUCID_SECRET_REQUEST_TOKEN, so a plain `omp` run (or a lane) never
+// sees the tool.
 
 import { writeStderrNotice } from "./stderr_notice.ts";
 
@@ -63,6 +67,9 @@ export const REQUEST_SECRET_DESCRIPTION =
   "plain sentence the user reads: why you need it), kind (apikey, token, bearer, pat, oauth, password, basic, " +
   "pem, jwt, saml, json or other), envName when a program reads it from an environment variable (e.g. " +
   "OPENAI_API_KEY), and workspaceScoped=true when it belongs only to the current project (needs envName). " +
+  "Only a model provider's own key env (e.g. OPENAI_API_KEY) is kept for every project; any other envName is " +
+  "kept to the current project, and names that steer programs (PATH, NODE_*, GIT_*, *_PROXY, *_BASE_URL, " +
+  "*_ENDPOINT, LUCID_*) are refused. " +
   "The call waits until the user answers (up to 10 minutes). On stored:true refer to it by ref or envName and " +
   "never print, echo or read the value back. On stored:false do not retry in a loop: tell the user what you " +
   "needed and continue without it.";
@@ -103,7 +110,11 @@ export default function secretIntakeExtension(piRaw: unknown): void {
     const pi = piRaw as OmpPluginApi;
     if (typeof pi?.registerTool !== "function") return;
     const url = (process.env.LUCID_SECRET_REQUEST_URL ?? "").trim();
-    if (!url) return; // not launched by the LUCID desktop: no dialog to show, so no tool
+    const token = (process.env.LUCID_SECRET_REQUEST_TOKEN ?? "").trim();
+    // Taken out of the env before any tool runs: a child the agent starts must not be able to open the dialog.
+    delete process.env.LUCID_SECRET_REQUEST_URL;
+    delete process.env.LUCID_SECRET_REQUEST_TOKEN;
+    if (!url || !token) return; // not launched by the LUCID desktop's master spawn: no dialog to show, so no tool
     // TypeBox when the shim is healthy, else structurally identical JSON-Schema literals (preview pattern).
     const T = pi.typebox?.Type;
     const tb: TypeBoxType | null =
@@ -142,7 +153,7 @@ export default function secretIntakeExtension(piRaw: unknown): void {
         const done = (raw: unknown): ToolResultShape => ({ content: [{ type: "text", text: formatSecretResult(raw) }] });
         const post = (body: unknown, withSignal: boolean) => fetch(url, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", "x-lucid-token": token },
           body: JSON.stringify(body),
           signal: withSignal && signal ? AbortSignal.any([signal, AbortSignal.timeout(POLL_FETCH_MS)]) : AbortSignal.timeout(POLL_FETCH_MS),
         });

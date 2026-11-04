@@ -22,7 +22,7 @@ import {
   vaultDelete, vaultExportEntries, vaultGet, vaultImportEntries, vaultList, vaultPut, vaultRotate, vaultStatus, workspaceRef,
 } from "./vault_store.ts";
 
-const ENV_KEYS = ["LUCID_GUI_SETTINGS_FILE", "LUCID_ENGINE_VAULT_DIR", "LUCID_OMP_MODELS_YAML", "LUCID_V2_TEST_KEY", "LUCID_V2_ROUTE_KEY"] as const;
+const ENV_KEYS = ["LUCID_GUI_SETTINGS_FILE", "LUCID_ENGINE_VAULT_DIR", "LUCID_OMP_MODELS_YAML", "LUCID_V2_TEST_KEY", "LUCID_V2_ROUTE_KEY", "GROQ_API_KEY"] as const;
 const ENV_BEFORE = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 const dirs: string[] = [];
 function scratch(): { root: string; file: string; vault: string } {
@@ -240,6 +240,7 @@ describe("routes", () => {
     scratch();
     useFakeStore();
     const secrets = ["sk-ROUTE-SECRET-VALUE-001", "sk-ROUTE-SECRET-VALUE-002", "sk-ROUTE-SECRET-VALUE-003"];
+    const RESERVED_VALUE = "sk-ROUTE-RESERVED-VALUE-05";
     const bodies: string[] = [];
     const call = async (path: string, body?: unknown) => {
       const res = await handleVaultRoutes(uiReq(path, body), path, CTX);
@@ -247,26 +248,34 @@ describe("routes", () => {
       bodies.push(text);
       return { status: res!.status, json: JSON.parse(text) };
     };
-    const put = await quiet(() => call("/api/vault/put", { value: secrets[0], kind: "apikey", envName: "LUCID_V2_ROUTE_KEY", label: "Route key" }));
+    // A provider's key env is live for the next omp spawn, like setKey.
+    delete process.env.GROQ_API_KEY;
+    const put = await quiet(() => call("/api/vault/put", { value: secrets[0], kind: "apikey", envName: "GROQ_API_KEY", label: "Route key" }));
     expect(put.status).toBe(200);
-    expect(put.json.data).toMatchObject({ ref: "key:LUCID_V2_ROUTE_KEY", envName: "LUCID_V2_ROUTE_KEY", source: "typed", last4: "-001" });
-    expect(process.env.LUCID_V2_ROUTE_KEY).toBe(secrets[0]); // live for the next omp spawn, like setKey
+    expect(put.json.data).toMatchObject({ ref: "key:GROQ_API_KEY", envName: "GROQ_API_KEY", source: "typed", last4: "-001" });
+    expect(process.env.GROQ_API_KEY).toBe(secrets[0]);
+    // Security review SECRET-INTAKE-ENVNAME-UNRESTRICTED: a reserved name (LUCID_*) is stored in the vault
+    // but never put into the engine env every child inherits.
+    delete process.env.LUCID_V2_ROUTE_KEY;
+    const reserved = await quiet(() => call("/api/vault/put", { value: RESERVED_VALUE, kind: "apikey", envName: "LUCID_V2_ROUTE_KEY", label: "Reserved key" }));
+    expect(reserved.json.data).toMatchObject({ ref: "key:LUCID_V2_ROUTE_KEY", envName: "LUCID_V2_ROUTE_KEY" });
+    expect(process.env.LUCID_V2_ROUTE_KEY).toBeUndefined();
     const labelled = await quiet(() => call("/api/vault/put", { value: secrets[1], kind: "token", label: "Prod JWT" }));
     expect(labelled.json.data.ref).toBe("secret:prod_jwt");
     const again = await quiet(() => call("/api/vault/put", { value: secrets[2], kind: "token", label: "Prod JWT" }));
     expect(again.json.data.ref).toBe("secret:prod_jwt_2"); // a label never clobbers another entry
-    const rot = await quiet(() => call("/api/vault/rotate", { ref: "key:LUCID_V2_ROUTE_KEY", value: "sk-ROUTE-ROTATED-00000004" }));
+    const rot = await quiet(() => call("/api/vault/rotate", { ref: "key:GROQ_API_KEY", value: "sk-ROUTE-ROTATED-00000004" }));
     expect(rot.json.data.rotatedAt).toBeNumber();
-    expect(process.env.LUCID_V2_ROUTE_KEY).toBe("sk-ROUTE-ROTATED-00000004");
+    expect(process.env.GROQ_API_KEY).toBe("sk-ROUTE-ROTATED-00000004");
     const list = await call("/api/vault/list");
-    expect(list.json.data.entries.map((e: { ref: string }) => e.ref)).toEqual(["key:LUCID_V2_ROUTE_KEY", "secret:prod_jwt", "secret:prod_jwt_2"]);
-    expect(list.json.data.status).toMatchObject({ state: "ok", entries: 3 });
+    expect(list.json.data.entries.map((e: { ref: string }) => e.ref)).toEqual(["key:GROQ_API_KEY", "key:LUCID_V2_ROUTE_KEY", "secret:prod_jwt", "secret:prod_jwt_2"]);
+    expect(list.json.data.status).toMatchObject({ state: "ok", entries: 4 });
     expect((await call("/api/vault/rotate", { ref: "key:NOPE", value: "x".repeat(20) })).status).toBe(404);
-    const del = await quiet(() => call("/api/vault/delete", { ref: "key:LUCID_V2_ROUTE_KEY" }));
+    const del = await quiet(() => call("/api/vault/delete", { ref: "key:GROQ_API_KEY" }));
     expect(del.json.data).toEqual({ deleted: true });
-    expect(process.env.LUCID_V2_ROUTE_KEY).toBeUndefined();
+    expect(process.env.GROQ_API_KEY).toBeUndefined();
     const all = bodies.join("\n");
-    for (const s of [...secrets, "sk-ROUTE-ROTATED-00000004"]) expect(all).not.toContain(s);
+    for (const s of [...secrets, RESERVED_VALUE, "sk-ROUTE-ROTATED-00000004"]) expect(all).not.toContain(s);
     expect(all).not.toContain("\"value\"");
   });
 

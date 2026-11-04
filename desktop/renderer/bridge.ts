@@ -1359,12 +1359,13 @@ export interface LucidBridge {
   // P-SECRET-INTAKE.1 (ADR-0476): the agent-triggered secret dialog (UI token). A value goes IN only; every
   // answer is metadata (ref, kind, label, env name, last-4).
   secretPending(): Promise<SecretRequestView[]>;
-  secretSubmit(id: string, value: string): Promise<SecretCallResult>;
+  /** `confirmReplace`: the user confirmed replacing the entry already saved under the request's ref. */
+  secretSubmit(id: string, value: string, confirmReplace: boolean): Promise<SecretCallResult>;
   /** The engine reads the picked file itself (Electron's native picker returns a path). */
-  secretSubmitFile(id: string, path: string): Promise<SecretCallResult>;
+  secretSubmitFile(id: string, path: string, confirmReplace: boolean): Promise<SecretCallResult>;
   secretCancel(id: string): Promise<boolean>;
   /** Open the user-only text file in the OS editor; the path is for the dialog only. */
-  secretFallback(id: string): Promise<{ ok: true; path: string } | { ok: false; error: string }>;
+  secretFallback(id: string, confirmReplace: boolean): Promise<{ ok: true; path: string } | { ok: false; error: string }>;
   /** Wait until the text file was saved, read, wiped and deleted. */
   secretFallbackWait(id: string): Promise<SecretCallResult>;
   secretManagerInfo(): Promise<{ enterprise: boolean; note: string } | null>;
@@ -2213,15 +2214,15 @@ export const bridge: LucidBridge = {
     const list = d && typeof d === "object" && "requests" in d && Array.isArray(d.requests) ? d.requests : [];
     return list.filter((r): r is SecretRequestView => !!r && typeof r === "object" && typeof Reflect.get(r, "id") === "string" && typeof Reflect.get(r, "name") === "string");
   },
-  secretSubmit: (id, value) => secretStore("/api/secret/submit", { id, value }),
-  secretSubmitFile: (id, path) => secretStore("/api/secret/submit-file", { id, path }),
+  secretSubmit: (id, value, confirmReplace) => secretStore("/api/secret/submit", { id, value, confirmReplace }),
+  secretSubmitFile: (id, path, confirmReplace) => secretStore("/api/secret/submit-file", { id, path, confirmReplace }),
   secretCancel: async (id) => {
     const d: unknown = await post("/api/secret/cancel", { id });
     return !!d && typeof d === "object" && "cancelled" in d && d.cancelled === true;
   },
-  secretFallback: async (id) => {
+  secretFallback: async (id, confirmReplace) => {
     try {
-      const res = await fetch("/api/secret/fallback", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ id }) });
+      const res = await fetch("/api/secret/fallback", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ id, confirmReplace }) });
       const j: unknown = await res.json();
       const data = j && typeof j === "object" && "data" in j ? j.data : null;
       const path = data && typeof data === "object" && "path" in data && typeof data.path === "string" ? data.path : "";

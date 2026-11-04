@@ -24,6 +24,8 @@ import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts"; // P-FLEET.L
 import { AGENT_BUILDER_POLICY, BUILD_POLICY, DATA_INTEGRATION_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, JEV_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
 import { workspaceSecretEnv } from "./vault_env_import.ts"; // P-VAULT-ENV.1 (ADR-0477): the workspace's scoped secrets
+import { vaultRedactEnv } from "./vault_env.ts"; // security review SECRET-INTAKE-AGENT-ENV-READBACK: names the redaction hook hides
+import { masterSecretRequestEnv } from "./secret_routes.ts"; // security review SECRET-INTAKE-REQUESTER-SPOOF: master-only request_secret env
 import { PendingWrites } from "./checkout_owners.ts"; // P-OWN.1: ownership only for writes that completed
 import { PREVIEW_ACTIVITY, previewActivityLabel, type PreviewActivityKind } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
 import { extractToolImages } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): images out of tool results
@@ -211,9 +213,16 @@ const COMMIT_GATE_EXT = repoAsset("harness", "omp", "commit_gate_extension.ts");
 const BROWSER_EXT = repoAsset("harness", "omp", "browser_extension.ts");
 // P-SECRET-INTAKE.1 (ADR-0476): `request_secret` asks the USER for a secret through the LUCID dialog and
 // stores it in the engine vault; the model only ever gets {stored, ref, envName} or {stored:false, reason}.
-// MASTER ONLY: the dialog rides the master turn's event stream (requestSecretDialog). Self-skips when
-// LUCID_SECRET_REQUEST_URL is absent.
+// MASTER ONLY: the dialog rides the master turn's event stream (requestSecretDialog), and only the master
+// spawn env carries its URL and master-only token (secret_routes.masterSecretRequestEnv). Self-skips
+// without them.
 const SECRET_INTAKE_EXT = repoAsset("harness", "omp", "secret_intake_extension.ts");
+// Security review SECRET-INTAKE-AGENT-ENV-READBACK: vault values are in the agent's own env (workspace
+// secrets, provider keys, credential env), so a `printenv` would hand them to the model. This tool_result
+// hook replaces each one (plain, JSON-escaped, base64, URL-encoded) with [vault:<NAME>]. The spawn env
+// names the variables (vault_env.vaultRedactEnv, names only). Master AND lanes, LAST of all extensions so
+// it rewrites what every gate and the interject drain produced. Self-skips without names.
+const VAULT_REDACT_EXT = repoAsset("harness", "omp", "vault_redact_extension.ts");
 // P-EVAL.4 (ADR-0318): reports the REAL tool name (+ pass/fail) of every tool call over a token'd
 // loopback URL, because omp's ACP tool_call update carries only a coarse `kind` and an intent-shadowed
 // title (ADR-0308) - so the chat's chips and the engineering report's per-tool breakdown had degraded to
@@ -370,7 +379,8 @@ export function fleetLaneArgv(): { cmd: string; args: string[] } {
   const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : [];
   const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
   const ownArgs = [...(existsSync(CHECKIN_EXT) ? ["-e", CHECKIN_EXT] : []), ...(existsSync(COMMIT_GATE_EXT) ? ["-e", COMMIT_GATE_EXT] : [])]; // P-OWN.1
-  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...ownArgs, ...STREAM_BEAT_ARGS, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
+  const redactArgs = existsSync(VAULT_REDACT_EXT) ? ["-e", VAULT_REDACT_EXT] : []; // last: see VAULT_REDACT_EXT
+  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...ownArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
   return { cmd: argv[0]!, args: argv.slice(1) };
 }
 
@@ -1034,6 +1044,7 @@ class Backend {
         // see the same calls the gates already ruled on, and it can never sit between a tool and its gate.
         const toolMetaArgs = existsSync(TOOL_META_EXT) ? ["-e", TOOL_META_EXT] : [];
         const judgmentArgs = existsSync(JUDGMENT_EXT) ? ["-e", JUDGMENT_EXT] : []; // P-JEV.2: judgment trace, see JUDGMENT_EXT
+        const redactArgs = existsSync(VAULT_REDACT_EXT) ? ["-e", VAULT_REDACT_EXT] : []; // last: see VAULT_REDACT_EXT
         // P-SANDBOX.1 (ADR-0157): the runtime execution boundary, decided at THE spawn. On Linux with
         // bwrap the whole omp process tree (bash/eval/python/pip children included) is namespaced; on
         // platforms without a backend this is the DISCLOSED passthrough - unless managed policy
@@ -1045,7 +1056,7 @@ class Backend {
         // log, and the session ran UNGATED while every surface reported healthy. start() rejects, so the
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...secretArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
+        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...secretArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
         // P-SANDBOX.16 (ADR-0397): a git the host never put on PATH (MinGit, scoop, GitHub Desktop's copy)
@@ -1053,9 +1064,11 @@ class Backend {
         // shim, P-SANDBOX.17).
         const planSetsPath = Object.keys(spawnPlan.env).some((k) => k.toUpperCase() === "PATH");
         const gitEnv = process.platform === "win32" && !planSetsPath ? prependPathOverlay(process.env, gitCmdDir()) : {};
-        // P-VAULT-ENV.1 (ADR-0477): this workspace's scoped secrets, under everything the plan sets.
+        // P-VAULT-ENV.1 (ADR-0477): this workspace's scoped secrets, under everything the plan sets. The
+        // request_secret URL + master-only token and the names the redaction hook hides ride this spawn only.
         const wsCwd = currentWorkspace();
-        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, wsCwd, { ...workspaceSecretEnv(wsCwd), ...spawnPlan.env, ...gitEnv, ...interjectChildEnv("master") }, spawnPlan.contained ? { windowsHide: true } : {});
+        const wsSecrets = workspaceSecretEnv(wsCwd);
+        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, wsCwd, { ...wsSecrets, ...spawnPlan.env, ...gitEnv, ...interjectChildEnv("master"), ...masterSecretRequestEnv(), ...vaultRedactEnv(wsSecrets) }, spawnPlan.contained ? { windowsHide: true } : {});
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;

@@ -169,10 +169,12 @@ import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type Bo
 import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 / P-DESIGN.1 (ADR-0154)
 import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: Meeting Hub client; loading it takes LUCID_MEETING_HUB_TOKEN out of process.env before any child spawns
 import { handleVaultRoutes } from "./vault_routes.ts"; // P-VAULT-V2.1 (ADR-0474): /api/vault/*; loading it takes LUCID_VAULT_MAIN_TOKEN out of process.env
-import { applyVaultEnv } from "./vault_env.ts"; // P-VAULT-V2.1 (ADR-0474): engine-side credential env
+import { applyVaultEnv, vaultRedactEnv } from "./vault_env.ts"; // P-VAULT-V2.1 (ADR-0474): engine-side credential env; security review: a lane's redaction names
 import { handleVaultBackupRoutes } from "./vault_backup_routes.ts"; // P-VAULT-UI.1 (ADR-0475): /api/vault/backup|restore
-import { handleSecretRoutes, SECRET_AGENT_ROUTE } from "./secret_routes.ts"; // P-SECRET-INTAKE.1 (ADR-0476): /api/secret/*
+import { configureSecretRequestEndpoint, handleSecretRoutes, SECRET_AGENT_ROUTE } from "./secret_routes.ts"; // P-SECRET-INTAKE.1 (ADR-0476): /api/secret/*
 import { workspaceSecretEnv } from "./vault_env_import.ts"; // P-VAULT-ENV.1 (ADR-0477): a lane's workspace-scoped secrets
+import { vaultStartupCleanup } from "./vault_lifecycle.ts"; // security review: plaintext a dead engine left behind
+import { mayHoldGlobalEnv } from "./env_name_policy.ts"; // security review SECRET-INTAKE-ENVNAME-UNRESTRICTED: the one reserved-name rule
 import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
 import { ensureHiddenConsole, ompWindowsHide } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): a hidden console the omp children share
 import { setDefaultWindowsHide } from "./acp.ts";
@@ -630,7 +632,8 @@ import { Db } from "../harness/memory/db.ts";
 import type { ImportVendor } from "../harness/personal/import_adapters.ts";
 import type { CuiDesignation } from "../harness/export/vault_export.ts";
 
-applyEnv(); // make stored API keys available to a spawned omp acp
+vaultStartupCleanup(); // security review: re-blank a `.env` and wipe secret temp folders a killed or crashed engine left, before anything else
+applyEnv(mayHoldGlobalEnv); // make stored API keys available to a spawned omp acp (never under a reserved env name)
 applyVaultEnv(); // P-VAULT-V2.1 (ADR-0474): credentials the engine vault holds, under the env names main used to inject
 if (loadSettings().headroomEnabled) startHeadroom(); // resume the opt-in compression proxy
 
@@ -1736,7 +1739,6 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/agent/beat",         // P-HEALTH.3: the stream_beat extension says a tool call is still being written
   "/api/judgment/trace",     // P-JEV.2 (ADR-0377): the judgment extension reports each typed judgment
   "/api/kg/recall", "/api/kg/retain", // P-KG.3: the memory_recall / memory_retain tools
-  SECRET_AGENT_ROUTE,        // P-SECRET-INTAKE.1 (ADR-0476): request_secret parks here until the user answers (never a value back)
   // Design suite: design_read / design_apply / design_request. The agent reads a manifest REBUILT from the
   // validated document and queues ops; it can never push state, ack batches, or export (UI token only).
   "/api/creator/design/manifest", "/api/creator/design/ops", "/api/creator/design/ops/result",
@@ -1782,7 +1784,10 @@ const fleet: FleetLaneManager = new FleetLaneManager({
   argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger,
   masterSessionId: () => backend.currentSessionId(), // P-SWITCH.2 (ADR-0404): one session, one owner
   claims: backend.writeClaims, history: backend.durations, // P-WAIT.1: one set of file claims, P-PROGRESS.1: one estimate history, with the master
-  env: (laneId, cwd) => ({ ...workspaceSecretEnv(cwd) /* P-VAULT-ENV.1 */, ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }),
+  env: (laneId, cwd) => {
+    const wsSecrets = workspaceSecretEnv(cwd); // P-VAULT-ENV.1; vaultRedactEnv: the lane's tool results hide them (security review)
+    return { ...wsSecrets, ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId), ...vaultRedactEnv(wsSecrets) };
+  },
   interject: (laneId, text) => { addInterject(laneId, text); },
   carriedNotes: carryPendingNotes, // ADR-0414: notes no tool step picked up ride the lane's next prompt
   // P-OWN.1: a spoke's authored path lands in the ledger; its prompts open with the checkout briefing.
@@ -2447,7 +2452,9 @@ return Bun.serve({
     // OWN CSP applies instead of the renderer's strict inherited one). An iframe `src` GET cannot send a
     // custom header, so this ONE endpoint also accepts the per-launch token as a `?t=` query param — same
     // token, still behind the loopback (H1) + Origin/Host/CSRF (H2) gate above. Every other /api needs the header.
-    if (p.startsWith("/api/") && p !== "/api/health") {
+    // Security review SECRET-INTAKE-REQUESTER-SPOOF: /api/secret/request takes only a requester token in
+    // the header (the master's own, never AGENT_TOKEN or a `?t=`), which handleSecretRoutes checks itself.
+    if (p.startsWith("/api/") && p !== "/api/health" && p !== SECRET_AGENT_ROUTE) {
       // `/api/preview/serve` (iframe src) and `/api/preview/shot` (fetched by the omp subprocess, which
       // inherits a ready URL incl. the token via LUCID_PREVIEW_SHOT_URL) can't set a header, so they also
       // accept the per-launch token as a `?t=` query param — same token, still behind the H1/H2 gate above.
@@ -2472,7 +2479,7 @@ return Bun.serve({
       if (p.startsWith("/api/controller/")) return await handleController(req, p, ctrlPairing, controllerDeps);
       const vr = await handleVaultRoutes(req, p, { uiToken: TOKEN }); if (vr) return vr; // P-VAULT-V2.1 (ADR-0474)
       const vb = await handleVaultBackupRoutes(req, p, { uiToken: TOKEN }); if (vb) return vb; // P-VAULT-UI.1 (ADR-0475)
-      const sr = await handleSecretRoutes(req, p, { uiToken: TOKEN, agentToken: AGENT_TOKEN, srv, emit: (r) => backend.requestSecretDialog(r) }); if (sr) return sr; // P-SECRET-INTAKE.1 (ADR-0476)
+      const sr = await handleSecretRoutes(req, p, { uiToken: TOKEN, srv, emit: (r) => backend.requestSecretDialog(r) }); if (sr) return sr; // P-SECRET-INTAKE.1 (ADR-0476)
       if (p === "/app.js") {
         const { js } = await bundleApp();
         return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
@@ -6864,7 +6871,9 @@ process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/
 // claim here. Same token'd convention as LUCID_FLEET_STATUS_URL; the endpoint applies NOTHING without a
 // fresh matching approval parked by the desktop's grant dialog (fail-closed, defense in depth).
 process.env.LUCID_SANDBOX_GRANT_URL = `http://127.0.0.1:${server.port}/api/sandbox/grant?t=${AGENT_TOKEN}`;
-process.env.LUCID_SECRET_REQUEST_URL = `http://127.0.0.1:${server.port}${SECRET_AGENT_ROUTE}?t=${AGENT_TOKEN}`; // P-SECRET-INTAKE.1 (ADR-0476): request_secret
+// P-SECRET-INTAKE.1 (ADR-0476): request_secret. Not in process.env (security review SECRET-INTAKE-REQUESTER-SPOOF):
+// only the master spawn gets the URL and its own token (acp_backend.ts, secret_routes.masterSecretRequestEnv).
+configureSecretRequestEndpoint(`http://127.0.0.1:${server.port}`);
 // P-SANDBOX.17 (ADR-0399): tools/git-broker/git_shim.ts POSTs the contained agent's git calls here.
 process.env.LUCID_GIT_URL = `http://127.0.0.1:${server.port}/api/git/exec?t=${AGENT_TOKEN}`;
 // P-EVAL.4 (ADR-0318): the tool_meta extension POSTs {id,name,ok?} here for every tool call, because the

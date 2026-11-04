@@ -9,22 +9,23 @@
 // a session's env gets its own workspace's secrets and no other workspace's.
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ACPClient } from "./acp.ts";
+import { engineCredClient } from "./cred_engine_client.ts";
 import { _setVaultBackendForTest, type OsKeyStore } from "./engine_vault.ts";
 import { _resetVaultEnvForTest } from "./vault_env.ts";
 import {
-  _resetMaterializedForTest, gitEverCommitted, importEnvFile, isIgnored, materializeEnvFile, owningWorkspace, scanEnvFile,
-  unmaterializeEnvFile, workspaceSecretEnv,
+  _resetMaterializedForTest, _setMaterializeJournalForTest, gitEverCommitted, importEnvFile, isIgnored, materializeEnvFile,
+  owningWorkspace, reblankMaterializedJournal, scanEnvFile, unmaterializeAll, unmaterializeEnvFile, workspaceSecretEnv,
 } from "./vault_env_import.ts";
 import { handleVaultRoutes } from "./vault_routes.ts";
-import { vaultGet, vaultList, workspaceRef } from "./vault_store.ts";
+import { onVaultWrite, vaultGet, vaultList, workspaceRef } from "./vault_store.ts";
 import { setWorkspace } from "./workspace.ts";
 
 const ENV_KEYS = [
-  "LUCID_GUI_SETTINGS_FILE", "LUCID_ENGINE_VAULT_DIR", "LUCID_OMP_MODELS_YAML", "LUCID_ACP_LOG", "GROQ_API_KEY",
+  "LUCID_GUI_SETTINGS_FILE", "LUCID_ENGINE_VAULT_DIR", "LUCID_OMP_MODELS_YAML", "LUCID_ACP_LOG", "GROQ_API_KEY", "OPENAI_API_KEY",
   "LUCID_GIT_PAT_GITHUB_COM", "LUCID_GIT_PAT_GITLAB_COM",
 ] as const;
 const ENV_BEFORE = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
@@ -36,8 +37,10 @@ function scratch(): string {
   process.env.LUCID_OMP_MODELS_YAML = join(root, "models.yml");
   process.env.LUCID_ACP_LOG = join(root, "acp.log");
   delete process.env.LUCID_ENGINE_VAULT_DIR;
+  _setMaterializeJournalForTest(join(root, "data", "vault-env-materialized.json"));
   return root;
 }
+const journalOf = (root: string): unknown => JSON.parse(readFileSync(join(root, "data", "vault-env-materialized.json"), "utf8"));
 function workspace(root: string, name: string, env?: string): string {
   const ws = join(root, name);
   mkdirSync(ws, { recursive: true });
@@ -59,6 +62,7 @@ const quiet = async <T>(fn: () => T | Promise<T>): Promise<T> => {
 };
 afterEach(() => { _setVaultBackendForTest(null); _resetVaultEnvForTest(); _resetMaterializedForTest(); });
 afterAll(() => {
+  _setMaterializeJournalForTest(null);
   for (const k of ENV_KEYS) { const v = ENV_BEFORE[k]; if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
@@ -196,6 +200,68 @@ describe("import", () => {
     expect(() => scanEnvFile(ws, "secrets.txt")).toThrow(/only a \.env file/);
     expect(scanEnvFile(ws, ".env.local").exists).toBe(false);
   });
+
+  // Wave B security review SECRET-INTAKE-ENVNAME-UNRESTRICTED: env_name_policy.ts is the one rule.
+  test("reserved names (runtime, proxy, base URL, git, python, CA bundle, LUCID) are blocked", async () => {
+    const root = scratch(); useFakeStore();
+    const reserved = ["NODE_OPTIONS", "HTTPS_PROXY", "OPENAI_BASE_URL", "GIT_SSH_COMMAND", "PYTHONPATH", "REQUESTS_CA_BUNDLE", "LUCID_X"];
+    const ws = workspace(root, "app", reserved.map((n) => `${n}=${V.stripe}`).join("\n") + "\n");
+    const s = scanEnvFile(ws);
+    expect(s.rows.map((r) => [r.name, r.blocked])).toEqual(reserved.map((n) => [n, "reserved name"]));
+    const r = await quiet(() => importEnvFile(ws));
+    expect(r.imported).toEqual([]);
+    expect(r.skipped.map((x) => x.name).sort()).toEqual([...reserved].sort());
+  });
+
+  // VAULT-ENV-IMPORT-OVERWRITE-GLOBAL
+  test("a row replacing a saved global key is skipped unless its name is confirmed", async () => {
+    const root = scratch(); useFakeStore();
+    const ws = workspace(root, "app", `GROQ_API_KEY=${V.groq}\n`);
+    await quiet(() => importEnvFile(ws));
+    const other = "gsk_FAKEfakeFAKEfake0000009Z";
+    writeFileSync(join(ws, ".env"), `GROQ_API_KEY=${other}\n`);
+    expect(scanEnvFile(ws).rows[0]).toMatchObject({ slot: "provider-key", status: "replaces" });
+    const r = await quiet(() => importEnvFile(ws, ".env", { names: ["GROQ_API_KEY"] }));
+    expect(r.imported).toEqual([]);
+    expect(r.skipped[0]!.name).toBe("GROQ_API_KEY");
+    expect(r.skipped[0]!.reason).toContain("replace your saved key");
+    expect(vaultGet("key:GROQ_API_KEY")).toBe(V.groq);
+    const ok = await quiet(() => importEnvFile(ws, ".env", { names: ["GROQ_API_KEY"], confirmReplace: ["GROQ_API_KEY"] }));
+    expect(ok.imported.map((i) => i.name)).toEqual(["GROQ_API_KEY"]);
+    expect(vaultGet("key:GROQ_API_KEY")).toBe(other);
+  });
+
+  // VAULT-ENV-SYMLINK-FOLLOW
+  test("a .env symlink is refused, never followed", () => {
+    const root = scratch(); useFakeStore();
+    const ws = workspace(root, "app");
+    const target = join(root, "credentials");
+    writeFileSync(target, `aws_secret_access_key=${V.stripe}\n`);
+    try { symlinkSync(target, join(ws, ".env"), "file"); }
+    catch { return; } // the platform refuses links here; nothing to test
+    expect(() => scanEnvFile(ws)).toThrow(/not a regular file/);
+    expect(() => importEnvFile(ws)).toThrow(/not a regular file/);
+  });
+
+  test("an oversize .env is refused before it is read", () => {
+    const root = scratch(); useFakeStore();
+    const ws = workspace(root, "app", `A=${"x".repeat(300 * 1024)}\n`);
+    expect(() => scanEnvFile(ws)).toThrow(/larger than 256 KiB/);
+  });
+
+  // VAULT-DEST-AUTOBACKUP-GAP (import part)
+  test("an import tells every vault write observer about each imported ref, metadata only", async () => {
+    const root = scratch(); useFakeStore();
+    const ws = workspace(root, "app", ENV_TEXT);
+    const heard: string[] = [];
+    const seen: string[] = [];
+    const off = onVaultWrite((m) => { heard.push(m.ref); seen.push(JSON.stringify(m)); });
+    try {
+      const r = await quiet(() => importEnvFile(ws));
+      expect(heard.sort()).toEqual(r.imported.map((i) => i.ref).sort());
+      expect(leaks(seen.join("\n"))).toEqual([]);
+    } finally { off(); }
+  });
 });
 
 const gitOk = Bun.spawnSync(["git", "--version"], { stdout: "pipe", stderr: "pipe" }).success;
@@ -224,6 +290,27 @@ describe.skipIf(!gitOk)("committed-file detection", () => {
     const r = await quiet(() => importEnvFile(ws, ".env", { gitignore: true }));
     expect(r.committed).toBe(true); // the UI tells the user to ROTATE
     expect(isIgnored(ws, ".env")).toBe(true); // git's own check-ignore agrees with what was written
+  });
+
+  // VAULT-ENV-IMPORT-OVERWRITE-GLOBAL: a repository's file never fills the user's global slots.
+  test("a git-tracked .env maps provider and git names to ws: overrides, not the global slots", async () => {
+    const root = scratch(); useFakeStore();
+    const openai = "sk-FAKEfakeFAKEfake00000007G";
+    const ws = workspace(root, "repo", `OPENAI_API_KEY=${openai}\nGITHUB_TOKEN=${V.gh}\n`);
+    expect(git(ws, "init", "-q")).toBe(true); // not ignored inside a repository: tracked
+    const before = process.env.OPENAI_API_KEY;
+    const s = scanEnvFile(ws);
+    expect(s.tracked).toBe(true);
+    const by = Object.fromEntries(s.rows.map((r) => [r.name, r]));
+    expect(by.OPENAI_API_KEY).toMatchObject({ slot: "workspace", ref: workspaceRef(ws, "OPENAI_API_KEY"), envName: "OPENAI_API_KEY", fromRepo: true });
+    expect(by.GITHUB_TOKEN).toMatchObject({ slot: "workspace", ref: workspaceRef(ws, "GITHUB_TOKEN"), envName: "GITHUB_TOKEN", fromRepo: true });
+    await quiet(() => importEnvFile(ws));
+    expect(vaultGet(workspaceRef(ws, "OPENAI_API_KEY"))).toBe(openai);
+    expect(vaultGet(workspaceRef(ws, "GITHUB_TOKEN"))).toBe(V.gh);
+    expect(vaultGet("key:OPENAI_API_KEY")).toBeUndefined();
+    expect(vaultGet("git_pat_github_com")).toBeUndefined();
+    expect(process.env.OPENAI_API_KEY).toBe(before);
+    expect(vaultList().find((m) => m.ref === workspaceRef(ws, "OPENAI_API_KEY"))!.label).toContain("from the repository");
   });
 
   test("outside a repository the answer is unknown, not false", () => {
@@ -306,6 +393,71 @@ describe("write .env temporarily", () => {
     expect(text).not.toContain(V.stripe);
     expect(text).toContain("STRIPE_SECRET_KEY=\n");
     expect(text).toContain("# keep");
+  });
+
+  /** A workspace holding one imported ws: secret, its .env blanked and git-ignored. */
+  const ready = async (root: string, name: string): Promise<string> => {
+    const ws = workspace(root, name, `STRIPE_SECRET_KEY=${V.stripe}\n`);
+    await quiet(() => importEnvFile(ws, ".env", { blank: true }));
+    writeFileSync(join(ws, ".gitignore"), ".env\n");
+    return ws;
+  };
+
+  // VAULT-ENV-MATERIALIZE-SYNCED
+  test("refused in a folder a cloud client syncs", async () => {
+    const root = scratch(); useFakeStore();
+    const ws = await ready(root, join("OneDrive", "app"));
+    const before = readFileSync(join(ws, ".env"), "utf8");
+    expect(() => materializeEnvFile(ws)).toThrow(/synced by a cloud client/);
+    expect(readFileSync(join(ws, ".env"), "utf8")).toBe(before);
+    expect(existsSync(join(root, "data", "vault-env-materialized.json"))).toBe(false);
+  });
+
+  test("journaled before the write; the next start re-blanks after a crash", async () => {
+    const root = scratch(); useFakeStore();
+    const ws = await ready(root, "app");
+    await quiet(() => materializeEnvFile(ws, ".env", 5));
+    const journal = journalOf(root) as Array<{ path: string; names: string[]; until: number }>;
+    expect(journal).toHaveLength(1);
+    expect(journal[0]).toMatchObject({ path: join(ws, ".env"), names: ["STRIPE_SECRET_KEY"] });
+    expect(leaks(JSON.stringify(journal))).toEqual([]);
+    expect(readFileSync(join(ws, ".env"), "utf8")).toContain(V.stripe);
+    _resetMaterializedForTest(); // the engine died: no timer, no in-memory record
+    expect(await quiet(() => reblankMaterializedJournal())).toEqual({ reblanked: 1, failed: 0 });
+    expect(readFileSync(join(ws, ".env"), "utf8")).not.toContain(V.stripe);
+    expect(journalOf(root)).toEqual([]);
+  });
+
+  test("unmaterializeAll re-blanks every written file and clears the journal", async () => {
+    const root = scratch(); useFakeStore();
+    const ws = await ready(root, "app");
+    await quiet(() => materializeEnvFile(ws, ".env", 5));
+    expect(await quiet(() => unmaterializeAll())).toEqual({ reblanked: 1, failed: 0 });
+    expect(readFileSync(join(ws, ".env"), "utf8")).not.toContain(V.stripe);
+    expect(journalOf(root)).toEqual([]);
+  });
+
+  test("VAULT-ENV-MATERIALIZE-SYNCED: main's graceful shutdown call re-blanks before the kill", async () => {
+    const root = scratch(); useFakeStore();
+    const ws = await ready(root, "app");
+    await quiet(() => materializeEnvFile(ws, ".env", 5));
+    expect(readFileSync(join(ws, ".env"), "utf8")).toContain(V.stripe);
+    // Electron main's own client, signed with the vault token, answered by the engine's route handler.
+    const UI = "ui-token-shutdown-0123456789abcdef0123";
+    const MAIN = "main-token-shutdown-0123456789abcdef01";
+    const engine = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const req = new Request(input, init);
+      return (await handleVaultRoutes(req, new URL(req.url).pathname, { uiToken: UI, mainToken: MAIN })) ?? new Response("not found", { status: 404 });
+    };
+    // Without the vault token's MAC the route is closed, like every other main-only route, and nothing changes.
+    const forged = engineCredClient({ baseUrl: "http://127.0.0.1:1", uiToken: UI, vaultToken: "wrong-token", fetch: engine as typeof fetch });
+    await expect(forged.shutdown()).rejects.toThrow();
+    expect(readFileSync(join(ws, ".env"), "utf8")).toContain(V.stripe);
+    const client = engineCredClient({ baseUrl: "http://127.0.0.1:1", uiToken: UI, vaultToken: MAIN, fetch: engine as typeof fetch });
+    const report = await quiet(() => client.shutdown());
+    expect(report.reblanked).toBe(1);
+    expect(readFileSync(join(ws, ".env"), "utf8")).not.toContain(V.stripe);
+    expect(journalOf(root)).toEqual([]);
   });
 });
 

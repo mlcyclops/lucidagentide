@@ -32,12 +32,20 @@ export function editorLabel(userAgent: string, mac: boolean): string {
   return /windows/i.test(userAgent) ? "Notepad" : "your text editor";
 }
 
-/** Where the secret will live, in one sentence (names only). */
-export function secretWhereText(v: Pick<SecretRequestView, "envName" | "workspace" | "replaces" | "ref">): string {
-  const as = v.envName ? ` as ${v.envName}` : "";
+/** Where the secret will live and who can use it (names only). Security review
+ *  SECRET-INTAKE-AGENT-ENV-READBACK: with an env name, programs the agent runs DO get the value (that is the
+ *  point), so the text says that, and that LUCID hides it from what the agent reads back (the
+ *  vault_redact_extension tool_result hook); it never claims the agent cannot reach it. */
+export function secretWhereText(v: Pick<SecretRequestView, "envName" | "workspace">): string {
   const scope = v.workspace ? ` for the ${v.workspace} workspace only` : "";
-  const replace = v.replaces ? " It replaces the value saved there now." : "";
-  return `Saved to LUCID's encrypted vault${as}${scope}. The agent never sees it.${replace}`;
+  return v.envName
+    ? `Saved to LUCID's encrypted vault${scope}. Programs the agent runs can use it as $${v.envName}; LUCID hides the value from the agent.`
+    : `Saved to LUCID's encrypted vault${scope}. The agent gets only its name, never the value.`;
+}
+
+/** The second confirmation a replacement needs, naming what is saved now. */
+export function secretReplaceText(v: Pick<SecretRequestView, "replacesLabel" | "ref">): string {
+  return `Replace my saved ${v.replacesLabel ?? v.ref}`;
 }
 
 const POLL_MS = 3_000;
@@ -66,9 +74,10 @@ async function showNext(): Promise<void> {
     openDialog(view);
   } catch {
     // The dialog itself failed: fall back to the text file so the agent's request can still be answered.
-    const r = await bridge.secretFallback(view.id);
+    // No dialog means no replace confirmation: a request that would replace a saved entry is refused here.
+    const r = await bridge.secretFallback(view.id, false);
     showToast(r.ok
-      ? { tone: "warn", title: "Secret request", desc: `The secret dialog failed to open, so ${editorLabel(navigator.userAgent, isMac())} opened a private text file instead. Paste the key, save, and close it.`, timeout: 12_000 }
+      ? { tone: "warn", title: "Secret request", desc: `The secret dialog failed to open, so ${editorLabel(navigator.userAgent, isMac())} opened a private text file instead. Paste the key, save, then close the tab without keeping it.`, timeout: 12_000 }
       : { tone: "danger", title: "Secret request", desc: `The secret dialog failed to open and the text-file fallback was refused: ${r.error}`, timeout: 12_000 });
     if (r.ok) void bridge.secretFallbackWait(view.id).then((s) => showToast(s.ok
       ? { title: "Secret stored", desc: `${s.label} is in the vault. LUCID read the text file, overwrote it with zeros and deleted it.`, timeout: 6000 }
@@ -92,6 +101,7 @@ function openDialog(view: SecretRequestView): void {
       <p class="modal-desc"><b class="secret-req"></b> asks for <b class="secret-name"></b>. In its words:</p>
       <div class="secret-purpose"></div>
       <p class="set-note secret-where"></p>
+      <label class="set-toggle secret-replace" hidden><input type="checkbox" class="secret-replace-ok" /><span class="secret-replace-text"></span></label>
       <div class="secret-step" data-step="enter">
         <div class="secret-field">
           ${multiline
@@ -137,6 +147,11 @@ function openDialog(view: SecretRequestView): void {
   q(".secret-name").textContent = view.name;
   q(".secret-purpose").textContent = view.purpose;
   q(".secret-where").textContent = secretWhereText(view);
+  // Security review SECRET-INTAKE-ENVNAME-UNRESTRICTED: replacing a saved entry is a second, explicit choice
+  // that names it; the engine refuses the write without it (code "confirm-replace").
+  const replaceOk = q<HTMLInputElement>(".secret-replace-ok");
+  q(".secret-replace").hidden = !view.replaces;
+  q(".secret-replace-text").textContent = secretReplaceText(view);
   q(".secret-help").textContent = `${secretHelpText()} ${multiline ? "A key file (.pem, .json) can be picked instead." : ""}`.trim();
   const input = q<HTMLInputElement | HTMLTextAreaElement>(".secret-input");
   const err = q(".secret-err");
@@ -187,35 +202,47 @@ function openDialog(view: SecretRequestView): void {
     q<HTMLButtonElement>("[data-act='text']").focus();
   };
 
+  /** A replacement not yet confirmed: say so before anything is read (the engine refuses it anyway). */
+  const unconfirmed = (): boolean => {
+    if (!view.replaces || replaceOk.checked) return false;
+    showErr(`This replaces your saved ${view.replacesLabel ?? view.ref}. Tick "${secretReplaceText(view)}" first, or cancel.`);
+    replaceOk.focus();
+    return true;
+  };
   const save = async () => {
+    if (unconfirmed()) return;
     const value = input.value;
     input.value = ""; // the field never holds the value longer than the request takes
-    handle(await bridge.secretSubmit(view.id, value), "");
+    handle(await bridge.secretSubmit(view.id, value, replaceOk.checked), "");
   };
   const pickFile = async () => {
     err.hidden = true;
+    if (unconfirmed()) return;
     if (bridge.isElectron) {
       const path = await bridge.pickFile({ title: `Choose the file for ${view.name}`, filters: [{ name: "Key files", extensions: ["pem", "key", "json", "crt", "p8", "txt"] }] });
-      if (path) handle(await bridge.secretSubmitFile(view.id, path), "LUCID read the file directly; it was not changed.");
+      if (path) handle(await bridge.secretSubmitFile(view.id, path, replaceOk.checked), "LUCID read the file directly; it was not changed.");
       return;
     }
     const picker = el(`<input type="file" accept=".pem,.key,.json,.crt,.p8,.txt" hidden />`) as HTMLInputElement;
     picker.addEventListener("change", async () => {
       const file = picker.files?.[0];
       picker.remove();
-      if (file) handle(await bridge.secretSubmit(view.id, await file.text()), "The file itself was not changed.");
+      if (file) handle(await bridge.secretSubmit(view.id, await file.text(), replaceOk.checked), "The file itself was not changed.");
     });
     ov.appendChild(picker);
     picker.click();
   };
   const textFile = async () => {
     err.hidden = true;
-    const r = await bridge.secretFallback(view.id);
+    if (unconfirmed()) return;
+    const r = await bridge.secretFallback(view.id, replaceOk.checked);
     if (!r.ok) { showErr(`The text file was refused: ${r.error}.`); return; }
-    q(".secret-wait").textContent = `${editor} opened an empty private file. Paste the key into it, save it (${modCombo("S")}), then close ${editor}. LUCID reads it, overwrites it with zeros and deletes it.`;
+    // Security review SECRET-FALLBACK-ORPHAN: some editors keep their own copy of an open tab to restore it
+    // later, so the user is told to close the tab without keeping it.
+    q(".secret-wait").textContent = `${editor} opened an empty private file. Paste the key into it, save it (${modCombo("S")}), then close the tab without keeping it (choose "Don't save" if asked). LUCID reads the file, overwrites it with zeros and deletes it.`;
     q(".secret-path").textContent = r.path;
     step("wait");
-    handle(await bridge.secretFallbackWait(view.id), "LUCID read the text file, overwrote it with zeros and deleted it. You can close the editor without saving.");
+    handle(await bridge.secretFallbackWait(view.id), `LUCID read the text file, overwrote it with zeros and deleted it. Close the ${editor} tab without keeping it.`);
   };
   const destKind = (): SecretManagerAnswer => (Object.keys(SECRET_MANAGER_LABELS).find((k): k is SecretManagerAnswer => k === kindSel.value) ?? "none");
   const paintDest = () => {
@@ -251,6 +278,7 @@ function openDialog(view: SecretRequestView): void {
     else input.classList.toggle("secret-masked", !show);
   });
   input.addEventListener("input", () => { err.hidden = true; });
+  replaceOk.addEventListener("change", () => { err.hidden = true; });
   input.addEventListener("keydown", (e) => { if (e instanceof KeyboardEvent && e.key === "Enter" && !multiline) { e.preventDefault(); void save(); } });
   kindSel.addEventListener("change", paintDest);
   void bridge.secretManagerInfo().then((info) => {

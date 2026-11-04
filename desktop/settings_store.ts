@@ -944,10 +944,14 @@ export function keyVaultDir(): string {
 }
 
 /** Push stored keys + AskSage base URL into process.env so child `omp acp`
- *  (and the AskSage extension) inherit them. */
-export function applyEnv(): void {
+ *  (and the AskSage extension) inherit them. `allow` filters the key names: the engine passes
+ *  env_name_policy.mayHoldGlobalEnv, so a key under a reserved env name (PATH, NODE_*, *_PROXY,
+ *  *_BASE_URL, LUCID_*, ...) that Settings > Providers does not configure itself stays in the vault and
+ *  out of the env every child inherits (security review SECRET-INTAKE-ENVNAME-UNRESTRICTED). Injected,
+ *  not imported: this module is also bundled into Electron main, which must not load the provider table. */
+export function applyEnv(allow: (envName: string) => boolean = () => true): void {
   const s = load();
-  for (const [k, v] of Object.entries(s.keys ?? {})) if (v) process.env[k] = v;
+  for (const [k, v] of Object.entries(s.keys ?? {})) if (v && allow(k)) process.env[k] = v;
   if (s.asksageBaseUrl) process.env.ASKSAGE_BASE_URL = s.asksageBaseUrl;
   if (s.asksageDatasets?.length) process.env.ASKSAGE_DATASETS = s.asksageDatasets.join(",");
   if (s.asksageQueryModel) process.env.ASKSAGE_QUERY_MODEL = s.asksageQueryModel;

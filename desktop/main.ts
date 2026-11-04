@@ -180,6 +180,8 @@ function markRunClean(): void {
 }
 /** Upper bound on stopping and verifying the engine tree at exit, so a quit never hangs on it. */
 const END_RUN_MS = 20_000;
+/** Upper bound on the engine's graceful vault cleanup before the engine tree is stopped. */
+const VAULT_SHUTDOWN_MS = 4_000;
 let runEnding: Promise<void> | null = null;
 /** End this run deliberately: stop the engine and everything under it (the omp agent tree included, which
  *  killing the engine alone does not reach), and mark the run clean only when that is VERIFIED. Otherwise
@@ -188,6 +190,14 @@ let runEnding: Promise<void> | null = null;
 function endRun(): Promise<void> {
   runEnding ??= (async () => {
     appendEngineLog(`\n--- ${new Date().toISOString()} P-RECOVER.1 exit: stopping the engine ---\n`);
+    // Security review VAULT-ENV-MATERIALIZE-SYNCED: the kill below is TerminateProcess on Windows, so no exit
+    // handler of the engine runs. Ask it first (main-only, MAC-authenticated) to blank any `.env` it wrote
+    // temporarily and wipe its secret temp folders. Bounded: a hung engine never holds up the quit, and
+    // whatever is left is cleaned at the next engine start.
+    if (dev?.pid && dev.exitCode === null) {
+      const cleaned = await Promise.race([engineVault().shutdown().then(() => true, () => false), sleep(VAULT_SHUTDOWN_MS).then(() => false)]);
+      if (!cleaned) appendEngineLog("- The engine did not confirm its vault cleanup; the next engine start re-blanks and sweeps what is left.\n");
+    }
     const timedOut = sleep(END_RUN_MS).then(() => false);
     const verified = await Promise.race([stopCurrentEngine([]).then((r) => r.verified, () => false), timedOut]);
     if (verified) markRunClean();

@@ -16,7 +16,7 @@
 // value is ever written to a response, a log line or an event. The passphrase is accepted on the way in
 // and never echoed. Shape: `{ ok: true, data }` or `{ ok: false, error }`, like vault_routes.ts.
 
-import { isEnvName } from "./engine_vault.ts";
+import { mayHoldGlobalEnv } from "./env_name_policy.ts";
 import { tokenValid } from "./origin_guard.ts";
 import { backupFileName, createVaultBackup, restoreVaultBackup, VaultBackupError } from "./vault_backup.ts";
 import { applyVaultEnv } from "./vault_env.ts";
@@ -44,11 +44,12 @@ function refusal(e: unknown, what: string): Response {
 }
 
 /** After a restore: keep restored settings-style `key:<ENV>` refs live in process.env (as vault_routes.ts
- *  does after a write) and re-resolve the engine-side credential env. Never fails the restore. */
+ *  does after a write; a reserved name per env_name_policy.ts is skipped) and re-resolve the engine-side
+ *  credential env. Never fails the restore. */
 function refreshEnv(refs: string[]): void {
   try {
     for (const ref of refs) {
-      if (!ref.startsWith("key:") || !isEnvName(ref.slice(4))) continue;
+      if (!ref.startsWith("key:") || !mayHoldGlobalEnv(ref.slice(4))) continue;
       const v = vaultGet(ref);
       if (v) process.env[ref.slice(4)] = v;
     }

@@ -28,20 +28,29 @@ const tool = (): Captured => {
 };
 
 const URL_KEY = "LUCID_SECRET_REQUEST_URL";
-const inheritedUrl = process.env[URL_KEY];
+const TOKEN_KEY = "LUCID_SECRET_REQUEST_TOKEN";
+const MASTER_TOKEN = "master-request-token";
+const inherited = { url: process.env[URL_KEY], token: process.env[TOKEN_KEY] };
 const realFetch = globalThis.fetch;
-beforeEach(() => { process.env[URL_KEY] = "http://127.0.0.1:9/api/secret/request?t=agent"; });
+beforeEach(() => {
+  process.env[URL_KEY] = "http://127.0.0.1:9/api/secret/request";
+  process.env[TOKEN_KEY] = MASTER_TOKEN;
+});
 afterEach(() => {
   globalThis.fetch = realFetch;
-  if (inheritedUrl === undefined) delete process.env[URL_KEY]; else process.env[URL_KEY] = inheritedUrl;
+  if (inherited.url === undefined) delete process.env[URL_KEY]; else process.env[URL_KEY] = inherited.url;
+  if (inherited.token === undefined) delete process.env[TOKEN_KEY]; else process.env[TOKEN_KEY] = inherited.token;
 });
 /** Answer each POST with the next scripted reply; "hang" never answers until the call is aborted (and
- *  resolves `hung` when it starts). Returns the request bodies the tool sent, in order. */
+ *  resolves `hung` when it starts). Returns the request bodies the tool sent, in order, and their
+ *  `x-lucid-token` headers and URLs. */
 const script = (replies: Array<{ body: unknown; status?: number } | "hang">) => {
   const sent: unknown[] = [];
+  const auth: Array<{ url: string; token: string | null }> = [];
   const hung = Promise.withResolvers<void>();
-  globalThis.fetch = ((_url: string, init: RequestInit) => {
+  globalThis.fetch = ((url: string, init: RequestInit) => {
     sent.push(JSON.parse(String(init.body)));
+    auth.push({ url: String(url), token: new Headers(init.headers).get("x-lucid-token") });
     const next = replies.shift();
     if (next === "hang" || next === undefined) {
       const { promise, reject } = Promise.withResolvers<Response>();
@@ -51,7 +60,7 @@ const script = (replies: Array<{ body: unknown; status?: number } | "hang">) => 
     }
     return Promise.resolve(new Response(JSON.stringify(next.body), { status: next.status ?? 200, headers: { "content-type": "application/json" } }));
   }) as unknown as typeof fetch;
-  return { sent, hung: hung.promise };
+  return { sent, auth, hung: hung.promise };
 };
 const respond = (body: unknown, status = 200) => script([{ body, status }]).sent;
 const resultOf = async (params: unknown, signal?: AbortSignal): Promise<unknown> => {
@@ -67,6 +76,20 @@ describe("registration", () => {
     const { pi, tools } = capture();
     secretIntakeExtension(pi);
     expect(tools).toEqual([]);
+  });
+  test("no master request token: no tool (a lane or a child with only the URL cannot open the dialog)", () => {
+    delete process.env[TOKEN_KEY];
+    const { pi, tools } = capture();
+    secretIntakeExtension(pi);
+    expect(tools).toEqual([]);
+  });
+  test("SECRET-INTAKE-REQUESTER-SPOOF: the URL and token leave the env at load and the token rides a header", async () => {
+    const t = tool();
+    expect(process.env[URL_KEY]).toBeUndefined(); // the agent's own commands inherit neither
+    expect(process.env[TOKEN_KEY]).toBeUndefined();
+    const { auth } = script([{ body: { ok: true, data: { stored: false, reason: "cancelled" } } }]);
+    await t.execute("call-1", ask);
+    expect(auth).toEqual([{ url: "http://127.0.0.1:9/api/secret/request", token: MASTER_TOKEN }]);
   });
   test("registered as a read-tier tool with name, purpose and kind required (literal schema mode)", () => {
     const t = tool();

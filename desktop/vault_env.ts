@@ -102,6 +102,24 @@ export function applyVaultEnv(): VaultEnvReport {
   return { names, meetingHub: !!hub, localProviders };
 }
 
+/** Security review SECRET-INTAKE-AGENT-ENV-READBACK: the env NAMES (never values) through which a vault
+ *  value reaches an omp child spawned with `overlay` (that session's workspace secrets) on top of
+ *  process.env: the overlay's own names, every credential env this module applied, and every
+ *  settings-style `key:<ENV>` whose vault value is live in process.env. The child's
+ *  harness/omp/vault_redact_extension.ts reads the values from its own env and replaces them in every tool
+ *  result with `[vault:<NAME>]` before the model sees it. */
+export function vaultRedactEnv(overlay: Readonly<Record<string, string>>): { LUCID_VAULT_REDACT_NAMES: string } {
+  const names = new Set([...Object.keys(overlay), ...applied.keys()]);
+  const vault = readVault(keyVaultDir());
+  if (!vault.problem) {
+    for (const [ref, value] of Object.entries(vault.secrets)) {
+      const name = ref.startsWith("key:") ? ref.slice(4) : "";
+      if (name && process.env[name] === value) names.add(name);
+    }
+  }
+  return { LUCID_VAULT_REDACT_NAMES: [...names].sort().join(",") };
+}
+
 /** Test-only: forget what this module applied (does not touch process.env). */
 export function _resetVaultEnvForTest(): void {
   applied.clear();

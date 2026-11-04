@@ -11,8 +11,9 @@
 //   Main-only, header UI token AND a request MAC keyed by the per-launch vault token Electron main minted
 //   (LUCID_VAULT_MAIN_TOKEN, taken out of process.env the moment this module loads, so no omp, fleet or
 //   scanner child inherits it and the renderer never receives it): /api/vault/main/status|list|store|
-//   rotate|delete|import. This is how bridge.cred* (through main's IPC handlers) and the safeStorage
-//   migration reach the vault; a headless engine has no main, so these answer 403. Every reply to an
+//   rotate|delete|import|shutdown. This is how bridge.cred* (through main's IPC handlers) and the safeStorage
+//   migration reach the vault, and how main runs the graceful vault cleanup (vault_lifecycle.ts) before it
+//   kills the engine; a headless engine has no main, so these answer 403. Every reply to an
 //   authenticated main request carries `x-lucid-vault-mac` (HMAC-SHA256 over the request nonce and the
 //   reply body; layout in cred_engine_client.ts), which main verifies before trusting the reply.
 //   What the vault token protects is that channel (the migration, which deletes safeStorage sources, and
@@ -32,10 +33,12 @@ import {
 } from "./cred_engine_client.ts"; // the one definition of the main <-> engine MAC layout
 import { isValidRef } from "./cred_vault.ts";
 import { isEnvName, VAULT_KINDS, type VaultKind } from "./engine_vault.ts";
+import { mayHoldGlobalEnv } from "./env_name_policy.ts";
 import { tokenValid } from "./origin_guard.ts";
 import { applyVaultEnv } from "./vault_env.ts";
 import { handleVaultDestRoutes } from "./vault_dest_routes.ts"; // P-VAULT-DEST.1 (ADR-0478): /api/vault/destinations*, /push, /pull
 import { handleVaultEnvRoutes } from "./vault_env_routes.ts";
+import { vaultShutdownCleanup } from "./vault_lifecycle.ts";
 import {
   credList, credViewOf, importLegacyCredential, isVaultRef, mintCredRef, vaultDelete, vaultGet, vaultList, vaultPut, vaultRotate,
   vaultStatus, workspaceRef,
@@ -48,6 +51,7 @@ const FIPS_MAC: MacPrimitives = { hmac: hmacSha256, sha256 };
 export const VAULT_UI_ROUTES: readonly string[] = ["/api/vault/list", "/api/vault/put", "/api/vault/rotate", "/api/vault/delete"];
 export const VAULT_MAIN_ROUTES: readonly string[] = [
   "/api/vault/main/status", "/api/vault/main/list", "/api/vault/main/store", "/api/vault/main/rotate", "/api/vault/main/delete", "/api/vault/main/import",
+  "/api/vault/main/shutdown",
 ];
 
 export interface VaultRouteCtx {
@@ -72,10 +76,11 @@ const num = (v: unknown): number | undefined => (typeof v === "number" && Number
 const kindOf = (v: unknown): VaultKind | null => VAULT_KINDS.find((k) => k === v) ?? null;
 
 /** After a write: re-resolve the engine-side credential env (vault_env.ts), and keep a settings-style
- *  `key:<ENV>` ref live in process.env the way settings_store.setKey does. Never fails the write. */
+ *  `key:<ENV>` ref live in process.env the way settings_store.setKey does, unless the name is reserved
+ *  (env_name_policy.ts: a reserved name is neither set nor unset here). Never fails the write. */
 export function afterWrite(ref: string): void {
   try {
-    if (ref.startsWith("key:") && isEnvName(ref.slice(4))) {
+    if (ref.startsWith("key:") && mayHoldGlobalEnv(ref.slice(4))) {
       const v = vaultGet(ref);
       if (v) process.env[ref.slice(4)] = v;
       else delete process.env[ref.slice(4)];
@@ -195,6 +200,9 @@ function mainRoute(req: Request, p: string, b: Record<string, unknown>): Respons
       return ok({ deleted });
     } catch (e) { return fail(500, errText(e)); }
   }
+  // Security review VAULT-ENV-MATERIALIZE-SYNCED: main calls this before it kills the engine on quit (a
+  // Windows kill runs no exit handler), so temporarily written `.env` values and temp dirs go first.
+  if (p === "/api/vault/main/shutdown") return ok(vaultShutdownCleanup());
   if (p === "/api/vault/main/import") {
     const ref = str(b.ref);
     const value = str(b.value);

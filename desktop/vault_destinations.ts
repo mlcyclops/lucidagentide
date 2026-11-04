@@ -11,13 +11,19 @@
 // connector through the add-on seam (addon_seam.ts runConnectorReply, `bun connectors/kms/src/cli.ts
 // <verb> --file <req>`).
 //
-// The file contract (ADR-A014 / ADR-A032): every request is written 0600 into a fresh private temp dir
-// (mkdtemp, 0700) and the whole dir is overwritten and removed right after the call, on success, on a
-// connector failure and on a throw. A pull's values come back ONLY in the request's `out` file inside
-// that dir; they are read into memory, imported through vaultImportEntries and the file is wiped with
-// the dir. Values never ride a reply, a log line, an event or a route response: replies carry names,
-// versions and counts, and every detail string that leaves this module is scrubbed of every value the
-// call involved (item values, the resolved client secret, pulled values) as a final guard.
+// The file contract (ADR-A014 / ADR-A032): every request is written 0600 (flag wx) into a fresh user-only
+// dir from secret_fallback.ts createUserOnlyDir (a private, non-synced temp base; POSIX 0700 or a
+// verified Windows ACL; no such dir = a DestinationError(500) and nothing written), and the whole dir is
+// overwritten and removed right after the call, on success, on a connector failure and on a throw. A dir
+// a killed engine leaves behind is swept at the next start (sweepOrphanTempDirs). A push goes out in
+// batches of PUSH_BATCH_SIZE items, one request dir each, so at most one batch of plaintext is on disk;
+// a failed batch stops the rest and the result reports what was pushed so far. A pull's values come
+// back ONLY in the request's `out` file inside that dir; they are read into memory, imported through
+// vaultImportEntries and the file is wiped with the dir. Values never ride a reply, a log line, an event
+// or a route response: replies carry names, versions and counts, and every detail string that leaves
+// this module is scrubbed of every value the call involved (item values, the resolved client secret,
+// pulled values; raw, JSON-escaped and base64 / base64url forms) as a final guard. A pulled `key:<ENV>`
+// reaches process.env only when env_name_policy.ts mayHoldGlobalEnv allows the name.
 //
 // Without the add-on (connectorStatus("kms") not installed) nothing pretends: every connector operation
 // refuses with the seam's own "part of the LUCID enterprise add-on" note, and auto-backup records the
@@ -29,11 +35,12 @@
 // memory for the Settings view.
 
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { connectorStatus, connectorVersion, runConnectorReply, type ConnectorReply } from "./addon_seam.ts";
 import { isEnvName, VAULT_KINDS, type VaultEntryMeta, type VaultKind } from "./engine_vault.ts";
+import { mayHoldGlobalEnv } from "./env_name_policy.ts";
+import { createUserOnlyDir } from "./secret_fallback.ts";
 import { load, save, type VaultDestination, type VaultDestinationKind } from "./settings_store.ts";
 import { applyVaultEnv } from "./vault_env.ts";
 import { isVaultRef, onVaultWrite, vaultExportEntries, vaultGet, vaultImportEntries, vaultList, type VaultExportEntry } from "./vault_store.ts";
@@ -229,10 +236,24 @@ export function _setDestinationRunnerForTest(r: DestinationRunner | null): void 
 /** The private temp dir prefix (tests and the demo look for leftovers by it). */
 export const REQUEST_DIR_PREFIX = "lucid-vdest-";
 
-/** Replace every known secret value (>= 4 chars, the add-on's own rule) in `text` with [redacted]. */
+let requestDirOptions: Parameters<typeof createUserOnlyDir>[1] = {};
+/** Test seam: the createUserOnlyDir options for request dirs (bases / restrict / userOnly); null resets. */
+export function _setRequestDirOptionsForTest(o: Parameters<typeof createUserOnlyDir>[1] | null): void { requestDirOptions = o ?? {}; }
+
+/** At most this many items ride one `put` request, so less plaintext sits on disk at once. */
+export const PUSH_BATCH_SIZE = 25;
+
+/** Replace every known secret value (>= 4 chars, the add-on's own rule) in `text` with [redacted], in
+ *  its raw, JSON-escaped, base64 and base64url forms. */
 export function scrubValues(text: string, secrets: readonly string[]): string {
   let out = text;
-  for (const s of secrets) if (s && s.length >= 4) out = out.split(s).join("[redacted]");
+  for (const s of secrets) {
+    if (!s || s.length < 4) continue;
+    const b64 = Buffer.from(s, "utf8").toString("base64");
+    for (const form of [s, JSON.stringify(s).slice(1, -1), b64, Buffer.from(s, "utf8").toString("base64url"), b64.replace(/=+$/, "")]) {
+      if (form.length >= 4) out = out.split(form).join("[redacted]");
+    }
+  }
   return out;
 }
 
@@ -256,12 +277,14 @@ interface KmsCall { res: ConnectorReply; out: Record<string, string> | null }
 /** Write `request` 0600 in a fresh private dir, run the verb, read the pull `out` file when asked, and wipe
  *  the dir whatever happens (success, connector failure, a throw). */
 async function callKms(verb: DestinationVerb, request: Record<string, unknown>, timeoutMs: number, wantOut = false): Promise<KmsCall> {
-  const dir = mkdtempSync(join(tmpdir(), REQUEST_DIR_PREFIX));
+  let dir: string;
+  try { dir = createUserOnlyDir(REQUEST_DIR_PREFIX, requestDirOptions); } catch (e) {
+    throw new DestinationError(`no private temp folder for the request: ${errText(e)}`, 500);
+  }
   try {
-    try { chmodSync(dir, 0o700); } catch { /* Windows: %TEMP% is already user-only */ }
     const outPath = join(dir, "pull.out.json");
     const file = join(dir, `${verb}.request.json`);
-    writeFileSync(file, JSON.stringify(wantOut ? { ...request, out: outPath } : request), { mode: 0o600 });
+    writeFileSync(file, JSON.stringify(wantOut ? { ...request, out: outPath } : request), { mode: 0o600, flag: "wx" });
     const res = await runner(verb, file, timeoutMs);
     let out: Record<string, string> | null = null;
     if (wantOut && res.ok) {
@@ -358,19 +381,34 @@ export async function pushToDestination(id: string, refs?: readonly string[]): P
   if (!items.length) return { ok: skipped.length === 0, pushed: [], skipped, detail: `nothing to push${skippedNote}` };
   const { destination, secrets } = requestDestination(d);
   const values = [...items.map((i) => i.value), ...secrets];
-  const timeoutMs = Math.min(15 * 60_000, 30_000 + items.length * 2_000);
-  const { res } = await callKms("put", { destination, items }, timeoutMs);
   const pushed: DestinationPushResult["pushed"] = [];
-  const rawPushed: unknown[] = res.reply && Array.isArray(res.reply.pushed) ? res.reply.pushed : [];
-  for (const p of rawPushed) {
-    const o = p && typeof p === "object" ? (p as Record<string, unknown>) : {};
-    const name = str(o.name);
-    const ref = name ? refOfName.get(name) : undefined;
-    if (!name || !ref) continue;
-    const version = str(o.version);
-    pushed.push({ ref, name, ...(version ? { version } : {}) });
+  const details: string[] = [];
+  let ok = true;
+  // Bounded batches, each its own request dir wiped right after; a failed batch stops the rest.
+  for (let at = 0; at < items.length; at += PUSH_BATCH_SIZE) {
+    const batch = items.slice(at, at + PUSH_BATCH_SIZE);
+    const timeoutMs = 30_000 + batch.length * 2_000;
+    let res: ConnectorReply;
+    try { ({ res } = await callKms("put", { destination, items: batch }, timeoutMs)); } catch (e) {
+      if (!pushed.length) throw e;
+      ok = false;
+      details.push(errText(e));
+      break;
+    }
+    const rawPushed: unknown[] = res.reply && Array.isArray(res.reply.pushed) ? res.reply.pushed : [];
+    for (const p of rawPushed) {
+      const o = p && typeof p === "object" ? (p as Record<string, unknown>) : {};
+      const name = str(o.name);
+      const ref = name ? refOfName.get(name) : undefined;
+      if (!name || !ref) continue;
+      const version = str(o.version);
+      pushed.push({ ref, name, ...(version ? { version } : {}) });
+    }
+    details.push(res.detail);
+    if (!res.ok) { ok = false; break; }
   }
-  return { ok: res.ok, pushed, skipped, detail: scrubValues(res.detail, values) + skippedNote };
+  const stopped = !ok && pushed.length ? ` (stopped after ${pushed.length} of ${items.length} pushed)` : "";
+  return { ok, pushed, skipped, detail: scrubValues(details.join("; "), values) + stopped + skippedNote };
 }
 
 // ── list ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -432,12 +470,13 @@ export interface DestinationPullResult {
   detail: string;
 }
 
-/** After a pull wrote values: keep a settings-style `key:<ENV>` live in process.env and re-resolve the
+/** After a pull wrote values: keep a settings-style `key:<ENV>` live in process.env (only when
+ *  mayHoldGlobalEnv(ENV): a pulled NODE_OPTIONS stays in the vault, never in the env) and re-resolve the
  *  engine-side credential env, as a vault route write does. Never fails the pull. */
 function refreshEnv(refs: readonly string[]): void {
   try {
     for (const ref of refs) {
-      if (!ref.startsWith("key:") || !isEnvName(ref.slice(4))) continue;
+      if (!ref.startsWith("key:") || !mayHoldGlobalEnv(ref.slice(4))) continue; // never a reserved name (env_name_policy.ts)
       const v = vaultGet(ref);
       if (v) process.env[ref.slice(4)] = v;
     }

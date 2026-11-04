@@ -12,7 +12,8 @@
  *  is rendered with textContent, never as markup. */
 export interface SecretRequestView {
   id: string;
-  /** Who asked, for the dialog header ("Main agent"). */
+  /** Who asked, for the dialog header: the label of the caller the engine authenticated ("Main agent"),
+   *  never a string from the request body. */
   requester: string;
   /** What the agent calls the secret, e.g. "OpenAI API key". */
   name: string;
@@ -26,8 +27,10 @@ export interface SecretRequestView {
   workspace: string | null;
   /** The vault ref it lands under. */
   ref: string;
-  /** An entry already exists under that ref and will be replaced. */
+  /** An entry already exists under that ref and will be replaced (only after a second confirmation). */
   replaces: boolean;
+  /** The saved entry's label (and last-4) the confirmation names; null when nothing is replaced. */
+  replacesLabel: string | null;
   createdAt: number;
   expiresAt: number;
 }

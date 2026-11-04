@@ -105,7 +105,12 @@ export interface EngineCredClient {
   rotate(input: RotateInput): Promise<CredView | null>;
   remove(ref: string): Promise<boolean>;
   importLegacy(item: ImportItem): Promise<ImportResult>;
+  /** Graceful vault cleanup before main kills the engine (vault_lifecycle.ts): counts only. */
+  shutdown(): Promise<VaultCleanupReport>;
 }
+
+/** What a vault cleanup did (vault_lifecycle.ts): re-blanked `.env` files and wiped temp folders, by count. */
+export interface VaultCleanupReport { reblanked: number; reblankFailed: number; swept: number; kept: number }
 
 export function engineCredClient(link: EngineVaultLink): EngineCredClient {
   const doFetch = link.fetch ?? fetch;
@@ -155,6 +160,7 @@ export function engineCredClient(link: EngineVaultLink): EngineCredClient {
     },
     remove: async (ref) => (await call<{ deleted: boolean }>("delete", { ref })).deleted === true,
     importLegacy: (item) => call<ImportResult>("import", item),
+    shutdown: () => call<VaultCleanupReport>("shutdown", {}),
   };
 }
 

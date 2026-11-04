@@ -10,7 +10,8 @@
 // only `.env` / `.env.<suffix>` directly in it.
 //
 //   POST /api/vault/env/scan           { file? }                          -> EnvScan (names, slots, last-4; no values)
-//   POST /api/vault/env/import         { file?, names?, blank?, gitignore? } -> EnvImportResult (names and refs)
+//   POST /api/vault/env/import         { file?, names?, confirmReplace?, blank?, gitignore? } -> EnvImportResult (names and refs)
+//                                      confirmReplace: the names the user confirmed may replace a saved global key
 //   POST /api/vault/env/materialize    { file?, minutes? }                -> { path, names, until }
 //   POST /api/vault/env/unmaterialize  { file? }                          -> { blanked, names }
 
@@ -40,8 +41,9 @@ export async function handleVaultEnvRoutes(req: Request, p: string, ctx: VaultRo
   try {
     if (p === "/api/vault/env/scan") return reply(200, { ok: true, data: scanEnvFile(ws, file) });
     if (p === "/api/vault/env/import") {
-      const names = Array.isArray(b.names) ? b.names.filter((n): n is string => typeof n === "string") : undefined;
-      return reply(200, { ok: true, data: importEnvFile(ws, file, { names, blank: b.blank === true, gitignore: b.gitignore === true }) });
+      const strings = (v: unknown): string[] | undefined => (Array.isArray(v) ? v.filter((n): n is string => typeof n === "string") : undefined);
+      const opts = { names: strings(b.names), confirmReplace: strings(b.confirmReplace), blank: b.blank === true, gitignore: b.gitignore === true };
+      return reply(200, { ok: true, data: importEnvFile(ws, file, opts) });
     }
     if (p === "/api/vault/env/materialize") {
       const minutes = typeof b.minutes === "number" ? b.minutes : undefined;

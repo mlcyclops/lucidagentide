@@ -11,12 +11,12 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:tes
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { addonDir, runConnectorReply, type ConnectorReply } from "./addon_seam.ts";
 import { _setVaultBackendForTest, type OsKeyStore, type VaultEntryMeta } from "./engine_vault.ts";
 import {
   _resetAutoBackupForTest, _setDestinationRunnerForTest, azureSecretName, flushAutoBackup, listVaultDestinations, lucidSecretTags,
-  pullFromDestination, pushToDestination, REQUEST_DIR_PREFIX, upsertVaultDestination,
+  _setRequestDirOptionsForTest, PUSH_BATCH_SIZE, pullFromDestination, pushToDestination, REQUEST_DIR_PREFIX, scrubValues, upsertVaultDestination,
   type DestinationCheckResult, type DestinationListResult, type DestinationPullResult, type DestinationPushResult, type DestinationsView,
   type DestinationVerb,
 } from "./vault_destinations.ts";
@@ -30,7 +30,7 @@ import { vaultGet, vaultImportEntries, vaultList, vaultPut, vaultRotate } from "
 const REAL_ADDON_AZURE = resolve(addonDir(), "connectors", "kms", "azure", "src", "azure.ts");
 const REAL_ADDON_HAS_MAPPING = existsSync(REAL_ADDON_AZURE) && readFileSync(REAL_ADDON_AZURE, "utf8").includes("export function azureSecretName");
 
-const ENV_KEYS = ["LUCID_GUI_SETTINGS_FILE", "LUCID_ENGINE_VAULT_DIR", "LUCID_OMP_MODELS_YAML", "LUCID_ADDON_DIR", "LUCID_DEST_T_ONE", "LUCID_DEST_T_TWO", "LUCID_DEST_T_NEW"] as const;
+const ENV_KEYS = ["LUCID_GUI_SETTINGS_FILE", "LUCID_ENGINE_VAULT_DIR", "LUCID_OMP_MODELS_YAML", "LUCID_ADDON_DIR", "LUCID_DEST_T_ONE", "LUCID_DEST_T_TWO", "LUCID_DEST_T_NEW", "NODE_OPTIONS", "OPENAI_API_KEY"] as const;
 const ENV_BEFORE = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 const dirs: string[] = [];
 const UI = "u".repeat(64);
@@ -119,6 +119,7 @@ let before: string[] = [];
 beforeEach(() => { before = leftoverRequestDirs(); });
 afterEach(() => {
   _setDestinationRunnerForTest(null);
+  _setRequestDirOptionsForTest(null);
   _resetAutoBackupForTest();
   _setVaultBackendForTest(null);
   _resetVaultEnvForTest();
@@ -231,7 +232,7 @@ describe("request files", () => {
     for (const c of calls) expect(existsSync(c.file)).toBe(false);
     expect(vaultGet("key:LUCID_DEST_T_NEW")).toBe("sk-dest-PULLED-00000000003");
     expect(vaultList().find((m) => m.ref === "key:LUCID_DEST_T_NEW")).toMatchObject({ source: "destination-pull", kind: "apikey", envName: "LUCID_DEST_T_NEW" });
-    expect(process.env.LUCID_DEST_T_NEW).toBe("sk-dest-PULLED-00000000003"); // live for the next spawn, like a route write
+    expect(process.env.LUCID_DEST_T_NEW).toBeUndefined(); // LUCID_* is reserved (env_name_policy.ts): vault only, never process.env
   });
 
   test("through the real seam: a fake add-on CLI sees a 0600 file, its exit-1 JSON line is parsed, and the file is gone", async () => {
@@ -468,5 +469,61 @@ describe("destination config", () => {
     expect(edited.autoBackup).toBeUndefined();
     expect((await call<VaultDestination>("/api/vault/destinations/auto-backup", { id: saved.id, on: true })).data!.autoBackup).toBe(true);
     expect(listVaultDestinations()).toHaveLength(1);
+  });
+});
+
+describe("security review fixes", () => {
+  test("VAULT-DEST-REQFILE-PERMS-ORPHAN: a request dir that cannot be verified user-only is a DestinationError(500), nothing written or run", async () => {
+    const root = scratch(); useFakeStore(); fakeAddon(root);
+    put("key:LUCID_DEST_T_ONE", "sk-dest-ONE-000000000001");
+    const dest = upsertVaultDestination({ name: "Gov KV", kind: "azure-kv", config: AZ_CONFIG });
+    const base = join(root, "tmp-base");
+    mkdirSync(base);
+    _setRequestDirOptionsForTest({ bases: [base], restrict: () => {}, userOnly: () => false });
+    const calls = fakeRunner((_v, req) => pushedAll(req));
+    await expect(pushToDestination(dest.id)).rejects.toMatchObject({ status: 500 });
+    expect(calls).toHaveLength(0);
+    expect(readdirSync(base)).toEqual([]);
+  });
+
+  test("VAULT-DEST-REQFILE-PERMS-ORPHAN: a push of N items goes out in ceil(N / batch) calls, each request dir gone afterwards", async () => {
+    const root = scratch(); useFakeStore(); fakeAddon(root);
+    const n = PUSH_BATCH_SIZE * 2 + 3;
+    for (let i = 0; i < n; i++) put(`key:VDEST_BATCH_${String(i).padStart(3, "0")}`, `sk-dest-BATCH-${String(i).padStart(10, "0")}`);
+    const dest = upsertVaultDestination({ name: "Gov KV", kind: "azure-kv", config: AZ_CONFIG });
+    const calls = fakeRunner((_v, req) => pushedAll(req));
+    const r = await pushToDestination(dest.id);
+    expect(calls).toHaveLength(Math.ceil(n / PUSH_BATCH_SIZE));
+    for (const c of calls) {
+      expect((c.request.items ?? []).length).toBeLessThanOrEqual(PUSH_BATCH_SIZE);
+      expect(existsSync(dirname(c.file))).toBe(false);
+    }
+    expect(new Set(calls.map((c) => dirname(c.file))).size).toBe(calls.length);
+    expect(r).toMatchObject({ ok: true });
+    expect(r.pushed).toHaveLength(n);
+  });
+
+  test("VAULT-DEST-AUTOBACKUP-GAP: scrubValues removes the raw, JSON-escaped, base64 and base64url forms", () => {
+    const v = 'sk-"quoted"\\path?>>~~0001';
+    const text = [v, JSON.stringify(v).slice(1, -1), Buffer.from(v).toString("base64"), Buffer.from(v).toString("base64url")].join(" | ");
+    const out = scrubValues(text, [v]);
+    expect(out).toBe("[redacted] | [redacted] | [redacted] | [redacted]");
+    expect(scrubValues("abc", ["abc"])).toBe("abc"); // < 4 chars: unchanged rule
+  });
+
+  test("SECRET-INTAKE-ENVNAME-UNRESTRICTED: a pulled key:NODE_OPTIONS stays out of process.env, key:OPENAI_API_KEY goes in", async () => {
+    const root = scratch(); useFakeStore(); fakeAddon(root);
+    const dest = upsertVaultDestination({ name: "Gov KV", kind: "azure-kv", config: AZ_CONFIG });
+    const nodeBefore = process.env.NODE_OPTIONS;
+    const values: Record<string, string> = { "key:NODE_OPTIONS": "--require ./evil-0000001.js", "key:OPENAI_API_KEY": "sk-dest-OPENAI-PULLED-0001" };
+    fakeRunner((verb, req) => {
+      if (verb === "list") return okReply({ items: Object.keys(values).map((ref) => ({ name: azureSecretName(ref), tags: lucidSecretTags(ref, "apikey", 1_000), updatedOn: "2026-11-01T00:00:00.000Z" })), detail: "listed" });
+      writeFileSync(req.out ?? "", JSON.stringify(Object.fromEntries(Object.entries(values).map(([ref, v]) => [azureSecretName(ref), v]))));
+      return okReply({ pulled: 2, detail: "pulled" });
+    });
+    const r = await pullFromDestination(dest.id);
+    expect(r.ok).toBe(true);
+    expect(process.env.NODE_OPTIONS).toBe(nodeBefore);
+    expect(process.env.OPENAI_API_KEY).toBe("sk-dest-OPENAI-PULLED-0001");
   });
 });

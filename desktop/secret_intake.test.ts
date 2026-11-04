@@ -7,8 +7,10 @@
 //   - cancel, timeout and an aborted call resolve stored:false and store nothing;
 //   - a value pasted in chat (an extra argument, or a key inside name/purpose) is never what is stored;
 //   - the notepad fallback's file sits outside synced folders and the workspace and is gone after the read;
-//   - over HTTP, the agent token opens only /api/secret/request and the UI routes take the header UI token
-//     only; the stored value is really in the engine vault;
+//   - over HTTP, only a requester token (the master's, in the header) opens /api/secret/request and names
+//     the requester; the UI routes take the header UI token only; the stored value is really in the vault;
+//   - reserved env names are refused, only provider key envs may be global, replacing a saved entry needs
+//     a second confirmation, and a reserved key:<ENV> never reaches process.env (security review);
 //   - the "another secrets manager?" answer never fakes a destination;
 //   - the built-in skill exists (the frozen prompt prefix is not touched by this slice).
 // The OS key store is an in-memory fake and every path is a temp dir.
@@ -29,9 +31,10 @@ import type { SecretIntakeResult, SecretRequestView } from "./secret_intake_view
 import { handleSecretRoutes } from "./secret_routes.ts";
 import { isSyncedPath } from "./synced_path.ts";
 import { _resetVaultEnvForTest } from "./vault_env.ts";
-import { vaultGet, type VaultEntryMeta, type VaultPutInput } from "./vault_store.ts";
+import { afterWrite } from "./vault_routes.ts";
+import { vaultDelete, vaultGet, vaultPut, type VaultEntryMeta, type VaultPutInput } from "./vault_store.ts";
 
-const ENV_KEYS = ["LUCID_GUI_SETTINGS_FILE", "LUCID_ENGINE_VAULT_DIR", "LUCID_OMP_MODELS_YAML", "LUCID_DATA_ROOT", "LUCID_ADDON_DIR", "LUCID_INTAKE_TEST_KEY"] as const;
+const ENV_KEYS = ["LUCID_GUI_SETTINGS_FILE", "LUCID_ENGINE_VAULT_DIR", "LUCID_OMP_MODELS_YAML", "LUCID_DATA_ROOT", "LUCID_ADDON_DIR", "OPENAI_API_KEY", "NODE_OPTIONS"] as const;
 const ENV_BEFORE = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 const dirs: string[] = [];
 const scratch = (): string => { const d = mkdtempSync(join(tmpdir(), "lucid-intake-test-")); dirs.push(d); return d; };
@@ -58,7 +61,7 @@ function fakeDeps(over: Partial<SecretIntakeDeps> = {}) {
       const meta: VaultEntryMeta = { ref: input.ref, label: input.label ?? input.ref, kind: input.kind, source: input.source, addedAt: 1, updatedAt: 1, ...(input.envName ? { envName: input.envName } : {}) };
       return meta;
     },
-    refs: () => [...vault.keys()],
+    existing: (ref) => (vault.has(ref) ? { ref, label: `saved ${ref}`, kind: "apikey", source: "typed", addedAt: 1, updatedAt: 1, last4: "9999" } : null),
     deriveRef: (env, ws, label) => (env ? (ws ? `ws:test:${env}` : `key:${env}`) : `secret:${label.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`),
     afterWrite: () => {},
     workspace: () => tmpdir(),
@@ -74,7 +77,7 @@ const ask = { name: "OpenAI API key", kind: "apikey", purpose: "To run the embed
 
 /** Open a request and collect its answer in one long hold (what the route's poll loop amounts to). */
 function collect(intake: SecretIntake, raw: unknown): Promise<SecretIntakeResult> {
-  const opened = intake.open(raw);
+  const opened = intake.open(raw, "Main agent");
   if ("result" in opened) return Promise.resolve(opened.result);
   return intake.wait(opened.id, 60_000).then((r) => r ?? { stored: false, reason: "still pending after the hold" });
 }
@@ -149,7 +152,7 @@ describe("stored:false outcomes store nothing", () => {
   test("an answer that lands between two agent polls is kept for the next poll", async () => {
     const f = fakeDeps();
     const intake = new SecretIntake(f.deps);
-    const opened = intake.open(ask);
+    const opened = intake.open(ask, "Main agent");
     if (!("id" in opened)) throw new Error("not opened");
     expect(await intake.wait(opened.id, 0)).toBeNull(); // still waiting: the route answers {pending, id}
     intake.submit(opened.id, DIALOG_VALUE, "dialog");
@@ -214,8 +217,9 @@ describe("text-file fallback through the intake", () => {
     for (const t of ticks) t();
     const out = await intake.awaitFallback(id);
     expect(out.ok).toBe(true);
-    expect(await pending).toEqual({ stored: true, ref: "key:TLS_KEY", envName: "TLS_KEY" });
-    expect(f.vault.get("key:TLS_KEY")).toBe("-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----");
+    // TLS_KEY is no provider key env, so it is kept to the workspace (SECRET-INTAKE-ENVNAME-UNRESTRICTED).
+    expect(await pending).toEqual({ stored: true, ref: "ws:test:TLS_KEY", envName: "TLS_KEY" });
+    expect(f.vault.get("ws:test:TLS_KEY")).toBe("-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----");
     expect(existsSync(start.path)).toBe(false);
     expect(existsSync(dirname(start.path))).toBe(false);
     expect(f.audit.join("\n")).not.toContain("MIIB");
@@ -241,7 +245,7 @@ describe("text-file fallback through the intake", () => {
 describe("pure rules", () => {
   test("only the declared fields are parsed; unknown kinds fall back to other", () => {
     const r = parseSecretRequest({ name: "n\u202Eame", kind: "API_KEY", purpose: " p ", envName: "A_B", value: CHAT_PASTED });
-    expect(r).toEqual({ ok: true, request: { name: "n ame", kind: "other", purpose: "p", envName: "A_B", workspaceScoped: false } });
+    expect(r).toEqual({ ok: true, request: { name: "n ame", kind: "other", purpose: "p", envName: "A_B", workspaceScoped: true } });
   });
   test("normalizeSecretValue trims single-line secrets and keeps PEM lines with LF endings", () => {
     expect(normalizeSecretValue("\uFEFF tok \r\n", "token")).toBe("tok");
@@ -268,33 +272,38 @@ describe("HTTP: tokens, the real vault, and no value on the wire", () => {
     new Request(`http://127.0.0.1${path}`, body === undefined
       ? { headers: { "x-lucid-token": token } }
       : { method: "POST", headers: { "x-lucid-token": token, "content-type": "application/json" }, body: JSON.stringify(body) });
+  const MASTER = [{ token: "master-token", label: "Main agent" }];
+  /** A request_secret POST as the master's extension sends it: the request token in the header. */
+  const asMaster = (body: unknown, token = "master-token"): Request =>
+    new Request("http://127.0.0.1/api/secret/request", { method: "POST", headers: { "x-lucid-token": token, "content-type": "application/json" }, body: JSON.stringify(body) });
 
   test("agent asks, user answers on the UI routes, the value lands in the vault and on no response", async () => {
     useVault();
     const shown = Promise.withResolvers<SecretRequestView>();
     const intake = new SecretIntake({ ...defaultIntakeDeps((v) => shown.resolve(v)), audit: () => {} });
-    const ctx = { uiToken: "ui-token", agentToken: "agent-token", emit: () => {}, intake };
+    const ctx = { uiToken: "ui-token", requesters: MASTER, emit: () => {}, intake };
     const wire: string[] = [];
     const call = async (req: Request, path: string) => { const r = (await handleSecretRoutes(req, path, ctx))!; const t = await r.text(); wire.push(t); return { status: r.status, body: JSON.parse(t) }; };
 
-    const agent = call(new Request("http://127.0.0.1/api/secret/request?t=agent-token", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...ask, envName: "LUCID_INTAKE_TEST_KEY", value: CHAT_PASTED }) }), "/api/secret/request");
+    const agent = call(asMaster({ ...ask, value: CHAT_PASTED }), "/api/secret/request");
     const view = await shown.promise;
+    expect(view.requester).toBe("Main agent");
     const listed = await call(ui("/api/secret/pending"), "/api/secret/pending");
     expect(listed.body.data.requests.map((r: SecretRequestView) => r.id)).toEqual([view.id]);
     const stored = await call(ui("/api/secret/submit", { id: view.id, value: DIALOG_VALUE }), "/api/secret/submit");
     expect(stored.status).toBe(200);
-    expect(stored.body.data).toMatchObject({ stored: true, ref: "key:LUCID_INTAKE_TEST_KEY", envName: "LUCID_INTAKE_TEST_KEY" });
+    expect(stored.body.data).toMatchObject({ stored: true, ref: "key:OPENAI_API_KEY", envName: "OPENAI_API_KEY" });
     const answered = await agent;
-    expect(answered.body).toEqual({ ok: true, data: { stored: true, ref: "key:LUCID_INTAKE_TEST_KEY", envName: "LUCID_INTAKE_TEST_KEY" } });
-    expect(vaultGet("key:LUCID_INTAKE_TEST_KEY")).toBe(DIALOG_VALUE);
+    expect(answered.body).toEqual({ ok: true, data: { stored: true, ref: "key:OPENAI_API_KEY", envName: "OPENAI_API_KEY" } });
+    expect(vaultGet("key:OPENAI_API_KEY")).toBe(DIALOG_VALUE);
     for (const t of wire) { expect(t).not.toContain(DIALOG_VALUE); expect(t).not.toContain(CHAT_PASTED); }
   });
 
   test("the agent polls by id while the user decides, and a withdraw (Stop) ends the request", async () => {
     const f = fakeDeps();
     const intake = new SecretIntake(f.deps);
-    const ctx = { uiToken: "ui-token", agentToken: "agent-token", emit: () => {}, intake, holdMs: 0 };
-    const agent = async (b: unknown) => (await (await handleSecretRoutes(new Request("http://127.0.0.1/api/secret/request?t=agent-token", { method: "POST", body: JSON.stringify(b) }), "/api/secret/request", ctx))!.json()).data;
+    const ctx = { uiToken: "ui-token", requesters: MASTER, emit: () => {}, intake, holdMs: 0 };
+    const agent = async (b: unknown) => (await (await handleSecretRoutes(asMaster(b), "/api/secret/request", ctx))!.json()).data;
     const first = await agent(ask);
     expect(first).toEqual({ pending: true, id: f.shown[0]!.id });
     expect(await agent({ id: first.id })).toEqual({ pending: true, id: first.id });
@@ -303,13 +312,19 @@ describe("HTTP: tokens, the real vault, and no value on the wire", () => {
     expect(f.vault.size).toBe(0);
   });
 
-  test("the agent token opens only the request route; UI routes take the header UI token only", async () => {
+  test("only a requester token in the header opens the request route; UI routes take the header UI token only", async () => {
     useVault();
     const intake = new SecretIntake({ ...fakeDeps().deps });
-    const ctx = { uiToken: "ui-token", agentToken: "agent-token", emit: () => {}, intake };
+    const ctx = { uiToken: "ui-token", requesters: MASTER, emit: () => {}, intake, holdMs: 0 };
     const status = async (req: Request, p: string) => (await handleSecretRoutes(req, p, ctx))!.status;
     expect(await status(new Request("http://127.0.0.1/api/secret/request?t=ui-token", { method: "POST", body: "{}" }), "/api/secret/request")).toBe(403);
-    expect(await status(ui("/api/secret/pending", undefined, "agent-token"), "/api/secret/pending")).toBe(403);
+    // SECRET-INTAKE-REQUESTER-SPOOF: the request token in a query string, the UI token or the shared agent
+    // token in the header are all refused; only the master's own token opens a request.
+    expect(await status(new Request("http://127.0.0.1/api/secret/request?t=master-token", { method: "POST", body: "{}" }), "/api/secret/request")).toBe(403);
+    expect(await status(asMaster({}, "ui-token"), "/api/secret/request")).toBe(403);
+    expect(await status(asMaster({}, "agent-token"), "/api/secret/request")).toBe(403);
+    expect(await status(asMaster({}), "/api/secret/request")).toBe(200);
+    expect(await status(ui("/api/secret/pending", undefined, "master-token"), "/api/secret/pending")).toBe(403);
     expect(await status(new Request("http://127.0.0.1/api/secret/pending?t=ui-token"), "/api/secret/pending")).toBe(403);
     expect(await status(ui("/api/secret/pending"), "/api/secret/pending")).toBe(200);
     expect(await handleSecretRoutes(ui("/api/other"), "/api/other", ctx)).toBeNull();
@@ -319,16 +334,83 @@ describe("HTTP: tokens, the real vault, and no value on the wire", () => {
     useVault();
     const f = fakeDeps();
     const intake = new SecretIntake(f.deps);
-    const ctx = { uiToken: "ui-token", agentToken: "agent-token", emit: () => {}, intake };
+    const ctx = { uiToken: "ui-token", requesters: MASTER, emit: () => {}, intake };
     const pending = collect(intake, { ...ask, kind: "json", envName: "GCP_SA" });
     const keyFile = join(scratch(), "sa.json");
     writeFileSync(keyFile, "{\"type\":\"service_account\"}\n");
     const r = (await handleSecretRoutes(ui("/api/secret/submit-file", { id: f.shown[0]!.id, path: keyFile }), "/api/secret/submit-file", ctx))!;
     expect(r.status).toBe(200);
     expect(await r.text()).not.toContain("service_account");
-    expect(await pending).toEqual({ stored: true, ref: "key:GCP_SA", envName: "GCP_SA" });
-    expect(f.vault.get("key:GCP_SA")).toBe("{\"type\":\"service_account\"}");
+    expect(await pending).toEqual({ stored: true, ref: "ws:test:GCP_SA", envName: "GCP_SA" }); // no provider key env: workspace-scoped
+    expect(f.vault.get("ws:test:GCP_SA")).toBe("{\"type\":\"service_account\"}");
     expect(readFileSync(keyFile, "utf8")).toBe("{\"type\":\"service_account\"}\n");
+  });
+
+  test("SECRET-INTAKE-REQUESTER-SPOOF: the dialog names the caller bound to the token, never a body field", async () => {
+    const f = fakeDeps();
+    const intake = new SecretIntake(f.deps);
+    const ctx = { uiToken: "ui-token", requesters: [...MASTER, { token: "lane-token", label: "Lane alpha" }], emit: () => {}, intake, holdMs: 0 };
+    await handleSecretRoutes(asMaster({ ...ask, requester: "LUCID Security" }, "lane-token"), "/api/secret/request", ctx);
+    expect(f.shown.map((v) => v.requester)).toEqual(["Lane alpha"]);
+    for (const p of intake.pending()) intake.cancel(p.id);
+  });
+
+  test("SECRET-INTAKE-ENVNAME-UNRESTRICTED: a reserved key:<ENV> written to the vault never reaches process.env", () => {
+    useVault();
+    process.env.NODE_OPTIONS = "--before";
+    vaultPut({ ref: "key:NODE_OPTIONS", value: "--require=/tmp/evil.js", kind: "other", source: "typed" });
+    afterWrite("key:NODE_OPTIONS");
+    expect(process.env.NODE_OPTIONS).toBe("--before");
+    vaultDelete("key:NODE_OPTIONS");
+    afterWrite("key:NODE_OPTIONS"); // a delete must not unset the engine's own value either
+    expect(process.env.NODE_OPTIONS).toBe("--before");
+    vaultPut({ ref: "key:OPENAI_API_KEY", value: DIALOG_VALUE, kind: "apikey", source: "typed" });
+    afterWrite("key:OPENAI_API_KEY");
+    expect(process.env.OPENAI_API_KEY).toBe(DIALOG_VALUE);
+  });
+});
+
+describe("SECRET-INTAKE-ENVNAME-UNRESTRICTED: env names an agent may ask for", () => {
+  test("reserved names are refused before any dialog opens", async () => {
+    const reserved = ["NODE_OPTIONS", "PATH", "Path", "HTTPS_PROXY", "no_proxy", "OPENAI_BASE_URL", "AZURE_OPENAI_ENDPOINT", "LUCID_GIT_PAT", "GIT_SSH_COMMAND",
+      "PYTHONPATH", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "BASH_ENV", "ENV", "OMP_CONFIG", "LD_PRELOAD"];
+    const f = fakeDeps();
+    const intake = new SecretIntake(f.deps);
+    for (const envName of reserved) {
+      const parsed = parseSecretRequest({ ...ask, envName });
+      expect(parsed.ok).toBe(false);
+      expect((await collect(intake, { ...ask, envName, workspaceScoped: true })).stored).toBe(false);
+    }
+    expect(f.shown).toEqual([]);
+  });
+  test("only a provider key env may be global; any other name is kept to the workspace", () => {
+    const provider = parseSecretRequest(ask);
+    expect(provider.ok && provider.request.workspaceScoped).toBe(false);
+    const other = parseSecretRequest({ ...ask, envName: "STRIPE_SECRET_KEY" });
+    expect(other.ok && other.request.workspaceScoped).toBe(true);
+    const f = fakeDeps();
+    const intake = new SecretIntake(f.deps);
+    void collect(intake, { ...ask, envName: "STRIPE_SECRET_KEY" });
+    expect(f.shown[0]!.ref).toBe("ws:test:STRIPE_SECRET_KEY");
+    expect(f.shown[0]!.workspace).not.toBeNull();
+    intake.cancel(f.shown[0]!.id);
+  });
+  test("replacing a saved entry needs the second confirmation that names it", async () => {
+    const f = fakeDeps();
+    f.vault.set("key:OPENAI_API_KEY", "sk-the-users-own-key-CCCCCCCCCCCCCCCC");
+    const intake = new SecretIntake(f.deps);
+    const pending = collect(intake, ask);
+    const view = f.shown[0]!;
+    expect(view.replaces).toBe(true);
+    expect(view.replacesLabel).toBe("saved key:OPENAI_API_KEY (ends in 9999)");
+    const refused = intake.submit(view.id, DIALOG_VALUE, "dialog");
+    expect(refused).toMatchObject({ ok: false, code: "confirm-replace" });
+    expect(f.vault.get("key:OPENAI_API_KEY")).toBe("sk-the-users-own-key-CCCCCCCCCCCCCCCC");
+    expect(intake.startFallback(view.id)).toMatchObject({ ok: false });
+    expect(intake.pending().length).toBe(1);
+    expect(intake.submit(view.id, DIALOG_VALUE, "dialog", true).ok).toBe(true);
+    expect(await pending).toMatchObject({ stored: true, ref: "key:OPENAI_API_KEY" });
+    expect(f.vault.get("key:OPENAI_API_KEY")).toBe(DIALOG_VALUE);
   });
 });
 

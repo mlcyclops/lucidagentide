@@ -13,7 +13,7 @@ const row = (over: Partial<EnvScanRow>): EnvScanRow => ({
   kind: "apikey", status: "new", last4: "0005", ...over,
 });
 const scan = (over: Partial<EnvScan> = {}): EnvScan => ({
-  workspace: "/w/app", file: ".env", exists: true, problems: [], isGit: true, ignored: false, committed: false,
+  workspace: "/w/app", file: ".env", exists: true, problems: [], isGit: true, ignored: false, committed: false, tracked: false,
   rows: [
     row({}),
     row({ name: "GITHUB_TOKEN", slot: "git-host", host: "github.com", ref: "git_pat_github_com", status: "same", last4: "001A" }),
@@ -53,6 +53,41 @@ describe("vaultEnvScanHtml", () => {
     expect(details).toBeGreaterThan(h.indexOf('data-venv="import"'));
     expect(h.indexOf('data-venv="materialize"')).toBeGreaterThan(details);
     expect(h).not.toContain("<details open");
+  });
+
+  // Wave B security review VAULT-ENV-IMPORT-OVERWRITE-GLOBAL
+  test("a row replacing a saved global key is not ticked and carries its own replace confirmation", () => {
+    const rows = [
+      row({ name: "OPENAI_API_KEY", slot: "provider-key", ref: "key:OPENAI_API_KEY", envName: "OPENAI_API_KEY", status: "replaces" }),
+      row({ name: "GITHUB_TOKEN", slot: "git-host", host: "github.com", ref: "git_pat_github_com", status: "replaces" }),
+      row({ name: "STRIPE_SECRET_KEY", status: "replaces" }),
+    ];
+    const h = vaultEnvScanHtml(scan({ rows }));
+    expect(checkbox(h, "OPENAI_API_KEY")).not.toContain(" checked");
+    expect(checkbox(h, "GITHUB_TOKEN")).not.toContain(" checked");
+    expect(checkbox(h, "STRIPE_SECRET_KEY")).toContain(" checked"); // a workspace secret is not a global key
+    expect(h).toContain('<input type="checkbox" data-venv-confirm="OPENAI_API_KEY" />');
+    expect(h).toContain("Replace my saved OPENAI_API_KEY key");
+    expect(h).toContain("Replace my saved github.com token");
+    expect(h).not.toContain('data-venv-confirm="STRIPE_SECRET_KEY"');
+    expect(rows.filter(preselected).map((r) => r.name)).toEqual(["STRIPE_SECRET_KEY"]);
+  });
+
+  test("a git-tracked file explains why its provider and git names are workspace overrides, not ticked", () => {
+    const rows = [row({ name: "OPENAI_API_KEY", envName: "OPENAI_API_KEY", fromRepo: true })];
+    const h = vaultEnvScanHtml(scan({ tracked: true, rows }));
+    expect(h).toContain("data-venv-tracked");
+    expect(h).toContain("this workspace (from the repository)");
+    expect(checkbox(h, "OPENAI_API_KEY")).not.toContain(" checked");
+    expect(vaultEnvScanHtml(scan())).not.toContain("data-venv-tracked");
+  });
+
+  // VAULT-ENV-MATERIALIZE-SYNCED: the card promises only what the engine does.
+  test("the temporary write promises re-blanking only at the timer, a normal quit or the next start", () => {
+    const h = vaultEnvScanHtml(scan());
+    expect(h).toContain("when the timer ends, when LUCID quits normally, or at the next LUCID start after a crash");
+    expect(h).toContain("Refused in a folder a cloud client syncs");
+    expect(h).not.toContain("when the engine exits");
   });
 
   test("no file, an empty file and unreadable lines each say so", () => {

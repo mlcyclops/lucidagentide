@@ -36,11 +36,15 @@ async function scanInto(sec: Element): Promise<void> {
 async function runAction(sec: Element, action: string): Promise<void> {
   if (action === "scan") { await scanInto(sec); return; }
   if (action === "import") {
-    const names = [...sec.querySelectorAll<HTMLInputElement>("input[data-venv-name]:checked")].map((i) => i.dataset.venvName ?? "").filter(Boolean);
+    // A "Replace my saved ..." box confirms that one name (and selects it): the server skips a replacing
+    // global row whose name is not in confirmReplace.
+    const confirmReplace = [...sec.querySelectorAll<HTMLInputElement>("input[data-venv-confirm]:checked")].map((i) => i.dataset.venvConfirm ?? "").filter(Boolean);
+    const ticked = [...sec.querySelectorAll<HTMLInputElement>("input[data-venv-name]:checked")].map((i) => i.dataset.venvName ?? "").filter(Boolean);
+    const names = [...new Set([...ticked, ...confirmReplace])];
     if (!names.length) { showToast({ tone: "warn", title: "Nothing selected", desc: "Tick the names to move into the vault.", timeout: 3500 }); return; }
     const blank = !!sec.querySelector<HTMLInputElement>(`input[data-venv-opt="blank"]`)?.checked;
     const gitignore = !!sec.querySelector<HTMLInputElement>(`input[data-venv-opt="gitignore"]`)?.checked;
-    const r = await call<EnvImportResult>("/api/vault/env/import", { names, blank, gitignore });
+    const r = await call<EnvImportResult>("/api/vault/env/import", { names, confirmReplace, blank, gitignore });
     if (!r.ok) { showToast({ tone: "danger", title: "Import refused", desc: `${r.error}. Nothing in the file was changed.`, timeout: 8000 }); return; }
     const s = importSummary(r.data);
     showToast({ tone: r.data.imported.length ? "ok" : "warn", title: s.title, desc: s.desc, timeout: 8000 });

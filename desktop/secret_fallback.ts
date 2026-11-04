@@ -16,10 +16,13 @@
 //   4. polls for a non-empty save that is stable across two polls, reads it, overwrites the bytes with
 //      zeros (fsync), deletes the file AND its directory (so a second save from the still-open editor
 //      fails instead of recreating the secret), and hands the text to the caller.
+// Step 2 is createUserOnlyDir, shared with the destination request dirs (vault_destinations.ts); every such
+// dir holds an owner marker (the creating pid), and sweepOrphanTempDirs wipes and removes the dirs a killed
+// or crashed engine left behind (run at engine start, and with includeOwn at graceful shutdown).
 // The path never reaches the agent: it goes to the dialog only, so the user knows which file to save.
 // Values never reach a log line here; only the refusal reasons are logged by the caller.
 
-import { chmodSync, closeSync, existsSync, fsyncSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeSync, type Stats } from "node:fs";
+import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeSync, type Stats } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { isSyncedPath, type SyncedPathEnv } from "./synced_path.ts";
@@ -164,14 +167,9 @@ export function isUserOnly(path: string, platform: NodeJS.Platform = process.pla
 /** Create `<base>/lucid-secret-XXXXXX/paste-<label>-here.txt`, empty, user-only (verified). Throws
  *  FallbackRefused, leaving nothing behind, when any step fails. */
 export function createUserOnlyFile(opts: FallbackOptions): { dir: string; file: string } {
-  const platform = opts.platform ?? process.platform;
-  const base = privateTempBase(opts);
-  const restrict = opts.restrict ?? ((d: string) => restrictToUser(d, platform));
-  const userOnly = opts.userOnly ?? ((p: string) => isUserOnly(p, platform));
-  const dir = mkdtempSync(join(base, "lucid-secret-"));
+  const userOnly = opts.userOnly ?? ((p: string) => isUserOnly(p, opts.platform ?? process.platform));
+  const dir = createUserOnlyDir(FALLBACK_DIR_PREFIX, opts);
   try {
-    restrict(dir);
-    if (!userOnly(dir)) throw new FallbackRefused("the temp folder could not be made readable by you only");
     const label = opts.label.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "secret";
     const file = join(dir, `paste-${label}-here.txt`);
     closeSync(openSync(file, "wx", 0o600));
@@ -181,6 +179,74 @@ export function createUserOnlyFile(opts: FallbackOptions): { dir: string; file: 
     rmSync(dir, { recursive: true, force: true });
     throw e instanceof FallbackRefused ? e : new FallbackRefused(`the temp file could not be created: ${String((e as Error)?.message ?? e).slice(0, 160)}`);
   }
+}
+
+/** The notepad fallback's dir prefix (the orphan sweep looks for it). */
+export const FALLBACK_DIR_PREFIX = "lucid-secret-";
+/** The owner marker inside every user-only dir: this process's pid, so a sweep never takes a live dir. */
+const OWNER_MARKER = "owner.pid";
+
+/** Create `<private temp base>/<prefix>XXXXXX`, user-only (verified), holding an owner marker (the pid,
+ *  user-only too). Throws FallbackRefused, leaving nothing behind, when any step fails. */
+export function createUserOnlyDir(prefix: string, opts: Pick<FallbackOptions, "bases" | "workspace" | "env" | "home" | "platform" | "restrict" | "userOnly"> = {}): string {
+  const platform = opts.platform ?? process.platform;
+  const base = privateTempBase(opts);
+  const restrict = opts.restrict ?? ((d: string) => restrictToUser(d, platform));
+  const userOnly = opts.userOnly ?? ((p: string) => isUserOnly(p, platform));
+  const dir = mkdtempSync(join(base, prefix));
+  try {
+    restrict(dir);
+    if (!userOnly(dir)) throw new FallbackRefused("the temp folder could not be made readable by you only");
+    const marker = join(dir, OWNER_MARKER);
+    const fd = openSync(marker, "wx", 0o600);
+    try { writeSync(fd, String(process.pid)); } finally { closeSync(fd); }
+    if (!userOnly(marker)) throw new FallbackRefused("the temp file could not be made readable by you only");
+    return dir;
+  } catch (e) {
+    rmSync(dir, { recursive: true, force: true });
+    throw e instanceof FallbackRefused ? e : new FallbackRefused(`the temp file could not be created: ${String((e as Error)?.message ?? e).slice(0, 160)}`);
+  }
+}
+
+/** Wipe (zeros, then delete) and remove leftover `<prefix>*` dirs directly under each private temp base
+ *  candidate: the plaintext an engine kill or crash left behind. A dir whose owner marker names another
+ *  live process is kept; this process's own dirs are kept unless `includeOwn` (graceful shutdown). Never
+ *  follows a symlink (lstat), never throws. `afterOverwrite` is the wipeAndDelete test seam. */
+export function sweepOrphanTempDirs(prefixes: readonly string[], opts: { includeOwn?: boolean; bases?: string[]; afterOverwrite?: (file: string) => void } = {}): { removed: number; kept: number } {
+  let removed = 0;
+  let kept = 0;
+  let bases: string[] = [];
+  try { bases = opts.bases ?? tempBaseCandidates(); } catch { /* nothing to sweep */ }
+  for (const base of new Set(bases.map((b) => resolve(b)))) {
+    let names: string[];
+    try { names = readdirSync(base); } catch { continue; }
+    for (const name of names) {
+      if (!prefixes.some((p) => name.startsWith(p))) continue;
+      const dir = join(base, name);
+      try {
+        if (!lstatSync(dir).isDirectory()) continue;
+        let pid = Number.NaN;
+        try {
+          const marker = join(dir, OWNER_MARKER);
+          if (lstatSync(marker).isFile()) pid = Number.parseInt(readFileSync(marker, "utf8").trim(), 10);
+        } catch { /* no marker: an orphan from before markers, or a half-made dir */ }
+        if (pid === process.pid ? !opts.includeOwn : Number.isInteger(pid) && pid > 0 && pidAlive(pid)) { kept++; continue; }
+        for (const f of readdirSync(dir)) {
+          const p = join(dir, f);
+          try { if (lstatSync(p).isFile()) wipeAndDelete(p, { afterOverwrite: opts.afterOverwrite }); } catch { /* removed below regardless */ }
+        }
+        rmSync(dir, { recursive: true, force: true });
+        removed++;
+      } catch {
+        kept++;
+      }
+    }
+  }
+  return { removed, kept };
+}
+
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException)?.code === "EPERM"; }
 }
 
 /** Text from the saved bytes: UTF-16 (Notepad's "Unicode") or UTF-8, BOM removed. */

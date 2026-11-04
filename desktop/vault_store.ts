@@ -49,7 +49,8 @@ function readable(): VaultRead {
   return v;
 }
 
-/** P-VAULT-DEST.1 (ADR-0478): observers of a stored value (vaultPut, vaultRotate), e.g. destination
+/** P-VAULT-DEST.1 (ADR-0478): observers of a stored value (vaultPut, vaultRotate, and vaultPutMany once
+ *  per entry, which the `.env` import writes through), e.g. destination
  *  auto-backup. They get metadata only, never the value, after the write is verified; a throwing observer
  *  never fails the write. Restore and destination pull (vaultImportEntries) and the safeStorage migration
  *  do not notify: they bring values in, they are not new secrets. */
@@ -100,6 +101,26 @@ export function vaultPut(input: VaultPutInput): VaultEntryMeta {
   const meta = metaOf(stored);
   notifyWrite(meta);
   return meta;
+}
+
+/** Store many secrets in ONE locked write (the `.env` import, vault_env_import.ts): all or nothing. Each
+ *  value is verified from what the vault handed back, like vaultPut, and only then is every write observer
+ *  told about each stored entry (metadata only). Throws on any failure, notifying nobody. */
+export function vaultPutMany(set: Record<string, string>, meta: Record<string, VaultMetaPatch>, source: VaultSource): VaultEntryMeta[] {
+  const refs = Object.keys(set);
+  for (const ref of refs) {
+    if (!isVaultRef(ref)) throw new Error("invalid vault ref");
+    if (typeof set[ref] !== "string" || !set[ref]) throw new Error("refusing to store an empty value");
+  }
+  if (!isSource(source)) throw new Error("unknown secret source");
+  const entries = mutateVault(keyVaultDir(), () => ({ set, del: [], meta, source }));
+  const stored = refs.map((ref) => {
+    const e = entries[ref];
+    if (!e || e.value !== set[ref]) throw new Error("the vault did not keep every value");
+    return metaOf(e);
+  });
+  for (const m of stored) notifyWrite(m);
+  return stored;
 }
 
 /** Replace the value of an EXISTING ref in place (same ref, kind, label, addedAt; rotatedAt = now).

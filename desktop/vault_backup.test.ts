@@ -22,7 +22,7 @@ import { _resetVaultEnvForTest } from "./vault_env.ts";
 import { vaultGet, vaultList, vaultPut, type VaultExportEntry } from "./vault_store.ts";
 
 const SLOW = 120_000;
-const ENV_KEYS = ["LUCID_GUI_SETTINGS_FILE", "LUCID_ENGINE_VAULT_DIR", "LUCID_OMP_MODELS_YAML", "LUCID_VB_TEST_KEY"] as const;
+const ENV_KEYS = ["LUCID_GUI_SETTINGS_FILE", "LUCID_ENGINE_VAULT_DIR", "LUCID_OMP_MODELS_YAML", "VB_RESTORE_TEST_KEY", "NODE_OPTIONS"] as const;
 const ENV_BEFORE = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 const dirs: string[] = [];
 function scratch(): { vault: string } {
@@ -55,12 +55,12 @@ const vaultBytes = (vault: string): Buffer | null => (existsSync(join(vault, SEC
 
 const PASS = "correct horse battery staple";
 const SECRETS = {
-  "key:LUCID_VB_TEST_KEY": "sk-BACKUP-SECRET-VALUE-0001",
+  "key:VB_RESTORE_TEST_KEY": "sk-BACKUP-SECRET-VALUE-0001",
   figma_pat: "figd-BACKUP-SECRET-VALUE-0002",
   "secret:prod_jwt": "eyJ-BACKUP-SECRET-VALUE-0003",
 };
 function seed(): void {
-  vaultPut({ ref: "key:LUCID_VB_TEST_KEY", value: SECRETS["key:LUCID_VB_TEST_KEY"], kind: "apikey", source: "typed", envName: "LUCID_VB_TEST_KEY", label: "Test key" });
+  vaultPut({ ref: "key:VB_RESTORE_TEST_KEY", value: SECRETS["key:VB_RESTORE_TEST_KEY"], kind: "apikey", source: "typed", envName: "VB_RESTORE_TEST_KEY", label: "Test key" });
   vaultPut({ ref: "figma_pat", value: SECRETS.figma_pat, kind: "pat", source: "migrated-safestorage", label: "Figma" });
   vaultPut({ ref: "secret:prod_jwt", value: SECRETS["secret:prod_jwt"], kind: "jwt", source: "agent-request", label: "Prod JWT", rotationIntervalDays: 30 });
 }
@@ -148,7 +148,7 @@ describe("backup envelope", () => {
     expect(codeOf(() => restoreVaultBackup("[]", PASS))).toBe("not-a-backup");
     expect(codeOf(() => parseVaultBackup(null))).toBe("not-a-backup");
     expect(vaultBytes(vault)!.equals(bytes!)).toBe(true);
-    expect(vaultGet("key:LUCID_VB_TEST_KEY")).toBeUndefined();
+    expect(vaultGet("key:VB_RESTORE_TEST_KEY")).toBeUndefined();
   }, SLOW);
 
   test("restore is newer-wins: a newer backup entry replaces, an older one is skipped, a missing one is added", () => {
@@ -217,7 +217,7 @@ describe("routes", () => {
 
     scratch();
     useFakeStore();
-    delete process.env.LUCID_VB_TEST_KEY;
+    delete process.env.VB_RESTORE_TEST_KEY;
     const wrong = await call("/api/vault/restore", { passphrase: "not the passphrase at all", file });
     expect(wrong.status).toBe(422);
     expect(wrong.json.ok).toBe(false);
@@ -228,13 +228,31 @@ describe("routes", () => {
     const restored = await quiet(() => call("/api/vault/restore", { passphrase: PASS, file }));
     expect(restored.status).toBe(200);
     expect(restored.json.data).toEqual({ added: 3, updated: 0, skipped: 0 });
-    expect(process.env.LUCID_VB_TEST_KEY).toBe(SECRETS["key:LUCID_VB_TEST_KEY"]); // live for the next omp spawn
+    expect(process.env.VB_RESTORE_TEST_KEY).toBe(SECRETS["key:VB_RESTORE_TEST_KEY"]); // live for the next omp spawn
     expect((await call("/api/vault/restore", { passphrase: PASS })).status).toBe(400);
 
     const all = bodies.join("\n");
     for (const v of Object.values(SECRETS)) expect(all).not.toContain(v);
     expect(all).not.toContain(PASS);
     expect(all).not.toContain("\"value\"");
+  }, SLOW);
+
+  test("SECRET-INTAKE-ENVNAME-UNRESTRICTED: a restored reserved key:<ENV> stays out of process.env", async () => {
+    scratch();
+    useFakeStore();
+    seed();
+    vaultPut({ ref: "key:NODE_OPTIONS", value: "--require=/tmp/evil-0004.js", kind: "other", source: "typed" });
+    const made = await handleVaultBackupRoutes(req("/api/vault/backup", { passphrase: PASS }), "/api/vault/backup", CTX);
+    const file: string = (await made!.json()).data.file;
+    scratch();
+    useFakeStore();
+    process.env.NODE_OPTIONS = "--engine-own-0004";
+    delete process.env.VB_RESTORE_TEST_KEY;
+    const restored = await quiet(() => handleVaultBackupRoutes(req("/api/vault/restore", { passphrase: PASS, file }), "/api/vault/restore", CTX));
+    expect(restored!.status).toBe(200);
+    expect(vaultGet("key:NODE_OPTIONS")).toBe("--require=/tmp/evil-0004.js"); // restored into the vault as it was
+    expect(process.env.NODE_OPTIONS).toBe("--engine-own-0004"); // but never into the env every child inherits
+    expect(process.env.VB_RESTORE_TEST_KEY).toBe(SECRETS["key:VB_RESTORE_TEST_KEY"]);
   }, SLOW);
 
   test("only the UI header token opens the routes; other paths pass through", async () => {

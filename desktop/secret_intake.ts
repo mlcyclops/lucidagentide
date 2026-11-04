@@ -6,7 +6,8 @@
 // P-SECRET-INTAKE.1 (ADR-0476): the engine half of the agent-triggered secret dialog.
 //
 // FLOW. The omp child's `request_secret` tool (harness/omp/secret_intake_extension.ts) POSTs
-// { name, kind, purpose, envName?, workspaceScoped? } to /api/secret/request with the agent token, then
+// { name, kind, purpose, envName?, workspaceScoped? } to /api/secret/request with the master-only request
+// token (secret_routes.ts; the route names the requester from the token, never from the body), then
 // polls the same route in short holds (wait()) so no single HTTP request outlives Bun's idle or fetch
 // timeouts. SecretIntake.open() validates it, parks it, and emits a `secret-request` ChatEvent into the
 // master turn (acp_backend.requestSecretDialog), the same event stream the approval cards ride. The
@@ -17,8 +18,13 @@
 //
 // Refusals are fail-closed: a vault write that throws leaves the request pending (the dialog shows the
 // error and the user may retry or cancel); cancel, timeout and a withdrawn tool call (the user pressed
-// Stop) resolve stored:false.
+// Stop) resolve stored:false. Replacing an entry already saved under the ref needs a second, explicit
+// confirmation in the dialog (which names the saved entry); without it nothing is written.
 // The notepad fallback (secret_fallback.ts) feeds the same submit path.
+//
+// Env names (security review SECRET-INTAKE-ENVNAME-UNRESTRICTED): a reserved name (env_name_policy.ts:
+// PATH, NODE_*, *_PROXY, *_BASE_URL, LUCID_*, ...) is refused, and only a provider's own key env may be a
+// global `key:<ENV>`; any other env name is stored workspace-scoped (`ws:`) for the current workspace.
 //
 // The "Do you keep another secrets manager?" answer is recorded as a NON-secret preference here, and saved
 // as a Contract C destination only when the enterprise add-on's kms connector is installed AND a
@@ -32,6 +38,7 @@ import { scanTextsForSecrets } from "../harness/agent/secret_guard.ts";
 import { writeAtomic } from "./atomic_file.ts";
 import { emitSecurityEvent, type SecurityDecision } from "./audit_export.ts";
 import { isEnvName, VAULT_KINDS, type VaultKind } from "./engine_vault.ts";
+import { isReservedEnvName, providerKeyEnvs } from "./env_name_policy.ts";
 import { startFallback, FallbackRefused, type FallbackOptions, type FallbackSession } from "./secret_fallback.ts";
 import {
   SECRET_MANAGER_LABELS, type SecretIntakeResult, type SecretManagerAnswer, type SecretManagerKind, type SecretManagerOutcome,
@@ -76,7 +83,12 @@ export function parseSecretRequest(raw: unknown): { ok: true; request: ParsedSec
   const kind = VAULT_KINDS.find((k) => k === kindRaw) ?? "other";
   const envRaw = typeof o.envName === "string" ? o.envName.trim() : "";
   if (envRaw && !isEnvName(envRaw)) return { ok: false, reason: "`envName` must be an environment variable name (letters, digits, underscore)" };
-  const workspaceScoped = o.workspaceScoped === true || o.workspaceScoped === "true";
+  if (envRaw && isReservedEnvName(envRaw)) {
+    return { ok: false, reason: `\`envName\` ${envRaw} is reserved: it changes how programs run or where they connect (PATH, NODE_*, GIT_*, PYTHON*, *_PROXY, *_BASE_URL, *_ENDPOINT, certificate settings, LUCID_*), so no secret may take it` };
+  }
+  // A global `key:<ENV>` reaches the engine's env and every later session of every workspace: only a
+  // provider's own key env may be one. Any other env name is kept to the current workspace.
+  const workspaceScoped = o.workspaceScoped === true || o.workspaceScoped === "true" || (!!envRaw && !providerKeyEnvs().has(envRaw));
   if (workspaceScoped && !envRaw) return { ok: false, reason: "a workspace-scoped secret needs an `envName`" };
   return { ok: true, request: { name, kind, purpose, envName: envRaw || null, workspaceScoped } };
 }
@@ -90,7 +102,7 @@ export function normalizeSecretValue(value: string, kind: VaultKind): string {
 
 export type SubmitOutcome =
   | { ok: true; meta: VaultEntryMeta }
-  | { ok: false; code: "not-found" | "empty" | "refused"; error: string };
+  | { ok: false; code: "not-found" | "empty" | "refused" | "confirm-replace"; error: string };
 export type FallbackStart = { ok: true; path: string } | { ok: false; error: string };
 export type FallbackOutcome = { ok: true; meta: VaultEntryMeta } | { ok: false; error: string };
 /** How the value reached the engine (audit reason only). */
@@ -100,7 +112,8 @@ export interface SecretIntakeDeps {
   /** Show the dialog: emit the `secret-request` ChatEvent into the master turn. */
   emit(view: SecretRequestView): void;
   put(input: VaultPutInput): VaultEntryMeta;
-  refs(): string[];
+  /** The entry stored under `ref` now (metadata only), or null. */
+  existing(ref: string): VaultEntryMeta | null;
   /** Ref for (envName, workspace realpath, label): vault_routes.derivedRef. */
   deriveRef(envName: string, workspace: string | undefined, label: string): string;
   /** Refresh the engine-side credential env after a write (vault_routes.afterWrite). */
@@ -118,7 +131,7 @@ export function defaultIntakeDeps(emit: (view: SecretRequestView) => void): Secr
   return {
     emit,
     put: vaultPut,
-    refs: () => vaultList().map((m) => m.ref),
+    existing: (ref) => vaultList().find((m) => m.ref === ref) ?? null,
     deriveRef: derivedRef,
     afterWrite,
     workspace: currentWorkspace,
@@ -141,6 +154,9 @@ interface Pending {
   fallback?: { session: FallbackSession; outcome: Promise<FallbackOutcome> };
 }
 
+/** The label (and last-4) of the entry a write would replace, as the dialog names it. */
+const savedLabel = (m: VaultEntryMeta): string => `${m.label}${m.last4 ? ` (ends in ${m.last4})` : ""}`;
+
 /** Settled results the agent has not collected yet (its poll may land just after the user answered). */
 const MAX_UNCOLLECTED = 32;
 
@@ -156,9 +172,10 @@ export class SecretIntake {
     return [...this.#pending.values()].map((p) => p.view);
   }
 
-  /** Open one `request_secret` call: validate, park it, show the dialog. `{ result }` when it is refused at
-   *  once (invalid, busy); otherwise `{ id }` to collect the answer with wait(). Never carries a value. */
-  open(raw: unknown): { id: string } | { result: SecretIntakeResult } {
+  /** Open one `request_secret` call: validate, park it, show the dialog. `requester` is the label of the
+   *  caller the route authenticated ("Main agent"). `{ result }` when it is refused at once (invalid, busy);
+   *  otherwise `{ id }` to collect the answer with wait(). Never carries a value. */
+  open(raw: unknown, requester: string): { id: string } | { result: SecretIntakeResult } {
     const parsed = parseSecretRequest(raw);
     if (!parsed.ok) return { result: { stored: false, reason: `invalid request: ${parsed.reason}` } };
     if (this.#pending.size >= MAX_PENDING_SECRET_REQUESTS) return { result: { stored: false, reason: "busy: other secret requests are already waiting for the user" } };
@@ -169,10 +186,11 @@ export class SecretIntake {
     }
     const ref = this.#deps.deriveRef(request.envName ?? "", workspace, request.name);
     const now = this.#deps.now();
+    const held = this.#deps.existing(ref);
     const view: SecretRequestView = {
-      id: randomUUID(), requester: "Main agent", name: request.name, kind: request.kind, purpose: request.purpose,
+      id: randomUUID(), requester, name: request.name, kind: request.kind, purpose: request.purpose,
       envName: request.envName, workspace: workspace ? basename(workspace) : null, ref,
-      replaces: this.#deps.refs().includes(ref), createdAt: now, expiresAt: now + this.#deps.timeoutMs,
+      replaces: !!held, replacesLabel: held ? savedLabel(held) : null, createdAt: now, expiresAt: now + this.#deps.timeoutMs,
     };
     const { promise, resolve } = Promise.withResolvers<SecretIntakeResult>();
     const timer = setTimeout(() => this.#finish(view.id, { stored: false, reason: "timeout" }, "block", "no answer before the deadline"), this.#deps.timeoutMs);
@@ -201,8 +219,10 @@ export class SecretIntake {
   }
 
   /** The user's value for a pending request: stored in the vault, then the request resolves stored:true.
-   *  A vault refusal leaves the request pending so the dialog can show the error. */
-  submit(id: string, value: string, via: SecretVia): SubmitOutcome {
+   *  Replacing an entry already saved under the ref needs `confirmReplace` (the dialog's second, explicit
+   *  confirmation naming the saved entry); without it nothing is written. A refusal of either kind leaves
+   *  the request pending so the dialog can show it. */
+  submit(id: string, value: string, via: SecretVia, confirmReplace = false): SubmitOutcome {
     const p = this.#pending.get(id);
     if (!p) return { ok: false, code: "not-found", error: "this request is no longer waiting (it was answered, cancelled or timed out)" };
     const clean = normalizeSecretValue(value, p.request.kind);
@@ -210,6 +230,11 @@ export class SecretIntake {
     // Without an env name the ref is a free `secret:<label>` slot: re-derive it so an entry written
     // since the dialog opened is never clobbered. With one, the ref is the env name's single slot.
     const ref = p.request.envName ? p.view.ref : this.#deps.deriveRef("", p.workspace, p.request.name);
+    const held = this.#deps.existing(ref);
+    if (held && !confirmReplace) {
+      this.#deps.audit("block", `replacing ${ref} was not confirmed for "${p.request.name}"`);
+      return { ok: false, code: "confirm-replace", error: `this replaces your saved ${savedLabel(held)}; confirm the replacement first` };
+    }
     let meta: VaultEntryMeta;
     try {
       meta = this.#deps.put({
@@ -240,10 +265,13 @@ export class SecretIntake {
 
   /** Start the notepad fallback for a pending request: a user-only file outside synced folders and the
    *  workspace, opened in the OS editor. The returned path is for the dialog only. */
-  startFallback(id: string): FallbackStart {
+  startFallback(id: string, confirmReplace = false): FallbackStart {
     const p = this.#pending.get(id);
     if (!p) return { ok: false, error: "this request is no longer waiting" };
     if (p.fallback) return { ok: true, path: p.fallback.session.path };
+    // Same rule as submit: never ask the user to paste a value that would be refused at the end.
+    const held = p.request.envName ? this.#deps.existing(p.view.ref) : null;
+    if (held && !confirmReplace) return { ok: false, error: `this replaces your saved ${savedLabel(held)}; confirm the replacement first` };
     let session: FallbackSession;
     try {
       session = this.#deps.fallback({ label: p.request.envName ?? p.request.name, workspace: this.#deps.workspace(), timeoutMs: Math.max(1_000, p.view.expiresAt - this.#deps.now()) });
@@ -256,7 +284,7 @@ export class SecretIntake {
       if (p.fallback?.session === session) p.fallback = undefined; // a later attempt may start a new file
       if (!r) return { ok: false, error: "the text file was closed before anything was saved" };
       if ("error" in r) return { ok: false, error: r.error };
-      const s = this.submit(id, r.value, "text-file");
+      const s = this.submit(id, r.value, "text-file", confirmReplace);
       return s.ok ? { ok: true, meta: s.meta } : { ok: false, error: s.code === "empty" ? "the saved file was empty" : s.error };
     });
     p.fallback = { session, outcome };
