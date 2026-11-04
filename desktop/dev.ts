@@ -590,6 +590,7 @@ import { EVENTS_LOG_PATH, recordSkillActivated } from "./skills_log.ts";
 import { auditTierVerdict, CONTROLLER_ROUTES, handleController, type ControllerDeps } from "./controller/routes.ts"; // P-CTRL.2 (ADR-0438)
 import { OFF_TASK_SYSTEM, offTaskPrompt, parseOffTask } from "./controller/remote_policy.ts"; // P-CTRL-REMOTE.1 (ADR-0476)
 import { PairingStore, type Pairing } from "./controller/store.ts"; // P-CTRL.2: the hashed pairing store
+import { handleRemoteSpokes, REMOTE_SPOKES_PLUGIN, type RemoteSpokesDeps } from "./remote_spokes.ts"; // P-IDE-SPOKES.1 (ADR-0487)
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
 import { addReportToKg, agentRecall, agentRetain, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unrelateEntities } from "./personal.ts";
@@ -2195,6 +2196,15 @@ const controllerDeps: ControllerDeps = {
   sink: EVENTS_LOG_PATH,
 };
 
+// P-IDE-SPOKES.1 (ADR-0487): the remote-spokes hub plugin, reached over its /host/* routes with the token the
+// plugin runtime minted for this engine. Recalled text and parked actions pass the same fail-closed scanner.
+const remoteSpokesDeps: RemoteSpokesDeps = {
+  endpoint: () => plugins.hostEndpoint(REMOTE_SPOKES_PLUGIN),
+  installed: () => plugins.list().some((p) => p.id === REMOTE_SPOKES_PLUGIN),
+  scan: (text) => scanAndDecide(agentScanner(), text),
+  record: recordBlock,
+};
+
 // P-AGENT.9/.10/.17: the ONE gated import path — every external spec (share file, n8n workflow, template)
 // runs the P-AGENT.5 scanner gate and persists WITH its trust label; nothing external skips the gate.
 interface GatedImportReply {
@@ -2468,6 +2478,10 @@ return Bun.serve({
     }
     try {
       if (p.startsWith("/api/controller/")) return await handleController(req, p, ctrlPairing, controllerDeps);
+      if (p === "/api/remote-spokes" || p.startsWith("/api/remote-spokes/")) {
+        srv.timeout(req, 0); // a recall pages the journal over the relay, and a decision may wait on a presence gesture
+        return await handleRemoteSpokes(req, p, remoteSpokesDeps);
+      }
       if (p === "/app.js") {
         const { js } = await bundleApp();
         return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });

@@ -27,9 +27,10 @@ import { cycleSpoke, ghostKey, ghostSpokes, hubLanes, ORBIT_FPS_FLOOR, ORBIT_NOD
 import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new spokes open on the last spoke's model; colliding names show the route
 import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
+import { closeRemotePanel, initOrbitRemote, layoutRemote, onRemoteHubClick, onRemotePanelClick, paintRemotePanel, reconcileRemote, refreshRemote, refreshRemotePanel, remoteCounts, remoteHubSectionHtml, remoteHubVisible, remoteList, remotePanelNode, type OrbitRemoteDeps } from "./orbit_remote.ts"; // P-IDE-SPOKES.1 (ADR-0487)
 import { beatLine, goalButtonHtml, goalButtonTip, goalPanelHtml, goalSnapshot, onGoalPanelClick, paintHubGoal, refreshGoal, stalledLanes, taskFormHtml, type OrbitGoalDeps } from "./orbit_goal.ts"; // P-AOS.1 (ADR-0452), P-AOS.2 (ADR-0453)
 
-export interface FleetOrbitDeps extends OrbitGoalDeps {
+export interface FleetOrbitDeps extends OrbitGoalDeps, OrbitRemoteDeps {
   /** P-TUI.2: open `lucid hub` in a new terminal window (app.ts toasts a refusal). */
   hubOpen: () => Promise<unknown>;
   fleetStatus: LucidBridge["fleetStatus"];
@@ -295,8 +296,10 @@ function paintGhosts(): void {
 // spokes, P-SWITCH.3). All are children of the stage, so the fleet stays visible behind them and no
 // popover positioning is involved.
 
-type OrbitPanel = "ghosts" | "spawn" | "hubs" | "goal";
+type OrbitPanel = "ghosts" | "spawn" | "hubs" | "goal" | "remote";
 let openedPanel: OrbitPanel | null = null;
+/** P-IDE-SPOKES.1: the remote spoke the "remote" panel shows next. */
+let remoteTarget: string | null = null;
 
 function togglePanel(which: OrbitPanel): void {
   openedPanel = openedPanel === which ? null : which;
@@ -306,10 +309,38 @@ function togglePanel(which: OrbitPanel): void {
   host.classList.toggle("show", openedPanel !== null);
   // A closed panel keeps no DOM: the spawn form's password input must not hold a token while hidden.
   if (openedPanel === null) { const body = $("[data-orbit-panel-body]", host); if (body) body.innerHTML = ""; }
+  if (openedPanel !== "remote") closeRemotePanel();
   if (openedPanel === "ghosts") { paintGhostPanel(); void refreshGhosts(); }
   if (openedPanel === "spawn") paintSpawnPanel();
   if (openedPanel === "hubs") paintHubsPanel();
   if (openedPanel === "goal") { goalSig = ""; paintGoalPanel(); }
+  if (openedPanel === "remote") paintRemote();
+}
+
+// ------------------------------------------------------ P-IDE-SPOKES.1 (ADR-0487): remote spokes
+//
+// The nodes, the hub picker section and the per-spoke panel live in orbit_remote.ts; this section only opens the
+// panel. A click on the spoke already shown closes it, like every other panel toggle.
+
+function openRemote(node: string): void {
+  if (openedPanel === "remote" && remotePanelNode() === node) { togglePanel("remote"); return; }
+  remoteTarget = node;
+  if (openedPanel === "remote") paintRemote(); else togglePanel("remote");
+}
+
+function paintRemote(): void {
+  const box = view ? ($("[data-orbit-panel-body]", view) as HTMLElement | null) : null;
+  if (box && remoteTarget) paintRemotePanel(box, remoteTarget, `<button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button>`);
+}
+
+/** The remote half of a poll: nodes, their slots, the hub picker and an open remote panel. */
+function paintRemoteAll(first: boolean): void {
+  if (!view || view.hidden) return;
+  reconcileRemote($("[data-orbit-stage]", view) as HTMLElement, $("[data-orbit-svg]", view) as unknown as SVGSVGElement, first);
+  ($("[data-orbit-empty]", view) as HTMLElement).hidden = lastMine.length + remoteList().length > 0;
+  layoutStage(lastMine);
+  paintHubsBadge();
+  if (openedPanel === "remote") { const box = $("[data-orbit-panel-body]", view) as HTMLElement | null; if (box) refreshRemotePanel(box); }
 }
 
 // ------------------------------------------------------ P-SWITCH.3 (ADR-0410): the other hubs' spokes
@@ -331,14 +362,17 @@ function paintHubsBadge(): void {
   if (!view) return;
   const n = hubList.length;
   const spokes = hubList.reduce((a, h) => a + h.lanes.length, 0);
-  const waiting = hubList.reduce((a, h) => a + h.waiting, 0);
+  // P-IDE-SPOKES.1 (ADR-0487): the remote hub is a hub too; its spokes count, and its parked asks wait on you.
+  const remote = remoteCounts();
+  const waiting = hubList.reduce((a, h) => a + h.waiting, 0) + remote.waiting;
+  const total = spokes + remote.spokes;
   for (const b of view.querySelectorAll("[data-orbit-hubs]")) {
     const badge = b.querySelector("[data-orbit-hubsn]") as HTMLElement | null;
     if (badge) {
-      const t = waiting ? `${spokes} \u00b7 ${waiting} waiting` : String(spokes);
+      const t = waiting ? `${total} \u00b7 ${waiting} waiting` : String(total);
       if (badge.textContent !== t) badge.textContent = t;
     }
-    (b as HTMLElement).hidden = n === 0;
+    (b as HTMLElement).hidden = n === 0 && !remoteHubVisible();
     (b as HTMLElement).classList.toggle("waiting", waiting > 0);
   }
   // An empty ring with spokes elsewhere must say so, or a new session reads as "my spokes are gone".
@@ -354,12 +388,14 @@ function paintHubsPanel(): void {
   if (openedPanel !== "hubs" || !view) return;
   const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
   if (!box) return;
-  const head = `<div class="orbit-panel-h">${icon("share", 14)}<b>Other hubs</b><span>${hubList.length}</span><button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button></div>`;
+  // P-IDE-SPOKES.1 (ADR-0487): the add-on's remote hub is listed first, with its spokes as pips.
+  const remote = remoteHubSectionHtml();
+  const head = `<div class="orbit-panel-h">${icon("share", 14)}<b>Other hubs</b><span>${hubList.length + (remote ? 1 : 0)}</span><button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button></div>`;
   if (hubList.length === 0) {
-    box.innerHTML = `${head}<div class="orbit-ghosts-empty">Every running spoke belongs to this session. A new session starts its own hub; spokes started there stay with it.</div>`;
+    box.innerHTML = `${head}${remote}<div class="orbit-ghosts-empty">Every running local spoke belongs to this session. A new session starts its own hub; spokes started there stay with it.</div>`;
     return;
   }
-  box.innerHTML = head + hubList.map((h, i) => `<div class="orbit-hubrow" data-hub-i="${i}" title="${esc(h.sessionId)}">
+  box.innerHTML = head + remote + hubList.map((h, i) => `<div class="orbit-hubrow" data-hub-i="${i}" title="${esc(h.sessionId)}">
       <span class="orbit-ghost-id"><b>${esc(hubTitle(h.sessionId))}</b><small>${h.lanes.length} ${h.lanes.length === 1 ? "spoke" : "spokes"}${h.waiting ? ` \u00b7 ${h.waiting} waiting on you` : ""}</small></span>
       <button class="btn-mini orbit-btn" data-hub-open data-tip="Open this hub|Makes this session Main and shows its spokes on the orbit. Nothing here stops: if Main is busy you get the choice first.">${icon("restore", 12)} Open</button>
     </div>
@@ -439,6 +475,16 @@ function onPanelClick(t: HTMLElement): boolean {
   if (openedPanel === "goal" && deps && view) {
     const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
     if (box && onGoalPanelClick(t, box, deps, () => { goalSig = ""; paintGoal(); })) return true;
+  }
+  // P-IDE-SPOKES.1: a remote spoke's panel, and the remote hub's row in the hub picker.
+  if (openedPanel === "remote" && view) {
+    const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
+    if (box && onRemotePanelClick(t, box)) return true;
+  }
+  if (openedPanel === "hubs") {
+    const hit = onRemoteHubClick(t);
+    if (hit === "handled") return true;
+    if (hit) { openRemote(hit); return true; }
   }
   const row = t.closest("[data-ghost-i]") as HTMLElement | null;
   if (row) {
@@ -632,12 +678,15 @@ let deps: FleetOrbitDeps | null = null;
 let view: HTMLElement | null = null;
 let pollTimer: number | null = null;
 let lastStatus: FleetStatusView | null = null;
+/** This hub's lanes from the last poll (the ring's local half; remote spokes take the slots after them). */
+let lastMine: LaneView[] = [];
 /** Card + line per lane id. Cards are reconciled, never rebuilt, so state-glow animations don't restart
  *  on every poll (the fleet grid's pill lesson). */
 const nodes = new Map<string, { card: HTMLElement; line: SVGLineElement }>();
 
 export function initFleetOrbit(d: FleetOrbitDeps): void {
   deps = d;
+  initOrbitRemote(d); // P-IDE-SPOKES.1 (ADR-0487)
   // P-FLEET.L17: fleet navigation from the keyboard, anywhere in the app. Ctrl/Cmd+Alt is free of the
   // app's Ctrl/Cmd bindings (zoom, mic, hands-free) and arrows cannot be produced by AltGr layouts, so
   // typing text can never trigger a spoke hop.
@@ -708,7 +757,7 @@ export function closeFleetOrbit(): void {
   // Cards are kept (cheap, and reopening repaints instantly); only the census reconcile mutates them.
 }
 
-const onResize = (): void => { if (lastStatus) layoutStage(lastStatus.lanes); };
+const onResize = (): void => { if (lastStatus) layoutStage(lastMine); };
 const onKey = (e: KeyboardEvent): void => {
   if (e.key !== "Escape" || !view || view.hidden) return;
   e.preventDefault(); e.stopPropagation();
@@ -804,6 +853,9 @@ function onViewClick(ev: Event): void {
   // P-FLEET.L20: the node's own close. Checked BEFORE the card, or the X would also be a takeover click.
   const close = t.closest("[data-orbit-stop]") as HTMLElement | null;
   if (close) { void closeSpoke(close.dataset.orbitStop!, close.dataset.act === "dismiss" ? "dismiss" : "stop"); return; }
+  // P-IDE-SPOKES.1: a remote spoke opens its panel; it is another machine, never promoted into the composer.
+  const remoteCard = t.closest("[data-remote-node]") as HTMLElement | null;
+  if (remoteCard?.dataset.remoteNode) { openRemote(remoteCard.dataset.remoteNode); return; }
   const card = t.closest(".orbit-node") as HTMLElement | null;
   if (card?.dataset.laneId) { takeover(card.dataset.laneId); return; }
 }
@@ -867,12 +919,16 @@ async function refresh(first: boolean): Promise<void> {
   // stay off the ring (and out of the census) and are reachable through the Hubs panel; the ghost census
   // below still counts them as live, so none of them is ever offered as a ghost to recover.
   const mine = hubLanes(s.lanes, s.hub);
+  lastMine = mine;
   hubList = otherHubs(s.lanes, s.hub);
   paintHead({ ...s, lanes: mine });
   reconcile(mine, first);
   layoutStage(mine);
   paintHub();
   paintHubsBadge();
+  // P-IDE-SPOKES.1 (ADR-0487): remote spokes join the ring when the hub plugin answers; its own request, so a
+  // slow plugin never holds the local ring back.
+  void refreshRemote().then(() => paintRemoteAll(first));
   // Ghosts read the durable ledger, which only changes when a lane runs or dies - the open-time fetch
   // plus every census change keeps the Recover badge honest without hammering the ledger per poll.
   if (first || censusSig(s.lanes) !== ghostCensus) { ghostCensus = censusSig(s.lanes); void refreshGhosts(); }
@@ -1033,7 +1089,7 @@ function reconcile(lanes: LaneView[], first: boolean): void {
     entry.card.style.setProperty("--ty", "0px");
     window.setTimeout(() => entry.card.remove(), EXIT_MS);
   }
-  ($("[data-orbit-empty]", view!) as HTMLElement).hidden = lanes.length > 0;
+  ($("[data-orbit-empty]", view!) as HTMLElement).hidden = lanes.length + remoteList().length > 0;
 }
 
 function buildNode(lane: LaneView): HTMLElement {
@@ -1118,7 +1174,7 @@ function layoutStage(lanes: LaneView[]): void {
   if (w === 0 || h === 0) return;
   svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
   const cx = w / 2, cy = h / 2;
-  const slots = orbitSlots(lanes.length, w, h);
+  const slots = orbitSlots(lanes.length + remoteList().length, w, h); // P-IDE-SPOKES.1: remote spokes share the ring
   // Decorative ring ellipses for each occupied ring, dash-drifting slowly (pure ornament, one per ring).
   const rings = [...new Set(slots.map((s) => s.ring))];
   const ringEls = svg.querySelectorAll(".orbit-ringline");
@@ -1148,6 +1204,7 @@ function layoutStage(lanes: LaneView[]): void {
     entry.line.setAttribute("x2", String(cx + slot.x));
     entry.line.setAttribute("y2", String(cy + slot.y));
   });
+  layoutRemote(slots.slice(lanes.length), cx, cy);
 }
 
 // ------------------------------------------------------------------------- the spoke takeover banner

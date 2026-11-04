@@ -22,7 +22,8 @@ export function testKey(id = "test-publisher"): TestKey {
 export const CLEAN: GateDecision = { block: false, reason: "clean", trustLabel: "trusted", findings: [], failClosed: false };
 
 /** A server plugin that records its pid and a grandchild's pid in LUCID_PLUGIN_DATA (so a test can prove
- *  the whole tree ends), answers /api/health with its id, and serves "hello" elsewhere. */
+ *  the whole tree ends), answers /api/health with its id, /host/check 204 only for this launch's
+ *  LUCID_PLUGIN_HOST_TOKEN (ADR-0487), and serves "hello" elsewhere. */
 export const SERVER_JS = `
 const http = require("http");
 const fs = require("fs");
@@ -33,6 +34,7 @@ const kid = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000000)"], { 
 fs.writeFileSync(path.join(data, "pids.json"), JSON.stringify({ server: process.pid, child: kid.pid }));
 http.createServer((req, res) => {
   if (req.url === "/api/health") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ok: true, id: process.env.LUCID_PLUGIN_ID, agent: process.env.LUCID_AGENT_BIN, root: process.env.LUCID_PLUGIN_ROOT })); return; }
+  if (req.url === "/host/check") { const t = process.env.LUCID_PLUGIN_HOST_TOKEN; res.writeHead(t && req.headers["x-lucid-host-token"] === t ? 204 : 403); res.end(); return; }
   res.writeHead(200, { "content-type": "text/plain" }); res.end("hello");
 }).listen(Number(process.env.PORT), process.env.HOST);
 `;
