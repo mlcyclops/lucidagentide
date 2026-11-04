@@ -49,11 +49,11 @@ jobs:
       - name: Keychain diagnostics (on failure)
         if: failure()
         run: |
-          set -x
-          security list-keychains -d user || true
-          security default-keychain -d user || true
-          security show-keychain-info "$(security default-keychain -d user | tr -d ' "')" || true
-          printf 'add-generic-password -s "LUCID CI Probe" -a "probe" -l "LUCID CI Probe" -w "cHJvYmU="\nquit\n' | security -i; echo "security -i exit=$?"
+          set +e -x
+          security list-keychains -d user
+          security default-keychain -d user
+          security show-keychain-info "$(security default-keychain -d user | tr -d ' "')"
+          printf 'add-generic-password -s "LUCID CI Probe" -a "probe" -l "LUCID CI Probe" -w "cHJvYmU="\n' | security -i; echo "security -i exit=$?"
           security find-generic-password -s "LUCID CI Probe" -a probe -w; echo "find exit=$?"
           security delete-generic-password -s "LUCID CI Probe" -a probe >/dev/null 2>&1 || true
       - name: Vault v2 and the safeStorage drain (P-VAULT-V2.1)

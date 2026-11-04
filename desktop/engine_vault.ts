@@ -35,7 +35,7 @@
 // Bun (Electron main bundles settings_store.ts with --target=node) every entry point reports `unavailable`
 // without touching a vault file.
 
-import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { aesGcmDecrypt, aesGcmEncrypt, FipsRequiredError, randomBytes, sha256 } from "../harness/crypto/fips_crypto.ts"; // P-FIPS.1 (ADR-0473)
@@ -363,7 +363,10 @@ function keychainStore(dir: string): OsKeyStore | null {
     },
     create(key) {
       // The secret travels on stdin to `security -i`, never on argv (argv is visible to other processes).
-      const line = `add-generic-password -s "${KEYCHAIN_SERVICE}" -a "${account}" -l "${KEYCHAIN_SERVICE}" -w "${key.toString("base64")}"\nquit\n`;
+      // One command, then EOF ends the session: `security -i` has no `quit` command, and the old trailing
+      // `quit` line made it exit 1 after a successful add, so no Mac ever got a master key (found by
+      // vault-backends.yml on a real Keychain, v2.5.1 beta review).
+      const line = `add-generic-password -s "${KEYCHAIN_SERVICE}" -a "${account}" -l "${KEYCHAIN_SERVICE}" -w "${key.toString("base64")}"\n`;
       const r = spawnSync(SECURITY_BIN, ["-i"], { input: line, encoding: "utf8", timeout: SPAWN_TIMEOUT_MS });
       return !r.error && r.status === 0;
     },
@@ -445,6 +448,14 @@ const pidAlive = (pid: number): boolean => {
   try { process.kill(pid, 0); return true; } catch (e) { return errCode(e) === "EPERM"; } // EPERM: alive, not ours to signal
 };
 
+/** A lock file's body and mtime from ONE descriptor, so both describe the same file (CodeQL #125/#126,
+ *  js/file-system-race: the lock path is never re-read by name after the `wx` create, nor stat'd apart
+ *  from the read). Throws ENOENT when the lock is gone. */
+function readLockFile(path: string): { raw: string; mtimeMs: number } {
+  const fd = openSync(path, "r");
+  try { return { raw: readFileSync(fd, "utf8"), mtimeMs: fstatSync(fd).mtimeMs }; } finally { closeSync(fd); }
+}
+
 /** Run `fn` holding an exclusive owner-token lock file (`wx` create; body `{ pid, token, ts }`). A held lock
  *  is taken over only when it is older than `staleMs` AND its owner pid is gone; a lock still owned by a
  *  live process is waited for, up to `timeoutMs`, then this throws (it never proceeds without the lock).
@@ -465,16 +476,15 @@ export function withFileLock<T>(path: string, fn: () => T, opts: { timeoutMs?: n
     if (fd !== null) {
       try { writeFileSync(fd, JSON.stringify({ pid: process.pid, token, ts: Date.now() })); } finally { closeSync(fd); }
       try { return fn(); } finally {
-        try { if (readFileSync(path, "utf8").includes(token)) unlinkSync(path); } catch { /* already gone */ }
+        try { if (readLockFile(path).raw.includes(token)) unlinkSync(path); } catch { /* already gone */ }
       }
     }
     let holder = "a lock being released";
     try {
-      const raw = readFileSync(path, "utf8");
-      const st = statSync(path);
+      const { raw, mtimeMs } = readLockFile(path);
       let info: { pid?: unknown; ts?: unknown } = {};
       try { info = JSON.parse(raw); } catch { /* the owner is between its create and its write */ }
-      const ts = typeof info.ts === "number" ? info.ts : st.mtimeMs;
+      const ts = typeof info.ts === "number" ? info.ts : mtimeMs;
       const pid = typeof info.pid === "number" ? info.pid : 0;
       holder = pid ? `pid ${pid}` : "an unknown process";
       if (Date.now() - ts > staleMs && !(pid && pidAlive(pid))) {
