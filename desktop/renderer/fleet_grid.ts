@@ -4,8 +4,8 @@
 // desktop/renderer/fleet_grid.ts - P-FLEET.L1/L2: the LUCID Fleet dashboard. Multiple headless engine lanes
 // on this machine, each rendered as a streaming, editable mini agent window inside one movable/resizable dock
 // (the share/join dock geometry primitives under the fleet's own storage keys). The card FRAME is the status
-// surface: the LED + border carry the lane color, and ONLY the two states that need the user - awaiting-input
-// (amber) and needs-approval (red) - animate their glow. Self-contained: every engine call goes through the
+// surface: the LED + border carry the lane color, and ONLY the states that need the user - awaiting-input
+// (blue), needs-approval and likely-stuck (red) - animate their glow. Self-contained: every engine call goes through the
 // injected bridge functions; no direct HTTP here. Closing or minimizing the panel never touches the lanes -
 // it is a viewport, not a lifecycle owner.
 //
@@ -39,7 +39,7 @@ import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts";
 import { openRepoDetails, paintRepoChip } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): the lane's repo + push target
 import { repoSections, spokeRepo } from "./spoke_repo.ts"; // P-HUB-PICK.1 (ADR-0470): codebase name, color and the By repo grouping
 import { githubPickNote, mountRepoPicker, repoPickerHtml } from "./repo_picker.ts"; // P-REPO.1: pick a repo instead of typing a URL
-import { laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order + wording + counts shared with the phone's fleet bar
+import { displayStatus, laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order + wording + counts shared with the phone's fleet bar
 // P-FLEET.L7: the transcript MODEL - stable ids, the chip glance line, the chevron body, the clipboard text.
 // Every one of those was hand-rolled here before; a lane chip and a composer chip can now not disagree.
 import { laneChip, laneChipBody, laneToolDoing, mintId, settleToolRow, transcriptCopyText, turnCopyText, type LaneToolRow, type LaneTurnRow } from "./lane_transcript.ts";
@@ -655,7 +655,7 @@ export function mountFleetPill(): void {
  *  made the pulse animation stutter. */
 function paintPill(): void {
   if (!pill) return;
-  const roll = laneRollup([...runs.values()].map((r) => r.view));
+  const roll = laneRollup([...runs.values()].map((r) => ({ ...r.view, status: displayStatus(r.view) }))); // P-STUCK-SHOW.1
   const box = $("[data-fleet-pips]", pill) as HTMLElement | null;
   if (box) {
     const html = roll.counts
@@ -868,7 +868,9 @@ function paintProgress(run: LaneRun): void {
   const full = statusDetail() === "full";
   // P-LIVENESS.1 (ADR-0418): a call marked likely stuck is something the user must know too.
   const urgent = p?.liveness.state === "dead" || p?.liveness.state === "stuck";
-  strip.hidden = (!p && !w) || (!full && !urgent && !w);
+  // P-STUCK-SHOW.1 (ADR-0473): an open call with no activity yet is named (amber) before it is marked stuck.
+  const flat = !urgent && p?.liveness.flatMs !== undefined;
+  strip.hidden = (!p && !w) || (!full && !urgent && !flat && !w);
   strip.classList.toggle("quiet", !full);
   if (strip.hidden) return;
   const bar = $(".lane-bar", strip) as HTMLElement, fill = $(".lane-fill", strip) as HTMLElement;
@@ -884,8 +886,8 @@ function paintProgress(run: LaneRun): void {
     est.textContent = w ? "" : progressLine(aged, eta);
     bar.classList.toggle("indeterminate", aged.estimate.percent === null && running && !w);
     fill.style.width = aged.estimate.percent === null ? "0%" : `${Math.min(95, aged.estimate.percent)}%`;
-    alive.hidden = !full && !urgent; // quiet: the pill appears only for a dead process or a likely-stuck call
-    alive.dataset.state = w ? "waiting" : p.liveness.state;
+    alive.hidden = !full && !urgent && !flat; // quiet: the pill appears only for a dead process, a likely-stuck call, or a call gone flat
+    alive.dataset.state = w ? "waiting" : flat ? "flat" : p.liveness.state;
     alive.textContent = w ? "waiting for a file" : p.liveness.label;
     alive.title = w ? "Another worker's running turn is editing this file; the write goes through when it ends." : p.liveness.detail;
     signal.textContent = running && !w ? (aged.lastSignalMs < STREAMING_MS ? "signal just now" : `last signal ${humanMs(aged.lastSignalMs)} ago`) : "";
@@ -918,7 +920,7 @@ function paintFrame(run: LaneRun): void {
   // P-FLEET.L18: `grp-hidden` is re-derived from the group model, never dropped - applyOrder skips an
   // unchanged frame, so a class this write erased would unfold a collapsed group on the next poll.
   const dragging = card.classList.contains("dragging");
-  card.className = `fleet-card lane-${v.status}${v.promoted ? " promoted" : ""}${dragging ? " dragging" : ""}${laneCollapsed(groups, v.id) ? " grp-hidden" : ""}`;
+  card.className = `fleet-card lane-${displayStatus(v)}${v.promoted ? " promoted" : ""}${dragging ? " dragging" : ""}${laneCollapsed(groups, v.id) ? " grp-hidden" : ""}`;
   // P-FLEET.L8: promote / pull back. Hidden entirely when app.ts did not thread the dep, because a button
   // that cannot act is worse than no button.
   const promote = $("[data-fleet-promote]", card) as HTMLButtonElement | null;

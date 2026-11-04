@@ -19,6 +19,7 @@
 export const LANE_STATUS_ORDER: readonly string[] = [
   "needs-approval",
   "awaiting-input",
+  "likely-stuck",
   "working",
   "starting",
   "done",
@@ -30,6 +31,7 @@ export const LANE_STATUS_ORDER: readonly string[] = [
 export const LANE_STATUS_WORDS: Readonly<Record<string, string>> = {
   "needs-approval": "need approval",
   "awaiting-input": "waiting on you",
+  "likely-stuck": "likely stuck",
   working: "working",
   starting: "starting",
   done: "done",
@@ -39,10 +41,34 @@ export const LANE_STATUS_WORDS: Readonly<Record<string, string>> = {
 
 /** The states that mean a human is BLOCKING the lane. The only ones allowed to animate, on either surface,
  *  so "something is moving" always means "something wants you". Exported so every "waiting on you" count
- *  (the orbit's Other hubs badge, P-SWITCH.3) reads the same rule instead of restating it. */
-export const LANE_ATTENTION: Readonly<Record<string, true>> = { "needs-approval": true, "awaiting-input": true };
-/** The states that mean the lane is making progress on its own. */
-const BUSY: Readonly<Record<string, true>> = { working: true, starting: true };
+ *  (the orbit's Other hubs badge, P-SWITCH.3) reads the same rule instead of restating it. A likely-stuck
+ *  lane counts: LUCID never stops its call (ADR-0418), so only the user can move it. */
+export const LANE_ATTENTION: Readonly<Record<string, true>> = { "needs-approval": true, "awaiting-input": true, "likely-stuck": true };
+/** The states that mean a turn is running (a likely-stuck lane's turn still is). */
+const BUSY: Readonly<Record<string, true>> = { working: true, starting: true, "likely-stuck": true };
+
+/** P-STUCK-SHOW.1 (ADR-0473): the status a surface shows for a lane. A WORKING lane whose open tool call
+ *  the evidence marks likely stuck (turn_progress livenessVerdict, ADR-0418) shows as `likely-stuck`, so
+ *  every count, dot and card says so instead of "working". The engine's status is unchanged: this is a
+ *  display state only, and nothing acts on it. A phone guest has no progress view; the host sends the
+ *  verdict as `stuck` (FleetLaneStatus, ADR-0475) and the same rule reads it. */
+export function displayStatus(lane: { status: string; progress?: { liveness?: { state?: string } } | null; stuck?: boolean }): string {
+  return lane.status === "working" && (lane.stuck === true || lane.progress?.liveness?.state === "stuck") ? "likely-stuck" : lane.status;
+}
+
+/** P-STUCK-SHOW.1: which lanes just became likely stuck, given the ids that were likely stuck at the last
+ *  look. A lane that leaves the state and comes back counts again (a new stall). `now` is the set to keep
+ *  for the next look. */
+export function newlyStuck<L extends { id: string; status: string; progress?: { liveness?: { state?: string } } | null }>(before: ReadonlySet<string>, lanes: readonly L[]): { now: Set<string>; fresh: L[] } {
+  const now = new Set<string>();
+  const fresh: L[] = [];
+  for (const l of lanes) {
+    if (displayStatus(l) !== "likely-stuck") continue;
+    now.add(l.id);
+    if (!before.has(l.id)) fresh.push(l);
+  }
+  return { now, fresh };
+}
 
 /** One state present in a snapshot, with the lanes in it. */
 export interface LaneStatusCount {

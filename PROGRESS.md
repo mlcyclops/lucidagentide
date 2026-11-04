@@ -5803,3 +5803,24 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-02):** the session index is saved to `~/.omp/agent/lucid-session-index.json` and reused at start (first list 2,327 ms to 176 ms on 1,653 real sessions). Sessions move to `~/.omp/agent/sessions-archive/` by a row button or an off-by-default age rule (30 days, 7 for spoke and empty sessions); archived ones stay searchable, readable and on the Timeline, and opening or recovering one restores it. A cross-engine registry keeps any session held by any running LUCID engine from moving. Proof: `make demo-P-SESS-ARCHIVE.1`, 9 new tests, real archive/open/restore and two-engine refusal smokes.
 - **stubbed:** none. Engines older than this build do not publish what they hold; for those the rule's day-based age is the only guard.
 - **next:** turn the rule on after a week of manual use; then consider dropping empty sessions sooner than 7 days.
+
+## P-STOP-GUARD.1: a press aimed at Send never stops a turn (ADR-0472)
+- **shipped (2026-11-03):** the composer's Send/Stop button stops only when the press began on a Stop face shown for 600 ms (`desktop/renderer/stop_guard.ts`, wired in `renderer/app.ts`). Before, a double click on Send, or a click as a held prompt or voice send started a turn, cancelled the new turn as if the user had pressed Stop. Proof: 6 new tests, renderer typecheck and bundle.
+- **stubbed:** none.
+- **next:** none. Spoke liveness: owner chose to keep stopping manual and show the evidence (P-STUCK-SHOW.1 below).
+
+## P-STUCK-SHOW.1: a spoke that might be stuck says so everywhere (ADR-0473)
+- **shipped (2026-11-03):** a working spoke whose open call ADR-0418 marks likely stuck shows as its own red state (`displayStatus` in `desktop/collab/fleet_status.ts`) on the orbit node, the orbit census, the grid card, the minimized pill and the Other hubs "waiting" count; the Fleet toolbar button gets a red dot naming the spokes, and one toast per stall offers Open spoke, with the fleet closed too (10 s poll in `renderer/app.ts`). A call flat for half the threshold (2.5 min, 6 min with a subagent) now reads "might be stuck: no activity for N" in amber in the quiet default (HUD line, grid pill, orbit node). Nothing acts on either. Proof: 5 new tests, desktop suites pass (the 5 failures under `desktop/release/win-unpacked` are the packaged copy the test script ignores), renderer and server typecheck, bundle, and a rendered check of the real CSS and glance strings.
+- **stubbed:** none. The amber orbit border was confirmed in the DOM (class `flat`), not in a screenshot: the preview screenshot lagged one page behind.
+- **next:** none. The phone follow-up shipped as P-STUCK-SHOW.3 below.
+
+## P-STUCK-SHOW.2: "ready for your prompt" is blue (ADR-0474)
+- **shipped (2026-11-03):** awaiting-input is blue on desktop (grid card, pips, orbit node and line, switch menu) and on the phone (`tools/remote-pwa/index.html`); amber now means only "might be stuck"; a likely-stuck spoke's orbit line is red. Proof: renderer typecheck, 956 tests across desktop/collab, orbit layout and the phone app.
+- **stubbed:** none. The colors were not checked by eye (the preview screenshot captured the app window, not the test page).
+- **next:** none. The slate theme's blue moved to #7790dc so it parts from cyan (ADR-0474 amendment).
+
+## P-STUCK-SHOW.3: phone guests see a likely-stuck spoke (ADR-0475)
+- **shipped (2026-11-03):** the guest fleet snapshot carries `stuck: true`; the phone's bar counts "likely stuck" in red and the lane card turns red while keeping Queue and Push. Proof: 1 new test, 2,098 tests across desktop/collab, desktop/renderer, the phone app and the liveness modules, root and desktop typechecks, PWA and renderer bundles.
+- **stubbed:** none. No amber "might be stuck" on the phone by design.
+- **next:** none.
+- **committed locally, not pushed:** P-STOP-GUARD.1 and P-STUCK-SHOW.1 to .3 (ADR-0472 to 0475) on `feat/p-sess-archive-1`, for the end-of-day push.

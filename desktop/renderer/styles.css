@@ -180,7 +180,7 @@
   /* brand */
   --accent:#a878b8; --accent-2:#c199cf; --accent-deep:#7d5589; --cyan:#78b8c4; --cyan-2:#a0d8e2;
   /* state hues */
-  --green:#74b892; --amber:#c8a86a; --red:#d68a8a; --blue:#8098c4; --red-mid:#cc7a7a;
+  --green:#74b892; --amber:#c8a86a; --red:#d68a8a; --blue:#7790dc; --red-mid:#cc7a7a;
   --red-deep:#a85e5e;
   /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
   --red-txt:#e8b8b8; --red-txt-2:#f0d4d4; --amber-txt:#ddc79a; --amber-txt-2:#eadcba;
@@ -194,7 +194,7 @@
   /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
   --accent-rgb:168 120 184; --accent-2-rgb:193 153 207; --cyan-rgb:120 184 196;
   --cyan-2-rgb:160 216 226; --green-rgb:116 184 146; --amber-rgb:200 168 106;
-  --red-rgb:214 138 138; --red-deep-rgb:168 94 94; --blue-rgb:128 152 196;
+  --red-rgb:214 138 138; --red-deep-rgb:168 94 94; --blue-rgb:119 144 220;
   --violet-rgb:160 140 200; --hero-rgb:122 212 160; --tint-rgb:255 255 255; --sh-rgb:0 0 0;
   --scrim-rgb:8 9 11; --scrim-2-rgb:16 17 20; --glass-rgb:13 14 17;
   color-scheme:dark;
@@ -4714,8 +4714,8 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 /* == P-FLEET.L1: fleet grid dashboard == */
 /* Multiple headless LUCID engine lanes as mini agent windows inside one movable dock (the share-dock frame
    under the lucid.fleetDock.* keys). The card FRAME is the status surface: the LED + border take the lane
-   color, and ONLY the two states that need the user - awaiting-input (amber) and needs-approval (red) -
-   animate their glow (the sendReady/secPulse feel). Every persistent label is nowrap+ellipsis and the grid
+   color, and ONLY the states that need the user - awaiting-input (blue), needs-approval and likely-stuck
+   (red) - animate their glow (the sendReady/secPulse feel). Amber is kept for "might be stuck" (ADR-0474). Every persistent label is nowrap+ellipsis and the grid
    tracks are minmax(280px,1fr), per the no-mid-word-wrap invariant. */
 .fleet-dock{min-width:320px}
 .fleet-body{padding:10px}
@@ -4994,13 +4994,13 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-card.lane-starting{--lane:var(--txt-4)}
 .fleet-card.lane-working{--lane:var(--cyan);--lane-dim:rgb(var(--cyan-rgb) / .35);border-color:rgb(var(--cyan-rgb) / .5)}
 .fleet-card.lane-working .fleet-led{animation:hudpulse 2.2s ease-in-out infinite}
-.fleet-card.lane-awaiting-input{--lane:var(--amber);--lane-dim:rgb(var(--amber-rgb) / .4);border-color:var(--amber);animation:fleetGlowAmber 2.6s ease-in-out infinite}
+.fleet-card.lane-awaiting-input{--lane:var(--blue);--lane-dim:rgb(var(--blue-rgb) / .4);border-color:var(--blue);animation:fleetGlowBlue 2.6s ease-in-out infinite}
 .fleet-card.lane-needs-approval{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .5);border-color:var(--red);animation:fleetGlowRed 1.6s ease-in-out infinite}
 .fleet-card.lane-needs-approval .fleet-card-head{background:rgb(var(--red-rgb) / .14);box-shadow:0 0 12px -2px rgb(var(--red-rgb) / .45) inset}
 .fleet-card.lane-done{--lane:var(--green);--lane-dim:rgb(var(--green-rgb) / .35);border-color:rgb(var(--green-rgb) / .55)}
 .fleet-card.lane-error{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .4);border-color:var(--red)}
 .fleet-card.lane-stopped{--lane:var(--txt-4);opacity:.55}
-@keyframes fleetGlowAmber{0%,100%{box-shadow:0 0 0 0 rgb(var(--amber-rgb) / 0)}50%{box-shadow:0 0 14px 2px rgb(var(--amber-rgb) / .4)}}
+@keyframes fleetGlowBlue{0%,100%{box-shadow:0 0 0 0 rgb(var(--blue-rgb) / 0)}50%{box-shadow:0 0 14px 2px rgb(var(--blue-rgb) / .4)}}
 @keyframes fleetGlowRed{0%,100%{box-shadow:0 0 2px 0 rgb(var(--red-rgb) / .3)}50%{box-shadow:0 0 18px 3px rgb(var(--red-rgb) / .6)}}
 /* P-FLEET.L2 - the MINIMIZED snapshot. The pill inherits .share-dock-pill; inside it one dot per lane
    state carries that state's color and its count, so a glance at the status bar answers "is anything
@@ -5014,7 +5014,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-pip b{font-family:var(--mono);font-size:10.5px;font-weight:700;color:var(--txt-2);font-variant-numeric:tabular-nums}
 .fleet-pip.lane-working{--lane:var(--cyan);--lane-dim:rgb(var(--cyan-rgb) / .45)}
 .fleet-pip.lane-working i{animation:hudpulse 2.2s ease-in-out infinite}
-.fleet-pip.lane-awaiting-input{--lane:var(--amber);--lane-dim:rgb(var(--amber-rgb) / .5)}
+.fleet-pip.lane-awaiting-input{--lane:var(--blue);--lane-dim:rgb(var(--blue-rgb) / .5)}
 .fleet-pip.lane-needs-approval{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .6)}
 .fleet-pip.lane-needs-approval i{animation:fleetGlowRed 1.6s ease-in-out infinite}
 .fleet-pip.lane-done{--lane:var(--green);--lane-dim:rgb(var(--green-rgb) / .45)}
@@ -6051,14 +6051,15 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-line[data-status="starting"]{stroke-dasharray:2 6;animation:orbitFlow 1.4s linear infinite;opacity:.6}
 .orbit-line[data-status="working"]{stroke:rgb(var(--cyan-rgb) / .75);stroke-width:2;
   stroke-dasharray:7 9;animation:orbitFlow .9s linear infinite}
-.orbit-line[data-status="awaiting-input"]{stroke:var(--amber);animation:orbitLineAmber 2.6s ease-in-out infinite}
+.orbit-line[data-status="awaiting-input"]{stroke:var(--blue);animation:orbitLineSoft 2.6s ease-in-out infinite}
+.orbit-line[data-status="likely-stuck"]{stroke:var(--red);stroke-width:2;animation:orbitLineSoft 2.6s ease-in-out infinite}
 .orbit-line[data-status="needs-approval"]{stroke:var(--red);stroke-width:2.5;animation:orbitLineRed 1.6s ease-in-out infinite}
 .orbit-line[data-status="done"]{stroke:rgb(var(--green-rgb) / .6)}
 .orbit-line[data-status="error"]{stroke:rgb(var(--red-rgb) / .55);stroke-dasharray:4 5}
 .orbit-line[data-status="stopped"]{stroke:var(--line);opacity:.5}
 .orbit-line.promoted{stroke-width:3;filter:drop-shadow(0 0 4px rgb(var(--accent-rgb) / .6))}
 @keyframes orbitFlow{to{stroke-dashoffset:-16}}
-@keyframes orbitLineAmber{0%,100%{opacity:.55}50%{opacity:1}}
+@keyframes orbitLineSoft{0%,100%{opacity:.55}50%{opacity:1}}
 @keyframes orbitLineRed{0%,100%{opacity:.6}50%{opacity:1}}
 /* The hub. Two expanding ping rings: the heartbeat of the whole view. */
 .orbit-hub{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2;cursor:pointer;
@@ -6160,9 +6161,9 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-node.lane-working{--lane:var(--cyan);--lane-dim:rgb(var(--cyan-rgb) / .35)}
 .orbit-node.lane-working .orbit-node-card{border-color:rgb(var(--cyan-rgb) / .5)}
 .orbit-node.lane-working .orbit-led{animation:hudpulse 2.2s ease-in-out infinite}
-.orbit-node.lane-awaiting-input{--lane:var(--amber);--lane-dim:rgb(var(--amber-rgb) / .4)}
-.orbit-node.lane-awaiting-input .orbit-node-card{border-color:var(--amber)}
-.orbit-node.lane-awaiting-input .orbit-node-card::after{box-shadow:0 0 14px 2px rgb(var(--amber-rgb) / .4);animation:orbitGlow 2.6s ease-in-out infinite}
+.orbit-node.lane-awaiting-input{--lane:var(--blue);--lane-dim:rgb(var(--blue-rgb) / .4)}
+.orbit-node.lane-awaiting-input .orbit-node-card{border-color:var(--blue)}
+.orbit-node.lane-awaiting-input .orbit-node-card::after{box-shadow:0 0 14px 2px rgb(var(--blue-rgb) / .4);animation:orbitGlow 2.6s ease-in-out infinite}
 .orbit-node.lane-needs-approval{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .5)}
 .orbit-node.lane-needs-approval .orbit-node-card{border-color:var(--red)}
 .orbit-node.lane-needs-approval .orbit-node-card::after{box-shadow:0 0 18px 3px rgb(var(--red-rgb) / .6);animation:orbitGlow 1.6s ease-in-out infinite}
@@ -6222,7 +6223,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .spoke-sw-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--lane,var(--txt-4));
   box-shadow:0 0 6px var(--lane-dim,transparent)}
 .spoke-sw-row.lane-working{--lane:var(--cyan);--lane-dim:rgb(var(--cyan-rgb) / .45)}
-.spoke-sw-row.lane-awaiting-input{--lane:var(--amber);--lane-dim:rgb(var(--amber-rgb) / .5)}
+.spoke-sw-row.lane-awaiting-input{--lane:var(--blue);--lane-dim:rgb(var(--blue-rgb) / .5)}
 .spoke-sw-row.lane-needs-approval{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .6)}
 .spoke-sw-row.lane-done{--lane:var(--green);--lane-dim:rgb(var(--green-rgb) / .45)}
 .spoke-sw-row.lane-error{--lane:var(--red)}
@@ -6571,6 +6572,22 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .hud-alive[data-state="stuck"],.lane-alive[data-state="stuck"]{color:var(--red-txt);background:rgb(var(--red-rgb) / .14);
   border-color:rgb(var(--red-rgb) / .5)}
 .hud-stopcall,.lane-stopcall{flex:none;white-space:nowrap}
+/* P-STUCK-SHOW.1 (ADR-0473): a likely-stuck spoke is red wherever a spoke is drawn (card, orbit node, the
+   count dots, the Fleet button), and a call flat for half the threshold is amber ("might be stuck").
+   Display only: LUCID still never stops the call on its own. */
+.lane-alive[data-state="flat"]{color:var(--amber-txt);background:rgb(var(--amber-rgb) / .14);border-color:rgb(var(--amber-rgb) / .5)}
+.fleet-card.lane-likely-stuck{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .5);border-color:var(--red);animation:fleetGlowRed 2.6s ease-in-out infinite}
+.fleet-pip.lane-likely-stuck{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .6)}
+.fleet-pip.lane-likely-stuck b{color:var(--txt)}
+.orbit-node.lane-likely-stuck{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .5)}
+.orbit-node.lane-likely-stuck .orbit-node-card{border-color:var(--red)}
+.orbit-node.lane-likely-stuck .orbit-node-card::after{box-shadow:0 0 18px 3px rgb(var(--red-rgb) / .6);animation:orbitGlow 2.6s ease-in-out infinite}
+.orbit-node.lane-working.flat{--lane:var(--amber);--lane-dim:rgb(var(--amber-rgb) / .4)}
+.orbit-node.lane-working.flat .orbit-node-card{border-color:rgb(var(--amber-rgb) / .7)}
+#ctFleet.fleet-stuck{position:relative;color:var(--red-txt)}
+#ctFleet.fleet-stuck::after{content:"";position:absolute;top:3px;right:3px;width:7px;height:7px;border-radius:50%;
+  background:var(--red);box-shadow:0 0 0 2px var(--bg-1)}
+@media (prefers-reduced-motion:reduce){.fleet-card.lane-likely-stuck,.orbit-node.lane-likely-stuck .orbit-node-card::after{animation:none}}
 
 .lane-progress{padding:5px 9px 6px;border-top:1px solid var(--line-soft);background:var(--bg-1);font-family:var(--mono);
   font-size:10.5px;color:var(--txt-3);min-width:0}

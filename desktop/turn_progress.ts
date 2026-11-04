@@ -64,6 +64,11 @@ export interface Liveness {
   /** P-LIVENESS.1: `stuck` and the open call started processes of its own, so "Stop command" can end just
    *  them. Never set outside `stuck`: the harness only offers the stop, the user decides. */
   canStopCall?: boolean;
+  /** P-STUCK-SHOW.1 (ADR-0473): how long the open call has shown no CPU, disk or subagent activity. Set on
+   *  `stuck`, and on `working` once the call has been flat for half the likely-stuck threshold (2.5 min, or
+   *  6 min while a subagent runs), so the quiet default can warn before the mark without lighting up every
+   *  short network wait. */
+  flatMs?: number;
 }
 
 export interface TurnEstimate {
@@ -294,13 +299,17 @@ export function livenessVerdict(i: LivenessInput): Liveness {
           label: `likely stuck: no activity for ${humanMs(v.flatMs)}`,
           detail: `${shortLabel(longest.label)} has been open ${humanMs(longest.elapsedMs)}. Nothing it started has used CPU or disk for ${humanMs(v.flatMs)}${sub} and the agent has sent nothing. A command waiting on a server that never answers looks exactly like this (network waits do not show in these counters). LUCID will not stop it on its own.${stop}`,
           canStopCall: ev.callProcs.length > 0,
+          flatMs: v.flatMs,
         };
       }
       if (v.active) {
         return { state: "working", label: `${waiting} · ${ev.mover ?? "its processes"} active`, detail: `A tool call is running${typ}. ${ev.mover ?? "Its processes"} used CPU or disk ${humanMs(i.now - ev.lastActiveAt)} ago, so it is alive.` };
       }
       if (ev.measurable && v.flatMs >= QUIET_MS) {
-        return { state: "working", label: `${waiting} · no activity for ${humanMs(v.flatMs)}`, detail: `A tool call is running${typ}. Nothing it started has used CPU or disk for ${humanMs(v.flatMs)}. At ${humanMs(v.thresholdMs)} with no activity LUCID marks it likely stuck and offers to stop it; it never stops it on its own.` };
+        // P-STUCK-SHOW.1 (ADR-0473): past half the threshold the call might be stuck, and the label says so.
+        const suspect = v.flatMs * 2 >= v.thresholdMs;
+        // The warning leads, so a narrow card or orbit node that ellipsizes the line still shows it.
+        return { state: "working", label: suspect ? `might be stuck: no activity for ${humanMs(v.flatMs)} · ${waiting}` : `${waiting} · no activity for ${humanMs(v.flatMs)}`, detail: `A tool call is running${typ}. Nothing it started has used CPU or disk for ${humanMs(v.flatMs)}. At ${humanMs(v.thresholdMs)} with no activity LUCID marks it likely stuck and offers to stop it; it never stops it on its own.`, ...(suspect ? { flatMs: v.flatMs } : {}) };
       }
     }
     return { state: "working", label: waiting, detail: `A tool call is running${typ}. Silence while it runs is normal; the watchdog never interrupts an open call.` };

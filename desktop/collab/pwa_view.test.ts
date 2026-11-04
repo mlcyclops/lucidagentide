@@ -255,6 +255,17 @@ describe("pwa_view: fleet lane cards + process rows", () => {
     }
   });
 
+  // P-STUCK-SHOW.3 (ADR-0475): the phone shows a spoke the host marks stuck in red, and it is still a running
+  // turn there: the composer keeps Queue and Push, so the user can interject or stop it from the phone.
+  it("a working lane the host marks stuck reads likely-stuck and stays busy", () => {
+    const html = renderLaneCard({ ...LANE, status: "working", stuck: true });
+    expect(html).toContain(`class="lane-card lane-likely-stuck"`);
+    expect(html).toContain(">likely-stuck</span>");
+    expect(html).toContain(">Queue</button>");
+    expect(html).not.toContain("hidden>Push</button>");
+    expect(renderLaneCard({ ...LANE, status: "done", stuck: true })).toContain(`class="lane-card lane-done"`); // a stale flag never repaints a settled lane
+  });
+
   it("shows the lane's cwd BASENAME, turn count, and status dot; renderItem wraps the card list", () => {
     const html = renderLaneCard({ ...LANE, cwd: "C:\\work\\repos\\proj" });
     expect(html).toContain(">proj</span>");
