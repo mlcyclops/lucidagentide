@@ -167,18 +167,20 @@ export async function handleController(req: Request, path: string, pairing: Pair
 
   // ── Human routes (UI token; the controller token never reaches these, apiAuthorized refuses it) ───────────
   if (path === "/api/controller/pair") {
-    const b = await strictBody(req, ["name", "workspace", "approverRoot", "approvalHours", "offTask"], ["name", "workspace"]);
+    const b = await strictBody(req, ["name", "workspace", "approverRoot", "approvalHours", "offTask", "presence"], ["name", "workspace"]);
     if (!b || !PAIRING_NAME_RE.test(b.name!)) return malformed();
     const workspace = await resolveWorkspace(b.workspace!);
     if (!workspace) return reply(400, { ok: false, error: "workspace must be an existing absolute folder" });
     // P-CTRL-REMOTE.1 (ADR-0476): a human pairing a REMOTE controller names the owner root whose certified hubs
     // may decide this pairing's parked asks. Without it the pairing is the plain supervised P-CTRL.2 kind.
+    // ADR-0488: `presence: "required"` makes every remote allow carry user-presence evidence the engine verifies.
     let remote: RemotePolicy | undefined;
     if (b.approverRoot !== undefined) {
       const hours = b.approvalHours === undefined ? DEFAULT_APPROVAL_HOURS : Number(b.approvalHours);
-      if (!p256FromSpki(b.approverRoot) || !Number.isInteger(hours) || hours < 1 || hours > MAX_APPROVAL_HOURS || (b.offTask !== undefined && b.offTask !== "on" && b.offTask !== "off")) return malformed();
-      remote = { root: b.approverRoot, approvalHours: hours, offTask: b.offTask !== "off", crl: { version: 0, serials: [] } };
-    } else if (b.approvalHours !== undefined || b.offTask !== undefined) return malformed();
+      if (!p256FromSpki(b.approverRoot) || !Number.isInteger(hours) || hours < 1 || hours > MAX_APPROVAL_HOURS || (b.offTask !== undefined && b.offTask !== "on" && b.offTask !== "off")
+        || (b.presence !== undefined && b.presence !== "required" && b.presence !== "none")) return malformed();
+      remote = { root: b.approverRoot, approvalHours: hours, offTask: b.offTask !== "off", crl: { version: 0, serials: [] }, ...(b.presence === "required" ? { presence: "required" as const } : {}) };
+    } else if (b.approvalHours !== undefined || b.offTask !== undefined || b.presence !== undefined) return malformed();
     const r = await deps.store.pair(b.name!, workspace, remote);
     if (!r.ok) return reply(409, { ok: false, error: r.error });
     emit(deps, "controller_paired", { runId: Snowflake.next(), sessionId: `controller:${r.pairing.id}` }, { pairing: r.pairing.name, pairing_id: r.pairing.id });
@@ -273,7 +275,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
     if (!pairing.remote) return reply(409, { ok: false, error: "this pairing has no approver root" });
     const ask = deps.fleet.pendingAsk(laneId);
     if (!ask || ask.id !== b.askId) return reply(409, { ok: false, error: "no such open ask" });
-    const v = verifyRemoteDecision({ decision: b.decision!, cert: b.cert!, ...(b.crl !== undefined ? { crl: b.crl } : {}) }, pairing.remote.root, pairing.remote.crl, { lane: laneId, ask: ask.id, digest: ask.digest });
+    const v = verifyRemoteDecision({ decision: b.decision!, cert: b.cert!, ...(b.crl !== undefined ? { crl: b.crl } : {}) }, pairing.remote.root, pairing.remote.crl, { lane: laneId, ask: ask.id, digest: ask.digest, presence: pairing.remote.presence === "required" });
     if (!v.ok) {
       if (v.crl) deps.store.advanceCrl(pairing.id, v.crl);
       emit(deps, "controller_ruling", ids, { pairing: pairing.name, lane_id: laneId, ruling: "remote_refused", tier: ask.tier, backend: "remote-approval", reason: v.reason });
@@ -285,7 +287,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
     emit(deps, "controller_ruling", ids, { pairing: pairing.name, lane_id: laneId, ruling: v.allow ? "remote_approved" : "remote_denied", tier: ask.tier, backend: "remote-approval", approver: v.approver });
     const r = deps.fleet.answerAsk(laneId, ask.id, v.allow);
     if (!r.ok) return reply(409, { ok: false, error: "the ask closed before the decision landed" });
-    return reply(200, { ok: true, data: { allow: v.allow, approver: v.approver } });
+    return reply(200, { ok: true, data: { allow: v.allow, approver: v.approver, presence: v.presence } });
   }
 
   if (path === "/api/controller/cancel") {

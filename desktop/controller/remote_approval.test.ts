@@ -9,7 +9,9 @@
 //   - only a decision the ENGINE verifies against the paired root releases a parked ask (approve scope, not
 //     revoked, this lane, this ask, this digest, in date); the controller can deny but never approve;
 //   - a decision cannot be replayed onto a later ask; cancel releases a parked ask; the off-task check only
-//     ever tightens.
+//     ever tightens;
+//   - ADR-0488: a pairing that requires user presence releases an allow only with presence evidence from the key
+//     the approver's certificate names, bound to that one decision; a deny needs none.
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { generateKeyPairSync, randomBytes, sign, type KeyObject } from "node:crypto";
@@ -20,7 +22,7 @@ import type { GateDecision } from "../../harness/security/gate.ts";
 import type { TelemetryEvent } from "../../harness/telemetry/events.ts";
 import { FleetLaneManager } from "../fleet_lanes.ts";
 import type { SystemSnapshot } from "../system_profile.ts";
-import { askDigest, canonical, classifyAsk, parseOffTask, verifyRemoteDecision, type RemoteAsk } from "./remote_policy.ts";
+import { askDigest, canonical, classifyAsk, parseOffTask, presenceChallenge, verifyRemoteDecision, type PresenceKind, type RemoteAsk } from "./remote_policy.ts";
 import { ControllerLaneStore } from "./lane_store.ts";
 import { handleController, type ControllerDeps } from "./routes.ts";
 import { PairingStore, type Pairing } from "./store.ts";
@@ -46,8 +48,23 @@ function cert(root: Node, n: Node, scopes: string[], over: Record<string, unknow
   return { serial, token: compact({ v: 1, typ: "lucid-node-cert", serial, root: root.id, node: n.id, role: "hub", label: "test hub", spki: n.spki, scopes, iat: now() - 10, exp: now() + 3600, ...over }, root.priv) };
 }
 const crlOf = (root: Node, version: number, serials: string[]) => compact({ v: 1, typ: "lucid-crl", root: root.id, version, serials, iat: now() }, root.priv);
+const decisionPayload = (hub: Node, lane: string, ask: RemoteAsk, allow: boolean, over: Record<string, unknown> = {}): Record<string, unknown> =>
+  ({ v: 1, typ: "lucid-approval", lane, ask: ask.id, digest: askDigest(ask.kind, ask.title, ask.input), allow, approver: hub.id, crl: 0, iat: now(), exp: now() + 600, ...over });
 function decision(hub: Node, lane: string, ask: RemoteAsk, allow: boolean, over: Record<string, unknown> = {}) {
-  return compact({ v: 1, typ: "lucid-approval", lane, ask: ask.id, digest: askDigest(ask.kind, ask.title, ask.input), allow, approver: hub.id, crl: 0, iat: now(), exp: now() + 600, ...over }, hub.priv);
+  return compact(decisionPayload(hub, lane, ask, allow, over), hub.priv);
+}
+
+// ── ADR-0488: a fake user-presence authenticator (the add-on's presence.ts after the gesture) ─────────────
+interface Authenticator { priv: KeyObject; ref: { kind: PresenceKind; spki: string } }
+/** Windows Hello's key credential is RSA 2048 (PKCS#1 v1.5 / SHA-256); the Secure Enclave's is P-256. */
+function authenticator(kind: PresenceKind): Authenticator {
+  const { privateKey, publicKey } = kind === "windows-hello" ? generateKeyPairSync("rsa", { modulusLength: 2048 }) : generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  return { priv: privateKey, ref: { kind, spki: b64u(publicKey.export({ type: "spki", format: "der" })) } };
+}
+/** A decision carrying `auth`'s presence signature over its own challenge, signed by the hub key. */
+function presentDecision(hub: Node, lane: string, ask: RemoteAsk, allow: boolean, auth: Authenticator, over: Record<string, unknown> = {}) {
+  const payload = decisionPayload(hub, lane, ask, allow, over);
+  return compact({ ...payload, presence: b64u(sign("sha256", presenceChallenge(payload), auth.priv)) }, hub.priv);
 }
 
 // ── Rig: real store, real routes, real lane manager over the fake agent ───────────────────────────────────
@@ -61,7 +78,7 @@ beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "lucid-remote-")); });
 afterEach(() => { fleet?.stopAll(); fleet = null; rmSync(dir, { recursive: true, force: true }); });
 afterAll(() => { try { rmSync(ws, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); } catch { /* agent still exiting; the OS temp cleaner takes it */ } });
 
-function rig(opts: { offTask?: "on" | "off" | "unknown"; offTaskOn?: boolean } = {}) {
+function rig(opts: { offTask?: "on" | "off" | "unknown"; offTaskOn?: boolean; presence?: "required" | "none" } = {}) {
   const root = key();
   const events: TelemetryEvent[] = [];
   const rulings: string[] = [];
@@ -81,7 +98,7 @@ function rig(opts: { offTask?: "on" | "off" | "unknown"; offTaskOn?: boolean } =
     return { status: res.status, json: (res.headers.get("content-type")?.includes("json") ? JSON.parse(text) : {}) as { ok?: boolean; error?: string; data?: Record<string, unknown> } };
   };
   const setup = async () => {
-    const p = await call("pair", null, { name: "spoke", workspace: ws, approverRoot: root.spki, approvalHours: "1", offTask: opts.offTaskOn ? "on" : "off" });
+    const p = await call("pair", null, { name: "spoke", workspace: ws, approverRoot: root.spki, approvalHours: "1", offTask: opts.offTaskOn ? "on" : "off", ...(opts.presence ? { presence: opts.presence } : {}) });
     expect(p.status).toBe(200);
     const pairing = (await store.verify(String(p.json.data!.token)))!;
     const s = await call("spawn", pairing, { name: "remote" });
@@ -235,7 +252,7 @@ describe("the off-task check only tightens", () => {
 test("verifyRemoteDecision accepts a newer CRL and never an older one", () => {
   const root = key(), hub = key(), c = cert(root, hub, ["approve"]);
   const ask: RemoteAsk = { id: "a1", digest: askDigest("fetch", "t", "null"), kind: "fetch", title: "t", input: "null", tier: "T2", reason: "", openedAt: 0, expiresAt: 0 };
-  const exp = { lane: "L", ask: "a1", digest: ask.digest };
+  const exp = { lane: "L", ask: "a1", digest: ask.digest, presence: false };
   const v = verifyRemoteDecision({ decision: decision(hub, "L", ask, true, { crl: 2 }), cert: c.token, crl: crlOf(root, 2, []) }, root.spki, { version: 1, serials: [] }, exp);
   expect(v.ok && v.crl.version).toBe(2);
   const older = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: c.token, crl: crlOf(root, 1, []) }, root.spki, { version: 3, serials: [c.serial] }, exp);
@@ -261,7 +278,7 @@ describe("a delegate-certified hub is accepted exactly when the add-on's TrustSt
     return compact({ v: 1, typ: "lucid-node-cert", serial: randomBytes(16).toString("hex"), root: root.id, node: hub.id, role: "hub", label: "test hub", spki: hub.spki, scopes, iat: now() - 10, exp: now() + 3600, user, issuer: del.id, delegation: delegationToken, ...over }, del.priv);
   }
   const ask: RemoteAsk = { id: "a1", digest: askDigest("fetch", "t", "null"), kind: "fetch", title: "t", input: "null", tier: "T2", reason: "", openedAt: 0, expiresAt: 0 };
-  const exp = { lane: "L", ask: "a1", digest: ask.digest };
+  const exp = { lane: "L", ask: "a1", digest: ask.digest, presence: false };
   const fresh = { version: 0, serials: [] };
 
   test("a delegate-certified approve is accepted; the root-signed path still is", () => {
@@ -321,5 +338,102 @@ describe("a delegate-certified hub is accepted exactly when the add-on's TrustSt
     const d = delegation(root, team, ["users"], { maxDays: 30 }, { iat: now() - 10 * DAY, exp: now() - 60 });
     const v = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: delegatedCert(root, team, d.token, hub, ["approve"]) }, root.spki, fresh, exp);
     expect(v).toEqual({ ok: false, reason: "the approver certificate's delegation is not in date" });
+  });
+
+  test("ADR-0488: a delegate-certified hub's presence key satisfies a pairing that requires presence", () => {
+    const root = key(), team = key(), hub = key(), mac = authenticator("macos-secure-enclave");
+    const c = delegatedCert(root, team, delegation(root, team, ["users"]).token, hub, ["approve"], { presence: mac.ref });
+    const required = { ...exp, presence: true };
+    expect(verifyRemoteDecision({ decision: presentDecision(hub, "L", ask, true, mac), cert: c }, root.spki, fresh, required)).toMatchObject({ ok: true, allow: true, presence: "macos-secure-enclave" });
+    const bare = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: c }, root.spki, fresh, required);
+    expect(!bare.ok && bare.reason).toBe("this pairing requires user presence and the approval carries no presence evidence");
+  });
+});
+
+// ── ADR-0488: user presence on approve ─────────────────────────────────────────────────────────────────
+describe("a pairing that requires user presence", () => {
+  test("refuses an allow without presence evidence, accepts one with a Windows Hello key's evidence", async () => {
+    const r = rig({ presence: "required" });
+    const { pairing, laneId } = await r.setup();
+    expect(r.store.pairingForLane(laneId)?.remote?.presence).toBe("required");
+    const hub = key(), hello = authenticator("windows-hello");
+    const withKey = cert(r.root, hub, ["approve"], { presence: hello.ref });
+    const without = cert(r.root, hub, ["approve"]);
+    const { parked } = await r.askFor(pairing, laneId, { kind: "execute", title: "bun test", rawInput: { command: "bun test" } });
+    expect(parked).not.toBeNull();
+    const tries: [object, string][] = [
+      [{ decision: decision(hub, laneId, parked!, true), cert: withKey.token }, "this pairing requires user presence and the approval carries no presence evidence"],
+      [{ decision: decision(hub, laneId, parked!, true), cert: without.token }, "this pairing requires user presence and the approver certificate names no presence key"],
+      [{ decision: presentDecision(hub, laneId, parked!, true, hello), cert: without.token }, "the decision carries presence evidence but the approver certificate names no presence key"],
+      [{ decision: presentDecision(hub, laneId, parked!, true, authenticator("windows-hello")), cert: withKey.token }, "the presence evidence does not verify for this decision"],
+    ];
+    for (const [body, why] of tries) {
+      const res = await r.call("decide", pairing, { laneId, askId: parked!.id, ...body });
+      expect(res.status).toBe(403);
+      expect(res.json.error).toBe(why);
+    }
+    expect(fleet!.pendingAsk(laneId)?.id).toBe(parked!.id); // nothing released
+    const ok = await r.call("decide", pairing, { laneId, askId: parked!.id, decision: presentDecision(hub, laneId, parked!, true, hello), cert: withKey.token });
+    expect(ok.status).toBe(200);
+    expect(ok.json.data).toEqual({ allow: true, approver: hub.id, presence: "windows-hello" });
+    expect(await r.settled(laneId)).toContain(ALLOWED);
+  }, TIMEOUT);
+
+  test("presence evidence is bound to one decision: moved onto the next ask it is refused; a signed deny needs none", async () => {
+    const r = rig({ presence: "required" });
+    const { pairing, laneId } = await r.setup();
+    const hub = key(), hello = authenticator("windows-hello"), c = cert(r.root, hub, ["approve"], { presence: hello.ref });
+    const first = await r.askFor(pairing, laneId, { kind: "fetch", title: "fetch a", rawInput: { url: "https://a" } });
+    const firstPayload = decisionPayload(hub, laneId, first.parked!, true);
+    const evidence = b64u(sign("sha256", presenceChallenge(firstPayload), hello.priv));
+    expect((await r.call("decide", pairing, { laneId, askId: first.parked!.id, decision: compact({ ...firstPayload, presence: evidence }, hub.priv), cert: c.token })).status).toBe(200);
+    await r.settled(laneId);
+    const next = await r.askFor(pairing, laneId, { kind: "fetch", title: "fetch b", rawInput: { url: "https://b" } });
+    // The hub key signs a fresh decision for the next ask, but the gesture's evidence is the first one's.
+    const moved = compact({ ...decisionPayload(hub, laneId, next.parked!, true), presence: evidence }, hub.priv);
+    const replay = await r.call("decide", pairing, { laneId, askId: next.parked!.id, decision: moved, cert: c.token });
+    expect(replay.status).toBe(403);
+    expect(replay.json.error).toBe("the presence evidence does not verify for this decision");
+    // Evidence made for a deny of this ask does not become an allow either.
+    const denyPayload = decisionPayload(hub, laneId, next.parked!, false);
+    const flipped = compact({ ...denyPayload, allow: true, presence: b64u(sign("sha256", presenceChallenge(denyPayload), hello.priv)) }, hub.priv);
+    expect((await r.call("decide", pairing, { laneId, askId: next.parked!.id, decision: flipped, cert: c.token })).json.error).toBe("the presence evidence does not verify for this decision");
+    expect(fleet!.pendingAsk(laneId)?.id).toBe(next.parked!.id);
+    const deny = await r.call("decide", pairing, { laneId, askId: next.parked!.id, decision: decision(hub, laneId, next.parked!, false), cert: c.token });
+    expect(deny.status).toBe(200);
+    expect(deny.json.data).toEqual({ allow: false, approver: hub.id, presence: null });
+    expect(await r.settled(laneId)).toContain(CANCELLED);
+  }, TIMEOUT);
+
+  test("pairing input: presence is required or none, and only on a remote pairing", async () => {
+    const r = rig();
+    expect((await r.call("pair", null, { name: "odd", workspace: ws, approverRoot: r.root.spki, presence: "maybe" })).status).toBe(400);
+    expect((await r.call("pair", null, { name: "plain", workspace: ws, presence: "required" })).status).toBe(400);
+    const none = await r.call("pair", null, { name: "none", workspace: ws, approverRoot: r.root.spki, presence: "none" });
+    expect((await r.store.verify(String(none.json.data!.token)))?.remote?.presence).toBeUndefined();
+  }, TIMEOUT);
+});
+
+describe("verifyRemoteDecision and presence keys", () => {
+  const ask: RemoteAsk = { id: "a1", digest: askDigest("fetch", "t", "null"), kind: "fetch", title: "t", input: "null", tier: "T2", reason: "", openedAt: 0, expiresAt: 0 };
+  const fresh = { version: 0, serials: [] };
+  const required = { lane: "L", ask: "a1", digest: ask.digest, presence: true };
+
+  test("a Secure Enclave P-256 key counts; a key of the wrong type for its kind is a malformed certificate", () => {
+    const root = key(), hub = key(), mac = authenticator("macos-secure-enclave"), hello = authenticator("windows-hello");
+    expect(verifyRemoteDecision({ decision: presentDecision(hub, "L", ask, true, mac), cert: cert(root, hub, ["approve"], { presence: mac.ref }).token }, root.spki, fresh, required))
+      .toMatchObject({ ok: true, presence: "macos-secure-enclave" });
+    for (const bad of [{ kind: "windows-hello", spki: mac.ref.spki }, { kind: "macos-secure-enclave", spki: hello.ref.spki }, { kind: "webauthn", spki: mac.ref.spki }, { ...mac.ref, extra: 1 }]) {
+      const v = verifyRemoteDecision({ decision: presentDecision(hub, "L", ask, true, mac), cert: cert(root, hub, ["approve"], { presence: bad }).token }, root.spki, fresh, required);
+      expect(v).toEqual({ ok: false, reason: "the approver certificate names a malformed presence key" });
+    }
+  });
+
+  test("without the requirement an allow needs no evidence, but evidence it carries is still checked", () => {
+    const root = key(), hub = key(), hello = authenticator("windows-hello"), c = cert(root, hub, ["approve"], { presence: hello.ref });
+    const optional = { ...required, presence: false };
+    expect(verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: c.token }, root.spki, fresh, optional)).toMatchObject({ ok: true, presence: null });
+    const wrong = verifyRemoteDecision({ decision: presentDecision(hub, "L", ask, true, authenticator("windows-hello")), cert: c.token }, root.spki, fresh, optional);
+    expect(wrong).toEqual({ ok: false, reason: "the presence evidence does not verify for this decision" });
   });
 });
