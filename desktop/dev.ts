@@ -558,7 +558,7 @@ import { kbScanner, kbStore, kgEntry, listKgs, activeKgId, createKg, renameKg, s
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.ts"
-import { installPluginFromUrl, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462)
+import { inspectPluginFile, installPluginFile, installPluginFromUrl, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0486)
 import { PluginRuntime, resolvePluginNode } from "./plugins/runtime.ts" // P-PLUGINS.2 (ADR-0462)
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
@@ -5829,6 +5829,20 @@ return Bun.serve({
         const b = await readBody<{ url?: unknown; expectId?: unknown }>(req);
         const r = await installPluginFromUrl(String(b.url ?? ""), String(b.expectId ?? ""), { beforeSwitch: async (id) => { await plugins.stop(id); } });
         return json({ ok: true, data: r.ok ? { ok: true, id: r.id, version: r.version } : r });
+      }
+      // P-PLUGINS.7 (ADR-0486): a private install from a .lplugin.zip the user picked. inspect-file reads it
+      // and installs nothing; install-file installs exactly the bytes the user reviewed (sha256) and, when
+      // unsigned, only with acceptUnsigned. Same gates and runtime as a store install.
+      if (p === "/api/plugins/inspect-file" && req.method === "POST") {
+        srv.timeout(req, 0);
+        const b = await readBody<{ path?: unknown }>(req);
+        return json({ ok: true, data: inspectPluginFile(String(b.path ?? "")) });
+      }
+      if (p === "/api/plugins/install-file" && req.method === "POST") {
+        srv.timeout(req, 0);
+        const b = await readBody<{ path?: unknown; sha256?: unknown; acceptUnsigned?: unknown }>(req);
+        const r = await installPluginFile(String(b.path ?? ""), { sha256: String(b.sha256 ?? ""), acceptUnsigned: b.acceptUnsigned === true }, { beforeSwitch: async (id) => { await plugins.stop(id); } });
+        return json({ ok: true, data: r.ok ? { ok: true, id: r.id, version: r.version, signed: r.signed } : r });
       }
       if (p === "/api/plugins/start" && req.method === "POST") {
         const b = await readBody<{ id?: unknown }>(req);

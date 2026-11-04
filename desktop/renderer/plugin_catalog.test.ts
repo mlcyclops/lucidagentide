@@ -8,8 +8,8 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
-  FREE_PLUGINS, PREMIUM_PLUGINS, cardActionLabel, decideCardAction, isNewerVersion, parseCageOrUei, parseTierPref, sortFree,
-  type CardFacts, type PremiumPlugin,
+  FREE_PLUGINS, PREMIUM_PLUGINS, cardActionLabel, decideCardAction, isNewerVersion, parseCageOrUei, parseTierPref, provenanceChip, sortFree,
+  storeInstalledVersion, type CardFacts, type InstalledFacts, type PremiumPlugin,
 } from "./plugin_catalog.ts";
 import type { Entitlement, GovAccessStatus } from "../../harness/market/entitlement.ts";
 
@@ -36,6 +36,8 @@ const CONTRACT: Record<string, { section: "civilian" | "government"; lookupKey: 
   homeschooltutor: { section: "civilian", lookupKey: "PLG-HST-OTF" },
   "tactical-genai-trainer": { section: "civilian", lookupKey: "PLG-TGT-OTF" },
   "lucid-meeting-hub": { section: "civilian", lookupKey: "PLG-MEETHUB-OTF" },
+  // ADR-0486: listed Coming soon; the entitlements catalog gains this key when the signed build is on sale.
+  "remote-spokes": { section: "civilian", lookupKey: "PLG-REMOTESPOKES-OTF" },
   "rapid-survey": { section: "government", lookupKey: "PLG-RAPID-OTF" },
   "quantum-cloak": { section: "government", lookupKey: "PLG-QCLOAK-OTF" },
   leaps: { section: "civilian", lookupKey: null },
@@ -95,7 +97,7 @@ describe("decideCardAction", () => {
 
   test("only the packaged and verified plugins are on sale", () => {
     expect(sold.map((p) => p.id).sort()).toEqual(["agentictrade187", "myhome", "pathfinder", "quantum-cloak"]);
-    expect(unavailable.map((p) => p.id).sort()).toEqual(["homeschooltutor", "lucid-meeting-hub", "rapid-survey", "tactical-genai-trainer"]);
+    expect(unavailable.map((p) => p.id).sort()).toEqual(["homeschooltutor", "lucid-meeting-hub", "rapid-survey", "remote-spokes", "tactical-genai-trainer"]);
   });
 
   test("an unavailable plugin is Coming soon whatever the facts: never Buy, Request access, Install or Update", () => {
@@ -153,6 +155,26 @@ describe("decideCardAction", () => {
   });
 });
 
+describe("private installs next to the store (ADR-0486)", () => {
+  const priv = (over: Partial<InstalledFacts> = {}): InstalledFacts => ({ id: "pathfinder", version: "1.0.0", source: "private", signed: false, ...over });
+
+  test("a private copy is never the purchased package: the store card neither opens nor updates it", () => {
+    const p = PREMIUM_PLUGINS.find((x) => x.id === "pathfinder")!;
+    expect(storeInstalledVersion(priv())).toBeNull();
+    expect(storeInstalledVersion(priv({ source: "catalog" }))).toBe("1.0.0");
+    expect(storeInstalledVersion(undefined)).toBeNull();
+    const ent = owned({ latestVersion: "2.0.0" });
+    expect(decideCardAction(p, facts({ entitlement: ent, installedVersion: storeInstalledVersion(priv()) })).kind).toBe("install");
+    expect(decideCardAction(p, facts({ entitlement: ent, installedVersion: storeInstalledVersion(priv({ source: "catalog" })) }))).toEqual({ kind: "update", to: "2.0.0" });
+  });
+
+  test("the provenance chip always names a private unsigned install", () => {
+    expect(provenanceChip(priv())).toEqual({ tone: "warn", label: "Private, unsigned" });
+    expect(provenanceChip(priv({ signed: true }))).toEqual({ tone: "ok", label: "Private, signed by TECHLEAD 187 LLC" });
+    expect(provenanceChip(priv({ source: "catalog", signed: true }))).toEqual({ tone: "ok", label: "LUCID store" });
+  });
+});
+
 describe("isNewerVersion", () => {
   test("numeric semver, prereleases below their release, garbage never newer", () => {
     expect(isNewerVersion("0.10.0", "0.9.9")).toBe(true);
@@ -166,11 +188,13 @@ describe("isNewerVersion", () => {
 });
 
 describe("drawer preferences and forms", () => {
-  test("the toggle defaults to PREMIUM; only an explicit FREE sticks", () => {
+  test("the toggle defaults to PREMIUM; only an explicit FREE or INSTALLED sticks", () => {
     expect(parseTierPref(null)).toBe("premium");
     expect(parseTierPref("")).toBe("premium");
     expect(parseTierPref("FREE")).toBe("premium");
     expect(parseTierPref("free")).toBe("free");
+    expect(parseTierPref("installed")).toBe("installed");
+    expect(parseTierPref("private")).toBe("premium");
   });
 
   test("CAGE or UEI: 5 or 12 alphanumerics, blank allowed", () => {

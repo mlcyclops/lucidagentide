@@ -578,7 +578,7 @@ export interface KbPackImportView {
 // running kind is opened at `url` (http://localhost:<port>/, the plugin's own loopback origin).
 export type PluginKind = "web" | "server" | "daemon";
 export type PluginState = "installed" | "running" | "starting" | "error";
-export type PluginGate = "manifest" | "hash" | "signature" | "authenticode" | "scan" | "download";
+export type PluginGate = "manifest" | "hash" | "signature" | "authenticode" | "scan" | "download" | "private";
 export interface InstalledPluginView {
   id: string; name: string; version: string; kind: PluginKind;
   tier: "premium" | "free"; section: "civilian" | "government";
@@ -587,10 +587,22 @@ export interface InstalledPluginView {
   license: string;
   /** The plugin registers agent tools (MCP) while it runs. */
   hasMcp: boolean;
+  /** ADR-0486: installed from the store, or privately from a file the user picked. */
+  source: "catalog" | "private";
+  /** Signed by a publisher key baked into this build. */
+  signed: boolean;
 }
 export interface PluginsListView { plugins: InstalledPluginView[] }
 export type PluginInstallView =
-  | { ok: true; id: string; version: string }
+  | { ok: true; id: string; version: string; signed?: boolean }
+  | { ok: false; gate: PluginGate; reason: string; logPath?: string };
+/** P-PLUGINS.7 (ADR-0486): what a picked `.lplugin.zip` is, before anything installs. `sha256` names the
+ *  reviewed bytes; `replaces` is the installed private version it would replace. */
+export type PluginFileInspectView =
+  | {
+    ok: true; id: string; name: string; version: string; publisher: string; kind: PluginKind;
+    permissions: string[]; hasMcp: boolean; signed: boolean; keyId?: string; sha256: string; replaces: string | null;
+  }
   | { ok: false; gate: PluginGate; reason: string; logPath?: string };
 export type PluginStartView = { ok: true; url: string } | { ok: false; error: string };
 export type PluginActionView = { ok: true } | { ok: false; error: string };
@@ -1189,6 +1201,9 @@ export interface LucidBridge {
   // P-PLUGINS.2 (ADR-0462): install (every gate fail-closed), run, stop and remove `.lplugin` plugins.
   pluginsList(): Promise<PluginsListView | null>;
   pluginsInstallFromUrl(url: string, expectId: string): Promise<PluginInstallView | null>;
+  // P-PLUGINS.7 (ADR-0486): a private install from a picked file, in two explicit steps.
+  pluginsInspectFile(path: string): Promise<PluginFileInspectView | null>;
+  pluginsInstallFile(input: { path: string; sha256: string; acceptUnsigned: boolean }): Promise<PluginInstallView | null>;
   pluginsStart(id: string): Promise<PluginStartView | null>;
   pluginsStop(id: string): Promise<PluginActionView | null>;
   /** keepData defaults to true: the plugin's data dir survives unless the user asks to delete it. */
@@ -1988,6 +2003,8 @@ export const bridge: LucidBridge = {
   kbPackInstallFromUrl: (url) => post("/api/kb/pack/install-from-url", { url }),
   pluginsList: () => getData("/api/plugins"),
   pluginsInstallFromUrl: (url, expectId) => post("/api/plugins/install-from-url", { url, expectId }),
+  pluginsInspectFile: (path) => post("/api/plugins/inspect-file", { path }),
+  pluginsInstallFile: (input) => post("/api/plugins/install-file", input),
   pluginsStart: (id) => post("/api/plugins/start", { id }),
   pluginsStop: (id) => post("/api/plugins/stop", { id }),
   pluginsUninstall: (id, keepData = true) => post("/api/plugins/uninstall", { id, keepData }),

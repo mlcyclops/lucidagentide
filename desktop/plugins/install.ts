@@ -16,12 +16,19 @@
 // version pointer: written to a temp file and renamed), userData/plugin-data/<id>/ (the plugin's state,
 // kept across updates and, unless asked, across uninstall). Every attempt is appended to
 // ~/.omp/lucid-plugins.jsonl.
+//
+// P-PLUGINS.7 (ADR-0486): a PRIVATE install from a local `.lplugin.zip` the user picked. The same bytes go
+// through the same gates and the same runtime; on top, the private path admits only free, civilian plugins
+// whose id is not a store plugin on sale (premium needs a license, Government needs verified access, both
+// only from the store), an unsigned package only after the user accepted the unsigned warning for exactly
+// the bytes they reviewed (sha256), and it never replaces a store install. `current.json` records the
+// source, so the store card never mistakes a private copy for the purchased one and nothing updates it.
 
 import { randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
-import type { TrustedPackKey } from "../../harness/kb/pack.ts";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { sha256Bytes, type TrustedPackKey } from "../../harness/kb/pack.ts";
 import { DEFAULT_POLICY, scanAndDecide, type GateDecision } from "../../harness/security/gate.ts";
 import { readAllZipEntries } from "../../harness/personal/unzip.ts";
 import {
@@ -35,6 +42,7 @@ import { managedConfig, type ManagedEgressPolicy } from "../managed_config.ts";
 import { isScannerUnavailable } from "../kb_pack.ts";
 import { kbScanner } from "../kb_store.ts";
 import { recordBlock } from "../security_log.ts";
+import { PREMIUM_PLUGINS } from "../renderer/plugin_catalog.ts"; // pure data, DOM-free
 
 /** Download ceiling (compressed) and expansion ceiling (uncompressed). */
 export const MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024;
@@ -52,6 +60,9 @@ export function pluginDataDir(id: string): string { return join(process.env.LUCI
 /** The attempt log the contract names: ~/.omp/lucid-plugins.jsonl. */
 export function pluginLogPath(): string { return process.env.LUCID_PLUGIN_LOG_PATH || join(homedir(), ".omp", "lucid-plugins.jsonl"); }
 
+/** Where an install came from: the store's signed download, or a file the user picked (ADR-0486). */
+export type PluginSource = "catalog" | "private";
+
 export interface InstalledPlugin {
   manifest: PluginManifest;
   /** The installed package folder (read-only to the plugin: LUCID_PLUGIN_ROOT). */
@@ -59,9 +70,10 @@ export interface InstalledPlugin {
   installedAt: string;
   signed: boolean;
   keyId?: string;
+  source: PluginSource;
 }
 
-interface CurrentPointer { id: string; version: string; installedAt: string; signed: boolean; keyId?: string }
+interface CurrentPointer { id: string; version: string; installedAt: string; signed: boolean; keyId?: string; source?: PluginSource }
 
 /** The installed, current version of `id`, or null when absent or unreadable. Re-validates the manifest. */
 export function readInstalled(id: string, root = pluginsRoot()): InstalledPlugin | null {
@@ -74,7 +86,8 @@ export function readInstalled(id: string, root = pluginsRoot()): InstalledPlugin
   try { raw = JSON.parse(readFileSync(join(dir, PLUGIN_MANIFEST), "utf8")); } catch { return null; }
   const v = validatePluginManifest(raw, { requireFiles: true });
   if (!v.ok || v.manifest.id !== id || v.manifest.version !== ptr.version) return null;
-  return { manifest: v.manifest, dir, installedAt: String(ptr.installedAt ?? ""), signed: !!ptr.signed, keyId: ptr.keyId };
+  // A pointer written before ADR-0486 has no source: the store download was then the only install path.
+  return { manifest: v.manifest, dir, installedAt: String(ptr.installedAt ?? ""), signed: !!ptr.signed, keyId: ptr.keyId, source: ptr.source === "private" ? "private" : "catalog" };
 }
 
 export function listInstalled(root = pluginsRoot()): InstalledPlugin[] {
@@ -111,6 +124,8 @@ export interface InstallDeps {
   beforeSwitch?: (id: string) => Promise<void>;
   record?: (b: { tool: string; severity?: string; findings?: string; reason: string }) => void;
   root?: string;
+  /** Recorded in the version pointer; default catalog. Only installPluginFile passes private. */
+  source?: PluginSource;
 }
 
 /** Append one attempt to ~/.omp/lucid-plugins.jsonl. Never throws. The URL is logged without its query
@@ -181,6 +196,99 @@ export async function installPluginFromUrl(url: string, expectId: string, deps: 
   const r = await installPluginBytes(d.bytes, expectId, deps);
   if (!r.ok) return fail(r.gate, r.reason);
   logPluginAttempt({ action: "install", source, expectId, ok: true, id: r.id, version: r.version, signed: r.signed, keyId: r.keyId, ms: Date.now() - startedAt });
+  return r;
+}
+
+// ── private install from a file (ADR-0486) ──────────────────────────────────────────────────────────
+
+/** Store plugins on sale install only from their card: the store checks the license and, for Government,
+ *  verified access. A coming-soon card's id stays open to a private build until it goes on sale. */
+const STORE_IDS = new Set(PREMIUM_PLUGINS.filter((p) => p.sale === "buy" && p.available).map((p) => p.id));
+
+/** Why the private path refuses this verified package, or null. Pure. The Premium/Free and Civilian/
+ *  Government rules stay with the store: a private install is free and civilian, and never displaces a
+ *  store install (the user removes that first). */
+export function privatePluginProblem(m: PluginManifest, installed: InstalledPlugin | null): string | null {
+  if (m.tier !== "free") return "a premium plugin installs only from the LUCID store, where its license is checked";
+  if (m.section !== "civilian") return "a Government plugin installs only from the LUCID store, after government access is verified";
+  if (STORE_IDS.has(m.id)) return `"${m.id}" is a LUCID store plugin; install it from its card`;
+  if (installed?.source === "catalog") return `"${m.id}" is installed from the LUCID store; remove it before installing a private copy`;
+  return null;
+}
+
+/** What the confirmation sheet shows before a private install. `sha256` names exactly these bytes, so the
+ *  install can refuse a file that changed after the user reviewed it. `replaces` is the installed private
+ *  version this would replace (null when none). */
+export type PluginFileInspect =
+  | {
+    ok: true; id: string; name: string; version: string; publisher: string; kind: PluginManifest["kind"];
+    permissions: string[]; hasMcp: boolean; signed: boolean; keyId?: string; sha256: string; replaces: string | null;
+  }
+  | { ok: false; gate: PluginGate; reason: string; logPath?: string };
+
+function readPackageFile(path: string): { ok: true; bytes: Buffer } | { ok: false; reason: string } {
+  if (!path || !isAbsolute(path)) return { ok: false, reason: "choose a .lplugin.zip file" };
+  if (!/\.zip$/i.test(path)) return { ok: false, reason: "a plugin package is a .lplugin.zip file" };
+  let size: number;
+  try { const st = statSync(path); if (!st.isFile()) return { ok: false, reason: "that is not a file" }; size = st.size; }
+  catch { return { ok: false, reason: "that file does not exist" }; }
+  if (size > MAX_DOWNLOAD_BYTES) return { ok: false, reason: `package is ${size} bytes, over the ${MAX_DOWNLOAD_BYTES}-byte limit` };
+  try { return { ok: true, bytes: readFileSync(path) }; } catch (e) { return { ok: false, reason: `could not read the file: ${(e as Error).message}` }; }
+}
+
+/** Every gate that needs no disk write: zip, manifest, hashes, signature (when present), the private rules. */
+function inspectPluginBytes(bytes: Buffer, deps: InstallDeps): PluginFileInspect {
+  let entries: { name: string; data: Buffer }[];
+  try { entries = readAllZipEntries(bytes, { maxTotalBytes: MAX_EXPANDED_BYTES }); }
+  catch (e) { return { ok: false, gate: "manifest", reason: `not a valid .lplugin.zip: ${(e as Error).message}` }; }
+  let id = "";
+  try {
+    const raw: unknown = JSON.parse(entries.find((e) => e.name === PLUGIN_MANIFEST)?.data.toString("utf8") ?? "");
+    if (raw && typeof raw === "object" && "id" in raw && typeof raw.id === "string") id = raw.id;
+  } catch { /* refused just below */ }
+  if (!ID_RE.test(id)) return { ok: false, gate: "manifest", reason: `the package has no valid ${PLUGIN_MANIFEST} id` };
+  const check = verifyPluginEntries(entries, { expectId: id, trusted: deps.trusted ?? trustedPluginKeys() });
+  if (!check.ok) return { ok: false, gate: check.gate, reason: check.reason };
+  const m = check.manifest;
+  const installed = readInstalled(id, deps.root ?? pluginsRoot());
+  const problem = privatePluginProblem(m, installed);
+  if (problem) return { ok: false, gate: "private", reason: problem };
+  return {
+    ok: true, id, name: m.name, version: m.version, publisher: m.publisher, kind: m.kind, permissions: [...(m.permissions ?? [])],
+    hasMcp: !!m.mcp, signed: check.signed, keyId: check.keyId, sha256: sha256Bytes(bytes), replaces: installed?.manifest.version ?? null,
+  };
+}
+
+function refusePrivate(deps: InstallDeps, path: string, startedAt: number, action: string, gate: PluginGate, reason: string): { ok: false; gate: PluginGate; reason: string; logPath: string } {
+  (deps.record ?? recordBlock)({ tool: "plugin_install", severity: "high", findings: gate, reason: `private plugin file refused at the ${gate} gate: ${reason}` });
+  return { ok: false, gate, reason, logPath: logPluginAttempt({ action, source: path, ok: false, gate, reason, ms: Date.now() - startedAt }) };
+}
+
+/** Step one of a private install: read the picked file and say what it is, installing nothing. */
+export function inspectPluginFile(path: string, deps: InstallDeps = {}): PluginFileInspect {
+  const startedAt = Date.now();
+  const f = readPackageFile(path);
+  if (!f.ok) return refusePrivate(deps, path, startedAt, "inspect-file", "private", f.reason);
+  const r = inspectPluginBytes(f.bytes, deps);
+  return r.ok ? r : refusePrivate(deps, path, startedAt, "inspect-file", r.gate, r.reason);
+}
+
+/** What the user confirmed on the sheet: the reviewed bytes, and (for an unsigned package) the warning. */
+export interface PluginFileConfirm { sha256: string; acceptUnsigned: boolean }
+
+/** Step two: install exactly the reviewed file, through every gate, recorded as a private install. */
+export async function installPluginFile(path: string, confirm: PluginFileConfirm, deps: InstallDeps = {}): Promise<InstallResult> {
+  const startedAt = Date.now();
+  const fail = (gate: PluginGate, reason: string): InstallResult => refusePrivate(deps, path, startedAt, "install-file", gate, reason);
+  const f = readPackageFile(path);
+  if (!f.ok) return fail("private", f.reason);
+  if (!confirm.sha256 || sha256Bytes(f.bytes) !== confirm.sha256) return fail("private", "the file changed after you reviewed it; choose it again");
+  const seen = inspectPluginBytes(f.bytes, deps);
+  if (!seen.ok) return fail(seen.gate, seen.reason);
+  if (!seen.signed && confirm.acceptUnsigned !== true) return fail("signature", "an unsigned package installs only after you accept the unsigned warning");
+  const r = await installPluginBytes(f.bytes, seen.id, { ...deps, source: "private" });
+  if (!r.ok) return fail(r.gate, r.reason);
+  logPluginAttempt({ action: "install-file", source: path, ok: true, id: r.id, version: r.version, signed: r.signed, keyId: r.keyId, ms: Date.now() - startedAt });
   return r;
 }
 
@@ -255,7 +363,7 @@ export async function installPluginBytes(bytes: Buffer, expectId: string, deps: 
     let displaced: string | null = null;
     if (existsSync(target)) { displaced = join(pluginDir, `.old-${randomBytes(6).toString("hex")}`); renameSync(target, displaced); }
     renameSync(staging, target);
-    const ptr: CurrentPointer = { id: manifest.id, version: manifest.version, installedAt: new Date().toISOString(), signed: check.signed, keyId: check.keyId };
+    const ptr: CurrentPointer = { id: manifest.id, version: manifest.version, installedAt: new Date().toISOString(), signed: check.signed, keyId: check.keyId, source: deps.source ?? "catalog" };
     const tmp = join(pluginDir, `.current-${randomBytes(4).toString("hex")}.json`);
     writeFileSync(tmp, JSON.stringify(ptr, null, 2));
     renameSync(tmp, join(pluginDir, "current.json"));

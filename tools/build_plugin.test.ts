@@ -94,8 +94,12 @@ describe("publisher key", () => {
   });
 
   test("parseArgs", () => {
-    expect(parseArgs(["--src", "s", "--out", "o", "--key", "k"])).toEqual({ src: "s", out: "o", key: "k", initKey: false, help: false });
+    expect(parseArgs(["--src", "s", "--out", "o", "--key", "k"])).toEqual({ src: "s", out: "o", key: "k", initKey: false, help: false, unsigned: false });
     expect(parseArgs(["--init-key"]).initKey).toBe(true);
+    // ADR-0486: a private build is unsigned on purpose, never "signed by whatever key is lying around".
+    expect(parseArgs(["--src", "s", "--out", "o", "--unsigned"]).unsigned).toBe(true);
+    expect(() => parseArgs(["--src", "s", "--out", "o", "--unsigned", "--key", "k"])).toThrow();
+    expect(() => parseArgs(["--init-key", "--unsigned"])).toThrow();
     expect(() => parseArgs(["--bogus"])).toThrow();
     expect(() => parseArgs(["--src"])).toThrow();
   });
