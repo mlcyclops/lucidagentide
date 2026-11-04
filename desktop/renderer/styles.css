@@ -1334,6 +1334,15 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .plg-chip{font-family:var(--font);font-size:9.5px;font-weight:700;letter-spacing:.06em;border-radius:999px;padding:1.5px 7px;border:1px solid var(--line);color:var(--txt-3);background:var(--bg-3)}
 .plg-chip[data-status="featured"]{color:var(--accent-2);background:var(--accent-dim);border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
 .plg-chip[data-status="built-in"]{color:var(--green);background:rgb(var(--green-rgb) / .12);border-color:rgb(var(--green-rgb) / .35)}
+/* ADR-0486: the INSTALLED tab. A verified install reads green; a private unsigned one is amber, never quiet. */
+.plg-chip[data-status="verified"]{color:var(--green);background:rgb(var(--green-rgb) / .12);border-color:rgb(var(--green-rgb) / .35)}
+.plg-chip[data-status="unsigned"]{color:var(--amber-txt);background:rgb(var(--amber-rgb) / .14);border-color:rgb(var(--amber-rgb) / .5)}
+.plg-inst-head{display:flex;align-items:flex-start;gap:14px;margin:0 0 14px}
+.plg-inst-head .plg-lede{margin:0}
+.plg-warn{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid rgb(var(--amber-rgb) / .5);border-radius:10px;background:rgb(var(--amber-rgb) / .1);color:var(--txt)}
+.plg-warn .ic{flex:none;color:var(--amber);margin-top:1px}
+.plg-warn p{margin:0;font-size:12.5px;line-height:1.5}
+.plg-act[data-kind="remove"]{border-color:rgb(var(--red-rgb) / .5);background:rgb(var(--red-rgb) / .12)}
 .plg-pitch{margin:9px 0 0;font-size:13px;line-height:1.5;color:var(--txt-2)}
 .plg-lucid{margin:10px 0 0;padding:8px 10px;border-left:2px solid rgb(var(--accent-2-rgb) / .55);background:rgb(var(--accent-rgb) / .06);border-radius:0 8px 8px 0;
   font-size:12.5px;line-height:1.45;color:var(--txt-2)}

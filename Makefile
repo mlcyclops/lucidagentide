@@ -689,6 +689,10 @@ demo-P-DESIGN.1: ## P-DESIGN.1 (ADR-0154): the agent honors a workspace DESIGN.m
 demo-P-MARKET.1c: ## P-MARKET.1c (ADR-0446): live Role KG Pack title layout at desktop and narrow widths (the plugin modal it also covered was retired by ADR-0461); set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL for an isolated QA browser and engine
 	$(BUN) run desktop/scripts/demo_p_market_1c.mjs
 
+.PHONY: demo-P-PLUGINS.7
+demo-P-PLUGINS.7: ## P-PLUGINS.7 (ADR-0486): private plugin install from a file on a RUNNING engine (ENGINE=http://127.0.0.1:<port> TOKEN=<ui token>): tampered refused, unsigned needs acceptance, listed private+unsigned, opens, uninstalls; set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to also drive the drawer's Installed tab
+	$(BUN) run desktop/scripts/demo_p_plugins_7.mjs --engine $(ENGINE) --token $(TOKEN)
+
 .PHONY: demo-P-FIGMA.1
 demo-P-FIGMA.1: ## P-FIGMA.1 (ADR-0154): /figma — parse a Figma file URL → key, walk the doc → top frames (capped), build a design-board HTML with frames inlined as PNG data URLs (names escaped, only data:image src) for the sandboxed preview
 	$(BUN) run desktop/scripts/demo_p_figma_1.ts

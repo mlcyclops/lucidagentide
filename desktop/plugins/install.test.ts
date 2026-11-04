@@ -10,15 +10,17 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { sha256Bytes } from "../../harness/kb/pack.ts";
 import { zipEntries } from "../../harness/kb/zip.ts";
 import { readAllZipEntries } from "../../harness/personal/unzip.ts";
 import { signPluginManifest, type PluginManifest } from "../../harness/plugins/package.ts";
 import { authenticodeVerdict } from "./authenticode.ts";
 import { CLEAN, buildServerFixture, testKey } from "./fixtures.ts";
 import {
-  downloadUrlProblem, installPluginBytes, installPluginFromUrl, listInstalled, pluginDataDir, pluginLogPath, readInstalled,
-  readPluginLicense, uninstallPlugin, type InstallDeps,
+  downloadUrlProblem, inspectPluginFile, installPluginBytes, installPluginFile, installPluginFromUrl, listInstalled, pluginDataDir,
+  pluginLogPath, readInstalled, readPluginLicense, uninstallPlugin, type InstallDeps,
 } from "./install.ts";
+import { PluginRuntime } from "./runtime.ts";
 
 const KEY = testKey();
 const ENV_KEYS = ["LUCID_PLUGINS_DIR", "LUCID_PLUGIN_DATA_DIR", "LUCID_PLUGIN_LOG_PATH", "LUCID_PLUGIN_DEV_LOOPBACK"] as const;
@@ -186,6 +188,7 @@ describe("install, update and uninstall", () => {
     expect(r).toEqual({ ok: true, id: "fixture-server", version: "0.1.0", signed: true, keyId: "test-publisher" });
     const p = readInstalled("fixture-server")!;
     expect(p.dir).toBe(join(process.env.LUCID_PLUGINS_DIR!, "fixture-server", "0.1.0"));
+    expect(p.source).toBe("catalog");
     expect(existsSync(join(p.dir, "app", "server.cjs"))).toBe(true);
     expect(existsSync(join(p.dir, "signature"))).toBe(true);
     expect(existsSync(pluginDataDir("fixture-server"))).toBe(true);
@@ -222,5 +225,118 @@ describe("install, update and uninstall", () => {
   test("a free plugin may be unsigned; when it IS signed the signature must still verify", async () => {
     expect(await installPluginBytes(buildServerFixture(null, { tier: "free" }), "fixture-server", deps())).toMatchObject({ ok: true, signed: false });
     expect(await installPluginBytes(buildServerFixture(testKey("stranger"), { tier: "free" }), "fixture-server", deps())).toMatchObject({ ok: false, gate: "signature" });
+  });
+
+  test("a pointer written before ADR-0486 (no source) reads as a store install", async () => {
+    expect((await installPluginBytes(buildServerFixture(KEY), "fixture-server", deps())).ok).toBe(true);
+    const ptrPath = join(process.env.LUCID_PLUGINS_DIR!, "fixture-server", "current.json");
+    const ptr: Record<string, unknown> = JSON.parse(readFileSync(ptrPath, "utf8"));
+    expect(ptr.source).toBe("catalog");
+    delete ptr.source;
+    writeFileSync(ptrPath, JSON.stringify(ptr));
+    expect(readInstalled("fixture-server")?.source).toBe("catalog");
+  });
+});
+
+// P-PLUGINS.7 (ADR-0486): a private install from a file the user picked. Same gates and runtime as a store
+// install; only the explicit two-step path installs it, the reviewed bytes are pinned by sha256, an unsigned
+// package needs the unsigned acceptance, and the store's Premium/Free and Civilian/Government rules hold.
+describe("private install from a file", () => {
+  const onDisk = (zip: Buffer, name = "fixture-server-0.1.0.lplugin.zip"): string => { const p = join(work, name); writeFileSync(p, zip); return p; };
+  const inspected = (path: string) => {
+    const v = inspectPluginFile(path, deps());
+    if (!v.ok) throw new Error(`inspect refused at ${v.gate}: ${v.reason}`);
+    return v;
+  };
+
+  test("an unsigned plugin installs only through the explicit path, shows as unsigned, opens through the runtime, and uninstalls", async () => {
+    const zip = buildServerFixture(null, { tier: "free" });
+    const path = onDisk(zip);
+
+    const v = inspected(path);
+    expect(v).toMatchObject({ id: "fixture-server", name: "Fixture Server", version: "0.1.0", kind: "server", signed: false, hasMcp: true, replaces: null, sha256: sha256Bytes(zip) });
+    expect(v.permissions).toEqual(["network:loopback", "fs:plugin-data"]);
+    expect(nothingInstalled()).toBe(true); // inspecting installs nothing
+
+    expect(await installPluginFile(path, { sha256: v.sha256, acceptUnsigned: false }, deps())).toMatchObject({ ok: false, gate: "signature" });
+    expect(await installPluginFile(path, { sha256: "", acceptUnsigned: true }, deps())).toMatchObject({ ok: false, gate: "private" });
+    expect(nothingInstalled()).toBe(true);
+
+    expect(await installPluginFile(path, { sha256: v.sha256, acceptUnsigned: true }, deps())).toMatchObject({ ok: true, id: "fixture-server", version: "0.1.0", signed: false });
+    expect(readInstalled("fixture-server")).toMatchObject({ source: "private", signed: false });
+
+    const rt = new PluginRuntime({ nodeExe: () => process.execPath, agentBin: () => "C:/lucid/omp.exe", onMcpChange: () => {} });
+    try {
+      expect(rt.list()).toMatchObject([{ id: "fixture-server", source: "private", signed: false, state: "installed" }]);
+      const started = await rt.start("fixture-server");
+      if (!started.ok) throw new Error(started.error);
+      expect(new URL(started.url).hostname).toMatch(/^(localhost|127\.0\.0\.1)$/);
+      const health = await (await fetch(`http://127.0.0.1:${new URL(started.url).port}/api/health`)).json() as Record<string, unknown>;
+      expect(health).toMatchObject({ ok: true, id: "fixture-server", agent: "C:/lucid/omp.exe" });
+      expect(await rt.stop("fixture-server")).toEqual({ ok: true });
+    } finally { await rt.stopAll(); }
+
+    expect(uninstallPlugin("fixture-server", true)).toEqual({ ok: true });
+    expect(nothingInstalled()).toBe(true);
+    const actions = readFileSync(pluginLogPath(), "utf8").trim().split("\n").map((l) => JSON.parse(l) as { action: string; ok: boolean; gate?: string });
+    expect(actions.filter((a) => a.action === "install-file" || a.action === "uninstall").map((a) => `${a.action}:${a.ok ? "ok" : a.gate}`)).toEqual(["install-file:signature", "install-file:private", "install-file:ok", "uninstall:ok"]);
+  }, 60_000);
+
+  test("a tampered package is refused at inspect and at install, and nothing installs", async () => {
+    const tampered = rezip(buildServerFixture(null, { tier: "free" }), (es) => es.map((e) => e.name === "app/server.cjs" ? { ...e, data: Buffer.from(e.data.toString() + "\n// injected") } : e));
+    const path = onDisk(tampered);
+    expect(inspectPluginFile(path, deps())).toMatchObject({ ok: false, gate: "hash" });
+    expect(await installPluginFile(path, { sha256: sha256Bytes(tampered), acceptUnsigned: true }, deps())).toMatchObject({ ok: false, gate: "hash" });
+    // A signature that does not verify is refused, never shown as "unsigned".
+    const stranger = onDisk(buildServerFixture(testKey("stranger"), { tier: "free" }), "stranger.lplugin.zip");
+    expect(inspectPluginFile(stranger, deps())).toMatchObject({ ok: false, gate: "signature" });
+    expect(nothingInstalled()).toBe(true);
+  });
+
+  test("the file the user reviewed is the file that installs", async () => {
+    const path = onDisk(buildServerFixture(null, { tier: "free" }));
+    const v = inspected(path);
+    writeFileSync(path, buildServerFixture(null, { tier: "free", version: "0.2.0" }));
+    const r = await installPluginFile(path, { sha256: v.sha256, acceptUnsigned: true }, deps());
+    expect(r).toMatchObject({ ok: false, gate: "private" });
+    expect(r.ok ? "" : r.reason).toContain("changed");
+    expect(nothingInstalled()).toBe(true);
+  });
+
+  test("the store's rules hold: no premium, no Government, no on-sale store id, never over a store install", async () => {
+    const premium = onDisk(buildServerFixture(KEY), "premium.lplugin.zip"); // signed by the trusted key, still premium
+    expect(inspectPluginFile(premium, deps())).toMatchObject({ ok: false, gate: "private" });
+    const gov = onDisk(buildServerFixture(null, { tier: "free", section: "government" }), "gov.lplugin.zip");
+    expect(inspectPluginFile(gov, deps())).toMatchObject({ ok: false, gate: "private" });
+    const onSale = onDisk(buildServerFixture(null, { tier: "free", id: "pathfinder" }), "pathfinder.lplugin.zip");
+    expect(inspectPluginFile(onSale, deps())).toMatchObject({ ok: false, gate: "private" });
+    // A coming-soon card's id is open to a private build until it goes on sale.
+    expect(inspectPluginFile(onDisk(buildServerFixture(null, { tier: "free", id: "remote-spokes" }), "remote-spokes.lplugin.zip"), deps())).toMatchObject({ ok: true, id: "remote-spokes", signed: false });
+
+    expect((await installPluginBytes(buildServerFixture(KEY), "fixture-server", deps())).ok).toBe(true); // a store install
+    const over = onDisk(buildServerFixture(null, { tier: "free" }));
+    const r = inspectPluginFile(over, deps());
+    expect(r).toMatchObject({ ok: false, gate: "private" });
+    expect(r.ok ? "" : r.reason).toContain("remove it");
+    expect(readInstalled("fixture-server")).toMatchObject({ source: "catalog", signed: true });
+
+    for (const bad of ["", "relative/p.lplugin.zip", join(work, "missing.lplugin.zip"), join(work, "notes.txt")]) {
+      expect(inspectPluginFile(bad, deps())).toMatchObject({ ok: false, gate: "private" });
+    }
+  });
+
+  test("a signed free plugin shows as signed; a newer file replaces the private copy and keeps its data", async () => {
+    const first = onDisk(buildServerFixture(KEY, { tier: "free" }));
+    const v = inspected(first);
+    expect(v).toMatchObject({ signed: true, keyId: "test-publisher" });
+    expect(await installPluginFile(first, { sha256: v.sha256, acceptUnsigned: false }, deps())).toMatchObject({ ok: true, signed: true });
+    writeFileSync(join(pluginDataDir("fixture-server"), "state.json"), "{\"kept\":true}");
+
+    const next = onDisk(buildServerFixture(KEY, { tier: "free", version: "0.2.0" }), "fixture-server-0.2.0.lplugin.zip");
+    const v2 = inspected(next);
+    expect(v2.replaces).toBe("0.1.0");
+    expect(await installPluginFile(next, { sha256: v2.sha256, acceptUnsigned: false }, deps())).toMatchObject({ ok: true, version: "0.2.0" });
+    expect(readInstalled("fixture-server")).toMatchObject({ source: "private", signed: true, manifest: { version: "0.2.0" } });
+    expect(readFileSync(join(pluginDataDir("fixture-server"), "state.json"), "utf8")).toBe("{\"kept\":true}");
   });
 });

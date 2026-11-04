@@ -16158,6 +16158,11 @@ const pluginsFlyout = createPluginsFlyout({
   beginSignIn: () => beginSignIn(),
   pluginsList: () => bridge.pluginsList(),
   installFromUrl: (url, id) => bridge.pluginsInstallFromUrl(url, id),
+  // P-PLUGINS.7 (ADR-0486): the Installed tab's private install needs the native picker (desktop app only).
+  ...(bridge.isElectron ? { pickFile: (opts: Parameters<typeof bridge.pickFile>[0]) => bridge.pickFile(opts) } : {}),
+  inspectFile: (path) => bridge.pluginsInspectFile(path),
+  installFile: (input) => bridge.pluginsInstallFile(input),
+  uninstall: (id, keepData) => bridge.pluginsUninstall(id, keepData),
   start: (id) => bridge.pluginsStart(id),
   license: (id) => bridge.pluginsLicense(id),
   openExternal: (url) => void openAuthUrl(url),

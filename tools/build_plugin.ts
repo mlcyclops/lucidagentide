@@ -12,11 +12,11 @@
 // KEYS. `--init-key` creates the publisher keypair ONCE at ~/.omp/keys/lucid-plugin-publisher.key (PKCS#8
 // PEM, mode 0600, never in a repo) and bakes the PUBLIC half into harness/plugins/publisher_key.ts, the
 // IDE's only trusted premium publisher. It never overwrites an existing private key. A premium plugin is
-// never built unsigned; a free plugin is built unsigned only when no key file exists.
+// never built unsigned; a free plugin is built unsigned when no key file exists or with --unsigned.
 //
 // Usage:
 //   bun tools/build_plugin.ts --init-key [--key <path>]
-//   bun tools/build_plugin.ts --src <plugin-stage dir> --out <dir> [--key <ed25519 private key path>]
+//   bun tools/build_plugin.ts --src <plugin-stage dir> --out <dir> [--key <ed25519 private key path> | --unsigned]
 
 import { createPrivateKey, createPublicKey, generateKeyPairSync, type KeyObject } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -36,11 +36,14 @@ export const BAKED_KEY_FILE = resolve(import.meta.dir, "..", "harness", "plugins
 /** The installer's ceiling, mirrored so the packer refuses what the IDE would refuse. */
 export const MAX_PACKAGE_BYTES = 1024 * 1024 * 1024;
 
-export interface BuildArgs { src?: string; out?: string; key?: string; initKey: boolean; help: boolean }
+/** `unsigned` (ADR-0486): build a free plugin unsigned even when a key file exists, for a private install. A
+ *  package signed by a key the IDE does not trust is refused, so a dev key on the build machine must not
+ *  sign a build meant for a shipped IDE. */
+export interface BuildArgs { src?: string; out?: string; key?: string; initKey: boolean; help: boolean; unsigned: boolean }
 
 /** Pure argument parser. Unknown flags throw (fail loud rather than silently mis-build). */
 export function parseArgs(argv: string[]): BuildArgs {
-  const a: BuildArgs = { initKey: false, help: false };
+  const a: BuildArgs = { initKey: false, help: false, unsigned: false };
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i]!;
     const value = (): string => { const v = argv[++i]; if (v == null) throw new Error(`${t} needs a value`); return v; };
@@ -49,8 +52,10 @@ export function parseArgs(argv: string[]): BuildArgs {
     else if (t === "--src") a.src = value();
     else if (t === "--out") a.out = value();
     else if (t === "--key") a.key = value();
+    else if (t === "--unsigned") a.unsigned = true;
     else throw new Error(`unknown argument: ${t}`);
   }
+  if (a.unsigned && (a.key || a.initKey)) throw new Error("--unsigned cannot be combined with --key or --init-key");
   return a;
 }
 
@@ -164,7 +169,11 @@ const USAGE = `build_plugin - the .lplugin packer (ADR-0462)
       and bake its public half into harness/plugins/publisher_key.ts.
 
   bun tools/build_plugin.ts --src <plugin-stage dir> --out <dir> [--key <path>]
-      Validate lucid-plugin.json (schema 1), hash every file, sign, and write <id>-<version>.lplugin.zip.`;
+      Validate lucid-plugin.json (schema 1), hash every file, sign, and write <id>-<version>.lplugin.zip.
+
+  bun tools/build_plugin.ts --src <plugin-stage dir> --out <dir> --unsigned
+      The same, unsigned even when a key file exists (free plugins only): a private build that a
+      shipped IDE installs from its Plugins drawer, Installed tab, marked unsigned (ADR-0486).`;
 
 function main(): void {
   const a = parseArgs(process.argv.slice(2));
@@ -177,7 +186,7 @@ function main(): void {
     return;
   }
   if (!a.out) throw new Error("--out is required");
-  const r = buildPlugin({ src: a.src!, out: a.out, privateKey: existsSync(keyPath) ? loadPrivateKey(keyPath) : undefined });
+  const r = buildPlugin({ src: a.src!, out: a.out, privateKey: !a.unsigned && existsSync(keyPath) ? loadPrivateKey(keyPath) : undefined });
   console.log(`built ${r.zipPath}`);
   console.log(`  ${r.manifest.id} ${r.manifest.version} (${r.manifest.tier}, ${r.manifest.kind}), ${r.files} files, ${r.bytes} bytes`);
   console.log(`  sha256 ${r.sha256}`);

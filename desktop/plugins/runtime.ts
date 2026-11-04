@@ -44,6 +44,8 @@ export interface PluginStatus {
   kind: PluginManifest["kind"]; tier: PluginManifest["tier"]; section: PluginManifest["section"];
   state: PluginState; url?: string; error?: string;
   license: string; hasMcp: boolean;
+  /** ADR-0486: a store install or a private one from a file, and whether a trusted publisher signed it. */
+  source: InstalledPlugin["source"]; signed: boolean;
 }
 
 export interface RuntimeDeps {
@@ -219,6 +221,7 @@ export class PluginRuntime {
         url: r?.state === "running" ? r.url : undefined,
         error: r?.state === "error" ? r.error : undefined,
         license: p.manifest.license, hasMcp: !!p.manifest.mcp,
+        source: p.source, signed: p.signed,
       };
     });
   }
