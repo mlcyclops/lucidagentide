@@ -15,7 +15,8 @@
 // sends changes it.
 //
 // A remote decision is valid only when the ENGINE verifies all of it: the approver's node certificate is signed
-// by the paired root, carries role `hub` and scope `approve`, is in date and not revoked (the newest CRL the
+// by the paired root (or, ADR-0477, by a delegate whose root-signed delegation it carries and whose limits it sits
+// inside), carries role `hub` and scope `approve`, is in date and not revoked (the newest CRL the
 // engine has seen, which only moves forward); the decision is signed by that certificate's key, names this lane,
 // this ask id and this ask's digest, is in date, and was made against a CRL no newer than the engine holds.
 // The controller only carries the bytes. It can deny on its own (refusing is always safe) but never approve.
@@ -200,8 +201,10 @@ export function verifyRemoteDecision(input: DecisionInput, rootSpki: string, hel
 }
 
 function checkDecision(input: DecisionInput, root: KeyObject, rootId: string, crl: CrlState, expected: Expected, nowSec: number): { ok: true; allow: boolean; approver: string; label: string } | { ok: false; reason: string } {
-  const cert = openCompact(input.cert, root);
-  if (!cert || cert.v !== 1 || cert.typ !== "lucid-node-cert" || cert.root !== rootId) return { ok: false, reason: "the approver certificate is not signed by the approver root" };
+  const opened = openApproverCert(input.cert, root, rootId, crl, nowSec);
+  if (!opened.ok) return opened;
+  const cert = opened.cert;
+  if (cert.v !== 1 || cert.typ !== "lucid-node-cert" || cert.root !== rootId) return { ok: false, reason: "the approver certificate is not signed by the approver root" };
   if (cert.role !== "hub" || !Array.isArray(cert.scopes) || !cert.scopes.includes("approve")) return { ok: false, reason: "the approver certificate does not carry the approve scope" };
   if (!isInt(cert.iat) || !isInt(cert.exp) || cert.iat > nowSec + CLOCK_SKEW_SEC || cert.exp <= nowSec) return { ok: false, reason: "the approver certificate is not in date" };
   if (typeof cert.serial !== "string" || crl.serials.includes(cert.serial)) return { ok: false, reason: "the approver certificate is revoked" };
@@ -215,4 +218,137 @@ function checkDecision(input: DecisionInput, root: KeyObject, rootId: string, cr
   if (!isInt(d.iat) || !isInt(d.exp) || d.iat > nowSec + CLOCK_SKEW_SEC || d.exp <= nowSec || d.exp - d.iat > MAX_DECISION_LIFETIME_SEC) return { ok: false, reason: "the decision is not in date" };
   if (!isInt(d.crl) || d.crl > crl.version) return { ok: false, reason: `the approver saw CRL v${String(d.crl)}; send that CRL with the decision` };
   return { ok: true, allow: d.allow, approver: cert.node, label: typeof cert.label === "string" ? cert.label.slice(0, 64) : "" };
+}
+
+// ── Delegated approver certificates (ADR-0477, amends ADR-0476) ────────────────────────────────────────
+//
+// The add-on's phase F2 lets the owner root certify a delegate (a team or site key) with powers and limits. The
+// delegate signs hub certificates inside them, and its root-signed delegation travels inside every certificate it
+// signs (`issuer`: the delegate id, `delegation`: the token). The engine accepts such a hub exactly when the
+// add-on's TrustStore.verifyCert would: the delegation is signed by the paired root, well formed, in date and not
+// revoked (its serial on the same root CRL); chain depth is one (a delegation signed by anyone but the root is
+// refused, so a delegate cannot delegate further); the delegation carries the `users` power; and the certificate
+// is well formed and sits inside the delegation's limits. Every check is repeated here, so a delegate that skips
+// its own checks still cannot exceed them. The root-signed path above is unchanged.
+
+const ROLES: readonly string[] = ["hub", "spoke"];
+const SCOPES: readonly string[] = ["recall", "drive", "approve"];
+const CLASSIFICATIONS: readonly string[] = ["private", "shareable", "cui"];
+const DELEGATE_POWERS: readonly string[] = ["users", "spokes", "custody", "enroll"];
+const MAX_DELEGATED_CERT_DAYS = 30;
+const MAX_DELEGATION_DAYS = 90;
+const NODE_RE = /^n_[0-9a-f]{32}$/;
+const LABEL_RE = /^[\x20-\x7e]{1,64}$/;
+const REGION_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const DOMAIN_RE = /^(?=.{1,190}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+const EMAIL_RE = /^[a-z0-9._%+-]{1,64}@(?=.{1,190}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+const CERT_KEYS = ["v", "typ", "serial", "root", "node", "role", "label", "spki", "scopes", "iat", "exp", "user", "classification", "region", "issuer", "delegation"];
+const DELEGATION_KEYS = ["v", "typ", "root", "serial", "id", "label", "spki", "may", "limits", "iat", "exp"];
+/** The add-on's delegation payload (remote-spoke/src/identity.ts `Delegation`), as `delegationProblem` admits it. */
+interface Delegation {
+  v: 1; typ: "lucid-delegation"; root: string; serial: string; id: string; label: string; spki: string; may: string[];
+  limits: { maxDays: number; roles?: string[]; scopes?: string[]; labelPrefix?: string; emailDomains?: string[]; regions?: string[]; classifications?: string[] };
+  iat: number; exp: number;
+}
+/** The user a delegated hub certificate names, as `userProblem` admits it. */
+interface UserClaim { id: string; email: string; name?: string; clearances?: string[] }
+/** Every limit list and what each entry must be. */
+const LIMIT_LISTS: Record<string, (s: string) => boolean> = {
+  roles: (s) => ROLES.includes(s),
+  scopes: (s) => SCOPES.includes(s),
+  emailDomains: (s) => DOMAIN_RE.test(s),
+  regions: (s) => REGION_RE.test(s),
+  classifications: (s) => CLASSIFICATIONS.includes(s),
+};
+
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+/** True when `o` has only `allowed` keys and every `required` one (the add-on's `exactKeys`). */
+const exactKeys = (o: Record<string, unknown>, allowed: readonly string[], required: readonly string[] = allowed): boolean =>
+  Object.keys(o).every((k) => allowed.includes(k)) && required.every((k) => k in o);
+/** A non-empty list of at most 32 distinct strings, each `good` (the add-on's limit-list rule). */
+const distinctList = (v: unknown, good: (s: string) => boolean): v is string[] =>
+  Array.isArray(v) && v.length > 0 && v.length <= 32 && new Set(v).size === v.length && v.every((s) => typeof s === "string" && good(s));
+
+type Opened = { ok: true; cert: Record<string, unknown> } | { ok: false; reason: string };
+
+/** The approver certificate's payload: root-signed (the ADR-0476 path), or signed by a delegate whose delegation
+ *  the root signed (ADR-0477). Dates, revocation, role, scope and key of the certificate itself are checked by
+ *  the caller on both paths. */
+function openApproverCert(token: unknown, root: KeyObject, rootId: string, crl: CrlState, nowSec: number): Opened {
+  const direct = openCompact(token, root);
+  if (direct) return { ok: true, cert: direct };
+  const notRoot: Opened = { ok: false, reason: "the approver certificate is not signed by the approver root" };
+  // Not root-signed: it may carry a root-signed delegation. Read it unverified only to find that delegation;
+  // the certificate is opened below with the delegation's key, which the root vouches for.
+  if (typeof token !== "string" || token.length > 8192) return notRoot;
+  let peek: unknown = null;
+  try { peek = JSON.parse(Buffer.from(token.split(".")[0] ?? "", "base64url").toString("utf8")); } catch { peek = null; }
+  if (!isObject(peek) || typeof peek.issuer !== "string" || typeof peek.delegation !== "string") return notRoot;
+
+  const del = openCompact(peek.delegation, root);
+  if (!del) return { ok: false, reason: "the approver certificate's delegation is not signed by the approver root" };
+  const malformed = delegationProblem(del, rootId);
+  if (malformed) return { ok: false, reason: `malformed delegation: ${malformed}` };
+  const d = del as unknown as Delegation;
+  if (d.iat > nowSec + CLOCK_SKEW_SEC || d.exp <= nowSec) return { ok: false, reason: "the approver certificate's delegation is not in date" };
+  if (crl.serials.includes(d.serial)) return { ok: false, reason: "the approver certificate's delegation is revoked" };
+  const delKey = p256FromSpki(d.spki);
+  if (!delKey || nodeIdOf(Buffer.from(d.spki, "base64url")) !== d.id) return { ok: false, reason: "the delegation key does not match its id" };
+
+  const c = openCompact(token, delKey);
+  if (!c) return { ok: false, reason: "the approver certificate is not signed by its delegation's key" };
+  if (c.issuer !== d.id) return { ok: false, reason: "the approver certificate names another issuer than its delegation" };
+  if (!exactKeys(c, CERT_KEYS, CERT_KEYS.slice(0, 11)) || typeof c.serial !== "string" || !SERIAL_RE.test(c.serial) || typeof c.node !== "string" || !NODE_RE.test(c.node)
+    || typeof c.label !== "string" || !LABEL_RE.test(c.label) || !isInt(c.iat) || !isInt(c.exp) || !Array.isArray(c.scopes) || !c.scopes.every((s: unknown) => typeof s === "string" && SCOPES.includes(s))
+    || c.classification !== undefined || c.region !== undefined) return { ok: false, reason: "malformed approver certificate" };
+  if (c.role !== "hub") return { ok: false, reason: "the approver certificate does not carry the approve scope" };
+
+  // The limits (the add-on's leafProblem for a hub).
+  const l = d.limits;
+  if (!d.may.includes("users")) return { ok: false, reason: "the approver certificate's delegation may not certify hubs (no users power)" };
+  if (l.roles && !l.roles.includes("hub")) return { ok: false, reason: "the approver certificate's delegation does not certify hubs" };
+  const allowed = l.scopes;
+  const extra = allowed ? c.scopes.filter((s: unknown) => !allowed.includes(String(s))) : [];
+  if (extra.length) return { ok: false, reason: `scope ${extra.join(", ")} is outside the approver certificate's delegation` };
+  if (c.exp - c.iat > l.maxDays * 86_400) return { ok: false, reason: `a delegated certificate lasts at most ${l.maxDays} days` };
+  if (c.iat + CLOCK_SKEW_SEC < d.iat || c.exp > d.exp) return { ok: false, reason: "a delegated certificate must sit inside its delegation's lifetime" };
+  if (l.labelPrefix !== undefined && !c.label.startsWith(l.labelPrefix)) return { ok: false, reason: `labels must start with "${l.labelPrefix}"` };
+  if (!isObject(c.user)) return { ok: false, reason: "a delegated hub certificate must name its user" };
+  const badUser = userProblem(c.user);
+  if (badUser) return { ok: false, reason: `malformed approver certificate: ${badUser}` };
+  const user = c.user as unknown as UserClaim;
+  if (l.emailDomains && !l.emailDomains.includes(user.email.slice(user.email.lastIndexOf("@") + 1))) return { ok: false, reason: `user ${user.email} is outside the delegation's email domains` };
+  const cleared = l.classifications;
+  const over = cleared && user.clearances ? user.clearances.filter((x) => !cleared.includes(x)) : [];
+  if (over.length) return { ok: false, reason: `clearance ${over.join(", ")} is outside the approver certificate's delegation` };
+  return { ok: true, cert: c };
+}
+
+/** Why a root-signed payload is not a well-formed delegation for this root (the add-on's delegationProblem), or null. */
+function delegationProblem(p: Record<string, unknown>, rootId: string): string | null {
+  if (!exactKeys(p, DELEGATION_KEYS) || p.v !== 1 || p.typ !== "lucid-delegation" || p.root !== rootId) return "wrong fields, type or root";
+  if (typeof p.serial !== "string" || !SERIAL_RE.test(p.serial) || typeof p.id !== "string" || !NODE_RE.test(p.id) || typeof p.label !== "string" || !LABEL_RE.test(p.label) || typeof p.spki !== "string") return "bad serial, id, label or key";
+  if (!isInt(p.iat) || !isInt(p.exp) || p.exp <= p.iat || p.exp - p.iat > MAX_DELEGATION_DAYS * 86_400) return `a delegation lasts at most ${MAX_DELEGATION_DAYS} days`;
+  const l = p.limits;
+  if (!isObject(l) || !exactKeys(l, ["maxDays", "labelPrefix", ...Object.keys(LIMIT_LISTS)], ["maxDays"])) return "limits are { maxDays, roles?, scopes?, labelPrefix?, emailDomains?, regions?, classifications? }";
+  if (!isInt(l.maxDays) || l.maxDays < 1 || l.maxDays > MAX_DELEGATED_CERT_DAYS) return `limits.maxDays must be 1 to ${MAX_DELEGATED_CERT_DAYS}`;
+  for (const [name, good] of Object.entries(LIMIT_LISTS)) {
+    if (l[name] !== undefined && !distinctList(l[name], good)) return `limits.${name} must be a non-empty list of distinct valid values`;
+  }
+  if (l.labelPrefix !== undefined && (typeof l.labelPrefix !== "string" || l.labelPrefix.length > 32 || !LABEL_RE.test(l.labelPrefix))) return "limits.labelPrefix must be 1 to 32 printable ASCII characters";
+  const may = p.may;
+  if (!distinctList(may, (m) => DELEGATE_POWERS.includes(m))) return `may must be a non-empty list from ${DELEGATE_POWERS.join(", ")}`;
+  if (may.includes("enroll") && (may.includes("users") || l.scopes !== undefined || (Array.isArray(l.roles) && l.roles.some((r: unknown) => r !== "spoke"))))
+    return "a delegation with the enroll power certifies spokes only";
+  return null;
+}
+
+/** Why a hub certificate's user claim is malformed (the add-on's userProblem), or null. */
+function userProblem(u: Record<string, unknown>): string | null {
+  if (!exactKeys(u, ["id", "email", "name", "clearances"], ["id", "email"])) return "a user claim is { id, email, name?, clearances? }";
+  if (typeof u.email !== "string" || !EMAIL_RE.test(u.email)) return "user email must be one lower-case address";
+  if (u.id !== `u_${createHash("sha256").update(u.email).digest("hex").slice(0, 32)}`) return "user id must be u_ and the first 32 hex of sha256(email)";
+  if (u.name !== undefined && (typeof u.name !== "string" || !LABEL_RE.test(u.name))) return "user name must be 1 to 64 printable ASCII characters";
+  if (u.clearances !== undefined && !distinctList(u.clearances, (c) => CLASSIFICATIONS.includes(c))) return "clearances must be a list of distinct classifications";
+  return null;
 }

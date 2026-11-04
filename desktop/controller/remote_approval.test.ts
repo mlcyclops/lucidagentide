@@ -241,3 +241,83 @@ test("verifyRemoteDecision accepts a newer CRL and never an older one", () => {
   const unseen = verifyRemoteDecision({ decision: decision(hub, "L", ask, true, { crl: 5 }), cert: c.token }, root.spki, { version: 3, serials: [] }, exp);
   expect(unseen.ok).toBe(false);
 });
+
+// ── ADR-0477: a hub certified by a delegate (the add-on's phase F2), chain depth one ──────────────────────
+describe("a delegate-certified hub is accepted exactly when the add-on's TrustStore would", () => {
+  const DAY = 86_400;
+  /** A delegation (the add-on's `issueDelegation` payload) for `del`, signed by `signer` (the root unless a test
+   *  forges depth two). */
+  function delegation(root: Node, del: Node, may: string[], limits: Record<string, unknown> = { maxDays: 30 }, over: Record<string, unknown> = {}, signer: KeyObject = root.priv) {
+    const serial = randomBytes(16).toString("hex");
+    return { serial, token: compact({ v: 1, typ: "lucid-delegation", root: root.id, serial, id: del.id, label: "team", spki: del.spki, may, limits, iat: now() - 60, exp: now() + 30 * DAY, ...over }, signer) };
+  }
+  /** A hub certificate the delegate signed (the add-on's `issueCert` with `delegation`): it names its user, its
+   *  issuer and carries the delegation token. */
+  function delegatedCert(root: Node, del: Node, delegationToken: string, hub: Node, scopes: string[], over: Record<string, unknown> = {}) {
+    const email = "ana@example.com";
+    const user = { id: `u_${new Bun.CryptoHasher("sha256").update(email).digest("hex").slice(0, 32)}`, email };
+    return compact({ v: 1, typ: "lucid-node-cert", serial: randomBytes(16).toString("hex"), root: root.id, node: hub.id, role: "hub", label: "test hub", spki: hub.spki, scopes, iat: now() - 10, exp: now() + 3600, user, issuer: del.id, delegation: delegationToken, ...over }, del.priv);
+  }
+  const ask: RemoteAsk = { id: "a1", digest: askDigest("fetch", "t", "null"), kind: "fetch", title: "t", input: "null", tier: "T2", reason: "", openedAt: 0, expiresAt: 0 };
+  const exp = { lane: "L", ask: "a1", digest: ask.digest };
+  const fresh = { version: 0, serials: [] };
+
+  test("a delegate-certified approve is accepted; the root-signed path still is", () => {
+    const root = key(), team = key(), hub = key();
+    const d = delegation(root, team, ["custody", "users"], { maxDays: 30, roles: ["hub"], scopes: ["approve", "recall"], emailDomains: ["example.com"], labelPrefix: "test" });
+    const v = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: delegatedCert(root, team, d.token, hub, ["approve", "recall"]) }, root.spki, fresh, exp);
+    expect(v).toMatchObject({ ok: true, allow: true, approver: hub.id, label: "test hub" });
+    const direct = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: cert(root, hub, ["approve"]).token }, root.spki, fresh, exp);
+    expect(direct.ok).toBe(true);
+  });
+
+  test("a delegation without the users power cannot certify an approver", () => {
+    const root = key(), team = key(), hub = key();
+    const d = delegation(root, team, ["custody", "spokes"]);
+    const v = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: delegatedCert(root, team, d.token, hub, ["approve"]) }, root.spki, fresh, exp);
+    expect(v.ok).toBe(false);
+    expect(!v.ok && v.reason).toContain("no users power");
+  });
+
+  test("certificate scopes, lifetime or user beyond the delegation's limits are refused", () => {
+    const root = key(), team = key(), hub = key();
+    const d = delegation(root, team, ["users"], { maxDays: 1, scopes: ["drive", "recall"], emailDomains: ["corp.example"] });
+    const outside = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: delegatedCert(root, team, d.token, hub, ["approve"]) }, root.spki, fresh, exp);
+    expect(!outside.ok && outside.reason).toContain("scope approve is outside");
+    const wide = delegation(root, team, ["users"], { maxDays: 1 });
+    const tooLong = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: delegatedCert(root, team, wide.token, hub, ["approve"], { exp: now() + 2 * DAY }) }, root.spki, fresh, exp);
+    expect(!tooLong.ok && tooLong.reason).toContain("at most 1 days");
+    const domains = delegation(root, team, ["users"], { maxDays: 30, emailDomains: ["corp.example"] });
+    const foreign = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: delegatedCert(root, team, domains.token, hub, ["approve"]) }, root.spki, fresh, exp);
+    expect(!foreign.ok && foreign.reason).toContain("email domains");
+    const noUser = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: delegatedCert(root, team, wide.token, hub, ["approve"], { user: undefined }) }, root.spki, fresh, exp);
+    expect(!noUser.ok && noUser.reason).toContain("must name its user");
+  });
+
+  test("a revoked delegation takes down every certificate it signed, from the held CRL or a newer one sent", () => {
+    const root = key(), team = key(), hub = key();
+    const d = delegation(root, team, ["users"]);
+    const c = delegatedCert(root, team, d.token, hub, ["approve"]);
+    const held = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: c }, root.spki, { version: 1, serials: [d.serial] }, exp);
+    expect(held).toEqual({ ok: false, reason: "the approver certificate's delegation is revoked" });
+    const sent = verifyRemoteDecision({ decision: decision(hub, "L", ask, true, { crl: 2 }), cert: c, crl: crlOf(root, 2, [d.serial]) }, root.spki, { version: 1, serials: [] }, exp);
+    expect(sent).toEqual({ ok: false, reason: "the approver certificate's delegation is revoked", crl: { version: 2, serials: [d.serial] } });
+  });
+
+  test("depth two is refused: a delegate cannot delegate further", () => {
+    const root = key(), team = key(), sub = key(), hub = key();
+    const first = delegation(root, team, ["users"]);
+    expect(verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: delegatedCert(root, team, first.token, hub, ["approve"]) }, root.spki, fresh, exp).ok).toBe(true);
+    // The team key signs a delegation for a sub-delegate, which then certifies the hub.
+    const second = delegation(root, sub, ["users"], { maxDays: 30 }, {}, team.priv);
+    const v = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: delegatedCert(root, sub, second.token, hub, ["approve"]) }, root.spki, fresh, exp);
+    expect(v).toEqual({ ok: false, reason: "the approver certificate's delegation is not signed by the approver root" });
+  });
+
+  test("an expired delegation is refused even when the certificate is still in date", () => {
+    const root = key(), team = key(), hub = key();
+    const d = delegation(root, team, ["users"], { maxDays: 30 }, { iat: now() - 10 * DAY, exp: now() - 60 });
+    const v = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: delegatedCert(root, team, d.token, hub, ["approve"]) }, root.spki, fresh, exp);
+    expect(v).toEqual({ ok: false, reason: "the approver certificate's delegation is not in date" });
+  });
+});
