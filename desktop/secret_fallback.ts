@@ -128,10 +128,15 @@ const run = (argv: string[]): { code: number; out: string } => {
   return { code: r.exitCode ?? 1, out: new TextDecoder().decode(r.stdout) };
 };
 
+/** whoami and icacls run by absolute System32 path. A bare `whoami.exe` resolves through PATH, and Git for
+ *  Windows' usr/bin (on PATH for many developers) ships a coreutils whoami.exe that rejects `/user`, which
+ *  made every private temp dir refuse on those machines. */
+const SYSTEM32 = join(process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows", "System32");
+
 let cachedUser: { name: string; sid: string } | null = null;
 function windowsUser(): { name: string; sid: string } {
   if (cachedUser) return cachedUser;
-  const r = run(["whoami.exe", "/user", "/fo", "csv", "/nh"]);
+  const r = run([join(SYSTEM32, "whoami.exe"), "/user", "/fo", "csv", "/nh"]);
   const who = r.code === 0 ? parseWhoamiUser(r.out) : null;
   if (!who) throw new FallbackRefused("could not identify the current Windows account to lock the file to it");
   cachedUser = who;
@@ -143,7 +148,7 @@ function windowsUser(): { name: string; sid: string } {
 export function restrictToUser(dir: string, platform: NodeJS.Platform = process.platform): void {
   if (platform !== "win32") { chmodSync(dir, 0o700); return; }
   const who = windowsUser();
-  const r = run(["icacls.exe", dir, "/inheritance:r", "/grant:r", `*${who.sid}:(OI)(CI)F`]);
+  const r = run([join(SYSTEM32, "icacls.exe"), dir, "/inheritance:r", "/grant:r", `*${who.sid}:(OI)(CI)F`]);
   if (r.code !== 0) throw new FallbackRefused("Windows refused to restrict the temp folder to your account");
 }
 
@@ -155,7 +160,7 @@ export function isUserOnly(path: string, platform: NodeJS.Platform = process.pla
       const uid = typeof process.getuid === "function" ? process.getuid() : -1;
       return (st.mode & 0o077) === 0 && (uid < 0 || st.uid === uid);
     }
-    const r = run(["icacls.exe", path]);
+    const r = run([join(SYSTEM32, "icacls.exe"), path]);
     return r.code === 0 && icaclsUserOnly(r.out, path, windowsUser());
   } catch {
     return false;
