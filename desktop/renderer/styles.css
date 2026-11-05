@@ -6510,6 +6510,22 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .rs-model-id{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rs-models>li .rs-chip{flex:none;font-family:inherit}
 .btn-mini.armed,.orbit-ghost-x.armed{color:var(--on-fill);background:var(--red);border-color:var(--red)}
+/* ADR-0490: alerts, host facts and Resume. The card's alert line is one ellipsized block; an alert row in the
+   hub section keeps its prose in ONE block span (invariant 11) beside flex:none buttons. Red for a spoke gone
+   silent, crashed or a turn cut off; amber for a restart that came back on its own. */
+.orbit-alert{font-size:10px;line-height:1.4;color:var(--red-txt,var(--red));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orbit-alert[data-kind="engine-restarted"],.orbit-alert[data-kind="agent-restarted"]{color:var(--amber-txt,var(--amber))}
+.rs-alerts{margin:0 0 8px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.rs-alert{display:flex;align-items:center;gap:6px;margin:0 4px 4px;padding:5px 8px;border:1px solid rgb(var(--red-rgb) / .4);
+  border-radius:9px;background:var(--red-dim)}
+.rs-alert[data-kind="engine-restarted"],.rs-alert[data-kind="agent-restarted"]{border-color:rgb(var(--amber-rgb) / .45);background:rgb(var(--amber-rgb) / .08)}
+.rs-alert-text{display:block;flex:1;min-width:0;font-size:11px;line-height:1.45;color:var(--txt-2)}
+.rs-alert-text>b{margin-right:4px;color:var(--txt)}
+.rs-alert .btn-mini,.rs-alert .orbit-ghost-x{flex:none;white-space:nowrap}
+.rs-alert-more{margin:0 4px;font-size:10.5px;color:var(--txt-4)}
+.rs-choice-main>small.rs-policy{color:var(--txt-4)}
+.rs-task.interrupted .orbit-ghost-id small{color:var(--amber-txt,var(--amber))}
+.rs-resume{color:var(--amber-txt,var(--amber))}
 
 /* P-FLEET.L17: the grid card header is now a takeover surface too (click = the orbit's spoke click;
    the grip alone keeps the reorder gesture). The pointer cursor says so; controls override it. */

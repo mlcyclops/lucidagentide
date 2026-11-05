@@ -30,7 +30,13 @@ export interface Pairing {
   /** P-CTRL-REMOTE.1 (ADR-0476): set by the human at pairing time, never by the controller. Its lanes run the
    *  tiered remote policy and accept decisions verified against `root`. */
   remote?: RemotePolicy;
+  /** ADR-0490: how many live lanes this pairing may hold (1 to PAIRING_LANES_MAX), set by the human at pairing
+   *  time from the spoke's lane policy. Absent: the ADR-0425 default of two (also every pairing stored before). */
+  maxLanes?: number;
 }
+
+/** ADR-0490: the most live lanes one pairing may be granted. */
+export const PAIRING_LANES_MAX = 8;
 
 export interface RemotePolicy {
   /** The owner root's P-256 public key, base64url SPKI DER. */
@@ -75,14 +81,15 @@ export class PairingStore {
   }
 
   /** Mint a pairing and its token. The token is returned ONCE and never stored in the clear. */
-  async pair(name: string, workspace: string, remote?: RemotePolicy): Promise<{ ok: true; pairing: Pairing; token: string } | { ok: false; error: string }> {
+  async pair(name: string, workspace: string, remote?: RemotePolicy, maxLanes?: number): Promise<{ ok: true; pairing: Pairing; token: string } | { ok: false; error: string }> {
     if (this.#broken) return { ok: false, error: this.#broken };
     if (!PAIRING_NAME_RE.test(name)) return { ok: false, error: "invalid pairing name" };
     if (this.#pairings.some((p) => p.name === name)) return { ok: false, error: "a pairing with that name exists" };
     if (remote && !isRemotePolicy(remote)) return { ok: false, error: "invalid remote policy" };
+    if (maxLanes !== undefined && !isLaneCount(maxLanes)) return { ok: false, error: `maxLanes must be an integer from 1 to ${PAIRING_LANES_MAX}` };
     const id = randomBytes(8).toString("hex");
     const token = `lucidctl_${id}_${randomBytes(32).toString("base64url")}`;
-    const pairing: Pairing = { id, name, workspace, hash: await Bun.password.hash(token, { algorithm: "argon2id" }), createdAt: new Date().toISOString(), lanes: [], ...(remote ? { remote } : {}) };
+    const pairing: Pairing = { id, name, workspace, hash: await Bun.password.hash(token, { algorithm: "argon2id" }), createdAt: new Date().toISOString(), lanes: [], ...(remote ? { remote } : {}), ...(maxLanes !== undefined ? { maxLanes } : {}) };
     this.#pairings.push(pairing);
     this.#save();
     return { ok: true, pairing, token };
@@ -174,7 +181,12 @@ function isPairing(v: unknown): v is Pairing {
   const p = v as Pairing;
   return !!p && typeof p.id === "string" && typeof p.name === "string" && typeof p.workspace === "string" && typeof p.hash === "string"
     && typeof p.createdAt === "string" && Array.isArray(p.lanes) && p.lanes.every((l) => typeof l === "string")
-    && (p.remote === undefined || isRemotePolicy(p.remote));
+    && (p.remote === undefined || isRemotePolicy(p.remote)) && (p.maxLanes === undefined || isLaneCount(p.maxLanes));
+}
+
+/** ADR-0490: a pairing's lane grant, an integer from 1 to PAIRING_LANES_MAX (the pair route, the store, the file). */
+export function isLaneCount(n: unknown): n is number {
+  return typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= PAIRING_LANES_MAX;
 }
 
 function isRemotePolicy(v: unknown): v is RemotePolicy {

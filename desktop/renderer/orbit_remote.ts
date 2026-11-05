@@ -13,6 +13,11 @@
 // free lanes and certificate region and classification; ineligible rows say why) and a Models section in the
 // per-spoke panel. Both start tasks through the same submit path as the panel's own "New task".
 //
+// ADR-0490: an alert line on each remote card (silent since, crashed, restarted, turn interrupted) and a
+// dismissible alert list in the Remote hub section (dismissals kept in localStorage by a key stable across polls);
+// host facts and the lane policy's why in the selector rows and the panel; a task a restart interrupted offers
+// Resume, armed like Approve, which sends RESUME_TEXT through the existing followup route. Nothing re-runs alone.
+//
 // Untrusted text rule: everything a spoke wrote reaches the DOM through textContent or esc(), never as markup.
 // Recalled entries arrive already scanned (a quarantined entry has no text at all); the only way recalled text
 // leaves this panel is "Copy for a prompt", which copies the engine's delimited UNTRUSTED_CONTENT envelope.
@@ -25,8 +30,10 @@ import { icon } from "./icons.ts";
 import type { LucidBridge } from "./bridge.ts";
 import type { OrbitSlot } from "./orbit_layout.ts";
 import {
-  approvalButtons, armClick, deployChoices, latencyLabel, modelCount, REMOTE_STATE_LABEL, REMOTE_TONE, remoteGlance, taskButtons, VIA_LABEL,
-  type DeployChoice, type RecallView, type RemoteApprovalView, type RemoteClassification, type RemoteHubView, type RemoteModelsView, type RemoteSpokeView,
+  approvalButtons, armClick, clockLabel, deployChoices, hostLabel, lanePolicyLabel, latencyLabel, mibLabel, modelCount, REMOTE_TONE, remoteGlance, RESUME_TEXT,
+  spokeAlerts, stateLabel, taskButtons, VIA_LABEL,
+  type DeployChoice, type RecallView, type RemoteAlertItem, type RemoteApprovalView, type RemoteClassification, type RemoteHubView, type RemoteModelsView,
+  type RemoteSpokeView,
 } from "./remote_spokes_model.ts";
 
 export interface OrbitRemoteDeps {
@@ -62,6 +69,36 @@ export function refreshRemote(): Promise<void> {
 
 export function remoteList(): RemoteSpokeView[] {
   return snap?.available ? snap.spokes : [];
+}
+
+// ------------------------------------------------------------------------------ alerts (ADR-0490)
+
+/** Alert lines the human dismissed, by RemoteAlertItem key. Kept across reloads: the hub keeps an alert until 20
+ *  newer ones push it out, so a dismissal has to outlive the page. Capped, oldest dropped first. */
+const DISMISS_KEY = "lucid.remoteSpokes.dismissedAlerts";
+const DISMISS_MAX = 500;
+let dismissed: Set<string> | null = null;
+
+function dismissedAlerts(): Set<string> {
+  if (dismissed) return dismissed;
+  dismissed = new Set();
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(DISMISS_KEY) ?? "[]");
+    if (Array.isArray(raw)) for (const k of raw) if (typeof k === "string") dismissed.add(k);
+  } catch { /* degrade to per-session dismissals */ }
+  return dismissed;
+}
+
+function dismissAlerts(keys: readonly string[]): void {
+  const set = dismissedAlerts();
+  for (const k of keys) set.add(k);
+  try { localStorage.setItem(DISMISS_KEY, JSON.stringify([...set].slice(-DISMISS_MAX))); } catch { /* degrade to per-session dismissals */ }
+}
+
+/** Every spoke's alert lines the human has not dismissed, newest first. */
+function openAlerts(now: number): RemoteAlertItem[] {
+  const gone = dismissedAlerts();
+  return remoteList().flatMap((s) => spokeAlerts(s, now)).filter((a) => !gone.has(a.key)).sort((x, y) => y.at - x.at);
 }
 
 // ------------------------------------------------------------------------------------ nodes on the ring
@@ -107,6 +144,7 @@ function buildRemoteNode(node: string): HTMLElement {
       <div class="orbit-node-card">
         <div class="orbit-node-head"><i class="orbit-led"></i><b class="orbit-name"></b><span class="orbit-remote-tag">${icon("link", 11)} remote</span></div>
         <div class="orbit-glance"></div>
+        <div class="orbit-alert" hidden></div>
         <div class="orbit-meta"><span class="orbit-model"></span></div>
         <div class="orbit-cta">${icon("arrowRight", 12)} open remote spoke</div>
       </div>
@@ -130,10 +168,21 @@ function paintRemoteNode(card: HTMLElement, s: RemoteSpokeView): void {
   const keep = card.classList.contains("orbit-enter") ? " orbit-enter" : "";
   const cls = `orbit-node remote rs-${REMOTE_TONE[s.state]}${keep}`;
   if (card.getAttribute("class") !== cls) card.setAttribute("class", cls);
+  const now = Date.now();
   setText(card, ".orbit-name", s.label);
-  setText(card, ".orbit-glance", remoteGlance(s));
+  setText(card, ".orbit-glance", remoteGlance(s, now));
+  // ADR-0490: the newest alert line the human has not dismissed (a silence first: it is the one still going on).
+  const gone = dismissedAlerts();
+  const alert = spokeAlerts(s, now).find((a) => !gone.has(a.key)) ?? null;
+  const line = card.querySelector<HTMLElement>(".orbit-alert");
+  if (line) {
+    line.hidden = alert === null;
+    setText(card, ".orbit-alert", alert?.text ?? "");
+    line.dataset.kind = alert?.kind ?? "";
+  }
   setText(card, ".orbit-model", s.models.default ?? "model not reported");
-  card.title = `${s.label} (remote spoke ${s.node})\n${REMOTE_STATE_LABEL[s.state]}\n${latencyLabel(s.latencyMs)}${s.via ? ` over ${VIA_LABEL[s.via]}` : ""}${s.error ? `\n${s.error}` : ""}`;
+  const host = hostLabel(s.host);
+  card.title = `${s.label} (remote spoke ${s.node})\n${stateLabel(s, now)}\n${latencyLabel(s.latencyMs)}${s.via ? ` over ${VIA_LABEL[s.via]}` : ""}${host ? `\n${host}` : ""}${s.error ? `\n${s.error}` : ""}`;
 }
 
 /** ADR-0489: whether the orbit offers "Start a remote task": the hub may drive and has at least one spoke. */
@@ -158,10 +207,11 @@ export function layoutRemote(slots: readonly OrbitSlot[], cx: number, cy: number
 
 // ------------------------------------------------------------------------- the hub picker's section
 
-/** Remote spokes and how many are parked on an approval, for the Other hubs badge. */
-export function remoteCounts(): { spokes: number; waiting: number } {
+/** Remote spokes, how many are parked on an approval, and (ADR-0490) how many alert lines are not dismissed, for
+ *  the Other hubs badge. */
+export function remoteCounts(): { spokes: number; waiting: number; alerts: number } {
   const list = remoteList();
-  return { spokes: list.length, waiting: list.filter((s) => s.state === "approval").length };
+  return { spokes: list.length, waiting: list.filter((s) => s.state === "approval").length, alerts: openAlerts(Date.now()).length };
 }
 
 /** Whether the Other hubs panel has a Remote hub section to show: the hub's spokes, or a plugin that is installed
@@ -187,7 +237,29 @@ export function remoteHubSectionHtml(): string {
       ${actions.drive ? `<button class="btn-mini orbit-btn" data-rs-deploy data-tip="Start a task on a remote spoke|Pick a spoke by how fast it answers, its models and its free lanes, then start a task there.">${icon("bolt", 12)} Start a task</button>` : ""}
       <button class="btn-mini orbit-btn" data-rs-panel data-tip="Remote Spokes panel|Setup, user presence, custody, models and provisioning stay in the plugin's own panel.">${icon("link", 12)} Panel</button>
     </div>
-    <div class="orbit-hubrow-lanes">${spokes.map((s) => `<button class="fleet-pip rs-pip rs-${REMOTE_TONE[s.state]}" data-rs-open="${esc(s.node)}" data-tip="${esc(s.label)}|${esc(remoteGlance(s))}"><i></i>${esc(s.label)}</button>`).join("")}</div>`;
+    <div class="orbit-hubrow-lanes">${spokes.map((s) => `<button class="fleet-pip rs-pip rs-${REMOTE_TONE[s.state]}" data-rs-open="${esc(s.node)}" data-tip="${esc(s.label)}|${esc(remoteGlance(s))}"><i></i>${esc(s.label)}</button>`).join("")}</div>${alertListHtml()}`;
+}
+
+/** ADR-0490: how many alert lines the Remote hub section lists; the rest wait behind "Dismiss all". */
+const ALERT_LIST_MAX = 12;
+
+/** ADR-0490: the alert lines not dismissed yet, newest first: a spoke gone silent, crashed, restarted, or a turn a
+ *  restart cut off (resumed from the spoke's panel, never on its own). Each line opens its spoke or is dismissed.
+ *  Every spoke-written word goes through esc(); the dismiss key is built from the node id, a closed kind and a
+ *  number. */
+function alertListHtml(): string {
+  const items = openAlerts(Date.now());
+  if (items.length === 0) return "";
+  const more = items.length > ALERT_LIST_MAX ? `<div class="rs-alert-more">${items.length - ALERT_LIST_MAX} older not shown</div>` : "";
+  return `<div class="rs-alerts">
+      <div class="rs-sec-h"><span>Alerts \u00b7 ${items.length}</span><button class="btn-mini orbit-btn" data-rs-alert-clear data-tip="Dismiss all|Hides every alert listed here. A spoke that goes silent again, or a new alert, shows up again.">${icon("check", 12)} Dismiss all</button></div>
+      ${items.slice(0, ALERT_LIST_MAX).map((a) => `<div class="rs-alert" data-kind="${esc(a.kind)}">
+        <span class="rs-alert-text"><b>${esc(a.label)}</b> ${esc(a.text)}</span>
+        <button class="btn-mini orbit-btn" data-rs-open="${esc(a.node)}">${icon("arrowRight", 12)} Open</button>
+        <button class="orbit-ghost-x" data-rs-alert-x="${esc(a.key)}" data-tip="Dismiss|Hides this alert. Nothing on the spoke changes.">${icon("close", 12)}</button>
+      </div>`).join("")}
+      ${more}
+    </div>`;
 }
 
 // ------------------------------------------------------------------------------- the per-spoke panel
@@ -280,6 +352,8 @@ export function paintRemotePanel(box: HTMLElement, node: string, closeHtml: stri
   const a = snap?.available ? snap.actions : null;
   box.innerHTML = `<div class="orbit-panel-h">${icon("link", 14)}<b data-rs-title></b><span class="rs-state" data-rs-state></span>${closeHtml}</div>
     <p class="rs-note" data-rs-sub></p>
+    <p class="rs-note" data-rs-host hidden></p>
+    <p class="rs-note" data-rs-lanes hidden></p>
     <p class="rs-note" data-rs-scopes></p>
     <div class="rs-sec-h"><span>Tasks</span></div>
     <div data-rs-tasks></div>
@@ -321,12 +395,27 @@ export function refreshRemotePanel(box: HTMLElement): void {
     return;
   }
   setText(box, "[data-rs-title]", s.label);
+  const now = Date.now();
   const st = $("[data-rs-state]", box) as HTMLElement;
   st.className = `rs-state rs-${REMOTE_TONE[s.state]}`;
-  setText(box, "[data-rs-state]", REMOTE_STATE_LABEL[s.state]);
+  setText(box, "[data-rs-state]", stateLabel(s, now));
   const lanes = s.lanes ? `${s.lanes.live} of ${s.lanes.max} lanes in use` : "lanes not reported";
   const cert = [s.region, s.classification && CLASSIFICATION_LABEL[s.classification]].filter(Boolean).join(", ");
-  setText(box, "[data-rs-sub]", `${lanes} \u00b7 ${latencyLabel(s.latencyMs)}${s.via ? ` over ${VIA_LABEL[s.via]}` : ""}${s.engineVersion ? ` \u00b7 engine ${s.engineVersion}` : ""}${cert ? ` \u00b7 ${cert}` : ""}${s.checkedAt ? ` \u00b7 checked ${new Date(s.checkedAt).toLocaleTimeString()}` : ""}${s.error ? ` \u00b7 ${s.error}` : ""}`);
+  setText(box, "[data-rs-sub]", `${lanes} \u00b7 ${latencyLabel(s.latencyMs)}${s.via ? ` over ${VIA_LABEL[s.via]}` : ""}${s.engineVersion ? ` \u00b7 engine ${s.engineVersion}` : ""}${cert ? ` \u00b7 ${cert}` : ""}${s.checkedAt ? ` \u00b7 checked ${new Date(s.checkedAt).toLocaleTimeString()}` : ""}${s.lastSeen ? ` \u00b7 last relay poll ${clockLabel(s.lastSeen, now)}` : ""}${s.error ? ` \u00b7 ${s.error}` : ""}`);
+  // ADR-0490: the machine the spoke runs on and why it runs as many lanes as it does.
+  const h = s.host;
+  const hostLine = h ? [
+    hostLabel(h),
+    h.os || h.arch ? [h.os, h.arch].filter(Boolean).join(" ") : "",
+    h.diskFreeMiB !== null ? `${mibLabel(h.diskFreeMiB)} disk free` : "",
+    h.localModel ? `local model at ${h.localModel.host} (${h.localModel.reachable ? "answering" : "not answering"})` : "",
+  ].filter(Boolean).join(" \u00b7 ") : "";
+  const hostEl = $("[data-rs-host]", box) as HTMLElement;
+  hostEl.hidden = !hostLine;
+  setText(box, "[data-rs-host]", hostLine ? `Machine: ${hostLine}` : "");
+  const lanesEl = $("[data-rs-lanes]", box) as HTMLElement;
+  lanesEl.hidden = !s.lanePolicy;
+  setText(box, "[data-rs-lanes]", s.lanePolicy ? `Lanes: ${lanePolicyLabel(s.lanePolicy)}` : "");
   const modelsSig = JSON.stringify(s.models);
   if (modelsSig !== panel.modelsSig) {
     panel.modelsSig = modelsSig;
@@ -338,10 +427,11 @@ export function refreshRemotePanel(box: HTMLElement): void {
   if (s.tasks.length === 0) { host.innerHTML = `<div class="orbit-ghosts-empty">No tasks on this spoke yet.</div>`; return; }
   host.innerHTML = s.tasks.map((t, i) => {
     const b = taskButtons(t, a);
-    const meta = `${t.state.replace("_", " ")} \u00b7 ${t.turns} ${t.turns === 1 ? "turn" : "turns"} \u00b7 ${new Date(t.updatedAt).toLocaleString()}${t.reviewBranch ? ` \u00b7 review ${t.reviewBranch}` : ""}${t.interrupted ? " \u00b7 interrupted by a restart" : ""}${t.shadow ? " \u00b7 shadow" : ""}`;
-    return `<div class="orbit-ghost rs-task" data-rs-task-i="${i}">
+    const meta = `${t.state.replace("_", " ")} \u00b7 ${t.turns} ${t.turns === 1 ? "turn" : "turns"} \u00b7 ${new Date(t.updatedAt).toLocaleString()}${t.reviewBranch ? ` \u00b7 review ${t.reviewBranch}` : ""}${t.interrupted ? ` \u00b7 interrupted by a restart at ${clockLabel(t.interrupted, now)}` : ""}${t.shadow ? " \u00b7 shadow" : ""}`;
+    return `<div class="orbit-ghost rs-task${t.interrupted ? " interrupted" : ""}" data-rs-task-i="${i}">
       <i class="orbit-ghost-dot rs-dot-${esc(t.state)}"></i>
       <span class="orbit-ghost-id"><b>${esc(t.name)}</b><small>${esc(meta)}</small></span>
+      ${b.resume ? `<button class="btn-mini orbit-btn rs-resume" data-rs-resume data-tip="Resume|Sends one follow-up asking the task to continue and to check what was already done first. Click twice. Nothing re-runs on its own.">${icon("restore", 12)} Resume</button>` : ""}
       ${b.recall ? `<button class="btn-mini orbit-btn" data-rs-recall data-tip="Recall this task|Its journal entries, scanned.">${icon("restore", 12)}</button>` : ""}
       ${b.followup ? `<button class="btn-mini orbit-btn" data-rs-follow-open>${icon("send", 12)} Follow up</button>` : ""}
       ${b.cancel ? `<button class="btn-mini orbit-btn" data-rs-cancel>${icon("close", 12)} Cancel</button>` : ""}
@@ -374,6 +464,16 @@ export function onRemotePanelClick(t: HTMLElement, box: HTMLElement): boolean {
     return true;
   }
   if (task && t.closest("[data-rs-cancel]")) { void act(box, "cancel", { task: task.id }); return true; }
+  // ADR-0490: Resume is the human's call, armed like Approve; the second click sends RESUME_TEXT as a follow-up.
+  const resumeBtn = t.closest("[data-rs-resume]") as HTMLElement | null;
+  if (task && resumeBtn) {
+    const key = `resume:${task.id}`;
+    const step = armClick(panel.armed[key] ?? null, Date.now());
+    if (step.act === "arm") { panel.armed[key] = step.armedAt!; resumeBtn.textContent = "Click again to resume"; resumeBtn.classList.add("armed"); return true; }
+    delete panel.armed[key];
+    void act(box, "followup", { task: task.id, text: RESUME_TEXT });
+    return true;
+  }
   const closeBtn = t.closest("[data-rs-close]") as HTMLElement | null;
   if (task && closeBtn) {
     const key = `close:${task.id}`;
@@ -564,7 +664,10 @@ function choiceHtml(c: DeployChoice, checked: boolean, now: number): string {
   const s = c.spoke;
   const lanes = s.lanes ? `${s.lanes.free}/${s.lanes.max} free` : "lanes not reported";
   const n = modelCount(s);
-  const first = `${REMOTE_STATE_LABEL[s.state]} \u00b7 ${lanes} \u00b7 ${s.models.default ?? "model not reported"}${n ? ` \u00b7 ${n} ${n === 1 ? "model" : "models"}` : ""}`;
+  const first = `${stateLabel(s, now)} \u00b7 ${lanes} \u00b7 ${s.models.default ?? "model not reported"}${n ? ` \u00b7 ${n} ${n === 1 ? "model" : "models"}` : ""}`;
+  // ADR-0490: the machine (cores, memory, each GPU and its memory) and why the spoke runs as many lanes as it does.
+  const host = hostLabel(s.host);
+  const policy = s.lanePolicy ? lanePolicyLabel(s.lanePolicy) : "";
   const answers = `${latencyLabel(s.latencyMs)}${s.via ? ` over ${VIA_LABEL[s.via]}` : ""}`;
   const expiry = s.certExpires === null ? ""
     : s.certExpires <= now ? `<span class="rs-chip bad">certificate expired</span>`
@@ -583,6 +686,8 @@ function choiceHtml(c: DeployChoice, checked: boolean, now: number): string {
         <b>${esc(s.label)}</b>
         <small>${esc(first)}</small>
         <small>${esc(answers)} \u00b7 ${esc(checkedAt)}</small>
+        ${host ? `<small class="rs-host">${esc(host)}</small>` : ""}
+        ${policy ? `<small class="rs-policy">${esc(policy)}</small>` : ""}
         ${chips ? `<small class="rs-chips">${chips}</small>` : ""}
         ${c.why ? `<small class="rs-why">${esc(c.why)}</small>` : ""}
       </span>
@@ -658,10 +763,14 @@ async function startDeploy(box: HTMLElement, openSpoke: (node: string) => void):
   showErr(box, `Task started on ${choice.spoke.label}; it shows in Tasks at the next refresh (up to 15 s).`, true);
 }
 
-/** The hub picker's buttons (Start, Panel, Start a task, a spoke pip). Returns the node to open, "deploy" for the
- *  Start-a-task selector, "handled", or null. */
-export function onRemoteHubClick(t: HTMLElement): string | "deploy" | "handled" | null {
+/** The hub picker's buttons (Start, Panel, Start a task, a spoke pip or alert's Open, an alert's dismiss). Returns
+ *  the node to open, "deploy" for the Start-a-task selector, "repaint" after a dismissal (the section, the badge
+ *  and the cards' alert lines change), "handled", or null. */
+export function onRemoteHubClick(t: HTMLElement): string | "deploy" | "repaint" | "handled" | null {
   if (!deps) return null;
+  const x = t.closest("[data-rs-alert-x]") as HTMLElement | null;
+  if (x) { dismissAlerts([x.dataset.rsAlertX ?? ""]); return "repaint"; }
+  if (t.closest("[data-rs-alert-clear]")) { dismissAlerts(openAlerts(Date.now()).map((a) => a.key)); return "repaint"; }
   if (t.closest("[data-rs-start]")) { void deps.startRemoteSpokes().then(refreshRemote); return "handled"; }
   if (t.closest("[data-rs-panel]")) { deps.openRemoteSpokesPanel(); return "handled"; }
   if (t.closest("[data-rs-deploy]")) return "deploy";

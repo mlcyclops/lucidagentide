@@ -9,6 +9,9 @@
 // wrote (task names, model ids, errors) is untrusted: it is validated and clipped here and only ever shown as text.
 // ADR-0489 adds the hub's optional per-spoke facts (answer time, route, the spoke certificate's region and
 // classification, the spoke's `models` answer) and the Start-a-task selector's order (`deployChoices`).
+// ADR-0490 adds the spoke's machine (`host`) and lane policy from `capabilities`, the hub's `lastSeen`,
+// `silentSince` and kept `alerts`, the `silent` state, the alert lines (`spokeAlerts`) and Resume for a task whose
+// turn a restart interrupted (`RESUME_TEXT`, sent only on the human's click).
 //
 // What a hub may do is what its certificate's scopes allow (add-on ADR-A044): recall reads (status, journal,
 // parked actions), drive starts, follows up, cancels and closes tasks and denies parked actions, approve signs an
@@ -35,8 +38,34 @@ export interface RemoteTaskView {
 }
 
 /** checking: not asked yet. offline: no reply in time. approval: an action is parked on a human. busy: a task is
- *  working. error: a task failed, or the spoke refused this hub's status read. idle: online and free. */
-export type RemoteSpokeState = "checking" | "offline" | "approval" | "busy" | "error" | "idle";
+ *  working. error: a task failed, or the spoke refused this hub's status read. idle: online and free. silent
+ *  (ADR-0490): the hub reaches a relay but the spoke has not polled it for over 2 minutes, so it is probably down;
+ *  this wins over every other state, since what the spoke said last is stale. */
+export type RemoteSpokeState = "checking" | "offline" | "approval" | "busy" | "error" | "idle" | "silent";
+
+/** ADR-0490: one GPU the spoke's machine reports, with its memory when the driver tells it. */
+export interface RemoteGpuView { name: string; vramMiB: number | null }
+
+/** ADR-0490: the machine a spoke runs on, from its `capabilities` answer (add-on spoke host report). */
+export interface RemoteHostView {
+  os: string | null; arch: string | null; cpus: number | null; memMiB: number | null; diskFreeMiB: number | null;
+  gpus: RemoteGpuView[];
+  /** The local model endpoint the spoke is configured with, and whether it answered the spoke's last check. */
+  localModel: { host: string; reachable: boolean } | null;
+}
+
+/** ADR-0490: what bounds the spoke's lane count. Closed set. */
+export const LANE_LIMITS = ["engine", "memory", "cpu", "gpu", "target", "config"] as const;
+export type RemoteLaneLimit = (typeof LANE_LIMITS)[number];
+
+/** ADR-0490: the spoke's lane count, sized to its machine and where it is deployed, and why. */
+export interface RemoteLanePolicyView { max: number; limitedBy: RemoteLaneLimit; why: string | null }
+
+/** ADR-0490: the alerts a spoke seals to its hubs (add-on spoke alert note). Closed set. */
+export const ALERT_KINDS = ["engine-restarted", "agent-restarted", "crashed", "turn-interrupted"] as const;
+export type RemoteAlertKind = (typeof ALERT_KINDS)[number];
+
+export interface RemoteAlertView { kind: RemoteAlertKind; at: number; detail: string; tasks: { id: string; name: string }[] }
 
 /** A signed-in frontier provider on a spoke and the model ids it offers there (ADR-0489). */
 export interface RemoteFrontierView { provider: string; name: string; account: string | null; models: string[] }
@@ -69,6 +98,15 @@ export interface RemoteSpokeView {
   certExpires: number | null;
   engineVersion: string | null;
   models: RemoteModelsView;
+  /** ADR-0490: from `capabilities`; null when the spoke did not report its machine (an older spoke). */
+  host: RemoteHostView | null;
+  lanePolicy: RemoteLanePolicyView | null;
+  /** ADR-0490: from the hub. The spoke's newest relay poll, and since when it has been silent (set only while the
+   *  hub reaches a relay and the spoke has neither polled it nor answered the hub for over 2 minutes). */
+  lastSeen: number | null;
+  silentSince: number | null;
+  /** ADR-0490: the alerts the hub kept for this spoke, newest first (at most ALERTS_MAX). */
+  alerts: RemoteAlertView[];
   error?: string;
 }
 
@@ -152,8 +190,67 @@ function mapModels(capsModels: Record<string, unknown> | null, answer: Record<st
   return { default: def, local: localModels(answer.local), frontier: frontierRows(answer.providers) };
 }
 
-/** The spoke's overall state from its reachability and tasks. Closed and stopped tasks hold no lane. */
-export function spokeState(reachable: boolean | null, tasks: readonly RemoteTaskView[] | null): RemoteSpokeState {
+// ------------------------------------------------------------- host, lane policy, alerts (ADR-0490)
+
+/** A spoke's machine may list several GPUs; the IDE keeps this many. */
+const GPU_MAX = 8;
+/** The hub keeps the newest 20 alerts per spoke; the IDE never shows more. */
+export const ALERTS_MAX = 20;
+/** The tasks one alert may name. */
+const ALERT_TASKS_MAX = 8;
+
+/** The machine facts from `capabilities.host`; null when the spoke did not send a host record. Each malformed
+ *  fact reads as unknown on its own; a GPU without a name is dropped. */
+function mapHost(v: unknown): RemoteHostView | null {
+  const h = record(v);
+  if (!h) return null;
+  const gpus = Array.isArray(h.gpus) ? h.gpus.map((g) => {
+    const r = record(g);
+    const name = clip(r?.name, 64);
+    return name ? { name, vramMiB: count(r?.vramMiB) } : null;
+  }).filter((g): g is RemoteGpuView => g !== null).slice(0, GPU_MAX) : [];
+  const lm = record(h.localModel);
+  const lmHost = clip(lm?.host, 128);
+  const cpus = count(h.cpus);
+  return {
+    os: clip(h.os, 32), arch: clip(h.arch, 16), cpus: cpus === 0 ? null : cpus, memMiB: count(h.memMiB), diskFreeMiB: count(h.diskFreeMiB), gpus,
+    localModel: lmHost && typeof lm?.reachable === "boolean" ? { host: lmHost, reachable: lm.reachable } : null,
+  };
+}
+
+/** `capabilities.lanePolicy`: a positive max and a known limit, or nothing. */
+function mapLanePolicy(v: unknown): RemoteLanePolicyView | null {
+  const p = record(v);
+  const max = count(p?.max);
+  const limitedBy = LANE_LIMITS.find((l) => l === p?.limitedBy);
+  if (!max || !limitedBy) return null;
+  return { max, limitedBy, why: clip(p?.why, 200) };
+}
+
+/** The hub's alert list: known kinds with a time, newest first, at most ALERTS_MAX. Named tasks must carry a
+ *  well-formed id; their names are clipped like task names. */
+function mapAlerts(v: unknown): RemoteAlertView[] {
+  if (!Array.isArray(v)) return [];
+  const out: RemoteAlertView[] = [];
+  for (const raw of v) {
+    const a = record(raw);
+    const kind = ALERT_KINDS.find((k) => k === a?.kind);
+    const at = count(a?.at);
+    if (!a || !kind || at === null) continue;
+    const tasks = Array.isArray(a.tasks) ? a.tasks.map((t) => {
+      const r = record(t);
+      const name = clip(r?.name, 48);
+      return typeof r?.id === "string" && TASK_RE.test(r.id) && name ? { id: r.id, name } : null;
+    }).filter((t): t is { id: string; name: string } => t !== null).slice(0, ALERT_TASKS_MAX) : [];
+    out.push({ kind, at, detail: clip(a.detail, 300) ?? "", tasks });
+  }
+  return out.sort((x, y) => y.at - x.at).slice(0, ALERTS_MAX);
+}
+
+/** The spoke's overall state from its reachability and tasks. Closed and stopped tasks hold no lane. ADR-0490: a
+ *  spoke the hub reports silent is `silent` whatever it said last. */
+export function spokeState(reachable: boolean | null, tasks: readonly RemoteTaskView[] | null, silentSince: number | null = null): RemoteSpokeState {
+  if (silentSince !== null) return "silent";
   if (reachable === null) return "checking";
   if (!reachable) return "offline";
   if (!tasks) return "error";
@@ -174,10 +271,12 @@ export function mapSpokeRow(raw: unknown): RemoteSpokeView | null {
   // ADR-0489: optional fields a newer hub plugin adds; an older one omits them and each reads as unknown.
   const viaKind = record(r.via)?.kind;
   const cert = record(r.cert);
+  // ADR-0490: likewise optional; an older plugin or spoke omits them. A zero time is no time.
+  const silentSince = count(r.silentSince) || null;
   const view: RemoteSpokeView = {
     node: r.node,
     label: clip(r.label, 64) ?? r.node.slice(0, 12),
-    state: spokeState(reachable, tasks),
+    state: spokeState(reachable, tasks, silentSince),
     lanes: max !== null && live !== null && free !== null ? { live, max, free } : null,
     tasks: (tasks ?? []).sort((a, b) => b.updatedAt - a.updatedAt),
     checkedAt: count(r.checkedAt),
@@ -188,6 +287,11 @@ export function mapSpokeRow(raw: unknown): RemoteSpokeView | null {
     certExpires: count(cert?.expires),
     engineVersion: clip(caps?.engineVersion, 32),
     models: mapModels(record(caps?.models), record(r.models)),
+    host: mapHost(caps?.host),
+    lanePolicy: mapLanePolicy(caps?.lanePolicy),
+    lastSeen: count(r.lastSeen),
+    silentSince,
+    alerts: mapAlerts(r.alerts),
   };
   const error = clip(r.error, 300);
   if (error) view.error = error;
@@ -217,11 +321,78 @@ export function mapHubSnapshot(raw: unknown): RemoteHubView {
 export type RemoteTone = "approval" | "stuck" | "maybe" | "busy" | "ready" | "checking";
 export const REMOTE_TONE: Readonly<Record<RemoteSpokeState, RemoteTone>> = {
   approval: "approval", error: "stuck", offline: "maybe", busy: "busy", idle: "ready", checking: "checking",
+  // ADR-0490: red, not amber. Offline may be this hub's own network; silent means the relay has not heard from
+  // the spoke either, so it is most likely down.
+  silent: "stuck",
 };
 
 export const REMOTE_STATE_LABEL: Readonly<Record<RemoteSpokeState, string>> = {
-  checking: "checking", offline: "offline", approval: "parked approval", busy: "online, busy", error: "online, error", idle: "online, idle",
+  checking: "checking", offline: "offline", approval: "parked approval", busy: "online, busy", error: "online, error", idle: "online, idle", silent: "silent",
 };
+
+/** ADR-0490: a time of day ("14:05"), with the date in front when it is not today. Local time. */
+export function clockLabel(ms: number, now: number): string {
+  const d = new Date(ms);
+  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return d.toDateString() === new Date(now).toDateString() ? hm : `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${hm}`;
+}
+
+/** The state as words. ADR-0490: a silent spoke says since when ("silent since 14:05"), never "idle". */
+export function stateLabel(s: RemoteSpokeView, now: number): string {
+  return s.state === "silent" && s.silentSince !== null ? `silent since ${clockLabel(s.silentSince, now)}` : REMOTE_STATE_LABEL[s.state];
+}
+
+/** ADR-0490: memory and disk sizes as the IDE shows them: MiB under 1 GiB, else GiB to one decimal. */
+export function mibLabel(mib: number): string {
+  return mib < 1024 ? `${mib} MiB` : `${Number((mib / 1024).toFixed(1))} GiB`;
+}
+
+/** ADR-0490: the machine facts that matter when picking a spoke: cores, memory, each GPU and its memory. "" when
+ *  the spoke reported none of them. */
+export function hostLabel(h: RemoteHostView | null): string {
+  if (!h) return "";
+  const parts = [
+    h.cpus !== null ? `${h.cpus} ${h.cpus === 1 ? "CPU" : "CPUs"}` : "",
+    h.memMiB !== null ? `${mibLabel(h.memMiB)} memory` : "",
+    ...h.gpus.map((g) => (g.vramMiB !== null ? `${g.name} ${mibLabel(g.vramMiB)}` : g.name)),
+  ];
+  return parts.filter(Boolean).join(" \u00b7 ");
+}
+
+export const LANE_LIMIT_LABEL: Readonly<Record<RemoteLaneLimit, string>> = {
+  engine: "the engine", memory: "memory", cpu: "CPU", gpu: "GPU", target: "where it is deployed", config: "its configuration",
+};
+
+/** ADR-0490: the spoke's lane policy in words: "up to 4 lanes, limited by memory: <the spoke's why>". */
+export function lanePolicyLabel(p: RemoteLanePolicyView): string {
+  return `up to ${p.max} ${p.max === 1 ? "lane" : "lanes"}, limited by ${LANE_LIMIT_LABEL[p.limitedBy]}${p.why ? `: ${p.why}` : ""}`;
+}
+
+/** ADR-0490: one line of the IDE's alert list: a spoke that went silent, or an alert its hub kept. `key` is stable
+ *  across polls, so a dismissal sticks. */
+export interface RemoteAlertItem { key: string; node: string; label: string; kind: RemoteAlertKind | "silent"; at: number; text: string; tasks: { id: string; name: string }[] }
+
+const ALERT_LABEL: Readonly<Record<RemoteAlertKind, string>> = {
+  "engine-restarted": "engine restarted", "agent-restarted": "spoke agent restarted", crashed: "crashed", "turn-interrupted": "turn interrupted",
+};
+
+/** ADR-0490: a spoke's alert lines, newest first: its silence (when the hub reports one), then every kept alert.
+ *  An interrupted turn names its tasks and says where to resume them; nothing is ever re-run on its own. */
+export function spokeAlerts(s: RemoteSpokeView, now: number): RemoteAlertItem[] {
+  const out: RemoteAlertItem[] = [];
+  if (s.silentSince !== null) {
+    const min = Math.max(2, Math.floor((now - s.silentSince) / 60_000));
+    out.push({ key: `${s.node}|silent|${s.silentSince}`, node: s.node, label: s.label, kind: "silent", at: s.silentSince, tasks: [],
+      text: `silent since ${clockLabel(s.silentSince, now)}: no word from it for ${min} min while its relay answers` });
+  }
+  for (const a of s.alerts) {
+    const names = a.tasks.length ? ` (${a.tasks.map((t) => t.name).join(", ")})` : "";
+    const resume = a.kind === "turn-interrupted" ? ". Resume it from the spoke's panel" : "";
+    out.push({ key: `${s.node}|${a.kind}|${a.at}`, node: s.node, label: s.label, kind: a.kind, at: a.at, tasks: a.tasks,
+      text: `${ALERT_LABEL[a.kind]} at ${clockLabel(a.at, now)}${names}${a.detail ? `: ${a.detail.replace(/\.+$/, "")}` : ""}${resume}` });
+  }
+  return out;
+}
 
 export const VIA_LABEL: Readonly<Record<RemoteVia, string>> = { lan: "LAN", relay: "relay" };
 
@@ -237,12 +408,12 @@ export function latencyLabel(ms: number | null): string {
 }
 
 /** The card's one-line glance: state, lanes, how fast it answers and over which route, and how many tasks are
- *  open. */
-export function remoteGlance(s: RemoteSpokeView): string {
+ *  open. `now` only matters for a silent spoke's "silent since". */
+export function remoteGlance(s: RemoteSpokeView, now = Date.now()): string {
   const lanes = s.lanes ? ` \u00b7 ${s.lanes.live}/${s.lanes.max} lanes` : "";
   const answers = s.latencyMs !== null ? ` \u00b7 ${seconds(s.latencyMs)} s${s.via ? ` ${VIA_LABEL[s.via]}` : ""}` : "";
   const open = s.tasks.filter((t) => t.state === "working" || t.state === "awaiting_approval").length;
-  return `${REMOTE_STATE_LABEL[s.state]}${lanes}${answers}${open ? ` \u00b7 ${open} open` : ""}`;
+  return `${stateLabel(s, now)}${lanes}${answers}${open ? ` \u00b7 ${open} open` : ""}`;
 }
 
 /** How many distinct models the spoke reports: the default, its local models and every signed-in provider's. */
@@ -259,6 +430,7 @@ export interface DeployChoice { spoke: RemoteSpokeView; eligible: boolean; why: 
  *  without drive), then what the spoke said. A spoke that did not report lanes is offered: it decides. */
 function deployBlock(s: RemoteSpokeView, a: HubActions): string | null {
   if (!a.drive) return "this hub cannot start tasks (no drive scope)";
+  if (s.state === "silent") return "silent: it has not polled its relay for over 2 minutes";
   if (s.state === "checking") return "still checking";
   // An offline row the hub could say more about (a revoked certificate, a refusal) gives that reason: "offline"
   // alone would suggest waiting, when the spoke will never answer this hub again.
@@ -277,16 +449,23 @@ export function deployChoices(spokes: readonly RemoteSpokeView[], a: HubActions)
 }
 
 /** Which buttons a task row offers: what the certificate allows AND what the spoke would accept in this state
- *  (a follow-up waits for the turn to end; a closed or stopped task holds no lane to cancel or close). */
-export function taskButtons(t: RemoteTaskView, a: HubActions): { recall: boolean; followup: boolean; cancel: boolean; close: boolean } {
+ *  (a follow-up waits for the turn to end; a closed or stopped task holds no lane to cancel or close). ADR-0490:
+ *  a task whose turn a restart cut off offers Resume, a follow-up with RESUME_TEXT; a new turn clears the mark. */
+export function taskButtons(t: RemoteTaskView, a: HubActions): { recall: boolean; followup: boolean; cancel: boolean; close: boolean; resume: boolean } {
   const live = t.state !== "closed" && t.state !== "stopped";
+  const followup = a.drive && (t.state === "idle" || t.state === "error");
   return {
     recall: a.recall,
-    followup: a.drive && (t.state === "idle" || t.state === "error"),
+    followup,
     cancel: a.drive && (t.state === "working" || t.state === "awaiting_approval"),
     close: a.drive && live,
+    resume: followup && t.interrupted !== undefined,
   };
 }
+
+/** ADR-0490: the one follow-up Resume sends. The human clicks it (twice); an interrupted turn is never re-run on
+ *  its own, and the model is told to check what already happened before it repeats anything. */
+export const RESUME_TEXT = "Continue this task. The previous turn was interrupted when the spoke restarted: check what was already done before you repeat anything.";
 
 /** A parked action's buttons: an allow needs approve and an action the scanner passed; a deny needs drive or
  *  approve and is always offered then (refusing is safe). */
@@ -294,7 +473,7 @@ export function approvalButtons(v: RemoteApprovalView, a: HubActions): { approve
   return { approve: a.approve && !v.quarantined, deny: a.deny };
 }
 
-/** The plugin panel's two-click rule (add-on ADR-A045), kept in the IDE for Approve and for Close: the first
+/** The plugin panel's two-click rule (add-on ADR-A045), kept in the IDE for Approve, Close and Resume: the first
  *  click arms for 8 seconds, a second click inside that window acts. Returns what this click does and the new
  *  armed time (null once it acted). */
 export const ARM_MS = 8_000;

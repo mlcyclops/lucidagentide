@@ -375,11 +375,12 @@ function paintHubsBadge(): void {
   for (const b of view.querySelectorAll("[data-orbit-hubs]")) {
     const badge = b.querySelector("[data-orbit-hubsn]") as HTMLElement | null;
     if (badge) {
-      const t = waiting ? `${total} \u00b7 ${waiting} waiting` : String(total);
+      // ADR-0490: alert lines not dismissed yet (a remote spoke gone silent, crashed, restarted, a turn cut off).
+      const t = [String(total), waiting ? `${waiting} waiting` : "", remote.alerts ? `${remote.alerts} ${remote.alerts === 1 ? "alert" : "alerts"}` : ""].filter(Boolean).join(" \u00b7 ");
       if (badge.textContent !== t) badge.textContent = t;
     }
     (b as HTMLElement).hidden = n === 0 && !remoteHubVisible();
-    (b as HTMLElement).classList.toggle("waiting", waiting > 0);
+    (b as HTMLElement).classList.toggle("waiting", waiting > 0 || remote.alerts > 0);
   }
   // An empty ring with spokes elsewhere must say so, or a new session reads as "my spokes are gone".
   const msg = $("[data-orbit-empty-msg]", view) as HTMLElement | null;
@@ -495,6 +496,8 @@ function onPanelClick(t: HTMLElement): boolean {
   if (openedPanel === "hubs") {
     const hit = onRemoteHubClick(t);
     if (hit === "handled") return true;
+    // ADR-0490: a dismissed alert leaves the section, the badge and its card's alert line at once.
+    if (hit === "repaint") { paintRemoteAll(false); return true; }
     if (hit === "deploy") { togglePanel("deploy"); return true; }
     if (hit) { openRemote(hit); return true; }
   }

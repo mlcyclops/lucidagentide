@@ -36,7 +36,7 @@ import type { LaneEvent, LaneTurnRecord, LaneView } from "../fleet_lanes.ts";
 import { closeLaneWorktree, createRemoteLaneWorktree, removeLaneWorktree } from "../lane_worktree.ts";
 import type { ControllerLane, ControllerLaneStore } from "./lane_store.ts";
 import { DEFAULT_APPROVAL_HOURS, MAX_APPROVAL_HOURS, p256FromSpki, verifyRemoteDecision, type RemoteAsk } from "./remote_policy.ts";
-import { PAIRING_NAME_RE, type Pairing, type PairingStore, type RemotePolicy } from "./store.ts";
+import { isLaneCount, PAIRING_NAME_RE, type Pairing, type PairingStore, type RemotePolicy } from "./store.ts";
 
 /** Routes the controller token opens. pair/unpair are NOT here: they stay on the UI token. */
 export const CONTROLLER_ROUTES: ReadonlySet<string> = new Set(
@@ -46,7 +46,8 @@ export const CONTROLLER_ROUTES: ReadonlySet<string> = new Set(
   ["lanes", "spawn", "prompt", "status", "result", "cancel", "close", "ask", "decide", "deny"].map((r) => `/api/controller/${r}`),
 );
 
-/** ADR-0425: at most two controller-owned live lanes per pairing. */
+/** ADR-0425: at most two controller-owned live lanes per pairing, unless the human granted the pairing its own
+ *  `maxLanes` at pairing time (ADR-0490, 1 to PAIRING_LANES_MAX). */
 export const MAX_LANES_PER_PAIRING = 2;
 const MAX_PROMPT_CHARS = 32_000;
 
@@ -196,8 +197,12 @@ export async function handleController(req: Request, path: string, pairing: Pair
 
   // ── Human routes (UI token; the controller token never reaches these, apiAuthorized refuses it) ───────────
   if (path === "/api/controller/pair") {
-    const b = await strictBody(req, ["name", "workspace", "approverRoot", "approvalHours", "offTask", "presence"], ["name", "workspace"]);
+    const b = await strictBody(req, ["name", "workspace", "approverRoot", "approvalHours", "offTask", "presence", "maxLanes"], ["name", "workspace"]);
     if (!b || !PAIRING_NAME_RE.test(b.name!)) return malformed();
+    // ADR-0490: the human may grant this pairing 1 to PAIRING_LANES_MAX live lanes (a string like every body value,
+    // decimal digits only); absent keeps the ADR-0425 default.
+    const maxLanes = b.maxLanes === undefined ? undefined : /^\d{1,2}$/.test(b.maxLanes) ? Number(b.maxLanes) : Number.NaN;
+    if (maxLanes !== undefined && !isLaneCount(maxLanes)) return malformed();
     const workspace = await resolveWorkspace(b.workspace!);
     if (!workspace) return reply(400, { ok: false, error: "workspace must be an existing absolute folder" });
     // P-CTRL-REMOTE.1 (ADR-0476): a human pairing a REMOTE controller names the owner root whose certified hubs
@@ -210,11 +215,11 @@ export async function handleController(req: Request, path: string, pairing: Pair
         || (b.presence !== undefined && b.presence !== "required" && b.presence !== "none")) return malformed();
       remote = { root: b.approverRoot, approvalHours: hours, offTask: b.offTask !== "off", crl: { version: 0, serials: [] }, ...(b.presence === "required" ? { presence: "required" as const } : {}) };
     } else if (b.approvalHours !== undefined || b.offTask !== undefined || b.presence !== undefined) return malformed();
-    const r = await deps.store.pair(b.name!, workspace, remote);
+    const r = await deps.store.pair(b.name!, workspace, remote, maxLanes);
     if (!r.ok) return reply(409, { ok: false, error: r.error });
-    emit(deps, "controller_paired", { runId: Snowflake.next(), sessionId: `controller:${r.pairing.id}` }, { pairing: r.pairing.name, pairing_id: r.pairing.id });
+    emit(deps, "controller_paired", { runId: Snowflake.next(), sessionId: `controller:${r.pairing.id}` }, { pairing: r.pairing.name, pairing_id: r.pairing.id, max_lanes: r.pairing.maxLanes ?? MAX_LANES_PER_PAIRING });
     // The token rides this reply once and nowhere else.
-    return reply(200, { ok: true, data: { id: r.pairing.id, name: r.pairing.name, workspace, token: r.token } });
+    return reply(200, { ok: true, data: { id: r.pairing.id, name: r.pairing.name, workspace, maxLanes: r.pairing.maxLanes ?? MAX_LANES_PER_PAIRING, token: r.token } });
   }
   if (path === "/api/controller/unpair") {
     const b = await strictBody(req, ["name"], ["name"]);
@@ -230,7 +235,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
 
   if (path === "/api/controller/lanes") {
     if (req.method !== "GET" || url.search) return malformed();
-    return reply(200, { ok: true, data: { lanes: (await ownLanes(deps, pairing)).map((l) => laneOut(l, deps.lanes.get(l.id))) } });
+    return reply(200, { ok: true, data: { lanes: (await ownLanes(deps, pairing)).map((l) => laneOut(l, deps.lanes.get(l.id))), maxLanes: pairing.maxLanes ?? MAX_LANES_PER_PAIRING } });
   }
 
   if (path === "/api/controller/spawn") {
@@ -239,7 +244,8 @@ export async function handleController(req: Request, path: string, pairing: Pair
     // ADR-0482: a lane that could not be recorded would silently not come back after a restart.
     if (deps.lanes.broken) return reply(503, { ok: false, error: deps.lanes.broken });
     const live = (await ownLanes(deps, pairing)).filter((l) => l.status !== "stopped");
-    if (live.length >= MAX_LANES_PER_PAIRING) return reply(429, { ok: false, error: `at most ${MAX_LANES_PER_PAIRING} lanes per pairing` });
+    const cap = pairing.maxLanes ?? MAX_LANES_PER_PAIRING;
+    if (live.length >= cap) return reply(429, { ok: false, error: `at most ${cap} lanes per pairing` });
     // The id comes first: a remote lane's review branch is named after it before the lane exists.
     const id = `lane-${randomBytes(4).toString("hex")}`;
     // ADR-0483: a remote pairing's lane in a git workspace gets its own worktree on `remote/<lane id>`. Not a git

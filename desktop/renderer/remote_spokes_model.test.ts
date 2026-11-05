@@ -4,11 +4,13 @@
 // P-IDE-SPOKES.1 (ADR-0487): the remote-spokes view model. What the orbit and the hub picker show for a spoke
 // (state, lanes, model, tasks) from the hub plugin's summary, what a hub's certificate lets the IDE offer, and
 // the plugin's two-click rule. ADR-0489: answer time, route, certificate region and classification, the spoke's
-// models, and the Start-a-task selector's eligibility and order.
+// models, and the Start-a-task selector's eligibility and order. ADR-0490: the spoke's machine and lane policy, the
+// silent rule, alert lines and Resume.
 
 import { describe, expect, test } from "bun:test";
 import {
-  approvalButtons, armClick, ARM_MS, deployChoices, hubActions, latencyLabel, mapHubSnapshot, mapSpokeRow, MODEL_LIST_MAX, modelCount, REMOTE_TONE, remoteGlance, spokeState, taskButtons,
+  ALERTS_MAX, approvalButtons, armClick, ARM_MS, clockLabel, deployChoices, hostLabel, hubActions, lanePolicyLabel, latencyLabel, mapHubSnapshot, mapSpokeRow, mibLabel,
+  MODEL_LIST_MAX, modelCount, REMOTE_TONE, remoteGlance, RESUME_TEXT, spokeAlerts, spokeState, stateLabel, taskButtons,
   type RemoteApprovalView, type RemoteSpokeView, type RemoteTaskView,
 } from "./remote_spokes_model.ts";
 
@@ -16,8 +18,11 @@ const NODE = `n_${"1".repeat(32)}`;
 const HUB = `n_${"f".repeat(32)}`;
 const task = (over: Record<string, unknown> = {}) => ({ id: "t_0123456789abcdef", name: "triage", state: "idle", turns: 3, updatedAt: 100, createdAt: 1, origin: HUB, ...over });
 const caps = { maxLanes: 2, liveLanes: 1, freeLanes: 1, busyTasks: 1, models: { default: "azure-openai/gpt-5.1", signedIn: [], local: [] } };
-/** ADR-0489's optional fields as an older hub plugin leaves them: every one unknown. */
-const UNKNOWN = { latencyMs: null, via: null, region: null, classification: null, certExpires: null, engineVersion: null };
+/** ADR-0489's and ADR-0490's optional fields as an older hub plugin leaves them: every one unknown. */
+const UNKNOWN = {
+  latencyMs: null, via: null, region: null, classification: null, certExpires: null, engineVersion: null,
+  host: null, lanePolicy: null, lastSeen: null, silentSince: null, alerts: [],
+};
 
 describe("mapSpokeRow: one spoke as the orbit shows it", () => {
   test("label, lanes, model and tasks come from the spoke's own capabilities and status", () => {
@@ -183,6 +188,103 @@ describe("ADR-0489: the Start-a-task selector's rows", () => {
   });
 });
 
+describe("ADR-0490: the spoke's machine, its lane policy, silence, alerts and Resume", () => {
+  const host = {
+    os: "linux", arch: "x64", cpus: 8, memMiB: 32_768, diskFreeMiB: 512_000,
+    gpus: [{ name: "NVIDIA A10", vramMiB: 24_576 }, { name: "iGPU" }], localModel: { host: "127.0.0.1:11434", reachable: true },
+  };
+  const lanePolicy = { max: 4, limitedBy: "memory", why: "32 GiB fits 4 engines with room for the model" };
+  /** Local wall-clock times on one day, so the clock labels do not depend on the test machine's time zone. */
+  const at = (h: number, m: number) => new Date(2026, 10, 5, h, m).getTime();
+  const NOW = at(14, 30);
+
+  test("host and lane policy come through from capabilities; caps.maxLanes stays the lane count", () => {
+    const v = mapSpokeRow({ node: NODE, label: "gpu-box", reachable: true, tasks: [], caps: { ...caps, maxLanes: 4, freeLanes: 3, host, lanePolicy }, lastSeen: 1_000 });
+    expect(v?.host).toEqual({
+      os: "linux", arch: "x64", cpus: 8, memMiB: 32_768, diskFreeMiB: 512_000,
+      gpus: [{ name: "NVIDIA A10", vramMiB: 24_576 }, { name: "iGPU", vramMiB: null }], localModel: { host: "127.0.0.1:11434", reachable: true },
+    });
+    expect(v?.lanePolicy).toEqual(lanePolicy);
+    expect(v?.lanes).toEqual({ live: 1, max: 4, free: 3 });
+    expect([v?.lastSeen, v?.silentSince, v?.state]).toEqual([1_000, null, "idle"]);
+    expect(hostLabel(v!.host)).toBe("8 CPUs \u00b7 32 GiB memory \u00b7 NVIDIA A10 24 GiB \u00b7 iGPU");
+    expect(lanePolicyLabel(v!.lanePolicy!)).toBe("up to 4 lanes, limited by memory: 32 GiB fits 4 engines with room for the model");
+    expect([mibLabel(512), mibLabel(15_872), mibLabel(1024)]).toEqual(["512 MiB", "15.5 GiB", "1 GiB"]);
+    expect(hostLabel(null)).toBe("");
+  });
+
+  test("malformed host, policy, presence and alert fields read as unknown or are dropped, never coerced", () => {
+    const v = mapSpokeRow({
+      node: NODE, label: "x", reachable: true, tasks: [], lastSeen: -1, silentSince: "soon",
+      caps: {
+        host: { os: 7, cpus: 0, memMiB: 1.5, diskFreeMiB: -3, gpus: [{ vramMiB: 8 }, { name: "G".repeat(200), vramMiB: "big" }, "nope"], localModel: { host: "h", reachable: "yes" } },
+        lanePolicy: { max: 0, limitedBy: "memory", why: "x" },
+      },
+      alerts: [
+        { kind: "exploded", at: 5 }, { kind: "crashed" }, "nope",
+        { kind: "crashed", at: 9, detail: "D".repeat(900), tasks: [{ id: "t_bad", name: "x" }, { id: "t_0123456789abcdef", name: "" }, { id: "t_0123456789abcdef", name: "ok" }] },
+      ],
+    });
+    expect(v?.host).toEqual({ os: null, arch: null, cpus: null, memMiB: null, diskFreeMiB: null, gpus: [{ name: "G".repeat(64), vramMiB: null }], localModel: null });
+    expect(v?.lanePolicy).toBeNull();
+    expect(mapSpokeRow({ node: NODE, label: "x", caps: { lanePolicy: { max: 2, limitedBy: "vibes" } } })?.lanePolicy).toBeNull();
+    expect(mapSpokeRow({ node: NODE, label: "x", caps: { lanePolicy: { max: 2, limitedBy: "target" } } })?.lanePolicy).toEqual({ max: 2, limitedBy: "target", why: null });
+    expect([v?.lastSeen, v?.silentSince, v?.state]).toEqual([null, null, "idle"]);
+    expect(v?.alerts).toEqual([{ kind: "crashed", at: 9, detail: "D".repeat(300), tasks: [{ id: "t_0123456789abcdef", name: "ok" }] }]);
+    expect(mapSpokeRow({ node: NODE, label: "x", alerts: "nope", caps: { host: "linux" } })).toMatchObject({ alerts: [], host: null });
+  });
+
+  test("alerts are newest first and at most 20", () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ kind: "engine-restarted", at: i + 1, detail: `n${i}` }));
+    const v = mapSpokeRow({ node: NODE, label: "x", alerts: many });
+    expect(v?.alerts).toHaveLength(ALERTS_MAX);
+    expect([v?.alerts[0]?.at, v?.alerts.at(-1)?.at]).toEqual([30, 11]);
+  });
+
+  test("the silent rule: a spoke the hub reports silent reads 'silent since', never idle, and cannot take a task", () => {
+    const since = at(14, 5);
+    const v = mapSpokeRow({ node: NODE, label: "vm", reachable: true, tasks: [task()], caps, silentSince: since, lastSeen: since })!;
+    expect(v.state).toBe("silent");
+    expect(REMOTE_TONE[v.state]).toBe("stuck");
+    expect(stateLabel(v, NOW)).toBe("silent since 14:05");
+    expect(remoteGlance(v, NOW)).toBe("silent since 14:05 \u00b7 1/2 lanes");
+    // the same row without silentSince is the plain idle spoke (an older plugin, or a spoke that polls)
+    expect(mapSpokeRow({ node: NODE, label: "vm", reachable: true, tasks: [task()], caps, lastSeen: since })?.state).toBe("idle");
+    // silence wins over whatever the spoke said last: it is stale
+    for (const reachable of [true, false, null]) {
+      expect(mapSpokeRow({ node: NODE, label: "vm", reachable, tasks: [task({ state: "working" })], silentSince: since })?.state).toBe("silent");
+    }
+    expect(mapSpokeRow({ node: NODE, label: "vm", silentSince: 0 })?.state).toBe("checking");
+    expect(deployChoices([v], hubActions(["drive"]))[0]).toMatchObject({ eligible: false, why: "silent: it has not polled its relay for over 2 minutes" });
+    // a silence from another day carries its date in front of the time
+    const nextDay = clockLabel(since, NOW + 86_400_000);
+    expect(nextDay).toEndWith(" 14:05");
+    expect(nextDay.length).toBeGreaterThan("14:05".length);
+  });
+
+  test("alert lines: the silence first, then each kept alert; an interrupted turn names its tasks and where to resume", () => {
+    const v = mapSpokeRow({
+      node: NODE, label: "vm", silentSince: at(14, 5),
+      alerts: [
+        { kind: "crashed", at: at(14, 4), detail: "the engine exited with code 137." },
+        { kind: "turn-interrupted", at: at(14, 6), detail: "", tasks: [{ id: "t_0123456789abcdef", name: "triage" }] },
+      ],
+    })!;
+    expect(spokeAlerts(v, NOW).map((a) => [a.key, a.kind, a.text])).toEqual([
+      [`${NODE}|silent|${at(14, 5)}`, "silent", "silent since 14:05: no word from it for 25 min while its relay answers"],
+      [`${NODE}|turn-interrupted|${at(14, 6)}`, "turn-interrupted", "turn interrupted at 14:06 (triage). Resume it from the spoke's panel"],
+      [`${NODE}|crashed|${at(14, 4)}`, "crashed", "crashed at 14:04: the engine exited with code 137"],
+    ]);
+    expect(spokeAlerts({ ...v, silentSince: null, alerts: [] }, NOW)).toEqual([]);
+  });
+
+  test("Resume sends exactly the contract text, and only a human click sends it", () => {
+    expect(RESUME_TEXT).toBe("Continue this task. The previous turn was interrupted when the spoke restarted: check what was already done before you repeat anything.");
+    // the first click only arms (the same two-click rule as Approve and Close)
+    expect(armClick(null, 5).act).toBe("arm");
+  });
+});
+
 describe("mapHubSnapshot: the hub, its scopes and every spoke", () => {
   test("a set-up hub lists its spokes with the actions its certificate's scopes allow", () => {
     const v = mapHubSnapshot({ hub: { node: HUB, label: "workstation", scopes: ["recall", "drive", "root-ish"] }, spokes: [{ node: NODE, label: "vm-218", reachable: true, tasks: [] }, { node: "bad" }] });
@@ -206,17 +308,27 @@ describe("scope gating: the IDE offers only what the hub certificate allows", ()
 
   test("recall only: read buttons, no drive, no approve, no deny", () => {
     expect(a(["recall"])).toEqual({ recall: true, drive: false, approve: false, deny: false });
-    expect(taskButtons(t("idle"), a(["recall"]))).toEqual({ recall: true, followup: false, cancel: false, close: false });
-    expect(taskButtons(t("working"), a(["recall"]))).toEqual({ recall: true, followup: false, cancel: false, close: false });
+    expect(taskButtons(t("idle"), a(["recall"]))).toEqual({ recall: true, followup: false, cancel: false, close: false, resume: false });
+    expect(taskButtons(t("working"), a(["recall"]))).toEqual({ recall: true, followup: false, cancel: false, close: false, resume: false });
+    expect(taskButtons({ ...t("idle"), interrupted: 5 }, a(["recall"])).resume).toBe(false);
   });
 
   test("drive: follow-up when the turn is over, cancel while it runs, close while it holds a lane", () => {
     const d = a(["recall", "drive"]);
-    expect(taskButtons(t("idle"), d)).toEqual({ recall: true, followup: true, cancel: false, close: true });
-    expect(taskButtons(t("working"), d)).toEqual({ recall: true, followup: false, cancel: true, close: true });
-    expect(taskButtons(t("awaiting_approval"), d)).toEqual({ recall: true, followup: false, cancel: true, close: true });
-    expect(taskButtons(t("closed"), d)).toEqual({ recall: true, followup: false, cancel: false, close: false });
-    expect(taskButtons(t("stopped"), d)).toEqual({ recall: true, followup: false, cancel: false, close: false });
+    expect(taskButtons(t("idle"), d)).toEqual({ recall: true, followup: true, cancel: false, close: true, resume: false });
+    expect(taskButtons(t("working"), d)).toEqual({ recall: true, followup: false, cancel: true, close: true, resume: false });
+    expect(taskButtons(t("awaiting_approval"), d)).toEqual({ recall: true, followup: false, cancel: true, close: true, resume: false });
+    expect(taskButtons(t("closed"), d)).toEqual({ recall: true, followup: false, cancel: false, close: false, resume: false });
+    expect(taskButtons(t("stopped"), d)).toEqual({ recall: true, followup: false, cancel: false, close: false, resume: false });
+  });
+
+  test("ADR-0490: an interrupted task offers Resume only when a follow-up could land (drive, turn over, lane held)", () => {
+    const d = a(["recall", "drive"]);
+    const cut = (state: RemoteTaskView["state"]): RemoteTaskView => ({ ...t(state), interrupted: 1_700 });
+    expect(taskButtons(cut("idle"), d)).toEqual({ recall: true, followup: true, cancel: false, close: true, resume: true });
+    expect(taskButtons(cut("error"), d).resume).toBe(true);
+    for (const state of ["working", "awaiting_approval", "closed", "stopped"] as const) expect(taskButtons(cut(state), d).resume).toBe(false);
+    expect(taskButtons(cut("idle"), a(["recall", "approve"])).resume).toBe(false);
   });
 
   test("parked actions: approve needs the approve scope and a scanner-clean action; deny needs drive or approve", () => {
@@ -230,7 +342,7 @@ describe("scope gating: the IDE offers only what the hub certificate allows", ()
 
 describe("display rules", () => {
   test("the shared hues: red stuck, amber might be stuck, cyan working, blue ready", () => {
-    expect(REMOTE_TONE).toEqual({ approval: "approval", error: "stuck", offline: "maybe", busy: "busy", idle: "ready", checking: "checking" });
+    expect(REMOTE_TONE).toEqual({ approval: "approval", error: "stuck", offline: "maybe", busy: "busy", idle: "ready", checking: "checking", silent: "stuck" });
     expect(spokeState(true, [])).toBe("idle");
   });
 

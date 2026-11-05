@@ -30,7 +30,7 @@ afterEach(() => {
 
 const CLEAN: GateDecision = { block: false, reason: "clean", trustLabel: "trusted", findings: [], failClosed: false };
 /** The fields these tests read from the handler's JSON replies. */
-interface Reply { error: string; data: { token: string; lane: { id: string }; lanes: { id: string }[]; turns: unknown; runId: string } }
+interface Reply { error: string; data: { token: string; lane: { id: string }; lanes: { id: string }[]; turns: unknown; runId: string; maxLanes: number } }
 
 function rig(scan: (t: string) => Promise<GateDecision> = async () => CLEAN) {
   const store = new PairingStore(join(dir, "controller-pairings.json"));
@@ -146,6 +146,46 @@ describe("scope isolation", () => {
     expect((await r.call("spawn", pairing, {})).status).toBe(200);
     const third = await r.call("spawn", pairing, {});
     expect([third.status, third.body.error]).toEqual([429, "at most 2 lanes per pairing"]);
+  });
+
+  test("ADR-0490: a pairing granted 4 lanes admits 4 and refuses the 5th; absent means 2; the grant survives a reload", async () => {
+    const r = rig();
+    const paired = await r.call("pair", null, { name: "big", workspace: ws, maxLanes: "4" });
+    expect(paired.status).toBe(200);
+    expect(paired.body.data.maxLanes).toBe(4);
+    const big = (await r.store.verify(paired.body.data.token))!;
+    expect(big.maxLanes).toBe(4);
+    for (let i = 0; i < 4; i++) expect((await r.call("spawn", big, {})).status).toBe(200);
+    const fifth = await r.call("spawn", big, {});
+    expect([fifth.status, fifth.body.error]).toEqual([429, "at most 4 lanes per pairing"]);
+    expect((await r.call("lanes", big)).body.data.maxLanes).toBe(4);
+    expect(r.events.find((e) => e.event === "controller_paired")).toMatchObject({ pairing: "big", max_lanes: 4 });
+    // absent: the ADR-0425 default, stored as nothing (so a pairing written before ADR-0490 reads the same)
+    const { pairing: plain } = await r.pair("plain");
+    expect(plain.maxLanes).toBeUndefined();
+    expect((await r.call("lanes", plain)).body.data.maxLanes).toBe(2);
+    const file = join(dir, "controller-pairings.json");
+    const reloaded = new PairingStore(file);
+    expect([reloaded.byId(big.id)?.maxLanes, reloaded.byId(plain.id)?.maxLanes]).toEqual([4, undefined]);
+    expect(reloaded.broken).toBeNull();
+  });
+
+  test("ADR-0490: a lane grant outside 1..8, or not decimal digits, is refused at pair time and in the file", async () => {
+    const r = rig();
+    for (const maxLanes of ["0", "9", "-1", "2.5", " 4", "4x", "", "08x", 4]) {
+      expect((await r.call("pair", null, { name: "bad", workspace: ws, maxLanes })).status).toBe(400);
+    }
+    // nothing was stored: the name is still free
+    expect((await r.call("pair", null, { name: "bad", workspace: ws })).status).toBe(200);
+    expect((await r.call("pair", null, { name: "one", workspace: ws, maxLanes: "1" })).status).toBe(200);
+    expect((await r.call("pair", null, { name: "eight", workspace: ws, maxLanes: "8" })).status).toBe(200);
+    expect((await r.store.pair("direct", ws, undefined, 9)).ok).toBe(false);
+    // a hand-edited store that grants 9 is malformed, not silently clamped
+    const file = join(dir, "controller-pairings.json");
+    const stored = JSON.parse(readFileSync(file, "utf8")) as { pairings: { maxLanes?: number }[] };
+    stored.pairings[0]!.maxLanes = 9;
+    writeFileSync(file, JSON.stringify(stored), { mode: 0o600 });
+    expect(new PairingStore(file).broken).toBe("pairing store is malformed");
   });
 
   test("ADR-0481: close ends the controller's own lane, frees its slot, and leaves no restart record", async () => {
