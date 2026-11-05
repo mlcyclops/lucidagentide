@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   createUserOnlyDir, createUserOnlyFile, decodeSecretFile, editorCommand, FALLBACK_DIR_PREFIX, FallbackRefused, icaclsUserOnly, isUserOnly,
-  MAX_SECRET_FILE_BYTES, parseIcaclsTrustees, parseWhoamiUser, privateTempBase, startFallback, sweepOrphanTempDirs, wipeAndDelete,
+  MAX_SECRET_FILE_BYTES, parseIcaclsTrustees, parseWhoamiUser, privateTempBase, restrictToUser, startFallback, sweepOrphanTempDirs, wipeAndDelete,
 } from "./secret_fallback.ts";
 import { isSyncedPath } from "./synced_path.ts";
 
@@ -49,6 +49,14 @@ describe("createUserOnlyFile", () => {
     expect(isSyncedPath(file)).toBe(false);
     expect(file).toContain("paste-OPENAI_API_KEY-here.txt");
     rmSync(d, { recursive: true, force: true });
+  });
+  test.skipIf(process.platform !== "win32")("v2.5.1 upgrade review SECRET-FALLBACK-EXPLICIT-ACE: an explicit entry for another trustee is removed, not just inherited ones", () => {
+    const d = dir();
+    const icacls = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe");
+    // An explicit (non-inherited) grant, as GitHub's runners put SYSTEM and Administrators on new folders.
+    expect(Bun.spawnSync([icacls, d, "/grant", "*S-1-5-32-545:(OI)(CI)R"]).exitCode).toBe(0); // BUILTIN\Users
+    restrictToUser(d);
+    expect(isUserOnly(d)).toBe(true);
   });
   test("fail-closed: a restrict failure refuses and leaves no folder behind", () => {
     const base = dir();

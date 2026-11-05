@@ -151,8 +151,17 @@ function windowsUser(): { name: string; sid: string } {
 export function restrictToUser(dir: string, platform: NodeJS.Platform = process.platform): void {
   if (platform !== "win32") { chmodSync(dir, 0o700); return; }
   const who = windowsUser();
-  const r = run([join(SYSTEM32, "icacls.exe"), dir, "/inheritance:r", "/grant:r", `*${who.sid}:(OI)(CI)F`]);
+  const icacls = join(SYSTEM32, "icacls.exe");
+  const r = run([icacls, dir, "/inheritance:r", "/grant:r", `*${who.sid}:(OI)(CI)F`]);
   if (r.code !== 0) throw new FallbackRefused("Windows refused to restrict the temp folder to your account");
+  // v2.5.1 upgrade review SECRET-FALLBACK-EXPLICIT-ACE: /inheritance:r drops only INHERITED entries. A new
+  // folder can also carry EXPLICIT ones (GitHub's Windows runners give SYSTEM and Administrators), which
+  // made every private dir fail verification. Remove every explicit entry that is not this user.
+  const listed = run([icacls, dir]);
+  if (listed.code !== 0) throw new FallbackRefused("Windows refused to list the temp folder's access entries");
+  for (const t of new Set(parseIcaclsTrustees(listed.out, dir).filter((t) => !isOwnTrustee(t, who)))) {
+    if (run([icacls, dir, "/remove", t]).code !== 0) throw new FallbackRefused(`Windows refused to remove ${t} from the temp folder`);
+  }
 }
 
 /** Default verify: POSIX owner = us and no group/other bits; Windows every ACE is the user's. */
