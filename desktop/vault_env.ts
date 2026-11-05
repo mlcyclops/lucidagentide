@@ -40,6 +40,8 @@ export interface VaultEnvReport {
 const applied = new Map<string, string>();
 /** The Meeting Hub bearer last taken from the vault. */
 let hubFromVault = "";
+/** applyVaultEnv has read the vault at least once (see HUB-STALE-INJECTION). */
+let hubApplied = false;
 let lastNote = "";
 
 /** Resolve the credential env from the engine vault and apply it to process.env. Called at engine
@@ -58,7 +60,13 @@ export function applyVaultEnv(): VaultEnvReport {
   const hub = env[MEETING_HUB_ENV] ?? "";
   delete env[MEETING_HUB_ENV];
   const held = meetingHubToken();
-  if (hub && hub !== held && (!held || held === hubFromVault)) setMeetingHubToken(hub);
+  // v2.5.1 upgrade review HUB-STALE-INJECTION: on the first application the held bearer can only be main's
+  // safeStorage injection (pairing needs a running engine), and the vault value replaces it like every
+  // other credential above; later, a held value that differs from the last vault value is a fresh pairing
+  // not yet stored, and is kept.
+  const firstHub = !hubApplied;
+  hubApplied = true;
+  if (hub && hub !== held && (firstHub || !held || held === hubFromVault)) setMeetingHubToken(hub);
   else if (!hub && hubFromVault && held === hubFromVault) setMeetingHubToken(""); // deleted from the vault
   hubFromVault = hub;
 
@@ -124,5 +132,6 @@ export function vaultRedactEnv(overlay: Readonly<Record<string, string>>): { LUC
 export function _resetVaultEnvForTest(): void {
   applied.clear();
   hubFromVault = "";
+  hubApplied = false;
   lastNote = "";
 }

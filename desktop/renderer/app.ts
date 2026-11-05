@@ -2724,6 +2724,10 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       sawTool = snapshot.pending.length > 0;
       for (const card of permCards.values()) card.el.remove();
       permCards.clear(); voiceApproval = null;
+      // v2.5.1 upgrade review SECRET-REQUEST-REATTACH: every attach starts with this snapshot, but the engine
+      // replays only permissions, so a secret request emitted while the stream was down is asked for again
+      // here (mountSecretIntake is idempotent: an open or queued request is not shown twice).
+      if (snapshot.running) mountSecretIntake();
       speechCursor = buf.length; speechFedAt = buf.length;
       streamEl.innerHTML = renderMarkdown(buf) + (snapshot.running ? `<span class="cursor"></span>` : "");
       setPhase(snapshotPhaseLabel(snapshot, rejoined, phase));

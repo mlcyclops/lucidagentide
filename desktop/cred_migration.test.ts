@@ -349,6 +349,20 @@ describe("engine-side env resolution", () => {
     expect(readFileSync(process.env.LUCID_OMP_MODELS_YAML!, "utf8")).not.toContain("LEGACYDGXKEY");
   });
 
+  test("v2.5.1 upgrade review HUB-STALE-INJECTION: the vault's Meeting Hub bearer replaces main's older injection; a fresh pairing is kept", async () => {
+    scratch();
+    useFakeStore();
+    vaultPut({ ref: "meeting_hub_token", value: "hub-VAULT-NEWER-BEARER-0000B", kind: "jwt", source: "typed" });
+    setMeetingHubToken("hub-LEGACY-INJECTED-BEARER-0A"); // main injected the older safeStorage copy at spawn
+    _resetVaultEnvForTest();
+    await quiet(async () => applyVaultEnv());
+    expect(meetingHubToken()).toBe("hub-VAULT-NEWER-BEARER-0000B");
+    setMeetingHubToken("hub-FRESH-PAIRING-NOTSTORED-C"); // pairing mid-session, before the renderer stores it
+    vaultPut({ ref: "figma_pat", value: "figd_UNRELATED_WRITE_000000D", kind: "apikey", source: "typed" });
+    await quiet(async () => applyVaultEnv());
+    expect(meetingHubToken()).toBe("hub-FRESH-PAIRING-NOTSTORED-C");
+  });
+
   test("a vault change re-resolves the env; a name main injected is never removed", async () => {
     scratch();
     useFakeStore();
