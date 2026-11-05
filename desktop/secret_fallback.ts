@@ -118,9 +118,12 @@ export function parseIcaclsTrustees(out: string, path: string): string[] {
 /** True when every ACE belongs to this user (by account name or SID) and there is at least one. */
 export function icaclsUserOnly(out: string, path: string, who: { name: string; sid: string }): boolean {
   const trustees = parseIcaclsTrustees(out, path);
-  if (trustees.length === 0) return false;
-  const ok = (t: string) => t.toLowerCase() === who.name.toLowerCase() || t.toUpperCase() === who.sid.toUpperCase() || t.toUpperCase() === `*${who.sid.toUpperCase()}`;
-  return trustees.every(ok);
+  return trustees.length > 0 && trustees.every((t) => isOwnTrustee(t, who));
+}
+
+/** An icacls trustee that names this user, by account name or SID. */
+function isOwnTrustee(t: string, who: { name: string; sid: string }): boolean {
+  return t.toLowerCase() === who.name.toLowerCase() || t.toUpperCase() === who.sid.toUpperCase() || t.toUpperCase() === `*${who.sid.toUpperCase()}`;
 }
 
 const run = (argv: string[]): { code: number; out: string } => {
@@ -167,6 +170,21 @@ export function isUserOnly(path: string, platform: NodeJS.Platform = process.pla
   }
 }
 
+/** For a refusal message: who else holds access to `path` (Windows trustees other than this user, never
+ *  a value), so a support log names the cause instead of only the symptom. Empty when unknown. */
+function foreignAccessNote(path: string, platform: NodeJS.Platform): string {
+  if (platform !== "win32") return "";
+  try {
+    const who = windowsUser();
+    const r = run([join(SYSTEM32, "icacls.exe"), path]);
+    if (r.code !== 0) return ` (icacls exited ${r.code})`;
+    const others = parseIcaclsTrustees(r.out, path).filter((t) => !isOwnTrustee(t, who));
+    return others.length ? ` (also: ${others.join(", ").slice(0, 200)}; you are ${who.name})` : ` (no access entries read; you are ${who.name})`;
+  } catch {
+    return "";
+  }
+}
+
 // ── the file ──────────────────────────────────────────────────────────────────────────────────────────
 
 /** Create `<base>/lucid-secret-XXXXXX/paste-<label>-here.txt`, empty, user-only (verified). Throws
@@ -201,7 +219,7 @@ export function createUserOnlyDir(prefix: string, opts: Pick<FallbackOptions, "b
   const dir = mkdtempSync(join(base, prefix));
   try {
     restrict(dir);
-    if (!userOnly(dir)) throw new FallbackRefused("the temp folder could not be made readable by you only");
+    if (!userOnly(dir)) throw new FallbackRefused(`the temp folder could not be made readable by you only${foreignAccessNote(dir, platform)}`);
     const marker = join(dir, OWNER_MARKER);
     const fd = openSync(marker, "wx", 0o600);
     try { writeSync(fd, String(process.pid)); } finally { closeSync(fd); }
