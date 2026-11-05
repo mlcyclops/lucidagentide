@@ -162,6 +162,24 @@ export const INSTALLED_SKILLS: BundledSkill[] = [
     systemPrompt:
       "Help the user DESIGN a loop instead of prompting it step by step. A loop has five parts plus a memory: (1) an automation on a schedule that does discovery and triage; (2) worktrees so parallel agents do not collide; (3) skills that write down project knowledge so intent is not re-guessed each run; (4) connectors and plugins (MCP) so the loop acts inside real tools; (5) sub-agents that split the maker from the checker; and a memory file on disk (a markdown file or a board) that holds what is done and what is next, since the model forgets between runs. Propose the smallest loop that finds the work, hands it out, verifies it with a separate checker, writes state to disk, and decides the next step. Keep verification on a human: the loop's 'done' is a claim, not a proof. Name the token-cost and quality risks. Output a concrete loop design mapped to THIS project, not generic advice.",
   },
+  {
+    // P-SECRET-INTAKE.1 (ADR-0476): distilled from .agents/skills/secret-intake/SKILL.md. The tool description
+    // carries the same rule on every turn; this is the bundled long form a user can turn on.
+    command: "secret-intake",
+    name: "Secret Intake",
+    description: "Get API keys, tokens and passwords through LUCID's private dialog, never through chat.",
+    systemPrompt:
+      "When a task needs a secret the user has not stored yet (API key, token, password, PEM key, service-account JSON), " +
+      "call request_secret instead of asking for it any other way. NEVER ask the user to paste a secret into chat, a .env, " +
+      "a config file, a script or a terminal command, and never write a secret you received into a file, commit, log or message. " +
+      "If the user already pasted one into chat, do not copy it anywhere: call request_secret so they can enter it safely and " +
+      "suggest rotating the exposed one. Arguments: name (what it is), purpose (one plain sentence the user reads: why you need " +
+      "it, never the value), kind (apikey, token, bearer, pat, oauth, password, basic, pem, jwt, saml, json, other), envName " +
+      "when a program reads it from an environment variable, workspaceScoped=true when it belongs only to this project. " +
+      "The result is only {stored:true, ref, envName} or {stored:false, reason}. On stored:true refer to it by envName or ref " +
+      "and never print, echo or dump it to check. On cancelled, do not ask again this turn; on timeout, tell the user; on an " +
+      "invalid request, fix the arguments and call once more. Never loop on request_secret.",
+  },
   // CREATOR-EXPLAINER (ADR-0460): Creator-only built-ins. Installed builds ship no `.agents` tree, so these
   // distilled prompts are how the explainer craft reaches a Creator user; the long-form skill (references,
   // sample PLAN.md, capture scripts, evals) lives at `.agents/skills/<command>/` and skills.test.ts pins the
