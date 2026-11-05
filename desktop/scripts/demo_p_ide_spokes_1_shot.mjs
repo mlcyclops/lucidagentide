@@ -14,6 +14,8 @@
 // affected card gets an alert line, a silent spoke reads "silent since" in red, the Remote hub section lists the
 // alerts newest first with a counting badge and a dismissal that sticks, and an interrupted task's Resume arms on
 // the first click and posts exactly the contract text through the followup route on the second.
+// ADR-0492: the selector's Model list holds the picked spoke's models, default first, refills when another spoke is
+// picked, and Start posts the chosen model.
 // Screenshots go to LUCID_DEMO_SHOT_DIR (default: the OS temp dir).
 
 import { tmpdir } from "node:os";
@@ -177,11 +179,22 @@ export async function verifyRemoteSpokes(page, shotDir = tmpdir()) {
     assert(rows[0].text.includes("16 CPUs \u00b7 64 GiB memory \u00b7 NVIDIA RTX 4090 24 GiB") && rows[0].text.includes("up to 2 lanes, limited by its configuration: the operator set two lanes on this spoke"), `vm-217 host and lane policy: ${JSON.stringify(rows[0])}`);
     await page.type("#orbitView [data-rs-dep-name]", "smoke");
     await page.type("#orbitView [data-rs-dep-text]", "say hello");
+    // ADR-0492: the Model list holds the picked spoke's models, its default first (sent as no model); picking another
+    // spoke refills it at once, and picking back offers the first spoke's models again.
+    const ownModels = await page.$$eval("#orbitView [data-rs-dep-model] option", (os) => os.map((o) => [o.value, o.textContent]));
+    assert(JSON.stringify(ownModels) === JSON.stringify([["", "spark/glm-5.3-flash (default)"], ["spark/qwen3-32b", "spark/qwen3-32b"]]), `vm-217 models: ${JSON.stringify(ownModels)}`);
+    await page.click(`#orbitView .rs-choice:has(input[value="${NODE("1")}"])`);
+    await page.waitForFunction(() => [...document.querySelectorAll("#orbitView [data-rs-dep-model] option")].some((o) => o.value === "azure-openai/gpt-5-mini"), { timeout: 5_000 });
+    const azureModels = await page.$$eval("#orbitView [data-rs-dep-model] option", (os) => os.map((o) => [o.value, o.textContent]));
+    assert(JSON.stringify(azureModels) === JSON.stringify([["", "azure-openai/gpt-5.1 (default)"], ["azure-openai/gpt-5-mini", "azure-openai/gpt-5-mini"]]), `azure-eastus models: ${JSON.stringify(azureModels)}`);
+    await page.click(`#orbitView .rs-choice:has(input[value="${NODE("4")}"])`);
+    await page.waitForFunction(() => [...document.querySelectorAll("#orbitView [data-rs-dep-model] option")].some((o) => o.value === "spark/qwen3-32b"), { timeout: 5_000 });
+    await page.select("#orbitView [data-rs-dep-model]", "spark/qwen3-32b");
     shots.push(join(shotDir, "ide-spokes-deploy.png"));
     await page.screenshot({ path: shots.at(-1) });
     await page.click("#orbitView [data-rs-dep-go]");
     await page.waitForFunction(() => document.querySelector("#orbitView [data-rs-title]")?.textContent === "vm-217", { timeout: 15_000 });
-    assert(JSON.stringify(submits) === JSON.stringify([{ node: NODE("4"), text: "say hello", name: "smoke" }]), `submit bodies: ${JSON.stringify(submits)}`);
+    assert(JSON.stringify(submits) === JSON.stringify([{ node: NODE("4"), text: "say hello", name: "smoke", model: "spark/qwen3-32b" }]), `submit bodies: ${JSON.stringify(submits)}`);
 
     // A long model list folds into a details with its count.
     await page.click("#orbitView [data-orbit-hubs]");
@@ -253,6 +266,6 @@ if (import.meta.main) {
     const page = (await browser.pages()).find((p) => p.url() === url);
     if (!page) throw new Error(`No existing QA page at ${url}`);
     console.log(JSON.stringify(await verifyRemoteSpokes(page, process.env.LUCID_DEMO_SHOT_DIR || tmpdir()), null, 2));
-    console.log("P-IDE-SPOKES.1 passed: remote spokes on the orbit and in the hub picker, scope-gated controls, two-click approve, recalled text shown as text; ADR-0489 selector, models and answer time; ADR-0490 host facts, alerts, silent since and two-click Resume.");
+    console.log("P-IDE-SPOKES.1 passed: remote spokes on the orbit and in the hub picker, scope-gated controls, two-click approve, recalled text shown as text; ADR-0489 selector, models and answer time; ADR-0490 host facts, alerts, silent since and two-click Resume; ADR-0492 a model chosen per task.");
   } finally { await browser.disconnect(); }
 }

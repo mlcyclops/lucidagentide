@@ -2198,6 +2198,9 @@ const controllerDeps: ControllerDeps = {
   store: new PairingStore(join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "controller-pairings.json")),
   lanes: new ControllerLaneStore(join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "controller-lanes.json")),
   fleet,
+  // ADR-0492: a controller may name one of the models the picker lists. checkerModelInfo().options is the backend's
+  // accessible list (platform, AskSage and managed-policy narrowing applied), not only the checker's.
+  models: () => backend.checkerModelInfo().options.map((o) => o.value),
   scan: (text) => scanAndDecide(agentScanner(), text),
   sink: EVENTS_LOG_PATH,
   restoring: controllerRestore.promise,

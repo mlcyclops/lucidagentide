@@ -12,6 +12,10 @@
 //     ever tightens;
 //   - ADR-0488: a pairing that requires user presence releases an allow only with presence evidence from the key
 //     the approver's certificate names, bound to that one decision; a deny needs none.
+//   - ADR-0491: a delegate-certified approver decides only with the paired spoke's own certificate inside its
+//     delegation (label prefix, regions, classifications) and with its user on the delegation's users list when it
+//     has one; a CRL more than three days past its nextUpdate refuses every decision, and once one with nextUpdate
+//     is held a list without it is never taken.
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { generateKeyPairSync, randomBytes, sign, type KeyObject } from "node:crypto";
@@ -22,7 +26,7 @@ import type { GateDecision } from "../../harness/security/gate.ts";
 import type { TelemetryEvent } from "../../harness/telemetry/events.ts";
 import { FleetLaneManager } from "../fleet_lanes.ts";
 import type { SystemSnapshot } from "../system_profile.ts";
-import { askDigest, canonical, classifyAsk, parseOffTask, presenceChallenge, verifyRemoteDecision, type PresenceKind, type RemoteAsk } from "./remote_policy.ts";
+import { askDigest, canonical, classifyAsk, parseOffTask, presenceChallenge, verifyRemoteDecision, type CrlState, type Expected, type PresenceKind, type RemoteAsk } from "./remote_policy.ts";
 import { ControllerLaneStore } from "./lane_store.ts";
 import { handleController, type ControllerDeps } from "./routes.ts";
 import { PairingStore, type Pairing } from "./store.ts";
@@ -98,8 +102,9 @@ function rig(opts: { offTask?: "on" | "off" | "unknown"; offTaskOn?: boolean; pr
     const text = await res.text();
     return { status: res.status, json: (res.headers.get("content-type")?.includes("json") ? JSON.parse(text) : {}) as { ok?: boolean; error?: string; data?: Record<string, unknown> } };
   };
-  const setup = async () => {
-    const p = await call("pair", null, { name: "spoke", workspace: ws, approverRoot: root.spki, approvalHours: "1", offTask: opts.offTaskOn ? "on" : "off", ...(opts.presence ? { presence: opts.presence } : {}) });
+  /** `extra`: more pair body fields (ADR-0491: spokeNode). */
+  const setup = async (extra: Record<string, string> = {}) => {
+    const p = await call("pair", null, { name: "spoke", workspace: ws, approverRoot: root.spki, approvalHours: "1", offTask: opts.offTaskOn ? "on" : "off", ...(opts.presence ? { presence: opts.presence } : {}), ...extra });
     expect(p.status).toBe(200);
     const pairing = (await store.verify(String(p.json.data!.token)))!;
     const s = await call("spawn", pairing, { name: "remote" });
@@ -222,6 +227,7 @@ describe("only an engine-verified decision releases a parked ask", () => {
     const p = await r.call("pair", null, { name: "plain", workspace: ws });
     const pairing = (await r.store.verify(String(p.json.data!.token)))!;
     expect(pairing.remote).toBeUndefined();
+    expect(pairing.spokeNode).toBeUndefined();
     expect((await r.call("pair", null, { name: "bad", workspace: ws, approverRoot: "not-a-key" })).status).toBe(400);
   }, TIMEOUT);
 });
@@ -279,13 +285,20 @@ describe("a delegate-certified hub is accepted exactly when the add-on's TrustSt
     return compact({ v: 1, typ: "lucid-node-cert", serial: randomBytes(16).toString("hex"), root: root.id, node: hub.id, role: "hub", label: "test hub", spki: hub.spki, scopes, iat: now() - 10, exp: now() + 3600, user, issuer: del.id, delegation: delegationToken, ...over }, del.priv);
   }
   const ask: RemoteAsk = { id: "a1", digest: askDigest("fetch", "t", "null"), kind: "fetch", title: "t", input: "null", tier: "T2", reason: "", openedAt: 0, expiresAt: 0 };
-  const exp = { lane: "L", ask: "a1", digest: ask.digest, presence: false };
+  /** ADR-0491: the spoke the pairing names. A delegate-certified approver needs its certificate with the decision. */
+  const spoke = key();
+  const exp = { lane: "L", ask: "a1", digest: ask.digest, presence: false, spokeNode: spoke.id };
   const fresh = { version: 0, serials: [] };
+  /** A spoke certificate (the add-on's `issueCert` for a spoke): root-signed unless `signer` is a delegate, whose
+   *  `issuer` and `delegation` then ride in `over`. */
+  function spokeCert(root: Node, over: Record<string, unknown> = {}, signer: KeyObject = root.priv, n: Node = spoke) {
+    return compact({ v: 1, typ: "lucid-node-cert", serial: randomBytes(16).toString("hex"), root: root.id, node: n.id, role: "spoke", label: "test spoke", spki: n.spki, scopes: [], iat: now() - 10, exp: now() + 3600, region: "eu-west", classification: "private", ...over }, signer);
+  }
 
   test("a delegate-certified approve is accepted; the root-signed path still is", () => {
     const root = key(), team = key(), hub = key();
     const d = delegation(root, team, ["custody", "users"], { maxDays: 30, roles: ["hub"], scopes: ["approve", "recall"], emailDomains: ["example.com"], labelPrefix: "test" });
-    const v = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: delegatedCert(root, team, d.token, hub, ["approve", "recall"]) }, root.spki, fresh, exp);
+    const v = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: delegatedCert(root, team, d.token, hub, ["approve", "recall"]), spokeCert: spokeCert(root) }, root.spki, fresh, exp);
     expect(v).toMatchObject({ ok: true, allow: true, approver: hub.id, label: "test hub" });
     const direct = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: cert(root, hub, ["approve"]).token }, root.spki, fresh, exp);
     expect(direct.ok).toBe(true);
@@ -327,7 +340,7 @@ describe("a delegate-certified hub is accepted exactly when the add-on's TrustSt
   test("depth two is refused: a delegate cannot delegate further", () => {
     const root = key(), team = key(), sub = key(), hub = key();
     const first = delegation(root, team, ["users"]);
-    expect(verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: delegatedCert(root, team, first.token, hub, ["approve"]) }, root.spki, fresh, exp).ok).toBe(true);
+    expect(verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: delegatedCert(root, team, first.token, hub, ["approve"]), spokeCert: spokeCert(root) }, root.spki, fresh, exp).ok).toBe(true);
     // The team key signs a delegation for a sub-delegate, which then certifies the hub.
     const second = delegation(root, sub, ["users"], { maxDays: 30 }, {}, team.priv);
     const v = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: delegatedCert(root, sub, second.token, hub, ["approve"]) }, root.spki, fresh, exp);
@@ -345,9 +358,184 @@ describe("a delegate-certified hub is accepted exactly when the add-on's TrustSt
     const root = key(), team = key(), hub = key(), mac = authenticator("macos-secure-enclave");
     const c = delegatedCert(root, team, delegation(root, team, ["users"]).token, hub, ["approve"], { presence: mac.ref });
     const required = { ...exp, presence: true };
-    expect(verifyRemoteDecision({ decision: presentDecision(hub, "L", ask, true, mac), cert: c }, root.spki, fresh, required)).toMatchObject({ ok: true, allow: true, presence: "macos-secure-enclave" });
-    const bare = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: c }, root.spki, fresh, required);
+    expect(verifyRemoteDecision({ decision: presentDecision(hub, "L", ask, true, mac), cert: c, spokeCert: spokeCert(root) }, root.spki, fresh, required)).toMatchObject({ ok: true, allow: true, presence: "macos-secure-enclave" });
+    const bare = verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: c, spokeCert: spokeCert(root) }, root.spki, fresh, required);
     expect(!bare.ok && bare.reason).toBe("this pairing requires user presence and the approval carries no presence evidence");
+  });
+
+  // ── ADR-0491 (the add-on's RS-ID-01): a delegated approver decides only for a spoke its delegation covers ──
+  describe("ADR-0491: delegation coverage of the paired spoke", () => {
+    const NOT_COVERED = { ok: false, reason: "the approver's delegation does not cover this spoke" };
+    /** A pairing made before ADR-0491, or by a controller that sent no spokeNode. */
+    const unpaired: Expected = { lane: "L", ask: "a1", digest: ask.digest, presence: false };
+    /** A team delegation limited to `test` labels in eu-west, private spokes, and a delegate-certified approver. */
+    function team(limits: Record<string, unknown> = { maxDays: 30, labelPrefix: "test", regions: ["eu-west"], classifications: ["private"] }) {
+      const root = key(), del = key(), hub = key();
+      const d = delegation(root, del, ["users"], limits);
+      return { root, del, hub, cert: delegatedCert(root, del, d.token, hub, ["approve"]) };
+    }
+
+    test("a spoke certificate for the paired node inside the label prefix, region and classification is accepted", () => {
+      const t = team();
+      expect(verifyRemoteDecision({ decision: decision(t.hub, "L", ask, true), cert: t.cert, spokeCert: spokeCert(t.root) }, t.root.spki, fresh, exp)).toMatchObject({ ok: true, allow: true, approver: t.hub.id });
+      // a delegation with no coverage limits reaches every spoke of its root
+      const wide = team({ maxDays: 30 });
+      expect(verifyRemoteDecision({ decision: decision(wide.hub, "L", ask, true), cert: wide.cert, spokeCert: spokeCert(wide.root, { region: undefined, classification: undefined, label: "any" }) }, wide.root.spki, fresh, exp).ok).toBe(true);
+    });
+
+    test("a spoke outside the label prefix, the regions or the classifications is refused", () => {
+      const t = team();
+      const outside = (over: Record<string, unknown>) => verifyRemoteDecision({ decision: decision(t.hub, "L", ask, true), cert: t.cert, spokeCert: spokeCert(t.root, over) }, t.root.spki, fresh, exp);
+      expect(outside({ label: "ops spoke" })).toEqual(NOT_COVERED);
+      expect(outside({ region: "us-east" })).toEqual(NOT_COVERED);
+      expect(outside({ region: undefined })).toEqual(NOT_COVERED);
+      expect(outside({ classification: "cui" })).toEqual(NOT_COVERED);
+      expect(outside({ classification: undefined })).toEqual(NOT_COVERED);
+    });
+
+    test("no paired spokeNode, or a missing, foreign, unverifiable, revoked or non-spoke certificate is refused", () => {
+      const t = team();
+      const d = (spokeCertToken: string | undefined, expected: Expected = exp, held: CrlState = fresh) =>
+        verifyRemoteDecision({ decision: decision(t.hub, "L", ask, true), cert: t.cert, ...(spokeCertToken !== undefined ? { spokeCert: spokeCertToken } : {}) }, t.root.spki, held, expected);
+      expect(d(spokeCert(t.root), unpaired)).toEqual(NOT_COVERED);
+      expect(d(undefined)).toEqual(NOT_COVERED);
+      // another spoke's genuine certificate: covered, but not the spoke this pairing names
+      expect(d(spokeCert(t.root, {}, t.root.priv, key()))).toEqual(NOT_COVERED);
+      // signed by another root, signed by nobody, and a tampered body
+      expect(d(spokeCert(key()))).toEqual(NOT_COVERED);
+      expect(d("garbage.token")).toEqual(NOT_COVERED);
+      const [body, sig] = spokeCert(t.root).split(".");
+      const forged = Buffer.from(Buffer.from(body!, "base64url").toString("utf8").replace("eu-west", "eu-wesu")).toString("base64url");
+      expect(d(`${forged}.${sig}`)).toEqual(NOT_COVERED);
+      // the spoke's own certificate revoked on the held CRL, expired, or a hub's certificate for the spoke's key
+      const serial = randomBytes(16).toString("hex");
+      expect(d(spokeCert(t.root, { serial }), exp, { version: 1, serials: [serial] })).toEqual(NOT_COVERED);
+      expect(d(spokeCert(t.root, { iat: now() - 7200, exp: now() - 60 }))).toEqual(NOT_COVERED);
+      expect(d(spokeCert(t.root, { role: "hub", region: undefined, classification: undefined, scopes: ["recall"] }))).toEqual(NOT_COVERED);
+    });
+
+    test("a delegate-certified spoke counts only inside its own delegation; the approver's limits still apply", () => {
+      const t = team();
+      const fleet = key();
+      const spokes = delegation(t.root, fleet, ["spokes"], { maxDays: 30, regions: ["eu-west"] });
+      const viaFleet = (over: Record<string, unknown> = {}) => spokeCert(t.root, { issuer: fleet.id, delegation: spokes.token, ...over }, fleet.priv);
+      const run = (token: string) => verifyRemoteDecision({ decision: decision(t.hub, "L", ask, true), cert: t.cert, spokeCert: token }, t.root.spki, fresh, exp);
+      expect(run(viaFleet()).ok).toBe(true);
+      // outside the spoke's own delegation (its region list), even though the approver's would cover it
+      const narrow = delegation(t.root, fleet, ["spokes"], { maxDays: 30, regions: ["us-east"] });
+      expect(run(spokeCert(t.root, { issuer: fleet.id, delegation: narrow.token }, fleet.priv))).toEqual(NOT_COVERED);
+      // a delegation without the spokes or enroll power certifies no spoke
+      const usersOnly = delegation(t.root, fleet, ["users"]);
+      expect(run(spokeCert(t.root, { issuer: fleet.id, delegation: usersOnly.token }, fleet.priv))).toEqual(NOT_COVERED);
+      // its delegation revoked
+      expect(verifyRemoteDecision({ decision: decision(t.hub, "L", ask, true), cert: t.cert, spokeCert: viaFleet() }, t.root.spki, { version: 1, serials: [spokes.serial] }, exp)).toEqual(NOT_COVERED);
+    });
+
+    test("a root-signed approver needs neither the paired spokeNode nor a spoke certificate", () => {
+      const root = key(), hub = key();
+      expect(verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: cert(root, hub, ["approve"]).token }, root.spki, fresh, unpaired).ok).toBe(true);
+      expect(verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: cert(root, hub, ["approve"]).token, spokeCert: "garbage" }, root.spki, fresh, exp).ok).toBe(true);
+    });
+
+    test("the pair route keeps a valid spokeNode and refuses a malformed one; decide hands the spoke certificate to the check", async () => {
+      const r = rig();
+      for (const bad of ["n_0123", `n_${"A".repeat(32)}`, `x_${"0".repeat(32)}`, `n_${"0".repeat(33)}`]) {
+        expect((await r.call("pair", null, { name: "bad", workspace: ws, approverRoot: r.root.spki, spokeNode: bad })).status).toBe(400);
+      }
+      const { pairing, laneId } = await r.setup({ spokeNode: spoke.id });
+      expect(pairing.spokeNode).toBe(spoke.id);
+      expect(r.store.byId(pairing.id)?.spokeNode).toBe(spoke.id);
+      const del = key(), hub = key();
+      const approver = delegatedCert(r.root, del, delegation(r.root, del, ["users"], { maxDays: 30, labelPrefix: "test", regions: ["eu-west"] }).token, hub, ["approve"]);
+      const { parked } = await r.askFor(pairing, laneId, { kind: "fetch", title: "fetch x", rawInput: { url: "https://x" } });
+      expect(parked).not.toBeNull();
+      const body = { laneId, askId: parked!.id, decision: decision(hub, laneId, parked!, true), cert: approver };
+      for (const extra of [{}, { spokeCert: spokeCert(r.root, { region: "us-east" }) }, { spokeCert: spokeCert(r.root, {}, r.root.priv, key()) }]) {
+        const refused = await r.call("decide", pairing, { ...body, ...extra });
+        expect([refused.status, refused.json.error]).toEqual([403, "the approver's delegation does not cover this spoke"]);
+      }
+      expect(fleet!.pendingAsk(laneId)?.id).toBe(parked!.id);
+      expect((await r.call("decide", pairing, { ...body, spokeCert: spokeCert(r.root) })).status).toBe(200);
+      expect(await r.settled(laneId)).toContain(ALLOWED);
+    }, TIMEOUT);
+
+    test("a delegation's users limit admits only the approvers it lists", () => {
+      const listed = team({ maxDays: 30, users: ["ana@example.com"] });
+      expect(verifyRemoteDecision({ decision: decision(listed.hub, "L", ask, true), cert: listed.cert, spokeCert: spokeCert(listed.root) }, listed.root.spki, fresh, exp).ok).toBe(true);
+      const other = team({ maxDays: 30, users: ["bob@example.com"] });
+      expect(verifyRemoteDecision({ decision: decision(other.hub, "L", ask, true), cert: other.cert, spokeCert: spokeCert(other.root) }, other.root.spki, fresh, exp))
+        .toEqual({ ok: false, reason: "user ana@example.com is outside this delegation's users" });
+      const bad = team({ maxDays: 30, users: ["Not An Email"] });
+      const v = verifyRemoteDecision({ decision: decision(bad.hub, "L", ask, true), cert: bad.cert, spokeCert: spokeCert(bad.root) }, bad.root.spki, fresh, exp);
+      expect(!v.ok && v.reason).toContain("limits.users");
+    });
+  });
+});
+
+// ── ADR-0491 (the add-on's RS-CRL-01): a CRL that expires ─────────────────────────────────────────────
+describe("a CRL with nextUpdate goes stale three days after it", () => {
+  const DAY = 86_400;
+  const STALE = "the approver root's revocation list is out of date; publish a fresh one";
+  const ask: RemoteAsk = { id: "a1", digest: askDigest("fetch", "t", "null"), kind: "fetch", title: "t", input: "null", tier: "T2", reason: "", openedAt: 0, expiresAt: 0 };
+  const exp = { lane: "L", ask: "a1", digest: ask.digest, presence: false };
+  const crlAt = (root: Node, version: number, iat: number, nextUpdate?: number) =>
+    compact({ v: 1, typ: "lucid-crl", root: root.id, version, serials: [], iat, ...(nextUpdate !== undefined ? { nextUpdate } : {}) }, root.priv);
+
+  test("a held list past nextUpdate plus three days refuses every decision; inside the grace it does not", () => {
+    const root = key(), hub = key(), c = cert(root, hub, ["approve"]).token;
+    const run = (nextUpdate: number) => verifyRemoteDecision({ decision: decision(hub, "L", ask, true, { crl: 2 }), cert: c }, root.spki, { version: 2, serials: [], nextUpdate }, exp);
+    expect(run(now() - 3 * DAY - 60)).toEqual({ ok: false, reason: STALE });
+    expect(run(now() - 3 * DAY + 60).ok).toBe(true);
+    expect(run(now() + 7 * DAY).ok).toBe(true);
+    // a deny is a decision too: a stale list refuses it as well (the controller can still deny on its own)
+    expect(verifyRemoteDecision({ decision: decision(hub, "L", ask, false, { crl: 2 }), cert: c }, root.spki, { version: 2, serials: [], nextUpdate: now() - 4 * DAY }, exp)).toEqual({ ok: false, reason: STALE });
+  });
+
+  test("a fresh list sent with the decision clears a stale held one and is returned to be kept", () => {
+    const root = key(), hub = key(), c = cert(root, hub, ["approve"]).token;
+    const nextUpdate = now() + 7 * DAY;
+    const v = verifyRemoteDecision({ decision: decision(hub, "L", ask, true, { crl: 3 }), cert: c, crl: crlAt(root, 3, now(), nextUpdate) }, root.spki, { version: 2, serials: [], nextUpdate: now() - 4 * DAY }, exp);
+    expect(v).toMatchObject({ ok: true, crl: { version: 3, serials: [], nextUpdate } });
+    // a stale list sent along is kept as revocation news, and still refuses
+    const lapsed = now() - 4 * DAY;
+    const old = verifyRemoteDecision({ decision: decision(hub, "L", ask, true, { crl: 3 }), cert: c, crl: crlAt(root, 3, lapsed - 7 * DAY, lapsed) }, root.spki, { version: 2, serials: [] }, exp);
+    expect(old).toEqual({ ok: false, reason: STALE, crl: { version: 3, serials: [], nextUpdate: lapsed } });
+  });
+
+  test("a legacy list (no nextUpdate) never goes stale", () => {
+    const root = key(), hub = key(), c = cert(root, hub, ["approve"]).token;
+    const v = verifyRemoteDecision({ decision: decision(hub, "L", ask, true, { crl: 2 }), cert: c, crl: crlAt(root, 2, now() - 365 * DAY) }, root.spki, { version: 1, serials: [] }, exp);
+    expect(v).toMatchObject({ ok: true, crl: { version: 2, serials: [] } });
+    expect(v.ok && "nextUpdate" in v.crl).toBe(false);
+  });
+
+  test("once a list with nextUpdate is held, a newer one without it is never adopted", () => {
+    const root = key(), hub = key(), c = cert(root, hub, ["approve"]).token;
+    const held = { version: 2, serials: [], nextUpdate: now() + 7 * DAY };
+    // the newer legacy list is ignored: the decision made against it names a version the engine does not hold
+    const v = verifyRemoteDecision({ decision: decision(hub, "L", ask, true, { crl: 3 }), cert: c, crl: crlAt(root, 3, now()) }, root.spki, held, exp);
+    expect(v).toEqual({ ok: false, reason: "the approver saw CRL v3; send that CRL with the decision" });
+    // the held list stays the one in force
+    const same = verifyRemoteDecision({ decision: decision(hub, "L", ask, true, { crl: 2 }), cert: c, crl: crlAt(root, 3, now()) }, root.spki, held, exp);
+    expect(same).toMatchObject({ ok: true, crl: held });
+    // a malformed nextUpdate (not after iat) is not a list from the root
+    expect(verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: c, crl: crlAt(root, 3, now(), now() - 1) }, root.spki, held, exp))
+      .toEqual({ ok: false, reason: "the CRL is not signed by the approver root" });
+  });
+
+  test("the pairing store keeps nextUpdate and never trades it for a list without one", async () => {
+    const file = join(dir, "pairings.json");
+    const store = new PairingStore(file);
+    const root = key();
+    const r = await store.pair("p", ws, { root: root.spki, approvalHours: 1, offTask: false, crl: { version: 0, serials: [] } });
+    if (!r.ok) throw new Error(r.error);
+    store.advanceCrl(r.pairing.id, { version: 1, serials: [] });
+    expect(store.byId(r.pairing.id)?.remote?.crl).toEqual({ version: 1, serials: [] });
+    store.advanceCrl(r.pairing.id, { version: 2, serials: [], nextUpdate: 1_000 });
+    store.advanceCrl(r.pairing.id, { version: 3, serials: ["x"] });
+    expect(store.byId(r.pairing.id)?.remote?.crl).toEqual({ version: 2, serials: [], nextUpdate: 1_000 });
+    // it survives a reload
+    expect(new PairingStore(file).byId(r.pairing.id)?.remote?.crl).toEqual({ version: 2, serials: [], nextUpdate: 1_000 });
   });
 });
 

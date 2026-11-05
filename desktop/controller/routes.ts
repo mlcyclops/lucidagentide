@@ -10,7 +10,8 @@
 //     Anything else answers 403 "forbidden" with no detail.
 //   - A controller sees and acts on ONLY the lanes it spawned. A foreign or unknown lane is the same 404.
 //   - spawn takes a name and nothing else: the lane runs in the pairing's workspace, pinned SUPERVISED (every
-//     privileged ask goes to the human through the existing fleet prompt; no auto, that is P-CTRL.4).
+//     privileged ask goes to the human through the existing fleet prompt; no auto, that is P-CTRL.4). ADR-0492:
+//     it may also name a model, only one this engine lists as available (else 400); absent, the fleet's default.
 //   - prompt text goes through the fail-closed scan before it reaches a lane. Scan unavailable == refused.
 //   - Malformed anything (bad JSON, extra keys, wrong types, oversize text) is refused, never coerced.
 // Events are metadata only (pairing, lane, verdict, counts); prompt text and tokens never reach them.
@@ -36,7 +37,7 @@ import type { LaneEvent, LaneTurnRecord, LaneView } from "../fleet_lanes.ts";
 import { closeLaneWorktree, createRemoteLaneWorktree, removeLaneWorktree } from "../lane_worktree.ts";
 import type { ControllerLane, ControllerLaneStore } from "./lane_store.ts";
 import { DEFAULT_APPROVAL_HOURS, MAX_APPROVAL_HOURS, p256FromSpki, verifyRemoteDecision, type RemoteAsk } from "./remote_policy.ts";
-import { isLaneCount, PAIRING_NAME_RE, type Pairing, type PairingStore, type RemotePolicy } from "./store.ts";
+import { isLaneCount, PAIRING_NAME_RE, SPOKE_NODE_RE, type Pairing, type PairingStore, type RemotePolicy } from "./store.ts";
 
 /** Routes the controller token opens. pair/unpair are NOT here: they stay on the UI token. */
 export const CONTROLLER_ROUTES: ReadonlySet<string> = new Set(
@@ -50,6 +51,8 @@ export const CONTROLLER_ROUTES: ReadonlySet<string> = new Set(
  *  `maxLanes` at pairing time (ADR-0490, 1 to PAIRING_LANES_MAX). */
 export const MAX_LANES_PER_PAIRING = 2;
 const MAX_PROMPT_CHARS = 32_000;
+/** ADR-0492: the longest model id a spawn may name (the add-on's "provider/id" is at most 192). */
+const MAX_MODEL_CHARS = 200;
 
 /** ADR-0482: the reply a turn an engine restart cut off gets in the lane's transcript (what `result` returns). */
 export const INTERRUPTED_NOTE = "[LUCID] This turn was interrupted by an engine restart and was not re-run. Send a follow-up to continue.";
@@ -69,6 +72,9 @@ export interface ControllerDeps {
     laneRunning(laneId: string): boolean | null;
     cancel(laneId: string): { ok: boolean };
   };
+  /** ADR-0492: the model ids this engine lists as available (the model picker's list, with its platform, AskSage
+   *  and managed-policy narrowing). A spawn may name one of these. Absent: a spawn that names a model is refused. */
+  models?(): string[];
   /** scanAndDecide with the strict default policy; a dead scanner returns a blocking decision. */
   scan(text: string): Promise<GateDecision>;
   /** Where controller events append (the engine's EVENTS_LOG_PATH; a collector in tests). */
@@ -142,7 +148,8 @@ async function strictBody(req: Request, keys: string[], required: string[]): Pro
 /** The exact body of each lane-scoped POST route; any other lane-scoped POST takes `laneId` only. */
 const BODY_KEYS: Record<string, { allowed: string[]; required: string[] }> = {
   "/api/controller/prompt": { allowed: ["laneId", "text"], required: ["laneId", "text"] },
-  "/api/controller/decide": { allowed: ["laneId", "askId", "decision", "cert", "crl"], required: ["laneId", "askId", "decision", "cert"] },
+  // spokeCert: ADR-0491, the spoke's own certificate, which a delegate-certified approver needs.
+  "/api/controller/decide": { allowed: ["laneId", "askId", "decision", "cert", "crl", "spokeCert"], required: ["laneId", "askId", "decision", "cert"] },
   "/api/controller/deny": { allowed: ["laneId", "askId"], required: ["laneId", "askId"] },
 };
 
@@ -197,8 +204,11 @@ export async function handleController(req: Request, path: string, pairing: Pair
 
   // ── Human routes (UI token; the controller token never reaches these, apiAuthorized refuses it) ───────────
   if (path === "/api/controller/pair") {
-    const b = await strictBody(req, ["name", "workspace", "approverRoot", "approvalHours", "offTask", "presence", "maxLanes"], ["name", "workspace"]);
+    const b = await strictBody(req, ["name", "workspace", "approverRoot", "approvalHours", "offTask", "presence", "maxLanes", "spokeNode"], ["name", "workspace"]);
     if (!b || !PAIRING_NAME_RE.test(b.name!)) return malformed();
+    // ADR-0491: the paired spoke's node id. A delegate-certified approver decides only for a spoke its delegation
+    // covers, and the engine learns which spoke from here, never from the controller.
+    if (b.spokeNode !== undefined && !SPOKE_NODE_RE.test(b.spokeNode)) return malformed();
     // ADR-0490: the human may grant this pairing 1 to PAIRING_LANES_MAX live lanes (a string like every body value,
     // decimal digits only); absent keeps the ADR-0425 default.
     const maxLanes = b.maxLanes === undefined ? undefined : /^\d{1,2}$/.test(b.maxLanes) ? Number(b.maxLanes) : Number.NaN;
@@ -215,7 +225,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
         || (b.presence !== undefined && b.presence !== "required" && b.presence !== "none")) return malformed();
       remote = { root: b.approverRoot, approvalHours: hours, offTask: b.offTask !== "off", crl: { version: 0, serials: [] }, ...(b.presence === "required" ? { presence: "required" as const } : {}) };
     } else if (b.approvalHours !== undefined || b.offTask !== undefined || b.presence !== undefined) return malformed();
-    const r = await deps.store.pair(b.name!, workspace, remote, maxLanes);
+    const r = await deps.store.pair(b.name!, workspace, remote, maxLanes, b.spokeNode);
     if (!r.ok) return reply(409, { ok: false, error: r.error });
     emit(deps, "controller_paired", { runId: Snowflake.next(), sessionId: `controller:${r.pairing.id}` }, { pairing: r.pairing.name, pairing_id: r.pairing.id, max_lanes: r.pairing.maxLanes ?? MAX_LANES_PER_PAIRING });
     // The token rides this reply once and nowhere else.
@@ -239,8 +249,10 @@ export async function handleController(req: Request, path: string, pairing: Pair
   }
 
   if (path === "/api/controller/spawn") {
-    const b = await strictBody(req, ["name"], []);
-    if (!b || (b.name !== undefined && !PAIRING_NAME_RE.test(b.name))) return malformed();
+    const b = await strictBody(req, ["name", "model"], []);
+    if (!b || (b.name !== undefined && !PAIRING_NAME_RE.test(b.name)) || (b.model !== undefined && (!b.model || b.model.length > MAX_MODEL_CHARS))) return malformed();
+    // ADR-0492: a model chosen per task must be one this engine lists as available; absent, the fleet's default.
+    if (b.model !== undefined && !(deps.models?.() ?? []).includes(b.model)) return reply(400, { ok: false, error: `this engine has no model ${b.model}` });
     // ADR-0482: a lane that could not be recorded would silently not come back after a restart.
     if (deps.lanes.broken) return reply(503, { ok: false, error: deps.lanes.broken });
     const live = (await ownLanes(deps, pairing)).filter((l) => l.status !== "stopped");
@@ -254,7 +266,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
     const wt = pairing.remote ? await createRemoteLaneWorktree(pairing.workspace, id) : null;
     if (wt && !wt.ok) return reply(503, { ok: false, error: wt.reason });
     const cwd = wt?.ok ? wt.laneCwd : pairing.workspace;
-    const r = await deps.fleet.spawn({ id, cwd, ...(b.name ? { name: b.name } : {}), supervised: true, ...(pairing.remote ? { remote: { approvalHours: pairing.remote.approvalHours, offTask: pairing.remote.offTask } } : {}) });
+    const r = await deps.fleet.spawn({ id, cwd, ...(b.name ? { name: b.name } : {}), ...(b.model ? { model: b.model } : {}), supervised: true, ...(pairing.remote ? { remote: { approvalHours: pairing.remote.approvalHours, offTask: pairing.remote.offTask } } : {}) });
     if (!r.ok || !r.lane) {
       if (wt?.ok) await removeLaneWorktree(wt);
       return reply(503, { ok: false, error: r.reason ?? "lane did not start" });
@@ -310,7 +322,12 @@ export async function handleController(req: Request, path: string, pairing: Pair
     if (!pairing.remote) return reply(409, { ok: false, error: "this pairing has no approver root" });
     const ask = deps.fleet.pendingAsk(laneId);
     if (!ask || ask.id !== b.askId) return reply(409, { ok: false, error: "no such open ask" });
-    const v = verifyRemoteDecision({ decision: b.decision!, cert: b.cert!, ...(b.crl !== undefined ? { crl: b.crl } : {}) }, pairing.remote.root, pairing.remote.crl, { lane: laneId, ask: ask.id, digest: ask.digest, presence: pairing.remote.presence === "required" });
+    // ADR-0491: the spoke the human paired (never one the controller names) is what a delegated approver must cover.
+    const v = verifyRemoteDecision(
+      { decision: b.decision!, cert: b.cert!, ...(b.crl !== undefined ? { crl: b.crl } : {}), ...(b.spokeCert !== undefined ? { spokeCert: b.spokeCert } : {}) },
+      pairing.remote.root, pairing.remote.crl,
+      { lane: laneId, ask: ask.id, digest: ask.digest, presence: pairing.remote.presence === "required", ...(pairing.spokeNode !== undefined ? { spokeNode: pairing.spokeNode } : {}) },
+    );
     if (!v.ok) {
       if (v.crl) deps.store.advanceCrl(pairing.id, v.crl);
       emit(deps, "controller_ruling", ids, { pairing: pairing.name, lane_id: laneId, ruling: "remote_refused", tier: ask.tier, backend: "remote-approval", reason: v.reason });

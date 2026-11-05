@@ -54,15 +54,18 @@ export interface RemoteHostView {
   localModel: { host: string; reachable: boolean } | null;
 }
 
-/** ADR-0490: what bounds the spoke's lane count. Closed set. */
-export const LANE_LIMITS = ["engine", "memory", "cpu", "gpu", "target", "config"] as const;
+/** ADR-0490: what bounds the spoke's lane count. Closed set. ADR-0491: `laptop`, a battery-capable machine whose
+ *  owner's own apps keep their memory. */
+export const LANE_LIMITS = ["engine", "memory", "cpu", "gpu", "target", "config", "laptop"] as const;
 export type RemoteLaneLimit = (typeof LANE_LIMITS)[number];
 
 /** ADR-0490: the spoke's lane count, sized to its machine and where it is deployed, and why. */
 export interface RemoteLanePolicyView { max: number; limitedBy: RemoteLaneLimit; why: string | null }
 
-/** ADR-0490: the alerts a spoke seals to its hubs (add-on spoke alert note). Closed set. */
-export const ALERT_KINDS = ["engine-restarted", "agent-restarted", "crashed", "turn-interrupted"] as const;
+/** ADR-0490: the alerts a spoke seals to its hubs (add-on spoke alert note). Closed set. ADR-0491: `crl-stale` (the
+ *  spoke's revocation list is past its nextUpdate plus grace, so it refuses drive and approve) and `cert-expiring`
+ *  (14 days or less left on the spoke's certificate). */
+export const ALERT_KINDS = ["engine-restarted", "agent-restarted", "crashed", "turn-interrupted", "crl-stale", "cert-expiring"] as const;
 export type RemoteAlertKind = (typeof ALERT_KINDS)[number];
 
 export interface RemoteAlertView { kind: RemoteAlertKind; at: number; detail: string; tasks: { id: string; name: string }[] }
@@ -367,7 +370,7 @@ export function hostLabel(h: RemoteHostView | null): string {
 }
 
 export const LANE_LIMIT_LABEL: Readonly<Record<RemoteLaneLimit, string>> = {
-  engine: "the engine", memory: "memory", cpu: "CPU", gpu: "GPU", target: "where it is deployed", config: "its configuration",
+  engine: "the engine", memory: "memory", cpu: "CPU", gpu: "GPU", target: "where it is deployed", config: "its configuration", laptop: "a laptop",
 };
 
 /** ADR-0490: the spoke's lane policy in words: "up to 4 lanes, limited by memory: <the spoke's why>". */
@@ -381,10 +384,19 @@ export interface RemoteAlertItem { key: string; node: string; label: string; kin
 
 const ALERT_LABEL: Readonly<Record<RemoteAlertKind, string>> = {
   "engine-restarted": "engine restarted", "agent-restarted": "spoke agent restarted", crashed: "crashed", "turn-interrupted": "turn interrupted",
+  "crl-stale": "revocation list out of date", "cert-expiring": "certificate expiring",
+};
+
+/** What the owner does about an alert, when there is one thing to do (ADR-0491 for the CRL and the certificate). */
+const ALERT_ACTION: Readonly<Partial<Record<RemoteAlertKind, string>>> = {
+  "turn-interrupted": "Resume it from the spoke's panel",
+  "crl-stale": "Publish a fresh one from the root (root crl-refresh); until then the spoke refuses drive and approve",
+  "cert-expiring": "Renew it (root renew, then hub renew-spoke)",
 };
 
 /** ADR-0490: a spoke's alert lines, newest first: its silence (when the hub reports one), then every kept alert.
- *  An interrupted turn names its tasks and says where to resume them; nothing is ever re-run on its own. */
+ *  An interrupted turn names its tasks and says where to resume them; nothing is ever re-run on its own. A stale
+ *  revocation list and an expiring certificate say what to run (ADR-0491). */
 export function spokeAlerts(s: RemoteSpokeView, now: number): RemoteAlertItem[] {
   const out: RemoteAlertItem[] = [];
   if (s.silentSince !== null) {
@@ -394,7 +406,8 @@ export function spokeAlerts(s: RemoteSpokeView, now: number): RemoteAlertItem[] 
   }
   for (const a of s.alerts) {
     const names = a.tasks.length ? ` (${a.tasks.map((t) => t.name).join(", ")})` : "";
-    const resume = a.kind === "turn-interrupted" ? ". Resume it from the spoke's panel" : "";
+    const action = ALERT_ACTION[a.kind];
+    const resume = action ? `. ${action}` : "";
     out.push({ key: `${s.node}|${a.kind}|${a.at}`, node: s.node, label: s.label, kind: a.kind, at: a.at, tasks: a.tasks,
       text: `${ALERT_LABEL[a.kind]} at ${clockLabel(a.at, now)}${names}${a.detail ? `: ${a.detail.replace(/\.+$/, "")}` : ""}${resume}` });
   }
@@ -428,6 +441,14 @@ export function modelCount(s: RemoteSpokeView): number {
   const all = new Set([...s.models.local, ...s.models.frontier.flatMap((f) => f.models)]);
   if (s.models.default) all.add(s.models.default);
   return all.size;
+}
+
+/** ADR-0492: the models a task on this spoke may name, as "provider/id": its local models, then each signed-in
+ *  provider's (a provider lists bare ids). The default is left out: a task that names no model runs on it, so the
+ *  selector offers it first as "no model". A provider id with no model list offers nothing to pick. */
+export function taskModelChoices(s: RemoteSpokeView): string[] {
+  const frontier = s.models.frontier.flatMap((f) => f.models.map((m) => (m.startsWith(`${f.provider}/`) ? m : `${f.provider}/${m}`)));
+  return [...new Set([...s.models.local, ...frontier])].filter((m) => m !== s.models.default && MODEL_ID_RE.test(m));
 }
 
 /** One row of the Start-a-task selector: the spoke, whether a task can start there now, and why not. */

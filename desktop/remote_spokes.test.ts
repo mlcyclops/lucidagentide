@@ -149,6 +149,16 @@ describe("scope gating: nothing the hub certificate does not allow reaches the p
     expect((await r.call("POST", "/api/remote-spokes/models", { node: NODE })).status).toBe(404);
   });
 
+  test("ADR-0492: submit forwards a chosen model as given and refuses a malformed one", async () => {
+    const r = rig({ scopes: ["recall", "drive"] });
+    for (const model of ["", "a b", 5, "x".repeat(129)]) {
+      expect((await r.call("POST", "/api/remote-spokes/submit", { node: NODE, text: "ok", model })).data).toMatchObject({ ok: false });
+    }
+    expect(r.forwarded()).toEqual([]);
+    expect((await r.call("POST", "/api/remote-spokes/submit", { node: NODE, text: "do it", model: "ollama/qwen2.5-coder:32b" })).data).toMatchObject({ ok: true });
+    expect(r.forwarded().map((c) => [c.path, c.body])).toEqual([[`/host/spokes/${NODE}/submit`, { text: "do it", model: "ollama/qwen2.5-coder:32b" }]]);
+  });
+
   test("a plugin refusal comes back in the plugin's own words", async () => {
     const r = rig({ status: { cancel: 422 } });
     expect((await r.call("POST", "/api/remote-spokes/cancel", { node: NODE, task: TASK })).data).toEqual({ ok: false, error: "plugin says no to cancel" });

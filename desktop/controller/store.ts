@@ -33,7 +33,13 @@ export interface Pairing {
   /** ADR-0490: how many live lanes this pairing may hold (1 to PAIRING_LANES_MAX), set by the human at pairing
    *  time from the spoke's lane policy. Absent: the ADR-0425 default of two (also every pairing stored before). */
   maxLanes?: number;
+  /** ADR-0491: the paired spoke's node id (`n_` and 32 hex), set by the human at pairing time. A delegate-certified
+   *  approver decides only when its delegation covers this spoke. Absent: only root-signed approvers can decide. */
+  spokeNode?: string;
 }
+
+/** ADR-0491: a node id, `n_` and the first 32 hex of sha256(SPKI DER). */
+export const SPOKE_NODE_RE = /^n_[0-9a-f]{32}$/;
 
 /** ADR-0490: the most live lanes one pairing may be granted. */
 export const PAIRING_LANES_MAX = 8;
@@ -45,8 +51,9 @@ export interface RemotePolicy {
   approvalHours: number;
   /** Run the off-task check before a T0/T1 action runs on its own. */
   offTask: boolean;
-  /** The newest root-signed CRL this engine has seen. Only ever moves forward. */
-  crl: { version: number; serials: string[] };
+  /** The newest root-signed CRL this engine has seen. Only ever moves forward. ADR-0491: `nextUpdate` (seconds)
+   *  when the list carried one; once held, a list without it is never taken. */
+  crl: { version: number; serials: string[]; nextUpdate?: number };
   /** ADR-0488: every remote allow must carry user-presence evidence from a presence key the approver's
    *  certificate names. Absent: not required (also every pairing stored before ADR-0488). */
   presence?: "required";
@@ -81,15 +88,19 @@ export class PairingStore {
   }
 
   /** Mint a pairing and its token. The token is returned ONCE and never stored in the clear. */
-  async pair(name: string, workspace: string, remote?: RemotePolicy, maxLanes?: number): Promise<{ ok: true; pairing: Pairing; token: string } | { ok: false; error: string }> {
+  async pair(name: string, workspace: string, remote?: RemotePolicy, maxLanes?: number, spokeNode?: string): Promise<{ ok: true; pairing: Pairing; token: string } | { ok: false; error: string }> {
     if (this.#broken) return { ok: false, error: this.#broken };
     if (!PAIRING_NAME_RE.test(name)) return { ok: false, error: "invalid pairing name" };
     if (this.#pairings.some((p) => p.name === name)) return { ok: false, error: "a pairing with that name exists" };
     if (remote && !isRemotePolicy(remote)) return { ok: false, error: "invalid remote policy" };
     if (maxLanes !== undefined && !isLaneCount(maxLanes)) return { ok: false, error: `maxLanes must be an integer from 1 to ${PAIRING_LANES_MAX}` };
+    if (spokeNode !== undefined && !SPOKE_NODE_RE.test(spokeNode)) return { ok: false, error: "spokeNode must be n_ and 32 hex" };
     const id = randomBytes(8).toString("hex");
     const token = `lucidctl_${id}_${randomBytes(32).toString("base64url")}`;
-    const pairing: Pairing = { id, name, workspace, hash: await Bun.password.hash(token, { algorithm: "argon2id" }), createdAt: new Date().toISOString(), lanes: [], ...(remote ? { remote } : {}), ...(maxLanes !== undefined ? { maxLanes } : {}) };
+    const pairing: Pairing = {
+      id, name, workspace, hash: await Bun.password.hash(token, { algorithm: "argon2id" }), createdAt: new Date().toISOString(), lanes: [],
+      ...(remote ? { remote } : {}), ...(maxLanes !== undefined ? { maxLanes } : {}), ...(spokeNode !== undefined ? { spokeNode } : {}),
+    };
     this.#pairings.push(pairing);
     this.#save();
     return { ok: true, pairing, token };
@@ -161,11 +172,12 @@ export class PairingStore {
     return this.#pairings.find((p) => p.lanes.includes(laneId)) ?? null;
   }
 
-  /** Record a newer CRL for a remote pairing. An older or equal version changes nothing (tighten only). */
-  advanceCrl(pairingId: string, crl: { version: number; serials: string[] }): void {
+  /** Record a newer CRL for a remote pairing. An older or equal version changes nothing (tighten only), and neither
+   *  does one without `nextUpdate` once a list with it is held (ADR-0491). */
+  advanceCrl(pairingId: string, crl: RemotePolicy["crl"]): void {
     const p = this.#pairings.find((x) => x.id === pairingId);
-    if (!p?.remote || crl.version <= p.remote.crl.version) return;
-    p.remote.crl = { version: crl.version, serials: [...crl.serials] };
+    if (!p?.remote || crl.version <= p.remote.crl.version || (p.remote.crl.nextUpdate !== undefined && crl.nextUpdate === undefined)) return;
+    p.remote.crl = { version: crl.version, serials: [...crl.serials], ...(crl.nextUpdate !== undefined ? { nextUpdate: crl.nextUpdate } : {}) };
     this.#save();
   }
 
@@ -181,7 +193,8 @@ function isPairing(v: unknown): v is Pairing {
   const p = v as Pairing;
   return !!p && typeof p.id === "string" && typeof p.name === "string" && typeof p.workspace === "string" && typeof p.hash === "string"
     && typeof p.createdAt === "string" && Array.isArray(p.lanes) && p.lanes.every((l) => typeof l === "string")
-    && (p.remote === undefined || isRemotePolicy(p.remote)) && (p.maxLanes === undefined || isLaneCount(p.maxLanes));
+    && (p.remote === undefined || isRemotePolicy(p.remote)) && (p.maxLanes === undefined || isLaneCount(p.maxLanes))
+    && (p.spokeNode === undefined || (typeof p.spokeNode === "string" && SPOKE_NODE_RE.test(p.spokeNode)));
 }
 
 /** ADR-0490: a pairing's lane grant, an integer from 1 to PAIRING_LANES_MAX (the pair route, the store, the file). */
@@ -194,5 +207,6 @@ function isRemotePolicy(v: unknown): v is RemotePolicy {
   return !!r && typeof r.root === "string" && /^[A-Za-z0-9_-]{40,400}$/.test(r.root)
     && Number.isInteger(r.approvalHours) && r.approvalHours >= 1 && r.approvalHours <= 24 && typeof r.offTask === "boolean"
     && !!r.crl && Number.isSafeInteger(r.crl.version) && r.crl.version >= 0 && Array.isArray(r.crl.serials) && r.crl.serials.every((s) => typeof s === "string")
+    && (r.crl.nextUpdate === undefined || (Number.isSafeInteger(r.crl.nextUpdate) && r.crl.nextUpdate >= 0))
     && (r.presence === undefined || r.presence === "required");
 }

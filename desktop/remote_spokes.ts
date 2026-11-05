@@ -12,7 +12,8 @@
 //   GET  /api/remote-spokes/approvals   ?node=                   recall scope
 //   POST /api/remote-spokes/decide      {node, task, ask, digest, allow, password?}   allow: approve; deny: drive or
 //                                       approve; password: a `password` hub's presence password, on an allow only
-//   POST /api/remote-spokes/submit      {node, text, name?}      drive
+//   POST /api/remote-spokes/submit      {node, text, name?, model?}   drive; model (ADR-0492): one the spoke
+//                                       reports; the spoke and its engine check it again
 //   POST /api/remote-spokes/followup    {node, task, text}       drive
 //   POST /api/remote-spokes/cancel      {node, task}             drive
 //   POST /api/remote-spokes/close       {node, task}             drive
@@ -30,7 +31,7 @@ import type { GateDecision } from "../harness/security/gate.ts";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
 import { neutralizeDelimiters } from "../harness/omp/mcp_result_gate.ts";
 import {
-  mapHubSnapshot, NODE_RE, TASK_RE,
+  mapHubSnapshot, MODEL_ID_RE, NODE_RE, TASK_RE,
   type RecallEntryView, type RecallView, type RemoteActionView, type RemoteApprovalView, type RemoteApprovalsView, type RemoteHubView,
 } from "./renderer/remote_spokes_model.ts";
 
@@ -198,7 +199,7 @@ async function strictBody(req: Request, allowed: Record<string, "string" | "bool
 /** `decision`: an allow needs approve (it is signed), a deny needs drive or approve (refusing is always safe). */
 const ACTION_BODIES: Record<string, { allowed: Record<string, "string" | "boolean">; required: string[]; scope: "recall" | "drive" | "decision" }> = {
   recall: { allowed: { node: "string", task: "string" }, required: ["node"], scope: "recall" },
-  submit: { allowed: { node: "string", text: "string", name: "string" }, required: ["node", "text"], scope: "drive" },
+  submit: { allowed: { node: "string", text: "string", name: "string", model: "string" }, required: ["node", "text"], scope: "drive" },
   followup: { allowed: { node: "string", task: "string", text: "string" }, required: ["node", "task", "text"], scope: "drive" },
   cancel: { allowed: { node: "string", task: "string" }, required: ["node", "task"], scope: "drive" },
   close: { allowed: { node: "string", task: "string" }, required: ["node", "task"], scope: "drive" },
@@ -242,6 +243,7 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
   if (task !== undefined && !TASK_RE.test(task)) return refuse("malformed task id");
   if (typeof b.text === "string" && (!b.text.trim() || b.text.length > MAX_TEXT)) return refuse(`text must be 1 to ${MAX_TEXT} characters`);
   if (typeof b.name === "string" && !NAME_RE.test(b.name)) return refuse("name must be 1 to 48 letters, digits, spaces, dot, dash or underscore");
+  if (typeof b.model === "string" && !MODEL_ID_RE.test(b.model)) return refuse("malformed model id");
 
   const hub = await loadHub(deps);
   // A decision's scope depends on its direction: an allow is signed (approve); a deny is safe for drive too.

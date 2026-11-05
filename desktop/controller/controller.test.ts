@@ -32,11 +32,12 @@ const CLEAN: GateDecision = { block: false, reason: "clean", trustLabel: "truste
 /** The fields these tests read from the handler's JSON replies. */
 interface Reply { error: string; data: { token: string; lane: { id: string }; lanes: { id: string }[]; turns: unknown; runId: string; maxLanes: number } }
 
-function rig(scan: (t: string) => Promise<GateDecision> = async () => CLEAN) {
+/** `models` (ADR-0492): the engine's available model ids; absent, the rig has no model list. */
+function rig(scan: (t: string) => Promise<GateDecision> = async () => CLEAN, models?: string[]) {
   const store = new PairingStore(join(dir, "controller-pairings.json"));
   const lanes = new Map<string, LaneView>();
   const prompts: { laneId: string; text: string }[] = [];
-  const spawns: { cwd: string; name?: string; supervised: true }[] = [];
+  const spawns: { cwd: string; name?: string; model?: string; supervised: true }[] = [];
   const events: TelemetryEvent[] = [];
   const view = (id: string, name: string, cwd: string): LaneView => ({ id, name, cwd, model: "m", status: "awaiting-input", createdAt: 0, lastActivityAt: 0, turns: 0, canRetry: false, respawns: 0, autoApprove: false, sessionAllow: [], sessionId: `sess-${id}`, hubSessionId: null, queued: [], promoted: false, openCalls: 0 });
   lanes.set("lane-user", view("lane-user", "user's own", "/home/u/secret"));
@@ -45,7 +46,7 @@ function rig(scan: (t: string) => Promise<GateDecision> = async () => CLEAN) {
     store,
     lanes: new ControllerLaneStore(join(dir, "controller-lanes.json")),
     fleet: {
-      spawn: async (o) => { spawns.push(o); const l = view(o.id, o.name ?? "x", o.cwd); lanes.set(l.id, l); return { ok: true, lane: l }; },
+      spawn: async (o) => { spawns.push(o); const l = { ...view(o.id, o.name ?? "x", o.cwd), model: o.model ?? "m" }; lanes.set(l.id, l); return { ok: true, lane: l }; },
       remove: (laneId) => { removed.push(laneId); lanes.delete(laneId); return { ok: true }; },
       prompt: async (laneId, text) => { prompts.push({ laneId, text }); },
       status: async () => ({ lanes: [...lanes.values()] }),
@@ -55,6 +56,7 @@ function rig(scan: (t: string) => Promise<GateDecision> = async () => CLEAN) {
       pendingAsk: () => null,
       answerAsk: () => ({ ok: false }),
     },
+    ...(models ? { models: () => models } : {}),
     scan,
     sink: (e) => events.push(e),
   };
@@ -146,6 +148,35 @@ describe("scope isolation", () => {
     expect((await r.call("spawn", pairing, {})).status).toBe(200);
     const third = await r.call("spawn", pairing, {});
     expect([third.status, third.body.error]).toEqual([429, "at most 2 lanes per pairing"]);
+  });
+
+  test("ADR-0492: spawn may name a model the engine lists; an unlisted one is 400 and starts nothing; none keeps the default", async () => {
+    const r = rig(async () => CLEAN, ["anthropic/claude-sonnet-4-5", "ollama/qwen2.5-coder:32b"]);
+    const { pairing } = await r.pair("hermes");
+    for (const bad of [{ model: "openai/gpt-9" }, { model: "anthropic/claude-sonnet-4-5 " }]) {
+      const res = await r.call("spawn", pairing, bad);
+      expect([res.status, res.body.error]).toEqual([400, `this engine has no model ${bad.model}`]);
+    }
+    for (const bad of [{ model: "" }, { model: 5 }, { model: "a".repeat(201) }]) expect((await r.call("spawn", pairing, bad)).status).toBe(400);
+    expect(r.spawns).toEqual([]);
+    const chosen = await r.call("spawn", pairing, { name: "local", model: "ollama/qwen2.5-coder:32b" });
+    expect(chosen.status).toBe(200);
+    expect(r.spawns[0]!.model).toBe("ollama/qwen2.5-coder:32b");
+    // the controller is not shown the model, but the lane's restart record keeps it (ADR-0482 brings it back on it)
+    expect(chosen.text).not.toContain("qwen");
+    const id = chosen.body.data.lane.id;
+    expect(new ControllerLaneStore(join(dir, "controller-lanes.json")).get(id)?.model).toBe("ollama/qwen2.5-coder:32b");
+    const plain = await r.call("spawn", pairing, {});
+    expect(plain.status).toBe(200);
+    expect(r.spawns[1]).not.toHaveProperty("model");
+  });
+
+  test("ADR-0492: an engine with no model list refuses every named model", async () => {
+    const r = rig();
+    const { pairing } = await r.pair("hermes");
+    const res = await r.call("spawn", pairing, { model: "anthropic/claude-sonnet-4-5" });
+    expect([res.status, res.body.error]).toEqual([400, "this engine has no model anthropic/claude-sonnet-4-5"]);
+    expect(r.spawns).toEqual([]);
   });
 
   test("ADR-0490: a pairing granted 4 lanes admits 4 and refuses the 5th; absent means 2; the grant survives a reload", async () => {

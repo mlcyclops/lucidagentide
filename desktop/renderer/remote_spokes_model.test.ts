@@ -10,7 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   ALERTS_MAX, approvalButtons, armClick, ARM_MS, clockLabel, deployChoices, hostLabel, hubActions, lanePolicyLabel, latencyLabel, mapHubSnapshot, mapSpokeRow, mibLabel,
-  MODEL_LIST_MAX, modelCount, REMOTE_TONE, remoteGlance, RESUME_TEXT, spokeAlerts, spokeState, stateLabel, taskButtons,
+  MODEL_LIST_MAX, modelCount, REMOTE_TONE, remoteGlance, RESUME_TEXT, spokeAlerts, spokeState, stateLabel, taskButtons, taskModelChoices,
   type RemoteApprovalView, type RemoteSpokeView, type RemoteTaskView,
 } from "./remote_spokes_model.ts";
 
@@ -285,6 +285,33 @@ describe("ADR-0490: the spoke's machine, its lane policy, silence, alerts and Re
   });
 });
 
+describe("ADR-0491: a stale revocation list, an expiring certificate and a laptop's lane cap", () => {
+  const at = (h: number, m: number) => new Date(2026, 10, 5, h, m).getTime();
+  const NOW = at(14, 30);
+
+  test("crl-stale and cert-expiring are kept alert kinds, each line says what to run", () => {
+    const v = mapSpokeRow({
+      node: NODE, label: "vm",
+      alerts: [
+        { kind: "crl-stale", at: at(9, 0), detail: "the revocation list v4 passed its next update 3 days ago." },
+        { kind: "cert-expiring", at: at(10, 0), detail: "12 days left" },
+      ],
+    })!;
+    expect(v.alerts.map((a) => a.kind)).toEqual(["cert-expiring", "crl-stale"]);
+    expect(spokeAlerts(v, NOW).map((a) => [a.key, a.text])).toEqual([
+      [`${NODE}|cert-expiring|${at(10, 0)}`, "certificate expiring at 10:00: 12 days left. Renew it (root renew, then hub renew-spoke)"],
+      [`${NODE}|crl-stale|${at(9, 0)}`, "revocation list out of date at 09:00: the revocation list v4 passed its next update 3 days ago. Publish a fresh one from the root (root crl-refresh); until then the spoke refuses drive and approve"],
+    ]);
+  });
+
+  test("limitedBy laptop is a known limit with its own words", () => {
+    const why = "laptop: 2 lanes so the owner's own apps keep their memory";
+    const p = mapSpokeRow({ node: NODE, label: "mac", caps: { lanePolicy: { max: 2, limitedBy: "laptop", why } } })?.lanePolicy;
+    expect(p).toEqual({ max: 2, limitedBy: "laptop", why });
+    expect(lanePolicyLabel(p!)).toBe(`up to 2 lanes, limited by a laptop: ${why}`);
+  });
+});
+
 describe("mapHubSnapshot: the hub, its scopes and every spoke", () => {
   test("a set-up hub lists its spokes with the actions its certificate's scopes allow", () => {
     const v = mapHubSnapshot({ hub: { node: HUB, label: "workstation", scopes: ["recall", "drive", "root-ish"] }, spokes: [{ node: NODE, label: "vm-218", reachable: true, tasks: [] }, { node: "bad" }] });
@@ -363,5 +390,28 @@ describe("display rules", () => {
     expect(first).toEqual({ act: "arm", armedAt: 1_000 });
     expect(armClick(first.armedAt, 1_000 + ARM_MS)).toEqual({ act: "go", armedAt: null });
     expect(armClick(first.armedAt, 1_001 + ARM_MS)).toEqual({ act: "arm", armedAt: 1_001 + ARM_MS });
+  });
+});
+
+describe("ADR-0492: a model chosen per task", () => {
+  test("the selector offers local models, then each signed-in provider's as provider/id, never the default", () => {
+    const v = mapSpokeRow({
+      node: NODE, label: "vm-218", reachable: true, tasks: [], caps: { ...caps, models: { default: "anthropic/claude-sonnet-4-5", signedIn: ["anthropic"], local: [] } },
+      models: {
+        providers: [
+          { provider: "anthropic", name: "Anthropic", signedIn: true, accounts: [], models: ["claude-opus-4-1", "anthropic/claude-sonnet-4-5"] },
+          { provider: "openai", name: "OpenAI", signedIn: false, accounts: [], models: ["gpt-5"] },
+        ],
+        local: { spark: ["qwen3-32b"] },
+        default: "anthropic/claude-sonnet-4-5",
+      },
+    });
+    expect(taskModelChoices(v!)).toEqual(["spark/qwen3-32b", "anthropic/claude-opus-4-1"]);
+  });
+
+  test("a spoke that reported only capabilities offers its local models; a provider without a list offers none", () => {
+    const v = mapSpokeRow({ node: NODE, label: "x", reachable: true, tasks: [], caps: { ...caps, models: { default: "azure-openai/gpt-5.1", signedIn: ["anthropic"], local: ["ollama/llama3"] } } });
+    expect(taskModelChoices(v!)).toEqual(["ollama/llama3"]);
+    expect(taskModelChoices(mapSpokeRow({ node: NODE, label: "y" })!)).toEqual([]);
   });
 });

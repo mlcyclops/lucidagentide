@@ -1138,8 +1138,9 @@ export interface LucidBridge {
   remoteSpokeApprovals(node: string): Promise<RemoteApprovalsView | null>;
   /** `password`: a `password` hub's presence password, on an allow only (ADR-0488); sent once, never kept. */
   remoteSpokeDecide(input: { node: string; task: string; ask: string; digest: string; allow: boolean; password?: string }): Promise<RemoteActionView | null>;
-  /** submit {node, text, name?}; followup {node, task, text}; cancel and close {node, task}. */
-  remoteSpokeAct(op: "submit" | "followup" | "cancel" | "close", input: { node: string; task?: string; text?: string; name?: string }): Promise<RemoteActionView | null>;
+  /** submit {node, text, name?, model?}; followup {node, task, text}; cancel and close {node, task}. `model`
+   *  (ADR-0492): one the spoke reports, "provider/id"; absent, the spoke engine's default. */
+  remoteSpokeAct(op: "submit" | "followup" | "cancel" | "close", input: { node: string; task?: string; text?: string; name?: string; model?: string }): Promise<RemoteActionView | null>;
   /** Full auto-mode. laneId omitted = ALL lanes + persisted default for new ones. The server refuses
    *  on=true unless the risk was accepted before or acceptRisk is true (which persists the acceptance). */
   fleetAuto(opts: { laneId?: string; on: boolean; acceptRisk?: boolean }): Promise<{ ok: boolean } | null>;

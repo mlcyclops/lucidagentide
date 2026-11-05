@@ -29,6 +29,14 @@
 // Enclave key with user presence, or a key the hub unwraps only with its owner's password). A deny never needs it.
 // Evidence a decision carries is always checked.
 //
+// ADR-0491 (the add-on's RS-ID-01 and RS-CRL-01): a delegate-certified approver decides only for a spoke its
+// delegation covers. The pairing names the spoke's node id; the decision carries the spoke's own certificate, which
+// must verify under the same root (its own delegation chain included), name that node and sit inside the approver
+// delegation's label prefix, regions and classifications. A root-signed approver is unaffected. A delegation's
+// `users` limit, when present, must list the approver's email. A CRL may carry `nextUpdate`; once the held list is
+// more than three days past it, every decision is refused until a fresh one arrives, and once a list with
+// `nextUpdate` is held, a newer one without it is never adopted. A legacy list (no `nextUpdate`) never goes stale.
+//
 // Formats are the remote-spoke add-on's (TechLead187/lucidagentIDEaddon remote-spoke/src/identity.ts):
 // `<base64url(JSON payload bytes)>.<base64url(ECDSA P-256 / SHA-256 DER signature over those bytes)>`.
 
@@ -61,6 +69,8 @@ export const DEFAULT_APPROVAL_HOURS = 8;
 export const MAX_APPROVAL_HOURS = 24;
 const MAX_DECISION_LIFETIME_SEC = 24 * 3600;
 const CLOCK_SKEW_SEC = 120;
+/** ADR-0491: a CRL is stale once now passes its nextUpdate by more than this. */
+const CRL_GRACE_SEC = 3 * 86_400;
 const SERIAL_RE = /^[0-9a-f]{32}$/;
 
 /** Canonical JSON: object keys sorted at every depth (identical to the add-on's `canonical`). */
@@ -182,10 +192,13 @@ function openCompact(token: unknown, key: KeyObject): Record<string, unknown> | 
   } catch { return null; }
 }
 
-export interface CrlState { version: number; serials: string[] }
-export interface DecisionInput { decision: string; cert: string; crl?: string }
-/** `presence`: the pairing requires user-presence evidence on an allow (ADR-0488). */
-export interface Expected { lane: string; ask: string; digest: string; presence: boolean }
+/** ADR-0491: `nextUpdate` (seconds), when the root promised the next list. Absent on a legacy CRL. */
+export interface CrlState { version: number; serials: string[]; nextUpdate?: number }
+/** ADR-0491: `spokeCert`, the spoke's own compact certificate, which a delegate-certified approver needs. */
+export interface DecisionInput { decision: string; cert: string; crl?: string; spokeCert?: string }
+/** `presence`: the pairing requires user-presence evidence on an allow (ADR-0488). `spokeNode`: the spoke node id
+ *  the human paired (ADR-0491), which a delegate-certified approver's delegation must cover. */
+export interface Expected { lane: string; ask: string; digest: string; presence: boolean; spokeNode?: string }
 /** `presence`: the kind of presence key whose evidence verified, or null when the decision carried none. */
 export type DecisionResult =
   | { ok: true; allow: boolean; approver: string; label: string; presence: PresenceKind | null; crl: CrlState }
@@ -201,16 +214,26 @@ export function verifyRemoteDecision(input: DecisionInput, rootSpki: string, hel
   let crl = held;
   if (input.crl !== undefined) {
     const c = openCompact(input.crl, root);
-    if (!c || c.v !== 1 || c.typ !== "lucid-crl" || c.root !== rootId || !isInt(c.version) || !Array.isArray(c.serials) || !c.serials.every((s) => typeof s === "string" && SERIAL_RE.test(s)))
+    if (!c || c.v !== 1 || c.typ !== "lucid-crl" || c.root !== rootId || !isInt(c.version) || !Array.isArray(c.serials) || !c.serials.every((s) => typeof s === "string" && SERIAL_RE.test(s))
+      || (c.nextUpdate !== undefined && (!isInt(c.nextUpdate) || !isInt(c.iat) || c.nextUpdate <= c.iat)))
       return { ok: false, reason: "the CRL is not signed by the approver root" };
-    if (c.version > held.version) crl = { version: c.version, serials: c.serials as string[] };
+    // ADR-0491: once a list with nextUpdate is held, a newer one without it is never adopted (a legacy list would
+    // switch the staleness check off).
+    if (c.version > held.version && (held.nextUpdate === undefined || c.nextUpdate !== undefined))
+      crl = { version: c.version, serials: c.serials as string[], ...(isInt(c.nextUpdate) ? { nextUpdate: c.nextUpdate } : {}) };
   }
   // A valid newer CRL is kept even when the decision is refused: revocation news is never thrown away.
-  const r = checkDecision(input, root, rootId, crl, expected, nowSec);
+  // ADR-0491: a list past its nextUpdate plus the grace may hide a revocation a relay withholds, so the engine
+  // refuses every decision until a fresh one arrives. A legacy list (no nextUpdate) never goes stale.
+  const r: CheckResult = crl.nextUpdate !== undefined && nowSec > crl.nextUpdate + CRL_GRACE_SEC
+    ? { ok: false, reason: "the approver root's revocation list is out of date; publish a fresh one" }
+    : checkDecision(input, root, rootId, crl, expected, nowSec);
   return r.ok ? { ...r, crl } : { ...r, ...(crl !== held ? { crl } : {}) };
 }
 
-function checkDecision(input: DecisionInput, root: KeyObject, rootId: string, crl: CrlState, expected: Expected, nowSec: number): { ok: true; allow: boolean; approver: string; label: string; presence: PresenceKind | null } | { ok: false; reason: string } {
+type CheckResult = { ok: true; allow: boolean; approver: string; label: string; presence: PresenceKind | null } | { ok: false; reason: string };
+
+function checkDecision(input: DecisionInput, root: KeyObject, rootId: string, crl: CrlState, expected: Expected, nowSec: number): CheckResult {
   const opened = openApproverCert(input.cert, root, rootId, crl, nowSec);
   if (!opened.ok) return opened;
   const cert = opened.cert;
@@ -220,6 +243,13 @@ function checkDecision(input: DecisionInput, root: KeyObject, rootId: string, cr
   if (typeof cert.serial !== "string" || crl.serials.includes(cert.serial)) return { ok: false, reason: "the approver certificate is revoked" };
   const approverKey = p256FromSpki(cert.spki);
   if (!approverKey || typeof cert.node !== "string" || nodeIdOf(Buffer.from(String(cert.spki), "base64url")) !== cert.node) return { ok: false, reason: "the approver certificate key does not match its node id" };
+  // ADR-0491: a delegate-certified approver acts only on a spoke its delegation covers. The engine knows which
+  // spoke from the pairing (the node id the human paired) and learns its label, region and classification from
+  // the spoke's own certificate, which must verify under the same root. A root-signed approver covers every spoke.
+  if (opened.delegation) {
+    const spoke = expected.spokeNode === undefined ? null : openSpokeCert(input.spokeCert, root, rootId, crl, nowSec);
+    if (!spoke || spoke.node !== expected.spokeNode || spokeOutsideDelegation(opened.delegation.limits, spoke)) return { ok: false, reason: "the approver's delegation does not cover this spoke" };
+  }
 
   const d = openCompact(input.decision, approverKey);
   if (!d || d.v !== 1 || d.typ !== "lucid-approval") return { ok: false, reason: "the decision is not signed by the approver" };
@@ -270,16 +300,23 @@ const DELEGATION_KEYS = ["v", "typ", "root", "serial", "id", "label", "spki", "m
 /** The add-on's delegation payload (remote-spoke/src/identity.ts `Delegation`), as `delegationProblem` admits it. */
 interface Delegation {
   v: 1; typ: "lucid-delegation"; root: string; serial: string; id: string; label: string; spki: string; may: string[];
-  limits: { maxDays: number; roles?: string[]; scopes?: string[]; labelPrefix?: string; emailDomains?: string[]; regions?: string[]; classifications?: string[] };
+  limits: DelegationLimits;
   iat: number; exp: number;
+}
+/** ADR-0491: `users`, the exact emails whose hubs the delegate may certify (the add-on's RS-ID-01 fix). */
+interface DelegationLimits {
+  maxDays: number; roles?: string[]; scopes?: string[]; labelPrefix?: string; emailDomains?: string[]; users?: string[]; regions?: string[]; classifications?: string[];
 }
 /** The user a delegated hub certificate names, as `userProblem` admits it. */
 interface UserClaim { id: string; email: string; name?: string; clearances?: string[] }
+/** What a spoke certificate says about where the spoke sits, the fields a delegation's coverage reads (ADR-0491). */
+interface SpokeCoverage { node: string; label: string; region?: string; classification?: string }
 /** Every limit list and what each entry must be. */
 const LIMIT_LISTS: Record<string, (s: string) => boolean> = {
   roles: (s) => ROLES.includes(s),
   scopes: (s) => SCOPES.includes(s),
   emailDomains: (s) => DOMAIN_RE.test(s),
+  users: (s) => EMAIL_RE.test(s),
   regions: (s) => REGION_RE.test(s),
   classifications: (s) => CLASSIFICATIONS.includes(s),
 };
@@ -292,15 +329,14 @@ const exactKeys = (o: Record<string, unknown>, allowed: readonly string[], requi
 const distinctList = (v: unknown, good: (s: string) => boolean): v is string[] =>
   Array.isArray(v) && v.length > 0 && v.length <= 32 && new Set(v).size === v.length && v.every((s) => typeof s === "string" && good(s));
 
-type Opened = { ok: true; cert: Record<string, unknown> } | { ok: false; reason: string };
+/** `delegation`: the delegation a delegate-certified certificate carries, null for a root-signed one. */
+type Opened = { ok: true; cert: Record<string, unknown>; delegation: Delegation | null } | { ok: false; reason: string };
 
-/** The approver certificate's payload: root-signed (the ADR-0476 path), or signed by a delegate whose delegation
- *  the root signed (ADR-0477). Dates, revocation, role, scope and key of the certificate itself are checked by
- *  the caller on both paths. */
-function openApproverCert(token: unknown, root: KeyObject, rootId: string, crl: CrlState, nowSec: number): Opened {
-  const direct = openCompact(token, root);
-  if (direct) return { ok: true, cert: direct };
-  const notRoot: Opened = { ok: false, reason: "the approver certificate is not signed by the approver root" };
+/** A certificate a delegate signed: the root-signed delegation it carries is well formed, in date, not revoked and
+ *  its key matches its id, and the certificate is signed by that key and names it as issuer. `what` names the
+ *  certificate in every reason. The certificate's own fields and the delegation's limits are the caller's. */
+function openDelegated(token: unknown, root: KeyObject, rootId: string, crl: CrlState, nowSec: number, what: string): { ok: true; cert: Record<string, unknown>; delegation: Delegation } | { ok: false; reason: string } {
+  const notRoot = { ok: false as const, reason: `${what} is not signed by the approver root` };
   // Not root-signed: it may carry a root-signed delegation. Read it unverified only to find that delegation;
   // the certificate is opened below with the delegation's key, which the root vouches for.
   if (typeof token !== "string" || token.length > 8192) return notRoot;
@@ -309,18 +345,30 @@ function openApproverCert(token: unknown, root: KeyObject, rootId: string, crl: 
   if (!isObject(peek) || typeof peek.issuer !== "string" || typeof peek.delegation !== "string") return notRoot;
 
   const del = openCompact(peek.delegation, root);
-  if (!del) return { ok: false, reason: "the approver certificate's delegation is not signed by the approver root" };
+  if (!del) return { ok: false, reason: `${what}'s delegation is not signed by the approver root` };
   const malformed = delegationProblem(del, rootId);
   if (malformed) return { ok: false, reason: `malformed delegation: ${malformed}` };
   const d = del as unknown as Delegation;
-  if (d.iat > nowSec + CLOCK_SKEW_SEC || d.exp <= nowSec) return { ok: false, reason: "the approver certificate's delegation is not in date" };
-  if (crl.serials.includes(d.serial)) return { ok: false, reason: "the approver certificate's delegation is revoked" };
+  if (d.iat > nowSec + CLOCK_SKEW_SEC || d.exp <= nowSec) return { ok: false, reason: `${what}'s delegation is not in date` };
+  if (crl.serials.includes(d.serial)) return { ok: false, reason: `${what}'s delegation is revoked` };
   const delKey = p256FromSpki(d.spki);
   if (!delKey || nodeIdOf(Buffer.from(d.spki, "base64url")) !== d.id) return { ok: false, reason: "the delegation key does not match its id" };
 
   const c = openCompact(token, delKey);
-  if (!c) return { ok: false, reason: "the approver certificate is not signed by its delegation's key" };
-  if (c.issuer !== d.id) return { ok: false, reason: "the approver certificate names another issuer than its delegation" };
+  if (!c) return { ok: false, reason: `${what} is not signed by its delegation's key` };
+  if (c.issuer !== d.id) return { ok: false, reason: `${what} names another issuer than its delegation` };
+  return { ok: true, cert: c, delegation: d };
+}
+
+/** The approver certificate's payload: root-signed (the ADR-0476 path), or signed by a delegate whose delegation
+ *  the root signed (ADR-0477). Dates, revocation, role, scope and key of the certificate itself are checked by
+ *  the caller on both paths; ADR-0491's spoke coverage of a delegated one too. */
+function openApproverCert(token: unknown, root: KeyObject, rootId: string, crl: CrlState, nowSec: number): Opened {
+  const direct = openCompact(token, root);
+  if (direct) return { ok: true, cert: direct, delegation: null };
+  const chained = openDelegated(token, root, rootId, crl, nowSec, "the approver certificate");
+  if (!chained.ok) return chained;
+  const c = chained.cert, d = chained.delegation;
   if (!exactKeys(c, CERT_KEYS, CERT_KEYS.slice(0, 11)) || typeof c.serial !== "string" || !SERIAL_RE.test(c.serial) || typeof c.node !== "string" || !NODE_RE.test(c.node)
     || typeof c.label !== "string" || !LABEL_RE.test(c.label) || !isInt(c.iat) || !isInt(c.exp) || !Array.isArray(c.scopes) || !c.scopes.every((s: unknown) => typeof s === "string" && SCOPES.includes(s))
     || c.classification !== undefined || c.region !== undefined) return { ok: false, reason: "malformed approver certificate" };
@@ -341,10 +389,50 @@ function openApproverCert(token: unknown, root: KeyObject, rootId: string, crl: 
   if (badUser) return { ok: false, reason: `malformed approver certificate: ${badUser}` };
   const user = c.user as unknown as UserClaim;
   if (l.emailDomains && !l.emailDomains.includes(user.email.slice(user.email.lastIndexOf("@") + 1))) return { ok: false, reason: `user ${user.email} is outside the delegation's email domains` };
+  if (l.users && !l.users.includes(user.email)) return { ok: false, reason: `user ${user.email} is outside this delegation's users` };
   const cleared = l.classifications;
   const over = cleared && user.clearances ? user.clearances.filter((x) => !cleared.includes(x)) : [];
   if (over.length) return { ok: false, reason: `clearance ${over.join(", ")} is outside the approver certificate's delegation` };
-  return { ok: true, cert: c };
+  return { ok: true, cert: c, delegation: d };
+}
+
+/** ADR-0491: the spoke's own certificate as the add-on's TrustStore.verifyCert admits it (root-signed, or signed by
+ *  a delegate with the spokes or enroll power and inside that delegation's limits), in date, not revoked and with
+ *  a key that hashes to its node id; null otherwise. Only where it sits is returned: that is all coverage reads. */
+function openSpokeCert(token: unknown, root: KeyObject, rootId: string, crl: CrlState, nowSec: number): SpokeCoverage | null {
+  const direct = openCompact(token, root);
+  const opened: Opened = direct ? { ok: true, cert: direct, delegation: null } : openDelegated(token, root, rootId, crl, nowSec, "the spoke certificate");
+  if (!opened.ok) return null;
+  const c = opened.cert, del = opened.delegation;
+  if (!del && (c.issuer !== undefined || c.delegation !== undefined)) return null;
+  if (!exactKeys(c, CERT_KEYS, CERT_KEYS.slice(0, 11)) || c.v !== 1 || c.typ !== "lucid-node-cert" || c.root !== rootId || c.role !== "spoke"
+    || typeof c.serial !== "string" || !SERIAL_RE.test(c.serial) || typeof c.node !== "string" || !NODE_RE.test(c.node) || typeof c.label !== "string" || !LABEL_RE.test(c.label)
+    || !isInt(c.iat) || !isInt(c.exp) || !Array.isArray(c.scopes) || !c.scopes.every((s: unknown) => typeof s === "string" && SCOPES.includes(s))
+    || c.user !== undefined || c.presence !== undefined
+    || (c.classification !== undefined && (typeof c.classification !== "string" || !CLASSIFICATIONS.includes(c.classification)))
+    || (c.region !== undefined && (typeof c.region !== "string" || !REGION_RE.test(c.region)))) return null;
+  if (c.iat > nowSec + CLOCK_SKEW_SEC || c.exp <= nowSec || crl.serials.includes(c.serial)) return null;
+  if (!p256FromSpki(c.spki) || nodeIdOf(Buffer.from(String(c.spki), "base64url")) !== c.node) return null;
+  const spoke: SpokeCoverage = {
+    node: c.node, label: c.label,
+    ...(typeof c.region === "string" ? { region: c.region } : {}), ...(typeof c.classification === "string" ? { classification: c.classification } : {}),
+  };
+  if (!del) return spoke;
+  // The limits (the add-on's leafProblem for a spoke).
+  const l = del.limits;
+  const allowed = l.scopes;
+  if ((!del.may.includes("spokes") && !del.may.includes("enroll")) || (l.roles && !l.roles.includes("spoke"))
+    || (allowed && c.scopes.some((s: unknown) => !allowed.includes(String(s))))
+    || c.exp - c.iat > l.maxDays * 86_400 || c.iat + CLOCK_SKEW_SEC < del.iat || c.exp > del.exp || spokeOutsideDelegation(l, spoke)) return null;
+  return spoke;
+}
+
+/** True when a delegation's limits do not reach this spoke (the add-on's spokeOutsideDelegation): its label must
+ *  start with the label prefix, and a region or classification list must name the spoke's own. */
+function spokeOutsideDelegation(l: DelegationLimits, spoke: SpokeCoverage): boolean {
+  return (l.labelPrefix !== undefined && !spoke.label.startsWith(l.labelPrefix))
+    || (!!l.regions && (spoke.region === undefined || !l.regions.includes(spoke.region)))
+    || (!!l.classifications && (spoke.classification === undefined || !l.classifications.includes(spoke.classification)));
 }
 
 /** Why a root-signed payload is not a well-formed delegation for this root (the add-on's delegationProblem), or null. */
@@ -353,7 +441,7 @@ function delegationProblem(p: Record<string, unknown>, rootId: string): string |
   if (typeof p.serial !== "string" || !SERIAL_RE.test(p.serial) || typeof p.id !== "string" || !NODE_RE.test(p.id) || typeof p.label !== "string" || !LABEL_RE.test(p.label) || typeof p.spki !== "string") return "bad serial, id, label or key";
   if (!isInt(p.iat) || !isInt(p.exp) || p.exp <= p.iat || p.exp - p.iat > MAX_DELEGATION_DAYS * 86_400) return `a delegation lasts at most ${MAX_DELEGATION_DAYS} days`;
   const l = p.limits;
-  if (!isObject(l) || !exactKeys(l, ["maxDays", "labelPrefix", ...Object.keys(LIMIT_LISTS)], ["maxDays"])) return "limits are { maxDays, roles?, scopes?, labelPrefix?, emailDomains?, regions?, classifications? }";
+  if (!isObject(l) || !exactKeys(l, ["maxDays", "labelPrefix", ...Object.keys(LIMIT_LISTS)], ["maxDays"])) return "limits are { maxDays, roles?, scopes?, labelPrefix?, emailDomains?, users?, regions?, classifications? }";
   if (!isInt(l.maxDays) || l.maxDays < 1 || l.maxDays > MAX_DELEGATED_CERT_DAYS) return `limits.maxDays must be 1 to ${MAX_DELEGATED_CERT_DAYS}`;
   for (const [name, good] of Object.entries(LIMIT_LISTS)) {
     if (l[name] !== undefined && !distinctList(l[name], good)) return `limits.${name} must be a non-empty list of distinct valid values`;

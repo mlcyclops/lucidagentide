@@ -33,7 +33,7 @@ import type { LucidBridge } from "./bridge.ts";
 import type { OrbitSlot } from "./orbit_layout.ts";
 import {
   approvalButtons, armClick, clockLabel, deployChoices, hostLabel, lanePolicyLabel, latencyLabel, mibLabel, modelCount, REMOTE_TONE, remoteGlance, RESUME_TEXT,
-  spokeAlerts, stateLabel, taskButtons, VIA_LABEL,
+  spokeAlerts, stateLabel, taskButtons, taskModelChoices, VIA_LABEL,
   type DeployChoice, type RecallView, type RemoteAlertItem, type RemoteApprovalView, type RemoteClassification, type RemoteHubView, type RemoteModelsView,
   type RemoteSpokeView,
 } from "./remote_spokes_model.ts";
@@ -540,7 +540,7 @@ type RemoteOp = "submit" | "followup" | "cancel" | "close";
 /** One action on a spoke through the engine, then a fresh hub read so every view shows its effect. The panel's
  *  buttons and the Start-a-task selector both go through here. Returns null when the spoke accepted it, else
  *  the refusal in words. */
-async function sendAct(node: string, op: RemoteOp, input: { task?: string; text?: string; name?: string }): Promise<string | null> {
+async function sendAct(node: string, op: RemoteOp, input: { task?: string; text?: string; name?: string; model?: string }): Promise<string | null> {
   if (!deps) return "The fleet is not ready.";
   const r = await deps.remoteSpokeAct(op, { node, ...input }).catch(() => null);
   if (!r) return "The engine did not answer.";
@@ -725,6 +725,7 @@ export function paintDeployPanel(box: HTMLElement, closeHtml: string): void {
     <p class="rs-note">Fastest first. "Answers in" is the hub's last round trip to the spoke, including its mailbox poll (about 2 s), not a network ping.</p>
     <div class="rs-choices" role="radiogroup" aria-label="Remote spokes" data-rs-dep-list></div>
     <label class="orbit-spawn-l">name <i>optional</i><input type="text" data-rs-dep-name maxlength="48" placeholder="what this task is for"></label>
+    <label class="orbit-spawn-l">model<select data-rs-dep-model></select></label>
     <label class="orbit-spawn-l">prompt<textarea data-rs-dep-text rows="3" maxlength="32000" placeholder="the first turn"></textarea></label>
     <div class="orbit-spawn-row"><button class="btn-mini orbit-btn orbit-spawn-go" data-rs-dep-go>${icon("bolt", 12)} Start task</button></div>
     <small class="orbit-ghost-err" data-rs-dep-err></small>`;
@@ -745,6 +746,7 @@ export function refreshDeployPanel(box: HTMLElement): void {
   const sig = JSON.stringify([choices, deploy.chosen, snap && !snap.available ? snap.reason : null]);
   if (sig === deploy.sig) return;
   deploy.sig = sig;
+  fillDeployModels(box, chosen?.spoke ?? null);
   const eligible = choices.filter((c) => c.eligible).length;
   setText(box, "[data-rs-dep-n]", choices.length ? `${eligible} of ${choices.length} ready` : "");
   const go = $("[data-rs-dep-go]", box) as HTMLButtonElement | null;
@@ -762,7 +764,28 @@ function showDeployErr(box: HTMLElement, text: string): void { setText(box, "[da
 export function onDeployPanelClick(t: HTMLElement, box: HTMLElement, openSpoke: (node: string) => void): boolean {
   if (!deploy) return false;
   if (t.closest("[data-rs-dep-go]")) { void startDeploy(box, openSpoke); return true; }
-  return t.closest("[data-rs-dep-list], [data-rs-dep-name], [data-rs-dep-text]") !== null;
+  // ADR-0492: a newly picked spoke shows its own models at once, not at the next poll. The radio's own click comes
+  // after it is checked (a click on its label only forwards one), so this reads the new pick.
+  if (t.matches("input[name=rs-deploy]")) { refreshDeployPanel(box); return true; }
+  return t.closest("[data-rs-dep-list], [data-rs-dep-name], [data-rs-dep-model], [data-rs-dep-text]") !== null;
+}
+
+/** ADR-0492: the picked spoke's models for this task, its default first (sent as no model, so the spoke engine's
+ *  default runs). A model picked before stays picked while the spoke still offers it. Every id is spoke-written,
+ *  so options are built node by node. */
+function fillDeployModels(box: HTMLElement, s: RemoteSpokeView | null): void {
+  const select = $("[data-rs-dep-model]", box) as HTMLSelectElement | null;
+  if (!select) return;
+  const keep = select.value;
+  const option = (value: string, text: string): HTMLOptionElement => {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = text;
+    return o;
+  };
+  const ids = s ? taskModelChoices(s) : [];
+  select.replaceChildren(option("", s?.models.default ? `${s.models.default} (default)` : "the spoke's default"), ...ids.map((id) => option(id, id)));
+  select.value = ids.includes(keep) ? keep : "";
 }
 
 async function startDeploy(box: HTMLElement, openSpoke: (node: string) => void): Promise<void> {
@@ -773,13 +796,15 @@ async function startDeploy(box: HTMLElement, openSpoke: (node: string) => void):
   if (!choice.eligible) { showDeployErr(box, `${choice.spoke.label} cannot take a task now: ${choice.why}.`); return; }
   const text = ($("[data-rs-dep-text]", box) as HTMLTextAreaElement).value;
   const name = ($("[data-rs-dep-name]", box) as HTMLInputElement).value.trim();
+  // ADR-0492: "" is the spoke's default; any other value is one of the picked spoke's own models.
+  const model = ($("[data-rs-dep-model]", box) as HTMLSelectElement | null)?.value ?? "";
   if (!text.trim()) { showDeployErr(box, "Write the task's first turn."); return; }
   const state = deploy;
   state.busy = true;
   const go = $("[data-rs-dep-go]", box) as HTMLButtonElement;
   go.disabled = true;
   showDeployErr(box, `Sent to ${choice.spoke.label}; waiting for the spoke\u2026`);
-  const error = await sendAct(node, "submit", { text, ...(name ? { name } : {}) });
+  const error = await sendAct(node, "submit", { text, ...(name ? { name } : {}), ...(model ? { model } : {}) });
   state.busy = false;
   if (deploy !== state) return; // the selector was closed meanwhile; the task still started (or not) on the spoke
   if (error) { go.disabled = false; showDeployErr(box, error); return; }
