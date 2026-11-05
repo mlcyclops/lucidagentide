@@ -169,7 +169,8 @@ export async function verifyRemoteSpokes(page, shotDir = tmpdir()) {
       label: e.querySelector("b")?.textContent, checked: e.querySelector("input").checked, disabled: e.querySelector("input").disabled,
       why: e.querySelector(".rs-why")?.textContent ?? null, text: e.textContent.replace(/\s+/g, " "),
     })));
-    assert(JSON.stringify(rows.map((r) => [r.label, r.disabled, r.why])) === JSON.stringify([["vm-217", false, null], ["azure-eastus", false, null], ["vm-218", true, "no free lane"], ["dgx-spark", true, "offline"]]), `selector rows: ${JSON.stringify(rows)}`);
+    // The reason's kind (before any colon): its full wording is remote_spokes_model.test.ts's to pin.
+    assert(JSON.stringify(rows.map((r) => [r.label, r.disabled, r.why === null ? null : r.why.split(":")[0]])) === JSON.stringify([["vm-217", false, null], ["azure-eastus", false, null], ["vm-218", true, "no free lane"], ["dgx-spark", true, "offline"]]), `selector rows: ${JSON.stringify(rows)}`);
     assert(rows[0].checked && rows[0].text.includes("answers in 1.9 s over LAN") && rows[0].text.includes("2/2 free") && rows[0].text.includes("2 models") && rows[0].text.includes("private"), `first row: ${JSON.stringify(rows[0])}`);
     assert(rows[2].text.includes("CUI") && rows[2].text.includes("certificate expires"), `vm-218 row: ${JSON.stringify(rows[2])}`);
     // ADR-0490: the row names the machine (cores, memory, GPU and its memory) and why it runs as many lanes as it does.
