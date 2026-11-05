@@ -53,6 +53,8 @@ export const MAX_LANES_PER_PAIRING = 2;
 const MAX_PROMPT_CHARS = 32_000;
 /** ADR-0492: the longest model id a spawn may name (the add-on's "provider/id" is at most 192). */
 const MAX_MODEL_CHARS = 200;
+/** ADR-0492: a model a controller names is `provider/model` (the add-on's spoke checks the same shape). */
+const MODEL_ID_RE = /^[a-z0-9][a-z0-9-]{0,40}\/[A-Za-z0-9][A-Za-z0-9._:/-]{0,149}$/;
 
 /** ADR-0482: the reply a turn an engine restart cut off gets in the lane's transcript (what `result` returns). */
 export const INTERRUPTED_NOTE = "[LUCID] This turn was interrupted by an engine restart and was not re-run. Send a follow-up to continue.";
@@ -250,9 +252,12 @@ export async function handleController(req: Request, path: string, pairing: Pair
 
   if (path === "/api/controller/spawn") {
     const b = await strictBody(req, ["name", "model"], []);
-    if (!b || (b.name !== undefined && !PAIRING_NAME_RE.test(b.name)) || (b.model !== undefined && (!b.model || b.model.length > MAX_MODEL_CHARS))) return malformed();
+    if (!b || (b.name !== undefined && !PAIRING_NAME_RE.test(b.name)) || (b.model !== undefined && (b.model.length > MAX_MODEL_CHARS || !MODEL_ID_RE.test(b.model)))) return malformed();
     // ADR-0492: a model chosen per task must be one this engine lists as available; absent, the fleet's default.
-    if (b.model !== undefined && !(deps.models?.() ?? []).includes(b.model)) return reply(400, { ok: false, error: `this engine has no model ${b.model}` });
+    // The list is what an omp session reported; a headless engine may have none yet. Then the lane's own model
+    // resolution and the pre-turn model policy clamp decide (a list that names models is enforced here).
+    const known = deps.models?.() ?? [];
+    if (b.model !== undefined && known.length > 0 && !known.includes(b.model)) return reply(400, { ok: false, error: `this engine has no model ${b.model}` });
     // ADR-0482: a lane that could not be recorded would silently not come back after a restart.
     if (deps.lanes.broken) return reply(503, { ok: false, error: deps.lanes.broken });
     const live = (await ownLanes(deps, pairing)).filter((l) => l.status !== "stopped");

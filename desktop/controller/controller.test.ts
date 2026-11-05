@@ -153,11 +153,10 @@ describe("scope isolation", () => {
   test("ADR-0492: spawn may name a model the engine lists; an unlisted one is 400 and starts nothing; none keeps the default", async () => {
     const r = rig(async () => CLEAN, ["anthropic/claude-sonnet-4-5", "ollama/qwen2.5-coder:32b"]);
     const { pairing } = await r.pair("hermes");
-    for (const bad of [{ model: "openai/gpt-9" }, { model: "anthropic/claude-sonnet-4-5 " }]) {
-      const res = await r.call("spawn", pairing, bad);
-      expect([res.status, res.body.error]).toEqual([400, `this engine has no model ${bad.model}`]);
-    }
-    for (const bad of [{ model: "" }, { model: 5 }, { model: "a".repeat(201) }]) expect((await r.call("spawn", pairing, bad)).status).toBe(400);
+    const unlisted = await r.call("spawn", pairing, { model: "openai/gpt-9" });
+    expect([unlisted.status, unlisted.body.error]).toEqual([400, "this engine has no model openai/gpt-9"]);
+    // Not `provider/model`: malformed before any list is consulted.
+    for (const bad of [{ model: "" }, { model: 5 }, { model: "a".repeat(201) }, { model: "anthropic/claude-sonnet-4-5 " }, { model: "x" }]) expect((await r.call("spawn", pairing, bad)).status).toBe(400);
     expect(r.spawns).toEqual([]);
     const chosen = await r.call("spawn", pairing, { name: "local", model: "ollama/qwen2.5-coder:32b" });
     expect(chosen.status).toBe(200);
@@ -171,12 +170,15 @@ describe("scope isolation", () => {
     expect(r.spawns[1]).not.toHaveProperty("model");
   });
 
-  test("ADR-0492: an engine with no model list refuses every named model", async () => {
-    const r = rig();
-    const { pairing } = await r.pair("hermes");
-    const res = await r.call("spawn", pairing, { model: "anthropic/claude-sonnet-4-5" });
-    expect([res.status, res.body.error]).toEqual([400, "this engine has no model anthropic/claude-sonnet-4-5"]);
-    expect(r.spawns).toEqual([]);
+  // Live on a headless spoke engine: no omp session had reported its model config, the list was empty, and every
+  // named model was refused, real ones included. With no list the lane's own resolution and the policy clamp decide.
+  test("ADR-0492: an engine that has reported no model list passes a named model to the lane", async () => {
+    for (const r of [rig(), rig(undefined, [])]) {
+      const { pairing } = await r.pair("hermes");
+      const res = await r.call("spawn", pairing, { model: "anthropic/claude-sonnet-4-5" });
+      expect(res.status).toBe(200);
+      expect(r.spawns[0]?.model).toBe("anthropic/claude-sonnet-4-5");
+    }
   });
 
   test("ADR-0490: a pairing granted 4 lanes admits 4 and refuses the 5th; absent means 2; the grant survives a reload", async () => {
