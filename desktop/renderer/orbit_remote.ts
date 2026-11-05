@@ -22,7 +22,9 @@
 // Recalled entries arrive already scanned (a quarantined entry has no text at all); the only way recalled text
 // leaves this panel is "Copy for a prompt", which copies the engine's delimited UNTRUSTED_CONTENT envelope.
 // Buttons appear only for what the hub certificate's scopes allow; the engine re-checks every action anyway.
-// Approve and Close keep the plugin panel's two-click rule (armClick).
+// Approve and Close keep the plugin panel's two-click rule (armClick). On a `password` hub (ADR-0488 amendment) the
+// first Approve click opens a password field instead, and the second signs with what was typed; the field is
+// emptied at once and the password goes only into that one decide request.
 
 import { $ } from "./dom.ts";
 import { esc } from "./format.ts";
@@ -509,6 +511,17 @@ export function onRemotePanelClick(t: HTMLElement, box: HTMLElement): boolean {
   const item = card ? panel.approvals[Number(card.dataset.rsAskI)] : undefined;
   if (item && card) {
     const approve = t.closest("[data-rs-approve]") as HTMLButtonElement | null;
+    const field = card.querySelector("[data-rs-password]") as HTMLInputElement | null;
+    if (approve && field) {
+      // A password hub: the first click opens the field, the next (or Enter) signs with what was typed. The field
+      // is emptied at once; the password lives only in this one request.
+      if (field.hidden) { field.hidden = false; approve.textContent = "Sign with the hub's password"; approve.classList.add("armed"); field.focus(); return true; }
+      const password = field.value;
+      field.value = "";
+      if (!password) { showErr(box, "Type this hub's presence password to sign the approval."); field.focus(); return true; }
+      void decide(box, item, true, password);
+      return true;
+    }
     if (approve) {
       const key = `approve:${item.task}:${item.ask.id}`;
       const step = armClick(panel.armed[key] ?? null, Date.now());
@@ -519,7 +532,7 @@ export function onRemotePanelClick(t: HTMLElement, box: HTMLElement): boolean {
     }
     if (t.closest("[data-rs-deny]")) { void decide(box, item, false); return true; }
   }
-  return t.closest("[data-rs-new], [data-rs-follow]") !== null;
+  return t.closest("[data-rs-new], [data-rs-follow], [data-rs-password]") !== null;
 }
 
 type RemoteOp = "submit" | "followup" | "cancel" | "close";
@@ -590,18 +603,29 @@ function approvalCard(v: RemoteApprovalView, i: number, b: { approve: boolean; d
   }
   const row = document.createElement("div");
   row.className = "orbit-spawn-row";
-  if (b.approve) { const ok = document.createElement("button"); ok.className = "btn-mini orbit-allow"; ok.dataset.rsApprove = ""; ok.textContent = "Approve"; row.append(ok); }
+  if (b.approve) {
+    const ok = document.createElement("button"); ok.className = "btn-mini orbit-allow"; ok.dataset.rsApprove = ""; ok.textContent = "Approve";
+    // ADR-0488 amendment: a `password` hub's Approve opens this field; the typed password is the second step.
+    if (snap?.available && snap.hub.presence === "password") {
+      const pw = document.createElement("input");
+      pw.type = "password"; pw.dataset.rsPassword = ""; pw.hidden = true; pw.maxLength = 1024; pw.autocomplete = "off"; pw.placeholder = "the hub's presence password";
+      pw.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); ok.click(); } });
+      row.append(pw);
+    }
+    row.append(ok);
+  }
   if (b.deny) { const no = document.createElement("button"); no.className = "btn-mini orbit-deny"; no.dataset.rsDeny = ""; no.textContent = "Deny"; row.append(no); }
   if (v.ask.expiresAt) { const exp = document.createElement("small"); exp.className = "rs-note"; exp.textContent = `expires ${new Date(v.ask.expiresAt).toLocaleTimeString()}`; row.append(exp); }
   card.append(row);
   return card;
 }
 
-async function decide(box: HTMLElement, item: RemoteApprovalView, allow: boolean): Promise<void> {
+/** `password`: a password hub's presence password for this one allow; passed straight to the engine, never kept. */
+async function decide(box: HTMLElement, item: RemoteApprovalView, allow: boolean, password?: string): Promise<void> {
   if (!panel || !deps) return;
   const node = panel.node;
-  showErr(box, allow ? "Signing; the hub may ask you to confirm it is you\u2026" : "Denying\u2026");
-  const r = await deps.remoteSpokeDecide({ node, task: item.task, ask: item.ask.id, digest: item.ask.digest, allow }).catch(() => null);
+  showErr(box, allow ? (password ? "Signing with the hub's password\u2026" : "Signing; the hub may ask you to confirm it is you\u2026") : "Denying\u2026");
+  const r = await deps.remoteSpokeDecide({ node, task: item.task, ask: item.ask.id, digest: item.ask.digest, allow, ...(password ? { password } : {}) }).catch(() => null);
   if (panel?.node !== node) return;
   if (!r) { showErr(box, "The engine did not answer."); return; }
   showErr(box, r.ok ? (allow ? "Approved: the spoke's engine verified the signed decision." : "Denied.") : r.error, r.ok);

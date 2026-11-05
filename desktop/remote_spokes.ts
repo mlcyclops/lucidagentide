@@ -10,7 +10,8 @@
 //   GET  /api/remote-spokes             the hub, its scopes and every spoke (orbit, hub picker)
 //   POST /api/remote-spokes/recall      {node, task?}            recall scope
 //   GET  /api/remote-spokes/approvals   ?node=                   recall scope
-//   POST /api/remote-spokes/decide      {node, task, ask, digest, allow}   allow: approve; deny: drive or approve
+//   POST /api/remote-spokes/decide      {node, task, ask, digest, allow, password?}   allow: approve; deny: drive or
+//                                       approve; password: a `password` hub's presence password, on an allow only
 //   POST /api/remote-spokes/submit      {node, text, name?}      drive
 //   POST /api/remote-spokes/followup    {node, task, text}       drive
 //   POST /api/remote-spokes/cancel      {node, task}             drive
@@ -201,8 +202,10 @@ const ACTION_BODIES: Record<string, { allowed: Record<string, "string" | "boolea
   followup: { allowed: { node: "string", task: "string", text: "string" }, required: ["node", "task", "text"], scope: "drive" },
   cancel: { allowed: { node: "string", task: "string" }, required: ["node", "task"], scope: "drive" },
   close: { allowed: { node: "string", task: "string" }, required: ["node", "task"], scope: "drive" },
-  decide: { allowed: { node: "string", task: "string", ask: "string", digest: "string", allow: "boolean" }, required: ["node", "task", "ask", "digest", "allow"], scope: "decision" },
+  decide: { allowed: { node: "string", task: "string", ask: "string", digest: "string", allow: "boolean", password: "string" }, required: ["node", "task", "ask", "digest", "allow"], scope: "decision" },
 };
+/** The longest presence password the hub accepts (add-on presence.ts). */
+const MAX_PASSWORD = 1024;
 
 /** The spoke's parked actions through the plugin, scanned; a string is the refusal. */
 async function readApprovals(deps: RemoteSpokesDeps, node: string, label: string): Promise<RemoteApprovalView[] | string> {
@@ -246,6 +249,13 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
   const gate = checkHub(hub, node, scope);
   if (gate) return refuse(gate);
   const label = labelOf(hub, node);
+  // ADR-0488 amendment: a `password` hub signs an allow only with its presence password, typed for this one
+  // approval. It goes to the plugin once and nowhere else (never stored, logged, echoed or put in model context);
+  // a deny, or an allow on a hub of another kind, never carries it.
+  const needsPassword = op === "decide" && b.allow === true && hub.available && hub.hub.presence === "password";
+  const password = needsPassword && typeof b.password === "string" && b.password ? b.password : undefined;
+  if (needsPassword && !password) return refuse("this hub approves with its presence password: type it to sign the approval");
+  if (password && password.length > MAX_PASSWORD) return refuse(`the presence password is at most ${MAX_PASSWORD} characters`);
 
   if (op === "recall") {
     const r = await callPlugin(deps, "POST", `/host/spokes/${node}/recall`, task ? { task } : {}, RECALL_TIMEOUT_MS);
@@ -267,6 +277,8 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
 
   const forward: Record<string, unknown> = { ...b };
   delete forward.node;
+  delete forward.password;
+  if (password !== undefined) forward.password = password;
   const r = await callPlugin(deps, "POST", `/host/spokes/${node}/${op}`, forward, op === "decide" ? DECIDE_TIMEOUT_MS : ACTION_TIMEOUT_MS);
   if (!r.ok) return refuse(r.error);
   if (r.status !== 200) return refuse(pluginError(r));

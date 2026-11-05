@@ -25,8 +25,9 @@
 // names a presence key (`presence: {kind, spki}`, certified by the same root or delegate) and the decision carries
 // `presence`, that key's signature over `presenceChallenge(decision)`: a domain prefix and the sha256 of the
 // decision without that field, so the evidence is bound to this one decision (lane, ask, digest, approver, time)
-// and cannot be moved to another. The key is one the platform uses only after a gesture (Windows Hello, a Secure
-// Enclave key with user presence). A deny never needs it. Evidence a decision carries is always checked.
+// and cannot be moved to another. The key is one the hub uses only after a gesture (Windows Hello, a Secure
+// Enclave key with user presence, or a key the hub unwraps only with its owner's password). A deny never needs it.
+// Evidence a decision carries is always checked.
 //
 // Formats are the remote-spoke add-on's (TechLead187/lucidagentIDEaddon remote-spoke/src/identity.ts):
 // `<base64url(JSON payload bytes)>.<base64url(ECDSA P-256 / SHA-256 DER signature over those bytes)>`.
@@ -381,15 +382,20 @@ function userProblem(u: Record<string, unknown>): string | null {
 // user-verification store and used only after a gesture. `windows-hello`: a Windows Hello key credential
 // (KeyCredentialManager; RSA 2048, PKCS#1 v1.5 / SHA-256, TPM-held where the machine has one).
 // `macos-secure-enclave`: a Secure Enclave P-256 key whose access control requires user presence (Touch ID or the
-// login password), ECDSA / SHA-256 DER. The engine cannot see the gesture; it checks that the key the root
-// certified for this hub signed this decision. What the platform enforces about that key is the ADR's stated limit.
+// login password), ECDSA / SHA-256 DER. `password` (the default from 2026-11-04): a P-256 key the hub keeps wrapped
+// under a key derived from its owner's password (scrypt, AES-256-GCM) and unwraps for one signature only after the
+// password is typed, ECDSA / SHA-256 DER. The engine cannot see the gesture; it checks that the key the root
+// certified for this hub signed this decision. What the platform (or the password) enforces about that key is the
+// ADR's stated limit: for `password` the engine cannot tell a typed password from a stolen presence.json plus the
+// password; presence.json alone is protected by scrypt.
 
-export type PresenceKind = "windows-hello" | "macos-secure-enclave";
-const PRESENCE_KINDS: readonly string[] = ["windows-hello", "macos-secure-enclave"];
+export type PresenceKind = "windows-hello" | "macos-secure-enclave" | "password";
+const PRESENCE_KINDS: readonly string[] = ["windows-hello", "macos-secure-enclave", "password"];
 const PRESENCE_PREFIX = "lucid-presence-v1:";
 
 /** The presence key a hub certificate names (`{kind, spki}`, base64url SPKI DER), or null when it is not one of
- *  the two kinds with its key type (RSA of at least 2048 bits for Windows Hello, P-256 for the Secure Enclave). */
+ *  the kinds with its key type (RSA of at least 2048 bits for Windows Hello, P-256 for the Secure Enclave and for
+ *  the password kind). */
 function presenceKeyOf(v: unknown): { kind: PresenceKind; key: KeyObject } | null {
   if (!isObject(v) || !exactKeys(v, ["kind", "spki"]) || typeof v.kind !== "string" || !PRESENCE_KINDS.includes(v.kind)) return null;
   if (typeof v.spki !== "string" || !/^[A-Za-z0-9_-]{40,1200}$/.test(v.spki)) return null;

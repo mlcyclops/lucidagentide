@@ -1136,7 +1136,8 @@ export interface LucidBridge {
   remoteSpokes(): Promise<RemoteHubView | null>;
   remoteSpokeRecall(node: string, task?: string): Promise<RecallView | null>;
   remoteSpokeApprovals(node: string): Promise<RemoteApprovalsView | null>;
-  remoteSpokeDecide(input: { node: string; task: string; ask: string; digest: string; allow: boolean }): Promise<RemoteActionView | null>;
+  /** `password`: a `password` hub's presence password, on an allow only (ADR-0488); sent once, never kept. */
+  remoteSpokeDecide(input: { node: string; task: string; ask: string; digest: string; allow: boolean; password?: string }): Promise<RemoteActionView | null>;
   /** submit {node, text, name?}; followup {node, task, text}; cancel and close {node, task}. */
   remoteSpokeAct(op: "submit" | "followup" | "cancel" | "close", input: { node: string; task?: string; text?: string; name?: string }): Promise<RemoteActionView | null>;
   /** Full auto-mode. laneId omitted = ALL lanes + persisted default for new ones. The server refuses
