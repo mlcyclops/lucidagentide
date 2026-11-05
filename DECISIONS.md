@@ -25677,3 +25677,119 @@ Wave B security review, findings for this slice. Each one is pinned by a regress
 **Upgrade review fixes (v2.5.1).** RELOAD-ORIGIN: the reload loaded `http://localhost:<port>`, but the engine binds only `127.0.0.1` (ADR-0474 VAULT-TRANSPORT-LOCALHOST), so an IPv6-first lookup could load whatever owns `[::1]:<port>` into the privileged window or fail; `engineAppUrl(port)` in `renderer_watchdog.ts` is now the one builder for the first load, `installAppNavigation` and the reload. RELOAD-RETRY: a reload whose `loadURL` failed (the engine briefly down) was only logged, and `installAppNavigation` ignores post-boot load failures, so the window stayed blank; `decideReloadRetry` schedules the next backoff step under the same 5-per-60 s cap that renderer deaths count against, and logs one "NOT retried" line at the cap. Pinned by `renderer_watchdog.test.ts` "decideReloadRetry" and "engineAppUrl".
 
 **Consequences.** Proven live on a dev Electron launch from this checkout (`LUCID_PORT=5555`, its own userData and lock beside the installed app): `taskkill /F` on the window's renderer pid produced `[renderer-watchdog] 2026-11-04T01:14:19.305Z main-window renderer gone reason=killed exitCode=1 -> reloading the app in 250ms (reload #1 of 5 per 60s)` in that identity's `engine.log`, and a new renderer pid sat under the same main process within 6 s with the engine port still bound; the dev app then closed cleanly on `WM_CLOSE`. A renderer death now ends in the app reloading onto the still-running engine within a second, and `engine.log` carries `[renderer-watchdog] ... reason=... exitCode=...` so the next death can be diagnosed. The reload is a fresh document: unsent prompt text and panel state in the dead renderer are lost (they were already lost), while sessions, settings and the queue come back from the engine. Alternatives rejected: `webContents.reload()` (reloads whatever the dead page's last navigation was, which may be the retry of a failed load; `loadURL` of the app href is explicit); enabling Crashpad (a dump pipeline and its storage for a question the reason string already answers well enough); a reload on `unresponsive` (destroys live state on a mere hang). Follow-up: why closing the Preview panel killed the renderer is still open; the next occurrence will be logged with its reason, which is the evidence needed to take it further.
+
+## ADR-0482 -- P-WAKE: SCOPE/PLAN for unattended scheduled work that LUCID is woken for, recovers itself, and the user can see and change (2026-11-05)
+
+**Status:** Proposed. Design only; nothing here is built. **Sequenced after the Tahiti distro pins core v2.5.1 (add-on ADR-A043, add-on issue #181) or ships on a later v2.5.x beta**, so the vault and FIPS line it depends on is already in the field. Amends ADR-0047 decision 1 and ADR-0443 decisions 4 and 6 (each named in the increment ADR that changes it).
+
+**Context.** The operator runs long, budget-bound work while away. The 2026-11-05 homeschool podcast run is the example: 15 NotebookLM episodes a day, a daily limit that resets at 03:24, and the agent kept a lane busy for hours just to wait for the reset, then reported back. What exists (all BUILT): P-SCHED.1/.2 (ADR-0443) scheduled jobs on a Fleet lane, created disarmed, with cron, `autoApprove` snapshot, `maxMinutes`, missed-run policy and ledger-based lane recovery, but only while LUCID is open (30 s in-process tick); P-AOS.1/.2 (ADR-0452/0453) fleet goal, heartbeat and verified tasks in the Fleet Orbit; P-HEALTH.1 (ADR-0311) the quiet / probe / recover ladder with a status probe and a resume note (`buildResumeNote`); lane model switching (`/api/fleet/model`) and in-place respawn; `lucid hub --headless` and the compiled `bin/lucid-engine`, which run without Electron; `harness/maintainer/os_schedule.ts` (P-MAINT.1 spike) that already emits schtasks, launchd, systemd and crontab plans. Missing: an outside wake, a confirmed task brief, a model policy with fallbacks, user-defined stall time, Orbit as a target, and a scheduler surface where the user reviews and changes jobs with full context.
+
+**Decision: six increments, each its own ADR and session.**
+1. **P-WAKE.1 (ADR-0483):** external wake. `lucid job wake <jobId>`, OS task registration on arm, cloud scheduler templates.
+2. **P-WAKE.2 (ADR-0484):** the confirmed job brief and the setup interview (`schedule_job` tool behind a confirmation card).
+3. **P-WAKE.3 (ADR-0485):** run policy: provider-error classes, user stall time, pre-approved fallback models, restart with a status inquiry.
+4. **P-WAKE.4 (ADR-0486):** Orbit (fleet goal) as a job target.
+5. **P-SCHED.5 (ADR-0487):** the Scheduler pill and panel.
+6. **P-SCHED.6 (ADR-0488):** the change conversation for modify / pause / cancel, with impact on OS and cloud schedules.
+
+Build order is 1, 2, 3, 5, 6, 4: the wake and the brief are what make a job worth running unattended; the run policy makes it survive; the panel and conversation make it reviewable; Orbit is the widest change and goes last.
+
+**Defaults proposed to the operator (2026-11-05), to confirm before P-WAKE.1 starts.** (a) A wake starts the headless engine by default and the full desktop app only for jobs that need the browser relay or another Electron-only capability. (b) A single-scope job targets a lane; a brief with several tasks targets Orbit. (c) At run time the harness takes fallback models strictly from the user's ordered, pre-approved list; LUCID only suggests models during setup. (d) P-WAKE.1 ships Windows Task Scheduler, launchd and systemd registration plus Azure Automation, AWS Systems Manager and Google Cloud templates that all call the same command.
+
+**Invariants carried by every increment.** The security gate runs in-process for every scheduled turn (invariants 3 and 4): no scheduler, OS or cloud, ever starts omp directly. A wake can only fire a job the user armed; it carries no prompt. An agent can propose a job or a change but never arm, re-arm or widen one without the user's explicit confirmation (ADR-0443 decision 4 stands in spirit). Unattended runs never approve anything the job's setup did not grant; an unanswered ask parks the run as `waiting` and becomes a "needs you" item. Events use existing `EventName` members unless an increment's ADR adds one through the frozen-contract process. UI follows invariant 11.
+
+**Consequences.** Overnight work stops occupying a lane to wait; it is a named, armed, auditable job that LUCID is woken for, that survives a provider outage on a model the user chose in advance, and that the user can review and change from one panel. Risk named now: an OS or cloud trigger is a new way in; P-WAKE.1 must prove a wake cannot run anything that was not armed by the user, and that a stale or forged trigger is refused.
+
+**Relates to.** ADR-0047, ADR-0142, ADR-0311, ADR-0385, ADR-0436 (lucid hub), ADR-0443, ADR-0452, ADR-0453, ADR-0116 (Engineering Reports), add-on ADR-A043 (Tahiti custody on 2.5.1).
+
+## ADR-0483 -- P-WAKE.1: an OS or cloud scheduler wakes LUCID through one command that only fires armed jobs; amends ADR-0047 (2026-11-05)
+
+**Status:** Proposed (P-WAKE epic, ADR-0482).
+
+**Context.** ADR-0047 refused the OS scheduler because it would "spawn omp in a process where the in-process gate isn't guaranteed armed", and ADR-0443 decision 6 left room for "an OS task that launches LUCID ITSELF". That room is what this uses.
+
+**Decision.**
+1. **One entry point.** `lucid job wake <jobId> [--trigger <name>]` (in `harness/launcher/`, beside `lucid hub`). It finds a verified engine through the discovery file and the nonce handshake (ADR-0305/0419); if none answers, it starts the normal engine (`bin/lucid-engine`, or the desktop app when the job's brief requires Electron-only capability, ADR-0482 default a). It then calls a new UI-token route `POST /api/jobs/<id>/wake` with the trigger name. The engine runs the job through the existing `JobScheduler` fire path, so the gate, the egress allowlist, lockdown clamps and the audit trail are the ones every interactive turn uses. ADR-0047 decision 1 is amended to: no scheduler ever starts omp; an OS or cloud scheduler may start LUCID's own engine and ask it to fire an armed job.
+2. **What a wake may do.** Fire only a job that exists, is armed, and whose `wakeNonce` (minted at arm time, stored in the job, written into the OS task's arguments) matches. No prompt, model or target travels on the command line. A disarmed, deleted, suspended or nonce-mismatched job is refused and audited. A second wake while the job is running is a no-op (`already-running`).
+3. **OS registration follows arming.** Arming a job registers one OS task per job from `os_schedule.ts` (promoted from the maintainer spike into `desktop/os_schedule.ts`): Windows Task Scheduler (`schtasks /create` under the current user, "run only when user is logged on" by default, an opt-in "whether logged on or not" that states the stored-credential consequence), launchd user agent, systemd user timer, crontab as the fallback. The OS task fires two minutes before the job's next fire time so the engine is up when the in-process tick runs. Disarming disables the task; deleting the job removes it. Registration failures leave the job armed in-app with a visible "LUCID must stay open" state, never silently "scheduled".
+4. **Cloud triggers are templates, not connectors.** The engine is loopback-only, so cloud schedulers reach it only through their own agent on the machine running `lucid job wake`: an Azure Automation runbook on a Hybrid Runbook Worker, an AWS Systems Manager Run Command document or State Manager association on the SSM Agent, and a Google Cloud Scheduler job delivered to the VM's guest agent (OS Config) or a Pub/Sub pull subscriber. LUCID ships one documented template per provider and records each external trigger the user says they created (`externalTriggers: [{ provider, resourceId, schedule, addedAt }]`) so P-SCHED.6 can name it when the job changes. LUCID never holds cloud credentials for this.
+5. **Machine state.** The OS task wakes the machine from sleep where the OS allows (`WakeToRun` on Windows); a locked screen is fine; a logged-off user is not, unless the opt-in in item 3 is chosen.
+
+**Proof (`make demo-P-WAKE.1`).** With LUCID stopped: the OS task starts the engine and the job runs to `ok`; a disarmed job and a forged nonce are refused with audit rows; a second wake during a run reports `already-running`; disarm disables and delete removes the OS task (read back with `schtasks /query`, `launchctl print`, `systemctl --user list-timers`); the engine that a wake started shuts down after the run when no window is attached.
+
+**Consequences.** LUCID no longer has to stay open for scheduled work. New surface: an OS task per armed job and one route; both refuse anything not armed. Relates to ADR-0047, ADR-0436, ADR-0443, ADR-0305.
+
+## ADR-0484 -- P-WAKE.2: a job carries a confirmed brief, drafted by the agent from PROGRESS.md, HANDOFF.md or memory, armed only by the user (2026-11-05)
+
+**Status:** Proposed (P-WAKE epic, ADR-0482). Amends ADR-0443 decision 4.
+
+**Context.** A job today is a prompt string. A 3 AM run needs the scope, context and acceptance the user agreed to, written down where the run can read it, plus the model and recovery choices the user made.
+
+**Decision.**
+1. **The brief.** `ScheduledJob` gains `brief: { title, scope, context, acceptance: string[], sources: [{ kind: "progress" | "handoff" | "memory" | "chat", ref, excerptHash }], origin: { repo, branch, commit, workspace } }`, stored beside the job (0600), shown in full in the Scheduler panel, and prepended (as delimited untrusted content when it quotes files, invariant 5) to the run's first prompt.
+2. **The setup interview.** A `schedule_job` agent tool drafts the job from the current PROGRESS.md "next" item, HANDOFF.md, LUCID memory or the conversation, then asks the user, in order: what to run and the acceptance; when (cadence, or "once at the next reset"); where (lane or Orbit, ADR-0482 default b); model and provider, confirmed by name; the ordered fallback list and the stall minutes (P-WAKE.3); attempts cap and `maxMinutes`; which approvals the run may grant itself (the `autoApprove` snapshot, with the existing risk note); notifications. The tool returns a draft only. ADR-0443 decision 4 is amended: the agent may draft a job, but the job is created and armed only by the user clicking Confirm on a card the renderer draws from the stored draft (the `sandbox_grant_dir` approval shape); a prompt-injected transcript can produce at most an unconfirmed draft.
+3. **Edits keep provenance.** Any later change to the brief, schedule, model policy or target records who changed it and when, and re-arming after a change needs the same confirmation.
+
+**Proof.** A draft from a PROGRESS.md "next" item round-trips into a job only through the confirmation card; the narrow agent token cannot create or arm; the brief's sources carry repo, branch and commit; an injected "arm yourself" instruction in a quoted file stays a draft.
+
+**Consequences.** The overnight run starts with the same understanding the user approved during the day. Relates to ADR-0024, ADR-0443, ADR-0482.
+
+## ADR-0485 -- P-WAKE.3: a scheduled run survives provider failure and stalls on models the user pre-approved, and restarts with a status inquiry (2026-11-05)
+
+**Status:** Proposed (P-WAKE epic, ADR-0482).
+
+**Context.** P-HEALTH.1 recovers a dead or silent child with fixed timings (90 / 180 / 420 s) and resumes up to twice with `buildResumeNote`; `recommendFallbacks` (P-NORESP.1) only draws buttons; nothing classifies provider errors.
+
+**Decision.**
+1. **Model policy on the job.** `modelPolicy: { primary: { provider, model }, fallbacks: [{ provider, model }], stallMinutes, attemptsMax, switchOn: ProviderFailureClass[] }`, captured by P-WAKE.2 and confirmed by name. At run time the harness takes models strictly from this list (ADR-0482 default c).
+2. **Failure classes.** A pure classifier maps provider responses and stream state to `quota` (429, insufficient quota, daily limit), `auth` (401, 403, expired sign-in), `model-unavailable` (404 model, deprecated, region), `overloaded` (529, 503), `stalled` (no stream events for `stallMinutes`), `crashed` (child exit). A usage window the job itself respects (for example 15 a day) is not a failure: the run reschedules to the reset time instead of switching.
+3. **Restart ladder for a job run.** On a class in `switchOn`: ask the running lane a short status inquiry when it is still alive ("what is done, what is left, any blocker", the P-HEALTH probe channel), cancel the turn, switch the lane to the next model in `fallbacks` (`/api/fleet/model`, or respawn with that model when the provider changes), and resume with `buildResumeNote` plus the inquiry's answer. Each attempt is recorded in the run history with class, model and outcome; at `attemptsMax` the run stops as `failed`, raises an incident, and leaves a "needs you" item. `auth` never switches provider silently when the next fallback shares the failing credential.
+4. **Stall time is the user's.** For a job run, `stallMinutes` replaces the health ladder's recover threshold; the quiet and probe steps scale proportionally.
+
+**Proof.** Fake providers drive each class; the run switches to the next approved model and resumes with the inquiry's answer; a daily-limit response reschedules instead of switching; attempts stop at the cap with an incident; no model outside the list is ever used.
+
+**Consequences.** A provider outage at 3 AM costs a model switch the user already agreed to, not the night's work. Relates to ADR-0186, ADR-0263, ADR-0311, ADR-0482.
+
+## ADR-0486 -- P-WAKE.4: a scheduled job can target the Fleet Orbit (a fleet goal and its verified tasks) instead of one lane (2026-11-05)
+
+**Status:** Proposed (P-WAKE epic, ADR-0482).
+
+**Decision.** `JobTarget` gains `{ kind: "orbit", goalTemplate }`. A fire seeds a fleet goal from the brief (ADR-0484): one AOS task per acceptance item with its check, dispatched by the existing 10 s heartbeat to idle spokes, verified fail-closed by `parseCheckVerdict` (ADR-0453). The job's model policy (ADR-0485) applies per spoke. The run ends `ok` when every task verifies, `partial` when the heartbeat stops with tasks open, and records per-task outcomes in the run history. Lane remains the default for single-scope briefs (ADR-0482 default b); the user or the setup interview may choose Orbit.
+
+**Proof.** A three-task brief fires into an Orbit goal, two spokes take tasks, one check fails and is retried within the policy, the run reports per-task outcomes.
+
+**Consequences.** Multi-part overnight work uses the verification the Orbit already has. Relates to ADR-0452, ADR-0453, ADR-0482.
+
+## ADR-0487 -- P-SCHED.5: the Scheduler pill and panel: every scheduled job reviewable in one place with the context to decide (2026-11-05)
+
+**Status:** Proposed (P-WAKE epic, ADR-0482). Extends ADR-0443 decision 5 (the rail tile and Jobs sheet stay).
+
+**Decision.**
+1. **The pill.** Whenever at least one job exists, a Scheduler pill sits bottom-right beside the minimized Fleet pill (`mountFleetPill`, P-FLEET.L2), with an indicator: idle (armed, next fire shown as "in 3h" or "Fri 02:00"), running (live), attention (a run waiting on you, failed, or registration missing). It never overlaps the Fleet dock or the Share dock; it moves with them.
+2. **The panel.** Clicking the pill opens an anchored panel, top to bottom:
+   - **Jobs list:** at most five rows visible, then a scroll bar. Each row is one ellipsised line (invariant 11): status dot, job name, next fire, target. Selecting a row shows its details pane: brief title and scope, repo and branch it was created from (and commit), target lane or Orbit, model and fallbacks, cadence in words plus cron, next three fire times, triggers (in-app, OS task, recorded cloud triggers), approvals the run may grant itself, last outcome. Row actions: Modify, Pause or Resume, Cancel, Run now.
+   - **Stats strip:** runs in the last 7 and 30 days, success rate, average and last duration, model switches, waits on you.
+   - **Engineering Report (small button):** opens P-REPORT.1 (ADR-0116) scoped to this job's runs.
+   - **Runs list:** the selected job's history (start, duration, outcome, model, attempts, note), newest first, its own scroll region.
+   - **Change conversation (P-SCHED.6):** opening Modify, Pause or Cancel inserts the conversation between the details pane and the stats strip; it pushes the lower sections down and never overlays them.
+3. **Layout rules.** The panel uses the existing component CSS (Jobs sheet, `goal-modal`, `set-note` patterns); width at least 440 px, height capped to the viewport with each list scrolling inside its own region; no text clipped mid-word, every label on one line with a tooltip when truncated; nothing crowded at 1366x768 or at 125 percent scaling. Mockups reuse the real CSS (invariant 11).
+
+**Proof.** Renderer tests for the pure builders (row, details, stats, runs) and a browser smoke at 1920x1080, 1366x768 and 125 percent scaling showing the five-row limit, scrolling, the inserted conversation pushing sections down, and no clipped labels; served-bytes check per AGENTS.md.
+
+**Consequences.** The user sees what will run, where it came from and how it has gone before deciding anything. Relates to ADR-0116, ADR-0443, ADR-0482.
+
+## ADR-0488 -- P-SCHED.6: modify, pause or cancel a job through a short conversation that explains impact, offers alternatives, and acts only on confirmation (2026-11-05)
+
+**Status:** Proposed (P-WAKE epic, ADR-0482).
+
+**Context.** Changing a job can change things outside LUCID: the OS task P-WAKE.1 registered, and cloud schedules the user created from the templates (Azure Automation, AWS Systems Manager, Google Cloud Scheduler). The user should understand that before acting.
+
+**Decision.**
+1. **A scoped conversation.** Modify, Pause and Cancel open a utility session in the panel, on the job's own model by default or any model from a picker (the existing model dropdown), seeded with the job record, its brief, recent runs and its triggers (as delimited data). It answers questions about the job and proposes a change.
+2. **Impact first.** Before any change the conversation states what it will touch: the in-app job, the OS task (update, disable or remove), each recorded cloud trigger (which LUCID cannot change: it shows the exact console path or CLI command to update or delete it), queued or running runs, and work that depends on the job's output. It offers alternatives where they fit: pause instead of cancel, skip the next run, change frequency or time, change model or fallbacks, run once now.
+3. **Action needs a click.** The session proposes a typed change (`pause`, `resume`, `cancel`, `edit { fields }`); the panel shows it as a diff and applies it only when the user confirms, through the UI-token job routes. Re-arming after an edit follows ADR-0484 item 3. The session itself cannot call the job routes.
+4. **Semantics.** Pause disarms the job and disables its OS task (cloud triggers listed as still active until the user changes them); Resume re-arms and re-enables after confirmation; Cancel deletes the job, removes the OS task and keeps the run history for the report.
+
+**Proof.** A modify that moves the time updates the in-app schedule and the OS task and lists the cloud trigger with its manual step; pause and resume round-trip; cancel removes the OS task; the session cannot change a job without the confirmed diff; questions are answered from the job record on the chosen model.
+
+**Consequences.** Changes to unattended work are deliberate and explained, including the parts outside LUCID. Relates to ADR-0443, ADR-0482, ADR-0483, ADR-0484, ADR-0487.
