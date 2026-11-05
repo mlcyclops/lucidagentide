@@ -7,6 +7,8 @@
 // is the add-on hub (the remote-spokes server plugin, add-on ADR-A051): its /host/spokes summary carries the
 // hub's certificate scopes and, per spoke, its own answers to `capabilities` and `status`. Everything a spoke
 // wrote (task names, model ids, errors) is untrusted: it is validated and clipped here and only ever shown as text.
+// ADR-0489 adds the hub's optional per-spoke facts (answer time, route, the spoke certificate's region and
+// classification, the spoke's `models` answer) and the Start-a-task selector's order (`deployChoices`).
 //
 // What a hub may do is what its certificate's scopes allow (add-on ADR-A044): recall reads (status, journal,
 // parked actions), drive starts, follows up, cancels and closes tasks and denies parked actions, approve signs an
@@ -36,15 +38,37 @@ export interface RemoteTaskView {
  *  working. error: a task failed, or the spoke refused this hub's status read. idle: online and free. */
 export type RemoteSpokeState = "checking" | "offline" | "approval" | "busy" | "error" | "idle";
 
+/** A signed-in frontier provider on a spoke and the model ids it offers there (ADR-0489). */
+export interface RemoteFrontierView { provider: string; name: string; account: string | null; models: string[] }
+
+/** What a spoke can run: the default new tasks use, its local models, and its signed-in frontier providers. From
+ *  the spoke's `models` answer when the hub has one, else from `capabilities` (provider names, no model lists). */
+export interface RemoteModelsView { default: string | null; local: string[]; frontier: RemoteFrontierView[] }
+
+/** How the hub's request reached the spoke: the spoke's own LAN mailbox, or a shared relay. */
+export type RemoteVia = "lan" | "relay";
+
+/** The classification a spoke certificate may carry (add-on certificate format). Closed set. */
+export const CLASSIFICATIONS = ["private", "shareable", "cui"] as const;
+export type RemoteClassification = (typeof CLASSIFICATIONS)[number];
+
 export interface RemoteSpokeView {
   node: string;
   label: string;
   state: RemoteSpokeState;
   /** From `capabilities`; null when the spoke did not answer it. */
   lanes: { live: number; max: number; free: number } | null;
-  model: string | null;
   tasks: RemoteTaskView[];
   checkedAt: number | null;
+  /** ADR-0489: the round trip of the hub's last `capabilities` request, including the spoke's mailbox poll. */
+  latencyMs: number | null;
+  via: RemoteVia | null;
+  /** ADR-0489: from the spoke certificate the hub holds (root- or delegate-signed), not from the spoke. */
+  region: string | null;
+  classification: RemoteClassification | null;
+  certExpires: number | null;
+  engineVersion: string | null;
+  models: RemoteModelsView;
   error?: string;
 }
 
@@ -77,6 +101,57 @@ function mapTask(raw: unknown): RemoteTaskView | null {
   return out;
 }
 
+// ------------------------------------------------------------------ models, route, certificate (ADR-0489)
+
+/** A model or provider id as the IDE accepts it from a spoke; anything else is dropped, never shown. */
+export const MODEL_ID_RE = /^[A-Za-z0-9._:@/-]{1,128}$/;
+/** A spoke may list hundreds of models; the IDE keeps this many per list. */
+export const MODEL_LIST_MAX = 200;
+const PROVIDER_MAX = 32;
+
+function modelIds(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const ids = v.filter((m): m is string => typeof m === "string" && MODEL_ID_RE.test(m));
+  return [...new Set(ids)].slice(0, MODEL_LIST_MAX);
+}
+
+/** Local models: a plain id list (`capabilities`), or `{ <provider>: ids }` (the `models` op), flattened to
+ *  `provider/id` unless the id already names its provider. */
+function localModels(v: unknown): string[] {
+  if (Array.isArray(v)) return modelIds(v);
+  const byProvider = record(v);
+  if (!byProvider) return [];
+  const ids = Object.entries(byProvider)
+    .filter(([provider]) => MODEL_ID_RE.test(provider))
+    .flatMap(([provider, list]) => modelIds(list).map((m) => (m.startsWith(`${provider}/`) ? m : `${provider}/${m}`)));
+  return modelIds(ids);
+}
+
+/** One signed-in provider: a `models` op provider record (only when `signedIn` is true), or a bare provider id
+ *  from `capabilities.models.signedIn` (no account, no model list). */
+function frontierRow(raw: unknown): RemoteFrontierView | null {
+  if (typeof raw === "string") return MODEL_ID_RE.test(raw) ? { provider: raw, name: raw, account: null, models: [] } : null;
+  const p = record(raw);
+  if (!p || p.signedIn !== true || typeof p.provider !== "string" || !MODEL_ID_RE.test(p.provider)) return null;
+  const accounts = Array.isArray(p.accounts) ? p.accounts.map((a) => clip(record(a)?.label, 64)).filter((l): l is string => l !== null) : [];
+  return { provider: p.provider, name: clip(p.name, 64) ?? p.provider, account: accounts.length ? accounts.join(", ").slice(0, 160) : null, models: modelIds(p.models) };
+}
+
+function frontierRows(v: unknown): RemoteFrontierView[] {
+  if (!Array.isArray(v)) return [];
+  return v.map(frontierRow).filter((f): f is RemoteFrontierView => f !== null).slice(0, PROVIDER_MAX);
+}
+
+/** The spoke's models: its `models` answer when the hub has one, else what `capabilities` says. The default
+ *  prefers `capabilities`, the fresher of the two (the `models` answer is refreshed at most every 5 minutes). */
+function mapModels(capsModels: Record<string, unknown> | null, answer: Record<string, unknown> | null): RemoteModelsView {
+  const fromCaps = clip(capsModels?.default, 128);
+  const fromAnswer = clip(answer?.default, 128);
+  const def = [fromCaps, fromAnswer].find((m): m is string => m !== null && MODEL_ID_RE.test(m)) ?? null;
+  if (!answer) return { default: def, local: localModels(capsModels?.local), frontier: frontierRows(capsModels?.signedIn) };
+  return { default: def, local: localModels(answer.local), frontier: frontierRows(answer.providers) };
+}
+
 /** The spoke's overall state from its reachability and tasks. Closed and stopped tasks hold no lane. */
 export function spokeState(reachable: boolean | null, tasks: readonly RemoteTaskView[] | null): RemoteSpokeState {
   if (reachable === null) return "checking";
@@ -96,14 +171,23 @@ export function mapSpokeRow(raw: unknown): RemoteSpokeView | null {
   const tasks = Array.isArray(r.tasks) ? r.tasks.map(mapTask).filter((t): t is RemoteTaskView => t !== null) : null;
   const caps = record(r.caps);
   const max = count(caps?.maxLanes), live = count(caps?.liveLanes), free = count(caps?.freeLanes);
+  // ADR-0489: optional fields a newer hub plugin adds; an older one omits them and each reads as unknown.
+  const viaKind = record(r.via)?.kind;
+  const cert = record(r.cert);
   const view: RemoteSpokeView = {
     node: r.node,
     label: clip(r.label, 64) ?? r.node.slice(0, 12),
     state: spokeState(reachable, tasks),
     lanes: max !== null && live !== null && free !== null ? { live, max, free } : null,
-    model: clip(record(caps?.models)?.default, 128),
     tasks: (tasks ?? []).sort((a, b) => b.updatedAt - a.updatedAt),
     checkedAt: count(r.checkedAt),
+    latencyMs: count(r.latencyMs),
+    via: viaKind === "lan" || viaKind === "relay" ? viaKind : null,
+    region: clip(cert?.region, 48),
+    classification: CLASSIFICATIONS.find((c) => c === cert?.classification) ?? null,
+    certExpires: count(cert?.expires),
+    engineVersion: clip(caps?.engineVersion, 32),
+    models: mapModels(record(caps?.models), record(r.models)),
   };
   const error = clip(r.error, 300);
   if (error) view.error = error;
@@ -139,11 +223,57 @@ export const REMOTE_STATE_LABEL: Readonly<Record<RemoteSpokeState, string>> = {
   checking: "checking", offline: "offline", approval: "parked approval", busy: "online, busy", error: "online, error", idle: "online, idle",
 };
 
-/** The card's one-line glance: state, lanes, and how many tasks are open. */
+export const VIA_LABEL: Readonly<Record<RemoteVia, string>> = { lan: "LAN", relay: "relay" };
+
+/** Seconds with one decimal under 10 s, whole seconds above (the mailbox poll makes finer digits noise). */
+function seconds(ms: number): string {
+  return ms < 10_000 ? (ms / 1000).toFixed(1) : String(Math.round(ms / 1000));
+}
+
+/** ADR-0489: the hub's last round trip to the spoke. It includes the spoke's mailbox poll (about 2 s), so it
+ *  reads as how fast the spoke answers, never as a network ping. */
+export function latencyLabel(ms: number | null): string {
+  return ms === null ? "answer time not measured yet" : `answers in ${seconds(ms)} s`;
+}
+
+/** The card's one-line glance: state, lanes, how fast it answers and over which route, and how many tasks are
+ *  open. */
 export function remoteGlance(s: RemoteSpokeView): string {
   const lanes = s.lanes ? ` \u00b7 ${s.lanes.live}/${s.lanes.max} lanes` : "";
+  const answers = s.latencyMs !== null ? ` \u00b7 ${seconds(s.latencyMs)} s${s.via ? ` ${VIA_LABEL[s.via]}` : ""}` : "";
   const open = s.tasks.filter((t) => t.state === "working" || t.state === "awaiting_approval").length;
-  return `${REMOTE_STATE_LABEL[s.state]}${lanes}${open ? ` \u00b7 ${open} open` : ""}`;
+  return `${REMOTE_STATE_LABEL[s.state]}${lanes}${answers}${open ? ` \u00b7 ${open} open` : ""}`;
+}
+
+/** How many distinct models the spoke reports: the default, its local models and every signed-in provider's. */
+export function modelCount(s: RemoteSpokeView): number {
+  const all = new Set([...s.models.local, ...s.models.frontier.flatMap((f) => f.models)]);
+  if (s.models.default) all.add(s.models.default);
+  return all.size;
+}
+
+/** One row of the Start-a-task selector: the spoke, whether a task can start there now, and why not. */
+export interface DeployChoice { spoke: RemoteSpokeView; eligible: boolean; why: string | null }
+
+/** Why a task cannot start on this spoke now, or null when it can. The hub's scopes first (nothing can start
+ *  without drive), then what the spoke said. A spoke that did not report lanes is offered: it decides. */
+function deployBlock(s: RemoteSpokeView, a: HubActions): string | null {
+  if (!a.drive) return "this hub cannot start tasks (no drive scope)";
+  if (s.state === "checking") return "still checking";
+  // An offline row the hub could say more about (a revoked certificate, a refusal) gives that reason: "offline"
+  // alone would suggest waiting, when the spoke will never answer this hub again.
+  if (s.state === "offline") return s.error ? `offline: ${s.error.slice(0, 120)}` : "offline";
+  if (s.lanes && s.lanes.free === 0) return "no free lane: close an idle task on it to free one";
+  return null;
+}
+
+/** ADR-0489: every spoke as a selector row, eligible first, then fastest answer (unmeasured last), then label. */
+export function deployChoices(spokes: readonly RemoteSpokeView[], a: HubActions): DeployChoice[] {
+  return spokes
+    .map((spoke) => { const why = deployBlock(spoke, a); return { spoke, eligible: why === null, why }; })
+    .sort((x, y) => Number(y.eligible) - Number(x.eligible)
+      || (x.spoke.latencyMs ?? Number.POSITIVE_INFINITY) - (y.spoke.latencyMs ?? Number.POSITIVE_INFINITY)
+      || x.spoke.label.localeCompare(y.spoke.label));
 }
 
 /** Which buttons a task row offers: what the certificate allows AND what the spoke would accept in this state

@@ -6301,6 +6301,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-ghost-id small{font-size:10px;color:var(--txt-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .orbit-ghost-err{color:var(--red-txt,var(--red)) !important}
 .orbit-ghost-err:empty{display:none}
+.orbit-ghost-err[data-tone="ok"]{color:var(--green-txt,var(--green)) !important}
 .orbit-ghost-x{flex:none;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;
   border:0;border-radius:6px;background:transparent;color:var(--txt-4);cursor:pointer;
   transition:color var(--t-fast),background var(--t-fast)}
@@ -6474,6 +6475,40 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .rs-entry-h .pill{flex:none}
 .rs-ask-h{font-size:12px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rs-ask .orbit-spawn-row{gap:6px;align-items:center}
+/* ADR-0489: the Start-a-task selector and the panel's Models section. Rows are grids, every text run its own
+   block line that ellipsizes (invariant 11); chips are inline blocks inside one block line, never flex prose. */
+.rs-choices{display:grid;gap:6px;margin:0 4px 10px}
+.rs-choice{display:grid;grid-template-columns:auto auto minmax(0,1fr);align-items:start;gap:8px;padding:7px 9px;
+  border:1px solid var(--line);border-radius:9px;cursor:pointer}
+.rs-choice:hover{border-color:var(--lane,var(--line-strong))}
+.rs-choice:has(input:checked){border-color:var(--lane,var(--blue));background:color-mix(in srgb,var(--lane,var(--blue)) 10%,transparent)}
+.rs-choice:has(input:focus-visible){outline:2px solid var(--blue);outline-offset:1px}
+.rs-choice.off{cursor:default;opacity:.62}
+.rs-choice input{margin:2px 0 0}
+.rs-choice .orbit-led{margin-top:5px}
+.rs-choice.rs-approval,.rs-choice.rs-stuck{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .4)}
+.rs-choice.rs-maybe{--lane:var(--amber);--lane-dim:rgb(var(--amber-rgb) / .4)}
+.rs-choice.rs-busy{--lane:var(--cyan);--lane-dim:rgb(var(--cyan-rgb) / .35)}
+.rs-choice.rs-ready{--lane:var(--blue);--lane-dim:rgb(var(--blue-rgb) / .4)}
+.rs-choice.rs-checking{--lane:var(--txt-4)}
+.rs-choice-main{min-width:0}
+.rs-choice-main>b,.rs-choice-main>small{display:block;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rs-choice-main>b{font-size:12.5px;color:var(--txt)}
+.rs-choice-main>small{font-size:11px;line-height:1.5;color:var(--txt-3)}
+.rs-choice-main>small.rs-chips{margin-top:3px}
+.rs-choice-main>small.rs-why{color:var(--amber-txt,var(--amber))}
+.rs-chip{display:inline-block;margin-right:4px;padding:0 6px;border:1px solid var(--line);border-radius:999px;
+  font-size:10px;line-height:16px;white-space:nowrap;color:var(--txt-2);vertical-align:middle}
+.rs-chip.cls-cui{border-color:var(--violet);color:var(--violet-txt)}
+.rs-chip.warn{border-color:rgb(var(--amber-rgb) / .6);color:var(--amber-txt)}
+.rs-chip.bad{border-color:rgb(var(--red-rgb) / .6);color:var(--red-txt,var(--red))}
+.rs-models-group,.rs-models-fold{margin:0 4px 6px}
+.rs-models-h,.rs-models-fold>summary{font-size:11px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rs-models-fold>summary{cursor:pointer}
+.rs-models{list-style:none;margin:2px 0 0;padding:0 0 0 10px}
+.rs-models>li{display:flex;align-items:center;gap:6px;min-width:0;font-family:var(--mono);font-size:11px;line-height:1.6;color:var(--txt-3)}
+.rs-model-id{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rs-models>li .rs-chip{flex:none;font-family:inherit}
 .btn-mini.armed,.orbit-ghost-x.armed{color:var(--on-fill);background:var(--red);border-color:var(--red)}
 
 /* P-FLEET.L17: the grid card header is now a takeover surface too (click = the orbit's spoke click;

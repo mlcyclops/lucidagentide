@@ -9,6 +9,10 @@
 // per spoke for its tasks, parked actions and recall. A remote spoke is never promoted into the composer: it is
 // another machine, driven through its hub.
 //
+// ADR-0489 adds the Start-a-task selector (every spoke as a radio row with how fast it answers, its route, models,
+// free lanes and certificate region and classification; ineligible rows say why) and a Models section in the
+// per-spoke panel. Both start tasks through the same submit path as the panel's own "New task".
+//
 // Untrusted text rule: everything a spoke wrote reaches the DOM through textContent or esc(), never as markup.
 // Recalled entries arrive already scanned (a quarantined entry has no text at all); the only way recalled text
 // leaves this panel is "Copy for a prompt", which copies the engine's delimited UNTRUSTED_CONTENT envelope.
@@ -21,8 +25,8 @@ import { icon } from "./icons.ts";
 import type { LucidBridge } from "./bridge.ts";
 import type { OrbitSlot } from "./orbit_layout.ts";
 import {
-  approvalButtons, armClick, REMOTE_STATE_LABEL, REMOTE_TONE, remoteGlance, taskButtons,
-  type RecallView, type RemoteApprovalView, type RemoteHubView, type RemoteSpokeView,
+  approvalButtons, armClick, deployChoices, latencyLabel, modelCount, REMOTE_STATE_LABEL, REMOTE_TONE, remoteGlance, taskButtons, VIA_LABEL,
+  type DeployChoice, type RecallView, type RemoteApprovalView, type RemoteClassification, type RemoteHubView, type RemoteModelsView, type RemoteSpokeView,
 } from "./remote_spokes_model.ts";
 
 export interface OrbitRemoteDeps {
@@ -128,8 +132,13 @@ function paintRemoteNode(card: HTMLElement, s: RemoteSpokeView): void {
   if (card.getAttribute("class") !== cls) card.setAttribute("class", cls);
   setText(card, ".orbit-name", s.label);
   setText(card, ".orbit-glance", remoteGlance(s));
-  setText(card, ".orbit-model", s.model ?? "model not reported");
-  card.title = `${s.label} (remote spoke ${s.node})\n${REMOTE_STATE_LABEL[s.state]}${s.error ? `\n${s.error}` : ""}`;
+  setText(card, ".orbit-model", s.models.default ?? "model not reported");
+  card.title = `${s.label} (remote spoke ${s.node})\n${REMOTE_STATE_LABEL[s.state]}\n${latencyLabel(s.latencyMs)}${s.via ? ` over ${VIA_LABEL[s.via]}` : ""}${s.error ? `\n${s.error}` : ""}`;
+}
+
+/** ADR-0489: whether the orbit offers "Start a remote task": the hub may drive and has at least one spoke. */
+export function remoteDeployVisible(): boolean {
+  return snap !== null && snap.available && snap.actions.drive && snap.spokes.length > 0;
 }
 
 /** Place remote nodes on the slots after the local lanes'. */
@@ -171,10 +180,11 @@ export function remoteHubSectionHtml(): string {
       : `<button class="btn-mini orbit-btn" data-rs-panel>${icon("link", 12)} Open panel</button>`;
     return `<div class="orbit-hubrow rs-hubrow"><span class="orbit-ghost-id"><b>Remote hub</b><small>${esc(snap.reason)}</small></span>${btn}</div>`;
   }
-  const { hub, spokes } = snap;
+  const { hub, spokes, actions } = snap;
   const waiting = spokes.filter((s) => s.state === "approval").length;
   return `<div class="orbit-hubrow rs-hubrow" title="${esc(hub.node)}">
       <span class="orbit-ghost-id"><b>${esc(hub.label)}</b><small>remote hub \u00b7 ${spokes.length} ${spokes.length === 1 ? "spoke" : "spokes"}${waiting ? ` \u00b7 ${waiting} waiting on you` : ""} \u00b7 may ${esc(hub.scopes.join(", ") || "nothing")}</small></span>
+      ${actions.drive ? `<button class="btn-mini orbit-btn" data-rs-deploy data-tip="Start a task on a remote spoke|Pick a spoke by how fast it answers, its models and its free lanes, then start a task there.">${icon("bolt", 12)} Start a task</button>` : ""}
       <button class="btn-mini orbit-btn" data-rs-panel data-tip="Remote Spokes panel|Setup, user presence, custody, models and provisioning stay in the plugin's own panel.">${icon("link", 12)} Panel</button>
     </div>
     <div class="orbit-hubrow-lanes">${spokes.map((s) => `<button class="fleet-pip rs-pip rs-${REMOTE_TONE[s.state]}" data-rs-open="${esc(s.node)}" data-tip="${esc(s.label)}|${esc(remoteGlance(s))}"><i></i>${esc(s.label)}</button>`).join("")}</div>`;
@@ -192,6 +202,8 @@ interface PanelState {
   approvals: RemoteApprovalView[];
   recall: Extract<RecallView, { ok: true }> | null;
   sig: string;
+  /** The models last painted, so a poll repaints the Models section (and folds its lists) only on a change. */
+  modelsSig: string;
 }
 let panel: PanelState | null = null;
 
@@ -202,9 +214,69 @@ function spokeOf(node: string): RemoteSpokeView | null {
   return remoteList().find((s) => s.node === node) ?? null;
 }
 
+const CLASSIFICATION_LABEL: Readonly<Record<RemoteClassification, string>> = { private: "private", shareable: "shareable", cui: "CUI" };
+
+/** ADR-0489: a model list longer than this folds into a details that shows its count. */
+const MODELS_OPEN_MAX = 12;
+
+/** One model list, built node by node (every id is spoke-written text): a heading, then the ids, the default
+ *  marked. A long list folds; `open` keeps a fold the user opened open across a repaint. */
+function modelGroup(title: string, ids: readonly string[], def: string | null, key: string, open: ReadonlySet<string>): HTMLElement {
+  const list = document.createElement("ul");
+  list.className = "rs-models";
+  for (const id of ids) {
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "rs-model-id";
+    name.textContent = id;
+    name.title = id;
+    li.append(name);
+    if (id === def) {
+      const chip = document.createElement("span");
+      chip.className = "rs-chip";
+      chip.textContent = "default";
+      li.append(chip);
+    }
+    list.append(li);
+  }
+  if (ids.length > MODELS_OPEN_MAX) {
+    const fold = document.createElement("details");
+    fold.className = "rs-models-fold";
+    fold.dataset.rsGroup = key;
+    fold.open = open.has(key);
+    const summary = document.createElement("summary");
+    summary.textContent = `${title} \u00b7 ${ids.length} models`;
+    fold.append(summary, list);
+    return fold;
+  }
+  const group = document.createElement("div");
+  group.className = "rs-models-group";
+  const head = document.createElement("div");
+  head.className = "rs-models-h";
+  head.textContent = ids.length ? title : `${title} \u00b7 signed in, models not listed by this spoke`;
+  group.append(head, list);
+  return group;
+}
+
+/** The panel's Models section: the default, the local models, then each signed-in frontier provider. */
+function paintModels(host: HTMLElement, m: RemoteModelsView): void {
+  const open = new Set([...host.querySelectorAll<HTMLDetailsElement>("details[data-rs-group]")].filter((d) => d.open).map((d) => d.dataset.rsGroup ?? ""));
+  const groups: HTMLElement[] = [];
+  if (m.default) groups.push(modelGroup("Default", [m.default], m.default, "default", open));
+  if (m.local.length) groups.push(modelGroup("Local", m.local, m.default, "local", open));
+  for (const f of m.frontier) groups.push(modelGroup(`${f.name}${f.account ? ` (${f.account})` : ""}`, f.models, m.default, `p:${f.provider}`, open));
+  if (groups.length === 0) {
+    const none = document.createElement("div");
+    none.className = "orbit-ghosts-empty";
+    none.textContent = "This spoke has not reported its models.";
+    groups.push(none);
+  }
+  host.replaceChildren(...groups);
+}
+
 /** Paint the panel for `node` once; polls only touch its head and task list (typed text survives a poll). */
 export function paintRemotePanel(box: HTMLElement, node: string, closeHtml: string): void {
-  panel = { node, followTask: null, armed: {}, approvals: [], recall: null, sig: "" };
+  panel = { node, followTask: null, armed: {}, approvals: [], recall: null, sig: "", modelsSig: "" };
   const a = snap?.available ? snap.actions : null;
   box.innerHTML = `<div class="orbit-panel-h">${icon("link", 14)}<b data-rs-title></b><span class="rs-state" data-rs-state></span>${closeHtml}</div>
     <p class="rs-note" data-rs-sub></p>
@@ -221,6 +293,9 @@ export function paintRemotePanel(box: HTMLElement, node: string, closeHtml: stri
       <label class="orbit-spawn-l">prompt<textarea data-rs-new-text rows="3" maxlength="32000" placeholder="the first turn"></textarea></label>
       <div class="orbit-spawn-row"><button class="btn-mini orbit-btn orbit-spawn-go" data-rs-new-go>${icon("bolt", 12)} Start task</button></div>
     </details>` : ""}
+    <div class="rs-sec-h"><span>Models</span></div>
+    <div data-rs-models></div>
+    <p class="rs-note">The default is what new tasks use; change it in the Remote Spokes panel (it restarts the spoke's engine).</p>
     ${a?.recall ? `<div class="rs-sec-h"><span>Parked actions</span><button class="btn-mini orbit-btn" data-rs-approvals>${icon("refresh", 12)} Check</button></div>
     <div data-rs-approvals-out></div>
     <div class="rs-sec-h"><span>Recall</span><button class="btn-mini orbit-btn" data-rs-recall-all data-tip="Recall|Reads this spoke's signed journal. Every entry passes the scanner first; a flagged entry is withheld.">${icon("restore", 12)} Whole journal</button><button class="btn-mini orbit-btn" data-rs-copy hidden data-tip="Copy for a prompt|Copies the entries that passed the scanner inside UNTRUSTED_CONTENT delimiters, the only form recalled text may take into a prompt. Withheld entries are not included.">${icon("copy", 12)} Copy for a prompt</button></div>
@@ -241,6 +316,8 @@ export function refreshRemotePanel(box: HTMLElement): void {
     setText(box, "[data-rs-title]", panel.node.slice(0, 12));
     setText(box, "[data-rs-sub]", snap && !snap.available ? snap.reason : "This spoke is no longer on the hub.");
     ($("[data-rs-tasks]", box) as HTMLElement).replaceChildren();
+    ($("[data-rs-models]", box) as HTMLElement).replaceChildren();
+    panel.modelsSig = "";
     return;
   }
   setText(box, "[data-rs-title]", s.label);
@@ -248,7 +325,13 @@ export function refreshRemotePanel(box: HTMLElement): void {
   st.className = `rs-state rs-${REMOTE_TONE[s.state]}`;
   setText(box, "[data-rs-state]", REMOTE_STATE_LABEL[s.state]);
   const lanes = s.lanes ? `${s.lanes.live} of ${s.lanes.max} lanes in use` : "lanes not reported";
-  setText(box, "[data-rs-sub]", `${lanes} \u00b7 ${s.model ?? "model not reported"}${s.checkedAt ? ` \u00b7 checked ${new Date(s.checkedAt).toLocaleTimeString()}` : ""}${s.error ? ` \u00b7 ${s.error}` : ""}`);
+  const cert = [s.region, s.classification && CLASSIFICATION_LABEL[s.classification]].filter(Boolean).join(", ");
+  setText(box, "[data-rs-sub]", `${lanes} \u00b7 ${latencyLabel(s.latencyMs)}${s.via ? ` over ${VIA_LABEL[s.via]}` : ""}${s.engineVersion ? ` \u00b7 engine ${s.engineVersion}` : ""}${cert ? ` \u00b7 ${cert}` : ""}${s.checkedAt ? ` \u00b7 checked ${new Date(s.checkedAt).toLocaleTimeString()}` : ""}${s.error ? ` \u00b7 ${s.error}` : ""}`);
+  const modelsSig = JSON.stringify(s.models);
+  if (modelsSig !== panel.modelsSig) {
+    panel.modelsSig = modelsSig;
+    paintModels($("[data-rs-models]", box) as HTMLElement, s.models);
+  }
   const may = [a.recall && "recall", a.drive && "drive", a.approve && "approve"].filter(Boolean).join(", ");
   setText(box, "[data-rs-scopes]", `This hub's certificate allows: ${may || "nothing"}. Actions it does not allow are not offered.`);
   const host = $("[data-rs-tasks]", box) as HTMLElement;
@@ -267,7 +350,13 @@ export function refreshRemotePanel(box: HTMLElement): void {
   }).join("");
 }
 
-function showErr(box: HTMLElement, text: string): void { setText(box, "[data-rs-err]", text); }
+/** The panel's one status line. `ok` marks a success ("Task started", "Approved") so it is not drawn in the error
+ *  red; every other message (refusals, waiting notes) keeps the default. */
+function showErr(box: HTMLElement, text: string, ok = false): void {
+  setText(box, "[data-rs-err]", text);
+  const el = $("[data-rs-err]", box) as HTMLElement | null;
+  if (el) el.dataset.tone = ok ? "ok" : "";
+}
 
 /** Clicks inside the remote panel. Returns true when the click was one of its controls. */
 export function onRemotePanelClick(t: HTMLElement, box: HTMLElement): boolean {
@@ -313,7 +402,7 @@ export function onRemotePanelClick(t: HTMLElement, box: HTMLElement): boolean {
   if (t.closest("[data-rs-recall-all]")) { void runRecall(box, undefined); return true; }
   if (t.closest("[data-rs-copy]")) {
     const ctx = panel.recall?.context ?? "";
-    if (ctx) void navigator.clipboard.writeText(ctx).then(() => showErr(box, "Copied, delimited as untrusted content."), () => showErr(box, "The clipboard refused the copy."));
+    if (ctx) void navigator.clipboard.writeText(ctx).then(() => showErr(box, "Copied, delimited as untrusted content.", true), () => showErr(box, "The clipboard refused the copy."));
     return true;
   }
   const card = t.closest("[data-rs-ask-i]") as HTMLElement | null;
@@ -333,18 +422,31 @@ export function onRemotePanelClick(t: HTMLElement, box: HTMLElement): boolean {
   return t.closest("[data-rs-new], [data-rs-follow]") !== null;
 }
 
-async function act(box: HTMLElement, op: "submit" | "followup" | "cancel" | "close", input: { task?: string; text?: string; name?: string }, done?: () => void): Promise<void> {
-  if (!panel || !deps) return;
+type RemoteOp = "submit" | "followup" | "cancel" | "close";
+
+/** One action on a spoke through the engine, then a fresh hub read so every view shows its effect. The panel's
+ *  buttons and the Start-a-task selector both go through here. Returns null when the spoke accepted it, else
+ *  the refusal in words. */
+async function sendAct(node: string, op: RemoteOp, input: { task?: string; text?: string; name?: string }): Promise<string | null> {
+  if (!deps) return "The fleet is not ready.";
+  const r = await deps.remoteSpokeAct(op, { node, ...input }).catch(() => null);
+  if (!r) return "The engine did not answer.";
+  if (!r.ok) return r.error;
+  await refreshRemote();
+  return null;
+}
+
+async function act(box: HTMLElement, op: RemoteOp, input: { task?: string; text?: string; name?: string }, done?: () => void): Promise<void> {
+  if (!panel) return;
   const node = panel.node;
   showErr(box, "Sent; waiting for the spoke\u2026");
-  const r = await deps.remoteSpokeAct(op, { node, ...input }).catch(() => null);
+  const error = await sendAct(node, op, input);
   if (panel?.node !== node) return;
-  if (!r) { showErr(box, "The engine did not answer."); return; }
-  if (!r.ok) { showErr(box, r.error); return; }
-  showErr(box, op === "close" ? "Closed: the spoke freed the lane." : "Done.");
+  if (error) { showErr(box, error); return; }
+  showErr(box, op === "close" ? "Closed: the spoke freed the lane." : "Done.", true);
   done?.();
-  await refreshRemote();
-  if (panel?.node === node) { panel.sig = ""; refreshRemotePanel(box); }
+  panel.sig = "";
+  refreshRemotePanel(box);
 }
 
 async function loadApprovals(box: HTMLElement): Promise<void> {
@@ -402,7 +504,7 @@ async function decide(box: HTMLElement, item: RemoteApprovalView, allow: boolean
   const r = await deps.remoteSpokeDecide({ node, task: item.task, ask: item.ask.id, digest: item.ask.digest, allow }).catch(() => null);
   if (panel?.node !== node) return;
   if (!r) { showErr(box, "The engine did not answer."); return; }
-  showErr(box, r.ok ? (allow ? "Approved: the spoke's engine verified the signed decision." : "Denied.") : r.error);
+  showErr(box, r.ok ? (allow ? "Approved: the spoke's engine verified the signed decision." : "Denied.") : r.error, r.ok);
   await loadApprovals(box);
 }
 
@@ -441,11 +543,128 @@ async function runRecall(box: HTMLElement, task: string | undefined): Promise<vo
   }));
 }
 
-/** The hub picker's buttons (Start, Panel, a spoke pip). Returns the node to open, "handled", or null. */
-export function onRemoteHubClick(t: HTMLElement): string | "handled" | null {
+// ------------------------------------------------------------- the Start-a-task selector (ADR-0489)
+
+interface DeployState {
+  /** The spoke picked last; kept across polls while it stays eligible. */
+  chosen: string | null;
+  sig: string;
+  busy: boolean;
+}
+let deploy: DeployState | null = null;
+
+export function closeDeployPanel(): void { deploy = null; }
+
+/** A certificate that has expired or expires within this window gets a warning chip. */
+const CERT_WARN_MS = 14 * 24 * 3_600_000;
+
+/** One selector row. The radio carries the node id (validated against NODE_RE by the model); every other value
+ *  a spoke wrote goes through esc(). */
+function choiceHtml(c: DeployChoice, checked: boolean, now: number): string {
+  const s = c.spoke;
+  const lanes = s.lanes ? `${s.lanes.free}/${s.lanes.max} free` : "lanes not reported";
+  const n = modelCount(s);
+  const first = `${REMOTE_STATE_LABEL[s.state]} \u00b7 ${lanes} \u00b7 ${s.models.default ?? "model not reported"}${n ? ` \u00b7 ${n} ${n === 1 ? "model" : "models"}` : ""}`;
+  const answers = `${latencyLabel(s.latencyMs)}${s.via ? ` over ${VIA_LABEL[s.via]}` : ""}`;
+  const expiry = s.certExpires === null ? ""
+    : s.certExpires <= now ? `<span class="rs-chip bad">certificate expired</span>`
+    : s.certExpires - now <= CERT_WARN_MS ? `<span class="rs-chip warn">certificate expires ${esc(new Date(s.certExpires).toLocaleDateString())}</span>` : "";
+  const chips = [
+    s.region ? `<span class="rs-chip">${esc(s.region)}</span>` : "",
+    s.classification ? `<span class="rs-chip cls-${s.classification}">${CLASSIFICATION_LABEL[s.classification]}</span>` : "",
+    s.engineVersion ? `<span class="rs-chip">engine ${esc(s.engineVersion)}</span>` : "",
+    expiry,
+  ].join("");
+  const checkedAt = s.checkedAt ? `checked ${new Date(s.checkedAt).toLocaleTimeString()}` : "not checked yet";
+  return `<label class="rs-choice rs-${REMOTE_TONE[s.state]}${c.eligible ? "" : " off"}" title="${esc(s.label)} (${esc(s.node)})">
+      <input type="radio" name="rs-deploy" value="${esc(s.node)}"${checked ? " checked" : ""}${c.eligible ? "" : " disabled"}>
+      <i class="orbit-led"></i>
+      <span class="rs-choice-main">
+        <b>${esc(s.label)}</b>
+        <small>${esc(first)}</small>
+        <small>${esc(answers)} \u00b7 ${esc(checkedAt)}</small>
+        ${chips ? `<small class="rs-chips">${chips}</small>` : ""}
+        ${c.why ? `<small class="rs-why">${esc(c.why)}</small>` : ""}
+      </span>
+    </label>`;
+}
+
+/** Paint the selector once: the list, then name, prompt and Start. Polls repaint only the list. */
+export function paintDeployPanel(box: HTMLElement, closeHtml: string): void {
+  deploy = { chosen: null, sig: "", busy: false };
+  box.innerHTML = `<div class="orbit-panel-h">${icon("bolt", 14)}<b>Start a task on a remote spoke</b><span data-rs-dep-n></span>${closeHtml}</div>
+    <p class="rs-note">Fastest first. "Answers in" is the hub's last round trip to the spoke, including its mailbox poll (about 2 s), not a network ping.</p>
+    <div class="rs-choices" role="radiogroup" aria-label="Remote spokes" data-rs-dep-list></div>
+    <label class="orbit-spawn-l">name <i>optional</i><input type="text" data-rs-dep-name maxlength="48" placeholder="what this task is for"></label>
+    <label class="orbit-spawn-l">prompt<textarea data-rs-dep-text rows="3" maxlength="32000" placeholder="the first turn"></textarea></label>
+    <div class="orbit-spawn-row"><button class="btn-mini orbit-btn orbit-spawn-go" data-rs-dep-go>${icon("bolt", 12)} Start task</button></div>
+    <small class="orbit-ghost-err" data-rs-dep-err></small>`;
+  refreshDeployPanel(box);
+}
+
+/** Per poll: the rows, only when they changed. The pick survives a repaint while that spoke stays eligible;
+ *  otherwise the first eligible spoke (the fastest) is picked. */
+export function refreshDeployPanel(box: HTMLElement): void {
+  if (!deploy) return;
+  const list = $("[data-rs-dep-list]", box) as HTMLElement | null;
+  if (!list) return;
+  const checked = list.querySelector<HTMLInputElement>("input[name=rs-deploy]:checked");
+  if (checked) deploy.chosen = checked.value;
+  const choices = snap?.available ? deployChoices(snap.spokes, snap.actions) : [];
+  const chosen = choices.find((c) => c.eligible && c.spoke.node === deploy?.chosen) ?? choices.find((c) => c.eligible) ?? null;
+  deploy.chosen = chosen?.spoke.node ?? null;
+  const sig = JSON.stringify([choices, deploy.chosen, snap && !snap.available ? snap.reason : null]);
+  if (sig === deploy.sig) return;
+  deploy.sig = sig;
+  const eligible = choices.filter((c) => c.eligible).length;
+  setText(box, "[data-rs-dep-n]", choices.length ? `${eligible} of ${choices.length} ready` : "");
+  const go = $("[data-rs-dep-go]", box) as HTMLButtonElement | null;
+  if (go) go.disabled = deploy.busy || eligible === 0;
+  if (!snap || !snap.available) { list.innerHTML = `<div class="orbit-ghosts-empty">${esc(snap ? snap.reason : "Asking the hub\u2026")}</div>`; return; }
+  if (choices.length === 0) { list.innerHTML = `<div class="orbit-ghosts-empty">This hub has no spokes yet. Enroll one in the Remote Spokes panel.</div>`; return; }
+  const now = Date.now();
+  list.innerHTML = choices.map((c) => choiceHtml(c, c.spoke.node === deploy?.chosen, now)).join("");
+}
+
+function showDeployErr(box: HTMLElement, text: string): void { setText(box, "[data-rs-dep-err]", text); }
+
+/** Clicks inside the selector. `openSpoke` opens a spoke's side panel (the orbit owns the panels). Returns true
+ *  when the click was one of its controls. */
+export function onDeployPanelClick(t: HTMLElement, box: HTMLElement, openSpoke: (node: string) => void): boolean {
+  if (!deploy) return false;
+  if (t.closest("[data-rs-dep-go]")) { void startDeploy(box, openSpoke); return true; }
+  return t.closest("[data-rs-dep-list], [data-rs-dep-name], [data-rs-dep-text]") !== null;
+}
+
+async function startDeploy(box: HTMLElement, openSpoke: (node: string) => void): Promise<void> {
+  if (!deploy || deploy.busy) return;
+  const node = box.querySelector<HTMLInputElement>("input[name=rs-deploy]:checked")?.value ?? null;
+  const choice = snap?.available ? deployChoices(snap.spokes, snap.actions).find((c) => c.spoke.node === node) : undefined;
+  if (!node || !choice) { showDeployErr(box, "Pick a spoke first."); return; }
+  if (!choice.eligible) { showDeployErr(box, `${choice.spoke.label} cannot take a task now: ${choice.why}.`); return; }
+  const text = ($("[data-rs-dep-text]", box) as HTMLTextAreaElement).value;
+  const name = ($("[data-rs-dep-name]", box) as HTMLInputElement).value.trim();
+  if (!text.trim()) { showDeployErr(box, "Write the task's first turn."); return; }
+  const state = deploy;
+  state.busy = true;
+  const go = $("[data-rs-dep-go]", box) as HTMLButtonElement;
+  go.disabled = true;
+  showDeployErr(box, `Sent to ${choice.spoke.label}; waiting for the spoke\u2026`);
+  const error = await sendAct(node, "submit", { text, ...(name ? { name } : {}) });
+  state.busy = false;
+  if (deploy !== state) return; // the selector was closed meanwhile; the task still started (or not) on the spoke
+  if (error) { go.disabled = false; showDeployErr(box, error); return; }
+  openSpoke(node);
+  showErr(box, `Task started on ${choice.spoke.label}; it shows in Tasks at the next refresh (up to 15 s).`, true);
+}
+
+/** The hub picker's buttons (Start, Panel, Start a task, a spoke pip). Returns the node to open, "deploy" for the
+ *  Start-a-task selector, "handled", or null. */
+export function onRemoteHubClick(t: HTMLElement): string | "deploy" | "handled" | null {
   if (!deps) return null;
   if (t.closest("[data-rs-start]")) { void deps.startRemoteSpokes().then(refreshRemote); return "handled"; }
   if (t.closest("[data-rs-panel]")) { deps.openRemoteSpokesPanel(); return "handled"; }
+  if (t.closest("[data-rs-deploy]")) return "deploy";
   const pip = t.closest("[data-rs-open]") as HTMLElement | null;
   return pip?.dataset.rsOpen ?? null;
 }

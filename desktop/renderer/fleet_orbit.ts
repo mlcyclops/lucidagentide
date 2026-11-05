@@ -27,7 +27,7 @@ import { cycleSpoke, ghostKey, ghostSpokes, hubLanes, ORBIT_FPS_FLOOR, ORBIT_NOD
 import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new spokes open on the last spoke's model; colliding names show the route
 import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
-import { closeRemotePanel, initOrbitRemote, layoutRemote, onRemoteHubClick, onRemotePanelClick, paintRemotePanel, reconcileRemote, refreshRemote, refreshRemotePanel, remoteCounts, remoteHubSectionHtml, remoteHubVisible, remoteList, remotePanelNode, type OrbitRemoteDeps } from "./orbit_remote.ts"; // P-IDE-SPOKES.1 (ADR-0487)
+import { closeDeployPanel, closeRemotePanel, initOrbitRemote, layoutRemote, onDeployPanelClick, onRemoteHubClick, onRemotePanelClick, paintDeployPanel, paintRemotePanel, reconcileRemote, refreshDeployPanel, refreshRemote, refreshRemotePanel, remoteCounts, remoteDeployVisible, remoteHubSectionHtml, remoteHubVisible, remoteList, remotePanelNode, type OrbitRemoteDeps } from "./orbit_remote.ts"; // P-IDE-SPOKES.1 (ADR-0487), ADR-0489
 import { beatLine, goalButtonHtml, goalButtonTip, goalPanelHtml, goalSnapshot, onGoalPanelClick, paintHubGoal, refreshGoal, stalledLanes, taskFormHtml, type OrbitGoalDeps } from "./orbit_goal.ts"; // P-AOS.1 (ADR-0452), P-AOS.2 (ADR-0453)
 
 export interface FleetOrbitDeps extends OrbitGoalDeps, OrbitRemoteDeps {
@@ -296,7 +296,7 @@ function paintGhosts(): void {
 // spokes, P-SWITCH.3). All are children of the stage, so the fleet stays visible behind them and no
 // popover positioning is involved.
 
-type OrbitPanel = "ghosts" | "spawn" | "hubs" | "goal" | "remote";
+type OrbitPanel = "ghosts" | "spawn" | "hubs" | "goal" | "remote" | "deploy";
 let openedPanel: OrbitPanel | null = null;
 /** P-IDE-SPOKES.1: the remote spoke the "remote" panel shows next. */
 let remoteTarget: string | null = null;
@@ -310,11 +310,13 @@ function togglePanel(which: OrbitPanel): void {
   // A closed panel keeps no DOM: the spawn form's password input must not hold a token while hidden.
   if (openedPanel === null) { const body = $("[data-orbit-panel-body]", host); if (body) body.innerHTML = ""; }
   if (openedPanel !== "remote") closeRemotePanel();
+  if (openedPanel !== "deploy") closeDeployPanel();
   if (openedPanel === "ghosts") { paintGhostPanel(); void refreshGhosts(); }
   if (openedPanel === "spawn") paintSpawnPanel();
   if (openedPanel === "hubs") paintHubsPanel();
   if (openedPanel === "goal") { goalSig = ""; paintGoalPanel(); }
   if (openedPanel === "remote") paintRemote();
+  if (openedPanel === "deploy") { const body = $("[data-orbit-panel-body]", host) as HTMLElement | null; if (body) paintDeployPanel(body, `<button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button>`); }
 }
 
 // ------------------------------------------------------ P-IDE-SPOKES.1 (ADR-0487): remote spokes
@@ -340,7 +342,11 @@ function paintRemoteAll(first: boolean): void {
   ($("[data-orbit-empty]", view) as HTMLElement).hidden = lastMine.length + remoteList().length > 0;
   layoutStage(lastMine);
   paintHubsBadge();
-  if (openedPanel === "remote") { const box = $("[data-orbit-panel-body]", view) as HTMLElement | null; if (box) refreshRemotePanel(box); }
+  // ADR-0489: the Start-a-task selector's header button, only for a hub that may drive and has spokes.
+  for (const b of view.querySelectorAll<HTMLElement>("[data-orbit-deploy]")) b.hidden = !remoteDeployVisible();
+  const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
+  if (box && openedPanel === "remote") refreshRemotePanel(box);
+  if (box && openedPanel === "deploy") refreshDeployPanel(box);
 }
 
 // ------------------------------------------------------ P-SWITCH.3 (ADR-0410): the other hubs' spokes
@@ -481,9 +487,15 @@ function onPanelClick(t: HTMLElement): boolean {
     const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
     if (box && onRemotePanelClick(t, box)) return true;
   }
+  // ADR-0489: the Start-a-task selector; a started task opens its spoke's panel.
+  if (openedPanel === "deploy" && view) {
+    const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
+    if (box && onDeployPanelClick(t, box, openRemote)) return true;
+  }
   if (openedPanel === "hubs") {
     const hit = onRemoteHubClick(t);
     if (hit === "handled") return true;
+    if (hit === "deploy") { togglePanel("deploy"); return true; }
     if (hit) { openRemote(hit); return true; }
   }
   const row = t.closest("[data-ghost-i]") as HTMLElement | null;
@@ -776,6 +788,7 @@ function buildView(): HTMLElement {
       <div class="orbit-hud" data-orbit-hud data-tip="Fleet pressure|CPU and memory right now. A metric sustained over the line refuses NEW spokes; running ones are never touched."></div>
       <span class="orbit-headgap"></span>
       <button class="btn-mini orbit-btn" data-orbit-hubs hidden data-tip="Other hubs|Spokes still running under your other sessions. Each session is its own hub: a new session starts empty, and the spokes you started before stay with the session that started them. Open a hub to make that session Main and see its spokes here.">${icon("share", 13)} Other hubs <b class="orbit-ghost-n" data-orbit-hubsn></b></button>
+      <button class="btn-mini orbit-btn" data-orbit-deploy hidden data-tip="Start a task on a remote spoke|Every remote spoke with how fast it answers, its models, free lanes and certificate region; pick one and start a task there.">${icon("bolt", 13)} Remote task</button>
       <button class="btn-mini orbit-btn" data-orbit-recover hidden data-tip="Historical spokes|Every lane that ever ran, remembered by the durable ledger. Recover one and it rejoins the orbit under its old name, folder and model, with its conversation loaded; hide one and it waits in the Hidden section.">${icon("restore", 13)} Recover <b class="orbit-ghost-n" data-orbit-ghostn></b></button>
       <button class="btn-mini orbit-btn orbit-goal-btn" data-orbit-goal></button>
       <button class="btn-mini orbit-btn" data-orbit-spawn data-tip="New spoke|Create it right here: name, folder (real OS browser) and model, or paste a repo URL to clone it first.">${icon("plus", 13)} New spoke</button>
@@ -833,6 +846,7 @@ function onViewClick(ev: Event): void {
   if (t.closest("[data-orbit-pin]")) { setFleetHome("orbit"); return; }
   if (t.closest("[data-orbit-recover]")) { togglePanel("ghosts"); return; }
   if (t.closest("[data-orbit-hubs]")) { togglePanel("hubs"); return; }
+  if (t.closest("[data-orbit-deploy]")) { togglePanel("deploy"); return; } // ADR-0489
   // The on-orbit panel spawns (folder or repo clone + vault PAT, P-FLEET.L18), so creating a spoke never
   // leaves the screen; the grid stays one click away as the workbench.
   if (t.closest("[data-orbit-grid]")) { closeFleetOrbit(); deps?.openGrid(); return; }
