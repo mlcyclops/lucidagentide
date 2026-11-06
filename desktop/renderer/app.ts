@@ -70,13 +70,15 @@ import { findRelayFile, createRelayFile, readRelayFile, updateRelayFile, shareRe
 import { toolfailGroupHtml, type ToolFailEntry } from "./toolfail_group.ts"; // P-TOOLFAIL.2 (ADR-0163)
 import { APP_VERSION } from "../version.ts";
 import { renderMarkdown } from "./markdown.ts";
-import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
+import { type GraphHandle, type GraphHooks, type GraphPerfOpts, KIND_COLOR, kindColor, kindLabel, mountGraph } from "./graph.ts";
+import { mountOrbitGraph, type OrbitView } from "./graph_orbit.ts"; // P-KG-ORBIT.1 (ADR-0470): the Orbit engine
+import { rankNodes, type RankedNode } from "./kg_search.ts"; // P-KG-ORBIT.1: ranked "Find a node" results
 import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannable QR of the invite link
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy, snapshotPhaseLabel, STARTING_AGENT_PHASE } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
-import { addQueued, nextHold, pushRecovery, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery
+import { addQueued, editQueued, nextHold, pushRecovery, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery
 import { delegationSettled, filterRunsForBatch, mergeRunSamples, runEta, type RunSample, type TimedRun } from "./subagent_filter.ts"; // P-TASK.5a: scope each delegation card to ITS batch's runs
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView, KbPackImportView, PersonalGraphData } from "./bridge.ts";
@@ -555,9 +557,12 @@ function buildShell(): void {
         <div class="set-head">
           <div class="set-title" data-tip="Knowledge Graph|Your private, encrypted personalization graph - nodes, edges, drill-down.">KG <span class="set-sub" id="kgScopeLbl"></span></div>
           <div class="kg-tools">
-            <input id="kgSearch" class="kg-search" type="search" placeholder="Find a node…" spellcheck="false" autocomplete="off" data-tip="Find a node|Type to highlight + center matching nodes. Esc clears." />
+            <input id="kgSearch" class="kg-search" type="search" placeholder="Find a node…" spellcheck="false" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="kgResults" data-tip="Find a node|Type to highlight + center matching nodes and list the best matches. Arrow keys + Enter open one. Esc clears." />
             <div class="seg kg-lens" data-kg-lens>
               <button class="on" data-lens="kind">Kind</button><button data-lens="trust">Trust</button>
+            </div>
+            <div class="seg kg-lens" data-kg-engine data-tip="Graph view|Flat: the force-directed map. Orbit: a 3D view where height is the dependency layer; select a node to see what it depends on (upstream) and what depends on it (downstream).">
+              <button class="on" data-engine="flat">Flat</button><button data-engine="orbit">Orbit</button>
             </div>
             <button class="btn-mini" id="kgPerf" data-tip="Performance mode|Auto adapts rendering to battery + CPU: on battery the graph goes calm (no particle flow, shorter settle, capped nodes); LOW battery pauses the visualization entirely - the agent still uses your knowledge. Click to cycle auto → full → reduced → minimal.">${icon("gauge", 13)} Auto</button>
             <button class="btn-mini" id="kgViews" data-tip="Graph views & tools · dropdown|Opens a menu with three options: Relate nodes (author your own relationships), Code graph (this workspace as a file/symbol graph), and Compiled KB (the knowledge base as a page graph). The label shows the graph you're viewing.">${icon("graph", 13)} <span id="kgViewsLbl">Personal</span> <span class="kgv-caret">▾</span></button>
@@ -580,6 +585,7 @@ function buildShell(): void {
           <div class="resizer resizer-l kg-side-resizer" id="kgSideResizer" data-resize="kgside" data-tip="Drag to resize the panel" data-tip-side="left" hidden></div>
           <div class="kg-side" id="kgSide"></div>
         </div>
+        <div class="kg-results" id="kgResults" role="listbox" aria-label="Matching nodes" hidden></div>
       </aside>
 
       <!-- P-MEET.1: the Meetings fly-out - a THIN client of the Lucid Meeting Hub on loopback (its only
@@ -2312,7 +2318,10 @@ async function send(): Promise<void> {
   // P-FLEET.L8: the same when the ATTACHED LANE is mid-turn. The engine runs one turn per lane and refused
   // a second prompt with a lone error the composer never showed, which left the bubble on "Connection
   // lost" and muted the watch: the lane looked dead while it was working.
+  // P-QUEUE-IMG.1 (ADR-0469): the composer's images stay in the composer while the chooser is open; Queue
+  // moves them into the staged item, so they never ride the prompt after it.
   if (turnInFlight()) { ta.value = ""; autosize(ta); setSendEnabled(); openQueueChooser(text); return; }
+  restageBefore = null; // sent, not re-staged: an Update's old slot no longer applies
   // P-NETSTAT.1 (ADR-0423): with no network at all, sending would only manufacture an error that blames
   // the model. Hold the prompt in the transcript behind a stand-by card; it goes out once the link is
   // stable (or on "Send now"). Main only: a lane's turn runs in its own process with its own recovery.
@@ -3012,7 +3021,9 @@ function setSendEnabled(): void {
 /** P-INTERJECT.2 (was P-ACP.4): the staged-prompt STACK above the composer - one chip per item, in run
  *  order. Each chip: a mode badge ("next turn" hold / "mid-turn" push record), the ellipsized text with
  *  the full prompt in its title, Push now on hold items (interject the running turn instead of waiting),
- *  and remove. Every label is its own nowrap span (invariant #11). */
+ *  and remove. Every label is its own nowrap span (invariant #11).
+ *  P-QUEUE-IMG.1 (ADR-0469): an item's own images show as small thumbs (click one to copy it into the
+ *  composer), and a hold item has Update, which pulls its text and images back into the composer. */
 function renderQueued(): void {
   let stack = $("#queuedChip");
   if (!state.queuedItems.length) { stack?.remove(); return; }
@@ -3022,34 +3033,96 @@ function renderQueued(): void {
     row.before(stack); // sits above the composer row, inside .composer-wrap
   }
   const idle = !turnInFlight();
-  stack.innerHTML = state.queuedItems.map((q, i) => `<div class="q-pill" data-tip="${q.mode === "hold" ? (stopHoldsQueue ? "Held because you pressed Stop - it waits until you send" : "Sends automatically when the current turn ends") : "Already pushed into the running turn - kept as a record"}">
+  stack.innerHTML = state.queuedItems.map((q, i) => {
+    const n = q.atts?.length ?? 0;
+    const imgs = n ? `<span class="q-imgs" data-tip="${n} image${n === 1 ? "" : "s"} ride with this prompt|Click one to copy it into the composer">${q.atts!.map((_, j) => `<button class="q-thumb" type="button" data-q-img="${i}:${j}" aria-label="Copy image ${j + 1} into the composer"><img class="q-thumb-img" alt="" /></button>`).join("")}</span>` : "";
+    // Push now is text-only (the interject wire carries no images), so an item with images never pushes:
+    // it stays staged and runs WITH its images as the next turn. The button explains instead of acting.
+    const push = q.mode !== "hold" ? ""
+      : idle ? `<button class="q-push" data-q-push="${i}" data-tip="Send now|Send this as the next turn">Send now</button>`
+      : n ? `<button class="q-push q-push-off" data-q-push="${i}" aria-disabled="true" data-tip="Push now is text only|This prompt carries images, so it runs with them as the next turn">Push now</button>`
+      : `<button class="q-push" data-q-push="${i}" data-tip="Push now|Interject this into the running turn instead of waiting">Push now</button>`;
+    const edit = q.mode === "hold" ? `<button class="q-push q-edit" data-q-edit="${i}" data-tip="Update|Pull this prompt and its images back into the composer to edit">Update</button>` : "";
+    return `<div class="q-pill" data-tip="${q.mode === "hold" ? (stopHoldsQueue ? "Held because you pressed Stop - it waits until you send" : "Sends automatically when the current turn ends") : "Already pushed into the running turn - kept as a record"}">
       <span class="q-label">${q.mode === "hold" ? "next turn" : "mid-turn"}</span>
+      ${imgs}
       <span class="q-text" data-q-i="${i}"></span>
-      ${q.mode === "hold" ? (idle ? `<button class="q-push" data-q-push="${i}" data-tip="Send now|Send this as the next turn">Send now</button>` : `<button class="q-push" data-q-push="${i}" data-tip="Push now|Interject this into the running turn instead of waiting">Push now</button>`) : ""}
+      ${edit}${push}
       <button class="q-cancel" data-q-x="${i}" data-tip="Remove staged prompt">${icon("close", 12)}</button>
-    </div>`).join("");
-  // Prompt text is user content: set it as a DOM property, never interpolated into the HTML string.
-  state.queuedItems.forEach((q, i) => { const t = $(`.q-text[data-q-i="${i}"]`, stack!) as HTMLElement | null; if (t) { t.textContent = q.text; t.title = q.text; } });
+    </div>`;
+  }).join("");
+  // Prompt text and image data are user content: set as DOM properties, never interpolated into HTML.
+  state.queuedItems.forEach((q, i) => {
+    const t = $(`.q-text[data-q-i="${i}"]`, stack!) as HTMLElement | null; if (t) { t.textContent = q.text; t.title = q.text; }
+    (q.atts ?? []).forEach((a, j) => { const img = $(`[data-q-img="${i}:${j}"] .q-thumb-img`, stack!) as HTMLImageElement | null; if (img) img.src = a.dataUrl; });
+  });
   $$("[data-q-x]", stack).forEach((b) => b.addEventListener("click", () => {
     const i = Number((b as HTMLElement).dataset.qX);
     state.queuedItems = state.queuedItems.filter((_, n) => n !== i);
     renderQueued(); ($("#input") as HTMLTextAreaElement)?.focus();
   }));
+  $$("[data-q-edit]", stack).forEach((b) => b.addEventListener("click", () => editStagedPrompt(Number((b as HTMLElement).dataset.qEdit))));
+  $$("[data-q-img]", stack).forEach((b) => b.addEventListener("click", () => {
+    const [i, j] = ((b as HTMLElement).dataset.qImg ?? "").split(":").map(Number);
+    const a = state.queuedItems[i!]?.atts?.[j!]; if (!a) return;
+    // A copy, re-validated like any paste (fail-closed): the staged prompt keeps its own image.
+    const r = acceptAttachment(state.attachments, a.dataUrl, `att_${++attSeq}`, a.name);
+    if (!r.ok || !r.attachment) { showToast({ tone: "warn", title: "Couldn't copy image", desc: r.reason ?? "" }); return; }
+    state.attachments.push(r.attachment); renderComposerThumbs();
+    showToast({ title: "Image copied to the composer", desc: "It rides with the next prompt you send or stage. The staged prompt keeps its own copy.", timeout: 2500 });
+  }));
   $$("[data-q-push]", stack).forEach((b) => b.addEventListener("click", () => {
     const i = Number((b as HTMLElement).dataset.qPush);
     const item = state.queuedItems[i]; if (!item) return;
+    if (turnInFlight() && item.atts?.length) {
+      showToast({ tone: "warn", title: "Push now is text only", desc: "A mid-turn push cannot carry images. This prompt stays staged and runs with its images as the next turn.", timeout: 5000 });
+      return;
+    }
     state.queuedItems = state.queuedItems.filter((_, n) => n !== i);
     renderQueued();
     // Nothing running (e.g. after Stop): the staged prompt becomes the next turn, unless the user has a
-    // draft in the composer, which is never clobbered (it stays staged instead).
+    // draft in the composer (text or images), which is never clobbered (it stays staged instead).
     if (!turnInFlight()) {
-      const ta = $("#input") as HTMLTextAreaElement | null;
-      if (!ta || ta.value.trim()) { state.queuedItems = [...state.queuedItems.slice(0, i), item, ...state.queuedItems.slice(i)]; renderQueued(); return; }
-      ta.value = item.text; setSendEnabled(); void send();
+      if (composerHasDraft()) { state.queuedItems = [...state.queuedItems.slice(0, i), item, ...state.queuedItems.slice(i)]; renderQueued(); return; }
+      loadComposer(item); void send();
       return;
     }
     void pushMidTurn(item.text, i);
   }));
+}
+
+/** P-QUEUE-IMG.1 (ADR-0469): the composer holds something the user is writing - text OR images. Every
+ *  path that would load a staged prompt into the composer refuses rather than overwrite or merge into it. */
+function composerHasDraft(): boolean {
+  const ta = $("#input") as HTMLTextAreaElement | null;
+  return !ta || !!ta.value.trim() || state.attachments.length > 0;
+}
+
+/** P-QUEUE-IMG.1 (ADR-0469): put a staged item's text AND its own images into the composer (the caller has
+ *  checked composerHasDraft). A following send() carries exactly these images, nothing else. */
+function loadComposer(item: QueuedItem): void {
+  const ta = $("#input") as HTMLTextAreaElement | null; if (!ta) return;
+  ta.value = item.text; autosize(ta);
+  state.attachments = (item.atts ?? []).slice();
+  renderComposerThumbs(); // also refreshes send-enabled
+}
+
+/** P-QUEUE-IMG.1 (ADR-0469): Update re-stages at the old slot - just ahead of the item that followed the
+ *  one pulled out (null: it was last). Consumed by the next stage; cleared by a send that does not stage. */
+let restageBefore: QueuedItem | null = null;
+
+/** P-QUEUE-IMG.1 (ADR-0469): Update on a staged "next turn" pill - the item leaves the stack and its text
+ *  and images go back into the composer, removable, with room to paste more. A draft is never touched. */
+function editStagedPrompt(i: number): void {
+  const ta = $("#input") as HTMLTextAreaElement | null; if (!ta) return;
+  const r = editQueued(state.queuedItems, i, { text: ta.value, atts: state.attachments.length });
+  if (!r.ok) {
+    if (r.code === "draft") showToast({ tone: "warn", title: "Composer has a draft", desc: "Update never overwrites what you are writing. Send, stage or clear the composer, then press Update.", timeout: 5000 });
+    return;
+  }
+  state.queuedItems = r.rest; restageBefore = r.before; renderQueued();
+  loadComposer(r.item); ta.focus();
+  showToast({ title: "Staged prompt back in the composer", desc: "Edit the text or its images. Staged again, it keeps its place in the stack.", timeout: 3000 });
 }
 /** A deliberate Stop halts the staged queue as well as the turn: a prompt held behind the stopped turn stays
  *  staged (visible, pushable) instead of starting a new turn the moment this one ends. Set here, before the
@@ -3085,10 +3158,9 @@ function releaseHeldPrompt(): void {
   if (stopHoldsQueue) return; // the user pressed Stop: nothing starts again until they send
   const nq = nextHold(state.queuedItems);
   if (!nq.item) return;
-  const ta = $("#input") as HTMLTextAreaElement | null;
-  if (!ta || ta.value.trim()) return;
+  if (composerHasDraft()) return; // P-QUEUE-IMG.1: pasted images are a draft too; never swept into this send
   state.queuedItems = nq.rest; renderQueued();
-  ta.value = nq.item.text; setSendEnabled(); void send();
+  loadComposer(nq.item); void send(); // the item's OWN images ride with it (ADR-0469)
 }
 
 /** P-INTERJECT.2: interject a note into the RUNNING turn (the attached lane's, or the master's) + leave a
@@ -3104,7 +3176,7 @@ async function pushMidTurn(text: string, at = state.queuedItems.length): Promise
   // flag set, and a send() with it set would open the chooser again for a turn that no longer exists.
   if (r.code === "idle" && laneId) laneTurnLive = false;
   const ta = $("#input") as HTMLTextAreaElement | null;
-  const plan = pushRecovery(r.code, r.reason, { draft: !ta || !!ta.value.trim(), ownTurnOpen: state.streaming });
+  const plan = pushRecovery(r.code, r.reason, { draft: composerHasDraft(), ownTurnOpen: state.streaming });
   if (ta && plan.keep !== "stage") {
     ta.value = text; autosize(ta); setSendEnabled();
     if (plan.keep === "send") void send(); else ta.focus();
@@ -3307,8 +3379,6 @@ function demoteLane(): void {
   const held = nextHold(state.queuedItems);
   if (held.item) {
     state.queuedItems = state.queuedItems.filter((q) => q.mode !== "hold"); renderQueued();
-    const ta = $("#input") as HTMLTextAreaElement | null;
-    if (ta && !ta.value.trim()) { ta.value = held.item.text; autosize(ta); setSendEnabled(); }
     showToast({ tone: "warn", title: "Staged prompt not sent", desc: "It was waiting for the lane's turn to end. It is back in the composer; reattach the lane to send it there.", timeout: 7000 });
   }
   // Leaving mid-turn: freeze the half-written bubble rather than stranding it in a "running" state that
@@ -3326,6 +3396,9 @@ function demoteLane(): void {
     showToast({ tone: "warn", title: "The lane still shows as attached", desc: "The composer is back on the main chat, but the fleet did not confirm the release. It will reconcile on the next fleet poll.", actions: [{ label: "OK" }], timeout: 6000 });
   }).catch(() => { /* best-effort: fleetDemote is idempotent and the next poll reconciles */ });
   swapAttachments(was, MASTER_TARGET);
+  // P-QUEUE-IMG.1 (ADR-0469): the held prompt comes back WITH its own images, after the swap, so they land
+  // in the composer the user is now looking at instead of being parked under the lane.
+  if (held.item && !composerHasDraft()) loadComposer(held.item);
   state.composerTarget = MASTER_TARGET;
   state.liveUsage = null; // P-FLEET.L17: the lane's samples leave with it; the master's next turn refills.
   // Restore BEFORE the notice: renderThread clears the thread, so a notice appended first would be wiped.
@@ -3550,13 +3623,22 @@ function openQueueChooser(text: string): void {
   ($("[data-qc-hold]", ch) as HTMLElement).addEventListener("click", () => {
     closeQueueChooser();
     if (!turnInFlight()) { resend(); return; }
-    const r = addQueued(state.queuedItems, text, "hold");
-    if (r.ok) { state.queuedItems = r.items; renderQueued(); }
+    // P-QUEUE-IMG.1 (ADR-0469): the images in the composer move INTO this item and leave the composer, so
+    // they run with this prompt and never ride whatever is sent next. An Update re-stage keeps its slot.
+    const r = addQueued(state.queuedItems, text, "hold", { atts: state.attachments, before: restageBefore });
+    if (r.ok) { state.queuedItems = r.items; restageBefore = null; state.attachments = []; renderComposerThumbs(); renderQueued(); }
     else showToast({ tone: "warn", title: "Not staged", desc: `${r.reason ?? "refused"}.`, timeout: 5000 });
   });
   ($("[data-qc-push]", ch) as HTMLElement).addEventListener("click", () => {
+    // P-QUEUE-IMG.1: a mid-turn push is text only. With images in the composer it would leave them behind
+    // for the next prompt, so the chooser stays open and says so instead.
+    if (turnInFlight() && state.attachments.length) {
+      showToast({ tone: "warn", title: "Push mid-turn is text only", desc: "A push cannot carry images. Queue it for the next turn to send them together, or remove the images to push the text.", timeout: 6000 });
+      return;
+    }
     closeQueueChooser();
     if (!turnInFlight()) { resend(); return; }
+    restageBefore = null;
     void pushMidTurn(text);
   });
   ($("[data-qc-x]", ch) as HTMLElement).addEventListener("click", () => {
@@ -8038,6 +8120,27 @@ let kgForceRender = false; // P-PERF.2: one-shot "Render anyway" override of the
 // only, per the ADR-0084 privacy boundary: entity-id-keyed positions are structural metadata of the
 // encrypted store and never touch disk. Keyed per graph (personal vs code:file vs code:symbol).
 const kgLayoutCache = new Map<string, Map<string, { x: number; y: number }>>();
+// P-KG-ORBIT.1 (ADR-0470): which engine draws #kgCanvas, the flat force graph (default) or the 3D Orbit
+// view, persisted like the other renderer view prefs. Each engine keeps its own per-graph cache (flat: the
+// node positions above; orbit: the camera), so switching never feeds one engine the other's layout.
+type KgEngine = "flat" | "orbit";
+let kgEngine: KgEngine = (() => { try { return localStorage.getItem("lucid.kgEngine") === "orbit" ? "orbit" : "flat"; } catch { return "flat"; } })();
+const kgOrbitViews = new Map<string, OrbitView>();
+/** Mount `data` into #kgCanvas with the active engine. `cacheKey` names the graph (personal, kb:<id>, code:<level>). */
+function mountKgGraph(canvas: HTMLElement, data: PersonalGraphData, onSelect: (id: string | null) => void, hooks: GraphHooks, perf: GraphPerfOpts, cacheKey: string): GraphHandle {
+  if (kgEngine === "orbit") {
+    return mountOrbitGraph(canvas, data, onSelect, {
+      forceCalm: !!perf.forceCalm || !!perf.staticLayout,
+      view: kgOrbitViews.get(cacheKey),
+      onView: (v) => kgOrbitViews.set(cacheKey, v),
+    });
+  }
+  return mountGraph(canvas, data, onSelect, hooks, {
+    ...perf, // P-PERF.3: seed from + harvest into the per-graph layout cache (no re-explosion on re-open)
+    positions: kgLayoutCache.get(cacheKey),
+    onPositions: (pos) => kgLayoutCache.set(cacheKey, pos),
+  });
+}
 let kgData: PersonalGraphData | null = null;
 let kgLens: "kind" | "trust" = "kind";
 let kgOpen = false;
@@ -10610,11 +10713,7 @@ async function renderKnowledge(): Promise<void> {
   // FULL (search, facts, signature); only the DRAWN subset is capped.
   const gOpts = graphOpts(perfWatch.tier());
   const { data: kgDraw, capped: kgCapped } = capGraph(kgData, gOpts.nodeCap);
-  kgHandle = mountGraph(canvas as HTMLElement, kgDraw, (id) => renderKgSide(id), { onRelate: relateNodes, onRelatePick: onRelatePick }, {
-    ...gOpts, // P-PERF.3: seed from + harvest into the per-graph layout cache (no re-explosion on re-open)
-    positions: kgLayoutCache.get("personal"),
-    onPositions: (pos) => kgLayoutCache.set("personal", pos),
-  });
+  kgHandle = mountKgGraph(canvas as HTMLElement, kgDraw, (id) => renderKgSide(id), { onRelate: relateNodes, onRelatePick: onRelatePick }, gOpts, "personal");
   if (kgCapped && scopeLbl) scopeLbl.textContent += ` · top ${kgDraw.nodes.length} of ${kgData.nodes.length} nodes`;
   showKgCenter(true); syncKgSideOpen();
   if (kgRelateMode) { kgHandle.setRelateMode(true); onRelatePick([]); } // preserve relate mode across a live remount
@@ -10698,12 +10797,7 @@ async function renderKbGraph(): Promise<void> {
   if (!g) { canvas.innerHTML = `<div class="kg-empty">${icon("report", 30)}<div>Couldn't load the graph preview. Your imported pack is still installed. Reopen this view to retry.</div></div>`; return; }
   if (!g.pages.length) { canvas.innerHTML = `<div class="kg-empty">${icon("report", 30)}<div>This knowledge graph is empty. Import a document to add pages.</div></div>`; return; }
   kgData = kbToGraphData(g);
-  const cacheKey = `kb:${g.kgId}`;
-  kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => void renderKbSide(id), {}, {
-    staticLayout: true,
-    positions: kgLayoutCache.get(cacheKey),
-    onPositions: (pos) => kgLayoutCache.set(cacheKey, pos),
-  });
+  kgHandle = mountKgGraph(canvas as HTMLElement, kgData, (id) => void renderKbSide(id), {}, { staticLayout: true }, `kb:${g.kgId}`);
   kgHandle.setLens(kgLens);
   const query = ($("#kgSearch") as HTMLInputElement | null)?.value.trim();
   if (query) kgHandle.setSearch(matchNodes(kgData.nodes, query));
@@ -10737,19 +10831,24 @@ async function renderCodeGraph(ingest: boolean, level: "file" | "symbol" = codeG
   const busy = ingest ? (level === "symbol" ? "Parsing symbols (AST)…" : "Ingesting the workspace…") : "Loading the code graph…";
   canvas.innerHTML = `<div class="skel-kg">${icon("refresh", 26, "spin")}<div>${busy}</div></div>`;
   if (side) { side.hidden = true; side.innerHTML = ""; }
-  // P-SYSRES.1 (ADR-0182): the AST ingest is the app's biggest CPU spike - hard-pause it while the
-  // machine is starved (notice + what-to-close panel + re-check). Fail-open on missing evidence.
-  const sysCg = await bridge.systemStatus().catch(() => null);
-  if (!kgOpen || generation !== kgRenderGeneration) return;
-  if (sysCg?.verdict.level === "blocked") {
+  // P-SYSRES.1 (ADR-0182): the ingest (above all the AST parse) is the app's biggest CPU spike - hard-pause
+  // it while the machine is starved (notice + what-to-close panel + re-check). Fail-open on missing evidence.
+  // Reading an already-built graph is cheap and never paused, so a Flat/Orbit switch or a reopen draws at once.
+  const pausedForIngest = async (): Promise<boolean> => {
+    const sysCg = await bridge.systemStatus().catch(() => null);
+    if (!kgOpen || generation !== kgRenderGeneration) return true;
+    if (sysCg?.verdict.level !== "blocked") return false;
     renderSysBlocked(canvas as HTMLElement, sysCg, "code graph", () => void renderCodeGraph(ingest, level));
     updateCodeGraphButtons(true, null);
-    return;
+    return true;
+  };
+  let data = ingest ? null : await bridge.codeGraph(level).catch(() => null);
+  if (!kgOpen || generation !== kgRenderGeneration) return;
+  if (ingest || (data && !data.ingested)) { // asked to rebuild, or never built → build now
+    if (await pausedForIngest()) return;
+    data = await bridge.codeGraphIngest(level).catch(() => null);
+    if (!kgOpen || generation !== kgRenderGeneration) return;
   }
-  let data = ingest ? await bridge.codeGraphIngest(level).catch(() => null) : await bridge.codeGraph(level).catch(() => null);
-  if (!kgOpen || generation !== kgRenderGeneration) return;
-  if (data && !data.ingested && !ingest) data = await bridge.codeGraphIngest(level).catch(() => null); // never built → build now
-  if (!kgOpen || generation !== kgRenderGeneration) return;
   if (!data || !data.nodes.length) {
     canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>No ${level === "symbol" ? "symbols" : "source files"} found to graph in this workspace. Open a code repo as your workspace, then try again.</div></div>`;
     updateCodeGraphButtons(true, null); showKgCenter(false); return;
@@ -10769,12 +10868,10 @@ async function renderCodeGraph(ingest: boolean, level: "file" | "symbol" = codeG
   }
   codeGraphRoot = data.root || "";
   kgData = { nodes, edges, facts: [] };
-  kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderCodeSide(id), {}, {
-    ...gOpts, // P-PERF.3: same layout continuity for the code graph, keyed by level
-    positions: kgLayoutCache.get(`code:${level}`),
-    onPositions: (pos) => kgLayoutCache.set(`code:${level}`, pos),
-  });
+  kgHandle = mountKgGraph(canvas as HTMLElement, kgData, (id) => renderCodeSide(id), {}, gOpts, `code:${level}`); // P-PERF.3: layout continuity keyed by level
   kgHandle.setLens(kgLens);
+  const cq = ($("#kgSearch") as HTMLInputElement | null)?.value.trim(); // P-KG-ORBIT.1: keep an active search across an engine switch
+  if (cq) kgHandle.setSearch(matchNodes(kgData.nodes, cq));
   kgSig = kgSignature(kgData);
   updateCodeGraphButtons(true, data);
   showKgCenter(true); syncKgSideOpen();
@@ -10833,8 +10930,14 @@ function renderCodeSide(id: string | null): void {
   // Each entry is a link that opens the real file in the Monaco IDE (P-KG-CODE.1d). For a symbol id
   // (`file#symbol`) the label shows the symbol + its file; clicking opens the file (openCodeFile strips the #).
   const sym = codeGraphLevel === "symbol";
-  const label = (id: string) => sym && id.includes("#") ? `${id.split("#")[1]} <span class="cg-open-file">${id.split("#")[0]}</span>` : esc(id);
-  const fileLink = (id: string, extra = "") => `<button type="button" class="cg-open${extra}" data-cg-open="${esc(id)}" data-tip="Open the file in the editor">${label(id)}</button>`;
+  // Invariant 11: one line per entry. The name never shrinks; the directory (or the symbol's file) ellipsizes
+  // first, and the tooltip carries the full id.
+  const label = (id: string) => {
+    if (sym && id.includes("#")) { const [file = "", name = ""] = id.split("#"); return `<span class="cg-open-base">${esc(name)}</span><span class="cg-open-file">${esc(file)}</span>`; }
+    const cut = id.lastIndexOf("/") + 1;
+    return `${cut ? `<span class="cg-open-dir">${esc(id.slice(0, cut))}</span>` : ""}<span class="cg-open-base">${esc(id.slice(cut))}</span>`;
+  };
+  const fileLink = (id: string, extra = "") => `<button type="button" class="cg-open${extra}" data-cg-open="${esc(id)}" data-tip="${esc(id)}|Open the file in the editor">${label(id)}</button>`;
   const list = (xs: string[]) => xs.length ? `<ol class="cg-side-list">${xs.slice(0, 80).map((x) => `<li>${fileLink(x)}</li>`).join("")}</ol>` : `<div class="cg-side-none">none</div>`;
   const outLbl = sym ? "Uses" : "Imports", inLbl = sym ? "Used by" : "Imported by";
   side.hidden = false;
@@ -16438,12 +16541,87 @@ function wire(): void {
     if (b) void openCodeFile(b.dataset.cgOpen!);
   });
   // P-KG-SEARCH.1: live node search - highlight + center matches as you type (Esc clears).
-  $("#kgSearch")?.addEventListener("input", (e) => {
-    const q = (e.target as HTMLInputElement).value;
+  // P-KG-ORBIT.1 (ADR-0470): plus a ranked results list under the box. Arrow keys move, Enter or a click
+  // picks: the active engine selects + focuses the node and its existing side panel opens (the mount's
+  // onSelect: renderKgSide / renderKbSide / renderCodeSide).
+  const kgSearchEl = $("#kgSearch") as HTMLInputElement; // static markup, like #kgClose above
+  const kgResEl = $("#kgResults") as HTMLElement;
+  let kgHits: RankedNode[] = [];
+  let kgHitAt = 0;
+  const hideKgResults = (): void => {
+    kgHits = [];
+    kgResEl.hidden = true; kgResEl.innerHTML = "";
+    kgSearchEl.setAttribute("aria-expanded", "false");
+  };
+  const paintKgResults = (): void => {
+    const q = kgSearchEl.value.trim();
+    if (!q) { hideKgResults(); return; }
+    kgResEl.innerHTML = kgHits.length
+      ? kgHits.map((h, i) => {
+        const dot = kgEngine === "orbit" ? kindColor(h.kind) : KIND_COLOR[kindLabel(h.kind)] ?? "#888";
+        const sub = kgCodeMode ? h.id : kindLabel(h.kind); // code nodes show their path; personal / KB ids are opaque
+        return `<button type="button" class="kg-res${i === kgHitAt ? " on" : ""}" role="option" aria-selected="${i === kgHitAt}" data-kg-res="${i}" title="${esc(h.id)}">`
+          + `<i class="kg-res-dot" style="background:${dot}"></i><span class="kg-res-txt"><span class="kg-res-name">${esc(h.name)}</span><span class="kg-res-path">${esc(sub)}</span></span></button>`;
+      }).join("")
+      : `<div class="kg-res-none">No matching nodes</div>`;
+    const aside = $("#knowledge") as HTMLElement, a = aside.getBoundingClientRect(), r = kgSearchEl.getBoundingClientRect();
+    const w = Math.min(420, Math.max(300, r.width), a.width - 16);
+    kgResEl.style.width = `${w}px`;
+    kgResEl.style.top = `${Math.round(r.bottom - a.top + 4)}px`;
+    kgResEl.style.left = `${Math.round(Math.max(8, Math.min(r.left - a.left, a.width - w - 8)))}px`;
+    kgResEl.hidden = false;
+    kgSearchEl.setAttribute("aria-expanded", "true");
+    kgResEl.querySelector(".kg-res.on")?.scrollIntoView({ block: "nearest" });
+  };
+  const pickKgHit = (i: number): void => {
+    const h = kgHits[i];
+    if (!h) return;
+    kgSearchEl.value = ""; // the pick replaces the search: the highlight clears so the selection reads
+    hideKgResults();
+    kgHandle?.setSearch(null);
+    kgHandle?.select(h.id);
+  };
+  kgSearchEl.addEventListener("input", () => {
+    const q = kgSearchEl.value;
     kgHandle?.setSearch(q.trim() ? matchNodes(kgData?.nodes ?? [], q) : null);
+    kgHits = rankNodes(kgData?.nodes ?? [], q, 12); kgHitAt = 0;
+    paintKgResults();
   });
-  $("#kgSearch")?.addEventListener("keydown", (e) => {
-    if ((e as KeyboardEvent).key === "Escape") { (e.target as HTMLInputElement).value = ""; kgHandle?.setSearch(null); }
+  kgSearchEl.addEventListener("keydown", (e) => {
+    const k = e.key;
+    if (k === "Escape") { kgSearchEl.value = ""; kgHandle?.setSearch(null); hideKgResults(); return; }
+    if ((k === "ArrowDown" || k === "ArrowUp") && kgHits.length) {
+      e.preventDefault();
+      kgHitAt = (kgHitAt + (k === "ArrowDown" ? 1 : kgHits.length - 1)) % kgHits.length;
+      paintKgResults();
+      return;
+    }
+    if (k === "Enter" && kgHits.length) { e.preventDefault(); pickKgHit(kgHitAt); }
+  });
+  kgSearchEl.addEventListener("focus", () => {
+    if (!kgSearchEl.value.trim()) return;
+    kgHits = rankNodes(kgData?.nodes ?? [], kgSearchEl.value, 12); kgHitAt = 0;
+    paintKgResults();
+  });
+  kgSearchEl.addEventListener("blur", () => hideKgResults());
+  kgResEl.addEventListener("mousedown", (e) => e.preventDefault()); // keep focus in the box so the click lands
+  kgResEl.addEventListener("click", (e) => {
+    const row = (e.target as HTMLElement).closest("[data-kg-res]") as HTMLElement | null;
+    if (row) pickKgHit(Number(row.dataset.kgRes));
+  });
+  // P-KG-ORBIT.1 (ADR-0470): the Flat | Orbit engine toggle remounts whatever graph is on the canvas.
+  const paintKgEngine = (): void => $$("[data-kg-engine] button").forEach((b) => b.classList.toggle("on", (b as HTMLElement).dataset.engine === kgEngine));
+  paintKgEngine();
+  $("[data-kg-engine]")?.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest("[data-engine]") as HTMLElement | null;
+    if (!b) return;
+    const next: KgEngine = b.dataset.engine === "orbit" ? "orbit" : "flat";
+    if (next === kgEngine) return;
+    kgEngine = next;
+    try { localStorage.setItem("lucid.kgEngine", next); } catch { /* the choice still applies for this session */ }
+    paintKgEngine();
+    hideKgResults();
+    if (kgOpen) void (kbGraphMode ? renderKbGraph() : kgCodeMode ? renderCodeGraph(false) : renderKnowledge());
   });
   // P-PERF.2: the performance-mode chip - cycle auto -> full -> reduced -> minimal; auto follows battery/CPU.
   $("#kgPerf")?.addEventListener("click", () => {
@@ -16915,6 +17093,7 @@ function wire(): void {
     fleetRespawn: bridge.fleetRespawn, // P-FLEET.L4: revive in place, memory carried
     fleetQueueAdd: bridge.fleetQueueAdd, // P-FLEET.L3: stage a prompt while the lane is busy
     fleetQueueRemove: bridge.fleetQueueRemove,
+    fleetQueueTake: bridge.fleetQueueTake, // P-QUEUE-IMG.1: Update pulls a staged item + its images back
     fleetQueueMove: bridge.fleetQueueMove,
     fleetDrain: bridge.fleetDrain, // P-FLEET.L3: stream the next staged prompt when idle
     fleetWatch: bridge.fleetWatch, // P-FLEET.L11: the card FOLLOWS a lane the main composer is driving

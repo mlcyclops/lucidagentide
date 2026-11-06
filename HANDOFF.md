@@ -13,9 +13,28 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-11-01, v2.5.0 stable)
+## Current state (2026-11-05, v2.5.1 stable)
 
-**v2.5.0** (2026-11-01, branch `release/v2.5.0-cut`) is the stable release:
+**v2.5.1** (2026-11-05, branch `release/v2.5.1-cut`) is the stable release:
+2.5.1-beta.1 (owner-tested on Windows) promoted with the #555 upgrade review
+fixes, plus P-QUEUE-IMG.1 (ADR-0469, staged prompts own their pasted
+images), P-KG-ORBIT.1 / P-KG-FLAT.1 / P-KG-POLISH.1 (ADR-0470, ADR-0471, the
+Knowledge canvas Orbit view and a readable flat graph) and the P-WAKE /
+P-SCHED.5-6 design ADRs (ADR-0482 to ADR-0488, docs only). Tagged `v2.5.1`
+and marked Latest. What beta.1 brought: the engine OS vault (ADR-0472),
+FIPS 140 at-rest crypto (ADR-0473), one v2 vault (ADR-0474), the vault list
+and `.lucidvault` backup (ADR-0475), request_secret (ADR-0476), `.env` import
+(ADR-0477), enterprise vault destinations (ADR-0478), the NIST SP 800-171
+Rev 3 evidence package (ADR-0479) and the renderer watchdog (ADR-0481).
+Installing over 2.5.0 migrates keys into the OS vault with no re-entry;
+downgrading to 2.5.0 shows them as unset. Left out as not low risk: the
+emertins sessions/hub stack (#551 to #553, ADR numbers collide with master's
+0469 to 0475), #524/#525 (biometric and passphrase vault unlock, needs its
+own security review), #512 and #457 (frozen `contracts.ts` changes,
+conflicting), #351 (Windows gate fails). The add-on repo's Tahiti distro
+(ADR-A032, ADR-A043) pins this tag.
+
+**v2.5.0** (2026-11-01, branch `release/v2.5.0-cut`) was the previous stable release:
 2.5.0-beta.1 through beta.4 promoted plus everything merged to master since
 beta.4, tagged `v2.5.0` and marked Latest, so the download buttons, the
 electron-updater feed and the Homebrew cask (after its `chore/cask-v2.5.0`

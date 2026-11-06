@@ -450,6 +450,36 @@ test("staged prompts run FIFO when the lane goes idle; reorder and remove work; 
   await hangTurn;
 }, TIMEOUT);
 
+// P-QUEUE-IMG.1 (ADR-0469): a staged lane prompt carries its OWN images through the manager queue: the
+// drain sends them with that prompt and not the next, and Update (queueTake) hands back the full text and
+// the actual images, not the clipped preview and count the status view carries.
+test("staged lane prompts carry their own images through drain; queueTake returns full text + images", async () => {
+  live = manager();
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  const png = { data: "aGVsbG8=", mimeType: "image/png" };
+  const long = `with images ${"x".repeat(200)}`;
+  expect(live.enqueue(id, "staged with two images", [png, png]).ok).toBe(true);
+  expect(live.enqueue(id, "staged text only").ok).toBe(true);
+  expect(live.enqueue(id, long, [png]).ok).toBe(true);
+  expect((await live.status()).lanes[0]!.queued.map((q) => q.images)).toEqual([2, 0, 1]);
+  const first: LaneEvent[] = [];
+  await live.drain(id, (e) => first.push(e));
+  expect(first.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("")).toContain("[images: 2]");
+  const second: LaneEvent[] = [];
+  await live.drain(id, (e) => second.push(e));
+  expect(second.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("")).not.toContain("[images:");
+  // Update: the remaining item comes back whole and leaves the queue.
+  const took = live.queueTake(id, 0);
+  expect(took.ok).toBe(true);
+  expect(took.item?.text).toBe(long);
+  expect(took.item?.images).toEqual([png]);
+  expect((await live.status()).lanes[0]!.queued.length).toBe(0);
+  // Out of range is a refusal, never a different item.
+  expect(live.queueTake(id, 0).ok).toBe(false);
+  expect(live.queueTake("no-such-lane", 0).ok).toBe(false);
+}, TIMEOUT);
+
 // ── P-FLEET.L5 (ADR-0274): the durable lane-session ledger ───────────────────────────────────────────
 
 test("spawn and every recovery NAME the session in the ledger; the view exposes the session id", async () => {

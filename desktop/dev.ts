@@ -6196,6 +6196,11 @@ return Bun.serve({
         const b = await readBody<{ laneId?: unknown; index?: unknown }>(req);
         return json({ ok: true, data: fleet.queueRemove(String(b.laneId ?? ""), Number(b.index)) });
       }
+      // P-QUEUE-IMG.1 (ADR-0469): Update pulls a staged item (full text + its own images) back into the card.
+      if (p === "/api/fleet/queue/take" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; index?: unknown }>(req);
+        return json({ ok: true, data: fleet.queueTake(String(b.laneId ?? ""), Number(b.index)) });
+      }
       if (p === "/api/fleet/queue/move" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown; index?: unknown; dir?: unknown }>(req);
         return json({ ok: true, data: fleet.queueMove(String(b.laneId ?? ""), Number(b.index), Number(b.dir) < 0 ? -1 : 1) });
