@@ -599,7 +599,7 @@ import { auditTierVerdict, CONTROLLER_ROUTES, forgetControllerLane, handleContro
 import { ControllerLaneStore } from "./controller/lane_store.ts"; // ADR-0496: controller lanes survive a restart
 import { OFF_TASK_SYSTEM, offTaskPrompt, parseOffTask } from "./controller/remote_policy.ts"; // P-CTRL-REMOTE.1 (ADR-0493)
 import { PairingStore, type Pairing } from "./controller/store.ts"; // P-CTRL.2: the hashed pairing store
-import { handleRemoteSpokes, REMOTE_SPOKES_PLUGIN, type RemoteSpokesDeps } from "./remote_spokes.ts"; // P-IDE-SPOKES.1 (ADR-0501)
+import { handleRemoteSpokes, REMOTE_SPOKES_PLUGIN, remoteSpokesPanelUrl, type RemoteSpokesDeps } from "./remote_spokes.ts"; // P-IDE-SPOKES.1 (ADR-0501)
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
 import { addReportToKg, agentRecall, agentRetain, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unrelateEntities } from "./personal.ts";
@@ -5892,7 +5892,12 @@ return Bun.serve({
       }
       if (p === "/api/plugins/start" && req.method === "POST") {
         const b = await readBody<{ id?: unknown }>(req);
-        return json({ ok: true, data: await plugins.start(String(b.id ?? "")) });
+        const id = String(b.id ?? "");
+        const started = await plugins.start(id);
+        // ADR-0509: the hub plugin's panel opens only with a one-time bootstrap secret it minted for this engine,
+        // framed only by this window (engineAppUrl's origin).
+        if (started.ok && id === REMOTE_SPOKES_PLUGIN) return json({ ok: true, data: await remoteSpokesPanelUrl(remoteSpokesDeps, `http://127.0.0.1:${ENGINE_PORT}`) });
+        return json({ ok: true, data: started });
       }
       if (p === "/api/plugins/stop" && req.method === "POST") {
         const b = await readBody<{ id?: unknown }>(req);
@@ -6891,7 +6896,7 @@ return Bun.serve({
 // non-secret (it proves launch identity, gates nothing else). Removed on every exit path the whisper/fleet
 // handlers already cover (SIGINT/SIGTERM re-enter process.exit, which fires "exit").
 if (!process.env.LUCID_ENGINE_NONCE) process.env.LUCID_ENGINE_NONCE = randomBytes(16).toString("hex");
-const ENGINE_PORT = server.port ?? PORT; // Bun types port as optional (unix-socket servers); a TCP bind always has one
+const ENGINE_PORT: number = server.port ?? PORT; // Bun types port as optional (unix-socket servers); a TCP bind always has one
 const DISCOVERY_PATH = discoveryPath(discoveryDir(process.env), ENGINE_PORT);
 // ADR-0498: the nonce-only record (no UI token) for controller clients, owner-only by default; shared with
 // LUCID_DISCOVERY_NONCE_GROUP (0640) in LUCID_DISCOVERY_NONCE_DIR when the operator names them.

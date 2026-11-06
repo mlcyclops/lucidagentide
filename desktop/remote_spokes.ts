@@ -97,6 +97,21 @@ export async function loadHub(deps: RemoteSpokesDeps): Promise<RemoteHubView> {
   return mapHubSnapshot(r.data);
 }
 
+/** ADR-0509 (add-on RS-IDE-01, ADR-A059): the hub panel's address for a plugin tab. The plugin's page carries no
+ *  secret; the engine asks the plugin (host token) for a one-time bootstrap secret and puts it in the URL fragment,
+ *  which the page trades once for its session cookie and token. `ideOrigin` is the IDE window that frames the
+ *  panel; the plugin allows no other frame-ancestor. */
+export async function remoteSpokesPanelUrl(deps: RemoteSpokesDeps, ideOrigin: string): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
+  const ep = deps.endpoint();
+  if (!ep) return { ok: false, error: deps.installed() ? "The Remote Spokes plugin is not running." : "The Remote Spokes plugin is not installed." };
+  const r = await callPlugin(deps, "POST", "/host/panel/bootstrap", { origin: ideOrigin }, SUMMARY_TIMEOUT_MS);
+  if (!r.ok) return r;
+  if (r.status !== 200) return { ok: false, error: pluginError(r) };
+  const secret = asRecord(r.data)?.secret;
+  if (typeof secret !== "string" || !/^[0-9a-f]{64}$/.test(secret)) return { ok: false, error: "The Remote Spokes plugin did not give a panel secret; update the plugin." };
+  return { ok: true, url: `${ep.url}/#bootstrap=${secret}` };
+}
+
 /** A plain JSON object from the plugin, or null. */
 function asRecord(v: unknown): Record<string, unknown> | null {
   return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;

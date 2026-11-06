@@ -34,7 +34,8 @@ export interface Pairing {
    *  time from the spoke's lane policy. Absent: the ADR-0425 default of two (also every pairing stored before). */
   maxLanes?: number;
   /** ADR-0505: the paired spoke's node id (`n_` and 32 hex), set by the human at pairing time. A delegate-certified
-   *  approver decides only when its delegation covers this spoke. Absent: only root-signed approvers can decide. */
+   *  approver decides only when its delegation covers this spoke, and every approver only when cleared for its
+   *  classification (ADR-0508). Absent: no remote decision is accepted until the spoke is paired again. */
   spokeNode?: string;
 }
 

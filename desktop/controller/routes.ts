@@ -150,7 +150,8 @@ async function strictBody(req: Request, keys: string[], required: string[]): Pro
 /** The exact body of each lane-scoped POST route; any other lane-scoped POST takes `laneId` only. */
 const BODY_KEYS: Record<string, { allowed: string[]; required: string[] }> = {
   "/api/controller/prompt": { allowed: ["laneId", "text"], required: ["laneId", "text"] },
-  // spokeCert: ADR-0505, the spoke's own certificate, which a delegate-certified approver needs.
+  // spokeCert: ADR-0505, ADR-0508, the spoke's own certificate, which every decision needs (an approver's clearance
+  // for its classification, and a delegate-certified approver's coverage).
   "/api/controller/decide": { allowed: ["laneId", "askId", "decision", "cert", "crl", "spokeCert"], required: ["laneId", "askId", "decision", "cert"] },
   "/api/controller/deny": { allowed: ["laneId", "askId"], required: ["laneId", "askId"] },
 };
@@ -327,7 +328,8 @@ export async function handleController(req: Request, path: string, pairing: Pair
     if (!pairing.remote) return reply(409, { ok: false, error: "this pairing has no approver root" });
     const ask = deps.fleet.pendingAsk(laneId);
     if (!ask || ask.id !== b.askId) return reply(409, { ok: false, error: "no such open ask" });
-    // ADR-0505: the spoke the human paired (never one the controller names) is what a delegated approver must cover.
+    // ADR-0505, ADR-0508: the spoke the human paired (never one the controller names) is what a delegated approver must
+    // cover and whose classification every approver must be cleared for.
     const v = verifyRemoteDecision(
       { decision: b.decision!, cert: b.cert!, ...(b.crl !== undefined ? { crl: b.crl } : {}), ...(b.spokeCert !== undefined ? { spokeCert: b.spokeCert } : {}) },
       pairing.remote.root, pairing.remote.crl,

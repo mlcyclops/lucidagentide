@@ -37,6 +37,11 @@
 // more than three days past it, every decision is refused until a fresh one arrives, and once a list with
 // `nextUpdate` is held, a newer one without it is never adopted. A legacy list (no `nextUpdate`) never goes stale.
 //
+// ADR-0508 (the add-on's RS-AUTHZ-02): EVERY approver, root-signed too, needs the paired spoke's own certificate with
+// the decision, and its user must be cleared for that spoke's classification: unclassified and shareable need no
+// clearance, private and cui must each be in the user's clearances, and a certificate naming no user is cleared for
+// neither. A pairing without `spokeNode` accepts no decision until it is paired again.
+//
 // Formats are the remote-spoke add-on's (TechLead187/lucidagentIDEaddon remote-spoke/src/identity.ts):
 // `<base64url(JSON payload bytes)>.<base64url(ECDSA P-256 / SHA-256 DER signature over those bytes)>`.
 
@@ -194,10 +199,11 @@ function openCompact(token: unknown, key: KeyObject): Record<string, unknown> | 
 
 /** ADR-0505: `nextUpdate` (seconds), when the root promised the next list. Absent on a legacy CRL. */
 export interface CrlState { version: number; serials: string[]; nextUpdate?: number }
-/** ADR-0505: `spokeCert`, the spoke's own compact certificate, which a delegate-certified approver needs. */
+/** ADR-0505, ADR-0508: `spokeCert`, the spoke's own compact certificate, which every decision needs (coverage of a
+ *  delegate-certified approver, and every approver's clearance). */
 export interface DecisionInput { decision: string; cert: string; crl?: string; spokeCert?: string }
 /** `presence`: the pairing requires user-presence evidence on an allow (ADR-0502). `spokeNode`: the spoke node id
- *  the human paired (ADR-0505), which a delegate-certified approver's delegation must cover. */
+ *  the human paired (ADR-0505); without it no decision is accepted (ADR-0508). */
 export interface Expected { lane: string; ask: string; digest: string; presence: boolean; spokeNode?: string }
 /** `presence`: the kind of presence key whose evidence verified, or null when the decision carried none. */
 export type DecisionResult =
@@ -245,10 +251,18 @@ function checkDecision(input: DecisionInput, root: KeyObject, rootId: string, cr
   if (!approverKey || typeof cert.node !== "string" || nodeIdOf(Buffer.from(String(cert.spki), "base64url")) !== cert.node) return { ok: false, reason: "the approver certificate key does not match its node id" };
   // ADR-0505: a delegate-certified approver acts only on a spoke its delegation covers. The engine knows which
   // spoke from the pairing (the node id the human paired) and learns its label, region and classification from
-  // the spoke's own certificate, which must verify under the same root. A root-signed approver covers every spoke.
-  if (opened.delegation) {
-    const spoke = expected.spokeNode === undefined ? null : openSpokeCert(input.spokeCert, root, rootId, crl, nowSec);
-    if (!spoke || spoke.node !== expected.spokeNode || spokeOutsideDelegation(opened.delegation.limits, spoke)) return { ok: false, reason: "the approver's delegation does not cover this spoke" };
+  // the spoke's own certificate, which must verify under the same root.
+  const spoke = expected.spokeNode === undefined ? null : openSpokeCert(input.spokeCert, root, rootId, crl, nowSec);
+  if (opened.delegation && (!spoke || spoke.node !== expected.spokeNode || spokeOutsideDelegation(opened.delegation.limits, spoke))) return { ok: false, reason: "the approver's delegation does not cover this spoke" };
+  // ADR-0508 (the add-on's RS-AUTHZ-02): every approver, root-signed too, decides only with the paired spoke's own
+  // certificate, and only when its user is cleared for that spoke's classification (private and cui must each be
+  // in the user's clearances; a certificate that names no user is cleared for neither). A pairing that names no
+  // spoke accepts no decision until it is paired again with spokeNode.
+  if (expected.spokeNode === undefined) return { ok: false, reason: "this pairing names no spoke; pair it again with spokeNode so the engine can check the approver's clearance" };
+  if (!spoke || spoke.node !== expected.spokeNode) return { ok: false, reason: "the decision does not carry the paired spoke's own certificate" };
+  const user = isObject(cert.user) && userProblem(cert.user) === null ? (cert.user as unknown as UserClaim) : undefined;
+  if (!clearedFor(user, spoke.classification)) {
+    return { ok: false, reason: user ? `user ${user.email} is not cleared for this ${spoke.classification} spoke` : `the approver certificate names no user, so it is not cleared for this ${spoke.classification} spoke` };
   }
 
   const d = openCompact(input.decision, approverKey);
@@ -425,6 +439,13 @@ function openSpokeCert(token: unknown, root: KeyObject, rootId: string, crl: Crl
     || (allowed && c.scopes.some((s: unknown) => !allowed.includes(String(s))))
     || c.exp - c.iat > l.maxDays * 86_400 || c.iat + CLOCK_SKEW_SEC < del.iat || c.exp > del.exp || spokeOutsideDelegation(l, spoke)) return null;
   return spoke;
+}
+
+/** ADR-0508: may this user approve on a spoke of this classification (the add-on's clearedFor)? Unclassified and
+ *  shareable need no clearance; private and cui must each be listed in the user's clearances. */
+function clearedFor(user: UserClaim | undefined, classification: string | undefined): boolean {
+  if (classification === undefined || classification === "shareable") return true;
+  return user?.clearances?.includes(classification) ?? false;
 }
 
 /** True when a delegation's limits do not reach this spoke (the add-on's spokeOutsideDelegation): its label must

@@ -11,7 +11,7 @@ import { describe, expect, test } from "bun:test";
 import { scanAndDecide } from "../harness/security/gate.ts";
 import { ScanUnavailableError, type ScannerClient } from "../harness/security/scanner_client.ts";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
-import { handleRemoteSpokes, MAX_RECALL_ENTRIES, type RemoteSpokesDeps } from "./remote_spokes.ts";
+import { handleRemoteSpokes, MAX_RECALL_ENTRIES, remoteSpokesPanelUrl, type RemoteSpokesDeps } from "./remote_spokes.ts";
 
 const TOKEN = "c".repeat(64);
 const NODE = `n_${"1".repeat(32)}`;
@@ -297,5 +297,34 @@ describe("ADR-0502 amendment: a password hub's Approve carries the presence pass
     const r = rig({ hub: hubOf("windows-hello"), approvals: [ask()] });
     expect((await r.call("POST", "/api/remote-spokes/decide", { node: NODE, task: TASK, ask: "ask-1", digest: DIGEST, allow: true, password: SECRET })).data).toMatchObject({ ok: true });
     expect(r.forwarded().filter((c) => c.path.endsWith("/decide")).map((c) => c.body)).toEqual([{ task: TASK, ask: "ask-1", digest: DIGEST, allow: true }]);
+  });
+});
+
+describe("ADR-0509: the hub panel opens with a one-time bootstrap secret the plugin minted for this engine", () => {
+  const SECRET = "ab".repeat(32);
+  const panelDeps = (reply: { status: number; body: unknown }, seen: { url: string; init: RequestInit }[], running = true): RemoteSpokesDeps => ({
+    endpoint: () => (running ? { url: "http://127.0.0.1:47555", token: TOKEN } : null),
+    installed: () => true,
+    scan: async () => { throw new Error("not used"); },
+    record: () => {},
+    fetch: (async (url: string, init: RequestInit) => { seen.push({ url, init }); return new Response(JSON.stringify(reply.body), { status: reply.status }); }) as unknown as typeof fetch,
+  });
+
+  test("the secret is asked for with the host token and the IDE's origin, and travels only in the fragment", async () => {
+    const seen: { url: string; init: RequestInit }[] = [];
+    const r = await remoteSpokesPanelUrl(panelDeps({ status: 200, body: { secret: SECRET } }, seen), "http://127.0.0.1:3000");
+    expect(r).toEqual({ ok: true, url: `http://127.0.0.1:47555/#bootstrap=${SECRET}` });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.url).toBe("http://127.0.0.1:47555/host/panel/bootstrap");
+    expect((seen[0]!.init.headers as Record<string, string>)["x-lucid-host-token"]).toBe(TOKEN);
+    expect(JSON.parse(String(seen[0]!.init.body))).toEqual({ origin: "http://127.0.0.1:3000" });
+  });
+
+  test("a plugin that is stopped, refuses or answers no well-formed secret gives no panel address", async () => {
+    expect((await remoteSpokesPanelUrl(panelDeps({ status: 200, body: { secret: SECRET } }, [], false), "http://127.0.0.1:3000")).ok).toBe(false);
+    expect(await remoteSpokesPanelUrl(panelDeps({ status: 403, body: { error: "forbidden" } }, []), "http://127.0.0.1:3000")).toEqual({ ok: false, error: "forbidden" });
+    for (const body of [{}, { secret: "short" }, { secret: `${SECRET}00` }, { secret: SECRET.toUpperCase() }]) {
+      expect((await remoteSpokesPanelUrl(panelDeps({ status: 200, body }, []), "http://127.0.0.1:3000")).ok).toBe(false);
+    }
   });
 });
