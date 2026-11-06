@@ -27,7 +27,7 @@ import { cycleSpoke, ghostKey, ghostSpokes, hubLanes, ORBIT_FPS_FLOOR, ORBIT_NOD
 import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new spokes open on the last spoke's model; colliding names show the route
 import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
-import { closeDeployPanel, closeRemotePanel, initOrbitRemote, layoutRemote, onDeployPanelClick, onRemoteHubClick, onRemotePanelClick, paintDeployPanel, paintRemotePanel, reconcileRemote, refreshDeployPanel, refreshRemote, refreshRemotePanel, remoteCounts, remoteDeployVisible, remoteHubSectionHtml, remoteHubVisible, remoteList, remotePanelNode, type OrbitRemoteDeps } from "./orbit_remote.ts"; // P-IDE-SPOKES.1 (ADR-0487), ADR-0489
+import { closeDeployPanel, closeRemotePanel, initOrbitRemote, layoutRemote, onDeployPanelClick, onRemoteHubClick, onRemotePanelClick, paintDeployPanel, paintRemotePanel, reconcileRemote, refreshDeployPanel, refreshRemote, refreshRemotePanel, remoteCounts, remoteDeployVisible, remoteHubSectionHtml, remoteHubVisible, remoteList, remotePanelNode, type OrbitRemoteDeps } from "./orbit_remote.ts"; // P-IDE-SPOKES.1 (ADR-0501), ADR-0503
 import { beatLine, goalButtonHtml, goalButtonTip, goalPanelHtml, goalSnapshot, onGoalPanelClick, paintHubGoal, refreshGoal, stalledLanes, taskFormHtml, type OrbitGoalDeps } from "./orbit_goal.ts"; // P-AOS.1 (ADR-0452), P-AOS.2 (ADR-0453)
 
 export interface FleetOrbitDeps extends OrbitGoalDeps, OrbitRemoteDeps {
@@ -319,7 +319,7 @@ function togglePanel(which: OrbitPanel): void {
   if (openedPanel === "deploy") { const body = $("[data-orbit-panel-body]", host) as HTMLElement | null; if (body) paintDeployPanel(body, `<button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button>`); }
 }
 
-// ------------------------------------------------------ P-IDE-SPOKES.1 (ADR-0487): remote spokes
+// ------------------------------------------------------ P-IDE-SPOKES.1 (ADR-0501): remote spokes
 //
 // The nodes, the hub picker section and the per-spoke panel live in orbit_remote.ts; this section only opens the
 // panel. A click on the spoke already shown closes it, like every other panel toggle.
@@ -342,7 +342,7 @@ function paintRemoteAll(first: boolean): void {
   ($("[data-orbit-empty]", view) as HTMLElement).hidden = lastMine.length + remoteList().length > 0;
   layoutStage(lastMine);
   paintHubsBadge();
-  // ADR-0489: the Start-a-task selector's header button, only for a hub that may drive and has spokes.
+  // ADR-0503: the Start-a-task selector's header button, only for a hub that may drive and has spokes.
   for (const b of view.querySelectorAll<HTMLElement>("[data-orbit-deploy]")) b.hidden = !remoteDeployVisible();
   const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
   if (box && openedPanel === "remote") refreshRemotePanel(box);
@@ -368,14 +368,14 @@ function paintHubsBadge(): void {
   if (!view) return;
   const n = hubList.length;
   const spokes = hubList.reduce((a, h) => a + h.lanes.length, 0);
-  // P-IDE-SPOKES.1 (ADR-0487): the remote hub is a hub too; its spokes count, and its parked asks wait on you.
+  // P-IDE-SPOKES.1 (ADR-0501): the remote hub is a hub too; its spokes count, and its parked asks wait on you.
   const remote = remoteCounts();
   const waiting = hubList.reduce((a, h) => a + h.waiting, 0) + remote.waiting;
   const total = spokes + remote.spokes;
   for (const b of view.querySelectorAll("[data-orbit-hubs]")) {
     const badge = b.querySelector("[data-orbit-hubsn]") as HTMLElement | null;
     if (badge) {
-      // ADR-0490: alert lines not dismissed yet (a remote spoke gone silent, crashed, restarted, a turn cut off).
+      // ADR-0504: alert lines not dismissed yet (a remote spoke gone silent, crashed, restarted, a turn cut off).
       const t = [String(total), waiting ? `${waiting} waiting` : "", remote.alerts ? `${remote.alerts} ${remote.alerts === 1 ? "alert" : "alerts"}` : ""].filter(Boolean).join(" \u00b7 ");
       if (badge.textContent !== t) badge.textContent = t;
     }
@@ -395,7 +395,7 @@ function paintHubsPanel(): void {
   if (openedPanel !== "hubs" || !view) return;
   const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
   if (!box) return;
-  // P-IDE-SPOKES.1 (ADR-0487): the add-on's remote hub is listed first, with its spokes as pips.
+  // P-IDE-SPOKES.1 (ADR-0501): the add-on's remote hub is listed first, with its spokes as pips.
   const remote = remoteHubSectionHtml();
   const head = `<div class="orbit-panel-h">${icon("share", 14)}<b>Other hubs</b><span>${hubList.length + (remote ? 1 : 0)}</span><button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button></div>`;
   if (hubList.length === 0) {
@@ -488,7 +488,7 @@ function onPanelClick(t: HTMLElement): boolean {
     const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
     if (box && onRemotePanelClick(t, box)) return true;
   }
-  // ADR-0489: the Start-a-task selector; a started task opens its spoke's panel.
+  // ADR-0503: the Start-a-task selector; a started task opens its spoke's panel.
   if (openedPanel === "deploy" && view) {
     const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
     if (box && onDeployPanelClick(t, box, openRemote)) return true;
@@ -496,7 +496,7 @@ function onPanelClick(t: HTMLElement): boolean {
   if (openedPanel === "hubs") {
     const hit = onRemoteHubClick(t);
     if (hit === "handled") return true;
-    // ADR-0490: a dismissed alert leaves the section, the badge and its card's alert line at once.
+    // ADR-0504: a dismissed alert leaves the section, the badge and its card's alert line at once.
     if (hit === "repaint") { paintRemoteAll(false); return true; }
     if (hit === "deploy") { togglePanel("deploy"); return true; }
     if (hit) { openRemote(hit); return true; }
@@ -701,7 +701,7 @@ const nodes = new Map<string, { card: HTMLElement; line: SVGLineElement }>();
 
 export function initFleetOrbit(d: FleetOrbitDeps): void {
   deps = d;
-  initOrbitRemote(d); // P-IDE-SPOKES.1 (ADR-0487)
+  initOrbitRemote(d); // P-IDE-SPOKES.1 (ADR-0501)
   // P-FLEET.L17: fleet navigation from the keyboard, anywhere in the app. Ctrl/Cmd+Alt is free of the
   // app's Ctrl/Cmd bindings (zoom, mic, hands-free) and arrows cannot be produced by AltGr layouts, so
   // typing text can never trigger a spoke hop.
@@ -849,7 +849,7 @@ function onViewClick(ev: Event): void {
   if (t.closest("[data-orbit-pin]")) { setFleetHome("orbit"); return; }
   if (t.closest("[data-orbit-recover]")) { togglePanel("ghosts"); return; }
   if (t.closest("[data-orbit-hubs]")) { togglePanel("hubs"); return; }
-  if (t.closest("[data-orbit-deploy]")) { togglePanel("deploy"); return; } // ADR-0489
+  if (t.closest("[data-orbit-deploy]")) { togglePanel("deploy"); return; } // ADR-0503
   // The on-orbit panel spawns (folder or repo clone + vault PAT, P-FLEET.L18), so creating a spoke never
   // leaves the screen; the grid stays one click away as the workbench.
   if (t.closest("[data-orbit-grid]")) { closeFleetOrbit(); deps?.openGrid(); return; }
@@ -943,7 +943,7 @@ async function refresh(first: boolean): Promise<void> {
   layoutStage(mine);
   paintHub();
   paintHubsBadge();
-  // P-IDE-SPOKES.1 (ADR-0487): remote spokes join the ring when the hub plugin answers; its own request, so a
+  // P-IDE-SPOKES.1 (ADR-0501): remote spokes join the ring when the hub plugin answers; its own request, so a
   // slow plugin never holds the local ring back.
   void refreshRemote().then(() => paintRemoteAll(first));
   // Ghosts read the durable ledger, which only changes when a lane runs or dies - the open-time fetch

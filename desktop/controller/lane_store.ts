@@ -1,10 +1,10 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/controller/lane_store.ts - ADR-0482: what a controller lane needs to come back after an engine restart.
+// desktop/controller/lane_store.ts - ADR-0496: what a controller lane needs to come back after an engine restart.
 //
 // A lane is an omp child of the engine, so a restart ends it. Its IDENTITY does not have to end with it: the lane
-// id the controller holds, the pairing that owns it, its cwd (the workspace, or its review worktree, ADR-0483), its
+// id the controller holds, the pairing that owns it, its cwd (the workspace, or its review worktree, ADR-0497), its
 // model, its omp session and its bounded transcript (what `result` indexes) live here, so the engine can respawn
 // the same lane on the same session at boot. A turn the engine started and never saw settle is `inFlight`; at boot
 // it becomes `interrupted` and is reported, never re-run.
@@ -33,7 +33,7 @@ export interface ControllerLane {
   turns: number;
   /** The lane's bounded transcript as of its last settled turn (result indices, the fallback resume memory). */
   transcript: LaneTurnRecord[];
-  /** ADR-0483: the review worktree of a remote lane in a git workspace. */
+  /** ADR-0497: the review worktree of a remote lane in a git workspace. */
   worktree?: { root: string; path: string; branch: string };
   /** A turn the engine started and has not seen settle: its run id, when it started, and the text it sent. */
   inFlight?: { runId: string; at: string; text: string };

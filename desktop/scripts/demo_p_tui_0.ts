@@ -14,7 +14,7 @@
 //   [5] a clean exit removes the file: SIGTERM on POSIX; on Windows, where kill() is TerminateProcess and
 //       no handler runs, the parent watch (LUCID_MAIN_PID, the path the Electron launch really uses),
 //       which exits through process.exit(0) and so runs the "exit" handler
-// ADR-0484 adds the nonce-only record: the engine also publishes engine-nonce-<port>.json (no UI token) into
+// ADR-0498 adds the nonce-only record: the engine also publishes engine-nonce-<port>.json (no UI token) into
 // LUCID_DISCOVERY_NONCE_DIR, shared with LUCID_DISCOVERY_NONCE_GROUP (0640) on POSIX, and a controller client
 // that holds only a controller token finds, proves and drives the engine from that record alone.
 //
@@ -81,7 +81,7 @@ try {
   if (process.platform !== "win32")
     assert((statSync(path).mode & 0o777) === 0o600, "the file is owner-only (0600) - it carries the UI token");
   const records = listNonceRecords(nonceRoot);
-  assert(records.length === 1, "exactly one engine-nonce-<port>.json appeared under LUCID_DISCOVERY_NONCE_DIR (ADR-0484)");
+  assert(records.length === 1, "exactly one engine-nonce-<port>.json appeared under LUCID_DISCOVERY_NONCE_DIR (ADR-0498)");
   const { path: recordPath, record } = records[0]!;
   assert(record.port === enginePort && record.nonce === discovery.nonce && record.pid === engine.pid, "the record names the same launch: port, nonce and pid");
   assert(!readFileSync(recordPath, "utf8").includes(discovery.token) && !("token" in JSON.parse(readFileSync(recordPath, "utf8"))), "the record carries no UI token");

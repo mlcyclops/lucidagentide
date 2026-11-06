@@ -9,7 +9,7 @@ import { resolvePreview } from "../preview_resolve.ts";
 import type { InstalledPluginView, PluginFileInspectView } from "./bridge.ts";
 import { drawerGeometry, drawerShellHtml, installedBodyHtml, privateInstallSheetHtml, removeSheetHtml } from "./plugins_flyout.ts";
 
-// P-PLUGINS.7 (ADR-0486): what the INSTALLED tab shows and what its sheets let a user do.
+// P-PLUGINS.7 (ADR-0500): what the INSTALLED tab shows and what its sheets let a user do.
 const row = (over: Partial<InstalledPluginView>): InstalledPluginView => ({
   id: "remote-spokes", name: "Remote Spokes", version: "0.1.0", kind: "server", tier: "free", section: "civilian",
   state: "installed", license: "Proprietary", hasMcp: false, source: "private", signed: false, ...over,

@@ -3,7 +3,7 @@
 
 // harness/omp/azure_entra.ts
 //
-// P-AZURE-ENTRA.1 (ADR-0485): Azure OpenAI signed in with Microsoft Entra ID instead of an API key.
+// P-AZURE-ENTRA.1 (ADR-0499): Azure OpenAI signed in with Microsoft Entra ID instead of an API key.
 //
 // omp's built-in `azure` provider (pi-ai `azure-openai-responses`) only knows a key: it always sends
 // `api-key: <AZURE_OPENAI_API_KEY>`, and a models.yml `!command` key is cached until a 401, so neither can

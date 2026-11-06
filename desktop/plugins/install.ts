@@ -17,7 +17,7 @@
 // kept across updates and, unless asked, across uninstall). Every attempt is appended to
 // ~/.omp/lucid-plugins.jsonl.
 //
-// P-PLUGINS.7 (ADR-0486): a PRIVATE install from a local `.lplugin.zip` the user picked. The same bytes go
+// P-PLUGINS.7 (ADR-0500): a PRIVATE install from a local `.lplugin.zip` the user picked. The same bytes go
 // through the same gates and the same runtime; on top, the private path admits only free, civilian plugins
 // whose id is not a store plugin on sale (premium needs a license, Government needs verified access, both
 // only from the store), an unsigned package only after the user accepted the unsigned warning for exactly
@@ -60,7 +60,7 @@ export function pluginDataDir(id: string): string { return join(process.env.LUCI
 /** The attempt log the contract names: ~/.omp/lucid-plugins.jsonl. */
 export function pluginLogPath(): string { return process.env.LUCID_PLUGIN_LOG_PATH || join(homedir(), ".omp", "lucid-plugins.jsonl"); }
 
-/** Where an install came from: the store's signed download, or a file the user picked (ADR-0486). */
+/** Where an install came from: the store's signed download, or a file the user picked (ADR-0500). */
 export type PluginSource = "catalog" | "private";
 
 export interface InstalledPlugin {
@@ -86,7 +86,7 @@ export function readInstalled(id: string, root = pluginsRoot()): InstalledPlugin
   try { raw = JSON.parse(readFileSync(join(dir, PLUGIN_MANIFEST), "utf8")); } catch { return null; }
   const v = validatePluginManifest(raw, { requireFiles: true });
   if (!v.ok || v.manifest.id !== id || v.manifest.version !== ptr.version) return null;
-  // A pointer written before ADR-0486 has no source: the store download was then the only install path.
+  // A pointer written before ADR-0500 has no source: the store download was then the only install path.
   return { manifest: v.manifest, dir, installedAt: String(ptr.installedAt ?? ""), signed: !!ptr.signed, keyId: ptr.keyId, source: ptr.source === "private" ? "private" : "catalog" };
 }
 
@@ -199,7 +199,7 @@ export async function installPluginFromUrl(url: string, expectId: string, deps: 
   return r;
 }
 
-// ── private install from a file (ADR-0486) ──────────────────────────────────────────────────────────
+// ── private install from a file (ADR-0500) ──────────────────────────────────────────────────────────
 
 /** Store plugins on sale install only from their card: the store checks the license and, for Government,
  *  verified access. A coming-soon card's id stays open to a private build until it goes on sale. */

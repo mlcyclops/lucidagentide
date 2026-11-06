@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Increment P-PLUGINS.7 (ADR-0486) - live smoke of a PRIVATE plugin install against a RUNNING engine.
+// Increment P-PLUGINS.7 (ADR-0500) - live smoke of a PRIVATE plugin install against a RUNNING engine.
 //
 // 1. Packs an unsigned free "hello-private" server plugin with the real packer (no key), plus a tampered
 //    copy of it, as .lplugin.zip files on disk.

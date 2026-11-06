@@ -20,7 +20,7 @@
 // env, which carries provider keys and vault-injected tokens. PORT, HOST, LUCID_PLUGIN_ID,
 // LUCID_PLUGIN_DATA, LUCID_PLUGIN_ROOT, LUCID_PLUGIN_URL, LUCID_AGENT_BIN (the omp the engine itself runs:
 // plugin AI goes through LUCID Agent). A server or daemon process also gets LUCID_PLUGIN_HOST_TOKEN, a secret
-// minted per launch that only this engine holds (P-IDE-SPOKES.1, ADR-0487): with it the engine calls the plugin's
+// minted per launch that only this engine holds (P-IDE-SPOKES.1, ADR-0501): with it the engine calls the plugin's
 // own /host/* routes (hostEndpoint). Its MCP child never gets it.
 
 import type { Server } from "bun";
@@ -46,7 +46,7 @@ export interface PluginStatus {
   kind: PluginManifest["kind"]; tier: PluginManifest["tier"]; section: PluginManifest["section"];
   state: PluginState; url?: string; error?: string;
   license: string; hasMcp: boolean;
-  /** ADR-0486: a store install or a private one from a file, and whether a trusted publisher signed it. */
+  /** ADR-0500: a store install or a private one from a file, and whether a trusted publisher signed it. */
   source: InstalledPlugin["source"]; signed: boolean;
 }
 
@@ -68,7 +68,7 @@ interface Running {
   url: string;
   proc?: ChildProcess;
   server?: Server<undefined>;
-  /** ADR-0487: this launch's LUCID_PLUGIN_HOST_TOKEN (server and daemon kinds). */
+  /** ADR-0501: this launch's LUCID_PLUGIN_HOST_TOKEN (server and daemon kinds). */
   hostToken?: string;
   error?: string;
   tail: string;
@@ -230,7 +230,7 @@ export class PluginRuntime {
     });
   }
 
-  /** ADR-0487: where the engine reaches a RUNNING server or daemon plugin's /host/* routes, and the per-launch
+  /** ADR-0501: where the engine reaches a RUNNING server or daemon plugin's /host/* routes, and the per-launch
    *  token they accept. Null while it is not running, and for web plugins (no process to hold a token). */
   hostEndpoint(id: string): { url: string; token: string } | null {
     const r = this.running.get(id);

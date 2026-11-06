@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/controller/lane_lifecycle.test.ts - ADR-0481/0482/0483. The REAL lane manager and the REAL controller
+// desktop/controller/lane_lifecycle.test.ts - ADR-0495/0496/0497. The REAL lane manager and the REAL controller
 // routes over the fake ACP agent (a real subprocess per lane) and real git. What must hold:
 //   - close denies a parked ask and cancels the turn before the lane goes, and the freed slot takes a new lane;
 //   - an engine that dies mid-turn gives the lane back after the restart: same lane id, same omp session, idle,
@@ -111,7 +111,7 @@ function engine(dataDir: string, opts: { loadSession?: boolean; tag?: string } =
   return { fleet, store, deps, events, rulings, call, pairRemote, spawn, view, settled };
 }
 
-describe("ADR-0481: close", () => {
+describe("ADR-0495: close", () => {
   test("denies a parked ask and cancels the turn first, then frees the slot; a non-git workspace runs in place", async () => {
     const ws = realpathSync(temp("ws"));
     const e = engine(temp("data"));
@@ -142,7 +142,7 @@ describe("ADR-0481: close", () => {
   }, TIMEOUT);
 });
 
-describe("ADR-0483: a remote lane's review worktree", () => {
+describe("ADR-0497: a remote lane's review worktree", () => {
   test("the lane runs on remote/<lane>, the boundary is the worktree, and close keeps the branch", async () => {
     const repo = newRepo();
     const e = engine(temp("data"));
@@ -181,7 +181,7 @@ describe("ADR-0483: a remote lane's review worktree", () => {
   }, TIMEOUT);
 });
 
-describe("ADR-0482: lanes survive an engine restart", () => {
+describe("ADR-0496: lanes survive an engine restart", () => {
   /** Engine A runs a lane in a git workspace, settles one turn, starts a long one and dies: engine B boots from
    *  the files exactly as A left them. */
   async function diedMidTurn(opts: { loadSession: boolean }) {

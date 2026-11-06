@@ -36,7 +36,7 @@ describe("provider descriptors (ADR-0210)", () => {
     expect(envs).toContain("AZURE_OPENAI_API_VERSION");
   });
 
-  test("Azure OpenAI (ADR-0485): the Sign-in choice offers exactly the modes the engine accepts, key first", () => {
+  test("Azure OpenAI (ADR-0499): the Sign-in choice offers exactly the modes the engine accepts, key first", () => {
     const az = find("azure");
     const mode = az?.fields?.find((f) => f.env === AZURE_AUTH_MODE_ENV);
     expect(mode?.options?.map((o) => o.value)).toEqual([...AZURE_AUTH_MODES]);

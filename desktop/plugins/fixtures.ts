@@ -23,7 +23,7 @@ export const CLEAN: GateDecision = { block: false, reason: "clean", trustLabel: 
 
 /** A server plugin that records its pid and a grandchild's pid in LUCID_PLUGIN_DATA (so a test can prove
  *  the whole tree ends), answers /api/health with its id, /host/check 204 only for this launch's
- *  LUCID_PLUGIN_HOST_TOKEN (ADR-0487), and serves "hello" elsewhere. */
+ *  LUCID_PLUGIN_HOST_TOKEN (ADR-0501), and serves "hello" elsewhere. */
 export const SERVER_JS = `
 const http = require("http");
 const fs = require("fs");

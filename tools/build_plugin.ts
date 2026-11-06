@@ -36,7 +36,7 @@ export const BAKED_KEY_FILE = resolve(import.meta.dir, "..", "harness", "plugins
 /** The installer's ceiling, mirrored so the packer refuses what the IDE would refuse. */
 export const MAX_PACKAGE_BYTES = 1024 * 1024 * 1024;
 
-/** `unsigned` (ADR-0486): build a free plugin unsigned even when a key file exists, for a private install. A
+/** `unsigned` (ADR-0500): build a free plugin unsigned even when a key file exists, for a private install. A
  *  package signed by a key the IDE does not trust is refused, so a dev key on the build machine must not
  *  sign a build meant for a shipped IDE. */
 export interface BuildArgs { src?: string; out?: string; key?: string; initKey: boolean; help: boolean; unsigned: boolean }
@@ -173,7 +173,7 @@ const USAGE = `build_plugin - the .lplugin packer (ADR-0462)
 
   bun tools/build_plugin.ts --src <plugin-stage dir> --out <dir> --unsigned
       The same, unsigned even when a key file exists (free plugins only): a private build that a
-      shipped IDE installs from its Plugins drawer, Installed tab, marked unsigned (ADR-0486).`;
+      shipped IDE installs from its Plugins drawer, Installed tab, marked unsigned (ADR-0500).`;
 
 function main(): void {
   const a = parseArgs(process.argv.slice(2));

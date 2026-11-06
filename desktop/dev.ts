@@ -15,7 +15,7 @@ import { join, dirname, basename } from "node:path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { ndjsonStream } from "./chat_stream.ts";
 import { ENGINE_EXIT_PORT_BUSY } from "./engine_boot.ts"; // P-PORTGUARD.2: the bind-failure exit code main classifies on
-import { discoveryDir, discoveryPath, nonceDir, noncePath, removeDiscovery, resolveNonceGroup, writeDiscovery, writeNonceRecord, type EngineNonceRecord } from "./engine_discovery.ts"; // P-TUI.0 (ADR-0419), ADR-0484
+import { discoveryDir, discoveryPath, nonceDir, noncePath, removeDiscovery, resolveNonceGroup, writeDiscovery, writeNonceRecord, type EngineNonceRecord } from "./engine_discovery.ts"; // P-TUI.0 (ADR-0419), ADR-0498
 import { parentAlive, parentWatchConfig } from "./parent_watch.ts"; // P-PORTGUARD.2: never outlive the Electron main
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
@@ -566,7 +566,7 @@ import { kbScanner, kbStore, kgEntry, listKgs, activeKgId, createKg, renameKg, s
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.ts"
-import { inspectPluginFile, installPluginFile, installPluginFromUrl, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0486)
+import { inspectPluginFile, installPluginFile, installPluginFromUrl, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0500)
 import { PluginRuntime, resolvePluginNode } from "./plugins/runtime.ts" // P-PLUGINS.2 (ADR-0462)
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
@@ -595,11 +595,11 @@ function markWorkspaceSetupAsked(path: string): void {
   saveSettings(s);
 }
 import { EVENTS_LOG_PATH, recordSkillActivated } from "./skills_log.ts";
-import { auditTierVerdict, CONTROLLER_ROUTES, forgetControllerLane, handleController, restoreControllerLanes, type ControllerDeps } from "./controller/routes.ts"; // P-CTRL.2 (ADR-0438); lane lifecycle ADR-0481/0482
-import { ControllerLaneStore } from "./controller/lane_store.ts"; // ADR-0482: controller lanes survive a restart
-import { OFF_TASK_SYSTEM, offTaskPrompt, parseOffTask } from "./controller/remote_policy.ts"; // P-CTRL-REMOTE.1 (ADR-0476)
+import { auditTierVerdict, CONTROLLER_ROUTES, forgetControllerLane, handleController, restoreControllerLanes, type ControllerDeps } from "./controller/routes.ts"; // P-CTRL.2 (ADR-0438); lane lifecycle ADR-0495/0496
+import { ControllerLaneStore } from "./controller/lane_store.ts"; // ADR-0496: controller lanes survive a restart
+import { OFF_TASK_SYSTEM, offTaskPrompt, parseOffTask } from "./controller/remote_policy.ts"; // P-CTRL-REMOTE.1 (ADR-0493)
 import { PairingStore, type Pairing } from "./controller/store.ts"; // P-CTRL.2: the hashed pairing store
-import { handleRemoteSpokes, REMOTE_SPOKES_PLUGIN, type RemoteSpokesDeps } from "./remote_spokes.ts"; // P-IDE-SPOKES.1 (ADR-0487)
+import { handleRemoteSpokes, REMOTE_SPOKES_PLUGIN, type RemoteSpokesDeps } from "./remote_spokes.ts"; // P-IDE-SPOKES.1 (ADR-0501)
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
 import { addReportToKg, agentRecall, agentRetain, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unrelateEntities } from "./personal.ts";
@@ -1798,7 +1798,7 @@ const fleet: FleetLaneManager = new FleetLaneManager({
   onWrite: (lane, path) => checkouts.recordWrite({ id: lane.id, name: lane.name }, path, lane.cwd),
   preface: (lane): Promise<string> => checkouts.briefingFor(lane.id, lane.cwd),
   repo: { observe: observeToolCall, peek: peekRepoContext }, // P-REPO.1 (ADR-0406)
-  // P-CTRL-REMOTE.1 (ADR-0476): the off-task check runs as a one-shot completion on the lane's own model (the
+  // P-CTRL-REMOTE.1 (ADR-0493): the off-task check runs as a one-shot completion on the lane's own model (the
   // util connection, never the chat turn). Tighten only: "" (any failure) parses as unknown, which parks.
   offTask: async (lane, action) => parseOffTask(await backend.complete(OFF_TASK_SYSTEM, offTaskPrompt(lane.assignment, action), { model: lane.model, idleMs: 20_000 })),
   // Throws when the line cannot be written; the fleet then refuses the action instead of running it unaudited.
@@ -2204,7 +2204,7 @@ function agentScanner(): ScannerClient {
 
 // P-CTRL.2 (ADR-0438): the external-controller policy core. Pairings (hashed tokens, fixed workspace, owned
 // lanes) persist owner-only under the engine data root; the prompt scan reuses the fail-closed agent scanner.
-// ADR-0482: each controller lane's restart record sits beside the pairings. The restore gate is shut from here,
+// ADR-0496: each controller lane's restart record sits beside the pairings. The restore gate is shut from here,
 // before the server binds, until the boot-time restore (near the end of this file) settles, so a controller that
 // asks in between waits for the full lane list instead of reading a half-restored one.
 const controllerRestore = Promise.withResolvers<void>();
@@ -2212,7 +2212,7 @@ const controllerDeps: ControllerDeps = {
   store: new PairingStore(join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "controller-pairings.json")),
   lanes: new ControllerLaneStore(join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "controller-lanes.json")),
   fleet,
-  // ADR-0492: a controller may name one of the models the picker lists. checkerModelInfo().options is the backend's
+  // ADR-0506: a controller may name one of the models the picker lists. checkerModelInfo().options is the backend's
   // accessible list (platform, AskSage and managed-policy narrowing applied), not only the checker's.
   models: () => backend.checkerModelInfo().options.map((o) => o.value),
   scan: (text) => scanAndDecide(agentScanner(), text),
@@ -2220,7 +2220,7 @@ const controllerDeps: ControllerDeps = {
   restoring: controllerRestore.promise,
 };
 
-// P-IDE-SPOKES.1 (ADR-0487): the remote-spokes hub plugin, reached over its /host/* routes with the token the
+// P-IDE-SPOKES.1 (ADR-0501): the remote-spokes hub plugin, reached over its /host/* routes with the token the
 // plugin runtime minted for this engine. Recalled text and parked actions pass the same fail-closed scanner.
 const remoteSpokesDeps: RemoteSpokesDeps = {
   endpoint: () => plugins.hostEndpoint(REMOTE_SPOKES_PLUGIN),
@@ -5876,7 +5876,7 @@ return Bun.serve({
         const r = await installPluginFromUrl(String(b.url ?? ""), String(b.expectId ?? ""), { beforeSwitch: async (id) => { await plugins.stop(id); } });
         return json({ ok: true, data: r.ok ? { ok: true, id: r.id, version: r.version } : r });
       }
-      // P-PLUGINS.7 (ADR-0486): a private install from a .lplugin.zip the user picked. inspect-file reads it
+      // P-PLUGINS.7 (ADR-0500): a private install from a .lplugin.zip the user picked. inspect-file reads it
       // and installs nothing; install-file installs exactly the bytes the user reviewed (sha256) and, when
       // unsigned, only with acceptUnsigned. Same gates and runtime as a store install.
       if (p === "/api/plugins/inspect-file" && req.method === "POST") {
@@ -6306,7 +6306,7 @@ return Bun.serve({
         const laneId = String(b.laneId ?? "");
         const existed = fleet.laneRunning(laneId) !== null;
         const r = fleet.remove(laneId, b.force === true);
-        // ADR-0481: a dismissed controller lane is over for its controller too (it does not come back after a
+        // ADR-0495: a dismissed controller lane is over for its controller too (it does not come back after a
         // restart, and a remote lane's review worktree is committed onto its branch and removed).
         if (existed && r.ok) await forgetControllerLane(controllerDeps, laneId);
         return json({ ok: true, data: r });
@@ -6893,7 +6893,7 @@ return Bun.serve({
 if (!process.env.LUCID_ENGINE_NONCE) process.env.LUCID_ENGINE_NONCE = randomBytes(16).toString("hex");
 const ENGINE_PORT = server.port ?? PORT; // Bun types port as optional (unix-socket servers); a TCP bind always has one
 const DISCOVERY_PATH = discoveryPath(discoveryDir(process.env), ENGINE_PORT);
-// ADR-0484: the nonce-only record (no UI token) for controller clients, owner-only by default; shared with
+// ADR-0498: the nonce-only record (no UI token) for controller clients, owner-only by default; shared with
 // LUCID_DISCOVERY_NONCE_GROUP (0640) in LUCID_DISCOVERY_NONCE_DIR when the operator names them.
 const NONCE_PATH = noncePath(nonceDir(process.env), ENGINE_PORT);
 const LAUNCH: EngineNonceRecord = {
@@ -7004,7 +7004,7 @@ await refreshRecall();
 backend.startAutomationScheduler();
 // P-SCHED.1 (ADR-0443): the scheduled LANE jobs tick beside it, same envelope (only while the app runs).
 jobScheduler.start();
-// ADR-0482: controller lanes the previous engine ran come back idle on their own lane ids and omp sessions (after
+// ADR-0496: controller lanes the previous engine ran come back idle on their own lane ids and omp sessions (after
 // the child env above is set, so a restored lane is wired like a new one). Detached: the bind never waits on omp;
 // controller routes do (the gate set with controllerDeps), and open when this settles, success or not.
 void restoreControllerLanes(controllerDeps).then(

@@ -1334,7 +1334,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .plg-chip{font-family:var(--font);font-size:9.5px;font-weight:700;letter-spacing:.06em;border-radius:999px;padding:1.5px 7px;border:1px solid var(--line);color:var(--txt-3);background:var(--bg-3)}
 .plg-chip[data-status="featured"]{color:var(--accent-2);background:var(--accent-dim);border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
 .plg-chip[data-status="built-in"]{color:var(--green);background:rgb(var(--green-rgb) / .12);border-color:rgb(var(--green-rgb) / .35)}
-/* ADR-0486: the INSTALLED tab. A verified install reads green; a private unsigned one is amber, never quiet. */
+/* ADR-0500: the INSTALLED tab. A verified install reads green; a private unsigned one is amber, never quiet. */
 .plg-chip[data-status="verified"]{color:var(--green);background:rgb(var(--green-rgb) / .12);border-color:rgb(var(--green-rgb) / .35)}
 .plg-chip[data-status="unsigned"]{color:var(--amber-txt);background:rgb(var(--amber-rgb) / .14);border-color:rgb(var(--amber-rgb) / .5)}
 .plg-inst-head{display:flex;align-items:flex-start;gap:14px;margin:0 0 14px}
@@ -6506,7 +6506,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-hubrow-lanes .fleet-pip{font-size:11px;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis}
 .orbit-btn.waiting .orbit-ghost-n{color:var(--amber-txt,var(--amber));background:rgb(var(--amber-rgb) / .14)}
 
-/* ── P-IDE-SPOKES.1 (ADR-0487): remote spokes on the orbit ──
+/* ── P-IDE-SPOKES.1 (ADR-0501): remote spokes on the orbit ──
    Another machine, so visibly not a local lane: a dashed frame, a "remote" tag, a dashed spoke line. The hues
    are the shared state hues (--lane, as every card uses): red stuck (parked on a human: the one that pulses;
    or failed), amber might be stuck (the hub has not heard from it), cyan working, blue online and ready. */
@@ -6521,7 +6521,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-node.rs-busy .orbit-led,.fleet-pip.rs-busy i{animation:hudpulse 2.2s ease-in-out infinite}
 .orbit-node.rs-ready,.fleet-pip.rs-ready,.rs-state.rs-ready{--lane:var(--blue);--lane-dim:rgb(var(--blue-rgb) / .4)}
 .orbit-node.rs-checking,.fleet-pip.rs-checking,.rs-state.rs-checking{--lane:var(--txt-4)}
-/* ADR-0493: deactivated on purpose (shipped, lent, unplugged): the dimmest grey, faded, never animated. */
+/* ADR-0507: deactivated on purpose (shipped, lent, unplugged): the dimmest grey, faded, never animated. */
 .orbit-node.rs-off,.fleet-pip.rs-off,.rs-state.rs-off{--lane:var(--txt-4)}
 .orbit-node.rs-off .orbit-node-card{opacity:.55}
 .orbit-node.rs-off .orbit-led,.fleet-pip.rs-off i{animation:none}
@@ -6560,7 +6560,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .rs-entry-h .pill{flex:none}
 .rs-ask-h{font-size:12px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rs-ask .orbit-spawn-row{gap:6px;align-items:center}
-/* ADR-0489: the Start-a-task selector and the panel's Models section. Rows are grids, every text run its own
+/* ADR-0503: the Start-a-task selector and the panel's Models section. Rows are grids, every text run its own
    block line that ellipsizes (invariant 11); chips are inline blocks inside one block line, never flex prose. */
 .rs-choices{display:grid;gap:6px;margin:0 4px 10px}
 .rs-choice{display:grid;grid-template-columns:auto auto minmax(0,1fr);align-items:start;gap:8px;padding:7px 9px;
@@ -6595,7 +6595,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .rs-model-id{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rs-models>li .rs-chip{flex:none;font-family:inherit}
 .btn-mini.armed,.orbit-ghost-x.armed{color:var(--on-fill);background:var(--red);border-color:var(--red)}
-/* ADR-0490: alerts, host facts and Resume. The card's alert line is one ellipsized block; an alert row in the
+/* ADR-0504: alerts, host facts and Resume. The card's alert line is one ellipsized block; an alert row in the
    hub section keeps its prose in ONE block span (invariant 11) beside flex:none buttons. Red for a spoke gone
    silent, crashed or a turn cut off; amber for a restart that came back on its own. */
 .orbit-alert{font-size:10px;line-height:1.4;color:var(--red-txt,var(--red));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

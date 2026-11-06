@@ -83,7 +83,7 @@ async function handle(line: string): Promise<void> {
   }
 
   const { id, method, params } = msg;
-  // ADR-0482: FAKE_ACP_LOAD_SESSION=1 advertises session/load (as omp does), accepts any recorded id, and every
+  // ADR-0496: FAKE_ACP_LOAD_SESSION=1 advertises session/load (as omp does), accepts any recorded id, and every
   // reply then names the session it ran in, so a restart test can prove a follow-up continued the SAME session
   // in a NEW process. Unset, the agent is exactly as before (no loadSession, replies unchanged).
   if (method === "initialize") { write({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentCapabilities: LOAD_SESSION ? { loadSession: true } : {} } }); return; }

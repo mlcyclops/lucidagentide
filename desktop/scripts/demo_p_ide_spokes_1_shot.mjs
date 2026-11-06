@@ -1,20 +1,20 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-IDE-SPOKES.1 (ADR-0487): visual proof in a real browser on an already-running, isolated engine and browser
+// P-IDE-SPOKES.1 (ADR-0501): visual proof in a real browser on an already-running, isolated engine and browser
 // (the P-MARKET.1c harness pattern: the caller owns the page, the engine and the browser). The engine's
 // /api/remote-spokes* answers are replaced by fixtures through request interception, so no hub plugin or
 // spoke is needed: what is proven is the RENDERER. Remote spokes sit on the orbit beside local lanes in their
 // own dashed frame and the shared hues; the hub picker lists the remote hub; a hub without the drive scope gets
 // no drive buttons; Approve keeps the two-click rule; recalled text that looks like markup stays text and runs
-// nothing; a withheld entry shows no text. ADR-0489: the glance carries the answer time and route; the panel
+// nothing; a withheld entry shows no text. ADR-0503: the glance carries the answer time and route; the panel
 // lists the spoke's models (a long list folds); with the drive scope the hub picker opens the Start-a-task
 // selector, whose rows are ordered and gated, and Start posts the chosen spoke's submit and opens its panel.
-// ADR-0490: selector rows and the panel name the spoke's machine and lane policy; with trouble on the hub each
+// ADR-0504: selector rows and the panel name the spoke's machine and lane policy; with trouble on the hub each
 // affected card gets an alert line, a silent spoke reads "silent since" in red, the Remote hub section lists the
 // alerts newest first with a counting badge and a dismissal that sticks, and an interrupted task's Resume arms on
 // the first click and posts exactly the contract text through the followup route on the second.
-// ADR-0492: the selector's Model list holds the picked spoke's models, default first, refills when another spoke is
+// ADR-0506: the selector's Model list holds the picked spoke's models, default first, refills when another spoke is
 // picked, and Start posts the chosen model.
 // Screenshots go to LUCID_DEMO_SHOT_DIR (default: the OS temp dir).
 
@@ -24,17 +24,17 @@ import { join } from "node:path";
 const NODE = (c) => `n_${c.repeat(32)}`;
 const HUB = { node: NODE("f"), label: "workstation", scopes: ["recall", "approve"] };
 const task = (id, name, state, extra = {}) => ({ id, name, state, turns: 2, updatedAt: Date.now() - 60_000, ...extra });
-// ADR-0489: answer time, route, certificate and models per spoke. 30 ids on vm-218 prove a long list folds.
+// ADR-0503: answer time, route, certificate and models per spoke. 30 ids on vm-218 prove a long list folds.
 const DAY = 86_400_000;
 const MANY = Array.from({ length: 30 }, (_, i) => `anthropic/claude-model-${i}`);
-/** ADR-0490's fields when nothing is wrong: no machine report, no silence, no alerts. */
+/** ADR-0504's fields when nothing is wrong: no machine report, no silence, no alerts. */
 const QUIET = { host: null, lanePolicy: null, lastSeen: null, silentSince: null, alerts: [], deactivated: null };
 const UNKNOWN = { latencyMs: null, via: null, region: null, classification: null, certExpires: null, engineVersion: null, models: { default: null, local: [], frontier: [] }, ...QUIET };
-/** ADR-0490: vm-217 reports its machine and why it runs two lanes. */
+/** ADR-0504: vm-217 reports its machine and why it runs two lanes. */
 const HOST_217 = { os: "linux", arch: "x64", cpus: 16, memMiB: 65_536, diskFreeMiB: 400_000, gpus: [{ name: "NVIDIA RTX 4090", vramMiB: 24_576 }], localModel: { host: "127.0.0.1:11434", reachable: true } };
 const POLICY_217 = { max: 2, limitedBy: "config", why: "the operator set two lanes on this spoke" };
 const MIN = 60_000;
-/** ADR-0490: the exact follow-up Resume must send. */
+/** ADR-0504: the exact follow-up Resume must send. */
 const RESUME = "Continue this task. The previous turn was interrupted when the spoke restarted: check what was already done before you repeat anything.";
 const VIEW = {
   available: true, hub: HUB, actions: { recall: true, drive: false, approve: true, deny: true },
@@ -54,7 +54,7 @@ const VIEW = {
 };
 /** The same hub with the drive scope: the Start-a-task selector appears. */
 const DRIVE_VIEW = { ...VIEW, hub: { ...HUB, scopes: ["recall", "drive", "approve"] }, actions: { recall: true, drive: true, approve: true, deny: true } };
-/** ADR-0490: the same drive hub hearing trouble, timed at call time so every run's alert keys are new (a
+/** ADR-0504: the same drive hub hearing trouble, timed at call time so every run's alert keys are new (a
  *  dismissal from an earlier run, kept in the QA browser's localStorage, never hides this run's alerts).
  *  azure-eastus restarted its engine; dgx-spark crashed and has been silent for 6 minutes; vm-217's "migrate"
  *  task lost its turn to a restart and waits for the human to resume it. */
@@ -112,7 +112,7 @@ export async function verifyRemoteSpokes(page, shotDir = tmpdir()) {
       assert(n && n.cls.includes(tone) && n.dashed && n.tag, `${label}: expected a dashed remote node in ${tone}, got ${JSON.stringify(n)}`);
     }
     assert(nodes.find((x) => x.name === "azure-eastus").glance.includes("parked approval"), "the approval spoke does not say it is parked");
-    // ADR-0489: the glance carries the answer time and route.
+    // ADR-0503: the glance carries the answer time and route.
     const vm217 = nodes.find((x) => x.name === "vm-217").glance;
     assert(vm217 === "online, idle \u00b7 0/2 lanes \u00b7 1.9 s LAN", `vm-217 glance: ${JSON.stringify(vm217)}`);
     await page.waitForTimeout?.(700); // let the fly-out settle before the picture (puppeteer versions without it skip)
@@ -153,14 +153,14 @@ export async function verifyRemoteSpokes(page, shotDir = tmpdir()) {
     shots.push(join(shotDir, "ide-spokes-panel.png"));
     await page.screenshot({ path: shots.at(-1) });
 
-    // ADR-0489: the panel's Models section names the default and the signed-in provider with its account.
+    // ADR-0503: the panel's Models section names the default and the signed-in provider with its account.
     const models = await page.$eval("#orbitView [data-rs-models]", (m) => ({
       heads: [...m.querySelectorAll(".rs-models-h")].map((h) => h.textContent), ids: [...m.querySelectorAll(".rs-model-id")].map((i) => i.textContent),
       defaults: m.querySelectorAll(".rs-chip").length,
     }));
     assert(models.heads.includes("Default") && models.heads.includes("Azure OpenAI (entra (managed identity))") && models.ids.includes("azure-openai/gpt-5-mini") && models.defaults >= 1, `models section: ${JSON.stringify(models)}`);
 
-    // ADR-0489: with the drive scope, the hub picker's Start a task opens the selector.
+    // ADR-0503: with the drive scope, the hub picker's Start a task opens the selector.
     fixtures["/api/remote-spokes"] = DRIVE_VIEW;
     await page.waitForSelector("#orbitView [data-orbit-deploy]:not([hidden])", { timeout: 15_000 });
     await page.click("#orbitView [data-orbit-hubs]");
@@ -175,11 +175,11 @@ export async function verifyRemoteSpokes(page, shotDir = tmpdir()) {
     assert(JSON.stringify(rows.map((r) => [r.label, r.disabled, r.why === null ? null : r.why.split(":")[0]])) === JSON.stringify([["vm-217", false, null], ["azure-eastus", false, null], ["vm-218", true, "no free lane"], ["dgx-spark", true, "offline"]]), `selector rows: ${JSON.stringify(rows)}`);
     assert(rows[0].checked && rows[0].text.includes("answers in 1.9 s over LAN") && rows[0].text.includes("2/2 free") && rows[0].text.includes("2 models") && rows[0].text.includes("private"), `first row: ${JSON.stringify(rows[0])}`);
     assert(rows[2].text.includes("CUI") && rows[2].text.includes("certificate expires"), `vm-218 row: ${JSON.stringify(rows[2])}`);
-    // ADR-0490: the row names the machine (cores, memory, GPU and its memory) and why it runs as many lanes as it does.
+    // ADR-0504: the row names the machine (cores, memory, GPU and its memory) and why it runs as many lanes as it does.
     assert(rows[0].text.includes("16 CPUs \u00b7 64 GiB memory \u00b7 NVIDIA RTX 4090 24 GiB") && rows[0].text.includes("up to 2 lanes, limited by its configuration: the operator set two lanes on this spoke"), `vm-217 host and lane policy: ${JSON.stringify(rows[0])}`);
     await page.type("#orbitView [data-rs-dep-name]", "smoke");
     await page.type("#orbitView [data-rs-dep-text]", "say hello");
-    // ADR-0492: the Model list holds the picked spoke's models, its default first (sent as no model); picking another
+    // ADR-0506: the Model list holds the picked spoke's models, its default first (sent as no model); picking another
     // spoke refills it at once, and picking back offers the first spoke's models again.
     const ownModels = await page.$$eval("#orbitView [data-rs-dep-model] option", (os) => os.map((o) => [o.value, o.textContent]));
     assert(JSON.stringify(ownModels) === JSON.stringify([["", "spark/glm-5.3-flash (default)"], ["spark/qwen3-32b", "spark/qwen3-32b"]]), `vm-217 models: ${JSON.stringify(ownModels)}`);
@@ -206,7 +206,7 @@ export async function verifyRemoteSpokes(page, shotDir = tmpdir()) {
     shots.push(join(shotDir, "ide-spokes-models.png"));
     await page.screenshot({ path: shots.at(-1) });
 
-    // ADR-0490: trouble on the hub. Each affected card gets an alert line; a silent spoke reads "silent since", red.
+    // ADR-0504: trouble on the hub. Each affected card gets an alert line; a silent spoke reads "silent since", red.
     fixtures["/api/remote-spokes"] = alertView();
     await page.waitForFunction(() => [...document.querySelectorAll("#orbitView .orbit-node.remote .orbit-alert")].filter((e) => !e.hidden).length === 3, { timeout: 15_000 });
     const cards = await page.$$eval("#orbitView .orbit-node.remote", (els) => els.map((e) => {
@@ -266,6 +266,6 @@ if (import.meta.main) {
     const page = (await browser.pages()).find((p) => p.url() === url);
     if (!page) throw new Error(`No existing QA page at ${url}`);
     console.log(JSON.stringify(await verifyRemoteSpokes(page, process.env.LUCID_DEMO_SHOT_DIR || tmpdir()), null, 2));
-    console.log("P-IDE-SPOKES.1 passed: remote spokes on the orbit and in the hub picker, scope-gated controls, two-click approve, recalled text shown as text; ADR-0489 selector, models and answer time; ADR-0490 host facts, alerts, silent since and two-click Resume; ADR-0492 a model chosen per task.");
+    console.log("P-IDE-SPOKES.1 passed: remote spokes on the orbit and in the hub picker, scope-gated controls, two-click approve, recalled text shown as text; ADR-0503 selector, models and answer time; ADR-0504 host facts, alerts, silent since and two-click Resume; ADR-0506 a model chosen per task.");
   } finally { await browser.disconnect(); }
 }

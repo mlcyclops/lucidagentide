@@ -10,13 +10,13 @@
 //     Anything else answers 403 "forbidden" with no detail.
 //   - A controller sees and acts on ONLY the lanes it spawned. A foreign or unknown lane is the same 404.
 //   - spawn takes a name and nothing else: the lane runs in the pairing's workspace, pinned SUPERVISED (every
-//     privileged ask goes to the human through the existing fleet prompt; no auto, that is P-CTRL.4). ADR-0492:
+//     privileged ask goes to the human through the existing fleet prompt; no auto, that is P-CTRL.4). ADR-0506:
 //     it may also name a model, only one this engine lists as available (else 400); absent, the fleet's default.
 //   - prompt text goes through the fail-closed scan before it reaches a lane. Scan unavailable == refused.
 //   - Malformed anything (bad JSON, extra keys, wrong types, oversize text) is refused, never coerced.
 // Events are metadata only (pairing, lane, verdict, counts); prompt text and tokens never reach them.
 //
-// Lane lifecycle (ADR-0481/0482/0483):
+// Lane lifecycle (ADR-0495/0496/0497):
 //   - close ends one of the controller's OWN lanes: an open parked ask is denied, a running turn is cancelled, the
 //     lane is removed, and its slot frees (the two-lane cap counts live lanes only).
 //   - a controller lane's identity is recorded (lane_store.ts), so after an engine restart it comes back idle on
@@ -41,27 +41,27 @@ import { isLaneCount, PAIRING_NAME_RE, SPOKE_NODE_RE, type Pairing, type Pairing
 
 /** Routes the controller token opens. pair/unpair are NOT here: they stay on the UI token. */
 export const CONTROLLER_ROUTES: ReadonlySet<string> = new Set(
-  // ask, decide, deny: P-CTRL-REMOTE.1 (ADR-0476). The controller can read a remote ask and deny it; an allow
+  // ask, decide, deny: P-CTRL-REMOTE.1 (ADR-0493). The controller can read a remote ask and deny it; an allow
   // needs a decision the engine verifies against the paired root, so the controller only carries it.
-  // close: ADR-0481.
+  // close: ADR-0495.
   ["lanes", "spawn", "prompt", "status", "result", "cancel", "close", "ask", "decide", "deny"].map((r) => `/api/controller/${r}`),
 );
 
 /** ADR-0425: at most two controller-owned live lanes per pairing, unless the human granted the pairing its own
- *  `maxLanes` at pairing time (ADR-0490, 1 to PAIRING_LANES_MAX). */
+ *  `maxLanes` at pairing time (ADR-0504, 1 to PAIRING_LANES_MAX). */
 export const MAX_LANES_PER_PAIRING = 2;
 const MAX_PROMPT_CHARS = 32_000;
-/** ADR-0492: the longest model id a spawn may name (the add-on's "provider/id" is at most 192). */
+/** ADR-0506: the longest model id a spawn may name (the add-on's "provider/id" is at most 192). */
 const MAX_MODEL_CHARS = 200;
-/** ADR-0492: a model a controller names is `provider/model` (the add-on's spoke checks the same shape). */
+/** ADR-0506: a model a controller names is `provider/model` (the add-on's spoke checks the same shape). */
 const MODEL_ID_RE = /^[a-z0-9][a-z0-9-]{0,40}\/[A-Za-z0-9][A-Za-z0-9._:/-]{0,149}$/;
 
-/** ADR-0482: the reply a turn an engine restart cut off gets in the lane's transcript (what `result` returns). */
+/** ADR-0496: the reply a turn an engine restart cut off gets in the lane's transcript (what `result` returns). */
 export const INTERRUPTED_NOTE = "[LUCID] This turn was interrupted by an engine restart and was not re-run. Send a follow-up to continue.";
 
 export interface ControllerDeps {
   store: PairingStore;
-  /** ADR-0482: what each controller lane needs to come back after an engine restart. */
+  /** ADR-0496: what each controller lane needs to come back after an engine restart. */
   lanes: ControllerLaneStore;
   fleet: {
     spawn(opts: { cwd: string; id: string; name?: string; model?: string; supervised: true; remote?: { approvalHours: number; offTask: boolean }; resume?: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }>;
@@ -74,14 +74,14 @@ export interface ControllerDeps {
     laneRunning(laneId: string): boolean | null;
     cancel(laneId: string): { ok: boolean };
   };
-  /** ADR-0492: the model ids this engine lists as available (the model picker's list, with its platform, AskSage
+  /** ADR-0506: the model ids this engine lists as available (the model picker's list, with its platform, AskSage
    *  and managed-policy narrowing). A spawn may name one of these. Absent: a spawn that names a model is refused. */
   models?(): string[];
   /** scanAndDecide with the strict default policy; a dead scanner returns a blocking decision. */
   scan(text: string): Promise<GateDecision>;
   /** Where controller events append (the engine's EVENTS_LOG_PATH; a collector in tests). */
   sink: string | EventSink;
-  /** ADR-0482: set from engine start until the boot-time lane restore has finished (dev.ts sets it before the
+  /** ADR-0496: set from engine start until the boot-time lane restore has finished (dev.ts sets it before the
    *  server binds and clears it when restoreControllerLanes settles). While set, every route waits for it (at most
    *  `restoreWaitMs`, default RESTORE_WAIT_MS) and then answers 503, so no client ever sees a half-restored
    *  lane list and mistakes a lane still coming back for one that ended. */
@@ -113,7 +113,7 @@ function emit(deps: ControllerDeps, event: EventName, ids: { runId: string; sess
   new Telemetry({ runId: ids.runId, sessionId: ids.sessionId, sink: deps.sink }).emit(event, fields);
 }
 
-/** P-CTRL-REMOTE.1 (ADR-0476): the audit line for a tier-policy verdict raised inside the fleet. Throws when it
+/** P-CTRL-REMOTE.1 (ADR-0493): the audit line for a tier-policy verdict raised inside the fleet. Throws when it
  *  cannot be written, so the fleet refuses the action rather than run it unrecorded. Metadata only. */
 export function auditTierVerdict(deps: ControllerDeps, laneId: string, v: { ruling: string; tier: string; reason: string }): void {
   const p = deps.store.pairingForLane(laneId);
@@ -150,7 +150,7 @@ async function strictBody(req: Request, keys: string[], required: string[]): Pro
 /** The exact body of each lane-scoped POST route; any other lane-scoped POST takes `laneId` only. */
 const BODY_KEYS: Record<string, { allowed: string[]; required: string[] }> = {
   "/api/controller/prompt": { allowed: ["laneId", "text"], required: ["laneId", "text"] },
-  // spokeCert: ADR-0491, the spoke's own certificate, which a delegate-certified approver needs.
+  // spokeCert: ADR-0505, the spoke's own certificate, which a delegate-certified approver needs.
   "/api/controller/decide": { allowed: ["laneId", "askId", "decision", "cert", "crl", "spokeCert"], required: ["laneId", "askId", "decision", "cert"] },
   "/api/controller/deny": { allowed: ["laneId", "askId"], required: ["laneId", "askId"] },
 };
@@ -161,14 +161,14 @@ async function ownLanes(deps: ControllerDeps, pairing: Pairing): Promise<LaneVie
   return lanes.filter((l) => pairing.lanes.includes(l.id));
 }
 
-/** What a controller may see of a lane: no cwd, no model, no ask summary (only its kind). ADR-0483: the review
- *  branch a remote lane's work lands on. ADR-0482: when the turn an engine restart interrupted had started. */
+/** What a controller may see of a lane: no cwd, no model, no ask summary (only its kind). ADR-0497: the review
+ *  branch a remote lane's work lands on. ADR-0496: when the turn an engine restart interrupted had started. */
 const laneOut = (l: LaneView, rec: ControllerLane | null) => ({
   id: l.id, name: l.name, status: l.status, turns: l.turns, ...(l.pendingApproval ? { awaitingApproval: l.pendingApproval.kind } : {}),
   ...(rec?.worktree ? { reviewBranch: rec.worktree.branch } : {}), ...(rec?.interrupted ? { interrupted: rec.interrupted } : {}),
 });
 
-/** ADR-0481/0483: a controller lane is over (closed, dismissed by the human, or not coming back after a restart).
+/** ADR-0495/0497: a controller lane is over (closed, dismissed by the human, or not coming back after a restart).
  *  Its ownership and its restart record go; a review worktree is committed onto its branch and removed, the
  *  branch kept. The lane itself must already be gone from the fleet. */
 async function retireLane(deps: ControllerDeps, laneId: string, pairingId: string | null, why: string): Promise<{ reviewBranch?: string; commit?: string | null; worktreeKept?: string }> {
@@ -180,7 +180,7 @@ async function retireLane(deps: ControllerDeps, laneId: string, pairingId: strin
   return c.ok ? { reviewBranch: rec.worktree.branch, commit: c.commit } : { reviewBranch: rec.worktree.branch, worktreeKept: c.reason };
 }
 
-/** ADR-0482: record a settled controller turn (transcript, turns, session, model) and drop its in-flight mark. A
+/** ADR-0496: record a settled controller turn (transcript, turns, session, model) and drop its in-flight mark. A
  *  lane closed meanwhile stays gone; a newer turn that already started keeps its own mark and records itself. */
 async function settleLane(deps: ControllerDeps, laneId: string, runId: string): Promise<void> {
   const view = (await deps.fleet.status()).lanes.find((l) => l.id === laneId);
@@ -198,7 +198,7 @@ export const controllerPreamble = (name: string) =>
 /** The one entry point. `pairing` is the header token's verified pairing (null for the UI token or none). */
 export async function handleController(req: Request, path: string, pairing: Pairing | null, deps: ControllerDeps): Promise<Response> {
   const url = new URL(req.url);
-  // ADR-0482: nothing answers from a half-restored engine. A lane list read before the restore finished would show
+  // ADR-0496: nothing answers from a half-restored engine. A lane list read before the restore finished would show
   // a lane that is still coming back as gone, and a controller would end its task (seen live on the Azure spoke).
   // Human routes wait too: an unpair racing the restore could leave a revoked pairing's lane running. The 403 for a
   // request with no pairing does not depend on lanes, but waiting for it costs nothing and keeps one rule.
@@ -208,18 +208,18 @@ export async function handleController(req: Request, path: string, pairing: Pair
   if (path === "/api/controller/pair") {
     const b = await strictBody(req, ["name", "workspace", "approverRoot", "approvalHours", "offTask", "presence", "maxLanes", "spokeNode"], ["name", "workspace"]);
     if (!b || !PAIRING_NAME_RE.test(b.name!)) return malformed();
-    // ADR-0491: the paired spoke's node id. A delegate-certified approver decides only for a spoke its delegation
+    // ADR-0505: the paired spoke's node id. A delegate-certified approver decides only for a spoke its delegation
     // covers, and the engine learns which spoke from here, never from the controller.
     if (b.spokeNode !== undefined && !SPOKE_NODE_RE.test(b.spokeNode)) return malformed();
-    // ADR-0490: the human may grant this pairing 1 to PAIRING_LANES_MAX live lanes (a string like every body value,
+    // ADR-0504: the human may grant this pairing 1 to PAIRING_LANES_MAX live lanes (a string like every body value,
     // decimal digits only); absent keeps the ADR-0425 default.
     const maxLanes = b.maxLanes === undefined ? undefined : /^\d{1,2}$/.test(b.maxLanes) ? Number(b.maxLanes) : Number.NaN;
     if (maxLanes !== undefined && !isLaneCount(maxLanes)) return malformed();
     const workspace = await resolveWorkspace(b.workspace!);
     if (!workspace) return reply(400, { ok: false, error: "workspace must be an existing absolute folder" });
-    // P-CTRL-REMOTE.1 (ADR-0476): a human pairing a REMOTE controller names the owner root whose certified hubs
+    // P-CTRL-REMOTE.1 (ADR-0493): a human pairing a REMOTE controller names the owner root whose certified hubs
     // may decide this pairing's parked asks. Without it the pairing is the plain supervised P-CTRL.2 kind.
-    // ADR-0488: `presence: "required"` makes every remote allow carry user-presence evidence the engine verifies.
+    // ADR-0502: `presence: "required"` makes every remote allow carry user-presence evidence the engine verifies.
     let remote: RemotePolicy | undefined;
     if (b.approverRoot !== undefined) {
       const hours = b.approvalHours === undefined ? DEFAULT_APPROVAL_HOURS : Number(b.approvalHours);
@@ -253,19 +253,19 @@ export async function handleController(req: Request, path: string, pairing: Pair
   if (path === "/api/controller/spawn") {
     const b = await strictBody(req, ["name", "model"], []);
     if (!b || (b.name !== undefined && !PAIRING_NAME_RE.test(b.name)) || (b.model !== undefined && (b.model.length > MAX_MODEL_CHARS || !MODEL_ID_RE.test(b.model)))) return malformed();
-    // ADR-0492: a model chosen per task must be one this engine lists as available; absent, the fleet's default.
+    // ADR-0506: a model chosen per task must be one this engine lists as available; absent, the fleet's default.
     // The list is what an omp session reported; a headless engine may have none yet. Then the lane's own model
     // resolution and the pre-turn model policy clamp decide (a list that names models is enforced here).
     const known = deps.models?.() ?? [];
     if (b.model !== undefined && known.length > 0 && !known.includes(b.model)) return reply(400, { ok: false, error: `this engine has no model ${b.model}` });
-    // ADR-0482: a lane that could not be recorded would silently not come back after a restart.
+    // ADR-0496: a lane that could not be recorded would silently not come back after a restart.
     if (deps.lanes.broken) return reply(503, { ok: false, error: deps.lanes.broken });
     const live = (await ownLanes(deps, pairing)).filter((l) => l.status !== "stopped");
     const cap = pairing.maxLanes ?? MAX_LANES_PER_PAIRING;
     if (live.length >= cap) return reply(429, { ok: false, error: `at most ${cap} lanes per pairing` });
     // The id comes first: a remote lane's review branch is named after it before the lane exists.
     const id = `lane-${randomBytes(4).toString("hex")}`;
-    // ADR-0483: a remote pairing's lane in a git workspace gets its own worktree on `remote/<lane id>`. Not a git
+    // ADR-0497: a remote pairing's lane in a git workspace gets its own worktree on `remote/<lane id>`. Not a git
     // repository (or no git here): null, and the lane runs in the workspace itself. A repository git cannot make a
     // worktree in (no commit yet, a clash) refuses the spawn: the review branch is what a remote lane promises.
     const wt = pairing.remote ? await createRemoteLaneWorktree(pairing.workspace, id) : null;
@@ -307,7 +307,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
     return reply(200, { ok: true, data: { turns, running: deps.fleet.laneRunning(laneId) === true } });
   }
 
-  // ── P-CTRL-REMOTE.1 (ADR-0476): remote decisions on a parked ask ────────────────────────────────────────
+  // ── P-CTRL-REMOTE.1 (ADR-0493): remote decisions on a parked ask ────────────────────────────────────────
   if (path === "/api/controller/ask") {
     if (req.method !== "GET" || [...url.searchParams.keys()].some((k) => k !== "laneId")) return malformed();
     return reply(200, { ok: true, data: { ask: deps.fleet.pendingAsk(laneId) } });
@@ -327,7 +327,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
     if (!pairing.remote) return reply(409, { ok: false, error: "this pairing has no approver root" });
     const ask = deps.fleet.pendingAsk(laneId);
     if (!ask || ask.id !== b.askId) return reply(409, { ok: false, error: "no such open ask" });
-    // ADR-0491: the spoke the human paired (never one the controller names) is what a delegated approver must cover.
+    // ADR-0505: the spoke the human paired (never one the controller names) is what a delegated approver must cover.
     const v = verifyRemoteDecision(
       { decision: b.decision!, cert: b.cert!, ...(b.crl !== undefined ? { crl: b.crl } : {}), ...(b.spokeCert !== undefined ? { spokeCert: b.spokeCert } : {}) },
       pairing.remote.root, pairing.remote.crl,
@@ -352,7 +352,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
     return reply(200, { ok: true, data: deps.fleet.cancel(laneId) });
   }
 
-  // ── ADR-0481: close one of this pairing's lanes ─────────────────────────────────────────────────────────
+  // ── ADR-0495: close one of this pairing's lanes ─────────────────────────────────────────────────────────
   // A busy lane is cancelled, then closed (not refused): close is the controller's final word on its own lane, a
   // parked ask means the lane is mid-turn anyway, and nothing on disk is lost (a remote lane's work is committed
   // onto its review branch; the omp session log stays). Audit lines land before the effect.
@@ -380,7 +380,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
   }
   emit(deps, "controller_turn_started", ids, { pairing: pairing.name, lane_id: laneId, verdict: verdict.trustLabel, findings: verdict.findings.length });
   const wire = controllerPreamble(pairing.name) + b.text;
-  // ADR-0482: marked in flight before it starts, settled when it ends. An engine that dies in between leaves the
+  // ADR-0496: marked in flight before it starts, settled when it ends. An engine that dies in between leaves the
   // mark, and the next boot reports the turn interrupted instead of running it again. A new turn clears the
   // previous interruption.
   const rec = deps.lanes.get(laneId);
@@ -396,7 +396,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
   return reply(202, { ok: true, data: { runId: ids.runId, verdict: verdict.trustLabel } });
 }
 
-/** ADR-0482: at engine boot, bring every recorded controller lane back, idle, under its own lane id, on its own
+/** ADR-0496: at engine boot, bring every recorded controller lane back, idle, under its own lane id, on its own
  *  omp session (session/load when omp offers it; otherwise a fresh session that carries the recorded transcript
  *  as memory, the P-FLEET.L4 fallback). A turn that was running when the engine died is NOT re-run: it is closed
  *  in the transcript with INTERRUPTED_NOTE and the lane reports `interrupted`. A lane whose pairing was revoked
@@ -437,7 +437,7 @@ export async function restoreControllerLanes(deps: ControllerDeps): Promise<stri
   return back;
 }
 
-/** ADR-0481: the human dismissed a controller lane from the fleet (it is already gone there). The lane is over
+/** ADR-0495: the human dismissed a controller lane from the fleet (it is already gone there). The lane is over
  *  for its controller too: it does not come back after a restart, and a review worktree ends like a close. */
 export async function forgetControllerLane(deps: ControllerDeps, laneId: string): Promise<void> {
   const pairing = deps.store.pairingForLane(laneId);

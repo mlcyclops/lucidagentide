@@ -20,7 +20,7 @@ describe("worktreePlan", () => {
     expect(worktreePlan(root, root, "x", "1").laneCwd).toBe(worktreePlan(root, root, "x", "1").path);
   });
 
-  test("ADR-0483: a remote lane's review worktree is named after its lane id, on remote/<lane id>", () => {
+  test("ADR-0497: a remote lane's review worktree is named after its lane id, on remote/<lane id>", () => {
     const p = remoteWorktreePlan(root, join(root, "app"), "lane-1a2b3c4d");
     expect(p).toEqual({ path: join("C:", "work", "myrepo.lucid-worktrees", "remote-lane-1a2b3c4d"), branch: "remote/lane-1a2b3c4d", laneCwd: join("C:", "work", "myrepo.lucid-worktrees", "remote-lane-1a2b3c4d", "app") });
   });

@@ -4079,7 +4079,7 @@ function provCard(p: ProviderAuth): string {
       ? (f.set ? `saved ••${esc(f.last4 ?? "")} - type to replace` : `Paste ${esc(f.env)}…`)
       : esc(f.placeholder ?? f.env);
     const val = !f.secret && f.value ? ` value="${esc(f.value)}"` : "";
-    // ADR-0485: a closed-choice field (Azure's sign-in mode) is a select on the same data-env/data-savekey
+    // ADR-0499: a closed-choice field (Azure's sign-in mode) is a select on the same data-env/data-savekey
     // path; an unset one shows its first option, which is the default the engine applies.
     const control = f.options
       ? `<select class="prov-key" data-env="${esc(f.env)}">${f.options.map((o) => `<option value="${esc(o.value)}"${o.value === f.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`
@@ -16291,7 +16291,7 @@ const pluginsFlyout = createPluginsFlyout({
   beginSignIn: () => beginSignIn(),
   pluginsList: () => bridge.pluginsList(),
   installFromUrl: (url, id) => bridge.pluginsInstallFromUrl(url, id),
-  // P-PLUGINS.7 (ADR-0486): the Installed tab's private install needs the native picker (desktop app only).
+  // P-PLUGINS.7 (ADR-0500): the Installed tab's private install needs the native picker (desktop app only).
   ...(bridge.isElectron ? { pickFile: (opts: Parameters<typeof bridge.pickFile>[0]) => bridge.pickFile(opts) } : {}),
   inspectFile: (path) => bridge.pluginsInspectFile(path),
   installFile: (input) => bridge.pluginsInstallFile(input),
@@ -17166,7 +17166,7 @@ function wire(): void {
     fleetRemove: bridge.fleetRemove,
     fleetSpawn: bridge.fleetSpawn, // P-FLEET.L17 recovery: respawn a historical spoke by its old identity
     timelineList: bridge.timelineList, // P-FLEET.L17 recovery: the P-FLEET.L5 durable ledger feeds the ghosts
-    // P-IDE-SPOKES.1 (ADR-0487): remote spokes from the remote-spokes hub plugin, through the engine.
+    // P-IDE-SPOKES.1 (ADR-0501): remote spokes from the remote-spokes hub plugin, through the engine.
     remoteSpokes: bridge.remoteSpokes,
     remoteSpokeRecall: bridge.remoteSpokeRecall,
     remoteSpokeApprovals: bridge.remoteSpokeApprovals,

@@ -157,7 +157,7 @@ function spawnGatedOmp(o: SpawnOpts): AgentRunResult {
     if (!gate) return { ok: false, blocked: true, reason: gateRefusal(), error: gateRefusal() };
     gateArgs.push("-e", gate);
   }
-  // ADR-0485: a built agent on an Azure model signs in exactly like the chat (Entra ID when
+  // ADR-0499: a built agent on an Azure model signs in exactly like the chat (Entra ID when
   // AZURE_OPENAI_AUTH_MODE asks for it; a no-op on the key path). Optional, like every provider extension.
   const azureEntra = repoAsset("harness", "omp", "azure_entra_extension.ts");
   const providerArgs = existsSync(azureEntra) ? ["-e", azureEntra] : [];

@@ -121,7 +121,7 @@ export interface LaunchAssets {
   mcpResultGate: string;
   /** The AskSage gov-gateway provider extension — no-op without ASKSAGE_API_KEY. */
   asksage: string;
-  /** The Azure OpenAI Entra ID sign-in extension (ADR-0485), no-op unless AZURE_OPENAI_AUTH_MODE asks. */
+  /** The Azure OpenAI Entra ID sign-in extension (ADR-0499), no-op unless AZURE_OPENAI_AUTH_MODE asks. */
   azureEntra: string;
   /** The LUCID skin extension (P-THEME.1) — cosmetic, fail-open; skins the TUI session only. */
   lucidTheme: string;
@@ -160,7 +160,7 @@ export interface BuildArgsOpts {
   gate: string;
   /** Included when present; a missing asksage extension is not security-critical, so it's omitted, not fatal. */
   asksage?: string;
-  /** The Azure OpenAI Entra ID extension (ADR-0485); included when present, like asksage. */
+  /** The Azure OpenAI Entra ID extension (ADR-0499); included when present, like asksage. */
   azureEntra?: string;
   acpConfig?: string;
   /** The MCP tool-result gate extension (P-MCP-GATE.1); included when present. */
@@ -184,7 +184,7 @@ export interface BuildTuiOpts {
   gate: string;
   /** Included when present; a missing asksage extension is not security-critical, so it's omitted, not fatal. */
   asksage?: string;
-  /** The Azure OpenAI Entra ID extension (ADR-0485); included when present, like asksage. */
+  /** The Azure OpenAI Entra ID extension (ADR-0499); included when present, like asksage. */
   azureEntra?: string;
   /** The MCP tool-result gate extension (P-MCP-GATE.1, ADR-0152); included when present so `lucid tui`
    *  scans external MCP tool results exactly like `lucid acp`. */

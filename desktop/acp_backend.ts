@@ -176,7 +176,7 @@ const MCP_RESULT_GATE = repoAsset("harness", "omp", "mcp_result_gate.ts");
 // AskSage gov-gateway provider extension, loaded alongside the gate (omp -e is
 // repeatable). No-op unless ASKSAGE_API_KEY is set in the spawn env. ADR-0007.
 const ASKSAGE = repoAsset("harness", "omp", "asksage_extension.ts");
-// P-AZURE-ENTRA.1 (ADR-0485): Azure OpenAI signed in with Microsoft Entra ID (managed identity or the
+// P-AZURE-ENTRA.1 (ADR-0499): Azure OpenAI signed in with Microsoft Entra ID (managed identity or the
 // Azure CLI) instead of a key. No-op unless AZURE_OPENAI_AUTH_MODE names an Entra mode in the spawn env.
 const AZURE_ENTRA = repoAsset("harness", "omp", "azure_entra_extension.ts");
 // P-PREVIEW.3a (ADR-0096) — DRAFT: registers the agent-callable `preview_open` tool. Defensively wrapped so

@@ -227,7 +227,7 @@ describe("install, update and uninstall", () => {
     expect(await installPluginBytes(buildServerFixture(testKey("stranger"), { tier: "free" }), "fixture-server", deps())).toMatchObject({ ok: false, gate: "signature" });
   });
 
-  test("a pointer written before ADR-0486 (no source) reads as a store install", async () => {
+  test("a pointer written before ADR-0500 (no source) reads as a store install", async () => {
     expect((await installPluginBytes(buildServerFixture(KEY), "fixture-server", deps())).ok).toBe(true);
     const ptrPath = join(process.env.LUCID_PLUGINS_DIR!, "fixture-server", "current.json");
     const ptr: Record<string, unknown> = JSON.parse(readFileSync(ptrPath, "utf8"));
@@ -238,7 +238,7 @@ describe("install, update and uninstall", () => {
   });
 });
 
-// P-PLUGINS.7 (ADR-0486): a private install from a file the user picked. Same gates and runtime as a store
+// P-PLUGINS.7 (ADR-0500): a private install from a file the user picked. Same gates and runtime as a store
 // install; only the explicit two-step path installs it, the reviewed bytes are pinned by sha256, an unsigned
 // package needs the unsigned acceptance, and the store's Premium/Free and Civilian/Government rules hold.
 describe("private install from a file", () => {

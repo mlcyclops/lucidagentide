@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/remote_spokes.ts - P-IDE-SPOKES.1 (ADR-0487): remote spokes in the IDE, engine side.
+// desktop/remote_spokes.ts - P-IDE-SPOKES.1 (ADR-0501): remote spokes in the IDE, engine side.
 //
 // The add-on hub runs inside the IDE as the `remote-spokes` server plugin (ADR-0462). The engine reaches its
 // /host/* routes with the per-launch token the plugin runtime minted for it (PluginRuntime.hostEndpoint); the
@@ -12,14 +12,14 @@
 //   GET  /api/remote-spokes/approvals   ?node=                   recall scope
 //   POST /api/remote-spokes/decide      {node, task, ask, digest, allow, password?}   allow: approve; deny: drive or
 //                                       approve; password: a `password` hub's presence password, on an allow only
-//   POST /api/remote-spokes/submit      {node, text, name?, model?}   drive; model (ADR-0492): one the spoke
+//   POST /api/remote-spokes/submit      {node, text, name?, model?}   drive; model (ADR-0506): one the spoke
 //                                       reports; the spoke and its engine check it again
 //   POST /api/remote-spokes/followup    {node, task, text}       drive
 //   POST /api/remote-spokes/cancel      {node, task}             drive
 //   POST /api/remote-spokes/close       {node, task}             drive
 //
 // Scopes come from the hub's certificate as the plugin reports it, re-read on every action, so a button the
-// renderer still shows after a scope change is refused here. The spokes check them a third time. ADR-0493: every
+// renderer still shows after a scope change is refused here. The spokes check them a third time. ADR-0507: every
 // action and read for a spoke the hub marks deactivated is refused here, before anything reaches the plugin.
 //
 // Recalled journal text and parked actions are untrusted model output from another machine (invariant 5). Every
@@ -42,7 +42,7 @@ export const REMOTE_SPOKES_PLUGIN = "remote-spokes";
 export const MAX_RECALL_ENTRIES = 200;
 const MAX_TEXT = 32_000;
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,47}$/;
-/** A decision may wait on the hub's user-presence gesture (ADR-0488) before it is signed. */
+/** A decision may wait on the hub's user-presence gesture (ADR-0502) before it is signed. */
 const DECIDE_TIMEOUT_MS = 180_000;
 const RECALL_TIMEOUT_MS = 180_000;
 const ACTION_TIMEOUT_MS = 90_000;
@@ -252,7 +252,7 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
   const gate = checkHub(hub, node, scope);
   if (gate) return refuse(gate);
   const label = labelOf(hub, node);
-  // ADR-0488 amendment: a `password` hub signs an allow only with its presence password, typed for this one
+  // ADR-0502 amendment: a `password` hub signs an allow only with its presence password, typed for this one
   // approval. It goes to the plugin once and nowhere else (never stored, logged, echoed or put in model context);
   // a deny, or an allow on a hub of another kind, never carries it.
   const needsPassword = op === "decide" && b.allow === true && hub.available && hub.hub.presence === "password";
@@ -289,7 +289,7 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
   return reply(out);
 }
 
-/** Why this hub may not act on `node` with `scope`, or null when it may. ADR-0493: nothing at all goes to a spoke the
+/** Why this hub may not act on `node` with `scope`, or null when it may. ADR-0507: nothing at all goes to a spoke the
  *  hub marks deactivated (it is unplugged or elsewhere on purpose), recall and deny included. */
 function checkHub(hub: RemoteHubView, node: string, scope: "recall" | "drive" | "approve" | "deny"): string | null {
   if (!hub.available) return hub.reason;
