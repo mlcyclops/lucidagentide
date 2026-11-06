@@ -7,7 +7,7 @@
 // the glance wording names the USER's next move in the two states that block on a human.
 
 import { describe, expect, test } from "bun:test";
-import { ORBIT_NODE_W, hubLanes, orbitSlots, otherHubs, spokeClose, spokeGlance, switchEntries } from "./orbit_layout.ts";
+import { ORBIT_NODE_W, hubEntries, hubLanes, orbitSlots, spokeClose, spokeGlance, switchEntries } from "./orbit_layout.ts";
 
 const W = 1600, H = 900;
 
@@ -116,12 +116,12 @@ describe("spokeGlance (P-PROGRESS.1)", () => {
 });
 
 // P-SWITCH.3 (ADR-0410): a new session is a new hub; the previous session keeps its spokes.
-describe("hubLanes / otherHubs", () => {
+describe("hubLanes / hubEntries", () => {
   const lanes = [
-    { id: "a", name: "api", status: "working" as const, hubSessionId: "s1", lastActivityAt: 10 },
-    { id: "b", name: "docs", status: "needs-approval" as const, hubSessionId: "s1", lastActivityAt: 50 },
-    { id: "c", name: "tests", status: "awaiting-input" as const, hubSessionId: "s2", lastActivityAt: 30 },
-    { id: "d", name: "old", status: "done" as const, hubSessionId: null, lastActivityAt: 5 },
+    { id: "a", name: "api", status: "working" as const, cwd: "C:\\code\\shop", hubSessionId: "s1", lastActivityAt: 10 },
+    { id: "b", name: "docs", status: "needs-approval" as const, cwd: "C:\\code\\shop", hubSessionId: "s1", lastActivityAt: 50 },
+    { id: "c", name: "tests", status: "awaiting-input" as const, cwd: "/srv/blog", hubSessionId: "s2", lastActivityAt: 30 },
+    { id: "d", name: "old", status: "done" as const, cwd: "/srv/blog", hubSessionId: null, lastActivityAt: 5 },
   ];
   test("a fresh session's orbit shows none of the previous session's spokes", () => {
     expect(hubLanes(lanes, "s3").map((l) => l.id)).toEqual(["d"]); // only the hubless legacy spoke rides along
@@ -131,15 +131,22 @@ describe("hubLanes / otherHubs", () => {
     expect(hubLanes(lanes, "s2").map((l) => l.id)).toEqual(["c", "d"]);
     expect(hubLanes(lanes, null).map((l) => l.id)).toEqual(["d"]);
   });
-  test("the other hubs keep every live spoke, newest activity first, counting the ones that wait on a human", () => {
-    const others = otherHubs(lanes, "s3");
-    expect(others.map((h) => h.sessionId)).toEqual(["s1", "s2"]);
-    expect(others[0]!.lanes.map((l) => l.id)).toEqual(["a", "b"]);
-    expect(others[0]!.waiting).toBe(1);
-    expect(others[1]!.waiting).toBe(1);
-    expect(otherHubs(lanes, "s1").map((h) => h.sessionId)).toEqual(["s2"]); // the current hub is never "other"
+  // P-HUB-PICK.1 (ADR-0470): the Hubs menu lists every hub, the one on screen first.
+  test("the current hub comes first, even empty; the other hubs follow by newest activity, counting who waits", () => {
+    const hubs = hubEntries(lanes, "s3");
+    expect(hubs.map((h) => [h.sessionId, h.current])).toEqual([["s3", true], ["s1", false], ["s2", false]]);
+    expect(hubs[0]!.lanes.map((l) => l.id)).toEqual(["d"]); // the hubless spoke rides the current hub, as on the orbit
+    expect(hubs[1]!.lanes.map((l) => l.id)).toEqual(["a", "b"]);
+    expect(hubs.map((h) => h.waiting)).toEqual([0, 1, 1]);
+    expect(hubEntries(lanes, "s1").map((h) => h.sessionId)).toEqual(["s1", "s2"]);
   });
-  test("hubless spokes never form a hub of their own", () => {
-    expect(otherHubs([lanes[3]!], "s1")).toEqual([]);
+  test("each hub names the distinct codebases its spokes work on", () => {
+    const hubs = hubEntries(lanes, "s2");
+    expect(hubs.find((h) => h.sessionId === "s1")!.repos.map((r) => r.name)).toEqual(["shop"]);
+    expect(hubs.find((h) => h.sessionId === "s2")!.repos.map((r) => r.name)).toEqual(["blog"]); // c and hubless d share one
+  });
+  test("with no Main session, hubless spokes form no hub and nothing is current", () => {
+    expect(hubEntries([lanes[3]!], null)).toEqual([]);
+    expect(hubEntries(lanes, null).some((h) => h.current)).toBe(false);
   });
 });

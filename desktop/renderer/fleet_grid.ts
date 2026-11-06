@@ -37,6 +37,7 @@ import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModel
 import type { ApprovalScope, FleetStatusView, LaneEvent, LaneImage, LaneView, LucidBridge } from "./bridge.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts";
 import { openRepoDetails, paintRepoChip } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): the lane's repo + push target
+import { repoSections, spokeRepo } from "./spoke_repo.ts"; // P-HUB-PICK.1 (ADR-0470): codebase name, color and the By repo grouping
 import { githubPickNote, mountRepoPicker, repoPickerHtml } from "./repo_picker.ts"; // P-REPO.1: pick a repo instead of typing a URL
 import { laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order + wording + counts shared with the phone's fleet bar
 // P-FLEET.L7: the transcript MODEL - stable ids, the chip glance line, the chevron body, the clipboard text.
@@ -155,6 +156,9 @@ let layout: LaneLayout = { order: [], size: {} };
 /** P-FLEET.L18: named groups (presentation only). Loaded with the layout, persisted beside it. */
 let groups: LaneGroups = loadGroups(null);
 const FLEET_GROUPS_KEY = "lucid.fleetGroups.v1";
+/** P-HUB-PICK.1 (ADR-0470): section the grid by codebase instead of by named group. Persisted. */
+const FLEET_BY_REPO_KEY = "lucid.fleetByRepo";
+let groupByRepo = false;
 
 // localStorage-backed persistence; a broken/absent store degrades to in-memory (the dock still works).
 function storage(): DockStorage {
@@ -168,6 +172,14 @@ function persistLayout(): void { storage().set(FLEET_LAYOUT_KEY, saveLayout(layo
 function persistGroups(): void {
   groups = pruneLanes(groups, [...runs.keys()]);
   storage().set(FLEET_GROUPS_KEY, saveGroups(groups));
+}
+
+/** P-HUB-PICK.1 (ADR-0470): the grid header's By repo toggle. */
+function paintByRepo(): void {
+  const b = dock ? ($("[data-fleet-byrepo]", dock) as HTMLElement | null) : null;
+  if (!b) return;
+  b.classList.toggle("on", groupByRepo);
+  b.setAttribute("aria-pressed", String(groupByRepo));
 }
 
 /** P-FLEET.L18: the grid header's default-view pin (fleet_orbit owns the one storage key). */
@@ -203,19 +215,21 @@ export function openFleetGrid(): void {
   dockState = loadDockState(storage(), window.innerWidth, window.innerHeight, FLEET_DOCK_KEY, fleetFallback(window.innerWidth, window.innerHeight));
   layout = loadLayout(storage().get(FLEET_LAYOUT_KEY)); // P-FLEET.L9: card order + sizes from the last run
   groups = loadGroups(storage().get(FLEET_GROUPS_KEY)); // P-FLEET.L18: named groups from the last run
+  groupByRepo = storage().get(FLEET_BY_REPO_KEY) === "1"; // P-HUB-PICK.1
   lastGroupSig = ""; // a fresh dock has no dividers yet - an unchanged signature must not skip building them
   dockState.minimized = false; // an explicit open always shows the panel, never just the pill
-  dock = el(`<div id="fleetDock" class="share-dock fleet-dock side-${dockState.side}" role="dialog" aria-label="LUCID Fleet - local lanes">
+  dock = el(`<div id="fleetDock" class="share-dock fleet-dock side-${dockState.side}" role="dialog" aria-label="LUCID Fleet - local spokes">
     <div class="share-dock-head" data-dock-drag>
       <span class="share-dock-grip">${icon("bolt", 14)}</span>
       <span class="share-dock-title">LUCID Fleet</span>
-      <span class="fleet-headroom" id="fleetHeadroom" data-tip="Local headroom|Live CPU and memory. Lanes are UNLIMITED - a new one is refused only while a metric stays at or above the tick for 30 seconds straight, so a burst never blocks you."></span>
-      <button class="btn-mini fleet-add-btn" data-fleet-orbit data-tip="Orbit|Back to the hub-and-spoke map. Same lanes, same colors - the grid and the orbit are two faces of one fleet.">${icon("share", 12)} Orbit</button>
+      <span class="fleet-headroom" id="fleetHeadroom" data-tip="Local headroom|Live CPU and memory. Spokes are UNLIMITED - a new one is refused only while a metric stays at or above the tick for 30 seconds straight, so a burst never blocks you."></span>
+      <button class="btn-mini fleet-add-btn" data-fleet-orbit data-tip="Orbit|Back to the hub-and-spoke map. Same spokes, same colors - the grid and the orbit are two faces of one fleet.">${icon("share", 12)} Orbit</button>
+      <button class="btn-mini fleet-add-btn fleet-pin" data-fleet-byrepo aria-pressed="false" data-tip="Group by repo|Section the cards by the codebase each spoke works on, in the same colors as the orbit. Your named groups are kept and come back when this is off.">${icon("git", 12)} By repo</button>
       <button class="btn-mini fleet-add-btn fleet-pin" data-fleet-pin data-tip="Default view|Make the GRID what the Fleet button opens. The orbit header has the same pin."></button>
       <button class="btn-mini fleet-add-btn" data-fleet-hub data-tip="Terminal hub|Open lucid hub in a new terminal window: this fleet as tmux-style panes (Fleet, Security, Sessions, Audit, Usage and a live agent pane), attached to this app. Also runs as lucid hub from any terminal.">${icon("terminal", 12)} Terminal</button>
-      <button class="btn-mini fleet-add-btn" data-fleet-add title="Spawn a new local lane">${icon("plus", 12)} Lane</button>
-      <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" title="Minimize (lanes keep running)">${UP_ARROW}</button>
-      <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" title="Close (lanes keep running)">${icon("close", 15)}</button>
+      <button class="btn-mini fleet-add-btn" data-fleet-add title="Spawn a new local spoke">${icon("plus", 12)} Spoke</button>
+      <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" title="Minimize (spokes keep running)">${UP_ARROW}</button>
+      <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" title="Close (spokes keep running)">${icon("close", 15)}</button>
     </div>
     <div class="share-dock-body fleet-body"><div class="fleet-grid" id="fleetGrid"></div></div>
     <div class="share-dock-rz n" data-dock-rz="n" aria-hidden="true"></div>
@@ -229,6 +243,7 @@ export function openFleetGrid(): void {
   </div>`);
   document.body.appendChild(dock);
   paintGridPin();
+  paintByRepo();
   applyShape();
   wireDrag();
   wireResize();
@@ -379,6 +394,27 @@ function applyOrder(grid: HTMLElement): void {
   // P-FLEET.L18: the flat order folds into GROUP sections (named groups first, ungrouped tail); within
   // a section the relative order is still layout.order, so drag-to-reorder semantics survive intact.
   const live = layout.order.filter((id) => runs.get(id)?.card);
+  // P-HUB-PICK.1 (ADR-0470): "By repo" sections the grid by codebase instead of by named group. A view, not
+  // an assignment: the named groups are kept and come back when it is turned off.
+  if (groupByRepo) {
+    const repoSecs = repoSections(live, (id) => { const r = runs.get(id); return r ? spokeRepo(r.view) : null; });
+    const rsig = `repo|${repoSecs.map((s) => `${s.repo.key}:${s.ids.join(",")}`).join("|")}`;
+    if (rsig === lastGroupSig && grid.querySelectorAll(".fleet-card[data-lane]").length === live.length) return;
+    lastGroupSig = rsig;
+    for (const d of grid.querySelectorAll(".fleet-group-head")) d.remove();
+    for (const s of repoSecs) {
+      grid.append(el(`<div class="fleet-group-head fleet-repo-head" style="--repo-hue:${s.repo.hue}" title="${esc(s.repo.key)}">
+        <span class="spoke-repo-tag">${esc(s.repo.name)}</span><span>${s.ids.length}</span>
+      </div>`));
+      for (const id of s.ids) {
+        const card = runs.get(id)?.card;
+        if (!card) continue;
+        card.classList.remove("grp-hidden");
+        grid.append(card);
+      }
+    }
+    return;
+  }
   const sections = groupSections(live, groups);
   // The change signature covers order, membership AND collapse - re-appending an unchanged card
   // restarts its state-glow animation (the pill lesson), so an unchanged frame must cost nothing.
@@ -390,9 +426,9 @@ function applyOrder(grid: HTMLElement): void {
     const closed = s.group !== null && !!groups.collapsed[s.group];
     if (s.group !== null) {
       grid.append(el(`<div class="fleet-group-head${closed ? " closed" : ""}" data-group="${esc(s.group)}">
-        <button class="fleet-grp-btn" data-grp-toggle="${esc(s.group)}" data-tip="${closed ? "Expand" : "Collapse"}|The lanes keep running either way; collapse only tidies the grid.">${icon("chevron", 11)}</button>
+        <button class="fleet-grp-btn" data-grp-toggle="${esc(s.group)}" data-tip="${closed ? "Expand" : "Collapse"}|The spokes keep running either way; collapse only tidies the grid.">${icon("chevron", 11)}</button>
         <b>${esc(s.group)}</b><span>${s.ids.length}</span>
-        <button class="fleet-grp-btn" data-grp-disband="${esc(s.group)}" data-tip="Disband group|Frees its lanes back to the ungrouped tail. Never touches the lanes themselves.">${icon("close", 11)}</button>
+        <button class="fleet-grp-btn" data-grp-disband="${esc(s.group)}" data-tip="Disband group|Frees its spokes back to the ungrouped tail. Never touches the spokes themselves.">${icon("close", 11)}</button>
       </div>`));
     }
     for (const id of s.ids) {
@@ -624,11 +660,11 @@ function paintPill(): void {
   if (box) {
     const html = roll.counts
       .map((c, i) => `<span class="fleet-pip lane-${c.status}" title="${esc(roll.lines[i] ?? "")}"><i aria-hidden="true"></i><b>${c.count}</b></span>`)
-      .join("") || `<span class="fleet-pip lane-idle" title="No lanes running"><i aria-hidden="true"></i><b>0</b></span>`;
+      .join("") || `<span class="fleet-pip lane-idle" title="No spokes running"><i aria-hidden="true"></i><b>0</b></span>`;
     if (box.innerHTML !== html) box.innerHTML = html;
   }
-  const tip = roll.lines.length ? roll.lines.join(" \u00b7 ") : "no lanes running";
-  pill.title = `LUCID Fleet - ${tip}. Click to reopen; lanes keep running either way.`;
+  const tip = roll.lines.length ? roll.lines.join(" \u00b7 ") : "no spokes running";
+  pill.title = `LUCID Fleet - ${tip}. Click to reopen; spokes keep running either way.`;
   pill.classList.toggle("live", roll.busy);
   pill.classList.toggle("attn", roll.attention);
 }
@@ -702,11 +738,11 @@ function paintHeadroom(hr: HTMLElement, res: FleetResources, laneCount: number):
     const over = held >= res.sustainMs;
     const c = over ? "var(--red)" : p >= line ? "var(--amber)" : "var(--green)";
     const hot = p >= line
-      ? `<span class="fleet-hr-hot${over ? " over" : ""}" title="${lbl} has held ${line}%+ for ${Math.round(held / 1000)}s. New lanes are refused at ${sustainS}s.">${Math.round(held / 1000)}s/${sustainS}s</span>`
+      ? `<span class="fleet-hr-hot${over ? " over" : ""}" title="${lbl} has held ${line}%+ for ${Math.round(held / 1000)}s. New spokes are refused at ${sustainS}s.">${Math.round(held / 1000)}s/${sustainS}s</span>`
       : "";
     return `${head}<span class="fleet-hr-bar" style="--wm:${line}%"><span class="fleet-hr-fill" style="width:${p}%;background:${c}"></span></span><span class="fleet-hr-val">${p}%</span>${hot}`;
   };
-  const lanes = `<span class="fleet-hr-lanes" title="Lanes running. There is no cap: a lane is refused only while CPU or memory stays at or above ${line}% for ${sustainS}s straight, so a burst never blocks you.">${laneCount} lane${laneCount === 1 ? "" : "s"}</span>`;
+  const lanes = `<span class="fleet-hr-lanes" title="Spokes running. There is no cap: a spoke is refused only while CPU or memory stays at or above ${line}% for ${sustainS}s straight, so a burst never blocks you.">${laneCount} spoke${laneCount === 1 ? "" : "s"}</span>`;
   hr.innerHTML = bar("CPU", res.cpuPct, res.cpuHotMs) + bar("MEM", res.memPct, res.memHotMs) + lanes;
 }
 
@@ -715,7 +751,7 @@ function paintEmpty(): void {
   const grid = $("#fleetGrid", dock) as HTMLElement | null; if (!grid) return;
   const empty = $(".fleet-empty", grid);
   const need = runs.size === 0 && !$(".fleet-spawn-card", grid);
-  if (need && !empty) grid.append(el(`<div class="fleet-empty">${icon("info", 13)}<span>No lanes yet - spawn one with + Lane. Each lane is a headless LUCID engine working its own folder.</span></div>`));
+  if (need && !empty) grid.append(el(`<div class="fleet-empty">${icon("info", 13)}<span>No spokes yet - spawn one with + Spoke. Each spoke is a headless LUCID engine working its own folder.</span></div>`));
   else if (!need && empty) empty.remove();
 }
 
@@ -729,24 +765,24 @@ const baseName = (p: string): string => p.replace(/[\\/]+$/, "").split(/[\\/]/).
 function buildCard(run: LaneRun): HTMLElement {
   return el(`<div class="fleet-card" data-lane="${esc(run.view.id)}">
     <div class="fleet-card-head">
-      <span class="fleet-grip" data-fleet-grip title="Drag to reorder this lane" aria-hidden="true"></span>
+      <span class="fleet-grip" data-fleet-grip title="Drag to reorder this spoke" aria-hidden="true"></span>
       <span class="fleet-led" aria-hidden="true"></span>
-      <span class="fleet-lane-name" data-fleet-name data-tip="Open in composer|Click the header to drive this lane from the full composer - the same takeover as clicking its spoke in the orbit. Drag the grip to reorder."></span>
-      <span class="fleet-cwd-chip" data-fleet-cwd></span>
-      <button class="fleet-grp-chip" data-fleet-grp data-tip="Group|File this lane under a named group on the grid. Presentation only - the lane's work is untouched."></button>
+      <span class="fleet-lane-name" data-fleet-name data-tip="Open in composer|Click the header to drive this spoke from the full composer - the same takeover as clicking its spoke in the orbit. Drag the grip to reorder."></span>
+      <span class="fleet-cwd-chip spoke-repo-tag" data-fleet-cwd></span>
+      <button class="fleet-grp-chip" data-fleet-grp data-tip="Group|File this spoke under a named group on the grid. Presentation only - the spoke's work is untouched."></button>
       <span class="fleet-usage" data-fleet-usage data-tone="ok" hidden></span>
       <span class="fleet-health" data-fleet-health data-health-action="quiet" hidden></span>
       <span class="fleet-quiet" data-fleet-quiet hidden></span>
       <span class="hud-ring lane-ring" data-lane-ring hidden data-tip="Progress|Working."><svg viewBox="0 0 22 22" width="15" height="15" aria-hidden="true"><circle class="hud-ring-track" cx="11" cy="11" r="8"/><circle class="hud-ring-arc" pathLength="100" cx="11" cy="11" r="8"/></svg></span>
-      <select class="fleet-model" data-fleet-model aria-label="Lane model"></select>
-      <button class="fleet-card-btn fleet-promote" data-fleet-promote aria-label="Drive this lane from the main composer" title="Promote: point the main composer at this lane" hidden>${icon("arrowRight", 12)}</button>
-      <button class="fleet-card-btn fleet-copy" data-fleet-copy aria-label="Copy this lane's transcript" title="Copy the whole transcript as plain text">${icon("copy", 12)}</button>
+      <select class="fleet-model" data-fleet-model aria-label="Spoke model"></select>
+      <button class="fleet-card-btn fleet-promote" data-fleet-promote aria-label="Drive this spoke from the main composer" title="Promote: point the main composer at this spoke" hidden>${icon("arrowRight", 12)}</button>
+      <button class="fleet-card-btn fleet-copy" data-fleet-copy aria-label="Copy this spoke's transcript" title="Copy the whole transcript as plain text">${icon("copy", 12)}</button>
       <button class="fleet-card-btn fleet-auto-btn" data-fleet-auto aria-label="Toggle full auto-mode" title="Full auto-mode: approve every ask automatically">${icon("bolt", 12)}</button>
-      <button class="fleet-card-btn" data-fleet-checkin aria-label="Check in on this lane" title="Check in: status, turns, last activity, queue depth">${icon("eye", 12)}</button>
-      <button class="fleet-card-btn" data-fleet-collapse aria-label="Collapse the lane card" title="Collapse (keeps the header)">${icon("minus", 12)}</button>
-      <button class="fleet-card-btn fleet-dismiss" data-fleet-stop aria-label="Stop this lane" title="Stop the lane">${icon("close", 12)}</button>
+      <button class="fleet-card-btn" data-fleet-checkin aria-label="Check in on this spoke" title="Check in: status, turns, last activity, queue depth">${icon("eye", 12)}</button>
+      <button class="fleet-card-btn" data-fleet-collapse aria-label="Collapse the spoke card" title="Collapse (keeps the header)">${icon("minus", 12)}</button>
+      <button class="fleet-card-btn fleet-dismiss" data-fleet-stop aria-label="Stop this spoke" title="Stop the spoke">${icon("close", 12)}</button>
     </div>
-    <button class="repo-chip fleet-repo" data-fleet-repo type="button" hidden aria-label="This lane's repository and push target"></button>
+    <button class="repo-chip fleet-repo" data-fleet-repo type="button" hidden aria-label="This spoke's repository and push target"></button>
     <div class="fleet-card-main">
       <div class="fleet-out-wrap">
         <div class="fleet-out" data-fleet-out>
@@ -769,7 +805,7 @@ function buildCard(run: LaneRun): HTMLElement {
         <span class="fleet-approve-txt" data-fleet-approve-txt></span>
         <span class="fleet-approve-acts">
           <button class="btn-mini ok" data-fleet-allow>${icon("check", 11)} Allow</button>
-          <button class="btn-mini ok" data-fleet-allow-session title="Approve this ask and every same-kind ask for the rest of this lane's session">${icon("check", 11)} Session</button>
+          <button class="btn-mini ok" data-fleet-allow-session title="Approve this ask and every same-kind ask for the rest of this spoke's session">${icon("check", 11)} Session</button>
           <button class="btn-mini danger" data-fleet-deny>${icon("close", 11)} Deny</button>
         </span>
       </div>
@@ -789,8 +825,8 @@ function buildCard(run: LaneRun): HTMLElement {
       <div class="fleet-queue" data-fleet-queue hidden></div>
       <div class="fleet-attach" data-fleet-attach hidden></div>
       <div class="fleet-compose">
-        <textarea class="fleet-input" rows="1" data-fleet-input placeholder="Prompt this lane\u2026" spellcheck="false"></textarea>
-        <button class="fleet-card-btn fleet-send" data-fleet-send aria-label="Send to this lane" title="Send">${icon("send", 13)}</button>
+        <textarea class="fleet-input" rows="1" data-fleet-input placeholder="Prompt this spoke\u2026" spellcheck="false"></textarea>
+        <button class="fleet-card-btn fleet-send" data-fleet-send aria-label="Send to this spoke" title="Send">${icon("send", 13)}</button>
         <button class="btn-mini danger fleet-cancel" data-fleet-cancel hidden>${icon("close", 11)} Cancel</button>
       </div>
     </div>
@@ -809,7 +845,7 @@ function paintRing(card: HTMLElement, p: ProgressView | null, at: number): void 
   const ring = $("[data-lane-ring]", card) as HTMLElement | null; if (!ring) return;
   ring.hidden = !p || p.liveness.state === "idle" || !statusRing();
   if (ring.hidden || !p) return;
-  const v = ringView(agedProgress(p, Math.max(0, Date.now() - at)), statusEta(), "Restart this lane");
+  const v = ringView(agedProgress(p, Math.max(0, Date.now() - at)), statusEta(), "Restart this spoke");
   ($(".hud-ring-arc", ring) as SVGCircleElement).style.strokeDashoffset = String(100 - Math.min(100, Math.max(0, v.pct ?? 0)));
   ring.dataset.tone = v.tone;
   ring.dataset.empty = v.pct === null ? "1" : "0";
@@ -893,12 +929,12 @@ function paintFrame(run: LaneRun): void {
       promote.dataset.on = on;
       promote.innerHTML = v.promoted ? icon("restore", 12) : icon("arrowRight", 12);
       const label = v.promoted
-        ? "Pull the main composer back off this lane"
-        : "Drive this lane from the main composer";
+        ? "Pull the main composer back off this spoke"
+        : "Drive this spoke from the main composer";
       promote.setAttribute("aria-label", label);
       promote.title = v.promoted
-        ? "The main composer is typing into this lane. Click to pull it back to the master agent; the lane keeps running either way."
-        : "Promote: point the main composer at this lane, even mid-turn. This card stays fully usable.";
+        ? "The main composer is typing into this spoke. Click to pull it back to the master agent; the spoke keeps running either way."
+        : "Promote: point the main composer at this spoke, even mid-turn. This card stays fully usable.";
     }
   }
   // P-FLEET.L10: the close button RELABELS with lane state, because the same glyph doing two different
@@ -909,11 +945,11 @@ function paintFrame(run: LaneRun): void {
     const gone = v.status === "stopped" ? "1" : "0";
     if (dismiss.dataset.gone !== gone) {
       dismiss.dataset.gone = gone;
-      const label = gone === "1" ? "Dismiss this lane" : "Stop this lane";
+      const label = gone === "1" ? "Dismiss this spoke" : "Stop this spoke";
       dismiss.setAttribute("aria-label", label);
       dismiss.title = gone === "1"
-        ? "Dismiss: remove this card from the grid. The lane's session history stays on disk and stays reviewable in the Timeline."
-        : "Stop the lane. The card stays so you can read it, and Respawn revives it in place. Click again once stopped to dismiss it.";
+        ? "Dismiss: remove this card from the grid. The spoke's session history stays on disk and stays reviewable in the Timeline."
+        : "Stop the spoke. The card stays so you can read it, and Respawn revives it in place. Click again once stopped to dismiss it.";
     }
   }
   const name = $("[data-fleet-name]", card) as HTMLElement | null;
@@ -922,7 +958,14 @@ function paintFrame(run: LaneRun): void {
     name.title = `${v.name || v.id} \u00b7 ${v.status} \u00b7 ${v.turns} turns${v.respawns ? ` \u00b7 respawned ${v.respawns}\u00d7, memory carried` : ""}`;
   }
   const cwd = $("[data-fleet-cwd]", card) as HTMLElement | null;
-  if (cwd) { cwd.textContent = baseName(v.cwd); cwd.title = v.cwd; }
+  // P-HUB-PICK.1 (ADR-0470): the codebase, not just the folder, in the same color as on the orbit and in
+  // the Hubs menu. The folder stays in the tooltip.
+  if (cwd) {
+    const sr = spokeRepo(v);
+    if (cwd.textContent !== sr.name) cwd.textContent = sr.name;
+    cwd.title = v.cwd;
+    if (card.style.getPropertyValue("--repo-hue") !== String(sr.hue)) card.style.setProperty("--repo-hue", String(sr.hue));
+  }
   // P-REPO.1 (ADR-0406): the repo this lane works in and where its commits go. Hidden until probed.
   const repo = $("[data-fleet-repo]", card) as HTMLElement | null;
   if (repo) { if (v.repo) paintRepoChip(repo, v.repo); else repo.hidden = true; }
@@ -944,7 +987,7 @@ function paintFrame(run: LaneRun): void {
     if (badge.pct !== null) {
       usage.dataset.tone = badge.tone;
       usage.textContent = `ctx ${badge.pct}%`;
-      usage.title = `${badge.label} - ${fmtTokens(run.meter.ctxTokens)} of ${fmtTokens(run.meter.ctxSize)} tokens, ${fmtUsd(run.meter.costUsd)} so far. Measured by this lane, not estimated.`;
+      usage.title = `${badge.label} - ${fmtTokens(run.meter.ctxTokens)} of ${fmtTokens(run.meter.ctxSize)} tokens, ${fmtUsd(run.meter.costUsd)} so far. Measured by this spoke, not estimated.`;
     }
   }
   // P-HEALTH.1: the harness probed or recovered this lane BY ITSELF - the user must see that a silent lane
@@ -957,8 +1000,8 @@ function paintFrame(run: LaneRun): void {
       health.dataset.healthAction = h.action;
       health.textContent = h.action === "probe" ? "probed" : "recovered";
       health.title = h.action === "probe"
-        ? `The harness asked this lane for a status because it went quiet: ${h.reason}`
-        : `The harness cancelled and resumed this lane in place: ${h.reason}`;
+        ? `The harness asked this spoke for a status because it went quiet: ${h.reason}`
+        : `The harness cancelled and resumed this spoke in place: ${h.reason}`;
     }
   }
   paintProgress(run); // P-PROGRESS.1
@@ -973,7 +1016,7 @@ function paintFrame(run: LaneRun): void {
       const secs = Math.round(quietMs / 1000);
       const open = v.openCalls > 0 ? ` ${v.openCalls} tool call${v.openCalls === 1 ? "" : "s"} are still out, which is why the harness is waiting rather than probing.` : "";
       quiet.textContent = m >= 1 ? `quiet ${m}m` : `quiet ${secs}s`;
-      quiet.title = `Nothing has streamed for ${secs}s. Long turns run to completion (no lane clock) - Cancel is yours whenever you want it.${open}`;
+      quiet.title = `Nothing has streamed for ${secs}s. Long turns run to completion (no spoke clock) - Cancel is yours whenever you want it.${open}`;
     }
   }
   const sel = $("[data-fleet-model]", card) as HTMLSelectElement | null;
@@ -992,7 +1035,7 @@ function paintFrame(run: LaneRun): void {
   if (ap) {
     ap.hidden = v.status !== "needs-approval";
     const txt = $("[data-fleet-approve-txt]", card) as HTMLElement | null;
-    if (txt) { const s = v.pendingApproval?.summary ?? "The lane asks to run a gated action."; txt.textContent = s; txt.title = v.pendingApproval?.kind ? `${s} (${v.pendingApproval.kind})` : s; }
+    if (txt) { const s = v.pendingApproval?.summary ?? "The spoke asks to run a gated action."; txt.textContent = s; txt.title = v.pendingApproval?.kind ? `${s} (${v.pendingApproval.kind})` : s; }
   }
   // P-FLEET.L4: error is a state, not a grave. Retry re-sends the last prompt (error lanes with one);
   // Respawn revives in place. A user-STOPPED lane gets Respawn only - stopping was a decision.
@@ -1003,8 +1046,8 @@ function paintFrame(run: LaneRun): void {
     if (show) {
       const txt = $("[data-fleet-recover-txt]", card) as HTMLElement | null;
       const msg = v.status === "error"
-        ? "The lane failed. Retry re-sends the last prompt; either way its memory is carried."
-        : "Lane stopped. Respawn revives it in place with its memory.";
+        ? "The spoke failed. Retry re-sends the last prompt; either way its memory is carried."
+        : "Spoke stopped. Respawn revives it in place with its memory.";
       if (txt) { txt.textContent = msg; txt.title = msg; }
       const retry = $("[data-fleet-retry]", card) as HTMLButtonElement | null;
       if (retry) retry.hidden = v.status !== "error" || !v.canRetry;
@@ -1029,13 +1072,13 @@ function paintFrame(run: LaneRun): void {
     // thought is exactly what the user wants to do while a compact card streams.
     const staging = run.streaming || v.status === "working" || v.status === "needs-approval";
     send.disabled = v.status === "stopped";
-    send.title = staging ? "Stage for later - runs in order when this lane goes idle" : "Send";
+    send.title = staging ? "Stage for later - runs in order when this spoke goes idle" : "Send";
     send.classList.toggle("staging", staging);
   }
   const input = $("[data-fleet-input]", card) as HTMLTextAreaElement | null;
   if (input) {
     input.disabled = v.status === "stopped";
-    input.placeholder = run.streaming || v.status === "working" ? "Stage the next prompt\u2026" : "Prompt this lane\u2026";
+    input.placeholder = run.streaming || v.status === "working" ? "Stage the next prompt\u2026" : "Prompt this spoke\u2026";
   }
 }
 
@@ -1183,9 +1226,9 @@ function liveCopy(run: LaneRun): { text: string; thinking?: string; tools: reado
 }
 
 function idleLabel(run: LaneRun): string {
-  if (run.view.status === "starting") return "Starting the lane\u2026";
-  if (run.view.status === "stopped") return "Lane stopped.";
-  return "No output yet - prompt this lane below.";
+  if (run.view.status === "starting") return "Starting the spoke\u2026";
+  if (run.view.status === "stopped") return "Spoke stopped.";
+  return "No output yet - prompt this spoke below.";
 }
 
 /** APPEND newly-settled turns. Existing turn nodes are not read, not diffed and not rewritten: the node
@@ -1485,7 +1528,7 @@ function runRespawn(run: LaneRun): void {
   void deps.fleetRespawn(run.view.id)
     .then((r) => {
       if (r?.ok && r.lane) { run.view = r.lane; paintFrame(run); paintOutput(run); paintPill(); return; }
-      setLaneNote(run, r?.reason ?? "the lane could not be restarted");
+      setLaneNote(run, r?.reason ?? "the spoke could not be restarted");
       void refresh();
     })
     .catch(() => { /* the next poll corrects it */ });
@@ -1511,7 +1554,7 @@ async function dismissLane(run: LaneRun): Promise<void> {
   if (r && !r.ok) {
     // The only refusal is a live turn, and it names the fix. Surface it rather than failing silently:
     // a close button that does nothing is indistinguishable from a broken one.
-    setLaneNote(run, r.reason ?? "that lane could not be dismissed");
+    setLaneNote(run, r.reason ?? "that spoke could not be dismissed");
     return;
   }
   run.follow?.stop();
@@ -1603,12 +1646,12 @@ function toggleSpawnForm(): void {
     <div class="fleet-card-head">
       <span class="fleet-led" aria-hidden="true"></span>
       <span class="fleet-lane-name">New lane</span>
-      <button class="fleet-card-btn" data-spawn-cancel aria-label="Close the new-lane form" title="Close">${icon("close", 12)}</button>
+      <button class="fleet-card-btn" data-spawn-cancel aria-label="Close the new-spoke form" title="Close">${icon("close", 12)}</button>
     </div>
     <div class="fleet-spawn">
       <label class="fleet-spawn-lbl" data-spawn-cwd-lbl>Folder</label>
       <div class="fleet-spawn-row">
-        <input class="fleet-spawn-in" data-spawn-cwd type="text" value="${esc(deps.getMasterCwd())}" spellcheck="false" aria-label="The folder this lane works in" />
+        <input class="fleet-spawn-in" data-spawn-cwd type="text" value="${esc(deps.getMasterCwd())}" spellcheck="false" aria-label="The folder this spoke works in" />
         <button class="btn-mini fleet-browse" data-spawn-browse title="Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button>
       </div>
       ${repoPickerHtml()}
@@ -1622,11 +1665,11 @@ function toggleSpawnForm(): void {
         <input class="fleet-spawn-in" data-spawn-pat type="password" autocomplete="off" spellcheck="false" aria-label="Personal access token for this repository host" placeholder="Personal access token (private repos)" />
         <label class="fleet-spawn-save"><input type="checkbox" data-spawn-save checked /><span data-spawn-save-txt>Remember this token for this host</span></label>
       </div>
-      <label class="fleet-spawn-save fleet-spawn-wt" title="The worktree is created next to the repo, starts at its last commit (uncommitted edits in this folder are not copied), and is kept when the lane closes."><input type="checkbox" data-spawn-wt /><span>Own worktree: this lane gets a new branch and its own copy of the repo, so it runs beside other agents here. I accept that merging it back can conflict.</span></label>
+      <label class="fleet-spawn-save fleet-spawn-wt" title="The worktree is created next to the repo, starts at its last commit (uncommitted edits in this folder are not copied), and is kept when the spoke closes."><input type="checkbox" data-spawn-wt /><span>Own worktree: this lane gets a new branch and its own copy of the repo, so it runs beside other agents here. I accept that merging it back can conflict.</span></label>
       <label class="fleet-spawn-lbl">Name <span class="fleet-spawn-opt">optional</span></label>
-      <input class="fleet-spawn-in" data-spawn-name type="text" placeholder="lane-${runs.size + 1}" spellcheck="false" aria-label="A name for this lane" />
+      <input class="fleet-spawn-in" data-spawn-name type="text" placeholder="spoke-${runs.size + 1}" spellcheck="false" aria-label="A name for this spoke" />
       <label class="fleet-spawn-lbl">Model</label>
-      <select class="fleet-spawn-in" data-spawn-model aria-label="The model this lane runs">${opts}</select>
+      <select class="fleet-spawn-in" data-spawn-model aria-label="The model this spoke runs">${opts}</select>
       <div class="fleet-spawn-err" data-spawn-err hidden></div>
       <div class="fleet-spawn-acts"><button class="btn-mini ok" data-spawn-go>${icon("bolt", 12)} Spawn</button></div>
     </div>
@@ -1677,7 +1720,7 @@ function revealPathEnd(input: HTMLInputElement | null): void {
 async function browseSpawnFolder(): Promise<void> {
   if (!dock || !deps) return;
   const form = $(".fleet-spawn-card", dock) as HTMLElement | null; if (!form) return;
-  const picked = await deps.pickFolder({ title: "Choose or create the folder this lane works in", confirm: "Use this folder" }).catch(() => null);
+  const picked = await deps.pickFolder({ title: "Choose or create the folder this spoke works in", confirm: "Use this folder" }).catch(() => null);
   if (!picked) return;
   const input = $("[data-spawn-cwd]", form) as HTMLInputElement | null;
   if (input) input.value = picked;
@@ -1731,7 +1774,7 @@ async function submitSpawn(): Promise<void> {
   const fail = (msg: string): void => { if (err) { err.textContent = msg; err.hidden = false; } };
   const remote = repoRaw ? parseGitRemote(repoRaw) : null;
   if (repoRaw && !remote) { fail("That is not a repo URL. Paste an https:// link, or a git@host:org/repo remote."); return; }
-  if (!repoRaw && !cwd) { fail("Pick the folder the lane works in, or paste a repo URL to clone."); return; }
+  if (!repoRaw && !cwd) { fail("Pick the folder the spoke works in, or paste a repo URL to clone."); return; }
   const go = $("[data-spawn-go]", form) as HTMLButtonElement | null;
   const goHtml = go?.innerHTML ?? "";
   if (err) err.hidden = true;
@@ -1768,7 +1811,7 @@ async function submitSpawn(): Promise<void> {
   if (go) { go.disabled = false; go.innerHTML = goHtml; }
   // A refusal carries the measured numbers ("system CPU has been at 93% for 34s") or the redacted git
   // failure - show it verbatim, it is the whole point of the guard.
-  fail([warn, r?.reason || "The engine refused the lane."].filter(Boolean).join(" "));
+  fail([warn, r?.reason || "The engine refused the spoke."].filter(Boolean).join(" "));
 }
 
 // ---------------------------------------------------------------- delegated events
@@ -1819,6 +1862,15 @@ function onClick(ev: Event): void {
   const hubBtn = t.closest("[data-fleet-hub]") as HTMLButtonElement | null;
   if (hubBtn) { void openHubFrom(hubBtn, () => deps?.hubOpen()); return; }
   if (t.closest("[data-fleet-pin]")) { setFleetHome("grid"); paintGridPin(); return; }
+  if (t.closest("[data-fleet-byrepo]")) { // P-HUB-PICK.1 (ADR-0470)
+    groupByRepo = !groupByRepo;
+    storage().set(FLEET_BY_REPO_KEY, groupByRepo ? "1" : "0");
+    paintByRepo();
+    lastGroupSig = "";
+    const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
+    if (grid) applyOrder(grid);
+    return;
+  }
   // P-FLEET.L18: group divider controls + the per-card group chip.
   const gt = t.closest("[data-grp-toggle]") as HTMLElement | null;
   if (gt) {
@@ -1948,7 +2000,7 @@ function onClick(ev: Event): void {
     void deps.interject(run.view.id, item.text, { live: true }).then((r) => {
       if (r.ok) { void deps?.fleetQueueRemove(run.view.id, i).catch(() => { /* the next poll corrects it */ }); return; }
       void refresh(); // repaint the chip the optimistic removal hid
-      setLaneNote(run, `Not pushed: ${r.reason}. It stays staged and runs as this lane's next prompt.`);
+      setLaneNote(run, `Not pushed: ${r.reason}. It stays staged and runs as this spoke's next prompt.`);
     });
     return;
   }

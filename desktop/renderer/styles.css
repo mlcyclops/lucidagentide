@@ -6459,6 +6459,31 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-hubrow-lanes .fleet-pip{font-size:11px;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis}
 .orbit-btn.waiting .orbit-ghost-n{color:var(--amber-txt,var(--amber));background:rgb(var(--amber-rgb) / .14)}
 
+/* P-HUB-PICK.1 (ADR-0470): one codebase tag everywhere (orbit node, grid card, Hubs menu, spoke switch menu),
+   colored by a hue derived from the repo identity, so two spokes on different codebases never read alike.
+   A single text child, never wraps. */
+.spoke-repo-tag{--rh:var(--repo-hue,220);flex:0 1 auto;min-width:0;max-width:150px;display:inline-block;
+  padding:1px 6px;border-radius:5px;font-family:var(--mono);font-size:9.5px;font-weight:600;line-height:1.5;
+  color:hsl(var(--rh) 75% 72%);background:hsl(var(--rh) 60% 50% / .14);border:1px solid hsl(var(--rh) 60% 55% / .38);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+:root[data-theme="lucid-light"] .spoke-repo-tag{color:hsl(var(--rh) 65% 32%);background:hsl(var(--rh) 60% 50% / .12)}
+.spoke-repo-tag:empty{display:none}
+.fleet-cwd-chip.spoke-repo-tag{max-width:132px}
+.orbit-meta .spoke-repo-tag{flex:0 0 auto;max-width:70%}
+.orbit-meta .orbit-model{flex:1 1 0}
+.orbit-node-card{box-shadow:var(--shadow-sm),inset 3px 0 0 hsl(var(--repo-hue,220) 60% 55% / .55)}
+.orbit-hubpick{max-width:260px}
+.orbit-hubpick-l{min-width:0;max-width:170px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orbit-hubpick .ic:last-child{flex:none;transform:rotate(90deg);opacity:.7}
+.orbit-hubrow.current{background:color-mix(in srgb,var(--accent) 9%,transparent)}
+.orbit-hubrow-repos,.spoke-sw-repos{display:flex;flex-wrap:wrap;gap:4px;padding:0 9px 5px}
+.spoke-sw-repos{padding:0 10px 6px 33px}
+.orbit-hubrow-lanes .fleet-pip i{box-shadow:0 0 0 2px hsl(var(--repo-hue,220) 60% 55% / .45)}
+.spoke-sw-sec{padding:4px 10px 2px;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--txt-4)}
+.spoke-sw-row .spoke-repo-tag{flex:0 1 auto;max-width:120px}
+.fleet-group-head.fleet-repo-head{border-bottom-color:hsl(var(--repo-hue,220) 60% 55% / .45)}
+.fleet-group-head.fleet-repo-head .spoke-repo-tag{font-size:10.5px;color:hsl(var(--repo-hue,220) 75% 72%)}
+
 /* P-FLEET.L17: the grid card header is now a takeover surface too (click = the orbit's spoke click;
    the grip alone keeps the reorder gesture). The pointer cursor says so; controls override it. */
 .fleet-card[data-lane] .fleet-card-head{cursor:pointer}

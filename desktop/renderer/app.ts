@@ -494,7 +494,7 @@ function buildShell(): void {
             <button class="ctool ctool-icon" id="ctVoice" data-tip="Voice - read aloud|Choose the speech engine and voice, and switch on auto-speak to have replies read to you as they stream.">${icon("volume", 15)}</button>
             <!-- P-FLEET.L1/L17: the fleet - headless local engine lanes. Opens the hub-and-spoke ORBIT map;
                  the classic grid of mini agent windows is one click away inside it. -->
-            <button class="ctool ctool-icon" id="ctFleet" data-tip="LUCID Fleet - hub &amp; spoke|Your lanes as spokes around the Main hub. Click a spoke to drive it from the full composer; the classic grid is one click away.">${icon("bolt", 15)}</button>
+            <button class="ctool ctool-icon" id="ctFleet" data-tip="LUCID Fleet - hub &amp; spoke|Your spokes around the Main hub. Click a spoke to drive it from the full composer; the classic grid is one click away.">${icon("bolt", 15)}</button>
             <!-- P-CONNUI.1 (ADR-0368): the connection affordance for a session with NOTHING at stake.
                  A failed startup status probe used to paint a paragraph into an empty thread ("Connection
                  unavailable: signal timed out. Reconnect to check session status before sending."), which
@@ -504,7 +504,7 @@ function buildShell(): void {
                  a turn that may still be running. -->
             <button class="ctool ctool-icon ctool-warn" id="ctReconnect" hidden data-tip="Reconnect|LUCID could not reach its engine to check for an active session. Nothing was lost. Click to retry.">${icon("refresh", 15)}</button>
             <!-- P-FLEET.L5: the reviewable timeline - every session (chats, lanes, ingest) across every workspace. -->
-            <button class="ctool ctool-icon" id="ctTimeline" data-tip="Timeline - review any session|Every conversation this machine has had - master chats, fleet lanes, imports - on one chronological, reviewable surface.">${icon("clock", 15)}</button>
+            <button class="ctool ctool-icon" id="ctTimeline" data-tip="Timeline - review any session|Every conversation this machine has had - master chats, fleet spokes, imports - on one chronological, reviewable surface.">${icon("clock", 15)}</button>
             <!-- Visible only while a reply is being spoken: a live indicator with a one-click stop. -->
             <!-- P-VOICE.4 (ADR-0248): a live spectrum analyser of the agent's actual voice - segmented LEDs
                  with hanging peak caps. Pops out into a draggable "LUCID Agent [Voice]" panel. -->
@@ -2134,7 +2134,7 @@ function renderStartupFailed(container: HTMLElement, reason?: string): void {
  *  app; only a refusal needs words here, with the engine's own reason. */
 async function openTerminalHub(): Promise<void> {
   const r = await bridge.hubOpen().catch(() => null);
-  if (r?.ok) showToast({ title: "Terminal hub opened", desc: "It is attached to this app: the Fleet deck shows these same lanes. Next time you can also type lucid hub in any terminal.", timeout: 4200 });
+  if (r?.ok) showToast({ title: "Terminal hub opened", desc: "It is attached to this app: the Fleet deck shows these same spokes. Next time you can also type lucid hub in any terminal.", timeout: 4200 });
   else showToast({ tone: "warn", title: "Terminal hub not opened", desc: r?.reason ?? "The engine did not answer.", timeout: 8000 });
 }
 
@@ -3305,7 +3305,7 @@ async function promoteLane(laneId: string): Promise<void> {
     // The engine refuses through composer_target.promoteRefusal, so its wording is shown verbatim. An
     // ABSENT reason is the module's own "did not report a status" case, not a sentence invented here;
     // promoteRefusal returns null only for a status that ALLOWS promotion, which "" is not.
-    showToast({ tone: "warn", title: "Can't attach to this lane", desc: r?.reason ?? promoteRefusal("")!, actions: [{ label: "OK" }], timeout: 8000 });
+    showToast({ tone: "warn", title: "Can't attach to this spoke", desc: r?.reason ?? promoteRefusal("")!, actions: [{ label: "OK" }], timeout: 8000 });
     void recoverMasterTurn();
     return;
   }
@@ -3373,7 +3373,7 @@ function demoteLane(): void {
     state.queuedItems = state.queuedItems.filter((q) => q.mode !== "hold"); renderQueued();
     const ta = $("#input") as HTMLTextAreaElement | null;
     if (ta && !ta.value.trim()) { ta.value = held.item.text; autosize(ta); setSendEnabled(); }
-    showToast({ tone: "warn", title: "Staged prompt not sent", desc: "It was waiting for the lane's turn to end. It is back in the composer; reattach the lane to send it there.", timeout: 7000 });
+    showToast({ tone: "warn", title: "Staged prompt not sent", desc: "It was waiting for the spoke's turn to end. It is back in the composer; reattach the spoke to send it there.", timeout: 7000 });
   }
   // Leaving mid-turn: freeze the half-written bubble rather than stranding it in a "running" state that
   // no further event will ever settle.
@@ -3387,7 +3387,7 @@ function demoteLane(): void {
   void bridge.fleetDemote().then((r) => {
     if (r?.ok) return;
     // The composer has already detached; the fleet card may still paint as attached until it reconciles.
-    showToast({ tone: "warn", title: "The lane still shows as attached", desc: "The composer is back on the main chat, but the fleet did not confirm the release. It will reconcile on the next fleet poll.", actions: [{ label: "OK" }], timeout: 6000 });
+    showToast({ tone: "warn", title: "The spoke still shows as attached", desc: "The composer is back on the main chat, but the fleet did not confirm the release. It will reconcile on the next fleet poll.", actions: [{ label: "OK" }], timeout: 6000 });
   }).catch(() => { /* best-effort: fleetDemote is idempotent and the next poll reconciles */ });
   swapAttachments(was, MASTER_TARGET);
   state.composerTarget = MASTER_TARGET;
@@ -3915,7 +3915,7 @@ async function openJobsSheet(): Promise<void> {
     const cron = readCron();
     if (!cron) { if (err) err.textContent = "Pick a valid time, day set, or cron expression."; return; }
     const t = tlist.find((x) => x.laneId === String(fd.get("target")));
-    if (!t) { if (err) err.textContent = "Pick a lane (spawn one in Fleet first)."; return; }
+    if (!t) { if (err) err.textContent = "Pick a spoke (spawn one in Fleet first)."; return; }
     const spec = {
       name: String(fd.get("name") ?? ""), prompt: String(fd.get("prompt") ?? ""), cron,
       target: { laneId: t.laneId, name: t.name, cwd: t.cwd, model: t.model, repo: t.repo },
@@ -3937,7 +3937,7 @@ async function openJobsSheet(): Promise<void> {
     const arm = t.closest("[data-job-arm]") as HTMLElement | null;
     if (arm) { void bridge.jobsUpdate(arm.dataset.jobArm!, { armed: arm.dataset.armTo === "1" }).then(redraw); return; }
     const run = t.closest("[data-job-run]") as HTMLElement | null;
-    if (run) { void bridge.jobsRun(run.dataset.jobRun!).then((r) => { showToast(r?.started ? { title: "Job started", desc: "Watch the lane in Fleet.", actions: [{ label: "OK" }], timeout: 3000 } : { tone: "warn", title: "Job not started", desc: "It may be running already.", actions: [{ label: "OK" }], timeout: 4000 }); return redraw(); }); return; }
+    if (run) { void bridge.jobsRun(run.dataset.jobRun!).then((r) => { showToast(r?.started ? { title: "Job started", desc: "Watch the spoke in Fleet.", actions: [{ label: "OK" }], timeout: 3000 } : { tone: "warn", title: "Job not started", desc: "It may be running already.", actions: [{ label: "OK" }], timeout: 4000 }); return redraw(); }); return; }
     const hist = t.closest("[data-job-hist]") as HTMLElement | null;
     if (hist) { const box = hist.closest(".job-row")?.querySelector(".job-hist") as HTMLElement | null; if (box) { box.hidden = !box.hidden; hist.setAttribute("aria-expanded", String(!box.hidden)); } return; }
     const del = t.closest("[data-job-del]") as HTMLElement | null;
@@ -9607,7 +9607,7 @@ async function captureCurrentPreview(): Promise<void> {
   const frame = laneFrame();
   const path = prevPathByLane[prevLane] ?? "";
   if (!frame || !path) {
-    showToast({ tone: "danger", title: "Capture", desc: "Open a local page in this lane first.", actions: [{ label: "OK" }], timeout: 4200 });
+    showToast({ tone: "danger", title: "Capture", desc: "Open a local page in this spoke first.", actions: [{ label: "OK" }], timeout: 4200 });
     return;
   }
   const btn = $("#prevCapture") as HTMLButtonElement | null;
