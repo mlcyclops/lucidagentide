@@ -54,7 +54,7 @@ import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
 
 /** The seven lane functions, typed straight off the bridge so the seam can never drift (results are
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
-type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject" | "stopCall" | "repoChoices" | "repoGithub">;
+type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueueTake" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject" | "stopCall" | "repoChoices" | "repoGithub">;
 type FleetResources = FleetStatusView["resources"];
 
 export interface FleetGridDeps extends FleetFns {
@@ -1017,7 +1017,11 @@ function paintFrame(run: LaneRun): void {
   if (q) {
     q.hidden = v.queued.length === 0;
     const html = v.queued
-      .map((item, i) => `<span class="fleet-q-chip"><b>${i + 1}</b><span class="fleet-q-txt" title="${esc(item.text)}">${esc(item.text)}${item.images ? ` [${item.images} img]` : ""}</span><button class="fleet-q-btn fleet-q-push" data-q-go="${i}" title="Push now - interject this into the running turn instead of waiting" aria-label="Push staged prompt ${i + 1} into the running turn now">Push now</button><button class="fleet-q-btn" data-q-up="${i}" title="Run earlier" aria-label="Move staged prompt ${i + 1} up" ${i === 0 ? "disabled" : ""}>\u2191</button><button class="fleet-q-btn" data-q-dn="${i}" title="Run later" aria-label="Move staged prompt ${i + 1} down" ${i === v.queued.length - 1 ? "disabled" : ""}>\u2193</button><button class="fleet-q-btn" data-q-x="${i}" title="Remove" aria-label="Remove staged prompt ${i + 1}">\u00d7</button></span>`)
+      .map((item, i) => `<span class="fleet-q-chip"><b>${i + 1}</b><span class="fleet-q-txt" title="${esc(item.text)}">${esc(item.text)}</span>${item.images ? `<span class="fleet-q-img" title="${item.images} image${item.images === 1 ? "" : "s"} ride with this prompt">${item.images} img</span>` : ""}<button class="fleet-q-btn fleet-q-edit" data-q-edit="${i}" title="Update - pull this prompt and its images back into the composer to edit" aria-label="Update staged prompt ${i + 1}">Update</button>${item.images
+        // P-QUEUE-IMG.1 (ADR-0469): an interject is text only, so a prompt carrying images never pushes; it
+        // runs with them as the lane's next turn. The button stays visible and says why.
+        ? `<button class="fleet-q-btn fleet-q-push" data-q-go="${i}" aria-disabled="true" title="Push now is text only - this prompt carries images, so it runs with them as the lane's next turn" aria-label="Push now unavailable for staged prompt ${i + 1}: it carries images">Push now</button>`
+        : `<button class="fleet-q-btn fleet-q-push" data-q-go="${i}" title="Push now - interject this into the running turn instead of waiting" aria-label="Push staged prompt ${i + 1} into the running turn now">Push now</button>`}<button class="fleet-q-btn" data-q-up="${i}" title="Run earlier" aria-label="Move staged prompt ${i + 1} up" ${i === 0 ? "disabled" : ""}>\u2191</button><button class="fleet-q-btn" data-q-dn="${i}" title="Run later" aria-label="Move staged prompt ${i + 1} down" ${i === v.queued.length - 1 ? "disabled" : ""}>\u2193</button><button class="fleet-q-btn" data-q-x="${i}" title="Remove" aria-label="Remove staged prompt ${i + 1}">\u00d7</button></span>`)
       .join("");
     if (q.innerHTML !== html) q.innerHTML = html;
   }
@@ -1397,6 +1401,46 @@ function sendPrompt(run: LaneRun): void {
   void deps.fleetPrompt(id, text, (e) => onLaneEvent(id, e), images)
     .catch((err: unknown) => onLaneEvent(id, { type: "error", message: err instanceof Error ? err.message : String(err) }))
     .finally(() => { run.streaming = false; foldPending(run); paintFrame(run); paintOutput(run); paintPill(); maybeDrain(run); });
+}
+
+/** P-QUEUE-IMG.1 (ADR-0469): Update on a staged chip. The manager hands back the item's FULL text and its
+ *  own images (the poll only carries a clipped preview and a count) and they load into this card's
+ *  composer: the image strip shows them removable, paste adds more, and Send/Stage uses the edited prompt
+ *  (a re-stage appends; the manager queue has no item ids to anchor a slot to). A draft in the card
+ *  composer, text or images, is never overwritten: the Update is refused with a note. */
+function editStaged(run: LaneRun, i: number): void {
+  if (!deps) return;
+  const input = run.card ? ($("[data-fleet-input]", run.card) as HTMLTextAreaElement | null) : null;
+  if (!input) return;
+  if (input.value.trim() || run.attached.length) { setLaneNote(run, "Update never overwrites a draft. Send, stage or clear this lane's composer, then press Update."); return; }
+  if (!run.view.queued[i]) return;
+  const id = run.view.id;
+  run.view.queued = run.view.queued.filter((_, n) => n !== i); // optimistic; the poll is truth
+  paintFrame(run);
+  void deps.fleetQueueTake(id, i).then((r) => {
+    if (!r?.ok || !r.item) { void refresh(); setLaneNote(run, `Not updated: ${r?.reason ?? "the engine did not answer"}.`); return; }
+    const item = r.item;
+    // Typed or pasted into while the take was in flight: the item is already out of the manager queue, so
+    // it goes back on the end of it rather than over the new draft.
+    if (input.value.trim() || run.attached.length) {
+      void deps?.fleetQueueAdd(id, item.text, item.images).then((a) => {
+        void refresh();
+        if (a?.ok) { setLaneNote(run, "Your composer got a draft first, so the staged prompt went back on the end of the queue."); return; }
+        // Could not re-stage either: the composer is the only place left, so it is added after the draft.
+        input.value = [input.value.trim(), item.text].filter(Boolean).join("\n\n");
+        run.attached = [...run.attached, ...item.images].slice(0, 6);
+        paintAttach(run);
+        setLaneNote(run, `Could not re-stage it (${a?.reason ?? "no answer"}), so it was added after your draft in the composer.`);
+      });
+      return;
+    }
+    input.value = item.text;
+    input.style.height = "auto";
+    input.style.height = `${Math.min(64, input.scrollHeight)}px`;
+    run.attached = item.images.slice();
+    paintAttach(run);
+    input.focus();
+  }).catch(() => { void refresh(); });
 }
 
 /** P-FLEET.L3: run the next STAGED prompt when the lane is idle - streamed into the card like any turn.
@@ -1940,6 +1984,7 @@ function onClick(ev: Event): void {
   if (qgo) {
     const i = Number(qgo.dataset.qGo);
     const item = run.view.queued[i]; if (!item) return;
+    if (item.images) { setLaneNote(run, "Push now is text only. This prompt carries images, so it stays staged and runs with them as the lane's next turn."); return; }
     run.view.queued = run.view.queued.filter((_, n) => n !== i); // optimistic; the poll is truth
     paintFrame(run);
     // ADR-0414: the staged prompt leaves the lane's queue only once the push is accepted. A refused push
@@ -1952,6 +1997,8 @@ function onClick(ev: Event): void {
     });
     return;
   }
+  const qed = t.closest("[data-q-edit]") as HTMLElement | null;
+  if (qed) { editStaged(run, Number(qed.dataset.qEdit)); return; }
   // P-FLEET.L3: the pasted-image strip and the staged-prompt chips.
   const ax = t.closest("[data-attach-x]") as HTMLElement | null;
   if (ax) { run.attached.splice(Number(ax.dataset.attachX), 1); paintAttach(run); return; }

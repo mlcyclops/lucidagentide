@@ -173,15 +173,86 @@ export function settleDone(kinetic: number, count: number, frames: number, grace
 /** The minimal body the force step needs - graph.ts SimNodes satisfy it structurally. */
 export interface SimBody { x: number; y: number; vx: number; vy: number; r: number }
 
+// ───────────── P-KG-FLAT.1 (ADR-0471): a readable flat view for big graphs ─────────────
+
+/** Squared-distance floor for the charge force (6 px): stacked nodes separate instead of exploding. */
+export const MIN_D2 = 36;
+/** Per-frame speed cap (px): the sim can never fling a node across the canvas in one step. */
+export const MAX_SPEED = 24;
+/** Centering multiplier for unlinked nodes in a linked graph, so isolates ring the core, not the horizon. */
+export const ISOLATE_GRAVITY = 4;
+/** Sunflower-seed spacing (px) for a cold mount: about the distance the charge and springs settle at. */
+export const SEED_SPACING = 34;
+
+/** Cold-mount placement order: a BFS from the busiest node of each component (busiest components
+ *  first), so linked nodes start next to each other on the seed spiral, then the unlinked nodes last so
+ *  they start on the rim. Iterative; returns a permutation of 0..n-1. `counts` breaks ties (busier
+ *  first) and picks each component's root. */
+export function seedOrder(n: number, springs: ReadonlyArray<readonly [number, number]>, counts: ReadonlyArray<number>): number[] {
+  const adj: number[][] = Array.from({ length: n }, () => []);
+  for (const [a, b] of springs) { if (a === b || a >= n || b >= n) continue; adj[a]!.push(b); adj[b]!.push(a); }
+  const busiest = [...Array(n).keys()].sort((a, b) => (counts[b] ?? 0) - (counts[a] ?? 0) || a - b);
+  const seen = new Uint8Array(n), out: number[] = [];
+  for (const root of busiest) {
+    if (seen[root] || adj[root]!.length === 0) continue;
+    seen[root] = 1;
+    const queue = [root];
+    for (let h = 0; h < queue.length; h++) {
+      const u = queue[h]!; out.push(u);
+      for (const v of adj[u]!) if (!seen[v]) { seen[v] = 1; queue.push(v); }
+    }
+  }
+  for (const i of busiest) if (!seen[i]) out.push(i);
+  return out;
+}
+
+/** The k-th point of a sunflower (golden-angle) spiral around (cx, cy): even density, no two points
+ *  closer than about `spacing`, so a cold mount starts near rest instead of in a 130 px ring. */
+export function spiralPoint(k: number, cx: number, cy: number, spacing = SEED_SPACING): { x: number; y: number } {
+  const a = k * Math.PI * (3 - Math.sqrt(5)), r = spacing * Math.sqrt(k + 0.5);
+  return { x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r };
+}
+
+/** Fit box that ignores the outermost `trim` share of nodes on each axis once a graph is big enough
+ *  (> 60 nodes): a handful of stragglers no longer shrink the whole graph to dust. `pad` keeps node
+ *  radii and labels inside. Small graphs and explicit subsets (search matches) keep the exact box. */
+export function robustBox(bodies: ReadonlyArray<{ x: number; y: number; r: number }>, trim = 0.02, pad = 24): FitBox | null {
+  if (!bodies.length) return null;
+  const t = bodies.length > 60 ? trim : 0;
+  const xs = bodies.map((b) => b.x).sort((a, b) => a - b), ys = bodies.map((b) => b.y).sort((a, b) => a - b);
+  const at = (arr: number[], p: number): number => arr[Math.min(arr.length - 1, Math.max(0, Math.floor(p * (arr.length - 1))))]!;
+  const rMax = bodies.reduce((m, b) => Math.max(m, b.r), 0);
+  return { minX: at(xs, t) - rMax - pad, maxX: at(xs, 1 - t) + rMax + pad, minY: at(ys, t) - rMax - pad, maxY: at(ys, 1 - t) + rMax + pad };
+}
+
+/** Zoom level of detail for the flat view. Below LABEL_ALL_SCALE every label would render under ~8 px
+ *  (unreadable smears), so only hubs, the hovered, selected, matched and picked nodes keep one;
+ *  `labelScale` grows label text against the zoom-out (capped) so the labels that do show stay
+ *  legible; `nodeGrow` keeps dots at a tappable on-screen size. */
+export const LABEL_ALL_SCALE = 0.85;
+export function zoomLod(scale: number): { allLabels: boolean; labelScale: number; nodeGrow: number } {
+  const s = Math.max(0.01, scale);
+  return { allLabels: s >= LABEL_ALL_SCALE, labelScale: Math.min(2.6, Math.max(1, 1 / s)), nodeGrow: Math.min(2.2, Math.max(1, 0.55 / s)) };
+}
+
+/** Ids of the busiest nodes (by `count`, ties by id) that keep their labels when zoomed out:
+ *  max(10, 3% of the graph). */
+export function hubIds(nodes: ReadonlyArray<{ id: string; count: number }>): Set<string> {
+  const k = Math.max(10, Math.ceil(nodes.length * 0.03));
+  return new Set([...nodes].sort((a, b) => b.count - a.count || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).slice(0, k).map((n) => n.id));
+}
+
 /** ONE physics frame, extracted from graph.ts's live tick so the OFF-SCREEN pre-settle below and the
  *  on-screen sim share the exact same math (charge + light collision, springs, gentle centering,
  *  eased damping). `springs` are index pairs into `bodies`. `hold` = a user-held node (velocity
  *  zeroed, position untouched - the drag sets it directly). Returns Σv² for settleDone. Pure over
  *  its inputs (mutates bodies in place - that IS the simulation). */
 export function stepForces(bodies: SimBody[], springs: ReadonlyArray<readonly [number, number]>, cx: number, cy: number, frames: number, hold = -1): number {
-  // charge (repulsion) + light collision
+  // charge (repulsion) + light collision. P-KG-FLAT.1 (ADR-0471): the squared distance is floored at
+  // MIN_D2 - two nodes seeded on top of each other used to get a 3000/0.01 kick and fly 100k px away,
+  // which shrank the zoom-to-fit to its 0.05 floor (the "dust cloud" flat view).
   for (let i = 0; i < bodies.length; i++) for (let j = i + 1; j < bodies.length; j++) {
-    const a = bodies[i]!, b = bodies[j]!; let dx = a.x - b.x, dy = a.y - b.y; const d2 = dx * dx + dy * dy || 0.01;
+    const a = bodies[i]!, b = bodies[j]!; let dx = a.x - b.x, dy = a.y - b.y; const d2 = Math.max(dx * dx + dy * dy, MIN_D2);
     const d = Math.sqrt(d2); let f = 3000 / d2; dx /= d; dy /= d;
     const overlap = a.r + b.r + 6 - d; if (overlap > 0) f += overlap * 0.35;
     a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
@@ -194,12 +265,21 @@ export function stepForces(bodies: SimBody[], springs: ReadonlyArray<readonly [n
   }
   // settling damping eases from looser → tighter so motion glides to rest instead of buzzing
   const damp = frames < 120 ? 0.86 : 0.8;
+  // P-KG-FLAT.1: in a graph that HAS links, an unlinked node is pushed out by the whole linked core and
+  // held only by the weak centering, so isolates drifted into a far rim that set the fit box. They get
+  // ISOLATE_GRAVITY x the pull. (A graph with no links at all keeps the uniform pull.)
+  let linked: Uint8Array | null = null;
+  if (springs.length) { linked = new Uint8Array(bodies.length); for (const [a, b] of springs) { linked[a] = 1; linked[b] = 1; } }
   let kinetic = 0;
   for (let i = 0; i < bodies.length; i++) {
     const n = bodies[i]!;
     if (i === hold) { n.vx = n.vy = 0; continue; }
-    n.vx += (cx - n.x) * 0.0025; n.vy += (cy - n.y) * 0.0025;
-    n.vx *= damp; n.vy *= damp; n.x += n.vx; n.y += n.vy;
+    const pull = linked && !linked[i] ? 0.0025 * ISOLATE_GRAVITY : 0.0025;
+    n.vx += (cx - n.x) * pull; n.vy += (cy - n.y) * pull;
+    n.vx *= damp; n.vy *= damp;
+    const speed = Math.hypot(n.vx, n.vy); // P-KG-FLAT.1: no single frame can fling a node across the canvas
+    if (speed > MAX_SPEED) { n.vx *= MAX_SPEED / speed; n.vy *= MAX_SPEED / speed; }
+    n.x += n.vx; n.y += n.vy;
     kinetic += n.vx * n.vx + n.vy * n.vy;
   }
   return kinetic;

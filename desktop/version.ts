@@ -699,4 +699,23 @@
 //            separate calls whose timestamped signatures differ by a few bytes, still pass as one image;
 //            proven by signed test run 41381896437 (all four legs green). A plain v2.5.0 tag, marked Latest,
 //            so the download buttons, the electron-updater feed and the Homebrew cask all follow it.
-export const APP_VERSION = "2.5.0";
+// v2.5.1-beta.1 = 2.5.0 plus the engine OS vault: provider keys, account keys, MCP tokens and the TURN
+//            credential move from lucid-gui.json into a DPAPI / Keychain / Secret Service sealed vault on
+//            the first engine start, no re-entry (ADR-0472), FIPS 140 at-rest crypto through the OS module
+//            (ADR-0473), one v2 vault with the safeStorage credentials drained in (ADR-0474), the vault list
+//            and encrypted backup in Settings (ADR-0475), request_secret through a LUCID dialog (ADR-0476),
+//            .env import and workspace secrets (ADR-0477), enterprise vault destinations (ADR-0478), the
+//            NIST SP 800-171 Rev 3 evidence package (ADR-0479), and the main-window renderer watchdog
+//            (ADR-0481). Upgrade review fixes: the macOS master key is created at all (security -i had no
+//            quit command), .env re-blank empties only LUCID's values, credDelete fails unless the engine
+//            answered, whoami/icacls run from System32. Downgrading to 2.5.0 shows saved keys as unset.
+//            PRERELEASE: never marked Latest; the Homebrew cask and stable installs stay on 2.5.0.
+// v2.5.1 = 2.5.1-beta.1 promoted to stable (owner-tested 2026-11-05) plus the #555 upgrade review fixes
+//            (restrictToUser strips explicit non-user ACEs as well as inherited ones, a refused private dir
+//            names the trustees holding access, the vault's Meeting Hub bearer replaces main's older
+//            injection, a .env file step failing after the vault write reports fileProblem), staged prompts
+//            that own their pasted images (P-QUEUE-IMG.1, ADR-0469), the Knowledge canvas Orbit view and
+//            ranked node search (P-KG-ORBIT.1, ADR-0470), a readable flat graph on big graphs (P-KG-FLAT.1,
+//            ADR-0471) and one-line code side panel paths (P-KG-POLISH.1). A plain v2.5.1 tag, marked
+//            Latest, so the download buttons, the electron-updater feed and the Homebrew cask follow it.
+export const APP_VERSION = "2.5.1";

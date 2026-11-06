@@ -264,8 +264,9 @@ export interface FleetLaneDeps {
   /** P-INTERJECT.1: per-lane spawn env OVERLAY (on top of the inherited process.env - ACPClient
    *  semantics). dev.ts supplies interjectChildEnv(laneId), which stamps LUCID_INTERJECT_TARGET=<laneId>
    *  (+ LUCID_DEV_URL) so the lane's interject_extension drains only ITS notes. Optional: absent means
-   *  a bare inherit, exactly the pre-seam behavior. Applied at spawn AND at every in-place recovery. */
-  env?: (laneId: string) => Record<string, string>;
+   *  a bare inherit, exactly the pre-seam behavior. Applied at spawn AND at every in-place recovery.
+   *  `cwd` is the lane's working folder: P-VAULT-ENV.1 adds that workspace's scoped secrets from it. */
+  env?: (laneId: string, cwd: string) => Record<string, string>;
   /** P-HEALTH.1: deliver an OPERATOR note to a lane's in-flight turn (dev.ts supplies addInterject).
    *  This is how a stall probe reaches a busy session: the lane already has a turn open, and a second
    *  session/prompt on one session would cross collectors (the ADR-0268 lesson). Optional, because a
@@ -514,7 +515,7 @@ export class FleetLaneManager {
       createdAt: t,
       lastActivityAt: t,
       turns: opts.resume ? Math.max(0, Math.floor(opts.resume.turns)) : 0,
-      client: new ACPClient(plan.cmd, plan.args, cwd, this.#deps.env?.(id) ?? {}),
+      client: new ACPClient(plan.cmd, plan.args, cwd, this.#deps.env?.(id, cwd) ?? {}),
       sessionId: opts.resume?.sessionId ?? null,
       hubSessionId: this.#hub(), // P-SWITCH.3: born under the hub of the moment, kept for life
       sinks: new Set(),
@@ -748,6 +749,17 @@ export class FleetLaneManager {
     if (!lane || index < 0 || index >= lane.queue.length) return { ok: false };
     lane.queue.splice(index, 1);
     return { ok: true };
+  }
+
+  /** P-QUEUE-IMG.1 (ADR-0469): Update on a staged chip. Removes the item and hands back its FULL text and
+   *  its own images (the status view only carries a clipped preview and a count), so the card composer can
+   *  load exactly what was staged for editing. Out-of-range is a refusal, never a different item. */
+  queueTake(laneId: string, index: number): { ok: boolean; item?: { text: string; images: LaneImage[] }; reason?: string } {
+    const lane = this.#lanes.get(laneId);
+    if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
+    if (!Number.isInteger(index) || index < 0 || index >= lane.queue.length) return { ok: false, reason: "that staged prompt already ran or was removed" };
+    const [item] = lane.queue.splice(index, 1);
+    return { ok: true, item: { text: item!.text, images: item!.images.slice() } };
   }
 
   /** Move a staged prompt one slot up (-1) or down (+1). Out-of-range is a quiet no-op. */
@@ -1278,7 +1290,7 @@ export class FleetLaneManager {
     // the same way. A lane must never come back to life ungated.
     let plan: { cmd: string; args: string[] };
     try { plan = this.#deps.argv(); } catch (e) { return { ok: false, reason: e instanceof Error ? e.message : String(e) }; }
-    lane.client = new ACPClient(plan.cmd, plan.args, lane.cwd, this.#deps.env?.(lane.id) ?? {});
+    lane.client = new ACPClient(plan.cmd, plan.args, lane.cwd, this.#deps.env?.(lane.id, lane.cwd) ?? {});
     this.#wire(lane);
     this.#setStatus(lane, "starting");
     try {

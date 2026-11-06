@@ -40,6 +40,8 @@ import {
 import type { DesignDoc } from "../../harness/creator/design/types.ts";
 import type { AgentManifest } from "../../harness/creator/design/agent_view.ts";
 import type { CuiVerdictView } from "./creator_studio.ts";
+// P-SECRET-INTAKE.1 (ADR-0476): the secret dialog's wire types and store-answer gate (pure, shared with the engine).
+import { isSecretStoredView, type SecretCallResult, type SecretManagerAnswer, type SecretManagerOutcome, type SecretRequestView } from "../secret_intake_view.ts";
 
 /** One Creator free-stack call: the payload on success, the server's own words on refusal, and the CUI
  *  verdict when the lockdown is what refused it. */
@@ -623,7 +625,9 @@ export interface ProviderAuth {
    *  without persisting a credential). Present only while the provider is NOT connected. */
   oauthError?: { message: string; at: number };
 }
-export interface AuthStatus { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[] }
+/** P-VAULT-KEYS.1 (ADR-0472): where saved keys live (mirrors desktop/engine_vault.ts VaultStatus). */
+export interface KeyVaultStatus { custody: "dpapi" | "keychain" | "libsecret" | "plaintext-file"; state: "ok" | "unavailable" | "unreadable"; detail?: string }
+export interface AuthStatus { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[]; vault?: KeyVaultStatus }
 export interface HeadroomStatus {
   installed: boolean; version: string | null; running: boolean; enabled: boolean;
   port: number; url: string; installHint: string;
@@ -1118,6 +1122,8 @@ export interface LucidBridge {
   /** P-FLEET.L3: the staged-prompt queue - manager-owned; drain streams the next item like a prompt. */
   fleetQueueAdd(laneId: string, text: string, images?: LaneImage[]): Promise<{ ok: boolean; queued?: number; reason?: string } | null>;
   fleetQueueRemove(laneId: string, index: number): Promise<{ ok: boolean } | null>;
+  /** P-QUEUE-IMG.1 (ADR-0469): remove a staged item and return its full text + its own images (Update). */
+  fleetQueueTake(laneId: string, index: number): Promise<{ ok: boolean; item?: { text: string; images: LaneImage[] }; reason?: string } | null>;
   fleetQueueMove(laneId: string, index: number, dir: -1 | 1): Promise<{ ok: boolean } | null>;
   fleetDrain(laneId: string, onEvent: (e: LaneEvent) => void): Promise<void>;
   // P-FLEET.L5: the reviewable timeline (list + open-a-point). Transcript reads are tail-limited.
@@ -1378,8 +1384,27 @@ export interface LucidBridge {
   credRotate(input: { ref: string; secret: string; expiresAt?: number }): Promise<CredMetaView | { error: string }>;
   credRotateFile(input: { ref: string }): Promise<CredMetaView | { error: string } | null>;
   credList(): Promise<CredMetaView[]>;
-  credDelete(ref: string): Promise<boolean>;
+  // security review CRED-DELETE-ENGINE-DOWN: an { error } means the credential was NOT removed.
+  credDelete(ref: string): Promise<{ deleted: boolean } | { error: string }>;
   credEncryptionAvailable(): Promise<boolean>;
+  // P-SECRET-INTAKE.1 (ADR-0476): the agent-triggered secret dialog (UI token). A value goes IN only; every
+  // answer is metadata (ref, kind, label, env name, last-4).
+  secretPending(): Promise<SecretRequestView[]>;
+  /** `confirmReplace`: the user confirmed replacing the entry already saved under the request's ref. */
+  secretSubmit(id: string, value: string, confirmReplace: boolean): Promise<SecretCallResult>;
+  /** The engine reads the picked file itself (Electron's native picker returns a path). */
+  secretSubmitFile(id: string, path: string, confirmReplace: boolean): Promise<SecretCallResult>;
+  secretCancel(id: string): Promise<boolean>;
+  /** Open the user-only text file in the OS editor; the path is for the dialog only. */
+  secretFallback(id: string, confirmReplace: boolean): Promise<{ ok: true; path: string } | { ok: false; error: string }>;
+  /** Wait until the text file was saved, read, wiped and deleted. */
+  secretFallbackWait(id: string): Promise<SecretCallResult>;
+  secretManagerInfo(): Promise<{ enterprise: boolean; note: string } | null>;
+  secretManagerRecord(input: { answer: SecretManagerAnswer; name?: string; config?: Record<string, string> }): Promise<SecretManagerOutcome | null>;
+  /** P-VAULT-DEST.1 (ADR-0478): one engine vault route (/api/vault/destinations*, /push, /pull, /list); GET
+   *  when `body` is undefined. Answers the route's own `{ ok, data }` / `{ ok: false, error }`; `T` is the
+   *  route's documented data shape. Responses carry metadata only, never a secret value. */
+  vaultDest<T>(path: string, body?: unknown): Promise<{ ok: boolean; data?: T; error?: string }>;
   // P-NETWL.2 (ADR-0106): curated network-whitelist CRUD (persisted server-side; non-secret).
   whitelistList(): Promise<WhitelistEntryView[]>;
   whitelistUpsert(entry: Partial<WhitelistEntryView>): Promise<WhitelistEntryView | null>;
@@ -1584,12 +1609,14 @@ interface NativeShell {
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
   // P-NETWL.1 (ADR-0106): native file picker + OS-encrypted credential vault (Electron-only).
   pickFile?(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
+  // P-VAULT-UI.1 (ADR-0475): native save dialog; path, null on cancel, or { error }.
+  saveTextFile?(opts: { title?: string; defaultName?: string; filters?: { name: string; extensions: string[] }[]; text: string }): Promise<string | { error: string } | null>;
   credStore?(input: { ref?: string; kind: string; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }): Promise<CredMetaView | { error: string }>;
   credStoreFile?(input: { kind: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }): Promise<CredMetaView | { error: string } | null>;
   credRotate?(input: { ref: string; secret: string; expiresAt?: number }): Promise<CredMetaView | { error: string }>;
   credRotateFile?(input: { ref: string }): Promise<CredMetaView | { error: string } | null>;
   credList?(): Promise<CredMetaView[]>;
-  credDelete?(ref: string): Promise<boolean>;
+  credDelete?(ref: string): Promise<{ deleted: boolean } | { error: string }>;
   credEncryptionAvailable?(): Promise<boolean>;
 }
 declare global { interface Window { lucid?: NativeShell } }
@@ -1607,7 +1634,7 @@ function readToken(): string {
   return (document.querySelector('meta[name="lucid-token"]') as HTMLMetaElement | null)?.content ?? "";
 }
 const TOKEN = readToken();
-const authHeaders = (extra?: Record<string, string>): Record<string, string> =>
+export const authHeaders = (extra?: Record<string, string>): Record<string, string> =>
   ({ ...(TOKEN ? { "x-lucid-token": TOKEN } : {}), ...extra });
 
 async function getData(path: string): Promise<any> {
@@ -1641,6 +1668,23 @@ async function getTimed(path: string, ms: number): Promise<unknown> {
   try { return (await (await fetch(path, { cache: "no-store", headers: authHeaders(), signal: AbortSignal.timeout(ms) })).json())?.data ?? null; } catch { return null; }
 }
 const PROBE_TIMEOUT_MS = 5_000;
+/** P-SECRET-INTAKE.1 (ADR-0476): one store call of the secret dialog. Keeps the engine's refusal words and
+ *  code (empty / refused / not-found / file / fallback) so the dialog can offer the text-file fallback. */
+async function secretStore(path: string, body: unknown): Promise<SecretCallResult> {
+  try {
+    const res = await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) });
+    const j: unknown = await res.json();
+    const data = j && typeof j === "object" && "data" in j ? j.data : null;
+    if (j && typeof j === "object" && "ok" in j && j.ok === true && isSecretStoredView(data)) {
+      return { ok: true, ref: data.ref, kind: data.kind, label: data.label, envName: data.envName, last4: data.last4 };
+    }
+    const error = j && typeof j === "object" && "error" in j && typeof j.error === "string" ? j.error : `the engine answered ${res.status}`;
+    const code = j && typeof j === "object" && "code" in j && typeof j.code === "string" ? j.code : "refused";
+    return { ok: false, error, code };
+  } catch {
+    return { ok: false, error: "the LUCID engine could not be reached", code: "unreachable" };
+  }
+}
 
 /** Creator free stack: read the route's `{ ok, data, error }`, keep the server's refusal words (and the CUI
  *  verdict when the lockdown refused), and refuse a payload the pane cannot read instead of painting half. */
@@ -1941,6 +1985,7 @@ export const bridge: LucidBridge = {
   },
   fleetQueueAdd: (laneId, text, images) => post("/api/fleet/queue", { laneId, text, ...(images?.length ? { images } : {}) }),
   fleetQueueRemove: (laneId, index) => post("/api/fleet/queue/remove", { laneId, index }),
+  fleetQueueTake: (laneId, index) => post("/api/fleet/queue/take", { laneId, index }),
   fleetQueueMove: (laneId, index, dir) => post("/api/fleet/queue/move", { laneId, index, dir }),
   fleetDrain: (laneId, onEvent) => {
     const sink = onEvent as (e: ChatEvent) => void; // same tagged-union unification as fleetPrompt
@@ -2200,8 +2245,53 @@ export const bridge: LucidBridge = {
   credRotate: (input) => (shell?.credRotate ? shell.credRotate(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-KEYS.2
   credRotateFile: (input) => (shell?.credRotateFile ? shell.credRotateFile(input) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-KEYS.2
   credList: () => (shell?.credList ? shell.credList() : Promise.resolve([])), // P-NETWL.1
-  credDelete: (ref) => (shell?.credDelete ? shell.credDelete(ref) : Promise.resolve(false)), // P-NETWL.1
+  credDelete: (ref) => (shell?.credDelete ? shell.credDelete(ref) : Promise.resolve({ error: "os-encryption-unavailable" })), // P-NETWL.1 (fail-closed in browser)
   credEncryptionAvailable: () => (shell?.credEncryptionAvailable ? shell.credEncryptionAvailable() : Promise.resolve(false)), // P-NETWL.1
+  // P-SECRET-INTAKE.1 (ADR-0476): the agent-triggered secret dialog.
+  secretPending: async () => {
+    const d: unknown = await getData("/api/secret/pending");
+    const list = d && typeof d === "object" && "requests" in d && Array.isArray(d.requests) ? d.requests : [];
+    return list.filter((r): r is SecretRequestView => !!r && typeof r === "object" && typeof Reflect.get(r, "id") === "string" && typeof Reflect.get(r, "name") === "string");
+  },
+  secretSubmit: (id, value, confirmReplace) => secretStore("/api/secret/submit", { id, value, confirmReplace }),
+  secretSubmitFile: (id, path, confirmReplace) => secretStore("/api/secret/submit-file", { id, path, confirmReplace }),
+  secretCancel: async (id) => {
+    const d: unknown = await post("/api/secret/cancel", { id });
+    return !!d && typeof d === "object" && "cancelled" in d && d.cancelled === true;
+  },
+  secretFallback: async (id, confirmReplace) => {
+    try {
+      const res = await fetch("/api/secret/fallback", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ id, confirmReplace }) });
+      const j: unknown = await res.json();
+      const data = j && typeof j === "object" && "data" in j ? j.data : null;
+      const path = data && typeof data === "object" && "path" in data && typeof data.path === "string" ? data.path : "";
+      if (path) return { ok: true, path };
+      const error = j && typeof j === "object" && "error" in j && typeof j.error === "string" ? j.error : "the text file could not be prepared";
+      return { ok: false, error };
+    } catch { return { ok: false, error: "the LUCID engine could not be reached" }; }
+  },
+  secretFallbackWait: (id) => secretStore("/api/secret/fallback/wait", { id }),
+  secretManagerInfo: async () => {
+    const d: unknown = await getData("/api/secret/manager");
+    if (!d || typeof d !== "object" || !("enterprise" in d)) return null;
+    return { enterprise: d.enterprise === true, note: "note" in d && typeof d.note === "string" ? d.note : "" };
+  },
+  secretManagerRecord: async (input) => {
+    const d: unknown = await post("/api/secret/manager", input);
+    if (!d || typeof d !== "object" || !("detail" in d) || typeof d.detail !== "string") return null;
+    return { saved: "saved" in d && d.saved === true, recorded: "recorded" in d && d.recorded === true, enterprise: "enterprise" in d && d.enterprise === true, detail: d.detail };
+  },
+  vaultDest: async <T>(path: string, body?: unknown): Promise<{ ok: boolean; data?: T; error?: string }> => { // P-VAULT-DEST.1 (ADR-0478)
+    try {
+      const res = await fetch(path, body === undefined
+        ? { cache: "no-store", headers: authHeaders() }
+        : { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) });
+      const j: unknown = await res.json().catch(() => null);
+      // The engine's own vault route envelope; the caller names the documented data shape it reads.
+      if (j && typeof j === "object" && "ok" in j) { const envelope = j as { ok: boolean; data?: T; error?: string }; return envelope; }
+      return { ok: false, error: `the engine answered HTTP ${res.status}` };
+    } catch { return { ok: false, error: "the engine did not answer" }; }
+  },
   whitelistList: async () => (await getData("/api/whitelist")) ?? [], // P-NETWL.2
   whitelistUpsert: (entry) => post("/api/whitelist", entry), // P-NETWL.2
   whitelistRemove: async (id) => { await post("/api/whitelist/remove", { id }); }, // P-NETWL.2

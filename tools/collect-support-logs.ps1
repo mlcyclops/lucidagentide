@@ -9,12 +9,15 @@
 # Secret custody is the whole point of doing this with a script instead of "zip up ~/.omp":
 #   - Every text file is redacted on the way in (bearer tokens, sk-* keys, api-key / token / secret /
 #     password assignments).
-#   - lucid-gui.json is NEVER copied verbatim. It holds provider API keys in PLAINTEXT
-#     (GuiSettings.keys, desktop/settings_store.ts). Only a redacted projection is included: which
-#     providers are configured, which model is selected, the lockdown flags.
+#   - lucid-gui.json is NEVER copied verbatim. Since P-VAULT-KEYS.1 (ADR-0472) its secrets (provider
+#     keys, named-account keys, MCP tokens, the TURN credential) live in the engine OS vault, but on a
+#     host with no usable OS vault (the documented fallback) and on installs not yet migrated the file
+#     still holds them in PLAINTEXT (desktop/settings_store.ts). Only a redacted projection is included:
+#     which providers are configured, which model is selected, the lockdown flags.
 #   - The credential vaults are excluded by construction, never by filter: ~/.omp/agent/agent.db
-#     (omp's OAuth vault), ~/.omp/lucid-cred-vault, ~/.omp/lucid-vault, *.enc, the KG .duckdb files,
-#     and the prompt-hash ledgers (lucid-turns.jsonl, lucid-ailoc.jsonl) are simply not read.
+#     (omp's OAuth vault), ~/.omp/lucid-engine-vault (the engine key vault: sealed secrets + the
+#     OS-protected master key), ~/.omp/lucid-cred-vault, ~/.omp/lucid-vault, *.enc, the KG .duckdb
+#     files, and the prompt-hash ledgers (lucid-turns.jsonl, lucid-ailoc.jsonl) are simply not read.
 #
 # Usage (from an ordinary PowerShell window - no admin, no execution-policy change):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\collect-support-logs.ps1
@@ -185,9 +188,11 @@ foreach ($t in @(
 }
 
 # ---- 5. a REDACTED projection of lucid-gui.json -------------------------------------------------
-# The original holds plaintext provider keys, so it is never copied. What support needs is the SHAPE:
-# which providers have a key at all, which model is selected, whether AskSage lockdown is on.
-$SecretName = '(?i)^(keys|token|secret|password|passwd|apikey|api_key|client_secret|authorization)$'
+# The original may hold plaintext secrets (the no-OS-vault fallback, or an install not yet migrated), so
+# it is never copied. What support needs is the SHAPE: which providers have a key at all, which model is
+# selected, whether AskSage lockdown is on. `key` is a named account's key, `collabTurnCredential` the
+# TURN secret: the same secret fields the engine vault owns.
+$SecretName = '(?i)^(keys|key|token|secret|password|passwd|apikey|api_key|client_secret|authorization|collabTurnCredential)$'
 function Protect-Node($node, [string]$name) {
   if ($name -match $SecretName) {
     if ($node -is [string]) { return ("<redacted len={0}>" -f $node.Length) }
