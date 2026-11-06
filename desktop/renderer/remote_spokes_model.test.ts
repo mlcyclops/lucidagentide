@@ -10,7 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   ALERTS_MAX, approvalButtons, armClick, ARM_MS, clockLabel, deployChoices, hostLabel, hubActions, lanePolicyLabel, latencyLabel, mapHubSnapshot, mapSpokeRow, mibLabel,
-  MODEL_LIST_MAX, modelCount, REMOTE_TONE, remoteGlance, RESUME_TEXT, spokeAlerts, spokeState, stateLabel, taskButtons, taskModelChoices,
+  MODEL_LIST_MAX, modelCount, REMOTE_TONE, remoteGlance, RESUME_TEXT, spokeActions, spokeAlerts, spokeState, stateLabel, taskButtons, taskModelChoices,
   type RemoteApprovalView, type RemoteSpokeView, type RemoteTaskView,
 } from "./remote_spokes_model.ts";
 
@@ -18,10 +18,10 @@ const NODE = `n_${"1".repeat(32)}`;
 const HUB = `n_${"f".repeat(32)}`;
 const task = (over: Record<string, unknown> = {}) => ({ id: "t_0123456789abcdef", name: "triage", state: "idle", turns: 3, updatedAt: 100, createdAt: 1, origin: HUB, ...over });
 const caps = { maxLanes: 2, liveLanes: 1, freeLanes: 1, busyTasks: 1, models: { default: "azure-openai/gpt-5.1", signedIn: [], local: [] } };
-/** ADR-0489's and ADR-0490's optional fields as an older hub plugin leaves them: every one unknown. */
+/** ADR-0489's, ADR-0490's and ADR-0493's optional fields as an older hub plugin leaves them: every one unknown. */
 const UNKNOWN = {
   latencyMs: null, via: null, region: null, classification: null, certExpires: null, engineVersion: null,
-  host: null, lanePolicy: null, lastSeen: null, silentSince: null, alerts: [],
+  host: null, lanePolicy: null, lastSeen: null, silentSince: null, alerts: [], deactivated: null,
 };
 
 describe("mapSpokeRow: one spoke as the orbit shows it", () => {
@@ -381,7 +381,7 @@ describe("scope gating: the IDE offers only what the hub certificate allows", ()
 
 describe("display rules", () => {
   test("the shared hues: red stuck, amber might be stuck, cyan working, blue ready", () => {
-    expect(REMOTE_TONE).toEqual({ approval: "approval", error: "stuck", offline: "maybe", busy: "busy", idle: "ready", checking: "checking", silent: "stuck" });
+    expect(REMOTE_TONE).toEqual({ approval: "approval", error: "stuck", offline: "maybe", busy: "busy", idle: "ready", checking: "checking", silent: "stuck", deactivated: "off" });
     expect(spokeState(true, [])).toBe("idle");
   });
 
@@ -413,5 +413,46 @@ describe("ADR-0492: a model chosen per task", () => {
     const v = mapSpokeRow({ node: NODE, label: "x", reachable: true, tasks: [], caps: { ...caps, models: { default: "azure-openai/gpt-5.1", signedIn: ["anthropic"], local: ["ollama/llama3"] } } });
     expect(taskModelChoices(v!)).toEqual(["ollama/llama3"]);
     expect(taskModelChoices(mapSpokeRow({ node: NODE, label: "y" })!)).toEqual([]);
+  });
+});
+
+describe("ADR-0493: a spoke deactivated on purpose", () => {
+  const since = new Date(2026, 10, 5, 9, 30).getTime();
+  const NOW = new Date(2026, 10, 9, 12, 0).getTime();
+  const REASON = "shipped to Alex's site; back when Alex grants access";
+  const row = { node: NODE, label: "dgx-spark (shared)", reachable: true, tasks: [task({ state: "working" })], caps, lastSeen: since, silentSince: since + 300_000,
+    alerts: [{ kind: "crashed", at: since, detail: "the engine exited" }] };
+
+  test("deactivated wins over silent, reads 'Deactivated since <date>: <reason>' in the dim tone and never alerts", () => {
+    const v = mapSpokeRow({ ...row, deactivated: { since, reason: REASON } })!;
+    expect([v.state, REMOTE_TONE[v.state], v.silentSince, v.deactivated]).toEqual(["deactivated", "off", null, { since, reason: REASON }]);
+    expect(stateLabel(v, NOW)).toBe(`Deactivated since 2026-11-05: ${REASON}`);
+    expect(remoteGlance(v, NOW)).toBe(`Deactivated since 2026-11-05: ${REASON}`);
+    expect(spokeAlerts(v, NOW)).toEqual([]);
+    // whatever the row also says, it wins: reachable or not, checking, silent
+    for (const reachable of [true, false, null]) expect(mapSpokeRow({ ...row, reachable, deactivated: { since, reason: "x" } })?.state).toBe("deactivated");
+    // a reason is clipped to 200 characters; a missing one still deactivates
+    expect(mapSpokeRow({ node: NODE, label: "x", deactivated: { since, reason: "R".repeat(300) } })?.deactivated?.reason).toHaveLength(200);
+    expect(mapSpokeRow({ node: NODE, label: "x", deactivated: { since } })?.deactivated).toEqual({ since, reason: "no reason given" });
+  });
+
+  test("it is never a target: not in the selector, and the panel offers no action at all", () => {
+    const off = mapSpokeRow({ ...row, deactivated: { since, reason: REASON } })!;
+    const on = mapSpokeRow({ node: `n_${"2".repeat(32)}`, label: "vm-217", reachable: true, tasks: [], caps })!;
+    const all = hubActions(["recall", "drive", "approve"]);
+    expect(deployChoices([off, on], all).map((c) => c.spoke.label)).toEqual(["vm-217"]);
+    expect(deployChoices([off], all)).toEqual([]);
+    expect(spokeActions(off, all)).toEqual({ recall: false, drive: false, approve: false, deny: false });
+    expect(taskButtons(off.tasks[0]!, spokeActions(off, all))).toEqual({ recall: false, followup: false, cancel: false, close: false, resume: false });
+    expect(spokeActions(on, all)).toBe(all);
+  });
+
+  test("reactivation (the mark gone) and an older plugin (no field, or a malformed one) behave exactly as before", () => {
+    const back = mapSpokeRow(row)!;
+    expect([back.state, back.deactivated, back.silentSince]).toEqual(["silent", null, since + 300_000]);
+    expect(spokeAlerts(back, NOW).map((a) => a.kind)).toEqual(["silent", "crashed"]);
+    for (const deactivated of [undefined, null, "yes", true, {}, { since: 0, reason: "x" }, { since: -5, reason: "x" }, { since: "2026-11-05", reason: "x" }]) {
+      expect(mapSpokeRow({ ...row, deactivated })).toEqual(back);
+    }
   });
 });

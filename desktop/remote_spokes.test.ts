@@ -159,6 +159,25 @@ describe("scope gating: nothing the hub certificate does not allow reaches the p
     expect(r.forwarded().map((c) => [c.path, c.body])).toEqual([[`/host/spokes/${NODE}/submit`, { text: "do it", model: "ollama/qwen2.5-coder:32b" }]]);
   });
 
+  test("ADR-0493: nothing reaches a deactivated spoke, whatever the scopes; reactivated, it forwards again", async () => {
+    const since = new Date(2026, 10, 5, 9, 30).getTime();
+    const spoke = { node: NODE, label: "dgx-spark (shared)", tasks: [{ id: TASK, name: "triage", state: "idle", turns: 1, updatedAt: 1 }] };
+    const hub = { node: HUB, label: "workstation", scopes: ["recall", "drive", "approve"] };
+    const r = rig({ hub: { hub, spokes: [{ ...spoke, deactivated: { since, reason: "shipped to Alex's site" } }] } });
+    const error = `dgx-spark (shared): Deactivated since 2026-11-05: shipped to Alex's site. Nothing is sent to a deactivated spoke; reactivate it on the hub first (hub reactivate --spoke ${NODE})`;
+    for (const [op, body] of [
+      ...actions,
+      ["recall", { node: NODE }],
+      ["decide", { node: NODE, task: TASK, ask: "ask-1", digest: DIGEST, allow: true }],
+      ["decide", { node: NODE, task: TASK, ask: "ask-1", digest: DIGEST, allow: false }],
+    ] as const) expect((await r.call("POST", `/api/remote-spokes/${op}`, body)).data).toEqual({ ok: false, error });
+    expect((await r.call("GET", `/api/remote-spokes/approvals?node=${NODE}`)).data).toEqual({ ok: false, error });
+    expect(r.forwarded()).toEqual([]);
+    expect((await r.call("GET", "/api/remote-spokes")).data).toMatchObject({ spokes: [{ node: NODE, state: "deactivated", deactivated: { since, reason: "shipped to Alex's site" } }] });
+    const back = rig({ hub: { hub, spokes: [spoke] } });
+    expect((await back.call("POST", "/api/remote-spokes/submit", { node: NODE, text: "do it" })).data).toMatchObject({ ok: true });
+  });
+
   test("a plugin refusal comes back in the plugin's own words", async () => {
     const r = rig({ status: { cancel: 422 } });
     expect((await r.call("POST", "/api/remote-spokes/cancel", { node: NODE, task: TASK })).data).toEqual({ ok: false, error: "plugin says no to cancel" });

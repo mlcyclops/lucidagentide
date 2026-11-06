@@ -19,7 +19,8 @@
 //   POST /api/remote-spokes/close       {node, task}             drive
 //
 // Scopes come from the hub's certificate as the plugin reports it, re-read on every action, so a button the
-// renderer still shows after a scope change is refused here. The spokes check them a third time.
+// renderer still shows after a scope change is refused here. The spokes check them a third time. ADR-0493: every
+// action and read for a spoke the hub marks deactivated is refused here, before anything reaches the plugin.
 //
 // Recalled journal text and parked actions are untrusted model output from another machine (invariant 5). Every
 // entry passes the fail-closed scan (scanAndDecide: scanner dead == quarantined) before it leaves this module;
@@ -31,7 +32,7 @@ import type { GateDecision } from "../harness/security/gate.ts";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
 import { neutralizeDelimiters } from "../harness/omp/mcp_result_gate.ts";
 import {
-  mapHubSnapshot, MODEL_ID_RE, NODE_RE, TASK_RE,
+  deactivatedLabel, mapHubSnapshot, MODEL_ID_RE, NODE_RE, TASK_RE,
   type RecallEntryView, type RecallView, type RemoteActionView, type RemoteApprovalView, type RemoteApprovalsView, type RemoteHubView,
 } from "./renderer/remote_spokes_model.ts";
 
@@ -288,10 +289,13 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
   return reply(out);
 }
 
-/** Why this hub may not act on `node` with `scope`, or null when it may. */
+/** Why this hub may not act on `node` with `scope`, or null when it may. ADR-0493: nothing at all goes to a spoke the
+ *  hub marks deactivated (it is unplugged or elsewhere on purpose), recall and deny included. */
 function checkHub(hub: RemoteHubView, node: string, scope: "recall" | "drive" | "approve" | "deny"): string | null {
   if (!hub.available) return hub.reason;
-  if (!NODE_RE.test(node) || !hub.spokes.some((s) => s.node === node)) return "this hub does not know that spoke";
+  const spoke = NODE_RE.test(node) ? hub.spokes.find((s) => s.node === node) : undefined;
+  if (!spoke) return "this hub does not know that spoke";
+  if (spoke.deactivated) return `${spoke.label}: ${deactivatedLabel(spoke.deactivated)}. Nothing is sent to a deactivated spoke; reactivate it on the hub first (hub reactivate --spoke ${node})`;
   if (!hub.actions[scope]) return scope === "deny" ? "this hub's certificate carries neither the drive nor the approve scope" : `this hub's certificate does not carry the ${scope} scope`;
   return null;
 }

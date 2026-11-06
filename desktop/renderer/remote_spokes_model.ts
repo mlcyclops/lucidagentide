@@ -12,6 +12,8 @@
 // ADR-0490 adds the spoke's machine (`host`) and lane policy from `capabilities`, the hub's `lastSeen`,
 // `silentSince` and kept `alerts`, the `silent` state, the alert lines (`spokeAlerts`) and Resume for a task whose
 // turn a restart interrupted (`RESUME_TEXT`, sent only on the human's click).
+// ADR-0493 adds the hub's optional `deactivated` mark: a spoke its owner took offline on purpose (shipped, lent,
+// unplugged) reads `deactivated`, in a dim tone, with no alert lines, and is never offered as a target.
 //
 // What a hub may do is what its certificate's scopes allow (add-on ADR-A044): recall reads (status, journal,
 // parked actions), drive starts, follows up, cancels and closes tasks and denies parked actions, approve signs an
@@ -40,8 +42,12 @@ export interface RemoteTaskView {
 /** checking: not asked yet. offline: no reply in time. approval: an action is parked on a human. busy: a task is
  *  working. error: a task failed, or the spoke refused this hub's status read. idle: online and free. silent
  *  (ADR-0490): the hub reaches a relay but the spoke has not polled it for over 2 minutes, so it is probably down;
- *  this wins over every other state, since what the spoke said last is stale. */
-export type RemoteSpokeState = "checking" | "offline" | "approval" | "busy" | "error" | "idle" | "silent";
+ *  this wins over every other state, since what the spoke said last is stale. deactivated (ADR-0493): the owner
+ *  took the spoke offline on purpose and the hub neither asks nor alerts about it; this wins over silent too. */
+export type RemoteSpokeState = "checking" | "offline" | "approval" | "busy" | "error" | "idle" | "silent" | "deactivated";
+
+/** ADR-0493: the hub's planned-offline mark for a spoke (add-on `hub deactivate`), until `hub reactivate`. */
+export interface RemoteDeactivatedView { since: number; reason: string }
 
 /** ADR-0490: one GPU the spoke's machine reports, with its memory when the driver tells it. */
 export interface RemoteGpuView { name: string; vramMiB: number | null }
@@ -110,6 +116,8 @@ export interface RemoteSpokeView {
   silentSince: number | null;
   /** ADR-0490: the alerts the hub kept for this spoke, newest first (at most ALERTS_MAX). */
   alerts: RemoteAlertView[];
+  /** ADR-0493: from the hub; null unless the owner deactivated this spoke (and always null from an older plugin). */
+  deactivated: RemoteDeactivatedView | null;
   error?: string;
 }
 
@@ -257,8 +265,10 @@ function mapAlerts(v: unknown): RemoteAlertView[] {
 }
 
 /** The spoke's overall state from its reachability and tasks. Closed and stopped tasks hold no lane. ADR-0490: a
- *  spoke the hub reports silent is `silent` whatever it said last. */
-export function spokeState(reachable: boolean | null, tasks: readonly RemoteTaskView[] | null, silentSince: number | null = null): RemoteSpokeState {
+ *  spoke the hub reports silent is `silent` whatever it said last. ADR-0493: a deactivated spoke is `deactivated`
+ *  whatever else the row says. */
+export function spokeState(reachable: boolean | null, tasks: readonly RemoteTaskView[] | null, silentSince: number | null = null, deactivated = false): RemoteSpokeState {
+  if (deactivated) return "deactivated";
   if (silentSince !== null) return "silent";
   if (reachable === null) return "checking";
   if (!reachable) return "offline";
@@ -267,6 +277,13 @@ export function spokeState(reachable: boolean | null, tasks: readonly RemoteTask
   if (tasks.some((t) => t.state === "working")) return "busy";
   if (tasks.some((t) => t.state === "error")) return "error";
   return "idle";
+}
+
+/** ADR-0493: the hub's `deactivated` mark, or null. The reason is the owner's text, clipped to 200 characters. */
+function mapDeactivated(v: unknown): RemoteDeactivatedView | null {
+  const d = record(v);
+  const since = count(d?.since);
+  return since ? { since, reason: clip(d?.reason, 200) ?? "no reason given" } : null;
 }
 
 /** One /host/spokes row as a view. A row whose node id is malformed is dropped (nothing could address it). */
@@ -281,11 +298,13 @@ export function mapSpokeRow(raw: unknown): RemoteSpokeView | null {
   const viaKind = record(r.via)?.kind;
   const cert = record(r.cert);
   // ADR-0490: likewise optional; an older plugin or spoke omits them. A zero time is no time.
-  const silentSince = count(r.silentSince) || null;
+  // ADR-0493: likewise optional. A mark without a positive `since` is no mark; a deactivated spoke is never silent.
+  const deactivated = mapDeactivated(r.deactivated);
+  const silentSince = deactivated ? null : count(r.silentSince) || null;
   const view: RemoteSpokeView = {
     node: r.node,
     label: clip(r.label, 64) ?? r.node.slice(0, 12),
-    state: spokeState(reachable, tasks, silentSince),
+    state: spokeState(reachable, tasks, silentSince, deactivated !== null),
     lanes: max !== null && live !== null && free !== null ? { live, max, free } : null,
     tasks: (tasks ?? []).sort((a, b) => b.updatedAt - a.updatedAt),
     checkedAt: count(r.checkedAt),
@@ -301,6 +320,7 @@ export function mapSpokeRow(raw: unknown): RemoteSpokeView | null {
     lastSeen: count(r.lastSeen),
     silentSince,
     alerts: mapAlerts(r.alerts),
+    deactivated,
   };
   const error = clip(r.error, 300);
   if (error) view.error = error;
@@ -327,18 +347,36 @@ export function mapHubSnapshot(raw: unknown): RemoteHubView {
 
 /** The orbit's color language for a remote spoke, on the existing state hues: red when it is stuck on a human
  *  or failed, amber when it might be stuck (the hub has not heard from it), cyan while it works, blue when it is
- *  online and ready. Only `approval` animates: it is the one that blocks on a human. */
-export type RemoteTone = "approval" | "stuck" | "maybe" | "busy" | "ready" | "checking";
+ *  online and ready. Only `approval` animates: it is the one that blocks on a human. ADR-0493: `off`, the dimmest,
+ *  for a spoke its owner deactivated: grey and faded, never red or amber, never animated. */
+export type RemoteTone = "approval" | "stuck" | "maybe" | "busy" | "ready" | "checking" | "off";
 export const REMOTE_TONE: Readonly<Record<RemoteSpokeState, RemoteTone>> = {
   approval: "approval", error: "stuck", offline: "maybe", busy: "busy", idle: "ready", checking: "checking",
   // ADR-0490: red, not amber. Offline may be this hub's own network; silent means the relay has not heard from
   // the spoke either, so it is most likely down.
   silent: "stuck",
+  // ADR-0493: planned, so nothing to worry about.
+  deactivated: "off",
 };
 
 export const REMOTE_STATE_LABEL: Readonly<Record<RemoteSpokeState, string>> = {
   checking: "checking", offline: "offline", approval: "parked approval", busy: "online, busy", error: "online, error", idle: "online, idle", silent: "silent",
+  deactivated: "deactivated",
 };
+
+/** ADR-0493: a deactivated spoke in words, "Deactivated since 2026-11-05: <the owner's reason>" (local date). The
+ *  orbit and the engine's refusals say it the same way. */
+export function deactivatedLabel(d: RemoteDeactivatedView): string {
+  const t = new Date(d.since);
+  const day = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+  return `Deactivated since ${day}: ${d.reason}`;
+}
+
+/** ADR-0493: what the hub may do with this spoke. A deactivated spoke is offered nothing (no task, follow-up,
+ *  recall, approve or deny): nothing reaches it until it is reactivated. Otherwise the certificate's scopes. */
+export function spokeActions(s: RemoteSpokeView, a: HubActions): HubActions {
+  return s.deactivated ? { recall: false, drive: false, approve: false, deny: false } : a;
+}
 
 /** ADR-0490: a time of day ("14:05"), with the date in front when it is not today. Local time. */
 export function clockLabel(ms: number, now: number): string {
@@ -347,8 +385,10 @@ export function clockLabel(ms: number, now: number): string {
   return d.toDateString() === new Date(now).toDateString() ? hm : `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${hm}`;
 }
 
-/** The state as words. ADR-0490: a silent spoke says since when ("silent since 14:05"), never "idle". */
+/** The state as words. ADR-0490: a silent spoke says since when ("silent since 14:05"), never "idle". ADR-0493: a
+ *  deactivated one says since when and why. */
 export function stateLabel(s: RemoteSpokeView, now: number): string {
+  if (s.state === "deactivated" && s.deactivated) return deactivatedLabel(s.deactivated);
   return s.state === "silent" && s.silentSince !== null ? `silent since ${clockLabel(s.silentSince, now)}` : REMOTE_STATE_LABEL[s.state];
 }
 
@@ -396,8 +436,10 @@ const ALERT_ACTION: Readonly<Partial<Record<RemoteAlertKind, string>>> = {
 
 /** ADR-0490: a spoke's alert lines, newest first: its silence (when the hub reports one), then every kept alert.
  *  An interrupted turn names its tasks and says where to resume them; nothing is ever re-run on its own. A stale
- *  revocation list and an expiring certificate say what to run (ADR-0491). */
+ *  revocation list and an expiring certificate say what to run (ADR-0491). A deactivated spoke has none (ADR-0493):
+ *  its quiet is planned, and nothing it kept from before is news until it is reactivated. */
 export function spokeAlerts(s: RemoteSpokeView, now: number): RemoteAlertItem[] {
+  if (s.deactivated) return [];
   const out: RemoteAlertItem[] = [];
   if (s.silentSince !== null) {
     const min = Math.max(2, Math.floor((now - s.silentSince) / 60_000));
@@ -428,8 +470,10 @@ export function latencyLabel(ms: number | null): string {
 }
 
 /** The card's one-line glance: state, lanes, how fast it answers and over which route, and how many tasks are
- *  open. `now` only matters for a silent spoke's "silent since". */
+ *  open. `now` only matters for a silent spoke's "silent since". ADR-0493: a deactivated spoke shows only that:
+ *  its last lanes and answer time are stale. */
 export function remoteGlance(s: RemoteSpokeView, now = Date.now()): string {
+  if (s.deactivated) return stateLabel(s, now);
   const lanes = s.lanes ? ` \u00b7 ${s.lanes.live}/${s.lanes.max} lanes` : "";
   const answers = s.latencyMs !== null ? ` \u00b7 ${seconds(s.latencyMs)} s${s.via ? ` ${VIA_LABEL[s.via]}` : ""}` : "";
   const open = s.tasks.filter((t) => t.state === "working" || t.state === "awaiting_approval").length;
@@ -467,9 +511,11 @@ function deployBlock(s: RemoteSpokeView, a: HubActions): string | null {
   return null;
 }
 
-/** ADR-0489: every spoke as a selector row, eligible first, then fastest answer (unmeasured last), then label. */
+/** ADR-0489: every spoke as a selector row, eligible first, then fastest answer (unmeasured last), then label.
+ *  ADR-0493: a deactivated spoke is no row at all: it is not a target, not even a greyed-out one. */
 export function deployChoices(spokes: readonly RemoteSpokeView[], a: HubActions): DeployChoice[] {
   return spokes
+    .filter((spoke) => !spoke.deactivated)
     .map((spoke) => { const why = deployBlock(spoke, a); return { spoke, eligible: why === null, why }; })
     .sort((x, y) => Number(y.eligible) - Number(x.eligible)
       || (x.spoke.latencyMs ?? Number.POSITIVE_INFINITY) - (y.spoke.latencyMs ?? Number.POSITIVE_INFINITY)

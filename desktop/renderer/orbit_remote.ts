@@ -33,7 +33,7 @@ import type { LucidBridge } from "./bridge.ts";
 import type { OrbitSlot } from "./orbit_layout.ts";
 import {
   approvalButtons, armClick, clockLabel, deployChoices, hostLabel, lanePolicyLabel, latencyLabel, mibLabel, modelCount, REMOTE_TONE, remoteGlance, RESUME_TEXT,
-  spokeAlerts, stateLabel, taskButtons, taskModelChoices, VIA_LABEL,
+  spokeActions, spokeAlerts, stateLabel, taskButtons, taskModelChoices, VIA_LABEL,
   type DeployChoice, type RecallView, type RemoteAlertItem, type RemoteApprovalView, type RemoteClassification, type RemoteHubView, type RemoteModelsView,
   type RemoteSpokeView,
 } from "./remote_spokes_model.ts";
@@ -187,9 +187,10 @@ function paintRemoteNode(card: HTMLElement, s: RemoteSpokeView): void {
   card.title = `${s.label} (remote spoke ${s.node})\n${stateLabel(s, now)}\n${latencyLabel(s.latencyMs)}${s.via ? ` over ${VIA_LABEL[s.via]}` : ""}${host ? `\n${host}` : ""}${s.error ? `\n${s.error}` : ""}`;
 }
 
-/** ADR-0489: whether the orbit offers "Start a remote task": the hub may drive and has at least one spoke. */
+/** ADR-0489: whether the orbit offers "Start a remote task": the hub may drive and has at least one spoke.
+ *  ADR-0493: a deactivated spoke does not count. */
 export function remoteDeployVisible(): boolean {
-  return snap !== null && snap.available && snap.actions.drive && snap.spokes.length > 0;
+  return snap !== null && snap.available && snap.actions.drive && snap.spokes.some((s) => !s.deactivated);
 }
 
 /** Place remote nodes on the slots after the local lanes'. */
@@ -232,11 +233,13 @@ export function remoteHubSectionHtml(): string {
       : `<button class="btn-mini orbit-btn" data-rs-panel>${icon("link", 12)} Open panel</button>`;
     return `<div class="orbit-hubrow rs-hubrow"><span class="orbit-ghost-id"><b>Remote hub</b><small>${esc(snap.reason)}</small></span>${btn}</div>`;
   }
-  const { hub, spokes, actions } = snap;
+  const { hub, spokes } = snap;
   const waiting = spokes.filter((s) => s.state === "approval").length;
+  // ADR-0493: a deactivated spoke still counts as the hub's, said plainly; it is never a target.
+  const off = spokes.filter((s) => s.deactivated).length;
   return `<div class="orbit-hubrow rs-hubrow" title="${esc(hub.node)}">
-      <span class="orbit-ghost-id"><b>${esc(hub.label)}</b><small>remote hub \u00b7 ${spokes.length} ${spokes.length === 1 ? "spoke" : "spokes"}${waiting ? ` \u00b7 ${waiting} waiting on you` : ""} \u00b7 may ${esc(hub.scopes.join(", ") || "nothing")}</small></span>
-      ${actions.drive ? `<button class="btn-mini orbit-btn" data-rs-deploy data-tip="Start a task on a remote spoke|Pick a spoke by how fast it answers, its models and its free lanes, then start a task there.">${icon("bolt", 12)} Start a task</button>` : ""}
+      <span class="orbit-ghost-id"><b>${esc(hub.label)}</b><small>remote hub \u00b7 ${spokes.length} ${spokes.length === 1 ? "spoke" : "spokes"}${off ? ` (${off} deactivated)` : ""}${waiting ? ` \u00b7 ${waiting} waiting on you` : ""} \u00b7 may ${esc(hub.scopes.join(", ") || "nothing")}</small></span>
+      ${remoteDeployVisible() ? `<button class="btn-mini orbit-btn" data-rs-deploy data-tip="Start a task on a remote spoke|Pick a spoke by how fast it answers, its models and its free lanes, then start a task there.">${icon("bolt", 12)} Start a task</button>` : ""}
       <button class="btn-mini orbit-btn" data-rs-panel data-tip="Remote Spokes panel|Setup, user presence, custody, models and provisioning stay in the plugin's own panel.">${icon("link", 12)} Panel</button>
     </div>
     <div class="orbit-hubrow-lanes">${spokes.map((s) => `<button class="fleet-pip rs-pip rs-${REMOTE_TONE[s.state]}" data-rs-open="${esc(s.node)}" data-tip="${esc(s.label)}|${esc(remoteGlance(s))}"><i></i>${esc(s.label)}</button>`).join("")}</div>${alertListHtml()}`;
@@ -351,7 +354,9 @@ function paintModels(host: HTMLElement, m: RemoteModelsView): void {
 /** Paint the panel for `node` once; polls only touch its head and task list (typed text survives a poll). */
 export function paintRemotePanel(box: HTMLElement, node: string, closeHtml: string): void {
   panel = { node, followTask: null, armed: {}, approvals: [], recall: null, sig: "", modelsSig: "" };
-  const a = snap?.available ? snap.actions : null;
+  // ADR-0493: a deactivated spoke's panel offers no new task, parked actions or recall.
+  const s0 = spokeOf(node);
+  const a = snap?.available ? (s0 ? spokeActions(s0, snap.actions) : snap.actions) : null;
   box.innerHTML = `<div class="orbit-panel-h">${icon("link", 14)}<b data-rs-title></b><span class="rs-state" data-rs-state></span>${closeHtml}</div>
     <p class="rs-note" data-rs-sub></p>
     <p class="rs-note" data-rs-host hidden></p>
@@ -384,7 +389,7 @@ export function paintRemotePanel(box: HTMLElement, node: string, closeHtml: stri
 export function refreshRemotePanel(box: HTMLElement): void {
   if (!panel) return;
   const s = spokeOf(panel.node);
-  const a = snap?.available ? snap.actions : null;
+  const a = snap?.available && s ? spokeActions(s, snap.actions) : null;
   const sig = JSON.stringify([s, a]);
   if (sig === panel.sig) return;
   panel.sig = sig;
@@ -424,7 +429,9 @@ export function refreshRemotePanel(box: HTMLElement): void {
     paintModels($("[data-rs-models]", box) as HTMLElement, s.models);
   }
   const may = [a.recall && "recall", a.drive && "drive", a.approve && "approve"].filter(Boolean).join(", ");
-  setText(box, "[data-rs-scopes]", `This hub's certificate allows: ${may || "nothing"}. Actions it does not allow are not offered.`);
+  setText(box, "[data-rs-scopes]", s.deactivated
+    ? `This spoke is deactivated, so nothing is sent to it. To use it again, run on the hub: hub reactivate --spoke ${s.node}`
+    : `This hub's certificate allows: ${may || "nothing"}. Actions it does not allow are not offered.`);
   const host = $("[data-rs-tasks]", box) as HTMLElement;
   if (s.tasks.length === 0) { host.innerHTML = `<div class="orbit-ghosts-empty">No tasks on this spoke yet.</div>`; return; }
   host.innerHTML = s.tasks.map((t, i) => {
@@ -572,7 +579,8 @@ async function loadApprovals(box: HTMLElement): Promise<void> {
   if (panel?.node !== node) return;
   if (!r || !r.ok) { out.textContent = r ? r.error : "The engine did not answer."; return; }
   panel.approvals = r.approvals;
-  const a = snap?.available ? snap.actions : null;
+  const s = spokeOf(node);
+  const a = snap?.available && s ? spokeActions(s, snap.actions) : null;
   if (r.approvals.length === 0) { out.textContent = "Nothing is waiting on this spoke."; return; }
   out.replaceChildren(...r.approvals.map((v, i) => approvalCard(v, i, a ? approvalButtons(v, a) : { approve: false, deny: false })));
 }
@@ -752,7 +760,13 @@ export function refreshDeployPanel(box: HTMLElement): void {
   const go = $("[data-rs-dep-go]", box) as HTMLButtonElement | null;
   if (go) go.disabled = deploy.busy || eligible === 0;
   if (!snap || !snap.available) { list.innerHTML = `<div class="orbit-ghosts-empty">${esc(snap ? snap.reason : "Asking the hub\u2026")}</div>`; return; }
-  if (choices.length === 0) { list.innerHTML = `<div class="orbit-ghosts-empty">This hub has no spokes yet. Enroll one in the Remote Spokes panel.</div>`; return; }
+  if (choices.length === 0) {
+    // ADR-0493: deactivated spokes are not targets, so a hub with only those has none to offer.
+    list.innerHTML = snap.spokes.length
+      ? `<div class="orbit-ghosts-empty">Every spoke on this hub is deactivated. Reactivate one on the hub (hub reactivate) to start a task there.</div>`
+      : `<div class="orbit-ghosts-empty">This hub has no spokes yet. Enroll one in the Remote Spokes panel.</div>`;
+    return;
+  }
   const now = Date.now();
   list.innerHTML = choices.map((c) => choiceHtml(c, c.spoke.node === deploy?.chosen, now)).join("");
 }

@@ -28,7 +28,7 @@ const task = (id, name, state, extra = {}) => ({ id, name, state, turns: 2, upda
 const DAY = 86_400_000;
 const MANY = Array.from({ length: 30 }, (_, i) => `anthropic/claude-model-${i}`);
 /** ADR-0490's fields when nothing is wrong: no machine report, no silence, no alerts. */
-const QUIET = { host: null, lanePolicy: null, lastSeen: null, silentSince: null, alerts: [] };
+const QUIET = { host: null, lanePolicy: null, lastSeen: null, silentSince: null, alerts: [], deactivated: null };
 const UNKNOWN = { latencyMs: null, via: null, region: null, classification: null, certExpires: null, engineVersion: null, models: { default: null, local: [], frontier: [] }, ...QUIET };
 /** ADR-0490: vm-217 reports its machine and why it runs two lanes. */
 const HOST_217 = { os: "linux", arch: "x64", cpus: 16, memMiB: 65_536, diskFreeMiB: 400_000, gpus: [{ name: "NVIDIA RTX 4090", vramMiB: 24_576 }], localModel: { host: "127.0.0.1:11434", reachable: true } };

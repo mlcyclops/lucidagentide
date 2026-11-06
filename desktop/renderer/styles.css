@@ -6441,7 +6441,12 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-node.rs-busy .orbit-led,.fleet-pip.rs-busy i{animation:hudpulse 2.2s ease-in-out infinite}
 .orbit-node.rs-ready,.fleet-pip.rs-ready,.rs-state.rs-ready{--lane:var(--blue);--lane-dim:rgb(var(--blue-rgb) / .4)}
 .orbit-node.rs-checking,.fleet-pip.rs-checking,.rs-state.rs-checking{--lane:var(--txt-4)}
+/* ADR-0493: deactivated on purpose (shipped, lent, unplugged): the dimmest grey, faded, never animated. */
+.orbit-node.rs-off,.fleet-pip.rs-off,.rs-state.rs-off{--lane:var(--txt-4)}
+.orbit-node.rs-off .orbit-node-card{opacity:.55}
+.orbit-node.rs-off .orbit-led,.fleet-pip.rs-off i{animation:none}
 .orbit-line.remote{stroke:var(--line-strong);stroke-dasharray:3 6}
+.orbit-line.remote.rs-off{stroke:var(--line);animation:none}
 .orbit-line.remote.rs-approval{stroke:var(--red);stroke-width:2.5;animation:orbitLineRed 1.6s ease-in-out infinite}
 .orbit-line.remote.rs-stuck{stroke:rgb(var(--red-rgb) / .6)}
 .orbit-line.remote.rs-maybe{stroke:rgb(var(--amber-rgb) / .7)}
