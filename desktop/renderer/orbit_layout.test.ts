@@ -113,6 +113,20 @@ describe("spokeGlance (P-PROGRESS.1)", () => {
     expect(spokeGlance({ ...base, status: "working", progress: { estimate: { percent: null } } }, true)).toBe("working \u00b7 turn 3");
     expect(spokeGlance({ ...base, status: "done", progress: { estimate: { percent: 40 } } }, true)).toBe("done \u00b7 2 turns");
   });
+
+  // P-STUCK-SHOW.1 (ADR-0490): the orbit never says plain "working" over a call the evidence doubts.
+  test("a likely-stuck call names itself and the way out; a call gone flat says it might be stuck", () => {
+    const base = { turns: 2, queued: [] as unknown[] };
+    const stuck = { estimate: { percent: 40 }, liveness: { state: "stuck", label: "likely stuck: no activity for 13 m", flatMs: 780_000 } };
+    expect(spokeGlance({ ...base, status: "working", progress: stuck }, true)).toBe("likely stuck \u00b7 quiet 13 m");
+    const flat = { estimate: { percent: null }, liveness: { state: "working", label: "might be stuck: no activity for 7 m \u00b7 waiting on task for 9 m", flatMs: 420_000 } };
+    expect(spokeGlance({ ...base, status: "working", progress: flat }, false)).toBe("might be stuck \u00b7 quiet 7 m");
+    // An open call that is merely waiting (no flat evidence yet) keeps the ordinary glance.
+    const waiting = { estimate: { percent: null }, liveness: { state: "working", label: "waiting on bash for 40 s" } };
+    expect(spokeGlance({ ...base, status: "working", progress: waiting }, false)).toBe("working \u00b7 turn 3");
+    // A settled lane never inherits a stale stuck verdict.
+    expect(spokeGlance({ ...base, status: "awaiting-input", progress: stuck }, false)).toBe("ready for your prompt");
+  });
 });
 
 // P-SWITCH.3 (ADR-0410): a new session is a new hub; the previous session keeps its spokes.

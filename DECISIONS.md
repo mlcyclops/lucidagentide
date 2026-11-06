@@ -25392,6 +25392,67 @@ Two traps found by measurement before writing anything:
 **Rejected.** A per-repo ring on the orbit: ring placement already encodes fleet size, and a second meaning would fight it. Renaming the code's `lane` identifiers: a large churn with no user-visible effect, and the API (`laneId`, `/api/fleet/*`) is consumed by the PWA and the hub TUI.
 
 **Consequences.** Hub picking is still between sessions of ONE engine on this machine. Remote hubs and remote spokes do not exist; the picker's model (`HubEntry`) is where a remote hub would list itself. The free-vs-paid scope of remote hub-and-spoke is proposed in the private add-on repo, not decided here. Colors are hash-derived, so two codebases can land on close hues; the name is always shown beside the color.
+
+## ADR-0471 -- P-SESS-ARCHIVE.1: the session index is saved across restarts, and sessions can be archived (by hand or by an off-by-default age rule) without being deleted (2026-11-02)
+
+**Status:** Accepted -- BUILT. `make demo-P-SESS-ARCHIVE.1`; `bun test desktop/sessions_archive.test.ts desktop/live_sessions.test.ts`. Real-machine smoke on 1,653 sessions (1.1 GB): first sidebar list 2,327 ms without the saved index, 176 ms after a restart with it; an archive, search, read, open-and-restore round trip on a real session; two engines at once, where the second refused to archive a session the first held. Extends ADR-0131 (the session index) and ADR-0469 (search).
+
+**Context.** The index (ADR-0131) was memory-only, so every engine start re-read every transcript: 1.1 GB on the measured machine. Sessions only accumulate: 1,324 of 1,653 files were untouched for 30 days, and 1,004 were under 4 KB (sessions that never got a reply).
+
+**Decision.** (1) The index entries (list metadata and search text) are written to `~/.omp/agent/lucid-session-index.json` at most every 30 s after a change (temp file + rename) and on exit, and read back at the first scan. An entry is used only while its file's mtime and size match, exactly as in memory. A missing, malformed or foreign-version file is ignored and rebuilt. `INDEX_FILE_VERSION` must be bumped whenever `parseSessionText` changes, or old titles would survive the fix. The session files stay the only truth. (2) Archiving renames a transcript to the same relative path under `~/.omp/agent/sessions-archive/` (same volume, so it is atomic) and moves its index entry. omp scans only `sessions/`, so archived files cost no stat on the sidebar poll and no parse at start. Nothing is deleted. (3) Archived sessions stay in search (marked), in the Timeline (so archived spokes stay recoverable), and readable in place. Opening one (`/api/session/load`) or recovering an archived spoke (`/api/fleet/spawn` with `sessionId`) restores it before omp loads it, because `acp_backend.loadSession` swallows a failed load. Delete works on archived sessions. Restore never overwrites an existing file. (4) An age rule, off by default: chats untouched for 30 days, spoke and empty sessions after 7, every workspace, at engine start (+2 min) and every 6 h while on; Save and archive now runs it once after a confirmation that shows the count. Settings `sessionArchive`, clamped to 1-3650 days. (5) Never archive a live session. Measured: omp does not keep a session file open (a rename succeeds while the session is loaded), so the OS does not refuse the move, and an engine still holding the session would append to a recreated file and split it. Each engine therefore publishes the session ids it holds (Main and every spoke, stopped ones included) to `~/.omp/agent/lucid-live-sessions/engine-<pid>.json`: every 30 s, immediately on load and new session, and withdrawn on exit. Archiving skips ids held by itself or by any other living engine (dead pids are pruned; records older than 90 s are ignored). (6) The sidebar gets Archive and Restore buttons on each row, an Archived group (count with the list, rows loaded when opened) and the rule panel.
+
+**Rejected.** Deleting old sessions: irreversible, and search over history is the point of ADR-0469. Compressing archives: saves disk but needs omp-side reading or a decompress on open, for no gain at start once the index is saved. An age floor in minutes as the only live guard: an idle session open in another window would still be moved.
+
+**Consequences.** Engines older than this build publish nothing, so a session they hold is protected only by the rule's age (days). The persisted index holds the said-text of every session (about 1% of transcript bytes, 7.3 MB measured) in plaintext beside the transcripts, with the same exposure as the transcripts themselves. A session archived while an old engine still writes to it splits into the archived file and a fragment at the active path; restore then refuses to overwrite and keeps both.
+
+## ADR-0489 -- P-STOP-GUARD.1: the composer button stops a turn only when the press began on a Stop face that had been showing for 600 ms (2026-11-03)
+
+**Status:** Accepted -- BUILT. `bun test desktop/renderer/stop_guard.test.ts`; renderer typecheck and bundle pass.
+
+**Numbering.** Written as ADR-0472 to ADR-0475 on 2026-11-03; renumbered to ADR-0489 to ADR-0492 when merging master, where the vault suite (release v2.5.1) had taken 0472 to 0479.
+
+**Context.** Owner report: a turn that started on its own cancelled itself, and read as if the user had pressed Stop. The composer's one button is Send while idle and Stop while a turn runs (P-ACP.4), and `setSendEnabled` swaps the face the moment `state.streaming` turns on. Turns start without a click at that moment: a held "next turn" prompt releasing when the previous turn ends, a voice send, a resumed run. The click handler read only `state.streaming`, so the second click of a double click on Send, or a click on Send that landed just as one of those turns began, called `stopTurn()`. omp then records the ACP `session/cancel` as a user interrupt (`USER_INTERRUPT_LABEL`), so the agent also says the user stopped it.
+
+**Decision.** `stopClickIntent` (desktop/renderer/stop_guard.ts, pure) decides what a click means. It is a Stop only while a turn runs AND the pointer went down at least `STOP_ARM_MS` (600 ms) after the face changed to Stop; a keyboard press is judged at the click. Anything else is Send, which mid-turn is the existing hold-or-push choice and does nothing with an empty composer. An unreadable clock never authorizes a Stop.
+
+**Rejected.** Disabling the button for a moment after a turn starts: a disabled button swallows the click silently, including a typed prompt the user meant to stage. A confirm dialog on Stop: a second step on the one control that must always work.
+
+**Consequences.** A deliberate Stop in the first 600 ms after a turn starts needs a second press. The fleet grid cards are unchanged: their Cancel is a separate button that does not replace Send.
+
+## ADR-0490 -- P-STUCK-SHOW.1: a spoke whose open call might be stuck says so on every surface; stopping it stays manual (2026-11-03)
+
+**Status:** Accepted -- BUILT. `bun test desktop/collab/fleet_status.test.ts desktop/call_pulse.test.ts desktop/renderer/orbit_layout.test.ts`. Extends ADR-0418.
+
+**Context.** Owner report: subagents in a spoke go silent and the spoke shows "working" forever, until the owner stops it by hand. The stall watchdog never passes `quiet` while a tool call is open (ADR-0263), and ADR-0418's evidence verdict only marks a call likely stuck (5 min flat, 12 min with a live subagent). That mark reached the main HUD and the grid card's strip only. The orbit node, the orbit census, the minimized pill and the Fleet button all said "working", and nothing reached the user with the fleet closed. Offered automatic recovery, the owner chose: "keep it manual but give the indicators that the agent might be likely stuck".
+
+**Decision.** (1) `displayStatus` (fleet_status.ts) shows a working lane whose liveness verdict is `stuck` as `likely-stuck`: ordered after "waiting on you", worded "likely stuck", counted as attention and as busy. The orbit node and census, the grid card frame, the minimized pill and the Other hubs count read it. The engine's lane status is unchanged. (2) The renderer polls the fleet every 10 s: the Fleet button gets a red dot and a tip naming the stuck spokes, and `newlyStuck` raises one sticky toast per stall with Open spoke. (3) A call flat for half the threshold gets `Liveness.flatMs` and the label "might be stuck: no activity for N ..." (the warning leads so a narrow line keeps it). It shows amber in the quiet default: the HUD line, the grid pill, the orbit node (`flat` class). Below half the threshold nothing changes, so short network waits stay quiet.
+
+**Rejected.** Recovering a likely-stuck subagent call on its own (the owner's call, and ADR-0418's). A distinct "might be stuck" lane status: it would count a long subagent generation as needing the user; the amber hint stays on the spoke itself.
+
+**Consequences.** A stuck spoke now animates like an approval request, so "something moving means it wants you" still holds. The phone PWA rolls up raw statuses and still says "working" for a stuck spoke. Network waits are invisible to the counters on Windows (ADR-0418), so a long download can read "might be stuck"; the detail sentence says so.
+
+## ADR-0491 -- P-STUCK-SHOW.2: "ready for your prompt" is blue; amber means only "might be stuck" (2026-11-03)
+
+**Status:** Accepted -- BUILT. Renderer typecheck; `bun test desktop/collab desktop/renderer/orbit_layout.test.ts tools/remote-pwa`.
+
+**Context.** Owner: "shouldn't we have different color for ready for prompt". Since ADR-0490 amber meant two things on one orbit: a spoke ready for your prompt, and a spoke whose call might be stuck.
+
+**Decision.** `awaiting-input` takes the theme's `--blue` (phone: #5e8df2, the dark theme's blue) on the grid card, pips, orbit node and line, and the spoke switch menu, with the same slow glow (`fleetGlowBlue`; the orbit line's opacity pulse is renamed `orbitLineSoft` since it carries no color). Amber is left to "might be stuck". The orbit line of a likely-stuck spoke is red, like its node. The lane palette is: cyan working, blue waiting on you, amber might be stuck, red needs approval, likely stuck or crashed, green done, grey stopped.
+
+**Rejected.** Recoloring "might be stuck" instead: amber is the warning hue everywhere else in the app (load ramps, reconnect), and "ready for your prompt" is not a warning.
+
+**Consequences.** In the muted `slate` theme blue (#8098c4) and cyan (#78b8c4) are close; the ready state still differs by its pulsing glow and its glance text. Not checked by eye: the preview screenshot showed the app window instead of the test page. Amended same day: slate's `--blue` is now #7790dc (hue 225, was #8098c4 at hue 219 with cyan at 189), more saturated, so ready and working part in that theme too; `--blue-txt` is unchanged.
+
+## ADR-0492 -- P-STUCK-SHOW.3: phone guests see a likely-stuck spoke (2026-11-03)
+
+**Status:** Accepted -- BUILT. `bun test desktop/collab tools/remote-pwa`; root and desktop typechecks; PWA bundles.
+
+**Context.** ADR-0490 left the phone PWA saying "working" for a stuck spoke: its fleet snapshot (`FleetLaneStatus`) carries no progress view, and its roll-up read raw statuses.
+
+**Decision.** The host's 5 s guest fleet snapshot (dev.ts) adds `stuck: true` when `displayStatus` says likely-stuck. `displayStatus` reads that flag as well as a progress verdict, so one rule serves desktop and phone. The phone's bar roll-up and lane cards use it (red card, red pip, "likely-stuck" label); the card's composer still treats the lane as busy (Queue, Push), because its turn is still running. No "might be stuck" hint on the phone: the snapshot stays small, and the alert that matters is the red one.
+
+**Consequences.** A phone shows the stuck state up to 5 s after the desktop. Hosts older than this build send no flag; their phones show "working" as before.
+
 ## ADR-0472 -- P-VAULT-KEYS.1: provider keys and MCP tokens move into an engine-side OS vault (DPAPI / Keychain / libsecret) (2026-11-03)
 
 **Status:** Accepted -- BUILT in source and tests. Proof: `make demo-P-VAULT-KEYS.1` (real processes, real backend) and `bun test desktop/engine_vault.test.ts desktop/settings_vault.test.ts`. Narrows ADR-0020's "tokens live in the 0600 file" and ADR-0375's "key accounts carry their secret in the settings file" to the no-vault fallback. OAuth tokens in omp's `~/.omp/agent/agent.db` are unchanged.

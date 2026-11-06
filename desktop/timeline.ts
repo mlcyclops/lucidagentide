@@ -22,7 +22,7 @@
 import { appendFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { listAllSessions, type SessionRow } from "./sessions.ts";
+import { archiveRootFor, listAllSessions, sessionsRoot, type SessionRow } from "./sessions.ts";
 import type { LaneSessionRecord } from "./fleet_lanes.ts";
 
 /** The durable lane-session ledger. Beside the cred vault dir, not inside the session corpus. */
@@ -190,6 +190,9 @@ export function buildTimeline(sessions: SessionRow[], ledger: LaneSessionRecord[
 
 /** The live listing dev.ts serves: corpus scan (async, index-cached, shared across concurrent and
  *  back-to-back callers) + ledger read + pure merge. */
-export async function listTimeline(opts: TimelineQuery = {}, root?: string, ledgerPath?: string): Promise<TimelinePage> {
-  return buildTimeline(await listAllSessions(root), readLaneLedger(ledgerPath), opts);
+export async function listTimeline(opts: TimelineQuery = {}, root: string = sessionsRoot(), ledgerPath?: string): Promise<TimelinePage> {
+  // P-SESS-ARCHIVE.1 (ADR-0471): archived sessions stay on the timeline (and so stay recoverable as ghost
+  // spokes); recovering one restores its file first (dev.ts /api/fleet/spawn).
+  const [active, archived] = await Promise.all([listAllSessions(root), listAllSessions(archiveRootFor(root))]);
+  return buildTimeline([...active, ...archived], readLaneLedger(ledgerPath), opts);
 }

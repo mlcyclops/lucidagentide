@@ -379,7 +379,7 @@
     .lane-card { --lane: var(--txt3); --lane-dim: transparent; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 7px; }
     .lane-card.lane-starting { --lane: #64748b; }
     .lane-card.lane-working { --lane: #46c8dc; --lane-dim: rgba(70,200,220,.35); border-color: rgba(70,200,220,.5); }
-    .lane-card.lane-awaiting-input { --lane: #e8b23c; --lane-dim: rgba(232,178,60,.4); border-color: #e8b23c; animation: fleetGlowAmber 2.6s ease-in-out infinite; }
+    .lane-card.lane-awaiting-input { --lane: #5e8df2; --lane-dim: rgba(94,141,242,.4); border-color: #5e8df2; animation: fleetGlowBlue 2.6s ease-in-out infinite; }
     .lane-card.lane-needs-approval { --lane: #ef5f5f; --lane-dim: rgba(239,95,95,.5); border-color: #ef5f5f; animation: fleetGlowRed 1.6s ease-in-out infinite; }
     .lane-card.lane-done { --lane: #46d27e; --lane-dim: rgba(70,210,126,.35); border-color: rgba(70,210,126,.55); }
     .lane-card.lane-error { --lane: #ef5f5f; --lane-dim: rgba(239,95,95,.4); border-color: #ef5f5f; }
@@ -387,16 +387,20 @@
     /* the pips share the mapping by class, exactly as the desktop pill shares it with its cards */
     .fleet-pip.lane-starting { --lane: #64748b; }
     .fleet-pip.lane-working { --lane: #46c8dc; --lane-dim: rgba(70,200,220,.45); }
-    .fleet-pip.lane-awaiting-input { --lane: #e8b23c; --lane-dim: rgba(232,178,60,.5); }
+    .fleet-pip.lane-awaiting-input { --lane: #5e8df2; --lane-dim: rgba(94,141,242,.5); }
     .fleet-pip.lane-needs-approval { --lane: #ef5f5f; --lane-dim: rgba(239,95,95,.6); }
     .fleet-pip.lane-done { --lane: #46d27e; --lane-dim: rgba(70,210,126,.45); }
     .fleet-pip.lane-error { --lane: #ef5f5f; --lane-dim: rgba(239,95,95,.4); }
-    @keyframes fleetGlowAmber { 0%,100% { box-shadow: 0 0 0 0 rgba(232,178,60,0); } 50% { box-shadow: 0 0 14px 2px rgba(232,178,60,.4); } }
+    /* P-STUCK-SHOW.3 (ADR-0492): a running call the host marks likely stuck, red like the desktop */
+    .lane-card.lane-likely-stuck { --lane: #ef5f5f; --lane-dim: rgba(239,95,95,.5); border-color: #ef5f5f; animation: fleetGlowRed 2.6s ease-in-out infinite; }
+    .fleet-pip.lane-likely-stuck { --lane: #ef5f5f; --lane-dim: rgba(239,95,95,.6); }
+    .fleet-pip.lane-likely-stuck b { color: var(--txt); }
+    @keyframes fleetGlowBlue { 0%,100% { box-shadow: 0 0 0 0 rgba(94,141,242,0); } 50% { box-shadow: 0 0 14px 2px rgba(94,141,242,.4); } }
     @keyframes fleetGlowRed { 0%,100% { box-shadow: 0 0 2px 0 rgba(239,95,95,.3); } 50% { box-shadow: 0 0 18px 3px rgba(239,95,95,.6); } }
     @keyframes lanePulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
     /* the desktop honours this; so does the phone. Only the two attention states animate at all. */
     @media (prefers-reduced-motion: reduce) {
-      .lane-card.lane-awaiting-input, .lane-card.lane-needs-approval,
+      .lane-card.lane-awaiting-input, .lane-card.lane-needs-approval, .lane-card.lane-likely-stuck,
       .fleet-pip.lane-needs-approval i, .fleet-pip.lane-working i { animation: none; }
     }
 
@@ -732,15 +736,19 @@
     // navigation, so (1) updateViaCache "none" keeps the worker script itself out of the HTTP cache,
     // (2) reg.update() runs on every return to the foreground (the only reliable "check now" moment on
     // a phone), and (3) when a NEW worker takes control (its skipWaiting + clients.claim), the page
-    // reloads ONCE so the running JS actually matches the freshly activated shell - previously the old
+    // reloads ONCE so the running JS actually matches the freshly activated shell. Before this, the old
     // bundle kept driving the screen until the user happened to fully relaunch.
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("./sw.js", { scope: "/remote", updateViaCache: "none" }).then((reg) => {
+    // In a sandboxed frame without allow-same-origin (the IDE preview), "serviceWorker" in navigator is
+    // true but reading the property throws SecurityError, so the read is guarded: no worker there.
+    let sw = null;
+    try { sw = navigator.serviceWorker || null; } catch { sw = null; }
+    if (sw) {
+      sw.register("./sw.js", { scope: "/remote", updateViaCache: "none" }).then((reg) => {
         document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") reg.update().catch(() => {}); });
       }).catch(() => {});
       let reloaded = false;
-      navigator.serviceWorker.addEventListener("controllerchange", () => {
-        if (reloaded) return; // one reload per takeover - never a loop
+      sw.addEventListener("controllerchange", () => {
+        if (reloaded) return; // one reload per takeover, never a loop
         reloaded = true;
         location.reload();
       });

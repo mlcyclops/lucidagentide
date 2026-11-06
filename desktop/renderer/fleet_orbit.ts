@@ -3,8 +3,8 @@
 
 // desktop/renderer/fleet_orbit.ts - P-FLEET.L17: the Fleet Orbit view (hub and spoke) + the spoke takeover
 // banner. The HUB is the master session; every lane is a SPOKE on an ellipse around it, connected by a
-// live SVG line that carries the lane's state color (the fleet grid's own color language: only amber
-// awaiting-input and red needs-approval animate, because those two block on a human). Clicking a spoke
+// live SVG line that carries the lane's state color (the fleet grid's own color language: only blue
+// awaiting-input and red needs-approval or likely-stuck animate, because those block on a human). Clicking a spoke
 // PROMOTES that lane into the main composer (the P-FLEET.L8 attach - the full IDE prompt window now
 // drives the lane), and a fixed banner at the top of the screen names the spoke and carries the switch
 // menu: Main, the whole fleet, or any other spoke by the name the user gave it.
@@ -27,6 +27,7 @@ import { cycleSpoke, ghostKey, ghostSpokes, hubLanes, ORBIT_FPS_FLOOR, ORBIT_NOD
 import { spokeRepo, type SpokeRepo } from "./spoke_repo.ts"; // P-HUB-PICK.1 (ADR-0470): one codebase name + color per spoke
 import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new spokes open on the last spoke's model; colliding names show the route
 import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
+import { LANE_STATUS_ORDER, LANE_STATUS_WORDS, displayStatus } from "../collab/fleet_status.ts"; // P-STUCK-SHOW.1 (ADR-0490)
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
 import { beatLine, goalButtonHtml, goalButtonTip, goalPanelHtml, goalSnapshot, onGoalPanelClick, paintHubGoal, refreshGoal, stalledLanes, taskFormHtml, type OrbitGoalDeps } from "./orbit_goal.ts"; // P-AOS.1 (ADR-0452), P-AOS.2 (ADR-0453)
 
@@ -900,11 +901,11 @@ const censusSig = (lanes: LaneView[]): string => lanes.map((l) => ghostKey(l.nam
 
 function paintHead(s: FleetStatusView): void {
   const census = $("[data-orbit-census]", view!) as HTMLElement;
-  const order = ["needs-approval", "awaiting-input", "working", "starting", "done", "error", "stopped"] as const;
-  const html = order
-    .map((st) => ({ st, n: s.lanes.filter((l) => l.status === st).length }))
-    .filter((r) => r.n > 0)
-    .map((r) => `<span class="fleet-pip lane-${r.st}" data-tip="${esc(r.st)}|${s.lanes.filter((l) => l.status === r.st).map((l) => esc(l.name)).join(", ")}"><i></i><b>${r.n}</b></span>`)
+  // P-STUCK-SHOW.1 (ADR-0490): the shared order and the display status, so a likely-stuck spoke is its own red count.
+  const html = LANE_STATUS_ORDER
+    .map((st) => ({ st, of: s.lanes.filter((l) => displayStatus(l) === st) }))
+    .filter((r) => r.of.length > 0)
+    .map((r) => `<span class="fleet-pip lane-${r.st}" data-tip="${esc(LANE_STATUS_WORDS[r.st] ?? r.st)}|${r.of.map((l) => esc(l.name)).join(", ")}"><i></i><b>${r.of.length}</b></span>`)
     .join("");
   const next = html || `<span class="orbit-census-zero">quiet skies</span>`;
   if (census.innerHTML !== next) census.innerHTML = next;
@@ -1037,7 +1038,7 @@ function reconcile(lanes: LaneView[], first: boolean): void {
       requestAnimationFrame(() => entry!.card.classList.remove("orbit-enter"));
     }
     paintNode(entry.card, lane);
-    entry.line.setAttribute("data-status", lane.status);
+    entry.line.setAttribute("data-status", displayStatus(lane)); // P-STUCK-SHOW.1: a likely-stuck spoke's line is red
     entry.line.classList.toggle("promoted", lane.promoted);
   });
   for (const [id, entry] of nodes) {
@@ -1086,11 +1087,14 @@ function buildNode(lane: LaneView): HTMLElement {
 /** Repaint a card in place. Text writes are guarded so an unchanged poll costs nothing and never
  *  restarts a running glow animation. */
 function paintNode(card: HTMLElement, lane: LaneView): void {
-  const cls = `orbit-node lane-${lane.status}${lane.promoted ? " promoted" : ""}${stalled.has(lane.id) ? " aos-stalled" : ""}`;
+  // P-STUCK-SHOW.1 (ADR-0490): a likely-stuck call turns the spoke red; a call flat for half the threshold, amber.
+  const shown = displayStatus(lane);
+  const doubt = shown === "likely-stuck" || (lane.status === "working" && lane.progress?.liveness.flatMs !== undefined);
+  const cls = `orbit-node lane-${shown}${doubt && shown === "working" ? " flat" : ""}${lane.promoted ? " promoted" : ""}${stalled.has(lane.id) ? " aos-stalled" : ""}`;
   const keep = card.classList.contains("orbit-enter") ? " orbit-enter" : "";
   if (card.getAttribute("class") !== cls + keep) card.setAttribute("class", cls + keep);
   setText(card, ".orbit-name", lane.name);
-  card.title = `${lane.name}\n${lane.cwd}\n${lane.model}`;
+  card.title = `${lane.name}\n${lane.cwd}\n${lane.model}${doubt && lane.progress ? `\n\n${lane.progress.liveness.label}\n${lane.progress.liveness.detail}` : ""}`;
   setText(card, ".orbit-glance", spokeGlance(lane, statusEta())); // P-PROGRESS.3: the percent is opt-in
   setText(card, ".orbit-model", lane.model);
   // P-HUB-PICK.1 (ADR-0470): every spoke names its codebase (hosted repo, git folder, or plain folder) in

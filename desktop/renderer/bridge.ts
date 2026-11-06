@@ -513,10 +513,15 @@ export interface EvalReportResult { kind: string; id: string; rel: string | null
 export interface ModeOption { id: string; name: string; description?: string }
 export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "creator" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
 export interface OmpCommand { name: string; description?: string; hint?: string }
-export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest"; live?: SessionLive; spoke?: string }
+export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest"; live?: SessionLive; spoke?: string; archived?: true }
 // P-KG-INGEST.1b (ADR-0076): chats, with throwaway extraction sessions split into a collapsible group.
 // P-SESS-SEARCH.1 (ADR-0469): `hiddenSpokes` = spoke sessions held back while the Spokes toggle is off.
-export interface SessionList { sessions: SessionInfo[]; ingest: SessionInfo[]; hiddenSpokes?: number }
+// P-SESS-ARCHIVE.1 (ADR-0471): `archived` = this workspace's archived chats (the Archived group's count).
+export interface SessionList { sessions: SessionInfo[]; ingest: SessionInfo[]; hiddenSpokes?: number; archived?: number }
+/** P-SESS-ARCHIVE.1 (ADR-0471): mirrors desktop/sessions.ts ArchivePolicy / ArchiveRun. */
+export interface ArchivePolicyView { auto: boolean; days: number; spokeDays: number }
+export interface ArchiveRunView { candidates: number; archived: number; skipped: number; at: number }
+export interface ArchivePolicyState { policy: ArchivePolicyView; wouldArchive: number; lastRun: ArchiveRunView | null }
 /** P-SESS-SEARCH.1: a sidebar search across every session of the workspace (mirrors desktop/sessions.ts). */
 export interface SessionSearch { hits: (SessionInfo & { snippet?: string })[]; total: number; hiddenSpokes: number }
 // P-SKILL.1 (ADR-0045): per-file result of a gated skill import (mirrors desktop/skills_import.ts).
@@ -1229,6 +1234,12 @@ export interface LucidBridge {
   resumeSession(id: string, opts?: { force?: boolean }): Promise<SessionSwitchResult>;
   deleteSession(id: string): Promise<{ ok: boolean; error?: string }>;
   clearIngestSessions(): Promise<{ ok: boolean; cleared: number } | null>; // P-KG-INGEST.2: bulk-delete ingest throwaways
+  // P-SESS-ARCHIVE.1 (ADR-0471): archive / restore, the Archived group, the auto-archive rule.
+  archiveSession(id: string): Promise<{ ok: boolean; error?: string } | null>;
+  restoreSession(id: string): Promise<{ ok: boolean; restored: boolean; error?: string } | null>;
+  archivedSessions(): Promise<{ sessions: SessionInfo[] } | null>;
+  archivePolicy(set?: ArchivePolicyView): Promise<ArchivePolicyState | null>;
+  archiveNow(): Promise<ArchiveRunView | null>;
   /** Same refusal rule as resumeSession. */
   newSession(opts?: { force?: boolean }): Promise<SessionSwitchResult>;
   setZoom(factor: number): void;
@@ -2064,6 +2075,11 @@ export const bridge: LucidBridge = {
   resumeSession: (id, opts) => postSessionSwitch("/api/session/load", { id, force: opts?.force === true }),
   deleteSession: async (id) => (await post("/api/session/delete", { id })) ?? { ok: false, error: "no response" },
   clearIngestSessions: () => post("/api/sessions/ingest/clear", {}),
+  archiveSession: (id) => post("/api/session/archive", { id }), // P-SESS-ARCHIVE.1
+  restoreSession: (id) => post("/api/session/restore", { id }),
+  archivedSessions: () => getData("/api/sessions/archived"),
+  archivePolicy: (set) => (set ? post("/api/sessions/archive-policy", set) : getData("/api/sessions/archive-policy")),
+  archiveNow: () => post("/api/sessions/archive-now", {}),
   newSession: (opts) => postSessionSwitch("/api/newSession", { force: opts?.force === true }),
   // P-COLLAB.3 (ADR-0192): live session sharing.
   collabStatus: () => getData("/api/collab/status"),
