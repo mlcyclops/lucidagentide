@@ -25405,9 +25405,11 @@ Two traps found by measurement before writing anything:
 
 **Consequences.** Engines older than this build publish nothing, so a session they hold is protected only by the rule's age (days). The persisted index holds the said-text of every session (about 1% of transcript bytes, 7.3 MB measured) in plaintext beside the transcripts, with the same exposure as the transcripts themselves. A session archived while an old engine still writes to it splits into the archived file and a fragment at the active path; restore then refuses to overwrite and keeps both.
 
-## ADR-0472 -- P-STOP-GUARD.1: the composer button stops a turn only when the press began on a Stop face that had been showing for 600 ms (2026-11-03)
+## ADR-0489 -- P-STOP-GUARD.1: the composer button stops a turn only when the press began on a Stop face that had been showing for 600 ms (2026-11-03)
 
 **Status:** Accepted -- BUILT. `bun test desktop/renderer/stop_guard.test.ts`; renderer typecheck and bundle pass.
+
+**Numbering.** Written as ADR-0472 to ADR-0475 on 2026-11-03; renumbered to ADR-0489 to ADR-0492 when merging master, where the vault suite (release v2.5.1) had taken 0472 to 0479.
 
 **Context.** Owner report: a turn that started on its own cancelled itself, and read as if the user had pressed Stop. The composer's one button is Send while idle and Stop while a turn runs (P-ACP.4), and `setSendEnabled` swaps the face the moment `state.streaming` turns on. Turns start without a click at that moment: a held "next turn" prompt releasing when the previous turn ends, a voice send, a resumed run. The click handler read only `state.streaming`, so the second click of a double click on Send, or a click on Send that landed just as one of those turns began, called `stopTurn()`. omp then records the ACP `session/cancel` as a user interrupt (`USER_INTERRUPT_LABEL`), so the agent also says the user stopped it.
 
@@ -25417,7 +25419,7 @@ Two traps found by measurement before writing anything:
 
 **Consequences.** A deliberate Stop in the first 600 ms after a turn starts needs a second press. The fleet grid cards are unchanged: their Cancel is a separate button that does not replace Send.
 
-## ADR-0473 -- P-STUCK-SHOW.1: a spoke whose open call might be stuck says so on every surface; stopping it stays manual (2026-11-03)
+## ADR-0490 -- P-STUCK-SHOW.1: a spoke whose open call might be stuck says so on every surface; stopping it stays manual (2026-11-03)
 
 **Status:** Accepted -- BUILT. `bun test desktop/collab/fleet_status.test.ts desktop/call_pulse.test.ts desktop/renderer/orbit_layout.test.ts`. Extends ADR-0418.
 
@@ -25429,11 +25431,11 @@ Two traps found by measurement before writing anything:
 
 **Consequences.** A stuck spoke now animates like an approval request, so "something moving means it wants you" still holds. The phone PWA rolls up raw statuses and still says "working" for a stuck spoke. Network waits are invisible to the counters on Windows (ADR-0418), so a long download can read "might be stuck"; the detail sentence says so.
 
-## ADR-0474 -- P-STUCK-SHOW.2: "ready for your prompt" is blue; amber means only "might be stuck" (2026-11-03)
+## ADR-0491 -- P-STUCK-SHOW.2: "ready for your prompt" is blue; amber means only "might be stuck" (2026-11-03)
 
 **Status:** Accepted -- BUILT. Renderer typecheck; `bun test desktop/collab desktop/renderer/orbit_layout.test.ts tools/remote-pwa`.
 
-**Context.** Owner: "shouldn't we have different color for ready for prompt". Since ADR-0473 amber meant two things on one orbit: a spoke ready for your prompt, and a spoke whose call might be stuck.
+**Context.** Owner: "shouldn't we have different color for ready for prompt". Since ADR-0490 amber meant two things on one orbit: a spoke ready for your prompt, and a spoke whose call might be stuck.
 
 **Decision.** `awaiting-input` takes the theme's `--blue` (phone: #5e8df2, the dark theme's blue) on the grid card, pips, orbit node and line, and the spoke switch menu, with the same slow glow (`fleetGlowBlue`; the orbit line's opacity pulse is renamed `orbitLineSoft` since it carries no color). Amber is left to "might be stuck". The orbit line of a likely-stuck spoke is red, like its node. The lane palette is: cyan working, blue waiting on you, amber might be stuck, red needs approval, likely stuck or crashed, green done, grey stopped.
 
@@ -25441,15 +25443,16 @@ Two traps found by measurement before writing anything:
 
 **Consequences.** In the muted `slate` theme blue (#8098c4) and cyan (#78b8c4) are close; the ready state still differs by its pulsing glow and its glance text. Not checked by eye: the preview screenshot showed the app window instead of the test page. Amended same day: slate's `--blue` is now #7790dc (hue 225, was #8098c4 at hue 219 with cyan at 189), more saturated, so ready and working part in that theme too; `--blue-txt` is unchanged.
 
-## ADR-0475 -- P-STUCK-SHOW.3: phone guests see a likely-stuck spoke (2026-11-03)
+## ADR-0492 -- P-STUCK-SHOW.3: phone guests see a likely-stuck spoke (2026-11-03)
 
 **Status:** Accepted -- BUILT. `bun test desktop/collab tools/remote-pwa`; root and desktop typechecks; PWA bundles.
 
-**Context.** ADR-0473 left the phone PWA saying "working" for a stuck spoke: its fleet snapshot (`FleetLaneStatus`) carries no progress view, and its roll-up read raw statuses.
+**Context.** ADR-0490 left the phone PWA saying "working" for a stuck spoke: its fleet snapshot (`FleetLaneStatus`) carries no progress view, and its roll-up read raw statuses.
 
 **Decision.** The host's 5 s guest fleet snapshot (dev.ts) adds `stuck: true` when `displayStatus` says likely-stuck. `displayStatus` reads that flag as well as a progress verdict, so one rule serves desktop and phone. The phone's bar roll-up and lane cards use it (red card, red pip, "likely-stuck" label); the card's composer still treats the lane as busy (Queue, Push), because its turn is still running. No "might be stuck" hint on the phone: the snapshot stays small, and the alert that matters is the red one.
 
 **Consequences.** A phone shows the stuck state up to 5 s after the desktop. Hosts older than this build send no flag; their phones show "working" as before.
+
 ## ADR-0472 -- P-VAULT-KEYS.1: provider keys and MCP tokens move into an engine-side OS vault (DPAPI / Keychain / libsecret) (2026-11-03)
 
 **Status:** Accepted -- BUILT in source and tests. Proof: `make demo-P-VAULT-KEYS.1` (real processes, real backend) and `bun test desktop/engine_vault.test.ts desktop/settings_vault.test.ts`. Narrows ADR-0020's "tokens live in the 0600 file" and ADR-0375's "key accounts carry their secret in the settings file" to the no-vault fallback. OAuth tokens in omp's `~/.omp/agent/agent.db` are unchanged.

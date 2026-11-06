@@ -255,7 +255,7 @@ describe("pwa_view: fleet lane cards + process rows", () => {
     }
   });
 
-  // P-STUCK-SHOW.3 (ADR-0475): the phone shows a spoke the host marks stuck in red, and it is still a running
+  // P-STUCK-SHOW.3 (ADR-0492): the phone shows a spoke the host marks stuck in red, and it is still a running
   // turn there: the composer keeps Queue and Push, so the user can interject or stop it from the phone.
   it("a working lane the host marks stuck reads likely-stuck and stays busy", () => {
     const html = renderLaneCard({ ...LANE, status: "working", stuck: true });

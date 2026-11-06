@@ -868,7 +868,7 @@ function paintProgress(run: LaneRun): void {
   const full = statusDetail() === "full";
   // P-LIVENESS.1 (ADR-0418): a call marked likely stuck is something the user must know too.
   const urgent = p?.liveness.state === "dead" || p?.liveness.state === "stuck";
-  // P-STUCK-SHOW.1 (ADR-0473): an open call with no activity yet is named (amber) before it is marked stuck.
+  // P-STUCK-SHOW.1 (ADR-0490): an open call with no activity yet is named (amber) before it is marked stuck.
   const flat = !urgent && p?.liveness.flatMs !== undefined;
   strip.hidden = (!p && !w) || (!full && !urgent && !flat && !w);
   strip.classList.toggle("quiet", !full);

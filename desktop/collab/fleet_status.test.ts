@@ -77,7 +77,7 @@ describe("fleet_status: laneRollup", () => {
   });
 });
 
-// P-STUCK-SHOW.1 (ADR-0473): a working spoke whose open call is marked likely stuck must never read as plain
+// P-STUCK-SHOW.1 (ADR-0490): a working spoke whose open call is marked likely stuck must never read as plain
 // "working" on a roll-up, and the alert for it fires once per stall.
 const live = (id: string, status: string, state?: string) => ({ id, name: id, status, progress: state ? { liveness: { state } } : undefined });
 

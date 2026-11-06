@@ -114,7 +114,7 @@ describe("spokeGlance (P-PROGRESS.1)", () => {
     expect(spokeGlance({ ...base, status: "done", progress: { estimate: { percent: 40 } } }, true)).toBe("done \u00b7 2 turns");
   });
 
-  // P-STUCK-SHOW.1 (ADR-0473): the orbit never says plain "working" over a call the evidence doubts.
+  // P-STUCK-SHOW.1 (ADR-0490): the orbit never says plain "working" over a call the evidence doubts.
   test("a likely-stuck call names itself and the way out; a call gone flat says it might be stuck", () => {
     const base = { turns: 2, queued: [] as unknown[] };
     const stuck = { estimate: { percent: 40 }, liveness: { state: "stuck", label: "likely stuck: no activity for 13 m", flatMs: 780_000 } };

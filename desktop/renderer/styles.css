@@ -4739,7 +4739,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 /* Multiple headless LUCID engine lanes as mini agent windows inside one movable dock (the share-dock frame
    under the lucid.fleetDock.* keys). The card FRAME is the status surface: the LED + border take the lane
    color, and ONLY the states that need the user - awaiting-input (blue), needs-approval and likely-stuck
-   (red) - animate their glow (the sendReady/secPulse feel). Amber is kept for "might be stuck" (ADR-0474). Every persistent label is nowrap+ellipsis and the grid
+   (red) - animate their glow (the sendReady/secPulse feel). Amber is kept for "might be stuck" (ADR-0491). Every persistent label is nowrap+ellipsis and the grid
    tracks are minmax(280px,1fr), per the no-mid-word-wrap invariant. */
 .fleet-dock{min-width:320px}
 .fleet-body{padding:10px}
@@ -6596,7 +6596,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .hud-alive[data-state="stuck"],.lane-alive[data-state="stuck"]{color:var(--red-txt);background:rgb(var(--red-rgb) / .14);
   border-color:rgb(var(--red-rgb) / .5)}
 .hud-stopcall,.lane-stopcall{flex:none;white-space:nowrap}
-/* P-STUCK-SHOW.1 (ADR-0473): a likely-stuck spoke is red wherever a spoke is drawn (card, orbit node, the
+/* P-STUCK-SHOW.1 (ADR-0490): a likely-stuck spoke is red wherever a spoke is drawn (card, orbit node, the
    count dots, the Fleet button), and a call flat for half the threshold is amber ("might be stuck").
    Display only: LUCID still never stops the call on its own. */
 .lane-alive[data-state="flat"]{color:var(--amber-txt);background:rgb(var(--amber-rgb) / .14);border-color:rgb(var(--amber-rgb) / .5)}

@@ -27,7 +27,7 @@ import { cycleSpoke, ghostKey, ghostSpokes, hubLanes, ORBIT_FPS_FLOOR, ORBIT_NOD
 import { spokeRepo, type SpokeRepo } from "./spoke_repo.ts"; // P-HUB-PICK.1 (ADR-0470): one codebase name + color per spoke
 import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new spokes open on the last spoke's model; colliding names show the route
 import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
-import { LANE_STATUS_ORDER, LANE_STATUS_WORDS, displayStatus } from "../collab/fleet_status.ts"; // P-STUCK-SHOW.1 (ADR-0473)
+import { LANE_STATUS_ORDER, LANE_STATUS_WORDS, displayStatus } from "../collab/fleet_status.ts"; // P-STUCK-SHOW.1 (ADR-0490)
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
 import { beatLine, goalButtonHtml, goalButtonTip, goalPanelHtml, goalSnapshot, onGoalPanelClick, paintHubGoal, refreshGoal, stalledLanes, taskFormHtml, type OrbitGoalDeps } from "./orbit_goal.ts"; // P-AOS.1 (ADR-0452), P-AOS.2 (ADR-0453)
 
@@ -901,7 +901,7 @@ const censusSig = (lanes: LaneView[]): string => lanes.map((l) => ghostKey(l.nam
 
 function paintHead(s: FleetStatusView): void {
   const census = $("[data-orbit-census]", view!) as HTMLElement;
-  // P-STUCK-SHOW.1 (ADR-0473): the shared order and the display status, so a likely-stuck spoke is its own red count.
+  // P-STUCK-SHOW.1 (ADR-0490): the shared order and the display status, so a likely-stuck spoke is its own red count.
   const html = LANE_STATUS_ORDER
     .map((st) => ({ st, of: s.lanes.filter((l) => displayStatus(l) === st) }))
     .filter((r) => r.of.length > 0)
@@ -1087,7 +1087,7 @@ function buildNode(lane: LaneView): HTMLElement {
 /** Repaint a card in place. Text writes are guarded so an unchanged poll costs nothing and never
  *  restarts a running glow animation. */
 function paintNode(card: HTMLElement, lane: LaneView): void {
-  // P-STUCK-SHOW.1 (ADR-0473): a likely-stuck call turns the spoke red; a call flat for half the threshold, amber.
+  // P-STUCK-SHOW.1 (ADR-0490): a likely-stuck call turns the spoke red; a call flat for half the threshold, amber.
   const shown = displayStatus(lane);
   const doubt = shown === "likely-stuck" || (lane.status === "working" && lane.progress?.liveness.flatMs !== undefined);
   const cls = `orbit-node lane-${shown}${doubt && shown === "working" ? " flat" : ""}${lane.promoted ? " promoted" : ""}${stalled.has(lane.id) ? " aos-stalled" : ""}`;

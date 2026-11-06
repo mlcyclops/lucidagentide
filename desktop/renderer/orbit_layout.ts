@@ -93,7 +93,7 @@ export function spokeGlance(l: { status: LaneStatus; turns: number; queued: read
   // with history shows how far along it probably is (labelled as the estimate it is). P-PROGRESS.3: only
   // when the user opted into the experimental estimate.
   if (l.waiting && l.status === "working") return `waiting for ${l.waiting.on.name}${q}`;
-  // P-STUCK-SHOW.1 (ADR-0473): the evidence verdict on an open call outranks "working". The node is 172 px
+  // P-STUCK-SHOW.1 (ADR-0490): the evidence verdict on an open call outranks "working". The node is 172 px
   // wide, so the glance is the verdict and how long nothing moved; the full sentence is the node's tooltip.
   const live = l.status === "working" ? l.progress?.liveness : undefined;
   if (live?.flatMs !== undefined && (live.state === "stuck" || live.state === "working")) {

@@ -25,7 +25,7 @@ import { parseImageDataUrl } from "../renderer/image_data_url.ts"; // the strict
 import type { CollabSessionHeader, CollabTranscriptTurn, WelcomeFrame } from "./frames.ts";
 import type { GuestPhase, GuestView } from "./guest.ts";
 import type { ProcessView } from "../process_view.ts"; // P-PWA-FLEET.1: pure process rows (type-only)
-import { displayStatus } from "./fleet_status.ts"; // P-STUCK-SHOW.3 (ADR-0475)
+import { displayStatus } from "./fleet_status.ts"; // P-STUCK-SHOW.3 (ADR-0492)
 
 /** Escape the five HTML-significant characters. The only text→markup boundary in the PWA. */
 export function escapeHtml(s: string): string {
@@ -308,7 +308,7 @@ export function laneCwdName(cwd: string): string {
  */
 export function renderLaneCard(lane: FleetLaneStatus): string {
   const id = escapeHtml(lane.id);
-  const status = escapeHtml(displayStatus(lane)); // P-STUCK-SHOW.3 (ADR-0475): a likely-stuck lane is red, not "working"
+  const status = escapeHtml(displayStatus(lane)); // P-STUCK-SHOW.3 (ADR-0492): a likely-stuck lane is red, not "working"
   const pend = lane.pendingApproval
     ? `<div class="lane-pend"><span class="lane-pend-sum">${escapeHtml(lane.pendingApproval.kind)}: ${escapeHtml(lane.pendingApproval.summary)}</span></div>` +
       `<div class="lane-approve">` +

@@ -12,8 +12,8 @@ import { bridge, type AccountsSnapshot, type ArchivePolicyView, type AgentRunRep
 import type { TurnStatus } from "./chat_events.ts";
 import { currentSwitchPreflight, liveBadge, planSessionSwitch, spokeNameFor, switchOutcome, switchSheetCopy } from "./session_switch.ts"; // P-SWITCH.1 (ADR-0403), P-SWITCH.2 (ADR-0404)
 import { markTerms } from "./session_search.ts"; // P-SESS-SEARCH.1 (ADR-0469)
-import { stopClickIntent } from "./stop_guard.ts"; // P-STOP-GUARD.1 (ADR-0472): a press aimed at Send never stops a turn
-import { newlyStuck } from "../collab/fleet_status.ts"; // P-STUCK-SHOW.1 (ADR-0473): one alert per stalled spoke
+import { stopClickIntent } from "./stop_guard.ts"; // P-STOP-GUARD.1 (ADR-0489): a press aimed at Send never stops a turn
+import { newlyStuck } from "../collab/fleet_status.ts"; // P-STUCK-SHOW.1 (ADR-0490): one alert per stalled spoke
 import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
 // P-RECOVER.1 (ADR-0385): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
 import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
@@ -2606,7 +2606,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     const p = progress;
     // P-INTERJECT.3: the Check-in card reads the same verdict. P-PROGRESS.3: only with Full detail, or when the
     // process is gone (the ADR-0409 amendment keeps every other liveness label out of the quiet default).
-    // P-STUCK-SHOW.1 (ADR-0473): an open call with no activity yet (flatMs) is named before it is marked stuck.
+    // P-STUCK-SHOW.1 (ADR-0490): an open call with no activity yet (flatMs) is named before it is marked stuck.
     liveTurn.alive = statusDetail() === "full" || p.liveness.state === "dead" || p.liveness.state === "stuck" || p.liveness.flatMs !== undefined ? p.liveness.label : "";
     liveTurn.open = p.liveness.state !== "idle" && p.liveness.state !== "dead" ? p.stepsOpen.length : 0;
     // P-LIVENESS.1 (ADR-0418): a call marked likely stuck shows in the quiet default too, with its way out.
@@ -3160,7 +3160,7 @@ function autosize(ta: HTMLTextAreaElement): void {
   ta.style.height = Math.min(ta.scrollHeight, max) + "px";
   ta.style.overflowY = ta.scrollHeight > max ? "auto" : "hidden";
 }
-/** P-STOP-GUARD.1 (ADR-0472): when the composer button last turned from Send to Stop, and when the pointer
+/** P-STOP-GUARD.1 (ADR-0489): when the composer button last turned from Send to Stop, and when the pointer
  *  last went down on it (null after each click, and for keyboard presses). */
 let stopShownAt = 0;
 let sendPressedAt: number | null = null;
@@ -17202,7 +17202,7 @@ function wire(): void {
   // closes the grid whenever it opens (fleet_orbit closeGrid dep), so with the orbit pinned the grid
   // appears only when the user switches to it.
   $("#ctFleet")?.addEventListener("click", () => { if (fleetHome() === "grid") toggleFleetGrid(); else toggleFleetOrbit(); });
-  // P-STUCK-SHOW.1 (ADR-0473): a spoke whose open call is marked likely stuck says so from anywhere, with the
+  // P-STUCK-SHOW.1 (ADR-0490): a spoke whose open call is marked likely stuck says so from anywhere, with the
   // fleet closed too: the Fleet button turns red and names the spokes in its tip, and one toast per stall
   // offers to open the spoke. Marking only, as ADR-0418: stopping it stays the user's decision.
   const fleetBtn = $("#ctFleet") as HTMLElement | null;
@@ -18110,7 +18110,7 @@ function wire(): void {
     ($("#input") as HTMLTextAreaElement)?.focus();
   });
   // P-ACP.4: while a turn runs the Send button is a Stop control (interrupt the turn); else it sends.
-  // P-STOP-GUARD.1 (ADR-0472): only a press that began on a Stop face already visible for STOP_ARM_MS stops;
+  // P-STOP-GUARD.1 (ADR-0489): only a press that began on a Stop face already visible for STOP_ARM_MS stops;
   // a press aimed at Send (double click, or a turn that started on its own under the pointer) acts as Send.
   const sendBtn = $("#send")!;
   sendBtn.addEventListener("pointerdown", () => { sendPressedAt = Date.now(); });
