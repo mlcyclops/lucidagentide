@@ -865,6 +865,15 @@ license-headers: ## Apply the BUSL-1.1 SPDX header to first-party source (idempo
 license-check: ## Fail if any first-party source file is missing the BUSL-1.1 header (CI guard)
 	$(BUN) run tools/license_headers.ts --check
 
+EVIDENCE_OUT ?= compliance-evidence
+.PHONY: compliance-evidence
+compliance-evidence: ## P-COMPLY.1 (ADR-0479): NIST SP 800-171 r3 host evidence -> $(EVIDENCE_OUT)/evidence.json + evidence.md (read-only)
+	$(BUN) run tools/compliance/evidence.ts --out $(EVIDENCE_OUT)
+
+.PHONY: compliance-matrix
+compliance-matrix: ## P-COMPLY.1: re-render docs/compliance/control-matrix-r3.md from the CSV
+	$(BUN) run tools/compliance/matrix.ts
+
 .PHONY: clean
 clean: ## Remove build/test artifacts (keeps committed source + DBs)
 	rm -rf node_modules/.cache .bun 2>/dev/null || true
@@ -1404,6 +1413,30 @@ demo-P-PORTGUARD.4: ## P-PORTGUARD.4 (ADR-0458): Creator beside Agent. A package
 demo-CREATOR-OPENFILM: ## CREATOR-OPENFILM (ADR-0457): OpenFilm (MIT, film.html + frame(t) pages) as an on-device Creator provider run ONLY as `--version`, `look` and `render` on a fixed argv: shell shims, package runners (npx, bunx, dlx) and the get/open/update/skill subcommands are refused before anything runs; the child env carries no engine secret and forces the browser, update-check and telemetry opt-outs (plus a dead download host under CUI lockdown); the CLI's own .film/opened marker is written so no detached Studio server is spawned; an external URL in any page refuses under lockdown; the look verdict (same t, same picture) is parsed with its untrusted text sanitized, only PNG sheets from .film/cache/look are stored; a render lands in the library as video and an exit-2 run fails its job
 	$(BUN) run desktop/scripts/demo_creator_openfilm.ts
 	$(BUN) test $(TEST_IGNORES) desktop/creator_openfilm.test.ts desktop/creator_registry.test.ts desktop/creator_probe.test.ts desktop/cui_policy.test.ts harness/omp/openfilm_extension.test.ts desktop/renderer/creator_video.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-VAULT-KEYS.1
+demo-P-VAULT-KEYS.1: ## P-VAULT-KEYS.1 (ADR-0472): provider keys, named-account keys, MCP bearer tokens and the TURN credential leave lucid-gui.json for an ENGINE-side OS vault (DPAPI / Keychain / libsecret master key, AES-256-GCM records) that headless engines open themselves. Real processes and the real backend: a plaintext settings file and its .bak migrate on the first engine start with no re-entry, a second engine reads the same keys, a missing master key reads as unreadable and rewrites nothing, a re-entered key sets the old vault aside, and the vault bundled for Node (Electron main) reports unavailable without touching a vault file
+	$(BUN) run desktop/scripts/demo_p_vault_keys_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/engine_vault.test.ts desktop/settings_vault.test.ts desktop/settings_store_atomic.test.ts desktop/auth_status.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-VAULT-V2.1
+demo-P-VAULT-V2.1: ## P-VAULT-V2.1 (ADR-0474): one engine vault. Sealed format v2 with per-entry metadata (v1 read and upgraded on the first real write), the Electron safeStorage credential vault migrated into it (import, engine read-back, only then delete; crash-safe, idempotent), credentials resolved engine-side under the env names main injected, and the vault API (/api/vault/list|put|rotate|delete, UI token only; main-only routes behind a per-launch vault token). Real engines in a scratch dir: no route response ever carries a value
+	$(BUN) run desktop/scripts/demo_p_vault_v2_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/vault_v2.test.ts desktop/cred_migration.test.ts desktop/engine_vault.test.ts desktop/settings_vault.test.ts desktop/cred_vault.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-VAULT-DEST.1
+demo-P-VAULT-DEST.1: ## P-VAULT-DEST.1 (ADR-0478): enterprise vault destinations, core half. Settings "Vault destinations (Enterprise)" over /api/vault/destinations*, /api/vault/push, /api/vault/pull (UI token only); requests to the add-on kms connector (put/list/pull/check, ADR-A044) written 0600 in a private temp dir and wiped after every call; name mapping char for char the add-on's; auto-backup on vaultPut/vaultRotate; honest not-installed state. Real engines in a scratch dir (set LUCID_ADDON_DIR to the add-on checkout): no route response or log line carries a value
+	$(BUN) run desktop/scripts/demo_p_vault_dest_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/vault_destinations.test.ts desktop/renderer/vault_dest_card.test.ts desktop/vault_v2.test.ts desktop/addon_seam.test.ts
+
+.PHONY: demo-P-FIPS.1
+demo-P-FIPS.1: ## P-FIPS.1 (ADR-0473): AES-256-GCM, PBKDF2-HMAC-SHA256, SHA-256, HMAC-SHA256 and the DRBG run in the OS FIPS 140 module (Windows CNG / Apple corecrypto / OpenSSL FIPS provider) after power-on known-answer tests; output is byte-identical to node:crypto so personal-kg.v1 stores open unchanged; fips is claimed only by the documented rule; LUCID_FIPS_REQUIRED=1 or managed security.crypto.requireFips fails every op closed when no validated module is usable; the Node (Electron main) bundle never loads bun:ffi
+	$(BUN) run desktop/scripts/demo_p_fips_1.ts
+	$(BUN) test $(TEST_IGNORES) harness/crypto/fips_crypto.test.ts harness/personal/personal.test.ts desktop/managed_config.test.ts
+
 .PHONY: demo-P-BREW.1
 demo-P-BREW.1: ## P-BREW.1: the Homebrew cask is an app cask over the release .zip - no pkg stanza, no allow_untrusted / package trust (deprecated in Homebrew 6), pinned per-arch sha256, and the cask url / electron-builder artifactName / update-cask job all name the same zips
 	$(BUN) run tools/cask_check.ts
+.PHONY: demo-P-RECOVER.4
+demo-P-RECOVER.4: ## P-RECOVER.4 (ADR-0481): the main window recovers its own renderer. A render-process-gone that is not a clean exit is logged with reason + exit code and the app is loaded again after a backoff (250ms to 10s), at most 5 reloads per 60s sliding window; past the cap the window is left as it is and the log says to relaunch; a clean exit is ignored; an unresponsive renderer is logged, never reloaded. Wiring lives in main.ts createWindow (proven on a real Electron launch, ADR-0481 Consequences)
+	$(BUN) test $(TEST_IGNORES) desktop/renderer_watchdog.test.ts desktop/gpu_watchdog.test.ts desktop/navigation_policy.test.ts harness/adr_numbering.test.ts
