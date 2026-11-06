@@ -13,6 +13,7 @@ import type { AgentSpec } from "../../harness/agent/spec.ts"; // P-AGENT.2b: Age
 import type { UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user-authored slash commands
 import type { JudgmentReport } from "../../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the judgment trace (DOM-free)
 import type { ProcessView } from "../process_view.ts"; // P-PWA-FLEET.1: pure process rows (DOM-free)
+import type { SecretRequestView } from "../secret_intake_view.ts"; // P-SECRET-INTAKE.1 (ADR-0476): pure (DOM-free)
 import type { TurnSnapshot } from "../turn_recovery.ts";
 import type { ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure progress + liveness view
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1: the same-file write wait view
@@ -68,6 +69,7 @@ export type ChatEvent =
   | { type: "design-available"; path: string } // P-FIGMA.2 (ADR-0154): the agent wrote/updated DESIGN.md
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
+  | { type: "secret-request"; request: SecretRequestView } // P-SECRET-INTAKE.1 (ADR-0476): the agent asks the user for a secret (names only)
   | { type: "usage"; used: number; size: number; cost: number }
   // P-STALL.1 (ADR-0186) / P-STALL.2 (ADR-0263): the provider is silent - the UI shows "still waiting";
   // `pending` names the open tool calls / spawned subagent tasks the turn is waiting on (longest first).

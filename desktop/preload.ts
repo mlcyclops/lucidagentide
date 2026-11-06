@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld("lucid", {
   pickFolder: (opts?: { title?: string; defaultPath?: string; buttonLabel?: string }): Promise<string | null> => ipcRenderer.invoke("lucid:pickFolder", opts ?? {}),
   // P-NETWL.1 (ADR-0106): native FILE picker (auth config / token / PEM / API-key upload).
   pickFile: (opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null> => ipcRenderer.invoke("lucid:pickFile", opts ?? {}),
+  // P-VAULT-UI.1 (ADR-0475): native SAVE dialog for text the renderer holds (the encrypted vault backup).
+  saveTextFile: (opts: { title?: string; defaultName?: string; filters?: { name: string; extensions: string[] }[]; text: string }): Promise<string | { error: string } | null> => ipcRenderer.invoke("lucid:saveTextFile", opts),
   // P-NETWL.1 (ADR-0106): OS-encrypted credential vault (safeStorage). Store/list/delete only; a plaintext
   // secret never comes back to the renderer (decrypt is main-process-only).
   credStore: (input: { ref?: string; kind: string; secret: string; label?: string }) => ipcRenderer.invoke("lucid:credStore", input),

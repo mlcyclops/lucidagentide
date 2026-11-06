@@ -259,8 +259,9 @@ export interface FleetLaneDeps {
   /** P-INTERJECT.1: per-lane spawn env OVERLAY (on top of the inherited process.env - ACPClient
    *  semantics). dev.ts supplies interjectChildEnv(laneId), which stamps LUCID_INTERJECT_TARGET=<laneId>
    *  (+ LUCID_DEV_URL) so the lane's interject_extension drains only ITS notes. Optional: absent means
-   *  a bare inherit, exactly the pre-seam behavior. Applied at spawn AND at every in-place recovery. */
-  env?: (laneId: string) => Record<string, string>;
+   *  a bare inherit, exactly the pre-seam behavior. Applied at spawn AND at every in-place recovery.
+   *  `cwd` is the lane's working folder: P-VAULT-ENV.1 adds that workspace's scoped secrets from it. */
+  env?: (laneId: string, cwd: string) => Record<string, string>;
   /** P-HEALTH.1: deliver an OPERATOR note to a lane's in-flight turn (dev.ts supplies addInterject).
    *  This is how a stall probe reaches a busy session: the lane already has a turn open, and a second
    *  session/prompt on one session would cross collectors (the ADR-0268 lesson). Optional, because a
@@ -490,7 +491,7 @@ export class FleetLaneManager {
       createdAt: t,
       lastActivityAt: t,
       turns: opts.resume ? Math.max(0, Math.floor(opts.resume.turns)) : 0,
-      client: new ACPClient(plan.cmd, plan.args, cwd, this.#deps.env?.(id) ?? {}),
+      client: new ACPClient(plan.cmd, plan.args, cwd, this.#deps.env?.(id, cwd) ?? {}),
       sessionId: opts.resume?.sessionId ?? null,
       hubSessionId: this.#hub(), // P-SWITCH.3: born under the hub of the moment, kept for life
       sinks: new Set(),
@@ -1235,7 +1236,7 @@ export class FleetLaneManager {
     // the same way. A lane must never come back to life ungated.
     let plan: { cmd: string; args: string[] };
     try { plan = this.#deps.argv(); } catch (e) { return { ok: false, reason: e instanceof Error ? e.message : String(e) }; }
-    lane.client = new ACPClient(plan.cmd, plan.args, lane.cwd, this.#deps.env?.(lane.id) ?? {});
+    lane.client = new ACPClient(plan.cmd, plan.args, lane.cwd, this.#deps.env?.(lane.id, lane.cwd) ?? {});
     this.#wire(lane);
     this.#setStatus(lane, "starting");
     try {
