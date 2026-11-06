@@ -3330,6 +3330,21 @@ body.preview-open .thread{font-size:.9em}
 .modal-err{color:var(--red);font-size:11.5px;margin:6px 0 0;min-height:14px}
 .modal-actions{display:flex;justify-content:center;gap:9px;margin-top:14px}
 .modal-actions .btn-mini{padding:6px 16px}
+/* P-SECRET-INTAKE.1 (ADR-0476): the agent-triggered secret dialog. Same .modal chrome; the agent's purpose is
+   quoted data, the field is masked (password input, or a disc-masked textarea for PEM / JSON). */
+.modal.secret-modal{width:min(520px,92vw);text-align:left}
+.secret-modal .modal-icon{margin-left:0}
+.secret-modal .modal-desc{margin-left:0;max-width:none}
+.secret-purpose{margin:0 0 10px;padding:8px 11px;border-left:2px solid var(--accent);border-radius:6px;
+  background:rgb(var(--tint-rgb) / .04);font-size:12.5px;line-height:1.55;color:var(--txt-2);white-space:pre-wrap;overflow-wrap:anywhere}
+.secret-field{display:flex;gap:6px;align-items:stretch;margin-top:10px}
+.secret-field .prov-key{text-align:left;font-family:var(--mono)}
+.secret-field textarea.prov-key{resize:vertical;min-height:84px;line-height:1.45}
+.secret-masked{-webkit-text-security:disc}
+.secret-path{font-family:var(--mono);font-size:11px;overflow-wrap:anywhere}
+.secret-modal .modal-actions{flex-wrap:wrap;justify-content:flex-end}
+.secret-dest-row{display:grid;grid-template-columns:120px minmax(0,1fr);gap:8px;align-items:center;margin-top:8px}
+.secret-dest-row>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--txt-2)}
 @keyframes fade{from{opacity:0}to{opacity:1}}
 
 /* ───────────────────────── About panel (P-ABOUT.1 / ADR-0087) ───────────────────────── */
@@ -4322,6 +4337,15 @@ pre:hover .code-copy-btn,pre:focus-within .code-copy-btn{opacity:1}
 .lp-apply-row{display:flex;align-items:center;gap:9px;margin:8px 0 2px;flex-wrap:wrap}
 .lp-apply-note{font-size:11px;color:var(--txt-2)}
 .lp-add-row .lp-auth-sel{flex:0 0 auto;max-width:52%}
+/* P-VAULT-DEST.1 (ADR-0478): Settings → Vault destinations (Enterprise); reuses the .lp-* row/add-form look */
+.vd-ttl{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vd-actions{display:flex;flex-wrap:wrap;gap:6px;padding:0 10px 8px}
+.vd-auto{padding:0 10px 8px}
+.vd-last{padding:0 10px 8px;margin-top:0}
+.vd-last.vd-bad{color:var(--amber)}
+.vd-result{margin:0 10px 9px}
+.vd-client{display:flex;flex-direction:column;gap:6px}
+.vd-client[hidden]{display:none}
 .lp-add-row #lpKey{flex:1;min-width:0}
 .ab-cred-row{display:flex;flex-direction:column;gap:6px;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r-sm);padding:8px 9px}
 .ab-cred-head{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--txt)}
@@ -6707,3 +6731,15 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 @media (prefers-reduced-motion: reduce){
   .hud-eta[data-state="estimating"],.sa-eta[data-state="estimating"],.subagent-eta[data-state="estimating"]{animation:none}
 }
+
+/* P-VAULT-UI.1 (ADR-0475): Settings > Credential vault. Invariant 11: the row label owns the header's free
+   space and ellipsizes; every metadata line is a block that never wraps. */
+.vault-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vault-row .prov-h{margin-bottom:6px}
+.vault-line{font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.vault-ref{font-family:var(--mono)}
+.vault-row .prov-row{margin-top:8px}
+.vault-strength:empty{display:none}
+.vault-strength[data-score="0"],.vault-strength[data-score="1"]{color:var(--red-txt)}
+.vault-strength[data-score="2"]{color:var(--cyan-txt)}
+.vault-strength[data-score="3"],.vault-strength[data-score="4"]{color:var(--green-txt)}

@@ -16,6 +16,7 @@ import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_rest
 // P-RECOVER.1 (ADR-0385): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
 import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
 import { REPORT_SAVED, clearRecoveryNotice, openIncidentSubmit, showIncidentNotice, showRecoveryNotice, type NoticeAction } from "./incident_notice.ts";
+import { mountSecretIntake, showSecretRequest } from "./secret_intake.ts"; // P-SECRET-INTAKE.1 (ADR-0476): the agent's secret dialog
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { externalHttpUrl } from "../navigation_policy.ts";
 import type { MascotInputs } from "./mascot.ts"; // One session-reactive sprite: composer or Arcade.
@@ -44,6 +45,7 @@ import { aboutHtml, readmeMark } from "./about.ts";
 import { createTriviaGame, isTriviaQuestion, triviaExplainHtml, triviaQuestionHtml, triviaVisible, type TriviaGame, type TriviaQuestion } from "./trivia.ts"; // P-TRIV.1 (ADR-0174)
 import { bankForRole } from "./trivia_roles.ts"; // P-TRIV.2 (ADR-0175): role-aware banks
 import { isIntelNewsItem, newsLineHtml } from "./trivia_news.ts"; // P-TRIV.3 (ADR-0176): the executive INTEL WIRE
+import { hydrateVaultSettings } from "./vault_settings.ts"; // P-VAULT-UI.1 (ADR-0475): Settings > Credential vault
 import { sectionizeAnswer, shouldSectionize, type AnswerSection } from "./answer_sections.ts"; // P-CHAT.A (ADR-0188): settled-turn collapsible sections
 import { interleaveChips, chipsInterleave, toolChip, type ToolMark, type ToolChip } from "./answer_chips.ts"; // P-CHAT.B (ADR-0189) + .B.1: inline tool-event chips (only when they interleave)
 import { describeTool } from "./tool_describe.ts"; // P-PROGRESS.1: what a tool call is doing, in plain words
@@ -88,6 +90,7 @@ import type { MeetingTodoView } from "./bridge.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
 import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
 import { localProvidersCardBody, draftFromForm, modelsFieldValue, providerWithDiscovered } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135) / P-LOCAL.6: Settings → Local Providers
+import { hydrateVaultDestinations } from "./vault_dest_ui.ts"; import { VAULT_DEST_SEC, VAULT_DEST_SUB, VAULT_DEST_TITLE } from "./vault_dest_card.ts"; // P-VAULT-DEST.1 (ADR-0478): Settings → Vault destinations (Enterprise)
 import { acceptAttachment, promptImageBlocks, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "./composer_attachments.ts"; // P-VISION.1 (ADR-0136): pasted images
 import { imageFileName } from "./chat_images.ts"; // P-IMG.1 (ADR-0208): inline render + download of tool images
 import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
@@ -131,6 +134,7 @@ import { DICTATION_DEFAULTS, dictationTick, downmixMono, encodeWavPcm16, mergeTr
 import { buildHubSections, configuredProviderCount, credentialedProviderIds, HUB_NON_MODEL_EXCLUDE, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
 import { LOCAL_MODEL_PRESETS } from "./local_presets.ts"; // P-LOCAL.4: one-click local-model presets in the hub
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
+import { installVaultEnvPanel, offerVaultEnvImport, VAULT_ENV_SEC, vaultEnvBodyHtml } from "./vault_env_panel.ts"; // P-VAULT-ENV.1 (ADR-0477)
 import { bumpSkillUsage, bundledSkillsByUsage, installedSkills, isSkillEnabled, setSkillEnabled, taskProforma } from "./skills.ts"; // ADR-0460: flavor-gated built-ins
 import { renderSkillInspect, renderSkillsDirectory, renderStudioCandidate, skillsDirSig, type SkillDirRow } from "./skills_dir.ts"; // P-SKILL.4 (ADR-0097) / P-SKILL.5 (ADR-0101)
 import { skillKey, type SkillRoot, trustEnableable } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097)
@@ -142,7 +146,7 @@ import { distillTopic, nextThinkingCue } from "../../harness/voice/thinking_cues
 import { SpeechQueue } from "./speech_queue.ts"; // P-VOICE.2: ordered, cancellable playback of those sentences
 import { applyReadAloudPatch, touchesReadAloud } from "../voice_flags.ts"; // P-VOICE.8 (ADR-0400): one rule for the read-aloud flags, shared with the engine
 import { VoiceEqualizer } from "./voice_eq.ts"; // P-VOICE.4 (ADR-0248): the glowing spectrum analyser
-import type { AuthStatus, ElevenVoiceView, JudgmentView, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
+import type { AuthStatus, ElevenVoiceView, JudgmentView, KeyVaultStatus, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
 import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type GraphEdge, type StoreChange } from "../../harness/brief/change_graph.ts"; // P-REPORT.8: report annex graphs
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
 import { DIGEST_MIN_CHARS } from "../../harness/voice/spoken_digest.ts"; // P-VOICE.6: slow-engine spoken digest
@@ -2784,6 +2788,10 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       sawTool = snapshot.pending.length > 0;
       for (const card of permCards.values()) card.el.remove();
       permCards.clear(); voiceApproval = null;
+      // v2.5.1 upgrade review SECRET-REQUEST-REATTACH: every attach starts with this snapshot, but the engine
+      // replays only permissions, so a secret request emitted while the stream was down is asked for again
+      // here (mountSecretIntake is idempotent: an open or queued request is not shown twice).
+      if (snapshot.running) mountSecretIntake();
       speechCursor = buf.length; speechFedAt = buf.length;
       streamEl.innerHTML = renderMarkdown(buf) + (snapshot.running ? `<span class="cursor"></span>` : "");
       setPhase(snapshotPhaseLabel(snapshot, rejoined, phase));
@@ -2896,6 +2904,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     else if (e.type === "design-available") showToast({ tone: "ok", title: "DESIGN.md is ready", desc: "The agent wrote your design invariants. Review + edit them in the IDE.", actions: [{ label: "Review in the IDE", kind: "ok", run: () => void openDesignInIde() }], timeout: 10000 }); // P-FIGMA.2 (ADR-0154)
     else if (e.type === "agent-builder-open") openAgentBuilderWithSpec(e.spec); // P-AGENT.8.2
     else if (e.type === "slash-command-created") void onSlashCommandCreated(e.command); // P-CMD.1
+    else if (e.type === "secret-request") showSecretRequest(e.request); // P-SECRET-INTAKE.1 (ADR-0476)
     // `used`/`size`/`cost` are the only figures the provider reports over ACP. While attached to a lane
     // these are that lane's own samples, which is why the ring and the rail both follow the attachment.
     else if (e.type === "usage") { tok = e.used; cost = e.cost; state.liveUsage = { used: e.used, size: e.size, cost: e.cost }; paintHud(); renderStatus(); renderMetricsRail(); }
@@ -4939,7 +4948,17 @@ function secProviders(auth: import("./bridge.ts").AuthStatus | null): string {
   // P-PROV.2: a prominent jump to the dedicated Provider Hub (every provider omp offers, with logos, in one
   // discoverable popup) so providers aren't buried in this collapsed card.
   const hubBtn = `<div class="prov-hubopen"><button class="btn-mini ok" id="openProvHub">${icon("expand", 12)} Open the Provider Hub</button><span class="set-note">All providers in one place - native logos, OAuth or API key, open-weight &amp; regional behind an acknowledgement.</span></div>`;
-  return setCard("providers", "Providers", "U.S. frontier \u00b7 key or OAuth", hubBtn + providerQuotaNotice() + cards + signoutAll, true);
+  return setCard("providers", "Providers", "U.S. frontier \u00b7 key or OAuth", hubBtn + keyCustodyNote(auth?.vault) + providerQuotaNotice() + cards + signoutAll, true);
+}
+// P-VAULT-KEYS.1 (ADR-0472): one quiet line on where saved keys live. `.set-note` is block prose (icon
+// absolutely positioned, text flows), never a flex row (invariant #11).
+const KEY_NOT_SAVED = "The OS vault could not store it, so nothing was saved. Check that you are signed in to this account's keychain, then try again.";
+const KEY_VAULT_NAMES: Record<"dpapi" | "keychain" | "libsecret", string> = { dpapi: "Windows DPAPI", keychain: "macOS Keychain", libsecret: "Linux Secret Service" };
+function keyCustodyNote(v: KeyVaultStatus | undefined): string {
+  if (!v) return "";
+  if (v.state === "unreadable") return `<div class="set-note warn">${icon("shield", 12)} Saved keys could not be decrypted on this account. Re-enter them to store them again.</div>`;
+  if (v.state === "ok" && v.custody !== "plaintext-file") return `<div class="set-note">${icon("shield", 12)} Keys are encrypted by the OS vault (${KEY_VAULT_NAMES[v.custody]}).</div>`;
+  return `<div class="set-note">${icon("info", 12)} No OS vault on this system: keys are kept in a user-only file.</div>`;
 }
 // P-IDE.1c (ADR-0029): data-sovereignty unlock for China-origin models. Renders ONLY when omp actually
 // exposes such a model (else an empty, preserved anchor). Hidden-by-default; the user must type
@@ -5727,6 +5746,9 @@ function settingsShell(): string {
     setSkel("mcp", "MCP connectors", "model context protocol", true),
     setSkel("agents", "Remote agents", "hermes · openclaw · ACP firewall", true), // P-AGENTFW.2 (ADR-0149)
     setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
+    setSkel("vault", "Credential vault", "names only \u00b7 encrypted backup", true), // P-VAULT-UI.1 (ADR-0475)
+    setSkel(VAULT_DEST_SEC, VAULT_DEST_TITLE, VAULT_DEST_SUB, true), // P-VAULT-DEST.1 (ADR-0478); collapsed by default
+    setCard(VAULT_ENV_SEC, "Import from .env", "workspace secrets · names only", vaultEnvBodyHtml(), true), // P-VAULT-ENV.1 (ADR-0477)
     setSkel("others", "More providers", "", true),
     setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
     setSkel("judgment", "Judgment", "None by default \u00b7 Jev \u00b7 your models", true), // P-JEV.1 (ADR-0374) + P-JEV.5
@@ -5775,6 +5797,8 @@ function hydrateSettings(): void {
   hydrateAgents(); // P-AGENTFW.2 (ADR-0149)
   void hydrateLocalProviders(); // P-LOCAL.3 (ADR-0135)
   hydrateWhitelist(); // P-NETWL.2 (ADR-0106)
+  void hydrateVaultSettings(); // P-VAULT-UI.1 (ADR-0475)
+  void hydrateVaultDestinations(); // P-VAULT-DEST.1 (ADR-0478)
   void bridge.asksage().then(async (a) => {
     if (a) state.asksage = a;
     fillSec("asksage", secAsksage(a, null)); // paint immediately (token readout shows a spinner)
@@ -11037,7 +11061,12 @@ async function saveGitPat(): Promise<void> {
   showToast({ tone: "ok", title: "Git token saved", desc: "Stored encrypted. Private-repo clones will use it now and in future sessions.", timeout: 4000 });
 }
 async function clearGitPat(): Promise<void> {
-  if (bridge.isElectron && bridge.credDelete) await bridge.credDelete("git_pat").catch(() => false);
+  if (bridge.isElectron && bridge.credDelete) {
+    // security review CRED-DELETE-ENGINE-DOWN: only a confirmed delete clears anything; otherwise the token
+    // is still stored (and re-applied next launch), so the session copy and the "saved" indicator stay.
+    const r = await bridge.credDelete("git_pat").catch((e: unknown) => ({ error: `not removed, engine unavailable (${String((e as Error)?.message ?? e)})` }));
+    if ("error" in r) { showToast({ tone: "danger", title: "Git token not removed", desc: String(r.error), timeout: 6000 }); return; }
+  }
   sessionGitPat = "";
   state.creds = await bridge.credList().catch(() => state.creds.filter((c) => c.ref !== "git_pat"));
   hydrateSettings();
@@ -11049,6 +11078,7 @@ function renderWorkspaceBar(): void {
   if (!bar) return;
   if (!w) { bar.hidden = true; return; }
   bar.hidden = false;
+  void offerVaultEnvImport(w.current, openSettings); // P-VAULT-ENV.1: once per workspace with a .env
   // P-REPO.1 (ADR-0406): under the workspace name, the repo Main actually works in (it can be a checkout
   // inside the workspace folder) and where its commits go - ONLY when it pushes to a hosted remote. A plain
   // folder or a local-only repo shows just the workspace name: nothing to warn about.
@@ -16939,6 +16969,7 @@ function wire(): void {
     applyVoiceDockShape();
   });
   void bridge.voiceSettings().then((v) => { if (v) { state.voice = v; updateVoiceChip(); } });
+  installVaultEnvPanel(); // P-VAULT-ENV.1 (ADR-0477): the Settings "Import from .env" card's buttons
   // P-FLEET.L1: the fleet grid dashboard - headless local lanes as streaming mini agent windows.
   initFleetGrid({
     hubOpen: openTerminalHub, // P-TUI.2
@@ -17379,7 +17410,8 @@ function wire(): void {
       const inp = $(`.prov-key[data-env="${env}"]`, $("#setBody")!) as HTMLInputElement | null;
       const val = inp?.value.trim() ?? "";
       if (!val) { showToast({ tone: "warn", title: "Nothing to save", desc: "Paste a key first.", actions: [{ label: "OK" }], timeout: 2000 }); return; }
-      await bridge.saveKey(env, val);
+      // P-VAULT-KEYS.1: null = the engine refused (the OS vault could not take the key; nothing was saved).
+      if (!(await bridge.saveKey(env, val))) { showToast({ tone: "danger", title: `${env} not saved`, desc: KEY_NOT_SAVED, actions: [{ label: "OK" }], timeout: 6000 }); return; }
       showToast({ title: `${env} saved`, desc: "Stored on this machine and passed to omp. New turns use it.", actions: [{ label: "OK" }], timeout: 2800 });
       void renderSettings();
       if (env === "ASKSAGE_API_KEY") { await loadConfig(); await loadAsksage(); } // surface gov models + usage
@@ -19122,7 +19154,7 @@ function openProviderHub(onClose?: () => void): void {
       const env = save.dataset.savekey!;
       const val = ($(`.prov-key[data-env="${env}"]`, body) as HTMLInputElement | null)?.value.trim() ?? "";
       if (!val) { showToast({ tone: "warn", title: "Nothing to save", desc: "Paste a key first.", timeout: 2000 }); return; }
-      await bridge.saveKey(env, val);
+      if (!(await bridge.saveKey(env, val))) { showToast({ tone: "danger", title: `${env} not saved`, desc: KEY_NOT_SAVED, timeout: 6000 }); return; }
       showToast({ title: `${env} saved`, desc: "Stored on this machine and passed to omp. New turns use it.", timeout: 2800 });
       await refreshAuth(); await loadConfig(); redraw();
       return;
@@ -19400,6 +19432,7 @@ initResize();
 seedThread();
 void recoverMasterTurn();
 void startupRecovery(); // P-RECOVER.1 (ADR-0385): resume the previous session after an unclean exit, report either way
+mountSecretIntake(); // P-SECRET-INTAKE.1 (ADR-0476): re-open a secret request still waiting after a reload
 // Sessions panel: remember your choice across launches; default OPEN so a past
 // conversation is one click away (it used to start collapsed → expand-then-click felt like
 // a double-click). Collapse it once and it stays collapsed.
