@@ -19,7 +19,7 @@
 // only in this increment; any future FTS is a derived, disposable index. The .jsonl files stay the
 // truth - this module never writes to the session corpus, and reading a point reuses sessionMessages.
 
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { listAllSessions, type SessionRow } from "./sessions.ts";
@@ -65,6 +65,20 @@ export function readLaneLedger(path: string = LANE_LEDGER_PATH()): LaneSessionRe
     } catch { /* torn line - skip, never throw */ }
   }
   return out;
+}
+
+/** P-SESS-SEARCH.1 (ADR-0469): session id -> the name of the lane that ran it, for the sidebar's spoke
+ *  filter. The ledger is append-only, so the last line for a session carries its freshest name. The
+ *  sidebar polls; the parse is cached on the ledger's mtime+size. No ledger = no known spokes. */
+let ledgerNames: { path: string; key: string; names: Map<string, string> } | null = null;
+export function laneSessionNames(path: string = LANE_LEDGER_PATH()): ReadonlyMap<string, string> {
+  let key: string;
+  try { const st = statSync(path); key = `${st.mtimeMs}:${st.size}`; } catch { return new Map(); }
+  if (ledgerNames?.path === path && ledgerNames.key === key) return ledgerNames.names;
+  const names = new Map<string, string>();
+  for (const rec of readLaneLedger(path)) names.set(rec.sessionId, rec.name);
+  ledgerNames = { path, key, names };
+  return names;
 }
 
 /** Closed set. `chat` = a human-driven session (master or any full GUI instance); `lane` = a fleet

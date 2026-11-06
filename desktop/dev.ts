@@ -139,11 +139,11 @@ import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, fa
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: shared combo parse, so a typo fails fast at the route
 import { isBrowserAction, isBrowserPageShape } from "./browser_snapshot.ts"; // P-JEV.4 (ADR-0379): the policy's act/snapshot shapes
 import { FleetGoal } from "./fleet_goal.ts"; // P-AOS.1 (ADR-0452): the standing fleet goal + the AOS-1 heartbeat
-import { appendLaneLedger, isTimelineKind, listTimeline, readLaneLedger } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline; P-SCHED.1 reads it to recover a job's lane
+import { appendLaneLedger, isTimelineKind, laneSessionNames, listTimeline, readLaneLedger } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline; P-SCHED.1 reads it to recover a job's lane; P-SESS-SEARCH.1 tags spoke sessions
 import { JobScheduler, type LedgerHit } from "./job_scheduler.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs
 import { createJob as createScheduledJob, jobTargetRepo, loadJobs, normalizeJobSpec, saveJobs, updateJob, nextFireAt } from "./scheduled_jobs.ts"; // P-SCHED.1 (aliased: creator_jobs.ts exports a createJob too, and the second import silently replaced the first at runtime)
 import { firesBetween } from "./cron.ts"; // P-SCHED.1
-import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
+import { clearIngestSessions, deleteSession, listSessions, searchSessions, sessionMessages, type SpokeFilter } from "./sessions.ts";
 import { providerAuth, typesafeKeySet, type ProviderAuthSnapshot } from "./auth_status.ts";
 import { parseJudgmentReport } from "../harness/judgment/trace_schema.ts"; // P-JEV.2 (ADR-0377): the loopback boundary for judgment traces
 import { openHubWindow } from "./hub_launch.ts"; // P-TUI.2: the Fleet view's Terminal hub button
@@ -5077,13 +5077,24 @@ return Bun.serve({
         return json(r);
       }
       // real omp ACP backend (genuine model replies + live session config)
-      if (p === "/api/sessions") {
+      if (p === "/api/sessions" || p === "/api/sessions/search") {
         // P-SWITCH.2 (ADR-0404): each row says where it is live (Main, working or not, or a spoke and its
         // state), so the sidebar shows what is running before anyone clicks.
-        const list = listSessions();
         const main = { sessionId: backend.currentSessionId(), busy: backend.switchBlocker() !== null };
         const lanes = fleet.owners();
-        return json({ ok: true, data: { sessions: withLiveState(list.sessions, main, lanes), ingest: list.ingest } });
+        // P-SESS-SEARCH.1 (ADR-0469): sessions a fleet lane ran are hidden unless `spokes=1`; the session
+        // Main holds and the lane the main composer is driving stay listed either way.
+        const keep = new Set<string>();
+        if (main.sessionId) keep.add(main.sessionId);
+        const driven = fleet.promotedLane()?.sessionId;
+        if (driven) keep.add(driven);
+        const filter: SpokeFilter = { spokes: laneSessionNames(), show: url.searchParams.get("spokes") === "1", keep };
+        if (p === "/api/sessions/search") {
+          const found = searchSessions((url.searchParams.get("q") ?? "").slice(0, 200), { filter });
+          return json({ ok: true, data: { ...found, hits: withLiveState(found.hits, main, lanes) } });
+        }
+        const list = listSessions(undefined, undefined, filter);
+        return json({ ok: true, data: { sessions: withLiveState(list.sessions, main, lanes), ingest: list.ingest, hiddenSpokes: list.hiddenSpokes } });
       }
       if (p === "/api/sessions/ingest/clear" && req.method === "POST") return json({ ok: true, data: clearIngestSessions() }); // P-KG-INGEST.2
       if (p === "/api/session" && url.searchParams.get("id")) { // P-PERF.4: tail-first page (limit=0 = all)

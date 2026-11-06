@@ -8,9 +8,10 @@
 // agent turn. Same renderer in Electron (real omp ACP via window.lucid) and in
 // the browser dev server (simulated). Pure DOM, no framework.
 
-import { bridge, type AccountsSnapshot, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
+import { bridge, type AccountsSnapshot, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SessionSearch, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import type { TurnStatus } from "./chat_events.ts";
 import { currentSwitchPreflight, liveBadge, planSessionSwitch, spokeNameFor, switchOutcome, switchSheetCopy } from "./session_switch.ts"; // P-SWITCH.1 (ADR-0403), P-SWITCH.2 (ADR-0404)
+import { markTerms } from "./session_search.ts"; // P-SESS-SEARCH.1 (ADR-0469)
 import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
 // P-RECOVER.1 (ADR-0385): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
 import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
@@ -442,6 +443,11 @@ function buildShell(): void {
             <button class="side-new" id="newSession" data-tip="New session">${icon("plus", 15)}</button>
             <button class="side-new" id="sideCollapse" data-tip="Collapse panel" data-tip-side="bottom">${icon("expand", 15)}</button>
           </div></div>
+        <!-- P-SESS-SEARCH.1 (ADR-0469): search every session of this workspace; spoke sessions hidden by default -->
+        <div class="sess-find">
+          <label class="sess-search">${icon("search", 13)}<input id="sessSearch" type="search" placeholder="Search sessions" aria-label="Search sessions by title or by what was said" spellcheck="false" autocomplete="off" /></label>
+          <button class="sess-spokes" id="sessSpokes" type="button" aria-pressed="false" data-tip="Spokes hidden|Sessions your fleet spokes ran are hidden. Click to show them." data-tip-side="bottom"><span class="sess-spokes-l">Spokes</span><span class="sess-spokes-n" hidden></span></button>
+        </div>
         <div class="side-list" id="sessList"></div>
         <div class="resizer resizer-r" data-resize="sidebar" data-tip="Drag to resize" data-tip-side="right"></div>
       </aside>
@@ -696,15 +702,69 @@ function sessSkeleton(): string {
     `<div class="skel-sess"><div class="skel skel-line t"></div><div class="skel skel-line m"></div></div>`).join("")}</div>`;
 }
 let ingestExpanded = false; // P-KG-INGEST.1b: the "Knowledge Graph Ingest" group is collapsed by default
-function sessRow(s: SessionInfo, active: boolean): string {
+/** `query` (P-SESS-SEARCH.1) marks the matched words in the title and the snippet of a search hit. */
+function sessRow(s: SessionInfo & { snippet?: string }, active: boolean, query = ""): string {
   // P-SWITCH.2 (ADR-0404): where this session is running right now, visible before the click.
   const badge = liveBadge(s.live);
+  // P-SESS-SEARCH.1: a spoke session that is not live still says which spoke ran it (shown only with Spokes on).
+  const spokeLine = !badge && s.spoke ? `<div class="sess-live">spoke "${esc(s.spoke)}"</div>` : "";
   return `<div class="sess ${active ? "active" : ""}" data-sid="${esc(s.id)}" data-tip="${esc(s.title)}|${esc(modelLabel(s.model))} · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}${badge ? ` · ${esc(badge.text)}` : ""}" data-tip-side="right">
-      <div class="t">${esc(s.title)}</div>
+      <div class="t">${query ? markTerms(s.title, query) : esc(s.title)}</div>
       <div class="m"><b>${esc(modelLabel(s.model))}</b> · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}</div>
-      ${badge ? `<div class="sess-live sess-live-${badge.tone}">${esc(badge.text)}</div>` : ""}
+      ${badge ? `<div class="sess-live sess-live-${badge.tone}">${esc(badge.text)}</div>` : spokeLine}
+      ${s.snippet ? `<div class="sess-snip">${markTerms(s.snippet, query)}</div>` : ""}
       <button class="sess-del" data-del="${esc(s.id)}" data-tip="Delete session" aria-label="Delete session" tabindex="-1">${icon("trash", 13)}</button>
     </div>`;
+}
+
+// P-SESS-SEARCH.1 (ADR-0469): the sidebar search box and the Spokes toggle. Spoke sessions are hidden by
+// default (the toggle persists); while the box holds a query the list shows the engine's matches across
+// EVERY session of the workspace, not the 40 newest. A click on a hit opens it like any sidebar row.
+let showSpokes = (() => { try { return localStorage.getItem("lucid.sessions.spokes") === "1"; } catch { return false; } })();
+let sessQuery = "";
+let sessSearchGen = 0;
+let sessSearchTimer = 0;
+/** The hits last painted, so the switch sheet and the hub can name a session found beyond the 40 newest. */
+let lastSearchHits: SessionSearch["hits"] = [];
+
+function paintSpokesToggle(hidden: number | undefined): void {
+  const b = $("#sessSpokes") as HTMLElement | null;
+  if (!b) return;
+  b.setAttribute("aria-pressed", String(showSpokes));
+  b.classList.toggle("on", showSpokes);
+  const n = $(".sess-spokes-n", b) as HTMLElement | null;
+  if (n) { n.textContent = String(hidden ?? 0); n.hidden = showSpokes || !hidden; }
+  b.dataset.tip = showSpokes
+    ? "Spokes shown|Sessions your fleet spokes ran are listed. Click to hide them."
+    : `Spokes hidden|${hidden ?? 0} session${hidden === 1 ? "" : "s"} your fleet spokes ran ${hidden === 1 ? "is" : "are"} hidden. Click to show them.`;
+}
+
+async function renderSessionSearch(): Promise<void> {
+  const list = $("#sessList");
+  if (!list) return;
+  const q = sessQuery;
+  const gen = ++sessSearchGen;
+  const r = await bridge.searchSessions(q, showSpokes).catch(() => null);
+  if (gen !== sessSearchGen || q !== sessQuery) return; // a newer keystroke owns the list
+  if (!r) { list.innerHTML = `<div class="side-empty">Search did not answer. The engine may be restarting; try again in a moment.</div>`; return; }
+  lastSearchHits = r.hits;
+  paintSpokesToggle(r.hiddenSpokes);
+  const hiddenNote = r.hiddenSpokes ? ` ${r.hiddenSpokes} more in spoke sessions; turn on Spokes to see them.` : "";
+  if (!r.hits.length) { list.innerHTML = `<div class="side-empty">No sessions match "${esc(q)}".${hiddenNote}</div>`; return; }
+  const head = `<div class="sess-count">${r.total === r.hits.length ? `${r.total} match${r.total === 1 ? "" : "es"}` : `Newest ${r.hits.length} of ${r.total} matches`}</div>`;
+  const tail = r.total > r.hits.length || hiddenNote ? `<div class="side-empty">${r.total > r.hits.length ? "Add a word to narrow it." : ""}${hiddenNote}</div>` : "";
+  list.innerHTML = head + r.hits.map((h) => sessRow(h, false, q)).join("") + tail;
+}
+
+function onSessSearchInput(value: string): void {
+  window.clearTimeout(sessSearchTimer);
+  sessSearchTimer = window.setTimeout(() => {
+    const q = value.trim();
+    if (q === sessQuery) return;
+    sessQuery = q;
+    if (!q) { sessSearchGen++; lastSearchHits = []; } // drop any in-flight search answer
+    void renderSessions();
+  }, 180);
 }
 /** The session list as last painted (cache or live): the model picker ranks each family by it. */
 let lastSessionList: SessionList | null = null;
@@ -730,16 +790,20 @@ function renderSessionList(data: SessionList): void {
 async function renderSessions(): Promise<void> {
   const list = $("#sessList");
   if (!list) return;
+  if (sessQuery) return renderSessionSearch(); // P-SESS-SEARCH.1: a query owns the list until cleared
   // P-PERF.1: on a cold list (first load / skeleton), paint the CACHED session list instantly so a
   // returning user never sees a skeleton; fall back to the skeleton only when there's no cache yet.
   const cached = cachedSessions<SessionList>();
-  const cold = !list.firstElementChild || !!$(".skel-group", list);
+  const cold = !list.firstElementChild || !!$(".skel-group", list) || !!$(".sess-count", list);
   if (cold) { if (cached) renderSessionList(cached); else list.innerHTML = sessSkeleton(); }
-  const data = await bridge.sessions().catch(() => null);
+  const gen = sessSearchGen;
+  const data = await bridge.sessions(showSpokes).catch(() => null);
+  if (sessQuery || gen !== sessSearchGen) return; // the user started searching while the list loaded
   if (data === null) { // keep the cached list on a transient error instead of blanking it
     if (cold && !cached) list.innerHTML = `<div class="side-empty">Couldn't load history - the GUI server looks out of date. Relaunch it (launcher → <b>G</b>), or restart <code>bun run desktop:web</code>.</div>`;
     return;
   }
+  paintSpokesToggle(data.hiddenSpokes);
   renderSessionList(data);
   setCachedSessions(data); // refresh the cache for next launch
   void warmTranscripts(data); // P-PERF.4: AC-only idle prefetch (no-op on battery tiers)
@@ -11300,9 +11364,10 @@ async function resumeSession(id: string, opts: { loaded?: boolean; force?: boole
 // one of them runs in a spoke. The engine refuses a switch while Main is busy (409 without force); these
 // functions ask first and offer the spoke, so the refusal is the rare race and not the normal path.
 
-/** The sidebar's cached row for a session (title for the sheet, model for its spoke). */
+/** The sidebar's cached row for a session (title for the sheet, model for its spoke). P-SESS-SEARCH.1: a
+ *  session opened from search results may be older than the cached 40, so the last hits answer too. */
 const cachedSessionInfo = (id: string | null): SessionInfo | undefined =>
-  id ? cachedSessions<SessionList>()?.sessions.find((s) => s.id === id) : undefined;
+  id ? cachedSessions<SessionList>()?.sessions.find((s) => s.id === id) ?? lastSearchHits.find((s) => s.id === id) : undefined;
 
 /** Every user-initiated "open this session" (the sidebar row) comes through here. */
 async function openSession(id: string): Promise<void> {
@@ -17965,6 +18030,22 @@ function wire(): void {
     const s = t.closest(".sess") as HTMLElement | null;
     if (s?.dataset.sid) void openSession(s.dataset.sid); // P-SWITCH.1: asks first when Main is working
   });
+  // P-SESS-SEARCH.1 (ADR-0469): search box (debounced; Esc clears) and the persisted Spokes toggle.
+  const sessSearch = $("#sessSearch") as HTMLInputElement | null;
+  sessSearch?.addEventListener("input", () => onSessSearchInput(sessSearch.value));
+  sessSearch?.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !sessSearch.value) return;
+    e.stopPropagation();
+    sessSearch.value = "";
+    onSessSearchInput("");
+  });
+  $("#sessSpokes")?.addEventListener("click", () => {
+    showSpokes = !showSpokes;
+    try { localStorage.setItem("lucid.sessions.spokes", showSpokes ? "1" : "0"); } catch { /* ignore */ }
+    paintSpokesToggle(undefined);
+    void renderSessions();
+  });
+  paintSpokesToggle(undefined);
   $(".brand")!.addEventListener("click", () => toggleSidebar());
 
   // status bar: click the budget / gov chips to re-check usage now
