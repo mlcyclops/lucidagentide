@@ -26382,3 +26382,18 @@ Parity already held and left alone: workspace, tab, pane hierarchy and ids; the 
 **Decision.** Turn the tool off in the overlay every omp child gets (`ompConfigArgs`: master, util, lanes). The model then asks in its reply text, which chat, lane cards and the PWA already show. The gated TUI does not read this overlay, so its working `ask` dialog stays. `checkin_send` no longer tells agents to "ask the operator with the ask tool". The alternative, a question card on master, lanes and the PWA that answers the elicitation, is a feature of its own; re-enable `ask` when it exists.
 
 **Consequences.** No multiple-choice question UI in the IDE; questions arrive as text and the user answers in the composer. Approval and plan-mode elicitations are unchanged (they still go through `elicitationAnswer`).
+## ADR-0523 -- P-GLOW.1: the red "needs approval" pulse runs on the compositor: a shadow painted once, only its opacity animates (2026-11-07)
+
+**Status:** Accepted.
+
+**Context.** Found while measuring P-ORBIT-CANVAS.1 (ADR-0522): `fleetGlowRed` animated `box-shadow` on a grid card (`.fleet-card.lane-needs-approval`), the minimized dock pill (`#fleetDockPill.attn`) and a census pip (`.fleet-pip.lane-needs-approval i`). A `box-shadow` animation cannot run on the compositor, so for as long as any lane waited for approval the main thread restyled and repainted at display rate, app-wide through the dock pill. The pip kept pulsing in the orbit's Lite mode too, against Lite's no-infinite-animation rule (P-FLEET.L17). The orbit's own cards already solved this (`.orbit-node-card::after` with an `orbitGlow` opacity pulse).
+
+**Decision.**
+1. The three red pulses become one pseudo-element rule: `::after` with the peak shadow painted once, `will-change: opacity`, animated by the existing `orbitGlow` keyframes (1.6 s). `fleetGlowRed` is removed. The pill and the pip get `position: relative` to anchor it.
+2. The grid card clips its overflow (`.fleet-card{overflow:hidden}`), so its glow is an INSET shadow inside the red border instead of a halo outside it. Changing the card's overflow would expose the resize handles and transcript, so the visual change was accepted instead.
+3. Reduced motion holds the glow still at half strength; the orbit's Lite holds every census pip still.
+4. `fleetGlowAmber` (awaiting-input grid cards) is the same pattern and stays as it is for now: it was not part of this ask.
+
+**Proof.** Bench in Edge (real GPU, 1600x900, motion allowed), main thread ms per second, two 8 s runs averaged, before then after: the app with the dock pill and a grid card waiting 12.6 to 1.3 (style recalcs 33.8 to 3.9 a second, renderer CPU 2.9% to 0.8%, GPU 6.6% to 1.5%); the orbit in Lite with an approval waiting 16.9 to 2.0; the orbit in Motion 34.6 to 31.1 on master, where the SVG spoke animations still hold the frame rate (ADR-0522 removes those). Screenshots at the pulse peak: pill and pip match; the card's glow sits inside its border.
+
+**Consequences.** A waiting approval no longer costs main-thread frames anywhere in the app. On `feat/rs-fleet-ops` the merge gave P-STUCK-SHOW.1's `.fleet-card.lane-likely-stuck` the same pulse (2.6 s), its last `fleetGlowRed` user; with ADR-0522 there, the orbit in Motion with an approval waiting measured 18.0 ms a second (master 34.6), Lite 3.9 (master 16.9), the app with the pill and a card 0.3 (master 12.6). Relates to ADR-0522 and P-FLEET.L2, P-FLEET.L17.

@@ -5968,3 +5968,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-07, branch `fix/acp-ask-off` from `feat/rs-fleet-ops` 78622a45, LOCAL ONLY):** `acp_config.yml` sets `ask.enabled: false` for every omp ACP child. Cause: LUCID declines omp's `askDialog` elicitation (no question UI), omp treats the decline as a user cancel and aborts the turn. Checkin text no longer points agents at the ask tool. Verified with a real `omp acp` run before and after (ADR-0523 proof) and 257 tests.
 - **stubbed:** no question card in the IDE; the model asks in its reply instead.
 - **next:** merge into `feat/rs-fleet-ops` and rebuild the installer; optionally design an askDialog card for master, lanes and the PWA, then re-enable `ask`.
+## P-GLOW.1: the red "needs approval" pulse runs on the compositor (ADR-0523)
+- **shipped (2026-11-07):** the grid card, the dock pill and the census pip pulse through one `::after` rule (shadow painted once, `orbitGlow` opacity pulse); `fleetGlowRed` removed; reduced motion and the orbit's Lite hold it still.
+- **verified:** bench in Edge, main thread ms per second before and after: dock pill plus grid card waiting 12.6 to 1.3, orbit Lite with an approval waiting 16.9 to 2.0; peak screenshots: pill and pip match, the card's glow now sits inside its border (the card clips overflow).
+- **stubbed:** `fleetGlowAmber` on awaiting-input grid cards still animates box-shadow.
+- **next:** the same fix for `fleetGlowAmber` if wanted.

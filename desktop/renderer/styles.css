@@ -5073,19 +5073,26 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-card.lane-working{--lane:var(--cyan);--lane-dim:rgb(var(--cyan-rgb) / .35);border-color:rgb(var(--cyan-rgb) / .5)}
 .fleet-card.lane-working .fleet-led{animation:hudpulse 2.2s ease-in-out infinite}
 .fleet-card.lane-awaiting-input{--lane:var(--blue);--lane-dim:rgb(var(--blue-rgb) / .4);border-color:var(--blue);animation:fleetGlowBlue 2.6s ease-in-out infinite}
-.fleet-card.lane-needs-approval{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .5);border-color:var(--red);animation:fleetGlowRed 1.6s ease-in-out infinite}
+.fleet-card.lane-needs-approval{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .5);border-color:var(--red)}
 .fleet-card.lane-needs-approval .fleet-card-head{background:rgb(var(--red-rgb) / .14);box-shadow:0 0 12px -2px rgb(var(--red-rgb) / .45) inset}
 .fleet-card.lane-done{--lane:var(--green);--lane-dim:rgb(var(--green-rgb) / .35);border-color:rgb(var(--green-rgb) / .55)}
 .fleet-card.lane-error{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .4);border-color:var(--red)}
 .fleet-card.lane-stopped{--lane:var(--txt-4);opacity:.55}
 @keyframes fleetGlowBlue{0%,100%{box-shadow:0 0 0 0 rgb(var(--blue-rgb) / 0)}50%{box-shadow:0 0 14px 2px rgb(var(--blue-rgb) / .4)}}
-@keyframes fleetGlowRed{0%,100%{box-shadow:0 0 2px 0 rgb(var(--red-rgb) / .3)}50%{box-shadow:0 0 18px 3px rgb(var(--red-rgb) / .6)}}
+/* P-GLOW.1 (ADR-0523): the red "needs approval" pulse on a grid card, the dock pill and a census pip is a
+   pseudo-element whose shadow is painted ONCE; only its opacity animates (orbitGlow), which runs on the
+   compositor. Animating box-shadow itself repainted on the main thread every frame for as long as any lane
+   waited, app-wide through the dock pill. The card clips its overflow, so its glow sits inside the border. */
+.fleet-card.lane-needs-approval::after,#fleetDockPill.attn::after,.fleet-pip.lane-needs-approval i::after{
+  content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  box-shadow:0 0 18px 3px rgb(var(--red-rgb) / .6);opacity:.1;will-change:opacity;animation:orbitGlow 1.6s ease-in-out infinite}
+.fleet-card.lane-needs-approval::after{box-shadow:inset 0 0 18px 3px rgb(var(--red-rgb) / .6)}
 /* P-FLEET.L2 - the MINIMIZED snapshot. The pill inherits .share-dock-pill; inside it one dot per lane
    state carries that state's color and its count, so a glance at the status bar answers "is anything
    blocked on me?" without reopening the panel. Each pip owns its own hover naming the lanes.
    The dot colors are taken from the SAME lane-<status> custom properties the cards use (--lane), so the
    two surfaces can never drift apart. */
-#fleetDockPill.attn{border-color:var(--red);animation:fleetGlowRed 1.6s ease-in-out infinite}
+#fleetDockPill.attn{border-color:var(--red);position:relative}
 .fleet-pips{display:inline-flex;align-items:center;gap:6px;flex:none;white-space:nowrap}
 .fleet-pip{--lane:var(--txt-4);--lane-dim:color-mix(in srgb,var(--txt-4) 30%,transparent);display:inline-flex;align-items:center;gap:3px;flex:none;cursor:pointer}
 .fleet-pip i{width:7px;height:7px;border-radius:50%;flex:none;background:var(--lane);box-shadow:0 0 6px var(--lane-dim)}
@@ -5094,7 +5101,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-pip.lane-working i{animation:hudpulse 2.2s ease-in-out infinite}
 .fleet-pip.lane-awaiting-input{--lane:var(--blue);--lane-dim:rgb(var(--blue-rgb) / .5)}
 .fleet-pip.lane-needs-approval{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .6)}
-.fleet-pip.lane-needs-approval i{animation:fleetGlowRed 1.6s ease-in-out infinite}
+.fleet-pip.lane-needs-approval i{position:relative}
 .fleet-pip.lane-done{--lane:var(--green);--lane-dim:rgb(var(--green-rgb) / .45)}
 .fleet-pip.lane-error{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .4)}
 .fleet-pip.lane-stopped,.fleet-pip.lane-idle{opacity:.55}
@@ -5133,9 +5140,10 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-empty span{min-width:0}
 /* without motion the states still read: border color + header tint stay; only the pulsing stops */
 @media (prefers-reduced-motion:reduce){
-  .fleet-card.lane-awaiting-input,.fleet-card.lane-needs-approval,#fleetDockPill.attn,
+  .fleet-card.lane-awaiting-input,
   .fleet-card.lane-working .fleet-led,.fleet-cursor,
-  .fleet-pip.lane-working i,.fleet-pip.lane-needs-approval i{animation:none}
+  .fleet-pip.lane-working i{animation:none}
+  .fleet-card.lane-needs-approval::after,#fleetDockPill.attn::after,.fleet-pip.lane-needs-approval i::after{animation:none;opacity:.5}
 }
 
 /* ───────────────────────── the Timeline dock - P-FLEET.L5 / P-TL.2 / P-TL.3 ─────────────────────────
@@ -6365,6 +6373,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-view.static .orbit-node-card{animation:none;will-change:auto;transition:none}
 .orbit-view.static .orbit-node-card::after{animation:none;will-change:auto;opacity:.5}
 .orbit-view.static .orbit-led{animation:none !important}
+.orbit-view.static .fleet-pip i,.orbit-view.static .fleet-pip i::after{animation:none}
 .orbit-view.static .orbit-hub-core{transition:none}
 .orbit-view.static .orbit-cta{transition:none}
 .orbit-view.static .orbit-node-x{transition:none}
@@ -6740,7 +6749,10 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
    count dots, the Fleet button), and a call flat for half the threshold is amber ("might be stuck").
    Display only: LUCID still never stops the call on its own. */
 .lane-alive[data-state="flat"]{color:var(--amber-txt);background:rgb(var(--amber-rgb) / .14);border-color:rgb(var(--amber-rgb) / .5)}
-.fleet-card.lane-likely-stuck{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .5);border-color:var(--red);animation:fleetGlowRed 2.6s ease-in-out infinite}
+.fleet-card.lane-likely-stuck{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .5);border-color:var(--red)}
+/* P-GLOW.1 (ADR-0523): the needs-approval card's compositor pulse, slower. */
+.fleet-card.lane-likely-stuck::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  box-shadow:inset 0 0 18px 3px rgb(var(--red-rgb) / .6);opacity:.1;will-change:opacity;animation:orbitGlow 2.6s ease-in-out infinite}
 .fleet-pip.lane-likely-stuck{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .6)}
 .fleet-pip.lane-likely-stuck b{color:var(--txt)}
 .orbit-node.lane-likely-stuck{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .5)}
@@ -6751,7 +6763,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 #ctFleet.fleet-stuck{position:relative;color:var(--red-txt)}
 #ctFleet.fleet-stuck::after{content:"";position:absolute;top:3px;right:3px;width:7px;height:7px;border-radius:50%;
   background:var(--red);box-shadow:0 0 0 2px var(--bg-1)}
-@media (prefers-reduced-motion:reduce){.fleet-card.lane-likely-stuck,.orbit-node.lane-likely-stuck .orbit-node-card::after{animation:none}}
+@media (prefers-reduced-motion:reduce){.fleet-card.lane-likely-stuck::after,.orbit-node.lane-likely-stuck .orbit-node-card::after{animation:none;opacity:.5}}
 
 .lane-progress{padding:5px 9px 6px;border-top:1px solid var(--line-soft);background:var(--bg-1);font-family:var(--mono);
   font-size:10.5px;color:var(--txt-3);min-width:0}
