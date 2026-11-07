@@ -721,9 +721,12 @@ function sessRow(s: SessionInfo & { snippet?: string }, active: boolean, query =
   const archBtn = s.archived
     ? `<button class="sess-del sess-arch" data-restore="${esc(s.id)}" data-tip="Restore|Back to the sessions list. Opening it does the same." aria-label="Restore session" tabindex="-1">${icon("restore", 13)}</button>`
     : `<button class="sess-del sess-arch" data-archive="${esc(s.id)}" data-tip="Archive|Moves it to the Archived group. Nothing is deleted: search still finds it, and opening it brings it back." aria-label="Archive session" tabindex="-1">${icon("archive", 13)}</button>`;
-  return `<div class="sess ${active ? "active" : ""}" data-sid="${esc(s.id)}" data-tip="${esc(s.title)}|${esc(modelLabel(s.model))} · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}${badge ? ` · ${esc(badge.text)}` : ""}" data-tip-side="right">
+  // The row can come from the localStorage cache, so `turns` is untyped data: render it only as a number.
+  const turns = Math.max(0, Math.trunc(Number(s.turns)) || 0);
+  const turnsText = `${turns} turn${turns === 1 ? "" : "s"}`;
+  return `<div class="sess ${active ? "active" : ""}" data-sid="${esc(s.id)}" data-tip="${esc(s.title)}|${esc(modelLabel(s.model))} · ${turnsText} · ${relTime(s.updatedAt)}${badge ? ` · ${esc(badge.text)}` : ""}" data-tip-side="right">
       <div class="t">${query ? markTerms(s.title, query) : esc(s.title)}</div>
-      <div class="m"><b>${esc(modelLabel(s.model))}</b> · ${s.turns} turn${s.turns === 1 ? "" : "s"} · ${relTime(s.updatedAt)}</div>
+      <div class="m"><b>${esc(modelLabel(s.model))}</b> · ${turnsText} · ${relTime(s.updatedAt)}</div>
       ${badge ? `<div class="sess-live sess-live-${badge.tone}">${esc(badge.text)}</div>` : spokeLine}
       ${archLine}
       ${s.snippet ? `<div class="sess-snip">${markTerms(s.snippet, query)}</div>` : ""}
