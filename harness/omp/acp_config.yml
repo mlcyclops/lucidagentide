@@ -31,6 +31,15 @@ task:
 edit:
   mode: replace
 
+# P-ASK.1 (ADR-0523): turn OFF omp's `ask` tool (multiple-choice question to the user). Advertising `elicitation.form`
+# (ADR-0110, ADR-0337) makes omp enable it, but LUCID has no question card: omp sends the question as an
+# `askDialog` form elicitation, the shared answerer finds no approve option and declines, and omp reads the
+# decline as "cancelled by the user" and aborts the whole turn. The user saw a run end "Done" with no reply.
+# With the tool off the model asks in its reply, which every surface (chat, lane card, PWA) shows.
+# Re-enable only once master and lanes render the askDialog form and return the user's answer.
+ask:
+  enabled: false
+
 # P-EGRESS.1 (ADR-0062): force the network-reaching tools to PROMPT, honored in EVERY approval mode
 # (including omp's default `yolo`, which otherwise auto-runs them). Without this an agent silently browses
 # arbitrary internet sites — a real risk in a security/provenance product. The desktop intercepts these
