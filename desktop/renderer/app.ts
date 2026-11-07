@@ -18376,7 +18376,13 @@ async function maybeApplyDefaultModel(modelOpt: ConfigOption | undefined): Promi
   if (!state.auth) { const au = await bridge.auth().catch(() => null); if (au) state.auth = au; }
   // The Local Provider list decides what counts as LOCAL, so it must be known before anything is picked.
   // (state starts with an empty list that is only filled when Settings opens, hence the length check.)
-  if (!state.localProviders.length) state.localProviders = (await bridge.localProvidersList().catch(() => null)) ?? [];
+  // Fail closed: if the list cannot be read, a custom local model would be misread as cloud and could be
+  // auto-selected. Leave the guard unspent so the next config adopt retries instead of picking anything.
+  if (!state.localProviders.length) {
+    const lp = await bridge.localProvidersList().catch(() => null);
+    if (!lp) { defaultModelApplied = false; return; }
+    state.localProviders = lp;
+  }
   const [chosen, last] = await Promise.all([
     bridge.chosenModel().catch(() => ""), // already narrowed to EXPLICIT picks by settings_store.chosenModel()
     bridge.lastModel().catch(() => ""),
@@ -18412,8 +18418,9 @@ async function maybeApplyDefaultModel(modelOpt: ConfigOption | undefined): Promi
     if (awaitingCloudModel) { const mn = $("#modelName"); if (mn) mn.textContent = "Choose a model"; }
     return;
   }
-  awaitingCloudModel = false;
+  // applyConfig clears the hold itself and restores it if the engine rejects the switch.
   if (desired !== current) await applyConfig("model", desired, { system: true });
+  else awaitingCloudModel = false;
 }
 async function loadConfig(newCycle = true): Promise<void> {
   if (newCycle && configWarmTimer !== null) { window.clearTimeout(configWarmTimer); configWarmTimer = null; }
@@ -18600,7 +18607,10 @@ async function applyConfig(configId: string, value: string, opts: { system?: boo
   // P-MODELDEF: a genuine USER pick becomes the sticky default (restored on the next launch). A SYSTEM
   // switch (lockdown clamp, no-response fallback, collab-guest mirror, boot default-select) never does.
   if (configId === "model" && !opts.system) void bridge.setChosenModel(value).catch(() => {});
-  if (configId === "model") awaitingCloudModel = false; // any deliberate or default switch resolves the hold
+  // Any deliberate or default switch resolves the hold, but only once the engine accepts it: a rejected
+  // switch leaves the backend on the unchosen local model, so the catch below restores the hold.
+  const heldLocal = configId === "model" && awaitingCloudModel;
+  if (configId === "model") awaitingCloudModel = false;
   const configured = bridge.setConfig(configId, value)
     .then((cfg) => {
       if (opts.confirm && cfg.find((c) => c.id === configId)?.currentValue !== value) throw new Error("The engine did not confirm the selected model");
@@ -18609,12 +18619,17 @@ async function applyConfig(configId: string, value: string, opts: { system?: boo
       updateComposerTools();
     })
     .catch((error) => {
-      if (opts.confirm && configId === "model" && state.model === value) {
+      const latest = state.model === value; // false when a newer switch already superseded this one
+      if (opts.confirm && configId === "model" && latest) {
         state.model = previousModel;
         if (opt) opt.currentValue = previousModel;
         const label = $("#modelName"); if (label) label.textContent = modelLabel(previousModel);
         renderStatus(); if (p2pHostActive()) setP2PHostOptions(buildRendererCollabOptions()); // undo the optimistic branch everywhere it painted
         updateComposerTools();
+      }
+      if (heldLocal && latest) {
+        awaitingCloudModel = true; // the engine is still on the unchosen local model: keep holding the composer
+        const mn = $("#modelName"); if (mn) mn.textContent = "Choose a model";
       }
       showToast({ title: `Couldn't confirm ${opt?.name ?? configId}`, desc: "The backend didn't acknowledge the change - it may not have applied. Try again if new turns don't use it.", tone: "warn", actions: [{ label: "OK" }], timeout: 4200 });
       if (opts.confirm) throw error;
