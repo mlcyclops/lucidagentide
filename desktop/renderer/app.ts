@@ -32,7 +32,7 @@ import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from
 import { PREVIEW_ZOOM_MAX, PREVIEW_ZOOM_MIN, PreviewWheelSteps, stepPreviewZoom } from "./preview_zoom.ts"; // whole-10% Preview zoom steps
 import { PREVIEW_KIND_ICON, isAutoPreviewPath, laneTabId, pluginTabId, previewKindLabel, previewPathKind, removeLaneTab, upsertLaneTab, upsertPluginTab, type PreviewTab } from "./preview_tabs.ts";
 import { roleIcon } from "./role_icons.ts";
-import { budgetWindowState, providerBudgetRows, providerHasApiKey, providerKeywords } from "./budget_gate.ts";
+import { budgetWindowState, providerBudgetRows, providerForModel, providerHasApiKey, providerKeywords } from "./budget_gate.ts";
 import { cachedSessions, cachedShareSnapshot, cachedSkills, cachedTranscript, setCachedSessions, setCachedShareSnapshot, setCachedSkills, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
 import { $, $$, accordion, el, fmtNum, gauge, spark, table, type Col } from "./dom.ts";
 import { freshFindings, splitReviewed } from "./sec_review.ts"; // P-SECACK.1 (ADR-0170): reviewed rows leave the active view
@@ -127,12 +127,12 @@ import { classifyTurnFailure, effectiveState, type FailureCause } from "./net_st
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
 import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
 import { decideGovOnboarding, planGovSetup, CIV_ASKSAGE_BASE, ASKSAGE_ACCOUNT_URL, ASKSAGE_DOCS_URL, ASKSAGE_TOKEN_STEPS } from "./gov_onboarding.ts"; // P-GOVCUI.1: Government/CUI first-run step
-import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isUnconfiguredAmbientModel, localPrefixSet, orderByUsage, pendingLocalModels, preferredDefaultModel, providerAllowedOnPlatform, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isLocalModel, isUnconfiguredAmbientModel, localPrefixSet, noResponseRestartHint, orderByUsage, pendingLocalModels, preferredDefaultModel, providerAllowedOnPlatform, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions } from "./model_families.ts";
 import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
 import { enclaveProviderSet, isLockdownRoutable, LOCKDOWN_DETAIL, LOCKDOWN_LABEL, lockdownToggleDecision } from "../lockdown_route.ts"; // CUI lockdown: the ONE routing predicate the server clamp also uses
 import { CONFIG_WARM_POLL_MS, warmStep } from "./config_warm.ts"; // P-IDE.1d: model-picker cold-start warm-poll (per-cycle retry budget)
 import { DICTATION_DEFAULTS, dictationTick, downmixMono, encodeWavPcm16, mergeTranscript, newDictation, pushWave, resampleLinear, sttFailureMessage, waveClock, waveHeight, WHISPER_SAMPLE_RATE, type DictationState } from "./dictation.ts"; // P-STT.3/.4: fluid live dictation + visible mic feedback
-import { buildHubSections, configuredProviderCount, credentialedProviderIds, HUB_NON_MODEL_EXCLUDE, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
+import { buildHubSections, configuredProviderCount, credentialedProviderIds, HUB_NON_MODEL_EXCLUDE, providerConfigured, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
 import { LOCAL_MODEL_PRESETS } from "./local_presets.ts"; // P-LOCAL.4: one-click local-model presets in the hub
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
 import { installVaultEnvPanel, offerVaultEnvImport, VAULT_ENV_SEC, vaultEnvBodyHtml } from "./vault_env_panel.ts"; // P-VAULT-ENV.1 (ADR-0477)
@@ -1995,12 +1995,29 @@ function renderNoResponseNotice(container: HTMLElement, model: string, stopReaso
   const body = reason
     ? `<b>${esc(modelLabel(model))}</b> didn't respond <span class="noresp-sr">(${esc(reason)})</span>. The provider may be overloaded, or this model may be unavailable right now. Switch to another model and try again:`
     : `<b>${esc(modelLabel(model))}</b> returned nothing. The provider may be overloaded or oversubscribed right now${stopReason ? ` <span class="noresp-sr">(${esc(stopReason)})</span>` : ""}. Switch to another model and try again:`;
+  // Recovery hint: right after a cloud sign-in, an empty turn usually means the picker never got that
+  // provider's models (the OAuth/respawn hung), so suggest refreshing providers or restarting LUCID.
+  const localPx = new Set((state.localProviders ?? []).map((p) => p.ompProvider).filter(Boolean));
+  const cloudConnected = configuredProviderCount(state.auth) > 0;
+  const cloudModelsListed = opts.some((o) => {
+    if (isLocalModel(o.value, localPx) || isAuxiliaryModel(o.value)) return false;
+    const prov = providerForModel(state.auth, o.value);
+    return !!prov && providerConfigured(prov);
+  });
+  const hint = noResponseRestartHint({ cloudConnected, cloudModelsListed, failedIsLocal: isLocalModel(model, localPx) });
   container.innerHTML = `<div class="noresp-card">
     <div class="noresp-h">${icon("info", 14)}<span>No response from ${esc(provider)}</span></div>
     <div class="noresp-b">${body}</div>
     ${recs ? `<div class="noresp-actions">${recs}</div>` : ""}
     <div class="noresp-actions"><button class="btn-mini" data-noresp-pick>${icon("sliders", 12)} Pick another model…</button></div>
+    <div class="noresp-b noresp-restart${hint.strong ? " strong" : ""}" data-noresp-restart-hint>${esc(hint.text)}</div>
+    <div class="noresp-actions"><button class="btn-mini" data-noresp-refresh title="Restart the engine so it re-reads your providers and the model list (your chat is kept)">${icon("refresh", 12)} Refresh providers</button></div>
   </div>`;
+  (container.querySelector("[data-noresp-refresh]") as HTMLButtonElement | null)?.addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget as HTMLButtonElement;
+    btn.disabled = true;
+    try { await refreshModels(); await loadConfig(); } finally { btn.disabled = false; }
+  });
   container.querySelectorAll("[data-noresp-switch]").forEach((b) => b.addEventListener("click", async () => {
     const v = (b as HTMLElement).dataset.norespSwitch!;
     await applyConfig("model", v, { system: true }); // no-response fallback switch (system, not the user's sticky pick)
@@ -2285,6 +2302,13 @@ async function send(): Promise<void> {
   // - an expanded body would reach a session that never registered the command. targetCaps says so, and
   // while attached the text goes to the lane exactly as the user typed it.
   const caps = targetCaps(state.composerTarget);
+  // Cloud-only default: the main session is sitting on a LOCAL model the user never chose and no cloud model
+  // has loaded yet. Do not run the turn on it; open the picker and say why. (A Fleet lane owns its own model.)
+  if (awaitingCloudModel && state.composerTarget === MASTER_TARGET && !state.streaming) {
+    showToast({ tone: "warn", title: "Choose a model first", desc: "LUCID never picks a local model for you. Connect a cloud provider in Settings > Providers (its models appear after sign-in; if they do not, restart LUCID), or pick any model in the picker.", timeout: 8000 });
+    ($("#modelBadge") as HTMLElement | null)?.click();
+    return;
+  }
   // P-CMD.1: a user-authored SKILL-mode "/" command ACTIVATES its body as a persistent instruction (no turn
   // sent) — same behaviour as a bundled skill. Handle it before we open an assistant node.
   const cmdTok = caps.slashCommands ? /^\/([a-z][a-z0-9-]{0,31})\b/i.exec(text)?.[1]?.toLowerCase() : undefined;
@@ -18340,32 +18364,56 @@ let configWarmTimer: number | null = null; // the single scheduled re-poll (one 
 // Runs only on a real ADOPTED list, never over a live turn, and under AskSage lockdown it stays on a gov
 // model. Fire-and-forget, guarded once per launch.
 let defaultModelApplied = false;
+// Cloud-only default (fix/v2.5.1-provider-default-models): true while the session sits on a LOCAL model
+// the user never explicitly chose and no cloud model is available to default to. send() holds the turn and
+// opens the picker instead of running it on that model; any model switch (or a later cloud default) clears it.
+let awaitingCloudModel = false;
 async function maybeApplyDefaultModel(modelOpt: ConfigOption | undefined): Promise<void> {
   if (defaultModelApplied || !modelOpt || !modelOpt.options?.length || state.streaming || state.userRole === "lucid-agent") return;
   defaultModelApplied = true;
   // loadAsksage / auth race loadConfig at boot; both gate what's selectable, so make sure they're known.
   if (state.asksage == null) { const a = await bridge.asksage().catch(() => null); if (a) state.asksage = a; }
   if (!state.auth) { const au = await bridge.auth().catch(() => null); if (au) state.auth = au; }
+  // The Local Provider list decides what counts as LOCAL, so it must be known before anything is picked.
+  // (state starts with an empty list that is only filled when Settings opens, hence the length check.)
+  if (!state.localProviders.length) state.localProviders = (await bridge.localProvidersList().catch(() => null)) ?? [];
   const [chosen, last] = await Promise.all([
-    bridge.chosenModel().catch(() => ""),
+    bridge.chosenModel().catch(() => ""), // already narrowed to EXPLICIT picks by settings_store.chosenModel()
     bridge.lastModel().catch(() => ""),
   ]);
   if (agentPrior || state.streaming) return; // the role was entered mid-await: the tier owns the model now
-  const candidates = curatedModels(modelOpt).filter((o) => !unavailableReason(o.value));
-  if (!candidates.length) return;
+  const localPx = new Set((state.localProviders ?? []).map((p) => p.ompProvider).filter(Boolean));
+  const isLocal = (v: string) => isLocalModel(v, localPx);
+  const cloud = (v: string) => !isLocal(v);
+  // !isAuxiliaryModel: curatedModels re-adds the CURRENT model even when it is hidden (ensureCurrent), so
+  // without this a session already sitting on an embedding model would match rung 1/2 and stay there.
+  const candidates = curatedModels(modelOpt).filter((o) => !unavailableReason(o.value) && !isAuxiliaryModel(o.value));
   const inList = (v: string) => !!v && candidates.some((o) => o.value === v);
   // A remembered model only wins while it is STILL OFFERED and still selectable: a revoked key or a
   // retired model must fall through to the curated default rather than pin the picker to a dead id.
+  // Only the EXPLICIT choice may be local; the auto-stamped last model and the curated default are cloud-only.
   let desired = inList(chosen) ? chosen
-    : inList(last) ? last
-    : (preferredDefaultModel(candidates)?.value ?? "");
+    : inList(last) && cloud(last) ? last
+    : (preferredDefaultModel(candidates, cloud)?.value ?? "");
   if (state.asksage?.only && desired && !lockdownRoutable(desired)) {
     // Lockdown overrides even a remembered pick: a CUI session may not route direct. Prefer the curated
-    // default among allowed routes (AskSage or a DGX enclave Local Provider), then any allowed model at all,
-    // and only then give up (the backend clamp is authoritative).
-    desired = preferredDefaultModel(candidates, lockdownRoutable)?.value ?? topModel(candidates, lockdownRoutable)?.value ?? desired;
+    // default among allowed CLOUD routes (AskSage), then any allowed cloud model, and only then give up (the
+    // backend clamp is authoritative and may still land a DGX enclave Local Provider by policy).
+    const ok = (v: string) => lockdownRoutable(v) && cloud(v);
+    desired = preferredDefaultModel(candidates, ok)?.value ?? topModel(candidates, ok)?.value ?? desired;
   }
-  if (desired && desired !== modelOpt.currentValue) await applyConfig("model", desired, { system: true });
+  const current = modelOpt.currentValue;
+  if (!desired) {
+    // No cloud model to default to yet (fresh install before the first OAuth, or the provider's models have
+    // not landed). Never fall back to a local model: leave the guard unspent so the post-OAuth config adopt
+    // re-runs this, and hold the composer if the session is sitting on a local model nobody chose.
+    defaultModelApplied = false;
+    awaitingCloudModel = !!current && isLocal(current) && current !== chosen;
+    if (awaitingCloudModel) { const mn = $("#modelName"); if (mn) mn.textContent = "Choose a model"; }
+    return;
+  }
+  awaitingCloudModel = false;
+  if (desired !== current) await applyConfig("model", desired, { system: true });
 }
 async function loadConfig(newCycle = true): Promise<void> {
   if (newCycle && configWarmTimer !== null) { window.clearTimeout(configWarmTimer); configWarmTimer = null; }
@@ -18552,6 +18600,7 @@ async function applyConfig(configId: string, value: string, opts: { system?: boo
   // P-MODELDEF: a genuine USER pick becomes the sticky default (restored on the next launch). A SYSTEM
   // switch (lockdown clamp, no-response fallback, collab-guest mirror, boot default-select) never does.
   if (configId === "model" && !opts.system) void bridge.setChosenModel(value).catch(() => {});
+  if (configId === "model") awaitingCloudModel = false; // any deliberate or default switch resolves the hold
   const configured = bridge.setConfig(configId, value)
     .then((cfg) => {
       if (opts.confirm && cfg.find((c) => c.id === configId)?.currentValue !== value) throw new Error("The engine did not confirm the selected model");
