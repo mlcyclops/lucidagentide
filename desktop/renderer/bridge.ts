@@ -1832,7 +1832,13 @@ export const bridge: LucidBridge = {
   agentHistoryRestore: (id, ts) => post("/api/agent/history/restore", { id, ts }), // P-AGENT.17
   agentTemplates: async () => (await getData("/api/agent/templates"))?.templates ?? [], // P-AGENT.17
   agentTemplateUse: (file) => post("/api/agent/template-use", { file }), // P-AGENT.17 (standard gated import path)
-  localProvidersList: async () => (await getData("/api/local-providers"))?.providers ?? [], // P-LOCAL.3
+  // P-LOCAL.3. Rejects when the engine cannot be read, so callers never mistake "unknown" for "no local
+  // providers" (ADR-0498: that would misread a custom local model as cloud and auto-select it).
+  localProvidersList: async () => {
+    const d = await getData("/api/local-providers");
+    if (!d) throw new Error("local providers unavailable");
+    return d.providers ?? [];
+  },
   localProviderUpsert: (provider) => post("/api/local-providers", { provider }), // P-LOCAL.3 (server validates fail-closed)
   localProviderDelete: (id) => post("/api/local-providers/delete", { id }), // P-LOCAL.3
   localProviderEnable: (id, enabled) => post("/api/local-providers/enable", { id, enabled }), // P-LOCAL.3
