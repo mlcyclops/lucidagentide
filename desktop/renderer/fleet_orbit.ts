@@ -24,6 +24,7 @@ import { githubPickNote, mountRepoPicker, repoPickerHtml } from "./repo_picker.t
 import type { ApprovalScope, FleetStatusView, LaneView, LucidBridge, TimelineEntry } from "./bridge.ts";
 import { isLaneTarget, type ComposerTarget } from "./composer_target.ts";
 import { cycleSpoke, ghostKey, ghostSpokes, hubLanes, ORBIT_FPS_FLOOR, ORBIT_NODE_H, ORBIT_NODE_W, orbitMode, orbitSlots, otherHubs, readAllPages, spokeClose, spokeGlance, switchEntries, type GhostLists, type GhostMark, type GhostSpoke, type HubEntry, type OrbitMode, type SpokeClose, type SwitchEntry } from "./orbit_layout.ts";
+import { mountOrbitCanvas, type OrbitCanvasHandle, type OrbitRing, type OrbitSpoke } from "./orbit_canvas.ts"; // P-ORBIT-CANVAS.1 (ADR-0522)
 import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new spokes open on the last spoke's model; colliding names show the route
 import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
@@ -174,6 +175,7 @@ let fpsGen = 0;
 
 function applyMode(next: OrbitMode): void {
   mode = next;
+  canvas?.setMode(next);
   view?.classList.toggle("static", next === "static");
   banner?.classList.toggle("static", next === "static");
   const btn = view ? ($("[data-orbit-mode]", view) as HTMLElement | null) : null;
@@ -632,9 +634,11 @@ let deps: FleetOrbitDeps | null = null;
 let view: HTMLElement | null = null;
 let pollTimer: number | null = null;
 let lastStatus: FleetStatusView | null = null;
-/** Card + line per lane id. Cards are reconciled, never rebuilt, so state-glow animations don't restart
+/** Card per lane id. Cards are reconciled, never rebuilt, so state-glow animations don't restart
  *  on every poll (the fleet grid's pill lesson). */
-const nodes = new Map<string, { card: HTMLElement; line: SVGLineElement }>();
+const nodes = new Map<string, { card: HTMLElement }>();
+/** P-ORBIT-CANVAS.1 (ADR-0522): the spokes and rings, painted on one canvas under the cards. */
+let canvas: OrbitCanvasHandle | null = null;
 
 export function initFleetOrbit(d: FleetOrbitDeps): void {
   deps = d;
@@ -679,6 +683,7 @@ export function openFleetOrbit(): void {
   if (!view) view = buildView();
   if (!view.isConnected) document.body.appendChild(view);
   view.hidden = false;
+  canvas?.setVisible(true);
   applyMode(resolveMode());
   paintHomePin();
   runFpsGuard();
@@ -700,7 +705,7 @@ export function closeFleetOrbit(): void {
   if (fpsGuard === "measuring") { fpsGuard = "armed"; fpsGen++; } // abandon a straddling measurement; the next open re-measures
   view.classList.remove("open");
   const v = view;
-  window.setTimeout(() => { v.hidden = true; }, 220);
+  window.setTimeout(() => { v.hidden = true; canvas?.setVisible(false); }, 220);
   if (pollTimer != null) { window.clearInterval(pollTimer); pollTimer = null; }
   if (beatTimer != null) { window.clearInterval(beatTimer); beatTimer = null; }
   window.removeEventListener("resize", onResize);
@@ -737,7 +742,6 @@ function buildView(): HTMLElement {
       <button class="btn-mini orbit-btn orbit-x" data-orbit-close data-tip="Close (Esc)|The spokes keep running; this view is a map, not a lifecycle owner.">${icon("close", 13)}</button>
     </header>
     <div class="orbit-stage" data-orbit-stage>
-      <svg class="orbit-svg" data-orbit-svg aria-hidden="true"></svg>
       <div class="orbit-hub" data-orbit-hub role="button" tabindex="0">
         <span class="orbit-hub-ping" aria-hidden="true"></span><span class="orbit-hub-ping p2" aria-hidden="true"></span>
         <span class="orbit-hub-goal" aria-hidden="true"></span>
@@ -769,6 +773,7 @@ function buildView(): HTMLElement {
   ($("[data-orbit-hub]", v) as HTMLElement).addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); goHome(); }
   });
+  canvas = mountOrbitCanvas($("[data-orbit-stage]", v) as HTMLElement, mode);
   return v;
 }
 
@@ -1000,18 +1005,14 @@ function paintHub(): void {
  *  and let removed lanes fall back INTO the hub before their nodes drop. */
 function reconcile(lanes: LaneView[], first: boolean): void {
   const stage = $("[data-orbit-stage]", view!) as HTMLElement;
-  const svg = $("[data-orbit-svg]", view!) as unknown as SVGSVGElement;
   const seen = new Set<string>();
   lanes.forEach((lane, i) => {
     seen.add(lane.id);
     let entry = nodes.get(lane.id);
     if (!entry) {
       const card = buildNode(lane);
-      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-      line.setAttribute("class", "orbit-line");
-      svg.appendChild(line);
       stage.appendChild(card);
-      entry = { card, line };
+      entry = { card };
       nodes.set(lane.id, entry);
       // Born at the hub, flown to the slot: the var flip happens in layoutStage after this frame.
       entry.card.style.setProperty("--tx", "0px");
@@ -1021,13 +1022,10 @@ function reconcile(lanes: LaneView[], first: boolean): void {
       requestAnimationFrame(() => entry!.card.classList.remove("orbit-enter"));
     }
     paintNode(entry.card, lane);
-    entry.line.setAttribute("data-status", lane.status);
-    entry.line.classList.toggle("promoted", lane.promoted);
   });
   for (const [id, entry] of nodes) {
     if (seen.has(id)) continue;
     nodes.delete(id);
-    entry.line.remove();
     entry.card.classList.add("orbit-exit");
     entry.card.style.setProperty("--tx", "0px");
     entry.card.style.setProperty("--ty", "0px");
@@ -1108,46 +1106,36 @@ function hash(s: string): number {
   return h;
 }
 
-/** Position every card and line from the pure layout. Cards transition on --tx/--ty; lines follow
- *  instantly (SVG attrs), which is invisible in practice because the poll repositions both together. */
+/** Position every card from the pure layout and hand the spokes and rings to the canvas. Cards transition
+ *  on --tx/--ty; lines land at once, which is invisible in practice because the poll repositions both together. */
 function layoutStage(lanes: LaneView[]): void {
   if (!view || view.hidden) return;
   const stage = $("[data-orbit-stage]", view) as HTMLElement;
-  const svg = $("[data-orbit-svg]", view) as unknown as SVGSVGElement;
   const w = stage.clientWidth, h = stage.clientHeight;
   if (w === 0 || h === 0) return;
-  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
-  const cx = w / 2, cy = h / 2;
   const slots = orbitSlots(lanes.length, w, h);
   // Decorative ring ellipses for each occupied ring, dash-drifting slowly (pure ornament, one per ring).
-  const rings = [...new Set(slots.map((s) => s.ring))];
-  const ringEls = svg.querySelectorAll(".orbit-ringline");
-  if (ringEls.length !== rings.length) {
-    ringEls.forEach((r) => r.remove());
-    for (const ring of rings) {
-      const sample = slots.find((s) => s.ring === ring)!;
-      const rx = Math.hypot(sample.x, 0) || Math.abs(sample.y);
-      const e = document.createElementNS("http://www.w3.org/2000/svg", "ellipse");
-      e.setAttribute("class", "orbit-ringline");
-      e.setAttribute("cx", String(cx)); e.setAttribute("cy", String(cy));
-      // Recover the ellipse radii from any slot on the ring: x = rx cos a, y = ry sin a.
-      const a = (sample.angle * Math.PI) / 180;
-      e.setAttribute("rx", String(Math.abs(Math.cos(a)) > 0.01 ? Math.abs(sample.x / Math.cos(a)) : rx));
-      e.setAttribute("ry", String(Math.abs(Math.sin(a)) > 0.01 ? Math.abs(sample.y / Math.sin(a)) : rx));
-      svg.insertBefore(e, svg.firstChild);
-    }
+  const rings: OrbitRing[] = [];
+  for (const ring of new Set(slots.map((s) => s.ring))) {
+    const sample = slots.find((s) => s.ring === ring)!;
+    const r = Math.hypot(sample.x, 0) || Math.abs(sample.y);
+    // Recover the ellipse radii from any slot on the ring: x = rx cos a, y = ry sin a.
+    const a = (sample.angle * Math.PI) / 180;
+    rings.push({
+      rx: Math.abs(Math.cos(a)) > 0.01 ? Math.abs(sample.x / Math.cos(a)) : r,
+      ry: Math.abs(Math.sin(a)) > 0.01 ? Math.abs(sample.y / Math.sin(a)) : r,
+    });
   }
+  const spokes: OrbitSpoke[] = [];
   lanes.forEach((lane, i) => {
     const entry = nodes.get(lane.id);
     const slot = slots[i];
     if (!entry || !slot) return;
     entry.card.style.setProperty("--tx", `${Math.round(slot.x)}px`);
     entry.card.style.setProperty("--ty", `${Math.round(slot.y)}px`);
-    entry.line.setAttribute("x1", String(cx));
-    entry.line.setAttribute("y1", String(cy));
-    entry.line.setAttribute("x2", String(cx + slot.x));
-    entry.line.setAttribute("y2", String(cy + slot.y));
+    spokes.push({ x: slot.x, y: slot.y, status: lane.status, promoted: lane.promoted });
   });
+  canvas?.setScene({ spokes, rings });
 }
 
 // ------------------------------------------------------------------------- the spoke takeover banner
