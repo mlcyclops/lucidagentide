@@ -7,7 +7,7 @@
 // GPT) and the gateway-prefix robustness are the easy things to break, so they're pinned here.
 
 import { describe, expect, it } from "bun:test";
-import { ASKSAGE_FAMILY_ORDER, capabilityTier, cmpModelsByLevel, cmpModelsNewestFirst, DEFAULT_MODEL_PREFERENCE, familyOf, filterModels, groupByFamily, gptVersion, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isSpecialVariantModel, isUnconfiguredAmbientModel, localPrefixSet, MODEL_FAMILIES, orderByUsage, pendingLocalModels, preferredDefaultModel, providerAllowedOnPlatform, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions, type LocalProviderRef, type ModelOption } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, cmpModelsByLevel, cmpModelsNewestFirst, DEFAULT_MODEL_PREFERENCE, familyOf, filterModels, groupByFamily, gptVersion, isApiOnlyModel, isAuxiliaryModel, isLocalModel, noResponseRestartHint, isChinaModel, isDeprecatedModel, isGovModel, isSpecialVariantModel, isUnconfiguredAmbientModel, localPrefixSet, MODEL_FAMILIES, orderByUsage, pendingLocalModels, preferredDefaultModel, providerAllowedOnPlatform, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions, type LocalProviderRef, type ModelOption } from "./model_families.ts";
 
 describe("familyOf", () => {
   it("classifies direct Anthropic models (incl. fable) as Claude", () => {
@@ -162,6 +162,25 @@ describe("P-IDE.1c - gov / auxiliary / china detection", () => {
     expect(preferredDefaultModel(localOnly)).toBeNull();
     const withCloud = [...localOnly, { value: "anthropic/claude-opus-5-5" }];
     expect(preferredDefaultModel(withCloud)?.value).toBe("anthropic/claude-opus-5-5");
+  });
+  it("isLocalModel: omp's implicit engines and configured Local Providers are local; cloud ids are not", () => {
+    for (const l of ["ollama/llama3.1:8b", "llama.cpp/qwen3-8b", "lm-studio/gemma-3", "apple/on-device", "local/x"]) expect(isLocalModel(l)).toBe(true);
+    expect(isLocalModel("dgx-spark/glm-5.3-flash", new Set(["dgx-spark"]))).toBe(true);
+    expect(isLocalModel("dgx-spark/glm-5.3-flash")).toBe(false); // unknown prefix without the configured set
+    for (const c of ["anthropic/claude-opus-5-5", "openai-codex/gpt-5.5", "ollama-cloud/gpt-oss-120b", "asksage-openai/gpt-5.6-luna", "openrouter/meta-llama/llama-3.3-70b", "bare-id"]) {
+      expect(isLocalModel(c)).toBe(false);
+    }
+  });
+  it("noResponseRestartHint: strong when a cloud provider is connected but its models are missing, or the failed model is local", () => {
+    expect(noResponseRestartHint({ cloudConnected: true, cloudModelsListed: false, failedIsLocal: false }).strong).toBe(true);
+    expect(noResponseRestartHint({ cloudConnected: true, cloudModelsListed: true, failedIsLocal: true }).strong).toBe(true);
+    expect(noResponseRestartHint({ cloudConnected: true, cloudModelsListed: true, failedIsLocal: false }).strong).toBe(false);
+    expect(noResponseRestartHint({ cloudConnected: false, cloudModelsListed: false, failedIsLocal: true }).strong).toBe(false);
+    const strong = noResponseRestartHint({ cloudConnected: true, cloudModelsListed: false, failedIsLocal: false }).text;
+    expect(strong).toContain("If you just signed in");
+    expect(strong).toContain("restart LUCID");
+    expect(noResponseRestartHint({ cloudConnected: false, cloudModelsListed: false, failedIsLocal: false }).text).toContain("Restart LUCID");
+    for (const t of [strong, noResponseRestartHint({ cloudConnected: false, cloudModelsListed: true, failedIsLocal: false }).text]) expect(t).not.toContain(String.fromCharCode(0x2014)); // CLAUDE.md: no em dashes in UI copy
   });
   it("recommendFallbacks never suggests an embedding model", () => {
     const models = [{ value: "ollama/nomic-embed-text:latest", name: "nomic" }, { value: "ollama/llama3.1:8b", name: "llama" }];

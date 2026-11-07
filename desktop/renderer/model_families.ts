@@ -126,6 +126,21 @@ export function localPrefixSet(providers: readonly LocalProviderRef[]): Set<stri
   return new Set(providers.filter((p) => p.enabled && p.ompProvider).map((p) => p.ompProvider));
 }
 
+/** omp's KEYLESS local engines, which it probes on its own with no LUCID configuration at all
+ *  (pi-coding-agent model-registry.ts #addImplicitDiscoverableProviders: Ollama on :11434, llama.cpp on
+ *  :8080, LM Studio on :1234, Apple's on-device model, plus the keyless `local` provider). */
+export const IMPLICIT_LOCAL_PROVIDERS: ReadonlySet<string> = new Set(["ollama", "llama.cpp", "lm-studio", "apple", "local"]);
+
+/** A model served from the user's own machine or network rather than a cloud provider: an omp implicit
+ *  local engine, or one of the user's configured Local Providers (`localPrefixes`, see localPrefixSet).
+ *  Cloud-only default (fix/v2.5.1-provider-default-models): the AUTOMATIC default never selects one of
+ *  these. A local model becomes active only through an explicit user pick. */
+export function isLocalModel(value: string, localPrefixes: ReadonlySet<string> = new Set()): boolean {
+  const p = providerPrefixOf(value);
+  if (!p) return false;
+  return IMPLICIT_LOCAL_PROVIDERS.has(p.toLowerCase()) || localPrefixes.has(p);
+}
+
 /** Split a curated list into local-provider models (pinned first) and everything else. Relative
  *  order inside each half is preserved: the caller already curated it. */
 export function splitLocalModels(models: readonly ModelOption[], prefixes: ReadonlySet<string>): { local: ModelOption[]; rest: ModelOption[] } {
@@ -422,6 +437,20 @@ export function providerLabelOf(value: string): string {
 }
 
 export interface FallbackRecs { sameFamily: ModelOption | null; otherProvider: ModelOption | null }
+
+/** The restart hint on the "no response" card. A turn that returns nothing right after a cloud sign-in is
+ *  very often the picker never receiving that provider's models (the OAuth broker or omp respawn hung), so
+ *  the session sat on whatever model it already had. `strong` = a cloud provider is connected but none of
+ *  its models are listed, or the failed model is local while a cloud provider is connected: in both cases
+ *  refreshing providers is the likeliest fix. Otherwise a milder last-resort line. Wording is advisory only
+ *  (the card offers a non-destructive "Refresh providers" action; it never restarts anything by itself). */
+export interface RestartHint { strong: boolean; text: string }
+export function noResponseRestartHint(input: { cloudConnected: boolean; cloudModelsListed: boolean; failedIsLocal: boolean }): RestartHint {
+  const strong = input.cloudConnected && (!input.cloudModelsListed || input.failedIsLocal);
+  return strong
+    ? { strong, text: "If you just signed in, your cloud providers may still be loading. Refresh providers below, or restart LUCID, to reload your providers and the model list, then try again." }
+    : { strong, text: "Still not responding? Restart LUCID to refresh your providers and the model list, then try again." };
+}
 
 /** When `failed` returned nothing (likely overloaded), recommend fallbacks from the user's ACCESSIBLE
  *  list, matching the failed model's gov-ness (so a lockdown session stays gov-routed):
