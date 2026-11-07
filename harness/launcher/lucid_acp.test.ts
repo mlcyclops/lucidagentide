@@ -63,15 +63,15 @@ test("buildAcpArgs reproduces the exact gated command (gate first, policy last)"
   expect(args).toContain(a.asksage);
   expect(args[args.length - 2]).toBe("--append-system-prompt");
   expect(args[args.length - 1]).toBe(APPENDED_POLICY);
-  // --isolate omitted by default
+  // the ACP overlay (ask off, approval prompts) loads like the desktop's; --isolate omitted by default
+  expect(args[args.indexOf("--config") + 1]).toBe(a.acpConfig);
   expect(args).not.toContain("--isolate");
 });
 
-test("--isolate adds the config overlay; omitted otherwise", () => {
+test("--isolate adds the isolation overlay; omitted otherwise", () => {
   const a = assets("/repo");
   const withIso = buildAcpArgs({ gate: a.gate, acpConfig: a.acpConfig, isolate: true });
-  expect(withIso).toContain("--isolate");
-  expect(withIso).toContain(a.acpConfig);
+  expect(withIso[withIso.indexOf("--isolate") + 1]).toBe(a.acpConfig);
   const noAsksage = buildAcpArgs({ gate: a.gate });
   expect(noAsksage.filter((x) => x === "-e").length).toBe(1); // gate only when asksage absent
 });

@@ -5973,3 +5973,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **verified:** bench in Edge, main thread ms per second before and after: dock pill plus grid card waiting 12.6 to 1.3, orbit Lite with an approval waiting 16.9 to 2.0; peak screenshots: pill and pip match, the card's glow now sits inside its border (the card clips overflow).
 - **stubbed:** `fleetGlowAmber` on awaiting-input grid cards still animates box-shadow.
 - **next:** the same fix for `fleetGlowAmber` if wanted.
+
+## P-ASK.1 review fix: `lucid acp` loads the ACP overlay too (ADR-0523)
+- **shipped (2026-11-07):** `buildAcpArgs` passes `acp_config.yml` via `--config` (present-only; `--isolate` without it refuses), so the standalone IDE launcher gets `ask` off and the desktop's approval prompts. `lucid_acp.test.ts` pins the `--config` and `--isolate` arguments; demo19 green.
+- **stubbed:** not exercised against a live IDE client; argv assembly and the fail-closed launcher demo only.
+- **next:** ship in v2.5.2 with #570 and #574.
