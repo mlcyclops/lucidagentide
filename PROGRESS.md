@@ -5897,3 +5897,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-07):** `orbitSlots` returns each slot's ring radii (`ringRx`, `ringRy`) and `layoutStage` draws the decorative ellipses from them instead of inverting a 12 o'clock sample (where cos a is a rounding error, so rx was ~3.6e-14); the ellipses are now re-sized on every layout pass, so a stage resize keeps them on the spokes. Test: every slot lies on its ring's ellipse, radii above 100 px, for 1 to 30 spokes.
 - **stubbed:** checked by rendering the layout's own output as SVG in the preview, not in a running Fleet Orbit. PR #571 (canvas orbit) still carries the old inversion and must take `ringRx`/`ringRy` when it rebases.
 - **next:** ship in v2.5.2.
+
+## Release cut: v2.5.2 (stable): bug fixes on 2.5.1
+- **shipped (2026-11-07, v2.5.2):** branch `release/v2.5.2-cut` = master with #560 (P-HERD design ADRs), #570 (P-MODEL.9, ADR-0498), #572 (P-ASK.1, ADR-0523), #574 (P-GLOW.1, ADR-0524) and #576 (orbit ring, #575); version 2.5.2 at version.ts, package.json, the bug template and the hub screenshot fixture; README and HANDOFF name 2.5.2 as Latest with a What's new section and an upgrade note for re-picking a local model.
+- **stubbed:** the Homebrew cask is pinned by the update-cask job after the tag build, not here; #573, #571 and the older held PRs stay for 2.6.0.
+- **next:** tag v2.5.2 on the merge commit, let the tag build sign and publish, mark it Latest, merge the auto `chore/cask-v2.5.2` PR; bump the add-on repo's Tahiti `core.lock` to this tag.
