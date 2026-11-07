@@ -300,7 +300,7 @@ describe("an Entra-signed Azure OpenAI turn end to end", () => {
     expect(imdsHits).toBe(hitsAfterDenial + 1);
   });
 
-  // The remote spoke (add-on ADR-A049) reaches the account BY NAME through its egress proxy: HTTPS_PROXY set,
+  // The remote spoke (add-on ADR-A064) reaches the account BY NAME through its egress proxy: HTTPS_PROXY set,
   // only IMDS in NO_PROXY. The request must carry that proxy; a host listed in NO_PROXY must go direct.
   test("the Entra request to the account goes through HTTPS_PROXY unless NO_PROXY names the host", async () => {
     const ACCOUNT_HOST = "lucid-spoke-aoai-7f3k.openai.azure.com";

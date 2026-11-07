@@ -97,7 +97,7 @@ export async function loadHub(deps: RemoteSpokesDeps): Promise<RemoteHubView> {
   return mapHubSnapshot(r.data);
 }
 
-/** ADR-0514 (add-on RS-IDE-01, ADR-A059): the hub panel's address for a plugin tab. The plugin's page carries no
+/** ADR-0514 (add-on RS-IDE-01, ADR-A074): the hub panel's address for a plugin tab. The plugin's page carries no
  *  secret; the engine asks the plugin (host token) for a one-time bootstrap secret and puts it in the URL fragment,
  *  which the page trades once for its session cookie and token. `ideOrigin` is the IDE window that frames the
  *  panel; the plugin allows no other frame-ancestor. */

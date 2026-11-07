@@ -4,7 +4,7 @@
 // desktop/renderer/remote_spokes_model.ts - P-IDE-SPOKES.1 (ADR-0506): remote spokes as the IDE sees them.
 //
 // Pure and DOM-free, so the engine (desktop/remote_spokes.ts) and the orbit share one model. The source of truth
-// is the add-on hub (the remote-spokes server plugin, add-on ADR-A051): its /host/spokes summary carries the
+// is the add-on hub (the remote-spokes server plugin, add-on ADR-A066): its /host/spokes summary carries the
 // hub's certificate scopes and, per spoke, its own answers to `capabilities` and `status`. Everything a spoke
 // wrote (task names, model ids, errors) is untrusted: it is validated and clipped here and only ever shown as text.
 // ADR-0508 adds the hub's optional per-spoke facts (answer time, route, the spoke certificate's region and
@@ -15,7 +15,7 @@
 // ADR-0512 adds the hub's optional `deactivated` mark: a spoke its owner took offline on purpose (shipped, lent,
 // unplugged) reads `deactivated`, in a dim tone, with no alert lines, and is never offered as a target.
 //
-// What a hub may do is what its certificate's scopes allow (add-on ADR-A044): recall reads (status, journal,
+// What a hub may do is what its certificate's scopes allow (add-on ADR-A059): recall reads (status, journal,
 // parked actions), drive starts, follows up, cancels and closes tasks and denies parked actions, approve signs an
 // allow (and a signed deny). The spokes enforce the same scopes again; the IDE never offers what would be refused.
 
@@ -30,7 +30,7 @@ export function hubActions(scopes: readonly string[]): HubActions {
   return { recall: scopes.includes("recall"), drive, approve, deny: drive || approve };
 }
 
-/** The spoke's TaskState (add-on spoke.ts), with `closed` from add-on ADR-A047. Closed set. */
+/** The spoke's TaskState (add-on spoke.ts), with `closed` from add-on ADR-A062. Closed set. */
 export const TASK_STATES = ["working", "awaiting_approval", "idle", "error", "stopped", "closed"] as const;
 export type RemoteTaskState = (typeof TASK_STATES)[number];
 
@@ -121,7 +121,7 @@ export interface RemoteSpokeView {
   error?: string;
 }
 
-/** How the hub proves user presence on approve (ADR-0507, add-on ADR-A052): `password` needs the hub's password
+/** How the hub proves user presence on approve (ADR-0507, add-on ADR-A067): `password` needs the hub's password
  *  typed for every Approve (the orbit asks for it and the engine passes it through once); the platform kinds ask
  *  on the hub machine itself; `none` approves without evidence. null: not set up, or not reported. */
 export const HUB_PRESENCE = ["password", "windows-hello", "macos-secure-enclave", "none"] as const;
@@ -547,7 +547,7 @@ export function approvalButtons(v: RemoteApprovalView, a: HubActions): { approve
   return { approve: a.approve && !v.quarantined, deny: a.deny };
 }
 
-/** The plugin panel's two-click rule (add-on ADR-A045), kept in the IDE for Approve, Close and Resume: the first
+/** The plugin panel's two-click rule (add-on ADR-A060), kept in the IDE for Approve, Close and Resume: the first
  *  click arms for 8 seconds, a second click inside that window acts. Returns what this click does and the new
  *  armed time (null once it acted). */
 export const ARM_MS = 8_000;

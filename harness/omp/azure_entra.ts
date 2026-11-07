@@ -241,7 +241,7 @@ export function createTokenSource(config: AzureEntraConfig, deps: EntraSourceDep
  *  held token so the next turn signs in again. The proxy is chosen by omp's own resolver (`PI_PROXY_<PROVIDER>`,
  *  `PI_PROXY`, `HTTPS_PROXY`, honoring `NO_PROXY` and never for local or metadata hosts) and set on the request
  *  explicitly, so a host that must reach the account through an egress proxy (the remote spoke, add-on
- *  ADR-A049) does not depend on the runtime's own reading of the proxy environment. A proxy omp's transport
+ *  ADR-A064) does not depend on the runtime's own reading of the proxy environment. A proxy omp's transport
  *  already set wins. */
 export function bearerFetch(token: string, source: EntraTokenSource, base: FetchImpl, provider: string): FetchImpl {
   return async (input, init) => {
