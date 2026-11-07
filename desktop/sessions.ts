@@ -525,10 +525,16 @@ export function autoArchive(policy: ArchivePolicy, keep: ReadonlySet<string>, sp
     for (const f of files) {
       const p = join(dir, f);
       try {
+        // One open file for the stat and every read: reading `p` again by path could see a different file.
         const fd = openSync(p, "r");
         let e: IndexEntry;
-        try { e = indexedEntry(p, f, fstatSync(fd), () => readFileSync(fd, "utf8")); } finally { closeSync(fd); }
-        const id = e.meta?.id ?? sessionRecord(readFileSync(p, "utf8"), f).id;
+        let id: string;
+        try {
+          let text: string | undefined;
+          const read = () => (text ??= readFileSync(fd, "utf8"));
+          e = indexedEntry(p, f, fstatSync(fd), read);
+          id = e.meta?.id ?? sessionRecord(read(), f).id;
+        } finally { closeSync(fd); }
         if (keep.has(id)) continue;
         const days = !e.meta || spokes.has(id) ? policy.spokeDays : policy.days;
         if (now - e.mtimeMs < days * 86_400_000) continue;

@@ -599,7 +599,7 @@ function markWorkspaceSetupAsked(path: string): void {
 import { EVENTS_LOG_PATH, recordSkillActivated } from "./skills_log.ts";
 import { auditTierVerdict, CONTROLLER_ROUTES, forgetControllerLane, handleController, restoreControllerLanes, type ControllerDeps } from "./controller/routes.ts"; // P-CTRL.2 (ADR-0438); lane lifecycle ADR-0500/0501
 import { ControllerLaneStore } from "./controller/lane_store.ts"; // ADR-0501: controller lanes survive a restart
-import { OFF_TASK_SYSTEM, offTaskPrompt, parseOffTask } from "./controller/remote_policy.ts"; // P-CTRL-REMOTE.1 (ADR-0498)
+import { OFF_TASK_SYSTEM, offTaskPrompt, parseOffTask } from "./controller/remote_policy.ts"; // P-CTRL-REMOTE.1 (ADR-0525)
 import { PairingStore, type Pairing } from "./controller/store.ts"; // P-CTRL.2: the hashed pairing store
 import { handleRemoteSpokes, REMOTE_SPOKES_PLUGIN, remoteSpokesPanelUrl, type RemoteSpokesDeps } from "./remote_spokes.ts"; // P-IDE-SPOKES.1 (ADR-0506)
 import { recentTurns } from "./turns_log.ts";
@@ -1801,7 +1801,7 @@ const fleet: FleetLaneManager = new FleetLaneManager({
   onWrite: (lane, path) => checkouts.recordWrite({ id: lane.id, name: lane.name }, path, lane.cwd),
   preface: (lane): Promise<string> => checkouts.briefingFor(lane.id, lane.cwd),
   repo: { observe: observeToolCall, peek: peekRepoContext }, // P-REPO.1 (ADR-0406)
-  // P-CTRL-REMOTE.1 (ADR-0498): the off-task check runs as a one-shot completion on the lane's own model (the
+  // P-CTRL-REMOTE.1 (ADR-0525): the off-task check runs as a one-shot completion on the lane's own model (the
   // util connection, never the chat turn). Tighten only: "" (any failure) parses as unknown, which parks.
   offTask: async (lane, action) => parseOffTask(await backend.complete(OFF_TASK_SYSTEM, offTaskPrompt(lane.assignment, action), { model: lane.model, idleMs: 20_000 })),
   // Throws when the line cannot be written; the fleet then refuses the action instead of running it unaudited.

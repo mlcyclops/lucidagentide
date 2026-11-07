@@ -25,7 +25,7 @@
 // source, so the store card never mistakes a private copy for the purchased one and nothing updates it.
 
 import { randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { sha256Bytes, type TrustedPackKey } from "../../harness/kb/pack.ts";
@@ -229,11 +229,19 @@ export type PluginFileInspect =
 function readPackageFile(path: string): { ok: true; bytes: Buffer } | { ok: false; reason: string } {
   if (!path || !isAbsolute(path)) return { ok: false, reason: "choose a .lplugin.zip file" };
   if (!/\.zip$/i.test(path)) return { ok: false, reason: "a plugin package is a .lplugin.zip file" };
-  let size: number;
-  try { const st = statSync(path); if (!st.isFile()) return { ok: false, reason: "that is not a file" }; size = st.size; }
-  catch { return { ok: false, reason: "that file does not exist" }; }
-  if (size > MAX_DOWNLOAD_BYTES) return { ok: false, reason: `package is ${size} bytes, over the ${MAX_DOWNLOAD_BYTES}-byte limit` };
-  try { return { ok: true, bytes: readFileSync(path) }; } catch (e) { return { ok: false, reason: `could not read the file: ${(e as Error).message}` }; }
+  // One open file for the checks and the read, so the bytes read are the file that was checked.
+  let fd: number;
+  try { fd = openSync(path, "r"); } catch { return { ok: false, reason: "that file does not exist" }; }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return { ok: false, reason: "that is not a file" };
+    if (st.size > MAX_DOWNLOAD_BYTES) return { ok: false, reason: `package is ${st.size} bytes, over the ${MAX_DOWNLOAD_BYTES}-byte limit` };
+    const bytes = readFileSync(fd);
+    if (bytes.length > MAX_DOWNLOAD_BYTES) return { ok: false, reason: `package is over the ${MAX_DOWNLOAD_BYTES}-byte limit` };
+    return { ok: true, bytes };
+  } catch (e) {
+    return { ok: false, reason: `could not read the file: ${(e as Error).message}` };
+  } finally { closeSync(fd); }
 }
 
 /** Every gate that needs no disk write: zip, manifest, hashes, signature (when present), the private rules. */

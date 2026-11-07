@@ -6750,7 +6750,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
    Display only: LUCID still never stops the call on its own. */
 .lane-alive[data-state="flat"]{color:var(--amber-txt);background:rgb(var(--amber-rgb) / .14);border-color:rgb(var(--amber-rgb) / .5)}
 .fleet-card.lane-likely-stuck{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .5);border-color:var(--red)}
-/* P-GLOW.1 (ADR-0523): the needs-approval card's compositor pulse, slower. */
+/* P-GLOW.1 (ADR-0524): the needs-approval card's compositor pulse, slower. */
 .fleet-card.lane-likely-stuck::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
   box-shadow:inset 0 0 18px 3px rgb(var(--red-rgb) / .6);opacity:.1;will-change:opacity;animation:orbitGlow 2.6s ease-in-out infinite}
 .fleet-pip.lane-likely-stuck{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .6)}

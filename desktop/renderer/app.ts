@@ -807,7 +807,9 @@ function renderSessionList(data: SessionList): void {
 // count rides the normal list). The sliders button opens the auto-archive rule.
 let archExpanded = false;
 let archivedList: SessionInfo[] | null = null;
-function archivedGroup(n: number): string {
+function archivedGroup(count: number): string {
+  // The list can come from the localStorage cache, so its count is untyped data: render it only as a number.
+  const n = Math.max(0, Math.trunc(Number(count)) || 0);
   const rows = archExpanded
     ? (archivedList ? (archivedList.length ? archivedList.map((s) => sessRow(s, false)).join("") : `<div class="side-empty">Nothing archived yet.</div>`) : `<div class="side-empty">Loading archived sessions\u2026</div>`)
     : "";

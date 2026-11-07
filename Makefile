@@ -1403,7 +1403,7 @@ demo-P-CTRL.2: ## P-CTRL.2 (ADR-0438; design ADR-0425, issue #449): the controll
 	$(BUN) test $(TEST_IGNORES) desktop/controller/controller.test.ts desktop/origin_guard.test.ts harness/telemetry/events.test.ts harness/adr_numbering.test.ts
 
 .PHONY: demo-P-CTRL-REMOTE.1
-demo-P-CTRL-REMOTE.1: ## P-CTRL-REMOTE.1 (ADR-0498): remote controller lanes. The REAL lane manager and controller routes over the fake ACP agent: the engine's tier policy runs T0/T1 inside the workspace, refuses known destructive actions and edits outside with no way to approve, and parks the rest; only a decision the engine verifies against the paired root (approve scope, not revoked, this lane, this ask, this digest, in date) releases a parked ask; replay, misreport, revocation and expiry are refused; deny and cancel release; the off-task check only tightens.
+demo-P-CTRL-REMOTE.1: ## P-CTRL-REMOTE.1 (ADR-0525): remote controller lanes. The REAL lane manager and controller routes over the fake ACP agent: the engine's tier policy runs T0/T1 inside the workspace, refuses known destructive actions and edits outside with no way to approve, and parks the rest; only a decision the engine verifies against the paired root (approve scope, not revoked, this lane, this ask, this digest, in date) releases a parked ask; replay, misreport, revocation and expiry are refused; deny and cancel release; the off-task check only tightens.
 	$(BUN) test $(TEST_IGNORES) desktop/controller/remote_approval.test.ts desktop/controller/controller.test.ts desktop/exec_policy.test.ts harness/adr_numbering.test.ts
 
 .PHONY: demo-P-CTRL-LANES.1

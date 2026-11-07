@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/controller/remote_approval.test.ts - P-CTRL-REMOTE.1 (ADR-0498). The REAL lane manager and the REAL
+// desktop/controller/remote_approval.test.ts - P-CTRL-REMOTE.1 (ADR-0525). The REAL lane manager and the REAL
 // controller routes against the faithful fake ACP agent (a real subprocess), which asks permission for exactly
 // the tool call a prompt scripts. What must hold:
 //   - the tier policy decides a remote lane's asks: T0/T1 inside the workspace run, known destructive and edits
@@ -21,7 +21,7 @@
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { generateKeyPairSync, randomBytes, sign, type KeyObject } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GateDecision } from "../../harness/security/gate.ts";
@@ -83,7 +83,9 @@ function presentDecision(hub: Node, lane: string, ask: RemoteAsk, allow: boolean
 // ── Rig: real store, real routes, real lane manager over the fake agent ───────────────────────────────────
 // One workspace for the file: on Windows a lane's agent process holds its cwd open until it exits, so a
 // per-test workspace cannot be removed in afterEach. It is removed once at the end, best effort.
-const ws = mkdtempSync(join(tmpdir(), "lucid-remote-ws-"));
+// Canonical, because the pair route realpaths the workspace: on a GitHub Windows runner tmpdir() is the 8.3
+// form (C:\Users\RUNNER~1\...), so a raw path would sit "outside" the paired workspace and a T0 read would park.
+const ws = realpathSync.native(mkdtempSync(join(tmpdir(), "lucid-remote-ws-")));
 mkdirSync(join(ws, "src"));
 let dir: string;
 let fleet: FleetLaneManager | null = null;

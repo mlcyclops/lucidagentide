@@ -5795,7 +5795,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **next:** re-count the model picker for 2.5 and refresh that screenshot.
 
 ## Remote controller lanes: tier policy and engine-verified remote approvals, delegate-certified approvers (P-CTRL-REMOTE.1)
-- **shipped (2026-11-03/04, branch `feat/p-ctrl-remote-approval`, local):** ADR-0498 (16c39be3) remote pairings with a tier policy and approvals the engine verifies against the paired root; ADR-0499 (04392437) the same verifier accepts a hub certified by a root-signed delegation within its limits. 219 tests in the touched areas, 3 typechecks clean; live on the add-on's remote spokes (VM 218, DGX Spark).
+- **shipped (2026-11-03/04, branch `feat/p-ctrl-remote-approval`, local):** ADR-0525 (16c39be3) remote pairings with a tier policy and approvals the engine verifies against the paired root; ADR-0499 (04392437) the same verifier accepts a hub certified by a root-signed delegation within its limits. 219 tests in the touched areas, 3 typechecks clean; live on the add-on's remote spokes (VM 218, DGX Spark).
 - **stubbed:** controller `close` verb (two lanes per pairing), lanes that survive an engine restart, user presence on approve.
 - **next:** push the branch at end of day; upgrade the live spokes to 04392437 with the add-on's `upgrade-core.sh`.
 
@@ -5968,7 +5968,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-07, branch `fix/acp-ask-off` from `feat/rs-fleet-ops` 78622a45, LOCAL ONLY):** `acp_config.yml` sets `ask.enabled: false` for every omp ACP child. Cause: LUCID declines omp's `askDialog` elicitation (no question UI), omp treats the decline as a user cancel and aborts the turn. Checkin text no longer points agents at the ask tool. Verified with a real `omp acp` run before and after (ADR-0523 proof) and 257 tests.
 - **stubbed:** no question card in the IDE; the model asks in its reply instead.
 - **next:** merge into `feat/rs-fleet-ops` and rebuild the installer; optionally design an askDialog card for master, lanes and the PWA, then re-enable `ask`.
-## P-GLOW.1: the red "needs approval" pulse runs on the compositor (ADR-0523)
+## P-GLOW.1: the red "needs approval" pulse runs on the compositor (ADR-0524)
 ## P-GLOW.1: the red "needs approval" pulse runs on the compositor (ADR-0524)
 - **shipped (2026-11-07):** the grid card, the dock pill and the census pip pulse through one `::after` rule (shadow painted once, `orbitGlow` opacity pulse); `fleetGlowRed` removed; reduced motion and the orbit's Lite hold it still.
 - **verified:** bench in Edge, main thread ms per second before and after: dock pill plus grid card waiting 12.6 to 1.3, orbit Lite with an approval waiting 16.9 to 2.0; peak screenshots: pill and pip match, the card's glow now sits inside its border (the card clips overflow).
@@ -5979,3 +5979,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-07):** `buildAcpArgs` passes `acp_config.yml` via `--config` (present-only; `--isolate` without it refuses), so the standalone IDE launcher gets `ask` off and the desktop's approval prompts. `lucid_acp.test.ts` pins the `--config` and `--isolate` arguments; demo19 green.
 - **stubbed:** not exercised against a live IDE client; argv assembly and the fail-closed launcher demo only.
 - **next:** ship in v2.5.2 with #570 and #574.
+
+## feat/rs-fleet-ops CI repair (#573): ADR numbering, Windows gate, CodeQL
+- **shipped (2026-11-07):** P-CTRL-REMOTE.1 renumbered ADR-0498 to ADR-0525 (#570 owns 0498), the stray second ADR-0523 heading removed after merging #572 and #574 (P-GLOW.1 is ADR-0524); `remote_approval.test.ts` canonicalizes its workspace (a GitHub Windows runner's tmpdir is the 8.3 `RUNNER~1` form, the pair route realpaths, so a T0 read parked; reproduced locally with an 8.3 TMP, green after); CodeQL: `readPackageFile` and `autoArchive` read through the one fd they checked, the Archived count renders only as a number.
+- **stubbed:** the medium CodeQL note on `demo_p_plugins_7.mjs` (the demo sends its own engine token to localhost) is left as designed.
+- **next:** CI on #573; the add-on repo still cites ADR-0498 for P-CTRL-REMOTE.1 and needs the same renumber.
