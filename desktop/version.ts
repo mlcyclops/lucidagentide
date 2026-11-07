@@ -718,4 +718,10 @@
 //            ranked node search (P-KG-ORBIT.1, ADR-0470), a readable flat graph on big graphs (P-KG-FLAT.1,
 //            ADR-0471) and one-line code side panel paths (P-KG-POLISH.1). A plain v2.5.1 tag, marked
 //            Latest, so the download buttons, the electron-updater feed and the Homebrew cask follow it.
-export const APP_VERSION = "2.5.1";
+// v2.5.2 = 2.5.1 plus bug fixes: a fresh install defaults to a cloud model only, local models are opt-in
+//            and embedding models never chat or check (P-MODEL.9, ADR-0498), omp's `ask` tool is off in
+//            every ACP session including `lucid acp`, so a declined question no longer ends a turn with no
+//            reply (P-ASK.1, ADR-0523), the needs-approval pulse runs on the compositor (P-GLOW.1, ADR-0524)
+//            and the Fleet Orbit's inner ring is drawn through its spokes (#575). Docs: the P-HERD design
+//            ADRs (ADR-0489 to ADR-0497). A plain v2.5.2 tag, marked Latest.
+export const APP_VERSION = "2.5.2";

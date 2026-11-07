@@ -46,7 +46,7 @@ import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, resolveOmpBin } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
 import { gatePath, gateRefusal, repoAsset, resolvedRepo } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
-import { asksageOnly, attribution, checkerModel, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, modelRolesOverlayFile, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
+import { asksageOnly, attribution, checkerModel, chosenModel, localProviderPrefixes, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, modelRolesOverlayFile, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
 import { heavyRoleModel, writeModelRolesOverlay } from "./model_roles.ts"; // P-MODEL.8 (ADR-0448)
 import { judgeChain, resolveJudgmentProvider, writeJudgmentOverlay, type ResolvedJudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374) + P-JEV.5 (ADR-0416)
 import { bannedJudges, judgeBanEnv } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416): local judges that failed more than once
@@ -65,7 +65,7 @@ import { caps } from "../harness/runs/profiles.ts";
 import { recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, type ModelOption } from "./checker_model.ts";
 import { enclaveHostSet, enclaveProviderSet, isAsksageRouted, isLockdownRoutable, lockdownEgressExempt, LOCKDOWN_SWITCH_FAILED_ERROR } from "./lockdown_route.ts"; // CUI lockdown: AskSage + DGX enclave routes
 import { resolveStartupModel } from "./startup_model.ts"; // P-MODEL.1 (ADR-0250): fresh-session picker default
-import { providerAllowedOnPlatform, providerPrefixOf } from "./renderer/model_families.ts"; // P-MODEL.6: platform-bound providers
+import { isLocalModel, providerAllowedOnPlatform, providerPrefixOf } from "./renderer/model_families.ts"; // P-MODEL.6: platform-bound providers
 import { providerAuth, typesafeKeySet, type ProviderAuth } from "./auth_status.ts";
 import { providerForModel } from "./renderer/budget_gate.ts"; // DOM-free (see its header note)
 import { parseGoalVerdict } from "./goal_verdict.ts";
@@ -1456,7 +1456,12 @@ class Backend {
     // providerConfigured's exact test (renderer/provider_hub.ts), inlined: importing provider_hub would
     // pull the DOM-typed bridge.ts into the server program.
     const configured = (p: ProviderAuth) => !!(p.oauthActive || p.keySet || (p.fields ?? []).some((f) => f.set));
+    // Cloud-only default: only an EXPLICIT picker choice may restore a local model; the automatic rungs
+    // skip anything local (omp's implicit Ollama/llama.cpp/LM Studio engines or a configured Local Provider).
+    const localPx = localProviderPrefixes();
     const pick = resolveStartupModel({
+      chosen: chosenModel(),
+      isLocal: (value) => isLocalModel(value, localPx),
       lastUsed: remembered,
       current,
       options: this.accessibleModels(),

@@ -3937,6 +3937,8 @@ body.preview-open .thread{font-size:.9em}
 .noresp-sr{opacity:.6;font-family:var(--mono);font-size:11px}
 .noresp-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .noresp-note{opacity:.6;font-size:10px;margin-left:6px;font-weight:400}
+.noresp-restart{font-size:12px}
+.noresp-restart.strong{color:var(--txt-1)}
 /* P-NETSTAT.1 (ADR-0423): the status-bar network indicator, its popover, and the "stand by" card that
    replaces the switch-model card when a turn died on the network. Each text run is its own element. */
 .net-seg{gap:6px;min-width:0;max-width:360px}

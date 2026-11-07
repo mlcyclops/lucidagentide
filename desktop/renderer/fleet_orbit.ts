@@ -1217,17 +1217,8 @@ function layoutStage(lanes: LaneView[]): void {
   if (w === 0 || h === 0) return;
   const slots = orbitSlots(lanes.length + remoteList().length, w, h); // P-IDE-SPOKES.1: remote spokes share the ring
   // Decorative ring ellipses for each occupied ring, dash-drifting slowly (pure ornament, one per ring).
-  const rings: OrbitRing[] = [];
-  for (const ring of new Set(slots.map((s) => s.ring))) {
-    const sample = slots.find((s) => s.ring === ring)!;
-    const r = Math.hypot(sample.x, 0) || Math.abs(sample.y);
-    // Recover the ellipse radii from any slot on the ring: x = rx cos a, y = ry sin a.
-    const a = (sample.angle * Math.PI) / 180;
-    rings.push({
-      rx: Math.abs(Math.cos(a)) > 0.01 ? Math.abs(sample.x / Math.cos(a)) : r,
-      ry: Math.abs(Math.sin(a)) > 0.01 ? Math.abs(sample.y / Math.sin(a)) : r,
-    });
-  }
+  // One sample slot per occupied ring carries that ring's radii (inverting x = rx cos a breaks at 12 o'clock).
+  const rings: OrbitRing[] = [...new Map(slots.map((s) => [s.ring, s] as const)).values()].map((s) => ({ rx: s.ringRx, ry: s.ringRy }));
   const spokes: OrbitSpoke[] = [];
   lanes.forEach((lane, i) => {
     const entry = nodes.get(lane.id);
