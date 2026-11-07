@@ -13,9 +13,22 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-11-05, v2.5.1 stable)
+## Current state (2026-11-07, v2.5.2 stable)
 
-**v2.5.1** (2026-11-05, branch `release/v2.5.1-cut`) is the stable release:
+**v2.5.2** (2026-11-07, branch `release/v2.5.2-cut`) is the stable release:
+2.5.1 plus bug fixes only. P-MODEL.9 (ADR-0498, #570): cloud-only automatic
+model default, local models restored only from an explicit pick, embedding
+models never chat or check, a provider refresh on the "No response" card.
+P-ASK.1 (ADR-0523, #572): omp's `ask` tool off in every ACP session,
+`lucid acp` included. P-GLOW.1 (ADR-0524, #574): compositor-only
+needs-approval pulse. #576: the Fleet Orbit ring drawn from the layout's
+radii (#575). Docs: the P-HERD design ADRs (ADR-0489 to ADR-0497, #560).
+Tagged `v2.5.2` and marked Latest. Held for 2.6.0: #573 (remote spokes,
+which carries #571 and the sessions stack as ADR-0515 to 0521, P-CTRL-REMOTE.1
+now ADR-0525), #571 (canvas orbit, must take `ringRx`/`ringRy`), #524/#525,
+#512, #457, #351.
+
+**v2.5.1** (2026-11-05, branch `release/v2.5.1-cut`) was the previous stable release:
 2.5.1-beta.1 (owner-tested on Windows) promoted with the #555 upgrade review
 fixes, plus P-QUEUE-IMG.1 (ADR-0469, staged prompts own their pasted
 images), P-KG-ORBIT.1 / P-KG-FLAT.1 / P-KG-POLISH.1 (ADR-0470, ADR-0471, the
