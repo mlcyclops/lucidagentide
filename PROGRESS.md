@@ -5879,6 +5879,15 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **stubbed:** no code. The reference video (youtu.be/6GR75W2dRmU) was not reachable from the drafting session; Herdr facts come from its docs mirrored on GitHub and its README and must be confirmed against the video. The five ADR-0489 defaults (ctrl+b prefix, server outlives the terminal, slots not lane ids, notifications off by default, local machines before SSH) need the operator's confirmation. P-HERD.7's local half depends on P-FLEET.P1 (ADR-0272), still design only.
 - **next:** confirm the defaults, then start P-HERD.1 (ADR-0490) in its own session: split hub_tui.ts into server and client roles over the existing Spaces model and control plane, `make demo-P-HERD.1`, lucid-hub skill contract v3.
 
+## P-ASK.1: a turn that called `ask` ended "Done" with no reply (ADR-0523)
+- **shipped (2026-11-07, branch `fix/acp-ask-off` from `feat/rs-fleet-ops` 78622a45, LOCAL ONLY):** `acp_config.yml` sets `ask.enabled: false` for every omp ACP child. Cause: LUCID declines omp's `askDialog` elicitation (no question UI), omp treats the decline as a user cancel and aborts the turn. Checkin text no longer points agents at the ask tool. Verified with a real `omp acp` run before and after (ADR-0523 proof) and 257 tests.
+- **stubbed:** no question card in the IDE; the model asks in its reply instead.
+- **next:** merge into `feat/rs-fleet-ops` and rebuild the installer; optionally design an askDialog card for master, lanes and the PWA, then re-enable `ask`.
+
+## P-ASK.1 review fix: `lucid acp` loads the ACP overlay too (ADR-0523)
+- **shipped (2026-11-07):** `buildAcpArgs` passes `acp_config.yml` via `--config` (present-only; `--isolate` without it refuses), so the standalone IDE launcher gets `ask` off and the desktop's approval prompts. `lucid_acp.test.ts` pins the `--config` and `--isolate` arguments; demo19 green.
+- **stubbed:** not exercised against a live IDE client; argv assembly and the fail-closed launcher demo only.
+- **next:** ship in v2.5.2 with #570 and #574.
 ## Fix: the Fleet Orbit's inner ring drew as a dashed vertical line (issue #575)
 - **shipped (2026-11-07):** `orbitSlots` returns each slot's ring radii (`ringRx`, `ringRy`) and `layoutStage` draws the decorative ellipses from them instead of inverting a 12 o'clock sample (where cos a is a rounding error, so rx was ~3.6e-14); the ellipses are now re-sized on every layout pass, so a stage resize keeps them on the spokes. Test: every slot lies on its ring's ellipse, radii above 100 px, for 1 to 30 spokes.
 - **stubbed:** checked by rendering the layout's own output as SVG in the preview, not in a running Fleet Orbit. PR #571 (canvas orbit) still carries the old inversion and must take `ringRx`/`ringRy` when it rebases.
