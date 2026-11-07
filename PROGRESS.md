@@ -5873,3 +5873,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-07, branch `fix/acp-ask-off` from `feat/rs-fleet-ops` 78622a45, LOCAL ONLY):** `acp_config.yml` sets `ask.enabled: false` for every omp ACP child. Cause: LUCID declines omp's `askDialog` elicitation (no question UI), omp treats the decline as a user cancel and aborts the turn. Checkin text no longer points agents at the ask tool. Verified with a real `omp acp` run before and after (ADR-0523 proof) and 257 tests.
 - **stubbed:** no question card in the IDE; the model asks in its reply instead.
 - **next:** merge into `feat/rs-fleet-ops` and rebuild the installer; optionally design an askDialog card for master, lanes and the PWA, then re-enable `ask`.
+
+## P-ASK.1 review fix: `lucid acp` loads the ACP overlay too (ADR-0523)
+- **shipped (2026-11-07):** `buildAcpArgs` passes `acp_config.yml` via `--config` (present-only; `--isolate` without it refuses), so the standalone IDE launcher gets `ask` off and the desktop's approval prompts. `lucid_acp.test.ts` pins the `--config` and `--isolate` arguments; demo19 green.
+- **stubbed:** not exercised against a live IDE client; argv assembly and the fail-closed launcher demo only.
+- **next:** ship in v2.5.2 with #570 and #574.
