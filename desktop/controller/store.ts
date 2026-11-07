@@ -27,22 +27,22 @@ export interface Pairing {
   createdAt: string;
   /** Lane ids this pairing spawned: the ONLY lanes it can see or act on. */
   lanes: string[];
-  /** P-CTRL-REMOTE.1 (ADR-0493): set by the human at pairing time, never by the controller. Its lanes run the
+  /** P-CTRL-REMOTE.1 (ADR-0498): set by the human at pairing time, never by the controller. Its lanes run the
    *  tiered remote policy and accept decisions verified against `root`. */
   remote?: RemotePolicy;
-  /** ADR-0504: how many live lanes this pairing may hold (1 to PAIRING_LANES_MAX), set by the human at pairing
+  /** ADR-0509: how many live lanes this pairing may hold (1 to PAIRING_LANES_MAX), set by the human at pairing
    *  time from the spoke's lane policy. Absent: the ADR-0425 default of two (also every pairing stored before). */
   maxLanes?: number;
-  /** ADR-0505: the paired spoke's node id (`n_` and 32 hex), set by the human at pairing time. A delegate-certified
+  /** ADR-0510: the paired spoke's node id (`n_` and 32 hex), set by the human at pairing time. A delegate-certified
    *  approver decides only when its delegation covers this spoke, and every approver only when cleared for its
-   *  classification (ADR-0508). Absent: no remote decision is accepted until the spoke is paired again. */
+   *  classification (ADR-0513). Absent: no remote decision is accepted until the spoke is paired again. */
   spokeNode?: string;
 }
 
-/** ADR-0505: a node id, `n_` and the first 32 hex of sha256(SPKI DER). */
+/** ADR-0510: a node id, `n_` and the first 32 hex of sha256(SPKI DER). */
 export const SPOKE_NODE_RE = /^n_[0-9a-f]{32}$/;
 
-/** ADR-0504: the most live lanes one pairing may be granted. */
+/** ADR-0509: the most live lanes one pairing may be granted. */
 export const PAIRING_LANES_MAX = 8;
 
 export interface RemotePolicy {
@@ -52,11 +52,11 @@ export interface RemotePolicy {
   approvalHours: number;
   /** Run the off-task check before a T0/T1 action runs on its own. */
   offTask: boolean;
-  /** The newest root-signed CRL this engine has seen. Only ever moves forward. ADR-0505: `nextUpdate` (seconds)
+  /** The newest root-signed CRL this engine has seen. Only ever moves forward. ADR-0510: `nextUpdate` (seconds)
    *  when the list carried one; once held, a list without it is never taken. */
   crl: { version: number; serials: string[]; nextUpdate?: number };
-  /** ADR-0502: every remote allow must carry user-presence evidence from a presence key the approver's
-   *  certificate names. Absent: not required (also every pairing stored before ADR-0502). */
+  /** ADR-0507: every remote allow must carry user-presence evidence from a presence key the approver's
+   *  certificate names. Absent: not required (also every pairing stored before ADR-0507). */
   presence?: "required";
 }
 
@@ -139,12 +139,12 @@ export class PairingStore {
   }
 
   /** Why the store refuses everything (an unreadable or malformed file), or null. The boot-time lane restore
-   *  (ADR-0496) touches nothing while it is set, so a torn file never reads as "every pairing was revoked". */
+   *  (ADR-0501) touches nothing while it is set, so a torn file never reads as "every pairing was revoked". */
   get broken(): string | null {
     return this.#broken;
   }
 
-  /** ADR-0495: a closed lane is no longer this pairing's; its slot and its id are gone. */
+  /** ADR-0500: a closed lane is no longer this pairing's; its slot and its id are gone. */
   removeLane(pairingId: string, laneId: string): void {
     const p = this.#pairings.find((x) => x.id === pairingId);
     if (!p || !p.lanes.includes(laneId)) return;
@@ -152,7 +152,7 @@ export class PairingStore {
     this.#save();
   }
 
-  /** ADR-0496: at boot, keep only the lane ids that came back. The rest ended with the previous engine. */
+  /** ADR-0501: at boot, keep only the lane ids that came back. The rest ended with the previous engine. */
   retainLanes(keep: ReadonlySet<string>): void {
     if (this.#broken) return;
     let changed = false;
@@ -163,7 +163,7 @@ export class PairingStore {
     if (changed) this.#save();
   }
 
-  /** The live pairing with this id (a revoked pairing is gone), for the boot-time lane restore (ADR-0496). */
+  /** The live pairing with this id (a revoked pairing is gone), for the boot-time lane restore (ADR-0501). */
   byId(pairingId: string): Pairing | null {
     return this.#pairings.find((p) => p.id === pairingId) ?? null;
   }
@@ -174,7 +174,7 @@ export class PairingStore {
   }
 
   /** Record a newer CRL for a remote pairing. An older or equal version changes nothing (tighten only), and neither
-   *  does one without `nextUpdate` once a list with it is held (ADR-0505). */
+   *  does one without `nextUpdate` once a list with it is held (ADR-0510). */
   advanceCrl(pairingId: string, crl: RemotePolicy["crl"]): void {
     const p = this.#pairings.find((x) => x.id === pairingId);
     if (!p?.remote || crl.version <= p.remote.crl.version || (p.remote.crl.nextUpdate !== undefined && crl.nextUpdate === undefined)) return;
@@ -198,7 +198,7 @@ function isPairing(v: unknown): v is Pairing {
     && (p.spokeNode === undefined || (typeof p.spokeNode === "string" && SPOKE_NODE_RE.test(p.spokeNode)));
 }
 
-/** ADR-0504: a pairing's lane grant, an integer from 1 to PAIRING_LANES_MAX (the pair route, the store, the file). */
+/** ADR-0509: a pairing's lane grant, an integer from 1 to PAIRING_LANES_MAX (the pair route, the store, the file). */
 export function isLaneCount(n: unknown): n is number {
   return typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= PAIRING_LANES_MAX;
 }

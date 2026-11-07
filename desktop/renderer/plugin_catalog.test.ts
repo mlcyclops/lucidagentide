@@ -36,7 +36,7 @@ const CONTRACT: Record<string, { section: "civilian" | "government"; lookupKey: 
   homeschooltutor: { section: "civilian", lookupKey: "PLG-HST-OTF" },
   "tactical-genai-trainer": { section: "civilian", lookupKey: "PLG-TGT-OTF" },
   "lucid-meeting-hub": { section: "civilian", lookupKey: "PLG-MEETHUB-OTF" },
-  // ADR-0500: listed Coming soon; the entitlements catalog gains this key when the signed build is on sale.
+  // ADR-0505: listed Coming soon; the entitlements catalog gains this key when the signed build is on sale.
   "remote-spokes": { section: "civilian", lookupKey: "PLG-REMOTESPOKES-OTF" },
   "rapid-survey": { section: "government", lookupKey: "PLG-RAPID-OTF" },
   "quantum-cloak": { section: "government", lookupKey: "PLG-QCLOAK-OTF" },
@@ -155,7 +155,7 @@ describe("decideCardAction", () => {
   });
 });
 
-describe("private installs next to the store (ADR-0500)", () => {
+describe("private installs next to the store (ADR-0505)", () => {
   const priv = (over: Partial<InstalledFacts> = {}): InstalledFacts => ({ id: "pathfinder", version: "1.0.0", source: "private", signed: false, ...over });
 
   test("a private copy is never the purchased package: the store card neither opens nor updates it", () => {

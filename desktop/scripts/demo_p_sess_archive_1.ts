@@ -3,7 +3,7 @@
 
 // desktop/scripts/demo_p_sess_archive_1.ts
 //
-// Increment P-SESS-ARCHIVE.1 (ADR-0471): a saved session index and session archiving.
+// Increment P-SESS-ARCHIVE.1 (ADR-0517): a saved session index and session archiving.
 //   1. 400 sessions: the first listing parses all of them; after a restart with the saved index, none.
 //   2. The 30-day rule (7 for spoke and empty sessions) archives the old ones and never a live one.
 //   3. An archived session is still counted, searchable and readable, and restores in place.

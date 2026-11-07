@@ -11,9 +11,9 @@
 import { bridge, type AccountsSnapshot, type ArchivePolicyView, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SessionSearch, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import type { TurnStatus } from "./chat_events.ts";
 import { currentSwitchPreflight, liveBadge, planSessionSwitch, spokeNameFor, switchOutcome, switchSheetCopy } from "./session_switch.ts"; // P-SWITCH.1 (ADR-0403), P-SWITCH.2 (ADR-0404)
-import { markTerms } from "./session_search.ts"; // P-SESS-SEARCH.1 (ADR-0469)
-import { stopClickIntent } from "./stop_guard.ts"; // P-STOP-GUARD.1 (ADR-0489): a press aimed at Send never stops a turn
-import { newlyStuck } from "../collab/fleet_status.ts"; // P-STUCK-SHOW.1 (ADR-0490): one alert per stalled spoke
+import { markTerms } from "./session_search.ts"; // P-SESS-SEARCH.1 (ADR-0515)
+import { stopClickIntent } from "./stop_guard.ts"; // P-STOP-GUARD.1 (ADR-0518): a press aimed at Send never stops a turn
+import { newlyStuck } from "../collab/fleet_status.ts"; // P-STUCK-SHOW.1 (ADR-0519): one alert per stalled spoke
 import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
 // P-RECOVER.1 (ADR-0385): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
 import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
@@ -447,7 +447,7 @@ function buildShell(): void {
             <button class="side-new" id="newSession" data-tip="New session">${icon("plus", 15)}</button>
             <button class="side-new" id="sideCollapse" data-tip="Collapse panel" data-tip-side="bottom">${icon("expand", 15)}</button>
           </div></div>
-        <!-- P-SESS-SEARCH.1 (ADR-0469): search every session of this workspace; spoke sessions hidden by default -->
+        <!-- P-SESS-SEARCH.1 (ADR-0515): search every session of this workspace; spoke sessions hidden by default -->
         <div class="sess-find">
           <label class="sess-search">${icon("search", 13)}<input id="sessSearch" type="search" placeholder="Search sessions" aria-label="Search sessions by title or by what was said" spellcheck="false" autocomplete="off" /></label>
           <button class="sess-spokes" id="sessSpokes" type="button" aria-pressed="false" data-tip="Spokes hidden|Sessions your fleet spokes ran are hidden. Click to show them." data-tip-side="bottom"><span class="sess-spokes-l">Spokes</span><span class="sess-spokes-n" hidden></span></button>
@@ -716,7 +716,7 @@ function sessRow(s: SessionInfo & { snippet?: string }, active: boolean, query =
   const badge = liveBadge(s.live);
   // P-SESS-SEARCH.1: a spoke session that is not live still says which spoke ran it (shown only with Spokes on).
   const spokeLine = !badge && s.spoke ? `<div class="sess-live">spoke "${esc(s.spoke)}"</div>` : "";
-  // P-SESS-ARCHIVE.1 (ADR-0471): an archived row says so and offers Restore; a live row offers Archive.
+  // P-SESS-ARCHIVE.1 (ADR-0517): an archived row says so and offers Restore; a live row offers Archive.
   const archLine = s.archived ? `<div class="sess-live sess-archived">archived \u00b7 opening it restores it</div>` : "";
   const archBtn = s.archived
     ? `<button class="sess-del sess-arch" data-restore="${esc(s.id)}" data-tip="Restore|Back to the sessions list. Opening it does the same." aria-label="Restore session" tabindex="-1">${icon("restore", 13)}</button>`
@@ -732,7 +732,7 @@ function sessRow(s: SessionInfo & { snippet?: string }, active: boolean, query =
     </div>`;
 }
 
-// P-SESS-SEARCH.1 (ADR-0469): the sidebar search box and the Spokes toggle. Spoke sessions are hidden by
+// P-SESS-SEARCH.1 (ADR-0515): the sidebar search box and the Spokes toggle. Spoke sessions are hidden by
 // default (the toggle persists); while the box holds a query the list shows the engine's matches across
 // EVERY session of the workspace, not the 40 newest. A click on a hit opens it like any sidebar row.
 let showSpokes = (() => { try { return localStorage.getItem("lucid.sessions.spokes") === "1"; } catch { return false; } })();
@@ -803,7 +803,7 @@ function renderSessionList(data: SessionList): void {
   list.innerHTML = chats + ingestGroup + archivedGroup(data.archived ?? 0);
 }
 
-// P-SESS-ARCHIVE.1 (ADR-0471): the Archived group. Collapsed by default; its rows load when it opens (the
+// P-SESS-ARCHIVE.1 (ADR-0517): the Archived group. Collapsed by default; its rows load when it opens (the
 // count rides the normal list). The sliders button opens the auto-archive rule.
 let archExpanded = false;
 let archivedList: SessionInfo[] | null = null;
@@ -2615,7 +2615,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     const p = progress;
     // P-INTERJECT.3: the Check-in card reads the same verdict. P-PROGRESS.3: only with Full detail, or when the
     // process is gone (the ADR-0409 amendment keeps every other liveness label out of the quiet default).
-    // P-STUCK-SHOW.1 (ADR-0490): an open call with no activity yet (flatMs) is named before it is marked stuck.
+    // P-STUCK-SHOW.1 (ADR-0519): an open call with no activity yet (flatMs) is named before it is marked stuck.
     liveTurn.alive = statusDetail() === "full" || p.liveness.state === "dead" || p.liveness.state === "stuck" || p.liveness.flatMs !== undefined ? p.liveness.label : "";
     liveTurn.open = p.liveness.state !== "idle" && p.liveness.state !== "dead" ? p.stepsOpen.length : 0;
     // P-LIVENESS.1 (ADR-0418): a call marked likely stuck shows in the quiet default too, with its way out.
@@ -3169,7 +3169,7 @@ function autosize(ta: HTMLTextAreaElement): void {
   ta.style.height = Math.min(ta.scrollHeight, max) + "px";
   ta.style.overflowY = ta.scrollHeight > max ? "auto" : "hidden";
 }
-/** P-STOP-GUARD.1 (ADR-0489): when the composer button last turned from Send to Stop, and when the pointer
+/** P-STOP-GUARD.1 (ADR-0518): when the composer button last turned from Send to Stop, and when the pointer
  *  last went down on it (null after each click, and for keyboard presses). */
 let stopShownAt = 0;
 let sendPressedAt: number | null = null;
@@ -4253,7 +4253,7 @@ function provCard(p: ProviderAuth): string {
       ? (f.set ? `saved ••${esc(f.last4 ?? "")} - type to replace` : `Paste ${esc(f.env)}…`)
       : esc(f.placeholder ?? f.env);
     const val = !f.secret && f.value ? ` value="${esc(f.value)}"` : "";
-    // ADR-0499: a closed-choice field (Azure's sign-in mode) is a select on the same data-env/data-savekey
+    // ADR-0504: a closed-choice field (Azure's sign-in mode) is a select on the same data-env/data-savekey
     // path; an unset one shows its first option, which is the default the engine applies.
     const control = f.options
       ? `<select class="prov-key" data-env="${esc(f.env)}">${f.options.map((o) => `<option value="${esc(o.value)}"${o.value === f.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`
@@ -16466,7 +16466,7 @@ const pluginsFlyout = createPluginsFlyout({
   beginSignIn: () => beginSignIn(),
   pluginsList: () => bridge.pluginsList(),
   installFromUrl: (url, id) => bridge.pluginsInstallFromUrl(url, id),
-  // P-PLUGINS.7 (ADR-0500): the Installed tab's private install needs the native picker (desktop app only).
+  // P-PLUGINS.7 (ADR-0505): the Installed tab's private install needs the native picker (desktop app only).
   ...(bridge.isElectron ? { pickFile: (opts: Parameters<typeof bridge.pickFile>[0]) => bridge.pickFile(opts) } : {}),
   inspectFile: (path) => bridge.pluginsInspectFile(path),
   installFile: (input) => bridge.pluginsInstallFile(input),
@@ -17341,7 +17341,7 @@ function wire(): void {
     fleetRemove: bridge.fleetRemove,
     fleetSpawn: bridge.fleetSpawn, // P-FLEET.L17 recovery: respawn a historical spoke by its old identity
     timelineList: bridge.timelineList, // P-FLEET.L17 recovery: the P-FLEET.L5 durable ledger feeds the ghosts
-    // P-IDE-SPOKES.1 (ADR-0501): remote spokes from the remote-spokes hub plugin, through the engine.
+    // P-IDE-SPOKES.1 (ADR-0506): remote spokes from the remote-spokes hub plugin, through the engine.
     remoteSpokes: bridge.remoteSpokes,
     remoteSpokeRecall: bridge.remoteSpokeRecall,
     remoteSpokeApprovals: bridge.remoteSpokeApprovals,
@@ -17405,7 +17405,7 @@ function wire(): void {
   // closes the grid whenever it opens (fleet_orbit closeGrid dep), so with the orbit pinned the grid
   // appears only when the user switches to it.
   $("#ctFleet")?.addEventListener("click", () => { if (fleetHome() === "grid") toggleFleetGrid(); else toggleFleetOrbit(); });
-  // P-STUCK-SHOW.1 (ADR-0490): a spoke whose open call is marked likely stuck says so from anywhere, with the
+  // P-STUCK-SHOW.1 (ADR-0519): a spoke whose open call is marked likely stuck says so from anywhere, with the
   // fleet closed too: the Fleet button turns red and names the spokes in its tip, and one toast per stall
   // offers to open the spoke. Marking only, as ADR-0418: stopping it stays the user's decision.
   const fleetBtn = $("#ctFleet") as HTMLElement | null;
@@ -18313,7 +18313,7 @@ function wire(): void {
     ($("#input") as HTMLTextAreaElement)?.focus();
   });
   // P-ACP.4: while a turn runs the Send button is a Stop control (interrupt the turn); else it sends.
-  // P-STOP-GUARD.1 (ADR-0489): only a press that began on a Stop face already visible for STOP_ARM_MS stops;
+  // P-STOP-GUARD.1 (ADR-0518): only a press that began on a Stop face already visible for STOP_ARM_MS stops;
   // a press aimed at Send (double click, or a turn that started on its own under the pointer) acts as Send.
   const sendBtn = $("#send")!;
   sendBtn.addEventListener("pointerdown", () => { sendPressedAt = Date.now(); });
@@ -18370,7 +18370,7 @@ function wire(): void {
     const t = e.target as HTMLElement;
     if (t.closest("[data-ingest-clear]")) { e.stopPropagation(); confirmClearIngest(); return; } // P-KG-INGEST.2
     if (t.closest("[data-ingest-toggle]")) { ingestExpanded = !ingestExpanded; void renderSessions(); return; } // P-KG-INGEST.1b
-    // P-SESS-ARCHIVE.1 (ADR-0471)
+    // P-SESS-ARCHIVE.1 (ADR-0517)
     if (t.closest("[data-arch-toggle]")) { archExpanded = !archExpanded; if (archExpanded) { archivedList = null; void loadArchived(); } if (lastSessionList) renderSessionList(lastSessionList); return; }
     const rule = t.closest("[data-arch-rule]") as HTMLElement | null;
     if (rule) { e.stopPropagation(); void openArchiveRule(rule); return; }
@@ -18383,7 +18383,7 @@ function wire(): void {
     const s = t.closest(".sess") as HTMLElement | null;
     if (s?.dataset.sid) void openSession(s.dataset.sid); // P-SWITCH.1: asks first when Main is working
   });
-  // P-SESS-SEARCH.1 (ADR-0469): search box (debounced; Esc clears) and the persisted Spokes toggle.
+  // P-SESS-SEARCH.1 (ADR-0515): search box (debounced; Esc clears) and the persisted Spokes toggle.
   const sessSearch = $("#sessSearch") as HTMLInputElement | null;
   sessSearch?.addEventListener("input", () => onSessSearchInput(sessSearch.value));
   sessSearch?.addEventListener("keydown", (e) => {

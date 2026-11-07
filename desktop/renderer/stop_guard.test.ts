@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/stop_guard.test.ts - P-STOP-GUARD.1 (ADR-0489): a press aimed at Send never cancels the
+// desktop/renderer/stop_guard.test.ts - P-STOP-GUARD.1 (ADR-0518): a press aimed at Send never cancels the
 // turn that started under it.
 
 import { describe, expect, test } from "bun:test";

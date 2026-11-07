@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-AZURE-ENTRA.1 (ADR-0499): Azure OpenAI with Microsoft Entra ID. The end-to-end block drives the REAL
+// P-AZURE-ENTRA.1 (ADR-0504): Azure OpenAI with Microsoft Entra ID. The end-to-end block drives the REAL
 // registered streamSimple through omp's REAL Azure Responses provider against two local doubles: a fake
 // instance metadata service and a fake Azure OpenAI v1 endpoint that records every request it gets.
 

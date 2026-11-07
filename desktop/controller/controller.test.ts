@@ -32,7 +32,7 @@ const CLEAN: GateDecision = { block: false, reason: "clean", trustLabel: "truste
 /** The fields these tests read from the handler's JSON replies. */
 interface Reply { error: string; data: { token: string; lane: { id: string }; lanes: { id: string }[]; turns: unknown; runId: string; maxLanes: number } }
 
-/** `models` (ADR-0506): the engine's available model ids; absent, the rig has no model list. */
+/** `models` (ADR-0511): the engine's available model ids; absent, the rig has no model list. */
 function rig(scan: (t: string) => Promise<GateDecision> = async () => CLEAN, models?: string[]) {
   const store = new PairingStore(join(dir, "controller-pairings.json"));
   const lanes = new Map<string, LaneView>();
@@ -128,7 +128,7 @@ describe("scope isolation", () => {
       expect((await r.call("result", a.pairing, undefined, `?laneId=${foreign}`)).status).toBe(404);
       expect((await r.call("cancel", a.pairing, { laneId: foreign })).status).toBe(404);
       expect((await r.call("prompt", a.pairing, { laneId: foreign, text: "hi" })).status).toBe(404);
-      // ADR-0495: closing someone else's lane (or the user's, or none) is the same not-found as every route.
+      // ADR-0500: closing someone else's lane (or the user's, or none) is the same not-found as every route.
       const close = await r.call("close", a.pairing, { laneId: foreign });
       expect([close.status, close.body]).toEqual([404, { ok: false, error: "unknown lane" } as never]);
     }
@@ -150,7 +150,7 @@ describe("scope isolation", () => {
     expect([third.status, third.body.error]).toEqual([429, "at most 2 lanes per pairing"]);
   });
 
-  test("ADR-0506: spawn may name a model the engine lists; an unlisted one is 400 and starts nothing; none keeps the default", async () => {
+  test("ADR-0511: spawn may name a model the engine lists; an unlisted one is 400 and starts nothing; none keeps the default", async () => {
     const r = rig(async () => CLEAN, ["anthropic/claude-sonnet-4-5", "ollama/qwen2.5-coder:32b"]);
     const { pairing } = await r.pair("hermes");
     const unlisted = await r.call("spawn", pairing, { model: "openai/gpt-9" });
@@ -161,7 +161,7 @@ describe("scope isolation", () => {
     const chosen = await r.call("spawn", pairing, { name: "local", model: "ollama/qwen2.5-coder:32b" });
     expect(chosen.status).toBe(200);
     expect(r.spawns[0]!.model).toBe("ollama/qwen2.5-coder:32b");
-    // the controller is not shown the model, but the lane's restart record keeps it (ADR-0496 brings it back on it)
+    // the controller is not shown the model, but the lane's restart record keeps it (ADR-0501 brings it back on it)
     expect(chosen.text).not.toContain("qwen");
     const id = chosen.body.data.lane.id;
     expect(new ControllerLaneStore(join(dir, "controller-lanes.json")).get(id)?.model).toBe("ollama/qwen2.5-coder:32b");
@@ -172,7 +172,7 @@ describe("scope isolation", () => {
 
   // Live on a headless spoke engine: no omp session had reported its model config, the list was empty, and every
   // named model was refused, real ones included. With no list the lane's own resolution and the policy clamp decide.
-  test("ADR-0506: an engine that has reported no model list passes a named model to the lane", async () => {
+  test("ADR-0511: an engine that has reported no model list passes a named model to the lane", async () => {
     for (const r of [rig(), rig(undefined, [])]) {
       const { pairing } = await r.pair("hermes");
       const res = await r.call("spawn", pairing, { model: "anthropic/claude-sonnet-4-5" });
@@ -181,7 +181,7 @@ describe("scope isolation", () => {
     }
   });
 
-  test("ADR-0504: a pairing granted 4 lanes admits 4 and refuses the 5th; absent means 2; the grant survives a reload", async () => {
+  test("ADR-0509: a pairing granted 4 lanes admits 4 and refuses the 5th; absent means 2; the grant survives a reload", async () => {
     const r = rig();
     const paired = await r.call("pair", null, { name: "big", workspace: ws, maxLanes: "4" });
     expect(paired.status).toBe(200);
@@ -193,7 +193,7 @@ describe("scope isolation", () => {
     expect([fifth.status, fifth.body.error]).toEqual([429, "at most 4 lanes per pairing"]);
     expect((await r.call("lanes", big)).body.data.maxLanes).toBe(4);
     expect(r.events.find((e) => e.event === "controller_paired")).toMatchObject({ pairing: "big", max_lanes: 4 });
-    // absent: the ADR-0425 default, stored as nothing (so a pairing written before ADR-0504 reads the same)
+    // absent: the ADR-0425 default, stored as nothing (so a pairing written before ADR-0509 reads the same)
     const { pairing: plain } = await r.pair("plain");
     expect(plain.maxLanes).toBeUndefined();
     expect((await r.call("lanes", plain)).body.data.maxLanes).toBe(2);
@@ -203,7 +203,7 @@ describe("scope isolation", () => {
     expect(reloaded.broken).toBeNull();
   });
 
-  test("ADR-0504: a lane grant outside 1..8, or not decimal digits, is refused at pair time and in the file", async () => {
+  test("ADR-0509: a lane grant outside 1..8, or not decimal digits, is refused at pair time and in the file", async () => {
     const r = rig();
     for (const maxLanes of ["0", "9", "-1", "2.5", " 4", "4x", "", "08x", 4]) {
       expect((await r.call("pair", null, { name: "bad", workspace: ws, maxLanes })).status).toBe(400);
@@ -221,7 +221,7 @@ describe("scope isolation", () => {
     expect(new PairingStore(file).broken).toBe("pairing store is malformed");
   });
 
-  test("ADR-0495: close ends the controller's own lane, frees its slot, and leaves no restart record", async () => {
+  test("ADR-0500: close ends the controller's own lane, frees its slot, and leaves no restart record", async () => {
     const r = rig();
     const { pairing } = await r.pair("hermes");
     const one = (await r.call("spawn", pairing, {})).body.data.lane.id;

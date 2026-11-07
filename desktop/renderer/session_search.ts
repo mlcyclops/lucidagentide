@@ -3,7 +3,7 @@
 
 // desktop/renderer/session_search.ts
 //
-// P-SESS-SEARCH.1 (ADR-0469): the sidebar search's display half. The engine matches (desktop/sessions.ts
+// P-SESS-SEARCH.1 (ADR-0515): the sidebar search's display half. The engine matches (desktop/sessions.ts
 // searchSessions: every whitespace-separated term, case-insensitive); this marks those terms in a title or
 // a snippet. Snippets are transcript text, so every byte outside a <mark> is escaped, and the marks are
 // placed on the RAW text before escaping so a term can never split an entity like "&amp;".

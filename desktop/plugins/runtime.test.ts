@@ -102,7 +102,7 @@ describe("server plugins", () => {
     expect(again.ok && again.url).toBe(url);
   }, 60_000);
 
-  // ADR-0501: the engine's own way into a server plugin. The token exists only while the plugin runs, only the
+  // ADR-0506: the engine's own way into a server plugin. The token exists only while the plugin runs, only the
   // plugin process holds it (never its MCP child, never the renderer's list), and a restart mints a new one.
   test("hostEndpoint hands the engine a per-launch token the plugin accepts and nothing else carries", async () => {
     expect((await installPluginBytes(buildServerFixture(KEY), "fixture-server", deps)).ok).toBe(true);

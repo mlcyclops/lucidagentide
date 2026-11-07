@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-SESS-SEARCH.1 (ADR-0469): session titles skip carried operator notes, the sidebar search finds a
+// P-SESS-SEARCH.1 (ADR-0515): session titles skip carried operator notes, the sidebar search finds a
 // session by what was said in it (never by tool output or injected blocks) across the whole workspace,
 // and spoke sessions are held back from the list and the search unless asked for.
 

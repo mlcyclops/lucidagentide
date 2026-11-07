@@ -47,11 +47,11 @@ export const LANE_ATTENTION: Readonly<Record<string, true>> = { "needs-approval"
 /** The states that mean a turn is running (a likely-stuck lane's turn still is). */
 const BUSY: Readonly<Record<string, true>> = { working: true, starting: true, "likely-stuck": true };
 
-/** P-STUCK-SHOW.1 (ADR-0490): the status a surface shows for a lane. A WORKING lane whose open tool call
+/** P-STUCK-SHOW.1 (ADR-0519): the status a surface shows for a lane. A WORKING lane whose open tool call
  *  the evidence marks likely stuck (turn_progress livenessVerdict, ADR-0418) shows as `likely-stuck`, so
  *  every count, dot and card says so instead of "working". The engine's status is unchanged: this is a
  *  display state only, and nothing acts on it. A phone guest has no progress view; the host sends the
- *  verdict as `stuck` (FleetLaneStatus, ADR-0492) and the same rule reads it. */
+ *  verdict as `stuck` (FleetLaneStatus, ADR-0521) and the same rule reads it. */
 export function displayStatus(lane: { status: string; progress?: { liveness?: { state?: string } } | null; stuck?: boolean }): string {
   return lane.status === "working" && (lane.stuck === true || lane.progress?.liveness?.state === "stuck") ? "likely-stuck" : lane.status;
 }

@@ -47,7 +47,7 @@ export function worktreePlan(root: string, cwd: string, name: string, suffix: st
   return placed(root, cwd, slug, `lucid/${slug}`);
 }
 
-/** ADR-0497: a REMOTE controller lane's review worktree. Same placement as worktreePlan (beside the repo, the
+/** ADR-0502: a REMOTE controller lane's review worktree. Same placement as worktreePlan (beside the repo, the
  *  picked subfolder kept), but the branch is `remote/<lane id>`, so the owner finds every remote lane's work by
  *  its lane id. `laneId` is the engine's own `lane-<8 hex>`, already a valid branch and folder name. */
 export function remoteWorktreePlan(root: string, cwd: string, laneId: string): WorktreePlan {
@@ -88,8 +88,8 @@ export async function createLaneWorktree(cwd: string, name: string): Promise<Wor
   return addWorktree(root, worktreePlan(root, cwd, name, randomBytes(3).toString("hex")));
 }
 
-/** ADR-0497: the review worktree of a remote controller lane, on `remote/<lane id>`. Null when `workspace` is
- *  not inside a git repository (the lane then runs in the workspace itself, as before ADR-0497). */
+/** ADR-0502: the review worktree of a remote controller lane, on `remote/<lane id>`. Null when `workspace` is
+ *  not inside a git repository (the lane then runs in the workspace itself, as before ADR-0502). */
 export async function createRemoteLaneWorktree(workspace: string, laneId: string): Promise<WorktreeResult | null> {
   const root = await repoRoot(workspace);
   return root ? addWorktree(root, remoteWorktreePlan(root, workspace, laneId)) : null;
@@ -111,11 +111,11 @@ async function addWorktree(root: string, plan: WorktreePlan): Promise<WorktreeRe
   return { ok: true, root, ...plan };
 }
 
-/** ADR-0497: the identity of the snapshot commit a closing lane leaves. The engine made it, so it carries the
+/** ADR-0502: the identity of the snapshot commit a closing lane leaves. The engine made it, so it carries the
  *  engine's name; the user's own identity never claims an agent's work, and no signing prompt can stall it. */
 const SNAPSHOT_IDENTITY = ["-c", "user.name=LUCID remote lane", "-c", "user.email=remote-lane@lucid.invalid", "-c", "commit.gpgsign=false"];
 
-/** ADR-0497: end a lane's worktree and KEEP its branch. Uncommitted work in the worktree (tracked changes and
+/** ADR-0502: end a lane's worktree and KEEP its branch. Uncommitted work in the worktree (tracked changes and
  *  new files; ignored files are not work) is first committed onto the branch as one snapshot commit, so
  *  removing the folder loses nothing; only then is the worktree removed. A snapshot git refuses leaves the
  *  worktree where it is (and says why): the folder is the only copy of that work. `commit` is the snapshot's

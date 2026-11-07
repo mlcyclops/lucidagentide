@@ -64,7 +64,7 @@ export interface Liveness {
   /** P-LIVENESS.1: `stuck` and the open call started processes of its own, so "Stop command" can end just
    *  them. Never set outside `stuck`: the harness only offers the stop, the user decides. */
   canStopCall?: boolean;
-  /** P-STUCK-SHOW.1 (ADR-0490): how long the open call has shown no CPU, disk or subagent activity. Set on
+  /** P-STUCK-SHOW.1 (ADR-0519): how long the open call has shown no CPU, disk or subagent activity. Set on
    *  `stuck`, and on `working` once the call has been flat for half the likely-stuck threshold (2.5 min, or
    *  6 min while a subagent runs), so the quiet default can warn before the mark without lighting up every
    *  short network wait. */
@@ -306,7 +306,7 @@ export function livenessVerdict(i: LivenessInput): Liveness {
         return { state: "working", label: `${waiting} · ${ev.mover ?? "its processes"} active`, detail: `A tool call is running${typ}. ${ev.mover ?? "Its processes"} used CPU or disk ${humanMs(i.now - ev.lastActiveAt)} ago, so it is alive.` };
       }
       if (ev.measurable && v.flatMs >= QUIET_MS) {
-        // P-STUCK-SHOW.1 (ADR-0490): past half the threshold the call might be stuck, and the label says so.
+        // P-STUCK-SHOW.1 (ADR-0519): past half the threshold the call might be stuck, and the label says so.
         const suspect = v.flatMs * 2 >= v.thresholdMs;
         // The warning leads, so a narrow card or orbit node that ellipsizes the line still shows it.
         return { state: "working", label: suspect ? `might be stuck: no activity for ${humanMs(v.flatMs)} · ${waiting}` : `${waiting} · no activity for ${humanMs(v.flatMs)}`, detail: `A tool call is running${typ}. Nothing it started has used CPU or disk for ${humanMs(v.flatMs)}. At ${humanMs(v.thresholdMs)} with no activity LUCID marks it likely stuck and offers to stop it; it never stops it on its own.`, ...(suspect ? { flatMs: v.flatMs } : {}) };

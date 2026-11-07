@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-SESS-ARCHIVE.1 (ADR-0471): the session index survives a restart (only changed files are re-read),
+// P-SESS-ARCHIVE.1 (ADR-0517): the session index survives a restart (only changed files are re-read),
 // archiving moves a session out of the scan without losing it (listed, searchable, readable, restorable),
 // and the auto-archive rule never moves a live session.
 

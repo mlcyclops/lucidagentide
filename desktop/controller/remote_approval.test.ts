@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/controller/remote_approval.test.ts - P-CTRL-REMOTE.1 (ADR-0493). The REAL lane manager and the REAL
+// desktop/controller/remote_approval.test.ts - P-CTRL-REMOTE.1 (ADR-0498). The REAL lane manager and the REAL
 // controller routes against the faithful fake ACP agent (a real subprocess), which asks permission for exactly
 // the tool call a prompt scripts. What must hold:
 //   - the tier policy decides a remote lane's asks: T0/T1 inside the workspace run, known destructive and edits
@@ -10,13 +10,13 @@
 //     revoked, this lane, this ask, this digest, in date); the controller can deny but never approve;
 //   - a decision cannot be replayed onto a later ask; cancel releases a parked ask; the off-task check only
 //     ever tightens;
-//   - ADR-0502: a pairing that requires user presence releases an allow only with presence evidence from the key
+//   - ADR-0507: a pairing that requires user presence releases an allow only with presence evidence from the key
 //     the approver's certificate names, bound to that one decision; a deny needs none.
-//   - ADR-0505: a delegate-certified approver decides only with the paired spoke's own certificate inside its
+//   - ADR-0510: a delegate-certified approver decides only with the paired spoke's own certificate inside its
 //     delegation (label prefix, regions, classifications) and with its user on the delegation's users list when it
 //     has one; a CRL more than three days past its nextUpdate refuses every decision, and once one with nextUpdate
 //     is held a list without it is never taken.
-//   - ADR-0508: every approver, root-signed too, decides only with the paired spoke's own certificate and only when
+//   - ADR-0513: every approver, root-signed too, decides only with the paired spoke's own certificate and only when
 //     its user is cleared for that spoke's classification; a pairing without spokeNode takes no decision.
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -54,7 +54,7 @@ function cert(root: Node, n: Node, scopes: string[], over: Record<string, unknow
   return { serial, token: compact({ v: 1, typ: "lucid-node-cert", serial, root: root.id, node: n.id, role: "hub", label: "test hub", spki: n.spki, scopes, iat: now() - 10, exp: now() + 3600, ...over }, root.priv) };
 }
 const crlOf = (root: Node, version: number, serials: string[]) => compact({ v: 1, typ: "lucid-crl", root: root.id, version, serials, iat: now() }, root.priv);
-/** ADR-0508: the spoke a pairing names (`spokeNode`) and its own certificate (the add-on's `issueCert` for a spoke),
+/** ADR-0513: the spoke a pairing names (`spokeNode`) and its own certificate (the add-on's `issueCert` for a spoke),
  *  root-signed and shareable unless `over` says otherwise. Every decision carries it, as the spoke agent sends it. */
 const paired = key();
 function pairedCert(root: Node, over: Record<string, unknown> = {}) {
@@ -66,7 +66,7 @@ function decision(hub: Node, lane: string, ask: RemoteAsk, allow: boolean, over:
   return compact(decisionPayload(hub, lane, ask, allow, over), hub.priv);
 }
 
-// ── ADR-0502: a fake user-presence authenticator (the add-on's presence.ts after the gesture) ─────────────
+// ── ADR-0507: a fake user-presence authenticator (the add-on's presence.ts after the gesture) ─────────────
 interface Authenticator { priv: KeyObject; ref: { kind: PresenceKind; spki: string } }
 /** Windows Hello's key credential is RSA 2048 (PKCS#1 v1.5 / SHA-256); the Secure Enclave's and the password
  *  kind's are P-256. */
@@ -105,7 +105,7 @@ function rig(opts: { offTask?: "on" | "off" | "unknown"; offTaskOn?: boolean; pr
   });
   const deps: ControllerDeps = { store, lanes: new ControllerLaneStore(join(rigDir, "controller-lanes.json")), fleet, scan: async () => CLEAN, sink: (e) => events.push(e) };
   const call = async (path: string, pairing: Pairing | null, body?: unknown, query = "") => {
-    // ADR-0508: a decision carries the paired spoke's own certificate, as the spoke agent sends it, unless the test
+    // ADR-0513: a decision carries the paired spoke's own certificate, as the spoke agent sends it, unless the test
     // names one (`spokeCert: undefined` sends none).
     const sent = path === "decide" && typeof body === "object" && body !== null && !("spokeCert" in body) ? { ...body, spokeCert: pairedCert(root) } : body;
     const req = new Request(`http://127.0.0.1/api/controller/${path}${query}`, sent === undefined ? {} : { method: "POST", body: JSON.stringify(sent) });
@@ -113,7 +113,7 @@ function rig(opts: { offTask?: "on" | "off" | "unknown"; offTaskOn?: boolean; pr
     const text = await res.text();
     return { status: res.status, json: (res.headers.get("content-type")?.includes("json") ? JSON.parse(text) : {}) as { ok?: boolean; error?: string; data?: Record<string, unknown> } };
   };
-  /** `extra`: more pair body fields (ADR-0505: spokeNode; ADR-0508: the paired spoke unless a test names another). */
+  /** `extra`: more pair body fields (ADR-0510: spokeNode; ADR-0513: the paired spoke unless a test names another). */
   const setup = async (extra: Record<string, string> = { spokeNode: paired.id }) => {
     const p = await call("pair", null, { name: "spoke", workspace: ws, approverRoot: root.spki, approvalHours: "1", offTask: opts.offTaskOn ? "on" : "off", ...(opts.presence ? { presence: opts.presence } : {}), ...extra });
     expect(p.status).toBe(200);
@@ -279,7 +279,7 @@ test("verifyRemoteDecision accepts a newer CRL and never an older one", () => {
   expect(unseen.ok).toBe(false);
 });
 
-// ── ADR-0494: a hub certified by a delegate (the add-on's phase F2), chain depth one ──────────────────────
+// ── ADR-0499: a hub certified by a delegate (the add-on's phase F2), chain depth one ──────────────────────
 describe("a delegate-certified hub is accepted exactly when the add-on's TrustStore would", () => {
   const DAY = 86_400;
   /** A delegation (the add-on's `issueDelegation` payload) for `del`, signed by `signer` (the root unless a test
@@ -292,12 +292,12 @@ describe("a delegate-certified hub is accepted exactly when the add-on's TrustSt
    *  issuer and carries the delegation token. */
   function delegatedCert(root: Node, del: Node, delegationToken: string, hub: Node, scopes: string[], over: Record<string, unknown> = {}) {
     const email = "ana@example.com";
-    // ADR-0508: cleared for private work, the classification `spokeCert` below gives the paired spoke.
+    // ADR-0513: cleared for private work, the classification `spokeCert` below gives the paired spoke.
     const user = { id: `u_${new Bun.CryptoHasher("sha256").update(email).digest("hex").slice(0, 32)}`, email, clearances: ["private"] };
     return compact({ v: 1, typ: "lucid-node-cert", serial: randomBytes(16).toString("hex"), root: root.id, node: hub.id, role: "hub", label: "test hub", spki: hub.spki, scopes, iat: now() - 10, exp: now() + 3600, user, issuer: del.id, delegation: delegationToken, ...over }, del.priv);
   }
   const ask: RemoteAsk = { id: "a1", digest: askDigest("fetch", "t", "null"), kind: "fetch", title: "t", input: "null", tier: "T2", reason: "", openedAt: 0, expiresAt: 0 };
-  /** ADR-0505: the spoke the pairing names. A delegate-certified approver needs its certificate with the decision. */
+  /** ADR-0510: the spoke the pairing names. A delegate-certified approver needs its certificate with the decision. */
   const spoke = key();
   const exp = { lane: "L", ask: "a1", digest: ask.digest, presence: false, spokeNode: spoke.id };
   const fresh = { version: 0, serials: [] };
@@ -366,7 +366,7 @@ describe("a delegate-certified hub is accepted exactly when the add-on's TrustSt
     expect(v).toEqual({ ok: false, reason: "the approver certificate's delegation is not in date" });
   });
 
-  test("ADR-0502: a delegate-certified hub's presence key satisfies a pairing that requires presence", () => {
+  test("ADR-0507: a delegate-certified hub's presence key satisfies a pairing that requires presence", () => {
     const root = key(), team = key(), hub = key(), mac = authenticator("macos-secure-enclave");
     const c = delegatedCert(root, team, delegation(root, team, ["users"]).token, hub, ["approve"], { presence: mac.ref });
     const required = { ...exp, presence: true };
@@ -375,10 +375,10 @@ describe("a delegate-certified hub is accepted exactly when the add-on's TrustSt
     expect(!bare.ok && bare.reason).toBe("this pairing requires user presence and the approval carries no presence evidence");
   });
 
-  // ── ADR-0505 (the add-on's RS-ID-01): a delegated approver decides only for a spoke its delegation covers ──
-  describe("ADR-0505: delegation coverage of the paired spoke", () => {
+  // ── ADR-0510 (the add-on's RS-ID-01): a delegated approver decides only for a spoke its delegation covers ──
+  describe("ADR-0510: delegation coverage of the paired spoke", () => {
     const NOT_COVERED = { ok: false, reason: "the approver's delegation does not cover this spoke" };
-    /** A pairing made before ADR-0505, or by a controller that sent no spokeNode. */
+    /** A pairing made before ADR-0510, or by a controller that sent no spokeNode. */
     const unpaired: Expected = { lane: "L", ask: "a1", digest: ask.digest, presence: false };
     /** A team delegation limited to `test` labels in eu-west, private spokes, and a delegate-certified approver. */
     function team(limits: Record<string, unknown> = { maxDays: 30, labelPrefix: "test", regions: ["eu-west"], classifications: ["private"] }) {
@@ -443,7 +443,7 @@ describe("a delegate-certified hub is accepted exactly when the add-on's TrustSt
       expect(verifyRemoteDecision({ decision: decision(t.hub, "L", ask, true), cert: t.cert, spokeCert: viaFleet() }, t.root.spki, { version: 1, serials: [spokes.serial] }, exp)).toEqual(NOT_COVERED);
     });
 
-    test("ADR-0508: a root-signed approver too needs the paired spokeNode and the paired spoke's own certificate", () => {
+    test("ADR-0513: a root-signed approver too needs the paired spokeNode and the paired spoke's own certificate", () => {
       const root = key(), hub = key(), c = cert(root, hub, ["approve"]).token;
       const shareable = spokeCert(root, { classification: "shareable" });
       expect(verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: c, spokeCert: shareable }, root.spki, fresh, unpaired))
@@ -455,7 +455,7 @@ describe("a delegate-certified hub is accepted exactly when the add-on's TrustSt
       expect(verifyRemoteDecision({ decision: decision(hub, "L", ask, true), cert: c, spokeCert: shareable }, root.spki, fresh, exp).ok).toBe(true);
     });
 
-    test("ADR-0508: on a private or cui spoke only an approver whose user is cleared for it decides, allow or deny", () => {
+    test("ADR-0513: on a private or cui spoke only an approver whose user is cleared for it decides, allow or deny", () => {
       const root = key(), hub = key();
       const run = (over: Record<string, unknown>, classification: string | undefined, allow = true) =>
         verifyRemoteDecision({ decision: decision(hub, "L", ask, allow), cert: cert(root, hub, ["approve"], over).token, spokeCert: spokeCert(root, { classification }) }, root.spki, fresh, exp);
@@ -512,7 +512,7 @@ describe("a delegate-certified hub is accepted exactly when the add-on's TrustSt
   });
 });
 
-// ── ADR-0505 (the add-on's RS-CRL-01): a CRL that expires ─────────────────────────────────────────────
+// ── ADR-0510 (the add-on's RS-CRL-01): a CRL that expires ─────────────────────────────────────────────
 describe("a CRL with nextUpdate goes stale three days after it", () => {
   const DAY = 86_400;
   const STALE = "the approver root's revocation list is out of date; publish a fresh one";
@@ -579,7 +579,7 @@ describe("a CRL with nextUpdate goes stale three days after it", () => {
   });
 });
 
-// ── ADR-0502: user presence on approve ─────────────────────────────────────────────────────────────────
+// ── ADR-0507: user presence on approve ─────────────────────────────────────────────────────────────────
 describe("a pairing that requires user presence", () => {
   test("refuses an allow without presence evidence, accepts one with a Windows Hello key's evidence", async () => {
     const r = rig({ presence: "required" });

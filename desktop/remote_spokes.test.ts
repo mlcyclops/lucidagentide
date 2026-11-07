@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-IDE-SPOKES.1 (ADR-0501): the engine side of remote spokes in the IDE, driven through its routes against a
+// P-IDE-SPOKES.1 (ADR-0506): the engine side of remote spokes in the IDE, driven through its routes against a
 // fake hub plugin. What must hold: the plugin is reached only with the engine's host token; every action is
 // gated by the hub certificate's scopes before anything is forwarded; recalled journal text passes the real
 // fail-closed gate (scanAndDecide) and leaves only delimited, with embedded delimiters neutralized; an entry or
@@ -149,7 +149,7 @@ describe("scope gating: nothing the hub certificate does not allow reaches the p
     expect((await r.call("POST", "/api/remote-spokes/models", { node: NODE })).status).toBe(404);
   });
 
-  test("ADR-0506: submit forwards a chosen model as given and refuses a malformed one", async () => {
+  test("ADR-0511: submit forwards a chosen model as given and refuses a malformed one", async () => {
     const r = rig({ scopes: ["recall", "drive"] });
     for (const model of ["", "a b", 5, "x".repeat(129)]) {
       expect((await r.call("POST", "/api/remote-spokes/submit", { node: NODE, text: "ok", model })).data).toMatchObject({ ok: false });
@@ -159,7 +159,7 @@ describe("scope gating: nothing the hub certificate does not allow reaches the p
     expect(r.forwarded().map((c) => [c.path, c.body])).toEqual([[`/host/spokes/${NODE}/submit`, { text: "do it", model: "ollama/qwen2.5-coder:32b" }]]);
   });
 
-  test("ADR-0507: nothing reaches a deactivated spoke, whatever the scopes; reactivated, it forwards again", async () => {
+  test("ADR-0512: nothing reaches a deactivated spoke, whatever the scopes; reactivated, it forwards again", async () => {
     const since = new Date(2026, 10, 5, 9, 30).getTime();
     const spoke = { node: NODE, label: "dgx-spark (shared)", tasks: [{ id: TASK, name: "triage", state: "idle", turns: 1, updatedAt: 1 }] };
     const hub = { node: HUB, label: "workstation", scopes: ["recall", "drive", "approve"] };
@@ -268,7 +268,7 @@ describe("parked actions: scanned like recall, and a flagged one can only be den
   });
 });
 
-describe("ADR-0502 amendment: a password hub's Approve carries the presence password through, once", () => {
+describe("ADR-0507 amendment: a password hub's Approve carries the presence password through, once", () => {
   const SECRET = "correct horse battery staple";
   const hubOf = (presence: string) => ({ hub: { node: HUB, label: "workstation", scopes: ["recall", "drive", "approve"], presence }, spokes: [{ node: NODE, label: "azure-eastus", reachable: true, checkedAt: 1, tasks: [] }] });
 
@@ -300,7 +300,7 @@ describe("ADR-0502 amendment: a password hub's Approve carries the presence pass
   });
 });
 
-describe("ADR-0509: the hub panel opens with a one-time bootstrap secret the plugin minted for this engine", () => {
+describe("ADR-0514: the hub panel opens with a one-time bootstrap secret the plugin minted for this engine", () => {
   const SECRET = "ab".repeat(32);
   const panelDeps = (reply: { status: number; body: unknown }, seen: { url: string; init: RequestInit }[], running = true): RemoteSpokesDeps => ({
     endpoint: () => (running ? { url: "http://127.0.0.1:47555", token: TOKEN } : null),

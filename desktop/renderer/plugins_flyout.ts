@@ -10,7 +10,7 @@
 // checkout, entitlement and government access; the engine bridge for install / start / license), so app.ts
 // keeps the singletons and this file has no hidden globals.
 //
-// P-PLUGINS.7 (ADR-0500): a third tab, INSTALLED, lists what is on this machine and is the one place a private
+// P-PLUGINS.7 (ADR-0505): a third tab, INSTALLED, lists what is on this machine and is the one place a private
 // plugin (a .lplugin.zip the user picked) is installed, opened and removed. Installing is two explicit steps:
 // the engine inspects the file and installs nothing, the user reviews it on a sheet (an unsigned package needs
 // the unsigned box ticked), then the engine installs exactly the reviewed bytes. Opening uses the same
@@ -162,7 +162,7 @@ export function licenseTextSheetHtml(name: string, version: string, text: string
   </div>`;
 }
 
-// ── the INSTALLED tab (ADR-0500) ───────────────────────────────────────────────────────────────────
+// ── the INSTALLED tab (ADR-0505) ───────────────────────────────────────────────────────────────────
 
 const KIND_LABEL: Record<InstalledPluginView["kind"], string> = { web: "Web app", server: "Local server", daemon: "Local program" };
 

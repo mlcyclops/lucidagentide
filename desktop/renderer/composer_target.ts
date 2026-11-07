@@ -191,7 +191,7 @@ function lanePhrase(t: Extract<ComposerTarget, { kind: "lane" }>): string {
   const name = oneLine(t.name) || oneLine(t.laneId) || "unnamed spoke";
   const cwd = oneLine(t.cwd) || "a folder that was not reported";
   const model = oneLine(t.model) || "a model that was not reported";
-  // P-HUB-PICK.1 (ADR-0470): the product word is "spoke"; "lane" is the code's word and never the user's.
+  // P-HUB-PICK.1 (ADR-0516): the product word is "spoke"; "lane" is the code's word and never the user's.
   return `spoke "${name}" in ${cwd} on ${model}`;
 }
 

@@ -1,10 +1,10 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-IDE-SPOKES.1 (ADR-0501): the remote-spokes view model. What the orbit and the hub picker show for a spoke
+// P-IDE-SPOKES.1 (ADR-0506): the remote-spokes view model. What the orbit and the hub picker show for a spoke
 // (state, lanes, model, tasks) from the hub plugin's summary, what a hub's certificate lets the IDE offer, and
-// the plugin's two-click rule. ADR-0503: answer time, route, certificate region and classification, the spoke's
-// models, and the Start-a-task selector's eligibility and order. ADR-0504: the spoke's machine and lane policy, the
+// the plugin's two-click rule. ADR-0508: answer time, route, certificate region and classification, the spoke's
+// models, and the Start-a-task selector's eligibility and order. ADR-0509: the spoke's machine and lane policy, the
 // silent rule, alert lines and Resume.
 
 import { describe, expect, test } from "bun:test";
@@ -18,7 +18,7 @@ const NODE = `n_${"1".repeat(32)}`;
 const HUB = `n_${"f".repeat(32)}`;
 const task = (over: Record<string, unknown> = {}) => ({ id: "t_0123456789abcdef", name: "triage", state: "idle", turns: 3, updatedAt: 100, createdAt: 1, origin: HUB, ...over });
 const caps = { maxLanes: 2, liveLanes: 1, freeLanes: 1, busyTasks: 1, models: { default: "azure-openai/gpt-5.1", signedIn: [], local: [] } };
-/** ADR-0503's, ADR-0504's and ADR-0507's optional fields as an older hub plugin leaves them: every one unknown. */
+/** ADR-0508's, ADR-0509's and ADR-0512's optional fields as an older hub plugin leaves them: every one unknown. */
 const UNKNOWN = {
   latencyMs: null, via: null, region: null, classification: null, certExpires: null, engineVersion: null,
   host: null, lanePolicy: null, lastSeen: null, silentSince: null, alerts: [], deactivated: null,
@@ -73,7 +73,7 @@ describe("mapSpokeRow: one spoke as the orbit shows it", () => {
   });
 });
 
-describe("ADR-0503: answer time, route, certificate and models", () => {
+describe("ADR-0508: answer time, route, certificate and models", () => {
   const models = {
     providers: [
       { provider: "anthropic", name: "Anthropic", signedIn: true, accounts: [{ label: "ops@contoso", expires: 1 }], models: ["anthropic/claude-sonnet-4-5", "anthropic/claude-opus-4-1"] },
@@ -146,7 +146,7 @@ describe("ADR-0503: answer time, route, certificate and models", () => {
   });
 });
 
-describe("ADR-0503: the Start-a-task selector's rows", () => {
+describe("ADR-0508: the Start-a-task selector's rows", () => {
   const drive = hubActions(["recall", "drive"]);
   const spoke = (label: string, over: Partial<RemoteSpokeView> = {}): RemoteSpokeView => ({
     node: NODE, label, state: "idle", lanes: { live: 0, max: 2, free: 2 }, tasks: [], checkedAt: 1, ...UNKNOWN, models: { default: null, local: [], frontier: [] }, ...over,
@@ -188,7 +188,7 @@ describe("ADR-0503: the Start-a-task selector's rows", () => {
   });
 });
 
-describe("ADR-0504: the spoke's machine, its lane policy, silence, alerts and Resume", () => {
+describe("ADR-0509: the spoke's machine, its lane policy, silence, alerts and Resume", () => {
   const host = {
     os: "linux", arch: "x64", cpus: 8, memMiB: 32_768, diskFreeMiB: 512_000,
     gpus: [{ name: "NVIDIA A10", vramMiB: 24_576 }, { name: "iGPU" }], localModel: { host: "127.0.0.1:11434", reachable: true },
@@ -285,7 +285,7 @@ describe("ADR-0504: the spoke's machine, its lane policy, silence, alerts and Re
   });
 });
 
-describe("ADR-0505: a stale revocation list, an expiring certificate and a laptop's lane cap", () => {
+describe("ADR-0510: a stale revocation list, an expiring certificate and a laptop's lane cap", () => {
   const at = (h: number, m: number) => new Date(2026, 10, 5, h, m).getTime();
   const NOW = at(14, 30);
 
@@ -322,7 +322,7 @@ describe("mapHubSnapshot: the hub, its scopes and every spoke", () => {
     });
   });
 
-  test("the hub's presence kind is passed on only when it is a known one (ADR-0502: password asks the IDE)", () => {
+  test("the hub's presence kind is passed on only when it is a known one (ADR-0507: password asks the IDE)", () => {
     const kind = (presence: unknown) => {
       const v = mapHubSnapshot({ hub: { node: HUB, label: "workstation", scopes: ["approve"], presence }, spokes: [] });
       return v.available ? v.hub.presence : "unavailable";
@@ -361,7 +361,7 @@ describe("scope gating: the IDE offers only what the hub certificate allows", ()
     expect(taskButtons(t("stopped"), d)).toEqual({ recall: true, followup: false, cancel: false, close: false, resume: false });
   });
 
-  test("ADR-0504: an interrupted task offers Resume only when a follow-up could land (drive, turn over, lane held)", () => {
+  test("ADR-0509: an interrupted task offers Resume only when a follow-up could land (drive, turn over, lane held)", () => {
     const d = a(["recall", "drive"]);
     const cut = (state: RemoteTaskView["state"]): RemoteTaskView => ({ ...t(state), interrupted: 1_700 });
     expect(taskButtons(cut("idle"), d)).toEqual({ recall: true, followup: true, cancel: false, close: true, resume: true });
@@ -393,7 +393,7 @@ describe("display rules", () => {
   });
 });
 
-describe("ADR-0506: a model chosen per task", () => {
+describe("ADR-0511: a model chosen per task", () => {
   test("the selector offers local models, then each signed-in provider's as provider/id, never the default", () => {
     const v = mapSpokeRow({
       node: NODE, label: "vm-218", reachable: true, tasks: [], caps: { ...caps, models: { default: "anthropic/claude-sonnet-4-5", signedIn: ["anthropic"], local: [] } },
@@ -416,7 +416,7 @@ describe("ADR-0506: a model chosen per task", () => {
   });
 });
 
-describe("ADR-0507: a spoke deactivated on purpose", () => {
+describe("ADR-0512: a spoke deactivated on purpose", () => {
   const since = new Date(2026, 10, 5, 9, 30).getTime();
   const NOW = new Date(2026, 10, 9, 12, 0).getTime();
   const REASON = "shipped to Alex's site; back when Alex grants access";

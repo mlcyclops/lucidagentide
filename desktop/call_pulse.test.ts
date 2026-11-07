@@ -87,7 +87,7 @@ describe("PulseTracker + livenessVerdict", () => {
     expect(verdict(t, now + PULSE_SAMPLE_MS).state).toBe("working");
   });
 
-  // P-STUCK-SHOW.1 (ADR-0490): the "might be stuck" warning starts at half the threshold, never earlier, so a
+  // P-STUCK-SHOW.1 (ADR-0519): the "might be stuck" warning starts at half the threshold, never earlier, so a
   // short network wait stays an ordinary "working" line in the quiet default.
   test("a call flat for half the threshold might be stuck; shorter flatness carries no warning", () => {
     const t = new PulseTracker();

@@ -292,7 +292,7 @@ import type { JobsData, JobTargetView, JobView } from "./jobs_view.ts"; // P-SCH
 export type { NetView };
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
 import type { AosControl, AosSnapshot } from "../aos.ts"; // P-AOS.1 (ADR-0452): the fleet goal (types only, owned there)
-import type { RecallView, RemoteActionView, RemoteApprovalsView, RemoteHubView } from "./remote_spokes_model.ts"; // P-IDE-SPOKES.1 (ADR-0501): owned there
+import type { RecallView, RemoteActionView, RemoteApprovalsView, RemoteHubView } from "./remote_spokes_model.ts"; // P-IDE-SPOKES.1 (ADR-0506): owned there
 export type { AosControl, AosSnapshot };
 /** P-AOS.1: a fleet-goal change: the new snapshot, or the engine's refusal in words. */
 export type FleetGoalReply = { ok: true; data: AosSnapshot } | { ok: false; error: string };
@@ -516,10 +516,10 @@ export interface ModeState { available: ModeOption[]; current: string; ui?: "age
 export interface OmpCommand { name: string; description?: string; hint?: string }
 export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest"; live?: SessionLive; spoke?: string; archived?: true }
 // P-KG-INGEST.1b (ADR-0076): chats, with throwaway extraction sessions split into a collapsible group.
-// P-SESS-SEARCH.1 (ADR-0469): `hiddenSpokes` = spoke sessions held back while the Spokes toggle is off.
-// P-SESS-ARCHIVE.1 (ADR-0471): `archived` = this workspace's archived chats (the Archived group's count).
+// P-SESS-SEARCH.1 (ADR-0515): `hiddenSpokes` = spoke sessions held back while the Spokes toggle is off.
+// P-SESS-ARCHIVE.1 (ADR-0517): `archived` = this workspace's archived chats (the Archived group's count).
 export interface SessionList { sessions: SessionInfo[]; ingest: SessionInfo[]; hiddenSpokes?: number; archived?: number }
-/** P-SESS-ARCHIVE.1 (ADR-0471): mirrors desktop/sessions.ts ArchivePolicy / ArchiveRun. */
+/** P-SESS-ARCHIVE.1 (ADR-0517): mirrors desktop/sessions.ts ArchivePolicy / ArchiveRun. */
 export interface ArchivePolicyView { auto: boolean; days: number; spokeDays: number }
 export interface ArchiveRunView { candidates: number; archived: number; skipped: number; at: number }
 export interface ArchivePolicyState { policy: ArchivePolicyView; wouldArchive: number; lastRun: ArchiveRunView | null }
@@ -598,7 +598,7 @@ export interface InstalledPluginView {
   license: string;
   /** The plugin registers agent tools (MCP) while it runs. */
   hasMcp: boolean;
-  /** ADR-0500: installed from the store, or privately from a file the user picked. */
+  /** ADR-0505: installed from the store, or privately from a file the user picked. */
   source: "catalog" | "private";
   /** Signed by a publisher key baked into this build. */
   signed: boolean;
@@ -607,7 +607,7 @@ export interface PluginsListView { plugins: InstalledPluginView[] }
 export type PluginInstallView =
   | { ok: true; id: string; version: string; signed?: boolean }
   | { ok: false; gate: PluginGate; reason: string; logPath?: string };
-/** P-PLUGINS.7 (ADR-0500): what a picked `.lplugin.zip` is, before anything installs. `sha256` names the
+/** P-PLUGINS.7 (ADR-0505): what a picked `.lplugin.zip` is, before anything installs. `sha256` names the
  *  reviewed bytes; `replaces` is the installed private version it would replace. */
 export type PluginFileInspectView =
   | {
@@ -620,7 +620,7 @@ export type PluginActionView = { ok: true } | { ok: false; error: string };
 export interface PluginLicenseView { ok: boolean; id?: string; version?: string; text?: string; error?: string }
 // P-PROV.1 (ADR-0210): extra per-provider config env (Azure resource/version, Vertex project/location/ADC,
 // Gemini-Enterprise project). Non-secret fields echo `value` to pre-fill; secret fields report `last4`.
-// `options` (ADR-0499): a closed choice rendered as a select, the first option being the unset default.
+// `options` (ADR-0504): a closed choice rendered as a select, the first option being the unset default.
 export interface ProviderFieldAuth { env: string; label: string; placeholder?: string; secret?: boolean; options?: { value: string; label: string }[]; set: boolean; value?: string; last4?: string }
 export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
@@ -1144,16 +1144,16 @@ export interface LucidBridge {
   /** P-FLEET.L4: revive an error/stopped lane in place - same id, transcript memory carried. */
   fleetRespawn(laneId: string): Promise<{ ok: boolean; lane?: LaneView; reason?: string } | null>;
   fleetAnswer(laneId: string, allow: boolean, scope?: ApprovalScope): Promise<{ ok: boolean } | null>;
-  /** P-IDE-SPOKES.1 (ADR-0501): the remote-spokes hub plugin's spokes, scopes and actions, through the engine.
+  /** P-IDE-SPOKES.1 (ADR-0506): the remote-spokes hub plugin's spokes, scopes and actions, through the engine.
    *  Recall and parked actions come back scanned; recalled text is shown as text and enters a prompt only as the
    *  delimited `context`. Every action is re-gated by the hub certificate's scopes engine-side. */
   remoteSpokes(): Promise<RemoteHubView | null>;
   remoteSpokeRecall(node: string, task?: string): Promise<RecallView | null>;
   remoteSpokeApprovals(node: string): Promise<RemoteApprovalsView | null>;
-  /** `password`: a `password` hub's presence password, on an allow only (ADR-0502); sent once, never kept. */
+  /** `password`: a `password` hub's presence password, on an allow only (ADR-0507); sent once, never kept. */
   remoteSpokeDecide(input: { node: string; task: string; ask: string; digest: string; allow: boolean; password?: string }): Promise<RemoteActionView | null>;
   /** submit {node, text, name?, model?}; followup {node, task, text}; cancel and close {node, task}. `model`
-   *  (ADR-0506): one the spoke reports, "provider/id"; absent, the spoke engine's default. */
+   *  (ADR-0511): one the spoke reports, "provider/id"; absent, the spoke engine's default. */
   remoteSpokeAct(op: "submit" | "followup" | "cancel" | "close", input: { node: string; task?: string; text?: string; name?: string; model?: string }): Promise<RemoteActionView | null>;
   /** Full auto-mode. laneId omitted = ALL lanes + persisted default for new ones. The server refuses
    *  on=true unless the risk was accepted before or acceptRisk is true (which persists the acceptance). */
@@ -1228,7 +1228,7 @@ export interface LucidBridge {
   // P-PLUGINS.2 (ADR-0462): install (every gate fail-closed), run, stop and remove `.lplugin` plugins.
   pluginsList(): Promise<PluginsListView | null>;
   pluginsInstallFromUrl(url: string, expectId: string): Promise<PluginInstallView | null>;
-  // P-PLUGINS.7 (ADR-0500): a private install from a picked file, in two explicit steps.
+  // P-PLUGINS.7 (ADR-0505): a private install from a picked file, in two explicit steps.
   pluginsInspectFile(path: string): Promise<PluginFileInspectView | null>;
   pluginsInstallFile(input: { path: string; sha256: string; acceptUnsigned: boolean }): Promise<PluginInstallView | null>;
   pluginsStart(id: string): Promise<PluginStartView | null>;
@@ -1264,7 +1264,7 @@ export interface LucidBridge {
   resumeSession(id: string, opts?: { force?: boolean }): Promise<SessionSwitchResult>;
   deleteSession(id: string): Promise<{ ok: boolean; error?: string }>;
   clearIngestSessions(): Promise<{ ok: boolean; cleared: number } | null>; // P-KG-INGEST.2: bulk-delete ingest throwaways
-  // P-SESS-ARCHIVE.1 (ADR-0471): archive / restore, the Archived group, the auto-archive rule.
+  // P-SESS-ARCHIVE.1 (ADR-0517): archive / restore, the Archived group, the auto-archive rule.
   archiveSession(id: string): Promise<{ ok: boolean; error?: string } | null>;
   restoreSession(id: string): Promise<{ ok: boolean; restored: boolean; error?: string } | null>;
   archivedSessions(): Promise<{ sessions: SessionInfo[] } | null>;
@@ -2013,7 +2013,7 @@ export const bridge: LucidBridge = {
   },
   fleetRespawn: (laneId) => post("/api/fleet/respawn", { laneId }),
   fleetAnswer: (laneId, allow, scope) => post("/api/fleet/answer", { laneId, allow, ...(scope ? { scope } : {}) }),
-  remoteSpokes: () => getData("/api/remote-spokes"), // P-IDE-SPOKES.1 (ADR-0501)
+  remoteSpokes: () => getData("/api/remote-spokes"), // P-IDE-SPOKES.1 (ADR-0506)
   remoteSpokeRecall: (node, task) => post("/api/remote-spokes/recall", { node, ...(task ? { task } : {}) }),
   remoteSpokeApprovals: (node) => getData(`/api/remote-spokes/approvals?node=${encodeURIComponent(node)}`),
   remoteSpokeDecide: (input) => post("/api/remote-spokes/decide", input),

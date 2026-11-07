@@ -88,7 +88,7 @@ export const PREMIUM_PLUGINS: PremiumPlugin[] = [
     media: { loop: true, poster: "webp", glyph: "calendar", tone: "violet" },
   },
   {
-    // ADR-0500: the remote-spokes hub (TechLead187/lucidagentIDEaddon remote-spoke/plugin). Coming soon until a
+    // ADR-0505: the remote-spokes hub (TechLead187/lucidagentIDEaddon remote-spoke/plugin). Coming soon until a
     // build signed with the TECHLEAD 187 LLC publisher key is uploaded and the entitlements catalog sells
     // PLG-REMOTESPOKES-OTF; until then a private build installs from the Installed tab, shown as unsigned.
     id: "remote-spokes", name: "Remote Spokes", section: "civilian", sale: "buy", lookupKey: "PLG-REMOTESPOKES-OTF", available: false,
@@ -304,10 +304,10 @@ export function fmtDownloads(n: number | null): string {
   return String(n);
 }
 
-/** The drawer's tabs: the two catalog tiers, and INSTALLED (ADR-0500), what is on this machine. */
+/** The drawer's tabs: the two catalog tiers, and INSTALLED (ADR-0505), what is on this machine. */
 export type DrawerTab = PluginTier | "installed";
 
-/** The drawer opens on PREMIUM unless the user last chose FREE or INSTALLED (ADR-0461/0500). Anything else
+/** The drawer opens on PREMIUM unless the user last chose FREE or INSTALLED (ADR-0461/0505). Anything else
  *  stored reads as PREMIUM. */
 export function parseTierPref(raw: string | null | undefined): DrawerTab {
   return raw === "free" || raw === "installed" ? raw : "premium";
@@ -317,7 +317,7 @@ export function parseTierPref(raw: string | null | undefined): DrawerTab {
 export interface InstalledFacts { id: string; version: string; source: "catalog" | "private"; signed: boolean }
 
 /** The version a store card counts as installed: only a store install. A private copy under a store id is
- *  not the purchased package, so the card neither opens it nor offers to update it (ADR-0500). Pure. */
+ *  not the purchased package, so the card neither opens it nor offers to update it (ADR-0505). Pure. */
 export function storeInstalledVersion(p: InstalledFacts | null | undefined): string | null {
   return p && p.source === "catalog" ? p.version : null;
 }

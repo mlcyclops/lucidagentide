@@ -3,7 +3,7 @@
 
 // harness/omp/azure_entra_extension.ts
 //
-// P-AZURE-ENTRA.1 (ADR-0499): loaded with every gated omp spawn (desktop/acp_backend.ts and the `lucid`
+// P-AZURE-ENTRA.1 (ADR-0504): loaded with every gated omp spawn (desktop/acp_backend.ts and the `lucid`
 // launcher), alongside the AskSage extension. A no-op unless AZURE_OPENAI_AUTH_MODE names an Entra mode
 // (`managed-identity` or `azure-cli`): the key mode is omp's built-in `azure` provider, untouched.
 //

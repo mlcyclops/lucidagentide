@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/orbit_remote.ts - P-IDE-SPOKES.1 (ADR-0501): remote spokes on the Fleet Orbit.
+// desktop/renderer/orbit_remote.ts - P-IDE-SPOKES.1 (ADR-0506): remote spokes on the Fleet Orbit.
 //
 // The add-on hub (the remote-spokes server plugin) is the source of truth; the engine reads it and this file only
 // draws: a remote node per spoke on the same ring as the local lanes (dashed frame, a "remote" tag, the shared
@@ -9,11 +9,11 @@
 // per spoke for its tasks, parked actions and recall. A remote spoke is never promoted into the composer: it is
 // another machine, driven through its hub.
 //
-// ADR-0503 adds the Start-a-task selector (every spoke as a radio row with how fast it answers, its route, models,
+// ADR-0508 adds the Start-a-task selector (every spoke as a radio row with how fast it answers, its route, models,
 // free lanes and certificate region and classification; ineligible rows say why) and a Models section in the
 // per-spoke panel. Both start tasks through the same submit path as the panel's own "New task".
 //
-// ADR-0504: an alert line on each remote card (silent since, crashed, restarted, turn interrupted) and a
+// ADR-0509: an alert line on each remote card (silent since, crashed, restarted, turn interrupted) and a
 // dismissible alert list in the Remote hub section (dismissals kept in localStorage by a key stable across polls);
 // host facts and the lane policy's why in the selector rows and the panel; a task a restart interrupted offers
 // Resume, armed like Approve, which sends RESUME_TEXT through the existing followup route. Nothing re-runs alone.
@@ -22,7 +22,7 @@
 // Recalled entries arrive already scanned (a quarantined entry has no text at all); the only way recalled text
 // leaves this panel is "Copy for a prompt", which copies the engine's delimited UNTRUSTED_CONTENT envelope.
 // Buttons appear only for what the hub certificate's scopes allow; the engine re-checks every action anyway.
-// Approve and Close keep the plugin panel's two-click rule (armClick). On a `password` hub (ADR-0502 amendment) the
+// Approve and Close keep the plugin panel's two-click rule (armClick). On a `password` hub (ADR-0507 amendment) the
 // first Approve click opens a password field instead, and the second signs with what was typed; the field is
 // emptied at once and the password goes only into that one decide request.
 
@@ -73,7 +73,7 @@ export function remoteList(): RemoteSpokeView[] {
   return snap?.available ? snap.spokes : [];
 }
 
-// ------------------------------------------------------------------------------ alerts (ADR-0504)
+// ------------------------------------------------------------------------------ alerts (ADR-0509)
 
 /** Alert lines the human dismissed, by RemoteAlertItem key. Kept across reloads: the hub keeps an alert until 20
  *  newer ones push it out, so a dismissal has to outlive the page. Capped, oldest dropped first. */
@@ -173,7 +173,7 @@ function paintRemoteNode(card: HTMLElement, s: RemoteSpokeView): void {
   const now = Date.now();
   setText(card, ".orbit-name", s.label);
   setText(card, ".orbit-glance", remoteGlance(s, now));
-  // ADR-0504: the newest alert line the human has not dismissed (a silence first: it is the one still going on).
+  // ADR-0509: the newest alert line the human has not dismissed (a silence first: it is the one still going on).
   const gone = dismissedAlerts();
   const alert = spokeAlerts(s, now).find((a) => !gone.has(a.key)) ?? null;
   const line = card.querySelector<HTMLElement>(".orbit-alert");
@@ -187,8 +187,8 @@ function paintRemoteNode(card: HTMLElement, s: RemoteSpokeView): void {
   card.title = `${s.label} (remote spoke ${s.node})\n${stateLabel(s, now)}\n${latencyLabel(s.latencyMs)}${s.via ? ` over ${VIA_LABEL[s.via]}` : ""}${host ? `\n${host}` : ""}${s.error ? `\n${s.error}` : ""}`;
 }
 
-/** ADR-0503: whether the orbit offers "Start a remote task": the hub may drive and has at least one spoke.
- *  ADR-0507: a deactivated spoke does not count. */
+/** ADR-0508: whether the orbit offers "Start a remote task": the hub may drive and has at least one spoke.
+ *  ADR-0512: a deactivated spoke does not count. */
 export function remoteDeployVisible(): boolean {
   return snap !== null && snap.available && snap.actions.drive && snap.spokes.some((s) => !s.deactivated);
 }
@@ -210,7 +210,7 @@ export function layoutRemote(slots: readonly OrbitSlot[], cx: number, cy: number
 
 // ------------------------------------------------------------------------- the hub picker's section
 
-/** Remote spokes, how many are parked on an approval, and (ADR-0504) how many alert lines are not dismissed, for
+/** Remote spokes, how many are parked on an approval, and (ADR-0509) how many alert lines are not dismissed, for
  *  the Other hubs badge. */
 export function remoteCounts(): { spokes: number; waiting: number; alerts: number } {
   const list = remoteList();
@@ -235,7 +235,7 @@ export function remoteHubSectionHtml(): string {
   }
   const { hub, spokes } = snap;
   const waiting = spokes.filter((s) => s.state === "approval").length;
-  // ADR-0507: a deactivated spoke still counts as the hub's, said plainly; it is never a target.
+  // ADR-0512: a deactivated spoke still counts as the hub's, said plainly; it is never a target.
   const off = spokes.filter((s) => s.deactivated).length;
   return `<div class="orbit-hubrow rs-hubrow" title="${esc(hub.node)}">
       <span class="orbit-ghost-id"><b>${esc(hub.label)}</b><small>remote hub \u00b7 ${spokes.length} ${spokes.length === 1 ? "spoke" : "spokes"}${off ? ` (${off} deactivated)` : ""}${waiting ? ` \u00b7 ${waiting} waiting on you` : ""} \u00b7 may ${esc(hub.scopes.join(", ") || "nothing")}</small></span>
@@ -245,10 +245,10 @@ export function remoteHubSectionHtml(): string {
     <div class="orbit-hubrow-lanes">${spokes.map((s) => `<button class="fleet-pip rs-pip rs-${REMOTE_TONE[s.state]}" data-rs-open="${esc(s.node)}" data-tip="${esc(s.label)}|${esc(remoteGlance(s))}"><i></i>${esc(s.label)}</button>`).join("")}</div>${alertListHtml()}`;
 }
 
-/** ADR-0504: how many alert lines the Remote hub section lists; the rest wait behind "Dismiss all". */
+/** ADR-0509: how many alert lines the Remote hub section lists; the rest wait behind "Dismiss all". */
 const ALERT_LIST_MAX = 12;
 
-/** ADR-0504: the alert lines not dismissed yet, newest first: a spoke gone silent, crashed, restarted, or a turn a
+/** ADR-0509: the alert lines not dismissed yet, newest first: a spoke gone silent, crashed, restarted, or a turn a
  *  restart cut off (resumed from the spoke's panel, never on its own). Each line opens its spoke or is dismissed.
  *  Every spoke-written word goes through esc(); the dismiss key is built from the node id, a closed kind and a
  *  number. */
@@ -293,7 +293,7 @@ function spokeOf(node: string): RemoteSpokeView | null {
 
 const CLASSIFICATION_LABEL: Readonly<Record<RemoteClassification, string>> = { private: "private", shareable: "shareable", cui: "CUI" };
 
-/** ADR-0503: a model list longer than this folds into a details that shows its count. */
+/** ADR-0508: a model list longer than this folds into a details that shows its count. */
 const MODELS_OPEN_MAX = 12;
 
 /** One model list, built node by node (every id is spoke-written text): a heading, then the ids, the default
@@ -354,7 +354,7 @@ function paintModels(host: HTMLElement, m: RemoteModelsView): void {
 /** Paint the panel for `node` once; polls only touch its head and task list (typed text survives a poll). */
 export function paintRemotePanel(box: HTMLElement, node: string, closeHtml: string): void {
   panel = { node, followTask: null, armed: {}, approvals: [], recall: null, sig: "", modelsSig: "" };
-  // ADR-0507: a deactivated spoke's panel offers no new task, parked actions or recall.
+  // ADR-0512: a deactivated spoke's panel offers no new task, parked actions or recall.
   const s0 = spokeOf(node);
   const a = snap?.available ? (s0 ? spokeActions(s0, snap.actions) : snap.actions) : null;
   box.innerHTML = `<div class="orbit-panel-h">${icon("link", 14)}<b data-rs-title></b><span class="rs-state" data-rs-state></span>${closeHtml}</div>
@@ -409,7 +409,7 @@ export function refreshRemotePanel(box: HTMLElement): void {
   const lanes = s.lanes ? `${s.lanes.live} of ${s.lanes.max} lanes in use` : "lanes not reported";
   const cert = [s.region, s.classification && CLASSIFICATION_LABEL[s.classification]].filter(Boolean).join(", ");
   setText(box, "[data-rs-sub]", `${lanes} \u00b7 ${latencyLabel(s.latencyMs)}${s.via ? ` over ${VIA_LABEL[s.via]}` : ""}${s.engineVersion ? ` \u00b7 engine ${s.engineVersion}` : ""}${cert ? ` \u00b7 ${cert}` : ""}${s.checkedAt ? ` \u00b7 checked ${new Date(s.checkedAt).toLocaleTimeString()}` : ""}${s.lastSeen ? ` \u00b7 last relay poll ${clockLabel(s.lastSeen, now)}` : ""}${s.error ? ` \u00b7 ${s.error}` : ""}`);
-  // ADR-0504: the machine the spoke runs on and why it runs as many lanes as it does.
+  // ADR-0509: the machine the spoke runs on and why it runs as many lanes as it does.
   const h = s.host;
   const hostLine = h ? [
     hostLabel(h),
@@ -473,7 +473,7 @@ export function onRemotePanelClick(t: HTMLElement, box: HTMLElement): boolean {
     return true;
   }
   if (task && t.closest("[data-rs-cancel]")) { void act(box, "cancel", { task: task.id }); return true; }
-  // ADR-0504: Resume is the human's call, armed like Approve; the second click sends RESUME_TEXT as a follow-up.
+  // ADR-0509: Resume is the human's call, armed like Approve; the second click sends RESUME_TEXT as a follow-up.
   const resumeBtn = t.closest("[data-rs-resume]") as HTMLElement | null;
   if (task && resumeBtn) {
     const key = `resume:${task.id}`;
@@ -613,7 +613,7 @@ function approvalCard(v: RemoteApprovalView, i: number, b: { approve: boolean; d
   row.className = "orbit-spawn-row";
   if (b.approve) {
     const ok = document.createElement("button"); ok.className = "btn-mini orbit-allow"; ok.dataset.rsApprove = ""; ok.textContent = "Approve";
-    // ADR-0502 amendment: a `password` hub's Approve opens this field; the typed password is the second step.
+    // ADR-0507 amendment: a `password` hub's Approve opens this field; the typed password is the second step.
     if (snap?.available && snap.hub.presence === "password") {
       const pw = document.createElement("input");
       pw.type = "password"; pw.dataset.rsPassword = ""; pw.hidden = true; pw.maxLength = 1024; pw.autocomplete = "off"; pw.placeholder = "the hub's presence password";
@@ -675,7 +675,7 @@ async function runRecall(box: HTMLElement, task: string | undefined): Promise<vo
   }));
 }
 
-// ------------------------------------------------------------- the Start-a-task selector (ADR-0503)
+// ------------------------------------------------------------- the Start-a-task selector (ADR-0508)
 
 interface DeployState {
   /** The spoke picked last; kept across polls while it stays eligible. */
@@ -697,7 +697,7 @@ function choiceHtml(c: DeployChoice, checked: boolean, now: number): string {
   const lanes = s.lanes ? `${s.lanes.free}/${s.lanes.max} free` : "lanes not reported";
   const n = modelCount(s);
   const first = `${stateLabel(s, now)} \u00b7 ${lanes} \u00b7 ${s.models.default ?? "model not reported"}${n ? ` \u00b7 ${n} ${n === 1 ? "model" : "models"}` : ""}`;
-  // ADR-0504: the machine (cores, memory, each GPU and its memory) and why the spoke runs as many lanes as it does.
+  // ADR-0509: the machine (cores, memory, each GPU and its memory) and why the spoke runs as many lanes as it does.
   const host = hostLabel(s.host);
   const policy = s.lanePolicy ? lanePolicyLabel(s.lanePolicy) : "";
   const answers = `${latencyLabel(s.latencyMs)}${s.via ? ` over ${VIA_LABEL[s.via]}` : ""}`;
@@ -761,7 +761,7 @@ export function refreshDeployPanel(box: HTMLElement): void {
   if (go) go.disabled = deploy.busy || eligible === 0;
   if (!snap || !snap.available) { list.innerHTML = `<div class="orbit-ghosts-empty">${esc(snap ? snap.reason : "Asking the hub\u2026")}</div>`; return; }
   if (choices.length === 0) {
-    // ADR-0507: deactivated spokes are not targets, so a hub with only those has none to offer.
+    // ADR-0512: deactivated spokes are not targets, so a hub with only those has none to offer.
     list.innerHTML = snap.spokes.length
       ? `<div class="orbit-ghosts-empty">Every spoke on this hub is deactivated. Reactivate one on the hub (hub reactivate) to start a task there.</div>`
       : `<div class="orbit-ghosts-empty">This hub has no spokes yet. Enroll one in the Remote Spokes panel.</div>`;
@@ -778,13 +778,13 @@ function showDeployErr(box: HTMLElement, text: string): void { setText(box, "[da
 export function onDeployPanelClick(t: HTMLElement, box: HTMLElement, openSpoke: (node: string) => void): boolean {
   if (!deploy) return false;
   if (t.closest("[data-rs-dep-go]")) { void startDeploy(box, openSpoke); return true; }
-  // ADR-0506: a newly picked spoke shows its own models at once, not at the next poll. The radio's own click comes
+  // ADR-0511: a newly picked spoke shows its own models at once, not at the next poll. The radio's own click comes
   // after it is checked (a click on its label only forwards one), so this reads the new pick.
   if (t.matches("input[name=rs-deploy]")) { refreshDeployPanel(box); return true; }
   return t.closest("[data-rs-dep-list], [data-rs-dep-name], [data-rs-dep-model], [data-rs-dep-text]") !== null;
 }
 
-/** ADR-0506: the picked spoke's models for this task, its default first (sent as no model, so the spoke engine's
+/** ADR-0511: the picked spoke's models for this task, its default first (sent as no model, so the spoke engine's
  *  default runs). A model picked before stays picked while the spoke still offers it. Every id is spoke-written,
  *  so options are built node by node. */
 function fillDeployModels(box: HTMLElement, s: RemoteSpokeView | null): void {
@@ -810,7 +810,7 @@ async function startDeploy(box: HTMLElement, openSpoke: (node: string) => void):
   if (!choice.eligible) { showDeployErr(box, `${choice.spoke.label} cannot take a task now: ${choice.why}.`); return; }
   const text = ($("[data-rs-dep-text]", box) as HTMLTextAreaElement).value;
   const name = ($("[data-rs-dep-name]", box) as HTMLInputElement).value.trim();
-  // ADR-0506: "" is the spoke's default; any other value is one of the picked spoke's own models.
+  // ADR-0511: "" is the spoke's default; any other value is one of the picked spoke's own models.
   const model = ($("[data-rs-dep-model]", box) as HTMLSelectElement | null)?.value ?? "";
   if (!text.trim()) { showDeployErr(box, "Write the task's first turn."); return; }
   const state = deploy;

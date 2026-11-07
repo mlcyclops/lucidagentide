@@ -24,12 +24,12 @@ import { githubPickNote, mountRepoPicker, repoPickerHtml } from "./repo_picker.t
 import type { ApprovalScope, FleetStatusView, LaneView, LucidBridge, TimelineEntry } from "./bridge.ts";
 import { isLaneTarget, type ComposerTarget } from "./composer_target.ts";
 import { cycleSpoke, ghostKey, ghostSpokes, hubLanes, ORBIT_FPS_FLOOR, ORBIT_NODE_H, ORBIT_NODE_W, hubEntries, orbitMode, orbitSlots, readAllPages, spokeClose, spokeGlance, switchEntries, type GhostLists, type GhostMark, type GhostSpoke, type HubEntry, type OrbitMode, type SpokeClose, type SwitchEntry } from "./orbit_layout.ts";
-import { spokeRepo, type SpokeRepo } from "./spoke_repo.ts"; // P-HUB-PICK.1 (ADR-0470): one codebase name + color per spoke
+import { spokeRepo, type SpokeRepo } from "./spoke_repo.ts"; // P-HUB-PICK.1 (ADR-0516): one codebase name + color per spoke
 import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new spokes open on the last spoke's model; colliding names show the route
 import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
-import { LANE_STATUS_ORDER, LANE_STATUS_WORDS, displayStatus } from "../collab/fleet_status.ts"; // P-STUCK-SHOW.1 (ADR-0490)
+import { LANE_STATUS_ORDER, LANE_STATUS_WORDS, displayStatus } from "../collab/fleet_status.ts"; // P-STUCK-SHOW.1 (ADR-0519)
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
-import { closeDeployPanel, closeRemotePanel, initOrbitRemote, layoutRemote, onDeployPanelClick, onRemoteHubClick, onRemotePanelClick, paintDeployPanel, paintRemotePanel, reconcileRemote, refreshDeployPanel, refreshRemote, refreshRemotePanel, remoteCounts, remoteDeployVisible, remoteHubSectionHtml, remoteHubVisible, remoteList, remotePanelNode, type OrbitRemoteDeps } from "./orbit_remote.ts"; // P-IDE-SPOKES.1 (ADR-0501), ADR-0503
+import { closeDeployPanel, closeRemotePanel, initOrbitRemote, layoutRemote, onDeployPanelClick, onRemoteHubClick, onRemotePanelClick, paintDeployPanel, paintRemotePanel, reconcileRemote, refreshDeployPanel, refreshRemote, refreshRemotePanel, remoteCounts, remoteDeployVisible, remoteHubSectionHtml, remoteHubVisible, remoteList, remotePanelNode, type OrbitRemoteDeps } from "./orbit_remote.ts"; // P-IDE-SPOKES.1 (ADR-0506), ADR-0508
 import { beatLine, goalButtonHtml, goalButtonTip, goalPanelHtml, goalSnapshot, onGoalPanelClick, paintHubGoal, refreshGoal, stalledLanes, taskFormHtml, type OrbitGoalDeps } from "./orbit_goal.ts"; // P-AOS.1 (ADR-0452), P-AOS.2 (ADR-0453)
 
 export interface FleetOrbitDeps extends OrbitGoalDeps, OrbitRemoteDeps {
@@ -321,7 +321,7 @@ function togglePanel(which: OrbitPanel): void {
   if (openedPanel === "deploy") { const body = $("[data-orbit-panel-body]", host) as HTMLElement | null; if (body) paintDeployPanel(body, `<button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button>`); }
 }
 
-// ------------------------------------------------------ P-IDE-SPOKES.1 (ADR-0501): remote spokes
+// ------------------------------------------------------ P-IDE-SPOKES.1 (ADR-0506): remote spokes
 //
 // The nodes, the hub picker section and the per-spoke panel live in orbit_remote.ts; this section only opens the
 // panel. A click on the spoke already shown closes it, like every other panel toggle.
@@ -344,7 +344,7 @@ function paintRemoteAll(first: boolean): void {
   ($("[data-orbit-empty]", view) as HTMLElement).hidden = lastMine.length + remoteList().length > 0;
   layoutStage(lastMine);
   paintHubsBadge();
-  // ADR-0503: the Start-a-task selector's header button, only for a hub that may drive and has spokes.
+  // ADR-0508: the Start-a-task selector's header button, only for a hub that may drive and has spokes.
   for (const b of view.querySelectorAll<HTMLElement>("[data-orbit-deploy]")) b.hidden = !remoteDeployVisible();
   const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
   if (box && openedPanel === "remote") refreshRemotePanel(box);
@@ -356,7 +356,7 @@ function paintRemoteAll(first: boolean): void {
 // The orbit is ONE session's hub and spoke. A spoke born under another session keeps running under that
 // hub; this panel lists every such hub with its spokes, and "Open" makes that session Main through the
 // guarded switch, so its orbit shows them. The model (hubLanes / hubEntries) is pure and tested.
-// P-HUB-PICK.1 (ADR-0470): the header button names the hub on screen and is the hub picker; the panel lists
+// P-HUB-PICK.1 (ADR-0516): the header button names the hub on screen and is the hub picker; the panel lists
 // every hub, this one first, each with the codebases its spokes work on.
 
 /** Every hub from the last poll, the current one first (P-HUB-PICK.1). Repainted per poll only while the
@@ -369,7 +369,7 @@ function hubTitle(sessionId: string): string {
   return deps?.sessionTitle(sessionId) || `Session \u2026${sessionId.slice(-6)}`;
 }
 
-/** P-HUB-PICK.1 (ADR-0470): a codebase tag, colored by its stable hue (spoke_repo.ts). One text child. */
+/** P-HUB-PICK.1 (ADR-0516): a codebase tag, colored by its stable hue (spoke_repo.ts). One text child. */
 const repoTag = (r: SpokeRepo): string => `<span class="spoke-repo-tag" style="--repo-hue:${r.hue}" data-tip="Codebase|${esc(r.key)}">${esc(r.name)}</span>`;
 
 function paintHubsBadge(): void {
@@ -377,7 +377,7 @@ function paintHubsBadge(): void {
   const others = hubList.filter((h) => !h.current);
   const n = others.length;
   const spokes = others.reduce((a, h) => a + h.lanes.length, 0);
-  // P-IDE-SPOKES.1 (ADR-0501): the remote hub is a hub too; its parked asks wait on you and its alerts show.
+  // P-IDE-SPOKES.1 (ADR-0506): the remote hub is a hub too; its parked asks wait on you and its alerts show.
   const remote = remoteCounts();
   const remoteOn = remoteHubVisible();
   const elsewhere = n + (remoteOn ? 1 : 0);
@@ -389,7 +389,7 @@ function paintHubsBadge(): void {
     if (label && label.textContent !== t) label.textContent = t;
     const badge = b.querySelector("[data-orbit-hubsn]") as HTMLElement | null;
     if (badge) {
-      // ADR-0504: alert lines not dismissed yet (a remote spoke gone silent, crashed, restarted, a turn cut off).
+      // ADR-0509: alert lines not dismissed yet (a remote spoke gone silent, crashed, restarted, a turn cut off).
       const bt = elsewhere
         ? [`${elsewhere + 1} hubs`, waiting ? `${waiting} waiting` : "", remote.alerts ? `${remote.alerts} ${remote.alerts === 1 ? "alert" : "alerts"}` : ""].filter(Boolean).join(" \u00b7 ")
         : "";
@@ -413,7 +413,7 @@ function paintHubsPanel(): void {
   if (openedPanel !== "hubs" || !view) return;
   const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
   if (!box) return;
-  // P-IDE-SPOKES.1 (ADR-0501): the add-on's remote hub is listed first, with its spokes as pips.
+  // P-IDE-SPOKES.1 (ADR-0506): the add-on's remote hub is listed first, with its spokes as pips.
   const remote = remoteHubSectionHtml();
   const head = `<div class="orbit-panel-h">${icon("share", 14)}<b>Hubs</b><span>${hubList.length + (remote ? 1 : 0)}</span><button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button></div>`;
   const note = hubList.length < 2
@@ -508,7 +508,7 @@ function onPanelClick(t: HTMLElement): boolean {
     const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
     if (box && onRemotePanelClick(t, box)) return true;
   }
-  // ADR-0503: the Start-a-task selector; a started task opens its spoke's panel.
+  // ADR-0508: the Start-a-task selector; a started task opens its spoke's panel.
   if (openedPanel === "deploy" && view) {
     const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
     if (box && onDeployPanelClick(t, box, openRemote)) return true;
@@ -516,7 +516,7 @@ function onPanelClick(t: HTMLElement): boolean {
   if (openedPanel === "hubs") {
     const hit = onRemoteHubClick(t);
     if (hit === "handled") return true;
-    // ADR-0504: a dismissed alert leaves the section, the badge and its card's alert line at once.
+    // ADR-0509: a dismissed alert leaves the section, the badge and its card's alert line at once.
     if (hit === "repaint") { paintRemoteAll(false); return true; }
     if (hit === "deploy") { togglePanel("deploy"); return true; }
     if (hit) { openRemote(hit); return true; }
@@ -721,7 +721,7 @@ const nodes = new Map<string, { card: HTMLElement; line: SVGLineElement }>();
 
 export function initFleetOrbit(d: FleetOrbitDeps): void {
   deps = d;
-  initOrbitRemote(d); // P-IDE-SPOKES.1 (ADR-0501)
+  initOrbitRemote(d); // P-IDE-SPOKES.1 (ADR-0506)
   // P-FLEET.L17: fleet navigation from the keyboard, anywhere in the app. Ctrl/Cmd+Alt is free of the
   // app's Ctrl/Cmd bindings (zoom, mic, hands-free) and arrows cannot be produced by AltGr layouts, so
   // typing text can never trigger a spoke hop.
@@ -869,7 +869,7 @@ function onViewClick(ev: Event): void {
   if (t.closest("[data-orbit-pin]")) { setFleetHome("orbit"); return; }
   if (t.closest("[data-orbit-recover]")) { togglePanel("ghosts"); return; }
   if (t.closest("[data-orbit-hubs]")) { togglePanel("hubs"); return; }
-  if (t.closest("[data-orbit-deploy]")) { togglePanel("deploy"); return; } // ADR-0503
+  if (t.closest("[data-orbit-deploy]")) { togglePanel("deploy"); return; } // ADR-0508
   // The on-orbit panel spawns (folder or repo clone + vault PAT, P-FLEET.L18), so creating a spoke never
   // leaves the screen; the grid stays one click away as the workbench.
   if (t.closest("[data-orbit-grid]")) { closeFleetOrbit(); deps?.openGrid(); return; }
@@ -963,7 +963,7 @@ async function refresh(first: boolean): Promise<void> {
   layoutStage(mine);
   paintHub();
   paintHubsBadge();
-  // P-IDE-SPOKES.1 (ADR-0501): remote spokes join the ring when the hub plugin answers; its own request, so a
+  // P-IDE-SPOKES.1 (ADR-0506): remote spokes join the ring when the hub plugin answers; its own request, so a
   // slow plugin never holds the local ring back.
   void refreshRemote().then(() => paintRemoteAll(first));
   // Ghosts read the durable ledger, which only changes when a lane runs or dies - the open-time fetch
@@ -977,7 +977,7 @@ const censusSig = (lanes: LaneView[]): string => lanes.map((l) => ghostKey(l.nam
 
 function paintHead(s: FleetStatusView): void {
   const census = $("[data-orbit-census]", view!) as HTMLElement;
-  // P-STUCK-SHOW.1 (ADR-0490): the shared order and the display status, so a likely-stuck spoke is its own red count.
+  // P-STUCK-SHOW.1 (ADR-0519): the shared order and the display status, so a likely-stuck spoke is its own red count.
   const html = LANE_STATUS_ORDER
     .map((st) => ({ st, of: s.lanes.filter((l) => displayStatus(l) === st) }))
     .filter((r) => r.of.length > 0)
@@ -1163,7 +1163,7 @@ function buildNode(lane: LaneView): HTMLElement {
 /** Repaint a card in place. Text writes are guarded so an unchanged poll costs nothing and never
  *  restarts a running glow animation. */
 function paintNode(card: HTMLElement, lane: LaneView): void {
-  // P-STUCK-SHOW.1 (ADR-0490): a likely-stuck call turns the spoke red; a call flat for half the threshold, amber.
+  // P-STUCK-SHOW.1 (ADR-0519): a likely-stuck call turns the spoke red; a call flat for half the threshold, amber.
   const shown = displayStatus(lane);
   const doubt = shown === "likely-stuck" || (lane.status === "working" && lane.progress?.liveness.flatMs !== undefined);
   const cls = `orbit-node lane-${shown}${doubt && shown === "working" ? " flat" : ""}${lane.promoted ? " promoted" : ""}${stalled.has(lane.id) ? " aos-stalled" : ""}`;
@@ -1173,7 +1173,7 @@ function paintNode(card: HTMLElement, lane: LaneView): void {
   card.title = `${lane.name}\n${lane.cwd}\n${lane.model}${doubt && lane.progress ? `\n\n${lane.progress.liveness.label}\n${lane.progress.liveness.detail}` : ""}`;
   setText(card, ".orbit-glance", spokeGlance(lane, statusEta())); // P-PROGRESS.3: the percent is opt-in
   setText(card, ".orbit-model", lane.model);
-  // P-HUB-PICK.1 (ADR-0470): every spoke names its codebase (hosted repo, git folder, or plain folder) in
+  // P-HUB-PICK.1 (ADR-0516): every spoke names its codebase (hosted repo, git folder, or plain folder) in
   // that codebase's color, so spokes on different repos never read alike.
   const sr = spokeRepo(lane);
   setText(card, ".orbit-repo-tag", sr.name);
@@ -1514,7 +1514,7 @@ async function openSwitchMenu(): Promise<void> {
   const mine = s ? hubLanes(s.lanes, s.hub) : [];
   if (current && s && !mine.some((l) => l.id === current)) { const cur = s.lanes.find((l) => l.id === current); if (cur) mine.push(cur); }
   const rows = switchEntries(mine, current);
-  // P-HUB-PICK.1 (ADR-0470): each spoke row names its codebase, and the other hubs are one click away.
+  // P-HUB-PICK.1 (ADR-0516): each spoke row names its codebase, and the other hubs are one click away.
   const repoById = new Map(mine.map((l) => [l.id, spokeRepo(l)]));
   const others = s ? hubEntries(s.lanes, s.hub).filter((h) => !h.current) : [];
   const hubRows = others.length

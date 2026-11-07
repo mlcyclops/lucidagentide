@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/controller/remote_policy.ts - P-CTRL-REMOTE.1 (ADR-0493): what a REMOTE controller lane may do on its
+// desktop/controller/remote_policy.ts - P-CTRL-REMOTE.1 (ADR-0498): what a REMOTE controller lane may do on its
 // own, and how a human on another machine approves the rest. Pure (no engine state), unit-tested.
 //
 // A remote lane is a controller lane whose pairing names an approver root (the owner's P-256 root public key,
@@ -15,13 +15,13 @@
 // sends changes it.
 //
 // A remote decision is valid only when the ENGINE verifies all of it: the approver's node certificate is signed
-// by the paired root (or, ADR-0494, by a delegate whose root-signed delegation it carries and whose limits it sits
+// by the paired root (or, ADR-0499, by a delegate whose root-signed delegation it carries and whose limits it sits
 // inside), carries role `hub` and scope `approve`, is in date and not revoked (the newest CRL the
 // engine has seen, which only moves forward); the decision is signed by that certificate's key, names this lane,
 // this ask id and this ask's digest, is in date, and was made against a CRL no newer than the engine holds.
 // The controller only carries the bytes. It can deny on its own (refusing is always safe) but never approve.
 //
-// User presence (ADR-0502): a pairing may require it. Then an ALLOW verifies only when the approver certificate
+// User presence (ADR-0507): a pairing may require it. Then an ALLOW verifies only when the approver certificate
 // names a presence key (`presence: {kind, spki}`, certified by the same root or delegate) and the decision carries
 // `presence`, that key's signature over `presenceChallenge(decision)`: a domain prefix and the sha256 of the
 // decision without that field, so the evidence is bound to this one decision (lane, ask, digest, approver, time)
@@ -29,7 +29,7 @@
 // Enclave key with user presence, or a key the hub unwraps only with its owner's password). A deny never needs it.
 // Evidence a decision carries is always checked.
 //
-// ADR-0505 (the add-on's RS-ID-01 and RS-CRL-01): a delegate-certified approver decides only for a spoke its
+// ADR-0510 (the add-on's RS-ID-01 and RS-CRL-01): a delegate-certified approver decides only for a spoke its
 // delegation covers. The pairing names the spoke's node id; the decision carries the spoke's own certificate, which
 // must verify under the same root (its own delegation chain included), name that node and sit inside the approver
 // delegation's label prefix, regions and classifications. A root-signed approver is unaffected. A delegation's
@@ -37,7 +37,7 @@
 // more than three days past it, every decision is refused until a fresh one arrives, and once a list with
 // `nextUpdate` is held, a newer one without it is never adopted. A legacy list (no `nextUpdate`) never goes stale.
 //
-// ADR-0508 (the add-on's RS-AUTHZ-02): EVERY approver, root-signed too, needs the paired spoke's own certificate with
+// ADR-0513 (the add-on's RS-AUTHZ-02): EVERY approver, root-signed too, needs the paired spoke's own certificate with
 // the decision, and its user must be cleared for that spoke's classification: unclassified and shareable need no
 // clearance, private and cui must each be in the user's clearances, and a certificate naming no user is cleared for
 // neither. A pairing without `spokeNode` accepts no decision until it is paired again.
@@ -74,7 +74,7 @@ export const DEFAULT_APPROVAL_HOURS = 8;
 export const MAX_APPROVAL_HOURS = 24;
 const MAX_DECISION_LIFETIME_SEC = 24 * 3600;
 const CLOCK_SKEW_SEC = 120;
-/** ADR-0505: a CRL is stale once now passes its nextUpdate by more than this. */
+/** ADR-0510: a CRL is stale once now passes its nextUpdate by more than this. */
 const CRL_GRACE_SEC = 3 * 86_400;
 const SERIAL_RE = /^[0-9a-f]{32}$/;
 
@@ -197,13 +197,13 @@ function openCompact(token: unknown, key: KeyObject): Record<string, unknown> | 
   } catch { return null; }
 }
 
-/** ADR-0505: `nextUpdate` (seconds), when the root promised the next list. Absent on a legacy CRL. */
+/** ADR-0510: `nextUpdate` (seconds), when the root promised the next list. Absent on a legacy CRL. */
 export interface CrlState { version: number; serials: string[]; nextUpdate?: number }
-/** ADR-0505, ADR-0508: `spokeCert`, the spoke's own compact certificate, which every decision needs (coverage of a
+/** ADR-0510, ADR-0513: `spokeCert`, the spoke's own compact certificate, which every decision needs (coverage of a
  *  delegate-certified approver, and every approver's clearance). */
 export interface DecisionInput { decision: string; cert: string; crl?: string; spokeCert?: string }
-/** `presence`: the pairing requires user-presence evidence on an allow (ADR-0502). `spokeNode`: the spoke node id
- *  the human paired (ADR-0505); without it no decision is accepted (ADR-0508). */
+/** `presence`: the pairing requires user-presence evidence on an allow (ADR-0507). `spokeNode`: the spoke node id
+ *  the human paired (ADR-0510); without it no decision is accepted (ADR-0513). */
 export interface Expected { lane: string; ask: string; digest: string; presence: boolean; spokeNode?: string }
 /** `presence`: the kind of presence key whose evidence verified, or null when the decision carried none. */
 export type DecisionResult =
@@ -223,13 +223,13 @@ export function verifyRemoteDecision(input: DecisionInput, rootSpki: string, hel
     if (!c || c.v !== 1 || c.typ !== "lucid-crl" || c.root !== rootId || !isInt(c.version) || !Array.isArray(c.serials) || !c.serials.every((s) => typeof s === "string" && SERIAL_RE.test(s))
       || (c.nextUpdate !== undefined && (!isInt(c.nextUpdate) || !isInt(c.iat) || c.nextUpdate <= c.iat)))
       return { ok: false, reason: "the CRL is not signed by the approver root" };
-    // ADR-0505: once a list with nextUpdate is held, a newer one without it is never adopted (a legacy list would
+    // ADR-0510: once a list with nextUpdate is held, a newer one without it is never adopted (a legacy list would
     // switch the staleness check off).
     if (c.version > held.version && (held.nextUpdate === undefined || c.nextUpdate !== undefined))
       crl = { version: c.version, serials: c.serials as string[], ...(isInt(c.nextUpdate) ? { nextUpdate: c.nextUpdate } : {}) };
   }
   // A valid newer CRL is kept even when the decision is refused: revocation news is never thrown away.
-  // ADR-0505: a list past its nextUpdate plus the grace may hide a revocation a relay withholds, so the engine
+  // ADR-0510: a list past its nextUpdate plus the grace may hide a revocation a relay withholds, so the engine
   // refuses every decision until a fresh one arrives. A legacy list (no nextUpdate) never goes stale.
   const r: CheckResult = crl.nextUpdate !== undefined && nowSec > crl.nextUpdate + CRL_GRACE_SEC
     ? { ok: false, reason: "the approver root's revocation list is out of date; publish a fresh one" }
@@ -249,12 +249,12 @@ function checkDecision(input: DecisionInput, root: KeyObject, rootId: string, cr
   if (typeof cert.serial !== "string" || crl.serials.includes(cert.serial)) return { ok: false, reason: "the approver certificate is revoked" };
   const approverKey = p256FromSpki(cert.spki);
   if (!approverKey || typeof cert.node !== "string" || nodeIdOf(Buffer.from(String(cert.spki), "base64url")) !== cert.node) return { ok: false, reason: "the approver certificate key does not match its node id" };
-  // ADR-0505: a delegate-certified approver acts only on a spoke its delegation covers. The engine knows which
+  // ADR-0510: a delegate-certified approver acts only on a spoke its delegation covers. The engine knows which
   // spoke from the pairing (the node id the human paired) and learns its label, region and classification from
   // the spoke's own certificate, which must verify under the same root.
   const spoke = expected.spokeNode === undefined ? null : openSpokeCert(input.spokeCert, root, rootId, crl, nowSec);
   if (opened.delegation && (!spoke || spoke.node !== expected.spokeNode || spokeOutsideDelegation(opened.delegation.limits, spoke))) return { ok: false, reason: "the approver's delegation does not cover this spoke" };
-  // ADR-0508 (the add-on's RS-AUTHZ-02): every approver, root-signed too, decides only with the paired spoke's own
+  // ADR-0513 (the add-on's RS-AUTHZ-02): every approver, root-signed too, decides only with the paired spoke's own
   // certificate, and only when its user is cleared for that spoke's classification (private and cui must each be
   // in the user's clearances; a certificate that names no user is cleared for neither). A pairing that names no
   // spoke accepts no decision until it is paired again with spokeNode.
@@ -272,7 +272,7 @@ function checkDecision(input: DecisionInput, root: KeyObject, rootId: string, cr
   if (!isInt(d.iat) || !isInt(d.exp) || d.iat > nowSec + CLOCK_SKEW_SEC || d.exp <= nowSec || d.exp - d.iat > MAX_DECISION_LIFETIME_SEC) return { ok: false, reason: "the decision is not in date" };
   if (!isInt(d.crl) || d.crl > crl.version) return { ok: false, reason: `the approver saw CRL v${String(d.crl)}; send that CRL with the decision` };
 
-  // ADR-0502: user presence. The certificate's presence key is certified with the hub; its evidence is checked
+  // ADR-0507: user presence. The certificate's presence key is certified with the hub; its evidence is checked
   // whenever a decision carries it, and required on an allow when the pairing says so.
   const presenceKey = cert.presence === undefined ? null : presenceKeyOf(cert.presence);
   if (cert.presence !== undefined && !presenceKey) return { ok: false, reason: "the approver certificate names a malformed presence key" };
@@ -287,7 +287,7 @@ function checkDecision(input: DecisionInput, root: KeyObject, rootId: string, cr
   return { ok: true, allow: d.allow, approver: cert.node, label: typeof cert.label === "string" ? cert.label.slice(0, 64) : "", presence };
 }
 
-// ── Delegated approver certificates (ADR-0494, amends ADR-0493) ────────────────────────────────────────
+// ── Delegated approver certificates (ADR-0499, amends ADR-0498) ────────────────────────────────────────
 //
 // The add-on's phase F2 lets the owner root certify a delegate (a team or site key) with powers and limits. The
 // delegate signs hub certificates inside them, and its root-signed delegation travels inside every certificate it
@@ -317,13 +317,13 @@ interface Delegation {
   limits: DelegationLimits;
   iat: number; exp: number;
 }
-/** ADR-0505: `users`, the exact emails whose hubs the delegate may certify (the add-on's RS-ID-01 fix). */
+/** ADR-0510: `users`, the exact emails whose hubs the delegate may certify (the add-on's RS-ID-01 fix). */
 interface DelegationLimits {
   maxDays: number; roles?: string[]; scopes?: string[]; labelPrefix?: string; emailDomains?: string[]; users?: string[]; regions?: string[]; classifications?: string[];
 }
 /** The user a delegated hub certificate names, as `userProblem` admits it. */
 interface UserClaim { id: string; email: string; name?: string; clearances?: string[] }
-/** What a spoke certificate says about where the spoke sits, the fields a delegation's coverage reads (ADR-0505). */
+/** What a spoke certificate says about where the spoke sits, the fields a delegation's coverage reads (ADR-0510). */
 interface SpokeCoverage { node: string; label: string; region?: string; classification?: string }
 /** Every limit list and what each entry must be. */
 const LIMIT_LISTS: Record<string, (s: string) => boolean> = {
@@ -374,9 +374,9 @@ function openDelegated(token: unknown, root: KeyObject, rootId: string, crl: Crl
   return { ok: true, cert: c, delegation: d };
 }
 
-/** The approver certificate's payload: root-signed (the ADR-0493 path), or signed by a delegate whose delegation
- *  the root signed (ADR-0494). Dates, revocation, role, scope and key of the certificate itself are checked by
- *  the caller on both paths; ADR-0505's spoke coverage of a delegated one too. */
+/** The approver certificate's payload: root-signed (the ADR-0498 path), or signed by a delegate whose delegation
+ *  the root signed (ADR-0499). Dates, revocation, role, scope and key of the certificate itself are checked by
+ *  the caller on both paths; ADR-0510's spoke coverage of a delegated one too. */
 function openApproverCert(token: unknown, root: KeyObject, rootId: string, crl: CrlState, nowSec: number): Opened {
   const direct = openCompact(token, root);
   if (direct) return { ok: true, cert: direct, delegation: null };
@@ -410,7 +410,7 @@ function openApproverCert(token: unknown, root: KeyObject, rootId: string, crl: 
   return { ok: true, cert: c, delegation: d };
 }
 
-/** ADR-0505: the spoke's own certificate as the add-on's TrustStore.verifyCert admits it (root-signed, or signed by
+/** ADR-0510: the spoke's own certificate as the add-on's TrustStore.verifyCert admits it (root-signed, or signed by
  *  a delegate with the spokes or enroll power and inside that delegation's limits), in date, not revoked and with
  *  a key that hashes to its node id; null otherwise. Only where it sits is returned: that is all coverage reads. */
 function openSpokeCert(token: unknown, root: KeyObject, rootId: string, crl: CrlState, nowSec: number): SpokeCoverage | null {
@@ -441,7 +441,7 @@ function openSpokeCert(token: unknown, root: KeyObject, rootId: string, crl: Crl
   return spoke;
 }
 
-/** ADR-0508: may this user approve on a spoke of this classification (the add-on's clearedFor)? Unclassified and
+/** ADR-0513: may this user approve on a spoke of this classification (the add-on's clearedFor)? Unclassified and
  *  shareable need no clearance; private and cui must each be listed in the user's clearances. */
 function clearedFor(user: UserClaim | undefined, classification: string | undefined): boolean {
   if (classification === undefined || classification === "shareable") return true;
@@ -485,7 +485,7 @@ function userProblem(u: Record<string, unknown>): string | null {
   return null;
 }
 
-// ── User presence on approve (ADR-0502) ────────────────────────────────────────────────────────────────
+// ── User presence on approve (ADR-0507) ────────────────────────────────────────────────────────────────
 //
 // The add-on's remote-spoke/src/presence.ts: a hub's presence key is made on that machine by the platform's
 // user-verification store and used only after a gesture. `windows-hello`: a Windows Hello key credential

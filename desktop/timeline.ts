@@ -67,7 +67,7 @@ export function readLaneLedger(path: string = LANE_LEDGER_PATH()): LaneSessionRe
   return out;
 }
 
-/** P-SESS-SEARCH.1 (ADR-0469): session id -> the name of the lane that ran it, for the sidebar's spoke
+/** P-SESS-SEARCH.1 (ADR-0515): session id -> the name of the lane that ran it, for the sidebar's spoke
  *  filter. The ledger is append-only, so the last line for a session carries its freshest name. The
  *  sidebar polls; the parse is cached on the ledger's mtime+size. No ledger = no known spokes. */
 let ledgerNames: { path: string; key: string; names: Map<string, string> } | null = null;
@@ -191,7 +191,7 @@ export function buildTimeline(sessions: SessionRow[], ledger: LaneSessionRecord[
 /** The live listing dev.ts serves: corpus scan (async, index-cached, shared across concurrent and
  *  back-to-back callers) + ledger read + pure merge. */
 export async function listTimeline(opts: TimelineQuery = {}, root: string = sessionsRoot(), ledgerPath?: string): Promise<TimelinePage> {
-  // P-SESS-ARCHIVE.1 (ADR-0471): archived sessions stay on the timeline (and so stay recoverable as ghost
+  // P-SESS-ARCHIVE.1 (ADR-0517): archived sessions stay on the timeline (and so stay recoverable as ghost
   // spokes); recovering one restores its file first (dev.ts /api/fleet/spawn).
   const [active, archived] = await Promise.all([listAllSessions(root), listAllSessions(archiveRootFor(root))]);
   return buildTimeline([...active, ...archived], readLaneLedger(ledgerPath), opts);

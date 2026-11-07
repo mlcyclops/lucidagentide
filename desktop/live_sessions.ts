@@ -3,7 +3,7 @@
 
 // desktop/live_sessions.ts
 //
-// P-SESS-ARCHIVE.1 (ADR-0471): which sessions ANY running LUCID engine holds. Archiving moves a session's
+// P-SESS-ARCHIVE.1 (ADR-0517): which sessions ANY running LUCID engine holds. Archiving moves a session's
 // file; omp does not keep that file open (measured: a rename succeeds while the session is loaded), so the
 // OS never refuses the move, and an engine still holding the session would append to a recreated file and
 // split it in two. Each engine knows only its own Main and spokes, and engines do not share a data folder

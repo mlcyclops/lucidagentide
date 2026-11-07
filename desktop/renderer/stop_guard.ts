@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/stop_guard.ts - P-STOP-GUARD.1 (ADR-0489): a click on the composer button stops a turn
+// desktop/renderer/stop_guard.ts - P-STOP-GUARD.1 (ADR-0518): a click on the composer button stops a turn
 // only when the user aimed it at Stop.
 //
 // The composer's one button is Send while idle and Stop while a turn runs (P-ACP.4), and it changes face

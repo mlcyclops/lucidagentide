@@ -37,7 +37,7 @@ import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModel
 import type { ApprovalScope, FleetStatusView, LaneEvent, LaneImage, LaneView, LucidBridge } from "./bridge.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts";
 import { openRepoDetails, paintRepoChip } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): the lane's repo + push target
-import { repoSections, spokeRepo } from "./spoke_repo.ts"; // P-HUB-PICK.1 (ADR-0470): codebase name, color and the By repo grouping
+import { repoSections, spokeRepo } from "./spoke_repo.ts"; // P-HUB-PICK.1 (ADR-0516): codebase name, color and the By repo grouping
 import { githubPickNote, mountRepoPicker, repoPickerHtml } from "./repo_picker.ts"; // P-REPO.1: pick a repo instead of typing a URL
 import { displayStatus, laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order + wording + counts shared with the phone's fleet bar
 // P-FLEET.L7: the transcript MODEL - stable ids, the chip glance line, the chevron body, the clipboard text.
@@ -156,7 +156,7 @@ let layout: LaneLayout = { order: [], size: {} };
 /** P-FLEET.L18: named groups (presentation only). Loaded with the layout, persisted beside it. */
 let groups: LaneGroups = loadGroups(null);
 const FLEET_GROUPS_KEY = "lucid.fleetGroups.v1";
-/** P-HUB-PICK.1 (ADR-0470): section the grid by codebase instead of by named group. Persisted. */
+/** P-HUB-PICK.1 (ADR-0516): section the grid by codebase instead of by named group. Persisted. */
 const FLEET_BY_REPO_KEY = "lucid.fleetByRepo";
 let groupByRepo = false;
 
@@ -174,7 +174,7 @@ function persistGroups(): void {
   storage().set(FLEET_GROUPS_KEY, saveGroups(groups));
 }
 
-/** P-HUB-PICK.1 (ADR-0470): the grid header's By repo toggle. */
+/** P-HUB-PICK.1 (ADR-0516): the grid header's By repo toggle. */
 function paintByRepo(): void {
   const b = dock ? ($("[data-fleet-byrepo]", dock) as HTMLElement | null) : null;
   if (!b) return;
@@ -394,7 +394,7 @@ function applyOrder(grid: HTMLElement): void {
   // P-FLEET.L18: the flat order folds into GROUP sections (named groups first, ungrouped tail); within
   // a section the relative order is still layout.order, so drag-to-reorder semantics survive intact.
   const live = layout.order.filter((id) => runs.get(id)?.card);
-  // P-HUB-PICK.1 (ADR-0470): "By repo" sections the grid by codebase instead of by named group. A view, not
+  // P-HUB-PICK.1 (ADR-0516): "By repo" sections the grid by codebase instead of by named group. A view, not
   // an assignment: the named groups are kept and come back when it is turned off.
   if (groupByRepo) {
     const repoSecs = repoSections(live, (id) => { const r = runs.get(id); return r ? spokeRepo(r.view) : null; });
@@ -868,7 +868,7 @@ function paintProgress(run: LaneRun): void {
   const full = statusDetail() === "full";
   // P-LIVENESS.1 (ADR-0418): a call marked likely stuck is something the user must know too.
   const urgent = p?.liveness.state === "dead" || p?.liveness.state === "stuck";
-  // P-STUCK-SHOW.1 (ADR-0490): an open call with no activity yet is named (amber) before it is marked stuck.
+  // P-STUCK-SHOW.1 (ADR-0519): an open call with no activity yet is named (amber) before it is marked stuck.
   const flat = !urgent && p?.liveness.flatMs !== undefined;
   strip.hidden = (!p && !w) || (!full && !urgent && !flat && !w);
   strip.classList.toggle("quiet", !full);
@@ -960,7 +960,7 @@ function paintFrame(run: LaneRun): void {
     name.title = `${v.name || v.id} \u00b7 ${v.status} \u00b7 ${v.turns} turns${v.respawns ? ` \u00b7 respawned ${v.respawns}\u00d7, memory carried` : ""}`;
   }
   const cwd = $("[data-fleet-cwd]", card) as HTMLElement | null;
-  // P-HUB-PICK.1 (ADR-0470): the codebase, not just the folder, in the same color as on the orbit and in
+  // P-HUB-PICK.1 (ADR-0516): the codebase, not just the folder, in the same color as on the orbit and in
   // the Hubs menu. The folder stays in the tooltip.
   if (cwd) {
     const sr = spokeRepo(v);
@@ -1908,7 +1908,7 @@ function onClick(ev: Event): void {
   const hubBtn = t.closest("[data-fleet-hub]") as HTMLButtonElement | null;
   if (hubBtn) { void openHubFrom(hubBtn, () => deps?.hubOpen()); return; }
   if (t.closest("[data-fleet-pin]")) { setFleetHome("grid"); paintGridPin(); return; }
-  if (t.closest("[data-fleet-byrepo]")) { // P-HUB-PICK.1 (ADR-0470)
+  if (t.closest("[data-fleet-byrepo]")) { // P-HUB-PICK.1 (ADR-0516)
     groupByRepo = !groupByRepo;
     storage().set(FLEET_BY_REPO_KEY, groupByRepo ? "1" : "0");
     paintByRepo();

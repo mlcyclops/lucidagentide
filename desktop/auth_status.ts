@@ -22,7 +22,7 @@ import type { VaultStatus } from "./engine_vault.ts";
 // non-sensitive (a project id, a region, a resource name) and are echoed back to pre-fill the input; a
 // secret field is masked like the primary key.
 // `options` makes the field a closed choice (a select in the card; the first option is the default when
-// unset), for a mode switch such as Azure's sign-in (ADR-0499).
+// unset), for a mode switch such as Azure's sign-in (ADR-0504).
 export interface ProviderField { env: string; label: string; placeholder?: string; secret?: boolean; options?: { value: string; label: string }[] }
 export interface ProviderFieldAuth extends ProviderField { set: boolean; value?: string; last4?: string }
 
@@ -81,7 +81,7 @@ export const MAJORS: Provider[] = [
   // either AZURE_OPENAI_RESOURCE_NAME (→ https://<name>.openai.azure.com/openai/v1) or a full
   // AZURE_OPENAI_BASE_URL; API version defaults to "v1"; an optional deployment-name map aliases model
   // ids to Azure deployment names. All ride the same setKey→env→omp seam as any key.
-  // ADR-0499: AZURE_OPENAI_AUTH_MODE switches the sign-in to Microsoft Entra ID (the VM's managed identity,
+  // ADR-0504: AZURE_OPENAI_AUTH_MODE switches the sign-in to Microsoft Entra ID (the VM's managed identity,
   // optionally a user-assigned one by client id, or the signed-in Azure CLI); harness/omp/azure_entra_extension.ts
   // then signs each request with a short-lived token held in omp's memory, so the key box stays empty.
   { id: "azure", name: "Azure · OpenAI", env: "AZURE_OPENAI_API_KEY", oauthId: "", canOauth: false,

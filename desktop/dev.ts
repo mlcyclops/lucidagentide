@@ -15,7 +15,7 @@ import { join, dirname, basename } from "node:path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { ndjsonStream } from "./chat_stream.ts";
 import { ENGINE_EXIT_PORT_BUSY } from "./engine_boot.ts"; // P-PORTGUARD.2: the bind-failure exit code main classifies on
-import { discoveryDir, discoveryPath, nonceDir, noncePath, removeDiscovery, resolveNonceGroup, writeDiscovery, writeNonceRecord, type EngineNonceRecord } from "./engine_discovery.ts"; // P-TUI.0 (ADR-0419), ADR-0498
+import { discoveryDir, discoveryPath, nonceDir, noncePath, removeDiscovery, resolveNonceGroup, writeDiscovery, writeNonceRecord, type EngineNonceRecord } from "./engine_discovery.ts"; // P-TUI.0 (ADR-0419), ADR-0503
 import { parentAlive, parentWatchConfig } from "./parent_watch.ts"; // P-PORTGUARD.2: never outlive the Electron main
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
@@ -130,7 +130,7 @@ import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, TURN_ALREADY_RUNN
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
-import { displayStatus } from "./collab/fleet_status.ts"; // P-STUCK-SHOW.3 (ADR-0492): phone guests see likely-stuck spokes too
+import { displayStatus } from "./collab/fleet_status.ts"; // P-STUCK-SHOW.3 (ADR-0521): phone guests see likely-stuck spokes too
 import { sessionLive, withLiveState, type SessionLiveSpoke } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
 import { addInterject, addPeerNote, awaitPeerReply, carryPendingNotes, drainInterjects, drainPeerNotes, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes; P-OWN.1: peer notes
 import { CheckoutRegistry, gitDirtyPaths, type CheckoutSession } from "./checkout_registry.ts"; // P-OWN.1: who is writing in which checkout
@@ -568,7 +568,7 @@ import { kbScanner, kbStore, kgEntry, listKgs, activeKgId, createKg, renameKg, s
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.ts"
-import { inspectPluginFile, installPluginFile, installPluginFromUrl, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0500)
+import { inspectPluginFile, installPluginFile, installPluginFromUrl, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505)
 import { PluginRuntime, resolvePluginNode } from "./plugins/runtime.ts" // P-PLUGINS.2 (ADR-0462)
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
@@ -597,11 +597,11 @@ function markWorkspaceSetupAsked(path: string): void {
   saveSettings(s);
 }
 import { EVENTS_LOG_PATH, recordSkillActivated } from "./skills_log.ts";
-import { auditTierVerdict, CONTROLLER_ROUTES, forgetControllerLane, handleController, restoreControllerLanes, type ControllerDeps } from "./controller/routes.ts"; // P-CTRL.2 (ADR-0438); lane lifecycle ADR-0495/0496
-import { ControllerLaneStore } from "./controller/lane_store.ts"; // ADR-0496: controller lanes survive a restart
-import { OFF_TASK_SYSTEM, offTaskPrompt, parseOffTask } from "./controller/remote_policy.ts"; // P-CTRL-REMOTE.1 (ADR-0493)
+import { auditTierVerdict, CONTROLLER_ROUTES, forgetControllerLane, handleController, restoreControllerLanes, type ControllerDeps } from "./controller/routes.ts"; // P-CTRL.2 (ADR-0438); lane lifecycle ADR-0500/0501
+import { ControllerLaneStore } from "./controller/lane_store.ts"; // ADR-0501: controller lanes survive a restart
+import { OFF_TASK_SYSTEM, offTaskPrompt, parseOffTask } from "./controller/remote_policy.ts"; // P-CTRL-REMOTE.1 (ADR-0498)
 import { PairingStore, type Pairing } from "./controller/store.ts"; // P-CTRL.2: the hashed pairing store
-import { handleRemoteSpokes, REMOTE_SPOKES_PLUGIN, remoteSpokesPanelUrl, type RemoteSpokesDeps } from "./remote_spokes.ts"; // P-IDE-SPOKES.1 (ADR-0501)
+import { handleRemoteSpokes, REMOTE_SPOKES_PLUGIN, remoteSpokesPanelUrl, type RemoteSpokesDeps } from "./remote_spokes.ts"; // P-IDE-SPOKES.1 (ADR-0506)
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
 import { addReportToKg, agentRecall, agentRetain, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unrelateEntities } from "./personal.ts";
@@ -949,7 +949,7 @@ setInterval(() => {
         id: l.id, name: l.name, status: l.status as string, cwd: basename(l.cwd), turns: l.turns,
         lastActivityAt: l.lastActivityAt,
         ...(l.pendingApproval ? { pendingApproval: { summary: l.pendingApproval.summary, kind: l.pendingApproval.kind } } : {}),
-        ...(displayStatus(l) === "likely-stuck" ? { stuck: true as const } : {}), // P-STUCK-SHOW.3 (ADR-0492)
+        ...(displayStatus(l) === "likely-stuck" ? { stuck: true as const } : {}), // P-STUCK-SHOW.3 (ADR-0521)
       }));
       const body = JSON.stringify(lanes);
       const stamp = `${body}#${count}`;
@@ -1801,7 +1801,7 @@ const fleet: FleetLaneManager = new FleetLaneManager({
   onWrite: (lane, path) => checkouts.recordWrite({ id: lane.id, name: lane.name }, path, lane.cwd),
   preface: (lane): Promise<string> => checkouts.briefingFor(lane.id, lane.cwd),
   repo: { observe: observeToolCall, peek: peekRepoContext }, // P-REPO.1 (ADR-0406)
-  // P-CTRL-REMOTE.1 (ADR-0493): the off-task check runs as a one-shot completion on the lane's own model (the
+  // P-CTRL-REMOTE.1 (ADR-0498): the off-task check runs as a one-shot completion on the lane's own model (the
   // util connection, never the chat turn). Tighten only: "" (any failure) parses as unknown, which parks.
   offTask: async (lane, action) => parseOffTask(await backend.complete(OFF_TASK_SYSTEM, offTaskPrompt(lane.assignment, action), { model: lane.model, idleMs: 20_000 })),
   // Throws when the line cannot be written; the fleet then refuses the action instead of running it unaudited.
@@ -1862,7 +1862,7 @@ const jobScheduler = new JobScheduler({
     emitSecurityEvent({ category: "exec", type: "scheduled_job", decision: e.outcome === "error" || e.outcome === "timeout" || e.outcome === "suspended" ? "block" : "allow", severity: e.outcome === "started" || e.outcome === "ok" ? "info" : "medium", tool: "scheduled_job", reason: `${e.name} [${e.jobId}] ${e.outcome}${e.laneId ? ` lane ${e.laneId}` : ""}${e.note ? `: ${e.note}` : ""}`.slice(0, 200) });
   },
 });
-/** P-SESS-ARCHIVE.1 (ADR-0471): sessions archiving must never move: Main's, and every spoke's (a stopped spoke
+/** P-SESS-ARCHIVE.1 (ADR-0517): sessions archiving must never move: Main's, and every spoke's (a stopped spoke
  *  resumes its session on respawn). Moving a file omp appends to would split the session in two. */
 function ownSessionIds(): Set<string> {
   const ids = new Set<string>();
@@ -2253,7 +2253,7 @@ function agentScanner(): ScannerClient {
 
 // P-CTRL.2 (ADR-0438): the external-controller policy core. Pairings (hashed tokens, fixed workspace, owned
 // lanes) persist owner-only under the engine data root; the prompt scan reuses the fail-closed agent scanner.
-// ADR-0496: each controller lane's restart record sits beside the pairings. The restore gate is shut from here,
+// ADR-0501: each controller lane's restart record sits beside the pairings. The restore gate is shut from here,
 // before the server binds, until the boot-time restore (near the end of this file) settles, so a controller that
 // asks in between waits for the full lane list instead of reading a half-restored one.
 const controllerRestore = Promise.withResolvers<void>();
@@ -2261,7 +2261,7 @@ const controllerDeps: ControllerDeps = {
   store: new PairingStore(join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "controller-pairings.json")),
   lanes: new ControllerLaneStore(join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "controller-lanes.json")),
   fleet,
-  // ADR-0506: a controller may name one of the models the picker lists. checkerModelInfo().options is the backend's
+  // ADR-0511: a controller may name one of the models the picker lists. checkerModelInfo().options is the backend's
   // accessible list (platform, AskSage and managed-policy narrowing applied), not only the checker's.
   models: () => backend.checkerModelInfo().options.map((o) => o.value),
   scan: (text) => scanAndDecide(agentScanner(), text),
@@ -2269,7 +2269,7 @@ const controllerDeps: ControllerDeps = {
   restoring: controllerRestore.promise,
 };
 
-// P-IDE-SPOKES.1 (ADR-0501): the remote-spokes hub plugin, reached over its /host/* routes with the token the
+// P-IDE-SPOKES.1 (ADR-0506): the remote-spokes hub plugin, reached over its /host/* routes with the token the
 // plugin runtime minted for this engine. Recalled text and parked actions pass the same fail-closed scanner.
 const remoteSpokesDeps: RemoteSpokesDeps = {
   endpoint: () => plugins.hostEndpoint(REMOTE_SPOKES_PLUGIN),
@@ -5161,7 +5161,7 @@ return Bun.serve({
         // state), so the sidebar shows what is running before anyone clicks.
         const main = { sessionId: backend.currentSessionId(), busy: backend.switchBlocker() !== null };
         const lanes = fleet.owners();
-        // P-SESS-SEARCH.1 (ADR-0469): sessions a fleet lane ran are hidden unless `spokes=1`; the session
+        // P-SESS-SEARCH.1 (ADR-0515): sessions a fleet lane ran are hidden unless `spokes=1`; the session
         // Main holds and the lane the main composer is driving stay listed either way.
         const keep = new Set<string>();
         if (main.sessionId) keep.add(main.sessionId);
@@ -5196,7 +5196,7 @@ return Bun.serve({
         if (held) return sessionHeld(held);
         const busy = force === true ? null : backend.switchBlocker();
         if (busy) return switchRefused(busy, backend.currentSessionId());
-        // P-SESS-ARCHIVE.1 (ADR-0471): omp loads only from the sessions folder, and a load it cannot find is
+        // P-SESS-ARCHIVE.1 (ADR-0517): omp loads only from the sessions folder, and a load it cannot find is
         // swallowed (acp_backend.loadSession), so an archived session comes back BEFORE the load.
         const back = restoreSession(String(id));
         // Not 409: that status means "busy or held" to the client. Any other non-2xx is a plain failed switch.
@@ -5205,7 +5205,7 @@ return Bun.serve({
         publishLiveSessions(ownSessionIds()); // other engines must not archive it from this moment
         return json({ ok: true });
       }
-      // P-SESS-ARCHIVE.1 (ADR-0471): archive / restore one session, the Archived group, the auto-archive rule.
+      // P-SESS-ARCHIVE.1 (ADR-0517): archive / restore one session, the Archived group, the auto-archive rule.
       if (p === "/api/session/archive" && req.method === "POST") {
         const { id } = await readBody<{ id?: unknown }>(req);
         const sid = String(id ?? "");
@@ -5971,7 +5971,7 @@ return Bun.serve({
         const r = await installPluginFromUrl(String(b.url ?? ""), String(b.expectId ?? ""), { beforeSwitch: async (id) => { await plugins.stop(id); } });
         return json({ ok: true, data: r.ok ? { ok: true, id: r.id, version: r.version } : r });
       }
-      // P-PLUGINS.7 (ADR-0500): a private install from a .lplugin.zip the user picked. inspect-file reads it
+      // P-PLUGINS.7 (ADR-0505): a private install from a .lplugin.zip the user picked. inspect-file reads it
       // and installs nothing; install-file installs exactly the bytes the user reviewed (sha256) and, when
       // unsigned, only with acceptUnsigned. Same gates and runtime as a store install.
       if (p === "/api/plugins/inspect-file" && req.method === "POST") {
@@ -5989,7 +5989,7 @@ return Bun.serve({
         const b = await readBody<{ id?: unknown }>(req);
         const id = String(b.id ?? "");
         const started = await plugins.start(id);
-        // ADR-0509: the hub plugin's panel opens only with a one-time bootstrap secret it minted for this engine,
+        // ADR-0514: the hub plugin's panel opens only with a one-time bootstrap secret it minted for this engine,
         // framed only by this window (engineAppUrl's origin).
         if (started.ok && id === REMOTE_SPOKES_PLUGIN) return json({ ok: true, data: await remoteSpokesPanelUrl(remoteSpokesDeps, `http://127.0.0.1:${ENGINE_PORT}`) });
         return json({ ok: true, data: started });
@@ -6411,7 +6411,7 @@ return Bun.serve({
         const laneId = String(b.laneId ?? "");
         const existed = fleet.laneRunning(laneId) !== null;
         const r = fleet.remove(laneId, b.force === true);
-        // ADR-0495: a dismissed controller lane is over for its controller too (it does not come back after a
+        // ADR-0500: a dismissed controller lane is over for its controller too (it does not come back after a
         // restart, and a remote lane's review worktree is committed onto its branch and removed).
         if (existed && r.ok) await forgetControllerLane(controllerDeps, laneId);
         return json({ ok: true, data: r });
@@ -6998,7 +6998,7 @@ return Bun.serve({
 if (!process.env.LUCID_ENGINE_NONCE) process.env.LUCID_ENGINE_NONCE = randomBytes(16).toString("hex");
 const ENGINE_PORT: number = server.port ?? PORT; // Bun types port as optional (unix-socket servers); a TCP bind always has one
 const DISCOVERY_PATH = discoveryPath(discoveryDir(process.env), ENGINE_PORT);
-// ADR-0498: the nonce-only record (no UI token) for controller clients, owner-only by default; shared with
+// ADR-0503: the nonce-only record (no UI token) for controller clients, owner-only by default; shared with
 // LUCID_DISCOVERY_NONCE_GROUP (0640) in LUCID_DISCOVERY_NONCE_DIR when the operator names them.
 const NONCE_PATH = noncePath(nonceDir(process.env), ENGINE_PORT);
 const LAUNCH: EngineNonceRecord = {
@@ -7038,7 +7038,7 @@ process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retr
 // P-FLEET.L1: the master agent's fleet_status tool (omp subprocess) GETs this to see local lane status -
 // metadata only (lane replies render in the fleet dashboard, never through this URL).
 process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/status?t=${AGENT_TOKEN}`;
-startLiveHeartbeat(); // P-SESS-ARCHIVE.1 (ADR-0471): tell other engines which sessions must not be archived
+startLiveHeartbeat(); // P-SESS-ARCHIVE.1 (ADR-0517): tell other engines which sessions must not be archived
 scheduleAutoArchive(); // P-SESS-ARCHIVE.1: only does anything while the rule is on
 // P-SANDBOX.8: the sandbox_grant_dir tool (omp subprocess) POSTs its user-approved {path,mode,reason}
 // claim here. Same token'd convention as LUCID_FLEET_STATUS_URL; the endpoint applies NOTHING without a
@@ -7111,7 +7111,7 @@ await refreshRecall();
 backend.startAutomationScheduler();
 // P-SCHED.1 (ADR-0443): the scheduled LANE jobs tick beside it, same envelope (only while the app runs).
 jobScheduler.start();
-// ADR-0496: controller lanes the previous engine ran come back idle on their own lane ids and omp sessions (after
+// ADR-0501: controller lanes the previous engine ran come back idle on their own lane ids and omp sessions (after
 // the child env above is set, so a restored lane is wired like a new one). Detached: the bind never waits on omp;
 // controller routes do (the gate set with controllerDeps), and open when this settles, success or not.
 void restoreControllerLanes(controllerDeps).then(

@@ -1,18 +1,18 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/remote_spokes_model.ts - P-IDE-SPOKES.1 (ADR-0501): remote spokes as the IDE sees them.
+// desktop/renderer/remote_spokes_model.ts - P-IDE-SPOKES.1 (ADR-0506): remote spokes as the IDE sees them.
 //
 // Pure and DOM-free, so the engine (desktop/remote_spokes.ts) and the orbit share one model. The source of truth
 // is the add-on hub (the remote-spokes server plugin, add-on ADR-A051): its /host/spokes summary carries the
 // hub's certificate scopes and, per spoke, its own answers to `capabilities` and `status`. Everything a spoke
 // wrote (task names, model ids, errors) is untrusted: it is validated and clipped here and only ever shown as text.
-// ADR-0503 adds the hub's optional per-spoke facts (answer time, route, the spoke certificate's region and
+// ADR-0508 adds the hub's optional per-spoke facts (answer time, route, the spoke certificate's region and
 // classification, the spoke's `models` answer) and the Start-a-task selector's order (`deployChoices`).
-// ADR-0504 adds the spoke's machine (`host`) and lane policy from `capabilities`, the hub's `lastSeen`,
+// ADR-0509 adds the spoke's machine (`host`) and lane policy from `capabilities`, the hub's `lastSeen`,
 // `silentSince` and kept `alerts`, the `silent` state, the alert lines (`spokeAlerts`) and Resume for a task whose
 // turn a restart interrupted (`RESUME_TEXT`, sent only on the human's click).
-// ADR-0507 adds the hub's optional `deactivated` mark: a spoke its owner took offline on purpose (shipped, lent,
+// ADR-0512 adds the hub's optional `deactivated` mark: a spoke its owner took offline on purpose (shipped, lent,
 // unplugged) reads `deactivated`, in a dim tone, with no alert lines, and is never offered as a target.
 //
 // What a hub may do is what its certificate's scopes allow (add-on ADR-A044): recall reads (status, journal,
@@ -41,18 +41,18 @@ export interface RemoteTaskView {
 
 /** checking: not asked yet. offline: no reply in time. approval: an action is parked on a human. busy: a task is
  *  working. error: a task failed, or the spoke refused this hub's status read. idle: online and free. silent
- *  (ADR-0504): the hub reaches a relay but the spoke has not polled it for over 2 minutes, so it is probably down;
- *  this wins over every other state, since what the spoke said last is stale. deactivated (ADR-0507): the owner
+ *  (ADR-0509): the hub reaches a relay but the spoke has not polled it for over 2 minutes, so it is probably down;
+ *  this wins over every other state, since what the spoke said last is stale. deactivated (ADR-0512): the owner
  *  took the spoke offline on purpose and the hub neither asks nor alerts about it; this wins over silent too. */
 export type RemoteSpokeState = "checking" | "offline" | "approval" | "busy" | "error" | "idle" | "silent" | "deactivated";
 
-/** ADR-0507: the hub's planned-offline mark for a spoke (add-on `hub deactivate`), until `hub reactivate`. */
+/** ADR-0512: the hub's planned-offline mark for a spoke (add-on `hub deactivate`), until `hub reactivate`. */
 export interface RemoteDeactivatedView { since: number; reason: string }
 
-/** ADR-0504: one GPU the spoke's machine reports, with its memory when the driver tells it. */
+/** ADR-0509: one GPU the spoke's machine reports, with its memory when the driver tells it. */
 export interface RemoteGpuView { name: string; vramMiB: number | null }
 
-/** ADR-0504: the machine a spoke runs on, from its `capabilities` answer (add-on spoke host report). */
+/** ADR-0509: the machine a spoke runs on, from its `capabilities` answer (add-on spoke host report). */
 export interface RemoteHostView {
   os: string | null; arch: string | null; cpus: number | null; memMiB: number | null; diskFreeMiB: number | null;
   gpus: RemoteGpuView[];
@@ -60,15 +60,15 @@ export interface RemoteHostView {
   localModel: { host: string; reachable: boolean } | null;
 }
 
-/** ADR-0504: what bounds the spoke's lane count. Closed set. ADR-0505: `laptop`, a battery-capable machine whose
+/** ADR-0509: what bounds the spoke's lane count. Closed set. ADR-0510: `laptop`, a battery-capable machine whose
  *  owner's own apps keep their memory. */
 export const LANE_LIMITS = ["engine", "memory", "cpu", "gpu", "target", "config", "laptop"] as const;
 export type RemoteLaneLimit = (typeof LANE_LIMITS)[number];
 
-/** ADR-0504: the spoke's lane count, sized to its machine and where it is deployed, and why. */
+/** ADR-0509: the spoke's lane count, sized to its machine and where it is deployed, and why. */
 export interface RemoteLanePolicyView { max: number; limitedBy: RemoteLaneLimit; why: string | null }
 
-/** ADR-0504: the alerts a spoke seals to its hubs (add-on spoke alert note). Closed set. ADR-0505: `crl-stale` (the
+/** ADR-0509: the alerts a spoke seals to its hubs (add-on spoke alert note). Closed set. ADR-0510: `crl-stale` (the
  *  spoke's revocation list is past its nextUpdate plus grace, so it refuses drive and approve) and `cert-expiring`
  *  (14 days or less left on the spoke's certificate). */
 export const ALERT_KINDS = ["engine-restarted", "agent-restarted", "crashed", "turn-interrupted", "crl-stale", "cert-expiring"] as const;
@@ -76,7 +76,7 @@ export type RemoteAlertKind = (typeof ALERT_KINDS)[number];
 
 export interface RemoteAlertView { kind: RemoteAlertKind; at: number; detail: string; tasks: { id: string; name: string }[] }
 
-/** A signed-in frontier provider on a spoke and the model ids it offers there (ADR-0503). */
+/** A signed-in frontier provider on a spoke and the model ids it offers there (ADR-0508). */
 export interface RemoteFrontierView { provider: string; name: string; account: string | null; models: string[] }
 
 /** What a spoke can run: the default new tasks use, its local models, and its signed-in frontier providers. From
@@ -98,30 +98,30 @@ export interface RemoteSpokeView {
   lanes: { live: number; max: number; free: number } | null;
   tasks: RemoteTaskView[];
   checkedAt: number | null;
-  /** ADR-0503: the round trip of the hub's last `capabilities` request, including the spoke's mailbox poll. */
+  /** ADR-0508: the round trip of the hub's last `capabilities` request, including the spoke's mailbox poll. */
   latencyMs: number | null;
   via: RemoteVia | null;
-  /** ADR-0503: from the spoke certificate the hub holds (root- or delegate-signed), not from the spoke. */
+  /** ADR-0508: from the spoke certificate the hub holds (root- or delegate-signed), not from the spoke. */
   region: string | null;
   classification: RemoteClassification | null;
   certExpires: number | null;
   engineVersion: string | null;
   models: RemoteModelsView;
-  /** ADR-0504: from `capabilities`; null when the spoke did not report its machine (an older spoke). */
+  /** ADR-0509: from `capabilities`; null when the spoke did not report its machine (an older spoke). */
   host: RemoteHostView | null;
   lanePolicy: RemoteLanePolicyView | null;
-  /** ADR-0504: from the hub. The spoke's newest relay poll, and since when it has been silent (set only while the
+  /** ADR-0509: from the hub. The spoke's newest relay poll, and since when it has been silent (set only while the
    *  hub reaches a relay and the spoke has neither polled it nor answered the hub for over 2 minutes). */
   lastSeen: number | null;
   silentSince: number | null;
-  /** ADR-0504: the alerts the hub kept for this spoke, newest first (at most ALERTS_MAX). */
+  /** ADR-0509: the alerts the hub kept for this spoke, newest first (at most ALERTS_MAX). */
   alerts: RemoteAlertView[];
-  /** ADR-0507: from the hub; null unless the owner deactivated this spoke (and always null from an older plugin). */
+  /** ADR-0512: from the hub; null unless the owner deactivated this spoke (and always null from an older plugin). */
   deactivated: RemoteDeactivatedView | null;
   error?: string;
 }
 
-/** How the hub proves user presence on approve (ADR-0502, add-on ADR-A052): `password` needs the hub's password
+/** How the hub proves user presence on approve (ADR-0507, add-on ADR-A052): `password` needs the hub's password
  *  typed for every Approve (the orbit asks for it and the engine passes it through once); the platform kinds ask
  *  on the hub machine itself; `none` approves without evidence. null: not set up, or not reported. */
 export const HUB_PRESENCE = ["password", "windows-hello", "macos-secure-enclave", "none"] as const;
@@ -156,7 +156,7 @@ function mapTask(raw: unknown): RemoteTaskView | null {
   return out;
 }
 
-// ------------------------------------------------------------------ models, route, certificate (ADR-0503)
+// ------------------------------------------------------------------ models, route, certificate (ADR-0508)
 
 /** A model or provider id as the IDE accepts it from a spoke; anything else is dropped, never shown. */
 export const MODEL_ID_RE = /^[A-Za-z0-9._:@/-]{1,128}$/;
@@ -207,7 +207,7 @@ function mapModels(capsModels: Record<string, unknown> | null, answer: Record<st
   return { default: def, local: localModels(answer.local), frontier: frontierRows(answer.providers) };
 }
 
-// ------------------------------------------------------------- host, lane policy, alerts (ADR-0504)
+// ------------------------------------------------------------- host, lane policy, alerts (ADR-0509)
 
 /** A spoke's machine may list several GPUs; the IDE keeps this many. */
 const GPU_MAX = 8;
@@ -264,8 +264,8 @@ function mapAlerts(v: unknown): RemoteAlertView[] {
   return out.sort((x, y) => y.at - x.at).slice(0, ALERTS_MAX);
 }
 
-/** The spoke's overall state from its reachability and tasks. Closed and stopped tasks hold no lane. ADR-0504: a
- *  spoke the hub reports silent is `silent` whatever it said last. ADR-0507: a deactivated spoke is `deactivated`
+/** The spoke's overall state from its reachability and tasks. Closed and stopped tasks hold no lane. ADR-0509: a
+ *  spoke the hub reports silent is `silent` whatever it said last. ADR-0512: a deactivated spoke is `deactivated`
  *  whatever else the row says. */
 export function spokeState(reachable: boolean | null, tasks: readonly RemoteTaskView[] | null, silentSince: number | null = null, deactivated = false): RemoteSpokeState {
   if (deactivated) return "deactivated";
@@ -279,7 +279,7 @@ export function spokeState(reachable: boolean | null, tasks: readonly RemoteTask
   return "idle";
 }
 
-/** ADR-0507: the hub's `deactivated` mark, or null. The reason is the owner's text, clipped to 200 characters. */
+/** ADR-0512: the hub's `deactivated` mark, or null. The reason is the owner's text, clipped to 200 characters. */
 function mapDeactivated(v: unknown): RemoteDeactivatedView | null {
   const d = record(v);
   const since = count(d?.since);
@@ -294,11 +294,11 @@ export function mapSpokeRow(raw: unknown): RemoteSpokeView | null {
   const tasks = Array.isArray(r.tasks) ? r.tasks.map(mapTask).filter((t): t is RemoteTaskView => t !== null) : null;
   const caps = record(r.caps);
   const max = count(caps?.maxLanes), live = count(caps?.liveLanes), free = count(caps?.freeLanes);
-  // ADR-0503: optional fields a newer hub plugin adds; an older one omits them and each reads as unknown.
+  // ADR-0508: optional fields a newer hub plugin adds; an older one omits them and each reads as unknown.
   const viaKind = record(r.via)?.kind;
   const cert = record(r.cert);
-  // ADR-0504: likewise optional; an older plugin or spoke omits them. A zero time is no time.
-  // ADR-0507: likewise optional. A mark without a positive `since` is no mark; a deactivated spoke is never silent.
+  // ADR-0509: likewise optional; an older plugin or spoke omits them. A zero time is no time.
+  // ADR-0512: likewise optional. A mark without a positive `since` is no mark; a deactivated spoke is never silent.
   const deactivated = mapDeactivated(r.deactivated);
   const silentSince = deactivated ? null : count(r.silentSince) || null;
   const view: RemoteSpokeView = {
@@ -347,15 +347,15 @@ export function mapHubSnapshot(raw: unknown): RemoteHubView {
 
 /** The orbit's color language for a remote spoke, on the existing state hues: red when it is stuck on a human
  *  or failed, amber when it might be stuck (the hub has not heard from it), cyan while it works, blue when it is
- *  online and ready. Only `approval` animates: it is the one that blocks on a human. ADR-0507: `off`, the dimmest,
+ *  online and ready. Only `approval` animates: it is the one that blocks on a human. ADR-0512: `off`, the dimmest,
  *  for a spoke its owner deactivated: grey and faded, never red or amber, never animated. */
 export type RemoteTone = "approval" | "stuck" | "maybe" | "busy" | "ready" | "checking" | "off";
 export const REMOTE_TONE: Readonly<Record<RemoteSpokeState, RemoteTone>> = {
   approval: "approval", error: "stuck", offline: "maybe", busy: "busy", idle: "ready", checking: "checking",
-  // ADR-0504: red, not amber. Offline may be this hub's own network; silent means the relay has not heard from
+  // ADR-0509: red, not amber. Offline may be this hub's own network; silent means the relay has not heard from
   // the spoke either, so it is most likely down.
   silent: "stuck",
-  // ADR-0507: planned, so nothing to worry about.
+  // ADR-0512: planned, so nothing to worry about.
   deactivated: "off",
 };
 
@@ -364,7 +364,7 @@ export const REMOTE_STATE_LABEL: Readonly<Record<RemoteSpokeState, string>> = {
   deactivated: "deactivated",
 };
 
-/** ADR-0507: a deactivated spoke in words, "Deactivated since 2026-11-05: <the owner's reason>" (local date). The
+/** ADR-0512: a deactivated spoke in words, "Deactivated since 2026-11-05: <the owner's reason>" (local date). The
  *  orbit and the engine's refusals say it the same way. */
 export function deactivatedLabel(d: RemoteDeactivatedView): string {
   const t = new Date(d.since);
@@ -372,32 +372,32 @@ export function deactivatedLabel(d: RemoteDeactivatedView): string {
   return `Deactivated since ${day}: ${d.reason}`;
 }
 
-/** ADR-0507: what the hub may do with this spoke. A deactivated spoke is offered nothing (no task, follow-up,
+/** ADR-0512: what the hub may do with this spoke. A deactivated spoke is offered nothing (no task, follow-up,
  *  recall, approve or deny): nothing reaches it until it is reactivated. Otherwise the certificate's scopes. */
 export function spokeActions(s: RemoteSpokeView, a: HubActions): HubActions {
   return s.deactivated ? { recall: false, drive: false, approve: false, deny: false } : a;
 }
 
-/** ADR-0504: a time of day ("14:05"), with the date in front when it is not today. Local time. */
+/** ADR-0509: a time of day ("14:05"), with the date in front when it is not today. Local time. */
 export function clockLabel(ms: number, now: number): string {
   const d = new Date(ms);
   const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
   return d.toDateString() === new Date(now).toDateString() ? hm : `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${hm}`;
 }
 
-/** The state as words. ADR-0504: a silent spoke says since when ("silent since 14:05"), never "idle". ADR-0507: a
+/** The state as words. ADR-0509: a silent spoke says since when ("silent since 14:05"), never "idle". ADR-0512: a
  *  deactivated one says since when and why. */
 export function stateLabel(s: RemoteSpokeView, now: number): string {
   if (s.state === "deactivated" && s.deactivated) return deactivatedLabel(s.deactivated);
   return s.state === "silent" && s.silentSince !== null ? `silent since ${clockLabel(s.silentSince, now)}` : REMOTE_STATE_LABEL[s.state];
 }
 
-/** ADR-0504: memory and disk sizes as the IDE shows them: MiB under 1 GiB, else GiB to one decimal. */
+/** ADR-0509: memory and disk sizes as the IDE shows them: MiB under 1 GiB, else GiB to one decimal. */
 export function mibLabel(mib: number): string {
   return mib < 1024 ? `${mib} MiB` : `${Number((mib / 1024).toFixed(1))} GiB`;
 }
 
-/** ADR-0504: the machine facts that matter when picking a spoke: cores, memory, each GPU and its memory. "" when
+/** ADR-0509: the machine facts that matter when picking a spoke: cores, memory, each GPU and its memory. "" when
  *  the spoke reported none of them. */
 export function hostLabel(h: RemoteHostView | null): string {
   if (!h) return "";
@@ -413,12 +413,12 @@ export const LANE_LIMIT_LABEL: Readonly<Record<RemoteLaneLimit, string>> = {
   engine: "the engine", memory: "memory", cpu: "CPU", gpu: "GPU", target: "where it is deployed", config: "its configuration", laptop: "a laptop",
 };
 
-/** ADR-0504: the spoke's lane policy in words: "up to 4 lanes, limited by memory: <the spoke's why>". */
+/** ADR-0509: the spoke's lane policy in words: "up to 4 lanes, limited by memory: <the spoke's why>". */
 export function lanePolicyLabel(p: RemoteLanePolicyView): string {
   return `up to ${p.max} ${p.max === 1 ? "lane" : "lanes"}, limited by ${LANE_LIMIT_LABEL[p.limitedBy]}${p.why ? `: ${p.why}` : ""}`;
 }
 
-/** ADR-0504: one line of the IDE's alert list: a spoke that went silent, or an alert its hub kept. `key` is stable
+/** ADR-0509: one line of the IDE's alert list: a spoke that went silent, or an alert its hub kept. `key` is stable
  *  across polls, so a dismissal sticks. */
 export interface RemoteAlertItem { key: string; node: string; label: string; kind: RemoteAlertKind | "silent"; at: number; text: string; tasks: { id: string; name: string }[] }
 
@@ -427,16 +427,16 @@ const ALERT_LABEL: Readonly<Record<RemoteAlertKind, string>> = {
   "crl-stale": "revocation list out of date", "cert-expiring": "certificate expiring",
 };
 
-/** What the owner does about an alert, when there is one thing to do (ADR-0505 for the CRL and the certificate). */
+/** What the owner does about an alert, when there is one thing to do (ADR-0510 for the CRL and the certificate). */
 const ALERT_ACTION: Readonly<Partial<Record<RemoteAlertKind, string>>> = {
   "turn-interrupted": "Resume it from the spoke's panel",
   "crl-stale": "Publish a fresh one from the root (root crl-refresh); until then the spoke refuses drive and approve",
   "cert-expiring": "Renew it (root renew, then hub renew-spoke)",
 };
 
-/** ADR-0504: a spoke's alert lines, newest first: its silence (when the hub reports one), then every kept alert.
+/** ADR-0509: a spoke's alert lines, newest first: its silence (when the hub reports one), then every kept alert.
  *  An interrupted turn names its tasks and says where to resume them; nothing is ever re-run on its own. A stale
- *  revocation list and an expiring certificate say what to run (ADR-0505). A deactivated spoke has none (ADR-0507):
+ *  revocation list and an expiring certificate say what to run (ADR-0510). A deactivated spoke has none (ADR-0512):
  *  its quiet is planned, and nothing it kept from before is news until it is reactivated. */
 export function spokeAlerts(s: RemoteSpokeView, now: number): RemoteAlertItem[] {
   if (s.deactivated) return [];
@@ -463,14 +463,14 @@ function seconds(ms: number): string {
   return ms < 10_000 ? (ms / 1000).toFixed(1) : String(Math.round(ms / 1000));
 }
 
-/** ADR-0503: the hub's last round trip to the spoke. It includes the spoke's mailbox poll (about 2 s), so it
+/** ADR-0508: the hub's last round trip to the spoke. It includes the spoke's mailbox poll (about 2 s), so it
  *  reads as how fast the spoke answers, never as a network ping. */
 export function latencyLabel(ms: number | null): string {
   return ms === null ? "answer time not measured yet" : `answers in ${seconds(ms)} s`;
 }
 
 /** The card's one-line glance: state, lanes, how fast it answers and over which route, and how many tasks are
- *  open. `now` only matters for a silent spoke's "silent since". ADR-0507: a deactivated spoke shows only that:
+ *  open. `now` only matters for a silent spoke's "silent since". ADR-0512: a deactivated spoke shows only that:
  *  its last lanes and answer time are stale. */
 export function remoteGlance(s: RemoteSpokeView, now = Date.now()): string {
   if (s.deactivated) return stateLabel(s, now);
@@ -487,7 +487,7 @@ export function modelCount(s: RemoteSpokeView): number {
   return all.size;
 }
 
-/** ADR-0506: the models a task on this spoke may name, as "provider/id": its local models, then each signed-in
+/** ADR-0511: the models a task on this spoke may name, as "provider/id": its local models, then each signed-in
  *  provider's (a provider lists bare ids). The default is left out: a task that names no model runs on it, so the
  *  selector offers it first as "no model". A provider id with no model list offers nothing to pick. */
 export function taskModelChoices(s: RemoteSpokeView): string[] {
@@ -511,8 +511,8 @@ function deployBlock(s: RemoteSpokeView, a: HubActions): string | null {
   return null;
 }
 
-/** ADR-0503: every spoke as a selector row, eligible first, then fastest answer (unmeasured last), then label.
- *  ADR-0507: a deactivated spoke is no row at all: it is not a target, not even a greyed-out one. */
+/** ADR-0508: every spoke as a selector row, eligible first, then fastest answer (unmeasured last), then label.
+ *  ADR-0512: a deactivated spoke is no row at all: it is not a target, not even a greyed-out one. */
 export function deployChoices(spokes: readonly RemoteSpokeView[], a: HubActions): DeployChoice[] {
   return spokes
     .filter((spoke) => !spoke.deactivated)
@@ -523,7 +523,7 @@ export function deployChoices(spokes: readonly RemoteSpokeView[], a: HubActions)
 }
 
 /** Which buttons a task row offers: what the certificate allows AND what the spoke would accept in this state
- *  (a follow-up waits for the turn to end; a closed or stopped task holds no lane to cancel or close). ADR-0504:
+ *  (a follow-up waits for the turn to end; a closed or stopped task holds no lane to cancel or close). ADR-0509:
  *  a task whose turn a restart cut off offers Resume, a follow-up with RESUME_TEXT; a new turn clears the mark. */
 export function taskButtons(t: RemoteTaskView, a: HubActions): { recall: boolean; followup: boolean; cancel: boolean; close: boolean; resume: boolean } {
   const live = t.state !== "closed" && t.state !== "stopped";
@@ -537,7 +537,7 @@ export function taskButtons(t: RemoteTaskView, a: HubActions): { recall: boolean
   };
 }
 
-/** ADR-0504: the one follow-up Resume sends. The human clicks it (twice); an interrupted turn is never re-run on
+/** ADR-0509: the one follow-up Resume sends. The human clicks it (twice); an interrupted turn is never re-run on
  *  its own, and the model is told to check what already happened before it repeats anything. */
 export const RESUME_TEXT = "Continue this task. The previous turn was interrupted when the spoke restarted: check what was already done before you repeat anything.";
 

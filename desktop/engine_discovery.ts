@@ -17,7 +17,7 @@
 // per-launch and dies with the process; the engine removes the file on exit, and a leftover file
 // verifies as dead the moment anyone checks it against /api/health.
 //
-// ADR-0498: the engine ALSO publishes a nonce-only record, engine-nonce-<port>.json: the same
+// ADR-0503: the engine ALSO publishes a nonce-only record, engine-nonce-<port>.json: the same
 // coordinates WITHOUT the UI token. It is what a controller client (one that holds only a controller
 // token, ADR-0438) reads to find and health-verify the engine, so that client never needs read access
 // to the token-bearing file and can run as its own OS user. By default it sits beside the token file,
@@ -30,7 +30,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { healthVerdict } from "./port_guard.ts";
 
-/** The nonce-only record (ADR-0498): enough to find and prove the engine, nothing that opens a route. */
+/** The nonce-only record (ADR-0503): enough to find and prove the engine, nothing that opens a route. */
 export interface EngineNonceRecord {
   /** Shape version. Bump only with a migration note in DECISIONS.md. */
   v: 1;

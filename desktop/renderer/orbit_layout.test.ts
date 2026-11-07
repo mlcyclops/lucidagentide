@@ -114,7 +114,7 @@ describe("spokeGlance (P-PROGRESS.1)", () => {
     expect(spokeGlance({ ...base, status: "done", progress: { estimate: { percent: 40 } } }, true)).toBe("done \u00b7 2 turns");
   });
 
-  // P-STUCK-SHOW.1 (ADR-0490): the orbit never says plain "working" over a call the evidence doubts.
+  // P-STUCK-SHOW.1 (ADR-0519): the orbit never says plain "working" over a call the evidence doubts.
   test("a likely-stuck call names itself and the way out; a call gone flat says it might be stuck", () => {
     const base = { turns: 2, queued: [] as unknown[] };
     const stuck = { estimate: { percent: 40 }, liveness: { state: "stuck", label: "likely stuck: no activity for 13 m", flatMs: 780_000 } };
@@ -145,7 +145,7 @@ describe("hubLanes / hubEntries", () => {
     expect(hubLanes(lanes, "s2").map((l) => l.id)).toEqual(["c", "d"]);
     expect(hubLanes(lanes, null).map((l) => l.id)).toEqual(["d"]);
   });
-  // P-HUB-PICK.1 (ADR-0470): the Hubs menu lists every hub, the one on screen first.
+  // P-HUB-PICK.1 (ADR-0516): the Hubs menu lists every hub, the one on screen first.
   test("the current hub comes first, even empty; the other hubs follow by newest activity, counting who waits", () => {
     const hubs = hubEntries(lanes, "s3");
     expect(hubs.map((h) => [h.sessionId, h.current])).toEqual([["s3", true], ["s1", false], ["s2", false]]);

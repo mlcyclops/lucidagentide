@@ -71,7 +71,7 @@ export interface GuiSettings {
   keys?: Record<string, string>;
   workspace?: string;
   recentWorkspaces?: string[];
-  // P-SESS-ARCHIVE.1 (ADR-0471): the session auto-archive rule (sessions.ts archivePolicy clamps it on read).
+  // P-SESS-ARCHIVE.1 (ADR-0517): the session auto-archive rule (sessions.ts archivePolicy clamps it on read).
   sessionArchive?: { auto?: boolean; days?: number; spokeDays?: number };
   // P-REPORT.9 (ADR-0162): repos the user wants INCLUDED IN REPORTS but not necessarily opened as the
   // active workspace. Tracked separately from `workspace`/`recentWorkspaces` so adding a report target

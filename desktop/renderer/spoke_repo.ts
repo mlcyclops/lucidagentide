@@ -3,7 +3,7 @@
 
 // desktop/renderer/spoke_repo.ts
 //
-// P-HUB-PICK.1 (ADR-0470): which codebase a spoke works on, named and colored the same way on every surface
+// P-HUB-PICK.1 (ADR-0516): which codebase a spoke works on, named and colored the same way on every surface
 // (the orbit node, the grid card, the Hubs menu, the spoke switch menu). The repo chip (ADR-0406) exists only
 // for a repo that pushes to a hosted remote; a spoke in a local git repo or a plain folder had no name for its
 // codebase at all, so two spokes on different repos read alike. Every spoke gets a label here: the hosted

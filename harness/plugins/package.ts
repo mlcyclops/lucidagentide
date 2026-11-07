@@ -192,7 +192,7 @@ export function verifyPluginSignature(m: PluginManifest, sigB64: string, trusted
   return { ok: false, reason: "the signature does not match the LUCID plugin publisher key" };
 }
 
-/** `private`: the ADR-0500 rules of an install from a file (free and civilian only, never a store id). */
+/** `private`: the ADR-0505 rules of an install from a file (free and civilian only, never a store id). */
 export type PluginGate = "manifest" | "hash" | "signature" | "authenticode" | "scan" | "download" | "private";
 
 export type PackageCheck =

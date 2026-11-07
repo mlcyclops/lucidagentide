@@ -8,7 +8,7 @@
 // IO-free so all three are unit-tested headless; fleet_orbit.ts owns the DOM, the SVG and the polling.
 
 import type { LaneStatus, RepoContext } from "./bridge.ts";
-import { spokeRepo, type SpokeRepo } from "./spoke_repo.ts"; // P-HUB-PICK.1 (ADR-0470)
+import { spokeRepo, type SpokeRepo } from "./spoke_repo.ts"; // P-HUB-PICK.1 (ADR-0516)
 import { humanMs } from "../turn_progress.ts"; // P-STUCK-SHOW.1: the same duration words as the liveness pill
 import { LANE_ATTENTION, displayStatus } from "../collab/fleet_status.ts"; // P-SWITCH.3: one rule for "waiting on you", shared with the dock pill and the phone bar
 import { promoteRefusal } from "./composer_target.ts";
@@ -93,7 +93,7 @@ export function spokeGlance(l: { status: LaneStatus; turns: number; queued: read
   // with history shows how far along it probably is (labelled as the estimate it is). P-PROGRESS.3: only
   // when the user opted into the experimental estimate.
   if (l.waiting && l.status === "working") return `waiting for ${l.waiting.on.name}${q}`;
-  // P-STUCK-SHOW.1 (ADR-0490): the evidence verdict on an open call outranks "working". The node is 172 px
+  // P-STUCK-SHOW.1 (ADR-0519): the evidence verdict on an open call outranks "working". The node is 172 px
   // wide, so the glance is the verdict and how long nothing moved; the full sentence is the node's tooltip.
   const live = l.status === "working" ? l.progress?.liveness : undefined;
   if (live?.flatMs !== undefined && (live.state === "stuck" || live.state === "working")) {
@@ -195,7 +195,7 @@ export function hubLanes<L extends { hubSessionId?: string | null }>(lanes: read
   return lanes.filter((l) => !l.hubSessionId || l.hubSessionId === hub);
 }
 
-/** One hub for the Hubs menu (P-HUB-PICK.1, ADR-0470): its spokes, each named with its codebase, and the
+/** One hub for the Hubs menu (P-HUB-PICK.1, ADR-0516): its spokes, each named with its codebase, and the
  *  distinct codebases the hub's spokes work on, so hubs over different repos are told apart at a glance. */
 export interface HubEntry {
   sessionId: string;

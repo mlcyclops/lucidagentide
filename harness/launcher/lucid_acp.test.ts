@@ -76,7 +76,7 @@ test("--isolate adds the config overlay; omitted otherwise", () => {
   expect(noAsksage.filter((x) => x === "-e").length).toBe(1); // gate only when asksage absent
 });
 
-test("the Azure Entra ID extension (ADR-0499) rides after asksage in both the ACP and the TUI command", () => {
+test("the Azure Entra ID extension (ADR-0504) rides after asksage in both the ACP and the TUI command", () => {
   const a = assets("/repo");
   expect(a.azureEntra.replace(/\\/g, "/")).toBe("/repo/harness/omp/azure_entra_extension.ts");
   expect(existsSync(join(repoRoot(), "harness", "omp", "azure_entra_extension.ts"))).toBe(true);

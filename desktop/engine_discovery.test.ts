@@ -109,9 +109,9 @@ describe("engine discovery (P-TUI.0)", () => {
   });
 });
 
-// ADR-0498: the nonce-only record a controller client reads. It never carries the UI token, it is
+// ADR-0503: the nonce-only record a controller client reads. It never carries the UI token, it is
 // owner-only unless the operator names a group, and it proves the engine through the same handshake.
-describe("nonce-only discovery record (ADR-0498)", () => {
+describe("nonce-only discovery record (ADR-0503)", () => {
   const { token: _token, ...launch } = d();
   const posix = process.platform !== "win32";
 
