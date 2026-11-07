@@ -26022,6 +26022,21 @@ Parity already held and left alone: workspace, tab, pane hierarchy and ids; the 
 
 **Consequences.** One fleet arrangement, two faces, as the grid and the orbit already are (P-FLEET.L18). Relates to ADR-0271, ADR-0273, ADR-0325, ADR-0452, ADR-0489, ADR-0491, ADR-0494.
 
+## ADR-0524 -- P-GLOW.1: the red "needs approval" pulse runs on the compositor: a shadow painted once, only its opacity animates (2026-11-07)
+
+**Status:** Accepted.
+
+**Context.** Found while measuring P-ORBIT-CANVAS.1 (ADR-0522): `fleetGlowRed` animated `box-shadow` on a grid card (`.fleet-card.lane-needs-approval`), the minimized dock pill (`#fleetDockPill.attn`) and a census pip (`.fleet-pip.lane-needs-approval i`). A `box-shadow` animation cannot run on the compositor, so for as long as any lane waited for approval the main thread restyled and repainted at display rate, app-wide through the dock pill. The pip kept pulsing in the orbit's Lite mode too, against Lite's no-infinite-animation rule (P-FLEET.L17). The orbit's own cards already solved this (`.orbit-node-card::after` with an `orbitGlow` opacity pulse).
+
+**Decision.**
+1. The three red pulses become one pseudo-element rule: `::after` with the peak shadow painted once, `will-change: opacity`, animated by the existing `orbitGlow` keyframes (1.6 s). `fleetGlowRed` is removed. The pill and the pip get `position: relative` to anchor it.
+2. The grid card clips its overflow (`.fleet-card{overflow:hidden}`), so its glow is an INSET shadow inside the red border instead of a halo outside it. Changing the card's overflow would expose the resize handles and transcript, so the visual change was accepted instead.
+3. Reduced motion holds the glow still at half strength; the orbit's Lite holds every census pip still.
+4. `fleetGlowAmber` (awaiting-input grid cards) is the same pattern and stays as it is for now: it was not part of this ask.
+
+**Proof.** Bench in Edge (real GPU, 1600x900, motion allowed), main thread ms per second, two 8 s runs averaged, before then after: the app with the dock pill and a grid card waiting 12.6 to 1.3 (style recalcs 33.8 to 3.9 a second, renderer CPU 2.9% to 0.8%, GPU 6.6% to 1.5%); the orbit in Lite with an approval waiting 16.9 to 2.0; the orbit in Motion 34.6 to 31.1 on master, where the SVG spoke animations still hold the frame rate (ADR-0522 removes those). Screenshots at the pulse peak: pill and pip match; the card's glow sits inside its border.
+
+**Consequences.** A waiting approval no longer costs main-thread frames anywhere in the app. Relates to ADR-0522 and P-FLEET.L2, P-FLEET.L17.
 ## ADR-0523 -- P-ASK.1: omp's `ask` tool is off in every ACP session (2026-11-07)
 
 **Status:** Accepted -- BUILT. `harness/omp/acp_config.yml` `ask.enabled: false`. Proof: a real `omp acp` (the pinned 18.8.6 package) driven with `ACP_INTERACTIVE_CLIENT_CAPS` and the shared `elicitationAnswer`, prompt "pick Red or Blue, use a question tool if you have one": before, one ask call, the elicitation declined, `stopReason: cancelled`, no text; after, no tool call, `end_turn`, the question in the reply. `bun test harness/omp/checkin_extension.test.ts harness/launcher/lucid_acp.test.ts desktop/acp_client_caps.test.ts desktop/exec_policy.test.ts` 257 pass.
