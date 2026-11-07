@@ -5961,14 +5961,13 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 ## P-ORBIT-CANVAS.1: the Fleet Orbit's spokes and rings on one canvas, the Knowledge Orbit's method (ADR-0522)
 - **shipped (2026-11-07):** `orbit_canvas.ts` paints spokes and rings on one Canvas 2D under the cards with a loop that ticks at 20 frames a second while a spoke moves, 4 a second for the ring drift alone, and parks when nothing moves, in Lite, under reduced motion and while the map is hidden. The SVG layer, its CSS and four keyframes are gone. Cards, hub and header stay DOM (buttons, focus, tooltips).
 - **verified:** bench in Edge (real GPU, motion allowed), main thread ms per second before and after: busy fleet 36.0 to 19.1, idle fleet 29.2 to 5.8, Lite unchanged; pixel diff against master under 0.5%; draw counter 16 a second in Motion, 0 closed, 1 after switching to Lite; `orbit_canvas.test.ts` plus the four orbit suites 45 pass; desktop tsc clean.
-- **stubbed:** a pending approval still pins the frame rate through the census pip's `fleetGlowRed` box-shadow animation, so that state saves nothing yet.
-- **next:** move `fleetGlowRed` on `.fleet-pip` to the pseudo-element opacity pulse; when `feat/rs-fleet-ops` rebases onto this, its remote spoke lines and `likely-stuck` join `OrbitSpoke` and the style table.
+- **stubbed:** none on this branch: the pending-approval cost (`fleetGlowRed`) is P-GLOW.1 (ADR-0524), and the merge here moved the remote spoke lines and `likely-stuck` into `OrbitSpoke` and the style table.
+- **next:** `fleetGlowBlue` on awaiting-input grid cards is the same box-shadow pattern, not done.
 
 ## P-ASK.1: a turn that called `ask` ended "Done" with no reply (ADR-0523)
 - **shipped (2026-11-07, branch `fix/acp-ask-off` from `feat/rs-fleet-ops` 78622a45, LOCAL ONLY):** `acp_config.yml` sets `ask.enabled: false` for every omp ACP child. Cause: LUCID declines omp's `askDialog` elicitation (no question UI), omp treats the decline as a user cancel and aborts the turn. Checkin text no longer points agents at the ask tool. Verified with a real `omp acp` run before and after (ADR-0523 proof) and 257 tests.
 - **stubbed:** no question card in the IDE; the model asks in its reply instead.
 - **next:** merge into `feat/rs-fleet-ops` and rebuild the installer; optionally design an askDialog card for master, lanes and the PWA, then re-enable `ask`.
-## P-GLOW.1: the red "needs approval" pulse runs on the compositor (ADR-0524)
 ## P-GLOW.1: the red "needs approval" pulse runs on the compositor (ADR-0524)
 - **shipped (2026-11-07):** the grid card, the dock pill and the census pip pulse through one `::after` rule (shadow painted once, `orbitGlow` opacity pulse); `fleetGlowRed` removed; reduced motion and the orbit's Lite hold it still.
 - **verified:** bench in Edge, main thread ms per second before and after: dock pill plus grid card waiting 12.6 to 1.3, orbit Lite with an approval waiting 16.9 to 2.0; peak screenshots: pill and pip match, the card's glow now sits inside its border (the card clips overflow).
