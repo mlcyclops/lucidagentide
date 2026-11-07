@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // desktop/controller/remote_policy.ts - P-CTRL-REMOTE.1 (ADR-0525): what a REMOTE controller lane may do on its
-// own, and how a human on another machine approves the rest. Pure (no engine state), unit-tested.
+// own, and how a human on another machine approves the rest. No engine state, unit-tested. The workspace boundary
+// reads the filesystem: it compares real paths, so a link inside the workspace cannot carry an action out of it.
 //
 // A remote lane is a controller lane whose pairing names an approver root (the owner's P-256 root public key,
 // set by the human who paired). Every permission ask the lane's omp raises is classified HERE, in the engine:
@@ -46,7 +47,8 @@
 // `<base64url(JSON payload bytes)>.<base64url(ECDSA P-256 / SHA-256 DER signature over those bytes)>`.
 
 import { createHash, createPublicKey, verify, type KeyObject } from "node:crypto";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { lstatSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { neutralizeDelimiters } from "../../harness/omp/mcp_result_gate.ts";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../../harness/prompt/assembler.ts";
 import { classifyCommand, isDestructiveProgram, type RiskTier } from "../exec_policy.ts";
@@ -91,12 +93,60 @@ export function canonical(v: unknown): string {
 export const askDigest = (kind: string, title: string, input: string): string =>
   createHash("sha256").update(canonical({ kind, title, input })).digest("hex");
 
-/** True when `p` (absolute, or relative to the workspace) stays inside the workspace. */
-export function insideWorkspace(workspace: string, p: string): boolean {
-  const abs = isAbsolute(p) ? resolve(p) : resolve(workspace, p);
-  const rel = relative(resolve(workspace), abs);
+/** The real path `abs` (absolute, no `..` segment) names: its longest existing ancestor realpath'd (symlinks,
+ *  junctions and 8.3 short names resolved), the segments that do not exist yet re-appended. Null when that cannot
+ *  be determined: a dangling link (writing through it lands wherever it points), a loop, a path through a file,
+ *  an unreadable directory. */
+function realOf(abs: string): string | null {
+  const missing: string[] = [];
+  for (let cur = abs; ; ) {
+    try {
+      return join(realpathSync.native(cur), ...missing.reverse());
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") return null;
+      try { lstatSync(cur); return null; } catch { /* truly absent: step up */ }
+      const up = dirname(cur);
+      if (up === cur) return null;
+      missing.push(basename(cur));
+      cur = up;
+    }
+  }
+}
+
+/** `raw` resolved one segment at a time, each `..` taken from the REAL parent of what precedes it (a kernel opening
+ *  the un-normalized path: `link/../x` is the link target's sibling, not the workspace's `x`). Null as `realOf`. */
+function physicalOf(raw: string): string | null {
+  const { root } = parse(raw);
+  let cur: string | null = root;
+  for (const seg of raw.slice(root.length).split(/[\\/]+/)) {
+    if (!seg || seg === ".") continue;
+    cur = seg === ".." ? dirname(cur) : realOf(join(cur, seg));
+    if (cur === null) return null;
+  }
+  return cur;
+}
+
+/** True when real path `real` is `root` or under it (case-folded on Windows). */
+function within(root: string, real: string): boolean {
+  const rel = relative(root, real);
   const fold = process.platform === "win32" ? rel.toLowerCase() : rel;
-  return rel === "" || (!fold.startsWith("..") && !isAbsolute(rel) && !fold.startsWith(`..${sep}`));
+  return rel === "" || (fold !== ".." && !fold.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+/** True when `p` (absolute, or relative to the workspace) stays inside the workspace on disk, not just as text
+ *  (CWE-59): both sides are canonicalized, so a symlink or junction inside the workspace that points out of it is
+ *  outside, one that points into it is inside, and an 8.3 short name equals its long form. A path that contains
+ *  `..` must stay inside both as a tool reads it (folded first, then resolved) and as a kernel walks it (resolved
+ *  segment by segment). Anything whose real path cannot be determined, the workspace included, is outside. */
+export function insideWorkspace(workspace: string, p: string): boolean {
+  let root: string;
+  try { root = realpathSync.native(workspace); } catch { return false; }
+  const raw = isAbsolute(p) ? p : `${workspace}${sep}${p}`; // not join: it would fold `..` before the walk sees it
+  const folded = realOf(resolve(raw));
+  if (folded === null || !within(root, folded)) return false;
+  if (!raw.split(/[\\/]+/).includes("..")) return true;
+  const walked = physicalOf(raw);
+  return walked !== null && within(root, walked);
 }
 
 /** Every path an ACP tool call names: `locations[].path` plus the common rawInput path fields. */

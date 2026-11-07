@@ -21,7 +21,7 @@
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { generateKeyPairSync, randomBytes, sign, type KeyObject } from "node:crypto";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GateDecision } from "../../harness/security/gate.ts";
@@ -83,8 +83,8 @@ function presentDecision(hub: Node, lane: string, ask: RemoteAsk, allow: boolean
 // ── Rig: real store, real routes, real lane manager over the fake agent ───────────────────────────────────
 // One workspace for the file: on Windows a lane's agent process holds its cwd open until it exits, so a
 // per-test workspace cannot be removed in afterEach. It is removed once at the end, best effort.
-// Canonical, because the pair route realpaths the workspace: on a GitHub Windows runner tmpdir() is the 8.3
-// form (C:\Users\RUNNER~1\...), so a raw path would sit "outside" the paired workspace and a T0 read would park.
+// Canonical, as the pair route stores it (it realpaths the workspace; on a GitHub Windows runner tmpdir() is the
+// 8.3 form C:\Users\RUNNER~1\...). The tier policy canonicalizes both sides itself since ADR-0526.
 const ws = realpathSync.native(mkdtempSync(join(tmpdir(), "lucid-remote-ws-")));
 mkdirSync(join(ws, "src"));
 let dir: string;
@@ -171,6 +171,75 @@ describe("the tier policy decides a remote lane's asks in the engine", () => {
     expect(classifyAsk({ kind: "edit", rawInput: { path: "../outside.txt" } }, w).action).toBe("block");
     expect(classifyAsk({ kind: "switch_mode" }, w).action).toBe("remote");
     expect(classifyAsk(null, w).action).toBe("remote");
+  });
+});
+
+// GHSA-vjj8-43cg-rmpr (CWE-59): the boundary compares real paths, so a link inside the workspace cannot carry a T0
+// read or a T1 edit out of it. A directory link is a junction on Windows (no privilege needed) and a symlink elsewhere.
+describe("the workspace boundary follows links", () => {
+  let root: string, lws: string, outside: string;
+  beforeEach(() => {
+    root = realpathSync.native(mkdtempSync(join(tmpdir(), "lucid-boundary-")));
+    lws = join(root, "ws");
+    outside = join(root, "outside");
+    mkdirSync(join(lws, "src"), { recursive: true });
+    mkdirSync(outside);
+    writeFileSync(join(outside, "victim.txt"), "secret");
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+  const linkDir = (target: string, path: string) => symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir");
+  const edit = (path: string, w = lws) => classifyAsk({ kind: "edit", rawInput: { path } }, w);
+  const read = (path: string, w = lws) => classifyAsk({ kind: "read", locations: [{ path }] }, w);
+
+  test("a directory link pointing outside is outside: its edit is refused, its read parks", () => {
+    linkDir(outside, join(lws, "link"));
+    expect(edit("link/victim.txt")).toMatchObject({ tier: "T3", action: "block" });
+    expect(read(join(lws, "link", "victim.txt"))).toMatchObject({ tier: "T2", action: "remote" });
+  });
+
+  test("a file symlink pointing outside is outside", () => {
+    try { symlinkSync(join(outside, "victim.txt"), join(lws, "leak.txt"), "file"); }
+    catch { return; } // the platform refuses file symlinks here (Windows without Developer Mode); nothing to test
+    expect(read("leak.txt")).toMatchObject({ tier: "T2", action: "remote" });
+    expect(edit("leak.txt").action).toBe("block");
+  });
+
+  test("a link pointing back into the workspace stays inside", () => {
+    linkDir(join(lws, "src"), join(lws, "alias"));
+    expect(edit("alias/new.ts")).toMatchObject({ tier: "T1", action: "auto" });
+    expect(read(join(lws, "alias", "new.ts"))).toMatchObject({ tier: "T0", action: "auto" });
+  });
+
+  test("a file not yet created under a linked directory is judged by where the link points", () => {
+    linkDir(outside, join(lws, "link"));
+    expect(edit("link/deeper/new.txt").action).toBe("block");
+    expect(edit("src/deeper/new.txt").action).toBe("auto");
+  });
+
+  test("a dangling link is outside: writing through it would land wherever it points", () => {
+    linkDir(join(outside, "gone"), join(lws, "dangling"));
+    expect(edit("dangling/new.txt").action).toBe("block");
+  });
+
+  test("`..` after a link must stay inside as a kernel walks it, not only as text folds it", () => {
+    linkDir(outside, join(lws, "link"));
+    // Text folds `link/..` to the workspace; a kernel takes `..` from the link's target, `outside`, so this is root/x.
+    expect(edit("link/../x.txt").action).toBe("block");
+    expect(edit("src/../x.txt").action).toBe("auto");
+  });
+
+  test("an unresolvable workspace puts every path outside", () => {
+    expect(edit("a.txt", join(root, "missing")).action).toBe("block");
+  });
+
+  test.if(process.platform === "win32")("an 8.3 short name equals its long form, either side", () => {
+    const long = join(lws, "long directory name");
+    mkdirSync(long);
+    const p = Bun.spawnSync(["powershell", "-NoProfile", "-Command", "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:P).ShortPath"], { env: { ...process.env, P: long } });
+    const short = p.stdout.toString().trim();
+    if (!short || short.toLowerCase() === long.toLowerCase()) return; // this volume does not make 8.3 names; nothing to test
+    expect(read(join(short, "a.ts"))).toMatchObject({ tier: "T0", action: "auto" });
+    expect(read(join(long, "a.ts"), short)).toMatchObject({ tier: "T0", action: "auto" });
   });
 });
 
