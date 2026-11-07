@@ -40,6 +40,17 @@ describe("resolveStartupModel - last used wins", () => {
     expect(r!.source).toBe("best-configured");
     expect(r!.value.startsWith("anthropic/")).toBe(true);
   });
+  it("drops a remembered EMBEDDING model (fresh v2.5.1 install pinned ollama/nomic-embed-text) for the best cloud model", () => {
+    const opts = [...OPTIONS, opt("ollama/nomic-embed-text:latest"), opt("anthropic/claude-opus-5-5")];
+    // Unknown (local) providers count as configured, which is exactly how the embedding model won before.
+    const isConfigured = (v: string) => v.startsWith("ollama/") || v.startsWith("anthropic/") || v.startsWith("openai-codex/");
+    const r = resolveStartupModel({ lastUsed: "ollama/nomic-embed-text:latest", current: "ollama/nomic-embed-text:latest", options: opts, isConfigured });
+    expect(r).toEqual({ value: "anthropic/claude-opus-5-5", source: "best-configured" });
+  });
+  it("never opens on an embedding model when it is the only configured option", () => {
+    const r = resolveStartupModel({ lastUsed: "", current: "", options: [opt("ollama/nomic-embed-text:latest")], isConfigured: () => true });
+    expect(r).toBeNull();
+  });
 });
 
 describe("resolveStartupModel - best configured", () => {

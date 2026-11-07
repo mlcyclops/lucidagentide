@@ -19,7 +19,7 @@
 // preferredDefaultModel, and the private `capability()` copy of capabilityTier that had drifted from the
 // real one (it knew `grok`/`spark`, capabilityTier did not) is gone: one heuristic, one definition.
 
-import { isGovModel, preferredDefaultModel } from "./renderer/model_families.ts";
+import { isAuxiliaryModel, isGovModel, preferredDefaultModel } from "./renderer/model_families.ts";
 import type { ModelOption } from "./checker_model.ts";
 
 export interface StartupModelInput {
@@ -44,7 +44,9 @@ export function resolveStartupModel(input: StartupModelInput): StartupModelPick 
   //    curated default looks. Only require that it is still offered and its provider still has a
   //    credential - deprecation/China gating never evicts an explicit pick (the user made it once;
   //    re-making it every launch is the bug this whole module fixes).
-  if (lastUsed && options.some((o) => o.value === lastUsed) && isConfigured(lastUsed)) {
+  //    Exception: a NON-CHAT model (an embedding model omp's Ollama probe listed) is never honored. It was
+  //    never a real choice, only the old ladder's fallback, and keeping it means every turn returns nothing.
+  if (lastUsed && !isAuxiliaryModel(lastUsed) && options.some((o) => o.value === lastUsed) && isConfigured(lastUsed)) {
     return { value: lastUsed, source: "last-used" };
   }
   // 2) Best among configured providers, per the curated list. preferredDefaultModel already drops

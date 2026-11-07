@@ -147,6 +147,27 @@ describe("P-IDE.1c - gov / auxiliary / china detection", () => {
     expect(isAuxiliaryModel("openai-codex/codex-auto-review")).toBe(true);
     expect(isAuxiliaryModel("openai-codex/gpt-5.4")).toBe(false);
   });
+  it("isAuxiliaryModel treats embedding/reranker models as non-chat (v2.5.1 nomic-embed-text default bug)", () => {
+    for (const e of ["ollama/nomic-embed-text:latest", "ollama/mxbai-embed-large", "ollama/bge-m3", "ollama/all-minilm:l6-v2",
+      "ollama/snowflake-arctic-embed2", "ollama/granite-embedding:278m", "openai/text-embedding-3-small", "ollama/bge-reranker-v2-m3"]) {
+      expect(isAuxiliaryModel(e)).toBe(true);
+    }
+    for (const c of ["ollama/qwen2.5:7b-instruct", "ollama/llama3.1:8b", "ollama/gemma3:12b", "anthropic/claude-opus-5-5",
+      "openai-codex/gpt-5.5", "openai-codex/gpt-6-astra", "google-antigravity/gemini-3.8-flash"]) {
+      expect(isAuxiliaryModel(c)).toBe(false);
+    }
+  });
+  it("preferredDefaultModel never lands on an embedding model, even when it is the only local survivor", () => {
+    const localOnly = [{ value: "ollama/nomic-embed-text:latest" }, { value: "ollama/qwen2.5:7b-instruct" }];
+    expect(preferredDefaultModel(localOnly)).toBeNull();
+    const withCloud = [...localOnly, { value: "anthropic/claude-opus-5-5" }];
+    expect(preferredDefaultModel(withCloud)?.value).toBe("anthropic/claude-opus-5-5");
+  });
+  it("recommendFallbacks never suggests an embedding model", () => {
+    const models = [{ value: "ollama/nomic-embed-text:latest", name: "nomic" }, { value: "ollama/llama3.1:8b", name: "llama" }];
+    const r = recommendFallbacks("ollama/llama3.2:3b", models);
+    expect([r.sameFamily?.value, r.otherProvider?.value]).not.toContain("ollama/nomic-embed-text:latest");
+  });
   it("isChinaModel matches flagged providers, not Western ones", () => {
     for (const c of ["deepseek/deepseek-v3", "moonshot/kimi-k2", "minimax/abab", "zhipu/glm-4.6", "openrouter/glm-4", "qwen/qwen-max"]) expect(isChinaModel(c)).toBe(true);
     for (const w of ["anthropic/claude-opus-4-8", "openai-codex/gpt-5.4", "google-antigravity/gemini-3-pro", "asksage-google/google-gemini-2.5-pro"]) expect(isChinaModel(w)).toBe(false);

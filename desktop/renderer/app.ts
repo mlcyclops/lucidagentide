@@ -18351,8 +18351,12 @@ async function maybeApplyDefaultModel(modelOpt: ConfigOption | undefined): Promi
     bridge.lastModel().catch(() => ""),
   ]);
   if (agentPrior || state.streaming) return; // the role was entered mid-await: the tier owns the model now
-  const candidates = curatedModels(modelOpt).filter((o) => !unavailableReason(o.value));
-  if (!candidates.length) return;
+  // !isAuxiliaryModel: curatedModels re-adds the CURRENT model even when it is hidden (ensureCurrent), so
+  // without this a session already sitting on an embedding model would match rung 1/2 and stay there.
+  const candidates = curatedModels(modelOpt).filter((o) => !unavailableReason(o.value) && !isAuxiliaryModel(o.value));
+  // Nothing chat-capable yet (e.g. a fresh install whose only models are local embedding tags, before the
+  // first OAuth): do NOT spend the once-per-launch guard, so the post-OAuth config adopt re-runs this.
+  if (!candidates.length) { defaultModelApplied = false; return; }
   const inList = (v: string) => !!v && candidates.some((o) => o.value === v);
   // A remembered model only wins while it is STILL OFFERED and still selectable: a revoked key or a
   // retired model must fall through to the curated default rather than pin the picker to a dead id.

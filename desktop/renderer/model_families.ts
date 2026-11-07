@@ -161,8 +161,23 @@ export function pendingLocalModels(
 /** Gov-gateway (AskSage CIV/MIL) model - only shown when an AskSage key is configured. */
 export function isGovModel(value: string): boolean { return /asksage/i.test(value); }
 
-/** omp auxiliary (non-chat) models - tab-completion + codex auto-review. Never shown in the picker. */
-export function isAuxiliaryModel(value: string): boolean { return /tab_flash|tab_jump|auto-review/i.test(value); }
+/** An EMBEDDING / reranker model: it turns text into vectors and cannot answer a chat turn at all.
+ *  omp's implicit Ollama probe (127.0.0.1:11434, model-discovery.ts) lists EVERY pulled tag as a chat
+ *  model, ignoring Ollama's `capabilities: ["embedding"]`, so a user who pulled `nomic-embed-text` for
+ *  RAG got it in the picker. Worse, with no cloud provider authed yet it was the only survivor of the
+ *  fresh-install default ladder (`qwen…` is China-gated, `…:7b` is tier 0), so LUCID opened on it, every
+ *  turn came back empty ("returned nothing ... end_turn"), and lastModel pinned it across the later
+ *  OAuth and every relaunch. Id heuristic: anything naming `embed`, `rerank`, or a well-known embedding
+ *  family that does not (bge, gte, e5, all-minilm, paraphrase-multilingual). */
+export function isEmbeddingModel(value: string): boolean {
+  return /embed|rerank|(^|[/:_-])(bge|gte|e5|all-minilm|paraphrase-multilingual)([-:._]|$)/i.test(value);
+}
+
+/** omp auxiliary (non-chat) models - tab-completion, codex auto-review, and embedding/reranker models.
+ *  Never shown in the picker and never eligible as a default, fallback, or remembered chat model. */
+export function isAuxiliaryModel(value: string): boolean {
+  return /tab_flash|tab_jump|auto-review/i.test(value) || isEmbeddingModel(value);
+}
 
 /** China-origin model (no U.S. data sovereignty). Hidden until the user acknowledges in Settings.
  *  Forward-looking: matches the providers the user flagged (DeepSeek, Kimi/Moonshot, MiniMax, GLM/Zhipu)
