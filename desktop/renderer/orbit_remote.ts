@@ -31,6 +31,7 @@ import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
 import type { LucidBridge } from "./bridge.ts";
 import type { OrbitSlot } from "./orbit_layout.ts";
+import type { OrbitSpoke } from "./orbit_canvas.ts";
 import {
   approvalButtons, armClick, clockLabel, deployChoices, hostLabel, lanePolicyLabel, latencyLabel, mibLabel, modelCount, REMOTE_TONE, remoteGlance, RESUME_TEXT,
   spokeActions, spokeAlerts, stateLabel, taskButtons, taskModelChoices, VIA_LABEL,
@@ -53,7 +54,7 @@ export interface OrbitRemoteDeps {
 let deps: OrbitRemoteDeps | null = null;
 /** The engine's last answer; null before the first one (or when the engine did not answer). */
 let snap: RemoteHubView | null = null;
-const remoteNodes = new Map<string, { card: HTMLElement; line: SVGLineElement }>();
+const remoteNodes = new Map<string, { card: HTMLElement }>();
 
 export function initOrbitRemote(d: OrbitRemoteDeps): void { deps = d; }
 
@@ -106,7 +107,7 @@ function openAlerts(now: number): RemoteAlertItem[] {
 // ------------------------------------------------------------------------------------ nodes on the ring
 
 /** Create, repaint and drop remote nodes like reconcile() does for lanes (cards are never rebuilt). */
-export function reconcileRemote(stage: HTMLElement, svg: SVGSVGElement, first: boolean): void {
+export function reconcileRemote(stage: HTMLElement, first: boolean): void {
   const spokes = remoteList();
   const seen = new Set<string>();
   spokes.forEach((s, i) => {
@@ -114,10 +115,8 @@ export function reconcileRemote(stage: HTMLElement, svg: SVGSVGElement, first: b
     let entry = remoteNodes.get(s.node);
     if (!entry) {
       const card = buildRemoteNode(s.node);
-      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-      svg.appendChild(line);
       stage.appendChild(card);
-      entry = { card, line };
+      entry = { card };
       remoteNodes.set(s.node, entry);
       card.style.setProperty("--tx", "0px");
       card.style.setProperty("--ty", "0px");
@@ -126,12 +125,10 @@ export function reconcileRemote(stage: HTMLElement, svg: SVGSVGElement, first: b
       requestAnimationFrame(() => card.classList.remove("orbit-enter"));
     }
     paintRemoteNode(entry.card, s);
-    entry.line.setAttribute("class", `orbit-line remote rs-${REMOTE_TONE[s.state]}`);
   });
   for (const [node, entry] of remoteNodes) {
     if (seen.has(node)) continue;
     remoteNodes.delete(node);
-    entry.line.remove();
     entry.card.classList.add("orbit-exit");
     entry.card.style.setProperty("--tx", "0px");
     entry.card.style.setProperty("--ty", "0px");
@@ -193,19 +190,18 @@ export function remoteDeployVisible(): boolean {
   return snap !== null && snap.available && snap.actions.drive && snap.spokes.some((s) => !s.deactivated);
 }
 
-/** Place remote nodes on the slots after the local lanes'. */
-export function layoutRemote(slots: readonly OrbitSlot[], cx: number, cy: number): void {
+/** Place remote nodes on the slots after the local lanes'; their lines go to the orbit canvas (ADR-0522). */
+export function layoutRemote(slots: readonly OrbitSlot[]): OrbitSpoke[] {
+  const lines: OrbitSpoke[] = [];
   remoteList().forEach((s, i) => {
     const entry = remoteNodes.get(s.node);
     const slot = slots[i];
     if (!entry || !slot) return;
     entry.card.style.setProperty("--tx", `${Math.round(slot.x)}px`);
     entry.card.style.setProperty("--ty", `${Math.round(slot.y)}px`);
-    entry.line.setAttribute("x1", String(cx));
-    entry.line.setAttribute("y1", String(cy));
-    entry.line.setAttribute("x2", String(cx + slot.x));
-    entry.line.setAttribute("y2", String(cy + slot.y));
+    lines.push({ x: slot.x, y: slot.y, status: `remote-${REMOTE_TONE[s.state]}`, promoted: false });
   });
+  return lines;
 }
 
 // ------------------------------------------------------------------------- the hub picker's section
