@@ -26383,6 +26383,7 @@ Parity already held and left alone: workspace, tab, pane hierarchy and ids; the 
 
 **Consequences.** No multiple-choice question UI in the IDE; questions arrive as text and the user answers in the composer. Approval and plan-mode elicitations are unchanged (they still go through `elicitationAnswer`).
 ## ADR-0523 -- P-GLOW.1: the red "needs approval" pulse runs on the compositor: a shadow painted once, only its opacity animates (2026-11-07)
+## ADR-0524 -- P-GLOW.1: the red "needs approval" pulse runs on the compositor: a shadow painted once, only its opacity animates (2026-11-07)
 
 **Status:** Accepted.
 

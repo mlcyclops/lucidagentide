@@ -5079,7 +5079,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-card.lane-error{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .4);border-color:var(--red)}
 .fleet-card.lane-stopped{--lane:var(--txt-4);opacity:.55}
 @keyframes fleetGlowBlue{0%,100%{box-shadow:0 0 0 0 rgb(var(--blue-rgb) / 0)}50%{box-shadow:0 0 14px 2px rgb(var(--blue-rgb) / .4)}}
-/* P-GLOW.1 (ADR-0523): the red "needs approval" pulse on a grid card, the dock pill and a census pip is a
+/* P-GLOW.1 (ADR-0524): the red "needs approval" pulse on a grid card, the dock pill and a census pip is a
    pseudo-element whose shadow is painted ONCE; only its opacity animates (orbitGlow), which runs on the
    compositor. Animating box-shadow itself repainted on the main thread every frame for as long as any lane
    waited, app-wide through the dock pill. The card clips its overflow, so its glow sits inside the border. */

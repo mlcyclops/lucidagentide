@@ -5969,6 +5969,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **stubbed:** no question card in the IDE; the model asks in its reply instead.
 - **next:** merge into `feat/rs-fleet-ops` and rebuild the installer; optionally design an askDialog card for master, lanes and the PWA, then re-enable `ask`.
 ## P-GLOW.1: the red "needs approval" pulse runs on the compositor (ADR-0523)
+## P-GLOW.1: the red "needs approval" pulse runs on the compositor (ADR-0524)
 - **shipped (2026-11-07):** the grid card, the dock pill and the census pip pulse through one `::after` rule (shadow painted once, `orbitGlow` opacity pulse); `fleetGlowRed` removed; reduced motion and the orbit's Lite hold it still.
 - **verified:** bench in Edge, main thread ms per second before and after: dock pill plus grid card waiting 12.6 to 1.3, orbit Lite with an approval waiting 16.9 to 2.0; peak screenshots: pill and pip match, the card's glow now sits inside its border (the card clips overflow).
 - **stubbed:** `fleetGlowAmber` on awaiting-input grid cards still animates box-shadow.
