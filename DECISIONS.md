@@ -25992,7 +25992,7 @@ Parity already held and left alone: workspace, tab, pane hierarchy and ids; the 
 
 **Consequences.** One fleet arrangement, two faces, as the grid and the orbit already are (P-FLEET.L18). Relates to ADR-0271, ADR-0273, ADR-0325, ADR-0452, ADR-0489, ADR-0491, ADR-0494.
 
-## ADR-0523 -- P-GLOW.1: the red "needs approval" pulse runs on the compositor: a shadow painted once, only its opacity animates (2026-11-07)
+## ADR-0524 -- P-GLOW.1: the red "needs approval" pulse runs on the compositor: a shadow painted once, only its opacity animates (2026-11-07)
 
 **Status:** Accepted.
 
