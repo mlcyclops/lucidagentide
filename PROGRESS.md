@@ -5848,6 +5848,42 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-05, branch `feat/rs-integration`, local):** ADR-0507. The view model maps the hub plugin's optional `deactivated {since, reason}` per spoke to a `deactivated` state that wins over silent, offline and checking; it reads "Deactivated since 2026-11-05: <reason>" in a new dim grey tone (`rs-off`, never animated), raises no alert lines, has no Start-a-task row and its panel offers no action; the engine refuses every action and read for it before anything reaches the plugin. `make demo-P-RS-DEACTIVATE.1`.
 - **stubbed:** none. The mark appears once the add-on hub plugin sends it (`hub deactivate`); `hub reactivate` removes it and the spoke behaves as before.
 - **next:** rebuild the installers with the updated add-on, then `hub deactivate --spoke n_345419a1fffa90135630cdba8b2aeeaa` for the DGX Spark and check the orbit shows it grey with its reason and no alert.
+## P-SESS-SEARCH.1: sidebar session search, spokes hidden by default, carried notes never title a session (ADR-0469)
+- **shipped (2026-11-02):** a search field and a Spokes toggle above the SESSIONS list. `GET /api/sessions/search` matches every term against title, model, spoke name and what the user typed and the agent replied (never tool output or injected blocks) across all sessions of the workspace, not only the 40 listed; hits show marked words and a snippet and open like any row. Spoke sessions (lane-session ledger) are hidden unless toggled on, before the 40-row cap. Titles skip ADR-0414 carried operator notes. Proof: `make demo-P-SESS-SEARCH.1`, 9 new tests, a real-corpus smoke (1,510 sessions: 0 note titles, 234 spokes hidden, search 144-173 ms, a 38-day-old session opened from a hit).
+- **stubbed:** none. A carried note containing a blank line can leave its tail in the title; the harness's own notes are one paragraph.
+- **next:** `dev.ts` says "set LUCID_PORT" when its port is busy, but the engine reads `PORT`; fix the message.
+
+## P-HUB-PICK.1: hub picker, a codebase on every spoke, "spoke" not "lane" (ADR-0470)
+- **shipped (2026-11-02):** the orbit header's hubs button names the hub on screen and opens a picker of every hub (this one first, codebases and waiting counts per hub, Open through the guarded switch); the spoke switch menu lists other hubs too. Every spoke shows its codebase (hosted repo, git root or folder) in a stable color on the orbit and the grid; the grid has a By repo toggle. The attach/release notes the agent reads and all fleet UI prose say "spoke". Proof: `make demo-P-HUB-PICK.1`, 6 new tests, a browser smoke with two hubs over three codebases.
+- **stubbed:** none. Hubs are sessions of one local engine; remote hubs and spokes are not built (proposal filed in the private add-on repo).
+- **next:** the PWA fleet cards and the hub TUI still say "lane"; carry the wording there.
+
+## P-SESS-ARCHIVE.1: saved session index, archive and auto-archive (ADR-0471)
+- **shipped (2026-11-02):** the session index is saved to `~/.omp/agent/lucid-session-index.json` and reused at start (first list 2,327 ms to 176 ms on 1,653 real sessions). Sessions move to `~/.omp/agent/sessions-archive/` by a row button or an off-by-default age rule (30 days, 7 for spoke and empty sessions); archived ones stay searchable, readable and on the Timeline, and opening or recovering one restores it. A cross-engine registry keeps any session held by any running LUCID engine from moving. Proof: `make demo-P-SESS-ARCHIVE.1`, 9 new tests, real archive/open/restore and two-engine refusal smokes.
+- **stubbed:** none. Engines older than this build do not publish what they hold; for those the rule's day-based age is the only guard.
+- **next:** turn the rule on after a week of manual use; then consider dropping empty sessions sooner than 7 days.
+
+## P-STOP-GUARD.1: a press aimed at Send never stops a turn (ADR-0489)
+- **shipped (2026-11-03):** the composer's Send/Stop button stops only when the press began on a Stop face shown for 600 ms (`desktop/renderer/stop_guard.ts`, wired in `renderer/app.ts`). Before, a double click on Send, or a click as a held prompt or voice send started a turn, cancelled the new turn as if the user had pressed Stop. Proof: 6 new tests, renderer typecheck and bundle.
+- **stubbed:** none.
+- **next:** none. Spoke liveness: owner chose to keep stopping manual and show the evidence (P-STUCK-SHOW.1 below).
+
+## P-STUCK-SHOW.1: a spoke that might be stuck says so everywhere (ADR-0490)
+- **shipped (2026-11-03):** a working spoke whose open call ADR-0418 marks likely stuck shows as its own red state (`displayStatus` in `desktop/collab/fleet_status.ts`) on the orbit node, the orbit census, the grid card, the minimized pill and the Other hubs "waiting" count; the Fleet toolbar button gets a red dot naming the spokes, and one toast per stall offers Open spoke, with the fleet closed too (10 s poll in `renderer/app.ts`). A call flat for half the threshold (2.5 min, 6 min with a subagent) now reads "might be stuck: no activity for N" in amber in the quiet default (HUD line, grid pill, orbit node). Nothing acts on either. Proof: 5 new tests, desktop suites pass (the 5 failures under `desktop/release/win-unpacked` are the packaged copy the test script ignores), renderer and server typecheck, bundle, and a rendered check of the real CSS and glance strings.
+- **stubbed:** none. The amber orbit border was confirmed in the DOM (class `flat`), not in a screenshot: the preview screenshot lagged one page behind.
+- **next:** none. The phone follow-up shipped as P-STUCK-SHOW.3 below.
+
+## P-STUCK-SHOW.2: "ready for your prompt" is blue (ADR-0491)
+- **shipped (2026-11-03):** awaiting-input is blue on desktop (grid card, pips, orbit node and line, switch menu) and on the phone (`tools/remote-pwa/index.html`); amber now means only "might be stuck"; a likely-stuck spoke's orbit line is red. Proof: renderer typecheck, 956 tests across desktop/collab, orbit layout and the phone app.
+- **stubbed:** none. The colors were not checked by eye (the preview screenshot captured the app window, not the test page).
+- **next:** none. The slate theme's blue moved to #7790dc so it parts from cyan (ADR-0491 amendment).
+
+## P-STUCK-SHOW.3: phone guests see a likely-stuck spoke (ADR-0492)
+- **shipped (2026-11-03):** the guest fleet snapshot carries `stuck: true`; the phone's bar counts "likely stuck" in red and the lane card turns red while keeping Queue and Push. Proof: 1 new test, 2,098 tests across desktop/collab, desktop/renderer, the phone app and the liveness modules, root and desktop typechecks, PWA and renderer bundles.
+- **stubbed:** none. No amber "might be stuck" on the phone by design.
+- **next:** none.
+- **pushed (2026-11-03), merged with master (2026-11-05):** P-STOP-GUARD.1 and P-STUCK-SHOW.1 to .3 on `feat/p-sess-archive-1` (PR #553). Written as ADR-0472 to 0475; renumbered ADR-0489 to 0492 because master's vault suite took 0472 to 0479.
+
 ## P-FIPS.1: at-rest crypto runs in the OS's FIPS 140 module (Windows CNG / Apple corecrypto / OpenSSL FIPS provider) (ADR-0473)
 - **shipped (2026-11-03):** `harness/crypto/fips_crypto.ts` (Contract A): Windows CNG via bun:ffi (proven byte-identical to node:crypto for AES-256-GCM with and without AAD at lengths 0 to 65539, PBKDF2, SHA-256, HMAC-SHA256; tag tampering throws), CommonCrypto and OpenSSL-FIPS bindings, power-on KATs, the documented `fips` claim rule (a Microsoft-listed Windows release AND the OS FIPS policy or its auto-self-test patch level; a macOS release and architecture with an active corecrypto CMVP certificate), fail-closed `FipsRequiredError` under `LUCID_FIPS_REQUIRED=1` or ANY managed source setting `security.crypto.requireFips` (GPO `CryptoRequireFips`, machine file, `LUCID_MANAGED_CONFIG` file; monotonic OR); `harness/personal/crypto.ts` switched with personal-kg.v1 unchanged; `make demo-P-FIPS.1`.
 - **stubbed:** macOS corecrypto (GCM through SPI) and Linux OpenSSL FIPS paths are not exercised on a real host; outbound TLS (Bun/omp BoringSSL) remains a non-validated residual gap; ADMX/ADML for `CryptoRequireFips` is owed in the private add-on repo.

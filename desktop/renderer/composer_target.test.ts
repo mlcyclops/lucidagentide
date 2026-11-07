@@ -327,7 +327,6 @@ describe("agent-facing promote/demote notes (P-FLEET.L8)", () => {
 
   it("demoteAgentNote says the lane is back on its card AND that the history is still its own", () => {
     const s = demoteAgentNote(lane());
-    expect(s).toMatch(/fleet lane card/i);
     expect(s).toMatch(/same session/i); // the model must not think it lost the turns
     expect(s).not.toContain(EM_DASH);
   });

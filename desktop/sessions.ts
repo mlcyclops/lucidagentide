@@ -8,12 +8,13 @@
 // and derive a title (first user message), model, turn count, and last-modified.
 // New GUI chats write new files here, so they appear on the next poll.
 
-import { closeSync, existsSync, fstatSync, openSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { open, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
 import { EXTRACT_SYSTEM } from "../harness/personal/distiller.ts";
+import { CARRIED_MARKER } from "./interject_store.ts";
 import { currentWorkspace } from "./workspace.ts";
 
 const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
@@ -60,6 +61,21 @@ export function stripInjectedPreamble(text: string): string {
   return s.replace(/^\s+/, "");
 }
 
+// P-SESS-SEARCH.1 (ADR-0469): an operator note carried into a prompt (ADR-0414) opens it as CARRIED_MARKER,
+// a newline, the note, then a blank line before what the user typed. The block has no closing tag, so the
+// note ends at its first blank line (the harness's own notes are one paragraph). It stays in the transcript,
+// the record of what the agent was told, but it never names the session: before this, every session a lane
+// was attached to was titled "[LUCID OPERATOR NOTE - sent while no tool s...".
+const CARRIED_NOTE = new RegExp(`^\\s*${CARRIED_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n[\\s\\S]*?(?:\\n\\n|$)`);
+
+/** A user message with the injected preamble AND any leading carried operator notes removed: what the
+ *  user typed. The session title and the search text read this; the transcript keeps the notes. */
+export function typedText(text: string): string {
+  let s = stripInjectedPreamble(text);
+  for (let m = CARRIED_NOTE.exec(s); m; m = CARRIED_NOTE.exec(s)) s = stripInjectedPreamble(s.slice(m[0].length));
+  return s;
+}
+
 export interface SessionInfo {
   id: string;
   title: string;
@@ -67,9 +83,42 @@ export interface SessionInfo {
   updatedAt: number;
   turns: number;
   kind?: "chat" | "kg-ingest"; // P-KG-INGEST.1b: throwaway model-extraction sessions (import + AI-learn)
+  /** P-SESS-SEARCH.1: the fleet lane that ran this session (lane-session ledger), set only when listed. */
+  spoke?: string;
+  /** P-SESS-ARCHIVE.1: the file lives in the archive folder (set only when true). */
+  archived?: true;
 }
 // P-KG-INGEST.1b (ADR-0076): the chat list, with throwaway extraction sessions split into their own group.
-export interface SessionList { sessions: SessionInfo[]; ingest: SessionInfo[] }
+// P-SESS-SEARCH.1: `hiddenSpokes` counts the spoke sessions a SpokeFilter held back (set only when filtered).
+// P-SESS-ARCHIVE.1: `archived` counts this workspace's archived chats (the sidebar's Archived group).
+export interface SessionList { sessions: SessionInfo[]; ingest: SessionInfo[]; hiddenSpokes?: number; archived?: number }
+
+/** Where omp keeps every session (one folder per encoded cwd). */
+export const sessionsRoot = (): string => join(homedir(), ".omp", "agent", "sessions");
+/** P-SESS-ARCHIVE.1 (ADR-0471): archived sessions keep their `<encoded-cwd>/<file>` path under this sibling
+ *  folder. Same volume as the sessions folder, so archiving and restoring are one atomic rename, and omp,
+ *  which only looks under `sessions/`, never sees or scans them. */
+export const archiveRootFor = (root: string): string => `${root}-archive`;
+/** Is `p` inside folder `root`? A bare prefix test would also match `sessions-archive` for `sessions`. */
+const under = (p: string, root: string): boolean => p.startsWith(root + sep);
+
+/** P-SESS-SEARCH.1 (ADR-0469): which sessions fleet lanes ran (session id -> lane name, from the durable
+ *  lane-session ledger), whether to show them, and the ids that stay visible regardless (the session Main
+ *  holds and the lane the main composer is driving). Spoke sessions are hidden unless `show`. */
+export interface SpokeFilter { spokes: ReadonlyMap<string, string>; show: boolean; keep?: ReadonlySet<string> }
+
+function spokeView<S extends SessionInfo>(rows: S[], filter?: SpokeFilter): { rows: S[]; hidden: number } {
+  if (!filter) return { rows, hidden: 0 };
+  const out: S[] = [];
+  let hidden = 0;
+  for (const s of rows) {
+    const name = filter.spokes.get(s.id);
+    if (name === undefined) { out.push(s); continue; }
+    if (!filter.show && !filter.keep?.has(s.id)) { hidden++; continue; }
+    out.push({ ...s, spoke: name });
+  }
+  return { rows: out, hidden };
+}
 
 // The import / AI-learn extractor runs in THROWAWAY omp sessions whose only "user message" is the
 // extractor system prompt + the text being learned from. omp persists each one, so a big import leaves
@@ -99,17 +148,22 @@ function firstUserText(message: any): string {
 // poll (the single biggest UI stall found in the battery investigation). Each file's parsed metadata is
 // cached keyed by mtime+size (append-only .jsonl always changes both); a poll now re-parses only what
 // changed and stat()s the rest. Entries for deleted files are pruned each scan.
-interface IndexEntry { mtimeMs: number; size: number; scwd: string; meta: Omit<SessionInfo, "updatedAt"> | null }
+// P-SESS-SEARCH.1 (ADR-0469): `text` is what search reads - every user message as typed (typedText) and every
+// assistant reply's text, never tool output, thinking, or injected blocks. Built in the same parse the
+// listing already pays for, so a search reads no file; the corpus measured 8.6 MB of it for 951 MB of
+// transcripts. Empty for ingest throwaways and probe sessions, which search never returns.
+interface IndexEntry { mtimeMs: number; size: number; scwd: string; meta: Omit<SessionInfo, "updatedAt"> | null; text: string }
 const sessionIndex = new Map<string, IndexEntry>();
 let indexParses = 0; // test seam: how many files were actually (re)parsed
 
 /** Parse one session .jsonl's TEXT into list metadata. `meta: null` = an empty/probe session (cached
  *  too, so it isn't re-parsed every poll just to be skipped again). Takes text rather than a path so
  *  the timeline's async scan can read the file off the event loop. */
-function parseSessionText(text: string, f: string): { scwd: string; meta: Omit<SessionInfo, "updatedAt"> | null } {
+function parseSessionText(text: string, f: string): { scwd: string; meta: Omit<SessionInfo, "updatedAt"> | null; text: string } {
   indexParses++;
   let id = "", scwd = "", model = "", title = "", turns = 0;
   let kind: "chat" | "kg-ingest" = "chat";
+  const said: string[] = [];
   for (const ln of text.split("\n")) {
     if (!ln) continue;
     let o: any;
@@ -121,7 +175,11 @@ function parseSessionText(text: string, f: string): { scwd: string; meta: Omit<S
         const raw = firstUserText(o.message);
         // An extractor throwaway -> group it; its title is the snippet it learned from, not the prompt.
         if (isIngestPrompt(raw)) { kind = "kg-ingest"; const t = ingestPreview(raw); if (t.trim()) title = t.trim().slice(0, 64); }
-        else { const t = stripInjectedPreamble(raw); if (t.trim()) title = t.trim().slice(0, 64); }
+        else { const t = typedText(raw); if (t.trim()) title = t.trim().slice(0, 64); }
+      }
+      if (kind === "chat" && (o.message.role === "user" || o.message.role === "assistant")) {
+        const t = o.message.role === "user" ? typedText(msgText(o.message)) : msgText(o.message);
+        if (t.trim()) said.push(t);
       }
       if (o.message.role === "assistant" && o.message.usage) {
         turns++;
@@ -133,8 +191,8 @@ function parseSessionText(text: string, f: string): { scwd: string; meta: Omit<S
       }
     }
   }
-  if (!title && turns === 0) return { scwd, meta: null }; // empty/probe session - remembered, skipped
-  return { scwd, meta: { id: id || f, title: title || "Untitled session", model: model || "-", turns, kind } };
+  if (!title && turns === 0) return { scwd, meta: null, text: "" }; // empty/probe session - remembered, skipped
+  return { scwd, meta: { id: id || f, title: title || "Untitled session", model: model || "-", turns, kind }, text: said.join("\n") };
 }
 
 /** The model as omp's `session/set_config_option` accepts it: `provider/model`. A `model_change` row
@@ -155,15 +213,180 @@ function indexedEntry(p: string, f: string, st: { mtimeMs: number; size: number 
   if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit;
   const e: IndexEntry = { mtimeMs: st.mtimeMs, size: st.size, ...parseSessionText(typeof text === "string" ? text : text(), f) };
   sessionIndex.set(p, e);
+  markDirty(p);
   return e;
 }
 
-export function __resetSessionIndex(): void { sessionIndex.clear(); allScans.clear(); indexParses = 0; }
+// ── P-SESS-ARCHIVE.1 (ADR-0471): the index survives restarts ──────────────────────────────────────────────
+// Building the index reads every transcript once: 1.1 GB on the measured machine, about 3 s at every engine
+// start. The entries (list metadata + search text, about 1% of the bytes) are written to one file beside the
+// sessions folder and read back at the first scan, so a start re-parses only files whose mtime or size
+// changed. The session files stay the only truth: an entry is used only while its mtime+size still match,
+// and a missing, unreadable, foreign-version or malformed index file is simply rebuilt.
+/** Bump whenever parseSessionText's output changes, or old titles and search text would outlive the fix. */
+const INDEX_FILE_VERSION = 1;
+/** At most one write per this long: the session in use changes every turn. */
+const INDEX_SAVE_DELAY_MS = 30_000;
+/** Which root the index file covers (its archive sibling too). undefined = the default, not yet resolved;
+ *  null = persistence off. Only keys under these roots are ever read from or written to the file. */
+let indexStore: { file: string; root: string } | null | undefined;
+let indexStoreLoaded = false;
+let indexSaveTimer: Timer | null = null;
 
-export function listSessions(cwd: string = currentWorkspace(), root: string = join(homedir(), ".omp", "agent", "sessions")): SessionList {
-  if (!existsSync(root)) return { sessions: [], ingest: [] };
+function store(): { file: string; root: string } | null {
+  if (indexStore === undefined) indexStore = { file: join(homedir(), ".omp", "agent", "lucid-session-index.json"), root: sessionsRoot() };
+  return indexStore;
+}
+function persisted(k: string): boolean {
+  const s = store();
+  return !!s && (under(k, s.root) || under(k, archiveRootFor(s.root)));
+}
+
+function isIndexEntry(v: unknown): v is IndexEntry {
+  if (!v || typeof v !== "object") return false;
+  if (!("mtimeMs" in v) || typeof v.mtimeMs !== "number" || !("size" in v) || typeof v.size !== "number") return false;
+  if (!("scwd" in v) || typeof v.scwd !== "string" || !("text" in v) || typeof v.text !== "string" || !("meta" in v)) return false;
+  const m = v.meta;
+  if (m === null) return true;
+  return !!m && typeof m === "object" && "id" in m && typeof m.id === "string" && "title" in m && typeof m.title === "string"
+    && "model" in m && typeof m.model === "string" && "turns" in m && typeof m.turns === "number"
+    && (!("kind" in m) || m.kind === undefined || m.kind === "chat" || m.kind === "kg-ingest");
+}
+
+/** Seed the in-memory index from the file, once, the first time its root (or archive) is scanned. Entries
+ *  already in memory win: they were read from disk this run. */
+function loadIndexStore(root: string): void {
+  const s = store();
+  if (indexStoreLoaded || !s || (root !== s.root && root !== archiveRootFor(s.root))) return;
+  indexStoreLoaded = true;
+  let raw: unknown;
+  try { raw = JSON.parse(readFileSync(s.file, "utf8")); } catch { return; }
+  if (!raw || typeof raw !== "object" || !("v" in raw) || raw.v !== INDEX_FILE_VERSION || !("entries" in raw) || !Array.isArray(raw.entries)) return;
+  for (const row of raw.entries) {
+    if (!Array.isArray(row) || typeof row[0] !== "string" || !persisted(row[0]) || sessionIndex.has(row[0])) continue;
+    if (isIndexEntry(row[1])) sessionIndex.set(row[0], row[1]);
+  }
+}
+
+function markDirty(k: string): void {
+  if (indexSaveTimer || !indexStoreLoaded || !persisted(k)) return;
+  indexSaveTimer = setTimeout(() => { indexSaveTimer = null; flushSessionIndex(); }, INDEX_SAVE_DELAY_MS);
+  indexSaveTimer.unref(); // a pending save is never the reason the engine stays up
+}
+
+/** Write the index file now (temp file + rename, so a crash mid-write leaves the previous one). Never
+ *  writes before the file was read this run: a scan of another root must not overwrite it with nothing. */
+export function flushSessionIndex(): void {
+  if (indexSaveTimer) { clearTimeout(indexSaveTimer); indexSaveTimer = null; }
+  const s = store();
+  if (!s || !indexStoreLoaded) return;
+  const tmp = `${s.file}.${process.pid}.tmp`;
+  try {
+    mkdirSync(dirname(s.file), { recursive: true });
+    writeFileSync(tmp, JSON.stringify({ v: INDEX_FILE_VERSION, entries: [...sessionIndex].filter(([k]) => persisted(k)) }));
+    renameSync(tmp, s.file);
+  } catch { try { rmSync(tmp, { force: true }); } catch { /* nothing to clean */ } }
+}
+
+/** Test seam: point persistence at a file and root, turn it off (null), or back to the default (undefined). */
+export function __setSessionIndexStore(s: { file: string; root: string } | null | undefined): void {
+  if (indexSaveTimer) { clearTimeout(indexSaveTimer); indexSaveTimer = null; }
+  indexStore = s;
+  indexStoreLoaded = false;
+}
+
+export function __resetSessionIndex(): void {
+  sessionIndex.clear(); allScans.clear(); archiveScanned.clear(); indexParses = 0;
+  if (indexSaveTimer) { clearTimeout(indexSaveTimer); indexSaveTimer = null; }
+  indexStoreLoaded = false;
+}
+
+/** The file of session `id` under `root`: the index first (no file read), else a scan for its session
+ *  record (a file the index has not seen yet). */
+function findSessionPath(id: string, root: string): string | null {
+  loadIndexStore(root);
+  for (const [k, e] of sessionIndex) {
+    if (under(k, root) && (e.meta?.id === id || basename(k) === id) && existsSync(k)) return k;
+  }
+  if (!existsSync(root)) return null;
+  for (const d of readdirSync(root)) {
+    const dir = join(root, d);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+      for (const f of readdirSync(dir)) {
+        if (!f.endsWith(".jsonl")) continue;
+        const p = join(dir, f);
+        try { if (f === id || sessionRecord(readFileSync(p, "utf8"), f).id === id) return p; } catch { /* unreadable */ }
+      }
+    } catch { /* skip dir */ }
+  }
+  return null;
+}
+
+/** The sidebar listing. `filter` (P-SESS-SEARCH.1) tags and, unless shown, holds back spoke sessions
+ *  BEFORE the 40-row cap, so hidden spokes never take a slot a chat could have. */
+export function listSessions(cwd: string = currentWorkspace(), root: string = join(homedir(), ".omp", "agent", "sessions"), filter?: SpokeFilter): SessionList {
+  const all = workspaceSessions(cwd, root).map((r) => r.info);
+  const chats = spokeView(all.filter((s) => s.kind !== "kg-ingest"), filter);
+  // Split: real chats (capped) vs the collapsed ingest group, so a big import can't crowd out chats.
+  return {
+    sessions: chats.rows.slice(0, 40),
+    ingest: all.filter((s) => s.kind === "kg-ingest").slice(0, 60),
+    ...(filter ? { hiddenSpokes: chats.hidden } : {}),
+    archived: archivedRows(cwd, root).filter((r) => r.info.kind !== "kg-ingest").length,
+  };
+}
+
+/** P-SESS-SEARCH.1: one search hit. `snippet` is set when the match came from the conversation rather
+ *  than the title, model, or spoke name: the matched words with some text either side. */
+export interface SessionHit extends SessionInfo { snippet?: string }
+/** `total` counts every visible match (hits is capped); `hiddenSpokes` counts matches a SpokeFilter held back. */
+export interface SessionSearch { hits: SessionHit[]; total: number; hiddenSpokes: number }
+
+const SEARCH_MAX_TERMS = 8;
+const SNIPPET_BEFORE = 40;
+const SNIPPET_AFTER = 100;
+
+function snippetAt(text: string, at: number, len: number): string {
+  const start = Math.max(0, at - SNIPPET_BEFORE);
+  const end = Math.min(text.length, at + len + SNIPPET_AFTER);
+  return `${start > 0 ? "\u2026" : ""}${text.slice(start, end).replace(/\s+/g, " ").trim()}${end < text.length ? "\u2026" : ""}`;
+}
+
+/** P-SESS-SEARCH.1 (ADR-0469): every chat session of `cwd` (not just the sidebar's 40) whose title, model,
+ *  spoke name, or conversation (index `text`: typed prompts and replies) contains EVERY whitespace-separated
+ *  term, case-insensitive. Sessions matched by name come first, then those matched only by what was said;
+ *  each group newest first. Reads the index only; a file is parsed only if it changed since the last listing. */
+export function searchSessions(query: string, opts: { cwd?: string; root?: string; filter?: SpokeFilter; limit?: number } = {}): SessionSearch {
+  const terms = [...new Set(query.toLowerCase().split(/\s+/).filter(Boolean))].slice(0, SEARCH_MAX_TERMS);
+  if (!terms.length) return { hits: [], total: 0, hiddenSpokes: 0 };
+  const res = terms.map((t) => new RegExp(t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+  const cwd = opts.cwd ?? currentWorkspace();
+  const root = opts.root ?? sessionsRoot();
+  // P-SESS-ARCHIVE.1: archived sessions are found too (marked), straight from the index: no file is read.
+  const rows = [...workspaceSessions(cwd, root), ...archivedRows(cwd, root)];
+  const named: SessionHit[] = [];
+  const said: SessionHit[] = [];
+  for (const { info, text } of rows) {
+    if (info.kind === "kg-ingest") continue;
+    const label = `${info.title}\n${info.model}\n${opts.filter?.spokes.get(info.id) ?? ""}`;
+    const inLabel = res.map((re) => re.test(label));
+    if (inLabel.every(Boolean)) { named.push(info); continue; }
+    if (!res.every((re, i) => inLabel[i] || re.test(text))) continue;
+    const m = res[inLabel.indexOf(false)]!.exec(text);
+    said.push(m ? { ...info, snippet: snippetAt(text, m.index, m[0].length) } : info);
+  }
+  const visible = spokeView([...named, ...said], opts.filter);
+  return { hits: visible.rows.slice(0, Math.max(1, opts.limit ?? 50)), total: visible.rows.length, hiddenSpokes: visible.hidden };
+}
+
+/** Every parseable session of `cwd` with its search text, newest first, uncapped. The one per-workspace
+ *  scan the listing and search share: stat()s every file, parses only what changed (P-PERF.4). */
+function workspaceSessions(cwd: string, root: string): { info: SessionInfo; text: string }[] {
+  if (!existsSync(root)) return [];
+  loadIndexStore(root);
   const want = norm(cwd);
-  const all: SessionInfo[] = [];
+  const all: { info: SessionInfo; text: string }[] = [];
   const seen = new Set<string>();
   for (const d of readdirSync(root)) {
     const dir = join(root, d);
@@ -179,19 +402,144 @@ export function listSessions(cwd: string = currentWorkspace(), root: string = jo
           try { e = indexedEntry(p, f, fstatSync(fd), () => readFileSync(fd, "utf8")); } finally { closeSync(fd); }
           seen.add(p);
           if (!e.meta || norm(e.scwd) !== want) continue;
-          all.push({ ...e.meta, updatedAt: e.mtimeMs });
+          all.push({ info: { ...e.meta, updatedAt: e.mtimeMs }, text: e.text });
         } catch { /* skip unreadable file */ }
       }
     } catch { /* skip dir */ }
   }
-  // Prune index entries for files deleted under THIS root (other roots - e.g. tests - are untouched).
-  for (const k of sessionIndex.keys()) if (k.startsWith(root) && !seen.has(k)) sessionIndex.delete(k);
-  all.sort((a, b) => b.updatedAt - a.updatedAt);
-  // Split: real chats (capped) vs the collapsed ingest group — so a big import can't crowd out chats.
+  // Prune index entries for files deleted under THIS root (other roots - e.g. tests, the archive - are untouched).
+  for (const k of sessionIndex.keys()) if (under(k, root) && !seen.has(k)) { sessionIndex.delete(k); markDirty(k); }
+  all.sort((a, b) => b.info.updatedAt - a.info.updatedAt);
+  return all;
+}
+
+// ── P-SESS-ARCHIVE.1 (ADR-0471): archive and restore ──────────────────────────────────────────────────────
+// Archiving moves a transcript to the same relative path under `<root>-archive` and moves its index entry
+// with it, so it is never parsed again, never stat()ed by the sidebar poll, and still searchable. Nothing is
+// deleted. Restoring is the reverse rename; opening, recovering or deleting an archived session restores or
+// finds it first (dev.ts), because omp loads sessions only from the sessions folder.
+
+/** Archive roots whose files the index has seen at least once this run. Archived files do not change on
+ *  their own, so after one scan the index answers for them; archive and restore keep it in step. */
+const archiveScanned = new Set<string>();
+
+/** This workspace's archived sessions with their search text, newest first, from the index. */
+function archivedRows(cwd: string, root: string, refresh = false): { info: SessionInfo; text: string }[] {
+  const ar = archiveRootFor(root);
+  if (refresh || !archiveScanned.has(ar)) { workspaceSessions(cwd, ar); archiveScanned.add(ar); }
+  const want = norm(cwd);
+  const out: { info: SessionInfo; text: string }[] = [];
+  for (const [k, e] of sessionIndex) {
+    if (under(k, ar) && e.meta && norm(e.scwd) === want) out.push({ info: { ...e.meta, updatedAt: e.mtimeMs, archived: true }, text: e.text });
+  }
+  return out.sort((a, b) => b.info.updatedAt - a.info.updatedAt);
+}
+
+/** The Archived group: this workspace's archived chats, newest first. Re-scans the archive folder. */
+export function archivedSessions(cwd: string = currentWorkspace(), root: string = sessionsRoot()): SessionInfo[] {
+  return archivedRows(cwd, root, true).map((r) => r.info).filter((s) => s.kind !== "kg-ingest");
+}
+
+export interface MoveResult { ok: boolean; error?: string }
+
+function moveSession(from: string, to: string): MoveResult {
+  if (existsSync(to)) return { ok: false, error: "a session file with that name is already there; nothing was moved" };
+  try {
+    mkdirSync(dirname(to), { recursive: true });
+    renameSync(from, to);
+  } catch (e) {
+    const code = e && typeof e === "object" && "code" in e ? String(e.code) : "";
+    return { ok: false, error: code === "EBUSY" || code === "EPERM" ? "the session file is in use by a running agent; close it and try again" : `could not move the session file (${code || "error"})` };
+  }
+  const e = sessionIndex.get(from);
+  sessionIndex.delete(from);
+  markDirty(from);
+  if (e) { try { const st = statSync(to); sessionIndex.set(to, { ...e, mtimeMs: st.mtimeMs, size: st.size }); markDirty(to); } catch { /* re-indexed on the next scan */ } }
+  allScans.clear();
+  return { ok: true };
+}
+
+function sessionCwd(p: string): string {
+  const known = sessionIndex.get(p)?.scwd;
+  if (known) return known;
+  try { return sessionRecord(readFileSync(p, "utf8"), basename(p)).cwd; } catch { return ""; }
+}
+
+/** Archive one session. `cwd` set = refuse a session of another workspace (the sidebar's rule for delete).
+ *  Already archived counts as done. The caller refuses live sessions (dev.ts knows who holds what). */
+export function archiveSession(id: string, opts: { cwd?: string; root?: string } = {}): MoveResult {
+  const root = opts.root ?? sessionsRoot();
+  const from = findSessionPath(id, root);
+  if (!from) return findSessionPath(id, archiveRootFor(root)) ? { ok: true } : { ok: false, error: "session not found" };
+  const scwd = opts.cwd ? sessionCwd(from) : "";
+  if (opts.cwd && scwd && norm(scwd) !== norm(opts.cwd)) return { ok: false, error: "session belongs to another workspace" };
+  return moveSession(from, join(archiveRootFor(root), relative(root, from)));
+}
+
+/** Bring an archived session back to the sessions folder. `restored` false = it was not archived. */
+export function restoreSession(id: string, root: string = sessionsRoot()): MoveResult & { restored: boolean } {
+  if (findSessionPath(id, root)) return { ok: true, restored: false };
+  const ar = archiveRootFor(root);
+  const from = findSessionPath(id, ar);
+  if (!from) return { ok: false, restored: false, error: "session not found" };
+  const r = moveSession(from, join(root, relative(ar, from)));
+  return { ...r, restored: r.ok };
+}
+
+export interface ArchivePolicy {
+  /** Run the rule on its own (on engine start and every few hours). Off by default. */
+  auto: boolean;
+  /** Archive a session untouched for this many days. */
+  days: number;
+  /** Spoke sessions and empty ones (started, never answered) go after this many days. */
+  spokeDays: number;
+}
+export const DEFAULT_ARCHIVE_POLICY: ArchivePolicy = { auto: false, days: 30, spokeDays: 7 };
+
+/** A stored or posted policy, clamped: whole days, 1 to 3650; anything malformed takes the default. */
+export function archivePolicy(v: unknown): ArchivePolicy {
+  const o = v && typeof v === "object" ? v : {};
+  const day = (x: unknown, d: number): number => (typeof x === "number" && Number.isFinite(x) ? Math.min(3650, Math.max(1, Math.round(x))) : d);
   return {
-    sessions: all.filter((s) => s.kind !== "kg-ingest").slice(0, 40),
-    ingest: all.filter((s) => s.kind === "kg-ingest").slice(0, 60),
+    auto: "auto" in o && o.auto === true,
+    days: day("days" in o ? o.days : undefined, DEFAULT_ARCHIVE_POLICY.days),
+    spokeDays: day("spokeDays" in o ? o.spokeDays : undefined, DEFAULT_ARCHIVE_POLICY.spokeDays),
   };
+}
+
+export interface ArchiveRun { candidates: number; archived: number; skipped: number }
+
+/** Apply the age rule to every session of every workspace. `keep` = live session ids (Main's, every spoke's,
+ *  stopped ones included: a respawn resumes its session) which are never moved. `dryRun` counts only. A file
+ *  that cannot be moved (open on Windows) is skipped and retried next run. */
+export function autoArchive(policy: ArchivePolicy, keep: ReadonlySet<string>, spokes: ReadonlyMap<string, string>, opts: { root?: string; now?: number; dryRun?: boolean } = {}): ArchiveRun {
+  const root = opts.root ?? sessionsRoot();
+  const now = opts.now ?? Date.now();
+  const run: ArchiveRun = { candidates: 0, archived: 0, skipped: 0 };
+  if (!existsSync(root)) return run;
+  loadIndexStore(root);
+  for (const d of readdirSync(root)) {
+    const dir = join(root, d);
+    let files: string[];
+    try { if (!statSync(dir).isDirectory()) continue; files = readdirSync(dir).filter((f) => f.endsWith(".jsonl")); } catch { continue; }
+    for (const f of files) {
+      const p = join(dir, f);
+      try {
+        const fd = openSync(p, "r");
+        let e: IndexEntry;
+        try { e = indexedEntry(p, f, fstatSync(fd), () => readFileSync(fd, "utf8")); } finally { closeSync(fd); }
+        const id = e.meta?.id ?? sessionRecord(readFileSync(p, "utf8"), f).id;
+        if (keep.has(id)) continue;
+        const days = !e.meta || spokes.has(id) ? policy.spokeDays : policy.days;
+        if (now - e.mtimeMs < days * 86_400_000) continue;
+        run.candidates++;
+        if (opts.dryRun) continue;
+        if (moveSession(p, join(archiveRootFor(root), relative(root, p))).ok) run.archived++;
+        else run.skipped++;
+      } catch { /* unreadable: leave it */ }
+    }
+  }
+  return run;
 }
 
 /** P-FLEET.L5 (ADR-0274): one session row for the TIMELINE - a SessionInfo plus the cwd it belongs to,
@@ -229,6 +577,7 @@ export function listAllSessions(root: string = join(homedir(), ".omp", "agent", 
 
 async function scanAllSessions(root: string): Promise<SessionRow[]> {
   if (!existsSync(root)) return [];
+  loadIndexStore(root);
   const all: SessionRow[] = [];
   const seen = new Set<string>();
   let dirs: string[];
@@ -256,7 +605,7 @@ async function scanAllSessions(root: string): Promise<SessionRow[]> {
       }));
     }
   }
-  for (const k of sessionIndex.keys()) if (k.startsWith(root) && !seen.has(k)) sessionIndex.delete(k);
+  for (const k of sessionIndex.keys()) if (under(k, root) && !seen.has(k)) { sessionIndex.delete(k); markDirty(k); }
   all.sort((a, b) => b.updatedAt - a.updatedAt);
   return all;
 }
@@ -327,36 +676,29 @@ export function sessionRecord(content: string, fallbackId: string): { id: string
 }
 
 /** Read a session's user/assistant transcript (for resuming into the chat), tail-first when limited. */
-export function sessionMessages(id: string, limit = 0, root: string = join(homedir(), ".omp", "agent", "sessions")): TranscriptPage {
-  if (!existsSync(root)) return { messages: [], total: 0, userTotal: 0 };
-  for (const d of readdirSync(root)) {
-    const dir = join(root, d);
-    try {
-      if (!statSync(dir).isDirectory()) continue;
-      for (const f of readdirSync(dir)) {
-        if (!f.endsWith(".jsonl")) continue;
-        const content = readFileSync(join(dir, f), "utf8");
-        if (sessionRecord(content, f).id !== id && f !== id) continue;
-        const out: { role: string; text: string; turn?: number }[] = [];
-        let users = 0;
-        for (const ln of content.split("\n")) {
-          if (!ln) continue;
-          let o: any; try { o = JSON.parse(ln); } catch { continue; }
-          if (o.type === "message" && (o.message?.role === "user" || o.message?.role === "assistant")) {
-            // Strip the injected preamble from USER turns only (assistant text never carries it).
-            const raw = msgText(o.message);
-            const t = o.message.role === "user" ? stripInjectedPreamble(raw) : raw;
-            if (t.trim()) {
-              if (o.message.role === "user") { users++; out.push({ role: "user", text: t, turn: users }); }
-              else out.push({ role: "assistant", text: t });
-            }
-          }
-        }
-        return { messages: limit > 0 && out.length > limit ? out.slice(-limit) : out, total: out.length, userTotal: users };
+export function sessionMessages(id: string, limit = 0, root: string = sessionsRoot()): TranscriptPage {
+  // P-SESS-ARCHIVE.1: located through the index (it used to read every file until the id matched), and an
+  // archived session's transcript reads in place: reviewing one never has to restore it.
+  const p = findSessionPath(id, root) ?? findSessionPath(id, archiveRootFor(root));
+  let content = "";
+  try { if (p) content = readFileSync(p, "utf8"); } catch { /* unreadable */ }
+  if (!content) return { messages: [], total: 0, userTotal: 0 };
+  const out: { role: string; text: string; turn?: number }[] = [];
+  let users = 0;
+  for (const ln of content.split("\n")) {
+    if (!ln) continue;
+    let o: any; try { o = JSON.parse(ln); } catch { continue; }
+    if (o.type === "message" && (o.message?.role === "user" || o.message?.role === "assistant")) {
+      // Strip the injected preamble from USER turns only (assistant text never carries it).
+      const raw = msgText(o.message);
+      const t = o.message.role === "user" ? stripInjectedPreamble(raw) : raw;
+      if (t.trim()) {
+        if (o.message.role === "user") { users++; out.push({ role: "user", text: t, turn: users }); }
+        else out.push({ role: "assistant", text: t });
       }
-    } catch { /* skip */ }
+    }
   }
-  return { messages: [], total: 0, userTotal: 0 };
+  return { messages: limit > 0 && out.length > limit ? out.slice(-limit) : out, total: out.length, userTotal: users };
 }
 
 /** Delete a session's omp `.jsonl` transcript from disk. Restricted to the CURRENT
@@ -365,25 +707,16 @@ export function sessionMessages(id: string, limit = 0, root: string = join(homed
  *  workspace, or the file can't be removed (e.g. still open by omp on Windows — close
  *  the live session first). The append-only DuckDB audit/provenance is a separate store
  *  and is intentionally untouched (issue #53). */
-export function deleteSession(id: string, cwd: string = currentWorkspace(), root: string = join(homedir(), ".omp", "agent", "sessions")): { ok: boolean; error?: string } {
-  if (!existsSync(root)) return { ok: false, error: "no sessions directory" };
-  const want = norm(cwd);
-  for (const d of readdirSync(root)) {
-    const dir = join(root, d);
-    try {
-      if (!statSync(dir).isDirectory()) continue;
-      for (const f of readdirSync(dir)) {
-        if (!f.endsWith(".jsonl")) continue;
-        const p = join(dir, f);
-        // Resolve id + cwd from the session record, wherever it sits in the header (see sessionRecord).
-        let sid = f, scwd = "";
-        try { ({ id: sid, cwd: scwd } = sessionRecord(readFileSync(p, "utf8"), f)); } catch { /* keep filename fallback */ }
-        if (sid !== id && f !== id) continue;
-        if (scwd && norm(scwd) !== want) return { ok: false, error: "session belongs to another workspace" };
-        try { rmSync(p, { force: true }); return { ok: true }; }
-        catch (e) { return { ok: false, error: String((e as any)?.message ?? e) }; }
-      }
-    } catch { /* skip dir */ }
-  }
-  return { ok: false, error: "session not found" };
+export function deleteSession(id: string, cwd: string = currentWorkspace(), root: string = sessionsRoot()): { ok: boolean; error?: string } {
+  // P-SESS-ARCHIVE.1: an archived session is deletable from the Archived group too; its index entry goes with it.
+  const p = findSessionPath(id, root) ?? findSessionPath(id, archiveRootFor(root));
+  if (!p) return { ok: false, error: "session not found" };
+  const scwd = sessionCwd(p);
+  if (scwd && norm(scwd) !== norm(cwd)) return { ok: false, error: "session belongs to another workspace" };
+  try { rmSync(p, { force: true }); }
+  catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+  sessionIndex.delete(p);
+  markDirty(p);
+  allScans.clear();
+  return { ok: true };
 }

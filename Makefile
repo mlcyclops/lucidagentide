@@ -479,6 +479,18 @@ demo-P-PERF.2: ## P-PERF.2 (ADR-0129): power/spec-aware perf tiers — battery�
 demo-P-PERF.3: ## P-PERF.3 (ADR-0130): KG layout continuity — re-open is a static paint (0 sim frames), refresh nestles newcomers, cold open exits on energy, positions never touch disk
 	$(BUN) run desktop/scripts/demo_p_perf_3.ts
 
+.PHONY: demo-P-SESS-ARCHIVE.1
+demo-P-SESS-ARCHIVE.1: ## P-SESS-ARCHIVE.1 (ADR-0471): the session index survives restarts; archive / restore / auto-archive, never a live session
+	$(BUN) run desktop/scripts/demo_p_sess_archive_1.ts
+
+.PHONY: demo-P-HUB-PICK.1
+demo-P-HUB-PICK.1: ## P-HUB-PICK.1 (ADR-0470): hub picker, a codebase name + color on every spoke, By repo grid, "spoke" in every agent note
+	$(BUN) run desktop/scripts/demo_p_hub_pick_1.ts
+
+.PHONY: demo-P-SESS-SEARCH.1
+demo-P-SESS-SEARCH.1: ## P-SESS-SEARCH.1 (ADR-0469): sidebar session search by title + what was said, spokes hidden by default, carried notes never title a session
+	$(BUN) run desktop/scripts/demo_p_sess_search_1.ts
+
 .PHONY: demo-P-PERF.4
 demo-P-PERF.4: ## P-PERF.4 (ADR-0131): incremental session index (warm polls parse nothing) + tail-first transcript pages + AC-only prefetch gate
 	$(BUN) run desktop/scripts/demo_p_perf_4.ts
