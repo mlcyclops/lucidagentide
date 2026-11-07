@@ -252,3 +252,20 @@ One per session, each with its own ADR and `make demo-*`:
   pass and the parity table above re-audited against reality.
 
 Ship order is negotiable; the P-TUI.0 seam and the P-TUI.2 fail-closed demo are not.
+
+## Herdr parity roadmap (P-HERD, ADR-0489)
+
+The hub borrows Herdr's idiom on purpose, and ADR-0489 maps what Herdr still has
+that the hub does not. Eight increments, each its own ADR and session, in build
+order: P-HERD.1 the hub as a server that outlives its terminal, with attach,
+detach, several clients and named instances (ADR-0490); P-HERD.2 named layouts
+as files with presets and agent slots (ADR-0491); P-HERD.3 the prefix key model,
+three modes, a bindings file, directional focus and resize, copy mode, pane move
+and rename (ADR-0492); P-HERD.4 `agent wait`, `agent prompt --wait`, the
+`agent_blocked` refusal and `agent events` (ADR-0493); P-HERD.5 attention: done
+means not yet seen, `prefix+a` for the next lane waiting on you, notifications
+(ADR-0494); P-HERD.6 Main as a pane beside its spokes and sessions opened into
+panes (ADR-0495); P-HERD.7 machines: several engines in one hub (ADR-0496);
+P-HERD.8 the GUI Fleet dock mirroring the same layouts and attention
+(ADR-0497). Vocabulary: a Herdr "session" is a hub INSTANCE (`--name`) here,
+because a LUCID session is a conversation on disk.
