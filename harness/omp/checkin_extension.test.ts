@@ -244,7 +244,7 @@ describe("checkin_send execute", () => {
     checkinExtension(pi);
     const r = await tool(tools, "checkin_send").execute("1", { to: "master", message: "editing a.ts", wait_ms: 500_000 });
     expect(calls[1]!.url).toContain("timeoutMs=90000");
-    expect(r.content[0]!.text).toContain("No reply from master within 90 s. Default: wait for its turn to end, or ask the operator with the ask tool.");
+    expect(r.content[0]!.text).toContain("No reply from master within 90 s.");
     expect(r.content[0]!.text).not.toContain(UNTRUSTED_START);
   });
 

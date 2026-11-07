@@ -5963,3 +5963,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **verified:** bench in Edge (real GPU, motion allowed), main thread ms per second before and after: busy fleet 36.0 to 19.1, idle fleet 29.2 to 5.8, Lite unchanged; pixel diff against master under 0.5%; draw counter 16 a second in Motion, 0 closed, 1 after switching to Lite; `orbit_canvas.test.ts` plus the four orbit suites 45 pass; desktop tsc clean.
 - **stubbed:** a pending approval still pins the frame rate through the census pip's `fleetGlowRed` box-shadow animation, so that state saves nothing yet.
 - **next:** move `fleetGlowRed` on `.fleet-pip` to the pseudo-element opacity pulse; when `feat/rs-fleet-ops` rebases onto this, its remote spoke lines and `likely-stuck` join `OrbitSpoke` and the style table.
+
+## P-ASK.1: a turn that called `ask` ended "Done" with no reply (ADR-0523)
+- **shipped (2026-11-07, branch `fix/acp-ask-off` from `feat/rs-fleet-ops` 78622a45, LOCAL ONLY):** `acp_config.yml` sets `ask.enabled: false` for every omp ACP child. Cause: LUCID declines omp's `askDialog` elicitation (no question UI), omp treats the decline as a user cancel and aborts the turn. Checkin text no longer points agents at the ask tool. Verified with a real `omp acp` run before and after (ADR-0523 proof) and 257 tests.
+- **stubbed:** no question card in the IDE; the model asks in its reply instead.
+- **next:** merge into `feat/rs-fleet-ops` and rebuild the installer; optionally design an askDialog card for master, lanes and the PWA, then re-enable `ask`.
