@@ -153,7 +153,11 @@ import { assumedCacheRate, priceFor } from "../model_pricing.ts";
 import { DIGEST_MIN_CHARS } from "../../harness/voice/spoken_digest.ts"; // P-VOICE.6: slow-engine spoken digest
 import { applyEditorTheme, closeIde, colorizeCode, guessLanguage, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
 // P-THEME.1: the theme registry (ids, labels, swatches, light/dark grouping). Pure + unit-tested.
-import { DEFAULT_THEME_ID, SYSTEM_THEME_ID, resolveTheme, themeAttr, themeGroups, type ThemeDef } from "./theme.ts";
+import { DEFAULT_THEME_ID, SYSTEM_THEME_ID, resolveTheme, themeAttr, themeGroups, THEMES, type ThemeDef } from "./theme.ts";
+// P-SEASON.1 (ADR-0525): special themes for U.S. holidays and event months, and their animated backdrops.
+import { nextWindow, rangeLabel, resolveSeason, SEASONS, seasonById, type SceneId, type SeasonDef, type SeasonPrefs } from "./seasons.ts";
+import { mountSeasonBackdrop, type BackdropHandle, type BackdropMotion } from "./season_backdrop.ts";
+import { SCENES, SCENE_ORDER } from "./season_scenes.ts";
 // P-FLEET.L13: the catch-up scroll math, shared with every fleet lane transcript.
 import { JUMP_SHOW_PX, anchorTop, chatTakesUpScroll, nextFollow, pageDownTarget, readingAnchor, shouldShowJump, type MsgBox, type ScrollAnchor, type ScrollBox } from "./scroll_jump.ts";
 import { loginLabel, providerRoute, setSpokeSwitchScroll, spokeSwitchScroll } from "./spoke_prefs.ts"; // P-SCROLL.1: where a spoke switch lands; colliding rows share the fleet login words
@@ -217,11 +221,27 @@ function themePref(): string {
 function osPrefersLight(): boolean {
   try { return window.matchMedia("(prefers-color-scheme: light)").matches; } catch { return false; }
 }
+// P-SEASON.1 (ADR-0525): special-theme prefs. Cosmetic, so localStorage only (same tier as the agent
+// tier and the Trivia toggle): `auto` follows the U.S. calendar (opt-in, P-THEME.2's rule that nothing
+// changes the look of an untouched install), `pick` pins one season by hand and beats the calendar.
+const SEASON_AUTO_KEY = "lucid.season.auto";
+const SEASON_PICK_KEY = "lucid.season.pick";
+const SEASON_SCENE_KEY = "lucid.season.scene"; // "" = the season's own scene, a SceneId, or "none"
+const SEASON_WHERE_KEY = "lucid.season.where"; // "stage" (LUCID Agent stage only) | "everywhere"
+function seasonPrefs(): SeasonPrefs {
+  try { return { auto: localStorage.getItem(SEASON_AUTO_KEY) === "1", pick: localStorage.getItem(SEASON_PICK_KEY) ?? "" }; }
+  catch { return { auto: false, pick: "" }; }
+}
 /** Resolve `pref` and paint it: the <html> data-theme attribute drives every `:root[data-theme=...]`
- *  block in styles.css, and Monaco is re-themed to match (a no-op before the editor loads). */
+ *  block in styles.css, and Monaco is re-themed to match (a no-op before the editor loads).
+ *  P-SEASON.1: a live special theme paints ITS palette over the base pref (which stays stored, so the
+ *  app returns to it when the season ends), and stamps `data-season` for the runner, splash and backdrop. */
 function applyTheme(pref: string): void {
-  const t = resolveTheme(pref, osPrefersLight());
-  document.documentElement.dataset.theme = themeAttr(t.id);
+  const season = resolveSeason(seasonPrefs(), new Date());
+  const t = resolveTheme(season?.palette ?? pref, osPrefersLight());
+  const root = document.documentElement;
+  root.dataset.theme = themeAttr(t.id);
+  if (season) root.dataset.season = season.id; else delete root.dataset.season;
   applyEditorTheme(t.id);
 }
 function bootTheme(): void {
@@ -234,6 +254,14 @@ function bootTheme(): void {
       if (themePref() === SYSTEM_THEME_ID) applyTheme(SYSTEM_THEME_ID);
     });
   } catch { /* older engine without addEventListener on MediaQueryList: the boot paint still stands */ }
+  // P-SEASON.1: the calendar moves under a long-running app, so re-resolve every ten minutes; a holiday
+  // starts (or ends) at most ten minutes after local midnight. Cheap: a few date comparisons.
+  window.setInterval(() => {
+    if (!seasonPrefs().auto) return;
+    const before = document.documentElement.dataset.season;
+    applyTheme(themePref());
+    if (document.documentElement.dataset.season !== before) seasonChanged();
+  }, 10 * 60_000);
 }
 bootTheme();
 // CREATOR-0: `resources` is the Creator build's third inspector tab (CPU + GPU odometers).
@@ -450,6 +478,8 @@ function buildShell(): void {
 
       <main class="center">
         <div class="chat-bg" id="chatBg" aria-hidden="true"></div>
+        <!-- P-SEASON.1 (ADR-0525): the special theme's animated backdrop (canvas mounted by season_backdrop.ts). -->
+        <div class="season-bg" id="seasonBg" aria-hidden="true"></div>
         <!-- P-AVATAR.1 (ADR-0251): the immersive stage layer. A neon ambient backdrop for the lucid-agent
              role; the three.js face mounts into it in P-AVATAR.2a. Non-interactive, behind the thread. -->
         <div class="agent-stage" id="agentStage" hidden aria-hidden="true">
@@ -4603,6 +4633,7 @@ function setImmersive(on: boolean): void {
   $("#app-inner")!.classList.toggle("immersive", on);
   const stage = $("#agentStage") as HTMLElement | null;
   if (stage) stage.hidden = !on;
+  syncSeasonBackdrop(); // P-SEASON.1: the stage is where the seasonal backdrop shows by default
   if (on) document.addEventListener("keydown", immersiveEsc);
   else document.removeEventListener("keydown", immersiveEsc);
   // P-AVATAR.1b: the left rail peeks back in when the mouse nears the left edge (hysteresis: engage
@@ -5617,7 +5648,8 @@ function secTheme(): string {
     <div class="theme-grp-lbl">${scheme === "light" ? "Light" : "Dark"}</div>
     <div class="theme-grid">${themes.map((t: ThemeDef) => themeTile(t.id, t.label, t.blurb, t.swatch, pref === t.id)).join("")}</div>`).join("");
   const inner = `<div class="theme-grid">${sys}</div>${groups}
-    <div class="set-note">${icon("info", 12)} Applies instantly across the app, the code editor, and the trainer. LUCID defaults to <b>Lucid Dark</b>. <b>Match system</b> follows your OS light/dark setting; picking a theme explicitly pins it, so a change to your OS setting will no longer move it.</div>`;
+    <div class="set-note">${icon("info", 12)} Applies instantly across the app, the code editor, and the trainer. LUCID defaults to <b>Lucid Dark</b>. <b>Match system</b> follows your OS light/dark setting; picking a theme explicitly pins it, so a change to your OS setting will no longer move it.</div>
+    ${secSeason()}`;
   const count = themeGroups().reduce((n, g) => n + g.themes.length, 0);
   return setCard("theme", "Theme", `${count} themes · light &amp; dark`, inner, true);
 }
@@ -5629,7 +5661,162 @@ async function pickTheme(pref: string): Promise<void> {
   try { if (pref) localStorage.setItem(THEME_KEY, pref); else localStorage.removeItem(THEME_KEY); } catch { /* storage off: this session still applies */ }
   applyTheme(pref);
   if (state.settingsOpen) fillSec("theme", secTheme());
+  seasonChanged();
   await bridge.setTheme(pref).catch(() => null);
+}
+
+// ── P-SEASON.1 (ADR-0525): special themes (Settings > Theme > Special themes) ─────────────────────
+// Three controls: the calendar checkbox, a swatch dropdown that pins one season, and the backdrop
+// (which scene, and whether it shows only on the LUCID Agent stage or behind every chat). The live
+// preview tile under them plays the hovered (or active, or next) season's backdrop.
+let seasonMenuOpen = false;
+let seasonBackdrop: BackdropHandle | null = null;
+let seasonPreview: BackdropHandle | null = null;
+function seasonScenePref(): string {
+  try { return localStorage.getItem(SEASON_SCENE_KEY) ?? ""; } catch { return ""; }
+}
+function seasonWherePref(): "stage" | "everywhere" {
+  try { return localStorage.getItem(SEASON_WHERE_KEY) === "everywhere" ? "everywhere" : "stage"; } catch { return "stage"; }
+}
+/** The scene to paint for `season` under the user's backdrop pref, or null for none. */
+function sceneFor(season: SeasonDef | undefined): SceneId | null {
+  if (!season) return null;
+  const pref = seasonScenePref();
+  if (pref === "none") return null;
+  return pref in SCENES ? (pref as SceneId) : season.scene;
+}
+function backdropMotion(): BackdropMotion {
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return "still";
+  const tier = perfWatch.tier();
+  return tier === "full" ? "full" : tier === "reduced" ? "reduced" : "still";
+}
+/** Show, swap or park the chat-column backdrop. Visible on the LUCID Agent stage, or everywhere when
+ *  the user asked for that; the canvas is only created the first time it is needed. */
+function syncSeasonBackdrop(): void {
+  const host = $("#seasonBg");
+  if (!host) return;
+  const season = seasonById(document.documentElement.dataset.season);
+  const scene = sceneFor(season);
+  const show = !!scene && (state.immersive || seasonWherePref() === "everywhere");
+  host.classList.toggle("on", show);
+  $(".center")?.classList.toggle("has-season", show);
+  if (!show || !season) { seasonBackdrop?.set(null, null); return; }
+  seasonBackdrop ??= mountSeasonBackdrop(host);
+  seasonBackdrop.setMotion(backdropMotion());
+  seasonBackdrop.set(scene, season.id);
+}
+/** Everything that follows the active season: the backdrop and, when Settings is open, the card. */
+function seasonChanged(): void {
+  syncSeasonBackdrop();
+  if (state.settingsOpen) { fillSec("theme", secTheme()); mountSeasonPreview(); }
+}
+function seasonSwatch(s: SeasonDef): readonly string[] {
+  return THEMES.find((t) => t.id === s.palette)?.swatch ?? [];
+}
+const swatchChips = (sw: readonly string[]): string => sw.map((c) => `<i style="background:${esc(c)}"></i>`).join("");
+function seasonWhen(s: SeasonDef, now: Date): string {
+  const w = nextWindow(s, now);
+  return w ? rangeLabel(w) : s.when;
+}
+function secSeason(): string {
+  const prefs = seasonPrefs();
+  const now = new Date();
+  const live = resolveSeason({ auto: true, pick: "" }, now); // what the calendar says today
+  const pinned = seasonById(prefs.pick);
+  const nextUp = SEASONS.map((s) => ({ s, w: nextWindow(s, now) })).filter((x) => x.w).sort((a, b) => a.w!.start - b.w!.start)[0];
+  const status = live
+    ? `Today: <b>${esc(live.label)}</b> (${esc(seasonWhen(live, now))})${prefs.auto ? "" : ". Turn this on to switch to it."}`
+    : nextUp ? `Next up: <b>${esc(nextUp.s.label)}</b>, ${esc(rangeLabel(nextUp.w!))}.` : "";
+  const trig = pinned
+    ? `<span class="theme-sw">${swatchChips(seasonSwatch(pinned))}</span><span class="season-nm">${esc(pinned.label)}</span><span class="season-when">Pinned</span>`
+    : `<span class="theme-sw season-sw-none"><i></i></span><span class="season-nm">${prefs.auto ? "Follow the calendar" : "None"}</span><span class="season-when">${prefs.auto ? "Automatic" : "Your theme"}</span>`;
+  const opt = (id: string, chips: string, label: string, kind: string, when: string, blurb: string): string => {
+    const on = prefs.pick === id;
+    return `<button type="button" role="option" class="season-opt${on ? " on" : ""}" data-season-pick="${esc(id)}" aria-selected="${on}">
+        <span class="theme-sw${id ? "" : " season-sw-none"}">${chips}</span>
+        <span class="season-nm">${esc(label)}</span>
+        ${kind ? `<span class="season-kind">${esc(kind)}</span>` : "<span></span>"}
+        <span class="season-when">${esc(when)}</span>
+        <span class="season-bl">${esc(blurb)}</span>
+      </button>`;
+  };
+  const rows = [
+    opt("", `<i></i>`, prefs.auto ? "Follow the calendar" : "None", "", prefs.auto ? "Automatic" : "Your theme", prefs.auto ? "Today's holiday or event month, then your own theme." : "Keep your own theme."),
+    ...SEASONS.map((s) => opt(s.id, swatchChips(seasonSwatch(s)), s.label, s.kind === "holiday" ? "Holiday" : "Event", seasonWhen(s, now), s.blurb)),
+  ].join("");
+  const sceneSel = seasonScenePref();
+  const sceneOpts = [`<option value=""${sceneSel === "" ? " selected" : ""}>Match the theme</option>`,
+    ...SCENE_ORDER.map((id) => `<option value="${id}"${sceneSel === id ? " selected" : ""}>${esc(SCENES[id].label)}</option>`),
+    `<option value="none"${sceneSel === "none" ? " selected" : ""}>No backdrop</option>`].join("");
+  const where = seasonWherePref();
+  return `<div class="theme-grp-lbl">Special themes</div>
+    <label class="set-toggle"><input type="checkbox" id="seasonAuto" ${prefs.auto ? "checked" : ""}/>
+      <span><b>Change with U.S. holidays and events</b> - switches to the special theme for today's holiday or event month, then back to your theme when it ends.</span></label>
+    ${status ? `<div class="season-status">${status}</div>` : ""}
+    <div class="season-dd${seasonMenuOpen ? " open" : ""}">
+      <button type="button" class="season-trigger" id="seasonTrigger" aria-haspopup="listbox" aria-expanded="${seasonMenuOpen}" aria-controls="seasonMenu">
+        ${trig}<span class="season-chev">${icon("chevron", 14)}</span>
+      </button>
+      <div class="season-menu" id="seasonMenu" role="listbox" aria-label="Special themes"${seasonMenuOpen ? "" : " hidden"}>${rows}</div>
+    </div>
+    <div class="season-fields">
+      <label class="season-field"><span class="season-field-lbl">Backdrop</span><select id="seasonScene">${sceneOpts}</select></label>
+      <label class="season-field"><span class="season-field-lbl">Show it</span><select id="seasonWhere">
+        <option value="stage"${where === "stage" ? " selected" : ""}>On the LUCID Agent stage</option>
+        <option value="everywhere"${where === "everywhere" ? " selected" : ""}>Behind every chat</option></select></label>
+    </div>
+    <div class="season-preview" id="seasonPreview"><span class="season-preview-cap" id="seasonPreviewCap"></span></div>`;
+}
+/** The season the preview tile shows: the hovered row, else the pinned/active one, else the next up. */
+function previewSeason(hover?: string): SeasonDef | undefined {
+  const now = new Date();
+  return seasonById(hover) ?? resolveSeason(seasonPrefs(), now) ?? resolveSeason({ auto: true, pick: "" }, now)
+    ?? SEASONS.map((s) => ({ s, w: nextWindow(s, now) })).filter((x) => x.w).sort((a, b) => a.w!.start - b.w!.start)[0]?.s;
+}
+function showSeasonPreview(hover?: string): void {
+  const s = previewSeason(hover);
+  const scene = s ? (seasonScenePref() === "none" ? s.scene : sceneFor(s)) : null;
+  seasonPreview?.set(scene, s?.id ?? null);
+  const cap = $("#seasonPreviewCap");
+  if (cap) cap.textContent = s && scene ? `${s.label} · ${SCENES[scene].label}` : "";
+}
+/** (Re)mount the preview tile after the Theme card renders. The previous canvas went with the old
+ *  card's HTML, so its handle is disposed and a fresh one bound to the new host. */
+function mountSeasonPreview(): void {
+  seasonPreview?.dispose();
+  seasonPreview = null;
+  const host = document.querySelector("#setBody #seasonPreview") as HTMLElement | null;
+  if (!host) return;
+  seasonPreview = mountSeasonBackdrop(host, "season-preview-cv", true);
+  seasonPreview.setMotion(backdropMotion());
+  showSeasonPreview();
+  const menu = $("#seasonMenu");
+  menu?.addEventListener("pointerover", (e) => {
+    const row = (e.target as HTMLElement).closest("[data-season-pick]") as HTMLElement | null;
+    if (row) showSeasonPreview(row.dataset.seasonPick);
+  });
+  menu?.addEventListener("pointerleave", () => showSeasonPreview());
+  menu?.addEventListener("focusin", (e) => showSeasonPreview((e.target as HTMLElement).closest<HTMLElement>("[data-season-pick]")?.dataset.seasonPick));
+  // A listbox moves with the arrow keys; Escape folds it back to the trigger.
+  menu?.addEventListener("keydown", (e) => {
+    const rows = [...menu.querySelectorAll<HTMLElement>(".season-opt")];
+    const i = rows.indexOf(document.activeElement as HTMLElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      rows[Math.max(0, Math.min(rows.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)))]?.focus();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      seasonMenuOpen = false;
+      seasonChanged();
+      ($("#seasonTrigger") as HTMLElement | null)?.focus();
+    }
+  });
+}
+function setSeasonPref(key: string, value: string): void {
+  try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key); } catch { /* storage off: this session still applies */ }
+  applyTheme(themePref());
+  seasonChanged();
 }
 
 // ── P-TRIV.4 (ADR-0191): Settings -> Trivia Wire ─────────────────────────────────────────────────
@@ -5860,6 +6047,8 @@ function hydrateSettings(): void {
 function renderSettings(): void {
   const body = $("#setBody"); if (!body) return;
   if (!body.querySelector("[data-sec]")) body.innerHTML = settingsShell(); // first open: skeleton
+  else fillSec("theme", secTheme()); // P-SEASON.1: dates and "today" move between opens
+  mountSeasonPreview();
   hydrateSettings(); // then fill in place
 }
 
@@ -6157,6 +6346,7 @@ function openSettings(): void {
 function closeSettings(): void {
   if (!state.settingsOpen) return;
   state.settingsOpen = false;
+  seasonPreview?.dispose(); seasonPreview = null; // P-SEASON.1: no hidden canvas keeps animating
   $("#settings")!.hidden = true;
   $("#inspector")!.hidden = false;
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
@@ -16664,7 +16854,7 @@ function wire(): void {
   });
   // Auto-tier flips (plug/unplug, battery level) repaint the chip and calm/wake a LIVE graph in place -
   // no remount, so the layout the user is looking at never jumps.
-  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(kbGraphMode || perfWatch.tier() !== "full"); });
+  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(kbGraphMode || perfWatch.tier() !== "full"); seasonBackdrop?.setMotion(backdropMotion()); });
   paintPerfChip();
   $("#kgData")?.addEventListener("click", (e) => openKgDataMenu(e.currentTarget as HTMLElement)); // P-KGUI.2 dropdown
   // P-KGMARKET.5 (ADR-0333): the storefront gets a button. It was previously reachable only by typing
@@ -17270,6 +17460,10 @@ function wire(): void {
   // P-VOICE.1 (ADR-0115): persist a voice setting when a Voice-card control changes.
   $("#setBody")!.addEventListener("change", async (e) => {
     const t0 = e.target as HTMLElement;
+    // P-SEASON.1 (ADR-0525): the special-theme calendar checkbox and the backdrop selects.
+    if (t0.id === "seasonAuto") { setSeasonPref(SEASON_AUTO_KEY, (t0 as HTMLInputElement).checked ? "1" : ""); return; }
+    if (t0.id === "seasonScene") { setSeasonPref(SEASON_SCENE_KEY, (t0 as HTMLSelectElement).value); return; }
+    if (t0.id === "seasonWhere") { setSeasonPref(SEASON_WHERE_KEY, (t0 as HTMLSelectElement).value === "everywhere" ? "everywhere" : ""); return; }
     // P-APPEAR.1: chat-background mode + image upload
     if (t0.id === "bgMode") { void updateChatBg({ mode: (t0 as HTMLSelectElement).value as "off" | "ambient" | "flashlight" }); return; }
     if (t0.id === "spokeSwitchScroll") { setSpokeSwitchScroll((t0 as HTMLSelectElement).value === "resume" ? "resume" : "latest"); return; } // P-SCROLL.1
@@ -17375,6 +17569,10 @@ function wire(): void {
     // test. dataset.themePick is "" for that tile, hence `!= null` rather than a plain truthy check.
     const th = t.closest("[data-theme-pick]") as HTMLElement | null;
     if (th) { void pickTheme(th.dataset.themePick ?? ""); return; }
+    // P-SEASON.1: the special-theme dropdown (trigger toggles the listbox; a row pins that season, "" unpins).
+    if (t.closest("#seasonTrigger")) { seasonMenuOpen = !seasonMenuOpen; seasonChanged(); if (seasonMenuOpen) ($(".season-opt.on") ?? $(".season-opt"))?.focus(); return; }
+    const sp = t.closest("[data-season-pick]") as HTMLElement | null;
+    if (sp) { seasonMenuOpen = false; setSeasonPref(SEASON_PICK_KEY, sp.dataset.seasonPick ?? ""); ($("#seasonTrigger") as HTMLElement | null)?.focus(); return; }
     // P-APPEAR.1: chat-background upload / remove
     if (t.closest("#bgUpload")) { ($("#bgFile") as HTMLInputElement | null)?.click(); return; }
     if (t.closest("#voiceEndpointImportBtn")) { ($("#voiceEndpointFile") as HTMLInputElement | null)?.click(); return; } // P-VOICE.7
@@ -19687,6 +19885,7 @@ void bridge.getSettings().then((s) => { // your saved name → the "You" label o
   }
   if (state.userRole) applyRoleDefault(state.userRole); // returning user lands on their role's surface
   syncImmersiveWithRole(state.userRole); // P-AVATAR.1: a returning lucid-agent boots straight onto the stage
+  syncSeasonBackdrop(); // P-SEASON.1: "Behind every chat" users get the backdrop in every role
   // P-AVATAR.6: the lucid-agent role gets a hero opening over the ~6-9s session warm - REAL signals
   // only, min beat + hard cap in boot_cinematic.ts, Esc/Skip always, reduced-motion = static card.
   if (state.userRole === "lucid-agent" && !document.getElementById("bootCine")) {
