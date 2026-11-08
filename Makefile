@@ -365,6 +365,10 @@ demo-P-MASCOT.5: demo-P-MASCOT.4 ## Arcade-parity prompt-bar runner (2x sprite, 
 	$(BUN) test ./desktop/renderer/mascot_runner.test.ts ./desktop/renderer/mascot_minigames.test.ts
 	$(BUN) run desktop/scripts/demo_p_mascot_5.ts
 
+.PHONY: demo-P-SEASON.1
+demo-P-SEASON.1: ## P-SEASON.1 (ADR-0525): U.S. holiday + event-month special themes - the calendar (nth weekdays, Easter, year-spanning windows, peak-day precedence), 16 special palettes held to the token contract, 16 animated backdrops valid at any t/size/season, 21 mascot acts + costumes, flush eye band, 16-beat no-slip gait, hover hop + click leap
+	$(BUN) test ./desktop/renderer/seasons.test.ts ./desktop/renderer/theme.test.ts ./desktop/renderer/scenes/scenes_paint.test.ts ./desktop/renderer/mascot_season.test.ts ./desktop/renderer/mascot.test.ts ./desktop/renderer/mascot_runner.test.ts ./desktop/renderer/boot_cinematic.test.ts
+
 .PHONY: demo-P-AVATAR.4
 demo-P-AVATAR.4: ## P-AVATAR.4 (ADR-0251): the LUCID Agent enter flow - fast-model preference order (Terra > Sonnet 5 > Flash, no pointless switch), one-gap-at-a-time readiness (provider > tts > stt), the one-time KG offer, exit model restoration
 	$(BUN) run desktop/scripts/demo_p_avatar_4.ts
