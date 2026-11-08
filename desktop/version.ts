@@ -724,4 +724,10 @@
 //            reply (P-ASK.1, ADR-0523), the needs-approval pulse runs on the compositor (P-GLOW.1, ADR-0524)
 //            and the Fleet Orbit's inner ring is drawn through its spokes (#575). Docs: the P-HERD design
 //            ADRs (ADR-0489 to ADR-0497). A plain v2.5.2 tag, marked Latest.
-export const APP_VERSION = "2.5.2";
+// v2.5.3-beta.1 = 2.5.2 plus special themes for U.S. holidays and event months (P-SEASON.1, ADR-0525):
+//            21 seasons over 16 new palettes, an opt-in calendar switch and a swatch dropdown in Settings >
+//            Theme, 16 animated backdrops on the LUCID Agent stage or behind every chat, seasonal mascot
+//            costumes and acts in the prompt-bar runner and the splash, a flush eye band, a 16-beat walk,
+//            and a hover hop and click leap. PRERELEASE: never marked Latest; the Homebrew cask and stable
+//            installs stay on 2.5.2.
+export const APP_VERSION = "2.5.3-beta.1";

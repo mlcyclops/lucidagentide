@@ -1,7 +1,7 @@
 {
   "name": "lucidagentide-desktop",
   "private": true,
-  "version": "2.5.2",
+  "version": "2.5.3-beta.1",
   "trustedDependencies": [
     "electron",
     "@resvg/resvg-js"
