@@ -28,7 +28,8 @@
 //                 fails in the handshake must create no lane).
 //
 // Every mode: session/new mints "fake-session-1", "-2", ... per process (a closed-and-reopened master session
-// changes id, as with a real agent), and a prompt containing "[slow Ns]" is answered after N seconds.
+// changes id, as with a real agent), and a prompt containing "[slow Ns]" is answered after N seconds ("[then Ns]":
+// N seconds after its permission ask was answered).
 //
 // stdout is reserved for ACP JSON-RPC; logs go to stderr.
 
@@ -128,6 +129,10 @@ async function handle(line: string): Promise<void> {
     const outcome = scripted
       ? await requestPermission(sessionId, JSON.parse(scripted[1]!))
       : MODE === "permission" ? await requestPermission(sessionId) : undefined;
+    // P-HOLDER.1: "[then Ns]" waits N seconds AFTER the ask was answered, so a test can let the engine go between
+    // the answer and the reply.
+    const then = /\[then (\d+)s\]/.exec(promptText);
+    if (then) { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, Number(then[1]) * 1000); await promise; }
     // P-FLEET.L3: the tool_call carries an EDIT-shaped rawInput (the P-CHAT.1 extraction contract), so a
     // lane test can assert the authored diff survives the wire. Consumers that only read title/kind are
     // unaffected (the firewall suites).

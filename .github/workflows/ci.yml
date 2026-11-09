@@ -58,6 +58,11 @@ jobs:
       - name: Harness test suite
         run: bun test harness
 
+      # P-HOLDER.1 (ADR-0527/0528): the one Rust crate. The runner image ships rustup and cargo.
+      - name: lucid-holder (Rust) tests
+        working-directory: native/lucid-holder
+        run: cargo test --release --locked
+
       - name: Install + typecheck (desktop)
         working-directory: desktop
         run: |
@@ -107,6 +112,11 @@ jobs:
       - name: Install (desktop)
         working-directory: desktop
         run: bun install
+
+      # P-HOLDER.1: desktop/lane_holder.test.ts drives the real holder (and fails under CI when it is missing).
+      - name: Build lucid-holder (Rust)
+        working-directory: desktop
+        run: bun run build-holder
 
       # The same exclusion-only scope as the local gate (ADR-0303: scope by exclusion, never by
       # positional pattern) - vendored trees and the packaged release copy stay out.

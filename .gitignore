@@ -107,6 +107,8 @@ tools/seed_personal_facts.ts
 # no bin/ dir fails ENOENT under current Bun (it no longer creates the outfile parent).
 /bin/*
 !/bin/.gitkeep
+# P-HOLDER.1: cargo's build output for the one Rust crate (desktop/build/build-holder.ts copies the binary to bin/).
+/native/lucid-holder/target/
 netwatch.log
 
 # Machine-generated memory/fact extraction scratch (local analysis artifacts, never source)

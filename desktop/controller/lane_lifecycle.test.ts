@@ -19,6 +19,7 @@ import type { GateDecision } from "../../harness/security/gate.ts";
 import { gitExe } from "../../harness/runs/sandbox_exec.ts";
 import type { TelemetryEvent } from "../../harness/telemetry/events.ts";
 import { FleetLaneManager } from "../fleet_lanes.ts";
+import { HolderLink, HolderPool, holderBinary } from "../lane_holder.ts";
 import type { SystemSnapshot } from "../system_profile.ts";
 import { ControllerLaneStore } from "./lane_store.ts";
 import { handleController, INTERRUPTED_NOTE, restoreControllerLanes, RESTORING_ERROR, type ControllerDeps } from "./routes.ts";
@@ -74,11 +75,12 @@ type Json = { ok?: boolean; error?: string; data?: Record<string, unknown> };
 /** One engine: its own data root (the pairing and lane stores), lane manager and routes. `tag` makes the session
  *  ids its agents mint its own (the fake agent tags them with LUCID_INTERJECT_TARGET), so a session that crossed a
  *  restart is told apart from a fresh one. */
-function engine(dataDir: string, opts: { loadSession?: boolean; tag?: string } = {}) {
+function engine(dataDir: string, opts: { loadSession?: boolean; tag?: string; holders?: HolderPool } = {}) {
   const events: TelemetryEvent[] = [];
   const fleet = new FleetLaneManager({
     argv: () => ({ cmd: "bun", args: [FAKE] }), masterModel: () => "m", sample: async () => healthy,
     env: () => ({ LUCID_INTERJECT_TARGET: `lane-${opts.tag ?? "x"}`, ...(opts.loadSession ? { FAKE_ACP_LOAD_SESSION: "1" } : {}) }),
+    ...(opts.holders ? { holders: opts.holders } : {}),
   });
   fleets.push(fleet);
   const store = new PairingStore(join(dataDir, "controller-pairings.json"));
@@ -227,6 +229,36 @@ describe("ADR-0501: lanes survive an engine restart", () => {
     // the cap counts the restored lane
     expect((await b.call("spawn", pairing, {})).status).toBe(200);
     expect((await b.call("spawn", pairing, {})).status).toBe(429);
+  }, TIMEOUT);
+
+  // P-HOLDER.1 (ADR-0528): with a holder the same restart interrupts nothing: the turn carries on and records itself.
+  test.skipIf(!holderBinary())("under a holder, the turn in flight carries on after the restart and records itself", async () => {
+    const repo = newRepo();
+    const pool = new HolderPool(join(temp("holders"), "lane-holders"), holderBinary()!);
+    const dataA = temp("data-a"), dataB = temp("data-b");
+    const a = engine(dataA, { loadSession: true, tag: "a", holders: pool });
+    const { token, pairing } = await a.pairRemote(repo);
+    const lane = await a.spawn(pairing);
+    expect((await a.call("prompt", pairing, { laneId: lane.id, text: "a long task [slow 3s]" })).status).toBe(202);
+    await (async () => { for (let i = 0; i < 400 && !pool.all()[0]?.inFlight; i++) await Bun.sleep(25); })();
+    for (const f of ["controller-pairings.json", "controller-lanes.json"]) copyFileSync(join(dataA, f), join(dataB, f));
+    a.fleet.stopAll();
+
+    const b = engine(dataB, { loadSession: true, tag: "b", holders: pool });
+    try {
+      // As dev.ts does: the held lanes come back first, then the controller restore finds them running.
+      for (const rec of pool.all()) expect((await b.fleet.reattach(rec)).ok).toBe(true);
+      expect(await restoreControllerLanes(b.deps)).toEqual([lane.id]);
+      expect(b.rulings()).toEqual([expect.objectContaining({ ruling: "lane_restored", lane_id: lane.id, reason: "reattached to its running agent; the turn carries on" })]);
+      const reply = await b.settled(lane.id);
+      expect(reply).toContain("a long task [slow 3s]");
+      expect(reply).toContain("[session fake-session-lane-a-1]"); // answered by engine A's agent process, not a new one
+      expect(reply).not.toContain(INTERRUPTED_NOTE);
+      const p = (await b.store.verify(token))!;
+      expect(((await b.call("lanes", p)).json.data!.lanes as Record<string, unknown>[])[0]).not.toHaveProperty("interrupted");
+    } finally {
+      for (const rec of pool.all()) { try { await (await HolderLink.connect(rec.endpoint, rec.token, rec.inFlight?.offset ?? rec.consumed)).kill(); } catch { /* gone */ } }
+    }
   }, TIMEOUT);
 
   test("a controller that lists lanes while the restore is still running gets the full set, never a half list", async () => {

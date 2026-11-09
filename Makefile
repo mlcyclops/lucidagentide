@@ -1490,6 +1490,12 @@ demo-P-FIPS.1: ## P-FIPS.1 (ADR-0473): AES-256-GCM, PBKDF2-HMAC-SHA256, SHA-256,
 .PHONY: demo-P-BREW.1
 demo-P-BREW.1: ## P-BREW.1: the Homebrew cask is an app cask over the release .zip - no pkg stanza, no allow_untrusted / package trust (deprecated in Homebrew 6), pinned per-arch sha256, and the cask url / electron-builder artifactName / update-cask job all name the same zips
 	$(BUN) run tools/cask_check.ts
+.PHONY: demo-P-HOLDER.1
+demo-P-HOLDER.1: ## P-HOLDER.1 (ADR-0527, ADR-0528): a lane's agent runs under lucid-holder (Rust, native/lucid-holder), so an engine killed mid-turn (a crash, an update, a closed window) leaves the turn running; the next engine reattaches and the same turn settles on the same agent process, nothing re-sent, asks already answered not asked again, open ones asked again; stopping a lane ends the holder and the agent tree. Real engines, the real holder, the house fake agent. Needs `bun run build-holder` (Rust)
+	cd desktop && $(BUN) run build-holder
+	$(BUN) run desktop/scripts/demo_p_holder_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/lane_holder.test.ts desktop/controller/lane_lifecycle.test.ts desktop/fleet_lanes.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-P-RECOVER.4
 demo-P-RECOVER.4: ## P-RECOVER.4 (ADR-0481): the main window recovers its own renderer. A render-process-gone that is not a clean exit is logged with reason + exit code and the app is loaded again after a backoff (250ms to 10s), at most 5 reloads per 60s sliding window; past the cap the window is left as it is and the log says to relaunch; a clean exit is ignored; an unresponsive renderer is logged, never reloaded. Wiring lives in main.ts createWindow (proven on a real Electron launch, ADR-0481 Consequences)
 	$(BUN) test $(TEST_IGNORES) desktop/renderer_watchdog.test.ts desktop/gpu_watchdog.test.ts desktop/navigation_policy.test.ts harness/adr_numbering.test.ts

@@ -130,6 +130,7 @@ import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, TURN_ALREADY_RUNN
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
+import { HolderPool } from "./lane_holder.ts"; // P-HOLDER.1 (ADR-0528): lanes outlive the engine
 import { displayStatus } from "./collab/fleet_status.ts"; // P-STUCK-SHOW.3 (ADR-0521): phone guests see likely-stuck spokes too
 import { sessionLive, withLiveState, type SessionLiveSpoke } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
 import { addInterject, addPeerNote, awaitPeerReply, carryPendingNotes, drainInterjects, drainPeerNotes, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes; P-OWN.1: peer notes
@@ -1787,7 +1788,12 @@ try {
   if (existsSync(LATENCY_LOG_PATH)) backend.durations.seedFromLatencyLines(readFileSync(LATENCY_LOG_PATH, "utf8").split("\n").slice(-200));
 } catch { /* no history yet */ }
 backend.carriedNotes = () => carryPendingNotes("master"); // ADR-0414: same carry as the lanes
+// P-HOLDER.1 (ADR-0528): lanes run under lucid-holder when it is built or shipped, so a restart, an update or a
+// closed window leaves their agents running. LUCID_LANE_HOLDERS=0 turns it off (lanes are this engine's children).
+const laneHolders = process.env.LUCID_LANE_HOLDERS === "0" ? null : HolderPool.forEngine();
+console.log(laneHolders ? `[fleet] lane holders on (${laneHolders.binary})` : "[fleet] lane holders off: lanes end with this engine");
 const fleet: FleetLaneManager = new FleetLaneManager({
+  holders: laneHolders,
   argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger,
   masterSessionId: () => backend.currentSessionId(), // P-SWITCH.2 (ADR-0404): one session, one owner
   claims: backend.writeClaims, history: backend.durations, // P-WAIT.1: one set of file claims, P-PROGRESS.1: one estimate history, with the master
@@ -7114,7 +7120,16 @@ jobScheduler.start();
 // ADR-0501: controller lanes the previous engine ran come back idle on their own lane ids and omp sessions (after
 // the child env above is set, so a restored lane is wired like a new one). Detached: the bind never waits on omp;
 // controller routes do (the gate set with controllerDeps), and open when this settles, success or not.
-void restoreControllerLanes(controllerDeps).then(
+// P-HOLDER.1 (ADR-0528): first take back every lane a holder kept running (its turn, if any, carries on), so the
+// controller restore below finds those lanes running instead of respawning them and calling their turns interrupted.
+async function reattachHeldLanes(): Promise<void> {
+  if (!laneHolders) return;
+  for (const rec of laneHolders.all()) {
+    const r = await fleet.reattach(rec);
+    console.log(r.ok ? `[fleet] reattached ${rec.laneId} (${rec.name})${rec.inFlight ? ", its turn carries on" : ""}` : `[fleet] ${rec.laneId} did not come back: ${r.reason}`);
+  }
+}
+void reattachHeldLanes().catch((e) => console.warn("[fleet] reattach failed:", e)).then(() => restoreControllerLanes(controllerDeps)).then(
   (back) => { if (back.length) console.log(`[controller] restored ${back.length} lane(s): ${back.join(", ")}`); },
   (e) => console.warn("[controller] lane restore failed:", e),
 ).finally(() => { controllerDeps.restoring = null; controllerRestore.resolve(); });

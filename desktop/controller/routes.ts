@@ -73,6 +73,8 @@ export interface ControllerDeps {
     laneTranscript(laneId: string): { role: "user" | "assistant"; text: string }[];
     laneRunning(laneId: string): boolean | null;
     cancel(laneId: string): { ok: boolean };
+    /** P-HOLDER.1: the settle of a turn a reattach resumed on this lane, or null when none is running. */
+    resumedTurn(laneId: string): Promise<void> | null;
   };
   /** ADR-0511: the model ids this engine lists as available (the model picker's list, with its platform, AskSage
    *  and managed-policy narrowing). A spawn may name one of these. Absent: a spawn that names a model is refused. */
@@ -413,6 +415,16 @@ export async function restoreControllerLanes(deps: ControllerDeps): Promise<stri
     if (!pairing || !pairing.lanes.includes(rec.id)) {
       const review = await retireLane(deps, rec.id, pairing?.id ?? null, "ended: its pairing was revoked before the engine restarted");
       emit(deps, "controller_ruling", ids, { pairing: pairing?.name ?? "", lane_id: rec.id, ruling: "lane_not_restored", backend: "lane-lifecycle", reason: "pairing revoked", ...(review.reviewBranch ? { branch: review.reviewBranch } : {}) });
+      continue;
+    }
+    // P-HOLDER.1 (ADR-0528): a holder kept this lane's agent running and the fleet already took it back, its turn
+    // (if any) still going: nothing was interrupted. The turn records itself when it settles, as a live one does.
+    if (deps.fleet.laneRunning(rec.id) !== null) {
+      const runId = rec.inFlight?.runId;
+      const resumed = deps.fleet.resumedTurn(rec.id);
+      if (runId) void (resumed ?? Promise.resolve()).finally(() => settleLane(deps, rec.id, runId)).catch(() => {});
+      emit(deps, "controller_ruling", ids, { pairing: pairing.name, lane_id: rec.id, ruling: "lane_restored", backend: "lane-lifecycle", reason: rec.inFlight ? "reattached to its running agent; the turn carries on" : "reattached to its running agent" });
+      back.push(rec.id);
       continue;
     }
     const transcript: LaneTurnRecord[] = rec.inFlight
