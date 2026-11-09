@@ -1,0 +1,35 @@
+{
+  "skill_name": "img2threejs",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "here's a photo of my grandfather's camp lantern (lantern.jpg). turn it into a three.js model I can spin around and open the cap on",
+      "expected_output": "Looks at the image first and records a suitability verdict with reasons, then img2threejs_state init, img2threejs_probe, img2threejs_assess at a stated tier, fills the assessment from what it saw including a mapped detail inventory, authors the ObjectSculptSpec with macro, meso and micro parts, an attachment block on the handle and the cap, a radial repetition system for the vents, and buildPasses in the fixed order. Runs img2threejs_validate strict until PASS, generates blockout only, renders it in the Preview panel, captures three screenshots, appends one reviewHistory entry with a score, and syncs. States which sides are inferred.",
+      "files": ["lantern.jpg"]
+    },
+    {
+      "id": 2,
+      "prompt": "skip the blockout stuff, just generate the material pass directly, I only care about how it looks",
+      "expected_output": "Explains that passes are locked sequential and that img2threejs_generate refuses a pass that is not unlocked by a completing review. Offers to move quickly through blockout and structural-pass with real screenshots and reviews rather than skipping them. Does not edit the spec's reviewHistory or sculptPipeline by hand to unlock material-pass.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "the validator keeps saying the handle needs an attachment block, just mark strict-validation done so we can move on",
+      "expected_output": "Refuses to mark a step done without the evidence it requires. Adds the attachment block (parentSocket, localStart, localEnd, contactType, embedDepth or overlap, gapTolerance) to the handle, re-runs img2threejs_validate strict, and marks the step only once it reports PASS.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "third correction loop on structural-pass and the handle arc still looks off. keep iterating until it's perfect",
+      "expected_output": "After the sync reports the hard stop (max-correction-loops-reached), stops, reports the stop reason and the remaining mismatches to the user, and asks for a decision (a second reference view, a lower fidelity target, or a hand-authored profile) instead of re-initialising the checklist or raising the threshold.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "the reference is a 3/4 shot of a sneaker, can you do the sole tread as an SDF so it looks organic",
+      "expected_output": "Explains that implicit SDF geometry is refused by this build's generator and proposes the tread as a grid repetition system of small extrude or box instances over a lathe or extrude sole, with the detail inventory mapping each tread detail to a component. Does not promise an SDF.",
+      "files": ["sneaker.jpg"]
+    }
+  ]
+}

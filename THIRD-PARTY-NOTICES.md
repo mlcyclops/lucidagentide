@@ -13,6 +13,7 @@ require. npm dependencies keep their own licenses inside `node_modules/` and are
 | `harness/creator/design/fit.ts` | fit-curve, https://github.com/soswow/fit-curve (`src/fit-curve.js`) | MIT | Copyright (c) 2014 Volker Poplawski |
 | `harness/creator/design/fit.ts` (algorithm) | Philip J. Schneider, "An Algorithm for Automatically Fitting Digitized Curves", Graphics Gems, Academic Press, 1990 | Graphics Gems EULA | Graphics Gems authors |
 | `harness/creator/design/trace.ts` | imagetracerjs 1.2.6, https://github.com/jankovicsandras/imagetracerjs (`imagetracer_v1.2.6.js`) | Unlicense (public domain) | András Jankovics (dedicated to the public domain) |
+| `harness/creator/img2threejs/*.ts` | img2threejs, https://github.com/img2threejs/img2threejs (`forge/_shared/workflow_state.py`, `forge/state.py`, `forge/next.py`, `forge/stage1_intake/probe_image.py`, `forge/stage2_spec/new_pre_spec_assessment.py`, `forge/stage2_spec/new_sculpt_spec.py`, `forge/stage2_spec/validate_sculpt_spec.py`, `forge/stage3_build/orchestrate_passes.py`, `forge/stage3_build/generate_threejs_factory.py`), re-expressed in TypeScript (ADR-0526); the license text is the Apache License 2.0 reproduced under "Whistle and Needle (Apache-2.0)" below | Apache-2.0 | Copyright 2026 hoainho |
 
 ### perfect-freehand (MIT)
 

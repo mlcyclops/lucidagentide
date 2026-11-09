@@ -80,6 +80,7 @@ describe("bundledSkillsByUsage: a disabled built-in never surfaces", () => {
 const CREATOR_ONLY = [
   "explainer-studio", "explainer-assets-gpu",
   "curriculum-guide-mirror", "curriculum-to-explainers", "notebooklm-podcast-studio",
+  "img2threejs", // CREATOR-IMG2THREEJS (ADR-0526)
 ] as const;
 const commands = (creatorBuild: boolean) => installedSkills(creatorBuild).map((s) => s.command);
 

@@ -40,6 +40,8 @@ export type CreatorCapabilityId =
   | "tts" | "stt" | "voice-clone" | "voice-design" | "dubbing" | "sfx" | "music" | "audio-isolation"
   | "alignment" | "streaming-audio" | "audio-mix" | "library-manage" | "remix"
   | "image" | "video" | "model-3d" | "scene-preview" | "render-still" | "render-animation"
+  // CREATOR-IMG2THREEJS (ADR-0526): a reference image rebuilt as a code-only, pass-gated procedural three.js model.
+  | "image-to-model"
   | "workflow-run" | "asset-import" | "engine-build" | "engine-test" | "runtime-feedback"
   | "avatar-video" | "video-compose" | "cad-model" | "cad-drawing" | "cad-convert" | "bim-inspect" | "pdf-markup"
   // Design suite: the DGX vision service (dgx-vision) and the in-renderer editor (design).
@@ -241,6 +243,7 @@ const THREEJS: CreatorIntegrationSpec = {
     { id: "runtime-feedback", status: "available", surface: "runtime", detail: "renderer.info reports draw calls, triangles, geometries, and textures for a perf budget." },
     { id: "asset-import", status: "available", surface: "runtime", detail: "glTF and the other loader formats the library ships." },
     { id: "render-animation", status: "planned", surface: "runtime", detail: "Deterministic frame-sequence capture lands with the video increment." },
+    { id: "image-to-model", status: "available", surface: "runtime", detail: "img2threejs: one reference image becomes an ObjectSculptSpec and a pass-gated procedural factory (img2threejs_* tools, TypeScript port, ADR-0526)." },
   ],
   note: "No install, no egress, no key: the scene is ordinary code the agent writes and then looks at.",
   cui: { posture: "on-device" },
