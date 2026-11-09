@@ -94,11 +94,6 @@ jobs:
       - name: Packaged-boot guard (release boots under the packaging filter)
         run: bun test desktop/packaged_boot.test.ts
 
-  # ADR-0352 (P-TEST.W2): the developer machine is Windows, CI was Linux-only, and the gap grew
-  # 8 standing environmental test failures that no PR ever saw (ADR-0351 fixed them). This leg
-  # replicates the LOCAL gate (`make test`'s bun half: the full suite under TEST_IGNORES) on
-  # windows-latest, so path-separator / path-module / machine-state rot fails the PR that
-  # introduces it instead of a developer's baseline ritual days later.
   # P-HOLDER.1 (ADR-0528): the holder's POSIX half (setsid, the agent's process group, the Unix socket) only runs
   # here; the Windows gate below covers the job object and the named pipe.
   holder-posix:
@@ -127,6 +122,11 @@ jobs:
       - name: Held lanes against the real holder
         run: bun test --timeout 30000 desktop/lane_holder.test.ts desktop/controller/lane_lifecycle.test.ts desktop/fleet_lanes.test.ts
 
+  # ADR-0352 (P-TEST.W2): the developer machine is Windows, CI was Linux-only, and the gap grew
+  # 8 standing environmental test failures that no PR ever saw (ADR-0351 fixed them). This leg
+  # replicates the LOCAL gate (`make test`'s bun half: the full suite under TEST_IGNORES) on
+  # windows-latest, so path-separator / path-module / machine-state rot fails the PR that
+  # introduces it instead of a developer's baseline ritual days later.
   gate-windows:
     name: Full test gate (Windows)
     runs-on: windows-latest
