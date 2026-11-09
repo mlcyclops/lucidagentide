@@ -18,7 +18,6 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { repoAsset } from "./repo_root.ts";
 import type { LaneTurnRecord } from "./fleet_lanes.ts";
@@ -48,6 +47,20 @@ export function holderBinary(env: Record<string, string | undefined> = process.e
   const candidates = [env.LUCID_HOLDER_BIN, repoAsset("bin", exe), repoAsset("native", "lucid-holder", "target", "release", exe)];
   for (const c of candidates) if (c && existsSync(c)) return c;
   return null;
+}
+
+/** Whether a process with this pid exists (one owned by another account counts). */
+export function holderProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }
+}
+
+/** LH-05: the last resort when a holder did not confirm a KILL. Ending the holder ends the agent's tree on Windows
+ *  (its job object kills on close); elsewhere the agent leads its own process group, which goes too. The pids are
+ *  the ones the holder's handshake reported a moment ago. */
+export function endHolderProcess(pid: number, childPid: number): void {
+  if (Number.isInteger(pid) && pid > 0) { try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } }
+  if (process.platform !== "win32" && Number.isInteger(childPid) && childPid > 1) { try { process.kill(-childPid, "SIGKILL"); } catch { /* gone */ } }
 }
 
 export interface HolderHello { base: number; end: number; pid: number; childPid: number; exited: number | null }
@@ -188,6 +201,9 @@ export interface HeldLaneRecord {
   turns: number;
   transcript: LaneTurnRecord[];
   supervised: boolean;
+  /** The lane's own auto switch when the record was written. A reattach never turns auto on for a lane that had
+   *  it off (an ask left open at shutdown is asked again, and must reach a human). */
+  autoApprove: boolean;
   remote: { approvalMs: number; offTask: boolean } | null;
   hubSessionId: string | null;
   createdAt: number;
@@ -209,11 +225,12 @@ export class HolderPool {
     if (process.platform !== "win32") chmodSync(dir, 0o700);
   }
 
-  /** The pool for this engine, or null when no holder binary is available. */
+  /** The pool for this engine, or null when no holder binary is available or the engine has no data root of its
+   *  own. Records name processes to reattach to, so they never live in ~/.omp, which agents can write. */
   static forEngine(env: Record<string, string | undefined> = process.env): HolderPool | null {
     const bin = holderBinary(env);
-    if (!bin) return null;
-    return new HolderPool(join(env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "lane-holders"), bin);
+    if (!bin || !env.LUCID_DATA_ROOT) return null;
+    return new HolderPool(join(env.LUCID_DATA_ROOT, "lane-holders"), bin);
   }
 
   /** Start a holder for `laneId` running `cmd args` in `cwd` with exactly `env`, and attach to it from offset 0. */
@@ -254,7 +271,16 @@ export class HolderPool {
 
   remove(laneId: string): void { rmSync(this.#path(laneId), { force: true }); }
 
-  /** Every readable record. A record that does not parse is skipped and left for a human (it names a process). */
+  /** Remove the lane's record only while it still names `holderId` (a newer holder on the lane keeps its own). */
+  removeIf(laneId: string, holderId: string): void {
+    let current: unknown;
+    try { current = (JSON.parse(readFileSync(this.#path(laneId), "utf8")) as { holderId?: unknown }).holderId; } catch { return; }
+    if (current === holderId) this.remove(laneId);
+  }
+
+  /** Every readable record that could only have come from this pool. A record that does not parse, or whose lane
+   *  id, holder id or endpoint is not one a holder of this pool would have (a pipe or socket path anywhere else, a
+   *  UNC path, a lane id that is not its file's name), is skipped and left for a human (it names a process). */
   all(): HeldLaneRecord[] {
     const out: HeldLaneRecord[] = [];
     let names: string[] = [];
@@ -263,9 +289,17 @@ export class HolderPool {
       if (!n.endsWith(".lane.json")) continue;
       try {
         const r = JSON.parse(readFileSync(join(this.dir, n), "utf8")) as HeldLaneRecord;
-        if (r?.v === 1 && typeof r.laneId === "string" && typeof r.endpoint === "string" && typeof r.token === "string") out.push(r);
+        if (r?.v === 1 && `${r.laneId}.lane.json` === n && typeof r.token === "string" && this.ownsEndpoint(r.holderId, r.endpoint, r.laneId)) out.push(r);
       } catch { /* skipped */ }
     }
     return out;
+  }
+
+  /** The endpoint a holder of this pool, for this lane, would have listened on (serve.rs endpoint_for). */
+  ownsEndpoint(holderId: unknown, endpoint: unknown, laneId: string): boolean {
+    if (typeof holderId !== "string" || typeof endpoint !== "string") return false;
+    if (!HOLDER_ID_RE.test(holderId) || !holderId.startsWith(`${laneId}-`)) return false;
+    if (process.platform === "win32") return endpoint.startsWith(`\\\\.\\pipe\\lucid-holder-${holderId}-`) && /^[0-9a-f]{32}$/.test(endpoint.slice(`\\\\.\\pipe\\lucid-holder-${holderId}-`.length));
+    return endpoint === join(this.dir, `${holderId}.sock`) || endpoint === join("/tmp", `lucid-holder-${process.getuid?.()}`, `${holderId}.sock`);
   }
 }

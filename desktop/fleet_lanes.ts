@@ -26,7 +26,7 @@ import { basename, join } from "node:path";
 import { stat } from "node:fs/promises"; // P-FLEET.L16: async stat runs OFF the event loop (statSync wedged it)
 import { randomUUID } from "node:crypto";
 import { ACPClient } from "./acp.ts";
-import { HELD_BUSY_KEEP_MS, HELD_IDLE_KEEP_MS, HolderLink, type HeldLaneRecord, type HolderPool } from "./lane_holder.ts"; // P-HOLDER.1 (ADR-0528)
+import { endHolderProcess, HELD_BUSY_KEEP_MS, HELD_IDLE_KEEP_MS, HolderLink, holderProcessAlive, type HeldLaneRecord, type HolderPool } from "./lane_holder.ts"; // P-HOLDER.1 (ADR-0528)
 // P-FLEET.L14 (ADR-0337): one definition of the interactive client's capabilities, shared with acp_backend.
 // Advertising `elicitation.form` is what lets omp reach this client for its OWN inner approval gate.
 import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts";
@@ -575,8 +575,7 @@ export class FleetLaneManager {
       return { ok: true, lane: this.#view(lane) };
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
-      try { lane.client.stop(); } catch { /* already dead */ }
-      this.#forgetHeld(lane);
+      this.#forgetHeld(lane, this.#stopClient(lane));
       // A refused spawn creates nothing (same rule as the gate-less refusal above). Leaving it in the
       // map as "error" painted a crashed spoke on the orbit whose Respawn could only fail the same way
       // (found live: every Recover of a historical spoke with an id omp did not know, "Unknown ACP
@@ -602,7 +601,14 @@ export class FleetLaneManager {
     const forget = (reason: string) => { try { pool.remove(rec.laneId); } catch { /* best effort */ } return { ok: false, reason }; };
     let link: HolderLink;
     try { link = await HolderLink.connect(rec.endpoint, rec.token, rec.inFlight?.offset ?? rec.consumed); }
-    catch (e) { return forget(`its holder is gone (${e instanceof Error ? e.message : String(e)})`); }
+    catch (e) {
+      const why = e instanceof Error ? e.message : String(e);
+      // LH-04: only a holder that answered and refused, or whose process is gone, is forgotten. One that is alive but
+      // did not answer (busy, or its endpoint held by someone else) keeps its record, so a later start tries again
+      // instead of leaving its agent running with nothing pointing at it.
+      if (!why.startsWith("holder refused the attach") && holderProcessAlive(rec.pid)) return { ok: false, reason: `its holder did not answer (${why}); its record is kept for the next start` };
+      return forget(`its holder is gone (${why})`);
+    }
     if (link.hello.exited !== null && !rec.inFlight) {
       await link.kill();
       return forget(`its agent exited (code ${link.hello.exited}) while no engine was attached`);
@@ -616,7 +622,9 @@ export class FleetLaneManager {
       // Kept for a later in-place recovery (a fresh spawn); this agent is attached below, never spawned.
       client: new ACPClient(plan.cmd, plan.args, rec.cwd, this.#deps.env?.(rec.laneId, rec.cwd) ?? {}),
       sessionId: rec.sessionId, hubSessionId: rec.hubSessionId, sinks: new Set(), pending: null,
-      autoApprove: rec.supervised ? false : this.#autoDefault, supervised: rec.supervised, remote: rec.remote,
+      // Auto only when the lane had it on AND this engine's fleet default is on: the open ask a replay brings back
+      // reaches a human unless both said otherwise (a record without the field counts as off).
+      autoApprove: !rec.supervised && rec.autoApprove === true && this.#autoDefault, supervised: rec.supervised, remote: rec.remote,
       sessionAllow: new Set(), busy: false, openCalls: new Map(), health: newEpisode(t), lastHealth: null, lastUsage: null,
       promoted: false, transcript: [], liveText: "", stepText: new StepTextJoiner(), liveTools: [], liveThinking: "",
       liveToolRecords: [], lastPrompt: null, lastImages: [], turnStartedAt: null, stepsDone: 0, waiting: null,
@@ -933,6 +941,7 @@ export class FleetLaneManager {
     if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
     if (on && lane.supervised) return { ok: false, reason: "a controller lane stays supervised - auto needs the controller consent (P-CTRL.4)" };
     lane.autoApprove = on;
+    this.#saveHeld(lane);
     if (on) lane.pending?.resolve(true);
     return { ok: true, lane: this.#view(lane) };
   }
@@ -943,6 +952,7 @@ export class FleetLaneManager {
     for (const lane of this.#lanes.values()) {
       if (lane.supervised) continue;
       lane.autoApprove = on;
+      this.#saveHeld(lane);
       if (on) lane.pending?.resolve(true);
     }
   }
@@ -975,8 +985,7 @@ export class FleetLaneManager {
     const lane = this.#lanes.get(laneId);
     if (!lane) return { ok: false };
     lane.pending?.resolve(false); // an open ask dies as a DENY, never dangles
-    try { lane.client.stop(); } catch { /* already dead */ }
-    this.#forgetHeld(lane);
+    this.#forgetHeld(lane, this.#stopClient(lane));
     this.#setStatus(lane, "stopped");
     return { ok: true };
   }
@@ -1005,8 +1014,7 @@ export class FleetLaneManager {
     if (lane.promoted) this.#setPromoted(lane, false);
     lane.pending?.resolve(false); // an open ask dies as a DENY, never dangles
     if (lane.busy && lane.sessionId) { try { lane.client.notify("session/cancel", { sessionId: lane.sessionId }); } catch { /* dead */ } }
-    try { lane.client.stop(); } catch { /* already dead */ }
-    this.#forgetHeld(lane);
+    this.#forgetHeld(lane, this.#stopClient(lane));
     // Tell every watcher the lane is gone BEFORE the sinks are dropped, so a live dashboard settles its
     // card instead of waiting forever on a stream that will never produce another event.
     this.#setStatus(lane, "stopped");
@@ -1184,6 +1192,13 @@ export class FleetLaneManager {
 
   /** ADR-0414: is a turn running on this lane right now? Null for a lane this manager does not know
    *  (dismissed, or never existed), so a live push to it is refused by name instead of parked forever. */
+  /** The approval policy a lane runs under (null for an unknown lane): what a controller restore checks a
+   *  reattached lane against before it accepts it as the pairing's (LH-02). */
+  lanePolicy(laneId: string): { supervised: boolean; remote: { approvalMs: number; offTask: boolean } | null } | null {
+    const lane = this.#lanes.get(laneId);
+    return lane ? { supervised: lane.supervised, remote: lane.remote } : null;
+  }
+
   laneRunning(laneId: string): boolean | null {
     const lane = this.#lanes.get(laneId);
     return lane ? lane.busy : null;
@@ -1423,8 +1438,7 @@ export class FleetLaneManager {
       return { ok: true };
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
-      try { lane.client.stop(); } catch { /* already dead */ }
-      this.#forgetHeld(lane);
+      this.#forgetHeld(lane, this.#stopClient(lane));
       this.#setStatus(lane, "error");
       return { ok: false, reason: `lane recovery failed: ${why}` };
     }
@@ -1640,7 +1654,7 @@ export class FleetLaneManager {
         v: 1, laneId: lane.id, holderId: lane.held.holderId, endpoint: lane.held.endpoint, token: lane.held.token,
         pid: lane.held.pid, childPid: lane.held.childPid, name: lane.name, cwd: lane.cwd, model: lane.model,
         sessionId: lane.sessionId, canLoadSession: lane.canLoadSession, turns: lane.turns, transcript: lane.transcript,
-        supervised: lane.supervised, remote: lane.remote, hubSessionId: lane.hubSessionId, createdAt: lane.createdAt,
+        supervised: lane.supervised, autoApprove: lane.autoApprove, remote: lane.remote, hubSessionId: lane.hubSessionId, createdAt: lane.createdAt,
         consumed: lane.client.consumedOffset, lastRequestId: lane.client.lastRequestId, inFlight: lane.held.inFlight,
       });
     } catch (e) {
@@ -1650,10 +1664,22 @@ export class FleetLaneManager {
 
   /** P-HOLDER.1: the lane is over (stopped, dismissed, or its agent is being replaced): no later engine brings it
    *  back. */
-  #forgetHeld(lane: Lane): void {
-    if (!lane.held) return;
+  #forgetHeld(lane: Lane, stopped: Promise<boolean> = Promise.resolve(true)): void {
+    const held = lane.held;
+    if (!held) return;
     lane.held = null;
-    try { this.#holders?.remove(lane.id); } catch { /* the record names a holder that is ending anyway */ }
+    const pool = this.#holders;
+    // LH-05: the record goes only once the holder confirmed the end. A holder that did not is ended by its pid
+    // (the one its handshake reported) first. A newer holder on the same lane id keeps its own record.
+    void stopped.then((ok) => {
+      if (!ok) endHolderProcess(held.pid, held.childPid);
+      try { pool?.removeIf(lane.id, held.holderId); } catch { /* the record names a holder that is ending anyway */ }
+    });
+  }
+
+  /** stop() on the lane's client, never throwing: true once the end is confirmed. */
+  #stopClient(lane: Lane): Promise<boolean> {
+    try { return lane.client.stop(); } catch { return Promise.resolve(true); /* already dead */ }
   }
 
   /** P-CTRL-REMOTE.1 (ADR-0525): decide one ask of a remote lane. T0/T1 inside the workspace run on their own

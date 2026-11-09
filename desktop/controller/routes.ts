@@ -72,6 +72,7 @@ export interface ControllerDeps {
     status(): Promise<{ lanes: LaneView[] }>;
     laneTranscript(laneId: string): { role: "user" | "assistant"; text: string }[];
     laneRunning(laneId: string): boolean | null;
+    lanePolicy(laneId: string): { supervised: boolean; remote: { approvalMs: number; offTask: boolean } | null } | null;
     cancel(laneId: string): { ok: boolean };
     /** P-HOLDER.1: the settle of a turn a reattach resumed on this lane, or null when none is running. */
     resumedTurn(laneId: string): Promise<void> | null;
@@ -400,6 +401,17 @@ export async function handleController(req: Request, path: string, pairing: Pair
   return reply(202, { ok: true, data: { runId: ids.runId, verdict: verdict.trustLabel } });
 }
 
+/** Whether a running lane's policy is the one a pairing's lane is spawned with (supervised; the pairing's remote
+ *  approval window and off-task check, or none). */
+function samePolicy(
+  policy: { supervised: boolean; remote: { approvalMs: number; offTask: boolean } | null } | null,
+  remote: { approvalHours: number; offTask: boolean } | null | undefined,
+): boolean {
+  if (!policy?.supervised) return false;
+  if (!remote) return policy.remote === null;
+  return policy.remote !== null && policy.remote.approvalMs === remote.approvalHours * 3_600_000 && policy.remote.offTask === remote.offTask;
+}
+
 /** ADR-0501: at engine boot, bring every recorded controller lane back, idle, under its own lane id, on its own
  *  omp session (session/load when omp offers it; otherwise a fresh session that carries the recorded transcript
  *  as memory, the P-FLEET.L4 fallback). A turn that was running when the engine died is NOT re-run: it is closed
@@ -419,6 +431,9 @@ export async function restoreControllerLanes(deps: ControllerDeps): Promise<stri
     }
     // P-HOLDER.1 (ADR-0528): a holder kept this lane's agent running and the fleet already took it back, its turn
     // (if any) still going: nothing was interrupted. The turn records itself when it settles, as a live one does.
+    // LH-02: only when it runs under the pairing's policy (supervised, the pairing's remote approval). A held lane
+    // that came back under any other policy is ended and started again the normal way below.
+    if (deps.fleet.laneRunning(rec.id) !== null && !samePolicy(deps.fleet.lanePolicy(rec.id), pairing.remote)) deps.fleet.remove(rec.id, true);
     if (deps.fleet.laneRunning(rec.id) !== null) {
       const runId = rec.inFlight?.runId;
       const resumed = deps.fleet.resumedTurn(rec.id);

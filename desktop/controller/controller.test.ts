@@ -52,6 +52,7 @@ function rig(scan: (t: string) => Promise<GateDecision> = async () => CLEAN, mod
       status: async () => ({ lanes: [...lanes.values()] }),
       laneTranscript: () => [{ role: "user", text: "q" }, { role: "assistant", text: "a0" }, { role: "user", text: "q2" }, { role: "assistant", text: "a1" }],
       laneRunning: () => false,
+      lanePolicy: () => ({ supervised: true, remote: null }),
       cancel: () => ({ ok: true }),
       pendingAsk: () => null,
       answerAsk: () => ({ ok: false }),

@@ -12,6 +12,7 @@
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FleetLaneManager } from "./fleet_lanes.ts";
@@ -104,7 +105,10 @@ describe.skipIf(!BIN)("P-HOLDER.1: lanes under lucid-holder", () => {
     expect(parked).toBe(true);
     b.stopAll(); // the open ask goes with engine B unanswered: no deny reaches the agent
 
+    // Engine C runs with fleet auto ON, but the lane had auto off when B went: the replayed ask must still reach a
+    // human, never be approved by C's default (LH-01).
     const c = engine(pool);
+    c.setAutoAll(true);
     expect((await c.reattach(pool.all()[0]!)).ok).toBe(true);
     let asked = false;
     for (let i = 0; i < 400 && !asked; i++) { asked = (await statusOf(c, id)) === "needs-approval"; if (!asked) await Bun.sleep(25); }
@@ -139,6 +143,37 @@ describe.skipIf(!BIN)("P-HOLDER.1: lanes under lucid-holder", () => {
     const h = await pool.launch("lane-0e0f0a0b", "bun", [FAKE], temp("ws"), { ...process.env });
     await expect(HolderLink.connect(h.endpoint, "0".repeat(64), 0)).rejects.toThrow(/refused/);
     await expect(HolderLink.connect(h.endpoint, h.token, 10_000_000)).rejects.toThrow(/not kept/);
+    await h.link.kill();
+  }, TIMEOUT);
+
+  test("a connection that never says hello is closed, and the engine still attaches", async () => {
+    const pool = holderFolder();
+    const h = await pool.launch("lane-0c0d0e0f", "bun", [FAKE], temp("ws"), { ...process.env });
+    const silent = connect({ path: h.endpoint });
+    const closed = Promise.withResolvers<number>();
+    const t0 = Date.now();
+    silent.on("error", () => {});
+    silent.on("close", () => closed.resolve(Date.now() - t0));
+    const after = await Promise.race([closed.promise, Bun.sleep(15_000).then(() => -1)]);
+    expect(after).toBeGreaterThan(0); // the holder hung up on it (5 s handshake deadline), on every platform
+    const again = await HolderLink.connect(h.endpoint, h.token, 0);
+    expect(again.hello.childPid).toBe(h.childPid);
+    await again.kill();
+  }, TIMEOUT);
+
+  test("a record that names another endpoint or another lane is not trusted", async () => {
+    const pool = holderFolder();
+    const h = await pool.launch("lane-0d0e0f0a", "bun", [FAKE], temp("ws"), { ...process.env });
+    const base = { v: 1 as const, laneId: "lane-0d0e0f0a", holderId: h.holderId, endpoint: h.endpoint, token: h.token, pid: h.pid, childPid: h.childPid, name: "n", cwd: ".", model: "m", sessionId: null, canLoadSession: false, turns: 0, transcript: [], supervised: false, autoApprove: false, remote: null, hubSessionId: null, createdAt: 0, consumed: 0, lastRequestId: 0, inFlight: null };
+    pool.save(base);
+    expect(pool.all().map((r) => r.laneId)).toEqual(["lane-0d0e0f0a"]);
+    for (const endpoint of [String.raw`\\fileserver\pipe\lucid-holder-x`, "/tmp/elsewhere.sock", `${h.endpoint}x`]) {
+      pool.save({ ...base, endpoint });
+      expect(pool.all()).toEqual([]);
+    }
+    pool.save({ ...base, holderId: "lane-0a0a0a0a-1234" }); // a holder id of another lane
+    expect(pool.all()).toEqual([]);
+    pool.save(base);
     await h.link.kill();
   }, TIMEOUT);
 });

@@ -24,9 +24,9 @@ use std::time::{Duration, Instant};
 const ERR_TAIL: usize = 64 * 1024;
 /// Frames queued for a client before it counts as gone (it reattaches from its offset).
 const CLIENT_QUEUE: usize = 4096;
-/// How long a full queue may stall the agent's output before the client is dropped.
-const CLIENT_STALL: Duration = Duration::from_secs(30);
 const HANDSHAKE_MAX: usize = 4096;
+/// How long a connection may take to send its hello; one that stalls is closed (LH-04).
+const HANDSHAKE_TIME: Duration = Duration::from_secs(5);
 
 pub struct Config {
     pub dir: PathBuf,
@@ -78,25 +78,13 @@ fn random_hex() -> String {
     out
 }
 
-/// Queue a frame for the attached client. A client whose queue stays full for CLIENT_STALL, or whose writer has
-/// gone, is dropped; it comes back from the offset it last handled.
+/// Queue a frame for the attached client. Never waits while the lock is held: a client whose queue is full, or whose
+/// writer has gone, is dropped at once; it comes back from the offset it last handled (the spool has every byte).
 fn push(sh: &mut Shared, frame: Vec<u8>) {
     let Some((_, tx)) = sh.client.as_ref() else { return };
-    let mut frame = frame;
-    let started = Instant::now();
-    loop {
-        match tx.try_send(frame) {
-            Ok(()) => return,
-            Err(TrySendError::Full(f)) if started.elapsed() < CLIENT_STALL => {
-                frame = f;
-                thread::sleep(Duration::from_millis(5));
-            }
-            Err(_) => {
-                sh.client = None;
-                sh.detached_since = Some(Instant::now());
-                return;
-            }
-        }
+    if let Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) = tx.try_send(frame) {
+        sh.client = None;
+        sh.detached_since = Some(Instant::now());
     }
 }
 
@@ -124,7 +112,9 @@ pub fn serve(cfg: Config) -> Result<(), String> {
         let _ = fs::remove_file(&endpoint); // a socket file left by a holder that died
     }
     let name = endpoint.as_str().to_fs_name::<GenericFilePath>().map_err(|e| format!("endpoint {endpoint}: {e}"))?;
-    let listener = ListenerOptions::new().name(name).create_sync().map_err(|e| format!("endpoint {endpoint}: {e}"))?;
+    let listener = platform::private_endpoint(ListenerOptions::new().name(name))
+        .and_then(|o| o.create_sync())
+        .map_err(|e| format!("endpoint {endpoint}: {e}"))?;
     let spool = Spool::create(&spool_path(&cfg.dir, &cfg.id)).map_err(|e| format!("spool: {e}"))?;
 
     let mut cmd = Command::new(&cfg.program);
@@ -268,13 +258,20 @@ fn reply(send: &mut impl Write, value: Value) -> std::io::Result<()> {
 /// One connection: the handshake (token, offset), the replay from that offset, then this client is THE client
 /// (a newer attach replaces it) and its frames are read until it leaves.
 fn attach(h: &Holder, stream: Stream) {
-    // The handshake gets 5 seconds; the session itself may sit idle for hours. `&Stream` reads and writes, so
-    // one Arc serves this reader and the writer thread (dropping either does not shut the connection).
-    let _ = stream.set_recv_timeout(Some(Duration::from_secs(5)));
+    // The handshake gets 5 seconds (a receive timeout on Unix, a watchdog on Windows, whose pipes ignore receive
+    // timeouts); the session itself may sit idle for hours. `&Stream` reads and writes, so one Arc serves this
+    // reader and the writer thread (dropping either does not shut the connection).
+    let _ = stream.set_recv_timeout(Some(HANDSHAKE_TIME));
     let stream = Arc::new(stream);
+    // Declared after the stream, so it is dropped (and its watchdog stopped) before the stream can close.
+    let deadline = platform::Deadline::arm(&stream, HANDSHAKE_TIME);
     let mut recv = &*stream;
     let mut send = &*stream;
-    let Some(line) = read_line(&mut recv) else { return };
+    let line = read_line(&mut recv);
+    if !deadline.disarm() {
+        return;
+    }
+    let Some(line) = line else { return };
     let hello: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
     let token = hello.get("token").and_then(Value::as_str).unwrap_or("");
     if !proto::same_secret(token.as_bytes(), h.cfg.token.as_bytes()) {
@@ -297,23 +294,49 @@ fn attach(h: &Holder, stream: Stream) {
             "v": 1, "ok": true, "base": sh.spool.base(), "end": sh.spool.end(),
             "pid": std::process::id(), "childPid": h.child_pid, "exited": sh.exited,
         });
-        // The replay is written here, under the lock, so no live frame can land between it and the stream.
-        let replayed = reply(&mut send, hello_ok)
-            .and_then(|_| sh.spool.read_from(from, |chunk| proto::write_frame(&mut send, OUT, chunk)))
-            .and_then(|_| if sh.err_tail.is_empty() { Ok(()) } else { proto::write_frame(&mut send, ERR, &sh.err_tail) })
-            .and_then(|_| match sh.exited { Some(code) => proto::write_frame(&mut send, EXIT, &code.to_le_bytes()), None => Ok(()) });
-        if replayed.is_err() {
+        // LH-05: only a snapshot is taken under the lock (a reader over the kept bytes up to now, the stderr tail,
+        // the exit), and the client is registered in the same step, so every later byte lands in its queue. The
+        // writer thread streams the snapshot first, then the queue: nothing is lost or reordered, and a client that
+        // stops reading stalls only its own thread, never the agent's output, KILL or the orphan timer.
+        let Ok(replay) = sh.spool.reader(from) else {
+            let _ = reply(&mut send, json!({ "v": 1, "ok": false, "error": "the spool cannot be read" }));
             return;
-        }
+        };
+        let err_tail = sh.err_tail.clone();
+        let exited = sh.exited;
         let gen = sh.next_gen;
         sh.next_gen += 1;
-        if sh.exited.is_some() {
+        if exited.is_some() {
             sh.exit_seen_by = Some(gen);
         }
         let (tx, rx) = sync_channel::<Vec<u8>>(CLIENT_QUEUE);
         let out = stream.clone();
         thread::spawn(move || {
             let mut send = &*out;
+            let (mut file, mut left) = replay;
+            let mut buf = vec![0u8; 64 * 1024];
+            let snapshot = || -> std::io::Result<()> {
+                reply(&mut send, hello_ok)?;
+                while left > 0 {
+                    let want = left.min(buf.len() as u64) as usize;
+                    let n = file.read(&mut buf[..want])?;
+                    if n == 0 {
+                        return Err(std::io::ErrorKind::UnexpectedEof.into());
+                    }
+                    proto::write_frame(&mut send, OUT, &buf[..n])?;
+                    left -= n as u64;
+                }
+                if !err_tail.is_empty() {
+                    proto::write_frame(&mut send, ERR, &err_tail)?;
+                }
+                if let Some(code) = exited {
+                    proto::write_frame(&mut send, EXIT, &code.to_le_bytes())?;
+                }
+                Ok(())
+            };
+            if snapshot().is_err() {
+                return;
+            }
             for frame in rx {
                 if send.write_all(&frame).and_then(|_| send.flush()).is_err() {
                     return;
@@ -331,6 +354,10 @@ fn attach(h: &Holder, stream: Stream) {
             Ok(Some(f)) => f,
             _ => break,
         };
+        // LH-05: the kill switch works from any connection that passed the token, current or not.
+        if frame.0 == KILL {
+            shutdown(h);
+        }
         let current = h.shared.lock().client.as_ref().map(|c| c.0) == Some(gen);
         if !current {
             return; // replaced by a newer attach: this connection no longer speaks for the engine

@@ -62,6 +62,7 @@ dependencies = [
  "libc",
  "parking_lot",
  "serde_json",
+ "widestring",
  "windows-sys 0.59.0",
 ]
 

@@ -51,6 +51,72 @@ mod imp {
     use windows_sys::Win32::System::Threading::{
         GetCurrentProcess, CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW,
     };
+    use windows_sys::Win32::System::IO::CancelIoEx;
+    use interprocess::local_socket::{ListenerOptions, Stream};
+    use interprocess::os::windows::local_socket::ListenerOptionsExt;
+    use interprocess::os::windows::security_descriptor::SecurityDescriptor;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// The pipe admits its owner (the account that runs the engine and this holder) and SYSTEM, nobody else
+    /// (LH-04: the default DACL lets every account open it for reading and pin an instance).
+    pub fn private_endpoint(opts: ListenerOptions<'_>) -> std::io::Result<ListenerOptions<'_>> {
+        let sddl = widestring::U16CString::from_str("D:P(A;;GA;;;OW)(A;;GA;;;SY)").map_err(std::io::Error::other)?;
+        Ok(opts.security_descriptor(SecurityDescriptor::deserialize(&sddl)?))
+    }
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum Phase { Armed, Fired, Done }
+
+    /// A receive deadline on one connection. Windows pipes ignore receive timeouts (interprocess reads them with
+    /// overlapped I/O), so a watchdog cancels the pipe's pending I/O once the time is up, and keeps cancelling until
+    /// the reader lets go of the deadline (a read that had just returned and is followed by another is cancelled
+    /// too). The caller must disarm or drop the deadline before the stream closes: the watchdog holds only the raw
+    /// handle, and never touches it after Done.
+    pub struct Deadline(Arc<Mutex<Phase>>);
+
+    impl Deadline {
+        pub fn arm(stream: &Stream, after: Duration) -> Deadline {
+            use std::os::windows::io::{AsHandle, AsRawHandle};
+            let phase = Arc::new(Mutex::new(Phase::Armed));
+            #[allow(unreachable_patterns)]
+            let pipe = match stream {
+                Stream::NamedPipe(p) => p.as_handle().as_raw_handle() as usize, // a HANDLE does not cross threads by itself
+                _ => return Deadline(phase),
+            };
+            let watch = phase.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(after);
+                loop {
+                    {
+                        let mut p = watch.lock();
+                        if *p == Phase::Done {
+                            break;
+                        }
+                        *p = Phase::Fired;
+                        unsafe { CancelIoEx(pipe as HANDLE, std::ptr::null()) };
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            });
+            Deadline(phase)
+        }
+
+        /// Stop the watchdog. False when the time ran out first (the caller must give up the connection).
+        pub fn disarm(&self) -> bool {
+            let mut p = self.0.lock();
+            let in_time = *p == Phase::Armed;
+            *p = Phase::Done;
+            in_time
+        }
+    }
+
+    impl Drop for Deadline {
+        fn drop(&mut self) {
+            *self.0.lock() = Phase::Done;
+        }
+    }
 
     /// Start `serve` out of the engine's reach: a new process group, out of the launcher's job when the job
     /// allows it (the engine's runtime puts its children in a kill-on-close job), and with a console that is
@@ -119,6 +185,19 @@ mod imp {
 
     pub fn own_tree() -> std::io::Result<()> { Ok(()) }
 
+    /// The socket already lives in a folder only this account can enter.
+    pub fn private_endpoint(opts: interprocess::local_socket::ListenerOptions<'_>) -> std::io::Result<interprocess::local_socket::ListenerOptions<'_>> {
+        Ok(opts)
+    }
+
+    /// Unix sockets honour the receive timeout set on the stream, so no watchdog is needed.
+    pub struct Deadline;
+
+    impl Deadline {
+        pub fn arm(_stream: &interprocess::local_socket::Stream, _after: Duration) -> Deadline { Deadline }
+        pub fn disarm(&self) -> bool { true }
+    }
+
     /// The agent leads a process group of its own, so its whole tree can be signalled at once.
     pub fn prepare_child(cmd: &mut Command) {
         cmd.process_group(0);
@@ -137,4 +216,4 @@ mod imp {
     }
 }
 
-pub use imp::{end_tree, own_tree, prepare_child, spawn_detached};
+pub use imp::{end_tree, own_tree, prepare_child, private_endpoint, spawn_detached, Deadline};

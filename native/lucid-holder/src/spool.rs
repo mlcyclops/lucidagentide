@@ -37,14 +37,20 @@ impl Spool {
         Ok(())
     }
 
-    /// Hand `each` the kept bytes from `from` to the end, in chunks. `from` must lie in `base..=end`.
-    pub fn read_from(&self, from: u64, mut each: impl FnMut(&[u8]) -> io::Result<()>) -> io::Result<()> {
+    /// A file handle at `from` and how many kept bytes follow it right now. The handle keeps reading the same bytes
+    /// even if a trim swaps the file afterwards, so a caller may stream it without holding any lock.
+    pub fn reader(&self, from: u64) -> io::Result<(File, u64)> {
         if from < self.base || from > self.end {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "offset not kept"));
         }
         let mut r = File::open(&self.path)?;
         r.seek(SeekFrom::Start(from - self.base))?;
-        let mut left = self.end - from;
+        Ok((r, self.end - from))
+    }
+
+    /// Hand `each` the kept bytes from `from` to the end, in chunks. `from` must lie in `base..=end`.
+    pub fn read_from(&self, from: u64, mut each: impl FnMut(&[u8]) -> io::Result<()>) -> io::Result<()> {
+        let (mut r, mut left) = self.reader(from)?;
         let mut buf = vec![0u8; CHUNK];
         while left > 0 {
             let want = left.min(CHUNK as u64) as usize;

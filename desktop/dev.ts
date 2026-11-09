@@ -7125,7 +7125,8 @@ jobScheduler.start();
 async function reattachHeldLanes(): Promise<void> {
   if (!laneHolders) return;
   for (const rec of laneHolders.all()) {
-    const r = await fleet.reattach(rec);
+    // One record that throws must not keep the others (and the controller restore after them) from coming back.
+    const r = await fleet.reattach(rec).catch((e) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }));
     console.log(r.ok ? `[fleet] reattached ${rec.laneId} (${rec.name})${rec.inFlight ? ", its turn carries on" : ""}` : `[fleet] ${rec.laneId} did not come back: ${r.reason}`);
   }
 }
