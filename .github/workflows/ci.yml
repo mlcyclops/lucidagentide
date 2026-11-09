@@ -9,6 +9,8 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  # A branch that is not yet aimed at master (a stacked PR) can still run the whole gate on demand.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -97,6 +99,34 @@ jobs:
   # replicates the LOCAL gate (`make test`'s bun half: the full suite under TEST_IGNORES) on
   # windows-latest, so path-separator / path-module / machine-state rot fails the PR that
   # introduces it instead of a developer's baseline ritual days later.
+  # P-HOLDER.1 (ADR-0528): the holder's POSIX half (setsid, the agent's process group, the Unix socket) only runs
+  # here; the Windows gate below covers the job object and the named pipe.
+  holder-posix:
+    name: Lane holder (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install (root)
+        run: bun install
+      - name: Install (desktop)
+        working-directory: desktop
+        run: bun install
+      - name: Build lucid-holder (Rust)
+        working-directory: desktop
+        run: bun run build-holder
+      - name: lucid-holder (Rust) tests
+        working-directory: native/lucid-holder
+        run: cargo test --release --locked
+      - name: Held lanes against the real holder
+        run: bun test --timeout 30000 desktop/lane_holder.test.ts desktop/controller/lane_lifecycle.test.ts desktop/fleet_lanes.test.ts
+
   gate-windows:
     name: Full test gate (Windows)
     runs-on: windows-latest
