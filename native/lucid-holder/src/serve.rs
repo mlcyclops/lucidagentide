@@ -119,7 +119,7 @@ fn write_ready(dir: &Path, id: &str, value: &Value) -> std::io::Result<()> {
 
 pub fn serve(cfg: Config) -> Result<(), String> {
     platform::own_tree().map_err(|e| format!("the agent's process tree cannot be owned: {e}"))?;
-    let endpoint = platform::endpoint_for(&cfg.dir, &cfg.id, &random_hex());
+    let endpoint = platform::endpoint_for(&cfg.dir, &cfg.id, &random_hex()).map_err(|e| format!("endpoint: {e}"))?;
     if !cfg!(windows) {
         let _ = fs::remove_file(&endpoint); // a socket file left by a holder that died
     }

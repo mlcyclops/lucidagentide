@@ -9,13 +9,34 @@ use std::process::{Child, Command};
 
 /// The endpoint a client connects to: a named pipe on Windows, a Unix-domain socket in the holder's private
 /// folder elsewhere. The Windows name carries a random part, so another account cannot pre-create it.
-pub fn endpoint_for(dir: &Path, id: &str, nonce: &str) -> String {
-    if cfg!(windows) {
-        format!(r"\\.\pipe\lucid-holder-{id}-{nonce}")
-    } else {
-        let _ = nonce;
-        dir.join(format!("{id}.sock")).to_string_lossy().into_owned()
+#[cfg(windows)]
+pub fn endpoint_for(_dir: &Path, id: &str, nonce: &str) -> std::io::Result<String> {
+    Ok(format!(r"\\.\pipe\lucid-holder-{id}-{nonce}"))
+}
+
+/// A Unix socket path longer than the kernel's `sun_path` (104 bytes on macOS, 108 on Linux, with its NUL) cannot be
+/// bound, and a data root under macOS's per-user temp folder is already most of that. Such a socket goes in
+/// `/tmp/lucid-holder-<uid>/` instead, a folder this account owns with mode 0700 (anything else is refused).
+#[cfg(unix)]
+pub fn endpoint_for(dir: &Path, id: &str, _nonce: &str) -> std::io::Result<String> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    const SUN_PATH_MAX: usize = 100;
+    let beside = dir.join(format!("{id}.sock"));
+    if beside.as_os_str().len() <= SUN_PATH_MAX {
+        return Ok(beside.to_string_lossy().into_owned());
     }
+    let uid = unsafe { libc::getuid() };
+    let short = Path::new("/tmp").join(format!("lucid-holder-{uid}"));
+    match std::fs::DirBuilder::new().mode(0o700).create(&short) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    let meta = std::fs::symlink_metadata(&short)?;
+    if !meta.is_dir() || meta.uid() != uid || meta.permissions().mode() & 0o777 != 0o700 {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("{} is not a 0700 folder of this account", short.display())));
+    }
+    Ok(short.join(format!("{id}.sock")).to_string_lossy().into_owned())
 }
 
 #[cfg(windows)]
