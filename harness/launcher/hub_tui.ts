@@ -35,6 +35,9 @@
 // hub_palette.ts): one fused, scored list of spaces, tabs, agents and decks; Enter acts, Esc
 // closes, and it only ever opens from hub-owned focus (the same guard as the `:` prompt).
 //
+// P-HERD-OSC.1 (ADR-0530): each poll tick reports the fleet to the terminal with OSC 7501 (the
+// Program Status Protocol, hub_program_status.ts), only what changed; quitting clears every record.
+//
 // The colors are the desktop design system (styles.css → the P-THEME.1 palette), so the hub and the
 // gated `lucid tui` read as one product: LUCID magenta chrome, cyan focus, the styles.css status hues.
 
@@ -45,6 +48,7 @@ import { discoveryDir, listDiscoveries, pruneStaleDiscovery, verifyDiscovery, ty
 import { agentPrioritiesPath, agentRailLine, HubAgentsPanel, laneLocations, statusGlyph, type AgentRow, type AgentsPanelRow, type GlyphHue } from "./hub_agents_panel.ts";
 import { createHubExecutor, startHubControl } from "./hub_control.ts";
 import { buildPaletteItems, filterPalette, type PaletteItem } from "./hub_palette.ts";
+import { programStatusEnabled, ProgramStatusEmitter } from "./hub_program_status.ts";
 import { HubOpError, leaves, loadSpaces, saveSpaces, Spaces, spacePanes, spacesPath, type PaneDeck, type PaneLeaf, type PaneNode } from "./hub_spaces.ts";
 import { parseHubCommand, tokenize, type HubOp } from "./hub_tmux_verbs.ts";
 
@@ -610,9 +614,12 @@ export class HubComponent implements Component {
   #status = "";
   #timer: NodeJS.Timeout | undefined;
   #disposed = false;
+  /** P-HERD-OSC.1 (ADR-0530): every fresh fleet snapshot, for the OSC 7501 reports. */
+  readonly #onFleet: ((lanes: Record<string, unknown>[]) => void) | undefined;
 
-  constructor(ui: HubUi, engine: EngineDiscovery, opts: { spawned?: boolean; spaces?: Spaces; prioritiesPath?: string } = {}) {
+  constructor(ui: HubUi, engine: EngineDiscovery, opts: { spawned?: boolean; spaces?: Spaces; prioritiesPath?: string; onFleet?: (lanes: Record<string, unknown>[]) => void } = {}) {
     this.#ui = ui;
+    this.#onFleet = opts.onFleet;
     this.#engine = engine;
     this.#spawned = !!opts.spawned;
     this.#base = `http://127.0.0.1:${engine.port}`;
@@ -715,6 +722,7 @@ export class HubComponent implements Component {
         whitelist: arr(whitelist), posture: rec(posture), config: arr(config),
         kg: rec(kg), kgGraph: kgGraph === null ? null : rec(kgGraph),
       };
+      this.#onFleet?.(arr(this.#data.fleet.lanes).map(rec));
       // Live transcripts for every open agent pane, same poll tick.
       const laneIds = [...new Set(leaves(this.#tree).flatMap((l) => (l.deck === "agent" && l.lane ? [l.lane] : [])))];
       const fetched = await Promise.all(laneIds.map(async (id) => {
@@ -1815,7 +1823,11 @@ export async function runHubCli(env: Readonly<Record<string, string | undefined>
   spaces.onChange = () => { try { saveSpaces(layoutFile, spaces); } catch { /* layout is convenience, never fatal */ } };
   const tui = opts.headless ? null : new TUI(new ProcessTerminal());
   const ui: HubUi = tui ?? { requestRender() { /* no terminal */ }, terminal: { rows: 40 } };
-  const component = new HubComponent(ui, attached.engine, { spawned: attached.spawned, spaces });
+  // P-HERD-OSC.1 (ADR-0530): OSC 7501 fleet reports, written through the SAME terminal the frames
+  // go through (one write per batch, so a report never lands inside a frame's escape sequence).
+  // A real TTY only, and LUCID_PROGRAM_STATUS=0 turns it off; headless has no terminal at all.
+  const status = tui && programStatusEnabled(env, process.stdout.isTTY === true) ? new ProgramStatusEmitter((bytes) => tui.terminal.write(bytes)) : null;
+  const component = new HubComponent(ui, attached.engine, { spawned: attached.spawned, spaces, onFleet: status ? (lanes) => status.update(lanes) : undefined });
   const control = startHubControl({ dir, exec: (op) => component.exec(op) });
   const quit = () => component.quit();
   for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(sig, quit);
@@ -1831,6 +1843,7 @@ export async function runHubCli(env: Readonly<Record<string, string | undefined>
     for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.off(sig, quit);
     control.stop();
     component.dispose();
+    status?.clear(); // after dispose: a refresh still in flight can no longer report
     spaces.onChange();
     overlay?.hide();
     tui?.stop();

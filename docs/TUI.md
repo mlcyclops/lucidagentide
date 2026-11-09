@@ -148,6 +148,31 @@ status` first, learn flags from `--help`, pass explicit ids, and leave approvals
 engine, and the UI token alone. `lucid hub --skill` prints the same file, so an agent
 on any machine with LUCID installed can load it without the repo.
 
+## Fleet status for the terminal (OSC 7501, P-HERD-OSC.1, ADR-0530)
+
+`lucid hub` tells the terminal it runs in what the fleet is doing, with the
+[Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status)
+(OSC 7501). A terminal that speaks it (Herdr, Ghostty, Rex) can show a badge, a
+spinner or a "needs you" mark on the hub's pane or tab; any other terminal ignores
+the sequence.
+
+- **Records.** One root record for the whole fleet, plus one record per lane: id =
+  the lane id (cut to the protocol's `[A-Za-z0-9_.+-]{1,32}`), title = the lane name,
+  `app=lucid`.
+- **Lane states.** `needs-approval` is `blocked` with `kind=permission`; `working` and
+  `starting` are `working`; `done` is `done`; `error` is `error`; `awaiting-input` is
+  `idle` (the lane is ready for its next prompt, it asked nothing); `stopped` is
+  `idle` with the message "Stopped" (the lane is still in the fleet). Lane messages
+  are fixed phrases: approval summaries and agent output never leave LUCID this way.
+- **Root.** `blocked` when any lane waits for an approval ("2 lanes need you"), else
+  `working` when any lane works, else `done` when any finished, else `idle`. Failed
+  lanes are added to the message ("1 lane failed").
+- **When.** Each poll tick (2 s) writes only the records that changed, through the
+  hub's own terminal output, never inside a frame. A lane that leaves the fleet is
+  cleared (`state=clear:id=<lane>`); quitting the hub clears every record.
+- **Off switch.** `LUCID_PROGRAM_STATUS=0` (or `false`, `off`, `no`) turns it off.
+  Nothing is written when stdout is not a TTY, nor by `lucid hub --headless`.
+
 ## Capability map
 
 Every GUI surface, its TUI counterpart, and the transport it already has. "Same

@@ -14,6 +14,9 @@
 //     it may also name a model, only one this engine lists as available (else 400); absent, the fleet's default.
 //   - prompt text goes through the fail-closed scan before it reaches a lane. Scan unavailable == refused.
 //   - Malformed anything (bad JSON, extra keys, wrong types, oversize text) is refused, never coerced.
+//   - schema (ADR-0531) answers this API as an OpenAPI 3.1 document (openapi.ts), to the UI token and to any paired
+//     controller alike, so outside clients can be built against it. A route added here goes into that document too:
+//     openapi.test.ts fails on a route the document misses or names wrongly.
 // Events are metadata only (pairing, lane, verdict, counts); prompt text and tokens never reach them.
 //
 // Lane lifecycle (ADR-0500/0501/0502):
@@ -36,6 +39,7 @@ import { Telemetry, type EventSink } from "../../harness/telemetry/events.ts";
 import type { LaneEvent, LaneTurnRecord, LaneView } from "../fleet_lanes.ts";
 import { closeLaneWorktree, createRemoteLaneWorktree, removeLaneWorktree } from "../lane_worktree.ts";
 import type { ControllerLane, ControllerLaneStore } from "./lane_store.ts";
+import { controllerOpenApi } from "./openapi.ts";
 import { DEFAULT_APPROVAL_HOURS, MAX_APPROVAL_HOURS, p256FromSpki, verifyRemoteDecision, type RemoteAsk } from "./remote_policy.ts";
 import { isLaneCount, PAIRING_NAME_RE, SPOKE_NODE_RE, type Pairing, type PairingStore, type RemotePolicy } from "./store.ts";
 
@@ -43,8 +47,8 @@ import { isLaneCount, PAIRING_NAME_RE, SPOKE_NODE_RE, type Pairing, type Pairing
 export const CONTROLLER_ROUTES: ReadonlySet<string> = new Set(
   // ask, decide, deny: P-CTRL-REMOTE.1 (ADR-0525). The controller can read a remote ask and deny it; an allow
   // needs a decision the engine verifies against the paired root, so the controller only carries it.
-  // close: ADR-0500.
-  ["lanes", "spawn", "prompt", "status", "result", "cancel", "close", "ask", "decide", "deny"].map((r) => `/api/controller/${r}`),
+  // close: ADR-0500. schema: ADR-0531, the one route the UI token also reads here.
+  ["lanes", "spawn", "prompt", "status", "result", "cancel", "close", "ask", "decide", "deny", "schema"].map((r) => `/api/controller/${r}`),
 );
 
 /** ADR-0425: at most two controller-owned live lanes per pairing, unless the human granted the pairing its own
@@ -134,8 +138,11 @@ async function resolveWorkspace(path: string): Promise<string | null> {
   }
 }
 
-const reply = (status: number, data: Record<string, unknown>) =>
-  new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
+const reply = (status: number, data: Record<string, unknown>) => new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
+/** ADR-0531: this API as OpenAPI 3.1, built on the first request (not at import, so no import order can see a
+ *  constant it reads still uninitialized) from the limits this handler enforces, then kept. */
+let schemaJson: string | null = null;
 const malformed = () => reply(400, { ok: false, error: "malformed request" });
 const UNKNOWN_LANE = { ok: false, error: "unknown lane" };
 /** A JSON object body carrying exactly `keys` (each optional unless `required`), every value a string. */
@@ -244,6 +251,14 @@ export async function handleController(req: Request, path: string, pairing: Pair
     if (!gone) return reply(404, { ok: false, error: "unknown pairing" });
     emit(deps, "controller_unpaired", { runId: Snowflake.next(), sessionId: `controller:${gone.id}` }, { pairing: gone.name, pairing_id: gone.id, lanes: gone.lanes.length });
     return reply(200, { ok: true });
+  }
+
+  // ADR-0531: the API's own description, for the UI token (no pairing here) and any paired controller alike. The
+  // engine's /api gate has already refused every other caller (no token, the agent token, an unverified one).
+  if (path === "/api/controller/schema") {
+    if (req.method !== "GET" || url.search) return malformed();
+    schemaJson ??= JSON.stringify(controllerOpenApi({ maxPromptChars: MAX_PROMPT_CHARS, maxModelChars: MAX_MODEL_CHARS, modelId: MODEL_ID_RE, defaultMaxLanes: MAX_LANES_PER_PAIRING, restoreWaitMs: RESTORE_WAIT_MS }));
+    return new Response(schemaJson, { status: 200, headers: JSON_HEADERS });
   }
 
   // ── Controller routes: a live pairing or nothing ────────────────────────────────────────────────────────

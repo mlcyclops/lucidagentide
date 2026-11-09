@@ -1924,11 +1924,13 @@ function spokeHolding(id: string): SessionLiveSpoke | null {
 // endpoint tooling (Defender / Intune) can identify the agent instead of classifying it as shadow AI. Only
 // when Electron launched us (LUCID_DATA_ROOT); a standalone dev engine is not an install. Rewritten each
 // launch, so MCP changes surface at the next start. Advisory: a failed write is logged, never fatal.
-if (process.env.LUCID_DATA_ROOT) {
+// ADR-0532: written once the port is bound (PORT=0 picks it then), so it never names port 0.
+function publishLocalAgentManifest(port: number): void {
+  if (!process.env.LUCID_DATA_ROOT) return;
   const manifest = buildLocalAgentManifest({
     build: BUILD,
     version: APP_VERSION,
-    port: PORT,
+    port,
     hostExecutable: process.env.LUCID_HOST_EXE || null,
     engineExecutable: basename(process.execPath),
     // Agent mode answers omp's per-tool asks itself (the in-process gate and the exec/egress tier prompts
@@ -2526,7 +2528,8 @@ return Bun.serve({
     let ctrlPairing: Pairing | null = null;
     // H2 (ADR-0022): reject anything a web page or DNS-rebind could forge against
     // the fixed local port (foreign Host/Origin, or a non-JSON state-changing body).
-    if (!isAllowedRequest(reqShape(req), PORT)) return new Response("forbidden", { status: 403 });
+    // ADR-0532: PORT=0 binds an ephemeral port, so the Host a client must use is the bound one.
+    if (!isAllowedRequest(reqShape(req), srv.port ?? PORT)) return new Response("forbidden", { status: 403 });
     // ADR-0024: the sensitive /api surface additionally requires the per-launch token (carried by
     // the renderer from the injected HTML). /api/health is exempt — main.ts polls it before the
     // page (and thus the token) exists, and it returns no data. Static assets/HTML aren't /api/*.
@@ -4225,7 +4228,7 @@ return Bun.serve({
       if (p === "/api/build-info") {
         return json({ ok: true, data: buildInfoView(BUILD, {
           version: APP_VERSION,
-          port: PORT,
+          port: ENGINE_PORT,
           dataRoot: process.env.LUCID_DATA_ROOT || "",
           settingsFile: process.env.LUCID_GUI_SETTINGS_FILE || join(homedir(), ".omp", "lucid-gui.json"),
           personalDir: personalBaseDir(),
@@ -7024,6 +7027,7 @@ try {
   console.error(`[discovery] could not publish ${NONCE_PATH}: ${String(err)}`);
 }
 process.on("exit", () => { removeDiscovery(DISCOVERY_PATH); removeDiscovery(NONCE_PATH); });
+publishLocalAgentManifest(ENGINE_PORT);
 
 // P-PREVIEW.3a-shot (ADR-0096): hand the omp subprocess a ready-to-use URL (real bound port + token) for the
 // agent's preview_screenshot tool to fetch the cached shot. omp is spawned later (lazily, by acp_backend in
