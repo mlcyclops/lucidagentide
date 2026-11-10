@@ -125,7 +125,7 @@ import { approveBlock, dismissAllBlocks, dismissBlock, liveBlocks } from "./secu
 import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECACK.1 (ADR-0170)
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { probeRateLimits } from "./ratelimit_probe.ts";
-import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
+import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger, type CodeActivity, type UsageLedger } from "../tools/memory_data.ts";
 import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, TURN_ALREADY_RUNNING, type JudgePlan } from "./acp_backend.ts";
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
@@ -363,7 +363,7 @@ async function whistleProbe(): Promise<WhistleProbeAnswer> {
   }
 }
 
-// P-VOICE.7: the same-machine handoff mailbox. The DGX Loader's "Send to LUCID" writes
+// P-VOICE.7: the same-machine handoff mailbox. The Private AI Platform's "Send to LUCID" writes
 // <home>/.omp/voice_endpoints/<id>.json (ADR-0017 in that repo); LUCID auto-scans on every endpoints
 // read, so the transfer is: click there, pick it here. Per-file fail-soft: one malformed file is
 // reported by name and skipped, never fatal, and NOTHING is imported without passing the fail-closed
@@ -974,7 +974,7 @@ setInterval(() => {
 }, 5000);
 
 // 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
-let codeActivityCache: { at: number; data: ReturnType<typeof codeActivity> } | null = null;
+let codeActivityCache: { at: number; data: Promise<CodeActivity> } | null = null; // P-BOOTPERF.1: async, single-flight
 // P-NETSTAT.1 (ADR-0423): one probe window per engine, shared by every renderer that polls it.
 const netProbe = new NetProbe();
 // P-PERF.3: the dashboard poll hammers these obs-DB reads (~every 4s). Each can take SECONDS as the DB grows,
@@ -988,8 +988,8 @@ function securitySnapshotMemo(): ReturnType<typeof securitySnapshot> {
   if (!secSnapMemo || t - secSnapMemo.at > SNAP_TTL_MS) secSnapMemo = { at: t, p: securitySnapshot() };
   return secSnapMemo.p; // concurrent callers await the SAME query
 }
-let usageMemo: { at: number; data: ReturnType<typeof usageLedger> } | null = null;
-function usageLedgerMemo(): ReturnType<typeof usageLedger> {
+let usageMemo: { at: number; data: Promise<UsageLedger> } | null = null; // P-BOOTPERF.1: async, single-flight
+function usageLedgerMemo(): Promise<UsageLedger> {
   const t = Date.now();
   if (!usageMemo || t - usageMemo.at > SNAP_TTL_MS) usageMemo = { at: t, data: usageLedger() };
   return usageMemo.data;
@@ -1170,7 +1170,7 @@ function creatorEndpointFor(providerId: CreatorProviderId, endpointId?: string):
 
 /** The dots.tts voice backend as a Creator declaration, so the avatar route gates its speech step with the
  *  same verdict. A Creator dots-tts declaration for the same URL carries the user's own attestation; else an
- *  imported voice endpoint written by the DGX Loader attests the enclave; else loopback counts as on-device. */
+ *  imported voice endpoint written by the Private AI Platform attests the enclave; else loopback counts as on-device. */
 function dotsTtsEndpointDef(url: string): CreatorEndpointDef {
   const base = url.replace(/\/+$/, "");
   const declared = listCreatorEndpoints().find((e) => e.enabled && e.providerId === "dots-tts" && (e.baseUrl ?? "").replace(/\/+$/, "") === base);
@@ -1185,7 +1185,7 @@ function dotsTtsEndpointDef(url: string): CreatorEndpointDef {
   };
 }
 
-// lucid-creator-endpoint v1: the DGX Loader writes <personal dir>/creator_endpoints/<id>.json. Scanned at
+// lucid-creator-endpoint v1: the Private AI Platform writes <personal dir>/creator_endpoints/<id>.json. Scanned at
 // engine start (Creator builds) and on POST /api/creator/endpoint/import-mailbox.
 const creatorEndpointMailboxDir = (): string => join(personalBaseDir(), "creator_endpoints");
 function scanCreatorEndpointMailbox(): CreatorMailboxReport {
@@ -2501,7 +2501,7 @@ function sendOauthCode(oauthId: string, code: string): { sent: boolean; reason?:
   catch (e) { console.error(`[oauth] send code failed for ${oauthId}:`, e); return { sent: false, reason: "could not send code" }; }
 }
 
-// lucid-creator-endpoint v1: import whatever the DGX Loader dropped in the mailbox while LUCID was closed.
+// lucid-creator-endpoint v1: import whatever the Private AI Platform dropped in the mailbox while LUCID was closed.
 // Per-file fail-soft; a scan failure never blocks the engine from starting.
 if (BUILD.creatorBuild) {
   try {
@@ -2901,7 +2901,7 @@ return Bun.serve({
         return json({ ok: true, data: { enabled: !!loadSettings().rateLimitProbe, limits: probeLocked ? [] : await probeRateLimits(url.searchParams.get("force") === "1") } });
       }
       // P10.2: cross-model usage & cost ledger (per-model totals + estimated cache savings).
-      if (p === "/api/usage") return json({ ok: true, data: usageLedgerMemo() }); // P-PERF.3 memo
+      if (p === "/api/usage") return json({ ok: true, data: await usageLedgerMemo() }); // P-PERF.3 memo
       // ADR-0030 P-CODE.1: per-workspace git diffstat for the current month (repo
       // activity, not AI authorship). Read-only, metadata-only, fail-closed per workspace.
       // Cached 30s — each call spawns `git log` per workspace, so don't re-run it on
@@ -2910,7 +2910,7 @@ return Bun.serve({
         const now = Date.now();
         if (!codeActivityCache || now - codeActivityCache.at > 30_000 || url.searchParams.get("force") === "1")
           codeActivityCache = { at: now, data: codeActivity() };
-        return json({ ok: true, data: codeActivityCache.data });
+        return json({ ok: true, data: await codeActivityCache.data });
       }
       // P-PORTGUARD.1 (ADR-0305): echo the per-launch nonce main minted for THIS child. Main only
       // trusts a health answer carrying it, so a squatter on the port can never win the window. The
@@ -4276,7 +4276,7 @@ return Bun.serve({
         const r = upsertCreatorEndpoint(def);
         return json({ ok: r.ok, error: r.ok ? undefined : r.errors.join("; "), data: { registry: creatorRegistryData() } });
       }
-      // lucid-creator-endpoint v1: rescan the DGX Loader mailbox (<personal dir>/creator_endpoints). Each file
+      // lucid-creator-endpoint v1: rescan the Private AI Platform mailbox (<personal dir>/creator_endpoints). Each file
       // passes the fail-closed contract gate and the declaration validator, or is reported by name.
       if (p === "/api/creator/endpoint/import-mailbox" && req.method === "POST") {
         if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator registry is only in the Creator build." });
@@ -4498,7 +4498,7 @@ return Bun.serve({
         const engine = url.searchParams.get("engine") ?? "musetalk";
         if (engine !== "musetalk" && engine !== "echomimic") return json({ ok: false, error: "engine must be musetalk or echomimic." });
         const ep = creatorEndpointFor("dgx-avatar", url.searchParams.get("endpointId") || undefined);
-        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX avatar endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX avatar endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
         const cuiTpl = creatorGate("dgx-avatar", ep);
         if (!cuiTpl.allowed) return json(cuiRefusal(cuiTpl));
         const r = await new DgxAvatarClient({ baseUrl: ep.baseUrl }).templates(engine);
@@ -4512,7 +4512,7 @@ return Bun.serve({
         const b = await readBody<Record<string, unknown>>(req).catch(() => null);
         if (!b) return json({ ok: false, error: "That avatar request was not JSON." });
         const ep = creatorEndpointFor("dgx-avatar", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
-        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX avatar endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX avatar endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
         const cuiAvatar = creatorGate("dgx-avatar", ep);
         if (!cuiAvatar.allowed) return json(cuiRefusal(cuiAvatar));
         const spec = buildAvatarSpec(b);
@@ -4667,7 +4667,7 @@ return Bun.serve({
         const name = checkInspectName(url.searchParams.get("name"));
         if (!name.ok) return json({ ok: false, error: name.error });
         const ep = creatorEndpointFor("dgx-cad", url.searchParams.get("endpointId") || undefined);
-        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
         const cuiInspect = creatorGate("dgx-cad", ep);
         if (!cuiInspect.allowed) return json(cuiRefusal(cuiInspect));
         if (Number(req.headers.get("content-length") ?? "0") > CAD_MAX_UPLOAD_BYTES * 1.4) return json({ ok: false, error: "That file is over the 200 MB inspect limit." });
@@ -4691,7 +4691,7 @@ return Bun.serve({
         const b = await readBody<Record<string, unknown>>(req).catch(() => null);
         if (!b) return json({ ok: false, error: "That CAD request was not JSON." });
         const ep = creatorEndpointFor("dgx-cad", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
-        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
         const cuiModel = creatorGate("dgx-cad", ep);
         if (!cuiModel.allowed) return json(cuiRefusal(cuiModel));
         const built = buildCadModelRequest(b);
@@ -4762,7 +4762,7 @@ return Bun.serve({
         if (!read.body || typeof read.body !== "object" || Array.isArray(read.body)) return json({ ok: false, error: "Send a JSON object." });
         const b = read.body as Record<string, unknown>;
         const ep = creatorEndpointFor("dgx-vision", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
-        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX vision endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX vision endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
         const cuiVision = creatorGate("dgx-vision", ep);
         if (!cuiVision.allowed) return json(cuiRefusal(cuiVision));
         const img = visionImageFrom(b.image);
@@ -5170,6 +5170,7 @@ return Bun.serve({
       if (p === "/api/sessions" || p === "/api/sessions/search") {
         // P-SWITCH.2 (ADR-0404): each row says where it is live (Main, working or not, or a spoke and its
         // state), so the sidebar shows what is running before anyone clicks.
+
         const main = { sessionId: backend.currentSessionId(), busy: backend.switchBlocker() !== null };
         const lanes = fleet.owners();
         // P-SESS-SEARCH.1 (ADR-0515): sessions a fleet lane ran are hidden unless `spokes=1`; the session
@@ -5684,11 +5685,12 @@ return Bun.serve({
       if (p === "/api/trivia/reseed" && req.method === "POST") {
         const b = await readBody<{ model?: unknown; role?: unknown; sources?: { sessions?: unknown; kg?: unknown; codegraph?: unknown } }>(req);
         const sources = { sessions: !!b.sources?.sessions, kg: !!b.sources?.kg, codegraph: !!b.sources?.codegraph };
+        const sessionTitles = sources.sessions ? (await listSessions()).sessions.map((s) => s.title) : [];
         const data = await seedTrivia(
           { role: typeof b.role === "string" ? b.role : "developer", sources, model: typeof b.model === "string" ? b.model : "" },
           {
             providers: {
-              sessions: () => listSessions().sessions.map((s) => s.title),
+              sessions: () => sessionTitles,
               kg: () => { const g = personalGraph(); return g ? [...g.facts.map((f) => f.statement), ...g.nodes.map((n) => n.name)] : []; },
               code: () => (loadCodeGraph(currentWorkspace())?.nodes ?? []).map((n) => n.name),
             },
@@ -5766,7 +5768,7 @@ return Bun.serve({
         const b = await readBody<{ sourcePath?: unknown; title?: unknown; text?: unknown }>(req);
         const text = String(b.text ?? "");
         if (!text.trim()) return json({ ok: true, data: { documentId: "", status: "quarantined", pagesCompiled: 0, pagesQuarantined: 0, links: 0, pageIds: [], blocked: [{ stage: "source", reason: "empty document", trustLabel: "quarantined", findings: 0 }] } });
-        const model = usageLedger().models[0]?.model;
+        const model = (await usageLedger()).models[0]?.model;
         const result = await ingestDocument({
           store: await kbStore(),
           scanner: kbScanner(),
@@ -5905,7 +5907,7 @@ return Bun.serve({
           else { targetId = (typeof b.kgId === "string" && b.kgId) ? b.kgId : (activeKgId() ?? ""); kgName = listKgs().find((k) => k.kg_id === targetId)?.name ?? ""; }
         } catch (e) { return json({ ok: true, data: { ok: false, error: clientError(e, "could not create or resolve the knowledge graph") } }); }
         if (!targetId) return json({ ok: true, data: { ok: false, error: "No target knowledge graph." } });
-        const model = usageLedger().models[0]?.model;
+        const model = (await usageLedger()).models[0]?.model;
         const started = startKbIngest({
           kgId: targetId, kgName,
           run: async (onTick, signal) => {
@@ -6332,7 +6334,7 @@ return Bun.serve({
         // works on its own branch beside other agents in this repo instead of sharing the checkout. A refused
         // spawn removes the worktree it just made; a started lane keeps it (its branch is the lane's work).
         const lane = b.worktree === true ? await createLaneWorktree(cwd, typeof b.name === "string" && b.name.trim() ? b.name : basename(cwd)) : null;
-        if (lane && !lane.ok) return json({ ok: true, data: { ok: false, reason: lane.reason } });
+        if (lane && !lane.ok) return json({ ok: true, data: { ok: false, reason: lane.reason, ...(lane.code ? { code: lane.code } : {}) } }); // P-PUSH.PAR1: `code` lets Push now fall back
         if (lane?.ok) cwd = lane.laneCwd;
         // P-FLEET.L17: recovering a historical spoke brings its RECORDED session back (omp loads it
         // natively; the on-disk transcript seeds the composer and is the fallback memory).
@@ -6366,8 +6368,14 @@ return Bun.serve({
         return json({ ok: true, data: fleet.enqueue(String(b.laneId ?? ""), String(b.text ?? ""), laneImages(b.images)) });
       }
       if (p === "/api/fleet/queue/remove" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; index?: unknown; expect?: unknown }>(req);
+        // P-PUSH.PAR1 (ADR-pending): `expect` (the item's full text) guards a remove that lands seconds later.
+        return json({ ok: true, data: fleet.queueRemove(String(b.laneId ?? ""), Number(b.index), typeof b.expect === "string" ? b.expect : undefined) });
+      }
+      // P-PUSH.PAR1 (ADR-pending): Copy and Push now read a staged item whole, without removing it.
+      if (p === "/api/fleet/queue/peek" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown; index?: unknown }>(req);
-        return json({ ok: true, data: fleet.queueRemove(String(b.laneId ?? ""), Number(b.index)) });
+        return json({ ok: true, data: fleet.queuePeek(String(b.laneId ?? ""), Number(b.index)) });
       }
       // P-QUEUE-IMG.1 (ADR-0469): Update pulls a staged item (full text + its own images) back into the card.
       if (p === "/api/fleet/queue/take" && req.method === "POST") {

@@ -568,10 +568,11 @@ const allScans = new Map<string, { rows: Promise<SessionRow[]>; doneAt: number |
  *  unlike the sidebar's per-workspace listing: this walks every workspace the machine has ever had, and
  *  doing that synchronously froze the whole engine for seconds per call (11 s cold, 1.5-2.6 s warm on
  *  a 13k-session corpus), starving the Timeline dock's own request behind the orbit's paged reads.
- *  Concurrent and back-to-back callers share one scan (ALL_SCAN_REUSE_MS). */
-export function listAllSessions(root: string = join(homedir(), ".omp", "agent", "sessions")): Promise<SessionRow[]> {
+ *  Concurrent and back-to-back callers share one scan (`reuseMs`, ALL_SCAN_REUSE_MS by default; 0 joins
+ *  only a scan still in flight). */
+export function listAllSessions(root: string = join(homedir(), ".omp", "agent", "sessions"), reuseMs: number = ALL_SCAN_REUSE_MS): Promise<SessionRow[]> {
   const hit = allScans.get(root);
-  if (hit && (hit.doneAt === null || Date.now() - hit.doneAt < ALL_SCAN_REUSE_MS)) return hit.rows;
+  if (hit && (hit.doneAt === null || Date.now() - hit.doneAt < reuseMs)) return hit.rows;
   const scan: { rows: Promise<SessionRow[]>; doneAt: number | null } = { rows: scanAllSessions(root), doneAt: null };
   allScans.set(root, scan);
   scan.rows.then(
@@ -596,7 +597,7 @@ async function scanAllSessions(root: string): Promise<SessionRow[]> {
       await Promise.all(files.slice(i, i + ALL_SCAN_BATCH).map(async (f) => {
         const p = join(dir, f);
         try {
-          // One handle for the size/mtime check and the read, as in listSessions.
+          // One handle for the size/mtime check and the read: nothing can swap the file in between.
           const h = await open(p, "r");
           let e: IndexEntry;
           try {
@@ -621,6 +622,7 @@ async function scanAllSessions(root: string): Promise<SessionRow[]> {
  *  (`isIngestPrompt` on the first user message) — a real chat is never touched. Returns the count removed. */
 export function clearIngestSessions(cwd: string = currentWorkspace(), root: string = join(homedir(), ".omp", "agent", "sessions")): { ok: boolean; cleared: number } {
   if (!existsSync(root)) return { ok: true, cleared: 0 };
+  allScans.delete(root); // P-BOOTPERF.1: a scan in flight may predate the removal; the next list rescans
   const want = norm(cwd);
   let cleared = 0;
   for (const d of readdirSync(root)) {
