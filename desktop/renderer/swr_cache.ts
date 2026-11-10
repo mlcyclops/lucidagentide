@@ -80,5 +80,13 @@ const SHARE_SNAPSHOT_KEY = "lucid.shareDock.snapshot";
 export function cachedShareSnapshot<T>(): T | null { return cacheGet<T>(SHARE_SNAPSHOT_KEY); }
 export function setCachedShareSnapshot(data: unknown): void { cacheSet(SHARE_SNAPSHOT_KEY, data); }
 
+// -- workspace bar (P-BOOTPERF.1, ADR-pending) --
+// The folder the agent works in (path, name, recent folders): ALREADY plaintext in the settings file
+// (lucid-gui.json), so it is safe at rest like the session list. Painted at boot so the top-left bar never
+// waits on the engine; the live answer replaces it and is the only one any action trusts.
+const WORKSPACE_KEY = "lucid.workspace";
+export function cachedWorkspace<T>(): T | null { return cacheGet<T>(WORKSPACE_KEY); }
+export function setCachedWorkspace(data: unknown): void { cacheSet(WORKSPACE_KEY, data); }
+
 // Test-only: reset the in-memory fallback store between cases.
 export function __resetCache(): void { mem = null; }
