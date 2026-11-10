@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/lane_holder.ts - P-HOLDER.1 (ADR-0528): the engine's side of `lucid-holder` (native/lucid-holder).
+// desktop/lane_holder.ts - P-HOLDER.1 (ADR-0534): the engine's side of `lucid-holder` (native/lucid-holder).
 //
 // A fleet lane's agent (`omp acp`) used to be a child of the engine, so an engine restart, an IDE update or closing
 // the window ended every turn in flight. With a holder the agent is a child of its own small process instead: the
@@ -14,8 +14,10 @@
 // (the JSON-RPC id of its session/prompt and the offset at which it was sent, so a reattach replays that whole turn
 // into a fresh lane and the reply settles it). Records live in `<data root>/lane-holders/` (0700), each 0600.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { CHANNEL_ENV, mintChannelKey } from "../harness/omp/engine_channel.ts";
+import { LaneChannels } from "./lane_channel.ts";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
 import { join } from "node:path";
@@ -55,15 +57,58 @@ export function holderProcessAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }
 }
 
-/** LH-05: the last resort when a holder did not confirm a KILL. Ending the holder ends the agent's tree on Windows
- *  (its job object kills on close); elsewhere the agent leads its own process group, which goes too. The pids are
- *  the ones the holder's handshake reported a moment ago. */
-export function endHolderProcess(pid: number, childPid: number): void {
-  if (Number.isInteger(pid) && pid > 0) { try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } }
-  if (process.platform !== "win32" && Number.isInteger(childPid) && childPid > 1) { try { process.kill(-childPid, "SIGKILL"); } catch { /* gone */ } }
+/** LH-07: what tells a process apart from a later one that got the same pid: its start time (Linux: field 22 of
+ *  /proc/<pid>/stat, clock ticks since boot; macOS: `ps -o lstart=`). Null when the process is gone or the OS
+ *  offers neither (Windows, where the holder's job object ends the tree and no group kill is sent). */
+export function processStartId(pid: number): string | null {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (process.platform === "linux") {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      // The command name (field 2) may hold spaces and parentheses; the fields after its last ')' start at field 3.
+      return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
+    } catch { return null; }
+  }
+  if (process.platform === "darwin") {
+    const r = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 2_000 });
+    const s = r.status === 0 && typeof r.stdout === "string" ? r.stdout.trim() : "";
+    return s || null;
+  }
+  return null;
 }
 
-export interface HolderHello { base: number; end: number; pid: number; childPid: number; exited: number | null }
+/** The pids a holder's handshake reported, with the start times sampled while that connection was open. */
+export interface HolderIdentity { pid: number; childPid: number; start: string | null; childStart: string | null }
+
+export interface EndHolderDeps {
+  platform: NodeJS.Platform;
+  startOf: (pid: number) => string | null;
+  kill: (pid: number, signal: NodeJS.Signals) => void;
+}
+
+const END_HOLDER_DEPS: EndHolderDeps = { platform: process.platform, startOf: processStartId, kill: (pid, signal) => { process.kill(pid, signal); } };
+
+/** LH-05: the last resort when a holder did not confirm a KILL. Ending the holder ends the agent's tree on Windows
+ *  (its job object kills on close). Elsewhere the agent leads its own process group, signalled first, while the
+ *  holder is alive: the holder never reaps the agent before its own group kill (serve.rs), so a live holder keeps
+ *  the agent's pid, and with it the group id, from being reused.
+ *  LH-07: on POSIX a pid is signalled only when it still names the process the handshake reported (same start
+ *  time). A pid whose identity cannot be read or differs belongs to someone else now and is left alone; the
+ *  holder's own keep-for ends whatever is left of the lane. */
+export function endHolderProcess(h: HolderIdentity, deps: EndHolderDeps = END_HOLDER_DEPS): void {
+  const send = (pid: number, signal: NodeJS.Signals) => { try { deps.kill(pid, signal); } catch { /* gone */ } };
+  if (deps.platform === "win32") {
+    if (Number.isInteger(h.pid) && h.pid > 0) send(h.pid, "SIGKILL");
+    return;
+  }
+  const same = (pid: number, start: string | null) => Number.isInteger(pid) && pid > 1 && start !== null && deps.startOf(pid) === start;
+  if (same(h.childPid, h.childStart)) send(-h.childPid, "SIGKILL");
+  if (same(h.pid, h.start)) send(h.pid, "SIGKILL");
+}
+
+/** `dropped` (LH-08): bytes between the offset asked for and where the replay starts, because the spool reached its
+ *  cap during the turn and let its oldest output go (0 when nothing was dropped). */
+export interface HolderHello { base: number; end: number; pid: number; childPid: number; exited: number | null; dropped: number }
 
 /** One connection to a holder. Frames received before `resume()` wait in the socket, so the caller wires its
  *  handlers first and loses nothing of the replay. */
@@ -111,8 +156,11 @@ export class HolderLink {
       try { msg = JSON.parse(head.subarray(0, nl).toString("utf8")); } catch { fail(new Error("holder handshake is not JSON")); return; }
       if (msg.ok !== true) { fail(new Error(`holder refused the attach: ${String(msg.error ?? "no reason")}`)); return; }
       const num = (k: string) => (typeof msg[k] === "number" ? (msg[k] as number) : 0);
-      const hello: HolderHello = { base: num("base"), end: num("end"), pid: num("pid"), childPid: num("childPid"), exited: typeof msg.exited === "number" ? msg.exited : null };
-      resolve(new HolderLink(socket, hello, from, head.subarray(nl + 1)));
+      // LH-08: a holder whose spool cap dropped the bytes at `from` replays from `from` in its answer (its base, on a
+      // line start); the offsets below count from there.
+      const start = typeof msg.from === "number" && msg.from >= from ? msg.from : from;
+      const hello: HolderHello = { base: num("base"), end: num("end"), pid: num("pid"), childPid: num("childPid"), exited: typeof msg.exited === "number" ? msg.exited : null, dropped: start - from };
+      resolve(new HolderLink(socket, hello, start, head.subarray(nl + 1)));
     };
     socket.on("data", onData);
     socket.once("error", (e) => fail(e));
@@ -193,6 +241,12 @@ export interface HeldLaneRecord {
   token: string;
   pid: number;
   childPid: number;
+  /** LH-07: the start times of `pid` and `childPid` when an engine last held a connection to this holder. */
+  start: string | null;
+  childStart: string | null;
+  /** LH-03: the lane's channel key (its agent has it as LUCID_LANE_CHANNEL); every engine that reattaches the lane
+   *  accepts its calls with it. A record without one gets no channel, and its agent's calls are refused. */
+  channel: string;
   name: string;
   cwd: string;
   model: string;
@@ -216,10 +270,13 @@ export interface HeldLaneRecord {
   inFlight: { requestId: number; offset: number; text: string; at: number; answered: (number | string)[] } | null;
 }
 
-export interface LaunchedHolder { holderId: string; endpoint: string; token: string; pid: number; childPid: number; link: HolderLink }
+export interface LaunchedHolder extends HolderIdentity { holderId: string; endpoint: string; token: string; channel: string; link: HolderLink }
 
 /** The holders of this engine's data root: launching them, and the records that bring their lanes back. */
 export class HolderPool {
+  /** LH-03: the channel keys of the held lanes this engine runs (launched here or reattached). */
+  readonly channels = new LaneChannels();
+
   constructor(readonly dir: string, readonly binary: string) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     if (process.platform !== "win32") chmodSync(dir, 0o700);
@@ -233,14 +290,19 @@ export class HolderPool {
     return new HolderPool(join(env.LUCID_DATA_ROOT, "lane-holders"), bin);
   }
 
-  /** Start a holder for `laneId` running `cmd args` in `cwd` with exactly `env`, and attach to it from offset 0. */
+  /** Start a holder for `laneId` running `cmd args` in `cwd` with `env` plus the lane's new channel key, and attach
+   *  to it from offset 0. LH-06: the attach token goes to the holder on its stdin (one line, then end of input),
+   *  never in an environment, so it is not in the holder's or the agent's process environment. */
   async launch(laneId: string, cmd: string, args: string[], cwd: string, env: Record<string, string | undefined>): Promise<LaunchedHolder> {
     const holderId = `${laneId}-${randomBytes(2).toString("hex")}`;
     if (!HOLDER_ID_RE.test(holderId)) throw new Error(`lane id "${laneId}" cannot name a holder`);
     const token = randomBytes(32).toString("hex");
+    const channel = mintChannelKey();
     const child = spawn(this.binary, ["run", "--dir", this.dir, "--id", holderId, "--cwd", cwd, "--orphan-ms", String(HELD_IDLE_KEEP_MS), "--", cmd, ...args], {
-      cwd, detached: true, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: { ...env, LUCID_HOLDER_TOKEN: token },
+      cwd, detached: true, windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: { ...env, [CHANNEL_ENV]: channel },
     });
+    child.stdin!.on("error", () => { /* a holder that refused to start says why on stderr */ });
+    child.stdin!.end(`${token}\n`);
     let out = "";
     let err = "";
     child.stdout!.on("data", (d) => { out += String(d); });
@@ -256,7 +318,9 @@ export class HolderPool {
     try { ready = JSON.parse(out.trim()); } catch { throw new Error("lane holder printed no ready record"); }
     if (typeof ready.endpoint !== "string" || typeof ready.pid !== "number" || typeof ready.childPid !== "number") throw new Error("lane holder's ready record is malformed");
     const link = await HolderLink.connect(ready.endpoint, token, 0);
-    return { holderId, endpoint: ready.endpoint, token, pid: ready.pid, childPid: ready.childPid, link };
+    this.channels.register(laneId, channel);
+    // Sampled while the connection is open, so the holder (and the agent it has not reaped) are the ones it reported.
+    return { holderId, endpoint: ready.endpoint, token, channel, pid: ready.pid, childPid: ready.childPid, start: processStartId(ready.pid), childStart: processStartId(ready.childPid), link };
   }
 
   #path(laneId: string): string { return join(this.dir, `${laneId}.lane.json`); }
@@ -269,7 +333,11 @@ export class HolderPool {
     renameSync(tmp, path);
   }
 
-  remove(laneId: string): void { rmSync(this.#path(laneId), { force: true }); }
+  /** Forget the lane: its record, and its channel (its agent's calls are refused from now on). */
+  remove(laneId: string): void {
+    this.channels.forget(laneId);
+    rmSync(this.#path(laneId), { force: true });
+  }
 
   /** Remove the lane's record only while it still names `holderId` (a newer holder on the lane keeps its own). */
   removeIf(laneId: string, holderId: string): void {

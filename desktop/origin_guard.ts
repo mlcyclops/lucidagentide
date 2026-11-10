@@ -113,6 +113,9 @@ export interface ApiAuthInput {
   /** P-CTRL.2: the HEADER token verified against a live pairing (async argon2id, so the caller does it).
    *  Never from `?t=`: a controller token is header-only. */
   controllerAuthorized?: boolean;
+  /** LH-03 (ADR-0544): the request carried a held lane's channel credential (`LaneChannels.laneOf`, which the
+   *  caller resolves). It opens agentRoutes and nothing else, exactly like the agent token. */
+  channelAuthorized?: boolean;
 }
 
 /** PURE: may this /api request proceed? The UI token works in the header everywhere and as `?t=` on the query
@@ -124,6 +127,7 @@ export function apiAuthorized(i: ApiAuthInput): boolean {
   if (tokenValid(i.headerToken, i.uiToken) || tokenValid(query, i.uiToken)) return true;
   if (i.controllerRoutes?.has(i.path)) return i.controllerAuthorized === true;
   if (!i.agentRoutes.has(i.path)) return false;
+  if (i.channelAuthorized === true) return true;
   return tokenValid(i.headerToken, i.agentToken) || tokenValid(i.queryToken, i.agentToken);
 }
 

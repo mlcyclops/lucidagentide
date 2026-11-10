@@ -31,6 +31,7 @@
 
 import type { createAgentSession } from "@oh-my-pi/pi-coding-agent";
 import { UNTRUSTED_START, UNTRUSTED_END } from "../prompt/assembler.ts";
+import { engineFetch } from "./engine_channel.ts"; // LH-03 (ADR-0544): a held lane trusts only a proven engine
 
 type SessionOpts = NonNullable<Parameters<typeof createAgentSession>[0]>;
 type ExtensionFactory = NonNullable<SessionOpts["extensions"]>[number];
@@ -116,10 +117,11 @@ export function formatPeerNotes(peer: PeerNote[]): string {
   return peer.map(formatPeerNote).join("");
 }
 
-/** ONE drain poll, bounded and fail-quiet: empty on timeout, network error, non-200, or a bad body. */
+/** ONE drain poll, bounded and fail-quiet: empty on timeout, network error, non-200, or a bad body. LH-03: on a
+ *  held lane an answer without the engine's channel proof (a squatter on the port) is empty too, never a note. */
 async function drainPending(url: string): Promise<{ notes: string[]; peer: PeerNote[] }> {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    const res = await engineFetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     if (!res.ok) return { notes: [], peer: [] };
     const body: unknown = await res.json();
     return { notes: parseDrainedNotes(body), peer: parseDrainedPeer(body) };

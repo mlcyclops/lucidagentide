@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/lane_holder.test.ts - P-HOLDER.1 (ADR-0528). The REAL lucid-holder binary, the REAL lane manager and the
+// desktop/lane_holder.test.ts - P-HOLDER.1 (ADR-0534). The REAL lucid-holder binary, the REAL lane manager and the
 // fake ACP agent as a real subprocess. "Engine A" and "engine B" are two lane managers over one holder folder: A
 // letting go (its shutdown path) stands for an engine restart, an IDE update or a closed window. What must hold:
 //   - a turn in flight when the engine went settles on the next engine, on the SAME agent process, never re-run;
@@ -11,12 +11,13 @@
 //   - a wrong token, or an offset the holder no longer keeps, is refused.
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CHANNEL_ENV, channelCredential } from "../harness/omp/engine_channel.ts";
 import { FleetLaneManager } from "./fleet_lanes.ts";
-import { HolderLink, HolderPool, holderBinary } from "./lane_holder.ts";
+import { endHolderProcess, HolderLink, HolderPool, holderBinary, processStartId } from "./lane_holder.ts";
 import type { SystemSnapshot } from "./system_profile.ts";
 
 const FAKE = join(import.meta.dir, "..", "harness", "mcp", "testing", "fake_acp_agent.ts");
@@ -164,7 +165,7 @@ describe.skipIf(!BIN)("P-HOLDER.1: lanes under lucid-holder", () => {
   test("a record that names another endpoint or another lane is not trusted", async () => {
     const pool = holderFolder();
     const h = await pool.launch("lane-0d0e0f0a", "bun", [FAKE], temp("ws"), { ...process.env });
-    const base = { v: 1 as const, laneId: "lane-0d0e0f0a", holderId: h.holderId, endpoint: h.endpoint, token: h.token, pid: h.pid, childPid: h.childPid, name: "n", cwd: ".", model: "m", sessionId: null, canLoadSession: false, turns: 0, transcript: [], supervised: false, autoApprove: false, remote: null, hubSessionId: null, createdAt: 0, consumed: 0, lastRequestId: 0, inFlight: null };
+    const base = { v: 1 as const, laneId: "lane-0d0e0f0a", holderId: h.holderId, endpoint: h.endpoint, token: h.token, pid: h.pid, childPid: h.childPid, start: h.start, childStart: h.childStart, channel: h.channel, name: "n", cwd: ".", model: "m", sessionId: null, canLoadSession: false, turns: 0, transcript: [], supervised: false, autoApprove: false, remote: null, hubSessionId: null, createdAt: 0, consumed: 0, lastRequestId: 0, inFlight: null };
     pool.save(base);
     expect(pool.all().map((r) => r.laneId)).toEqual(["lane-0d0e0f0a"]);
     for (const endpoint of [String.raw`\\fileserver\pipe\lucid-holder-x`, "/tmp/elsewhere.sock", `${h.endpoint}x`]) {
@@ -176,6 +177,63 @@ describe.skipIf(!BIN)("P-HOLDER.1: lanes under lucid-holder", () => {
     pool.save(base);
     await h.link.kill();
   }, TIMEOUT);
+
+  test("LH-03: the lane's channel survives its engine; the next engine accepts it only once it reattached the lane", async () => {
+    const pool = holderFolder();
+    const a = engine(pool);
+    const id = (await a.spawn({ cwd: temp("ws") })).lane!.id;
+    const rec = pool.all()[0]!;
+    expect(pool.channels.laneFor(channelCredential(rec.channel))?.laneId).toBe(id);
+    a.stopAll(); // engine A goes away; the agent keeps the channel it was started with
+    const later = new HolderPool(pool.dir, BIN!); // engine B: same data root, nothing in memory
+    pools.push(later);
+    expect(later.channels.laneFor(channelCredential(rec.channel))).toBeNull();
+    expect((await engine(later).reattach(later.all()[0]!)).ok).toBe(true);
+    expect(later.channels.laneFor(channelCredential(rec.channel))?.laneId).toBe(id);
+  }, TIMEOUT);
+
+  test.skipIf(process.platform !== "linux")("LH-06: the attach token is in neither the holder's nor the agent's environment", async () => {
+    const pool = holderFolder();
+    const h = await pool.launch("lane-0b0c0d0e", "bun", [FAKE], temp("ws"), { ...process.env });
+    const environ = (pid: number) => readFileSync(`/proc/${pid}/environ`, "utf8");
+    expect(environ(h.pid)).not.toContain(h.token);
+    expect(environ(h.childPid)).not.toContain(h.token);
+    expect(environ(h.childPid)).toContain(`${CHANNEL_ENV}=${h.channel}`);
+    await h.link.kill();
+  }, TIMEOUT);
+});
+
+describe("LH-07: the last-resort kill signals only the processes the holder reported", () => {
+  const id = { pid: 400, childPid: 500, start: "s-400", childStart: "s-500" };
+  const run = (platform: NodeJS.Platform, starts: Record<number, string | null>) => {
+    const sent: [number, string][] = [];
+    endHolderProcess(id, { platform, startOf: (pid) => starts[pid] ?? null, kill: (pid, sig) => { sent.push([pid, sig]); } });
+    return sent;
+  };
+
+  test("same identities: the agent's group first (while the holder pins it), then the holder", () => {
+    expect(run("linux", { 400: "s-400", 500: "s-500" })).toEqual([[-500, "SIGKILL"], [400, "SIGKILL"]]);
+  });
+
+  test("a pid that now names another process (another start time) or no process is left alone", () => {
+    expect(run("linux", { 400: "s-400", 500: "reused" })).toEqual([[400, "SIGKILL"]]);
+    expect(run("darwin", { 400: "reused", 500: null })).toEqual([]);
+  });
+
+  test("an identity never sampled is never trusted", () => {
+    const sent: [number, string][] = [];
+    endHolderProcess({ ...id, start: null, childStart: null }, { platform: "linux", startOf: () => null, kill: (pid, sig) => { sent.push([pid, sig]); } });
+    expect(sent).toEqual([]);
+  });
+
+  test("Windows ends the holder, whose job object takes the tree; no group is signalled", () => {
+    expect(run("win32", {})).toEqual([[400, "SIGKILL"]]);
+  });
+
+  test.skipIf(process.platform !== "linux" && process.platform !== "darwin")("a live process reads the same identity twice", () => {
+    expect(processStartId(process.pid)).not.toBeNull();
+    expect(processStartId(process.pid)).toBe(processStartId(process.pid));
+  });
 });
 
 // The suite above skips without a holder binary; a gate that skipped silently would pass with the feature broken.

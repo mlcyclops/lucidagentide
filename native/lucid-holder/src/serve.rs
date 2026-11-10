@@ -27,6 +27,9 @@ const CLIENT_QUEUE: usize = 4096;
 const HANDSHAKE_MAX: usize = 4096;
 /// How long a connection may take to send its hello; one that stalls is closed (LH-04).
 const HANDSHAKE_TIME: Duration = Duration::from_secs(5);
+/// LH-08: the most agent output the spool keeps at once. A turn that writes more loses its oldest output (only a
+/// client that comes back from before the cut misses it, and it is told so); the disk use stays bounded.
+const SPOOL_CAP: u64 = 128 * 1024 * 1024;
 
 pub struct Config {
     pub dir: PathBuf,
@@ -115,10 +118,10 @@ pub fn serve(cfg: Config) -> Result<(), String> {
     let listener = platform::private_endpoint(ListenerOptions::new().name(name))
         .and_then(|o| o.create_sync())
         .map_err(|e| format!("endpoint {endpoint}: {e}"))?;
-    let spool = Spool::create(&spool_path(&cfg.dir, &cfg.id)).map_err(|e| format!("spool: {e}"))?;
+    let spool = Spool::create(&spool_path(&cfg.dir, &cfg.id), SPOOL_CAP).map_err(|e| format!("spool: {e}"))?;
 
     let mut cmd = Command::new(&cfg.program);
-    cmd.args(&cfg.args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).env_remove("LUCID_HOLDER_TOKEN");
+    cmd.args(&cfg.args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     if let Some(cwd) = &cfg.cwd {
         cmd.current_dir(cwd);
     }
@@ -157,7 +160,9 @@ pub fn serve(cfg: Config) -> Result<(), String> {
     {
         let h = h.clone();
         thread::spawn(move || {
-            let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
+            // LH-07: on POSIX the agent is not reaped here, so its pid (and its process group id) cannot be handed to
+            // another process before shutdown's group kill; the holder's exit hands the zombie to init.
+            let code = platform::wait_unreaped(&mut child);
             let _ = out_thread.join(); // every stdout byte reaches the spool before the exit is told
             let mut sh = h.shared.lock();
             sh.exited = Some(code);
@@ -235,6 +240,12 @@ fn pump_stderr(h: &Holder, mut err: impl Read) {
     }
 }
 
+/// LH-08: where a replay asked for at `from` starts. A `from` inside what the cap dropped (below `capped`, which is
+/// at most `base`) moves up to `base`; anything else stays as asked (and is refused if it is not kept).
+fn replay_start(from: u64, base: u64, capped: u64) -> u64 {
+    if from < capped { base } else { from }
+}
+
 fn read_line(r: &mut impl Read) -> Option<String> {
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
@@ -285,6 +296,11 @@ fn attach(h: &Holder, stream: Stream) {
 
     let gen = {
         let mut sh = h.shared.lock();
+        // LH-08: bytes the spool cap dropped (not ones a client trimmed) are gone for good; a client that comes back
+        // from before the cut gets the replay from the oldest kept byte, a line start, and is told what it missed.
+        let asked = from;
+        let from = replay_start(from, sh.spool.base(), sh.spool.capped());
+        let dropped = from - asked;
         if from < sh.spool.base() || from > sh.spool.end() {
             let msg = format!("offset {from} is not kept (kept {} to {})", sh.spool.base(), sh.spool.end());
             let _ = reply(&mut send, json!({ "v": 1, "ok": false, "error": msg, "base": sh.spool.base(), "end": sh.spool.end() }));
@@ -293,6 +309,13 @@ fn attach(h: &Holder, stream: Stream) {
         let hello_ok = json!({
             "v": 1, "ok": true, "base": sh.spool.base(), "end": sh.spool.end(),
             "pid": std::process::id(), "childPid": h.child_pid, "exited": sh.exited,
+            "from": from, "dropped": dropped,
+        });
+        let marker = (dropped > 0).then(|| {
+            format!(
+                "\nlucid-holder: this turn's output passed the spool cap of {} MiB; its bytes {asked} to {from} were dropped, and the replay starts at {from}\n",
+                sh.spool.cap() / (1024 * 1024)
+            )
         });
         // LH-05: only a snapshot is taken under the lock (a reader over the kept bytes up to now, the stderr tail,
         // the exit), and the client is registered in the same step, so every later byte lands in its queue. The
@@ -317,6 +340,9 @@ fn attach(h: &Holder, stream: Stream) {
             let mut buf = vec![0u8; 64 * 1024];
             let snapshot = || -> std::io::Result<()> {
                 reply(&mut send, hello_ok)?;
+                if let Some(marker) = &marker {
+                    proto::write_frame(&mut send, ERR, marker.as_bytes())?;
+                }
                 while left > 0 {
                     let want = left.min(buf.len() as u64) as usize;
                     let n = file.read(&mut buf[..want])?;
@@ -396,5 +422,20 @@ fn attach(h: &Holder, stream: Stream) {
     };
     if done {
         shutdown(h); // the agent is gone and its client has seen why
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::replay_start;
+
+    #[test]
+    fn only_bytes_the_cap_dropped_move_a_replay_forward() {
+        assert_eq!(replay_start(10, 40, 40), 40, "inside the capped range: from the oldest kept byte");
+        assert_eq!(replay_start(40, 40, 40), 40);
+        assert_eq!(replay_start(45, 40, 40), 45, "kept: as asked");
+        // A client trim moved base past the cap's cut: an offset it trimmed stays refused, not silently moved.
+        assert_eq!(replay_start(50, 60, 40), 50);
+        assert_eq!(replay_start(5, 60, 0), 5, "the cap never cut: as asked");
     }
 }

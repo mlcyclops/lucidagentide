@@ -8,8 +8,10 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import commitGateExtension, { REFUSAL_PREFIX, WRITE_WAIT_MS, checkoutGateUrl, mentionsGit, parseGateVerdict, writeTargets } from "./commit_gate_extension.ts";
+import { CHANNEL_ENV, CHANNEL_PROOF_HEADER, mintChannelKey } from "./engine_channel.ts";
+import { LaneChannels } from "../../desktop/lane_channel.ts";
 
-const ENV_KEYS = ["LUCID_INTERJECT_TARGET", "LUCID_CHECKOUT_GATE_URL", "LUCID_CHECKOUT_WRITE_URL"] as const;
+const ENV_KEYS = ["LUCID_INTERJECT_TARGET", "LUCID_CHECKOUT_GATE_URL", "LUCID_CHECKOUT_WRITE_URL", CHANNEL_ENV] as const;
 const inherited: Record<string, string | undefined> = {};
 for (const k of ENV_KEYS) inherited[k] = process.env[k];
 const realFetch = globalThis.fetch;
@@ -159,5 +161,54 @@ describe("tool_call handler", () => {
     expect(lines[0]).toContain("checkout gate unreachable, command allowed (fail-open): ECONNREFUSED");
     expect(lines[1]).toContain("responded 503");
     expect(lines[2]).toContain("malformed gate response");
+  });
+});
+
+describe("LH-03: an answer the gate cannot trust fails CLOSED", () => {
+  const blocked = (r: unknown): string => {
+    expect(r).toMatchObject({ block: true });
+    return r && typeof r === "object" && "reason" in r && typeof r.reason === "string" ? r.reason : "";
+  };
+  const held = (): string => { const key = mintChannelKey(); process.env[CHANNEL_ENV] = key; return key; };
+  const allow = { ok: true, data: { block: false } };
+
+  test("a 401 or 403 (an engine that does not accept this session's token) blocks instead of allowing", async () => {
+    liveEnv();
+    const handler = install()!;
+    for (const status of [401, 403]) {
+      globalThis.fetch = (async (_input: string | URL | Request) => new Response("forbidden", { status })) as typeof globalThis.fetch;
+      expect(blocked(await handler(bash("git add -A")))).toContain(`credentials (${status})`);
+    }
+  });
+
+  test("a held lane blocks an allow that carries no proof, or one made for another request (a squatter on the port)", async () => {
+    liveEnv();
+    held();
+    const handler = install()!;
+    const urls = stubFetch(allow); // what any process holding the port can send back
+    expect(blocked(await handler(bash("git add -A")))).toContain("could not be verified");
+    // The old engine's token never leaves the lane; the credential it sends cannot sign a reply.
+    expect(urls[0]).not.toContain("t=tok");
+    const replayed = new Response(JSON.stringify(allow), { headers: { [CHANNEL_PROOF_HEADER]: "0".repeat(64) } });
+    globalThis.fetch = (async (_input: string | URL | Request) => replayed.clone()) as typeof globalThis.fetch;
+    blocked(await handler(bash("git add -A")));
+  });
+
+  test("a held lane trusts the verdict of the engine that holds its channel (any engine that reattached it)", async () => {
+    liveEnv();
+    const key = held();
+    const channels = new LaneChannels();
+    channels.register("lane-1", key); // what a later engine does from the lane's holder record
+    let verdict: unknown = allow;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const req = new Request(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url, init);
+      // The engine's half: the credential names this lane, and the reply carries its proof.
+      expect(channels.laneOf(new URL(req.url), null)?.laneId).toBe("lane-1");
+      return channels.answer(req, new Response(JSON.stringify(verdict), { headers: { "content-type": "application/json" } }));
+    }) as typeof globalThis.fetch;
+    const handler = install()!;
+    expect(await handler(bash("git add -A"))).toBeUndefined();
+    verdict = { ok: true, data: { block: true, reason: "b.ts belongs to Main" } };
+    expect(blocked(await handler(bash("git add -A")))).toBe(`${REFUSAL_PREFIX}b.ts belongs to Main`);
   });
 });

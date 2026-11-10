@@ -160,6 +160,12 @@ mod imp {
 
     pub fn prepare_child(_cmd: &mut Command) {}
 
+    /// The agent's exit code (-1 when it has none). Windows sends no group kill by id, so the handle may be waited on
+    /// and closed as usual.
+    pub fn wait_unreaped(child: &mut Child) -> i32 {
+        child.wait().ok().and_then(|s| s.code()).unwrap_or(-1)
+    }
+
     /// Nothing to do here: ending the holder ends the job, and with it the agent's whole tree.
     pub fn end_tree(_pid: u32, _gone: &dyn Fn() -> bool) {}
 }
@@ -203,6 +209,24 @@ mod imp {
         cmd.process_group(0);
     }
 
+    /// LH-07: wait for the agent to exit WITHOUT reaping it (`waitid` with WNOWAIT). While it is an unreaped zombie
+    /// its pid is not handed out again, so the process group id `end_tree` signals still names the agent's group and
+    /// never a stranger's. The zombie is reaped by init once the holder exits. Returns the exit code, or -1 for a
+    /// signal or a failed wait.
+    pub fn wait_unreaped(child: &mut Child) -> i32 {
+        let pid = child.id() as libc::id_t;
+        loop {
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let r = unsafe { libc::waitid(libc::P_PID, pid, &mut info, libc::WEXITED | libc::WNOWAIT) };
+            if r == 0 {
+                return if info.si_code == libc::CLD_EXITED { unsafe { info.si_status() } } else { -1 };
+            }
+            if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+                return -1;
+            }
+        }
+    }
+
     /// SIGTERM to the agent's group, then SIGKILL to the group once the agent exited or 5 seconds passed
     /// (anything it left behind in its group goes too). `gone` reports the agent's own exit.
     pub fn end_tree(pid: u32, gone: &dyn Fn() -> bool) {
@@ -216,4 +240,30 @@ mod imp {
     }
 }
 
-pub use imp::{end_tree, own_tree, prepare_child, private_endpoint, spawn_detached, Deadline};
+pub use imp::{end_tree, own_tree, prepare_child, private_endpoint, spawn_detached, wait_unreaped, Deadline};
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_agent_exit_is_seen_without_freeing_its_pid() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "exit 7"]);
+        prepare_child(&mut cmd);
+        let mut child = cmd.spawn().unwrap();
+        let pid = child.id() as i32;
+        assert_eq!(wait_unreaped(&mut child), 7);
+        // Still an unreaped zombie: the pid (and the group id it leads) cannot belong to anyone else yet.
+        assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+        child.wait().unwrap();
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "reaped, the pid is free");
+    }
+
+    #[test]
+    fn a_signalled_agent_reports_no_exit_code() {
+        let mut child = Command::new("sh").args(["-c", "kill -9 $$"]).spawn().unwrap();
+        assert_eq!(wait_unreaped(&mut child), -1);
+        child.wait().unwrap();
+    }
+}

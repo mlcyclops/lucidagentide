@@ -26,6 +26,8 @@
 // FAIL-SOFT, like tool_meta_extension.ts. If the URL is unset, the hook API is missing or a POST fails, the
 // outcome is the old behaviour (the watchdog may act on a long write), never a broken omp launch.
 
+import { engineFetch } from "./engine_channel.ts";
+
 /** At most one beat per session per this many ms. The watchdog's first threshold (quiet) is 90 s, so a
  *  10 s beat keeps a streaming turn far from every threshold while costing one tiny loopback POST. */
 export const BEAT_MS = 10_000;
@@ -75,7 +77,8 @@ export default function streamBeatExtension(pi: unknown): void {
       const session = beatSession(event, ctx);
       if (!session || !due(session, Date.now())) return;
       // Fire-and-forget: a slow desktop must never slow the model's stream.
-      void fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ session }) })
+      // LH-03 (ADR-0544): a held lane's beat carries its channel credential, so an engine that reattached it counts it.
+      void engineFetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ session }) })
         .catch(() => { /* liveness hint only; the watchdog falls back to ACP traffic */ });
     });
   } catch {
