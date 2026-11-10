@@ -744,11 +744,29 @@ export class FleetLaneManager {
     return { ok: true, queued: lane.queue.length };
   }
 
-  queueRemove(laneId: string, index: number): { ok: boolean } {
+  /** P-PUSH.PAR1 (ADR-pending): `expect` is the item's full text as the caller last read it. A push to a
+   *  parallel lane takes seconds (worktree + spawn), and a drain in that window shifts every index, so a
+   *  bare index could delete a DIFFERENT staged prompt. With `expect`, the item at `index` must carry that
+   *  text, else the first item that does is removed; none matching is a refusal (fail-closed). */
+  queueRemove(laneId: string, index: number, expect?: string): { ok: boolean } {
     const lane = this.#lanes.get(laneId);
-    if (!lane || index < 0 || index >= lane.queue.length) return { ok: false };
-    lane.queue.splice(index, 1);
+    if (!lane) return { ok: false };
+    let at = index;
+    if (expect !== undefined && lane.queue[at]?.text !== expect) at = lane.queue.findIndex((q) => q.text === expect);
+    if (!Number.isInteger(at) || at < 0 || at >= lane.queue.length) return { ok: false };
+    lane.queue.splice(at, 1);
     return { ok: true };
+  }
+
+  /** P-PUSH.PAR1 (ADR-pending): read a staged item's FULL text and its own images WITHOUT removing it. Copy
+   *  and Push now on a lane chip need the whole prompt (the status view clips it at 140 chars), and Push now
+   *  keeps the item staged until the parallel lane accepted it. Out-of-range is a refusal. */
+  queuePeek(laneId: string, index: number): { ok: boolean; item?: { text: string; images: LaneImage[] }; reason?: string } {
+    const lane = this.#lanes.get(laneId);
+    if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
+    if (!Number.isInteger(index) || index < 0 || index >= lane.queue.length) return { ok: false, reason: "that staged prompt already ran or was removed" };
+    const item = lane.queue[index]!;
+    return { ok: true, item: { text: item.text, images: item.images.slice() } };
   }
 
   /** P-QUEUE-IMG.1 (ADR-0469): Update on a staged chip. Removes the item and hands back its FULL text and

@@ -41,7 +41,7 @@ try {
   git(repo, "commit", "-q", "-m", "seed");
 
   console.log("== [2/3] codeActivity() reports the diffstat (vendored churn excluded) ==");
-  const ca = codeActivity({ workspaces: [repo, nogit] }); // nogit has no .git → must be omitted
+  const ca = await codeActivity({ workspaces: [repo, nogit] }); // nogit has no .git → must be omitted
   console.log(`   month        : ${ca.month} (${ca.daysInMonth} days)`);
   console.log(`   workspaces   : ${ca.workspaces.length}`);
   for (const w of ca.workspaces) console.log(`     ${w.name}: +${w.added} / -${w.deleted} · ${w.files} files · spend $${w.spend}`);

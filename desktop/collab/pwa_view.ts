@@ -298,9 +298,12 @@ export function laneCwdName(cwd: string): string {
  *
  * Its composer offers EXACTLY what `CollabGuest` can do for a lane and nothing more (a dead control is
  * worse than no control): Send/Queue (`fleetPrompt`, text only - images stay master-bound because the
- * lane wire has no image field), Push now + Check in (`interject` with the lane id), Stop (`fleetStop`),
+ * lane wire has no image field), Push + Check in (`interject` with the lane id), Stop (`fleetStop`),
  * and the three approval answers (`fleetAnswer`). No spawn, no model picker, no queue reorder: the guest
  * protocol has none of those, so the phone must not pretend.
+ * P-PUSH.PAR1 (ADR-pending): the phone's Push is a mid-turn steer note, the desktop's "Steer running turn".
+ * The desktop's Push now (run it in a new lane on its own worktree) needs spawn, so it is not offered here
+ * and the Push button's tooltip says steer, never parallel.
  *
  * The whole `.lane-drive` block is hidden for view guests by CSS (`#fleet[data-readonly]`); guest.ts
  * refuses their sends anyway and the host re-refuses, fail-closed.
@@ -327,7 +330,7 @@ export function renderLaneCard(lane: FleetLaneStatus): string {
     `<span class="lane-spacer"></span>` +
     `<button type="button" class="lane-ico stop" data-lane="${id}" data-fleet-act="stop" title="Stop this lane" aria-label="Stop lane ${escapeHtml(lane.name)}">\u25a0</button>` +
     `<button type="button" class="lane-send" data-lane="${id}" data-fleet-act="send">${busy ? "Queue" : "Send"}</button>` +
-    `<button type="button" class="lane-send push" data-lane="${id}" data-fleet-act="push" title="Interject the running turn"${busy ? "" : " hidden"}>Push</button>` +
+    `<button type="button" class="lane-send push" data-lane="${id}" data-fleet-act="push" title="Steer the running turn: add this as a note it reads at its next step"${busy ? "" : " hidden"}>Push</button>` +
     `</div></div>`;
   return `<div class="lane-card lane-${status}" data-lane="${id}">` +
     // P-PWA-FOCUS.1: the header row IS the focus control - tap the lane's name to watch its conversation.

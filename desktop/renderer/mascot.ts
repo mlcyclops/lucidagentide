@@ -90,10 +90,8 @@ idleB: rows(BASE_20, {
 idleC: rows(BASE_20, {
   5: ".kgGGGGGGGGGGGGgkG..",
 }),
-blink: rows(BASE_20, {
-  6: ".ksSkkkSSSSkkkSsk...",
-  7: ".ksSSSSSSSSSSSSsk...",
-}),
+// Closed eyes are stamped by expressiveEyes; the coarse rows stay BASE so the scarf knot survives.
+blink: BASE_20,
 guard: rows(BASE_20, {
   14: ".kKKDKKKKKKKKDKKk...",
   15: ".kSSkKKKKKKKKkSSk...",
@@ -126,8 +124,6 @@ throwB: rows(BASE_20, {
   16: ".kSSkkKKKKKKkkkkk...",
 }),
 meditate: rows(BASE_20, {
-  6: ".ksSkkkSSSSkkkSsk...",
-  7: ".ksSSSSSSSSSSSSsk...",
   14: ".kKKDKKKKKKKKDKKk...",
   15: "..kSSkKKKKKKkSSk....",
   16: "...kkSSKKKKSSkk.....",
@@ -285,14 +281,14 @@ const BASE_40: Rows = [
   "...kgggggggggggggggggggggggggggggk......",
   "..kggGGGGGGGGGGGGGGGGGGGGGGGGGGggk......",
   "..kgGGGGGGGGGGGGGGGGGGGGGGGGGGGGgk......",
-  "..kgGGGGGGGGGGGGGGGGGGGGGGGGGGGGgk..gg..",
+  "..kgGGGGGGGGGGGGGGGGGGGGGGGGGGGGgkGgg...",
   "..kggGGGGGGGGGGGGGGGGGGGGGGGGGGggk.Ggg..",
-  "..kssSSSSSSSSSSSSSSSSSSSSSSSSSSSSsskGg..",
-  ".kssSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSssk...",
-  ".kssSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSsk..",
-  ".kssSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSsk..",
-  ".kssSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSssk...",
-  "..kssSSSSSSSSSSSSSSSSSSSSSSSSSSSSssk....",
+  "..kssSSSSSSSSSSSSSSSSSSSSSSSSSSssk..Gg..",
+  "..kssSSSSSSSSSSSSSSSSSSSSSSSSSSssk......",
+  "..kssSSSSSSSSSSSSSSSSSSSSSSSSSSssk......",
+  "..kssSSSSSSSSSSSSSSSSSSSSSSSSSSssk......",
+  "..kssSSSSSSSSSSSSSSSSSSSSSSSSSSssk......",
+  "..kssSSSSSSSSSSSSSSSSSSSSSSSSSSssk......",
   "..kkDDKKKKKKKKKKKKKKKKKKKKKKKKDDKk......",
   "..kKkDDKKKKKKKKKKKKKKKKKKKKKKDDKkKk.....",
   "..kKKkKDKKKKKKDKKKKKDKKKKKKDKkKKk.......",
@@ -437,6 +433,8 @@ interface ActionPose {
   prop?: "terminal" | "scanner";
   propBeat?: number;
   staff?: readonly [Joint, Joint];
+  /** Raised arms (salute, hop) are re-drawn after the hood so a hand at the brow stays visible. */
+  armsOverHood?: boolean;
 }
 function actionFrame(p: ActionPose): Rows {
   const grid = Array.from({ length: MASCOT_H }, () => Array<string>(MASCOT_W).fill('.'));
@@ -484,6 +482,11 @@ function actionFrame(p: ActionPose): Rows {
     if (color !== '.' && yy >= 0) grid[yy]![x] = color;
   }
   expressiveEyes(grid, p.expression ?? 'focused', 1 + p.bob, p.gaze ?? 1);
+  if (p.armsOverHood) {
+    // Lit colours: a hand raised in front of the hood is the subject of the pose, not a far limb.
+    limb([24 + p.lean, 27 + p.bob], p.backElbow, p.backHand, false); hand(p.backHand);
+    limb([12 + p.lean, 27 + p.bob], p.frontElbow, p.frontHand, false); hand(p.frontHand);
+  }
   // Props and gripping fingers share the articulated hands. All of this is pre-rasterized once.
   if (p.prop === 'terminal') {
     const beat = p.propBeat ?? 0;
@@ -531,30 +534,63 @@ MASCOT_FRAMES.kickA = actionFrame({ ...stance, lean: -1, backKnee: [26, 34], bac
 MASCOT_FRAMES.kickB = actionFrame({ ...stance, lean: -2, backKnee: [27, 34], backFoot: [34, 31], backElbow: [26, 29], backHand: [25, 26] });
 MASCOT_FRAMES.kickC = actionFrame({ ...stance, lean: -1, backKnee: [26, 33], backFoot: [26, 38] });
 MASCOT_FRAMES.kickD = actionFrame({ ...stance, backKnee: [25, 40], backFoot: [27, 45] });
-// Contact -> down -> pass -> up for each leg; the planted foot sweeps backwards as the body travels.
-// P-MASCOT.5: the contact sweep is now LINEAR, 29 -> 24 -> 19 -> 14 -> 9 over its four beats. It used
-// to be 29,25,21,17,8 (three beats of 4 cells then one of 9), so no single travel speed could keep the
-// planted foot still: whatever the body speed, the last contact beat skidded. A character that walks
-// across the prompt bar shows that instantly, because there the GROUND is what stays put.
-const gait: readonly (readonly [number, Joint, Joint, Joint, Joint])[] = [
-  [0, [14, 43], [9, 49], [22, 43], [29, 49]],
-  [1, [12, 43], [9, 46], [21, 45], [24, 49]],
-  [0, [16, 41], [12, 43], [20, 44], [19, 49]],
-  [-1, [22, 41], [23, 45], [18, 44], [14, 49]],
-  [0, [23, 43], [29, 49], [13, 43], [9, 49]],
-  [1, [22, 45], [24, 49], [12, 43], [9, 46]],
-  [0, [21, 44], [19, 49], [16, 41], [12, 43]],
-  [-1, [18, 44], [14, 49], [22, 41], [23, 45]],
-];
-const armSwing = [-3, -2, 0, 2, 3, 2, 0, -2];
-for (let i = 0; i < gait.length; i++) {
-  const [bob, frontKnee, frontFoot, backKnee, backFoot] = gait[i]!;
-  const swing = armSwing[i]!;
-  MASCOT_FRAMES['run' + String.fromCharCode(65 + i)] = actionFrame({ ...stance, bob, frontKnee, frontFoot, backKnee, backFoot,
-    frontElbow: [10 + swing, 31 + bob], frontHand: [14 + swing, 29 + bob],
-    backElbow: [26 - swing, 31 + bob], backHand: [29 - swing, 28 + bob],
+// P-SEASON.1 gait: 16 beats of 50 ms (one 800 ms stride pair; 50 ms is exactly 3 frames at 60 Hz, so
+// no beat is held longer than its neighbours). Each foot is planted for half the cycle and its sole
+// slides back exactly GAIT_SWEEP cells a beat (26 -> 10), LINEARLY, so a body translating that far per
+// beat keeps it pinned to the ground (P-MASCOT.5's no-skate contract). The swing foot travels forward
+// on a smoothstep under a sine lift, knees are solved from two equal bones bending forward (+x, the
+// unmirrored facing), the hips settle a cell after each contact and rise through the pass, and the
+// arms counter-swing the legs as bent pendulums (near arm forward while the near foot trails).
+const GAIT_BEATS = 16;
+const GAIT_SWEEP = 2;
+const GAIT_HALF = GAIT_BEATS / 2;
+const GAIT_FRONT = 26;
+const GAIT_BACK = GAIT_FRONT - GAIT_SWEEP * GAIT_HALF;
+const GAIT_BONE = 6.75;
+function gaitFoot(rel: number): Joint {
+  if (rel <= GAIT_HALF) return [GAIT_FRONT - GAIT_SWEEP * rel, 49];
+  const s = (rel - GAIT_HALF) / GAIT_HALF;
+  return [Math.round(GAIT_BACK + (GAIT_FRONT - GAIT_BACK) * s * s * (3 - 2 * s)), Math.round(49 - 5 * Math.sin(Math.PI * s))];
+}
+function gaitKnee(hip: Joint, foot: Joint): Joint {
+  const dx = foot[0] - hip[0], dy = foot[1] - hip[1];
+  const d = Math.hypot(dx, dy);
+  const h = d >= 2 * GAIT_BONE ? 0 : Math.sqrt(GAIT_BONE * GAIT_BONE - d * d / 4);
+  return [Math.round(hip[0] + dx / 2 + h * dy / d), Math.round(hip[1] + dy / 2 - h * dx / d)];
+}
+function gaitArm(shoulder: Joint, swing: number): [Joint, Joint] {
+  const elbow: Joint = [shoulder[0] + 4.5 * Math.sin(swing), shoulder[1] + 4.5 * Math.cos(swing)];
+  const fore = swing + 1.6;
+  return [[Math.round(elbow[0]), Math.round(elbow[1])], [Math.round(elbow[0] + 4.5 * Math.sin(fore)), Math.round(elbow[1] + 4.5 * Math.cos(fore))]];
+}
+for (let i = 0; i < GAIT_BEATS; i++) {
+  const bob = Math.round(Math.sin(2 * Math.PI * i / GAIT_HALF));
+  const frontFoot = gaitFoot((i + GAIT_HALF) % GAIT_BEATS), backFoot = gaitFoot(i);
+  const swing = 0.6 * Math.cos(2 * Math.PI * i / GAIT_BEATS);
+  const [frontElbow, frontHand] = gaitArm([12, 27 + bob], swing);
+  const [backElbow, backHand] = gaitArm([24, 27 + bob], -swing);
+  MASCOT_FRAMES['run' + String.fromCharCode(65 + i)] = actionFrame({ ...stance, bob,
+    frontFoot, frontKnee: gaitKnee([15, 38 + bob], frontFoot),
+    backFoot, backKnee: gaitKnee([20, 38 + bob], backFoot),
+    frontElbow, frontHand, backElbow, backHand,
   });
 }
+// Reactions on the prompt bar: a springy hop (crouch, rise, fall) and a ninja dash for the click leap.
+MASCOT_FRAMES.crouch = actionFrame({ ...stance, bob: 3, expression: 'focused',
+  frontKnee: [10, 44], frontFoot: [10, 49], backKnee: [28, 44], backFoot: [27, 49],
+  frontElbow: [8, 33], frontHand: [7, 37], backElbow: [30, 33], backHand: [31, 37] });
+MASCOT_FRAMES.hopUp = actionFrame({ ...stance, bob: -1, expression: 'joyful',
+  frontKnee: [17, 43], frontFoot: [13, 47], backKnee: [25, 42], backFoot: [22, 47],
+  frontElbow: [7, 27], frontHand: [3, 24], backElbow: [30, 27], backHand: [35, 23] });
+MASCOT_FRAMES.hopFall = actionFrame({ ...stance, expression: 'joyful',
+  frontKnee: [15, 44], frontFoot: [12, 49], backKnee: [23, 44], backFoot: [25, 49],
+  frontElbow: [7, 29], frontHand: [4, 26], backElbow: [29, 29], backHand: [33, 26] });
+MASCOT_FRAMES.dash = actionFrame({ ...stance, bob: -1, lean: 1, expression: 'focused', gaze: 1,
+  frontKnee: [10, 42], frontFoot: [4, 45], backKnee: [27, 40], backFoot: [25, 46],
+  frontElbow: [8, 30], frontHand: [3, 31], backElbow: [21, 31], backHand: [17, 33] });
+// Seasonal acts (mascot_season.ts): a crisp salute, the hand flat at the brow over the headband.
+MASCOT_FRAMES.salute = actionFrame({ ...stance, expression: 'focused', gaze: 0, armsOverHood: true,
+  backElbow: [36, 24], backHand: [33, 14] });
 
 // Alternating finger contact, lift and return: the terminal stays planted while both wrists type.
 const coding: ActionPose = { ...stance, expression: 'focused', gaze: 0, prop: 'terminal',
@@ -578,13 +614,14 @@ MASCOT_FRAMES.staffD = actionFrame({ ...stance, bob: 1, lean: 1, gaze: -1, front
 MASCOT_FRAMES.staffE = actionFrame({ ...stance, gaze: -1, frontElbow: [12, 35], frontHand: [18, 36], backElbow: [28, 36], backHand: [26, 32], staff: [[6, 42], [36, 27]] });
 MASCOT_FRAMES.staffF = actionFrame({ ...stance, frontElbow: [16, 34], frontHand: [27, 38], backElbow: [28, 32], backHand: [30, 29], staff: [[24, 47], [32, 23]] });
 
-export const MASCOT_RUN_FRAMES = ["runA", "runB", "runC", "runD", "runE", "runF", "runG", "runH"] as const;
-export const MASCOT_RUN_BEAT_MS = 80;
-/** The gait's ground contract: each foot is planted for four beats and its heel sweeps back 5 cells a
- *  beat. Anything that TRANSLATES the character (the prompt-bar runner) must travel exactly this fast
- *  in cell units or the planted foot skates. Read these, never re-derive them. */
-export const MASCOT_RUN_CONTACT_BEATS = 4;
-export const MASCOT_RUN_SWEEP_CELLS = 5;
+export const MASCOT_RUN_FRAMES = ["runA", "runB", "runC", "runD", "runE", "runF", "runG", "runH",
+  "runI", "runJ", "runK", "runL", "runM", "runN", "runO", "runP"] as const;
+export const MASCOT_RUN_BEAT_MS = 50;
+/** The gait's ground contract: each foot is planted for CONTACT beats and its sole sweeps back SWEEP
+ *  cells a beat. Anything that TRANSLATES the character (the prompt-bar runner) must travel exactly
+ *  this far per beat, in whole beats, or the planted foot skates. Read these, never re-derive them. */
+export const MASCOT_RUN_CONTACT_BEATS = GAIT_HALF;
+export const MASCOT_RUN_SWEEP_CELLS = GAIT_SWEEP;
 
 export type MascotState = "idle" | "listening" | "speaking" | "working" | "victory";
 export interface MascotInputs { speaking: boolean; listening: boolean; working: boolean }

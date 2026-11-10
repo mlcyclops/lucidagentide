@@ -44,7 +44,7 @@ import { recordLatency } from "./latency_log.ts"; // P-EVAL.2 (ADR-0187): per-tu
 import { beginStepTurn, endStepTurn, noteStepEvent } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
-import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, resolveOmpBin } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
+import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, type OmpResolution, resolveOmpBin, resolveOmpBinAsync } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
 import { gatePath, gateRefusal, repoAsset, resolvedRepo } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
 import { asksageOnly, attribution, checkerModel, chosenModel, localProviderPrefixes, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, modelRolesOverlayFile, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
 import { heavyRoleModel, writeModelRolesOverlay } from "./model_roles.ts"; // P-MODEL.8 (ADR-0448)
@@ -234,7 +234,7 @@ const VAULT_REDACT_EXT = repoAsset("harness", "omp", "vault_redact_extension.ts"
 const TOOL_META_EXT = repoAsset("harness", "omp", "tool_meta_extension.ts");
 // P-JEV.2 (ADR-0377): reports EVERY typed judgment (question, answers, probabilities, which backend
 // answered, latency, error) over a token'd loopback URL, because omp records none of them and has no hook
-// for them: the extension wraps pi-ai's TypeSafeJudge / TextJudge in-process. Observability only, fail-soft,
+// for them: the extension wraps pi-ai's NativeJudge / TextJudge in-process. Observability only, fail-soft,
 // self-skips when LUCID_JUDGMENT_URL is absent.
 const JUDGMENT_EXT = repoAsset("harness", "omp", "judgment_extension.ts");
 // Design suite: design_read / design_apply / design_request let the agent read the Creator Design editor's
@@ -360,14 +360,39 @@ function ompBin(): string {
       return bunProbeVerdict(Bun.spawnSync([candidate, "--version"], { stdout: "ignore", stderr: "ignore", timeout: OMP_PROBE_TIMEOUT_MS }));
     } catch { return false; }
   };
-  const r = resolveOmpBin(
-    { envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join },
-    probe,
-  );
+  return adoptOmpResolution(resolveOmpBin({ envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join }, probe));
+}
+function adoptOmpResolution(r: OmpResolution): string {
   if (r.indeterminate) console.error(`[omp] probe timed out; using ${r.bin} anyway (slow cold start, not a missing binary): ${r.timedOut.join(", ")}`);
   else if (!r.proven) console.error(`[omp] no runnable omp found; tried: ${r.rejected.join(", ")}`);
   ompBinCache = r.bin;
   return r.bin;
+}
+/** P-BOOTPERF.1 (ADR-pending): the same proven resolution as ompBin(), probed WITHOUT blocking the
+ *  engine. The sync probe is Bun.spawnSync on the event loop that serves every route, so on a cold,
+ *  antivirus-scanned Windows launch (OMP_PROBE_TIMEOUT_MS per candidate) the renderer's workspace bar,
+ *  turn-status and net-status probes all hung behind it; the status probe then timed out into the
+ *  composer's Reconnect button. start() awaits this first, so the sync ompBin() callers after it hit the
+ *  cache. One resolution per engine, shared by concurrent callers. Never rejects. */
+let ompBinPending: Promise<string> | null = null;
+function ompBinAsync(): Promise<string> {
+  if (ompBinCache) return Promise.resolve(ompBinCache);
+  ompBinPending ??= resolveOmpBinAsync(
+    { envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join },
+    ompProbeAsync,
+  ).then(adoptOmpResolution);
+  return ompBinPending;
+}
+/** `<candidate> --version` as a non-blocking capability probe: true ran, false failed to run or exited
+ *  non-zero, "timeout" did not answer in OMP_PROBE_TIMEOUT_MS (slow machine, not a missing binary). */
+async function ompProbeAsync(candidate: string): Promise<boolean | "timeout"> {
+  try {
+    const child = Bun.spawn([candidate, "--version"], { stdin: "ignore", stdout: "ignore", stderr: "ignore", windowsHide: true });
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill(); }, OMP_PROBE_TIMEOUT_MS);
+    try { await child.exited; } finally { clearTimeout(timer); }
+    return timedOut ? "timeout" : bunProbeVerdict({ exitCode: child.exitCode, signalCode: child.signalCode });
+  } catch { return false; } // ENOENT / EPERM / EACCES: cannot run this one
 }
 
 /** P-FLEET.L1: the gated omp argv for a LOCAL LANE. Same fail-closed security gate (-e GATE, invariant 4)
@@ -1059,7 +1084,8 @@ class Backend {
         // log, and the session ran UNGATED while every surface reported healthy. start() rejects, so the
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, "-e", AZURE_ENTRA, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...secretArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
+        // P-BOOTPERF.1 (ADR-pending): probe omp off the event loop; the engine keeps serving meanwhile.
+        const ompArgv = [await ompBinAsync(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, "-e", AZURE_ENTRA, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...secretArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
         // P-SANDBOX.16 (ADR-0397): a git the host never put on PATH (MinGit, scoop, GitHub Desktop's copy)
