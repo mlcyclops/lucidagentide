@@ -1,4 +1,4 @@
-// Phase C (ADR-0534): the Meet relay's state (meet_relay.Hub): rooms, peers and seats, presence sessions and their
+// Phase C (ADR-0540): the Meet relay's state (meet_relay.Hub): rooms, peers and seats, presence sessions and their
 // inboxes, room history with rseq and catch-up, direct messages, reactions, invitations, devices, the certificate
 // mailboxes (renewals, enrollments, seed requests) and the admin queue, behind ONE lock and one condition variable as
 // in the Python. The persistent parts are kept as the JSON values state.json holds, in the order Python's dicts keep

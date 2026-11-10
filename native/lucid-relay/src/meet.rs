@@ -1,4 +1,4 @@
-// lucid-relay meet (ADR-0534 phase C): a drop-in for the Meeting Hub rendezvous relay `relay/meet_relay.py`. The
+// lucid-relay meet (ADR-0540 phase C): a drop-in for the Meeting Hub rendezvous relay `relay/meet_relay.py`. The
 // same `--config relay.json` (same fields, defaults and refusals), the same `state_dir` (state.json written as
 // json.dumps writes it, crl.pem with its root and signer parts, releases.json, link-reports.log), mutual TLS that
 // requires a client certificate from the Meet CA and checks the CRL bundle, the identity read from the client

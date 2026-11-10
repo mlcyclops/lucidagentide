@@ -1,4 +1,4 @@
-// Phase C (ADR-0534): the Meet relay's route tables (meet_relay.Handler.do_GET and do_POST), each route reading its
+// Phase C (ADR-0540): the Meet relay's route tables (meet_relay.Handler.do_GET and do_POST), each route reading its
 // caller, body and gate in the order the Python handler does, so the same request gets the same first refusal.
 
 use crate::meet::{self as m, run, Ctx, R, CAPTIONS_LIMIT_MAX};

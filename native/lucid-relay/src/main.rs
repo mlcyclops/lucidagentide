@@ -1,4 +1,4 @@
-// lucid-relay (ADR-0534): the remote-spokes relay in Rust, phase A. A drop-in for the add-on's
+// lucid-relay (ADR-0540): the remote-spokes relay in Rust, phase A. A drop-in for the add-on's
 // `lucid-spoke relay serve`: the same flags and environment (relayServeConfig in src/relay.ts), so a systemd unit or
 // a container swaps only the program. `relay serve` in front of the flags is accepted and ignored, so the existing
 // ExecStart and ENTRYPOINT arguments work unchanged.

@@ -1,4 +1,4 @@
-// Phase C (ADR-0534): the Meet relay's TLS (meet_relay.py tls_context, crl_path, crl_parts, bundle_checks_chain,
+// Phase C (ADR-0540): the Meet relay's TLS (meet_relay.py tls_context, crl_path, crl_parts, bundle_checks_chain,
 // RefusalLog) and its outbound mutual-TLS client (SignerClient, and the Proxmox calls of meet_console.FilesPower).
 // Server TLS REQUIRES a client certificate chaining to the Meet CA; with a CRL file the leaf is checked, and once the
 // bundle also holds a CRL from another CA (the signer's) every certificate of the chain is. An expired CRL refuses

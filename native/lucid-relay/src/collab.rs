@@ -1,4 +1,4 @@
-// Phase B (ADR-0534): the LUCID collab relay broker, a drop-in for tools/relay/serve.ts over
+// Phase B (ADR-0540): the LUCID collab relay broker, a drop-in for tools/relay/serve.ts over
 // desktop/collab/relay_server.ts (P-COLLAB.5/.9, ADR-0192/0195; P-REMOTE.1/.2/.7/.16, ADR-0226/0227/0431). A dumb
 // forwarder of OPAQUE E2E-sealed frames: it reads and rewrites only the 4-byte peer header and never holds a room key.
 //
