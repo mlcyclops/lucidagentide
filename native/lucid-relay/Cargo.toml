@@ -4,6 +4,7 @@
 # lucid-relay (ADR-0534): the remote-spokes relay in Rust. Phase A is a drop-in for the add-on's Bun relay
 # (`lucid-spoke relay serve`): the same flags, environment, routes, answers, limits, log lines and state folder.
 # Phase B (`lucid-relay collab`) is the core's collab broker (tools/relay/serve.ts), wire-compatible with desktop/collab.
+# Phase C (`lucid-relay meet`) is the Meeting Hub rendezvous relay (relay/meet_relay.py): same relay.json and state.json.
 
 [package]
 name = "lucid-relay"
@@ -38,6 +39,7 @@ sha2 = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "io-util", "sync"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "tls12", "logging"] }
 tokio-tungstenite = { version = "0.26", default-features = false, features = ["handshake"] }
+webpki-roots = "1"
 
 [profile.release]
 opt-level = 3

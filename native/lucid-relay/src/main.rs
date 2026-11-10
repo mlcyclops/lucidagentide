@@ -23,6 +23,14 @@ mod http_client;
 mod identity;
 mod license;
 mod log;
+mod meet;
+mod meet_console;
+mod meet_hub;
+mod meet_json;
+mod meet_ops;
+mod meet_routes;
+mod meet_tls;
+mod meet_x509;
 mod relay;
 mod server;
 mod store;
@@ -195,6 +203,10 @@ fn main() {
     // Phase B: the collab broker (tools/relay/serve.ts). Everything else is `relay serve` (phase A).
     if args.first().map(String::as_str) == Some("collab") {
         collab::main(&args[1..]);
+    }
+    // Phase C: the Meeting Hub rendezvous relay (relay/meet_relay.py; src/meet.rs).
+    if args.first().map(String::as_str) == Some("meet") {
+        meet::main(&args[1..]);
     }
     let flags = parse_args(&args).unwrap_or_else(|e| die(&e));
     let c = relay_serve_config(&flags, |k| std::env::var(k).ok()).unwrap_or_else(|e| die(&e));
