@@ -146,6 +146,9 @@ const PASS_ENV = [
   "USERPROFILE", "HOME", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles",
   "ProgramFiles(x86)", "CommonProgramFiles", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS",
   "LANG", "LC_ALL", "TZ", "USER", "USERNAME", "LOGNAME", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+  // A development licence (remote-spokes add-on ADR-A092): the switch and the development PUBLIC key, set by the
+  // developer in their own environment. Neither is a secret; without them a plugin accepts publisher licences only.
+  "LUCID_LICENSE_DEV", "LUCID_LICENSE_DEV_PUB",
 ];
 
 /** The contract env for one plugin (also the MCP child's env). */

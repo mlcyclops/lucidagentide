@@ -21,7 +21,7 @@ import { pluginSelfNavigation } from "../navigation_policy.ts";
 import type { PluginManifest } from "../../harness/plugins/package.ts";
 
 const KEY = testKey();
-const ENV_KEYS = ["LUCID_PLUGINS_DIR", "LUCID_PLUGIN_DATA_DIR", "LUCID_PLUGIN_LOG_PATH"] as const;
+const ENV_KEYS = ["LUCID_PLUGINS_DIR", "LUCID_PLUGIN_DATA_DIR", "LUCID_PLUGIN_LOG_PATH", "LUCID_LICENSE_DEV", "LUCID_LICENSE_DEV_PUB", "OPENAI_API_KEY"] as const;
 let saved: Record<string, string | undefined> = {};
 let work = "";
 let runtime: PluginRuntime | null = null;
@@ -100,6 +100,21 @@ describe("server plugins", () => {
     // The port is remembered: a restart lands on the same origin (browser storage is keyed by it).
     const again = await rt.start("fixture-server");
     expect(again.ok && again.url).toBe(url);
+  }, 60_000);
+
+  // A plugin that checks a development licence (remote-spokes ADR-A092) gets the developer's two variables; an engine
+  // secret still never crosses.
+  test("the development licence variables reach a plugin; the engine's other environment does not", async () => {
+    process.env.LUCID_LICENSE_DEV = "1";
+    process.env.LUCID_LICENSE_DEV_PUB = "MCowBQYDK2VwAyEAdevpublickey";
+    process.env.OPENAI_API_KEY = "sk-not-for-plugins";
+    expect((await installPluginBytes(buildServerFixture(KEY), "fixture-server", deps)).ok).toBe(true);
+    const rt = makeRuntime();
+    expect((await rt.start("fixture-server")).ok).toBe(true);
+    const env = pluginMcpServers()[0]!.env;
+    expect(env).toContainEqual({ name: "LUCID_LICENSE_DEV", value: "1" });
+    expect(env).toContainEqual({ name: "LUCID_LICENSE_DEV_PUB", value: "MCowBQYDK2VwAyEAdevpublickey" });
+    expect(env.map((e) => e.name)).not.toContain("OPENAI_API_KEY");
   }, 60_000);
 
   // ADR-0506: the engine's own way into a server plugin. The token exists only while the plugin runs, only the
