@@ -13,7 +13,7 @@
 import type { SeasonId } from "../seasons.ts";
 import { frameDpr, glow, hash01, layerCache, ridge, wrap, type SceneDef, type SceneFrame } from "../scene_kit.ts";
 
-/** Shell colours as `r g b` triplets, per season. */
+/** Shell colors as `r g b` triplets, per season. */
 function shellColors(season: SeasonId | null): string[] {
   if (season === "new-year") return ["255 200 105", "255 222 150", "226 232 248", "255 180 92", "255 236 190", "214 224 244"];
   if (season === "independence-day") return ["255 64 84", "248 250 255", "86 132 255", "255 96 110", "132 170 255"];
@@ -63,7 +63,7 @@ function shellOf(slot: number, ts: number, w: number, horizon: number, colors: s
   };
 }
 
-/** Closed-form spark flight with linear drag k and gravity g: offset from the burst centre at age a. */
+/** Closed-form spark flight with linear drag k and gravity g: offset from the burst center at age a. */
 function flight(vx: number, vy: number, k: number, g: number, a: number, out: number[]): void {
   const e = (1 - Math.exp(-k * a)) / k;
   out[0] = vx * e;
@@ -81,7 +81,7 @@ function skyline(w: number, horizon: number, unit: number, salt: number, scale: 
   while (x < w + unit * 10) {
     const bw = unit * (9 + 26 * hash01(i, salt));
     const nx = (x + bw / 2) / w;
-    // A downtown core right of centre, a smaller cluster to the left, low sprawl elsewhere.
+    // A downtown core right of center, a smaller cluster to the left, low sprawl elsewhere.
     const env = 0.1 + 0.9 * Math.exp(-(((nx - 0.63) / 0.1) ** 2)) + 0.45 * Math.exp(-(((nx - 0.3) / 0.06) ** 2));
     const bh = unit * scale * (8 + 150 * env * (0.3 + 0.7 * Math.pow(hash01(i, salt + 1), 0.8)));
     out.push({ x, top: horizon - bh, w: bw - unit * 1.5 });
@@ -220,7 +220,7 @@ function paintShells(ctx: CanvasRenderingContext2D, f: SceneFrame, live: Shell[]
     if (b.age > BURST_S) continue;
     const a = b.age;
     const life = a / BURST_S;
-    // The flash lights the sky around the shell and lingers briefly as a coloured bloom.
+    // The flash lights the sky around the shell and lingers briefly as a colored bloom.
     if (a < 1.4) glow(ctx, b.x, b.y, b.r * 1.3, b.color, 0.4 * (1 - a / 1.4) ** 2.2);
     const willow = b.kind === WILLOW;
     const count = willow ? 84 : 110;

@@ -9,7 +9,7 @@
 
 import { frameDpr, glow, hash01, layerCache, wrap, type SceneDef, type SceneFrame } from "../scene_kit.ts";
 
-/** A unit heart (about 2 wide, centred on the origin), built once. */
+/** A unit heart (about 2 wide, centered on the origin), built once. */
 const HEART = (() => {
   const p = new Path2D();
   p.moveTo(0, 0.62);
@@ -23,7 +23,7 @@ const HEART = (() => {
   return p;
 })();
 
-/** Heart colours: rose, blush, crimson, coral, and a pale pearl pink. */
+/** Heart colors: rose, blush, crimson, coral, and a pale pearl pink. */
 const TINTS = [
   ["#ff6f91", "#c2275a"],
   ["#ffb3c6", "#e0708f"],
@@ -46,7 +46,7 @@ function paintBack(ctx: CanvasRenderingContext2D, w: number, h: number): void {
   // Two broad warm glows give the field depth, like out-of-focus lamps far behind.
   glow(ctx, w * 0.72, h * 0.78, Math.max(w, h) * 0.55, "230 90 120", 0.22);
   glow(ctx, w * 0.18, h * 0.25, Math.max(w, h) * 0.4, "160 40 90", 0.18);
-  // A soft vignette keeps the edges deep and the centre airy.
+  // A soft vignette keeps the edges deep and the center airy.
   const v = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.3, w / 2, h / 2, Math.max(w, h) * 0.75);
   v.addColorStop(0, "rgb(10 0 6 / 0)");
   v.addColorStop(1, "rgb(10 0 6 / 0.5)");

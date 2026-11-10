@@ -26,7 +26,7 @@ function skyStops(season: SeasonId | null): [number, string][] {
 const SIL = "#121731";
 const SIL_FAR = "#2a2c55";
 
-/** The obelisk outline (shaft plus pyramidion) at centre x, base on `gy`. */
+/** The obelisk outline (shaft plus pyramidion) at center x, base on `gy`. */
 function obeliskPath(ctx: CanvasRenderingContext2D, x: number, gy: number, h: number, flip = 1): void {
   const tall = h * 0.46;
   const bw = h * 0.034;

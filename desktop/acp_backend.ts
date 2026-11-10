@@ -1648,18 +1648,18 @@ class Backend {
     // bundled helper is missing ⇒ reply cancelled without asking, and say why in the engine log.
     const helper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : null;
     if (!helper || !existsSync(helper)) {
-      console.error(`[sandbox-grant] cancelled without asking: ${process.platform === "win32" ? "the bundled lucid-appcontainer helper is missing" : `directory grants need Windows AppContainer ACEs (platform ${process.platform})`} · ${dirPath || "(no path)"}`);
+      console.error(`[sandbox-grant] canceled without asking: ${process.platform === "win32" ? "the bundled lucid-appcontainer helper is missing" : `directory grants need Windows AppContainer ACEs (platform ${process.platform})`} · ${dirPath || "(no path)"}`);
       return cancelled;
     }
     if (!dirPath) {
-      console.error("[sandbox-grant] cancelled without asking: the tool call named no directory");
+      console.error("[sandbox-grant] canceled without asking: the tool call named no directory");
       return cancelled;
     }
     // P-SANDBOX.14 (ADR-0394): managed policy owns the folder list; never ask the user for a grant the
     // endpoint would refuse anyway.
     if (managedSandboxFoldersLocked(managedConfig().config)) {
       emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: "block", severity: "medium", tool: "sandbox_grant_dir", reason: `blocked (folders managed by policy) · ${modeWord} ${dirPath}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
-      console.error(`[sandbox-grant] cancelled without asking: your organization manages the sandbox's folders · ${dirPath}`);
+      console.error(`[sandbox-grant] canceled without asking: your organization manages the sandbox's folders · ${dirPath}`);
       return cancelled;
     }
     if (!(this.askActive && this.listener)) {
@@ -1819,7 +1819,7 @@ class Backend {
     // #460 case 1 (P-SWITCH.1 follow-up): a running /goal loop (or a Main-owned automation, which runs
     // through runGoal) is stopped and FULLY unwound before the session changes. Only forced or
     // destructive callers reach here while a loop runs: the unforced HTTP routes already refused via
-    // switchBlocker(), so this never widens a plain switch into a work-cancelling path (#390).
+    // switchBlocker(), so this never widens a plain switch into a work-canceling path (#390).
     await this.stopGoalForSwitch();
     this.clearTurnRecovery();
     await this.start();
@@ -2328,8 +2328,8 @@ class Backend {
   isGoalRunning(): boolean { return this.goalActive; }
 
   /** #460 case 1 (P-SWITCH.1 follow-up): stop the running /goal loop, or a Main-owned automation (those
-   *  run through runGoal), and WAIT for it to unwind before the caller touches the session. Cancelling
-   *  alone is not enough: the forced switch previously cancelled only the maker TURN (clearTurnRecovery),
+   *  run through runGoal), and WAIT for it to unwind before the caller touches the session. Canceling
+   *  alone is not enough: the forced switch previously canceled only the maker TURN (clearTurnRecovery),
    *  goalCancelled stayed false, and the loop's checker or next iteration then ran inside the newly
    *  loaded session. Bounded so a wedged unwind can never hang the switch; goalCancelled stays true, so
    *  a late-waking loop still exits at its next checkpoint without doing any work. No-op when idle. */
@@ -2618,7 +2618,7 @@ class Backend {
   //
   // The refusal that makes it safe: an OPEN TOOL CALL caps the verdict at `quiet`, so a turn that is
   // genuinely running a long build is never probed (a note interleaved into a running call is noise) and
-  // never cancelled (ADR-0263 removed the wall-clock kill precisely because it destroyed that work).
+  // never canceled (ADR-0263 removed the wall-clock kill precisely because it destroyed that work).
   // Only a DEAD child overrides, and that is evidence rather than a guess about how long work may take.
   private healthEpisode: HealthEpisode = newEpisode(Date.now());
   private healthActivityAt = Date.now();
@@ -2703,7 +2703,7 @@ class Backend {
       const r = await pending;
       // P-RECOVER.1 (ADR-0385): every automatic recovery leaves a report, whether or not it worked.
       this.recordRecovery("agent-child-failed", r.ok ? "recovered" : "not-recovered",
-        "The chat session stopped making progress (or its agent process exited), so LUCID's watchdog cancelled the turn, restarted the agent process, and tried to resume the same session.",
+        "The chat session stopped making progress (or its agent process exited), so LUCID's watchdog canceled the turn, restarted the agent process, and tried to resume the same session.",
         [{ at: now, what: v.reason }, { at: Date.now(), what: !r.ok ? `The recovery did not complete (${r.error ?? "unknown error"}).` : hadSession ? "The agent process was restarted and the chat session was resumed." : "The agent process was restarted. No chat session was open." }]);
       return { action: "recover", reason: v.reason };
     } finally {
@@ -2895,7 +2895,7 @@ class Backend {
         : hadSession ? "The agent process was restarted and the chat session was resumed."
         : "The agent process was restarted. No chat session was open.";
       const incidentId = this.recordRecovery("agent-child-failed", r.ok ? "recovered" : "not-recovered",
-        "The chat stopped making progress and recovery was requested from the window. LUCID cancelled the turn, restarted the agent process, and tried to resume the same session.",
+        "The chat stopped making progress and recovery was requested from the window. LUCID canceled the turn, restarted the agent process, and tried to resume the same session.",
         [{ at: now, what: `Recovery was requested from the window (agent process ${wasDead ? "had exited" : "was still running"}).` }, { at: Date.now(), what: result }]);
       return { ok: r.ok, sessionId: this.sessionId, reason: result, ...(incidentId ? { incidentId } : {}) };
     } finally {

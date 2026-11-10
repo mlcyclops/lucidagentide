@@ -11,7 +11,7 @@
 
 import { bird, frameDpr, glow, hash01, layerCache, noise1, wrap, type SceneDef, type SceneFrame } from "../scene_kit.ts";
 
-/** One landform, all in fractions of the frame: centre, half-width of the flat top, top height. */
+/** One landform, all in fractions of the frame: center, half-width of the flat top, top height. */
 interface Mesa { cx: number; hw: number; ht: number }
 
 interface Range {

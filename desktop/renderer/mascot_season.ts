@@ -3,7 +3,7 @@
 
 // desktop/renderer/mascot_season.ts - P-SEASON.1 (ADR-0525): LUCID's seasonal costume and act.
 //
-// Every special theme dresses the ninja (a gi/accent recolour plus an optional head or chest piece) and
+// Every special theme dresses the ninja (a gi/accent recolor plus an optional head or chest piece) and
 // gives him one short act, 1.8 to 3.6 s, choreographed from the EXISTING body frames in mascot.ts with
 // pixel prop sprites on top: a football he slices in half, a gift a star pops out of, a dove he
 // releases. Everything here is PURE except paintSeasonExtras (which takes a caller-owned context):
@@ -121,7 +121,7 @@ const PX: Record<string, number> = {};
 /** Register a sprite; `px` = mascot cells per sprite pixel (2 = chunky like his body, 1 = fine). */
 const def = (name: string, rows: Rows, px = 2): void => { S[name] = rows; PX[name] = px; };
 
-// Single pixels and confetti chips in every prop colour: lines, sparks and confetti are built from
+// Single pixels and confetti chips in every prop color: lines, sparks and confetti are built from
 // these. DOT is a fine one-cell dot (fishing line, wire), PIX a chunky one (sparks, rod).
 for (const c of Object.keys(PROP_PALETTE)) {
   def(`DOT_${c}`, [c], 1);
@@ -515,7 +515,7 @@ const sh = (n: string): number => S[n]!.length * PX[n]!;
 // ── the head anchor ─────────────────────────────────────────────────────────────────────────────
 
 const anchors = new Map<string, { x: number; y: number }>();
-/** Where a hat sits on `frame`: the centre of the topmost hood row (the first row whose longest solid
+/** Where a hat sits on `frame`: the center of the topmost hood row (the first row whose longest solid
  *  run is at least 10 cells). Derived from the grid itself, so a hat follows the head on every frame,
  *  including the ones that bob, lean, crouch or fall. Unknown frames resolve like idleA. */
 export function headAnchor(frame: string): { x: number; y: number } {
@@ -542,7 +542,7 @@ export function headAnchor(frame: string): { x: number; y: number } {
 interface Piece { sprite: string; dx: number; dy: number }
 interface Costume { gi: Record<"K" | "D" | "L" | "G" | "g", string>; pieces: Piece[] }
 
-/** A head piece centred on the anchor (plus `xOff`), its row `seatRow` landing on the hood's top row. */
+/** A head piece centered on the anchor (plus `xOff`), its row `seatRow` landing on the hood's top row. */
 const onHead = (sprite: string, seatRow: number, xOff = 0): Piece => ({ sprite, dx: -Math.floor(sw(sprite) / 2) + xOff, dy: -seatRow });
 const onBand = (sprite: string): Piece => ({ sprite, dx: -Math.floor(sw(sprite) / 2) + 1, dy: 9 });
 const onChest = (sprite: string): Piece => ({ sprite, dx: -12, dy: 25 });
@@ -572,7 +572,7 @@ const COSTUMES: Record<SeasonId, Costume> = {
 };
 
 const paletteCache = new WeakMap<Record<string, string>, Partial<Record<SeasonId, Record<string, string>>>>();
-/** The season's costume colours over `base` (gi K/D/L and accent G/g; skin, eyes, steel and ink keep
+/** The season's costume colors over `base` (gi K/D/L and accent G/g; skin, eyes, steel and ink keep
  *  their contrast). null = `base` itself. Cached per base, so a per-frame call never allocates. */
 export function seasonPalette(id: SeasonId | null, base: Record<string, string>): Record<string, string> {
   const c = id ? COSTUMES[id] : undefined;
@@ -617,7 +617,7 @@ const outBack = (u: number): number => { const v = clamp01(u) - 1; return 1 + 2.
 function put(out: SeasonProp[], sprite: string, x: number, y: number): void {
   out.push({ sprite, x: Math.round(x), y: Math.round(y) });
 }
-/** Centre a sprite on a point. */
+/** Center a sprite on a point. */
 function putC(out: SeasonProp[], sprite: string, x: number, y: number): void {
   put(out, sprite, x - Math.floor(sw(sprite) / 2), y - Math.floor(sh(sprite) / 2));
 }
@@ -641,7 +641,7 @@ function twinkle(out: SeasonProp[], x: number, y: number, t: number): void {
   putC(out, blink(t, 90) ? "TWINKLE" : "TWINKLE_S", x, y);
 }
 
-/** Right-hand centres (cells) for the frames the acts hold props in, read off the grids. */
+/** Right-hand centers (cells) for the frames the acts hold props in, read off the grids. */
 const HAND: Record<string, readonly [number, number]> = {
   idleA: [30, 33], idleB: [30, 33], idleC: [30, 33], blink: [30, 33],
   guard: [27, 26], talkA: [30, 29], talkC: [30, 29], throwA: [31, 28], throwB: [32, 31],
