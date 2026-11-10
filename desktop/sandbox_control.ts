@@ -153,10 +153,10 @@ export interface RuntimeFolderView {
 }
 
 /** PURE: the folders LUCID itself gives the contained agent so it can run (see appContainerRuntimeGrants),
- *  labelled for the panel, so the list the user sees is the COMPLETE answer to "what can it reach". */
+ *  labeled for the panel, so the list the user sees is the COMPLETE answer to "what can it reach". */
 export function runtimeFolderView(i: { workspace: string; grantRx: string[]; grantRw: string[]; tmpDir: string; policy?: PolicyFolderPlan }): RuntimeFolderView[] {
   const out: RuntimeFolderView[] = [{ path: i.workspace, mode: "rw", why: "the current workspace" }];
-  // P-SANDBOX.14 (ADR-0394): the admin-approved folders come first after the workspace, labelled as policy.
+  // P-SANDBOX.14 (ADR-0394): the admin-approved folders come first after the workspace, labeled as policy.
   for (const p of i.policy?.grantRw ?? []) out.push({ path: p, mode: "rw", why: "allowed by your organization's policy" });
   for (const p of i.policy?.grantRx ?? []) out.push({ path: p, mode: "rx", why: "allowed by your organization's policy" });
   for (const p of i.grantRw) out.push({ path: p, mode: "rw", why: "the agent's own state (sessions, settings, audit)" });

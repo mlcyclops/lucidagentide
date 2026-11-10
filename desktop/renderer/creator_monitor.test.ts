@@ -75,7 +75,7 @@ describe("the odometer dial", () => {
     expect(odometerSvg(null)).toContain("cod-needle"); // the instrument still reads at rest
   });
 
-  test("the dial carries its band class so green-to-red is CSS, not inline colour", () => {
+  test("the dial carries its band class so green-to-red is CSS, not inline color", () => {
     expect(odometerSvg(10)).toContain("cod-cool");
     expect(odometerSvg(80)).toContain("cod-warm");
     expect(odometerSvg(97)).toContain("cod-hot");

@@ -92,7 +92,7 @@ const stopFixture = () => { if (fixture) { try { fixture.proc.kill(); } catch { 
 type WsFactory = new (url: string, opts?: { headers?: Record<string, string> }) => WebSocket;
 const WsWithHeaders = WebSocket as unknown as WsFactory;
 
-/** One frame as it arrived, labelled the way desktop/fake_comfy_server.ts's own header documents the
+/** One frame as it arrived, labeled the way desktop/fake_comfy_server.ts's own header documents the
  *  sequence, so a failed order assertion prints something a human can compare against that table line by
  *  line. Binary frames keep their bytes: the preview frame's 8-byte header is contract, not decoration. */
 interface WireFrame { label: string; promptId: string | null; bytes: Uint8Array | null; data: Record<string, unknown> | null }
@@ -515,7 +515,7 @@ async function main(): Promise<void> {
         labels.filter((l) => l.startsWith("executed:")).join(" ") || "none");
       // The load-bearing check. Nothing follows the error, so a decoder that ends a run on frame TYPE waits
       // for a signal that never comes and reports the stream as still running. Terminating on the error
-      // itself is the only correct behaviour, and this check is what fails if the fixture ever starts
+      // itself is the only correct behavior, and this check is what fails if the fixture ever starts
       // sending a courtesy terminal frame and quietly hides that class of bug again.
       check(!labels.includes("executing:null"),
         "and NO terminal executing:node=null follows, so a decoder that ends on frame type alone would hang forever", labels.join(" "));

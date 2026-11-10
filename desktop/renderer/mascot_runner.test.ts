@@ -72,15 +72,15 @@ describe("runnerAt - the parkour route", () => {
   it("keeps a foot planted on the ground through every beat of the run (no skating)", () => {
     const soles = (frameId: string): number[] => {
       const bottom = MASCOT_FRAMES[frameId]![MASCOT_H - 1]!;
-      const centres: number[] = [];
+      const centers: number[] = [];
       for (let x = 0; x < MASCOT_W; x++) {
         if (bottom[x] === ".") continue;
         let end = x;
         while (end + 1 < MASCOT_W && bottom[end + 1] !== ".") end++;
-        centres.push((x + end) / 2);
+        centers.push((x + end) / 2);
         x = end;
       }
-      return centres;
+      return centers;
     };
     for (const scale of [1, 2, 3]) {
       const l: RunnerLayout = { ...L, scale };

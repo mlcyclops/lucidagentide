@@ -68,7 +68,7 @@ describe("mask PNG decoding", () => {
     const m = await decodeMaskPng(png(w, h, 0, 8, rows), w, h);
     expect(m.alpha.length).toBe(w * h);
     expect(Array.from(m.alpha)).toEqual(rows.flatMap((r) => Array.from(r)));
-    // No stride drift: the disc centre is covered and the corners and edge midpoints are not.
+    // No stride drift: the disc center is covered and the corners and edge midpoints are not.
     expect(m.alpha[Math.floor(h / 2) * w + Math.floor(w / 2)]).toBe(255);
     for (const [x, y] of [[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1], [0, Math.floor(h / 2)], [w - 1, Math.floor(h / 2)]]) expect(m.alpha[y! * w + x!]).toBe(0);
   });

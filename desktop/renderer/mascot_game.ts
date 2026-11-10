@@ -197,7 +197,7 @@ function advance(next: ArcadeState, dtMs: number): void {
     // duck hazard is not hard, it is unsurvivable. Crates are solid now, so the course owes that time.
     const recovery = (46 * scale) / speed + 0.3;
     // Waiting shifts every hazard already in flight one-for-one closer, so the shortfall against the
-    // tightest neighbour IS the wait this hazard owes. No search, no re-roll, no bias.
+    // tightest neighbor IS the wait this hazard owes. No search, no re-roll, no bias.
     let deficit = 0;
     for (const obstacle of next.obstacles) {
       if (obstacle.handled) continue;

@@ -286,10 +286,10 @@ const UNREAL: CreatorIntegrationSpec = {
   cui: { posture: "on-device" },
 };
 
-// ── video composition + avatars (free / self-hosted first, paid catalogued) ──
+// ── video composition + avatars (free / self-hosted first, paid cataloged) ──
 // HyperFrames (Apache-2.0, hyperframes.heygen.com) renders HTML compositions to video with headless Chrome
 // plus FFmpeg. The DGX avatar service is the Loader's MuseTalk / EchoMimic pipeline behind a loopback HTTP
-// API on the box (contract section 2a). HeyGen is the paid cloud counterpart, catalogued only.
+// API on the box (contract section 2a). HeyGen is the paid cloud counterpart, cataloged only.
 
 const HYPERFRAMES: CreatorIntegrationSpec = {
   id: "hyperframes",
@@ -358,7 +358,7 @@ const HEYGEN: CreatorIntegrationSpec = {
   consentRequired: true,
   docsUrl: "https://docs.heygen.com",
   capabilities: [
-    { id: "avatar-video", status: "available", surface: "api", detail: "Avatar video generation through the documented HeyGen API (catalogued only in this phase: LUCID makes no HeyGen calls yet)." },
+    { id: "avatar-video", status: "available", surface: "api", detail: "Avatar video generation through the documented HeyGen API (cataloged only in this phase: LUCID makes no HeyGen calls yet)." },
   ],
   note: "Paid cloud service, metered per plan: scripts, audio, and likeness leave the device, so it is refused under CUI lockdown. Catalog and declaration only this phase; use the DGX avatar render for local work.",
   cui: { posture: "cloud" },
@@ -490,8 +490,8 @@ const AUTODESK_APS: CreatorIntegrationSpec = {
   consentRequired: false,
   docsUrl: "https://aps.autodesk.com",
   capabilities: [
-    { id: "cad-convert", status: "available", surface: "api", detail: "Model Derivative API translates DWG, RVT, IFC, and other formats (catalogued only in this phase)." },
-    { id: "cad-drawing", status: "available", surface: "api", detail: "Automation API (Design Automation) runs AutoCAD and other engines headlessly in the cloud (catalogued only in this phase)." },
+    { id: "cad-convert", status: "available", surface: "api", detail: "Model Derivative API translates DWG, RVT, IFC, and other formats (cataloged only in this phase)." },
+    { id: "cad-drawing", status: "available", surface: "api", detail: "Automation API (Design Automation) runs AutoCAD and other engines headlessly in the cloud (cataloged only in this phase)." },
   ],
   note: "Paid cloud service metered in Flex tokens, with no self-hosted option: drawings leave the device, so it is refused under CUI lockdown. Catalog and declaration only this phase.",
   cui: { posture: "cloud" },
@@ -509,7 +509,7 @@ const BLUEBEAM_STUDIO: CreatorIntegrationSpec = {
   consentRequired: false,
   docsUrl: "https://developers.bluebeam.com",
   capabilities: [
-    { id: "pdf-markup", status: "available", surface: "api", detail: "Studio Sessions Markups API reads and writes session markups over OAuth (catalogued only in this phase)." },
+    { id: "pdf-markup", status: "available", surface: "api", detail: "Studio Sessions Markups API reads and writes session markups over OAuth (cataloged only in this phase)." },
   ],
   note: "Paid cloud service: needs a Bluebeam Core (or higher) subscription and production app approval from Bluebeam. Documents leave the device, so it is refused under CUI lockdown. Catalog and declaration only this phase.",
   cui: { posture: "cloud" },
@@ -527,7 +527,7 @@ const CLASSCAD: CreatorIntegrationSpec = {
   consentRequired: false,
   docsUrl: "https://classcad.ch",
   capabilities: [
-    { id: "cad-model", status: "available", surface: "websocket", detail: "Parametric solid modeling through a ClassCAD worker over a websocket (catalogued only in this phase)." },
+    { id: "cad-model", status: "available", surface: "websocket", detail: "Parametric solid modeling through a ClassCAD worker over a websocket (cataloged only in this phase)." },
   ],
   note: "Paid, CHF pricing tiers. The worker signs in with a ClassCAD key and shares through a Cloudflare relay by default: set CLASSCAD_SHARE=off. Allowed under CUI lockdown only when its worker runs on a DGX endpoint attested as an enclave.",
   cui: { posture: "enclave" },

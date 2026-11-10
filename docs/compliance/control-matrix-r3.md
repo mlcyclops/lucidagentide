@@ -218,7 +218,7 @@ Paths are relative to the repository root. `evidence.json` is the output of `bun
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 03.15.01 | Policy and Procedures |   | customer | Not a LUCID function. | Review policies. | Policy set | customer |
 | 03.15.02 | System Security Plan | 3.12.4 | customer | docs/compliance/README.md (boundary, data flows, locations) is SSP input. | Review the SSP. | SSP | customer |
-| 03.15.03 | Rules of Behavior |   | customer | Not a LUCID function. The consent banner (03.01.09) restates monitoring terms. | Review signed rules of behavior. | Acknowledgements | customer |
+| 03.15.03 | Rules of Behavior |   | customer | Not a LUCID function. The consent banner (03.01.09) restates monitoring terms. | Review signed rules of behavior. | Acknowledgments | customer |
 
 ## System and Services Acquisition
 

@@ -279,7 +279,7 @@ export function renderLoopReport(m: LoopMetrics): string {
   out.push(`| Iterations | ${m.iterations} of ${m.maxIters} |`);
   out.push(`| Duration | ${formatDuration(m.durationMs)} |`);
   out.push(`| Stop condition | ${m.condition || "-"} |`);
-  out.push(`| Verification | ${m.command ? "`" + m.command + "`" : "checker judgement (no command)"} |`);
+  out.push(`| Verification | ${m.command ? "`" + m.command + "`" : "checker judgment (no command)"} |`);
   if (m.spendUsd != null) {
     const cap = m.budgetUsd && m.budgetUsd > 0 ? ` of ${formatSpend(m.budgetUsd)} cap` : "";
     out.push(`| Spend | ${formatSpend(m.spendUsd)}${cap}${m.peakContextTokens ? ` · peak context ${formatTokens(m.peakContextTokens)}` : ""} |`);

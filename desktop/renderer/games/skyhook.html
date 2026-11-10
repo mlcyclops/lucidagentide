@@ -1528,7 +1528,7 @@ function drawHUD(){
     ctx.fillStyle=col(PC.casc, cascadeGap<500?0.85+0.15*Math.sin(nowS*10):0.6);
     ctx.fillText('CASCADE '+Math.max(0,Math.round(cascadeGap/10))+' m', 19, 86);
   }
-  // surge meter. Centred at the top it sits on the distance readout and the FLOW line on BEST below
+  // surge meter. Centered at the top it sits on the distance readout and the FLOW line on BEST below
   // about 640 px, so a narrow panel puts the meter (and FLOW above it) at the bottom.
   const narrow=W<640;
   const mw=Math.min(210, W-48), mx=W/2-mw/2, my=narrow?H-40:20;

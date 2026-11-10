@@ -16,7 +16,7 @@ import browserExtension, { type BrowserRunIo, browserEndpoint, browserShotImage,
 const BASE = "http://127.0.0.1:5319/api/browser?t=tok";
 const ALL_TOOLS = ["browser_click", "browser_close", "browser_drag", "browser_keys", "browser_open", "browser_run", "browser_screenshot", "browser_scroll", "browser_type"];
 
-// ── typed mock surfaces (no `any`: the shim is untyped at runtime, so it is modelled explicitly) ───────
+// ── typed mock surfaces (no `any`: the shim is untyped at runtime, so it is modeled explicitly) ───────
 type SchemaNode = Record<string, unknown>;
 interface ToolResult { content: { type: string; text?: string; data?: string; mimeType?: string }[]; isError?: boolean }
 interface CapturedTool {

@@ -55,7 +55,7 @@ test("bars snap up fast and glide down slow", () => {
   const afterRelease = f.levels[0]!;
   const rose = afterAttack - 0;
   const fell = afterAttack - afterRelease;
-  expect(fell).toBeLessThan(rose); // release is slower than attack — the defining behaviour
+  expect(fell).toBeLessThan(rose); // release is slower than attack: the defining behavior
   expect(afterRelease).toBeGreaterThan(0.5 * afterAttack);
 });
 

@@ -6,7 +6,7 @@
 // P-NVIM.6 (view the knowledge graph from Neovim): the `lucid kb` data CLI that backs `:LucidKb`. Proves,
 // against a seeded TEMP KG (never the user's ~/.omp), that:
 // (1) the typed reads (kbList / kbPages / kbShow / kbSearch) return the KGs, pages, a page body, and hits;
-// (2) `runKb(argv)` dispatches list | pages | show | search and honours --json (machine) vs text (terminal);
+// (2) `runKb(argv)` dispatches list | pages | show | search and honors --json (machine) vs text (terminal);
 // (3) `show` on a missing page exits non-zero (so the Neovim client can surface "not found").
 //
 // Run: bun run harness/scripts/demo_pnvim6.ts

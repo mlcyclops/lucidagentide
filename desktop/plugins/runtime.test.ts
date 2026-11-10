@@ -102,9 +102,9 @@ describe("server plugins", () => {
     expect(again.ok && again.url).toBe(url);
   }, 60_000);
 
-  // A plugin that checks a development licence (remote-spokes ADR-A092) gets the developer's two variables; an engine
+  // A plugin that checks a development license (remote-spokes ADR-A092) gets the developer's two variables; an engine
   // secret still never crosses.
-  test("the development licence variables reach a plugin; the engine's other environment does not", async () => {
+  test("the development license variables reach a plugin; the engine's other environment does not", async () => {
     process.env.LUCID_LICENSE_DEV = "1";
     process.env.LUCID_LICENSE_DEV_PUB = "MCowBQYDK2VwAyEAdevpublickey";
     process.env.OPENAI_API_KEY = "sk-not-for-plugins";

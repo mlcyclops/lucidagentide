@@ -6,7 +6,7 @@
 // P-REPORT.8: a change-annotated APPLICATION DEPENDENCY GRAPH + DATA-SCHEMA CHANGE map for the
 // engineering report. From `git diff --numstat` + `--name-status` over a range, it groups changed
 // files into the architecture's layers (renderer / desktop / harness / scanner / tools / extensions),
-// colours each by whether it net-GREW (green) or net-SHRANK (red) with the +added/-removed line counts,
+// colors each by whether it net-GREW (green) or net-SHRANK (red) with the +added/-removed line counts,
 // and draws the dependency edges between them. It emits BOTH a hand-built SVG (rendered image, styled by
 // the renderer) AND Mermaid `flowchart` code (copyable, and importable into draw.io) - plus a schema
 // change map keyed to the data stores each touched file backs.
@@ -103,7 +103,7 @@ export function changeGraphMermaid(g: ChangeGraph): string {
 }
 
 // ── styled SVG (the "image") ─────────────────────────────────────────────────────
-// Layered layout: depth from the dependency edges (sources at top), nodes spread per row. Colours match
+// Layered layout: depth from the dependency edges (sources at top), nodes spread per row. Colors match
 // the Mermaid classDefs. Self-contained (uses CSS vars with hex fallbacks so it also renders on white/print).
 const ADDED = "#46d27e", REMOVED = "#e05a5a", CHANGED = "#5e8df2";
 const nodeColor = (s: ModuleChange["status"]) => (s === "added" ? ADDED : s === "removed" ? REMOVED : CHANGED);
@@ -250,7 +250,7 @@ export function schemaSvg(changes: StoreChange[]): string {
 
 // ── report annexes (markdown: heading + table + copyable Mermaid; page-broken in print) ──────────────
 /** Annex A + B markdown: the change table + Mermaid (marked for the styled SVG swap), then the schema map.
- *  Each annex is prefixed with an HTML page-break marker the print CSS honours. */
+ *  Each annex is prefixed with an HTML page-break marker the print CSS honors. */
 export function renderAnnexes(g: ChangeGraph, schema: StoreChange[]): string {
   const out: string[] = [];
   out.push("## Annex A - Application dependency graph", "");

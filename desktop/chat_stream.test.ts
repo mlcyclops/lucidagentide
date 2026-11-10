@@ -193,7 +193,7 @@ describe("ndjsonStream observer lifetime", () => {
 
   // This platform integration deliberately exercises the real heartbeat interval; fake
   // timers would not verify a live Response remains readable while execution is pending.
-  test("a quiet live connection sends a real heartbeat and can still be cancelled", async () => {
+  test("a quiet live connection sends a real heartbeat and can still be canceled", async () => {
     const execution = Promise.withResolvers<void>();
     const response = ndjsonStream("heartbeat", async () => { await execution.promise; });
     const reader = response.body!.getReader();
@@ -236,7 +236,7 @@ describe("ndjsonStream observer lifetime", () => {
       if (mode === "request abort") request.abort();
       else {
         // This is Bun fetch's CLIENT body, not ndjsonStream's server-side body (whose
-        // cancel hook is covered above). Cancelling the client reader alone need not
+        // cancel hook is covered above). Canceling the client reader alone need not
         // tear down the HTTP request; explicitly abort its transport as the caller must.
         const cancelled = reader.cancel();
         request.abort();

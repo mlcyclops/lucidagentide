@@ -3,7 +3,7 @@
 
 // Three self-contained local mini games for the agent arcade. Same discipline as mascot_game.ts:
 // the engines are pure (no DOM, no clock, no Math.random), determinism comes from an integer seed
-// carried inside the state, and every painter is nearest-neighbour fillRect at integer scale.
+// carried inside the state, and every painter is nearest-neighbor fillRect at integer scale.
 
 import { MASCOT_H, MASCOT_THEMES, MASCOT_W, paintFrame } from './mascot.ts';
 import type { ArcadeScorePort } from './mascot_game.ts';
@@ -364,7 +364,7 @@ export function createStackState(width = 640, seed = 1): StackState {
   };
 }
 
-/** Edge triggered drop. Overhang is trimmed away for good; a centred drop inside STACK_PERFECT_PX
+/** Edge triggered drop. Overhang is trimmed away for good; a centered drop inside STACK_PERFECT_PX
  *  buys a little width back. Missing the tower outright ends the run. */
 export function dropStackBlock(state: StackState): StackState {
   if (state.phase !== 'playing') return state;
@@ -476,7 +476,7 @@ export function paintShurikenRange(ctx: CanvasRenderingContext2D, state: Shurike
       ctx.fillRect(x + 10, y - 1 - burst, 3, burst * 2);
       continue;
     }
-    // Concentric rings, painted largest first: outline, steel, white, neon centre.
+    // Concentric rings, painted largest first: outline, steel, white, neon center.
     ctx.fillStyle = palette.k!;
     ctx.fillRect(x, y - 11, 22, 22);
     ctx.fillStyle = palette.M!;
@@ -604,7 +604,7 @@ export function paintStackTower(ctx: CanvasRenderingContext2D, state: StackState
     ctx.fillStyle = palette.G!;
     ctx.fillRect(sliderX, sliderY, sliderW, 2);
     ctx.fillRect(sliderX + Math.floor(sliderW / 2) - 1, sliderY + 4, 2, 5);
-    // Drop guide: a dotted plumb line straight down from the crate centre.
+    // Drop guide: a dotted plumb line straight down from the crate center.
     const guideX = sliderX + Math.floor(sliderW / 2);
     for (let y = sliderY + STACK_BLOCK_HEIGHT + 2; y < rowY(state.tower.length - 1); y += 6) {
       ctx.fillRect(guideX, y, 1, 3);
@@ -923,7 +923,7 @@ const KATA_SPEC: MiniGameSpec<KataState> = {
 const STACK_SPEC: MiniGameSpec<StackState> = {
   id: 'stack',
   name: 'Rooftop stack',
-  blurb: 'Drop each dojo crate with Space or Ctrl; overhang is trimmed away for good, and a perfect centre pays a bonus and hands some width back.',
+  blurb: 'Drop each dojo crate with Space or Ctrl; overhang is trimmed away for good, and a perfect center pays a bonus and hands some width back.',
   ariaLabel: 'Rooftop stack. Space or Control drops the sliding crate onto the tower.',
   readyText: 'Drop the crate when it lines up with the tower.',
   buttons: [{ action: 'drop', label: 'Drop', aria: 'Drop the sliding crate' }],

@@ -164,7 +164,7 @@ test("one turn at a time per lane - an overlapping prompt is refused, not crosse
   live.cancel(r.lane!.id); // the fake answers session/cancel with stopReason cancelled
   await firstTurn;
   const st = await live.status();
-  expect(st.lanes[0]!.status).toBe("awaiting-input"); // a cancelled turn is not an error
+  expect(st.lanes[0]!.status).toBe("awaiting-input"); // a canceled turn is not an error
 }, TIMEOUT);
 
 // P-FLEET.L8: the transcript holds SETTLED turns only, so a composer attached mid-turn used to land on the

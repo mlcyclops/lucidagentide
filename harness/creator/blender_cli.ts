@@ -31,9 +31,9 @@
 // The suite proves that the argv CONSTRUCTED is the argv intended and that the classifier maps given text to
 // the right verdict. It does NOT prove that real Blender accepts this argv, that its real stdout matches the
 // samples classified against, or that an exit code treated as success is one. The argument order, the
-// `Saved: '<path>'` line, and the `Error:` marker come from Blender's documented command-line behaviour;
+// `Saved: '<path>'` line, and the `Error:` marker come from Blender's documented command-line behavior;
 // they are NOT fixtures captured from a run. Whoever first points this at an installed Blender should
-// re-check all three. The classifier is deliberately conservative for exactly that reason: an unrecognised
+// re-check all three. The classifier is deliberately conservative for exactly that reason: an unrecognized
 // line is never read as success, and exit 0 with nothing saved is a failure rather than a shrug.
 
 // ── the request ─────────────────────────────────────────────────────────────

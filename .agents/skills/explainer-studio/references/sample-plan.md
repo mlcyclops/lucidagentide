@@ -87,21 +87,21 @@ Chapter switching tweens camera and gears; under reduced motion it cuts.
 |------|-------|
 | Real | Meshing gears share one tooth size; turns are inversely proportional to tooth counts; each mesh reverses direction; an idler does not change the ratio; compound stages multiply. |
 | Calculated | Every ratio, every turn count, and the direction arrows, from `math.js`. |
-| Drawn to illustrate | The tooth shape (a rounded trapezoid, not a true involute profile), colours, the glowing meeting point, the crank speed. |
+| Drawn to illustrate | The tooth shape (a rounded trapezoid, not a true involute profile), colors, the glowing meeting point, the crank speed. |
 | Simplified | No friction, no backlash, no tooth wear; turning effort (torque) is mentioned only as "the slower gear pushes harder" in the older level and is not computed. |
 
 ## 9. Look
 
 - Dusk workshop: warm horizon (`#f2a65a`) under a deep blue zenith (`#1d2b53`); a wooden bench on a dark
   ground disc that fades into fog.
-- Accent colours: driver red `#e4572e`, driven teal `#17bebb`, idler amber `#ffc914`, compound pair violet
-  `#7b5ea7`. The same colour names the gear in its label and its readout.
+- Accent colors: driver red `#e4572e`, driven teal `#17bebb`, idler amber `#ffc914`, compound pair violet
+  `#7b5ea7`. The same color names the gear in its label and its readout.
 - Light: hemisphere fill plus one warm shadowed key light from the upper left.
 - Type: the system UI font, tabular numerals for readouts.
 
 ## 10. Accessibility
 
-- Every control is a real button or labelled range; full keyboard path in section 6; visible focus ring.
+- Every control is a real button or labeled range; full keyboard path in section 6; visible focus ring.
 - `aria-live="polite"` on the main readout ("Teal gear: 1/2 turn, turning the opposite way").
 - Canvas text alternative updated with each change.
 - Reduced motion: no cinematic orbit, no auto-turning on chapter entry, tweens become cuts; the Calm switch

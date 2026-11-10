@@ -47,7 +47,7 @@ const resourced = resolveMigrationsDir("harness/kb", BUNFS, {
   execPath: "/app/bin/lucid-engine",
   resources: "/res",
 });
-check(resourced === join("/res", "repo", "harness", "kb", "migrations"), "LUCID_RESOURCES (threaded by main.ts when packaged) is honoured");
+check(resourced === join("/res", "repo", "harness", "kb", "migrations"), "LUCID_RESOURCES (threaded by main.ts when packaged) is honored");
 check(KB_MIGRATIONS_DIR === join(REPO, "harness", "kb", "migrations"), "the live KB constant still points at the repo from source");
 
 console.log("\n[2] the SHIPPED runtime: a compiled binary opens a real KG store");

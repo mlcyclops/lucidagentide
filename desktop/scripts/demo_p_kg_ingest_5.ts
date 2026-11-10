@@ -81,8 +81,8 @@ const summary = await importConversations(store, cleanScanner, convos, {
 });
 try { if (existsSync(dbPath)) rmSync(dbPath); } catch { /* ignore */ }
 if (extracted.length !== 1) fail(`abort must stop mid-conversation, but ${extracted.length} messages were extracted`);
-if (!summary.cancelled) fail("the summary must report the run as cancelled");
-if (summary.blocked !== 0) fail("a cancelled message must not be miscounted as a gate block");
+if (!summary.cancelled) fail("the summary must report the run as canceled");
+if (summary.blocked !== 0) fail("a canceled message must not be miscounted as a gate block");
 ok("Stop mid-conversation: messages 2 and 3 never run (was: cancel only seen at conversation boundaries)");
 if (!signalReachedExtractor) fail("the extractor must receive the abort signal");
 ok("the same signal reaches the extractor, so an in-flight model call is interrupted, not awaited");
@@ -105,7 +105,7 @@ ok('first Stop: job marked "Stopping", giving the run a grace period to unwind c
 cancelImport(first.jobId); // the run is wedged and ignores the abort: force it
 const stopped = importJobStatus(first.jobId);
 if (stopped?.state !== "cancelled") fail("a second Stop must force the job to a terminal state");
-ok("second Stop: FORCE-cancelled (a wedged run can never trap the UI on \"Stopping...\" forever)");
+ok("second Stop: FORCE-canceled (a wedged run can never trap the UI on \"Stopping...\" forever)");
 
 const retry = startImport({ run: async () => ({ ok: true, learned: 0 }) });
 if (!retry.ok) fail("a new import must be allowed after a force-cancel");

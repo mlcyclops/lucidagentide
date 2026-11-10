@@ -4,7 +4,7 @@
 // desktop/tour.test.ts — P-ROLE.1/.1b (ADR-0088/0089): the role catalog + first-run walkthrough.
 //
 // Pure surface only: the step catalog, per-role selection, the coach-card markup, and the
-// role-normalisation fold. No DOM, no on-disk settings touched.
+// role-normalization fold. No DOM, no on-disk settings touched.
 
 import { describe, expect, test } from "bun:test";
 import { ROLE_META, TOUR_STEPS, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole } from "./renderer/tour.ts";

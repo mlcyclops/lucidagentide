@@ -294,7 +294,7 @@ describe("trainer.html palette blocks", () => {
 
   test("covers the same theme ids as theme.ts", () => {
     // The trainer is a same-origin iframe with its OWN document: styles.css cannot reach it (and
-    // must not, the class names collide), so it duplicates the token contract for the 36 colours
+    // must not, the class names collide), so it duplicates the token contract for the 36 colors
     // it uses. If an id is added to THEMES and not here, the trainer silently stays dark.
     expect(pal.map((p) => p.id).sort()).toEqual(THEMES.map((t) => t.id).sort());
   });

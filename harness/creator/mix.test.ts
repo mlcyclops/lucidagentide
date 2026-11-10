@@ -155,13 +155,13 @@ describe("the gain stages", () => {
     expect(clipFadeGain(c, 101)).toBe(0);            // past the end contributes nothing
   });
 
-  test("pan is equal power: centre is not louder than the edges", () => {
+  test("pan is equal power: center is not louder than the edges", () => {
     expect(panGains(0, 1)).toEqual([1]);
-    const centre = panGains(0, 2);
-    expect(centre[0]).toBeCloseTo(Math.SQRT1_2, 6);
-    expect(centre[1]).toBeCloseTo(Math.SQRT1_2, 6);
+    const center = panGains(0, 2);
+    expect(center[0]).toBeCloseTo(Math.SQRT1_2, 6);
+    expect(center[1]).toBeCloseTo(Math.SQRT1_2, 6);
     const power = (g: number[]): number => g[0]! ** 2 + g[1]! ** 2;
-    expect(power(centre)).toBeCloseTo(1, 6);
+    expect(power(center)).toBeCloseTo(1, 6);
     expect(power(panGains(-1, 2))).toBeCloseTo(1, 6);
     expect(power(panGains(1, 2))).toBeCloseTo(1, 6);
     expect(panGains(-1, 2)[1]).toBeCloseTo(0, 6);

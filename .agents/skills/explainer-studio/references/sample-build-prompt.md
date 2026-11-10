@@ -34,7 +34,7 @@ Ratios show as `a : b` in lowest terms, turns as mixed numbers. No float ever re
 self-tests in `?selftest` mode and under `bun test`.
 
 **Console.** Chapter tabs 1 to 5, steppers for each tooth count (8 to 60), idler toggle, Space turns the
-driver one full turn, live readouts in each gear's accent colour, Play it again, the `?` shortcut list,
+driver one full turn, live readouts in each gear's accent color, Play it again, the `?` shortcut list,
 toggleable labels (`L`), a Calm switch, and a short themed loading line in your own words.
 
 **Write-up drawer** (`W`): How it works, The idea, Worked examples (exact arithmetic), What's real, What's
@@ -42,7 +42,7 @@ calculated, What's drawn to illustrate, What's simplified, Controls, and the sim
 plan's honesty table; say the tooth shape is simplified and is not a true involute.
 
 **Accessibility and performance.** Full keyboard operation, visible focus, `aria-live` readout, canvas text
-alternative, reduced motion honoured. Pixel ratio clamped to 2, render on demand, loop paused when hidden or
+alternative, reduced motion honored. Pixel ratio clamped to 2, render on demand, loop paused when hidden or
 off screen, under 40 draw calls, total transfer under 400 KB.
 
 **Capture mode.** `?capture=1` replaces the clock and exposes `window.__explainer` with `step(dt)`,

@@ -246,7 +246,7 @@ async function busyRun(label: string, fn: () => Promise<void>): Promise<void> {
   try {
     await fn();
   } catch (e) {
-    if (e instanceof DesignCancelled || st.cancelRequested) setStatus(`${label}: cancelled.`);
+    if (e instanceof DesignCancelled || st.cancelRequested) setStatus(`${label}: canceled.`);
     else if (e instanceof DesignBudgetError) setStatus(`${label}: the tile budget is full (${Math.round(e.budget / 1048576)} MB). Close other documents or work smaller.`, "error");
     else setStatus(`${label}: ${e instanceof Error ? e.message : String(e)}`, "error");
   } finally {
@@ -1371,8 +1371,8 @@ async function decodePng(b64: string, w: number, h: number, what: string): Promi
   return { width: w, height: h, rgba };
 }
 
-/** A returned mask (8-bit L from dgx-vision, or any PNG colour type) as one coverage value per pixel.
- *  Decoded by design_png.ts in the worker, never through canvas, so no RGBA stride or colour handling
+/** A returned mask (8-bit L from dgx-vision, or any PNG color type) as one coverage value per pixel.
+ *  Decoded by design_png.ts in the worker, never through canvas, so no RGBA stride or color handling
  *  can touch the samples; the size must match exactly. */
 async function decodeMaskPng(b64: string, w: number, h: number, what: string): Promise<MaskData> {
   const bytes = b64ToBytes(b64);

@@ -11,7 +11,7 @@
 // Nyquist so a downsample does not alias, with 32 taps per side scaled by the decimation ratio so the
 // transition band stays the same width in Hz. No dependency, no WASM, no worker.
 
-/** Taps on each side of the centre at unity ratio; scaled by from/to when downsampling. */
+/** Taps on each side of the center at unity ratio; scaled by from/to when downsampling. */
 const HALF_TAPS = 32;
 /** Kernel table resolution (points per input sample); the table is linearly interpolated. */
 const KERNEL_RES = 128;

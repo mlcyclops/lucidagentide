@@ -97,7 +97,7 @@ export function formatOpenfilmJob(body: unknown, waited: number | null = null): 
     );
   }
   if (state === "refused") return refusal(error, `OpenFilm ${kind} job ${jobId} was refused.`);
-  if (state === "cancelled") return text(`OpenFilm ${kind} job ${jobId} was cancelled${error ? `: ${error}` : ""}. Nothing was produced; start a new one only if the user still wants it.`, true);
+  if (state === "cancelled") return text(`OpenFilm ${kind} job ${jobId} was canceled${error ? `: ${error}` : ""}. Nothing was produced; start a new one only if the user still wants it.`, true);
 
   if (kind === "render") {
     if (state === "failed") return text(`OpenFilm render job ${jobId} failed: ${error || "no error text"}. No video was added to the Creator library. Run openfilm_look and fix every error before rendering again.`, true);

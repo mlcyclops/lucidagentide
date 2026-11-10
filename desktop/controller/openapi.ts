@@ -262,7 +262,7 @@ export function controllerOpenApi(limits: ControllerApiLimits): Schema {
         post: {
           operationId: "closeLane",
           tags: ["lanes"],
-          summary: laneOps("End one of the pairing's lanes (ADR-0500): an open parked ask is denied, a running turn cancelled, the lane removed, and its slot frees."),
+          summary: laneOps("End one of the pairing's lanes (ADR-0500): an open parked ask is denied, a running turn canceled, the lane removed, and its slot frees."),
           description: "A remote lane's review worktree is committed onto its branch and removed; the branch is kept (ADR-0502).",
           security: CONTROLLER,
           requestBody: jsonBody({ laneId: ref("LaneId") }, ["laneId"], "The lane."),

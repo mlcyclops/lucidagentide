@@ -223,7 +223,7 @@ These files are **not** redacted. Search them for `sk-`, `Bearer`, `token` and `
 - 🏷️ **Showback-ready** - built for teams that need to attribute AI costs to projects or users
 - 🪪 **AI-authored code ledger** - a tamper-evident count of *which model wrote which lines*, per repo and identity (authorship attribution, not just git activity)
 
-The Main GUI ledger records only live, successfully completed write and edit calls from the Main session, not shared utility sessions. Edit counts come from omp's applied diff, including every `replace_all` occurrence; preview truncation does not reduce them. Failed, rejected, quarantined, cancelled, and replayed calls add no sample. Writes retain the existing convention: all written content lines are additions. Existing historical samples are not rewritten. See ADR-0451 and `make demo-P-LOC.5`.
+The Main GUI ledger records only live, successfully completed write and edit calls from the Main session, not shared utility sessions. Edit counts come from omp's applied diff, including every `replace_all` occurrence; preview truncation does not reduce them. Failed, rejected, quarantined, canceled, and replayed calls add no sample. Writes retain the existing convention: all written content lines are additions. Existing historical samples are not rewritten. See ADR-0451 and `make demo-P-LOC.5`.
 
 > **🏛️ Enterprise rollups (premium, coming soon).** A separately-licensed add-on rolls this showback
 > up into executive **BI dashboards** - Power BI (GCC-High), QuickSight, Looker, SharePoint, or an
@@ -328,7 +328,7 @@ The Main GUI ledger records only live, successfully completed write and edit cal
 
 **Session switching (#460, cases 1-5)**
 
-- **🛑 "Stop it and switch" really stops the loop** - a forced session switch now stops a running `/goal` loop and waits for it to unwind before the session changes. Before, the maker turn was cancelled but the loop lived on inside the newly loaded session. *(#507, case 1)*
+- **🛑 "Stop it and switch" really stops the loop** - a forced session switch now stops a running `/goal` loop and waits for it to unwind before the session changes. Before, the maker turn was canceled but the loop lived on inside the newly loaded session. *(#507, case 1)*
 - **🤖 Agent automations no longer block a switch** - the "an automation is running" blocker fires only for automations that own Main's session (goal-kind). Agent-kind automations run in their own child pipeline and no longer refuse a switch. *(#509, case 2)*
 - **📡 The engine's answer decides what the thread shows** - a busy `409` between turns reloads the holder's transcript, a held `409` attaches to the holding spoke per the [ADR-0404](DECISIONS.md) registry, and no answer is never treated as a completed switch. *(#510, cases 3 and 4)*
 - **⏱ A late preflight cannot win** - clicking session A then B quickly can no longer let A's late preflight land on top of B: `openSession` takes a generation number before any await and discards superseded plans. *(#511, case 5)*
@@ -386,10 +386,10 @@ The Main GUI ledger records only live, successfully completed write and edit cal
   withheld, so it never narrates raw source at you.
 - **🎛️ Your engine, your voice.** ElevenLabs (your account's cloned voices), ChatGPT/OpenAI, or **Kokoro
   running offline on your own machine** - air-gap safe, no key, nothing leaves the box. The picker sits in the
-  composer, remembers a voice **per engine**, and greys out anything that isn't actually configured with the
+  composer, remembers a voice **per engine**, and grays out anything that isn't actually configured with the
   reason why.
-- **📻 A spectrum analyser, not an animation.** The bars are driven by the real audio through a Web Audio
-  analyser - log-spaced bands, fast attack and slow release, hanging peak caps. Mini in the prompt bar, or
+- **📻 A spectrum analyzer, not an animation.** The bars are driven by the real audio through a Web Audio
+  analyzer - log-spaced bands, fast attack and slow release, hanging peak caps. Mini in the prompt bar, or
   popped out as a draggable, snapping, self-remembering panel.
 - **🧠 Spoken answers are written for speech.** In conversation mode the agent gets standing, per-turn
   guidance to lead with the answer in two or three plain sentences - no markdown, no paths, no code read aloud -
@@ -547,11 +547,11 @@ way, whichever model you choose.
 | **U.S. frontier** | **Anthropic** (Claude), **OpenAI** (ChatGPT), **Google** (Gemini), **xAI** (Grok), **Perplexity** (Sonar) | OAuth subscription **or** API key |
 | **Government gateway** | **AskSage** - accredited proxy to Claude, GPT, and Gemini inside GovCloud, with scanned personas + dataset-grounded RAG | API key |
 | **Local / self-hosted** | **Ollama**, **llama.cpp**, **vLLM**, or any OpenAI-compatible endpoint (incl. one reached over a VPN) - run U.S. open-weight model families like **Gemma**, **Llama**, **gpt-oss**, and **Phi** on your own hardware, fully offline | None, or your endpoint's key (OS-encrypted vault) |
-| **More providers** _(third-party / non-U.S. / custom, behind an acknowledgement)_ | **OpenRouter**, **DeepSeek**, **Moonshot / Kimi**, **Groq** | API key |
+| **More providers** _(third-party / non-U.S. / custom, behind an acknowledgment)_ | **OpenRouter**, **DeepSeek**, **Moonshot / Kimi**, **Groq** | API key |
 
 <sub>The catalog is **driven by omp** - as the runtime adds providers and models in future builds, they appear
 in the picker automatically. Non-U.S. / restricted-origin models stay hidden behind a data-sovereignty
-acknowledgement, and an enterprise policy can pin the org to the gov gateway only.</sub>
+acknowledgment, and an enterprise policy can pin the org to the gov gateway only.</sub>
 
 ---
 
@@ -873,7 +873,7 @@ editor and the trainer stage.
 |:--|:--|:--|
 | **Lucid Dark** *(default)* | dark | The original: near-black ground, magenta accent, cyan for data. |
 | **Midnight** | dark | Deep indigo, cooler and quieter than the default. |
-| **Slate** | dark | Neutral grey with the colour turned right down. |
+| **Slate** | dark | Neutral gray with the color turned right down. |
 | **Ember** | dark | Warm amber and red over a roasted dark ground. |
 | **High Contrast** | dark | Pure black with maximum-contrast text for low vision. |
 | **Lucid Light** | light | The same brand hues on a light neutral ground. |

@@ -97,6 +97,6 @@ export type ChatEvent =
   // error is an ordinary failure, so it gets its own name and its own (red, but distinct) chip.
   | { type: "lane-error"; message: string }
   // P-HEALTH.1: the harness acted on this session BY ITSELF - it probed a silent turn with the canned
-  // status ask, or cancelled and resumed a wedged one in place. Surfaced so a self-heal is visible work
+  // status ask, or canceled and resumed a wedged one in place. Surfaced so a self-heal is visible work
   // rather than an unexplained gap, and so the token meter can count what the harness spent.
   | { type: "health"; action: "probe" | "recover"; reason: string; /** P-HEALTH.3: the run did not continue on its own, so the user has to act. Only then does the chat keep a note. */ needsUser?: boolean };

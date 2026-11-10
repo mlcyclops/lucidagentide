@@ -75,7 +75,7 @@ export interface TourStep {
   icon: string;
   title: string;
   body: string;
-  /** Optional emphasised one-liner (rendered as the "tip" chip). */
+  /** Optional emphasized one-liner (rendered as the "tip" chip). */
   tip?: string;
 }
 

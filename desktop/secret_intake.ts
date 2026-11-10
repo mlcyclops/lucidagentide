@@ -200,7 +200,7 @@ export class SecretIntake {
     return { id: view.id };
   }
 
-  /** The answer to an opened request, held up to `holdMs`: the result once the user answered, cancelled
+  /** The answer to an opened request, held up to `holdMs`: the result once the user answered, canceled
    *  or the deadline passed, or null while it is still waiting (the agent polls again). The tool polls in
    *  short holds so no single HTTP request outlives an idle or fetch timeout. */
   async wait(id: string, holdMs: number): Promise<SecretIntakeResult | null> {
@@ -224,7 +224,7 @@ export class SecretIntake {
    *  the request pending so the dialog can show it. */
   submit(id: string, value: string, via: SecretVia, confirmReplace = false): SubmitOutcome {
     const p = this.#pending.get(id);
-    if (!p) return { ok: false, code: "not-found", error: "this request is no longer waiting (it was answered, cancelled or timed out)" };
+    if (!p) return { ok: false, code: "not-found", error: "this request is no longer waiting (it was answered, canceled or timed out)" };
     const clean = normalizeSecretValue(value, p.request.kind);
     if (!clean) return { ok: false, code: "empty", error: "nothing was captured" };
     // Without an env name the ref is a free `secret:<label>` slot: re-derive it so an entry written
@@ -253,7 +253,7 @@ export class SecretIntake {
 
   /** The user said no (or closed the dialog). */
   cancel(id: string): boolean {
-    return this.#finish(id, { stored: false, reason: "cancelled" }, "block", "the user cancelled");
+    return this.#finish(id, { stored: false, reason: "cancelled" }, "block", "the user canceled");
   }
 
   /** The agent's call was stopped (the user pressed Stop): close the dialog's request unanswered. */

@@ -488,7 +488,7 @@ export type ChatEvent =
   | { type: "waiting"; wait: WaitView }
   // P-JEV.2 (ADR-0377): one typed judgment the omp child answered during this turn (question, answers with
   // probabilities, which backend answered, latency, error). Self-reported by the judgment extension, which
-  // awaits the desktop's acknowledgement before omp acts on the answer, so this always precedes `done`.
+  // awaits the desktop's acknowledgment before omp acts on the answer, so this always precedes `done`.
   | { type: "judgment"; report: JudgmentReport }
   // P-IMG.1 (ADR-0208): a tool result carried image content (generated image, chart, rendered figure). The
   // images are validated + capped in extractToolImages before this event is emitted; the UI renders them
@@ -522,7 +522,7 @@ export type ChatEvent =
   // typically an overloaded/oversubscribed gov model. The UI surfaces it + recommends a fallback model.
   | { type: "no-response"; model: string; stopReason?: string; reason?: string }
   // P-HEALTH.1: the harness acted on this session BY ITSELF - it probed a silent turn with the canned
-  // status ask, or cancelled and resumed a wedged one in place. Kept in parity with the renderer's
+  // status ask, or canceled and resumed a wedged one in place. Kept in parity with the renderer's
   // chat_events.ts union (the two are mirrored at this one boundary, like every other variant here).
   | { type: "health"; action: "probe" | "recover"; reason: string; /** P-HEALTH.3: the run did not continue on its own, so the user has to act. Only then does the chat keep a note. */ needsUser?: boolean }
   | { type: "done"; text?: string }; // text = the authoritative full assistant reply (reconciles lossy streaming)
@@ -1189,7 +1189,7 @@ class Backend {
             // security block is the gate's own stderr signal, handled in onStderr below.
             // P-TOOLFAIL.1 (ADR-0093): surface omp's ACTUAL status + message instead of a flat
             // "tool call rejected" — distinguish a tool that ran-and-errored ("failed") from one that
-            // never ran ("rejected": refused / unavailable / cancelled), so the neutral chip says WHY
+            // never ran ("rejected": refused / unavailable / canceled), so the neutral chip says WHY
             // and is never mistaken for a security denial. (toolFailureReason is pure; see tool_failure.ts.)
             // P-TOOLFAIL.2 (ADR-0163): also carry the COMMAND the call attempted + the full error
             // text, so the renderer's collapsed toolbox badge can expand into an honest per-action view.
@@ -2758,7 +2758,7 @@ class Backend {
   /** A dead master is forgotten and start() replaces it, resuming the session it held. Everything that
    *  belonged to the dead child goes with it: parked permissions are denied (fail-closed) and open calls
    *  can never settle. No kill here: the child is already gone, and a pid it no longer owns is never
-   *  signalled. */
+   *  signaled. */
   private dropDeadMaster(): void {
     this.acp = null;
     this.starting = null;
@@ -2855,7 +2855,7 @@ class Backend {
     const wasDead = this.acp?.isDead ?? false;
     try {
       console.error("[recover] recovery of the master agent process requested from the window");
-      const reason = "Recovery was requested from the window, so the harness is cancelling and respawning the agent process in place.";
+      const reason = "Recovery was requested from the window, so the harness is canceling and respawning the agent process in place.";
       this.lastHealth = { action: "recover", reason, at: now };
       try { this.listener?.({ type: "health", action: "recover", reason }); } catch { /* stream gone */ }
       if (this.recoveryTurn?.running) {

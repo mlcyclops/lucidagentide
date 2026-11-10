@@ -6,7 +6,7 @@
 // The chat-history import wedged at "0/500 messages" because `request()` had no timeout and never
 // rejected when the omp child died: the promise for `initialize` (or `session/new`) simply stayed
 // pending forever, and every later call queued behind it. These tests pin the four ways a request can
-// fail to get an answer - dead child, mute child, unspawnable binary, caller cancelled - and assert each
+// fail to get an answer - dead child, mute child, unspawnable binary, caller canceled - and assert each
 // one REJECTS. A regression here reintroduces an unkillable import, so treat a failure as stop-the-line.
 
 import { expect, test } from "bun:test";
@@ -85,14 +85,14 @@ test("an aborted signal rejects the in-flight request", async () => {
   const ctl = new AbortController();
   const pending = acp.request("session/prompt", {}, { signal: ctl.signal });
   ctl.abort();
-  await expect(pending).rejects.toThrow(/cancelled/i);
+  await expect(pending).rejects.toThrow(/canceled/i);
   acp.stop();
 });
 
 test("an already-aborted signal rejects without sending anything", async () => {
   const acp = client(ECHO);
   acp.start();
-  await expect(acp.request("session/prompt", {}, { signal: AbortSignal.abort() })).rejects.toThrow(/cancelled/i);
+  await expect(acp.request("session/prompt", {}, { signal: AbortSignal.abort() })).rejects.toThrow(/canceled/i);
   acp.stop();
 });
 

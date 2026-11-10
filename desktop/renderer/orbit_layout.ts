@@ -93,7 +93,7 @@ export function orbitSlots(count: number, w: number, h: number, opts?: OrbitOpts
 export function spokeGlance(l: { status: LaneStatus; turns: number; queued: readonly unknown[]; waiting?: { on: { name: string } }; progress?: { estimate: { percent: number | null }; liveness?: { state: string; label: string; flatMs?: number } } }, showEstimate: boolean): string {
   const q = l.queued.length > 0 ? ` \u00b7 ${l.queued.length} queued` : "";
   // P-WAIT.1: a lane whose write waits for another worker's file says whom it waits for; a running one
-  // with history shows how far along it probably is (labelled as the estimate it is). P-PROGRESS.3: only
+  // with history shows how far along it probably is (labeled as the estimate it is). P-PROGRESS.3: only
   // when the user opted into the experimental estimate.
   if (l.waiting && l.status === "working") return `waiting for ${l.waiting.on.name}${q}`;
   // P-STUCK-SHOW.1 (ADR-0519): the evidence verdict on an open call outranks "working". The node is 172 px

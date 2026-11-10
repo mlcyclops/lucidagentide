@@ -85,7 +85,7 @@ async function clipboardImageFiles(): Promise<File[]> {
 }
 
 /** Dispatch a real, cancelable `paste` carrying `files` on `field`. Returns true when a handler consumed
- *  it (called preventDefault), exactly the contract the composer and lane paste listeners already honour
+ *  it (called preventDefault), exactly the contract the composer and lane paste listeners already honor
  *  for Ctrl+V. */
 function replayPaste(field: HTMLElement, files: File[]): boolean {
   const dt = new DataTransfer();

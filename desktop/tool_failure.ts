@@ -5,7 +5,7 @@
 // tool_call_update into an HONEST, specific chip reason.
 //
 // omp fires one signal for two very different things: a tool that RAN and errored
-// (status "failed"), and a tool that DID NOT run — refused, unavailable, or cancelled
+// (status "failed"), and a tool that DID NOT run: refused, unavailable, or canceled
 // (status "rejected"). The old chip flattened both to a flat "tool call rejected", which
 // read as a security/permission DENIAL even when the real cause was "no such tool" or a
 // plain runtime error. (See ADR-0093: a turn whose browser-open + js-execute calls showed
@@ -25,7 +25,7 @@
 
 /** A failed/rejected tool_call_update reduced to what the neutral chip needs. */
 export interface ToolFailure {
-  /** true = the tool ran and errored ("failed"); false = it never ran ("rejected": refused / unavailable / cancelled). */
+  /** true = the tool ran and errored ("failed"); false = it never ran ("rejected": refused / unavailable / canceled). */
   didRun: boolean;
   /** The chip text — omp's own message when present, else a clear, non-accusatory fallback. */
   reason: string;

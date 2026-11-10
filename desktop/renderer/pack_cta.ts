@@ -14,10 +14,10 @@
 // 2. THE ROUND TRIP. Clicking "Get pack" while signed out opened the browser and then told the user to
 //    "click the pack again". That is the checkout asking the user to remember the checkout. Worse, the
 //    toast never said WHY an account was needed, so the request read as a data grab rather than as the
-//    licence lookup it is.
+//    license lookup it is.
 //
 // The interesting constraint is that `lucid://auth` is SHARED. The same deep link finishes a LUCID Remote
-// sign-in and a Google Drive authorisation. So "resume the purchase on sign-in" must not mean "any future
+// sign-in and a Google Drive authorization. So "resume the purchase on sign-in" must not mean "any future
 // sign-in, forever, starts a Stripe checkout for a pack somebody once clicked". Hence the expiry below: a
 // pending checkout is a short-lived statement of intent, not a standing order.
 
@@ -44,7 +44,7 @@ export interface PendingCheckout {
 }
 
 /** How long a click stays a pending purchase. Long enough for a real sign-in with a password manager and a
- *  second factor; far too short to still be pending the next time the user authorises Google Drive. */
+ *  second factor; far too short to still be pending the next time the user authorizes Google Drive. */
 export const PENDING_CHECKOUT_MAX_AGE_MS = 15 * 60_000;
 
 /** May this pending checkout be resumed by the sign-in that just landed?
@@ -68,10 +68,10 @@ export function shouldResumeCheckout(p: PendingCheckout | null | undefined, now:
  *  - `blocked`: sign-in could not start at all (unconfigured build, no sign-in URL). */
 export type PackSignInState = "pending" | "resumed" | "blocked";
 
-/** The sentence that was missing. An account is not a gate for its own sake: it is where the licence lives,
+/** The sentence that was missing. An account is not a gate for its own sake: it is where the license lives,
  *  which is also the answer to "why should I sign in to buy a file". */
-export const LICENCE_RATIONALE =
-  "Your account holds the pack licence, so it installs on every machine you sign in to.";
+export const LICENSE_RATIONALE =
+  "Your account holds the pack license, so it installs on every machine you sign in to.";
 
 /** Context-aware toast copy for each point in the round trip. Names the PACK, because "Sign in" with no
  *  object is what made the old prompt read like an unrelated account wall. */
@@ -80,7 +80,7 @@ export function packSignInCopy(state: PackSignInState, packName: string, reason?
   if (state === "pending") {
     return {
       title: `Finish signing in for ${name}`,
-      desc: `${LICENCE_RATIONALE} Come back when you are done and this picks up on its own, no need to find the row again.`,
+      desc: `${LICENSE_RATIONALE} Come back when you are done and this picks up on its own, no need to find the row again.`,
     };
   }
   if (state === "resumed") {
@@ -89,6 +89,6 @@ export function packSignInCopy(state: PackSignInState, packName: string, reason?
   const why = reason?.trim();
   return {
     title: `Sign in to get ${name}`,
-    desc: why ? `${LICENCE_RATIONALE} Sign-in is unavailable in this build: ${why}.` : LICENCE_RATIONALE,
+    desc: why ? `${LICENSE_RATIONALE} Sign-in is unavailable in this build: ${why}.` : LICENSE_RATIONALE,
   };
 }

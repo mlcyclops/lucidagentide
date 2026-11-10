@@ -74,7 +74,7 @@ export async function kbShow(idOrSlug: string, kgId?: string): Promise<KbPageFul
   const pages = await (await kbStore(kgId)).listPages();
   const p = pages.find((x) => x.page_id === idOrSlug || x.slug === idOrSlug);
   if (!p) return undefined;
-  // DuckDB returns TIMESTAMP columns (created_at/updated_at) as BigInt — not JSON-serialisable, and the
+  // DuckDB returns TIMESTAMP columns (created_at/updated_at) as BigInt, not JSON-serializable, and the
   // viewer doesn't need them; return only the JSON-safe, string-coerced fields the KG viewer renders.
   return {
     page_id: String(p.page_id),
@@ -87,7 +87,7 @@ export async function kbShow(idOrSlug: string, kgId?: string): Promise<KbPageFul
   };
 }
 
-/** A short body excerpt centred on the first match of `q` (already lower-cased). */
+/** A short body excerpt centered on the first match of `q` (already lower-cased). */
 export function snippetAround(body: string, q: string, radius = 60): string {
   const flat = body.replace(/\s+/g, " ").trim();
   const at = flat.toLowerCase().indexOf(q);

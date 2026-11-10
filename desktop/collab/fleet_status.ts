@@ -10,8 +10,8 @@
 // PURE, DOM-free, import-free (a `LaneStatus`-shaped string is all it knows), so the PWA bundle can import
 // it without dragging in a renderer module, and every rule is unit-testable.
 //
-// The COLOURS are deliberately NOT here: both surfaces key them off the same `lane-<status>` class through
-// the same CSS custom properties (`--lane` / `--lane-dim`), which is what stops a colour edit in one
+// The COLORS are deliberately NOT here: both surfaces key them off the same `lane-<status>` class through
+// the same CSS custom properties (`--lane` / `--lane-dim`), which is what stops a color edit in one
 // stylesheet from silently diverging from the other.
 
 /** Attention-first order: what needs a human, then what is running, then what has settled. Every roll-up
@@ -101,7 +101,7 @@ export interface LaneRollup {
  * An UNKNOWN status (a newer host reporting a state this build has no copy for) is NOT dropped: it sorts
  * after every known state, keeps its raw name as its wording, and still contributes its count. Losing a
  * lane from the roll-up because we did not recognize its state would silently undercount work in flight.
- * It never counts as attention, though - only a state we can actually reason about earns the alarm colour.
+ * It never counts as attention, though - only a state we can actually reason about earns the alarm color.
  */
 export function laneRollup(lanes: ReadonlyArray<{ status: string; name?: string; id?: string }>): LaneRollup {
   // Dynamic grouping keyed by whatever the host sent, so a Map (not a Record): unknown keys, insertion

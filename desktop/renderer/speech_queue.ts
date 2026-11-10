@@ -7,7 +7,7 @@
 //
 // Auto-speak synthesizes a reply one sentence at a time so audio starts after sentence one instead of after
 // the whole answer. That turns read-aloud into a concurrency problem, and the failure modes are all audible:
-// two clips playing over each other, sentence three arriving before sentence two, a cancelled turn still
+// two clips playing over each other, sentence three arriving before sentence two, a canceled turn still
 // talking over the next one, or a leaked blob URL per sentence. This class owns exactly that, and nothing
 // else - no DOM, no fetch, no Audio. Everything external is a dep, so the interleaving is testable
 // (harness/scripts/demo_pvoice2.ts) instead of only observable by ear.
@@ -18,7 +18,7 @@
 //     between sentences, few enough that stopping hasn't already paid for clips nobody will hear.
 //   · stop() is absolute: queued text is dropped, every open handle is closed exactly once, and work already
 //     in flight is discarded when it lands (a generation counter, not a flag, so a slow request from a
-//     cancelled turn can't speak over the new one).
+//     canceled turn can't speak over the new one).
 
 export interface SpeechSynthResult {
   audioB64: string | null;

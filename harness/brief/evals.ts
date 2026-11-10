@@ -528,7 +528,7 @@ const NO_SIGNAL_REASON: Partial<Record<EvalMetricKey, string>> = {
 };
 
 /** P-EVAL.4: resolve one row to the number the report should SHOW plus where that number came from. The
- *  derived substitute wins over a measurement that has no signal, because a labelled proxy tells a reader
+ *  derived substitute wins over a measurement that has no signal, because a labeled proxy tells a reader
  *  more than the word `needs_signal`; a measurement with a signal always wins. Falls back to inferring the
  *  source from the tiers when `sources` is absent (an EvalMetrics from before P-EVAL.4). */
 function resolveMetric(m: EvalMetrics, key: EvalMetricKey): { shown: Metric; source: MetricSource } {

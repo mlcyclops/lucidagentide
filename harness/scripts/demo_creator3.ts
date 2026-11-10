@@ -171,9 +171,9 @@ console.log("2) a render's outputs are read by KEY and by extension, so a video 
 
 console.log("3) a server's content-type is a claim; the magic bytes are the evidence");
 {
-  check("PNG bytes are recognised as PNG", sniffMime(PNG) === "image/png", String(sniffMime(PNG)));
-  check("WEBM bytes are recognised by their EBML header", sniffMime(WEBM) === "video/webm", String(sniffMime(WEBM)));
-  check("GLB bytes are recognised by the glTF magic", sniffMime(GLB) === "model/gltf-binary", String(sniffMime(GLB)));
+  check("PNG bytes are recognized as PNG", sniffMime(PNG) === "image/png", String(sniffMime(PNG)));
+  check("WEBM bytes are recognized by their EBML header", sniffMime(WEBM) === "video/webm", String(sniffMime(WEBM)));
+  check("GLB bytes are recognized by the glTF magic", sniffMime(GLB) === "model/gltf-binary", String(sniffMime(GLB)));
   check("unknown bytes return null rather than a guess", sniffMime(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])) === null);
   const lie = mimeMismatch("video/mp4", PNG);
   check("PNG bytes CLAIMED as video/mp4 produce a refusal sentence naming both", !!lie && lie.includes("video/mp4"), lie ?? "no refusal");
@@ -334,10 +334,10 @@ console.log("7) deterministic frame capture: the same plan renders the same fram
   check("and the verdict admits it cannot tell a static scene from one ignoring the clock",
     stuck.verdict.includes("static") && stuck.verdict.includes("wall clock") && stuck.verdict.includes("cannot tell"),
     stuck.verdict.slice(0, 120));
-  // The synthetic ids above prove the audit's ARITHMETIC and nothing more: they bypass the rasteriser and
+  // The synthetic ids above prove the audit's ARITHMETIC and nothing more: they bypass the rasterizer and
   // the readback entirely. This version drives real pixels through the real fingerprint, so it also catches
-  // the CAPTURE PIPELINE going nondeterministic: a readback that varies run to run, a rasteriser leaving
-  // uninitialised memory in the buffer, or a fingerprint carrying state between calls. Neither version
+  // the CAPTURE PIPELINE going nondeterministic: a readback that varies run to run, a rasterizer leaving
+  // uninitialized memory in the buffer, or a fingerprint carrying state between calls. Neither version
   // guards the digest algorithm itself (a frozen scene agrees under any deterministic hash); that is pinned
   // at unit level in frame_capture.test.ts against published FNV vectors.
   const frozen = tenFrames.frames.map(() => frameFingerprint(sceneFrame(0), 4, 4));
@@ -649,7 +649,7 @@ console.log("14) CREATOR-3b: the Preview-panel capture harness, and the referenc
 {
   // The driver is the real product module. The transport is scripted here because the other end is a
   // sandboxed iframe: what a headless run CAN prove is that the driver judges every reply correctly, that
-  // its caps match the bridge's, and that the shipped reference scene actually honours the contract.
+  // its caps match the bridge's, and that the shipped reference scene actually honors the contract.
   const plan = framePlan({ durationMs: 2000, fps: 30 });
   if (!plan.ok) stop("the panel's default plan is buildable", plan.error);
   check("the panel's default pass is 60 frames, inside the bridge's 64-frame cap",
@@ -710,7 +710,7 @@ console.log("14) CREATOR-3b: the Preview-panel capture harness, and the referenc
     !refusedPass.ok && refusedPass.error.includes("Frame 4") && refusedPass.fingerprints.length === 0,
     refusedPass.error.slice(0, 70));
 
-  // The shipped reference scene has to honour the contract it documents, or it teaches the wrong thing.
+  // The shipped reference scene has to honor the contract it documents, or it teaches the wrong thing.
   const scenePath = join(import.meta.dir, "..", "..", "desktop", "scripts", "capture_scene_example.html");
   const sceneHtml = readFileSync(scenePath, "utf8");
   const scriptAt = sceneHtml.lastIndexOf("<script>");

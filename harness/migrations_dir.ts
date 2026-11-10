@@ -18,7 +18,7 @@
 //   2. `$LUCID_RESOURCES/repo/<repoRelDir>/migrations` — Electron threads LUCID_RESOURCES when packaged;
 //   3. `<execPath>/../../<repoRelDir>/migrations` — the compiled engine ships at <repo>/bin/lucid-engine,
 //      and the packaged tree carries the repo (with its .sql files) beside it.
-// When none exist the first candidate is returned, so the failure still names a path a human recognises
+// When none exist the first candidate is returned, so the failure still names a path a human recognizes
 // rather than a virtual one.
 
 import { existsSync } from "node:fs";

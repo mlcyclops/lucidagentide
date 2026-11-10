@@ -85,7 +85,7 @@ export function wsUrlFor(baseUrl: string, clientId: string): string {
 
 // ── frame decoding ───────────────────────────────────────────────────────────
 
-/** Every event this module can produce. Closed set: an unrecognised frame becomes `unknown`, never a guess
+/** Every event this module can produce. Closed set: an unrecognized frame becomes `unknown`, never a guess
  *  and never a throw. */
 export type ComfyEvent =
   | { readonly type: "status"; readonly queueRemaining: number | null }
@@ -136,7 +136,7 @@ function decodeBinaryFrame(raw: Uint8Array): ComfyEvent {
   // `slice` copies, so holding the preview does not pin the whole frame buffer alive.
   const bytes = raw.slice(8);
   // The format byte is the server's claim about its own payload. If the magic bytes contradict it, the frame
-  // is malformed, not a preview: hand the renderer nothing rather than a mislabelled image.
+  // is malformed, not a preview: hand the renderer nothing rather than a mislabeled image.
   if (mimeMismatch(mime, bytes)) return unknownEvent("binary:1:mime-mismatch");
   return { type: "preview", mime, bytes };
 }
@@ -249,7 +249,7 @@ export function applyComfyEvent(state: StreamState, ev: ComfyEvent): StreamState
   if (isTerminal(state.status)) return state;
   // Binary frames carry no prompt id, so on a shared socket this counter is a floor, not a census.
   if (ev.type === "preview") return { ...state, previewCount: state.previewCount + 1 };
-  // A queue depth is about the server, and an unrecognised frame is about nothing we can act on.
+  // A queue depth is about the server, and an unrecognized frame is about nothing we can act on.
   if (ev.type === "status" || ev.type === "unknown") return state;
   if (!state.promptId || ev.promptId !== state.promptId) return state;
   switch (ev.type) {
@@ -305,8 +305,8 @@ export interface ComfyOutputRef {
   /** The output key this entry was listed under, kept verbatim for provenance. */
   readonly key: string;
   readonly kind: MediaKind;
-  /** Empty when the filename named no format we recognise. An empty mime is a REQUEST to sniff the bytes,
-   *  never a licence to store the file under a guess. */
+  /** Empty when the filename named no format we recognize. An empty mime is a REQUEST to sniff the bytes,
+   *  never a license to store the file under a guess. */
   readonly mime: string;
 }
 
@@ -419,7 +419,7 @@ export function parseHistoryOutputs(raw: unknown, promptId: string): readonly Co
 
 // ── magic bytes ──────────────────────────────────────────────────────────────
 
-/** Name a payload from its first bytes, or null when nothing recognisable is there. This is the only opinion
+/** Name a payload from its first bytes, or null when nothing recognizable is there. This is the only opinion
  *  about a file's type that is not the remote server's. */
 export function sniffMime(bytes: Uint8Array): string | null {
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;

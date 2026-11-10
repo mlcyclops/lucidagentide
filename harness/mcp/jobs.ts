@@ -155,7 +155,7 @@ export class JobTable {
   }
 
   /** running -> done, storing the post-gate envelope. Terminal states are STICKY: finishing an already
-   *  terminal job (e.g. a cancelled one whose remote turn later settled) is a no-op. */
+   *  terminal job (e.g. a canceled one whose remote turn later settled) is a no-op. */
   finish(id: string, envelope: string): void {
     const j = this.#jobs.get(id);
     if (!j || isTerminal(j.state)) return;

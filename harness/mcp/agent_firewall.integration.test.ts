@@ -85,7 +85,7 @@ test("the remote's session/request_permission is DENIED over the real transport"
     const r = await firewallFor(c).handlePrompt("do something dangerous");
     const text = r.content[0]?.text ?? "";
     expect(r.isError).toBeFalsy();
-    // The fake agent echoes the outcome our client returned; we always deny → cancelled.
+    // The fake agent echoes the outcome our client returned; we always deny → "cancelled".
     expect(text).toContain("cancelled");
   } finally { c.stop(); }
 }, TIMEOUT);

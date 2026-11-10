@@ -189,7 +189,7 @@ export function orbitLayout(nodes: ReadonlyArray<OrbitInNode>, edges: ReadonlyAr
   const groupSpan = new Map<string, Map<string, { a0: number; span: number }>>();
   for (const [k, m] of groupCount) {
     const ks = kindSpan.get(k)!;
-    const pad = Math.min(ks.span * 0.08, 0.12); // a visible gap between neighbouring kinds
+    const pad = Math.min(ks.span * 0.08, 0.12); // a visible gap between neighboring kinds
     groupSpan.set(k, spans(m, ks.a0 + pad / 2, Math.max(0, ks.span - pad)));
   }
 

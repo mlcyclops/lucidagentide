@@ -24,7 +24,7 @@ test("done is 100% and final", () => {
   expect(r).toEqual({ pct: 100, line: "Done - learned 7 facts from 10 messages", done: true, stalled: false });
 });
 
-test("cancelled keeps the partial facts", () => {
+test("canceled keeps the partial facts", () => {
   const r = formatImportLine({ state: "cancelled", messages: 4, totalMessages: 10, learned: 2, blocked: 0 });
   expect(r.done).toBe(true);
   expect(r.line).toContain("kept 2 facts");
@@ -36,7 +36,7 @@ test("running but silent past STALL_MS reports the stall", () => {
   const now = 1_000_000;
   const r = formatImportLine({ state: "running", messages: 0, totalMessages: 500, learned: 0, blocked: 0, updatedAt: now - STALL_MS, now });
   expect(r.stalled).toBe(true);
-  expect(r.done).toBe(false); // still cancellable, not a terminal state
+  expect(r.done).toBe(false); // still cancelable, not a terminal state
   expect(r.line).toContain("No response from the model");
   expect(r.line).toContain("0/500 messages");
 });

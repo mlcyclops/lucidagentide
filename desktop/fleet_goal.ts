@@ -96,7 +96,7 @@ export class FleetGoal {
     };
   }
 
-  /** Set the standing goal. AOS-1: exactly one active goal, so an open one must be cancelled first. */
+  /** Set the standing goal. AOS-1: exactly one active goal, so an open one must be canceled first. */
   set(raw: unknown): Reply {
     if (this.#goal && (this.#goal.status === "active" || this.#goal.status === "blocked")) return { ok: false, error: "A fleet goal is already open. Cancel it before setting a new one." };
     const v = validateGoalInput(raw);

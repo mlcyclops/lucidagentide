@@ -288,10 +288,10 @@ describe("the mix-format indicator reflects what the SERVER reported", () => {
   });
 
   test("pan words say plainly that a mono mix has nowhere to place a pan", () => {
-    expect(panWords(0, 2)).toBe("centre");
+    expect(panWords(0, 2)).toBe("center");
     expect(panWords(-0.5, 2)).toBe("50% left");
     expect(panWords(1, 2)).toBe("100% right");
-    expect(panWords(-1, 1)).toBe("centre (a mono mix has nowhere to place a pan)");
+    expect(panWords(-1, 1)).toBe("center (a mono mix has nowhere to place a pan)");
   });
 
   test("a level is the number actually applied, and zero is silent rather than -Infinity dB", () => {
@@ -482,7 +482,7 @@ describe("the pane keeps its honesty in the markup", () => {
     expect(mixerDurationLabel(null)).toBe("Nothing on the mix yet.");
   });
 
-  test("the report is rendered line for line, so nothing measured is summarised away", () => {
+  test("the report is rendered line for line, so nothing measured is summarized away", () => {
     const html = creatorMixerHtml(view({ report: ok({ peak: 0, clipped: 0 }) }));
     for (const line of reportLines(ok({ peak: 0, clipped: 0 }))) expect(html).toContain(line);
     expect(html).not.toContain("Infinity");

@@ -543,7 +543,7 @@ function startCardDrag(e: PointerEvent, head: HTMLElement, fromGrip: boolean): v
   };
   const move = (m: Event): void => {
     const pm = m as PointerEvent;
-    // The card only LIFTS after the pointer has actually travelled: a header click (which lands a
+    // The card only LIFTS after the pointer has actually traveled: a header click (which lands a
     // sub-pixel pointermove on most hardware) must not flash a placeholder or count as a reorder.
     if (!moved) {
       if (Math.abs(pm.clientX - ox) < DRAG_SLOP && Math.abs(pm.clientY - oy) < DRAG_SLOP) return;
@@ -650,7 +650,7 @@ export function mountFleetPill(): void {
  *  names the lanes - enough to keep working in the main window and still know a lane is blocked on you.
  *  Order, wording, and counting come from the shared `laneRollup` (P-PWA-FLEET.2), so this pill and the
  *  phone's collapsed fleet bar can never disagree; the dots reuse the cards' own `lane-<status>` classes,
- *  so neither can drift from the panel's colours either.
+ *  so neither can drift from the panel's colors either.
  *  The markup is compared before it is written, because an identical repaint every 2.5s is precisely what
  *  made the pulse animation stutter. */
 function paintPill(): void {
@@ -1003,7 +1003,7 @@ function paintFrame(run: LaneRun): void {
       health.textContent = h.action === "probe" ? "probed" : "recovered";
       health.title = h.action === "probe"
         ? `The harness asked this spoke for a status because it went quiet: ${h.reason}`
-        : `The harness cancelled and resumed this spoke in place: ${h.reason}`;
+        : `The harness canceled and resumed this spoke in place: ${h.reason}`;
     }
   }
   paintProgress(run); // P-PROGRESS.1

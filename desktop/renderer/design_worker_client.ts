@@ -15,7 +15,7 @@
 import { runDesignTask, type DesignTask, type DesignTaskResult } from "./design_tasks.ts";
 
 export class DesignCancelled extends Error {
-  constructor() { super("Cancelled."); this.name = "DesignCancelled"; }
+  constructor() { super("Canceled."); this.name = "DesignCancelled"; }
 }
 
 export const DESIGN_WORKER_URL = "/design_worker.js";
@@ -30,7 +30,7 @@ export class DesignWorkerClient {
   private seq = 0;
   private pending = new Map<number, Pending>();
   private waiting: Waiting[] = [];
-  private cancelledInline = new Set<number>();
+  private canceledInline = new Set<number>();
 
   mode(): "worker" | "main-thread" { return this.inline ? "main-thread" : "worker"; }
   busy(): boolean { return this.pending.size > 0; }
@@ -97,7 +97,7 @@ export class DesignWorkerClient {
   private runInline(id: number, task: DesignTask): void {
     // Yield once so the UI paints the busy state before the main thread is taken.
     setTimeout(() => {
-      if (this.cancelledInline.delete(id)) return;
+      if (this.canceledInline.delete(id)) return;
       const p = this.pending.get(id);
       if (!p) return;
       runDesignTask(task, (f, note) => p.onProgress?.(f, note ?? "")).then(
@@ -126,7 +126,7 @@ export class DesignWorkerClient {
     this.worker = null;
     this.ready = false;
     this.waiting = [];
-    for (const [id, p] of this.pending) { if (this.inline) this.cancelledInline.add(id); p.reject(new DesignCancelled()); }
+    for (const [id, p] of this.pending) { if (this.inline) this.canceledInline.add(id); p.reject(new DesignCancelled()); }
     this.pending.clear();
   }
 }

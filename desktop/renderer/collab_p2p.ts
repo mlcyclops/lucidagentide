@@ -10,7 +10,7 @@
 // (P-COLLAB.16), and exposes a tiny surface (`teeEvent`/`teeUserTurn`, status, teardown) that app.ts drives.
 //
 // The relay is still used for SIGNALING + as the automatic fallback (PreferP2PTransport), so P2P degrades to
-// exactly the relay behaviour when a DataChannel can't be formed. One host + one guest at a time, mirroring the
+// exactly the relay behavior when a DataChannel can't be formed. One host + one guest at a time, mirroring the
 // backend's single-share model. Fail-closed: no authorized relay endpoint -> no share (same as the relay path).
 
 import { webrtcHostCoordinator, webrtcGuestCoordinator } from "../collab/webrtc_coordinator.ts";

@@ -5,7 +5,7 @@
 // policy, tested WITHOUT a DOM. What can break here without a browser: a script that no longer parses
 // as one JS expression (main evaluates each as `code`), a page label that escapes its literal and
 // becomes code, a freshness reference that compares the wrong keys, and runtime narrowing that lets an
-// off-shape action or page through. Behaviour inside a live page is covered by the smoke run, not here.
+// off-shape action or page through. Behavior inside a live page is covered by the smoke run, not here.
 
 import { describe, expect, test } from "bun:test";
 import {

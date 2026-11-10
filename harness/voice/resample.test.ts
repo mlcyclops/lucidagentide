@@ -78,7 +78,7 @@ test("48 kHz stereo pcm16 -> mono float averages the channels and scales to [-1,
   expect(mono[0]).toBeCloseTo(0, 6);
   expect(mono[1]).toBeCloseTo(32767 / 32768, 6);
   expect(mono[2]).toBeCloseTo(-0.5, 6);
-  // A view into a larger buffer (a WAV data chunk) honours the byte offset.
+  // A view into a larger buffer (a WAV data chunk) honors the byte offset.
   const framed = new Uint8Array(bytes.buffer, 4, 8);
   expect(Array.from(pcm16ToMonoFloat(framed, 2))).toEqual([mono[1]!, mono[2]!]);
   // Mono passes samples through.

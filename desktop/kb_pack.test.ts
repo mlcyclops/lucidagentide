@@ -118,7 +118,7 @@ describe("kb_pack — export → gated import", () => {
 
 // P-PACKSCAN.1 (ADR-0368): a BROKEN SCANNER and a POISONED PACK must not look the same.
 //
-// The shipped behaviour reported a missing sidecar directory as `page "doc-01-summary" flagged:
+// The shipped behavior reported a missing sidecar directory as `page "doc-01-summary" flagged:
 // fail-closed: scan unavailable (scanner not running)`, i.e. it accused a valid 189-page pack of
 // carrying an attack. The pack was fine; the packaged engine could not find its own scanner. Both cases
 // still REFUSE (invariant 3 is untouched); only the stage, the message, and whose problem it is differ.

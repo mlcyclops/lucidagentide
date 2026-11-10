@@ -147,9 +147,9 @@ import { speakable } from "../../harness/brief/engineering_update.ts"; // P-REPO
 import { TTS_PROVIDERS } from "../../harness/voice/catalog.ts"; // P-VOICE.2 (ADR-0247): every engine's selectable voices
 import { takeSpeechChunks } from "../../harness/voice/speech_stream.ts"; // P-VOICE.2: sentence-at-a-time live read-aloud
 import { distillTopic, nextThinkingCue } from "../../harness/voice/thinking_cues.ts"; // P-VOICE.6/.7 (ADR-0249/0257): spoken "still working" cues, active-listening openers, thinking snapshots
-import { SpeechQueue } from "./speech_queue.ts"; // P-VOICE.2: ordered, cancellable playback of those sentences
+import { SpeechQueue } from "./speech_queue.ts"; // P-VOICE.2: ordered, cancelable playback of those sentences
 import { applyReadAloudPatch, touchesReadAloud } from "../voice_flags.ts"; // P-VOICE.8 (ADR-0400): one rule for the read-aloud flags, shared with the engine
-import { VoiceEqualizer } from "./voice_eq.ts"; // P-VOICE.4 (ADR-0248): the glowing spectrum analyser
+import { VoiceEqualizer } from "./voice_eq.ts"; // P-VOICE.4 (ADR-0248): the glowing spectrum analyzer
 import type { AuthStatus, ElevenVoiceView, JudgmentView, KeyVaultStatus, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
 import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type GraphEdge, type StoreChange } from "../../harness/brief/change_graph.ts"; // P-REPORT.8: report annex graphs
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
@@ -410,8 +410,8 @@ function buildShell(): void {
       <label class="agent-tier-control" id="agentTierControl" hidden title="Regular: Opus/Luna class. Max: the strongest available model for this provider; API billing may apply."><span>Agent</span><select id="agentTier" aria-label="LUCID Agent model tier"><option value="regular">Regular</option><option value="max">Max</option></select></label>
       <button class="ctool tb-chip" id="tbStage" hidden data-tip="Enter the stage|Rails away, immersive LUCID Agent view. Esc steps back out.">${icon("spark", 14)}<span>Stage</span></button>
       <div class="win-ctrls">
-        <button id="winMin" data-tip="Minimise">${icon("minus", 15)}</button>
-        <button id="winMax" data-tip="Maximise">${icon("square", 13)}</button>
+        <button id="winMin" data-tip="Minimize">${icon("minus", 15)}</button>
+        <button id="winMax" data-tip="Maximize">${icon("square", 13)}</button>
         <button id="winClose" class="close" data-tip="Close">${icon("close", 14)}</button>
       </div>
     </div>
@@ -510,7 +510,7 @@ function buildShell(): void {
             <!-- P-FLEET.L5: the reviewable timeline - every session (chats, lanes, ingest) across every workspace. -->
             <button class="ctool ctool-icon" id="ctTimeline" data-tip="Timeline - review any session|Every conversation this machine has had - master chats, fleet spokes, imports - on one chronological, reviewable surface.">${icon("clock", 15)}</button>
             <!-- Visible only while a reply is being spoken: a live indicator with a one-click stop. -->
-            <!-- P-VOICE.4 (ADR-0248): a live spectrum analyser of the agent's actual voice - segmented LEDs
+            <!-- P-VOICE.4 (ADR-0248): a live spectrum analyzer of the agent's actual voice - segmented LEDs
                  with hanging peak caps. Pops out into a draggable "LUCID Agent [Voice]" panel. -->
             <div class="ct-speak" id="ctSpeak" hidden><span class="ct-speak-dot"></span><canvas class="ct-eq" id="ctEqCanvas" aria-hidden="true"></canvas><span class="ct-speak-lbl" id="ctSpeakLbl">Speaking</span><button class="ct-speak-stop" id="ctEqPop" aria-label="Pop the voice panel out" data-tip="Pop out|Float the equalizer as a panel you can drag anywhere in LUCID">${icon("expand", 12)}</button><button class="ct-speak-stop" id="ctSpeakStop" aria-label="Stop reading aloud" data-tip="Stop reading">${icon("close", 12)}</button></div>
           </div>
@@ -2483,7 +2483,7 @@ async function send(): Promise<void> {
     return;
   }
   // P-CMD.1: a user-authored SKILL-mode "/" command ACTIVATES its body as a persistent instruction (no turn
-  // sent) — same behaviour as a bundled skill. Handle it before we open an assistant node.
+  // sent): same behavior as a bundled skill. Handle it before we open an assistant node.
   const cmdTok = caps.slashCommands ? /^\/([a-z][a-z0-9-]{0,31})\b/i.exec(text)?.[1]?.toLowerCase() : undefined;
   if (cmdTok && !state.streaming) {
     const uc = state.userCommands.find((c) => c.name === cmdTok);
@@ -2771,7 +2771,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     // The per-turn OUTPUT count. (Tokens/s was removed - it read as noise on the done line.)
     tpsEl.textContent = out > 0 ? `· ${fmtNum(out)} tokens out` : "";
     // The CONTEXT figure (window fill + turn cost) genuinely includes the prompt -
-    // labelled "context" so it's never mistaken for the per-turn output above. Cost
+    // labeled "context" so it's never mistaken for the per-turn output above. Cost
     // is shown to the cent ($0.00) - the sub-cent precision read as noise.
     ($(".hud-meta", hud) as HTMLElement).textContent = tok ? `· ${fmtNum(tok)} context · ~$${cost.toFixed(2)}` : "";
     paintProgress(); // P-PROGRESS.1: the ages move every second between engine samples
@@ -2819,7 +2819,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   // one, so the report's breakdown reads "read x14, edit x6, bash x3 (1 failed)" instead of the
   // "other x23" it had degraded to. The coarse ACP class rides along as `kind` so the server can group by
   // name and still fall back to class, and so a turn with no self-reports is honestly coarse rather than
-  // silently mislabelled. `ok` is only set when a report actually arrived: absent stays "not observed",
+  // silently mislabeled. `ok` is only set when a report actually arrived: absent stays "not observed",
   // never an assumed pass.
   const buildEvalTurn = (): EvalReportTurn => ({
     runId: `run-${t0}`,
@@ -2863,7 +2863,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   // read-aloud cursor, so auto-speak can never trail one reply behind.
   speech.stop(); speechCursor = 0; speechFedAt = 0;
   // P-VOICE.6/.7: hands-free, a long think is DEAD AIR - indistinguishable from a crash. Open with a varied,
-  // active-listening acknowledgement (restating the ask when it can be restated faithfully), then speak
+  // active-listening acknowledgment (restating the ask when it can be restated faithfully), then speak
   // snapshots of the live reasoning while the user waits - until the answer itself starts talking.
   if (!adopted) startThinkingCues({ toolActive: () => sawTool, topic: distillTopic(text), thinking: () => thinkBuf });
   const onEvent = (e: ChatEvent) => {
@@ -3338,7 +3338,7 @@ async function stopTurn(): Promise<void> {
   if (!state.streaming) return;
   stopHoldsQueue = true; renderQueued();
   if (activeTurnView) { await activeTurnView.stop(); return; }
-  // P-GOAL.2: a running /goal loop is cancelled at the LOOP level (halt iterations + abort the turn);
+  // P-GOAL.2: a running /goal loop is canceled at the LOOP level (halt iterations + abort the turn);
   // an ordinary turn just cancels the turn.
   try { await (goalLoopRunning ? bridge.cancelGoal() : bridge.cancelChat()); } catch { /* best-effort; it still settles */ }
 }
@@ -5173,7 +5173,7 @@ function secProviders(auth: import("./bridge.ts").AuthStatus | null): string {
   const signoutAll = `<div class="prov-signout"><button class="btn-mini danger" data-oauth-logout-all title="Delete EVERY saved OAuth login - all providers, including stale or orphaned ones. Your API keys are kept. Use this to fully reset provider logins (e.g. after reinstalling).">${icon("trash", 12)} Sign out of all providers</button></div>`;
   // P-PROV.2: a prominent jump to the dedicated Provider Hub (every provider omp offers, with logos, in one
   // discoverable popup) so providers aren't buried in this collapsed card.
-  const hubBtn = `<div class="prov-hubopen"><button class="btn-mini ok" id="openProvHub">${icon("expand", 12)} Open the Provider Hub</button><span class="set-note">All providers in one place - native logos, OAuth or API key, open-weight &amp; regional behind an acknowledgement.</span></div>`;
+  const hubBtn = `<div class="prov-hubopen"><button class="btn-mini ok" id="openProvHub">${icon("expand", 12)} Open the Provider Hub</button><span class="set-note">All providers in one place - native logos, OAuth or API key, open-weight &amp; regional behind an acknowledgment.</span></div>`;
   return setCard("providers", "Providers", "U.S. frontier \u00b7 key or OAuth", hubBtn + keyCustodyNote(auth?.vault) + providerQuotaNotice() + cards + signoutAll, true);
 }
 // P-VAULT-KEYS.1 (ADR-0472): one quiet line on where saved keys live. `.set-note` is block prose (icon
@@ -5203,7 +5203,7 @@ function secSovereignty(): string {
 }
 function secAsksage(a: typeof state.asksage, datasets: string[] | null): string {
   // ADR-0068 (P-ENT.1): an enterprise policy can LOCK model routing (force gov-gateway-only). When
-  // locked, the toggle is forced-on, disabled, and labelled "Managed by <org>" (mirrors attribution).
+  // locked, the toggle is forced-on, disabled, and labeled "Managed by <org>" (mirrors attribution).
   const locked = !!state.managed?.locks?.models;
   const org = esc(state.managed?.orgName || "your organization");
   const checked = locked || a?.only ? "checked" : "";
@@ -5674,7 +5674,7 @@ function openCredRotate(anchor: HTMLElement, ref: string): void {
       return;
     }
     close();
-    if (!r) return; // user cancelled the file dialog
+    if (!r) return; // user canceled the file dialog
     if (state.settingsOpen) hydrateWhitelist();
     showToast({ title: "Credential rotated", desc: `New secret stored (••••${esc(r.last4 ?? "")}); the reference is unchanged so the entry keeps working.`, timeout: 3600 });
   };
@@ -5778,7 +5778,7 @@ function secWorkingStatus(): string {
 // ellipsizing line (styles.css). Each `.theme-opt` wraps its label and blurb in their OWN elements, so
 // no raw text is ever a direct flex/grid child next to an inline tag.
 function themeTile(id: string, label: string, blurb: string, swatch: readonly string[], active: boolean): string {
-  // The swatch colours come from the THEMES registry (first-party literals), never from user input, but
+  // The swatch colors come from the THEMES registry (first-party literals), never from user input, but
   // they still go through esc() because they land in an inline style attribute.
   const chips = swatch.map((c) => `<i style="background:${esc(c)}"></i>`).join("");
   return `<button type="button" class="theme-opt${active ? " on" : ""}" data-theme-pick="${esc(id)}" aria-pressed="${active}">
@@ -5978,7 +5978,7 @@ function settingsShell(): string {
     setSkel("others", "More providers", "", true),
     setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
     setSkel("judgment", "Judgment", "None by default \u00b7 Jev \u00b7 your models", true), // P-JEV.1 (ADR-0374) + P-JEV.5
-    secTheme(), // P-THEME.1: light mode + colour themes (rendered from theme.ts + localStorage, no fetch wait)
+    secTheme(), // P-THEME.1: light mode + color themes (rendered from theme.ts + localStorage, no fetch wait)
     secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
     secChatScroll(), // P-SCROLL.1 (ADR-0405): where a spoke switch lands (rendered from localStorage)
     secWorkingStatus(), // P-PROGRESS.3 (ADR-0412): quiet footer by default; opt-in detail and estimate
@@ -8033,7 +8033,7 @@ function addMixerTrack(): void {
   if (!r.ok) { setMixerStatus(r.error, "error"); return; }
   state.creatorMixer = {
     ...v, addId: id, graph: r.graph,
-    status: `Added ${picked.title || picked.id} as ${r.trackId}, at unity gain and centred.`,
+    status: `Added ${picked.title || picked.id} as ${r.trackId}, at unity gain and centered.`,
     statusTone: "ok",
   };
   void renderCreatorStudio();
@@ -10530,7 +10530,7 @@ function addPreviewTextBox(p: { x: number; y: number }): void {
   inp.addEventListener("keydown", (e) => { if (e.key === "Enter") commit(); else if (e.key === "Escape") { done = true; inp.remove(); } });
   inp.addEventListener("blur", commit);
 }
-/** The markup tools dropdown: pen / rectangle / text, a colour row, Cursor (disarm), and Clear. */
+/** The markup tools dropdown: pen / rectangle / text, a color row, Cursor (disarm), and Clear. */
 function openMarkupMenu(anchor: HTMLElement): void {
   document.querySelector(".markup-pop")?.remove();
   const tool = (id: string, ic: string, label: string) => `<button class="mk-tool${drawTool === id ? " on" : ""}" data-tool="${id}">${icon(ic, 15)}<span>${label}</span></button>`;
@@ -12653,7 +12653,7 @@ async function refresh(): Promise<void> {
     // historical snapshot - so it shows what the next turn will actually use.
     state.lastOk = Date.now();
     // Security rail badge: number of items AWAITING YOUR REVIEW (quarantined/suspicious
-    // content the gate flagged). Hidden when there's nothing to act on; coloured by the
+    // content the gate flagged). Hidden when there's nothing to act on; colored by the
     // worst trust label in the queue (quarantined = red, suspicious-only = amber).
     // P-SECACK.1: reviewed rows no longer count as "awaiting" (same split securityHtml uses).
     const approvals = splitReviewed(sec?.approvals ?? [], sec?.acks?.artifacts ?? {}).active;
@@ -13231,11 +13231,11 @@ async function speakText(text: string, btn?: HTMLElement | null): Promise<void> 
   const clean = (text || "").split(/\n+/).map((ln) => speakable(ln)).filter(Boolean).join(" ").trim();
   if (!clean) return;
   const orig = btn?.innerHTML ?? "";
-  const labelled = /listen/i.test(orig); // the report's "Listen" button carries a label; message read-aloud is icon-only
+  const labeled = /listen/i.test(orig); // the report's "Listen" button carries a label; message read-aloud is icon-only
   if (btn) {
     speakOrig.set(btn, orig);
     btn.classList.add("busy");
-    btn.innerHTML = `${icon("refresh", 16, "spin")}${labelled ? " <span>Synthesizing…</span>" : ""}`;
+    btn.innerHTML = `${icon("refresh", 16, "spin")}${labeled ? " <span>Synthesizing…</span>" : ""}`;
   }
   const r = await bridge.speak(clean.slice(0, 8000)).catch(() => null);
   if (!r?.audioB64) {
@@ -13245,7 +13245,7 @@ async function speakText(text: string, btn?: HTMLElement | null): Promise<void> 
   }
   const url = audioBlobUrl(r.audioB64, r.mime);
   ttsAudio = new Audio(url);
-  if (btn) { btn.classList.remove("busy"); btn.classList.add("playing"); btn.innerHTML = `${icon("close", 16)}${labelled ? " <span>Stop</span>" : ""}`; }
+  if (btn) { btn.classList.remove("busy"); btn.classList.add("playing"); btn.innerHTML = `${icon("close", 16)}${labeled ? " <span>Stop</span>" : ""}`; }
   ttsAudio.onended = () => { restoreSpeakBtn(btn); URL.revokeObjectURL(url); ttsAudio = null; };
   ttsAudio.play().catch(() => { restoreSpeakBtn(btn); URL.revokeObjectURL(url); });
 }
@@ -13287,7 +13287,7 @@ const speech = new SpeechQueue({
     speechEl.onerror = done; // a decode failure must advance the queue, not wedge it
     speechAudioUrl = url;
     speechEl.src = url;
-    // ensure() builds the analyser graph on first use and resolves false when Web Audio can't run; either way
+    // ensure() builds the analyzer graph on first use and resolves false when Web Audio can't run; either way
     // we play. A visual is never worth muting the agent for.
     void voiceEq.ensure(speechEl).then(() => {
       if (speechAudioUrl !== url) { done(); return; } // stopped while the audio graph was starting
@@ -13438,7 +13438,7 @@ async function speakDigestTail(buf: string): Promise<void> {
 // beside a live Share dock without either one moving the other.
 const VOICE_DOCK_KEY = "lucid.voiceDock.v1";
 const VOICE_DOCK_OPEN_KEY = "lucid.voiceDock.open";
-/** Wide and short: an analyser is a letterbox, not a column. Clamped to the dock minimums on load. */
+/** Wide and short: an analyzer is a letterbox, not a column. Clamped to the dock minimums on load. */
 const voiceDockFallback = (vw: number, vh: number): DockShape => ({ x: Math.max(12, vw - 372 - 16), y: Math.max(12, vh - 260), w: 360, h: 210 });
 const dockStore = { get: (k: string) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* storage off */ } } };
 let voiceDock: HTMLElement | null = null;
@@ -13458,7 +13458,7 @@ function applyVoiceDockShape(): void {
 }
 
 /** Drag the header to move, the corner grip to resize. On release the shape snaps to a frame edge if it is
- *  close enough, is clamped fully on-screen, and is persisted - the same behaviour as the Share dock. */
+ *  close enough, is clamped fully on-screen, and is persisted - the same behavior as the Share dock. */
 function wireVoiceDockDrag(head: HTMLElement, grip: HTMLElement): void {
   const start = (e: PointerEvent, mode: "move" | "size"): void => {
     if (!voiceDockState || e.button !== 0) return;
@@ -13497,7 +13497,7 @@ function wireVoiceDockDrag(head: HTMLElement, grip: HTMLElement): void {
   grip.addEventListener("pointerdown", (e) => start(e, "size"));
 }
 
-/** Open (and build, once) the floating panel, mounting its canvas on the shared analyser. */
+/** Open (and build, once) the floating panel, mounting its canvas on the shared analyzer. */
 function openVoiceDock(): void {
   dockStore.set(VOICE_DOCK_OPEN_KEY, "1");
   if (voiceDock) { voiceDock.hidden = false; updateVoiceChip(); return; }
@@ -13561,7 +13561,7 @@ function updateVoiceChip(): void {
         : `Voice - read aloud \u00b7 ${hk}|Replies are spoken only when you click a reply's speaker button. ${hk} goes hands-free. Click to pick the engine and voice.`);
   }
   // P-VOICE.4: the strip carries the equalizer, so it is hidden whenever the panel is popped out - two live
-  // analysers of the same voice, six inches apart, is noise.
+  // analyzers of the same voice, six inches apart, is noise.
   const popped = voiceDockOpen();
   const live = $("#ctSpeak");
   if (live) live.hidden = !speech.busy || popped;
@@ -13593,9 +13593,9 @@ function voiceRowsHtml(data: VoiceListView | null): string {
   return `<div class="voice-grp">${icon("spark", 11)} Favorites</div>${fav.map(row).join("")}<div class="voice-grp">All voices</div>${rest.map(row).join("")}`;
 }
 
-/** One engine row. An engine that CANNOT speak (no key, nothing listening) renders greyed + non-selectable
+/** One engine row. An engine that CANNOT speak (no key, nothing listening) renders grayed + non-selectable
  *  with a tag, exactly like an unavailable model - picking it and discovering the failure one toast per reply
- *  is the behaviour this replaces. The reason is shown when it is the engine currently selected. */
+ *  is the behavior this replaces. The reason is shown when it is the engine currently selected. */
 function voiceEngineHtml(e: TtsEngineView, provider: string): string {
   const on = e.id === provider;
   const meta = e.cloud ? "cloud" : "offline";
@@ -13721,7 +13721,7 @@ async function openVoiceDropdown(anchor: HTMLElement): Promise<void> {
   });
   node.addEventListener("click", (e) => {
     const t = e.target as HTMLElement;
-    // A greyed engine explains itself rather than silently doing nothing on click.
+    // A grayed engine explains itself rather than silently doing nothing on click.
     const dead = (t.closest("[data-vunavail]") as HTMLElement | null)?.dataset.vunavail;
     if (dead) {
       const row = data?.engines?.find((x) => x.id === dead);
@@ -14547,7 +14547,7 @@ async function pushReportToKg(kind: string, rel: string, archived: boolean, anch
 // Rendered report markdown carries a duplicate title H1, an emoji outcome badge, and unrenderable
 // ASCII / mermaid "charts". In the viewer we (1) drop the doubled H1 (the modal header already shows
 // the title), (2) swap the emoji for a custom SVG badge, and (3) turn every ASCII scoreboard + mermaid
-// pie/bar block into a colour bar chart with a plasma-on-hover fill. Purely presentational - the stored
+// pie/bar block into a color bar chart with a plasma-on-hover fill. Purely presentational - the stored
 // markdown bytes are untouched (loop_report stays byte-stable / test-frozen).
 const OUTCOME_ICON: Record<string, { glyph: string; cls: string }> = {
   "✅": { glyph: "checkBadge", cls: "ro-met" },
@@ -14678,7 +14678,7 @@ function enhanceReportBody(body: HTMLElement | null, _title: string): void {
 
 // P-REPORT.5: print / save-as-PDF. The on-screen viewer is dark; paper wants the opposite. We drop the
 // already-enhanced report HTML (light-friendly classes: headings, tables, .rchart bars, .ro-badge) into a
-// hidden same-origin iframe with a SELF-CONTAINED light stylesheet (white bg, dark text, print-safe colours,
+// hidden same-origin iframe with a SELF-CONTAINED light stylesheet (white bg, dark text, print-safe colors,
 // no glows), then invoke the OS print dialog - which offers "Save as PDF" as well as any printer.
 const PRINT_CSS = `
   @page{margin:16mm}
@@ -17751,7 +17751,7 @@ function wire(): void {
     if (t.closest("#thirdPartyRelock")) {
       state.thirdPartyAck = !!(await bridge.setThirdPartyAck(false))?.acknowledged;
       fillSec("others", secOthers(state.auth));
-      showToast({ title: "Re-locked", desc: "Third-party providers are hidden again behind the acknowledgement.", actions: [{ label: "OK" }], timeout: 2600 });
+      showToast({ title: "Re-locked", desc: "Third-party providers are hidden again behind the acknowledgment.", actions: [{ label: "OK" }], timeout: 2600 });
       return;
     }
     if (t.closest("#voiceFav")) { // P-VOICE.1: star/unstar the selected voice (favorites list first)
@@ -17894,7 +17894,7 @@ function wire(): void {
       const rotRaw = (($("#wlAuthRotate", body) as HTMLInputElement)?.value ?? "").trim();
       const rotationIntervalDays = rotRaw ? Math.max(0, Math.floor(Number(rotRaw))) : undefined;
       const r = await bridge.credStoreFile({ kind, label, rotationIntervalDays });
-      if (!r) return; // user cancelled the native dialog
+      if (!r) return; // user canceled the native dialog
       if ("error" in r) { showToast({ title: "Couldn't store file", desc: r.error === "os-encryption-unavailable" ? "OS encryption isn't available on this machine, so the secret can't be stored securely (fail-closed)." : r.error, actions: [{ label: "OK" }], timeout: 5000 }); return; }
       wlPendingCred = { ref: r.ref, kind: r.kind, label: r.label };
       const btn = t.closest("#wlAuthFile") as HTMLElement; btn.innerHTML = `${icon("check", 12)} ${esc(r.label ?? "file")}`;
@@ -18443,7 +18443,7 @@ function wire(): void {
 }
 
 // ───────────────────────── mis-click guards (P-MASCOT.5) ─────────────────────────
-// Reported live: the titlebar and side-panel controls sit so close together that Maximise/Collapse
+// Reported live: the titlebar and side-panel controls sit so close together that Maximize/Collapse
 // overshoots land on Close/New session, both of which destroyed work with no confirmation and no undo.
 // The buttons are also spaced apart in styles.css; this is the second half of the fix. Nothing prompts
 // when there is nothing to lose, so the common case stays one click.
@@ -18465,7 +18465,7 @@ function confirmWindowClose(): void {
 
 async function confirmNewSession(): Promise<void> {
   // P-SWITCH.1 (ADR-0403): a working Main is not "a conversation that stays in history": its turn would be
-  // cancelled. Offer the spoke instead of the history reassurance below, which is only true when idle.
+  // canceled. Offer the spoke instead of the history reassurance below, which is only true when idle.
   const main = await bridge.sessionBusy().catch(() => null);
   if (main?.busy) { showSwitchSheet(null, main.busy, main.sessionId); return; }
   const dirty = $$("#thread .msg").length > 0 || (($("#input") as HTMLTextAreaElement | null)?.value ?? "").trim();
@@ -18556,8 +18556,8 @@ const palette = createPalette(() => {
     { id: "refresh", title: "Refresh dashboards now", icon: "refresh", run: () => refresh() },
     // Mis-click safety: the titlebar buttons are 30px wide and two pixels apart, so every window
     // action also has a keyboard route here. Close still runs the unsaved-work guard.
-    { id: "winmin", title: "Minimise window", icon: "minus", hint: "window", run: () => window.lucid?.win?.minimize() },
-    { id: "winmax", title: "Maximise / restore window", icon: "expand", hint: "window", run: () => window.lucid?.win?.toggleMaximize() },
+    { id: "winmin", title: "Minimize window", icon: "minus", hint: "window", run: () => window.lucid?.win?.minimize() },
+    { id: "winmax", title: "Maximize / restore window", icon: "expand", hint: "window", run: () => window.lucid?.win?.toggleMaximize() },
     { id: "winclose", title: "Close window", icon: "close", hint: "window", run: () => confirmWindowClose() },
     { id: "stage", title: state.immersive ? "Leave the immersive stage" : "Enter the immersive stage", icon: "spark", hint: "Esc exits", run: () => setImmersive(!state.immersive) },
   ];
@@ -18606,7 +18606,7 @@ function loadCachedConfig(): void {
 let configWarmTries = 0;
 let configWarmTimer: number | null = null; // the single scheduled re-poll (one chain at a time)
 // P-MODEL.2: once per launch, land on the model the user should actually be on. The order is a strict
-// preference ladder, and every rung is there because the previous behaviour got it wrong:
+// preference ladder, and every rung is there because the previous behavior got it wrong:
 //
 //   1. chosenModel  - an EXPLICIT picker click. A deliberate choice is never re-litigated.
 //   2. lastModel    - the model the COMPOSER last ran on. This rung is the fix for the reported bug.
@@ -18913,7 +18913,7 @@ async function applyConfig(configId: string, value: string, opts: { system?: boo
 
 const isAsksage = (v: string) => /asksage/i.test(v);
 // Models present in the catalog but NOT currently selectable. Keyed by short id; the value is the
-// reason shown (greyed row + hover banner). (ADR-0029 P-IDE.1b/1d)
+// reason shown (grayed row + hover banner). (ADR-0029 P-IDE.1b/1d)
 const ITAR_REASON = "Currently unavailable - restricted under U.S. ITAR export controls until the government clears it for use (expected soon).";
 const UNAVAILABLE: Record<string, string> = {
   "claude-mythos-5": ITAR_REASON, // Mythos 5 stays ITAR-gated until cleared.
@@ -18970,7 +18970,7 @@ function providerLabel(v: string): string {
 const modelRow = (o: { value: string; name: string }, sel: string) => {
   // Provider tag only on NON-gov colliding rows - the Gov pill already distinguishes gov routes.
   const prov = (!isAsksage(o.value) && collidingNames.has(cleanModelName(o.name))) ? `<span class="row-prov" data-tip="Login">${esc(providerLabel(o.value))}</span>` : "";
-  // P-IDE.1b: an unavailable model (e.g. ITAR-blocked Fable) renders greyed + non-selectable - NO
+  // P-IDE.1b: an unavailable model (e.g. ITAR-blocked Fable) renders grayed + non-selectable - NO
   // data-val, so the picker's click handler skips it; data-model stays so the hover card explains why.
   const reason = unavailableReason(o.value);
   if (reason) {
@@ -19887,7 +19887,7 @@ try {
     if (pluginsFlyout.onSignedIn()) return; // P-PLUGINS.1: a plugin purchase interrupted by sign-in picks up here
     // P-KGMARKET.5 (ADR-0333): finish the purchase the user started, instead of telling them to find the
     // row again. ONE SHOT and time-boxed: this deep link also lands for a LUCID Remote sign-in and for a
-    // Google Drive authorisation, so a stale intent must never open a payment page nobody asked for.
+    // Google Drive authorization, so a stale intent must never open a payment page nobody asked for.
     const pend = pendingCheckout;
     pendingCheckout = null;
     const pack = pend && shouldResumeCheckout(pend, Date.now()) ? KG_PACKS.find((p) => p.id === pend.packId) : undefined;

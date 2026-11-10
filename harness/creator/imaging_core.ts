@@ -68,13 +68,13 @@ export const concat = (parts: readonly Uint8Array[]): Uint8Array => {
   return out;
 };
 
-/** IHDR payload for 8-bit RGBA (colour type 6), deflate, adaptive filtering, no interlace. */
+/** IHDR payload for 8-bit RGBA (color type 6), deflate, adaptive filtering, no interlace. */
 export function pngIhdrRgba8(width: number, height: number): Uint8Array {
   const ihdr = new Uint8Array(13);
   ihdr.set(be32(width), 0);
   ihdr.set(be32(height), 4);
   ihdr[8] = 8;  // bit depth
-  ihdr[9] = 6;  // colour type: truecolour with alpha
+  ihdr[9] = 6;  // color type: truecolor with alpha
   return ihdr;  // bytes 10..12 (compression, filter, interlace) stay 0
 }
 

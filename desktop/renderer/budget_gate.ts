@@ -45,7 +45,7 @@ export function providerForModel<T extends ProviderAuthLike>(auth: AuthGroupsLik
 }
 
 /** Whether the current model's provider is authenticated with an API KEY (vs OAuth-only). Unknown
- *  (auth not loaded yet, or an unrecognised provider) → true, so the pill is left as-is, never hidden
+ *  (auth not loaded yet, or an unrecognized provider) → true, so the pill is left as-is, never hidden
  *  on a guess. OAuth-only (oauth active, no key) → false → hide the inaccurate budget pill. */
 export function providerHasApiKey(auth: AuthGroupsLike | null, model: string): boolean {
   if (!auth) return true;

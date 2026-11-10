@@ -7,7 +7,7 @@
 // hold an HTTP request open, and the old /api/kb/ingest-batch capped at 50 to avoid exactly that. This lifts
 // the cap: the seed runs in the background (no cap - author the whole dataset), the request returns a jobId
 // at once, and the UI polls a live count + can cancel. A single active job at a time (a seed is heavy and
-// serialises through one KG store); a second start is refused rather than racing two writers. Fail-safe: a
+// serializes through one KG store); a second start is refused rather than racing two writers. Fail-safe: a
 // cancelled/failed run keeps the pages already compiled (ingestSourcesIntoKg persists per document).
 //
 // This mirrors desktop/import_job.ts (the personal-graph import job) with a KB-shaped progress/result.

@@ -1289,10 +1289,10 @@ export interface LucidBridge {
   setTheme(theme: string): Promise<ProfileSettings | null>;
   // Enterprise-managed policy (read-only; placed by admins via GPO/MDM).
   managed(): Promise<ManagedPolicy | null>;
-  // P-IDE.1c: China-origin model data-sovereignty acknowledgement gate.
+  // P-IDE.1c: China-origin model data-sovereignty acknowledgment gate.
   chinaAck(): Promise<{ acknowledged: boolean } | null>;
   setChinaAck(acknowledge: boolean): Promise<{ acknowledged: boolean } | null>;
-  // Third-party / non-U.S. / custom "More providers" acknowledgement gate (mirrors chinaAck).
+  // Third-party / non-U.S. / custom "More providers" acknowledgment gate (mirrors chinaAck).
   thirdPartyAck(): Promise<{ acknowledged: boolean } | null>;
   setThirdPartyAck(acknowledge: boolean): Promise<{ acknowledged: boolean } | null>;
   // ADR-0219: per chat-session CUI vs Search mode (defaults to the ACTIVE session when no id is given).
@@ -1389,7 +1389,7 @@ export interface LucidBridge {
    *  browser (LucidAgentIDE.bat / lucid.exe + default browser). The server runs on the same machine
    *  (loopback bind), so it opens the real Explorer / Finder / zenity dialog itself. `supported:false`
    *  (or null: request failed) = fall back to the in-app browser; `supported:true, path:null` = the
-   *  user CANCELLED, never re-prompt. */
+   *  user CANCELED, never re-prompt. */
   pickFolderNative(opts?: PickFolderOpts): Promise<NativePickResult | null>;
   // P-NETWL.1 (ADR-0106): native FILE picker + OS-encrypted credential vault. All Electron-only; in a plain
   // browser pickFile/credList resolve null/[] and credStore reports the vault as unavailable (fail-closed).
@@ -2363,7 +2363,7 @@ export const bridge: LucidBridge = {
     return isSystemStatus(v) ? v : null;
   },
   // CREATOR-0 (ADR-0279): identity + feature reveal. A null (old backend, failed call) means NO Creator
-  // surface renders - absent, never a greyed hint.
+  // surface renders - absent, never a grayed hint.
   buildInfo: async () => {
     const v: unknown = await getData("/api/build-info").catch(() => null);
     const o = v as BuildInfoView | null;

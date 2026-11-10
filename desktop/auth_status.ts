@@ -137,7 +137,7 @@ export const MAJORS: Provider[] = [
       { env: "AWS_REGION", label: "Region (optional)", placeholder: "us-east-1" },
     ] },
 ];
-// More providers (third-party / non-U.S. / custom aggregators) - gated behind a typed acknowledgement
+// More providers (third-party / non-U.S. / custom aggregators) - gated behind a typed acknowledgment
 // in the UI because they route to servers outside U.S. jurisdiction or aggregate many origins.
 export const OTHERS: Provider[] = [
   { id: "openrouter", name: "OpenRouter", env: "OPENROUTER_API_KEY", oauthId: "openrouter", canOauth: true },

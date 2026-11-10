@@ -35,7 +35,7 @@ export interface HubSection {
   key: HubSectionKey;
   title: string;
   subtitle: string;
-  /** Gated behind the typed acknowledgement. When true, `providers` is empty (nothing rendered until unlocked). */
+  /** Gated behind the typed acknowledgment. When true, `providers` is empty (nothing rendered until unlocked). */
   locked: boolean;
   providers: HubProvider[];
 }
@@ -56,8 +56,8 @@ export interface HubOpts {
 
 /**
  * Build the hub's sections from live auth status. Order: gov gateway (if present) → frontier (U.S.) →
- * open-weight & regional (locked behind the acknowledgement). A section with no providers is dropped, EXCEPT
- * the locked open section, which is kept (so the UI can render its acknowledgement gate).
+ * open-weight & regional (locked behind the acknowledgment). A section with no providers is dropped, EXCEPT
+ * the locked open section, which is kept (so the UI can render its acknowledgment gate).
  */
 export function buildHubSections(auth: AuthStatus | null, opts: HubOpts): HubSection[] {
   const gateway = (auth?.gateway ?? []).map(toHub);
@@ -71,7 +71,7 @@ export function buildHubSections(auth: AuthStatus | null, opts: HubOpts): HubSec
   if (frontier.length) {
     sections.push({ key: "frontier", title: "Frontier providers", subtitle: "U.S. labs · sign in or paste a key", locked: false, providers: frontier });
   }
-  // Open-weight / regional: locked behind the typed acknowledgement (data-sovereignty). While locked we emit
+  // Open-weight / regional: locked behind the typed acknowledgment (data-sovereignty). While locked we emit
   // NO providers, so nothing about them renders until the user opts in.
   sections.push({
     key: "open",

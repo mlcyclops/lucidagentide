@@ -9,7 +9,7 @@
 // inherited unchanged — each source is scan-gated fail-closed BEFORE compilation, every derived page is
 // re-scanned, a flagged source/page is quarantined and NEVER stored (keystone #2), and a dead scanner blocks
 // (invariant #3). This module adds only batching concerns: a bounded count (never silent), per-document
-// progress, and cancellation at a document boundary (a cancelled run keeps what already compiled — fail-safe).
+// progress, and cancellation at a document boundary (a canceled run keeps what already compiled, fail-safe).
 
 import type { ScannerClient } from "../security/scanner_client.ts";
 import type { GatePolicy } from "../security/gate.ts";

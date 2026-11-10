@@ -86,7 +86,7 @@ export async function streamNdjson(path: string, body: unknown, onEvent: (e: Cha
         res = await fetch(p, { method: "POST", headers: { "content-type": "application/json", ...(opts?.headers?.() ?? {}) }, body: JSON.stringify(b), signal: connection.signal });
       } catch {
         if (signal?.aborted) return "aborted";
-        // Even the initial POST may have started work before its acknowledgement was lost.
+        // Even the initial POST may have started work before its acknowledgment was lost.
         // Only adopt that work through attach, never repeat the original prompt POST.
         if (opts?.reattach) return "dropped";
         return fail("[backend unreachable - is the GUI server running?]");

@@ -132,7 +132,7 @@ export class JobScheduler {
     const endedAt = this.#now();
     const timedOut = endedAt - startedAt >= job.maxMinutes * 60_000 - 1000;
     const outcome: RunOutcome = timedOut ? "timeout" : sawError ? "error" : "ok";
-    this.#patch(job.id, (j) => ({ ...j, lastOutcome: outcome, history: j.history.map((h, i) => (i === 0 && h.startedAt === startedAt ? { ...h, endedAt, outcome, note: timedOut ? `cancelled after ${job.maxMinutes} min` : (error ?? undefined) } : h)) }));
+    this.#patch(job.id, (j) => ({ ...j, lastOutcome: outcome, history: j.history.map((h, i) => (i === 0 && h.startedAt === startedAt ? { ...h, endedAt, outcome, note: timedOut ? `canceled after ${job.maxMinutes} min` : (error ?? undefined) } : h)) }));
     this.deps.audit({ jobId: job.id, name: job.name, outcome, laneId, note: error ?? undefined });
   }
 

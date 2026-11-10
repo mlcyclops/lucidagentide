@@ -121,7 +121,7 @@ export const OMP_PROBE_TIMEOUT_MS = 30_000;
  *
  *  TRADEOFF: a child that dies on a SIGNAL for a real reason (a segfaulting omp) also reads as a timeout
  *  here. That is deliberate and safe in this direction: the cost is that we try to use a binary that
- *  will fail loudly at the real spawn, which is strictly better than the old behaviour of silently
+ *  will fail loudly at the real spawn, which is strictly better than the old behavior of silently
  *  substituting a bare `omp` that does not exist at all. */
 export function bunProbeVerdict(r: { exitCode?: number | null; signalCode?: string | null; exitedDueToTimeout?: boolean }): boolean | "timeout" {
   if (r.exitedDueToTimeout === true) return "timeout";

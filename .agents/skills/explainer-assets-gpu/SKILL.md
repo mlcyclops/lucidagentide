@@ -26,7 +26,7 @@ place only when PLAN.md's Assets section names it, its source, its size, and the
 | Narration | omp `tts` tool, on-device Kokoro-82M (WAV), no network | dots.tts `:8084` (`/v1/audio/speech`, `/v1/voices`): 48 kHz, zero-shot voice cloning | Kokoro first: free, private, and good enough for most narration. dots.tts when the user wants a specific designed voice or a consented clone. Cloning a real voice needs that speaker's explicit, current, scope-matched consent; never clone a child's voice. No consent: a synthetic voice. Compress to Opus before shipping. |
 | Presenter or avatar video | None worth the cost; use a fictional mascot drawn in the scene | DGX Avatar `:8088` (MuseTalk or EchoMimic) from the Creator Video pane, voiced by dots.tts | Only when the user asks for a presenter. A real person's likeness needs their consent; never a real child's likeness. One GPU render at a time: a 409 means wait, not retry in a loop. |
 | Preview clips and posters | Headless Chromium over the DevTools protocol plus ffmpeg on this machine | Not needed | Always local. Deterministic capture mode, VP9 webm or H.264 mp4 of about 25 to 260 KB, webp posters (the explainer-studio skill's verification reference has the scripts). |
-| Offline simulation baking (trajectories, fluid fields, lookup tables) | A Bun script on the local CPU, written to compact typed arrays | The DGX job queue (`dgxq`, fair-share, trust-gated admission) for long GPU jobs | Local CPU first. Move to the DGX only when a local run would take more than about 10 minutes or truly needs CUDA. Baked data counts against the budget and is labelled "calculated offline" in the write-up. |
+| Offline simulation baking (trajectories, fluid fields, lookup tables) | A Bun script on the local CPU, written to compact typed arrays | The DGX job queue (`dgxq`, fair-share, trust-gated admission) for long GPU jobs | Local CPU first. Move to the DGX only when a local run would take more than about 10 minutes or truly needs CUDA. Baked data counts against the budget and is labeled "calculated offline" in the write-up. |
 | Captions from narration | LUCID's managed local whisper.cpp | DGX STT `:8081` | Local first; the DGX only for long batches. Real timestamps come from alignment, never guessed. |
 
 ## How to reach the DGX (in this order)
@@ -80,12 +80,12 @@ attested as a DGX enclave are allowed; quote a `CUI lockdown:` refusal and offer
   decoders, models, textures, audio). Without assets, the explainer-studio target of under 1 MB applies.
 - **Models:** GLB only, compressed with meshopt (preferred, small decoder) or Draco, quantized, with unused
   nodes, materials, and UVs pruned. One GLB per mechanism, not per part.
-- **Textures:** KTX2 (Basis Universal: ETC1S for colour, UASTC for normals), power-of-two sizes, no larger
+- **Textures:** KTX2 (Basis Universal: ETC1S for color, UASTC for normals), power-of-two sizes, no larger
   than displayed; 1024 px is a ceiling, not a target.
 - **Audio:** Opus in webm at 24 to 48 kbps mono for narration; captions alongside.
 - **Decoders count:** the meshopt decoder, the Draco decoder, and the Basis transcoder are vendored locally
   and count against the budget. Never load them from a CDN.
-- **Provenance:** every asset records its generator, prompt or script, model, licence, and sha256 in
+- **Provenance:** every asset records its generator, prompt or script, model, license, and sha256 in
   PLAN.md's Assets section; generated media lands in the Creator library first.
 
 The conversion and compression commands (headless Blender, `gltf-transform`, `toktx`, ffmpeg) and the

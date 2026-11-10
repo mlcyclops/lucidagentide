@@ -211,7 +211,7 @@ export function removeDiscovery(path: string): void {
   try { rmSync(path, { force: true }); } catch { /* verification catches leftovers */ }
 }
 
-/** Whether a process with this pid exists: signal 0 probes without signalling, and EPERM means it
+/** Whether a process with this pid exists: signal 0 probes without signaling, and EPERM means it
  *  exists but belongs to someone else. */
 export function pidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }

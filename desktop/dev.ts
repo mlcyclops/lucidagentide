@@ -778,7 +778,7 @@ let collabWsById: Record<string, string> = {};
 // audited turn with NO protocol change and no UserTurnFrame consumer touched. `sttSource` also rides the
 // inbox record as an adjacent field, for any consumer that wants the raw value instead of the label.
 // Only the NOTABLE cases are marked. "host" is the default and safe path (the desktop's own offline
-// whisper), so labelling it would put "(voice: desktop)" on every hold-to-talk turn and make the author
+// whisper), so labeling it would put "(voice: desktop)" on every hold-to-talk turn and make the author
 // column noise; absence of a marker already means "transcribed here".
 const STT_MARKER: Record<SttSource, string> = {
   "device-local": " (voice: on-device)",
@@ -1341,7 +1341,7 @@ async function visionJobView(jobId: string): Promise<VisionJobReply> {
   if (!st.ok) return { ok: false, error: st.error, data: { jobId } };
   const s = st.data;
   if (s.state === "error" || s.state === "cancelled") {
-    const err = s.error || s.message || `the vision ${row.op} ${s.state === "error" ? "failed" : "was cancelled"}`;
+    const err = s.error || s.message || `the vision ${row.op} ${s.state === "error" ? "failed" : "was canceled"}`;
     finishJob(jobIo, CREATOR_DIR, jobId, s.state === "error" ? "failed" : "cancelled", err);
     return { ok: true, data: { jobId, state: s.state, progress: s.progress, message: s.message, error: err } };
   }
@@ -2454,7 +2454,7 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
         console.error(`[oauth] no URL from broker for ${oauthId} via ${ompBin()} — stdout=${JSON.stringify(out.slice(0, 200))} stderr=${JSON.stringify(err.slice(0, 200))}`);
       }
       // A device broker may only hand the UI an ALLOWLISTED https URL (the renderer opens it); anything
-      // else is reported in the output text, never opened. Non-device flows keep today's behaviour.
+      // else is reported in the output text, never opened. Non-device flows keep today's behavior.
       const safeUrl = showCode && url && !deviceUrlAllowed(oauthId, url) ? "" : url;
       if (showCode && url && !safeUrl) console.error(`[oauth] ${oauthId} printed a sign-in URL outside its allowlist; not opening it`);
       const code = codes?.code ?? undefined;
@@ -3754,7 +3754,7 @@ return Bun.serve({
           }
           const kokoro = provider === "local-tts";
           const key = kokoro ? undefined : process.env.OPENAI_API_KEY; // presence guaranteed by the readiness check above
-          // P-VOICE.2: honour the SELECTED voice (this was pinned to alloy/af_heart, which made the picker a
+          // P-VOICE.2: honor the SELECTED voice (this was pinned to alloy/af_heart, which made the picker a
           // no-op for these engines). resolveVoice falls back to the engine default when the stored id
           // belongs to a different engine, so a mid-session provider switch can't 400 the request.
           const voice = resolveVoice(provider, (typeof b.voiceId === "string" && b.voiceId) || v.ttsVoice);
@@ -5355,13 +5355,13 @@ return Bun.serve({
           locks: managedLocks(mc.config),
         } });
       }
-      // P-IDE.1c (ADR-0029): the China-origin data-sovereignty acknowledgement gate. GET returns the
+      // P-IDE.1c (ADR-0029): the China-origin data-sovereignty acknowledgment gate. GET returns the
       // flag; POST {acknowledge:true} after the user types ACKNOWLEDGE unlocks those models in the picker.
       if (p === "/api/china-ack") {
         if (req.method === "POST") { const b = await readBody<{ acknowledge?: unknown }>(req); return json({ ok: true, data: { acknowledged: !!setChinaModelsAcknowledged(!!b.acknowledge).chinaModelsAcknowledged } }); }
         return json({ ok: true, data: { acknowledged: chinaModelsAcknowledged() } });
       }
-      // The third-party / non-U.S. / custom "More providers" acknowledgement gate (mirrors china-ack).
+      // The third-party / non-U.S. / custom "More providers" acknowledgment gate (mirrors china-ack).
       if (p === "/api/thirdparty-ack") {
         if (req.method === "POST") { const b = await readBody<{ acknowledge?: unknown }>(req); return json({ ok: true, data: { acknowledged: !!setThirdPartyProvidersAcknowledged(!!b.acknowledge).thirdPartyProvidersAcknowledged } }); }
         return json({ ok: true, data: { acknowledged: thirdPartyProvidersAcknowledged() } });
@@ -6144,7 +6144,7 @@ return Bun.serve({
       if (p === "/api/chat/cancel" && req.method === "POST") {
         const body = req.body ? await readBody<{ turnId?: unknown; requestId?: unknown }>(req) : {};
         if ((body.turnId !== undefined && typeof body.turnId !== "string") || (body.requestId !== undefined && typeof body.requestId !== "string")) return Response.json({ ok: false, error: "turnId and requestId must be strings" }, { status: 400 });
-        if ((body.turnId !== undefined || body.requestId !== undefined) && !backend.turnStatus(body.turnId, body.requestId)) return Response.json({ ok: false, error: "The requested chat turn is no longer available. A different turn will not be cancelled." }, { status: 409 });
+        if ((body.turnId !== undefined || body.requestId !== undefined) && !backend.turnStatus(body.turnId, body.requestId)) return Response.json({ ok: false, error: "The requested chat turn is no longer available. A different turn will not be canceled." }, { status: 409 });
         backend.cancel();
         return json({ ok: true, data: { cancelled: true } });
       }
@@ -6269,7 +6269,7 @@ return Bun.serve({
       }
       if (p === "/api/fleet/status") return json({ ok: true, data: await fleet.status() });
       // P-AOS.1 (ADR-0452): the standing fleet goal. UI token only (never AGENT_ROUTES): criteria are verified
-      // and the goal is paused, resumed or cancelled by the human, per AOS-1 section 7.
+      // and the goal is paused, resumed or canceled by the human, per AOS-1 section 7.
       if (p === "/api/fleet/goal" && req.method === "GET") return json({ ok: true, data: fleetGoal.snapshot() });
       if (p === "/api/fleet/goal" && req.method === "POST") return json({ ok: true, data: fleetGoal.set(await readBody<unknown>(req)) });
       if (p === "/api/fleet/goal/criterion" && req.method === "POST") {
@@ -6668,7 +6668,7 @@ return Bun.serve({
         // P-REATTACH.1 + P-INTERJECT.1: a prompt that arrives while the master turn is RUNNING is an
         // INTERJECTION, not a superseding turn. The old path called backend.prompt() unconditionally,
         // which silently stole the running turn's listener and raced a second session/prompt onto the
-        // same session - omp cancelled the in-flight turn (stopReason=cancelled), the new stream never
+        // same session - omp canceled the in-flight turn (stopReason=cancelled), the new stream never
         // saw the events, and the composer froze on a blinking cursor while work continued invisibly.
         // Now: attach THIS stream as the running turn's live output, then queue the text on the
         // interject store (delivered into the turn at its next tool boundary). Attach BEFORE queueing:

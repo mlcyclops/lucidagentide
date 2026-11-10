@@ -177,7 +177,7 @@ export interface StoredMedia {
   readonly ref: ComfyOutputRef;
   /** The mime the BYTES proved, which is not always the one the server claimed. */
   readonly mime: string;
-  /** The scan verdict's own words for the metadata that travelled with this artifact. */
+  /** The scan verdict's own words for the metadata that traveled with this artifact. */
   readonly scanned: string;
 }
 
