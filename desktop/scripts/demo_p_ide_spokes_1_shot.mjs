@@ -5,7 +5,7 @@
 // (the P-MARKET.1c harness pattern: the caller owns the page, the engine and the browser). The engine's
 // /api/remote-spokes* answers are replaced by fixtures through request interception, so no hub plugin or
 // spoke is needed: what is proven is the RENDERER. Remote spokes holding a task sit on the orbit beside local
-// lanes in their own dashed frame and the shared hues (P-RS-VIEW.1, ADR-0533: an idle or offline spoke with no
+// lanes in their own dashed frame and the shared hues (P-RS-VIEW.1, ADR-0539: an idle or offline spoke with no
 // task is not drawn); the Hubs panel summarizes the remote hub in one row whose Open shows the Remote spokes view
 // (left rail), which lists every spoke grouped Working / No task; a hub without the drive scope gets no drive
 // buttons; Approve keeps the two-click rule; recalled text that looks like markup stays text and runs nothing; a

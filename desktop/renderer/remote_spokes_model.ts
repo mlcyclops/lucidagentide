@@ -378,7 +378,7 @@ export function spokeActions(s: RemoteSpokeView, a: HubActions): HubActions {
   return s.deactivated ? { recall: false, drive: false, approve: false, deny: false } : a;
 }
 
-/** P-RS-VIEW.1 (ADR-0533): whether a remote spoke is on the Fleet Orbit. The orbit shows work, so a spoke is there
+/** P-RS-VIEW.1 (ADR-0539): whether a remote spoke is on the Fleet Orbit. The orbit shows work, so a spoke is there
  *  only while it holds a task (working, parked on an approval, failed, or waiting for a follow-up); closed and
  *  stopped tasks hold no lane. An idle machine, an offline one with nothing on it and a deactivated one live only
  *  in the Remote spokes view. A silent spoke that still holds a task stays: the work on it is what went quiet. */

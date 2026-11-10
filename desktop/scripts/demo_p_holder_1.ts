@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Increment P-HOLDER.1 (ADR-0528) - a lane's turn survives its engine.
+// Increment P-HOLDER.1 (ADR-0534) - a lane's turn survives its engine.
 //
 // Drives the REAL engine (desktop/dev.ts) twice over one data root, with the house fake ACP agent behind the lane
 // (demo_fake_omp.ts, so it runs on Windows too) and the REAL lucid-holder binary:
@@ -28,7 +28,7 @@ function assert(cond: unknown, msg: string): void {
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
-console.log("== ADR-0528 P-HOLDER.1: a lane's turn survives its engine ==\n");
+console.log("== ADR-0534 P-HOLDER.1: a lane's turn survives its engine ==\n");
 
 const bin = holderBinary();
 if (!bin) throw new Error("lucid-holder is not built: run `bun run build-holder` in desktop/ first");

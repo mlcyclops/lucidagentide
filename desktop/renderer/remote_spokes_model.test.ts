@@ -457,7 +457,7 @@ describe("ADR-0512: a spoke deactivated on purpose", () => {
   });
 });
 
-describe("P-RS-VIEW.1 (ADR-0533): which remote spokes the Fleet Orbit draws", () => {
+describe("P-RS-VIEW.1 (ADR-0539): which remote spokes the Fleet Orbit draws", () => {
   const spoke = (tasks: Record<string, unknown>[], over: Record<string, unknown> = {}): RemoteSpokeView =>
     mapSpokeRow({ node: NODE, label: "vm-218", reachable: true, caps, tasks, ...over })!;
 

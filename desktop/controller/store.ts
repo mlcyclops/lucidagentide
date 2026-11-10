@@ -27,7 +27,7 @@ export interface Pairing {
   createdAt: string;
   /** Lane ids this pairing spawned: the ONLY lanes it can see or act on. */
   lanes: string[];
-  /** P-CTRL-REMOTE.1 (ADR-0525): set by the human at pairing time, never by the controller. Its lanes run the
+  /** P-CTRL-REMOTE.1 (ADR-0531): set by the human at pairing time, never by the controller. Its lanes run the
    *  tiered remote policy and accept decisions verified against `root`. */
   remote?: RemotePolicy;
   /** ADR-0509: how many live lanes this pairing may hold (1 to PAIRING_LANES_MAX), set by the human at pairing

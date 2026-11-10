@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The holder's wire format after the handshake line (ADR-0528). One frame is
+//! The holder's wire format after the handshake line (ADR-0534). One frame is
 //! `kind (1 byte) | payload length (u32 little endian) | payload`.
 //!
 //! Holder to client: `O` agent stdout bytes (contiguous from the offset the client asked for),

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/remote_spokes_view.ts - P-RS-VIEW.1 (ADR-0533): the Remote spokes view.
+// desktop/renderer/remote_spokes_view.ts - P-RS-VIEW.1 (ADR-0539): the Remote spokes view.
 //
 // Remote spokes are other machines, and the Fleet Orbit is a map of work. Before this view every remote spoke the
 // hub knew sat on the orbit's ring whether it was doing anything or not, and the plugin's own panel (setup, presence,
