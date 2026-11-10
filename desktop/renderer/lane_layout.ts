@@ -23,7 +23,14 @@ import type { DockShape } from "./share_dock.ts";
  *  adjustable right side handlers, not just snap". Width is now a plain pixel value like height already
  *  was, so the edge tracks the pointer 1:1. */
 export interface CardSize { w: number; h: number }
-export interface LaneLayout { order: string[]; size: Record<string, CardSize> }
+/** P-FLEET.FIT1 (ADR-pending): a lane's share of its AUTOFIT row. `fw` weighs its width against the other
+ *  cards in the same row, `fh` weighs its row's height against the other rows. 1 is the equal share; the
+ *  absence of an entry means "equal" too, so a layout that never touched autofit carries none. */
+export interface FitWeight { fw: number; fh: number }
+/** `autofit` and `fit` are OPTIONAL on purpose: a layout saved before P-FLEET.FIT1 has neither, and must
+ *  load as autofit ON with equal shares. Only the non-default values are ever written (`autofit:false`,
+ *  a non-empty `fit`), so a default layout still serializes to exactly the pre-FIT1 bytes. */
+export interface LaneLayout { order: string[]; size: Record<string, CardSize>; autofit?: boolean; fit?: Record<string, FitWeight> }
 
 export const CARD_COL_W = 300;      // the DEFAULT card width, and the legacy track width migrations read
 export const CARD_GAP = 10;
@@ -206,7 +213,36 @@ export function reconcile(layout: LaneLayout, laneIds: readonly string[]): LaneL
     const s = src[id];
     if (s) size[id] = { w: s.w, h: s.h };
   }
-  return { order, size };
+  // P-FLEET.FIT1: the mode survives, and fit shares are released with their lane exactly like sizes.
+  return withFit({ order, size }, layout?.autofit, layout?.fit, order);
+}
+
+/** Attach the optional P-FLEET.FIT1 fields: `autofit` only when explicitly OFF, `fit` only when some lane
+ *  holds a non-equal share. Shared by reconcile / loadLayout / saveLayout so the three cannot disagree on
+ *  what "default" means. Entries are copied (never aliased), clamped, and kept only for lanes in `order`. */
+function withFit(base: LaneLayout, autofit: unknown, fit: unknown, order: readonly string[]): LaneLayout {
+  const out: LaneLayout = base;
+  if (autofit === false) out.autofit = false;
+  if (fit && typeof fit === "object" && !Array.isArray(fit)) {
+    const bag = fit as Record<string, unknown>;
+    const kept: Record<string, FitWeight> = {};
+    let any = false;
+    for (const id of order) {
+      const w = fitWeight(bag[id]);
+      if (w) { kept[id] = w; any = true; }
+    }
+    if (any) out.fit = kept;
+  }
+  return out;
+}
+
+/** A persisted share, or null when it is unreadable or exactly equal (equal is what absence already means). */
+function fitWeight(v: unknown): FitWeight | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const c = v as { fw?: unknown; fh?: unknown };
+  const fw = clampWeight(c.fw);
+  const fh = clampWeight(c.fh);
+  return fw === 1 && fh === 1 ? null : { fw, fh };
 }
 
 /** Persistence. A corrupt/absent payload yields an EMPTY layout, never a throw: a broken store must never
@@ -218,7 +254,7 @@ export function loadLayout(raw: string | null | undefined): LaneLayout {
   try { parsed = JSON.parse(raw); } catch { return empty; }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return empty;
 
-  const p = parsed as { order?: unknown; size?: unknown };
+  const p = parsed as { order?: unknown; size?: unknown; autofit?: unknown; fit?: unknown };
   // Fail closed on the load-bearing field: an `order` that is not a clean string array makes the WHOLE
   // payload untrustworthy, so it is discarded rather than partially salvaged.
   if (!Array.isArray(p.order)) return empty;
@@ -254,7 +290,9 @@ export function loadLayout(raw: string | null | undefined): LaneLayout {
       size[id] = clampSize({ w, h }, CARD_MAX_W);
     }
   }
-  return { order, size };
+  // P-FLEET.FIT1: a payload from before autofit has no `autofit` key and loads as ON; a malformed `fit`
+  // only loses the shares (equal is a safe answer), never the order or sizes beside it.
+  return withFit({ order, size }, p.autofit, p.fit, order);
 }
 
 export function saveLayout(l: LaneLayout): string {
@@ -269,7 +307,8 @@ export function saveLayout(l: LaneLayout): string {
     if (s) size[id] = clampSize(s, CARD_MAX_W);
   }
   // Keys are emitted in `order` sequence, so an unchanged layout always serializes to identical bytes.
-  return JSON.stringify({ order, size });
+  // P-FLEET.FIT1: the optional fields go through the same normalizer as load, so save(load(x)) is stable.
+  return JSON.stringify(withFit({ order, size }, l?.autofit, l?.fit, order));
 }
 
 /** The dock's missing edges. `dir` is any subset of "n"/"s"/"e"/"w" (e.g. "n", "ne", "se"). A north drag
@@ -308,3 +347,179 @@ export function resizeShape(dir: string, start: DockShape, dx: number, dy: numbe
   if (n) { out.h = Math.max(mh, Math.round(sh - ddy)); out.y = sy + sh - out.h; }   // bottom edge invariant
   return out;
 }
+
+// ------------------------------------------------------------------ P-FLEET.FIT1: autofit tiling
+//
+// P-FLEET.FIT1 (ADR-pending): the DEFAULT fleet layout. Instead of tile-width cards with content height
+// (which left most of a tall dock empty and wrapped a fourth lane onto a half-empty row), the visible lanes
+// tile the WHOLE grid body in both axes. The grid shape (cols x rows) is chosen per panel aspect; within
+// that shape every row fills the panel's width and the rows fill its height. A user drag re-weights one
+// card (or one row) and the OTHER members share what is left equally, so the panel stays full.
+
+/** The smallest tile autofit will lay out before it stops filling the panel and scrolls instead. Wider
+ *  than CARD_MIN_W because a TILED card must show a usable transcript and composer, not just a header. */
+export const FIT_MIN_W = 320;
+export const FIT_MIN_H = 260;
+/** The tile shape autofit prefers (w / h). Transcripts read in lines, so a slightly wide card wins a tie. */
+export const FIT_ASPECT = 1.4;
+/** Score cost of one empty grid cell. Not dead space (the last row's cards stretch across it) but an
+ *  uneven row, so a full grid beats a ragged one unless the ragged one's tiles are a far better shape. */
+const FIT_EMPTY_COST = 0.35;
+/** Persisted shares are clamped here: one card can be 100x another, never 0 wide and never NaN. */
+export const FIT_WEIGHT_MIN = 0.1;
+export const FIT_WEIGHT_MAX = 10;
+
+/** `cardW`/`cardH` are the EQUAL tile size; `scroll` is true when even that could not fit at FIT_MIN_*
+ *  and the tiles overflow the panel (the body scrolls, the tiles stay equal). */
+export interface FitGrid { cols: number; rows: number; cardW: number; cardH: number; scroll: boolean }
+/** One lane's tile in px, and the plan row it landed in. */
+export interface FitCell { w: number; h: number; row: number }
+/** The whole tiling: lane ids per visual row, each row's card widths and height, and a per-lane lookup. */
+export interface FitPlan { grid: FitGrid; rows: string[][]; rowW: number[][]; rowH: number[]; cells: Record<string, FitCell> }
+
+/** Shares are stored rounded to 3 places, so clamp(clamp(x)) === clamp(x) and save/load is byte-stable.
+ *  Unreadable or non-positive means "no opinion", i.e. the equal share. */
+function clampWeight(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  return Math.round(Math.max(FIT_WEIGHT_MIN, Math.min(FIT_WEIGHT_MAX, n)) * 1000) / 1000;
+}
+
+function sum(xs: readonly number[]): number { let t = 0; for (const x of xs) t += x; return t; }
+
+/** The autofit grid for `n` lanes in a `w` x `h` px body. Null when there is nothing to tile or the body
+ *  is unmeasured (0 / NaN while hidden or minimized): the caller keeps its last plan rather than collapse
+ *  every card on one bad measurement, the same doctrine as maxCardW. */
+export function autofitGrid(n: number, w: number, h: number): FitGrid | null {
+  return autofitSections([num(n, 0)], w, h);
+}
+
+/** autofitGrid for a grid split into SECTIONS (P-FLEET.L18 lane groups): each section starts a fresh row,
+ *  so rows = sum of ceil(count / cols). Every column count from 1 to the largest section is scored; a shape
+ *  is feasible only when its tiles reach FIT_MIN_W x FIT_MIN_H. Among feasible shapes the winner is the one
+ *  whose tiles are closest to FIT_ASPECT (log distance, so 2x too wide and 2x too tall cost the same) plus
+ *  FIT_EMPTY_COST per empty cell; ties keep the fewer columns. Nothing feasible: as many FIT_MIN_W columns
+ *  as the width holds, tiles at least FIT_MIN_H tall, and the body scrolls. */
+export function autofitSections(counts: readonly number[], w: number, h: number): FitGrid | null {
+  const secs = (counts ?? []).map((c) => Math.trunc(num(c, 0))).filter((c) => c > 0);
+  const W = Math.floor(num(w, 0));
+  const H = Math.floor(num(h, 0));
+  if (secs.length === 0 || !(W > 0) || !(H > 0)) return null;
+  const n = sum(secs);
+  const widest = Math.max(...secs);
+  const rowsFor = (cols: number): number => secs.reduce((a, c) => a + Math.ceil(c / cols), 0);
+  // Floored, never rounded: a half-pixel up per tile is a row that no longer fits (defaultCardW's rule).
+  const cellW = (cols: number): number => Math.floor((W - CARD_GAP * (cols - 1)) / cols);
+  const cellH = (rows: number): number => Math.floor((H - CARD_GAP * (rows - 1)) / rows);
+
+  let best: FitGrid | null = null;
+  let bestScore = Infinity;
+  for (let cols = 1; cols <= widest; cols++) {
+    const rows = rowsFor(cols);
+    const cw = cellW(cols);
+    const ch = cellH(rows);
+    if (cw < FIT_MIN_W || ch < FIT_MIN_H) continue;
+    const score = Math.abs(Math.log(cw / ch / FIT_ASPECT)) + FIT_EMPTY_COST * (rows * cols - n);
+    if (score < bestScore) { bestScore = score; best = { cols, rows, cardW: cw, cardH: ch, scroll: false }; }
+  }
+  if (best) return best;
+
+  const cols = Math.max(1, Math.min(widest, Math.floor((W + CARD_GAP) / (FIT_MIN_W + CARD_GAP))));
+  const rows = rowsFor(cols);
+  const cardW = Math.max(1, cellW(cols));
+  const cardH = Math.max(FIT_MIN_H, cellH(rows));
+  return { cols, rows, cardW, cardH, scroll: rows * cardH + CARD_GAP * (rows - 1) > H };
+}
+
+/** Split `total` px across members in proportion to `weights`, honoring a per-member minimum, in WHOLE
+ *  px that sum to exactly `total` (a row that sums one px over wraps its last card; one px under is a
+ *  visible seam). A member whose share falls under `min` is pinned there and the rest re-split; when
+ *  `min * k` cannot fit at all, the minimum degrades to the equal floor rather than overflow. */
+export function distribute(total: number, weights: readonly number[], min: number): number[] {
+  const k = weights?.length ?? 0;
+  if (k === 0) return [];
+  const T = Math.max(0, Math.floor(num(total, 0)));
+  const ws = weights.map(clampWeight);
+  const lo = Math.min(Math.max(0, Math.floor(num(min, 0))), Math.floor(T / k));
+  const pinned = new Array<boolean>(k).fill(false);
+  const raw = new Array<number>(k).fill(0);
+  // Terminates: every pass pins at least one member or stops, and since lo <= T/k the free members' sum
+  // (`rem`) is always >= lo * free, so at least one member can never pin.
+  for (;;) {
+    let rem = T;
+    let sw = 0;
+    for (let i = 0; i < k; i++) { if (pinned[i]) rem -= lo; else sw += ws[i]!; }
+    let changed = false;
+    for (let i = 0; i < k; i++) {
+      if (pinned[i]) { raw[i] = lo; continue; }
+      raw[i] = (rem * ws[i]!) / sw;
+      if (raw[i]! < lo) { pinned[i] = true; changed = true; }
+    }
+    if (!changed) break;
+  }
+  const out = raw.map((v) => Math.floor(v));
+  let left = T - sum(out);
+  // The leftover is the free members' summed fractions, so it is < their count: one pass hands it out.
+  for (let i = 0; i < k && left > 0; i++) { if (!pinned[i]) { out[i] = out[i]! + 1; left--; } }
+  return out;
+}
+
+/** The full tiling for the visible lanes. `sections` is the grid's group sections in display order (one
+ *  section when there are no groups); each is chunked into rows of `grid.cols`. Every row's widths fill
+ *  `w` exactly (gaps included) and, unless the grid scrolls, the rows' heights fill `h` exactly. `fit`
+ *  re-weights: a lane's `fw` against its row-mates, its row's mean `fh` against the other rows. Null when
+ *  autofitSections is null (nothing to tile / unmeasured). Duplicate or junk ids are skipped. */
+export function autofitPlan(sections: readonly (readonly string[])[], w: number, h: number, fit?: Record<string, FitWeight>): FitPlan | null {
+  const seen = new Set<string>();
+  const secs: string[][] = [];
+  for (const s of sections ?? []) {
+    const ids: string[] = [];
+    for (const id of s ?? []) {
+      if (typeof id !== "string" || !id || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+    if (ids.length) secs.push(ids);
+  }
+  const grid = autofitSections(secs.map((s) => s.length), w, h);
+  if (!grid) return null;
+  const rows: string[][] = [];
+  for (const s of secs) for (let i = 0; i < s.length; i += grid.cols) rows.push(s.slice(i, i + grid.cols));
+
+  const W = Math.floor(num(w, 0));
+  const rowW = rows.map((r) => distribute(W - CARD_GAP * (r.length - 1), r.map((id) => clampWeight(fit?.[id]?.fw)), CARD_MIN_W));
+  const totalH = grid.scroll ? grid.cardH * rows.length : Math.floor(num(h, 0)) - CARD_GAP * (rows.length - 1);
+  const rowH = distribute(totalH, rows.map((r) => sum(r.map((id) => clampWeight(fit?.[id]?.fh))) / r.length), CARD_MIN_H);
+
+  const cells: Record<string, FitCell> = {};
+  rows.forEach((r, ri) => r.forEach((id, ci) => { cells[id] = { w: rowW[ri]![ci]!, h: rowH[ri]!, row: ri }; }));
+  return { grid, rows, rowW, rowH, cells };
+}
+
+/** P-FLEET.FIT1 "auto fit and equally resize": member `idx` of a run that must keep its total (one row's
+ *  widths, or the rows' heights) takes `next` px, clamped so every OTHER member keeps `min`, and the others
+ *  share what is left EQUALLY. Fewer than two members, or a bad index, returns the sizes unchanged: there
+ *  is no sibling to give way, so a lone card already fills its row. Pure; whole px; total preserved. */
+export function shareResize(sizes: readonly number[], idx: number, next: number, min: number): number[] {
+  const s = (sizes ?? []).map((v) => Math.max(0, Math.floor(num(v, 0))));
+  const k = s.length;
+  const i = Math.trunc(num(idx, -1));
+  if (k < 2 || i < 0 || i >= k) return s;
+  const total = sum(s);
+  const lo = Math.min(Math.max(0, Math.floor(num(min, 0))), Math.floor(total / k));
+  const mine = clampInt(num(next, s[i]!), lo, total - lo * (k - 1));
+  const rest = distribute(total - mine, new Array<number>(k - 1).fill(1), lo);
+  return s.map((_, j) => (j === i ? mine : rest[j < i ? j : j - 1]!));
+}
+
+/** px sizes -> the mean-1 shares FitWeight stores (an equal run is all 1s). Shares, not px, are persisted
+ *  so a drag made in a 900px dock still means "this card gets twice its neighbour" in a 1600px one. */
+export function sharesOf(sizes: readonly number[]): number[] {
+  const k = sizes?.length ?? 0;
+  const total = sum((sizes ?? []).map((v) => Math.max(0, num(v, 0))));
+  if (k === 0 || !(total > 0)) return (sizes ?? []).map(() => 1);
+  return sizes.map((v) => clampWeight((Math.max(0, num(v, 0)) * k) / total));
+}
+
+/** Autofit is the DEFAULT: only an explicit `autofit:false` turns it off. */
+export function isAutofit(l: LaneLayout | null | undefined): boolean { return l?.autofit !== false; }

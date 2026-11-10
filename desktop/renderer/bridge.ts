@@ -1102,12 +1102,18 @@ export interface LucidBridge {
   /** P-FLEET.WT1: `worktree` runs the lane in its own git worktree on a new branch (the user accepted the merge risk). */
   /** P-TUI.2: open `lucid hub` in a new terminal window attached to this engine. */
   hubOpen(): Promise<{ ok: boolean; reason?: string } | null>;
-  fleetSpawn(opts: { cwd: string; model?: string; name?: string; repoUrl?: string; pat?: string; sessionId?: string; worktree?: boolean }): Promise<{ ok: boolean; lane?: LaneView; reason?: string; worktree?: { path: string; branch: string } } | null>;
+  /** P-PUSH.PAR1 (ADR-pending): `code: "no-repo"` marks a worktree refusal because the folder is not a git
+   *  repo with a commit, so the composer's Push now can fall back to steering the running turn. */
+  fleetSpawn(opts: { cwd: string; model?: string; name?: string; repoUrl?: string; pat?: string; sessionId?: string; worktree?: boolean }): Promise<{ ok: boolean; lane?: LaneView; reason?: string; code?: "no-repo"; worktree?: { path: string; branch: string } } | null>;
   /** P-FLEET.L3: `images` ride as ACP image blocks after the text, exactly like the master chat. */
   fleetPrompt(laneId: string, text: string, onEvent: (e: LaneEvent) => void, images?: LaneImage[]): Promise<void>;
   /** P-FLEET.L3: the staged-prompt queue - manager-owned; drain streams the next item like a prompt. */
   fleetQueueAdd(laneId: string, text: string, images?: LaneImage[]): Promise<{ ok: boolean; queued?: number; reason?: string } | null>;
-  fleetQueueRemove(laneId: string, index: number): Promise<{ ok: boolean } | null>;
+  /** P-PUSH.PAR1 (ADR-pending): `expect` (the item's full text) makes a late remove fail closed instead of
+   *  deleting whichever prompt slid into `index` meanwhile. */
+  fleetQueueRemove(laneId: string, index: number, expect?: string): Promise<{ ok: boolean } | null>;
+  /** P-PUSH.PAR1 (ADR-pending): a staged item's full text + its own images, left in the queue. */
+  fleetQueuePeek(laneId: string, index: number): Promise<{ ok: boolean; item?: { text: string; images: LaneImage[] }; reason?: string } | null>;
   /** P-QUEUE-IMG.1 (ADR-0469): remove a staged item and return its full text + its own images (Update). */
   fleetQueueTake(laneId: string, index: number): Promise<{ ok: boolean; item?: { text: string; images: LaneImage[] }; reason?: string } | null>;
   fleetQueueMove(laneId: string, index: number, dir: -1 | 1): Promise<{ ok: boolean } | null>;
@@ -1962,7 +1968,8 @@ export const bridge: LucidBridge = {
     return streamNdjson("/api/fleet/prompt", { laneId, text, ...(images?.length ? { images } : {}) }, sink);
   },
   fleetQueueAdd: (laneId, text, images) => post("/api/fleet/queue", { laneId, text, ...(images?.length ? { images } : {}) }),
-  fleetQueueRemove: (laneId, index) => post("/api/fleet/queue/remove", { laneId, index }),
+  fleetQueueRemove: (laneId, index, expect) => post("/api/fleet/queue/remove", { laneId, index, ...(expect !== undefined ? { expect } : {}) }),
+  fleetQueuePeek: (laneId, index) => post("/api/fleet/queue/peek", { laneId, index }), // P-PUSH.PAR1
   fleetQueueTake: (laneId, index) => post("/api/fleet/queue/take", { laneId, index }),
   fleetQueueMove: (laneId, index, dir) => post("/api/fleet/queue/move", { laneId, index, dir }),
   fleetDrain: (laneId, onEvent) => {

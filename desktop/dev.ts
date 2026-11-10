@@ -125,7 +125,7 @@ import { approveBlock, dismissAllBlocks, dismissBlock, liveBlocks } from "./secu
 import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECACK.1 (ADR-0170)
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { probeRateLimits } from "./ratelimit_probe.ts";
-import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
+import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger, type CodeActivity, type UsageLedger } from "../tools/memory_data.ts";
 import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, TURN_ALREADY_RUNNING, type JudgePlan } from "./acp_backend.ts";
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
@@ -967,7 +967,7 @@ setInterval(() => {
 }, 5000);
 
 // 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
-let codeActivityCache: { at: number; data: ReturnType<typeof codeActivity> } | null = null;
+let codeActivityCache: { at: number; data: Promise<CodeActivity> } | null = null; // P-BOOTPERF.1: async, single-flight
 // P-NETSTAT.1 (ADR-0423): one probe window per engine, shared by every renderer that polls it.
 const netProbe = new NetProbe();
 // P-PERF.3: the dashboard poll hammers these obs-DB reads (~every 4s). Each can take SECONDS as the DB grows,
@@ -981,8 +981,8 @@ function securitySnapshotMemo(): ReturnType<typeof securitySnapshot> {
   if (!secSnapMemo || t - secSnapMemo.at > SNAP_TTL_MS) secSnapMemo = { at: t, p: securitySnapshot() };
   return secSnapMemo.p; // concurrent callers await the SAME query
 }
-let usageMemo: { at: number; data: ReturnType<typeof usageLedger> } | null = null;
-function usageLedgerMemo(): ReturnType<typeof usageLedger> {
+let usageMemo: { at: number; data: Promise<UsageLedger> } | null = null; // P-BOOTPERF.1: async, single-flight
+function usageLedgerMemo(): Promise<UsageLedger> {
   const t = Date.now();
   if (!usageMemo || t - usageMemo.at > SNAP_TTL_MS) usageMemo = { at: t, data: usageLedger() };
   return usageMemo.data;
@@ -2811,7 +2811,7 @@ return Bun.serve({
         return json({ ok: true, data: { enabled: !!loadSettings().rateLimitProbe, limits: probeLocked ? [] : await probeRateLimits(url.searchParams.get("force") === "1") } });
       }
       // P10.2: cross-model usage & cost ledger (per-model totals + estimated cache savings).
-      if (p === "/api/usage") return json({ ok: true, data: usageLedgerMemo() }); // P-PERF.3 memo
+      if (p === "/api/usage") return json({ ok: true, data: await usageLedgerMemo() }); // P-PERF.3 memo
       // ADR-0030 P-CODE.1: per-workspace git diffstat for the current month (repo
       // activity, not AI authorship). Read-only, metadata-only, fail-closed per workspace.
       // Cached 30s — each call spawns `git log` per workspace, so don't re-run it on
@@ -2820,7 +2820,7 @@ return Bun.serve({
         const now = Date.now();
         if (!codeActivityCache || now - codeActivityCache.at > 30_000 || url.searchParams.get("force") === "1")
           codeActivityCache = { at: now, data: codeActivity() };
-        return json({ ok: true, data: codeActivityCache.data });
+        return json({ ok: true, data: await codeActivityCache.data });
       }
       // P-PORTGUARD.1 (ADR-0305): echo the per-launch nonce main minted for THIS child. Main only
       // trusts a health answer carrying it, so a squatter on the port can never win the window. The
@@ -5080,7 +5080,7 @@ return Bun.serve({
       if (p === "/api/sessions") {
         // P-SWITCH.2 (ADR-0404): each row says where it is live (Main, working or not, or a spoke and its
         // state), so the sidebar shows what is running before anyone clicks.
-        const list = listSessions();
+        const list = await listSessions(); // P-BOOTPERF.1: async, so a cold index never freezes the engine
         const main = { sessionId: backend.currentSessionId(), busy: backend.switchBlocker() !== null };
         const lanes = fleet.owners();
         return json({ ok: true, data: { sessions: withLiveState(list.sessions, main, lanes), ingest: list.ingest } });
@@ -5548,11 +5548,12 @@ return Bun.serve({
       if (p === "/api/trivia/reseed" && req.method === "POST") {
         const b = await readBody<{ model?: unknown; role?: unknown; sources?: { sessions?: unknown; kg?: unknown; codegraph?: unknown } }>(req);
         const sources = { sessions: !!b.sources?.sessions, kg: !!b.sources?.kg, codegraph: !!b.sources?.codegraph };
+        const sessionTitles = sources.sessions ? (await listSessions()).sessions.map((s) => s.title) : [];
         const data = await seedTrivia(
           { role: typeof b.role === "string" ? b.role : "developer", sources, model: typeof b.model === "string" ? b.model : "" },
           {
             providers: {
-              sessions: () => listSessions().sessions.map((s) => s.title),
+              sessions: () => sessionTitles,
               kg: () => { const g = personalGraph(); return g ? [...g.facts.map((f) => f.statement), ...g.nodes.map((n) => n.name)] : []; },
               code: () => (loadCodeGraph(currentWorkspace())?.nodes ?? []).map((n) => n.name),
             },
@@ -5630,7 +5631,7 @@ return Bun.serve({
         const b = await readBody<{ sourcePath?: unknown; title?: unknown; text?: unknown }>(req);
         const text = String(b.text ?? "");
         if (!text.trim()) return json({ ok: true, data: { documentId: "", status: "quarantined", pagesCompiled: 0, pagesQuarantined: 0, links: 0, pageIds: [], blocked: [{ stage: "source", reason: "empty document", trustLabel: "quarantined", findings: 0 }] } });
-        const model = usageLedger().models[0]?.model;
+        const model = (await usageLedger()).models[0]?.model;
         const result = await ingestDocument({
           store: await kbStore(),
           scanner: kbScanner(),
@@ -5769,7 +5770,7 @@ return Bun.serve({
           else { targetId = (typeof b.kgId === "string" && b.kgId) ? b.kgId : (activeKgId() ?? ""); kgName = listKgs().find((k) => k.kg_id === targetId)?.name ?? ""; }
         } catch (e) { return json({ ok: true, data: { ok: false, error: clientError(e, "could not create or resolve the knowledge graph") } }); }
         if (!targetId) return json({ ok: true, data: { ok: false, error: "No target knowledge graph." } });
-        const model = usageLedger().models[0]?.model;
+        const model = (await usageLedger()).models[0]?.model;
         const started = startKbIngest({
           kgId: targetId, kgName,
           run: async (onTick, signal) => {
@@ -6162,7 +6163,7 @@ return Bun.serve({
         // works on its own branch beside other agents in this repo instead of sharing the checkout. A refused
         // spawn removes the worktree it just made; a started lane keeps it (its branch is the lane's work).
         const lane = b.worktree === true ? await createLaneWorktree(cwd, typeof b.name === "string" && b.name.trim() ? b.name : basename(cwd)) : null;
-        if (lane && !lane.ok) return json({ ok: true, data: { ok: false, reason: lane.reason } });
+        if (lane && !lane.ok) return json({ ok: true, data: { ok: false, reason: lane.reason, ...(lane.code ? { code: lane.code } : {}) } }); // P-PUSH.PAR1: `code` lets Push now fall back
         if (lane?.ok) cwd = lane.laneCwd;
         // P-FLEET.L17: recovering a historical spoke brings its RECORDED session back (omp loads it
         // natively; the on-disk transcript seeds the composer and is the fallback memory).
@@ -6193,8 +6194,14 @@ return Bun.serve({
         return json({ ok: true, data: fleet.enqueue(String(b.laneId ?? ""), String(b.text ?? ""), laneImages(b.images)) });
       }
       if (p === "/api/fleet/queue/remove" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; index?: unknown; expect?: unknown }>(req);
+        // P-PUSH.PAR1 (ADR-pending): `expect` (the item's full text) guards a remove that lands seconds later.
+        return json({ ok: true, data: fleet.queueRemove(String(b.laneId ?? ""), Number(b.index), typeof b.expect === "string" ? b.expect : undefined) });
+      }
+      // P-PUSH.PAR1 (ADR-pending): Copy and Push now read a staged item whole, without removing it.
+      if (p === "/api/fleet/queue/peek" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown; index?: unknown }>(req);
-        return json({ ok: true, data: fleet.queueRemove(String(b.laneId ?? ""), Number(b.index)) });
+        return json({ ok: true, data: fleet.queuePeek(String(b.laneId ?? ""), Number(b.index)) });
       }
       // P-QUEUE-IMG.1 (ADR-0469): Update pulls a staged item (full text + its own images) back into the card.
       if (p === "/api/fleet/queue/take" && req.method === "POST") {

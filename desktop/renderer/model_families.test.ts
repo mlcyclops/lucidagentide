@@ -461,6 +461,40 @@ describe("P-MODEL.2 - preferredDefaultModel (the curated fresh-install default)"
   });
 });
 
+describe("P-MODEL.10 - Fable 5.2 / Mythos 5.2 (omp 18.18.6)", () => {
+  const mk = (...values: string[]): ModelOption[] => values.map((value) => ({ value, name: value }));
+  const F52 = "anthropic/claude-fable-5-2", M52 = "anthropic/claude-mythos-5-2";
+
+  it("are Claude-family, flagship-tier, API-credit billed and never deprecated", () => {
+    for (const v of [F52, M52, "openrouter/anthropic/claude-fable-5.2"]) {
+      expect(familyOf(v).id).toBe("claude");
+      expect(capabilityTier(v)).toBe(2);
+      expect(isApiOnlyModel(v)).toBe(true);
+      expect(isDeprecatedModel(v)).toBe(false);
+    }
+  });
+  it("rank above 5.1 and 5 within their families (the version tiebreak at the same tier)", () => {
+    expect(cmpModelsByLevel(F52, "anthropic/claude-fable-5-1")).toBeLessThan(0);
+    expect(cmpModelsByLevel(F52, "anthropic/claude-fable-5")).toBeLessThan(0);
+    expect(cmpModelsByLevel(M52, "anthropic/claude-mythos-5-1")).toBeLessThan(0);
+    expect(topModel(mk("anthropic/claude-fable-5", "anthropic/claude-fable-5-1", F52))?.value).toBe(F52);
+  });
+  it("Fable 5.2 replaces 5.1 in the curated default; it still sits below Opus 5.5 / Opus 5 and GPT-6", () => {
+    expect(preferredDefaultModel(mk("anthropic/claude-fable-5", "anthropic/claude-fable-5-1", F52))?.value).toBe(F52);
+    expect(preferredDefaultModel(mk(F52, "anthropic/claude-opus-5-5"))?.value).toBe("anthropic/claude-opus-5-5");
+    expect(preferredDefaultModel(mk(F52, "openai-codex/gpt-6-astra"))?.value).toBe("openai-codex/gpt-6-astra");
+    // The 5.2 entries are version-anchored: neither can be selected by a 5.1 or a future 5.20 id.
+    expect(DEFAULT_MODEL_PREFERENCE.some((p) => p.test("claude-fable-5-1") || p.test("claude-mythos-5-1"))).toBe(false);
+    expect(DEFAULT_MODEL_PREFERENCE.some((p) => p.test("claude-fable-5-20"))).toBe(false);
+  });
+  it("Mythos 5.2 is never synthesized: it is picked only when the account's model list carries it", () => {
+    // Without Mythos in the reported list, the Fable 5.2 entry wins and nothing names Mythos.
+    expect(preferredDefaultModel(mk(F52, "anthropic/claude-haiku-4-5"))?.value).toBe(F52);
+    // A verified org whose list carries ONLY Mythos 5.2 (no Fable 5.2) defaults to it.
+    expect(preferredDefaultModel(mk(M52, "anthropic/claude-fable-5-1"))?.value).toBe(M52);
+  });
+});
+
 describe("P-MODEL.8 - Gemini 4 Argon is the flagship, Gemini 3.8 Flash the Gemini default", () => {
   const mk = (...values: string[]): ModelOption[] => values.map((value) => ({ value, name: value }));
   // The Google API-key catalog as omp discovers it from GET /v1beta/models (2026-10-14), chat routes only.

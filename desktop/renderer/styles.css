@@ -5596,6 +5596,27 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
    instead of staying pinned at 180px, which is the whole point of dragging the edge. */
 .fleet-card[style*="height"] .fleet-out-wrap{flex:1}
 .fleet-card[style*="height"] .fleet-out{max-height:none;flex:1}
+/* == P-FLEET.FIT1 (ADR-pending): AUTOFIT, the default card layout ==
+   fleet_grid.ts puts `.autofit` on the grid and gives every visible card an inline `flex:0 1 <w>px` plus
+   `height:<h>px` from lane_layout.autofitPlan, so the cards tile the whole body in both axes. None of these
+   rules size a card; they make the INSIDE of a tile behave: the transcript takes all the slack while the
+   header, status strips and composer never shrink, so the composer stays pinned to the card's bottom at
+   any tile height. Every rule is scoped to `.autofit`, so the free layout is byte-for-byte what it was. */
+.fleet-grid.autofit .fleet-card>:not(.fleet-card-main):not(.fleet-card-rz){flex-shrink:0}
+.fleet-grid.autofit .fleet-card-main{flex:1 1 0;min-height:0}
+.fleet-grid.autofit .fleet-card-main>:not(.fleet-out-wrap){flex-shrink:0}
+.fleet-grid.autofit .fleet-out-wrap{flex:1 1 0;min-height:0}
+.fleet-grid.autofit .fleet-out{flex:1 1 0;max-height:none;min-height:40px}
+/* Group dividers and the + Lane form own a full row, so each group's tiles start a clean row and the form
+   never squeezes into a tile row; fleet_grid.ts measures them and subtracts their height before tiling. */
+.fleet-grid.autofit .fleet-group-head,.fleet-grid.autofit .fleet-spawn-card{flex:0 0 100%;width:auto}
+/* The reorder placeholder becomes a 4px insertion bar whose outer width (4px - 14px margin) nets to zero
+   against the 10px gap it adds, so a full tile row never wraps while a card is being dragged across it. */
+.fleet-grid.autofit .fleet-drop-slot{flex:0 0 4px;margin-right:-14px;align-self:stretch;min-height:0;border:0;border-radius:2px;
+  background:var(--accent)}
+/* The header toggle: lit while autofit is on. One text child, nowrap (invariant 11). */
+.fleet-fit-btn span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fleet-fit-btn.on{color:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
 .fleet-out-empty{display:flex;align-items:center;min-width:0;color:var(--txt-4);font-size:11px}
 .fleet-out-empty span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fleet-turn-user{flex:none;color:var(--accent-2);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -5970,7 +5991,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-checkin{margin:6px 8px 0;padding:7px 9px;border:1px solid var(--line-soft);border-radius:8px;background:var(--bg-2)}
 .fleet-ck-line{display:block;font-size:11px;color:var(--txt-2);padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fleet-ck-acts{display:flex;gap:6px;margin-top:5px}
-.fleet-q-push{white-space:nowrap;font-size:9.5px}
+.fleet-q-btn.fleet-q-push{width:auto;padding:0 4px;white-space:nowrap;font-size:9.5px}
 /* ── P-BROWSER.1 (wave 2): the agent-browser pill (BrowserFeature section) ──────────────────────
    Floats near the top of the chat while the agent drives its visible browser window. Invariant #11:
    ONE text child (.bp-label, nowrap+ellipsis); the icon and buttons are flex:none controls. .bp-fx is
@@ -7486,3 +7507,11 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .vault-strength[data-score="0"],.vault-strength[data-score="1"]{color:var(--red-txt)}
 .vault-strength[data-score="2"]{color:var(--cyan-txt)}
 .vault-strength[data-score="3"],.vault-strength[data-score="4"]{color:var(--green-txt)}
+
+/* ───────── P-PUSH.PAR1 (ADR-pending): the staged chip's item menu (right-click / long-press) ─────────
+   The shared .ctx-menu, capped in width; each label is the row's one ellipsizing text child (invariant #11).
+   Chips suppress the native touch callout and word selection, so a hold opens THIS menu instead. */
+.ctx-menu.ctx-menu-stage{max-width:min(320px,92vw)}
+.ctx-menu-stage .ctx-it>span:first-child{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctx-menu-stage .ctx-it:focus-visible{outline:2px solid var(--line-strong);outline-offset:-2px;background:var(--bg-3)}
+.q-pill,.fleet-q-chip{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}

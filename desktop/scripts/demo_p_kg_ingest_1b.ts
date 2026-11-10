@@ -40,7 +40,7 @@ try {
   writeFileSync(join(dir, "chat.jsonl"), file("c1", "how do I center a div?"));
   for (let i = 0; i < 12; i++) writeFileSync(join(dir, `ing${i}.jsonl`), file(`i${i}`, `${EXTRACT_SYSTEM}\n\nfact number ${i}`));
 
-  const { sessions, ingest } = listSessions(cwd, root);
+  const { sessions, ingest } = await listSessions(cwd, root);
   if (sessions.length !== 1 || sessions[0]!.id !== "c1") fail(`chat list should hold only the real chat, got ${sessions.map((s) => s.id)}`);
   if (ingest.length !== 12) fail(`all 12 throwaways should be grouped, got ${ingest.length}`);
   if (!ingest.every((s) => s.kind === "kg-ingest")) fail("grouped sessions must be kind kg-ingest");
