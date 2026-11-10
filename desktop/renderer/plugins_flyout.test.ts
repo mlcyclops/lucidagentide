@@ -134,6 +134,14 @@ describe("the optional add-on card", () => {
     expect(hostile).not.toContain("<b>x</b>");
     expect(hostile).not.toContain("<script>");
   });
+
+  test("an add-on with a page says its live view is open, and still lists the commands", () => {
+    expect(herd.page).toBe(true);
+    const sheet = addonOpenSheetHtml(herd);
+    expect(sheet).toContain("live view, read only, is open in the Herd Preview tab");
+    expect(sheet).toContain('<code class="plg-cmd">lucid herd</code>');
+    expect(addonOpenSheetHtml({ ...herd, page: false })).not.toContain("Preview tab");
+  });
 });
 
 describe("drawerGeometry", () => {

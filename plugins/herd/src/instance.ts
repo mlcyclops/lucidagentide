@@ -80,7 +80,7 @@ export const SNAPSHOTS_KEPT = 10;
 const SNAPSHOT_RE = /^\d{13}-\d{6}\.json$/;
 
 /** tmp + rename, 0600: a crash mid-write leaves the previous file, never a torn one. */
-function writeAtomic(path: string, body: string): void {
+export function writeAtomic(path: string, body: string): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.tmp-${process.pid}`;
   writeFileSync(tmp, body, { mode: 0o600 });

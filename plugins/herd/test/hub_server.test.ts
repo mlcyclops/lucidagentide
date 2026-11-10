@@ -317,12 +317,17 @@ describe("security posture (ADR-0490 item 6)", () => {
   test("approval keys are refused on /cmd and never reach an approval route", async () => {
     serve();
     const d = await hub();
-    await cmd(d, "pane", "rebind", "s1:p1", "security");
+    // A fresh instance opens on the `solo` preset (ADR-0491 item 3), so the pane id is read, not assumed.
+    const panes: unknown = (await cmd(d, "pane", "list")).data;
+    const first = Array.isArray(panes) ? panes[0] : null;
+    const pane = first && typeof first === "object" && "id" in first && typeof first.id === "string" ? first.id : "";
+    expect(pane).not.toBe("");
+    expect((await callHub(d, ["pane", "rebind", "-t", pane, "security"])).status).toBe(200);
     for (const key of ["a", "i", "y", "s", "d"]) {
       const bare = await callHub(d, [key]);
       expect(bare.status).toBe(400);
       expect(bare.body).toMatchObject({ error: "usage" });
-      const typed = await callHub(d, ["send-keys", "-t", "s1:p1", key]);
+      const typed = await callHub(d, ["send-keys", "-t", pane, key]);
       expect(typed.status).toBe(409);
       expect(typed.body).toMatchObject({ error: "not_agent" });
     }

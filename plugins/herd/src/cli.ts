@@ -15,14 +15,24 @@
 // after the verb. Contract for scripts, as `lucid hub`: JSON on stdout and exit 0, or JSON
 // {"error":code,"message"} on stderr and exit 1. No server running is {"error":"no_hub"}.
 
-import { callHub, verifyHub, type HubReply } from "../../../harness/launcher/hub_control.ts";
-import { HubOpError } from "../../../harness/launcher/hub_spaces.ts";
+import { callHub, verifyHub, type HubDiscovery, type HubReply } from "../../../harness/launcher/hub_control.ts";
+import { resolve } from "node:path";
+import { HubOpError, type PaneDeck } from "../../../harness/launcher/hub_spaces.ts";
 import { HUB_USAGE, parseHubCommand } from "../../../harness/launcher/hub_tmux_verbs.ts";
+import { DECKS } from "../../../harness/launcher/hub_tui.ts";
+import { streamHub } from "./events.ts";
+import { defaultKeysJson } from "./keys.ts";
+import { isFileLayoutOp, LAYOUT_USAGE, LayoutLibrary, parseLayoutCommand, runLayoutOp } from "./layouts.ts";
+import { HERD_PANE_USAGE, parseHerdPaneCommand } from "./pane_verbs.ts";
 import { runHubClient } from "./hub_client.ts";
 import { runHubServer } from "./hub_server.ts";
 import { connectInstance, DEFAULT_INSTANCE, herdDataDir, instanceName, liveInstances } from "./instance.ts";
+import { finalReply, parseHerdVerb, type HerdVerb } from "./waits.ts";
 
 type Env = Readonly<Record<string, string | undefined>>;
+
+/** The decks a Herd server draws (the classic ones and Main), for the shell-side layout parser. */
+const cliIsDeck = (d: string): d is PaneDeck => d === "main" || DECKS.some((x) => x.id === d);
 
 export const HERD_HELP =
   "lucid herd [--name <name>]               attach this terminal (starting the server if none runs); Q detaches\n" +
@@ -30,6 +40,20 @@ export const HERD_HELP =
   "lucid herd server list                   every running instance\n" +
   "lucid herd [--name <name>] <command>     drive the running server, as `lucid hub <command>`:\n" +
   `  ${HUB_USAGE.replace(/^lucid hub /, "")}\n` +
+  "lucid herd main prompt <text> [--wait]   prompt Main as typed (refused agent_blocked while it waits on you)\n" +
+  "lucid herd session list | open <id> [--as main|lane]   open as Main is refused busy while Main works\n" +
+  "lucid herd machine list | add <name> --dir <discovery folder> | remove <name>   other engines on this box\n" +
+  "  agent verbs take <machine>/<lane>; agent spawn|list take --machine <name>\n" +
+  "lucid herd agent wait <lane> [--until <status>]... [--timeout <ms>]   block until the lane gets there\n" +
+  "lucid herd agent prompt --wait [--until <status>]... [--timeout <ms>] <lane> <text>   refused agent_blocked on an open ask\n" +
+  "lucid herd agent spawn ... --wait [--timeout <ms>]   return once the lane is ready\n" +
+  "lucid herd agent events [--lane <lane>] [--since <cursor>]   NDJSON lane transitions until you stop it\n" +
+  "lucid herd pane wait-output <pane> (--match <text> | --regex <re>) [--timeout <ms>]   on a deck pane\n" +
+  "lucid herd next | notify <title> [--body <text>] [--lane <lane>]   jump to who needs you; a script's notification\n" +
+  `lucid herd ${LAYOUT_USAGE}\n` +
+  "  list, show, delete, export and import work on the files, server or no server; presets are read-only\n" +
+  `lucid herd ${HERD_PANE_USAGE}\n` +
+  "lucid herd --default-keys                 print the default hub-keys.json (prefix ctrl+b, then one key)\n" +
   "Herd is an optional free add-on (Plugins, Free, Herd); the classic `lucid hub` is unchanged.\n";
 
 const fail = (body: Record<string, unknown>): number => {
@@ -55,7 +79,30 @@ export function splitName(argv: readonly string[]): { name: string; rest: string
   return { name: instanceName(raw), rest };
 }
 
+/** First words only the Herd server knows (P-HERD.6 and P-HERD.7): the classic parser would refuse them. */
+const HOST_ONLY_VERBS: Record<string, true> = { main: true, session: true, machine: true };
 const STOP_WAIT_MS = 60_000; // a spawned engine is stopped and awaited before the server lets go
+
+/** P-HERD.4 (ADR-0493): a reply that streams. `agent events` prints each transition as one NDJSON
+ *  line until the server ends it; a wait prints its result once it settles. A failure is the usual
+ *  JSON on stderr and exit 1. No deadline here: a wait lasts as long as its own --timeout. */
+async function runStreamed(hub: HubDiscovery, argv: readonly string[], events: boolean): Promise<number> {
+  const lines: string[] = [];
+  try {
+    await streamHub(hub, argv, (line) => {
+      if (events && line.startsWith('{"ts":')) process.stdout.write(`${line}\n`);
+      else lines.push(line);
+    });
+  } catch (e) {
+    return fail({ error: "hub_unreachable", message: e instanceof Error ? e.message : String(e) });
+  }
+  const last = lines.at(-1) ?? null;
+  if (events && last === null) return 0; // the server stopped: the stream simply ends
+  const r = finalReply(last);
+  if (!r.ok) return fail(r.body);
+  process.stdout.write(JSON.stringify(r.data, null, 2) + "\n");
+  return 0;
+}
 
 /** `entry` is the script a detached server runs (client.js when installed, process.argv[1]). */
 export async function runHerdCli(argv: readonly string[], env: Env, entry: string): Promise<number> {
@@ -71,7 +118,29 @@ export async function runHerdCli(argv: readonly string[], env: Env, entry: strin
     process.stdout.write(HERD_HELP);
     return 0;
   }
+  if (rest.length === 1 && rest[0] === "--default-keys") {
+    process.stdout.write(defaultKeysJson()); // P-HERD.3 (ADR-0492 item 3), as Herdr's --default-config
+    return 0;
+  }
   const data = herdDataDir(env);
+  // P-HERD.2 / P-HERD.3 (ADR-0491, ADR-0492): the layout files are read and written right here (export
+  // and import resolve their paths against this shell), with or without a server; save, apply and
+  // tree, and Herd's pane verbs, go to the server past the classic parser.
+  let herdOwn = false;
+  try {
+    const layout = parseLayoutCommand(rest);
+    if (layout && isFileLayoutOp(layout)) {
+      const op = layout.op === "layout.export" || layout.op === "layout.import" ? { ...layout, path: resolve(layout.path) } : layout;
+      const result = runLayoutOp({ library: new LayoutLibrary(data, cliIsDeck), mainReady: () => true, lanes: () => [] }, op, "shell");
+      process.stdout.write(JSON.stringify(result ?? null, null, 2) + "\n");
+      return 0;
+    }
+    // P-HERD.6/7 (ADR-0495, ADR-0496): main, session and machine verbs, and `--machine`, are the server's own.
+    herdOwn = layout !== null || parseHerdPaneCommand(rest) !== null || HOST_ONLY_VERBS[rest[0] ?? ""] === true || rest.includes("--machine");
+  } catch (e) {
+    if (e instanceof HubOpError) return fail({ error: e.code, message: e.message });
+    throw e;
+  }
   if (rest[0] === "server") {
     if (rest.length === 2 && rest[1] === "start") return runHubServer(env, { name });
     if (rest.length === 2 && rest[1] === "list") {
@@ -79,9 +148,13 @@ export async function runHerdCli(argv: readonly string[], env: Env, entry: strin
       return 0;
     }
     if (!(rest.length === 2 && rest[1] === "stop")) return fail({ error: "usage", message: "server start|stop|list [--name <name>]" });
-  } else {
+  }
+  // P-HERD.4/5 (ADR-0493, ADR-0494): waits, events, notify and next are Herd's own verbs.
+  let herd: HerdVerb | null = null;
+  if (rest[0] !== "server") {
     try {
-      parseHubCommand(rest); // usage errors answer locally, server or no server
+      herd = parseHerdVerb(rest);
+      if (!herd && !herdOwn) parseHubCommand(rest); // usage errors answer locally, server or no server
     } catch (e) {
       if (e instanceof HubOpError) return fail({ error: e.code, message: e.message });
       throw e;
@@ -89,6 +162,7 @@ export async function runHerdCli(argv: readonly string[], env: Env, entry: strin
   }
   const hub = await connectInstance(data, name);
   if (!hub) return fail({ error: "no_hub", message: `no Herd instance "${name}" answered the handshake (start one with \`lucid herd${named}\` or \`lucid herd server start${named}\`)` });
+  if (herd && herd.verb !== "notify" && herd.verb !== "next") return runStreamed(hub, rest, herd.verb === "agent.events");
   let r: HubReply;
   try { r = await callHub(hub, rest); }
   catch (e) { return fail({ error: "hub_unreachable", message: e instanceof Error ? e.message : String(e) }); }

@@ -47,10 +47,10 @@ import chalk from "@oh-my-pi/pi-utils/chalk";
 import { matchesKey, parseSgrMouse, ProcessTerminal, TUI, truncateToWidth, type Component } from "@oh-my-pi/pi-tui";
 import { join } from "node:path";
 import { discoveryDir, listDiscoveries, pruneStaleDiscovery, verifyDiscovery, type EngineDiscovery } from "../../desktop/engine_discovery.ts";
-import { agentPrioritiesPath, agentRailLine, HubAgentsPanel, laneLocations, statusGlyph, type AgentRow, type AgentsPanelRow, type GlyphHue } from "./hub_agents_panel.ts";
+import { agentPrioritiesPath, agentRailLine, HubAgentsPanel, laneLocations, statusGlyph, type AgentRow, type AgentsPanelRow, type GlyphHue, type LaneAttention } from "./hub_agents_panel.ts";
 import { createHubExecutor, startHubControl } from "./hub_control.ts";
 import { buildPaletteItems, filterPalette, type PaletteItem } from "./hub_palette.ts";
-import { HubOpError, leaves, loadSpaces, saveSpaces, Spaces, spacePanes, spacesPath, type PaneDeck, type PaneLeaf, type PaneNode } from "./hub_spaces.ts";
+import { HubOpError, leaves, loadSpaces, saveSpaces, slotLabel, Spaces, spacePanes, spacesPath, type PaneDeck, type PaneLeaf, type PaneNode } from "./hub_spaces.ts";
 import { parseHubCommand, tokenize, type HubOp } from "./hub_tmux_verbs.ts";
 
 // styles.css palette (desktop/renderer/styles.css) - the single source of the brand.
@@ -63,6 +63,8 @@ const LINE = chalk.hex("#252a3a");     // --line: unfocused borders
 const GREEN = chalk.hex("#46d27e");
 const AMBER = chalk.hex("#e8b23c");
 const RED = chalk.hex("#ef5f5f");
+/** The same painters, for a host deck (HubHostDeck) that draws its own pane in the hub's colors. */
+export const HUB_COLORS = { ACCENT, ACCENT_2, CYAN, TXT, TXT_3, LINE, GREEN, AMBER, RED } as const;
 
 // ---- decks -------------------------------------------------------------------------------------
 
@@ -171,9 +173,18 @@ export type RailRow =
   | { kind: "gap" }
   | { kind: "spaces-head"; count: number }
   | { kind: "space"; id: string; name: string; focused: boolean; panes: number }
-  | { kind: "tab"; id: string; space: string; name: string; active: boolean; focused: boolean; panes: number; lanes: string[]; last: boolean }
+  | { kind: "tab"; id: string; space: string; name: string; active: boolean; focused: boolean; panes: number; lanes: string[]; last: boolean; /** P-HERD.5 (Herd only): the ◎ count when attention replaces the lane count. */ badge?: number }
   | { kind: "agents-head"; count: number | null }
-  | { kind: "agent"; row: AgentsPanelRow & Partial<AgentRow> };
+  | { kind: "agent"; row: AgentsPanelRow & Partial<AgentRow>; dim?: boolean }
+  | { kind: "machine"; name: string; state: RailMachineState; count: number };
+
+/** P-HERD.7 (ADR-0496; Herd only, ADR-0535): another engine's connection, as the rail's dot shows it. */
+export type RailMachineState = "connected" | "reconnecting" | "down";
+/** One other machine's lanes under its own header. Rows of a machine that is not connected are drawn
+ *  dimmed with their last status. Their ids are control-plane refs (`<machine>/<lane>`). */
+export interface RailMachineGroup { name: string; state: RailMachineState; rows: readonly (AgentsPanelRow & Partial<AgentRow>)[] }
+/** The Herd seam that groups the AGENTS region by machine: `local` names this hub's own engine. */
+export interface RailMachines { local: string; groups: readonly RailMachineGroup[] }
 
 /** The seam for the rail's AGENTS region (P-TUI.5 E2, branch feat/p-tui.5-agents-panel): rows are
  *  drawn under the AGENTS header, clicks and priority keys route here. The hub binds its own
@@ -186,8 +197,10 @@ export interface RailAgentsPanel {
 
 /** The rail's rows from the model: SPACES header, each space with its tabs indented beneath, then the
  *  AGENTS header and (E2) the attached panel's rows. `agents` = the panel's rows (or, legacy, just
- *  their count); null when no panel is attached. */
-export function railRows(spaces: Spaces, agents: number | readonly (AgentsPanelRow & Partial<AgentRow>)[] | null = null): RailRow[] {
+ *  their count); null when no panel is attached. `machines` (Herd only) adds other engines: with one
+ *  or more groups, this engine's rows sit under a `local` machine header and each group follows under
+ *  its own; null or no groups is the rail exactly as before. */
+export function railRows(spaces: Spaces, agents: number | readonly (AgentsPanelRow & Partial<AgentRow>)[] | null = null, machines: RailMachines | null = null): RailRow[] {
   const rows: RailRow[] = [{ kind: "gap" }, { kind: "spaces-head", count: spaces.spaces.length }];
   for (const s of spaces.spaces) {
     const focused = s.id === spaces.active;
@@ -199,8 +212,15 @@ export function railRows(spaces: Spaces, agents: number | readonly (AgentsPanelR
     });
   }
   const n = agents === null ? null : typeof agents === "number" ? agents : agents.length;
-  rows.push({ kind: "gap" }, { kind: "agents-head", count: n });
+  const groups = machines?.groups ?? [];
+  const remote = groups.reduce((sum, g) => sum + g.rows.length, 0);
+  rows.push({ kind: "gap" }, { kind: "agents-head", count: n === null && remote === 0 ? null : (n ?? 0) + remote });
+  if (machines && groups.length) rows.push({ kind: "machine", name: machines.local, state: "connected", count: n ?? 0 });
   if (agents !== null && typeof agents !== "number") for (const a of agents) rows.push({ kind: "agent", row: a });
+  for (const g of groups) {
+    rows.push({ kind: "machine", name: g.name, state: g.state, count: g.rows.length });
+    for (const a of g.rows) rows.push({ kind: "agent", row: a, ...(g.state === "connected" ? {} : { dim: true }) });
+  }
   return rows;
 }
 
@@ -235,8 +255,10 @@ export function railLine(row: RailRow, w: number, paint: RailPaint = PLAIN_PAINT
       });
     case "spaces-head": mark = " ▦ "; name = "SPACES"; count = `${row.count} `; break;
     case "agents-head": mark = " ◎ "; name = "AGENTS"; count = row.count === null ? "" : `${row.count} `; break;
+    // ● connected, ◐ reconnecting, ○ down: the dot reads without color too.
+    case "machine": mark = ` ${row.state === "connected" ? "●" : row.state === "reconnecting" ? "◐" : "○"} `; name = row.name; count = `${row.count} `; break;
     case "space": mark = `${row.focused ? "▎◆" : " ◇"} `; name = row.name; count = `${row.panes}▣ `; break;
-    case "tab": mark = `   ${row.last ? "└" : "├"} `; name = row.name; lanes = row.lanes.length ? `◎${row.lanes.length} ` : ""; count = `${row.panes}▣ `; break;
+    case "tab": mark = `   ${row.last ? "└" : "├"} `; name = row.name; lanes = row.lanes.length ? `◎${row.badge ?? row.lanes.length} ` : ""; count = `${row.panes}▣ `; break;
   }
   const room = Math.max(1, w - Bun.stringWidth(mark) - Bun.stringWidth(lanes) - Bun.stringWidth(count) - 1);
   const cut = truncateToWidth(name, room);
@@ -571,6 +593,28 @@ interface HubUi { requestRender(): void; terminal: { rows: number } }
 /** ADR-0535: what the status line shows when a Herd server runs this component. */
 export interface HubServerInfo { readonly name: string; clients(): number }
 
+/** P-HERD.2 (ADR-0491; Herd only): palette rows a host adds (kind "host"), and Enter on one. */
+export interface HubHostPalette { items(): PaletteItem[]; act(id: string): void }
+
+/** P-HERD.6 (ADR-0495; Herd only, ADR-0535): the `main` deck, owned by the host (Herd's Main pane:
+ *  the engine's own conversation). Inert in the classic hub: it passes none, and its isDeck never
+ *  accepts "main". Keys reach the host only as an attached client's keystrokes (handleInput): the
+ *  control plane's send-keys types into agent panes only, so no script answers a Main ask. */
+export interface HubHostDeck {
+  /** A pane of this deck, framed, exactly w x h rows. */
+  pane(w: number, h: number, focused: boolean): string[];
+  /** True while the host's composer, picker or choice owns the keyboard. */
+  modal(): boolean;
+  /** A key while modal(), or while a pane of this deck is focused: true when the host took it. */
+  input(data: string, enter: boolean): boolean;
+  /** The status-line hint while a pane of this deck is focused or modal() is true. */
+  hint(): string;
+  /** Lines for the `?` overlay: [keys, what they do]; a "" second cell is a group heading. */
+  readonly help: readonly [string, string][];
+  /** Sessions deck ⏎: offer the choice. `asLane` resumes the session as a lane (the classic ⏎). */
+  sessionEnter(id: string, title: string, asLane: () => void): void;
+}
+
 const POLL_MS = 2000;
 const SIDEBAR_W = 20;
 const RAIL_W = 28;
@@ -626,9 +670,25 @@ export class HubComponent implements Component {
   /** ADR-0535: in a Herd server q, Q and ctrl+c detach the client whose key it was. Unset (the
    *  classic hub, the demos) q and ctrl+c end run() and Q is an ordinary key. */
   readonly #detach: (() => void) | undefined;
+  /** P-HERD.2 (ADR-0491; Herd only): verbs the host answers in the `:` prompt ahead of the parser. */
+  readonly #commands: ((argv: readonly string[]) => Promise<unknown> | undefined) | undefined;
+  /** P-HERD.2 (ADR-0491; Herd only): extra palette rows (kind "host") and what Enter on one does. */
+  readonly #hostPalette: HubHostPalette | undefined;
+  /** P-HERD.6 (ADR-0495; Herd only): the host-owned `main` deck; undefined in the classic hub. */
+  readonly #hostDeck: HubHostDeck | undefined;
+  /** P-HERD.7 (ADR-0496; Herd only): other machines' lanes for the rail; undefined in the classic hub. */
+  readonly #machines: (() => RailMachines | null) | undefined;
+  /** P-HERD.5 (ADR-0494; Herd only): a lane's attention for the rail (order, hues, ◎ badges);
+   *  undefined in the classic hub, which paints and sorts exactly as before. */
+  readonly #attention: ((laneId: string) => LaneAttention) | undefined;
 
-  constructor(ui: HubUi, engine: EngineDiscovery, opts: { spawned?: boolean; spaces?: Spaces; prioritiesPath?: string; onFleet?: (lanes: Record<string, unknown>[]) => void; server?: HubServerInfo; detach?: () => void; notice?: string } = {}) {
+  constructor(ui: HubUi, engine: EngineDiscovery, opts: { spawned?: boolean; spaces?: Spaces; prioritiesPath?: string; onFleet?: (lanes: Record<string, unknown>[]) => void; server?: HubServerInfo; detach?: () => void; notice?: string; commands?: (argv: readonly string[]) => Promise<unknown> | undefined; palette?: HubHostPalette; hostDeck?: HubHostDeck; machines?: () => RailMachines | null; attention?: (laneId: string) => LaneAttention } = {}) {
     this.#ui = ui;
+    this.#attention = opts.attention;
+    this.#hostDeck = opts.hostDeck;
+    this.#machines = opts.machines;
+    this.#commands = opts.commands;
+    this.#hostPalette = opts.palette;
     this.#onFleet = opts.onFleet;
     this.#server = opts.server;
     this.#detach = opts.detach;
@@ -650,12 +710,13 @@ export class HubComponent implements Component {
       },
       cancel: (id, name) => { void this.#cancelLaneById(id, name); },
       path: opts.prioritiesPath ?? agentPrioritiesPath(discoveryDir(process.env)),
+      ...(opts.attention ? { attention: opts.attention } : {}),
     });
     this.agentsPanel = this.#agents;
     this.#exec = createHubExecutor({
       spaces: this.#spaces,
       engine: { base: this.#base, token: engine.token, port: engine.port, version: engine.version, flavor: engine.flavor },
-      isDeck: (d) => DECKS.some((x) => x.id === d),
+      isDeck: (d) => DECKS.some((x) => x.id === d) || (d === "main" && this.#hostDeck !== undefined),
       paneText: (id, w, n) => this.paneText(id, w, n),
       refresh: () => this.refresh(),
       changed: () => this.#ui.requestRender(),
@@ -665,6 +726,34 @@ export class HubComponent implements Component {
 
   get spaces(): Spaces {
     return this.#spaces;
+  }
+
+  // ---- P-HERD.2 / P-HERD.3 (ADR-0491, ADR-0492): seams the Herd add-on's key layer drives; the
+  // classic hub never calls them. ----
+
+  /** The clickable geometry of the last rendered frame (null before the first render). */
+  get geometry(): HubGeometry | null {
+    return this.#geom;
+  }
+
+  /** Put a message in the status line (until the next action replaces it). */
+  setStatus(text: string): void {
+    this.#status = text;
+    this.#ui.requestRender();
+  }
+
+  /** Open the palette (prefix+g); an open composer stays open beneath it. */
+  openPalette(): void {
+    this.#palette = { query: "", sel: 0 };
+    this.#ui.requestRender();
+  }
+
+  /** Open the rail and put the keyboard on it, at the tab on screen (prefix+w). */
+  focusRail(): void {
+    if (!this.#spaces.rail) this.#spaces.setRail(true);
+    this.#railFocus = true;
+    this.#railSel = this.#focusedTabRow();
+    this.#ui.requestRender();
   }
 
   /** Run one control op (the control server and the `:` prompt both land here). */
@@ -909,6 +998,8 @@ export class HubComponent implements Component {
       this.#ui.requestRender();
       return;
     }
+    // P-HERD.6 (Herd only): the Main pane's composer, picker or the Sessions choice owns every key.
+    if (this.#hostDeck?.modal()) { this.#hostDeck.input(data, isEnter); this.#ui.requestRender(); return; }
     // ADR-0535: in a Herd server `Q` detaches too (prefix+q once P-HERD.3 lands the prefix), and q and
     // ctrl+c detach rather than quit: a client never ends the server, only `lucid herd server stop`.
     if (matchesKey(data, "ctrl+c") || data === "q" || (data === "Q" && this.#detach)) { this.#leave(); return; }
@@ -940,6 +1031,9 @@ export class HubComponent implements Component {
       if (data === "r") { this.#railRename(row); return; }
       if (data === "n") { this.#railCreate(row); return; }
     }
+    // P-HERD.6 (Herd only): a focused Main pane takes its own keys first (⏎ compose, y/s/d answer,
+    // c cancel, m/M pickers, scrolling); the rest fall through to the hub keymap.
+    if (this.#hostDeck && this.#focusedDeck() === "main" && this.#hostDeck.input(data, isEnter)) { this.#ui.requestRender(); return; }
     if (data === "?") { this.#help = true; this.#ui.requestRender(); return; }
     const count = leaves(this.#tree).length;
     const sp = this.#spaces;
@@ -1062,6 +1156,14 @@ export class HubComponent implements Component {
       const s = this.#data.sessions.map(rec);
       const sess = s[Math.min(this.#selected, s.length - 1)];
       if (!sess) { this.#status = "no session selected"; this.#ui.requestRender(); return; }
+      // P-HERD.6 (Herd only): ⏎ offers resume as a lane (below) or open as Main.
+      if (this.#hostDeck) {
+        const id = str(sess.id);
+        this.#status = "";
+        this.#hostDeck.sessionEnter(id, str(sess.title), () => void this.#spawnAgent(id));
+        this.#ui.requestRender();
+        return;
+      }
       await this.#spawnAgent(str(sess.id));
       return;
     }
@@ -1142,8 +1244,10 @@ export class HubComponent implements Component {
         return;
       }
       if (kind === "command") {
-        // Same parser + executor as `lucid hub <cmd>`: what works typed works scripted.
-        const r = await this.exec(parseHubCommand(tokenize(text)));
+        // Same parser + executor as `lucid hub <cmd>`: what works typed works scripted. A Herd host
+        // answers its own verbs first (P-HERD.2); the classic hub passes no `commands`.
+        const argv = tokenize(text);
+        const r = await (this.#commands?.(argv) ?? this.exec(parseHubCommand(argv)));
         this.#status = `:${text} → ${truncateToWidth(JSON.stringify(r) ?? "ok", 120)}`;
       } else if (kind === "space-rename" || kind === "tab-rename") {
         // p.lane carries the SPACE or TAB id here; a refused rename (HubOpError) surfaces verbatim in the catch.
@@ -1273,7 +1377,7 @@ export class HubComponent implements Component {
   // -- P-TUI.5: the rail. Every verb is the model's; a refusal surfaces verbatim. -------------------
 
   #railRows(): RailRow[] {
-    return railRows(this.#spaces, this.agentsPanel ? this.agentsPanel.rows() : null);
+    return railRows(this.#spaces, this.agentsPanel ? this.agentsPanel.rows() : null, this.#machines?.() ?? null);
   }
 
   /** The rail row of the tab on screen: where the keyboard lands on B and after a create. */
@@ -1324,7 +1428,7 @@ export class HubComponent implements Component {
    *  (help, reader, picker, palette, a composer) owns input until it closes, so a stray click never
    *  edits or dismisses it. */
   #click(col: number, row: number): void {
-    if (this.#help || this.#reader || this.#picker || this.#palette || this.#prompt || !this.#geom) return;
+    if (this.#help || this.#reader || this.#picker || this.#palette || this.#prompt || this.#hostDeck?.modal() || !this.#geom) return;
     const hit = clickTarget(this.#geom, col, row);
     if (!hit) return;
     // The strip (P-TUI.6): a click on an entry rebinds the focused pane to that deck - the same
@@ -1360,22 +1464,41 @@ export class HubComponent implements Component {
   #railBlock(rows: readonly RailRow[], h: number): string[] {
     const w = RAIL_W - 1;
     const lanes = arr(this.#data?.fleet.lanes).map(rec);
+    // P-HERD.5 (ADR-0494; Herd only): a lane waiting on you is amber, a finished turn you have not
+    // looked at is bold green (Herdr's done), one you have seen is dim green (idle). A tab's ◎ counts
+    // needs-you (amber), else unseen (green), else its lanes as before. Unset in the classic hub.
+    const att = this.#attention;
     // A tab's ◎ badge is live: amber while one of its agents waits on you, green while one works.
     const laneHue = (ids: string[]) => {
+      if (att && ids.some((id) => att(id) === "needs-you")) return AMBER;
+      if (att && ids.some((id) => att(id) === "unseen")) return GREEN.bold;
       const mine = lanes.filter((l) => ids.includes(str(l.id)));
       return mine.some((l) => rec(l.pendingApproval).summary) ? AMBER : mine.some((l) => str(l.status) === "working") ? GREEN : ACCENT_2;
     };
+    const shown = att
+      ? rows.map((r) => {
+        if (r.kind !== "tab") return r;
+        const needs = r.lanes.filter((id) => att(id) === "needs-you").length;
+        return { ...r, badge: needs || r.lanes.filter((id) => att(id) === "unseen").length || r.lanes.length };
+      })
+      : rows;
     // Agent-row hues: the LaneStatus vocabulary via statusGlyph (attention amber, busy green,
     // error red, settled dim); the click-selected row's name reads cyan like a focused tab.
     const hue: Record<GlyphHue, (s: string) => string> = { attention: AMBER, busy: GREEN, error: RED, ok: TXT_3, off: TXT_3, unknown: TXT_3 };
     const paint: RailPaint = {
       head: (s) => ACCENT_2.bold(s),
-      mark: (s, r) => (r.kind === "agent" ? hue[statusGlyph(r.row.status).hue](s) : r.kind === "space" && r.focused ? ACCENT(s) : TXT_3(s)),
-      name: (s, r) => (r.kind === "agent" ? (this.#agents.selected === r.row.id ? CYAN.bold(s) : TXT(s)) : r.kind === "space" ? (r.focused ? TXT.bold(s) : TXT(s)) : r.kind === "tab" ? (r.focused ? CYAN.bold(s) : r.active ? TXT(s) : TXT_3(s)) : s),
+      // P-HERD.7 (Herd only): a machine header's dot is green, amber or red by connection; a machine
+      // that is not connected keeps its rows, dimmed, with their last status.
+      mark: (s, r) => (r.kind === "machine" ? (r.state === "connected" ? GREEN : r.state === "reconnecting" ? AMBER : RED)(s) : r.kind === "agent" && r.dim ? TXT_3(s)
+        : r.kind === "agent" && r.row.attention === "needs-you" ? AMBER(s)
+        : r.kind === "agent" && r.row.attention === "unseen" ? GREEN.bold(s)
+        : r.kind === "agent" && att && r.row.status === "done" ? GREEN.dim(s)
+        : r.kind === "agent" ? hue[statusGlyph(r.row.status).hue](s) : r.kind === "space" && r.focused ? ACCENT(s) : TXT_3(s)),
+      name: (s, r) => (r.kind === "machine" ? ACCENT_2(s) : r.kind === "agent" && r.dim ? TXT_3(s) : r.kind === "agent" ? (this.#agents.selected === r.row.id ? CYAN.bold(s) : TXT(s)) : r.kind === "space" ? (r.focused ? TXT.bold(s) : TXT(s)) : r.kind === "tab" ? (r.focused ? CYAN.bold(s) : r.active ? TXT(s) : TXT_3(s)) : s),
       lanes: (s, r) => (r.kind === "tab" ? laneHue(r.lanes)(s) : r.kind === "agent" ? TXT_3(s) : s),
       count: (s, r) => (r.kind === "agent" && r.row.priority >= 1 ? ACCENT_2(s) : TXT_3(s)),
     };
-    const body = rows.slice(0, h).map((r, i) => (this.#railFocus && i === this.#railSel ? chalk.inverse(TXT(railLine(r, w))) : railLine(r, w, paint)));
+    const body = shown.slice(0, h).map((r, i) => (this.#railFocus && i === this.#railSel ? chalk.inverse(TXT(railLine(r, w))) : railLine(r, w, paint)));
     while (body.length < h) body.push(" ".repeat(w));
     return body.map((l) => l + LINE("│"));
   }
@@ -1493,6 +1616,7 @@ export class HubComponent implements Component {
       ["  n", "create a space · r rename it (inline)"],
       ["  x", "close it (the last space refuses)"],
       ["", ""],
+      ...(this.#hostDeck ? [...this.#hostDeck.help, ["", ""] as [string, string]] : []),
       ["Security", ""],
       ["  a", "approve the selected block (audited release)"],
       ["  i", "dismiss the selected block (acknowledge only)"],
@@ -1522,7 +1646,8 @@ export class HubComponent implements Component {
    *  composer line at the bottom in prompt mode. */
   #agentPane(leaf: PaneLeaf, w: number, h: number, focused: boolean): string[] {
     const lane = arr(this.#data?.fleet.lanes).map(rec).find((l) => str(l.id) === leaf.lane);
-    const status = lane ? str(lane.status) : "gone";
+    // P-HERD.2 (Herd only): a pane from a layout slot with no lane yet waits, and says for what.
+    const status = lane ? str(lane.status) : leaf.slot ? "waiting" : "gone";
     const live = this.#live[leaf.lane ?? ""];
     const working = status === "working" || !!live?.working;
     const turns = this.#transcripts[leaf.lane ?? ""] ?? [];
@@ -1554,8 +1679,9 @@ export class HubComponent implements Component {
       for (const row of wrapText(str(ask.summary), innerW - 4)) lines.push(`\u0002  ${row}`);
       lines.push(`\u0002  y allow once · s allow for this session · d deny`);
     }
-    if (lines.length === 0) lines.push("", status === "gone" ? "  this agent is gone (x closes the pane)" : "  no turns yet - press ⏎ and type to talk to this agent");
-    const promptOn = focused && this.#prompt?.lane === leaf.lane;
+    if (lines.length === 0) lines.push("", leaf.slot && !lane ? `  waiting for ${slotLabel(leaf.slot)}; it fills when one is there` : status === "gone" ? "  this agent is gone (x closes the pane)" : "  no turns yet - press ⏎ and type to talk to this agent");
+    const prompt = this.#prompt;
+    const promptOn = focused && prompt !== null && prompt.lane === leaf.lane;
     const bodyH = h - 2 - (promptOn ? 1 : 0);
     // Scrollback: #scroll is the offset UP from the live tail (0 = follow). Clamped so the top of
     // history is the ceiling; a "more below" marker replaces the last row while scrolled.
@@ -1570,7 +1696,7 @@ export class HubComponent implements Component {
     const spin = working ? ` ${"⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[Math.floor(Date.now() / 200) % 10]}` : "";
     // The lane's own model, else the engine's current default - the pane always names its model.
     const model = (lane && str(lane.model)) || modelCatalog(this.#data?.config ?? []).current;
-    const title = ` ▶ ${leaf.laneName ?? leaf.lane}${model && model !== "?" ? ` · ${model}` : ""} · ${status}${spin}${lane && rec(lane.pendingApproval).summary ? " · WAITING" : ""} `;
+    const title = ` ▶ ${leaf.label ? `${leaf.label} · ` : ""}${leaf.laneName ?? leaf.lane ?? (leaf.slot ? slotLabel(leaf.slot) : "")}${model && model !== "?" ? ` · ${model}` : ""} · ${status}${spin}${lane && rec(lane.pendingApproval).summary ? " · WAITING" : ""} `;
     const titlePainted = focused ? ACCENT_2.bold(title) : TXT_3(title);
     const dashes = Math.max(0, w - 2 - Bun.stringWidth(title) - 1);
     const top = paint("╭─") + titlePainted + paint("─".repeat(dashes) + "╮");
@@ -1580,8 +1706,8 @@ export class HubComponent implements Component {
       const painted = line.startsWith("\u0002") ? AMBER(line.slice(1)) : line.startsWith("\u0001") ? TXT_3(line.slice(1)) : line.startsWith("›") ? ACCENT_2(line) : TXT(line);
       return paint("│") + " " + painted + " " + paint("│");
     });
-    if (promptOn) {
-      const p = truncateToWidth(this.#prompt!.text, innerW - 4);
+    if (promptOn && prompt) {
+      const p = truncateToWidth(prompt.text, innerW - 4);
       const promptRow = ACCENT.bold("› ") + TXT(p) + ACCENT("▌") + " ".repeat(Math.max(0, innerW - 3 - Bun.stringWidth(p)));
       rows.push(paint("│") + " " + promptRow + " " + paint("│"));
     }
@@ -1620,6 +1746,7 @@ export class HubComponent implements Component {
   /** The fused list under the current query: spaces, tabs, agents (live lanes), decks. */
   #paletteMatches(): PaletteItem[] {
     const items = buildPaletteItems(this.#spaces, arr(this.#data?.fleet.lanes).map(rec));
+    if (this.#hostPalette) items.push(...this.#hostPalette.items()); // P-HERD.2: layouts (Herd only)
     return filterPalette(items, this.#palette?.query ?? "");
   }
 
@@ -1634,6 +1761,7 @@ export class HubComponent implements Component {
       if (pick.kind === "space") { this.#selected = 0; this.#scroll = 0; this.#status = `space → ${this.#spaces.focus(pick.id).name}`; }
       else if (pick.kind === "tab") { this.#selected = 0; this.#scroll = 0; this.#status = `tab → ${this.#spaces.focusTab(pick.id).name}`; }
       else if (pick.kind === "agent") { this.#agents.selected = pick.id; this.#agents.attach(pick.id); return; }
+      else if (pick.kind === "host") { this.#hostPalette?.act(pick.id); this.#ui.requestRender(); return; }
       else { this.#spaces.rebind(undefined, pick.id as DeckId); this.#selected = 0; this.#scroll = 0; this.#status = `deck → ${pick.label}`; }
     } catch (err) {
       if (!(err instanceof HubOpError)) throw err;
@@ -1674,12 +1802,14 @@ export class HubComponent implements Component {
 
   #pane(leaf: PaneLeaf, w: number, h: number, focused: boolean): string[] {
     if (leaf.deck === "agent") return this.#agentPane(leaf, w, h, focused);
+    // P-HERD.6: only a Herd host draws Main; a layout without one shows what the pane is for.
+    if (leaf.deck === "main") return this.#hostDeck ? this.#hostDeck.pane(w, h, focused) : fitBlock(["", "  Main is a Herd pane (lucid herd)"], w, h);
     const deck = leaf.deck;
     const meta = DECKS.find((d) => d.id === deck)!;
     const badge = deck === "security" ? quarantineOf(this.#data).length : deck === "fleet" || deck === "agents" ? arr(this.#data?.fleet.lanes).length : deck === "sessions" ? this.#data?.sessions.length ?? 0 : deck === "spaces" ? this.#spaceRows().length : 0;
     const body = fitBlock(deckLines(deck, this.#data, w - 4, focused ? this.#selected : -1, this.#kgFilter, deck === "spaces" ? this.#spaceRows() : []), w - 4, h - 2);
     const paint = focused ? CYAN : LINE;
-    const title = ` ${meta.icon} ${meta.title}${badge ? ` · ${badge}` : ""} `;
+    const title = ` ${meta.icon} ${leaf.label ? `${leaf.label} · ` : ""}${meta.title}${badge ? ` · ${badge}` : ""} `;
     const titlePainted = focused ? ACCENT_2.bold(title) : TXT_3(title);
     const dashes = Math.max(0, w - 2 - Bun.stringWidth(title) - 1);
     const top = paint("╭─") + titlePainted + paint("─".repeat(dashes) + "╮");
@@ -1781,7 +1911,11 @@ export class HubComponent implements Component {
     const rightPlain = this.#server
       ? `${this.#engine.flavor} engine · herd ${this.#server.name} · ${this.#server.clients()} attached `
       : `${this.#engine.flavor} engine · lucid hub `;
-    const composing = this.#prompt && this.#promptKind === "wl-add"
+    // P-HERD.6 (Herd only): while the host's composer, picker or choice holds the keys, it speaks here.
+    const hostModal = this.#hostDeck?.modal() ? ` ${this.#hostDeck.hint()}` : "";
+    const focusedDeck = this.#focusedDeck();
+    const deckHint = focusedDeck === "main" ? this.#hostDeck?.hint() ?? "" : DECK_HINTS[focusedDeck];
+    const composing = hostModal ? hostModal : this.#prompt && this.#promptKind === "wl-add"
       ? ` add host to whitelist: ${this.#prompt.text}▌  (⏎ save · esc cancel)`
       : this.#prompt && this.#promptKind === "kg-filter"
         ? ` filter pages: ${this.#prompt.text}▌  (live · ⏎ keep · esc clear)`
@@ -1790,7 +1924,7 @@ export class HubComponent implements Component {
           : this.#prompt && (this.#promptKind === "space-rename" || this.#promptKind === "tab-rename")
             ? ` rename ${this.#promptKind === "space-rename" ? "space" : "tab"}: ${this.#prompt.text}▌  (⏎ save · esc cancel)`
           : "";
-    const hint = this.#reader ? " j/k scroll · ctrl+u/d page · esc closes the page" : this.#help ? " any key closes help" : this.#palette ? " palette: type to filter · ⇅ or ⌃n/⌃p move · ⏎ act · esc closes" : composing || ` ${DECK_HINTS[this.#prompt ? "prompting" : this.#railFocus && railOn ? "rail" : this.#focusedDeck()]} · ⌃k palette · ? help`;
+    const hint = this.#reader ? " j/k scroll · ctrl+u/d page · esc closes the page" : this.#help ? " any key closes help" : this.#palette ? " palette: type to filter · ⇅ or ⌃n/⌃p move · ⏎ act · esc closes" : composing || ` ${this.#prompt ? DECK_HINTS.prompting : this.#railFocus && railOn ? DECK_HINTS.rail : deckHint} · ⌃k palette · ? help`;
     const leftPlain = truncateToWidth(composing || (this.#status ? ` ${this.#status}` : hint), Math.max(0, width - Bun.stringWidth(rightPlain) - 1));
     const pad = Math.max(1, width - Bun.stringWidth(leftPlain) - Bun.stringWidth(rightPlain));
     const statusBar = (this.#status ? AMBER(leftPlain) : TXT_3(leftPlain)) + " ".repeat(pad) + TXT_3(rightPlain);

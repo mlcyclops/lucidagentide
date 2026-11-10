@@ -181,6 +181,46 @@ installs it for you). Without it, `lucid herd` prints how to install it and exit
   human-only keys (`a`, `i`, `y`, `s`, `d`) work only from an attached terminal; `/cmd`
   has no verb for them.
 
+### Layouts and keys (P-HERD.2 and P-HERD.3, ADR-0491 and ADR-0492)
+
+- **Layouts are files.** `hub-layouts/<name>.json` in the add-on's data folder:
+  `{ v: 1, name, tree, rail? }`, where `tree` is a split tree of `{ dir: "h"|"v", ratio, a, b }`
+  and panes `{ deck }` or `{ deck: "agent", slot }`. A slot is `{ by: "priority", index }` (that
+  place in the rail's agents list) or `{ by: "name", pattern }` (a `*`/`?` glob on the lane
+  name). An agent pane whose slot has no lane yet says what it waits for and fills when the
+  lane appears. A layout never carries a lane id, a cwd, a model or a prompt: such a file is
+  refused, as is one over 32 panes or 64 KiB. Names are 1-40 of `a-z 0-9 - _`.
+- **Presets.** `solo`, `columns-3`, `columns-4`, `review`, `orbit` and `command` (Main beside
+  two agents) are read-only and copied under `hub-layouts/builtin/`. A new instance opens on
+  `solo`.
+- **Verbs.** `lucid herd layout list | show <name> | save <name> [-t <tab>] | apply <name>
+  [-t <tab>] | delete <name> | tree [-t <tab>] | export <name> <path> | import <path> [--as
+  <name>]`, also in the `:` prompt and the palette (`layout <name>`). List, show, delete,
+  export and import work on the files without a server; export never overwrites; import
+  takes a new name (`-2`, `-3`) when its name is taken. Over the control plane an agent can
+  save and apply, but not export or import (they name files).
+- **The prefix.** `ctrl+b`, then one key, works from a composer too, and a composer never
+  loses a printed key to the hub. Defaults: `c` new tab, `v` split right, `-` split down,
+  `h j k l` focus by geometry, `H J K L` swap, `z` zoom, `x` close, `r` resize mode (`h j k l`
+  move the divider one cell, capitals five, `esc` ends), `[` copy mode, `,` name the pane,
+  `!` pane to a new tab, `n`/`p` next and previous tab, `1`-`9` a tab, `T`/`X` rename and close
+  the tab, `N`/`W`/`D` new, rename and close space, `w` the spaces panel, `g` the palette, `b`
+  the rail, `space` the next layout, `a` the next lane waiting on you, `q` detach, `?` the live
+  bindings. Bare keys without the prefix work as in the classic hub.
+- **`hub-keys.json`** in the data folder: `{ v: 1, prefix, bindings: { <action>: [<key>, ...] },
+  direct: { <action>: [...] }, mouse, notify }`. `direct` keys act without the prefix and need
+  `ctrl` or `alt`. Unknown actions and unreadable keys are skipped and named in the status line
+  and in `ctrl+b ?`, which shows the table as the file has it now. `lucid herd --default-keys`
+  prints the defaults. `mouse: false` leaves mouse capture off so the terminal selects text.
+- **Copy mode.** `h j k l`, `w b`, `0 $`, `g G`, page keys, `/` search with `n N`, `v` select,
+  `y` (or enter) yank, `q`/`esc` leave. A yank goes to the clipboard of the terminal that
+  pressed it (OSC 52) and to the OS clipboard command when there is one (not over SSH).
+- **Pane verbs.** `pane focus|swap [-t <pane>] --direction left|right|up|down` (and tmux
+  `select-pane -L|-R|-U|-D`), `pane resize [-t <pane>] -L|-R|-U|-D --cells <n>`, `pane move
+  <pane> --tab <tab> --split right|down`, `pane move <pane> --new-tab [-n <name>]` (the id
+  stays; into another space the pane gets a new id there) and `pane rename <pane> <label> |
+  --clear`. Dragging a divider with the mouse resizes it.
+
 ### Fleet status for the terminal (OSC 7501, P-HERD-OSC.1, ADR-0530)
 
 The Herd client tells the terminal it runs in what the fleet is doing, with the

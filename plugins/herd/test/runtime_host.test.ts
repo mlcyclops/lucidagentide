@@ -6,14 +6,15 @@
 // add-on's data dir, the IDE's node_modules and data root, and never the runtime's host token.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { startHubControl, type HubControl } from "../../../harness/launcher/hub_control.ts";
 import { instancePaths } from "../src/instance.ts";
-import { ideBun, ideRepo, startHealthServer, workerEnv } from "../src/runtime_host.ts";
+import { ideBun, ideRepo, startRuntimeServer, workerEnv } from "../src/runtime_host.ts";
 
+const HOST_TOKEN = "f".repeat(64);
 let data: string;
 let port: number;
 let health: Server;
@@ -24,7 +25,7 @@ beforeEach(async () => {
   const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("") });
   port = probe.port!;
   probe.stop(true);
-  health = await startHealthServer(data, port);
+  health = await startRuntimeServer(data, port, HOST_TOKEN);
 });
 afterEach(() => {
   control?.stop();
@@ -54,6 +55,79 @@ describe("/healthz", () => {
     expect((await get("/healthz", { origin: "http://evil.example" })).status).toBe(403);
     expect((await get("/cmd")).status).toBe(404);
     expect(await (await get("/healthz")).text()).not.toContain(control.discovery.token);
+  });
+});
+
+// ADR-0497 as the add-on: the read-only mirror of instance main on the same PORT.
+describe("the GUI mirror", () => {
+  const LAYOUT = {
+    v: 2, active: "s1", nextSpace: 2,
+    spaces: [{
+      id: "s1", name: "work", activeTab: "s1:t1", nextPane: 3, nextTab: 2,
+      tabs: [{ id: "s1:t1", name: "pair", focus: 0, zoom: false, tree: { kind: "split", dir: "v", ratio: 0.7, a: { kind: "leaf", id: "s1:p1", deck: "agent", lane: "L1", laneName: "alpha" }, b: { kind: "leaf", id: "s1:p2", deck: "fleet" } } }],
+    }],
+  };
+  const startMain = () => {
+    const spaces = instancePaths(data, "main").spaces;
+    mkdirSync(dirname(spaces), { recursive: true });
+    writeFileSync(spaces, JSON.stringify(LAYOUT));
+    return startHubControl({
+      dir: instancePaths(data, "main").run,
+      exec: async (op) => (op.op === "agent.list" ? [{ id: "L1", name: "alpha", status: "needs-approval", attention: "needs-you", cwd: "C:/secret/repo" }] : null),
+    });
+  };
+
+  test("the page: strict CSP, its own Origin only, GET only, no CORS", async () => {
+    const page = await get("/");
+    expect(page.status).toBe(200);
+    expect(page.headers.get("content-type")).toContain("text/html");
+    expect(page.headers.get("content-security-policy")).toContain("script-src 'self'");
+    expect(page.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(page.headers.get("access-control-allow-origin")).toBeNull();
+    expect(await page.text()).toContain('<script src="/mirror.js" defer></script>');
+    expect((await get("/mirror.js", { origin: `http://localhost:${port}` })).status).toBe(200);
+    expect((await get("/api/mirror", { origin: "http://evil.example" })).status).toBe(403);
+    expect((await fetch(`http://127.0.0.1:${port}/`, { method: "POST" })).status).toBe(405);
+  });
+
+  test("down until instance main answers; then its tabs, tree and lanes, metadata only", async () => {
+    expect(await (await get("/api/mirror")).json()).toMatchObject({ v: 1, instance: "main", up: false, spaces: [] });
+    control = startMain();
+    const res = await get("/api/mirror");
+    const text = await res.text();
+    expect(JSON.parse(text)).toMatchObject({
+      up: true, focusedTab: "s1:t1", counts: { agents: 1, needsYou: 1, unseen: 0 },
+      spaces: [{ id: "s1", tabs: [{ id: "s1:t1", tree: { dir: "v", ratio: 0.7, a: { agent: { name: "alpha", status: "needs-approval", attention: "needs-you" } }, b: { deck: "fleet" } } }] }],
+    });
+    expect(text).not.toContain("secret");
+    expect(text).not.toContain(control.discovery.token);
+  });
+
+  test("the host route answers only with the runtime's host token", async () => {
+    control = startMain();
+    expect((await get("/host/mirror")).status).toBe(403);
+    expect((await get("/host/mirror", { "x-lucid-host-token": "0".repeat(64) })).status).toBe(403);
+    const ok = await get("/host/mirror", { "x-lucid-host-token": HOST_TOKEN });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({ up: true, counts: { needsYou: 1 } });
+  });
+
+  test("the live feed sends the current state at once", async () => {
+    control = startMain();
+    const res = await get("/api/mirror/events");
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    const reader = res.body!.getReader();
+    const dec = new TextDecoder();
+    let got = "";
+    while (!got.includes("\n\ndata: ") || !got.endsWith("\n\n")) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      got += dec.decode(value, { stream: true });
+    }
+    await reader.cancel();
+    expect(got.startsWith("retry: 3000\n\n")).toBe(true);
+    const event = got.split("\n\n").find((chunk) => chunk.startsWith("data: "));
+    expect(JSON.parse(event!.slice("data: ".length))).toMatchObject({ up: true, focusedTab: "s1:t1" });
   });
 });
 

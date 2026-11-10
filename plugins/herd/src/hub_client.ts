@@ -16,9 +16,12 @@
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import { spawn } from "node:child_process";
 import chalk from "@oh-my-pi/pi-utils/chalk";
-import { ProcessTerminal, TUI, truncateToWidth, type Component } from "@oh-my-pi/pi-tui";
+import { ProcessTerminal, TERMINAL, TUI, truncateToWidth, type Component } from "@oh-my-pi/pi-tui";
 import type { HubDiscovery } from "../../../harness/launcher/hub_control.ts";
 import { HubOpError } from "../../../harness/launcher/hub_spaces.ts";
+import { desktopEscape, terminalNotifyKind, type HerdAlert } from "./attention.ts";
+import { clipboardCommand, osc52 } from "./copy_mode.ts";
+import { loadKeysConfig } from "./keys.ts";
 import { programStatusEnabled, ProgramStatusEmitter } from "./hub_program_status.ts";
 import type { HubClientMsg, HubServerMsg } from "./hub_server.ts";
 import { connectInstance, herdDataDir, instanceName, instancePaths } from "./instance.ts";
@@ -42,7 +45,7 @@ const KEEPALIVE_MS = 30_000;
 
 /** Attach to a server that already WON the handshake (connectInstance). Resolves once the stream is
  *  open; rejects when the server refuses the upgrade. */
-export function attachHub(d: HubDiscovery, opts: { cols: number; rows: number; onFrame(lines: string[]): void; onLanes?(lanes: Record<string, unknown>[]): void }): Promise<HubAttachment> {
+export function attachHub(d: HubDiscovery, opts: { cols: number; rows: number; onFrame(lines: string[]): void; onLanes?(lanes: Record<string, unknown>[]): void; onAlert?(a: HerdAlert): void; onYank?(text: string): void }): Promise<HubAttachment> {
   const ws = new WebSocket(`ws://127.0.0.1:${d.port}/attach?cols=${opts.cols}&rows=${opts.rows}`, { headers: { "x-lucid-hub-token": d.token } });
   const closed = Promise.withResolvers<HubDetachReason>();
   const opened = Promise.withResolvers<HubAttachment>();
@@ -64,6 +67,8 @@ export function attachHub(d: HubDiscovery, opts: { cols: number; rows: number; o
     try { m = JSON.parse(ev.data); } catch { return; }
     if (m.t === "frame" && Array.isArray(m.lines)) opts.onFrame(m.lines);
     else if (m.t === "lanes" && Array.isArray(m.lanes)) opts.onLanes?.(m.lanes);
+    else if (m.t === "alert" && typeof m.bell === "boolean") opts.onAlert?.(m); // P-HERD.5 (ADR-0494)
+    else if (m.t === "yank" && typeof m.text === "string") opts.onYank?.(m.text); // P-HERD.3 (ADR-0492 item 5)
     else if (m.t === "bye") reason = m.reason === "stopped" ? "stopped" : "detached";
   };
   ws.onclose = () => {
@@ -156,6 +161,25 @@ export async function runHubClient(env: Env, opts: { name?: string; entry: strin
       rows: Math.max(5, sent.rows),
       onFrame: (lines) => { frame = lines; tui.requestRender(); },
       onLanes: status ? (lanes) => status.update(lanes) : undefined,
+      // P-HERD.5 (ADR-0494): BEL as asked; a desktop notification only in the escape this terminal
+      // shows (terminalNotifyKind), else nothing. The server sends lane name and status only.
+      onAlert: (a) => {
+        const kind = a.desktop ? terminalNotifyKind(TERMINAL.notifyProtocol, env) : null;
+        const bytes = `${a.bell ? "\x07" : ""}${kind && a.desktop ? desktopEscape(kind, a.desktop) : ""}`;
+        if (bytes && process.stdout.isTTY === true) tui.terminal.write(bytes);
+      },
+      // P-HERD.3 (ADR-0492 item 5): copy mode's yank lands on THIS terminal's clipboard through OSC 52,
+      // and on the OS clipboard when this machine has a clipboard command.
+      onYank: (text) => {
+        tui.terminal.write(osc52(text));
+        const cmd = clipboardCommand(process.platform, env);
+        if (!cmd) return;
+        try {
+          const p = spawn(cmd[0]!, cmd.slice(1), { stdio: ["pipe", "ignore", "ignore"], windowsHide: true });
+          p.on("error", () => { /* no such command here: OSC 52 carried it */ });
+          p.stdin?.end(text);
+        } catch { /* OSC 52 carried it */ }
+      },
     });
   } catch (e) {
     process.stderr.write(`[herd] could not attach to Herd instance "${name}": ${e instanceof Error ? e.message : String(e)}\n`);
@@ -165,7 +189,8 @@ export async function runHubClient(env: Env, opts: { name?: string; entry: strin
   for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(sig, leave);
   // mouseTracking: pi-tui turns SGR click reporting on while this fullscreen overlay holds the screen
   // and off again on hide/stop, so the parent shell gets its native selection back on detach.
-  const overlay = tui.showOverlay(view, { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0, fullscreen: true, mouseTracking: true });
+  // `mouse: false` in hub-keys.json (P-HERD.3) leaves it off: the terminal selects text natively.
+  const overlay = tui.showOverlay(view, { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0, fullscreen: true, mouseTracking: loadKeysConfig(data).mouse });
   tui.setFocus(view);
   tui.start();
   let reason: HubDetachReason;

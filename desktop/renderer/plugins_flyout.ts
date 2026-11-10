@@ -18,8 +18,10 @@
 //
 // ADR-0535: an optional add-on (Herd) is a FREE card with the "Optional add-on" chip. Its button is Install when
 // this build ships the signed package, Not in this build when it does not, and Open plus Remove once installed.
-// Install goes through the engine's install-offered route only; Open starts it through the runtime and shows
-// the terminal commands that use it. Nothing of an add-on installs or runs before the user presses Install.
+// Install goes through the engine's install-offered route only; Open starts it through the runtime, shows its
+// read-only page in its Preview tab when the catalog row has `page` (Herd's live mirror, ADR-0497), and keeps
+// the drawer open on the terminal commands that use it. Nothing of an add-on installs or runs before the user
+// presses Install.
 //
 // Media is bundled under assets/plugins/ (offline). A loop only gets its `src` while its card is on screen
 // (IntersectionObserver), and never under prefers-reduced-motion: then the poster is the picture.
@@ -136,12 +138,14 @@ export function freeCardHtml(p: FreePlugin, addon?: { action: AddonAction; note:
   </article>`;
 }
 
-/** After Open starts an add-on: how to use it from a terminal (its catalog `howTo`). */
+/** After Open starts an add-on: how to use it from a terminal (its catalog `howTo`). An add-on with a
+ *  `page` also opened its read-only view in a Preview tab, and the sheet says where it is. */
 export function addonOpenSheetHtml(p: FreePlugin): string {
   const steps = (p.howTo ?? []).map((s) => `<li><code class="plg-cmd">${esc(s.command)}</code> ${esc(s.what)}</li>`).join("");
+  const page = p.page ? ` Its live view, read only, is open in the ${esc(p.name)} Preview tab.` : "";
   return `<div class="plg-sheet" role="dialog" aria-modal="true" aria-labelledby="plgSheetTitle">
     <div class="plg-sheet-h"><b id="plgSheetTitle">${esc(p.name)} is running</b><button type="button" class="set-close" data-plg-sheet-close aria-label="Close">${icon("close", 15)}</button></div>
-    <p class="plg-sheet-price">It runs on this machine and keeps running after a terminal closes. Use it from any terminal:</p>
+    <p class="plg-sheet-price">It runs on this machine and keeps running after a terminal closes.${page} Use it from any terminal:</p>
     <ul class="plg-sheet-list">${steps}</ul>
     <div class="plg-form-row"><button type="button" class="btn-mini" data-plg-sheet-close>Close</button></div>
   </div>`;
@@ -650,7 +654,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     if (hit("[data-plg-file]")) { void reviewFile(); return; }
     if (hit("[data-plg-fileinstall]")) { void installReviewed(); return; }
     if ((el = hit("[data-plg-iopen]"))) {
-      // An add-on (ADR-0535) has no page to show: Open starts it and shows its terminal commands instead.
+      // An add-on (ADR-0535) opens through openAddon: its page when it serves one, and its terminal commands.
       const id = el.dataset.plgIopen!, a = addon(id), p = installed.get(id);
       if (a && p) void openAddon(a); else if (p) void openPlugin(p);
       return;
@@ -694,12 +698,18 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     }
   }
 
-  /** Start the add-on through the plugin runtime, then show how to use it from a terminal. */
+  /** Start the add-on through the plugin runtime, show its page (when it serves one) in its Preview tab,
+   *  and keep the drawer open on how to use it from a terminal. */
   async function openAddon(p: FreePlugin): Promise<void> {
     if (!root) open("free"); // the toast's Open can run after the drawer closed; the sheet lives in the drawer
     setNote(p.id, { tone: "info", text: `Starting ${p.name}.` });
     const r = await deps.start(p.id).catch(() => null);
-    if (r?.ok) { setNote(p.id, null); showSheet(addonOpenSheetHtml(p)); return; }
+    if (r?.ok) {
+      setNote(p.id, null);
+      if (p.page) deps.openPluginTab(p.id, p.name, r.url);
+      showSheet(addonOpenSheetHtml(p));
+      return;
+    }
     setNote(p.id, { tone: "danger", text: `${p.name} did not start${r && !r.ok && r.error ? `: ${r.error}` : "."}` });
   }
 

@@ -123,7 +123,8 @@ interface AttachData { client: HubClientSocket | null; cols: number; rows: numbe
 
 /** Boot the control server on an ephemeral loopback port and publish its discovery file. With
  *  `attach`, the same server accepts TUI clients on /attach. `commands` sees every authenticated argv
- *  first and answers the ones it owns (a promise) or returns undefined to hand argv to the parser;
+ *  first and answers the ones it owns (a promise of the data, or of a whole Response for a reply that
+ *  streams) or returns undefined to hand argv to the parser;
  *  it never reaches an approval route, because nothing on this plane does. */
 export function startHubControl(opts: {
   dir: string;
@@ -148,6 +149,9 @@ export function startHubControl(opts: {
     }
     try {
       const data = await (opts.commands?.(argv) ?? opts.exec(parseHubCommand(argv)));
+      // A `commands` verb may answer with its own streamed reply (Herd's waits and events, ADR-0493);
+      // the executor never returns one, so the classic hub never takes this branch.
+      if (data instanceof Response) return data;
       return reply(200, { ok: true, data: data ?? null });
     } catch (e) {
       if (e instanceof HubOpError) return reply(STATUS_BY_CODE[e.code] ?? 409, { error: e.code, message: e.message });

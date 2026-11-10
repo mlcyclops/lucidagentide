@@ -163,6 +163,9 @@ export interface FreePlugin {
   tone: PosterTone;
   /** An add-on's sheet after Open: the commands that use it. Only `add-on` rows carry it. */
   howTo?: readonly AddonStep[];
+  /** An add-on that serves a read-only page on its runtime port: Open also shows that page in the
+   *  add-on's Preview tab, beside the sheet of commands (ADR-0497 as the Herd add-on). */
+  page?: boolean;
 }
 
 /** The FREE registry (ADR-0158/0181 rows, retired ids never reused: copilot, brat, url-into-selection, readwise). */
@@ -294,7 +297,8 @@ export const FREE_PLUGINS: FreePlugin[] = [
     id: "herd", name: "Herd", rank: 19, status: "add-on",
     desc: "A Herdr-style terminal fleet: a hub server that outlives the terminal, with attach, detach, and named hubs.",
     category: "Terminal", downloads: null, glyph: "terminal", tone: "cyan",
-    lucid: "Run lucid herd in any terminal to attach to your agents' hub. Close the terminal and the hub keeps running; attach again later, or run more than one hub by name. The classic lucid hub stays as it is.",
+    lucid: "Run lucid herd in any terminal to attach to your agents' hub. Close the terminal and the hub keeps running; attach again later, or run more than one hub by name. Open shows a live, read-only view of the main hub's tabs and panes here. The classic lucid hub stays as it is.",
+    page: true,
     howTo: [
       { command: "lucid herd", what: "Attach to the hub named main, or start it." },
       { command: "lucid herd --name work", what: "Attach to a second hub named work." },

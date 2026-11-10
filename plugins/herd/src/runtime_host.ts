@@ -4,10 +4,12 @@
 // Herd (ADR-0535): what the IDE's plugin runtime starts (Plugins drawer, Herd, Open). The runtime runs
 // a server plugin's `entry.main` under Electron's own Node (desktop/plugins/runtime.ts, asNode), so
 // this side uses Node APIs only. The hub itself is Bun code (Bun.serve, pi-tui), so the runtime host
-// does two things:
+// does three things:
 //   1. serves `GET /healthz` on the runtime's PORT (loopback Host, no Origin): 200 once instance
 //      `main` answers its nonce handshake, 503 before;
-//   2. runs instance `main` as `<IDE bun> <package>/client.js server start` with the add-on's data dir,
+//   2. serves the read-only GUI mirror of instance `main` on the same PORT (gui_server.ts, ADR-0497):
+//      the page the IDE opens in Herd's Preview tab, with live updates, never an approval or a prompt;
+//   3. runs instance `main` as `<IDE bun> <package>/client.js server start` with the add-on's data dir,
 //      unless a verified `main` already runs (started earlier by `lucid herd`): that one is adopted,
 //      never stopped by the drawer, because the drawer did not start it.
 // The worker ends when the runtime stops the plugin (its tree kill takes the worker too); the worker
@@ -19,6 +21,7 @@ import { existsSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+import { guardRequest, MIRROR_ASSETS, MIRROR_HEADERS, MirrorFeed, readMirror, type MirrorSink } from "./gui_server.ts";
 import { connectInstance, DEFAULT_INSTANCE } from "./instance.ts";
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -60,23 +63,37 @@ export function workerEnv(env: Env, data: string, repo: string | null): Record<s
   return out;
 }
 
-/** `GET /healthz` for the runtime: 200 while instance main answers its handshake, else 503. Any other
- *  path is 404; a non-loopback Host or any Origin is 403 (the hub control plane's guards). */
-export function startHealthServer(data: string, port: number): Promise<Server> {
+/** The runtime's PORT: `GET /healthz` (200 while instance main answers its handshake, else 503) and
+ *  the read-only GUI mirror of instance main (gui_server.ts, ADR-0497), all behind guardRequest: a
+ *  loopback Host, GET only, no foreign Origin, and the runtime's host token on /host/*. */
+export function startRuntimeServer(data: string, port: number, hostToken: string | null): Promise<Server> {
+  const feed = new MirrorFeed(() => readMirror(data, DEFAULT_INSTANCE));
   const server = createServer((req, res) => {
-    const host = req.headers.host;
-    if ((host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) || req.headers.origin !== undefined) {
-      res.writeHead(403, { "content-type": "application/json" }).end(JSON.stringify({ error: "forbidden" }));
-      return;
+    const json = (status: number, body: unknown) => res.writeHead(status, { ...MIRROR_HEADERS, "content-type": "application/json" }).end(JSON.stringify(body));
+    const verdict = guardRequest({ method: req.method, url: req.url, host: req.headers.host, origin: req.headers.origin, token: req.headers["x-lucid-host-token"] }, port, hostToken);
+    if (!verdict.ok) { json(verdict.status, { error: verdict.error }); return; }
+    switch (verdict.route) {
+      case "health":
+        void connectInstance(data, DEFAULT_INSTANCE).then((hub) => json(hub ? 200 : 503, hub ? { ok: true, instance: DEFAULT_INSTANCE, pid: hub.pid } : { ok: false, instance: DEFAULT_INSTANCE }));
+        return;
+      case "page": case "script": case "style": {
+        const asset = MIRROR_ASSETS[verdict.route];
+        res.writeHead(200, { ...MIRROR_HEADERS, "content-type": asset.type }).end(asset.body);
+        return;
+      }
+      case "state": case "host-state":
+        void readMirror(data, DEFAULT_INSTANCE).then((s) => json(200, s), () => json(502, { error: "unavailable" }));
+        return;
+      case "events": {
+        const sink: MirrorSink = { send: (chunk) => { if (!res.destroyed && !res.writableEnded) res.write(chunk); } };
+        const unsubscribe = feed.subscribe(sink);
+        if (!unsubscribe) { json(429, { error: "too_many_viewers" }); return; }
+        res.writeHead(200, { ...MIRROR_HEADERS, "content-type": "text/event-stream; charset=utf-8", connection: "keep-alive" });
+        res.write("retry: 3000\n\n");
+        res.once("close", unsubscribe); // the page went away (the response's close, not the request's)
+        return;
+      }
     }
-    if (req.url !== "/healthz" || req.method !== "GET") {
-      res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "not_found" }));
-      return;
-    }
-    void connectInstance(data, DEFAULT_INSTANCE).then((hub) => {
-      res.writeHead(hub ? 200 : 503, { "content-type": "application/json" })
-        .end(JSON.stringify(hub ? { ok: true, instance: DEFAULT_INSTANCE, pid: hub.pid } : { ok: false, instance: DEFAULT_INSTANCE }));
-    });
   });
   const ready = Promise.withResolvers<Server>();
   server.once("error", ready.reject);
@@ -93,10 +110,10 @@ export async function runRuntimeHost(env: Env): Promise<number> {
     process.stderr.write("[herd] server.js is started by the IDE's plugin runtime (Plugins, Free, Herd, Open). In a terminal, run `lucid herd`.\n");
     return 2;
   }
-  const health = await startHealthServer(data, port);
+  const health = await startRuntimeServer(data, port, env.LUCID_PLUGIN_HOST_TOKEN || null);
   const adopted = await connectInstance(data, DEFAULT_INSTANCE);
   if (adopted) {
-    process.stdout.write(`[herd] instance main already runs (pid ${adopted.pid}); serving its health only\n`);
+    process.stdout.write(`[herd] instance main already runs (pid ${adopted.pid}); serving its health and its read-only view only\n`);
     const closed = Promise.withResolvers<number>();
     for (const sig of ["SIGTERM", "SIGINT"] as const) process.once(sig, () => { health.close(); closed.resolve(0); });
     return closed.promise;
