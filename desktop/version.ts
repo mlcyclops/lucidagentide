@@ -730,4 +730,10 @@
 //            costumes and acts in the prompt-bar runner and the splash, a flush eye band, a 16-beat walk,
 //            and a hover hop and click leap. PRERELEASE: never marked Latest; the Homebrew cask and stable
 //            installs stay on 2.5.2.
-export const APP_VERSION = "2.5.3-beta.1";
+// v2.5.3-beta.2 = 2.5.3-beta.1 plus omp 18.18.6 on bundled Bun 1.4.4 with Claude Fable 5.2 and Mythos 5.2
+//            (P-MODEL.10, ADR-0526), a Windows boot that no longer blocks the workspace bar or the
+//            connection check behind heavy startup requests (P-BOOTPERF.1, ADR-0527), fleet lanes that autofit the dock
+//            at equal sizes and still resize (P-FLEET.FIT1, ADR-0528), and a staged-prompt copy menu with
+//            Push now running the prompt in a parallel worktree lane (P-PUSH.PAR1, ADR-0529). PRERELEASE:
+//            never marked Latest; the Homebrew cask and stable installs stay on 2.5.2.
+export const APP_VERSION = "2.5.3-beta.2";
