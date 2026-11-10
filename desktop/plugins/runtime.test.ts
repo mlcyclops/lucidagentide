@@ -8,11 +8,12 @@
 // the way Electron's Node does in the app.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLEAN, buildServerFixture, testKey, writeStage } from "./fixtures.ts";
-import { installPluginBytes, pluginDataDir } from "./install.ts";
+import { installPluginBytes, pluginDataDir, readInstalled } from "./install.ts";
+import { readRunIntents, runIntentDir, setRunIntent } from "./intent.ts";
 import { pluginMcpServers } from "./mcp.ts";
 import { pluginOrigin, PLUGIN_PORT_MAX, PLUGIN_PORT_MIN } from "./ports.ts";
 import { PluginRuntime, preferredPort, resolveWebFile, webCsp } from "./runtime.ts";
@@ -197,6 +198,75 @@ describe("web plugins", () => {
     expect(csp).toContain("img-src 'self' data: blob:;");
     expect(csp).toContain("frame-ancestors http://localhost:* http://127.0.0.1:*");
   });
+});
+
+// P-PLUGINS.8 (ADR-0546): what the runtime does to the running-intent ledger. A new PluginRuntime over the same
+// folders is the next launch.
+describe("running intent across launches", () => {
+  async function installWebFixture(): Promise<void> {
+    const src = writeStage({ "LICENSE": "license\n", "web/index.html": "<!doctype html>" }, {
+      schema: 1, id: "fixture-web", name: "Fixture Web", version: "1.0.0", publisher: "TECHLEAD 187 LLC",
+      license: "LUCID-Premium-Plugin-1.0", tier: "premium", section: "government", kind: "web",
+      entry: { root: "web", index: "index.html" }, permissions: ["network:internet"],
+    });
+    const zip = readFileSync(buildPlugin({ src, out: mkdtempSync(join(tmpdir(), "lplugin-out-")), privateKey: KEY.privateKey }).zipPath);
+    expect((await installPluginBytes(zip, "fixture-web", deps)).ok).toBe(true);
+  }
+  const stateOf = (rt: PluginRuntime, id: string) => rt.list().find((p) => p.id === id)?.state;
+
+  test("a new install waits for the user; a started plugin comes back at the next launch; the user's Stop holds", async () => {
+    await installWebFixture();
+    let rt = makeRuntime();
+    expect(await rt.autostart()).toEqual([]); // newly installed: nothing runs unasked (ADR-0535)
+    expect(stateOf(rt, "fixture-web")).toBe("installed");
+
+    expect((await rt.start("fixture-web")).ok).toBe(true);
+    expect(readRunIntents(runIntentDir())).toEqual(["fixture-web"]);
+    if (process.platform !== "win32") expect(statSync(join(runIntentDir(), "fixture-web")).mode & 0o777).toBe(0o600);
+
+    await rt.stopAll(); // the engine quitting is not the user stopping it
+    expect(readRunIntents(runIntentDir())).toEqual(["fixture-web"]);
+    rt = makeRuntime();
+    expect(await rt.autostart()).toEqual([{ id: "fixture-web", ok: true, attempts: 1 }]);
+    expect(stateOf(rt, "fixture-web")).toBe("running");
+
+    expect(await rt.stop("fixture-web", { byUser: true })).toEqual({ ok: true });
+    expect(readRunIntents(runIntentDir())).toEqual([]);
+    rt = makeRuntime();
+    expect(await rt.autostart()).toEqual([]);
+    expect(stateOf(rt, "fixture-web")).toBe("installed");
+  }, 30_000);
+
+  test("uninstall forgets the intent; a recorded plugin with no package is skipped and forgotten", async () => {
+    await installWebFixture();
+    const rt = makeRuntime();
+    expect((await rt.start("fixture-web")).ok).toBe(true);
+    expect(await rt.uninstall("fixture-web", true)).toEqual({ ok: true });
+    expect(readInstalled("fixture-web")).toBeNull();
+    expect(readRunIntents(runIntentDir())).toEqual([]);
+
+    setRunIntent("gone-private", runIntentDir()); // e.g. an unsigned private install a release cleanup removed
+    expect(await makeRuntime().autostart()).toEqual([]);
+    expect(readRunIntents(runIntentDir())).toEqual([]);
+  }, 30_000);
+
+  test("a crash and an update's stop keep the intent; only the user's stop clears it", async () => {
+    expect((await installPluginBytes(buildServerFixture(KEY), "fixture-server", deps)).ok).toBe(true);
+    const rt = makeRuntime();
+    expect((await rt.start("fixture-server")).ok).toBe(true);
+    const pids = JSON.parse(readFileSync(join(pluginDataDir("fixture-server"), "pids.json"), "utf8")) as { server: number; child: number };
+    process.kill(pids.server);
+    expect(await until(() => stateOf(rt, "fixture-server") === "error", 10_000)).toBe(true);
+    try { process.kill(pids.child); } catch { /* already gone */ }
+    expect(readRunIntents(runIntentDir())).toEqual(["fixture-server"]);
+
+    const up = await installPluginBytes(buildServerFixture(KEY, { version: "0.2.0" }), "fixture-server", { ...deps, beforeSwitch: async (id: string) => { await rt.stop(id); } });
+    expect(up.ok).toBe(true);
+    expect(readRunIntents(runIntentDir())).toEqual(["fixture-server"]);
+
+    expect(await rt.stop("fixture-server", { byUser: true })).toEqual({ ok: true });
+    expect(readRunIntents(runIntentDir())).toEqual([]);
+  }, 60_000);
 });
 
 describe("ports and navigation", () => {

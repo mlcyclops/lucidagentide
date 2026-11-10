@@ -50,13 +50,16 @@ export const MAX_EXPANDED_BYTES = 1024 * 1024 * 1024;
 /** The scanner answers one request within 5 s; a bundle is scanned in slices that fit comfortably. */
 const SCAN_SLICE_CHARS = 200_000;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
-const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+/** A plugin id: what a manifest may declare and every on-disk name derived from it. */
+export const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 const dataRoot = (): string => process.env.LUCID_DATA_ROOT || join(homedir(), ".omp");
 /** userData/plugins (LUCID_PLUGINS_DIR overrides, for tests and isolated smoke runs). */
 export function pluginsRoot(): string { return process.env.LUCID_PLUGINS_DIR || join(dataRoot(), "plugins"); }
+/** userData/plugin-data (LUCID_PLUGIN_DATA_DIR overrides): the plugins data root, one dir per plugin under it. */
+export function pluginDataRoot(): string { return process.env.LUCID_PLUGIN_DATA_DIR || join(dataRoot(), "plugin-data"); }
 /** userData/plugin-data/<id>: the plugin's writable state, never removed by an update. */
-export function pluginDataDir(id: string): string { return join(process.env.LUCID_PLUGIN_DATA_DIR || join(dataRoot(), "plugin-data"), id); }
+export function pluginDataDir(id: string): string { return join(pluginDataRoot(), id); }
 /** The attempt log the contract names: ~/.omp/lucid-plugins.jsonl. */
 export function pluginLogPath(): string { return process.env.LUCID_PLUGIN_LOG_PATH || join(homedir(), ".omp", "lucid-plugins.jsonl"); }
 
@@ -77,7 +80,7 @@ interface CurrentPointer { id: string; version: string; installedAt: string; sig
 
 /** The installed, current version of `id`, or null when absent or unreadable. Re-validates the manifest. */
 export function readInstalled(id: string, root = pluginsRoot()): InstalledPlugin | null {
-  if (!ID_RE.test(id)) return null;
+  if (!PLUGIN_ID_RE.test(id)) return null;
   let ptr: CurrentPointer;
   try { ptr = JSON.parse(readFileSync(join(root, id, "current.json"), "utf8")) as CurrentPointer; } catch { return null; }
   if (!ptr || ptr.id !== id || typeof ptr.version !== "string") return null;
@@ -182,7 +185,7 @@ export async function installPluginFromUrl(url: string, expectId: string, deps: 
     (deps.record ?? recordBlock)({ tool: "plugin_install", severity: "high", findings: gate, reason: `plugin "${expectId}" refused at the ${gate} gate: ${reason}` });
     return { ok: false, gate, reason, logPath: logPluginAttempt({ action: "install", source, expectId, ok: false, gate, reason, ms: Date.now() - startedAt }) };
   };
-  if (!ID_RE.test(expectId)) return fail("manifest", "invalid plugin id");
+  if (!PLUGIN_ID_RE.test(expectId)) return fail("manifest", "invalid plugin id");
   const problem = downloadUrlProblem(url);
   if (problem) return fail("download", problem);
   const host = extractHost(url) ?? "";
@@ -254,7 +257,7 @@ function inspectPluginBytes(bytes: Buffer, deps: InstallDeps): PluginFileInspect
     const raw: unknown = JSON.parse(entries.find((e) => e.name === PLUGIN_MANIFEST)?.data.toString("utf8") ?? "");
     if (raw && typeof raw === "object" && "id" in raw && typeof raw.id === "string") id = raw.id;
   } catch { /* refused just below */ }
-  if (!ID_RE.test(id)) return { ok: false, gate: "manifest", reason: `the package has no valid ${PLUGIN_MANIFEST} id` };
+  if (!PLUGIN_ID_RE.test(id)) return { ok: false, gate: "manifest", reason: `the package has no valid ${PLUGIN_MANIFEST} id` };
   const check = verifyPluginEntries(entries, { expectId: id, trusted: deps.trusted ?? trustedPluginKeys() });
   if (!check.ok) return { ok: false, gate: check.gate, reason: check.reason };
   const m = check.manifest;
@@ -391,7 +394,7 @@ export async function installPluginBytes(bytes: Buffer, expectId: string, deps: 
 
 /** Remove the installed package. The data dir stays unless `keepData` is false. */
 export function uninstallPlugin(id: string, keepData: boolean, root = pluginsRoot()): { ok: true } | { ok: false; error: string } {
-  if (!ID_RE.test(id)) return { ok: false, error: "invalid plugin id" };
+  if (!PLUGIN_ID_RE.test(id)) return { ok: false, error: "invalid plugin id" };
   const dir = join(root, id);
   if (!existsSync(dir)) return { ok: false, error: "that plugin is not installed" };
   try {

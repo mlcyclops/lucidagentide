@@ -14,7 +14,8 @@
 // answer 2xx within the timeout, else the process tree is killed and the plugin reports `error`. A crash
 // after that flips the state to `error` and unregisters its MCP server. Processes are never detached on
 // Windows, and every stop is a tree kill (taskkill /T, by absolute path, the acp.ts rule), so a plugin
-// cannot outlive the engine: main's quit tree-kills the engine and everything under it.
+// cannot outlive the engine: main's quit tree-kills the engine and everything under it. ADR-0546: a plugin the
+// user started and did not stop starts again at the next launch (the running-intent ledger, plugins/intent.ts).
 //
 // Env: a plugin gets an ALLOWLISTED environment (OS basics plus the contract vars), never the engine's
 // env, which carries provider keys and vault-injected tokens. PORT, HOST, LUCID_PLUGIN_ID,
@@ -31,7 +32,8 @@ import { createServer } from "node:net";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { safeRelPath, type DaemonEntry, type PluginManifest, type ServerEntry, type WebEntry } from "../../harness/plugins/package.ts";
 import { formatSquatter, ownerProbeSpec, parseOwnerProbe } from "../port_guard.ts";
-import { listInstalled, pluginDataDir, pluginsRoot, readInstalled, type InstalledPlugin } from "./install.ts";
+import { listInstalled, pluginDataDir, pluginsRoot, readInstalled, uninstallPlugin, type InstalledPlugin } from "./install.ts";
+import { autostartPlugins, clearRunIntent, readRunIntents, runIntentDir, setRunIntent, type AutostartOutcome } from "./intent.ts";
 import { removePluginMcp, setPluginMcp, type PluginMcpServer } from "./mcp.ts";
 import { PLUGIN_PORT_MAX, PLUGIN_PORT_MIN } from "./ports.ts";
 
@@ -59,6 +61,8 @@ export interface RuntimeDeps {
   onMcpChange: () => void;
   healthTimeoutMs?: number;
   root?: string;
+  /** ADR-0546: the running-intent ledger (default plugin-data/.running-intent). */
+  intentDir?: string;
   platform?: string;
 }
 
@@ -213,6 +217,7 @@ export class PluginRuntime {
   }
 
   private root(): string { return this.deps.root ?? pluginsRoot(); }
+  private intentDir(): string { return this.deps.intentDir ?? runIntentDir(); }
 
   /** Every installed plugin with its live state. */
   list(): PluginStatus[] {
@@ -237,13 +242,17 @@ export class PluginRuntime {
     return r?.state === "running" && r.hostToken ? { url: `http://127.0.0.1:${r.port}`, token: r.hostToken } : null;
   }
 
-  /** Start (or return the running instance of) a plugin. Concurrent calls share one start. */
+  /** Start (or return the running instance of) a plugin. Concurrent calls share one start. ADR-0546: a start that
+   *  comes up records that the plugin should run again at the next launch; a failed one changes nothing. */
   start(id: string): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
     const live = this.running.get(id);
     if (live?.state === "running") return Promise.resolve({ ok: true as const, url: live.url });
     const pending = this.starting.get(id);
     if (pending) return pending;
-    const p = this.doStart(id).finally(() => this.starting.delete(id));
+    const p = this.doStart(id).then((r) => {
+      if (r.ok) setRunIntent(id, this.intentDir());
+      return r;
+    }).finally(() => this.starting.delete(id));
     this.starting.set(id, p);
     return p;
   }
@@ -388,8 +397,11 @@ export class PluginRuntime {
     this.deps.onMcpChange();
   }
 
-  /** Stop one plugin (idempotent): unregister its MCP, end its server or process tree, wait for exit. */
-  async stop(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  /** Stop one plugin (idempotent): unregister its MCP, end its server or process tree, wait for exit. ADR-0546: only
+   *  a stop the user asked for (`byUser`) forgets that it should run at the next launch; the engine's own stops (a
+   *  crashed instance, a failed health check, an update's switch, quitting) keep that intent. */
+  async stop(id: string, opts: { byUser?: boolean } = {}): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (opts.byUser) clearRunIntent(id, this.intentDir());
     const r = this.running.get(id);
     if (!r) return { ok: true };
     r.stopping = true;
@@ -406,6 +418,27 @@ export class PluginRuntime {
     }
     this.running.delete(id);
     return { ok: true };
+  }
+
+  /** The user removes a plugin: stop it as the user's stop (its intent goes too), then remove the package. */
+  async uninstall(id: string, keepData: boolean): Promise<{ ok: true } | { ok: false; error: string }> {
+    const stopped = await this.stop(id, { byUser: true });
+    if (!stopped.ok) return stopped;
+    return uninstallPlugin(id, keepData, this.root());
+  }
+
+  /** ADR-0546: once per launch, after the engine serves, start every plugin the user left running (bounded retry).
+   *  A recorded plugin with no package any more is skipped quietly and forgotten. */
+  autostart(): Promise<AutostartOutcome[]> {
+    const dir = this.intentDir();
+    return autostartPlugins({
+      intents: () => readRunIntents(dir),
+      installed: (id) => readInstalled(id, this.root()) !== null,
+      start: (id) => this.start(id),
+      forget: (id) => clearRunIntent(id, dir),
+      sleep: Bun.sleep,
+      log: console.log,
+    });
   }
 
   async stopAll(): Promise<void> { await Promise.all([...this.running.keys()].map((id) => this.stop(id))); }

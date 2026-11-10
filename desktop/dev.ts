@@ -569,7 +569,7 @@ import { kbScanner, kbStore, kgEntry, listKgs, activeKgId, createKg, renameKg, s
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.ts"
-import { inspectPluginFile, installPluginFile, installPluginFromUrl, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505)
+import { inspectPluginFile, installPluginFile, installPluginFromUrl, readPluginLicense } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505)
 import { PluginRuntime, resolvePluginNode } from "./plugins/runtime.ts" // P-PLUGINS.2 (ADR-0462)
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
@@ -6003,16 +6003,14 @@ return Bun.serve({
         if (started.ok && id === REMOTE_SPOKES_PLUGIN) return json({ ok: true, data: await remoteSpokesPanelUrl(remoteSpokesDeps, `http://127.0.0.1:${ENGINE_PORT}`) });
         return json({ ok: true, data: started });
       }
+      // ADR-0546: these are the USER's stop and uninstall, so the plugin also stays stopped at the next launch.
       if (p === "/api/plugins/stop" && req.method === "POST") {
         const b = await readBody<{ id?: unknown }>(req);
-        return json({ ok: true, data: await plugins.stop(String(b.id ?? "")) });
+        return json({ ok: true, data: await plugins.stop(String(b.id ?? ""), { byUser: true }) });
       }
       if (p === "/api/plugins/uninstall" && req.method === "POST") {
         const b = await readBody<{ id?: unknown; keepData?: unknown }>(req);
-        const id = String(b.id ?? "");
-        const stopped = await plugins.stop(id);
-        if (!stopped.ok) return json({ ok: true, data: stopped });
-        return json({ ok: true, data: uninstallPlugin(id, b.keepData !== false) });
+        return json({ ok: true, data: await plugins.uninstall(String(b.id ?? ""), b.keepData !== false) });
       }
       // P-SKILLREG.2 (ADR-0102): the PUBLISH seam. Reads a codified skill's SKILL.md and publishes it as a
       // versioned artifact to the configured targets (fail-safe fan-out). Public ships the LOCAL publisher;
@@ -7121,6 +7119,9 @@ await refreshRecall();
 backend.startAutomationScheduler();
 // P-SCHED.1 (ADR-0443): the scheduled LANE jobs tick beside it, same envelope (only while the app runs).
 jobScheduler.start();
+// P-PLUGINS.8 (ADR-0546): the plugins the user left running come back, once, now that the engine serves. Detached:
+// the bind never waits on a plugin; each one gets a bounded retry, and a user's Stop meanwhile cancels its retry.
+void plugins.autostart().catch((e) => console.warn("[plugins] autostart failed:", e));
 // ADR-0501: controller lanes the previous engine ran come back idle on their own lane ids and omp sessions (after
 // the child env above is set, so a restored lane is wired like a new one). Detached: the bind never waits on omp;
 // controller routes do (the gate set with controllerDeps), and open when this settles, success or not.
