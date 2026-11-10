@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/controller/openapi.ts - ADR-0531: the paired controller API (ADR-0438 and later) as an OpenAPI 3.1
+// desktop/controller/openapi.ts - ADR-0537: the paired controller API (ADR-0438 and later) as an OpenAPI 3.1
 // document, so a client written elsewhere (a phone app, an editor panel, a Stream Deck) can be built against it.
 // `GET /api/controller/schema` serves it (routes.ts) to the UI token and to any paired controller.
 //
@@ -89,7 +89,7 @@ export function controllerOpenApi(limits: ControllerApiLimits): Schema {
     tags: [
       { name: "pairing", description: "Human routes: the UI token." },
       { name: "lanes", description: "The controller's own lanes: a controller token." },
-      { name: "remote approval", description: "A remote pairing's parked asks (ADR-0525): a controller token." },
+      { name: "remote approval", description: "A remote pairing's parked asks (ADR-0531): a controller token." },
       { name: "schema", description: "This document: the UI token or a controller token." },
     ],
     paths: {
@@ -98,7 +98,7 @@ export function controllerOpenApi(limits: ControllerApiLimits): Schema {
           operationId: "pair",
           tags: ["pairing"],
           summary: "Pair a controller and mint its token (shown once).",
-          description: "The workspace is fixed here: every lane the pairing spawns runs in it. `approverRoot` makes a remote pairing (ADR-0525); `approvalHours`, `offTask` and `presence` are refused without it.",
+          description: "The workspace is fixed here: every lane the pairing spawns runs in it. `approverRoot` makes a remote pairing (ADR-0531); `approvalHours`, `offTask` and `presence` are refused without it.",
           security: UI,
           requestBody: jsonBody({
             name: ref("PairingName"),
@@ -376,7 +376,7 @@ export function controllerOpenApi(limits: ControllerApiLimits): Schema {
           reason: { type: "string" },
           openedAt: { type: "integer", description: "Milliseconds since the epoch." },
           expiresAt: { type: "integer", description: "Milliseconds since the epoch; unanswered by then, the ask is denied." },
-        }, ["id", "digest", "kind", "title", "input", "tier", "reason", "openedAt", "expiresAt"], "A parked ask, bounded and canonical (ADR-0525)."),
+        }, ["id", "digest", "kind", "title", "input", "tier", "reason", "openedAt", "expiresAt"], "A parked ask, bounded and canonical (ADR-0531)."),
         Error: obj({ ok: { const: false }, error: { type: "string" } }, ["ok", "error"]),
       },
       responses: {

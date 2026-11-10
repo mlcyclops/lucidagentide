@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/lane_holder.test.ts - P-HOLDER.1 (ADR-0528). The REAL lucid-holder binary, the REAL lane manager and the
+// desktop/lane_holder.test.ts - P-HOLDER.1 (ADR-0534). The REAL lucid-holder binary, the REAL lane manager and the
 // fake ACP agent as a real subprocess. "Engine A" and "engine B" are two lane managers over one holder folder: A
 // letting go (its shutdown path) stands for an engine restart, an IDE update or a closed window. What must hold:
 //   - a turn in flight when the engine went settles on the next engine, on the SAME agent process, never re-run;

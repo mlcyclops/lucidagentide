@@ -60,7 +60,7 @@ jobs:
       - name: Harness test suite
         run: bun test harness
 
-      # P-HOLDER.1 (ADR-0527/0528): the one Rust crate. The runner image ships rustup and cargo.
+      # P-HOLDER.1 (ADR-0533/0534): the one Rust crate. The runner image ships rustup and cargo.
       - name: lucid-holder (Rust) tests
         working-directory: native/lucid-holder
         run: cargo test --release --locked
@@ -94,7 +94,7 @@ jobs:
       - name: Packaged-boot guard (release boots under the packaging filter)
         run: bun test desktop/packaged_boot.test.ts
 
-  # P-HOLDER.1 (ADR-0528): the holder's POSIX half (setsid, the agent's process group, the Unix socket) only runs
+  # P-HOLDER.1 (ADR-0534): the holder's POSIX half (setsid, the agent's process group, the Unix socket) only runs
   # here; the Windows gate below covers the job object and the named pipe.
   holder-posix:
     name: Lane holder (${{ matrix.os }})

@@ -1,4 +1,4 @@
-// Phase C (ADR-0534): the X.509 the Meet relay reads with Python's `cryptography` (meet_relay.py) and `ssl`
+// Phase C (ADR-0540): the X.509 the Meet relay reads with Python's `cryptography` (meet_relay.py) and `ssl`
 // (getpeercert): certificates, certificate requests and CRLs in DER, their names, subject alternative names, key
 // identifiers, validity and serials, and their signatures (AWS-LC). Only what the relay's checks depend on.
 

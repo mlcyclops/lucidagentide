@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/collab/relay_conformance.test.ts: ADR-0534 phase B, the collab broker's wire protocol, proven against ONE
+// desktop/collab/relay_conformance.test.ts: ADR-0540 phase B, the collab broker's wire protocol, proven against ONE
 // broker started as a deployment starts it (a separate process on a free port, configured by environment only).
 // Without LUCID_TEST_COLLAB_RELAY_BIN that is `bun run tools/relay/serve.ts`; with it, that binary run as
 // `<bin> collab` (native/lucid-relay). The same scenarios as relay_server.test.ts, relay_auth_gate.test.ts and

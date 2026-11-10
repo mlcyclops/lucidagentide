@@ -1,7 +1,7 @@
 # Copyright (c) 2026 TechLead 187 LLC
 # SPDX-License-Identifier: BUSL-1.1
 #
-# lucid-relay (ADR-0534): the remote-spokes relay in Rust. Phase A is a drop-in for the add-on's Bun relay
+# lucid-relay (ADR-0540): the remote-spokes relay in Rust. Phase A is a drop-in for the add-on's Bun relay
 # (`lucid-spoke relay serve`): the same flags, environment, routes, answers, limits, log lines and state folder.
 # Phase B (`lucid-relay collab`) is the core's collab broker (tools/relay/serve.ts), wire-compatible with desktop/collab.
 # Phase C (`lucid-relay meet`) is the Meeting Hub rendezvous relay (relay/meet_relay.py): same relay.json and state.json.

@@ -1,4 +1,4 @@
-// Phase C (ADR-0534): the Meet relay's side of the browser console (relay/meet_console.py): the /v1/console/* routes
+// Phase C (ADR-0540): the Meet relay's side of the browser console (relay/meet_console.py): the /v1/console/* routes
 // for the console server's certificate from `console_sources` only, the in-memory log ring (session ids and download
 // tokens hidden), per-link performance from link reports and `state` signals, and the download server's power through
 // the Proxmox API (`files_power`).

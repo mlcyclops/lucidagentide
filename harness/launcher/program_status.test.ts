@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-HERD-OSC.1 (ADR-0530): the OSC 7501 report builder. A valid report is the exact byte string the
+// P-HERD-OSC.1 (ADR-0536): the OSC 7501 report builder. A valid report is the exact byte string the
 // spec's own examples show; every input a terminal would DISCARD (bad state, id, kind, progress, app,
 // control characters, over-limit text) is refused with a reason instead of written.
 

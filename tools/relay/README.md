@@ -130,7 +130,7 @@ it. Hosts start a share; guests paste the invite link and connect through this b
 | `RELAY_TELEMETRY` | (none) | `off` | `firestore` = metadata-only presence documents (P-REMOTE.7) |
 | `RELAY_METADATA_TOKEN_URL` / `RELAY_FIRESTORE_URL` | (none) | Cloud Run metadata server / `https://firestore.googleapis.com` | override for an emulator or a conformance run |
 
-The same broker also ships as a Rust binary (ADR-0534): `lucid-relay collab` takes the same flags and
+The same broker also ships as a Rust binary (ADR-0540): `lucid-relay collab` takes the same flags and
 environment, so the unit's `ExecStart` or the image's `ENTRYPOINT` swaps only the program.
 
 ## Identity gate (`RELAY_AUTH=firebase`)

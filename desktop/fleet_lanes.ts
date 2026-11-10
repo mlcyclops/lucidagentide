@@ -26,7 +26,7 @@ import { basename, join } from "node:path";
 import { stat } from "node:fs/promises"; // P-FLEET.L16: async stat runs OFF the event loop (statSync wedged it)
 import { randomUUID } from "node:crypto";
 import { ACPClient } from "./acp.ts";
-import { endHolderProcess, HELD_BUSY_KEEP_MS, HELD_IDLE_KEEP_MS, HolderLink, holderProcessAlive, type HeldLaneRecord, type HolderPool } from "./lane_holder.ts"; // P-HOLDER.1 (ADR-0528)
+import { endHolderProcess, HELD_BUSY_KEEP_MS, HELD_IDLE_KEEP_MS, HolderLink, holderProcessAlive, type HeldLaneRecord, type HolderPool } from "./lane_holder.ts"; // P-HOLDER.1 (ADR-0534)
 // P-FLEET.L14 (ADR-0337): one definition of the interactive client's capabilities, shared with acp_backend.
 // Advertising `elicitation.form` is what lets omp reach this client for its OWN inner approval gate.
 import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts";
@@ -146,7 +146,7 @@ export type LaneEvent =
   | { type: "permission"; summary: string; kind: string }
   /** P-FLEET.L6: an ask was granted WITHOUT a human - full auto-mode or a standing session allow. */
   | { type: "auto-approved"; summary: string; mode: "auto" | "session" }
-  /** P-CTRL-REMOTE.1 (ADR-0525): a remote lane's tier policy ran an action on its own or refused it outright. */
+  /** P-CTRL-REMOTE.1 (ADR-0531): a remote lane's tier policy ran an action on its own or refused it outright. */
   | { type: "policy"; verdict: "allowed" | "blocked"; summary: string; tier: string; reason: string }
   /** P-FLEET.L7: the provider's context accounting for THIS lane, so a promoted lane can drive the
    *  composer's token meter with its own figures instead of the master's. `used`/`size` are context
@@ -295,13 +295,13 @@ export interface FleetLaneDeps {
   /** P-REPO.1 (ADR-0406): the repo tracker (repo_probe.ts). `observe` sees every tool_call, `peek` is a
    *  synchronous cached read for the status view. Optional: without it a lane simply reports no repo. */
   repo?: RepoTracker;
-  /** P-CTRL-REMOTE.1 (ADR-0525): does `action` belong to the lane's assignment? Asked before a T0/T1 action
+  /** P-CTRL-REMOTE.1 (ADR-0531): does `action` belong to the lane's assignment? Asked before a T0/T1 action
    *  runs on its own in a remote lane whose pairing turned the check on. Tighten only: anything but "on"
    *  (including a missing checker or a failure) sends the action to a remote human instead. */
   offTask?: (lane: { id: string; model: string; assignment: string }, action: string) => Promise<"on" | "off" | "unknown">;
   /** P-CTRL-REMOTE.1: one audit line per remote-policy verdict (dev.ts emits controller_ruling). Metadata only. */
   remoteAudit?: (laneId: string, verdict: { ruling: "tier_auto" | "tier_blocked" | "parked" | "off_task"; tier: string; reason: string }) => void;
-  /** P-HOLDER.1 (ADR-0528): each lane's agent runs under a `lucid-holder`, so an engine restart, an IDE update or
+  /** P-HOLDER.1 (ADR-0534): each lane's agent runs under a `lucid-holder`, so an engine restart, an IDE update or
    *  closing the window leaves it running and a later engine reattaches (reattach()). Absent or null: lanes are
    *  this engine's own children and end with it, as before. */
   holders?: HolderPool | null;
@@ -368,7 +368,7 @@ interface Lane {
   /** The unanswered permission ask, if any. Resolving it answers the remote. `ask` is set on a remote lane:
    *  the bounded view and digest a remote decision must name (P-CTRL-REMOTE.1). */
   pending: { summary: string; kind: string; resolve: (allow: boolean) => void; ask?: RemoteAsk } | null;
-  /** P-CTRL-REMOTE.1 (ADR-0525): set from the pairing's human-chosen policy; null for every other lane. */
+  /** P-CTRL-REMOTE.1 (ADR-0531): set from the pairing's human-chosen policy; null for every other lane. */
   remote: RemoteLanePolicy | null;
   /** P-FLEET.L6: approve every ask without a human (per-lane; initialized from the manager default). */
   autoApprove: boolean;
@@ -589,7 +589,7 @@ export class FleetLaneManager {
     }
   }
 
-  /** P-HOLDER.1 (ADR-0528): bring back a lane whose agent a holder kept running while no engine was attached. The
+  /** P-HOLDER.1 (ADR-0534): bring back a lane whose agent a holder kept running while no engine was attached. The
    *  lane comes back under its own id with its session, model and transcript; nothing is re-run. A turn that was
    *  in flight carries on: the holder replays the agent's output from the moment the prompt went out into the
    *  fresh lane (asks already answered are not asked again; open ones are), and the reply settles it. A holder
@@ -918,7 +918,7 @@ export class FleetLaneManager {
     return { ok: true };
   }
 
-  /** P-CTRL-REMOTE.1 (ADR-0525): the open remote ask of a remote lane, or null. */
+  /** P-CTRL-REMOTE.1 (ADR-0531): the open remote ask of a remote lane, or null. */
   pendingAsk(laneId: string): RemoteAsk | null {
     return this.#lanes.get(laneId)?.pending?.ask ?? null;
   }
@@ -1608,7 +1608,7 @@ export class FleetLaneManager {
           const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
           return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
         };
-        // P-CTRL-REMOTE.1 (ADR-0525): a remote lane never consults auto mode or session grants; its pairing's
+        // P-CTRL-REMOTE.1 (ADR-0531): a remote lane never consults auto mode or session grants; its pairing's
         // tier policy decides, and what it does not allow outright waits for a verified remote decision.
         if (lane.remote) return (await this.#remoteAsk(lane, tc, summary, kind)) ? pick() : { outcome: { outcome: "cancelled" } };
         if (lane.autoApprove || lane.sessionAllow.has(kind)) {
@@ -1682,7 +1682,7 @@ export class FleetLaneManager {
     try { return lane.client.stop(); } catch { return Promise.resolve(true); /* already dead */ }
   }
 
-  /** P-CTRL-REMOTE.1 (ADR-0525): decide one ask of a remote lane. T0/T1 inside the workspace run on their own
+  /** P-CTRL-REMOTE.1 (ADR-0531): decide one ask of a remote lane. T0/T1 inside the workspace run on their own
    *  (after the off-task check when the pairing asked for it); known destructive and catastrophic actions are
    *  refused with no way to approve them; everything else parks until a verified remote decision, a controller
    *  deny, or the pairing's approval window ends (deny). Resolves true only for an allow. */
