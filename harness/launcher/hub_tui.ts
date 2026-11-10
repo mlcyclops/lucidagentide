@@ -35,8 +35,10 @@
 // hub_palette.ts): one fused, scored list of spaces, tabs, agents and decks; Enter acts, Esc
 // closes, and it only ever opens from hub-owned focus (the same guard as the `:` prompt).
 //
-// P-HERD-OSC.1 (ADR-0530): each poll tick reports the fleet to the terminal with OSC 7501 (the
-// Program Status Protocol, hub_program_status.ts), only what changed; quitting clears every record.
+// ADR-0535: the optional Herd add-on (plugins/herd) runs this same component inside its server and
+// renders it for attached terminals. The constructor's `server`, `detach` and `notice` options are
+// its seams; the classic hub passes none of them, so `q` quits, nothing detaches and the status line
+// reads as before. The classic hub writes no OSC 7501 (the Herd client does, ADR-0530 as amended).
 //
 // The colors are the desktop design system (styles.css → the P-THEME.1 palette), so the hub and the
 // gated `lucid tui` read as one product: LUCID magenta chrome, cyan focus, the styles.css status hues.
@@ -48,7 +50,6 @@ import { discoveryDir, listDiscoveries, pruneStaleDiscovery, verifyDiscovery, ty
 import { agentPrioritiesPath, agentRailLine, HubAgentsPanel, laneLocations, statusGlyph, type AgentRow, type AgentsPanelRow, type GlyphHue } from "./hub_agents_panel.ts";
 import { createHubExecutor, startHubControl } from "./hub_control.ts";
 import { buildPaletteItems, filterPalette, type PaletteItem } from "./hub_palette.ts";
-import { programStatusEnabled, ProgramStatusEmitter } from "./hub_program_status.ts";
 import { HubOpError, leaves, loadSpaces, saveSpaces, Spaces, spacePanes, spacesPath, type PaneDeck, type PaneLeaf, type PaneNode } from "./hub_spaces.ts";
 import { parseHubCommand, tokenize, type HubOp } from "./hub_tmux_verbs.ts";
 
@@ -567,6 +568,9 @@ export function fitBlock(lines: readonly string[], w: number, h: number): string
 
 interface HubUi { requestRender(): void; terminal: { rows: number } }
 
+/** ADR-0535: what the status line shows when a Herd server runs this component. */
+export interface HubServerInfo { readonly name: string; clients(): number }
+
 const POLL_MS = 2000;
 const SIDEBAR_W = 20;
 const RAIL_W = 28;
@@ -614,12 +618,21 @@ export class HubComponent implements Component {
   #status = "";
   #timer: NodeJS.Timeout | undefined;
   #disposed = false;
-  /** P-HERD-OSC.1 (ADR-0530): every fresh fleet snapshot, for the OSC 7501 reports. */
+  /** Every fresh fleet snapshot, before the agent panes read their lanes (the Herd server relinks
+   *  and streams lanes from here). */
   readonly #onFleet: ((lanes: Record<string, unknown>[]) => void) | undefined;
+  /** ADR-0535: set when this component runs inside a Herd server (the status line names it). */
+  readonly #server: HubServerInfo | undefined;
+  /** ADR-0535: in a Herd server q, Q and ctrl+c detach the client whose key it was. Unset (the
+   *  classic hub, the demos) q and ctrl+c end run() and Q is an ordinary key. */
+  readonly #detach: (() => void) | undefined;
 
-  constructor(ui: HubUi, engine: EngineDiscovery, opts: { spawned?: boolean; spaces?: Spaces; prioritiesPath?: string; onFleet?: (lanes: Record<string, unknown>[]) => void } = {}) {
+  constructor(ui: HubUi, engine: EngineDiscovery, opts: { spawned?: boolean; spaces?: Spaces; prioritiesPath?: string; onFleet?: (lanes: Record<string, unknown>[]) => void; server?: HubServerInfo; detach?: () => void; notice?: string } = {}) {
     this.#ui = ui;
     this.#onFleet = opts.onFleet;
+    this.#server = opts.server;
+    this.#detach = opts.detach;
+    this.#status = opts.notice ?? "";
     this.#engine = engine;
     this.#spawned = !!opts.spawned;
     this.#base = `http://127.0.0.1:${engine.port}`;
@@ -661,6 +674,13 @@ export class HubComponent implements Component {
 
   quit(): void {
     this.#done.resolve();
+  }
+
+  /** q and ctrl+c (and Q in a Herd server): a Herd client detaches (its server, the engine and
+   *  every lane stay up); the classic hub quits. */
+  #leave(): void {
+    if (this.#detach) this.#detach();
+    else this.#done.resolve();
   }
 
   /** A pane as the hub draws it: ANSI stripped, frame removed, trailing blank rows dropped. */
@@ -822,7 +842,7 @@ export class HubComponent implements Component {
     // Enter arrives as \r, \n or \r\n depending on the terminal's line discipline; byte-exact
     // matching silently killed the key on CRLF terminals (field report 2026-09-28).
     const isEnter = data === "\r" || data === "\n" || data === "\r\n" || matchesKey(data, "enter");
-    if (this.#help) { if (isEnter) return; this.#help = false; this.#ui.requestRender(); if (data === "q" || matchesKey(data, "ctrl+c")) this.#done.resolve(); return; }
+    if (this.#help) { if (isEnter) return; this.#help = false; this.#ui.requestRender(); if (data === "q" || (data === "Q" && this.#detach) || matchesKey(data, "ctrl+c")) this.#leave(); return; }
     // Page reader: a fullscreen read view anchored at the TOP; j/k move down/up, esc or q closes.
     if (this.#reader) {
       if (matchesKey(data, "escape") || data === "q") { this.#reader = null; this.#scroll = 0; }
@@ -889,7 +909,9 @@ export class HubComponent implements Component {
       this.#ui.requestRender();
       return;
     }
-    if (matchesKey(data, "ctrl+c") || data === "q") { this.#done.resolve(); return; }
+    // ADR-0535: in a Herd server `Q` detaches too (prefix+q once P-HERD.3 lands the prefix), and q and
+    // ctrl+c detach rather than quit: a client never ends the server, only `lucid herd server stop`.
+    if (matchesKey(data, "ctrl+c") || data === "q" || (data === "Q" && this.#detach)) { this.#leave(); return; }
     // Rail keys, while the keyboard is on the rail. Anything else falls through to the pane keymap.
     if (this.#railFocus && this.#spaces.rail) {
       const rows = this.#railRows();
@@ -932,7 +954,7 @@ export class HubComponent implements Component {
     else if (data === "x" && this.#focusedDeck() === "agents") { void this.#dismissLane(); return; }
     else if (data === "x" && this.#focusedDeck() === "spaces") { this.#closeSpace(); return; }
     else if (data === "x") {
-      try { sp.closePane(); } catch (e) { if (!(e instanceof HubOpError)) throw e; this.#status = "last pane - q quits"; }
+      try { sp.closePane(); } catch (e) { if (!(e instanceof HubOpError)) throw e; this.#status = this.#detach ? "last pane - q detaches" : "last pane - q quits"; }
     } else if (DECKS.some((d) => d.key === data)) {
       sp.rebind(undefined, DECKS.find((d) => d.key === data)!.id);
       this.#selected = 0; this.#scroll = 0;
@@ -1159,7 +1181,7 @@ export class HubComponent implements Component {
   async #cancelLaneById(id: string, name: string): Promise<void> {
     try {
       const r = rec(await this.#post("/api/fleet/cancel", { laneId: id }));
-      this.#status = r.ok === false ? `cancel refused: ${str(r.reason ?? "no running turn")}` : `cancelled ${name}'s turn`;
+      this.#status = r.ok === false ? `cancel refused: ${str(r.reason ?? "no running turn")}` : `canceled ${name}'s turn`;
     } catch (err) {
       this.#status = `cancel failed: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -1478,7 +1500,9 @@ export class HubComponent implements Component {
       ["General", ""],
       ["  r", "refresh now (auto-refreshes every 2s)"],
       ["  ?", "this help · any key closes it"],
-      ["  q", "quit (a hub-spawned engine exits too)"],
+      ...(this.#detach
+        ? [["  q / Q", "detach: hub, engine and lanes keep running"], ["  lucid herd", "reattaches · `server stop` ends the hub"]] as [string, string][]
+        : [["  q", "quit (a hub-spawned engine exits too)"]] as [string, string][]),
     ];
     const boxW = Math.min(64, w - 4);
     const lines = entries.map(([k, v]) =>
@@ -1753,7 +1777,10 @@ export class HubComponent implements Component {
     };
     const column = rail ? this.#railBlock(rail, bodyH) : left ? this.#sidebarBlock(bodyH) : null;
     const body = column ? column.map((s, i) => s + (panes[i] ?? "")) : panes;
-    const rightPlain = `${this.#engine.flavor} engine · lucid hub `;
+    // ADR-0535: a Herd server names its instance and how many terminals are on it right now.
+    const rightPlain = this.#server
+      ? `${this.#engine.flavor} engine · herd ${this.#server.name} · ${this.#server.clients()} attached `
+      : `${this.#engine.flavor} engine · lucid hub `;
     const composing = this.#prompt && this.#promptKind === "wl-add"
       ? ` add host to whitelist: ${this.#prompt.text}▌  (⏎ save · esc cancel)`
       : this.#prompt && this.#promptKind === "kg-filter"
@@ -1785,11 +1812,13 @@ export async function findEngine(env: Readonly<Record<string, string | undefined
 export interface AttachedEngine { engine: EngineDiscovery; spawned: boolean; child: Bun.Subprocess | null }
 
 /** Attach to a running engine, or SPAWN a headless one and wait for its discovery file. The spawned
- *  child belongs to the hub: quit the hub, the engine goes with it (and removes its own file). */
-export async function attachOrSpawnEngine(env: Readonly<Record<string, string | undefined>>): Promise<AttachedEngine | null> {
+ *  child belongs to the hub: quit the hub, the engine goes with it (and removes its own file).
+ *  `repo` is the checkout whose desktop/dev.ts is spawned; null attaches only (the Herd add-on when
+ *  the IDE's plugin runtime started it, ADR-0535, where the IDE's engine is the one to find). */
+export async function attachOrSpawnEngine(env: Readonly<Record<string, string | undefined>>, repo: string | null = join(import.meta.dir, "..", "..")): Promise<AttachedEngine | null> {
   const running = await findEngine(env);
   if (running) return { engine: running, spawned: false, child: null };
-  const repo = join(import.meta.dir, "..", "..");
+  if (repo === null) return null;
   const child = Bun.spawn([process.execPath, join(repo, "desktop", "dev.ts")], {
     cwd: repo,
     env: { ...env } as Record<string, string | undefined>,
@@ -1823,11 +1852,7 @@ export async function runHubCli(env: Readonly<Record<string, string | undefined>
   spaces.onChange = () => { try { saveSpaces(layoutFile, spaces); } catch { /* layout is convenience, never fatal */ } };
   const tui = opts.headless ? null : new TUI(new ProcessTerminal());
   const ui: HubUi = tui ?? { requestRender() { /* no terminal */ }, terminal: { rows: 40 } };
-  // P-HERD-OSC.1 (ADR-0530): OSC 7501 fleet reports, written through the SAME terminal the frames
-  // go through (one write per batch, so a report never lands inside a frame's escape sequence).
-  // A real TTY only, and LUCID_PROGRAM_STATUS=0 turns it off; headless has no terminal at all.
-  const status = tui && programStatusEnabled(env, process.stdout.isTTY === true) ? new ProgramStatusEmitter((bytes) => tui.terminal.write(bytes)) : null;
-  const component = new HubComponent(ui, attached.engine, { spawned: attached.spawned, spaces, onFleet: status ? (lanes) => status.update(lanes) : undefined });
+  const component = new HubComponent(ui, attached.engine, { spawned: attached.spawned, spaces });
   const control = startHubControl({ dir, exec: (op) => component.exec(op) });
   const quit = () => component.quit();
   for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(sig, quit);
@@ -1843,7 +1868,6 @@ export async function runHubCli(env: Readonly<Record<string, string | undefined>
     for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.off(sig, quit);
     control.stop();
     component.dispose();
-    status?.clear(); // after dispose: a refresh still in flight can no longer report
     spaces.onChange();
     overlay?.hide();
     tui?.stop();
@@ -1851,3 +1875,4 @@ export async function runHubCli(env: Readonly<Record<string, string | undefined>
   }
   return 0;
 }
+

@@ -23,6 +23,11 @@
 // only from the store), an unsigned package only after the user accepted the unsigned warning for exactly
 // the bytes they reviewed (sha256), and it never replaces a store install. `current.json` records the
 // source, so the store card never mistakes a private copy for the purchased one and nothing updates it.
+//
+// ADR-0535: an OFFERED add-on (Herd) ships inside the app as a signed package in `<resources>/addons/`, named
+// by `addons/index.json`, and installs only when the user presses Install on its card. It goes through the
+// private-install path with the index sha256 as the reviewed bytes, must carry exactly the index id, and must
+// be signed: an unsigned offered package is refused. An id the index does not name is refused.
 
 import { randomBytes } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -32,11 +37,12 @@ import { sha256Bytes, type TrustedPackKey } from "../../harness/kb/pack.ts";
 import { DEFAULT_POLICY, scanAndDecide, type GateDecision } from "../../harness/security/gate.ts";
 import { readAllZipEntries } from "../../harness/personal/unzip.ts";
 import {
-  PLUGIN_LICENSE, PLUGIN_MANIFEST, PLUGIN_SIGNATURE, canonicalPluginBytes, validatePluginManifest, verifyPluginEntries,
-  type PluginGate, type PluginManifest,
+  ADDONS_INDEX, PLUGIN_LICENSE, PLUGIN_MANIFEST, PLUGIN_SIGNATURE, canonicalPluginBytes, parseOfferedIndex, verifyPluginEntries,
+  type OfferedAddon, type PluginGate, type PluginManifest,
 } from "../../harness/plugins/package.ts";
 import { trustedPluginKeys } from "../../harness/plugins/publisher_key.ts";
 import { needsAuthenticode, probeAuthenticode, type AuthenticodeProbe } from "./authenticode.ts";
+import { PLUGIN_ID_RE, pluginDataDir, pluginsRoot, readInstalled, type CurrentPointer, type InstalledPlugin, type PluginSource } from "./installed.ts";
 import { extractHost } from "../egress_policy.ts";
 import { managedConfig, type ManagedEgressPolicy } from "../managed_config.ts";
 import { isScannerUnavailable } from "../kb_pack.ts";
@@ -50,50 +56,19 @@ export const MAX_EXPANDED_BYTES = 1024 * 1024 * 1024;
 /** The scanner answers one request within 5 s; a bundle is scanned in slices that fit comfortably. */
 const SCAN_SLICE_CHARS = 200_000;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
-const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-const dataRoot = (): string => process.env.LUCID_DATA_ROOT || join(homedir(), ".omp");
-/** userData/plugins (LUCID_PLUGINS_DIR overrides, for tests and isolated smoke runs). */
-export function pluginsRoot(): string { return process.env.LUCID_PLUGINS_DIR || join(dataRoot(), "plugins"); }
-/** userData/plugin-data/<id>: the plugin's writable state, never removed by an update. */
-export function pluginDataDir(id: string): string { return join(process.env.LUCID_PLUGIN_DATA_DIR || join(dataRoot(), "plugin-data"), id); }
 /** The attempt log the contract names: ~/.omp/lucid-plugins.jsonl. */
 export function pluginLogPath(): string { return process.env.LUCID_PLUGIN_LOG_PATH || join(homedir(), ".omp", "lucid-plugins.jsonl"); }
+/** ADR-0535: the offered add-ons folder, `<resources>/addons` (extraResources `addons`, found like
+ *  `<resources>/runtimes`; a dev run passes the desktop folder, so it is `desktop/addons`). LUCID_ADDONS_DIR
+ *  overrides, for tests and isolated smoke runs. */
+export function addonsDir(resourcesPath: string): string { return process.env.LUCID_ADDONS_DIR || join(resourcesPath, "addons"); }
 
-/** Where an install came from: the store's signed download, or a file the user picked (ADR-0505). */
-export type PluginSource = "catalog" | "private";
-
-export interface InstalledPlugin {
-  manifest: PluginManifest;
-  /** The installed package folder (read-only to the plugin: LUCID_PLUGIN_ROOT). */
-  dir: string;
-  installedAt: string;
-  signed: boolean;
-  keyId?: string;
-  source: PluginSource;
-}
-
-interface CurrentPointer { id: string; version: string; installedAt: string; signed: boolean; keyId?: string; source?: PluginSource }
-
-/** The installed, current version of `id`, or null when absent or unreadable. Re-validates the manifest. */
-export function readInstalled(id: string, root = pluginsRoot()): InstalledPlugin | null {
-  if (!ID_RE.test(id)) return null;
-  let ptr: CurrentPointer;
-  try { ptr = JSON.parse(readFileSync(join(root, id, "current.json"), "utf8")) as CurrentPointer; } catch { return null; }
-  if (!ptr || ptr.id !== id || typeof ptr.version !== "string") return null;
-  const dir = join(root, id, ptr.version);
+/** The add-ons this build offers. A missing or unreadable index offers nothing (the card says Not in this build). */
+export function readOfferedAddons(dir: string): OfferedAddon[] {
   let raw: unknown;
-  try { raw = JSON.parse(readFileSync(join(dir, PLUGIN_MANIFEST), "utf8")); } catch { return null; }
-  const v = validatePluginManifest(raw, { requireFiles: true });
-  if (!v.ok || v.manifest.id !== id || v.manifest.version !== ptr.version) return null;
-  // A pointer written before ADR-0505 has no source: the store download was then the only install path.
-  return { manifest: v.manifest, dir, installedAt: String(ptr.installedAt ?? ""), signed: !!ptr.signed, keyId: ptr.keyId, source: ptr.source === "private" ? "private" : "catalog" };
-}
-
-export function listInstalled(root = pluginsRoot()): InstalledPlugin[] {
-  let names: string[];
-  try { names = readdirSync(root); } catch { return []; }
-  return names.sort().map((n) => readInstalled(n, root)).filter((p): p is InstalledPlugin => !!p);
+  try { raw = JSON.parse(readFileSync(join(dir, ADDONS_INDEX), "utf8")); } catch { return []; }
+  return parseOfferedIndex(raw);
 }
 
 /** The installed LICENSE text (capped), so the card can show what the user accepted. */
@@ -182,7 +157,7 @@ export async function installPluginFromUrl(url: string, expectId: string, deps: 
     (deps.record ?? recordBlock)({ tool: "plugin_install", severity: "high", findings: gate, reason: `plugin "${expectId}" refused at the ${gate} gate: ${reason}` });
     return { ok: false, gate, reason, logPath: logPluginAttempt({ action: "install", source, expectId, ok: false, gate, reason, ms: Date.now() - startedAt }) };
   };
-  if (!ID_RE.test(expectId)) return fail("manifest", "invalid plugin id");
+  if (!PLUGIN_ID_RE.test(expectId)) return fail("manifest", "invalid plugin id");
   const problem = downloadUrlProblem(url);
   if (problem) return fail("download", problem);
   const host = extractHost(url) ?? "";
@@ -254,7 +229,7 @@ function inspectPluginBytes(bytes: Buffer, deps: InstallDeps): PluginFileInspect
     const raw: unknown = JSON.parse(entries.find((e) => e.name === PLUGIN_MANIFEST)?.data.toString("utf8") ?? "");
     if (raw && typeof raw === "object" && "id" in raw && typeof raw.id === "string") id = raw.id;
   } catch { /* refused just below */ }
-  if (!ID_RE.test(id)) return { ok: false, gate: "manifest", reason: `the package has no valid ${PLUGIN_MANIFEST} id` };
+  if (!PLUGIN_ID_RE.test(id)) return { ok: false, gate: "manifest", reason: `the package has no valid ${PLUGIN_MANIFEST} id` };
   const check = verifyPluginEntries(entries, { expectId: id, trusted: deps.trusted ?? trustedPluginKeys() });
   if (!check.ok) return { ok: false, gate: check.gate, reason: check.reason };
   const m = check.manifest;
@@ -281,23 +256,39 @@ export function inspectPluginFile(path: string, deps: InstallDeps = {}): PluginF
   return r.ok ? r : refusePrivate(deps, path, startedAt, "inspect-file", r.gate, r.reason);
 }
 
-/** What the user confirmed on the sheet: the reviewed bytes, and (for an unsigned package) the warning. */
-export interface PluginFileConfirm { sha256: string; acceptUnsigned: boolean }
+/** What the user confirmed on the sheet: the reviewed bytes, and (for an unsigned package) the warning.
+ *  `offeredId` (ADR-0535): the file is an add-on this build offers, so it must carry exactly that id and be
+ *  signed; `sha256` is then the index's, and `acceptUnsigned` is ignored. */
+export interface PluginFileConfirm { sha256: string; acceptUnsigned: boolean; offeredId?: string }
 
 /** Step two: install exactly the reviewed file, through every gate, recorded as a private install. */
 export async function installPluginFile(path: string, confirm: PluginFileConfirm, deps: InstallDeps = {}): Promise<InstallResult> {
   const startedAt = Date.now();
-  const fail = (gate: PluginGate, reason: string): InstallResult => refusePrivate(deps, path, startedAt, "install-file", gate, reason);
+  const offered = confirm.offeredId;
+  const action = offered ? "install-offered" : "install-file";
+  const fail = (gate: PluginGate, reason: string): InstallResult => refusePrivate(deps, path, startedAt, action, gate, reason);
   const f = readPackageFile(path);
   if (!f.ok) return fail("private", f.reason);
-  if (!confirm.sha256 || sha256Bytes(f.bytes) !== confirm.sha256) return fail("private", "the file changed after you reviewed it; choose it again");
+  if (!confirm.sha256 || sha256Bytes(f.bytes) !== confirm.sha256) {
+    return fail("private", offered ? "the package does not match this build's add-on index" : "the file changed after you reviewed it; choose it again");
+  }
   const seen = inspectPluginBytes(f.bytes, deps);
   if (!seen.ok) return fail(seen.gate, seen.reason);
+  if (offered && seen.id !== offered) return fail("manifest", `the package is "${seen.id}", not the offered add-on "${offered}"`);
+  if (offered && !seen.signed) return fail("signature", "an offered add-on must be signed by TECHLEAD 187 LLC; this package is not");
   if (!seen.signed && confirm.acceptUnsigned !== true) return fail("signature", "an unsigned package installs only after you accept the unsigned warning");
   const r = await installPluginBytes(f.bytes, seen.id, { ...deps, source: "private" });
   if (!r.ok) return fail(r.gate, r.reason);
-  logPluginAttempt({ action: "install-file", source: path, ok: true, id: r.id, version: r.version, signed: r.signed, keyId: r.keyId, ms: Date.now() - startedAt });
+  logPluginAttempt({ action, source: path, ok: true, id: r.id, version: r.version, signed: r.signed, keyId: r.keyId, ms: Date.now() - startedAt });
   return r;
+}
+
+/** ADR-0535: install an add-on this build offers, only when the user pressed Install. The package is the one
+ *  `addons/index.json` names, pinned to the index sha256, through every private-install gate, and signed. */
+export async function installOfferedPlugin(id: string, dir: string, deps: InstallDeps = {}): Promise<InstallResult> {
+  const entry = readOfferedAddons(dir).find((a) => a.id === id);
+  if (!entry) return refusePrivate(deps, join(dir, ADDONS_INDEX), Date.now(), "install-offered", "private", `"${id}" is not an add-on this build offers`);
+  return installPluginFile(join(dir, entry.file), { sha256: entry.sha256, acceptUnsigned: false, offeredId: entry.id }, deps);
 }
 
 const TEXT_EXT = /\.(c?js|mjs|ts|tsx|jsx|json|html?|css|md|txt|py|svg|xml|ya?ml|toml|ini|cfg|sh|ps1|bat|cmd|map|csv|env|lock)$/i;
@@ -391,7 +382,7 @@ export async function installPluginBytes(bytes: Buffer, expectId: string, deps: 
 
 /** Remove the installed package. The data dir stays unless `keepData` is false. */
 export function uninstallPlugin(id: string, keepData: boolean, root = pluginsRoot()): { ok: true } | { ok: false; error: string } {
-  if (!ID_RE.test(id)) return { ok: false, error: "invalid plugin id" };
+  if (!PLUGIN_ID_RE.test(id)) return { ok: false, error: "invalid plugin id" };
   const dir = join(root, id);
   if (!existsSync(dir)) return { ok: false, error: "that plugin is not installed" };
   try {

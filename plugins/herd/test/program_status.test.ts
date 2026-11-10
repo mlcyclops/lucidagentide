@@ -1,12 +1,13 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-HERD-OSC.1 (ADR-0530): the OSC 7501 report builder. A valid report is the exact byte string the
-// spec's own examples show; every input a terminal would DISCARD (bad state, id, kind, progress, app,
-// control characters, over-limit text) is refused with a reason instead of written.
+// P-HERD-OSC.1 (ADR-0530, in the Herd add-on since ADR-0535): the OSC 7501 report builder. A valid
+// report is the exact byte string the spec's own examples show; every input a terminal would DISCARD
+// (bad state, id, kind, progress, app, control characters, over-limit text) is refused with a reason
+// instead of written.
 
 import { describe, expect, test } from "bun:test";
-import { buildProgramStatus, CLEAR_ALL_PROGRAM_STATUS, cleanStatusText, validStatusId, type ProgramStatusReport } from "./program_status.ts";
+import { buildProgramStatus, CLEAR_ALL_PROGRAM_STATUS, cleanStatusText, validStatusId, type ProgramStatusReport } from "../src/program_status.ts";
 
 const seq = (r: ProgramStatusReport): string => {
   const out = buildProgramStatus(r);

@@ -138,8 +138,12 @@ export const PREMIUM_PLUGINS: PremiumPlugin[] = [
 ];
 
 /** Closed set. featured = pinned to the top; built-in = LUCID already ships the capability;
- *  planned = on the integration roadmap (ADR-0158). */
-export type FreeStatus = "featured" | "built-in" | "planned";
+ *  planned = on the integration roadmap (ADR-0158); add-on = an optional free add-on this build offers,
+ *  installed only when the user presses Install on its card (ADR-0535). */
+export type FreeStatus = "featured" | "built-in" | "planned" | "add-on";
+
+/** One line of an add-on's "how to use it" sheet: a command to type and what it does. */
+export interface AddonStep { command: string; what: string }
 
 export interface FreePlugin {
   id: string;            // stable id: never regenerated (AGENTS.md invariant 9)
@@ -157,6 +161,8 @@ export interface FreePlugin {
   lucid: string;
   glyph: string;
   tone: PosterTone;
+  /** An add-on's sheet after Open: the commands that use it. Only `add-on` rows carry it. */
+  howTo?: readonly AddonStep[];
 }
 
 /** The FREE registry (ADR-0158/0181 rows, retired ids never reused: copilot, brat, url-into-selection, readwise). */
@@ -281,6 +287,20 @@ export const FREE_PLUGINS: FreePlugin[] = [
     desc: "Named knowledge graphs from your chats, documents, and vaults.",
     category: "Knowledge", downloads: null, glyph: "graph", tone: "blue",
     lucid: "Seed graphs from ChatGPT, Claude, or Gemini exports or markdown, import signed Role KG Packs, and ground the agent's answers in them.",
+  },
+  {
+    // ADR-0535: P-HERD ships as this optional add-on. The classic `lucid hub` stays the default; nothing of Herd
+    // installs or runs until the user presses Install here.
+    id: "herd", name: "Herd", rank: 19, status: "add-on",
+    desc: "A Herdr-style terminal fleet: a hub server that outlives the terminal, with attach, detach, and named hubs.",
+    category: "Terminal", downloads: null, glyph: "terminal", tone: "cyan",
+    lucid: "Run lucid herd in any terminal to attach to your agents' hub. Close the terminal and the hub keeps running; attach again later, or run more than one hub by name. The classic lucid hub stays as it is.",
+    howTo: [
+      { command: "lucid herd", what: "Attach to the hub named main, or start it." },
+      { command: "lucid herd --name work", what: "Attach to a second hub named work." },
+      { command: "lucid herd server list", what: "List the hubs that are running." },
+      { command: "lucid herd server stop", what: "Stop the hub. Pressing Q in a terminal only detaches." },
+    ],
   },
 ];
 
@@ -408,6 +428,46 @@ export function cardActionLabel(a: CardAction): string {
     case "installing": return "Installing";
     case "open": return "Open";
     case "update": return `Update to ${a.to}`;
+  }
+}
+
+/** What an optional add-on's card offers right now (ADR-0535). `open` also shows Remove beside it. */
+export type AddonAction =
+  | { kind: "checking" }
+  | { kind: "not-offered" }
+  | { kind: "install"; version: string }
+  | { kind: "installing" }
+  | { kind: "open" };
+
+export interface AddonFacts {
+  /** The engine's plugin list has answered at least once, so `offeredVersion` is known. */
+  listed: boolean;
+  /** The version this build offers (its add-ons index), or null when the build ships none. */
+  offeredVersion: string | null;
+  /** The installed package (any source), or null when it is not installed. */
+  installed: InstalledFacts | null;
+  /** An install for this card is in flight. */
+  busy: boolean;
+}
+
+/** The add-on card's state (ADR-0535). Order matters: in-flight work shows Installing; an installed add-on
+ *  opens (and can be removed) whatever this build offers; otherwise Install only when this build ships the
+ *  signed package, and Not in this build when it does not. Before the first answer, Checking. */
+export function decideAddonAction(f: AddonFacts): AddonAction {
+  if (f.busy) return { kind: "installing" };
+  if (f.installed) return { kind: "open" };
+  if (!f.listed) return { kind: "checking" };
+  return f.offeredVersion ? { kind: "install", version: f.offeredVersion } : { kind: "not-offered" };
+}
+
+/** The add-on button text. One short line (invariant 11). */
+export function addonActionLabel(a: AddonAction): string {
+  switch (a.kind) {
+    case "checking": return "Checking";
+    case "not-offered": return "Not in this build";
+    case "install": return "Install";
+    case "installing": return "Installing";
+    case "open": return "Open";
   }
 }
 

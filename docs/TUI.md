@@ -148,13 +148,46 @@ status` first, learn flags from `--help`, pass explicit ids, and leave approvals
 engine, and the UI token alone. `lucid hub --skill` prints the same file, so an agent
 on any machine with LUCID installed can load it without the repo.
 
-## Fleet status for the terminal (OSC 7501, P-HERD-OSC.1, ADR-0530)
+## Herd, the optional add-on (P-HERD, ADR-0535)
 
-`lucid hub` tells the terminal it runs in what the fleet is doing, with the
+Herd is a free, optional add-on that makes the hub a server that outlives its terminal,
+in the Herdr and tmux idiom. It is not part of the default install: `lucid hub` stays the
+classic hub (one process, `q` quits, no server, no OSC 7501). Install Herd in the IDE:
+Plugins, Free, Herd, Install (the package is offered inside the app and signed; nothing
+installs it for you). Without it, `lucid herd` prints how to install it and exits 2.
+
+- **Attach, detach, reattach.** `lucid herd` attaches this terminal to the Herd server,
+  starting it (detached) when none runs. `Q` (also `q`, `ctrl+c`) detaches: the server,
+  the engine it spawned and every lane keep running. `lucid herd` again reattaches to the
+  same panes. Any number of terminals can attach; they share one layout, rendered at the
+  smallest attached size. Herd uses the classic hub's keymap, decks and `:` commands.
+- **Server verbs.** `lucid herd server list`, `lucid herd server start [--name <n>]` (in
+  this terminal), `lucid herd server stop [--name <n>]` (an engine the server spawned stops
+  with it; one it only attached to is left alone). `lucid herd [--name <n>] <command>` takes
+  the same JSON control commands as `lucid hub <command>`.
+- **Named instances.** `--name <n>` picks an instance (default `main`); each has its own
+  server, layout, agent priorities and discovery file.
+- **Files.** Everything Herd writes lives in the add-on's data folder
+  (`<data root>/plugin-data/herd/`): `hub-<name>-spaces.json` with a `.bak` and the last
+  ten writes under `hub-snapshots/<name>/` (a truncated or corrupt layout restores from the
+  newest snapshot that parses, and the status line says so), `hub-<name>-agent-priorities.json`,
+  and `run/<name>/hub-discovery-<pid>.json` (0600). The classic `hub-spaces.json` is only
+  read, once, to seed `main` the first time it starts; it is never moved or written.
+- **In the IDE.** The Herd card's Open starts the add-on through the plugin runtime (instance
+  `main`, health at `/healthz`) and shows the `lucid herd` command to run in a terminal.
+- **Security.** The same control plane as the hub: the hub token, a loopback Host, no
+  browser Origin, a timing-safe compare, and the nonce handshake before the token leaves
+  a client. A terminal client holds the hub token only, never the engine's UI token. The
+  human-only keys (`a`, `i`, `y`, `s`, `d`) work only from an attached terminal; `/cmd`
+  has no verb for them.
+
+### Fleet status for the terminal (OSC 7501, P-HERD-OSC.1, ADR-0530)
+
+The Herd client tells the terminal it runs in what the fleet is doing, with the
 [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status)
 (OSC 7501). A terminal that speaks it (Herdr, Ghostty, Rex) can show a badge, a
-spinner or a "needs you" mark on the hub's pane or tab; any other terminal ignores
-the sequence.
+spinner or a "needs you" mark on the pane or tab; any other terminal ignores the
+sequence. The classic `lucid hub` writes none of it.
 
 - **Records.** One root record for the whole fleet, plus one record per lane: id =
   the lane id (cut to the protocol's `[A-Za-z0-9_.+-]{1,32}`), title = the lane name,
@@ -168,10 +201,10 @@ the sequence.
   `working` when any lane works, else `done` when any finished, else `idle`. Failed
   lanes are added to the message ("1 lane failed").
 - **When.** Each poll tick (2 s) writes only the records that changed, through the
-  hub's own terminal output, never inside a frame. A lane that leaves the fleet is
-  cleared (`state=clear:id=<lane>`); quitting the hub clears every record.
+  client's own terminal output, never inside a frame. A lane that leaves the fleet is
+  cleared (`state=clear:id=<lane>`); detaching clears every record.
 - **Off switch.** `LUCID_PROGRAM_STATUS=0` (or `false`, `off`, `no`) turns it off.
-  Nothing is written when stdout is not a TTY, nor by `lucid hub --headless`.
+  Nothing is written when stdout is not a TTY.
 
 ## Capability map
 

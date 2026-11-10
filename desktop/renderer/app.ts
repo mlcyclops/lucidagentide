@@ -16499,6 +16499,7 @@ const pluginsFlyout = createPluginsFlyout({
   ...(bridge.isElectron ? { pickFile: (opts: Parameters<typeof bridge.pickFile>[0]) => bridge.pickFile(opts) } : {}),
   inspectFile: (path) => bridge.pluginsInspectFile(path),
   installFile: (input) => bridge.pluginsInstallFile(input),
+  installOffered: (id) => bridge.pluginsInstallOffered(id),
   uninstall: (id, keepData) => bridge.pluginsUninstall(id, keepData),
   start: (id) => bridge.pluginsStart(id),
   license: (id) => bridge.pluginsLicense(id),

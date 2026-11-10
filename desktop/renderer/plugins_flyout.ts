@@ -16,6 +16,11 @@
 // the unsigned box ticked), then the engine installs exactly the reviewed bytes. Opening uses the same
 // runtime start and plugin Preview tab as a store plugin.
 //
+// ADR-0535: an optional add-on (Herd) is a FREE card with the "Optional add-on" chip. Its button is Install when
+// this build ships the signed package, Not in this build when it does not, and Open plus Remove once installed.
+// Install goes through the engine's install-offered route only; Open starts it through the runtime and shows
+// the terminal commands that use it. Nothing of an add-on installs or runs before the user presses Install.
+//
 // Media is bundled under assets/plugins/ (offline). A loop only gets its `src` while its card is on screen
 // (IntersectionObserver), and never under prefers-reduced-motion: then the poster is the picture.
 
@@ -23,8 +28,9 @@ import { esc } from "./format.ts";
 import { icon, iconBody } from "./icons.ts";
 import {
   BLACK_ARROW, FREE_PLUGINS, PLUGIN_LICENSE_NAME, PLUGIN_LICENSE_URL, PLUGIN_PRICE_LABEL, PREMIUM_PLUGINS,
-  cardActionLabel, decideCardAction, fmtDownloads, matchesQuery, parseCageOrUei, parseTierPref, provenanceChip, sortFree, storeInstalledVersion,
-  type CardAction, type DrawerTab, type FreePlugin, type PluginMedia, type PosterTone, type PremiumPlugin, type SoldPlugin,
+  addonActionLabel, cardActionLabel, decideAddonAction, decideCardAction, fmtDownloads, matchesQuery, parseCageOrUei, parseTierPref, provenanceChip,
+  sortFree, storeInstalledVersion,
+  type AddonAction, type CardAction, type DrawerTab, type FreePlugin, type PluginMedia, type PosterTone, type PremiumPlugin, type SoldPlugin,
 } from "./plugin_catalog.ts";
 import { shouldResumeCheckout, type PendingCheckout } from "./pack_cta.ts";
 import type { AuthState, Entitlement, GovAccessStatus } from "../../harness/market/entitlement.ts";
@@ -95,22 +101,50 @@ export function premiumCardHtml(p: PremiumPlugin, a: CardAction, installed: bool
   </article>`;
 }
 
-const STATUS_CHIP: Record<FreePlugin["status"], string> = { featured: "Featured", "built-in": "Built in", planned: "Planned" };
+const STATUS_CHIP: Record<FreePlugin["status"], string> = { featured: "Featured", "built-in": "Built in", planned: "Planned", "add-on": "Optional add-on" };
 
-export function freeCardHtml(p: FreePlugin): string {
-  const dl = fmtDownloads(p.downloads);
-  const action = p.repo
-    ? `<button type="button" class="plg-act" data-kind="visit" data-plg-repo="${esc(p.repo)}" title="${esc(p.repo)}">View project${icon("arrowRight", 13)}</button>`
-    : `<span class="plg-act plg-act-static" data-kind="built-in">${icon("check", 13)}In LUCID now</span>`;
+/** The footer of an optional add-on's card (ADR-0535): the one state button, Remove once installed, and the
+ *  status note. Re-rendered alone on every state change. */
+export function addonFootHtml(p: FreePlugin, a: AddonAction, note: CardNote | null): string {
+  const meta = a.kind === "install" ? `Free, version ${esc(a.version)}` : a.kind === "not-offered" ? "Free, not shipped with this build" : "Free";
+  const disabled = a.kind === "checking" || a.kind === "not-offered" || a.kind === "installing" ? " disabled" : "";
+  const busy = a.kind === "installing" ? ` aria-busy="true"` : "";
+  const remove = a.kind === "open" ? `<button type="button" class="plg-lic" data-plg-iremove="${esc(p.id)}">Remove</button>` : "";
+  return `<div class="plg-foot"><span class="plg-meta">${meta}</span>${remove}<button type="button" class="plg-act" data-kind="${a.kind}" data-plg-addon="${esc(p.id)}"${disabled}${busy}>${esc(addonActionLabel(a))}</button></div>`
+    + (note ? `<p class="plg-note" data-tone="${note.tone}" role="status">${esc(note.text)}</p>` : "");
+}
+
+/** A free card. An add-on row takes its live state (`addon`); every other row is a link or a built-in. */
+export function freeCardHtml(p: FreePlugin, addon?: { action: AddonAction; note: CardNote | null }): string {
+  let foot: string;
+  if (addon) foot = `<div class="plg-foot-slot" data-plg-afoot="${esc(p.id)}">${addonFootHtml(p, addon.action, addon.note)}</div>`;
+  else {
+    const dl = fmtDownloads(p.downloads);
+    const action = p.repo
+      ? `<button type="button" class="plg-act" data-kind="visit" data-plg-repo="${esc(p.repo)}" title="${esc(p.repo)}">View project${icon("arrowRight", 13)}</button>`
+      : `<span class="plg-act plg-act-static" data-kind="built-in">${icon("check", 13)}In LUCID now</span>`;
+    foot = `<div class="plg-foot"><span class="plg-meta">${dl ? `${icon("download", 12)}${esc(dl)} Obsidian downloads` : "Free"}</span>${action}</div>`;
+  }
   return `<article class="plg-card" data-plg-card="${esc(p.id)}">${shotHtml(p.id, p.name, { loop: false, poster: "generated", glyph: p.glyph, tone: p.tone })}
     <div class="plg-cbody">
       <b class="plg-name">${esc(p.name)}</b>
       <span class="plg-kind">${esc(p.category)}<span class="plg-chip" data-status="${p.status}">${STATUS_CHIP[p.status]}</span></span>
       <p class="plg-pitch">${esc(p.desc)}</p>
       <p class="plg-lucid"><span>With LUCID Agent</span>${esc(p.lucid)}</p>
-      <div class="plg-foot"><span class="plg-meta">${dl ? `${icon("download", 12)}${esc(dl)} Obsidian downloads` : "Free"}</span>${action}</div>
+      ${foot}
     </div>
   </article>`;
+}
+
+/** After Open starts an add-on: how to use it from a terminal (its catalog `howTo`). */
+export function addonOpenSheetHtml(p: FreePlugin): string {
+  const steps = (p.howTo ?? []).map((s) => `<li><code class="plg-cmd">${esc(s.command)}</code> ${esc(s.what)}</li>`).join("");
+  return `<div class="plg-sheet" role="dialog" aria-modal="true" aria-labelledby="plgSheetTitle">
+    <div class="plg-sheet-h"><b id="plgSheetTitle">${esc(p.name)} is running</b><button type="button" class="set-close" data-plg-sheet-close aria-label="Close">${icon("close", 15)}</button></div>
+    <p class="plg-sheet-price">It runs on this machine and keeps running after a terminal closes. Use it from any terminal:</p>
+    <ul class="plg-sheet-list">${steps}</ul>
+    <div class="plg-form-row"><button type="button" class="btn-mini" data-plg-sheet-close>Close</button></div>
+  </div>`;
 }
 
 /** The Government access panel at the top of the Government section (one record per account, ADR-0465). */
@@ -277,6 +311,8 @@ export interface PluginsFlyoutDeps {
   pickFile?: (opts: { title: string; filters: { name: string; extensions: string[] }[] }) => Promise<string | null>;
   inspectFile: (path: string) => Promise<PluginFileInspectView | null>;
   installFile: (input: { path: string; sha256: string; acceptUnsigned: boolean }) => Promise<PluginInstallView | null>;
+  /** ADR-0535: install an add-on this build offers (only from its card's Install button). */
+  installOffered: (id: string) => Promise<PluginInstallView | null>;
   uninstall: (id: string, keepData: boolean) => Promise<PluginActionView | null>;
   start: (id: string) => Promise<PluginStartView | null>;
   license: (id: string) => Promise<PluginLicenseView | null>;
@@ -316,6 +352,9 @@ const GATE_TEXT: Record<PluginGate, string> = {
   private: "This package cannot be installed from a file",
 };
 
+/** The optional add-ons on the Free tab (ADR-0535): the rows whose card installs, opens and removes. */
+const ADDON_PLUGINS = FREE_PLUGINS.filter((p) => p.status === "add-on");
+
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
@@ -336,7 +375,11 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
   /** A purchase the user started and that a browser detour interrupted (sign-in or Stripe Checkout). */
   let pending: (PendingCheckout & { stage: "signin" | "checkout" }) | null = null;
 
+  /** ADR-0535: id -> version of each add-on this build offers; null until the engine's list first answers. */
+  let offered: Map<string, string> | null = null;
+
   const premium = (id: string) => PREMIUM_PLUGINS.find((p) => p.id === id);
+  const addon = (id: string) => ADDON_PLUGINS.find((p) => p.id === id);
   const reducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   function actionFor(p: PremiumPlugin): CardAction {
@@ -355,11 +398,19 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     paintFoot(id);
   }
 
-  /** Repaint one card's footer: a store card on PREMIUM, or an Installed row (both can carry a note). */
+  function addonActionFor(id: string): AddonAction {
+    return decideAddonAction({ listed: offered !== null, offeredVersion: offered?.get(id) ?? null, installed: installed.get(id) ?? null, busy: busy.has(id) });
+  }
+
+  /** Repaint one card's footer: a store card on PREMIUM, an add-on card on FREE, or an Installed row (each
+   *  can carry a note). */
   function paintFoot(id: string): void {
     const p = premium(id);
     const slot = root?.querySelector(`[data-plg-foot="${CSS.escape(id)}"]`);
     if (p && slot) slot.innerHTML = premiumFootHtml(p, actionFor(p), storeInstalledVersion(installed.get(id)) !== null, notes.get(id) ?? null);
+    const a = addon(id);
+    const aslot = root?.querySelector(`[data-plg-afoot="${CSS.escape(id)}"]`);
+    if (a && aslot) aslot.innerHTML = addonFootHtml(a, addonActionFor(id), notes.get(id) ?? null);
     const row = installed.get(id);
     const islot = root?.querySelector(`[data-plg-ifoot="${CSS.escape(id)}"]`);
     if (row && islot) islot.innerHTML = installedFootHtml(row, notes.get(id) ?? null);
@@ -370,13 +421,19 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     if (slot) slot.innerHTML = govPanelHtml(deps.user().signedIn, gov, govFormOpen, govError);
   }
 
-  function paintAllFeet(): void { for (const p of PREMIUM_PLUGINS) paintFoot(p.id); paintGov(); }
+  function paintAllFeet(): void {
+    for (const p of PREMIUM_PLUGINS) paintFoot(p.id);
+    for (const p of ADDON_PLUGINS) paintFoot(p.id);
+    paintGov();
+  }
 
   function bodyHtml(): string {
     const empty = `<p class="plg-empty">No plugins match "${esc(query.trim())}".</p>`;
     if (tier === "free") {
-      const cards = sortFree(FREE_PLUGINS).filter((p) => matchesQuery([p.name, p.desc, p.category, p.lucid], query)).map(freeCardHtml);
-      return `<p class="plg-lede">Integrations that are free with LUCID Agent: the ones already built in, and the ones on the way.</p>`
+      const cards = sortFree(FREE_PLUGINS)
+        .filter((p) => matchesQuery([p.name, p.desc, p.category, p.lucid], query))
+        .map((p) => freeCardHtml(p, p.status === "add-on" ? { action: addonActionFor(p.id), note: notes.get(p.id) ?? null } : undefined));
+      return `<p class="plg-lede">Integrations that are free with LUCID Agent: the ones already built in, optional add-ons that install only when you press Install, and the ones on the way.</p>`
         + (cards.length ? `<div class="plg-grid">${cards.join("")}</div>` : empty);
     }
     if (tier === "installed") return installedBodyHtml([...installed.values()], query, notes, !!deps.pickFile);
@@ -432,6 +489,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     ]);
     installed.clear();
     for (const p of list?.plugins ?? []) installed.set(p.id, p);
+    if (list) offered = new Map(list.offered.map((o): [string, string] => [o.id, o.version]));
     sold.forEach((p, i) => ents.set(p.id, entList[i] ?? null));
     gov = govStatus;
     if (tier === "installed") render(); else paintAllFeet();
@@ -591,10 +649,58 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     if (hit("[data-plg-govcancel]")) { govFormOpen = false; govError = ""; paintGov(); return; }
     if (hit("[data-plg-file]")) { void reviewFile(); return; }
     if (hit("[data-plg-fileinstall]")) { void installReviewed(); return; }
-    if ((el = hit("[data-plg-iopen]"))) { const p = installed.get(el.dataset.plgIopen!); if (p) void openPlugin(p); return; }
+    if ((el = hit("[data-plg-iopen]"))) {
+      // An add-on (ADR-0535) has no page to show: Open starts it and shows its terminal commands instead.
+      const id = el.dataset.plgIopen!, a = addon(id), p = installed.get(id);
+      if (a && p) void openAddon(a); else if (p) void openPlugin(p);
+      return;
+    }
     if ((el = hit("[data-plg-iremove]"))) { const p = installed.get(el.dataset.plgIremove!); if (p?.source === "private") showSheet(removeSheetHtml(p)); return; }
     if ((el = hit("[data-plg-remove-go]"))) { void removePrivate(el.dataset.plgRemoveGo!); return; }
+    if ((el = hit("[data-plg-addon]"))) { void actAddon(el.dataset.plgAddon!); return; }
     if ((el = hit("[data-plg-act]"))) void act(el.dataset.plgAct!);
+  }
+
+  /** ADR-0535: an add-on card's button. Install is the only way an offered add-on reaches this machine. */
+  async function actAddon(id: string): Promise<void> {
+    const p = addon(id);
+    if (!p) return;
+    const a = addonActionFor(id);
+    switch (a.kind) {
+      case "install": await installAddon(p); return;
+      case "open": await openAddon(p); return;
+      case "checking": case "not-offered": case "installing": return;
+    }
+  }
+
+  async function installAddon(p: FreePlugin): Promise<void> {
+    busy.add(p.id);
+    setNote(p.id, { tone: "info", text: "Checking the signature, checksums, and security scan." });
+    try {
+      const r = await deps.installOffered(p.id).catch(() => null);
+      if (!r) { setNote(p.id, { tone: "danger", text: "The install service did not answer. Is the LUCID engine running?" }); return; }
+      if (!r.ok) {
+        const why = `${GATE_TEXT[r.gate]}: ${r.reason}`;
+        setNote(p.id, { tone: "danger", text: `Not installed. ${why}` });
+        deps.toast({ tone: "danger", title: `${p.name} was not installed`, desc: why, timeout: 0, actions: [{ label: "OK" }] });
+        return;
+      }
+      await refresh();
+      setNote(p.id, { tone: "ok", text: `Installed version ${r.version}. Nothing runs until you open it.` });
+      deps.toast({ tone: "ok", title: `${p.name} is installed`, desc: "Open it to start it and see how to use it.", timeout: 6000, actions: [{ label: "Open", kind: "ok", run: () => void openAddon(p) }] });
+    } finally {
+      busy.delete(p.id);
+      paintFoot(p.id);
+    }
+  }
+
+  /** Start the add-on through the plugin runtime, then show how to use it from a terminal. */
+  async function openAddon(p: FreePlugin): Promise<void> {
+    if (!root) open("free"); // the toast's Open can run after the drawer closed; the sheet lives in the drawer
+    setNote(p.id, { tone: "info", text: `Starting ${p.name}.` });
+    const r = await deps.start(p.id).catch(() => null);
+    if (r?.ok) { setNote(p.id, null); showSheet(addonOpenSheetHtml(p)); return; }
+    setNote(p.id, { tone: "danger", text: `${p.name} did not start${r && !r.ok && r.error ? `: ${r.error}` : "."}` });
   }
 
   /** Step one of a private install: pick a file, let the engine say what it is, show the review sheet. */

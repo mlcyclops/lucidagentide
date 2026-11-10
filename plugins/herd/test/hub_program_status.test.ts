@@ -1,16 +1,17 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-HERD-OSC.1 (ADR-0530): what a Program Status terminal (Herdr, Ghostty, Rex) learns from `lucid
-// hub`. The LaneStatus vocabulary maps onto the protocol's states, one record per lane plus a root
-// that says whether the fleet needs the human; a poll tick that changes nothing writes nothing, a
-// lane that leaves the fleet is cleared, and quitting clears every record.
+// P-HERD-OSC.1 (ADR-0530, in the Herd add-on since ADR-0535): what a Program Status terminal
+// (Herdr, Ghostty, Rex) learns from the Herd client. The LaneStatus vocabulary maps onto the
+// protocol's states, one record per lane plus a root that says whether the fleet needs the human; a
+// poll tick that changes nothing writes nothing, a lane that leaves the fleet is cleared, and
+// detaching clears every record.
 
 import { describe, expect, test } from "bun:test";
 import {
   diffReports, fleetRecords, fleetReports, laneProgramState, laneRecordId, programStatusEnabled,
   ProgramStatusEmitter, ROOT_RECORD,
-} from "./hub_program_status.ts";
+} from "../src/hub_program_status.ts";
 
 const lane = (name: string, status: string, extra: Record<string, unknown> = {}): Record<string, unknown> =>
   ({ id: `lane-${name}`, name, status, model: "anthropic/claude-sonnet-4-20250514", createdAt: 0, ...extra });
@@ -123,7 +124,7 @@ describe("ProgramStatusEmitter", () => {
     em.clear();
     expect(writes.slice(2)).toEqual(["\x1b]7501;state=clear\x1b\\"]);
   });
-  test("a hub that never reported clears nothing on exit", () => {
+  test("a client that never reported clears nothing on exit", () => {
     const writes: string[] = [];
     new ProgramStatusEmitter((b) => writes.push(b)).clear();
     expect(writes).toEqual([]);

@@ -569,7 +569,7 @@ import { kbScanner, kbStore, kgEntry, listKgs, activeKgId, createKg, renameKg, s
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.ts"
-import { inspectPluginFile, installPluginFile, installPluginFromUrl, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505)
+import { addonsDir, inspectPluginFile, installOfferedPlugin, installPluginFile, installPluginFromUrl, readOfferedAddons, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505), ADR-0535 offered add-ons
 import { PluginRuntime, resolvePluginNode } from "./plugins/runtime.ts" // P-PLUGINS.2 (ADR-0462)
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
@@ -1691,6 +1691,8 @@ function ompBin(): string {
 // process.execPath (the on-disk binary at <repo>/bin/lucid-engine); a dev run uses import.meta.dir as-is.
 const DESKTOP_DIR = engineDesktopDir(import.meta.dir, process.execPath, existsSync);
 const REPO_DIR = join(DESKTOP_DIR, "..");
+// ADR-0535: the offered add-ons, <resources>/addons in a packaged app and desktop/addons in a dev run.
+const ADDONS_DIR = addonsDir(process.env.LUCID_RESOURCES || DESKTOP_DIR);
 const ROOT = join(DESKTOP_DIR, "renderer");
 // CREATOR-0 (ADR-0279): the engine serves on its FLAVOR's native port (Agent 5319, Creator 5320) unless
 // PORT overrides it, so both products can run side by side with no launcher gymnastics.
@@ -5972,7 +5974,12 @@ return Bun.serve({
       // hash, signature, authenticode, scan; desktop/plugins/install.ts) and stops a running copy before the
       // version pointer moves; start/stop drive desktop/plugins/runtime.ts; uninstall keeps the data dir
       // unless keepData is explicitly false.
-      if (p === "/api/plugins" && req.method === "GET") return json({ ok: true, data: { plugins: plugins.list() } });
+      // ADR-0535: `offered` is what this build ships in <resources>/addons (desktop/addons in a dev run), listed
+      // so the card can say Install or Not in this build. Nothing there installs until install-offered.
+      if (p === "/api/plugins" && req.method === "GET") {
+        const offered = readOfferedAddons(ADDONS_DIR).map((a) => ({ id: a.id, version: a.version }));
+        return json({ ok: true, data: { plugins: plugins.list(), offered } });
+      }
       if (p === "/api/plugins/license" && req.method === "GET") return json({ ok: true, data: readPluginLicense(url.searchParams.get("id") ?? "") });
       if (p === "/api/plugins/install-from-url" && req.method === "POST") {
         srv.timeout(req, 0); // a large package (download + per-file scan) can outlast the 60 s idle limit
@@ -5992,6 +5999,14 @@ return Bun.serve({
         srv.timeout(req, 0);
         const b = await readBody<{ path?: unknown; sha256?: unknown; acceptUnsigned?: unknown }>(req);
         const r = await installPluginFile(String(b.path ?? ""), { sha256: String(b.sha256 ?? ""), acceptUnsigned: b.acceptUnsigned === true }, { beforeSwitch: async (id) => { await plugins.stop(id); } });
+        return json({ ok: true, data: r.ok ? { ok: true, id: r.id, version: r.version, signed: r.signed } : r });
+      }
+      // ADR-0535: install an add-on this build offers (the user pressed Install on its card). Only an id the
+      // addons index names, only the bytes its sha256 names, signed, through the private-install gates.
+      if (p === "/api/plugins/install-offered" && req.method === "POST") {
+        srv.timeout(req, 0);
+        const b = await readBody<{ id?: unknown }>(req);
+        const r = await installOfferedPlugin(String(b.id ?? ""), ADDONS_DIR, { beforeSwitch: async (id) => { await plugins.stop(id); } });
         return json({ ok: true, data: r.ok ? { ok: true, id: r.id, version: r.version, signed: r.signed } : r });
       }
       if (p === "/api/plugins/start" && req.method === "POST") {

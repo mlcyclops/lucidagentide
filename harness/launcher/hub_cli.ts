@@ -2,17 +2,18 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // P-TUI.3 (ADR-0436): `lucid hub <args>`. Bare `lucid hub` launches the TUI; `--headless` runs the same
-// hub with no terminal (an agent's or CI's hub); `--skill` prints the agent-facing skill doc; anything
-// else is a control command (hub_tmux_verbs.ts) sent to the RUNNING hub through its discovery file.
-// Contract for scripts: JSON on stdout + exit 0, or JSON {"error":code,"message"} on stderr + exit 1.
-// No hub running is {"error":"no_hub"}. This path never loads pi-tui and never starts a hub.
+// hub with no terminal (an agent's or CI's hub); `--skill` prints the agent-facing skill doc; `--help`
+// prints the usage; anything else is a control command (hub_tmux_verbs.ts) sent to the RUNNING hub
+// through its discovery file. Contract for scripts: JSON on stdout + exit 0, or JSON
+// {"error":code,"message"} on stderr + exit 1. No hub running is {"error":"no_hub"}. This path never
+// loads pi-tui and never starts a hub.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { discoveryDir } from "../../desktop/engine_discovery.ts";
 import { callHub, connectHub, type HubReply } from "./hub_control.ts";
 import { HubOpError } from "./hub_spaces.ts";
-import { parseHubCommand } from "./hub_tmux_verbs.ts";
+import { HUB_USAGE, parseHubCommand } from "./hub_tmux_verbs.ts";
 
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -21,11 +22,23 @@ const fail = (body: Record<string, unknown>): number => {
   return 1;
 };
 
+/** `lucid hub --help`. The last line points at Herd, the optional add-on (ADR-0535). */
+export const HUB_HELP =
+  "lucid hub                the terminal hub over the running engine; q quits (a hub-spawned engine exits too)\n" +
+  "lucid hub --headless     the same hub with no terminal, for agents and CI\n" +
+  "lucid hub --skill        print the agent guide\n" +
+  `${HUB_USAGE}\n` +
+  "A hub that outlives its terminal (detach, reattach, named instances) is Herd, an optional free add-on: install it in the IDE (Plugins, Free, Herd), then run `lucid herd`.\n";
+
 export async function runHub(argv: readonly string[], env: Env, repoRoot: string): Promise<number> {
   if (argv.length === 0 || (argv.length === 1 && argv[0] === "--headless")) {
     // Dynamic on purpose: the control CLI must not load pi-tui (or start anything) to send one command.
     const { runHubCli } = await import("./hub_tui.ts");
     return runHubCli(env, { headless: argv[0] === "--headless" });
+  }
+  if (argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h")) {
+    process.stdout.write(HUB_HELP);
+    return 0;
   }
   if (argv.length === 1 && argv[0] === "--skill") {
     // Another increment authors skills/lucid-hub/SKILL.md; until it lands this is a one-line pointer.

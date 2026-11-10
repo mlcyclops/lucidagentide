@@ -1,9 +1,10 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-HERD-OSC.1 (ADR-0530) - `lucid hub` reports the fleet to its terminal with OSC 7501, so a
-// terminal that speaks the Program Status Protocol (Herdr, Ghostty, Rex) shows what LUCID's fleet
-// is doing without scraping the screen.
+// P-HERD-OSC.1 (ADR-0530, moved into the Herd add-on by ADR-0535) - the Herd client reports the
+// fleet to its terminal with OSC 7501, so a terminal that speaks the Program Status Protocol (Herdr,
+// Ghostty, Rex) shows what LUCID's fleet is doing without scraping the screen. The classic
+// `lucid hub` writes none of this.
 //
 // One ROOT record for the whole fleet plus one CHILD record per lane (id = the lane id cut to the
 // segment grammar, title = the lane name, app=lucid). The LaneStatus vocabulary (fleet_lanes.ts)
@@ -124,7 +125,7 @@ export function diffReports(prev: ReadonlyMap<string, string>, next: ReadonlyMap
   return out;
 }
 
-/** Writes the fleet's reports through `write` (the hub's terminal), only what changed, each batch
+/** Writes the fleet's reports through `write` (the client's terminal), only what changed, each batch
  *  as ONE write so no report lands inside another sequence; `clear()` removes every record. */
 export class ProgramStatusEmitter {
   readonly #write: (bytes: string) => void;

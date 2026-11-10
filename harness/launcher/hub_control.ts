@@ -13,12 +13,19 @@
 //   POST /cmd                 {argv:[...]} + x-lucid-hub-token. argv goes through the ONE parser
 //                             (hub_tmux_verbs.ts) and the ONE executor below.
 //
+// Two seams the classic hub never passes, used by the optional Herd add-on's server (plugins/herd,
+// ADR-0535): `attach` serves GET /attach?cols&rows, a TUI client's WebSocket behind the same token
+// and the same Host and Origin guards; `commands` answers the add-on's own verbs (`server stop`)
+// ahead of the parser. Without them /attach is 404 and every argv goes to the parser, as before.
+//
 // Security posture: the control plane scans nothing and releases nothing. Agent ops are a FIXED
 // allowlist of engine fleet routes (list/spawn/prompt/status/read/cancel), called with the engine UI
 // token the hub already holds; prompt text rides /api/fleet/prompt untouched, so the in-omp gate scans
 // it exactly as it scans a typed prompt. There is no generic engine proxy and no op reaching
 // /api/security/approve, /api/fleet/answer, the whitelist or the egress posture: those stay human-only
 // keys in the TUI. send-keys types into an AGENT pane's composer only; it never reaches the keymap.
+// With `attach`, those human-only keys reach the keymap from an attached client alone: a person at a
+// terminal, holding the hub token only, never the engine UI token (every engine call stays here).
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -61,14 +68,18 @@ export function listHubDiscoveries(dir: string): HubDiscovery[] {
   return found.sort((a, b) => b.at - a.at).map((x) => x.d);
 }
 
+/** The nonce handshake for one record: true only when the server behind it echoes the file's nonce.
+ *  The token is not sent. */
+export async function verifyHub(d: HubDiscovery, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  try {
+    const res = await fetchImpl(`http://127.0.0.1:${d.port}/health`, { signal: AbortSignal.timeout(2000) });
+    return healthVerdict(d.nonce, res.ok, await res.json()) === "ours";
+  } catch { return false; /* dead or foreign */ }
+}
+
 /** The newest hub that wins the nonce handshake, or null. The token is sent nowhere until it wins. */
 export async function connectHub(dir: string, fetchImpl: typeof fetch = fetch): Promise<HubDiscovery | null> {
-  for (const d of listHubDiscoveries(dir)) {
-    try {
-      const res = await fetchImpl(`http://127.0.0.1:${d.port}/health`, { signal: AbortSignal.timeout(2000) });
-      if (healthVerdict(d.nonce, res.ok, await res.json()) === "ours") return d;
-    } catch { /* dead or foreign: try the next file */ }
-  }
+  for (const d of listHubDiscoveries(dir)) if (await verifyHub(d, fetchImpl)) return d;
   return null;
 }
 
@@ -89,36 +100,100 @@ const STATUS_BY_CODE: Record<string, number> = { usage: 400, bad_request: 400, b
 
 export interface HubControl { discovery: HubDiscovery; path: string; stop(): void }
 
-/** Boot the control server on an ephemeral loopback port and publish its discovery file. */
-export function startHubControl(opts: { dir: string; exec: (op: HubOp) => Promise<unknown>; pid?: number }): HubControl {
+/** One attached TUI client as a Herd server sees it (ADR-0490, ADR-0535). `cols`/`rows` is its
+ *  terminal size. */
+export interface HubClientSocket { readonly id: number; cols: number; rows: number; send(msg: string): void; close(code?: number, reason?: string): void }
+
+/** What a Herd server does with attached clients (plugins/herd/src/hub_server.ts). Messages are
+ *  JSON text frames. */
+export interface HubAttachHandler {
+  open(c: HubClientSocket): void;
+  message(c: HubClientSocket, raw: string): void;
+  close(c: HubClientSocket): void;
+}
+
+/** A terminal size from the attach URL: whole numbers in a sane range, else null (400). */
+function termSize(raw: string | null, min: number): number | null {
+  if (raw === null || !/^\d{1,4}$/.test(raw)) return null;
+  const n = Number(raw);
+  return n >= min && n <= 2000 ? n : null;
+}
+
+interface AttachData { client: HubClientSocket | null; cols: number; rows: number }
+
+/** Boot the control server on an ephemeral loopback port and publish its discovery file. With
+ *  `attach`, the same server accepts TUI clients on /attach. `commands` sees every authenticated argv
+ *  first and answers the ones it owns (a promise) or returns undefined to hand argv to the parser;
+ *  it never reaches an approval route, because nothing on this plane does. */
+export function startHubControl(opts: {
+  dir: string;
+  exec: (op: HubOp) => Promise<unknown>;
+  pid?: number;
+  attach?: HubAttachHandler;
+  commands?: (argv: readonly string[]) => Promise<unknown> | undefined;
+}): HubControl {
   const nonce = randomBytes(16).toString("hex");
   const token = randomBytes(32).toString("hex");
   const tokenBuf = Buffer.from(token);
   const reply = (status: number, body: unknown) => Response.json(body, { status });
-  const server = Bun.serve({
+  const authed = (req: Request): boolean => {
+    const presented = Buffer.from(req.headers.get("x-lucid-hub-token") ?? "");
+    return presented.length === tokenBuf.length && timingSafeEqual(presented, tokenBuf);
+  };
+  async function cmd(req: Request): Promise<Response> {
+    let argv: unknown;
+    try { argv = rec(await req.json()).argv; } catch { return reply(400, { error: "bad_request", message: "body must be JSON {argv:[...]}" }); }
+    if (!Array.isArray(argv) || argv.length === 0 || argv.length > 64 || !argv.every((a) => typeof a === "string" && a.length <= 100_000)) {
+      return reply(400, { error: "bad_request", message: "argv must be 1-64 strings" });
+    }
+    try {
+      const data = await (opts.commands?.(argv) ?? opts.exec(parseHubCommand(argv)));
+      return reply(200, { ok: true, data: data ?? null });
+    } catch (e) {
+      if (e instanceof HubOpError) return reply(STATUS_BY_CODE[e.code] ?? 409, { error: e.code, message: e.message });
+      return reply(500, { error: "internal", message: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  let nextClient = 1;
+  const server = Bun.serve<AttachData>({
     hostname: "127.0.0.1",
     port: 0,
     maxRequestBodySize: 1 << 20,
-    async fetch(req) {
+    fetch(req, srv) {
       // DNS-rebinding and browser guards: only a loopback Host, and no browser Origin at all.
       const host = req.headers.get("host");
       if ((host !== `127.0.0.1:${server.port}` && host !== `localhost:${server.port}`) || req.headers.has("origin")) return reply(403, { error: "forbidden" });
-      const { pathname } = new URL(req.url);
-      if (pathname === "/health" && req.method === "GET") return reply(200, { ok: true, service: "lucid-hub", nonce });
-      if (pathname !== "/cmd" || req.method !== "POST") return reply(404, { error: "not_found" });
-      const presented = Buffer.from(req.headers.get("x-lucid-hub-token") ?? "");
-      if (presented.length !== tokenBuf.length || !timingSafeEqual(presented, tokenBuf)) return reply(403, { error: "forbidden" });
-      let argv: unknown;
-      try { argv = rec(await req.json()).argv; } catch { return reply(400, { error: "bad_request", message: "body must be JSON {argv:[...]}" }); }
-      if (!Array.isArray(argv) || argv.length === 0 || argv.length > 64 || !argv.every((a) => typeof a === "string" && a.length <= 100_000)) {
-        return reply(400, { error: "bad_request", message: "argv must be 1-64 strings" });
+      const url = new URL(req.url);
+      if (url.pathname === "/health" && req.method === "GET") return reply(200, { ok: true, service: "lucid-hub", nonce });
+      if (url.pathname === "/cmd" && req.method === "POST") return authed(req) ? cmd(req) : reply(403, { error: "forbidden" });
+      if (url.pathname === "/attach" && req.method === "GET" && opts.attach) {
+        if (!authed(req)) return reply(403, { error: "forbidden" });
+        const cols = termSize(url.searchParams.get("cols"), 20);
+        const rows = termSize(url.searchParams.get("rows"), 5);
+        if (cols === null || rows === null) return reply(400, { error: "bad_request", message: "attach needs cols (20-2000) and rows (5-2000)" });
+        return srv.upgrade(req, { data: { client: null, cols, rows } }) ? undefined : reply(426, { error: "upgrade_required" });
       }
-      try {
-        return reply(200, { ok: true, data: (await opts.exec(parseHubCommand(argv))) ?? null });
-      } catch (e) {
-        if (e instanceof HubOpError) return reply(STATUS_BY_CODE[e.code] ?? 409, { error: e.code, message: e.message });
-        return reply(500, { error: "internal", message: e instanceof Error ? e.message : String(e) });
-      }
+      return reply(404, { error: "not_found" });
+    },
+    websocket: {
+      maxPayloadLength: 1 << 20,
+      open(ws) {
+        const client: HubClientSocket = {
+          id: nextClient++,
+          cols: ws.data.cols,
+          rows: ws.data.rows,
+          send: (msg) => { ws.send(msg); },
+          close: (code, reason) => { ws.close(code, reason); },
+        };
+        ws.data.client = client;
+        opts.attach?.open(client);
+      },
+      message(ws, message) {
+        if (ws.data.client && typeof message === "string") opts.attach?.message(ws.data.client, message);
+      },
+      close(ws) {
+        if (ws.data.client) opts.attach?.close(ws.data.client);
+      },
     },
   });
   const discovery: HubDiscovery = { v: 1, pid: opts.pid ?? process.pid, port: server.port!, nonce, token };

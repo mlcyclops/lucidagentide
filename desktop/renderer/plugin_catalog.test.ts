@@ -8,8 +8,8 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
-  FREE_PLUGINS, PREMIUM_PLUGINS, cardActionLabel, decideCardAction, isNewerVersion, parseCageOrUei, parseTierPref, provenanceChip, sortFree,
-  storeInstalledVersion, type CardFacts, type InstalledFacts, type PremiumPlugin,
+  FREE_PLUGINS, PREMIUM_PLUGINS, addonActionLabel, cardActionLabel, decideAddonAction, decideCardAction, isNewerVersion, parseCageOrUei,
+  parseTierPref, provenanceChip, sortFree, storeInstalledVersion, type AddonFacts, type CardFacts, type InstalledFacts, type PremiumPlugin,
 } from "./plugin_catalog.ts";
 import type { Entitlement, GovAccessStatus } from "../../harness/market/entitlement.ts";
 
@@ -218,5 +218,42 @@ describe("free catalog", () => {
     for (const retired of ["copilot", "brat", "url-into-selection", "readwise"]) expect(FREE_PLUGINS.some((p) => p.id === retired)).toBe(false);
     for (const p of FREE_PLUGINS) if (p.repo) expect(p.repo).toMatch(/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+$/);
     expect(FREE_PLUGINS.filter((p) => p.status === "planned").every((p) => !!p.repo)).toBe(true);
+  });
+});
+
+// ADR-0535: Herd is an optional free add-on. Its card installs only on Install, and only what this build ships.
+describe("optional add-ons", () => {
+  const addonFacts = (over: Partial<AddonFacts> = {}): AddonFacts => ({ listed: true, offeredVersion: "0.1.0", installed: null, busy: false, ...over });
+  const herdInstalled: InstalledFacts = { id: "herd", version: "0.1.0", source: "private", signed: true };
+
+  test("Herd is a free add-on row with terminal commands, never a store plugin", () => {
+    const herd = FREE_PLUGINS.find((p) => p.id === "herd");
+    expect(herd).toMatchObject({ name: "Herd", status: "add-on" });
+    expect(herd?.repo).toBeUndefined();
+    expect(herd?.howTo?.[0]?.command).toBe("lucid herd");
+    expect(PREMIUM_PLUGINS.some((p) => p.id === "herd")).toBe(false);
+    expect(FREE_PLUGINS.filter((p) => p.status === "add-on").every((p) => (p.howTo?.length ?? 0) > 0)).toBe(true);
+  });
+
+  test("not installed: Install when this build offers it, Not in this build when it does not, Checking before the list answers", () => {
+    expect(decideAddonAction(addonFacts())).toEqual({ kind: "install", version: "0.1.0" });
+    expect(decideAddonAction(addonFacts({ offeredVersion: null }))).toEqual({ kind: "not-offered" });
+    expect(decideAddonAction(addonFacts({ listed: false, offeredVersion: null }))).toEqual({ kind: "checking" });
+    expect(addonActionLabel({ kind: "not-offered" })).toBe("Not in this build");
+    expect(addonActionLabel({ kind: "install", version: "0.1.0" })).toBe("Install");
+  });
+
+  test("installed: Open whatever this build offers; in-flight work shows Installing", () => {
+    expect(decideAddonAction(addonFacts({ installed: herdInstalled }))).toEqual({ kind: "open" });
+    expect(decideAddonAction(addonFacts({ installed: herdInstalled, offeredVersion: null }))).toEqual({ kind: "open" });
+    expect(decideAddonAction(addonFacts({ installed: herdInstalled, listed: false }))).toEqual({ kind: "open" });
+    expect(decideAddonAction(addonFacts({ busy: true }))).toEqual({ kind: "installing" });
+    expect(addonActionLabel({ kind: "open" })).toBe("Open");
+  });
+
+  test("no fact turns a build without the package into Install", () => {
+    for (const listed of [false, true])
+      for (const busy of [false, true])
+        expect(decideAddonAction(addonFacts({ listed, busy, offeredVersion: null })).kind).not.toBe("install");
   });
 });

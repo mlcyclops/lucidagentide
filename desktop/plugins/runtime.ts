@@ -31,7 +31,7 @@ import { createServer } from "node:net";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { safeRelPath, type DaemonEntry, type PluginManifest, type ServerEntry, type WebEntry } from "../../harness/plugins/package.ts";
 import { formatSquatter, ownerProbeSpec, parseOwnerProbe } from "../port_guard.ts";
-import { listInstalled, pluginDataDir, pluginsRoot, readInstalled, type InstalledPlugin } from "./install.ts";
+import { listInstalled, pluginDataDir, pluginsRoot, readInstalled, type InstalledPlugin } from "./installed.ts";
 import { removePluginMcp, setPluginMcp, type PluginMcpServer } from "./mcp.ts";
 import { PLUGIN_PORT_MAX, PLUGIN_PORT_MIN } from "./ports.ts";
 

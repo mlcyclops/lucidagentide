@@ -323,6 +323,27 @@ export class Spaces {
     this.onChange();
   }
 
+  /** P-HERD.1 (ADR-0490 item 5, called by the Herd add-on's server only, ADR-0535; the classic hub
+   *  never relinks): a server outlives engine restarts, and an engine that recovers a lane may give
+   *  it a new id (P-FLEET.L4). An agent pane whose lane id the engine no longer lists
+   *  re-binds to the ONE live lane carrying its saved name; with none (or two), it stays put and
+   *  renders "this agent is gone". Returns how many panes moved. */
+  relinkLanes(lanes: readonly { id: string; name: string }[]): number {
+    const ids = new Set(lanes.map((l) => l.id));
+    let moved = 0;
+    for (const s of this.spaces) for (const t of s.tabs) {
+      leaves(t.tree).forEach((leaf, i) => {
+        if (leaf.deck !== "agent" || !leaf.lane || ids.has(leaf.lane) || !leaf.laneName) return;
+        const named = lanes.filter((l) => l.name === leaf.laneName);
+        if (named.length !== 1) return;
+        t.tree = mapLeaf(t.tree, i, () => ({ ...leaf, lane: named[0]!.id }));
+        moved++;
+      });
+    }
+    if (moved) this.onChange();
+    return moved;
+  }
+
   list(): { id: string; name: string; active: boolean; panes: number; tabs: number; activeTab: string }[] {
     return this.spaces.map((s) => ({ id: s.id, name: s.name, active: s.id === this.active, panes: spacePanes(s), tabs: s.tabs.length, activeTab: s.activeTab }));
   }

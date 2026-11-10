@@ -603,7 +603,9 @@ export interface InstalledPluginView {
   /** Signed by a publisher key baked into this build. */
   signed: boolean;
 }
-export interface PluginsListView { plugins: InstalledPluginView[] }
+/** ADR-0535: an optional add-on this build ships (desktop/addons/index.json). Offered, never installed by setup. */
+export interface OfferedAddonView { id: string; version: string }
+export interface PluginsListView { plugins: InstalledPluginView[]; offered: OfferedAddonView[] }
 export type PluginInstallView =
   | { ok: true; id: string; version: string; signed?: boolean }
   | { ok: false; gate: PluginGate; reason: string; logPath?: string };
@@ -1231,6 +1233,8 @@ export interface LucidBridge {
   // P-PLUGINS.7 (ADR-0505): a private install from a picked file, in two explicit steps.
   pluginsInspectFile(path: string): Promise<PluginFileInspectView | null>;
   pluginsInstallFile(input: { path: string; sha256: string; acceptUnsigned: boolean }): Promise<PluginInstallView | null>;
+  /** ADR-0535: install an add-on this build offers; the engine refuses any id its add-ons index does not name. */
+  pluginsInstallOffered(id: string): Promise<PluginInstallView | null>;
   pluginsStart(id: string): Promise<PluginStartView | null>;
   pluginsStop(id: string): Promise<PluginActionView | null>;
   /** keepData defaults to true: the plugin's data dir survives unless the user asks to delete it. */
@@ -2090,6 +2094,7 @@ export const bridge: LucidBridge = {
   pluginsInstallFromUrl: (url, expectId) => post("/api/plugins/install-from-url", { url, expectId }),
   pluginsInspectFile: (path) => post("/api/plugins/inspect-file", { path }),
   pluginsInstallFile: (input) => post("/api/plugins/install-file", input),
+  pluginsInstallOffered: (id) => post("/api/plugins/install-offered", { id }),
   pluginsStart: (id) => post("/api/plugins/start", { id }),
   pluginsStop: (id) => post("/api/plugins/stop", { id }),
   pluginsUninstall: (id, keepData = true) => post("/api/plugins/uninstall", { id, keepData }),
