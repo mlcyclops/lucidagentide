@@ -7331,7 +7331,12 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .rs-entry-h>span:last-child{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rs-entry-h .pill{flex:none}
 .rs-ask-h{font-size:12px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.rs-ask .orbit-spawn-row{gap:6px;align-items:center}
+.rs-ask .orbit-spawn-row{gap:6px;align-items:center;flex-wrap:wrap}
+/* The presence password field takes its own line: beside "Sign with the hub's password" and Deny it was squeezed
+   to one character wide. */
+.rs-ask .orbit-spawn-row input.rs-pw{flex:1 1 100%;min-width:0;background:var(--bg-2);border:1px solid var(--line);
+  border-radius:8px;color:var(--txt);font:inherit;font-size:12px;padding:7px 9px}
+.rs-ask .orbit-spawn-row input.rs-pw:focus{outline:none;border-color:var(--accent)}
 /* ADR-0508: the Start-a-task selector and the panel's Models section. Rows are grids, every text run its own
    block line that ellipsizes (invariant 11); chips are inline blocks inside one block line, never flex prose. */
 .rs-choices{display:grid;gap:6px;margin:0 4px 10px}
