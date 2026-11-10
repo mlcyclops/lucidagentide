@@ -14,7 +14,7 @@
 //     it may also name a model, only one this engine lists as available (else 400); absent, the fleet's default.
 //   - prompt text goes through the fail-closed scan before it reaches a lane. Scan unavailable == refused.
 //   - Malformed anything (bad JSON, extra keys, wrong types, oversize text) is refused, never coerced.
-//   - schema (ADR-0531) answers this API as an OpenAPI 3.1 document (openapi.ts), to the UI token and to any paired
+//   - schema (ADR-0537) answers this API as an OpenAPI 3.1 document (openapi.ts), to the UI token and to any paired
 //     controller alike, so outside clients can be built against it. A route added here goes into that document too:
 //     openapi.test.ts fails on a route the document misses or names wrongly.
 // Events are metadata only (pairing, lane, verdict, counts); prompt text and tokens never reach them.
@@ -45,9 +45,9 @@ import { isLaneCount, PAIRING_NAME_RE, SPOKE_NODE_RE, type Pairing, type Pairing
 
 /** Routes the controller token opens. pair/unpair are NOT here: they stay on the UI token. */
 export const CONTROLLER_ROUTES: ReadonlySet<string> = new Set(
-  // ask, decide, deny: P-CTRL-REMOTE.1 (ADR-0525). The controller can read a remote ask and deny it; an allow
+  // ask, decide, deny: P-CTRL-REMOTE.1 (ADR-0531). The controller can read a remote ask and deny it; an allow
   // needs a decision the engine verifies against the paired root, so the controller only carries it.
-  // close: ADR-0500. schema: ADR-0531, the one route the UI token also reads here.
+  // close: ADR-0500. schema: ADR-0537, the one route the UI token also reads here.
   ["lanes", "spawn", "prompt", "status", "result", "cancel", "close", "ask", "decide", "deny", "schema"].map((r) => `/api/controller/${r}`),
 );
 
@@ -120,7 +120,7 @@ function emit(deps: ControllerDeps, event: EventName, ids: { runId: string; sess
   new Telemetry({ runId: ids.runId, sessionId: ids.sessionId, sink: deps.sink }).emit(event, fields);
 }
 
-/** P-CTRL-REMOTE.1 (ADR-0525): the audit line for a tier-policy verdict raised inside the fleet. Throws when it
+/** P-CTRL-REMOTE.1 (ADR-0531): the audit line for a tier-policy verdict raised inside the fleet. Throws when it
  *  cannot be written, so the fleet refuses the action rather than run it unrecorded. Metadata only. */
 export function auditTierVerdict(deps: ControllerDeps, laneId: string, v: { ruling: string; tier: string; reason: string }): void {
   const p = deps.store.pairingForLane(laneId);
@@ -140,7 +140,7 @@ async function resolveWorkspace(path: string): Promise<string | null> {
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
 const reply = (status: number, data: Record<string, unknown>) => new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
-/** ADR-0531: this API as OpenAPI 3.1, built on the first request (not at import, so no import order can see a
+/** ADR-0537: this API as OpenAPI 3.1, built on the first request (not at import, so no import order can see a
  *  constant it reads still uninitialized) from the limits this handler enforces, then kept. */
 let schemaJson: string | null = null;
 const malformed = () => reply(400, { ok: false, error: "malformed request" });
@@ -228,7 +228,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
     if (maxLanes !== undefined && !isLaneCount(maxLanes)) return malformed();
     const workspace = await resolveWorkspace(b.workspace!);
     if (!workspace) return reply(400, { ok: false, error: "workspace must be an existing absolute folder" });
-    // P-CTRL-REMOTE.1 (ADR-0525): a human pairing a REMOTE controller names the owner root whose certified hubs
+    // P-CTRL-REMOTE.1 (ADR-0531): a human pairing a REMOTE controller names the owner root whose certified hubs
     // may decide this pairing's parked asks. Without it the pairing is the plain supervised P-CTRL.2 kind.
     // ADR-0507: `presence: "required"` makes every remote allow carry user-presence evidence the engine verifies.
     let remote: RemotePolicy | undefined;
@@ -253,7 +253,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
     return reply(200, { ok: true });
   }
 
-  // ADR-0531: the API's own description, for the UI token (no pairing here) and any paired controller alike. The
+  // ADR-0537: the API's own description, for the UI token (no pairing here) and any paired controller alike. The
   // engine's /api gate has already refused every other caller (no token, the agent token, an unverified one).
   if (path === "/api/controller/schema") {
     if (req.method !== "GET" || url.search) return malformed();
@@ -326,7 +326,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
     return reply(200, { ok: true, data: { turns, running: deps.fleet.laneRunning(laneId) === true } });
   }
 
-  // ── P-CTRL-REMOTE.1 (ADR-0525): remote decisions on a parked ask ────────────────────────────────────────
+  // ── P-CTRL-REMOTE.1 (ADR-0531): remote decisions on a parked ask ────────────────────────────────────────
   if (path === "/api/controller/ask") {
     if (req.method !== "GET" || [...url.searchParams.keys()].some((k) => k !== "laneId")) return malformed();
     return reply(200, { ok: true, data: { ask: deps.fleet.pendingAsk(laneId) } });
@@ -444,7 +444,7 @@ export async function restoreControllerLanes(deps: ControllerDeps): Promise<stri
       emit(deps, "controller_ruling", ids, { pairing: pairing?.name ?? "", lane_id: rec.id, ruling: "lane_not_restored", backend: "lane-lifecycle", reason: "pairing revoked", ...(review.reviewBranch ? { branch: review.reviewBranch } : {}) });
       continue;
     }
-    // P-HOLDER.1 (ADR-0528): a holder kept this lane's agent running and the fleet already took it back, its turn
+    // P-HOLDER.1 (ADR-0534): a holder kept this lane's agent running and the fleet already took it back, its turn
     // (if any) still going: nothing was interrupted. The turn records itself when it settles, as a live one does.
     // LH-02: only when it runs under the pairing's policy (supervised, the pairing's remote approval). A held lane
     // that came back under any other policy is ended and started again the normal way below.

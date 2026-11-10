@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/lane_holder.ts - P-HOLDER.1 (ADR-0528): the engine's side of `lucid-holder` (native/lucid-holder).
+// desktop/lane_holder.ts - P-HOLDER.1 (ADR-0534): the engine's side of `lucid-holder` (native/lucid-holder).
 //
 // A fleet lane's agent (`omp acp`) used to be a child of the engine, so an engine restart, an IDE update or closing
 // the window ended every turn in flight. With a holder the agent is a child of its own small process instead: the
