@@ -37,6 +37,11 @@ const TABLE: [RegExp, Price][] = [
   // (sonnet-ish $3/$15), understating the priciest models in the catalog by more than 3x. These are also
   // the models that bill as pay-as-you-go credits outside a plan's included usage, so a low estimate is
   // exactly the wrong direction to be wrong in.
+  // P-MODEL.10 (ADR-pending): Fable 5.2 / Mythos 5.2 (2026-11-09, from omp 18.18.6's catalog) cut that
+  // to $8/$40 per Mtok (cache read $0.20, 5m cache write $10, 1h cache write $16; Price carries no cache
+  // fields). Must precede the generic Fable / Mythos row, which keeps Fable 5 and 5.1 at $10/$50. The
+  // `(\b|[-.])` tail ends the version (same as Haiku 5.5), so a future `fable-5-20` never lands here.
+  [/(?:fable|mythos)-?5[-.]2(\b|[-.])/, { inPerM: 8.0, outPerM: 40.0 }],
   [/fable|mythos/, { inPerM: 10.0, outPerM: 50.0 }],
   // Opus 5.5 (2026-09-22) cut the flagship rate again to $4/$20 (cache read $0.20 / write $5 per Mtok on
   // the API; Price carries no cache fields, so those live in this comment). Must be matched BEFORE the

@@ -23,8 +23,16 @@ shipped; three.js was removed from the repo with it).
 
 ## Pixel-frame conventions (desktop/renderer/mascot.ts)
 
-- Frames are 20x26 char grids over MASCOT_PALETTE; '.' = transparent. Every frame derives from BASE
-  via `rows(BASE, {overrides})` so the character stays on-model - author DIFFS, not new drawings.
+- Frames are 40x52 cells (MASCOT_W x MASCOT_H) over MASCOT_PALETTE; '.' = transparent. Simple poses
+  are authored as 20x26 diffs of BASE_20 via `rows(BASE, {overrides})` and upscaled; articulated poses
+  (run, kicks, hop, dash, salute) come from `actionFrame`. Author DIFFS, not new drawings.
+- The face band is FLUSH with the hood: face rows sit on the headband outline columns (x=2..33) in
+  every frame and expression. mascot.test.ts fails a frame whose cheek bulges past the hood.
+- Gait (P-SEASON.1): 16 beats x MASCOT_RUN_BEAT_MS (50 ms), the planted sole slides back exactly
+  MASCOT_RUN_SWEEP_CELLS per beat, and walkers move in whole beats. Read the constants; never
+  hard-code a beat length (the arcade and the splash both step by MASCOT_RUN_BEAT_MS).
+- Seasons (P-SEASON.1): costumes, head pieces and act props live in mascot_season.ts and paint via
+  `paintSeasonExtras`; surfaces read the active season from `document.documentElement.dataset.season`.
 - Keep silhouettes readable at small scale: one-pixel outlines ('k'), chunky limbs, high contrast
   between gi (K/D) and accent (G). Test: squint at an 8x scale render.
 - Animation = beat tables (frame + ms). Working activities rotate every ~6.5s via `workActivity`.

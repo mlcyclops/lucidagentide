@@ -1,7 +1,7 @@
 # Reaching the DGX fleet safely
 
 Source of truth: `DGX-FLEET-INTEGRATION.md` in the LucidAgentIDE repo (including its 2026-09-17 measured
-addendum) and the DGX Loader's own contracts. Where this file and a live answer from the box disagree,
+addendum) and the Private AI Platform's (formerly DGX Loader) own contracts. Where this file and a live answer from the box disagree,
 believe the box and say so.
 
 ## Topology
@@ -33,10 +33,10 @@ capability is whatever its `/object_info` proves on that install.
 
 ### 1. The LUCID mailboxes (no tunnels to manage by hand)
 
-- **Voice:** the Loader writes `~/.omp/voice_endpoints/<id>.json` (`lucid-voice-endpoint` v1). LUCID scans it
+- **Voice:** the platform writes `~/.omp/voice_endpoints/<id>.json` (`lucid-voice-endpoint` v1). LUCID scans it
   and lists the endpoint under Settings, Voice, Endpoints; activation switches URL, model, and provider
   together.
-- **Creator services:** the Loader writes `<personal dir>/creator_endpoints/<id>.json`
+- **Creator services:** the platform writes `<personal dir>/creator_endpoints/<id>.json`
   (`lucid-creator-endpoint` v1) for `dgx-avatar`, `dgx-cad`, and `dgx-vision`. Creator imports the folder at
   startup and from the Import button in the Video and CAD panes. The file carries the URL (the local end of
   an SSH forward), the forward command for the user to run, and `enclave: { kind: "dgx", host }`.
@@ -85,7 +85,7 @@ A hardened host on the SSH path runs fail2ban.
   put the key in LUCID's vault ONCE, then run Discover models: the server reports the real 524288 context.
 - Reference credentials by NAME only. Never put a secret in a URL, a command line, a script, an endpoint
   file, PLAN.md, a commit, or chat, and never echo or log one.
-- Endpoint files from the Loader never contain secrets; if one does, LUCID refuses it, and so do you.
+- Endpoint files from the platform never contain secrets; if one does, LUCID refuses it, and so do you.
 
 ## Smoke checks (one call each, no loops)
 

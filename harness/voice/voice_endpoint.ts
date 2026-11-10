@@ -5,7 +5,7 @@
 //
 // A self-hosted TTS endpoint (a dots.tts service on a DGX, today; anything OpenAI-speech-shaped,
 // tomorrow) is ENVIRONMENT data, not code: host, port, tunnel recipe, model. Hardcoding one box's
-// name anywhere is exactly the bug this file removes. The DGX Loader EXPORTS this JSON (one-click
+// name anywhere is exactly the bug this file removes. The Private AI Platform EXPORTS this JSON (one-click
 // into ~/.omp/voice_endpoints/ for same-machine handoff, or a save-file for transfer); LUCID imports
 // it (auto-scan of the handoff dir, or manual upload) and the endpoint becomes a labeled, selectable
 // row in Settings > Voice. The contract is versioned and fail-closed:
@@ -14,7 +14,7 @@
 //     (credentials belong in the vault / server-side config, never in a shareable export);
 //   - ids are slug-guarded so an import can never write outside its own name.
 //
-// The DGX Loader repo documents its half in docs/adr/0017 (export builder + buttons); this module
+// The Private AI Platform repo documents its half in docs/adr/0017 (export builder + buttons); this module
 // is the LUCID-side source of truth for the shape.
 
 export interface VoiceEndpointTransport {

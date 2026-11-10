@@ -56,7 +56,7 @@ async function main(): Promise<void> {
   }
 
   // 2) compaction policy (how omp keeps context bounded)
-  const cp = compactionPolicy();
+  const cp = await compactionPolicy();
   if (cp) {
     console.log(
       table(
