@@ -5999,7 +5999,7 @@ return Bun.serve({
         const id = String(b.id ?? "");
         const started = await plugins.start(id);
         // ADR-0514: the hub plugin's panel opens only with a one-time bootstrap secret it minted for this engine,
-        // framed only by this window (engineAppUrl's origin).
+        // framed by nothing but this window's origin. ADR-0537: the IDE opens it top level in its own window.
         if (started.ok && id === REMOTE_SPOKES_PLUGIN) return json({ ok: true, data: await remoteSpokesPanelUrl(remoteSpokesDeps, `http://127.0.0.1:${ENGINE_PORT}`) });
         return json({ ok: true, data: started });
       }

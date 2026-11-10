@@ -87,7 +87,7 @@ export async function verifyRemoteSpokes(page, shotDir = tmpdir()) {
   const fixtures = {
     "/api/remote-spokes": VIEW, "/api/remote-spokes/recall": RECALL, "/api/remote-spokes/approvals": APPROVALS, "/api/remote-spokes/submit": { ok: true, data: { task: "t_00000000000000aa" } },
     "/api/remote-spokes/followup": { ok: true, data: { task: "t_0000000000000005" } },
-    // P-RS-VIEW.1: the Admin tab's panel URL (the engine special-cases remote-spokes' start); nothing listens there.
+    // P-RS-VIEW.1, P-RS-WINDOW.1: the admin panel's URL (the engine special-cases remote-spokes' start); nothing listens there.
     "/api/plugins/start": { ok: true, url: ADMIN_URL },
   };
   const submits = [];
@@ -287,16 +287,26 @@ export async function verifyRemoteSpokes(page, shotDir = tmpdir()) {
     shots.push(join(shotDir, "ide-spokes-resume.png"));
     await page.screenshot({ path: shots.at(-1) });
 
-    // P-RS-VIEW.1: the Admin tab frames the plugin's panel at the URL the engine's start returned, in the plugin sandbox.
+    // P-RS-WINDOW.1 (ADR-0537): the Admin tab is a launcher with no frame. Outside Electron its button opens the URL the
+    // engine's start returned in one named tab (window.open is recorded here, so no tab opens on a dead port).
     await page.click("#remoteSpokes [data-rsv-tab=\"admin\"]");
-    await page.waitForSelector("#remoteSpokes [data-rsv-admin] iframe.rsv-frame", { visible: true });
-    const admin = await page.$eval("#remoteSpokes", (v) => {
-      const f = v.querySelector("[data-rsv-admin] iframe");
-      return { src: f.getAttribute("src"), sandbox: f.getAttribute("sandbox"), spokesHidden: v.querySelector("[data-rsv-spokes]").hidden, w: Math.round(f.getBoundingClientRect().width), h: Math.round(f.getBoundingClientRect().height) };
+    await page.waitForSelector("#remoteSpokes [data-rsv-admin-open]", { visible: true });
+    await page.evaluate(() => {
+      window.__rsvOpened = [];
+      window.__rsvOpen = window.open;
+      window.open = (u, name) => { window.__rsvOpened.push({ url: String(u), name: String(name) }); return {}; };
     });
-    assert(admin.src === ADMIN_URL && admin.sandbox.includes("allow-scripts") && admin.spokesHidden && admin.w > 300 && admin.h > 300, `admin tab: ${JSON.stringify(admin)}`);
     shots.push(join(shotDir, "ide-spokes-admin.png"));
     await page.screenshot({ path: shots.at(-1) });
+    await page.click("#remoteSpokes [data-rsv-admin-open]");
+    await page.waitForFunction(() => window.__rsvOpened.length === 1, { timeout: 5_000 });
+    const admin = await page.evaluate(() => {
+      const v = document.querySelector("#remoteSpokes");
+      const opened = window.__rsvOpened;
+      window.open = window.__rsvOpen;
+      return { opened, frames: v.querySelectorAll("iframe").length, spokesHidden: v.querySelector("[data-rsv-spokes]").hidden, text: v.querySelector("[data-rsv-admin]").textContent.replace(/\s+/g, " ").trim() };
+    });
+    assert(JSON.stringify(admin.opened) === JSON.stringify([{ url: ADMIN_URL, name: "lucid-remote-spokes-admin" }]) && admin.frames === 0 && admin.spokesHidden && admin.text.includes("Open the admin panel"), `admin tab: ${JSON.stringify(admin)}`);
     await page.click("#remoteSpokes [data-rsv-tab=\"spokes\"]");
     return { orbit: nodes.map((n) => n.name), view: listView.rows.map((r) => r.name), rows: rows.map((r) => r.label), submits, alerts: listed, followups, admin, shots };
   } finally {

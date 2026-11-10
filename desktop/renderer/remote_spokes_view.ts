@@ -12,7 +12,8 @@
 //           the hub's alert list, and on the right the picked spoke's panel (tasks, parked actions, models,
 //           recall) or the Start-a-task selector. Both are orbit_remote.ts's own panels, so every untrusted-text,
 //           scope and two-click rule there holds here unchanged.
-//   Admin   the remote-spokes plugin's own panel in a frame (the engine's bootstrap URL, PLUGIN_FRAME_SANDBOX).
+//   Admin   a launcher for the remote-spokes plugin's own panel, which opens in a window of its own
+//           (remote_admin_launch.ts, ADR-0537).
 //
 // The view and the orbit share orbit_remote.ts's one per-spoke panel state, so app.ts never lets both be open:
 // opening either closes the other. The hub snapshot is shared too (refreshRemote is single-flight): this view polls
@@ -26,21 +27,19 @@ import {
   refreshDeployPanel, refreshRemote, refreshRemotePanel, remoteAlertListHtml, remoteCounts, remoteDeployVisible, remoteHubVisible, remoteSnapshot,
 } from "./orbit_remote.ts";
 import { onOrbit, REMOTE_TONE, remoteGlance, type RemoteSpokeView } from "./remote_spokes_model.ts";
+import { adminLauncherHtml } from "./remote_admin_launch.ts";
 
 /** The hub plugin's id (desktop/remote_spokes.ts REMOTE_SPOKES_PLUGIN, engine-side). */
 export const REMOTE_SPOKES_PLUGIN = "remote-spokes";
 
 export type RemoteViewTab = "spokes" | "admin";
 
-/** Where to open the view: a tab, one spoke on the Spokes tab, or the Admin tab at a panel URL already minted
- *  (the Plugins flyout's Open starts the plugin and gets one). */
-export interface RemoteViewTarget { tab?: RemoteViewTab; node?: string; adminUrl?: string }
+/** Where to open the view: a tab, or one spoke on the Spokes tab. */
+export interface RemoteViewTarget { tab?: RemoteViewTab; node?: string }
 
 export interface RemoteViewDeps {
-  /** Start the plugin and mint its panel URL through the engine's bootstrap. */
-  panelUrl: () => Promise<{ ok: true; url: string } | { ok: false; error: string }>;
-  /** The sandbox every plugin frame gets (app.ts PLUGIN_FRAME_SANDBOX). */
-  frameSandbox: string;
+  /** app.ts's launchRemoteAdmin: open or bring forward the admin panel's own window (ADR-0537). */
+  openAdmin: () => void;
   /** app.ts's close: the view, then the inspector and the rail's active mark. */
   close: () => void;
   /** The rail button: shown while the plugin is installed; `attention` is parked approvals plus open alerts. */
@@ -59,9 +58,6 @@ let detail: { kind: "spoke"; node: string } | { kind: "deploy" } | null = null;
 let openTimer: number | null = null;
 /** The list markup last written. */
 let listSig = "";
-/** The Admin frame's URL is minted once per view lifetime; Reload mints a fresh one. */
-let adminLoaded = false;
-let adminGen = 0;
 
 /** The view's shell, placed by app.ts beside the other right-edge surfaces. */
 export function remoteViewHtml(): string {
@@ -72,10 +68,10 @@ export function remoteViewHtml(): string {
       <div class="kg-tools">
         <div class="rsv-tabs" role="tablist" aria-label="Remote spokes">
           <button class="rsv-tab on" role="tab" aria-selected="true" data-rsv-tab="spokes">Spokes</button>
-          <button class="rsv-tab" role="tab" aria-selected="false" data-rsv-tab="admin" data-tip="Admin|The hub's own panel: add, approve and remove spokes, presence, custody, models, relays and licences.">Admin</button>
+          <button class="rsv-tab" role="tab" aria-selected="false" data-rsv-tab="admin" data-tip="Admin|The hub's own panel: add, approve and remove spokes, presence, custody, models, relays and licenses. It opens in a window of its own.">Admin</button>
         </div>
         <button class="btn-mini" data-rs-deploy hidden data-tip="Start a task on a remote spoke|Pick a spoke by how fast it answers, its models and its free lanes, then start a task there.">${icon("bolt", 13)} Start a task</button>
-        <button class="btn-mini btn-icon" data-rsv-refresh data-tip="Refresh|Re-read the hub. On the Admin tab, reloads the panel.">${icon("refresh", 14)}</button>
+        <button class="btn-mini btn-icon" data-rsv-refresh data-tip="Refresh|Re-read the hub.">${icon("refresh", 14)}</button>
         <button class="set-close" data-rsv-close data-tip="Close">${icon("close", 16)}</button>
       </div>
     </div>
@@ -83,9 +79,7 @@ export function remoteViewHtml(): string {
       <div class="rsv-list" data-rsv-list></div>
       <div class="rsv-detail" data-rsv-detail></div>
     </div>
-    <div class="rsv-admin" data-rsv-admin hidden>
-      <div class="rsv-admin-msg" data-rsv-admin-msg></div>
-    </div>
+    <div class="rsv-admin" data-rsv-admin hidden>${adminLauncherHtml()}</div>
   </aside>`;
 }
 
@@ -107,7 +101,7 @@ export function showRemoteView(at: RemoteViewTarget = {}): void {
   if (!root) return;
   root.hidden = false;
   if (at.node) pickSpoke(at.node);
-  setTab(at.tab ?? (at.node ? "spokes" : tab), at.adminUrl);
+  setTab(at.tab ?? (at.node ? "spokes" : tab));
   if (openTimer === null) openTimer = window.setInterval(() => void refreshRemote(), OPEN_POLL_MS);
   void refreshRemote();
 }
@@ -122,7 +116,7 @@ export function hideRemoteView(): void {
 
 // ----------------------------------------------------------------------------------------------- tabs
 
-function setTab(next: RemoteViewTab, adminUrl?: string): void {
+function setTab(next: RemoteViewTab): void {
   if (!root) return;
   tab = next;
   for (const b of root.querySelectorAll<HTMLElement>("[data-rsv-tab]")) {
@@ -132,39 +126,7 @@ function setTab(next: RemoteViewTab, adminUrl?: string): void {
   }
   ($("[data-rsv-spokes]", root) as HTMLElement).hidden = next !== "spokes";
   ($("[data-rsv-admin]", root) as HTMLElement).hidden = next !== "admin";
-  if (next === "admin" && (adminUrl || !adminLoaded)) void loadAdmin(adminUrl);
   paint();
-}
-
-/** Frame the plugin's panel at `url`, or at a freshly minted one. A newer load wins over a slower older one. */
-async function loadAdmin(url?: string): Promise<void> {
-  if (!root || !deps) return;
-  const gen = ++adminGen;
-  const host = $("[data-rsv-admin]", root) as HTMLElement;
-  const msg = $("[data-rsv-admin-msg]", root) as HTMLElement;
-  msg.hidden = false;
-  msg.textContent = "Starting Remote Spokes\u2026";
-  const r = url ? { ok: true as const, url } : await deps.panelUrl().catch(() => ({ ok: false as const, error: "The engine did not answer." }));
-  if (gen !== adminGen) return;
-  if (!r.ok) {
-    adminLoaded = false;
-    msg.innerHTML = `<p class="rs-note bad"></p><button class="btn-mini" data-rsv-admin-retry>${icon("refresh", 12)} Try again</button>`;
-    ($("p", msg) as HTMLElement).textContent = r.error;
-    return;
-  }
-  let frame = host.querySelector<HTMLIFrameElement>("iframe");
-  if (!frame) {
-    frame = document.createElement("iframe");
-    frame.className = "rsv-frame";
-    frame.setAttribute("sandbox", deps.frameSandbox);
-    frame.setAttribute("allow", "clipboard-write");
-    frame.setAttribute("referrerpolicy", "no-referrer");
-    frame.title = "Remote Spokes admin panel";
-    host.append(frame);
-  }
-  frame.src = r.url;
-  msg.hidden = true;
-  adminLoaded = true;
 }
 
 // ------------------------------------------------------------------------------------------ painting
@@ -213,11 +175,11 @@ function listHtml(): string {
   if (!snap.available) {
     const btn = snap.plugin === "stopped"
       ? `<button class="btn-mini" data-rs-start>${icon("bolt", 12)} Start Remote Spokes</button>`
-      : snap.plugin === "running" ? `<button class="btn-mini" data-rsv-tab="admin">${icon("link", 12)} Set up on the Admin tab</button>` : "";
+      : snap.plugin === "running" ? `<button class="btn-mini" data-rsv-admin-open>${icon("link", 12)} Set up in the admin panel</button>` : "";
     return `<div class="rsv-notice"><p class="rs-note">${esc(snap.reason)}</p>${btn}</div>`;
   }
   if (snap.spokes.length === 0) {
-    return `<div class="rsv-notice"><p class="rs-note">This hub has no spokes yet.</p><button class="btn-mini" data-rsv-tab="admin">${icon("plus", 12)} Add a spoke on the Admin tab</button></div>`;
+    return `<div class="rsv-notice"><p class="rs-note">This hub has no spokes yet.</p><button class="btn-mini" data-rsv-admin-open>${icon("plus", 12)} Add a spoke in the admin panel</button></div>`;
   }
   const now = Date.now();
   const working = snap.spokes.filter(onOrbit);
@@ -260,12 +222,8 @@ function onClick(ev: Event): void {
   if (t.closest("[data-rsv-close]")) { deps.close(); return; }
   const tabBtn = t.closest("[data-rsv-tab]") as HTMLElement | null;
   if (tabBtn) { setTab(tabBtn.dataset.rsvTab === "admin" ? "admin" : "spokes"); return; }
-  if (t.closest("[data-rsv-admin-retry]")) { void loadAdmin(); return; }
-  if (t.closest("[data-rsv-refresh]")) {
-    if (tab === "admin") void loadAdmin();
-    else void refreshRemote();
-    return;
-  }
+  if (t.closest("[data-rsv-admin-open]")) { deps.openAdmin(); return; }
+  if (t.closest("[data-rsv-refresh]")) { void refreshRemote(); return; }
   if (t.closest("[data-rsv-detail-close]")) { clearDetail(); paint(); return; }
   const box = $("[data-rsv-detail]", root) as HTMLElement;
   if (box.contains(t)) {

@@ -1557,6 +1557,9 @@ export interface LucidBridge {
   showInFolder(path: string): Promise<boolean>; // P-FSREVEAL.1: reveal a FILE highlighted in its parent folder (Electron only; false in browser)
   canShowInFolder(): boolean; // whether the native shell can reveal a file in its folder (Electron only)
   openExternal(url: string): Promise<boolean>; // open an http(s) URL in the OS browser (OAuth); false in browser → caller falls back to window.open
+  /** P-RS-WINDOW.1 (ADR-0537): the Remote Spokes admin window at a minted panel URL. False when main refuses it,
+   *  null outside Electron (the caller then opens a named browser tab). */
+  openRemoteSpokesAdmin(url: string): Promise<boolean | null>;
   // P-INTERJECT.1/.2 (wave 2): mid-turn operator interjection - queue a note the running turn's agent
   // reads at its next tool boundary (target "master" or a laneId; the server enforces trim, the 4000-char
   // limit, and the 8-note-per-target cap). ADR-0414: `live` marks the user's own push, which the engine
@@ -1618,6 +1621,7 @@ interface NativeShell {
   pickFolder?(opts?: PickFolderOpts): Promise<string | null>;
   capturePreview?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
   openExternal?(url: string): Promise<boolean>;
+  openRemoteSpokesAdmin?(url: string): Promise<boolean>;
   revealPath?(path: string): Promise<boolean>;
   showInFolder?(path: string): Promise<boolean>; // P-FSREVEAL.1: reveal a file highlighted in its parent folder
   relaunch?(): Promise<void>; // P-LOCAL.3 polish: restart the app to apply local-provider changes
@@ -2608,6 +2612,7 @@ export const bridge: LucidBridge = {
   revealPath: (path) => (shell?.revealPath ? shell.revealPath(path) : Promise.resolve(false)),
   canRevealPath: () => !!shell?.revealPath,
   openExternal: (url) => (shell?.openExternal ? shell.openExternal(url) : Promise.resolve(false)),
+  openRemoteSpokesAdmin: (url) => (shell?.openRemoteSpokesAdmin ? shell.openRemoteSpokesAdmin(url) : Promise.resolve(null)),
   showInFolder: (path) => (shell?.showInFolder ? shell.showInFolder(path) : Promise.resolve(false)), // P-FSREVEAL.1 (ADR-0212)
   canShowInFolder: () => !!shell?.showInFolder,
   // P-RECOVER.1 (ADR-0385): every answer is shape-checked here, so app.ts only ever sees the contract types.

@@ -52,9 +52,11 @@ export interface OrbitRemoteDeps {
   remoteSpokeAct: LucidBridge["remoteSpokeAct"];
   /** Start the remote-spokes plugin (the sanctioned pluginsStart path) so its spokes appear. */
   startRemoteSpokes: () => Promise<void>;
-  /** P-RS-VIEW.1 (ADR-0533): open the Remote spokes view (rail), on its Admin tab (the plugin's own panel: setup,
-   *  presence, custody) or on one spoke. app.ts closes the orbit first, so one surface drives a spoke at a time. */
+  /** P-RS-VIEW.1 (ADR-0533): open the Remote spokes view (rail), on a tab or on one spoke. app.ts closes the orbit
+   *  first, so one surface drives a spoke at a time. */
   openRemoteView: (at?: { tab?: "spokes" | "admin"; node?: string }) => void;
+  /** P-RS-WINDOW.1 (ADR-0537): open or bring forward the plugin's admin panel window (setup, presence, custody). */
+  openRemoteAdmin: () => void;
 }
 
 let deps: OrbitRemoteDeps | null = null;
@@ -267,7 +269,7 @@ export function remoteHubSectionHtml(): string {
   return `<div class="orbit-hubrow rs-hubrow" title="${esc(hub.node)}">
       <span class="orbit-ghost-id"><b>${esc(hub.label)}</b><small>${esc(summary)}</small></span>
       ${remoteDeployVisible() ? `<button class="btn-mini orbit-btn" data-rs-deploy data-tip="Start a task on a remote spoke|Pick a spoke by how fast it answers, its models and its free lanes, then start a task there.">${icon("bolt", 12)} Start a task</button>` : ""}
-      <button class="btn-mini orbit-btn" data-rs-view data-tip="Remote spokes|Every remote spoke, its alerts, and the hub's setup (the Admin tab), in their own view. Also on the left rail.">${icon("link", 12)} Open</button>
+      <button class="btn-mini orbit-btn" data-rs-view data-tip="Remote spokes|Every remote spoke and its alerts, in their own view, with a button for the hub's admin panel. Also on the left rail.">${icon("link", 12)} Open</button>
     </div>`;
 }
 
@@ -402,7 +404,7 @@ export function paintRemotePanel(box: HTMLElement, node: string, closeHtml: stri
     </details>` : ""}
     <div class="rs-sec-h"><span>Models</span></div>
     <div data-rs-models></div>
-    <p class="rs-note">The default is what new tasks use; change it on the Admin tab of Remote spokes (it restarts the spoke's engine).</p>
+    <p class="rs-note">The default is what new tasks use; change it in the Remote Spokes admin panel (it restarts the spoke's engine).</p>
     ${a?.recall ? `<div class="rs-sec-h"><span>Parked actions</span><button class="btn-mini orbit-btn" data-rs-approvals>${icon("refresh", 12)} Check</button></div>
     <div data-rs-approvals-out></div>
     <div class="rs-sec-h"><span>Recall</span><button class="btn-mini orbit-btn" data-rs-recall-all data-tip="Recall|Reads this spoke's signed journal. Every entry passes the scanner first; a flagged entry is withheld.">${icon("restore", 12)} Whole journal</button><button class="btn-mini orbit-btn" data-rs-copy hidden data-tip="Copy for a prompt|Copies the entries that passed the scanner inside UNTRUSTED_CONTENT delimiters, the only form recalled text may take into a prompt. Withheld entries are not included.">${icon("copy", 12)} Copy for a prompt</button></div>
@@ -790,7 +792,7 @@ export function refreshDeployPanel(box: HTMLElement): void {
     // ADR-0512: deactivated spokes are not targets, so a hub with only those has none to offer.
     list.innerHTML = snap.spokes.length
       ? `<div class="orbit-ghosts-empty">Every spoke on this hub is deactivated. Reactivate one on the hub (hub reactivate) to start a task there.</div>`
-      : `<div class="orbit-ghosts-empty">This hub has no spokes yet. Enroll one on the Admin tab of Remote spokes.</div>`;
+      : `<div class="orbit-ghosts-empty">This hub has no spokes yet. Enroll one in the Remote Spokes admin panel.</div>`;
     return;
   }
   const now = Date.now();
@@ -862,7 +864,7 @@ export function onRemoteHubClick(t: HTMLElement): string | "deploy" | "repaint" 
   if (x) { dismissAlerts([x.dataset.rsAlertX ?? ""]); return "repaint"; }
   if (t.closest("[data-rs-alert-clear]")) { dismissAlerts(openAlerts(Date.now()).map((a) => a.key)); return "repaint"; }
   if (t.closest("[data-rs-start]")) { void deps.startRemoteSpokes().then(refreshRemote); return "handled"; }
-  if (t.closest("[data-rs-panel]")) { deps.openRemoteView({ tab: "admin" }); return "handled"; }
+  if (t.closest("[data-rs-panel]")) { deps.openRemoteAdmin(); return "handled"; }
   if (t.closest("[data-rs-view]")) { deps.openRemoteView(); return "handled"; }
   if (t.closest("[data-rs-deploy]")) return "deploy";
   const pip = t.closest("[data-rs-open]") as HTMLElement | null;

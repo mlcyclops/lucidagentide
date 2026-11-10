@@ -26552,3 +26552,19 @@ Parity already held and left alone: workspace, tab, pane hierarchy and ids; the 
 **Rejected.** Keeping idle spokes on the ring dimmed: the ring would still grow with machines rather than work, which was the complaint. A modal or a Preview tab for the admin panel: the first hides the IDE, and the second is where the panel was hard to find.
 
 **Consequences.** Amends ADR-0506 (which spokes the ring draws; the Hubs panel's Remote hub section) and ADR-0509 (the alert list lives in the view; the orbit cards keep their alert line). The routes, the engine and the plugin are unchanged.
+
+## ADR-0537 -- P-RS-WINDOW.1: the Remote Spokes admin panel opens in a window of its own (2026-11-10)
+
+**Status:** Accepted -- BUILT. Checks: `bun test desktop/admin_window.test.ts desktop/renderer/remote_admin_launch.test.ts`; desktop typecheck; `desktop/scripts/demo_p_ide_spokes_1_shot.mjs` (Admin tab section rewritten for this change).
+
+**Context.** The owner, 2026-11-10: "Since the spoke admin panel has so much information it should spawn a whole window, not just a small menu." ADR-0533 framed the plugin's panel inside the Remote spokes view's Admin tab, which is a right-edge surface beside the chat, too narrow for setup, presence, custody, models, relays and licenses.
+
+**Decision.**
+1. **One window.** Every entry point (the view's Admin tab, the Spokes tab's "Set up" and "Add a spoke" buttons, the Hubs panel's Set up, the plugins drawer's Open for `remote-spokes`) calls `launchRemoteAdmin` (`renderer/remote_admin_launch.ts`): it mints a fresh panel URL through `POST /api/plugins/start` (or uses the one the drawer just minted) and asks main through the preload bridge (`openRemoteSpokesAdmin`, IPC `lucid:openRemoteSpokesAdmin`, the same sender check as `lucid:openExternal`). Main (`main.ts`) keeps one BrowserWindow titled "Remote Spokes admin", default 1280 by 860, resizable, whose size and position are saved to `remote-spokes-admin-window.json` in the user data folder and restored when they still land on a screen (`admin_window.ts adminBounds`; the main window saves none, so this is the window's own). A second open brings the window forward; it reloads only when the window is new or the plugin moved to another port, so a half-filled form is not lost.
+2. **Security.** `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, no preload, and a session partition of its own without `persist:` (in memory, so the panel's cookie never mixes with the app's). Main refuses any URL that is not a plugin loopback origin (`plugins/ports.ts pluginOrigin`). `adminNavigation` decides every window open and top-level navigation: the panel's own origin stays, an https URL elsewhere goes to the system browser through `shell.openExternal`, everything else is denied; a main-frame redirect off the origin is cancelled. The panel's document title never replaces the window's.
+3. **The Admin tab is a launcher**: one line on what the panel holds and "Open the admin panel". The iframe, its sandbox wiring and its reload path are gone. Outside Electron (the Chrome demo) the URL opens in one named tab, `window.open(url, "lucid-remote-spokes-admin")`; inside Electron a refusal is reported and never falls back to a tab, since the app's window-open policy would hand the one-time URL to the system browser.
+4. Closing the window never stops the plugin.
+
+**Rejected.** Keeping the frame and widening the view: it still shares the screen with the chat. Opening the panel in the system browser: the one-time URL and the panel's session would leave LUCID.
+
+**Consequences.** Amends ADR-0533 (the Admin tab no longer frames the panel) and ADR-0514's framing note: the panel now loads top level in its own window, and the plugin's frame-ancestors (the IDE origin only) still keeps any other page from framing it. The engine routes and the plugin are unchanged.

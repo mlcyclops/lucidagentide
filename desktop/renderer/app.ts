@@ -119,6 +119,7 @@ import { loadDockState, saveDockState, clampToViewport, snapDecision, participan
 import { closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid
 import { closeFleetOrbit, fleetHome, initFleetOrbit, noteSpokeAsk, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
 import { hideRemoteView, initRemoteView, isRemoteViewOpen, REMOTE_SPOKES_PLUGIN, remoteViewHtml, showRemoteView, type RemoteViewTarget } from "./remote_spokes_view.ts"; // P-RS-VIEW.1 (ADR-0533)
+import { launchRemoteAdmin } from "./remote_admin_launch.ts"; // P-RS-WINDOW.1 (ADR-0537)
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
 import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
 import { gitCredRef } from "../git_url.ts"; // P-FLEET.L2: per-host git credential ref for the OS vault
@@ -426,7 +427,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
         <button class="rail-btn" data-rail="meetings" data-tip="Meetings|What was decided, and what you owe - read live from your Lucid Meeting Hub. Nothing is stored here" data-tip-icon="calendar">${icon("calendar", 20)}</button>
         <!-- P-RS-VIEW.1 (ADR-0533): shown once the Remote Spokes plugin is installed; the badge counts parked approvals and open alerts. -->
-        <button class="rail-btn" data-rail="remote" id="railRemote" hidden data-tip="Remote spokes|LUCID on your other machines: what each one is doing, its alerts, and the hub's setup on the Admin tab" data-tip-icon="link">${icon("link", 20)}<span class="badge" id="railRemoteBadge" hidden>0</span></button>
+        <button class="rail-btn" data-rail="remote" id="railRemote" hidden data-tip="Remote spokes|LUCID on your other machines: what each one is doing, its alerts, and a button for the hub's admin panel" data-tip-icon="link">${icon("link", 20)}<span class="badge" id="railRemoteBadge" hidden>0</span></button>
         <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}<span class="rail-live-dot prev-rail-dot" id="railPreviewDot" hidden></span></button>
         <button class="rail-btn" data-rail="trainer" data-tip="Trainer|Extract expert know-how into the coverage map, then drill it with lesson-based mini-games" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="agentBuilder" data-tip="Agent Builder|Design an AI agent on a visual workflow canvas - LUCID builds the gated code for you" data-tip-icon="spark">${icon("spark", 20)}</button>
@@ -8857,6 +8858,20 @@ function paintRemoteRail(visible: boolean, attention: number): void {
   const badge = $("#railRemoteBadge");
   if (badge) { badge.textContent = String(attention); badge.hidden = attention === 0; }
 }
+/** P-RS-WINDOW.1 (ADR-0537): every entry point to the plugin's admin panel opens its own window. `url` is a panel URL
+ *  the plugins drawer just minted; without one a fresh one is minted (POST /api/plugins/start). */
+async function openRemoteAdmin(url?: string): Promise<void> {
+  const why = await launchRemoteAdmin({
+    panelUrl: async () => {
+      if (url) return { ok: true, url };
+      const r = await bridge.pluginsStart(REMOTE_SPOKES_PLUGIN);
+      return r?.ok ? { ok: true, url: r.url } : { ok: false, error: r ? r.error : "The engine did not answer." };
+    },
+    openWindow: bridge.openRemoteSpokesAdmin,
+    openTab: (u, name) => window.open(u, name),
+  });
+  if (why) showToast({ title: "The admin panel did not open", desc: why, tone: "danger" });
+}
 
 function openMeetings(): void {
   meetOpen = true;
@@ -16542,8 +16557,8 @@ const pluginsFlyout = createPluginsFlyout({
   start: (id) => bridge.pluginsStart(id),
   license: (id) => bridge.pluginsLicense(id),
   openExternal: (url) => void openAuthUrl(url),
-  // P-RS-VIEW.1 (ADR-0533): Remote Spokes opens as its own view (the Admin tab), not as one more Preview tab.
-  openPluginTab: (id, name, url) => (id === REMOTE_SPOKES_PLUGIN ? openRemoteView({ tab: "admin", adminUrl: url }) : openPluginTab(id, name, url)),
+  // P-RS-WINDOW.1 (ADR-0537): Remote Spokes' panel opens in its own window, not as one more Preview tab.
+  openPluginTab: (id, name, url) => (id === REMOTE_SPOKES_PLUGIN ? void openRemoteAdmin(url) : openPluginTab(id, name, url)),
   toast: showToast,
   anchor: () => $("#preview") as HTMLElement | null,
   minLeft: railWidth,
@@ -17423,7 +17438,8 @@ function wire(): void {
       const r = await bridge.pluginsStart(REMOTE_SPOKES_PLUGIN);
       if (!r || !r.ok) showToast({ title: "Remote Spokes did not start", desc: r ? r.error : "The engine did not answer.", tone: "danger" });
     },
-    openRemoteView: (at) => openRemoteView(at), // P-RS-VIEW.1 (ADR-0533): the plugin's panel is the view's Admin tab
+    openRemoteView: (at) => openRemoteView(at), // P-RS-VIEW.1 (ADR-0533)
+    openRemoteAdmin: () => void openRemoteAdmin(), // P-RS-WINDOW.1 (ADR-0537): the plugin's panel in its own window
     closeRemoteView: () => closeRemoteView(),
     repoChoices: bridge.repoChoices, // P-REPO.1 (ADR-0406): the New spoke panel picks a repo instead of typing
     repoGithub: bridge.repoGithub,
@@ -17465,11 +17481,7 @@ function wire(): void {
   });
   // P-RS-VIEW.1 (ADR-0533): after initFleetOrbit, whose remote deps its hub reads use.
   initRemoteView($("#remoteSpokes") as HTMLElement, {
-    panelUrl: async () => {
-      const r = await bridge.pluginsStart(REMOTE_SPOKES_PLUGIN);
-      return r?.ok ? { ok: true, url: r.url } : { ok: false, error: r ? r.error : "The engine did not answer." };
-    },
-    frameSandbox: PLUGIN_FRAME_SANDBOX,
+    openAdmin: () => void openRemoteAdmin(),
     close: closeRemoteView,
     paintRail: paintRemoteRail,
   });

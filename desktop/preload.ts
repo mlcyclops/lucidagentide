@@ -42,6 +42,8 @@ contextBridge.exposeInMainWorld("lucid", {
   // Open an external http(s) URL in the OS default browser (OAuth sign-in) — reliable path that doesn't
   // depend on the renderer's window.open reaching setWindowOpenHandler.
   openExternal: (url: string): Promise<boolean> => ipcRenderer.invoke("lucid:openExternal", url),
+  // P-RS-WINDOW.1 (ADR-0537): open (or bring forward) the Remote Spokes admin window at a freshly minted panel URL.
+  openRemoteSpokesAdmin: (url: string): Promise<boolean> => ipcRenderer.invoke("lucid:openRemoteSpokesAdmin", url),
   revealPath: (path: string): Promise<boolean> => ipcRenderer.invoke("lucid:revealPath", path),
   // P-FSREVEAL.1 (ADR-0212): reveal a file highlighted in its parent folder (native file manager).
   showInFolder: (path: string): Promise<boolean> => ipcRenderer.invoke("lucid:showInFolder", path),
