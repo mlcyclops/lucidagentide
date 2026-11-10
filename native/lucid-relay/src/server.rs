@@ -4,6 +4,7 @@
 
 use crate::codec::{js_number, now_ms, utf8_lossy};
 use crate::console::{ConsoleReply, ConsoleRequest, MARKER_HEADER};
+use crate::license::SEAT_HEADER;
 use crate::log::{Fields, Logger};
 use crate::relay::{json_reply, refuse, Dialed, HostCheck, Reply, Request, State, BODY_BYTES};
 use bytes::Bytes;
@@ -247,7 +248,9 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
         return console_response(console.http(&r, t, || relay.state.lock().console_status(now_ms())));
     }
     let authorization = header(AUTHORIZATION).unwrap_or_default();
-    let request = Request { method: &method, pathname: &pathname, path: &path, authorization: &authorization, dialed: &dialed, body: &text, where_: &where_ };
+    // F2 (ADR-A100): a hub's license seat; only a licensed relay reads it.
+    let seat = parts.headers.get(SEAT_HEADER).map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned());
+    let request = Request { method: &method, pathname: &pathname, path: &path, authorization: &authorization, seat: seat.as_deref(), dialed: &dialed, body: &text, where_: &where_ };
     let reply = relay.state.lock().serve(&request, t, host_ok);
     match reply {
         Ok(r) => to_response(r),

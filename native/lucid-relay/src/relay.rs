@@ -10,7 +10,10 @@ use crate::codec::{as_object, exact_keys, js_number_string, parse_json, safe_int
 use crate::console::{Console, CONSOLE_OFF};
 use crate::der::{ecdsa_verify, CertNames};
 use crate::identity::{is_node_id, DirectoryHolder, NodeCert, TrustStore, LOOPBACK_HOSTS};
-use crate::license::{license_keys, license_state, license_user_of, migrate_license_file, verify_license, Admission, License, LicenseStateName, LicenseUsers, LICENSE_USERS_FILE, LICENSE_USERS_FILE_OLD, LICENSE_V1_SEATS_FILE, LICENSE_V1_SEATS_FILE_OLD};
+use crate::license::{
+    license_keys, license_state, license_user_of, migrate_license_file, verify_license, Admission, License, LicenseStateName, LicenseUsers, LICENSE_USERS_FILE, LICENSE_USERS_FILE_OLD,
+    LICENSE_V1_SEATS_FILE, LICENSE_V1_SEATS_FILE_OLD, seat_problem, UNCOUNTED_REASON, UNLICENSED_DIRECTORY_REASON,
+};
 use crate::log::{Fields, Level, Logger};
 use crate::store::{make_dir, read_text, remove, write_in_place, write_private};
 use indexmap::IndexMap;
@@ -102,6 +105,8 @@ pub struct Request<'a> {
     pub pathname: &'a str,
     pub path: &'a str,
     pub authorization: &'a str,
+    /// F2 (ADR-A100): the `lucid-seat` header, a hub's license seat.
+    pub seat: Option<&'a str>,
     pub dialed: &'a Dialed,
     pub body: &'a str,
     pub where_: &'a Fields,
@@ -186,6 +191,25 @@ pub fn parse_envelope(v: Option<&Value>) -> Option<(&Map<String, Value>, String,
     Some((o, from.to_owned(), to.to_owned(), id.to_owned()))
 }
 
+/// How many relays a directory may name under `license`: its count. F2 (ADR-A100): a mailbox with no license (a spoke's
+/// LAN mailbox) carries one at most, or it would hand nodes a list of more relays than any licensed relay would serve.
+fn relay_cap_of(license: Option<&License>) -> i64 {
+    license.map_or(1, |l| l.relays)
+}
+
+/// Why a directory naming `relays` distinct relays may not be served under `license` (None: no license), or None.
+fn relays_over_cap(license: Option<&License>, relays: usize) -> Option<String> {
+    if relays as i64 <= relay_cap_of(license) {
+        return None;
+    }
+    let Some(l) = license else { return Some(UNLICENSED_DIRECTORY_REASON.into()) };
+    Some(if l.edition == "standard" {
+        "a Standard license covers one relay; more relays need an Enterprise license".into()
+    } else {
+        format!("the license covers {} relays", l.relays)
+    })
+}
+
 impl State {
     /// Load everything a restarted relay needs and judge the license; Err is why the relay does not start.
     pub fn new(opts: Options, logger: Arc<Logger>) -> Result<State, String> {
@@ -260,7 +284,7 @@ impl State {
             // Not fatal, unlike the CRL; one naming more relays than the license covers is not loaded either.
             let t = now.div_euclid(1000);
             if let Some(over) = st.directory_over_cap(&stored, t) {
-                let f = Fields::new().with("reason", over).with("relays", st.licensed.as_ref().map(|l| l.license.relays));
+                let f = Fields::new().with("reason", over).with("relays", st.relay_cap());
                 st.logger.security("directory.stored-over-license", &f, Level::Warn);
             } else if let Err(reason) = st.directory.accept(&st.trust, &stored, t) {
                 st.logger.warn("directory.stored-refused", &Fields::new().with("reason", reason));
@@ -347,19 +371,16 @@ impl State {
         Ok(())
     }
 
-    /// Why a root-signed directory may not be served under this license, or None (ADR-A077).
+    /// How many relays a directory this mailbox carries may name (relay_cap_of).
+    fn relay_cap(&self) -> i64 {
+        relay_cap_of(self.licensed.as_ref().map(|l| &l.license))
+    }
+
+    /// Why a root-signed directory may not be served here, or None (ADR-A077): it names more relays than relay_cap.
     fn directory_over_cap(&self, token: &str, t: i64) -> Option<String> {
-        let l = &self.licensed.as_ref()?.license;
         let mut probe = DirectoryHolder::default();
         probe.accept(&self.trust, token, t).ok()?;
-        if probe.urls().iter().collect::<HashSet<_>>().len() as i64 <= l.relays {
-            return None;
-        }
-        Some(if l.edition == "standard" {
-            "a Standard license covers one relay; more relays need an Enterprise license".into()
-        } else {
-            format!("the license covers {} relays", l.relays)
-        })
+        relays_over_cap(self.licensed.as_ref().map(|l| &l.license), probe.urls().iter().collect::<HashSet<_>>().len())
     }
 
     fn save_seen(&mut self, t: i64) {
@@ -566,7 +587,7 @@ impl State {
         let who = r.where_.clone().with("node", &me.node).with("role", &me.role);
         let logger = self.logger.clone();
         if me.role == "hub" {
-            if let Some(reply) = self.seat(&me, t, &who)? {
+            if let Some(reply) = self.seat(&me, r.seat, t, &who)? {
                 return Ok(reply);
             }
         }
@@ -608,8 +629,7 @@ impl State {
                 let Some(token) = token else { return Ok(refuse(&logger, 400, "malformed", "directory.malformed", &who)) };
                 let ts = t.div_euclid(1000);
                 if let Some(over) = self.directory_over_cap(token, ts) {
-                    let relays = self.licensed.as_ref().map(|l| l.license.relays);
-                    return Ok(refuse(&logger, 403, &over, "directory.over-license", &who.clone().with("relays", relays)));
+                    return Ok(refuse(&logger, 403, &over, "directory.over-license", &who.clone().with("relays", self.relay_cap())));
                 }
                 match self.directory.accept(&self.trust, token, ts) {
                     Err(reason) => refuse(&logger, 409, &reason, "directory.refused", &who),
@@ -768,7 +788,15 @@ impl State {
 
     /// Users (ADR-A077): distinct people on hub certificates take a seat; a refused one first frees the seats of users
     /// whose every certificate was revoked or expired.
-    fn seat(&mut self, me: &NodeCert, t: i64, who: &Fields) -> Result<Option<Reply>, String> {
+    fn seat(&mut self, me: &NodeCert, seat: Option<&str>, t: i64, who: &Fields) -> Result<Option<Reply>, String> {
+        // F2 (ADR-A100): only a hub the org root counted under THIS license (its seat, in the lucid-seat header), so one
+        // license copied to many relays admits at most its users in all. This relay's own book is the second wall.
+        if let Some(lic) = self.licensed.as_ref() {
+            if let Some(why) = seat_problem(seat, self.trust.root_key(), &self.trust.root_id, &lic.license.id, me, t.div_euclid(1000)) {
+                let f = who.clone().with("user", license_user_of(me)).with("license", &lic.license.id).with("why", why);
+                return Ok(Some(refuse(&self.logger, 403, UNCOUNTED_REASON, "user.uncounted", &f)));
+            }
+        }
         let Some(lic) = self.licensed.as_mut() else { return Ok(None) };
         let users = lic.license.users;
         let mut seat = lic.users.admit(me, users, t.div_euclid(1000))?;
@@ -896,5 +924,21 @@ mod tests {
         assert!(is_torn(&format!("{to}.{id}.json.tmp-42")));
         assert!(!is_torn("seen.json"));
         assert_eq!(parse_store_name("seen.json"), None);
+    }
+
+    fn license(edition: &str, relays: i64) -> License {
+        License { id: "l_0123456789abcdef".into(), org: String::new(), root: String::new(), edition: edition.into(), users: 20, relays, exp: 0, grace_days: 14 }
+    }
+
+    #[test]
+    fn f2_a_mailbox_with_no_license_carries_one_relay_at_most() {
+        assert_eq!(relays_over_cap(None, 1), None);
+        assert_eq!(relays_over_cap(None, 2).as_deref(), Some(UNLICENSED_DIRECTORY_REASON));
+        let standard = license("standard", 1);
+        assert_eq!(relays_over_cap(Some(&standard), 1), None);
+        assert_eq!(relays_over_cap(Some(&standard), 2).as_deref(), Some("a Standard license covers one relay; more relays need an Enterprise license"));
+        let enterprise = license("enterprise", 3);
+        assert_eq!(relays_over_cap(Some(&enterprise), 3), None);
+        assert_eq!(relays_over_cap(Some(&enterprise), 4).as_deref(), Some("the license covers 3 relays"));
     }
 }

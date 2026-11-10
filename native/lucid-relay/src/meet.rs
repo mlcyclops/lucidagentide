@@ -206,11 +206,15 @@ pub struct Settings {
     pub files_power: Obj,
     pub min_client: Obj,
     pub version_exempt: Vec<String>,
+    pub recording_enabled: bool,
+    /// Explicit issuer-managed membership, keyed by the authenticated certificate principal: {id, label}.
+    /// A relay address or email domain never establishes organization ownership.
+    pub recording_organizations: Obj,
 }
 
-const SETTINGS_FIELDS: [&str; 25] = [
+const SETTINGS_FIELDS: [&str; 27] = [
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "signer_url", "signer_cert",
-    "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt",
+    "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "recording_organizations",
 ];
 
 impl Default for Settings {
@@ -241,8 +245,36 @@ impl Default for Settings {
             files_power: Obj::new(),
             min_client: Obj::new(),
             version_exempt: VERSION_EXEMPT.iter().map(|s| s.to_string()).collect(),
+            recording_enabled: true,
+            recording_organizations: Obj::new(),
         }
     }
+}
+
+/// Settings.__post_init__: the recording switch and each organization membership {id, label} (1 to 200 characters,
+/// not blank) under a lower-case principal.
+fn recording_settings(raw: &Obj, s: &mut Settings) -> Result<(), String> {
+    match raw.get("recording_enabled") {
+        None => {}
+        Some(Value::Bool(b)) => s.recording_enabled = *b,
+        Some(_) => return Err("recording_enabled must be true or false".into()),
+    }
+    let orgs = match raw.get("recording_organizations") {
+        None => return Ok(()),
+        Some(Value::Object(o)) => o,
+        Some(_) => return Err("recording_organizations must map certificate principals to owners".into()),
+    };
+    let field_ok = |v: Option<&Value>| matches!(v, Some(Value::String(t)) if !t.trim().is_empty() && t.chars().count() <= 200);
+    for (principal, owner) in orgs {
+        let ok = !principal.is_empty()
+            && *principal == principal.to_lowercase()
+            && owner.as_object().map(|o| o.len() == 2 && field_ok(o.get("id")) && field_ok(o.get("label"))).unwrap_or(false);
+        if !ok {
+            return Err("recording organization membership needs principal, id and label".into());
+        }
+    }
+    s.recording_organizations = orgs.clone();
+    Ok(())
 }
 
 impl Settings {
@@ -330,6 +362,7 @@ impl Settings {
             Some(Value::Array(a)) if a.iter().all(Value::is_string) => s.version_exempt = a.iter().map(pj::py_str).collect(),
             Some(_) => return Err("relay settings: version_exempt must be a list of email addresses".into()),
         }
+        recording_settings(raw, &mut s)?;
         Ok(s)
     }
 }
@@ -799,6 +832,11 @@ fn serve(settings: Settings) -> ! {
     let links = Arc::new(LinkStats::new());
     let state_dir = (!settings.state_dir.is_empty()).then(|| PathBuf::from(&settings.state_dir));
     let hub = Arc::new(Hub::new(state_dir.clone(), &settings.admins, settings.history_hours, settings.mail_days, signer.clone(), links.clone()));
+    {
+        let mut st = hub.st.lock();
+        st.recording_enabled = settings.recording_enabled;
+        st.recording_organizations = settings.recording_organizations.clone();
+    }
     let tls = tls_config(&settings).unwrap_or_else(|e| die(&e));
     let listener = TcpListener::bind((settings.host.as_str(), settings.port)).unwrap_or_else(|e| die(&format!("cannot listen on {}:{}: {e}", settings.host, settings.port)));
     let console = Console::new(&settings, links).unwrap_or_else(|e| die(&e));
@@ -1309,6 +1347,29 @@ mod tests {
         assert_eq!(version_key("0.93"), version_key("0.93.0"));
         assert_eq!(version_key("x"), vec![0]);
         assert!(version_key("0.92.0") < version_key("0.93.0"));
+    }
+
+    #[test]
+    fn recording_settings_are_checked_as_python_does() {
+        let check = |v: Value| {
+            let mut s = Settings::default();
+            recording_settings(v.as_object().unwrap(), &mut s).map(|_| s)
+        };
+        let s = check(json!({})).unwrap();
+        assert!(s.recording_enabled && s.recording_organizations.is_empty());
+        let s = check(json!({"recording_enabled": false, "recording_organizations": {"ann@x": {"id": "org-1", "label": "Org"}}})).unwrap();
+        assert!(!s.recording_enabled);
+        assert_eq!(s.recording_organizations["ann@x"], json!({"id": "org-1", "label": "Org"}));
+        for wrong in [json!({"recording_enabled": 1}), json!({"recording_enabled": null})] {
+            assert_eq!(check(wrong).unwrap_err(), "recording_enabled must be true or false");
+        }
+        for wrong in [json!({"recording_organizations": []}), json!({"recording_organizations": null})] {
+            assert_eq!(check(wrong).unwrap_err(), "recording_organizations must map certificate principals to owners");
+        }
+        let long = "x".repeat(201);
+        for owner in [json!({"Ann@x": {"id": "o", "label": "O"}}), json!({"": {"id": "o", "label": "O"}}), json!({"ann@x": {"id": "o"}}), json!({"ann@x": {"id": "o", "label": "O", "x": "y"}}), json!({"ann@x": {"id": " ", "label": "O"}}), json!({"ann@x": {"id": 1, "label": "O"}}), json!({"ann@x": {"id": long, "label": "O"}}), json!({"ann@x": "org"})] {
+            assert_eq!(check(json!({"recording_organizations": owner})).unwrap_err(), "recording organization membership needs principal, id and label");
+        }
     }
 
     #[test]

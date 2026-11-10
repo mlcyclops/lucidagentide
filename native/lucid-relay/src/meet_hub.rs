@@ -51,6 +51,9 @@ const WEAK_LAPSE_TRIPS: f64 = 5.0;
 const MERGE_WINDOW: f64 = 30.0;
 pub const OLD_APP: &str = "this device runs an older app: approve it on the issuer's PC, or update the app and let it ask again";
 pub const SIGNER_DOWN: &str = "the certificate server cannot be reached; use the issuer's PC";
+const RECORDING_NOTICE: &str = "Encrypted recording stays on the recorder's device. Every participant must explicitly consent before recording.";
+/// A late joiner still owes its consent to an active recorder: no room content until then.
+const ADMISSION_FIRST: &str = "acknowledge recording before joining the call";
 
 // ── call tally and link lines ────────────────────────────────────────────────────────────────────────────────
 
@@ -263,6 +266,13 @@ pub struct Peer {
     events: VecDeque<Obj>,
     pub joined: f64,
     pub recording: bool,
+    recording_paused: bool,
+    /// The recorder's live request snapshot ({} when none): control state only, never room history.
+    recording_request: Obj,
+    /// peer id -> its answer to this recorder's request (the recorder's own policy acknowledgement included).
+    recording_replies: IndexMap<String, bool>,
+    /// A late joiner who has not yet accepted every active recorder: no members, media or room content.
+    admission_pending: bool,
     pub address: String,
     pub client: Obj,
     captions: IndexMap<i64, Obj>,
@@ -355,6 +365,9 @@ pub struct State {
     last_prune: f64,
     history_s: f64,
     mail_s: f64,
+    /// relay.json `recording_enabled` and `recording_organizations` (principal -> {id, label}), set at start.
+    pub recording_enabled: bool,
+    pub recording_organizations: Obj,
 }
 
 fn obj_mut<'a>(map: &'a mut Obj, key: &str) -> &'a mut Obj {
@@ -420,8 +433,12 @@ impl State {
     }
 
     fn broadcast(&mut self, room: &str, event: &Obj, skip: Option<&str>) {
+        let control = matches!(event.get("type").and_then(Value::as_str), Some("recording" | "recording_request" | "recording_consent" | "moved"));
         for p in self.peers.values_mut() {
             if p.room == room && Some(p.peer_id.as_str()) != skip {
+                if p.admission_pending && !control {
+                    continue;
+                }
                 push(&mut p.seq, &mut p.events, event);
             }
         }
@@ -449,7 +466,7 @@ impl State {
     }
 
     fn members(&self, room: &str) -> Vec<Value> {
-        self.peers.values().filter(|p| p.room == room).map(|p| Value::Object(with(&p.public(), obj([("weak", Value::Bool(p.weak))])))).collect()
+        self.peers.values().filter(|p| p.room == room && !p.admission_pending).map(|p| Value::Object(with(&p.public(), obj([("weak", Value::Bool(p.weak))])))).collect()
     }
 
     fn set_weak(&mut self, id: &str, why: &str) {
@@ -659,29 +676,97 @@ impl State {
         out
     }
 
-    fn set_recording(&mut self, id: &str, on: bool) {
+    /// _set_recording: announce a recorder's state; stopping ends its request and may admit late joiners.
+    /// Consent and owner snapshots are live control state only, never relay history.
+    fn set_recording(&mut self, id: &str, on: bool, paused: bool) {
         let Some(p) = self.peers.get_mut(id) else { return };
         p.recording = on;
-        let (room, name, principal) = (p.room.clone(), p.who.name.clone(), p.who.principal.clone());
-        self.broadcast(&room, &obj([("type", Value::from("recording")), ("peer", Value::from(id)), ("name", Value::from(name.clone())), ("principal", Value::from(principal.clone())), ("on", Value::Bool(on))]), None);
-        let mut line = obj([
-            ("kind", Value::from("recording")),
-            ("id", Value::from(pj::token_hex(6))),
-            ("peer", Value::from(id)),
-            ("name", Value::from(name)),
-            ("principal", Value::from(principal)),
-            ("on", Value::Bool(on)),
-            ("ts", f(pj::now())),
-        ]);
-        self.room_log(&room, &mut line);
+        p.recording_paused = on && paused;
+        let event = with(
+            &p.recording_request,
+            obj([
+                ("type", Value::from("recording")),
+                ("peer", Value::from(id)),
+                ("name", Value::from(p.who.name.clone())),
+                ("principal", Value::from(p.who.principal.clone())),
+                ("on", Value::Bool(on)),
+                ("paused", Value::Bool(p.recording_paused)),
+            ]),
+        );
+        let room = p.room.clone();
+        if !on {
+            p.recording_request.clear();
+            p.recording_replies.clear();
+        }
+        self.broadcast(&room, &event, None);
+        if !on {
+            self.admit_waiting(&room);
+        }
+    }
+
+    /// _admit_waiting: a late joiner who has accepted every active recorder joins the call.
+    fn admit_waiting(&mut self, room: &str) {
+        let waiting: Vec<String> = self.peers.values().filter(|p| p.room == room && p.admission_pending).map(|p| p.peer_id.clone()).collect();
+        for id in waiting {
+            let accepted = self.peers.values().filter(|r| r.room == room && r.recording).all(|r| r.recording_replies.get(&id) == Some(&true));
+            if !accepted {
+                continue;
+            }
+            let Some(p) = self.peers.get_mut(&id) else { continue };
+            p.admission_pending = false;
+            let public = p.public();
+            let members: Vec<Value> = self.members(room).into_iter().filter(|m| m.get("peer").and_then(Value::as_str) != Some(id.as_str())).collect();
+            self.push_peer(&id, &obj([("type", Value::from("recording_admitted")), ("members", Value::Array(members))]));
+            self.broadcast(room, &with(&obj([("type", Value::from("join"))]), public), Some(&id));
+        }
+    }
+
+    /// _recording_owner: the organization the issuer names for this principal, else the person.
+    fn recording_owner(&self, who: &Identity) -> Obj {
+        if let Some(org) = as_obj(self.recording_organizations.get(&who.principal)) {
+            return obj([("kind", Value::from("organization")), ("id", Value::from(pj::text_of(org, "id"))), ("label", Value::from(pj::text_of(org, "label")))]);
+        }
+        obj([("kind", Value::from("individual")), ("id", Value::from(who.principal.clone())), ("label", Value::from(who.name.clone()))])
+    }
+
+    /// _recording_peer: the caller's own peer, from the very certificate (device and serial) that joined.
+    fn recording_peer(&self, id: &str, who: &Identity) -> R<()> {
+        self.owned(id, who)?;
+        let p = &self.peers[id];
+        if p.who.device != who.device || p.who.serial != who.serial {
+            return forbidden("recording controls belong to the joined certificate");
+        }
+        Ok(())
+    }
+
+    /// recording_policy (the caller's peer already checked): permission, ownership and the room's recorders and requests.
+    fn recording_policy(&self, id: &str, who: &Identity) -> Obj {
+        let p = &self.peers[id];
+        let recorders: Vec<Value> = self
+            .peers
+            .values()
+            .filter(|r| r.room == p.room && r.recording)
+            .map(|r| Value::Object(with(&r.recording_request, obj([("on", Value::Bool(true)), ("paused", Value::Bool(r.recording_paused))]))))
+            .collect();
+        let requests: Vec<Value> = self.peers.values().filter(|r| r.room == p.room && !r.recording_request.is_empty() && !r.recording).map(|r| Value::Object(r.recording_request.clone())).collect();
+        obj([
+            ("allowed", Value::Bool(self.recording_enabled && !p.admission_pending)),
+            ("owner", Value::Object(self.recording_owner(who))),
+            ("notice", Value::from(RECORDING_NOTICE)),
+            ("participant_consent_required", Value::Bool(true)),
+            ("policy_acknowledgement_required", Value::Bool(true)),
+            ("recorders", Value::Array(recorders)),
+            ("requests", Value::Array(requests)),
+            ("admission_pending", Value::Bool(p.admission_pending)),
+        ])
     }
 
     /// _drop: remove a room peer.
     fn drop_peer(&mut self, id: &str, why: &str, announce: bool, end_stay: bool) {
         let Some(p) = self.peers.get(id) else { return };
         let before = self.pstate(&p.who.principal.clone());
-        if self.peers[id].recording {
-            self.set_recording(id, false);
+        if p.recording || !p.recording_request.is_empty() {
+            self.set_recording(id, false, false);
         }
         let Some(mut peer) = self.peers.shift_remove(id) else { return };
         if peer.polls > 0 {
@@ -1030,6 +1115,8 @@ impl Hub {
             last_prune: pj::mono(),
             history_s: history_hours * 3600.0,
             mail_s: mail_days * 86400.0,
+            recording_enabled: true,
+            recording_organizations: Obj::new(),
         };
         let hub = Hub { st: Mutex::new(st), cond: Condvar::new(), signer, links, state_dir, save_lock: Mutex::new(()), stop: AtomicBool::new(false) };
         if hub.state_dir.is_some() {
@@ -1239,7 +1326,7 @@ impl Hub {
                 st.drop_peer(&old, "replaced", false, true);
             }
         }
-        let peer = Peer {
+        let mut peer = Peer {
             peer_id: pj::token_urlsafe(12),
             room: room.to_string(),
             who: who.clone(),
@@ -1248,6 +1335,10 @@ impl Hub {
             events: VecDeque::new(),
             joined: pj::now(),
             recording: false,
+            recording_paused: false,
+            recording_request: Obj::new(),
+            recording_replies: IndexMap::new(),
+            admission_pending: false,
             address: address.to_string(),
             client: client.clone(),
             captions: IndexMap::new(),
@@ -1260,8 +1351,19 @@ impl Hub {
             relay_rtt: None,
             tally: CallTally::new(),
         };
-        let members = st.members(room);
+        let mut members = st.members(room);
         let recording: Vec<Value> = st.peers.values().filter(|p| p.room == room && p.recording).map(|p| Value::from(p.peer_id.clone())).collect();
+        peer.admission_pending = !recording.is_empty();
+        let pending = peer.admission_pending;
+        let notices: Vec<Value> = st
+            .peers
+            .values()
+            .filter(|p| p.room == room && !p.recording_request.is_empty())
+            .map(|p| Value::Object(with(&p.recording_request, obj([("on", Value::Bool(p.recording)), ("paused", Value::Bool(p.recording_paused))]))))
+            .collect();
+        if pending {
+            members.clear();
+        }
         let now = pj::now();
         let creates = !st.stays.contains_key(room);
         if creates {
@@ -1278,7 +1380,9 @@ impl Hub {
         let peer_id = peer.peer_id.clone();
         st.peers.insert(peer_id.clone(), peer);
         st.seen(who);
-        st.broadcast(room, &with(&obj([("type", Value::from("join"))]), public.clone()), Some(&peer_id));
+        if !pending {
+            st.broadcast(room, &with(&obj([("type", Value::from("join"))]), public.clone()), Some(&peer_id));
+        }
         let log = st.rooms.get(room).cloned().unwrap_or_default();
         let chats: Vec<&Obj> = log.iter().filter(|l| pj::text_of(l, "kind") == "chat").collect();
         let history: Vec<Value> = chats[chats.len().saturating_sub(CHAT_KEEP)..].iter().map(|l| Value::Object((*l).clone())).collect();
@@ -1320,9 +1424,11 @@ impl Hub {
             ("peer", Value::from(peer_id.clone())),
             ("you", Value::Object(public)),
             ("members", Value::Array(members)),
-            ("chat", Value::Array(history)),
-            ("missed", Value::Object(out_missed)),
+            ("chat", Value::Array(if pending { Vec::new() } else { history })),
+            ("missed", Value::Object(if pending { Obj::new() } else { out_missed })),
             ("recording", Value::Array(recording)),
+            ("recording_notices", Value::Array(notices)),
+            ("admission_pending", Value::Bool(pending)),
             ("rseq", Value::from(rseq)),
             ("options", Value::Object(obj([("late_history", Value::Bool(stay_late))]))),
         ]);
@@ -1388,6 +1494,9 @@ impl Hub {
         if st.peers.get(to).map(|t| t.room != room).unwrap_or(true) {
             return Err(E::Gone("that participant has left".into()));
         }
+        if st.peers[peer_id].admission_pending || st.peers[to].admission_pending {
+            return forbidden("recording consent is required before joining media");
+        }
         st.push_peer(to, &obj([("type", Value::from("signal")), ("from", Value::from(peer_id)), ("data", data.clone())]));
         let state = data.as_object().filter(|d| d.get("kind").and_then(Value::as_str) == Some("state")).cloned();
         if let Some(d) = &state {
@@ -1447,6 +1556,9 @@ impl Hub {
     pub fn say(&self, peer_id: &str, who: &Identity, text: &str) -> R<Obj> {
         let mut st = self.st.lock();
         st.owned(peer_id, who)?;
+        if st.peers[peer_id].admission_pending {
+            return forbidden(ADMISSION_FIRST);
+        }
         let room = st.peers[peer_id].room.clone();
         let mut line = obj([
             ("type", Value::from("chat")),
@@ -1474,7 +1586,7 @@ impl Hub {
         let mut st = self.st.lock();
         st.owned(peer_id, who)?;
         let room = st.peers[peer_id].room.clone();
-        let (line, repeat) = Self::caption_line(&mut st, peer_id, who, text, cseq, age, dur);
+        let (line, repeat) = Self::caption_line(&mut st, peer_id, who, text, cseq, age, dur)?;
         drop(st);
         self.wake();
         Self::caption_logged(&room, who, text, &line, repeat);
@@ -1527,7 +1639,15 @@ impl Hub {
                     out.push(Value::Object(obj([("cseq", c), ("refused", Value::from(e.message()))])));
                 }
                 Ok((t, c, age, dur)) => {
-                    let (line, repeat) = Self::caption_line(&mut st, peer_id, who, &t, c, age, dur);
+                    let (line, repeat) = match Self::caption_line(&mut st, peer_id, who, &t, c, age, dur) {
+                        Ok(stored) => stored,
+                        Err(e) => {
+                            // a late joiner's refusal ends the batch, after any weak report it carried
+                            drop(st);
+                            self.wake();
+                            return Err(e);
+                        }
+                    };
                     out.push(Value::Object(line.clone()));
                     done.push((t, line, repeat));
                 }
@@ -1541,10 +1661,13 @@ impl Hub {
         Ok(obj([("lines", Value::Array(out))]))
     }
 
-    fn caption_line(st: &mut State, peer_id: &str, who: &Identity, text: &str, cseq: Option<i64>, age: Option<i64>, dur: Option<i64>) -> (Obj, bool) {
+    fn caption_line(st: &mut State, peer_id: &str, who: &Identity, text: &str, cseq: Option<i64>, age: Option<i64>, dur: Option<i64>) -> R<(Obj, bool)> {
+        if st.peers[peer_id].admission_pending {
+            return forbidden(ADMISSION_FIRST);
+        }
         if let Some(c) = cseq {
             if let Some(stored) = st.peers[peer_id].captions.get(&c) {
-                return (stored.clone(), true);
+                return Ok((stored.clone(), true));
             }
         }
         let room = st.peers[peer_id].room.clone();
@@ -1580,7 +1703,7 @@ impl Hub {
                 p.captions.shift_remove_index(0);
             }
         }
-        (line, false)
+        Ok((line, false))
     }
 
     fn caption_logged(room: &str, who: &Identity, text: &str, line: &Obj, repeat: bool) {
@@ -1607,19 +1730,114 @@ impl Hub {
         Ok(())
     }
 
-    pub fn recording(&self, peer_id: &str, who: &Identity, on: Body) -> R<Obj> {
-        let Some(Value::Bool(on)) = on else { return bad("on must be true or false") };
+    /// `POST /v1/recording/policy`: permission, ownership and the room's recorders and open requests.
+    pub fn recording_policy(&self, peer_id: &str, who: &Identity) -> R<Obj> {
+        let st = self.st.lock();
+        st.recording_peer(peer_id, who)?;
+        Ok(st.recording_policy(peer_id, who))
+    }
+
+    /// `POST /v1/recording`: capture is authorized only after the recorder acknowledged the policy and every
+    /// participant actually consented; until then the answer is a pending request, never permission.
+    /// `acknowledged` and `paused` default to false when absent.
+    pub fn recording(&self, peer_id: &str, who: &Identity, on: Body, acknowledged: Body, paused: Body) -> R<Obj> {
+        let flag = |v: Option<&Value>| match v {
+            None => Some(false),
+            Some(Value::Bool(b)) => Some(*b),
+            Some(_) => None,
+        };
+        let (Some(Value::Bool(on)), Some(acknowledged), Some(paused)) = (on, flag(acknowledged), flag(paused)) else {
+            return bad("on, acknowledged and paused must be true or false");
+        };
         let on = *on;
         let mut st = self.st.lock();
-        st.owned(peer_id, who)?;
-        let room = st.peers[peer_id].room.clone();
-        if st.peers[peer_id].recording != on {
-            st.set_recording(peer_id, on);
-        }
+        st.recording_peer(peer_id, who)?;
+        let out = Self::recording_locked(&mut st, peer_id, who, on, acknowledged, paused);
         drop(st);
         self.wake();
-        log_info(&format!("recording room={room} principal={} on={}", who.principal, if on { "True" } else { "False" }));
-        Ok(obj([("ok", Value::Bool(true)), ("on", Value::Bool(on))]))
+        out
+    }
+
+    fn recording_locked(st: &mut State, peer_id: &str, who: &Identity, on: bool, acknowledged: bool, paused: bool) -> R<Obj> {
+        let p = &st.peers[peer_id];
+        if !on {
+            let request = p.recording_request.get("request").cloned().unwrap_or(Value::Null);
+            if p.recording || !p.recording_request.is_empty() {
+                st.set_recording(peer_id, false, false);
+            }
+            return Ok(obj([("ok", Value::Bool(true)), ("on", Value::Bool(false)), ("paused", Value::Bool(false)), ("request", request)]));
+        }
+        let policy = st.recording_policy(peer_id, who);
+        if policy.get("allowed") != Some(&Value::Bool(true)) {
+            return forbidden("recording is not permitted");
+        }
+        let room = st.peers[peer_id].room.clone();
+        if st.peers[peer_id].recording_request.is_empty() {
+            if !acknowledged {
+                return forbidden("acknowledge the recording policy before requesting consent");
+            }
+            if paused {
+                return bad("start recording before pausing");
+            }
+            let request = obj([
+                ("request", Value::from(pj::token_urlsafe(18))),
+                ("peer", Value::from(peer_id)),
+                ("name", Value::from(who.name.clone())),
+                ("principal", Value::from(who.principal.clone())),
+                ("owner", policy.get("owner").cloned().unwrap_or(Value::Null)),
+                ("notice", policy.get("notice").cloned().unwrap_or(Value::Null)),
+                ("policy_acknowledged", Value::Bool(true)),
+            ]);
+            let p = st.peers.get_mut(peer_id).expect("recording peer");
+            p.recording_request = request.clone();
+            p.recording_replies.clear();
+            p.recording_replies.insert(peer_id.to_string(), true);
+            st.broadcast(&room, &with(&request, obj([("type", Value::from("recording_request"))])), None);
+        }
+        let p = &st.peers[peer_id];
+        let participants: Vec<&Peer> = st.peers.values().filter(|r| r.room == room && !r.admission_pending).collect();
+        let waiting: Vec<Value> = participants.iter().filter(|r| !p.recording_replies.contains_key(&r.peer_id)).map(|r| Value::Object(r.public())).collect();
+        let denied: Vec<Value> = participants.iter().filter(|r| p.recording_replies.get(&r.peer_id) == Some(&false)).map(|r| Value::Object(r.public())).collect();
+        if !waiting.is_empty() || !denied.is_empty() {
+            return Ok(with(
+                &p.recording_request,
+                obj([("ok", Value::Bool(false)), ("pending", Value::Bool(true)), ("waiting", Value::Array(waiting)), ("denied", Value::Array(denied)), ("on", Value::Bool(false))]),
+            ));
+        }
+        if !p.recording || p.recording_paused != paused {
+            st.set_recording(peer_id, true, paused);
+        }
+        Ok(with(
+            &st.peers[peer_id].recording_request,
+            obj([("ok", Value::Bool(true)), ("on", Value::Bool(true)), ("paused", Value::Bool(paused)), ("participant_consent_complete", Value::Bool(true))]),
+        ))
+    }
+
+    /// `POST /v1/recording/consent`: a participant's own answer to one recorder's request. A refusal stops an active
+    /// recording (unless the one refusing is still waiting to be admitted); an acceptance may admit a late joiner.
+    pub fn recording_consent(&self, peer_id: &str, who: &Identity, request: &str, accepted: Body) -> R<Obj> {
+        let Some(Value::Bool(accepted)) = accepted else { return bad("accepted must be true or false") };
+        let accepted = *accepted;
+        let mut st = self.st.lock();
+        st.recording_peer(peer_id, who)?;
+        let room = st.peers[peer_id].room.clone();
+        let Some(recorder) = st.peers.values().find(|r| r.room == room && r.recording_request.get("request").and_then(Value::as_str) == Some(request)).map(|r| r.peer_id.clone()) else {
+            return Err(E::Gone("that recording request has ended".into()));
+        };
+        if recorder == peer_id {
+            return bad("recorder policy acknowledgement is not participant consent");
+        }
+        st.peers.get_mut(&recorder).expect("recorder").recording_replies.insert(peer_id.to_string(), accepted);
+        st.broadcast(&room, &obj([("type", Value::from("recording_consent")), ("request", Value::from(request)), ("peer", Value::from(peer_id)), ("accepted", Value::Bool(accepted))]), None);
+        if !accepted && st.peers[&recorder].recording && !st.peers[peer_id].admission_pending {
+            st.set_recording(&recorder, false, false);
+        }
+        st.admit_waiting(&room);
+        let pending = st.peers[peer_id].admission_pending;
+        let members: Vec<Value> = if pending { Vec::new() } else { st.members(&room).into_iter().filter(|m| m.get("peer").and_then(Value::as_str) != Some(peer_id)).collect() };
+        drop(st);
+        self.wake();
+        Ok(obj([("ok", Value::Bool(true)), ("accepted", Value::Bool(accepted)), ("admission_pending", Value::Bool(pending)), ("members", Value::Array(members))]))
     }
 
     pub fn room_options(&self, peer_id: &str, who: &Identity, late: Body) -> R<Obj> {
@@ -1654,6 +1872,9 @@ impl Hub {
         let st = self.st.lock();
         st.owned(peer_id, who)?;
         let p = &st.peers[peer_id];
+        if p.admission_pending {
+            return forbidden(ADMISSION_FIRST);
+        }
         let now = pj::now();
         let start = match st.stays.get(&p.room) {
             Some(s) if s.late_history => s.start,
@@ -1702,6 +1923,9 @@ impl Hub {
         let since = m::number(Some(since), "since")?;
         let limit = limit.clamp(1, ROOM_LOG_KEEP as i64) as usize;
         let st = self.st.lock();
+        if st.peers.values().any(|p| p.room == room && p.who.principal == who.principal && p.admission_pending) {
+            return forbidden(ADMISSION_FIRST);
+        }
         let mut lines: Vec<&Obj> = st.rooms.get(&room).map(|l| l.iter().filter(|l| pj::num(l, "ts") > since).collect()).unwrap_or_default();
         if !st.peers.values().any(|p| p.room == room && p.who.principal == who.principal) {
             if !as_obj(st.left.get(&who.principal)).map(|o| o.contains_key(&room)).unwrap_or(false) {
@@ -2906,5 +3130,202 @@ mod tests {
         let h = Hub::new(Some(dir.clone()), &[], 1e9, 1e9, None, Arc::new(LinkStats::new()));
         assert_eq!(h.st.lock().snapshot(), text);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ── recording consent ───────────────────────────────────────────────────────────────────────────────────
+
+    fn refusal<T>(r: R<T>) -> String {
+        match r {
+            Err(E::Forbidden(m)) => format!("403 {m}"),
+            Err(E::Bad(m)) => format!("400 {m}"),
+            Err(E::Gone(m)) => format!("410 {m}"),
+            Err(e) => format!("other {}", e.message()),
+            Ok(_) => "ok".into(),
+        }
+    }
+
+    fn queue(h: &Hub, peer: &str) -> Vec<Obj> {
+        h.st.lock().peers[peer].events.iter().cloned().collect()
+    }
+
+    fn types(h: &Hub, peer: &str) -> Vec<String> {
+        queue(h, peer).iter().map(|e| pj::text_of(e, "type")).collect()
+    }
+
+    fn keys(o: &Obj) -> Vec<&str> {
+        o.keys().map(String::as_str).collect()
+    }
+
+    fn on(h: &Hub, peer: &str, who: &Identity, acknowledged: bool) -> R<Obj> {
+        h.recording(peer, who, Some(&json!(true)), Some(&json!(acknowledged)), None)
+    }
+
+    fn peer_of(joined: &Obj) -> String {
+        joined["peer"].as_str().unwrap().to_string()
+    }
+
+    /// ann records "ops" with ben's consent: (hub, ann, ben, ann's peer, ben's peer).
+    fn recording_room() -> (Hub, Identity, Identity, String, String) {
+        let h = hub();
+        let ann = who("ann@x", "aaaaaaaaaaaaaaaa");
+        let ben = who("ben@x", "bbbbbbbbbbbbbbbb");
+        let a = peer_of(&h.join("ops", &ann, "", false, None).unwrap());
+        let b = peer_of(&h.join("ops", &ben, "", false, None).unwrap());
+        let request = on(&h, &a, &ann, true).unwrap()["request"].as_str().unwrap().to_string();
+        h.recording_consent(&b, &ben, &request, Some(&json!(true))).unwrap();
+        assert_eq!(on(&h, &a, &ann, false).unwrap()["on"], json!(true));
+        (h, ann, ben, a, b)
+    }
+
+    #[test]
+    fn recording_waits_for_the_policy_acknowledgement_and_every_participant() {
+        let h = hub();
+        let ann = who("ann@x", "aaaaaaaaaaaaaaaa");
+        let ben = who("ben@x", "bbbbbbbbbbbbbbbb");
+        let a = peer_of(&h.join("ops", &ann, "", false, None).unwrap());
+        let b = peer_of(&h.join("ops", &ben, "", false, None).unwrap());
+        assert_eq!(refusal(h.recording(&a, &ann, Some(&json!("yes")), None, None)), "400 on, acknowledged and paused must be true or false");
+        assert_eq!(refusal(h.recording(&a, &ann, Some(&json!(true)), Some(&Value::Null), None)), "400 on, acknowledged and paused must be true or false");
+        assert_eq!(refusal(on(&h, &a, &ann, false)), "403 acknowledge the recording policy before requesting consent");
+        assert_eq!(refusal(h.recording(&a, &ann, Some(&json!(true)), Some(&json!(true)), Some(&json!(true)))), "400 start recording before pausing");
+
+        let pending = on(&h, &a, &ann, true).unwrap();
+        assert_eq!(keys(&pending), ["request", "peer", "name", "principal", "owner", "notice", "policy_acknowledged", "ok", "pending", "waiting", "denied", "on"]);
+        assert_eq!(pending["request"].as_str().unwrap().len(), 24);
+        assert_eq!(pending["owner"], json!({"kind": "individual", "id": "ann@x", "label": "ANN@X"}));
+        assert_eq!(pending["notice"], json!(RECORDING_NOTICE));
+        assert_eq!((&pending["ok"], &pending["pending"], &pending["on"]), (&json!(false), &json!(true), &json!(false)));
+        assert_eq!(pending["waiting"], json!([{"peer": b, "name": "BEN@X", "principal": "ben@x"}]));
+        assert_eq!(pending["denied"], json!([]));
+        let request = pending["request"].as_str().unwrap().to_string();
+        let asked = queue(&h, &b).pop().unwrap();
+        assert_eq!(keys(&asked), ["request", "peer", "name", "principal", "owner", "notice", "policy_acknowledged", "type", "seq"]);
+        assert_eq!(asked["type"], json!("recording_request"));
+
+        assert_eq!(refusal(h.recording_consent(&a, &ann, &request, Some(&json!(true)))), "400 recorder policy acknowledgement is not participant consent");
+        assert_eq!(refusal(h.recording_consent(&b, &ben, "nope", Some(&json!(true)))), "410 that recording request has ended");
+        assert_eq!(refusal(h.recording_consent(&b, &ben, &request, Some(&json!("yes")))), "400 accepted must be true or false");
+
+        let refused = h.recording_consent(&b, &ben, &request, Some(&json!(false))).unwrap();
+        assert_eq!(Value::Object(refused), json!({"ok": true, "accepted": false, "admission_pending": false, "members": [{"peer": a, "name": "ANN@X", "principal": "ann@x", "weak": false}]}));
+        let mut told = queue(&h, &a).pop().unwrap();
+        told.shift_remove("seq");
+        assert_eq!(told, obj([("type", json!("recording_consent")), ("request", json!(request)), ("peer", json!(b)), ("accepted", json!(false))]));
+        let denied = on(&h, &a, &ann, false).unwrap();
+        assert_eq!((&denied["waiting"], &denied["denied"]), (&json!([]), &json!([{"peer": b, "name": "BEN@X", "principal": "ben@x"}])));
+
+        h.recording_consent(&b, &ben, &request, Some(&json!(true))).unwrap();
+        let started = on(&h, &a, &ann, false).unwrap();
+        assert_eq!(keys(&started), ["request", "peer", "name", "principal", "owner", "notice", "policy_acknowledged", "ok", "on", "paused", "participant_consent_complete"]);
+        let notice = queue(&h, &b).pop().unwrap();
+        assert_eq!(keys(&notice), ["request", "peer", "name", "principal", "owner", "notice", "policy_acknowledged", "type", "on", "paused", "seq"]);
+        assert_eq!((&notice["type"], &notice["on"], &notice["paused"]), (&json!("recording"), &json!(true), &json!(false)));
+
+        let paused = h.recording(&a, &ann, Some(&json!(true)), None, Some(&json!(true))).unwrap();
+        assert_eq!(paused["paused"], json!(true));
+        let policy = h.recording_policy(&b, &ben).unwrap();
+        assert_eq!(keys(&policy), ["allowed", "owner", "notice", "participant_consent_required", "policy_acknowledgement_required", "recorders", "requests", "admission_pending"]);
+        assert_eq!(policy["recorders"][0]["paused"], json!(true));
+        assert_eq!(policy["requests"], json!([]));
+
+        // a participant revokes: the recording stops and its request ends
+        h.recording_consent(&b, &ben, &request, Some(&json!(false))).unwrap();
+        let stopped = queue(&h, &b).pop().unwrap();
+        assert_eq!((&stopped["type"], &stopped["on"], &stopped["paused"]), (&json!("recording"), &json!(false), &json!(false)));
+        assert!(!h.st.lock().peers[&a].recording);
+        assert_eq!(refusal(h.recording_consent(&b, &ben, &request, Some(&json!(true)))), "410 that recording request has ended");
+        let off = h.recording(&a, &ann, Some(&json!(false)), None, None).unwrap();
+        assert_eq!(Value::Object(off), json!({"ok": true, "on": false, "paused": false, "request": null}));
+        // control state only: never room history, never state.json
+        let st = h.st.lock();
+        assert!(st.rooms["ops"].iter().all(|l| pj::text_of(l, "kind") == "join"));
+        assert!(!st.snapshot().contains("recording"));
+    }
+
+    #[test]
+    fn a_late_joiner_is_held_until_it_accepts_every_recorder() {
+        let (h, ann, ben, a, b) = recording_room();
+        let cy = who("cy@x", "cccccccccccccccc");
+        let joined = h.join("ops", &cy, "", false, None).unwrap();
+        let c = peer_of(&joined);
+        assert_eq!(keys(&joined), ["peer", "you", "members", "chat", "missed", "recording", "recording_notices", "admission_pending", "rseq", "options"]);
+        assert_eq!((&joined["members"], &joined["chat"], &joined["missed"]), (&json!([]), &json!([]), &json!({})));
+        assert_eq!((&joined["recording"], &joined["admission_pending"]), (&json!([a]), &json!(true)));
+        assert_eq!(joined["recording_notices"][0]["on"], json!(true));
+        assert!(queue(&h, &b).iter().all(|e| e.get("peer") != Some(&json!(c))), "the room does not hear a waiting joiner");
+
+        assert_eq!(refusal(h.say(&c, &cy, "hi")), format!("403 {ADMISSION_FIRST}"));
+        assert_eq!(refusal(h.caption(&c, &cy, "hi", None, None, None)), format!("403 {ADMISSION_FIRST}"));
+        assert_eq!(refusal(h.captions(&c, &cy, Some(&json!([{"text": "hi"}])), None, None)), format!("403 {ADMISSION_FIRST}"));
+        assert_eq!(refusal(h.room_captions(&c, &cy, "0", "10")), format!("403 {ADMISSION_FIRST}"));
+        assert_eq!(refusal(h.room_history(&json!("ops"), &cy, &json!(0), 10)), format!("403 {ADMISSION_FIRST}"));
+        assert_eq!(refusal(h.signal(&c, &cy, &a, json!({}))), "403 recording consent is required before joining media");
+        assert_eq!(refusal(h.signal(&b, &ben, &c, json!({}))), "403 recording consent is required before joining media");
+        assert_eq!(refusal(on(&h, &c, &cy, true)), "403 recording is not permitted");
+        let policy = h.recording_policy(&c, &cy).unwrap();
+        assert_eq!((&policy["allowed"], &policy["admission_pending"]), (&json!(false), &json!(true)));
+        h.say(&a, &ann, "not for cy").unwrap();
+        assert!(queue(&h, &c).is_empty());
+        // the recorder's own answer does not wait for a joiner who is not yet in the call
+        assert_eq!(on(&h, &a, &ann, false).unwrap()["ok"], json!(true));
+
+        let request = joined["recording_notices"][0]["request"].as_str().unwrap().to_string();
+        let refused = h.recording_consent(&c, &cy, &request, Some(&json!(false))).unwrap();
+        assert_eq!(Value::Object(refused), json!({"ok": true, "accepted": false, "admission_pending": true, "members": []}));
+        assert!(h.st.lock().peers[&a].recording, "a waiting joiner's refusal does not stop the recording");
+        let accepted = h.recording_consent(&c, &cy, &request, Some(&json!(true))).unwrap();
+        assert_eq!(accepted["admission_pending"], json!(false));
+        assert_eq!(accepted["members"], json!([{"peer": a, "name": "ANN@X", "principal": "ann@x", "weak": false}, {"peer": b, "name": "BEN@X", "principal": "ben@x", "weak": false}]));
+        assert_eq!(types(&h, &c), ["recording_consent", "recording_consent", "recording_admitted"]);
+        assert_eq!(queue(&h, &c)[2]["members"], accepted["members"]);
+        let joins: Vec<Obj> = queue(&h, &b).into_iter().filter(|e| e["type"] == json!("join")).collect();
+        assert_eq!(joins.len(), 1);
+        assert_eq!(keys(&joins[0]), ["type", "peer", "name", "principal", "seq"]);
+        assert_eq!(joins[0]["peer"], json!(c));
+        assert_eq!(h.say(&c, &cy, "hello").unwrap()["text"], json!("hello"));
+    }
+
+    #[test]
+    fn the_recorder_leaving_admits_a_waiting_joiner() {
+        let (h, ann, _ben, a, b) = recording_room();
+        let cy = who("cy@x", "cccccccccccccccc");
+        let c = peer_of(&h.join("ops", &cy, "", false, None).unwrap());
+        h.leave(&a, &ann).unwrap();
+        assert_eq!(types(&h, &c), ["recording", "recording_admitted", "leave"]);
+        let events = queue(&h, &c);
+        let peers: Vec<&Value> = events[1]["members"].as_array().unwrap().iter().map(|m| &m["peer"]).collect();
+        assert_eq!(peers, [&json!(a), &json!(b)]);
+        assert!(!h.st.lock().peers[&c].admission_pending);
+    }
+
+    #[test]
+    fn recording_controls_belong_to_the_joined_certificate() {
+        let h = hub();
+        let ann = who("ann@x", "aaaaaaaaaaaaaaaa");
+        let a = peer_of(&h.join("ops", &ann, "", false, None).unwrap());
+        let laptop = who("ann@x", "dddddddddddddddd");
+        let reissued = Identity { serial: "0f".into(), ..ann.clone() };
+        let ben = who("ben@x", "bbbbbbbbbbbbbbbb");
+        assert_eq!(refusal(h.recording_policy(&a, &laptop)), "403 recording controls belong to the joined certificate");
+        assert_eq!(refusal(on(&h, &a, &reissued, true)), "403 recording controls belong to the joined certificate");
+        assert_eq!(refusal(h.recording_consent(&a, &laptop, "x", Some(&json!(true)))), "403 recording controls belong to the joined certificate");
+        assert_eq!(refusal(h.recording_policy(&a, &ben)), "403 that session belongs to someone else");
+        assert_eq!(refusal(h.recording_policy("gone", &ann)), "410 not in a room (the relay dropped this session); join again");
+    }
+
+    #[test]
+    fn relay_settings_name_the_owner_and_may_disable_recording() {
+        let h = hub();
+        let ann = who("ann@x", "aaaaaaaaaaaaaaaa");
+        let ben = who("ben@x", "bbbbbbbbbbbbbbbb");
+        let a = peer_of(&h.join("ops", &ann, "", false, None).unwrap());
+        let b = peer_of(&h.join("ops", &ben, "", false, None).unwrap());
+        h.st.lock().recording_organizations = json!({"ann@x": {"id": "org-1", "label": "Org One"}}).as_object().unwrap().clone();
+        assert_eq!(h.recording_policy(&a, &ann).unwrap()["owner"], json!({"kind": "organization", "id": "org-1", "label": "Org One"}));
+        assert_eq!(h.recording_policy(&b, &ben).unwrap()["owner"], json!({"kind": "individual", "id": "ben@x", "label": "BEN@X"}));
+        h.st.lock().recording_enabled = false;
+        assert_eq!(h.recording_policy(&a, &ann).unwrap()["allowed"], json!(false));
+        assert_eq!(refusal(on(&h, &a, &ann, true)), "403 recording is not permitted");
+        assert_eq!(Value::Object(h.recording(&a, &ann, Some(&json!(false)), None, None).unwrap()), json!({"ok": true, "on": false, "paused": false, "request": null}));
     }
 }

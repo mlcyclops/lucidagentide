@@ -1,12 +1,13 @@
-// The add-on's own verdicts on certificates, CRLs, relay directories, request signatures, licenses and a stored
-// envelope record (its scripts/relay-vectors.ts writes tests/vectors.json), checked here against this crate's.
+// The add-on's own verdicts on certificates, CRLs, relay directories, request signatures, licenses, license seats
+// and a stored envelope record (its scripts/relay-vectors.ts writes tests/vectors.json), checked here against this
+// crate's.
 //
 //   bun scripts/relay-vectors.ts <this crate>/tests/vectors.json   (from the add-on's remote-spoke folder)
 
 use crate::codec::{parse_json, sha256_hex, str_of, stringify, unb64u};
 use crate::der::{ecdsa_verify, p256_from_spki};
 use crate::identity::{DirectoryHolder, TrustStore};
-use crate::license::{license_keys, license_state, license_token_of, verify_license};
+use crate::license::{license_keys, license_state, license_token_of, seat_problem, verify_license};
 use crate::relay::parse_envelope;
 use serde_json::{json, Value};
 
@@ -118,6 +119,18 @@ fn licenses_get_the_same_verdicts() {
             Err(reason) => json!({ "ok": false, "reason": reason }),
         };
         assert_eq!(got, c["verdict"], "license: {}", c["name"]);
+    }
+}
+
+/// F2 (ADR-A100): a hub's license seat, judged against its own certificate and the relay's license id.
+#[test]
+fn license_seats_get_the_same_verdicts() {
+    let v = vectors();
+    let trust = root(&v);
+    for c in v["seats"].as_array().unwrap() {
+        let cert = trust.verify_cert(c.get("cert"), now(&v)).unwrap_or_else(|e| panic!("seat {}: {e}", c["name"])).cert;
+        let got = seat_problem(c["token"].as_str(), trust.root_key(), &trust.root_id, c["license"].as_str().unwrap(), &cert, now(&v));
+        assert_eq!(got, c["verdict"].as_str(), "seat: {}", c["name"]);
     }
 }
 
