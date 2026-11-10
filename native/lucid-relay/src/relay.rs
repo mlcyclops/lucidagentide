@@ -7,6 +7,7 @@
 // directory and user book.
 
 use crate::codec::{as_object, exact_keys, js_number_string, parse_json, safe_int, sha256_hex, str_of, stringify, unb64u, utf8_lossy};
+use crate::console::{Console, CONSOLE_OFF};
 use crate::der::{ecdsa_verify, CertNames};
 use crate::identity::{is_node_id, DirectoryHolder, NodeCert, TrustStore, LOOPBACK_HOSTS};
 use crate::license::{license_keys, license_state, license_user_of, verify_license, Admission, License, LicenseStateName, LicenseUsers, LICENSE_V1_SEATS_FILE};
@@ -45,6 +46,8 @@ pub struct Options {
     pub users_file: Option<PathBuf>,
     pub store_bytes: i64,
     pub sender_bytes: i64,
+    /// The control panel (src/console.rs), when it is on: /v1/logs and /v1/console/invite go to it.
+    pub console: Option<Arc<Console>>,
 }
 
 struct Licensed {
@@ -135,6 +138,10 @@ pub struct State {
     seen_file: Option<PathBuf>,
     directory_file: Option<PathBuf>,
     logger: Arc<Logger>,
+    console: Option<Arc<Console>>,
+    started: i64,
+    /// For the control panel: each node's certificate label and user email, as last seen since the start.
+    labels: HashMap<String, (String, Option<String>)>,
 }
 
 fn store_name(to: &str, id: &str) -> String {
@@ -235,6 +242,9 @@ impl State {
             seen_file: opts.seen_file,
             directory_file: opts.directory_file,
             logger,
+            console: opts.console,
+            started: now,
+            labels: HashMap::new(),
         };
         if let Some(stored) = st.directory_file.as_deref().and_then(read_text).filter(|s| !s.is_empty()) {
             // Not fatal, unlike the CRL; one naming more relays than the licence covers is not loaded either.
@@ -359,6 +369,9 @@ impl State {
     fn note_seen(&mut self, c: &NodeCert, t: i64) {
         let changed = self.seen.get(&c.node).is_none_or(|was| was.serial != c.serial || was.role != c.role);
         self.seen.insert(c.node.clone(), Seen { role: c.role.clone(), at: t, serial: c.serial.clone(), exp: c.exp });
+        if self.console.is_some() {
+            self.labels.insert(c.node.clone(), (c.label.clone(), c.user.as_ref().map(|u| u.email.clone())));
+        }
         if changed || t - self.seen_saved_at >= SEEN_SAVE_MS {
             self.save_seen(t);
         }
@@ -475,6 +488,7 @@ impl State {
         let stale: Vec<String> = self.seen.keys().filter(|n| self.recipient_problem(n, t).is_some()).cloned().collect();
         for n in stale {
             self.seen.shift_remove(&n);
+            self.labels.remove(&n);
         }
         let mut expired = Vec::new();
         self.mailboxes.retain(|_, b| {
@@ -647,9 +661,99 @@ impl State {
                     json_reply(200, &o)
                 }
             },
+            // The control panel (ADR-A094): a spoke's own security and ops lines, kept in a ring per node.
+            ("/v1/logs", "POST") => {
+                let Some(console) = self.console.clone() else { return Ok(refuse(&logger, 409, CONSOLE_OFF, "logs.console-off", &who)) };
+                if me.role != "spoke" {
+                    return Ok(refuse(&logger, 403, "only a spoke sends its log lines here", "logs.refused", &who));
+                }
+                match console.take_logs(&me.node, r.body, t) {
+                    Err(e) => refuse(&logger, e.status, &e.error, e.event, &who),
+                    Ok(kept) => {
+                        logger.perf("logs", &Fields::new().with("node", &me.node).with("lines", kept));
+                        json_reply(200, &json!({ "ok": true, "kept": kept }))
+                    }
+                }
+            }
+            // The control panel's one-time invite, for the person a hub with the drive scope names.
+            ("/v1/console/invite", "POST") => {
+                let Some(console) = self.console.clone() else { return Ok(refuse(&logger, 409, CONSOLE_OFF, "console.invite-refused", &who)) };
+                if me.role != "hub" || !me.scopes.iter().any(|s| s == "drive") {
+                    let f = who.clone().with("scopes", me.scopes.as_slice());
+                    return Ok(refuse(&logger, 403, "a control panel invite needs a hub with the drive scope", "console.invite-refused", &f));
+                }
+                let Some(email) = me.user.as_ref().map(|u| u.email.clone()) else {
+                    return Ok(refuse(&logger, 403, "this hub's certificate names no user email: an invite is for a person", "console.invite-refused", &who));
+                };
+                if !parse_json(r.body).as_ref().and_then(as_object).is_some_and(|b| b.is_empty()) {
+                    return Ok(refuse(&logger, 400, "malformed", "console.invite-malformed", &who));
+                }
+                match console.invite(&email, &me.node, r.dialed, t) {
+                    Err(e) => refuse(&logger, e.status, &e.error, e.event, &who.clone().with("email", &email)),
+                    Ok(inv) => {
+                        // The link signs its holder in once: never written to a log.
+                        logger.security("console.invite", &who.clone().with("email", &email).with("expires", inv.expires).with("consoleOrigin", &inv.origin), Level::Info);
+                        json_reply(200, &json!({ "ok": true, "link": inv.link, "email": email, "expires": inv.expires, "origin": inv.origin }))
+                    }
+                }
+            }
             _ => refuse(&logger, 404, "not found", "route.unknown", &who),
         };
         Ok(reply)
+    }
+
+    /// The control panel, when it is on.
+    pub fn console(&self) -> Option<Arc<Console>> {
+        self.console.clone()
+    }
+
+    /// What the control panel shows of the relay (read-only; never message contents): health, licence, seats, nodes
+    /// seen, CRL and directory versions. Times in `...At` are milliseconds; `exp` and `since` are seconds.
+    pub fn console_status(&self, t: i64) -> Value {
+        let mut queues: Vec<(&String, usize, i64)> = self.mailboxes.iter().map(|(n, b)| (n, b.len(), b.iter().map(|m| m.bytes).sum::<i64>())).collect();
+        queues.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(b.0)));
+        let queues: Vec<Value> = queues.iter().take(100).map(|(n, m, b)| json!({ "node": n, "messages": m, "bytes": b })).collect();
+        let licence = self.licensed.as_ref().map(|lic| {
+            let l = &lic.license;
+            let (state, days_left) = license_state(l, t.div_euclid(1000));
+            json!({
+                "id": l.id, "org": l.org, "edition": l.edition, "users": l.users, "used": lic.users.used(), "relays": l.relays,
+                "exp": l.exp, "state": state.as_str(), "daysLeft": days_left, "dev": lic.dev,
+            })
+        });
+        // A seat is a user key (u_ and a hash of the email); the email shows when a hub of that user was seen.
+        let emails: HashMap<String, &str> = self.labels.values().filter_map(|(_, e)| e.as_deref()).map(|e| (crate::identity::user_id_of(e), e)).collect();
+        let seats: Vec<Value> = self
+            .licensed
+            .as_ref()
+            .map(|l| l.users.seats())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| json!({ "user": s.user, "email": emails.get(&s.user), "since": s.since, "certificates": s.certificates, "exp": s.exp }))
+            .collect();
+        let nodes: Vec<Value> = self
+            .seen
+            .iter()
+            .map(|(node, s)| {
+                let (label, email) = self.labels.get(node).cloned().unwrap_or_default();
+                json!({
+                    "node": node, "role": s.role, "label": label, "email": email, "serial": s.serial, "exp": s.exp,
+                    "lastSeenAt": s.at, "lastPollAt": self.polls.get(node), "revoked": self.trust.is_revoked(&s.serial),
+                })
+            })
+            .collect();
+        json!({
+            "relay": {
+                "version": env!("CARGO_PKG_VERSION"), "startedAt": self.started, "uptimeSeconds": (t - self.started).max(0) / 1000,
+                "mailboxes": self.mailboxes.len(), "queued": self.mailboxes.values().map(Vec::len).sum::<usize>(),
+                "heldBytes": self.held, "storeBytes": self.store_cap, "senderBytes": self.sender_cap, "queues": queues,
+            },
+            "licence": licence,
+            "seats": seats,
+            "nodes": nodes,
+            "crl": { "version": self.trust.crl_version() },
+            "directory": { "version": self.directory.version(), "relays": self.directory.urls() },
+        })
     }
 
     /// Users (ADR-A077): distinct people on hub certificates take a seat; a refused one first frees the seats of users

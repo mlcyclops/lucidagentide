@@ -3,12 +3,13 @@
 // its limit held while it streams in, then the relay state under one lock.
 
 use crate::codec::{js_number, now_ms, utf8_lossy};
+use crate::console::{ConsoleReply, ConsoleRequest, MARKER_HEADER};
 use crate::log::{Fields, Logger};
 use crate::relay::{json_reply, refuse, Dialed, HostCheck, Reply, Request, State, BODY_BYTES};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
-use hyper::header::{AUTHORIZATION, CACHE_CONTROL, CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, HOST};
+use hyper::header::{AUTHORIZATION, CACHE_CONTROL, CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST, ORIGIN};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::Response;
@@ -142,6 +143,17 @@ fn to_response(r: Reply) -> Response<Full<Bytes>> {
     b.body(Full::new(Bytes::from(r.body))).unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
 }
 
+fn console_response(r: ConsoleReply) -> Response<Full<Bytes>> {
+    let mut b = Response::builder().status(r.status).header(CONTENT_TYPE, r.content_type);
+    for (name, value) in &r.headers {
+        b = b.header(*name, value.as_str());
+    }
+    if r.close {
+        b = b.header(CONNECTION, "close");
+    }
+    b.body(Full::new(Bytes::from(r.body))).unwrap_or_else(|_| internal_error())
+}
+
 fn internal_error() -> Response<Full<Bytes>> {
     to_response(Reply { status: 500, content_type: "text/plain;charset=utf-8", body: "Internal Server Error".into(), close: false })
 }
@@ -160,11 +172,16 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
     let t = now_ms();
     // Behind a TLS front this is the front's address; the node id in each line is what identifies a caller.
     let where_ = Fields::new().with("method", method.as_str()).with("path", pathname.as_str()).with("ip", peer.ip().to_string());
-    let gate = relay.state.lock().licence_gate(t, &where_);
-    match gate {
-        Err(_) => return internal_error(),
-        Ok(Some(r)) => return to_response(r),
-        Ok(None) => {}
+    // The control panel (src/console.rs, ADR-A094) answers under /console/ when it is on, before the licence gate: an
+    // admin must see an expired licence there. When it is off these paths are relay routes like any other.
+    let console = if pathname == "/console" || pathname.starts_with("/console/") { relay.state.lock().console() } else { None };
+    if console.is_none() {
+        let gate = relay.state.lock().licence_gate(t, &where_);
+        match gate {
+            Err(_) => return internal_error(),
+            Ok(Some(r)) => return to_response(r),
+            Ok(None) => {}
+        }
     }
     // The body limit holds while the body streams in (RS-RELAY-02): a declared length over it is refused unread, and
     // a chunked body is read frame by frame and cut at the limit, never buffered whole.
@@ -208,6 +225,27 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
     let host_header = header(HOST).or_else(|| parts.uri.authority().map(|a| a.to_string())).unwrap_or_default();
     let dialed = dialed_of(&host_header, relay.tls);
     let host_ok = relay.hosts.accepts(&dialed);
+    if let Some(console) = console {
+        let cookie = header(COOKIE).unwrap_or_default();
+        let origin = header(ORIGIN);
+        let marker = parts.headers.get(MARKER_HEADER).map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned());
+        let content_type = header(CONTENT_TYPE).unwrap_or_default();
+        let ip = peer.ip().to_string();
+        let r = ConsoleRequest {
+            method: &method,
+            pathname: &pathname,
+            query: parts.uri.query().unwrap_or(""),
+            cookie: &cookie,
+            origin: origin.as_deref(),
+            marker: marker.as_deref(),
+            content_type: &content_type,
+            ip: &ip,
+            body: &text,
+            dialed: &dialed,
+            host_ok,
+        };
+        return console_response(console.http(&r, t, || relay.state.lock().console_status(now_ms())));
+    }
     let authorization = header(AUTHORIZATION).unwrap_or_default();
     let request = Request { method: &method, pathname: &pathname, path: &path, authorization: &authorization, dialed: &dialed, body: &text, where_: &where_ };
     let reply = relay.state.lock().serve(&request, t, host_ok);

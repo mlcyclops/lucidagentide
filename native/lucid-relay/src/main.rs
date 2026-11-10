@@ -6,6 +6,7 @@
 //   lucid-relay [relay serve] --root <root.pub> --license <file> [--host 127.0.0.1] [--port 8787]
 //               [--tls-cert f --tls-key f] [--state <dir>] [--sender-mib 16]
 //     (or LUCID_RELAY_ROOT_PUB, _LICENSE, _HOST, _PORT/PORT, _TLS_CERT, _TLS_KEY, _STATE, _SENDER_MIB, _BEHIND_TLS=1)
+//               [--console 1]   the control panel at /console/ (or LUCID_RELAY_CONSOLE=1; needs --state; src/console.rs)
 //   lucid-relay --owner <spoke node id> ...   a spoke's LAN mailbox: carries mail to and from that spoke only, needs
 //               no licence; with --state it keeps crl, lan-mailbox-seen.json and lan-mail/ as the spoke agent does.
 //   lucid-relay collab [--host=…] [--port=…] …   phase B, the core's collab broker (tools/relay/serve.ts; src/collab.rs).
@@ -14,6 +15,9 @@ mod codec;
 mod collab;
 mod collab_auth;
 mod collab_presence;
+mod console;
+mod console_page;
+mod console_webauthn;
 mod der;
 mod http_client;
 mod identity;
@@ -35,7 +39,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-const FLAGS: [&str; 9] = ["root", "host", "port", "tls-cert", "tls-key", "state", "license", "sender-mib", "owner"];
+const FLAGS: [&str; 10] = ["root", "host", "port", "tls-cert", "tls-key", "state", "license", "sender-mib", "owner", "console"];
 
 fn die(msg: &str) -> ! {
     eprintln!("lucid-relay: {msg}");
@@ -198,7 +202,9 @@ fn main() {
     if c.owner.is_none() && c.license.is_none() {
         die("the relay licence is required (--license or LUCID_RELAY_LICENSE: the licence file or its armoured text)");
     }
-    let logger = Arc::new(Logger::new(if c.owner.is_some() { "lan-mailbox" } else { "relay" }));
+    // The control panel (src/console.rs): --console 1 or LUCID_RELAY_CONSOLE=1; when on, the logger feeds its ring.
+    let base = Logger::new(if c.owner.is_some() { "lan-mailbox" } else { "relay" });
+    let (logger, console) = console::open(flags.get("console"), |k| std::env::var(k).ok(), c.state.as_deref(), c.owner.is_some(), base).unwrap_or_else(|e| die(&e));
     let root = root_key(&c.root_pem).unwrap_or_else(|e| die(&e));
     let state = c.state.as_deref().map(Path::new);
     let at = |name: &str| state.map(|d| d.join(name));
@@ -214,6 +220,7 @@ fn main() {
         users_file: if lan { None } else { at(LICENSE_USERS_FILE) },
         store_bytes: STORE_BYTES,
         sender_bytes: c.sender_bytes.unwrap_or(SENDER_BYTES),
+        console,
     };
     if c.behind_tls {
         logger.ops("plain-http", &Fields::new().with("why", "a platform front terminates TLS (LUCID_RELAY_BEHIND_TLS=1)"), Level::Info);

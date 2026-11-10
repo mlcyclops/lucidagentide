@@ -258,6 +258,13 @@ pub struct Freed {
     pub why: &'static str,
 }
 
+pub struct SeatView {
+    pub user: String,
+    pub since: i64,
+    pub certificates: usize,
+    pub exp: i64,
+}
+
 /// The people a licensed relay admitted, each with every certificate it was seen with (license.ts LicenseUsers).
 pub struct LicenseUsers {
     file: Option<PathBuf>,
@@ -293,6 +300,12 @@ impl LicenseUsers {
 
     pub fn used(&self) -> i64 {
         self.users.len() as i64
+    }
+
+    /// The seats as the control panel shows them (ADR-A094): the user key, since when (seconds), how many
+    /// certificates, and when the last of them ends (seconds).
+    pub fn seats(&self) -> Vec<SeatView> {
+        self.users.iter().map(|(u, s)| SeatView { user: u.clone(), since: s.since, certificates: s.certs.len(), exp: s.certs.values().copied().max().unwrap_or(0) }).collect()
     }
 
     fn save(&self) -> Result<(), String> {
