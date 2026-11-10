@@ -26555,3 +26555,18 @@ Parity already held and left alone: workspace, tab, pane hierarchy and ids; the 
 **Phase C (built).** `lucid-relay meet` is a drop-in for the Meeting Hub rendezvous `relay/meet_relay.py`: the same `relay.json` and `state.json`, mutual TLS with the Meet CA, identity from the client certificate, every route group (presence and inbox, rooms and signaling, chat, captions and history, DMs and invitations, certificate mailboxes and the signer hand-off, releases and the version gate, the `/v1/console/*` routes). meet_pki's CRLs carry no CRL-number extension, which webpki refuses, so the relay checks revocation itself the way OpenSSL's CRL_CHECK_LEAF/CHAIN does. Proof: the Meet repo's `tests/test_meet_relay_conformance.py` passes 46/46 against `meet_relay.py` and against `LUCID_TEST_MEET_RELAY_BIN=<lucid-relay>`; `cargo test --release` 64 pass. Differences: log timestamps are UTC; a request refused before its body is read has its connection closed after the answer.
 
 **Next.** A Linux release build (aws-lc needs a Linux C toolchain: cross-compiling from Windows fails) and running the binary on relay VM 217 (spokes) and VM 206 (Meeting Hub, after a Hub release tested against it).
+
+## ADR-0536 -- A release clears what a dev build left behind: development modules are removed (data kept) and dev settings are ignored (2026-11-10)
+
+**Status:** Accepted -- BUILT. Proof: `desktop/release_cleanup.test.ts` and `desktop/plugins/runtime.test.ts`.
+
+**Context.** The owner (2026-11-10): "Whenever there is a new release, if you have a dev copy of the IDE, all development modules or changes get removed, and then the dev can reinstall the updates." A dev build (version `X.Y.Z-dev.N`) is where unsigned plugin builds and development license overrides get tried; a release must not carry them forward silently.
+
+**Decision.**
+1. A dev build is a version whose prerelease tag starts with `dev` (`2.6.0-dev.3`). A release (`2.6.0`) and a beta (`2.6.0-beta.1`) are not.
+2. A development module is a plugin installed from a file (source `private`, ADR-0505) that the trusted publisher key did not sign. Store installs and signed packages stay.
+3. A development change is a dev-only environment override: `LUCID_LICENSE_DEV` and `LUCID_LICENSE_DEV_PUB` (remote-spokes add-on ADR-A092). The plugin runtime passes them to plugins only when the IDE itself is a dev build; a release drops them.
+4. The engine keeps `last-run-version.json` (0600) in the data root and rewrites it on every start, after the check. When the previous version was a dev build and the current one is not, the engine, once and before any plugin can start, uninstalls every development module with its data KEPT (so a reinstall restores its state, a hub plugin keeps its keys), logs each removal to the plugin log (kind `release-cleanup`), and saves `release-cleanup.json` beside the marker: `{ from, to, at, removed, envIgnored }`, where `envIgnored` names the dev overrides still set in the environment. No marker (a fresh machine or an older IDE): write it, clean nothing.
+5. `GET /api/release-cleanup` returns the report until `POST /api/release-cleanup/ack` marks it seen. The renderer shows it once after start as a notice, with a button that opens the Plugins drawer on the Installed tab.
+
+**Consequences.** It runs once per dev-to-release move: release to release, dev to dev and release to dev clean nothing. A developer may reinstall a module from Plugins, Installed, Install from file after the release; it stays until the next dev-to-release move. Herd's offered install (another branch) is signed by the publisher key, so it stays.

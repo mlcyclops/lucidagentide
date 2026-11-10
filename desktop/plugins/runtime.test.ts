@@ -12,7 +12,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLEAN, buildServerFixture, testKey, writeStage } from "./fixtures.ts";
-import { installPluginBytes, pluginDataDir } from "./install.ts";
+import { installPluginBytes, pluginDataDir, readInstalled } from "./install.ts";
 import { pluginMcpServers } from "./mcp.ts";
 import { pluginOrigin, PLUGIN_PORT_MAX, PLUGIN_PORT_MIN } from "./ports.ts";
 import { PluginRuntime, preferredPort, resolveWebFile, webCsp } from "./runtime.ts";
@@ -44,8 +44,8 @@ afterEach(async () => {
 
 const deps = { trusted: KEY.trusted, decide: async () => CLEAN, record: () => {}, managedEgress: {} };
 
-function makeRuntime(healthTimeoutMs = 20_000): PluginRuntime {
-  runtime = new PluginRuntime({ nodeExe: () => process.execPath, agentBin: () => "C:/lucid/omp.exe", onMcpChange: () => { mcpChanges++; }, healthTimeoutMs });
+function makeRuntime(healthTimeoutMs = 20_000, appVersion?: string): PluginRuntime {
+  runtime = new PluginRuntime({ nodeExe: () => process.execPath, agentBin: () => "C:/lucid/omp.exe", onMcpChange: () => { mcpChanges++; }, healthTimeoutMs, appVersion });
   return runtime;
 }
 
@@ -102,20 +102,32 @@ describe("server plugins", () => {
     expect(again.ok && again.url).toBe(url);
   }, 60_000);
 
-  // A plugin that checks a development license (remote-spokes ADR-A092) gets the developer's two variables; an engine
-  // secret still never crosses.
-  test("the development license variables reach a plugin; the engine's other environment does not", async () => {
+  // A plugin that checks a development license (remote-spokes ADR-A092) gets the developer's two variables under a
+  // dev build of the IDE; an engine secret still never crosses.
+  test("under a dev build the development license variables reach a plugin; the engine's other environment does not", async () => {
     process.env.LUCID_LICENSE_DEV = "1";
     process.env.LUCID_LICENSE_DEV_PUB = "MCowBQYDK2VwAyEAdevpublickey";
     process.env.OPENAI_API_KEY = "sk-not-for-plugins";
     expect((await installPluginBytes(buildServerFixture(KEY), "fixture-server", deps)).ok).toBe(true);
-    const rt = makeRuntime();
+    const rt = makeRuntime(20_000, "2.6.0-dev.3");
     expect((await rt.start("fixture-server")).ok).toBe(true);
     const env = pluginMcpServers()[0]!.env;
     expect(env).toContainEqual({ name: "LUCID_LICENSE_DEV", value: "1" });
     expect(env).toContainEqual({ name: "LUCID_LICENSE_DEV_PUB", value: "MCowBQYDK2VwAyEAdevpublickey" });
     expect(env.map((e) => e.name)).not.toContain("OPENAI_API_KEY");
   }, 60_000);
+
+  // ADR-0536: a release drops the development overrides, so a plugin there accepts publisher licenses only.
+  test("a release drops the development license variables", async () => {
+    process.env.LUCID_LICENSE_DEV = "1";
+    process.env.LUCID_LICENSE_DEV_PUB = "MCowBQYDK2VwAyEAdevpublickey";
+    expect((await installPluginBytes(buildServerFixture(KEY), "fixture-server", deps)).ok).toBe(true);
+    const p = readInstalled("fixture-server")!;
+    const names = makeRuntime(20_000, "2.6.0").mcpServerFor(p, PLUGIN_PORT_MIN)!.env.map((e) => e.name);
+    expect(names).not.toContain("LUCID_LICENSE_DEV");
+    expect(names).not.toContain("LUCID_LICENSE_DEV_PUB");
+    expect(names).toContain("LUCID_PLUGIN_ID");
+  });
 
   // ADR-0506: the engine's own way into a server plugin. The token exists only while the plugin runs, only the
   // plugin process holds it (never its MCP child, never the renderer's list), and a restart mints a new one.

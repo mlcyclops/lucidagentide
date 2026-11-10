@@ -618,6 +618,8 @@ export type PluginFileInspectView =
 export type PluginStartView = { ok: true; url: string } | { ok: false; error: string };
 export type PluginActionView = { ok: true } | { ok: false; error: string };
 export interface PluginLicenseView { ok: boolean; id?: string; version?: string; text?: string; error?: string }
+/** ADR-0536: what the first start of a release after a dev build removed (data kept) and which dev settings it ignores. */
+export interface ReleaseCleanupView { from: string; to: string; at: string; removed: { id: string; name: string; version: string }[]; envIgnored: string[] }
 // P-PROV.1 (ADR-0210): extra per-provider config env (Azure resource/version, Vertex project/location/ADC,
 // Gemini-Enterprise project). Non-secret fields echo `value` to pre-fill; secret fields report `last4`.
 // `options` (ADR-0504): a closed choice rendered as a select, the first option being the unset default.
@@ -1236,6 +1238,9 @@ export interface LucidBridge {
   /** keepData defaults to true: the plugin's data dir survives unless the user asks to delete it. */
   pluginsUninstall(id: string, keepData?: boolean): Promise<PluginActionView | null>;
   pluginsLicense(id: string): Promise<PluginLicenseView | null>;
+  /** ADR-0536: the last dev-to-release cleanup the user has not seen yet (null when none), and marking it seen. */
+  releaseCleanup(): Promise<ReleaseCleanupView | null>;
+  releaseCleanupAck(): Promise<boolean | null>;
   // P-CMD.1 (ADR-0146): user-authored "/" slash commands (workspace .omp/commands/). Create validates +
   // scans fail-closed server-side. `list` = stored commands; `create` returns the persisted command or errors.
   userCommands(): Promise<UserCommand[]>;
@@ -2094,6 +2099,8 @@ export const bridge: LucidBridge = {
   pluginsStop: (id) => post("/api/plugins/stop", { id }),
   pluginsUninstall: (id, keepData = true) => post("/api/plugins/uninstall", { id, keepData }),
   pluginsLicense: (id) => getData(`/api/plugins/license?id=${encodeURIComponent(id)}`),
+  releaseCleanup: () => getData("/api/release-cleanup"),
+  releaseCleanupAck: () => post("/api/release-cleanup/ack", {}),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
   clearActiveSkill: () => post("/api/skill", { clear: true }),
   skillActivated: (command, name, source) => post("/api/skill/activated", { command, name, source }),

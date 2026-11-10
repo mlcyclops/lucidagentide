@@ -16510,10 +16510,26 @@ const pluginsFlyout = createPluginsFlyout({
   storage: localStorage,
   now: Date.now,
 });
-function openPluginsDrawer(tier?: "premium" | "free"): void {
+function openPluginsDrawer(tier?: "premium" | "free" | "installed"): void {
   const from = document.activeElement as HTMLElement | null; // openPreview may move focus; Esc returns here
   if (!previewOpen) openPreview();
   pluginsFlyout.open(tier, from);
+}
+/** ADR-0536: once after start, tell the user what the move from a dev build to this release removed (data kept)
+ *  and which dev settings it now ignores. Shown once: acknowledged as soon as it appears. */
+async function showReleaseCleanupNotice(): Promise<void> {
+  const r = await bridge.releaseCleanup();
+  if (!r) return;
+  void bridge.releaseCleanupAck();
+  const names = r.removed.map((m) => m.name).join(", ");
+  const lines = [
+    ...(r.removed.length ? [`This release removed development modules: ${names}. Their data is kept. To use them again, reinstall them from Plugins, Installed, Install from file.`] : []),
+    ...(r.envIgnored.length ? [`This release ignores development settings: ${r.envIgnored.join(", ")}.`] : []),
+  ];
+  showToast({
+    tone: "info", title: "Development changes removed", desc: lines.join(" "), timeout: 0,
+    actions: [...(r.removed.length ? [{ label: "Open Installed", kind: "ok" as const, run: () => openPluginsDrawer("installed") }] : []), { label: "OK" }],
+  });
 }
 /** Scripts, same-origin storage, forms, popups and downloads: what a real app needs. Safe to combine because the
  *  plugin's origin is never the renderer's, so allow-same-origin cannot reach this window. */
@@ -16921,6 +16937,7 @@ function wire(): void {
   $("#railMarket")?.addEventListener("click", () => openPluginsDrawer("free")); // P-PLUGINS.1 (ADR-0461): the old marketplace entry
   $("#prevPlugins")?.addEventListener("click", (e) => pluginsFlyout.toggle(e.currentTarget as HTMLElement)); // P-PLUGINS.1
   window.addEventListener("focus", () => pluginsFlyout.onWindowFocus()); // P-PLUGINS.1: finish a checkout done in the browser
+  void showReleaseCleanupNotice(); // ADR-0536
   // CREATOR-0 (ADR-0282): the Creator Studio rail entry + its whole delegated surface.
   $("#railStudio")?.addEventListener("click", () => openCreatorStudio());
   $("#studioClose")?.addEventListener("click", () => closeCreatorStudio());

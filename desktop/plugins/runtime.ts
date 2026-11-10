@@ -34,6 +34,8 @@ import { formatSquatter, ownerProbeSpec, parseOwnerProbe } from "../port_guard.t
 import { listInstalled, pluginDataDir, pluginsRoot, readInstalled, type InstalledPlugin } from "./install.ts";
 import { removePluginMcp, setPluginMcp, type PluginMcpServer } from "./mcp.ts";
 import { PLUGIN_PORT_MAX, PLUGIN_PORT_MIN } from "./ports.ts";
+import { DEV_ONLY_ENV, isDevVersion } from "../release_cleanup.ts";
+import { APP_VERSION } from "../version.ts";
 
 const HEALTH_TIMEOUT_MS = 30_000;
 const STOP_WAIT_MS = 5_000;
@@ -60,6 +62,8 @@ export interface RuntimeDeps {
   healthTimeoutMs?: number;
   root?: string;
   platform?: string;
+  /** The IDE's own version (default APP_VERSION); a dev build passes the development license variables (ADR-0536). */
+  appVersion?: string;
 }
 
 interface Running {
@@ -146,9 +150,6 @@ const PASS_ENV = [
   "USERPROFILE", "HOME", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles",
   "ProgramFiles(x86)", "CommonProgramFiles", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS",
   "LANG", "LC_ALL", "TZ", "USER", "USERNAME", "LOGNAME", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
-  // A development license (remote-spokes add-on ADR-A092): the switch and the development PUBLIC key, set by the
-  // developer in their own environment. Neither is a secret; without them a plugin accepts publisher licenses only.
-  "LUCID_LICENSE_DEV", "LUCID_LICENSE_DEV_PUB",
 ];
 
 /** The contract env for one plugin (also the MCP child's env). */
@@ -164,9 +165,9 @@ export function pluginEnv(p: InstalledPlugin, port: number, agentBin: string): R
   };
 }
 
-function childEnv(contract: Record<string, string>, asNode: boolean): Record<string, string> {
+function childEnv(keys: readonly string[], contract: Record<string, string>, asNode: boolean): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const k of PASS_ENV) { const v = process.env[k]; if (v !== undefined) env[k] = v; }
+  for (const k of keys) { const v = process.env[k]; if (v !== undefined) env[k] = v; }
   Object.assign(env, contract);
   if (asNode) env.ELECTRON_RUN_AS_NODE = "1";
   return env;
@@ -210,9 +211,14 @@ export class PluginRuntime {
   private running = new Map<string, Running>();
   private starting = new Map<string, Promise<{ ok: true; url: string } | { ok: false; error: string }>>();
   private readonly platform: string;
+  private readonly envKeys: readonly string[];
 
   constructor(private readonly deps: RuntimeDeps) {
     this.platform = deps.platform ?? process.platform;
+    // The development license variables (remote-spokes add-on ADR-A092: the switch and the development PUBLIC
+    // key, neither a secret) reach a plugin only when the IDE itself is a dev build; a release drops them, so a
+    // plugin there accepts publisher licenses only (ADR-0536).
+    this.envKeys = isDevVersion(deps.appVersion ?? APP_VERSION) ? [...PASS_ENV, ...DEV_ONLY_ENV] : PASS_ENV;
   }
 
   private root(): string { return this.deps.root ?? pluginsRoot(); }
@@ -322,7 +328,7 @@ export class PluginRuntime {
     let proc: ChildProcess;
     try {
       proc = spawn(cmd, args, {
-        cwd: p.dir, env: childEnv({ ...contract, LUCID_PLUGIN_HOST_TOKEN: hostToken }, asNode), stdio: ["ignore", "pipe", "pipe"],
+        cwd: p.dir, env: childEnv(this.envKeys, { ...contract, LUCID_PLUGIN_HOST_TOKEN: hostToken }, asNode), stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true, detached: this.platform !== "win32",
       });
     } catch (err) { return { ok: false, error: `could not start: ${(err as Error).message}` }; }
@@ -380,7 +386,7 @@ export class PluginRuntime {
     const args = (m.args ?? []).map((a) => (safeRelPath(a) && a in files ? join(p.dir, a) : a));
     // The same allowlisted env the plugin's own process gets, so the MCP child starts identically whether or
     // not omp merges its own environment into a stdio server's.
-    const env = Object.entries(childEnv(pluginEnv(p, port, this.deps.agentBin()), asNode)).map(([name, value]) => ({ name, value }));
+    const env = Object.entries(childEnv(this.envKeys, pluginEnv(p, port, this.deps.agentBin()), asNode)).map(([name, value]) => ({ name, value }));
     return { name: `plugin-${p.manifest.id}`, command, args, env };
   }
 

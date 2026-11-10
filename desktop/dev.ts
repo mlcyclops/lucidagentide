@@ -41,6 +41,7 @@ import { flavorInfo, buildInfoView, normalizeUiMode, resolveBuildFlavor, uiModeP
 import { buildLocalAgentManifest, writeLocalAgentManifest } from "./local_agent_manifest.ts"; // P-LEGIBLE.1 (ADR-0384)
 import { mcpServersForAcp } from "./settings_store.ts"; // P-LEGIBLE.1: the configured MCP servers the manifest declares
 import { APP_VERSION } from "./version.ts"; // CREATOR-0: /api/build-info reports the single-sourced version
+import { acknowledgeReleaseCleanup, pendingReleaseCleanup, runReleaseCleanup } from "./release_cleanup.ts"; // ADR-0536
 import {
   CREATOR_PRESSURE_PCT, CREATOR_SUSTAIN_MS, CREATOR_WARM_PCT, creatorAdmission, freshnessOf, gpuFromDcgm,
   pushCreatorSample, sampleCreatorCpu, sampleLocalGpu, sampleOf, telemetryFromAgentJson, validateRemoteTarget,
@@ -2044,6 +2045,9 @@ const plugins = new PluginRuntime({
   onMcpChange: () => backend.restart(),
 });
 process.on("exit", () => { try { plugins.stopAllSync(); } catch { /* dying anyway */ } });
+// ADR-0536: the first start of a release after a dev build removes the development modules (data kept), before
+// any plugin can start. Every start records the version that ran. A failure here must never stop the engine.
+try { runReleaseCleanup(APP_VERSION); } catch (e) { console.error(`[release-cleanup] ${e instanceof Error ? e.message : String(e)}`); }
 // P-PREVIEW.3a-shot (ADR-0096): latest PNG of the rendered preview, pushed by the renderer after each render
 // (Electron capturePage → /api/preview/shot-cache) and read by the agent's preview_screenshot tool. In-memory.
 let latestPreviewShot: string | null = null;
@@ -6014,6 +6018,9 @@ return Bun.serve({
         if (!stopped.ok) return json({ ok: true, data: stopped });
         return json({ ok: true, data: uninstallPlugin(id, b.keepData !== false) });
       }
+      // ADR-0536: the notice for the last dev-to-release cleanup, shown once; ack marks it seen.
+      if (p === "/api/release-cleanup" && req.method === "GET") return json({ ok: true, data: pendingReleaseCleanup() });
+      if (p === "/api/release-cleanup/ack" && req.method === "POST") return json({ ok: true, data: acknowledgeReleaseCleanup() });
       // P-SKILLREG.2 (ADR-0102): the PUBLISH seam. Reads a codified skill's SKILL.md and publishes it as a
       // versioned artifact to the configured targets (fail-safe fan-out). Public ships the LOCAL publisher;
       // a declared remote with no registered publisher is a clean no-op. Publishing establishes NO trust:

@@ -52,7 +52,8 @@ const SCAN_SLICE_CHARS = 200_000;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-const dataRoot = (): string => process.env.LUCID_DATA_ROOT || join(homedir(), ".omp");
+/** The LUCID data root (~/.omp; LUCID_DATA_ROOT overrides). */
+export function dataRoot(): string { return process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"); }
 /** userData/plugins (LUCID_PLUGINS_DIR overrides, for tests and isolated smoke runs). */
 export function pluginsRoot(): string { return process.env.LUCID_PLUGINS_DIR || join(dataRoot(), "plugins"); }
 /** userData/plugin-data/<id>: the plugin's writable state, never removed by an update. */
