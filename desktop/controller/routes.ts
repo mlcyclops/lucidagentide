@@ -41,7 +41,7 @@ import { isLaneCount, PAIRING_NAME_RE, SPOKE_NODE_RE, type Pairing, type Pairing
 
 /** Routes the controller token opens. pair/unpair are NOT here: they stay on the UI token. */
 export const CONTROLLER_ROUTES: ReadonlySet<string> = new Set(
-  // ask, decide, deny: P-CTRL-REMOTE.1 (ADR-0525). The controller can read a remote ask and deny it; an allow
+  // ask, decide, deny: P-CTRL-REMOTE.1 (ADR-0531). The controller can read a remote ask and deny it; an allow
   // needs a decision the engine verifies against the paired root, so the controller only carries it.
   // close: ADR-0500.
   ["lanes", "spawn", "prompt", "status", "result", "cancel", "close", "ask", "decide", "deny"].map((r) => `/api/controller/${r}`),
@@ -113,7 +113,7 @@ function emit(deps: ControllerDeps, event: EventName, ids: { runId: string; sess
   new Telemetry({ runId: ids.runId, sessionId: ids.sessionId, sink: deps.sink }).emit(event, fields);
 }
 
-/** P-CTRL-REMOTE.1 (ADR-0525): the audit line for a tier-policy verdict raised inside the fleet. Throws when it
+/** P-CTRL-REMOTE.1 (ADR-0531): the audit line for a tier-policy verdict raised inside the fleet. Throws when it
  *  cannot be written, so the fleet refuses the action rather than run it unrecorded. Metadata only. */
 export function auditTierVerdict(deps: ControllerDeps, laneId: string, v: { ruling: string; tier: string; reason: string }): void {
   const p = deps.store.pairingForLane(laneId);
@@ -218,7 +218,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
     if (maxLanes !== undefined && !isLaneCount(maxLanes)) return malformed();
     const workspace = await resolveWorkspace(b.workspace!);
     if (!workspace) return reply(400, { ok: false, error: "workspace must be an existing absolute folder" });
-    // P-CTRL-REMOTE.1 (ADR-0525): a human pairing a REMOTE controller names the owner root whose certified hubs
+    // P-CTRL-REMOTE.1 (ADR-0531): a human pairing a REMOTE controller names the owner root whose certified hubs
     // may decide this pairing's parked asks. Without it the pairing is the plain supervised P-CTRL.2 kind.
     // ADR-0507: `presence: "required"` makes every remote allow carry user-presence evidence the engine verifies.
     let remote: RemotePolicy | undefined;
@@ -308,7 +308,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
     return reply(200, { ok: true, data: { turns, running: deps.fleet.laneRunning(laneId) === true } });
   }
 
-  // ── P-CTRL-REMOTE.1 (ADR-0525): remote decisions on a parked ask ────────────────────────────────────────
+  // ── P-CTRL-REMOTE.1 (ADR-0531): remote decisions on a parked ask ────────────────────────────────────────
   if (path === "/api/controller/ask") {
     if (req.method !== "GET" || [...url.searchParams.keys()].some((k) => k !== "laneId")) return malformed();
     return reply(200, { ok: true, data: { ask: deps.fleet.pendingAsk(laneId) } });
