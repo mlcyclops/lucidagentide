@@ -5915,7 +5915,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 
 ## P-MODEL.10 (ADR-0526): omp 18.18.6, Claude Fable 5.2 and Claude Mythos 5.2
 - **shipped (2026-11-10):** six omp packages 18.8.6 -> 18.18.6; `TypeSafeJudge` -> `NativeJudge` cutover; dead `.d.ts` packaging re-includes dropped; `task.isolation.enabled: false`; R-07 at 92; Fable/Mythos 5.2 at $8/$40, 1M ctx, cards, default-ladder slot. Root + desktop tsc clean, 758 tests pass, prefix 15166 bytes `16a11b9c2a5d` A/B identical, fail-closed OK.
-- **stubbed:** compiled-engine gate run once on this machine only; demo_p_jev_2's two source-text checks fail exactly as on origin/master d98c5bf (stale greps, not this increment); AskSage gov ids stay on 5.1.
+- **stubbed:** bundled Bun 1.4.2 -> 1.4.4 is required by omp 18.14+ (CI smoke caught it), proven contained only by the windows AppContainer smoke; compiled-engine gate run once on this machine only; demo_p_jev_2's two source-text checks fail exactly as on origin/master d98c5bf (stale greps, not this increment); AskSage gov ids stay on 5.1.
 - **next:** refresh demo_p_jev_2's stale `dev.ts`/bundle greps; watch for `google-antigravity` being un-paused upstream.
 
 ## P-BOOTPERF.1 (ADR-0527): the boot burst never blocks the engine's event loop
