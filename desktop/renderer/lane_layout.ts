@@ -225,13 +225,14 @@ function withFit(base: LaneLayout, autofit: unknown, fit: unknown, order: readon
   if (autofit === false) out.autofit = false;
   if (fit && typeof fit === "object" && !Array.isArray(fit)) {
     const bag = fit as Record<string, unknown>;
-    const kept: Record<string, FitWeight> = {};
-    let any = false;
+    // Built through fromEntries, never `kept[id] = w`: a stored lane id is untrusted, and `__proto__` as
+    // an assignment target would set the prototype instead of an own entry (CodeQL remote-property-injection).
+    const kept: [string, FitWeight][] = [];
     for (const id of order) {
-      const w = fitWeight(bag[id]);
-      if (w) { kept[id] = w; any = true; }
+      const w = Object.hasOwn(bag, id) ? fitWeight(bag[id]) : null;
+      if (w) kept.push([id, w]);
     }
-    if (any) out.fit = kept;
+    if (kept.length) out.fit = Object.fromEntries(kept);
   }
   return out;
 }
