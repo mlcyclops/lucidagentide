@@ -6012,3 +6012,47 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-09):** `native/lucid-holder` (Rust, the first crate, ADR-0533) owns each fleet lane's agent (spool by offset, named pipe or Unix socket with a token, job object or process group); `desktop/lane_holder.ts` + ACPClient held transport + `FleetLaneManager.reattach` + boot reattach before `restoreControllerLanes`; `bun run build-holder` in every dist; CI builds and tests it. `make demo-P-HOLDER.1` (engine SIGKILLed mid-turn, the next engine settles the same turn on the same agent) and the full suite pass on Windows (7787 pass, 0 fail).
 - **stubbed:** the master chat session is not held; on systemd spokes the add-on keeps holders off (the unit's cgroup stop would end them; a holder service of their own is the add-on's next step, add-on ADR-A080). Since: run on Debian 13 and macOS (tests and the demo pass; a macOS socket path past sun_path now goes to /tmp/lucid-holder-<uid>), CI `holder-posix` green on ubuntu and macOS.
 - **next:** the release workflow on all three OSes; hold the master session.
+## P-SEASON.1 (ADR-0525): U.S. holiday and event-month special themes, animated backdrops, seasonal mascot acts
+- **shipped (2026-11-08):** 21 seasons (`seasons.ts`, nth-weekday/Easter/even-year calendar, peak-day precedence) over 16 new special palettes (+ Ember for Thanksgiving) in styles.css and trainer.html; Settings > Theme > Special themes: opt-in calendar checkbox, swatch dropdown that pins a season, backdrop and placement selects, live preview tile with the act; 16 stateless canvas backdrops (`scenes/`), perf-tier throttled; `mascot_season.ts` costumes + acts in the prompt-bar runner and the splash; flush eye band, 16-beat 50 ms gait, hover hop, click leap-dash with afterimages. `make demo-P-SEASON.1` green; renderer suite 1702 pass; served `/app.js` + `/styles.css` grepped on a fresh engine.
+- **stubbed:** scene paint cost measured only in a harness (leaves ~7 ms at 1920x1080 including GPU, others under 4 ms); not run in the packaged Electron build; the immersive-stage path verified via the shared `syncSeasonBackdrop`, the screenshot was the "behind every chat" path.
+- **next:** look at leaves' frame cost on a low-end laptop; delete `desktop/_qa_lead*/` once the user has reviewed the Christmas composer preview.
+
+## Release cut: v2.5.3-beta.1 (prerelease): special themes
+- **shipped (2026-11-08):** version 2.5.3-beta.1 at version.ts and desktop/package.json on master after #580 (P-SEASON.1, ADR-0525); built and published as a GitHub PRERELEASE through the `beta_release` dispatch of build-desktop.yml (ADR-0395).
+- **stubbed:** README, HANDOFF and the bug template stay on 2.5.2 (Latest); the Homebrew cask is not moved for a prerelease.
+- **next:** install the beta, check the special themes in the packaged app (leaves frame cost, the LUCID Agent stage backdrop), then promote to v2.5.3 stable.
+
+## P-MODEL.10 (ADR-0526): omp 18.18.6, Claude Fable 5.2 and Claude Mythos 5.2
+- **shipped (2026-11-10):** six omp packages 18.8.6 -> 18.18.6; `TypeSafeJudge` -> `NativeJudge` cutover; dead `.d.ts` packaging re-includes dropped; `task.isolation.enabled: false`; R-07 at 92; Fable/Mythos 5.2 at $8/$40, 1M ctx, cards, default-ladder slot. Root + desktop tsc clean, 758 tests pass, prefix 15166 bytes `16a11b9c2a5d` A/B identical, fail-closed OK.
+- **stubbed:** bundled Bun 1.4.2 -> 1.4.4 is required by omp 18.14+ (CI smoke caught it), proven contained only by the windows AppContainer smoke; compiled-engine gate run once on this machine only; demo_p_jev_2's two source-text checks fail exactly as on origin/master d98c5bf (stale greps, not this increment); AskSage gov ids stay on 5.1.
+- **next:** refresh demo_p_jev_2's stale `dev.ts`/bundle greps; watch for `google-antigravity` being un-paused upstream.
+
+## P-BOOTPERF.1 (ADR-0527): the boot burst never blocks the engine's event loop
+- **shipped (2026-11-10):** async sessions/usage/code-activity/compaction-policy/omp probe, promise-cached memos, cached workspace bar (`lucid.workspace`), self-healing Reconnect (`shouldReprobeStatus`). Real-engine burst, before/after: /api/workspace 10991/26 ms, /api/chat/status 10038/4 ms, /api/net-status 31352/1803 ms, heartbeat p95 30042/458 ms.
+- **stubbed:** `/api/sessions` cold is slower end to end (9.9 s -> 16.2 s) because it now yields; sessionMessages, sandbox probes and the session_metrics walk are still synchronous.
+- **next:** measure the packaged Windows build cold (antivirus-scanned) with the same burst replay; move sessionMessages' scan off the loop.
+
+## P-FLEET.FIT1 (ADR-0528): fleet lanes autofit the dock, equal sizes, resize shares the rest
+- **shipped (2026-11-10):** Autofit on by default with a header toggle; `autofitGrid`/`autofitSections` tiling (min 320x260, aspect 1.4), equal-share edge resize, double-click reset, share persistence, ResizeObserver + MutationObserver refit. 130 layout tests; live 2x2 fill of 1258x831, 150 px drag -> 764/464, reset, 5 lanes -> 3+2.
+- **stubbed:** not exercised in the packaged Electron window or the orbit view's spoke windows.
+- **next:** offer autofit for the orbit view's opened lane windows if the operator wants the same behavior there.
+
+## P-PUSH.PAR1 (ADR-0529): staged-prompt copy menu, Push now runs in a parallel worktree lane
+- **shipped (2026-11-10):** right-click / long-press menu (Copy prompt, Copy and remove, Steer running turn) on composer and lane chips; Push now spawns `<source>-push-<n>` on its own worktree with a preamble and tells the user the source agent is still working; queue peek + text-guarded remove + `no-repo` code; lane Push-now width overlap and per-paint chip rebuild fixed. 154 tests; live mocked-fleet run proved the full wire sequence, clipboard full text, long-press 8/8.
+- **stubbed:** main-composer Push now proven by unit tests only (needs a live master turn to stage). Lane Push now proven against real omp 18.18.6 lanes on a scratch repo: worktree branch + first reply confirmed, and the drain-during-push double run it exposed is fixed (`laneDrainReady`).
+- **next:** stage and push from the main composer during a live master turn in the installed beta.
+
+## Release cut: v2.5.3-beta.2 (prerelease): omp 18.18.6, Fable/Mythos 5.2, Windows boot, fleet autofit, parallel Push now
+- **shipped (2026-11-10):** version 2.5.3-beta.2 at version.ts and desktop/package.json on master after #586 (P-MODEL.10, P-BOOTPERF.1, P-FLEET.FIT1, P-PUSH.PAR1; ADR-0526 to ADR-0529), built and published as a GitHub prerelease by the build-desktop beta_release dispatch.
+- **stubbed:** README, HANDOFF and the bug template stay on 2.5.2 (Latest); the Homebrew cask is not moved for a prerelease.
+- **next:** install the beta on Windows, time the workspace bar and the Reconnect button at startup, push a staged prompt from the main composer during a live turn, then promote to v2.5.3 stable.
+
+## P-PRIVAI.1 (ADR-0530): the DGX Loader is now the Private AI Platform (display rename, identifiers kept)
+- **shipped (2026-11-10):** every current UI string, toast, tooltip, route error, probe note, CUI refusal reason, registry note, skill and guide names the Private AI Platform; provider ids, `enclave.kind`, the `dgx-loader` source value and its `/^dgx-loader\b/i` attestation regex, contract kinds, mailbox paths, env vars, appId and fixtures unchanged; `make demo-P-PRIVAI.1`.
+- **stubbed:** history (old ADRs, PROGRESS entries, dated fleet-brief notes) keeps the old name on purpose. Verified: demo green after build-renderer, and a fresh engine's served `/app.js` has "Import from the Private AI Platform" 5 times and "DGX Loader" 0 times.
+- **next:** ship it in the next beta; the platform's own rename (TL187 Private AI Platform, userData pinned) ships in its repo.
+
+## Release cut: v2.5.3-beta.3 (prerelease): the Private AI Platform name
+- **shipped (2026-11-10):** version 2.5.3-beta.3 at version.ts and desktop/package.json on master after #588 (P-PRIVAI.1, ADR-0530), built and published as a GitHub prerelease by the build-desktop beta_release dispatch.
+- **stubbed:** README, HANDOFF and the bug template stay on 2.5.2 (Latest); the Homebrew cask is not moved for a prerelease.
+- **next:** install the beta, check Creator Studio and Settings > Voice name the Private AI Platform, then promote the 2.5.3 betas to v2.5.3 stable.

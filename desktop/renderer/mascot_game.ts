@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-import { MASCOT_H, MASCOT_RUN_FRAMES, MASCOT_THEMES, MASCOT_W, paintFrame } from './mascot.ts';
+import { MASCOT_H, MASCOT_RUN_BEAT_MS, MASCOT_RUN_FRAMES, MASCOT_THEMES, MASCOT_W, paintFrame } from './mascot.ts';
 import { MINI_GAMES, type MiniGameHandle } from './mascot_minigames.ts';
 import { ARCADE_GAMES, type ArcadeGameId } from '../arcade_games.ts';
 
@@ -706,7 +706,7 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort,
     }
     const spriteScale = arcadeScale(state.width);
     if (!state.invulnerableMs || Math.floor(state.invulnerableMs / 90) % 2 === 0) {
-      let frame: string = MASCOT_RUN_FRAMES[Math.floor(state.elapsedMs / 80) % MASCOT_RUN_FRAMES.length]!;
+      let frame: string = MASCOT_RUN_FRAMES[Math.floor(state.elapsedMs / MASCOT_RUN_BEAT_MS) % MASCOT_RUN_FRAMES.length]!;
       if (!playing || state.mode === 'flycatch') frame = 'guard';
       if (state.attack) {
         const duration = state.attack === 'kick' ? 330 : 230;

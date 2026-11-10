@@ -285,11 +285,11 @@ export async function probeProvider(deps: ProbeDeps, providerId: CreatorProvider
     case "openfilm":
       return ep ? probeOpenfilm(deps, ep) : result("openfilm", "skipped", "No OpenFilm executable is declared yet.", deps.now(), deps.now());
     case "dgx-avatar":
-      return ep ? probeDgxHealth(deps, "dgx-avatar", ep) : result("dgx-avatar", "skipped", "No DGX avatar endpoint is declared yet. Import one from the DGX Loader mailbox.", deps.now(), deps.now());
+      return ep ? probeDgxHealth(deps, "dgx-avatar", ep) : result("dgx-avatar", "skipped", "No DGX avatar endpoint is declared yet. Import one from the Private AI Platform mailbox.", deps.now(), deps.now());
     case "dgx-cad":
-      return ep ? probeDgxHealth(deps, "dgx-cad", ep) : result("dgx-cad", "skipped", "No DGX CAD endpoint is declared yet. Import one from the DGX Loader mailbox.", deps.now(), deps.now());
+      return ep ? probeDgxHealth(deps, "dgx-cad", ep) : result("dgx-cad", "skipped", "No DGX CAD endpoint is declared yet. Import one from the Private AI Platform mailbox.", deps.now(), deps.now());
     case "dgx-vision":
-      return ep ? probeDgxHealth(deps, "dgx-vision", ep) : result("dgx-vision", "skipped", "No DGX vision endpoint is declared yet. Import one from the DGX Loader mailbox.", deps.now(), deps.now());
+      return ep ? probeDgxHealth(deps, "dgx-vision", ep) : result("dgx-vision", "skipped", "No DGX vision endpoint is declared yet. Import one from the Private AI Platform mailbox.", deps.now(), deps.now());
     case "pdf-markup":
       return probeBuiltIn(deps, "pdf-markup", ["pdf-markup"]);
     case "design":
@@ -393,7 +393,7 @@ export async function probeDrift(deps: ProbeDeps, ep: CreatorEndpointDef | undef
   return result("drift", "ready", `Drift ${version} answered at ${baseUrl}${fromSession ? " (Agent access session)" : " (declared endpoint)"}; proven: ${attested.join(", ")}.`, startedAt, deps.now(), attested, init.version);
 }
 
-/** The DGX Loader services: `/health` both proves reachability AND reports what the box can do. */
+/** The Private AI Platform services: `/health` both proves reachability AND reports what the box can do. */
 export async function probeDgxHealth(deps: ProbeDeps, providerId: "dgx-avatar" | "dgx-cad" | "dgx-vision", ep: CreatorEndpointDef): Promise<ProbeResult> {
   const startedAt = deps.now();
   const base = (ep.baseUrl ?? "").replace(/\/+$/, "");
@@ -401,7 +401,7 @@ export async function probeDgxHealth(deps: ProbeDeps, providerId: "dgx-avatar" |
   const r = await readJson(deps, `${base}/health`, {});
   const now = deps.now();
   if (r.status === 401 || r.status === 403) return result(providerId, "unauthorized", `${base} refused the request.`, startedAt, now);
-  if (!r.status) return result(providerId, "unreachable", `${base} did not answer. Is the SSH forward from the DGX Loader running?`, startedAt, now);
+  if (!r.status) return result(providerId, "unreachable", `${base} did not answer. Is the SSH forward from the Private AI Platform running?`, startedAt, now);
   if (r.status >= 400) return result(providerId, "unreachable", `${base} answered ${r.status}.`, startedAt, now);
   if (providerId === "dgx-avatar") {
     const h = parseAvatarHealth(r.body);

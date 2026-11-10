@@ -327,8 +327,10 @@ export const DEFAULT_MODEL_PREFERENCE: readonly RegExp[] = [
   /gpt-6(?:\.\d+)?-sol(?![\w.-])/,
   /gpt-6(?:\.\d+)?(?:-(?!mini|nano|lite|flash|oss|luna)[a-z]+)?(?![\w.-])/, // any other GPT-6 tier, and bare gpt-6
   /gpt-6(?:\.\d+)?-luna(?![\w.-])/,
-  /claude-fable-5[-.]1(?![\w.-])/,                                      // Fable 5.1 (API-credit billed, see isApiOnlyModel)
-  /claude-mythos-5[-.]1(?![\w.-])/,                                     // Mythos 5.1, shipped alongside Fable 5.1
+  // P-MODEL.10 (ADR-pending): Fable 5.2 / Mythos 5.2 (omp 18.18.6, $8/$40) replace the 5.1 pair here.
+  // Mythos 5.2 matches only when the account's model list carries it (Anthropic-verified orgs).
+  /claude-fable-5[-.]2(?![\w.-])/,                                      // Fable 5.2 (API-credit billed, see isApiOnlyModel)
+  /claude-mythos-5[-.]2(?![\w.-])/,                                     // Mythos 5.2, the same model for verified orgs
   /claude-fable-5(?![\w.-])/,
   // Sonnet 5.5 (omp 18.4.4, 2026-09-30): the balanced tier of the 5.5 family, directly above the Sonnet it
   // supersedes and below every flagship entry. `[-.]` takes both `claude-sonnet-5-5` and the aggregators'

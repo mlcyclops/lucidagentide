@@ -99,8 +99,30 @@ export function resolveOmpBin(i: OmpCandidateInput, canRun: OmpRunProbe): OmpRes
     if (verdict === "timeout") timedOut.push(c); // slow, not broken: still a usable fallback
     else rejected.push(c);
   }
-  // Nothing answered successfully. A candidate that timed out beats the bare name, which on a packaged
-  // install is the ONLY candidate we know is absent.
+  return unproven(rejected, timedOut);
+}
+
+/** P-BOOTPERF.1 (ADR-pending): resolveOmpBin with an ASYNC probe. Same candidate order, same verdicts,
+ *  same fallback rule. The engine needs it because the sync probe ran `omp --version` through
+ *  Bun.spawnSync on the one event loop that serves every /api route: up to OMP_PROBE_TIMEOUT_MS per
+ *  candidate on a cold, antivirus-scanned Windows launch, during which the workspace bar, the status
+ *  probes and every other request simply waited. Pure apart from the injected probe. */
+export async function resolveOmpBinAsync(i: OmpCandidateInput, canRun: (candidate: string) => Promise<boolean | "timeout">): Promise<OmpResolution> {
+  const rejected: string[] = [];
+  const timedOut: string[] = [];
+  for (const c of ompCandidates(i)) {
+    let verdict: boolean | "timeout" = false;
+    try { verdict = await canRun(c); } catch { verdict = false; } // a throwing probe is a failed probe
+    if (verdict === true) return { bin: c, proven: true, rejected, timedOut };
+    if (verdict === "timeout") timedOut.push(c);
+    else rejected.push(c);
+  }
+  return unproven(rejected, timedOut);
+}
+
+/** Nothing answered successfully. A candidate that timed out beats the bare name, which on a packaged
+ *  install is the ONLY candidate we know is absent. */
+function unproven(rejected: string[], timedOut: string[]): OmpResolution {
   if (timedOut.length) return { bin: timedOut[0]!, proven: false, indeterminate: true, rejected, timedOut };
   return { bin: "omp", proven: false, rejected, timedOut };
 }

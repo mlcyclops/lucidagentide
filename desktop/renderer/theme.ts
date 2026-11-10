@@ -26,6 +26,8 @@ export interface ThemeDef {
   scheme: "dark" | "light";
   blurb: string;       // one short sentence for the settings row
   swatch: [string, string, string]; // bg, accent, text preview hexes for the picker chip
+  /** P-SEASON.1: a special-theme palette, reached through a season (seasons.ts) rather than the base grid. */
+  special?: true;
 }
 
 // The swatch triplet is literally (--bg-0, --accent, --txt) out of that theme's palette block.
@@ -83,6 +85,88 @@ export const THEMES: readonly ThemeDef[] = [
     blurb: "Warm sepia light, easy on the eyes in a bright room.",
     swatch: ["#f6f0e4", "#9c2b6d", "#2b2418"],
   },
+  // P-SEASON.1 (ADR-0525): special-theme palettes. seasons.ts maps each U.S. holiday or event month to
+  // one of these (Thanksgiving reuses Ember); they stay out of the base grid via `special`.
+  {
+    id: "evergreen", label: "Evergreen", scheme: "dark", special: true,
+    blurb: "Pine green ground, Christmas red, warm gold.",
+    swatch: ["#07120d", "#e23b45", "#f1f6f1"],
+  },
+  {
+    id: "liberty", label: "Liberty", scheme: "dark", special: true,
+    blurb: "Deep navy, flag red and bright star blue.",
+    swatch: ["#060913", "#e5404f", "#f2f4fb"],
+  },
+  {
+    id: "honor", label: "Honor", scheme: "dark", special: true,
+    blurb: "Quiet charcoal with brass gold and steel blue.",
+    swatch: ["#0a0c0f", "#d6ab4c", "#eef0f3"],
+  },
+  {
+    id: "gilded", label: "Gilded", scheme: "dark", special: true,
+    blurb: "Midnight black with champagne gold and silver.",
+    swatch: ["#0f0e0a", "#e4c271", "#f8f4ea"],
+  },
+  {
+    id: "dawn", label: "Dawn", scheme: "dark", special: true,
+    blurb: "Indigo night breaking into sunrise amber.",
+    swatch: ["#070812", "#f2a44c", "#eff0fa"],
+  },
+  {
+    id: "rosewood", label: "Rosewood", scheme: "dark", special: true,
+    blurb: "Deep wine ground with rose and lilac.",
+    swatch: ["#12070b", "#ff527e", "#fcf0f4"],
+  },
+  {
+    id: "shamrock", label: "Shamrock", scheme: "dark", special: true,
+    blurb: "Clover green with a pot of gold.",
+    swatch: ["#07120c", "#33cf6e", "#eef8f1"],
+  },
+  {
+    id: "blossom", label: "Blossom", scheme: "dark", special: true,
+    blurb: "Twilight plum with cherry blossom pink.",
+    swatch: ["#10080e", "#ff80b8", "#fcf0f7"],
+  },
+  {
+    id: "harbor", label: "Harbor", scheme: "dark", special: true,
+    blurb: "Deep sea navy with lantern amber.",
+    swatch: ["#070c12", "#f2a53c", "#ebf2f8"],
+  },
+  {
+    id: "jubilee", label: "Jubilee", scheme: "dark", special: true,
+    blurb: "Warm dark ground with celebration red and gold.",
+    swatch: ["#100b0a", "#e8493d", "#f9f1ea"],
+  },
+  {
+    id: "heritage", label: "Heritage", scheme: "dark", special: true,
+    blurb: "Earth brown with turquoise and terracotta.",
+    swatch: ["#100c08", "#2fc0b1", "#f7efe7"],
+  },
+  {
+    id: "nightshade", label: "Nightshade", scheme: "dark", special: true,
+    blurb: "Witching-hour purple with pumpkin orange.",
+    swatch: ["#0d0811", "#ff8a24", "#f5effb"],
+  },
+  {
+    id: "gridiron", label: "Gridiron", scheme: "dark", special: true,
+    blurb: "Night turf with pigskin brown and trophy gold.",
+    swatch: ["#08100b", "#d08a45", "#f1f6f2"],
+  },
+  {
+    id: "pitch", label: "Pitch", scheme: "dark", special: true,
+    blurb: "Floodlit emerald with golden trim.",
+    swatch: ["#06130f", "#31e0a2", "#eefaf5"],
+  },
+  {
+    id: "podium", label: "Podium", scheme: "dark", special: true,
+    blurb: "Stadium blue with gold medal shine.",
+    swatch: ["#070912", "#f3c34f", "#eff3ff"],
+  },
+  {
+    id: "pastel", label: "Pastel", scheme: "light", special: true,
+    blurb: "Soft lilac light with mint, for spring.",
+    swatch: ["#f8f5fc", "#7a45c8", "#1d1727"],
+  },
 ];
 
 export const DEFAULT_THEME_ID = "lucid-dark";
@@ -139,11 +223,12 @@ export function monacoThemeFor(id: string): "lucid-dark" | "lucid-light" {
   return resolveTheme(id, false).scheme === "light" ? "lucid-light" : "lucid-dark";
 }
 
-/** Themes grouped for the settings picker, dark group first. */
+/** The base themes grouped for the settings picker, dark group first. Special-theme palettes are not
+ *  listed: they are chosen as a season (Settings > Theme > Special themes), never as a base theme. */
 export function themeGroups(): { scheme: "dark" | "light"; themes: ThemeDef[] }[] {
   // Dark first because the default is dark: the active row should be in the first group the
   // eye lands on. Order WITHIN a group is THEMES order (curated, not alphabetical).
   return (["dark", "light"] as const)
-    .map((scheme) => ({ scheme, themes: THEMES.filter((t) => t.scheme === scheme) }))
+    .map((scheme) => ({ scheme, themes: THEMES.filter((t) => t.scheme === scheme && !t.special) }))
     .filter((g) => g.themes.length > 0);
 }
