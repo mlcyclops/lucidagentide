@@ -148,7 +148,7 @@ status` first, learn flags from `--help`, pass explicit ids, and leave approvals
 engine, and the UI token alone. `lucid hub --skill` prints the same file, so an agent
 on any machine with LUCID installed can load it without the repo.
 
-## Fleet status for the terminal (OSC 7501, P-HERD-OSC.1, ADR-0530)
+## Fleet status for the terminal (OSC 7501, P-HERD-OSC.1, ADR-0536)
 
 `lucid hub` tells the terminal it runs in what the fleet is doing, with the
 [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status)

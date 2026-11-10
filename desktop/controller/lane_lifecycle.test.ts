@@ -231,7 +231,7 @@ describe("ADR-0501: lanes survive an engine restart", () => {
     expect((await b.call("spawn", pairing, {})).status).toBe(429);
   }, TIMEOUT);
 
-  // P-HOLDER.1 (ADR-0528): with a holder the same restart interrupts nothing: the turn carries on and records itself.
+  // P-HOLDER.1 (ADR-0534): with a holder the same restart interrupts nothing: the turn carries on and records itself.
   test.skipIf(!holderBinary())("under a holder, the turn in flight carries on after the restart and records itself", async () => {
     const repo = newRepo();
     const pool = new HolderPool(join(temp("holders"), "lane-holders"), holderBinary()!);

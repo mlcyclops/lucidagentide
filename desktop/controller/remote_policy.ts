@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/controller/remote_policy.ts - P-CTRL-REMOTE.1 (ADR-0525): what a REMOTE controller lane may do on its
+// desktop/controller/remote_policy.ts - P-CTRL-REMOTE.1 (ADR-0531): what a REMOTE controller lane may do on its
 // own, and how a human on another machine approves the rest. No engine state, unit-tested. The workspace boundary
 // reads the filesystem: it compares real paths, so a link inside the workspace cannot carry an action out of it.
 //
@@ -337,7 +337,7 @@ function checkDecision(input: DecisionInput, root: KeyObject, rootId: string, cr
   return { ok: true, allow: d.allow, approver: cert.node, label: typeof cert.label === "string" ? cert.label.slice(0, 64) : "", presence };
 }
 
-// ── Delegated approver certificates (ADR-0499, amends ADR-0525) ────────────────────────────────────────
+// ── Delegated approver certificates (ADR-0499, amends ADR-0531) ────────────────────────────────────────
 //
 // The add-on's phase F2 lets the owner root certify a delegate (a team or site key) with powers and limits. The
 // delegate signs hub certificates inside them, and its root-signed delegation travels inside every certificate it
@@ -424,7 +424,7 @@ function openDelegated(token: unknown, root: KeyObject, rootId: string, crl: Crl
   return { ok: true, cert: c, delegation: d };
 }
 
-/** The approver certificate's payload: root-signed (the ADR-0525 path), or signed by a delegate whose delegation
+/** The approver certificate's payload: root-signed (the ADR-0531 path), or signed by a delegate whose delegation
  *  the root signed (ADR-0499). Dates, revocation, role, scope and key of the certificate itself are checked by
  *  the caller on both paths; ADR-0510's spoke coverage of a delegated one too. */
 function openApproverCert(token: unknown, root: KeyObject, rootId: string, crl: CrlState, nowSec: number): Opened {

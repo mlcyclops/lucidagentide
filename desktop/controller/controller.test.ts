@@ -311,7 +311,7 @@ describe("events per route", () => {
 describe("403 paths", () => {
   test("no pairing is 403 with no detail on every controller route", async () => {
     const r = rig();
-    // ADR-0531: the schema is the one controller route the UI token (no pairing) also reads (openapi.test.ts).
+    // ADR-0537: the schema is the one controller route the UI token (no pairing) also reads (openapi.test.ts).
     for (const route of [...CONTROLLER_ROUTES].filter((p) => p !== "/api/controller/schema")) {
       const res = await r.call(route.slice("/api/controller/".length), null, { laneId: "lane-1", text: "x" });
       expect([res.status, res.text]).toEqual([403, "forbidden"]);

@@ -25,7 +25,7 @@ needs-approval pulse. #576: the Fleet Orbit ring drawn from the layout's
 radii (#575). Docs: the P-HERD design ADRs (ADR-0489 to ADR-0497, #560).
 Tagged `v2.5.2` and marked Latest. Held for 2.6.0: #573 (remote spokes,
 which carries #571 and the sessions stack as ADR-0515 to 0521, P-CTRL-REMOTE.1
-now ADR-0525), #571 (canvas orbit, must take `ringRx`/`ringRy`), #524/#525,
+now ADR-0531), #571 (canvas orbit, must take `ringRx`/`ringRy`), #524/#525,
 #512, #457, #351.
 
 **v2.5.1** (2026-11-05, branch `release/v2.5.1-cut`) was the previous stable release:

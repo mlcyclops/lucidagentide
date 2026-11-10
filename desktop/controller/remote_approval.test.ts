@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/controller/remote_approval.test.ts - P-CTRL-REMOTE.1 (ADR-0525). The REAL lane manager and the REAL
+// desktop/controller/remote_approval.test.ts - P-CTRL-REMOTE.1 (ADR-0531). The REAL lane manager and the REAL
 // controller routes against the faithful fake ACP agent (a real subprocess), which asks permission for exactly
 // the tool call a prompt scripts. What must hold:
 //   - the tier policy decides a remote lane's asks: T0/T1 inside the workspace run, known destructive and edits
@@ -84,7 +84,7 @@ function presentDecision(hub: Node, lane: string, ask: RemoteAsk, allow: boolean
 // One workspace for the file: on Windows a lane's agent process holds its cwd open until it exits, so a
 // per-test workspace cannot be removed in afterEach. It is removed once at the end, best effort.
 // Canonical, as the pair route stores it (it realpaths the workspace; on a GitHub Windows runner tmpdir() is the
-// 8.3 form C:\Users\RUNNER~1\...). The tier policy canonicalizes both sides itself since ADR-0526.
+// 8.3 form C:\Users\RUNNER~1\...). The tier policy canonicalizes both sides itself since ADR-0532.
 const ws = realpathSync.native(mkdtempSync(join(tmpdir(), "lucid-remote-ws-")));
 mkdirSync(join(ws, "src"));
 let dir: string;

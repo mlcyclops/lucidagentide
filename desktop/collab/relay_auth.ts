@@ -195,7 +195,7 @@ export function createFirebaseVerifier(cfg: FirebaseVerifierConfig): (token: str
  *   RELAY_JWKS_URL=<url>           (optional; tests / mirrors)
  *   RELAY_AUTH_DEADLINE_MS=5000    (optional)
  *   RELAY_MAX_ROOMS_PER_USER=4, RELAY_MAX_CONNECTS_PER_MINUTE=30, RELAY_RECLAIM_GRACE_MS=30000 (optional; the
- *   gate's quotas and re-claim grace, ADR-0534: so a broker, Bun or Rust, is configured by environment alone)
+ *   gate's quotas and re-claim grace, ADR-0540: so a broker, Bun or Rust, is configured by environment alone)
  */
 export function authFromEnv(
   env: Record<string, string | undefined>,

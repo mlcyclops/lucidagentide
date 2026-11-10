@@ -16515,7 +16515,7 @@ function openPluginsDrawer(tier?: "premium" | "free" | "installed"): void {
   if (!previewOpen) openPreview();
   pluginsFlyout.open(tier, from);
 }
-/** ADR-0536: once after start, tell the user what the move from a dev build to this release removed (data kept)
+/** ADR-0542: once after start, tell the user what the move from a dev build to this release removed (data kept)
  *  and which dev settings it now ignores. Shown once: acknowledged as soon as it appears. */
 async function showReleaseCleanupNotice(): Promise<void> {
   const r = await bridge.releaseCleanup();
@@ -16937,7 +16937,7 @@ function wire(): void {
   $("#railMarket")?.addEventListener("click", () => openPluginsDrawer("free")); // P-PLUGINS.1 (ADR-0461): the old marketplace entry
   $("#prevPlugins")?.addEventListener("click", (e) => pluginsFlyout.toggle(e.currentTarget as HTMLElement)); // P-PLUGINS.1
   window.addEventListener("focus", () => pluginsFlyout.onWindowFocus()); // P-PLUGINS.1: finish a checkout done in the browser
-  void showReleaseCleanupNotice(); // ADR-0536
+  void showReleaseCleanupNotice(); // ADR-0542
   // CREATOR-0 (ADR-0282): the Creator Studio rail entry + its whole delegated surface.
   $("#railStudio")?.addEventListener("click", () => openCreatorStudio());
   $("#studioClose")?.addEventListener("click", () => closeCreatorStudio());

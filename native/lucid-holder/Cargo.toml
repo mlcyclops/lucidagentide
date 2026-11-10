@@ -1,7 +1,7 @@
 # Copyright (c) 2026 TechLead 187 LLC
 # SPDX-License-Identifier: BUSL-1.1
 #
-# lucid-holder (P-HOLDER.1, ADR-0528): owns one lane's agent process so the engine can go away and come back.
+# lucid-holder (P-HOLDER.1, ADR-0534): owns one lane's agent process so the engine can go away and come back.
 
 [package]
 name = "lucid-holder"

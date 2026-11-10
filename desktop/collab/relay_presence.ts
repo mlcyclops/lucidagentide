@@ -39,7 +39,7 @@ export interface FirestoreRelayPresenceConfig {
   activityThrottleMs?: number;
   requestTimeoutMs?: number;
   /** The token endpoint (default: the Cloud Run metadata server) and the Firestore REST origin (default
-   *  https://firestore.googleapis.com), for an emulator or a conformance run against another broker (ADR-0534). */
+   *  https://firestore.googleapis.com), for an emulator or a conformance run against another broker (ADR-0540). */
   metadataTokenUrl?: string;
   firestoreUrl?: string;
   fetchImpl?: typeof fetch;

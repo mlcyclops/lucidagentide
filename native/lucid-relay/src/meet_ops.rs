@@ -1,4 +1,4 @@
-// Phase C (ADR-0534): the Meet relay server's own operations (meet_relay.RelayServer): the CRL bundle (the root's CRL
+// Phase C (ADR-0540): the Meet relay server's own operations (meet_relay.RelayServer): the CRL bundle (the root's CRL
 // and the signer's CRLs in crl.pem, rebuilt and applied to new connections), CRL and CA pushes, the signer for admins
 // (status, ledger, next key, installing an intermediate, revoking), the daily expiry check and its alerts, releases
 // (releases.json), the version gate and update links for the download server (meet_downloads.mint).

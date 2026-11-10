@@ -35,7 +35,7 @@
 // hub_palette.ts): one fused, scored list of spaces, tabs, agents and decks; Enter acts, Esc
 // closes, and it only ever opens from hub-owned focus (the same guard as the `:` prompt).
 //
-// P-HERD-OSC.1 (ADR-0530): each poll tick reports the fleet to the terminal with OSC 7501 (the
+// P-HERD-OSC.1 (ADR-0536): each poll tick reports the fleet to the terminal with OSC 7501 (the
 // Program Status Protocol, hub_program_status.ts), only what changed; quitting clears every record.
 //
 // The colors are the desktop design system (styles.css → the P-THEME.1 palette), so the hub and the
@@ -614,7 +614,7 @@ export class HubComponent implements Component {
   #status = "";
   #timer: NodeJS.Timeout | undefined;
   #disposed = false;
-  /** P-HERD-OSC.1 (ADR-0530): every fresh fleet snapshot, for the OSC 7501 reports. */
+  /** P-HERD-OSC.1 (ADR-0536): every fresh fleet snapshot, for the OSC 7501 reports. */
   readonly #onFleet: ((lanes: Record<string, unknown>[]) => void) | undefined;
 
   constructor(ui: HubUi, engine: EngineDiscovery, opts: { spawned?: boolean; spaces?: Spaces; prioritiesPath?: string; onFleet?: (lanes: Record<string, unknown>[]) => void } = {}) {
@@ -1823,7 +1823,7 @@ export async function runHubCli(env: Readonly<Record<string, string | undefined>
   spaces.onChange = () => { try { saveSpaces(layoutFile, spaces); } catch { /* layout is convenience, never fatal */ } };
   const tui = opts.headless ? null : new TUI(new ProcessTerminal());
   const ui: HubUi = tui ?? { requestRender() { /* no terminal */ }, terminal: { rows: 40 } };
-  // P-HERD-OSC.1 (ADR-0530): OSC 7501 fleet reports, written through the SAME terminal the frames
+  // P-HERD-OSC.1 (ADR-0536): OSC 7501 fleet reports, written through the SAME terminal the frames
   // go through (one write per batch, so a report never lands inside a frame's escape sequence).
   // A real TTY only, and LUCID_PROGRAM_STATUS=0 turns it off; headless has no terminal at all.
   const status = tui && programStatusEnabled(env, process.stdout.isTTY === true) ? new ProgramStatusEmitter((bytes) => tui.terminal.write(bytes)) : null;

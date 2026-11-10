@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/build/build-holder.ts - P-HOLDER.1 (ADR-0527, ADR-0528): build native/lucid-holder (Rust) for this machine
+// desktop/build/build-holder.ts - P-HOLDER.1 (ADR-0533, ADR-0534): build native/lucid-holder (Rust) for this machine
 // and stage it as bin/lucid-holder(.exe), which electron-builder ships under `<resources>/repo/bin` (the same folder
 // as lucid-engine) and lane_holder.ts holderBinary() finds there.
 //

@@ -1,4 +1,4 @@
-// The relay's control panel (ADR-A094; core ADR-0534, decision D3): an admin web app under /console/ on the relay's
+// The relay's control panel (ADR-A094; core ADR-0540, decision D3): an admin web app under /console/ on the relay's
 // own port, OFF unless `--console 1` or LUCID_RELAY_CONSOLE=1, its admins and passkeys in `console.json` in the state
 // folder. The flow is the Meeting Hub console's (console/meet_console_web.py): a one-time invite link (here minted by a
 // hub with the drive scope through the signed op POST /v1/console/invite, for the user its certificate names, good

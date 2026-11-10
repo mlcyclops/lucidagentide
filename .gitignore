@@ -109,7 +109,7 @@ tools/seed_personal_facts.ts
 !/bin/.gitkeep
 # P-HOLDER.1: cargo's build output for the one Rust crate (desktop/build/build-holder.ts copies the binary to bin/).
 /native/lucid-holder/target/
-# ADR-0534: the Rust relay's build output.
+# ADR-0540: the Rust relay's build output.
 /native/lucid-relay/target/
 netwatch.log
 

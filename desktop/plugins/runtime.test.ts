@@ -117,7 +117,7 @@ describe("server plugins", () => {
     expect(env.map((e) => e.name)).not.toContain("OPENAI_API_KEY");
   }, 60_000);
 
-  // ADR-0536: a release drops the development overrides, so a plugin there accepts publisher licenses only.
+  // ADR-0542: a release drops the development overrides, so a plugin there accepts publisher licenses only.
   test("a release drops the development license variables", async () => {
     process.env.LUCID_LICENSE_DEV = "1";
     process.env.LUCID_LICENSE_DEV_PUB = "MCowBQYDK2VwAyEAdevpublickey";

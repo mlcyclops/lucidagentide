@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/release_cleanup.ts - ADR-0536: a release clears what a dev build left behind.
+// desktop/release_cleanup.ts - ADR-0542: a release clears what a dev build left behind.
 //
 // The owner's rule: when a machine that ran a dev build of the IDE (a version like 2.6.0-dev.3) first runs a
 // release (2.6.0), every development module is removed, and the developer may reinstall it afterwards. A

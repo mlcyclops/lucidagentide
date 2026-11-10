@@ -62,7 +62,7 @@ export interface RuntimeDeps {
   healthTimeoutMs?: number;
   root?: string;
   platform?: string;
-  /** The IDE's own version (default APP_VERSION); a dev build passes the development license variables (ADR-0536). */
+  /** The IDE's own version (default APP_VERSION); a dev build passes the development license variables (ADR-0542). */
   appVersion?: string;
 }
 
@@ -217,7 +217,7 @@ export class PluginRuntime {
     this.platform = deps.platform ?? process.platform;
     // The development license variables (remote-spokes add-on ADR-A092: the switch and the development PUBLIC
     // key, neither a secret) reach a plugin only when the IDE itself is a dev build; a release drops them, so a
-    // plugin there accepts publisher licenses only (ADR-0536).
+    // plugin there accepts publisher licenses only (ADR-0542).
     this.envKeys = isDevVersion(deps.appVersion ?? APP_VERSION) ? [...PASS_ENV, ...DEV_ONLY_ENV] : PASS_ENV;
   }
 

@@ -1,4 +1,4 @@
-// Phase C (ADR-0534): what the Meet relay (relay/meet_relay.py) gets from Python itself. json.dumps text (`, ` and
+// Phase C (ADR-0540): what the Meet relay (relay/meet_relay.py) gets from Python itself. json.dumps text (`, ` and
 // `: ` separators, ensure_ascii, float repr), the truthiness and str() of a JSON value as the handlers read request
 // fields, base64, random tokens (secrets.token_hex, token_urlsafe) and the two clocks.
 
