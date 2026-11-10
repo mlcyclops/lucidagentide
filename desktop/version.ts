@@ -736,4 +736,8 @@
 //            at equal sizes and still resize (P-FLEET.FIT1, ADR-0528), and a staged-prompt copy menu with
 //            Push now running the prompt in a parallel worktree lane (P-PUSH.PAR1, ADR-0529). PRERELEASE:
 //            never marked Latest; the Homebrew cask and stable installs stay on 2.5.2.
-export const APP_VERSION = "2.5.3-beta.2";
+// v2.5.3-beta.3 = 2.5.3-beta.2 plus the DGX Loader's new name, the Private AI Platform, in every current
+//            UI string, toast, route error, probe note, CUI refusal reason, skill and guide; provider ids,
+//            the mailbox contract and the enclave attestation tag are unchanged (P-PRIVAI.1, ADR-0530).
+//            PRERELEASE: never marked Latest; the Homebrew cask and stable installs stay on 2.5.2.
+export const APP_VERSION = "2.5.3-beta.3";
