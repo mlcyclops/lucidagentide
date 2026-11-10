@@ -5930,5 +5930,5 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 
 ## P-PUSH.PAR1 (ADR-0529): staged-prompt copy menu, Push now runs in a parallel worktree lane
 - **shipped (2026-11-10):** right-click / long-press menu (Copy prompt, Copy and remove, Steer running turn) on composer and lane chips; Push now spawns `<source>-push-<n>` on its own worktree with a preamble and tells the user the source agent is still working; queue peek + text-guarded remove + `no-repo` code; lane Push-now width overlap and per-paint chip rebuild fixed. 154 tests; live mocked-fleet run proved the full wire sequence, clipboard full text, long-press 8/8.
-- **stubbed:** main-composer Push now proven by unit tests only (needs a live master turn to stage); not run against a real spawned omp lane.
-- **next:** push a real staged prompt from a busy lane in a git repo and confirm the worktree branch and the new lane's first reply.
+- **stubbed:** main-composer Push now proven by unit tests only (needs a live master turn to stage). Lane Push now proven against real omp 18.18.6 lanes on a scratch repo: worktree branch + first reply confirmed, and the drain-during-push double run it exposed is fixed (`laneDrainReady`).
+- **next:** stage and push from the main composer during a live master turn in the installed beta.

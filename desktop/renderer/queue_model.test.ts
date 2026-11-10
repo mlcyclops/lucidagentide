@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { Attachment } from "./composer_attachments.ts";
-import { addQueued, canSteer, editQueued, mainCheckoutCwd, nextHold, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pushLaneName, pushNowRoute, pushRecovery, type PushSource, type QueuedItem } from "./queue_model.ts";
+import { addQueued, canSteer, editQueued, laneDrainReady, mainCheckoutCwd, nextHold, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pushLaneName, pushNowRoute, pushRecovery, type PushSource, type QueuedItem } from "./queue_model.ts";
 
 const hold = (text: string): QueuedItem => ({ text, mode: "hold" });
 const push = (text: string): QueuedItem => ({ text, mode: "push" });
@@ -279,5 +279,22 @@ describe("parallel push: routing and fallbacks", () => {
     expect(canSteer({ hold: true, running: false, images: 0 })).toBe(false);
     expect(canSteer({ hold: true, running: true, images: 1 })).toBe(false);
     expect(canSteer({ hold: false, running: true, images: 0 })).toBe(false);
+  });
+});
+
+describe("laneDrainReady (P-PUSH.PAR1)", () => {
+  const idle = { streaming: false, queued: 2, status: "done", pushing: false };
+  test("an idle lane with staged prompts drains, from either idle status", () => {
+    expect(laneDrainReady(idle)).toBe(true);
+    expect(laneDrainReady({ ...idle, status: "awaiting-input" })).toBe(true);
+  });
+  test("a push in flight holds the queue: the pushed prompt belongs to the parallel lane, never the source", () => {
+    expect(laneDrainReady({ ...idle, pushing: true })).toBe(false);
+  });
+  test("busy, streaming, waiting on approval, or empty never drains", () => {
+    expect(laneDrainReady({ ...idle, status: "working" })).toBe(false);
+    expect(laneDrainReady({ ...idle, status: "needs-approval" })).toBe(false);
+    expect(laneDrainReady({ ...idle, streaming: true })).toBe(false);
+    expect(laneDrainReady({ ...idle, queued: 0 })).toBe(false);
   });
 });

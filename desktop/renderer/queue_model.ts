@@ -192,3 +192,11 @@ export function parallelPushRefusal(r: { reason?: string; code?: string }, ctx: 
 export function canSteer(ctx: { hold: boolean; running: boolean; images: number }): boolean {
   return ctx.hold && ctx.running && ctx.images === 0;
 }
+
+/** P-FLEET.L3 + P-PUSH.PAR1: may a lane run its next staged prompt now? Only when it is idle (no stream,
+ *  awaiting input or done) with something staged, and NOT while a push from it is in flight: the drain
+ *  pops the queue head, and the pushed prompt belongs to the parallel lane. Measured with a real lane
+ *  before this rule: a source that finished first ran the pushed prompt on its own checkout too. */
+export function laneDrainReady(ctx: { streaming: boolean; queued: number; status: string; pushing: boolean }): boolean {
+  return !ctx.streaming && ctx.queued > 0 && !ctx.pushing && (ctx.status === "awaiting-input" || ctx.status === "done");
+}

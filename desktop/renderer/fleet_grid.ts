@@ -26,7 +26,7 @@ import { popover, showToast } from "./ui.ts"; // P-FLEET.L18: the per-card group
 // P-PUSH.PAR1 (ADR-pending): staged chips get the shared right-click / long-press menu, and Push now runs the
 // prompt in a new worktree lane (the decision rules are pure, in queue_model).
 import { bindItemMenu, copyToClipboard, openCtxMenu, type CtxMenuEntry } from "./ctxmenu.ts";
-import { canSteer, mainCheckoutCwd, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pushLaneName, type PushSource } from "./queue_model.ts";
+import { canSteer, laneDrainReady, mainCheckoutCwd, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pushLaneName, type PushSource } from "./queue_model.ts";
 // P-FLEET.L18: the grid and the orbit are two faces of one fleet - the grid links back to the map and
 // shares the "which view does the Fleet button open" pin. Acyclic: fleet_orbit never imports the grid.
 import { fleetHome, openFleetOrbit, setFleetHome } from "./fleet_orbit.ts";
@@ -1726,6 +1726,8 @@ async function pushStagedParallel(run: LaneRun, i: number): Promise<void> {
     showToast({ tone: "info", title: n.title, desc, timeout: 9000 });
   } finally {
     pushingLanes.delete(id);
+    // The queue held for the push (maybeDrain); refresh re-reads it, so the pushed item is gone, and
+    // resumes the drain for every idle lane.
     void refresh();
   }
 }
@@ -1783,9 +1785,9 @@ export async function pushToNewLane(src: PushSource, text: string, images: LaneI
 /** P-FLEET.L3: run the next STAGED prompt when the lane is idle - streamed into the card like any turn.
  *  Guarded so only one drain fires per lane; approvals still glow and wait for a human mid-drain. */
 function maybeDrain(run: LaneRun): void {
-  if (!deps || run.streaming) return;
-  if (!run.view.queued.length) return;
-  if (run.view.status !== "awaiting-input" && run.view.status !== "done") return;
+  // P-PUSH.PAR1: the queue holds while a push from this lane is in flight; the push's settle (refresh)
+  // resumes it.
+  if (!deps || !laneDrainReady({ streaming: run.streaming, queued: run.view.queued.length, status: run.view.status, pushing: pushingLanes.has(run.view.id) })) return;
   const id = run.view.id;
   const next = run.view.queued[0]!;
   run.view.queued = run.view.queued.slice(1);
