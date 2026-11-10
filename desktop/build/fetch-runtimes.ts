@@ -21,9 +21,10 @@
 
 import { $ } from "bun";
 import { createHash } from "node:crypto";
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cachedRuntimeCurrent, parsePins, PINS_FILE, satisfiesMinimum } from "./runtime_pin.ts";
 
 // Locate the extracted member by basename, recursively. Cross-platform ON PURPOSE: it replaces a
 // `find … -name` shell call that on the Windows CI runner resolves to System32\find.exe (a text-search
@@ -233,12 +234,18 @@ if (specs.length === 0) {
 	console.warn(`fetch-runtimes: no runtime specs for platform "${TARGET}" — nothing to bundle.`);
 }
 
+// P-RUNTIME-PIN.1 (ADR-0547, issue #598): which pinned archive each runtime on disk came from. A runtime is
+// reused only when its record matches the current pin; a stale or unrecorded one is fetched again.
+const PINS_PATH = join(OUT, PINS_FILE);
+const pins = parsePins(existsSync(PINS_PATH) ? readFileSync(PINS_PATH, "utf8") : null);
+
 for (const spec of specs) {
 	const dest = join(OUT, spec.name);
-	if (!REFRESH && existsSync(dest)) {
-		console.log(`runtimes: ${spec.name} (cached)`);
+	if (!REFRESH && cachedRuntimeCurrent(existsSync(dest), pins, spec.name, spec.sha256)) {
+		console.log(`runtimes: ${spec.name} (cached, pin matches)`);
 		continue;
 	}
+	if (!REFRESH && existsSync(dest)) console.log(`runtimes: ${spec.name} on disk is not from the current pin; fetching it again`);
 
 	const tmp = join(OUT, `.tmp-${spec.name}`);
 	rmSync(tmp, { recursive: true, force: true });
@@ -310,6 +317,8 @@ for (const spec of specs) {
 		chmodSync(dest, 0o755);
 	}
 	rmSync(tmp, { recursive: true, force: true });
+	pins[spec.name] = spec.sha256;
+	writeFileSync(PINS_PATH, JSON.stringify(pins, null, 2) + "\n");
 	console.log(`runtimes: ${spec.name} ok (sha256 verified)`);
 }
 
@@ -352,6 +361,19 @@ if (!REFRESH) {
 		cpSync(src, plain);
 		chmodSync(plain, 0o755);
 		console.log(`runtimes: bun (plain alias for the omp shim -> ${suffixedBun.name})`);
+	}
+	// P-RUNTIME-PIN.1 (ADR-0547, issue #598): the bundled Bun must satisfy the bundled omp's `engines.bun`, or
+	// the packaged app's agent never starts. Checked by running it, so only when it is this machine's own
+	// platform and arch (a cross-staged runtime cannot run here).
+	if (TARGET === process.platform && TARGET_ARCH === process.arch) {
+		const ompPkg: unknown = JSON.parse(readFileSync(join(HERE, "..", "..", "node_modules", "@oh-my-pi", "pi-coding-agent", "package.json"), "utf8"));
+		const engines = ompPkg && typeof ompPkg === "object" && "engines" in ompPkg ? ompPkg.engines : null;
+		const range = engines && typeof engines === "object" && "bun" in engines && typeof engines.bun === "string" ? engines.bun : null;
+		const version = (await $`${plain} --version`.text()).trim();
+		if (range !== null && !satisfiesMinimum(version, range)) {
+			throw new Error(`fetch-runtimes: the bundled bun is ${version}, but omp needs bun ${range}; the packaged agent would not start. Raise BUN_VERSION.`);
+		}
+		console.log(`runtimes: bundled bun ${version} satisfies omp's engines.bun ${range ?? "(none declared)"}`);
 	}
 }
 

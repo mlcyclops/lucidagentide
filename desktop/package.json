@@ -64,7 +64,8 @@
         "filter": [
           "**/*",
           "!README.md",
-          "!.gitkeep"
+          "!.gitkeep",
+          "!.pins.json"
         ]
       },
       {
