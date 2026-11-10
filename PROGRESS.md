@@ -5932,3 +5932,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-10):** right-click / long-press menu (Copy prompt, Copy and remove, Steer running turn) on composer and lane chips; Push now spawns `<source>-push-<n>` on its own worktree with a preamble and tells the user the source agent is still working; queue peek + text-guarded remove + `no-repo` code; lane Push-now width overlap and per-paint chip rebuild fixed. 154 tests; live mocked-fleet run proved the full wire sequence, clipboard full text, long-press 8/8.
 - **stubbed:** main-composer Push now proven by unit tests only (needs a live master turn to stage). Lane Push now proven against real omp 18.18.6 lanes on a scratch repo: worktree branch + first reply confirmed, and the drain-during-push double run it exposed is fixed (`laneDrainReady`).
 - **next:** stage and push from the main composer during a live master turn in the installed beta.
+
+## Release cut: v2.5.3-beta.2 (prerelease): omp 18.18.6, Fable/Mythos 5.2, Windows boot, fleet autofit, parallel Push now
+- **shipped (2026-11-10):** version 2.5.3-beta.2 at version.ts and desktop/package.json on master after #586 (P-MODEL.10, P-BOOTPERF.1, P-FLEET.FIT1, P-PUSH.PAR1; ADR-0526 to ADR-0529), built and published as a GitHub prerelease by the build-desktop beta_release dispatch.
+- **stubbed:** README, HANDOFF and the bug template stay on 2.5.2 (Latest); the Homebrew cask is not moved for a prerelease.
+- **next:** install the beta on Windows, time the workspace bar and the Reconnect button at startup, push a staged prompt from the main composer during a live turn, then promote to v2.5.3 stable.
