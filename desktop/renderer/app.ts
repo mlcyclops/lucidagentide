@@ -11,7 +11,7 @@
 import { bridge, type AccountsSnapshot, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import type { TurnStatus } from "./chat_events.ts";
 import { currentSwitchPreflight, liveBadge, planSessionSwitch, spokeNameFor, switchOutcome, switchSheetCopy } from "./session_switch.ts"; // P-SWITCH.1 (ADR-0403), P-SWITCH.2 (ADR-0404)
-import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
+import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext, shouldReprobeStatus } from "./turn_restore.ts";
 // P-RECOVER.1 (ADR-0385): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
 import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
 import { REPORT_SAVED, clearRecoveryNotice, openIncidentSubmit, showIncidentNotice, showRecoveryNotice, type NoticeAction } from "./incident_notice.ts";
@@ -33,10 +33,10 @@ import { PREVIEW_ZOOM_MAX, PREVIEW_ZOOM_MIN, PreviewWheelSteps, stepPreviewZoom 
 import { PREVIEW_KIND_ICON, isAutoPreviewPath, laneTabId, pluginTabId, previewKindLabel, previewPathKind, removeLaneTab, upsertLaneTab, upsertPluginTab, type PreviewTab } from "./preview_tabs.ts";
 import { roleIcon } from "./role_icons.ts";
 import { budgetWindowState, providerBudgetRows, providerForModel, providerHasApiKey, providerKeywords } from "./budget_gate.ts";
-import { cachedSessions, cachedShareSnapshot, cachedSkills, cachedTranscript, setCachedSessions, setCachedShareSnapshot, setCachedSkills, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
+import { cachedSessions, cachedShareSnapshot, cachedSkills, cachedTranscript, cachedWorkspace, setCachedSessions, setCachedShareSnapshot, setCachedSkills, setCachedTranscript, setCachedWorkspace, transcriptSig } from "./swr_cache.ts";
 import { $, $$, accordion, el, fmtNum, gauge, spark, table, type Col } from "./dom.ts";
 import { freshFindings, splitReviewed } from "./sec_review.ts"; // P-SECACK.1 (ADR-0170): reviewed rows leave the active view
-import { installTextContextMenu } from "./ctxmenu.ts"; // P-SECACK.1 (ADR-0170): right-click clipboard menu
+import { bindItemMenu, copyToClipboard, installTextContextMenu, openCtxMenu, type CtxMenuEntry } from "./ctxmenu.ts"; // P-SECACK.1 (ADR-0170): right-click clipboard menu; P-PUSH.PAR1: the staged chip's item menu
 import { restoredTurnHtml } from "./steps_restore.ts"; // P-RESUME.1 (ADR-0171): resumed thinking/tool history
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
@@ -78,7 +78,7 @@ import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptim
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy, snapshotPhaseLabel, STARTING_AGENT_PHASE } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
-import { addQueued, editQueued, nextHold, pushRecovery, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery
+import { addQueued, canSteer, editQueued, nextHold, parallelPushNotice, parallelPushRefusal, pushNowRoute, pushRecovery, type PushSource, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery; P-PUSH.PAR1: Push now in a parallel worktree lane
 import { delegationSettled, filterRunsForBatch, mergeRunSamples, runEta, type RunSample, type TimedRun } from "./subagent_filter.ts"; // P-TASK.5a: scope each delegation card to ITS batch's runs
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView, KbPackImportView, PersonalGraphData } from "./bridge.ts";
@@ -113,7 +113,7 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
-import { closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid
+import { closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, pushToNewLane, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
 import { fleetHome, initFleetOrbit, noteSpokeAsk, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
 import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
@@ -362,6 +362,8 @@ const shortModelId = (v: string) => v.replace(/^anthropic\//, "").replace(/^asks
 const MODEL_CTX: Record<string, number> = {
   // P-MODEL.2: Fable/Mythos 5.1 and Opus 5.5 / Opus 5 are all 1M-context; GPT-6 (astra) ships at 1M too,
   // which is the first OpenAI generation to match Claude's window, so it must not inherit the 256K GPT-5 default.
+  // P-MODEL.10 (ADR-pending): Fable/Mythos 5.2 (omp 18.18.6 catalog): 1M context, 128K max output.
+  "claude-fable-5-2": 1_000_000, "claude-mythos-5-2": 1_000_000,
   "claude-fable-5-1": 1_000_000, "claude-mythos-5-1": 1_000_000,
   "claude-fable-5": 1_000_000, "claude-mythos-5": 1_000_000, "claude-opus-5-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
   "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
@@ -3074,10 +3076,13 @@ function setSendEnabled(): void {
 }
 /** P-INTERJECT.2 (was P-ACP.4): the staged-prompt STACK above the composer - one chip per item, in run
  *  order. Each chip: a mode badge ("next turn" hold / "mid-turn" push record), the ellipsized text with
- *  the full prompt in its title, Push now on hold items (interject the running turn instead of waiting),
- *  and remove. Every label is its own nowrap span (invariant #11).
+ *  the full prompt in its title, Push now / Send now on hold items, and remove. Every label is its own
+ *  nowrap span (invariant #11).
  *  P-QUEUE-IMG.1 (ADR-0469): an item's own images show as small thumbs (click one to copy it into the
- *  composer), and a hold item has Update, which pulls its text and images back into the composer. */
+ *  composer), and a hold item has Update, which pulls its text and images back into the composer.
+ *  P-PUSH.PAR1 (ADR-pending): while a turn runs, Push now runs the item IN PARALLEL in a new fleet lane on
+ *  its own git worktree (images included); idle, Send now just sends it as the next turn. Right-click or
+ *  long-press a chip for Copy prompt, Copy and remove, and Steer running turn (the old Push now). */
 function renderQueued(): void {
   let stack = $("#queuedChip");
   if (!state.queuedItems.length) { stack?.remove(); return; }
@@ -3085,19 +3090,19 @@ function renderQueued(): void {
     const row = $("#input")!.closest(".composer-row") ?? $("#input")!.parentElement!;
     stack = el(`<div id="queuedChip" class="queued-chip queued-stack"></div>`);
     row.before(stack); // sits above the composer row, inside .composer-wrap
+    bindItemMenu(stack, "[data-q-row]", (pill, x, y) => openQueuedMenu(Number(pill.dataset.qRow), x, y, pill)); // P-PUSH.PAR1: delegated, so it survives the innerHTML rebuilds below
   }
   const idle = !turnInFlight();
   stack.innerHTML = state.queuedItems.map((q, i) => {
     const n = q.atts?.length ?? 0;
     const imgs = n ? `<span class="q-imgs" data-tip="${n} image${n === 1 ? "" : "s"} ride with this prompt|Click one to copy it into the composer">${q.atts!.map((_, j) => `<button class="q-thumb" type="button" data-q-img="${i}:${j}" aria-label="Copy image ${j + 1} into the composer"><img class="q-thumb-img" alt="" /></button>`).join("")}</span>` : "";
-    // Push now is text-only (the interject wire carries no images), so an item with images never pushes:
-    // it stays staged and runs WITH its images as the next turn. The button explains instead of acting.
+    // P-PUSH.PAR1: an item already starting its parallel lane cannot be pushed or sent again until that settles.
     const push = q.mode !== "hold" ? ""
+      : pushingItems.has(q) ? `<button class="q-push q-push-off" data-q-push="${i}" aria-disabled="true" data-tip="Pushing|A new lane on its own worktree is starting for this prompt">Pushing\u2026</button>`
       : idle ? `<button class="q-push" data-q-push="${i}" data-tip="Send now|Send this as the next turn">Send now</button>`
-      : n ? `<button class="q-push q-push-off" data-q-push="${i}" aria-disabled="true" data-tip="Push now is text only|This prompt carries images, so it runs with them as the next turn">Push now</button>`
-      : `<button class="q-push" data-q-push="${i}" data-tip="Push now|Interject this into the running turn instead of waiting">Push now</button>`;
+      : `<button class="q-push" data-q-push="${i}" data-tip="Push now|Run this in parallel in a new lane on its own worktree" aria-label="Push now: run this in parallel in a new lane on its own worktree">Push now</button>`;
     const edit = q.mode === "hold" ? `<button class="q-push q-edit" data-q-edit="${i}" data-tip="Update|Pull this prompt and its images back into the composer to edit">Update</button>` : "";
-    return `<div class="q-pill" data-tip="${q.mode === "hold" ? (stopHoldsQueue ? "Held because you pressed Stop - it waits until you send" : "Sends automatically when the current turn ends") : "Already pushed into the running turn - kept as a record"}">
+    return `<div class="q-pill" data-q-row="${i}" data-tip="${q.mode === "hold" ? (stopHoldsQueue ? "Held because you pressed Stop - it waits until you send" : "Sends automatically when the current turn ends") : "Already pushed into the running turn - kept as a record"}|Right-click or long-press to copy it">
       <span class="q-label">${q.mode === "hold" ? "next turn" : "mid-turn"}</span>
       ${imgs}
       <span class="q-text" data-q-i="${i}"></span>
@@ -3115,7 +3120,12 @@ function renderQueued(): void {
     state.queuedItems = state.queuedItems.filter((_, n) => n !== i);
     renderQueued(); ($("#input") as HTMLTextAreaElement)?.focus();
   }));
-  $$("[data-q-edit]", stack).forEach((b) => b.addEventListener("click", () => editStagedPrompt(Number((b as HTMLElement).dataset.qEdit))));
+  $$("[data-q-edit]", stack).forEach((b) => b.addEventListener("click", () => {
+    const i = Number((b as HTMLElement).dataset.qEdit);
+    // P-PUSH.PAR1: pulled back mid-push, the same prompt would sit in the composer AND run in the new lane.
+    if (pushingItems.has(state.queuedItems[i]!)) { showToast({ tone: "warn", title: "Still pushing", desc: "This prompt is starting in a new parallel lane. Update it once that settles; if the push fails it stays here.", timeout: 4000 }); return; }
+    editStagedPrompt(i);
+  }));
   $$("[data-q-img]", stack).forEach((b) => b.addEventListener("click", () => {
     const [i, j] = ((b as HTMLElement).dataset.qImg ?? "").split(":").map(Number);
     const a = state.queuedItems[i!]?.atts?.[j!]; if (!a) return;
@@ -3127,22 +3137,104 @@ function renderQueued(): void {
   }));
   $$("[data-q-push]", stack).forEach((b) => b.addEventListener("click", () => {
     const i = Number((b as HTMLElement).dataset.qPush);
-    const item = state.queuedItems[i]; if (!item) return;
-    if (turnInFlight() && item.atts?.length) {
-      showToast({ tone: "warn", title: "Push now is text only", desc: "A mid-turn push cannot carry images. This prompt stays staged and runs with its images as the next turn.", timeout: 5000 });
-      return;
-    }
+    const item = state.queuedItems[i]; if (!item || pushingItems.has(item)) return;
+    const src = pushSource();
+    const route = pushNowRoute({ running: turnInFlight(), cwd: src.cwd, images: item.atts?.length ?? 0 });
+    if (route.kind === "parallel") { void pushStagedToLane(item, src); return; }
+    if (route.kind === "stage") { showToast({ tone: "warn", title: route.title, desc: route.desc, timeout: 8000 }); return; }
     state.queuedItems = state.queuedItems.filter((_, n) => n !== i);
     renderQueued();
+    if (route.kind === "steer") { showToast({ tone: "info", title: route.title, desc: route.desc, timeout: 8000 }); void pushMidTurn(item.text, i); return; }
     // Nothing running (e.g. after Stop): the staged prompt becomes the next turn, unless the user has a
     // draft in the composer (text or images), which is never clobbered (it stays staged instead).
-    if (!turnInFlight()) {
-      if (composerHasDraft()) { state.queuedItems = [...state.queuedItems.slice(0, i), item, ...state.queuedItems.slice(i)]; renderQueued(); return; }
-      loadComposer(item); void send();
+    if (composerHasDraft()) { state.queuedItems = [...state.queuedItems.slice(0, i), item, ...state.queuedItems.slice(i)]; renderQueued(); return; }
+    loadComposer(item); void send();
+  }));
+}
+
+// ── P-PUSH.PAR1 (ADR-pending): the staged chip's item menu, and Push now as a parallel worktree lane ──────
+
+/** Staged items whose parallel lane is starting. They stay in the stack (ADR-0414: nothing leaves before it
+ *  is accepted) but cannot be pushed, sent, updated or drained until the push settles. */
+const pushingItems = new Set<QueuedItem>();
+
+/** What the staged prompt waits behind: the lane the composer is attached to, else the main agent in the
+ *  open workspace on its current model. */
+function pushSource(): PushSource {
+  const t = state.composerTarget;
+  if (isLaneTarget(t)) return { kind: "lane", name: t.name, cwd: t.cwd, model: t.model };
+  return { kind: "master", name: "main", cwd: state.workspace?.current ?? "", model: state.model || state.config.find((c) => c.id === "model")?.currentValue || "" };
+}
+
+/** Push now while a turn runs: the item (text + its own images) starts in a new fleet lane on its own git
+ *  worktree. The user hears it at once (toast), and once the lane runs, the toast names the branch and the
+ *  transcript keeps a note. The item leaves the stack only when the lane accepted it. A folder that is not a
+ *  git repo falls back to steering the running turn (text only); every other refusal keeps it staged. */
+async function pushStagedToLane(item: QueuedItem, src: PushSource): Promise<void> {
+  pushingItems.add(item); renderQueued();
+  try {
+    const images = promptImageBlocks(item.atts ?? []).map((b) => ({ data: b.data, mimeType: b.mimeType }));
+    const r = await pushToNewLane(src, item.text, images, {
+      announce: (lane) => {
+        const n = parallelPushNotice(src, lane, { busy: true });
+        showToast({ tone: "info", title: n.title, desc: n.desc, timeout: 7000 });
+      },
+    });
+    if (r.ok) {
+      state.queuedItems = state.queuedItems.filter((q) => q !== item);
+      const n = parallelPushNotice(src, r.name, { busy: true, branch: r.branch });
+      showToast({ tone: "info", title: n.title, desc: n.desc, timeout: 9000 });
+      addNoteChip(`Running in parallel in ${r.name} (branch ${r.branch}): ${item.text}`);
       return;
     }
-    void pushMidTurn(item.text, i);
-  }));
+    const running = turnInFlight();
+    const plan = parallelPushRefusal(r, { canSteer: running, images: images.length });
+    const at = state.queuedItems.indexOf(item);
+    if (plan.kind === "steer" && at >= 0) {
+      state.queuedItems = state.queuedItems.filter((q) => q !== item);
+      showToast({ tone: "info", title: plan.title, desc: plan.desc, timeout: 8000 });
+      void pushMidTurn(item.text, at);
+      return;
+    }
+    showToast({ tone: "warn", title: plan.title, desc: plan.desc, timeout: 9000 });
+  } finally {
+    pushingItems.delete(item); renderQueued();
+    if (!turnInFlight()) releaseHeldPrompt(); // the turn ended mid-push: a kept item runs next, as promised
+  }
+}
+
+/** Right-click / long-press on a staged chip: Copy prompt, Copy and remove (to re-paste and edit), and
+ *  Steer running turn (the old Push now) for a text-only "next turn" item while a turn runs. */
+function openQueuedMenu(i: number, x: number, y: number, pill: HTMLElement): void {
+  const item = state.queuedItems[i]; if (!item) return;
+  const n = item.atts?.length ?? 0;
+  const entries: CtxMenuEntry[] = [
+    { label: "Copy prompt", run: () => void copyQueued(item, false) },
+    { label: "Copy and remove", run: () => void copyQueued(item, true) },
+  ];
+  if (!pushingItems.has(item) && canSteer({ hold: item.mode === "hold", running: turnInFlight(), images: n })) {
+    entries.push({
+      label: "Steer running turn",
+      run: () => {
+        const at = state.queuedItems.indexOf(item); if (at < 0) return;
+        state.queuedItems = state.queuedItems.filter((q) => q !== item); renderQueued();
+        void pushMidTurn(item.text, at);
+      },
+    });
+  }
+  const focused = pill.contains(document.activeElement) ? (document.activeElement as HTMLElement) : ($("button", pill) as HTMLElement | null);
+  openCtxMenu(x, y, entries, { returnFocus: focused, className: "ctx-menu-stage" });
+}
+
+/** Copy a staged prompt's full text; `remove` then drops it from the stack (only after the clipboard took
+ *  it, so a refused clipboard never loses the prompt). Images are not text: a kept item keeps them, and a
+ *  removed one says they went with it (Update is the path that keeps text AND images). */
+async function copyQueued(item: QueuedItem, remove: boolean): Promise<void> {
+  const n = item.atts?.length ?? 0;
+  if (!(await copyToClipboard(item.text))) { showToast({ tone: "warn", title: "Couldn't copy", desc: "The clipboard refused. The prompt stays staged.", timeout: 4000 }); return; }
+  if (!remove) { showToast({ title: "Copied", desc: n ? "The prompt text is on your clipboard. Its images stay with the staged prompt." : "The staged prompt is on your clipboard.", timeout: 2200 }); return; }
+  state.queuedItems = state.queuedItems.filter((q) => q !== item); renderQueued();
+  showToast({ title: "Copied and removed", desc: `Paste it into the prompt bar to edit it, or keep it for later.${n ? ` Its ${n} image${n === 1 ? " was" : "s were"} removed with it.` : ""}`, timeout: 3500 });
 }
 
 /** P-QUEUE-IMG.1 (ADR-0469): the composer holds something the user is writing - text OR images. Every
@@ -3210,11 +3302,13 @@ const liveTurn = { phase: "", pending: [] as { label: string; elapsedMs: number 
  *  attached lane's watch, so a prompt staged behind a lane's turn runs when THAT turn ends. */
 function releaseHeldPrompt(): void {
   if (stopHoldsQueue) return; // the user pressed Stop: nothing starts again until they send
-  const nq = nextHold(state.queuedItems);
+  // P-PUSH.PAR1: an item whose parallel lane is still starting is not drained here (it would run twice).
+  const nq = nextHold(state.queuedItems.filter((q) => !pushingItems.has(q)));
   if (!nq.item) return;
   if (composerHasDraft()) return; // P-QUEUE-IMG.1: pasted images are a draft too; never swept into this send
-  state.queuedItems = nq.rest; renderQueued();
-  loadComposer(nq.item); void send(); // the item's OWN images ride with it (ADR-0469)
+  const next = nq.item;
+  state.queuedItems = state.queuedItems.filter((q) => q !== next); renderQueued();
+  loadComposer(next); void send(); // the item's OWN images ride with it (ADR-0469)
 }
 
 /** P-INTERJECT.2: interject a note into the RUNNING turn (the attached lane's, or the master's) + leave a
@@ -11325,13 +11419,20 @@ async function clearGitPat(): Promise<void> {
   hydrateSettings();
   showToast({ title: "Git token removed", desc: "Private-repo clones will need a token again.", timeout: 3000 });
 }
+/** P-BOOTPERF.1 (ADR-pending): the last live answer from a previous run, painted until this run's engine
+ *  answers. It only paints: the .env offer and everything else that acts on the folder wait for the live
+ *  answer (state.workspace), and it is dropped the moment that answer, or its failure, lands. */
+let bootWorkspace: WorkspaceInfo | null = null;
 function renderWorkspaceBar(): void {
   const bar = $("#wsBar") as HTMLButtonElement | null;
-  const w = state.workspace;
+  const w = state.workspace ?? bootWorkspace;
   if (!bar) return;
   if (!w) { bar.hidden = true; return; }
   bar.hidden = false;
-  void offerVaultEnvImport(w.current, openSettings); // P-VAULT-ENV.1: once per workspace with a .env
+  if (state.workspace) {
+    setCachedWorkspace(state.workspace); // P-BOOTPERF.1: the next launch paints this before the engine answers
+    void offerVaultEnvImport(w.current, openSettings); // P-VAULT-ENV.1: once per workspace with a .env
+  }
   // P-REPO.1 (ADR-0406): under the workspace name, the repo Main actually works in (it can be a checkout
   // inside the workspace folder) and where its commits go - ONLY when it pushes to a hosted remote. A plain
   // folder or a local-only repo shows just the workspace name: nothing to warn about.
@@ -11346,12 +11447,18 @@ async function loadWorkspace(): Promise<void> {
   // #11 perceived-latency: the bar used to stay hidden until workspace() resolved, then
   // pop in. Show a subtle "loading workspace…" pill instantly; renderWorkspaceBar() below
   // always replaces it (even on a null/failed result, which hides the bar as before).
+  // P-BOOTPERF.1 (ADR-pending): a returning user gets the bar from the last live answer at once (name,
+  // folder icon), not a pill that waits on the engine; the repo line arrives with refreshTitlebarRepo.
   const bar = $("#wsBar") as HTMLButtonElement | null;
-  if (bar && !state.workspace) {
+  const cached = state.workspace ? null : cachedWorkspace<WorkspaceInfo>();
+  bootWorkspace = cached?.current && cached.name ? cached : null;
+  if (bootWorkspace) renderWorkspaceBar();
+  else if (bar && !state.workspace) {
     bar.hidden = false;
     bar.innerHTML = `<span class="ws-bar-loading">${icon("refresh", 12, "spin")}loading workspace…</span>`;
   }
   state.workspace = await bridge.workspace().catch(() => null);
+  bootWorkspace = null;
   renderWorkspaceBar();
   void refreshTitlebarRepo(); // P-REPO.1
 }
@@ -17307,6 +17414,7 @@ function wire(): void {
     fleetRespawn: bridge.fleetRespawn, // P-FLEET.L4: revive in place, memory carried
     fleetQueueAdd: bridge.fleetQueueAdd, // P-FLEET.L3: stage a prompt while the lane is busy
     fleetQueueRemove: bridge.fleetQueueRemove,
+    fleetQueuePeek: bridge.fleetQueuePeek, // P-PUSH.PAR1: Copy / Push now read a staged item whole, in place
     fleetQueueTake: bridge.fleetQueueTake, // P-QUEUE-IMG.1: Update pulls a staged item + its images back
     fleetQueueMove: bridge.fleetQueueMove,
     fleetDrain: bridge.fleetDrain, // P-FLEET.L3: stream the next staged prompt when idle
@@ -17317,7 +17425,7 @@ function wire(): void {
     fleetStop: bridge.fleetStop,
     fleetRemove: bridge.fleetRemove, // P-FLEET.L10: dismiss a stopped lane so its card leaves the grid
     fleetSetModel: bridge.fleetSetModel,
-    interject: bridge.interject, // P-INTERJECT.2: Push now on staged chips + the per-lane Check in ask
+    interject: bridge.interject, // P-INTERJECT.2: Steer running turn on staged chips (P-PUSH.PAR1) + the per-lane Check in ask
     stopCall: bridge.stopCall, // P-LIVENESS.1: Stop command on a lane call marked likely stuck
     repoChoices: bridge.repoChoices, // P-REPO.1 (ADR-0406): the New lane form picks a repo instead of typing
     repoGithub: bridge.repoGithub,
@@ -19017,8 +19125,14 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   // at $10/$50 per Mtok, double Fable 5's tier, and on Pro / standard Team seats they bill as
   // pay-as-you-go credits OUTSIDE the plan's included limits, so an unaware user pays real money per
   // call. isApiOnlyModel drives the explicit warning; this card carries the cost framing.
-  "claude-fable-5-1": { exp: 5, iq: 5, eff: "The current frontier ceiling, billed as pay-as-you-go credits rather than from your plan's included usage.", best: "The hardest novel reasoning and long-horizon agentic work, when cost is not the constraint.", ctx: "1M" },
-  "claude-mythos-5-1": { exp: 5, iq: 5, eff: "The current frontier ceiling, billed as pay-as-you-go credits rather than from your plan's included usage.", best: "The hardest novel reasoning and long-horizon agentic work, when cost is not the constraint.", ctx: "1M" },
+  // P-MODEL.10 (ADR-pending): Fable 5.2 / Mythos 5.2 (omp 18.18.6 catalog) are the new ceiling at $8/$40
+  // per Mtok, 1M context, 128K output, adaptive thinking always on. Same model and specs; Mythos 5.2 is
+  // listed only to organizations Anthropic has verified, so it appears only when the account's model list
+  // carries it (omp discovers it; LUCID never adds it). Still API-credit billed, so `exp` stays at the top.
+  "claude-fable-5-2": { exp: 5, iq: 5, eff: "The current frontier ceiling at $8/$40 per Mtok, billed as pay-as-you-go credits rather than from your plan's included usage.", best: "The hardest novel reasoning and long-horizon agentic work, when cost is not the constraint.", ctx: "1M" },
+  "claude-mythos-5-2": { exp: 5, iq: 5, eff: "Fable 5.2's model for Anthropic-verified organizations, at $8/$40 per Mtok, billed as pay-as-you-go credits rather than from your plan's included usage.", best: "The hardest novel reasoning and long-horizon agentic work, when cost is not the constraint.", ctx: "1M" },
+  "claude-fable-5-1": { exp: 5, iq: 5, eff: "The prior frontier ceiling at $10/$50 per Mtok, billed as pay-as-you-go credits rather than from your plan's included usage.", best: "The hardest novel reasoning and long-horizon agentic work, when cost is not the constraint.", ctx: "1M" },
+  "claude-mythos-5-1": { exp: 5, iq: 5, eff: "The prior frontier ceiling at $10/$50 per Mtok, billed as pay-as-you-go credits rather than from your plan's included usage.", best: "The hardest novel reasoning and long-horizon agentic work, when cost is not the constraint.", ctx: "1M" },
   "claude-fable-5": { exp: 5, iq: 5, eff: "Frontier capability at a premium price - worth it only when the task needs the ceiling.", best: "The hardest novel reasoning and long-horizon agentic work.", ctx: "1M" },
   "claude-mythos-5": { exp: 5, iq: 5, eff: "Frontier capability at a premium price - worth it only when the task needs the ceiling.", best: "The hardest novel reasoning and long-horizon agentic work.", ctx: "1M" },
   // P-MODEL.2: Opus 5.5 (2026-09-22) opens the Claude 5.5 family. Anthropic's own framing: Fable-5.1-level
@@ -19814,6 +19928,15 @@ onNetChange(() => {
   if (configWarmTimer !== null || Date.now() - netModelKickAt < 15_000) return;
   netModelKickAt = Date.now();
   void loadConfig(true).then(renderStatus);
+});
+// P-BOOTPERF.1 (ADR-pending): the quiet Reconnect button heals itself. The net monitor's engine probe going
+// from silent to answering while the button shows re-runs the status probe, whose success hides it.
+let engineWasAnswering = false;
+onNetChange(() => {
+  const engineAnswering = netSnapshot().view !== null;
+  const reconnectShown = ($("#ctReconnect") as HTMLButtonElement | null)?.hidden === false;
+  if (shouldReprobeStatus({ reconnectShown, engineWasAnswering, engineAnswering })) void recoverMasterTurn();
+  engineWasAnswering = engineAnswering;
 });
 // P-KGMARKET.4 (ADR-0206): register the entitlement provider for this build (firebase / dev stub / off) and
 // listen for the lucid://auth deep link the OS forwards after hosted sign-in. A plain public build has no

@@ -12,6 +12,15 @@
 **START**
 
 1. Read this file.
+1. **Sync with remote BEFORE touching anything.** Run `git fetch --all --prune`,
+   then `git status -sb`. If the current branch is behind its upstream,
+   fast-forward it (`git merge --ff-only @{u}`). If the branch is a stale
+   feature branch already merged into `origin/master`, switch to `master`,
+   fast-forward it to `origin/master`, and branch new work from there. Never
+   start work on a local copy that is behind remote; much of this repo moves
+   between sessions (other machines, fleet lanes, CI release jobs). Re-run
+   `git fetch` before opening a PR or pushing, and rebase on `origin/master`
+   if it moved while you worked.
 1. `make test && make demo-<previous-increment>` — the baseline must be green
    before you change anything.
 1. State out loud the single increment ID you are building this session. One
