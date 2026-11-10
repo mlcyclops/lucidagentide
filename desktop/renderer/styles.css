@@ -3019,6 +3019,51 @@ body.preview-open .thread{font-size:.9em}
 .meet-todo.unknown:hover{background:none;border-color:transparent}
 .meet-todo.unknown .meet-todo-mark{border-style:dashed;color:var(--txt-3);font-size:10px;line-height:1}
 .meet-todo-text{min-width:0}
+/* ============================================================================================
+   P-RS-VIEW.1 (ADR-0533): the Remote spokes view. The .kg shell with its own width var, wide enough
+   for the plugin's Admin panel. Spokes tab: the list on the left, the picked spoke's panel (the
+   orbit's own .rs-* panel) on the right. Rows are grids, every text run its own ellipsized block
+   (invariant #11). Admin tab: the plugin's panel in a frame that fills the view.
+   ============================================================================================ */
+#remoteSpokes{width:var(--remoteSpokes-w,min(960px,70vw))}
+#remoteSpokes .set-head{padding-top:6px;padding-bottom:6px;gap:10px}
+#remoteSpokes .set-title{min-width:0;white-space:nowrap;overflow:hidden}
+#remoteSpokes .set-sub{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rsv-tabs{display:inline-flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--bg-2)}
+.rsv-tab{border:0;border-radius:6px;background:none;color:var(--txt-3);font:inherit;font-size:12px;padding:3px 11px;cursor:pointer;
+  transition:background var(--t-fast),color var(--t-fast)}
+.rsv-tab:hover{color:var(--txt)}
+.rsv-tab.on{background:var(--bg-3);color:var(--txt)}
+.rsv-main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);overflow:hidden}
+.rsv-main[hidden],.rsv-admin[hidden],.rsv-admin-msg[hidden]{display:none}
+.rsv-list{overflow:auto;padding:8px 6px;border-right:1px solid var(--line-soft)}
+.rsv-detail{overflow:auto;padding:10px 12px;min-width:0}
+.rsv-detail .orbit-panel-h [data-rsv-detail-close]{margin-left:auto}
+.rsv-rows{display:grid;gap:2px;margin:0 0 6px}
+.rsv-row{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:8px;width:100%;text-align:left;
+  padding:7px 9px;border:1px solid transparent;border-radius:9px;background:none;color:var(--txt-2);font:inherit;cursor:pointer;
+  transition:background var(--t-fast),border-color var(--t-fast)}
+.rsv-row:hover{background:var(--bg-2);border-color:var(--line-soft)}
+.rsv-row.on{background:var(--bg-2);border-color:var(--lane,var(--accent))}
+.rsv-row .orbit-led{margin-top:5px}
+.rsv-row-main{min-width:0}
+.rsv-row-main>b,.rsv-row-main>small{display:block;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rsv-row-main>b{font-size:12.5px;color:var(--txt)}
+.rsv-row-main>small{font-size:11px;line-height:1.5;color:var(--txt-3)}
+.rsv-row-main>small.rsv-row-model{font-family:var(--mono);font-size:10.5px;color:var(--txt-4)}
+.rsv-row.rs-approval,.rsv-row.rs-stuck{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .4)}
+.rsv-row.rs-maybe{--lane:var(--amber);--lane-dim:rgb(var(--amber-rgb) / .4)}
+.rsv-row.rs-busy{--lane:var(--cyan);--lane-dim:rgb(var(--cyan-rgb) / .35)}
+.rsv-row.rs-busy .orbit-led{animation:hudpulse 2.2s ease-in-out infinite}
+.rsv-row.rs-ready{--lane:var(--blue);--lane-dim:rgb(var(--blue-rgb) / .4)}
+.rsv-row.rs-checking,.rsv-row.rs-off{--lane:var(--txt-4)}
+.rsv-row.rs-off{opacity:.6}
+.rsv-notice{display:grid;gap:6px;justify-items:start;padding:8px 4px}
+.rsv-foot{margin-top:10px}
+.rsv-admin{flex:1;min-height:0;display:flex;flex-direction:column}
+.rsv-admin-msg{padding:12px 16px}
+.rsv-frame{flex:1;min-height:0;width:100%;border:0;background:var(--bg-1)}
+@media (prefers-reduced-motion:reduce){.rsv-row.rs-busy .orbit-led{animation:none}}
 /* P-KG-CODE.1: trim the Knowledge-graph header's vertical padding too (ID beats the shared .set-head rule). */
 #knowledge .set-head{padding-top:6px;padding-bottom:6px}
 /* P-KGUI.1 (ADR-0184): the consolidated views dropdown replaces the three-button vertical stack. */
@@ -6546,7 +6591,6 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-node.rs-off,.fleet-pip.rs-off,.rs-state.rs-off{--lane:var(--txt-4)}
 .orbit-node.rs-off .orbit-node-card{opacity:.55}
 .orbit-node.rs-off .orbit-led,.fleet-pip.rs-off i{animation:none}
-.fleet-pip.rs-pip{border:0;background:none;padding:0;font:inherit;color:var(--txt-2)}
 .rs-hubrow small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* The per-spoke panel. Every text run is its own block (invariant 11: no prose as flex siblings). */
 .rs-state{margin-left:2px;padding:1px 7px;border-radius:999px;font-size:10px;white-space:nowrap;

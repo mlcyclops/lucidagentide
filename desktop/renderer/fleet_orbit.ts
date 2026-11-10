@@ -30,7 +30,7 @@ import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModel
 import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
 import { LANE_STATUS_ORDER, LANE_STATUS_WORDS, displayStatus } from "../collab/fleet_status.ts"; // P-STUCK-SHOW.1 (ADR-0519)
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
-import { closeDeployPanel, closeRemotePanel, initOrbitRemote, layoutRemote, onDeployPanelClick, onRemoteHubClick, onRemotePanelClick, paintDeployPanel, paintRemotePanel, reconcileRemote, refreshDeployPanel, refreshRemote, refreshRemotePanel, remoteCounts, remoteDeployVisible, remoteHubSectionHtml, remoteHubVisible, remoteList, remotePanelNode, type OrbitRemoteDeps } from "./orbit_remote.ts"; // P-IDE-SPOKES.1 (ADR-0506), ADR-0508
+import { closeDeployPanel, closeRemotePanel, initOrbitRemote, layoutRemote, onDeployPanelClick, onRemoteHubClick, onRemotePanelClick, paintDeployPanel, paintRemotePanel, reconcileRemote, refreshDeployPanel, refreshRemote, refreshRemotePanel, orbitRemoteList, remoteCounts, remoteDeployVisible, remoteHubSectionHtml, remoteHubVisible, remotePanelNode, type OrbitRemoteDeps } from "./orbit_remote.ts"; // P-IDE-SPOKES.1 (ADR-0506), ADR-0508, P-RS-VIEW.1 (ADR-0533)
 import { beatLine, goalButtonHtml, goalButtonTip, goalPanelHtml, goalSnapshot, onGoalPanelClick, paintHubGoal, refreshGoal, stalledLanes, taskFormHtml, type OrbitGoalDeps } from "./orbit_goal.ts"; // P-AOS.1 (ADR-0452), P-AOS.2 (ADR-0453)
 
 export interface FleetOrbitDeps extends OrbitGoalDeps, OrbitRemoteDeps {
@@ -60,6 +60,9 @@ export interface FleetOrbitDeps extends OrbitGoalDeps, OrbitRemoteDeps {
   /** Close the grid dock. One fleet view at a time: opening the orbit, by any route, closes the grid, so
    *  an orbit-first user never finds a grid left behind that they did not ask for. */
   closeGrid: () => void;
+  /** P-RS-VIEW.1 (ADR-0533): close the Remote spokes view. It and the orbit share one per-spoke panel, so opening
+   *  either closes the other. */
+  closeRemoteView: () => void;
   /** The REAL OS folder dialog (fleet_grid's contract). Resolves null on cancel - never re-prompt. */
   pickFolder: (opts?: { title?: string; confirm?: string }) => Promise<string | null>;
   /** The master model picker's options, for the on-orbit spawn form's model select. */
@@ -343,7 +346,7 @@ function paintRemote(): void {
 function paintRemoteAll(first: boolean): void {
   if (!view || view.hidden) return;
   reconcileRemote($("[data-orbit-stage]", view) as HTMLElement, first);
-  ($("[data-orbit-empty]", view) as HTMLElement).hidden = lastMine.length + remoteList().length > 0;
+  ($("[data-orbit-empty]", view) as HTMLElement).hidden = lastMine.length + orbitRemoteList().length > 0;
   layoutStage(lastMine);
   paintHubsBadge();
   // ADR-0508: the Start-a-task selector's header button, only for a hub that may drive and has spokes.
@@ -515,13 +518,11 @@ function onPanelClick(t: HTMLElement): boolean {
     const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
     if (box && onDeployPanelClick(t, box, openRemote)) return true;
   }
+  // P-RS-VIEW.1 (ADR-0533): the remote hub's row offers Start, Set up, Open (the Remote spokes view) and Start a task.
   if (openedPanel === "hubs") {
     const hit = onRemoteHubClick(t);
-    if (hit === "handled") return true;
-    // ADR-0509: a dismissed alert leaves the section, the badge and its card's alert line at once.
-    if (hit === "repaint") { paintRemoteAll(false); return true; }
     if (hit === "deploy") { togglePanel("deploy"); return true; }
-    if (hit) { openRemote(hit); return true; }
+    if (hit) return true;
   }
   const row = t.closest("[data-ghost-i]") as HTMLElement | null;
   if (row) {
@@ -764,6 +765,7 @@ export function toggleFleetOrbit(): void {
 export function openFleetOrbit(): void {
   if (!deps) return;
   deps.closeGrid();
+  deps.closeRemoteView();
   if (!view) view = buildView();
   if (!view.isConnected) document.body.appendChild(view);
   view.hidden = false;
@@ -1125,7 +1127,7 @@ function reconcile(lanes: LaneView[], first: boolean): void {
     entry.card.style.setProperty("--ty", "0px");
     window.setTimeout(() => entry.card.remove(), EXIT_MS);
   }
-  ($("[data-orbit-empty]", view!) as HTMLElement).hidden = lanes.length + remoteList().length > 0;
+  ($("[data-orbit-empty]", view!) as HTMLElement).hidden = lanes.length + orbitRemoteList().length > 0;
 }
 
 function buildNode(lane: LaneView): HTMLElement {
@@ -1215,7 +1217,7 @@ function layoutStage(lanes: LaneView[]): void {
   const stage = $("[data-orbit-stage]", view) as HTMLElement;
   const w = stage.clientWidth, h = stage.clientHeight;
   if (w === 0 || h === 0) return;
-  const slots = orbitSlots(lanes.length + remoteList().length, w, h); // P-IDE-SPOKES.1: remote spokes share the ring
+  const slots = orbitSlots(lanes.length + orbitRemoteList().length, w, h); // P-IDE-SPOKES.1: remote spokes share the ring; P-RS-VIEW.1: only those holding a task
   // Decorative ring ellipses for each occupied ring, dash-drifting slowly (pure ornament, one per ring).
   // One sample slot per occupied ring carries that ring's radii (inverting x = rx cos a breaks at 12 o'clock).
   const rings: OrbitRing[] = [...new Map(slots.map((s) => [s.ring, s] as const)).values()].map((s) => ({ rx: s.ringRx, ry: s.ringRy }));

@@ -18,6 +18,11 @@
 // host facts and the lane policy's why in the selector rows and the panel; a task a restart interrupted offers
 // Resume, armed like Approve, which sends RESUME_TEXT through the existing followup route. Nothing re-runs alone.
 //
+// P-RS-VIEW.1 (ADR-0533): only a spoke holding a task is on the ring (remote_spokes_model.ts onOrbit). Every spoke,
+// the alert list and the plugin's own panel live in the Remote spokes view (remote_spokes_view.ts, on the left
+// rail), which reuses this file's per-spoke panel and Start-a-task selector; the Hubs panel keeps a one-line
+// summary of the remote hub that opens it.
+//
 // Untrusted text rule: everything a spoke wrote reaches the DOM through textContent or esc(), never as markup.
 // Recalled entries arrive already scanned (a quarantined entry has no text at all); the only way recalled text
 // leaves this panel is "Copy for a prompt", which copies the engine's delimited UNTRUSTED_CONTENT envelope.
@@ -33,7 +38,7 @@ import type { LucidBridge } from "./bridge.ts";
 import type { OrbitSlot } from "./orbit_layout.ts";
 import type { OrbitSpoke } from "./orbit_canvas.ts";
 import {
-  approvalButtons, armClick, clockLabel, deployChoices, hostLabel, lanePolicyLabel, latencyLabel, mibLabel, modelCount, REMOTE_TONE, remoteGlance, RESUME_TEXT,
+  approvalButtons, armClick, clockLabel, deployChoices, hostLabel, lanePolicyLabel, latencyLabel, mibLabel, modelCount, onOrbit, REMOTE_TONE, remoteGlance, RESUME_TEXT,
   spokeActions, spokeAlerts, stateLabel, taskButtons, taskModelChoices, VIA_LABEL,
   type DeployChoice, type RecallView, type RemoteAlertItem, type RemoteApprovalView, type RemoteClassification, type RemoteHubView, type RemoteModelsView,
   type RemoteSpokeView,
@@ -47,16 +52,22 @@ export interface OrbitRemoteDeps {
   remoteSpokeAct: LucidBridge["remoteSpokeAct"];
   /** Start the remote-spokes plugin (the sanctioned pluginsStart path) so its spokes appear. */
   startRemoteSpokes: () => Promise<void>;
-  /** Start it and open its own panel in a plugin tab (setup, presence, custody: everything the IDE leaves there). */
-  openRemoteSpokesPanel: () => void;
+  /** P-RS-VIEW.1 (ADR-0533): open the Remote spokes view (rail), on its Admin tab (the plugin's own panel: setup,
+   *  presence, custody) or on one spoke. app.ts closes the orbit first, so one surface drives a spoke at a time. */
+  openRemoteView: (at?: { tab?: "spokes" | "admin"; node?: string }) => void;
 }
 
 let deps: OrbitRemoteDeps | null = null;
 /** The engine's last answer; null before the first one (or when the engine did not answer). */
 let snap: RemoteHubView | null = null;
 const remoteNodes = new Map<string, { card: HTMLElement }>();
+/** P-RS-VIEW.1: told after every hub read that got an answer (the rail button and the Remote spokes view). */
+const listeners = new Set<() => void>();
 
 export function initOrbitRemote(d: OrbitRemoteDeps): void { deps = d; }
+
+/** P-RS-VIEW.1: call `fn` after each answered hub read, whoever asked for it. */
+export function onRemoteChange(fn: () => void): void { listeners.add(fn); }
 
 let inflight: Promise<void> | null = null;
 
@@ -66,13 +77,25 @@ export function refreshRemote(): Promise<void> {
   if (!deps) return Promise.resolve();
   if (inflight) return inflight;
   const d = deps;
-  inflight = d.remoteSpokes().catch(() => null).then((s) => { if (s) snap = s; }).finally(() => { inflight = null; });
+  inflight = d.remoteSpokes().catch(() => null).then((s) => {
+    if (!s) return;
+    snap = s;
+    for (const fn of listeners) fn();
+  }).finally(() => { inflight = null; });
   return inflight;
 }
 
 export function remoteList(): RemoteSpokeView[] {
   return snap?.available ? snap.spokes : [];
 }
+
+/** P-RS-VIEW.1 (ADR-0533): the remote spokes the orbit draws: only those holding a task (onOrbit). */
+export function orbitRemoteList(): RemoteSpokeView[] {
+  return remoteList().filter(onOrbit);
+}
+
+/** P-RS-VIEW.1: the hub view as last read, for the Remote spokes view's header and notices. */
+export function remoteSnapshot(): RemoteHubView | null { return snap; }
 
 // ------------------------------------------------------------------------------ alerts (ADR-0509)
 
@@ -106,9 +129,10 @@ function openAlerts(now: number): RemoteAlertItem[] {
 
 // ------------------------------------------------------------------------------------ nodes on the ring
 
-/** Create, repaint and drop remote nodes like reconcile() does for lanes (cards are never rebuilt). */
+/** Create, repaint and drop remote nodes like reconcile() does for lanes (cards are never rebuilt). P-RS-VIEW.1:
+ *  a spoke whose last task closes falls back into the hub like a dismissed lane, and one that takes a task flies out. */
 export function reconcileRemote(stage: HTMLElement, first: boolean): void {
-  const spokes = remoteList();
+  const spokes = orbitRemoteList();
   const seen = new Set<string>();
   spokes.forEach((s, i) => {
     seen.add(s.node);
@@ -193,7 +217,7 @@ export function remoteDeployVisible(): boolean {
 /** Place remote nodes on the slots after the local lanes'; their lines go to the orbit canvas (ADR-0522). */
 export function layoutRemote(slots: readonly OrbitSlot[]): OrbitSpoke[] {
   const lines: OrbitSpoke[] = [];
-  remoteList().forEach((s, i) => {
+  orbitRemoteList().forEach((s, i) => {
     const entry = remoteNodes.get(s.node);
     const slot = slots[i];
     if (!entry || !slot) return;
@@ -219,36 +243,42 @@ export function remoteHubVisible(): boolean {
   return snap !== null && (snap.available || snap.plugin !== "missing");
 }
 
-/** The Remote hub section of the Other hubs panel: the add-on hub and its spokes, or why there are none. Empty
- *  while the engine has not answered, so a panel never flashes a wrong reason. */
+/** The Remote hub row of the Hubs panel: the add-on hub in one line, or why there are none. Empty while the engine
+ *  has not answered, so a panel never flashes a wrong reason. P-RS-VIEW.1 (ADR-0533): the spoke list, its alerts
+ *  and the plugin's own panel live in the Remote spokes view, which Open shows; this row only summarizes. */
 export function remoteHubSectionHtml(): string {
   if (!snap || !remoteHubVisible()) return "";
   if (!snap.available) {
     const btn = snap.plugin === "stopped"
-      ? `<button class="btn-mini orbit-btn" data-rs-start data-tip="Start Remote Spokes|Starts the Remote Spokes plugin so this hub's remote spokes join the orbit.">${icon("bolt", 12)} Start</button>`
-      : `<button class="btn-mini orbit-btn" data-rs-panel>${icon("link", 12)} Open panel</button>`;
+      ? `<button class="btn-mini orbit-btn" data-rs-start data-tip="Start Remote Spokes|Starts the Remote Spokes plugin so this hub's remote spokes can be reached.">${icon("bolt", 12)} Start</button>`
+      : `<button class="btn-mini orbit-btn" data-rs-panel>${icon("link", 12)} Set up</button>`;
     return `<div class="orbit-hubrow rs-hubrow"><span class="orbit-ghost-id"><b>Remote hub</b><small>${esc(snap.reason)}</small></span>${btn}</div>`;
   }
   const { hub, spokes } = snap;
   const waiting = spokes.filter((s) => s.state === "approval").length;
-  // ADR-0512: a deactivated spoke still counts as the hub's, said plainly; it is never a target.
-  const off = spokes.filter((s) => s.deactivated).length;
+  const working = orbitRemoteList().length;
+  const alerts = openAlerts(Date.now()).length;
+  const summary = [
+    `${spokes.length} remote ${spokes.length === 1 ? "spoke" : "spokes"}`,
+    working ? `${working} on the orbit` : "none working",
+    waiting ? `${waiting} waiting on you` : "",
+    alerts ? `${alerts} ${alerts === 1 ? "alert" : "alerts"}` : "",
+  ].filter(Boolean).join(" \u00b7 ");
   return `<div class="orbit-hubrow rs-hubrow" title="${esc(hub.node)}">
-      <span class="orbit-ghost-id"><b>${esc(hub.label)}</b><small>remote hub \u00b7 ${spokes.length} ${spokes.length === 1 ? "spoke" : "spokes"}${off ? ` (${off} deactivated)` : ""}${waiting ? ` \u00b7 ${waiting} waiting on you` : ""} \u00b7 may ${esc(hub.scopes.join(", ") || "nothing")}</small></span>
+      <span class="orbit-ghost-id"><b>${esc(hub.label)}</b><small>${esc(summary)}</small></span>
       ${remoteDeployVisible() ? `<button class="btn-mini orbit-btn" data-rs-deploy data-tip="Start a task on a remote spoke|Pick a spoke by how fast it answers, its models and its free lanes, then start a task there.">${icon("bolt", 12)} Start a task</button>` : ""}
-      <button class="btn-mini orbit-btn" data-rs-panel data-tip="Remote Spokes panel|Setup, user presence, custody, models and provisioning stay in the plugin's own panel.">${icon("link", 12)} Panel</button>
-    </div>
-    <div class="orbit-hubrow-lanes">${spokes.map((s) => `<button class="fleet-pip rs-pip rs-${REMOTE_TONE[s.state]}" data-rs-open="${esc(s.node)}" data-tip="${esc(s.label)}|${esc(remoteGlance(s))}"><i></i>${esc(s.label)}</button>`).join("")}</div>${alertListHtml()}`;
+      <button class="btn-mini orbit-btn" data-rs-view data-tip="Remote spokes|Every remote spoke, its alerts, and the hub's setup (the Admin tab), in their own view. Also on the left rail.">${icon("link", 12)} Open</button>
+    </div>`;
 }
 
-/** ADR-0509: how many alert lines the Remote hub section lists; the rest wait behind "Dismiss all". */
+/** ADR-0509: how many alert lines the Remote spokes view lists; the rest wait behind "Dismiss all". */
 const ALERT_LIST_MAX = 12;
 
 /** ADR-0509: the alert lines not dismissed yet, newest first: a spoke gone silent, crashed, restarted, or a turn a
  *  restart cut off (resumed from the spoke's panel, never on its own). Each line opens its spoke or is dismissed.
  *  Every spoke-written word goes through esc(); the dismiss key is built from the node id, a closed kind and a
- *  number. */
-function alertListHtml(): string {
+ *  number. P-RS-VIEW.1: shown in the Remote spokes view; its clicks go through onRemoteHubClick. */
+export function remoteAlertListHtml(): string {
   const items = openAlerts(Date.now());
   if (items.length === 0) return "";
   const more = items.length > ALERT_LIST_MAX ? `<div class="rs-alert-more">${items.length - ALERT_LIST_MAX} older not shown</div>` : "";
@@ -372,7 +402,7 @@ export function paintRemotePanel(box: HTMLElement, node: string, closeHtml: stri
     </details>` : ""}
     <div class="rs-sec-h"><span>Models</span></div>
     <div data-rs-models></div>
-    <p class="rs-note">The default is what new tasks use; change it in the Remote Spokes panel (it restarts the spoke's engine).</p>
+    <p class="rs-note">The default is what new tasks use; change it on the Admin tab of Remote spokes (it restarts the spoke's engine).</p>
     ${a?.recall ? `<div class="rs-sec-h"><span>Parked actions</span><button class="btn-mini orbit-btn" data-rs-approvals>${icon("refresh", 12)} Check</button></div>
     <div data-rs-approvals-out></div>
     <div class="rs-sec-h"><span>Recall</span><button class="btn-mini orbit-btn" data-rs-recall-all data-tip="Recall|Reads this spoke's signed journal. Every entry passes the scanner first; a flagged entry is withheld.">${icon("restore", 12)} Whole journal</button><button class="btn-mini orbit-btn" data-rs-copy hidden data-tip="Copy for a prompt|Copies the entries that passed the scanner inside UNTRUSTED_CONTENT delimiters, the only form recalled text may take into a prompt. Withheld entries are not included.">${icon("copy", 12)} Copy for a prompt</button></div>
@@ -760,7 +790,7 @@ export function refreshDeployPanel(box: HTMLElement): void {
     // ADR-0512: deactivated spokes are not targets, so a hub with only those has none to offer.
     list.innerHTML = snap.spokes.length
       ? `<div class="orbit-ghosts-empty">Every spoke on this hub is deactivated. Reactivate one on the hub (hub reactivate) to start a task there.</div>`
-      : `<div class="orbit-ghosts-empty">This hub has no spokes yet. Enroll one in the Remote Spokes panel.</div>`;
+      : `<div class="orbit-ghosts-empty">This hub has no spokes yet. Enroll one on the Admin tab of Remote spokes.</div>`;
     return;
   }
   const now = Date.now();
@@ -822,16 +852,18 @@ async function startDeploy(box: HTMLElement, openSpoke: (node: string) => void):
   showErr(box, `Task started on ${choice.spoke.label}; it shows in Tasks at the next refresh (up to 15 s).`, true);
 }
 
-/** The hub picker's buttons (Start, Panel, Start a task, a spoke pip or alert's Open, an alert's dismiss). Returns
- *  the node to open, "deploy" for the Start-a-task selector, "repaint" after a dismissal (the section, the badge
- *  and the cards' alert lines change), "handled", or null. */
+/** The remote hub's buttons, in the Hubs panel and the Remote spokes view (Start, Set up, Open, Start a task, a
+ *  spoke row or alert's Open, an alert's dismiss). Returns the node to open, "deploy" for the Start-a-task
+ *  selector, "repaint" after a dismissal (the alert list, the badges and the cards' alert lines change),
+ *  "handled", or null. */
 export function onRemoteHubClick(t: HTMLElement): string | "deploy" | "repaint" | "handled" | null {
   if (!deps) return null;
   const x = t.closest("[data-rs-alert-x]") as HTMLElement | null;
   if (x) { dismissAlerts([x.dataset.rsAlertX ?? ""]); return "repaint"; }
   if (t.closest("[data-rs-alert-clear]")) { dismissAlerts(openAlerts(Date.now()).map((a) => a.key)); return "repaint"; }
   if (t.closest("[data-rs-start]")) { void deps.startRemoteSpokes().then(refreshRemote); return "handled"; }
-  if (t.closest("[data-rs-panel]")) { deps.openRemoteSpokesPanel(); return "handled"; }
+  if (t.closest("[data-rs-panel]")) { deps.openRemoteView({ tab: "admin" }); return "handled"; }
+  if (t.closest("[data-rs-view]")) { deps.openRemoteView(); return "handled"; }
   if (t.closest("[data-rs-deploy]")) return "deploy";
   const pip = t.closest("[data-rs-open]") as HTMLElement | null;
   return pip?.dataset.rsOpen ?? null;

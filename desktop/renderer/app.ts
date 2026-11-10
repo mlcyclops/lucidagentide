@@ -117,7 +117,8 @@ import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOpti
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
 import { closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid
-import { fleetHome, initFleetOrbit, noteSpokeAsk, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
+import { closeFleetOrbit, fleetHome, initFleetOrbit, noteSpokeAsk, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
+import { hideRemoteView, initRemoteView, isRemoteViewOpen, REMOTE_SPOKES_PLUGIN, remoteViewHtml, showRemoteView, type RemoteViewTarget } from "./remote_spokes_view.ts"; // P-RS-VIEW.1 (ADR-0533)
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
 import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
 import { gitCredRef } from "../git_url.ts"; // P-FLEET.L2: per-host git credential ref for the OS vault
@@ -424,6 +425,8 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="memory" data-tip="Memory & context|Context window, prompt-cache savings, semantic memory" data-tip-icon="savings">${icon("savings", 20)}</button>
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
         <button class="rail-btn" data-rail="meetings" data-tip="Meetings|What was decided, and what you owe - read live from your Lucid Meeting Hub. Nothing is stored here" data-tip-icon="calendar">${icon("calendar", 20)}</button>
+        <!-- P-RS-VIEW.1 (ADR-0533): shown once the Remote Spokes plugin is installed; the badge counts parked approvals and open alerts. -->
+        <button class="rail-btn" data-rail="remote" id="railRemote" hidden data-tip="Remote spokes|LUCID on your other machines: what each one is doing, its alerts, and the hub's setup on the Admin tab" data-tip-icon="link">${icon("link", 20)}<span class="badge" id="railRemoteBadge" hidden>0</span></button>
         <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}<span class="rail-live-dot prev-rail-dot" id="railPreviewDot" hidden></span></button>
         <button class="rail-btn" data-rail="trainer" data-tip="Trainer|Extract expert know-how into the coverage map, then drill it with lesson-based mini-games" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="agentBuilder" data-tip="Agent Builder|Design an AI agent on a visual workflow canvas - LUCID builds the gated code for you" data-tip-icon="spark">${icon("spark", 20)}</button>
@@ -614,6 +617,8 @@ function buildShell(): void {
           <div class="meet-detail" id="meetDetail"></div>
         </div>
       </aside>
+
+      ${remoteViewHtml()}
 
       <aside class="kg preview-panel" id="preview" hidden>
         <div class="resizer resizer-l" data-resize="preview" data-tip="Drag to resize|Widen the preview or collapse toward the chat" data-tip-side="left"></div>
@@ -6331,6 +6336,7 @@ function openSettings(): void {
   closeIde(); // P-IDE.4: right-edge surfaces are mutually exclusive
   closeSkills(); // P-SKILL.4
   closeMeetings(); // P-MEET.1
+  closeRemoteView(); // P-RS-VIEW.1
   state.settingsOpen = true;
   if (!state.sidebarCollapsed) toggleSidebar(true); // give the chat room; reopen sessions via the hamburger
   $("#settings")!.hidden = false;
@@ -8782,6 +8788,7 @@ function openKnowledge(): void {
   closePreview(); // P-PREVIEW.1
   closeSkills(); // P-SKILL.4
   closeMeetings(); // P-MEET.1
+  closeRemoteView(); // P-RS-VIEW.1
   if (!state.sidebarCollapsed) toggleSidebar(true); // give the chat room; reopen sessions via the hamburger
   $("#knowledge")!.hidden = false;
   $("#inspector")!.hidden = true;
@@ -8821,6 +8828,36 @@ let meetListGeneration = 0;
 let meetDetailGeneration = 0;
 let meetSearchTimer: number | null = null;
 
+// ── P-RS-VIEW.1 (ADR-0533): the Remote spokes view ─────────────────────────────────────────────────
+// remote_spokes_view.ts draws it; this glue makes it one of the right-edge surfaces. It shares the orbit's
+// per-spoke panel, so it closes the orbit first (and the orbit closes it, through FleetOrbitDeps.closeRemoteView).
+function openRemoteView(at?: RemoteViewTarget): void {
+  closeFleetOrbit();
+  closeSettings();
+  closeIde();
+  closeKnowledge();
+  closePreview();
+  closeSkills();
+  closeMeetings();
+  if (!state.sidebarCollapsed) toggleSidebar(true);
+  $("#inspector")!.hidden = true;
+  $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "remote"));
+  showRemoteView(at);
+}
+function closeRemoteView(): void {
+  if (!isRemoteViewOpen()) return;
+  hideRemoteView();
+  $("#inspector")!.hidden = false;
+  $$(".rail-btn").forEach((b) => b.classList.remove("active"));
+  $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+}
+function paintRemoteRail(visible: boolean, attention: number): void {
+  const btn = $("#railRemote");
+  if (btn) btn.hidden = !visible;
+  const badge = $("#railRemoteBadge");
+  if (badge) { badge.textContent = String(attention); badge.hidden = attention === 0; }
+}
+
 function openMeetings(): void {
   meetOpen = true;
   closeSettings();
@@ -8828,6 +8865,7 @@ function openMeetings(): void {
   closeKnowledge();
   closePreview();
   closeSkills();
+  closeRemoteView(); // P-RS-VIEW.1
   if (!state.sidebarCollapsed) toggleSidebar(true);
   $("#meetings")!.hidden = false;
   $("#inspector")!.hidden = true;
@@ -8949,6 +8987,7 @@ function openPreview(opts?: { reveal?: PrevLane }): void {
   closeAgentBuilder(); // P-AGENT.2b
   closeSkills(); // P-SKILL.4
   closeMeetings(); // P-MEET.1
+  closeRemoteView(); // P-RS-VIEW.1
   if (!state.sidebarCollapsed) toggleSidebar(true);
   $("#preview")!.hidden = false;
   document.body.classList.add("preview-open"); // shrinks the chat text while the (≤50vw) preview is open
@@ -16503,7 +16542,8 @@ const pluginsFlyout = createPluginsFlyout({
   start: (id) => bridge.pluginsStart(id),
   license: (id) => bridge.pluginsLicense(id),
   openExternal: (url) => void openAuthUrl(url),
-  openPluginTab: (id, name, url) => openPluginTab(id, name, url),
+  // P-RS-VIEW.1 (ADR-0533): Remote Spokes opens as its own view (the Admin tab), not as one more Preview tab.
+  openPluginTab: (id, name, url) => (id === REMOTE_SPOKES_PLUGIN ? openRemoteView({ tab: "admin", adminUrl: url }) : openPluginTab(id, name, url)),
   toast: showToast,
   anchor: () => $("#preview") as HTMLElement | null,
   minLeft: railWidth,
@@ -16621,6 +16661,7 @@ function wire(): void {
     // close() restores the inspector + re-activates the chat rail). Second click = dismiss.
     if (r === "knowledge" && kgOpen) return closeKnowledge();
     if (r === "meetings" && meetOpen) return closeMeetings(); // P-MEET.1
+    if (r === "remote" && isRemoteViewOpen()) return closeRemoteView(); // P-RS-VIEW.1
     if (r === "preview" && previewOpen) return closePreview();
     if (r === "agentBuilder" && abOpen) return closeAgentBuilder();
     if (r === "settings" && state.settingsOpen) return closeSettings();
@@ -16628,6 +16669,7 @@ function wire(): void {
     if (r === "trainer" && trainerOpen) return closeTrainer(); // P-TRAINER.7
     if (r !== "knowledge") closeKnowledge();
     if (r !== "meetings") closeMeetings(); // P-MEET.1
+    if (r !== "remote") closeRemoteView(); // P-RS-VIEW.1
     if (r !== "preview") closePreview(); // P-PREVIEW.1: right-edge surfaces are mutually exclusive
     if (r !== "agentBuilder") closeAgentBuilder(); // P-AGENT.2b
     if (r !== "skills") closeSkills(); // P-SKILL.4
@@ -16638,6 +16680,7 @@ function wire(): void {
     else if (r === "settings") openSettings();
     else if (r === "knowledge") openKnowledge();
     else if (r === "meetings") openMeetings(); // P-MEET.1
+    else if (r === "remote") openRemoteView(); // P-RS-VIEW.1
     else if (r === "preview") openPreview();
     else if (r === "agentBuilder") openAgentBuilder(); // P-AGENT.2b
     else if (r === "skills") openSkills(); // P-SKILL.4
@@ -17377,13 +17420,11 @@ function wire(): void {
     remoteSpokeDecide: bridge.remoteSpokeDecide,
     remoteSpokeAct: bridge.remoteSpokeAct,
     startRemoteSpokes: async () => {
-      const r = await bridge.pluginsStart("remote-spokes");
+      const r = await bridge.pluginsStart(REMOTE_SPOKES_PLUGIN);
       if (!r || !r.ok) showToast({ title: "Remote Spokes did not start", desc: r ? r.error : "The engine did not answer.", tone: "danger" });
     },
-    openRemoteSpokesPanel: () => void bridge.pluginsStart("remote-spokes").then((r) => {
-      if (!r || !r.ok) { showToast({ title: "Remote Spokes did not start", desc: r ? r.error : "The engine did not answer.", tone: "danger" }); return; }
-      openPluginTab("remote-spokes", "Remote Spokes", r.url);
-    }),
+    openRemoteView: (at) => openRemoteView(at), // P-RS-VIEW.1 (ADR-0533): the plugin's panel is the view's Admin tab
+    closeRemoteView: () => closeRemoteView(),
     repoChoices: bridge.repoChoices, // P-REPO.1 (ADR-0406): the New spoke panel picks a repo instead of typing
     repoGithub: bridge.repoGithub,
     repoContext: bridge.repoContext, // P-REPO.1: the hub names Main's repo
@@ -17421,6 +17462,16 @@ function wire(): void {
     // opening another hub rides the same guarded switch as a sidebar click (a busy Main gets the sheet).
     sessionTitle: (id) => cachedSessionInfo(id)?.title ?? null,
     openSession: (id) => void openSession(id),
+  });
+  // P-RS-VIEW.1 (ADR-0533): after initFleetOrbit, whose remote deps its hub reads use.
+  initRemoteView($("#remoteSpokes") as HTMLElement, {
+    panelUrl: async () => {
+      const r = await bridge.pluginsStart(REMOTE_SPOKES_PLUGIN);
+      return r?.ok ? { ok: true, url: r.url } : { ok: false, error: r ? r.error : "The engine did not answer." };
+    },
+    frameSandbox: PLUGIN_FRAME_SANDBOX,
+    close: closeRemoteView,
+    paintRail: paintRemoteRail,
   });
   // P-REPO.1 (ADR-0406): the titlebar names the repo the composer's session works on and where it pushes.
   initTitlebarRepo({
@@ -19809,6 +19860,7 @@ function initResize(): void {
     const pw = Number(localStorage.getItem("lucid.preview-w")); if (pw) setW("preview", Math.min(pw, Math.round(window.innerWidth * 0.5))); // P-PREVIEW.1: never restore wider than 50%
     const ksw = Number(localStorage.getItem("lucid.kgside-w")); if (ksw) setW("kgside", ksw); // P-KG-CODE.1b
     const mw = Number(localStorage.getItem("lucid.meetings-w")); if (mw) setW("meetings", mw); // P-MEET.1
+    const rw = Number(localStorage.getItem("lucid.remoteSpokes-w")); if (rw) setW("remoteSpokes", rw); // P-RS-VIEW.1
   } catch { /* ignore */ }
   // data-resize value → the panel element id ("kg" → #knowledge, "kgside" → the KG side flyout); all
   // right-side panels resize from their left edge, the sidebar (left panel) from its right edge.
@@ -19830,6 +19882,7 @@ function initResize(): void {
       : active.which === "preview" ? [360, Math.round(window.innerWidth * 0.5)]
       : active.which === "kg" ? [360, Math.round(window.innerWidth * 0.8)]
       : active.which === "kgside" ? [200, Math.round(window.innerWidth * 0.6)] // P-KG-CODE.1b: the KG side flyout
+      : active.which === "remoteSpokes" ? [420, Math.round(window.innerWidth * 0.8)] // P-RS-VIEW.1: room for the Admin panel
       : [300, 720];
     const raw = active.which === "sidebar" ? e.clientX - rect.left : rect.right - e.clientX;
     setW(active.which, Math.max(min, Math.min(max, raw)));

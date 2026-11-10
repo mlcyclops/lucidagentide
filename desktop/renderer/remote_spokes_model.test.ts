@@ -10,7 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   ALERTS_MAX, approvalButtons, armClick, ARM_MS, clockLabel, deployChoices, hostLabel, hubActions, lanePolicyLabel, latencyLabel, mapHubSnapshot, mapSpokeRow, mibLabel,
-  MODEL_LIST_MAX, modelCount, REMOTE_TONE, remoteGlance, RESUME_TEXT, spokeActions, spokeAlerts, spokeState, stateLabel, taskButtons, taskModelChoices,
+  MODEL_LIST_MAX, modelCount, onOrbit, REMOTE_TONE, remoteGlance, RESUME_TEXT, spokeActions, spokeAlerts, spokeState, stateLabel, taskButtons, taskModelChoices,
   type RemoteApprovalView, type RemoteSpokeView, type RemoteTaskView,
 } from "./remote_spokes_model.ts";
 
@@ -454,5 +454,27 @@ describe("ADR-0512: a spoke deactivated on purpose", () => {
     for (const deactivated of [undefined, null, "yes", true, {}, { since: 0, reason: "x" }, { since: -5, reason: "x" }, { since: "2026-11-05", reason: "x" }]) {
       expect(mapSpokeRow({ ...row, deactivated })).toEqual(back);
     }
+  });
+});
+
+describe("P-RS-VIEW.1 (ADR-0533): which remote spokes the Fleet Orbit draws", () => {
+  const spoke = (tasks: Record<string, unknown>[], over: Record<string, unknown> = {}): RemoteSpokeView =>
+    mapSpokeRow({ node: NODE, label: "vm-218", reachable: true, caps, tasks, ...over })!;
+
+  test("a spoke is on the orbit while a task holds a lane on it, whatever that task is doing", () => {
+    for (const state of ["working", "awaiting_approval", "idle", "error"]) expect(onOrbit(spoke([task({ state })]))).toBe(true);
+    // One open task among finished ones is enough.
+    expect(onOrbit(spoke([task({ state: "closed" }), task({ id: "t_fedcba9876543210", state: "idle" })]))).toBe(true);
+  });
+
+  test("an online idle machine, or one whose tasks all closed or stopped, is not", () => {
+    expect(onOrbit(spoke([]))).toBe(false);
+    expect(onOrbit(spoke([task({ state: "closed" }), task({ id: "t_fedcba9876543210", state: "stopped" })]))).toBe(false);
+    expect(onOrbit(spoke([], { reachable: false }))).toBe(false);
+  });
+
+  test("silence keeps a spoke with open work on the orbit; deactivation takes any spoke off", () => {
+    expect(onOrbit(spoke([task({ state: "working" })], { silentSince: 500 }))).toBe(true);
+    expect(onOrbit(spoke([task({ state: "working" })], { deactivated: { since: 500, reason: "shipped" } }))).toBe(false);
   });
 });

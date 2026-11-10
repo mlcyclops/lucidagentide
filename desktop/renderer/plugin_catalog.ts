@@ -94,7 +94,7 @@ export const PREMIUM_PLUGINS: PremiumPlugin[] = [
     id: "remote-spokes", name: "Remote Spokes", section: "civilian", sale: "buy", lookupKey: "PLG-REMOTESPOKES-OTF", available: false,
     kicker: "LUCID on your other machines",
     pitch: "Drive headless LUCID engines on your VMs, a DGX Spark, or a cloud VM from this IDE through a sealed relay: pair a spoke once, hand it tasks, watch its lanes, and approve or reject what it asks with a decision the spoke's engine verifies.",
-    lucid: "A hub that runs on this machine and opens in a Preview tab. Until the signed release is on sale, a private build installs from the Installed tab and is marked unsigned.",
+    lucid: "A hub that runs on this machine and opens as Remote spokes on the left rail. Until the signed release is on sale, a private build installs from the Installed tab and is marked unsigned.",
     media: { loop: false, poster: "generated", glyph: "share", tone: "cyan" },
   },
   {
