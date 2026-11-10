@@ -100,7 +100,7 @@ export async function loadHub(deps: RemoteSpokesDeps): Promise<RemoteHubView> {
 /** ADR-0514 (add-on RS-IDE-01, ADR-A074): the hub panel's address for a plugin tab. The plugin's page carries no
  *  secret; the engine asks the plugin (host token) for a one-time bootstrap secret and puts it in the URL fragment,
  *  which the page trades once for its session cookie and token. `ideOrigin` is the IDE window's origin; the plugin
- *  allows no other frame-ancestor. ADR-0537: the IDE now loads the panel top level in its own window (main.ts),
+ *  allows no other frame-ancestor. ADR-0543: the IDE now loads the panel top level in its own window (main.ts),
  *  so nothing frames it, and frame-ancestors still keeps any other page from framing it. */
 export async function remoteSpokesPanelUrl(deps: RemoteSpokesDeps, ideOrigin: string): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
   const ep = deps.endpoint();

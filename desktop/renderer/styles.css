@@ -3020,10 +3020,10 @@ body.preview-open .thread{font-size:.9em}
 .meet-todo.unknown .meet-todo-mark{border-style:dashed;color:var(--txt-3);font-size:10px;line-height:1}
 .meet-todo-text{min-width:0}
 /* ============================================================================================
-   P-RS-VIEW.1 (ADR-0533): the Remote spokes view. The .kg shell with its own width var, wide enough
+   P-RS-VIEW.1 (ADR-0539): the Remote spokes view. The .kg shell with its own width var, wide enough
    for the plugin's Admin panel. Spokes tab: the list on the left, the picked spoke's panel (the
    orbit's own .rs-* panel) on the right. Rows are grids, every text run its own ellipsized block
-   (invariant #11). Admin tab: a launcher for the plugin's panel, which opens in its own window (ADR-0537).
+   (invariant #11). Admin tab: a launcher for the plugin's panel, which opens in its own window (ADR-0543).
    ============================================================================================ */
 #remoteSpokes{width:var(--remoteSpokes-w,min(960px,70vw))}
 #remoteSpokes .set-head{padding-top:6px;padding-bottom:6px;gap:10px}

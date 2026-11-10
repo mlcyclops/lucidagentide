@@ -18,7 +18,7 @@
 // host facts and the lane policy's why in the selector rows and the panel; a task a restart interrupted offers
 // Resume, armed like Approve, which sends RESUME_TEXT through the existing followup route. Nothing re-runs alone.
 //
-// P-RS-VIEW.1 (ADR-0533): only a spoke holding a task is on the ring (remote_spokes_model.ts onOrbit). Every spoke,
+// P-RS-VIEW.1 (ADR-0539): only a spoke holding a task is on the ring (remote_spokes_model.ts onOrbit). Every spoke,
 // the alert list and the plugin's own panel live in the Remote spokes view (remote_spokes_view.ts, on the left
 // rail), which reuses this file's per-spoke panel and Start-a-task selector; the Hubs panel keeps a one-line
 // summary of the remote hub that opens it.
@@ -52,10 +52,10 @@ export interface OrbitRemoteDeps {
   remoteSpokeAct: LucidBridge["remoteSpokeAct"];
   /** Start the remote-spokes plugin (the sanctioned pluginsStart path) so its spokes appear. */
   startRemoteSpokes: () => Promise<void>;
-  /** P-RS-VIEW.1 (ADR-0533): open the Remote spokes view (rail), on a tab or on one spoke. app.ts closes the orbit
+  /** P-RS-VIEW.1 (ADR-0539): open the Remote spokes view (rail), on a tab or on one spoke. app.ts closes the orbit
    *  first, so one surface drives a spoke at a time. */
   openRemoteView: (at?: { tab?: "spokes" | "admin"; node?: string }) => void;
-  /** P-RS-WINDOW.1 (ADR-0537): open or bring forward the plugin's admin panel window (setup, presence, custody). */
+  /** P-RS-WINDOW.1 (ADR-0543): open or bring forward the plugin's admin panel window (setup, presence, custody). */
   openRemoteAdmin: () => void;
 }
 
@@ -91,7 +91,7 @@ export function remoteList(): RemoteSpokeView[] {
   return snap?.available ? snap.spokes : [];
 }
 
-/** P-RS-VIEW.1 (ADR-0533): the remote spokes the orbit draws: only those holding a task (onOrbit). */
+/** P-RS-VIEW.1 (ADR-0539): the remote spokes the orbit draws: only those holding a task (onOrbit). */
 export function orbitRemoteList(): RemoteSpokeView[] {
   return remoteList().filter(onOrbit);
 }
@@ -246,7 +246,7 @@ export function remoteHubVisible(): boolean {
 }
 
 /** The Remote hub row of the Hubs panel: the add-on hub in one line, or why there are none. Empty while the engine
- *  has not answered, so a panel never flashes a wrong reason. P-RS-VIEW.1 (ADR-0533): the spoke list, its alerts
+ *  has not answered, so a panel never flashes a wrong reason. P-RS-VIEW.1 (ADR-0539): the spoke list, its alerts
  *  and the plugin's own panel live in the Remote spokes view, which Open shows; this row only summarizes. */
 export function remoteHubSectionHtml(): string {
   if (!snap || !remoteHubVisible()) return "";

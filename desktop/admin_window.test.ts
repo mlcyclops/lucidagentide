@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { ADMIN_DEFAULT_SIZE, adminBounds, adminNavigation } from "./admin_window.ts";
 import { pluginOrigin } from "./plugins/ports.ts";
 
-// P-RS-WINDOW.1 (ADR-0537): what the Remote Spokes admin window may load, and where it opens.
+// P-RS-WINDOW.1 (ADR-0543): what the Remote Spokes admin window may load, and where it opens.
 const PANEL = "http://127.0.0.1:47555";
 const SCREEN = [{ x: 0, y: 0, width: 1920, height: 1040 }];
 

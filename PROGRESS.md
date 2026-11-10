@@ -5795,7 +5795,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **next:** re-count the model picker for 2.5 and refresh that screenshot.
 
 ## Remote controller lanes: tier policy and engine-verified remote approvals, delegate-certified approvers (P-CTRL-REMOTE.1)
-- **shipped (2026-11-03/04, branch `feat/p-ctrl-remote-approval`, local):** ADR-0525 (16c39be3) remote pairings with a tier policy and approvals the engine verifies against the paired root; ADR-0499 (04392437) the same verifier accepts a hub certified by a root-signed delegation within its limits. 219 tests in the touched areas, 3 typechecks clean; live on the add-on's remote spokes (VM 218, DGX Spark).
+- **shipped (2026-11-03/04, branch `feat/p-ctrl-remote-approval`, local):** ADR-0531 (16c39be3) remote pairings with a tier policy and approvals the engine verifies against the paired root; ADR-0499 (04392437) the same verifier accepts a hub certified by a root-signed delegation within its limits. 219 tests in the touched areas, 3 typechecks clean; live on the add-on's remote spokes (VM 218, DGX Spark).
 - **stubbed:** controller `close` verb (two lanes per pairing), lanes that survive an engine restart, user presence on approve.
 - **next:** push the branch at end of day; upgrade the live spokes to 04392437 with the add-on's `upgrade-core.sh`.
 
@@ -5990,11 +5990,11 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **next:** ship in v2.5.2 with #570 and #574.
 
 ## feat/rs-fleet-ops CI repair (#573): ADR numbering, Windows gate, CodeQL
-- **shipped (2026-11-07):** P-CTRL-REMOTE.1 renumbered ADR-0498 to ADR-0525 (#570 owns 0498), the stray second ADR-0523 heading removed after merging #572 and #574 (P-GLOW.1 is ADR-0524); `remote_approval.test.ts` canonicalizes its workspace (a GitHub Windows runner's tmpdir is the 8.3 `RUNNER~1` form, the pair route realpaths, so a T0 read parked; reproduced locally with an 8.3 TMP, green after); CodeQL: `readPackageFile` and `autoArchive` read through the one fd they checked, the Archived count renders only as a number.
+- **shipped (2026-11-07):** P-CTRL-REMOTE.1 renumbered ADR-0498 to ADR-0531 (#570 owns 0498), the stray second ADR-0523 heading removed after merging #572 and #574 (P-GLOW.1 is ADR-0524); `remote_approval.test.ts` canonicalizes its workspace (a GitHub Windows runner's tmpdir is the 8.3 `RUNNER~1` form, the pair route realpaths, so a T0 read parked; reproduced locally with an 8.3 TMP, green after); CodeQL: `readPackageFile` and `autoArchive` read through the one fd they checked, the Archived count renders only as a number.
 - **stubbed:** the medium CodeQL note on `demo_p_plugins_7.mjs` (the demo sends its own engine token to localhost) is left as designed.
 - **next:** CI on #573; the add-on repo still cites ADR-0498 for P-CTRL-REMOTE.1 and needs the same renumber.
 
-## P-CTRL-REMOTE.1 workspace boundary follows links (ADR-0526, GHSA-vjj8-43cg-rmpr)
+## P-CTRL-REMOTE.1 workspace boundary follows links (ADR-0532, GHSA-vjj8-43cg-rmpr)
 - **shipped (2026-11-07):** `insideWorkspace` compares real paths: workspace realpath'd, asked path by its longest existing ancestor, `..` checked both folded and walked, anything unresolvable (dangling link, loop) outside. 8 new tests on real junctions/symlinks in `remote_approval.test.ts`; 6 fail on the pre-fix source, all pass after; controller + fleet lane suites 104/104; root, desktop and server typechecks clean.
 - **stubbed:** the file-symlink case returns early on Windows without Developer Mode (runs on the Linux and macOS legs); not exercised through a live remote spoke.
 - **next:** CI on #573, then close the advisory with the fix commit; #573 can move toward 2.6.0.
@@ -6008,7 +6008,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **stubbed:** the Homebrew cask is pinned by the update-cask job after the tag build, not here; #573, #571 and the older held PRs stay for 2.6.0.
 - **next:** tag v2.5.2 on the merge commit, let the tag build sign and publish, mark it Latest, merge the auto `chore/cask-v2.5.2` PR; bump the add-on repo's Tahiti `core.lock` to this tag.
 
-## P-HOLDER.1: a lane's turn survives its engine (ADR-0527, ADR-0528)
-- **shipped (2026-11-09):** `native/lucid-holder` (Rust, the first crate, ADR-0527) owns each fleet lane's agent (spool by offset, named pipe or Unix socket with a token, job object or process group); `desktop/lane_holder.ts` + ACPClient held transport + `FleetLaneManager.reattach` + boot reattach before `restoreControllerLanes`; `bun run build-holder` in every dist; CI builds and tests it. `make demo-P-HOLDER.1` (engine SIGKILLed mid-turn, the next engine settles the same turn on the same agent) and the full suite pass on Windows (7787 pass, 0 fail).
+## P-HOLDER.1: a lane's turn survives its engine (ADR-0533, ADR-0534)
+- **shipped (2026-11-09):** `native/lucid-holder` (Rust, the first crate, ADR-0533) owns each fleet lane's agent (spool by offset, named pipe or Unix socket with a token, job object or process group); `desktop/lane_holder.ts` + ACPClient held transport + `FleetLaneManager.reattach` + boot reattach before `restoreControllerLanes`; `bun run build-holder` in every dist; CI builds and tests it. `make demo-P-HOLDER.1` (engine SIGKILLed mid-turn, the next engine settles the same turn on the same agent) and the full suite pass on Windows (7787 pass, 0 fail).
 - **stubbed:** the master chat session is not held; on systemd spokes the add-on keeps holders off (the unit's cgroup stop would end them; a holder service of their own is the add-on's next step, add-on ADR-A080). Since: run on Debian 13 and macOS (tests and the demo pass; a macOS socket path past sun_path now goes to /tmp/lucid-holder-<uid>), CI `holder-posix` green on ubuntu and macOS.
 - **next:** the release workflow on all three OSes; hold the master session.

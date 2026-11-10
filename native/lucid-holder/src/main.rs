@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-//! lucid-holder (P-HOLDER.1, ADR-0528): one lane's agent process, owned outside the engine.
+//! lucid-holder (P-HOLDER.1, ADR-0534): one lane's agent process, owned outside the engine.
 //!
 //!   lucid-holder run --dir <dir> --id <id> [--cwd <dir>] [--orphan-ms <ms>] -- <program> [args...]
 //!

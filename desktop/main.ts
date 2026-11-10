@@ -43,7 +43,7 @@ import { BROWSER_POLICY_WORLD, SNAPSHOT_JS, freshnessJs, isBrowserAction, isBrow
 import { captureCropFromCssRect } from "./preview_capture.ts"; // P-PREVIEW.1: CSS-px rect -> DIP crop (zoom-aware)
 import { flavorInfo, resolveBuildFlavor } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279): the product-line identity
 import { installAppNavigation, openExternalHttp } from "./navigation_policy.ts";
-import { ADMIN_BOUNDS_FILE, ADMIN_MIN_SIZE, ADMIN_PARTITION, ADMIN_WINDOW_TITLE, adminBounds, adminNavigation } from "./admin_window.ts"; // P-RS-WINDOW.1 (ADR-0537)
+import { ADMIN_BOUNDS_FILE, ADMIN_MIN_SIZE, ADMIN_PARTITION, ADMIN_WINDOW_TITLE, adminBounds, adminNavigation } from "./admin_window.ts"; // P-RS-WINDOW.1 (ADR-0543)
 import { pluginOrigin } from "./plugins/ports.ts";
 import { isEngineDocument } from "./origin_guard.ts"; // P-SANDBOX.15 (ADR-0396): the UI token goes only to our own window
 import { installCliForwarder } from "./cli_forwarder.ts"; // P-TUI.2: `lucid hub` from any terminal on an installed machine
@@ -1293,7 +1293,7 @@ ipcMain.handle("lucid:openExternal", async (e, u: unknown) => {
   return openExternalHttp(u, (url) => shell.openExternal(url));
 });
 
-// P-RS-WINDOW.1 (ADR-0537): the Remote Spokes plugin's panel in ONE window of its own. The renderer mints a fresh
+// P-RS-WINDOW.1 (ADR-0543): the Remote Spokes plugin's panel in ONE window of its own. The renderer mints a fresh
 // panel URL through the engine first; this loads it top level, on the plugin's loopback origin only, in an
 // in-memory session of its own, with no preload. Closing it leaves the plugin running. Same sender check as
 // openExternal: only the main window's main frame may ask.

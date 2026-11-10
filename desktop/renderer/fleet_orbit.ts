@@ -30,7 +30,7 @@ import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModel
 import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
 import { LANE_STATUS_ORDER, LANE_STATUS_WORDS, displayStatus } from "../collab/fleet_status.ts"; // P-STUCK-SHOW.1 (ADR-0519)
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
-import { closeDeployPanel, closeRemotePanel, initOrbitRemote, layoutRemote, onDeployPanelClick, onRemoteHubClick, onRemotePanelClick, paintDeployPanel, paintRemotePanel, reconcileRemote, refreshDeployPanel, refreshRemote, refreshRemotePanel, orbitRemoteList, remoteCounts, remoteDeployVisible, remoteHubSectionHtml, remoteHubVisible, remotePanelNode, type OrbitRemoteDeps } from "./orbit_remote.ts"; // P-IDE-SPOKES.1 (ADR-0506), ADR-0508, P-RS-VIEW.1 (ADR-0533)
+import { closeDeployPanel, closeRemotePanel, initOrbitRemote, layoutRemote, onDeployPanelClick, onRemoteHubClick, onRemotePanelClick, paintDeployPanel, paintRemotePanel, reconcileRemote, refreshDeployPanel, refreshRemote, refreshRemotePanel, orbitRemoteList, remoteCounts, remoteDeployVisible, remoteHubSectionHtml, remoteHubVisible, remotePanelNode, type OrbitRemoteDeps } from "./orbit_remote.ts"; // P-IDE-SPOKES.1 (ADR-0506), ADR-0508, P-RS-VIEW.1 (ADR-0539)
 import { beatLine, goalButtonHtml, goalButtonTip, goalPanelHtml, goalSnapshot, onGoalPanelClick, paintHubGoal, refreshGoal, stalledLanes, taskFormHtml, type OrbitGoalDeps } from "./orbit_goal.ts"; // P-AOS.1 (ADR-0452), P-AOS.2 (ADR-0453)
 
 export interface FleetOrbitDeps extends OrbitGoalDeps, OrbitRemoteDeps {
@@ -60,7 +60,7 @@ export interface FleetOrbitDeps extends OrbitGoalDeps, OrbitRemoteDeps {
   /** Close the grid dock. One fleet view at a time: opening the orbit, by any route, closes the grid, so
    *  an orbit-first user never finds a grid left behind that they did not ask for. */
   closeGrid: () => void;
-  /** P-RS-VIEW.1 (ADR-0533): close the Remote spokes view. It and the orbit share one per-spoke panel, so opening
+  /** P-RS-VIEW.1 (ADR-0539): close the Remote spokes view. It and the orbit share one per-spoke panel, so opening
    *  either closes the other. */
   closeRemoteView: () => void;
   /** The REAL OS folder dialog (fleet_grid's contract). Resolves null on cancel - never re-prompt. */
@@ -518,7 +518,7 @@ function onPanelClick(t: HTMLElement): boolean {
     const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
     if (box && onDeployPanelClick(t, box, openRemote)) return true;
   }
-  // P-RS-VIEW.1 (ADR-0533): the remote hub's row offers Start, Set up, Open (the Remote spokes view) and Start a task.
+  // P-RS-VIEW.1 (ADR-0539): the remote hub's row offers Start, Set up, Open (the Remote spokes view) and Start a task.
   if (openedPanel === "hubs") {
     const hit = onRemoteHubClick(t);
     if (hit === "deploy") { togglePanel("deploy"); return true; }

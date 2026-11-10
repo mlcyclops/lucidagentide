@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/remote_spokes_view.ts - P-RS-VIEW.1 (ADR-0533): the Remote spokes view.
+// desktop/renderer/remote_spokes_view.ts - P-RS-VIEW.1 (ADR-0539): the Remote spokes view.
 //
 // Remote spokes are other machines, and the Fleet Orbit is a map of work. Before this view every remote spoke the
 // hub knew sat on the orbit's ring whether it was doing anything or not, and the plugin's own panel (setup, presence,
@@ -13,7 +13,7 @@
 //           recall) or the Start-a-task selector. Both are orbit_remote.ts's own panels, so every untrusted-text,
 //           scope and two-click rule there holds here unchanged.
 //   Admin   a launcher for the remote-spokes plugin's own panel, which opens in a window of its own
-//           (remote_admin_launch.ts, ADR-0537).
+//           (remote_admin_launch.ts, ADR-0543).
 //
 // The view and the orbit share orbit_remote.ts's one per-spoke panel state, so app.ts never lets both be open:
 // opening either closes the other. The hub snapshot is shared too (refreshRemote is single-flight): this view polls
@@ -38,7 +38,7 @@ export type RemoteViewTab = "spokes" | "admin";
 export interface RemoteViewTarget { tab?: RemoteViewTab; node?: string }
 
 export interface RemoteViewDeps {
-  /** app.ts's launchRemoteAdmin: open or bring forward the admin panel's own window (ADR-0537). */
+  /** app.ts's launchRemoteAdmin: open or bring forward the admin panel's own window (ADR-0543). */
   openAdmin: () => void;
   /** app.ts's close: the view, then the inspector and the rail's active mark. */
   close: () => void;
