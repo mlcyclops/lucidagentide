@@ -3,7 +3,7 @@
 
 // harness/creator/creator_endpoint.ts - the portable Creator endpoint contract (lucid-creator-endpoint v1).
 //
-// The DGX Loader runs three Creator services on a DGX box (dgx-avatar on 8088, dgx-cad on 8089, dgx-vision on
+// The Private AI Platform runs three Creator services on a DGX box (dgx-avatar on 8088, dgx-cad on 8089, dgx-vision on
 // 8090, all bound to 127.0.0.1 on the box) and EXPORTS how to reach them as this JSON, dropped into the same-machine mailbox
 // <personal dir>/creator_endpoints/<id>.json. LUCID imports it as a Creator endpoint declaration attested as
 // a DGX enclave host, which is what lets it through the CUI lockdown. This module is the LUCID-side source of

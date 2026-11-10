@@ -360,7 +360,7 @@ async function whistleProbe(): Promise<WhistleProbeAnswer> {
   }
 }
 
-// P-VOICE.7: the same-machine handoff mailbox. The DGX Loader's "Send to LUCID" writes
+// P-VOICE.7: the same-machine handoff mailbox. The Private AI Platform's "Send to LUCID" writes
 // <home>/.omp/voice_endpoints/<id>.json (ADR-0017 in that repo); LUCID auto-scans on every endpoints
 // read, so the transfer is: click there, pick it here. Per-file fail-soft: one malformed file is
 // reported by name and skipped, never fatal, and NOTHING is imported without passing the fail-closed
@@ -1163,7 +1163,7 @@ function creatorEndpointFor(providerId: CreatorProviderId, endpointId?: string):
 
 /** The dots.tts voice backend as a Creator declaration, so the avatar route gates its speech step with the
  *  same verdict. A Creator dots-tts declaration for the same URL carries the user's own attestation; else an
- *  imported voice endpoint written by the DGX Loader attests the enclave; else loopback counts as on-device. */
+ *  imported voice endpoint written by the Private AI Platform attests the enclave; else loopback counts as on-device. */
 function dotsTtsEndpointDef(url: string): CreatorEndpointDef {
   const base = url.replace(/\/+$/, "");
   const declared = listCreatorEndpoints().find((e) => e.enabled && e.providerId === "dots-tts" && (e.baseUrl ?? "").replace(/\/+$/, "") === base);
@@ -1178,7 +1178,7 @@ function dotsTtsEndpointDef(url: string): CreatorEndpointDef {
   };
 }
 
-// lucid-creator-endpoint v1: the DGX Loader writes <personal dir>/creator_endpoints/<id>.json. Scanned at
+// lucid-creator-endpoint v1: the Private AI Platform writes <personal dir>/creator_endpoints/<id>.json. Scanned at
 // engine start (Creator builds) and on POST /api/creator/endpoint/import-mailbox.
 const creatorEndpointMailboxDir = (): string => join(personalBaseDir(), "creator_endpoints");
 function scanCreatorEndpointMailbox(): CreatorMailboxReport {
@@ -2416,7 +2416,7 @@ function sendOauthCode(oauthId: string, code: string): { sent: boolean; reason?:
   catch (e) { console.error(`[oauth] send code failed for ${oauthId}:`, e); return { sent: false, reason: "could not send code" }; }
 }
 
-// lucid-creator-endpoint v1: import whatever the DGX Loader dropped in the mailbox while LUCID was closed.
+// lucid-creator-endpoint v1: import whatever the Private AI Platform dropped in the mailbox while LUCID was closed.
 // Per-file fail-soft; a scan failure never blocks the engine from starting.
 if (BUILD.creatorBuild) {
   try {
@@ -4186,7 +4186,7 @@ return Bun.serve({
         const r = upsertCreatorEndpoint(def);
         return json({ ok: r.ok, error: r.ok ? undefined : r.errors.join("; "), data: { registry: creatorRegistryData() } });
       }
-      // lucid-creator-endpoint v1: rescan the DGX Loader mailbox (<personal dir>/creator_endpoints). Each file
+      // lucid-creator-endpoint v1: rescan the Private AI Platform mailbox (<personal dir>/creator_endpoints). Each file
       // passes the fail-closed contract gate and the declaration validator, or is reported by name.
       if (p === "/api/creator/endpoint/import-mailbox" && req.method === "POST") {
         if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator registry is only in the Creator build." });
@@ -4408,7 +4408,7 @@ return Bun.serve({
         const engine = url.searchParams.get("engine") ?? "musetalk";
         if (engine !== "musetalk" && engine !== "echomimic") return json({ ok: false, error: "engine must be musetalk or echomimic." });
         const ep = creatorEndpointFor("dgx-avatar", url.searchParams.get("endpointId") || undefined);
-        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX avatar endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX avatar endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
         const cuiTpl = creatorGate("dgx-avatar", ep);
         if (!cuiTpl.allowed) return json(cuiRefusal(cuiTpl));
         const r = await new DgxAvatarClient({ baseUrl: ep.baseUrl }).templates(engine);
@@ -4422,7 +4422,7 @@ return Bun.serve({
         const b = await readBody<Record<string, unknown>>(req).catch(() => null);
         if (!b) return json({ ok: false, error: "That avatar request was not JSON." });
         const ep = creatorEndpointFor("dgx-avatar", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
-        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX avatar endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX avatar endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
         const cuiAvatar = creatorGate("dgx-avatar", ep);
         if (!cuiAvatar.allowed) return json(cuiRefusal(cuiAvatar));
         const spec = buildAvatarSpec(b);
@@ -4577,7 +4577,7 @@ return Bun.serve({
         const name = checkInspectName(url.searchParams.get("name"));
         if (!name.ok) return json({ ok: false, error: name.error });
         const ep = creatorEndpointFor("dgx-cad", url.searchParams.get("endpointId") || undefined);
-        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
         const cuiInspect = creatorGate("dgx-cad", ep);
         if (!cuiInspect.allowed) return json(cuiRefusal(cuiInspect));
         if (Number(req.headers.get("content-length") ?? "0") > CAD_MAX_UPLOAD_BYTES * 1.4) return json({ ok: false, error: "That file is over the 200 MB inspect limit." });
@@ -4601,7 +4601,7 @@ return Bun.serve({
         const b = await readBody<Record<string, unknown>>(req).catch(() => null);
         if (!b) return json({ ok: false, error: "That CAD request was not JSON." });
         const ep = creatorEndpointFor("dgx-cad", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
-        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
         const cuiModel = creatorGate("dgx-cad", ep);
         if (!cuiModel.allowed) return json(cuiRefusal(cuiModel));
         const built = buildCadModelRequest(b);
@@ -4672,7 +4672,7 @@ return Bun.serve({
         if (!read.body || typeof read.body !== "object" || Array.isArray(read.body)) return json({ ok: false, error: "Send a JSON object." });
         const b = read.body as Record<string, unknown>;
         const ep = creatorEndpointFor("dgx-vision", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
-        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX vision endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX vision endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
         const cuiVision = creatorGate("dgx-vision", ep);
         if (!cuiVision.allowed) return json(cuiRefusal(cuiVision));
         const img = visionImageFrom(b.image);

@@ -416,7 +416,7 @@ Queued alongside it:
 
 ## Cross-repo briefs
 
-- `DGX-FLEET-INTEGRATION.md` (repo root) - what the TL187 DGX Loader fleet
+- `DGX-FLEET-INTEGRATION.md` (repo root) - what the TL187 Private AI Platform (formerly DGX Loader) fleet
   ships for LUCID (OpenAI-compatible serving, A2A agent card registry, model
   provenance and trust states, LoRA candidates, corpus lake), how to
   build-and-test against it today over SSH tunnels with zero hardcoded box

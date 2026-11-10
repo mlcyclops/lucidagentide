@@ -1,9 +1,9 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/creator_dgx_avatar.ts - the HTTP client for the DGX Loader's avatar service (contract section 2a).
+// desktop/creator_dgx_avatar.ts - the HTTP client for the Private AI Platform's avatar service (contract section 2a).
 //
-// The service runs on a DGX box bound to 127.0.0.1:8088 and is reached through the Loader's SSH forward, so
+// The service runs on a DGX box bound to 127.0.0.1:8088 and is reached through the platform's SSH forward, so
 // LUCID only ever dials the declared base URL. Every call has a timeout, every answer is shape-checked before
 // anything reads it, and every remote string (an error, a template name) is bounded untrusted text. Nothing
 // here decides WHETHER to call: the CUI gate and the job ledger live in the route; this module only speaks
