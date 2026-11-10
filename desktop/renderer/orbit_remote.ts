@@ -644,7 +644,7 @@ function approvalCard(v: RemoteApprovalView, i: number, b: { approve: boolean; d
     // ADR-0507 amendment: a `password` hub's Approve opens this field; the typed password is the second step.
     if (snap?.available && snap.hub.presence === "password") {
       const pw = document.createElement("input");
-      pw.type = "password"; pw.dataset.rsPassword = ""; pw.hidden = true; pw.maxLength = 1024; pw.autocomplete = "off"; pw.placeholder = "the hub's presence password";
+      pw.type = "password"; pw.className = "rs-pw"; pw.dataset.rsPassword = ""; pw.hidden = true; pw.maxLength = 1024; pw.autocomplete = "off"; pw.placeholder = "the hub's presence password";
       pw.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); ok.click(); } });
       row.append(pw);
     }
