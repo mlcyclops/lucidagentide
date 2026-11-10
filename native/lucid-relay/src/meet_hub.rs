@@ -1,6 +1,6 @@
 // Phase C (ADR-0534): the Meet relay's state (meet_relay.Hub): rooms, peers and seats, presence sessions and their
 // inboxes, room history with rseq and catch-up, direct messages, reactions, invitations, devices, the certificate
-// mailboxes (renewals, enrolments, seed requests) and the admin queue, behind ONE lock and one condition variable as
+// mailboxes (renewals, enrollments, seed requests) and the admin queue, behind ONE lock and one condition variable as
 // in the Python. The persistent parts are kept as the JSON values state.json holds, in the order Python's dicts keep
 // them, so state.json moves between the two implementations.
 
@@ -2312,7 +2312,7 @@ impl Hub {
         Ok(obj([("ok", Value::Bool(true))]))
     }
 
-    // ── enrolment ────────────────────────────────────────────────────────────────────────────────────────────
+    // ── enrollment ────────────────────────────────────────────────────────────────────────────────────────────
 
     pub fn seed_used(&self, serial: &str) -> bool {
         self.st.lock().consumed_seeds.contains_key(&m::serial(serial))
@@ -2382,7 +2382,7 @@ impl Hub {
         drop(st);
         self.wake();
         log_info(&format!(
-            "enrolment {} principal={} device={device} seed={serial} origin={}",
+            "enrollment {} principal={} device={device} seed={serial} origin={}",
             if signed { "signed by signer" } else { "requested" },
             who.principal,
             if origin.is_empty() { "-" } else { &origin }
@@ -2409,7 +2409,7 @@ impl Hub {
                 st.consumed_seeds.insert(serial.clone(), f(pj::now()));
                 st.dirty = true;
                 drop(st);
-                log_info(&format!("enrolment delivered principal={} device={} seed={serial}", who.principal, str_value(row.get("device"))));
+                log_info(&format!("enrollment delivered principal={} device={} seed={serial}", who.principal, str_value(row.get("device"))));
                 let get = |k: &str| row.get(k).cloned().ok_or_else(|| E::Gone(format!("'{k}'")));
                 Ok(obj([("state", Value::from("signed")), ("cert_pem", get("cert_pem")?), ("ca_pem", get("ca_pem")?), ("chain_pem", row.get("chain_pem").cloned().unwrap_or(Value::from("")))]))
             }
@@ -2433,9 +2433,9 @@ impl Hub {
         let reason = m::reason(refused);
         let (csr_pem, principal, device) = {
             let st = self.st.lock();
-            let Some(row) = as_obj(st.enrollments.get(&serial)) else { return Err(E::NotFound("no enrolment is waiting for that invite".into())) };
+            let Some(row) = as_obj(st.enrollments.get(&serial)) else { return Err(E::NotFound("no enrollment is waiting for that invite".into())) };
             if pj::text_of(row, "state") == "signed" {
-                return Err(E::Conflict("that enrolment was already signed".into()));
+                return Err(E::Conflict("that enrollment was already signed".into()));
             }
             (row.get("csr_pem").cloned().unwrap_or(Value::Null), pj::text_of(row, "principal"), row.get("device").cloned().unwrap_or(Value::Null))
         };
@@ -2453,7 +2453,7 @@ impl Hub {
         }
         let mut st = self.st.lock();
         let row = st.enrollments.get_mut(&serial).and_then(Value::as_object_mut);
-        let Some(row) = row.filter(|r| pj::text_of(r, "state") != "signed") else { return Err(E::Conflict("that enrolment was already answered".into())) };
+        let Some(row) = row.filter(|r| pj::text_of(r, "state") != "signed") else { return Err(E::Conflict("that enrollment was already answered".into())) };
         if row.get("csr_pem") != Some(&csr_pem) {
             return bad("the device sent a new request meanwhile; read it again");
         }
@@ -2466,7 +2466,7 @@ impl Hub {
         let principal = pj::py_str(row.get("principal").unwrap_or(&Value::Null));
         st.dirty = true;
         drop(st);
-        log_info(&format!("enrolment {} principal={principal} seed={serial} by={}", if reason.is_empty() { "signed" } else { "refused" }, who.principal));
+        log_info(&format!("enrollment {} principal={principal} seed={serial} by={}", if reason.is_empty() { "signed" } else { "refused" }, who.principal));
         Ok(obj([("ok", Value::Bool(true))]))
     }
 

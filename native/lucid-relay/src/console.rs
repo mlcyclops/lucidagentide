@@ -6,7 +6,7 @@
 // session in the cookie `__Host-lrc` (12 h idle, 7 days at most), every POST with this console's Origin and the header
 // `X-Lucid-Console: 1`, and sign-in attempts limited per source address. Admin actions go to the security log.
 //
-// It shows, read-only: relay health, licence, seats, nodes seen, CRL and directory versions (State::console_status),
+// It shows, read-only: relay health, license, seats, nodes seen, CRL and directory versions (State::console_status),
 // the relay's own recent log lines (a ring fed by the logger's tap, newest first, by category and level, downloadable
 // as JSONL) and spoke log lines (POST /v1/logs, a signed spoke op, kept in a ring per node). Never message contents.
 

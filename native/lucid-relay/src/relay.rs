@@ -2,7 +2,7 @@
 // startRelay: every request signed by the caller's node key for this one mailbox (RS-RELAY-03) inside a 60 s window
 // with a nonce never seen before; mail taken only for a node seen authenticating here (RS-RELAY-01); the per-sender
 // quota, the store cap, the rate limit and the mailbox depth; the body limit while the body streams in (RS-RELAY-02);
-// the 72 h TTL; the licence (users on hub certificates, relays in the directory, 503 past grace); and the state folder
+// the 72 h TTL; the license (users on hub certificates, relays in the directory, 503 past grace); and the state folder
 // in the same format, so a relay moves between the Bun relay and this one with its queued mail, seen book, CRL,
 // directory and user book.
 
@@ -10,13 +10,13 @@ use crate::codec::{as_object, exact_keys, js_number_string, parse_json, safe_int
 use crate::console::{Console, CONSOLE_OFF};
 use crate::der::{ecdsa_verify, CertNames};
 use crate::identity::{is_node_id, DirectoryHolder, NodeCert, TrustStore, LOOPBACK_HOSTS};
-use crate::license::{license_keys, license_state, license_user_of, verify_license, Admission, License, LicenseStateName, LicenseUsers, LICENSE_V1_SEATS_FILE};
+use crate::license::{license_keys, license_state, license_user_of, migrate_license_file, verify_license, Admission, License, LicenseStateName, LicenseUsers, LICENSE_USERS_FILE, LICENSE_USERS_FILE_OLD, LICENSE_V1_SEATS_FILE, LICENSE_V1_SEATS_FILE_OLD};
 use crate::log::{Fields, Level, Logger};
 use crate::store::{make_dir, read_text, remove, write_in_place, write_private};
 use indexmap::IndexMap;
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub const BODY_BYTES: usize = 320 * 1024;
@@ -37,7 +37,7 @@ const EXPIRED_LOG_EVERY_MS: i64 = 60_000;
 pub struct Options {
     pub root: p256::ecdsa::VerifyingKey,
     pub owner: Option<String>,
-    /// The licence token (already out of its armour).
+    /// The license token (already out of its armor).
     pub license: Option<String>,
     pub crl_file: Option<PathBuf>,
     pub store: Option<PathBuf>,
@@ -187,7 +187,7 @@ pub fn parse_envelope(v: Option<&Value>) -> Option<(&Map<String, Value>, String,
 }
 
 impl State {
-    /// Load everything a restarted relay needs and judge the licence; Err is why the relay does not start.
+    /// Load everything a restarted relay needs and judge the license; Err is why the relay does not start.
     pub fn new(opts: Options, logger: Arc<Logger>) -> Result<State, String> {
         let mut trust = TrustStore::new(opts.root);
         if let Some(file) = opts.crl_file.as_ref().filter(|f| f.exists()) {
@@ -206,9 +206,19 @@ impl State {
                 match verify_license(token, &trust.root_id, &keys, now.div_euclid(1000)) {
                     Err(reason) => {
                         logger.security("license.refused", &Fields::new().with("reason", &reason), Level::Error);
-                        return Err(format!("relay licence refused: {reason}"));
+                        return Err(format!("relay license refused: {reason}"));
                     }
-                    Ok(c) => Some(Licensed { token: token.clone(), license: c.license, dev: c.dev, users: LicenseUsers::open(opts.users_file.as_deref())? }),
+                    Ok(c) => {
+                        if let Some(file) = opts.users_file.as_deref().filter(|f| f.file_name().is_some_and(|n| n == LICENSE_USERS_FILE)) {
+                            let dir = file.parent().unwrap_or(Path::new(""));
+                            if migrate_license_file(dir, LICENSE_USERS_FILE_OLD, LICENSE_USERS_FILE)? {
+                                let f = Fields::new().with("from", dir.join(LICENSE_USERS_FILE_OLD).display().to_string()).with("to", file.display().to_string());
+                                logger.ops("license.users-migrated", &f, Level::Info);
+                            }
+                            migrate_license_file(dir, LICENSE_V1_SEATS_FILE_OLD, LICENSE_V1_SEATS_FILE)?;
+                        }
+                        Some(Licensed { token: token.clone(), license: c.license, dev: c.dev, users: LicenseUsers::open(opts.users_file.as_deref())? })
+                    }
                 }
             }
         };
@@ -247,11 +257,11 @@ impl State {
             labels: HashMap::new(),
         };
         if let Some(stored) = st.directory_file.as_deref().and_then(read_text).filter(|s| !s.is_empty()) {
-            // Not fatal, unlike the CRL; one naming more relays than the licence covers is not loaded either.
+            // Not fatal, unlike the CRL; one naming more relays than the license covers is not loaded either.
             let t = now.div_euclid(1000);
             if let Some(over) = st.directory_over_cap(&stored, t) {
                 let f = Fields::new().with("reason", over).with("relays", st.licensed.as_ref().map(|l| l.license.relays));
-                st.logger.security("directory.stored-over-licence", &f, Level::Warn);
+                st.logger.security("directory.stored-over-license", &f, Level::Warn);
             } else if let Err(reason) = st.directory.accept(&st.trust, &stored, t) {
                 st.logger.warn("directory.stored-refused", &Fields::new().with("reason", reason));
             }
@@ -337,7 +347,7 @@ impl State {
         Ok(())
     }
 
-    /// Why a root-signed directory may not be served under this licence, or None (ADR-A077).
+    /// Why a root-signed directory may not be served under this license, or None (ADR-A077).
     fn directory_over_cap(&self, token: &str, t: i64) -> Option<String> {
         let l = &self.licensed.as_ref()?.license;
         let mut probe = DirectoryHolder::default();
@@ -346,9 +356,9 @@ impl State {
             return None;
         }
         Some(if l.edition == "standard" {
-            "a Standard licence covers one relay; more relays need an Enterprise licence".into()
+            "a Standard license covers one relay; more relays need an Enterprise license".into()
         } else {
-            format!("the licence covers {} relays", l.relays)
+            format!("the license covers {} relays", l.relays)
         })
     }
 
@@ -407,7 +417,7 @@ impl State {
         Ok(())
     }
 
-    /// Where the licence stands, logged at start, once a day, and when a request finds it moved on.
+    /// Where the license stands, logged at start, once a day, and when a request finds it moved on.
     pub fn check_license(&mut self, t: i64) -> Result<(), String> {
         if self.licensed.is_none() {
             return Ok(());
@@ -428,17 +438,17 @@ impl State {
             .with("state", state.as_str())
             .with("daysLeft", days_left);
         if lic.dev {
-            let why = "development licence: signed by LUCID_LICENSE_DEV_PUB (LUCID_LICENSE_DEV=1), not the publisher; never for production";
+            let why = "development license: signed by LUCID_LICENSE_DEV_PUB (LUCID_LICENSE_DEV=1), not the publisher; never for production";
             self.logger.security("license.development", &fields.clone().with("why", why), Level::Warn);
         }
         match state {
             LicenseStateName::Valid => self.logger.ops("license.ok", &fields, Level::Info),
             LicenseStateName::Grace => {
-                let why = format!("the licence expired; the relay stops serving in {days_left} day(s) unless a renewed licence is installed");
+                let why = format!("the license expired; the relay stops serving in {days_left} day(s) unless a renewed license is installed");
                 self.logger.security("license.grace", &fields.with("why", why), Level::Warn);
             }
             LicenseStateName::Expired => {
-                let why = "the licence is past its grace: every route but /healthz answers 503 until a renewed licence is installed; queued mail stays on disk";
+                let why = "the license is past its grace: every route but /healthz answers 503 until a renewed license is installed; queued mail stays on disk";
                 self.logger.security("license.expired", &fields.with("why", why), Level::Error);
             }
         }
@@ -446,7 +456,7 @@ impl State {
     }
 
     /// Past its grace a licensed relay answers 503 to every route but /healthz, before reading the body.
-    pub fn licence_gate(&mut self, t: i64, where_: &Fields) -> Result<Option<Reply>, String> {
+    pub fn license_gate(&mut self, t: i64, where_: &Fields) -> Result<Option<Reply>, String> {
         let Some(state) = self.licensed.as_ref().map(|l| license_state(&l.license, t.div_euclid(1000)).0) else { return Ok(None) };
         if Some(state) != self.license_seen {
             self.check_license(t)?;
@@ -462,7 +472,7 @@ impl State {
             self.expired_refused = 0;
             self.expired_logged_at = Some(t);
         }
-        Ok(Some(json_reply(503, &json!({ "ok": false, "error": "licence expired" }))))
+        Ok(Some(json_reply(503, &json!({ "ok": false, "error": "license expired" }))))
     }
 
     /// Drop envelopes from the books and from disk (acknowledged, expired or over a cap).
@@ -599,7 +609,7 @@ impl State {
                 let ts = t.div_euclid(1000);
                 if let Some(over) = self.directory_over_cap(token, ts) {
                     let relays = self.licensed.as_ref().map(|l| l.license.relays);
-                    return Ok(refuse(&logger, 403, &over, "directory.over-licence", &who.clone().with("relays", relays)));
+                    return Ok(refuse(&logger, 403, &over, "directory.over-license", &who.clone().with("relays", relays)));
                 }
                 match self.directory.accept(&self.trust, token, ts) {
                     Err(reason) => refuse(&logger, 409, &reason, "directory.refused", &who),
@@ -643,7 +653,7 @@ impl State {
             }
             ("/v1/license", "GET") => match &self.licensed {
                 // A spoke's LAN mailbox has none; hubs ask every mailbox, so that is an answer, not a refusal to log.
-                None => json_reply(404, &json!({ "ok": false, "error": "this mailbox carries no licence" })),
+                None => json_reply(404, &json!({ "ok": false, "error": "this mailbox carries no license" })),
                 Some(lic) => {
                     let l = &lic.license;
                     let (state, days_left) = license_state(l, t.div_euclid(1000));
@@ -651,7 +661,7 @@ impl State {
                         "ok": true, "id": l.id, "org": l.org, "edition": l.edition, "users": l.users, "used": lic.users.used(),
                         "relays": l.relays, "exp": l.exp, "state": state.as_str(), "daysLeft": days_left,
                     });
-                    // ADR-A089: a development licence hands out its signed token so a reader checks it itself.
+                    // ADR-A089: a development license hands out its signed token so a reader checks it itself.
                     if lic.dev {
                         if let Some(m) = o.as_object_mut() {
                             m.insert("dev".into(), Value::Bool(true));
@@ -707,13 +717,13 @@ impl State {
         self.console.clone()
     }
 
-    /// What the control panel shows of the relay (read-only; never message contents): health, licence, seats, nodes
+    /// What the control panel shows of the relay (read-only; never message contents): health, license, seats, nodes
     /// seen, CRL and directory versions. Times in `...At` are milliseconds; `exp` and `since` are seconds.
     pub fn console_status(&self, t: i64) -> Value {
         let mut queues: Vec<(&String, usize, i64)> = self.mailboxes.iter().map(|(n, b)| (n, b.len(), b.iter().map(|m| m.bytes).sum::<i64>())).collect();
         queues.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(b.0)));
         let queues: Vec<Value> = queues.iter().take(100).map(|(n, m, b)| json!({ "node": n, "messages": m, "bytes": b })).collect();
-        let licence = self.licensed.as_ref().map(|lic| {
+        let license = self.licensed.as_ref().map(|lic| {
             let l = &lic.license;
             let (state, days_left) = license_state(l, t.div_euclid(1000));
             json!({
@@ -748,7 +758,7 @@ impl State {
                 "mailboxes": self.mailboxes.len(), "queued": self.mailboxes.values().map(Vec::len).sum::<usize>(),
                 "heldBytes": self.held, "storeBytes": self.store_cap, "senderBytes": self.sender_cap, "queues": queues,
             },
-            "licence": licence,
+            "license": license,
             "seats": seats,
             "nodes": nodes,
             "crl": { "version": self.trust.crl_version() },
@@ -772,8 +782,8 @@ impl State {
         let counts = Fields::new().with("user", license_user_of(me)).with("used", lic.users.used()).with("users", l.users).with("edition", &l.edition);
         match seat {
             Admission::Refused => {
-                let tail = if l.edition == "standard" { " (Standard); more users need an Enterprise licence" } else { "" };
-                let error = format!("the licence allows {} users{tail}", l.users);
+                let tail = if l.edition == "standard" { " (Standard); more users need an Enterprise license" } else { "" };
+                let error = format!("the license allows {} users{tail}", l.users);
                 Ok(Some(refuse(&self.logger, 403, &error, "user.refused", &who.clone().merge(&counts))))
             }
             Admission::Taken => {

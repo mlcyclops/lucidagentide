@@ -38,14 +38,14 @@ pub const INDEX_HTML: &str = r###"<!doctype html>
   <section id="panel" hidden>
     <nav>
       <button type="button" data-tab="health" class="on">Health</button>
-      <button type="button" data-tab="licence">Licence</button>
+      <button type="button" data-tab="license">License</button>
       <button type="button" data-tab="seats">Seats</button>
       <button type="button" data-tab="nodes">Nodes</button>
       <button type="button" data-tab="logs">Logs</button>
       <span id="updated" class="note"></span>
     </nav>
     <div id="health" class="tab"></div>
-    <div id="licence" class="tab" hidden></div>
+    <div id="license" class="tab" hidden></div>
     <div id="seats" class="tab" hidden></div>
     <div id="nodes" class="tab" hidden></div>
     <div id="logs" class="tab" hidden>
@@ -229,7 +229,7 @@ pub const APP_JS: &str = r###""use strict";
     }
     $("updated").textContent = "Updated " + new Date().toLocaleTimeString();
     renderHealth();
-    renderLicence();
+    renderLicense();
     renderSeats();
     renderNodes();
     renderSources();
@@ -259,10 +259,10 @@ pub const APP_JS: &str = r###""use strict";
     );
   }
 
-  function renderLicence() {
-    const l = status.licence;
+  function renderLicense() {
+    const l = status.license;
     if (!l) {
-      $("licence").replaceChildren(el("p", null, "This relay runs without a licence."));
+      $("license").replaceChildren(el("p", null, "This relay runs without a license."));
       return;
     }
     const rows = [
@@ -273,10 +273,10 @@ pub const APP_JS: &str = r###""use strict";
       ["State", l.state],
       ["Days left", l.daysLeft],
       ["Ends", day(l.exp)],
-      ["Licence id", l.id],
+      ["License id", l.id],
     ];
-    if (l.dev) rows.push(["Development licence", "yes: never for production"]);
-    $("licence").replaceChildren(pairs(rows));
+    if (l.dev) rows.push(["Development license", "yes: never for production"]);
+    $("license").replaceChildren(pairs(rows));
   }
 
   function renderSeats() {

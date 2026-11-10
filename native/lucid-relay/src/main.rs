@@ -8,7 +8,7 @@
 //     (or LUCID_RELAY_ROOT_PUB, _LICENSE, _HOST, _PORT/PORT, _TLS_CERT, _TLS_KEY, _STATE, _SENDER_MIB, _BEHIND_TLS=1)
 //               [--console 1]   the control panel at /console/ (or LUCID_RELAY_CONSOLE=1; needs --state; src/console.rs)
 //   lucid-relay --owner <spoke node id> ...   a spoke's LAN mailbox: carries mail to and from that spoke only, needs
-//               no licence; with --state it keeps crl, lan-mailbox-seen.json and lan-mail/ as the spoke agent does.
+//               no license; with --state it keeps crl, lan-mailbox-seen.json and lan-mail/ as the spoke agent does.
 //   lucid-relay collab [--host=…] [--port=…] …   phase B, the core's collab broker (tools/relay/serve.ts; src/collab.rs).
 
 mod codec;
@@ -153,7 +153,7 @@ fn relay_serve_config(flags: &HashMap<String, String>, env: impl Fn(&str) -> Opt
             return Err("--owner must be the spoke's node id (n_ and 32 hex)".into());
         }
         if license.is_some() {
-            return Err("a LAN mailbox (--owner) carries no licence: leave out --license and LUCID_RELAY_LICENSE".into());
+            return Err("a LAN mailbox (--owner) carries no license: leave out --license and LUCID_RELAY_LICENSE".into());
         }
     }
     let tls = match (cert, key) {
@@ -210,9 +210,9 @@ fn main() {
     }
     let flags = parse_args(&args).unwrap_or_else(|e| die(&e));
     let c = relay_serve_config(&flags, |k| std::env::var(k).ok()).unwrap_or_else(|e| die(&e));
-    // A shared relay always runs under the org's relay licence; a spoke's LAN mailbox needs none.
+    // A shared relay always runs under the org's relay license; a spoke's LAN mailbox needs none.
     if c.owner.is_none() && c.license.is_none() {
-        die("the relay licence is required (--license or LUCID_RELAY_LICENSE: the licence file or its armoured text)");
+        die("the relay license is required (--license or LUCID_RELAY_LICENSE: the license file or its armored text)");
     }
     // The control panel (src/console.rs): --console 1 or LUCID_RELAY_CONSOLE=1; when on, the logger feeds its ring.
     let base = Logger::new(if c.owner.is_some() { "lan-mailbox" } else { "relay" });
@@ -251,7 +251,7 @@ fn main() {
         let url = format!("{}://{shown}:{port}/", if c.tls.is_some() { "https" } else { "http" });
         logger.ops("listening", &Fields::new().with("url", url).with("licensed", licensed).with("store", has_store).with("owner", c.owner.clone()), Level::Info);
         if licensed {
-            // An idle relay must still write its daily licence lines, which an operator's alert is raised from.
+            // An idle relay must still write its daily license lines, which an operator's alert is raised from.
             let daily = relay.clone();
             tokio::spawn(async move {
                 let mut every = tokio::time::interval(Duration::from_millis(LICENSE_CHECK_MS));

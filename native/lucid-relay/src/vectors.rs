@@ -1,4 +1,4 @@
-// The add-on's own verdicts on certificates, CRLs, relay directories, request signatures, licences and a stored
+// The add-on's own verdicts on certificates, CRLs, relay directories, request signatures, licenses and a stored
 // envelope record (its scripts/relay-vectors.ts writes tests/vectors.json), checked here against this crate's.
 //
 //   bun scripts/relay-vectors.ts <this crate>/tests/vectors.json   (from the add-on's remote-spoke folder)
@@ -93,7 +93,7 @@ fn request_signatures_verify_exactly_when_typescript_signed_that_string() {
 }
 
 #[test]
-fn licences_get_the_same_verdicts() {
+fn licenses_get_the_same_verdicts() {
     let v = vectors();
     let trust = root(&v);
     let dev_pub = v["license"]["devPub"].as_str().unwrap().to_owned();
@@ -117,7 +117,7 @@ fn licences_get_the_same_verdicts() {
             }
             Err(reason) => json!({ "ok": false, "reason": reason }),
         };
-        assert_eq!(got, c["verdict"], "licence: {}", c["name"]);
+        assert_eq!(got, c["verdict"], "license: {}", c["name"]);
     }
 }
 

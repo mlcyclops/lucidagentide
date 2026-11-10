@@ -1,6 +1,6 @@
-// The relay licence, rule for rule from the add-on's src/license.ts: the v2 token (Ed25519 by the publisher key, or
+// The relay license, rule for rule from the add-on's src/license.ts: the v2 token (Ed25519 by the publisher key, or
 // by a development key only with LUCID_LICENSE_DEV=1 and LUCID_LICENSE_DEV_PUB), its editions, its state (valid,
-// grace, expired) and the user book `licence-users.json`.
+// grace, expired) and the user book `license-users.json`.
 
 use crate::codec::{as_object, b64_decode_lenient, exact_keys, is_int, js_trim, num_is, parse_json, str_of, unb64u, utf16_len, utf8_lossy};
 use crate::der::{ed25519_verify, parse_spki, PublicKey};
@@ -10,12 +10,15 @@ use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// The TECHLEAD 187 LLC licence publisher key (Ed25519, SPKI DER, base64).
+/// The TECHLEAD 187 LLC license publisher key (Ed25519, SPKI DER, base64).
 pub const LICENSE_PUBLISHER_SPKI: &str = "MCowBQYDK2VwAyEArNtRnkfcASRcd/drmTVEwOmoH3cwIK7GXSRuPdf3Hpw=";
 pub const LICENSE_TYP: &str = "lucid-relay-license";
-pub const LICENSE_USERS_FILE: &str = "licence-users.json";
-pub const LICENSE_V1_SEATS_FILE: &str = "licence-seats.json";
-pub const LICENSE_V1_REASON: &str = "a version 1 relay licence: ask for a new licence (Standard or Enterprise)";
+pub const LICENSE_USERS_FILE: &str = "license-users.json";
+pub const LICENSE_V1_SEATS_FILE: &str = "license-seats.json";
+/// The names these books had before the American spelling: a relay renames an old one to the new name at start.
+pub const LICENSE_USERS_FILE_OLD: &str = "licence-users.json";
+pub const LICENSE_V1_SEATS_FILE_OLD: &str = "licence-seats.json";
+pub const LICENSE_V1_REASON: &str = "a version 1 relay license: ask for a new license (Standard or Enterprise)";
 const FEATURES: [&str; 2] = ["relay", "spokes"];
 const EDITIONS: [&str; 2] = ["standard", "enterprise"];
 const DEFAULT_GRACE_DAYS: i64 = 14;
@@ -31,7 +34,7 @@ const ARMOR_END: &str = "-----END LUCID RELAY LICENSE-----";
 
 pub type Ed25519Key = ed25519_dalek::VerifyingKey;
 
-/// The keys a licence may be signed with.
+/// The keys a license may be signed with.
 pub struct LicenseKeys {
     pub publisher: Ed25519Key,
     pub dev: Option<Ed25519Key>,
@@ -50,10 +53,10 @@ fn ed25519_spki(b64: &str, what: &str) -> Result<Ed25519Key, String> {
 
 /// The publisher key, plus the development key when LUCID_LICENSE_DEV=1 AND LUCID_LICENSE_DEV_PUB are both set.
 pub fn license_keys(env: impl Fn(&str) -> Option<String>) -> Result<LicenseKeys, String> {
-    let publisher = ed25519_spki(LICENSE_PUBLISHER_SPKI, "the baked licence publisher key")?;
+    let publisher = ed25519_spki(LICENSE_PUBLISHER_SPKI, "the baked license publisher key")?;
     let flag = env("LUCID_LICENSE_DEV").filter(|v| !v.is_empty()).unwrap_or_else(|| "0".into());
     if flag != "0" && flag != "1" {
-        return Err("LUCID_LICENSE_DEV must be 1 (accept the development licence key) or unset".into());
+        return Err("LUCID_LICENSE_DEV must be 1 (accept the development license key) or unset".into());
     }
     if flag != "1" {
         return Ok(LicenseKeys { publisher, dev: None });
@@ -91,7 +94,7 @@ fn license_problem(p: Option<&Map<String, Value>>) -> Option<String> {
     allowed.push("graceDays");
     let Some(p) = p.filter(|p| exact_keys(p, &allowed, &required)) else { return Some("unexpected fields".into()) };
     if !num_is(p.get("v"), 2.0) || str_of(p.get("typ")) != Some(LICENSE_TYP) {
-        return Some("not a relay licence".into());
+        return Some("not a relay license".into());
     }
     let id_ok = str_of(p.get("id")).is_some_and(|i| i.len() == 18 && i.starts_with("l_") && i[2..].bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)));
     if !id_ok {
@@ -107,10 +110,10 @@ fn license_problem(p: Option<&Map<String, Value>>) -> Option<String> {
     let Some(users) = is_int(p.get("users")).filter(|u| (1..=MAX_USERS).contains(u)) else { return Some(format!("users must be 1 to {MAX_USERS}")) };
     let Some(relays) = is_int(p.get("relays")).filter(|r| (1..=MAX_RELAYS).contains(r)) else { return Some(format!("relays must be 1 to {MAX_RELAYS}")) };
     if edition == "standard" && users > STANDARD_MAX_USERS {
-        return Some(format!("a Standard licence allows 1 to {STANDARD_MAX_USERS} users; more users need an Enterprise licence"));
+        return Some(format!("a Standard license allows 1 to {STANDARD_MAX_USERS} users; more users need an Enterprise license"));
     }
     if edition == "standard" && relays != 1 {
-        return Some("a Standard licence covers one relay; more relays need an Enterprise licence".into());
+        return Some("a Standard license covers one relay; more relays need an Enterprise license".into());
     }
     let features_ok = p.get("features").and_then(Value::as_array).is_some_and(|f| {
         let names: Vec<Option<&str>> = f.iter().map(Value::as_str).collect();
@@ -137,9 +140,9 @@ pub struct LicenseCheck {
     pub dev: bool,
 }
 
-/// Verify a licence token: the signature (publisher first), the shape, the root, and not issued in the future.
+/// Verify a license token: the signature (publisher first), the shape, the root, and not issued in the future.
 pub fn verify_license(token: &str, root: &str, keys: &LicenseKeys, now: i64) -> Result<LicenseCheck, String> {
-    let bad = || Err("malformed licence".to_string());
+    let bad = || Err("malformed license".to_string());
     if utf16_len(token) > MAX_LICENSE_TOKEN {
         return bad();
     }
@@ -156,7 +159,7 @@ pub fn verify_license(token: &str, root: &str, keys: &LicenseKeys, now: i64) -> 
     } else if keys.dev.as_ref().is_some_and(|k| ed25519_verify(k, &body, &sig)) {
         true
     } else {
-        return Err("licence is not signed by the licence publisher".into());
+        return Err("license is not signed by the license publisher".into());
     };
     let parsed = parse_json(&utf8_lossy(&body));
     let p = parsed.as_ref().and_then(as_object);
@@ -166,7 +169,7 @@ pub fn verify_license(token: &str, root: &str, keys: &LicenseKeys, now: i64) -> 
         }
     }
     if let Some(problem) = license_problem(p) {
-        return Err(format!("malformed licence: {problem}"));
+        return Err(format!("malformed license: {problem}"));
     }
     let p = p.expect("checked by license_problem");
     let int = |k: &str| is_int(p.get(k)).unwrap_or(0);
@@ -182,10 +185,10 @@ pub fn verify_license(token: &str, root: &str, keys: &LicenseKeys, now: i64) -> 
         grace_days: is_int(p.get("graceDays")).unwrap_or(DEFAULT_GRACE_DAYS),
     };
     if license.root != root {
-        return Err(format!("licence is for another root ({}, this relay trusts {root})", license.root));
+        return Err(format!("license is for another root ({}, this relay trusts {root})", license.root));
     }
     if int("iat") > now + CLOCK_SKEW_SEC {
-        return Err("licence is not valid yet".into());
+        return Err("license is not valid yet".into());
     }
     Ok(LicenseCheck { license, dev })
 }
@@ -207,7 +210,7 @@ impl LicenseStateName {
     }
 }
 
-/// Where a licence stands at `now` (seconds): valid until exp, then grace for graceDays, then expired.
+/// Where a license stands at `now` (seconds): valid until exp, then grace for graceDays, then expired.
 pub fn license_state(l: &License, now: i64) -> (LicenseStateName, i64) {
     let ceil_days = |s: i64| (s + DAY_SEC - 1).div_euclid(DAY_SEC);
     if now < l.exp {
@@ -220,7 +223,7 @@ pub fn license_state(l: &License, now: i64) -> (LicenseStateName, i64) {
     (LicenseStateName::Expired, 0)
 }
 
-/// The token inside a licence file or value: armoured, or the bare token.
+/// The token inside a license file or value: armored, or the bare token.
 pub fn license_token_of(text: &str) -> String {
     let t = js_trim(text);
     let Some(inner) = t.strip_prefix(ARMOR_BEGIN) else { return t.to_owned() };
@@ -271,12 +274,23 @@ pub struct LicenseUsers {
     users: IndexMap<String, UserSeat>,
 }
 
+/// In `dir`, rename `from` to `to` when `to` is absent and `from` exists (license.ts migrateLicenseFile). True when it
+/// renamed; Err when the rename failed.
+pub fn migrate_license_file(dir: &Path, from: &str, to: &str) -> Result<bool, String> {
+    let (old, new) = (dir.join(from), dir.join(to));
+    if new.exists() || !old.exists() {
+        return Ok(false);
+    }
+    std::fs::rename(&old, &new).map_err(|e| format!("cannot rename {} to {}: {e}", old.display(), new.display()))?;
+    Ok(true)
+}
+
 impl LicenseUsers {
     pub fn open(file: Option<&Path>) -> Result<LicenseUsers, String> {
         let mut book = LicenseUsers { file: file.map(Path::to_path_buf), users: IndexMap::new() };
         let Some(file) = file else { return Ok(book) };
         let Some(raw) = crate::store::read_text(file) else { return Ok(book) };
-        let broken = || format!("{} is not a licence user book: fix it, or remove it so every live hub takes its seat again", file.display());
+        let broken = || format!("{} is not a license user book: fix it, or remove it so every live hub takes its seat again", file.display());
         let parsed = parse_json(&raw);
         let o = parsed.as_ref().and_then(as_object).ok_or_else(broken)?;
         let users = o.get("users").and_then(as_object);
@@ -391,7 +405,23 @@ mod tests {
     }
 
     #[test]
-    fn armour_and_keys() {
+    fn old_named_user_book_is_renamed_and_read() {
+        let dir = std::env::temp_dir().join(format!("lucid-relay-users-migrate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let book = r#"{"v":2,"users":{"u_00112233445566778899aabbccddeeff":{"since":1800000000,"certs":{"0a1b2c3d4e5f60718293a4b5c6d7e8f9":1900000000}}}}"#;
+        std::fs::write(dir.join(LICENSE_USERS_FILE_OLD), book).unwrap();
+        let file = dir.join(LICENSE_USERS_FILE);
+        assert!(migrate_license_file(&dir, LICENSE_USERS_FILE_OLD, LICENSE_USERS_FILE).unwrap());
+        assert!(file.exists() && !dir.join(LICENSE_USERS_FILE_OLD).exists());
+        assert!(!migrate_license_file(&dir, LICENSE_USERS_FILE_OLD, LICENSE_USERS_FILE).unwrap());
+        let users = LicenseUsers::open(Some(&file)).unwrap();
+        assert_eq!(users.used(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn armor_and_keys() {
         assert_eq!(license_token_of(&format!("{ARMOR_BEGIN}\nabc.\n def\n{ARMOR_END}\n")), "abc.def");
         assert_eq!(license_token_of(" tok.en\n"), "tok.en");
         assert_eq!(license_token_of(&format!("{ARMOR_BEGIN}\nabc.def\n-----BROKEN")), "");

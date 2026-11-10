@@ -1,4 +1,4 @@
-// Just enough DER to read what the relay reads: a SubjectPublicKeyInfo (a P-256 node key, the Ed25519 licence keys,
+// Just enough DER to read what the relay reads: a SubjectPublicKeyInfo (a P-256 node key, the Ed25519 license keys,
 // a presence key that may be RSA) and the names on the relay's own TLS certificate. Node reads these with OpenSSL;
 // the rules kept here are the ones its answers depend on (src/identity.ts importPublicSpki, src/presence.ts
 // presencePublicKey, X509Certificate.checkHost and checkIP).

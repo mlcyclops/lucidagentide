@@ -1,5 +1,5 @@
 // HTTP/1.1 over plain TCP (loopback, or behind a platform's TLS front) or TLS (rustls with the AWS-LC provider; its
-// FIPS module with the `fips` feature). Each request: /healthz first, then the licence gate, then the body read with
+// FIPS module with the `fips` feature). Each request: /healthz first, then the license gate, then the body read with
 // its limit held while it streams in, then the relay state under one lock.
 
 use crate::codec::{js_number, now_ms, utf8_lossy};
@@ -172,11 +172,11 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
     let t = now_ms();
     // Behind a TLS front this is the front's address; the node id in each line is what identifies a caller.
     let where_ = Fields::new().with("method", method.as_str()).with("path", pathname.as_str()).with("ip", peer.ip().to_string());
-    // The control panel (src/console.rs, ADR-A094) answers under /console/ when it is on, before the licence gate: an
-    // admin must see an expired licence there. When it is off these paths are relay routes like any other.
+    // The control panel (src/console.rs, ADR-A094) answers under /console/ when it is on, before the license gate: an
+    // admin must see an expired license there. When it is off these paths are relay routes like any other.
     let console = if pathname == "/console" || pathname.starts_with("/console/") { relay.state.lock().console() } else { None };
     if console.is_none() {
-        let gate = relay.state.lock().licence_gate(t, &where_);
+        let gate = relay.state.lock().license_gate(t, &where_);
         match gate {
             Err(_) => return internal_error(),
             Ok(Some(r)) => return to_response(r),
