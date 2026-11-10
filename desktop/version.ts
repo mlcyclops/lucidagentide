@@ -724,4 +724,7 @@
 //            reply (P-ASK.1, ADR-0523), the needs-approval pulse runs on the compositor (P-GLOW.1, ADR-0524)
 //            and the Fleet Orbit's inner ring is drawn through its spokes (#575). Docs: the P-HERD design
 //            ADRs (ADR-0489 to ADR-0497). A plain v2.5.2 tag, marked Latest.
-export const APP_VERSION = "2.5.2";
+// v2.6.0-dev.1 = a local development build of the 2.6.0 line (feat/lane-holder: lanes under lucid-holder, OSC 7501
+//            fleet status, the controller OpenAPI document, PORT=0), so an installed dev build is told apart from
+//            the 2.5.2 release at a glance. Never tagged or published; the release sets 2.6.0.
+export const APP_VERSION = "2.6.0-dev.1";
