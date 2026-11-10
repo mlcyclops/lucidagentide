@@ -12,7 +12,7 @@
 // One 0600 file per plugin in a 0700 dir under the plugins data root (`plugin-data/.running-intent`): beside the
 // plugins' own data dirs but in none of them (a dot name is never a plugin id), so a plugin cannot reset or forge
 // its own intent through LUCID_PLUGIN_DATA, and an update (which clears `plugins/<id>/` of all but the version)
-// never drops it. A newly installed plugin has no file, so it runs only once the user opens it (ADR-0535).
+// never drops it. A newly installed plugin has no file, so it runs only once the user opens it (ADR-0541).
 
 import { chmodSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -49,7 +49,7 @@ export function readRunIntents(dir: string): string[] {
 }
 
 /** Which recorded plugins to start at launch, and which have no package any more (a plugin removed behind the
- *  IDE's back, such as the release cleanup of unsigned private installs, ADR-0536): those are skipped quietly. */
+ *  IDE's back, such as the release cleanup of unsigned private installs, ADR-0542): those are skipped quietly. */
 export function launchSelection(intents: readonly string[], installed: (id: string) => boolean): { start: string[]; missing: string[] } {
   const start: string[] = [];
   const missing: string[] = [];

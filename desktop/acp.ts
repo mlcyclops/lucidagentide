@@ -83,7 +83,7 @@ export function rpcError(err: unknown): Error & { code?: number; data?: unknown 
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void; cleanup: () => void };
 
-/** P-HOLDER.1 (ADR-0528): a connection to a `lucid-holder` that owns the agent process (desktop/lane_holder.ts
+/** P-HOLDER.1 (ADR-0534): a connection to a `lucid-holder` that owns the agent process (desktop/lane_holder.ts
  *  HolderLink). Structural, so this module, which the VS Code extension also bundles, imports nothing of the
  *  engine's. Frames wait until `resume()`, so the client wires its handlers before the replay arrives. */
 export interface HeldIO {

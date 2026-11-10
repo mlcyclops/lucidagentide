@@ -1403,7 +1403,7 @@ demo-P-CTRL.2: ## P-CTRL.2 (ADR-0438; design ADR-0425, issue #449): the controll
 	$(BUN) test $(TEST_IGNORES) desktop/controller/controller.test.ts desktop/origin_guard.test.ts harness/telemetry/events.test.ts harness/adr_numbering.test.ts
 
 .PHONY: demo-P-CTRL-REMOTE.1
-demo-P-CTRL-REMOTE.1: ## P-CTRL-REMOTE.1 (ADR-0525): remote controller lanes. The REAL lane manager and controller routes over the fake ACP agent: the engine's tier policy runs T0/T1 inside the workspace, refuses known destructive actions and edits outside with no way to approve, and parks the rest; only a decision the engine verifies against the paired root (approve scope, not revoked, this lane, this ask, this digest, in date) releases a parked ask; replay, misreport, revocation and expiry are refused; deny and cancel release; the off-task check only tightens.
+demo-P-CTRL-REMOTE.1: ## P-CTRL-REMOTE.1 (ADR-0531): remote controller lanes. The REAL lane manager and controller routes over the fake ACP agent: the engine's tier policy runs T0/T1 inside the workspace, refuses known destructive actions and edits outside with no way to approve, and parks the rest; only a decision the engine verifies against the paired root (approve scope, not revoked, this lane, this ask, this digest, in date) releases a parked ask; replay, misreport, revocation and expiry are refused; deny and cancel release; the off-task check only tightens.
 	$(BUN) test $(TEST_IGNORES) desktop/controller/remote_approval.test.ts desktop/controller/controller.test.ts desktop/exec_policy.test.ts harness/adr_numbering.test.ts
 
 .PHONY: demo-P-CTRL-LANES.1
@@ -1491,7 +1491,7 @@ demo-P-FIPS.1: ## P-FIPS.1 (ADR-0473): AES-256-GCM, PBKDF2-HMAC-SHA256, SHA-256,
 demo-P-BREW.1: ## P-BREW.1: the Homebrew cask is an app cask over the release .zip - no pkg stanza, no allow_untrusted / package trust (deprecated in Homebrew 6), pinned per-arch sha256, and the cask url / electron-builder artifactName / update-cask job all name the same zips
 	$(BUN) run tools/cask_check.ts
 .PHONY: demo-P-HOLDER.1
-demo-P-HOLDER.1: ## P-HOLDER.1 (ADR-0527, ADR-0528): a lane's agent runs under lucid-holder (Rust, native/lucid-holder), so an engine killed mid-turn (a crash, an update, a closed window) leaves the turn running; the next engine reattaches and the same turn settles on the same agent process, nothing re-sent, asks already answered not asked again, open ones asked again; stopping a lane ends the holder and the agent tree. Real engines, the real holder, the house fake agent. Needs `bun run build-holder` (Rust)
+demo-P-HOLDER.1: ## P-HOLDER.1 (ADR-0533, ADR-0534): a lane's agent runs under lucid-holder (Rust, native/lucid-holder), so an engine killed mid-turn (a crash, an update, a closed window) leaves the turn running; the next engine reattaches and the same turn settles on the same agent process, nothing re-sent, asks already answered not asked again, open ones asked again; stopping a lane ends the holder and the agent tree. Real engines, the real holder, the house fake agent. Needs `bun run build-holder` (Rust)
 	cd desktop && $(BUN) run build-holder
 	$(BUN) run desktop/scripts/demo_p_holder_1.ts
 	$(BUN) test $(TEST_IGNORES) desktop/lane_holder.test.ts desktop/controller/lane_lifecycle.test.ts desktop/fleet_lanes.test.ts harness/adr_numbering.test.ts

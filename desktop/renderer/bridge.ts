@@ -1557,7 +1557,7 @@ export interface LucidBridge {
   showInFolder(path: string): Promise<boolean>; // P-FSREVEAL.1: reveal a FILE highlighted in its parent folder (Electron only; false in browser)
   canShowInFolder(): boolean; // whether the native shell can reveal a file in its folder (Electron only)
   openExternal(url: string): Promise<boolean>; // open an http(s) URL in the OS browser (OAuth); false in browser → caller falls back to window.open
-  /** P-RS-WINDOW.1 (ADR-0537): the Remote Spokes admin window at a minted panel URL. False when main refuses it,
+  /** P-RS-WINDOW.1 (ADR-0543): the Remote Spokes admin window at a minted panel URL. False when main refuses it,
    *  null outside Electron (the caller then opens a named browser tab). */
   openRemoteSpokesAdmin(url: string): Promise<boolean | null>;
   // P-INTERJECT.1/.2 (wave 2): mid-turn operator interjection - queue a note the running turn's agent

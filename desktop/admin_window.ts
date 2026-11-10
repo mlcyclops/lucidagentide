@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/admin_window.ts - P-RS-WINDOW.1 (ADR-0537): the pure rules of the Remote Spokes admin window.
+// desktop/admin_window.ts - P-RS-WINDOW.1 (ADR-0543): the pure rules of the Remote Spokes admin window.
 //
 // Electron main opens the Remote Spokes plugin's panel top level in its own window. This file holds what that window
 // may load and where it sits, so both are testable without Electron: the panel URL must be a plugin loopback origin,

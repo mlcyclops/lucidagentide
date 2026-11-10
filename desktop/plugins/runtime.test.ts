@@ -217,7 +217,7 @@ describe("running intent across launches", () => {
   test("a new install waits for the user; a started plugin comes back at the next launch; the user's Stop holds", async () => {
     await installWebFixture();
     let rt = makeRuntime();
-    expect(await rt.autostart()).toEqual([]); // newly installed: nothing runs unasked (ADR-0535)
+    expect(await rt.autostart()).toEqual([]); // newly installed: nothing runs unasked (ADR-0541)
     expect(stateOf(rt, "fixture-web")).toBe("installed");
 
     expect((await rt.start("fixture-web")).ok).toBe(true);

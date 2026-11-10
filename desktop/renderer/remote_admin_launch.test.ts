@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import { ADMIN_TAB_NAME, adminLauncherHtml, launchRemoteAdmin, type PanelUrlResult } from "./remote_admin_launch.ts";
 
-// P-RS-WINDOW.1 (ADR-0537): the admin panel opens in its own window, never in a frame in the view.
+// P-RS-WINDOW.1 (ADR-0543): the admin panel opens in its own window, never in a frame in the view.
 const URL_OK = "http://127.0.0.1:47555/#bootstrap=abc";
 
 function harness(mint: PanelUrlResult | Error, answer: boolean | null | Error, tab: unknown = {}) {

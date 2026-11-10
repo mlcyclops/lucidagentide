@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/remote_admin_launch.ts - P-RS-WINDOW.1 (ADR-0537): the Remote Spokes admin panel opens in a window
+// desktop/renderer/remote_admin_launch.ts - P-RS-WINDOW.1 (ADR-0543): the Remote Spokes admin panel opens in a window
 // of its own. The view's Admin tab is a launcher, and every entry point (the Admin tab, the Spokes tab's setup
 // buttons, the Hubs panel's Set up, the plugins drawer's Open) goes through launchRemoteAdmin: mint a fresh panel URL
 // through the engine, then ask Electron main for the window, or open a named browser tab outside Electron.
