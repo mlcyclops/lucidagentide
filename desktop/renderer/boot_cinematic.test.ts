@@ -5,7 +5,9 @@
 // min-beat + hard-cap done gate (voice/models never hold boot hostage), and the sprint choreography.
 
 import { describe, expect, it } from "bun:test";
-import { BOOT_CAP_MS, BOOT_MIN_MS, FINALE_MS, bootDone, bootFinale, bootLines, bootRunnerX } from "./boot_cinematic.ts";
+import { BOOT_CAP_MS, BOOT_MIN_MS, FINALE_MS, bootDone, bootFinale, bootLines, bootRunnerX, finaleMs } from "./boot_cinematic.ts";
+import { seasonActMs } from "./mascot_season.ts";
+import { SEASONS } from "./seasons.ts";
 import { BLADE_DIAG, BLADE_FLAT, KEYBOARD_LEFT, KEYBOARD_RIGHT, KEYBOARD_WHOLE, MASCOT_FRAMES, MASCOT_RUN_FRAMES, MASCOT_RUN_BEAT_MS, keyboardLitKeys } from "./mascot.ts";
 
 const none = { settings: false, config: false, models: 0, voice: false };
@@ -97,6 +99,13 @@ describe("bootFinale - stop, draw, slice the keyboard, follow through", () => {
   });
 });
 
+describe("finaleMs - the season act replaces the keyboard slice", () => {
+  it("no season keeps the blade finale; a season holds the hand-off until its whole act has played", () => {
+    expect(finaleMs(null)).toBe(FINALE_MS);
+    for (const s of SEASONS) expect(finaleMs(s.id)).toBe(seasonActMs(s.id));
+  });
+});
+
 describe("bootRunnerX - sprint passes with rests", () => {
   it("shares every articulated gait beat and clamps pre-start timestamps", () => {
     for (let i = 0; i < MASCOT_RUN_FRAMES.length; i++) expect(bootRunnerX(i * MASCOT_RUN_BEAT_MS, 900, 80).frame).toBe(MASCOT_RUN_FRAMES[i]);
@@ -116,7 +125,7 @@ describe("bootRunnerX - sprint passes with rests", () => {
     const w = 800, s = 100;
     let prev = -Infinity;
     const frames = new Set<string>();
-    for (let t = 0; t < 2600; t += 80) {
+    for (let t = 0; t < 2600; t += MASCOT_RUN_BEAT_MS) {
       const r = bootRunnerX(t, w, s);
       expect(r.x).toBeGreaterThanOrEqual(prev);
       prev = r.x;

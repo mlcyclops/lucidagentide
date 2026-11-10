@@ -168,6 +168,343 @@
   color-scheme:dark;
 }
 
+/* P-SEASON.1 (ADR-0525): the special-theme palettes, mirrored from styles.css (same ids as theme.ts). */
+/* @palette evergreen */
+:root[data-theme="evergreen"]{
+  /* surfaces + hairlines */
+  --bg-0:#07120d; --bg-1:#0b1b13; --bg-2:#10281c; --bg-3:#143223; --line:#1c4330;
+  --line-soft:#143022; --line-strong:#255c41;
+  /* text ramp */
+  --txt:#f1f6f1; --txt-2:#99c0ac; --txt-3:#5d8571; --txt-4:#406452;
+  /* brand + state hues */
+  --accent:#e23b45; --accent-2:#ff6f78; --accent-deep:#a51d2c; --cyan:#e8c66a;
+  --cyan-2:#f6dc98; --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#160102; --btn-text-cyan:#161001; --state-correct-text:#00180c;
+  --state-wrong-text:#180000;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:226 59 69; --cyan-rgb:232 198 106; --green-rgb:70 210 126;
+  --amber-rgb:232 178 60; --red-rgb:239 95 95; --blue-rgb:94 141 242; --tint-rgb:255 255 255;
+  --sh-rgb:0 0 0; --scrim-rgb:5 13 9; --bg-0-rgb:7 18 13; --bg-1-rgb:11 27 19;
+  --bg-2-rgb:16 40 28;
+  color-scheme:dark;
+}
+
+/* @palette liberty */
+:root[data-theme="liberty"]{
+  /* surfaces + hairlines */
+  --bg-0:#060913; --bg-1:#0a0e1c; --bg-2:#0e152a; --bg-3:#121a35; --line:#182447;
+  --line-soft:#111933; --line-strong:#203061;
+  /* text ramp */
+  --txt:#f2f4fb; --txt-2:#abb3cb; --txt-3:#6d799a; --txt-4:#4e5978;
+  /* brand + state hues */
+  --accent:#e5404f; --accent-2:#ff7380; --accent-deep:#a91d2e; --cyan:#6ea6ff;
+  --cyan-2:#9cc3ff; --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#160103; --btn-text-cyan:#010916; --state-correct-text:#00180c;
+  --state-wrong-text:#180000;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:229 64 79; --cyan-rgb:110 166 255; --green-rgb:70 210 126;
+  --amber-rgb:232 178 60; --red-rgb:239 95 95; --blue-rgb:94 141 242; --tint-rgb:255 255 255;
+  --sh-rgb:0 0 0; --scrim-rgb:4 7 13; --bg-0-rgb:6 9 19; --bg-1-rgb:10 14 28;
+  --bg-2-rgb:14 21 42;
+  color-scheme:dark;
+}
+
+/* @palette honor */
+:root[data-theme="honor"]{
+  /* surfaces + hairlines */
+  --bg-0:#0a0c0f; --bg-1:#0f1317; --bg-2:#161c22; --bg-3:#1c232a; --line:#262f39;
+  --line-soft:#1b2229; --line-strong:#34404d;
+  /* text ramp */
+  --txt:#eef0f3; --txt-2:#a7b6c8; --txt-3:#677c95; --txt-4:#4a5c72;
+  /* brand + state hues */
+  --accent:#d6ab4c; --accent-2:#ecc979; --accent-deep:#8f6c22; --cyan:#86a9cc;
+  --cyan-2:#b0c9e2; --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#160f01; --btn-text-cyan:#010b16; --state-correct-text:#00180c;
+  --state-wrong-text:#180000;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:214 171 76; --cyan-rgb:134 169 204; --green-rgb:70 210 126;
+  --amber-rgb:232 178 60; --red-rgb:239 95 95; --blue-rgb:94 141 242; --tint-rgb:255 255 255;
+  --sh-rgb:0 0 0; --scrim-rgb:7 9 11; --bg-0-rgb:10 12 15; --bg-1-rgb:15 19 23;
+  --bg-2-rgb:22 28 34;
+  color-scheme:dark;
+}
+
+/* @palette gilded */
+:root[data-theme="gilded"]{
+  /* surfaces + hairlines */
+  --bg-0:#0f0e0a; --bg-1:#17150f; --bg-2:#221e16; --bg-3:#2b261b; --line:#3a3425;
+  --line-soft:#29251b; --line-strong:#4f4632;
+  /* text ramp */
+  --txt:#f8f4ea; --txt-2:#c0b59a; --txt-3:#877a5e; --txt-4:#655b41;
+  /* brand + state hues */
+  --accent:#e4c271; --accent-2:#f5dc9f; --accent-deep:#9d7b2c; --cyan:#b9c6f2;
+  --cyan-2:#d6defa; --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#161001; --btn-text-cyan:#010616; --state-correct-text:#00180c;
+  --state-wrong-text:#180000;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:228 194 113; --cyan-rgb:185 198 242; --green-rgb:70 210 126;
+  --amber-rgb:232 178 60; --red-rgb:239 95 95; --blue-rgb:94 141 242; --tint-rgb:255 255 255;
+  --sh-rgb:0 0 0; --scrim-rgb:11 10 7; --bg-0-rgb:15 14 10; --bg-1-rgb:23 21 15;
+  --bg-2-rgb:34 30 22;
+  color-scheme:dark;
+}
+
+/* @palette dawn */
+:root[data-theme="dawn"]{
+  /* surfaces + hairlines */
+  --bg-0:#070812; --bg-1:#0b0c1b; --bg-2:#101228; --bg-3:#141732; --line:#1c1f43;
+  --line-soft:#141630; --line-strong:#252a5c;
+  /* text ramp */
+  --txt:#eff0fa; --txt-2:#afb1cd; --txt-3:#73769d; --txt-4:#535680;
+  /* brand + state hues */
+  --accent:#f2a44c; --accent-2:#ffc581; --accent-deep:#b56a1e; --cyan:#7fa9f2;
+  --cyan-2:#a9c6ff; --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#160c01; --btn-text-cyan:#010916; --state-correct-text:#00180c;
+  --state-wrong-text:#180000;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:242 164 76; --cyan-rgb:127 169 242; --green-rgb:70 210 126;
+  --amber-rgb:232 178 60; --red-rgb:239 95 95; --blue-rgb:94 141 242; --tint-rgb:255 255 255;
+  --sh-rgb:0 0 0; --scrim-rgb:5 6 13; --bg-0-rgb:7 8 18; --bg-1-rgb:11 12 27;
+  --bg-2-rgb:16 18 40;
+  color-scheme:dark;
+}
+
+/* @palette rosewood */
+:root[data-theme="rosewood"]{
+  /* surfaces + hairlines */
+  --bg-0:#12070b; --bg-1:#1b0b10; --bg-2:#281018; --bg-3:#32141e; --line:#431c29;
+  --line-soft:#30141d; --line-strong:#5c2537;
+  /* text ramp */
+  --txt:#fcf0f4; --txt-2:#cbacb6; --txt-3:#9a6d7c; --txt-4:#784e5c;
+  /* brand + state hues */
+  --accent:#ff527e; --accent-2:#ff8aa6; --accent-deep:#b5244d; --cyan:#d9a6ff;
+  --cyan-2:#e8c6ff; --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#160106; --btn-text-cyan:#0d0116; --state-correct-text:#00180c;
+  --state-wrong-text:#180000;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:255 82 126; --cyan-rgb:217 166 255; --green-rgb:70 210 126;
+  --amber-rgb:232 178 60; --red-rgb:239 95 95; --blue-rgb:94 141 242; --tint-rgb:255 255 255;
+  --sh-rgb:0 0 0; --scrim-rgb:13 5 8; --bg-0-rgb:18 7 11; --bg-1-rgb:27 11 16;
+  --bg-2-rgb:40 16 24;
+  color-scheme:dark;
+}
+
+/* @palette shamrock */
+:root[data-theme="shamrock"]{
+  /* surfaces + hairlines */
+  --bg-0:#07120c; --bg-1:#0a1c12; --bg-2:#0f291a; --bg-3:#133320; --line:#1a452c;
+  --line-soft:#13311f; --line-strong:#235e3c;
+  /* text ramp */
+  --txt:#eef8f1; --txt-2:#99c0a9; --txt-3:#5d856e; --txt-4:#40644f;
+  /* brand + state hues */
+  --accent:#33cf6e; --accent-2:#6fe79b; --accent-deep:#178f48; --cyan:#f0c94e;
+  --cyan-2:#f7dd85; --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#011609; --btn-text-cyan:#161101; --state-correct-text:#00180c;
+  --state-wrong-text:#180000;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:51 207 110; --cyan-rgb:240 201 78; --green-rgb:70 210 126;
+  --amber-rgb:232 178 60; --red-rgb:239 95 95; --blue-rgb:94 141 242; --tint-rgb:255 255 255;
+  --sh-rgb:0 0 0; --scrim-rgb:5 13 8; --bg-0-rgb:7 18 12; --bg-1-rgb:10 28 18;
+  --bg-2-rgb:15 41 26;
+  color-scheme:dark;
+}
+
+/* @palette blossom */
+:root[data-theme="blossom"]{
+  /* surfaces + hairlines */
+  --bg-0:#10080e; --bg-1:#190d15; --bg-2:#25131f; --bg-3:#2e1827; --line:#3f2035;
+  --line-soft:#2d1726; --line-strong:#552c47;
+  /* text ramp */
+  --txt:#fcf0f7; --txt-2:#cbabc0; --txt-3:#996c8a; --txt-4:#774d69;
+  /* brand + state hues */
+  --accent:#ff80b8; --accent-2:#ffaad0; --accent-deep:#c34681; --cyan:#b8a4ff;
+  --cyan-2:#d2c6ff; --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#16010a; --btn-text-cyan:#060116; --state-correct-text:#00180c;
+  --state-wrong-text:#180000;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:255 128 184; --cyan-rgb:184 164 255; --green-rgb:70 210 126;
+  --amber-rgb:232 178 60; --red-rgb:239 95 95; --blue-rgb:94 141 242; --tint-rgb:255 255 255;
+  --sh-rgb:0 0 0; --scrim-rgb:12 6 10; --bg-0-rgb:16 8 14; --bg-1-rgb:25 13 21;
+  --bg-2-rgb:37 19 31;
+  color-scheme:dark;
+}
+
+/* @palette harbor */
+:root[data-theme="harbor"]{
+  /* surfaces + hairlines */
+  --bg-0:#070c12; --bg-1:#0a131c; --bg-2:#0f1c29; --bg-3:#122334; --line:#192f46;
+  --line-soft:#122232; --line-strong:#22405f;
+  /* text ramp */
+  --txt:#ebf2f8; --txt-2:#a5b6c7; --txt-3:#667d93; --txt-4:#495d70;
+  /* brand + state hues */
+  --accent:#f2a53c; --accent-2:#ffc16c; --accent-deep:#b07017; --cyan:#5cc4e6;
+  --cyan-2:#8ad8f0; --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#160d01; --btn-text-cyan:#011116; --state-correct-text:#00180c;
+  --state-wrong-text:#180000;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:242 165 60; --cyan-rgb:92 196 230; --green-rgb:70 210 126;
+  --amber-rgb:232 178 60; --red-rgb:239 95 95; --blue-rgb:94 141 242; --tint-rgb:255 255 255;
+  --sh-rgb:0 0 0; --scrim-rgb:5 9 13; --bg-0-rgb:7 12 18; --bg-1-rgb:10 19 28;
+  --bg-2-rgb:15 28 41;
+  color-scheme:dark;
+}
+
+/* @palette jubilee */
+:root[data-theme="jubilee"]{
+  /* surfaces + hairlines */
+  --bg-0:#100b0a; --bg-1:#18110e; --bg-2:#231915; --bg-3:#2b201b; --line:#3b2b24;
+  --line-soft:#2a1f1a; --line-strong:#503a31;
+  /* text ramp */
+  --txt:#f9f1ea; --txt-2:#c8b0a6; --txt-3:#937466; --txt-4:#705549;
+  /* brand + state hues */
+  --accent:#e8493d; --accent-2:#ff7c6e; --accent-deep:#a82b21; --cyan:#f2c24f;
+  --cyan-2:#f8d886; --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#160301; --btn-text-cyan:#161001; --state-correct-text:#00180c;
+  --state-wrong-text:#180000;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:232 73 61; --cyan-rgb:242 194 79; --green-rgb:70 210 126;
+  --amber-rgb:232 178 60; --red-rgb:239 95 95; --blue-rgb:94 141 242; --tint-rgb:255 255 255;
+  --sh-rgb:0 0 0; --scrim-rgb:11 8 7; --bg-0-rgb:16 11 10; --bg-1-rgb:24 17 14;
+  --bg-2-rgb:35 25 21;
+  color-scheme:dark;
+}
+
+/* @palette heritage */
+:root[data-theme="heritage"]{
+  /* surfaces + hairlines */
+  --bg-0:#100c08; --bg-1:#19120d; --bg-2:#251b13; --bg-3:#2e2118; --line:#3f2d20;
+  --line-soft:#2d2017; --line-strong:#553d2c;
+  /* text ramp */
+  --txt:#f7efe7; --txt-2:#c6b1a3; --txt-3:#8f7664; --txt-4:#6d5646;
+  /* brand + state hues */
+  --accent:#2fc0b1; --accent-2:#6fe0d4; --accent-deep:#1a8479; --cyan:#e27d4f;
+  --cyan-2:#f0a07a; --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#011614; --btn-text-cyan:#160801; --state-correct-text:#00180c;
+  --state-wrong-text:#180000;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:47 192 177; --cyan-rgb:226 125 79; --green-rgb:70 210 126;
+  --amber-rgb:232 178 60; --red-rgb:239 95 95; --blue-rgb:94 141 242; --tint-rgb:255 255 255;
+  --sh-rgb:0 0 0; --scrim-rgb:12 8 6; --bg-0-rgb:16 12 8; --bg-1-rgb:25 18 13;
+  --bg-2-rgb:37 27 19;
+  color-scheme:dark;
+}
+
+/* @palette nightshade */
+:root[data-theme="nightshade"]{
+  /* surfaces + hairlines */
+  --bg-0:#0d0811; --bg-1:#140c1a; --bg-2:#1e1127; --bg-3:#251630; --line:#331d42;
+  --line-soft:#24152f; --line-strong:#452859;
+  /* text ramp */
+  --txt:#f5effb; --txt-2:#bfadcc; --txt-3:#89709c; --txt-4:#69507b;
+  /* brand + state hues */
+  --accent:#ff8a24; --accent-2:#ffae62; --accent-deep:#c45b0a; --cyan:#ac80f2;
+  --cyan-2:#c8a8ff; --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#160b01; --btn-text-cyan:#090116; --state-correct-text:#00180c;
+  --state-wrong-text:#180000;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:255 138 36; --cyan-rgb:172 128 242; --green-rgb:70 210 126;
+  --amber-rgb:232 178 60; --red-rgb:239 95 95; --blue-rgb:94 141 242; --tint-rgb:255 255 255;
+  --sh-rgb:0 0 0; --scrim-rgb:9 6 12; --bg-0-rgb:13 8 17; --bg-1-rgb:20 12 26;
+  --bg-2-rgb:30 17 39;
+  color-scheme:dark;
+}
+
+/* @palette gridiron */
+:root[data-theme="gridiron"]{
+  /* surfaces + hairlines */
+  --bg-0:#08100b; --bg-1:#0d1911; --bg-2:#132519; --bg-3:#182e1f; --line:#203f2a;
+  --line-soft:#172d1e; --line-strong:#2c553a;
+  /* text ramp */
+  --txt:#f1f6f2; --txt-2:#98bfa5; --txt-3:#5c856a; --txt-4:#40634c;
+  /* brand + state hues */
+  --accent:#d08a45; --accent-2:#e8aa70; --accent-deep:#8c5622; --cyan:#f4cf55;
+  --cyan-2:#f9e08e; --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#160b01; --btn-text-cyan:#161101; --state-correct-text:#00180c;
+  --state-wrong-text:#180000;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:208 138 69; --cyan-rgb:244 207 85; --green-rgb:70 210 126;
+  --amber-rgb:232 178 60; --red-rgb:239 95 95; --blue-rgb:94 141 242; --tint-rgb:255 255 255;
+  --sh-rgb:0 0 0; --scrim-rgb:6 12 8; --bg-0-rgb:8 16 11; --bg-1-rgb:13 25 17;
+  --bg-2-rgb:19 37 25;
+  color-scheme:dark;
+}
+
+/* @palette pitch */
+:root[data-theme="pitch"]{
+  /* surfaces + hairlines */
+  --bg-0:#06130f; --bg-1:#0a1c16; --bg-2:#0e2a21; --bg-3:#123529; --line:#184737;
+  --line-soft:#113328; --line-strong:#20614b;
+  /* text ramp */
+  --txt:#eefaf5; --txt-2:#99c0b3; --txt-3:#5d8577; --txt-4:#406458;
+  /* brand + state hues */
+  --accent:#31e0a2; --accent-2:#7af0c5; --accent-deep:#12a272; --cyan:#ffd35f;
+  --cyan-2:#ffe394; --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#01160e; --btn-text-cyan:#161001; --state-correct-text:#00180c;
+  --state-wrong-text:#180000;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:49 224 162; --cyan-rgb:255 211 95; --green-rgb:70 210 126;
+  --amber-rgb:232 178 60; --red-rgb:239 95 95; --blue-rgb:94 141 242; --tint-rgb:255 255 255;
+  --sh-rgb:0 0 0; --scrim-rgb:4 13 10; --bg-0-rgb:6 19 15; --bg-1-rgb:10 28 22;
+  --bg-2-rgb:14 42 33;
+  color-scheme:dark;
+}
+
+/* @palette podium */
+:root[data-theme="podium"]{
+  /* surfaces + hairlines */
+  --bg-0:#070912; --bg-1:#0a0e1c; --bg-2:#0f1429; --bg-3:#121934; --line:#192246;
+  --line-soft:#121832; --line-strong:#222e5f;
+  /* text ramp */
+  --txt:#eff3ff; --txt-2:#acb3cc; --txt-3:#70789b; --txt-4:#50587b;
+  /* brand + state hues */
+  --accent:#f3c34f; --accent-2:#ffd97f; --accent-deep:#b0861c; --cyan:#55abff;
+  --cyan-2:#8cc6ff; --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#161001; --btn-text-cyan:#010c16; --state-correct-text:#00180c;
+  --state-wrong-text:#180000;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:243 195 79; --cyan-rgb:85 171 255; --green-rgb:70 210 126;
+  --amber-rgb:232 178 60; --red-rgb:239 95 95; --blue-rgb:94 141 242; --tint-rgb:255 255 255;
+  --sh-rgb:0 0 0; --scrim-rgb:5 6 13; --bg-0-rgb:7 9 18; --bg-1-rgb:10 14 28;
+  --bg-2-rgb:15 20 41;
+  color-scheme:dark;
+}
+
+/* @palette pastel */
+:root[data-theme="pastel"]{
+  /* surfaces + hairlines */
+  --bg-0:#f8f5fc; --bg-1:#ffffff; --bg-2:#f4effa; --bg-3:#ece3f7; --line:#ded2eb;
+  --line-soft:#ece2f7; --line-strong:#c4afdb;
+  /* text ramp */
+  --txt:#1d1727; --txt-2:#56456a; --txt-3:#7c6793; --txt-4:#a393b4;
+  /* brand + state hues */
+  --accent:#7a45c8; --accent-2:#9a5ee6; --accent-deep:#5a2f9f; --cyan:#12806f;
+  --cyan-2:#0f6f61; --green:#1c7f45; --amber:#8a5a04; --red:#c02626; --blue:#2b52c8;
+  /* ink ON a saturated gradient fill (see the note above) */
+  --btn-text-dark:#ffffff; --btn-text-cyan:#ffffff; --state-correct-text:#ffffff;
+  --state-wrong-text:#ffffff;
+  /* channel triplets: the only way to build an alpha variant of a themed colour */
+  --accent-rgb:122 69 200; --cyan-rgb:18 128 111; --green-rgb:28 127 69; --amber-rgb:138 90 4;
+  --red-rgb:192 38 38; --blue-rgb:43 82 200; --tint-rgb:255 255 255; --sh-rgb:60 66 92;
+  --scrim-rgb:30 32 48; --bg-0-rgb:248 245 252; --bg-1-rgb:255 255 255;
+  --bg-2-rgb:244 239 250;
+  color-scheme:light;
+}
+
 /* P-THEME.2: no prefers-color-scheme first-paint block here any more, matching styles.css. An unset
    preference means Lucid Dark, not the OS hint, so the bare `:root` above (which IS lucid-dark) is the
    correct no-attribute paint. The head script below still mirrors the parent's [data-theme] before first
