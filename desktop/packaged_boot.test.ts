@@ -180,11 +180,16 @@ test("lazily-imported feature deps load from the filtered install (no broken-but
 test("every .d.ts omp imports as text survives the packaging filter", async () => {
   const textImport = /from\s+["']([^"']+\.d\.ts)["']\s+with\s*\{\s*type:\s*["']text["']\s*\}/g;
   const assets: string[] = [];
+  let scanned = 0;
   for await (const f of new Bun.Glob("@oh-my-pi/*/src/**/*.ts").scan({ cwd: join(REPO, "node_modules"), followSymlinks: true })) {
     if (f.endsWith(".d.ts")) continue;
+    scanned++;
     const src = readFileSync(join(REPO, "node_modules", f), "utf8");
     for (const m of src.matchAll(textImport)) assets.push(join("node_modules", dirname(f), m[1]));
   }
-  expect(assets.length).toBeGreaterThan(0); // the scan itself must still find omp's sources
+  // P-MODEL.10 (ADR-pending): omp 18.18.6 imports no `.d.ts` as text any more (the eval preludes now
+  // import their `.md` docs instead), so an empty asset list is legitimate; the sanity check is that the
+  // scan still reached omp's sources at all.
+  expect(scanned).toBeGreaterThan(0);
   expect(assets.filter((a) => !existsSync(join(SIM, a)))).toEqual([]);
 }, 30_000);

@@ -68,6 +68,14 @@ describe("listPrice tiers", () => {
       expect(listPrice(m)).toEqual({ inPerM: 10, outPerM: 50 });
     }
   });
+  test("Fable / Mythos 5.2 (P-MODEL.10) carry their cataloged $8/$40 on every route spelling; 5 and 5.1 keep $10/$50", () => {
+    for (const id of ["anthropic/claude-fable-5-2", "anthropic/claude-mythos-5-2", "vercel-ai-gateway/anthropic/claude-fable-5.2", "amazon-bedrock/anthropic.claude-mythos-5-2"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 8, outPerM: 40 });
+    }
+    for (const id of ["anthropic/claude-fable-5", "anthropic/claude-fable-5-1", "anthropic/claude-mythos-5-1", "anthropic/claude-fable-5-20"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 10, outPerM: 50 });
+    }
+  });
   test("the GPT-6 tiers carry their cataloged rates: Astra, Sol, Luna are three different prices", () => {
     expect(listPrice("openai-codex/gpt-6-astra")).toEqual({ inPerM: 10, outPerM: 50 });
     expect(listPrice("openai/gpt-6-sol")).toEqual({ inPerM: 2, outPerM: 10 });

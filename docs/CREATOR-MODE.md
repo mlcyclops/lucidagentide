@@ -699,9 +699,9 @@ Everything in this section is free or self-hosted. The paid services (HeyGen, Au
 ClassCAD, ODA Drawings SDK) are in the registry as catalog entries you can declare, with honest statuses and
 pricing notes, but Creator ships no client for them yet.
 
-**Getting the DGX services into Creator.** The TL187 DGX Loader serves two kinds on the box, both bound to
+**Getting the DGX services into Creator.** The TL187 Private AI Platform (formerly DGX Loader) serves two kinds on the box, both bound to
 127.0.0.1: `avatar` (port 8088, MuseTalk or EchoMimicV3 plus an optional HyperFrames compose) and `cad`
-(port 8089). On a probed card the Loader's **Send to LUCID Creator** writes a `lucid-creator-endpoint` v1
+(port 8089). On a probed card the platform's **Send to LUCID Creator** writes a `lucid-creator-endpoint` v1
 file into `<personal dir>/creator_endpoints/`. Creator imports the folder at startup and from the **Import**
 button in the Video and CAD panes. The file carries the URL (the local mouth of an SSH forward), the forward
 command to run, and `enclave: { kind: "dgx", host }`. A file with a credential-like key, a userinfo URL, an id
@@ -754,7 +754,7 @@ and import are supported. Bluebeam BAX is shown as not supported because its sch
 
 **CUI lockdown.** The existing lockdown (Settings, AskSage gov gateway card, now labeled "CUI lockdown") also
 governs Creator. While it is on, a provider is usable only if it runs on this machine, or its endpoint is
-attested as a DGX enclave host (imported from the Loader, or the **Enclave** checkbox on the endpoint form),
+attested as a DGX enclave host (imported from the Private AI Platform, or the **Enclave** checkbox on the endpoint form),
 or it is a CUI-authorized service. Cloud providers without an authorization are refused before any call,
 probes are skipped with the reason, and every refusal is audited. Each provider row shows a posture chip
 (on-device, DGX enclave, cloud) and the reason when refused. An org-managed lock stays AskSage-only: a user's

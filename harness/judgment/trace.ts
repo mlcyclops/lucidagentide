@@ -4,7 +4,7 @@
 // harness/judgment/trace.ts - P-JEV.2 (ADR-0377): the one shape a traced judgment travels in.
 //
 // omp answers its typed judgments (auto-thinking effort, the smart unexpected-stop check, git AI staging,
-// the eval `judge()` helper) through pi-ai's `Judge` classes: `TypeSafeJudge` (Jev, api.typesafe.ai) and
+// the eval `judge()` helper) through pi-ai's `Judge` classes: `NativeJudge` (Jev, api.typesafe.ai) and
 // `TextJudge` (a chat or local model answering by keyword). omp records NONE of the answers anywhere and
 // exposes no hook for them, so the only place the full request + result exist is inside those two calls.
 // `harness/omp/judgment_extension.ts` wraps them in-process and posts one of these per call; the desktop
