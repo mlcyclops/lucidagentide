@@ -388,6 +388,11 @@ demo-P-FLEET.FIT1: ## P-FLEET.FIT1 (ADR-0528): fleet lanes autofit the dock in b
 demo-P-PUSH.PAR1: ## P-PUSH.PAR1 (ADR-0529): staged-chip copy menu (right-click / long-press) + Push now runs the prompt in a parallel lane on its own git worktree (main-checkout mapping, unique <source>-push-<n> names, preamble, dequeue only on acceptance, text-guarded remove, no-repo steer fallback)
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/queue_model.test.ts desktop/renderer/ctxmenu.test.ts desktop/lane_worktree.test.ts desktop/fleet_lanes.test.ts
 
+.PHONY: demo-P-PRIVAI.1
+demo-P-PRIVAI.1: ## P-PRIVAI.1 (ADR-0530): the DGX Loader is now the Private AI Platform - the renderer bundle carries "Import from the Private AI Platform" and no "DGX Loader", while the /^dgx-loader\b/i enclave attestation regex and the dgx-avatar/dgx-cad/dgx-vision provider ids stay
+	$(BUN) run desktop/scripts/demo_p_privai_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/creator_probe.test.ts desktop/creator_mailbox.test.ts desktop/creator_registry.test.ts desktop/cui_policy.test.ts
+
 .PHONY: demo-P-AVATAR.4
 demo-P-AVATAR.4: ## P-AVATAR.4 (ADR-0251): the LUCID Agent enter flow - fast-model preference order (Terra > Sonnet 5 > Flash, no pointless switch), one-gap-at-a-time readiness (provider > tts > stt), the one-time KG offer, exit model restoration
 	$(BUN) run desktop/scripts/demo_p_avatar_4.ts

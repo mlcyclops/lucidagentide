@@ -1,10 +1,10 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/creator_dgx_vision.ts - the HTTP client for the DGX Loader's vision service (design contract
-// section 4), mirroring creator_dgx_cad.ts.
+// desktop/creator_dgx_vision.ts - the HTTP client for the Private AI Platform's vision service (design
+// contract section 4), mirroring creator_dgx_cad.ts.
 //
-// The service runs on a DGX box bound to 127.0.0.1:8090 and is reached through the Loader's SSH forward.
+// The service runs on a DGX box bound to 127.0.0.1:8090 and is reached through the platform's SSH forward.
 // Rules that hold here:
 //   * Every input image is sniffed from its header and refused before any byte leaves this machine when its
 //     format is not on the allowlist or width * height * frames exceeds the decode budget.

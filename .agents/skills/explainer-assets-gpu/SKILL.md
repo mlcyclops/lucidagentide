@@ -31,7 +31,7 @@ place only when PLAN.md's Assets section names it, its source, its size, and the
 
 ## How to reach the DGX (in this order)
 
-1. **LUCID's own seams first.** The DGX Loader's "Send to LUCID" writes portable endpoint files that LUCID
+1. **LUCID's own seams first.** The Private AI Platform's (formerly DGX Loader) "Send to LUCID" writes portable endpoint files that LUCID
    imports and gates: `~/.omp/voice_endpoints/<id>.json` (`lucid-voice-endpoint` v1, for TTS and dots.tts,
    shown in Settings, Voice, Endpoints) and `<personal dir>/creator_endpoints/<id>.json`
    (`lucid-creator-endpoint` v1, for `dgx-avatar`, `dgx-cad`, `dgx-vision`, imported with the Import button in

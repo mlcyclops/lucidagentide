@@ -5937,3 +5937,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-10):** version 2.5.3-beta.2 at version.ts and desktop/package.json on master after #586 (P-MODEL.10, P-BOOTPERF.1, P-FLEET.FIT1, P-PUSH.PAR1; ADR-0526 to ADR-0529), built and published as a GitHub prerelease by the build-desktop beta_release dispatch.
 - **stubbed:** README, HANDOFF and the bug template stay on 2.5.2 (Latest); the Homebrew cask is not moved for a prerelease.
 - **next:** install the beta on Windows, time the workspace bar and the Reconnect button at startup, push a staged prompt from the main composer during a live turn, then promote to v2.5.3 stable.
+
+## P-PRIVAI.1 (ADR-0530): the DGX Loader is now the Private AI Platform (display rename, identifiers kept)
+- **shipped (2026-11-10):** every current UI string, toast, tooltip, route error, probe note, CUI refusal reason, registry note, skill and guide names the Private AI Platform; provider ids, `enclave.kind`, the `dgx-loader` source value and its `/^dgx-loader\b/i` attestation regex, contract kinds, mailbox paths, env vars, appId and fixtures unchanged; `make demo-P-PRIVAI.1`.
+- **stubbed:** history (old ADRs, PROGRESS entries, dated fleet-brief notes) keeps the old name on purpose. Verified: demo green after build-renderer, and a fresh engine's served `/app.js` has "Import from the Private AI Platform" 5 times and "DGX Loader" 0 times.
+- **next:** ship it in the next beta; the platform's own rename (TL187 Private AI Platform, userData pinned) ships in its repo.

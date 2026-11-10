@@ -5335,7 +5335,7 @@ async function hydrateWhisper(): Promise<void> {
 }
 
 // P-VOICE.7: the imported-endpoints strip inside the dots.tts section. The GET auto-scans the handoff
-// mailbox (the DGX Loader's "Send to LUCID" drops files there), so freshly sent configs appear on every
+// mailbox (the Private AI Platform's "Send to LUCID" drops files there), so freshly sent configs appear on every
 // Settings open with no extra click; the Import button is the portable fallback (a file exported on
 // another machine). Every list row is a real imported config - no box name lives in code.
 async function hydrateVoiceEndpoints(): Promise<void> {
@@ -5351,9 +5351,9 @@ async function hydrateVoiceEndpoints(): Promise<void> {
       <select id="voiceEndpointSel" class="prov-key">
         <option value=""${d.active ? "" : " selected"}>${d.endpoints.length ? "choose an imported endpoint\u2026" : "none imported yet"}</option>${opts}
       </select>
-      <button class="btn-mini" id="voiceEndpointImportBtn" data-tip="Import|Upload a .json exported from the DGX Loader (Export config)">${icon("expand", 12)} Import\u2026</button>
+      <button class="btn-mini" id="voiceEndpointImportBtn" data-tip="Import|Upload a .json exported from the Private AI Platform (Export config)">${icon("expand", 12)} Import\u2026</button>
       <input type="file" id="voiceEndpointFile" accept=".json,application/json" hidden /></div>
-    <div class="set-note">${icon("info", 12)} One-click transfer: in the DGX Loader's Voice tab hit <b>Send to LUCID</b> - the config lands in the handoff folder and appears here on the next Settings open. Or export the file there and Import it here. Configs never carry secrets.</div>
+    <div class="set-note">${icon("info", 12)} One-click transfer: in the Private AI Platform's Voice tab hit <b>Send to LUCID</b> - the config lands in the handoff folder and appears here on the next Settings open. Or export the file there and Import it here. Configs never carry secrets.</div>
     ${rejectNote}`;
 }
 /** Populate the Voice card's picker with the SELECTED engine's voices (P-VOICE.2, ADR-0247): ElevenLabs is
@@ -7013,13 +7013,13 @@ function paintCreatorDrift(): void {
 
 async function importCreatorMailbox(): Promise<void> {
   const r = await bridge.creatorImportMailbox();
-  if (!r.ok || !r.data) { showToast({ tone: "danger", title: "Import from the DGX Loader", desc: r.error ?? "The mailbox did not answer.", actions: [{ label: "OK" }], timeout: 5200 }); return; }
+  if (!r.ok || !r.data) { showToast({ tone: "danger", title: "Import from the Private AI Platform", desc: r.error ?? "The mailbox did not answer.", actions: [{ label: "OK" }], timeout: 5200 }); return; }
   const { imported, rejected } = r.data;
   const desc = [
     imported.length ? `Imported ${imported.join(", ")}.` : "No new endpoint files.",
     rejected.length ? `Rejected: ${rejected.map((x) => `${x.file} (${x.reason})`).join("; ")}` : "",
   ].filter(Boolean).join(" ");
-  showToast({ tone: rejected.length ? "warn" : undefined, title: "Import from the DGX Loader", desc, actions: [{ label: "OK" }], timeout: 6400 });
+  showToast({ tone: rejected.length ? "warn" : undefined, title: "Import from the Private AI Platform", desc, actions: [{ label: "OK" }], timeout: 6400 });
   if (state.studioTab === "cad") await loadCreatorCad();
   else await loadCreatorVideo();
 }

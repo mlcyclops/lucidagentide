@@ -1871,7 +1871,7 @@ export const bridge: LucidBridge = {
   voices: (provider) => getData(provider ? `/api/voices?provider=${encodeURIComponent(provider)}` : "/api/voices"),
   transcribe: (audioB64, mime, language) => post("/api/transcribe", { audioB64, mime, language }),
   voiceDigest: (text) => post("/api/voice/digest", { text }), // P-VOICE.6: slow-engine spoken digest
-  // P-VOICE.7: portable voice endpoints (DGX Loader handoff + manual upload fallback)
+  // P-VOICE.7: portable voice endpoints (Private AI Platform handoff + manual upload fallback)
   voiceEndpoints: () => getData("/api/voice/endpoints"),
   voiceEndpointImport: (json) => post("/api/voice/endpoints/import", { json }),
   voiceEndpointActivate: (id) => post("/api/voice/endpoints/activate", { id }),
@@ -2470,7 +2470,7 @@ export const bridge: LucidBridge = {
       return { ok: !!body.ok, error: body.error, run: body.data.run };
     } catch { return { ok: false, error: "The render service did not answer." }; }
   },
-  // Creator free stack: dgx-avatar, HyperFrames, dgx-cad, and the Loader endpoint mailbox.
+  // Creator free stack: dgx-avatar, HyperFrames, dgx-cad, and the Private AI Platform endpoint mailbox.
   creatorAvatarTemplates: (endpointId, engine) =>
     creatorCall(`/api/creator/avatar/templates?endpointId=${encodeURIComponent(endpointId)}&engine=${encodeURIComponent(engine)}`, {},
       (d): d is AvatarTemplatesView => !!d && typeof d === "object" && "templates" in d && Array.isArray(d.templates) && "folders" in d && Array.isArray(d.folders),
