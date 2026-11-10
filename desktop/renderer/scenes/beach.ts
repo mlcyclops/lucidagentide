@@ -16,7 +16,7 @@ type Stops = readonly (readonly [number, string])[];
 interface Look {
   sky: Stops;
   sea: Stops;
-  /** Sun centre above the horizon, in sun radii (negative = partly set). */
+  /** Sun center above the horizon, in sun radii (negative = partly set). */
   sunLift: number;
   sunRgb: string;
   cloudRgb: string;

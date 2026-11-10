@@ -215,7 +215,7 @@ export function mountComposerRunner(wrap: HTMLElement, getState: () => MascotInp
   function setPalette(): void {
     palette = season ? seasonPalette(season, MASCOT_PALETTE) : MASCOT_PALETTE;
     // Afterimages are flat silhouettes in the costume's accent: the newest lifted most of the way to
-    // white, older ones closer to the raw accent, so the trail fades into the costume colour.
+    // white, older ones closer to the raw accent, so the trail fades into the costume color.
     const accent = parseInt((palette.G ?? MASCOT_PALETTE.G!).slice(1), 16);
     ghostPalettes = [0.75, 0.45, 0.15].map((w) => {
       const pale = (c: number): number => Math.round(c + (255 - c) * w);

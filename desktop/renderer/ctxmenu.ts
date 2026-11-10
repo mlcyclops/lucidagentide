@@ -231,7 +231,7 @@ export function openCtxMenu(clientX: number, clientY: number, entries: CtxMenuEn
 
 /** A press shorter than this is a tap; holding it this long on touch or pen opens the item menu. */
 export const LONG_PRESS_MS = 500;
-/** A finger that drifts further than this (px) is scrolling, not holding: the long-press is cancelled. */
+/** A finger that drifts further than this (px) is scrolling, not holding: the long-press is canceled. */
 export const LONG_PRESS_SLOP_PX = 10;
 /** Did the pointer travel far enough from where it went down to count as a drag/scroll? */
 export function longPressMoved(dx: number, dy: number): boolean {
@@ -240,7 +240,7 @@ export function longPressMoved(dx: number, dy: number): boolean {
 
 /** Wire an item menu on every `selector` row inside `root` (delegated, so rows rebuilt by innerHTML keep
  *  working; bind once per root). A mouse right-click opens it at the pointer; on touch or pen, holding a
- *  row for LONG_PRESS_MS opens it (cancelled by lifting, or by moving past LONG_PRESS_SLOP_PX). The
+ *  row for LONG_PRESS_MS opens it (canceled by lifting, or by moving past LONG_PRESS_SLOP_PX). The
  *  browser's own long-press contextmenu right after ours is swallowed, as is the release's click, so the
  *  hold can never also press the button under the finger. */
 export function bindItemMenu(root: HTMLElement, selector: string, open: (row: HTMLElement, clientX: number, clientY: number) => void): void {

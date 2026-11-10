@@ -13,7 +13,7 @@ import { frameDpr, glow, hash01, layerCache, ridge, wrap, type SceneDef, type Sc
 
 const TAU = Math.PI * 2;
 
-/** Canopy colour triples: sunlit edge, body, shade. */
+/** Canopy color triples: sunlit edge, body, shade. */
 type Tone = readonly [string, string, string];
 const VIVID: readonly Tone[] = [
   ["#ffd56e", "#e9a43a", "#9c5a1c"], ["#ff9e4e", "#d8642a", "#843218"], ["#f2744e", "#b93c2a", "#6a1e1c"],
