@@ -5942,3 +5942,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-10):** every current UI string, toast, tooltip, route error, probe note, CUI refusal reason, registry note, skill and guide names the Private AI Platform; provider ids, `enclave.kind`, the `dgx-loader` source value and its `/^dgx-loader\b/i` attestation regex, contract kinds, mailbox paths, env vars, appId and fixtures unchanged; `make demo-P-PRIVAI.1`.
 - **stubbed:** history (old ADRs, PROGRESS entries, dated fleet-brief notes) keeps the old name on purpose. Verified: demo green after build-renderer, and a fresh engine's served `/app.js` has "Import from the Private AI Platform" 5 times and "DGX Loader" 0 times.
 - **next:** ship it in the next beta; the platform's own rename (TL187 Private AI Platform, userData pinned) ships in its repo.
+
+## Release cut: v2.5.3-beta.3 (prerelease): the Private AI Platform name
+- **shipped (2026-11-10):** version 2.5.3-beta.3 at version.ts and desktop/package.json on master after #588 (P-PRIVAI.1, ADR-0530), built and published as a GitHub prerelease by the build-desktop beta_release dispatch.
+- **stubbed:** README, HANDOFF and the bug template stay on 2.5.2 (Latest); the Homebrew cask is not moved for a prerelease.
+- **next:** install the beta, check Creator Studio and Settings > Voice name the Private AI Platform, then promote the 2.5.3 betas to v2.5.3 stable.
