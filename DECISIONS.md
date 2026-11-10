@@ -26535,3 +26535,17 @@ Parity already held and left alone: workspace, tab, pane hierarchy and ids; the 
 **Rejected.** A per-instance Unix socket or named pipe (above). `PORT=0` at every start of an installed engine: held lanes would lose their engine for good after a restart.
 
 **Consequences.** Test rigs and second engines can run beside the IDE without a port plan. The desktop keeps its fixed default port and the ADR-0458 move off a busy one; nothing changes for an install that does not set `PORT`.
+
+## ADR-0534 -- P-RELAY-RS: one relay in Rust (`native/lucid-relay`) for the remote-spokes mailbox and the collab broker; amends ADR-0527 (2026-11-09)
+
+**Status:** Accepted -- BUILT (phases A and B). Proof: `cargo test --release` in `native/lucid-relay` (26 pass, including verdicts on certificates, CRLs, directories, request signatures and licences produced by the add-on's TypeScript code); `desktop/collab/relay_conformance.test.ts` 15/15 against `bun run tools/relay/serve.ts` and against `lucid-relay collab`; the add-on's `test/relay-conformance.test.ts` 12/12 against its Bun relay and against `lucid-relay`.
+
+**Context.** The owner: one relay technology for hub and spoke, and Rust. Three relays existed: the remote-spokes mailbox (add-on `src/relay.ts`, Bun), the collab and remote-access broker (`tools/relay/serve.ts`, Bun, ADR-0195/0226/0227/0431) and the Meeting Hub rendezvous (Python, separate repo). ADR-0527 limited Rust to sidecars under `native/`.
+
+**Decision.**
+1. ADR-0527 is amended: `native/lucid-relay` is the second Rust crate allowed (a server binary, not an IDE sidecar). TLS is rustls on the aws-lc-rs provider; a `fips` cargo feature selects its FIPS module (needs CMake and Go at build time, not yet built).
+2. Phase A: `lucid-relay [relay serve] <flags>` is a drop-in for `lucid-spoke relay serve`: the same flags and environment, routes, status codes and answers, limits and quotas, replay guard, seen book, owner mode, licence gate and seat book, log line format and `LUCID_LOG_SYSLOG` shipping, and the same state folder, so a relay moves between the two with its queued mail.
+3. Phase B: `lucid-relay collab` is a drop-in for `tools/relay/serve.ts`, wire-compatible with `desktop/collab` clients, including the optional Firebase gate (RS256 through AWS-LC) and metadata-only Firestore presence. The TypeScript broker gains RELAY_MAX_ROOMS_PER_USER, RELAY_MAX_CONNECTS_PER_MINUTE, RELAY_RECLAIM_GRACE_MS, RELAY_METADATA_TOKEN_URL and RELAY_FIRESTORE_URL so either broker is configured by environment alone. The desktop's embedded relay stays TypeScript.
+4. Conformance is the contract: both conformance suites run against the TypeScript server by default and against the binary with `LUCID_TEST_RELAY_BIN` / `LUCID_TEST_COLLAB_RELAY_BIN`.
+
+**Consequences.** Known differences, all deliberate or cosmetic: start-up errors are prefixed `lucid-relay:`; an oversized collab frame closes with 1009 (Bun drops with 1006); a socket closed while its token is being checked is never admitted (Bun kept a ghost room); the JWKS fetch times out after 10 s; RS256 keys must be 2048 to 8192 bits. Next: phase C (the Meeting Hub rendezvous, mutual TLS with the Meet CA), the relay's control panel (add-on ADR-A094), and running the binary on relay VM 217.

@@ -124,6 +124,14 @@ it. Hosts start a share; guests paste the invite link and connect through this b
 | `RELAY_ALLOWED_EMAILS` | — | — | comma list admitted WITHOUT a `premium`/`admin` claim (self-host allowlist) |
 | `RELAY_JWKS_URL` | — | Google securetoken JWKS | override for tests / air-gapped mirrors |
 | `RELAY_AUTH_DEADLINE_MS` | — | `5000` | ms before an unauthenticated socket is reaped (4401) |
+| `RELAY_MAX_ROOMS_PER_USER` | (none) | `4` | rooms one signed-in account may host at once (4429) |
+| `RELAY_MAX_CONNECTS_PER_MINUTE` | (none) | `30` | successful sign-ins per account per minute (4429) |
+| `RELAY_RECLAIM_GRACE_MS` | (none) | `30000` | ms a dropped host's room is held for the same account (`0` = no grace) |
+| `RELAY_TELEMETRY` | (none) | `off` | `firestore` = metadata-only presence documents (P-REMOTE.7) |
+| `RELAY_METADATA_TOKEN_URL` / `RELAY_FIRESTORE_URL` | (none) | Cloud Run metadata server / `https://firestore.googleapis.com` | override for an emulator or a conformance run |
+
+The same broker also ships as a Rust binary (ADR-0534): `lucid-relay collab` takes the same flags and
+environment, so the unit's `ExecStart` or the image's `ENTRYPOINT` swaps only the program.
 
 ## Identity gate (`RELAY_AUTH=firebase`)
 
