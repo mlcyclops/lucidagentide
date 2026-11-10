@@ -4,7 +4,7 @@
 # (acp_backend.ts passes it via `--config`). Precedence: runtime flags > this
 # overlay > project config > global ~/.omp/agent/config.yml.
 #
-# ADR-0032 (fix): task isolation is DISABLED (`mode: none`). It was enabled in
+# ADR-0032 (fix): task isolation is DISABLED (`enabled: false`). It was enabled in
 # ADR-0028 so subagents would run in an isolated copy and return a reviewable
 # patch — but on this product that STRANDED built files: omp captured the
 # subagent's edits as a patch (merge: patch) that LucidAgentIDE has no UI to
@@ -17,9 +17,11 @@
 # EVERY tool call in-process, fail-closed — that, not isolation, is the load-
 # bearing protection. Re-enable isolation only once (a) a patch-review/apply UI
 # exists and (b) the chosen backend's merge is verified reliable on Windows.
+# P-MODEL.10 (ADR-pending): omp 18.18 split the legacy `task.isolation.mode` into `task.isolation.enabled`
+# plus a root `isolation.backend`; `mode: none` only survived through omp's legacy-key migration.
 task:
   isolation:
-    mode: none
+    enabled: false
 
 # P-EDIT.1 (ADR-0105): use the `replace` (search/replace) edit tool instead of omp's default `hashline`.
 # hashline anchors each hunk to line-hash markers the model must have "displayed", one hunk per range — a

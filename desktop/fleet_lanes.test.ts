@@ -480,6 +480,38 @@ test("staged lane prompts carry their own images through drain; queueTake return
   expect(live.queueTake("no-such-lane", 0).ok).toBe(false);
 }, TIMEOUT);
 
+// P-PUSH.PAR1 (ADR-pending): Copy and Push now read a staged item WHOLE without removing it, and the remove
+// that follows a slow parallel push is guarded by the item's text, so a drain that shifted the indexes in
+// between can never make it delete a different staged prompt.
+test("queuePeek reads full text + images in place; queueRemove with expect follows the item or refuses", async () => {
+  live = manager();
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  const png = { data: "aGVsbG8=", mimeType: "image/png" };
+  const long = `peeked ${"y".repeat(200)}`;
+  expect(live.enqueue(id, "first").ok).toBe(true);
+  expect(live.enqueue(id, long, [png]).ok).toBe(true);
+  const peek = live.queuePeek(id, 1);
+  expect(peek.ok).toBe(true);
+  expect(peek.item?.text).toBe(long);
+  expect(peek.item?.images).toEqual([png]);
+  expect((await live.status()).lanes[0]!.queued.length).toBe(2); // still staged
+  expect(live.queuePeek(id, 5).ok).toBe(false);
+  expect(live.queuePeek("no-such-lane", 0).ok).toBe(false);
+  // The head drains while the push is in flight: index 1 is now out of range, and the guarded remove finds
+  // the item by its text instead of refusing or deleting the wrong one.
+  await live.drain(id, () => {});
+  expect(live.queueRemove(id, 1, long).ok).toBe(true);
+  expect((await live.status()).lanes[0]!.queued.length).toBe(0);
+  // Nothing carries that text any more: a refusal, never a different item.
+  expect(live.enqueue(id, "unrelated").ok).toBe(true);
+  expect(live.queueRemove(id, 0, long).ok).toBe(false);
+  expect((await live.status()).lanes[0]!.queued.map((q) => q.text)).toEqual(["unrelated"]);
+  // A NaN index without `expect` used to splice the head; it is a refusal now.
+  expect(live.queueRemove(id, Number.NaN).ok).toBe(false);
+  expect((await live.status()).lanes[0]!.queued.length).toBe(1);
+}, TIMEOUT);
+
 // ── P-FLEET.L5 (ADR-0274): the durable lane-session ledger ───────────────────────────────────────────
 
 test("spawn and every recovery NAME the session in the ledger; the view exposes the session id", async () => {

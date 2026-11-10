@@ -11,7 +11,7 @@
 // and ships in every tag from v1.11.8 onward.
 
 import { describe, expect, test } from "bun:test";
-import { bunProbeVerdict, isOmpSpawnFailure, nodeProbeVerdict, OMP_PROBE_TIMEOUT_MS, ompCandidates, ompUnavailableReport, resolveOmpBin, type OmpCandidateInput } from "./omp_bin.ts";
+import { bunProbeVerdict, isOmpSpawnFailure, nodeProbeVerdict, OMP_PROBE_TIMEOUT_MS, ompCandidates, ompUnavailableReport, resolveOmpBin, resolveOmpBinAsync, type OmpCandidateInput, type OmpRunProbe } from "./omp_bin.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -147,6 +147,34 @@ describe("a timed-out probe", () => {
     expect(r.proven).toBe(false);
     expect(r.indeterminate).toBeUndefined();
     expect(r.timedOut).toEqual([]);
+  });
+});
+
+// P-BOOTPERF.1 (ADR-pending): the engine now probes off its event loop through resolveOmpBinAsync. It must
+// make exactly the decision the sync resolver makes, for every verdict mix, or the two paths would drift
+// (the c2d8cf9 class of bug this module exists to prevent).
+describe("resolveOmpBinAsync", () => {
+  const BUNDLED = "C:/app/resources/repo/node_modules/.bin/omp.exe";
+  const cases: [string, Partial<OmpCandidateInput>, OmpRunProbe][] = [
+    ["env binary runs", { envBin: "/opt/omp" }, () => true],
+    ["unrunnable install binary skipped", { envBin: PROGRAM_FILES }, (c) => c !== PROGRAM_FILES],
+    ["every candidate fails", { envBin: PROGRAM_FILES }, () => false],
+    ["throwing probe", { envBin: PROGRAM_FILES }, (c) => { if (c === PROGRAM_FILES) throw new Error("EPERM"); return c === "omp"; }],
+    ["slow bundled shim stays usable", { envBin: BUNDLED }, (c) => (c === BUNDLED ? "timeout" : false)],
+    ["a later answer beats a timeout", { envBin: BUNDLED }, (c) => (c === BUNDLED ? "timeout" : c === "/home/n/.bun/bin/omp")],
+    ["all slow keeps the first", { envBin: BUNDLED, installed: ["/managed/omp"] }, () => "timeout"],
+  ];
+  for (const [name, over, probe] of cases) {
+    test(`same resolution as the sync resolver: ${name}`, async () => {
+      const asyncProbe = async (c: string) => probe(c);
+      expect(await resolveOmpBinAsync(input(over), asyncProbe)).toEqual(resolveOmpBin(input(over), probe));
+    });
+  }
+
+  test("stops probing at the first candidate that runs", async () => {
+    const probed: string[] = [];
+    await resolveOmpBinAsync(input({ envBin: "/opt/omp" }), async (c) => { probed.push(c); return true; });
+    expect(probed).toEqual(["/opt/omp"]);
   });
 });
 

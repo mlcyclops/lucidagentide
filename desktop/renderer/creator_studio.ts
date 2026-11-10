@@ -154,7 +154,7 @@ export function probeLineHtml(probe: ProbeResultView | undefined, now: number): 
 
 const POSTURE: Record<string, { label: string; tone: "local" | "enclave" | "cloud"; detail: string }> = {
   "on-device": { label: "on-device", tone: "local", detail: "Runs on this workstation (in the renderer, a local process, or a loopback service you run)." },
-  enclave: { label: "DGX enclave", tone: "enclave", detail: "Runs on a DGX host attested as a CUI enclave (imported from the Loader or declared by you)." },
+  enclave: { label: "DGX enclave", tone: "enclave", detail: "Runs on a DGX host attested as a CUI enclave (imported from the Private AI Platform or declared by you)." },
   cloud: { label: "cloud", tone: "cloud", detail: "A vendor service off this workstation and outside the DGX enclave." },
 };
 

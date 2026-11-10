@@ -78,13 +78,15 @@ async function git(dir: string, args: string[]): Promise<{ ok: boolean; out: str
 
 export type WorktreeResult =
   | ({ ok: true; root: string } & WorktreePlan)
-  | { ok: false; reason: string };
+  /** P-PUSH.PAR1 (ADR-pending): `no-repo` = the folder is not a repo with a commit (no worktree is possible
+   *  here at all), as opposed to git failing on a real repo. The composer's Push now steers instead. */
+  | { ok: false; reason: string; code?: "no-repo" };
 
 /** Create the lane's worktree on a new branch from the checkout's HEAD. Every refusal names why, in words
  *  the spawn form shows verbatim. */
 export async function createLaneWorktree(cwd: string, name: string): Promise<WorktreeResult> {
   const root = await repoRoot(cwd);
-  if (!root) return { ok: false, reason: `"${cwd}" is not inside a git repository, so it cannot have its own worktree. Spawn it without the worktree option, or pick a folder inside a repo.` };
+  if (!root) return { ok: false, code: "no-repo", reason: `"${cwd}" is not inside a git repository, so it cannot have its own worktree. Spawn it without the worktree option, or pick a folder inside a repo.` };
   return addWorktree(root, worktreePlan(root, cwd, name, randomBytes(3).toString("hex")));
 }
 
@@ -105,7 +107,7 @@ async function repoRoot(cwd: string): Promise<string | null> {
 
 async function addWorktree(root: string, plan: WorktreePlan): Promise<WorktreeResult> {
   const head = await git(root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
-  if (!head.ok) return { ok: false, reason: `the repository at "${root}" has no commits yet, so there is nothing to start a worktree from. Commit once, then spawn again.` };
+  if (!head.ok) return { ok: false, code: "no-repo", reason: `the repository at "${root}" has no commits yet, so there is nothing to start a worktree from. Commit once, then spawn again.` };
   const add = await git(root, ["worktree", "add", "-b", plan.branch, plan.path, "HEAD"]);
   if (!add.ok) return { ok: false, reason: `git could not create the worktree: ${add.err.split(/\r?\n/).pop() || "unknown error"}` };
   return { ok: true, root, ...plan };

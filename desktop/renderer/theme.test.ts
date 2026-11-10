@@ -21,15 +21,17 @@ const HERE = import.meta.dir;
 const CSS = readFileSync(join(HERE, "styles.css"), "utf8");
 const TRAINER = readFileSync(join(HERE, "trainer.html"), "utf8");
 
+// The BASE themes offered in the picker grid. Special-theme palettes (P-SEASON.1) are registered too but
+// are reached through a season, so they are pinned by seasons.test.ts instead.
 const EXPECTED_IDS = ["lucid-dark", "lucid-light", "midnight", "slate", "ember", "paper", "contrast"];
+const BASE = THEMES.filter((t) => !t.special);
 const EM_DASH = "\u2014";
 
 // ── the registry ──────────────────────────────────────────────────────────────────────
 
 describe("THEMES registry", () => {
-  test("ships exactly the seven ids app.ts and styles.css agree on", () => {
-    expect(THEMES.map((t) => t.id).sort()).toEqual([...EXPECTED_IDS].sort());
-    expect(THEMES).toHaveLength(7);
+  test("offers exactly the seven base ids in the picker grid", () => {
+    expect(BASE.map((t) => t.id).sort()).toEqual([...EXPECTED_IDS].sort());
   });
 
   test("has unique kebab-case ids", () => {
@@ -37,8 +39,8 @@ describe("THEMES registry", () => {
     for (const t of THEMES) expect(t.id).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
   });
 
-  test("has exactly two light themes", () => {
-    expect(THEMES.filter((t) => t.scheme === "light").map((t) => t.id)).toEqual(["lucid-light", "paper"]);
+  test("has exactly two light base themes", () => {
+    expect(BASE.filter((t) => t.scheme === "light").map((t) => t.id)).toEqual(["lucid-light", "paper"]);
   });
 
   test("defaults to lucid-dark", () => {
@@ -276,7 +278,7 @@ describe("styles.css palette blocks", () => {
   test("keeps the light themes' state-hue text legible on their own tint", () => {
     // The subtle half of a light port: --red/--green/--amber were picked to glow on near-black,
     // and a straight copy leaves 2:1 text on a pale wash. --*-txt is the light-side answer.
-    for (const id of ["lucid-light", "paper"]) {
+    for (const id of THEMES.filter((t) => t.scheme === "light").map((t) => t.id)) {
       const p = byId.get(id)!;
       for (const tok of ["--red-txt", "--amber-txt", "--green-txt", "--blue-txt", "--cyan-txt", "--violet-txt"]) {
         const ratio = contrast(p.tokens[tok]!, p.tokens["--bg-2"]!);
