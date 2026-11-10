@@ -5947,3 +5947,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-10):** version 2.5.3-beta.3 at version.ts and desktop/package.json on master after #588 (P-PRIVAI.1, ADR-0530), built and published as a GitHub prerelease by the build-desktop beta_release dispatch.
 - **stubbed:** README, HANDOFF and the bug template stay on 2.5.2 (Latest); the Homebrew cask is not moved for a prerelease.
 - **next:** install the beta, check Creator Studio and Settings > Voice name the Private AI Platform, then promote the 2.5.3 betas to v2.5.3 stable.
+
+## Fix: switching a lane to the main space shows the whole answer (no 8K "[truncated]")
+- **shipped (2026-11-10):** desktop/fleet_lanes.ts keeps full turn text in the lane transcript (200K memory ceiling) so promote() seeds the main composer and the phone lane-sync with the whole answer; the 8K clamp now applies only inside the recovery preamble; regression test in fleet_lanes.test.ts.
+- **stubbed:** none; thinking keeps its 8K replay cap.
+- **next:** roll into the next beta with the low-risk PR set.
