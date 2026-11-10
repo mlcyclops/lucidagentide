@@ -38,21 +38,38 @@
 //     hyphen-less `glm5.3` lands behind the ACKNOWLEDGE like every other GLM spelling.
 //   - snowflake: Snowflake Cortex (U.S.), Claude in the customer's own Snowflake account via Snowflake
 //     OAuth (PKCE, loopback 54551). Tenant-hosted allied provider, no gate.
+//
+// 18.8.6 -> 18.18.6 (P-MODEL.10, ADR-pending) ADDED seven, removed none, reviewed 2026-11-10:
+//   - cloudflare-workers-ai: Cloudflare (U.S.) Workers AI, API token + account id; default is the Clef
+//     System One judge (`@cf/cloudflare/clef`). Allied host; any open-weight China-origin id it serves is
+//     gated per MODEL by `isChinaModel`, like every other host.
+//   - coralbricks: CoralBricks inference gateway, open-weight models only (default `glm-5.3-fast`,
+//     `deepseek-v4.1-flash-fast`). Every bundled id is China-origin and already behind the ACKNOWLEDGE via
+//     `isChinaModel` (`glm-<digit>`, `deepseek`); no provider-level gate needed.
+//   - inception: Inception Labs (U.S.) Mercury diffusion models. Allied first-party, no gate.
+//   - modular: Modular (U.S.) MAX serving of open-weight models (default `google/gemma-4-31b-it`). Allied
+//     host, per-model gate as above.
+//   - otari: OpenAI-compatible gateway whose roster is the workspace's own enabled upstreams (ids
+//     `<upstream>/<model>`, nothing bundled). Same posture as openrouter: listed, per-model gate.
+//   - sambanova: SambaNova Cloud (U.S.), open-weight models (default `gpt-oss-120b`). Allied host,
+//     per-model gate.
+//   - scaleway: Scaleway (France, EU) serverless inference (default `glm-5.3`). Allied host; its GLM /
+//     Qwen / DeepSeek ids sit behind the ACKNOWLEDGE through `isChinaModel`.
 
 import { expect, test } from "bun:test";
 import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog";
 
-// Pinned universe at @oh-my-pi/pi-catalog 18.8.6 (the exact version package.json pins). Sorted, 85 ids.
+// Pinned universe at @oh-my-pi/pi-catalog 18.18.6 (the exact version package.json pins). Sorted, 92 ids.
 const PINNED_PROVIDER_IDS = [
 	"abliteration", "aiand", "aimlapi", "alibaba-coding-plan", "alibaba-token-plan", "amazon-bedrock",
 	"anthropic", "apple", "azure", "baseten", "bedrock-mantle", "cerebras", "charm-hyper", "cline-pass",
-	"cloudflare-ai-gateway", "commandcode", "coreweave", "cursor", "deepinfra", "deepseek", "devin",
+	"cloudflare-ai-gateway", "cloudflare-workers-ai", "commandcode", "coralbricks", "coreweave", "cursor", "deepinfra", "deepseek", "devin",
 	"factory-droid", "firepass", "fireworks", "github-copilot", "gitlab-duo", "gitlab-duo-agent", "gmi-cloud", "google",
-	"google-antigravity", "google-gemini-cli", "google-vertex", "groq", "helmcode", "huggingface", "kilo",
+	"google-antigravity", "google-gemini-cli", "google-vertex", "groq", "helmcode", "huggingface", "inception", "kilo",
 	"kimi-code", "litellm", "lm-studio", "local", "meta", "minimax", "minimax-code", "minimax-code-cn",
-	"mistral", "moonshot", "muse-code", "nanogpt", "novita", "nvidia", "ollama", "ollama-cloud", "openai",
-	"openai-codex", "opencode-go", "opencode-zen", "openrouter", "qianfan", "qwen-portal", "sakana",
-	"siliconflow", "siliconflow-cn", "singularityapi-dev", "singularityapi-tech", "snowflake", "stepfun", "synthetic", "together",
+	"mistral", "modular", "moonshot", "muse-code", "nanogpt", "novita", "nvidia", "ollama", "ollama-cloud", "openai",
+	"openai-codex", "opencode-go", "opencode-zen", "openrouter", "otari", "qianfan", "qwen-portal", "sakana",
+	"sambanova", "scaleway", "siliconflow", "siliconflow-cn", "singularityapi-dev", "singularityapi-tech", "snowflake", "stepfun", "synthetic", "together",
 	"typesafe", "umans", "venice", "vercel-ai-gateway", "vllm", "wafer-serverless", "web", "xai",
 	"xai-oauth", "xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp",
 	"yolo-auto", "zai", "zenmux", "zhipu-coding-plan",

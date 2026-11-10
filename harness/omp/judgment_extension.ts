@@ -8,8 +8,9 @@
 // there, and say so when a configured Jev sat idle. omp's judgment module (18.2.6, `src/judgment/index.ts`)
 // resolves a Judge per feature and calls it; only the auto-thinking caller records even usage
 // (`appendModelUsage`, tokens only). The answers, the probabilities and the questions exist in exactly one
-// place: inside `TypeSafeJudge.judge()` (Jev, api.typesafe.ai) and `TextJudge.judge()` (the chat/local
-// keyword bridge omp falls back to, or uses outright when Jev is off). Those are plain class methods on
+// place: inside `NativeJudge.judge()` (Jev, api.typesafe.ai; pi-ai 18.9.2's rename of the TypeSafe judge
+// class, which now also serves the other native judgment wires such as OpenRouter decisions) and
+// `TextJudge.judge()` (the chat/local keyword bridge omp falls back to, or uses outright when Jev is off). Those are plain class methods on
 // the `@oh-my-pi/pi-ai` module this process already loaded (asksage_stream.ts imports the same package at
 // runtime), so this extension wraps the two prototype methods in-process. Every judge omp constructs from
 // here on is observed, whichever feature asked. This is an in-process wrapper on a public class, not a
@@ -26,7 +27,7 @@
 // costs a trace, never a judgment and never a turn. Every path is wrapped. The judgment's own errors are
 // re-thrown untouched so omp's TypeSafe-to-LLM fallback behaves exactly as pinned.
 
-import { TextJudge, TypeSafeJudge } from "@oh-my-pi/pi-ai/judgment";
+import { NativeJudge, TextJudge } from "@oh-my-pi/pi-ai/judgment";
 import { captureJudgment } from "../judgment/trace_schema.ts";
 import { isLocalJudge, isMissingModelError, JUDGE_BAN_FAILURES, parseCommaList } from "../judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416) + P-JEV.6 (ADR-0421)
 import type { JudgmentBackend, JudgmentReport } from "../judgment/trace.ts";
@@ -135,7 +136,7 @@ export default function judgmentExtension(_pi: unknown): void {
     const post = (report: JudgmentReport) => postReport(url, report);
     // P-JEV.5 (ADR-0416): only the text judge (chat or local models) can be a local model or a missing one; Jev is never either.
     const breaker = new JudgeBreaker(parseCommaList(process.env.LUCID_JUDGE_LOCAL_PROVIDERS), parseCommaList(process.env.LUCID_JUDGE_BANS));
-    traceJudgePrototype(TypeSafeJudge.prototype as unknown as JudgeLike, "typesafe", target, post);
+    traceJudgePrototype(NativeJudge.prototype as unknown as JudgeLike, "typesafe", target, post);
     traceJudgePrototype(TextJudge.prototype as unknown as JudgeLike, "text", target, post, breaker);
   } catch {
     /* A tracing extension must never break omp launch. Worst case: the chat shows no judgment row. */

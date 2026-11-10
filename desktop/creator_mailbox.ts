@@ -3,12 +3,12 @@
 
 // desktop/creator_mailbox.ts - the same-machine handoff mailbox for Creator endpoints.
 //
-// The DGX Loader writes <personal dir>/creator_endpoints/<id>.json (lucid-creator-endpoint v1); LUCID scans
+// The Private AI Platform writes <personal dir>/creator_endpoints/<id>.json (lucid-creator-endpoint v1); LUCID scans
 // it at engine start and on POST /api/creator/endpoint/import-mailbox. Same posture as the voice mailbox in
 // dev.ts: per-file fail-soft (one malformed file is reported by name and skipped, never fatal) and NOTHING is
 // imported without passing the fail-closed contract gate AND the registry's own declaration validation.
 //
-// An imported declaration is zone "internal" with `enclave: true`: the Loader is attesting a DGX enclave
+// An imported declaration is zone "internal" with `enclave: true`: the platform is attesting a DGX enclave
 // host, which is what lets it through the CUI lockdown. A re-scan never re-enables an endpoint the user
 // switched off, and never lets a file claim an id that belongs to another provider's declaration.
 

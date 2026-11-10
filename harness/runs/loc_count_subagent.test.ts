@@ -5,7 +5,7 @@
 //
 // R-06: subagent (task) edits must not be masked from the gate or from code-activity attribution.
 //
-// With omp task isolation OFF (ADR-0032; harness/omp/acp_config.yml `task.isolation.mode: none`), a
+// With omp task isolation OFF (ADR-0032; harness/omp/acp_config.yml `task.isolation.enabled: false`), a
 // `task` subagent runs in the REAL workspace, so its write/edit tool calls flow through the SAME
 // in-process fail-closed gate as the main agent (keystone #1 / invariant #3/#4). Code-activity
 // attribution (ADR-0031) counts from that gate's tool_result hook — and the event shape it counts
