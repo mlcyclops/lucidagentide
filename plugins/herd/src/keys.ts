@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.3, ADR-0492): the KEY MODEL. Three modes, Herdr style:
+// Herd (ADR-0541; P-HERD.3, ADR-0492): the KEY MODEL. Three modes, Herdr style:
 //
 //   terminal mode   a focused agent (or Main) composer: every key types, except the prefix
 //   navigate mode   hub-owned focus: the classic bare keys (| - z x digits ...) stay as they are

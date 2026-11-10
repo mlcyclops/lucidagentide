@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.2 and P-HERD.3, ADR-0491 and ADR-0492): what a client's bytes meet BEFORE the
+// Herd (ADR-0541; P-HERD.2 and P-HERD.3, ADR-0491 and ADR-0492): what a client's bytes meet BEFORE the
 // hub keymap, in the Herd server. The prefix and its one action, the direct chords, resize mode,
 // copy mode, the rename prompts, the live bindings (`prefix+?`) and divider drags live here; every
 // other byte goes on to HubComponent.handleInput exactly as the classic hub would take it, so terminal

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// ADR-0535: the build step for offered add-ons. A build without a signing key offers nothing; a signed
+// ADR-0541: the build step for offered add-ons. A build without a signing key offers nothing; a signed
 // package is indexed with its sha256; a package the shipped IDE would refuse (unsigned, or signed by a key it
 // does not trust) fails the build and leaves an empty index.
 

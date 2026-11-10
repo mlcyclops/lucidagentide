@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.3, ADR-0492 item 5): COPY MODE. `prefix+[` freezes the focused pane's text
+// Herd (ADR-0541; P-HERD.3, ADR-0492 item 5): COPY MODE. `prefix+[` freezes the focused pane's text
 // (the pane as the hub renders it, frame removed: HubComponent.paneText) and hands the keys to this
 // cursor until `q` or `esc`:
 //

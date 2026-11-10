@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535): what `lucid herd [--name <name>] <args>` means once core has handed argv to the
+// Herd (ADR-0541): what `lucid herd [--name <name>] <args>` means once core has handed argv to the
 // installed add-on's client.js.
 //   (bare)          attach this terminal to instance <name> (default `main`), starting its server
 //                   first when none runs (hub_client.ts). Q detaches; the server stays up.

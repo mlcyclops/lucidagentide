@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.6, ADR-0495): MAIN IS A PANE. The engine's own conversation (Main, the hub of
+// Herd (ADR-0541; P-HERD.6, ADR-0495): MAIN IS A PANE. The engine's own conversation (Main, the hub of
 // the GUI's hub-and-spoke) drawn in a hub pane beside its spokes, over the same routes the desktop
 // renderer uses:
 //

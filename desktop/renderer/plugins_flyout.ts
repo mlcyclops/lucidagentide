@@ -16,7 +16,7 @@
 // the unsigned box ticked), then the engine installs exactly the reviewed bytes. Opening uses the same
 // runtime start and plugin Preview tab as a store plugin.
 //
-// ADR-0535: an optional add-on (Herd) is a FREE card with the "Optional add-on" chip. Its button is Install when
+// ADR-0541: an optional add-on (Herd) is a FREE card with the "Optional add-on" chip. Its button is Install when
 // this build ships the signed package, Not in this build when it does not, and Open plus Remove once installed.
 // Install goes through the engine's install-offered route only; Open starts it through the runtime, shows its
 // read-only page in its Preview tab when the catalog row has `page` (Herd's live mirror, ADR-0497), and keeps
@@ -105,7 +105,7 @@ export function premiumCardHtml(p: PremiumPlugin, a: CardAction, installed: bool
 
 const STATUS_CHIP: Record<FreePlugin["status"], string> = { featured: "Featured", "built-in": "Built in", planned: "Planned", "add-on": "Optional add-on" };
 
-/** The footer of an optional add-on's card (ADR-0535): the one state button, Remove once installed, and the
+/** The footer of an optional add-on's card (ADR-0541): the one state button, Remove once installed, and the
  *  status note. Re-rendered alone on every state change. */
 export function addonFootHtml(p: FreePlugin, a: AddonAction, note: CardNote | null): string {
   const meta = a.kind === "install" ? `Free, version ${esc(a.version)}` : a.kind === "not-offered" ? "Free, not shipped with this build" : "Free";
@@ -315,7 +315,7 @@ export interface PluginsFlyoutDeps {
   pickFile?: (opts: { title: string; filters: { name: string; extensions: string[] }[] }) => Promise<string | null>;
   inspectFile: (path: string) => Promise<PluginFileInspectView | null>;
   installFile: (input: { path: string; sha256: string; acceptUnsigned: boolean }) => Promise<PluginInstallView | null>;
-  /** ADR-0535: install an add-on this build offers (only from its card's Install button). */
+  /** ADR-0541: install an add-on this build offers (only from its card's Install button). */
   installOffered: (id: string) => Promise<PluginInstallView | null>;
   uninstall: (id: string, keepData: boolean) => Promise<PluginActionView | null>;
   start: (id: string) => Promise<PluginStartView | null>;
@@ -356,7 +356,7 @@ const GATE_TEXT: Record<PluginGate, string> = {
   private: "This package cannot be installed from a file",
 };
 
-/** The optional add-ons on the Free tab (ADR-0535): the rows whose card installs, opens and removes. */
+/** The optional add-ons on the Free tab (ADR-0541): the rows whose card installs, opens and removes. */
 const ADDON_PLUGINS = FREE_PLUGINS.filter((p) => p.status === "add-on");
 
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -379,7 +379,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
   /** A purchase the user started and that a browser detour interrupted (sign-in or Stripe Checkout). */
   let pending: (PendingCheckout & { stage: "signin" | "checkout" }) | null = null;
 
-  /** ADR-0535: id -> version of each add-on this build offers; null until the engine's list first answers. */
+  /** ADR-0541: id -> version of each add-on this build offers; null until the engine's list first answers. */
   let offered: Map<string, string> | null = null;
 
   const premium = (id: string) => PREMIUM_PLUGINS.find((p) => p.id === id);
@@ -654,7 +654,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     if (hit("[data-plg-file]")) { void reviewFile(); return; }
     if (hit("[data-plg-fileinstall]")) { void installReviewed(); return; }
     if ((el = hit("[data-plg-iopen]"))) {
-      // An add-on (ADR-0535) opens through openAddon: its page when it serves one, and its terminal commands.
+      // An add-on (ADR-0541) opens through openAddon: its page when it serves one, and its terminal commands.
       const id = el.dataset.plgIopen!, a = addon(id), p = installed.get(id);
       if (a && p) void openAddon(a); else if (p) void openPlugin(p);
       return;
@@ -665,7 +665,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     if ((el = hit("[data-plg-act]"))) void act(el.dataset.plgAct!);
   }
 
-  /** ADR-0535: an add-on card's button. Install is the only way an offered add-on reaches this machine. */
+  /** ADR-0541: an add-on card's button. Install is the only way an offered add-on reaches this machine. */
   async function actAddon(id: string): Promise<void> {
     const p = addon(id);
     if (!p) return;

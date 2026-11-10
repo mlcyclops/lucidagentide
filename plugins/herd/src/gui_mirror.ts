@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0497 as the add-on, ADR-0535): what the read-only GUI mirror shows of instance `main`.
+// Herd (ADR-0497 as the add-on, ADR-0541): what the read-only GUI mirror shows of instance `main`.
 // PURE: no I/O, no DOM. gui_server.ts reads the instance's layout file and its `agent list` and hands
 // both here; the page (gui_page.ts) only draws the result.
 //

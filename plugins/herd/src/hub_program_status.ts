@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-HERD-OSC.1 (ADR-0530, moved into the Herd add-on by ADR-0535) - the Herd client reports the
+// P-HERD-OSC.1 (ADR-0536, moved into the Herd add-on by ADR-0541) - the Herd client reports the
 // fleet to its terminal with OSC 7501, so a terminal that speaks the Program Status Protocol (Herdr,
 // Ghostty, Rex) shows what LUCID's fleet is doing without scraping the screen. The classic
 // `lucid hub` writes none of this.

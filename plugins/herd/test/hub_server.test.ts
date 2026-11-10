@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.1, ADR-0490): the hub is a SERVER that outlives its terminal. What a user
+// Herd (ADR-0541; P-HERD.1, ADR-0490): the hub is a SERVER that outlives its terminal. What a user
 // notices, pinned against a real server, real TUI clients over /attach and a fake engine on loopback:
 // detaching leaves the hub and its engine running; reattaching shows the same panes; several clients
 // share one layout rendered at the smallest size; a second named instance keeps its own files;

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-HERD-OSC.1 (ADR-0530, in the Herd add-on since ADR-0535): what a Program Status terminal
+// P-HERD-OSC.1 (ADR-0536, in the Herd add-on since ADR-0541): what a Program Status terminal
 // (Herdr, Ghostty, Rex) learns from the Herd client. The LaneStatus vocabulary maps onto the
 // protocol's states, one record per lane plus a root that says whether the fleet needs the human; a
 // poll tick that changes nothing writes nothing, a lane that leaves the fleet is cleared, and

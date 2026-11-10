@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535): what the IDE's plugin runtime starts (Plugins drawer, Herd, Open). The runtime runs
+// Herd (ADR-0541): what the IDE's plugin runtime starts (Plugins drawer, Herd, Open). The runtime runs
 // a server plugin's `entry.main` under Electron's own Node (desktop/plugins/runtime.ts, asNode), so
 // this side uses Node APIs only. The hub itself is Bun code (Bun.serve, pi-tui), so the runtime host
 // does three things:

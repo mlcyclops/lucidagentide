@@ -2,7 +2,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Stage the Herd add-on (ADR-0535) for the packer (tools/build_plugin.ts, ADR-0462):
+// Stage the Herd add-on (ADR-0541) for the packer (tools/build_plugin.ts, ADR-0462):
 //   bun plugins/herd/stage.ts <outDir>
 // writes exactly four files into a fresh <outDir>:
 //   server.js          entry.main. The IDE's plugin runtime runs it under Electron's Node (runtime.ts

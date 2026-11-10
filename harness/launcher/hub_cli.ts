@@ -22,7 +22,7 @@ const fail = (body: Record<string, unknown>): number => {
   return 1;
 };
 
-/** `lucid hub --help`. The last line points at Herd, the optional add-on (ADR-0535). */
+/** `lucid hub --help`. The last line points at Herd, the optional add-on (ADR-0541). */
 export const HUB_HELP =
   "lucid hub                the terminal hub over the running engine; q quits (a hub-spawned engine exits too)\n" +
   "lucid hub --headless     the same hub with no terminal, for agents and CI\n" +

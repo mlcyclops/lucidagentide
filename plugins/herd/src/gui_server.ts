@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0497 as the add-on, ADR-0535): the read-only GUI mirror on the runtime's PORT, beside
+// Herd (ADR-0497 as the add-on, ADR-0541): the read-only GUI mirror on the runtime's PORT, beside
 // /healthz (runtime_host.ts). Node APIs only: server.js runs under Electron's Node.
 //
 // Routes, all GET:

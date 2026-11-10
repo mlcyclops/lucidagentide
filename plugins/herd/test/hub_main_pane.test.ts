@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.6, ADR-0495): Main is a pane. The ADR's proof list, with a fake engine on
+// Herd (ADR-0541; P-HERD.6, ADR-0495): Main is a pane. The ADR's proof list, with a fake engine on
 // loopback speaking the renderer's routes: the pure row model over an NDJSON fixture; y/s/d pick the
 // ask's own options and an ask is answered only by a keystroke; picker rows keep the engine's order
 // with the current value selected; the pane observes a running turn it did not start (two viewers,

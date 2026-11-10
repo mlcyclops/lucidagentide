@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.3, ADR-0492 item 5): copy mode over a frozen pane. What is yanked is exactly
+// Herd (ADR-0541; P-HERD.3, ADR-0492 item 5): copy mode over a frozen pane. What is yanked is exactly
 // what was selected on screen, the cursor never leaves the text, search wraps and says when nothing
 // matched, and a yank becomes OSC 52 bytes the terminal puts on its clipboard.
 

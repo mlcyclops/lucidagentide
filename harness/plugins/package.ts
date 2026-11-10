@@ -242,7 +242,7 @@ export function verifyPluginEntries(entries: { name: string; data: Buffer }[], o
   return { ok: true, manifest, payload, signed: true, keyId: s.keyId };
 }
 
-// ── offered add-ons (ADR-0535) ─────────────────────────────────────────────────────────────────────
+// ── offered add-ons (ADR-0541) ─────────────────────────────────────────────────────────────────────
 
 /** The index a build writes beside the optional add-on packages it offers (`desktop/addons/index.json`,
  *  shipped as extraResources `addons`, written by tools/build_addons.ts). Nothing in it installs until the

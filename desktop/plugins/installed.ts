@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // desktop/plugins/installed.ts - where installed plugins live and how to read one, with nothing heavier
-// than node:fs and the manifest schema. Split out of install.ts (ADR-0535) so the `lucid` launcher's
+// than node:fs and the manifest schema. Split out of install.ts (ADR-0541) so the `lucid` launcher's
 // `lucid herd` can ask "is the Herd add-on installed, and where?" without loading the install gates
 // (the scanner, kb_store's DuckDB natives), which `bun build --compile` of the launcher cannot bundle.
 // The gated install itself stays in install.ts.

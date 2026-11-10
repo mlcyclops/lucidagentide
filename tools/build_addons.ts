@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// tools/build_addons.ts - ADR-0535: stage, pack and sign the optional add-ons a build OFFERS.
+// tools/build_addons.ts - ADR-0541: stage, pack and sign the optional add-ons a build OFFERS.
 //
 // An offered add-on (Herd) is never installed by setup. The build places each signed package in
 // desktop/addons/ (shipped as electron-builder extraResources `addons`) beside addons/index.json,
@@ -35,7 +35,7 @@ export const DEFAULT_OUT = join(REPO, "desktop", "addons");
 /** One add-on a build offers: its id, and the repo-relative script that writes its plugin stage. */
 export interface AddonSpec { id: string; stage: string }
 
-/** Every optional add-on the IDE offers (ADR-0535). */
+/** Every optional add-on the IDE offers (ADR-0541). */
 export const ADDONS: readonly AddonSpec[] = [{ id: "herd", stage: "plugins/herd/stage.ts" }];
 
 export interface AddonsArgs { out?: string; key?: string; signCmd?: string; help: boolean }
@@ -136,7 +136,7 @@ export function buildAddons(opts: BuildAddonsOpts): BuildAddonsResult {
   return { index, skipped: null };
 }
 
-const USAGE = `build_addons - the optional add-ons a build offers (ADR-0535)
+const USAGE = `build_addons - the optional add-ons a build offers (ADR-0541)
 
   bun tools/build_addons.ts [--out <dir>] [--key <path>]
       Stage and pack every add-on, signed with the publisher key (default ${DEFAULT_KEY_PATH},

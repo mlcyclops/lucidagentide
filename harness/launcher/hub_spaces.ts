@@ -18,10 +18,10 @@ import { join } from "node:path";
 import type { DeckId } from "./hub_tui.ts";
 
 /** A leaf is a capability deck, or a live AGENT pane bound to a fleet lane. `main` (P-HERD.6,
- *  ADR-0495; Herd only, ADR-0535) is the engine's own conversation, drawn by the host's deck seam
+ *  ADR-0495; Herd only, ADR-0541) is the engine's own conversation, drawn by the host's deck seam
  *  (hub_tui.ts HubHostDeck); the classic hub's isDeck never accepts it, so no classic layout has one. */
 export type PaneDeck = DeckId | "agent" | "main";
-/** P-HERD.2 (ADR-0491; set by the Herd add-on only, ADR-0535): what an agent pane with no lane yet
+/** P-HERD.2 (ADR-0491; set by the Herd add-on only, ADR-0541): what an agent pane with no lane yet
  *  is waiting for. `priority` is the n-th lane (1-based) in the rail's agents order, `name` a glob on
  *  the lane name, `main` the engine's Main pane (P-HERD.6) before the host can show it. */
 export type PaneSlot = { by: "priority"; index: number } | { by: "name"; pattern: string } | { by: "main" };
@@ -81,7 +81,7 @@ export function layoutOf(node: PaneNode): string {
 }
 
 // ---- P-HERD.2 / P-HERD.3 (ADR-0491, ADR-0492): pure geometry and slot helpers. Called by the Herd
-// add-on only (ADR-0535); the classic hub never reaches them. ----------------------------------------
+// add-on only (ADR-0541); the classic hub never reaches them. ----------------------------------------
 
 export type PaneDirection = "left" | "right" | "up" | "down";
 /** A pane's rectangle in cells; hub_tui.paneRects builds these with the renderer's arithmetic. */
@@ -435,7 +435,7 @@ export class Spaces {
     this.onChange();
   }
 
-  /** P-HERD.1 (ADR-0490 item 5, called by the Herd add-on's server only, ADR-0535; the classic hub
+  /** P-HERD.1 (ADR-0490 item 5, called by the Herd add-on's server only, ADR-0541; the classic hub
    *  never relinks): a server outlives engine restarts, and an engine that recovers a lane may give
    *  it a new id (P-FLEET.L4). An agent pane whose lane id the engine no longer lists
    *  re-binds to the ONE live lane carrying its saved name; with none (or two), it stays put and
@@ -456,7 +456,7 @@ export class Spaces {
     return moved;
   }
 
-  // ---- P-HERD.2 / P-HERD.3 (ADR-0491, ADR-0492): called by the Herd add-on only (ADR-0535) ----
+  // ---- P-HERD.2 / P-HERD.3 (ADR-0491, ADR-0492): called by the Herd add-on only (ADR-0541) ----
 
   /** Name a pane (null clears the name). The name shows in the pane's title; the id never changes. */
   renamePane(ref: string, label: string | null): PaneLeaf {

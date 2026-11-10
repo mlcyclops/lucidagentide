@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.2, ADR-0491): named LAYOUTS as files. A layout is presentation only:
+// Herd (ADR-0541; P-HERD.2, ADR-0491): named LAYOUTS as files. A layout is presentation only:
 //
 //   <data>/hub-layouts/<name>.json           a saved layout (0600, tmp + rename)
 //   <data>/hub-layouts/builtin/<name>.json   the shipped presets, rewritten from this module

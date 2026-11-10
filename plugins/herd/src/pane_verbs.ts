@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.3, ADR-0492 item 4): the pane verbs Herd adds to the control plane, answered
+// Herd (ADR-0541; P-HERD.3, ADR-0492 item 4): the pane verbs Herd adds to the control plane, answered
 // through the `commands` seam ahead of the classic parser (whose vocabulary stays as it is):
 //
 //   pane focus [-t <pane>] --direction left|right|up|down      (tmux: select-pane -L|-R|-U|-D)

@@ -148,7 +148,7 @@ status` first, learn flags from `--help`, pass explicit ids, and leave approvals
 engine, and the UI token alone. `lucid hub --skill` prints the same file, so an agent
 on any machine with LUCID installed can load it without the repo.
 
-## Herd, the optional add-on (P-HERD, ADR-0535)
+## Herd, the optional add-on (P-HERD, ADR-0541)
 
 Herd is a free, optional add-on that makes the hub a server that outlives its terminal,
 in the Herdr and tmux idiom. It is not part of the default install: `lucid hub` stays the
@@ -221,7 +221,7 @@ installs it for you). Without it, `lucid herd` prints how to install it and exit
   stays; into another space the pane gets a new id there) and `pane rename <pane> <label> |
   --clear`. Dragging a divider with the mouse resizes it.
 
-### Fleet status for the terminal (OSC 7501, P-HERD-OSC.1, ADR-0530)
+### Fleet status for the terminal (OSC 7501, P-HERD-OSC.1, ADR-0536)
 
 The Herd client tells the terminal it runs in what the fleet is doing, with the
 [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status)

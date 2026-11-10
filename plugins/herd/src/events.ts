@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.4, ADR-0493 items 1 and 4): the LANE FEED. The Herd server keeps one
+// Herd (ADR-0541; P-HERD.4, ADR-0493 items 1 and 4): the LANE FEED. The Herd server keeps one
 // /api/fleet/watch NDJSON stream per lane of its engine's fleet, the engine's own push of every lane
 // transition, and turns them into transitions `{ ts, lane, name, from, to, cursor }`: metadata only,
 // never a token, a tool detail, an ask summary or reply text (ADR-0271). Waits (waits.ts) and

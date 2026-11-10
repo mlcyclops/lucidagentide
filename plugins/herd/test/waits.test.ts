@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-HERD.4 (ADR-0493, in the Herd add-on since ADR-0535): waits and the event stream over a FAKE
+// P-HERD.4 (ADR-0493, in the Herd add-on since ADR-0541): waits and the event stream over a FAKE
 // engine whose /api/fleet/watch streams the test drives by hand. What a script relies on: a wait
 // ends on the status it asked for and never on the one the lane rested in before a prompt; a stream
 // event is never undone by a slower status read; a lane that leaves ends the wait agent_not_running;

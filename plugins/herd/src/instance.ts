@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535): a hub INSTANCE and the files it owns. Every one of them lives under the add-on's
+// Herd (ADR-0541): a hub INSTANCE and the files it owns. Every one of them lives under the add-on's
 // data dir (LUCID_PLUGIN_DATA when the IDE's plugin runtime or `lucid herd` starts Herd), never beside
 // the classic hub's files:
 //

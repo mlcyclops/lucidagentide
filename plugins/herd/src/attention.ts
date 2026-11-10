@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.5, ADR-0494): ATTENTION. Which lanes wait on the human, which finished
+// Herd (ADR-0541; P-HERD.5, ADR-0494): ATTENTION. Which lanes wait on the human, which finished
 // turns the human has not looked at yet, a jump to the next one, and notifications the user turns on.
 //
 //   attention   "needs-you" | "unseen" | "none", beside the LaneStatus, never instead of it (the

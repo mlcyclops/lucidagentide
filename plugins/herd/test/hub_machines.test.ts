@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.7, ADR-0496): machines. The ADR's proof list, against fake engines on
+// Herd (ADR-0541; P-HERD.7, ADR-0496): machines. The ADR's proof list, against fake engines on
 // loopback: the saved list is untrusted input (off-shape entries, the reserved name and SSH entries
 // drop out); lane ids prefix as `<machine>/<lane>` with the default machine's prefix optional; each
 // machine reconnects on its own backoff, keeping its last lanes dimmed while it is away; a discovery

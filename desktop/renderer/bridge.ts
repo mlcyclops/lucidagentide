@@ -603,7 +603,7 @@ export interface InstalledPluginView {
   /** Signed by a publisher key baked into this build. */
   signed: boolean;
 }
-/** ADR-0535: an optional add-on this build ships (desktop/addons/index.json). Offered, never installed by setup. */
+/** ADR-0541: an optional add-on this build ships (desktop/addons/index.json). Offered, never installed by setup. */
 export interface OfferedAddonView { id: string; version: string }
 export interface PluginsListView { plugins: InstalledPluginView[]; offered: OfferedAddonView[] }
 export type PluginInstallView =
@@ -1233,7 +1233,7 @@ export interface LucidBridge {
   // P-PLUGINS.7 (ADR-0505): a private install from a picked file, in two explicit steps.
   pluginsInspectFile(path: string): Promise<PluginFileInspectView | null>;
   pluginsInstallFile(input: { path: string; sha256: string; acceptUnsigned: boolean }): Promise<PluginInstallView | null>;
-  /** ADR-0535: install an add-on this build offers; the engine refuses any id its add-ons index does not name. */
+  /** ADR-0541: install an add-on this build offers; the engine refuses any id its add-ons index does not name. */
   pluginsInstallOffered(id: string): Promise<PluginInstallView | null>;
   pluginsStart(id: string): Promise<PluginStartView | null>;
   pluginsStop(id: string): Promise<PluginActionView | null>;

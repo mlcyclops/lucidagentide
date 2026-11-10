@@ -476,7 +476,7 @@ export async function main(argv: string[], env: Env = process.env, deps?: { tui?
     return runHub(rest, env, repoRoot());
   }
   if (sub === "herd") {
-    // ADR-0535: Herd is an optional add-on; core only launches its INSTALLED client, or says how to
+    // ADR-0541: Herd is an optional add-on; core only launches its INSTALLED client, or says how to
     // install it. Lazy for the hub's reason: nothing Herd-related loads for any other subcommand.
     const { runHerd } = await import("./herd_cli.ts");
     return runHerd(rest, env, repoRoot());

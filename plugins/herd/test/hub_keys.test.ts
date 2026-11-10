@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.3, ADR-0492): the key model. The bindings file is read, never trusted: an
+// Herd (ADR-0541; P-HERD.3, ADR-0492): the key model. The bindings file is read, never trusted: an
 // unknown action or an unreadable chord is skipped with a plain reason, never fatal; a prefix or a
 // direct chord that would type into a composer is refused; the table `prefix+?` shows is the active
 // one; and the prefix arms the client that typed it, for one key.

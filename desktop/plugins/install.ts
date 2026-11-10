@@ -24,7 +24,7 @@
 // the bytes they reviewed (sha256), and it never replaces a store install. `current.json` records the
 // source, so the store card never mistakes a private copy for the purchased one and nothing updates it.
 //
-// ADR-0535: an OFFERED add-on (Herd) ships inside the app as a signed package in `<resources>/addons/`, named
+// ADR-0541: an OFFERED add-on (Herd) ships inside the app as a signed package in `<resources>/addons/`, named
 // by `addons/index.json`, and installs only when the user presses Install on its card. It goes through the
 // private-install path with the index sha256 as the reviewed bytes, must carry exactly the index id, and must
 // be signed: an unsigned offered package is refused. An id the index does not name is refused.
@@ -59,7 +59,7 @@ const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
 
 /** The attempt log the contract names: ~/.omp/lucid-plugins.jsonl. */
 export function pluginLogPath(): string { return process.env.LUCID_PLUGIN_LOG_PATH || join(homedir(), ".omp", "lucid-plugins.jsonl"); }
-/** ADR-0535: the offered add-ons folder, `<resources>/addons` (extraResources `addons`, found like
+/** ADR-0541: the offered add-ons folder, `<resources>/addons` (extraResources `addons`, found like
  *  `<resources>/runtimes`; a dev run passes the desktop folder, so it is `desktop/addons`). LUCID_ADDONS_DIR
  *  overrides, for tests and isolated smoke runs. */
 export function addonsDir(resourcesPath: string): string { return process.env.LUCID_ADDONS_DIR || join(resourcesPath, "addons"); }
@@ -257,7 +257,7 @@ export function inspectPluginFile(path: string, deps: InstallDeps = {}): PluginF
 }
 
 /** What the user confirmed on the sheet: the reviewed bytes, and (for an unsigned package) the warning.
- *  `offeredId` (ADR-0535): the file is an add-on this build offers, so it must carry exactly that id and be
+ *  `offeredId` (ADR-0541): the file is an add-on this build offers, so it must carry exactly that id and be
  *  signed; `sha256` is then the index's, and `acceptUnsigned` is ignored. */
 export interface PluginFileConfirm { sha256: string; acceptUnsigned: boolean; offeredId?: string }
 
@@ -283,7 +283,7 @@ export async function installPluginFile(path: string, confirm: PluginFileConfirm
   return r;
 }
 
-/** ADR-0535: install an add-on this build offers, only when the user pressed Install. The package is the one
+/** ADR-0541: install an add-on this build offers, only when the user pressed Install. The package is the one
  *  `addons/index.json` names, pinned to the index sha256, through every private-install gate, and signed. */
 export async function installOfferedPlugin(id: string, dir: string, deps: InstallDeps = {}): Promise<InstallResult> {
   const entry = readOfferedAddons(dir).find((a) => a.id === id);

@@ -35,10 +35,10 @@
 // hub_palette.ts): one fused, scored list of spaces, tabs, agents and decks; Enter acts, Esc
 // closes, and it only ever opens from hub-owned focus (the same guard as the `:` prompt).
 //
-// ADR-0535: the optional Herd add-on (plugins/herd) runs this same component inside its server and
+// ADR-0541: the optional Herd add-on (plugins/herd) runs this same component inside its server and
 // renders it for attached terminals. The constructor's `server`, `detach` and `notice` options are
 // its seams; the classic hub passes none of them, so `q` quits, nothing detaches and the status line
-// reads as before. The classic hub writes no OSC 7501 (the Herd client does, ADR-0530 as amended).
+// reads as before. The classic hub writes no OSC 7501 (the Herd client does, ADR-0536 as amended).
 //
 // The colors are the desktop design system (styles.css → the P-THEME.1 palette), so the hub and the
 // gated `lucid tui` read as one product: LUCID magenta chrome, cyan focus, the styles.css status hues.
@@ -178,7 +178,7 @@ export type RailRow =
   | { kind: "agent"; row: AgentsPanelRow & Partial<AgentRow>; dim?: boolean }
   | { kind: "machine"; name: string; state: RailMachineState; count: number };
 
-/** P-HERD.7 (ADR-0496; Herd only, ADR-0535): another engine's connection, as the rail's dot shows it. */
+/** P-HERD.7 (ADR-0496; Herd only, ADR-0541): another engine's connection, as the rail's dot shows it. */
 export type RailMachineState = "connected" | "reconnecting" | "down";
 /** One other machine's lanes under its own header. Rows of a machine that is not connected are drawn
  *  dimmed with their last status. Their ids are control-plane refs (`<machine>/<lane>`). */
@@ -590,13 +590,13 @@ export function fitBlock(lines: readonly string[], w: number, h: number): string
 
 interface HubUi { requestRender(): void; terminal: { rows: number } }
 
-/** ADR-0535: what the status line shows when a Herd server runs this component. */
+/** ADR-0541: what the status line shows when a Herd server runs this component. */
 export interface HubServerInfo { readonly name: string; clients(): number }
 
 /** P-HERD.2 (ADR-0491; Herd only): palette rows a host adds (kind "host"), and Enter on one. */
 export interface HubHostPalette { items(): PaletteItem[]; act(id: string): void }
 
-/** P-HERD.6 (ADR-0495; Herd only, ADR-0535): the `main` deck, owned by the host (Herd's Main pane:
+/** P-HERD.6 (ADR-0495; Herd only, ADR-0541): the `main` deck, owned by the host (Herd's Main pane:
  *  the engine's own conversation). Inert in the classic hub: it passes none, and its isDeck never
  *  accepts "main". Keys reach the host only as an attached client's keystrokes (handleInput): the
  *  control plane's send-keys types into agent panes only, so no script answers a Main ask. */
@@ -665,9 +665,9 @@ export class HubComponent implements Component {
   /** Every fresh fleet snapshot, before the agent panes read their lanes (the Herd server relinks
    *  and streams lanes from here). */
   readonly #onFleet: ((lanes: Record<string, unknown>[]) => void) | undefined;
-  /** ADR-0535: set when this component runs inside a Herd server (the status line names it). */
+  /** ADR-0541: set when this component runs inside a Herd server (the status line names it). */
   readonly #server: HubServerInfo | undefined;
-  /** ADR-0535: in a Herd server q, Q and ctrl+c detach the client whose key it was. Unset (the
+  /** ADR-0541: in a Herd server q, Q and ctrl+c detach the client whose key it was. Unset (the
    *  classic hub, the demos) q and ctrl+c end run() and Q is an ordinary key. */
   readonly #detach: (() => void) | undefined;
   /** P-HERD.2 (ADR-0491; Herd only): verbs the host answers in the `:` prompt ahead of the parser. */
@@ -1000,7 +1000,7 @@ export class HubComponent implements Component {
     }
     // P-HERD.6 (Herd only): the Main pane's composer, picker or the Sessions choice owns every key.
     if (this.#hostDeck?.modal()) { this.#hostDeck.input(data, isEnter); this.#ui.requestRender(); return; }
-    // ADR-0535: in a Herd server `Q` detaches too (prefix+q once P-HERD.3 lands the prefix), and q and
+    // ADR-0541: in a Herd server `Q` detaches too (prefix+q once P-HERD.3 lands the prefix), and q and
     // ctrl+c detach rather than quit: a client never ends the server, only `lucid herd server stop`.
     if (matchesKey(data, "ctrl+c") || data === "q" || (data === "Q" && this.#detach)) { this.#leave(); return; }
     // Rail keys, while the keyboard is on the rail. Anything else falls through to the pane keymap.
@@ -1907,7 +1907,7 @@ export class HubComponent implements Component {
     };
     const column = rail ? this.#railBlock(rail, bodyH) : left ? this.#sidebarBlock(bodyH) : null;
     const body = column ? column.map((s, i) => s + (panes[i] ?? "")) : panes;
-    // ADR-0535: a Herd server names its instance and how many terminals are on it right now.
+    // ADR-0541: a Herd server names its instance and how many terminals are on it right now.
     const rightPlain = this.#server
       ? `${this.#engine.flavor} engine · herd ${this.#server.name} · ${this.#server.clients()} attached `
       : `${this.#engine.flavor} engine · lucid hub `;
@@ -1948,7 +1948,7 @@ export interface AttachedEngine { engine: EngineDiscovery; spawned: boolean; chi
 /** Attach to a running engine, or SPAWN a headless one and wait for its discovery file. The spawned
  *  child belongs to the hub: quit the hub, the engine goes with it (and removes its own file).
  *  `repo` is the checkout whose desktop/dev.ts is spawned; null attaches only (the Herd add-on when
- *  the IDE's plugin runtime started it, ADR-0535, where the IDE's engine is the one to find). */
+ *  the IDE's plugin runtime started it, ADR-0541, where the IDE's engine is the one to find). */
 export async function attachOrSpawnEngine(env: Readonly<Record<string, string | undefined>>, repo: string | null = join(import.meta.dir, "..", "..")): Promise<AttachedEngine | null> {
   const running = await findEngine(env);
   if (running) return { engine: running, spawned: false, child: null };

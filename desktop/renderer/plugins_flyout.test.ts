@@ -84,7 +84,7 @@ describe("the INSTALLED tab", () => {
   });
 });
 
-// ADR-0535: the Herd card on the Free tab. One state button, Remove only once installed, nothing clickable
+// ADR-0541: the Herd card on the Free tab. One state button, Remove only once installed, nothing clickable
 // when this build does not ship the package.
 describe("the optional add-on card", () => {
   const herd: FreePlugin | undefined = FREE_PLUGINS.find((p) => p.id === "herd");

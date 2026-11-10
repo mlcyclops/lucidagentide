@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// ADR-0535: `lucid herd [args]`. Herd (a hub server that outlives its terminal: attach, detach,
+// ADR-0541: `lucid herd [args]`. Herd (a hub server that outlives its terminal: attach, detach,
 // reattach, named instances, OSC 7501) is an OPTIONAL free add-on, not part of core. Core only finds
 // the INSTALLED add-on (desktop/plugins/installed.ts, the same reader the plugin runtime uses) and runs
 // its terminal client with the IDE's bundled bun; everything Herd does lives in the package

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-HERD.5 (ADR-0494, in the Herd add-on since ADR-0535): attention. A finished turn reads unseen
+// P-HERD.5 (ADR-0494, in the Herd add-on since ADR-0541): attention. A finished turn reads unseen
 // until it has been on screen in the focused pane with someone attached, and idle after; an open ask
 // is needs-you (awaiting-input, the engine's ready state, is not); prefix+a goes to the oldest ask,
 // then the oldest unseen lane, then says there is none; the bell rings once per ask only when the

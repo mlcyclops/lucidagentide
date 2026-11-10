@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/controller/openapi.test.ts - ADR-0531: the published controller API schema. A client built from the
+// desktop/controller/openapi.test.ts - ADR-0537: the published controller API schema. A client built from the
 // document must get what it promises: every route the handler serves is in it with the method the handler takes,
 // it names no route the handler does not serve, every request it describes is served, every reply matches it, and
 // the limits it states are the ones the handler enforces. The handler is the REAL handleController.
@@ -253,7 +253,7 @@ function dataOf(r: { body: unknown }): Schema {
   return object(field(r.body, "data"), "the reply's data");
 }
 
-describe("the published controller API schema (ADR-0531)", () => {
+describe("the published controller API schema (ADR-0537)", () => {
   test("the UI token and a paired controller read the same document, by GET only", async () => {
     const r = rig();
     const doc = await fetchDoc(r.deps);

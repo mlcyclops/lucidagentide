@@ -14,7 +14,7 @@
 //                             (hub_tmux_verbs.ts) and the ONE executor below.
 //
 // Two seams the classic hub never passes, used by the optional Herd add-on's server (plugins/herd,
-// ADR-0535): `attach` serves GET /attach?cols&rows, a TUI client's WebSocket behind the same token
+// ADR-0541): `attach` serves GET /attach?cols&rows, a TUI client's WebSocket behind the same token
 // and the same Host and Origin guards; `commands` answers the add-on's own verbs (`server stop`)
 // ahead of the parser. Without them /attach is 404 and every argv goes to the parser, as before.
 //
@@ -100,7 +100,7 @@ const STATUS_BY_CODE: Record<string, number> = { usage: 400, bad_request: 400, b
 
 export interface HubControl { discovery: HubDiscovery; path: string; stop(): void }
 
-/** One attached TUI client as a Herd server sees it (ADR-0490, ADR-0535). `cols`/`rows` is its
+/** One attached TUI client as a Herd server sees it (ADR-0490, ADR-0541). `cols`/`rows` is its
  *  terminal size. */
 export interface HubClientSocket { readonly id: number; cols: number; rows: number; send(msg: string): void; close(code?: number, reason?: string): void }
 

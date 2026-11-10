@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.7, ADR-0496): MACHINES. One Herd server attaches to its own engine (the
+// Herd (ADR-0541; P-HERD.7, ADR-0496): MACHINES. One Herd server attaches to its own engine (the
 // default machine, `local`) and may hold more: each machine is another engine on THIS box, found in
 // its own discovery folder (a second data root, the way a Fleet Profile instance gets one) and proven
 // with the same nonce handshake as every engine (ADR-0419) BEFORE its UI token is used for anything.

@@ -130,7 +130,7 @@ import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, TURN_ALREADY_RUNN
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
-import { HolderPool } from "./lane_holder.ts"; // P-HOLDER.1 (ADR-0528): lanes outlive the engine
+import { HolderPool } from "./lane_holder.ts"; // P-HOLDER.1 (ADR-0534): lanes outlive the engine
 import { displayStatus } from "./collab/fleet_status.ts"; // P-STUCK-SHOW.3 (ADR-0521): phone guests see likely-stuck spokes too
 import { sessionLive, withLiveState, type SessionLiveSpoke } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
 import { addInterject, addPeerNote, awaitPeerReply, carryPendingNotes, drainInterjects, drainPeerNotes, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes; P-OWN.1: peer notes
@@ -569,7 +569,7 @@ import { kbScanner, kbStore, kgEntry, listKgs, activeKgId, createKg, renameKg, s
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.ts"
-import { addonsDir, inspectPluginFile, installOfferedPlugin, installPluginFile, installPluginFromUrl, readOfferedAddons, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505), ADR-0535 offered add-ons
+import { addonsDir, inspectPluginFile, installOfferedPlugin, installPluginFile, installPluginFromUrl, readOfferedAddons, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505), ADR-0541 offered add-ons
 import { PluginRuntime, resolvePluginNode } from "./plugins/runtime.ts" // P-PLUGINS.2 (ADR-0462)
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
@@ -600,7 +600,7 @@ function markWorkspaceSetupAsked(path: string): void {
 import { EVENTS_LOG_PATH, recordSkillActivated } from "./skills_log.ts";
 import { auditTierVerdict, CONTROLLER_ROUTES, forgetControllerLane, handleController, restoreControllerLanes, type ControllerDeps } from "./controller/routes.ts"; // P-CTRL.2 (ADR-0438); lane lifecycle ADR-0500/0501
 import { ControllerLaneStore } from "./controller/lane_store.ts"; // ADR-0501: controller lanes survive a restart
-import { OFF_TASK_SYSTEM, offTaskPrompt, parseOffTask } from "./controller/remote_policy.ts"; // P-CTRL-REMOTE.1 (ADR-0525)
+import { OFF_TASK_SYSTEM, offTaskPrompt, parseOffTask } from "./controller/remote_policy.ts"; // P-CTRL-REMOTE.1 (ADR-0531)
 import { PairingStore, type Pairing } from "./controller/store.ts"; // P-CTRL.2: the hashed pairing store
 import { handleRemoteSpokes, REMOTE_SPOKES_PLUGIN, remoteSpokesPanelUrl, type RemoteSpokesDeps } from "./remote_spokes.ts"; // P-IDE-SPOKES.1 (ADR-0506)
 import { recentTurns } from "./turns_log.ts";
@@ -1691,7 +1691,7 @@ function ompBin(): string {
 // process.execPath (the on-disk binary at <repo>/bin/lucid-engine); a dev run uses import.meta.dir as-is.
 const DESKTOP_DIR = engineDesktopDir(import.meta.dir, process.execPath, existsSync);
 const REPO_DIR = join(DESKTOP_DIR, "..");
-// ADR-0535: the offered add-ons, <resources>/addons in a packaged app and desktop/addons in a dev run.
+// ADR-0541: the offered add-ons, <resources>/addons in a packaged app and desktop/addons in a dev run.
 const ADDONS_DIR = addonsDir(process.env.LUCID_RESOURCES || DESKTOP_DIR);
 const ROOT = join(DESKTOP_DIR, "renderer");
 // CREATOR-0 (ADR-0279): the engine serves on its FLAVOR's native port (Agent 5319, Creator 5320) unless
@@ -1790,7 +1790,7 @@ try {
   if (existsSync(LATENCY_LOG_PATH)) backend.durations.seedFromLatencyLines(readFileSync(LATENCY_LOG_PATH, "utf8").split("\n").slice(-200));
 } catch { /* no history yet */ }
 backend.carriedNotes = () => carryPendingNotes("master"); // ADR-0414: same carry as the lanes
-// P-HOLDER.1 (ADR-0528): lanes run under lucid-holder when it is built or shipped, so a restart, an update or a
+// P-HOLDER.1 (ADR-0534): lanes run under lucid-holder when it is built or shipped, so a restart, an update or a
 // closed window leaves their agents running. LUCID_LANE_HOLDERS=0 turns it off (lanes are this engine's children).
 const laneHolders = process.env.LUCID_LANE_HOLDERS === "0" ? null : HolderPool.forEngine();
 console.log(laneHolders ? `[fleet] lane holders on (${laneHolders.binary})` : "[fleet] lane holders off: lanes end with this engine");
@@ -1809,7 +1809,7 @@ const fleet: FleetLaneManager = new FleetLaneManager({
   onWrite: (lane, path) => checkouts.recordWrite({ id: lane.id, name: lane.name }, path, lane.cwd),
   preface: (lane): Promise<string> => checkouts.briefingFor(lane.id, lane.cwd),
   repo: { observe: observeToolCall, peek: peekRepoContext }, // P-REPO.1 (ADR-0406)
-  // P-CTRL-REMOTE.1 (ADR-0525): the off-task check runs as a one-shot completion on the lane's own model (the
+  // P-CTRL-REMOTE.1 (ADR-0531): the off-task check runs as a one-shot completion on the lane's own model (the
   // util connection, never the chat turn). Tighten only: "" (any failure) parses as unknown, which parks.
   offTask: async (lane, action) => parseOffTask(await backend.complete(OFF_TASK_SYSTEM, offTaskPrompt(lane.assignment, action), { model: lane.model, idleMs: 20_000 })),
   // Throws when the line cannot be written; the fleet then refuses the action instead of running it unaudited.
@@ -1926,7 +1926,7 @@ function spokeHolding(id: string): SessionLiveSpoke | null {
 // endpoint tooling (Defender / Intune) can identify the agent instead of classifying it as shadow AI. Only
 // when Electron launched us (LUCID_DATA_ROOT); a standalone dev engine is not an install. Rewritten each
 // launch, so MCP changes surface at the next start. Advisory: a failed write is logged, never fatal.
-// ADR-0532: written once the port is bound (PORT=0 picks it then), so it never names port 0.
+// ADR-0538: written once the port is bound (PORT=0 picks it then), so it never names port 0.
 function publishLocalAgentManifest(port: number): void {
   if (!process.env.LUCID_DATA_ROOT) return;
   const manifest = buildLocalAgentManifest({
@@ -2530,7 +2530,7 @@ return Bun.serve({
     let ctrlPairing: Pairing | null = null;
     // H2 (ADR-0022): reject anything a web page or DNS-rebind could forge against
     // the fixed local port (foreign Host/Origin, or a non-JSON state-changing body).
-    // ADR-0532: PORT=0 binds an ephemeral port, so the Host a client must use is the bound one.
+    // ADR-0538: PORT=0 binds an ephemeral port, so the Host a client must use is the bound one.
     if (!isAllowedRequest(reqShape(req), srv.port ?? PORT)) return new Response("forbidden", { status: 403 });
     // ADR-0024: the sensitive /api surface additionally requires the per-launch token (carried by
     // the renderer from the injected HTML). /api/health is exempt — main.ts polls it before the
@@ -5974,7 +5974,7 @@ return Bun.serve({
       // hash, signature, authenticode, scan; desktop/plugins/install.ts) and stops a running copy before the
       // version pointer moves; start/stop drive desktop/plugins/runtime.ts; uninstall keeps the data dir
       // unless keepData is explicitly false.
-      // ADR-0535: `offered` is what this build ships in <resources>/addons (desktop/addons in a dev run), listed
+      // ADR-0541: `offered` is what this build ships in <resources>/addons (desktop/addons in a dev run), listed
       // so the card can say Install or Not in this build. Nothing there installs until install-offered.
       if (p === "/api/plugins" && req.method === "GET") {
         const offered = readOfferedAddons(ADDONS_DIR).map((a) => ({ id: a.id, version: a.version }));
@@ -6001,7 +6001,7 @@ return Bun.serve({
         const r = await installPluginFile(String(b.path ?? ""), { sha256: String(b.sha256 ?? ""), acceptUnsigned: b.acceptUnsigned === true }, { beforeSwitch: async (id) => { await plugins.stop(id); } });
         return json({ ok: true, data: r.ok ? { ok: true, id: r.id, version: r.version, signed: r.signed } : r });
       }
-      // ADR-0535: install an add-on this build offers (the user pressed Install on its card). Only an id the
+      // ADR-0541: install an add-on this build offers (the user pressed Install on its card). Only an id the
       // addons index names, only the bytes its sha256 names, signed, through the private-install gates.
       if (p === "/api/plugins/install-offered" && req.method === "POST") {
         srv.timeout(req, 0);
@@ -7139,7 +7139,7 @@ jobScheduler.start();
 // ADR-0501: controller lanes the previous engine ran come back idle on their own lane ids and omp sessions (after
 // the child env above is set, so a restored lane is wired like a new one). Detached: the bind never waits on omp;
 // controller routes do (the gate set with controllerDeps), and open when this settles, success or not.
-// P-HOLDER.1 (ADR-0528): first take back every lane a holder kept running (its turn, if any, carries on), so the
+// P-HOLDER.1 (ADR-0534): first take back every lane a holder kept running (its turn, if any, carries on), so the
 // controller restore below finds those lanes running instead of respawning them and calling their turns interrupted.
 async function reattachHeldLanes(): Promise<void> {
   if (!laneHolders) return;

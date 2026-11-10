@@ -158,5 +158,5 @@ tools/lucid-support-*.zip
 desktop/mxc/*
 !desktop/mxc/.gitkeep
 
-# offered add-ons (ADR-0535): signed .lplugin.zip packages + index.json written by tools/build_addons.ts, never committed
+# offered add-ons (ADR-0541): signed .lplugin.zip packages + index.json written by tools/build_addons.ts, never committed
 desktop/addons/

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535): argv and file naming. `--name` picks an instance before the verb or after
+// Herd (ADR-0541): argv and file naming. `--name` picks an instance before the verb or after
 // `server start|stop`; instance names are file-safe; every instance file lives in the add-on's data
 // dir; `server list` names only instances whose server wins the handshake.
 

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.2, ADR-0491): layouts are untrusted presentation. The parser takes exactly
+// Herd (ADR-0541; P-HERD.2, ADR-0491): layouts are untrusted presentation. The parser takes exactly
 // the documented shape and refuses a lane id, a cwd, a model or a prompt; the tree is capped; names
 // land in file names safely; slots resolve to the rail's order or a name glob; save and apply round
 // trip; presets are read-only and apply with no lanes at all; import never overwrites.

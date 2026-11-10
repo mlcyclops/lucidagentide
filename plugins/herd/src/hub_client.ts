@@ -1,11 +1,11 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.1, ADR-0490 items 2 and 3): the terminal CLIENT. Bare `lucid herd [--name
+// Herd (ADR-0541; P-HERD.1, ADR-0490 items 2 and 3): the terminal CLIENT. Bare `lucid herd [--name
 // <name>]` attaches this terminal to the newest verified server of that instance, or starts one
 // (detached, so it outlives this terminal) and attaches. The client is a thin pi-tui view: it draws
 // the frames the server streams, forwards every key, paste and click as raw bytes to the server's ONE
-// keymap, reports its terminal size, and writes the fleet's OSC 7501 records (ADR-0530) to its own
+// keymap, reports its terminal size, and writes the fleet's OSC 7501 records (ADR-0536) to its own
 // terminal. Q (and q, ctrl+c) detaches; closing the terminal detaches too. The server, its engine and
 // every lane keep running.
 //
@@ -133,7 +133,7 @@ export async function runHubClient(env: Env, opts: { name?: string; entry: strin
     }
   }
   const tui = new TUI(new ProcessTerminal());
-  // P-HERD-OSC.1 (ADR-0530): the fleet's records go to THIS terminal, through the same writer as the
+  // P-HERD-OSC.1 (ADR-0536): the fleet's records go to THIS terminal, through the same writer as the
   // frames; a real TTY only, and LUCID_PROGRAM_STATUS=0 turns it off.
   const status = programStatusEnabled(env, process.stdout.isTTY === true) ? new ProgramStatusEmitter((bytes) => tui.terminal.write(bytes)) : null;
   let frame: readonly string[] = [];

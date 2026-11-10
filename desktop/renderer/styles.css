@@ -1367,7 +1367,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .plg-chip{font-family:var(--font);font-size:9.5px;font-weight:700;letter-spacing:.06em;border-radius:999px;padding:1.5px 7px;border:1px solid var(--line);color:var(--txt-3);background:var(--bg-3)}
 .plg-chip[data-status="featured"]{color:var(--accent-2);background:var(--accent-dim);border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
 .plg-chip[data-status="built-in"]{color:var(--green);background:rgb(var(--green-rgb) / .12);border-color:rgb(var(--green-rgb) / .35)}
-/* ADR-0535: an optional add-on, installed only from its card, and the terminal commands its sheet lists. */
+/* ADR-0541: an optional add-on, installed only from its card, and the terminal commands its sheet lists. */
 .plg-chip[data-status="add-on"]{color:var(--cyan);background:rgb(var(--cyan-rgb) / .12);border-color:rgb(var(--cyan-rgb) / .4)}
 .plg-cmd{font-family:var(--mono);font-size:12px;padding:1px 6px;border-radius:6px;border:1px solid var(--line);background:var(--bg-3);color:var(--txt)}
 /* ADR-0505: the INSTALLED tab. A verified install reads green; a private unsigned one is amber, never quiet. */

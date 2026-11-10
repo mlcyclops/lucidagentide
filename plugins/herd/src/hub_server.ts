@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.1, ADR-0490 items 1 to 6): the hub SERVER. One process owns what dies with
+// Herd (ADR-0541; P-HERD.1, ADR-0490 items 1 to 6): the hub SERVER. One process owns what dies with
 // the terminal in the classic `lucid hub`: the Spaces model and its layout file, the engine
 // attachment (and the engine it spawned, ADR-0420), the per-lane /api/fleet/watch streams, the poll,
 // and the control plane. TUI CLIENTS (hub_client.ts) attach over the control server's /attach

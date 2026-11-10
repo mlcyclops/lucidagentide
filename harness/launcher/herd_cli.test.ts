@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// ADR-0535: `lucid herd` in core only launches the INSTALLED add-on's client, with the IDE's bun, the
+// ADR-0541: `lucid herd` in core only launches the INSTALLED add-on's client, with the IDE's bun, the
 // add-on's data dir and the IDE's node_modules; without the add-on it says how to install it and
 // exits 2, starting nothing.
 

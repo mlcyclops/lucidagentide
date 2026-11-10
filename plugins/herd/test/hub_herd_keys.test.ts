@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.2 and P-HERD.3, ADR-0491 and ADR-0492), end to end: a real Herd server, a
+// Herd (ADR-0541; P-HERD.2 and P-HERD.3, ADR-0491 and ADR-0492), end to end: a real Herd server, a
 // headless client fed real key bytes over /attach, the control plane, and a fake engine on loopback.
 // The prefix splits while a composer is focused and the composer keeps its text; directional focus
 // lands on the geometric neighbor; resize mode moves a divider by cells and the CLI reads the same

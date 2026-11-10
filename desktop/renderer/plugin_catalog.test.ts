@@ -221,7 +221,7 @@ describe("free catalog", () => {
   });
 });
 
-// ADR-0535: Herd is an optional free add-on. Its card installs only on Install, and only what this build ships.
+// ADR-0541: Herd is an optional free add-on. Its card installs only on Install, and only what this build ships.
 describe("optional add-ons", () => {
   const addonFacts = (over: Partial<AddonFacts> = {}): AddonFacts => ({ listed: true, offeredVersion: "0.1.0", installed: null, busy: false, ...over });
   const herdInstalled: InstalledFacts = { id: "herd", version: "0.1.0", source: "private", signed: true };

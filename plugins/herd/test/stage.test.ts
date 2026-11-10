@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535): `bun plugins/herd/stage.ts <outDir>` writes exactly what the packer needs, and
+// Herd (ADR-0541): `bun plugins/herd/stage.ts <outDir>` writes exactly what the packer needs, and
 // both bundles load. server.js holds no npm package (it runs under Electron's Node); client.js keeps
 // its npm packages external (the IDE's own copies, through NODE_PATH).
 

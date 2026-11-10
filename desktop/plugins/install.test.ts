@@ -342,7 +342,7 @@ describe("private install from a file", () => {
   });
 });
 
-// ADR-0535: an add-on the build OFFERS (desktop/addons, index.json). It installs only through install-offered,
+// ADR-0541: an add-on the build OFFERS (desktop/addons, index.json). It installs only through install-offered,
 // only for an id the index names, only the bytes its sha256 names, and only signed.
 describe("offered add-ons", () => {
   const FILE = "fixture-server-0.1.0.lplugin.zip";

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535): the side the IDE's plugin runtime starts. /healthz answers 200 only while instance
+// Herd (ADR-0541): the side the IDE's plugin runtime starts. /healthz answers 200 only while instance
 // main wins its nonce handshake, under the control plane's Host and Origin guards; the worker gets the
 // add-on's data dir, the IDE's node_modules and data root, and never the runtime's host token.
 

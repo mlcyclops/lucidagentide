@@ -139,7 +139,7 @@ export const PREMIUM_PLUGINS: PremiumPlugin[] = [
 
 /** Closed set. featured = pinned to the top; built-in = LUCID already ships the capability;
  *  planned = on the integration roadmap (ADR-0158); add-on = an optional free add-on this build offers,
- *  installed only when the user presses Install on its card (ADR-0535). */
+ *  installed only when the user presses Install on its card (ADR-0541). */
 export type FreeStatus = "featured" | "built-in" | "planned" | "add-on";
 
 /** One line of an add-on's "how to use it" sheet: a command to type and what it does. */
@@ -292,7 +292,7 @@ export const FREE_PLUGINS: FreePlugin[] = [
     lucid: "Seed graphs from ChatGPT, Claude, or Gemini exports or markdown, import signed Role KG Packs, and ground the agent's answers in them.",
   },
   {
-    // ADR-0535: P-HERD ships as this optional add-on. The classic `lucid hub` stays the default; nothing of Herd
+    // ADR-0541: P-HERD ships as this optional add-on. The classic `lucid hub` stays the default; nothing of Herd
     // installs or runs until the user presses Install here.
     id: "herd", name: "Herd", rank: 19, status: "add-on",
     desc: "A Herdr-style terminal fleet: a hub server that outlives the terminal, with attach, detach, and named hubs.",
@@ -435,7 +435,7 @@ export function cardActionLabel(a: CardAction): string {
   }
 }
 
-/** What an optional add-on's card offers right now (ADR-0535). `open` also shows Remove beside it. */
+/** What an optional add-on's card offers right now (ADR-0541). `open` also shows Remove beside it. */
 export type AddonAction =
   | { kind: "checking" }
   | { kind: "not-offered" }
@@ -454,7 +454,7 @@ export interface AddonFacts {
   busy: boolean;
 }
 
-/** The add-on card's state (ADR-0535). Order matters: in-flight work shows Installing; an installed add-on
+/** The add-on card's state (ADR-0541). Order matters: in-flight work shows Installing; an installed add-on
  *  opens (and can be removed) whatever this build offers; otherwise Install only when this build ships the
  *  signed package, and Not in this build when it does not. Before the first answer, Checking. */
 export function decideAddonAction(f: AddonFacts): AddonAction {

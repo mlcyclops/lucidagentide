@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Herd (ADR-0535; P-HERD.4, ADR-0493): WAITS, a blocked refusal and an event stream on the control
+// Herd (ADR-0541; P-HERD.4, ADR-0493): WAITS, a blocked refusal and an event stream on the control
 // plane, so an orchestrating agent scripts the fleet without polling. The verbs, answered by the
 // Herd server over /cmd only (never the `:` prompt):
 //
