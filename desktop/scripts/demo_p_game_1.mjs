@@ -155,6 +155,37 @@ assert.match(deck.node('ovTitle').textContent, /CRIPPLED|NO INTERCEPTORS/, 'an u
 deck.node('btnPrimary').click();
 assert.equal(globalThis.__deckGuard.state().hull, 10, 'scramble again starts a fresh run');
 console.log(`Deck Guard: ${flight.done} missions, ${flight.downed} drones and ${flight.missiles} missiles on autopilot, pause/restart, loss (${deck.node('ovTitle').textContent}), replay`);
+const holly = await launch('deck-guard-holiday.html', 400, 720);
+const dh = () => globalThis.__deckGuardHoliday.state();
+holly.advance(2); // the attract demo flies behind the title panel and never loses
+assert.equal(holly.node('ovTitle').textContent, 'DECK GUARD');
+assert.equal(dh().mode, 'title');
+holly.node('btnPrimary').click();
+assert.equal(holly.node('overlay').hidden, true);
+assert.equal(holly.node('goalN').textContent, 'GOAL 1/13');
+globalThis.__deckGuardHoliday.autoplay(true); // the bot also takes a workshop gift after each wave, so no panel stops it
+for (let i = 0; i < 120 && holly.node('overlay').hidden; i++) { holly.advance(1); if (i === 30 || i === 60) globalThis.__deckGuardHoliday.launchMissile(); }
+const sled = dh();
+assert.ok(sled.done >= 1 && sled.downed >= 15, `the swarm must fall and missions advance, got ${JSON.stringify(sled)}`);
+if (dh().mode === 'dying') holly.advance(2); // a last jet lost at the end of the budget finishes its fall first
+if (!holly.node('overlay').hidden) holly.node('btnPrimary').click(); // the bot can lose its jets first: that ends in the loss panel, and a new run starts
+holly.key('KeyP');
+assert.equal(holly.node('ovTitle').textContent, 'PAUSED');
+holly.key('KeyR');
+assert.equal(holly.node('goalN').textContent, 'GOAL 1/13', 'restart resets the ladder');
+assert.equal(dh().score, 0);
+globalThis.__deckGuardHoliday.autoplay(false);
+let gifted = 0;
+for (let i = 0; i < 600 && !/CRIPPLED|OUT OF JETS/.test(holly.node('ovTitle').textContent); i++) {
+  if (dh().mode === 'pick') { holly.key('Digit1'); gifted++; } // a cleared wave offers workshop gifts; key 1 takes the first
+  if (i % 20 === 0) globalThis.__deckGuardHoliday.launchMissile();
+  holly.advance(0.5);
+}
+assert.match(holly.node('ovTitle').textContent, /CRIPPLED|OUT OF JETS/, 'an undefended workshop falls');
+holly.node('btnPrimary').click();
+assert.equal(dh().hull, 10, 'scramble again starts a fresh run');
+assert.equal(dh().mode, 'play');
+console.log(`Deck Guard: Deck the Halls: ${sled.done} missions, ${sled.downed} drones, ${sled.missiles} candy canes and ${sled.gifts} presents on autoplay (wave ${sled.wave}), pause/restart, ${gifted} workshop gift(s) by key, loss (${holly.node('ovTitle').textContent}), replay`);
 const cadence = await launch('chroma-cadence.html', 420, 720);
 const cc = () => globalThis.__chromaCadence.state();
 const playOut = () => { for (let i = 0; i < 130 && cc().state === 'playing'; i++) cadence.advance(1); };
