@@ -44,6 +44,7 @@ import { HerdInput } from "./herd_input.ts";
 import { KeysFile, loadKeysConfig, notifySettings } from "./keys.ts";
 import { LayoutLibrary } from "./layouts.ts";
 import { MainPane } from "./main_pane.ts";
+import { spokePaneCommand, SpokePanes } from "./spoke_pane.ts";
 import { herdWaitCommands } from "./waits.ts";
 
 export type HubServerMsg =
@@ -137,10 +138,22 @@ export function startHubServer(opts: { data: string; classic: string | null; nam
   };
   // ---- P-HERD.6 and P-HERD.7 (ADR-0495, ADR-0496): the Main pane and the other machines ----
   const mainPane = new MainPane({ base: `http://127.0.0.1:${attached.engine.port}`, token: attached.engine.token }, { changed: () => ui.requestRender() });
+  // ADR-0559: attention covers this engine's lanes and the spoke tasks, refreshed by either poll. It
+  // waits for this engine's first snapshot, so that snapshot is still the one a restart only learns from.
+  let fleetLanes: Record<string, unknown>[] | null = null;
+  const attend = () => { if (fleetLanes) attention.update([...fleetLanes, ...machines.spokeLanes()]); };
   const machines = new MachineSet(machinesPath(data, name), attached.engine, {
-    onChange: () => ui.requestRender(),
+    onChange: () => { attend(); ui.requestRender(); },
     annotate: (lane) => attention.annotate(lane),
   });
+  // ADR-0559: an agent pane on a `spokes/<node>:<task>` ref is drawn and keyed here, read-only; its
+  // typed line runs the very `agent prompt` verb a script does.
+  const spokePanes = new SpokePanes({
+    machines,
+    run: (argv) => commands(argv) ?? component.exec(parseHubCommand(argv)),
+    changed: () => ui.requestRender(),
+  });
+  const spokePaneLanes = () => spaces.paneList({}).flatMap((p) => (p.deck === "agent" && p.lane && spokePanes.owns(p.lane) ? [p.lane] : []));
   // ---- P-HERD.2 and P-HERD.3 (ADR-0491, ADR-0492): layouts and the key model ----
   const keysFile = new KeysFile(data);
   const keysProblem = keysFile.current().cfg.problems[0];
@@ -150,6 +163,7 @@ export function startHubServer(opts: { data: string; classic: string | null; nam
     commands: (argv) => keys.command(argv, "prompt") ?? commands(argv), // P-HERD.2: `:layout ...`
     palette: { items: () => keys.paletteItems(), act: (id) => keys.paletteAct(id) }, // P-HERD.2
     hostDeck: mainPane,
+    hostLanes: spokePanes, // ADR-0559
     machines: () => machines.railGroups(),
     spawned: attached.spawned,
     spaces,
@@ -159,11 +173,16 @@ export function startHubServer(opts: { data: string; classic: string | null; nam
     notice: restored ? `layout file did not parse: restored ${restored}` : seed ? "started from the classic hub's layout (read only)" : keysProblem === undefined ? undefined : `hub-keys.json: ${keysProblem}`,
     attention: (laneId) => attention.attention(laneId), // P-HERD.5: rail order, hues, ◎ badges
     onFleet: (lanes) => {
-      // ADR-0490 item 5: a pane whose lane came back under a new id follows it by name.
-      spaces.relinkLanes(lanes.flatMap((l) => (typeof l.id === "string" ? [{ id: l.id, name: typeof l.name === "string" ? l.name : "" }] : [])));
+      // ADR-0490 item 5: a pane whose lane came back under a new id follows it by name. A spoke pane
+      // is never this engine's lane, so it never follows one of them by name (ADR-0559).
+      spaces.relinkLanes([
+        ...lanes.flatMap((l) => (typeof l.id === "string" ? [{ id: l.id, name: typeof l.name === "string" ? l.name : "" }] : [])),
+        ...spokePaneLanes().map((id) => ({ id, name: "" })),
+      ]);
       keys.fillSlots(); // P-HERD.2: a waiting layout pane takes its lane once it is there
       feed.snapshot(lanes); // P-HERD.4: new lanes get their watch streams
-      attention.update(lanes); // P-HERD.5: seen, needs-you, alerts
+      fleetLanes = lanes;
+      attend(); // P-HERD.5: seen, needs-you, alerts (ADR-0559: spoke tasks too)
       mainPane.setLanes(lanes); // P-HERD.6: Main's spokes count
       machines.setLocalLanes(lanes); // P-HERD.7: this engine's rows in the combined list
       const body = JSON.stringify({
@@ -207,6 +226,9 @@ export function startHubServer(opts: { data: string; classic: string | null; nam
     // rename. Over /cmd, layout export and import refuse (they name files; the shell runs them).
     const herdVerb = keys.command(argv, "control");
     if (herdVerb) return herdVerb;
+    // ADR-0559: `pane rebind <pane> agent spokes/<node>:<task>` binds a spoke pane; send-keys refuses one.
+    const spokeVerb = spokePaneCommand(argv, spaces, () => machines.spokeLanes());
+    if (spokeVerb) return spokeVerb.finally(() => ui.requestRender());
     // P-HERD.5 (ADR-0494): `:next` and `lucid herd next`, the same jump as prefix+a.
     if (verb === "next" && sub === undefined) return attention.focusNext().then((message) => ({ message }));
     // P-HERD.6 (ADR-0495): `main prompt` rides /api/chat as a typed prompt; `session open --as main`
@@ -250,6 +272,7 @@ export function startHubServer(opts: { data: string; classic: string | null; nam
     },
   });
   redrawn.add(() => attention.touch());
+  redrawn.add(() => void spokePanes.sync(spokePaneLanes())); // ADR-0559: recall a spoke pane's task when it changed
   // /cmd only, ahead of every other verb: the `:` prompt never reaches waits or the event stream.
   const herdWaits = herdWaitCommands({
     feed,

@@ -465,9 +465,10 @@ describe("the spokes machine (ADR-0549)", () => {
     expect(await run(["agent", "spawn", "--machine", "spokes", "--spoke", NODE_A, "--text", "x", "--cwd", "/tmp"])).toBe("usage");
     expect(await run(["agent", "prompt", `spokes/${NODE_A}:t_bad`, "x"])).toBe("usage");
     expect(await run(["agent", "prompt", `spokes/${NODE_A}:${TASK_1}`])).toBe("usage");
-    // A follow-up to a task parked on a person's approval is refused before anything is sent.
+    // A follow-up to a task parked on a person's approval is refused before anything is sent: the one
+    // request is the fresh read of the task's state (ADR-0559).
     expect(await run(["agent", "prompt", ref, "go on"])).toBe("agent_blocked");
-    expect(hub.seen).toEqual([]);
+    expect(hub.seen.map((s) => [s.method, s.path])).toEqual([["GET", "/api/remote-spokes"]]);
     // Without a spokes machine, `--machine spokes` names no machine.
     expect(await codeOf(() => new MachineSet(null, hub.record).command(["agent", "spawn", "--machine", "spokes"], localExec([])))).toBe("not_found");
   });
@@ -484,6 +485,7 @@ describe("the spokes machine (ADR-0549)", () => {
       .toEqual({ lane: `spokes/${NODE_A}:${TASK_1}`, machine: "spokes", accepted: true, task: TASK_1 });
     expect(hub.seen.map((s) => [s.method, s.path, s.token, s.body])).toEqual([
       ["POST", "/api/remote-spokes/submit", hub.record.token, { node: NODE_A, text: "run the eval", model: "local/qwen" }],
+      ["GET", "/api/remote-spokes", hub.record.token, undefined], // ADR-0559: the task's state, read fresh
       ["POST", "/api/remote-spokes/followup", hub.record.token, { node: NODE_A, task: TASK_1, text: "and then" }],
     ]);
     expect(log).toEqual([]); // nothing reached the hub's own agent verbs

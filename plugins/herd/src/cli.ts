@@ -48,6 +48,7 @@ export const HERD_HELP =
   "lucid herd machine add spokes            the Remote Spokes hub's spokes and their tasks (no SSH)\n" +
   "  agent spawn --machine spokes --spoke <node> --text <text> [--name <n>] [--model <m>]   start a task\n" +
   "  agent prompt spokes/<node>:<task> <text>   follow one up; approvals stay with a person in the IDE\n" +
+  "  pane rebind [-t <pane>] agent spokes/<node>:<task>   open a task read-only in a pane (or ⏎ on its rail row, prefix+a)\n" +
   "lucid herd agent wait <lane> [--until <status>]... [--timeout <ms>]   block until the lane gets there\n" +
   "lucid herd agent prompt --wait [--until <status>]... [--timeout <ms>] <lane> <text>   refused agent_blocked on an open ask\n" +
   "lucid herd agent spawn ... --wait [--timeout <ms>]   return once the lane is ready\n" +

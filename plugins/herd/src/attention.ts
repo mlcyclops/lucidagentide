@@ -18,6 +18,9 @@
 //   next        prefix+a and `:next`: the oldest open ask first, then the oldest unseen lane, never
 //               the lane already focused; it focuses a pane showing the lane or binds the focused
 //               pane to it (ADR-0420).
+//   spokes      ADR-0559: the server passes the spoke tasks (`spokes/<node>:<task>`, status as the
+//               rail draws it) beside its own lanes, so seen, unseen and next cover them the same
+//               way; a spoke row opens into a spoke pane (spoke_pane.ts).
 //   alerts      off by default (`notify` in hub-keys.json, keys.ts): the bell is BEL on a lane
 //               entering needs-you; desktop is the terminal's own escape (OSC 9 or OSC 777) on
 //               needs-you and on a newly unseen turn. The text is the lane name and its status,

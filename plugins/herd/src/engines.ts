@@ -14,9 +14,12 @@
 // (desktop/remote_spokes.ts): GET /api/remote-spokes on the machine poll, POST
 // /api/remote-spokes/submit for `agent spawn --machine spokes --spoke <node> --text <text>` and
 // /api/remote-spokes/followup for `agent prompt spokes/<node>:<task> <text>`. Each spoke task is one
-// row, ref `spokes/<node>:<task>`, with the spoke's label and the task state verbatim. Nothing else
-// reaches a spoke from here: approvals, presence and every decision are a person's in the IDE
-// (refused `human_only`), and status, read, cancel, close, waits and events are refused.
+// row, ref `spokes/<node>:<task>`, with the spoke's label and the task state verbatim. A follow-up
+// reads the task's state fresh first (ADR-0559) and is refused `agent_blocked` while it waits on an
+// approval. ADR-0559: a spoke pane (spoke_pane.ts) recalls the task's journal through POST
+// /api/remote-spokes/recall, already scanned by the engine. Nothing else reaches a spoke from here:
+// approvals, presence and every decision are a person's in the IDE (refused `human_only`), and
+// status, read, cancel, close, waits and events are refused on the control plane.
 //
 // The file is untrusted input: every entry is validated and an off-shape one is dropped, never
 // guessed. On the control plane a lane of machine b is `b/<laneId>`; the default machine's prefix is
@@ -427,6 +430,32 @@ export class MachineSet {
     return out;
   }
 
+  /** ADR-0559: the spoke tasks of the last poll with `id` their control-plane ref (`spokes/<node>:<task>`),
+   *  for attention and the spoke pane; `stale` while the hub is not connected. Empty without a spokes machine. */
+  spokeLanes(): MachineLane[] {
+    const c = this.#conns.get(SPOKES_MACHINE);
+    if (!c) return [];
+    return c.lanes.map((l) => {
+      const ref = laneRef(SPOKES_MACHINE, str(l.id));
+      return { ...l, machine: SPOKES_MACHINE, ref, id: ref, ...(c.state === "connected" ? {} : { stale: true }) };
+    });
+  }
+
+  /** ADR-0559: the spokes machine's state and the hub's reason while it is not connected; null without one. */
+  spokesConn(): { state: MachineState; error: string } | null {
+    const c = this.#conns.get(SPOKES_MACHINE);
+    return c ? { state: c.state, error: c.error } : null;
+  }
+
+  /** ADR-0559: POST /api/remote-spokes/recall {node, task}. The engine scans every entry fail-closed
+   *  before it answers (a flagged one comes back withheld, desktop/remote_spokes.ts gateRecall); the
+   *  hub's refusal comes back verbatim (`refused`). */
+  async spokeRecall(node: string, task: string): Promise<Record<string, unknown>> {
+    const view = await this.#spokesCall("/api/remote-spokes/recall", { node, task });
+    if (view.ok !== true) throw new HubOpError("refused", str(view.error) || "the Remote Spokes hub refused the recall");
+    return view;
+  }
+
   /** The rail's machine groups (hub_tui RailMachines): null while this hub has only its own engine,
    *  so the rail stays exactly as the classic one. Row ids are control-plane refs. */
   railGroups(): RailMachines | null {
@@ -559,7 +588,11 @@ export class MachineSet {
       return { lane: { id: laneRef(SPOKES_MACHINE, `${r.node}:${task}`), machine: SPOKES_MACHINE, node: r.node, task } };
     }
     const id = `${r.node}:${r.task}`;
-    const known = this.#conns.get(SPOKES_MACHINE)?.lanes.find((l) => l.id === id);
+    // ADR-0559: the task's state read fresh, not from the last poll (up to 2 s old, and the task may
+    // have parked since). A failed read falls back to the last poll; the spoke's engine still enforces
+    // its own check either way.
+    const lanes = await this.#spokesRead().catch(() => this.#conns.get(SPOKES_MACHINE)?.lanes ?? []);
+    const known = lanes.find((l) => l.id === id);
     if (known?.taskState === "awaiting_approval") {
       throw new HubOpError("agent_blocked", `spoke task "${str(known.name)}" is waiting on a person's approval; nothing was sent. The person decides it in the IDE's Remote Spokes panel.`);
     }

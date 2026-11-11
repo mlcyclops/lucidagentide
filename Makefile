@@ -1451,8 +1451,8 @@ demo-P-HERD.6: ## P-HERD.6 (ADR-0495, ADR-0545): Main as a pane: the engine's ow
 	$(BUN) test $(TEST_IGNORES) plugins/herd/test/hub_main_pane.test.ts
 
 .PHONY: demo-P-HERD.7
-demo-P-HERD.7: ## P-HERD.7 (ADR-0496, ADR-0549): machines: engines on this box by --dir behind the nonce handshake with their own backoff, `<machine>/<lane>` refs, and the `spokes` machine listing Remote Spokes tasks (submit and follow-up only, decisions refused human_only); --ssh and --profile refused.
-	$(BUN) test $(TEST_IGNORES) plugins/herd/test/hub_machines.test.ts
+demo-P-HERD.7: ## P-HERD.7 (ADR-0496, ADR-0549, ADR-0559): machines: engines on this box by --dir behind the nonce handshake with their own backoff, `<machine>/<lane>` refs, and the `spokes` machine listing Remote Spokes tasks (submit and follow-up only, a follow-up checks the task fresh, decisions refused human_only); a spoke task opens read-only in a pane; --ssh and --profile refused.
+	$(BUN) test $(TEST_IGNORES) plugins/herd/test/hub_machines.test.ts plugins/herd/test/spoke_pane.test.ts
 
 .PHONY: demo-P-HERD.8
 demo-P-HERD.8: ## P-HERD.8 (ADR-0497, ADR-0549): the read-only mirror page Herd serves on the runtime port: tabs, split tree, agent status and attention over Server-Sent Events; loopback Host, GET only, no foreign Origin, host token, a CSP of default-src none.

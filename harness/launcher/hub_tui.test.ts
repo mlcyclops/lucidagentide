@@ -6,7 +6,9 @@
 // keystones (no lost or duplicated leaf, stable ids) live in hub_spaces.test.ts (P-TUI.3).
 
 import { describe, expect, test } from "bun:test";
-import { agentTableLines, clickTarget, deckLines, deckStrip, deckStripEntries, fmtElapsed, kgPages, modelCatalog, fitBlock, paneRects, railLine, railRows, spaceTableLines, type HubData, type HubGeometry, type HubSpace } from "./hub_tui.ts";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { agentTableLines, clickTarget, deckLines, deckStrip, deckStripEntries, fmtElapsed, HubComponent, kgPages, modelCatalog, fitBlock, paneRects, railLine, railRows, spaceTableLines, type HubData, type HubGeometry, type HubHostLanes, type HubSpace } from "./hub_tui.ts";
 import { Spaces } from "./hub_spaces.ts";
 
 describe("fitBlock", () => {
@@ -357,5 +359,60 @@ describe("deck strip (P-TUI.6)", () => {
     expect(clickTarget(g, cells[1]!.x + cells[1]!.w - 1, 38)).toEqual({ kind: "deck", id: "security" });
     expect(clickTarget(g, cells[1]!.x + cells[1]!.w, 38)).toBeNull(); // the gap between cells
     expect(clickTarget(g, cells[0]!.x, 39)).toBeNull(); // the status line is not the strip
+  });
+});
+
+// ADR-0559: the host-lanes seam is inert unless a host passes one AND a pane shows a lane it owns.
+// Nothing here reaches an engine: no key below refreshes, spawns or sends.
+describe("host lanes (ADR-0559)", () => {
+  const engine = { v: 1 as const, pid: 1, port: 1, nonce: "n", token: "t", version: "9.9", flavor: "agent", startedAt: "2026-11-11T00:00:00.000Z" };
+  const make = (hostLanes?: HubHostLanes) => {
+    const spaces = new Spaces();
+    spaces.split(undefined, "right");
+    spaces.rebind(undefined, "agent", { id: "lane_1", name: "scout" });
+    const ui = { requestRender() { /* headless */ }, terminal: { rows: 30 } };
+    const hub = new HubComponent(ui, engine, { spaces, prioritiesPath: join(tmpdir(), "hub-host-lanes-none.json"), ...(hostLanes ? { hostLanes } : {}) });
+    return { spaces, hub, frame: () => hub.render(120).join("\n") };
+  };
+
+  test("with no hostLanes, or one that owns no lane on screen, the pane tree, keys and frames are the classic hub's", () => {
+    const calls: string[] = [];
+    const idle: HubHostLanes = {
+      owns: (lane) => lane.startsWith("elsewhere/"),
+      pane: () => { calls.push("pane"); return []; },
+      modal: () => false,
+      input: () => { calls.push("input"); return true; },
+      hint: () => { calls.push("hint"); return ""; },
+    };
+    const classic = make();
+    const seamed = make(idle);
+    expect(seamed.frame()).toBe(classic.frame());
+    for (const key of ["\r", "hi", "\u001b", "k", "j", "|", "\t", "m", "-"]) {
+      classic.hub.handleInput(key);
+      seamed.hub.handleInput(key);
+      expect(seamed.frame()).toBe(classic.frame());
+      expect(JSON.stringify(seamed.spaces)).toBe(JSON.stringify(classic.spaces));
+    }
+    expect(calls).toEqual([]);
+  });
+
+  test("an agent pane on a lane the host owns is drawn, hinted and keyed by the host first", () => {
+    const keys: string[] = [];
+    const host: HubHostLanes = {
+      owns: (lane) => lane.startsWith("elsewhere/"),
+      pane: (lane, w, h) => fitBlock([`host draws ${lane}`], w, h),
+      modal: () => false,
+      input: (lane, data) => { keys.push(`${lane} ${JSON.stringify(data)}`); return data === "\r"; },
+      hint: (lane) => `host hint ${lane}`,
+    };
+    const { spaces, hub, frame } = make(host);
+    spaces.rebind(undefined, "agent", { id: "elsewhere/x", name: "x" });
+    expect(Bun.stripANSI(frame())).toContain("host draws elsewhere/x");
+    expect(Bun.stripANSI(frame())).toContain("host hint elsewhere/x");
+    hub.handleInput("\r"); // the host's: no hub composer opens over it
+    expect(Bun.stripANSI(frame())).toContain("host hint elsewhere/x");
+    hub.handleInput("|"); // not the host's: the hub keymap splits
+    expect(keys).toEqual(['elsewhere/x "\\r"', 'elsewhere/x "|"']);
+    expect(spaces.paneList({}).length).toBe(3);
   });
 });

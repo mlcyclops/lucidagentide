@@ -615,6 +615,25 @@ export interface HubHostDeck {
   sessionEnter(id: string, title: string, asLane: () => void): void;
 }
 
+/** ADR-0559 (Herd only, ADR-0541): AGENT panes bound to a lane ref the HOST owns (a lane this
+ *  engine does not run), drawn and keyed by the host. Inert in the classic hub: it passes none, and
+ *  every agent pane draws and keys exactly as before. The hub never fetches a transcript for or
+ *  watches an owned lane, and a key the host does not take falls to the hub keymap as on any pane; a
+ *  rail ⏎ on an owned row binds the focused pane to it. The control plane's verbs on such a pane are
+ *  the host's to answer (its `commands` seam), ahead of the executor. */
+export interface HubHostLanes {
+  /** True for a lane ref the host draws. */
+  owns(lane: string): boolean;
+  /** An agent pane on owned `lane`, framed, exactly w x h rows. */
+  pane(lane: string, w: number, h: number, focused: boolean): string[];
+  /** True while the host's composer owns the keyboard (it takes every key, whatever is focused). */
+  modal(): boolean;
+  /** A key while modal(), or while a pane on owned `lane` is focused: true when the host took it. */
+  input(lane: string, data: string, enter: boolean): boolean;
+  /** The status-line hint while a pane on owned `lane` is focused or modal() is true. */
+  hint(lane: string): string;
+}
+
 const POLL_MS = 2000;
 const SIDEBAR_W = 20;
 const RAIL_W = 28;
@@ -676,16 +695,19 @@ export class HubComponent implements Component {
   readonly #hostPalette: HubHostPalette | undefined;
   /** P-HERD.6 (ADR-0495; Herd only): the host-owned `main` deck; undefined in the classic hub. */
   readonly #hostDeck: HubHostDeck | undefined;
+  /** ADR-0559 (Herd only): agent panes on lanes the host owns; undefined in the classic hub. */
+  readonly #hostLanes: HubHostLanes | undefined;
   /** P-HERD.7 (ADR-0496; Herd only): other machines' lanes for the rail; undefined in the classic hub. */
   readonly #machines: (() => RailMachines | null) | undefined;
   /** P-HERD.5 (ADR-0494; Herd only): a lane's attention for the rail (order, hues, ◎ badges);
    *  undefined in the classic hub, which paints and sorts exactly as before. */
   readonly #attention: ((laneId: string) => LaneAttention) | undefined;
 
-  constructor(ui: HubUi, engine: EngineDiscovery, opts: { spawned?: boolean; spaces?: Spaces; prioritiesPath?: string; onFleet?: (lanes: Record<string, unknown>[]) => void; server?: HubServerInfo; detach?: () => void; notice?: string; commands?: (argv: readonly string[]) => Promise<unknown> | undefined; palette?: HubHostPalette; hostDeck?: HubHostDeck; machines?: () => RailMachines | null; attention?: (laneId: string) => LaneAttention } = {}) {
+  constructor(ui: HubUi, engine: EngineDiscovery, opts: { spawned?: boolean; spaces?: Spaces; prioritiesPath?: string; onFleet?: (lanes: Record<string, unknown>[]) => void; server?: HubServerInfo; detach?: () => void; notice?: string; commands?: (argv: readonly string[]) => Promise<unknown> | undefined; palette?: HubHostPalette; hostDeck?: HubHostDeck; hostLanes?: HubHostLanes; machines?: () => RailMachines | null; attention?: (laneId: string) => LaneAttention } = {}) {
     this.#ui = ui;
     this.#attention = opts.attention;
     this.#hostDeck = opts.hostDeck;
+    this.#hostLanes = opts.hostLanes;
     this.#machines = opts.machines;
     this.#commands = opts.commands;
     this.#hostPalette = opts.palette;
@@ -833,7 +855,7 @@ export class HubComponent implements Component {
       };
       this.#onFleet?.(arr(this.#data.fleet.lanes).map(rec));
       // Live transcripts for every open agent pane, same poll tick.
-      const laneIds = [...new Set(leaves(this.#tree).flatMap((l) => (l.deck === "agent" && l.lane ? [l.lane] : [])))];
+      const laneIds = [...new Set(leaves(this.#tree).flatMap((l) => (l.deck === "agent" && l.lane && !this.#hostLanes?.owns(l.lane) ? [l.lane] : [])))];
       const fetched = await Promise.all(laneIds.map(async (id) => {
         try {
           const r = rec(await this.#get(`/api/fleet/transcript?laneId=${encodeURIComponent(id)}`));
@@ -919,6 +941,12 @@ export class HubComponent implements Component {
     return this.#focusedLeaf().deck;
   }
 
+  /** ADR-0559 (Herd only): the focused agent pane's lane when the host owns it, else null. */
+  #focusedHostLane(): string | null {
+    const leaf = this.#focusedLeaf();
+    return leaf.deck === "agent" && leaf.lane && this.#hostLanes?.owns(leaf.lane) ? leaf.lane : null;
+  }
+
   handleInput(data: string): void {
     // Mouse reports come FIRST, before any mode: with reporting on, every pointer move is an input
     // event, and one must never close help, type "[<0;12;5M" into a composer or a filter, or reach
@@ -1000,6 +1028,8 @@ export class HubComponent implements Component {
     }
     // P-HERD.6 (Herd only): the Main pane's composer, picker or the Sessions choice owns every key.
     if (this.#hostDeck?.modal()) { this.#hostDeck.input(data, isEnter); this.#ui.requestRender(); return; }
+    // ADR-0559 (Herd only): the composer of a host-owned agent pane owns every key the same way.
+    if (this.#hostLanes?.modal()) { this.#hostLanes.input(this.#focusedLeaf().lane ?? "", data, isEnter); this.#ui.requestRender(); return; }
     // ADR-0541: in a Herd server `Q` detaches too (prefix+q once P-HERD.3 lands the prefix), and q and
     // ctrl+c detach rather than quit: a client never ends the server, only `lucid herd server stop`.
     if (matchesKey(data, "ctrl+c") || data === "q" || (data === "Q" && this.#detach)) { this.#leave(); return; }
@@ -1018,6 +1048,13 @@ export class HubComponent implements Component {
       // Agent rows (P-TUI.5 E2): ⏎ attaches into the focused pane, c cancels the lane's turn via the
       // existing route, a digit sets its priority badge (DISPLAY ORDER only, never scheduling).
       if (row?.kind === "agent") {
+        // ADR-0559 (Herd only): a row the host owns binds the focused pane the same ADR-0420 way.
+        if (isEnter && this.#hostLanes?.owns(row.row.id)) {
+          this.#spaces.rebind(undefined, "agent", { id: row.row.id, name: row.row.name });
+          this.#status = `agent → ${row.row.name}`;
+          this.#ui.requestRender();
+          return;
+        }
         if (isEnter) { this.#agents.attach(row.row.id); return; }
         if (data === "c") { this.#agents.cancel(row.row.id); return; }
         if (/^[1-9]$/.test(data)) {
@@ -1034,6 +1071,9 @@ export class HubComponent implements Component {
     // P-HERD.6 (Herd only): a focused Main pane takes its own keys first (⏎ compose, y/s/d answer,
     // c cancel, m/M pickers, scrolling); the rest fall through to the hub keymap.
     if (this.#hostDeck && this.#focusedDeck() === "main" && this.#hostDeck.input(data, isEnter)) { this.#ui.requestRender(); return; }
+    // ADR-0559 (Herd only): a focused pane on a host-owned lane takes its own keys first, the same way.
+    const hostLane = this.#focusedHostLane();
+    if (hostLane !== null && this.#hostLanes!.input(hostLane, data, isEnter)) { this.#ui.requestRender(); return; }
     if (data === "?") { this.#help = true; this.#ui.requestRender(); return; }
     const count = leaves(this.#tree).length;
     const sp = this.#spaces;
@@ -1428,7 +1468,7 @@ export class HubComponent implements Component {
    *  (help, reader, picker, palette, a composer) owns input until it closes, so a stray click never
    *  edits or dismisses it. */
   #click(col: number, row: number): void {
-    if (this.#help || this.#reader || this.#picker || this.#palette || this.#prompt || this.#hostDeck?.modal() || !this.#geom) return;
+    if (this.#help || this.#reader || this.#picker || this.#palette || this.#prompt || this.#hostDeck?.modal() || this.#hostLanes?.modal() || !this.#geom) return;
     const hit = clickTarget(this.#geom, col, row);
     if (!hit) return;
     // The strip (P-TUI.6): a click on an entry rebinds the focused pane to that deck - the same
@@ -1801,7 +1841,7 @@ export class HubComponent implements Component {
 
 
   #pane(leaf: PaneLeaf, w: number, h: number, focused: boolean): string[] {
-    if (leaf.deck === "agent") return this.#agentPane(leaf, w, h, focused);
+    if (leaf.deck === "agent") return leaf.lane && this.#hostLanes?.owns(leaf.lane) ? this.#hostLanes.pane(leaf.lane, w, h, focused) : this.#agentPane(leaf, w, h, focused);
     // P-HERD.6: only a Herd host draws Main; a layout without one shows what the pane is for.
     if (leaf.deck === "main") return this.#hostDeck ? this.#hostDeck.pane(w, h, focused) : fitBlock(["", "  Main is a Herd pane (lucid herd)"], w, h);
     const deck = leaf.deck;
@@ -1912,9 +1952,11 @@ export class HubComponent implements Component {
       ? `${this.#engine.flavor} engine · herd ${this.#server.name} · ${this.#server.clients()} attached `
       : `${this.#engine.flavor} engine · lucid hub `;
     // P-HERD.6 (Herd only): while the host's composer, picker or choice holds the keys, it speaks here.
-    const hostModal = this.#hostDeck?.modal() ? ` ${this.#hostDeck.hint()}` : "";
+    // ADR-0559 (Herd only): a host-owned agent pane's composer and keys speak here the same way.
+    const hostLane = this.#focusedHostLane();
+    const hostModal = this.#hostDeck?.modal() ? ` ${this.#hostDeck.hint()}` : this.#hostLanes?.modal() ? ` ${this.#hostLanes.hint(this.#focusedLeaf().lane ?? "")}` : "";
     const focusedDeck = this.#focusedDeck();
-    const deckHint = focusedDeck === "main" ? this.#hostDeck?.hint() ?? "" : DECK_HINTS[focusedDeck];
+    const deckHint = focusedDeck === "main" ? this.#hostDeck?.hint() ?? "" : hostLane !== null ? this.#hostLanes!.hint(hostLane) : DECK_HINTS[focusedDeck];
     const composing = hostModal ? hostModal : this.#prompt && this.#promptKind === "wl-add"
       ? ` add host to whitelist: ${this.#prompt.text}▌  (⏎ save · esc cancel)`
       : this.#prompt && this.#promptKind === "kg-filter"

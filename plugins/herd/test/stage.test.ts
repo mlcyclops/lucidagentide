@@ -26,7 +26,7 @@ describe("stage", () => {
     expect(readdirSync(out).sort()).toEqual(["LICENSE", "client.js", "lucid-plugin.json", "server.js"]);
     const m = JSON.parse(readFileSync(join(out, "lucid-plugin.json"), "utf8"));
     expect(m).toMatchObject({
-      schema: 1, id: "herd", name: "Herd", version: "0.2.0", publisher: "TECHLEAD 187 LLC", tier: "free", section: "civilian", kind: "server",
+      schema: 1, id: "herd", name: "Herd", version: "0.2.1", publisher: "TECHLEAD 187 LLC", tier: "free", section: "civilian", kind: "server",
       entry: { main: "server.js", healthPath: "/healthz" }, permissions: ["network:loopback", "fs:plugin-data"],
     });
     expect("files" in m).toBe(false);
