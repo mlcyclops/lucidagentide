@@ -42,7 +42,7 @@ test("PBKDF2 is deterministic per (passphrase, salt) and salt-sensitive", () => 
   const salt = randomSalt();
   expect(deriveKey("hunter2", salt).equals(deriveKey("hunter2", salt))).toBe(true);
   expect(deriveKey("hunter2", salt).equals(deriveKey("hunter2", randomSalt()))).toBe(false);
-});
+}, 30_000); // four real 600k-iteration derivations; Windows CNG (P-FIPS.1) takes ~0.9 s each, past bun's 5 s default under load
 
 // ── passphrase-custody store ─────────────────────────────────────────────────────
 test("store: create → mutate → reopen with passphrase round-trips the graph", () => {

@@ -1,0 +1,89 @@
+# Real OS vault backends (ADR-0472 / ADR-0474) on macOS and Linux.
+#
+# The engine vault seals its master key with DPAPI on Windows, the login Keychain on macOS and the Secret
+# Service on Linux. The Windows backend is covered by the full test gate (ci.yml, windows-latest); the
+# other two were only covered through an injected store, and an Ubuntu runner with no keyring silently
+# takes the plaintext-file fallback. This workflow runs the upgrade path against the REAL backend:
+# an older build's plaintext lucid-gui.json migrates on the first engine start, a SECOND engine process
+# (a fresh master-key read from the OS, as after a restart) reads every key back, and the safeStorage
+# credential vault drains into the engine vault. LUCID_REQUIRE_OS_VAULT=1 turns the fallback into a
+# failure, so a missing backend can never pass as green.
+
+name: Vault backends
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "desktop/engine_vault.ts"
+      - "desktop/settings_store.ts"
+      - "desktop/vault_*.ts"
+      - "desktop/cred_*.ts"
+      - "harness/crypto/**"
+      - "desktop/scripts/demo_p_vault_*.ts"
+      - ".github/workflows/vault-backends.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vault-backends-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: Engine vault on the macOS Keychain
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install
+        run: bun install && (cd desktop && bun install)
+      - name: Upgrade migration through the real Keychain (P-VAULT-KEYS.1)
+        env:
+          LUCID_REQUIRE_OS_VAULT: "1"
+        run: bun run desktop/scripts/demo_p_vault_keys_1.ts
+      - name: Keychain diagnostics (on failure)
+        if: failure()
+        run: |
+          set +e -x
+          security list-keychains -d user
+          security default-keychain -d user
+          security show-keychain-info "$(security default-keychain -d user | tr -d ' "')"
+          printf 'add-generic-password -s "LUCID CI Probe" -a "probe" -l "LUCID CI Probe" -w "cHJvYmU="\n' | security -i; echo "security -i exit=$?"
+          security find-generic-password -s "LUCID CI Probe" -a probe -w; echo "find exit=$?"
+          security delete-generic-password -s "LUCID CI Probe" -a probe >/dev/null 2>&1 || true
+      - name: Vault v2 and the safeStorage drain (P-VAULT-V2.1)
+        run: bun run desktop/scripts/demo_p_vault_v2_1.ts
+      - name: Vault unit suites
+        run: bun test desktop/engine_vault.test.ts desktop/settings_vault.test.ts desktop/vault_v2.test.ts desktop/cred_migration.test.ts
+
+  linux:
+    name: Engine vault on the Linux Secret Service
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnome-keyring libsecret-tools dbus-x11
+          bun install && (cd desktop && bun install)
+      # One D-Bus session with an unlocked login keyring for every step below (as a desktop login has).
+      - name: Upgrade migration, vault v2 and unit suites through the real Secret Service
+        env:
+          LUCID_REQUIRE_OS_VAULT: "1"
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            echo -n "ci-keyring" | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+            echo -n probe | secret-tool store --label=probe lucid-ci probe
+            test "$(secret-tool lookup lucid-ci probe)" = probe
+            bun run desktop/scripts/demo_p_vault_keys_1.ts
+            bun run desktop/scripts/demo_p_vault_v2_1.ts
+            bun test desktop/engine_vault.test.ts desktop/settings_vault.test.ts desktop/vault_v2.test.ts desktop/cred_migration.test.ts
+          '

@@ -49,10 +49,12 @@ describe("flavor resolution", () => {
     expect(normalizeBuildFlavor(" creator ")).toBe("creator");
   });
 
-  test("env wins, then packaged metadata, then standard", () => {
+  test("packaged metadata wins, then env, then standard: an inherited LUCID_BUILD_FLAVOR never flips an installed app", () => {
     expect(resolveBuildFlavor({ LUCID_BUILD_FLAVOR: "creator" })).toBe("creator");
     expect(resolveBuildFlavor({}, "creator")).toBe("creator");
-    expect(resolveBuildFlavor({ LUCID_BUILD_FLAVOR: "agent" }, "creator")).toBe("agent");
+    // The Agent engine exports LUCID_BUILD_FLAVOR=agent to every shell it starts; Creator launched from one stays Creator.
+    expect(resolveBuildFlavor({ LUCID_BUILD_FLAVOR: "agent" }, "creator")).toBe("creator");
+    expect(resolveBuildFlavor({ LUCID_BUILD_FLAVOR: "creator" }, "agent")).toBe("agent");
     expect(resolveBuildFlavor({})).toBe("agent");
     expect(resolveBuildFlavor(null, null)).toBe("agent");
   });

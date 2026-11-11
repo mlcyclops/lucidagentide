@@ -142,6 +142,25 @@ describe("themed sprites and expressive eyes", () => {
     expect(face("idleA")).not.toBe(face("guard"));
     expect(face("victoryB")).not.toBe(face("guard"));
   });
+  // P-SEASON.1, reported live: "the eye section is a bit bulging on the edges". The skin band used to
+  // swell up to four cells past the hood on the right (and one on the left), reading as a lumpy cheek.
+  // Every face row's outline must sit exactly on the headband's outline columns, in every frame and
+  // expression. Rows where a held prop hides a cheek (the scanner) are skipped, as is the salute, whose
+  // forearm legitimately crosses the right cheek.
+  it("keeps the eye band flush with the hood silhouette in every frame", () => {
+    for (const [id, f] of Object.entries(MASCOT_FRAMES)) {
+      if (id === "salute") continue;
+      const band = f.filter((r) => [...r].filter((c) => c === "G").length >= 20);
+      expect({ id, band: band.length > 0 }).toEqual({ id, band: true });
+      const left = Math.min(...band.map((r) => r.indexOf("k")));
+      const right = Math.max(...band.map((r) => r.slice(0, 35).lastIndexOf("k")));
+      for (const r of f) {
+        const a = r.indexOf("s"), b = r.lastIndexOf("s");
+        if ([...r].filter((c) => c === "s").length < 4) continue;
+        expect({ id, row: r, edges: [a - 1, b + 1], ink: r[a - 1]! + r[b + 1]! }).toEqual({ id, row: r, edges: [left, right], ink: "kk" });
+      }
+    }
+  });
   it("synchronizes work costumes to activity slots and restores brand outside work", () => {
     const snap: MascotSnap = { state: "working", since: 923, until: 0 };
     const themes = new Set();

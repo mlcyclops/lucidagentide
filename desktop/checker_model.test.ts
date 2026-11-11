@@ -69,6 +69,13 @@ describe("resolveCheckerModel", () => {
     expect(r.source).toBe("recommended");
     expect(r.value).toBe("anthropic/claude-haiku-4-5");
   });
+  test("an embedding model is never the checker, even as a saved override (ADR-0498)", () => {
+    const list = [opt("ollama/nomic-embed-text:latest"), ...ANTHROPIC];
+    expect(recommendCheckerModel(list, "ollama/nomic-embed-text:latest")!.value).toBe("anthropic/claude-haiku-4-5");
+    expect(resolveCheckerModel({ chosen: "ollama/nomic-embed-text:latest", models: list, current: "anthropic/claude-opus-4-8" }))
+      .toEqual({ value: "anthropic/claude-haiku-4-5", source: "recommended" });
+    expect(recommendCheckerModel([opt("ollama/nomic-embed-text:latest")], "anthropic/claude-opus-4-8")).toBeNull();
+  });
   test("no choice + no models ⇒ falls back to the maker model (ADR-0046 default)", () => {
     expect(resolveCheckerModel({ chosen: "", models: [], current: "anthropic/claude-opus-4-8" }))
       .toEqual({ value: "anthropic/claude-opus-4-8", source: "maker" });

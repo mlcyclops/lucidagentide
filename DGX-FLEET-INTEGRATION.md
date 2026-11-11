@@ -1,6 +1,6 @@
 # DGX Fleet Integration: what the fleet ships, and the ADRs LUCID needs
 
-- **Source:** TL187 DGX Loader repo (sibling checkout: `..\..\15-DGX\dgx`),
+- **Source:** TL187 Private AI Platform (formerly DGX Loader) repo (sibling checkout: `..\..\15-DGX\dgx`),
   its ADRs 0001 to 0018, and its `docs/LUCID-INTEGRATION.md` voice contract
   plus `docs/HANDOFF-LUCID-MODEL-PICKER.md` (the model-picker contract).
 - **Date:** 2026-09-05, with an addendum on 2026-09-17 (see the bottom
@@ -205,9 +205,9 @@ Four consequences for LUCID, in order of how much they cost if ignored:
    QUEUES on this head. It does not error. Expect that to present as latency
    and do not read it as a hang.
 
-### ADR-F: import a DGX Loader model endpoint (the LUCID ask)
+### ADR-F: import a Private AI Platform model endpoint (the LUCID ask)
 
-This is the half of DGX ADR-0018 that LUCID owns. The Loader half is built:
+This is the half of DGX ADR-0018 that LUCID owns. The platform half is built:
 `src/shared/modelEndpoint.ts` plus 24 tests, an IPC contract, and a
 `Send to LUCID` button on each live endpoint card in the Evals Dashboard. It
 writes `<LUCID data root>/model_endpoints/<id>.json`.
@@ -215,10 +215,10 @@ writes `<LUCID data root>/model_endpoints/<id>.json`.
 **Why a file and not an API call, stated so nobody re-litigates it.** LUCID's
 control plane binds `127.0.0.1` and every `/api/*` route except `/api/health`
 requires the per-launch `x-lucid-token` minted by LUCID's own Electron main.
-The Loader has no channel to obtain it and must not: that control plane holds
+The platform has no channel to obtain it and must not: that control plane holds
 keys and passphrases. `/api/health` is the single token-exempt route, confers
-no authority, and is used only to detect that LUCID is running. So the Loader
-PUBLISHES and LUCID PULLS. A compromised Loader cannot configure LUCID. This
+no authority, and is used only to detect that LUCID is running. So the platform
+PUBLISHES and LUCID PULLS. A compromised platform cannot configure LUCID. This
 is the same conclusion ADR-0017 reached for voice, reached again independently.
 
 The increment, sized for one session:
@@ -238,7 +238,7 @@ The increment, sized for one session:
    `ompProvider` from the slug: LUCID owns that namespace and must never adopt
    an id from the file. Carry `zone` (default `internal`) and `models[]`
    including `compat` through as the seed declaration.
-4. **Offer, never auto-apply.** A banner or Settings row: "DGX Loader
+4. **Offer, never auto-apply.** A banner or Settings row: "Private AI Platform
    published 1 model endpoint. Review and import." Importing a file from disk
    must not silently add a provider that can then receive prompts.
 5. **Hand off to the existing path.** Save the provider, put the key in the

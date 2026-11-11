@@ -1,0 +1,35 @@
+{
+  "skill_name": "explainer-studio",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "make my 10 year old an interactive 3d thing that explains equivalent fractions, like the sael.net explainers. she has a chromebook so keep it light",
+      "expected_output": "Writes PLAN.md first with all fifteen sections (goal, audience and levels, idea and misconceptions, chapters with success checks, views, console and keyboard map, exact math model, honesty table, look, accessibility, performance budget, assets = none, kid safety, verification plan, out of scope) and shows it before any scene code. The design is original (no Fraction Kitchen names, layout, or text) and credits Ryan Sael only as inspiration. Math uses reduced rationals with gcd/lcm and never displays a float. Budget is procedural three.js under 1 MB with pixel ratio clamped to 2 and the loop paused when hidden.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "the explainer you built looks done, ship it",
+      "expected_output": "Does not declare it done on appearance. Runs preview_open on the page inside the workspace, preview_inspect with what=errors and requires zero console errors, takes preview_screenshot of every chapter and view, drives a control with preview_click and confirms the readout matches the math module, then (when Chromium and ffmpeg are available) runs the headless DevTools capture for screenshots per chapter, posters, and a muted webm/mp4 preview clip of about 25 to 260 KB. Reports transfer size, error count, draw calls, and file paths, and labels anything it could not run as unverified.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "add a hdr environment map and a couple of glb models from sketchfab so the solar system explainer looks more realistic",
+      "expected_output": "Pushes back on the asset-heavy approach: the quality bar is procedural three.js under 1 MB with no HDR/EXR maps or GLB models, and runtime must not fetch from the network. Offers procedural alternatives (gradient sky shader, fog, hemisphere plus one shadowed key light, procedural planet materials) and, only if one asset is truly justified, routes it through the explainer-assets-gpu budget rules (GLB with meshopt or Draco, KTX2, total under about 5 MB, recorded in PLAN.md) with licensing checked. Never downloads third-party models without the user's say-so and never copies another explainer's assets.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "in the long division explainer the remainder readout says 0.30000000000000004 of a cart sometimes, fix it",
+      "expected_output": "Treats it as a violation of the exact-math rule, not a formatting tweak: moves the computation into the pure math module using integers or BigInt (long division steps of divide, multiply, subtract, bring down; remainder as an integer, fractional parts as reduced rationals), shows rounded values only with an approximately-equals sign, adds self-tests that would have caught it, runs them under bun test and in ?selftest mode, and re-verifies the affected chapter with a screenshot and zero console errors.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "build a 3d explainer for my 8 year old about how a bill becomes a law, make it fun and exciting with explosions when the president vetoes",
+      "expected_output": "Applies the kid-safe rules: keeps the civics content neutral and nonpartisan, replaces explosions with a gentle non-violent veto cue, uses encouraging copy and hints instead of penalties, no links out or data collection, and no real child's likeness. Plans first, uses only facts it is sure of (for example 435 representatives, 100 senators, a two-thirds vote of both chambers to override a veto) and leaves out anything uncertain, includes the honesty write-up sections, and honours reduced motion.",
+      "files": []
+    }
+  ]
+}

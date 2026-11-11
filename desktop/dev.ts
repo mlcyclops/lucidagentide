@@ -56,7 +56,12 @@ import {
   VISION_MAX_IMAGE_BYTES, type VisionImage, type VisionRemoteRow,
 } from "./creator_dgx_vision.ts"; // Design suite: DGX vision service client (design contract section 4)
 import { DESIGN_STATE_MAX_BYTES, DesignStore, planDesignExport, planHyperframesExport } from "./creator_design.ts"; // Design suite: state, agent-op queue, export validation
-import { planHyperframesRender, preflightHyperframes, runHyperframesRender, type HyperframesFormat, type HyperframesQuality, type HyperframesSpawn } from "./creator_hyperframes.ts"; // local HyperFrames renders
+// The child spawn shape is HyperFrames' (OpenfilmSpawn is the same type); one spawn helper serves both CLIs.
+import { planHyperframesRender, preflightHyperframes, runHyperframesRender, type HyperframesFormat, type HyperframesQuality, type HyperframesSpawn as CreatorChildSpawn } from "./creator_hyperframes.ts"; // local HyperFrames renders
+import {
+  planOpenfilmLook, planOpenfilmRender, preflightOpenfilm, runOpenfilmLook, runOpenfilmRender,
+  type OpenfilmDeps, type OpenfilmDirEntry, type OpenfilmFormat, type OpenfilmLookVerdict,
+} from "./creator_openfilm.ts"; // CREATOR-OPENFILM (ADR-0457): local OpenFilm look + render
 import { addTrack, foldLibrary, libraryLedger, libraryStats, removeTrack, trackAudio, updateTrack, type CreatorTrack, type LibraryIo, type LibraryStats, type TrackOrigin } from "./creator_library.ts"; // CREATOR-0 (ADR-0281)
 import {
   ComfyClient, applyWorkflowTemplate, artifactDir, artifactLedger, buildGif, buildSpriteSheet, decodePngDataUrl,
@@ -120,7 +125,7 @@ import { approveBlock, dismissAllBlocks, dismissBlock, liveBlocks } from "./secu
 import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECACK.1 (ADR-0170)
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { probeRateLimits } from "./ratelimit_probe.ts";
-import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
+import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger, type CodeActivity, type UsageLedger } from "../tools/memory_data.ts";
 import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, TURN_ALREADY_RUNNING, type JudgePlan } from "./acp_backend.ts";
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
@@ -163,9 +168,18 @@ import { InspectRelay } from "./preview_inspect_relay.ts"; // P-PREVIEW.6b: agen
 import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type BoardFrame } from "./figma_client.ts"; // P-FIGMA.1 (ADR-0154)
 import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 / P-DESIGN.1 (ADR-0154)
 import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: Meeting Hub client; loading it takes LUCID_MEETING_HUB_TOKEN out of process.env before any child spawns
+import { handleVaultRoutes } from "./vault_routes.ts"; // P-VAULT-V2.1 (ADR-0474): /api/vault/*; loading it takes LUCID_VAULT_MAIN_TOKEN out of process.env
+import { applyVaultEnv, vaultRedactEnv } from "./vault_env.ts"; // P-VAULT-V2.1 (ADR-0474): engine-side credential env; security review: a lane's redaction names
+import { handleVaultBackupRoutes } from "./vault_backup_routes.ts"; // P-VAULT-UI.1 (ADR-0475): /api/vault/backup|restore
+import { configureSecretRequestEndpoint, handleSecretRoutes, SECRET_AGENT_ROUTE } from "./secret_routes.ts"; // P-SECRET-INTAKE.1 (ADR-0476): /api/secret/*
+import { workspaceSecretEnv } from "./vault_env_import.ts"; // P-VAULT-ENV.1 (ADR-0477): a lane's workspace-scoped secrets
+import { upsertVaultDestination } from "./vault_destinations.ts"; // ADR-0476 x ADR-0478: a remembered secrets manager becomes a destination
+import { vaultStartupCleanup } from "./vault_lifecycle.ts"; // security review: plaintext a dead engine left behind
+import { mayHoldGlobalEnv } from "./env_name_policy.ts"; // security review SECRET-INTAKE-ENVNAME-UNRESTRICTED: the one reserved-name rule
 import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
 import { ensureHiddenConsole, ompWindowsHide } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): a hidden console the omp children share
 import { setDefaultWindowsHide } from "./acp.ts";
+import { HeadedBrowserRevealer } from "./headed_browser_reveal.ts"; // P-BROWSER.5 (ADR-0456): show the headed browser omp's broker spawns hidden
 import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { discoveryHeaders, MAX_DISCOVERY_BYTES, parseDiscoveredModels, providerEnvVar, providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
@@ -346,7 +360,7 @@ async function whistleProbe(): Promise<WhistleProbeAnswer> {
   }
 }
 
-// P-VOICE.7: the same-machine handoff mailbox. The DGX Loader's "Send to LUCID" writes
+// P-VOICE.7: the same-machine handoff mailbox. The Private AI Platform's "Send to LUCID" writes
 // <home>/.omp/voice_endpoints/<id>.json (ADR-0017 in that repo); LUCID auto-scans on every endpoints
 // read, so the transfer is: click there, pick it here. Per-file fail-soft: one malformed file is
 // reported by name and skipped, never fatal, and NOTHING is imported without passing the fail-closed
@@ -552,6 +566,8 @@ import { kbScanner, kbStore, kgEntry, listKgs, activeKgId, createKg, renameKg, s
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.ts"
+import { installPluginFromUrl, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462)
+import { PluginRuntime, resolvePluginNode } from "./plugins/runtime.ts" // P-PLUGINS.2 (ADR-0462)
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
 import { retrieveKnowledge, type RetrieveMode, type RetrieveArgs } from "../harness/kb/retrieve.ts"
@@ -595,6 +611,7 @@ import { listDir } from "./fs_browse.ts";
 import { pickFolderNative } from "./native_dialog.ts"; // P-FS.2 (ADR-0265): real OS folder dialog for the browser build
 import { DIAL_TYPES, type LoopDial } from "./exec_policy.ts";
 import { audit } from "./audit_export.ts";
+import { handleComplianceRoutes } from "./compliance_routes.ts"; // P-COMPLY.1 (ADR-0479)
 import { isRiskTier, managedWorkspaceRoots } from "./managed_config.ts";
 import { apiAuthorized, isAllowedRequest, reqShape, tokenValid } from "./origin_guard.ts";
 
@@ -616,7 +633,9 @@ import { Db } from "../harness/memory/db.ts";
 import type { ImportVendor } from "../harness/personal/import_adapters.ts";
 import type { CuiDesignation } from "../harness/export/vault_export.ts";
 
-applyEnv(); // make stored API keys available to a spawned omp acp
+vaultStartupCleanup(); // security review: re-blank a `.env` and wipe secret temp folders a killed or crashed engine left, before anything else
+applyEnv(mayHoldGlobalEnv); // make stored API keys available to a spawned omp acp (never under a reserved env name)
+applyVaultEnv(); // P-VAULT-V2.1 (ADR-0474): credentials the engine vault holds, under the env names main used to inject
 if (loadSettings().headroomEnabled) startHeadroom(); // resume the opt-in compression proxy
 
 // P-COLLAB.3 (ADR-0192): the one live-share host for this backend. Real deps: a CollabSocket over the
@@ -948,7 +967,7 @@ setInterval(() => {
 }, 5000);
 
 // 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
-let codeActivityCache: { at: number; data: ReturnType<typeof codeActivity> } | null = null;
+let codeActivityCache: { at: number; data: Promise<CodeActivity> } | null = null; // P-BOOTPERF.1: async, single-flight
 // P-NETSTAT.1 (ADR-0423): one probe window per engine, shared by every renderer that polls it.
 const netProbe = new NetProbe();
 // P-PERF.3: the dashboard poll hammers these obs-DB reads (~every 4s). Each can take SECONDS as the DB grows,
@@ -962,8 +981,8 @@ function securitySnapshotMemo(): ReturnType<typeof securitySnapshot> {
   if (!secSnapMemo || t - secSnapMemo.at > SNAP_TTL_MS) secSnapMemo = { at: t, p: securitySnapshot() };
   return secSnapMemo.p; // concurrent callers await the SAME query
 }
-let usageMemo: { at: number; data: ReturnType<typeof usageLedger> } | null = null;
-function usageLedgerMemo(): ReturnType<typeof usageLedger> {
+let usageMemo: { at: number; data: Promise<UsageLedger> } | null = null; // P-BOOTPERF.1: async, single-flight
+function usageLedgerMemo(): Promise<UsageLedger> {
   const t = Date.now();
   if (!usageMemo || t - usageMemo.at > SNAP_TTL_MS) usageMemo = { at: t, data: usageLedger() };
   return usageMemo.data;
@@ -1144,7 +1163,7 @@ function creatorEndpointFor(providerId: CreatorProviderId, endpointId?: string):
 
 /** The dots.tts voice backend as a Creator declaration, so the avatar route gates its speech step with the
  *  same verdict. A Creator dots-tts declaration for the same URL carries the user's own attestation; else an
- *  imported voice endpoint written by the DGX Loader attests the enclave; else loopback counts as on-device. */
+ *  imported voice endpoint written by the Private AI Platform attests the enclave; else loopback counts as on-device. */
 function dotsTtsEndpointDef(url: string): CreatorEndpointDef {
   const base = url.replace(/\/+$/, "");
   const declared = listCreatorEndpoints().find((e) => e.enabled && e.providerId === "dots-tts" && (e.baseUrl ?? "").replace(/\/+$/, "") === base);
@@ -1159,7 +1178,7 @@ function dotsTtsEndpointDef(url: string): CreatorEndpointDef {
   };
 }
 
-// lucid-creator-endpoint v1: the DGX Loader writes <personal dir>/creator_endpoints/<id>.json. Scanned at
+// lucid-creator-endpoint v1: the Private AI Platform writes <personal dir>/creator_endpoints/<id>.json. Scanned at
 // engine start (Creator builds) and on POST /api/creator/endpoint/import-mailbox.
 const creatorEndpointMailboxDir = (): string => join(personalBaseDir(), "creator_endpoints");
 function scanCreatorEndpointMailbox(): CreatorMailboxReport {
@@ -1357,8 +1376,8 @@ async function visionJobView(jobId: string): Promise<VisionJobReply> {
   return { ok: true, data: { jobId, state: "done", progress: 1, message: s.message, result } };
 }
 
-/** HyperFrames runs as a fixed argument vector with an explicit env (never the engine's). No shell. */
-const hyperframesSpawn: HyperframesSpawn = async (argv, opts) => {
+/** HyperFrames and OpenFilm run as a fixed argument vector with an explicit env (never the engine's). No shell. */
+const creatorChildSpawn: CreatorChildSpawn = async (argv, opts) => {
   const proc = Bun.spawn([...argv], { cwd: opts.cwd, env: opts.env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
   const timer = setTimeout(() => { try { proc.kill(); } catch { /* already exited */ } }, opts.timeoutMs);
   try {
@@ -1366,6 +1385,36 @@ const hyperframesSpawn: HyperframesSpawn = async (argv, opts) => {
     return { code, stdout: stdout.slice(-20_000), stderr: stderr.slice(-20_000) };
   } finally { clearTimeout(timer); }
 };
+
+// CREATOR-OPENFILM (ADR-0457): the look verdicts this engine produced, keyed by job id. Bounded; the oldest goes
+// first. Job state, error, and artifacts are the ledger's; only the parsed verdict lives here.
+const OPENFILM_VERDICTS_MAX = 64;
+const openfilmVerdicts = new Map<string, OpenfilmLookVerdict>();
+function rememberOpenfilmVerdict(jobId: string, verdict: OpenfilmLookVerdict): void {
+  openfilmVerdicts.delete(jobId);
+  openfilmVerdicts.set(jobId, verdict);
+  while (openfilmVerdicts.size > OPENFILM_VERDICTS_MAX) {
+    const oldest = openfilmVerdicts.keys().next().value;
+    if (oldest === undefined) break;
+    openfilmVerdicts.delete(oldest);
+  }
+}
+
+/** The OpenFilm runners' real I/O: node:fs, the shared child spawn, and the Creator job + artifact ledgers. */
+function openfilmDeps(): OpenfilmDeps {
+  return {
+    spawn: creatorChildSpawn,
+    exists: (path) => existsSync(path),
+    readText: (path) => readFileSync(path, "utf8"),
+    readBytes: (path) => new Uint8Array(readFileSync(path)),
+    fileSize: (path) => statSync(path).size,
+    listDir: (dir) => readdirSync(dir, { withFileTypes: true })
+      .map((d): OpenfilmDirEntry => ({ name: d.name, kind: d.isDirectory() ? "dir" : d.isFile() ? "file" : "other" })),
+    writeText: (path, text) => writeFileSync(path, text),
+    ensureDir: (dir) => { mkdirSync(dir, { recursive: true }); },
+    jobIo, artifactIo, env: process.env, now: () => Date.now(),
+  };
+}
 
 // ---- CREATOR-1: jobs ----
 
@@ -1667,6 +1716,9 @@ delete process.env.LUCID_MAIN_TOKEN;
   if (con.allocated) console.error(`[console] hidden console window allocated for the agent's children${con.hidden ? "" : " (WARNING: it could not be hidden)"}`);
   else if (process.platform === "win32" && !con.window) console.error(`[console] no console window for the agent's children (${con.reason ?? "unknown"}): windows the agent opens may stay hidden`);
 }
+// P-BROWSER.5 (ADR-0456): omp 18.8 spawns its broker detached and console-less, so the console above no longer
+// reaches the shared headed Chromium: it is born hidden again (a white, frameless rectangle). Show it.
+new HeadedBrowserRevealer().start();
 // P-SANDBOX.15 (ADR-0396): the omp children's OWN token. Every LUCID_*_URL handed to a child carries this,
 // never TOKEN, and the engine accepts it only on AGENT_ROUTES (below), so the agent cannot reach human-only
 // routes such as /api/security/approve or the sandbox switch.
@@ -1693,6 +1745,9 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/creator/design/manifest", "/api/creator/design/ops", "/api/creator/design/ops/result",
   // CREATOR-DRIFT: the drift_status / drift_read / drift_apply / drift_export tools (harness/omp/drift_extension.ts).
   "/api/creator/drift/status", "/api/creator/drift/call", "/api/creator/drift/library",
+  // CREATOR-OPENFILM (ADR-0457): the openfilm_look / openfilm_render / openfilm_job tools. Each route still runs
+  // the Creator build check, the CUI gate, the project scan, and the governor exactly as the UI's call does.
+  "/api/creator/openfilm/look", "/api/creator/openfilm/render", "/api/creator/openfilm/job",
   "/api/browser/open", "/api/browser/capture", "/api/browser/scroll", "/api/browser/close",
   "/api/browser/shot", "/api/browser/click", "/api/browser/type", "/api/browser/drag", "/api/browser/keys",
   "/api/browser/snapshot", "/api/browser/act", // P-JEV.4 (ADR-0379): the browser_run policy loop
@@ -1730,7 +1785,10 @@ const fleet: FleetLaneManager = new FleetLaneManager({
   argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger,
   masterSessionId: () => backend.currentSessionId(), // P-SWITCH.2 (ADR-0404): one session, one owner
   claims: backend.writeClaims, history: backend.durations, // P-WAIT.1: one set of file claims, P-PROGRESS.1: one estimate history, with the master
-  env: (laneId) => ({ ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId) }),
+  env: (laneId, cwd) => {
+    const wsSecrets = workspaceSecretEnv(cwd); // P-VAULT-ENV.1; vaultRedactEnv: the lane's tool results hide them (security review)
+    return { ...wsSecrets, ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId), ...vaultRedactEnv(wsSecrets) };
+  },
   interject: (laneId, text) => { addInterject(laneId, text); },
   carriedNotes: carryPendingNotes, // ADR-0414: notes no tool step picked up ride the lane's next prompt
   // P-OWN.1: a spoke's authored path lands in the ledger; its prompts open with the checkout briefing.
@@ -1847,7 +1905,12 @@ setInterval(() => {
 // P-RECOVER.1 (ADR-0385): the master session the PREVIOUS engine process was talking to, read here, once,
 // BEFORE the persister below is wired (the backend can only write the file through it, so nothing in this
 // process can overwrite the record first). /api/recovery/state offers it for resume after an unclean exit.
-const LAST_SESSION_FILE = lastSessionPath(PORT);
+// P-PORTGUARD.4 (ADR-0458): keyed on the instance's IDENTITY port, so an engine Electron moved off a busy
+// default port still resumes the session the same install recorded last time. Honored only from the
+// Electron main that spawned THIS engine: an engine started from an agent shell inherits that shell's LUCID
+// env and must not write another instance's resume file.
+const IDENTITY_PORT = process.env.LUCID_MAIN_PID === String(process.ppid) ? Number(process.env.LUCID_IDENTITY_PORT) || PORT : PORT;
+const LAST_SESSION_FILE = lastSessionPath(IDENTITY_PORT);
 const PREVIOUS_SESSION = readLastSession(LAST_SESSION_FILE);
 backend.configureRecovery({ persistSession: (sessionId) => { writeLastSession(LAST_SESSION_FILE, { sessionId, cwd: currentWorkspace(), at: Date.now() }); } });
 // P-PWA-FOCUS.1: the lane-to-guest tap. ONE persistent observer, registered here at module scope right
@@ -1907,6 +1970,15 @@ function laneImages(raw: unknown): { data: string; mimeType: string }[] {
 process.on("exit", () => { try { fleet.stopAll(); } catch { /* dying anyway */ } });
 process.on("SIGINT", () => { try { fleet.stopAll(); } catch { /* dying */ } process.exit(0); });
 process.on("SIGTERM", () => { try { fleet.stopAll(); } catch { /* dying */ } process.exit(0); });
+// P-PLUGINS.2 (ADR-0462): installed plugins run as engine children (server kind under Electron's Node,
+// LUCID_ELECTRON_EXE from main). A running plugin's MCP server joins omp's session config, so a change
+// respawns omp exactly like an /api/mcp edit. The SIGINT/SIGTERM handlers above exit through "exit".
+const plugins = new PluginRuntime({
+  nodeExe: () => resolvePluginNode(DESKTOP_DIR),
+  agentBin: () => ompBin(),
+  onMcpChange: () => backend.restart(),
+});
+process.on("exit", () => { try { plugins.stopAllSync(); } catch { /* dying anyway */ } });
 // P-PREVIEW.3a-shot (ADR-0096): latest PNG of the rendered preview, pushed by the renderer after each render
 // (Electron capturePage → /api/preview/shot-cache) and read by the agent's preview_screenshot tool. In-memory.
 let latestPreviewShot: string | null = null;
@@ -1923,7 +1995,7 @@ setBrowserProcessSource(() => {
 });
 // P-PREVIEW.6b (ADR-0153): relay for the agent's read-only DOM inspect of the sandboxed preview.
 const inspectRelay = new InspectRelay();
-const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
+const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".mp4": "video/mp4", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
 // Text-ish types take a charset; binary (images/fonts) must not (a bogus "image/png; charset" suffix).
 const isTextCT = (ct: string) => /^(text\/|application\/(javascript|json)|image\/svg)/.test(ct);
 
@@ -2344,7 +2416,7 @@ function sendOauthCode(oauthId: string, code: string): { sent: boolean; reason?:
   catch (e) { console.error(`[oauth] send code failed for ${oauthId}:`, e); return { sent: false, reason: "could not send code" }; }
 }
 
-// lucid-creator-endpoint v1: import whatever the DGX Loader dropped in the mailbox while LUCID was closed.
+// lucid-creator-endpoint v1: import whatever the Private AI Platform dropped in the mailbox while LUCID was closed.
 // Per-file fail-soft; a scan failure never blocks the engine from starting.
 if (BUILD.creatorBuild) {
   try {
@@ -2367,7 +2439,7 @@ return Bun.serve({
   hostname: "127.0.0.1", // H1 (ADR-0022): loopback only — this control plane handles keys/passphrases.
   // ADR-0305 invariant: the window only renders the nonce-verified LOOPBACK engine; this bind is load-bearing.
   idleTimeout: 60,
-  async fetch(req) {
+  async fetch(req, srv) {
     const url = new URL(req.url);
     const p = url.pathname;
     let ctrlPairing: Pairing | null = null;
@@ -2381,7 +2453,9 @@ return Bun.serve({
     // OWN CSP applies instead of the renderer's strict inherited one). An iframe `src` GET cannot send a
     // custom header, so this ONE endpoint also accepts the per-launch token as a `?t=` query param — same
     // token, still behind the loopback (H1) + Origin/Host/CSRF (H2) gate above. Every other /api needs the header.
-    if (p.startsWith("/api/") && p !== "/api/health") {
+    // Security review SECRET-INTAKE-REQUESTER-SPOOF: /api/secret/request takes only a requester token in
+    // the header (the master's own, never AGENT_TOKEN or a `?t=`), which handleSecretRoutes checks itself.
+    if (p.startsWith("/api/") && p !== "/api/health" && p !== SECRET_AGENT_ROUTE) {
       // `/api/preview/serve` (iframe src) and `/api/preview/shot` (fetched by the omp subprocess, which
       // inherits a ready URL incl. the token via LUCID_PREVIEW_SHOT_URL) can't set a header, so they also
       // accept the per-launch token as a `?t=` query param — same token, still behind the H1/H2 gate above.
@@ -2404,6 +2478,9 @@ return Bun.serve({
     }
     try {
       if (p.startsWith("/api/controller/")) return await handleController(req, p, ctrlPairing, controllerDeps);
+      const vr = await handleVaultRoutes(req, p, { uiToken: TOKEN }); if (vr) return vr; // P-VAULT-V2.1 (ADR-0474)
+      const vb = await handleVaultBackupRoutes(req, p, { uiToken: TOKEN }); if (vb) return vb; // P-VAULT-UI.1 (ADR-0475)
+      const sr = await handleSecretRoutes(req, p, { uiToken: TOKEN, srv, emit: (r) => backend.requestSecretDialog(r), destinations: { upsert: upsertVaultDestination } }); if (sr) return sr; // P-SECRET-INTAKE.1 (ADR-0476)
       if (p === "/app.js") {
         const { js } = await bundleApp();
         return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
@@ -2734,7 +2811,7 @@ return Bun.serve({
         return json({ ok: true, data: { enabled: !!loadSettings().rateLimitProbe, limits: probeLocked ? [] : await probeRateLimits(url.searchParams.get("force") === "1") } });
       }
       // P10.2: cross-model usage & cost ledger (per-model totals + estimated cache savings).
-      if (p === "/api/usage") return json({ ok: true, data: usageLedgerMemo() }); // P-PERF.3 memo
+      if (p === "/api/usage") return json({ ok: true, data: await usageLedgerMemo() }); // P-PERF.3 memo
       // ADR-0030 P-CODE.1: per-workspace git diffstat for the current month (repo
       // activity, not AI authorship). Read-only, metadata-only, fail-closed per workspace.
       // Cached 30s — each call spawns `git log` per workspace, so don't re-run it on
@@ -2743,7 +2820,7 @@ return Bun.serve({
         const now = Date.now();
         if (!codeActivityCache || now - codeActivityCache.at > 30_000 || url.searchParams.get("force") === "1")
           codeActivityCache = { at: now, data: codeActivity() };
-        return json({ ok: true, data: codeActivityCache.data });
+        return json({ ok: true, data: await codeActivityCache.data });
       }
       // P-PORTGUARD.1 (ADR-0305): echo the per-launch nonce main minted for THIS child. Main only
       // trusts a health answer carrying it, so a squatter on the port can never win the window. The
@@ -2752,6 +2829,7 @@ return Bun.serve({
       // P-ENT.2 (ADR-0069): the unified security-event stream (metadata-only, OCSF-ready) + per-sink
       // delivery status, for the in-app dashboard. Read-only; the file sink is the SIEM export source.
       if (p === "/api/audit") return json({ ok: true, data: { events: audit.recent(100), sinks: audit.sinkStatuses() } });
+      const compliance = await handleComplianceRoutes(req, p); if (compliance) return compliance;
       // P-BRIEF.3 (ADR-0072): generate the Executive Engineering Update from the repo's own logs. Pure +
       // air-gap (reads DECISIONS.md/PROGRESS.md from the repo root); returns the written brief + the
       // two-host podcast script. Audio synthesis (a TTS backend) is a later slice; this is the brief.
@@ -4067,6 +4145,7 @@ return Bun.serve({
           settingsFile: process.env.LUCID_GUI_SETTINGS_FILE || join(homedir(), ".omp", "lucid-gui.json"),
           personalDir: personalBaseDir(),
           platform: process.platform,
+          ...(IDENTITY_PORT !== PORT ? { portRolledFrom: IDENTITY_PORT, portRollHolder: (process.env.LUCID_PORT_ROLL_HOLDER || "").slice(0, 200) } : {}),
         }) });
       }
       // CREATOR-0 (ADR-0283): normalized CPU/GPU/memory telemetry for the odometer rail. Creator builds
@@ -4107,7 +4186,7 @@ return Bun.serve({
         const r = upsertCreatorEndpoint(def);
         return json({ ok: r.ok, error: r.ok ? undefined : r.errors.join("; "), data: { registry: creatorRegistryData() } });
       }
-      // lucid-creator-endpoint v1: rescan the DGX Loader mailbox (<personal dir>/creator_endpoints). Each file
+      // lucid-creator-endpoint v1: rescan the Private AI Platform mailbox (<personal dir>/creator_endpoints). Each file
       // passes the fail-closed contract gate and the declaration validator, or is reported by name.
       if (p === "/api/creator/endpoint/import-mailbox" && req.method === "POST") {
         if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator registry is only in the Creator build." });
@@ -4329,7 +4408,7 @@ return Bun.serve({
         const engine = url.searchParams.get("engine") ?? "musetalk";
         if (engine !== "musetalk" && engine !== "echomimic") return json({ ok: false, error: "engine must be musetalk or echomimic." });
         const ep = creatorEndpointFor("dgx-avatar", url.searchParams.get("endpointId") || undefined);
-        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX avatar endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX avatar endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
         const cuiTpl = creatorGate("dgx-avatar", ep);
         if (!cuiTpl.allowed) return json(cuiRefusal(cuiTpl));
         const r = await new DgxAvatarClient({ baseUrl: ep.baseUrl }).templates(engine);
@@ -4343,7 +4422,7 @@ return Bun.serve({
         const b = await readBody<Record<string, unknown>>(req).catch(() => null);
         if (!b) return json({ ok: false, error: "That avatar request was not JSON." });
         const ep = creatorEndpointFor("dgx-avatar", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
-        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX avatar endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX avatar endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
         const cuiAvatar = creatorGate("dgx-avatar", ep);
         if (!cuiAvatar.allowed) return json(cuiRefusal(cuiAvatar));
         const spec = buildAvatarSpec(b);
@@ -4408,7 +4487,7 @@ return Bun.serve({
         if (!admit.ok) return json({ ok: false, error: admit.reason, data: { jobId: admit.jobId } });
         try { mkdirSync(outDir, { recursive: true }); } catch { /* the runner reports a missing output */ }
         void runHyperframesRender({
-          spawn: hyperframesSpawn, exists: (path) => existsSync(path), readText: (path) => readFileSync(path, "utf8"),
+          spawn: creatorChildSpawn, exists: (path) => existsSync(path), readText: (path) => readFileSync(path, "utf8"),
           readBytes: (path) => new Uint8Array(readFileSync(path)), ensureDir: (dir) => mkdirSync(dir, { recursive: true }),
           jobIo, artifactIo, env: process.env, now: () => Date.now(),
         }, CREATOR_DIR, admit.jobId, planned.plan, { label, note: pre.note })
@@ -4416,6 +4495,79 @@ return Bun.serve({
           .catch((e) => { finishJob(jobIo, CREATOR_DIR, admit.jobId, "failed", String(e).slice(0, 300)); })
           .finally(() => { try { rmSync(outDir, { recursive: true, force: true }); } catch { /* the library copy is the record */ } });
         return json({ ok: true, data: { jobId: admit.jobId, note: pre.note } });
+      }
+      // CREATOR-OPENFILM (ADR-0457): `openfilm look` (determinism + film check, contact-sheet PNGs) and `openfilm
+      // render` of a local film folder on THIS machine. Fixed argv, forced opt-outs, .film/opened written first so no
+      // Studio server is spawned, path-confined, every page scanned for external URLs; the job returns at once.
+      if ((p === "/api/creator/openfilm/look" || p === "/api/creator/openfilm/render") && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator video tools are only in the Creator build." });
+        const isLook = p === "/api/creator/openfilm/look";
+        const b = await readBody<Record<string, unknown>>(req).catch(() => null);
+        if (!b || typeof b !== "object" || Array.isArray(b)) return json({ ok: false, error: "That OpenFilm request was not JSON." });
+        const ep = creatorEndpointFor("openfilm", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
+        if (!ep?.command) return json({ ok: false, error: "No OpenFilm executable is declared. Add it in Creator Studio first." });
+        const cuiOf = creatorGate("openfilm", ep);
+        if (!cuiOf.allowed) return json(cuiRefusal(cuiOf));
+        const projectDir = typeof b.projectDir === "string" ? b.projectDir : "";
+        const roots = managedWorkspaceRoots() ?? [];
+        const format: OpenfilmFormat = b.format === "webm" || b.format === "mov" ? b.format : "mp4";
+        const outDir = join(CREATOR_DIR, "openfilm", `of_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`);
+        // A present-but-mistyped field reaches the planner as is, so it is refused rather than silently dropped.
+        const planned = isLook
+          ? planOpenfilmLook({
+            exe: ep.command, prefixArgs: ep.args, projectDir, roots,
+            at: b.at == null ? undefined : b.at as number,
+            range: b.range == null ? undefined : b.range as [number, number],
+            count: b.count == null ? undefined : b.count as number,
+          })
+          : planOpenfilmRender({
+            exe: ep.command, prefixArgs: ep.args, projectDir, roots, outPath: join(outDir, `render.${format}`), format,
+            fps: b.fps == null ? undefined : b.fps as number, fourK: b.fourK === true, blur: b.blur === true,
+          });
+        if (!planned.ok) return json({ ok: false, error: planned.error });
+        const locked = creatorLocked();
+        const deps = openfilmDeps();
+        const pre = preflightOpenfilm(deps, planned.plan, ep.command, locked);
+        if (!pre.ok) {
+          if (pre.stage === "external-refs") emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "creator-cui-lockdown", reason: `OpenFilm ${isLook ? "look" : "render"} refused under CUI lockdown: external URLs in ${planned.plan.projectDir}`.slice(0, 200) });
+          return json({ ok: false, error: pre.error, data: { stage: pre.stage } });
+        }
+        const name = basename(planned.plan.projectDir);
+        const label = isLook ? `OpenFilm look: ${name}` : `OpenFilm ${format}: ${name}`;
+        const admit = await admitCreatorJob(isLook ? "test" : "render", label, "openfilm");
+        if (!admit.ok) return json({ ok: false, error: admit.reason, data: { jobId: admit.jobId } });
+        const runOpts = { label, home: join(CREATOR_DIR, "openfilm", "home"), locked, note: pre.note };
+        const settle = (stage: string, ok: boolean, error: string): void => { if (!ok) console.warn(`[creator] openfilm ${admit.jobId} ${stage}: ${error}`); };
+        const crashed = (e: unknown): void => { finishJob(jobIo, CREATOR_DIR, admit.jobId, "failed", String(e).slice(0, 300)); };
+        if (planned.plan.kind === "look") {
+          void runOpenfilmLook(deps, CREATOR_DIR, admit.jobId, planned.plan, runOpts)
+            .then((r) => { if (r.verdict) rememberOpenfilmVerdict(admit.jobId, r.verdict); settle(r.stage, r.ok, r.error); })
+            .catch(crashed);
+        } else {
+          try { mkdirSync(outDir, { recursive: true }); } catch { /* the runner reports a missing output */ }
+          void runOpenfilmRender(deps, CREATOR_DIR, admit.jobId, planned.plan, runOpts)
+            .then((r) => settle(r.stage, r.ok, r.error))
+            .catch(crashed)
+            .finally(() => { try { rmSync(outDir, { recursive: true, force: true }); } catch { /* the library copy is the record */ } });
+        }
+        return json({ ok: true, data: { jobId: admit.jobId, note: pre.note } });
+      }
+      // CREATOR-OPENFILM: one job's view. State, error, and artifacts come from the job ledger; the look verdict
+      // from this engine's bounded memory (null after a restart, or for a render).
+      if (p === "/api/creator/openfilm/job") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator video tools are only in the Creator build." });
+        const jobId = url.searchParams.get("jobId") ?? "";
+        if (!jobId) return json({ ok: false, error: "Name the OpenFilm job (jobId)." });
+        const job = listJobs(jobIo, CREATOR_DIR).find((j) => j.id === jobId);
+        if (!job || job.provider !== "openfilm") return json({ ok: false, error: "No OpenFilm job has that id." });
+        const kind = job.kind === "test" ? "look" : "render";
+        return json({
+          ok: true,
+          data: {
+            jobId: job.id, kind, state: job.state, error: job.error, artifacts: [...job.artifacts],
+            look: kind === "look" ? openfilmVerdicts.get(job.id) ?? null : null,
+          },
+        });
       }
       // DGX CAD (contract 2c): inspect a DXF / DWG / IFC / STEP file on the box. The origin guard requires a
       // JSON content type on every POST, so the bytes ride either as the raw body (sent with content-type
@@ -4425,7 +4577,7 @@ return Bun.serve({
         const name = checkInspectName(url.searchParams.get("name"));
         if (!name.ok) return json({ ok: false, error: name.error });
         const ep = creatorEndpointFor("dgx-cad", url.searchParams.get("endpointId") || undefined);
-        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
         const cuiInspect = creatorGate("dgx-cad", ep);
         if (!cuiInspect.allowed) return json(cuiRefusal(cuiInspect));
         if (Number(req.headers.get("content-length") ?? "0") > CAD_MAX_UPLOAD_BYTES * 1.4) return json({ ok: false, error: "That file is over the 200 MB inspect limit." });
@@ -4449,7 +4601,7 @@ return Bun.serve({
         const b = await readBody<Record<string, unknown>>(req).catch(() => null);
         if (!b) return json({ ok: false, error: "That CAD request was not JSON." });
         const ep = creatorEndpointFor("dgx-cad", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
-        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
         const cuiModel = creatorGate("dgx-cad", ep);
         if (!cuiModel.allowed) return json(cuiRefusal(cuiModel));
         const built = buildCadModelRequest(b);
@@ -4520,7 +4672,7 @@ return Bun.serve({
         if (!read.body || typeof read.body !== "object" || Array.isArray(read.body)) return json({ ok: false, error: "Send a JSON object." });
         const b = read.body as Record<string, unknown>;
         const ep = creatorEndpointFor("dgx-vision", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
-        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX vision endpoint is declared. Import one from the DGX Loader mailbox in Creator Studio." });
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX vision endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
         const cuiVision = creatorGate("dgx-vision", ep);
         if (!cuiVision.allowed) return json(cuiRefusal(cuiVision));
         const img = visionImageFrom(b.image);
@@ -4928,7 +5080,7 @@ return Bun.serve({
       if (p === "/api/sessions") {
         // P-SWITCH.2 (ADR-0404): each row says where it is live (Main, working or not, or a spoke and its
         // state), so the sidebar shows what is running before anyone clicks.
-        const list = listSessions();
+        const list = await listSessions(); // P-BOOTPERF.1: async, so a cold index never freezes the engine
         const main = { sessionId: backend.currentSessionId(), busy: backend.switchBlocker() !== null };
         const lanes = fleet.owners();
         return json({ ok: true, data: { sessions: withLiveState(list.sessions, main, lanes), ingest: list.ingest } });
@@ -5194,7 +5346,9 @@ return Bun.serve({
       if (p === "/api/auth") return json({ ok: true, data: authWithOauthErrors() });
       if (p === "/api/auth/key" && req.method === "POST") {
         const { env, key } = await readBody<{ env?: unknown; key?: unknown }>(req);
-        setKey(String(env), String(key ?? ""));
+        // P-VAULT-KEYS.1 (ADR-0472): a key the OS vault cannot take is refused, never written in plaintext.
+        try { setKey(String(env), String(key ?? "")); }
+        catch (e) { return json({ ok: false, error: clientError(e, "the key could not be stored in the OS vault - nothing was saved") }); }
         backend.restart(); // pick up the new env on next turn
         return json({ ok: true, data: providerAuth() });
       }
@@ -5394,11 +5548,12 @@ return Bun.serve({
       if (p === "/api/trivia/reseed" && req.method === "POST") {
         const b = await readBody<{ model?: unknown; role?: unknown; sources?: { sessions?: unknown; kg?: unknown; codegraph?: unknown } }>(req);
         const sources = { sessions: !!b.sources?.sessions, kg: !!b.sources?.kg, codegraph: !!b.sources?.codegraph };
+        const sessionTitles = sources.sessions ? (await listSessions()).sessions.map((s) => s.title) : [];
         const data = await seedTrivia(
           { role: typeof b.role === "string" ? b.role : "developer", sources, model: typeof b.model === "string" ? b.model : "" },
           {
             providers: {
-              sessions: () => listSessions().sessions.map((s) => s.title),
+              sessions: () => sessionTitles,
               kg: () => { const g = personalGraph(); return g ? [...g.facts.map((f) => f.statement), ...g.nodes.map((n) => n.name)] : []; },
               code: () => (loadCodeGraph(currentWorkspace())?.nodes ?? []).map((n) => n.name),
             },
@@ -5476,7 +5631,7 @@ return Bun.serve({
         const b = await readBody<{ sourcePath?: unknown; title?: unknown; text?: unknown }>(req);
         const text = String(b.text ?? "");
         if (!text.trim()) return json({ ok: true, data: { documentId: "", status: "quarantined", pagesCompiled: 0, pagesQuarantined: 0, links: 0, pageIds: [], blocked: [{ stage: "source", reason: "empty document", trustLabel: "quarantined", findings: 0 }] } });
-        const model = usageLedger().models[0]?.model;
+        const model = (await usageLedger()).models[0]?.model;
         const result = await ingestDocument({
           store: await kbStore(),
           scanner: kbScanner(),
@@ -5615,7 +5770,7 @@ return Bun.serve({
           else { targetId = (typeof b.kgId === "string" && b.kgId) ? b.kgId : (activeKgId() ?? ""); kgName = listKgs().find((k) => k.kg_id === targetId)?.name ?? ""; }
         } catch (e) { return json({ ok: true, data: { ok: false, error: clientError(e, "could not create or resolve the knowledge graph") } }); }
         if (!targetId) return json({ ok: true, data: { ok: false, error: "No target knowledge graph." } });
-        const model = usageLedger().models[0]?.model;
+        const model = (await usageLedger()).models[0]?.model;
         const started = startKbIngest({
           kgId: targetId, kgName,
           run: async (onTick, signal) => {
@@ -5679,6 +5834,33 @@ return Bun.serve({
         const url = String(b.url ?? "");
         if (!url) return json({ ok: true, data: { ok: false, error: "url is required" } });
         return json({ ok: true, data: await installPackFromUrl(url) });
+      }
+      // P-PLUGINS.2 (ADR-0462): `.lplugin` plugins. Install runs every gate fail-closed (download, manifest,
+      // hash, signature, authenticode, scan; desktop/plugins/install.ts) and stops a running copy before the
+      // version pointer moves; start/stop drive desktop/plugins/runtime.ts; uninstall keeps the data dir
+      // unless keepData is explicitly false.
+      if (p === "/api/plugins" && req.method === "GET") return json({ ok: true, data: { plugins: plugins.list() } });
+      if (p === "/api/plugins/license" && req.method === "GET") return json({ ok: true, data: readPluginLicense(url.searchParams.get("id") ?? "") });
+      if (p === "/api/plugins/install-from-url" && req.method === "POST") {
+        srv.timeout(req, 0); // a large package (download + per-file scan) can outlast the 60 s idle limit
+        const b = await readBody<{ url?: unknown; expectId?: unknown }>(req);
+        const r = await installPluginFromUrl(String(b.url ?? ""), String(b.expectId ?? ""), { beforeSwitch: async (id) => { await plugins.stop(id); } });
+        return json({ ok: true, data: r.ok ? { ok: true, id: r.id, version: r.version } : r });
+      }
+      if (p === "/api/plugins/start" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        return json({ ok: true, data: await plugins.start(String(b.id ?? "")) });
+      }
+      if (p === "/api/plugins/stop" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        return json({ ok: true, data: await plugins.stop(String(b.id ?? "")) });
+      }
+      if (p === "/api/plugins/uninstall" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; keepData?: unknown }>(req);
+        const id = String(b.id ?? "");
+        const stopped = await plugins.stop(id);
+        if (!stopped.ok) return json({ ok: true, data: stopped });
+        return json({ ok: true, data: uninstallPlugin(id, b.keepData !== false) });
       }
       // P-SKILLREG.2 (ADR-0102): the PUBLISH seam. Reads a codified skill's SKILL.md and publishes it as a
       // versioned artifact to the configured targets (fail-safe fan-out). Public ships the LOCAL publisher;
@@ -5985,7 +6167,7 @@ return Bun.serve({
         // works on its own branch beside other agents in this repo instead of sharing the checkout. A refused
         // spawn removes the worktree it just made; a started lane keeps it (its branch is the lane's work).
         const lane = b.worktree === true ? await createLaneWorktree(cwd, typeof b.name === "string" && b.name.trim() ? b.name : basename(cwd)) : null;
-        if (lane && !lane.ok) return json({ ok: true, data: { ok: false, reason: lane.reason } });
+        if (lane && !lane.ok) return json({ ok: true, data: { ok: false, reason: lane.reason, ...(lane.code ? { code: lane.code } : {}) } }); // P-PUSH.PAR1: `code` lets Push now fall back
         if (lane?.ok) cwd = lane.laneCwd;
         // P-FLEET.L17: recovering a historical spoke brings its RECORDED session back (omp loads it
         // natively; the on-disk transcript seeds the composer and is the fallback memory).
@@ -6016,8 +6198,19 @@ return Bun.serve({
         return json({ ok: true, data: fleet.enqueue(String(b.laneId ?? ""), String(b.text ?? ""), laneImages(b.images)) });
       }
       if (p === "/api/fleet/queue/remove" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; index?: unknown; expect?: unknown }>(req);
+        // P-PUSH.PAR1 (ADR-pending): `expect` (the item's full text) guards a remove that lands seconds later.
+        return json({ ok: true, data: fleet.queueRemove(String(b.laneId ?? ""), Number(b.index), typeof b.expect === "string" ? b.expect : undefined) });
+      }
+      // P-PUSH.PAR1 (ADR-pending): Copy and Push now read a staged item whole, without removing it.
+      if (p === "/api/fleet/queue/peek" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown; index?: unknown }>(req);
-        return json({ ok: true, data: fleet.queueRemove(String(b.laneId ?? ""), Number(b.index)) });
+        return json({ ok: true, data: fleet.queuePeek(String(b.laneId ?? ""), Number(b.index)) });
+      }
+      // P-QUEUE-IMG.1 (ADR-0469): Update pulls a staged item (full text + its own images) back into the card.
+      if (p === "/api/fleet/queue/take" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; index?: unknown }>(req);
+        return json({ ok: true, data: fleet.queueTake(String(b.laneId ?? ""), Number(b.index)) });
       }
       if (p === "/api/fleet/queue/move" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown; index?: unknown; dir?: unknown }>(req);
@@ -6055,12 +6248,12 @@ return Bun.serve({
         const on = b.on === true;
         if (on && !loadSettings().fleetAutoRiskAcceptedAt) {
           if (b.acceptRisk !== true) return json({ ok: false, error: "full auto-mode needs an explicit risk acceptance first" });
-          saveSettings({ ...loadSettings(), fleetAutoRiskAcceptedAt: Date.now() });
+          const accepted = loadSettings(); accepted.fleetAutoRiskAcceptedAt = Date.now(); saveSettings(accepted); // a load()-sourced object: secret deltas stay exact (ADR-0472)
         }
         const laneId = typeof b.laneId === "string" && b.laneId ? b.laneId : "";
         if (laneId) return json({ ok: true, data: fleet.setAuto(laneId, on) });
         fleet.setAutoAll(on);
-        saveSettings({ ...loadSettings(), fleetAutoApprove: on });
+        const s = loadSettings(); s.fleetAutoApprove = on; saveSettings(s);
         return json({ ok: true, data: { ok: true } });
       }
       if (p === "/api/fleet/cancel" && req.method === "POST") {
@@ -6606,6 +6799,8 @@ return Bun.serve({
       // the token from main over IPC instead. Only a standalone browser dev run (`bun run web`) still injects.
       if (rel === "index.html" || rel === "trainer.html") {
         const html = (await Bun.file(join(ROOT, rel)).text())
+          // ADR-0458: the window and taskbar title is the page title, so Creator beside Agent reads "Lucid Creator".
+          .replace("<title>Lucid Agent</title>", `<title>${BUILD.displayName}</title>`)
           .replace("</head>", HAS_MAIN ? "</head>" : `  <meta name="lucid-token" content="${TOKEN}">\n</head>`);
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
       }
@@ -6693,6 +6888,9 @@ process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/
 // claim here. Same token'd convention as LUCID_FLEET_STATUS_URL; the endpoint applies NOTHING without a
 // fresh matching approval parked by the desktop's grant dialog (fail-closed, defense in depth).
 process.env.LUCID_SANDBOX_GRANT_URL = `http://127.0.0.1:${server.port}/api/sandbox/grant?t=${AGENT_TOKEN}`;
+// P-SECRET-INTAKE.1 (ADR-0476): request_secret. Not in process.env (security review SECRET-INTAKE-REQUESTER-SPOOF):
+// only the master spawn gets the URL and its own token (acp_backend.ts, secret_routes.masterSecretRequestEnv).
+configureSecretRequestEndpoint(`http://127.0.0.1:${server.port}`);
 // P-SANDBOX.17 (ADR-0399): tools/git-broker/git_shim.ts POSTs the contained agent's git calls here.
 process.env.LUCID_GIT_URL = `http://127.0.0.1:${server.port}/api/git/exec?t=${AGENT_TOKEN}`;
 // P-EVAL.4 (ADR-0318): the tool_meta extension POSTs {id,name,ok?} here for every tool call, because the
@@ -6721,6 +6919,11 @@ if (BUILD.creatorBuild) {
   process.env.LUCID_DRIFT_STATUS_URL = `http://127.0.0.1:${server.port}/api/creator/drift/status?t=${AGENT_TOKEN}`;
   process.env.LUCID_DRIFT_CALL_URL = `http://127.0.0.1:${server.port}/api/creator/drift/call?t=${AGENT_TOKEN}`;
   process.env.LUCID_DRIFT_LIBRARY_URL = `http://127.0.0.1:${server.port}/api/creator/drift/library?t=${AGENT_TOKEN}`;
+  // CREATOR-OPENFILM (ADR-0457): openfilm_look / openfilm_render / openfilm_job (harness/omp/openfilm_extension.ts).
+  // The job URL already carries ?t=; callers append &jobId=<encoded id>.
+  process.env.LUCID_OPENFILM_LOOK_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/look?t=${AGENT_TOKEN}`;
+  process.env.LUCID_OPENFILM_RENDER_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/render?t=${AGENT_TOKEN}`;
+  process.env.LUCID_OPENFILM_JOB_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/job?t=${AGENT_TOKEN}`;
 }
 // P-INTERJECT.1: the omp children (master + lanes) reach this server for mid-turn operator notes.
 // LUCID_DEV_URL is the bare base URL from the shared contract; LUCID_INTERJECT_URL is the ready-to-use

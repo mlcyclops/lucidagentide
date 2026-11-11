@@ -365,6 +365,39 @@ demo-P-MASCOT.5: demo-P-MASCOT.4 ## Arcade-parity prompt-bar runner (2x sprite, 
 	$(BUN) test ./desktop/renderer/mascot_runner.test.ts ./desktop/renderer/mascot_minigames.test.ts
 	$(BUN) run desktop/scripts/demo_p_mascot_5.ts
 
+.PHONY: demo-P-SEASON.1
+demo-P-SEASON.1: ## P-SEASON.1 (ADR-0525): U.S. holiday + event-month special themes - the calendar (nth weekdays, Easter, year-spanning windows, peak-day precedence), 16 special palettes held to the token contract, 16 animated backdrops valid at any t/size/season, 21 mascot acts + costumes, flush eye band, 16-beat no-slip gait, hover hop + click leap
+	$(BUN) test ./desktop/renderer/seasons.test.ts ./desktop/renderer/theme.test.ts ./desktop/renderer/scenes/scenes_paint.test.ts ./desktop/renderer/mascot_season.test.ts ./desktop/renderer/mascot.test.ts ./desktop/renderer/mascot_runner.test.ts ./desktop/renderer/boot_cinematic.test.ts
+
+.PHONY: demo-P-MODEL.10
+demo-P-MODEL.10: ## P-MODEL.10 (ADR-0526): omp 18.18.6 with Claude Fable 5.2 / Mythos 5.2 - six packages pinned together, NativeJudge migration, R-07 at 92 ids, 8/40 USD per Mtok version-anchored price row, 1M windows, picker cards, frozen prefix still byte-stable
+	$(BUN) test $(TEST_IGNORES) harness/prompt/prefix_compaction.test.ts harness/omp/provider_catalog.test.ts harness/omp/judgment_extension.test.ts desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/packaged_boot.test.ts
+	$(BUN) run harness/scripts/demo02_prefix_hash.ts
+
+.PHONY: demo-P-BOOTPERF.1
+demo-P-BOOTPERF.1: ## P-BOOTPERF.1 (ADR-0527): the renderer's boot burst never blocks the engine's event loop - async sessions/usage/code-activity/compaction-policy/omp probe, cached workspace bar, self-healing Reconnect button (a dead engine keeps it)
+	$(BUN) test $(TEST_IGNORES) desktop/omp_bin.test.ts desktop/renderer/turn_restore.test.ts desktop/sessions_index.test.ts desktop/sessions_ingest.test.ts harness/usage_ledger.test.ts harness/code_activity.test.ts
+	$(BUN) run desktop/scripts/demo_p_perf_4.ts
+	$(BUN) run harness/scripts/demo_pcode1.ts
+
+.PHONY: demo-P-FLEET.FIT1
+demo-P-FLEET.FIT1: ## P-FLEET.FIT1 (ADR-0528): fleet lanes autofit the dock in both directions at equal sizes (on by default, header toggle), refit on resize/spawn/close, a card-edge drag shares the rest equally, double-click resets
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/lane_layout.test.ts
+
+.PHONY: demo-P-PUSH.PAR1
+demo-P-PUSH.PAR1: ## P-PUSH.PAR1 (ADR-0529): staged-chip copy menu (right-click / long-press) + Push now runs the prompt in a parallel lane on its own git worktree (main-checkout mapping, unique <source>-push-<n> names, preamble, dequeue only on acceptance, text-guarded remove, no-repo steer fallback)
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/queue_model.test.ts desktop/renderer/ctxmenu.test.ts desktop/lane_worktree.test.ts desktop/fleet_lanes.test.ts
+
+.PHONY: demo-P-PRIVAI.1
+demo-P-PRIVAI.1: ## P-PRIVAI.1 (ADR-0530): the DGX Loader is now the Private AI Platform - the renderer bundle carries "Import from the Private AI Platform" and no "DGX Loader", while the /^dgx-loader\b/i enclave attestation regex and the dgx-avatar/dgx-cad/dgx-vision provider ids stay
+	$(BUN) run desktop/scripts/demo_p_privai_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/creator_probe.test.ts desktop/creator_mailbox.test.ts desktop/creator_registry.test.ts desktop/cui_policy.test.ts
+
+.PHONY: demo-P-RUNTIME-PY.1
+demo-P-RUNTIME-PY.1: ## P-RUNTIME-PY.1 (ADR-0548): the bundled CPython moves to python-build-standalone 20261026 (3.12.16, OpenSSL 3.5.9); fetch-runtimes runs it and refuses a tree that is not PY_VERSION or whose OpenSSL is below PY_OPENSSL_MIN
+	$(BUN) test $(TEST_IGNORES) desktop/build/python_floor.test.ts
+	cd desktop && $(BUN) run build/fetch-runtimes.ts
+
 .PHONY: demo-P-AVATAR.4
 demo-P-AVATAR.4: ## P-AVATAR.4 (ADR-0251): the LUCID Agent enter flow - fast-model preference order (Terra > Sonnet 5 > Flash, no pointless switch), one-gap-at-a-time readiness (provider > tts > stt), the one-time KG offer, exit model restoration
 	$(BUN) run desktop/scripts/demo_p_avatar_4.ts
@@ -695,12 +728,8 @@ demo-P-PREVIEW.6c: ## P-PREVIEW.6c (ADR-0153): the agent CLICKS/TYPES in the liv
 demo-P-DESIGN.1: ## P-DESIGN.1 (ADR-0154): the agent honors a workspace DESIGN.md — read + wrapped as a <design-invariants> block and re-delivered in the user-turn preamble EVERY turn (never the frozen prefix); no DESIGN.md → no block
 	$(BUN) run desktop/scripts/demo_p_design_1.ts
 
-.PHONY: demo-P-MARKET.1
-demo-P-MARKET.1: ## P-MARKET.1 (ADR-0158): the Plugin Marketplace popup - Excalidraw pinned first, then Obsidian's top-ranked integrations by community downloads; searchable scrim-modal on the About//goal conventions; rows only open their GitHub repo (installs are P-MARKET.2)
-	$(BUN) run desktop/scripts/demo_p_market_1.ts
-
 .PHONY: demo-P-MARKET.1c
-demo-P-MARKET.1c: ## P-MARKET.1c (ADR-0446): live catalog title layout at desktop and narrow widths; set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL for an isolated QA browser and engine
+demo-P-MARKET.1c: ## P-MARKET.1c (ADR-0446): live Role KG Pack title layout at desktop and narrow widths (the plugin modal it also covered was retired by ADR-0461); set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL for an isolated QA browser and engine
 	$(BUN) run desktop/scripts/demo_p_market_1c.mjs
 
 .PHONY: demo-P-FIGMA.1
@@ -871,6 +900,15 @@ license-headers: ## Apply the BUSL-1.1 SPDX header to first-party source (idempo
 license-check: ## Fail if any first-party source file is missing the BUSL-1.1 header (CI guard)
 	$(BUN) run tools/license_headers.ts --check
 
+EVIDENCE_OUT ?= compliance-evidence
+.PHONY: compliance-evidence
+compliance-evidence: ## P-COMPLY.1 (ADR-0479): NIST SP 800-171 r3 host evidence -> $(EVIDENCE_OUT)/evidence.json + evidence.md (read-only)
+	$(BUN) run tools/compliance/evidence.ts --out $(EVIDENCE_OUT)
+
+.PHONY: compliance-matrix
+compliance-matrix: ## P-COMPLY.1: re-render docs/compliance/control-matrix-r3.md from the CSV
+	$(BUN) run tools/compliance/matrix.ts
+
 .PHONY: clean
 clean: ## Remove build/test artifacts (keeps committed source + DBs)
 	rm -rf node_modules/.cache .bun 2>/dev/null || true
@@ -967,6 +1005,16 @@ demo-P-GAME.9: ## P-GAME.9: Silent Fathom joins the arcade. Proves the Preview g
 
 .PHONY: demo-P-GAME.10
 demo-P-GAME.10: ## P-GAME.10: Skyhook joins the arcade. Proves the Preview gate, then drives it headless at 400x720: the view zooms out (0.5) so anchors in rope reach are on screen, holding Space latches and letting go flings forward into a FLOW chain, pause freezes the run, restart from pause; every anchor hangs within rope reach of its floor and a player idle on the floor can still latch (both were lost runs before the playability fix); the autopilot carries a seeded run past 2000 m; an idle player is then caught by the Cascade; the best distance carries to the menu
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.11
+demo-P-GAME.11: ## P-GAME.11: Deck Guard: Deck the Halls joins the arcade next to Deck Guard. Proves the Preview gate, then drives it headless at 400x720: the attract demo flies behind the title, the autoplay bot pops swarms, unwraps presents and takes workshop gifts between waves, pause, restart resets the ladder; an idle player (any cleared wave's workshop gift taken by key) lets the undefended workshop fall (WORKSHOP CRIPPLED or OUT OF JETS); scramble again starts a fresh run
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.12
+demo-P-GAME.12: ## P-GAME.12: Chimney Rush and Gobble Getaway join the arcade. Proves the Preview gate, then drives both headless at 400x720: Chimney Rush autoplay reaches town 3+ with perfect chimneys, pause/resume, an idle sleigh is caught by the sunrise and still banks cookies, ride again; Gobble Getaway autoplay hops past row 40, pause/resume, restart, an idle turkey is caught and the game over names who did it, hop again
 	$(BUN) test desktop/arcade_games.test.ts
 	$(BUN) run desktop/scripts/demo_p_game_1.mjs
 
@@ -1247,7 +1295,7 @@ demo-P-UX-JEV.1: ## P-UX-JEV.1 (ADR-0376): the link that restarted the front end
 	$(BUN) run desktop/scripts/demo_p_ux_jev_1.ts
 
 .PHONY: demo-P-JEV.2
-demo-P-JEV.2: ## P-JEV.2 (ADR-0377): Jev in the chat. omp answers typed judgments out of band and records none of them, so the user could never see whether Jev was used. A new in-process omp extension wraps pi-ai TypeSafeJudge / TextJudge (the only place the question, the typed answers with probabilities, the backend, the latency and any error exist), AWAITS a token-d loopback POST so the desktop has each report before omp acts on the answer, and the chat draws a per-turn judgment window with one table per judgment (question / answer + probability bars / confidence, backend, ms, judged state). A turn with no judgment while Jev is configured gets a quiet "Jev not consulted" note; an unconfigured Jev shows nothing. Proves the wrap on the real classes, the ordering, the fallback capture, the master-only relay, the active gate and the served bytes.
+demo-P-JEV.2: ## P-JEV.2 (ADR-0377): Jev in the chat. omp answers typed judgments out of band and records none of them, so the user could never see whether Jev was used. A new in-process omp extension wraps pi-ai NativeJudge / TextJudge (the only place the question, the typed answers with probabilities, the backend, the latency and any error exist), AWAITS a token-d loopback POST so the desktop has each report before omp acts on the answer, and the chat draws a per-turn judgment window with one table per judgment (question / answer + probability bars / confidence, backend, ms, judged state). A turn with no judgment while Jev is configured gets a quiet "Jev not consulted" note; an unconfigured Jev shows nothing. Proves the wrap on the real classes, the ordering, the fallback capture, the master-only relay, the active gate and the served bytes.
 	$(BUN) test $(TEST_IGNORES) harness/judgment/trace.test.ts harness/omp/judgment_extension.test.ts desktop/judgment_policy.test.ts
 	$(BUN) run desktop/scripts/demo_p_jev_2.ts
 
@@ -1400,6 +1448,40 @@ demo-CREATOR-DRIFT: ## CREATOR-DRIFT (ADR-0430): CutWire Drift (GPL-3.0 Qt + FFm
 demo-CREATOR-WHISTLE: ## CREATOR-WHISTLE (ADR-0432): word timing measured IN-PROCESS by the pinned Whistle model (Needle wasm, no socket import): the three assets verify by size and sha256 and a one-byte flip refuses the load by name and both hashes, the real model transcribes a 16 kHz fixture at 90%+ token match with monotonic word times, a clip over 30 s is windowed with no word split, one substituted word becomes the ONE derived item capped at 0.7, load and transcribe make zero network attempts, a hot CPU refuses the align job with the measured reason, confidence 1.2 is rejected, and a scratch Creator engine's POST /api/creator/align returns a validated, model-pinned document the editor paints with measured chips. Fails (exit 1) when the assets are missing
 	$(BUN) run harness/scripts/demo_creator_whistle.ts
 	$(BUN) test $(TEST_IGNORES) harness/voice/whistle.test.ts harness/voice/whistle_client.test.ts harness/voice/resample.test.ts harness/voice/transcription.test.ts harness/creator/timeline.test.ts desktop/whistle_assets.test.ts desktop/whistle_stage.test.ts desktop/creator_registry.test.ts desktop/creator_probe.test.ts desktop/creator_editor.test.ts desktop/renderer/creator_editor.test.ts desktop/lockdown_route.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-PORTGUARD.4
+demo-P-PORTGUARD.4: ## P-PORTGUARD.4 (ADR-0458): Creator beside Agent. A packaged app's own lucidBuildFlavor beats an inherited LUCID_BUILD_FLAVOR (the standard package is stamped agent), a LUCID engine whose parent app is alive is LIVE and never offered for reaping, and the owner probe carries the parent pid on win32 and POSIX. The busy-default-port roll and the inherited-env scrub live in main.ts and were proven on a real Electron launch (ADR-0458 Consequences)
+	$(BUN) run desktop/scripts/demo_portguard.ts
+	$(BUN) test $(TEST_IGNORES) desktop/build_flavor.test.ts desktop/orphan_engine.test.ts desktop/port_guard.test.ts desktop/build/electron-builder.creator.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-CREATOR-OPENFILM
+demo-CREATOR-OPENFILM: ## CREATOR-OPENFILM (ADR-0457): OpenFilm (MIT, film.html + frame(t) pages) as an on-device Creator provider run ONLY as `--version`, `look` and `render` on a fixed argv: shell shims, package runners (npx, bunx, dlx) and the get/open/update/skill subcommands are refused before anything runs; the child env carries no engine secret and forces the browser, update-check and telemetry opt-outs (plus a dead download host under CUI lockdown); the CLI's own .film/opened marker is written so no detached Studio server is spawned; an external URL in any page refuses under lockdown; the look verdict (same t, same picture) is parsed with its untrusted text sanitized, only PNG sheets from .film/cache/look are stored; a render lands in the library as video and an exit-2 run fails its job
+	$(BUN) run desktop/scripts/demo_creator_openfilm.ts
+	$(BUN) test $(TEST_IGNORES) desktop/creator_openfilm.test.ts desktop/creator_registry.test.ts desktop/creator_probe.test.ts desktop/cui_policy.test.ts harness/omp/openfilm_extension.test.ts desktop/renderer/creator_video.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-VAULT-KEYS.1
+demo-P-VAULT-KEYS.1: ## P-VAULT-KEYS.1 (ADR-0472): provider keys, named-account keys, MCP bearer tokens and the TURN credential leave lucid-gui.json for an ENGINE-side OS vault (DPAPI / Keychain / libsecret master key, AES-256-GCM records) that headless engines open themselves. Real processes and the real backend: a plaintext settings file and its .bak migrate on the first engine start with no re-entry, a second engine reads the same keys, a missing master key reads as unreadable and rewrites nothing, a re-entered key sets the old vault aside, and the vault bundled for Node (Electron main) reports unavailable without touching a vault file
+	$(BUN) run desktop/scripts/demo_p_vault_keys_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/engine_vault.test.ts desktop/settings_vault.test.ts desktop/settings_store_atomic.test.ts desktop/auth_status.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-VAULT-V2.1
+demo-P-VAULT-V2.1: ## P-VAULT-V2.1 (ADR-0474): one engine vault. Sealed format v2 with per-entry metadata (v1 read and upgraded on the first real write), the Electron safeStorage credential vault migrated into it (import, engine read-back, only then delete; crash-safe, idempotent), credentials resolved engine-side under the env names main injected, and the vault API (/api/vault/list|put|rotate|delete, UI token only; main-only routes behind a per-launch vault token). Real engines in a scratch dir: no route response ever carries a value
+	$(BUN) run desktop/scripts/demo_p_vault_v2_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/vault_v2.test.ts desktop/cred_migration.test.ts desktop/engine_vault.test.ts desktop/settings_vault.test.ts desktop/cred_vault.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-VAULT-DEST.1
+demo-P-VAULT-DEST.1: ## P-VAULT-DEST.1 (ADR-0478): enterprise vault destinations, core half. Settings "Vault destinations (Enterprise)" over /api/vault/destinations*, /api/vault/push, /api/vault/pull (UI token only); requests to the add-on kms connector (put/list/pull/check, ADR-A044) written 0600 in a private temp dir and wiped after every call; name mapping char for char the add-on's; auto-backup on vaultPut/vaultRotate; honest not-installed state. Real engines in a scratch dir (set LUCID_ADDON_DIR to the add-on checkout): no route response or log line carries a value
+	$(BUN) run desktop/scripts/demo_p_vault_dest_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/vault_destinations.test.ts desktop/renderer/vault_dest_card.test.ts desktop/vault_v2.test.ts desktop/addon_seam.test.ts
+
+.PHONY: demo-P-FIPS.1
+demo-P-FIPS.1: ## P-FIPS.1 (ADR-0473): AES-256-GCM, PBKDF2-HMAC-SHA256, SHA-256, HMAC-SHA256 and the DRBG run in the OS FIPS 140 module (Windows CNG / Apple corecrypto / OpenSSL FIPS provider) after power-on known-answer tests; output is byte-identical to node:crypto so personal-kg.v1 stores open unchanged; fips is claimed only by the documented rule; LUCID_FIPS_REQUIRED=1 or managed security.crypto.requireFips fails every op closed when no validated module is usable; the Node (Electron main) bundle never loads bun:ffi
+	$(BUN) run desktop/scripts/demo_p_fips_1.ts
+	$(BUN) test $(TEST_IGNORES) harness/crypto/fips_crypto.test.ts harness/personal/personal.test.ts desktop/managed_config.test.ts
+
 .PHONY: demo-P-BREW.1
 demo-P-BREW.1: ## P-BREW.1: the Homebrew cask is an app cask over the release .zip - no pkg stanza, no allow_untrusted / package trust (deprecated in Homebrew 6), pinned per-arch sha256, and the cask url / electron-builder artifactName / update-cask job all name the same zips
 	$(BUN) run tools/cask_check.ts
+.PHONY: demo-P-RECOVER.4
+demo-P-RECOVER.4: ## P-RECOVER.4 (ADR-0481): the main window recovers its own renderer. A render-process-gone that is not a clean exit is logged with reason + exit code and the app is loaded again after a backoff (250ms to 10s), at most 5 reloads per 60s sliding window; past the cap the window is left as it is and the log says to relaunch; a clean exit is ignored; an unresponsive renderer is logged, never reloaded. Wiring lives in main.ts createWindow (proven on a real Electron launch, ADR-0481 Consequences)
+	$(BUN) test $(TEST_IGNORES) desktop/renderer_watchdog.test.ts desktop/gpu_watchdog.test.ts desktop/navigation_policy.test.ts harness/adr_numbering.test.ts

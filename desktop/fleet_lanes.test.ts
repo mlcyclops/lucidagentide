@@ -273,6 +273,24 @@ test("spawn with resume brings the recorded conversation back: seeded transcript
   expect((await live.status()).lanes[0]!.turns).toBe(435);
 }, TIMEOUT);
 
+// Found live: switching a lane to the main space cut a long answer mid-sentence with "[truncated]", because
+// the 8K recovery clamp was applied to the transcript promote() hands the composer. Promote shows the whole
+// answer; only the recovery preamble stays clamped.
+test("promote seeds a long answer in full while the recovery preamble stays clamped", async () => {
+  live = manager();
+  const long = `${"x".repeat(12_000)} TAIL-OF-ANSWER`;
+  const r = await live.spawn({ cwd: import.meta.dir, resume: { sessionId: "01a0-long", transcript: [{ role: "user", text: "write it up" }, { role: "assistant", text: long }], turns: 1 } });
+  expect(r.ok).toBe(true);
+  const seeded = live.promote(r.lane!.id).transcript!;
+  expect(seeded[1]!.text).toBe(long);
+  const events: LaneEvent[] = [];
+  await live.prompt(r.lane!.id, "continue", (e) => events.push(e));
+  const reply = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(reply).toContain("TRANSCRIPT START");
+  expect(reply).toContain("[truncated]");
+  expect(reply).not.toContain("TAIL-OF-ANSWER");
+}, TIMEOUT);
+
 // P-SWITCH.2 (ADR-0404): one session, one owner. A lane never loads a session Main or another live lane
 // holds; a spawn that would is refused by name and creates nothing, and a stopped lane cannot come back
 // on a session someone else opened meanwhile.
@@ -448,6 +466,68 @@ test("staged prompts run FIFO when the lane goes idle; reorder and remove work; 
   expect(refused.some((e) => e.type === "error" && /busy/.test(e.message))).toBe(true);
   live.cancel(l2.lane!.id);
   await hangTurn;
+}, TIMEOUT);
+
+// P-QUEUE-IMG.1 (ADR-0469): a staged lane prompt carries its OWN images through the manager queue: the
+// drain sends them with that prompt and not the next, and Update (queueTake) hands back the full text and
+// the actual images, not the clipped preview and count the status view carries.
+test("staged lane prompts carry their own images through drain; queueTake returns full text + images", async () => {
+  live = manager();
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  const png = { data: "aGVsbG8=", mimeType: "image/png" };
+  const long = `with images ${"x".repeat(200)}`;
+  expect(live.enqueue(id, "staged with two images", [png, png]).ok).toBe(true);
+  expect(live.enqueue(id, "staged text only").ok).toBe(true);
+  expect(live.enqueue(id, long, [png]).ok).toBe(true);
+  expect((await live.status()).lanes[0]!.queued.map((q) => q.images)).toEqual([2, 0, 1]);
+  const first: LaneEvent[] = [];
+  await live.drain(id, (e) => first.push(e));
+  expect(first.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("")).toContain("[images: 2]");
+  const second: LaneEvent[] = [];
+  await live.drain(id, (e) => second.push(e));
+  expect(second.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("")).not.toContain("[images:");
+  // Update: the remaining item comes back whole and leaves the queue.
+  const took = live.queueTake(id, 0);
+  expect(took.ok).toBe(true);
+  expect(took.item?.text).toBe(long);
+  expect(took.item?.images).toEqual([png]);
+  expect((await live.status()).lanes[0]!.queued.length).toBe(0);
+  // Out of range is a refusal, never a different item.
+  expect(live.queueTake(id, 0).ok).toBe(false);
+  expect(live.queueTake("no-such-lane", 0).ok).toBe(false);
+}, TIMEOUT);
+
+// P-PUSH.PAR1 (ADR-pending): Copy and Push now read a staged item WHOLE without removing it, and the remove
+// that follows a slow parallel push is guarded by the item's text, so a drain that shifted the indexes in
+// between can never make it delete a different staged prompt.
+test("queuePeek reads full text + images in place; queueRemove with expect follows the item or refuses", async () => {
+  live = manager();
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  const png = { data: "aGVsbG8=", mimeType: "image/png" };
+  const long = `peeked ${"y".repeat(200)}`;
+  expect(live.enqueue(id, "first").ok).toBe(true);
+  expect(live.enqueue(id, long, [png]).ok).toBe(true);
+  const peek = live.queuePeek(id, 1);
+  expect(peek.ok).toBe(true);
+  expect(peek.item?.text).toBe(long);
+  expect(peek.item?.images).toEqual([png]);
+  expect((await live.status()).lanes[0]!.queued.length).toBe(2); // still staged
+  expect(live.queuePeek(id, 5).ok).toBe(false);
+  expect(live.queuePeek("no-such-lane", 0).ok).toBe(false);
+  // The head drains while the push is in flight: index 1 is now out of range, and the guarded remove finds
+  // the item by its text instead of refusing or deleting the wrong one.
+  await live.drain(id, () => {});
+  expect(live.queueRemove(id, 1, long).ok).toBe(true);
+  expect((await live.status()).lanes[0]!.queued.length).toBe(0);
+  // Nothing carries that text any more: a refusal, never a different item.
+  expect(live.enqueue(id, "unrelated").ok).toBe(true);
+  expect(live.queueRemove(id, 0, long).ok).toBe(false);
+  expect((await live.status()).lanes[0]!.queued.map((q) => q.text)).toEqual(["unrelated"]);
+  // A NaN index without `expect` used to splice the head; it is a refusal now.
+  expect(live.queueRemove(id, Number.NaN).ok).toBe(false);
+  expect((await live.status()).lanes[0]!.queued.length).toBe(1);
 }, TIMEOUT);
 
 // ── P-FLEET.L5 (ADR-0274): the durable lane-session ledger ───────────────────────────────────────────

@@ -14,19 +14,21 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, saf
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { connect } from "node:net";
+import { connect, createServer } from "node:net";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
 import { ensureRuntimes, findBun, needsBootstrap, ompResolution } from "./runtime.ts";
 import { ompUnavailableReport } from "./omp_bin.ts"; // P-OMP-BOOT.1 (ADR-0357): the one-shot loud boot report
 import { createSplash, setSplashStatus } from "./splash.ts";
-import { deleteCredential, listCredentials, readCredential, rotateCredential, storeCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
-import { MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: the Meeting Hub pairing bearer's vault ref
+import { listCredentials, readCredential, type SafeStorageLike, type VaultIo } from "./cred_vault.ts";
+import { credDeleteEverywhere, credListMerged, credRotateEngine, credStoreEngine, engineCredClient, migrateCredVault, type LegacyCredVault, type StoreInput } from "./cred_engine_client.ts"; // P-VAULT-V2.1 (ADR-0474)
+import { credEnvPlan } from "./cred_env.ts"; // P-VAULT-V2.1 (ADR-0474): the one credential -> env plan
 import { bestEngineLine, classifyEngineFailure, isProtectedInstallRoot, probeDirWritable, type WriteProbe } from "./engine_boot.ts";
 import { resolveEngineSpawn } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): prefer the compiled engine binary
 import { materializeLocalProviders, registerLocalProviderEgress } from "./local_providers_runtime.ts";
 import { GPU_SANDBOX_FLAG_FILE, GPU_SANDBOX_SWITCH, decideGpuAction, gpuDeathLogLine, relaunchArgs } from "./gpu_watchdog.ts";
+import { decideReloadRetry, decideRendererAction, engineAppUrl, freshRendererWatch, reloadFailedLogLine, rendererGoneLogLine, rendererResponsivenessLogLine } from "./renderer_watchdog.ts";
 import { formatPortIncident, formatSquatter, healthVerdict, ownerProbeSpec, parseOwnerProbe, type HealthVerdict, type SquatterInfo } from "./port_guard.ts"; // P-PORTGUARD.1 (ADR-0305): the engine port handshake
 import { classifyPortHolder, orphanDialog, reapSpec } from "./orphan_engine.ts"; // P-PORTGUARD.3 (ADR-0382): reap our own orphan, after a warning
 import { assessPreviousRun, freshLedger, markClean, readLedgerText, runLedgerPath, withEngine, writeLedger, type PreviousRun, type RunLedger } from "./run_ledger.ts"; // P-RECOVER.1 (ADR-0385)
@@ -37,8 +39,6 @@ import type { IncidentEvent, IncidentInput, IncidentProcess } from "./incident_r
 import { backfillCanonicalFromInstance, seedInstanceFromCanonical } from "./oscrypt_seed.ts"; // one safeStorage key across port-keyed instances
 import { listLocalProviders, embeddingsConfig, personalBaseDir, personalProtectorsPath } from "./settings_store.ts";
 import { DeviceUnlockError, helperSepRunner, KgDeviceUnlock, macSecureEnclaveProvider, windowsHelloProvider } from "./kg_device_unlock.ts"; // P-KGBIO.1 (ADR-0454)
-import type { AuthKind } from "./network_whitelist.ts";
-import { gitEnvNameFromRef } from "./git_url.ts"; // P-FLEET.L2: host-scoped git creds, vault ref -> env name
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: agent key combos, parsed by one shared rule
 import { BROWSER_POLICY_WORLD, SNAPSHOT_JS, freshnessJs, isBrowserAction, isBrowserPageShape, settleJs, targetJs, type BrowserAction, type BrowserFreshness } from "./browser_snapshot.ts"; // P-JEV.4 (ADR-0379): the Jev policy's page scripts
 import { captureCropFromCssRect } from "./preview_capture.ts"; // P-PREVIEW.1: CSS-px rect -> DIP crop (zoom-aware)
@@ -47,26 +47,48 @@ import { installAppNavigation, openExternalHttp } from "./navigation_policy.ts";
 import { isEngineDocument } from "./origin_guard.ts"; // P-SANDBOX.15 (ADR-0396): the UI token goes only to our own window
 import { installCliForwarder } from "./cli_forwarder.ts"; // P-TUI.2: `lucid hub` from any terminal on an installed machine
 
+// P-PORTGUARD.4 (ADR-0458): every LUCID engine exports its own LUCID_* env (identity, data root, vault dir,
+// token'd loopback URLs, its main's pid) to the agent's shells and terminals. An app launched from one of
+// them (an agent asked to "open Creator") inherited all of it: the other app's flavor, its vault directory,
+// its engine's URLs and tokens. LUCID_MAIN_PID is only ever set by a LUCID main for ITS engine, so seeing
+// it here means this process was started inside another LUCID's tree: drop the inherited LUCID_* before
+// anything reads them. LUCID_PORT stays (no engine sets it; it is only ever the launcher's own choice).
+// Under another LUCID a deliberate override cannot be told from a leak, so dev overrides need a clean shell.
+if (process.env.LUCID_MAIN_PID) {
+  const inherited = Object.keys(process.env).filter((k) => k.startsWith("LUCID_") && k !== "LUCID_PORT");
+  for (const k of inherited) delete process.env[k];
+  console.log(`[main] started inside another LUCID's process tree: ignored ${inherited.length} inherited LUCID_* variable(s)`);
+}
+
 // CREATOR-0 (ADR-0279): resolve the BUILD FLAVOR before anything reads an identity-derived path.
-// Order: an explicit env var (launcher / dev run), then the packaged package.json's `lucidBuildFlavor`
-// (electron-builder extraMetadata), then the standard Agent build. Renaming the app is what actually
-// separates the two products on disk (userData, the single-instance lock, and the Windows os_crypt key
-// all key on the app name), so it happens FIRST and only for the Creator flavor - the standard build's
-// paths must not move by a single byte.
+// Order (ADR-0458): the packaged package.json's `lucidBuildFlavor` (electron-builder extraMetadata), then
+// the env var (a dev run; build-creator.ts bakes it into the Creator dev bundle), then the standard Agent
+// build. Renaming the app is what actually separates the two products on disk (userData, the
+// single-instance lock, and the Windows os_crypt key all key on the app name), so it happens FIRST and only
+// for the Creator flavor - the standard build's paths must not move by a single byte.
 const packagedBuildFlavor = ((): string => {
   try {
     const meta = JSON.parse(readFileSync(join(app.getAppPath(), "package.json"), "utf8")) as { lucidBuildFlavor?: unknown };
     return typeof meta.lucidBuildFlavor === "string" ? meta.lucidBuildFlavor : "";
   } catch { return ""; }
 })();
-const BUILD = flavorInfo(resolveBuildFlavor(process.env, packagedBuildFlavor));
+// The literal `process.env.LUCID_BUILD_FLAVOR` is what build-creator.ts's define replaces, so a dev Creator
+// bundle carries "creator" baked in; passing `process.env` itself (as before ADR-0458) left the define with
+// nothing to replace, and `start:creator` ran as the Agent.
+const BUILD = flavorInfo(resolveBuildFlavor({ LUCID_BUILD_FLAVOR: process.env.LUCID_BUILD_FLAVOR }, packagedBuildFlavor));
 if (BUILD.creatorBuild) {
   app.setName(BUILD.productName);
   if (process.platform === "win32") { try { app.setAppUserModelId(BUILD.appId); } catch { /* taskbar grouping only */ } }
 }
 
 const DEFAULT_PORT = BUILD.defaultPort;
-const PORT = Number(process.env.LUCID_PORT ?? DEFAULT_PORT);
+// P-PORTGUARD.4 (ADR-0458): two ports. IDENTITY_PORT is the port this instance is KEYED on (userData suffix,
+// os_crypt seeding, the deep-link claim): the flavor default, or an explicit LUCID_PORT. PORT is where the
+// engine actually binds: it starts as IDENTITY_PORT and moves only when the default is busy at launch
+// (rollOffBusyPort), WITHOUT moving the identity, so a roll never strands settings, vault or sessions.
+const PORT_EXPLICIT = typeof process.env.LUCID_PORT === "string" && process.env.LUCID_PORT.trim() !== "";
+const IDENTITY_PORT = Number(process.env.LUCID_PORT ?? DEFAULT_PORT);
+let PORT = IDENTITY_PORT;
 // A LUCID on a NON-DEFAULT port is a deliberately separate instance: LucidAgentIDE.bat rolls a free port
 // when 5319 is taken, precisely so a dev build can run beside an installed one. Electron's single-instance
 // lock (below, ADR-0206) is keyed on the userData directory and knows nothing about the port, so without
@@ -76,7 +98,7 @@ const PORT = Number(process.env.LUCID_PORT ?? DEFAULT_PORT);
 // OAuth deep-link still re-focuses the primary app rather than spawning an engine.
 // Must run before requestSingleInstanceLock() and before anything resolves a userData path.
 const CANONICAL_USER_DATA = app.getPath("userData"); // the unsuffixed install identity - owns the one true safeStorage key
-if (PORT !== DEFAULT_PORT) app.setPath("userData", `${app.getPath("userData")}-${PORT}`);
+if (IDENTITY_PORT !== DEFAULT_PORT) app.setPath("userData", `${app.getPath("userData")}-${IDENTITY_PORT}`);
 // safeStorage on Windows is Chromium os_crypt: its AES key lives in `<userData>/Local State`, so the
 // per-port userData above silently gave EVERY instance its own encryption key while the credential vault
 // (~/.omp/lucid-cred-vault) is global. A key stored on port A was undecryptable on port B: readCredential
@@ -87,7 +109,7 @@ if (PORT !== DEFAULT_PORT) app.setPath("userData", `${app.getPath("userData")}-$
 // seed just means this instance mints its own key (the pre-fix behavior).
 const localStatePath = (dir: string): string => join(dir, "Local State");
 function readTextBestEffort(p: string): string { try { return readFileSync(p, "utf8"); } catch { return ""; } }
-if (process.platform === "win32" && PORT !== DEFAULT_PORT) {
+if (process.platform === "win32" && IDENTITY_PORT !== DEFAULT_PORT) {
   try {
     const instPath = localStatePath(app.getPath("userData"));
     const seed = seedInstanceFromCanonical(readTextBestEffort(localStatePath(CANONICAL_USER_DATA)), readTextBestEffort(instPath));
@@ -160,6 +182,8 @@ function markRunClean(): void {
 }
 /** Upper bound on stopping and verifying the engine tree at exit, so a quit never hangs on it. */
 const END_RUN_MS = 20_000;
+/** Upper bound on the engine's graceful vault cleanup before the engine tree is stopped. */
+const VAULT_SHUTDOWN_MS = 4_000;
 let runEnding: Promise<void> | null = null;
 /** End this run deliberately: stop the engine and everything under it (the omp agent tree included, which
  *  killing the engine alone does not reach), and mark the run clean only when that is VERIFIED. Otherwise
@@ -168,6 +192,14 @@ let runEnding: Promise<void> | null = null;
 function endRun(): Promise<void> {
   runEnding ??= (async () => {
     appendEngineLog(`\n--- ${new Date().toISOString()} P-RECOVER.1 exit: stopping the engine ---\n`);
+    // Security review VAULT-ENV-MATERIALIZE-SYNCED: the kill below is TerminateProcess on Windows, so no exit
+    // handler of the engine runs. Ask it first (main-only, MAC-authenticated) to blank any `.env` it wrote
+    // temporarily and wipe its secret temp folders. Bounded: a hung engine never holds up the quit, and
+    // whatever is left is cleaned at the next engine start.
+    if (dev?.pid && dev.exitCode === null) {
+      const cleaned = await Promise.race([engineVault().shutdown().then(() => true, () => false), sleep(VAULT_SHUTDOWN_MS).then(() => false)]);
+      if (!cleaned) appendEngineLog("- The engine did not confirm its vault cleanup; the next engine start re-blanks and sweeps what is left.\n");
+    }
     const timedOut = sleep(END_RUN_MS).then(() => false);
     const verified = await Promise.race([stopCurrentEngine([]).then((r) => r.verified, () => false), timedOut]);
     if (verified) markRunClean();
@@ -275,7 +307,7 @@ let engineRestartInFlight: Promise<EngineRestartResult> | null = null;
 /** One nonce-checked health probe: true only when OUR engine answers (a squatter never counts). */
 async function engineAnswersHealth(): Promise<boolean> {
   try {
-    const res = await fetch(`http://localhost:${PORT}/api/health`, { signal: AbortSignal.timeout(3000) });
+    const res = await fetch(`http://127.0.0.1:${PORT}/api/health`, { signal: AbortSignal.timeout(3000) });
     const text = await res.text();
     let body: unknown = text;
     try { body = JSON.parse(text); } catch { /* healthVerdict fails closed on the raw text */ }
@@ -348,6 +380,7 @@ async function restartEngineNow(trigger: string): Promise<EngineRestartResult> {
   const reason = ok ? "restarted" : up.status === "foreign" ? "port-foreign" : "engine-down";
   events.push({ at: Date.now(), what: ok ? "The new engine answered its health check." : up.status === "foreign" ? `Another program answered on port ${PORT}; it is not ${BUILD.productName}'s engine and was not shown.` : "The new engine did not answer its health check in time." });
   appendEngineLog(`- Restart ${ok ? "succeeded" : `failed (${reason})`}.\n`);
+  if (ok) void migrateLegacyCreds(); // P-VAULT-V2.1 (ADR-0474): an engine that was down at boot migrates now
   const meta = recordIncident({
     ...incidentIdentity(),
     kind: "engine-unreachable",
@@ -422,19 +455,15 @@ function startDevServer(): void {
   // main-only. So MAIN materializes the Local Providers here — writes omp's ~/.omp/agent/models.yml and
   // resolves each provider's secret from the vault — and injects the keys into the dev child's env (models.yml
   // holds only the env-var NAME; omp resolves it from this env). Best-effort: never blocks the server start.
+  // P-VAULT-V2.1 (ADR-0474): the engine resolves the same providers from its own vault too (vault_env.ts),
+  // so a provider whose key already migrated out of safeStorage is routed by the engine's models.yml rewrite.
   const lpEnv = prepareLocalProviders();
-  // P-FIGMA.1 (ADR-0154): the Figma PAT lives in the OS-encrypted vault (main-only). Inject it into the dev
-  // child as LUCID_FIGMA_TOKEN so /api/figma/import can call api.figma.com server-side — the key never reaches
-  // the renderer or the agent. (A freshly-entered token is passed in the first import request; this covers
-  // subsequent sessions.) Best-effort — never blocks the server start.
-  const figmaEnv = prepareFigmaToken();
-  // ADR-0216: the vault-backed git PAT (ref "git_pat"), injected as LUCID_GIT_PAT so cloneRepo can authenticate
-  // a PRIVATE clone from the Settings button - the same vault→env-into-dev-child path as Figma/Local Providers.
-  const gitEnv = prepareGitToken();
-  const embeddingsEnv = prepareEmbeddingsToken(); // ADR-0221: vault→env for the embeddings endpoint key
-  // P-MEET.1: the Meetings panel's Hub pairing bearer (ref "meeting_hub_token"), same vault→env-into-dev-child
-  // path. A token claimed DURING this session is held in the engine's memory; this covers every later launch.
-  const meetingsEnv = prepareMeetingHubToken();
+  // P-FIGMA.1 / ADR-0216 / P-FLEET.L2 / ADR-0221 / P-MEET.1: the credentials STILL in safeStorage, injected
+  // under the env names cred_env.ts defines (LUCID_FIGMA_TOKEN, LUCID_GIT_PAT[_<HOST>], LUCID_EMBEDDINGS_KEY,
+  // LUCID_MEETING_HUB_TOKEN). P-VAULT-V2.1 (ADR-0474): once an entry migrates into the engine vault its
+  // safeStorage copy is gone and the engine resolves the same name itself; this keeps the first boot after
+  // the upgrade (and any entry not yet migrated) working exactly as before. Best-effort, never blocks start.
+  const credEnv = prepareCredEnv();
   // CREATOR-0 (ADR-0279): the engine child learns its own identity and its own data roots. The standard
   // build gets ONLY the descriptive vars (no path relocation), so its on-disk layout is untouched; the
   // Creator build additionally isolates GUI settings, Personal Knowledge, the creator data root, and the
@@ -468,7 +497,7 @@ function startDevServer(): void {
     // P-BROWSER.1 (wave 2): LUCID_MAIN_TOKEN is the per-launch capability token, minted HERE (below)
     // and adopted by dev.ts as THE token - the only channel that lets this parent process authenticate
     // its agent-browser poll loop against the child's /api/browser routes.
-    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...figmaEnv, ...gitEnv, ...embeddingsEnv, ...meetingsEnv, ...flavorEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_MAIN_TOKEN: MAIN_TOKEN, LUCID_ENGINE_NONCE: ENGINE_NONCE, LUCID_MAIN_PID: String(process.pid), LUCID_HOST_EXE: basename(process.execPath) /* P-LEGIBLE.1: the manifest's relatedProcess */ },
+    env: { ...process.env, ...runtimeEnv, ...lpEnv, ...credEnv, ...flavorEnv, LUCID_RESOURCES: app.isPackaged ? process.resourcesPath : "", PORT: String(PORT), LUCID_IDENTITY_PORT: String(IDENTITY_PORT) /* ADR-0458: the resume file follows identity, not a rolled bind */, LUCID_PORT_ROLL_HOLDER: portRoll?.holder ?? "", LUCID_MAIN_TOKEN: MAIN_TOKEN, LUCID_VAULT_MAIN_TOKEN: VAULT_MAIN_TOKEN /* P-VAULT-V2.1: main-only vault routes */, LUCID_ENGINE_NONCE: ENGINE_NONCE, LUCID_MAIN_PID: String(process.pid), LUCID_HOST_EXE: basename(process.execPath) /* P-LEGIBLE.1: the manifest's relatedProcess */, LUCID_ELECTRON_EXE: process.execPath /* P-PLUGINS.2 (ADR-0462): server plugins run under this binary with ELECTRON_RUN_AS_NODE */ },
     // NOT "inherit": in a packaged GUI app the Electron main has no console, so inheriting
     // makes the console-subsystem Bun allocate its OWN console window (the black pop-up).
     // Pipe instead + windowsHide so no window ever appears; forward output for dev runs.
@@ -511,7 +540,7 @@ async function waitForServer(timeoutMs = 30000): Promise<ServerWait> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`http://localhost:${PORT}/api/health`);
+      const res = await fetch(`http://127.0.0.1:${PORT}/api/health`);
       const text = await res.text();
       let body: unknown = text;
       try { body = JSON.parse(text); } catch { /* healthVerdict fails closed on the raw text */ }
@@ -561,7 +590,7 @@ function portAccepting(): Promise<boolean> {
 async function reapOrphanedEngine(): Promise<boolean> {
   if (!(await portAccepting())) return true;
   const observed = await probePortOwner();
-  const holder = classifyPortHolder(observed, process.pid);
+  const holder = classifyPortHolder(observed, process.pid, pidAlive);
   if (holder.kind !== "ours" || !observed) return true;
   const d = orphanDialog({ port: PORT, productName: BUILD.productName, observed, evidence: holder.evidence });
   appendEngineLog(`\n--- ${new Date().toISOString()} orphaned engine on port ${PORT} (P-PORTGUARD.3) ---\n${d.detail}\n`);
@@ -584,13 +613,62 @@ async function reapOrphanedEngine(): Promise<boolean> {
   return true;
 }
 
+/** Is `pid` running? EPERM means it exists but belongs to someone else, which still counts. */
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }
+}
+
+/** A loopback port the OS says is free right now (bind 0, read it, release it). null if none. */
+function pickFreeLoopbackPort(): Promise<number | null> {
+  const { promise, resolve } = Promise.withResolvers<number | null>();
+  const srv = createServer();
+  srv.once("error", () => resolve(null));
+  srv.listen(0, "127.0.0.1", () => {
+    const addr = srv.address();
+    const port = addr && typeof addr === "object" ? addr.port : null;
+    srv.close(() => resolve(port));
+  });
+  return promise;
+}
+
+/** This launch's roll. The engine gets the holder (LUCID_PORT_ROLL_HOLDER) and /api/build-info reports it,
+ *  so the window says where it runs and why: a native box shown during renderer startup was dismissed
+ *  before anyone could read it. */
+let portRoll: { from: number; to: number; holder: string } | null = null;
+/** P-PORTGUARD.4 (ADR-0458): the default port is busy at launch (another program, or another LIVE LUCID),
+ *  so the engine binds a free loopback port instead. Only the BIND moves: userData, the vault key, the
+ *  single-instance lock and the deep-link claim stay on IDENTITY_PORT, which is what ADR-0305 refused
+ *  to move silently. It is never silent either: engine.log names the holder and the window says where
+ *  this instance runs. An explicit LUCID_PORT is the user's own choice and is never rolled (the ADR-0305
+ *  dialog still reports it). Returns what happened, or null when nothing moved. */
+async function rollOffBusyPort(): Promise<{ from: number; to: number; holder: string } | null> {
+  if (PORT_EXPLICIT || !(await portAccepting())) return null;
+  const observed = await probePortOwner();
+  const kind = classifyPortHolder(observed, process.pid, pidAlive).kind;
+  const who = observed ? `${observed.name ?? "unknown program"} (pid ${observed.pid ?? "unknown"})` : "a program that could not be identified";
+  const holder = kind === "live" ? `another running LUCID engine, ${who}` : who;
+  const to = await pickFreeLoopbackPort();
+  const from = PORT;
+  appendEngineLog(`\n--- ${new Date().toISOString()} default port busy (P-PORTGUARD.4) ---\n- Port ${from} is held by ${holder}.\n${formatSquatter(observed).join("\n")}\n`);
+  if (to === null) { appendEngineLog("- No free loopback port could be reserved; the engine tries the default and reports the bind.\n"); return null; }
+  PORT = to;
+  if (runLedger) saveRunLedger({ ...runLedger, port: to }); // the next launch's recovery looks where this engine really is
+  appendEngineLog(`- The engine binds port ${to} instead. Settings, vault and sessions stay on this install's own identity.\n`);
+  return { from, to, holder };
+}
+
+// P-RECOVER.4 (ADR-0481): reload bookkeeping for the main window's renderer watchdog (pure core:
+// renderer_watchdog.ts). Reset whenever a window is created, so a reopened window starts with a full cap.
+let rendererWatch = freshRendererWatch();
+
 function createWindow(): void {
+  rendererWatch = freshRendererWatch();
   // Runtime window icon (taskbar/dev). Packaged Win/mac use the exe/app icon
   // baked in by electron-builder; this covers the dev run and Linux.
   const iconPath = join(app.getAppPath(), "build", "icon.png");
   win = new BrowserWindow({
     width: 1320, height: 860, minWidth: 940, minHeight: 600,
-    frame: false, backgroundColor: "#0a0b0f", show: false, title: "Lucid Agent",
+    frame: false, backgroundColor: "#0a0b0f", show: false, title: BUILD.displayName,
     ...(existsSync(iconPath) ? { icon: iconPath } : {}),
     // `plugins` enables Chromium's BUILT-IN PDF viewer, and nothing else: NPAPI and PPAPI are long gone
     // from Chromium, so the internal PDF reader is the only "plugin" this flag can still turn on. It
@@ -600,6 +678,36 @@ function createWindow(): void {
     webPreferences: { preload: preloadPath(), contextIsolation: true, nodeIntegration: false, plugins: true },
   });
   win.once("ready-to-show", () => { firstWindowRendered = true; win!.show(); }); // ADR-0246: past here a GPU death is not the boot brick
+  // P-RECOVER.4 (ADR-0481): a dead renderer used to leave the frameless window painting only its background
+  // with no way back (no menu accelerator, the close button lived in the renderer, a second launch only
+  // focuses an existing window). Log the reason + exit code (the only evidence of WHY it died) and load the
+  // app again after a backoff, capped per minute so a renderer that dies at boot cannot loop. The engine and
+  // its agent sessions are untouched: only the window's document is recreated.
+  const thisWin = win;
+  thisWin.webContents.on("render-process-gone", (_e, details) => {
+    if (thisWin.isDestroyed()) return; // the window is closing: its renderer exiting is expected
+    const r = decideRendererAction(details, rendererWatch, Date.now());
+    rendererWatch = r.state;
+    appendEngineLog(rendererGoneLogLine(details, r, new Date().toISOString()));
+    if (r.action === "reload") scheduleReload(r.delayMs);
+  });
+  // P-RECOVER.4 (ADR-0481) upgrade review RELOAD-RETRY / RELOAD-ORIGIN: the reload uses the same
+  // 127.0.0.1 app URL as the first load, and a failed load retries under the same per-minute cap.
+  function scheduleReload(delayMs: number): void {
+    setTimeout(() => {
+      if (thisWin.isDestroyed()) return;
+      // PORT is read at reload time: it is where the engine binds NOW (a launch-time roll, ADR-0458, is in it).
+      thisWin.loadURL(engineAppUrl(PORT)).catch((err: unknown) => {
+        if (thisWin.isDestroyed()) return;
+        const retry = decideReloadRetry(rendererWatch, Date.now());
+        rendererWatch = retry.state;
+        appendEngineLog(reloadFailedLogLine(err instanceof Error ? err.message : String(err), retry, new Date().toISOString()));
+        if (retry.action === "reload") scheduleReload(retry.delayMs);
+      });
+    }, delayMs);
+  }
+  thisWin.webContents.on("unresponsive", () => appendEngineLog(rendererResponsivenessLogLine("unresponsive", new Date().toISOString())));
+  thisWin.webContents.on("responsive", () => appendEngineLog(rendererResponsivenessLogLine("responsive", new Date().toISOString())));
   // Spell-check suggestions: Electron's spellchecker underlines misspellings but the app must build the
   // correction menu itself. Only intercept when there's a misspelled word (so we don't fight Monaco's own
   // context menu elsewhere); offer the dictionary suggestions + "Add to dictionary".
@@ -615,13 +723,16 @@ function createWindow(): void {
     );
     Menu.buildFromTemplate(template).popup({ window: win ?? undefined });
   });
-  installAppNavigation(win.webContents, `http://localhost:${PORT}/`, (url) => shell.openExternal(url));
+  // ADR-0474 security review VAULT-TRANSPORT-LOCALHOST: every main-to-engine fetch and the window load use
+  // 127.0.0.1, the engine's bind address. `localhost` can resolve to [::1] first, a socket any local
+  // process may own, which would then receive the UI token and render as our window.
+  installAppNavigation(win.webContents, `${engineAppUrl(PORT)}/`, (url) => shell.openExternal(url));
   // P-KGMARKET.4: once the renderer is up, flush any lucid://auth URL that arrived during a cold launch.
   win.webContents.on("did-finish-load", () => {
     if (pendingAuthUrl) { win?.webContents.send("lucid:authCallback", pendingAuthUrl); pendingAuthUrl = null; }
     void kgAutoUnlock(); // P-KGBIO.1 (ADR-0454): once per run, Windows Hello / Touch ID unlock at launch
   });
-  win.loadURL(`http://localhost:${PORT}`);
+  win.loadURL(engineAppUrl(PORT));
   // P-RECOVER.1 (ADR-0385): a Windows log off or shutdown arrives as session-end; it is a deliberate
   // exit, so it must not surface as an unclean-shutdown incident on the next launch.
   win.on("session-end", () => markRunClean());
@@ -668,10 +779,27 @@ ipcMain.handle("lucid:pickFile", async (e, opts: unknown) => {
   return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
 });
 
-// P-NETWL.1 (ADR-0106): the OS-encrypted credential vault (cred_vault.ts) lives in the main process because
-// Electron's safeStorage is main-only. The renderer can STORE, LIST, and DELETE secrets; it can never READ a
-// plaintext back (decrypt stays here, for future request injection). storeCredential FAIL-CLOSES if OS
-// encryption is unavailable - the handler surfaces { error } rather than ever writing plaintext.
+// P-VAULT-UI.1 (ADR-0475): native SAVE dialog for a text file the renderer already holds (the encrypted
+// `.lucidvault` backup: ciphertext, never a plaintext secret). The user picks the path; main writes the text
+// there owner-only (0600 where the OS honors it). Returns the path, null on cancel, or { error }.
+ipcMain.handle("lucid:saveTextFile", async (e, opts: unknown) => {
+  const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+  const o = (opts ?? {}) as { title?: unknown; defaultName?: unknown; filters?: unknown; text?: unknown };
+  if (typeof o.text !== "string") return { error: "nothing to save" };
+  const filters = Array.isArray(o.filters) ? (o.filters as { name: string; extensions: string[] }[]) : undefined;
+  const r = await dialog.showSaveDialog(w!, {
+    title: typeof o.title === "string" ? o.title : "Save file",
+    ...(typeof o.defaultName === "string" && o.defaultName ? { defaultPath: basename(o.defaultName) } : {}),
+    ...(filters ? { filters } : {}),
+  });
+  if (r.canceled || !r.filePath) return null;
+  try { writeFileSync(r.filePath, o.text, { encoding: "utf8", mode: 0o600 }); return r.filePath; } catch (err) { return { error: (err instanceof Error ? err.message : String(err)).slice(0, 200) }; }
+});
+
+// P-NETWL.1 (ADR-0106): the legacy safeStorage credential vault (cred_vault.ts), main-only because Electron's
+// safeStorage is. P-VAULT-V2.1 (ADR-0474): it is now only READ (env injection for entries not yet migrated)
+// and drained into the engine vault (migrateLegacyCreds); every new credential goes to the engine. The
+// renderer can STORE, LIST, ROTATE and DELETE; it can never READ a plaintext back.
 // CREATOR-0 (ADR-0279): the Creator flavor gets its OWN vault root inside its userData. Two reasons:
 // a standard-build provider key must not silently become creative-media egress credit, and on Windows
 // the safeStorage key lives per profile directory, so a shared vault path across two app identities
@@ -716,76 +844,42 @@ function prepareLocalProviders(): Record<string, string> {
     return r.childEnv;
   } catch (err) { console.error("[LOCAL_PROVIDERS] prepare failed:", err); return {}; }
 }
-// P-FIGMA.1 (ADR-0154): read the Figma PAT from the vault (ref "figma_pat") and expose it to the dev child as
-// LUCID_FIGMA_TOKEN, so the Figma REST calls happen server-side without the secret ever reaching the renderer.
-const FIGMA_PAT_REF = "figma_pat";
-function prepareFigmaToken(): Record<string, string> {
+// P-FIGMA.1 (ADR-0154), ADR-0216, P-FLEET.L2, ADR-0221, P-MEET.1: the safeStorage credentials the engine
+// reads from its env (Figma PAT, git PATs generic and per host, embeddings key, Meeting Hub bearer; the
+// engine's meetings_hub.ts takes the bearer out of process.env on load). The ref -> name rules live in
+// cred_env.ts, shared with the engine's own resolution (vault_env.ts). A ref that cannot be decrypted is
+// skipped. Secrets never reach the renderer or the agent.
+function prepareCredEnv(): Record<string, string> {
   try {
-    const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), FIGMA_PAT_REF);
-    return tok ? { LUCID_FIGMA_TOKEN: tok } : {};
+    return credEnvPlan({
+      refs: () => listCredentials(VAULT_IO, CRED_DIR()).map((m) => m.ref),
+      read: (ref) => readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), ref),
+    }, embeddingsConfig());
   } catch { return {}; }
 }
-// ADR-0216: read the git personal access token from the vault (ref "git_pat") and expose it to the dev child as
-// LUCID_GIT_PAT, so cloneRepo can clone a PRIVATE repo from the Settings "Clone" button without an interactive
-// credential prompt. The secret never reaches the renderer or the agent. (A freshly-entered PAT is also passed
-// inline on the first clone request; this covers subsequent sessions.) Best-effort — never blocks server start.
-//
-// P-FLEET.L2: the fleet's repo field saves a token PER HOST (vault ref `git_pat_<host_slug>`, minted by
-// git_url.gitCredRef). Every such ref is injected under its own name - `LUCID_GIT_PAT_GITHUB_COM`,
-// `LUCID_GIT_PAT_DEV_AZURE_COM`, `LUCID_GIT_PAT_GITLAB_MYCORP_COM` - which is what lets workspace.ts hand a
-// token ONLY to the host it was saved for, self-hosted GitLab/Azure DevOps Server included. Enumerating the
-// vault costs one directory read at launch; a ref we cannot decrypt is simply skipped.
-const GIT_PAT_REF = "git_pat";
-function prepareGitToken(): Record<string, string> {
-  const env: Record<string, string> = {};
-  try {
-    const legacy = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), GIT_PAT_REF);
-    if (legacy) env.LUCID_GIT_PAT = legacy;
-  } catch { /* best-effort */ }
-  try {
-    for (const meta of listCredentials(VAULT_IO, CRED_DIR())) {
-      const name = gitEnvNameFromRef(meta.ref);
-      if (!name) continue;
-      const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), meta.ref);
-      if (tok) env[name] = tok;
-    }
-  } catch { /* best-effort */ }
-  return env;
+// P-VAULT-V2.1 (ADR-0474): the credential store is the ENGINE vault now (FIPS-routed crypto under an
+// OS-held master key; safeStorage is not a FIPS 140-validated module). Main reaches it over the engine's
+// main-only routes with the UI token plus this per-launch vault token, which only the engine (env, removed
+// on load) and this process hold: the renderer and the agent never see it.
+const VAULT_MAIN_TOKEN = randomBytes(32).toString("hex");
+const legacyCredVault = (): LegacyCredVault => ({ ss: ELECTRON_SAFE_STORAGE, io: VAULT_IO, dir: CRED_DIR() });
+const engineVault = () => engineCredClient({ baseUrl: `http://127.0.0.1:${PORT}`, uiToken: MAIN_TOKEN, vaultToken: VAULT_MAIN_TOKEN });
+/** Move what is left in safeStorage into the engine vault (cred_engine_client.ts: import, engine verifies,
+ *  only then delete). Runs after the engine answers its health check; idempotent; never throws. */
+async function migrateLegacyCreds(): Promise<void> {
+  const r = await migrateCredVault(legacyCredVault(), engineVault());
+  if (!r.migrated.length && !r.kept.length) return;
+  const line = `[vault] safeStorage -> engine vault: ${r.migrated.length} moved${r.kept.length ? `, ${r.kept.length} kept (${r.kept.map((k) => `${k.ref}: ${k.reason}`).join("; ").slice(0, 400)})` : ""}`;
+  console.error(line);
+  appendEngineLog(line + "\n");
 }
-// ADR-0221: read the embeddings endpoint's API key from the vault (ref = settings.embeddings.vaultRef) and expose
-// it to the dev child as LUCID_EMBEDDINGS_KEY, so the ApiEmbedder can authenticate a cloud endpoint (OpenAI/Azure)
-// without the secret reaching the renderer. A local no-auth Ollama needs no key. Best-effort — never blocks start.
-function prepareEmbeddingsToken(): Record<string, string> {
-  try {
-    const cfg = embeddingsConfig();
-    if (!cfg?.enabled || !cfg.vaultRef || (cfg.authKind !== "bearer" && cfg.authKind !== "apikey")) return {};
-    const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), cfg.vaultRef);
-    return tok ? { LUCID_EMBEDDINGS_KEY: tok } : {};
-  } catch { return {}; }
-}
-// P-MEET.1: read the Meeting Hub pairing bearer from the vault and expose it to the dev child as
-// LUCID_MEETING_HUB_TOKEN, so the Meetings panel's calls to the loopback Hub are authenticated
-// server-side. Same shape as the Figma PAT: the renderer only ever sees rendered meeting rows. The
-// engine's meetings_hub.ts moves it into module state and deletes it from process.env on load, so
-// the engine's own omp/fleet/scanner children never inherit it.
-// Best-effort - a missing/unpairable token just leaves the panel in its "pair with the Hub" state.
-function prepareMeetingHubToken(): Record<string, string> {
-  try {
-    const tok = readCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), MEETING_HUB_CRED_REF);
-    return tok ? { LUCID_MEETING_HUB_TOKEN: tok } : {};
-  } catch { return {}; }
-}
-ipcMain.handle("lucid:credStore", (_e, input: { ref?: string; kind: AuthKind; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => {
-  try { return storeCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { ...input, createdAt: Date.now() }); }
-  catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
-});
-// P-KEYS.2 (ADR-0107): rotate a stored secret IN PLACE (same ref), by paste or by file. Fail-closed: throws
-// (surfaced as {error}) if OS encryption is unavailable, leaving the old secret intact; the secret bytes for
-// the file path are read + re-encrypted in main, never crossing to the renderer.
-ipcMain.handle("lucid:credRotate", (_e, input: { ref: string; secret: string; expiresAt?: number }) => {
-  try { return rotateCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { ...input, rotatedAt: Date.now() }) ?? { error: "not-found" }; }
-  catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
-});
+// P-NETWL.1 / P-KEYS.2 / P-VAULT-V2.1: the bridge cred* calls keep their names and shapes; the store behind
+// them is the engine vault. Fail-closed: an engine refusal (no OS backend, FIPS refusal, engine down) is an
+// { error }, never a safeStorage or plaintext fallback.
+ipcMain.handle("lucid:credStore", (_e, input: StoreInput) => credStoreEngine(engineVault(), legacyCredVault(), input));
+// P-KEYS.2 (ADR-0107): rotate a stored secret IN PLACE (same ref), by paste or by file. The old secret stays
+// intact on any failure; the secret bytes for the file path are read in main, never crossing to the renderer.
+ipcMain.handle("lucid:credRotate", (_e, input: { ref: string; secret: string; expiresAt?: number }) => credRotateEngine(engineVault(), legacyCredVault(), input));
 ipcMain.handle("lucid:credRotateFile", async (e, input: { ref: string }) => {
   try {
     const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
@@ -796,12 +890,13 @@ ipcMain.handle("lucid:credRotateFile", async (e, input: { ref: string }) => {
     });
     if (r.canceled || !r.filePaths[0]) return null;
     const secret = readFileSync(r.filePaths[0], "utf8");
-    return rotateCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { ref: input.ref, secret, rotatedAt: Date.now() }) ?? { error: "not-found" };
+    return await credRotateEngine(engineVault(), legacyCredVault(), { ref: input.ref, secret });
   } catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
 });
-ipcMain.handle("lucid:credList", () => { try { return listCredentials(VAULT_IO, CRED_DIR()); } catch { return []; } });
-ipcMain.handle("lucid:credDelete", (_e, ref: unknown) => { try { return deleteCredential(VAULT_IO, CRED_DIR(), typeof ref === "string" ? ref : ""); } catch { return false; } });
-ipcMain.handle("lucid:credEncryptionAvailable", () => { try { return safeStorage.isEncryptionAvailable(); } catch { return false; } });
+ipcMain.handle("lucid:credList", () => credListMerged(engineVault(), legacyCredVault()));
+ipcMain.handle("lucid:credDelete", (_e, ref: unknown) => credDeleteEverywhere(engineVault(), legacyCredVault(), typeof ref === "string" ? ref : ""));
+// "Can a credential be stored right now?": the engine vault is usable (custody ok).
+ipcMain.handle("lucid:credEncryptionAvailable", async () => { try { return (await engineVault().status()).available; } catch { return false; } });
 
 // P-KGBIO.1 (ADR-0454): unlock the personal knowledge graph with Windows Hello (face, fingerprint, PIN) or
 // Touch ID (a Secure Enclave key, via bin/lucid-sep), each a protector in the store's Protector Spec v1 file. The VMK is unwrapped
@@ -829,7 +924,7 @@ async function engineData(res: Response | null): Promise<Record<string, unknown>
 /** Hand a released DEK to the engine, then zero main's copy. */
 async function engineUnlockWithKey(dek: Buffer): Promise<KgDeviceReply> {
   try {
-    const d = await engineData(await fetch(`http://localhost:${PORT}/api/personal/unlock-key`, {
+    const d = await engineData(await fetch(`http://127.0.0.1:${PORT}/api/personal/unlock-key`, {
       method: "POST", headers: { "x-lucid-token": MAIN_TOKEN, "content-type": "application/json" },
       body: JSON.stringify({ dek: dek.toString("base64") }),
     }));
@@ -868,7 +963,7 @@ async function kgAutoUnlock(): Promise<void> {
   kgAutoUnlockTried = true;
   const st = await kgDevice.status().catch(() => null);
   if (!st?.enrolled || !st.autoUnlock) return;
-  const p = await engineData(await fetch(`http://localhost:${PORT}/api/personal`, { headers: { "x-lucid-token": MAIN_TOKEN } }).catch(() => null));
+  const p = await engineData(await fetch(`http://127.0.0.1:${PORT}/api/personal`, { headers: { "x-lucid-token": MAIN_TOKEN } }).catch(() => null));
   if (p?.enabled !== true || p.configured !== true || p.unlocked !== false) return;
   const r = await kgDeviceUnlockEngine();
   if (win && !win.isDestroyed()) win.webContents.send("lucid:kgDeviceUnlocked", { ...r, label: st.label });
@@ -876,7 +971,7 @@ async function kgAutoUnlock(): Promise<void> {
 // P-NETWL.2 (ADR-0106): upload an auth file (token / PEM / API-key / config) straight into the vault. The
 // file is picked + read + encrypted ENTIRELY in main - the secret bytes never cross to the renderer (unlike a
 // paste flow). Returns the credential metadata (+ the source filename as a default label) or { error }.
-ipcMain.handle("lucid:credStoreFile", async (e, input: { kind: AuthKind; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => {
+ipcMain.handle("lucid:credStoreFile", async (e, input: { kind: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }) => {
   try {
     const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
     const r = await dialog.showOpenDialog(w!, {
@@ -888,7 +983,7 @@ ipcMain.handle("lucid:credStoreFile", async (e, input: { kind: AuthKind; label?:
     const p = r.filePaths[0];
     const secret = readFileSync(p, "utf8");
     const label = input.label && input.label.trim() ? input.label : p.replace(/^.*[\\/]/, ""); // default label = filename
-    return storeCredential(ELECTRON_SAFE_STORAGE, VAULT_IO, CRED_DIR(), { kind: input.kind, secret, label, createdAt: Date.now(), expiresAt: input.expiresAt, rotationIntervalDays: input.rotationIntervalDays });
+    return await credStoreEngine(engineVault(), legacyCredVault(), { kind: input.kind, secret, label, expiresAt: input.expiresAt, rotationIntervalDays: input.rotationIntervalDays });
   } catch (err) { return { error: (err as Error)?.message ?? String(err) }; }
 });
 
@@ -958,7 +1053,7 @@ html.lucid-snap-flash { animation: lucidAgentBreathe 3.2s ease-in-out infinite, 
 `;
 async function browserApiPost(path: string, body: unknown): Promise<void> {
   try {
-    await fetch(`http://localhost:${PORT}${path}`, {
+    await fetch(`http://127.0.0.1:${PORT}${path}`, {
       method: "POST",
       headers: { "x-lucid-token": MAIN_TOKEN, "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -1226,7 +1321,7 @@ async function agentBrowserTick(): Promise<void> {
   if (agentPollBusy) return;
   agentPollBusy = true;
   try {
-    const res = await fetch(`http://localhost:${PORT}/api/browser/commands`, { headers: { "x-lucid-token": MAIN_TOKEN } });
+    const res = await fetch(`http://127.0.0.1:${PORT}/api/browser/commands`, { headers: { "x-lucid-token": MAIN_TOKEN } });
     if (!res.ok) return;
     const parsed: unknown = await res.json().catch(() => null);
     const data = parsed && typeof parsed === "object" && "data" in parsed ? parsed.data : null;
@@ -1320,7 +1415,7 @@ ipcMain.on("lucid:win", (e, action: string) => {
 // re-focuses the running app and hands it the URL (rather than spawning a second engine).
 // Only the DEFAULT-port instance claims the lucid:// scheme. A side-by-side test instance registering it
 // would silently steal the OAuth callback from the app the user actually signed in from.
-if (PORT === DEFAULT_PORT) {
+if (IDENTITY_PORT === DEFAULT_PORT) {
   if (process.defaultApp && process.argv.length >= 2) {
     app.setAsDefaultProtocolClient(AUTH_PROTOCOL, process.execPath, [resolve(process.argv[1]!)]); // dev
   } else {
@@ -1395,7 +1490,7 @@ app.whenReady().then(async () => {
   // the canonical dir has no key, so adopt the key Chromium just minted for THIS instance as the
   // canonical one - every later instance then seeds from it (module-load seed above). Never overwrites
   // an existing canonical key. Best-effort: a miss self-heals on a later launch.
-  if (process.platform === "win32" && PORT !== DEFAULT_PORT) {
+  if (process.platform === "win32" && IDENTITY_PORT !== DEFAULT_PORT) {
     try {
       const canonPath = localStatePath(CANONICAL_USER_DATA);
       const fill = backfillCanonicalFromInstance(readTextBestEffort(canonPath), readTextBestEffort(localStatePath(app.getPath("userData"))));
@@ -1414,6 +1509,9 @@ app.whenReady().then(async () => {
   // P-PORTGUARD.3 (ADR-0382): an engine WE left behind (a build before the parent watch, or a crash it
   // could not observe) is offered for reaping before the bind is even attempted. Quit = leave it alone.
   if (!(await reapOrphanedEngine())) { splash?.close(); markRunClean(); app.exit(0); return; }
+  // P-PORTGUARD.4 (ADR-0458): still busy (a foreign program, another live LUCID, or an orphan the user
+  // stopped that did not let go) -> bind a free port instead of failing. The handshake below still applies.
+  portRoll = await rollOffBusyPort();
   startDevServer();
   const serverUp = await waitForServer();
   // P-PORTGUARD.1 (ADR-0305): a FOREIGN process answered the engine port. Never render it - the window
@@ -1454,6 +1552,7 @@ app.whenReady().then(async () => {
   // P-BROWSER.1 (wave 2): start the agent-browser command poll once the server answered /api/health.
   // Started even on a timeout - the loop is fail-quiet and a late-starting server self-heals into it.
   startAgentBrowserLoop();
+  if (serverUp.status === "ready") void migrateLegacyCreds(); // P-VAULT-V2.1 (ADR-0474): safeStorage -> engine vault
   splash?.close();
   // Don't leave the user staring at a black window with no explanation: if the local engine never
   // came up (e.g. no usable bun runtime), say so. The window keeps retrying via did-fail-load, so a

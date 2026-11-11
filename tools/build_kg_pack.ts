@@ -219,7 +219,7 @@ async function main(): Promise<void> {
   let complete: ((s: string, u: string) => Promise<string>) | null = null;
   if (!a.dryRun) {
     let model = a.model;
-    if (!model) { try { const { usageLedger } = await import("../tools/memory_data.ts"); model = usageLedger().models[0]?.model; } catch { /* no ledger — use omp default */ } }
+    if (!model) { try { const { usageLedger } = await import("../tools/memory_data.ts"); model = (await usageLedger()).models[0]?.model; } catch { /* no ledger: use omp default */ } }
     try {
       const { backend } = await import("../desktop/acp_backend.ts");
       complete = (system: string, user: string) => backend.complete(system, user, model ? { model } : {});

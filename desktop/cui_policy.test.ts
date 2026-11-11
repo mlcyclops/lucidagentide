@@ -45,6 +45,11 @@ describe("locked: rule by rule", () => {
     const child = cuiProviderVerdict(true, spec("hyperframes"), ep({ providerId: "hyperframes", baseUrl: undefined, command: "/usr/bin/hyperframes" }));
     expect(child).toMatchObject({ allowed: true, posture: "on-device" });
     expect(child.reason).toContain("child process");
+    // CREATOR-OPENFILM (ADR-0457): node plus the CLI entry is a child process too; its external-URL scan is the
+    // engine's preflight (creator_openfilm.test.ts), not this provider verdict.
+    const film = cuiProviderVerdict(true, spec("openfilm"), ep({ providerId: "openfilm", baseUrl: undefined, command: "C:/node/node.exe", args: ["C:/of/node_modules/openfilm/bin/openfilm.mjs"] }));
+    expect(film).toMatchObject({ allowed: true, posture: "on-device" });
+    expect(film.reason).toContain("child process");
     expect(cuiProviderVerdict(true, spec("comfyui")).allowed).toBe(true);
   });
 

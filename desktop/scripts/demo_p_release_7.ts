@@ -124,8 +124,13 @@ for (const [wf, inputs] of [
   const test = runConfigure(script, { RUNNER_OS: "Windows", RELEASE_RUN: "" });
   assert(test.status === 0 && test.ghEnv.trim() === "", `${wf}: a Windows TEST dispatch with no secret -> nothing exported, builds unsigned as before`);
 
-  const mac = runConfigure(script, { RUNNER_OS: "macOS", RELEASE_RUN: "1" });
-  assert(mac.status === 0 && !mac.ghEnv.includes("CSC_LINK") && mac.ghEnv.includes("LUCID_RELEASE_RUN=1"), `${wf}: a macOS RELEASE run is not gated (no Apple certificate yet), it is only marked`);
+  for (const os of ["macOS", "Linux"]) {
+    const other = runConfigure(script, { RUNNER_OS: os, RELEASE_RUN: "1" });
+    assert(other.status === 0 && !other.ghEnv.includes("CSC_LINK"), `${wf}: a ${os} RELEASE run is not gated (no Windows bytes, no Apple certificate yet)`);
+    // ADR-0459: Creator's overlay (which carries the Windows gate) loads on every runner, so its workflow marks
+    // ONLY the Windows job; Agent's mac/Linux jobs never load win-signing, so its marking is inert there.
+    if (wf === "build-creator.yml") assert(!other.ghEnv.includes("LUCID_RELEASE_RUN"), `${wf}: ...and NOT marked, so the Creator overlay and the identity gate load on ${os}`);
+  }
 }
 
 console.log("\n[2] win-signing.cjs enforces the same rule inside electron-builder's config load");

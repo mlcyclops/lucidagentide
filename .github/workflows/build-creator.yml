@@ -51,7 +51,10 @@ jobs:
           - os: windows-latest
             label: Creator Windows (NSIS + portable, x64)
             script: dist:win:creator
-          - os: ubuntu-latest
+          # ADR-0459: pinned. ubuntu-latest moved to ubuntu-26.04 (October 2026), where /tmp is a 7.9 GB tmpfs
+          # (fpm: "Disk quota exceeded" staging the rpm) and, with TMPDIR moved to disk, rpmbuild still
+          # failed. creator-v0.1.1 and every Agent release so far were built on ubuntu-24.04.
+          - os: ubuntu-24.04
             label: Creator Linux (AppImage + deb + rpm, x64)
             script: dist:linux:creator
     runs-on: ${{ matrix.os }}
@@ -131,7 +134,9 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           RELEASE_RUN: ${{ (startsWith(github.ref, 'refs/tags/') || inputs.publish_latest) && '1' || '' }}
         run: |
-          if [[ "$RELEASE_RUN" == "1" ]]; then
+          # ADR-0459: Windows only. The Creator overlay (and the identity gate that reads it) loads on every
+          # runner, and the gate this marks guards Windows bytes; a macOS/Linux job has no Windows signer.
+          if [[ "$RELEASE_RUN" == "1" && "$RUNNER_OS" == "Windows" ]]; then
             echo "LUCID_RELEASE_RUN=1" >> "$GITHUB_ENV"
           fi
           if [[ "$RUNNER_OS" == "macOS" && -n "$MAC_CSC_LINK" ]]; then

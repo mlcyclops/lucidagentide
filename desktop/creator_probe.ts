@@ -24,6 +24,7 @@ import { avatarHealthCapabilities, parseAvatarHealth } from "./creator_dgx_avata
 import { cadHealthCapabilities, parseCadHealth } from "./creator_dgx_cad.ts";
 import { parseVisionHealth, visionHealthCapabilities, visionHealthDetail } from "./creator_dgx_vision.ts";
 import { hyperframesVersionArgv } from "./creator_hyperframes.ts";
+import { openfilmVersionArgv } from "./creator_openfilm.ts"; // CREATOR-OPENFILM (ADR-0457)
 import { DRIFT_SESSION_ENDPOINT_ID, DriftClient, defaultDriftExePaths, type DriftSessionState } from "./creator_drift.ts"; // CREATOR-DRIFT
 
 /** Closed set. `skipped` = nothing to probe (no endpoint declared, or a built-in). */
@@ -281,12 +282,14 @@ export async function probeProvider(deps: ProbeDeps, providerId: CreatorProvider
         : result("unreal", "skipped", "No Unreal executable is declared yet.", deps.now(), deps.now());
     case "hyperframes":
       return ep ? probeHyperframes(deps, ep) : result("hyperframes", "skipped", "No HyperFrames executable is declared yet.", deps.now(), deps.now());
+    case "openfilm":
+      return ep ? probeOpenfilm(deps, ep) : result("openfilm", "skipped", "No OpenFilm executable is declared yet.", deps.now(), deps.now());
     case "dgx-avatar":
-      return ep ? probeDgxHealth(deps, "dgx-avatar", ep) : result("dgx-avatar", "skipped", "No DGX avatar endpoint is declared yet. Import one from the DGX Loader mailbox.", deps.now(), deps.now());
+      return ep ? probeDgxHealth(deps, "dgx-avatar", ep) : result("dgx-avatar", "skipped", "No DGX avatar endpoint is declared yet. Import one from the Private AI Platform mailbox.", deps.now(), deps.now());
     case "dgx-cad":
-      return ep ? probeDgxHealth(deps, "dgx-cad", ep) : result("dgx-cad", "skipped", "No DGX CAD endpoint is declared yet. Import one from the DGX Loader mailbox.", deps.now(), deps.now());
+      return ep ? probeDgxHealth(deps, "dgx-cad", ep) : result("dgx-cad", "skipped", "No DGX CAD endpoint is declared yet. Import one from the Private AI Platform mailbox.", deps.now(), deps.now());
     case "dgx-vision":
-      return ep ? probeDgxHealth(deps, "dgx-vision", ep) : result("dgx-vision", "skipped", "No DGX vision endpoint is declared yet. Import one from the DGX Loader mailbox.", deps.now(), deps.now());
+      return ep ? probeDgxHealth(deps, "dgx-vision", ep) : result("dgx-vision", "skipped", "No DGX vision endpoint is declared yet. Import one from the Private AI Platform mailbox.", deps.now(), deps.now());
     case "pdf-markup":
       return probeBuiltIn(deps, "pdf-markup", ["pdf-markup"]);
     case "design":
@@ -315,6 +318,21 @@ export function probeHyperframes(deps: ProbeDeps, ep: CreatorEndpointDef): Probe
   try { version = (deps.exec(v.argv).split("\n")[0] ?? "").trim().slice(0, 80); }
   catch { return result("hyperframes", "not-installed", `${exe} is present but did not answer --version.`, startedAt, deps.now()); }
   return result("hyperframes", "ready", `hyperframes ${version || "(no version line)"} responded on this machine.`, startedAt, deps.now(), ["video-compose", "render-animation", "runtime-feedback"], version);
+}
+
+/** CREATOR-OPENFILM (ADR-0457): `<exe> [prefix] --version`, which the CLI answers before any network work. A
+ *  shell shim, a package runner (npx and friends), or declared args naming a refused subcommand are refused here
+ *  exactly as look and render refuse them, so the probe never runs what a job would not. */
+export function probeOpenfilm(deps: ProbeDeps, ep: CreatorEndpointDef): ProbeResult {
+  const startedAt = deps.now();
+  const v = openfilmVersionArgv({ exe: ep.command ?? "", prefixArgs: ep.args });
+  if (!v.ok) return result("openfilm", "not-installed", v.error, startedAt, deps.now());
+  const exe = v.argv[0]!;
+  if (!deps.exists(exe)) return result("openfilm", "not-installed", `${exe} is not on disk.`, startedAt, deps.now());
+  let version = "";
+  try { version = (deps.exec(v.argv).split("\n")[0] ?? "").trim().slice(0, 80); }
+  catch { return result("openfilm", "not-installed", `${exe} is present but did not answer --version.`, startedAt, deps.now()); }
+  return result("openfilm", "ready", `openfilm ${version || "(no version line)"} responded on this machine.`, startedAt, deps.now(), ["video-compose", "render-animation", "runtime-feedback"], version);
 }
 
 const DRIFT_ENABLE_HINT = "In Drift: Settings -> Agent access -> On, then probe again.";
@@ -375,7 +393,7 @@ export async function probeDrift(deps: ProbeDeps, ep: CreatorEndpointDef | undef
   return result("drift", "ready", `Drift ${version} answered at ${baseUrl}${fromSession ? " (Agent access session)" : " (declared endpoint)"}; proven: ${attested.join(", ")}.`, startedAt, deps.now(), attested, init.version);
 }
 
-/** The DGX Loader services: `/health` both proves reachability AND reports what the box can do. */
+/** The Private AI Platform services: `/health` both proves reachability AND reports what the box can do. */
 export async function probeDgxHealth(deps: ProbeDeps, providerId: "dgx-avatar" | "dgx-cad" | "dgx-vision", ep: CreatorEndpointDef): Promise<ProbeResult> {
   const startedAt = deps.now();
   const base = (ep.baseUrl ?? "").replace(/\/+$/, "");
@@ -383,7 +401,7 @@ export async function probeDgxHealth(deps: ProbeDeps, providerId: "dgx-avatar" |
   const r = await readJson(deps, `${base}/health`, {});
   const now = deps.now();
   if (r.status === 401 || r.status === 403) return result(providerId, "unauthorized", `${base} refused the request.`, startedAt, now);
-  if (!r.status) return result(providerId, "unreachable", `${base} did not answer. Is the SSH forward from the DGX Loader running?`, startedAt, now);
+  if (!r.status) return result(providerId, "unreachable", `${base} did not answer. Is the SSH forward from the Private AI Platform running?`, startedAt, now);
   if (r.status >= 400) return result(providerId, "unreachable", `${base} answered ${r.status}.`, startedAt, now);
   if (providerId === "dgx-avatar") {
     const h = parseAvatarHealth(r.body);
