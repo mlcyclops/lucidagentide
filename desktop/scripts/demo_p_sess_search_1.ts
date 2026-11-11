@@ -46,20 +46,20 @@ try {
   }
   __resetSessionIndex();
 
-  const all = listSessions(cwd, root);
+  const all = await listSessions(cwd, root);
   if (all.sessions.some((s) => s.title.startsWith("[LUCID OPERATOR NOTE"))) fail("a carried note still names a session");
   if (all.sessions[0]!.title !== "task number 1499") fail(`newest title should be what was typed, got ${all.sessions[0]!.title}`);
   ok("no session is titled by a carried operator note; titles are what the user typed");
 
   const filter: SpokeFilter = { spokes, show: false };
-  const list = listSessions(cwd, root, filter);
+  const list = await listSessions(cwd, root, filter);
   if (list.hiddenSpokes !== N / 5) fail(`expected ${N / 5} hidden spokes, got ${list.hiddenSpokes}`);
   if (list.sessions.length !== 40 || list.sessions.some((s) => spokes.has(s.id))) fail("the 40 slots must all be chats");
   ok(`${list.hiddenSpokes} spoke sessions held back and counted; all 40 sidebar rows are chats`);
 
   const parsed = __sessionIndexStats().parses;
   const t0 = performance.now();
-  const r = searchSessions("stripe webhook", { cwd, root, filter });
+  const r = await searchSessions("stripe webhook", { cwd, root, filter });
   const ms = performance.now() - t0;
   if (r.hits.map((h) => h.id).join() !== "s3") fail(`expected only s3, got ${r.hits.map((h) => h.id).join()}`);
   if (!r.hits[0]!.snippet?.includes("Stripe webhook secret")) fail(`snippet should quote the reply, got ${r.hits[0]!.snippet}`);

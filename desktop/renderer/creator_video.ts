@@ -114,7 +114,7 @@ export interface CreatorVideoView {
 /** Why the avatar Render button is disabled, or "" when it may be pressed. */
 export function videoRenderBlock(v: CreatorVideoView): string {
   if (v.busy) return v.busy;
-  if (!v.endpoints.length) return "No dgx-avatar endpoint is declared. Import one from the DGX Loader or connect one under Integrations.";
+  if (!v.endpoints.length) return "No dgx-avatar endpoint is declared. Import one from the Private AI Platform or connect one under Integrations.";
   const ep = v.endpoints.find((e) => e.id === v.endpointId);
   if (!ep) return "Pick a dgx-avatar endpoint.";
   if (ep.cui && !ep.cui.allowed) return `Refused under CUI lockdown: ${ep.cui.reason}`;
@@ -217,9 +217,9 @@ export function creatorVideoHtml(v: CreatorVideoView | null): string {
   const refused = !!ep?.cui && !ep.cui.allowed;
   const endpointRow = v.endpoints.length
     ? `<div class="cim-row"><span class="cim-lbl">Endpoint</span><select class="prov-key cvd-grow" id="cvdEndpoint">${v.endpoints.map((e) => option(e.id, `${e.label} (${e.id})`, v.endpointId)).join("")}</select>
-        <button type="button" class="btn-mini" data-cvd-import data-tip="Import from the DGX Loader|Rescans ~/.omp/creator_endpoints for lucid-creator-endpoint files the Loader exported.">Import</button></div>`
-    : `<p class="cpl-gate">${icon("shield", 13)}No dgx-avatar endpoint is declared. Export one from the DGX Loader and import it here, or connect one under Integrations.</p>
-       <div class="cim-row"><button type="button" class="btn-mini ok" data-cvd-import>Import from the DGX Loader</button></div>`;
+        <button type="button" class="btn-mini" data-cvd-import data-tip="Import from the Private AI Platform|Rescans ~/.omp/creator_endpoints for lucid-creator-endpoint files the platform exported.">Import</button></div>`
+    : `<p class="cpl-gate">${icon("shield", 13)}No dgx-avatar endpoint is declared. Export one from the Private AI Platform and import it here, or connect one under Integrations.</p>
+       <div class="cim-row"><button type="button" class="btn-mini ok" data-cvd-import>Import from the Private AI Platform</button></div>`;
   const engines = (Object.keys(ENGINE_LABEL) as AvatarEngine[]).map((e) =>
     `<button type="button" class="cpl-kind-chip${v.engine === e ? " on" : ""}" data-cvd-engine="${e}">${esc(ENGINE_LABEL[e])}</button>`).join("");
   const templates = v.templates.length

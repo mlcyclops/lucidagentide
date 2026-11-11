@@ -1,7 +1,7 @@
 {
   "name": "lucidagentide-desktop",
   "private": true,
-  "version": "2.5.1-beta.1",
+  "version": "2.5.3",
   "trustedDependencies": [
     "electron",
     "@resvg/resvg-js"
@@ -117,9 +117,6 @@
           "!**/.git/**",
           "!node_modules/**/*.map",
           "!node_modules/**/*.d.ts",
-          "node_modules/@oh-my-pi/pi-coding-agent/src/tools/browser/declarations.d.ts",
-          "node_modules/@oh-my-pi/pi-coding-agent/src/tools/computer/declarations.d.ts",
-          "node_modules/@oh-my-pi/pi-coding-agent/src/archive/declarations.d.ts",
           "!node_modules/.bin/**",
           "node_modules/.bin/omp*",
           "!node_modules/onnxruntime-node/**",

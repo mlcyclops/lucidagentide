@@ -139,17 +139,28 @@ async function runAction(act: CtxAction, field: Field, deps: CtxMenuDeps): Promi
 /** Copy plain text to the clipboard, degrading to a toast when a browser refuses (Electron always grants). */
 async function copyText(text: string, deps: CtxMenuDeps): Promise<void> {
   if (!text) return;
-  try { await navigator.clipboard.writeText(text); }
-  catch { deps.toast?.({ title: "Clipboard blocked", desc: "The browser refused clipboard access. Use Ctrl+C here.", tone: "warn" }); }
+  if (!(await copyToClipboard(text))) deps.toast?.({ title: "Clipboard blocked", desc: "The browser refused clipboard access. Use Ctrl+C here.", tone: "warn" });
+}
+
+/** P-PUSH.PAR1 (ADR-pending): the one plain-text clipboard write menus share. False when refused (a
+ *  browser without permission; Electron always grants), so the caller can say so instead of claiming
+ *  "Copied". */
+export async function copyToClipboard(text: string): Promise<boolean> {
+  try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
 }
 
 interface MenuEntry { label: string; kbd: string; enabled: boolean; run: () => void }
+/** `focus`: move focus into the menu (first enabled item) so arrows/Enter work at once; Escape then returns
+ *  it to `returnFocus`. The field menus leave focus in the field, so the text selection survives. */
+interface MenuOpts { focus?: boolean; returnFocus?: HTMLElement | null; className?: string }
 
-/** Build + place the styled in-DOM menu at (x,y), clamped to the viewport, with the shared dismiss wiring. */
-function spawnMenu(clientX: number, clientY: number, entries: MenuEntry[]): void {
+/** Build + place the styled in-DOM menu at (x,y), clamped to the viewport, with the shared dismiss wiring:
+ *  Escape, a press or wheel outside it, any scroll, and window blur close it; arrow keys, Home and End
+ *  move between enabled items (Enter or Space activates the focused one, as on any button). */
+function spawnMenu(clientX: number, clientY: number, entries: MenuEntry[], opts: MenuOpts = {}): void {
   closeCtxMenu();
   const menu = document.createElement("div");
-  menu.className = "ctx-menu";
+  menu.className = opts.className ? `ctx-menu ${opts.className}` : "ctx-menu";
   menu.setAttribute("role", "menu");
   for (const it of entries) {
     const btn = document.createElement("button");
@@ -169,19 +180,118 @@ function spawnMenu(clientX: number, clientY: number, entries: MenuEntry[]): void
   menu.style.left = `${Math.max(8, Math.min(clientX, window.innerWidth - r.width - 8))}px`;
   menu.style.top = `${Math.max(8, Math.min(clientY, window.innerHeight - r.height - 8))}px`;
   openMenu = menu;
+  const items = [...menu.querySelectorAll<HTMLButtonElement>(".ctx-it:not(:disabled)")];
+  if (opts.focus) items[0]?.focus();
 
+  // P-PUSH.PAR1 (ADR-pending): pointerdown (not mousedown) so a TAP outside closes it too, which also covers
+  // a touch scroll (every swipe starts with one). Not touchmove: the finger that long-pressed the menu open
+  // is still down, and its moves target the row it started on. A programmatic scroll (a streaming reply
+  // following its tail) must not close it, so there is deliberately no `scroll` listener.
   const away = (ev: Event) => { if (!menu.contains(ev.target as Node)) closeCtxMenu(); };
-  const key = (ev: KeyboardEvent) => { if (ev.key === "Escape") closeCtxMenu(); };
-  document.addEventListener("mousedown", away, true);
+  const key = (ev: KeyboardEvent) => {
+    if (ev.key === "Escape") {
+      ev.preventDefault(); ev.stopPropagation();
+      closeCtxMenu();
+      if (opts.returnFocus?.isConnected) opts.returnFocus.focus();
+      return;
+    }
+    if (ev.key === "Tab") { closeCtxMenu(); return; }
+    const at = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (!items.length || (at < 0 && !opts.focus)) return; // a field menu: arrows still move the caret
+    const to = ev.key === "ArrowDown" ? (at + 1) % items.length
+      : ev.key === "ArrowUp" ? (at <= 0 ? items.length - 1 : at - 1)
+      : ev.key === "Home" ? 0
+      : ev.key === "End" ? items.length - 1
+      : -1;
+    if (to < 0) return;
+    ev.preventDefault(); ev.stopPropagation();
+    items[to]!.focus();
+  };
+  document.addEventListener("pointerdown", away, true);
   document.addEventListener("wheel", away, { capture: true, passive: true });
   document.addEventListener("keydown", key, true);
   window.addEventListener("blur", closeCtxMenu);
   closeListeners = () => {
-    document.removeEventListener("mousedown", away, true);
+    document.removeEventListener("pointerdown", away, true);
     document.removeEventListener("wheel", away, { capture: true } as EventListenerOptions);
     document.removeEventListener("keydown", key, true);
     window.removeEventListener("blur", closeCtxMenu);
   };
+}
+
+// ── P-PUSH.PAR1 (ADR-pending): an item menu on any list row, by right-click OR long-press ──────────────
+
+export interface CtxMenuEntry { label: string; kbd?: string; enabled?: boolean; run: () => void }
+
+/** Open the shared styled menu at (x,y) with focus inside it (keyboard-ready); Escape hands focus back to
+ *  `returnFocus`. Same look, dismiss rules and single-instance rule as the field menu above. */
+export function openCtxMenu(clientX: number, clientY: number, entries: CtxMenuEntry[], opts: { returnFocus?: HTMLElement | null; className?: string } = {}): void {
+  spawnMenu(clientX, clientY, entries.map((e) => ({ label: e.label, kbd: e.kbd ?? "", enabled: e.enabled !== false, run: e.run })), { ...opts, focus: true });
+}
+
+/** A press shorter than this is a tap; holding it this long on touch or pen opens the item menu. */
+export const LONG_PRESS_MS = 500;
+/** A finger that drifts further than this (px) is scrolling, not holding: the long-press is cancelled. */
+export const LONG_PRESS_SLOP_PX = 10;
+/** Did the pointer travel far enough from where it went down to count as a drag/scroll? */
+export function longPressMoved(dx: number, dy: number): boolean {
+  return Math.hypot(dx, dy) > LONG_PRESS_SLOP_PX;
+}
+
+/** Wire an item menu on every `selector` row inside `root` (delegated, so rows rebuilt by innerHTML keep
+ *  working; bind once per root). A mouse right-click opens it at the pointer; on touch or pen, holding a
+ *  row for LONG_PRESS_MS opens it (cancelled by lifting, or by moving past LONG_PRESS_SLOP_PX). The
+ *  browser's own long-press contextmenu right after ours is swallowed, as is the release's click, so the
+ *  hold can never also press the button under the finger. */
+export function bindItemMenu(root: HTMLElement, selector: string, open: (row: HTMLElement, clientX: number, clientY: number) => void): void {
+  let timer = 0;
+  let start: { x: number; y: number; id: number } | null = null;
+  let firedAt = 0;
+  const cancel = (): void => { if (timer) window.clearTimeout(timer); timer = 0; start = null; };
+  const rowOf = (t: EventTarget | null): HTMLElement | null => {
+    const row = (t as HTMLElement | null)?.closest?.(selector) as HTMLElement | null;
+    return row && root.contains(row) ? row : null;
+  };
+  root.addEventListener("contextmenu", (e) => {
+    const row = rowOf(e.target); if (!row) return;
+    e.preventDefault(); e.stopPropagation(); // the document-level copy menu must not replace this one
+    cancel();
+    if (Date.now() - firedAt < 1000) return; // the browser's echo of a long-press that already opened it
+    open(row, e.clientX, e.clientY);
+  });
+  root.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "touch" && e.pointerType !== "pen") return;
+    const row = rowOf(e.target); if (!row) return;
+    cancel();
+    start = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    timer = window.setTimeout(() => {
+      timer = 0;
+      const at = start; start = null;
+      if (!at) return;
+      // A repaint during the hold may have rebuilt the rows (innerHTML); the row under the finger is the
+      // same logical item, so resolve it again instead of dropping the long-press.
+      const live = row.isConnected ? row : rowOf(document.elementFromPoint(at.x, at.y));
+      if (!live) return;
+      firedAt = Date.now();
+      window.getSelection?.()?.removeAllRanges(); // a hold also selects a word; the menu is the copy path
+      const swallow = (ev: Event): void => { ev.preventDefault(); ev.stopPropagation(); };
+      const release = (): void => {
+        window.removeEventListener("pointerup", release, true);
+        window.removeEventListener("pointercancel", release, true);
+        window.setTimeout(() => window.removeEventListener("click", swallow, true), 350);
+      };
+      window.addEventListener("click", swallow, true);
+      window.addEventListener("pointerup", release, true);
+      window.addEventListener("pointercancel", release, true);
+      open(live, at.x, at.y);
+    }, LONG_PRESS_MS);
+  });
+  root.addEventListener("pointermove", (e) => {
+    if (start && e.pointerId === start.id && longPressMoved(e.clientX - start.x, e.clientY - start.y)) cancel();
+  });
+  const end = (e: PointerEvent): void => { if (start && e.pointerId === start.id) cancel(); };
+  root.addEventListener("pointerup", end);
+  root.addEventListener("pointercancel", end);
 }
 
 /** One document-level contextmenu hook. A textual FIELD gets the full clipboard menu; otherwise a right-click

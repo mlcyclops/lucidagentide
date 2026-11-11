@@ -44,6 +44,16 @@ describe("orbitSlots", () => {
     }
   });
 
+  test("every slot lies on its ring's ellipse, and a ring at 12 o'clock is never a zero-width line (#575)", () => {
+    for (const n of [1, 2, 5, 8, 14, 30]) {
+      for (const s of orbitSlots(n, W, H)) {
+        expect(s.ringRx).toBeGreaterThan(100);
+        expect(s.ringRy).toBeGreaterThan(100);
+        expect((s.x / s.ringRx) ** 2 + (s.y / s.ringRy) ** 2).toBeCloseTo(1, 9);
+      }
+    }
+  });
+
   test("a tiny stage floors the radii instead of folding spokes onto the hub", () => {
     for (const s of orbitSlots(4, 240, 200)) {
       expect(Number.isFinite(s.x) && Number.isFinite(s.y)).toBe(true);

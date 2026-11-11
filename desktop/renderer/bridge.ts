@@ -1105,12 +1105,20 @@ export interface LucidBridge {
   /** P-FLEET.WT1: `worktree` runs the lane in its own git worktree on a new branch (the user accepted the merge risk). */
   /** P-TUI.2: open `lucid hub` in a new terminal window attached to this engine. */
   hubOpen(): Promise<{ ok: boolean; reason?: string } | null>;
-  fleetSpawn(opts: { cwd: string; model?: string; name?: string; repoUrl?: string; pat?: string; sessionId?: string; worktree?: boolean }): Promise<{ ok: boolean; lane?: LaneView; reason?: string; worktree?: { path: string; branch: string } } | null>;
+  /** P-PUSH.PAR1 (ADR-pending): `code: "no-repo"` marks a worktree refusal because the folder is not a git
+   *  repo with a commit, so the composer's Push now can fall back to steering the running turn. */
+  fleetSpawn(opts: { cwd: string; model?: string; name?: string; repoUrl?: string; pat?: string; sessionId?: string; worktree?: boolean }): Promise<{ ok: boolean; lane?: LaneView; reason?: string; code?: "no-repo"; worktree?: { path: string; branch: string } } | null>;
   /** P-FLEET.L3: `images` ride as ACP image blocks after the text, exactly like the master chat. */
   fleetPrompt(laneId: string, text: string, onEvent: (e: LaneEvent) => void, images?: LaneImage[]): Promise<void>;
   /** P-FLEET.L3: the staged-prompt queue - manager-owned; drain streams the next item like a prompt. */
   fleetQueueAdd(laneId: string, text: string, images?: LaneImage[]): Promise<{ ok: boolean; queued?: number; reason?: string } | null>;
-  fleetQueueRemove(laneId: string, index: number): Promise<{ ok: boolean } | null>;
+  /** P-PUSH.PAR1 (ADR-pending): `expect` (the item's full text) makes a late remove fail closed instead of
+   *  deleting whichever prompt slid into `index` meanwhile. */
+  fleetQueueRemove(laneId: string, index: number, expect?: string): Promise<{ ok: boolean } | null>;
+  /** P-PUSH.PAR1 (ADR-pending): a staged item's full text + its own images, left in the queue. */
+  fleetQueuePeek(laneId: string, index: number): Promise<{ ok: boolean; item?: { text: string; images: LaneImage[] }; reason?: string } | null>;
+  /** P-QUEUE-IMG.1 (ADR-0469): remove a staged item and return its full text + its own images (Update). */
+  fleetQueueTake(laneId: string, index: number): Promise<{ ok: boolean; item?: { text: string; images: LaneImage[] }; reason?: string } | null>;
   fleetQueueMove(laneId: string, index: number, dir: -1 | 1): Promise<{ ok: boolean } | null>;
   fleetDrain(laneId: string, onEvent: (e: LaneEvent) => void): Promise<void>;
   // P-FLEET.L5: the reviewable timeline (list + open-a-point). Transcript reads are tail-limited.
@@ -1835,7 +1843,13 @@ export const bridge: LucidBridge = {
   agentHistoryRestore: (id, ts) => post("/api/agent/history/restore", { id, ts }), // P-AGENT.17
   agentTemplates: async () => (await getData("/api/agent/templates"))?.templates ?? [], // P-AGENT.17
   agentTemplateUse: (file) => post("/api/agent/template-use", { file }), // P-AGENT.17 (standard gated import path)
-  localProvidersList: async () => (await getData("/api/local-providers"))?.providers ?? [], // P-LOCAL.3
+  // P-LOCAL.3. Rejects when the engine cannot be read, so callers never mistake "unknown" for "no local
+  // providers" (ADR-0498: that would misread a custom local model as cloud and auto-select it).
+  localProvidersList: async () => {
+    const d = await getData("/api/local-providers");
+    if (!d) throw new Error("local providers unavailable");
+    return d.providers ?? [];
+  },
   localProviderUpsert: (provider) => post("/api/local-providers", { provider }), // P-LOCAL.3 (server validates fail-closed)
   localProviderDelete: (id) => post("/api/local-providers/delete", { id }), // P-LOCAL.3
   localProviderEnable: (id, enabled) => post("/api/local-providers/enable", { id, enabled }), // P-LOCAL.3
@@ -1862,7 +1876,7 @@ export const bridge: LucidBridge = {
   voices: (provider) => getData(provider ? `/api/voices?provider=${encodeURIComponent(provider)}` : "/api/voices"),
   transcribe: (audioB64, mime, language) => post("/api/transcribe", { audioB64, mime, language }),
   voiceDigest: (text) => post("/api/voice/digest", { text }), // P-VOICE.6: slow-engine spoken digest
-  // P-VOICE.7: portable voice endpoints (DGX Loader handoff + manual upload fallback)
+  // P-VOICE.7: portable voice endpoints (Private AI Platform handoff + manual upload fallback)
   voiceEndpoints: () => getData("/api/voice/endpoints"),
   voiceEndpointImport: (json) => post("/api/voice/endpoints/import", { json }),
   voiceEndpointActivate: (id) => post("/api/voice/endpoints/activate", { id }),
@@ -1959,7 +1973,9 @@ export const bridge: LucidBridge = {
     return streamNdjson("/api/fleet/prompt", { laneId, text, ...(images?.length ? { images } : {}) }, sink);
   },
   fleetQueueAdd: (laneId, text, images) => post("/api/fleet/queue", { laneId, text, ...(images?.length ? { images } : {}) }),
-  fleetQueueRemove: (laneId, index) => post("/api/fleet/queue/remove", { laneId, index }),
+  fleetQueueRemove: (laneId, index, expect) => post("/api/fleet/queue/remove", { laneId, index, ...(expect !== undefined ? { expect } : {}) }),
+  fleetQueuePeek: (laneId, index) => post("/api/fleet/queue/peek", { laneId, index }), // P-PUSH.PAR1
+  fleetQueueTake: (laneId, index) => post("/api/fleet/queue/take", { laneId, index }),
   fleetQueueMove: (laneId, index, dir) => post("/api/fleet/queue/move", { laneId, index, dir }),
   fleetDrain: (laneId, onEvent) => {
     const sink = onEvent as (e: ChatEvent) => void; // same tagged-union unification as fleetPrompt
@@ -2460,7 +2476,7 @@ export const bridge: LucidBridge = {
       return { ok: !!body.ok, error: body.error, run: body.data.run };
     } catch { return { ok: false, error: "The render service did not answer." }; }
   },
-  // Creator free stack: dgx-avatar, HyperFrames, dgx-cad, and the Loader endpoint mailbox.
+  // Creator free stack: dgx-avatar, HyperFrames, dgx-cad, and the Private AI Platform endpoint mailbox.
   creatorAvatarTemplates: (endpointId, engine) =>
     creatorCall(`/api/creator/avatar/templates?endpointId=${encodeURIComponent(endpointId)}&engine=${encodeURIComponent(engine)}`, {},
       (d): d is AvatarTemplatesView => !!d && typeof d === "object" && "templates" in d && Array.isArray(d.templates) && "folders" in d && Array.isArray(d.folders),
