@@ -42,7 +42,7 @@ beforeEach(() => {
   roots = [];
 });
 
-test("a carried operator note never names the session, but stays in the transcript", () => {
+test("a carried operator note never names the session, but stays in the transcript", async () => {
   const note = `${CARRIED_MARKER}\nOPERATOR NOTE (not from the user, no reply needed): your session is now being driven from the MAIN COMPOSER.`;
   const root = freshRoot({
     "one.jsonl": session("one", user(`${note}\n\nAdd a search box to the sessions menu`), reply("ok")),
@@ -51,12 +51,12 @@ test("a carried operator note never names the session, but stays in the transcri
     // A prompt that is ONLY a note: the title comes from the next thing the user typed.
     "three.jsonl": session("three", user(note), reply("noted"), user("Real question here"), reply("answer")),
   });
-  const titles = Object.fromEntries(listSessions(CWD, root).sessions.map((s) => [s.id, s.title]));
+  const titles = Object.fromEntries((await listSessions(CWD, root)).sessions.map((s) => [s.id, s.title]));
   expect(titles).toEqual({ one: "Add a search box to the sessions menu", two: "Fix the deploy script", three: "Real question here" });
   expect(sessionMessages("one", 0, root).messages[0]!.text).toContain(CARRIED_MARKER);
 });
 
-test("search matches what the user and the agent said, never tool output, thinking, injected blocks, or notes", () => {
+test("search matches what the user and the agent said, never tool output, thinking, injected blocks, or notes", async () => {
   const root = freshRoot({
     "said.jsonl": session("said", user("deploy the site"), reply("I pushed the Janelle landing page to staging.")),
     "tool.jsonl": session("tool", user("list files"), ln({ type: "message", message: { role: "toolResult", content: [{ type: "text", text: "janelle.html" }] } }), reply("done")),
@@ -64,39 +64,39 @@ test("search matches what the user and the agent said, never tool output, thinki
     "recall.jsonl": session("recall", user("<recalled-memory>\nJanelle prefers blue\n</recalled-memory>\n\nhello there"), reply("hi")),
     "note.jsonl": session("note", user(`${CARRIED_MARKER}\nlook at janelle later\n\nunrelated ask`), reply("sure")),
   });
-  const r = searchSessions("JANELLE", { cwd: CWD, root });
+  const r = await searchSessions("JANELLE", { cwd: CWD, root });
   expect(r.hits.map((h) => h.id)).toEqual(["said"]);
   expect(r.hits[0]!.snippet).toContain("Janelle landing page");
 });
 
-test("every term must match, across title and conversation, case-insensitive", () => {
+test("every term must match, across title and conversation, case-insensitive", async () => {
   const root = freshRoot({
     "both.jsonl": session("both", user("Fix the sidebar"), reply("The SEARCH box now filters.")),
     "one.jsonl": session("one", user("Fix the sidebar"), reply("Nothing else changed.")),
   });
-  expect(searchSessions("sidebar search", { cwd: CWD, root }).hits.map((h) => h.id)).toEqual(["both"]);
-  expect(searchSessions("  ", { cwd: CWD, root })).toEqual({ hits: [], total: 0, hiddenSpokes: 0 });
+  expect((await searchSessions("sidebar search", { cwd: CWD, root })).hits.map((h) => h.id)).toEqual(["both"]);
+  expect(await searchSessions("  ", { cwd: CWD, root })).toEqual({ hits: [], total: 0, hiddenSpokes: 0 });
 });
 
-test("sessions matched by name come before newer ones matched only by what was said", () => {
+test("sessions matched by name come before newer ones matched only by what was said", async () => {
   const root = freshRoot({
     "named.jsonl": session("named", user("Janelle SEO audit"), reply("ok")),
     "newer.jsonl": session("newer", user("other work"), reply("also touched janelle pages")),
   });
-  const r = searchSessions("janelle", { cwd: CWD, root });
+  const r = await searchSessions("janelle", { cwd: CWD, root });
   expect(r.hits.map((h) => h.id)).toEqual(["named", "newer"]);
   expect(r.hits[0]!.snippet).toBeUndefined();
 });
 
-test("search reaches sessions older than the 40 the sidebar lists", () => {
+test("search reaches sessions older than the 40 the sidebar lists", async () => {
   const files: Record<string, string> = { "old.jsonl": session("old", user("the forgotten migration"), reply("ok")) };
   for (let i = 0; i < 45; i++) files[`s${i}.jsonl`] = session(`s${i}`, user(`chat ${i}`), reply("ok"));
   const root = freshRoot(files);
-  expect(listSessions(CWD, root).sessions.some((s) => s.id === "old")).toBe(false);
-  expect(searchSessions("forgotten", { cwd: CWD, root }).hits.map((h) => h.id)).toEqual(["old"]);
+  expect((await listSessions(CWD, root)).sessions.some((s) => s.id === "old")).toBe(false);
+  expect((await searchSessions("forgotten", { cwd: CWD, root })).hits.map((h) => h.id)).toEqual(["old"]);
 });
 
-test("spoke sessions are hidden and counted unless shown; kept ids stay; hidden ones free their list slots", () => {
+test("spoke sessions are hidden and counted unless shown; kept ids stay; hidden ones free their list slots", async () => {
   const files: Record<string, string> = {};
   // 38 chats + 2 spokes + 1 newest chat = 41 sessions: unfiltered, the oldest chat (c0) falls off the 40.
   for (let i = 0; i < 38; i++) files[`c${i}.jsonl`] = session(`c${i}`, user(`chat ${i} about billing`), reply("ok"));
@@ -106,20 +106,20 @@ test("spoke sessions are hidden and counted unless shown; kept ids stay; hidden 
   const root = freshRoot(files);
   const spokes = new Map([["lane-a", "Tom"], ["lane-b", "Jerry"]]);
   const hide: SpokeFilter = { spokes, show: false, keep: new Set(["lane-b"]) };
-  expect(listSessions(CWD, root).sessions.some((s) => s.id === "c0")).toBe(false);
+  expect((await listSessions(CWD, root)).sessions.some((s) => s.id === "c0")).toBe(false);
 
-  const hidden = listSessions(CWD, root, hide);
+  const hidden = await listSessions(CWD, root, hide);
   expect(hidden.hiddenSpokes).toBe(1);
   expect(hidden.sessions.some((s) => s.id === "lane-a")).toBe(false);
   expect(hidden.sessions.find((s) => s.id === "lane-b")?.spoke).toBe("Jerry");
   expect(hidden.sessions).toHaveLength(40); // lane-a's slot went to the oldest chat
   expect(hidden.sessions.some((s) => s.id === "c0")).toBe(true);
 
-  const found = searchSessions("billing", { cwd: CWD, root, filter: hide, limit: 100 });
+  const found = await searchSessions("billing", { cwd: CWD, root, filter: hide, limit: 100 });
   expect(found.hiddenSpokes).toBe(1);
   expect(found.hits.some((h) => h.id === "lane-a")).toBe(false);
 
-  expect(searchSessions("tom", { cwd: CWD, root, filter: { spokes, show: true } }).hits.map((h) => [h.id, h.spoke])).toEqual([["lane-a", "Tom"]]);
+  expect((await searchSessions("tom", { cwd: CWD, root, filter: { spokes, show: true } })).hits.map((h) => [h.id, h.spoke])).toEqual([["lane-a", "Tom"]]);
 });
 
 test("the ledger names a session by its latest lane record; no ledger means no known spokes", () => {

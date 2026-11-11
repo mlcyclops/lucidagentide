@@ -250,7 +250,7 @@ describe("provider routing + the cache", () => {
   });
 });
 
-describe("the DGX Loader services and HyperFrames", () => {
+describe("the Private AI Platform services and HyperFrames", () => {
   const avatarEp = ep({ id: "nick-dgx-avatar", providerId: "dgx-avatar", baseUrl: "http://127.0.0.1:8088", zone: "internal", enclave: true });
   const cadEp = ep({ id: "nick-dgx-cad", providerId: "dgx-cad", baseUrl: "http://127.0.0.1:8089", zone: "internal", enclave: true });
 

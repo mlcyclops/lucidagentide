@@ -365,6 +365,39 @@ demo-P-MASCOT.5: demo-P-MASCOT.4 ## Arcade-parity prompt-bar runner (2x sprite, 
 	$(BUN) test ./desktop/renderer/mascot_runner.test.ts ./desktop/renderer/mascot_minigames.test.ts
 	$(BUN) run desktop/scripts/demo_p_mascot_5.ts
 
+.PHONY: demo-P-SEASON.1
+demo-P-SEASON.1: ## P-SEASON.1 (ADR-0525): U.S. holiday + event-month special themes - the calendar (nth weekdays, Easter, year-spanning windows, peak-day precedence), 16 special palettes held to the token contract, 16 animated backdrops valid at any t/size/season, 21 mascot acts + costumes, flush eye band, 16-beat no-slip gait, hover hop + click leap
+	$(BUN) test ./desktop/renderer/seasons.test.ts ./desktop/renderer/theme.test.ts ./desktop/renderer/scenes/scenes_paint.test.ts ./desktop/renderer/mascot_season.test.ts ./desktop/renderer/mascot.test.ts ./desktop/renderer/mascot_runner.test.ts ./desktop/renderer/boot_cinematic.test.ts
+
+.PHONY: demo-P-MODEL.10
+demo-P-MODEL.10: ## P-MODEL.10 (ADR-0526): omp 18.18.6 with Claude Fable 5.2 / Mythos 5.2 - six packages pinned together, NativeJudge migration, R-07 at 92 ids, 8/40 USD per Mtok version-anchored price row, 1M windows, picker cards, frozen prefix still byte-stable
+	$(BUN) test $(TEST_IGNORES) harness/prompt/prefix_compaction.test.ts harness/omp/provider_catalog.test.ts harness/omp/judgment_extension.test.ts desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/packaged_boot.test.ts
+	$(BUN) run harness/scripts/demo02_prefix_hash.ts
+
+.PHONY: demo-P-BOOTPERF.1
+demo-P-BOOTPERF.1: ## P-BOOTPERF.1 (ADR-0527): the renderer's boot burst never blocks the engine's event loop - async sessions/usage/code-activity/compaction-policy/omp probe, cached workspace bar, self-healing Reconnect button (a dead engine keeps it)
+	$(BUN) test $(TEST_IGNORES) desktop/omp_bin.test.ts desktop/renderer/turn_restore.test.ts desktop/sessions_index.test.ts desktop/sessions_ingest.test.ts harness/usage_ledger.test.ts harness/code_activity.test.ts
+	$(BUN) run desktop/scripts/demo_p_perf_4.ts
+	$(BUN) run harness/scripts/demo_pcode1.ts
+
+.PHONY: demo-P-FLEET.FIT1
+demo-P-FLEET.FIT1: ## P-FLEET.FIT1 (ADR-0528): fleet lanes autofit the dock in both directions at equal sizes (on by default, header toggle), refit on resize/spawn/close, a card-edge drag shares the rest equally, double-click resets
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/lane_layout.test.ts
+
+.PHONY: demo-P-PUSH.PAR1
+demo-P-PUSH.PAR1: ## P-PUSH.PAR1 (ADR-0529): staged-chip copy menu (right-click / long-press) + Push now runs the prompt in a parallel lane on its own git worktree (main-checkout mapping, unique <source>-push-<n> names, preamble, dequeue only on acceptance, text-guarded remove, no-repo steer fallback)
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/queue_model.test.ts desktop/renderer/ctxmenu.test.ts desktop/lane_worktree.test.ts desktop/fleet_lanes.test.ts
+
+.PHONY: demo-P-PRIVAI.1
+demo-P-PRIVAI.1: ## P-PRIVAI.1 (ADR-0530): the DGX Loader is now the Private AI Platform - the renderer bundle carries "Import from the Private AI Platform" and no "DGX Loader", while the /^dgx-loader\b/i enclave attestation regex and the dgx-avatar/dgx-cad/dgx-vision provider ids stay
+	$(BUN) run desktop/scripts/demo_p_privai_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/creator_probe.test.ts desktop/creator_mailbox.test.ts desktop/creator_registry.test.ts desktop/cui_policy.test.ts
+
+.PHONY: demo-P-RUNTIME-PY.1
+demo-P-RUNTIME-PY.1: ## P-RUNTIME-PY.1 (ADR-0548): the bundled CPython moves to python-build-standalone 20261026 (3.12.16, OpenSSL 3.5.9); fetch-runtimes runs it and refuses a tree that is not PY_VERSION or whose OpenSSL is below PY_OPENSSL_MIN
+	$(BUN) test $(TEST_IGNORES) desktop/build/python_floor.test.ts
+	cd desktop && $(BUN) run build/fetch-runtimes.ts
+
 .PHONY: demo-P-AVATAR.4
 demo-P-AVATAR.4: ## P-AVATAR.4 (ADR-0251): the LUCID Agent enter flow - fast-model preference order (Terra > Sonnet 5 > Flash, no pointless switch), one-gap-at-a-time readiness (provider > tts > stt), the one-time KG offer, exit model restoration
 	$(BUN) run desktop/scripts/demo_p_avatar_4.ts
@@ -969,6 +1002,16 @@ demo-P-GAME.10: ## P-GAME.10: Skyhook joins the arcade. Proves the Preview gate,
 	$(BUN) test desktop/arcade_games.test.ts
 	$(BUN) run desktop/scripts/demo_p_game_1.mjs
 
+.PHONY: demo-P-GAME.11
+demo-P-GAME.11: ## P-GAME.11: Deck Guard: Deck the Halls joins the arcade next to Deck Guard. Proves the Preview gate, then drives it headless at 400x720: the attract demo flies behind the title, the autoplay bot pops swarms, unwraps presents and takes workshop gifts between waves, pause, restart resets the ladder; an idle player (any cleared wave's workshop gift taken by key) lets the undefended workshop fall (WORKSHOP CRIPPLED or OUT OF JETS); scramble again starts a fresh run
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.12
+demo-P-GAME.12: ## P-GAME.12: Chimney Rush and Gobble Getaway join the arcade. Proves the Preview gate, then drives both headless at 400x720: Chimney Rush autoplay reaches town 3+ with perfect chimneys, pause/resume, an idle sleigh is caught by the sunrise and still banks cookies, ride again; Gobble Getaway autoplay hops past row 40, pause/resume, restart, an idle turkey is caught and the game over names who did it, hop again
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
 .PHONY: demo-P-SYSRES.1
 demo-P-SYSRES.1: ## P-SYSRES.1 (ADR-0182): the system resource guard - a weak CPU under heavy load / RAM pressure pauses the KG + Code Graph builds behind a notice (why + machine line + top-processes panel + re-check, no escape hatch); FAIL-OPEN (no evidence never blocks); read-only fixed-argv process listing
 	$(BUN) run desktop/scripts/demo_p_sysres_1.ts
@@ -1246,7 +1289,7 @@ demo-P-UX-JEV.1: ## P-UX-JEV.1 (ADR-0376): the link that restarted the front end
 	$(BUN) run desktop/scripts/demo_p_ux_jev_1.ts
 
 .PHONY: demo-P-JEV.2
-demo-P-JEV.2: ## P-JEV.2 (ADR-0377): Jev in the chat. omp answers typed judgments out of band and records none of them, so the user could never see whether Jev was used. A new in-process omp extension wraps pi-ai TypeSafeJudge / TextJudge (the only place the question, the typed answers with probabilities, the backend, the latency and any error exist), AWAITS a token-d loopback POST so the desktop has each report before omp acts on the answer, and the chat draws a per-turn judgment window with one table per judgment (question / answer + probability bars / confidence, backend, ms, judged state). A turn with no judgment while Jev is configured gets a quiet "Jev not consulted" note; an unconfigured Jev shows nothing. Proves the wrap on the real classes, the ordering, the fallback capture, the master-only relay, the active gate and the served bytes.
+demo-P-JEV.2: ## P-JEV.2 (ADR-0377): Jev in the chat. omp answers typed judgments out of band and records none of them, so the user could never see whether Jev was used. A new in-process omp extension wraps pi-ai NativeJudge / TextJudge (the only place the question, the typed answers with probabilities, the backend, the latency and any error exist), AWAITS a token-d loopback POST so the desktop has each report before omp acts on the answer, and the chat draws a per-turn judgment window with one table per judgment (question / answer + probability bars / confidence, backend, ms, judged state). A turn with no judgment while Jev is configured gets a quiet "Jev not consulted" note; an unconfigured Jev shows nothing. Proves the wrap on the real classes, the ordering, the fallback capture, the master-only relay, the active gate and the served bytes.
 	$(BUN) test $(TEST_IGNORES) harness/judgment/trace.test.ts harness/omp/judgment_extension.test.ts desktop/judgment_policy.test.ts
 	$(BUN) run desktop/scripts/demo_p_jev_2.ts
 

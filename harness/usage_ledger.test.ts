@@ -36,8 +36,8 @@ function fixtureRoot(): string {
   return root;
 }
 
-test("aggregates per model with derived savings + cache hit-rate", () => {
-  const led = usageLedger({ root: fixtureRoot() });
+test("aggregates per model with derived savings + cache hit-rate", async () => {
+  const led = await usageLedger({ root: fixtureRoot() });
   expect(led.models.length).toBe(2);
   const opus = led.models.find((m) => m.model === "claude-opus-4-8")!;
   expect(opus.turns).toBe(1);
@@ -51,15 +51,15 @@ test("aggregates per model with derived savings + cache hit-rate", () => {
   expect(opus.source).toBe("subscription");
 });
 
-test("classifies provider + strips the gateway prefix from the model id", () => {
-  const led = usageLedger({ root: fixtureRoot() });
+test("classifies provider + strips the gateway prefix from the model id", async () => {
+  const led = await usageLedger({ root: fixtureRoot() });
   const gpt = led.models.find((m) => m.model === "gpt-5.2")!; // asksage-openai/ prefix stripped
   expect(gpt).toBeTruthy();
   expect(gpt.provider).toBe("openai");
 });
 
-test("totals sum across models; sorted by spend; all subscription (no local)", () => {
-  const led = usageLedger({ root: fixtureRoot() });
+test("totals sum across models; sorted by spend; all subscription (no local)", async () => {
+  const led = await usageLedger({ root: fixtureRoot() });
   expect(led.totals.sessions).toBe(2);
   expect(led.totals.cost).toBeCloseTo(0.0047 + 0.005, 6);
   expect(led.totals.savings).toBeCloseTo(0.00045 * 9, 8);
@@ -68,8 +68,8 @@ test("totals sum across models; sorted by spend; all subscription (no local)", (
   expect(led.bySource.subscription.cost).toBeCloseTo(led.totals.cost, 6);
 });
 
-test("missing/empty root yields an empty ledger (never throws)", () => {
-  const led = usageLedger({ root: join(tmpdir(), "lucid-no-such-" + process.pid) });
+test("missing/empty root yields an empty ledger (never throws)", async () => {
+  const led = await usageLedger({ root: join(tmpdir(), "lucid-no-such-" + process.pid) });
   expect(led.models.length).toBe(0);
   expect(led.totals.cost).toBe(0);
 });

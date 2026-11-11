@@ -31,18 +31,18 @@ try {
   for (let i = 0; i < 9; i++) writeFileSync(join(dir, `ing${i}.jsonl`), file(`i${i}`, cwd, `${EXTRACT_SYSTEM}\n\nfact ${i}`));
   writeFileSync(join(dir, "other.jsonl"), file("o1", "/other/repo", `${EXTRACT_SYSTEM}\n\nother repo`));
 
-  if (listSessions(cwd, root).ingest.length !== 9) fail("setup: expected 9 ingest sessions");
+  if ((await listSessions(cwd, root)).ingest.length !== 9) fail("setup: expected 9 ingest sessions");
 
   const r = clearIngestSessions(cwd, root);
   if (!r.ok || r.cleared !== 9) fail(`expected to clear 9, cleared ${r.cleared}`);
   ok("cleared all 9 ingest throwaways in one action");
 
-  const after = listSessions(cwd, root);
+  const after = await listSessions(cwd, root);
   if (after.ingest.length !== 0) fail("ingest sessions should be gone");
   if (after.sessions.map((s) => s.id).join() !== "c1") fail("the real chat must survive");
   ok("the real chat survived; knowledge graph is a separate store (untouched)");
 
-  if (listSessions("/other/repo", root).ingest.map((s) => s.id).join() !== "o1") fail("another workspace's ingest must NOT be cleared");
+  if ((await listSessions("/other/repo", root)).ingest.map((s) => s.id).join() !== "o1") fail("another workspace's ingest must NOT be cleared");
   ok("workspace-scoped: another repo's ingest sessions were left alone");
 
   if (clearIngestSessions(cwd, root).cleared !== 0) fail("a second clear should be a no-op");

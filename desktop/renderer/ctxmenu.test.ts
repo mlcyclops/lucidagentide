@@ -5,7 +5,19 @@
 // text-splice math the paste/cut actions run on the prompt bar.
 
 import { describe, expect, test } from "bun:test";
-import { menuItemsFor, readonlyMenuItemsFor, spliceText } from "./ctxmenu.ts";
+import { LONG_PRESS_MS, LONG_PRESS_SLOP_PX, longPressMoved, menuItemsFor, readonlyMenuItemsFor, spliceText } from "./ctxmenu.ts";
+
+// P-PUSH.PAR1 (ADR-pending): a held staged chip opens its menu; a finger that drifts is a scroll, not a hold.
+describe("long-press thresholds", () => {
+  test("a hold is about half a second and survives a small wobble; a drag past the slop cancels it", () => {
+    expect(LONG_PRESS_MS).toBe(500);
+    expect(LONG_PRESS_SLOP_PX).toBe(10);
+    expect(longPressMoved(0, 0)).toBe(false);
+    expect(longPressMoved(6, 8)).toBe(false); // exactly 10px: still a hold
+    expect(longPressMoved(7, 8)).toBe(true);
+    expect(longPressMoved(0, -11)).toBe(true);
+  });
+});
 
 describe("menuItemsFor — which entries are actionable", () => {
   test("selection in an editable field → everything enabled", () => {

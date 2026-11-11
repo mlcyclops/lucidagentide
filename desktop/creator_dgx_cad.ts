@@ -1,9 +1,9 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/creator_dgx_cad.ts - the HTTP client for the DGX Loader's CAD service (contract section 2c).
+// desktop/creator_dgx_cad.ts - the HTTP client for the Private AI Platform's CAD service (contract section 2c).
 //
-// The service runs on a DGX box bound to 127.0.0.1:8089 and is reached through the Loader's SSH forward.
+// The service runs on a DGX box bound to 127.0.0.1:8089 and is reached through the platform's SSH forward.
 // Three rules hold here:
 //   * A MODEL RUN EXECUTES THE USER'S PYTHON on the box, so the request body only ever carries
 //     `approved: true` when the caller hands in the exec-approval decision. There is no other way to build

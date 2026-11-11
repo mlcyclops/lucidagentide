@@ -314,6 +314,636 @@
   color-scheme:dark;
 }
 
+/* P-SEASON.1 (ADR-0525): the special-theme palettes. Each is a full palette like the ones above, so the
+   token-completeness test holds them to the same contract. They are picked through Settings > Theme >
+   Special themes (or the calendar), never from the base theme grid; seasons.ts maps each U.S. holiday or
+   event month to one of these ids (Thanksgiving reuses Ember). Generated from a seed (ground hue, accent,
+   secondary, text) against the lucid-dark / lucid-light ramps, then tuned by eye; txt-2..4 keep the base
+   ramp's contrast ratios against each ground. */
+/* Christmas */
+/* @palette evergreen */
+:root[data-theme="evergreen"] {
+  /* surfaces */
+  --bg-0:#07120d; --bg-1:#0b1b13; --bg-2:#10281c; --bg-3:#143223; --bg-4:#1a3e2c;
+  /* extra surfaces: glow wash, inset troughs, code/editor grounds, elevated cards, kg canvas, marquee fade, alpha checkerboard */
+  --bg-glow:#220d0e; --bg-sunk:#08140e; --bg-code:#0b1c14; --bg-code-2:#091610;
+  --bg-editor:#091610; --bg-elev:#0e2318; --bg-kg:#0e2118; --bg-fade:#091610; --check-1:#0e2318;
+  --check-2:#0a1811;
+  /* chrome: titlebar + statusbar gradient stops, scrollbar thumb states */
+  --tb-1:#0e2318; --tb-2:#0c1d14; --tb-3:#091710; --sb-1:#0a1a12; --sb-2:#08150f; --sb-3:#07100c;
+  --scroll-thumb:#1a402d; --scroll-thumb-h:#255a40; --scroll-thumb-a:#2d6e4e;
+  /* hairlines */
+  --line:#1c4330; --line-soft:#143022; --line-strong:#255c41;
+  /* text ramp (txt-code = the <pre> foreground) */
+  --txt:#f1f6f1; --txt-2:#99c0ac; --txt-3:#5d8571; --txt-4:#406452; --txt-code:#dee4df;
+  /* brand */
+  --accent:#e23b45; --accent-2:#ff6f78; --accent-deep:#a51d2c; --cyan:#e8c66a; --cyan-2:#f6dc98;
+  /* state hues */
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2; --red-mid:#e5564e;
+  --red-deep:#c8423b;
+  /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
+  --red-txt:#ffb0b0; --red-txt-2:#ffd7d7; --amber-txt:#f3cf7a; --amber-txt-2:#ffd79a;
+  --green-txt:#8ee8ad; --green-txt-2:#c6f3d6; --blue-txt:#aec4ff; --blue-2:#8aa6f5;
+  --cyan-txt:#8fe0ee;
+  /* CUI/violet band + the lucid-agent hero green (brand one-off, ADR-0251) */
+  --violet:#8b5cf6; --violet-2:#7c3aed; --violet-ic:#c4b5fd; --violet-txt:#e9ddff; --hero:#41ff8b;
+  --hero-txt:#8ef5bc;
+  /* inks: color-mix lighten/darken, and text ON a saturated fill */
+  --tint:#ffffff; --shade:#000000; --on-fill:#ffffff; --on-amber:#171008;
+  /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
+  --accent-rgb:226 59 69; --accent-2-rgb:255 111 120; --cyan-rgb:232 198 106;
+  --cyan-2-rgb:246 220 152; --green-rgb:70 210 126; --amber-rgb:232 178 60; --red-rgb:239 95 95;
+  --red-deep-rgb:200 66 59; --blue-rgb:94 141 242; --violet-rgb:139 92 246; --hero-rgb:65 255 139;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:5 13 9; --scrim-2-rgb:29 12 13;
+  --glass-rgb:6 14 10;
+  color-scheme:dark;
+}
+
+/* Presidents' Day, Independence Day, Election Season */
+/* @palette liberty */
+:root[data-theme="liberty"] {
+  /* surfaces */
+  --bg-0:#060913; --bg-1:#0a0e1c; --bg-2:#0e152a; --bg-3:#121a35; --bg-4:#162142;
+  /* extra surfaces: glow wash, inset troughs, code/editor grounds, elevated cards, kg canvas, marquee fade, alpha checkerboard */
+  --bg-glow:#220d0f; --bg-sunk:#070a15; --bg-code:#0a0f1d; --bg-code-2:#080c17;
+  --bg-editor:#080c17; --bg-elev:#0c1225; --bg-kg:#0c1223; --bg-fade:#080c17; --check-1:#0c1225;
+  --check-2:#080d1a;
+  /* chrome: titlebar + statusbar gradient stops, scrollbar thumb states */
+  --tb-1:#0c1225; --tb-2:#0a0f1f; --tb-3:#080c18; --sb-1:#090d1b; --sb-2:#070b16; --sb-3:#060911;
+  --scroll-thumb:#172243; --scroll-thumb-h:#20305f; --scroll-thumb-a:#273a74;
+  /* hairlines */
+  --line:#182447; --line-soft:#111933; --line-strong:#203061;
+  /* text ramp (txt-code = the <pre> foreground) */
+  --txt:#f2f4fb; --txt-2:#abb3cb; --txt-3:#6d799a; --txt-4:#4e5978; --txt-code:#dfe1e8;
+  /* brand */
+  --accent:#e5404f; --accent-2:#ff7380; --accent-deep:#a91d2e; --cyan:#6ea6ff; --cyan-2:#9cc3ff;
+  /* state hues */
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2; --red-mid:#e5564e;
+  --red-deep:#c8423b;
+  /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
+  --red-txt:#ffb0b0; --red-txt-2:#ffd7d7; --amber-txt:#f3cf7a; --amber-txt-2:#ffd79a;
+  --green-txt:#8ee8ad; --green-txt-2:#c6f3d6; --blue-txt:#aec4ff; --blue-2:#8aa6f5;
+  --cyan-txt:#8fe0ee;
+  /* CUI/violet band + the lucid-agent hero green (brand one-off, ADR-0251) */
+  --violet:#8b5cf6; --violet-2:#7c3aed; --violet-ic:#c4b5fd; --violet-txt:#e9ddff; --hero:#41ff8b;
+  --hero-txt:#8ef5bc;
+  /* inks: color-mix lighten/darken, and text ON a saturated fill */
+  --tint:#ffffff; --shade:#000000; --on-fill:#ffffff; --on-amber:#171008;
+  /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
+  --accent-rgb:229 64 79; --accent-2-rgb:255 115 128; --cyan-rgb:110 166 255;
+  --cyan-2-rgb:156 195 255; --green-rgb:70 210 126; --amber-rgb:232 178 60; --red-rgb:239 95 95;
+  --red-deep-rgb:200 66 59; --blue-rgb:94 141 242; --violet-rgb:139 92 246; --hero-rgb:65 255 139;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:4 7 13; --scrim-2-rgb:29 12 14;
+  --glass-rgb:5 8 15;
+  color-scheme:dark;
+}
+
+/* Memorial Day, Veterans Day */
+/* @palette honor */
+:root[data-theme="honor"] {
+  /* surfaces */
+  --bg-0:#0a0c0f; --bg-1:#0f1317; --bg-2:#161c22; --bg-3:#1c232a; --bg-4:#232b35;
+  /* extra surfaces: glow wash, inset troughs, code/editor grounds, elevated cards, kg canvas, marquee fade, alpha checkerboard */
+  --bg-glow:#221b0d; --bg-sunk:#0b0e11; --bg-code:#101317; --bg-code-2:#0c0f13;
+  --bg-editor:#0c0f13; --bg-elev:#14181d; --bg-kg:#13171c; --bg-fade:#0c0f13; --check-1:#14181d;
+  --check-2:#0e1114;
+  /* chrome: titlebar + statusbar gradient stops, scrollbar thumb states */
+  --tb-1:#14181d; --tb-2:#101419; --tb-3:#0d1013; --sb-1:#0e1216; --sb-2:#0c0e11; --sb-3:#090b0e;
+  --scroll-thumb:#242c36; --scroll-thumb-h:#333f4c; --scroll-thumb-a:#3e4c5d;
+  /* hairlines */
+  --line:#262f39; --line-soft:#1b2229; --line-strong:#34404d;
+  /* text ramp (txt-code = the <pre> foreground) */
+  --txt:#eef0f3; --txt-2:#a7b6c8; --txt-3:#677c95; --txt-4:#4a5c72; --txt-code:#dcdee1;
+  /* brand */
+  --accent:#d6ab4c; --accent-2:#ecc979; --accent-deep:#8f6c22; --cyan:#86a9cc; --cyan-2:#b0c9e2;
+  /* state hues */
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2; --red-mid:#e5564e;
+  --red-deep:#c8423b;
+  /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
+  --red-txt:#ffb0b0; --red-txt-2:#ffd7d7; --amber-txt:#f3cf7a; --amber-txt-2:#ffd79a;
+  --green-txt:#8ee8ad; --green-txt-2:#c6f3d6; --blue-txt:#aec4ff; --blue-2:#8aa6f5;
+  --cyan-txt:#8fe0ee;
+  /* CUI/violet band + the lucid-agent hero green (brand one-off, ADR-0251) */
+  --violet:#8b5cf6; --violet-2:#7c3aed; --violet-ic:#c4b5fd; --violet-txt:#e9ddff; --hero:#41ff8b;
+  --hero-txt:#8ef5bc;
+  /* inks: color-mix lighten/darken, and text ON a saturated fill */
+  --tint:#ffffff; --shade:#000000; --on-fill:#1d1607; --on-amber:#171008;
+  /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
+  --accent-rgb:214 171 76; --accent-2-rgb:236 201 121; --cyan-rgb:134 169 204;
+  --cyan-2-rgb:176 201 226; --green-rgb:70 210 126; --amber-rgb:232 178 60; --red-rgb:239 95 95;
+  --red-deep-rgb:200 66 59; --blue-rgb:94 141 242; --violet-rgb:139 92 246; --hero-rgb:65 255 139;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:7 9 11; --scrim-2-rgb:29 23 12;
+  --glass-rgb:8 10 12;
+  color-scheme:dark;
+}
+
+/* New Year's */
+/* @palette gilded */
+:root[data-theme="gilded"] {
+  /* surfaces */
+  --bg-0:#0f0e0a; --bg-1:#17150f; --bg-2:#221e16; --bg-3:#2b261b; --bg-4:#363022;
+  /* extra surfaces: glow wash, inset troughs, code/editor grounds, elevated cards, kg canvas, marquee fade, alpha checkerboard */
+  --bg-glow:#221c0d; --bg-sunk:#110f0b; --bg-code:#18150f; --bg-code-2:#13110c;
+  --bg-editor:#13110c; --bg-elev:#1e1b13; --bg-kg:#1d1a12; --bg-fade:#13110c; --check-1:#1e1b13;
+  --check-2:#15120d;
+  /* chrome: titlebar + statusbar gradient stops, scrollbar thumb states */
+  --tb-1:#1e1b13; --tb-2:#191610; --tb-3:#14110c; --sb-1:#16140e; --sb-2:#12100b; --sb-3:#0e0d09;
+  --scroll-thumb:#373123; --scroll-thumb-h:#4d4532; --scroll-thumb-a:#5f543c;
+  /* hairlines */
+  --line:#3a3425; --line-soft:#29251b; --line-strong:#4f4632;
+  /* text ramp (txt-code = the <pre> foreground) */
+  --txt:#f8f4ea; --txt-2:#c0b59a; --txt-3:#877a5e; --txt-4:#655b41; --txt-code:#e5e2d8;
+  /* brand */
+  --accent:#e4c271; --accent-2:#f5dc9f; --accent-deep:#9d7b2c; --cyan:#b9c6f2; --cyan-2:#d6defa;
+  /* state hues */
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2; --red-mid:#e5564e;
+  --red-deep:#c8423b;
+  /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
+  --red-txt:#ffb0b0; --red-txt-2:#ffd7d7; --amber-txt:#f3cf7a; --amber-txt-2:#ffd79a;
+  --green-txt:#8ee8ad; --green-txt-2:#c6f3d6; --blue-txt:#aec4ff; --blue-2:#8aa6f5;
+  --cyan-txt:#8fe0ee;
+  /* CUI/violet band + the lucid-agent hero green (brand one-off, ADR-0251) */
+  --violet:#8b5cf6; --violet-2:#7c3aed; --violet-ic:#c4b5fd; --violet-txt:#e9ddff; --hero:#41ff8b;
+  --hero-txt:#8ef5bc;
+  /* inks: color-mix lighten/darken, and text ON a saturated fill */
+  --tint:#ffffff; --shade:#000000; --on-fill:#1d1607; --on-amber:#171008;
+  /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
+  --accent-rgb:228 194 113; --accent-2-rgb:245 220 159; --cyan-rgb:185 198 242;
+  --cyan-2-rgb:214 222 250; --green-rgb:70 210 126; --amber-rgb:232 178 60; --red-rgb:239 95 95;
+  --red-deep-rgb:200 66 59; --blue-rgb:94 141 242; --violet-rgb:139 92 246; --hero-rgb:65 255 139;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:11 10 7; --scrim-2-rgb:29 24 12;
+  --glass-rgb:12 11 8;
+  color-scheme:dark;
+}
+
+/* MLK Jr. Day */
+/* @palette dawn */
+:root[data-theme="dawn"] {
+  /* surfaces */
+  --bg-0:#070812; --bg-1:#0b0c1b; --bg-2:#101228; --bg-3:#141732; --bg-4:#1a1d3e;
+  /* extra surfaces: glow wash, inset troughs, code/editor grounds, elevated cards, kg canvas, marquee fade, alpha checkerboard */
+  --bg-glow:#22180d; --bg-sunk:#080914; --bg-code:#0b0d1c; --bg-code-2:#090a16;
+  --bg-editor:#090a16; --bg-elev:#0e1023; --bg-kg:#0e0f21; --bg-fade:#090a16; --check-1:#0e1023;
+  --check-2:#0a0b18;
+  /* chrome: titlebar + statusbar gradient stops, scrollbar thumb states */
+  --tb-1:#0e1023; --tb-2:#0c0d1d; --tb-3:#090a17; --sb-1:#0a0c1a; --sb-2:#080915; --sb-3:#070710;
+  --scroll-thumb:#1a1d40; --scroll-thumb-h:#25295a; --scroll-thumb-a:#2d326e;
+  /* hairlines */
+  --line:#1c1f43; --line-soft:#141630; --line-strong:#252a5c;
+  /* text ramp (txt-code = the <pre> foreground) */
+  --txt:#eff0fa; --txt-2:#afb1cd; --txt-3:#73769d; --txt-4:#535680; --txt-code:#dcdde7;
+  /* brand */
+  --accent:#f2a44c; --accent-2:#ffc581; --accent-deep:#b56a1e; --cyan:#7fa9f2; --cyan-2:#a9c6ff;
+  /* state hues */
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2; --red-mid:#e5564e;
+  --red-deep:#c8423b;
+  /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
+  --red-txt:#ffb0b0; --red-txt-2:#ffd7d7; --amber-txt:#f3cf7a; --amber-txt-2:#ffd79a;
+  --green-txt:#8ee8ad; --green-txt-2:#c6f3d6; --blue-txt:#aec4ff; --blue-2:#8aa6f5;
+  --cyan-txt:#8fe0ee;
+  /* CUI/violet band + the lucid-agent hero green (brand one-off, ADR-0251) */
+  --violet:#8b5cf6; --violet-2:#7c3aed; --violet-ic:#c4b5fd; --violet-txt:#e9ddff; --hero:#41ff8b;
+  --hero-txt:#8ef5bc;
+  /* inks: color-mix lighten/darken, and text ON a saturated fill */
+  --tint:#ffffff; --shade:#000000; --on-fill:#1d1207; --on-amber:#171008;
+  /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
+  --accent-rgb:242 164 76; --accent-2-rgb:255 197 129; --cyan-rgb:127 169 242;
+  --cyan-2-rgb:169 198 255; --green-rgb:70 210 126; --amber-rgb:232 178 60; --red-rgb:239 95 95;
+  --red-deep-rgb:200 66 59; --blue-rgb:94 141 242; --violet-rgb:139 92 246; --hero-rgb:65 255 139;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:5 6 13; --scrim-2-rgb:29 21 12;
+  --glass-rgb:6 7 14;
+  color-scheme:dark;
+}
+
+/* Valentine's Day */
+/* @palette rosewood */
+:root[data-theme="rosewood"] {
+  /* surfaces */
+  --bg-0:#12070b; --bg-1:#1b0b10; --bg-2:#281018; --bg-3:#32141e; --bg-4:#3e1a26;
+  /* extra surfaces: glow wash, inset troughs, code/editor grounds, elevated cards, kg canvas, marquee fade, alpha checkerboard */
+  --bg-glow:#220d12; --bg-sunk:#14080c; --bg-code:#1c0b11; --bg-code-2:#16090d;
+  --bg-editor:#16090d; --bg-elev:#230e15; --bg-kg:#210e14; --bg-fade:#16090d; --check-1:#230e15;
+  --check-2:#180a0f;
+  /* chrome: titlebar + statusbar gradient stops, scrollbar thumb states */
+  --tb-1:#230e15; --tb-2:#1d0c12; --tb-3:#17090e; --sb-1:#1a0a0f; --sb-2:#15080c; --sb-3:#10070a;
+  --scroll-thumb:#401a27; --scroll-thumb-h:#5a2537; --scroll-thumb-a:#6e2d43;
+  /* hairlines */
+  --line:#431c29; --line-soft:#30141d; --line-strong:#5c2537;
+  /* text ramp (txt-code = the <pre> foreground) */
+  --txt:#fcf0f4; --txt-2:#cbacb6; --txt-3:#9a6d7c; --txt-4:#784e5c; --txt-code:#e9dde1;
+  /* brand */
+  --accent:#ff527e; --accent-2:#ff8aa6; --accent-deep:#b5244d; --cyan:#d9a6ff; --cyan-2:#e8c6ff;
+  /* state hues */
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2; --red-mid:#e5564e;
+  --red-deep:#c8423b;
+  /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
+  --red-txt:#ffb0b0; --red-txt-2:#ffd7d7; --amber-txt:#f3cf7a; --amber-txt-2:#ffd79a;
+  --green-txt:#8ee8ad; --green-txt-2:#c6f3d6; --blue-txt:#aec4ff; --blue-2:#8aa6f5;
+  --cyan-txt:#8fe0ee;
+  /* CUI/violet band + the lucid-agent hero green (brand one-off, ADR-0251) */
+  --violet:#8b5cf6; --violet-2:#7c3aed; --violet-ic:#c4b5fd; --violet-txt:#e9ddff; --hero:#41ff8b;
+  --hero-txt:#8ef5bc;
+  /* inks: color-mix lighten/darken, and text ON a saturated fill */
+  --tint:#ffffff; --shade:#000000; --on-fill:#1d070d; --on-amber:#171008;
+  /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
+  --accent-rgb:255 82 126; --accent-2-rgb:255 138 166; --cyan-rgb:217 166 255;
+  --cyan-2-rgb:232 198 255; --green-rgb:70 210 126; --amber-rgb:232 178 60; --red-rgb:239 95 95;
+  --red-deep-rgb:200 66 59; --blue-rgb:94 141 242; --violet-rgb:139 92 246; --hero-rgb:65 255 139;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:13 5 8; --scrim-2-rgb:29 12 16;
+  --glass-rgb:14 6 9;
+  color-scheme:dark;
+}
+
+/* St. Patrick's Day */
+/* @palette shamrock */
+:root[data-theme="shamrock"] {
+  /* surfaces */
+  --bg-0:#07120c; --bg-1:#0a1c12; --bg-2:#0f291a; --bg-3:#133320; --bg-4:#184029;
+  /* extra surfaces: glow wash, inset troughs, code/editor grounds, elevated cards, kg canvas, marquee fade, alpha checkerboard */
+  --bg-glow:#0d2215; --bg-sunk:#08140d; --bg-code:#0b1c12; --bg-code-2:#09160e;
+  --bg-editor:#09160e; --bg-elev:#0d2417; --bg-kg:#0d2216; --bg-fade:#09160e; --check-1:#0d2417;
+  --check-2:#091910;
+  /* chrome: titlebar + statusbar gradient stops, scrollbar thumb states */
+  --tb-1:#0d2417; --tb-2:#0b1e13; --tb-3:#09170f; --sb-1:#0a1a11; --sb-2:#08150d; --sb-3:#06110b;
+  --scroll-thumb:#19412a; --scroll-thumb-h:#235c3b; --scroll-thumb-a:#2b7048;
+  /* hairlines */
+  --line:#1a452c; --line-soft:#13311f; --line-strong:#235e3c;
+  /* text ramp (txt-code = the <pre> foreground) */
+  --txt:#eef8f1; --txt-2:#99c0a9; --txt-3:#5d856e; --txt-4:#40644f; --txt-code:#dce6df;
+  /* brand */
+  --accent:#33cf6e; --accent-2:#6fe79b; --accent-deep:#178f48; --cyan:#f0c94e; --cyan-2:#f7dd85;
+  /* state hues */
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2; --red-mid:#e5564e;
+  --red-deep:#c8423b;
+  /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
+  --red-txt:#ffb0b0; --red-txt-2:#ffd7d7; --amber-txt:#f3cf7a; --amber-txt-2:#ffd79a;
+  --green-txt:#8ee8ad; --green-txt-2:#c6f3d6; --blue-txt:#aec4ff; --blue-2:#8aa6f5;
+  --cyan-txt:#8fe0ee;
+  /* CUI/violet band + the lucid-agent hero green (brand one-off, ADR-0251) */
+  --violet:#8b5cf6; --violet-2:#7c3aed; --violet-ic:#c4b5fd; --violet-txt:#e9ddff; --hero:#41ff8b;
+  --hero-txt:#8ef5bc;
+  /* inks: color-mix lighten/darken, and text ON a saturated fill */
+  --tint:#ffffff; --shade:#000000; --on-fill:#071d0f; --on-amber:#171008;
+  /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
+  --accent-rgb:51 207 110; --accent-2-rgb:111 231 155; --cyan-rgb:240 201 78;
+  --cyan-2-rgb:247 221 133; --green-rgb:70 210 126; --amber-rgb:232 178 60; --red-rgb:239 95 95;
+  --red-deep-rgb:200 66 59; --blue-rgb:94 141 242; --violet-rgb:139 92 246; --hero-rgb:65 255 139;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:5 13 8; --scrim-2-rgb:12 29 18;
+  --glass-rgb:6 15 9;
+  color-scheme:dark;
+}
+
+/* Mother's Day */
+/* @palette blossom */
+:root[data-theme="blossom"] {
+  /* surfaces */
+  --bg-0:#10080e; --bg-1:#190d15; --bg-2:#25131f; --bg-3:#2e1827; --bg-4:#3a1e31;
+  /* extra surfaces: glow wash, inset troughs, code/editor grounds, elevated cards, kg canvas, marquee fade, alpha checkerboard */
+  --bg-glow:#220d16; --bg-sunk:#120a0f; --bg-code:#1a0d16; --bg-code-2:#140b11;
+  --bg-editor:#140b11; --bg-elev:#20111b; --bg-kg:#1f101a; --bg-fade:#140b11; --check-1:#20111b;
+  --check-2:#160c13;
+  /* chrome: titlebar + statusbar gradient stops, scrollbar thumb states */
+  --tb-1:#20111b; --tb-2:#1b0e17; --tb-3:#150b12; --sb-1:#180c14; --sb-2:#130a10; --sb-3:#0f080d;
+  --scroll-thumb:#3b1f32; --scroll-thumb-h:#542b46; --scroll-thumb-a:#663556;
+  /* hairlines */
+  --line:#3f2035; --line-soft:#2d1726; --line-strong:#552c47;
+  /* text ramp (txt-code = the <pre> foreground) */
+  --txt:#fcf0f7; --txt-2:#cbabc0; --txt-3:#996c8a; --txt-4:#774d69; --txt-code:#e9dde4;
+  /* brand */
+  --accent:#ff80b8; --accent-2:#ffaad0; --accent-deep:#c34681; --cyan:#b8a4ff; --cyan-2:#d2c6ff;
+  /* state hues */
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2; --red-mid:#e5564e;
+  --red-deep:#c8423b;
+  /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
+  --red-txt:#ffb0b0; --red-txt-2:#ffd7d7; --amber-txt:#f3cf7a; --amber-txt-2:#ffd79a;
+  --green-txt:#8ee8ad; --green-txt-2:#c6f3d6; --blue-txt:#aec4ff; --blue-2:#8aa6f5;
+  --cyan-txt:#8fe0ee;
+  /* CUI/violet band + the lucid-agent hero green (brand one-off, ADR-0251) */
+  --violet:#8b5cf6; --violet-2:#7c3aed; --violet-ic:#c4b5fd; --violet-txt:#e9ddff; --hero:#41ff8b;
+  --hero-txt:#8ef5bc;
+  /* inks: color-mix lighten/darken, and text ON a saturated fill */
+  --tint:#ffffff; --shade:#000000; --on-fill:#1d0711; --on-amber:#171008;
+  /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
+  --accent-rgb:255 128 184; --accent-2-rgb:255 170 208; --cyan-rgb:184 164 255;
+  --cyan-2-rgb:210 198 255; --green-rgb:70 210 126; --amber-rgb:232 178 60; --red-rgb:239 95 95;
+  --red-deep-rgb:200 66 59; --blue-rgb:94 141 242; --violet-rgb:139 92 246; --hero-rgb:65 255 139;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:12 6 10; --scrim-2-rgb:29 12 19;
+  --glass-rgb:13 7 11;
+  color-scheme:dark;
+}
+
+/* Father's Day, Labor Day */
+/* @palette harbor */
+:root[data-theme="harbor"] {
+  /* surfaces */
+  --bg-0:#070c12; --bg-1:#0a131c; --bg-2:#0f1c29; --bg-3:#122334; --bg-4:#172c41;
+  /* extra surfaces: glow wash, inset troughs, code/editor grounds, elevated cards, kg canvas, marquee fade, alpha checkerboard */
+  --bg-glow:#22190d; --bg-sunk:#070e15; --bg-code:#0a131d; --bg-code-2:#080f17;
+  --bg-editor:#080f17; --bg-elev:#0d1824; --bg-kg:#0c1723; --bg-fade:#080f17; --check-1:#0d1824;
+  --check-2:#091119;
+  /* chrome: titlebar + statusbar gradient stops, scrollbar thumb states */
+  --tb-1:#0d1824; --tb-2:#0b141e; --tb-3:#081018; --sb-1:#09121b; --sb-2:#080e15; --sb-3:#060b11;
+  --scroll-thumb:#172d43; --scroll-thumb-h:#213f5e; --scroll-thumb-a:#284d73;
+  /* hairlines */
+  --line:#192f46; --line-soft:#122232; --line-strong:#22405f;
+  /* text ramp (txt-code = the <pre> foreground) */
+  --txt:#ebf2f8; --txt-2:#a5b6c7; --txt-3:#667d93; --txt-4:#495d70; --txt-code:#d9e0e6;
+  /* brand */
+  --accent:#f2a53c; --accent-2:#ffc16c; --accent-deep:#b07017; --cyan:#5cc4e6; --cyan-2:#8ad8f0;
+  /* state hues */
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2; --red-mid:#e5564e;
+  --red-deep:#c8423b;
+  /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
+  --red-txt:#ffb0b0; --red-txt-2:#ffd7d7; --amber-txt:#f3cf7a; --amber-txt-2:#ffd79a;
+  --green-txt:#8ee8ad; --green-txt-2:#c6f3d6; --blue-txt:#aec4ff; --blue-2:#8aa6f5;
+  --cyan-txt:#8fe0ee;
+  /* CUI/violet band + the lucid-agent hero green (brand one-off, ADR-0251) */
+  --violet:#8b5cf6; --violet-2:#7c3aed; --violet-ic:#c4b5fd; --violet-txt:#e9ddff; --hero:#41ff8b;
+  --hero-txt:#8ef5bc;
+  /* inks: color-mix lighten/darken, and text ON a saturated fill */
+  --tint:#ffffff; --shade:#000000; --on-fill:#1d1307; --on-amber:#171008;
+  /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
+  --accent-rgb:242 165 60; --accent-2-rgb:255 193 108; --cyan-rgb:92 196 230;
+  --cyan-2-rgb:138 216 240; --green-rgb:70 210 126; --amber-rgb:232 178 60; --red-rgb:239 95 95;
+  --red-deep-rgb:200 66 59; --blue-rgb:94 141 242; --violet-rgb:139 92 246; --hero-rgb:65 255 139;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:5 9 13; --scrim-2-rgb:29 22 12;
+  --glass-rgb:5 10 15;
+  color-scheme:dark;
+}
+
+/* Juneteenth */
+/* @palette jubilee */
+:root[data-theme="jubilee"] {
+  /* surfaces */
+  --bg-0:#100b0a; --bg-1:#18110e; --bg-2:#231915; --bg-3:#2b201b; --bg-4:#372821;
+  /* extra surfaces: glow wash, inset troughs, code/editor grounds, elevated cards, kg canvas, marquee fade, alpha checkerboard */
+  --bg-glow:#220e0d; --bg-sunk:#110d0b; --bg-code:#18120f; --bg-code-2:#130e0c;
+  --bg-editor:#130e0c; --bg-elev:#1e1613; --bg-kg:#1d1512; --bg-fade:#130e0c; --check-1:#1e1613;
+  --check-2:#150f0d;
+  /* chrome: titlebar + statusbar gradient stops, scrollbar thumb states */
+  --tb-1:#1e1613; --tb-2:#191310; --tb-3:#140e0c; --sb-1:#16100e; --sb-2:#120d0b; --sb-3:#0e0a09;
+  --scroll-thumb:#382922; --scroll-thumb-h:#4f3930; --scroll-thumb-a:#60463b;
+  /* hairlines */
+  --line:#3b2b24; --line-soft:#2a1f1a; --line-strong:#503a31;
+  /* text ramp (txt-code = the <pre> foreground) */
+  --txt:#f9f1ea; --txt-2:#c8b0a6; --txt-3:#937466; --txt-4:#705549; --txt-code:#e6dfd8;
+  /* brand */
+  --accent:#e8493d; --accent-2:#ff7c6e; --accent-deep:#a82b21; --cyan:#f2c24f; --cyan-2:#f8d886;
+  /* state hues */
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2; --red-mid:#e5564e;
+  --red-deep:#c8423b;
+  /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
+  --red-txt:#ffb0b0; --red-txt-2:#ffd7d7; --amber-txt:#f3cf7a; --amber-txt-2:#ffd79a;
+  --green-txt:#8ee8ad; --green-txt-2:#c6f3d6; --blue-txt:#aec4ff; --blue-2:#8aa6f5;
+  --cyan-txt:#8fe0ee;
+  /* CUI/violet band + the lucid-agent hero green (brand one-off, ADR-0251) */
+  --violet:#8b5cf6; --violet-2:#7c3aed; --violet-ic:#c4b5fd; --violet-txt:#e9ddff; --hero:#41ff8b;
+  --hero-txt:#8ef5bc;
+  /* inks: color-mix lighten/darken, and text ON a saturated fill */
+  --tint:#ffffff; --shade:#000000; --on-fill:#ffffff; --on-amber:#171008;
+  /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
+  --accent-rgb:232 73 61; --accent-2-rgb:255 124 110; --cyan-rgb:242 194 79;
+  --cyan-2-rgb:248 216 134; --green-rgb:70 210 126; --amber-rgb:232 178 60; --red-rgb:239 95 95;
+  --red-deep-rgb:200 66 59; --blue-rgb:94 141 242; --violet-rgb:139 92 246; --hero-rgb:65 255 139;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:11 8 7; --scrim-2-rgb:29 13 12;
+  --glass-rgb:13 9 8;
+  color-scheme:dark;
+}
+
+/* Indigenous Peoples' Day */
+/* @palette heritage */
+:root[data-theme="heritage"] {
+  /* surfaces */
+  --bg-0:#100c08; --bg-1:#19120d; --bg-2:#251b13; --bg-3:#2e2118; --bg-4:#3a2a1e;
+  /* extra surfaces: glow wash, inset troughs, code/editor grounds, elevated cards, kg canvas, marquee fade, alpha checkerboard */
+  --bg-glow:#0d2220; --bg-sunk:#120d0a; --bg-code:#1a120d; --bg-code-2:#140f0b;
+  --bg-editor:#140f0b; --bg-elev:#201711; --bg-kg:#1f1610; --bg-fade:#140f0b; --check-1:#201711;
+  --check-2:#16100c;
+  /* chrome: titlebar + statusbar gradient stops, scrollbar thumb states */
+  --tb-1:#201711; --tb-2:#1b130e; --tb-3:#150f0b; --sb-1:#18110c; --sb-2:#130e0a; --sb-3:#0f0b08;
+  --scroll-thumb:#3b2b1f; --scroll-thumb-h:#543c2b; --scroll-thumb-a:#664935;
+  /* hairlines */
+  --line:#3f2d20; --line-soft:#2d2017; --line-strong:#553d2c;
+  /* text ramp (txt-code = the <pre> foreground) */
+  --txt:#f7efe7; --txt-2:#c6b1a3; --txt-3:#8f7664; --txt-4:#6d5646; --txt-code:#e5ddd5;
+  /* brand */
+  --accent:#2fc0b1; --accent-2:#6fe0d4; --accent-deep:#1a8479; --cyan:#e27d4f; --cyan-2:#f0a07a;
+  /* state hues */
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2; --red-mid:#e5564e;
+  --red-deep:#c8423b;
+  /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
+  --red-txt:#ffb0b0; --red-txt-2:#ffd7d7; --amber-txt:#f3cf7a; --amber-txt-2:#ffd79a;
+  --green-txt:#8ee8ad; --green-txt-2:#c6f3d6; --blue-txt:#aec4ff; --blue-2:#8aa6f5;
+  --cyan-txt:#8fe0ee;
+  /* CUI/violet band + the lucid-agent hero green (brand one-off, ADR-0251) */
+  --violet:#8b5cf6; --violet-2:#7c3aed; --violet-ic:#c4b5fd; --violet-txt:#e9ddff; --hero:#41ff8b;
+  --hero-txt:#8ef5bc;
+  /* inks: color-mix lighten/darken, and text ON a saturated fill */
+  --tint:#ffffff; --shade:#000000; --on-fill:#071d1a; --on-amber:#171008;
+  /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
+  --accent-rgb:47 192 177; --accent-2-rgb:111 224 212; --cyan-rgb:226 125 79;
+  --cyan-2-rgb:240 160 122; --green-rgb:70 210 126; --amber-rgb:232 178 60; --red-rgb:239 95 95;
+  --red-deep-rgb:200 66 59; --blue-rgb:94 141 242; --violet-rgb:139 92 246; --hero-rgb:65 255 139;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:12 8 6; --scrim-2-rgb:12 29 27;
+  --glass-rgb:13 10 7;
+  color-scheme:dark;
+}
+
+/* Halloween */
+/* @palette nightshade */
+:root[data-theme="nightshade"] {
+  /* surfaces */
+  --bg-0:#0d0811; --bg-1:#140c1a; --bg-2:#1e1127; --bg-3:#251630; --bg-4:#2f1b3d;
+  /* extra surfaces: glow wash, inset troughs, code/editor grounds, elevated cards, kg canvas, marquee fade, alpha checkerboard */
+  --bg-glow:#22170d; --bg-sunk:#0f0913; --bg-code:#150c1b; --bg-code-2:#100a15;
+  --bg-editor:#100a15; --bg-elev:#1a0f22; --bg-kg:#190f20; --bg-fade:#100a15; --check-1:#1a0f22;
+  --check-2:#120b17;
+  /* chrome: titlebar + statusbar gradient stops, scrollbar thumb states */
+  --tb-1:#1a0f22; --tb-2:#160d1c; --tb-3:#110a16; --sb-1:#130b19; --sb-2:#0f0914; --sb-3:#0c0710;
+  --scroll-thumb:#301c3e; --scroll-thumb-h:#442758; --scroll-thumb-a:#52306b;
+  /* hairlines */
+  --line:#331d42; --line-soft:#24152f; --line-strong:#452859;
+  /* text ramp (txt-code = the <pre> foreground) */
+  --txt:#f5effb; --txt-2:#bfadcc; --txt-3:#89709c; --txt-4:#69507b; --txt-code:#e2dde8;
+  /* brand */
+  --accent:#ff8a24; --accent-2:#ffae62; --accent-deep:#c45b0a; --cyan:#ac80f2; --cyan-2:#c8a8ff;
+  /* state hues */
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2; --red-mid:#e5564e;
+  --red-deep:#c8423b;
+  /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
+  --red-txt:#ffb0b0; --red-txt-2:#ffd7d7; --amber-txt:#f3cf7a; --amber-txt-2:#ffd79a;
+  --green-txt:#8ee8ad; --green-txt-2:#c6f3d6; --blue-txt:#aec4ff; --blue-2:#8aa6f5;
+  --cyan-txt:#8fe0ee;
+  /* CUI/violet band + the lucid-agent hero green (brand one-off, ADR-0251) */
+  --violet:#8b5cf6; --violet-2:#7c3aed; --violet-ic:#c4b5fd; --violet-txt:#e9ddff; --hero:#41ff8b;
+  --hero-txt:#8ef5bc;
+  /* inks: color-mix lighten/darken, and text ON a saturated fill */
+  --tint:#ffffff; --shade:#000000; --on-fill:#1d1107; --on-amber:#171008;
+  /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
+  --accent-rgb:255 138 36; --accent-2-rgb:255 174 98; --cyan-rgb:172 128 242;
+  --cyan-2-rgb:200 168 255; --green-rgb:70 210 126; --amber-rgb:232 178 60; --red-rgb:239 95 95;
+  --red-deep-rgb:200 66 59; --blue-rgb:94 141 242; --violet-rgb:139 92 246; --hero-rgb:65 255 139;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:9 6 12; --scrim-2-rgb:29 20 12;
+  --glass-rgb:11 6 14;
+  color-scheme:dark;
+}
+
+/* Super Bowl */
+/* @palette gridiron */
+:root[data-theme="gridiron"] {
+  /* surfaces */
+  --bg-0:#08100b; --bg-1:#0d1911; --bg-2:#132519; --bg-3:#182e1f; --bg-4:#1e3a27;
+  /* extra surfaces: glow wash, inset troughs, code/editor grounds, elevated cards, kg canvas, marquee fade, alpha checkerboard */
+  --bg-glow:#22170d; --bg-sunk:#0a120d; --bg-code:#0d1a11; --bg-code-2:#0b140e;
+  --bg-editor:#0b140e; --bg-elev:#112016; --bg-kg:#101f15; --bg-fade:#0b140e; --check-1:#112016;
+  --check-2:#0c160f;
+  /* chrome: titlebar + statusbar gradient stops, scrollbar thumb states */
+  --tb-1:#112016; --tb-2:#0e1b12; --tb-3:#0b150e; --sb-1:#0c1810; --sb-2:#0a130d; --sb-3:#080f0a;
+  --scroll-thumb:#1f3b28; --scroll-thumb-h:#2b5439; --scroll-thumb-a:#356645;
+  /* hairlines */
+  --line:#203f2a; --line-soft:#172d1e; --line-strong:#2c553a;
+  /* text ramp (txt-code = the <pre> foreground) */
+  --txt:#f1f6f2; --txt-2:#98bfa5; --txt-3:#5c856a; --txt-4:#40634c; --txt-code:#dee4e0;
+  /* brand */
+  --accent:#d08a45; --accent-2:#e8aa70; --accent-deep:#8c5622; --cyan:#f4cf55; --cyan-2:#f9e08e;
+  /* state hues */
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2; --red-mid:#e5564e;
+  --red-deep:#c8423b;
+  /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
+  --red-txt:#ffb0b0; --red-txt-2:#ffd7d7; --amber-txt:#f3cf7a; --amber-txt-2:#ffd79a;
+  --green-txt:#8ee8ad; --green-txt-2:#c6f3d6; --blue-txt:#aec4ff; --blue-2:#8aa6f5;
+  --cyan-txt:#8fe0ee;
+  /* CUI/violet band + the lucid-agent hero green (brand one-off, ADR-0251) */
+  --violet:#8b5cf6; --violet-2:#7c3aed; --violet-ic:#c4b5fd; --violet-txt:#e9ddff; --hero:#41ff8b;
+  --hero-txt:#8ef5bc;
+  /* inks: color-mix lighten/darken, and text ON a saturated fill */
+  --tint:#ffffff; --shade:#000000; --on-fill:#1d1207; --on-amber:#171008;
+  /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
+  --accent-rgb:208 138 69; --accent-2-rgb:232 170 112; --cyan-rgb:244 207 85;
+  --cyan-2-rgb:249 224 142; --green-rgb:70 210 126; --amber-rgb:232 178 60; --red-rgb:239 95 95;
+  --red-deep-rgb:200 66 59; --blue-rgb:94 141 242; --violet-rgb:139 92 246; --hero-rgb:65 255 139;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:6 12 8; --scrim-2-rgb:29 20 12;
+  --glass-rgb:7 13 9;
+  color-scheme:dark;
+}
+
+/* World Cup */
+/* @palette pitch */
+:root[data-theme="pitch"] {
+  /* surfaces */
+  --bg-0:#06130f; --bg-1:#0a1c16; --bg-2:#0e2a21; --bg-3:#123529; --bg-4:#164233;
+  /* extra surfaces: glow wash, inset troughs, code/editor grounds, elevated cards, kg canvas, marquee fade, alpha checkerboard */
+  --bg-glow:#0d221b; --bg-sunk:#071510; --bg-code:#0a1d17; --bg-code-2:#081712;
+  --bg-editor:#081712; --bg-elev:#0c251d; --bg-kg:#0c231b; --bg-fade:#081712; --check-1:#0c251d;
+  --check-2:#081a14;
+  /* chrome: titlebar + statusbar gradient stops, scrollbar thumb states */
+  --tb-1:#0c251d; --tb-2:#0a1f18; --tb-3:#081813; --sb-1:#091b15; --sb-2:#071611; --sb-3:#06110d;
+  --scroll-thumb:#174334; --scroll-thumb-h:#205f4a; --scroll-thumb-a:#27745a;
+  /* hairlines */
+  --line:#184737; --line-soft:#113328; --line-strong:#20614b;
+  /* text ramp (txt-code = the <pre> foreground) */
+  --txt:#eefaf5; --txt-2:#99c0b3; --txt-3:#5d8577; --txt-4:#406458; --txt-code:#dbe8e3;
+  /* brand */
+  --accent:#31e0a2; --accent-2:#7af0c5; --accent-deep:#12a272; --cyan:#ffd35f; --cyan-2:#ffe394;
+  /* state hues */
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2; --red-mid:#e5564e;
+  --red-deep:#c8423b;
+  /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
+  --red-txt:#ffb0b0; --red-txt-2:#ffd7d7; --amber-txt:#f3cf7a; --amber-txt-2:#ffd79a;
+  --green-txt:#8ee8ad; --green-txt-2:#c6f3d6; --blue-txt:#aec4ff; --blue-2:#8aa6f5;
+  --cyan-txt:#8fe0ee;
+  /* CUI/violet band + the lucid-agent hero green (brand one-off, ADR-0251) */
+  --violet:#8b5cf6; --violet-2:#7c3aed; --violet-ic:#c4b5fd; --violet-txt:#e9ddff; --hero:#41ff8b;
+  --hero-txt:#8ef5bc;
+  /* inks: color-mix lighten/darken, and text ON a saturated fill */
+  --tint:#ffffff; --shade:#000000; --on-fill:#071d15; --on-amber:#171008;
+  /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
+  --accent-rgb:49 224 162; --accent-2-rgb:122 240 197; --cyan-rgb:255 211 95;
+  --cyan-2-rgb:255 227 148; --green-rgb:70 210 126; --amber-rgb:232 178 60; --red-rgb:239 95 95;
+  --red-deep-rgb:200 66 59; --blue-rgb:94 141 242; --violet-rgb:139 92 246; --hero-rgb:65 255 139;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:4 13 10; --scrim-2-rgb:12 29 23;
+  --glass-rgb:5 15 12;
+  color-scheme:dark;
+}
+
+/* Olympic Games */
+/* @palette podium */
+:root[data-theme="podium"] {
+  /* surfaces */
+  --bg-0:#070912; --bg-1:#0a0e1c; --bg-2:#0f1429; --bg-3:#121934; --bg-4:#171f41;
+  /* extra surfaces: glow wash, inset troughs, code/editor grounds, elevated cards, kg canvas, marquee fade, alpha checkerboard */
+  --bg-glow:#221c0d; --bg-sunk:#070a15; --bg-code:#0a0e1d; --bg-code-2:#080b17;
+  --bg-editor:#080b17; --bg-elev:#0d1124; --bg-kg:#0c1123; --bg-fade:#080b17; --check-1:#0d1124;
+  --check-2:#090c19;
+  /* chrome: titlebar + statusbar gradient stops, scrollbar thumb states */
+  --tb-1:#0d1124; --tb-2:#0b0f1e; --tb-3:#080b18; --sb-1:#090d1b; --sb-2:#080a15; --sb-3:#060811;
+  --scroll-thumb:#172043; --scroll-thumb-h:#212d5e; --scroll-thumb-a:#283773;
+  /* hairlines */
+  --line:#192246; --line-soft:#121832; --line-strong:#222e5f;
+  /* text ramp (txt-code = the <pre> foreground) */
+  --txt:#eff3ff; --txt-2:#acb3cc; --txt-3:#70789b; --txt-4:#50587b; --txt-code:#dce0ec;
+  /* brand */
+  --accent:#f3c34f; --accent-2:#ffd97f; --accent-deep:#b0861c; --cyan:#55abff; --cyan-2:#8cc6ff;
+  /* state hues */
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2; --red-mid:#e5564e;
+  --red-deep:#c8423b;
+  /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
+  --red-txt:#ffb0b0; --red-txt-2:#ffd7d7; --amber-txt:#f3cf7a; --amber-txt-2:#ffd79a;
+  --green-txt:#8ee8ad; --green-txt-2:#c6f3d6; --blue-txt:#aec4ff; --blue-2:#8aa6f5;
+  --cyan-txt:#8fe0ee;
+  /* CUI/violet band + the lucid-agent hero green (brand one-off, ADR-0251) */
+  --violet:#8b5cf6; --violet-2:#7c3aed; --violet-ic:#c4b5fd; --violet-txt:#e9ddff; --hero:#41ff8b;
+  --hero-txt:#8ef5bc;
+  /* inks: color-mix lighten/darken, and text ON a saturated fill */
+  --tint:#ffffff; --shade:#000000; --on-fill:#1d1607; --on-amber:#171008;
+  /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
+  --accent-rgb:243 195 79; --accent-2-rgb:255 217 127; --cyan-rgb:85 171 255;
+  --cyan-2-rgb:140 198 255; --green-rgb:70 210 126; --amber-rgb:232 178 60; --red-rgb:239 95 95;
+  --red-deep-rgb:200 66 59; --blue-rgb:94 141 242; --violet-rgb:139 92 246; --hero-rgb:65 255 139;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:5 6 13; --scrim-2-rgb:29 24 12;
+  --glass-rgb:5 7 15;
+  color-scheme:dark;
+}
+
+/* Easter */
+/* @palette pastel */
+:root[data-theme="pastel"] {
+  /* surfaces */
+  --bg-0:#f8f5fc; --bg-1:#ffffff; --bg-2:#f4effa; --bg-3:#ece3f7; --bg-4:#e5dcef;
+  /* extra surfaces: glow wash, inset troughs, code/editor grounds, elevated cards, kg canvas, marquee fade, alpha checkerboard */
+  --bg-glow:#f2eef9; --bg-sunk:#e9def6; --bg-code:#f7f3fb; --bg-code-2:#f0e9f9;
+  --bg-editor:#ffffff; --bg-elev:#ffffff; --bg-kg:#f3ecfa; --bg-fade:#f8f5fc; --check-1:#ede5f7;
+  --check-2:#e5dcef;
+  /* chrome: titlebar + statusbar gradient stops, scrollbar thumb states */
+  --tb-1:#ffffff; --tb-2:#faf8fd; --tb-3:#f2ecf9; --sb-1:#faf8fd; --sb-2:#f6f2fb; --sb-3:#f0e9f9;
+  --scroll-thumb:#d1c1e3; --scroll-thumb-h:#bba4d6; --scroll-thumb-a:#a585c9;
+  /* hairlines */
+  --line:#ded2eb; --line-soft:#ece2f7; --line-strong:#c4afdb;
+  /* text ramp (txt-code = the <pre> foreground) */
+  --txt:#1d1727; --txt-2:#56456a; --txt-3:#7c6793; --txt-4:#a393b4; --txt-code:#2f2938;
+  /* brand */
+  --accent:#7a45c8; --accent-2:#9a5ee6; --accent-deep:#5a2f9f; --cyan:#12806f; --cyan-2:#0f6f61;
+  /* state hues */
+  --green:#1c7f45; --amber:#8a5a04; --red:#c02626; --blue:#2b52c8; --red-mid:#c42a22;
+  --red-deep:#9c1f19;
+  /* state hues, TEXT weight: legible on that hue's -dim tint, never on the raw hue */
+  --red-txt:#8e1414; --red-txt-2:#a52222; --amber-txt:#6b4302; --amber-txt-2:#7a4e03;
+  --green-txt:#0f5c30; --green-txt-2:#146b39; --blue-txt:#1e3b96; --blue-2:#3a5fd0;
+  --cyan-txt:#0a5b6b;
+  /* CUI/violet band + the lucid-agent hero green (brand one-off, ADR-0251) */
+  --violet:#6d28d9; --violet-2:#5b21b6; --violet-ic:#5b21b6; --violet-txt:#3b1d8f; --hero:#0d7a3f;
+  --hero-txt:#0a5c30;
+  /* inks: color-mix lighten/darken, and text ON a saturated fill */
+  --tint:#ffffff; --shade:#000000; --on-fill:#ffffff; --on-amber:#ffffff;
+  /* channel triplets - the ONLY way to build an alpha variant (and the only thing @keyframes can follow) */
+  --accent-rgb:122 69 200; --accent-2-rgb:154 94 230; --cyan-rgb:18 128 111;
+  --cyan-2-rgb:15 111 97; --green-rgb:28 127 69; --amber-rgb:138 90 4; --red-rgb:192 38 38;
+  --red-deep-rgb:156 31 25; --blue-rgb:43 82 200; --violet-rgb:109 40 217; --hero-rgb:13 122 63;
+  --tint-rgb:255 255 255; --sh-rgb:60 66 92; --scrim-rgb:30 32 48; --scrim-2-rgb:60 40 80;
+  --glass-rgb:255 255 255;
+  color-scheme:light;
+}
+
 /* @derived - recipes built FROM the palette above; one definition, all themes.
    Never add a raw colour here: everything routes through a --*-rgb triplet so a
    theme switch is a single attribute flip with no duplicated shadow tables. */
@@ -3046,19 +3676,23 @@ body.preview-open .thread{font-size:.9em}
 .cg-side-h{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--txt-1);margin-bottom:3px}
 .cg-side-h b{color:var(--txt)}
 /* P-KG-CODE.1d: file paths are clickable buttons that open the file in the IDE */
-.cg-open{display:block;width:100%;text-align:left;background:none;border:0;padding:0;margin:0;font-family:var(--mono);font-size:11px;color:var(--txt-2);word-break:break-all;line-height:1.4;cursor:pointer;transition:color var(--t)}
+/* Invariant 11: each path is ONE line. The file name (.cg-open-base) holds its width; the directory, or a
+   symbol's file, ellipsizes first. No raw text sits beside the spans (both are elements). */
+.cg-open{display:flex;width:100%;min-width:0;text-align:left;background:none;border:0;padding:0;margin:0;font-family:var(--mono);font-size:11px;color:var(--txt-2);white-space:nowrap;line-height:1.4;cursor:pointer;transition:color var(--t)}
+.cg-open-dir{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--txt-3)}
+.cg-open-base{flex:0 0 auto;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .cg-open:hover{color:var(--accent-2);text-decoration:underline;text-underline-offset:2px}
 .cg-side-path.cg-open{font-size:10.5px;color:var(--txt-3);margin-bottom:12px}
 .cg-side-path.cg-open:hover{color:var(--accent-2)}
 .cg-side-sec{margin-bottom:12px}
 .cg-side-lbl{display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-3);font-weight:700;margin-bottom:5px}
 .cg-side-list{margin:0;padding-left:26px;display:flex;flex-direction:column;gap:3px;list-style:decimal}
-.cg-side-list li{font-family:var(--mono);font-size:11px;color:var(--txt-2);word-break:break-all}
+.cg-side-list li{font-family:var(--mono);font-size:11px;color:var(--txt-2);min-width:0}
 .cg-side-list li::marker{color:var(--accent-2);font-weight:700;font-family:var(--sans,inherit)}
 .cg-side-none{font-size:11px;color:var(--txt-4);font-style:italic}
 /* P-KG-SYM.1: symbol-node bits + the file hint after a symbol name */
 .cg-side-kind{font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent-2);border:1px solid color-mix(in srgb,var(--accent-2) 30%,var(--line));border-radius:5px;padding:1px 5px;font-family:var(--sans,inherit)}
-.cg-open-file{color:var(--txt-4);font-size:9.5px}
+.cg-open-file{flex:0 1 auto;min-width:0;margin-left:6px;overflow:hidden;text-overflow:ellipsis;color:var(--txt-4);font-size:9.5px}
 /* the "build a code graph" level picker */
 .cg-picker{width:min(660px,95vw)}
 .cg-levels{display:flex;flex-direction:column;gap:14px;margin:14px 0 8px}
@@ -3435,7 +4069,7 @@ body.preview-open .thread{font-size:.9em}
 .kg-svg.kg-form{animation:kgForm .3s var(--ease-out)}
 @keyframes kgForm{from{opacity:0}to{opacity:1}}
 @media (prefers-reduced-motion: reduce){.kg-svg.kg-form{animation:none}}
-.kg-edge{fill:none;stroke:var(--line-strong);stroke-width:1.1;opacity:.32;stroke-linecap:round;transition:opacity var(--t)}
+.kg-edge{fill:none;stroke:var(--line-strong);stroke-width:1.1;opacity:.32;stroke-linecap:round;transition:opacity var(--t);vector-effect:non-scaling-stroke}
 .kg-part{opacity:.8;filter:drop-shadow(0 0 2.5px currentColor)}
 /* shared soft glow over the whole node layer - one cheap filter, not one per node */
 .kg-nodes{filter:url(#kgGlow)}
@@ -3455,6 +4089,44 @@ body.preview-open .thread{font-size:.9em}
 .kg-search{flex:1 1 96px;min-width:0;max-width:170px;padding:4px 9px;font-size:12px;border-radius:7px;border:1px solid var(--line);background:var(--bg-0);color:var(--txt);outline:none;transition:border-color var(--t) var(--ease),max-width var(--t) var(--ease)}
 .kg-search:focus{border-color:var(--accent);max-width:210px}
 .kg-search::placeholder{color:var(--txt-3)}
+/* P-KG-ORBIT.1 (ADR-0470): the ranked "Find a node" results under the search box. Each row is a dot plus ONE
+   block text element (name over path), both single-line ellipsized (invariant 11). */
+.kg-results{position:absolute;z-index:30;max-height:340px;overflow:auto;background:var(--bg-2);border:1px solid var(--line-strong);border-radius:10px;padding:4px;box-shadow:0 12px 32px -12px rgb(var(--sh-rgb) / .7)}
+.kg-results[hidden]{display:none}
+.kg-res{display:flex;align-items:center;gap:9px;width:100%;border:0;background:transparent;text-align:left;padding:6px 8px;border-radius:7px;cursor:pointer;color:var(--txt-2)}
+.kg-res.on,.kg-res:hover{background:var(--bg-4);color:var(--txt)}
+.kg-res-dot{flex:none;width:9px;height:9px;border-radius:50%}
+.kg-res-txt{display:block;flex:1;min-width:0}
+.kg-res-name{display:block;font-size:12.5px;font-weight:600;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kg-res-path{display:block;font-family:var(--mono);font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kg-res-none{padding:8px 10px;font-size:12px;color:var(--txt-4)}
+/* P-KG-ORBIT.1 (ADR-0470): the Orbit engine - a canvas plus DOM overlays (selection HUD, kind legend, axis note). */
+.orb{position:absolute;inset:0;z-index:1}
+.orb-cv{display:block;width:100%;height:100%;touch-action:none}
+.orb-hud{position:absolute;top:12px;left:12px;z-index:3;width:260px;max-width:calc(100% - 24px);max-height:calc(100% - 96px);overflow:auto;padding:10px 12px;border-radius:10px;
+  background:color-mix(in srgb,var(--bg-2) 92%,transparent);border:1px solid var(--line);box-shadow:0 10px 26px -14px rgb(var(--sh-rgb) / .7);font-size:12px;color:var(--txt-2)}
+.orb-hud[hidden],.orb-hint[hidden],.orb-back[hidden],.orb-sec[hidden]{display:none}
+.orb-hud-name{font-size:13px;font-weight:700;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:8px}
+.seg.orb-dir{margin-bottom:8px}
+.orb-dir button{flex:1;padding:4px 6px;white-space:nowrap}
+.orb-hud-count{font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:8px}
+.orb-up{color:#5ec8f2;font-weight:600}
+.orb-down{color:#e8b23c;font-weight:600}
+.orb-sec{margin-bottom:8px}
+.orb-sec-lbl{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-3);font-weight:700;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orb-row{display:flex;align-items:center;gap:7px;width:100%;border:0;background:transparent;color:var(--txt-2);font-size:12px;padding:3px 6px;border-radius:6px;cursor:pointer;text-align:left}
+.orb-row:hover{background:var(--bg-3);color:var(--txt)}
+.orb-row-txt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orb-dot{flex:none;display:inline-block;width:8px;height:8px;border-radius:50%}
+.orb-more{font-size:11px;color:var(--txt-4);padding:2px 6px;font-style:italic;white-space:nowrap}
+.orb-legend{position:absolute;left:12px;bottom:12px;z-index:3;display:flex;flex-wrap:wrap;gap:5px;max-width:calc(100% - 80px)}
+.orb-chip{display:flex;align-items:center;gap:6px;white-space:nowrap;border:1px solid var(--line);background:color-mix(in srgb,var(--bg-2) 92%,transparent);border-radius:999px;padding:3px 9px;font-size:11px;color:var(--txt-2);cursor:pointer;transition:opacity var(--t),border-color var(--t)}
+.orb-chip:hover{border-color:var(--line-strong);color:var(--txt)}
+.orb-chip-txt{white-space:nowrap}
+.orb-chip.off{opacity:.45}
+.orb-chip.off .orb-dot{background:transparent!important;box-shadow:inset 0 0 0 1px var(--txt-4)}
+.orb-axis{position:absolute;top:12px;right:14px;z-index:2;font-size:10.5px;color:var(--txt-4);white-space:nowrap;pointer-events:none}
+.orb-hint{position:absolute;top:40px;left:50%;transform:translateX(-50%);z-index:4;max-width:calc(100% - 24px);padding:6px 12px;border-radius:8px;background:var(--bg-2);border:1px solid var(--accent);color:var(--txt);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* P-KG-REL.1: relate mode - crosshair cursor, picked-node ring, and the cursor-following ghost edge */
 .kg-relating .kg-node,.kg-relating .kg-svg{cursor:crosshair}
 .kg-node.rel circle{stroke:var(--accent);stroke-width:2.5;transform:scale(1.1)}
@@ -3470,7 +4142,10 @@ body.preview-open .thread{font-size:.9em}
 .kg-relate-label::placeholder{color:var(--txt-3)}
 .kg-relate-bar .btn-mini{margin-left:auto}
 .kg-relate-bar .btn-mini+.btn-mini{margin-left:6px}
-.kg-label{fill:var(--txt-2);font-size:9.5px;font-family:inherit;text-anchor:middle;paint-order:stroke;stroke:var(--bg-0);stroke-width:3px;stroke-linejoin:round;transition:fill var(--t)}
+.kg-label{fill:var(--txt-2);font-size:calc(9.5px * var(--kg-ls,1));font-family:inherit;text-anchor:middle;paint-order:stroke;stroke:var(--bg-0);stroke-width:calc(3px * var(--kg-ls,1));stroke-linejoin:round;transition:fill var(--t)}
+/* P-KG-FLAT.1 (ADR-0471): zoomed out, only hubs and the nodes you are working with keep a label */
+.kg-svg.kg-lod .kg-node:not(.hub):not(.sel):not(.match):not(.rel):not(:hover) .kg-label{display:none}
+.kg-svg.kg-lod .kg-node.hub .kg-label{fill:var(--txt)}
 .kg-node:hover .kg-label,.kg-node.sel .kg-label{fill:var(--txt)}
 .kg-side-head{display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13.5px}
 .kg-side-head b{color:var(--txt);min-width:0;overflow:hidden;text-overflow:ellipsis}
@@ -3614,6 +4289,71 @@ body.preview-open .thread{font-size:.9em}
    so the Theme card reads like the rest of Settings. A BLOCK, not a flex row: it holds one text run. */
 .theme-grp-lbl{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-4);margin:12px 0 2px}
 .theme-grp-lbl:first-child{margin-top:6px}
+/* ───────── P-SEASON.1 (ADR-0525): Settings -> Theme -> Special themes ─────────
+   The dropdown is IN FLOW (the listbox expands under its trigger and pushes the card down): .set-coll
+   clips overflow, so a floating menu would be cut off at the card edge. Every row is a GRID with one
+   ellipsizing label (invariant 11); the blurb is its own block on its own row. */
+.theme-grp-lbl+.set-toggle{margin-top:4px}
+.season-status{font-size:12px;color:var(--txt-3);margin:2px 0 8px}
+.season-status b{color:var(--txt-2);font-weight:650}
+.season-dd{border:1px solid var(--line);border-radius:11px;background:var(--bg-2);box-shadow:var(--emboss);overflow:hidden;
+  transition:border-color var(--t),box-shadow var(--t)}
+.season-dd.open{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));
+  box-shadow:0 0 0 1px var(--accent-dim),0 10px 28px -14px rgb(var(--sh-rgb) / .6)}
+.season-trigger{-webkit-app-region:no-drag;width:100%;display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;
+  align-items:center;gap:10px;padding:10px 12px;border:0;background:transparent;color:var(--txt);font:inherit;
+  font-size:12.5px;text-align:left;cursor:pointer;transition:background var(--t-fast)}
+.season-trigger:hover{background:var(--bg-3)}
+.season-trigger:focus-visible{outline:2px solid var(--accent-2);outline-offset:-2px;border-radius:11px}
+/* .theme-sw carries grid-area:sw for the theme tiles; the trigger is an unnamed grid, so place it in flow. */
+.season-trigger>.theme-sw{grid-area:auto}
+/* The shared chevron icon points right: down when closed, up when open, like a native select. */
+.season-chev{display:inline-flex;color:var(--txt-4);transform:rotate(90deg);transition:transform var(--t-slow) var(--ease-out),color var(--t)}
+.season-dd.open .season-chev{transform:rotate(-90deg);color:var(--txt-2)}
+.season-sw-none i{background:repeating-linear-gradient(135deg,var(--bg-4) 0 3px,var(--bg-2) 3px 6px);width:33px}
+.season-nm{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:650;color:var(--txt)}
+.season-when{white-space:nowrap;font-size:11.5px;color:var(--txt-3);font-variant-numeric:tabular-nums}
+.season-kind{white-space:nowrap;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--txt-3);
+  border:1px solid var(--line);border-radius:999px;padding:1px 7px}
+.season-menu{max-height:360px;overflow:auto;border-top:1px solid var(--line-soft);padding:4px;
+  animation:setCollOpen var(--t-slow) var(--ease-out)}
+.season-menu[hidden]{display:none}
+.season-opt{-webkit-app-region:no-drag;width:100%;display:grid;grid-template-columns:auto minmax(0,1fr) auto minmax(108px,auto);
+  grid-template-areas:"sw nm kind when" ". bl bl bl";gap:2px 10px;align-items:center;padding:8px 10px;border:1px solid transparent;
+  border-radius:8px;background:transparent;color:var(--txt-2);font:inherit;font-size:12.5px;text-align:left;cursor:pointer;
+  transition:background var(--t-fast),border-color var(--t)}
+.season-opt>.theme-sw{grid-area:sw}
+.season-opt>.season-nm{grid-area:nm}
+.season-opt>.season-kind,.season-opt>span:nth-child(3){grid-area:kind}
+.season-opt>.season-when{grid-area:when;text-align:right}
+.season-bl{grid-area:bl;min-width:0;font-size:11px;line-height:1.5;color:var(--txt-3)}
+.season-opt:hover,.season-opt:focus-visible{background:var(--bg-3);outline:none;border-color:var(--line)}
+.season-opt.on{background:var(--accent-dim);border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
+.season-opt.on .season-bl{color:var(--txt-2)}
+.season-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-top:10px}
+.season-field{display:grid;gap:4px;min-width:0}
+.season-field-lbl{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-4)}
+.season-field select{min-height:32px;padding:5px 8px;background:var(--bg-2);color:var(--txt);border:1px solid var(--line);
+  border-radius:8px;font:inherit;font-size:12.5px;cursor:pointer}
+.season-field select:focus-visible{outline:2px solid var(--accent-2);outline-offset:2px}
+/* The live preview tile: the hovered (or active, or next) season's backdrop at 16:9. */
+.season-preview{position:relative;margin-top:10px;aspect-ratio:16/7;border-radius:11px;overflow:hidden;
+  border:1px solid var(--line);background:var(--bg-1);box-shadow:var(--emboss)}
+.season-preview-cv{position:absolute;inset:0;width:100%;height:100%;display:block}
+.season-preview-cap{position:absolute;left:10px;bottom:8px;max-width:calc(100% - 20px);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;font-size:11px;font-weight:650;letter-spacing:.04em;color:var(--txt);padding:3px 9px;border-radius:999px;
+  background:rgb(var(--glass-rgb) / .62);border:1px solid rgb(var(--tint-rgb) / .12)}
+.season-preview-cap:empty{display:none}
+/* The chat-column backdrop. Under the chat (z-index 1) like .chat-bg, faded so prose stays readable, and
+   scrimmed toward the composer where the prompt text sits. */
+.season-bg{position:absolute;inset:0;z-index:0;pointer-events:none;opacity:0;transition:opacity .6s var(--ease-out,ease)}
+.season-bg.on{opacity:.62}
+.season-bg::after{content:"";position:absolute;inset:0;
+  background:linear-gradient(180deg,rgb(var(--scrim-rgb) / .28) 0%,rgb(var(--scrim-rgb) / .12) 30%,rgb(var(--scrim-rgb) / .42) 78%,rgb(var(--scrim-rgb) / .7) 100%)}
+.season-backdrop{position:absolute;inset:0;width:100%;height:100%;display:block}
+/* On the stage the season owns the mood: the neon wash steps back so the two do not fight. */
+.center.has-season .agent-stage-glow{opacity:.3;animation:none}
+@media (prefers-reduced-motion:reduce){.season-bg{transition:none}}
 /* personalization - compartment selector + per-mode risk notice (ADR-0012) */
 .pscope-lbl{display:flex;align-items:center;gap:5px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-4);margin:12px 0 6px}
 .pscope-lbl .info-dot{color:var(--txt-4)}
@@ -3869,6 +4609,8 @@ body.preview-open .thread{font-size:.9em}
 .noresp-sr{opacity:.6;font-family:var(--mono);font-size:11px}
 .noresp-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .noresp-note{opacity:.6;font-size:10px;margin-left:6px;font-weight:400}
+.noresp-restart{font-size:12px}
+.noresp-restart.strong{color:var(--txt-1)}
 /* P-NETSTAT.1 (ADR-0423): the status-bar network indicator, its popover, and the "stand by" card that
    replaces the switch-model card when a turn died on the network. Each text run is its own element. */
 .net-seg{gap:6px;min-width:0;max-width:360px}
@@ -4873,6 +5615,27 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
    instead of staying pinned at 180px, which is the whole point of dragging the edge. */
 .fleet-card[style*="height"] .fleet-out-wrap{flex:1}
 .fleet-card[style*="height"] .fleet-out{max-height:none;flex:1}
+/* == P-FLEET.FIT1 (ADR-pending): AUTOFIT, the default card layout ==
+   fleet_grid.ts puts `.autofit` on the grid and gives every visible card an inline `flex:0 1 <w>px` plus
+   `height:<h>px` from lane_layout.autofitPlan, so the cards tile the whole body in both axes. None of these
+   rules size a card; they make the INSIDE of a tile behave: the transcript takes all the slack while the
+   header, status strips and composer never shrink, so the composer stays pinned to the card's bottom at
+   any tile height. Every rule is scoped to `.autofit`, so the free layout is byte-for-byte what it was. */
+.fleet-grid.autofit .fleet-card>:not(.fleet-card-main):not(.fleet-card-rz){flex-shrink:0}
+.fleet-grid.autofit .fleet-card-main{flex:1 1 0;min-height:0}
+.fleet-grid.autofit .fleet-card-main>:not(.fleet-out-wrap){flex-shrink:0}
+.fleet-grid.autofit .fleet-out-wrap{flex:1 1 0;min-height:0}
+.fleet-grid.autofit .fleet-out{flex:1 1 0;max-height:none;min-height:40px}
+/* Group dividers and the + Lane form own a full row, so each group's tiles start a clean row and the form
+   never squeezes into a tile row; fleet_grid.ts measures them and subtracts their height before tiling. */
+.fleet-grid.autofit .fleet-group-head,.fleet-grid.autofit .fleet-spawn-card{flex:0 0 100%;width:auto}
+/* The reorder placeholder becomes a 4px insertion bar whose outer width (4px - 14px margin) nets to zero
+   against the 10px gap it adds, so a full tile row never wraps while a card is being dragged across it. */
+.fleet-grid.autofit .fleet-drop-slot{flex:0 0 4px;margin-right:-14px;align-self:stretch;min-height:0;border:0;border-radius:2px;
+  background:var(--accent)}
+/* The header toggle: lit while autofit is on. One text child, nowrap (invariant 11). */
+.fleet-fit-btn span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fleet-fit-btn.on{color:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
 .fleet-out-empty{display:flex;align-items:center;min-width:0;color:var(--txt-4);font-size:11px}
 .fleet-out-empty span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fleet-turn-user{flex:none;color:var(--accent-2);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -5005,19 +5768,26 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-card.lane-working{--lane:var(--cyan);--lane-dim:rgb(var(--cyan-rgb) / .35);border-color:rgb(var(--cyan-rgb) / .5)}
 .fleet-card.lane-working .fleet-led{animation:hudpulse 2.2s ease-in-out infinite}
 .fleet-card.lane-awaiting-input{--lane:var(--amber);--lane-dim:rgb(var(--amber-rgb) / .4);border-color:var(--amber);animation:fleetGlowAmber 2.6s ease-in-out infinite}
-.fleet-card.lane-needs-approval{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .5);border-color:var(--red);animation:fleetGlowRed 1.6s ease-in-out infinite}
+.fleet-card.lane-needs-approval{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .5);border-color:var(--red)}
 .fleet-card.lane-needs-approval .fleet-card-head{background:rgb(var(--red-rgb) / .14);box-shadow:0 0 12px -2px rgb(var(--red-rgb) / .45) inset}
 .fleet-card.lane-done{--lane:var(--green);--lane-dim:rgb(var(--green-rgb) / .35);border-color:rgb(var(--green-rgb) / .55)}
 .fleet-card.lane-error{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .4);border-color:var(--red)}
 .fleet-card.lane-stopped{--lane:var(--txt-4);opacity:.55}
 @keyframes fleetGlowAmber{0%,100%{box-shadow:0 0 0 0 rgb(var(--amber-rgb) / 0)}50%{box-shadow:0 0 14px 2px rgb(var(--amber-rgb) / .4)}}
-@keyframes fleetGlowRed{0%,100%{box-shadow:0 0 2px 0 rgb(var(--red-rgb) / .3)}50%{box-shadow:0 0 18px 3px rgb(var(--red-rgb) / .6)}}
+/* P-GLOW.1 (ADR-0524): the red "needs approval" pulse on a grid card, the dock pill and a census pip is a
+   pseudo-element whose shadow is painted ONCE; only its opacity animates (orbitGlow), which runs on the
+   compositor. Animating box-shadow itself repainted on the main thread every frame for as long as any lane
+   waited, app-wide through the dock pill. The card clips its overflow, so its glow sits inside the border. */
+.fleet-card.lane-needs-approval::after,#fleetDockPill.attn::after,.fleet-pip.lane-needs-approval i::after{
+  content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  box-shadow:0 0 18px 3px rgb(var(--red-rgb) / .6);opacity:.1;will-change:opacity;animation:orbitGlow 1.6s ease-in-out infinite}
+.fleet-card.lane-needs-approval::after{box-shadow:inset 0 0 18px 3px rgb(var(--red-rgb) / .6)}
 /* P-FLEET.L2 - the MINIMIZED snapshot. The pill inherits .share-dock-pill; inside it one dot per lane
    state carries that state's color and its count, so a glance at the status bar answers "is anything
    blocked on me?" without reopening the panel. Each pip owns its own hover naming the lanes.
    The dot colors are taken from the SAME lane-<status> custom properties the cards use (--lane), so the
    two surfaces can never drift apart. */
-#fleetDockPill.attn{border-color:var(--red);animation:fleetGlowRed 1.6s ease-in-out infinite}
+#fleetDockPill.attn{border-color:var(--red);position:relative}
 .fleet-pips{display:inline-flex;align-items:center;gap:6px;flex:none;white-space:nowrap}
 .fleet-pip{--lane:var(--txt-4);--lane-dim:color-mix(in srgb,var(--txt-4) 30%,transparent);display:inline-flex;align-items:center;gap:3px;flex:none;cursor:pointer}
 .fleet-pip i{width:7px;height:7px;border-radius:50%;flex:none;background:var(--lane);box-shadow:0 0 6px var(--lane-dim)}
@@ -5026,7 +5796,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-pip.lane-working i{animation:hudpulse 2.2s ease-in-out infinite}
 .fleet-pip.lane-awaiting-input{--lane:var(--amber);--lane-dim:rgb(var(--amber-rgb) / .5)}
 .fleet-pip.lane-needs-approval{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .6)}
-.fleet-pip.lane-needs-approval i{animation:fleetGlowRed 1.6s ease-in-out infinite}
+.fleet-pip.lane-needs-approval i{position:relative}
 .fleet-pip.lane-done{--lane:var(--green);--lane-dim:rgb(var(--green-rgb) / .45)}
 .fleet-pip.lane-error{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .4)}
 .fleet-pip.lane-stopped,.fleet-pip.lane-idle{opacity:.55}
@@ -5065,9 +5835,10 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-empty span{min-width:0}
 /* without motion the states still read: border color + header tint stay; only the pulsing stops */
 @media (prefers-reduced-motion:reduce){
-  .fleet-card.lane-awaiting-input,.fleet-card.lane-needs-approval,#fleetDockPill.attn,
+  .fleet-card.lane-awaiting-input,
   .fleet-card.lane-working .fleet-led,.fleet-cursor,
-  .fleet-pip.lane-working i,.fleet-pip.lane-needs-approval i{animation:none}
+  .fleet-pip.lane-working i{animation:none}
+  .fleet-card.lane-needs-approval::after,#fleetDockPill.attn::after,.fleet-pip.lane-needs-approval i::after{animation:none;opacity:.5}
 }
 
 /* ───────────────────────── the Timeline dock - P-FLEET.L5 / P-TL.2 / P-TL.3 ─────────────────────────
@@ -5189,6 +5960,17 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .q-pill .q-push{flex:none;background:none;border:1px solid var(--line);border-radius:999px;padding:0 7px;
   font-size:10px;color:var(--txt-3);cursor:pointer;white-space:nowrap;line-height:16px}
 .q-pill .q-push:hover{color:var(--txt);border-color:var(--line-strong);background:var(--bg-3)}
+/* P-QUEUE-IMG.1 (ADR-0469): a staged item's OWN images as tiny thumbs (click = copy into the composer).
+   flex:none and nowrap, so the pill's one text child (.q-text) is still the only thing that ellipsizes. */
+.q-pill .q-imgs{flex:none;display:inline-flex;gap:2px;white-space:nowrap}
+.q-pill .q-thumb{flex:none;width:18px;height:18px;padding:0;border:1px solid var(--line);border-radius:4px;
+  overflow:hidden;background:var(--bg-3);cursor:copy}
+.q-pill .q-thumb:hover{border-color:var(--line-strong)}
+.q-pill .q-thumb-img{width:100%;height:100%;object-fit:cover;display:block}
+.q-pill .q-push-off{opacity:.45;cursor:not-allowed}
+.fleet-q-img{flex:none;white-space:nowrap;font-family:var(--mono);font-size:9.5px;color:var(--txt-4)}
+.fleet-q-btn.fleet-q-edit{width:auto;padding:0 4px;white-space:nowrap;font-size:9.5px}
+.fleet-q-btn.fleet-q-push[aria-disabled="true"]{opacity:.4;cursor:not-allowed}
 .queue-chooser{max-width:min(1080px,94vw);margin:0 auto 6px;display:flex;align-items:center;gap:7px;
   justify-content:flex-end;padding:3px 8px;background:var(--bg-2);border:1px solid var(--line-soft);border-radius:999px}
 .queue-chooser .qc-text{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
@@ -5228,7 +6010,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-checkin{margin:6px 8px 0;padding:7px 9px;border:1px solid var(--line-soft);border-radius:8px;background:var(--bg-2)}
 .fleet-ck-line{display:block;font-size:11px;color:var(--txt-2);padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fleet-ck-acts{display:flex;gap:6px;margin-top:5px}
-.fleet-q-push{white-space:nowrap;font-size:9.5px}
+.fleet-q-btn.fleet-q-push{width:auto;padding:0 4px;white-space:nowrap;font-size:9.5px}
 /* ── P-BROWSER.1 (wave 2): the agent-browser pill (BrowserFeature section) ──────────────────────
    Floats near the top of the chat while the agent drives its visible browser window. Invariant #11:
    ONE text child (.bp-label, nowrap+ellipsis); the icon and buttons are flex:none controls. .bp-fx is
@@ -6308,6 +7090,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-view.static .orbit-node-card{animation:none;will-change:auto;transition:none}
 .orbit-view.static .orbit-node-card::after{animation:none;will-change:auto;opacity:.5}
 .orbit-view.static .orbit-led{animation:none !important}
+.orbit-view.static .fleet-pip i,.orbit-view.static .fleet-pip i::after{animation:none}
 .orbit-view.static .orbit-svg{will-change:auto;transform:none}
 .orbit-view.static .orbit-hub-core{transition:none}
 .orbit-view.static .orbit-cta{transition:none}
@@ -6743,3 +7526,11 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .vault-strength[data-score="0"],.vault-strength[data-score="1"]{color:var(--red-txt)}
 .vault-strength[data-score="2"]{color:var(--cyan-txt)}
 .vault-strength[data-score="3"],.vault-strength[data-score="4"]{color:var(--green-txt)}
+
+/* ───────── P-PUSH.PAR1 (ADR-pending): the staged chip's item menu (right-click / long-press) ─────────
+   The shared .ctx-menu, capped in width; each label is the row's one ellipsizing text child (invariant #11).
+   Chips suppress the native touch callout and word selection, so a hold opens THIS menu instead. */
+.ctx-menu.ctx-menu-stage{max-width:min(320px,92vw)}
+.ctx-menu-stage .ctx-it>span:first-child{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctx-menu-stage .ctx-it:focus-visible{outline:2px solid var(--line-strong);outline-offset:-2px;background:var(--bg-3)}
+.q-pill,.fleet-q-chip{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
