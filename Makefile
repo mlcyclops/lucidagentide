@@ -1411,6 +1411,38 @@ demo-P-TUI.6: demo-P-TUI.5e2 ## P-TUI.6 (ADR-0435): the deck STRIP + the fuzzy P
 	$(BUN) run desktop/scripts/demo_p_tui_6.ts
 	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_palette.test.ts harness/launcher/hub_tui.test.ts harness/launcher/hub_agents_panel.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-P-HERD.1
+demo-P-HERD.1: ## P-HERD.1 (ADR-0490, ADR-0541): Herd, the optional add-on: a hub server that outlives its terminal, clients that attach, detach and reattach, named instances with their own layout files and snapshots, the `lucid herd` client and server list|start|stop, the runtime host's /healthz, and the staged package.
+	$(BUN) test $(TEST_IGNORES) plugins/herd/test/hub_server.test.ts plugins/herd/test/cli.test.ts plugins/herd/test/runtime_host.test.ts plugins/herd/test/stage.test.ts
+
+.PHONY: demo-P-HERD.2
+demo-P-HERD.2: ## P-HERD.2 (ADR-0491, ADR-0545): named layouts as untrusted files: the parser refuses a lane id, cwd, model or prompt, presets, slots by priority or name, save, apply, cycle, and export and import from the shell only.
+	$(BUN) test $(TEST_IGNORES) plugins/herd/test/hub_layouts.test.ts
+
+.PHONY: demo-P-HERD.3
+demo-P-HERD.3: ## P-HERD.3 (ADR-0492, ADR-0545): the key model: prefix ctrl+b with terminal, prefix and navigate modes, hub-keys.json, directional focus and swap, resize by cells, copy mode with search and OSC 52 yank, pane move and rename.
+	$(BUN) test $(TEST_IGNORES) plugins/herd/test/hub_keys.test.ts plugins/herd/test/hub_herd_keys.test.ts plugins/herd/test/copy_mode.test.ts
+
+.PHONY: demo-P-HERD.4
+demo-P-HERD.4: ## P-HERD.4 (ADR-0493, ADR-0545): agent wait, prompt --wait, spawn --wait and agent events over the per-lane watch streams, pane wait-output, agent_blocked on an open ask, agent_prompt_stalled, timeouts; no verb answers an ask.
+	$(BUN) test $(TEST_IGNORES) plugins/herd/test/waits.test.ts
+
+.PHONY: demo-P-HERD.5
+demo-P-HERD.5: ## P-HERD.5 (ADR-0494, ADR-0545): attention: the seen ledger (done means not yet seen), needs-you first, `next` and ctrl+b a, the bell and terminal alerts with lane name and status only, notify rate limits.
+	$(BUN) test $(TEST_IGNORES) plugins/herd/test/attention.test.ts
+
+.PHONY: demo-P-HERD.6
+demo-P-HERD.6: ## P-HERD.6 (ADR-0495, ADR-0545): Main as a pane: the engine's own conversation over /api/chat, the parked ask answered only by keys, main prompt refused agent_blocked while Main waits on a person, session list and open --as main|lane.
+	$(BUN) test $(TEST_IGNORES) plugins/herd/test/hub_main_pane.test.ts
+
+.PHONY: demo-P-HERD.7
+demo-P-HERD.7: ## P-HERD.7 (ADR-0496, ADR-0549): machines: engines on this box by --dir behind the nonce handshake with their own backoff, `<machine>/<lane>` refs, and the `spokes` machine listing Remote Spokes tasks (submit and follow-up only, decisions refused human_only); --ssh and --profile refused.
+	$(BUN) test $(TEST_IGNORES) plugins/herd/test/hub_machines.test.ts
+
+.PHONY: demo-P-HERD.8
+demo-P-HERD.8: ## P-HERD.8 (ADR-0497, ADR-0549): the read-only mirror page Herd serves on the runtime port: tabs, split tree, agent status and attention over Server-Sent Events; loopback Host, GET only, no foreign Origin, host token, a CSP of default-src none.
+	$(BUN) test $(TEST_IGNORES) plugins/herd/test/gui_mirror.test.ts plugins/herd/test/gui_server.test.ts
+
 .PHONY: demo-P-FLEET.WT1
 demo-P-FLEET.WT1: ## P-FLEET.WT1: a lane can run in its OWN git worktree (spawn option, the user accepts the merge-conflict risk): a new branch lucid/<name>-<id> from HEAD in <repo>.lucid-worktrees/<slug> beside the repo, the lane starting in the same subfolder the user picked; the original checkout is untouched, so the shared-checkout coordination (write waits, sweep refusals, check-ins) does not apply; a refused spawn removes the worktree, branch and folder it just made; not-a-repo and no-commits are named refusals.
 	$(BUN) test $(TEST_IGNORES) desktop/lane_worktree.test.ts

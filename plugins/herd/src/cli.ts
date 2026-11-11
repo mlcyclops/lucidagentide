@@ -20,6 +20,7 @@ import { resolve } from "node:path";
 import { HubOpError, type PaneDeck } from "../../../harness/launcher/hub_spaces.ts";
 import { HUB_USAGE, parseHubCommand } from "../../../harness/launcher/hub_tmux_verbs.ts";
 import { DECKS } from "../../../harness/launcher/hub_tui.ts";
+import { SPOKES_MACHINE } from "./engines.ts";
 import { streamHub } from "./events.ts";
 import { defaultKeysJson } from "./keys.ts";
 import { isFileLayoutOp, LAYOUT_USAGE, LayoutLibrary, parseLayoutCommand, runLayoutOp } from "./layouts.ts";
@@ -44,6 +45,9 @@ export const HERD_HELP =
   "lucid herd session list | open <id> [--as main|lane]   open as Main is refused busy while Main works\n" +
   "lucid herd machine list | add <name> --dir <discovery folder> | remove <name>   other engines on this box\n" +
   "  agent verbs take <machine>/<lane>; agent spawn|list take --machine <name>\n" +
+  "lucid herd machine add spokes            the Remote Spokes hub's spokes and their tasks (no SSH)\n" +
+  "  agent spawn --machine spokes --spoke <node> --text <text> [--name <n>] [--model <m>]   start a task\n" +
+  "  agent prompt spokes/<node>:<task> <text>   follow one up; approvals stay with a person in the IDE\n" +
   "lucid herd agent wait <lane> [--until <status>]... [--timeout <ms>]   block until the lane gets there\n" +
   "lucid herd agent prompt --wait [--until <status>]... [--timeout <ms>] <lane> <text>   refused agent_blocked on an open ask\n" +
   "lucid herd agent spawn ... --wait [--timeout <ms>]   return once the lane is ready\n" +
@@ -135,8 +139,10 @@ export async function runHerdCli(argv: readonly string[], env: Env, entry: strin
       process.stdout.write(JSON.stringify(result ?? null, null, 2) + "\n");
       return 0;
     }
-    // P-HERD.6/7 (ADR-0495, ADR-0496): main, session and machine verbs, and `--machine`, are the server's own.
-    herdOwn = layout !== null || parseHerdPaneCommand(rest) !== null || HOST_ONLY_VERBS[rest[0] ?? ""] === true || rest.includes("--machine");
+    // P-HERD.6/7 (ADR-0495, ADR-0496): main, session and machine verbs, and `--machine`, are the server's own;
+    // so is an agent verb on a `spokes/...` ref (ADR-0549), which the server answers or refuses.
+    herdOwn = layout !== null || parseHerdPaneCommand(rest) !== null || HOST_ONLY_VERBS[rest[0] ?? ""] === true || rest.includes("--machine")
+      || (rest[0] === "agent" && (rest[2] ?? "").startsWith(`${SPOKES_MACHINE}/`));
   } catch (e) {
     if (e instanceof HubOpError) return fail({ error: e.code, message: e.message });
     throw e;

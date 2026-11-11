@@ -33,7 +33,7 @@
 
 import { HubOpError } from "../../../harness/launcher/hub_spaces.ts";
 import { hasOpenAsk, type HerdAttention } from "./attention.ts";
-import { DEFAULT_MACHINE } from "./engines.ts";
+import { DEFAULT_MACHINE, SPOKES_MACHINE } from "./engines.ts";
 import { errorBody, isRecord, ndjsonResponse, type LaneFeed, type LaneTransition, type Timers } from "./events.ts";
 
 /** The LaneStatus vocabulary (desktop/fleet_lanes.ts), closed. */
@@ -327,6 +327,11 @@ export function herdWaitCommands(host: WaitsHost): (argv: readonly string[]) => 
 
   function spawn(v: Extract<HerdVerb, { verb: "agent.spawn.wait" }>): Response {
     return ndjsonResponse(async (write, signal) => {
+      // ADR-0549: a spoke task has no watch stream here; refuse before anything is submitted.
+      const at = v.spawn.indexOf("--machine");
+      if (at >= 0 && v.spawn[at + 1] === SPOKES_MACHINE) {
+        throw new HubOpError("not_local", `--wait follows the lanes of this server's own engine; a task on ${SPOKES_MACHINE} is followed in \`agent list --machine ${SPOKES_MACHINE}\``);
+      }
       const t0 = host.now();
       const reply = await host.run(["agent", "spawn", ...v.spawn]);
       const lane = isRecord(reply) && isRecord(reply.lane) ? reply.lane : null;

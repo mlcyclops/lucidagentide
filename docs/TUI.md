@@ -367,3 +367,12 @@ panes (ADR-0495); P-HERD.7 machines: several engines in one hub (ADR-0496);
 P-HERD.8 the GUI Fleet dock mirroring the same layouts and attention
 (ADR-0497). Vocabulary: a Herdr "session" is a hub INSTANCE (`--name`) here,
 because a LUCID session is a conversation on disk.
+
+All eight are built in Herd, the optional add-on (`lucid herd`, ADR-0541,
+ADR-0545), each proven by `make demo-P-HERD.<n>`; the classic `lucid hub` is
+unchanged. ADR-0549 closes P-HERD.7 and P-HERD.8: other engines on this box are
+added by `--dir`, and a box elsewhere joins as a Remote Spoke instead of an SSH
+machine; `machine add spokes` lists the Remote Spokes hub's tasks through the
+engine's `/api/remote-spokes` routes, and Herd may submit a task or a follow-up
+there, while every decision stays a person's (`human_only`). P-HERD.8 is Herd's
+read-only mirror page; the core Fleet dock does not read Herd's files.

@@ -19,7 +19,8 @@ import type { HubOp } from "../../../harness/launcher/hub_tmux_verbs.ts";
 import { railLine, railRows } from "../../../harness/launcher/hub_tui.ts";
 import {
   addMachine, BACKOFF_MS, connFail, connOk, DEFAULT_MACHINE, DOWN_AFTER, freshConn, laneRef, loadMachines, MACHINE_POLL_MS,
-  MachineSet, machinesPath, nextDelay, parseMachines, removeMachine, routeAgentArgv, splitLaneRef,
+  MachineSet, machinesPath, nextDelay, parseMachines, removeMachine, routeAgentArgv, routeSpokesArgv, splitLaneRef,
+  SPOKES_MACHINE, spokeTaskLanes, spokeTaskRef,
 } from "../src/engines.ts";
 
 interface FakeEngine { record: EngineDiscovery; seen: { path: string; token: string | null }[]; lanes: Record<string, unknown>[]; stop(): void }
@@ -288,5 +289,208 @@ describe("a MachineSet", () => {
     const path = machinesPath(dir, "main");
     writeFileSync(path, "\u0000\u0000");
     expect(new MachineSet(path, local()).names()).toEqual([DEFAULT_MACHINE]);
+  });
+});
+
+// ADR-0549: the `spokes` machine. A fake engine answers the /api/remote-spokes routes the renderer
+// uses (desktop/remote_spokes.ts) with the shapes that module returns; the Herd server reaches them
+// with its own engine's UI token and nothing else.
+
+const NODE_A = `n_${"a".repeat(32)}`;
+const NODE_B = `n_${"b".repeat(32)}`;
+const TASK_1 = `t_${"1".repeat(16)}`;
+const TASK_2 = `t_${"2".repeat(16)}`;
+const TASK_3 = `t_${"3".repeat(16)}`;
+const TASK_NEW = `t_${"9".repeat(16)}`;
+
+interface FakeHub { record: EngineDiscovery; seen: { method: string; path: string; token: string | null; body: unknown }[]; view: Record<string, unknown>; reply: Record<string, unknown>; stop(): void }
+
+const hubs: FakeHub[] = [];
+
+const spokesView = (): Record<string, unknown> => ({
+  available: true,
+  hub: { node: `n_${"c".repeat(32)}`, label: "hub", scopes: ["recall", "drive"], presence: "none" },
+  actions: { recall: true, drive: true, approve: false, deny: true },
+  spokes: [
+    { node: NODE_A, label: "box-a\u0007", state: "approval", tasks: [
+      { id: TASK_1, name: "train\u202e", state: "working", turns: 2, updatedAt: 1 },
+      { id: TASK_2, name: "review", state: "awaiting_approval", turns: 1, updatedAt: 1 },
+      { id: "t_bad", name: "dropped", state: "working", turns: 0, updatedAt: 1 },
+      { id: `t_${"4".repeat(16)}`, name: "dropped", state: "sleeping", turns: 0, updatedAt: 1 },
+    ] },
+    { node: "n_bad", label: "dropped", state: "idle", tasks: [{ id: TASK_3, name: "x", state: "idle", turns: 0, updatedAt: 1 }] },
+    { node: NODE_B, label: "box-b", state: "idle", tasks: [{ id: TASK_3, name: "", state: "idle", turns: 3, updatedAt: 1 }] },
+  ],
+});
+
+const UNAVAILABLE = { available: false, plugin: "missing", reason: "Install the Remote Spokes plugin to see remote spokes here." };
+
+/** This server's own engine, answering the remote-spokes routes only. */
+function fakeHub(view: Record<string, unknown> = spokesView()): FakeHub {
+  const nonce = crypto.randomUUID();
+  const token = `token-${nonce}`;
+  const seen: FakeHub["seen"] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(req) {
+      const { pathname } = new URL(req.url);
+      const body: unknown = req.method === "POST" ? await req.json() : undefined;
+      seen.push({ method: req.method, path: pathname, token: req.headers.get("x-lucid-token"), body });
+      if (req.headers.get("x-lucid-token") !== token) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+      if (pathname === "/api/remote-spokes" && req.method === "GET") return Response.json({ ok: true, data: hub.view });
+      if ((pathname === "/api/remote-spokes/submit" || pathname === "/api/remote-spokes/followup") && req.method === "POST") return Response.json({ ok: true, data: hub.reply });
+      return new Response("not found", { status: 404 });
+    },
+  });
+  const hub: FakeHub = {
+    record: { v: 1, pid: process.pid, port: server.port!, nonce, version: "9.9", flavor: "agent", startedAt: new Date().toISOString(), token },
+    seen,
+    view,
+    reply: { ok: true, data: { task: TASK_NEW } },
+    stop: () => { void server.stop(true); },
+  };
+  hubs.push(hub);
+  return hub;
+}
+
+async function spokesSet(hub: FakeHub): Promise<MachineSet> {
+  const set = new MachineSet(null, hub.record);
+  set.machineCommand(["machine", "add", SPOKES_MACHINE]);
+  await set.tick(SPOKES_MACHINE);
+  return set;
+}
+
+async function codeOf(f: () => Promise<unknown> | unknown): Promise<string> {
+  try { await f(); return "ok"; } catch (e) { return e instanceof HubOpError ? e.code : String(e); }
+}
+
+describe("the spokes machine (ADR-0549)", () => {
+  afterEach(() => { for (const h of hubs.splice(0)) h.stop(); });
+
+  test("the list file keeps `spokes` only under its own name and kind; add takes no flags and no SSH", async () => {
+    const raw = JSON.stringify({ v: 1, machines: [
+      { name: "spokes", kind: "spokes" },
+      { name: "spokes", kind: "spokes" },
+      { name: "other", kind: "spokes" },
+      { name: "spokes", kind: "local", discoveryDir: join(dir, "s") },
+    ] });
+    expect(parseMachines(raw)).toEqual([{ name: "spokes", kind: "spokes" }]);
+
+    const path = machinesPath(dir, "main");
+    const set = new MachineSet(path, local());
+    expect(set.machineCommand(["machine", "add", "spokes"])).toEqual({ added: "spokes", kind: "spokes", state: "down" });
+    expect(loadMachines(path)).toEqual([{ name: "spokes", kind: "spokes" }]);
+    expect(new MachineSet(path, local()).names()).toEqual([DEFAULT_MACHINE, "spokes"]);
+    expect(await codeOf(() => set.machineCommand(["machine", "add", "spokes"]))).toBe("exists");
+    expect(await codeOf(() => set.machineCommand(["machine", "add", "spokes", "--dir", join(dir, "s")]))).toBe("usage");
+    expect(await codeOf(() => set.machineCommand(["machine", "add", "spokes", "--ssh", "192.0.2.10"]))).toBe("not_supported");
+    expect(await codeOf(() => set.machineCommand(["machine", "add", "box", "--profile", "gpu"]))).toBe("not_supported");
+    expect(set.list().at(-1)).toMatchObject({ name: "spokes", kind: "spokes", discoveryDir: null });
+  });
+
+  test("spokeTaskLanes: one row per task with the spoke label and the task state verbatim; malformed rows drop; text is terminal-safe", () => {
+    expect(spokeTaskLanes(spokesView().spokes)).toEqual([
+      { id: `${NODE_A}:${TASK_1}`, name: "train", status: "working", taskState: "working", spoke: "box-a", spokeState: "approval", node: NODE_A, task: TASK_1, turns: 2 },
+      { id: `${NODE_A}:${TASK_2}`, name: "review", status: "needs-approval", taskState: "awaiting_approval", spoke: "box-a", spokeState: "approval", node: NODE_A, task: TASK_2, turns: 1 },
+      { id: `${NODE_B}:${TASK_3}`, name: TASK_3, status: "done", taskState: "idle", spoke: "box-b", spokeState: "idle", node: NODE_B, task: TASK_3, turns: 3 },
+    ]);
+    expect(spokeTaskLanes("junk")).toEqual([]);
+  });
+
+  test("listing: the poll reads /api/remote-spokes with this engine's token; agent list and the rail name the spoke and the task state", async () => {
+    const hub = fakeHub();
+    const set = await spokesSet(hub);
+    expect(set.state(SPOKES_MACHINE)).toBe("connected");
+    expect(hub.seen.map((s) => [s.method, s.path, s.token])).toEqual([["GET", "/api/remote-spokes", hub.record.token]]);
+    expect(set.list().at(-1)).toMatchObject({ name: "spokes", kind: "spokes", state: "connected", lanes: 3, port: hub.record.port });
+
+    const list = await set.command(["agent", "list"], localExec([]));
+    expect(list).toEqual([
+      { id: "lane_a", name: "scout", status: "working", machine: "local" },
+      { id: `spokes/${NODE_A}:${TASK_1}`, name: "train", status: "working", taskState: "working", spoke: "box-a", spokeState: "approval", node: NODE_A, task: TASK_1, turns: 2, machine: "spokes" },
+      { id: `spokes/${NODE_A}:${TASK_2}`, name: "review", status: "needs-approval", taskState: "awaiting_approval", spoke: "box-a", spokeState: "approval", node: NODE_A, task: TASK_2, turns: 1, machine: "spokes" },
+      { id: `spokes/${NODE_B}:${TASK_3}`, name: TASK_3, status: "done", taskState: "idle", spoke: "box-b", spokeState: "idle", node: NODE_B, task: TASK_3, turns: 3, machine: "spokes" },
+    ]);
+    const only = await set.command(["agent", "list", "--machine", "spokes"], localExec([]));
+    expect(Array.isArray(only) ? only.length : -1).toBe(3);
+
+    const rail = railRows(new Spaces(), [], set.railGroups());
+    const row = rail.find((r) => r.kind === "agent" && r.row.id === `spokes/${NODE_A}:${TASK_1}`);
+    expect(row?.kind === "agent" ? [row.row.location, row.row.model, row.dim ?? false] : null).toEqual(["box-a", "working", false]);
+    expect(rail.filter((r) => r.kind === "machine").map((r) => (r.kind === "machine" ? `${r.name}:${r.state}:${r.count}` : ""))).toEqual(["local:connected:0", "spokes:connected:3"]);
+    for (const r of rail) expect(Bun.stringWidth(railLine(r, 27))).toBe(27);
+  });
+
+  test("an unavailable hub is down with its reason; rows it had stay, dimmed and stale", async () => {
+    const missing = fakeHub(UNAVAILABLE);
+    const down = await spokesSet(missing);
+    expect(down.list().at(-1)).toMatchObject({ name: "spokes", state: "down", error: UNAVAILABLE.reason, lanes: 0 });
+
+    const hub = fakeHub();
+    const set = await spokesSet(hub);
+    hub.view = UNAVAILABLE;
+    await set.tick(SPOKES_MACHINE);
+    expect(set.state(SPOKES_MACHINE)).toBe("reconnecting");
+    const rows = await set.command(["agent", "list", "--machine", "spokes"], localExec([]));
+    expect(Array.isArray(rows) && rows.length === 3 && rows.every((r) => typeof r === "object" && r !== null && "stale" in r && r.stale === true)).toBe(true);
+    const rail = railRows(new Spaces(), [], set.railGroups());
+    expect(rail.filter((r) => r.kind === "agent").every((r) => r.kind === "agent" && r.dim === true)).toBe(true);
+  });
+
+  test("refs: spokes/<node>:<task> parses; anything else is a usage refusal", () => {
+    expect(spokeTaskRef(`${NODE_A}:${TASK_1}`)).toEqual({ node: NODE_A, task: TASK_1 });
+    for (const bad of [NODE_A, `${NODE_A}:t_bad`, `n_bad:${TASK_1}`, `${NODE_A}:${TASK_1}:x`, ""]) {
+      expect(() => spokeTaskRef(bad)).toThrow(HubOpError);
+    }
+    expect(routeSpokesArgv(["agent", "list", "--machine", "spokes"])).toEqual({ kind: "list" });
+    expect(routeSpokesArgv(["agent", "spawn", "--machine", "spokes", "--spoke", NODE_A, "--text", "run the eval", "--name", "eval"])).toEqual({ kind: "submit", node: NODE_A, text: "run the eval", name: "eval" });
+    expect(routeSpokesArgv(["agent", "prompt", `spokes/${NODE_A}:${TASK_1}`, "and", "then", "-v"])).toEqual({ kind: "followup", node: NODE_A, task: TASK_1, text: "and then -v" });
+    expect(routeSpokesArgv(["agent", "list"])).toBeNull();
+    expect(routeSpokesArgv(["agent", "status", "b/lane_3"])).toBeNull();
+    expect(routeSpokesArgv(["pane", "list"])).toBeNull();
+  });
+
+  test("refusals: a decision is human_only, every other verb not_supported, malformed spawns usage; nothing is sent", async () => {
+    const hub = fakeHub();
+    const set = await spokesSet(hub);
+    hub.seen.length = 0;
+    const ref = `spokes/${NODE_A}:${TASK_2}`;
+    const run = (argv: string[]) => codeOf(() => set.command(argv, localExec([])));
+    for (const verb of ["approve", "deny", "decide", "answer"]) expect(await run(["agent", verb, ref])).toBe("human_only");
+    for (const verb of ["status", "read", "cancel", "close"]) expect(await run(["agent", verb, ref])).toBe("not_supported");
+    expect(await run(["agent", "priority", ref, "2"])).toBe("not_supported");
+    expect(await run(["agent", "spawn", "--machine", "spokes", "--text", "x"])).toBe("usage");
+    expect(await run(["agent", "spawn", "--machine", "spokes", "--spoke", NODE_A])).toBe("usage");
+    expect(await run(["agent", "spawn", "--machine", "spokes", "--spoke", NODE_A, "--text", "x", "--cwd", "/tmp"])).toBe("usage");
+    expect(await run(["agent", "prompt", `spokes/${NODE_A}:t_bad`, "x"])).toBe("usage");
+    expect(await run(["agent", "prompt", `spokes/${NODE_A}:${TASK_1}`])).toBe("usage");
+    // A follow-up to a task parked on a person's approval is refused before anything is sent.
+    expect(await run(["agent", "prompt", ref, "go on"])).toBe("agent_blocked");
+    expect(hub.seen).toEqual([]);
+    // Without a spokes machine, `--machine spokes` names no machine.
+    expect(await codeOf(() => new MachineSet(null, hub.record).command(["agent", "spawn", "--machine", "spokes"], localExec([])))).toBe("not_found");
+  });
+
+  test("spawn submits and prompt follows up through the remote-spokes routes; the hub's refusal comes back verbatim", async () => {
+    const hub = fakeHub();
+    const set = await spokesSet(hub);
+    hub.seen.length = 0;
+    const log: HubOp[] = [];
+    expect(await set.command(["agent", "spawn", "--machine", "spokes", "--spoke", NODE_A, "--text", "run the eval", "--model", "local/qwen"], localExec(log)))
+      .toEqual({ lane: { id: `spokes/${NODE_A}:${TASK_NEW}`, machine: "spokes", node: NODE_A, task: TASK_NEW } });
+    hub.reply = { ok: true, data: { task: TASK_1 } };
+    expect(await set.command(["agent", "prompt", `spokes/${NODE_A}:${TASK_1}`, "and", "then"], localExec(log)))
+      .toEqual({ lane: `spokes/${NODE_A}:${TASK_1}`, machine: "spokes", accepted: true, task: TASK_1 });
+    expect(hub.seen.map((s) => [s.method, s.path, s.token, s.body])).toEqual([
+      ["POST", "/api/remote-spokes/submit", hub.record.token, { node: NODE_A, text: "run the eval", model: "local/qwen" }],
+      ["POST", "/api/remote-spokes/followup", hub.record.token, { node: NODE_A, task: TASK_1, text: "and then" }],
+    ]);
+    expect(log).toEqual([]); // nothing reached the hub's own agent verbs
+
+    hub.reply = { ok: false, error: "this hub's certificate does not carry the drive scope" };
+    let message = "";
+    try { await set.command(["agent", "prompt", `spokes/${NODE_B}:${TASK_3}`, "more"], localExec(log)); } catch (e) { message = e instanceof HubOpError ? `${e.code}: ${e.message}` : String(e); }
+    expect(message).toBe("refused: this hub's certificate does not carry the drive scope");
   });
 });

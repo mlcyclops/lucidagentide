@@ -360,6 +360,12 @@ describe("the server verbs", () => {
     expect(await lastLine(res)).toMatchObject({ ok: true, data: { lane: "lane_2", status: "awaiting-input" } });
   });
 
+  test("spawn --wait on the spokes machine is refused not_local before anything is submitted (ADR-0549)", async () => {
+    const res = await respond(["agent", "spawn", "--machine", "spokes", "--spoke", `n_${"a".repeat(32)}`, "--text", "run it", "--wait"]);
+    expect(await lastLine(res)).toMatchObject({ ok: false, body: { error: "not_local" } });
+    expect(calls.some((c) => c[1] === "spawn")).toBe(false);
+  });
+
   test("agent events streams transitions until the client leaves, and resumes from a cursor", async () => {
     const res = await respond(["agent", "events", "--lane", "scout"]);
     const reader = res.body!.getReader();

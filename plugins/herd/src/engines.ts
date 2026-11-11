@@ -7,7 +7,16 @@
 // with the same nonce handshake as every engine (ADR-0419) BEFORE its UI token is used for anything.
 // A discovery file whose engine fails the handshake is never sent a token.
 //
-//   hub-<instance>-machines.json   {v:1, machines:[{name, kind:"local", discoveryDir}]}   0600
+//   hub-<instance>-machines.json   {v:1, machines:[{name, kind:"local", discoveryDir} | {name:"spokes", kind:"spokes"}]}   0600
+//
+// ADR-0549: the machine named `spokes` (kind `spokes`, added with `machine add spokes`, no SSH) is the
+// Remote Spokes hub's spokes, read through THIS server's own engine on the routes the renderer uses
+// (desktop/remote_spokes.ts): GET /api/remote-spokes on the machine poll, POST
+// /api/remote-spokes/submit for `agent spawn --machine spokes --spoke <node> --text <text>` and
+// /api/remote-spokes/followup for `agent prompt spokes/<node>:<task> <text>`. Each spoke task is one
+// row, ref `spokes/<node>:<task>`, with the spoke's label and the task state verbatim. Nothing else
+// reaches a spoke from here: approvals, presence and every decision are a person's in the IDE
+// (refused `human_only`), and status, read, cancel, close, waits and events are refused.
 //
 // The file is untrusted input: every entry is validated and an off-shape one is dropped, never
 // guessed. On the control plane a lane of machine b is `b/<laneId>`; the default machine's prefix is
@@ -18,14 +27,15 @@
 // engine record (and its token) is dropped, so the next attempt re-reads the discovery folder and
 // re-runs the handshake: an engine that restarted on a new port with a new token is found again.
 //
-// Not here (ADR-0496): SSH machines (item 3) wait for the operator's go (ADR-0489 default e) and
-// would add an SSH session and a forwarded listening port, so `machine add --ssh` is refused.
-// `--profile` (item 4) needs Fleet Profiles (ADR-0272, design only): add the profile's discovery
-// folder with `--dir` instead.
+// Not here: SSH machines (ADR-0496 item 3) are replaced by Remote Spokes (ADR-0549): a box elsewhere
+// joins as a spoke and shows up under `spokes`, so `machine add --ssh` is refused. `--profile` (item
+// 4) is refused too: Fleet Profiles (ADR-0334) are superseded by the Remote Spokes hub picker; an
+// engine on this box is added by its discovery folder with `--dir`.
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { listDiscoveries, verifyDiscovery, type EngineDiscovery } from "../../../desktop/engine_discovery.ts";
+import { NODE_RE, TASK_RE, TASK_STATES, type RemoteTaskState } from "../../../desktop/renderer/remote_spokes_model.ts";
 import { buildAgentRows } from "../../../harness/launcher/hub_agents_panel.ts";
 import { createHubExecutor } from "../../../harness/launcher/hub_control.ts";
 import { HubOpError, Spaces } from "../../../harness/launcher/hub_spaces.ts";
@@ -43,7 +53,19 @@ export const BACKOFF_MS: readonly number[] = [1000, 2000, 4000, 8000, 16_000, 30
 /** Failed attempts after a drop before the dot says "down" instead of "reconnecting" (it still retries). */
 export const DOWN_AFTER = 5;
 
-export interface MachineSpec { name: string; kind: "local"; discoveryDir: string }
+/** ADR-0549: the one machine of kind `spokes`, the Remote Spokes hub's spokes, always by this name. */
+export const SPOKES_MACHINE = "spokes";
+/** The most spoke tasks one listing keeps (the rail and `agent list` stay bounded). */
+export const MAX_SPOKE_TASKS = 256;
+/** A submit or follow-up waits on the hub plugin and the spoke's mailbox (the route allows 90 s). */
+const SPOKES_ACTION_TIMEOUT_MS = 100_000;
+const SPOKES_READ_TIMEOUT_MS = 15_000;
+/** A spoke's label and a task's name are written elsewhere and drawn in a terminal: no control or
+ *  format characters, one short line. */
+const SPOKE_TEXT_MAX = 48;
+
+export interface LocalMachineSpec { name: string; kind: "local"; discoveryDir: string }
+export type MachineSpec = LocalMachineSpec | { name: typeof SPOKES_MACHINE; kind: "spokes" };
 export type MachineState = "connected" | "reconnecting" | "down";
 /** A lane as the combined list carries it: the engine's record plus its machine and control-plane ref. */
 export type MachineLane = Record<string, unknown> & { machine: string; ref: string };
@@ -64,8 +86,9 @@ export function machineName(raw: string | undefined): string {
   return raw;
 }
 
-/** The saved list. Off-shape entries (bad name, the reserved name, a duplicate, a relative folder, an
- *  unknown kind such as ssh) are dropped; an unparseable file is an empty list. */
+/** The saved list. Off-shape entries (bad name, a reserved name, a duplicate, a relative folder, an
+ *  unknown kind such as ssh, a `spokes` kind under any other name) are dropped; an unparseable file
+ *  is an empty list. */
 export function parseMachines(raw: string): MachineSpec[] {
   let parsed: unknown;
   try { parsed = JSON.parse(raw); } catch { return []; }
@@ -75,8 +98,12 @@ export function parseMachines(raw: string): MachineSpec[] {
   for (const entry of o.machines) {
     if (out.length >= MAX_MACHINES) break;
     const m = rec(entry);
+    if (m.kind === "spokes" && m.name === SPOKES_MACHINE && !out.some((x) => x.name === SPOKES_MACHINE)) {
+      out.push({ name: SPOKES_MACHINE, kind: "spokes" });
+      continue;
+    }
     if (m.kind !== "local" || typeof m.name !== "string" || typeof m.discoveryDir !== "string") continue;
-    if (!MACHINE_NAME_RE.test(m.name) || m.name === DEFAULT_MACHINE || !isAbsolute(m.discoveryDir) || out.some((x) => x.name === m.name)) continue;
+    if (!MACHINE_NAME_RE.test(m.name) || m.name === DEFAULT_MACHINE || m.name === SPOKES_MACHINE || !isAbsolute(m.discoveryDir) || out.some((x) => x.name === m.name)) continue;
     out.push({ name: m.name, kind: "local", discoveryDir: m.discoveryDir });
   }
   return out;
@@ -97,10 +124,18 @@ export function saveMachines(path: string, list: readonly MachineSpec[]): void {
 /** The list with one more local machine, or a refusal naming why. */
 export function addMachine(list: readonly MachineSpec[], name: string, discoveryDir: string): MachineSpec[] {
   const n = machineName(name);
+  if (n === SPOKES_MACHINE) throw new HubOpError("usage", "`machine add spokes` (no flags) lists the Remote Spokes hub's spokes; name an engine on this box anything else");
   if (!isAbsolute(discoveryDir)) throw new HubOpError("usage", "machine add <name> --dir <absolute path of that engine's discovery folder>");
   if (list.some((m) => m.name === n)) throw new HubOpError("exists", `machine "${n}" is already in this hub`);
   if (list.length >= MAX_MACHINES) throw new HubOpError("refused", `a hub holds at most ${MAX_MACHINES} machines`);
   return [...list, { name: n, kind: "local", discoveryDir }];
+}
+
+/** ADR-0549: the list with the `spokes` machine, or a refusal naming why. */
+export function addSpokes(list: readonly MachineSpec[]): MachineSpec[] {
+  if (list.some((m) => m.name === SPOKES_MACHINE)) throw new HubOpError("exists", `machine "${SPOKES_MACHINE}" is already in this hub`);
+  if (list.length >= MAX_MACHINES) throw new HubOpError("refused", `a hub holds at most ${MAX_MACHINES} machines`);
+  return [...list, { name: SPOKES_MACHINE, kind: "spokes" }];
 }
 
 export function removeMachine(list: readonly MachineSpec[], name: string): MachineSpec[] {
@@ -150,6 +185,112 @@ export function routeAgentArgv(argv: readonly string[], machines: readonly strin
   const { machine, lane } = splitLaneRef(op.lane, machines);
   if (op.op === "agent.priority" && machine !== DEFAULT_MACHINE) throw new HubOpError("usage", "priority is display order in this hub's agents panel and applies to this machine's lanes only");
   return { machine, op: { ...op, lane } };
+}
+
+// ---- the spokes machine (pure; ADR-0549) ---------------------------------------------------------
+
+/** A spoke task's state as the rail's LaneStatus glyphs read it; the state itself travels verbatim
+ *  as `taskState`. Idle is a finished turn ready for a follow-up; closed is gone for good. */
+export const TASK_LANE_STATUS: Readonly<Record<RemoteTaskState, string>> = {
+  working: "working", awaiting_approval: "needs-approval", idle: "done", error: "error", stopped: "stopped", closed: "stopped",
+};
+
+/** Text written on another machine, made safe to draw in a terminal: no control or format
+ *  characters (escapes, bidi overrides), one short line. */
+export function spokeText(v: unknown): string {
+  return str(v).replace(/[\p{Cc}\p{Cf}]/gu, "").trim().slice(0, SPOKE_TEXT_MAX);
+}
+
+/** The rows of `GET /api/remote-spokes` `spokes`: one per task, id `<node>:<task>`, the task state
+ *  verbatim as `taskState` beside the LaneStatus it draws as, and the spoke's label. A spoke or task
+ *  whose id is malformed is dropped (nothing could address it), and so is a task in an unknown state. */
+export function spokeTaskLanes(spokes: unknown): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  for (const raw of Array.isArray(spokes) ? spokes : []) {
+    const s = rec(raw);
+    const node = str(s.node);
+    if (!NODE_RE.test(node)) continue;
+    const label = spokeText(s.label) || node.slice(0, 12);
+    for (const t of Array.isArray(s.tasks) ? s.tasks : []) {
+      if (out.length >= MAX_SPOKE_TASKS) return out;
+      const task = rec(t);
+      const id = str(task.id);
+      const state = TASK_STATES.find((st) => st === task.state);
+      if (!TASK_RE.test(id) || state === undefined) continue;
+      out.push({
+        id: `${node}:${id}`,
+        name: spokeText(task.name) || id,
+        status: TASK_LANE_STATUS[state],
+        taskState: state,
+        spoke: label,
+        spokeState: str(s.state),
+        node,
+        task: id,
+        turns: typeof task.turns === "number" && Number.isSafeInteger(task.turns) ? task.turns : 0,
+      });
+    }
+  }
+  return out;
+}
+
+/** `<node>:<task>` (the part of a `spokes/...` ref after the machine), or a usage refusal. */
+export function spokeTaskRef(lane: string): { node: string; task: string } {
+  const [node = "", task = "", ...extra] = lane.split(":");
+  if (!NODE_RE.test(node) || !TASK_RE.test(task) || extra.length) {
+    throw new HubOpError("usage", `a spoke task is ${SPOKES_MACHINE}/<node>:<task> (n_ and 32 hex digits, t_ and 16 hex digits), as \`agent list --machine ${SPOKES_MACHINE}\` names it`);
+  }
+  return { node, task };
+}
+
+export type SpokesRoute =
+  | { kind: "list" }
+  | { kind: "submit"; node: string; text: string; name?: string; model?: string }
+  | { kind: "followup"; node: string; task: string; text: string };
+
+/** Verbs that would decide for a person. No Herd verb reaches /api/remote-spokes/decide. */
+const HUMAN_ONLY_VERBS: Record<string, true> = { approve: true, deny: true, decide: true, answer: true, allow: true, dismiss: true };
+const SPAWN_USAGE = `agent spawn --machine ${SPOKES_MACHINE} --spoke <node> --text <text> [--name <name>] [--model <model>]`;
+
+/** An `agent ...` argv aimed at the spokes machine (`--machine spokes` or a `spokes/...` ref), as the
+ *  one thing it may do there; null when it is not aimed there. Everything but a listing, a submit and
+ *  a follow-up is refused: a decision `human_only`, the rest `not_supported`. */
+export function routeSpokesArgv(argv: readonly string[]): SpokesRoute | null {
+  if (argv[0] !== "agent") return null;
+  const verb = argv[1] ?? "";
+  const at = argv.indexOf("--machine", 2);
+  const byFlag = at >= 0 && argv[at + 1] === SPOKES_MACHINE;
+  const byRef = (argv[2] ?? "").startsWith(`${SPOKES_MACHINE}/`);
+  if (!byFlag && !byRef) return null;
+  if (HUMAN_ONLY_VERBS[verb]) {
+    throw new HubOpError("human_only", "approvals, presence and every decision on a spoke are a person's, in the IDE's Remote Spokes panel; no Herd verb decides for them");
+  }
+  if (byFlag && verb === "list") {
+    if (argv.length !== 4) throw new HubOpError("usage", `agent list --machine ${SPOKES_MACHINE}`);
+    return { kind: "list" };
+  }
+  if (byFlag && verb === "spawn") {
+    const flags: Record<string, string> = {};
+    for (let i = 2; i < argv.length; i += 2) {
+      const flag = argv[i]!;
+      const value = argv[i + 1];
+      if (!["--machine", "--spoke", "--text", "--name", "--model"].includes(flag) || value === undefined || flag in flags) throw new HubOpError("usage", SPAWN_USAGE);
+      flags[flag] = value;
+    }
+    const node = flags["--spoke"] ?? "";
+    const text = flags["--text"] ?? "";
+    if (!NODE_RE.test(node)) throw new HubOpError("usage", `${SPAWN_USAGE}; <node> is the spoke's id (n_ and 32 hex digits) from \`agent list --machine ${SPOKES_MACHINE}\``);
+    if (!text.trim()) throw new HubOpError("usage", SPAWN_USAGE);
+    const name = flags["--name"];
+    const model = flags["--model"];
+    return { kind: "submit", node, text, ...(name === undefined ? {} : { name }), ...(model === undefined ? {} : { model }) };
+  }
+  if (byRef && verb === "prompt") {
+    const { node, task } = spokeTaskRef(argv[2]!.slice(SPOKES_MACHINE.length + 1));
+    const text = argv.slice(3).join(" ");
+    if (!text.trim()) throw new HubOpError("usage", `agent prompt ${SPOKES_MACHINE}/<node>:<task> <text>`);
+    return { kind: "followup", node, task, text };
+  }
+  throw new HubOpError("not_supported", `on ${SPOKES_MACHINE} Herd lists tasks, starts one (agent spawn --machine ${SPOKES_MACHINE}) and follows one up (agent prompt ${SPOKES_MACHINE}/<node>:<task>); status, read, cancel, close, waits and events stay with the IDE's Remote Spokes panel`);
 }
 
 // ---- one machine's connection (pure) --------------------------------------------------------------
@@ -204,7 +345,7 @@ export interface MachineSetDeps {
   annotate?: (lane: Record<string, unknown>) => Record<string, unknown>;
 }
 
-export interface MachineView { name: string; kind: "local"; discoveryDir: string | null; state: MachineState; lanes: number; attempt: number; error: string; port: number | null }
+export interface MachineView { name: string; kind: MachineSpec["kind"]; discoveryDir: string | null; state: MachineState; lanes: number; attempt: number; error: string; port: number | null }
 
 export class MachineSet {
   readonly #path: string | null;
@@ -294,7 +435,17 @@ export class MachineSet {
       local: DEFAULT_MACHINE,
       groups: this.#specs.map((s) => {
         const c = this.#conns.get(s.name) ?? freshConn();
-        return { name: s.name, state: c.state, rows: buildAgentRows(c.lanes, {}, {}).map((r) => ({ ...r, id: laneRef(s.name, r.id) })) };
+        if (s.kind === "local") return { name: s.name, state: c.state, rows: buildAgentRows(c.lanes, {}, {}).map((r) => ({ ...r, id: laneRef(s.name, r.id) })) };
+        // ADR-0549: a spoke task's meta cell is its spoke's label and its task state, verbatim.
+        const byId = new Map(c.lanes.map((l) => [str(l.id), l]));
+        return {
+          name: s.name,
+          state: c.state,
+          rows: buildAgentRows(c.lanes, {}, {}).map((r) => {
+            const l = byId.get(r.id);
+            return { ...r, id: laneRef(s.name, r.id), location: str(l?.spoke), model: str(l?.taskState) };
+          }),
+        };
       }),
     };
   }
@@ -304,19 +455,30 @@ export class MachineSet {
       { name: DEFAULT_MACHINE, kind: "local", discoveryDir: null, state: "connected", lanes: this.#localLanes.length, attempt: 0, error: "", port: this.#local.port },
       ...this.#specs.map((s) => {
         const c = this.#conns.get(s.name) ?? freshConn();
-        return { name: s.name, kind: s.kind, discoveryDir: s.discoveryDir, state: c.state, lanes: c.lanes.length, attempt: c.attempt, error: c.error, port: c.engine?.port ?? null };
+        return { name: s.name, kind: s.kind, discoveryDir: s.kind === "local" ? s.discoveryDir : null, state: c.state, lanes: c.lanes.length, attempt: c.attempt, error: c.error, port: c.engine?.port ?? null };
       }),
     ];
   }
 
-  add(name: string, discoveryDir: string): MachineSpec {
+  add(name: string, discoveryDir: string): LocalMachineSpec {
     this.#specs = addMachine(this.#specs, name, discoveryDir);
-    if (this.#path) saveMachines(this.#path, this.#specs);
     const spec = this.#specs.at(-1)!;
-    this.#conns.set(spec.name, freshConn());
-    if (this.#running) void this.tick(spec.name);
+    this.#added(spec.name);
+    return { name: spec.name, kind: "local", discoveryDir };
+  }
+
+  /** ADR-0549: the Remote Spokes hub's spokes, read through this server's own engine. */
+  addSpokes(): void {
+    this.#specs = addSpokes(this.#specs);
+    this.#added(SPOKES_MACHINE);
+  }
+
+  /** Save the list and start the new machine's clock. */
+  #added(name: string): void {
+    if (this.#path) saveMachines(this.#path, this.#specs);
+    this.#conns.set(name, freshConn());
+    if (this.#running) void this.tick(name);
     this.#onChange();
-    return spec;
   }
 
   remove(name: string): void {
@@ -337,9 +499,12 @@ export class MachineSet {
     if (!spec || !before) return;
     let next: MachineConn;
     try {
-      const engine = before.engine ?? (await this.#find(spec.discoveryDir));
-      if (!engine) throw new Error(`no engine in ${spec.discoveryDir} answered the handshake`);
-      next = connOk(engine, await this.#status(engine));
+      if (spec.kind === "spokes") next = connOk(this.#local, await this.#spokesRead());
+      else {
+        const engine = before.engine ?? (await this.#find(spec.discoveryDir));
+        if (!engine) throw new Error(`no engine in ${spec.discoveryDir} answered the handshake`);
+        next = connOk(engine, await this.#status(engine));
+      }
     } catch (e) {
       next = connFail(before, e instanceof Error ? e.message : String(e));
     }
@@ -356,6 +521,50 @@ export class MachineSet {
     const body = rec(await res.json());
     const lanes = rec(body.data ?? body).lanes;
     return Array.isArray(lanes) ? lanes.map(rec) : [];
+  }
+
+  /** ADR-0549: one /api/remote-spokes route on this server's own engine (its UI token, the routes the
+   *  renderer uses; the engine holds the hub plugin's host token and checks the hub's scopes). */
+  async #spokesCall(path: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const res = await this.#fetch(`http://127.0.0.1:${this.#local.port}${path}`, {
+      method: body ? "POST" : "GET",
+      headers: { "x-lucid-token": this.#local.token, ...(body ? { "content-type": "application/json" } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(body ? SPOKES_ACTION_TIMEOUT_MS : SPOKES_READ_TIMEOUT_MS),
+    });
+    if (!res.ok) throw new HubOpError("engine", `${path} -> ${res.status}`);
+    return rec(rec(await res.json()).data);
+  }
+
+  /** Every spoke task the hub knows; an unavailable hub (plugin missing, stopped, not set up) throws its reason. */
+  async #spokesRead(): Promise<Record<string, unknown>[]> {
+    const view = await this.#spokesCall("/api/remote-spokes");
+    if (view.available !== true) throw new Error(str(view.reason) || "the Remote Spokes hub is not available");
+    return spokeTaskLanes(view.spokes);
+  }
+
+  /** A submit or a follow-up; the hub's refusal (scope, deactivated spoke, malformed text) verbatim. */
+  async #spokesAct(op: "submit" | "followup", body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const reply = await this.#spokesCall(`/api/remote-spokes/${op}`, body);
+    if (reply.ok !== true) throw new HubOpError("refused", str(reply.error) || `the Remote Spokes hub refused the ${op}`);
+    return rec(reply.data);
+  }
+
+  async #spokesCommand(r: SpokesRoute): Promise<unknown> {
+    if (r.kind === "list") return this.#listSpokes();
+    if (r.kind === "submit") {
+      const data = await this.#spokesAct("submit", { node: r.node, text: r.text, ...(r.name === undefined ? {} : { name: r.name }), ...(r.model === undefined ? {} : { model: r.model }) });
+      const task = str(data.task);
+      if (!TASK_RE.test(task)) throw new HubOpError("engine", "the Remote Spokes hub took the task but named no task id; see `agent list --machine spokes`");
+      return { lane: { id: laneRef(SPOKES_MACHINE, `${r.node}:${task}`), machine: SPOKES_MACHINE, node: r.node, task } };
+    }
+    const id = `${r.node}:${r.task}`;
+    const known = this.#conns.get(SPOKES_MACHINE)?.lanes.find((l) => l.id === id);
+    if (known?.taskState === "awaiting_approval") {
+      throw new HubOpError("agent_blocked", `spoke task "${str(known.name)}" is waiting on a person's approval; nothing was sent. The person decides it in the IDE's Remote Spokes panel.`);
+    }
+    const data = await this.#spokesAct("followup", { node: r.node, task: r.task, text: r.text });
+    return { lane: laneRef(SPOKES_MACHINE, id), machine: SPOKES_MACHINE, accepted: true, task: TASK_RE.test(str(data.task)) ? str(data.task) : r.task };
   }
 
   /** The core agent verbs aimed at machine `name`'s verified engine. */
@@ -383,6 +592,9 @@ export class MachineSet {
   /** Answer an `agent ...` argv across machines, or undefined when it is not one of the routed verbs.
    *  `local` is the hub's own executor (the classic agent verbs, unchanged for unprefixed refs). */
   command(argv: readonly string[], local: (op: HubOp) => Promise<unknown>): Promise<unknown> | undefined {
+    // ADR-0549: argv aimed at the spokes machine never reaches the core agent verbs.
+    const spokes = this.#conns.has(SPOKES_MACHINE) ? routeSpokesArgv(argv) : null;
+    if (spokes) return this.#spokesCommand(spokes);
     const r = routeAgentArgv(argv, this.names());
     if (!r) return undefined;
     if (r.machine === null) return this.#listAll(local);
@@ -415,6 +627,7 @@ export class MachineSet {
     }
     const c = this.#conns.get(machine);
     if (!c) throw new HubOpError("not_found", `no machine "${machine}"`);
+    if (machine === SPOKES_MACHINE) return this.#listSpokes();
     let lanes = c.lanes;
     let stale = c.state !== "connected";
     if (!stale) {
@@ -426,21 +639,36 @@ export class MachineSet {
     return lanes.map((l) => this.#annotate({ ...l, machine, id: laneRef(machine, str(l.id)), ...(stale ? { stale: true } : {}) }));
   }
 
+  /** ADR-0549: the spoke tasks, read fresh while the hub answers, else the last ones with `stale`. */
+  async #listSpokes(): Promise<unknown[]> {
+    const c = this.#conns.get(SPOKES_MACHINE) ?? freshConn();
+    let lanes = c.lanes;
+    let stale = c.state !== "connected";
+    if (!stale) {
+      try { lanes = await this.#spokesRead(); } catch { stale = true; }
+    }
+    return lanes.map((l) => this.#annotate({ ...l, machine: SPOKES_MACHINE, id: laneRef(SPOKES_MACHINE, str(l.id)), ...(stale ? { stale: true } : {}) }));
+  }
+
   /** `agent list`: the default machine's lanes, then each machine's, every row naming its machine. */
   async #listAll(local: (op: HubOp) => Promise<unknown>): Promise<unknown[]> {
     const parts = await Promise.all(this.names().map((m) => this.#listOne(m, local)));
     return parts.flat();
   }
 
-  /** `machine list | add <name> --dir <path> | remove <name>`. */
+  /** `machine list | add <name> --dir <path> | add spokes | remove <name>`. */
   machineCommand(argv: readonly string[]): unknown {
     const [, sub, ...rest] = argv;
     if (sub === "list" && rest.length === 0) return this.list();
     if (sub === "add") {
       const [name, flag, value, ...extra] = rest;
-      if (flag === "--ssh") throw new HubOpError("not_supported", "SSH machines (ADR-0496 item 3) wait for the operator's go; add an engine on this box with --dir");
-      if (flag === "--profile") throw new HubOpError("not_supported", "Fleet Profiles (ADR-0272) are not built yet; add that profile's discovery folder with --dir");
-      if (flag !== "--dir" || value === undefined || extra.length) throw new HubOpError("usage", "machine add <name> --dir <absolute path of that engine's discovery folder>");
+      if (flag === "--ssh") throw new HubOpError("not_supported", "SSH machines are not built: a box elsewhere joins LUCID as a Remote Spoke, and `machine add spokes` lists its tasks here (ADR-0549)");
+      if (flag === "--profile") throw new HubOpError("not_supported", "Fleet Profiles are superseded by the Remote Spokes hub picker (ADR-0549): add a box as a Remote Spoke and `machine add spokes`; an engine on this box is added with --dir");
+      if (name === SPOKES_MACHINE && rest.length === 1) {
+        this.addSpokes();
+        return { added: SPOKES_MACHINE, kind: "spokes", state: this.state(SPOKES_MACHINE) };
+      }
+      if (flag !== "--dir" || value === undefined || extra.length) throw new HubOpError("usage", "machine add <name> --dir <absolute path of that engine's discovery folder> | machine add spokes");
       const spec = this.add(name ?? "", value);
       return { added: spec.name, discoveryDir: spec.discoveryDir, state: this.state(spec.name) };
     }
@@ -448,6 +676,6 @@ export class MachineSet {
       this.remove(rest[0]!);
       return { removed: rest[0] };
     }
-    throw new HubOpError("usage", "machine list | machine add <name> --dir <path> | machine remove <name>");
+    throw new HubOpError("usage", "machine list | machine add <name> --dir <path> | machine add spokes | machine remove <name>");
   }
 }
