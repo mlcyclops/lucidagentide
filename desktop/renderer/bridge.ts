@@ -515,7 +515,7 @@ export interface ModeState { available: ModeOption[]; current: string; ui?: "age
 export interface OmpCommand { name: string; description?: string; hint?: string }
 export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest"; live?: SessionLive; spoke?: string }
 // P-KG-INGEST.1b (ADR-0076): chats, with throwaway extraction sessions split into a collapsible group.
-// P-SESS-SEARCH.1 (ADR-0469): `hiddenSpokes` = spoke sessions held back while the Spokes toggle is off.
+// P-SESS-SEARCH.1 (ADR-0552): `hiddenSpokes` = spoke sessions held back while the Spokes toggle is off.
 export interface SessionList { sessions: SessionInfo[]; ingest: SessionInfo[]; hiddenSpokes?: number }
 /** P-SESS-SEARCH.1: a sidebar search across every session of the workspace (mirrors desktop/sessions.ts). */
 export interface SessionSearch { hits: (SessionInfo & { snippet?: string })[]; total: number; hiddenSpokes: number }

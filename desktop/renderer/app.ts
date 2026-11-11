@@ -11,7 +11,7 @@
 import { bridge, type AccountsSnapshot, type AgentRunReply, type McpCatalogTool, type ChatEvent, type CollabShareStatus, type ConfigOption, type EvalReportTurn, type GoalDial, type LaneEvent, type LaneView, type MemorySnapshot, type OmpCommand, type ProviderAuth, type RestoredTurn, type SecuritySnapshot, type SessionInfo, type SessionList, type SessionSearch, type SkillInspectView, type SkillView, type UserRole, type WorkspaceInfo, type WhisperStatusView, type WhisperTierView } from "./bridge.ts";
 import type { TurnStatus } from "./chat_events.ts";
 import { currentSwitchPreflight, liveBadge, planSessionSwitch, spokeNameFor, switchOutcome, switchSheetCopy } from "./session_switch.ts"; // P-SWITCH.1 (ADR-0403), P-SWITCH.2 (ADR-0404)
-import { markTerms } from "./session_search.ts"; // P-SESS-SEARCH.1 (ADR-0469)
+import { markTerms } from "./session_search.ts"; // P-SESS-SEARCH.1 (ADR-0552)
 import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext, shouldReprobeStatus } from "./turn_restore.ts";
 // P-RECOVER.1 (ADR-0385): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
 import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
@@ -475,7 +475,7 @@ function buildShell(): void {
             <button class="side-new" id="newSession" data-tip="New session">${icon("plus", 15)}</button>
             <button class="side-new" id="sideCollapse" data-tip="Collapse panel" data-tip-side="bottom">${icon("expand", 15)}</button>
           </div></div>
-        <!-- P-SESS-SEARCH.1 (ADR-0469): search every session of this workspace; spoke sessions hidden by default -->
+        <!-- P-SESS-SEARCH.1 (ADR-0552): search every session of this workspace; spoke sessions hidden by default -->
         <div class="sess-find">
           <label class="sess-search">${icon("search", 13)}<input id="sessSearch" type="search" placeholder="Search sessions" aria-label="Search sessions by title or by what was said" spellcheck="false" autocomplete="off" /></label>
           <button class="sess-spokes" id="sessSpokes" type="button" aria-pressed="false" data-tip="Spokes hidden|Sessions your fleet spokes ran are hidden. Click to show them." data-tip-side="bottom"><span class="sess-spokes-l">Spokes</span><span class="sess-spokes-n" hidden></span></button>
@@ -755,7 +755,7 @@ function sessRow(s: SessionInfo & { snippet?: string }, active: boolean, query =
     </div>`;
 }
 
-// P-SESS-SEARCH.1 (ADR-0469): the sidebar search box and the Spokes toggle. Spoke sessions are hidden by
+// P-SESS-SEARCH.1 (ADR-0552): the sidebar search box and the Spokes toggle. Spoke sessions are hidden by
 // default (the toggle persists); while the box holds a query the list shows the engine's matches across
 // EVERY session of the workspace, not the 40 newest. A click on a hit opens it like any sidebar row.
 let showSpokes = (() => { try { return localStorage.getItem("lucid.sessions.spokes") === "1"; } catch { return false; } })();
@@ -18539,7 +18539,7 @@ function wire(): void {
     const s = t.closest(".sess") as HTMLElement | null;
     if (s?.dataset.sid) void openSession(s.dataset.sid); // P-SWITCH.1: asks first when Main is working
   });
-  // P-SESS-SEARCH.1 (ADR-0469): search box (debounced; Esc clears) and the persisted Spokes toggle.
+  // P-SESS-SEARCH.1 (ADR-0552): search box (debounced; Esc clears) and the persisted Spokes toggle.
   const sessSearch = $("#sessSearch") as HTMLInputElement | null;
   sessSearch?.addEventListener("input", () => onSessSearchInput(sessSearch.value));
   sessSearch?.addEventListener("keydown", (e) => {

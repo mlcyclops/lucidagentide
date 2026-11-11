@@ -1237,7 +1237,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   border-left:2px solid var(--line-soft)}
 .sess-del:focus-visible{opacity:1;outline:2px solid var(--accent);outline-offset:1px}
 .sess:hover .t{padding-right:24px}
-/* P-SESS-SEARCH.1 (ADR-0469): sidebar search + Spokes toggle on one row; the field takes the width, the
+/* P-SESS-SEARCH.1 (ADR-0552): sidebar search + Spokes toggle on one row; the field takes the width, the
    toggle never wraps. A snippet is a BLOCK paragraph clamped to two lines (never prose inside a flex row). */
 .sess-find{display:flex;align-items:center;gap:6px;padding:0 12px 8px}
 .sess-search{flex:1;min-width:0;display:flex;align-items:center;gap:6px;padding:0 8px;border:1px solid var(--line);

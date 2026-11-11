@@ -67,7 +67,7 @@ export function readLaneLedger(path: string = LANE_LEDGER_PATH()): LaneSessionRe
   return out;
 }
 
-/** P-SESS-SEARCH.1 (ADR-0469): session id -> the name of the lane that ran it, for the sidebar's spoke
+/** P-SESS-SEARCH.1 (ADR-0552): session id -> the name of the lane that ran it, for the sidebar's spoke
  *  filter. The ledger is append-only, so the last line for a session carries its freshest name. The
  *  sidebar polls; the parse is cached on the ledger's mtime+size. No ledger = no known spokes. */
 let ledgerNames: { path: string; key: string; names: Map<string, string> } | null = null;

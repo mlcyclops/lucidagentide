@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-SESS-SEARCH.1 (ADR-0469): search snippets are transcript text painted as HTML. Marking must never let
+// P-SESS-SEARCH.1 (ADR-0552): search snippets are transcript text painted as HTML. Marking must never let
 // that text become markup, and must mark every term the engine matched on.
 
 import { expect, test } from "bun:test";

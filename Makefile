@@ -517,7 +517,7 @@ demo-P-HUB-PICK.1: ## P-HUB-PICK.1 (ADR-0470): hub picker, a codebase name + col
 	$(BUN) run desktop/scripts/demo_p_hub_pick_1.ts
 
 .PHONY: demo-P-SESS-SEARCH.1
-demo-P-SESS-SEARCH.1: ## P-SESS-SEARCH.1 (ADR-0469): sidebar session search by title + what was said, spokes hidden by default, carried notes never title a session
+demo-P-SESS-SEARCH.1: ## P-SESS-SEARCH.1 (ADR-0552): sidebar session search by title + what was said, spokes hidden by default, carried notes never title a session
 	$(BUN) run desktop/scripts/demo_p_sess_search_1.ts
 
 .PHONY: demo-P-PERF.4
