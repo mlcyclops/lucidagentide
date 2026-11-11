@@ -273,6 +273,24 @@ test("spawn with resume brings the recorded conversation back: seeded transcript
   expect((await live.status()).lanes[0]!.turns).toBe(435);
 }, TIMEOUT);
 
+// Found live: switching a lane to the main space cut a long answer mid-sentence with "[truncated]", because
+// the 8K recovery clamp was applied to the transcript promote() hands the composer. Promote shows the whole
+// answer; only the recovery preamble stays clamped.
+test("promote seeds a long answer in full while the recovery preamble stays clamped", async () => {
+  live = manager();
+  const long = `${"x".repeat(12_000)} TAIL-OF-ANSWER`;
+  const r = await live.spawn({ cwd: import.meta.dir, resume: { sessionId: "01a0-long", transcript: [{ role: "user", text: "write it up" }, { role: "assistant", text: long }], turns: 1 } });
+  expect(r.ok).toBe(true);
+  const seeded = live.promote(r.lane!.id).transcript!;
+  expect(seeded[1]!.text).toBe(long);
+  const events: LaneEvent[] = [];
+  await live.prompt(r.lane!.id, "continue", (e) => events.push(e));
+  const reply = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(reply).toContain("TRANSCRIPT START");
+  expect(reply).toContain("[truncated]");
+  expect(reply).not.toContain("TAIL-OF-ANSWER");
+}, TIMEOUT);
+
 // P-SWITCH.2 (ADR-0404): one session, one owner. A lane never loads a session Main or another live lane
 // holds; a spawn that would is refused by name and creates nothing, and a stopped lane cannot come back
 // on a session someone else opened meanwhile.

@@ -31,6 +31,12 @@ async function launch(file, width, height) {
     focus() { document.activeElement = this; }
     setPointerCapture() {}
     matches() { return false; }
+    querySelector() { return new Element(this.id + ':q'); }
+    querySelectorAll() { return []; }
+    get children() { return []; }
+    remove() {}
+    removeAttribute(key) { delete this.attrs[key]; }
+    getAttribute(key) { return this.attrs[key] ?? null; }
     click() { if (!this.disabled) handlers.get(`${this.id}:click`)?.({ target: this }); }
     pointer(kind, x, y) { handlers.get(`${this.id}:${kind}`)?.({ button: 0, pointerId: 1, clientX: x, clientY: y, target: this, preventDefault() {} }); }
   }
@@ -38,7 +44,10 @@ async function launch(file, width, height) {
     if (!nodes.has(id)) nodes.set(id, new Element(id));
     return nodes.get(id);
   };
-  globalThis.document = { getElementById: node, createElement: () => new Element('new'), createTextNode: text => ({ textContent: String(text) }), activeElement: null, hidden: false, addEventListener() {} };
+  globalThis.document = { getElementById: node, createElement: () => new Element('new'), createTextNode: text => ({ textContent: String(text) }), activeElement: null, hidden: false, addEventListener() {},
+    querySelector: () => new Element('q'), querySelectorAll: () => [], body: new Element('body'), documentElement: new Element('html') };
+  globalThis.matchMedia = () => ({ matches: false, addEventListener() {}, addListener() {} }); // standard window APIs the newer games read
+  globalThis.devicePixelRatio = 1;
   globalThis.innerWidth = width; globalThis.innerHeight = height;
   globalThis.window = globalThis;
   globalThis.HTMLElement = globalThis.HTMLButtonElement = Element;
@@ -155,6 +164,88 @@ assert.match(deck.node('ovTitle').textContent, /CRIPPLED|NO INTERCEPTORS/, 'an u
 deck.node('btnPrimary').click();
 assert.equal(globalThis.__deckGuard.state().hull, 10, 'scramble again starts a fresh run');
 console.log(`Deck Guard: ${flight.done} missions, ${flight.downed} drones and ${flight.missiles} missiles on autopilot, pause/restart, loss (${deck.node('ovTitle').textContent}), replay`);
+const holly = await launch('deck-guard-holiday.html', 400, 720);
+const dh = () => globalThis.__deckGuardHoliday.state();
+holly.advance(2); // the attract demo flies behind the title panel and never loses
+assert.equal(holly.node('ovTitle').textContent, 'DECK GUARD');
+assert.equal(dh().mode, 'title');
+holly.node('btnPrimary').click();
+assert.equal(holly.node('overlay').hidden, true);
+assert.equal(holly.node('goalN').textContent, 'GOAL 1/13');
+globalThis.__deckGuardHoliday.autoplay(true); // the bot also takes a workshop gift after each wave, so no panel stops it
+for (let i = 0; i < 120 && holly.node('overlay').hidden; i++) { holly.advance(1); if (i === 30 || i === 60) globalThis.__deckGuardHoliday.launchMissile(); }
+const sled = dh();
+assert.ok(sled.done >= 1 && sled.downed >= 15, `the swarm must fall and missions advance, got ${JSON.stringify(sled)}`);
+if (dh().mode === 'dying') holly.advance(2); // a last jet lost at the end of the budget finishes its fall first
+if (!holly.node('overlay').hidden) holly.node('btnPrimary').click(); // the bot can lose its jets first: that ends in the loss panel, and a new run starts
+holly.key('KeyP');
+assert.equal(holly.node('ovTitle').textContent, 'PAUSED');
+holly.key('KeyR');
+assert.equal(holly.node('goalN').textContent, 'GOAL 1/13', 'restart resets the ladder');
+assert.equal(dh().score, 0);
+globalThis.__deckGuardHoliday.autoplay(false);
+let gifted = 0;
+for (let i = 0; i < 600 && !/CRIPPLED|OUT OF JETS/.test(holly.node('ovTitle').textContent); i++) {
+  if (dh().mode === 'pick') { holly.key('Digit1'); gifted++; } // a cleared wave offers workshop gifts; key 1 takes the first
+  if (i % 20 === 0) globalThis.__deckGuardHoliday.launchMissile();
+  holly.advance(0.5);
+}
+assert.match(holly.node('ovTitle').textContent, /CRIPPLED|OUT OF JETS/, 'an undefended workshop falls');
+holly.node('btnPrimary').click();
+assert.equal(dh().hull, 10, 'scramble again starts a fresh run');
+assert.equal(dh().mode, 'play');
+console.log(`Deck Guard: Deck the Halls: ${sled.done} missions, ${sled.downed} drones, ${sled.missiles} candy canes and ${sled.gifts} presents on autoplay (wave ${sled.wave}), pause/restart, ${gifted} workshop gift(s) by key, loss (${holly.node('ovTitle').textContent}), replay`);
+const sleigh = await launch('chimney-rush.html', 400, 720);
+const cr = () => globalThis.__chimneyRush.state();
+sleigh.advance(2); // the attract demo sleigh rides behind the title panel
+assert.equal(cr().phase, 'title');
+sleigh.node('bStart').click();
+assert.equal(cr().phase, 'play');
+assert.equal(cr().town, 1);
+globalThis.__chimneyRush.autoplay(true);
+for (let i = 0; i < 90 && cr().phase === 'play'; i++) sleigh.advance(1);
+const ride = cr();
+assert.ok(ride.town >= 3 && ride.perfect >= 8, `the bot must reach town 3 with perfect chimneys, got ${JSON.stringify({ town: ride.town, perfect: ride.perfect })}`);
+globalThis.__chimneyRush.pause();
+assert.equal(cr().phase, 'paused');
+sleigh.node('bResume').click();
+assert.equal(cr().phase, 'play');
+globalThis.__chimneyRush.autoplay(false); // no hands on the reins: the night runs out
+for (let i = 0; i < 600 && cr().phase !== 'over'; i++) sleigh.advance(0.5);
+assert.equal(cr().phase, 'over', 'an idle sleigh is caught by the sunrise');
+assert.ok(cr().cookies > 0, 'every run banks cookies for the Workshop');
+sleigh.node('bRetry').click();
+assert.equal(cr().phase, 'play');
+assert.equal(cr().town, 1, 'ride again starts a fresh night');
+console.log(`Chimney Rush: autoplay to town ${ride.town} (${ride.perfect} perfect chimneys, ${ride.delivered} gifts), pause/resume, idle until sunrise, ${cr().cookies} cookies banked, ride again`);
+const turkey = await launch('gobble-getaway.html', 400, 720);
+const gg = () => globalThis.__gobbleGetaway.state();
+turkey.advance(2);
+assert.equal(gg().phase, 'title');
+turkey.node('bStart').click();
+assert.equal(gg().phase, 'play');
+assert.equal(gg().row, 0);
+globalThis.__gobbleGetaway.autoplay(true);
+let hopped = 0;
+for (let i = 0; i < 60 && gg().phase === 'play'; i++) { turkey.advance(1); hopped = Math.max(hopped, gg().row); }
+assert.ok(hopped >= 40, `the bot must hop past row 40, got ${hopped}`);
+if (gg().phase !== 'play') turkey.node('bRetry').click(); // the bot can be caught first: start a fresh run
+globalThis.__gobbleGetaway.pause();
+assert.equal(gg().phase, 'paused');
+turkey.node('bResume').click();
+assert.equal(gg().phase, 'play');
+globalThis.__gobbleGetaway.autoplay(false);
+turkey.node('bRestart').click(); // a fresh run, then one hop starts the chase and the turkey stands still
+assert.equal(gg().row, 0, 'restart begins at row 0');
+globalThis.__gobbleGetaway.hop('up');
+for (let i = 0; i < 120 && gg().phase !== 'over'; i++) turkey.advance(0.5);
+assert.equal(gg().phase, 'over', 'a turkey that stops hopping is caught');
+const caughtBy = gg().causeText;
+assert.ok(caughtBy, 'the game over names who caught the turkey');
+turkey.node('bRetry').click();
+assert.equal(gg().phase, 'play');
+assert.equal(gg().row, 0, 'hop again starts at row 0');
+console.log(`Gobble Getaway: autoplay past row ${hopped}, pause/resume, restart, idle turkey ${caughtBy}, hop again`);
 const cadence = await launch('chroma-cadence.html', 420, 720);
 const cc = () => globalThis.__chromaCadence.state();
 const playOut = () => { for (let i = 0; i < 130 && cc().state === 'playing'; i++) cadence.advance(1); };
