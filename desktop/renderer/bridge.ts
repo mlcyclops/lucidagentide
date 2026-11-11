@@ -515,10 +515,10 @@ export interface ModeState { available: ModeOption[]; current: string; ui?: "age
 export interface OmpCommand { name: string; description?: string; hint?: string }
 export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest"; live?: SessionLive; spoke?: string; archived?: true }
 // P-KG-INGEST.1b (ADR-0076): chats, with throwaway extraction sessions split into a collapsible group.
-// P-SESS-SEARCH.1 (ADR-0469): `hiddenSpokes` = spoke sessions held back while the Spokes toggle is off.
-// P-SESS-ARCHIVE.1 (ADR-0471): `archived` = this workspace's archived chats (the Archived group's count).
+// P-SESS-SEARCH.1 (ADR-0552): `hiddenSpokes` = spoke sessions held back while the Spokes toggle is off.
+// P-SESS-ARCHIVE.1 (ADR-0554): `archived` = this workspace's archived chats (the Archived group's count).
 export interface SessionList { sessions: SessionInfo[]; ingest: SessionInfo[]; hiddenSpokes?: number; archived?: number }
-/** P-SESS-ARCHIVE.1 (ADR-0471): mirrors desktop/sessions.ts ArchivePolicy / ArchiveRun. */
+/** P-SESS-ARCHIVE.1 (ADR-0554): mirrors desktop/sessions.ts ArchivePolicy / ArchiveRun. */
 export interface ArchivePolicyView { auto: boolean; days: number; spokeDays: number }
 export interface ArchiveRunView { candidates: number; archived: number; skipped: number; at: number }
 export interface ArchivePolicyState { policy: ArchivePolicyView; wouldArchive: number; lastRun: ArchiveRunView | null }
@@ -1242,7 +1242,7 @@ export interface LucidBridge {
   resumeSession(id: string, opts?: { force?: boolean }): Promise<SessionSwitchResult>;
   deleteSession(id: string): Promise<{ ok: boolean; error?: string }>;
   clearIngestSessions(): Promise<{ ok: boolean; cleared: number } | null>; // P-KG-INGEST.2: bulk-delete ingest throwaways
-  // P-SESS-ARCHIVE.1 (ADR-0471): archive / restore, the Archived group, the auto-archive rule.
+  // P-SESS-ARCHIVE.1 (ADR-0554): archive / restore, the Archived group, the auto-archive rule.
   archiveSession(id: string): Promise<{ ok: boolean; error?: string } | null>;
   restoreSession(id: string): Promise<{ ok: boolean; restored: boolean; error?: string } | null>;
   archivedSessions(): Promise<{ sessions: SessionInfo[] } | null>;

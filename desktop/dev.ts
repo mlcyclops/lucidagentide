@@ -130,7 +130,7 @@ import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, TURN_ALREADY_RUNN
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
-import { displayStatus } from "./collab/fleet_status.ts"; // P-STUCK-SHOW.3 (ADR-0492): phone guests see likely-stuck spokes too
+import { displayStatus } from "./collab/fleet_status.ts"; // P-STUCK-SHOW.3 (ADR-0558): phone guests see likely-stuck spokes too
 import { sessionLive, withLiveState, type SessionLiveSpoke } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
 import { addInterject, addPeerNote, awaitPeerReply, carryPendingNotes, drainInterjects, drainPeerNotes, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes; P-OWN.1: peer notes
 import { CheckoutRegistry, gitDirtyPaths, type CheckoutSession } from "./checkout_registry.ts"; // P-OWN.1: who is writing in which checkout
@@ -946,7 +946,7 @@ setInterval(() => {
         id: l.id, name: l.name, status: l.status as string, cwd: basename(l.cwd), turns: l.turns,
         lastActivityAt: l.lastActivityAt,
         ...(l.pendingApproval ? { pendingApproval: { summary: l.pendingApproval.summary, kind: l.pendingApproval.kind } } : {}),
-        ...(displayStatus(l) === "likely-stuck" ? { stuck: true as const } : {}), // P-STUCK-SHOW.3 (ADR-0492)
+        ...(displayStatus(l) === "likely-stuck" ? { stuck: true as const } : {}), // P-STUCK-SHOW.3 (ADR-0558)
       }));
       const body = JSON.stringify(lanes);
       const stamp = `${body}#${count}`;
@@ -1854,7 +1854,7 @@ const jobScheduler = new JobScheduler({
     emitSecurityEvent({ category: "exec", type: "scheduled_job", decision: e.outcome === "error" || e.outcome === "timeout" || e.outcome === "suspended" ? "block" : "allow", severity: e.outcome === "started" || e.outcome === "ok" ? "info" : "medium", tool: "scheduled_job", reason: `${e.name} [${e.jobId}] ${e.outcome}${e.laneId ? ` lane ${e.laneId}` : ""}${e.note ? `: ${e.note}` : ""}`.slice(0, 200) });
   },
 });
-/** P-SESS-ARCHIVE.1 (ADR-0471): sessions archiving must never move: Main's, and every spoke's (a stopped spoke
+/** P-SESS-ARCHIVE.1 (ADR-0554): sessions archiving must never move: Main's, and every spoke's (a stopped spoke
  *  resumes its session on respawn). Moving a file omp appends to would split the session in two. */
 function ownSessionIds(): Set<string> {
   const ids = new Set<string>();
@@ -5132,7 +5132,7 @@ return Bun.serve({
 
         const main = { sessionId: backend.currentSessionId(), busy: backend.switchBlocker() !== null };
         const lanes = fleet.owners();
-        // P-SESS-SEARCH.1 (ADR-0469): sessions a fleet lane ran are hidden unless `spokes=1`; the session
+        // P-SESS-SEARCH.1 (ADR-0552): sessions a fleet lane ran are hidden unless `spokes=1`; the session
         // Main holds and the lane the main composer is driving stay listed either way.
         const keep = new Set<string>();
         if (main.sessionId) keep.add(main.sessionId);
@@ -5167,7 +5167,7 @@ return Bun.serve({
         if (held) return sessionHeld(held);
         const busy = force === true ? null : backend.switchBlocker();
         if (busy) return switchRefused(busy, backend.currentSessionId());
-        // P-SESS-ARCHIVE.1 (ADR-0471): omp loads only from the sessions folder, and a load it cannot find is
+        // P-SESS-ARCHIVE.1 (ADR-0554): omp loads only from the sessions folder, and a load it cannot find is
         // swallowed (acp_backend.loadSession), so an archived session comes back BEFORE the load.
         const back = restoreSession(String(id));
         // Not 409: that status means "busy or held" to the client. Any other non-2xx is a plain failed switch.
@@ -5176,7 +5176,7 @@ return Bun.serve({
         publishLiveSessions(ownSessionIds()); // other engines must not archive it from this moment
         return json({ ok: true });
       }
-      // P-SESS-ARCHIVE.1 (ADR-0471): archive / restore one session, the Archived group, the auto-archive rule.
+      // P-SESS-ARCHIVE.1 (ADR-0554): archive / restore one session, the Archived group, the auto-archive rule.
       if (p === "/api/session/archive" && req.method === "POST") {
         const { id } = await readBody<{ id?: unknown }>(req);
         const sid = String(id ?? "");
@@ -6981,7 +6981,7 @@ process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retr
 // P-FLEET.L1: the master agent's fleet_status tool (omp subprocess) GETs this to see local lane status -
 // metadata only (lane replies render in the fleet dashboard, never through this URL).
 process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/status?t=${AGENT_TOKEN}`;
-startLiveHeartbeat(); // P-SESS-ARCHIVE.1 (ADR-0471): tell other engines which sessions must not be archived
+startLiveHeartbeat(); // P-SESS-ARCHIVE.1 (ADR-0554): tell other engines which sessions must not be archived
 scheduleAutoArchive(); // P-SESS-ARCHIVE.1: only does anything while the rule is on
 // P-SANDBOX.8: the sandbox_grant_dir tool (omp subprocess) POSTs its user-approved {path,mode,reason}
 // claim here. Same token'd convention as LUCID_FLEET_STATUS_URL; the endpoint applies NOTHING without a

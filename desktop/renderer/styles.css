@@ -1237,7 +1237,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
   border-left:2px solid var(--line-soft)}
 .sess-del:focus-visible{opacity:1;outline:2px solid var(--accent);outline-offset:1px}
 .sess:hover .t{padding-right:24px}
-/* P-SESS-SEARCH.1 (ADR-0469): sidebar search + Spokes toggle on one row; the field takes the width, the
+/* P-SESS-SEARCH.1 (ADR-0552): sidebar search + Spokes toggle on one row; the field takes the width, the
    toggle never wraps. A snippet is a BLOCK paragraph clamped to two lines (never prose inside a flex row). */
 .sess-find{display:flex;align-items:center;gap:6px;padding:0 12px 8px}
 .sess-search{flex:1;min-width:0;display:flex;align-items:center;gap:6px;padding:0 8px;border:1px solid var(--line);
@@ -1255,7 +1255,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .sess-count{flex:none;padding:2px 11px 4px;font-size:11px;color:var(--txt-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sess .sess-snip{font-size:11.5px;line-height:1.45;color:var(--txt-3);overflow:hidden;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-/* P-SESS-ARCHIVE.1 (ADR-0471): Archive/Restore sits left of Delete; the title makes room for both on hover. */
+/* P-SESS-ARCHIVE.1 (ADR-0554): Archive/Restore sits left of Delete; the title makes room for both on hover. */
 .sess-del.sess-arch{right:33px}
 .sess-del.sess-arch:hover{background:color-mix(in srgb,var(--accent-2) 16%,transparent);color:var(--accent-2)}
 .sess:hover .t,.sess:focus-within .t{padding-right:52px}
@@ -5481,7 +5481,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 /* Multiple headless LUCID engine lanes as mini agent windows inside one movable dock (the share-dock frame
    under the lucid.fleetDock.* keys). The card FRAME is the status surface: the LED + border take the lane
    color, and ONLY the states that need the user - awaiting-input (blue), needs-approval and likely-stuck
-   (red) - animate their glow (the sendReady/secPulse feel). Amber is kept for "might be stuck" (ADR-0491). Every persistent label is nowrap+ellipsis and the grid
+   (red) - animate their glow (the sendReady/secPulse feel). Amber is kept for "might be stuck" (ADR-0557). Every persistent label is nowrap+ellipsis and the grid
    tracks are minmax(280px,1fr), per the no-mid-word-wrap invariant. */
 .fleet-dock{min-width:320px}
 .fleet-body{padding:10px}
@@ -7258,7 +7258,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-hubrow-lanes .fleet-pip{font-size:11px;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis}
 .orbit-btn.waiting .orbit-ghost-n{color:var(--amber-txt,var(--amber));background:rgb(var(--amber-rgb) / .14)}
 
-/* P-HUB-PICK.1 (ADR-0470): one codebase tag everywhere (orbit node, grid card, Hubs menu, spoke switch menu),
+/* P-HUB-PICK.1 (ADR-0553): one codebase tag everywhere (orbit node, grid card, Hubs menu, spoke switch menu),
    colored by a hue derived from the repo identity, so two spokes on different codebases never read alike.
    A single text child, never wraps. */
 .spoke-repo-tag{--rh:var(--repo-hue,220);flex:0 1 auto;min-width:0;max-width:150px;display:inline-block;
@@ -7380,7 +7380,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .hud-alive[data-state="stuck"],.lane-alive[data-state="stuck"]{color:var(--red-txt);background:rgb(var(--red-rgb) / .14);
   border-color:rgb(var(--red-rgb) / .5)}
 .hud-stopcall,.lane-stopcall{flex:none;white-space:nowrap}
-/* P-STUCK-SHOW.1 (ADR-0490): a likely-stuck spoke is red wherever a spoke is drawn (card, orbit node, the
+/* P-STUCK-SHOW.1 (ADR-0556): a likely-stuck spoke is red wherever a spoke is drawn (card, orbit node, the
    count dots, the Fleet button), and a call flat for half the threshold is amber ("might be stuck").
    Display only: LUCID still never stops the call on its own. */
 .lane-alive[data-state="flat"]{color:var(--amber-txt);background:rgb(var(--amber-rgb) / .14);border-color:rgb(var(--amber-rgb) / .5)}

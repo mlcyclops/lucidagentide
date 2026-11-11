@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-HUB-PICK.1 (ADR-0470): every spoke names its codebase, the same codebase always reads and colors the
+// P-HUB-PICK.1 (ADR-0553): every spoke names its codebase, the same codebase always reads and colors the
 // same, and different codebases never share a key.
 
 import { expect, test } from "bun:test";

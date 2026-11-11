@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-SESS-ARCHIVE.1 (ADR-0471): archiving must see sessions held by OTHER running engines, and must not be
+// P-SESS-ARCHIVE.1 (ADR-0554): archiving must see sessions held by OTHER running engines, and must not be
 // blocked forever by a record a dead or hung engine left behind.
 
 import { afterAll, expect, test } from "bun:test";
