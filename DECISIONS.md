@@ -23505,7 +23505,7 @@ Closing Preview invalidates pending checks and suppresses both its visible Agent
 
 ## ADR-0334 -- P-FLEET.DGX: the DGX fleet as one configured provider plus one agent registry, never as hostnames in code (2026-09-05)
 
-**Status:** Superseded by ADR-0550 (and ADR-0549 on the 2.6.0 line). Was: Proposed -- NOT BUILT. Written by the TL187 DGX Loader's agent as a cross-repo handoff, to be
+**Status:** Superseded by ADR-0550 and ADR-0549: a box joins as a Remote Spoke and is chosen by capability in the hub picker; Herd's `machine add --profile` stays refused and points at Remote Spokes. Never built. Was: Proposed -- NOT BUILT. Written by the TL187 DGX Loader's agent as a cross-repo handoff, to be
 adopted increment by increment when a session picks it up. Wire contracts and the build-to-test path live
 in `DGX-FLEET-INTEGRATION.md` at this repo's root (pointed to from `HANDOFF.md`, Cross-repo briefs); the
 source of truth for the fleet side is the DGX Loader repo's ADRs 0001 to 0014. Numbering note: if another
