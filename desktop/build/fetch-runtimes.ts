@@ -25,6 +25,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rm
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cachedRuntimeCurrent, parsePins, PINS_FILE, satisfiesMinimum } from "./runtime_pin.ts";
+import { checkBundledPython, PY_OPENSSL_MIN } from "./python_floor.ts";
 
 // Locate the extracted member by basename, recursively. Cross-platform ON PURPOSE: it replaces a
 // `find … -name` shell call that on the Windows CI runner resolves to System32\find.exe (a text-search
@@ -53,8 +54,8 @@ const UV_VERSION = "0.11.23"; // github.com/astral-sh/uv -> release tag <ver>
 // Python on first run — impossible on an air-gapped host. The scanner has zero pip deps
 // (scanner-sidecar/pyproject.toml `dependencies = []`), so a bare interpreter suffices.
 // `install_only` archives extract to a single top-level `python/` directory.
-const PY_TAG = "20260623"; // github.com/astral-sh/python-build-standalone -> release tag
-const PY_VERSION = "3.12.13"; // CPython inside that tag (scanner requires >=3.11)
+const PY_TAG = "20261026"; // github.com/astral-sh/python-build-standalone -> release tag
+const PY_VERSION = "3.12.16"; // CPython inside that tag (scanner requires >=3.11)
 
 interface RuntimeSpec {
 	readonly platform: "darwin" | "win32" | "linux"; // the process.platform this runtime targets
@@ -167,14 +168,16 @@ const SPECS: readonly RuntimeSpec[] = [
 	},
 	// Relocatable CPython for the scanner (air-gap) — copy the whole extracted `python/` tree.
 	// Hashes below were cross-checked against python-build-standalone's published SHA256SUMS
-	// for release 20260623 (…/releases/download/20260623/SHA256SUMS).
+	// for release 20261026 (…/releases/download/20261026/SHA256SUMS).
+	// P-RUNTIME-PY.1 (ADR-0548): 20260623 (3.12.13) carried OpenSSL 3.5.7, below the 3.5.8/3.5.9 fixes for
+	// CVE-2026-84782 (High) and three Moderates; 20261026 (3.12.16) carries OpenSSL 3.5.9 and expat 2.9.0.
 	{
 		platform: "win32",
 		name: "python-win32-x64",
 		kind: "tgz",
 		tree: "python",
 		url: pyUrl("x86_64-pc-windows-msvc"),
-		sha256: "c6af85bb83d5158c9ff71f50dfad467853d1cd236f932b144e87e26e2ea2a83e",
+		sha256: "590dfcbe3a34c07301e6332e13e2188b98655cd072b08afa45a7998dc4c22bc5",
 	},
 	{
 		platform: "linux",
@@ -182,7 +185,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "tgz",
 		tree: "python",
 		url: pyUrl("x86_64-unknown-linux-gnu"),
-		sha256: "9fa869d69be54f6b8eeae64272fbd9bb0646e0e1a8da9d80e51ba5a3bee48930",
+		sha256: "6a79e922e50006b601f29e688407659da1c2b86ebcd4e9c7254cf234be8b89de",
 	},
 	{
 		platform: "linux",
@@ -190,7 +193,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "tgz",
 		tree: "python",
 		url: pyUrl("aarch64-unknown-linux-gnu"),
-		sha256: "b14d074c43fdf03f01822fd07a15b3039eb0558503d1cb791791602cbe32908b",
+		sha256: "a945427411dc6851a1393533b74a4a1ac434321ae397f2ec69897a9b4fde032b",
 	},
 	{
 		platform: "darwin",
@@ -198,7 +201,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "tgz",
 		tree: "python",
 		url: pyUrl("aarch64-apple-darwin"),
-		sha256: "3724aa4dafb5f7b6c2cf98e89914e4248dc6bd2fe40407df4a2d73de99615f16",
+		sha256: "fbf4afef53c2a6b72bb741bc06d5671a9dfaf87bd84e5aa73ac9b3d0d589f14e",
 	},
 	{
 		platform: "darwin",
@@ -206,7 +209,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "tgz",
 		tree: "python",
 		url: pyUrl("x86_64-apple-darwin"),
-		sha256: "7c57fdd1fa675190093700eb0d8e7117e1f9eae7c30a46dea5f8d5266bcfc791",
+		sha256: "a962e47df522889eaa7ff0d6a56203f1079f68aabb65ffdbe8455f362bc769f3",
 	},
 ];
 
@@ -237,7 +240,10 @@ if (specs.length === 0) {
 // P-RUNTIME-PIN.1 (ADR-0547, issue #598): which pinned archive each runtime on disk came from. A runtime is
 // reused only when its record matches the current pin; a stale or unrecorded one is fetched again.
 const PINS_PATH = join(OUT, PINS_FILE);
-const pins = parsePins(existsSync(PINS_PATH) ? readFileSync(PINS_PATH, "utf8") : null);
+// Read, never check-then-read (CodeQL js/file-system-race): a missing or unreadable file is "nothing recorded".
+let pinsText: string | null = null;
+try { pinsText = readFileSync(PINS_PATH, "utf8"); } catch { pinsText = null; }
+const pins = parsePins(pinsText);
 
 for (const spec of specs) {
 	const dest = join(OUT, spec.name);
@@ -374,6 +380,18 @@ if (!REFRESH) {
 			throw new Error(`fetch-runtimes: the bundled bun is ${version}, but omp needs bun ${range}; the packaged agent would not start. Raise BUN_VERSION.`);
 		}
 		console.log(`runtimes: bundled bun ${version} satisfies omp's engines.bun ${range ?? "(none declared)"}`);
+	}
+	// P-RUNTIME-PY.1 (ADR-0548): run the bundled CPython and read what it carries. A tree that is not
+	// PY_VERSION (a stale cached runtimes/ dir) or whose OpenSSL is below PY_OPENSSL_MIN stops the build:
+	// the pin said 3.12.13 for months while its OpenSSL 3.5.7 collected a High CVE, and nothing read it.
+	// Only for this machine's own platform and arch (a cross-staged runtime cannot run here).
+	const py = SPECS.find((s) => s.platform === TARGET && s.name === `python-${TARGET}-${TARGET_ARCH}`);
+	if (py && TARGET === process.platform && TARGET_ARCH === process.arch) {
+		const exe = join(OUT, py.name, ...(TARGET === "win32" ? ["python.exe"] : ["bin", "python3"]));
+		const probe = await $`${exe} -I -c ${"import json, platform, ssl; print(json.dumps({'python': platform.python_version(), 'openssl': ssl.OPENSSL_VERSION}))"}`.text();
+		const refusal = checkBundledPython(probe, PY_VERSION, PY_OPENSSL_MIN);
+		if (refusal) throw new Error(`fetch-runtimes: ${py.name}: ${refusal}`);
+		console.log(`runtimes: ${py.name} is CPython ${PY_VERSION} with OpenSSL >= ${PY_OPENSSL_MIN}`);
 	}
 }
 
