@@ -99,7 +99,7 @@ result = cq.Workplane("XY").box(40, 30, 10).faces(">Z").workplane().hole(8)
 
 /** Why the pane cannot send to the selected endpoint, or "". */
 export function cadEndpointBlock(v: CreatorCadView): string {
-  if (!v.endpoints.length) return "No dgx-cad endpoint is declared. Import one from the DGX Loader or connect one under Integrations.";
+  if (!v.endpoints.length) return "No dgx-cad endpoint is declared. Import one from the Private AI Platform or connect one under Integrations.";
   const ep = v.endpoints.find((e) => e.id === v.endpointId);
   if (!ep) return "Pick a dgx-cad endpoint.";
   if (ep.cui && !ep.cui.allowed) return `Refused under CUI lockdown: ${ep.cui.reason}`;
@@ -180,7 +180,7 @@ export function creatorCadHtml(v: CreatorCadView | null): string {
     ? `<div class="cim-row"><span class="cim-lbl">Endpoint</span><select class="prov-key cvd-grow" id="ccadEndpoint">${
       v.endpoints.map((e) => `<option value="${esc(e.id)}"${e.id === v.endpointId ? " selected" : ""}>${esc(`${e.label} (${e.id})`)}</option>`).join("")
     }</select><button type="button" class="btn-mini" data-cvd-import>Import</button></div>`
-    : `<div class="cim-row"><button type="button" class="btn-mini ok" data-cvd-import>Import from the DGX Loader</button></div>`;
+    : `<div class="cim-row"><button type="button" class="btn-mini ok" data-cvd-import>Import from the Private AI Platform</button></div>`;
   const outputs = CAD_OUTPUTS.map((o) =>
     `<label class="ccad-out"><input type="checkbox" data-ccad-output="${o}"${v.outputs.includes(o) ? " checked" : ""} /><span>${o.toUpperCase()}</span></label>`).join("");
   const runBlock = cadRunBlock(v);

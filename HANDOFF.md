@@ -13,9 +13,55 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-11-01, v2.5.0 stable)
+## Current state (2026-11-10, v2.5.3 stable)
 
-**v2.5.0** (2026-11-01, branch `release/v2.5.0-cut`) is the stable release:
+**v2.5.3** (2026-11-10, branch `release/v2.5.3-cut`) is the stable release:
+2.5.3-beta.4 promoted unchanged, i.e. 2.5.2 plus the four 2.5.3 betas.
+P-SEASON.1 (ADR-0525, #580): special themes for U.S. holidays and event
+months. #586: P-MODEL.10 (ADR-0526, omp 18.18.6 on bundled Bun 1.4.4, Claude
+Fable/Mythos 5.2), P-BOOTPERF.1 (ADR-0527, Windows boot), P-FLEET.FIT1
+(ADR-0528, lane autofit), P-PUSH.PAR1 (ADR-0529, Push now in a parallel
+lane). P-PRIVAI.1 (ADR-0530, #588): the DGX Loader is the Private AI
+Platform, identifiers kept. #600: P-GAME.11, 11b, 12 (holiday arcade). #597:
+a promoted lane keeps its whole answer. Tagged `v2.5.3` and marked Latest;
+the add-on's Tahiti `core.lock` pins this tag. Held for 2.6.0: #599
+(fetch-runtimes stale Bun, #598; local builds only, CI fetches fresh), #596,
+#595, #594, #593, #592, #591, #590, #585, #583, #573, #571 and the older held
+PRs.
+
+**v2.5.2** (2026-11-07, branch `release/v2.5.2-cut`) was the previous stable release:
+2.5.1 plus bug fixes only. P-MODEL.9 (ADR-0498, #570): cloud-only automatic
+model default, local models restored only from an explicit pick, embedding
+models never chat or check, a provider refresh on the "No response" card.
+P-ASK.1 (ADR-0523, #572): omp's `ask` tool off in every ACP session,
+`lucid acp` included. P-GLOW.1 (ADR-0524, #574): compositor-only
+needs-approval pulse. #576: the Fleet Orbit ring drawn from the layout's
+radii (#575). Docs: the P-HERD design ADRs (ADR-0489 to ADR-0497, #560).
+Tagged `v2.5.2` and marked Latest. Held for 2.6.0: #573 (remote spokes,
+which carries #571 and the sessions stack as ADR-0515 to 0521, P-CTRL-REMOTE.1
+now ADR-0525), #571 (canvas orbit, must take `ringRx`/`ringRy`), #524/#525,
+#512, #457, #351.
+
+**v2.5.1** (2026-11-05, branch `release/v2.5.1-cut`) was the previous stable release:
+2.5.1-beta.1 (owner-tested on Windows) promoted with the #555 upgrade review
+fixes, plus P-QUEUE-IMG.1 (ADR-0469, staged prompts own their pasted
+images), P-KG-ORBIT.1 / P-KG-FLAT.1 / P-KG-POLISH.1 (ADR-0470, ADR-0471, the
+Knowledge canvas Orbit view and a readable flat graph) and the P-WAKE /
+P-SCHED.5-6 design ADRs (ADR-0482 to ADR-0488, docs only). Tagged `v2.5.1`
+and marked Latest. What beta.1 brought: the engine OS vault (ADR-0472),
+FIPS 140 at-rest crypto (ADR-0473), one v2 vault (ADR-0474), the vault list
+and `.lucidvault` backup (ADR-0475), request_secret (ADR-0476), `.env` import
+(ADR-0477), enterprise vault destinations (ADR-0478), the NIST SP 800-171
+Rev 3 evidence package (ADR-0479) and the renderer watchdog (ADR-0481).
+Installing over 2.5.0 migrates keys into the OS vault with no re-entry;
+downgrading to 2.5.0 shows them as unset. Left out as not low risk: the
+emertins sessions/hub stack (#551 to #553, ADR numbers collide with master's
+0469 to 0475), #524/#525 (biometric and passphrase vault unlock, needs its
+own security review), #512 and #457 (frozen `contracts.ts` changes,
+conflicting), #351 (Windows gate fails). The add-on repo's Tahiti distro
+(ADR-A032, ADR-A043) pins this tag.
+
+**v2.5.0** (2026-11-01, branch `release/v2.5.0-cut`) was the previous stable release:
 2.5.0-beta.1 through beta.4 promoted plus everything merged to master since
 beta.4, tagged `v2.5.0` and marked Latest, so the download buttons, the
 electron-updater feed and the Homebrew cask (after its `chore/cask-v2.5.0`
@@ -384,7 +430,7 @@ Queued alongside it:
 
 ## Cross-repo briefs
 
-- `DGX-FLEET-INTEGRATION.md` (repo root) - what the TL187 DGX Loader fleet
+- `DGX-FLEET-INTEGRATION.md` (repo root) - what the TL187 Private AI Platform (formerly DGX Loader) fleet
   ships for LUCID (OpenAI-compatible serving, A2A agent card registry, model
   provenance and trust states, LoRA candidates, corpus lake), how to
   build-and-test against it today over SSH tunnels with zero hardcoded box

@@ -40,29 +40,29 @@ try {
   }
   __setSessionIndexStore({ file: join(base, "index.json"), root });
   __resetSessionIndex();
-  listSessions(cwd, root);
+  await listSessions(cwd, root);
   const cold = __sessionIndexStats().parses;
   flushSessionIndex();
   __resetSessionIndex(); // a restart
-  listSessions(cwd, root);
+  await listSessions(cwd, root);
   if (cold !== N || __sessionIndexStats().parses !== 0) fail(`expected ${N} cold parses and 0 after restart, got ${cold} / ${__sessionIndexStats().parses}`);
   ok(`first start parsed ${cold} transcripts; after a restart with the saved index: 0`);
 
   const policy = archivePolicy({ days: 30, spokeDays: 7 });
   const keep = new Set(["s350"]); // the session Main holds
-  const run = autoArchive(policy, keep, new Map(), { root, now: NOW });
-  const list = listSessions(cwd, root);
+  const run = await autoArchive(policy, keep, new Map(), { root, now: NOW });
+  const list = await listSessions(cwd, root);
   // Ages 30..399 days match (370), minus the live one.
   if (run.archived !== N - 30 - 1 || list.archived !== run.archived) fail(`archived ${run.archived}, listed ${list.archived}`);
   if (!list.sessions.some((s) => s.id === "s350")) fail("the live session must stay");
   ok(`30-day rule archived ${run.archived}; the live 350-day-old session stayed; ${list.sessions.length} remain listed`);
 
-  const hit = searchSessions("stripe webhook", { cwd, root }).hits[0];
+  const hit = (await searchSessions("stripe webhook", { cwd, root })).hits[0];
   if (hit?.id !== "s200" || !hit.archived) fail("an archived session must stay searchable");
   if (!sessionMessages("s200", 0, root).messages.some((m) => m.text.includes("Stripe"))) fail("an archived transcript must stay readable");
   ok(`search still finds the 200-day-old archived session and reads it in place`);
 
-  if (!restoreSession("s200", root).restored || !listSessions(cwd, root).sessions.some((s) => s.id === "s200")) fail("restore");
+  if (!restoreSession("s200", root).restored || !(await listSessions(cwd, root)).sessions.some((s) => s.id === "s200")) fail("restore");
   ok("restore puts it back in the list");
   console.log("SMOKE OK");
 } finally {

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 import { describe, expect, test } from "bun:test";
-import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
+import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext, shouldReprobeStatus } from "./turn_restore.ts";
 
 describe("turn recovery", () => {
   test("canonical completion replaces a longer answer polluted by connection notices", () => {
@@ -48,5 +48,25 @@ describe("turn recovery", () => {
       { role: "user", text: "again" }, { role: "assistant", text: "partial second result" },
     ];
     expect(priorTurnContext(messages, "again")).toEqual(messages.slice(0, 2));
+  });
+});
+
+// P-BOOTPERF.1: the startup Reconnect button stayed up for the whole session after a slow boot.
+describe("quiet reconnect self-heal", () => {
+  test("the engine answering again while the button shows re-runs the status probe", () => {
+    expect(shouldReprobeStatus({ reconnectShown: true, engineWasAnswering: false, engineAnswering: true })).toBe(true);
+  });
+
+  test("a dead engine keeps its button: no answer, no re-probe (fail-closed)", () => {
+    expect(shouldReprobeStatus({ reconnectShown: true, engineWasAnswering: false, engineAnswering: false })).toBe(false);
+  });
+
+  test("only the silent-to-answering edge re-probes, so a failing status route cannot loop", () => {
+    expect(shouldReprobeStatus({ reconnectShown: true, engineWasAnswering: true, engineAnswering: true })).toBe(false);
+    expect(shouldReprobeStatus({ reconnectShown: true, engineWasAnswering: true, engineAnswering: false })).toBe(false);
+  });
+
+  test("nothing happens while the button is hidden (normal startup)", () => {
+    expect(shouldReprobeStatus({ reconnectShown: false, engineWasAnswering: false, engineAnswering: true })).toBe(false);
   });
 });

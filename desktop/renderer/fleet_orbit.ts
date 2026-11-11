@@ -1145,23 +1145,24 @@ function layoutStage(lanes: LaneView[]): void {
   const cx = w / 2, cy = h / 2;
   const slots = orbitSlots(lanes.length, w, h);
   // Decorative ring ellipses for each occupied ring, dash-drifting slowly (pure ornament, one per ring).
-  const rings = [...new Set(slots.map((s) => s.ring))];
-  const ringEls = svg.querySelectorAll(".orbit-ringline");
+  // One sample slot per occupied ring carries that ring's radii. The ellipses are recreated only when the
+  // ring count changes, but re-sized every pass so a stage resize keeps them on the spokes.
+  const rings = [...new Map(slots.map((s) => [s.ring, s] as const)).values()];
+  let ringEls = [...svg.querySelectorAll(".orbit-ringline")];
   if (ringEls.length !== rings.length) {
     ringEls.forEach((r) => r.remove());
-    for (const ring of rings) {
-      const sample = slots.find((s) => s.ring === ring)!;
-      const rx = Math.hypot(sample.x, 0) || Math.abs(sample.y);
+    ringEls = rings.map(() => {
       const e = document.createElementNS("http://www.w3.org/2000/svg", "ellipse");
       e.setAttribute("class", "orbit-ringline");
-      e.setAttribute("cx", String(cx)); e.setAttribute("cy", String(cy));
-      // Recover the ellipse radii from any slot on the ring: x = rx cos a, y = ry sin a.
-      const a = (sample.angle * Math.PI) / 180;
-      e.setAttribute("rx", String(Math.abs(Math.cos(a)) > 0.01 ? Math.abs(sample.x / Math.cos(a)) : rx));
-      e.setAttribute("ry", String(Math.abs(Math.sin(a)) > 0.01 ? Math.abs(sample.y / Math.sin(a)) : rx));
       svg.insertBefore(e, svg.firstChild);
-    }
+      return e;
+    });
   }
+  rings.forEach((sample, i) => {
+    const e = ringEls[i]!;
+    e.setAttribute("cx", String(cx)); e.setAttribute("cy", String(cy));
+    e.setAttribute("rx", String(sample.ringRx)); e.setAttribute("ry", String(sample.ringRy));
+  });
   lanes.forEach((lane, i) => {
     const entry = nodes.get(lane.id);
     const slot = slots[i];

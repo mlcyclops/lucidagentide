@@ -31,6 +31,7 @@ import { remoteAgentMcpServers } from "../harness/mcp/registry.ts";
 import { pluginMcpServers } from "./plugins/mcp.ts"; // P-PLUGINS.2 (ADR-0462)
 import { DEFAULT_RELAY_URL } from "@oh-my-pi/pi-wire"; // P-COLLAB.3: the public-relay fallback origin
 import { sanitizeModelCompat, validateLocalProvider, type LocalModelDef, type LocalProviderDef } from "./local_providers.ts";
+import { isLocalModel } from "./renderer/model_families.ts"; // cloud-only default: explicit-choice migration
 import { validateCreatorEndpoint, type CreatorEndpointDef } from "./creator_registry.ts"; // CREATOR-0 (ADR-0282)
 
 // LUCID_GUI_SETTINGS_FILE is a supported instance-isolation seam. Creator and Fleet builds point it at
@@ -155,6 +156,9 @@ export interface GuiSettings {
   // backend also writes from omp's reported default "did the user deliberately choose a model?". Empty ⇒
   // never chosen ⇒ the renderer boots to the highest-level available model for the active provider.
   chosenModel?: string;
+  // fix/v2.5.1-provider-default-models: the explicit-choice marker written by setChosenModel. Absent on
+  // values written before the fix; chosenModel() then refuses to restore a LOCAL value (read-time migration).
+  chosenModelSource?: "user";
   // P-IDE.1c (ADR-0029): the user acknowledged the data-sovereignty warning for China-origin models
   // (DeepSeek/Kimi/MiniMax/GLM/…). Until set, those models are hidden from the picker. Off by default.
   chinaModelsAcknowledged?: boolean;
@@ -418,7 +422,7 @@ export function voiceSettings(): VoiceSettings {
 }
 
 /** P-VOICE.7: upsert an imported endpoint (validated upstream by parseVoiceEndpointConfig). Dedupe by
- *  id; a re-import of the same id replaces the stored copy (the loader re-exports after edits). The
+ *  id; a re-import of the same id replaces the stored copy (the Private AI Platform re-exports after edits). The
  *  list is capped defensively - an import can never grow the settings file without bound. */
 export function importVoiceEndpoint(cfg: VoiceEndpointConfig): VoiceSettings {
   const s = load();
@@ -1034,11 +1038,27 @@ export function setLastModel(model: string): void {
 /** P-MODELDEF: the user's explicitly-chosen model ("" if they've never picked one). Set ONLY on a genuine
  *  user selection in the picker; never from a system switch (lockdown clamp, no-response
  *  fallback, collab-guest mirror, boot default-select), so it cleanly signals an explicit preference. */
-export function chosenModel(): string { return load().chosenModel ?? ""; }
+//
+// Cloud-only default (fix/v2.5.1-provider-default-models): every write from now on carries
+// `chosenModelSource: "user"`, the explicit-choice marker. MIGRATION: a stored LOCAL value WITHOUT the
+// marker (written before this fix) is treated as not explicit and reads as "", so it never auto-applies;
+// the user re-picks it once if they really want it. A legacy CLOUD value is still honored (it can only
+// ever resolve to a cloud default). The stored value is left on disk untouched (read-time migration).
+export function chosenModel(): string {
+  const s = load();
+  const v = s.chosenModel ?? "";
+  if (!v || s.chosenModelSource === "user") return v;
+  return isLocalModel(v, localProviderPrefixes()) ? "" : v;
+}
 export function setChosenModel(model: string): GuiSettings {
   const s = load(); const m = (model ?? "").trim();
-  if (m) s.chosenModel = m; else delete s.chosenModel;
+  if (m) { s.chosenModel = m; s.chosenModelSource = "user"; } else { delete s.chosenModel; delete s.chosenModelSource; }
   save(s); return s;
+}
+/** Every configured Local Provider's omp prefix, enabled or not (a disabled one is still LOCAL), for
+ *  isLocalModel. The implicit engines (Ollama, llama.cpp, LM Studio, ...) are covered by isLocalModel itself. */
+export function localProviderPrefixes(): Set<string> {
+  return new Set(listLocalProviders().map((p) => p.ompProvider).filter(Boolean));
 }
 // P-THEME.1: the user's chosen app theme id (see desktop/renderer/theme.ts THEMES). "" / unset means
 // "not chosen", which resolveTheme folds to the DEFAULT (lucid-dark). P-THEME.2: it used to fold to the

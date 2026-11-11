@@ -14,8 +14,10 @@ import { LANE_ATTENTION, displayStatus } from "../collab/fleet_status.ts"; // P-
 import { promoteRefusal } from "./composer_target.ts";
 
 /** One spoke's resting place, in stage coordinates relative to the hub (0,0 = stage center). `ring` is
- *  0-based from the innermost occupied ring; `angle` is degrees with -90 at 12 o'clock, clockwise. */
-export interface OrbitSlot { x: number; y: number; ring: number; angle: number }
+ *  0-based from the innermost occupied ring; `angle` is degrees with -90 at 12 o'clock, clockwise.
+ *  `ringRx`/`ringRy` are the radii of the ellipse the slot's ring lies on, so the decorative ring is drawn
+ *  from the layout itself (inverting x = rx cos a breaks at 12 o'clock, where cos a is a rounding error). */
+export interface OrbitSlot { x: number; y: number; ring: number; angle: number; ringRx: number; ringRy: number }
 
 export interface OrbitOpts { nodeW?: number; nodeH?: number; pad?: number }
 
@@ -74,10 +76,11 @@ export function orbitSlots(count: number, w: number, h: number, opts?: OrbitOpts
     // Rings start at 12 o'clock; each deeper ring is staggered half a step so nested spokes interleave
     // instead of stacking into radial columns that read as overlap.
     const start = -90 + ring * (step / 2);
+    const ringRx = rx * plan[ring]!, ringRy = ry * plan[ring]!;
     for (let k = 0; k < n; k++) {
       const angle = start + k * step;
       const rad = (angle * Math.PI) / 180;
-      slots.push({ x: rx * plan[ring]! * Math.cos(rad), y: ry * plan[ring]! * Math.sin(rad), ring, angle });
+      slots.push({ x: ringRx * Math.cos(rad), y: ringRy * Math.sin(rad), ring, angle, ringRx, ringRy });
       placed++;
     }
   }

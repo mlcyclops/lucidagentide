@@ -20,3 +20,12 @@ export function canAdoptTurn(status: { turnId: string; running: boolean } | null
 export function canonicalTurnAnswer(current: string, supplied: string | undefined): string {
   return supplied === undefined ? current : supplied;
 }
+
+/** P-BOOTPERF.1 (ADR-pending): may the quiet Reconnect button heal itself? It used to stay up for the rest
+ *  of the session once a slow startup outlived the boot grace, even after the engine answered and the app
+ *  worked. Re-run the status probe (whose success hides it) when the engine starts answering again while
+ *  it shows. Only on that silent-to-answering edge: a status route that fails while the engine answers
+ *  cannot loop, and a dead engine never answers, so its button stays (fail-closed). */
+export function shouldReprobeStatus(i: { reconnectShown: boolean; engineWasAnswering: boolean; engineAnswering: boolean }): boolean {
+  return i.reconnectShown && i.engineAnswering && !i.engineWasAnswering;
+}

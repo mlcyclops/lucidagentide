@@ -14,7 +14,7 @@ import { currentSwitchPreflight, liveBadge, planSessionSwitch, spokeNameFor, swi
 import { markTerms } from "./session_search.ts"; // P-SESS-SEARCH.1 (ADR-0469)
 import { stopClickIntent } from "./stop_guard.ts"; // P-STOP-GUARD.1 (ADR-0489): a press aimed at Send never stops a turn
 import { newlyStuck } from "../collab/fleet_status.ts"; // P-STUCK-SHOW.1 (ADR-0490): one alert per stalled spoke
-import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext } from "./turn_restore.ts";
+import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext, shouldReprobeStatus } from "./turn_restore.ts";
 // P-RECOVER.1 (ADR-0385): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
 import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
 import { REPORT_SAVED, clearRecoveryNotice, openIncidentSubmit, showIncidentNotice, showRecoveryNotice, type NoticeAction } from "./incident_notice.ts";
@@ -35,11 +35,11 @@ import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from
 import { PREVIEW_ZOOM_MAX, PREVIEW_ZOOM_MIN, PreviewWheelSteps, stepPreviewZoom } from "./preview_zoom.ts"; // whole-10% Preview zoom steps
 import { PREVIEW_KIND_ICON, isAutoPreviewPath, laneTabId, pluginTabId, previewKindLabel, previewPathKind, removeLaneTab, upsertLaneTab, upsertPluginTab, type PreviewTab } from "./preview_tabs.ts";
 import { roleIcon } from "./role_icons.ts";
-import { budgetWindowState, providerBudgetRows, providerHasApiKey, providerKeywords } from "./budget_gate.ts";
-import { cachedSessions, cachedShareSnapshot, cachedSkills, cachedTranscript, setCachedSessions, setCachedShareSnapshot, setCachedSkills, setCachedTranscript, transcriptSig } from "./swr_cache.ts";
+import { budgetWindowState, providerBudgetRows, providerForModel, providerHasApiKey, providerKeywords } from "./budget_gate.ts";
+import { cachedSessions, cachedShareSnapshot, cachedSkills, cachedTranscript, cachedWorkspace, setCachedSessions, setCachedShareSnapshot, setCachedSkills, setCachedTranscript, setCachedWorkspace, transcriptSig } from "./swr_cache.ts";
 import { $, $$, accordion, el, fmtNum, gauge, spark, table, type Col } from "./dom.ts";
 import { freshFindings, splitReviewed } from "./sec_review.ts"; // P-SECACK.1 (ADR-0170): reviewed rows leave the active view
-import { installTextContextMenu } from "./ctxmenu.ts"; // P-SECACK.1 (ADR-0170): right-click clipboard menu
+import { bindItemMenu, copyToClipboard, installTextContextMenu, openCtxMenu, type CtxMenuEntry } from "./ctxmenu.ts"; // P-SECACK.1 (ADR-0170): right-click clipboard menu; P-PUSH.PAR1: the staged chip's item menu
 import { restoredTurnHtml } from "./steps_restore.ts"; // P-RESUME.1 (ADR-0171): resumed thinking/tool history
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
@@ -73,13 +73,15 @@ import { findRelayFile, createRelayFile, readRelayFile, updateRelayFile, shareRe
 import { toolfailGroupHtml, type ToolFailEntry } from "./toolfail_group.ts"; // P-TOOLFAIL.2 (ADR-0163)
 import { APP_VERSION } from "../version.ts";
 import { renderMarkdown } from "./markdown.ts";
-import { type GraphHandle, kindLabel, mountGraph } from "./graph.ts";
+import { type GraphHandle, type GraphHooks, type GraphPerfOpts, KIND_COLOR, kindColor, kindLabel, mountGraph } from "./graph.ts";
+import { mountOrbitGraph, type OrbitView } from "./graph_orbit.ts"; // P-KG-ORBIT.1 (ADR-0470): the Orbit engine
+import { rankNodes, type RankedNode } from "./kg_search.ts"; // P-KG-ORBIT.1: ranked "Find a node" results
 import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannable QR of the invite link
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy, snapshotPhaseLabel, STARTING_AGENT_PHASE } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
-import { addQueued, nextHold, pushRecovery, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery
+import { addQueued, canSteer, editQueued, nextHold, parallelPushNotice, parallelPushRefusal, pushNowRoute, pushRecovery, type PushSource, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery; P-PUSH.PAR1: Push now in a parallel worktree lane
 import { delegationSettled, filterRunsForBatch, mergeRunSamples, runEta, type RunSample, type TimedRun } from "./subagent_filter.ts"; // P-TASK.5a: scope each delegation card to ITS batch's runs
 import { guardBlockedHtml, resourcePanelBodyHtml, resourcePanelHtml, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1 (ADR-0182)
 import type { CollabP2PConfig, CollabRelay, CollabRelayServeStatus, KbGraphView, KbPackImportView, PersonalGraphData } from "./bridge.ts";
@@ -114,7 +116,7 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
-import { closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid
+import { closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, pushToNewLane, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
 import { fleetHome, initFleetOrbit, noteSpokeAsk, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
 import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
@@ -128,12 +130,12 @@ import { classifyTurnFailure, effectiveState, type FailureCause } from "./net_st
 import { fitWithin, MAX_SNAPSHOT_EDGE } from "../collab/preview_snapshot.ts"; // P-PREVIEW-PWA.1 (ADR-0237): scaled-down preview snapshot to phone guests
 import { accessCounts } from "../collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness counts
 import { decideGovOnboarding, planGovSetup, CIV_ASKSAGE_BASE, ASKSAGE_ACCOUNT_URL, ASKSAGE_DOCS_URL, ASKSAGE_TOKEN_STEPS } from "./gov_onboarding.ts"; // P-GOVCUI.1: Government/CUI first-run step
-import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isUnconfiguredAmbientModel, localPrefixSet, orderByUsage, pendingLocalModels, preferredDefaultModel, providerAllowedOnPlatform, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, familyOf, filterModels, groupByFamily, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isLocalModel, isUnconfiguredAmbientModel, localPrefixSet, noResponseRestartHint, orderByUsage, pendingLocalModels, preferredDefaultModel, providerAllowedOnPlatform, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions } from "./model_families.ts";
 import { FAVS_KEY, offeredModels, parseFavs, starredOf, toggleFav } from "./model_favorites.ts"; // P-FAV.1 (ADR-0165) + P-REMOTE.11b (ADR-0238)
 import { enclaveProviderSet, isLockdownRoutable, LOCKDOWN_DETAIL, LOCKDOWN_LABEL, lockdownToggleDecision } from "../lockdown_route.ts"; // CUI lockdown: the ONE routing predicate the server clamp also uses
 import { CONFIG_WARM_POLL_MS, warmStep } from "./config_warm.ts"; // P-IDE.1d: model-picker cold-start warm-poll (per-cycle retry budget)
 import { DICTATION_DEFAULTS, dictationTick, downmixMono, encodeWavPcm16, mergeTranscript, newDictation, pushWave, resampleLinear, sttFailureMessage, waveClock, waveHeight, WHISPER_SAMPLE_RATE, type DictationState } from "./dictation.ts"; // P-STT.3/.4: fluid live dictation + visible mic feedback
-import { buildHubSections, configuredProviderCount, credentialedProviderIds, HUB_NON_MODEL_EXCLUDE, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
+import { buildHubSections, configuredProviderCount, credentialedProviderIds, HUB_NON_MODEL_EXCLUDE, providerConfigured, type HubSection } from "./provider_hub.ts"; // P-PROV.2: Provider Hub grouping + gate
 import { LOCAL_MODEL_PRESETS } from "./local_presets.ts"; // P-LOCAL.4: one-click local-model presets in the hub
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
 import { installVaultEnvPanel, offerVaultEnvImport, VAULT_ENV_SEC, vaultEnvBodyHtml } from "./vault_env_panel.ts"; // P-VAULT-ENV.1 (ADR-0477)
@@ -154,7 +156,11 @@ import { assumedCacheRate, priceFor } from "../model_pricing.ts";
 import { DIGEST_MIN_CHARS } from "../../harness/voice/spoken_digest.ts"; // P-VOICE.6: slow-engine spoken digest
 import { applyEditorTheme, closeIde, colorizeCode, guessLanguage, openIde, setIdeExclusivity, setIdeHooks } from "./ide_panel.ts";
 // P-THEME.1: the theme registry (ids, labels, swatches, light/dark grouping). Pure + unit-tested.
-import { DEFAULT_THEME_ID, SYSTEM_THEME_ID, resolveTheme, themeAttr, themeGroups, type ThemeDef } from "./theme.ts";
+import { DEFAULT_THEME_ID, SYSTEM_THEME_ID, resolveTheme, themeAttr, themeGroups, THEMES, type ThemeDef } from "./theme.ts";
+// P-SEASON.1 (ADR-0525): special themes for U.S. holidays and event months, and their animated backdrops.
+import { nextWindow, rangeLabel, resolveSeason, SEASONS, seasonById, type SceneId, type SeasonDef, type SeasonPrefs } from "./seasons.ts";
+import { mountSeasonBackdrop, type BackdropHandle, type BackdropMotion } from "./season_backdrop.ts";
+import { SCENES, SCENE_ORDER } from "./season_scenes.ts";
 // P-FLEET.L13: the catch-up scroll math, shared with every fleet lane transcript.
 import { JUMP_SHOW_PX, anchorTop, chatTakesUpScroll, nextFollow, pageDownTarget, readingAnchor, shouldShowJump, type MsgBox, type ScrollAnchor, type ScrollBox } from "./scroll_jump.ts";
 import { loginLabel, providerRoute, setSpokeSwitchScroll, spokeSwitchScroll } from "./spoke_prefs.ts"; // P-SCROLL.1: where a spoke switch lands; colliding rows share the fleet login words
@@ -218,11 +224,27 @@ function themePref(): string {
 function osPrefersLight(): boolean {
   try { return window.matchMedia("(prefers-color-scheme: light)").matches; } catch { return false; }
 }
+// P-SEASON.1 (ADR-0525): special-theme prefs. Cosmetic, so localStorage only (same tier as the agent
+// tier and the Trivia toggle): `auto` follows the U.S. calendar (opt-in, P-THEME.2's rule that nothing
+// changes the look of an untouched install), `pick` pins one season by hand and beats the calendar.
+const SEASON_AUTO_KEY = "lucid.season.auto";
+const SEASON_PICK_KEY = "lucid.season.pick";
+const SEASON_SCENE_KEY = "lucid.season.scene"; // "" = the season's own scene, a SceneId, or "none"
+const SEASON_WHERE_KEY = "lucid.season.where"; // "stage" (LUCID Agent stage only) | "everywhere"
+function seasonPrefs(): SeasonPrefs {
+  try { return { auto: localStorage.getItem(SEASON_AUTO_KEY) === "1", pick: localStorage.getItem(SEASON_PICK_KEY) ?? "" }; }
+  catch { return { auto: false, pick: "" }; }
+}
 /** Resolve `pref` and paint it: the <html> data-theme attribute drives every `:root[data-theme=...]`
- *  block in styles.css, and Monaco is re-themed to match (a no-op before the editor loads). */
+ *  block in styles.css, and Monaco is re-themed to match (a no-op before the editor loads).
+ *  P-SEASON.1: a live special theme paints ITS palette over the base pref (which stays stored, so the
+ *  app returns to it when the season ends), and stamps `data-season` for the runner, splash and backdrop. */
 function applyTheme(pref: string): void {
-  const t = resolveTheme(pref, osPrefersLight());
-  document.documentElement.dataset.theme = themeAttr(t.id);
+  const season = resolveSeason(seasonPrefs(), new Date());
+  const t = resolveTheme(season?.palette ?? pref, osPrefersLight());
+  const root = document.documentElement;
+  root.dataset.theme = themeAttr(t.id);
+  if (season) root.dataset.season = season.id; else delete root.dataset.season;
   applyEditorTheme(t.id);
 }
 function bootTheme(): void {
@@ -235,6 +257,14 @@ function bootTheme(): void {
       if (themePref() === SYSTEM_THEME_ID) applyTheme(SYSTEM_THEME_ID);
     });
   } catch { /* older engine without addEventListener on MediaQueryList: the boot paint still stands */ }
+  // P-SEASON.1: the calendar moves under a long-running app, so re-resolve every ten minutes; a holiday
+  // starts (or ends) at most ten minutes after local midnight. Cheap: a few date comparisons.
+  window.setInterval(() => {
+    if (!seasonPrefs().auto) return;
+    const before = document.documentElement.dataset.season;
+    applyTheme(themePref());
+    if (document.documentElement.dataset.season !== before) seasonChanged();
+  }, 10 * 60_000);
 }
 bootTheme();
 // CREATOR-0: `resources` is the Creator build's third inspector tab (CPU + GPU odometers).
@@ -335,6 +365,8 @@ const shortModelId = (v: string) => v.replace(/^anthropic\//, "").replace(/^asks
 const MODEL_CTX: Record<string, number> = {
   // P-MODEL.2: Fable/Mythos 5.1 and Opus 5.5 / Opus 5 are all 1M-context; GPT-6 (astra) ships at 1M too,
   // which is the first OpenAI generation to match Claude's window, so it must not inherit the 256K GPT-5 default.
+  // P-MODEL.10 (ADR-pending): Fable/Mythos 5.2 (omp 18.18.6 catalog): 1M context, 128K max output.
+  "claude-fable-5-2": 1_000_000, "claude-mythos-5-2": 1_000_000,
   "claude-fable-5-1": 1_000_000, "claude-mythos-5-1": 1_000_000,
   "claude-fable-5": 1_000_000, "claude-mythos-5": 1_000_000, "claude-opus-5-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000,
   "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-sonnet-4-5": 1_000_000,
@@ -456,6 +488,8 @@ function buildShell(): void {
 
       <main class="center">
         <div class="chat-bg" id="chatBg" aria-hidden="true"></div>
+        <!-- P-SEASON.1 (ADR-0525): the special theme's animated backdrop (canvas mounted by season_backdrop.ts). -->
+        <div class="season-bg" id="seasonBg" aria-hidden="true"></div>
         <!-- P-AVATAR.1 (ADR-0251): the immersive stage layer. A neon ambient backdrop for the lucid-agent
              role; the three.js face mounts into it in P-AVATAR.2a. Non-interactive, behind the thread. -->
         <div class="agent-stage" id="agentStage" hidden aria-hidden="true">
@@ -563,9 +597,12 @@ function buildShell(): void {
         <div class="set-head">
           <div class="set-title" data-tip="Knowledge Graph|Your private, encrypted personalization graph - nodes, edges, drill-down.">KG <span class="set-sub" id="kgScopeLbl"></span></div>
           <div class="kg-tools">
-            <input id="kgSearch" class="kg-search" type="search" placeholder="Find a node…" spellcheck="false" autocomplete="off" data-tip="Find a node|Type to highlight + center matching nodes. Esc clears." />
+            <input id="kgSearch" class="kg-search" type="search" placeholder="Find a node…" spellcheck="false" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="kgResults" data-tip="Find a node|Type to highlight + center matching nodes and list the best matches. Arrow keys + Enter open one. Esc clears." />
             <div class="seg kg-lens" data-kg-lens>
               <button class="on" data-lens="kind">Kind</button><button data-lens="trust">Trust</button>
+            </div>
+            <div class="seg kg-lens" data-kg-engine data-tip="Graph view|Flat: the force-directed map. Orbit: a 3D view where height is the dependency layer; select a node to see what it depends on (upstream) and what depends on it (downstream).">
+              <button class="on" data-engine="flat">Flat</button><button data-engine="orbit">Orbit</button>
             </div>
             <button class="btn-mini" id="kgPerf" data-tip="Performance mode|Auto adapts rendering to battery + CPU: on battery the graph goes calm (no particle flow, shorter settle, capped nodes); LOW battery pauses the visualization entirely - the agent still uses your knowledge. Click to cycle auto → full → reduced → minimal.">${icon("gauge", 13)} Auto</button>
             <button class="btn-mini" id="kgViews" data-tip="Graph views & tools · dropdown|Opens a menu with three options: Relate nodes (author your own relationships), Code graph (this workspace as a file/symbol graph), and Compiled KB (the knowledge base as a page graph). The label shows the graph you're viewing.">${icon("graph", 13)} <span id="kgViewsLbl">Personal</span> <span class="kgv-caret">▾</span></button>
@@ -588,6 +625,7 @@ function buildShell(): void {
           <div class="resizer resizer-l kg-side-resizer" id="kgSideResizer" data-resize="kgside" data-tip="Drag to resize the panel" data-tip-side="left" hidden></div>
           <div class="kg-side" id="kgSide"></div>
         </div>
+        <div class="kg-results" id="kgResults" role="listbox" aria-label="Matching nodes" hidden></div>
       </aside>
 
       <!-- P-MEET.1: the Meetings fly-out - a THIN client of the Lucid Meeting Hub on loopback (its only
@@ -2157,12 +2195,29 @@ function renderNoResponseNotice(container: HTMLElement, model: string, stopReaso
   const body = reason
     ? `<b>${esc(modelLabel(model))}</b> didn't respond <span class="noresp-sr">(${esc(reason)})</span>. The provider may be overloaded, or this model may be unavailable right now. Switch to another model and try again:`
     : `<b>${esc(modelLabel(model))}</b> returned nothing. The provider may be overloaded or oversubscribed right now${stopReason ? ` <span class="noresp-sr">(${esc(stopReason)})</span>` : ""}. Switch to another model and try again:`;
+  // Recovery hint: right after a cloud sign-in, an empty turn usually means the picker never got that
+  // provider's models (the OAuth/respawn hung), so suggest refreshing providers or restarting LUCID.
+  const localPx = new Set((state.localProviders ?? []).map((p) => p.ompProvider).filter(Boolean));
+  const cloudConnected = configuredProviderCount(state.auth) > 0;
+  const cloudModelsListed = opts.some((o) => {
+    if (isLocalModel(o.value, localPx) || isAuxiliaryModel(o.value)) return false;
+    const prov = providerForModel(state.auth, o.value);
+    return !!prov && providerConfigured(prov);
+  });
+  const hint = noResponseRestartHint({ cloudConnected, cloudModelsListed, failedIsLocal: isLocalModel(model, localPx) });
   container.innerHTML = `<div class="noresp-card">
     <div class="noresp-h">${icon("info", 14)}<span>No response from ${esc(provider)}</span></div>
     <div class="noresp-b">${body}</div>
     ${recs ? `<div class="noresp-actions">${recs}</div>` : ""}
     <div class="noresp-actions"><button class="btn-mini" data-noresp-pick>${icon("sliders", 12)} Pick another model…</button></div>
+    <div class="noresp-b noresp-restart${hint.strong ? " strong" : ""}" data-noresp-restart-hint>${esc(hint.text)}</div>
+    <div class="noresp-actions"><button class="btn-mini" data-noresp-refresh title="Restart the engine so it re-reads your providers and the model list (your chat is kept)">${icon("refresh", 12)} Refresh providers</button></div>
   </div>`;
+  (container.querySelector("[data-noresp-refresh]") as HTMLButtonElement | null)?.addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget as HTMLButtonElement;
+    btn.disabled = true;
+    try { await refreshModels(); await loadConfig(); } finally { btn.disabled = false; }
+  });
   container.querySelectorAll("[data-noresp-switch]").forEach((b) => b.addEventListener("click", async () => {
     const v = (b as HTMLElement).dataset.norespSwitch!;
     await applyConfig("model", v, { system: true }); // no-response fallback switch (system, not the user's sticky pick)
@@ -2447,6 +2502,13 @@ async function send(): Promise<void> {
   // - an expanded body would reach a session that never registered the command. targetCaps says so, and
   // while attached the text goes to the lane exactly as the user typed it.
   const caps = targetCaps(state.composerTarget);
+  // Cloud-only default: the main session is sitting on a LOCAL model the user never chose and no cloud model
+  // has loaded yet. Do not run the turn on it; open the picker and say why. (A Fleet lane owns its own model.)
+  if (awaitingCloudModel && state.composerTarget === MASTER_TARGET && !state.streaming) {
+    showToast({ tone: "warn", title: "Choose a model first", desc: "LUCID never picks a local model for you. Connect a cloud provider in Settings > Providers (its models appear after sign-in; if they do not, restart LUCID), or pick any model in the picker.", timeout: 8000 });
+    ($("#modelBadge") as HTMLElement | null)?.click();
+    return;
+  }
   // P-CMD.1: a user-authored SKILL-mode "/" command ACTIVATES its body as a persistent instruction (no turn
   // sent) — same behaviour as a bundled skill. Handle it before we open an assistant node.
   const cmdTok = caps.slashCommands ? /^\/([a-z][a-z0-9-]{0,31})\b/i.exec(text)?.[1]?.toLowerCase() : undefined;
@@ -2480,7 +2542,10 @@ async function send(): Promise<void> {
   // P-FLEET.L8: the same when the ATTACHED LANE is mid-turn. The engine runs one turn per lane and refused
   // a second prompt with a lone error the composer never showed, which left the bubble on "Connection
   // lost" and muted the watch: the lane looked dead while it was working.
+  // P-QUEUE-IMG.1 (ADR-0469): the composer's images stay in the composer while the chooser is open; Queue
+  // moves them into the staged item, so they never ride the prompt after it.
   if (turnInFlight()) { ta.value = ""; autosize(ta); setSendEnabled(); openQueueChooser(text); return; }
+  restageBefore = null; // sent, not re-staged: an Update's old slot no longer applies
   // P-NETSTAT.1 (ADR-0423): with no network at all, sending would only manufacture an error that blames
   // the model. Hold the prompt in the transcript behind a stand-by card; it goes out once the link is
   // stable (or on "Send now"). Main only: a lane's turn runs in its own process with its own recovery.
@@ -3185,8 +3250,13 @@ function setSendEnabled(): void {
 }
 /** P-INTERJECT.2 (was P-ACP.4): the staged-prompt STACK above the composer - one chip per item, in run
  *  order. Each chip: a mode badge ("next turn" hold / "mid-turn" push record), the ellipsized text with
- *  the full prompt in its title, Push now on hold items (interject the running turn instead of waiting),
- *  and remove. Every label is its own nowrap span (invariant #11). */
+ *  the full prompt in its title, Push now / Send now on hold items, and remove. Every label is its own
+ *  nowrap span (invariant #11).
+ *  P-QUEUE-IMG.1 (ADR-0469): an item's own images show as small thumbs (click one to copy it into the
+ *  composer), and a hold item has Update, which pulls its text and images back into the composer.
+ *  P-PUSH.PAR1 (ADR-pending): while a turn runs, Push now runs the item IN PARALLEL in a new fleet lane on
+ *  its own git worktree (images included); idle, Send now just sends it as the next turn. Right-click or
+ *  long-press a chip for Copy prompt, Copy and remove, and Steer running turn (the old Push now). */
 function renderQueued(): void {
   let stack = $("#queuedChip");
   if (!state.queuedItems.length) { stack?.remove(); return; }
@@ -3194,36 +3264,185 @@ function renderQueued(): void {
     const row = $("#input")!.closest(".composer-row") ?? $("#input")!.parentElement!;
     stack = el(`<div id="queuedChip" class="queued-chip queued-stack"></div>`);
     row.before(stack); // sits above the composer row, inside .composer-wrap
+    bindItemMenu(stack, "[data-q-row]", (pill, x, y) => openQueuedMenu(Number(pill.dataset.qRow), x, y, pill)); // P-PUSH.PAR1: delegated, so it survives the innerHTML rebuilds below
   }
   const idle = !turnInFlight();
-  stack.innerHTML = state.queuedItems.map((q, i) => `<div class="q-pill" data-tip="${q.mode === "hold" ? (stopHoldsQueue ? "Held because you pressed Stop - it waits until you send" : "Sends automatically when the current turn ends") : "Already pushed into the running turn - kept as a record"}">
+  stack.innerHTML = state.queuedItems.map((q, i) => {
+    const n = q.atts?.length ?? 0;
+    const imgs = n ? `<span class="q-imgs" data-tip="${n} image${n === 1 ? "" : "s"} ride with this prompt|Click one to copy it into the composer">${q.atts!.map((_, j) => `<button class="q-thumb" type="button" data-q-img="${i}:${j}" aria-label="Copy image ${j + 1} into the composer"><img class="q-thumb-img" alt="" /></button>`).join("")}</span>` : "";
+    // P-PUSH.PAR1: an item already starting its parallel lane cannot be pushed or sent again until that settles.
+    const push = q.mode !== "hold" ? ""
+      : pushingItems.has(q) ? `<button class="q-push q-push-off" data-q-push="${i}" aria-disabled="true" data-tip="Pushing|A new lane on its own worktree is starting for this prompt">Pushing\u2026</button>`
+      : idle ? `<button class="q-push" data-q-push="${i}" data-tip="Send now|Send this as the next turn">Send now</button>`
+      : `<button class="q-push" data-q-push="${i}" data-tip="Push now|Run this in parallel in a new lane on its own worktree" aria-label="Push now: run this in parallel in a new lane on its own worktree">Push now</button>`;
+    const edit = q.mode === "hold" ? `<button class="q-push q-edit" data-q-edit="${i}" data-tip="Update|Pull this prompt and its images back into the composer to edit">Update</button>` : "";
+    return `<div class="q-pill" data-q-row="${i}" data-tip="${q.mode === "hold" ? (stopHoldsQueue ? "Held because you pressed Stop - it waits until you send" : "Sends automatically when the current turn ends") : "Already pushed into the running turn - kept as a record"}|Right-click or long-press to copy it">
       <span class="q-label">${q.mode === "hold" ? "next turn" : "mid-turn"}</span>
+      ${imgs}
       <span class="q-text" data-q-i="${i}"></span>
-      ${q.mode === "hold" ? (idle ? `<button class="q-push" data-q-push="${i}" data-tip="Send now|Send this as the next turn">Send now</button>` : `<button class="q-push" data-q-push="${i}" data-tip="Push now|Interject this into the running turn instead of waiting">Push now</button>`) : ""}
+      ${edit}${push}
       <button class="q-cancel" data-q-x="${i}" data-tip="Remove staged prompt">${icon("close", 12)}</button>
-    </div>`).join("");
-  // Prompt text is user content: set it as a DOM property, never interpolated into the HTML string.
-  state.queuedItems.forEach((q, i) => { const t = $(`.q-text[data-q-i="${i}"]`, stack!) as HTMLElement | null; if (t) { t.textContent = q.text; t.title = q.text; } });
+    </div>`;
+  }).join("");
+  // Prompt text and image data are user content: set as DOM properties, never interpolated into HTML.
+  state.queuedItems.forEach((q, i) => {
+    const t = $(`.q-text[data-q-i="${i}"]`, stack!) as HTMLElement | null; if (t) { t.textContent = q.text; t.title = q.text; }
+    (q.atts ?? []).forEach((a, j) => { const img = $(`[data-q-img="${i}:${j}"] .q-thumb-img`, stack!) as HTMLImageElement | null; if (img) img.src = a.dataUrl; });
+  });
   $$("[data-q-x]", stack).forEach((b) => b.addEventListener("click", () => {
     const i = Number((b as HTMLElement).dataset.qX);
     state.queuedItems = state.queuedItems.filter((_, n) => n !== i);
     renderQueued(); ($("#input") as HTMLTextAreaElement)?.focus();
   }));
+  $$("[data-q-edit]", stack).forEach((b) => b.addEventListener("click", () => {
+    const i = Number((b as HTMLElement).dataset.qEdit);
+    // P-PUSH.PAR1: pulled back mid-push, the same prompt would sit in the composer AND run in the new lane.
+    if (pushingItems.has(state.queuedItems[i]!)) { showToast({ tone: "warn", title: "Still pushing", desc: "This prompt is starting in a new parallel lane. Update it once that settles; if the push fails it stays here.", timeout: 4000 }); return; }
+    editStagedPrompt(i);
+  }));
+  $$("[data-q-img]", stack).forEach((b) => b.addEventListener("click", () => {
+    const [i, j] = ((b as HTMLElement).dataset.qImg ?? "").split(":").map(Number);
+    const a = state.queuedItems[i!]?.atts?.[j!]; if (!a) return;
+    // A copy, re-validated like any paste (fail-closed): the staged prompt keeps its own image.
+    const r = acceptAttachment(state.attachments, a.dataUrl, `att_${++attSeq}`, a.name);
+    if (!r.ok || !r.attachment) { showToast({ tone: "warn", title: "Couldn't copy image", desc: r.reason ?? "" }); return; }
+    state.attachments.push(r.attachment); renderComposerThumbs();
+    showToast({ title: "Image copied to the composer", desc: "It rides with the next prompt you send or stage. The staged prompt keeps its own copy.", timeout: 2500 });
+  }));
   $$("[data-q-push]", stack).forEach((b) => b.addEventListener("click", () => {
     const i = Number((b as HTMLElement).dataset.qPush);
-    const item = state.queuedItems[i]; if (!item) return;
+    const item = state.queuedItems[i]; if (!item || pushingItems.has(item)) return;
+    const src = pushSource();
+    const route = pushNowRoute({ running: turnInFlight(), cwd: src.cwd, images: item.atts?.length ?? 0 });
+    if (route.kind === "parallel") { void pushStagedToLane(item, src); return; }
+    if (route.kind === "stage") { showToast({ tone: "warn", title: route.title, desc: route.desc, timeout: 8000 }); return; }
     state.queuedItems = state.queuedItems.filter((_, n) => n !== i);
     renderQueued();
+    if (route.kind === "steer") { showToast({ tone: "info", title: route.title, desc: route.desc, timeout: 8000 }); void pushMidTurn(item.text, i); return; }
     // Nothing running (e.g. after Stop): the staged prompt becomes the next turn, unless the user has a
-    // draft in the composer, which is never clobbered (it stays staged instead).
-    if (!turnInFlight()) {
-      const ta = $("#input") as HTMLTextAreaElement | null;
-      if (!ta || ta.value.trim()) { state.queuedItems = [...state.queuedItems.slice(0, i), item, ...state.queuedItems.slice(i)]; renderQueued(); return; }
-      ta.value = item.text; setSendEnabled(); void send();
+    // draft in the composer (text or images), which is never clobbered (it stays staged instead).
+    if (composerHasDraft()) { state.queuedItems = [...state.queuedItems.slice(0, i), item, ...state.queuedItems.slice(i)]; renderQueued(); return; }
+    loadComposer(item); void send();
+  }));
+}
+
+// ── P-PUSH.PAR1 (ADR-pending): the staged chip's item menu, and Push now as a parallel worktree lane ──────
+
+/** Staged items whose parallel lane is starting. They stay in the stack (ADR-0414: nothing leaves before it
+ *  is accepted) but cannot be pushed, sent, updated or drained until the push settles. */
+const pushingItems = new Set<QueuedItem>();
+
+/** What the staged prompt waits behind: the lane the composer is attached to, else the main agent in the
+ *  open workspace on its current model. */
+function pushSource(): PushSource {
+  const t = state.composerTarget;
+  if (isLaneTarget(t)) return { kind: "lane", name: t.name, cwd: t.cwd, model: t.model };
+  return { kind: "master", name: "main", cwd: state.workspace?.current ?? "", model: state.model || state.config.find((c) => c.id === "model")?.currentValue || "" };
+}
+
+/** Push now while a turn runs: the item (text + its own images) starts in a new fleet lane on its own git
+ *  worktree. The user hears it at once (toast), and once the lane runs, the toast names the branch and the
+ *  transcript keeps a note. The item leaves the stack only when the lane accepted it. A folder that is not a
+ *  git repo falls back to steering the running turn (text only); every other refusal keeps it staged. */
+async function pushStagedToLane(item: QueuedItem, src: PushSource): Promise<void> {
+  pushingItems.add(item); renderQueued();
+  try {
+    const images = promptImageBlocks(item.atts ?? []).map((b) => ({ data: b.data, mimeType: b.mimeType }));
+    const r = await pushToNewLane(src, item.text, images, {
+      announce: (lane) => {
+        const n = parallelPushNotice(src, lane, { busy: true });
+        showToast({ tone: "info", title: n.title, desc: n.desc, timeout: 7000 });
+      },
+    });
+    if (r.ok) {
+      state.queuedItems = state.queuedItems.filter((q) => q !== item);
+      const n = parallelPushNotice(src, r.name, { busy: true, branch: r.branch });
+      showToast({ tone: "info", title: n.title, desc: n.desc, timeout: 9000 });
+      addNoteChip(`Running in parallel in ${r.name} (branch ${r.branch}): ${item.text}`);
       return;
     }
-    void pushMidTurn(item.text, i);
-  }));
+    const running = turnInFlight();
+    const plan = parallelPushRefusal(r, { canSteer: running, images: images.length });
+    const at = state.queuedItems.indexOf(item);
+    if (plan.kind === "steer" && at >= 0) {
+      state.queuedItems = state.queuedItems.filter((q) => q !== item);
+      showToast({ tone: "info", title: plan.title, desc: plan.desc, timeout: 8000 });
+      void pushMidTurn(item.text, at);
+      return;
+    }
+    showToast({ tone: "warn", title: plan.title, desc: plan.desc, timeout: 9000 });
+  } finally {
+    pushingItems.delete(item); renderQueued();
+    if (!turnInFlight()) releaseHeldPrompt(); // the turn ended mid-push: a kept item runs next, as promised
+  }
+}
+
+/** Right-click / long-press on a staged chip: Copy prompt, Copy and remove (to re-paste and edit), and
+ *  Steer running turn (the old Push now) for a text-only "next turn" item while a turn runs. */
+function openQueuedMenu(i: number, x: number, y: number, pill: HTMLElement): void {
+  const item = state.queuedItems[i]; if (!item) return;
+  const n = item.atts?.length ?? 0;
+  const entries: CtxMenuEntry[] = [
+    { label: "Copy prompt", run: () => void copyQueued(item, false) },
+    { label: "Copy and remove", run: () => void copyQueued(item, true) },
+  ];
+  if (!pushingItems.has(item) && canSteer({ hold: item.mode === "hold", running: turnInFlight(), images: n })) {
+    entries.push({
+      label: "Steer running turn",
+      run: () => {
+        const at = state.queuedItems.indexOf(item); if (at < 0) return;
+        state.queuedItems = state.queuedItems.filter((q) => q !== item); renderQueued();
+        void pushMidTurn(item.text, at);
+      },
+    });
+  }
+  const focused = pill.contains(document.activeElement) ? (document.activeElement as HTMLElement) : ($("button", pill) as HTMLElement | null);
+  openCtxMenu(x, y, entries, { returnFocus: focused, className: "ctx-menu-stage" });
+}
+
+/** Copy a staged prompt's full text; `remove` then drops it from the stack (only after the clipboard took
+ *  it, so a refused clipboard never loses the prompt). Images are not text: a kept item keeps them, and a
+ *  removed one says they went with it (Update is the path that keeps text AND images). */
+async function copyQueued(item: QueuedItem, remove: boolean): Promise<void> {
+  const n = item.atts?.length ?? 0;
+  if (!(await copyToClipboard(item.text))) { showToast({ tone: "warn", title: "Couldn't copy", desc: "The clipboard refused. The prompt stays staged.", timeout: 4000 }); return; }
+  if (!remove) { showToast({ title: "Copied", desc: n ? "The prompt text is on your clipboard. Its images stay with the staged prompt." : "The staged prompt is on your clipboard.", timeout: 2200 }); return; }
+  state.queuedItems = state.queuedItems.filter((q) => q !== item); renderQueued();
+  showToast({ title: "Copied and removed", desc: `Paste it into the prompt bar to edit it, or keep it for later.${n ? ` Its ${n} image${n === 1 ? " was" : "s were"} removed with it.` : ""}`, timeout: 3500 });
+}
+
+/** P-QUEUE-IMG.1 (ADR-0469): the composer holds something the user is writing - text OR images. Every
+ *  path that would load a staged prompt into the composer refuses rather than overwrite or merge into it. */
+function composerHasDraft(): boolean {
+  const ta = $("#input") as HTMLTextAreaElement | null;
+  return !ta || !!ta.value.trim() || state.attachments.length > 0;
+}
+
+/** P-QUEUE-IMG.1 (ADR-0469): put a staged item's text AND its own images into the composer (the caller has
+ *  checked composerHasDraft). A following send() carries exactly these images, nothing else. */
+function loadComposer(item: QueuedItem): void {
+  const ta = $("#input") as HTMLTextAreaElement | null; if (!ta) return;
+  ta.value = item.text; autosize(ta);
+  state.attachments = (item.atts ?? []).slice();
+  renderComposerThumbs(); // also refreshes send-enabled
+}
+
+/** P-QUEUE-IMG.1 (ADR-0469): Update re-stages at the old slot - just ahead of the item that followed the
+ *  one pulled out (null: it was last). Consumed by the next stage; cleared by a send that does not stage. */
+let restageBefore: QueuedItem | null = null;
+
+/** P-QUEUE-IMG.1 (ADR-0469): Update on a staged "next turn" pill - the item leaves the stack and its text
+ *  and images go back into the composer, removable, with room to paste more. A draft is never touched. */
+function editStagedPrompt(i: number): void {
+  const ta = $("#input") as HTMLTextAreaElement | null; if (!ta) return;
+  const r = editQueued(state.queuedItems, i, { text: ta.value, atts: state.attachments.length });
+  if (!r.ok) {
+    if (r.code === "draft") showToast({ tone: "warn", title: "Composer has a draft", desc: "Update never overwrites what you are writing. Send, stage or clear the composer, then press Update.", timeout: 5000 });
+    return;
+  }
+  state.queuedItems = r.rest; restageBefore = r.before; renderQueued();
+  loadComposer(r.item); ta.focus();
+  showToast({ title: "Staged prompt back in the composer", desc: "Edit the text or its images. Staged again, it keeps its place in the stack.", timeout: 3000 });
 }
 /** A deliberate Stop halts the staged queue as well as the turn: a prompt held behind the stopped turn stays
  *  staged (visible, pushable) instead of starting a new turn the moment this one ends. Set here, before the
@@ -3257,12 +3476,13 @@ const liveTurn = { phase: "", pending: [] as { label: string; elapsedMs: number 
  *  attached lane's watch, so a prompt staged behind a lane's turn runs when THAT turn ends. */
 function releaseHeldPrompt(): void {
   if (stopHoldsQueue) return; // the user pressed Stop: nothing starts again until they send
-  const nq = nextHold(state.queuedItems);
+  // P-PUSH.PAR1: an item whose parallel lane is still starting is not drained here (it would run twice).
+  const nq = nextHold(state.queuedItems.filter((q) => !pushingItems.has(q)));
   if (!nq.item) return;
-  const ta = $("#input") as HTMLTextAreaElement | null;
-  if (!ta || ta.value.trim()) return;
-  state.queuedItems = nq.rest; renderQueued();
-  ta.value = nq.item.text; setSendEnabled(); void send();
+  if (composerHasDraft()) return; // P-QUEUE-IMG.1: pasted images are a draft too; never swept into this send
+  const next = nq.item;
+  state.queuedItems = state.queuedItems.filter((q) => q !== next); renderQueued();
+  loadComposer(next); void send(); // the item's OWN images ride with it (ADR-0469)
 }
 
 /** P-INTERJECT.2: interject a note into the RUNNING turn (the attached lane's, or the master's) + leave a
@@ -3278,7 +3498,7 @@ async function pushMidTurn(text: string, at = state.queuedItems.length): Promise
   // flag set, and a send() with it set would open the chooser again for a turn that no longer exists.
   if (r.code === "idle" && laneId) laneTurnLive = false;
   const ta = $("#input") as HTMLTextAreaElement | null;
-  const plan = pushRecovery(r.code, r.reason, { draft: !ta || !!ta.value.trim(), ownTurnOpen: state.streaming });
+  const plan = pushRecovery(r.code, r.reason, { draft: composerHasDraft(), ownTurnOpen: state.streaming });
   if (ta && plan.keep !== "stage") {
     ta.value = text; autosize(ta); setSendEnabled();
     if (plan.keep === "send") void send(); else ta.focus();
@@ -3481,8 +3701,6 @@ function demoteLane(): void {
   const held = nextHold(state.queuedItems);
   if (held.item) {
     state.queuedItems = state.queuedItems.filter((q) => q.mode !== "hold"); renderQueued();
-    const ta = $("#input") as HTMLTextAreaElement | null;
-    if (ta && !ta.value.trim()) { ta.value = held.item.text; autosize(ta); setSendEnabled(); }
     showToast({ tone: "warn", title: "Staged prompt not sent", desc: "It was waiting for the spoke's turn to end. It is back in the composer; reattach the spoke to send it there.", timeout: 7000 });
   }
   // Leaving mid-turn: freeze the half-written bubble rather than stranding it in a "running" state that
@@ -3500,6 +3718,9 @@ function demoteLane(): void {
     showToast({ tone: "warn", title: "The spoke still shows as attached", desc: "The composer is back on the main chat, but the fleet did not confirm the release. It will reconcile on the next fleet poll.", actions: [{ label: "OK" }], timeout: 6000 });
   }).catch(() => { /* best-effort: fleetDemote is idempotent and the next poll reconciles */ });
   swapAttachments(was, MASTER_TARGET);
+  // P-QUEUE-IMG.1 (ADR-0469): the held prompt comes back WITH its own images, after the swap, so they land
+  // in the composer the user is now looking at instead of being parked under the lane.
+  if (held.item && !composerHasDraft()) loadComposer(held.item);
   state.composerTarget = MASTER_TARGET;
   state.liveUsage = null; // P-FLEET.L17: the lane's samples leave with it; the master's next turn refills.
   // Restore BEFORE the notice: renderThread clears the thread, so a notice appended first would be wiped.
@@ -3724,13 +3945,22 @@ function openQueueChooser(text: string): void {
   ($("[data-qc-hold]", ch) as HTMLElement).addEventListener("click", () => {
     closeQueueChooser();
     if (!turnInFlight()) { resend(); return; }
-    const r = addQueued(state.queuedItems, text, "hold");
-    if (r.ok) { state.queuedItems = r.items; renderQueued(); }
+    // P-QUEUE-IMG.1 (ADR-0469): the images in the composer move INTO this item and leave the composer, so
+    // they run with this prompt and never ride whatever is sent next. An Update re-stage keeps its slot.
+    const r = addQueued(state.queuedItems, text, "hold", { atts: state.attachments, before: restageBefore });
+    if (r.ok) { state.queuedItems = r.items; restageBefore = null; state.attachments = []; renderComposerThumbs(); renderQueued(); }
     else showToast({ tone: "warn", title: "Not staged", desc: `${r.reason ?? "refused"}.`, timeout: 5000 });
   });
   ($("[data-qc-push]", ch) as HTMLElement).addEventListener("click", () => {
+    // P-QUEUE-IMG.1: a mid-turn push is text only. With images in the composer it would leave them behind
+    // for the next prompt, so the chooser stays open and says so instead.
+    if (turnInFlight() && state.attachments.length) {
+      showToast({ tone: "warn", title: "Push mid-turn is text only", desc: "A push cannot carry images. Queue it for the next turn to send them together, or remove the images to push the text.", timeout: 6000 });
+      return;
+    }
     closeQueueChooser();
     if (!turnInFlight()) { resend(); return; }
+    restageBefore = null;
     void pushMidTurn(text);
   });
   ($("[data-qc-x]", ch) as HTMLElement).addEventListener("click", () => {
@@ -4671,6 +4901,7 @@ function setImmersive(on: boolean): void {
   $("#app-inner")!.classList.toggle("immersive", on);
   const stage = $("#agentStage") as HTMLElement | null;
   if (stage) stage.hidden = !on;
+  syncSeasonBackdrop(); // P-SEASON.1: the stage is where the seasonal backdrop shows by default
   if (on) document.addEventListener("keydown", immersiveEsc);
   else document.removeEventListener("keydown", immersiveEsc);
   // P-AVATAR.1b: the left rail peeks back in when the mouse nears the left edge (hysteresis: engage
@@ -5278,7 +5509,7 @@ async function hydrateWhisper(): Promise<void> {
 }
 
 // P-VOICE.7: the imported-endpoints strip inside the dots.tts section. The GET auto-scans the handoff
-// mailbox (the DGX Loader's "Send to LUCID" drops files there), so freshly sent configs appear on every
+// mailbox (the Private AI Platform's "Send to LUCID" drops files there), so freshly sent configs appear on every
 // Settings open with no extra click; the Import button is the portable fallback (a file exported on
 // another machine). Every list row is a real imported config - no box name lives in code.
 async function hydrateVoiceEndpoints(): Promise<void> {
@@ -5294,9 +5525,9 @@ async function hydrateVoiceEndpoints(): Promise<void> {
       <select id="voiceEndpointSel" class="prov-key">
         <option value=""${d.active ? "" : " selected"}>${d.endpoints.length ? "choose an imported endpoint\u2026" : "none imported yet"}</option>${opts}
       </select>
-      <button class="btn-mini" id="voiceEndpointImportBtn" data-tip="Import|Upload a .json exported from the DGX Loader (Export config)">${icon("expand", 12)} Import\u2026</button>
+      <button class="btn-mini" id="voiceEndpointImportBtn" data-tip="Import|Upload a .json exported from the Private AI Platform (Export config)">${icon("expand", 12)} Import\u2026</button>
       <input type="file" id="voiceEndpointFile" accept=".json,application/json" hidden /></div>
-    <div class="set-note">${icon("info", 12)} One-click transfer: in the DGX Loader's Voice tab hit <b>Send to LUCID</b> - the config lands in the handoff folder and appears here on the next Settings open. Or export the file there and Import it here. Configs never carry secrets.</div>
+    <div class="set-note">${icon("info", 12)} One-click transfer: in the Private AI Platform's Voice tab hit <b>Send to LUCID</b> - the config lands in the handoff folder and appears here on the next Settings open. Or export the file there and Import it here. Configs never carry secrets.</div>
     ${rejectNote}`;
 }
 /** Populate the Voice card's picker with the SELECTED engine's voices (P-VOICE.2, ADR-0247): ElevenLabs is
@@ -5685,7 +5916,8 @@ function secTheme(): string {
     <div class="theme-grp-lbl">${scheme === "light" ? "Light" : "Dark"}</div>
     <div class="theme-grid">${themes.map((t: ThemeDef) => themeTile(t.id, t.label, t.blurb, t.swatch, pref === t.id)).join("")}</div>`).join("");
   const inner = `<div class="theme-grid">${sys}</div>${groups}
-    <div class="set-note">${icon("info", 12)} Applies instantly across the app, the code editor, and the trainer. LUCID defaults to <b>Lucid Dark</b>. <b>Match system</b> follows your OS light/dark setting; picking a theme explicitly pins it, so a change to your OS setting will no longer move it.</div>`;
+    <div class="set-note">${icon("info", 12)} Applies instantly across the app, the code editor, and the trainer. LUCID defaults to <b>Lucid Dark</b>. <b>Match system</b> follows your OS light/dark setting; picking a theme explicitly pins it, so a change to your OS setting will no longer move it.</div>
+    ${secSeason()}`;
   const count = themeGroups().reduce((n, g) => n + g.themes.length, 0);
   return setCard("theme", "Theme", `${count} themes · light &amp; dark`, inner, true);
 }
@@ -5697,7 +5929,162 @@ async function pickTheme(pref: string): Promise<void> {
   try { if (pref) localStorage.setItem(THEME_KEY, pref); else localStorage.removeItem(THEME_KEY); } catch { /* storage off: this session still applies */ }
   applyTheme(pref);
   if (state.settingsOpen) fillSec("theme", secTheme());
+  seasonChanged();
   await bridge.setTheme(pref).catch(() => null);
+}
+
+// ── P-SEASON.1 (ADR-0525): special themes (Settings > Theme > Special themes) ─────────────────────
+// Three controls: the calendar checkbox, a swatch dropdown that pins one season, and the backdrop
+// (which scene, and whether it shows only on the LUCID Agent stage or behind every chat). The live
+// preview tile under them plays the hovered (or active, or next) season's backdrop.
+let seasonMenuOpen = false;
+let seasonBackdrop: BackdropHandle | null = null;
+let seasonPreview: BackdropHandle | null = null;
+function seasonScenePref(): string {
+  try { return localStorage.getItem(SEASON_SCENE_KEY) ?? ""; } catch { return ""; }
+}
+function seasonWherePref(): "stage" | "everywhere" {
+  try { return localStorage.getItem(SEASON_WHERE_KEY) === "everywhere" ? "everywhere" : "stage"; } catch { return "stage"; }
+}
+/** The scene to paint for `season` under the user's backdrop pref, or null for none. */
+function sceneFor(season: SeasonDef | undefined): SceneId | null {
+  if (!season) return null;
+  const pref = seasonScenePref();
+  if (pref === "none") return null;
+  return pref in SCENES ? (pref as SceneId) : season.scene;
+}
+function backdropMotion(): BackdropMotion {
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return "still";
+  const tier = perfWatch.tier();
+  return tier === "full" ? "full" : tier === "reduced" ? "reduced" : "still";
+}
+/** Show, swap or park the chat-column backdrop. Visible on the LUCID Agent stage, or everywhere when
+ *  the user asked for that; the canvas is only created the first time it is needed. */
+function syncSeasonBackdrop(): void {
+  const host = $("#seasonBg");
+  if (!host) return;
+  const season = seasonById(document.documentElement.dataset.season);
+  const scene = sceneFor(season);
+  const show = !!scene && (state.immersive || seasonWherePref() === "everywhere");
+  host.classList.toggle("on", show);
+  $(".center")?.classList.toggle("has-season", show);
+  if (!show || !season) { seasonBackdrop?.set(null, null); return; }
+  seasonBackdrop ??= mountSeasonBackdrop(host);
+  seasonBackdrop.setMotion(backdropMotion());
+  seasonBackdrop.set(scene, season.id);
+}
+/** Everything that follows the active season: the backdrop and, when Settings is open, the card. */
+function seasonChanged(): void {
+  syncSeasonBackdrop();
+  if (state.settingsOpen) { fillSec("theme", secTheme()); mountSeasonPreview(); }
+}
+function seasonSwatch(s: SeasonDef): readonly string[] {
+  return THEMES.find((t) => t.id === s.palette)?.swatch ?? [];
+}
+const swatchChips = (sw: readonly string[]): string => sw.map((c) => `<i style="background:${esc(c)}"></i>`).join("");
+function seasonWhen(s: SeasonDef, now: Date): string {
+  const w = nextWindow(s, now);
+  return w ? rangeLabel(w) : s.when;
+}
+function secSeason(): string {
+  const prefs = seasonPrefs();
+  const now = new Date();
+  const live = resolveSeason({ auto: true, pick: "" }, now); // what the calendar says today
+  const pinned = seasonById(prefs.pick);
+  const nextUp = SEASONS.map((s) => ({ s, w: nextWindow(s, now) })).filter((x) => x.w).sort((a, b) => a.w!.start - b.w!.start)[0];
+  const status = live
+    ? `Today: <b>${esc(live.label)}</b> (${esc(seasonWhen(live, now))})${prefs.auto ? "" : ". Turn this on to switch to it."}`
+    : nextUp ? `Next up: <b>${esc(nextUp.s.label)}</b>, ${esc(rangeLabel(nextUp.w!))}.` : "";
+  const trig = pinned
+    ? `<span class="theme-sw">${swatchChips(seasonSwatch(pinned))}</span><span class="season-nm">${esc(pinned.label)}</span><span class="season-when">Pinned</span>`
+    : `<span class="theme-sw season-sw-none"><i></i></span><span class="season-nm">${prefs.auto ? "Follow the calendar" : "None"}</span><span class="season-when">${prefs.auto ? "Automatic" : "Your theme"}</span>`;
+  const opt = (id: string, chips: string, label: string, kind: string, when: string, blurb: string): string => {
+    const on = prefs.pick === id;
+    return `<button type="button" role="option" class="season-opt${on ? " on" : ""}" data-season-pick="${esc(id)}" aria-selected="${on}">
+        <span class="theme-sw${id ? "" : " season-sw-none"}">${chips}</span>
+        <span class="season-nm">${esc(label)}</span>
+        ${kind ? `<span class="season-kind">${esc(kind)}</span>` : "<span></span>"}
+        <span class="season-when">${esc(when)}</span>
+        <span class="season-bl">${esc(blurb)}</span>
+      </button>`;
+  };
+  const rows = [
+    opt("", `<i></i>`, prefs.auto ? "Follow the calendar" : "None", "", prefs.auto ? "Automatic" : "Your theme", prefs.auto ? "Today's holiday or event month, then your own theme." : "Keep your own theme."),
+    ...SEASONS.map((s) => opt(s.id, swatchChips(seasonSwatch(s)), s.label, s.kind === "holiday" ? "Holiday" : "Event", seasonWhen(s, now), s.blurb)),
+  ].join("");
+  const sceneSel = seasonScenePref();
+  const sceneOpts = [`<option value=""${sceneSel === "" ? " selected" : ""}>Match the theme</option>`,
+    ...SCENE_ORDER.map((id) => `<option value="${id}"${sceneSel === id ? " selected" : ""}>${esc(SCENES[id].label)}</option>`),
+    `<option value="none"${sceneSel === "none" ? " selected" : ""}>No backdrop</option>`].join("");
+  const where = seasonWherePref();
+  return `<div class="theme-grp-lbl">Special themes</div>
+    <label class="set-toggle"><input type="checkbox" id="seasonAuto" ${prefs.auto ? "checked" : ""}/>
+      <span><b>Change with U.S. holidays and events</b> - switches to the special theme for today's holiday or event month, then back to your theme when it ends.</span></label>
+    ${status ? `<div class="season-status">${status}</div>` : ""}
+    <div class="season-dd${seasonMenuOpen ? " open" : ""}">
+      <button type="button" class="season-trigger" id="seasonTrigger" aria-haspopup="listbox" aria-expanded="${seasonMenuOpen}" aria-controls="seasonMenu">
+        ${trig}<span class="season-chev">${icon("chevron", 14)}</span>
+      </button>
+      <div class="season-menu" id="seasonMenu" role="listbox" aria-label="Special themes"${seasonMenuOpen ? "" : " hidden"}>${rows}</div>
+    </div>
+    <div class="season-fields">
+      <label class="season-field"><span class="season-field-lbl">Backdrop</span><select id="seasonScene">${sceneOpts}</select></label>
+      <label class="season-field"><span class="season-field-lbl">Show it</span><select id="seasonWhere">
+        <option value="stage"${where === "stage" ? " selected" : ""}>On the LUCID Agent stage</option>
+        <option value="everywhere"${where === "everywhere" ? " selected" : ""}>Behind every chat</option></select></label>
+    </div>
+    <div class="season-preview" id="seasonPreview"><span class="season-preview-cap" id="seasonPreviewCap"></span></div>`;
+}
+/** The season the preview tile shows: the hovered row, else the pinned/active one, else the next up. */
+function previewSeason(hover?: string): SeasonDef | undefined {
+  const now = new Date();
+  return seasonById(hover) ?? resolveSeason(seasonPrefs(), now) ?? resolveSeason({ auto: true, pick: "" }, now)
+    ?? SEASONS.map((s) => ({ s, w: nextWindow(s, now) })).filter((x) => x.w).sort((a, b) => a.w!.start - b.w!.start)[0]?.s;
+}
+function showSeasonPreview(hover?: string): void {
+  const s = previewSeason(hover);
+  const scene = s ? (seasonScenePref() === "none" ? s.scene : sceneFor(s)) : null;
+  seasonPreview?.set(scene, s?.id ?? null);
+  const cap = $("#seasonPreviewCap");
+  if (cap) cap.textContent = s && scene ? `${s.label} · ${SCENES[scene].label}` : "";
+}
+/** (Re)mount the preview tile after the Theme card renders. The previous canvas went with the old
+ *  card's HTML, so its handle is disposed and a fresh one bound to the new host. */
+function mountSeasonPreview(): void {
+  seasonPreview?.dispose();
+  seasonPreview = null;
+  const host = document.querySelector("#setBody #seasonPreview") as HTMLElement | null;
+  if (!host) return;
+  seasonPreview = mountSeasonBackdrop(host, "season-preview-cv", true);
+  seasonPreview.setMotion(backdropMotion());
+  showSeasonPreview();
+  const menu = $("#seasonMenu");
+  menu?.addEventListener("pointerover", (e) => {
+    const row = (e.target as HTMLElement).closest("[data-season-pick]") as HTMLElement | null;
+    if (row) showSeasonPreview(row.dataset.seasonPick);
+  });
+  menu?.addEventListener("pointerleave", () => showSeasonPreview());
+  menu?.addEventListener("focusin", (e) => showSeasonPreview((e.target as HTMLElement).closest<HTMLElement>("[data-season-pick]")?.dataset.seasonPick));
+  // A listbox moves with the arrow keys; Escape folds it back to the trigger.
+  menu?.addEventListener("keydown", (e) => {
+    const rows = [...menu.querySelectorAll<HTMLElement>(".season-opt")];
+    const i = rows.indexOf(document.activeElement as HTMLElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      rows[Math.max(0, Math.min(rows.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)))]?.focus();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      seasonMenuOpen = false;
+      seasonChanged();
+      ($("#seasonTrigger") as HTMLElement | null)?.focus();
+    }
+  });
+}
+function setSeasonPref(key: string, value: string): void {
+  try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key); } catch { /* storage off: this session still applies */ }
+  applyTheme(themePref());
+  seasonChanged();
 }
 
 // ── P-TRIV.4 (ADR-0191): Settings -> Trivia Wire ─────────────────────────────────────────────────
@@ -5928,6 +6315,8 @@ function hydrateSettings(): void {
 function renderSettings(): void {
   const body = $("#setBody"); if (!body) return;
   if (!body.querySelector("[data-sec]")) body.innerHTML = settingsShell(); // first open: skeleton
+  else fillSec("theme", secTheme()); // P-SEASON.1: dates and "today" move between opens
+  mountSeasonPreview();
   hydrateSettings(); // then fill in place
 }
 
@@ -6225,6 +6614,7 @@ function openSettings(): void {
 function closeSettings(): void {
   if (!state.settingsOpen) return;
   state.settingsOpen = false;
+  seasonPreview?.dispose(); seasonPreview = null; // P-SEASON.1: no hidden canvas keeps animating
   $("#settings")!.hidden = true;
   $("#inspector")!.hidden = false;
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
@@ -6797,13 +7187,13 @@ function paintCreatorDrift(): void {
 
 async function importCreatorMailbox(): Promise<void> {
   const r = await bridge.creatorImportMailbox();
-  if (!r.ok || !r.data) { showToast({ tone: "danger", title: "Import from the DGX Loader", desc: r.error ?? "The mailbox did not answer.", actions: [{ label: "OK" }], timeout: 5200 }); return; }
+  if (!r.ok || !r.data) { showToast({ tone: "danger", title: "Import from the Private AI Platform", desc: r.error ?? "The mailbox did not answer.", actions: [{ label: "OK" }], timeout: 5200 }); return; }
   const { imported, rejected } = r.data;
   const desc = [
     imported.length ? `Imported ${imported.join(", ")}.` : "No new endpoint files.",
     rejected.length ? `Rejected: ${rejected.map((x) => `${x.file} (${x.reason})`).join("; ")}` : "",
   ].filter(Boolean).join(" ");
-  showToast({ tone: rejected.length ? "warn" : undefined, title: "Import from the DGX Loader", desc, actions: [{ label: "OK" }], timeout: 6400 });
+  showToast({ tone: rejected.length ? "warn" : undefined, title: "Import from the Private AI Platform", desc, actions: [{ label: "OK" }], timeout: 6400 });
   if (state.studioTab === "cad") await loadCreatorCad();
   else await loadCreatorVideo();
 }
@@ -8212,6 +8602,27 @@ let kgForceRender = false; // P-PERF.2: one-shot "Render anyway" override of the
 // only, per the ADR-0084 privacy boundary: entity-id-keyed positions are structural metadata of the
 // encrypted store and never touch disk. Keyed per graph (personal vs code:file vs code:symbol).
 const kgLayoutCache = new Map<string, Map<string, { x: number; y: number }>>();
+// P-KG-ORBIT.1 (ADR-0470): which engine draws #kgCanvas, the flat force graph (default) or the 3D Orbit
+// view, persisted like the other renderer view prefs. Each engine keeps its own per-graph cache (flat: the
+// node positions above; orbit: the camera), so switching never feeds one engine the other's layout.
+type KgEngine = "flat" | "orbit";
+let kgEngine: KgEngine = (() => { try { return localStorage.getItem("lucid.kgEngine") === "orbit" ? "orbit" : "flat"; } catch { return "flat"; } })();
+const kgOrbitViews = new Map<string, OrbitView>();
+/** Mount `data` into #kgCanvas with the active engine. `cacheKey` names the graph (personal, kb:<id>, code:<level>). */
+function mountKgGraph(canvas: HTMLElement, data: PersonalGraphData, onSelect: (id: string | null) => void, hooks: GraphHooks, perf: GraphPerfOpts, cacheKey: string): GraphHandle {
+  if (kgEngine === "orbit") {
+    return mountOrbitGraph(canvas, data, onSelect, {
+      forceCalm: !!perf.forceCalm || !!perf.staticLayout,
+      view: kgOrbitViews.get(cacheKey),
+      onView: (v) => kgOrbitViews.set(cacheKey, v),
+    });
+  }
+  return mountGraph(canvas, data, onSelect, hooks, {
+    ...perf, // P-PERF.3: seed from + harvest into the per-graph layout cache (no re-explosion on re-open)
+    positions: kgLayoutCache.get(cacheKey),
+    onPositions: (pos) => kgLayoutCache.set(cacheKey, pos),
+  });
+}
 let kgData: PersonalGraphData | null = null;
 let kgLens: "kind" | "trust" = "kind";
 let kgOpen = false;
@@ -10784,11 +11195,7 @@ async function renderKnowledge(): Promise<void> {
   // FULL (search, facts, signature); only the DRAWN subset is capped.
   const gOpts = graphOpts(perfWatch.tier());
   const { data: kgDraw, capped: kgCapped } = capGraph(kgData, gOpts.nodeCap);
-  kgHandle = mountGraph(canvas as HTMLElement, kgDraw, (id) => renderKgSide(id), { onRelate: relateNodes, onRelatePick: onRelatePick }, {
-    ...gOpts, // P-PERF.3: seed from + harvest into the per-graph layout cache (no re-explosion on re-open)
-    positions: kgLayoutCache.get("personal"),
-    onPositions: (pos) => kgLayoutCache.set("personal", pos),
-  });
+  kgHandle = mountKgGraph(canvas as HTMLElement, kgDraw, (id) => renderKgSide(id), { onRelate: relateNodes, onRelatePick: onRelatePick }, gOpts, "personal");
   if (kgCapped && scopeLbl) scopeLbl.textContent += ` · top ${kgDraw.nodes.length} of ${kgData.nodes.length} nodes`;
   showKgCenter(true); syncKgSideOpen();
   if (kgRelateMode) { kgHandle.setRelateMode(true); onRelatePick([]); } // preserve relate mode across a live remount
@@ -10872,12 +11279,7 @@ async function renderKbGraph(): Promise<void> {
   if (!g) { canvas.innerHTML = `<div class="kg-empty">${icon("report", 30)}<div>Couldn't load the graph preview. Your imported pack is still installed. Reopen this view to retry.</div></div>`; return; }
   if (!g.pages.length) { canvas.innerHTML = `<div class="kg-empty">${icon("report", 30)}<div>This knowledge graph is empty. Import a document to add pages.</div></div>`; return; }
   kgData = kbToGraphData(g);
-  const cacheKey = `kb:${g.kgId}`;
-  kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => void renderKbSide(id), {}, {
-    staticLayout: true,
-    positions: kgLayoutCache.get(cacheKey),
-    onPositions: (pos) => kgLayoutCache.set(cacheKey, pos),
-  });
+  kgHandle = mountKgGraph(canvas as HTMLElement, kgData, (id) => void renderKbSide(id), {}, { staticLayout: true }, `kb:${g.kgId}`);
   kgHandle.setLens(kgLens);
   const query = ($("#kgSearch") as HTMLInputElement | null)?.value.trim();
   if (query) kgHandle.setSearch(matchNodes(kgData.nodes, query));
@@ -10911,19 +11313,24 @@ async function renderCodeGraph(ingest: boolean, level: "file" | "symbol" = codeG
   const busy = ingest ? (level === "symbol" ? "Parsing symbols (AST)…" : "Ingesting the workspace…") : "Loading the code graph…";
   canvas.innerHTML = `<div class="skel-kg">${icon("refresh", 26, "spin")}<div>${busy}</div></div>`;
   if (side) { side.hidden = true; side.innerHTML = ""; }
-  // P-SYSRES.1 (ADR-0182): the AST ingest is the app's biggest CPU spike - hard-pause it while the
-  // machine is starved (notice + what-to-close panel + re-check). Fail-open on missing evidence.
-  const sysCg = await bridge.systemStatus().catch(() => null);
-  if (!kgOpen || generation !== kgRenderGeneration) return;
-  if (sysCg?.verdict.level === "blocked") {
+  // P-SYSRES.1 (ADR-0182): the ingest (above all the AST parse) is the app's biggest CPU spike - hard-pause
+  // it while the machine is starved (notice + what-to-close panel + re-check). Fail-open on missing evidence.
+  // Reading an already-built graph is cheap and never paused, so a Flat/Orbit switch or a reopen draws at once.
+  const pausedForIngest = async (): Promise<boolean> => {
+    const sysCg = await bridge.systemStatus().catch(() => null);
+    if (!kgOpen || generation !== kgRenderGeneration) return true;
+    if (sysCg?.verdict.level !== "blocked") return false;
     renderSysBlocked(canvas as HTMLElement, sysCg, "code graph", () => void renderCodeGraph(ingest, level));
     updateCodeGraphButtons(true, null);
-    return;
+    return true;
+  };
+  let data = ingest ? null : await bridge.codeGraph(level).catch(() => null);
+  if (!kgOpen || generation !== kgRenderGeneration) return;
+  if (ingest || (data && !data.ingested)) { // asked to rebuild, or never built → build now
+    if (await pausedForIngest()) return;
+    data = await bridge.codeGraphIngest(level).catch(() => null);
+    if (!kgOpen || generation !== kgRenderGeneration) return;
   }
-  let data = ingest ? await bridge.codeGraphIngest(level).catch(() => null) : await bridge.codeGraph(level).catch(() => null);
-  if (!kgOpen || generation !== kgRenderGeneration) return;
-  if (data && !data.ingested && !ingest) data = await bridge.codeGraphIngest(level).catch(() => null); // never built → build now
-  if (!kgOpen || generation !== kgRenderGeneration) return;
   if (!data || !data.nodes.length) {
     canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>No ${level === "symbol" ? "symbols" : "source files"} found to graph in this workspace. Open a code repo as your workspace, then try again.</div></div>`;
     updateCodeGraphButtons(true, null); showKgCenter(false); return;
@@ -10943,12 +11350,10 @@ async function renderCodeGraph(ingest: boolean, level: "file" | "symbol" = codeG
   }
   codeGraphRoot = data.root || "";
   kgData = { nodes, edges, facts: [] };
-  kgHandle = mountGraph(canvas as HTMLElement, kgData, (id) => renderCodeSide(id), {}, {
-    ...gOpts, // P-PERF.3: same layout continuity for the code graph, keyed by level
-    positions: kgLayoutCache.get(`code:${level}`),
-    onPositions: (pos) => kgLayoutCache.set(`code:${level}`, pos),
-  });
+  kgHandle = mountKgGraph(canvas as HTMLElement, kgData, (id) => renderCodeSide(id), {}, gOpts, `code:${level}`); // P-PERF.3: layout continuity keyed by level
   kgHandle.setLens(kgLens);
+  const cq = ($("#kgSearch") as HTMLInputElement | null)?.value.trim(); // P-KG-ORBIT.1: keep an active search across an engine switch
+  if (cq) kgHandle.setSearch(matchNodes(kgData.nodes, cq));
   kgSig = kgSignature(kgData);
   updateCodeGraphButtons(true, data);
   showKgCenter(true); syncKgSideOpen();
@@ -11007,8 +11412,14 @@ function renderCodeSide(id: string | null): void {
   // Each entry is a link that opens the real file in the Monaco IDE (P-KG-CODE.1d). For a symbol id
   // (`file#symbol`) the label shows the symbol + its file; clicking opens the file (openCodeFile strips the #).
   const sym = codeGraphLevel === "symbol";
-  const label = (id: string) => sym && id.includes("#") ? `${id.split("#")[1]} <span class="cg-open-file">${id.split("#")[0]}</span>` : esc(id);
-  const fileLink = (id: string, extra = "") => `<button type="button" class="cg-open${extra}" data-cg-open="${esc(id)}" data-tip="Open the file in the editor">${label(id)}</button>`;
+  // Invariant 11: one line per entry. The name never shrinks; the directory (or the symbol's file) ellipsizes
+  // first, and the tooltip carries the full id.
+  const label = (id: string) => {
+    if (sym && id.includes("#")) { const [file = "", name = ""] = id.split("#"); return `<span class="cg-open-base">${esc(name)}</span><span class="cg-open-file">${esc(file)}</span>`; }
+    const cut = id.lastIndexOf("/") + 1;
+    return `${cut ? `<span class="cg-open-dir">${esc(id.slice(0, cut))}</span>` : ""}<span class="cg-open-base">${esc(id.slice(cut))}</span>`;
+  };
+  const fileLink = (id: string, extra = "") => `<button type="button" class="cg-open${extra}" data-cg-open="${esc(id)}" data-tip="${esc(id)}|Open the file in the editor">${label(id)}</button>`;
   const list = (xs: string[]) => xs.length ? `<ol class="cg-side-list">${xs.slice(0, 80).map((x) => `<li>${fileLink(x)}</li>`).join("")}</ol>` : `<div class="cg-side-none">none</div>`;
   const outLbl = sym ? "Uses" : "Imports", inLbl = sym ? "Used by" : "Imported by";
   side.hidden = false;
@@ -11182,13 +11593,20 @@ async function clearGitPat(): Promise<void> {
   hydrateSettings();
   showToast({ title: "Git token removed", desc: "Private-repo clones will need a token again.", timeout: 3000 });
 }
+/** P-BOOTPERF.1 (ADR-pending): the last live answer from a previous run, painted until this run's engine
+ *  answers. It only paints: the .env offer and everything else that acts on the folder wait for the live
+ *  answer (state.workspace), and it is dropped the moment that answer, or its failure, lands. */
+let bootWorkspace: WorkspaceInfo | null = null;
 function renderWorkspaceBar(): void {
   const bar = $("#wsBar") as HTMLButtonElement | null;
-  const w = state.workspace;
+  const w = state.workspace ?? bootWorkspace;
   if (!bar) return;
   if (!w) { bar.hidden = true; return; }
   bar.hidden = false;
-  void offerVaultEnvImport(w.current, openSettings); // P-VAULT-ENV.1: once per workspace with a .env
+  if (state.workspace) {
+    setCachedWorkspace(state.workspace); // P-BOOTPERF.1: the next launch paints this before the engine answers
+    void offerVaultEnvImport(w.current, openSettings); // P-VAULT-ENV.1: once per workspace with a .env
+  }
   // P-REPO.1 (ADR-0406): under the workspace name, the repo Main actually works in (it can be a checkout
   // inside the workspace folder) and where its commits go - ONLY when it pushes to a hosted remote. A plain
   // folder or a local-only repo shows just the workspace name: nothing to warn about.
@@ -11203,12 +11621,18 @@ async function loadWorkspace(): Promise<void> {
   // #11 perceived-latency: the bar used to stay hidden until workspace() resolved, then
   // pop in. Show a subtle "loading workspace…" pill instantly; renderWorkspaceBar() below
   // always replaces it (even on a null/failed result, which hides the bar as before).
+  // P-BOOTPERF.1 (ADR-pending): a returning user gets the bar from the last live answer at once (name,
+  // folder icon), not a pill that waits on the engine; the repo line arrives with refreshTitlebarRepo.
   const bar = $("#wsBar") as HTMLButtonElement | null;
-  if (bar && !state.workspace) {
+  const cached = state.workspace ? null : cachedWorkspace<WorkspaceInfo>();
+  bootWorkspace = cached?.current && cached.name ? cached : null;
+  if (bootWorkspace) renderWorkspaceBar();
+  else if (bar && !state.workspace) {
     bar.hidden = false;
     bar.innerHTML = `<span class="ws-bar-loading">${icon("refresh", 12, "spin")}loading workspace…</span>`;
   }
   state.workspace = await bridge.workspace().catch(() => null);
+  bootWorkspace = null;
   renderWorkspaceBar();
   void refreshTitlebarRepo(); // P-REPO.1
 }
@@ -16613,12 +17037,87 @@ function wire(): void {
     if (b) void openCodeFile(b.dataset.cgOpen!);
   });
   // P-KG-SEARCH.1: live node search - highlight + center matches as you type (Esc clears).
-  $("#kgSearch")?.addEventListener("input", (e) => {
-    const q = (e.target as HTMLInputElement).value;
+  // P-KG-ORBIT.1 (ADR-0470): plus a ranked results list under the box. Arrow keys move, Enter or a click
+  // picks: the active engine selects + focuses the node and its existing side panel opens (the mount's
+  // onSelect: renderKgSide / renderKbSide / renderCodeSide).
+  const kgSearchEl = $("#kgSearch") as HTMLInputElement; // static markup, like #kgClose above
+  const kgResEl = $("#kgResults") as HTMLElement;
+  let kgHits: RankedNode[] = [];
+  let kgHitAt = 0;
+  const hideKgResults = (): void => {
+    kgHits = [];
+    kgResEl.hidden = true; kgResEl.innerHTML = "";
+    kgSearchEl.setAttribute("aria-expanded", "false");
+  };
+  const paintKgResults = (): void => {
+    const q = kgSearchEl.value.trim();
+    if (!q) { hideKgResults(); return; }
+    kgResEl.innerHTML = kgHits.length
+      ? kgHits.map((h, i) => {
+        const dot = kgEngine === "orbit" ? kindColor(h.kind) : KIND_COLOR[kindLabel(h.kind)] ?? "#888";
+        const sub = kgCodeMode ? h.id : kindLabel(h.kind); // code nodes show their path; personal / KB ids are opaque
+        return `<button type="button" class="kg-res${i === kgHitAt ? " on" : ""}" role="option" aria-selected="${i === kgHitAt}" data-kg-res="${i}" title="${esc(h.id)}">`
+          + `<i class="kg-res-dot" style="background:${dot}"></i><span class="kg-res-txt"><span class="kg-res-name">${esc(h.name)}</span><span class="kg-res-path">${esc(sub)}</span></span></button>`;
+      }).join("")
+      : `<div class="kg-res-none">No matching nodes</div>`;
+    const aside = $("#knowledge") as HTMLElement, a = aside.getBoundingClientRect(), r = kgSearchEl.getBoundingClientRect();
+    const w = Math.min(420, Math.max(300, r.width), a.width - 16);
+    kgResEl.style.width = `${w}px`;
+    kgResEl.style.top = `${Math.round(r.bottom - a.top + 4)}px`;
+    kgResEl.style.left = `${Math.round(Math.max(8, Math.min(r.left - a.left, a.width - w - 8)))}px`;
+    kgResEl.hidden = false;
+    kgSearchEl.setAttribute("aria-expanded", "true");
+    kgResEl.querySelector(".kg-res.on")?.scrollIntoView({ block: "nearest" });
+  };
+  const pickKgHit = (i: number): void => {
+    const h = kgHits[i];
+    if (!h) return;
+    kgSearchEl.value = ""; // the pick replaces the search: the highlight clears so the selection reads
+    hideKgResults();
+    kgHandle?.setSearch(null);
+    kgHandle?.select(h.id);
+  };
+  kgSearchEl.addEventListener("input", () => {
+    const q = kgSearchEl.value;
     kgHandle?.setSearch(q.trim() ? matchNodes(kgData?.nodes ?? [], q) : null);
+    kgHits = rankNodes(kgData?.nodes ?? [], q, 12); kgHitAt = 0;
+    paintKgResults();
   });
-  $("#kgSearch")?.addEventListener("keydown", (e) => {
-    if ((e as KeyboardEvent).key === "Escape") { (e.target as HTMLInputElement).value = ""; kgHandle?.setSearch(null); }
+  kgSearchEl.addEventListener("keydown", (e) => {
+    const k = e.key;
+    if (k === "Escape") { kgSearchEl.value = ""; kgHandle?.setSearch(null); hideKgResults(); return; }
+    if ((k === "ArrowDown" || k === "ArrowUp") && kgHits.length) {
+      e.preventDefault();
+      kgHitAt = (kgHitAt + (k === "ArrowDown" ? 1 : kgHits.length - 1)) % kgHits.length;
+      paintKgResults();
+      return;
+    }
+    if (k === "Enter" && kgHits.length) { e.preventDefault(); pickKgHit(kgHitAt); }
+  });
+  kgSearchEl.addEventListener("focus", () => {
+    if (!kgSearchEl.value.trim()) return;
+    kgHits = rankNodes(kgData?.nodes ?? [], kgSearchEl.value, 12); kgHitAt = 0;
+    paintKgResults();
+  });
+  kgSearchEl.addEventListener("blur", () => hideKgResults());
+  kgResEl.addEventListener("mousedown", (e) => e.preventDefault()); // keep focus in the box so the click lands
+  kgResEl.addEventListener("click", (e) => {
+    const row = (e.target as HTMLElement).closest("[data-kg-res]") as HTMLElement | null;
+    if (row) pickKgHit(Number(row.dataset.kgRes));
+  });
+  // P-KG-ORBIT.1 (ADR-0470): the Flat | Orbit engine toggle remounts whatever graph is on the canvas.
+  const paintKgEngine = (): void => $$("[data-kg-engine] button").forEach((b) => b.classList.toggle("on", (b as HTMLElement).dataset.engine === kgEngine));
+  paintKgEngine();
+  $("[data-kg-engine]")?.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest("[data-engine]") as HTMLElement | null;
+    if (!b) return;
+    const next: KgEngine = b.dataset.engine === "orbit" ? "orbit" : "flat";
+    if (next === kgEngine) return;
+    kgEngine = next;
+    try { localStorage.setItem("lucid.kgEngine", next); } catch { /* the choice still applies for this session */ }
+    paintKgEngine();
+    hideKgResults();
+    if (kgOpen) void (kbGraphMode ? renderKbGraph() : kgCodeMode ? renderCodeGraph(false) : renderKnowledge());
   });
   // P-PERF.2: the performance-mode chip - cycle auto -> full -> reduced -> minimal; auto follows battery/CPU.
   $("#kgPerf")?.addEventListener("click", () => {
@@ -16637,7 +17136,7 @@ function wire(): void {
   });
   // Auto-tier flips (plug/unplug, battery level) repaint the chip and calm/wake a LIVE graph in place -
   // no remount, so the layout the user is looking at never jumps.
-  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(kbGraphMode || perfWatch.tier() !== "full"); });
+  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(kbGraphMode || perfWatch.tier() !== "full"); seasonBackdrop?.setMotion(backdropMotion()); });
   paintPerfChip();
   $("#kgData")?.addEventListener("click", (e) => openKgDataMenu(e.currentTarget as HTMLElement)); // P-KGUI.2 dropdown
   // P-KGMARKET.5 (ADR-0333): the storefront gets a button. It was previously reachable only by typing
@@ -17090,6 +17589,8 @@ function wire(): void {
     fleetRespawn: bridge.fleetRespawn, // P-FLEET.L4: revive in place, memory carried
     fleetQueueAdd: bridge.fleetQueueAdd, // P-FLEET.L3: stage a prompt while the lane is busy
     fleetQueueRemove: bridge.fleetQueueRemove,
+    fleetQueuePeek: bridge.fleetQueuePeek, // P-PUSH.PAR1: Copy / Push now read a staged item whole, in place
+    fleetQueueTake: bridge.fleetQueueTake, // P-QUEUE-IMG.1: Update pulls a staged item + its images back
     fleetQueueMove: bridge.fleetQueueMove,
     fleetDrain: bridge.fleetDrain, // P-FLEET.L3: stream the next staged prompt when idle
     fleetWatch: bridge.fleetWatch, // P-FLEET.L11: the card FOLLOWS a lane the main composer is driving
@@ -17099,7 +17600,7 @@ function wire(): void {
     fleetStop: bridge.fleetStop,
     fleetRemove: bridge.fleetRemove, // P-FLEET.L10: dismiss a stopped lane so its card leaves the grid
     fleetSetModel: bridge.fleetSetModel,
-    interject: bridge.interject, // P-INTERJECT.2: Push now on staged chips + the per-lane Check in ask
+    interject: bridge.interject, // P-INTERJECT.2: Steer running turn on staged chips (P-PUSH.PAR1) + the per-lane Check in ask
     stopCall: bridge.stopCall, // P-LIVENESS.1: Stop command on a lane call marked likely stuck
     repoChoices: bridge.repoChoices, // P-REPO.1 (ADR-0406): the New lane form picks a repo instead of typing
     repoGithub: bridge.repoGithub,
@@ -17266,6 +17767,10 @@ function wire(): void {
   // P-VOICE.1 (ADR-0115): persist a voice setting when a Voice-card control changes.
   $("#setBody")!.addEventListener("change", async (e) => {
     const t0 = e.target as HTMLElement;
+    // P-SEASON.1 (ADR-0525): the special-theme calendar checkbox and the backdrop selects.
+    if (t0.id === "seasonAuto") { setSeasonPref(SEASON_AUTO_KEY, (t0 as HTMLInputElement).checked ? "1" : ""); return; }
+    if (t0.id === "seasonScene") { setSeasonPref(SEASON_SCENE_KEY, (t0 as HTMLSelectElement).value); return; }
+    if (t0.id === "seasonWhere") { setSeasonPref(SEASON_WHERE_KEY, (t0 as HTMLSelectElement).value === "everywhere" ? "everywhere" : ""); return; }
     // P-APPEAR.1: chat-background mode + image upload
     if (t0.id === "bgMode") { void updateChatBg({ mode: (t0 as HTMLSelectElement).value as "off" | "ambient" | "flashlight" }); return; }
     if (t0.id === "spokeSwitchScroll") { setSpokeSwitchScroll((t0 as HTMLSelectElement).value === "resume" ? "resume" : "latest"); return; } // P-SCROLL.1
@@ -17371,6 +17876,10 @@ function wire(): void {
     // test. dataset.themePick is "" for that tile, hence `!= null` rather than a plain truthy check.
     const th = t.closest("[data-theme-pick]") as HTMLElement | null;
     if (th) { void pickTheme(th.dataset.themePick ?? ""); return; }
+    // P-SEASON.1: the special-theme dropdown (trigger toggles the listbox; a row pins that season, "" unpins).
+    if (t.closest("#seasonTrigger")) { seasonMenuOpen = !seasonMenuOpen; seasonChanged(); if (seasonMenuOpen) ($(".season-opt.on") ?? $(".season-opt"))?.focus(); return; }
+    const sp = t.closest("[data-season-pick]") as HTMLElement | null;
+    if (sp) { seasonMenuOpen = false; setSeasonPref(SEASON_PICK_KEY, sp.dataset.seasonPick ?? ""); ($("#seasonTrigger") as HTMLElement | null)?.focus(); return; }
     // P-APPEAR.1: chat-background upload / remove
     if (t.closest("#bgUpload")) { ($("#bgFile") as HTMLInputElement | null)?.click(); return; }
     if (t.closest("#voiceEndpointImportBtn")) { ($("#voiceEndpointFile") as HTMLInputElement | null)?.click(); return; } // P-VOICE.7
@@ -18392,32 +18901,63 @@ let configWarmTimer: number | null = null; // the single scheduled re-poll (one 
 // Runs only on a real ADOPTED list, never over a live turn, and under AskSage lockdown it stays on a gov
 // model. Fire-and-forget, guarded once per launch.
 let defaultModelApplied = false;
+// Cloud-only default (fix/v2.5.1-provider-default-models): true while the session sits on a LOCAL model
+// the user never explicitly chose and no cloud model is available to default to. send() holds the turn and
+// opens the picker instead of running it on that model; any model switch (or a later cloud default) clears it.
+let awaitingCloudModel = false;
 async function maybeApplyDefaultModel(modelOpt: ConfigOption | undefined): Promise<void> {
   if (defaultModelApplied || !modelOpt || !modelOpt.options?.length || state.streaming || state.userRole === "lucid-agent") return;
   defaultModelApplied = true;
   // loadAsksage / auth race loadConfig at boot; both gate what's selectable, so make sure they're known.
   if (state.asksage == null) { const a = await bridge.asksage().catch(() => null); if (a) state.asksage = a; }
   if (!state.auth) { const au = await bridge.auth().catch(() => null); if (au) state.auth = au; }
+  // The Local Provider list decides what counts as LOCAL, so it must be known before anything is picked.
+  // (state starts with an empty list that is only filled when Settings opens, hence the length check.)
+  // Fail closed: if the list cannot be read, a custom local model would be misread as cloud and could be
+  // auto-selected. Leave the guard unspent so the next config adopt retries instead of picking anything.
+  if (!state.localProviders.length) {
+    const lp = await bridge.localProvidersList().catch(() => null);
+    if (!lp) { defaultModelApplied = false; return; }
+    state.localProviders = lp;
+  }
   const [chosen, last] = await Promise.all([
-    bridge.chosenModel().catch(() => ""),
+    bridge.chosenModel().catch(() => ""), // already narrowed to EXPLICIT picks by settings_store.chosenModel()
     bridge.lastModel().catch(() => ""),
   ]);
   if (agentPrior || state.streaming) return; // the role was entered mid-await: the tier owns the model now
-  const candidates = curatedModels(modelOpt).filter((o) => !unavailableReason(o.value));
-  if (!candidates.length) return;
+  const localPx = new Set((state.localProviders ?? []).map((p) => p.ompProvider).filter(Boolean));
+  const isLocal = (v: string) => isLocalModel(v, localPx);
+  const cloud = (v: string) => !isLocal(v);
+  // !isAuxiliaryModel: curatedModels re-adds the CURRENT model even when it is hidden (ensureCurrent), so
+  // without this a session already sitting on an embedding model would match rung 1/2 and stay there.
+  const candidates = curatedModels(modelOpt).filter((o) => !unavailableReason(o.value) && !isAuxiliaryModel(o.value));
   const inList = (v: string) => !!v && candidates.some((o) => o.value === v);
   // A remembered model only wins while it is STILL OFFERED and still selectable: a revoked key or a
   // retired model must fall through to the curated default rather than pin the picker to a dead id.
+  // Only the EXPLICIT choice may be local; the auto-stamped last model and the curated default are cloud-only.
   let desired = inList(chosen) ? chosen
-    : inList(last) ? last
-    : (preferredDefaultModel(candidates)?.value ?? "");
+    : inList(last) && cloud(last) ? last
+    : (preferredDefaultModel(candidates, cloud)?.value ?? "");
   if (state.asksage?.only && desired && !lockdownRoutable(desired)) {
     // Lockdown overrides even a remembered pick: a CUI session may not route direct. Prefer the curated
-    // default among allowed routes (AskSage or a DGX enclave Local Provider), then any allowed model at all,
-    // and only then give up (the backend clamp is authoritative).
-    desired = preferredDefaultModel(candidates, lockdownRoutable)?.value ?? topModel(candidates, lockdownRoutable)?.value ?? desired;
+    // default among allowed CLOUD routes (AskSage), then any allowed cloud model, and only then give up (the
+    // backend clamp is authoritative and may still land a DGX enclave Local Provider by policy).
+    const ok = (v: string) => lockdownRoutable(v) && cloud(v);
+    desired = preferredDefaultModel(candidates, ok)?.value ?? topModel(candidates, ok)?.value ?? desired;
   }
-  if (desired && desired !== modelOpt.currentValue) await applyConfig("model", desired, { system: true });
+  const current = modelOpt.currentValue;
+  if (!desired) {
+    // No cloud model to default to yet (fresh install before the first OAuth, or the provider's models have
+    // not landed). Never fall back to a local model: leave the guard unspent so the post-OAuth config adopt
+    // re-runs this, and hold the composer if the session is sitting on a local model nobody chose.
+    defaultModelApplied = false;
+    awaitingCloudModel = !!current && isLocal(current) && current !== chosen;
+    if (awaitingCloudModel) { const mn = $("#modelName"); if (mn) mn.textContent = "Choose a model"; }
+    return;
+  }
+  // applyConfig clears the hold itself and restores it if the engine rejects the switch.
+  if (desired !== current) await applyConfig("model", desired, { system: true });
+  else awaitingCloudModel = false;
 }
 async function loadConfig(newCycle = true): Promise<void> {
   if (newCycle && configWarmTimer !== null) { window.clearTimeout(configWarmTimer); configWarmTimer = null; }
@@ -18604,6 +19144,10 @@ async function applyConfig(configId: string, value: string, opts: { system?: boo
   // P-MODELDEF: a genuine USER pick becomes the sticky default (restored on the next launch). A SYSTEM
   // switch (lockdown clamp, no-response fallback, collab-guest mirror, boot default-select) never does.
   if (configId === "model" && !opts.system) void bridge.setChosenModel(value).catch(() => {});
+  // Any deliberate or default switch resolves the hold, but only once the engine accepts it: a rejected
+  // switch leaves the backend on the unchosen local model, so the catch below restores the hold.
+  const heldLocal = configId === "model" && awaitingCloudModel;
+  if (configId === "model") awaitingCloudModel = false;
   const configured = bridge.setConfig(configId, value)
     .then((cfg) => {
       if (opts.confirm && cfg.find((c) => c.id === configId)?.currentValue !== value) throw new Error("The engine did not confirm the selected model");
@@ -18612,12 +19156,17 @@ async function applyConfig(configId: string, value: string, opts: { system?: boo
       updateComposerTools();
     })
     .catch((error) => {
-      if (opts.confirm && configId === "model" && state.model === value) {
+      const latest = state.model === value; // false when a newer switch already superseded this one
+      if (opts.confirm && configId === "model" && latest) {
         state.model = previousModel;
         if (opt) opt.currentValue = previousModel;
         const label = $("#modelName"); if (label) label.textContent = modelLabel(previousModel);
         renderStatus(); if (p2pHostActive()) setP2PHostOptions(buildRendererCollabOptions()); // undo the optimistic branch everywhere it painted
         updateComposerTools();
+      }
+      if (heldLocal && latest) {
+        awaitingCloudModel = true; // the engine is still on the unchosen local model: keep holding the composer
+        const mn = $("#modelName"); if (mn) mn.textContent = "Choose a model";
       }
       showToast({ title: `Couldn't confirm ${opt?.name ?? configId}`, desc: "The backend didn't acknowledge the change - it may not have applied. Try again if new turns don't use it.", tone: "warn", actions: [{ label: "OK" }], timeout: 4200 });
       if (opts.confirm) throw error;
@@ -18807,8 +19356,14 @@ const MODEL_INFO: Record<string, ModelInfo> = {
   // at $10/$50 per Mtok, double Fable 5's tier, and on Pro / standard Team seats they bill as
   // pay-as-you-go credits OUTSIDE the plan's included limits, so an unaware user pays real money per
   // call. isApiOnlyModel drives the explicit warning; this card carries the cost framing.
-  "claude-fable-5-1": { exp: 5, iq: 5, eff: "The current frontier ceiling, billed as pay-as-you-go credits rather than from your plan's included usage.", best: "The hardest novel reasoning and long-horizon agentic work, when cost is not the constraint.", ctx: "1M" },
-  "claude-mythos-5-1": { exp: 5, iq: 5, eff: "The current frontier ceiling, billed as pay-as-you-go credits rather than from your plan's included usage.", best: "The hardest novel reasoning and long-horizon agentic work, when cost is not the constraint.", ctx: "1M" },
+  // P-MODEL.10 (ADR-pending): Fable 5.2 / Mythos 5.2 (omp 18.18.6 catalog) are the new ceiling at $8/$40
+  // per Mtok, 1M context, 128K output, adaptive thinking always on. Same model and specs; Mythos 5.2 is
+  // listed only to organizations Anthropic has verified, so it appears only when the account's model list
+  // carries it (omp discovers it; LUCID never adds it). Still API-credit billed, so `exp` stays at the top.
+  "claude-fable-5-2": { exp: 5, iq: 5, eff: "The current frontier ceiling at $8/$40 per Mtok, billed as pay-as-you-go credits rather than from your plan's included usage.", best: "The hardest novel reasoning and long-horizon agentic work, when cost is not the constraint.", ctx: "1M" },
+  "claude-mythos-5-2": { exp: 5, iq: 5, eff: "Fable 5.2's model for Anthropic-verified organizations, at $8/$40 per Mtok, billed as pay-as-you-go credits rather than from your plan's included usage.", best: "The hardest novel reasoning and long-horizon agentic work, when cost is not the constraint.", ctx: "1M" },
+  "claude-fable-5-1": { exp: 5, iq: 5, eff: "The prior frontier ceiling at $10/$50 per Mtok, billed as pay-as-you-go credits rather than from your plan's included usage.", best: "The hardest novel reasoning and long-horizon agentic work, when cost is not the constraint.", ctx: "1M" },
+  "claude-mythos-5-1": { exp: 5, iq: 5, eff: "The prior frontier ceiling at $10/$50 per Mtok, billed as pay-as-you-go credits rather than from your plan's included usage.", best: "The hardest novel reasoning and long-horizon agentic work, when cost is not the constraint.", ctx: "1M" },
   "claude-fable-5": { exp: 5, iq: 5, eff: "Frontier capability at a premium price - worth it only when the task needs the ceiling.", best: "The hardest novel reasoning and long-horizon agentic work.", ctx: "1M" },
   "claude-mythos-5": { exp: 5, iq: 5, eff: "Frontier capability at a premium price - worth it only when the task needs the ceiling.", best: "The hardest novel reasoning and long-horizon agentic work.", ctx: "1M" },
   // P-MODEL.2: Opus 5.5 (2026-09-22) opens the Claude 5.5 family. Anthropic's own framing: Fable-5.1-level
@@ -19605,6 +20160,15 @@ onNetChange(() => {
   netModelKickAt = Date.now();
   void loadConfig(true).then(renderStatus);
 });
+// P-BOOTPERF.1 (ADR-pending): the quiet Reconnect button heals itself. The net monitor's engine probe going
+// from silent to answering while the button shows re-runs the status probe, whose success hides it.
+let engineWasAnswering = false;
+onNetChange(() => {
+  const engineAnswering = netSnapshot().view !== null;
+  const reconnectShown = ($("#ctReconnect") as HTMLButtonElement | null)?.hidden === false;
+  if (shouldReprobeStatus({ reconnectShown, engineWasAnswering, engineAnswering })) void recoverMasterTurn();
+  engineWasAnswering = engineAnswering;
+});
 // P-KGMARKET.4 (ADR-0206): register the entitlement provider for this build (firebase / dev stub / off) and
 // listen for the lucid://auth deep link the OS forwards after hosted sign-in. A plain public build has no
 // config → "off" → the fail-closed nullProvider, so nothing here changes the storefront's behavior.
@@ -19675,6 +20239,7 @@ void bridge.getSettings().then((s) => { // your saved name → the "You" label o
   }
   if (state.userRole) applyRoleDefault(state.userRole); // returning user lands on their role's surface
   syncImmersiveWithRole(state.userRole); // P-AVATAR.1: a returning lucid-agent boots straight onto the stage
+  syncSeasonBackdrop(); // P-SEASON.1: "Behind every chat" users get the backdrop in every role
   // P-AVATAR.6: the lucid-agent role gets a hero opening over the ~6-9s session warm - REAL signals
   // only, min beat + hard cap in boot_cinematic.ts, Esc/Skip always, reduced-motion = static card.
   if (state.userRole === "lucid-agent" && !document.getElementById("bootCine")) {

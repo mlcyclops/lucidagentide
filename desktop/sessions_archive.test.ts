@@ -49,29 +49,29 @@ beforeEach(() => {
 });
 afterAll(() => { __setSessionIndexStore(undefined); __resetSessionIndex(); for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
 
-test("the saved index answers after a restart: unchanged files are not re-read, a changed one is", () => {
+test("the saved index answers after a restart: unchanged files are not re-read, a changed one is", async () => {
   const root = freshRoot({ "a.jsonl": [session("a", "alpha reply"), 1], "b.jsonl": [session("b", "bravo reply"), 1] });
   const file = join(root, "..", "index.json");
   __setSessionIndexStore({ file, root });
-  expect(listSessions(CWD, root).sessions).toHaveLength(2);
+  expect((await listSessions(CWD, root)).sessions).toHaveLength(2);
   flushSessionIndex();
   expect(existsSync(file)).toBe(true);
 
   __resetSessionIndex(); // a restart: memory gone, the file stays
-  expect(searchSessions("bravo", { cwd: CWD, root }).hits.map((h) => h.id)).toEqual(["b"]);
+  expect((await searchSessions("bravo", { cwd: CWD, root })).hits.map((h) => h.id)).toEqual(["b"]);
   expect(__sessionIndexStats().parses).toBe(0);
 
   writeFileSync(join(root, "enc", "a.jsonl"), session("a", "alpha changed"));
   __resetSessionIndex();
-  expect(searchSessions("changed", { cwd: CWD, root }).hits.map((h) => h.id)).toEqual(["a"]);
+  expect((await searchSessions("changed", { cwd: CWD, root })).hits.map((h) => h.id)).toEqual(["a"]);
   expect(__sessionIndexStats().parses).toBe(1);
 });
 
-test("a malformed or foreign-version index file is ignored and rebuilt, never trusted", () => {
+test("a malformed or foreign-version index file is ignored and rebuilt, never trusted", async () => {
   const root = freshRoot({ "a.jsonl": [session("a", "alpha"), 1] });
   const file = join(root, "..", "index.json");
   __setSessionIndexStore({ file, root });
-  listSessions(CWD, root);
+  await listSessions(CWD, root);
   flushSessionIndex();
   // A genuine, current index whose only fault is the version: an older parser's titles must not survive.
   const foreign = readFileSync(file, "utf8").replace('"v":1', '"v":999');
@@ -79,26 +79,26 @@ test("a malformed or foreign-version index file is ignored and rebuilt, never tr
     writeFileSync(file, bad);
     __setSessionIndexStore({ file, root });
     __resetSessionIndex();
-    expect(listSessions(CWD, root).sessions.map((s) => s.id)).toEqual(["a"]);
+    expect((await listSessions(CWD, root)).sessions.map((s) => s.id)).toEqual(["a"]);
     expect(__sessionIndexStats().parses).toBe(1);
   }
 });
 
-test("archive moves a session out of the list but keeps it counted, searchable, readable and restorable", () => {
+test("archive moves a session out of the list but keeps it counted, searchable, readable and restorable", async () => {
   const root = freshRoot({ "old.jsonl": [session("old", "the forgotten migration"), 40], "new.jsonl": [session("new", "today"), 1] });
   expect(archiveSession("old", { cwd: CWD, root })).toEqual({ ok: true });
   expect(existsSync(join(archiveRootFor(root), "enc", "old.jsonl"))).toBe(true);
 
-  const list = listSessions(CWD, root);
+  const list = await listSessions(CWD, root);
   expect(list.sessions.map((s) => s.id)).toEqual(["new"]);
   expect(list.archived).toBe(1);
-  expect(archivedSessions(CWD, root).map((s) => [s.id, s.archived])).toEqual([["old", true]]);
-  const hit = searchSessions("forgotten", { cwd: CWD, root }).hits;
+  expect((await archivedSessions(CWD, root)).map((s) => [s.id, s.archived])).toEqual([["old", true]]);
+  const hit = (await searchSessions("forgotten", { cwd: CWD, root })).hits;
   expect(hit.map((h) => [h.id, h.archived])).toEqual([["old", true]]);
   expect(sessionMessages("old", 0, root).messages.at(-1)!.text).toBe("the forgotten migration");
 
   expect(restoreSession("old", root)).toEqual({ ok: true, restored: true });
-  expect(listSessions(CWD, root).sessions.map((s) => s.id).sort()).toEqual(["new", "old"]);
+  expect((await listSessions(CWD, root)).sessions.map((s) => s.id).sort()).toEqual(["new", "old"]);
   expect(restoreSession("old", root)).toEqual({ ok: true, restored: false }); // already back: nothing to do
 });
 
@@ -112,15 +112,15 @@ test("archive refuses another workspace's session, and restore never overwrites 
   expect(existsSync(join(archiveRootFor(root), "enc", "y.jsonl"))).toBe(true);
 });
 
-test("deleting an archived session removes its file and its count", () => {
+test("deleting an archived session removes its file and its count", async () => {
   const root = freshRoot({ "z.jsonl": [session("z", "zulu"), 40] });
   archiveSession("z", { cwd: CWD, root });
   expect(deleteSession("z", CWD, root)).toEqual({ ok: true });
   expect(existsSync(join(archiveRootFor(root), "enc", "z.jsonl"))).toBe(false);
-  expect(listSessions(CWD, root).archived).toBe(0);
+  expect((await listSessions(CWD, root)).archived).toBe(0);
 });
 
-test("auto-archive: chats after `days`, spoke and empty sessions after `spokeDays`, live sessions never; dry run moves nothing", () => {
+test("auto-archive: chats after `days`, spoke and empty sessions after `spokeDays`, live sessions never; dry run moves nothing", async () => {
   const root = freshRoot({
     "chat-old.jsonl": [session("chat-old", "a"), 31],
     "chat-young.jsonl": [session("chat-young", "b"), 20],
@@ -131,11 +131,11 @@ test("auto-archive: chats after `days`, spoke and empty sessions after `spokeDay
   const policy = archivePolicy({ auto: true, days: 30, spokeDays: 7 });
   const keep = new Set(["main-old"]);
   const spokes = new Map([["spoke-8d", "Tom"]]);
-  expect(autoArchive(policy, keep, spokes, { root, now: NOW, dryRun: true })).toEqual({ candidates: 3, archived: 0, skipped: 0 });
+  expect(await autoArchive(policy, keep, spokes, { root, now: NOW, dryRun: true })).toEqual({ candidates: 3, archived: 0, skipped: 0 });
   expect(existsSync(join(root, "enc", "chat-old.jsonl"))).toBe(true);
 
-  expect(autoArchive(policy, keep, spokes, { root, now: NOW })).toEqual({ candidates: 3, archived: 3, skipped: 0 });
-  expect(listSessions(CWD, root).sessions.map((s) => s.id).sort()).toEqual(["chat-young", "main-old"]);
+  expect(await autoArchive(policy, keep, spokes, { root, now: NOW })).toEqual({ candidates: 3, archived: 3, skipped: 0 });
+  expect((await listSessions(CWD, root)).sessions.map((s) => s.id).sort()).toEqual(["chat-young", "main-old"]);
 });
 
 test("the policy is clamped: whole days 1-3650, off unless explicitly true", () => {
