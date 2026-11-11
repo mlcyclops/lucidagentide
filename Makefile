@@ -393,6 +393,11 @@ demo-P-PRIVAI.1: ## P-PRIVAI.1 (ADR-0530): the DGX Loader is now the Private AI 
 	$(BUN) run desktop/scripts/demo_p_privai_1.ts
 	$(BUN) test $(TEST_IGNORES) desktop/creator_probe.test.ts desktop/creator_mailbox.test.ts desktop/creator_registry.test.ts desktop/cui_policy.test.ts
 
+.PHONY: demo-P-RUNTIME-PY.1
+demo-P-RUNTIME-PY.1: ## P-RUNTIME-PY.1 (ADR-0548): the bundled CPython moves to python-build-standalone 20261026 (3.12.16, OpenSSL 3.5.9); fetch-runtimes runs it and refuses a tree that is not PY_VERSION or whose OpenSSL is below PY_OPENSSL_MIN
+	$(BUN) test $(TEST_IGNORES) desktop/build/python_floor.test.ts
+	cd desktop && $(BUN) run build/fetch-runtimes.ts
+
 .PHONY: demo-P-AVATAR.4
 demo-P-AVATAR.4: ## P-AVATAR.4 (ADR-0251): the LUCID Agent enter flow - fast-model preference order (Terra > Sonnet 5 > Flash, no pointless switch), one-gap-at-a-time readiness (provider > tts > stt), the one-time KG offer, exit model restoration
 	$(BUN) run desktop/scripts/demo_p_avatar_4.ts
@@ -1006,6 +1011,16 @@ demo-P-GAME.9: ## P-GAME.9: Silent Fathom joins the arcade. Proves the Preview g
 
 .PHONY: demo-P-GAME.10
 demo-P-GAME.10: ## P-GAME.10: Skyhook joins the arcade. Proves the Preview gate, then drives it headless at 400x720: the view zooms out (0.5) so anchors in rope reach are on screen, holding Space latches and letting go flings forward into a FLOW chain, pause freezes the run, restart from pause; every anchor hangs within rope reach of its floor and a player idle on the floor can still latch (both were lost runs before the playability fix); the autopilot carries a seeded run past 2000 m; an idle player is then caught by the Cascade; the best distance carries to the menu
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.11
+demo-P-GAME.11: ## P-GAME.11: Deck Guard: Deck the Halls joins the arcade next to Deck Guard. Proves the Preview gate, then drives it headless at 400x720: the attract demo flies behind the title, the autoplay bot pops swarms, unwraps presents and takes workshop gifts between waves, pause, restart resets the ladder; an idle player (any cleared wave's workshop gift taken by key) lets the undefended workshop fall (WORKSHOP CRIPPLED or OUT OF JETS); scramble again starts a fresh run
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.12
+demo-P-GAME.12: ## P-GAME.12: Chimney Rush and Gobble Getaway join the arcade. Proves the Preview gate, then drives both headless at 400x720: Chimney Rush autoplay reaches town 3+ with perfect chimneys, pause/resume, an idle sleigh is caught by the sunrise and still banks cookies, ride again; Gobble Getaway autoplay hops past row 40, pause/resume, restart, an idle turkey is caught and the game over names who did it, hop again
 	$(BUN) test desktop/arcade_games.test.ts
 	$(BUN) run desktop/scripts/demo_p_game_1.mjs
 
