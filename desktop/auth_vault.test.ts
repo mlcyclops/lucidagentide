@@ -26,7 +26,7 @@ function seed(disabledCause: string | null): void {
   const db = new Database(dbPath);
   db.exec("create table auth_credentials (id integer primary key, provider text, credential_type text, data text, disabled_cause text, identity_key text)");
   db.query("insert into auth_credentials (provider, credential_type, data, disabled_cause, identity_key) values (?,?,?,?,?)")
-    .run("openai-codex", "oauth", '{"access":"TOKEN-DO-NOT-TOUCH","refresh":"RT"}', disabledCause, "email:nick@example.com");
+    .run("openai-codex", "oauth", '{"access":"TOKEN-DO-NOT-TOUCH","refresh":"RT"}', disabledCause, "email:operator@example.com");
   db.close();
 }
 function read(provider: string): { data: string; disabled_cause: string | null } | null {
@@ -43,7 +43,7 @@ describe("clearDisabledCredential", () => {
     seed("logged out by user");
     const r = clearDisabledCredential("openai-codex", dbPath);
     expect(r.cleared).toBe(1);
-    expect(r.identity).toBe("email:nick@example.com");
+    expect(r.identity).toBe("email:operator@example.com");
     const row = read("openai-codex")!;
     expect(row.disabled_cause).toBeNull();           // re-enabled
     expect(row.data).toContain("TOKEN-DO-NOT-TOUCH"); // token blob preserved verbatim

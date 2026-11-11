@@ -707,6 +707,13 @@ button in the Video and CAD panes. The file carries the URL (the local mouth of 
 command to run, and `enclave: { kind: "dgx", host }`. A file with a credential-like key, a userinfo URL, an id
 outside 2 to 49 characters, or no enclave block is rejected with the reason.
 
+**How LUCID reaches the box (ADR-0550).** Each GPU box joins LUCID as a Remote Spoke: identity, trust,
+approvals, the relay transport and GPU reporting come from the spoke, and the Private AI Platform manages what
+runs on the box. The SSH forward named in a creator or voice endpoint file is the one remaining SSH path; it
+stays until a later increment carries these mailboxes over the spoke. Do not hand-make a Local Provider that
+points at a box address: work on a spoke uses that spoke's LAN model route, and this workstation's chat gets a
+DGX model only through the platform's `lucid-model-endpoint` mailbox. The box's vLLM listens on port 8000.
+
 **Video pane.** Pick the avatar endpoint, engine, template, dots.tts voice and script; optionally a title,
 subtitle and captions (timing is estimated from character count, not force-aligned). Creator synthesizes the
 speech through your dots.tts endpoint, uploads it to the avatar service, follows the job, and stores the
