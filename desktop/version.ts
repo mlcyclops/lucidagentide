@@ -740,4 +740,9 @@
 //            UI string, toast, route error, probe note, CUI refusal reason, skill and guide; provider ids,
 //            the mailbox contract and the enclave attestation tag are unchanged (P-PRIVAI.1, ADR-0530).
 //            PRERELEASE: never marked Latest; the Homebrew cask and stable installs stay on 2.5.2.
-export const APP_VERSION = "2.5.3-beta.3";
+// v2.5.3-beta.4 = 2.5.3-beta.3 plus three holiday games in the arcade: Deck Guard: Deck the Halls (P-GAME.11,
+//            11b), Chimney Rush and Gobble Getaway (P-GAME.12), each with a between-runs shop, missions and a
+//            seeded daily run, sound off in the Preview and a memory fallback for storage; and promoting a fleet
+//            lane to the main space keeps the whole answer instead of an 8K [truncated] cut (#597).
+//            PRERELEASE: never marked Latest; the Homebrew cask and stable installs stay on 2.5.2.
+export const APP_VERSION = "2.5.3-beta.4";
