@@ -993,6 +993,16 @@ demo-P-GAME.10: ## P-GAME.10: Skyhook joins the arcade. Proves the Preview gate,
 	$(BUN) test desktop/arcade_games.test.ts
 	$(BUN) run desktop/scripts/demo_p_game_1.mjs
 
+.PHONY: demo-P-GAME.11
+demo-P-GAME.11: ## P-GAME.11: Deck Guard: Deck the Halls joins the arcade next to Deck Guard. Proves the Preview gate, then drives it headless at 400x720: the attract demo flies behind the title, the autoplay bot pops swarms, unwraps presents and takes workshop gifts between waves, pause, restart resets the ladder; an idle player (any cleared wave's workshop gift taken by key) lets the undefended workshop fall (WORKSHOP CRIPPLED or OUT OF JETS); scramble again starts a fresh run
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.12
+demo-P-GAME.12: ## P-GAME.12: Chimney Rush and Gobble Getaway join the arcade. Proves the Preview gate, then drives both headless at 400x720: Chimney Rush autoplay reaches town 3+ with perfect chimneys, pause/resume, an idle sleigh is caught by the sunrise and still banks cookies, ride again; Gobble Getaway autoplay hops past row 40, pause/resume, restart, an idle turkey is caught and the game over names who did it, hop again
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
 .PHONY: demo-P-SYSRES.1
 demo-P-SYSRES.1: ## P-SYSRES.1 (ADR-0182): the system resource guard - a weak CPU under heavy load / RAM pressure pauses the KG + Code Graph builds behind a notice (why + machine line + top-processes panel + re-check, no escape hatch); FAIL-OPEN (no evidence never blocks); read-only fixed-argv process listing
 	$(BUN) run desktop/scripts/demo_p_sysres_1.ts
