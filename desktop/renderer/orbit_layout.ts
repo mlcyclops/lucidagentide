@@ -8,7 +8,7 @@
 // IO-free so all three are unit-tested headless; fleet_orbit.ts owns the DOM, the SVG and the polling.
 
 import type { LaneStatus, RepoContext } from "./bridge.ts";
-import { spokeRepo, type SpokeRepo } from "./spoke_repo.ts"; // P-HUB-PICK.1 (ADR-0470)
+import { spokeRepo, type SpokeRepo } from "./spoke_repo.ts"; // P-HUB-PICK.1 (ADR-0553)
 import { LANE_ATTENTION } from "../collab/fleet_status.ts"; // P-SWITCH.3: one rule for "waiting on you", shared with the dock pill and the phone bar
 import { promoteRefusal } from "./composer_target.ts";
 
@@ -191,7 +191,7 @@ export function hubLanes<L extends { hubSessionId?: string | null }>(lanes: read
   return lanes.filter((l) => !l.hubSessionId || l.hubSessionId === hub);
 }
 
-/** One hub for the Hubs menu (P-HUB-PICK.1, ADR-0470): its spokes, each named with its codebase, and the
+/** One hub for the Hubs menu (P-HUB-PICK.1, ADR-0553): its spokes, each named with its codebase, and the
  *  distinct codebases the hub's spokes work on, so hubs over different repos are told apart at a glance. */
 export interface HubEntry {
   sessionId: string;

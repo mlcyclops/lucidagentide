@@ -3,7 +3,7 @@
 
 // desktop/scripts/demo_p_hub_pick_1.ts
 //
-// Increment P-HUB-PICK.1 (ADR-0470): a hub picker, a codebase on every spoke, and "spoke" in every agent note.
+// Increment P-HUB-PICK.1 (ADR-0553): a hub picker, a codebase on every spoke, and "spoke" in every agent note.
 //   1. Two hubs, five spokes over three codebases: the picker lists the hub on screen first, then the other,
 //      each with the codebases its spokes work on and how many wait on you.
 //   2. Two clones of one GitHub repo read and color as the same codebase; two folders named alike do not.

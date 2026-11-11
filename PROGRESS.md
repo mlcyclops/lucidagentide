@@ -5799,7 +5799,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **stubbed:** none. A carried note containing a blank line can leave its tail in the title; the harness's own notes are one paragraph.
 - **next:** `dev.ts` says "set LUCID_PORT" when its port is busy, but the engine reads `PORT`; fix the message.
 
-## P-HUB-PICK.1: hub picker, a codebase on every spoke, "spoke" not "lane" (ADR-0470)
+## P-HUB-PICK.1: hub picker, a codebase on every spoke, "spoke" not "lane" (ADR-0553)
 - **shipped (2026-11-02):** the orbit header's hubs button names the hub on screen and opens a picker of every hub (this one first, codebases and waiting counts per hub, Open through the guarded switch); the spoke switch menu lists other hubs too. Every spoke shows its codebase (hosted repo, git root or folder) in a stable color on the orbit and the grid; the grid has a By repo toggle. The attach/release notes the agent reads and all fleet UI prose say "spoke". Proof: `make demo-P-HUB-PICK.1`, 6 new tests, a browser smoke with two hubs over three codebases.
 - **stubbed:** none. Hubs are sessions of one local engine; remote hubs and spokes are not built (proposal filed in the private add-on repo).
 - **next:** the PWA fleet cards and the hub TUI still say "lane"; carry the wording there.

@@ -7242,7 +7242,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-hubrow-lanes .fleet-pip{font-size:11px;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis}
 .orbit-btn.waiting .orbit-ghost-n{color:var(--amber-txt,var(--amber));background:rgb(var(--amber-rgb) / .14)}
 
-/* P-HUB-PICK.1 (ADR-0470): one codebase tag everywhere (orbit node, grid card, Hubs menu, spoke switch menu),
+/* P-HUB-PICK.1 (ADR-0553): one codebase tag everywhere (orbit node, grid card, Hubs menu, spoke switch menu),
    colored by a hue derived from the repo identity, so two spokes on different codebases never read alike.
    A single text child, never wraps. */
 .spoke-repo-tag{--rh:var(--repo-hue,220);flex:0 1 auto;min-width:0;max-width:150px;display:inline-block;

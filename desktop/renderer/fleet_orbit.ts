@@ -24,7 +24,7 @@ import { githubPickNote, mountRepoPicker, repoPickerHtml } from "./repo_picker.t
 import type { ApprovalScope, FleetStatusView, LaneView, LucidBridge, TimelineEntry } from "./bridge.ts";
 import { isLaneTarget, type ComposerTarget } from "./composer_target.ts";
 import { cycleSpoke, ghostKey, ghostSpokes, hubLanes, ORBIT_FPS_FLOOR, ORBIT_NODE_H, ORBIT_NODE_W, hubEntries, orbitMode, orbitSlots, readAllPages, spokeClose, spokeGlance, switchEntries, type GhostLists, type GhostMark, type GhostSpoke, type HubEntry, type OrbitMode, type SpokeClose, type SwitchEntry } from "./orbit_layout.ts";
-import { spokeRepo, type SpokeRepo } from "./spoke_repo.ts"; // P-HUB-PICK.1 (ADR-0470): one codebase name + color per spoke
+import { spokeRepo, type SpokeRepo } from "./spoke_repo.ts"; // P-HUB-PICK.1 (ADR-0553): one codebase name + color per spoke
 import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new spokes open on the last spoke's model; colliding names show the route
 import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
@@ -318,7 +318,7 @@ function togglePanel(which: OrbitPanel): void {
 // The orbit is ONE session's hub and spoke. A spoke born under another session keeps running under that
 // hub; this panel lists every such hub with its spokes, and "Open" makes that session Main through the
 // guarded switch, so its orbit shows them. The model (hubLanes / hubEntries) is pure and tested.
-// P-HUB-PICK.1 (ADR-0470): the header button names the hub on screen and is the hub picker; the panel lists
+// P-HUB-PICK.1 (ADR-0553): the header button names the hub on screen and is the hub picker; the panel lists
 // every hub, this one first, each with the codebases its spokes work on.
 
 /** Every hub from the last poll, the current one first (P-HUB-PICK.1). Repainted per poll only while the
@@ -331,7 +331,7 @@ function hubTitle(sessionId: string): string {
   return deps?.sessionTitle(sessionId) || `Session \u2026${sessionId.slice(-6)}`;
 }
 
-/** P-HUB-PICK.1 (ADR-0470): a codebase tag, colored by its stable hue (spoke_repo.ts). One text child. */
+/** P-HUB-PICK.1 (ADR-0553): a codebase tag, colored by its stable hue (spoke_repo.ts). One text child. */
 const repoTag = (r: SpokeRepo): string => `<span class="spoke-repo-tag" style="--repo-hue:${r.hue}" data-tip="Codebase|${esc(r.key)}">${esc(r.name)}</span>`;
 
 function paintHubsBadge(): void {
@@ -1093,7 +1093,7 @@ function paintNode(card: HTMLElement, lane: LaneView): void {
   card.title = `${lane.name}\n${lane.cwd}\n${lane.model}`;
   setText(card, ".orbit-glance", spokeGlance(lane, statusEta())); // P-PROGRESS.3: the percent is opt-in
   setText(card, ".orbit-model", lane.model);
-  // P-HUB-PICK.1 (ADR-0470): every spoke names its codebase (hosted repo, git folder, or plain folder) in
+  // P-HUB-PICK.1 (ADR-0553): every spoke names its codebase (hosted repo, git folder, or plain folder) in
   // that codebase's color, so spokes on different repos never read alike.
   const sr = spokeRepo(lane);
   setText(card, ".orbit-repo-tag", sr.name);
@@ -1434,7 +1434,7 @@ async function openSwitchMenu(): Promise<void> {
   const mine = s ? hubLanes(s.lanes, s.hub) : [];
   if (current && s && !mine.some((l) => l.id === current)) { const cur = s.lanes.find((l) => l.id === current); if (cur) mine.push(cur); }
   const rows = switchEntries(mine, current);
-  // P-HUB-PICK.1 (ADR-0470): each spoke row names its codebase, and the other hubs are one click away.
+  // P-HUB-PICK.1 (ADR-0553): each spoke row names its codebase, and the other hubs are one click away.
   const repoById = new Map(mine.map((l) => [l.id, spokeRepo(l)]));
   const others = s ? hubEntries(s.lanes, s.hub).filter((h) => !h.current) : [];
   const hubRows = others.length

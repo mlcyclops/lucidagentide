@@ -25381,7 +25381,7 @@ Two traps found by measurement before writing anything:
 
 **Consequences.** The hub TUI reads `/api/sessions` and now also gets spoke sessions hidden by default. Memory grows by the said-text of every session the index has parsed; the Timeline's all-workspace scan fills it for every workspace, about 1% of transcript bytes. Matching is substring AND across a whole conversation, so a long session matches loose multi-word queries; ranking beyond name-first is recency only.
 
-## ADR-0470 -- P-HUB-PICK.1: a hub picker on the orbit, a codebase name and color on every spoke, and "spoke" in every agent note (2026-11-02)
+## ADR-0553 -- P-HUB-PICK.1: a hub picker on the orbit, a codebase name and color on every spoke, and "spoke" in every agent note (2026-11-02)
 
 **Status:** Accepted -- BUILT. `make demo-P-HUB-PICK.1`; `bun test desktop/renderer/spoke_repo.test.ts desktop/renderer/orbit_layout.test.ts`. Browser smoke against a real engine with `/api/fleet/status` mocked to five spokes under two hubs over three codebases. Extends ADR-0410 (one hub per session) and ADR-0406 (repo chip); no engine or API change.
 

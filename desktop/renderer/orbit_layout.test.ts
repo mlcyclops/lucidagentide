@@ -141,7 +141,7 @@ describe("hubLanes / hubEntries", () => {
     expect(hubLanes(lanes, "s2").map((l) => l.id)).toEqual(["c", "d"]);
     expect(hubLanes(lanes, null).map((l) => l.id)).toEqual(["d"]);
   });
-  // P-HUB-PICK.1 (ADR-0470): the Hubs menu lists every hub, the one on screen first.
+  // P-HUB-PICK.1 (ADR-0553): the Hubs menu lists every hub, the one on screen first.
   test("the current hub comes first, even empty; the other hubs follow by newest activity, counting who waits", () => {
     const hubs = hubEntries(lanes, "s3");
     expect(hubs.map((h) => [h.sessionId, h.current])).toEqual([["s3", true], ["s1", false], ["s2", false]]);
