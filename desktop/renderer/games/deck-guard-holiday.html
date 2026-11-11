@@ -3639,7 +3639,7 @@ kbd{display:inline-block;min-width:22px;padding:2px 6px;margin:0 2px;border-radi
     invulnerable: (on) => { G.godTest = !!on; },
     clearWave: () => { killBoss(); for (const s of segs.slice()) killSeg(s, false); divers = []; ebullets = []; for (const b of sleighs) hurtSleigh(b, 999); G.sleighsLeft = 0; },
     spawnSleigh: () => spawnSleigh(sleighs.length),
-    // spawnBoss() keeps the old behaviour (the current wave's boss, or Krampus Prime off a boss wave); spawnBoss('king' | 'krampus' | 'queen') picks one
+    // spawnBoss() keeps the old behavior (the current wave's boss, or Krampus Prime off a boss wave); spawnBoss('king' | 'krampus' | 'queen') picks one
     spawnBoss: (type) => { if (!boss) { G.bossSpawned = true; spawnBoss(type); } },
     boss: () => (boss ? { type: boss.type, phase: boss.phase, bells: podsAlive(), core: boss.core, dying: boss.dying > 0, whip: !!boss.whip, beam: !!boss.beam, volley: !!boss.volley } : null),
     launchMissile: () => launchMissile(),
