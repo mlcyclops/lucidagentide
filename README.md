@@ -78,17 +78,17 @@ personalization internals are proprietary and intentionally undocumented here - 
 <tr>
 <td align="center">
 
-# 🚀 LUCID v2.5.2 is here
+# 🚀 LUCID v2.5.3 is here
 
-<p align="center"><b>🔐 provider keys in your OS vault</b> · <b>🧮 FIPS 140 crypto at rest</b> · <b>📋 NIST SP 800-171 evidence</b> · <b>🪐 an Orbit view for the Knowledge graph</b> · <b>🧩 a Plugins drawer with premium plugins</b> · <b>🎯 one fleet goal with a heartbeat and verified tasks</b> · <b>🕹 <code>lucid hub</code> as a control plane any agent can drive</b> · <b>✍️ Windows installers signed by TECHLEAD 187 LLC</b> · <b>🎮 a paired controller with its own token scope</b> · <b>🔑 OpenAI sign-in by device code</b> · <b>🛡️ Microsoft's container behind the Windows sandbox</b> · <b>🗓 scheduled jobs</b> · <b>🛟 settings that survive a crash</b> · <b>🌐 LAN model servers through the sandbox</b></p>
+<p align="center"><b>🎄 special themes for U.S. holidays</b> · <b>🧠 omp 18.18.6 with Claude Fable 5.2 and Mythos 5.2</b> · <b>⚡ a faster Windows boot</b> · <b>🔀 Push now in a parallel lane</b> · <b>🖥 the Private AI Platform</b> · <b>🔐 provider keys in your OS vault</b> · <b>🧮 FIPS 140 crypto at rest</b> · <b>📋 NIST SP 800-171 evidence</b> · <b>🪐 an Orbit view for the Knowledge graph</b> · <b>🧩 a Plugins drawer with premium plugins</b> · <b>🎯 one fleet goal with a heartbeat and verified tasks</b> · <b>🕹 <code>lucid hub</code> as a control plane any agent can drive</b> · <b>✍️ Windows installers signed by TECHLEAD 187 LLC</b> · <b>🎮 a paired controller with its own token scope</b> · <b>🔑 OpenAI sign-in by device code</b> · <b>🛡️ Microsoft's container behind the Windows sandbox</b> · <b>🗓 scheduled jobs</b> · <b>🛟 settings that survive a crash</b> · <b>🌐 LAN model servers through the sandbox</b></p>
 
-<a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.2"><img src="https://img.shields.io/badge/Download-v2.5.2-c64bd6?style=for-the-badge&logo=github&logoColor=white" alt="Download LUCID v2.5.2" /></a>
+<a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.3"><img src="https://img.shields.io/badge/Download-v2.5.3-c64bd6?style=for-the-badge&logo=github&logoColor=white" alt="Download LUCID v2.5.3" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/issues/new?template=bug_report.yml"><img src="https://img.shields.io/badge/Found%20a%20bug%3F-Open%20an%20issue-d73a49?style=for-the-badge&logo=github&logoColor=white" alt="Found a bug? Open an issue" /></a>
 <a href="#how-to-pull-your-logs"><img src="https://img.shields.io/badge/How%20to-pull%20your%20logs-555555?style=for-the-badge" alt="How to pull your logs" /></a>
 
-<p align="center"><sub>v2.5.2 is a bug-fix release on top of 2.5.1: a fresh install defaults to a cloud model and never to an embedding model, local models are strictly your choice, a question the agent asks no longer ends its turn with no reply, the needs-approval pulse stops costing main-thread frames, and the Fleet Orbit's ring is drawn through its spokes. Everything 2.5.1 brought stays: provider keys in an engine-side OS vault, FIPS 140 crypto at rest and the NIST SP 800-171 Rev 3 evidence package. Installers stay signed by TECHLEAD 187 LLC. It is the current stable release, backed by <b>7,300+ tests</b>, and the download buttons above, Homebrew and the in-app updater all point at it. <a href="#-whats-new-in-v252"><b>What's new in 2.5.2</b></a> · <a href="#-whats-new-in-v251"><b>What's new in 2.5.1</b></a> · <a href="#-install-or-update-lucid-v252"><b>How to update, and how to report a bug with screenshots and logs</b></a>.</sub></p>
+<p align="center"><sub>v2.5.3 promotes the four 2.5.3 betas to stable: special themes for U.S. holidays and event months, omp 18.18.6 with Claude Fable 5.2 and Mythos 5.2, a Windows boot that no longer stalls the workspace bar, fleet lanes that fit the dock, Push now running a staged prompt in a parallel lane, the DGX Loader renamed the Private AI Platform, three holiday games in the arcade, and a promoted fleet lane that keeps its whole answer. Everything 2.5.2 brought stays. Installers stay signed by TECHLEAD 187 LLC. It is the current stable release, backed by <b>7,300+ tests</b>, and the download buttons above, Homebrew and the in-app updater all point at it. <a href="#-whats-new-in-v253"><b>What's new in 2.5.3</b></a> · <a href="#-whats-new-in-v252"><b>What's new in 2.5.2</b></a> · <a href="#-install-or-update-lucid-v253"><b>How to update, and how to report a bug with screenshots and logs</b></a>.</sub></p>
 
-<p align="center"><sub><b>No beta channel is open right now.</b> Installing 2.5.2 over 2.5.1, 2.5.1-beta.1 or 2.5.0 keeps your settings, sessions and keys.</sub></p>
+<p align="center"><sub><b>No beta channel is open right now.</b> Installing 2.5.3 over 2.5.2, 2.5.1 or a 2.5.3 beta keeps your settings, sessions and keys.</sub></p>
 
 </td>
 </tr>
@@ -98,18 +98,19 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
-## 🚀 Install or update LUCID v2.5.2
+## 🚀 Install or update LUCID v2.5.3
 
-> **v2.5.2 is the current stable release** and the repository's Latest: 2.5.1 plus bug fixes, with **7,300+ tests** behind it. What it fixes is in [What's new in v2.5.2](#-whats-new-in-v252).
+> **v2.5.3 is the current stable release** and the repository's Latest: the 2.5.3 betas promoted, with **7,300+ tests** behind it. What it brings is in [What's new in v2.5.3](#-whats-new-in-v253).
 
 ### Install or update
 
-1. **Already on LUCID?** On Windows the in-app updater offers 2.5.2; its installer carries the TECHLEAD 187 LLC signature (the updater checks it before installing). On macOS run `brew update && brew upgrade --cask lucidagentide` (Homebrew is the macOS update channel, see [Homebrew](#homebrew-macos); the cask is an app cask that also puts `lucid` and `lucid-hub` on PATH). On Linux, download the new AppImage, `.deb` or `.rpm` and install it over the old one. Installing 2.5.2 over 2.5.1, 2.5.0, 2.5.1-beta.1, 2.4.1 or a 2.5.0 beta keeps your settings, sessions and keys; coming from 2.5.0 or older, on the first start your saved keys move into the OS vault (Windows DPAPI, macOS Keychain, Linux Secret Service) without asking you to re-enter them.
-2. **New install:** use the download buttons at the top of this page, or open the **[v2.5.2 release](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.2)** and pick the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
+1. **Already on LUCID?** On Windows the in-app updater offers 2.5.3; its installer carries the TECHLEAD 187 LLC signature (the updater checks it before installing). On macOS run `brew update && brew upgrade --cask lucidagentide` (Homebrew is the macOS update channel, see [Homebrew](#homebrew-macos); the cask is an app cask that also puts `lucid` and `lucid-hub` on PATH). On Linux, download the new AppImage, `.deb` or `.rpm` and install it over the old one. Installing 2.5.3 over a 2.5.3 beta, 2.5.2, 2.5.1, 2.5.0 or 2.4.1 keeps your settings, sessions and keys; coming from 2.5.0 or older, on the first start your saved keys move into the OS vault (Windows DPAPI, macOS Keychain, Linux Secret Service) without asking you to re-enter them.
+2. **New install:** use the download buttons at the top of this page, or open the **[v2.5.3 release](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.3)** and pick the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
 
 ### Upgrade notes and known issues
 
 - **Windows: turn the sandbox on.** If you have never switched it on, do it from **Security > Runtime sandbox**; it asks for administrator approval once if Windows needs it. If the panel stays on **disclosed** instead of **isolated**, the contained runtime failed its boot check and LUCID fell back safely. That is exactly the report we want: a screenshot of the Runtime sandbox section plus the support zip below.
+- **The DGX Loader is now called the Private AI Platform.** Only the name you see changed; your provider settings, the mailbox and the enclave attestation carry over untouched.
 - **A local model you picked before 2.5.2 may need picking once more.** LUCID now restores a local model only from an explicit picker choice; if you had chosen one before this release, choose it again and it sticks.
 - **Going back to 2.5.0 shows saved keys as unset.** 2.5.0 cannot read the OS vault that 2.5.1 moves your keys into, so after a downgrade you enter them again.
 - **Judgments start off.** Settings > Judgment defaults to **None**. Opt in to Jev (paste a TypeSafe key) or to your own models there.
@@ -243,11 +244,28 @@ The Main GUI ledger records only live, successfully completed write and edit cal
 
 ---
 
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.5.3
+
+> **🎄 Four betas promoted to stable.** v2.5.3 is 2.5.3-beta.4 released unchanged: 2.5.2 plus everything the four 2.5.3 betas brought (#580, #586, #588, #597, #600). The Windows installers stay signed by **TECHLEAD 187 LLC**.
+>
+> **➡️ Install it:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.5.3](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.3). It is the repository's Latest release: the download buttons, the in-app updater and Homebrew follow it. Installing it over a 2.5.3 beta, 2.5.2 or 2.5.1 keeps your settings, sessions and sign-ins.
+
+- **🎄 Special themes for U.S. holidays and event months** - 21 seasons over 16 new palettes, an opt-in calendar switch and a swatch dropdown in Settings > Theme, animated backdrops on the LUCID Agent stage or behind every chat, and seasonal mascot costumes in the prompt-bar runner and the splash. *(P-SEASON.1, [ADR-0525](DECISIONS.md), #580)*
+- **🧠 omp 18.18.6 with Claude Fable 5.2 and Mythos 5.2** - the bundled agent engine moves to omp 18.18.6 on a bundled Bun 1.4.4. *(P-MODEL.10, [ADR-0526](DECISIONS.md), #586)*
+- **⚡ A faster Windows boot** - heavy startup requests no longer hold up the workspace bar or the connection check. *(P-BOOTPERF.1, [ADR-0527](DECISIONS.md), #586)*
+- **🧱 Fleet lanes fit the dock** - lanes autofit at equal sizes and can still be resized by hand. *(P-FLEET.FIT1, [ADR-0528](DECISIONS.md), #586)*
+- **🔀 Push now runs in a parallel lane** - a staged prompt's copy menu can push it straight into its own worktree lane while the current turn keeps running. *(P-PUSH.PAR1, [ADR-0529](DECISIONS.md), #586)*
+- **🖥 The DGX Loader is now the Private AI Platform** - the new name in every UI string, toast, error, skill and guide; provider ids, the mailbox contract and the enclave attestation tag are unchanged. *(P-PRIVAI.1, [ADR-0530](DECISIONS.md), #588)*
+- **🎮 A holiday arcade** - Deck Guard: Deck the Halls, Chimney Rush and Gobble Getaway join Preview > Games, each with a between-runs shop, missions and a seeded daily run. *(P-GAME.11, 11b, 12, #600)*
+- **📝 A promoted lane keeps its whole answer** - switching a fleet lane to the main space carries the full reply instead of cutting it at 8K with "[truncated]". *(#597)*
+
+---
+
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.5.2
 
 > **🔧 A bug-fix release.** v2.5.2 is 2.5.1 plus the fixes merged since (#570, #572, #574, #576). No new product surface; the Windows installers stay signed by **TECHLEAD 187 LLC**.
 >
-> **➡️ Install it:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.5.2](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.2). It is the repository's Latest release: the download buttons, the in-app updater and Homebrew follow it. Installing it over 2.5.1, 2.5.0 or 2.5.1-beta.1 keeps your settings, sessions and sign-ins.
+> **➡️ Install it:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.5.2](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.2). Superseded by v2.5.3, which the download buttons, the in-app updater and Homebrew now follow. Installing it over 2.5.1, 2.5.0 or 2.5.1-beta.1 keeps your settings, sessions and sign-ins.
 
 - **☁️ A fresh install opens on a cloud model** - the automatic default only ever picks a cloud model; with none signed in yet, the composer asks you to choose instead of running on a local model you never picked, and the best cloud model is selected as soon as a provider signs in. A local model is restored only when you chose it in the picker. *(P-MODEL.9, [ADR-0498](DECISIONS.md), #570)*
 - **🧲 Embedding models never chat** - an Ollama embedding or reranker model (for example `nomic-embed-text`) is never the default, a fallback, a remembered pick or the `/goal` checker. *(P-MODEL.9, [ADR-0498](DECISIONS.md), #570)*
@@ -440,7 +458,8 @@ The Main GUI ledger records only live, successfully completed write and edit cal
 
 ## Table of contents
 
-- [🚀 Install or update LUCID v2.5.2, report bugs, pull logs](#-install-or-update-lucid-v252)
+- [🚀 Install or update LUCID v2.5.3, report bugs, pull logs](#-install-or-update-lucid-v253)
+- [<img src=".github/assets/icons/release-animated.svg" width="16" alt=""> What's new in v2.5.3](#-whats-new-in-v253)
 - [<img src=".github/assets/icons/release-animated.svg" width="16" alt=""> What's new in v2.5.2](#-whats-new-in-v252)
 - [<img src=".github/assets/icons/release-animated.svg" width="16" alt=""> What's new in v2.5.1](#-whats-new-in-v251)
 - [<img src=".github/assets/icons/release-animated.svg" width="16" alt=""> What's new in v2.5.0](#-whats-new-in-v250)
@@ -985,7 +1004,9 @@ Obsidian-vault export), AI-authorship attribution, one-command import, a read-wr
 the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
 guards), a local **RAG knowledge spine** + the **compiled KB** with hybrid retrieval, the governed **skills
 directory** + **Skill Studio**, **local & hybrid providers**, the **Agent Builder**, the **agent firewall**,
-and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v2.5.2):** bug fixes only:
+and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v2.5.3):** special themes for U.S. holidays *(ADR-0525)*, omp 18.18.6 with Fable/Mythos 5.2 *(ADR-0526)*, a
+faster Windows boot *(ADR-0527)*, fleet autofit *(ADR-0528)*, Push now in a parallel lane *(ADR-0529)*, the Private AI
+Platform name *(ADR-0530)* and a holiday arcade. **v2.5.2:** bug fixes only:
 a cloud-only automatic model default with embedding models never used for chat *(ADR-0498)*, omp's `ask` tool off in
 ACP sessions *(ADR-0523)*, a compositor-only approval pulse *(ADR-0524)* and the Fleet Orbit ring. **v2.5.1:** provider
 keys, account keys and MCP tokens in an **engine-side OS vault** (DPAPI, Keychain, Secret Service) with
@@ -1024,6 +1045,7 @@ sidecar's 57, with `tsc --noEmit` clean on the shipping projects. The table belo
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **v2.5.3 batch** | **🎄 Four betas promoted to stable** - 2.5.3-beta.4 released unchanged (#580, #586, #588, #597, #600). **SEASON** (`P-SEASON.1`, ADR-0525): 21 seasons over 16 palettes, an opt-in calendar switch, animated backdrops and mascot costumes. **MODEL** (`P-MODEL.10`, ADR-0526): omp 18.18.6 on bundled Bun 1.4.4 with Claude Fable 5.2 and Mythos 5.2. **BOOT** (`P-BOOTPERF.1`, ADR-0527): the workspace bar and connection check no longer wait on heavy startup requests on Windows. **FLEET** (`P-FLEET.FIT1`, ADR-0528): lanes autofit the dock and still resize. **PUSH** (`P-PUSH.PAR1`, ADR-0529): Push now runs a staged prompt in a parallel worktree lane. **PRIVAI** (`P-PRIVAI.1`, ADR-0530): the DGX Loader is the Private AI Platform, identifiers kept. **GAME** (`P-GAME.11`, `11b`, `12`): three holiday arcade titles. **LANE** (#597): a promoted lane keeps its whole answer. | [ADR-0525..0530](DECISIONS.md) |
 | **v2.5.2 batch** | **🔧 Patch release: model defaults, questions, approval pulse, orbit ring** - bug fixes only (#570, #572, #574, #576). **MODEL** (`P-MODEL.9`, ADR-0498): the automatic default picks only cloud models, a local model is restored only from an explicit picker choice, embedding and reranker models are never a chat model or the `/goal` checker, and the "No response" card offers a provider refresh. **ASK** (`P-ASK.1`, ADR-0523): omp's `ask` tool is off in every ACP session, `lucid acp` included, so a declined question no longer ends the turn. **GLOW** (`P-GLOW.1`, ADR-0524): the needs-approval pulse animates opacity on the compositor. **ORBIT** (#575): the inner ring is drawn from the layout's own radii. Docs: the P-HERD design ADRs (ADR-0489..0497). | [ADR-0489..0498, 0523, 0524](DECISIONS.md) |
 | **v2.5.1 batch** | **🔐 The engine OS vault, promoted to stable** - 2.5.1-beta.1 plus its upgrade review fixes, released as the repository's Latest. **VAULT** (`P-VAULT-KEYS.1`, `P-VAULT-V2.1`, `P-VAULT-UI.1`, ADR-0472/0474/0475): provider keys, account keys, MCP tokens and the TURN credential sealed by DPAPI, Keychain or Secret Service on the first engine start, one v2 vault, a Settings list and a `.lucidvault` encrypted backup. **CRYPTO** (`P-FIPS.1`, ADR-0473): at-rest crypto through the OS FIPS 140 module with an honest claim. **SECRETS** (`P-SECRET-INTAKE.1`, `P-VAULT-ENV.1`, `P-VAULT-DEST.1`, ADR-0476..0478): a masked dialog, `.env` import, enterprise destinations. **EVIDENCE** (`P-COMPLY.1`, ADR-0479): NIST SP 800-171 Rev 3 matrix, POA&M, evidence report. **RECOVERY** (`P-RECOVER.4`, ADR-0481). **QUEUE** (`P-QUEUE-IMG.1`, ADR-0469). **KNOWLEDGE** (`P-KG-ORBIT.1`, `P-KG-FLAT.1`, ADR-0470/0471): the Orbit view, ranked search, a readable flat graph. | [ADR-0469..0481](DECISIONS.md) |
 | **v2.5.0 batch** | **🧩 Four betas promoted to stable** - beta.1 through beta.4 plus everything merged since beta.4, released as the repository's Latest. **PLUGINS** (`P-PLUGINS.1-6`, ADR-0461..0466): the Plugins drawer in the Preview panel (Premium and Free, Civilian and Government), signed `.lplugin` install with manifest, hash, signature and scanner gates, $29.99 Stripe checkout through the LUCID account, the Government access gate and the owner Marketplace Dashboard. **FLEET** (`P-AOS.1/.2`, ADR-0452/0453): one standing fleet goal with a mandatory spend + time budget, a 10 s heartbeat, and verified tasks. **HUB** (`P-TUI.3..6`, ADR-0433..0436): the `lucid hub` control plane, decks, tabs, rail, palette. **FIXES**: the headed browser shown again (ADR-0456), Creator jobs in the Creator ledger, Timeline and first-turn fixes. **CREATOR**: explainer and curriculum built-ins for the Creator build only (ADR-0460, ADR-0467). **RELEASE** (`P-RELEASE.9`, ADR-0468): the air-gap gate compares Authenticode image digests, so the two separately signed copies of one bun pass. **PWA**: the phone app hardened against hostile host values (#544). Gate 535 files / 7,256 tests, plus the sidecar's 57. | [ADR-0452..0468](DECISIONS.md) |
