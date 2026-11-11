@@ -13,9 +13,23 @@ an Electron desktop app (Windows NSIS + portable, macOS .pkg/.zip, Linux
 AppImage/deb/rpm), with the same gated agent available headless (`lucid`,
 `lucid tui`, `lucid acp`). See `README.md` and `BUILD PLAN omp.md`.
 
-## Current state (2026-11-07, v2.5.2 stable)
+## Current state (2026-11-10, v2.5.3 stable)
 
-**v2.5.2** (2026-11-07, branch `release/v2.5.2-cut`) is the stable release:
+**v2.5.3** (2026-11-10, branch `release/v2.5.3-cut`) is the stable release:
+2.5.3-beta.4 promoted unchanged, i.e. 2.5.2 plus the four 2.5.3 betas.
+P-SEASON.1 (ADR-0525, #580): special themes for U.S. holidays and event
+months. #586: P-MODEL.10 (ADR-0526, omp 18.18.6 on bundled Bun 1.4.4, Claude
+Fable/Mythos 5.2), P-BOOTPERF.1 (ADR-0527, Windows boot), P-FLEET.FIT1
+(ADR-0528, lane autofit), P-PUSH.PAR1 (ADR-0529, Push now in a parallel
+lane). P-PRIVAI.1 (ADR-0530, #588): the DGX Loader is the Private AI
+Platform, identifiers kept. #600: P-GAME.11, 11b, 12 (holiday arcade). #597:
+a promoted lane keeps its whole answer. Tagged `v2.5.3` and marked Latest;
+the add-on's Tahiti `core.lock` pins this tag. Held for 2.6.0: #599
+(fetch-runtimes stale Bun, #598; local builds only, CI fetches fresh), #596,
+#595, #594, #593, #592, #591, #590, #585, #583, #573, #571 and the older held
+PRs.
+
+**v2.5.2** (2026-11-07, branch `release/v2.5.2-cut`) was the previous stable release:
 2.5.1 plus bug fixes only. P-MODEL.9 (ADR-0498, #570): cloud-only automatic
 model default, local models restored only from an explicit pick, embedding
 models never chat or check, a provider refresh on the "No response" card.
