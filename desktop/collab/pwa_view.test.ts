@@ -40,6 +40,10 @@ describe("pwa_view: foldEvent reducer", () => {
     ]);
     expect(items[0]).toEqual({ kind: "preview", image: "data:image/png;base64,AAA", label: "Home screen", id: "shot-0" });
     expect(items[2]).toEqual({ kind: "preview", image: "data:image/png;base64,BBB", id: "shot-1" });
+    // the phone uses the image as an <img> src AND the Save link's href: anything but a raster data URL is dropped
+    for (const image of ["javascript:alert(1)", "https://evil.example/x.png", "data:text/html;base64,PHNjcmlwdD4=", "data:image/svg+xml;base64,PHN2Zz4="]) {
+      expect(fold([{ type: "preview-snapshot", image }])).toEqual([]);
+    }
     // the data URL is NEVER inlined into the HTML (hydrated as an <img> property); the label is escaped.
     const html = renderItem({ kind: "preview", image: "data:image/png;base64,SECRETPIXELS", label: "<b>x</b>", id: "shot-0" });
     expect(html).toContain('data-shot="shot-0"');
@@ -194,6 +198,19 @@ describe("pwa_view: fleet lane cards + process rows", () => {
     expect(html).not.toContain("<script>");
     expect(html).toContain("&lt;img");
     expect(html).toContain("&lt;script&gt;");
+  });
+
+  it("never renders host-sent 'numbers' that are really markup (turns, add/del, subagent count)", () => {
+    const hostile = `<img src=x onerror=alert(1)>`;
+    const lane = renderLaneCard({ id: "l1", name: "a", status: "working", cwd: "/w", turns: hostile as unknown as number, lastActivityAt: 0 });
+    expect(lane).not.toContain("<img");
+    expect(lane).toContain("0 turns");
+    const items = fold([
+      { type: "tool", name: "edit", detail: "a.ts", add: 1, del: hostile as unknown as number },
+      { type: "subagent", agent: "x", title: "t", assignments: { length: hostile } as unknown as [] },
+    ]);
+    const html = renderTranscript(items);
+    expect(html).not.toContain("<img");
   });
 
   it("renders approval buttons ONLY with a pendingApproval", () => {

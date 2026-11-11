@@ -57,6 +57,9 @@ export interface SquatterInfo {
   name: string | null;
   startedAt: string | null;
   command: string | null;
+  /** P-PORTGUARD.4 (ADR-0458): the listener's parent pid. A LUCID engine whose parent (the app that
+   *  spawned it) is still running belongs to another LIVE instance and must never be offered for reaping. */
+  parentPid?: number | null;
 }
 
 export interface PortIncidentInput {
@@ -134,7 +137,7 @@ export function ownerProbeSpec(platform: string, port: number): { cmd: string; a
       `$c = Get-NetTCPConnection -State Listen -LocalPort ${port} -ErrorAction SilentlyContinue | Select-Object -First 1; ` +
       `if ($c) { $p = Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue; ` +
       `$w = Get-CimInstance Win32_Process -Filter "ProcessId=$($c.OwningProcess)" -ErrorAction SilentlyContinue; ` +
-      `if ($p) { [pscustomobject]@{ Id = $p.Id; ProcessName = $p.ProcessName; StartTime = $p.StartTime; Path = $p.Path; CommandLine = $w.CommandLine } | ConvertTo-Json } }`;
+      `if ($p) { [pscustomobject]@{ Id = $p.Id; ProcessName = $p.ProcessName; StartTime = $p.StartTime; Path = $p.Path; CommandLine = $w.CommandLine; ParentProcessId = $w.ParentProcessId } | ConvertTo-Json } }`;
     return { cmd: "powershell.exe", args: ["-NoProfile", "-Command", script] };
   }
   if (platform === "darwin" || platform === "linux") {
@@ -144,7 +147,7 @@ export function ownerProbeSpec(platform: string, port: number): { cmd: string; a
     // and BSD; an empty probe must produce empty stdout, not a ps usage error.
     const script =
       `pid="$(lsof -tnP -iTCP:${port} -sTCP:LISTEN 2>/dev/null | head -n 1)" && ` +
-      `[ -n "$pid" ] && ps -p "$pid" -o pid=,lstart=,command=`;
+      `[ -n "$pid" ] && ps -p "$pid" -o pid=,ppid=,lstart=,command=`;
     return { cmd: "sh", args: ["-c", script] };
   }
   return null;
@@ -197,12 +200,13 @@ function parseWindowsProbe(text: string): SquatterInfo | null {
     ? record.CommandLine
     : null;
   const imagePath = "Path" in record && typeof record.Path === "string" && record.Path.length > 0 ? record.Path : null;
-  return { pid, name, startedAt, command: cmdLine ?? imagePath };
+  const parentPid = "ParentProcessId" in record && typeof record.ParentProcessId === "number" ? record.ParentProcessId : null;
+  return { pid, name, startedAt, command: cmdLine ?? imagePath, parentPid };
 }
 
-/** One `ps -o pid=,lstart=,command=` line: pid, then EXACTLY five lstart tokens (weekday, month,
- *  day, time, year - the day may be space-padded), then the command, which may contain spaces. */
-const POSIX_PS_LINE = /^\s*(\d+)\s+((?:\S+\s+){4}\S+)\s+(\S.*)$/;
+/** One `ps -o pid=,ppid=,lstart=,command=` line: pid, ppid, then EXACTLY five lstart tokens (weekday,
+ *  month, day, time, year - the day may be space-padded), then the command, which may contain spaces. */
+const POSIX_PS_LINE = /^\s*(\d+)\s+(\d+)\s+((?:\S+\s+){4}\S+)\s+(\S.*)$/;
 
 function parsePosixProbe(text: string): SquatterInfo | null {
   // head -n 1 in the probe already limits to one pid, but be defensive about multi-line stdout.
@@ -211,12 +215,13 @@ function parsePosixProbe(text: string): SquatterInfo | null {
   if (!m) return null;
   const pid = Number(m[1]);
   if (!Number.isInteger(pid)) return null;
+  const parentPid = Number(m[2]);
   // Collapse ps's column padding (e.g. "Aug  7") so the incident block reads cleanly.
-  const startedAt = m[2]!.replace(/\s+/g, " "); // groups 2/3 always exist when POSIX_PS_LINE matches
-  const command = m[3]!.trim();
+  const startedAt = m[3]!.replace(/\s+/g, " "); // groups 2-4 always exist when POSIX_PS_LINE matches
+  const command = m[4]!.trim();
   // ps gives no separate name column; the basename of the command's first word is the closest
   // equivalent to Windows' ProcessName ("bun" from "/usr/local/bin/bun server.ts").
   const first = command.split(/\s+/)[0] ?? "";
   const name = first ? (first.split(/[\\/]/).pop() ?? first) : null;
-  return { pid, name, startedAt, command };
+  return { pid, name, startedAt, command, parentPid: Number.isInteger(parentPid) ? parentPid : null };
 }

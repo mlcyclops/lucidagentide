@@ -79,28 +79,28 @@ test("renamedPath: handles plain, brace, and non-rename forms", () => {
 
 // ── codeActivity() shape + fail-closed ────────────────────────────────────────
 
-test("codeActivity: always returns the pinned shape (month, daysInMonth, totals)", () => {
-  const ca = codeActivity({ workspaces: [], now: new Date(2026, 5, 15) }); // June 2026
+test("codeActivity: always returns the pinned shape (month, daysInMonth, totals)", async () => {
+  const ca = await codeActivity({ workspaces: [], now: new Date(2026, 5, 15) }); // June 2026
   expect(ca.month).toBe("June 2026");
   expect(ca.daysInMonth).toBe(30);
   expect(ca.workspaces).toEqual([]);
   expect(ca.totals).toEqual({ added: 0, deleted: 0, files: 0 });
 });
 
-test("codeActivity: a non-git dir is omitted (fail-closed, never faked)", () => {
+test("codeActivity: a non-git dir is omitted (fail-closed, never faked)", async () => {
   const dir = mkdtempSync(join(homedir(), ".lucid-nogit-test-"));
   cleanup.push(dir);
-  const ca = codeActivity({ workspaces: [dir] });
+  const ca = await codeActivity({ workspaces: [dir] });
   expect(ca.workspaces).toEqual([]);
 });
 
-test("codeActivity: a path outside the home subtree is omitted (pathWithin)", () => {
+test("codeActivity: a path outside the home subtree is omitted (pathWithin)", async () => {
   const outside = join(parse(homedir()).root, "definitely-not-under-home-xyz");
-  const ca = codeActivity({ workspaces: [outside] });
+  const ca = await codeActivity({ workspaces: [outside] });
   expect(ca.workspaces).toEqual([]);
 });
 
-test.skipIf(!gitAvailable)("codeActivity: real repo → workspace listed with diffstat for this month", () => {
+test.skipIf(!gitAvailable)("codeActivity: real repo → workspace listed with diffstat for this month", async () => {
   const repo = tmpRepoUnderHome();
   writeFileSync(join(repo, "a.ts"), "one\ntwo\nthree\n", "utf8");
   mkdirSync(join(repo, "node_modules"), { recursive: true });
@@ -108,7 +108,7 @@ test.skipIf(!gitAvailable)("codeActivity: real repo → workspace listed with di
   git(repo, "add", "-A");
   git(repo, "commit", "-q", "-m", "seed");
 
-  const ca = codeActivity({ workspaces: [repo] });
+  const ca = await codeActivity({ workspaces: [repo] });
   expect(ca.workspaces.length).toBe(1);
   const ws = ca.workspaces[0]!;
   expect(ws.added).toBe(3);              // a.ts only — node_modules churn excluded
@@ -119,7 +119,7 @@ test.skipIf(!gitAvailable)("codeActivity: real repo → workspace listed with di
   expect(ca.totals).toEqual({ added: 3, deleted: 0, files: 1 });
 });
 
-test.skipIf(!gitAvailable)("codeActivity: commits before this month are excluded by the window", () => {
+test.skipIf(!gitAvailable)("codeActivity: commits before this month are excluded by the window", async () => {
   const repo = tmpRepoUnderHome();
   writeFileSync(join(repo, "old.ts"), "x\n", "utf8");
   git(repo, "add", "-A");
@@ -128,7 +128,7 @@ test.skipIf(!gitAvailable)("codeActivity: commits before this month are excluded
   git(repo, "-c", `user.name=Test`, "commit", "-q", "-m", "old", "--date", past);
   Bun.spawnSync(["git", "commit", "--amend", "--no-edit", "--date", past], { cwd: repo, env: { ...process.env, GIT_COMMITTER_DATE: past } });
 
-  const ca = codeActivity({ workspaces: [repo] });
+  const ca = await codeActivity({ workspaces: [repo] });
   expect(ca.workspaces).toEqual([]); // nothing landed THIS month
 });
 

@@ -103,8 +103,8 @@ try {
   const winInfo = parseOwnerProbe("win32", win32Sample);
   assert(winInfo !== null && winInfo.pid === 40409 && winInfo.name === "bun", "win32 JSON parses to the squatter's pid + name");
   assert(winInfo !== null && winInfo.startedAt !== null && winInfo.command !== null && winInfo.command.includes("bun"), "win32 JSON keeps the start time + command");
-  // Canned posix sample: what `lsof ... | ps -o pid=,lstart=,command=` emits.
-  const posixSample = "40409 Wed Aug 27 09:14:02 2026 bun server.ts\n";
+  // Canned posix sample: what `lsof ... | ps -o pid=,ppid=,lstart=,command=` emits (ppid since ADR-0458).
+  const posixSample = "40409 1 Wed Aug 27 09:14:02 2026 bun server.ts\n";
   const posixInfo = parseOwnerProbe("darwin", posixSample);
   assert(posixInfo !== null && posixInfo.pid === 40409, "posix ps line parses to the squatter's pid");
   assert(posixInfo !== null && posixInfo.startedAt !== null && posixInfo.command !== null && posixInfo.command.includes("server.ts"), "posix ps line keeps the lstart time + command");

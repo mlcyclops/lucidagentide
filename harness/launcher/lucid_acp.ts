@@ -170,6 +170,9 @@ export function buildAcpArgs(o: BuildArgsOpts): string[] {
   const args = ["acp", "-e", o.gate];
   if (o.mcpResultGate) args.push("-e", o.mcpResultGate);
   if (o.asksage) args.push("-e", o.asksage);
+  // The same `--config` overlay the desktop gives every omp child (acp_backend ompConfigArgs): approval
+  // prompts for egress/exec tools, the replace edit mode, and omp's `ask` tool off (P-ASK.1, ADR-0523).
+  if (o.acpConfig) args.push("--config", o.acpConfig);
   if (o.isolate && o.acpConfig) args.push("--isolate", o.acpConfig);
   args.push("--append-system-prompt", APPENDED_POLICY);
   return args;
@@ -334,7 +337,14 @@ export async function runAcp(o: RunAcpOpts = {}): Promise<number> {
 
   const omp = resolveOmp(env, a.repo);
   const asksage = existsSync(a.asksage) ? a.asksage : undefined;
-  const args = buildAcpArgs({ gate: a.gate, asksage, acpConfig: a.acpConfig, isolate: o.isolate, mcpResultGate: existsSync(a.mcpResultGate) ? a.mcpResultGate : undefined });
+  // A missing --config file is a hard error in omp, so the overlay is present-only (as on the desktop).
+  // --isolate needs it, so an isolation request without it refuses rather than running un-isolated.
+  const acpConfig = existsSync(a.acpConfig) ? a.acpConfig : undefined;
+  if (o.isolate && !acpConfig) {
+    err(`[lucid acp] FAIL-CLOSED: --isolate needs ${a.acpConfig}, which is missing\n`);
+    return 1;
+  }
+  const args = buildAcpArgs({ gate: a.gate, asksage, acpConfig, isolate: o.isolate, mcpResultGate: existsSync(a.mcpResultGate) ? a.mcpResultGate : undefined });
   const cwd = o.cwd ?? env.LUCID_WORKSPACE ?? process.cwd();
   const spawnFn = o.spawnFn ?? ((c, ar, op) => nodeSpawn(c, ar, op as never) as unknown as SpawnedLike);
 
