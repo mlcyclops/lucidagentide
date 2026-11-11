@@ -189,10 +189,18 @@ const HANDSHAKE_MS = 30_000;
  *  seconds is generous for a healthy disk and short enough that a OneDrive hydration stall reads as
  *  the refusal it is instead of a frozen button. */
 const STAT_DIR_MS = 10_000;
-/** The transcript kept for recovery replay, per lane: enough memory to resume mid-task, bounded so a
- *  chatty lane cannot grow without limit. Oldest turns fall off first; the byte cap trims per turn. */
+/** The transcript kept per lane: what promote() seeds the main composer with, what a remote guest's
+ *  lane-sync replays, and what the recovery preamble is built from. Oldest turns fall off first. */
 export const TRANSCRIPT_MAX_TURNS = 40;
-const TRANSCRIPT_MAX_TURN_CHARS = 8_000;
+/** Per-turn memory ceiling for the KEPT text. Generous on purpose: switching a lane to the main space must
+ *  show the whole answer, and an 8K clamp here cut long answers mid-sentence with "[truncated]". This only
+ *  stops a pathological turn from pinning unbounded memory. Remote replays are bounded by boundTranscript. */
+const TRANSCRIPT_MAX_TURN_CHARS = 200_000;
+/** Per-turn clamp applied only when building the recovery preamble, so a respawned lane's first prompt
+ *  stays a bounded memory aid rather than a replay of every long answer. */
+const RESUME_MAX_TURN_CHARS = 8_000;
+/** P-REMOTE.16: the in-flight thinking kept for replay memory. */
+const THINKING_MAX_CHARS = 8_000;
 /** P-REMOTE.16: tool records kept per recorded turn (the compact `[ran: ...]` titles keep their own 40 cap). */
 const TRANSCRIPT_MAX_TOOLS = 64;
 /** P-FLEET.L3: staged prompts per lane. Mirrors P-FLEET.1's job-queue cap - past it, refuse loudly. */
@@ -719,11 +727,29 @@ export class FleetLaneManager {
     return { ok: true, queued: lane.queue.length };
   }
 
-  queueRemove(laneId: string, index: number): { ok: boolean } {
+  /** P-PUSH.PAR1 (ADR-pending): `expect` is the item's full text as the caller last read it. A push to a
+   *  parallel lane takes seconds (worktree + spawn), and a drain in that window shifts every index, so a
+   *  bare index could delete a DIFFERENT staged prompt. With `expect`, the item at `index` must carry that
+   *  text, else the first item that does is removed; none matching is a refusal (fail-closed). */
+  queueRemove(laneId: string, index: number, expect?: string): { ok: boolean } {
     const lane = this.#lanes.get(laneId);
-    if (!lane || index < 0 || index >= lane.queue.length) return { ok: false };
-    lane.queue.splice(index, 1);
+    if (!lane) return { ok: false };
+    let at = index;
+    if (expect !== undefined && lane.queue[at]?.text !== expect) at = lane.queue.findIndex((q) => q.text === expect);
+    if (!Number.isInteger(at) || at < 0 || at >= lane.queue.length) return { ok: false };
+    lane.queue.splice(at, 1);
     return { ok: true };
+  }
+
+  /** P-PUSH.PAR1 (ADR-pending): read a staged item's FULL text and its own images WITHOUT removing it. Copy
+   *  and Push now on a lane chip need the whole prompt (the status view clips it at 140 chars), and Push now
+   *  keeps the item staged until the parallel lane accepted it. Out-of-range is a refusal. */
+  queuePeek(laneId: string, index: number): { ok: boolean; item?: { text: string; images: LaneImage[] }; reason?: string } {
+    const lane = this.#lanes.get(laneId);
+    if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
+    if (!Number.isInteger(index) || index < 0 || index >= lane.queue.length) return { ok: false, reason: "that staged prompt already ran or was removed" };
+    const item = lane.queue[index]!;
+    return { ok: true, item: { text: item.text, images: item.images.slice() } };
   }
 
   /** P-QUEUE-IMG.1 (ADR-0469): Update on a staged chip. Removes the item and hands back its FULL text and
@@ -1267,7 +1293,10 @@ export class FleetLaneManager {
    *  TRANSCRIPT (data to remember, not instructions to re-execute). Tool effects on disk are real - the
    *  work is not redone, it is remembered. */
   #resumePreamble(lane: Lane): string {
-    const lines = lane.transcript.map((t) => `${t.role === "user" ? "USER" : "LANE"}: ${t.text}`).join("\n\n");
+    const lines = lane.transcript.map((t) => {
+      const text = t.text.length > RESUME_MAX_TURN_CHARS ? `${t.text.slice(0, RESUME_MAX_TURN_CHARS)}\u2026[truncated]` : t.text;
+      return `${t.role === "user" ? "USER" : "LANE"}: ${text}`;
+    }).join("\n\n");
     return (
       `[SESSION RECOVERY] You are the same worker lane, resumed after your previous process died. ` +
       `The transcript of your session so far follows between the markers. Treat it as MEMORY: do not ` +
@@ -1276,12 +1305,12 @@ export class FleetLaneManager {
     );
   }
 
-  /** Append a turn to the bounded recovery transcript (per-turn char clamp, oldest turns fall off). */
+  /** Append a turn to the bounded lane transcript (per-turn memory ceiling, oldest turns fall off). */
   #record(lane: Lane, turn: LaneTurnRecord): void {
     const text = turn.text.length > TRANSCRIPT_MAX_TURN_CHARS ? `${turn.text.slice(0, TRANSCRIPT_MAX_TURN_CHARS)}\u2026[truncated]` : turn.text;
     const rec: LaneTurnRecord = { role: turn.role, text };
     // P-REMOTE.16: the rich detail, bounded like the text (the tool records were already capped at the wire).
-    if (turn.thinking) rec.thinking = turn.thinking.length > TRANSCRIPT_MAX_TURN_CHARS ? `${turn.thinking.slice(0, TRANSCRIPT_MAX_TURN_CHARS)}\u2026[truncated]` : turn.thinking;
+    if (turn.thinking) rec.thinking = turn.thinking.length > THINKING_MAX_CHARS ? `${turn.thinking.slice(0, THINKING_MAX_CHARS)}\u2026[truncated]` : turn.thinking;
     if (turn.tools?.length) rec.tools = turn.tools.slice(0, TRANSCRIPT_MAX_TOOLS).map(copyTool);
     if (turn.error) rec.error = turn.error;
     lane.transcript.push(rec);
@@ -1329,7 +1358,7 @@ export class FleetLaneManager {
         case "agent_thought_chunk":
           if (u.content?.type === "text") {
             const text = String(u.content.text);
-            if (lane.liveThinking.length < TRANSCRIPT_MAX_TURN_CHARS) lane.liveThinking += text; // P-REMOTE.16: replay memory
+            if (lane.liveThinking.length < THINKING_MAX_CHARS) lane.liveThinking += text; // P-REMOTE.16: replay memory
             this.#emit(lane, { type: "thinking", text });
           }
           break;

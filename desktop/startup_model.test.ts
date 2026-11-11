@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from "bun:test";
 import { resolveStartupModel } from "./startup_model.ts";
+import { isLocalModel } from "./renderer/model_families.ts";
 
 const opt = (value: string) => ({ value });
 
@@ -39,6 +40,64 @@ describe("resolveStartupModel - last used wins", () => {
     const r = resolveStartupModel({ lastUsed: "openai-codex/gpt-5.5", current: "anthropic/claude-opus-4-8", options: OPTIONS, isConfigured: configuredBy("anthropic/") });
     expect(r!.source).toBe("best-configured");
     expect(r!.value.startsWith("anthropic/")).toBe(true);
+  });
+  it("drops a remembered EMBEDDING model (fresh v2.5.1 install pinned ollama/nomic-embed-text) for the best cloud model", () => {
+    const opts = [...OPTIONS, opt("ollama/nomic-embed-text:latest"), opt("anthropic/claude-opus-5-5")];
+    // Unknown (local) providers count as configured, which is exactly how the embedding model won before.
+    const isConfigured = (v: string) => v.startsWith("ollama/") || v.startsWith("anthropic/") || v.startsWith("openai-codex/");
+    const r = resolveStartupModel({ lastUsed: "ollama/nomic-embed-text:latest", current: "ollama/nomic-embed-text:latest", options: opts, isConfigured });
+    expect(r).toEqual({ value: "anthropic/claude-opus-5-5", source: "best-configured" });
+  });
+  it("never opens on an embedding model when it is the only configured option", () => {
+    const r = resolveStartupModel({ lastUsed: "", current: "", options: [opt("ollama/nomic-embed-text:latest")], isConfigured: () => true });
+    expect(r).toBeNull();
+  });
+});
+
+describe("resolveStartupModel - cloud-only default, local strictly opt-in", () => {
+  const isLocal = (v: string) => isLocalModel(v, new Set(["dgx-spark"]));
+  const LOCAL = ["ollama/llama3.1:8b", "ollama/nomic-embed-text:latest", "ollama/qwen2.5:7b-instruct"].map(opt);
+  // Before any OAuth: only local providers hold anything usable (they need no credential).
+  const preOauth = (v: string) => isLocal(v);
+  const postOauth = (v: string) => isLocal(v) || v.startsWith("anthropic/") || v.startsWith("openai-codex/");
+
+  it("fresh install with ONLY local models present: no auto-default (null), so the picker waits", () => {
+    const r = resolveStartupModel({ lastUsed: "", current: "ollama/llama3.1:8b", options: LOCAL, isConfigured: () => true, isLocal });
+    expect(r).toBeNull();
+  });
+  it("same install, cloud catalog present but not signed in yet: still no local fallback", () => {
+    const r = resolveStartupModel({ lastUsed: "", current: "", options: [...LOCAL, ...OPTIONS], isConfigured: preOauth, isLocal });
+    expect(r).toBeNull();
+  });
+  it("after OAuth the cloud model appears and is chosen", () => {
+    const r = resolveStartupModel({ lastUsed: "", current: "ollama/llama3.1:8b", options: [...LOCAL, ...OPTIONS, opt("anthropic/claude-opus-5-5")], isConfigured: postOauth, isLocal });
+    expect(r).toEqual({ value: "anthropic/claude-opus-5-5", source: "best-configured" });
+  });
+  it("a local model the user EXPLICITLY picked is remembered and honored over every cloud model", () => {
+    const r = resolveStartupModel({ chosen: "ollama/llama3.1:8b", lastUsed: "", current: "anthropic/claude-opus-5-5", options: [...LOCAL, ...OPTIONS, opt("anthropic/claude-opus-5-5")], isConfigured: postOauth, isLocal });
+    expect(r).toEqual({ value: "ollama/llama3.1:8b", source: "chosen" });
+  });
+  it("an explicitly picked configured Local Provider model is honored", () => {
+    const r = resolveStartupModel({ chosen: "dgx-spark/glm-5.3-flash", lastUsed: "", current: "", options: [opt("dgx-spark/glm-5.3-flash"), opt("anthropic/claude-opus-5-5")], isConfigured: () => true, isLocal });
+    expect(r!.value).toBe("dgx-spark/glm-5.3-flash");
+  });
+  it("an AUTO-assigned local last-used value is NOT honored after upgrade (cloud wins, or nothing)", () => {
+    const withCloud = resolveStartupModel({ lastUsed: "ollama/llama3.1:8b", current: "ollama/llama3.1:8b", options: [...LOCAL, opt("anthropic/claude-opus-5-5")], isConfigured: postOauth, isLocal });
+    expect(withCloud).toEqual({ value: "anthropic/claude-opus-5-5", source: "best-configured" });
+    const noCloud = resolveStartupModel({ lastUsed: "ollama/llama3.1:8b", current: "ollama/llama3.1:8b", options: LOCAL, isConfigured: () => true, isLocal });
+    expect(noCloud).toBeNull();
+  });
+  it("a configured Local Provider is never the auto-default either", () => {
+    const r = resolveStartupModel({ lastUsed: "", current: "", options: [opt("dgx-spark/glm-5.3-flash")], isConfigured: () => true, isLocal });
+    expect(r).toBeNull();
+  });
+  it("a CLOUD last-used model is still restored (P-MODEL.2 behaviour kept)", () => {
+    const r = resolveStartupModel({ lastUsed: "openai-codex/gpt-5.5", current: "", options: [...LOCAL, ...OPTIONS], isConfigured: postOauth, isLocal });
+    expect(r).toEqual({ value: "openai-codex/gpt-5.5", source: "last-used" });
+  });
+  it("an explicit choice that is an embedding model is still refused", () => {
+    const r = resolveStartupModel({ chosen: "ollama/nomic-embed-text:latest", lastUsed: "", current: "", options: [opt("ollama/nomic-embed-text:latest"), opt("anthropic/claude-opus-5-5")], isConfigured: () => true, isLocal });
+    expect(r).toEqual({ value: "anthropic/claude-opus-5-5", source: "best-configured" });
   });
 });
 

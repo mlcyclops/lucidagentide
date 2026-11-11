@@ -74,7 +74,7 @@ export function cuiProviderVerdict(locked: boolean, spec: CreatorIntegrationSpec
     return refuse(posture, `${host} is declared local but is not a loopback address, so it is refused under CUI lockdown.`);
   }
   if (posture !== "on-device") {
-    return refuse(posture, `${spec.name} must be attested as a DGX enclave host (import it from the DGX Loader or mark it as an enclave), so it is refused under CUI lockdown.`);
+    return refuse(posture, `${spec.name} must be attested as a DGX enclave host (import it from the Private AI Platform or mark it as an enclave), so it is refused under CUI lockdown.`);
   }
   return allow("on-device", `${host} is a loopback service on this workstation.`);
 }

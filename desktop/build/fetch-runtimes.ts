@@ -24,6 +24,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkBundledPython, PY_OPENSSL_MIN } from "./python_floor.ts";
 
 // Locate the extracted member by basename, recursively. Cross-platform ON PURPOSE: it replaces a
 // `find … -name` shell call that on the Windows CI runner resolves to System32\find.exe (a text-search
@@ -39,9 +40,12 @@ function findMember(root: string, member: string): string | null {
 // P-SANDBOX.10 (ADR-0387): 1.3.14 -> 1.4.2. Under the Windows AppContainer, bun 1.3.14 cannot run a
 // script at all ("CouldntReadCurrentDirectory" while walking the cwd's ancestors, oven-sh/bun#28220),
 // and no ACL on the ancestors fixed it; 1.4.2 boots the contained omp with no extra grants (measured
-// on a windows-latest runner by .github/workflows/sandbox-lab.yml). All five hashes below were
-// downloaded AND cross-checked against …/bun-v1.4.2/SHASUMS256.txt.
-const BUN_VERSION = "1.4.2"; // github.com/oven-sh/bun -> release tag bun-v<ver>
+// on a windows-latest runner by .github/workflows/sandbox-lab.yml).
+// P-MODEL.10 (ADR-0526): 1.4.2 -> 1.4.4. omp 18.14+ declares `engines.bun >= 1.4.4` and refuses to start
+// on older runtimes ("Bun runtime must be >= 1.4.4"), so the bundled runtime moves with the omp pin; the
+// AppContainer smoke (appcontainer-smoke.yml reads BUN_VERSION from here) proves the contained boot.
+// All five hashes below are from …/bun-v1.4.4/SHASUMS256.txt; windows-x64 was also downloaded and hashed.
+const BUN_VERSION = "1.4.4"; // github.com/oven-sh/bun -> release tag bun-v<ver>
 const UV_VERSION = "0.11.23"; // github.com/astral-sh/uv -> release tag <ver>
 // python-build-standalone (astral-sh): a RELOCATABLE CPython we bundle so the scanner
 // interpreter is provisioned OFFLINE (air-gap, ADR-0225 / add-on ADR-A009). Without it,
@@ -49,8 +53,8 @@ const UV_VERSION = "0.11.23"; // github.com/astral-sh/uv -> release tag <ver>
 // Python on first run — impossible on an air-gapped host. The scanner has zero pip deps
 // (scanner-sidecar/pyproject.toml `dependencies = []`), so a bare interpreter suffices.
 // `install_only` archives extract to a single top-level `python/` directory.
-const PY_TAG = "20260623"; // github.com/astral-sh/python-build-standalone -> release tag
-const PY_VERSION = "3.12.13"; // CPython inside that tag (scanner requires >=3.11)
+const PY_TAG = "20261026"; // github.com/astral-sh/python-build-standalone -> release tag
+const PY_VERSION = "3.12.16"; // CPython inside that tag (scanner requires >=3.11)
 
 interface RuntimeSpec {
 	readonly platform: "darwin" | "win32" | "linux"; // the process.platform this runtime targets
@@ -80,7 +84,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "zip",
 		member: "bun",
 		url: bunUrl("darwin-aarch64"),
-		sha256: "90987a3a16d7db556d886ac3d551e7b6d3edf0a1cf43acaed622e8676be1d12f",
+		sha256: "c240d7f0ccb90c263a849fcdb09b7ee62630d921348ed6aafda86b9d577bc510",
 	},
 	{
 		platform: "darwin",
@@ -88,7 +92,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "zip",
 		member: "bun",
 		url: bunUrl("darwin-x64"),
-		sha256: "80520d7e17526308c9185d261679ac6d27798d3803a0e9f7ff9121ab8affb012",
+		sha256: "50a3491f73abc2fe81673171a85762d3bc2cc1680ccecadd983de99adf77977e",
 	},
 	{
 		platform: "darwin",
@@ -113,7 +117,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "zip",
 		member: "bun.exe",
 		url: bunUrl("windows-x64"),
-		sha256: "ce4c17497b2f29712a99d3d53f028de28cd42e3bacb8589599e7f000e49b6405",
+		sha256: "cd2c0fccc78f3ede1f50ca827a15f063eda13d4d150a3d0674f4f6e323d864a5",
 	},
 	{
 		platform: "win32",
@@ -130,7 +134,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "zip",
 		member: "bun",
 		url: bunUrl("linux-x64"),
-		sha256: "36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913",
+		sha256: "bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c",
 	},
 	{
 		platform: "linux",
@@ -142,7 +146,7 @@ const SPECS: readonly RuntimeSpec[] = [
 	},
 	// Linux arm64 (P-ARM64.B). Every hash below was downloaded and then CROSS-CHECKED against the
 	// vendor's own published manifest, never just self-hashed: bun against
-	// …/bun-v1.4.2/SHASUMS256.txt, uv against its per-asset …tar.gz.sha256 sidecar, and CPython
+	// …/bun-v1.4.4/SHASUMS256.txt, uv against its per-asset …tar.gz.sha256 sidecar, and CPython
 	// against …/releases/download/20260623/SHA256SUMS. The method was validated by reproducing the
 	// ALREADY-COMMITTED python-linux-x64 hash below (9fa869d6…) from that same SHA256SUMS file.
 	{
@@ -151,7 +155,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "zip",
 		member: "bun",
 		url: bunUrl("linux-aarch64"),
-		sha256: "54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7",
+		sha256: "baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e",
 	},
 	{
 		platform: "linux",
@@ -163,14 +167,16 @@ const SPECS: readonly RuntimeSpec[] = [
 	},
 	// Relocatable CPython for the scanner (air-gap) — copy the whole extracted `python/` tree.
 	// Hashes below were cross-checked against python-build-standalone's published SHA256SUMS
-	// for release 20260623 (…/releases/download/20260623/SHA256SUMS).
+	// for release 20261026 (…/releases/download/20261026/SHA256SUMS).
+	// P-RUNTIME-PY.1 (ADR-0548): 20260623 (3.12.13) carried OpenSSL 3.5.7, below the 3.5.8/3.5.9 fixes for
+	// CVE-2026-84782 (High) and three Moderates; 20261026 (3.12.16) carries OpenSSL 3.5.9 and expat 2.9.0.
 	{
 		platform: "win32",
 		name: "python-win32-x64",
 		kind: "tgz",
 		tree: "python",
 		url: pyUrl("x86_64-pc-windows-msvc"),
-		sha256: "c6af85bb83d5158c9ff71f50dfad467853d1cd236f932b144e87e26e2ea2a83e",
+		sha256: "590dfcbe3a34c07301e6332e13e2188b98655cd072b08afa45a7998dc4c22bc5",
 	},
 	{
 		platform: "linux",
@@ -178,7 +184,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "tgz",
 		tree: "python",
 		url: pyUrl("x86_64-unknown-linux-gnu"),
-		sha256: "9fa869d69be54f6b8eeae64272fbd9bb0646e0e1a8da9d80e51ba5a3bee48930",
+		sha256: "6a79e922e50006b601f29e688407659da1c2b86ebcd4e9c7254cf234be8b89de",
 	},
 	{
 		platform: "linux",
@@ -186,7 +192,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "tgz",
 		tree: "python",
 		url: pyUrl("aarch64-unknown-linux-gnu"),
-		sha256: "b14d074c43fdf03f01822fd07a15b3039eb0558503d1cb791791602cbe32908b",
+		sha256: "a945427411dc6851a1393533b74a4a1ac434321ae397f2ec69897a9b4fde032b",
 	},
 	{
 		platform: "darwin",
@@ -194,7 +200,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "tgz",
 		tree: "python",
 		url: pyUrl("aarch64-apple-darwin"),
-		sha256: "3724aa4dafb5f7b6c2cf98e89914e4248dc6bd2fe40407df4a2d73de99615f16",
+		sha256: "fbf4afef53c2a6b72bb741bc06d5671a9dfaf87bd84e5aa73ac9b3d0d589f14e",
 	},
 	{
 		platform: "darwin",
@@ -202,7 +208,7 @@ const SPECS: readonly RuntimeSpec[] = [
 		kind: "tgz",
 		tree: "python",
 		url: pyUrl("x86_64-apple-darwin"),
-		sha256: "7c57fdd1fa675190093700eb0d8e7117e1f9eae7c30a46dea5f8d5266bcfc791",
+		sha256: "a962e47df522889eaa7ff0d6a56203f1079f68aabb65ffdbe8455f362bc769f3",
 	},
 ];
 
@@ -349,6 +355,18 @@ if (!REFRESH) {
 		cpSync(src, plain);
 		chmodSync(plain, 0o755);
 		console.log(`runtimes: bun (plain alias for the omp shim -> ${suffixedBun.name})`);
+	}
+	// P-RUNTIME-PY.1 (ADR-0548): run the bundled CPython and read what it carries. A tree that is not
+	// PY_VERSION (a stale cached runtimes/ dir) or whose OpenSSL is below PY_OPENSSL_MIN stops the build:
+	// the pin said 3.12.13 for months while its OpenSSL 3.5.7 collected a High CVE, and nothing read it.
+	// Only for this machine's own platform and arch (a cross-staged runtime cannot run here).
+	const py = SPECS.find((s) => s.platform === TARGET && s.name === `python-${TARGET}-${TARGET_ARCH}`);
+	if (py && TARGET === process.platform && TARGET_ARCH === process.arch) {
+		const exe = join(OUT, py.name, ...(TARGET === "win32" ? ["python.exe"] : ["bin", "python3"]));
+		const probe = await $`${exe} -I -c ${"import json, platform, ssl; print(json.dumps({'python': platform.python_version(), 'openssl': ssl.OPENSSL_VERSION}))"}`.text();
+		const refusal = checkBundledPython(probe, PY_VERSION, PY_OPENSSL_MIN);
+		if (refusal) throw new Error(`fetch-runtimes: ${py.name}: ${refusal}`);
+		console.log(`runtimes: ${py.name} is CPython ${PY_VERSION} with OpenSSL >= ${PY_OPENSSL_MIN}`);
 	}
 }
 

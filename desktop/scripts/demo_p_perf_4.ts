@@ -38,19 +38,19 @@ for (let s = 0; s < 30; s++) {
 try {
   // 1) cold scan parses everything ONCE…
   __resetSessionIndex();
-  const first = listSessions(CWD, root);
+  const first = await listSessions(CWD, root);
   if (first.sessions.length !== 30) fail(`expected 30 sessions, got ${first.sessions.length}`);
   if (__sessionIndexStats().parses !== 30) fail("cold scan should parse all 30 files");
   ok("cold scan: 30 files parsed once, 30 sessions listed");
 
   // 2) …and the poll that used to re-read megabytes now re-parses NOTHING
-  for (let i = 0; i < 10; i++) listSessions(CWD, root);
+  for (let i = 0; i < 10; i++) await listSessions(CWD, root);
   if (__sessionIndexStats().parses !== 30) fail("10 warm polls must add ZERO re-parses");
   ok("10 sidebar polls later: still 30 parses total — warm polls are stat()-only");
 
   // 3) an appended turn (append-only .jsonl growth) re-parses only ITS file, and the result reflects it
   appendFileSync(join(dir, "s7.jsonl"), "\n" + ln({ type: "message", message: { role: "assistant", usage: { input: 1, output: 1 }, model: "anthropic/m", content: [{ type: "text", text: "new turn" }] } }));
-  const after = listSessions(CWD, root);
+  const after = await listSessions(CWD, root);
   if (__sessionIndexStats().parses !== 31) fail("one changed file must cost exactly one re-parse");
   if (after.sessions.find((s) => s.id === "s7")!.turns !== 11) fail("the re-parse must be reflected (not stale)");
   ok("one new chat turn: exactly 1 re-parse (s7), fresh turn count shown — never stale, never wasteful");
