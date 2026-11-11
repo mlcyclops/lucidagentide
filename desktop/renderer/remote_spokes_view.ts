@@ -140,7 +140,13 @@ function onSnapshot(): void {
 function paint(): void {
   if (!root || root.hidden) return;
   const snap = remoteSnapshot();
-  const sub = !snap ? "" : !snap.available ? "not running" : `${snap.hub.label} \u00b7 ${snap.spokes.length} ${snap.spokes.length === 1 ? "spoke" : "spokes"}`;
+  // P-RS-LANES.1 (ADR-0551): the same count as the badges, the Fleet pill and the hub summary (remoteCounts).
+  const c = remoteCounts();
+  const sub = !snap ? "" : !snap.available ? "not running" : [
+    `${snap.hub.label} \u00b7 ${c.spokes} ${c.spokes === 1 ? "spoke" : "spokes"}`,
+    c.working ? `${c.working} working` : "",
+    c.waiting ? `${c.waiting} waiting on you` : "",
+  ].filter(Boolean).join(" \u00b7 ");
   const subEl = $("[data-rsv-sub]", root) as HTMLElement;
   if (subEl.textContent !== sub) subEl.textContent = sub;
   ($("[data-rs-deploy]", root) as HTMLElement).hidden = !remoteDeployVisible();
