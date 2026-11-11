@@ -302,7 +302,8 @@ function loadMeta(){
     d.suit = d.suits.indexOf(o.suit) >= 0 ? o.suit : 'classic';
     d.maxTown = Math.max(1, Math.floor(numOr(o.maxTown, 1))); d.bestTown = Math.max(1, Math.floor(numOr(o.bestTown, 1)));
     d.bestCombo = Math.max(0, Math.floor(numOr(o.bestCombo, 0))); d.runs = Math.max(0, Math.floor(numOr(o.runs, 0)));
-    if (o.seen && typeof o.seen === 'object') for (const k in o.seen) d.seen[k] = Math.floor(numOr(o.seen[k], 0));
+    // Object.fromEntries over plain lowercase keys: a stored key can never write the prototype.
+    if (o.seen && typeof o.seen === 'object') d.seen = Object.fromEntries(Object.entries(o.seen).filter(([k]) => /^[a-z][a-z0-9]{0,23}$/.test(k)).map(([k, v]) => [k, Math.floor(numOr(v, 0))]));
     if (o.daily && typeof o.daily === 'object'){ d.daily.date = typeof o.daily.date === 'string' ? o.daily.date : ''; d.daily.best = Math.max(0, Math.floor(numOr(o.daily.best, 0))); d.daily.plays = Math.max(0, Math.floor(numOr(o.daily.plays, 0))); }
     if (Array.isArray(o.missions)) for (const m of o.missions){
       if (!m || !MISD[m.id] || d.missions.length >= 3) continue;

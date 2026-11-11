@@ -396,7 +396,8 @@ try {
     meta.stars = Math.max(0, m.stars | 0); meta.mDone = Math.max(0, m.mDone | 0);
     if (m.daily && typeof m.daily === 'object') meta.daily = { date: String(m.daily.date || ''), best: +m.daily.best || 0, bestRow: +m.daily.bestRow || 0, runs: m.daily.runs | 0 };
     if (m.life && typeof m.life === 'object') for (const k in meta.life) meta.life[k] = +m.life[k] || 0;
-    if (m.seen && typeof m.seen === 'object') for (const k in m.seen) if (INTRO[k]) meta.seen[k] = true;
+    // Object.fromEntries over known intro ids only: a stored key can never write the prototype.
+    if (m.seen && typeof m.seen === 'object') meta.seen = Object.fromEntries(Object.keys(m.seen).filter(k => Object.prototype.hasOwnProperty.call(INTRO, k)).map(k => [k, true]));
   }
 } catch (e) {}
 function saveMeta(){ store.set('gobble.meta', JSON.stringify({ perks: meta.perks, headOn: meta.headOn, missions: meta.missions.filter(Boolean).map(m => ({ t: m.t, n: m.n, p: m.p, tier: m.tier })), stars: meta.stars, mDone: meta.mDone, daily: meta.daily, life: meta.life, seen: meta.seen })); }
