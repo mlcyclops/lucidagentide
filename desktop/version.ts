@@ -740,4 +740,14 @@
 //            UI string, toast, route error, probe note, CUI refusal reason, skill and guide; provider ids,
 //            the mailbox contract and the enclave attestation tag are unchanged (P-PRIVAI.1, ADR-0530).
 //            PRERELEASE: never marked Latest; the Homebrew cask and stable installs stay on 2.5.2.
-export const APP_VERSION = "2.5.3-beta.3";
+// v2.5.3-beta.4 = 2.5.3-beta.3 plus three holiday games in the arcade: Deck Guard: Deck the Halls (P-GAME.11,
+//            11b), Chimney Rush and Gobble Getaway (P-GAME.12), each with a between-runs shop, missions and a
+//            seeded daily run, sound off in the Preview and a memory fallback for storage; and promoting a fleet
+//            lane to the main space keeps the whole answer instead of an 8K [truncated] cut (#597).
+//            PRERELEASE: never marked Latest; the Homebrew cask and stable installs stay on 2.5.2.
+// v2.5.3 = 2.5.3-beta.4 promoted to stable unchanged: the four 2.5.3 betas on top of 2.5.2 (special themes
+//            P-SEASON.1; omp 18.18.6 on Bun 1.4.4 with Fable/Mythos 5.2, the Windows boot, fleet autofit and
+//            parallel Push now, ADR-0526 to ADR-0529; the Private AI Platform name, ADR-0530; the holiday
+//            arcade P-GAME.11, 11b, 12 and whole lane answers on promote, #597). A plain v2.5.3 tag, marked
+//            Latest, so the download buttons, the electron-updater feed and the Homebrew cask follow it.
+export const APP_VERSION = "2.5.3";
