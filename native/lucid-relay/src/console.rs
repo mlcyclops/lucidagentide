@@ -1343,7 +1343,7 @@ mod tests {
         let authorization = format!("LucidNode {}", b64u(stringify(&a).as_bytes()));
         let d = dialed(host);
         let where_ = Fields::new();
-        let r = Request { method: "POST", pathname: path, path, authorization: &authorization, dialed: &d, body: sent, where_: &where_ };
+        let r = Request { method: "POST", pathname: path, path, authorization: &authorization, seat: None, dialed: &d, body: sent, where_: &where_ };
         let reply = st.serve(&r, t, true).unwrap();
         (reply.status, parse_json(&reply.body).unwrap_or(Value::Null))
     }

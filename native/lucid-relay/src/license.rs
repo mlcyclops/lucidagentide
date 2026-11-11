@@ -4,8 +4,9 @@
 
 use crate::codec::{as_object, b64_decode_lenient, exact_keys, is_int, js_trim, num_is, parse_json, str_of, unb64u, utf16_len, utf8_lossy};
 use crate::der::{ed25519_verify, parse_spki, PublicKey};
-use crate::identity::{is_node_id, is_serial, NodeCert};
+use crate::identity::{is_node_id, is_serial, open_compact, NodeCert};
 use indexmap::IndexMap;
+use p256::ecdsa::VerifyingKey;
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -25,6 +26,17 @@ const DEFAULT_GRACE_DAYS: i64 = 14;
 const MAX_GRACE_DAYS: i64 = 30;
 const STANDARD_MAX_USERS: i64 = 20;
 const MAX_USERS: i64 = 10_000;
+/// F2 (ADR-A100): what a licensed relay answers (403) a hub with no good seat for this relay's license (seat_problem
+/// says why, in its security line).
+pub const UNCOUNTED_REASON: &str = "this hub was not counted under this relay's license: the org root signs it a license seat (root seat, or root renew with the license installed)";
+/// F2 (ADR-A100): the request header a hub sends its license seat in.
+pub const SEAT_HEADER: &str = "lucid-seat";
+const SEAT_TYP: &str = "lucid-license-seat";
+const SEAT_KEYS: [&str; 9] = ["v", "typ", "root", "license", "node", "serial", "user", "iat", "exp"];
+const MAX_SEAT_TOKEN: usize = 2048;
+/// F2 (ADR-A100): what a mailbox with no license (a spoke's LAN mailbox) answers (403) a relay directory naming more
+/// than one relay.
+pub const UNLICENSED_DIRECTORY_REASON: &str = "a mailbox with no license carries a relay directory of one relay at most: post it to a licensed relay";
 const MAX_RELAYS: i64 = 100;
 const DAY_SEC: i64 = 86_400;
 const CLOCK_SKEW_SEC: i64 = 120;
@@ -239,6 +251,33 @@ pub fn license_user_of(cert: &NodeCert) -> String {
     cert.user.as_ref().map_or_else(|| cert.node.clone(), |u| u.id.clone())
 }
 
+/// F2 (ADR-A100), license.ts seatProblem word for word: why `seat` (the request's `lucid-seat` header) does not count
+/// hub certificate `cert` under license `license` at `now` (seconds), or None. A seat is the org root's word that it
+/// counted that one certificate's user: { v: 1, typ: "lucid-license-seat", root, license, node, serial, user, iat, exp }.
+pub fn seat_problem(seat: Option<&str>, root: &VerifyingKey, root_id: &str, license: &str, cert: &NodeCert, now: i64) -> Option<&'static str> {
+    let Some(token) = seat.filter(|s| !s.is_empty()) else { return Some("no license seat") };
+    let Some(p) = open_compact(Some(&Value::String(token.to_owned())), root, MAX_SEAT_TOKEN) else { return Some("license seat is not signed by this root") };
+    const MALFORMED: Option<&str> = Some("malformed license seat");
+    if !exact_keys(&p, &SEAT_KEYS, &SEAT_KEYS) || !num_is(p.get("v"), 1.0) || str_of(p.get("typ")) != Some(SEAT_TYP) || str_of(p.get("root")) != Some(root_id) {
+        return MALFORMED;
+    }
+    let (Some(id), Some(node), Some(serial), Some(user)) = (str_of(p.get("license")), str_of(p.get("node")), str_of(p.get("serial")), str_of(p.get("user"))) else { return MALFORMED };
+    let (Some(iat), Some(exp)) = (is_int(p.get("iat")), is_int(p.get("exp"))) else { return MALFORMED };
+    if id != license {
+        return Some("license seat is for another license");
+    }
+    if node != cert.node || serial != cert.serial || user != license_user_of(cert) {
+        return Some("license seat is for another certificate");
+    }
+    if iat > now + CLOCK_SKEW_SEC {
+        return Some("license seat is not valid yet");
+    }
+    if exp <= now {
+        return Some("license seat expired");
+    }
+    None
+}
+
 /// /^[un]_[0-9a-f]{32}$/
 fn is_user_key(s: &str) -> bool {
     s.len() == 34 && (s.starts_with("u_") || s.starts_with("n_")) && s[2..].bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
@@ -393,6 +432,53 @@ impl LicenseUsers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// F2 (ADR-A100): a seat counts one hub certificate under one license, signed by this root, in date.
+    #[test]
+    fn f2_a_seat_counts_one_certificate_under_one_license() {
+        use crate::codec::{b64u, stringify};
+        use crate::der::p256_spki_der;
+        use crate::identity::node_id_of;
+        use p256::ecdsa::signature::Signer;
+        use p256::ecdsa::{Signature, SigningKey};
+        let root = SigningKey::from_slice(&[7u8; 32]).unwrap();
+        let other = SigningKey::from_slice(&[8u8; 32]).unwrap();
+        let root_id = node_id_of(&p256_spki_der(root.verifying_key()));
+        let now = 1_800_000_000;
+        let cert = NodeCert {
+            serial: "a".repeat(32),
+            node: format!("n_{}", "1".repeat(32)),
+            role: "hub".into(),
+            label: "Desk".into(),
+            scopes: vec!["recall".into()],
+            iat: now - 60,
+            exp: now + 86_400,
+            user: None,
+            classification: None,
+            region: None,
+        };
+        let seat = |key: &SigningKey, edit: &dyn Fn(&mut Value)| {
+            let mut p = json!({
+                "v": 1, "typ": "lucid-license-seat", "root": root_id, "license": "l_0123456789abcdef", "node": cert.node, "serial": cert.serial,
+                "user": cert.node, "iat": now, "exp": cert.exp,
+            });
+            edit(&mut p);
+            let body = stringify(&p);
+            let sig: Signature = key.sign(body.as_bytes());
+            format!("{}.{}", b64u(body.as_bytes()), b64u(sig.to_der().as_bytes()))
+        };
+        let judge = |token: Option<&str>| seat_problem(token, root.verifying_key(), &root_id, "l_0123456789abcdef", &cert, now);
+        let set = |key: &'static str, v: Value| move |p: &mut Value| p[key] = v.clone();
+        assert_eq!(judge(Some(seat(&root, &|_: &mut Value| {}).as_str())), None);
+        assert_eq!(judge(None), Some("no license seat"));
+        assert_eq!(judge(Some("")), Some("no license seat"));
+        assert_eq!(judge(Some(seat(&other, &|_: &mut Value| {}).as_str())), Some("license seat is not signed by this root"));
+        assert_eq!(judge(Some(seat(&root, &set("extra", json!(1))).as_str())), Some("malformed license seat"));
+        assert_eq!(judge(Some(seat(&root, &set("license", json!("l_fedcba9876543210"))).as_str())), Some("license seat is for another license"));
+        assert_eq!(judge(Some(seat(&root, &set("serial", json!("b".repeat(32)))).as_str())), Some("license seat is for another certificate"));
+        assert_eq!(judge(Some(seat(&root, &set("iat", json!(now + 3600))).as_str())), Some("license seat is not valid yet"));
+        assert_eq!(judge(Some(seat(&root, &set("exp", json!(now))).as_str())), Some("license seat expired"));
+    }
 
     #[test]
     fn states_and_days_left() {

@@ -83,6 +83,8 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/react" => react,
         "/v1/invite" => invite,
         "/v1/recording" => recording,
+        "/v1/recording/policy" => recording_policy,
+        "/v1/recording/consent" => recording_consent,
         "/v1/renew" => renew,
         "/v1/renew/ack" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
@@ -308,7 +310,17 @@ fn ice(c: &mut Ctx) -> R<Obj> {
 
 fn recording(c: &mut Ctx) -> R<Obj> {
     let (who, b, peer) = peer_gate(c)?;
-    c.relay.hub.recording(&peer, &who, b.get("on"))
+    c.relay.hub.recording(&peer, &who, b.get("on"), b.get("acknowledged"), b.get("paused"))
+}
+
+fn recording_policy(c: &mut Ctx) -> R<Obj> {
+    let (who, _, peer) = peer_gate(c)?;
+    c.relay.hub.recording_policy(&peer, &who)
+}
+
+fn recording_consent(c: &mut Ctx) -> R<Obj> {
+    let (who, b, peer) = peer_gate(c)?;
+    c.relay.hub.recording_consent(&peer, &who, &pj::s(&b, "request"), b.get("accepted"))
 }
 
 // ── POST: presence, messages, invitations ────────────────────────────────────────────────────────────────────
