@@ -272,3 +272,64 @@ describe("collab relay governance (ADR-0193 P-COLLAB.6)", () => {
     expect(merged.collab?.allowedBinds).toEqual(["10.0.0.5:8790"]); // registry preserved
   });
 });
+
+// ── ADR-0473 (P-FIPS.1) security review FIPS-POLICY-LOOSENABLE: requireFips is monotonic ──────────
+import { afterEach } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { __resetManagedCache, managedConfig, managedRequireFipsBy, requireFipsFrom } from "./managed_config.ts";
+
+describe("requireFips is the OR of every policy source (no source can turn it off)", () => {
+  const ON: ManagedConfig = { security: { crypto: { requireFips: true } } };
+  const OFF: ManagedConfig = { security: { crypto: { requireFips: false } } };
+
+  test("pure: any one source requiring it is enough; a `false` elsewhere never cancels it", () => {
+    expect(requireFipsFrom({ registry: null, machineFile: null, envFile: null })).toEqual([]);
+    expect(requireFipsFrom({ registry: OFF, machineFile: OFF, envFile: OFF })).toEqual([]);
+    for (const s of [
+      { registry: ON, machineFile: OFF, envFile: OFF },
+      { registry: OFF, machineFile: ON, envFile: OFF },
+      { registry: OFF, machineFile: OFF, envFile: ON },
+      { registry: ON, machineFile: null, envFile: OFF },
+    ]) expect(requireFipsFrom(s).length).toBe(1);
+    expect(requireFipsFrom({ registry: ON, machineFile: ON, envFile: ON })).toHaveLength(3);
+    expect(requireFipsFrom({ registry: parseRegistryPolicy("k\r\n    CryptoRequireFips    REG_DWORD    0x1\r\n"), machineFile: null, envFile: OFF })[0]).toContain("CryptoRequireFips");
+  });
+
+  const saved = { cfg: process.env.LUCID_MANAGED_CONFIG, pd: process.env.ProgramData };
+  const roots: string[] = [];
+  afterEach(() => {
+    if (saved.cfg === undefined) delete process.env.LUCID_MANAGED_CONFIG; else process.env.LUCID_MANAGED_CONFIG = saved.cfg;
+    if (saved.pd === undefined) delete process.env.ProgramData; else process.env.ProgramData = saved.pd;
+    for (const d of roots.splice(0)) rmSync(d, { recursive: true, force: true });
+    __resetManagedCache();
+  });
+  const policyFile = (dir: string, cfg: ManagedConfig): string => {
+    mkdirSync(dir, { recursive: true });
+    const p = join(dir, "managed-config.json");
+    writeFileSync(p, JSON.stringify(cfg));
+    return p;
+  };
+
+  test("live: a LUCID_MANAGED_CONFIG file requiring FIPS is honored on its own", () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-fips-policy-"));
+    roots.push(root);
+    process.env.LUCID_MANAGED_CONFIG = policyFile(join(root, "user"), ON);
+    __resetManagedCache();
+    expect(managedRequireFipsBy().some((s) => s.includes("LUCID_MANAGED_CONFIG"))).toBe(true);
+  });
+
+  test.skipIf(process.platform !== "win32")("live: a user LUCID_MANAGED_CONFIG saying false cannot override the machine file saying true", () => {
+    const root = mkdtempSync(join(tmpdir(), "lucid-fips-policy-"));
+    roots.push(root);
+    process.env.ProgramData = join(root, "ProgramData");
+    policyFile(join(root, "ProgramData", "LucidAgentIDE"), ON);
+    process.env.LUCID_MANAGED_CONFIG = policyFile(join(root, "user"), OFF);
+    __resetManagedCache();
+    // The merged config still follows the first-file rule (pre-existing; ADR-0473 follow-up) ...
+    expect(managedConfig().config?.security?.crypto?.requireFips).toBe(false);
+    // ... but the requirement is read per source, so the machine mandate stands.
+    expect(managedRequireFipsBy().some((s) => s.includes("machine policy file"))).toBe(true);
+  });
+});

@@ -677,4 +677,77 @@
 //            not quoted. The Preview zoom moves in whole 10% steps. Session files are read through one
 //            handle (CodeQL js/file-system-race). PRERELEASE: never marked Latest; the Homebrew cask and
 //            stable installs stay on 2.4.1, a beta install updates to the next beta. Gate 527 files / 7128 tests.
-export const APP_VERSION = "2.5.0-beta.2";
+// v2.5.0-beta.3 = 2.5.0-beta.2 plus #523 and #526. P-BROWSER.5 (ADR-0456): the agent's headed browser no
+//            longer comes up as a white, frameless box: omp 18.8 spawns its daemon broker console-less, so
+//            the shared headed Chromium was born hidden again; the engine now shows that window on Windows.
+//            Creator jobs (probes, avatar, CAD and vision renders) are recorded in the Creator ledger again
+//            (a shadowed createJob import sent them to the scheduled-jobs factory). The Jobs sheet shows
+//            each target's repo. Subagent rows show the agent's intent. The `lucid hub` demos run on
+//            Windows (the registry probe's stderr line no longer precedes the CLI's JSON). Stale
+//            engine-discovery files of killed engines are pruned. PRERELEASE: never marked Latest; the
+//            Homebrew cask and stable installs stay on 2.4.1. Gate 528 files / 7135 tests.
+// v2.5.0-beta.4 = 2.5.0-beta.3 plus P-PLUGINS (ADR-0461 to ADR-0466, #537 to #540): the Plugins drawer in
+//            the Preview panel (Premium and Free, Civilian and Government), signed .lplugin install with
+//            manifest, hash, signature and scanner gates, $29.99 Stripe checkout through the LUCID account,
+//            the Government access gate, and the owner Marketplace Dashboard. The Linux x64 release leg is
+//            pinned to ubuntu-24.04 (ADR-0459). PRERELEASE: never marked Latest; the Homebrew cask and stable
+//            installs stay on 2.4.1, a beta install updates to the next beta.
+// v2.5.0 = 2.5.0-beta.1 through beta.4 promoted to stable, plus CREATOR-CURRICULUM (ADR-0467: three
+//            Creator-only curriculum built-ins beside the ADR-0460 explainer skills, absent from the Agent
+//            build) and P-RELEASE.9 (ADR-0468): the air-gap gate compares Authenticode image digests
+//            (desktop/build/pe_image.ts), so `bun-win32-x64.exe` and its `bun.exe` alias, signed by two
+//            separate calls whose timestamped signatures differ by a few bytes, still pass as one image;
+//            proven by signed test run 41381896437 (all four legs green). A plain v2.5.0 tag, marked Latest,
+//            so the download buttons, the electron-updater feed and the Homebrew cask all follow it.
+// v2.5.1-beta.1 = 2.5.0 plus the engine OS vault: provider keys, account keys, MCP tokens and the TURN
+//            credential move from lucid-gui.json into a DPAPI / Keychain / Secret Service sealed vault on
+//            the first engine start, no re-entry (ADR-0472), FIPS 140 at-rest crypto through the OS module
+//            (ADR-0473), one v2 vault with the safeStorage credentials drained in (ADR-0474), the vault list
+//            and encrypted backup in Settings (ADR-0475), request_secret through a LUCID dialog (ADR-0476),
+//            .env import and workspace secrets (ADR-0477), enterprise vault destinations (ADR-0478), the
+//            NIST SP 800-171 Rev 3 evidence package (ADR-0479), and the main-window renderer watchdog
+//            (ADR-0481). Upgrade review fixes: the macOS master key is created at all (security -i had no
+//            quit command), .env re-blank empties only LUCID's values, credDelete fails unless the engine
+//            answered, whoami/icacls run from System32. Downgrading to 2.5.0 shows saved keys as unset.
+//            PRERELEASE: never marked Latest; the Homebrew cask and stable installs stay on 2.5.0.
+// v2.5.1 = 2.5.1-beta.1 promoted to stable (owner-tested 2026-11-05) plus the #555 upgrade review fixes
+//            (restrictToUser strips explicit non-user ACEs as well as inherited ones, a refused private dir
+//            names the trustees holding access, the vault's Meeting Hub bearer replaces main's older
+//            injection, a .env file step failing after the vault write reports fileProblem), staged prompts
+//            that own their pasted images (P-QUEUE-IMG.1, ADR-0469), the Knowledge canvas Orbit view and
+//            ranked node search (P-KG-ORBIT.1, ADR-0470), a readable flat graph on big graphs (P-KG-FLAT.1,
+//            ADR-0471) and one-line code side panel paths (P-KG-POLISH.1). A plain v2.5.1 tag, marked
+//            Latest, so the download buttons, the electron-updater feed and the Homebrew cask follow it.
+// v2.5.2 = 2.5.1 plus bug fixes: a fresh install defaults to a cloud model only, local models are opt-in
+//            and embedding models never chat or check (P-MODEL.9, ADR-0498), omp's `ask` tool is off in
+//            every ACP session including `lucid acp`, so a declined question no longer ends a turn with no
+//            reply (P-ASK.1, ADR-0523), the needs-approval pulse runs on the compositor (P-GLOW.1, ADR-0524)
+//            and the Fleet Orbit's inner ring is drawn through its spokes (#575). Docs: the P-HERD design
+//            ADRs (ADR-0489 to ADR-0497). A plain v2.5.2 tag, marked Latest.
+// v2.5.3-beta.1 = 2.5.2 plus special themes for U.S. holidays and event months (P-SEASON.1, ADR-0525):
+//            21 seasons over 16 new palettes, an opt-in calendar switch and a swatch dropdown in Settings >
+//            Theme, 16 animated backdrops on the LUCID Agent stage or behind every chat, seasonal mascot
+//            costumes and acts in the prompt-bar runner and the splash, a flush eye band, a 16-beat walk,
+//            and a hover hop and click leap. PRERELEASE: never marked Latest; the Homebrew cask and stable
+//            installs stay on 2.5.2.
+// v2.5.3-beta.2 = 2.5.3-beta.1 plus omp 18.18.6 on bundled Bun 1.4.4 with Claude Fable 5.2 and Mythos 5.2
+//            (P-MODEL.10, ADR-0526), a Windows boot that no longer blocks the workspace bar or the
+//            connection check behind heavy startup requests (P-BOOTPERF.1, ADR-0527), fleet lanes that autofit the dock
+//            at equal sizes and still resize (P-FLEET.FIT1, ADR-0528), and a staged-prompt copy menu with
+//            Push now running the prompt in a parallel worktree lane (P-PUSH.PAR1, ADR-0529). PRERELEASE:
+//            never marked Latest; the Homebrew cask and stable installs stay on 2.5.2.
+// v2.5.3-beta.3 = 2.5.3-beta.2 plus the DGX Loader's new name, the Private AI Platform, in every current
+//            UI string, toast, route error, probe note, CUI refusal reason, skill and guide; provider ids,
+//            the mailbox contract and the enclave attestation tag are unchanged (P-PRIVAI.1, ADR-0530).
+//            PRERELEASE: never marked Latest; the Homebrew cask and stable installs stay on 2.5.2.
+// v2.5.3-beta.4 = 2.5.3-beta.3 plus three holiday games in the arcade: Deck Guard: Deck the Halls (P-GAME.11,
+//            11b), Chimney Rush and Gobble Getaway (P-GAME.12), each with a between-runs shop, missions and a
+//            seeded daily run, sound off in the Preview and a memory fallback for storage; and promoting a fleet
+//            lane to the main space keeps the whole answer instead of an 8K [truncated] cut (#597).
+//            PRERELEASE: never marked Latest; the Homebrew cask and stable installs stay on 2.5.2.
+// v2.5.3 = 2.5.3-beta.4 promoted to stable unchanged: the four 2.5.3 betas on top of 2.5.2 (special themes
+//            P-SEASON.1; omp 18.18.6 on Bun 1.4.4 with Fable/Mythos 5.2, the Windows boot, fleet autofit and
+//            parallel Push now, ADR-0526 to ADR-0529; the Private AI Platform name, ADR-0530; the holiday
+//            arcade P-GAME.11, 11b, 12 and whole lane answers on promote, #597). A plain v2.5.3 tag, marked
+//            Latest, so the download buttons, the electron-updater feed and the Homebrew cask follow it.
+export const APP_VERSION = "2.5.3";

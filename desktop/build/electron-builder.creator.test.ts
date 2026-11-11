@@ -64,7 +64,8 @@ describe("Creator packaging overlay (CREATOR-0, ADR-0279)", () => {
     expect(base.productName).toBe(AGENT_FLAVOR.productName);
     expect(base.directories?.output).toBe("release");
     expect(base.nsis?.artifactName).toBe("LucidAgent-Setup.${ext}");
-    expect(base.extraMetadata).toBeUndefined();
+    // ADR-0458: the standard package is stamped `agent` so an inherited LUCID_BUILD_FLAVOR cannot flip it.
+    expect(base.extraMetadata).toEqual({ lucidBuildFlavor: "agent" });
     expect(base.protocols).toBeUndefined();
     expect(base.publish?.[0]?.provider).toBe("github");
   });

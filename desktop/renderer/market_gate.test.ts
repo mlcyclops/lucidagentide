@@ -33,6 +33,8 @@ describe("market_gate provider seam", () => {
       entitlement: async () => ({ packId: "p1", state: "active" }),
       checkoutUrl: async () => "https://checkout.example/p1",
       downloadUrl: async () => "https://signed.example/p1.lkgpack",
+      govAccess: async () => "none",
+      requestGovAccess: async () => null,
     };
     registerMarketProvider(fake);
     expect(getMarketProvider()).toBe(fake);

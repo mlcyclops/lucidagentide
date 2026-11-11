@@ -36,6 +36,8 @@ const fake: EntitlementProvider = {
   entitlement: async () => ent({ method: "gpc" }),
   checkoutUrl: async () => "https://checkout.example/p1",
   downloadUrl: async () => "https://signed.example/p1.lkgpack",
+  govAccess: async () => "none",
+  requestGovAccess: async () => null,
 };
 registerMarketProvider(fake);
 assert(getMarketProvider() === fake && getMarketProvider().configured(), "registered provider is active");

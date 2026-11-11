@@ -31,19 +31,19 @@ function freshRoot(files: Record<string, string>): string {
 
 beforeEach(() => __resetSessionIndex());
 
-test("a poll with no changes parses NOTHING (stat-only); a changed file re-parses only itself", () => {
+test("a poll with no changes parses NOTHING (stat-only); a changed file re-parses only itself", async () => {
   const root = freshRoot({ "a.jsonl": chat("a", ["one"]), "b.jsonl": chat("b", ["two"]), "c.jsonl": chat("c", ["three"]) });
   try {
-    listSessions(CWD, root);
+    await listSessions(CWD, root);
     expect(__sessionIndexStats().parses).toBe(3); // cold scan parses all
 
-    const again = listSessions(CWD, root);
+    const again = await listSessions(CWD, root);
     expect(__sessionIndexStats().parses).toBe(3); // warm poll: zero re-parses
     expect(again.sessions.map((s) => s.id).sort()).toEqual(["a", "b", "c"]); // …and identical results
 
     // an appended turn (the append-only .jsonl growth pattern) re-parses ONLY that file
     appendFileSync(join(root, "enc", "b.jsonl"), "\n" + ln({ type: "message", message: { role: "assistant", usage: { input: 1, output: 1 }, model: "anthropic/m", content: [{ type: "text", text: "more" }] } }));
-    const after = listSessions(CWD, root);
+    const after = await listSessions(CWD, root);
     expect(__sessionIndexStats().parses).toBe(4);
     expect(after.sessions.find((s) => s.id === "b")!.turns).toBe(2); // the fresh parse is REFLECTED, not stale
   } finally {
@@ -54,7 +54,7 @@ test("a poll with no changes parses NOTHING (stat-only); a changed file re-parse
 // P-FLEET.L17 (found live): the index kept the BARE model id omp writes on assistant rows ("gpt-6-astra",
 // provider beside it) and stripped "anthropic/" on top, so the orbit's Recover handed omp an id it did not
 // know and every historical spoke came back crashed. The record is the `provider/model` id omp accepts.
-test("the session model is the provider/model id omp accepts, never the bare assistant-row id", () => {
+test("the session model is the provider/model id omp accepts, never the bare assistant-row id", async () => {
   const codex = [
     ln({ type: "session", id: "x", cwd: CWD }),
     ln({ type: "model_change", model: "openai-codex/gpt-6-astra" }),
@@ -77,7 +77,7 @@ test("the session model is the provider/model id omp accepts, never the bare ass
   const root = freshRoot({ "x.jsonl": codex, "y.jsonl": bare, "z.jsonl": restated, "a.jsonl": chat("a", ["one"]) });
   try {
     const byId: Record<string, string> = {};
-    for (const s of listSessions(CWD, root).sessions) byId[s.id] = s.model;
+    for (const s of (await listSessions(CWD, root)).sessions) byId[s.id] = s.model;
     expect(byId.x).toBe("openai-codex/gpt-6-astra");
     expect(byId.y).toBe("claude-opus-5-5");
     expect(byId.z).toBe("anthropic/claude-opus-5-5");
@@ -87,15 +87,15 @@ test("the session model is the provider/model id omp accepts, never the bare ass
   }
 });
 
-test("deleted files are pruned from the index; other roots are untouched", () => {
+test("deleted files are pruned from the index; other roots are untouched", async () => {
   const rootA = freshRoot({ "a.jsonl": chat("a", ["one"]) });
   const rootB = freshRoot({ "b.jsonl": chat("b", ["two"]) });
   try {
-    listSessions(CWD, rootA);
-    listSessions(CWD, rootB);
+    await listSessions(CWD, rootA);
+    await listSessions(CWD, rootB);
     expect(__sessionIndexStats().entries).toBe(2);
     rmSync(join(rootA, "enc", "a.jsonl"));
-    expect(listSessions(CWD, rootA).sessions).toHaveLength(0);
+    expect((await listSessions(CWD, rootA)).sessions).toHaveLength(0);
     expect(__sessionIndexStats().entries).toBe(1); // a pruned; b (another root) kept
   } finally {
     rmSync(rootA, { recursive: true, force: true });
@@ -103,12 +103,12 @@ test("deleted files are pruned from the index; other roots are untouched", () =>
   }
 });
 
-test("empty/probe sessions are cached too - remembered as skips, not re-parsed every poll", () => {
+test("empty/probe sessions are cached too - remembered as skips, not re-parsed every poll", async () => {
   const root = freshRoot({ "probe.jsonl": ln({ type: "session", id: "p", cwd: CWD }) });
   try {
-    expect(listSessions(CWD, root).sessions).toHaveLength(0);
+    expect((await listSessions(CWD, root)).sessions).toHaveLength(0);
     expect(__sessionIndexStats().parses).toBe(1);
-    listSessions(CWD, root);
+    await listSessions(CWD, root);
     expect(__sessionIndexStats().parses).toBe(1); // the skip verdict was cached
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -138,14 +138,14 @@ test("sessionMessages: limit=0 returns everything; a limit returns the TAIL plus
 // omp 18 writes a fixed-width `{ type: "title" }` slot as LINE ONE of every session file, ahead of the
 // session record. The sidebar (which scans for the record) kept listing sessions while the transcript
 // reader (which trusted line one) matched none of them: every click landed on the empty state.
-test("sessionMessages: finds the transcript when an omp 18 title slot precedes the session record", () => {
+test("sessionMessages: finds the transcript when an omp 18 title slot precedes the session record", async () => {
   const titled = [ln({ type: "title", v: 1, title: "", updatedAt: "2026-09-21T00:00:00.000Z", pad: " ".repeat(180) }), chat("real-id", ["hello"])].join("\n");
   const root = freshRoot({ "2026-09-21T00-00-00-000Z_real-id.jsonl": titled });
   try {
     const page = sessionMessages("real-id", 10, root);
     expect(page.total).toBe(2);
     expect(page.messages[0]).toEqual({ role: "user", text: "hello q0", turn: 1 });
-    expect(listSessions(CWD, root).sessions.map((s) => s.id)).toEqual(["real-id"]); // the same id the sidebar hands back
+    expect((await listSessions(CWD, root)).sessions.map((s) => s.id)).toEqual(["real-id"]); // the same id the sidebar hands back
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

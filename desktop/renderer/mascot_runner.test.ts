@@ -7,7 +7,10 @@
 
 import { describe, expect, it } from "bun:test";
 import { MASCOT_FRAMES, MASCOT_H, MASCOT_W, MASCOT_RUN_FRAMES, MASCOT_RUN_BEAT_MS, mirrorFrame } from "./mascot.ts";
-import { RUNNER_SCALE, RUNNER_TIMINGS, runnerAt, runnerCycle, type RunnerLayout, type RunnerPhase } from "./mascot_runner.ts";
+import {
+  LEAP_ROUTE_MS, RUNNER_HEADROOM, RUNNER_SCALE, RUNNER_TIMINGS, runnerAt, runnerCycle, runnerReaction, runnerReactionMs, runnerRestMs, runnerWalkLeft,
+  type RunnerLayout, type RunnerPhase,
+} from "./mascot_runner.ts";
 
 const T = RUNNER_TIMINGS;
 
@@ -89,9 +92,13 @@ describe("runnerAt - the parkour route", () => {
         expect(p.phase).toBe("run");
         return soles(p.frame).map((c) => p.x + c * scale);
       };
-      for (let beat = 1; beat * MASCOT_RUN_BEAT_MS < 8 * MASCOT_RUN_BEAT_MS; beat++) {
+      // A whole stride pair, plus a sample at the END of each beat: travel happens in whole beats, so a
+      // body that glided within a beat would drag its planted sole along with it.
+      for (let beat = 1; beat <= MASCOT_RUN_FRAMES.length; beat++) {
         const before = world((beat - 1) * MASCOT_RUN_BEAT_MS + 1);
+        const late = world(beat * MASCOT_RUN_BEAT_MS - 1);
         const after = world(beat * MASCOT_RUN_BEAT_MS + 1);
+        expect(late).toEqual(before);
         const held = before.some((a) => after.some((b) => Math.abs(a - b) < 1));
         expect({ beat, scale, held }).toEqual({ beat, scale, held: true });
       }
@@ -156,6 +163,82 @@ describe("runnerAt - the parkour route", () => {
     expect(a.mirrored).toBe(false);
     expect(b.mirrored).toBe(true);
     expect(Math.abs((L.width - MASCOT_W * RUNNER_SCALE - a.x) - b.x)).toBeLessThan(2); // reflected entry
+  });
+});
+
+describe("hover hop and click leap", () => {
+  const sample = (kind: "hop" | "leap", reduced: boolean) => {
+    const out: { t: number; frame: string; lift: number; travel: number }[] = [];
+    for (let t = 0; t <= runnerReactionMs(kind, reduced); t += 5) {
+      const b = runnerReaction(kind, t, reduced);
+      out.push({ t, frame: b.frame, lift: b.lift, travel: b.travel });
+    }
+    return out;
+  };
+  it("both reactions crouch first, rise and fall back to the lane, and end on the ground", () => {
+    for (const kind of ["hop", "leap"] as const) {
+      const s = sample(kind, false);
+      expect(s[0]!.frame).toBe("crouch");
+      expect(s[0]!.lift).toBe(0);
+      expect(s[s.length - 1]!.lift).toBe(0);
+      const peak = s.reduce((a, b) => (b.lift > a.lift ? b : a));
+      expect(peak.lift).toBeGreaterThan(4);
+      // Rises monotonically to the peak, then falls monotonically: no hitches mid-air.
+      const i = s.indexOf(peak);
+      for (let k = 1; k <= i; k++) expect(s[k]!.lift).toBeGreaterThanOrEqual(s[k - 1]!.lift);
+      for (let k = i + 1; k < s.length; k++) expect(s[k]!.lift).toBeLessThanOrEqual(s[k - 1]!.lift);
+      for (const b of s) expect(b.frame in MASCOT_FRAMES).toBe(true);
+    }
+  });
+  it("only the leap dashes: its travel runs 0 -> 1 without ever reversing; the hop stays put", () => {
+    const leap = sample("leap", false);
+    expect(leap[0]!.travel).toBe(0);
+    expect(leap[leap.length - 1]!.travel).toBe(1);
+    for (let k = 1; k < leap.length; k++) expect(leap[k]!.travel).toBeGreaterThanOrEqual(leap[k - 1]!.travel);
+    expect(sample("hop", false).every((b) => b.travel === 0)).toBe(true);
+  });
+  it("reduced motion never leaves the ground or travels", () => {
+    for (const kind of ["hop", "leap"] as const) {
+      const s = sample(kind, true);
+      expect(s.every((b) => b.lift === 0 && b.travel === 0)).toBe(true);
+      expect(new Set(s.map((b) => b.frame)).size).toBe(1);
+    }
+  });
+  it("the leap's peak fits in the canvas sky above the top lane at every DPR", () => {
+    const peak = Math.max(...sample("leap", false).map((b) => b.lift));
+    for (const dpr of [1, 1.5, 2]) {
+      const scale = Math.max(1, Math.floor(RUNNER_SCALE * dpr));
+      const topY = Math.round(RUNNER_HEADROOM * dpr) - MASCOT_H * scale;
+      expect(topY - peak * scale).toBeGreaterThanOrEqual(0);
+    }
+  });
+  it("a dash only has room on the walking lanes, and never past the lane's end", () => {
+    const c = runnerCycle(L);
+    expect(runnerWalkLeft(runnerAt(10, L), c)).toBe(c.runMs - 10);
+    expect(runnerWalkLeft(runnerAt(c.runMs - 5, L), c)).toBe(5);
+    const sneakT = c.runMs + T.CLIMB_MS + T.MANTLE_MS + 30;
+    expect(runnerWalkLeft(runnerAt(sneakT, L), c)).toBe(c.sneakMs - 30);
+    expect(runnerWalkLeft(runnerAt(c.total - 10, L), c)).toBe(0); // rest
+    // Folding a full dash into the route keeps him on the same lane, further along, facing the same way.
+    const before = runnerAt(100, L), after = runnerAt(100 + LEAP_ROUTE_MS, L);
+    expect(after.phase).toBe("run");
+    expect(after.mirrored).toBe(before.mirrored);
+    expect(after.x).toBeGreaterThan(before.x);
+  });
+});
+
+describe("seasonal rest", () => {
+  it("stretches the rest to fit the act with a lead-in and a tail, never shortening the plain rest", () => {
+    expect(runnerRestMs(0)).toBe(T.REST_MS);
+    expect(runnerRestMs(500)).toBe(T.REST_MS);
+    expect(runnerRestMs(3600)).toBeGreaterThanOrEqual(T.ACT_LEAD_MS + 3600);
+    const plain = runnerCycle(L), festive = runnerCycle(L, runnerRestMs(3600));
+    expect(festive.total - plain.total).toBe(runnerRestMs(3600) - T.REST_MS);
+    // The act window sits wholly inside the rest phase.
+    const actEnd = festive.total - festive.restMs + T.ACT_LEAD_MS + 3600;
+    const p = runnerAt(actEnd - 1, L, undefined, festive);
+    expect(p.phase).toBe("rest");
+    expect(p.phaseT).toBe(T.ACT_LEAD_MS + 3600 - 1);
   });
 });
 

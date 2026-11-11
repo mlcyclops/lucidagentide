@@ -23,6 +23,9 @@ import type { IncidentEvent, IncidentKind, IncidentOutcome } from "./incident_re
 import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts"; // P-FLEET.L14 (ADR-0337): one shared definition
 import { AGENT_BUILDER_POLICY, BUILD_POLICY, DATA_INTEGRATION_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, JEV_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
+import { workspaceSecretEnv } from "./vault_env_import.ts"; // P-VAULT-ENV.1 (ADR-0477): the workspace's scoped secrets
+import { vaultRedactEnv } from "./vault_env.ts"; // security review SECRET-INTAKE-AGENT-ENV-READBACK: names the redaction hook hides
+import { masterSecretRequestEnv } from "./secret_routes.ts"; // security review SECRET-INTAKE-REQUESTER-SPOOF: master-only request_secret env
 import { PendingWrites } from "./checkout_owners.ts"; // P-OWN.1: ownership only for writes that completed
 import { PREVIEW_ACTIVITY, previewActivityLabel, type PreviewActivityKind } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
 import { extractToolImages } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): images out of tool results
@@ -41,9 +44,9 @@ import { recordLatency } from "./latency_log.ts"; // P-EVAL.2 (ADR-0187): per-tu
 import { beginStepTurn, endStepTurn, noteStepEvent } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
-import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, resolveOmpBin } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
+import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, type OmpResolution, resolveOmpBin, resolveOmpBinAsync } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
 import { gatePath, gateRefusal, repoAsset, resolvedRepo } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
-import { asksageOnly, attribution, checkerModel, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, modelRolesOverlayFile, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
+import { asksageOnly, attribution, checkerModel, chosenModel, localProviderPrefixes, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, modelRolesOverlayFile, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
 import { heavyRoleModel, writeModelRolesOverlay } from "./model_roles.ts"; // P-MODEL.8 (ADR-0448)
 import { judgeChain, resolveJudgmentProvider, writeJudgmentOverlay, type ResolvedJudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374) + P-JEV.5 (ADR-0416)
 import { bannedJudges, judgeBanEnv } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416): local judges that failed more than once
@@ -62,7 +65,7 @@ import { caps } from "../harness/runs/profiles.ts";
 import { recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, type ModelOption } from "./checker_model.ts";
 import { enclaveHostSet, enclaveProviderSet, isAsksageRouted, isLockdownRoutable, lockdownEgressExempt, LOCKDOWN_SWITCH_FAILED_ERROR } from "./lockdown_route.ts"; // CUI lockdown: AskSage + DGX enclave routes
 import { resolveStartupModel } from "./startup_model.ts"; // P-MODEL.1 (ADR-0250): fresh-session picker default
-import { providerAllowedOnPlatform, providerPrefixOf } from "./renderer/model_families.ts"; // P-MODEL.6: platform-bound providers
+import { isLocalModel, providerAllowedOnPlatform, providerPrefixOf } from "./renderer/model_families.ts"; // P-MODEL.6: platform-bound providers
 import { providerAuth, typesafeKeySet, type ProviderAuth } from "./auth_status.ts";
 import { providerForModel } from "./renderer/budget_gate.ts"; // DOM-free (see its header note)
 import { parseGoalVerdict } from "./goal_verdict.ts";
@@ -94,6 +97,7 @@ import { agentBuilderOpenSpec } from "../harness/agent/handoff.ts"; // P-AGENT.8
 import type { AgentSpec } from "../harness/agent/spec.ts";
 import { slashCommandCreateDraft } from "../harness/commands/handoff.ts"; // P-CMD.1: chat -> user slash command
 import type { UserCommand } from "../harness/commands/spec.ts";
+import type { SecretRequestView } from "./secret_intake_view.ts"; // P-SECRET-INTAKE.1 (ADR-0476)
 import { gateDenyReason } from "./gate_audit.ts";
 import { type ElicitationAnswer, type ExecChoice, type ExecClass, classifyCommand, classifyEval, elicitationAnswer, elicitationOptions, execStore, execVerdict, recordExec } from "./exec_policy.ts";
 import { toolFailureCommand, toolFailureDetail, toolFailureReason } from "./tool_failure.ts";
@@ -207,6 +211,18 @@ const COMMIT_GATE_EXT = repoAsset("harness", "omp", "commit_gate_extension.ts");
 // lanes driving one shared window would fight over it (same rationale that keeps preview off lanes).
 // The extension self-skips when LUCID_BROWSER_URL is absent (no Electron main = no window executor).
 const BROWSER_EXT = repoAsset("harness", "omp", "browser_extension.ts");
+// P-SECRET-INTAKE.1 (ADR-0476): `request_secret` asks the USER for a secret through the LUCID dialog and
+// stores it in the engine vault; the model only ever gets {stored, ref, envName} or {stored:false, reason}.
+// MASTER ONLY: the dialog rides the master turn's event stream (requestSecretDialog), and only the master
+// spawn env carries its URL and master-only token (secret_routes.masterSecretRequestEnv). Self-skips
+// without them.
+const SECRET_INTAKE_EXT = repoAsset("harness", "omp", "secret_intake_extension.ts");
+// Security review SECRET-INTAKE-AGENT-ENV-READBACK: vault values are in the agent's own env (workspace
+// secrets, provider keys, credential env), so a `printenv` would hand them to the model. This tool_result
+// hook replaces each one (plain, JSON-escaped, base64, URL-encoded) with [vault:<NAME>]. The spawn env
+// names the variables (vault_env.vaultRedactEnv, names only). Master AND lanes, LAST of all extensions so
+// it rewrites what every gate and the interject drain produced. Self-skips without names.
+const VAULT_REDACT_EXT = repoAsset("harness", "omp", "vault_redact_extension.ts");
 // P-EVAL.4 (ADR-0318): reports the REAL tool name (+ pass/fail) of every tool call over a token'd
 // loopback URL, because omp's ACP tool_call update carries only a coarse `kind` and an intent-shadowed
 // title (ADR-0308) - so the chat's chips and the engineering report's per-tool breakdown had degraded to
@@ -215,7 +231,7 @@ const BROWSER_EXT = repoAsset("harness", "omp", "browser_extension.ts");
 const TOOL_META_EXT = repoAsset("harness", "omp", "tool_meta_extension.ts");
 // P-JEV.2 (ADR-0377): reports EVERY typed judgment (question, answers, probabilities, which backend
 // answered, latency, error) over a token'd loopback URL, because omp records none of them and has no hook
-// for them: the extension wraps pi-ai's TypeSafeJudge / TextJudge in-process. Observability only, fail-soft,
+// for them: the extension wraps pi-ai's NativeJudge / TextJudge in-process. Observability only, fail-soft,
 // self-skips when LUCID_JUDGMENT_URL is absent.
 const JUDGMENT_EXT = repoAsset("harness", "omp", "judgment_extension.ts");
 // Design suite: design_read / design_apply / design_request let the agent read the Creator Design editor's
@@ -228,6 +244,11 @@ const DESIGN_EXT = repoAsset("harness", "omp", "design_extension.ts");
 // in dev.ts). MASTER ONLY, like the Design suite: there is one editor. Self-skips when LUCID_DRIFT_CALL_URL is
 // absent, which is every non-Creator build.
 const DRIFT_EXT = repoAsset("harness", "omp", "drift_extension.ts");
+// CREATOR-OPENFILM (ADR-0457): openfilm_look / openfilm_render / openfilm_job run OpenFilm's look and render as
+// fixed-argv engine jobs through the /api/creator/openfilm/* routes (job ledger, artifact library, governor, CUI
+// gate all live in dev.ts). MASTER ONLY, like the Drift tools. Self-skips unless LUCID_OPENFILM_LOOK_URL,
+// LUCID_OPENFILM_RENDER_URL and LUCID_OPENFILM_JOB_URL are all set, which is every non-Creator build.
+const OPENFILM_EXT = repoAsset("harness", "omp", "openfilm_extension.ts");
 // P-HEALTH.3: a liveness beat while the model streams a tool call's arguments, which omp's ACP mapper never
 // forwards, so the stall watchdog stops reading a long write as a wedged session. Master AND lanes; each
 // beat names its omp session id, so the engine credits the right one. Fail-soft, self-skips when
@@ -336,14 +357,39 @@ function ompBin(): string {
       return bunProbeVerdict(Bun.spawnSync([candidate, "--version"], { stdout: "ignore", stderr: "ignore", timeout: OMP_PROBE_TIMEOUT_MS }));
     } catch { return false; }
   };
-  const r = resolveOmpBin(
-    { envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join },
-    probe,
-  );
+  return adoptOmpResolution(resolveOmpBin({ envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join }, probe));
+}
+function adoptOmpResolution(r: OmpResolution): string {
   if (r.indeterminate) console.error(`[omp] probe timed out; using ${r.bin} anyway (slow cold start, not a missing binary): ${r.timedOut.join(", ")}`);
   else if (!r.proven) console.error(`[omp] no runnable omp found; tried: ${r.rejected.join(", ")}`);
   ompBinCache = r.bin;
   return r.bin;
+}
+/** P-BOOTPERF.1 (ADR-pending): the same proven resolution as ompBin(), probed WITHOUT blocking the
+ *  engine. The sync probe is Bun.spawnSync on the event loop that serves every route, so on a cold,
+ *  antivirus-scanned Windows launch (OMP_PROBE_TIMEOUT_MS per candidate) the renderer's workspace bar,
+ *  turn-status and net-status probes all hung behind it; the status probe then timed out into the
+ *  composer's Reconnect button. start() awaits this first, so the sync ompBin() callers after it hit the
+ *  cache. One resolution per engine, shared by concurrent callers. Never rejects. */
+let ompBinPending: Promise<string> | null = null;
+function ompBinAsync(): Promise<string> {
+  if (ompBinCache) return Promise.resolve(ompBinCache);
+  ompBinPending ??= resolveOmpBinAsync(
+    { envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join },
+    ompProbeAsync,
+  ).then(adoptOmpResolution);
+  return ompBinPending;
+}
+/** `<candidate> --version` as a non-blocking capability probe: true ran, false failed to run or exited
+ *  non-zero, "timeout" did not answer in OMP_PROBE_TIMEOUT_MS (slow machine, not a missing binary). */
+async function ompProbeAsync(candidate: string): Promise<boolean | "timeout"> {
+  try {
+    const child = Bun.spawn([candidate, "--version"], { stdin: "ignore", stdout: "ignore", stderr: "ignore", windowsHide: true });
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill(); }, OMP_PROBE_TIMEOUT_MS);
+    try { await child.exited; } finally { clearTimeout(timer); }
+    return timedOut ? "timeout" : bunProbeVerdict({ exitCode: child.exitCode, signalCode: child.signalCode });
+  } catch { return false; } // ENOENT / EPERM / EACCES: cannot run this one
 }
 
 /** P-FLEET.L1: the gated omp argv for a LOCAL LANE. Same fail-closed security gate (-e GATE, invariant 4)
@@ -358,7 +404,8 @@ export function fleetLaneArgv(): { cmd: string; args: string[] } {
   const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : [];
   const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
   const ownArgs = [...(existsSync(CHECKIN_EXT) ? ["-e", CHECKIN_EXT] : []), ...(existsSync(COMMIT_GATE_EXT) ? ["-e", COMMIT_GATE_EXT] : [])]; // P-OWN.1
-  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...ownArgs, ...STREAM_BEAT_ARGS, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
+  const redactArgs = existsSync(VAULT_REDACT_EXT) ? ["-e", VAULT_REDACT_EXT] : []; // last: see VAULT_REDACT_EXT
+  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...ownArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
   return { cmd: argv[0]!, args: argv.slice(1) };
 }
 
@@ -477,6 +524,7 @@ export type ChatEvent =
   | { type: "design-available"; path: string } // P-FIGMA.2 (ADR-0154): the agent wrote/updated DESIGN.md → offer to pop it out in the IDE
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
+  | { type: "secret-request"; request: SecretRequestView } // P-SECRET-INTAKE.1 (ADR-0476): show the secret dialog (names only, never a value)
   | { type: "usage"; used: number; size: number; cost: number }
   // P-STALL.1 (ADR-0186) / P-STALL.2 (ADR-0263): the provider has emitted NOTHING for waitedMs — the UI
   // shows "still waiting" instead of a frozen pane. Repeats each silent 2-min mark; any real activity
@@ -746,6 +794,14 @@ class Backend {
     this.emit({ type: "preview-activity", label: PREVIEW_ACTIVITY[kind] });
   }
 
+  /** P-SECRET-INTAKE.1 (ADR-0476): show the secret dialog for a parked `request_secret` call (dev.ts
+   *  /api/secret/request -> secret_intake.ts). Emits into the ACTIVE turn's stream like the approval cards;
+   *  the view names what is asked and why, never a value. A renderer that missed it re-syncs from
+   *  /api/secret/pending. */
+  requestSecretDialog(request: SecretRequestView): void {
+    this.emit({ type: "secret-request", request });
+  }
+
   /** P-EVAL.4 (ADR-0318): relay a self-reported tool name (and, on the result report, its pass/fail) into
    *  the ACTIVE turn's event stream. Called by dev.ts /api/tool/meta, which the tool_meta omp extension
    *  POSTs to.
@@ -1004,13 +1060,16 @@ class Backend {
         const knowledgeArgs = existsSync(KNOWLEDGE_EXT) ? ["-e", KNOWLEDGE_EXT] : []; // ADR-0220: knowledge_search (non-AskSage RAG)
         const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
         const browserArgs = existsSync(BROWSER_EXT) ? ["-e", BROWSER_EXT] : []; // P-BROWSER.1: master-only, see BROWSER_EXT
+        const secretArgs = existsSync(SECRET_INTAKE_EXT) ? ["-e", SECRET_INTAKE_EXT] : []; // P-SECRET-INTAKE.1: master-only, see SECRET_INTAKE_EXT
         const designArgs = existsSync(DESIGN_EXT) ? ["-e", DESIGN_EXT] : []; // Design suite: master-only, see DESIGN_EXT
         const driftArgs = existsSync(DRIFT_EXT) ? ["-e", DRIFT_EXT] : []; // CREATOR-DRIFT: master-only, see DRIFT_EXT
+        const openfilmArgs = existsSync(OPENFILM_EXT) ? ["-e", OPENFILM_EXT] : []; // CREATOR-OPENFILM: master-only, see OPENFILM_EXT
         const ownArgs = [...(existsSync(CHECKIN_EXT) ? ["-e", CHECKIN_EXT] : []), ...(existsSync(COMMIT_GATE_EXT) ? ["-e", COMMIT_GATE_EXT] : [])]; // P-OWN.1
         // P-EVAL.4 (ADR-0318): last of the observability extensions. Loaded AFTER the gates so its hooks
         // see the same calls the gates already ruled on, and it can never sit between a tool and its gate.
         const toolMetaArgs = existsSync(TOOL_META_EXT) ? ["-e", TOOL_META_EXT] : [];
         const judgmentArgs = existsSync(JUDGMENT_EXT) ? ["-e", JUDGMENT_EXT] : []; // P-JEV.2: judgment trace, see JUDGMENT_EXT
+        const redactArgs = existsSync(VAULT_REDACT_EXT) ? ["-e", VAULT_REDACT_EXT] : []; // last: see VAULT_REDACT_EXT
         // P-SANDBOX.1 (ADR-0157): the runtime execution boundary, decided at THE spawn. On Linux with
         // bwrap the whole omp process tree (bash/eval/python/pip children included) is namespaced; on
         // platforms without a backend this is the DISCLOSED passthrough - unless managed policy
@@ -1022,7 +1081,8 @@ class Backend {
         // log, and the session ran UNGATED while every surface reported healthy. start() rejects, so the
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...designArgs, ...driftArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
+        // P-BOOTPERF.1 (ADR-pending): probe omp off the event loop; the engine keeps serving meanwhile.
+        const ompArgv = [await ompBinAsync(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...secretArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
         // P-SANDBOX.16 (ADR-0397): a git the host never put on PATH (MinGit, scoop, GitHub Desktop's copy)
@@ -1030,7 +1090,11 @@ class Backend {
         // shim, P-SANDBOX.17).
         const planSetsPath = Object.keys(spawnPlan.env).some((k) => k.toUpperCase() === "PATH");
         const gitEnv = process.platform === "win32" && !planSetsPath ? prependPathOverlay(process.env, gitCmdDir()) : {};
-        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), { ...spawnPlan.env, ...gitEnv, ...interjectChildEnv("master") }, spawnPlan.contained ? { windowsHide: true } : {});
+        // P-VAULT-ENV.1 (ADR-0477): this workspace's scoped secrets, under everything the plan sets. The
+        // request_secret URL + master-only token and the names the redaction hook hides ride this spawn only.
+        const wsCwd = currentWorkspace();
+        const wsSecrets = workspaceSecretEnv(wsCwd);
+        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, wsCwd, { ...wsSecrets, ...spawnPlan.env, ...gitEnv, ...interjectChildEnv("master"), ...masterSecretRequestEnv(), ...vaultRedactEnv(wsSecrets) }, spawnPlan.contained ? { windowsHide: true } : {});
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
@@ -1415,7 +1479,12 @@ class Backend {
     // providerConfigured's exact test (renderer/provider_hub.ts), inlined: importing provider_hub would
     // pull the DOM-typed bridge.ts into the server program.
     const configured = (p: ProviderAuth) => !!(p.oauthActive || p.keySet || (p.fields ?? []).some((f) => f.set));
+    // Cloud-only default: only an EXPLICIT picker choice may restore a local model; the automatic rungs
+    // skip anything local (omp's implicit Ollama/llama.cpp/LM Studio engines or a configured Local Provider).
+    const localPx = localProviderPrefixes();
     const pick = resolveStartupModel({
+      chosen: chosenModel(),
+      isLocal: (value) => isLocalModel(value, localPx),
       lastUsed: remembered,
       current,
       options: this.accessibleModels(),
@@ -2872,7 +2941,9 @@ class Backend {
           // gets the same refusal as the chat spawn. Returning null degrades to the shared (also gated)
           // connection; it never becomes an ungated shortcut. Logged because the catch below is silent.
           if (!GATE) { console.error(`[acp:util] ${gateRefusal()}`); return null; }
-          const acp = spawned = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...(existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []), ...ompConfigArgs()], currentWorkspace());
+          // Security review residual: the util child inherits the engine env (global provider keys, credential
+          // env) and runs real tools, so it gets the same fail-closed redaction hook as master and lanes, last.
+          const acp = spawned = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...(existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []), ...(existsSync(VAULT_REDACT_EXT) ? ["-e", VAULT_REDACT_EXT] : []), ...ompConfigArgs()], currentWorkspace(), vaultRedactEnv({}));
           // A util completion is TEXT-ONLY: collect assistant text into the active sink, ignore everything
           // else (no tool calls, no permissions, no gate-block surfacing — that's the chat connection's job).
           acp.onNotify = (method: string, params: any) => {
