@@ -393,6 +393,11 @@ demo-P-PRIVAI.1: ## P-PRIVAI.1 (ADR-0530): the DGX Loader is now the Private AI 
 	$(BUN) run desktop/scripts/demo_p_privai_1.ts
 	$(BUN) test $(TEST_IGNORES) desktop/creator_probe.test.ts desktop/creator_mailbox.test.ts desktop/creator_registry.test.ts desktop/cui_policy.test.ts
 
+.PHONY: demo-P-RUNTIME-PY.1
+demo-P-RUNTIME-PY.1: ## P-RUNTIME-PY.1 (ADR-0548): the bundled CPython moves to python-build-standalone 20261026 (3.12.16, OpenSSL 3.5.9); fetch-runtimes runs it and refuses a tree that is not PY_VERSION or whose OpenSSL is below PY_OPENSSL_MIN
+	$(BUN) test $(TEST_IGNORES) desktop/build/python_floor.test.ts
+	cd desktop && $(BUN) run build/fetch-runtimes.ts
+
 .PHONY: demo-P-AVATAR.4
 demo-P-AVATAR.4: ## P-AVATAR.4 (ADR-0251): the LUCID Agent enter flow - fast-model preference order (Terra > Sonnet 5 > Flash, no pointless switch), one-gap-at-a-time readiness (provider > tts > stt), the one-time KG offer, exit model restoration
 	$(BUN) run desktop/scripts/demo_p_avatar_4.ts
