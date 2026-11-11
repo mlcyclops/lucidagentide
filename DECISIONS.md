@@ -25369,7 +25369,7 @@ Two traps found by measurement before writing anything:
 
 **Consequences.** The arm64 fault ADR-0364 guards against (another arch's bun as the alias) still fails, now on the whole image rather than the first 64 bytes, so it also catches a different bun version or a corrupt copy of the same size. A signed build no longer fails on signature length. Creator's air-gap smoke (same script, `LUCID_RELEASE_DIR=release-creator`) gets the same comparison.
 
-## ADR-0469 -- P-SESS-SEARCH.1: the SESSIONS sidebar searches every session by title and by what was said, spoke sessions are hidden by default, and a carried operator note never titles a session (2026-11-02)
+## ADR-0552 -- P-SESS-SEARCH.1: the SESSIONS sidebar searches every session by title and by what was said, spoke sessions are hidden by default, and a carried operator note never titles a session (2026-11-02)
 
 **Status:** Accepted -- BUILT. `make demo-P-SESS-SEARCH.1`; `bun test desktop/sessions_search.test.ts desktop/renderer/session_search.test.ts`. Smoke on the real corpus of one workspace (1,510 sessions, 951 MB on a NAS): search answers in 144-173 ms, and a 38-day-old session outside the 40 listed rows opened from a search hit with its transcript restored. Extends ADR-0131 (the session index) and ADR-0404 (live badges); no change to ADR-0414's wire format.
 

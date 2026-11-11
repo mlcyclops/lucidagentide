@@ -61,7 +61,7 @@ export function stripInjectedPreamble(text: string): string {
   return s.replace(/^\s+/, "");
 }
 
-// P-SESS-SEARCH.1 (ADR-0469): an operator note carried into a prompt (ADR-0414) opens it as CARRIED_MARKER,
+// P-SESS-SEARCH.1 (ADR-0552): an operator note carried into a prompt (ADR-0414) opens it as CARRIED_MARKER,
 // a newline, the note, then a blank line before what the user typed. The block has no closing tag, so the
 // note ends at its first blank line (the harness's own notes are one paragraph). It stays in the transcript,
 // the record of what the agent was told, but it never names the session: before this, every session a lane
@@ -90,7 +90,7 @@ export interface SessionInfo {
 // P-SESS-SEARCH.1: `hiddenSpokes` counts the spoke sessions a SpokeFilter held back (set only when filtered).
 export interface SessionList { sessions: SessionInfo[]; ingest: SessionInfo[]; hiddenSpokes?: number }
 
-/** P-SESS-SEARCH.1 (ADR-0469): which sessions fleet lanes ran (session id -> lane name, from the durable
+/** P-SESS-SEARCH.1 (ADR-0552): which sessions fleet lanes ran (session id -> lane name, from the durable
  *  lane-session ledger), whether to show them, and the ids that stay visible regardless (the session Main
  *  holds and the lane the main composer is driving). Spoke sessions are hidden unless `show`. */
 export interface SpokeFilter { spokes: ReadonlyMap<string, string>; show: boolean; keep?: ReadonlySet<string> }
@@ -136,7 +136,7 @@ function firstUserText(message: any): string {
 // poll (the single biggest UI stall found in the battery investigation). Each file's parsed metadata is
 // cached keyed by mtime+size (append-only .jsonl always changes both); a poll now re-parses only what
 // changed and stat()s the rest. Entries for deleted files are pruned each scan.
-// P-SESS-SEARCH.1 (ADR-0469): `text` is what search reads - every user message as typed (typedText) and every
+// P-SESS-SEARCH.1 (ADR-0552): `text` is what search reads - every user message as typed (typedText) and every
 // assistant reply's text, never tool output, thinking, or injected blocks. Built in the same parse the
 // listing already pays for, so a search reads no file; the corpus measured 8.6 MB of it for 951 MB of
 // transcripts. Empty for ingest throwaways and probe sessions, which search never returns.
@@ -241,7 +241,7 @@ function snippetAt(text: string, at: number, len: number): string {
   return `${start > 0 ? "\u2026" : ""}${text.slice(start, end).replace(/\s+/g, " ").trim()}${end < text.length ? "\u2026" : ""}`;
 }
 
-/** P-SESS-SEARCH.1 (ADR-0469): every chat session of `cwd` (not just the sidebar's 40) whose title, model,
+/** P-SESS-SEARCH.1 (ADR-0552): every chat session of `cwd` (not just the sidebar's 40) whose title, model,
  *  spoke name, or conversation (index `text`: typed prompts and replies) contains EVERY whitespace-separated
  *  term, case-insensitive. Sessions matched by name come first, then those matched only by what was said;
  *  each group newest first. Reads the index only, over the sidebar's async scan: a file is parsed only if it

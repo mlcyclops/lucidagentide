@@ -5083,7 +5083,7 @@ return Bun.serve({
 
         const main = { sessionId: backend.currentSessionId(), busy: backend.switchBlocker() !== null };
         const lanes = fleet.owners();
-        // P-SESS-SEARCH.1 (ADR-0469): sessions a fleet lane ran are hidden unless `spokes=1`; the session
+        // P-SESS-SEARCH.1 (ADR-0552): sessions a fleet lane ran are hidden unless `spokes=1`; the session
         // Main holds and the lane the main composer is driving stay listed either way.
         const keep = new Set<string>();
         if (main.sessionId) keep.add(main.sessionId);

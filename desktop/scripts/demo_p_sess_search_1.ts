@@ -3,7 +3,7 @@
 
 // desktop/scripts/demo_p_sess_search_1.ts
 //
-// Increment P-SESS-SEARCH.1 (ADR-0469): the SESSIONS sidebar can search, and spokes stop drowning it.
+// Increment P-SESS-SEARCH.1 (ADR-0552): the SESSIONS sidebar can search, and spokes stop drowning it.
 // A workspace of 1,500 sessions where every lane-attached one opened with a carried operator note:
 //   1. titles are what the user typed, never "[LUCID OPERATOR NOTE - sent while no tool s...";
 //   2. spoke sessions (named in the lane ledger) are held back from the list and counted, and the 40

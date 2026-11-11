@@ -5794,7 +5794,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **stubbed:** none. The model picker screenshot caption (47 models) was not re-counted.
 - **next:** re-count the model picker for 2.5 and refresh that screenshot.
 
-## P-SESS-SEARCH.1: sidebar session search, spokes hidden by default, carried notes never title a session (ADR-0469)
+## P-SESS-SEARCH.1: sidebar session search, spokes hidden by default, carried notes never title a session (ADR-0552)
 - **shipped (2026-11-02):** a search field and a Spokes toggle above the SESSIONS list. `GET /api/sessions/search` matches every term against title, model, spoke name and what the user typed and the agent replied (never tool output or injected blocks) across all sessions of the workspace, not only the 40 listed; hits show marked words and a snippet and open like any row. Spoke sessions (lane-session ledger) are hidden unless toggled on, before the 40-row cap. Titles skip ADR-0414 carried operator notes. Proof: `make demo-P-SESS-SEARCH.1`, 9 new tests, a real-corpus smoke (1,510 sessions: 0 note titles, 234 spokes hidden, search 144-173 ms, a 38-day-old session opened from a hit).
 - **stubbed:** none. A carried note containing a blank line can leave its tail in the title; the harness's own notes are one paragraph.
 - **next:** `dev.ts` says "set LUCID_PORT" when its port is busy, but the engine reads `PORT`; fix the message.
