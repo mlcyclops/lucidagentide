@@ -29,7 +29,7 @@ const patch = countDiffLines("--- a/f.ts\n+++ b/f.ts\n@@ -1 +1 @@\n+n1\n+n2\n-o1
 assert(patch.added === 2 && patch.removed === 1, "unified diff headers do not count as authored lines");
 
 console.log("\n[2] the desktop appends completed counts to GUI-owned JSONL without DuckDB");
-const context = { identity: "nick@corp.com", identitySource: "email", repo: "/w/lucid" };
+const context = { identity: "operator@corp.com", identitySource: "email", repo: "/w/lucid" };
 recordAiLoc({ ...context, model: "claude-opus-4-8", filePath: "/w/lucid/a.ts", tool: "write", added: countContentLines("1\n2\n3\n"), removed: 0 }, { logPath: LOG });
 recordAiLoc({ ...context, model: "claude-opus-4-8", filePath: "/w/lucid/b.ts", tool: "edit", ...countDiffLines(" 1|x\n+2|y\n") }, { logPath: LOG });
 recordAiLoc({ ...context, model: "gpt-5.2", filePath: "/w/lucid/c.ts", tool: "edit", ...countDiffLines("+p1\n-p2\n") }, { logPath: LOG });
@@ -42,7 +42,7 @@ assert(!!agg, "the roll-up has data for the AI-authored lines panel");
 assert(agg!.totals.edits === 3, "three countable edits recorded");
 assert(agg!.totals.added === 5 && agg!.totals.removed === 1, "added and removed counts summed across write and edits");
 assert(agg!.totals.models === 2 && agg!.byModel[0]!.model === "claude-opus-4-8", "per-model breakdown, most lines first");
-assert(agg!.identities.length === 1 && agg!.identities[0] === "nick@corp.com", "attributed to the corporate identity");
+assert(agg!.identities.length === 1 && agg!.identities[0] === "operator@corp.com", "attributed to the corporate identity");
 assert(aggregateAiLoc([], "2026-07-13T00:00:00Z") === null, "no samples retain the explicit empty state");
 
 rmSync(dir, { recursive: true, force: true });

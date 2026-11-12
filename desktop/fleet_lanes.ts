@@ -939,6 +939,11 @@ export class FleetLaneManager {
   answer(laneId: string, allow: boolean, scope?: ApprovalScope): { ok: boolean } {
     const lane = this.#lanes.get(laneId);
     if (!lane?.pending) return { ok: false };
+    // P-CTRL-REMOTE.1 (ADR-0531): a remote lane's parked ask is released only by a decision the engine verified
+    // (`answerAsk`, after `verifyRemoteDecision` and its audit line). This path carries no certificate, no
+    // presence evidence and no audit, and it is reachable with the UI token and by a collab edit guest, so an
+    // allow through it would step around all three. A deny stays: refusing is always safe.
+    if (allow && lane.pending.ask) return { ok: false };
     if (allow && scope === "session") lane.sessionAllow.add(lane.pending.kind); // BEFORE resolve - resolve nulls pending
     lane.pending.resolve(allow);
     return { ok: true };

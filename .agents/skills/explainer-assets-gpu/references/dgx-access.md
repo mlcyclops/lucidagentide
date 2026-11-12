@@ -7,7 +7,7 @@ believe the box and say so.
 ## Topology
 
 - Two DGX Spark boxes (GB10, 128 GB unified memory each) on an isolated network.
-- In the reference fleet the HEAD node is `10.0.0.21`. The vLLM server runs tensor-parallel across both boxes; the second box is a
+- The HEAD node's address comes from the user's endpoint files (`<head>`); see ADR-0550 for the route LUCID prefers. The vLLM server runs tensor-parallel across both boxes; the second box is a
   rank-1 member that holds a shard and serves NO HTTP. Point every request at the head, only ever the head.
 - Every service binds the host's loopback. The planned NGINX proxy (TLS, bearer, allowlist, audit) is not
   live, so access is a VPN or an SSH forward.
@@ -55,7 +55,7 @@ capability is whatever its `/object_info` proves on that install.
 
 ### 3. A VPN or an SSH forward
 
-- **VPN:** when it is up, `http://<head>:8000/v1/models` answers (`10.0.0.21` in the reference fleet). A `401 {"error":"Unauthorized"}` means
+- **VPN:** when it is up, `http://<head>:8000/v1/models` answers. A `401 {"error":"Unauthorized"}` means
   reachable and the key is missing, NOT down. (Measured 2026-10-28: 401 over the VPN, nothing forwarded on
   loopback.)
 - **SSH forward**, one held connection per service, run by the user or as a long-lived background job:
@@ -65,7 +65,7 @@ ssh -N -L 18000:127.0.0.1:8000 <user>@<head>     # vLLM  -> http://127.0.0.1:180
 ssh -N -L 18084:127.0.0.1:8084 <user>@<head>     # dots.tts
 ```
 
-  `<user>` and `<head>` come from the user or their endpoint file (`10.0.0.21` in the reference fleet). Keys live in their SSH agent or key file; never in a script or a repo.
+  `<user>` and `<head>` come from the user or their endpoint file. Keys live in their SSH agent or key file; never in a script or a repo.
 
 ## The fail2ban rule (wire-level law)
 
