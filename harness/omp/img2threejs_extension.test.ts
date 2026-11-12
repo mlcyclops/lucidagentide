@@ -129,7 +129,7 @@ describe("probe and assess", () => {
     writeFileSync(join(root, "notes.txt"), "hello");
     const notImage = await tool("img2threejs_probe").execute("1", { image: "notes.txt" });
     expect(notImage.isError).toBe(true);
-    expect(textOf(notImage)).toContain("not a recognised image container");
+    expect(textOf(notImage)).toContain("not a recognized image container");
   });
   test("assess returns the skeleton for the tier and refuses a bad tier or domain", async () => {
     const r = await tool("img2threejs_assess").execute("1", { targetName: "Old Boot", complexity: "complex", domain: "object" });
