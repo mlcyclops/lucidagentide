@@ -38,14 +38,14 @@ const key = await importRoomKey(generateRoomKey());
 
 // the desktop HOST (also authenticates to the gated relay)
 const hostSock = new CollabSocket({ wsUrl, role: "host", key, authToken: () => "tok-host" });
-const host = new CollabHost(hostSock, { header: { sessionId: "s1", title: "Refactor the parser", model: "claude-opus-4-8", hostName: "nick@desktop", startedAt: 1000 } });
+const host = new CollabHost(hostSock, { header: { sessionId: "s1", title: "Refactor the parser", model: "claude-opus-4-8", hostName: "operator@desktop", startedAt: 1000 } });
 host.start();
 host.pushUserTurn("clean up the tokenizer");
 
 // the PHONE: the exact modules the PWA wires (CollabSocket authToken + CollabGuest + pwa_view)
 let items: ViewItem[] = [];
 const guestSock = new CollabSocket({ wsUrl, role: "guest", key, authToken: () => "tok-phone" });
-const guest = new CollabGuest(guestSock, { name: "nick@phone", writeToken: null }, {
+const guest = new CollabGuest(guestSock, { name: "operator@phone", writeToken: null }, {
   // P-REMOTE.16: ONE item list - the welcome replay expands into it, live events fold into it by turn seq.
   onWelcome: (w) => { items = mergeWelcome(items, w); },
   onEvent: (e: ChatEvent, seq?: number) => { items = foldEvent(items, e, seq); },
@@ -55,7 +55,7 @@ guest.start();
 // [1] the phone authenticates to the gated relay, goes live, and renders the host header
 await until(() => guest.view().phase === "live", "phone live");
 const hdr = renderHeader(guest.view().header);
-if (!hdr.includes("Refactor the parser") || !hdr.includes("nick@desktop")) fail("header did not render");
+if (!hdr.includes("Refactor the parser") || !hdr.includes("operator@desktop")) fail("header did not render");
 if (statusLabel(guest.view()).tone !== "live") fail("status not live");
 pass("phone signs in to the GATED relay, goes live, renders the session header (view-only)");
 

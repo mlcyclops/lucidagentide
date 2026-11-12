@@ -166,27 +166,164 @@ function commandOf(tc: Record<string, unknown>): string | null {
 
 const actionFor = (tier: RiskTier): AskAction => (tier === "T0" || tier === "T1" ? "auto" : tier === "T2" ? "remote" : "block");
 
+// ── What a rated command is pointed at ─────────────────────────────────────────────────────────────────
+//
+// `classifyCommand` rates the PROGRAM: `cat` is T0, `cp` is T1. A remote lane also has to hold the workspace
+// boundary on what the program is pointed at (`cat ~/.ssh/id_rsa`, `cp ./a /etc/b`), and a rated program must
+// not be a way to run an unrated one (`GIT_EXTERNAL_DIFF=x git diff`, `./ls`, `awk 'BEGIN{system(...)}'`,
+// `git -c core.pager=x log`). `commandNeedsHuman` answers that for a command the ladder would let run on its
+// own. It only ever tightens: every answer sends the ask to a human, none allows anything.
+//
+// It is not a shell. It reads the plain subset (words, single and double quotes, globs) and sends everything it
+// would have to interpret to a human: an expansion, a redirect, an escape, a brace, a leading tilde.
+
+/** A URL. The workspace check would read one as a relative path, so it is tested first. */
+const URL_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+/** Characters an unquoted word may hold and still be read as written. Globs are allowed: they match under the
+ *  directory the word names, which is checked as a path. `^` is literal to a shell (`HEAD^`). */
+const BARE_CHAR = /[A-Za-z0-9_@%+=:,.\/*?[\]^-]/;
+/** What follows `$` inside double quotes when it starts an expansion (`$HOME`, `${x}`, `$(...)`, `$1`, `$?`).
+ *  A `$` before anything else there is text (`"end$"`). Outside quotes `$` is never read. */
+const EXPANDS = /[A-Za-z_{(0-9@*#?$!-]/;
+
+/** The command as the words a shell would pass, quotes removed, or null when a word needs interpreting. */
+function plainWords(cmd: string): string[] | null {
+  const out: string[] = [];
+  let word: string | null = null;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i]!;
+    if (/\s/.test(ch)) {
+      if (word !== null) { out.push(word); word = null; }
+      continue;
+    }
+    if (ch === "'") { // literal to the next single quote
+      const end = cmd.indexOf("'", i + 1);
+      if (end < 0) return null;
+      word = (word ?? "") + cmd.slice(i + 1, end);
+      i = end;
+      continue;
+    }
+    if (ch === '"') { // literal except `$`, a backtick, and a backslash before one of $ ` " \
+      let body = "";
+      let j = i + 1;
+      for (; j < cmd.length && cmd[j] !== '"'; j++) {
+        const c = cmd[j]!;
+        const next = cmd[j + 1] ?? "";
+        if (c === "`" || (c === "$" && EXPANDS.test(next)) || (c === "\\" && /[$`"\\\n]/.test(next))) return null;
+        body += c;
+      }
+      if (j >= cmd.length) return null; // unbalanced
+      word = (word ?? "") + body;
+      i = j;
+      continue;
+    }
+    // `~` expands only at the start of a word or after `=` / `:`; elsewhere it is text (`HEAD~1`).
+    const tilde = ch === "~" && word !== null && word !== "" && !/[=:]$/.test(word);
+    if (!tilde && !BARE_CHAR.test(ch)) return null;
+    word = (word ?? "") + ch;
+  }
+  if (word !== null) out.push(word);
+  return out;
+}
+
+/** Programs that are a programming language or take a script that can write files and start programs. */
+const SCRIPT_PROGRAMS = new Set(["awk", "gawk", "mawk", "nawk", "sed", "gsed"]);
+/** git subcommands a remote lane runs on its own: reads, and changes to this repository's own history and
+ *  index. Not here, so a human decides: anything that reaches a remote (fetch, remote, ls-remote), writes
+ *  configuration (config), or can start a program (bisect run, filter-branch, difftool, grep -O, ...). */
+const GIT_UNATTENDED = new Set([
+  "status", "diff", "log", "show", "rev-parse", "ls-files", "describe", "blame", "cat-file", "shortlog", "reflog",
+  "branch", "tag", "stash", "add", "commit", "checkout", "switch", "restore", "merge", "cherry-pick", "revert", "reset", "mv",
+]);
+/** git options that name a program to run. */
+const GIT_RUNS_PROGRAM = /^(--exec|--ext-diff|--textconv|--upload-pack|--receive-pack|--open-files-in-pager|-x$|-O)/;
+
+/** Why a command the ladder rates T0 or T1 still may not run on its own in a remote lane, or null. `base` is the
+ *  directory its relative paths resolve against (the workspace, or the call's own `cwd` inside it). */
+export function commandNeedsHuman(cmd: string, workspace: string, base: string = workspace): string | null {
+  const words = plainWords(cmd.trim());
+  if (words === null) return "uses shell syntax this policy does not read (an expansion, a redirect, an escape)";
+  const argv0 = words[0] ?? "";
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(argv0)) return "sets an environment variable for the command";
+  if (argv0.includes("/")) return "names its program by path";
+  const prog = argv0.replace(/\.exe$/i, "").toLowerCase();
+  if (/^(env|command|nice|time|nohup|stdbuf|setsid)$/.test(prog)) return `runs its command through ${prog}`;
+  if (SCRIPT_PROGRAMS.has(prog)) return `${prog} runs a script that can write files and start programs`;
+  const args = words.slice(1);
+  if (prog === "git") {
+    const sub = (args[0] ?? "").toLowerCase();
+    if (!sub || sub.startsWith("-")) return "git with an option before its subcommand";
+    if (!GIT_UNATTENDED.has(sub)) return `git ${sub} can reach a remote, write configuration or start a program`;
+    const runs = args.find((a) => GIT_RUNS_PROGRAM.test(a));
+    if (runs) return `git ${sub} ${runs} names a program to run`;
+  }
+  // Every argument is read as a place. A search pattern or a message that happens to look like a path outside
+  // the workspace sends the ask to a human; telling text from a place per program would be a second policy.
+  for (let i = prog === "git" ? 1 : 0; i < args.length; i++) {
+    const arg = args[i]!;
+    // A git message is text. It is the one argument read as text, because every commit carries one.
+    if (prog === "git" && (arg === "-m" || arg === "--message")) { i++; continue; }
+    if (prog === "git" && arg.startsWith("--message=")) continue;
+    let candidate = arg;
+    if (arg.startsWith("-")) {
+      // `--output=/x`, `-o/x`: the value part is a path. A bare flag names nothing.
+      const eq = arg.indexOf("=");
+      const slash = arg.indexOf("/");
+      if (eq > 0) candidate = arg.slice(eq + 1);
+      else if (slash > 0) candidate = arg.slice(slash);
+      else continue;
+    }
+    if (!candidate) continue;
+    if (URL_RE.test(candidate)) return `names a URL: ${candidate}`;
+    if (/^[A-Za-z]:(?!\/)/.test(candidate)) return `names a drive-relative path: ${candidate}`;
+    const p = isAbsolute(candidate) ? candidate : `${base}${sep}${candidate}`;
+    if (!insideWorkspace(workspace, p)) return `names a path outside the workspace: ${candidate}`;
+  }
+  return null;
+}
+
+/** The directory a command call asks to run in, when it names one. */
+function cwdOf(tc: Record<string, unknown>): string | null {
+  const ri = tc.rawInput && typeof tc.rawInput === "object" ? (tc.rawInput as Record<string, unknown>) : {};
+  for (const k of ["cwd", "workdir", "workingDirectory", "working_directory"]) if (typeof ri[k] === "string" && (ri[k] as string).trim()) return ri[k] as string;
+  return null;
+}
+
+/** True when `p` names git's own files (`.git/config`, `.git/hooks/...`): an edit there changes what every
+ *  later git command runs. */
+const inGitDir = (p: string): boolean => p.split(/[\\/]+/).some((seg) => seg.toLowerCase() === ".git");
+
 /** Classify one permission ask (the ACP `toolCall`) for a remote lane working in `workspace`. Unknown shapes
  *  never run on their own: an unrecognized kind asks a human, an unparseable command is refused. */
 export function classifyAsk(toolCall: unknown, workspace: string): AskClass {
   const tc = toolCall && typeof toolCall === "object" ? (toolCall as Record<string, unknown>) : {};
   const kind = String(tc.kind ?? "").toLowerCase();
   const paths = pathsOf(tc);
-  const outside = paths.filter((p) => !insideWorkspace(workspace, p));
+  const outside = paths.filter((p) => URL_RE.test(p) || !insideWorkspace(workspace, p));
   const tiered = (tier: RiskTier, reason: string): AskClass => ({ tier, action: actionFor(tier), reason });
 
   if (kind === "read" || kind === "search" || kind === "think")
     return outside.length ? tiered("T2", `reads outside the workspace: ${outside[0]}`) : tiered("T0", "read inside the workspace");
   if (kind === "edit" || kind === "move") {
     if (!paths.length) return tiered("T2", `${kind} with no path named`);
-    return outside.length ? tiered("T3", `${kind} outside the workspace: ${outside[0]}`) : tiered("T1", `${kind} inside the workspace`);
+    if (outside.length) return tiered("T3", `${kind} outside the workspace: ${outside[0]}`);
+    const git = paths.find((p) => inGitDir(isAbsolute(p) ? relative(workspace, p) : p));
+    return git ? tiered("T2", `${kind} of git's own files: ${git}`) : tiered("T1", `${kind} inside the workspace`);
   }
   if (kind === "delete") return tiered("T3", "delete");
   if (kind === "execute" || kind === "run" || kind === "bash" || kind === "shell") {
     const cmd = commandOf(tc);
     if (!cmd) return tiered("T3", "a command with no command text");
     const c = classifyCommand(cmd);
-    if ((c.tier === "T0" || c.tier === "T1") && outside.length) return tiered("T2", `${c.reason}; names a path outside the workspace`);
+    if (c.tier === "T0" || c.tier === "T1") {
+      if (outside.length) return tiered("T2", `${c.reason}; names a path outside the workspace`);
+      const cwd = cwdOf(tc);
+      const base = cwd === null ? workspace : isAbsolute(cwd) ? cwd : `${workspace}${sep}${cwd}`;
+      if (!insideWorkspace(workspace, base)) return tiered("T2", `${c.reason}; runs in a directory outside the workspace: ${cwd}`);
+      const why = commandNeedsHuman(cmd, workspace, base);
+      if (why) return tiered("T2", `${c.reason}; ${why}`);
+    }
     // T3 covers both "known destructive" (rm, chmod, kill, ssh ...) and "unknown program or compound command"
     // (bun test, make, a pipe), which the ladder fail-closes to T3. The first is refused; the second goes to a
     // human, who sees the whole command.

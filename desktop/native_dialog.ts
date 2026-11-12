@@ -178,8 +178,9 @@ let inFlight = false;
 // node:child_process (not Bun.spawn) ON PURPOSE: renderer/bridge.ts type-imports NativePickResult from
 // this module, which pulls the file into the desktop tsconfig program - a NODE-typed project (Bun-runtime
 // modules are excluded there by policy; see desktop/tsconfig.json). node's spawn runs identically under
-// the Bun-run dev server, and the file stays typecheckable on both surfaces.
-async function runToText(argv: string[], opts: { stdinText?: string; env?: Record<string, string | undefined> } = {}): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+// the Bun-run dev server, and the file stays typecheckable on both surfaces. Also the Windows Hello
+// runner for the knowledge-graph device unlock (kg_device_unlock.ts, ADR-0454).
+export async function runToText(argv: string[], opts: { stdinText?: string; env?: Record<string, string | undefined> } = {}): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const { spawn } = await import("node:child_process");
   return await new Promise((resolve) => {
     const proc = spawn(argv[0]!, argv.slice(1), {
