@@ -105,7 +105,7 @@ describe("controller token: hashed, revocable, never stored in the clear", () =>
     expect(readFileSync(file, "utf8")).toBe("{torn");
   });
 
-  test("P-CTRL-RO.1a (ADR-0451): a read-only pairing round-trips; a legacy pairing loads as not read-only", async () => {
+  test("P-CTRL-RO.1a (ADR-0560): a read-only pairing round-trips; a legacy pairing loads as not read-only", async () => {
     const file = join(dir, "controller-pairings.json");
     const store = new PairingStore(file);
     const minted = await store.pair("observer", ws, true);

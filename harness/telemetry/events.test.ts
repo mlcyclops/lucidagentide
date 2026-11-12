@@ -71,7 +71,7 @@ test("P-CTRL.1 (ADR-0426): the seven controller_* names are contract-valid and e
   expect(events).toHaveLength(names.length);
 });
 
-test("P-CTRL-RO.1a (ADR-0451): controller_read is contract-valid, emits, and near-misses raise", () => {
+test("P-CTRL-RO.1a (ADR-0560): controller_read is contract-valid, emits, and near-misses raise", () => {
   const { tel, events } = collector();
   const rec = tel.emit("controller_read", { pairing: "p1", tool: "fleet.list_agents", lane_id: "lane-1", bytes: 112, redactions: 0 });
   expect(rec.event).toBe("controller_read");

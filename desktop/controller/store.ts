@@ -27,7 +27,7 @@ export interface Pairing {
   createdAt: string;
   /** Lane ids this pairing spawned: the ONLY lanes it can see or act on. */
   lanes: string[];
-  /** P-CTRL-RO.1a (ADR-0451; design ADR-0449): issued for observation only. Set when the pairing is
+  /** P-CTRL-RO.1a (ADR-0560; design ADR-0449): issued for observation only. Set when the pairing is
    *  minted and never widened in place (no store API mutates it); granting write scope means unpair
    *  and re-pair. Absent on pairings minted before this field existed; absent means not read-only. */
   readOnly?: boolean;

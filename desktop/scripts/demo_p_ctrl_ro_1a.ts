@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// Increment P-CTRL-RO.1a (ADR-0451; design ADR-0449, issue #449) - the read-only controller contract
+// Increment P-CTRL-RO.1a (ADR-0560; design ADR-0449, issue #449) - the read-only controller contract
 // sub-step, exactly the ADR-0449 sentence:
 //   [1] controller_read is in the frozen EventName contract and emits through the real Telemetry
 //       envelope with the stable run/session ids
@@ -24,7 +24,7 @@ function assert(cond: unknown, msg: string): void {
   console.log("  \u2713 " + msg);
 }
 
-console.log("== ADR-0451 P-CTRL-RO.1a: controller_read in the frozen contract; the readOnly pairing capability ==\n");
+console.log("== ADR-0560 P-CTRL-RO.1a: controller_read in the frozen contract; the readOnly pairing capability ==\n");
 
 console.log("[1] controller_read emits through the real Telemetry envelope");
 const events: TelemetryEvent[] = [];
