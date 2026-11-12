@@ -1,0 +1,77 @@
+# Repo usage metrics (P-METRICS.1, ADR-0561).
+#
+# GitHub keeps release download counts only as running totals and keeps clone and view traffic for
+# 14 days only. This job runs daily and saves what GitHub knows today to the `metrics` branch
+# (snapshots/<date>.json, traffic-daily.json, SUMMARY.md), so history outlives GitHub's window.
+# It never touches master. tools/metrics/repo_metrics.ts does the work; see docs/REPO-METRICS.md.
+#
+# Secrets:
+#   GITHUB_TOKEN           the job's own token: reads releases, pushes the `metrics` branch.
+#   METRICS_TRAFFIC_TOKEN  optional fine-grained PAT, this repo only, Administration: Read-only.
+#                          GitHub's traffic API needs that permission and a workflow token cannot
+#                          be given it. Without the secret, traffic is recorded as "not collected"
+#                          and release counts are still saved.
+
+name: repo metrics
+
+on:
+  schedule:
+    - cron: "23 4 * * *" # daily 04:23 UTC: off the hour, and well inside GitHub's 14-day window
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repo-metrics
+  cancel-in-progress: false # never cut a run off between writing and pushing
+
+jobs:
+  collect:
+    name: Collect downloads, clones and views
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2" # desktop/build/fetch-runtimes.ts BUN_VERSION
+
+      # The collector has no dependencies (node builtins + fetch), so there is no install step.
+
+      - name: Check out the metrics data branch
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --heads origin metrics >/dev/null; then
+            git fetch --depth=1 origin metrics
+            git worktree add -B metrics metrics-data FETCH_HEAD
+          else
+            git worktree add --orphan -b metrics metrics-data
+          fi
+
+      - name: Collect
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          METRICS_TRAFFIC_TOKEN: ${{ secrets.METRICS_TRAFFIC_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: bun run tools/metrics/repo_metrics.ts collect --repo "$REPO" --dir metrics-data
+
+      # Runs even when Collect exited 1: whatever it could save (always the release counts unless
+      # that fetch itself failed) is worth keeping, and the red job still tells you something broke.
+      - name: Commit and push the data
+        if: ${{ !cancelled() }}
+        working-directory: metrics-data
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then echo "nothing new"; exit 0; fi
+          git commit -q -m "metrics: $(date -u +%F)"
+          git push origin HEAD:metrics
+
+      - name: Job summary
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -f metrics-data/SUMMARY.md ]; then cat metrics-data/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"; fi

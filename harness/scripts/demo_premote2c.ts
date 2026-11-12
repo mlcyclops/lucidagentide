@@ -28,7 +28,7 @@ console.log("== P-REMOTE.2c: renderer-pushed token -> backend cache -> host sock
 
 const NOW = Date.now();
 const verify = async (t: string): Promise<AuthVerdict> =>
-  t === "good-token" ? { ok: true, uid: "u1", email: "nick@x.io", premium: true, admin: false } : { ok: false, code: 4401, reason: "bad token" };
+  t === "good-token" ? { ok: true, uid: "u1", email: "operator@x.io", premium: true, admin: false } : { ok: false, code: 4401, reason: "bad token" };
 const relay = startRelayServer({ port: 0, auth: { verify } });
 const key = await importRoomKey(generateRoomKey());
 const dial = (room: string, authToken?: () => string | null) =>

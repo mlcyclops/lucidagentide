@@ -16,7 +16,11 @@ import { CUI_STORE_VERSION, PersonalStore, type PersonalGraph, type PersonalScop
 // P-KG.3: the PURE decision layer for the agent's KG read/write tools (lock / trust / compartment /
 // shape gates + ranking). Kept out of this file so it is testable without crypto, fs, or HTTP.
 import { LOCKED_READ_REASON, LOCKED_WRITE_REASON, searchGraph, vetAgentWrite, type KgHit, type KgQuery } from "../harness/personal/agent_kg.ts";
-import { load, personalAuditPath, personalCuiArchiveDir, personalCuiStorePath, personalStorePath, personalVaultDir, setPersonalization, setPersonalScope } from "./settings_store.ts";
+import { load, personalAuditPath, personalCuiArchiveDir, personalCuiStorePath, personalProtectorsPath, personalStorePath, personalVaultDir, setPersonalization, setPersonalScope } from "./settings_store.ts";
+// ADR-0454: the main store's Lucid Vault Protector Spec v1 file (password + Windows Hello / Touch ID protectors)
+import { createProtectors, ProtectorError, readProtectors, rewrapPassword, unlockWithPassword, writeProtectors, type ProtectorDoc } from "../harness/personal/protectors.ts";
+import { FipsRequiredError } from "../harness/crypto/fips_crypto.ts";
+import { randomKey } from "../harness/personal/crypto.ts";
 import { buildRecall, buildRecallFromGraph } from "../harness/personal/recall.ts";
 import { distillTurn, heuristicExtractor, modelExtractor, type CompleteFn, type Extractor } from "../harness/personal/distiller.ts";
 import { isConversationShard, mergeConversationShards, parseExport, type ImportVendor } from "../harness/personal/import_adapters.ts";
@@ -76,15 +80,118 @@ export function enablePersonal(enabled: boolean): PersonalStatus {
 export function setupPersonal(passphrase: string): { ok: boolean; error?: string } {
   if (!passphrase || passphrase.length < 8) return { ok: false, error: "Passphrase must be at least 8 characters." };
   if (PersonalStore.exists(personalStorePath())) return { ok: false, error: "A store already exists - unlock it instead." };
-  try { mkdirSync(dirname(personalStorePath()), { recursive: true }); store = PersonalStore.createWithPassphrase(personalStorePath(), passphrase); return { ok: true }; }
+  try {
+    mkdirSync(dirname(personalStorePath()), { recursive: true });
+    // ADR-0454: the store's DEK is the Protector Spec v1 VMK. The store (with its legacy passphrase envelope)
+    // lands first, then the protector file, as the Hub orders it: a protector file that fails to land leaves a
+    // store that still opens on the envelope and migrates on the next unlock. A stale protector file left by an
+    // earlier store is overwritten here, which also drops any device protector bound to that old key.
+    const dek = randomKey();
+    store = PersonalStore.createWithPassphrase(personalStorePath(), passphrase, { dek });
+    writeProtectors(personalProtectorsPath(), createProtectors(dek, passphrase));
+    return { ok: true };
+  }
   catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
 }
 
-/** Unlock the main store. Generic error on failure (don't distinguish wrong-pass). */
+/** Unlock the main store. Generic error on a wrong passphrase (don't distinguish why).
+ *  ADR-0454: the protector file is preferred; when it exists, the store opens through it or not at all (a
+ *  malformed or unsupported file is fatal, never a quiet fall back to the envelope, which would downgrade the
+ *  unlock). With no protector file yet, the legacy envelope opens the store and the DEK is migrated, unchanged,
+ *  into a new protector file (spec §7: zero re-encryption). */
 export function unlockPersonal(passphrase: string): { ok: boolean; error?: string } {
   if (!PersonalStore.exists(personalStorePath())) return { ok: false, error: "No store yet - set a passphrase to create one." };
-  try { store = PersonalStore.openWithPassphrase(personalStorePath(), passphrase); return { ok: true }; }
-  catch { return { ok: false, error: "Wrong passphrase, or the store could not be read." }; }
+  let doc: ProtectorDoc | null;
+  try { doc = readProtectors(personalProtectorsPath()); }
+  catch (e) { return { ok: false, error: `The store's protector file is unusable: ${(e as Error).message}.` }; }
+  if (!doc) {
+    try { store = PersonalStore.openWithPassphrase(personalStorePath(), passphrase); }
+    catch { return { ok: false, error: "Wrong passphrase, or the store could not be read." }; }
+    migrateToProtectors(passphrase);
+    return { ok: true };
+  }
+  let vmk: Buffer;
+  try { vmk = unlockWithPassword(doc, passphrase); }
+  catch (e) {
+    // A policy refusal (FIPS required, no validated module) says nothing about the passphrase.
+    if (e instanceof FipsRequiredError) return { ok: false, error: `FIPS mode refused the operation: ${e.message}` };
+    return { ok: false, error: e instanceof ProtectorError && e.code !== "auth" ? `The store's protector file is unusable: ${e.message}.` : "Wrong passphrase, or the store could not be read." };
+  }
+  try { store = PersonalStore.openWithKey(personalStorePath(), vmk); return { ok: true }; }
+  catch { vmk.fill(0); return { ok: false, error: "The protector file does not belong to this store." }; }
+}
+
+/** P-KGPASS.1 (ADR-0455): change the passphrase of the main or the CUI store. The store must be unlocked (the
+ *  open store owns the envelope it saves) and the current passphrase is re-proven. A re-wrap, never a re-key:
+ *  - main: the protector file's password entry is re-wrapped (spec `rewrap_password`; every device protector
+ *    keeps working), then the store envelope is re-wrapped too, so the old passphrase opens neither and an
+ *    older build still opens the store with the new one. Protector file first: a crash between the two writes
+ *    leaves the NEW passphrase working (unlock prefers the protector file) and the envelope still on the old
+ *    one; the next change, made with the passphrase that unlocks, re-wraps the envelope and ends that.
+ *  - cui: the CUI store's own envelope only (it has no protector file; ADR-0014).
+ *  Passphrases never leave here. */
+export function changePersonalPassphrase(which: "main" | "cui", current: string, next: string): { ok: boolean; error?: string } {
+  const target = which === "cui" ? cuiStore : store;
+  if (!target) return { ok: false, error: `Unlock your ${which === "cui" ? "CUI store" : "store"} first.` };
+  if (!next || next.length < 8) return { ok: false, error: "The new passphrase must be at least 8 characters." };
+  if (next === current) return { ok: false, error: "The new passphrase is the same as the current one." };
+  const wrong = { ok: false, error: "The current passphrase is wrong." };
+  try {
+    if (which === "cui") return target.changePassphrase(current, next) ? { ok: true } : wrong;
+    const doc = readProtectors(personalProtectorsPath());
+    if (!doc) { // never migrated (a failed write at unlock): change the envelope, then migrate under the new passphrase
+      if (!target.changePassphrase(current, next)) return wrong;
+      migrateToProtectors(next);
+      return { ok: true };
+    }
+    let vmk: Buffer;
+    try { vmk = unlockWithPassword(doc, current); } catch (e) { if (e instanceof ProtectorError && e.code === "auth") return wrong; throw e; }
+    try {
+      // Both copies must be one store before either is replaced: the protector file's key has to be the
+      // open store's key. `current` is proven by the protector entry above; the envelope is NOT asked
+      // for it. An earlier change that died between the two writes leaves the envelope on the passphrase
+      // before it, and asking would make that state unrepairable (no passphrase would pass both checks).
+      if (!target.passphraseSealed) return { ok: false, error: "This store has no passphrase to change." };
+      if (!target.holdsKey(vmk)) return { ok: false, error: "The store and its protector file disagree - nothing was changed." };
+      writeProtectors(personalProtectorsPath(), rewrapPassword(doc, vmk, next));
+      try {
+        target.rewrapPassphraseWithKey(vmk, next);
+      } catch (e) {
+        const why = e instanceof Error ? e.message : String(e);
+        return { ok: false, error: `The new passphrase is set, but the store file could not be rewritten (${why}). Unlock with the new passphrase and change it once more to finish.` };
+      }
+    } finally { vmk.fill(0); }
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
+}
+
+/** Spec §7 migration: the envelope's DEK becomes the VMK unchanged. Written, then re-read and re-proven; a
+ *  file that does not verify is removed. Best-effort: on any failure the store keeps opening on its envelope
+ *  and the next unlock tries again. The envelope itself is left as is (an older build can still open it). */
+function migrateToProtectors(passphrase: string): void {
+  const path = personalProtectorsPath();
+  let dek: Buffer | null = null;
+  try {
+    dek = PersonalStore.unwrapPassphraseDek(personalStorePath(), passphrase);
+    writeProtectors(path, createProtectors(dek, passphrase));
+    const proven = unlockWithPassword(readProtectors(path)!, passphrase);
+    const same = proven.equals(dek);
+    proven.fill(0);
+    if (!same) rmSync(path, { force: true });
+  } catch { try { rmSync(path, { force: true }); } catch { /* nothing to undo */ } }
+  finally { dek?.fill(0); }
+}
+
+/** P-KGBIO.1 (ADR-0454): unlock the main store with its DEK, released by the desktop main process after a
+ *  Windows Hello / Touch ID check. Already unlocked -> no-op (never swaps the live store out from under a
+ *  turn). The key is zeroed here on any failure; on success the store owns it. Main store only (never CUI). */
+export function unlockPersonalWithKey(dekB64: string): { ok: boolean; error?: string } {
+  if (store) return { ok: true };
+  if (!PersonalStore.exists(personalStorePath())) return { ok: false, error: "No store yet - set a passphrase to create one." };
+  const dek = Buffer.from(dekB64, "base64");
+  if (dek.length !== 32) { dek.fill(0); return { ok: false, error: "Malformed key." }; }
+  try { store = PersonalStore.openWithKey(personalStorePath(), dek); return { ok: true }; }
+  catch { dek.fill(0); return { ok: false, error: "That key does not open this store." }; }
 }
 
 // P-VAULT-HINT.2 (ADR-0080): last-known ACTIVE fact counts, captured IN MEMORY at lock time — NEVER
