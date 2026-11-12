@@ -249,7 +249,7 @@ const DRIFT_EXT = repoAsset("harness", "omp", "drift_extension.ts");
 // gate all live in dev.ts). MASTER ONLY, like the Drift tools. Self-skips unless LUCID_OPENFILM_LOOK_URL,
 // LUCID_OPENFILM_RENDER_URL and LUCID_OPENFILM_JOB_URL are all set, which is every non-Creator build.
 const OPENFILM_EXT = repoAsset("harness", "omp", "openfilm_extension.ts");
-// CREATOR-IMG2THREEJS (ADR-0526): img2threejs_probe / _assess / _validate / _generate / _state, the pure TypeScript
+// CREATOR-IMG2THREEJS (ADR-0562): img2threejs_probe / _assess / _validate / _generate / _state, the pure TypeScript
 // port of img2threejs (image to procedural three.js) with its strict-quality, pass-lock and checklist gates. No
 // engine route: the tools are in-process and touch only files under the workspace. MASTER ONLY. Self-skips unless
 // LUCID_IMG2THREEJS=1, which dev.ts sets in Creator builds only.

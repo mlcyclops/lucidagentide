@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // harness/creator/img2threejs/img2threejs.test.ts - the TypeScript port of img2threejs's deterministic
-// core (CREATOR-IMG2THREEJS, ADR-0526): the strict gate blocks a shallow spec, the pass gate blocks a deeper
+// core (CREATOR-IMG2THREEJS, ADR-0562): the strict gate blocks a shallow spec, the pass gate blocks a deeper
 // pass, unsupported geometry blocks by name, the checklist refuses evidence-free and out-of-order marks and
 // hard-stops at the loop limit, and the generated factory is TypeScript that Bun can transpile.
 
@@ -53,6 +53,19 @@ describe("validateSpec", () => {
     expect(r.errors.some((e) => e.startsWith('component "glass" primitive must be one of:'))).toBe(true);
     expect(r.errors).toContain('component "handle" references missing parent "ghost"');
     expect(r.errors).toContain("reviewHistory[0].action is invalid");
+  });
+  test("a parent chain that loops is an error, and the pass filter and the generator survive it", () => {
+    const spec = campLanternSpec();
+    const tree = spec.componentTree as JsonRecord[];
+    const [a, b] = [String(tree[0]!.id), String(tree[1]!.id)];
+    tree[0]!.parent = b;
+    tree[1]!.parent = a;
+    const r = validateSpec(spec);
+    expect(r.errors.filter((e) => e.startsWith("component parent chain loops:"))).toEqual([`component parent chain loops: "${a}" -> "${b}" -> "${a}"`]);
+    expect(filterComponentsForPass(spec, tree, "blockout").map((c) => c.id).sort()).toEqual([a, b].sort());
+    const g = generateFactory(spec, "blockout");
+    expect(g.ok).toBe(false);
+    if (!g.ok) expect(g.report.gate).toBe("strict-quality");
   });
   test("a child limb without an attachment contract is a quality failure, not an error", () => {
     const spec = campLanternSpec();

@@ -372,7 +372,7 @@ export const INSTALLED_SKILLS: BundledSkill[] = [
       "played locally only, never committed, packaged, published or shown in a public video. When " +
       ".agents/skills/notebooklm-podcast-studio exists in the workspace, read it and references/runbook.md first.",
   },
-  // CREATOR-IMG2THREEJS (ADR-0526): the image-to-procedural-three.js craft, built in to Creator. The long-form skill
+  // CREATOR-IMG2THREEJS (ADR-0562): the image-to-procedural-three.js craft, built in to Creator. The long-form skill
   // (spec contract, image analysis, review gates, evals) lives at .agents/skills/img2threejs/; the tools it names are
   // the pure TypeScript port in harness/creator/img2threejs/ registered by harness/omp/img2threejs_extension.ts.
   {

@@ -1,9 +1,9 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/creator/img2threejs/validate.ts - ObjectSculptSpec validation (CREATOR-IMG2THREEJS, ADR-0526).
+// harness/creator/img2threejs/validate.ts - ObjectSculptSpec validation (CREATOR-IMG2THREEJS, ADR-0562).
 // TypeScript port of forge/stage2_spec/validate_sculpt_spec.py from github.com/img2threejs/img2threejs
-// (Apache-2.0), reduced to the rules the generator in this repo honours (see ADR-0526 "not ported").
+// (Apache-2.0), reduced to the rules the generator in this repo honours (see ADR-0562 "not ported").
 //
 // Two kinds of finding, exactly as upstream:
 //   errors    - the spec is malformed. Nothing downstream may read it.
@@ -677,6 +677,18 @@ function validateComponents(spec: JsonRecord, materialIds: Set<string>, evidence
     }
   });
   for (const [id, parent] of parentRefs) if (!ids.has(parent)) s.errors.push(`component ${q(id)} references missing parent ${q(parent)}`);
+  // A parent chain that loops has no root to hang from. Each loop is reported once, by its members.
+  const parentOf = new Map(parentRefs);
+  const looped = new Set<string>();
+  for (const [start] of parentRefs) {
+    const chain: string[] = [];
+    let at: string | undefined = start;
+    while (at !== undefined && !chain.includes(at) && !looped.has(at)) { chain.push(at); at = parentOf.get(at); }
+    if (at === undefined || looped.has(at)) continue;
+    const loop = chain.slice(chain.indexOf(at));
+    for (const member of loop) looped.add(member);
+    s.errors.push(`component parent chain loops: ${[...loop, at].map(q).join(" -> ")}`);
+  }
   if (ids.size === 0) s.errors.push("at least one component is required");
   if (ids.size === 1) s.warnings.push("only one component found; this is likely still blockout quality");
 }

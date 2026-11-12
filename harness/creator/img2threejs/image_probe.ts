@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // harness/creator/img2threejs/image_probe.ts - technical probe of a reference image (CREATOR-IMG2THREEJS,
-// ADR-0526). TypeScript port of forge/stage1_intake/probe_image.py from github.com/img2threejs/img2threejs
+// ADR-0562). TypeScript port of forge/stage1_intake/probe_image.py from github.com/img2threejs/img2threejs
 // (Apache-2.0): container type and pixel size from the header bytes of PNG, JPEG, GIF, WebP, BMP and TIFF.
 //
 // This is ONLY a technical probe. It says whether the file is an image the pipeline can reason about and

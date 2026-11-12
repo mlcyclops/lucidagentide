@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // harness/creator/img2threejs/fixtures/camp_lantern.ts - a small ObjectSculptSpec that passes the strict
-// quality gate (CREATOR-IMG2THREEJS, ADR-0526). Shared by the unit tests and `make demo-CREATOR-IMG2THREEJS`.
+// quality gate (CREATOR-IMG2THREEJS, ADR-0562). Shared by the unit tests and `make demo-CREATOR-IMG2THREEJS`.
 // It is first-party and invented: a generic camp lantern, no reference image, no brand.
 
 import { makePreSpecAssessment, makeQualityContract } from "../assessment.ts";

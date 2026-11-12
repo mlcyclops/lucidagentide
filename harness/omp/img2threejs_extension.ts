@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/omp/img2threejs_extension.ts - the agent's img2threejs tools (CREATOR-IMG2THREEJS, ADR-0526). Five
+// harness/omp/img2threejs_extension.ts - the agent's img2threejs tools (CREATOR-IMG2THREEJS, ADR-0562). Five
 // omp-native tools over the pure TypeScript port in harness/creator/img2threejs/:
 //
 //   img2threejs_probe     (approval "read")   header probe of a reference image: type, size, aspect, verdict
@@ -23,7 +23,7 @@
 // Fail-closed, like the library: a BLOCKED report is an error result and NO factory file is written; a state
 // file that fails validation is never rewritten; an unreadable spec is an error, never an empty spec.
 
-import { existsSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, statSync, writeFileSync, closeSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, closeSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import {
   DEFAULT_MAX_PER_PASS, DEFAULT_MAX_TOTAL, STATE_RELATIVE_PATH, WorkflowStateError, generateFactory, isAssessableTier,
@@ -112,6 +112,19 @@ function writeAtomic(abs: string, body: string): void {
   renameSync(tmp, abs);
 }
 
+/** Claim a path that must not exist yet with an exclusive create, so the "do not overwrite" rule is
+ *  enforced by the file system rather than by a check a later write could race. False when it is taken. */
+function claimNew(abs: string): boolean {
+  mkdirSync(dirname(abs), { recursive: true });
+  try {
+    closeSync(openSync(abs, "wx"));
+    return true;
+  } catch (e) {
+    if (e instanceof Error && "code" in e && e.code === "EEXIST") return false;
+    throw e;
+  }
+}
+
 // ── tool bodies (exported for tests and the demo; `root` is the workspace) ──
 
 export function runProbe(root: string, params: unknown): TextResult {
@@ -180,7 +193,6 @@ export function runGenerate(root: string, params: unknown): TextResult {
   const out = confinePath(root, p.out ?? "src/createObjectModel.ts", "img2threejs_generate out");
   if (!out.ok) return text(out.error, true);
   if (!/\.ts$/i.test(out.abs)) return text(`img2threejs_generate: out must be a .ts file (got ${JSON.stringify(out.rel)})`, true);
-  if (existsSync(out.abs) && p.force !== true) return text(`img2threejs_generate: ${JSON.stringify(out.rel)} already exists. Pass force: true to regenerate it (a refine-code iteration edits the existing file instead).`, true);
   const r = generateFactory(spec, passId);
   if (!r.ok) {
     const report = r.report;
@@ -191,7 +203,17 @@ export function runGenerate(root: string, params: unknown): TextResult {
       true,
     );
   }
-  try { writeAtomic(out.abs, r.source); } catch (e) { return text(`img2threejs_generate: could not write ${JSON.stringify(out.rel)}: ${e instanceof Error ? dataText(e.message, 200) : "unknown error"}`, true); }
+  let claimed = false;
+  try {
+    if (p.force !== true) {
+      claimed = claimNew(out.abs);
+      if (!claimed) return text(`img2threejs_generate: ${JSON.stringify(out.rel)} already exists. Pass force: true to regenerate it (a refine-code iteration edits the existing file instead).`, true);
+    }
+    writeAtomic(out.abs, r.source);
+  } catch (e) {
+    if (claimed) rmSync(out.abs, { force: true }); // the empty claim, never a file that was there before
+    return text(`img2threejs_generate: could not write ${JSON.stringify(out.rel)}: ${e instanceof Error ? dataText(e.message, 200) : "unknown error"}`, true);
+  }
   const bytes = Buffer.byteLength(r.source, "utf8");
   return text(
     `generated pass ${passId}: ${out.rel} (${bytes} bytes), export ${r.functionName}(options) and ${r.functionName.replace(/Model$/, "LookDevLights")}(mode); ` +

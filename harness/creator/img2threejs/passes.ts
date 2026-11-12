@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/creator/img2threejs/passes.ts - the locked-sequential pass gate (CREATOR-IMG2THREEJS, ADR-0526).
+// harness/creator/img2threejs/passes.ts - the locked-sequential pass gate (CREATOR-IMG2THREEJS, ADR-0562).
 // TypeScript port of forge/stage3_build/orchestrate_passes.py from github.com/img2threejs/img2threejs
 // (Apache-2.0).
 //
@@ -77,9 +77,13 @@ export function filterComponentsForPass(spec: JsonRecord, components: readonly J
   for (const c of components) if (c.id !== undefined && c.id !== null) byId.set(String(c.id), c);
   const included: JsonRecord[] = [];
   const includedIds = new Set<string>();
+  // Ids whose parent chain is being walked. validateSpec rejects a looping chain, but this function is
+  // exported and takes any tree, so a loop must end the walk here instead of exhausting the stack.
+  const walking = new Set<string>();
   const include = (component: JsonRecord): void => {
     const id = str(component.id);
-    if (!id || includedIds.has(id)) return;
+    if (!id || includedIds.has(id) || walking.has(id)) return;
+    walking.add(id);
     const parent = component.parent;
     if (parent !== undefined && parent !== null && byId.has(String(parent))) include(byId.get(String(parent))!);
     included.push(component);

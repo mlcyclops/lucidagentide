@@ -95,15 +95,23 @@ describe("the workspace boundary", () => {
     expect(confinePath(root, "", "t")).toMatchObject({ ok: false });
     expect(confinePath(root, 42, "t")).toMatchObject({ ok: false });
   });
-  test("a symlink that points out of the workspace is refused by name", () => {
+  test("a link that points out of the workspace is refused by name", () => {
     writeFileSync(join(outside, "secret.json"), "{}");
-    symlinkSync(join(outside, "secret.json"), join(root, "link.json"));
-    const r = confinePath(root, "link.json", "t");
-    expect(r.ok).toBe(false);
-    expect((r as { error: string }).error).toContain("through a link");
     mkdirSync(join(root, "deep"));
-    symlinkSync(outside, join(root, "deep", "out"));
+    symlinkSync(outside, join(root, "deep", "out"), "junction"); // a junction needs no privilege on Windows
     expect(confinePath(root, "deep/out/new.ts", "t")).toMatchObject({ ok: false });
+    const viaDir = confinePath(root, "deep/out/secret.json", "t");
+    expect(viaDir.ok).toBe(false);
+    if (!viaDir.ok) expect(viaDir.error).toContain("through a link");
+    // A FILE symlink needs a privilege an unelevated Windows account does not hold. Where it cannot be
+    // made, the directory link above is the proof; where it can, the file case is checked too.
+    let fileLink = true;
+    try { symlinkSync(join(outside, "secret.json"), join(root, "link.json")); } catch { fileLink = false; }
+    if (fileLink) {
+      const r = confinePath(root, "link.json", "t");
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toContain("through a link");
+    }
   });
 });
 

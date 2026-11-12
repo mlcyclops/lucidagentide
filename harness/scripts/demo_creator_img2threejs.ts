@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// demo-CREATOR-IMG2THREEJS (ADR-0526): the img2threejs pipeline as pure TypeScript, driven end to end through the
+// demo-CREATOR-IMG2THREEJS (ADR-0562): the img2threejs pipeline as pure TypeScript, driven end to end through the
 // REAL agent tools against a temp workspace, so the proof needs no engine, no image model and no network:
 //
 //   [1] the extension self-skips outside Creator builds and registers five tools inside one

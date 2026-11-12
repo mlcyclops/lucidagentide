@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // harness/creator/img2threejs/factory.ts - the pass-gated three.js factory generator (CREATOR-IMG2THREEJS,
-// ADR-0526). TypeScript port of the core of forge/stage3_build/generate_threejs_factory.py from
+// ADR-0562). TypeScript port of the core of forge/stage3_build/generate_threejs_factory.py from
 // github.com/img2threejs/img2threejs (Apache-2.0).
 //
 // Input: a validated ObjectSculptSpec and the pass to build. Output: TypeScript SOURCE for a factory
@@ -21,7 +21,7 @@
 // Every spec string that lands in the source goes through JSON.stringify, so a spec cannot inject code:
 // names, ids and whole component records are emitted as JSON literals.
 //
-// Not ported (see ADR-0526): procedural and reference texture sets (materials are flat PBR from the spec's
+// Not ported (see ADR-0562): procedural and reference texture sets (materials are flat PBR from the spec's
 // numbers), the look-dev environment / composer / inspect-controls exports, stand-proud, SDF polygonization,
 // visual hull carving, Catmull-Clark subdivision, quadric decimation, vertex paint, the character rig.
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // harness/creator/img2threejs/contract.ts - the closed vocabularies of the img2threejs pipeline
-// (CREATOR-IMG2THREEJS, ADR-0526), ported to TypeScript from github.com/img2threejs/img2threejs
+// (CREATOR-IMG2THREEJS, ADR-0562), ported to TypeScript from github.com/img2threejs/img2threejs
 // (Apache-2.0; forge/stage2_spec/validate_sculpt_spec.py, forge/stage3_build/orchestrate_passes.py).
 //
 // Upstream ships this pipeline as Python scripts. CLAUDE.md invariant 2 fixes the language boundary of

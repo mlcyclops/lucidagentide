@@ -26065,7 +26065,7 @@ Parity already held and left alone: workspace, tab, pane hierarchy and ids; the 
 
 **Consequences.** Special themes are opt-in and reversible, and add no server state. Adding a season is a registry row; adding a palette is a ThemeDef plus its CSS and trainer blocks, which the existing tests enforce. Relates to ADR-0251 (mascot), P-THEME.1/.2, P-PERF.2 (ADR-0129).
 
-## ADR-0526 -- CREATOR-IMG2THREEJS: img2threejs (image to procedural three.js) ported to TypeScript as a Creator capability, with five agent tools and a built-in skill (2026-11-09)
+## ADR-0562 -- CREATOR-IMG2THREEJS: img2threejs (image to procedural three.js) ported to TypeScript as a Creator capability, with five agent tools and a built-in skill (2026-11-09)
 
 **Status:** Accepted -- BUILT. `make demo-CREATOR-IMG2THREEJS`.
 

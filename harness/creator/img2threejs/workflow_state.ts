@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // harness/creator/img2threejs/workflow_state.ts - the local checklist that is the authority on progress
-// (CREATOR-IMG2THREEJS, ADR-0526). TypeScript port of forge/_shared/workflow_state.py, forge/state.py and
+// (CREATOR-IMG2THREEJS, ADR-0562). TypeScript port of forge/_shared/workflow_state.py, forge/state.py and
 // forge/next.py from github.com/img2threejs/img2threejs (Apache-2.0).
 //
 // Upstream's rule, kept verbatim in spirit: `.img2threejs/state.json` is the authority on progress, the

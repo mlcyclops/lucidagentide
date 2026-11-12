@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // harness/creator/img2threejs/assessment.ts - the pre-spec assessment and quality contract skeletons
-// (CREATOR-IMG2THREEJS, ADR-0526). TypeScript port of forge/stage2_spec/new_pre_spec_assessment.py and the
+// (CREATOR-IMG2THREEJS, ADR-0562). TypeScript port of forge/stage2_spec/new_pre_spec_assessment.py and the
 // `make_pre_spec_assessment` / `make_quality_contract` builders of forge/stage2_spec/new_sculpt_spec.py from
 // github.com/img2threejs/img2threejs (Apache-2.0).
 //
