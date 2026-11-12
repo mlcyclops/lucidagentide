@@ -26,6 +26,8 @@
 // keys in the TUI. send-keys types into an AGENT pane's composer only; it never reaches the keymap.
 // With `attach`, those human-only keys reach the keymap from an attached client alone: a person at a
 // terminal, holding the hub token only, never the engine UI token (every engine call stays here).
+// /attach and /cmd accept the same token, so an attached client cannot be told apart from a
+// same-user script: a Herd server (ADR-0563) therefore answers no ask from any client at all.
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";

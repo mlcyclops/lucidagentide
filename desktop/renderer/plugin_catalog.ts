@@ -441,7 +441,8 @@ export type AddonAction =
   | { kind: "not-offered" }
   | { kind: "install"; version: string }
   | { kind: "installing" }
-  | { kind: "open" };
+  | { kind: "open" }
+  | { kind: "update"; from: string; to: string };
 
 export interface AddonFacts {
   /** The engine's plugin list has answered at least once, so `offeredVersion` is known. */
@@ -454,12 +455,19 @@ export interface AddonFacts {
   busy: boolean;
 }
 
-/** The add-on card's state (ADR-0541). Order matters: in-flight work shows Installing; an installed add-on
- *  opens (and can be removed) whatever this build offers; otherwise Install only when this build ships the
- *  signed package, and Not in this build when it does not. Before the first answer, Checking. */
+/** The add-on card's state (ADR-0541, ADR-0563). Order matters: in-flight work shows Installing; an
+ *  installed add-on offers Update when this build ships a strictly newer package (installed through the
+ *  same install-offered path), else opens (and can be removed) whatever this build offers; otherwise
+ *  Install only when this build ships the signed package, and Not in this build when it does not.
+ *  Before the first answer, Checking. */
 export function decideAddonAction(f: AddonFacts): AddonAction {
   if (f.busy) return { kind: "installing" };
-  if (f.installed) return { kind: "open" };
+  if (f.installed) {
+    const offered = f.offeredVersion;
+    return offered && isNewerVersion(offered, f.installed.version)
+      ? { kind: "update", from: f.installed.version, to: offered }
+      : { kind: "open" };
+  }
   if (!f.listed) return { kind: "checking" };
   return f.offeredVersion ? { kind: "install", version: f.offeredVersion } : { kind: "not-offered" };
 }
@@ -472,6 +480,7 @@ export function addonActionLabel(a: AddonAction): string {
     case "install": return "Install";
     case "installing": return "Installing";
     case "open": return "Open";
+    case "update": return "Update";
   }
 }
 

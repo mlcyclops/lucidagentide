@@ -521,6 +521,12 @@ export const DECK_HINTS: Record<DeckId | "agent" | "prompting" | "rail", string>
   prompting: "type your prompt · ⏎ send · esc cancel",
   rail: "rail: j/k select · ⏎ focus (agent row: attach) · r rename · n new · agent: 1-9 priority · c cancel · esc",
 };
+/** ADR-0563 (Herd only): an attached Herd client holds the same token a same-user script does, so it
+ *  never answers an ask; a person answers it in the IDE. */
+export const HERD_ASK_IN_IDE = "waiting on a person's approval: answer it in the IDE (Herd never answers an ask)";
+/** ADR-0563 (Herd only): release and dismiss of a quarantined call are a person's, in the IDE. */
+export const HERD_SECURITY_IN_IDE = "security decisions are made in the IDE (Herd never releases or dismisses a block)";
+const HERD_AGENT_HINT = "⏎ prompt · m model · j/k scroll · G live · asks are answered in the IDE · x close";
 
 /** Style one plain deck row (widths already fixed - only color changes here, never geometry). */
 export function colorizeRow(deck: DeckId, row: string): string {
@@ -598,8 +604,8 @@ export interface HubHostPalette { items(): PaletteItem[]; act(id: string): void 
 
 /** P-HERD.6 (ADR-0495; Herd only, ADR-0541): the `main` deck, owned by the host (Herd's Main pane:
  *  the engine's own conversation). Inert in the classic hub: it passes none, and its isDeck never
- *  accepts "main". Keys reach the host only as an attached client's keystrokes (handleInput): the
- *  control plane's send-keys types into agent panes only, so no script answers a Main ask. */
+ *  accepts "main". Keys reach the host only as an attached client's keystrokes (handleInput), and
+ *  no key answers a Main ask (ADR-0563): an attached client holds the same token a script does. */
 export interface HubHostDeck {
   /** A pane of this deck, framed, exactly w x h rows. */
   pane(w: number, h: number, focused: boolean): string[];
@@ -1068,8 +1074,9 @@ export class HubComponent implements Component {
       if (data === "r") { this.#railRename(row); return; }
       if (data === "n") { this.#railCreate(row); return; }
     }
-    // P-HERD.6 (Herd only): a focused Main pane takes its own keys first (⏎ compose, y/s/d answer,
-    // c cancel, m/M pickers, scrolling); the rest fall through to the hub keymap.
+    // P-HERD.6 (Herd only): a focused Main pane takes its own keys first (⏎ compose, y/s/d refused
+    // while an ask is parked (ADR-0563), c cancel, m/M pickers, scrolling); the rest fall through
+    // to the hub keymap.
     if (this.#hostDeck && this.#focusedDeck() === "main" && this.#hostDeck.input(data, isEnter)) { this.#ui.requestRender(); return; }
     // ADR-0559 (Herd only): a focused pane on a host-owned lane takes its own keys first, the same way.
     const hostLane = this.#focusedHostLane();
@@ -1103,7 +1110,12 @@ export class HubComponent implements Component {
     else if (data === "G" && this.#focusedDeck() === "agent") this.#scroll = 0;
     else if (data === "r" && this.#focusedDeck() === "spaces") { this.#startRenameSpace(); return; }
     else if (data === "r") { void this.refresh(); return; }
-    else if (data === "a" || data === "i") { void this.#judge(data === "a"); return; }
+    else if (data === "a" || data === "i") {
+      // ADR-0563: a Herd client makes no security decision either (same token as a script).
+      if (this.#hostDeck) { if (this.#focusedDeck() === "security") this.#status = `refused: ${HERD_SECURITY_IN_IDE}`; this.#ui.requestRender(); return; }
+      void this.#judge(data === "a");
+      return;
+    }
     else if (data === "n" && this.#focusedDeck() === "spaces") { this.#createSpace(); return; }
     else if (data === "n") { void this.#spawnAgent(null); return; }
     else if (data === "c" && this.#focusedDeck() === "agents") { void this.#cancelLane(); return; }
@@ -1112,7 +1124,12 @@ export class HubComponent implements Component {
     else if (data === "t" && this.#focusedDeck() === "network") { void this.#togglePosture(); return; }
     else if (data === "/" && this.#focusedDeck() === "kg") { this.#promptKind = "kg-filter"; this.#prompt = { lane: "", text: this.#kgFilter }; }
     else if (data === "c" && this.#focusedDeck() === "kg") { void this.#cycleKg(); return; }
-    else if ((data === "y" || data === "s" || data === "d") && this.#pendingApprovalLane()) { void this.#answerApproval(data); return; }
+    else if ((data === "y" || data === "s" || data === "d") && this.#pendingApprovalLane()) {
+      // ADR-0563: a Herd client never answers an ask (it holds the same token a script does).
+      if (this.#hostDeck) { this.#status = `refused: ${HERD_ASK_IN_IDE}`; this.#ui.requestRender(); return; }
+      void this.#answerApproval(data);
+      return;
+    }
     else if (isEnter) { void this.#enter(); return; }
     else if (data === "m") { this.#openModelPicker(); return; }
     this.#ui.requestRender();
@@ -1179,7 +1196,7 @@ export class HubComponent implements Component {
     if (leaf.deck === "agent" && leaf.lane) {
       // A parked ask owns the pane: opening the composer here is how "y + enter" became a prompt
       // named "y" (field report 2026-09-28). Answer first; the composer comes back after.
-      if (this.#pendingApprovalLane()) { this.#status = "this agent is waiting on the ask above - answer it: y allow once · s allow for session · d deny"; this.#ui.requestRender(); return; }
+      if (this.#pendingApprovalLane()) { this.#status = this.#hostDeck ? `this agent is ${HERD_ASK_IN_IDE}` : "this agent is waiting on the ask above - answer it: y allow once · s allow for session · d deny"; this.#ui.requestRender(); return; }
       this.#promptKind = "agent"; this.#prompt = { lane: leaf.lane, text: "" }; this.#scroll = 0; this.#ui.requestRender(); return;
     }
     // P-TUI.4: the Agents table attaches exactly like Fleet - the ADR-0420 live-agent-pane bind.
@@ -1643,7 +1660,7 @@ export class HubComponent implements Component {
       ["  c on Agents", "cancel the selected agent's turn"],
       ["  x on Agents", "dismiss a STOPPED agent (done/error/stopped)"],
       ["  ⏎ on an agent", "type a prompt · ⏎ sends · esc cancels"],
-      ["  y / s / d", "answer a parked ask: once / session / deny"],
+      this.#hostDeck ? ["  a parked ask", "answered in the IDE, never in Herd"] : ["  y / s / d", "answer a parked ask: once / session / deny"],
       ["  m", "switch the agent's model (picker)"],
       ["", ""],
       ["Knowledge (deck 8)", ""],
@@ -1658,8 +1675,9 @@ export class HubComponent implements Component {
       ["", ""],
       ...(this.#hostDeck ? [...this.#hostDeck.help, ["", ""] as [string, string]] : []),
       ["Security", ""],
-      ["  a", "approve the selected block (audited release)"],
-      ["  i", "dismiss the selected block (acknowledge only)"],
+      ...(this.#hostDeck
+        ? [["  a / i", "release or dismiss a block: in the IDE, never in Herd"] as [string, string]]
+        : [["  a", "approve the selected block (audited release)"], ["  i", "dismiss the selected block (acknowledge only)"]] as [string, string][]),
       ["", ""],
       ["General", ""],
       ["  r", "refresh now (auto-refreshes every 2s)"],
@@ -1717,7 +1735,7 @@ export class HubComponent implements Component {
       lines.push("");
       lines.push(`\u0002⚠ approval needed (${str(ask.kind)})`);
       for (const row of wrapText(str(ask.summary), innerW - 4)) lines.push(`\u0002  ${row}`);
-      lines.push(`\u0002  y allow once · s allow for this session · d deny`);
+      lines.push(this.#hostDeck ? `\u0002  ${HERD_ASK_IN_IDE}` : `\u0002  y allow once · s allow for this session · d deny`);
     }
     if (lines.length === 0) lines.push("", leaf.slot && !lane ? `  waiting for ${slotLabel(leaf.slot)}; it fills when one is there` : status === "gone" ? "  this agent is gone (x closes the pane)" : "  no turns yet - press ⏎ and type to talk to this agent");
     const prompt = this.#prompt;
@@ -1956,7 +1974,7 @@ export class HubComponent implements Component {
     const hostLane = this.#focusedHostLane();
     const hostModal = this.#hostDeck?.modal() ? ` ${this.#hostDeck.hint()}` : this.#hostLanes?.modal() ? ` ${this.#hostLanes.hint(this.#focusedLeaf().lane ?? "")}` : "";
     const focusedDeck = this.#focusedDeck();
-    const deckHint = focusedDeck === "main" ? this.#hostDeck?.hint() ?? "" : hostLane !== null ? this.#hostLanes!.hint(hostLane) : DECK_HINTS[focusedDeck];
+    const deckHint = focusedDeck === "main" ? this.#hostDeck?.hint() ?? "" : hostLane !== null ? this.#hostLanes!.hint(hostLane) : this.#hostDeck && focusedDeck === "agent" ? HERD_AGENT_HINT : this.#hostDeck && focusedDeck === "security" ? `j/k select · ${HERD_SECURITY_IN_IDE}` : DECK_HINTS[focusedDeck];
     const composing = hostModal ? hostModal : this.#prompt && this.#promptKind === "wl-add"
       ? ` add host to whitelist: ${this.#prompt.text}▌  (⏎ save · esc cancel)`
       : this.#prompt && this.#promptKind === "kg-filter"

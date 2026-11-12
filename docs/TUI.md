@@ -178,8 +178,14 @@ installs it for you). Without it, `lucid herd` prints how to install it and exit
 - **Security.** The same control plane as the hub: the hub token, a loopback Host, no
   browser Origin, a timing-safe compare, and the nonce handshake before the token leaves
   a client. A terminal client holds the hub token only, never the engine's UI token. The
-  human-only keys (`a`, `i`, `y`, `s`, `d`) work only from an attached terminal; `/cmd`
-  has no verb for them.
+  Security deck's `a` (release) and `i` (dismiss) are refused in Herd and send nothing:
+  security decisions are made in the IDE (ADR-0563; the classic hub keeps them). A parked
+  ask (Main's or a lane's) is answered in the IDE, never in Herd: an attached client holds
+  the same token any same-user script does, so `y`, `s` and `d` are refused there and send
+  nothing; the pane shows the ask's kind and summary and points at the IDE. Engine text
+  (titles, model, tool and option names, turn text) is sanitized before it reaches the
+  terminal. Stopping or removing the add-on stops every Herd server it can verify, and one
+  name runs one server (an exclusive lock in the data folder).
 
 ### Layouts and keys (P-HERD.2 and P-HERD.3, ADR-0491 and ADR-0492)
 

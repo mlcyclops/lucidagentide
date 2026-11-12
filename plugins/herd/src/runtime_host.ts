@@ -10,9 +10,10 @@
 //   2. serves the read-only GUI mirror of instance `main` on the same PORT (gui_server.ts, ADR-0497):
 //      the page the IDE opens in Herd's Preview tab, with live updates, never an approval or a prompt;
 //   3. runs instance `main` as `<IDE bun> <package>/client.js server start` with the add-on's data dir,
-//      unless a verified `main` already runs (started earlier by `lucid herd`): that one is adopted,
-//      never stopped by the drawer, because the drawer did not start it.
-// The worker ends when the runtime stops the plugin (its tree kill takes the worker too); the worker
+//      unless a verified `main` already runs (started earlier by `lucid herd`): that one is adopted.
+// On the runtime's stop signal every verified instance is stopped first (ADR-0563: the adopted
+// `main` and any named one a terminal started, so none outlives the add-on's removal), through the
+// same path as `lucid herd server stop`; one that will not stop is logged by name. The worker
 // ending ends this process, which the runtime reports. The runtime gives no engine checkout, so the
 // worker only attaches to the IDE's own engine (it never spawns one here).
 
@@ -22,7 +23,7 @@ import { createServer, type Server } from "node:http";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { guardRequest, MIRROR_ASSETS, MIRROR_HEADERS, MirrorFeed, readMirror, type MirrorSink } from "./gui_server.ts";
-import { connectInstance, DEFAULT_INSTANCE } from "./instance.ts";
+import { connectInstance, DEFAULT_INSTANCE, STOP_WAIT_MS, stopAllInstances } from "./instance.ts";
 
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -115,7 +116,9 @@ export async function runRuntimeHost(env: Env): Promise<number> {
   if (adopted) {
     process.stdout.write(`[herd] instance main already runs (pid ${adopted.pid}); serving its health and its read-only view only\n`);
     const closed = Promise.withResolvers<number>();
-    for (const sig of ["SIGTERM", "SIGINT"] as const) process.once(sig, () => { health.close(); closed.resolve(0); });
+    onShutdown(() => {
+      void stopHerdInstances(data).then((ok) => { health.close(); closed.resolve(ok ? 0 : 1); });
+    });
     return closed.promise;
   }
   const bun = ideBun(process.execPath, process.platform, process.versions.bun !== undefined);
@@ -124,9 +127,33 @@ export async function runRuntimeHost(env: Env): Promise<number> {
   const ended = Promise.withResolvers<number>();
   worker.once("error", (e) => { process.stderr.write(`[herd] could not start the Herd server with ${bun}: ${e.message}\n`); ended.resolve(1); });
   worker.once("exit", (code) => ended.resolve(code ?? 1));
-  const forward = (sig: "SIGTERM" | "SIGINT") => { try { worker.kill(sig); } catch { /* gone */ } };
-  for (const sig of ["SIGTERM", "SIGINT"] as const) process.once(sig, () => forward(sig));
+  let stopOk = true;
+  onShutdown((sig) => {
+    // The worker is instance main: it stops through the same path as every other instance; the
+    // signal is forwarded only after, for a worker that would not stop.
+    void stopHerdInstances(data).then((ok) => {
+      stopOk = ok;
+      try { worker.kill(sig); } catch { /* gone */ }
+    });
+  });
   const code = await ended.promise;
   health.close();
-  return code;
+  return stopOk ? code : 1;
+}
+
+function onShutdown(fn: (sig: "SIGTERM" | "SIGINT") => void): void {
+  let fired = false;
+  for (const sig of ["SIGTERM", "SIGINT"] as const) process.once(sig, () => { if (!fired) { fired = true; fn(sig); } });
+}
+
+/** ADR-0563: stopping (or removing) the add-on stops every verified Herd instance, the one this host
+ *  started and any a terminal started (adopted `main` or a named one), through the same path as
+ *  `lucid herd server stop`, each awaited with `waitMs`. An instance that will not stop is logged by
+ *  name. False when one is left running. The runtime stops a plugin with a tree kill and no hook
+ *  runs before removal, so this runs on the host's shutdown signal. */
+export async function stopHerdInstances(data: string, waitMs = STOP_WAIT_MS, log: (line: string) => void = (l) => { process.stderr.write(l); }): Promise<boolean> {
+  const { stopped, failed } = await stopAllInstances(data, waitMs);
+  if (stopped.length) log(`[herd] stopped instance${stopped.length === 1 ? "" : "s"} ${stopped.join(", ")} with the add-on\n`);
+  for (const f of failed) log(`[herd] could not stop instance ${f.name}: ${f.error}: ${f.message}; it is still running\n`);
+  return failed.length === 0;
 }

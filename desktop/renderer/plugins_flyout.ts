@@ -108,10 +108,10 @@ const STATUS_CHIP: Record<FreePlugin["status"], string> = { featured: "Featured"
 /** The footer of an optional add-on's card (ADR-0541): the one state button, Remove once installed, and the
  *  status note. Re-rendered alone on every state change. */
 export function addonFootHtml(p: FreePlugin, a: AddonAction, note: CardNote | null): string {
-  const meta = a.kind === "install" ? `Free, version ${esc(a.version)}` : a.kind === "not-offered" ? "Free, not shipped with this build" : "Free";
+  const meta = a.kind === "install" ? `Free, version ${esc(a.version)}` : a.kind === "update" ? `Free, version ${esc(a.from)}, ${esc(a.to)} available` : a.kind === "not-offered" ? "Free, not shipped with this build" : "Free";
   const disabled = a.kind === "checking" || a.kind === "not-offered" || a.kind === "installing" ? " disabled" : "";
   const busy = a.kind === "installing" ? ` aria-busy="true"` : "";
-  const remove = a.kind === "open" ? `<button type="button" class="plg-lic" data-plg-iremove="${esc(p.id)}">Remove</button>` : "";
+  const remove = a.kind === "open" || a.kind === "update" ? `<button type="button" class="plg-lic" data-plg-iremove="${esc(p.id)}">Remove</button>` : "";
   return `<div class="plg-foot"><span class="plg-meta">${meta}</span>${remove}<button type="button" class="plg-act" data-kind="${a.kind}" data-plg-addon="${esc(p.id)}"${disabled}${busy}>${esc(addonActionLabel(a))}</button></div>`
     + (note ? `<p class="plg-note" data-tone="${note.tone}" role="status">${esc(note.text)}</p>` : "");
 }
@@ -671,7 +671,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     if (!p) return;
     const a = addonActionFor(id);
     switch (a.kind) {
-      case "install": await installAddon(p); return;
+      case "install": case "update": await installAddon(p); return;
       case "open": await openAddon(p); return;
       case "checking": case "not-offered": case "installing": return;
     }

@@ -20,8 +20,9 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { pluginDataDir } from "../../../desktop/plugins/installed.ts";
-import { connectHub, type HubDiscovery } from "../../../harness/launcher/hub_control.ts";
+import { callHub, connectHub, verifyHub, type HubDiscovery, type HubReply } from "../../../harness/launcher/hub_control.ts";
 import { HubOpError, loadSpaces, Spaces, spacesPath } from "../../../harness/launcher/hub_spaces.ts";
 
 export const HERD_ID = "herd";
@@ -74,6 +75,95 @@ export async function liveInstances(data: string, fetchImpl: typeof fetch = fetc
     if (d) out.push({ name, pid: d.pid, port: d.port });
   }
   return out;
+}
+
+/** True while process `pid` exists (EPERM: it exists, owned by someone else). */
+export function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (e) { return errCode(e) === "EPERM"; }
+}
+
+function errCode(e: unknown): unknown {
+  return e instanceof Error && "code" in e ? e.code : undefined;
+}
+
+const lockPid = (path: string): number | null => {
+  let raw: string;
+  try { raw = readFileSync(path, "utf8"); } catch { return null; }
+  const pid = Number(raw.trim());
+  return Number.isInteger(pid) && pid > 0 ? pid : 0; // 0: unreadable content, a torn or foreign file
+};
+
+/** ADR-0563: one server per instance name. `run/<name>/server.lock` is created O_EXCL with this
+ *  pid before the "already running" check and held for the server's life. A lock whose pid is not
+ *  alive is stale and reclaimed (moved aside first, so two reclaimers cannot both win). Returns the
+ *  release, or the live holder's pid. */
+export function acquireInstanceLock(data: string, name: string, pid = process.pid, alive: (pid: number) => boolean = pidAlive): { release(): void } | { heldBy: number } {
+  const dir = instancePaths(data, name).run;
+  const path = join(dir, "server.lock");
+  mkdirSync(dir, { recursive: true });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      writeFileSync(path, `${pid}\n`, { flag: "wx", mode: 0o600 });
+      let released = false;
+      return {
+        release() {
+          if (released) return;
+          released = true;
+          if (lockPid(path) === pid) rmSync(path, { force: true });
+        },
+      };
+    } catch (e) {
+      if (errCode(e) !== "EEXIST") throw e;
+    }
+    const holder = lockPid(path);
+    if (holder === null) continue; // gone between the create and the read: try again
+    if (holder > 0 && alive(holder)) return { heldBy: holder };
+    const aside = `${path}.stale-${pid}`;
+    try { renameSync(path, aside); } catch { continue; } // another reclaimer moved it first
+    const moved = lockPid(aside);
+    if (moved !== null && moved > 0 && moved !== holder && alive(moved)) {
+      // A live server's fresh lock was moved, not the stale one: put it back and yield to it.
+      try { writeFileSync(path, `${moved}\n`, { flag: "wx", mode: 0o600 }); } catch { /* a third one holds it */ }
+      rmSync(aside, { force: true });
+      return { heldBy: moved };
+    }
+    rmSync(aside, { force: true });
+  }
+  const holder = lockPid(path);
+  return { heldBy: holder ?? 0 };
+}
+
+/** How long a stop waits for a server to be gone: a spawned engine is stopped and awaited first. */
+export const STOP_WAIT_MS = 60_000;
+
+export type StopResult = { ok: true } | { ok: false; error: string; message: string };
+
+/** `lucid herd server stop`: ask the verified server `hub` to stop, then wait until it no longer
+ *  answers its handshake (at most `waitMs`), so the next command never races the shutdown. */
+export async function stopInstance(hub: HubDiscovery, name: string, waitMs = STOP_WAIT_MS): Promise<StopResult> {
+  let r: HubReply;
+  try { r = await callHub(hub, ["server", "stop"]); }
+  catch (e) { return { ok: false, error: "hub_unreachable", message: e instanceof Error ? e.message : String(e) }; }
+  if (r.status !== 200 || r.body.ok !== true) {
+    return { ok: false, error: typeof r.body.error === "string" ? r.body.error : "refused", message: typeof r.body.message === "string" ? r.body.message : `server stop -> ${r.status}` };
+  }
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline && (await verifyHub(hub))) await sleep(200);
+  if (await verifyHub(hub)) return { ok: false, error: "stop_timeout", message: `Herd instance "${name}" (pid ${hub.pid}) still answers after ${waitMs / 1000}s` };
+  return { ok: true };
+}
+
+/** ADR-0563: every verified instance in `data` stopped through the same path as `server stop`,
+ *  in parallel, each awaited with `waitMs`. `failed` names each one that would not stop. */
+export async function stopAllInstances(data: string, waitMs = STOP_WAIT_MS): Promise<{ stopped: string[]; failed: { name: string; error: string; message: string }[] }> {
+  const results = await Promise.all((await liveInstances(data)).map(async ({ name }) => {
+    const hub = await connectInstance(data, name);
+    return { name, r: hub ? await stopInstance(hub, name, waitMs) : ({ ok: true } as const) };
+  }));
+  return {
+    stopped: results.filter((x) => x.r.ok).map((x) => x.name),
+    failed: results.flatMap(({ name, r }) => (r.ok ? [] : [{ name, error: r.error, message: r.message }])),
+  };
 }
 
 export const SNAPSHOTS_KEPT = 10;

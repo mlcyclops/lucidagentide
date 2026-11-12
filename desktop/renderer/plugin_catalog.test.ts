@@ -251,6 +251,15 @@ describe("optional add-ons", () => {
     expect(addonActionLabel({ kind: "open" })).toBe("Open");
   });
 
+  test("ADR-0563: a newer offered package shows Update; the same or an older one stays Open", () => {
+    expect(decideAddonAction(addonFacts({ installed: herdInstalled, offeredVersion: "0.2.1" }))).toEqual({ kind: "update", from: "0.1.0", to: "0.2.1" });
+    expect(addonActionLabel({ kind: "update", from: "0.1.0", to: "0.2.1" })).toBe("Update");
+    expect(decideAddonAction(addonFacts({ installed: { ...herdInstalled, version: "0.3.0" }, offeredVersion: "0.2.1" }))).toEqual({ kind: "open" });
+    expect(decideAddonAction(addonFacts({ installed: herdInstalled, offeredVersion: "0.1.0" }))).toEqual({ kind: "open" });
+    expect(decideAddonAction(addonFacts({ installed: herdInstalled, offeredVersion: "garbled" }))).toEqual({ kind: "open" });
+    expect(decideAddonAction(addonFacts({ installed: herdInstalled, offeredVersion: "0.2.1", busy: true }))).toEqual({ kind: "installing" });
+  });
+
   test("no fact turns a build without the package into Install", () => {
     for (const listed of [false, true])
       for (const busy of [false, true])

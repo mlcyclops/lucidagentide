@@ -39,7 +39,7 @@ import { attachOrSpawnEngine, DECKS, HubComponent, type AttachedEngine } from ".
 import { HerdAttention, MAIN_TARGET, type HerdAlert } from "./attention.ts";
 import { MachineSet, machinesPath } from "./engines.ts";
 import { engineFeedDeps, LaneFeed, REAL_TIMERS } from "./events.ts";
-import { classicSeed, connectInstance, herdDataDir, instanceName, instancePaths, LayoutStore } from "./instance.ts";
+import { acquireInstanceLock, classicSeed, connectInstance, herdDataDir, instanceName, instancePaths, LayoutStore } from "./instance.ts";
 import { HerdInput } from "./herd_input.ts";
 import { KeysFile, loadKeysConfig, notifySettings } from "./keys.ts";
 import { LayoutLibrary } from "./layouts.ts";
@@ -363,8 +363,24 @@ export async function runHubServer(env: Env, opts: { name?: string } = {}): Prom
     throw e;
   }
   const data = herdDataDir(env);
-  const running = await connectInstance(data, name);
-  if (running) return fail({ error: "hub_running", message: `Herd instance "${name}" is already running (pid ${running.pid}); attach with \`lucid herd${name === "main" ? "" : ` --name ${name}`}\`` });
+  const attach = `attach with \`lucid herd${name === "main" ? "" : ` --name ${name}`}\``;
+  // ADR-0563: the lock comes before the check and is held for the server's life, so two launches at
+  // once cannot both start.
+  const lock = acquireInstanceLock(data, name);
+  if ("heldBy" in lock) return fail({ error: "hub_running", message: `Herd instance "${name}" is already running or starting (pid ${lock.heldBy}); ${attach}` });
+  const release = () => lock.release();
+  process.once("exit", release);
+  try {
+    const running = await connectInstance(data, name);
+    if (running) return fail({ error: "hub_running", message: `Herd instance "${name}" is already running (pid ${running.pid}); ${attach}` });
+    return await serveLocked(env, data, name);
+  } finally {
+    release();
+    process.off("exit", release);
+  }
+}
+
+async function serveLocked(env: Env, data: string, name: string): Promise<number> {
   // A client that started this server forced its own color level for the frames (hub_client.ts);
   // that is the server's rendering business, not the engine's or its lanes'.
   const engineEnv = { ...env };

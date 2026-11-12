@@ -12,7 +12,6 @@
 //   POST /api/chat/attach {turnId}  observe that turn: a snapshot, its parked asks, then every event
 //   POST /api/chat {text}           a typed prompt; the in-process gate scans it like any other
 //   POST /api/chat/cancel {turnId}  stop the running turn
-//   POST /api/chat/permission       answer a parked ask: ONLY from an attached client's y/s/d keys
 //   GET/POST /api/config, /api/setConfig, /api/modes   the model and mode pickers
 //   POST /api/session/load {id}     open a session as Main; refused while Main is busy (409)
 //
@@ -20,9 +19,13 @@
 // GUI showing Main sees the same turn, because the turn is observed through /api/chat/attach rather
 // than owned by this pane. A turn started here is observed through its own /api/chat stream.
 //
-// Human-only stays human-only (ADR-0495 item 4): nothing on the control plane reaches the permission
-// route. `main prompt` rides /api/chat as a typed prompt and is refused `agent_blocked` while Main
-// waits on the human; `session open --as main` is refused `busy` exactly as the GUI is.
+// Human-only stays human-only (ADR-0495 item 4, ADR-0563): nothing in Herd reaches the permission or
+// answer route, not the control plane and not an attached client's keys (an attached client holds the
+// same discovery token a same-user script does). A parked ask shows its kind and summary and points
+// at the IDE, where a person answers it. Engine text (titles, model, tool and option names, turns) is
+// untrusted and sanitized with spokeBody before it reaches a terminal. `main prompt` rides /api/chat
+// as a typed prompt and is refused `agent_blocked` while Main waits on the human; `session open
+// --as main` is refused `busy` exactly as the GUI is.
 //
 // Not here: "attachments by path through /api/chat/attach" (ADR-0495 item 1). That route attaches an
 // observer to a running turn (P-RECOVER); the engine has no attachment-by-path route to call.
@@ -31,13 +34,16 @@ import { matchesKey, truncateToWidth } from "@oh-my-pi/pi-tui";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { HubOpError } from "../../../harness/launcher/hub_spaces.ts";
 import type { HubOp } from "../../../harness/launcher/hub_tmux_verbs.ts";
-import { fitBlock, HUB_COLORS, pickerMatches, wrapText, type HubHostDeck, type ModelOption } from "../../../harness/launcher/hub_tui.ts";
+import { fitBlock, HERD_ASK_IN_IDE, HUB_COLORS, pickerMatches, wrapText, type HubHostDeck, type ModelOption } from "../../../harness/launcher/hub_tui.ts";
+import { spokeBody } from "./spoke_pane.ts";
 
 const { ACCENT, ACCENT_2, AMBER, CYAN, LINE, TXT, TXT_3 } = HUB_COLORS;
 
 const rec = (v: unknown): Record<string, unknown> => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 const str = (v: unknown): string => (typeof v === "string" ? v : typeof v === "number" ? String(v) : "");
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+/** Engine text bound for one terminal row (a title, a name): no newlines either. */
+const safeLine = (v: unknown): string => spokeBody(v).replace(/\s+/g, " ").trim();
 
 export const MAIN_POLL_MS = 2000;
 /** Whole-turn thinking retention, as the agent pane keeps it: the cap only bounds a runaway stream. */
@@ -48,9 +54,9 @@ const WAIT_MS = 80_000;
 
 // ---- the row model (pure) -------------------------------------------------------------------------
 
-export interface MainAskOption { optionId: string; name: string; kind: string }
-/** A parked permission ask, as the engine's `permission` event carries it. */
-export interface MainAsk { id: string; tool: string; detail: string; options: MainAskOption[] }
+/** A parked permission ask, as the engine's `permission` event carries it: metadata only, since Herd
+ *  never answers it (its options stay with the engine and the IDE). Text is sanitized. */
+export interface MainAsk { id: string; tool: string; detail: string }
 /** Main's current (or last) turn as observed: what makes a working model visible. */
 export interface MainTurn {
   turnId: string;
@@ -67,7 +73,8 @@ export interface MainTurn {
 export const idleTurn = (): MainTurn => ({ turnId: "", prompt: "", text: "", thinking: "", trimmed: false, tools: [], working: false, asks: [], error: "" });
 
 /** Fold one NDJSON event of /api/chat or /api/chat/attach into the turn. A snapshot of ANOTHER turn
- *  starts fresh; the thinking and tool trail of a settled turn stays until the next one begins. */
+ *  starts fresh; the thinking and tool trail of a settled turn stays until the next one begins. Every
+ *  engine string is sanitized here, before it can reach a terminal row. */
 export function foldMainEvent(t: MainTurn, raw: unknown): MainTurn {
   const e = rec(raw);
   switch (e.type) {
@@ -75,54 +82,24 @@ export function foldMainEvent(t: MainTurn, raw: unknown): MainTurn {
       const s = rec(e.snapshot);
       const turnId = str(s.turnId);
       const base = turnId === t.turnId ? t : idleTurn();
-      return { ...base, turnId, prompt: str(s.prompt) || base.prompt, text: str(s.text), working: s.running === true };
+      return { ...base, turnId, prompt: spokeBody(s.prompt) || base.prompt, text: spokeBody(s.text), working: s.running === true };
     }
-    case "token": return { ...t, text: t.text + str(e.text), working: true };
+    case "token": return { ...t, text: t.text + spokeBody(e.text), working: true };
     case "thinking": {
-      const grown = t.thinking + str(e.text);
+      const grown = t.thinking + spokeBody(e.text);
       return { ...t, thinking: grown.slice(-THINKING_CAP), trimmed: t.trimmed || grown.length > THINKING_CAP, working: true };
     }
-    case "tool": return { ...t, tools: [...t.tools, str(e.name) || "tool"].slice(-6), working: true };
+    case "tool": return { ...t, tools: [...t.tools, safeLine(e.name) || "tool"].slice(-6), working: true };
     case "permission": {
       const id = str(e.id);
       if (!id || t.asks.some((a) => a.id === id)) return t;
-      const options = arr(e.options).map(rec)
-        .map((o) => ({ optionId: str(o.optionId), name: str(o.name) || str(o.optionId), kind: str(o.kind) }))
-        .filter((o) => o.optionId !== "");
-      return { ...t, asks: [...t.asks, { id, tool: str(e.tool) || "tool", detail: str(e.detail), options }] };
+      return { ...t, asks: [...t.asks, { id, tool: safeLine(e.tool) || "tool", detail: spokeBody(e.detail) }] };
     }
-    case "error": return { ...t, error: str(e.message) || "the engine reported an error" };
+    case "error": return { ...t, error: safeLine(e.message) || "the engine reported an error" };
     // The settled reply now lives in the session's history (refetched on done).
     case "done": return { ...t, text: "", working: false, asks: [] };
     default: return t;
   }
-}
-
-export type AnswerKey = "y" | "s" | "d";
-
-/** Which of the ask's OWN options a key picks. y: the one-call allow (else the first allow). s: an
- *  allow that lasts past this call but not forever (allow_always, or for the rest of this turn); a
- *  standing "always allow this site" or a "danger" option is never on a key. d: the ask's deny, else
- *  no option at all, which the engine reads as deny (fail-closed). Null: this ask has nothing for
- *  that key. */
-export function answerOption(ask: MainAsk, key: AnswerKey): { optionId: string | null; name: string } | null {
-  const allows = ask.options.filter((o) => /^allow/i.test(o.kind) || (o.kind === "" && /allow/i.test(o.optionId)));
-  const once = allows.find((o) => /once/i.test(o.optionId) || /once/i.test(o.kind)) ?? allows[0];
-  if (key === "y") return once ? { optionId: once.optionId, name: once.name } : null;
-  if (key === "s") {
-    const longer = allows.find((o) => o !== once && /always|turn|session/i.test(`${o.kind} ${o.optionId}`) && !/site|program/i.test(o.optionId));
-    return longer ? { optionId: longer.optionId, name: longer.name } : null;
-  }
-  const deny = ask.options.find((o) => /^reject/i.test(o.kind) || /deny|reject|block/i.test(o.optionId));
-  return deny ? { optionId: deny.optionId, name: deny.name } : { optionId: null, name: "Deny" };
-}
-
-/** The key line under an ask: only the keys this ask answers, with the engine's own option names. */
-export function askKeys(ask: MainAsk): string {
-  return (["y", "s", "d"] as const).flatMap((k) => {
-    const o = answerOption(ask, k);
-    return o ? [`${k} ${o.name}`] : [];
-  }).join(" · ");
 }
 
 export interface MainView { history: readonly { role: string; text: string }[]; turn: MainTurn }
@@ -155,7 +132,7 @@ export function mainRows(v: MainView, innerW: number): string[] {
   for (const ask of t.asks) {
     lines.push("", `\u0002⚠ approval needed (${ask.tool})`);
     for (const row of wrapText(ask.detail || "(no detail)", innerW - 4)) lines.push(`\u0002  ${row}`);
-    lines.push(`\u0002  ${askKeys(ask)}`);
+    lines.push(`\u0002  ${HERD_ASK_IN_IDE}`);
   }
   if (lines.length === 0) lines.push("", "  no turns yet - press ⏎ and type to talk to Main");
   return lines;
@@ -165,12 +142,12 @@ export function mainRows(v: MainView, innerW: number): string[] {
 export function pickerItems(kind: "model" | "mode", config: unknown, modes: unknown): { items: ModelOption[]; current: string; configId: string } {
   if (kind === "mode") {
     const m = rec(modes);
-    const items = arr(m.available).map(rec).map((o) => ({ value: str(o.id), name: str(o.name) || str(o.id) })).filter((o) => o.value !== "");
+    const items = arr(m.available).map(rec).map((o) => ({ value: str(o.id), name: safeLine(o.name) || safeLine(o.id) })).filter((o) => o.value !== "");
     return { items, current: str(m.current), configId: "" };
   }
   for (const raw of arr(config).map(rec)) {
     if (!/model/i.test(str(raw.id))) continue;
-    const items = arr(raw.options).map(rec).map((o) => ({ value: str(o.value), name: str(o.name) || str(o.value) })).filter((o) => o.value !== "");
+    const items = arr(raw.options).map(rec).map((o) => ({ value: str(o.value), name: safeLine(o.name) || safeLine(o.value) })).filter((o) => o.value !== "");
     if (items.length) return { items, current: str(raw.value ?? raw.currentValue), configId: str(raw.id) };
   }
   return { items: [], current: "", configId: "" };
@@ -193,7 +170,7 @@ const HELP: readonly [string, string][] = [
   ["Main (Herd)", ""],
   ["  :pane rebind main", "put Main in the focused pane"],
   ["  ⏎ on Main", "type to Main · ⏎ sends · esc cancels"],
-  ["  y / s / d", "answer Main's parked ask (keys only, never scripts)"],
+  ["  Main's parked ask", "answered in the IDE, never in Herd"],
   ["  c", "cancel Main's running turn"],
   ["  m / M", "switch Main's model / mode (picker)"],
   ["  ⏎ on Sessions", "l resume as a lane · m open as Main"],
@@ -343,10 +320,10 @@ export class MainPane implements HubHostDeck {
           this.#get("/api/sessions"),
           this.#get("/api/config"),
         ]);
-        this.#history = arr(rec(page).messages).map(rec).map((m) => ({ role: str(m.role), text: str(m.text) }));
+        this.#history = arr(rec(page).messages).map(rec).map((m) => ({ role: str(m.role), text: spokeBody(m.text) }));
         const row = arr(rec(list).sessions).map(rec).find((s) => str(s.id) === sid);
-        this.#title = row ? str(row.title) : "";
-        this.#model = pickerItems("model", config, null).current;
+        this.#title = row ? safeLine(row.title) : "";
+        this.#model = safeLine(pickerItems("model", config, null).current);
         this.#historyStale = false;
       }
       const status = rec(await this.#get("/api/chat/status"));
@@ -465,7 +442,7 @@ export class MainPane implements HubHostDeck {
       if (s.running === true && str(s.turnId)) await this.#observe(str(s.turnId));
     }
     const ask = this.ask();
-    if (ask) throw new HubOpError("agent_blocked", `Main is waiting on the human (${ask.kind}); a person answers it in a Herd pane`);
+    if (ask) throw new HubOpError("agent_blocked", `Main is waiting on the human (${ask.kind}); a person answers it in the IDE`);
     if (!wait) {
       const first = await this.#first(text);
       if (first.type === "error") throw new HubOpError("refused", str(first.message) || "the engine refused the prompt");
@@ -488,7 +465,7 @@ export class MainPane implements HubHostDeck {
       throw new HubOpError("engine", `/api/chat: ${e instanceof Error ? e.message : String(e)}`);
     });
     if (got.error !== undefined) throw new HubOpError("refused", got.error);
-    if (got.blocked !== undefined) throw new HubOpError("agent_blocked", `Main's turn is waiting on the human (${got.blocked}); a person answers it in a Herd pane`);
+    if (got.blocked !== undefined) throw new HubOpError("agent_blocked", `Main's turn is waiting on the human (${got.blocked}); a person answers it in the IDE`);
     if (got.done === undefined) return { main: true, accepted: true, done: false, note: "still running; the Main pane shows it" };
     return { main: true, accepted: true, done: true, text: got.done };
   }
@@ -521,23 +498,7 @@ export class MainPane implements HubHostDeck {
     return { main: true, session: this.#sessionId };
   }
 
-  // -- human-only actions (keystrokes from an attached client) ------------------------------------
-
-  async #answer(key: AnswerKey): Promise<void> {
-    const ask = this.#turn.asks[0];
-    if (!ask) return;
-    const pick = answerOption(ask, key);
-    if (!pick) { this.#notice = `this ask has no "${key}" choice: ${askKeys(ask)}`; this.#changed(); return; }
-    try {
-      const { body } = await this.#post("/api/chat/permission", { id: ask.id, ...(pick.optionId ? { optionId: pick.optionId } : {}) });
-      const resolved = rec(body.data).resolved === true;
-      this.#turn = { ...this.#turn, asks: this.#turn.asks.filter((a) => a.id !== ask.id) };
-      this.#notice = resolved ? `${pick.name}: ${ask.tool}` : "that ask was already settled";
-    } catch (e) {
-      this.#notice = `answer failed: ${e instanceof Error ? e.message : String(e)}`;
-    }
-    this.#changed();
-  }
+  // -- keystrokes from an attached client (never an answer to an ask) -----------------------------
 
   async #cancel(): Promise<void> {
     if (!this.#turn.working) { this.#notice = "Main has no running turn"; this.#changed(); return; }
@@ -575,7 +536,7 @@ export class MainPane implements HubHostDeck {
         ? await this.#post("/api/setConfig", { configId: pk.configId, value: pick.value })
         : await this.#post("/api/modes", { modeId: pick.value });
       this.#notice = status >= 400 || body.ok === false ? `${pk.kind} switch refused: ${str(body.error) || status}` : `Main's ${pk.kind} → ${pick.name}`;
-      if (pk.kind === "model" && status < 400) this.#model = pick.value;
+      if (pk.kind === "model" && status < 400) this.#model = safeLine(pick.value);
     } catch (e) {
       this.#notice = `${pk.kind} switch failed: ${e instanceof Error ? e.message : String(e)}`;
     }
@@ -595,11 +556,11 @@ export class MainPane implements HubHostDeck {
   }
 
   hint(): string {
-    if (this.#choice) return `open "${truncateToWidth(this.#choice.title || this.#choice.id, 40)}": l resume as a lane · m open as Main · esc cancels`;
+    if (this.#choice) return `open "${truncateToWidth(safeLine(this.#choice.title || this.#choice.id), 40)}": l resume as a lane · m open as Main · esc cancels`;
     if (this.#picker) return `Main's ${this.#picker.kind}: type to filter · ⇅ move · ⏎ apply · esc`;
     if (this.#composer !== null) return "to Main: ⏎ sends · esc cancels";
-    if (this.#notice) return this.#notice;
-    if (this.#turn.asks.length) return `Main waits on you: ${askKeys(this.#turn.asks[0]!)}`;
+    if (this.#notice) return safeLine(this.#notice);
+    if (this.#turn.asks.length) return `Main (${this.#turn.asks[0]!.tool}) is ${HERD_ASK_IN_IDE}`;
     return "⏎ talk to Main · c cancel · m model · M mode · j/k scroll";
   }
 
@@ -649,13 +610,15 @@ export class MainPane implements HubHostDeck {
     // The pane is focused and nothing is open: its own keys first, the rest go to the hub.
     this.#notice = "";
     if (enter) {
-      // A parked ask owns the pane: answer it first (an Enter must never become a prompt named "y").
-      if (this.#turn.asks.length) { this.#notice = `Main waits on the ask above - answer it: ${askKeys(this.#turn.asks[0]!)}`; return true; }
+      // A parked ask owns the pane: a person answers it in the IDE (an Enter must never become a
+      // prompt named "y").
+      if (this.#turn.asks.length) { this.#notice = `Main is ${HERD_ASK_IN_IDE}`; return true; }
       this.#composer = "";
       this.#scroll = 0;
       return true;
     }
-    if ((data === "y" || data === "s" || data === "d") && this.#turn.asks.length) { void this.#answer(data); return true; }
+    // The old answer keys are refused outright while an ask is parked: nothing is sent.
+    if ((data === "y" || data === "s" || data === "d") && this.#turn.asks.length) { this.#notice = `refused: Main is ${HERD_ASK_IN_IDE}`; return true; }
     if (data === "c") { void this.#cancel(); return true; }
     if (data === "m" || data === "M") { void this.#openPicker(data === "m" ? "model" : "mode"); return true; }
     if (data === "j" || matchesKey(data, "down")) { this.#scroll = Math.max(0, this.#scroll - 1); return true; }
@@ -685,7 +648,7 @@ export class MainPane implements HubHostDeck {
     const paint = focused ? CYAN : LINE;
     const working = this.#turn.working || this.#busy !== null;
     const spin = working ? ` ${"⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[Math.floor(Date.now() / 200) % 10]}` : "";
-    const name = this.#title || (this.#sessionId ? this.#sessionId.slice(0, 8) : "no session");
+    const name = this.#title || (this.#sessionId ? safeLine(this.#sessionId.slice(0, 8)) : "no session");
     const title = ` ◆ Main · ${name} · ${this.#spokes} spoke${this.#spokes === 1 ? "" : "s"}${this.#model ? ` · ${this.#model}` : ""} · ${working ? "working" : "idle"}${spin}${this.#turn.asks.length ? " · WAITING" : ""} `;
     const cut = truncateToWidth(title, Math.max(1, w - 4));
     const top = paint("╭─") + (focused ? ACCENT_2.bold(cut) : TXT_3(cut)) + paint("─".repeat(Math.max(0, w - 3 - Bun.stringWidth(cut))) + "╮");

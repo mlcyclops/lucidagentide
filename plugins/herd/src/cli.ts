@@ -15,7 +15,7 @@
 // after the verb. Contract for scripts, as `lucid hub`: JSON on stdout and exit 0, or JSON
 // {"error":code,"message"} on stderr and exit 1. No server running is {"error":"no_hub"}.
 
-import { callHub, verifyHub, type HubDiscovery, type HubReply } from "../../../harness/launcher/hub_control.ts";
+import { callHub, type HubDiscovery, type HubReply } from "../../../harness/launcher/hub_control.ts";
 import { resolve } from "node:path";
 import { HubOpError, type PaneDeck } from "../../../harness/launcher/hub_spaces.ts";
 import { HUB_USAGE, parseHubCommand } from "../../../harness/launcher/hub_tmux_verbs.ts";
@@ -27,7 +27,7 @@ import { isFileLayoutOp, LAYOUT_USAGE, LayoutLibrary, parseLayoutCommand, runLay
 import { HERD_PANE_USAGE, parseHerdPaneCommand } from "./pane_verbs.ts";
 import { runHubClient } from "./hub_client.ts";
 import { runHubServer } from "./hub_server.ts";
-import { connectInstance, DEFAULT_INSTANCE, herdDataDir, instanceName, liveInstances } from "./instance.ts";
+import { connectInstance, DEFAULT_INSTANCE, herdDataDir, instanceName, liveInstances, stopInstance } from "./instance.ts";
 import { finalReply, parseHerdVerb, type HerdVerb } from "./waits.ts";
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -42,6 +42,7 @@ export const HERD_HELP =
   "lucid herd [--name <name>] <command>     drive the running server, as `lucid hub <command>`:\n" +
   `  ${HUB_USAGE.replace(/^lucid hub /, "")}\n` +
   "lucid herd main prompt <text> [--wait]   prompt Main as typed (refused agent_blocked while it waits on you)\n" +
+  "  a parked ask (Main's or a lane's) is answered in the IDE, never in Herd: no key or verb answers it\n" +
   "lucid herd session list | open <id> [--as main|lane]   open as Main is refused busy while Main works\n" +
   "lucid herd machine list | add <name> --dir <discovery folder> | remove <name>   other engines on this box\n" +
   "  agent verbs take <machine>/<lane>; agent spawn|list take --machine <name>\n" +
@@ -86,7 +87,6 @@ export function splitName(argv: readonly string[]): { name: string; rest: string
 
 /** First words only the Herd server knows (P-HERD.6 and P-HERD.7): the classic parser would refuse them. */
 const HOST_ONLY_VERBS: Record<string, true> = { main: true, session: true, machine: true };
-const STOP_WAIT_MS = 60_000; // a spawned engine is stopped and awaited before the server lets go
 
 /** P-HERD.4 (ADR-0493): a reply that streams. `agent events` prints each transition as one NDJSON
  *  line until the server ends it; a wait prints its result once it settles. A failure is the usual
@@ -170,19 +170,18 @@ export async function runHerdCli(argv: readonly string[], env: Env, entry: strin
   const hub = await connectInstance(data, name);
   if (!hub) return fail({ error: "no_hub", message: `no Herd instance "${name}" answered the handshake (start one with \`lucid herd${named}\` or \`lucid herd server start${named}\`)` });
   if (herd && herd.verb !== "notify" && herd.verb !== "next") return runStreamed(hub, rest, herd.verb === "agent.events");
+  if (rest[0] === "server") {
+    // `server stop` returns once the server is GONE (its spawned engine stopped first), so the next
+    // command a script runs never races the shutdown.
+    const stopped = await stopInstance(hub, name);
+    if (!stopped.ok) return fail({ error: stopped.error, message: stopped.message });
+    process.stdout.write(JSON.stringify({ stopped: name, pid: hub.pid }, null, 2) + "\n");
+    return 0;
+  }
   let r: HubReply;
   try { r = await callHub(hub, rest); }
   catch (e) { return fail({ error: "hub_unreachable", message: e instanceof Error ? e.message : String(e) }); }
   if (r.status !== 200 || r.body.ok !== true) return fail(r.body);
-  if (rest[0] === "server") {
-    // `server stop` returns once the server is GONE (its spawned engine stopped first), so the next
-    // command a script runs never races the shutdown.
-    const deadline = Date.now() + STOP_WAIT_MS;
-    while (Date.now() < deadline && (await verifyHub(hub))) await Bun.sleep(200);
-    if (await verifyHub(hub)) return fail({ error: "stop_timeout", message: `Herd instance "${name}" (pid ${hub.pid}) still answers after ${STOP_WAIT_MS / 1000}s` });
-    process.stdout.write(JSON.stringify({ stopped: name, pid: hub.pid }, null, 2) + "\n");
-    return 0;
-  }
   process.stdout.write(JSON.stringify(r.body.data, null, 2) + "\n");
   return 0;
 }
