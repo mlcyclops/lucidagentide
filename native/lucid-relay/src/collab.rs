@@ -7,7 +7,9 @@
 //   to n to that guest; a guest frame always goes to the host. STRING frames from the relay are JSON control:
 //   peer-joined / peer-left (to the host), room-closed (to guests), auth-ok, and pong for the exact client keepalive
 //   `{"t":"ping"}`. Fatal close codes: 4001 room closed, 4004 no such room, 4009 host already connected, 4029 full,
-//   4401 / 4403 / 4429 from the optional identity gate.
+//   4401 / 4403 / 4429 from the optional identity gate, 1013 when a peer that does not read lets its outgoing queue
+//   (frames, control strings and pongs) pass MAX_QUEUE_BYTES. Connections are capped (server.rs CONN_LIMITS), and a
+//   TLS handshake gets 10 s.
 //
 //   lucid-relay collab [--host=0.0.0.0] [--port=8790] [--tls-cert=f --tls-key=f]
 //     (or HOST, PORT, TLS_CERT, TLS_KEY, MAX_ROOMS, MAX_PEERS_PER_ROOM, MAX_FRAME_BYTES, IDLE_TIMEOUT_SEC,
@@ -17,6 +19,7 @@ use crate::codec::{iso_time, js_number, stringify};
 use crate::collab_auth::{auth_from_env, AuthGate, Verdict};
 use crate::collab_presence::{Presence, Principal};
 use crate::http_client::HttpClient;
+use crate::server::{tls_within, ConnLimits, CONN_LIMITS};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use http_body_util::Full;
@@ -30,10 +33,10 @@ use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch, OwnedSemaphorePermit, Semaphore};
 use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
@@ -45,6 +48,13 @@ const KEEPALIVE_PING: &str = r#"{"t":"ping"}"#;
 const KEEPALIVE_PONG: &str = r#"{"t":"pong"}"#;
 /// After the relay sends a close frame, how long it waits for the peer's before dropping the connection.
 const CLOSE_WAIT: Duration = Duration::from_secs(5);
+/// The most a connection's outgoing queue holds (frames, control strings and pongs waiting for its socket); past it
+/// the connection is closed with 1013, so a peer that never reads cannot grow the relay's memory.
+pub const MAX_QUEUE_BYTES: usize = 16 * 1024 * 1024;
+/// What one queued message costs beyond its payload (its allocation and channel slot), so tiny pongs count too.
+const QUEUE_OVERHEAD: usize = 64;
+/// How long a 1013 close gets to reach a peer over its queue before the socket is dropped.
+const OVERFLOW_CLOSE_WAIT: Duration = Duration::from_secs(1);
 
 /// `[lucid-relay] <ISO time> <message>[ <JSON detail>]` on stdout, as serve.ts logs.
 pub fn log(message: &str, detail: Option<Value>) {
@@ -74,8 +84,29 @@ enum Out {
     Close(u16, String),
 }
 
-struct Conn {
+impl Out {
+    /// What this message counts against its connection's queue (a close is never refused, so never counted).
+    fn weight(&self) -> usize {
+        QUEUE_OVERHEAD
+            + match self {
+                Out::Text(s) => s.len(),
+                Out::Binary(b) => b.len(),
+                Out::Ping | Out::Close(..) => 0,
+            }
+    }
+}
+
+/// A connection's outgoing queue: the channel to its writer, the bytes waiting in it (the writer takes off what it
+/// has sent), its cap, and the signal that it went over.
+struct Outbox {
     tx: mpsc::UnboundedSender<Out>,
+    queued: Arc<AtomicUsize>,
+    cap: usize,
+    over: watch::Sender<bool>,
+}
+
+struct Conn {
+    out: Outbox,
     room_id: String,
     role: Role,
     peer: u32,
@@ -108,6 +139,8 @@ pub struct Limits {
     pub max_peers: f64,
     pub max_frame: usize,
     pub idle: Duration,
+    /// MAX_QUEUE_BYTES, smaller in tests.
+    pub max_queue: usize,
 }
 
 pub struct Broker {
@@ -125,8 +158,19 @@ fn send(st: &mut State, id: u64, out: Out) {
     }
     if matches!(out, Out::Close(..)) {
         c.closing = true;
+    } else {
+        let weight = out.weight();
+        let held = c.out.queued.load(Ordering::SeqCst);
+        if held + weight > c.out.cap {
+            // A peer that does not read: its socket goes (1013) rather than the relay holding its backlog.
+            c.closing = true;
+            c.out.over.send_replace(true);
+            log("relay: outgoing queue full, connection closed", Some(json!({ "code": 1013, "role": c.role.as_str(), "peer": c.peer, "queuedBytes": held })));
+            return;
+        }
+        c.out.queued.fetch_add(weight, Ordering::SeqCst);
     }
-    let _ = c.tx.send(out);
+    let _ = c.out.tx.send(out);
 }
 
 fn close(st: &mut State, id: u64, code: u16, reason: &str) {
@@ -265,11 +309,11 @@ impl Broker {
         true
     }
 
-    fn open(self: &Arc<Self>, room_id: String, role: Role, tx: mpsc::UnboundedSender<Out>) -> u64 {
+    fn open(self: &Arc<Self>, room_id: String, role: Role, out: Outbox) -> u64 {
         let mut st = self.state.lock();
         st.next += 1;
         let id = st.next;
-        st.conns.insert(id, Conn { tx, room_id, role, peer: 0, authed: false, authing: false, uid: None, principal: None, closing: false });
+        st.conns.insert(id, Conn { out, room_id, role, peer: 0, authed: false, authing: false, uid: None, principal: None, closing: false });
         match &self.auth {
             // Gated: not admitted yet; the first frame must authenticate within the deadline.
             Some(gate) => {
@@ -505,7 +549,7 @@ fn query_param(query: Option<&str>, name: &str) -> Option<String> {
     })
 }
 
-async fn handle(broker: Arc<Broker>, mut req: hyper::Request<Incoming>) -> Response<Full<Bytes>> {
+async fn handle(broker: Arc<Broker>, mut req: hyper::Request<Incoming>, permit: Arc<OwnedSemaphorePermit>) -> Response<Full<Bytes>> {
     let path = req.uri().path().to_owned();
     // A Firebase Hosting rewrite forwards `/relay/r/<id>`: an optional `/relay` prefix is stripped.
     let pathname = if path == "/relay" {
@@ -538,6 +582,8 @@ async fn handle(broker: Arc<Broker>, mut req: hyper::Request<Incoming>) -> Respo
     let (true, Some(accept)) = (upgrade, key) else { return plain(StatusCode::UPGRADE_REQUIRED, "expected a websocket upgrade") };
     let on_upgrade = hyper::upgrade::on(&mut req);
     tokio::spawn(async move {
+        // The connection's slot stays taken while its WebSocket runs.
+        let _permit = permit;
         let Ok(upgraded) = on_upgrade.await else { return };
         let mut cfg = WebSocketConfig::default();
         cfg.max_message_size = Some(broker.limits.max_frame);
@@ -560,37 +606,75 @@ where
 {
     let (mut sink, mut stream) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Out>();
+    let queued = Arc::new(AtomicUsize::new(0));
+    let (over_tx, mut over) = watch::channel(false);
     let closing = Arc::new(AtomicBool::new(false));
     let writer_closing = closing.clone();
-    let writer = tokio::spawn(async move {
-        while let Some(out) = rx.recv().await {
-            let sent = match out {
-                Out::Text(s) => sink.send(Message::text(s)).await,
-                Out::Binary(b) => sink.send(Message::binary(b)).await,
-                Out::Ping => sink.send(Message::Ping(Default::default())).await,
+    let writer_queued = queued.clone();
+    let mut writer_over = over.clone();
+    let mut writer = tokio::spawn(async move {
+        let mut overflowed = false;
+        loop {
+            let out = tokio::select! {
+                biased;
+                Ok(_) = writer_over.wait_for(|o| *o) => {
+                    overflowed = true;
+                    break;
+                }
+                out = rx.recv() => match out {
+                    Some(out) => out,
+                    None => break,
+                },
+            };
+            let weight = out.weight();
+            let msg = match out {
+                Out::Text(s) => Message::text(s),
+                Out::Binary(b) => Message::binary(b),
+                Out::Ping => Message::Ping(Default::default()),
                 Out::Close(code, reason) => {
                     writer_closing.store(true, Ordering::SeqCst);
                     let _ = sink.send(Message::Close(Some(CloseFrame { code: CloseCode::from(code), reason: reason.into() }))).await;
                     break;
                 }
             };
+            // A send stuck on a peer that does not read gives way to the overflow close.
+            let sent = tokio::select! {
+                biased;
+                Ok(_) = writer_over.wait_for(|o| *o) => {
+                    overflowed = true;
+                    break;
+                }
+                sent = sink.send(msg) => sent,
+            };
+            writer_queued.fetch_sub(weight, Ordering::SeqCst);
             if sent.is_err() {
                 break;
             }
         }
+        if overflowed {
+            writer_closing.store(true, Ordering::SeqCst);
+            let frame = Message::Close(Some(CloseFrame { code: CloseCode::from(1013), reason: "outgoing queue full".into() }));
+            let _ = tokio::time::timeout(OVERFLOW_CLOSE_WAIT, sink.send(frame)).await;
+        }
     });
-    let id = broker.open(room_id, role, tx.clone());
+    let id = broker.open(room_id, role, Outbox { tx, queued, cap: broker.limits.max_queue, over: over_tx });
     let mut pinged = false;
     loop {
         let wait = if closing.load(Ordering::SeqCst) { CLOSE_WAIT } else { broker.limits.idle };
-        match tokio::time::timeout(wait, stream.next()).await {
+        let next = tokio::select! {
+            biased;
+            // Over its queue: the reader stops at once, the writer sends the 1013.
+            Ok(_) = over.wait_for(|o| *o) => break,
+            next = tokio::time::timeout(wait, stream.next()) => next,
+        };
+        match next {
             Err(_) => {
                 // Idle: one ping, then drop the socket if the peer still says nothing (Bun's sendPings).
                 if pinged || closing.load(Ordering::SeqCst) {
                     break;
                 }
                 pinged = true;
-                let _ = tx.send(Out::Ping);
+                send(&mut broker.state.lock(), id, Out::Ping);
             }
             Ok(None) => break,
             Ok(Some(Err(WsError::Capacity(_)))) => {
@@ -609,30 +693,42 @@ where
             }
         }
     }
+    // The connection's record (and with it the queue's sender) goes; the writer drains what is left, but never waits
+    // on a peer that does not read for longer than CLOSE_WAIT.
     broker.on_close(id);
-    drop(tx);
-    let _ = writer.await;
+    if tokio::time::timeout(CLOSE_WAIT, &mut writer).await.is_err() {
+        writer.abort();
+    }
 }
 
 /// Accept connections until the process stops.
-async fn serve(listener: tokio::net::TcpListener, broker: Arc<Broker>, acceptor: Option<TlsAcceptor>) {
+async fn serve(listener: tokio::net::TcpListener, broker: Arc<Broker>, acceptor: Option<TlsAcceptor>, limits: ConnLimits) {
+    let slots = Arc::new(Semaphore::new(limits.connections));
     loop {
         let Ok((stream, _)) = listener.accept().await else {
             tokio::time::sleep(Duration::from_millis(50)).await;
             continue;
         };
+        // Every slot taken: this connection is dropped unread.
+        let Ok(permit) = slots.clone().try_acquire_owned() else {
+            drop(stream);
+            continue;
+        };
         let broker = broker.clone();
         let acceptor = acceptor.clone();
         tokio::spawn(async move {
+            // Held until the connection (and its WebSocket, which runs inside the upgrade) is gone.
+            let permit = Arc::new(permit);
             let svc = service_fn(move |req| {
                 let broker = broker.clone();
-                async move { Ok::<_, Infallible>(handle(broker, req).await) }
+                let permit = permit.clone();
+                async move { Ok::<_, Infallible>(handle(broker, req, permit).await) }
             });
             let mut builder = http1::Builder::new();
             builder.timer(TokioTimer::new()).header_read_timeout(Duration::from_secs(30));
             match acceptor {
                 Some(a) => {
-                    if let Ok(s) = a.accept(stream).await {
+                    if let Some(s) = tls_within(&a, stream, limits.handshake).await {
                         let _ = builder.serve_connection(TokioIo::new(s), svc).with_upgrades().await;
                     }
                 }
@@ -683,6 +779,7 @@ pub fn main(argv: &[String]) -> ! {
         max_peers: env_number(&env, "MAX_PEERS_PER_ROOM", 16.0),
         max_frame: env_number(&env, "MAX_FRAME_BYTES", 512.0 * 1024.0) as usize,
         idle: Duration::from_secs_f64(env_number(&env, "IDLE_TIMEOUT_SEC", 120.0)),
+        max_queue: MAX_QUEUE_BYTES,
     };
     let pwa = env.get("RELAY_PWA_REDIRECT").map(|v| v.trim().to_owned()).filter(|v| !v.is_empty());
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap_or_else(|e| fail(1, &format!("failed to start: {e}")));
@@ -724,7 +821,7 @@ pub fn main(argv: &[String]) -> ! {
                 log("status", Some(json!({ "rooms": rooms, "peers": peers })));
             }
         });
-        tokio::spawn(serve(listener, broker.clone(), acceptor));
+        tokio::spawn(serve(listener, broker.clone(), acceptor, CONN_LIMITS));
         let signal = stop_signal().await;
         log(&format!("{signal} - shutting down ({} rooms open)", broker.counts().0), None);
         broker.stop();
@@ -767,5 +864,104 @@ mod tests {
         assert_eq!(decode_component("bad%zz", false), None);
         assert_eq!(pack(7, &[1, 2]), vec![0, 0, 0, 7, 1, 2]);
         assert!(pwa_redirect_html("https://x.app/remote/").contains("\"https://x.app/remote\""));
+    }
+
+    type Client = WebSocketStream<tokio::net::TcpStream>;
+
+    async fn dial(port: u16, path: &str) -> Client {
+        let tcp = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        tokio_tungstenite::client_async(format!("ws://127.0.0.1:{port}{path}"), tcp).await.unwrap().0
+    }
+
+    /// The next control string a client gets, as JSON.
+    async fn next_ctrl(ws: &mut futures_util::stream::SplitStream<Client>) -> Value {
+        loop {
+            match tokio::time::timeout(Duration::from_secs(10), ws.next()).await.expect("a control string in time") {
+                Some(Ok(Message::Text(t))) => return crate::codec::parse_json(t.as_str()).unwrap_or(Value::Null),
+                Some(Ok(_)) => continue,
+                _ => panic!("the socket ended"),
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_guest_that_never_reads_is_closed_while_the_room_goes_on() {
+        const CAP: usize = 1024 * 1024;
+        const FRAME: usize = 32 * 1024;
+        const STEP: usize = 8;
+        let limits = Limits { max_rooms: 8.0, max_peers: 8.0, max_frame: 64 * 1024, idle: Duration::from_secs(120), max_queue: CAP };
+        let broker = Arc::new(Broker::new(limits, None, None, None));
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(serve(listener, broker.clone(), None, CONN_LIMITS));
+        let (mut host_tx, mut host_rx) = dial(port, "/r/room-q?role=host").await.split();
+        // The host's room exists once its socket task has opened it.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while broker.counts().0 == 0 {
+            assert!(tokio::time::Instant::now() < deadline, "the host never opened its room");
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        let reader = dial(port, "/r/room-q?role=guest").await;
+        assert_eq!(next_ctrl(&mut host_rx).await, json!({ "t": "peer-joined", "peer": 1 }));
+        let mut stuck = dial(port, "/r/room-q?role=guest").await;
+        assert_eq!(next_ctrl(&mut host_rx).await, json!({ "t": "peer-joined", "peer": 2 }));
+        // The guest that reads counts every frame that reaches it.
+        let got = Arc::new(AtomicUsize::new(0));
+        let counted = got.clone();
+        tokio::spawn(async move {
+            let mut reader = reader;
+            while let Some(Ok(m)) = reader.next().await {
+                if let Message::Binary(b) = m {
+                    assert_eq!(&b[..4], &[0, 0, 0, 0], "a host frame carries peer 0");
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        });
+        let caught_up = |want: usize| {
+            let got = got.clone();
+            async move {
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+                while got.load(Ordering::SeqCst) < want {
+                    assert!(tokio::time::Instant::now() < deadline, "the reading guest fell behind");
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                }
+            }
+        };
+        // The host broadcasts in steps the reading guest keeps up with; the other guest reads nothing, so its queue
+        // (past what the sockets buffer) reaches the cap and the relay closes it.
+        let mut sent = 0usize;
+        let left = loop {
+            for _ in 0..STEP {
+                host_tx.send(Message::binary(vec![0u8; FRAME])).await.unwrap();
+                sent += 1;
+            }
+            caught_up(sent).await;
+            if let Ok(Some(Ok(Message::Text(t)))) = tokio::time::timeout(Duration::from_millis(1), host_rx.next()).await {
+                break crate::codec::parse_json(t.as_str()).unwrap_or(Value::Null);
+            }
+            assert!(sent * FRAME < 1024 * 1024 * 1024, "the guest that never reads was never closed");
+        };
+        assert_eq!(left, json!({ "t": "peer-left", "peer": 2 }));
+        // The host and the other guest go on: a frame for peer 1 still arrives, and the room holds both.
+        let mut to_one = vec![0u8; FRAME];
+        to_one[3] = 1;
+        host_tx.send(Message::binary(to_one)).await.unwrap();
+        caught_up(sent + 1).await;
+        assert_eq!(broker.counts(), (1, 2));
+        // The closed guest finds its socket ended (a 1013 close, when it got through, or the dropped connection)
+        // after fewer frames than were sent.
+        let mut frames = 0usize;
+        let ended = loop {
+            match tokio::time::timeout(Duration::from_secs(30), stuck.next()).await {
+                Err(_) => break None,
+                Ok(Some(Ok(Message::Binary(_)))) => frames += 1,
+                Ok(Some(Ok(Message::Close(frame)))) => break Some(frame.map(|f| u16::from(f.code))),
+                Ok(Some(Ok(_))) => {}
+                Ok(Some(Err(_))) | Ok(None) => break Some(None),
+            }
+        };
+        let ended = ended.expect("the closed guest's socket ended");
+        assert!(ended.is_none_or(|code| code == 1013), "closed with {ended:?}");
+        assert!(frames < sent, "{frames} of {sent} frames");
     }
 }

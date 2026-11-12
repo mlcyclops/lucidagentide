@@ -1,6 +1,7 @@
 // HTTP/1.1 over plain TCP (loopback, or behind a platform's TLS front) or TLS (rustls with the AWS-LC provider; its
 // FIPS module with the `fips` feature). Each request: /healthz first, then the license gate, then the body read with
-// its limit held while it streams in, then the relay state under one lock.
+// its limit held while it streams in (and its deadline), then the relay state under one lock. Connections are capped
+// (CONN_LIMITS: one past the cap is dropped unread) and a TLS handshake has its own deadline.
 
 use crate::codec::{js_number, now_ms, utf8_lossy};
 use crate::console::{ConsoleReply, ConsoleRequest, MARKER_HEADER};
@@ -18,10 +19,12 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use parking_lot::Mutex;
 use serde_json::json;
 use std::convert::Infallible;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Semaphore;
+use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
 
 pub struct Relay {
@@ -133,6 +136,13 @@ pub fn dialed_of(host_header: &str, tls: bool) -> Dialed {
     Dialed { host, hostname, port: port.unwrap_or(default) }
 }
 
+const X_FORWARDED_FOR: &str = "x-forwarded-for";
+
+/// The address a TLS front appended to X-Forwarded-For: the last entry (the ones before it are the caller's word).
+fn forwarded_ip(header: &str) -> Option<IpAddr> {
+    header.rsplit(',').next()?.trim().parse().ok()
+}
+
 fn to_response(r: Reply) -> Response<Full<Bytes>> {
     let mut b = Response::builder().status(r.status).header(CONTENT_TYPE, r.content_type);
     if r.content_type == "application/json" {
@@ -159,7 +169,7 @@ fn internal_error() -> Response<Full<Bytes>> {
     to_response(Reply { status: 500, content_type: "text/plain;charset=utf-8", body: "Internal Server Error".into(), close: false })
 }
 
-async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAddr) -> Response<Full<Bytes>> {
+async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAddr, body_time: Duration) -> Response<Full<Bytes>> {
     let (parts, body) = req.into_parts();
     let method = parts.method.as_str().to_owned();
     let pathname = parts.uri.path().to_owned();
@@ -193,8 +203,16 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
         let mut body = body;
         let mut buf = Vec::new();
         let mut size = 0usize;
+        // The whole body arrives within body_time, or the connection goes: a stalled sender holds nothing for long.
+        let deadline = tokio::time::Instant::now() + body_time;
         loop {
-            match body.frame().await {
+            let Ok(frame) = tokio::time::timeout_at(deadline, body.frame()).await else {
+                let f = where_.clone().with("bytes", size).with("limitMs", body_time.as_millis() as u64);
+                let mut r = refuse(&relay.logger, 408, "request body timed out", "request.timeout", &f);
+                r.close = true;
+                return to_response(r);
+            };
+            match frame {
                 None => break,
                 Some(Err(e)) => {
                     let f = where_.clone().with("bytes", size).with("reason", e.to_string());
@@ -224,14 +242,19 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
     }
     let header = |name: hyper::header::HeaderName| parts.headers.get(name).map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned());
     let host_header = header(HOST).or_else(|| parts.uri.authority().map(|a| a.to_string())).unwrap_or_default();
-    let dialed = dialed_of(&host_header, relay.tls);
+    // Behind a TLS front the caller dialed https: its Host reads as an https URL's host does.
+    let behind_tls = relay.hosts.public.is_some();
+    let dialed = dialed_of(&host_header, relay.tls || behind_tls);
     let host_ok = relay.hosts.accepts(&dialed);
     if let Some(console) = console {
         let cookie = header(COOKIE).unwrap_or_default();
         let origin = header(ORIGIN);
         let marker = parts.headers.get(MARKER_HEADER).map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned());
         let content_type = header(CONTENT_TYPE).unwrap_or_default();
-        let ip = peer.ip().to_string();
+        // The sign-in limit counts per caller: behind the TLS front (its public host set), the caller is the address
+        // the front appended to X-Forwarded-For, not the front itself.
+        let forwarded = if behind_tls { parts.headers.get_all(X_FORWARDED_FOR).iter().last().and_then(|v| v.to_str().ok()).and_then(forwarded_ip) } else { None };
+        let ip = forwarded.unwrap_or_else(|| peer.ip()).to_string();
         let r = ConsoleRequest {
             method: &method,
             pathname: &pathname,
@@ -287,8 +310,42 @@ pub fn provider() -> rustls::crypto::CryptoProvider {
     rustls::crypto::aws_lc_rs::default_provider()
 }
 
+/// A `fips` build refuses to start unless AWS-LC runs its FIPS module in FIPS mode and the TLS provider says so:
+/// every signature check, digest and TLS session then goes through the validated module.
+#[cfg(feature = "fips")]
+pub fn fips_check() -> Result<(), String> {
+    aws_lc_rs::try_fips_mode().map_err(|e| format!("this is a FIPS build, but AWS-LC is not in FIPS mode ({e}): refusing to start"))?;
+    if !provider().fips() {
+        return Err("this is a FIPS build, but the TLS provider does not report FIPS mode: refusing to start".into());
+    }
+    Ok(())
+}
+
+/// Without the `fips` feature there is nothing to check.
+#[cfg(not(feature = "fips"))]
+pub fn fips_check() -> Result<(), String> {
+    Ok(())
+}
+
+/// What one listener allows: connections served at once (one more is dropped unread), and how long a TLS handshake
+/// and a request body may take.
+#[derive(Clone, Copy)]
+pub struct ConnLimits {
+    pub connections: usize,
+    pub handshake: Duration,
+    pub body: Duration,
+}
+
+pub const CONN_LIMITS: ConnLimits = ConnLimits { connections: 4096, handshake: Duration::from_secs(10), body: Duration::from_secs(10) };
+
+/// The TLS handshake within `limit`, or None (failed or stalled: the connection is dropped).
+pub async fn tls_within(acceptor: &TlsAcceptor, stream: TcpStream, limit: Duration) -> Option<TlsStream<TcpStream>> {
+    tokio::time::timeout(limit, acceptor.accept(stream)).await.ok()?.ok()
+}
+
 /// Accept connections until the process stops.
-pub async fn run(listener: TcpListener, relay: Arc<Relay>, acceptor: Option<TlsAcceptor>) {
+pub async fn run(listener: TcpListener, relay: Arc<Relay>, acceptor: Option<TlsAcceptor>, limits: ConnLimits) {
+    let slots = Arc::new(Semaphore::new(limits.connections));
     loop {
         let (stream, peer) = match listener.accept().await {
             Ok(c) => c,
@@ -297,18 +354,24 @@ pub async fn run(listener: TcpListener, relay: Arc<Relay>, acceptor: Option<TlsA
                 continue;
             }
         };
+        // Every slot taken: this connection is dropped unread.
+        let Ok(permit) = slots.clone().try_acquire_owned() else {
+            drop(stream);
+            continue;
+        };
         let relay = relay.clone();
         let acceptor = acceptor.clone();
         tokio::spawn(async move {
+            let _permit = permit;
             let svc = service_fn(move |req| {
                 let relay = relay.clone();
-                async move { Ok::<_, Infallible>(handle(relay, req, peer).await) }
+                async move { Ok::<_, Infallible>(handle(relay, req, peer, limits.body).await) }
             });
             let mut builder = http1::Builder::new();
             builder.timer(TokioTimer::new()).header_read_timeout(Duration::from_secs(30));
             match acceptor {
                 Some(a) => {
-                    if let Ok(s) = a.accept(stream).await {
+                    if let Some(s) = tls_within(&a, stream, limits.handshake).await {
                         let _ = builder.serve_connection(TokioIo::new(s), svc).await;
                     }
                 }
@@ -338,5 +401,149 @@ mod tests {
         assert_eq!(whatwg_ipv4("127.1"), Some(Ipv4Addr::new(127, 0, 0, 1)));
         assert_eq!(whatwg_ipv4("0x7f.0.0.1"), Some(Ipv4Addr::new(127, 0, 0, 1)));
         assert_eq!(whatwg_ipv4("256.0.0.1"), None);
+    }
+
+    #[test]
+    fn behind_a_tls_front_only_the_public_host_is_this_relay() {
+        let hosts = HostCheck { names: None, port: 8080, public: Some(dialed_of("Relay.Example.com", true)) };
+        assert!(hosts.accepts(&dialed_of("relay.example.com", true)));
+        assert!(hosts.accepts(&dialed_of("relay.example.com:443", true)));
+        assert!(!hosts.accepts(&dialed_of("relay.example.com:8443", true)));
+        assert!(!hosts.accepts(&dialed_of("evil.example", true)));
+        assert!(!hosts.accepts(&dialed_of("127.0.0.1:8080", true)));
+        // With neither TLS names nor a public host, only loopback on the listening port.
+        let bare = HostCheck { names: None, port: 8080, public: None };
+        assert!(bare.accepts(&dialed_of("127.0.0.1:8080", false)));
+        assert!(!bare.accepts(&dialed_of("relay.example.com", false)));
+        // The caller is the address the front appended last.
+        assert_eq!(forwarded_ip("203.0.113.9, 198.51.100.4"), Some("198.51.100.4".parse().unwrap()));
+        assert_eq!(forwarded_ip(" 2001:db8::1 "), Some("2001:db8::1".parse().unwrap()));
+        assert_eq!(forwarded_ip("198.51.100.4, junk"), None);
+    }
+
+    #[test]
+    fn a_fips_build_runs_in_fips_mode() {
+        // Without the feature there is nothing to check; with it, this test runs on the FIPS module in FIPS mode.
+        assert_eq!(fips_check(), Ok(()));
+    }
+
+    use crate::log::Logger;
+    use crate::relay::{Options, SENDER_BYTES, STORE_BYTES};
+    use std::time::Instant;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn test_relay() -> Arc<Relay> {
+        let root = p256::ecdsa::SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let logger = Arc::new(Logger::capture("relay", Box::new(|_, _| {})));
+        let opts = Options {
+            root: root.verifying_key().into(),
+            owner: None,
+            license: None,
+            crl_file: None,
+            store: None,
+            seen_file: None,
+            directory_file: None,
+            users_file: None,
+            store_bytes: STORE_BYTES,
+            sender_bytes: SENDER_BYTES,
+            console: None,
+        };
+        let state = State::new(opts, logger.clone()).unwrap();
+        Arc::new(Relay { state: Mutex::new(state), logger, hosts: HostCheck { names: None, port: 0, public: None }, tls: false })
+    }
+
+    async fn listen(acceptor: Option<TlsAcceptor>, limits: ConnLimits) -> u16 {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(run(listener, test_relay(), acceptor, limits));
+        port
+    }
+
+    fn der(tag: u8, body: &[u8]) -> Vec<u8> {
+        let n = body.len();
+        let mut out = vec![tag];
+        match n {
+            0..=0x7f => out.push(n as u8),
+            0x80..=0xff => out.extend([0x81, n as u8]),
+            _ => out.extend([0x82, (n >> 8) as u8, n as u8]),
+        }
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn pem(label: &str, data: &[u8]) -> String {
+        let b = crate::meet_json::b64(data);
+        let lines: Vec<&str> = b.as_bytes().chunks(64).map(|c| std::str::from_utf8(c).unwrap()).collect();
+        format!("-----BEGIN {label}-----\n{}\n-----END {label}-----\n", lines.join("\n"))
+    }
+
+    /// A self-signed P-256 certificate for relay.test and its PKCS#8 key, as PEM.
+    fn self_signed() -> (String, String) {
+        use aws_lc_rs::rand::SystemRandom;
+        use aws_lc_rs::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_ASN1_SIGNING};
+        let rng = SystemRandom::new();
+        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &rng).unwrap();
+        let pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, pkcs8.as_ref()).unwrap();
+        let spki = crate::der::p256_spki_der(&crate::der::P256Key::from_sec1(pair.public_key().as_ref()).unwrap());
+        let alg = der(0x30, &der(0x06, &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02]));
+        let name = der(0x30, &der(0x31, &der(0x30, &[der(0x06, &[0x55, 0x04, 0x03]), der(0x0c, b"relay.test")].concat())));
+        let validity = der(0x30, &[der(0x17, b"250101000000Z"), der(0x17, b"491231235959Z")].concat());
+        let tbs = der(0x30, &[der(0xa0, &der(0x02, &[2])), der(0x02, &[1]), alg.clone(), name.clone(), validity, name, spki].concat());
+        let sig = pair.sign(&rng, &tbs).unwrap();
+        let cert = der(0x30, &[tbs, alg, der(0x03, &[&[0u8][..], sig.as_ref()].concat())].concat());
+        (pem("CERTIFICATE", &cert), pem("PRIVATE KEY", pkcs8.as_ref()))
+    }
+
+    #[tokio::test]
+    async fn a_stalled_request_body_is_cut_at_its_deadline() {
+        let limits = ConnLimits { connections: 8, handshake: Duration::from_secs(10), body: Duration::from_millis(300) };
+        let port = listen(None, limits).await;
+        let mut c = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        // Ten bytes of the hundred it declares, then nothing.
+        c.write_all(b"POST /v1/send HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 100\r\n\r\n{\"v\":1,\"x\"").await.unwrap();
+        let started = Instant::now();
+        let mut answer = Vec::new();
+        let read = tokio::time::timeout(Duration::from_secs(5), c.read_to_end(&mut answer)).await;
+        assert!(read.is_ok(), "the relay answered and closed the connection");
+        let text = String::from_utf8_lossy(&answer);
+        assert!(text.starts_with("HTTP/1.1 408"), "{text}");
+        assert!(text.contains("request body timed out") && text.to_ascii_lowercase().contains("connection: close"), "{text}");
+        assert!(started.elapsed() >= Duration::from_millis(250));
+    }
+
+    #[tokio::test]
+    async fn a_stalled_tls_handshake_is_dropped() {
+        let (cert, key) = self_signed();
+        let acceptor = tls_acceptor(&cert, &key).unwrap();
+        let limits = ConnLimits { connections: 8, handshake: Duration::from_millis(300), body: Duration::from_secs(10) };
+        let port = listen(Some(acceptor), limits).await;
+        // A client that connects and never says hello.
+        let mut c = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let started = Instant::now();
+        let mut buf = [0u8; 64];
+        let read = tokio::time::timeout(Duration::from_secs(5), c.read(&mut buf)).await;
+        assert!(matches!(read, Ok(Ok(0)) | Ok(Err(_))), "the relay dropped the stalled connection");
+        assert!(started.elapsed() >= Duration::from_millis(250));
+    }
+
+    #[tokio::test]
+    async fn connections_past_the_cap_are_dropped() {
+        let limits = ConnLimits { connections: 1, handshake: Duration::from_secs(10), body: Duration::from_secs(10) };
+        let port = listen(None, limits).await;
+        // The one slot, held by a client that has sent nothing yet.
+        let first = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let mut second = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let mut buf = [0u8; 64];
+        let read = tokio::time::timeout(Duration::from_secs(5), second.read(&mut buf)).await;
+        assert!(matches!(read, Ok(Ok(0)) | Ok(Err(_))), "the connection over the cap was dropped");
+        // The slot comes back when its connection goes.
+        drop(first);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let mut third = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        third.write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").await.unwrap();
+        let mut answer = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(5), third.read_to_end(&mut answer)).await;
+        assert!(String::from_utf8_lossy(&answer).starts_with("HTTP/1.1 200"));
     }
 }

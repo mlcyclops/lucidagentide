@@ -5,11 +5,14 @@
 //
 //   lucid-relay [relay serve] --root <root.pub> --license <file> [--host 127.0.0.1] [--port 8787]
 //               [--tls-cert f --tls-key f] [--state <dir>] [--sender-mib 16]
-//     (or LUCID_RELAY_ROOT_PUB, _LICENSE, _HOST, _PORT/PORT, _TLS_CERT, _TLS_KEY, _STATE, _SENDER_MIB, _BEHIND_TLS=1)
+//     (or LUCID_RELAY_ROOT_PUB, _LICENSE, _HOST, _PORT/PORT, _TLS_CERT, _TLS_KEY, _STATE, _SENDER_MIB, _BEHIND_TLS=1;
+//      behind a TLS front LUCID_RELAY_PUBLIC_HOST=<host[:port]> is required: the one host the relay answers for)
 //               [--console 1]   the control panel at /console/ (or LUCID_RELAY_CONSOLE=1; needs --state; src/console.rs)
 //   lucid-relay --owner <spoke node id> ...   a spoke's LAN mailbox: carries mail to and from that spoke only, needs
 //               no license; with --state it keeps crl, lan-mailbox-seen.json and lan-mail/ as the spoke agent does.
 //   lucid-relay collab [--host=…] [--port=…] …   phase B, the core's collab broker (tools/relay/serve.ts; src/collab.rs).
+//   lucid-relay console remove-admin <email> [--state <dir>]   with the relay stopped: a control panel admin, its
+//               passkeys and open invites leave console.json (signed in, POST /console/api/admins/remove does it live).
 
 mod codec;
 mod collab;
@@ -104,6 +107,8 @@ struct Config {
     tls: Option<(String, String)>,
     state: Option<String>,
     behind_tls: bool,
+    /// LUCID_RELAY_PUBLIC_HOST: behind a TLS front, the one host this relay answers for.
+    public_host: Option<String>,
     license: Option<String>,
     sender_bytes: Option<i64>,
     owner: Option<String>,
@@ -136,6 +141,15 @@ fn relay_serve_config(flags: &HashMap<String, String>, env: impl Fn(&str) -> Opt
     if behind == "1" && (host.is_none() || port_text.is_none()) {
         return Err("behind a TLS front the relay binds only the address it is given: set the host (--host or LUCID_RELAY_HOST) and the port (--port, LUCID_RELAY_PORT or PORT)".into());
     }
+    // Behind a front the relay has no certificate naming it: the public host is the only Host it answers, the
+    // audience requests are signed for, and the control panel's origin.
+    let public_host = env("LUCID_RELAY_PUBLIC_HOST").map(|v| v.trim().to_owned()).filter(|v| !v.is_empty());
+    match (&public_host, behind == "1") {
+        (None, true) => return Err("behind a TLS front set LUCID_RELAY_PUBLIC_HOST to the host name callers dial (relay.example.com, or relay.example.com:8443)".into()),
+        (Some(_), false) => return Err("LUCID_RELAY_PUBLIC_HOST is for a relay behind a TLS front (LUCID_RELAY_BEHIND_TLS=1); with its own certificate the relay answers for the names on it".into()),
+        (Some(p), true) if !public_host_ok(p) => return Err(format!("LUCID_RELAY_PUBLIC_HOST {p} is not a host name with an optional port (no scheme, path or spaces)")),
+        _ => {}
+    }
     let port = js_number(port_text.as_deref().unwrap_or("8787"));
     if !js_is_integer(port) || !(1.0..=65_535.0).contains(&port) {
         return Err(format!("port {} is not 1 to 65535", port_text.as_deref().unwrap_or("undefined")));
@@ -167,16 +181,57 @@ fn relay_serve_config(flags: &HashMap<String, String>, env: impl Fn(&str) -> Opt
         tls,
         state: get("state", &["LUCID_RELAY_STATE"]),
         behind_tls: behind == "1",
+        public_host,
         license: license.map(|l| pem_or_file(&l).map(|text| license_token_of(&text))).transpose()?,
         sender_bytes: sender_text.map(|_| sender_mib as i64 * 1024 * 1024),
         owner,
     })
 }
 
+/// LUCID_RELAY_PUBLIC_HOST: a DNS name (letters, digits, hyphens, dots), with an optional port 1 to 65535.
+fn public_host_ok(p: &str) -> bool {
+    let (name, port) = match p.split_once(':') {
+        Some((n, port)) => (n, Some(port)),
+        None => (p, None),
+    };
+    let name_ok = !name.is_empty() && name.split('.').all(|l| !l.is_empty() && l.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-'));
+    name_ok && port.is_none_or(|n| n.parse::<u16>().is_ok_and(|n| n > 0))
+}
+
 /// The owner root public key from its PEM (createPublicKey, then TrustStore's P-256 check).
-fn root_key(pem: &str) -> Result<p256::ecdsa::VerifyingKey, String> {
+fn root_key(pem: &str) -> Result<der::P256Key, String> {
     let der = der::pem_blocks(pem, "PUBLIC KEY").into_iter().next().ok_or("the owner root public key is not a PUBLIC KEY PEM")?;
     der::p256_from_spki(&der).ok_or_else(|| "root key must be ECDSA P-256".into())
+}
+
+/// `lucid-relay console remove-admin <email> [--state <dir>]` (or LUCID_RELAY_STATE), with the relay stopped: an
+/// admin, its passkeys and open invites leave console.json.
+fn console_cli(args: &[String]) -> ! {
+    const USAGE: &str = "usage: lucid-relay console remove-admin <email> [--state <dir>] (or LUCID_RELAY_STATE), with the relay stopped";
+    let mut state = std::env::var("LUCID_RELAY_STATE").ok();
+    let mut rest = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        i += 1;
+        if let Some(v) = a.strip_prefix("--state=") {
+            state = Some(v.to_owned());
+        } else if a == "--state" {
+            state = Some(args.get(i).cloned().unwrap_or_else(|| die(USAGE)));
+            i += 1;
+        } else {
+            rest.push(a.as_str());
+        }
+    }
+    let ["remove-admin", email] = rest.as_slice() else { die(USAGE) };
+    let dir = state.filter(|d| !d.is_empty()).unwrap_or_else(|| die("the control panel keeps its admins in the state folder: give --state or LUCID_RELAY_STATE"));
+    match console::remove_admin_offline(&Path::new(&dir).join(console::CONSOLE_FILE), email) {
+        Ok(done) => {
+            println!("lucid-relay: {done}");
+            std::process::exit(0)
+        }
+        Err(e) => die(&e),
+    }
 }
 
 #[cfg(unix)]
@@ -200,6 +255,8 @@ async fn stop_signal() -> &'static str {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // A `fips` build serves nothing (relay, collab or meet) unless AWS-LC is in FIPS mode.
+    server::fips_check().unwrap_or_else(|e| die(&e));
     // Phase B: the collab broker (tools/relay/serve.ts). Everything else is `relay serve` (phase A).
     if args.first().map(String::as_str) == Some("collab") {
         collab::main(&args[1..]);
@@ -207,6 +264,10 @@ fn main() {
     // Phase C: the Meeting Hub rendezvous relay (relay/meet_relay.py; src/meet.rs).
     if args.first().map(String::as_str) == Some("meet") {
         meet::main(&args[1..]);
+    }
+    // The control panel's book, offline: `console remove-admin <email>`.
+    if args.first().map(String::as_str) == Some("console") {
+        console_cli(&args[1..]);
     }
     let flags = parse_args(&args).unwrap_or_else(|e| die(&e));
     let c = relay_serve_config(&flags, |k| std::env::var(k).ok()).unwrap_or_else(|e| die(&e));
@@ -235,7 +296,8 @@ fn main() {
         console,
     };
     if c.behind_tls {
-        logger.ops("plain-http", &Fields::new().with("why", "a platform front terminates TLS (LUCID_RELAY_BEHIND_TLS=1)"), Level::Info);
+        let f = Fields::new().with("why", "a platform front terminates TLS (LUCID_RELAY_BEHIND_TLS=1)").with("publicHost", c.public_host.clone());
+        logger.ops("plain-http", &f, Level::Info);
     }
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap_or_else(|e| die(&e.to_string()));
     runtime.block_on(async move {
@@ -246,7 +308,8 @@ fn main() {
         let port = listener.local_addr().map(|a| a.port()).unwrap_or(c.port);
         let licensed = st.licensed();
         let has_store = c.state.is_some();
-        let relay = Arc::new(server::Relay { state: Mutex::new(st), logger: logger.clone(), hosts: HostCheck { names, port }, tls: c.tls.is_some() });
+        let public = c.public_host.as_deref().map(|p| server::dialed_of(p, true));
+        let relay = Arc::new(server::Relay { state: Mutex::new(st), logger: logger.clone(), hosts: HostCheck { names, port, public }, tls: c.tls.is_some() });
         let shown = if c.hostname.contains(':') { format!("[{}]", c.hostname) } else { c.hostname.clone() };
         let url = format!("{}://{shown}:{port}/", if c.tls.is_some() { "https" } else { "http" });
         logger.ops("listening", &Fields::new().with("url", url).with("licensed", licensed).with("store", has_store).with("owner", c.owner.clone()), Level::Info);
@@ -262,7 +325,7 @@ fn main() {
                 }
             });
         }
-        tokio::spawn(server::run(listener, relay, acceptor));
+        tokio::spawn(server::run(listener, relay, acceptor, server::CONN_LIMITS));
         let signal = stop_signal().await;
         logger.ops("stopping", &Fields::new().with("signal", signal), Level::Info);
         std::process::exit(0);
@@ -290,11 +353,36 @@ mod tests {
         assert!(err(&[("root", PEM)], &[]).contains("refusing plain HTTP"));
         assert!(err(&[("root", PEM), ("host", "0.0.0.0"), ("port", "8080")], &[("LUCID_RELAY_BEHIND_TLS", "true")]).contains("must be 1"));
         assert!(err(&[("root", PEM)], &[("LUCID_RELAY_BEHIND_TLS", "1"), ("PORT", "8080")]).contains("binds only the address it is given"));
-        assert!(err(&[("root", PEM)], &[("LUCID_RELAY_BEHIND_TLS", "1"), ("LUCID_RELAY_HOST", "0.0.0.0"), ("PORT", "70000")]).contains("not 1 to 65535"));
+        assert!(err(&[("root", PEM)], &[("LUCID_RELAY_BEHIND_TLS", "1"), ("LUCID_RELAY_HOST", "0.0.0.0"), ("PORT", "70000"), ("LUCID_RELAY_PUBLIC_HOST", "relay.example.com")]).contains("not 1 to 65535"));
         assert!(err(&[("root", PEM)], &[("LUCID_RELAY_TLS_CERT", PEM)]).contains("both the TLS certificate and its key"));
-        assert!(err(&[("root", PEM)], &[("LUCID_RELAY_BEHIND_TLS", "1"), ("LUCID_RELAY_HOST", "127.0.0.1"), ("PORT", "8080"), ("LUCID_RELAY_SENDER_MIB", "0")]).contains("per-sender quota"));
-        let c = relay_serve_config(&flags(&[("root", PEM), ("sender-mib", "4")]), env(&[("LUCID_RELAY_BEHIND_TLS", "1"), ("LUCID_RELAY_HOST", "0.0.0.0"), ("PORT", "8080"), ("LUCID_RELAY_PORT", "8443"), ("LUCID_RELAY_SENDER_MIB", "32")])).ok().unwrap();
+        assert!(err(&[("root", PEM)], &[("LUCID_RELAY_BEHIND_TLS", "1"), ("LUCID_RELAY_HOST", "127.0.0.1"), ("PORT", "8080"), ("LUCID_RELAY_PUBLIC_HOST", "relay.example.com"), ("LUCID_RELAY_SENDER_MIB", "0")]).contains("per-sender quota"));
+        let c = relay_serve_config(&flags(&[("root", PEM), ("sender-mib", "4")]), env(&[("LUCID_RELAY_BEHIND_TLS", "1"), ("LUCID_RELAY_HOST", "0.0.0.0"), ("PORT", "8080"), ("LUCID_RELAY_PORT", "8443"), ("LUCID_RELAY_PUBLIC_HOST", "relay.example.com"), ("LUCID_RELAY_SENDER_MIB", "32")])).ok().unwrap();
         assert_eq!((c.hostname.as_str(), c.port, c.behind_tls, c.sender_bytes), ("0.0.0.0", 8443, true, Some(4 * 1024 * 1024)));
+        assert_eq!(c.public_host.as_deref(), Some("relay.example.com"));
+    }
+
+    #[test]
+    fn behind_a_tls_front_the_public_host_is_required() {
+        // Behind a front, with `public` as LUCID_RELAY_PUBLIC_HOST (None: unset): the error, or "" when it starts.
+        let behind = |public: Option<&str>| {
+            let public = public.map(str::to_owned);
+            let vars = move |k: &str| match k {
+                "LUCID_RELAY_BEHIND_TLS" => Some("1".to_owned()),
+                "LUCID_RELAY_HOST" => Some("0.0.0.0".to_owned()),
+                "PORT" => Some("8080".to_owned()),
+                "LUCID_RELAY_PUBLIC_HOST" => public.clone(),
+                _ => None,
+            };
+            relay_serve_config(&flags(&[("root", PEM)]), vars).err().unwrap_or_default()
+        };
+        assert!(behind(None).contains("set LUCID_RELAY_PUBLIC_HOST"));
+        assert_eq!(behind(Some("relay.example.com:8443")), "");
+        for bad in ["https://relay.example.com", "relay.example.com/x", "relay..example.com", "relay.example.com:0", "relay.example.com:x", "relay example.com"] {
+            assert!(behind(Some(bad)).contains("is not a host name"), "{bad}");
+        }
+        let own_tls = relay_serve_config(&flags(&[("root", PEM)]), env(&[("LUCID_RELAY_TLS_CERT", PEM), ("LUCID_RELAY_TLS_KEY", PEM), ("LUCID_RELAY_PUBLIC_HOST", "relay.example.com")]));
+        assert!(own_tls.err().unwrap_or_default().contains("is for a relay behind a TLS front"));
+        assert!(public_host_ok("relay.example.com") && public_host_ok("localhost"));
     }
 
     #[test]

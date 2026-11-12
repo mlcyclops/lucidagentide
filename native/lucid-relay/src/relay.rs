@@ -35,10 +35,14 @@ const SEEN_MS: i64 = MESSAGE_TTL_MS;
 const SEEN_SAVE_MS: i64 = 3_600_000;
 pub const LICENSE_CHECK_MS: u64 = 24 * 3_600_000;
 const EXPIRED_LOG_EVERY_MS: i64 = 60_000;
+/// The books are swept at most this often, and only for a request whose authorization parses.
+const SWEEP_EVERY_MS: i64 = 1000;
+/// Why a LAN mailbox refuses its owner's node id on a certificate that is not a spoke's.
+const OWNER_NOT_SPOKE: &str = "the owner of this LAN mailbox must be a spoke";
 
 /// What startRelay takes, as `relay serve` (or a spoke's LAN mailbox, `owner`) builds it.
 pub struct Options {
-    pub root: p256::ecdsa::VerifyingKey,
+    pub root: crate::der::P256Key,
     pub owner: Option<String>,
     /// The license token (already out of its armor).
     pub license: Option<String>,
@@ -133,6 +137,8 @@ pub struct State {
     held_by: HashMap<String, i64>,
     seen: IndexMap<String, Seen>,
     seen_saved_at: i64,
+    /// When sweep() last ran, None before the first.
+    swept_at: Option<i64>,
     license_seen: Option<LicenseStateName>,
     expired_refused: i64,
     expired_logged_at: Option<i64>,
@@ -266,6 +272,7 @@ impl State {
             held_by: HashMap::new(),
             seen: IndexMap::new(),
             seen_saved_at: 0,
+            swept_at: None,
             license_seen: None,
             expired_refused: 0,
             expired_logged_at: None,
@@ -306,11 +313,25 @@ impl State {
             }
             st.seen_saved_at = t;
         }
+        // A LAN mailbox for a node this mailbox saw authenticate as a hub: --owner names a hub, not a spoke.
+        if let Some(owner) = &st.owner {
+            if st.seen.get(owner).is_some_and(|s| s.role != "spoke") {
+                return Err(format!("--owner {owner} is a hub's node id (seen here on a hub certificate): a LAN mailbox belongs to a spoke"));
+            }
+        }
         if st.store.is_some() {
             st.restore_store()?;
         }
         st.check_license(crate::codec::now_ms())?;
+        st.tell_console_revoked();
         Ok(st)
+    }
+
+    /// The control panel refuses admins whose inviting hub's certificate the CRL revokes (ADR-0540 review).
+    fn tell_console_revoked(&self) {
+        if let Some(console) = &self.console {
+            console.set_revoked(self.trust.revoked_serials());
+        }
     }
 
     pub fn licensed(&self) -> bool {
@@ -542,6 +563,11 @@ impl State {
         let ts = a.get("ts").and_then(Value::as_f64).filter(|_| a.get("ts").is_some_and(Value::is_number));
         let nonce = str_of(a.get("nonce")).filter(|n| crate::identity::is_serial(n));
         let (Some(ts), Some(nonce), Some(sig)) = (ts, nonce, str_of(a.get("sig"))) else { return failed("malformed authorization", None) };
+        // Only now, for an authorization that parses, and at most once a second: junk never costs a sweep.
+        if self.swept_at.is_none_or(|at| t - at >= SWEEP_EVERY_MS || t < at) {
+            self.swept_at = Some(t);
+            self.sweep(t);
+        }
         let claimed = str_of(a.get("cert"))
             .and_then(|c| unb64u(c.split('.').next().unwrap_or("")))
             .and_then(|b| parse_json(&utf8_lossy(&b)))
@@ -553,6 +579,10 @@ impl State {
             Ok(c) => c,
             Err(reason) => return Err((if reason == "certificate revoked" { "auth.revoked" } else { "auth.failed" }, reason, claimed)),
         };
+        // A LAN mailbox carries mail for its spoke: its node id on a hub certificate is not that spoke.
+        if self.owner.as_deref() == Some(c.cert.node.as_str()) && c.cert.role != "spoke" {
+            return failed(OWNER_NOT_SPOKE, claimed);
+        }
         // RS-RELAY-03: the signature must name this mailbox: its owner, or the host the caller dialed.
         if self.owner.is_none() && !host_ok {
             return failed("request is for another host", claimed);
@@ -573,9 +603,8 @@ impl State {
         Ok(c.cert)
     }
 
-    /// Everything after the body is read: sweep, authenticate, seat, route.
+    /// Everything after the body is read: authenticate (sweeping the books, at most once a second), seat, route.
     pub fn serve(&mut self, r: &Request, t: i64, host_ok: bool) -> Result<Reply, String> {
-        self.sweep(t);
         let me = match self.authenticate(r, t, host_ok) {
             Ok(c) => c,
             Err((event, reason, claimed)) => {
@@ -658,6 +687,7 @@ impl State {
                             }
                             logger.ops("crl.accepted", &Fields::new().with("node", &me.node).with("version", self.trust.crl_version()), Level::Info);
                             self.free_users(t)?; // a user whose every certificate is revoked frees its seat now
+                            self.tell_console_revoked(); // and an admin a revoked hub invited is signed out
                         }
                         json_reply(200, &json!({ "ok": true, "version": self.trust.crl_version() }))
                     }
@@ -718,7 +748,7 @@ impl State {
                 if !parse_json(r.body).as_ref().and_then(as_object).is_some_and(|b| b.is_empty()) {
                     return Ok(refuse(&logger, 400, "malformed", "console.invite-malformed", &who));
                 }
-                match console.invite(&email, &me.node, r.dialed, t) {
+                match console.invite(&email, &me.node, &me.serial, r.dialed, t) {
                     Err(e) => refuse(&logger, e.status, &e.error, e.event, &who.clone().with("email", &email)),
                     Ok(inv) => {
                         // The link signs its holder in once: never written to a log.
@@ -884,17 +914,22 @@ impl State {
     }
 }
 
-/// The relay's own TLS names and listening port, for RS-RELAY-03's host check.
+/// The relay's own TLS names and listening port, or behind a TLS front its public host, for RS-RELAY-03's host check.
 pub struct HostCheck {
     pub names: Option<CertNames>,
     pub port: u16,
+    /// LUCID_RELAY_PUBLIC_HOST behind a TLS front, as an https URL's host normalizes it.
+    pub public: Option<Dialed>,
 }
 
 impl HostCheck {
     /// Whether a request's Host names this relay: with its own TLS certificate the name must be on it and the port
-    /// the one it listens on; plain HTTP on loopback, the listening port; plain HTTP otherwise (behind a front that
-    /// routes by Host), any.
+    /// the one it listens on; behind a TLS front, the public host exactly (so the audience a request is signed for
+    /// and the control panel's origin are that host); plain HTTP with neither, loopback on the listening port only.
     pub fn accepts(&self, d: &Dialed) -> bool {
+        if let Some(p) = &self.public {
+            return d.host == p.host;
+        }
         let name = d.hostname.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(&d.hostname);
         if let Some(names) = &self.names {
             return d.port == self.port
@@ -903,11 +938,7 @@ impl HostCheck {
                     Err(_) => names.check_host(name),
                 };
         }
-        if LOOPBACK_HOSTS.contains(&d.hostname.as_str()) {
-            d.port == self.port
-        } else {
-            true
-        }
+        LOOPBACK_HOSTS.contains(&d.hostname.as_str()) && d.port == self.port
     }
 }
 
@@ -940,5 +971,114 @@ mod tests {
         let enterprise = license("enterprise", 3);
         assert_eq!(relays_over_cap(Some(&enterprise), 3), None);
         assert_eq!(relays_over_cap(Some(&enterprise), 4).as_deref(), Some("the license covers 3 relays"));
+    }
+
+    use crate::codec::b64u;
+    use crate::der::p256_spki_der;
+    use crate::identity::node_id_of;
+    use p256::ecdsa::signature::Signer;
+    use p256::ecdsa::{Signature, SigningKey};
+
+    const T0: i64 = 1_800_000_000_000;
+
+    fn compact(key: &SigningKey, payload: &Value) -> String {
+        let body = stringify(payload);
+        let sig: Signature = key.sign(body.as_bytes());
+        format!("{}.{}", b64u(body.as_bytes()), b64u(sig.to_der().as_bytes()))
+    }
+
+    /// A node's key, root-signed certificate and id.
+    fn node(root: &SigningKey, seed: u8, role: &str) -> (SigningKey, String, String) {
+        let key = SigningKey::from_slice(&[seed; 32]).unwrap();
+        let spki = p256_spki_der(&key.verifying_key().into());
+        let id = node_id_of(&spki);
+        let now = T0 / 1000;
+        let p = json!({
+            "v": 1, "typ": "lucid-node-cert", "serial": format!("{seed:032x}"), "root": node_id_of(&p256_spki_der(&root.verifying_key().into())),
+            "node": id, "role": role, "label": format!("{role} {seed}"), "spki": b64u(&spki), "scopes": [], "iat": now - 60, "exp": now + 86_400,
+        });
+        (key, compact(root, &p), id)
+    }
+
+    fn state(root: &SigningKey, owner: Option<String>, seen_file: Option<PathBuf>) -> Result<State, String> {
+        let opts = Options {
+            root: root.verifying_key().into(),
+            owner,
+            license: None,
+            crl_file: None,
+            store: None,
+            seen_file,
+            directory_file: None,
+            users_file: None,
+            store_bytes: STORE_BYTES,
+            sender_bytes: SENDER_BYTES,
+            console: None,
+        };
+        State::new(opts, Arc::new(Logger::capture("relay", Box::new(|_, _| {}))))
+    }
+
+    /// GET /v1/inbox signed by `key` and `cert` for `audience`: the status.
+    fn inbox(st: &mut State, key: &SigningKey, cert: &str, audience: &str, t: i64, nonce: u32) -> u16 {
+        let nonce = format!("{nonce:032x}");
+        let line = format!("lucid-relay-auth/v2\n{audience}\nGET\n/v1/inbox\n{}\n{nonce}\n{}", js_number_string(t as f64), sha256_hex(b""));
+        let sig: Signature = key.sign(line.as_bytes());
+        let a = json!({ "cert": cert, "ts": t, "nonce": nonce, "sig": b64u(sig.to_der().as_bytes()) });
+        let authorization = format!("LucidNode {}", b64u(stringify(&a).as_bytes()));
+        let d = Dialed { host: "relay.example.com".into(), hostname: "relay.example.com".into(), port: 443 };
+        let where_ = Fields::new();
+        let r = Request { method: "GET", pathname: "/v1/inbox", path: "/v1/inbox", authorization: &authorization, seat: None, dialed: &d, body: "", where_: &where_ };
+        st.serve(&r, t, true).unwrap().status
+    }
+
+    #[test]
+    fn a_lan_mailbox_refuses_its_owner_id_on_a_hub_certificate() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let (spoke_key, spoke_cert, spoke) = node(&root, 2, "spoke");
+        let (hub_key, hub_cert, hub) = node(&root, 3, "hub");
+        let mut lan = state(&root, Some(spoke.clone()), None).unwrap();
+        assert_eq!(inbox(&mut lan, &spoke_key, &spoke_cert, &format!("lan:{spoke}"), T0, 1), 200);
+        // A LAN mailbox whose --owner is a hub's node id: that hub never authenticates as its owner.
+        let mut wrong = state(&root, Some(hub.clone()), None).unwrap();
+        assert_eq!(inbox(&mut wrong, &hub_key, &hub_cert, &format!("lan:{hub}"), T0, 2), 401);
+        // And a mailbox that saw that id on a hub certificate refuses to start with it as --owner.
+        let dir = std::env::temp_dir().join(format!("lucid-relay-owner-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let seen = dir.join("lan-mailbox-seen.json");
+        let book = json!({ "nodes": { hub.clone(): { "role": "hub", "at": T0, "serial": format!("{:032x}", 3), "exp": T0 / 1000 + 86_400 } } });
+        std::fs::write(&seen, stringify(&book)).unwrap();
+        let e = state(&root, Some(hub.clone()), Some(seen)).err().unwrap_or_default();
+        assert!(e.contains("is a hub's node id"), "{e}");
+    }
+
+    #[test]
+    fn only_an_authorization_that_parses_sweeps_and_at_most_once_a_second() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let mut st = state(&root, None, None).unwrap();
+        let junk = |st: &mut State, authorization: &str, t: i64| {
+            let d = Dialed { host: "relay.example.com".into(), hostname: "relay.example.com".into(), port: 443 };
+            let where_ = Fields::new();
+            let r = Request { method: "GET", pathname: "/v1/inbox", path: "/v1/inbox", authorization, seat: None, dialed: &d, body: "", where_: &where_ };
+            st.serve(&r, t, true).unwrap().status
+        };
+        // A nonce long past its window: the next sweep drops it.
+        st.nonces.insert("stale".into(), 0);
+        let t = T0;
+        assert_eq!(junk(&mut st, "", t), 401);
+        assert_eq!(junk(&mut st, "LucidNode !!!", t), 401);
+        assert_eq!(junk(&mut st, &format!("LucidNode {}", b64u(b"{\"cert\":1}")), t), 401);
+        assert!(st.nonces.contains_key("stale") && st.swept_at.is_none(), "junk never sweeps");
+        // An authorization that parses (its certificate is still refused) sweeps.
+        let parses = format!("LucidNode {}", b64u(stringify(&json!({ "cert": "a.b", "ts": t, "nonce": format!("{:032x}", 9), "sig": "AA" })).as_bytes()));
+        assert_eq!(junk(&mut st, &parses, t), 401);
+        assert!(!st.nonces.contains_key("stale"));
+        assert_eq!(st.swept_at, Some(t));
+        // Within the second, no second sweep; after it, one.
+        st.nonces.insert("stale".into(), 0);
+        assert_eq!(junk(&mut st, &parses, t + 999), 401);
+        assert!(st.nonces.contains_key("stale"));
+        assert_eq!(junk(&mut st, &parses, t + 1000), 401);
+        assert!(!st.nonces.contains_key("stale"));
+        assert_eq!(st.swept_at, Some(t + 1000));
     }
 }
