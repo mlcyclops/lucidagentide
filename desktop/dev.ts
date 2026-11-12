@@ -605,7 +605,7 @@ import { PairingStore, type Pairing } from "./controller/store.ts"; // P-CTRL.2:
 import { handleRemoteSpokes, REMOTE_SPOKES_PLUGIN, remoteSpokesPanelUrl, type RemoteSpokesDeps } from "./remote_spokes.ts"; // P-IDE-SPOKES.1 (ADR-0506)
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
-import { addReportToKg, agentRecall, agentRetain, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unrelateEntities } from "./personal.ts";
+import { addReportToKg, agentRecall, agentRetain, changePersonalPassphrase, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unlockPersonalWithKey, unrelateEntities } from "./personal.ts";
 import { EXPLAIN_SYSTEM, explainCommand, explainUserPrompt } from "./explain_command.ts";
 import type { PersonalScope } from "../harness/personal/store.ts";
 import { readEditorFile, saveEditorFile } from "./editor.ts";
@@ -1853,6 +1853,11 @@ const jobScheduler = new JobScheduler({
   recover: async (hit) => {
     let resume: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } | undefined;
     if (hit.sessionId) {
+      // P-SESS-ARCHIVE.1: a spoke whose session the auto-archive rule moved comes back with its file, as it
+      // does on /api/fleet/spawn. omp loads only from the sessions folder, so without this the job's recovery
+      // would spawn against a session it cannot load.
+      const back = restoreSession(hit.sessionId);
+      if (!back.ok && back.error !== "session not found") return { ok: false, reason: `Could not restore the archived session: ${back.error}` };
       const page = sessionMessages(hit.sessionId, TRANSCRIPT_MAX_TURNS);
       const transcript: LaneTurnRecord[] = [];
       for (const m of page.messages) if ((m.role === "user" || m.role === "assistant") && m.text.trim()) transcript.push({ role: m.role, text: m.text });
@@ -1902,10 +1907,10 @@ let autoArchiveTimer: Timer | null = null;
 function scheduleAutoArchive(): void {
   if (autoArchiveTimer) { clearTimeout(autoArchiveTimer); autoArchiveTimer = null; }
   const tick = (delay: number): void => {
-    autoArchiveTimer = setTimeout(() => {
+    autoArchiveTimer = setTimeout(async () => {
       const policy = archivePolicy(loadSettings().sessionArchive);
       if (!policy.auto) { autoArchiveTimer = null; return; }
-      try { lastArchiveRun = { at: Date.now(), ...autoArchive(policy, liveSessionIds(), laneSessionNames()) }; flushSessionIndex(); }
+      try { lastArchiveRun = { at: Date.now(), ...await autoArchive(policy, liveSessionIds(), laneSessionNames()) }; flushSessionIndex(); }
       catch (e) { console.error(`[archive] auto-archive pass failed: ${e instanceof Error ? e.message : String(e)}`); }
       tick(AUTO_ARCHIVE_EVERY_MS);
     }, delay);
@@ -5184,10 +5189,10 @@ return Bun.serve({
         if (driven) keep.add(driven);
         const filter: SpokeFilter = { spokes: laneSessionNames(), show: url.searchParams.get("spokes") === "1", keep };
         if (p === "/api/sessions/search") {
-          const found = searchSessions((url.searchParams.get("q") ?? "").slice(0, 200), { filter });
+          const found = await searchSessions((url.searchParams.get("q") ?? "").slice(0, 200), { filter });
           return json({ ok: true, data: { ...found, hits: withLiveState(found.hits, main, lanes) } });
         }
-        const list = listSessions(undefined, undefined, filter);
+        const list = await listSessions(undefined, undefined, filter);
         return json({ ok: true, data: { sessions: withLiveState(list.sessions, main, lanes), ingest: list.ingest, hiddenSpokes: list.hiddenSpokes, archived: list.archived } });
       }
       if (p === "/api/sessions/ingest/clear" && req.method === "POST") return json({ ok: true, data: clearIngestSessions() }); // P-KG-INGEST.2
@@ -5232,7 +5237,7 @@ return Bun.serve({
         const { id } = await readBody<{ id?: unknown }>(req);
         return json({ ok: true, data: restoreSession(String(id ?? "")) });
       }
-      if (p === "/api/sessions/archived") return json({ ok: true, data: { sessions: archivedSessions().slice(0, 300) } });
+      if (p === "/api/sessions/archived") return json({ ok: true, data: { sessions: (await archivedSessions()).slice(0, 300) } });
       if (p === "/api/sessions/archive-policy") {
         if (req.method === "POST") {
           const s = loadSettings();
@@ -5241,11 +5246,11 @@ return Bun.serve({
           scheduleAutoArchive();
         }
         const policy = archivePolicy(loadSettings().sessionArchive);
-        const preview = autoArchive(policy, liveSessionIds(), laneSessionNames(), { dryRun: true });
+        const preview = await autoArchive(policy, liveSessionIds(), laneSessionNames(), { dryRun: true });
         return json({ ok: true, data: { policy, wouldArchive: preview.candidates, lastRun: lastArchiveRun } });
       }
       if (p === "/api/sessions/archive-now" && req.method === "POST") {
-        lastArchiveRun = { at: Date.now(), ...autoArchive(archivePolicy(loadSettings().sessionArchive), liveSessionIds(), laneSessionNames()) };
+        lastArchiveRun = { at: Date.now(), ...await autoArchive(archivePolicy(loadSettings().sessionArchive), liveSessionIds(), laneSessionNames()) };
         flushSessionIndex();
         return json({ ok: true, data: lastArchiveRun });
       }
@@ -6058,6 +6063,10 @@ return Bun.serve({
       if (p === "/api/personal/ai-extract" && req.method === "POST") { const b = await readBody<{ enabled?: unknown }>(req); setPersonalAiExtract(!!b.enabled); return json({ ok: true, data: personalStatus() }); }
       if (p === "/api/personal/setup" && req.method === "POST") { const b = await readBody<{ passphrase?: unknown }>(req); return json({ ok: true, data: setupPersonal(String(b.passphrase ?? "")) }); }
       if (p === "/api/personal/unlock" && req.method === "POST") { const b = await readBody<{ passphrase?: unknown }>(req); return json({ ok: true, data: unlockPersonal(String(b.passphrase ?? "")) }); }
+      // P-KGBIO.1 (ADR-0454): the desktop main process hands over the DEK a Windows Hello / Touch ID check released.
+      if (p === "/api/personal/unlock-key" && req.method === "POST") { const b = await readBody<{ dek?: unknown }>(req); return json({ ok: true, data: unlockPersonalWithKey(String(b.dek ?? "")) }); }
+      // P-KGPASS.1 (ADR-0455): change the main or CUI store's passphrase (a DEK re-wrap; both passphrases stay in this handler).
+      if (p === "/api/personal/passphrase" && req.method === "POST") { const b = await readBody<{ which?: unknown; current?: unknown; next?: unknown }>(req); return json({ ok: true, data: changePersonalPassphrase(b.which === "cui" ? "cui" : "main", String(b.current ?? ""), String(b.next ?? "")) }); }
       if (p === "/api/personal/lock" && req.method === "POST") return json({ ok: true, data: lockPersonal() });
       if (p === "/api/personal/scope" && req.method === "POST") { const b = await readBody<{ scope?: unknown }>(req); return json({ ok: true, data: setScope(String(b.scope ?? "personal") as any) }); }
       // P9.5a: the isolated CUI store has its OWN setup/unlock/lock (separate file + passphrase).
@@ -7103,6 +7112,9 @@ if (BUILD.creatorBuild) {
   process.env.LUCID_OPENFILM_LOOK_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/look?t=${AGENT_TOKEN}`;
   process.env.LUCID_OPENFILM_RENDER_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/render?t=${AGENT_TOKEN}`;
   process.env.LUCID_OPENFILM_JOB_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/job?t=${AGENT_TOKEN}`;
+  // CREATOR-IMG2THREEJS (ADR-0562): img2threejs_* (harness/omp/img2threejs_extension.ts). A flag, not a URL: the
+  // tools are pure and in-process, so there is no engine route for them to call. Unset outside Creator builds.
+  process.env.LUCID_IMG2THREEJS = "1";
 }
 // P-INTERJECT.1: the omp children (master + lanes) reach this server for mid-turn operator notes.
 // LUCID_DEV_URL is the bare base URL from the shared contract; LUCID_INTERJECT_URL is the ready-to-use

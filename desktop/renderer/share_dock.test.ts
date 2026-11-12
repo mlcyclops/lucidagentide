@@ -98,9 +98,9 @@ describe("loadDockState / saveDockState (P-SHARE.1)", () => {
 
 describe("participantSummary (P-SHARE.1)", () => {
   it("counts + normalizes access, keeping the email name", () => {
-    const s = participantSummary([{ name: "nick@x.com", access: "edit" }, { name: " bob ", access: "view" }, { name: "", access: "weird" }]);
+    const s = participantSummary([{ name: "operator@x.com", access: "edit" }, { name: " bob ", access: "view" }, { name: "", access: "weird" }]);
     expect(s.count).toBe(3);
-    expect(s.people[0]).toEqual({ name: "nick@x.com", access: "edit" });
+    expect(s.people[0]).toEqual({ name: "operator@x.com", access: "edit" });
     expect(s.people[1]!.name).toBe("bob");
     expect(s.people[2]).toEqual({ name: "guest", access: "view" }); // blank name + unknown access default safely
   });
