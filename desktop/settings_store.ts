@@ -283,7 +283,7 @@ export const ASKSAGE_DEFAULT_LIMIT = 200_000;
 export function personalBaseDir(): string {
   return process.env.LUCID_PERSONAL_DIR || join(homedir(), ".omp");
 }
-/** Default on-disk location of the encrypted personalization store (P9.1) — work + personal. `base` lets
+/** Default on-disk location of the encrypted personalization store (P9.1) - work + personal. `base` lets
  *  the Electron main process resolve the Creator flavor's relocated dir (set only in the engine's env). */
 export function personalStorePath(base = personalBaseDir()): string {
   return join(base, "lucid-personal.kg.enc");

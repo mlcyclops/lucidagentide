@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// harness/personal/protectors.ts — the Lucid Vault Protector Spec v1 for the personal knowledge graph
+// harness/personal/protectors.ts - the Lucid Vault Protector Spec v1 for the personal knowledge graph
 // (P-KGBIO.1, ADR-0454; spec: LUCIDMeetingHub docs/VAULT_QUICK_UNLOCK_PROPOSAL.md §3-§4, as shipped by the
 // Hub in src/vault_protectors.py).
 //
