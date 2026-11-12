@@ -6806,33 +6806,14 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-hud.hot{color:var(--amber-txt,var(--amber))}
 .orbit-headgap{flex:1}
 .orbit-btn{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
-/* GPU path (P-FLEET.L17): `contain` bounds invalidation to the stage; the SVG (whose dash-flow lines
-   DO repaint) is isolated onto its own composited layer so a flowing spoke never re-rasterizes the
-   cards above it. Cards, float wrappers, pings and the nebula animate transform/opacity ONLY, so with
-   hardware acceleration on (the Electron shell keeps it on and heals GPU deaths rather than disabling
-   it) the idle constellation costs the CPU near-nothing. */
+/* GPU path (P-FLEET.L17): `contain` bounds invalidation to the stage. Cards, float wrappers, pings and
+   the nebula animate transform/opacity ONLY, so with hardware acceleration on (the Electron shell keeps it
+   on and heals GPU deaths rather than disabling it) they run on the compositor. */
 .orbit-stage{position:relative;flex:1;overflow:hidden;contain:layout paint}
-.orbit-svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;
-  will-change:transform;transform:translateZ(0)}
-/* Decorative ring: a slow dashed drift sells the "orbit" without moving a single card. */
-.orbit-ringline{fill:none;stroke:var(--line-soft);stroke-width:1;stroke-dasharray:3 9;
-  animation:orbitRingDrift 60s linear infinite}
-@keyframes orbitRingDrift{to{stroke-dashoffset:-240}}
-/* Spokes: the line carries the lane color; data flows along it only while the lane WORKS, and the two
-   states that block on a human pulse - the identical rule the grid's cards animate by. */
-.orbit-line{stroke:var(--line-strong);stroke-width:1.5;transition:stroke 240ms}
-.orbit-line[data-status="starting"]{stroke-dasharray:2 6;animation:orbitFlow 1.4s linear infinite;opacity:.6}
-.orbit-line[data-status="working"]{stroke:rgb(var(--cyan-rgb) / .75);stroke-width:2;
-  stroke-dasharray:7 9;animation:orbitFlow .9s linear infinite}
-.orbit-line[data-status="awaiting-input"]{stroke:var(--amber);animation:orbitLineAmber 2.6s ease-in-out infinite}
-.orbit-line[data-status="needs-approval"]{stroke:var(--red);stroke-width:2.5;animation:orbitLineRed 1.6s ease-in-out infinite}
-.orbit-line[data-status="done"]{stroke:rgb(var(--green-rgb) / .6)}
-.orbit-line[data-status="error"]{stroke:rgb(var(--red-rgb) / .55);stroke-dasharray:4 5}
-.orbit-line[data-status="stopped"]{stroke:var(--line);opacity:.5}
-.orbit-line.promoted{stroke-width:3;filter:drop-shadow(0 0 4px rgb(var(--accent-rgb) / .6))}
-@keyframes orbitFlow{to{stroke-dashoffset:-16}}
-@keyframes orbitLineAmber{0%,100%{opacity:.55}50%{opacity:1}}
-@keyframes orbitLineRed{0%,100%{opacity:.6}50%{opacity:1}}
+/* P-ORBIT-CANVAS.1 (ADR-0522): spokes and rings are painted by orbit_canvas.ts on this one canvas, the
+   Knowledge Orbit's method: the line carries the lane color, data flows along it only while the lane
+   WORKS, the two states that block on a human pulse, and the loop parks when nothing moves. */
+.orbit-cv{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 /* The hub. Two expanding ping rings: the heartbeat of the whole view. */
 .orbit-hub{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2;cursor:pointer;
   display:grid;place-items:center;border-radius:50%}
@@ -7007,7 +6988,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 /* Motion hygiene: every orbit ornament is decorative; a reduced-motion user gets the same information
    from the static colors. */
 @media (prefers-reduced-motion: reduce){
-  .orbit-nebula,.orbit-ringline,.orbit-line,.orbit-hub-ping,.orbit-node-card,.orbit-node-card::after,.spoke-beacon::after,.spoke-chip.hot::after{animation:none !important}
+  .orbit-nebula,.orbit-hub-ping,.orbit-node-card,.orbit-node-card::after,.spoke-beacon::after,.spoke-chip.hot::after{animation:none !important}
   .orbit-node-card::after,.spoke-chip.hot::after{opacity:.5}
   .orbit-node,.orbit-node-float{transition:none}
 }
@@ -7063,16 +7044,12 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-view.static{backdrop-filter:none;-webkit-backdrop-filter:none;background:var(--bg-0)}
 .orbit-view.static .orbit-nebula{display:none}
 .orbit-view.static .orbit-hub-ping{display:none}
-.orbit-view.static .orbit-ringline,
-.orbit-view.static .orbit-line{animation:none;stroke-dasharray:none}
-.orbit-view.static .orbit-line[data-status="starting"]{stroke-dasharray:2 6}
 .orbit-view.static .orbit-node{transition:none;will-change:auto}
 .orbit-view.static .orbit-node-float{transition:none;will-change:auto}
 .orbit-view.static .orbit-node-card{animation:none;will-change:auto;transition:none}
 .orbit-view.static .orbit-node-card::after{animation:none;will-change:auto;opacity:.5}
 .orbit-view.static .orbit-led{animation:none !important}
 .orbit-view.static .fleet-pip i,.orbit-view.static .fleet-pip i::after{animation:none}
-.orbit-view.static .orbit-svg{will-change:auto;transform:none}
 .orbit-view.static .orbit-hub-core{transition:none}
 .orbit-view.static .orbit-cta{transition:none}
 .orbit-view.static .orbit-node-x{transition:none}
