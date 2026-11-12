@@ -26672,6 +26672,19 @@ Every change tightens: nothing that was refused or parked before runs now. Proof
 
 **Consequences.** The platform's own rename (window title, installer name, its docs) ships in its repo; LUCID needs no change when it lands, because nothing LUCID reads moved. Old ADRs keep the old name, so a search for "DGX Loader" still finds the history. If the platform ever changes its `source` prefix or the mailbox paths, that is a cross-repo contract bump with its own ADR on both sides. Relates to ADR-0427, ADR-0429, P-VOICE.7.
 
+## ADR-0547 -- P-RUNTIME-PIN.1: a cached runtime is reused only when it came from the current pin, and the bundled Bun must satisfy omp's engines.bun (2026-11-10)
+
+**Status:** Accepted. Fixes issue #598. Numbered after the 2.6.0 line's ADR-0531 to ADR-0546 so the two never collide when they meet.
+
+**Context.** A local 2.6.0-dev.5 installer shipped Bun 1.4.2 although master had moved the pin to 1.4.4 for omp 18.18 (P-MODEL.10, ADR-0526); omp refuses to start on an older Bun, so the installed agent did not start and the owner repaired it by hand. `desktop/build/fetch-runtimes.ts` skipped any runtime that already existed in `desktop/runtimes/` ("cached") and verified the pin only on a download, so a checkout that had fetched 1.4.2 months earlier kept bundling it, and the build log still said "verified".
+
+**Decision.**
+1. Every runtime fetch-runtimes.ts extracts is recorded in `desktop/runtimes/.pins.json` with the archive SHA-256 it was verified against. A runtime on disk is reused only when its record equals the current spec's pin; a runtime with no record or another one is fetched again and verified. The record is never packaged (extraResources filter `!.pins.json`). Pure decisions in `desktop/build/runtime_pin.ts`.
+2. After the plain `bun` alias is written, the bundled Bun is run and its version checked against `engines.bun` of the bundled `@oh-my-pi/pi-coding-agent`; a Bun that does not satisfy it stops the build with the reason. Only `>=x.y.z` ranges are understood; any other shape fails closed. Checked only for the machine's own platform and arch.
+
+**Proof.** `desktop/build/runtime_pin.test.ts` (7). Live: a checkout holding the stale Bun 1.4.2 with no record fetched 1.4.4 again, verified it and passed the engines check; a second run reused it ("cached, pin matches").
+
+**Consequences.** The first build after this change re-downloads every runtime once (no checkout has records yet). Relates to ADR-0387, ADR-0526.
 ## ADR-0548 -- P-RUNTIME-PY.1: the bundled CPython moves to 3.12.16 with OpenSSL 3.5.9, and the build refuses an older one (2026-11-10)
 
 **Status:** Accepted. Numbered after ADR-0547 (#599) and the 2.6.0 line's ADR-0531 to ADR-0546. Targets the next 2.5.4 beta.
