@@ -1530,6 +1530,11 @@ demo-CREATOR-OPENFILM: ## CREATOR-OPENFILM (ADR-0457): OpenFilm (MIT, film.html 
 	$(BUN) run desktop/scripts/demo_creator_openfilm.ts
 	$(BUN) test $(TEST_IGNORES) desktop/creator_openfilm.test.ts desktop/creator_registry.test.ts desktop/creator_probe.test.ts desktop/cui_policy.test.ts harness/omp/openfilm_extension.test.ts desktop/renderer/creator_video.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-CREATOR-IMG2THREEJS
+demo-CREATOR-IMG2THREEJS: ## CREATOR-IMG2THREEJS (ADR-0562): img2threejs (image to procedural three.js, Apache-2.0) ported to pure TypeScript under harness/creator/img2threejs/ (no Python outside the sidecar, invariant 2) and exposed to the agent as img2threejs_probe / _assess / _validate / _generate / _state (Creator builds only, in-process, workspace-confined). Proves, through the REAL tools against a temp workspace: the strict-quality gate FAILS a shallow spec and PASSES the lantern fixture; blockout emits macro parts only; a locked pass and unported geometry are BLOCKED by name with nothing written; the factory is TypeScript Bun transpiles with every spec string a JSON literal; the checklist refuses evidence-free and out-of-order marks, reopens a pass on refine, and hard-stops at the loop limit; forged delimiters in a spec reach the model neutralized inside the fence
+	$(BUN) run harness/scripts/demo_creator_img2threejs.ts
+	$(BUN) test $(TEST_IGNORES) harness/creator/img2threejs/img2threejs.test.ts harness/omp/img2threejs_extension.test.ts desktop/creator_registry.test.ts desktop/creator_probe.test.ts desktop/renderer/skills.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-P-VAULT-KEYS.1
 demo-P-VAULT-KEYS.1: ## P-VAULT-KEYS.1 (ADR-0472): provider keys, named-account keys, MCP bearer tokens and the TURN credential leave lucid-gui.json for an ENGINE-side OS vault (DPAPI / Keychain / libsecret master key, AES-256-GCM records) that headless engines open themselves. Real processes and the real backend: a plaintext settings file and its .bak migrate on the first engine start with no re-entry, a second engine reads the same keys, a missing master key reads as unreadable and rewrites nothing, a re-entered key sets the old vault aside, and the vault bundled for Node (Electron main) reports unavailable without touching a vault file
 	$(BUN) run desktop/scripts/demo_p_vault_keys_1.ts

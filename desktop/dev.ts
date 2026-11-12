@@ -7097,6 +7097,9 @@ if (BUILD.creatorBuild) {
   process.env.LUCID_OPENFILM_LOOK_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/look?t=${AGENT_TOKEN}`;
   process.env.LUCID_OPENFILM_RENDER_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/render?t=${AGENT_TOKEN}`;
   process.env.LUCID_OPENFILM_JOB_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/job?t=${AGENT_TOKEN}`;
+  // CREATOR-IMG2THREEJS (ADR-0562): img2threejs_* (harness/omp/img2threejs_extension.ts). A flag, not a URL: the
+  // tools are pure and in-process, so there is no engine route for them to call. Unset outside Creator builds.
+  process.env.LUCID_IMG2THREEJS = "1";
 }
 // P-INTERJECT.1: the omp children (master + lanes) reach this server for mid-turn operator notes.
 // LUCID_DEV_URL is the bare base URL from the shared contract; LUCID_INTERJECT_URL is the ready-to-use
