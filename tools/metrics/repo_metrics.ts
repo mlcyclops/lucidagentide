@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// tools/metrics/repo_metrics.ts - P-METRICS.1 (ADR-0525): long-term download and clone tracking.
+// tools/metrics/repo_metrics.ts - P-METRICS.1 (ADR-0561): long-term download and clone tracking.
 //
 // GitHub keeps release asset download counts forever but only as one running total per file, and it
 // keeps clone and view traffic for 14 days only. Anything older is gone. This collector runs once a
@@ -134,25 +134,30 @@ export function rollupRelease(r: ReleaseSnap): ReleaseRollup {
 export const EMPTY_SERIES: DailySeries = { v: 1, clones: {}, views: {} };
 
 /** Parse a persisted series; anything off-shape starts over EMPTY rather than throwing, but the
- *  caller is told (`ok: false`) so CI can refuse to overwrite a file it could not read. */
+ *  caller is told (`ok: false`) so CI can refuse to overwrite a file it could not read. Off-shape
+ *  means ANY part: a missing or non-object `clones` / `views`, a key that is not a day, or an entry
+ *  without finite counts. Dropping only the bad part and reporting `ok` would let the next write
+ *  replace the file with whatever survived, which is the history loss this guard exists to stop. */
 export function parseSeries(raw: string | null): { series: DailySeries; ok: boolean } {
   if (raw === null) return { series: structuredClone(EMPTY_SERIES), ok: true };
+  const bad = { series: structuredClone(EMPTY_SERIES), ok: false };
   try {
     const v: unknown = JSON.parse(raw);
-    if (!v || typeof v !== "object" || (v as { v?: unknown }).v !== 1) return { series: structuredClone(EMPTY_SERIES), ok: false };
+    if (!v || typeof v !== "object" || !("v" in v) || v.v !== 1) return bad;
     const src = v as Record<string, unknown>;
     const out = structuredClone(EMPTY_SERIES);
     for (const key of ["clones", "views"] as const) {
       const m = src[key];
-      if (!m || typeof m !== "object") continue;
+      if (!m || typeof m !== "object" || Array.isArray(m)) return bad;
       for (const [day, p] of Object.entries(m as Record<string, unknown>)) {
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !p || typeof p !== "object") continue;
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !p || typeof p !== "object") return bad;
         const { count, uniques } = p as Record<string, unknown>;
-        if (typeof count === "number" && typeof uniques === "number") out[key][day] = { count, uniques };
+        if (typeof count !== "number" || typeof uniques !== "number" || !Number.isFinite(count) || !Number.isFinite(uniques)) return bad;
+        out[key][day] = { count, uniques };
       }
     }
     return { series: out, ok: true };
-  } catch { return { series: structuredClone(EMPTY_SERIES), ok: false }; }
+  } catch { return bad; }
 }
 
 /** Merge one fetch of GitHub's per-day window into the series. A day GitHub still reports is taken
@@ -188,7 +193,7 @@ const cell = (s: string): string => s.replace(/[|\r\n`]/g, " ").slice(0, 80);
 export function buildSummary(latest: Snapshot, baseline: Snapshot | null, series: DailySeries, maxReleases = 15): string {
   const lines: string[] = [];
   lines.push(`# ${cell(latest.repo)} usage metrics`, "");
-  lines.push(`Last collected ${latest.collectedAt} by the repo-metrics workflow (P-METRICS.1, ADR-0525).`, "");
+  lines.push(`Last collected ${latest.collectedAt} by the repo-metrics workflow (P-METRICS.1, ADR-0561).`, "");
   lines.push("All counts are downloads, not people. GitHub does not record who downloaded a file, so one person can count many times.", "");
 
   // Releases

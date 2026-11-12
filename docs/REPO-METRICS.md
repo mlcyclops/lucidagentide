@@ -1,6 +1,6 @@
 # Repo usage metrics
 
-A daily GitHub Actions job keeps a history of release downloads, clones and repository views. GitHub itself keeps download counts only as running totals with no dates, and keeps clones and views for 14 days only. Design and rules: DECISIONS.md ADR-0525 (P-METRICS.1).
+A daily GitHub Actions job keeps a history of release downloads, clones and repository views. GitHub itself keeps download counts only as running totals with no dates, and keeps clones and views for 14 days only. Design and rules: DECISIONS.md ADR-0561 (P-METRICS.1).
 
 ## Where the numbers are
 

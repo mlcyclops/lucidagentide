@@ -1,4 +1,4 @@
-# Repo usage metrics (P-METRICS.1, ADR-0525).
+# Repo usage metrics (P-METRICS.1, ADR-0561).
 #
 # GitHub keeps release download counts only as running totals and keeps clone and view traffic for
 # 14 days only. This job runs daily and saves what GitHub knows today to the `metrics` branch

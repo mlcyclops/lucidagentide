@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// tools/metrics/repo_metrics.test.ts - P-METRICS.1 (ADR-0525): the pure core and the collect path.
+// tools/metrics/repo_metrics.test.ts - P-METRICS.1 (ADR-0561): the pure core and the collect path.
 
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
@@ -73,6 +73,21 @@ describe("daily series", () => {
     expect(parseSeries("{not json").ok).toBe(false);
     expect(parseSeries(JSON.stringify({ v: 2 })).ok).toBe(false);
     expect(parseSeries(null)).toEqual({ series: { v: 1, clones: {}, views: {} }, ok: true });
+  });
+  test("a series with one unreadable part is reported whole, so the readable part cannot overwrite it", () => {
+    const day = { count: 3, uniques: 2 };
+    const good = { v: 1 as const, clones: { "2026-10-01": day }, views: { "2026-10-01": day } };
+    expect(parseSeries(JSON.stringify(good))).toEqual({ series: good, ok: true });
+    for (const broken of [
+      { ...good, clones: "corrupt" },
+      { ...good, clones: [day] },
+      { v: 1, views: good.views },
+      { ...good, views: { "not-a-day": day } },
+      { ...good, views: { "2026-10-01": { count: "3", uniques: 2 } } },
+      { ...good, clones: { "2026-10-01": null } },
+    ]) {
+      expect(parseSeries(JSON.stringify(broken))).toEqual({ series: { v: 1, clones: {}, views: {} }, ok: false });
+    }
   });
   test("baseline picks the newest snapshot at least 7 days back", () => {
     expect(baselineDate(["2026-10-30", "2026-11-01", "2026-11-02", "2026-11-05"], "2026-11-08")).toBe("2026-11-01");

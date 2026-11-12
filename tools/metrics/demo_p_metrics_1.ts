@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// tools/metrics/demo_p_metrics_1.ts - `make demo-P-METRICS.1` (ADR-0525).
+// tools/metrics/demo_p_metrics_1.ts - `make demo-P-METRICS.1` (ADR-0561).
 //
 // Runs the REAL collector CLI as a subprocess, with tokens in its environment exactly as the
 // workflow passes them, against a local HTTP server that answers like api.github.com. Proves:

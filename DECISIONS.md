@@ -26046,7 +26046,7 @@ Parity already held and left alone: workspace, tab, pane hierarchy and ids; the 
 **Decision.** Turn the tool off in the overlay every omp child gets (`ompConfigArgs`: master, util, lanes). The model then asks in its reply text, which chat, lane cards and the PWA already show. The gated TUI does not read this overlay, so its working `ask` dialog stays. The standalone IDE launcher `lucid acp` (`buildAcpArgs`) had loaded the overlay only as the `--isolate` argument; it now passes it via `--config` as the desktop does (present-only, and an `--isolate` request without it refuses to start), so an IDE client that advertises elicitation gets the same fix and the same egress/exec approval prompts. `checkin_send` no longer tells agents to "ask the operator with the ask tool". The alternative, a question card on master, lanes and the PWA that answers the elicitation, is a feature of its own; re-enable `ask` when it exists.
 
 **Consequences.** No multiple-choice question UI in the IDE; questions arrive as text and the user answers in the composer. Approval and plan-mode elicitations are unchanged (they still go through `elicitationAnswer`).
-## ADR-0525 -- P-METRICS.1: a daily job keeps download, clone and view history on a `metrics` branch, because GitHub forgets traffic after 14 days (2026-11-08)
+## ADR-0561 -- P-METRICS.1: a daily job keeps download, clone and view history on a `metrics` branch, because GitHub forgets traffic after 14 days (2026-11-08)
 
 **Status:** Accepted. First real run happens after merge, because GitHub only runs scheduled and manually started workflows from the default branch.
 
