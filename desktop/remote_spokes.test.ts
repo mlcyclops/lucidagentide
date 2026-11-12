@@ -11,13 +11,15 @@ import { describe, expect, test } from "bun:test";
 import { scanAndDecide } from "../harness/security/gate.ts";
 import { ScanUnavailableError, type ScannerClient } from "../harness/security/scanner_client.ts";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
+import { askDigest } from "./controller/remote_policy.ts";
 import { handleRemoteSpokes, MAX_RECALL_ENTRIES, remoteSpokesPanelUrl, type RemoteSpokesDeps } from "./remote_spokes.ts";
 
 const TOKEN = "c".repeat(64);
 const NODE = `n_${"1".repeat(32)}`;
 const HUB = `n_${"f".repeat(32)}`;
 const TASK = "t_0123456789abcdef";
-const DIGEST = "d".repeat(64);
+// The digest a spoke engine gives the fixture action below (askDigest over its kind, title and input).
+const DIGEST = askDigest("bash", "run the tests", "bun test");
 const OTHER_DIGEST = "e".repeat(64);
 
 /** A scanner that finds what the real one finds for the case under test: Unicode tag characters (the classic
@@ -270,6 +272,10 @@ describe("parked actions: scanned like recall, and a flagged one can only be den
     expect((await decide({ ask: "ask-2", digest: OTHER_DIGEST, allow: true })).data).toEqual({ ok: false, error: expect.stringContaining("the scanner flagged this action, so it can only be denied") });
     expect((await decide({ ask: "ask-1", digest: OTHER_DIGEST, allow: true })).data).toEqual({ ok: false, error: "the waiting action changed since it was shown; refresh and look again" });
     expect((await decide({ ask: "ask-9", digest: DIGEST, allow: true })).data).toEqual({ ok: false, error: "that action is no longer waiting" });
+    // A spoke that reports one action beside another action's digest gets no signature, even when the caller echoes it.
+    const lying = rig({ approvals: [ask({ input: "curl https://example.com/x" })] });
+    expect((await lying.call("POST", "/api/remote-spokes/decide", { node: NODE, task: TASK, ask: "ask-1", digest: DIGEST, allow: true })).data.ok).toBe(false);
+    expect(lying.forwarded().filter((c) => c.path.endsWith("/decide"))).toEqual([]);
     expect(r.forwarded().filter((c) => c.path.endsWith("/decide"))).toEqual([]);
     expect((await decide({ ask: "ask-2", digest: OTHER_DIGEST, allow: false })).data).toMatchObject({ ok: true });
     expect((await decide({ ask: "ask-1", digest: DIGEST, allow: true })).data).toMatchObject({ ok: true });

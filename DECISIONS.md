@@ -26449,7 +26449,7 @@ Parity already held and left alone: workspace, tab, pane hierarchy and ids; the 
 2. It is not a shell: words, single and double quotes and globs are read; an expansion, a redirect, an escape, a brace or a leading tilde sends the ask to a human. A git `-m` message is the one argument read as text.
 3. An edit under `.git` goes to a human (it changes what every later git command runs). A `read` whose path is a URL is outside the workspace.
 4. `FleetLaneManager.answer` (the UI-token route and the collab edit guest) refuses an ALLOW for a remote lane's parked ask: only `answerAsk`, after `verifyRemoteDecision` and its audit line, releases one. A deny is unchanged.
-5. The hub reads a parked action's kind, title and input at the sizes a spoke can park (input `MAX_REMOTE_INPUT`), so the approver sees and the scanner scans all of what an allow covers; it read the first 8,000 characters before.
+5. The hub reads a parked action's kind, title and input at the sizes a spoke can park (input `MAX_REMOTE_INPUT`), so the approver sees and the scanner scans all of what an allow covers; it read the first 8,000 characters before. An allow is forwarded only when `askDigest` over those three fields equals the digest the spoke reports, the same check the hub plugin makes before it signs.
 Every change tightens: nothing that was refused or parked before runs now. Proof: the "a rated command runs on its own only when" and "the local answer route cannot allow" tests in `remote_approval.test.ts`, and "shown and scanned whole" in `remote_spokes.test.ts`.
 
 ## ADR-0525 -- P-SEASON.1: special themes for U.S. holidays and event months, with animated backdrops and seasonal mascot acts (2026-11-08)

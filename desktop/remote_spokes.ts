@@ -31,7 +31,7 @@
 import type { GateDecision } from "../harness/security/gate.ts";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
 import { neutralizeDelimiters } from "../harness/omp/mcp_result_gate.ts";
-import { MAX_REMOTE_INPUT } from "./controller/remote_policy.ts";
+import { askDigest, MAX_REMOTE_INPUT } from "./controller/remote_policy.ts";
 import {
   deactivatedLabel, mapHubSnapshot, MODEL_ID_RE, NODE_RE, TASK_RE,
   type RecallEntryView, type RecallView, type RemoteActionView, type RemoteApprovalView, type RemoteApprovalsView, type RemoteHubView,
@@ -295,6 +295,9 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
     if (!item) return refuse("that action is no longer waiting");
     if (item.ask.digest !== b.digest) return refuse("the waiting action changed since it was shown; refresh and look again");
     if (item.quarantined) return refuse(`the scanner flagged this action, so it can only be denied: ${item.quarantined}`);
+    // The digest is what the decision signs. It must be the digest of what was shown and scanned here, not a
+    // value the spoke reports beside it (the hub plugin makes the same check before it signs).
+    if (askDigest(item.ask.kind, item.ask.title, item.ask.input) !== item.ask.digest) return refuse("the spoke reported an action whose digest does not match what it shows; nothing was signed");
   }
 
   const forward: Record<string, unknown> = { ...b };

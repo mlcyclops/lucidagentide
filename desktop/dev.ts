@@ -1847,6 +1847,11 @@ const jobScheduler = new JobScheduler({
   recover: async (hit) => {
     let resume: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } | undefined;
     if (hit.sessionId) {
+      // P-SESS-ARCHIVE.1: a spoke whose session the auto-archive rule moved comes back with its file, as it
+      // does on /api/fleet/spawn. omp loads only from the sessions folder, so without this the job's recovery
+      // would spawn against a session it cannot load.
+      const back = restoreSession(hit.sessionId);
+      if (!back.ok && back.error !== "session not found") return { ok: false, reason: `Could not restore the archived session: ${back.error}` };
       const page = sessionMessages(hit.sessionId, TRANSCRIPT_MAX_TURNS);
       const transcript: LaneTurnRecord[] = [];
       for (const m of page.messages) if ((m.role === "user" || m.role === "assistant") && m.text.trim()) transcript.push({ role: m.role, text: m.text });
@@ -1896,10 +1901,10 @@ let autoArchiveTimer: Timer | null = null;
 function scheduleAutoArchive(): void {
   if (autoArchiveTimer) { clearTimeout(autoArchiveTimer); autoArchiveTimer = null; }
   const tick = (delay: number): void => {
-    autoArchiveTimer = setTimeout(() => {
+    autoArchiveTimer = setTimeout(async () => {
       const policy = archivePolicy(loadSettings().sessionArchive);
       if (!policy.auto) { autoArchiveTimer = null; return; }
-      try { lastArchiveRun = { at: Date.now(), ...autoArchive(policy, liveSessionIds(), laneSessionNames()) }; flushSessionIndex(); }
+      try { lastArchiveRun = { at: Date.now(), ...await autoArchive(policy, liveSessionIds(), laneSessionNames()) }; flushSessionIndex(); }
       catch (e) { console.error(`[archive] auto-archive pass failed: ${e instanceof Error ? e.message : String(e)}`); }
       tick(AUTO_ARCHIVE_EVERY_MS);
     }, delay);
@@ -5170,10 +5175,10 @@ return Bun.serve({
         if (driven) keep.add(driven);
         const filter: SpokeFilter = { spokes: laneSessionNames(), show: url.searchParams.get("spokes") === "1", keep };
         if (p === "/api/sessions/search") {
-          const found = searchSessions((url.searchParams.get("q") ?? "").slice(0, 200), { filter });
+          const found = await searchSessions((url.searchParams.get("q") ?? "").slice(0, 200), { filter });
           return json({ ok: true, data: { ...found, hits: withLiveState(found.hits, main, lanes) } });
         }
-        const list = listSessions(undefined, undefined, filter);
+        const list = await listSessions(undefined, undefined, filter);
         return json({ ok: true, data: { sessions: withLiveState(list.sessions, main, lanes), ingest: list.ingest, hiddenSpokes: list.hiddenSpokes, archived: list.archived } });
       }
       if (p === "/api/sessions/ingest/clear" && req.method === "POST") return json({ ok: true, data: clearIngestSessions() }); // P-KG-INGEST.2
@@ -5218,7 +5223,7 @@ return Bun.serve({
         const { id } = await readBody<{ id?: unknown }>(req);
         return json({ ok: true, data: restoreSession(String(id ?? "")) });
       }
-      if (p === "/api/sessions/archived") return json({ ok: true, data: { sessions: archivedSessions().slice(0, 300) } });
+      if (p === "/api/sessions/archived") return json({ ok: true, data: { sessions: (await archivedSessions()).slice(0, 300) } });
       if (p === "/api/sessions/archive-policy") {
         if (req.method === "POST") {
           const s = loadSettings();
@@ -5227,11 +5232,11 @@ return Bun.serve({
           scheduleAutoArchive();
         }
         const policy = archivePolicy(loadSettings().sessionArchive);
-        const preview = autoArchive(policy, liveSessionIds(), laneSessionNames(), { dryRun: true });
+        const preview = await autoArchive(policy, liveSessionIds(), laneSessionNames(), { dryRun: true });
         return json({ ok: true, data: { policy, wouldArchive: preview.candidates, lastRun: lastArchiveRun } });
       }
       if (p === "/api/sessions/archive-now" && req.method === "POST") {
-        lastArchiveRun = { at: Date.now(), ...autoArchive(archivePolicy(loadSettings().sessionArchive), liveSessionIds(), laneSessionNames()) };
+        lastArchiveRun = { at: Date.now(), ...await autoArchive(archivePolicy(loadSettings().sessionArchive), liveSessionIds(), laneSessionNames()) };
         flushSessionIndex();
         return json({ ok: true, data: lastArchiveRun });
       }

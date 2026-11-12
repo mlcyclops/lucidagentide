@@ -822,7 +822,12 @@ function renderSessionList(data: SessionList): void {
   lastSessionList = data;
   const list = $("#sessList"); if (!list) return;
   const { sessions, ingest } = data;
-  if (!sessions.length && !ingest.length) { list.innerHTML = `<div class="side-empty">No sessions yet - send a prompt to start one. They persist here across runs.</div>`; return; }
+  if (!sessions.length && !ingest.length) {
+    // Archiving the last active session must not hide the Archived group: it holds the Restore controls.
+    const archived = Math.max(0, Math.trunc(Number(data.archived)) || 0);
+    list.innerHTML = `<div class="side-empty">No sessions yet - send a prompt to start one. They persist here across runs.</div>${archived ? archivedGroup(archived) : ""}`;
+    return;
+  }
   const chats = sessions.map((s, i) => sessRow(s, i === 0)).join("");
   // P-KG-INGEST.1b: collapse the throwaway "Extract DURABLE facts…" extraction sessions an import mints
   // into ONE foldable group so they don't pollute the chat history (they stay inspectable when expanded).
@@ -18652,8 +18657,11 @@ function wire(): void {
   // a press aimed at Send (double click, or a turn that started on its own under the pointer) acts as Send.
   const sendBtn = $("#send")!;
   sendBtn.addEventListener("pointerdown", () => { sendPressedAt = Date.now(); });
-  sendBtn.addEventListener("click", () => {
-    const intent = stopClickIntent({ streaming: state.streaming, stopShownAt, pressedAt: sendPressedAt, now: Date.now() });
+  sendBtn.addEventListener("click", (e) => {
+    // A keyboard activation (Enter, Space) is a click with detail 0 and no pointer press of its own. A press
+    // recorded earlier and never clicked (released off the button, a right click) must not be read as its press.
+    const pressedAt = e instanceof UIEvent && e.detail === 0 ? null : sendPressedAt;
+    const intent = stopClickIntent({ streaming: state.streaming, stopShownAt, pressedAt, now: Date.now() });
     sendPressedAt = null;
     if (intent === "stop") void stopTurn(); else void send();
   });
