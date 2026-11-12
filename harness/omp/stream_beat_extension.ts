@@ -77,7 +77,7 @@ export default function streamBeatExtension(pi: unknown): void {
       const session = beatSession(event, ctx);
       if (!session || !due(session, Date.now())) return;
       // Fire-and-forget: a slow desktop must never slow the model's stream.
-      // LH-03 (ADR-0544): a held lane's beat carries its channel credential, so an engine that reattached it counts it.
+      // LH-03 (ADR-0544): a held lane's beat carries its channel MAC, so an engine that reattached it counts it.
       void engineFetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ session }) })
         .catch(() => { /* liveness hint only; the watchdog falls back to ACP traffic */ });
     });

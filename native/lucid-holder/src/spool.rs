@@ -23,12 +23,17 @@ pub struct Spool {
     cap: u64,
     /// The offset up to which the cap (not a client's trim) dropped bytes; 0 while it never did.
     capped: u64,
+    /// After a cap cut failed, none is tried again before `end` reaches this: each try copies up to half the cap,
+    /// and retrying it on every write would copy that much per write while the cause lasts.
+    cut_after: u64,
+    /// How the trimmed copy replaces the file (a test makes it fail).
+    rename: fn(&Path, &Path) -> io::Result<()>,
 }
 
 impl Spool {
     pub fn create(path: &Path, cap: u64) -> io::Result<Spool> {
         let file = OpenOptions::new().create(true).truncate(true).write(true).read(true).open(path)?;
-        Ok(Spool { path: path.to_path_buf(), file: Some(file), base: 0, end: 0, cap: cap.max(2), capped: 0 })
+        Ok(Spool { path: path.to_path_buf(), file: Some(file), base: 0, end: 0, cap: cap.max(2), capped: 0, cut_after: 0, rename: |from: &Path, to: &Path| fs::rename(from, to) })
     }
 
     pub fn base(&self) -> u64 { self.base }
@@ -40,15 +45,17 @@ impl Spool {
     /// more than the cap however long one turn writes. The cut lands just after a newline at or past the middle of
     /// what is kept (the agent speaks one JSON message per line, so a replay from there starts on a whole message),
     /// or at the end when the kept half holds no newline. A cut that fails (Windows will not replace a file a
-    /// replay still reads) is tried again on a later write; the bytes are never refused for it.
+    /// replay still reads) is tried again once another eighth of the cap was written; the bytes are never refused
+    /// for it.
     pub fn append(&mut self, data: &[u8]) -> io::Result<()> {
         let file = self.file.as_mut().ok_or_else(|| io::Error::other("spool is being trimmed"))?;
         file.write_all(data)?;
         self.end += data.len() as u64;
-        if self.end - self.base > self.cap {
+        if self.end - self.base > self.cap && self.end >= self.cut_after {
             let cut = self.line_start_from(self.end - self.cap / 2).unwrap_or(self.end);
-            if self.trim(cut).is_ok() {
-                self.capped = cut;
+            match self.trim(cut) {
+                Ok(()) => self.capped = cut,
+                Err(_) => self.cut_after = self.end + self.cap / 8,
             }
         }
         Ok(())
@@ -109,7 +116,10 @@ impl Spool {
         }
         // Windows will not rename over a file this process still has open.
         self.file = None;
-        let renamed = fs::rename(&tmp, &self.path);
+        let renamed = (self.rename)(&tmp, &self.path);
+        if renamed.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
         self.file = Some(OpenOptions::new().append(true).read(true).open(&self.path)?);
         renamed?;
         self.base = to;
@@ -163,6 +173,40 @@ mod tests {
         assert_eq!(collect(&s, 40), b"three\n");
         assert!(s.read_from(0, |_| Ok(())).is_err(), "the dropped bytes are gone");
         assert!(fs::metadata(&path).unwrap().len() <= 40, "the file holds no more than the cap");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_cut_that_fails_is_tried_again_only_after_more_output_not_on_every_write() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static RENAMES: AtomicUsize = AtomicUsize::new(0);
+        fn refuse(_: &Path, _: &Path) -> io::Result<()> {
+            RENAMES.fetch_add(1, Ordering::SeqCst);
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "a replay still reads the file"))
+        }
+        let dir = std::env::temp_dir().join(format!("lucid-holder-cutfail-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("f.spool");
+        let mut s = Spool::create(&path, 64).unwrap();
+        s.rename = refuse;
+        s.append(&[b'x'; 70]).unwrap(); // past the cap: the cut is tried and fails
+        assert_eq!(RENAMES.load(Ordering::SeqCst), 1);
+        assert_eq!((s.base(), s.capped()), (0, 0), "nothing was dropped");
+        assert!(!path.with_extension("spool.tmp").exists(), "the failed copy is gone");
+        for _ in 0..3 {
+            s.append(b"y\n").unwrap(); // still past the cap, but within an eighth of it since the failure
+        }
+        assert_eq!(RENAMES.load(Ordering::SeqCst), 1, "not retried on every write");
+        assert_eq!(collect(&s, 0).len(), 76, "every byte is still kept and readable");
+        s.append(b"y\n").unwrap(); // an eighth of the cap later: tried again
+        assert_eq!(RENAMES.load(Ordering::SeqCst), 2);
+        s.rename = |from: &Path, to: &Path| fs::rename(from, to);
+        for _ in 0..4 {
+            s.append(b"y\n").unwrap();
+        }
+        // Tried once more an eighth later, and it holds: cut after the first newline at or past 86 - 32.
+        assert_eq!((s.base(), s.end(), s.capped()), (72, 86, 72));
+        assert_eq!(collect(&s, 72), b"y\n".repeat(7));
         fs::remove_dir_all(&dir).ok();
     }
 

@@ -55,9 +55,9 @@ mod imp {
     use interprocess::local_socket::{ListenerOptions, Stream};
     use interprocess::os::windows::local_socket::ListenerOptionsExt;
     use interprocess::os::windows::security_descriptor::SecurityDescriptor;
-    use parking_lot::Mutex;
+    use parking_lot::{Condvar, Mutex};
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     /// The pipe admits its owner (the account that runs the engine and this holder) and SYSTEM, nobody else
     /// (LH-04: the default DACL lets every account open it for reading and pin an instance).
@@ -69,28 +69,45 @@ mod imp {
     #[derive(Clone, Copy, PartialEq)]
     enum Phase { Armed, Fired, Done }
 
-    /// A receive deadline on one connection. Windows pipes ignore receive timeouts (interprocess reads them with
-    /// overlapped I/O), so a watchdog cancels the pipe's pending I/O once the time is up, and keeps cancelling until
-    /// the reader lets go of the deadline (a read that had just returned and is followed by another is cancelled
-    /// too). The caller must disarm or drop the deadline before the stream closes: the watchdog holds only the raw
-    /// handle, and never touches it after Done.
-    pub struct Deadline(Arc<Mutex<Phase>>);
+    /// A watchdog over one pipe. Windows pipes ignore receive timeouts (interprocess reads them with overlapped I/O)
+    /// and have no shutdown, so once it fires (its time ran out, or `fire`) it cancels the pipe's pending I/O, and
+    /// keeps cancelling until its owner marks it Done (a read or write that had just returned and is followed by
+    /// another is cancelled too). It holds only the raw handle and never touches it after Done, so its owner must
+    /// mark it Done (disarm or drop) before the stream closes.
+    struct Watch {
+        phase: Mutex<Phase>,
+        wake: Condvar,
+    }
 
-    impl Deadline {
-        pub fn arm(stream: &Stream, after: Duration) -> Deadline {
+    impl Watch {
+        /// Fires `after` from now, or only on `fire` when `after` is None.
+        fn start(stream: &Stream, after: Option<Duration>) -> Arc<Watch> {
             use std::os::windows::io::{AsHandle, AsRawHandle};
-            let phase = Arc::new(Mutex::new(Phase::Armed));
+            let watch = Arc::new(Watch { phase: Mutex::new(Phase::Armed), wake: Condvar::new() });
             #[allow(unreachable_patterns)]
             let pipe = match stream {
                 Stream::NamedPipe(p) => p.as_handle().as_raw_handle() as usize, // a HANDLE does not cross threads by itself
-                _ => return Deadline(phase),
+                _ => return watch,
             };
-            let watch = phase.clone();
+            let w = watch.clone();
             std::thread::spawn(move || {
-                std::thread::sleep(after);
+                let until = after.map(|a| Instant::now() + a);
+                {
+                    let mut p = w.phase.lock();
+                    while *p == Phase::Armed {
+                        match until {
+                            Some(t) => {
+                                if w.wake.wait_until(&mut p, t).timed_out() {
+                                    break;
+                                }
+                            }
+                            None => w.wake.wait(&mut p),
+                        }
+                    }
+                }
                 loop {
                     {
-                        let mut p = watch.lock();
+                        let mut p = w.phase.lock();
                         if *p == Phase::Done {
                             break;
                         }
@@ -100,21 +117,65 @@ mod imp {
                     std::thread::sleep(Duration::from_millis(50));
                 }
             });
-            Deadline(phase)
+            watch
+        }
+
+        fn fire(&self) {
+            let mut p = self.phase.lock();
+            if *p == Phase::Armed {
+                *p = Phase::Fired;
+                self.wake.notify_all();
+            }
+        }
+
+        /// Stop for good. False when it had fired first.
+        fn done(&self) -> bool {
+            let mut p = self.phase.lock();
+            let in_time = *p == Phase::Armed;
+            *p = Phase::Done;
+            self.wake.notify_all();
+            in_time
+        }
+    }
+
+    /// A receive deadline on one connection (the watchdog above, on a timer).
+    pub struct Deadline(Arc<Watch>);
+
+    impl Deadline {
+        pub fn arm(stream: &Stream, after: Duration) -> Deadline {
+            Deadline(Watch::start(stream, Some(after)))
         }
 
         /// Stop the watchdog. False when the time ran out first (the caller must give up the connection).
         pub fn disarm(&self) -> bool {
-            let mut p = self.0.lock();
-            let in_time = *p == Phase::Armed;
-            *p = Phase::Done;
-            in_time
+            self.0.done()
         }
     }
 
     impl Drop for Deadline {
         fn drop(&mut self) {
-            *self.0.lock() = Phase::Done;
+            self.0.done();
+        }
+    }
+
+    /// Ends both halves of one connection on demand (the watchdog above, fired by `cut`): every pending and later
+    /// read or write on it fails, so the threads serving it let go and the client sees the pipe close. Must be
+    /// dropped before the stream (it holds only the raw handle).
+    pub struct Cutter(Arc<Watch>);
+
+    impl Cutter {
+        pub fn new(stream: &Stream) -> Cutter {
+            Cutter(Watch::start(stream, None))
+        }
+
+        pub fn cut(&self) {
+            self.0.fire();
+        }
+    }
+
+    impl Drop for Cutter {
+        fn drop(&mut self) {
+            self.0.done();
         }
     }
 
@@ -204,6 +265,28 @@ mod imp {
         pub fn disarm(&self) -> bool { true }
     }
 
+    /// Ends both halves of one connection on demand: a socket shutdown through a second descriptor of the same
+    /// socket, so a blocked read sees the end of the stream, a write fails, and the client sees the close.
+    pub struct Cutter(Option<std::os::unix::net::UnixStream>);
+
+    impl Cutter {
+        pub fn new(stream: &interprocess::local_socket::Stream) -> Cutter {
+            use std::os::fd::AsFd;
+            #[allow(unreachable_patterns)]
+            let dup = match stream {
+                interprocess::local_socket::Stream::UdSocket(s) => s.as_fd().try_clone_to_owned().ok().map(std::os::unix::net::UnixStream::from),
+                _ => None,
+            };
+            Cutter(dup)
+        }
+
+        pub fn cut(&self) {
+            if let Some(s) = &self.0 {
+                let _ = s.shutdown(std::net::Shutdown::Both);
+            }
+        }
+    }
+
     /// The agent leads a process group of its own, so its whole tree can be signalled at once.
     pub fn prepare_child(cmd: &mut Command) {
         cmd.process_group(0);
@@ -240,7 +323,56 @@ mod imp {
     }
 }
 
-pub use imp::{end_tree, own_tree, prepare_child, private_endpoint, spawn_detached, wait_unreaped, Deadline};
+pub use imp::{end_tree, own_tree, prepare_child, private_endpoint, spawn_detached, wait_unreaped, Cutter, Deadline};
+
+#[cfg(test)]
+mod cut_tests {
+    use super::Cutter;
+    use interprocess::local_socket::{prelude::*, GenericFilePath, ListenerOptions, Stream};
+    use std::io::Read;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn ended(r: std::io::Result<usize>) -> bool {
+        r.map(|n| n == 0).unwrap_or(true)
+    }
+
+    #[test]
+    fn a_cut_ends_a_blocked_read_and_the_client_sees_the_close() {
+        let path = if cfg!(windows) {
+            format!(r"\\.\pipe\lucid-holder-cut-test-{}", std::process::id())
+        } else {
+            std::env::temp_dir().join(format!("lucid-holder-cut-{}.sock", std::process::id())).to_string_lossy().into_owned()
+        };
+        if !cfg!(windows) {
+            let _ = std::fs::remove_file(&path);
+        }
+        let listener = ListenerOptions::new().name(path.as_str().to_fs_name::<GenericFilePath>().unwrap()).create_sync().unwrap();
+        let client = Stream::connect(path.as_str().to_fs_name::<GenericFilePath>().unwrap()).unwrap();
+        let server = Arc::new(listener.accept().unwrap());
+        let cut = Cutter::new(&server);
+        let reader = {
+            let s = server.clone();
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 8];
+                let mut r = &*s;
+                ended(r.read(&mut buf))
+            })
+        };
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(!reader.is_finished(), "nothing was sent: the read waits");
+        cut.cut();
+        assert!(reader.join().unwrap(), "the cut ended the blocked read");
+        drop(cut); // before the stream: the Windows watchdog holds only its raw handle
+        drop(server);
+        let mut buf = [0u8; 8];
+        let mut c = &client;
+        assert!(ended(c.read(&mut buf)), "the client sees the end of the connection");
+        if !cfg!(windows) {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
 
 #[cfg(all(test, unix))]
 mod tests {

@@ -8,24 +8,27 @@ use crate::platform;
 use crate::proto::{self, CLOSE_STDIN, ERR, EXIT, KILL, ORPHAN, OUT, STDIN, TRIM};
 use crate::spool::Spool;
 use interprocess::local_socket::{prelude::*, GenericFilePath, ListenerOptions, Stream};
+use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::ffi::OsString;
-use std::fs;
-use std::io::{Read, Write};
+use std::fs::{self, File};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
-use parking_lot::Mutex;
-use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 /// Recent stderr kept for a client that attaches later (the engine quotes the last line of a failure).
 const ERR_TAIL: usize = 64 * 1024;
-/// Frames queued for a client before it counts as gone (it reattaches from its offset).
-const CLIENT_QUEUE: usize = 4096;
+/// The most bytes queued for a client before it counts as gone. It is then cut off (both halves of its connection,
+/// so it sees the close) and comes back from the offset it last handled; the spool has every byte. This bounds what
+/// one slow client costs the holder in memory.
+const CLIENT_QUEUE_BYTES: usize = 8 * 1024 * 1024;
 const HANDSHAKE_MAX: usize = 4096;
-/// How long a connection may take to send its hello; one that stalls is closed (LH-04).
+/// How long a connection may take to finish the handshake; one that stalls is closed (LH-04).
 const HANDSHAKE_TIME: Duration = Duration::from_secs(5);
 /// LH-08: the most agent output the spool keeps at once. A turn that writes more loses its oldest output (only a
 /// client that comes back from before the cut misses it, and it is told so); the disk use stays bounded.
@@ -41,12 +44,25 @@ pub struct Config {
     pub token: String,
 }
 
+/// One client connection. `cut` is declared first, so it is dropped (its watchdog stopped) before the stream closes.
+struct Conn {
+    cut: platform::Cutter,
+    stream: Stream,
+}
+
+/// The attached client: its generation, the queue its writer thread drains, the bytes in that queue, its connection.
+struct Client {
+    gen: u64,
+    tx: Sender<Vec<u8>>,
+    queued: Arc<AtomicUsize>,
+    conn: Arc<Conn>,
+}
+
 struct Shared {
     spool: Spool,
     err_tail: Vec<u8>,
     exited: Option<i32>,
-    /// The attached client: its generation and the queue its writer thread drains.
-    client: Option<(u64, SyncSender<Vec<u8>>)>,
+    client: Option<Client>,
     next_gen: u64,
     /// Since when no client has been attached.
     detached_since: Option<Instant>,
@@ -67,25 +83,15 @@ pub fn ready_path(dir: &Path, id: &str) -> PathBuf { dir.join(format!("{id}.json
 pub fn error_path(dir: &Path, id: &str) -> PathBuf { dir.join(format!("{id}.err")) }
 fn spool_path(dir: &Path, id: &str) -> PathBuf { dir.join(format!("{id}.spool")) }
 
-fn random_hex() -> String {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-    let mut out = String::new();
-    for salt in 0..2u64 {
-        let mut h = RandomState::new().build_hasher();
-        h.write_u64(salt);
-        h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
-        h.write_u32(std::process::id());
-        out.push_str(&format!("{:016x}", h.finish()));
-    }
-    out
-}
-
-/// Queue a frame for the attached client. Never waits while the lock is held: a client whose queue is full, or whose
-/// writer has gone, is dropped at once; it comes back from the offset it last handled (the spool has every byte).
+/// Queue a frame for the attached client. Never waits while the lock is held: a client whose queue would pass
+/// CLIENT_QUEUE_BYTES, or whose writer has gone, is cut off at once (both halves of its connection, so its reader
+/// here lets go and the client sees the close); it comes back from the offset it last handled.
 fn push(sh: &mut Shared, frame: Vec<u8>) {
-    let Some((_, tx)) = sh.client.as_ref() else { return };
-    if let Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) = tx.try_send(frame) {
+    let Some(c) = sh.client.as_ref() else { return };
+    let len = frame.len();
+    let over = c.queued.fetch_add(len, Ordering::AcqRel) + len > CLIENT_QUEUE_BYTES;
+    if over || c.tx.send(frame).is_err() {
+        c.conn.cut.cut();
         sh.client = None;
         sh.detached_since = Some(Instant::now());
     }
@@ -102,7 +108,7 @@ fn shutdown(h: &Holder) -> ! {
     std::process::exit(0);
 }
 
-fn write_ready(dir: &Path, id: &str, value: &Value) -> std::io::Result<()> {
+fn write_ready(dir: &Path, id: &str, value: &Value) -> io::Result<()> {
     let tmp = dir.join(format!("{id}.json.tmp"));
     fs::write(&tmp, serde_json::to_vec(value)?)?;
     fs::rename(&tmp, ready_path(dir, id))
@@ -110,7 +116,8 @@ fn write_ready(dir: &Path, id: &str, value: &Value) -> std::io::Result<()> {
 
 pub fn serve(cfg: Config) -> Result<(), String> {
     platform::own_tree().map_err(|e| format!("the agent's process tree cannot be owned: {e}"))?;
-    let endpoint = platform::endpoint_for(&cfg.dir, &cfg.id, &random_hex()).map_err(|e| format!("endpoint: {e}"))?;
+    let nonce = proto::random_hex(16).map_err(|e| format!("the OS random source: {e}"))?;
+    let endpoint = platform::endpoint_for(&cfg.dir, &cfg.id, &nonce).map_err(|e| format!("endpoint: {e}"))?;
     if !cfg!(windows) {
         let _ = fs::remove_file(&endpoint); // a socket file left by a holder that died
     }
@@ -166,8 +173,9 @@ pub fn serve(cfg: Config) -> Result<(), String> {
             let _ = out_thread.join(); // every stdout byte reaches the spool before the exit is told
             let mut sh = h.shared.lock();
             sh.exited = Some(code);
-            if let Some((gen, _)) = sh.client {
-                sh.exit_seen_by = Some(gen);
+            let gen = sh.client.as_ref().map(|c| c.gen);
+            if gen.is_some() {
+                sh.exit_seen_by = gen;
             }
             push(&mut sh, proto::encode(EXIT, &code.to_le_bytes()));
         });
@@ -259,40 +267,93 @@ fn read_line(r: &mut impl Read) -> Option<String> {
     None
 }
 
-fn reply(send: &mut impl Write, value: Value) -> std::io::Result<()> {
+fn reply(send: &mut impl Write, value: Value) -> io::Result<()> {
     let mut line = serde_json::to_vec(&value)?;
     line.push(b'\n');
     send.write_all(&line)?;
     send.flush()
 }
 
-/// One connection: the handshake (token, offset), the replay from that offset, then this client is THE client
+fn refuse(send: &mut impl Write, why: &str) -> Option<u64> {
+    let _ = reply(send, json!({ "v": proto::HANDSHAKE, "ok": false, "error": why }));
+    None
+}
+
+/// Handshake v2 (proto.rs): the client's nonce; this holder's proof over it and a nonce of its own (`ours`); the
+/// client's proof over that, and the offset to replay from. The token never crosses the endpoint, and nothing of the
+/// agent's output goes to a client before it proved it holds the token. Returns the offset, or None once the client
+/// was refused (or left).
+fn handshake(token: &[u8], ours: &str, recv: &mut impl Read, send: &mut impl Write) -> Option<u64> {
+    let hello: Value = serde_json::from_str(&read_line(recv)?).unwrap_or(Value::Null);
+    if hello.get("v").and_then(Value::as_u64) != Some(proto::HANDSHAKE) {
+        return refuse(send, &format!("this lucid-holder speaks handshake v{}; the client must come from the same build", proto::HANDSHAKE));
+    }
+    let Some(theirs) = hello.get("nonce").and_then(Value::as_str).filter(|n| proto::is_nonce(n)) else {
+        return refuse(send, "a nonce is required");
+    };
+    reply(send, json!({ "v": proto::HANDSHAKE, "nonce": ours, "proof": proto::proof(token, "holder", theirs) })).ok()?;
+    let answer: Value = serde_json::from_str(&read_line(recv)?).unwrap_or(Value::Null);
+    let proof = answer.get("proof").and_then(Value::as_str).unwrap_or("");
+    if !proto::same_secret(proof.as_bytes(), proto::proof(token, "engine", ours).as_bytes()) {
+        return refuse(send, "refused");
+    }
+    let Some(from) = answer.get("from").and_then(Value::as_u64) else {
+        return refuse(send, "from is required");
+    };
+    Some(from)
+}
+
+/// What a new client gets before the live queue: its hello, the cap marker, the kept bytes from its offset, the
+/// stderr tail and the exit. The replay file is taken by value and closed before the live stream starts: a client
+/// that stays attached must not keep it open, or Windows refuses every later spool cut and trim (a file someone
+/// reads cannot be replaced).
+fn send_snapshot(send: &mut impl Write, replay: (File, u64), hello: Value, marker: Option<String>, err_tail: &[u8], exited: Option<i32>) -> io::Result<()> {
+    let (mut file, mut left) = replay;
+    reply(send, hello)?;
+    if let Some(marker) = marker {
+        proto::write_frame(send, ERR, marker.as_bytes())?;
+    }
+    let mut buf = vec![0u8; 64 * 1024];
+    while left > 0 {
+        let want = left.min(buf.len() as u64) as usize;
+        let n = file.read(&mut buf[..want])?;
+        if n == 0 {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        proto::write_frame(send, OUT, &buf[..n])?;
+        left -= n as u64;
+    }
+    drop(file);
+    if !err_tail.is_empty() {
+        proto::write_frame(send, ERR, err_tail)?;
+    }
+    if let Some(code) = exited {
+        proto::write_frame(send, EXIT, &code.to_le_bytes())?;
+    }
+    Ok(())
+}
+
+/// One connection: the handshake (proofs, offset), the replay from that offset, then this client is THE client
 /// (a newer attach replaces it) and its frames are read until it leaves.
 fn attach(h: &Holder, stream: Stream) {
     // The handshake gets 5 seconds (a receive timeout on Unix, a watchdog on Windows, whose pipes ignore receive
     // timeouts); the session itself may sit idle for hours. `&Stream` reads and writes, so one Arc serves this
-    // reader and the writer thread (dropping either does not shut the connection).
+    // reader and the writer thread (dropping either does not shut the connection; a cut does).
     let _ = stream.set_recv_timeout(Some(HANDSHAKE_TIME));
-    let stream = Arc::new(stream);
-    // Declared after the stream, so it is dropped (and its watchdog stopped) before the stream can close.
-    let deadline = platform::Deadline::arm(&stream, HANDSHAKE_TIME);
-    let mut recv = &*stream;
-    let mut send = &*stream;
-    let line = read_line(&mut recv);
+    let conn = Arc::new(Conn { cut: platform::Cutter::new(&stream), stream });
+    // Declared after the connection, so it is dropped (and its watchdog stopped) before the stream can close.
+    let deadline = platform::Deadline::arm(&conn.stream, HANDSHAKE_TIME);
+    let mut recv = &conn.stream;
+    let mut send = &conn.stream;
+    let Ok(ours) = proto::random_hex(16) else {
+        refuse(&mut send, "the holder has no random source");
+        return;
+    };
+    let from = handshake(h.cfg.token.as_bytes(), &ours, &mut recv, &mut send);
     if !deadline.disarm() {
         return;
     }
-    let Some(line) = line else { return };
-    let hello: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
-    let token = hello.get("token").and_then(Value::as_str).unwrap_or("");
-    if !proto::same_secret(token.as_bytes(), h.cfg.token.as_bytes()) {
-        let _ = reply(&mut send, json!({ "v": 1, "ok": false, "error": "refused" }));
-        return;
-    }
-    let Some(from) = hello.get("from").and_then(Value::as_u64) else {
-        let _ = reply(&mut send, json!({ "v": 1, "ok": false, "error": "from is required" }));
-        return;
-    };
+    let Some(from) = from else { return };
 
     let gen = {
         let mut sh = h.shared.lock();
@@ -303,11 +364,11 @@ fn attach(h: &Holder, stream: Stream) {
         let dropped = from - asked;
         if from < sh.spool.base() || from > sh.spool.end() {
             let msg = format!("offset {from} is not kept (kept {} to {})", sh.spool.base(), sh.spool.end());
-            let _ = reply(&mut send, json!({ "v": 1, "ok": false, "error": msg, "base": sh.spool.base(), "end": sh.spool.end() }));
+            let _ = reply(&mut send, json!({ "v": proto::HANDSHAKE, "ok": false, "error": msg, "base": sh.spool.base(), "end": sh.spool.end() }));
             return;
         }
         let hello_ok = json!({
-            "v": 1, "ok": true, "base": sh.spool.base(), "end": sh.spool.end(),
+            "v": proto::HANDSHAKE, "ok": true, "base": sh.spool.base(), "end": sh.spool.end(),
             "pid": std::process::id(), "childPid": h.child_pid, "exited": sh.exited,
             "from": from, "dropped": dropped,
         });
@@ -322,7 +383,7 @@ fn attach(h: &Holder, stream: Stream) {
         // writer thread streams the snapshot first, then the queue: nothing is lost or reordered, and a client that
         // stops reading stalls only its own thread, never the agent's output, KILL or the orphan timer.
         let Ok(replay) = sh.spool.reader(from) else {
-            let _ = reply(&mut send, json!({ "v": 1, "ok": false, "error": "the spool cannot be read" }));
+            let _ = reply(&mut send, json!({ "v": proto::HANDSHAKE, "ok": false, "error": "the spool cannot be read" }));
             return;
         };
         let err_tail = sh.err_tail.clone();
@@ -332,59 +393,38 @@ fn attach(h: &Holder, stream: Stream) {
         if exited.is_some() {
             sh.exit_seen_by = Some(gen);
         }
-        let (tx, rx) = sync_channel::<Vec<u8>>(CLIENT_QUEUE);
-        let out = stream.clone();
+        let (tx, rx) = channel::<Vec<u8>>();
+        let queued = Arc::new(AtomicUsize::new(0));
+        let drained = queued.clone();
+        let out = conn.clone();
         thread::spawn(move || {
-            let mut send = &*out;
-            let (mut file, mut left) = replay;
-            let mut buf = vec![0u8; 64 * 1024];
-            let snapshot = || -> std::io::Result<()> {
-                reply(&mut send, hello_ok)?;
-                if let Some(marker) = &marker {
-                    proto::write_frame(&mut send, ERR, marker.as_bytes())?;
-                }
-                while left > 0 {
-                    let want = left.min(buf.len() as u64) as usize;
-                    let n = file.read(&mut buf[..want])?;
-                    if n == 0 {
-                        return Err(std::io::ErrorKind::UnexpectedEof.into());
-                    }
-                    proto::write_frame(&mut send, OUT, &buf[..n])?;
-                    left -= n as u64;
-                }
-                if !err_tail.is_empty() {
-                    proto::write_frame(&mut send, ERR, &err_tail)?;
-                }
-                if let Some(code) = exited {
-                    proto::write_frame(&mut send, EXIT, &code.to_le_bytes())?;
-                }
-                Ok(())
-            };
-            if snapshot().is_err() {
+            let mut send = &out.stream;
+            if send_snapshot(&mut send, replay, hello_ok, marker, &err_tail, exited).is_err() {
                 return;
             }
             for frame in rx {
                 if send.write_all(&frame).and_then(|_| send.flush()).is_err() {
                     return;
                 }
+                drained.fetch_sub(frame.len(), Ordering::AcqRel);
             }
         });
-        sh.client = Some((gen, tx)); // a previous client's queue closes, and with it its writer
+        sh.client = Some(Client { gen, tx, queued, conn: conn.clone() }); // a previous client's queue closes, and with it its writer
         sh.detached_since = None;
         gen
     };
-    let _ = stream.set_recv_timeout(None);
+    let _ = conn.stream.set_recv_timeout(None);
 
     loop {
         let frame = match proto::read_frame(&mut recv) {
             Ok(Some(f)) => f,
             _ => break,
         };
-        // LH-05: the kill switch works from any connection that passed the token, current or not.
+        // LH-05: the kill switch works from any connection that passed the handshake, current or not.
         if frame.0 == KILL {
             shutdown(h);
         }
-        let current = h.shared.lock().client.as_ref().map(|c| c.0) == Some(gen);
+        let current = h.shared.lock().client.as_ref().map(|c| c.gen) == Some(gen);
         if !current {
             return; // replaced by a newer attach: this connection no longer speaks for the engine
         }
@@ -414,7 +454,7 @@ fn attach(h: &Holder, stream: Stream) {
 
     let done = {
         let mut sh = h.shared.lock();
-        if sh.client.as_ref().map(|c| c.0) == Some(gen) {
+        if sh.client.as_ref().map(|c| c.gen) == Some(gen) {
             sh.client = None;
             sh.detached_since = Some(Instant::now());
         }
@@ -427,7 +467,21 @@ fn attach(h: &Holder, stream: Stream) {
 
 #[cfg(test)]
 mod tests {
-    use super::replay_start;
+    use super::*;
+
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const OURS: &str = "ffeeddccbbaa99887766554433221100";
+    const THEIRS: &str = "00112233445566778899aabbccddeeff";
+
+    /// The handshake over in-memory streams: what it returned, and every line it sent.
+    fn shake(client: &str) -> (Option<u64>, Vec<Value>) {
+        let mut recv = client.as_bytes();
+        let mut sent = Vec::new();
+        let from = handshake(TOKEN.as_bytes(), OURS, &mut recv, &mut sent);
+        let text = String::from_utf8(sent).unwrap();
+        assert!(!text.contains(TOKEN), "the token never crosses the endpoint");
+        (from, text.lines().map(|l| serde_json::from_str(l).unwrap()).collect())
+    }
 
     #[test]
     fn only_bytes_the_cap_dropped_move_a_replay_forward() {
@@ -437,5 +491,35 @@ mod tests {
         // A client trim moved base past the cap's cut: an offset it trimmed stays refused, not silently moved.
         assert_eq!(replay_start(50, 60, 40), 50);
         assert_eq!(replay_start(5, 60, 0), 5, "the cap never cut: as asked");
+    }
+
+    #[test]
+    fn the_holder_proves_itself_first_and_takes_the_offset_only_from_a_client_that_proved_itself() {
+        let engine = proto::proof(TOKEN.as_bytes(), "engine", OURS);
+        let (from, sent) = shake(&format!("{}\n{}\n", json!({ "v": 2, "nonce": THEIRS }), json!({ "v": 2, "proof": engine, "from": 7 })));
+        assert_eq!(from, Some(7));
+        assert_eq!(sent.len(), 1, "the hello is sent by the caller, after the handshake");
+        assert_eq!(sent[0]["nonce"], OURS);
+        assert_eq!(sent[0]["proof"], proto::proof(TOKEN.as_bytes(), "holder", THEIRS));
+    }
+
+    #[test]
+    fn a_client_that_cannot_prove_the_token_is_refused_after_the_challenge() {
+        // A replayed holder proof is not an engine proof.
+        let reflected = proto::proof(TOKEN.as_bytes(), "holder", OURS);
+        let (from, sent) = shake(&format!("{}\n{}\n", json!({ "v": 2, "nonce": THEIRS }), json!({ "v": 2, "proof": reflected, "from": 0 })));
+        assert_eq!(from, None);
+        assert_eq!((sent.len(), &sent[1]["ok"], &sent[1]["error"]), (2, &json!(false), &json!("refused")));
+    }
+
+    #[test]
+    fn a_client_of_another_handshake_or_without_a_nonce_is_refused_at_once() {
+        let (from, sent) = shake(&format!("{}\n", json!({ "v": 1, "token": TOKEN, "from": 0 })));
+        assert_eq!(from, None);
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0]["ok"], json!(false));
+        assert!(sent[0]["error"].as_str().unwrap().contains("handshake v2"));
+        let (from, sent) = shake(&format!("{}\n", json!({ "v": 2, "nonce": "short" })));
+        assert_eq!((from, &sent[0]["error"]), (None, &json!("a nonce is required")));
     }
 }

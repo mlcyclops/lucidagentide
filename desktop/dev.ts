@@ -131,6 +131,7 @@ import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
 import { HolderPool } from "./lane_holder.ts"; // P-HOLDER.1 (ADR-0534): lanes outlive the engine
+import { answerChannel, CHANNEL_ROUTES, channelAdmits } from "./lane_channel.ts"; // LH-03 (ADR-0544): a held lane's channel
 import { displayStatus } from "./collab/fleet_status.ts"; // P-STUCK-SHOW.3 (ADR-0521): phone guests see likely-stuck spokes too
 import { sessionLive, withLiveState, type SessionLiveSpoke } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
 import { addInterject, addPeerNote, awaitPeerReply, carryPendingNotes, drainInterjects, drainPeerNotes, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes; P-OWN.1: peer notes
@@ -1762,6 +1763,9 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
 // P-SANDBOX.15 (ADR-0396): the routes the AGENT token opens - every child-called route above. Only
 // /api/preview/serve is left out: the renderer's iframe loads it with the UI token, and no child calls it.
 const AGENT_ROUTES: ReadonlySet<string> = new Set([...QUERY_TOKEN_ROUTES].filter((r) => r !== "/api/preview/serve"));
+// LH-03 (ADR-0544 as amended): the routes a held lane's channel opens. lane_channel.ts CHANNEL_ROUTES lists them with
+// the speaker each one names; only agent routes count, so the channel never reaches a route the agent token cannot.
+const CHANNEL_AUTH_ROUTES: ReadonlySet<string> = new Set(Object.keys(CHANNEL_ROUTES).filter((r) => AGENT_ROUTES.has(r)));
 // P-FLEET.L1/L2/L4/L5: the local lane manager - N gated headless LUCID agents on this machine under the
 // sustained-pressure guard. Lanes default to the MASTER session's current model unless the user picks
 // another. Every spawned/recovered session is NAMED in the durable lane-session ledger (P-FLEET.L5), so
@@ -2527,9 +2531,10 @@ return Bun.serve({
   hostname: "127.0.0.1", // H1 (ADR-0022): loopback only — this control plane handles keys/passphrases.
   // ADR-0305 invariant: the window only renders the nonce-verified LOOPBACK engine; this bind is load-bearing.
   idleTimeout: 60,
-  // LH-03 (ADR-0544): a reply to a held lane's channel request carries the proof its extensions check; every other
-  // reply passes through untouched. The handler body below keeps its indentation (same reason as the bind wrapper).
-  async fetch(req, srv) { const reply = await (async (): Promise<Response> => {
+  // LH-03 (ADR-0544 as amended): a request whose MAC verifies under a held lane's channel key (fresh time, new nonce)
+  // is that lane's; its reply, whatever it is, carries the proof the lane's side checks. Every other reply passes
+  // through untouched. The handler body below keeps its indentation (same reason as the bind wrapper).
+  async fetch(req, srv) { const channel = laneHolders === null ? null : await laneHolders.channels.authenticate(req, new URL(req.url)); const reply = await (async (): Promise<Response> => {
     const url = new URL(req.url);
     const p = url.pathname;
     let ctrlPairing: Pairing | null = null;
@@ -2564,10 +2569,10 @@ return Bun.serve({
       // P-CTRL.2 (ADR-0438): a paired controller's token (header only) opens CONTROLLER_ROUTES and nothing else.
       const headerToken = req.headers.get("x-lucid-token");
       ctrlPairing = CONTROLLER_ROUTES.has(p) && !tokenValid(headerToken, TOKEN) ? await controllerDeps.store.verify(headerToken) : null;
-      // LH-03 (ADR-0544): a held lane's channel credential (its key is in the lane's holder record, so it works on
-      // every engine that reattached the lane) opens the agent routes for that lane; the reply is signed below.
-      const channelAuthorized = laneHolders !== null && laneHolders.channels.laneOf(url, headerToken) !== null;
-      const authorized = apiAuthorized({ path: p, headerToken, queryToken: url.searchParams.get("t"), uiToken: TOKEN, agentToken: AGENT_TOKEN, queryRoutes: QUERY_TOKEN_ROUTES, agentRoutes: AGENT_ROUTES, controllerRoutes: CONTROLLER_ROUTES, controllerAuthorized: ctrlPairing !== null, channelAuthorized });
+      // LH-03 (ADR-0544 as amended): a request that authenticated as a held lane (above) opens CHANNEL_AUTH_ROUTES,
+      // and only where every speaker it names is that lane (a beat's session is the omp session the lane runs).
+      const channelAuthorized = channel !== null && channelAdmits(channel, url, (laneId) => fleet.owners().find((o) => o.id === laneId)?.sessionId ?? null);
+      const authorized = apiAuthorized({ path: p, headerToken, queryToken: url.searchParams.get("t"), uiToken: TOKEN, agentToken: AGENT_TOKEN, queryRoutes: QUERY_TOKEN_ROUTES, agentRoutes: AGENT_ROUTES, controllerRoutes: CONTROLLER_ROUTES, controllerAuthorized: ctrlPairing !== null, channelAuthorized, channelRoutes: CHANNEL_AUTH_ROUTES });
       if (!authorized) return new Response("forbidden", { status: 403 });
     }
     try {
@@ -7005,7 +7010,7 @@ return Bun.serve({
       return json({ ok: false, error: "internal error" });
     }
     return new Response("not found", { status: 404 });
-  })(); return laneHolders ? laneHolders.channels.answer(req, reply) : reply; },
+  })(); return channel === null ? reply : answerChannel(channel, reply); },
 });
 } catch (err) {
   const e = err as NodeJS.ErrnoException;

@@ -12,8 +12,9 @@
 //! called it is never the holder's parent: a tree kill of the engine does not reach the agent.
 //!
 //! The attach token is the first line of stdin (32 to 1024 printable characters; LH-06: never an environment
-//! variable, so neither this process's environment nor the agent's holds it). A client
-//! sends one JSON line `{"v":1,"token","from":<offset>}` and then speaks the frames in proto.rs.
+//! variable, so neither this process's environment nor the agent's holds it), and it never crosses the endpoint:
+//! a client and the holder prove to each other that they hold it (handshake v2 in proto.rs, HMAC-SHA256 over
+//! each other's fresh nonce), the client names the offset to replay from, and both then speak the frames in proto.rs.
 //! `<dir>` must already exist and be private to the account (the engine makes it 0700).
 
 mod platform;

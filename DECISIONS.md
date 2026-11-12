@@ -26839,3 +26839,35 @@ The review also found stale facts in the docs: vLLM was written as port 8080, an
 - Follow-ups: (a) carry the creator and voice mailboxes over the spoke and retire their SSH forwards; (b) feed the platform's telemetry (loaded models, serve kinds, GPU use) into the spoke's capability record so the hub picker sees it.
 
 Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-out on the 2.6.0 line, which supersedes ADR-0334 there), platform ADR-0018 and ADR-0033.
+
+## ADR-0565 -- LH-03 review closure: a held lane's channel carries a per-request MAC, opens only its own routes, and every agent-route call uses it (2026-11-12)
+
+**Status:** Accepted. Amends ADR-0533 to ADR-0535 and ADR-0544. Proof: `bun test desktop/lane_channel.test.ts harness/omp/commit_gate_extension.test.ts desktop/lane_holder.test.ts`; desktop typecheck.
+
+**Context.** The 2026-11-12 review of #583/#595 found that the ADR-0544 channel credential was HMAC(key, "client"), the same on every request for the lane's life; the reply proof covered the nonce, status and body but not the request's method, path, query or body; a missing `target` passed; and a channel request opened all of `AGENT_ROUTES`. A process holding the engine port during a restart could record the credential and replay it against `/api/git/exec`, `/api/kg/recall`, `/api/browser/*` or `/api/checkin`. Only four callers used `engineFetch`; every other agent-route tool and the git shim sent the old agent token with plain fetch. Both halves used node:crypto directly.
+
+**Decision.**
+1. No standing credential. Each request carries a 16-byte nonce, its time and HMAC-SHA256(key, "lucid-lane-channel/v2/request" | method | path?query | time | nonce | SHA-256(body)). The engine accepts it only within 60 s of its clock, from a registered lane's key, with a nonce it has not seen (kept until its time plus 60 s, at most 8192; when full, new requests are refused rather than a nonce forgotten early).
+2. The reply proof is HMAC-SHA256(key, "lucid-lane-channel/v2/reply" | request MAC | status | SHA-256(body)); every reply to an authenticated request is signed, refusals included, and the lane uses a body only when its proof verifies.
+3. Scope: `CHANNEL_ROUTES` (desktop/lane_channel.ts) lists the routes a channel opens and each route's speaker field; a named speaker (`target`, `from`, `session`) must be the authenticated lane and a missing one is refused. `/api/git/exec` and `/api/sandbox/grant` are not opened to a channel.
+4. Every agent-route caller (knowledge, browser, fleet, preview, sandbox grant, tool meta, judgment, design, drift and openfilm extensions, and `tools/git-broker/git_shim.ts`) goes through `engineFetch` and fails closed on `ChannelProofError`.
+5. HMAC, SHA-256 and random bytes come from `harness/crypto/fips_crypto.ts`.
+
+**Consequences.** A recorded request cannot be replayed to an engine that saw it, after the window, altered, or pointed at another route or lane. Residual and accepted: a request a squatter captured and never delivered can be replayed once to an engine that starts within 60 s, doing exactly what the lane asked once. A held lane's own tools work after a reattach.
+
+## ADR-0566 -- P-HOLDER.1 hardening after the 2026-11-12 review: a handshake that never sends the token, cut-off slow clients, identity-checked kills, held lanes the restore can see (2026-11-12)
+
+**Status:** Accepted. Amends ADR-0533 to ADR-0535 and ADR-0544. Proof: `cargo test --release --locked` in `native/lucid-holder` (18 pass); `bun test desktop/lane_holder.test.ts desktop/controller/lane_lifecycle.test.ts desktop/fleet_lanes.test.ts desktop/acp.test.ts`; desktop typecheck.
+
+**Context.** The same review found: the engine sent the holder token in clear and trusted any `{"ok":true}` with its pid, so a process that took a freed pipe name (or pre-created `/tmp/lucid-holder-<uid>`) could answer, stream forged ACP and receive the user's prompts; the Windows last-resort kill went to a recorded pid with no identity check; no frame length cap; a client whose queue filled kept an open stream, `kill()` on a closed link reported success, and the record was deleted while the agent ran on; the controller restore retired a revoked pairing's lane the holder had brought back without ending it, and checked nothing when a store was broken; a holder alive but not answering was spawned over; the replay file stayed open so Windows spool cuts failed; each client could queue 256 MiB; the endpoint nonce came from SipHash.
+
+**Decision.**
+1. Handshake v2: the engine sends a nonce, the holder proves it holds the token (HMAC-SHA256 keyed with the token over "lucid-holder/v2 holder <nonce>"), then the engine proves itself the same way with role "engine"; the token never crosses the endpoint. Another version is refused by name.
+2. POSIX: connect only when the socket's folder is a real folder owned by this account with mode 0700. Frames over 1 MiB close the link.
+3. Windows process identity is the creation time, recorded at launch and at reattach and checked before any kill; a pid whose identity differs counts as gone and is never signaled.
+4. Each client's queue is bounded at 8 MiB; a client past it is cut on both halves and the engine reconnects from its last handled line. `kill()` on a closed link sends K on a new connection, or returns false and the record is kept.
+5. The replay file is closed before the live stream; a failed cap cut backs off for another eighth of the cap.
+6. Nonces come from the OS random source (holder) and fips_crypto (engine).
+7. Controller restore: a lane the fleet already took back is ended, and its end awaited, before a revoked pairing's retire or a policy-mismatch respawn; with a broken store every supervised lane taken back is ended and no store is touched; a lane whose holder is alive but did not answer is neither retired nor respawned, keeping its records and slot.
+
+**Consequences.** A holder from before v2 is refused and ends by its own keep-for. A client more than 8 MiB behind replays from the spool. Known limit: one record per lane id.

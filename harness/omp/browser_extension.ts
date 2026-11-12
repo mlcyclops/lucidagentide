@@ -40,6 +40,7 @@
 
 import { actionSpace, decide, DEFAULT_STEPS, type HistoryEntry, MAX_STEPS, PolicyError, policyQuestions, policyState, stalled } from "../browser_policy.ts";
 import { type BrowserAction, type BrowserFreshness, type BrowserPage, freshnessOf, isBrowserPageShape } from "../../desktop/browser_snapshot.ts";
+import { engineFetch } from "./engine_channel.ts"; // LH-03 (ADR-0544): a held lane's call is MACed and its answer proven
 
 interface ToolContentBlock { type: string; text?: string; data?: string; mimeType?: string }
 interface ToolResult { content: ToolContentBlock[]; isError?: boolean }
@@ -290,7 +291,7 @@ export default function browserExtension(pi: unknown, deps: BrowserExtensionDeps
       const url = browserEndpoint(base, path);
       if (!url) return null;
       try {
-        const r = await fetch(url, {
+        const r = await engineFetch(url, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),

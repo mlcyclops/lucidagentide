@@ -69,7 +69,8 @@ export interface ControllerDeps {
   lanes: ControllerLaneStore;
   fleet: {
     spawn(opts: { cwd: string; id: string; name?: string; model?: string; supervised: true; remote?: { approvalHours: number; offTask: boolean }; resume?: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }>;
-    remove(laneId: string, force: boolean): { ok: boolean; reason?: string };
+    /** `ended` settles once the lane's agent is confirmed ended (a held lane: its holder too). */
+    remove(laneId: string, force: boolean): { ok: boolean; reason?: string; ended?: Promise<void> };
     pendingAsk(laneId: string): RemoteAsk | null;
     answerAsk(laneId: string, askId: string, allow: boolean): { ok: boolean };
     prompt(laneId: string, text: string, sink: (e: LaneEvent) => void): Promise<void>;
@@ -80,6 +81,9 @@ export interface ControllerDeps {
     cancel(laneId: string): { ok: boolean };
     /** P-HOLDER.1: the settle of a turn a reattach resumed on this lane, or null when none is running. */
     resumedTurn(laneId: string): Promise<void> | null;
+    /** LH-04: why this lane's holder, alive, did not answer its reattach (its agent may still run), or null. Absent:
+     *  a fleet without holders. */
+    unreachedHolder?(laneId: string): string | null;
   };
   /** ADR-0511: the model ids this engine lists as available (the model picker's list, with its platform, AskSage
    *  and managed-policy narrowing). A spawn may name one of these. Absent: a spawn that names a model is refused. */
@@ -431,15 +435,37 @@ function samePolicy(
  *  omp session (session/load when omp offers it; otherwise a fresh session that carries the recorded transcript
  *  as memory, the P-FLEET.L4 fallback). A turn that was running when the engine died is NOT re-run: it is closed
  *  in the transcript with INTERRUPTED_NOTE and the lane reports `interrupted`. A lane whose pairing was revoked
- *  (or no longer owns it), or that cannot start again, is retired like a close. Nothing is touched while either
- *  store is broken. Returns the lane ids that came back. */
+ *  (or no longer owns it), or that cannot start again, is retired like a close (a held lane the fleet already took
+ *  back is ended first). Neither store is touched while either is broken; held controller lanes already back are
+ *  ended then. A lane whose holder is alive but did not answer is left alone this boot. Returns the lane ids that
+ *  came back. */
 export async function restoreControllerLanes(deps: ControllerDeps): Promise<string[]> {
-  if (deps.store.broken || deps.lanes.broken) return [];
+  if (deps.store.broken || deps.lanes.broken) {
+    // P-HOLDER.1: the held lanes are reattached before this restore (dev.ts), so a controller lane (supervised) may
+    // already run again. A store that cannot be read cannot say which pairing owns it or under what policy, so none
+    // runs unchecked: each is ended (the stores themselves are left as they are).
+    for (const lane of (await deps.fleet.status()).lanes) {
+      if (deps.fleet.lanePolicy(lane.id)?.supervised) await deps.fleet.remove(lane.id, true).ended;
+    }
+    return [];
+  }
   const back: string[] = [];
+  // LH-04: lanes whose holder is alive but did not answer keep their slot and their record for the next start.
+  const kept: string[] = [];
   for (const rec of deps.lanes.all()) {
     const pairing = deps.store.byId(rec.pairingId);
     const ids = { runId: Snowflake.next(), sessionId: rec.sessionId ?? `controller:${rec.pairingId}` };
+    // LH-04: its agent may still run in the lane's folder under a holder that did not answer, so the lane is neither
+    // retired (its worktree is in use) nor started again over it this boot; a later start tries the holder again.
+    const unreached = deps.fleet.unreachedHolder?.(rec.id) ?? null;
+    if (unreached !== null) {
+      emit(deps, "controller_ruling", ids, { pairing: pairing?.name ?? "", lane_id: rec.id, ruling: "lane_not_restored", backend: "lane-lifecycle", reason: `its holder did not answer; tried again at the next start (${unreached})`.slice(0, 200) });
+      kept.push(rec.id);
+      continue;
+    }
     if (!pairing || !pairing.lanes.includes(rec.id)) {
+      // A lane its holder kept running is already back in the fleet: it ends before it is retired.
+      if (deps.fleet.laneRunning(rec.id) !== null) await deps.fleet.remove(rec.id, true).ended;
       const review = await retireLane(deps, rec.id, pairing?.id ?? null, "ended: its pairing was revoked before the engine restarted");
       emit(deps, "controller_ruling", ids, { pairing: pairing?.name ?? "", lane_id: rec.id, ruling: "lane_not_restored", backend: "lane-lifecycle", reason: "pairing revoked", ...(review.reviewBranch ? { branch: review.reviewBranch } : {}) });
       continue;
@@ -448,7 +474,7 @@ export async function restoreControllerLanes(deps: ControllerDeps): Promise<stri
     // (if any) still going: nothing was interrupted. The turn records itself when it settles, as a live one does.
     // LH-02: only when it runs under the pairing's policy (supervised, the pairing's remote approval). A held lane
     // that came back under any other policy is ended and started again the normal way below.
-    if (deps.fleet.laneRunning(rec.id) !== null && !samePolicy(deps.fleet.lanePolicy(rec.id), pairing.remote)) deps.fleet.remove(rec.id, true);
+    if (deps.fleet.laneRunning(rec.id) !== null && !samePolicy(deps.fleet.lanePolicy(rec.id), pairing.remote)) await deps.fleet.remove(rec.id, true).ended;
     if (deps.fleet.laneRunning(rec.id) !== null) {
       const runId = rec.inFlight?.runId;
       const resumed = deps.fleet.resumedTurn(rec.id);
@@ -477,7 +503,7 @@ export async function restoreControllerLanes(deps: ControllerDeps): Promise<stri
     back.push(rec.id);
   }
   // Every other lane id a pairing held ended with the previous engine; its slot and its id go.
-  deps.store.retainLanes(new Set(back));
+  deps.store.retainLanes(new Set([...back, ...kept]));
   return back;
 }
 

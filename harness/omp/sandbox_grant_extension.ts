@@ -15,6 +15,8 @@
 //
 // Defensively wrapped: a registration failure NEVER breaks omp launch — worst case the tool is absent.
 
+import { engineFetch } from "./engine_channel.ts"; // LH-03 (ADR-0544): a held lane's call is MACed and its answer proven
+
 // omp's plugin API is a library boundary whose type isn't exported to us; type the minimal surface we
 // use (the fleet_extension convention).
 interface TypeBoxType {
@@ -78,7 +80,7 @@ export default function sandboxGrantExtension(piRaw: unknown): void {
         let body: unknown;
         try {
           // Generous timeout: the engine may re-run the helper elevated (a UAC prompt the user answers).
-          const r = await fetch(url, {
+          const r = await engineFetch(url, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ path, mode, reason }),

@@ -100,8 +100,11 @@ export interface HeldIO {
   trim(offset: number): void;
   /** How long the holder keeps the agent with no engine attached. */
   keepFor(ms: number): void;
+  /** End the agent's tree and the holder; true once confirmed. A closed connection sends it on a new one. */
   kill(): Promise<boolean>;
   detach(): void;
+  /** A new connection to the same holder, replaying stdout from `from` (the holder dropped this one). */
+  reconnect(from: number): Promise<HeldIO>;
 }
 
 /** Per-request bounds. Without at least one of these a request waits forever (P-KG-INGEST.5, ADR-0264). */
@@ -126,6 +129,10 @@ export class ACPClient {
   private decoder = new StringDecoder("utf8");
   /** Set by detach(): the connection was let go on purpose, so nobody is told the agent ended. */
   private detached = false;
+  /** While the holder connection is being made again: what was sent meanwhile, in order, for the new connection. */
+  private reconnecting: ((io: HeldIO) => void)[] | null = null;
+  /** The offset the last reconnect replayed from; a connection that closes again with nothing handled since ends. */
+  private reconnectedFrom = -1;
 
   /** P-HOLDER.1: an agent request a previous engine already answered (a replay brings it again). Skipped. */
   skipRequest: (id: number | string) => boolean = () => false;
@@ -198,8 +205,43 @@ export class ACPClient {
       const hint = code ? this.lastStderrLine() : "";
       this.die(`acp: agent process exited (code ${code})${hint ? ` - last stderr: ${hint}` : ""}`, code);
     };
-    io.onClose = () => this.die("acp: the lane holder closed the connection", null);
+    io.onClose = () => { void this.reconnectHeld(io); };
     io.resume();
+  }
+
+  /** P-HOLDER.1: the holder closed this connection while nobody here let go of it. It drops a client that fell too
+   *  far behind (its queue for it is bounded) and the agent runs on, so attach again from the last handled line: the
+   *  replay brings every byte after it. What is sent meanwhile waits for the new connection. A reconnect that fails,
+   *  or a connection that closes again before anything new was handled, ends the client as before. */
+  private async reconnectHeld(io: HeldIO): Promise<void> {
+    if (this.dead || this.held !== io) return;
+    const from = this.consumedOffset;
+    if (from === this.reconnectedFrom) { this.die("acp: the lane holder closed the connection", null); return; }
+    this.reconnectedFrom = from;
+    this.reconnecting = [];
+    let next: HeldIO;
+    try { next = await io.reconnect(from); }
+    catch (e) {
+      this.reconnecting = null;
+      this.die(`acp: the lane holder closed the connection and did not take it back (${e instanceof Error ? e.message : String(e)})`, null);
+      return;
+    }
+    const queued = this.reconnecting ?? [];
+    this.reconnecting = null;
+    // Stopped, detached or ended meanwhile: whoever did that acts on the agent; this connection only lets go.
+    if (this.dead || this.held !== io) { next.detach(); return; }
+    // The replay starts at a line start, so the partial line and any half character go.
+    this.buf = "";
+    this.decoder = new StringDecoder("utf8");
+    this.attachHeld(next);
+    for (const send of queued) send(next);
+  }
+
+  /** P-HOLDER.1: hand `send` the holder connection now, or the next one while it is being made again. */
+  private toHeld(send: (io: HeldIO) => void): void {
+    if (!this.held || this.dead) return;
+    if (this.reconnecting) this.reconnecting.push(send);
+    else send(this.held);
   }
 
   /** P-HOLDER.1: every held stdout byte before this offset was handled (a partial line is not). */
@@ -208,9 +250,11 @@ export class ACPClient {
   /** P-HOLDER.1: tell the holder how long to keep the agent if this engine goes away, and that everything handled
    *  so far may be forgotten (`trim`, at a turn's end). No-ops for an agent this process spawned itself. */
   holdFor(ms: number, trim = false): void {
-    if (!this.held || this.dead) return;
-    if (trim) this.held.trim(this.consumedOffset);
-    this.held.keepFor(ms);
+    const handled = this.consumedOffset;
+    this.toHeld((io) => {
+      if (trim) io.trim(handled);
+      io.keepFor(ms);
+    });
   }
 
   /** The id the last request() used (0 before any). */
@@ -341,7 +385,7 @@ export class ACPClient {
 
   private write(o: unknown): void {
     const line = JSON.stringify(o) + "\n";
-    if (this.held) { if (!this.dead) this.held.write(line); return; }
+    if (this.held) { this.toHeld((io) => io.write(line)); return; }
     this.proc?.stdin!.write(line);
   }
 

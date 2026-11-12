@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import commitGateExtension, { REFUSAL_PREFIX, WRITE_WAIT_MS, checkoutGateUrl, mentionsGit, parseGateVerdict, writeTargets } from "./commit_gate_extension.ts";
 import { CHANNEL_ENV, CHANNEL_PROOF_HEADER, mintChannelKey } from "./engine_channel.ts";
-import { LaneChannels } from "../../desktop/lane_channel.ts";
+import { answerChannel, channelAdmits, LaneChannels } from "../../desktop/lane_channel.ts";
 
 const ENV_KEYS = ["LUCID_INTERJECT_TARGET", "LUCID_CHECKOUT_GATE_URL", "LUCID_CHECKOUT_WRITE_URL", CHANNEL_ENV] as const;
 const inherited: Record<string, string | undefined> = {};
@@ -187,7 +187,7 @@ describe("LH-03: an answer the gate cannot trust fails CLOSED", () => {
     const handler = install()!;
     const urls = stubFetch(allow); // what any process holding the port can send back
     expect(blocked(await handler(bash("git add -A")))).toContain("could not be verified");
-    // The old engine's token never leaves the lane; the credential it sends cannot sign a reply.
+    // The old engine's token never leaves the lane; the request MAC it sends cannot sign a reply.
     expect(urls[0]).not.toContain("t=tok");
     const replayed = new Response(JSON.stringify(allow), { headers: { [CHANNEL_PROOF_HEADER]: "0".repeat(64) } });
     globalThis.fetch = (async (_input: string | URL | Request) => replayed.clone()) as typeof globalThis.fetch;
@@ -202,9 +202,13 @@ describe("LH-03: an answer the gate cannot trust fails CLOSED", () => {
     let verdict: unknown = allow;
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const req = new Request(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url, init);
-      // The engine's half: the credential names this lane, and the reply carries its proof.
-      expect(channels.laneOf(new URL(req.url), null)?.laneId).toBe("lane-1");
-      return channels.answer(req, new Response(JSON.stringify(verdict), { headers: { "content-type": "application/json" } }));
+      // The engine's half: the request's MAC names this lane, it speaks for itself, and the reply carries its proof.
+      const url = new URL(req.url);
+      const ch = await channels.authenticate(req, url);
+      if (!ch) throw new Error("the gate's request did not authenticate as lane-1");
+      expect(ch.laneId).toBe("lane-1");
+      expect(channelAdmits(ch, url, () => null)).toBe(true);
+      return answerChannel(ch, new Response(JSON.stringify(verdict), { headers: { "content-type": "application/json" } }));
     }) as typeof globalThis.fetch;
     const handler = install()!;
     expect(await handler(bash("git add -A"))).toBeUndefined();
