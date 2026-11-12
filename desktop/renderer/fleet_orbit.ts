@@ -1219,7 +1219,8 @@ function layoutStage(lanes: LaneView[]): void {
   if (w === 0 || h === 0) return;
   const slots = orbitSlots(lanes.length + orbitRemoteList().length, w, h); // P-IDE-SPOKES.1: remote spokes share the ring; P-RS-VIEW.1: only those holding a task
   // Decorative ring ellipses for each occupied ring, dash-drifting slowly (pure ornament, one per ring).
-  // One sample slot per occupied ring carries that ring's radii (inverting x = rx cos a breaks at 12 o'clock).
+  // One sample slot per occupied ring carries that ring's radii (orbit_layout.ts ringRx/ringRy), so the canvas
+  // draws each ring exactly on its spokes, and a stage resize re-sizes it on the next pass.
   const rings: OrbitRing[] = [...new Map(slots.map((s) => [s.ring, s] as const)).values()].map((s) => ({ rx: s.ringRx, ry: s.ringRy }));
   const spokes: OrbitSpoke[] = [];
   lanes.forEach((lane, i) => {

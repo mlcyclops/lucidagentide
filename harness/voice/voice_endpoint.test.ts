@@ -10,9 +10,9 @@ import { describe, expect, test } from "bun:test";
 import { parseVoiceEndpointConfig } from "./voice_endpoint.ts";
 
 const valid = () => ({
-  kind: "lucid-voice-endpoint", version: 1, id: "nick-dgx", label: "Nick DGX",
+  kind: "lucid-voice-endpoint", version: 1, id: "box-dgx", label: "DGX box",
   engine: "dots-tts", url: "http://127.0.0.1:8084", model: "rednote-hilab/dots.tts-soar",
-  transport: { kind: "ssh-forward", command: "ssh -J alex@10.0.0.21 -N -L 8084:127.0.0.1:8084 nick@10.0.0.8" },
+  transport: { kind: "ssh-forward", command: "ssh -J operator@192.0.2.21 -N -L 8084:127.0.0.1:8084 operator@192.0.2.8" },
   exportedAt: 1757200000000, source: "dgx-loader 1.2.1",
 });
 
@@ -22,7 +22,7 @@ describe("parseVoiceEndpointConfig", () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.config.url).toBe("http://127.0.0.1:8084");
-      expect(r.config.label).toBe("Nick DGX");
+      expect(r.config.label).toBe("DGX box");
       expect(r.config.transport?.kind).toBe("ssh-forward");
       expect(r.config.transport?.command).toContain("ssh -J");
     }
@@ -48,8 +48,8 @@ describe("parseVoiceEndpointConfig", () => {
   });
 
   test("rejects urls with embedded userinfo or non-http schemes", () => {
-    expect(parseVoiceEndpointConfig({ ...valid(), url: "http://user:pw@10.0.0.8:8084" }).ok).toBe(false);
-    expect(parseVoiceEndpointConfig({ ...valid(), url: "ssh://10.0.0.8" }).ok).toBe(false);
+    expect(parseVoiceEndpointConfig({ ...valid(), url: "http://user:pw@192.0.2.8:8084" }).ok).toBe(false);
+    expect(parseVoiceEndpointConfig({ ...valid(), url: "ssh://192.0.2.8" }).ok).toBe(false);
     expect(parseVoiceEndpointConfig({ ...valid(), url: "not a url" }).ok).toBe(false);
   });
 

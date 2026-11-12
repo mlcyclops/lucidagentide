@@ -47,7 +47,7 @@ const key = await importRoomKey(generateRoomKey());
 
 const hostSock = new CollabSocket({ wsUrl, role: "host", key, authToken: () => "tok-host" });
 const host = new CollabHost(hostSock, {
-  header: { sessionId: "s1", title: "Harden the relay", model: "claude-opus-4-8", hostName: "nick@desktop", startedAt: 1000 },
+  header: { sessionId: "s1", title: "Harden the relay", model: "claude-opus-4-8", hostName: "operator@desktop", startedAt: 1000 },
   posture: () => ({ cui: false, lockdown: false }), // a non-CUI session: the phone MAY keep history on-device
 });
 host.start();
