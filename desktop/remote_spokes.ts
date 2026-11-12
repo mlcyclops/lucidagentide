@@ -31,6 +31,7 @@
 import type { GateDecision } from "../harness/security/gate.ts";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
 import { neutralizeDelimiters } from "../harness/omp/mcp_result_gate.ts";
+import { MAX_REMOTE_INPUT } from "./controller/remote_policy.ts";
 import {
   deactivatedLabel, mapHubSnapshot, MODEL_ID_RE, NODE_RE, TASK_RE,
   type RecallEntryView, type RecallView, type RemoteActionView, type RemoteApprovalView, type RemoteApprovalsView, type RemoteHubView,
@@ -179,7 +180,10 @@ export async function gateApprovals(raw: unknown, label: string, deps: Pick<Remo
     const view: RemoteApprovalView = {
       task, name: field(a, "name", 48),
       ask: {
-        id, digest, kind: field(ask, "kind", 64), title: field(ask, "title", 500), input: field(ask, "input", 8_000), tier: field(ask, "tier", 32), reason: field(ask, "reason", 500),
+        // kind, title and input are what the decision's digest covers, so they are read at the sizes the spoke
+        // engine can park (fleet_lanes: kind 80, title 300, input MAX_REMOTE_INPUT). A smaller cap here would show
+        // the approver, and hand the scanner, a prefix of an action whose allow covers all of it.
+        id, digest, kind: field(ask, "kind", 80), title: field(ask, "title", 500), input: field(ask, "input", MAX_REMOTE_INPUT), tier: field(ask, "tier", 32), reason: field(ask, "reason", 500),
         expiresAt: typeof ask?.expiresAt === "number" && Number.isSafeInteger(ask.expiresAt) ? ask.expiresAt : 0,
       },
     };
