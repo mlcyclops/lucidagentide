@@ -27,7 +27,7 @@ function check(label: string, ok: boolean): void {
 console.log("== P-LOCAL.5 - GLM-5.3-Flash on vLLM, with the preset metadata that used to be dropped ==");
 
 // The user's rig: GLM-5.3-Flash served by vLLM on the 2x DGX Spark, reached over the LAN.
-const SPARK = "http://10.0.0.21:8000/v1";
+const SPARK = "http://192.0.2.21:8000/v1";
 
 // (1) the preset exists and is sized for the box it runs on.
 const glm = presetById("glm-5.3-flash");
@@ -57,7 +57,7 @@ const custom = model("my-private-finetune");
 check("a hand-typed model id keeps the conservative defaults", custom.contextWindow === 8192 && custom.reasoning === false);
 check("a hand-typed model id gets no compat", custom.compat === undefined);
 
-// (5) GLM's wire shape. omp derives these from the base URL, and a 10.x address matches no vendor,
+// (5) GLM's wire shape. omp derives these from the base URL, and a LAN address matches no vendor,
 //     so without an explicit compat the thinking request is malformed and the trace is dropped.
 const glmEntry = model("glm-5.3-flash");
 check("GLM is a reasoning model", glmEntry.reasoning === true);

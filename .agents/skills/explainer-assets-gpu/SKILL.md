@@ -53,12 +53,14 @@ place only when PLAN.md's Assets section names it, its source, its size, and the
      `/api/creator/resources`, `/api/creator/jobs`) accept only the UI's token. Ask the user to run the step
      in the Creator Studio CAD, Video, Images, or Render pane, and pick up the result from the Creator library
      or the file they save. Never try to reach those routes another way.
-3. **Otherwise a VPN or an SSH forward**, for a service LUCID has no seam for (for example the LLM as a Local
-   Provider). Details and the backoff rule are in `references/dgx-access.md`. In short:
-   - Box addresses, users, and model ids are DATA from the user's endpoint files or Local Provider, never
-     guessed or hard-coded into a project. In the reference fleet (`DGX-FLEET-INTEGRATION.md`) the head node is
-     `10.0.0.21` over the VPN. Point at the HEAD only: the second box is a tensor-parallel member that serves
-     no HTTP, and a probe against it looks exactly like a dead pool.
+3. **Otherwise a VPN or an SSH forward**, only for a service LUCID has no seam for yet. ADR-0550 is the
+   direction: a GPU box joins as a Remote Spoke (work runs there through its LAN model route), and the
+   workstation's chat reaches a DGX model only through the Private AI Platform's model-endpoint mailbox; a
+   hand-made Local Provider pointing at a box address is not a supported route. Details and the backoff rule
+   are in `references/dgx-access.md`. In short:
+   - Box addresses, users, and model ids are DATA from the user's endpoint files, never guessed or hard-coded
+     into a project. Point at the HEAD only (`<head>` from those files): the second box is a tensor-parallel
+     member that serves no HTTP, and a probe against it looks exactly like a dead pool.
    - Without the VPN: one held forward per service, `ssh -N -L 18000:127.0.0.1:8000 <user>@<head>`.
    - **fail2ban:** never rapid-retry SSH and never poll on a fixed interval. TCP 22 open plus an ssh exit 255
      with no output means rate-limited, not down: wait at least 60 seconds before the next single attempt,

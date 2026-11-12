@@ -63,7 +63,7 @@ pass("real relay refuses the no-claim token 4403 -> guest ended -> isEntitlement
 
 // [3] ENTITLED: a premium phone goes LIVE against a real host — a paying user is NEVER shown Subscribe
 const hostSock = new CollabSocket({ wsUrl, role: "host", key, authToken: () => "tok-premium" });
-const host = new CollabHost(hostSock, { header: { sessionId: "s6", title: "Remote session", model: "claude-opus-4-8", hostName: "nick@desktop", startedAt: 1000 } });
+const host = new CollabHost(hostSock, { header: { sessionId: "s6", title: "Remote session", model: "claude-opus-4-8", hostName: "operator@desktop", startedAt: 1000 } });
 host.start();
 const paidSock = new CollabSocket({ wsUrl, role: "guest", key, authToken: () => "tok-premium" });
 const paidGuest = new CollabGuest(paidSock, { name: "paid@phone", writeToken: null }, {});
