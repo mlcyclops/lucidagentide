@@ -20,8 +20,16 @@
 // FAIL CLOSED: an unknown version or type, a missing field, a duplicate id, an absurd iteration count or a
 // malformed file throws. None of them degrades into "fewer ways in". Nothing here logs a key or a blob.
 
-import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+// FIPS (ADR-0473, Contract A): the VMK wrap and unwrap (AES-256-GCM), every salt, nonce and id (the DRBG) and
+// the vmk_check MAC (HMAC-SHA256) go through harness/crypto/fips_crypto.ts, as the PBKDF2 already did, so they
+// run in the validated module when one is usable and refuse (FipsRequiredError) when one is required and absent.
+// ONE operation stays on node:crypto: the AES-128-CBC inside vmk_check. The Hub's spec fixes that token as
+// Fernet, the provider has no CBC, and the block it encrypts is the public constant LUCID_VMK_V1 (a key-check
+// value, not stored data). ADR-0454 records it as the exception.
+
+import { createCipheriv, createDecipheriv, timingSafeEqual } from "node:crypto";
 import { closeSync, fsyncSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import { aesGcmDecrypt, aesGcmEncrypt, CryptoAuthError, hmacSha256, randomBytes } from "../crypto/fips_crypto.ts";
 import { deriveKey, KDF_ITERS, KEY_LEN } from "./crypto.ts";
 
 export const PROTECTORS_VERSION = 1 as const;
@@ -67,7 +75,7 @@ export function makeVmkCheck(vmk: Buffer): string {
   const ts = Buffer.alloc(8);
   ts.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 1000)));
   const body = Buffer.concat([Buffer.from([0x80]), ts, iv, cipher.update(VMK_CHECK_PLAINTEXT, "utf8"), cipher.final()]);
-  return b64url(Buffer.concat([body, createHmac("sha256", vmk.subarray(0, 16)).update(body).digest()]));
+  return b64url(Buffer.concat([body, hmacSha256(vmk.subarray(0, 16), body)]));
 }
 
 export function vmkCheckOk(vmk: Buffer, token: string): boolean {
@@ -75,7 +83,7 @@ export function vmkCheckOk(vmk: Buffer, token: string): boolean {
     const raw = Buffer.from(token.replace(/-/g, "+").replace(/_/g, "/"), "base64");
     if (vmk.length !== KEY_LEN || raw.length < 1 + 8 + 16 + 16 + 32 || raw[0] !== 0x80) return false;
     const body = raw.subarray(0, raw.length - 32);
-    if (!timingSafeEqual(raw.subarray(raw.length - 32), createHmac("sha256", vmk.subarray(0, 16)).update(body).digest())) return false;
+    if (!timingSafeEqual(raw.subarray(raw.length - 32), hmacSha256(vmk.subarray(0, 16), body))) return false;
     const decipher = createDecipheriv("aes-128-cbc", vmk.subarray(16, 32), body.subarray(9, 25));
     return Buffer.concat([decipher.update(body.subarray(25)), decipher.final()]).toString("utf8") === VMK_CHECK_PLAINTEXT;
   } catch { return false; }
@@ -86,10 +94,8 @@ const aad = (id: string, type: string): Buffer => Buffer.from(`lucid-vmk-v${PROT
 
 function wrap(kek: Buffer, vmk: Buffer, id: string, type: ProtectorType): { wrapped_vmk: string; nonce: string } {
   const nonce = randomBytes(NONCE_BYTES);
-  const cipher = createCipheriv("aes-256-gcm", kek, nonce);
-  cipher.setAAD(aad(id, type));
-  const ct = Buffer.concat([cipher.update(vmk), cipher.final(), cipher.getAuthTag()]); // ct||tag, as Python's AESGCM
-  return { wrapped_vmk: ct.toString("base64"), nonce: nonce.toString("base64") };
+  const { ct, tag } = aesGcmEncrypt(kek, nonce, vmk, aad(id, type));
+  return { wrapped_vmk: Buffer.concat([ct, tag]).toString("base64"), nonce: nonce.toString("base64") }; // ct||tag, as Python's AESGCM
 }
 
 /** The VMK from one entry, proven against the document's vmk_check. THROWS auth on a wrong KEK or a blob
@@ -98,11 +104,13 @@ export function unwrapEntry(doc: ProtectorDoc, entry: ProtectorEntry, kek: Buffe
   const blob = Buffer.from(entry.wrapped_vmk, "base64");
   let vmk: Buffer;
   try {
-    const decipher = createDecipheriv("aes-256-gcm", kek, Buffer.from(entry.nonce, "base64"));
-    decipher.setAAD(aad(entry.id, entry.type));
-    decipher.setAuthTag(blob.subarray(blob.length - 16));
-    vmk = Buffer.concat([decipher.update(blob.subarray(0, blob.length - 16)), decipher.final()]);
-  } catch { throw new ProtectorError("auth", "that protector did not unwrap the vault key"); }
+    vmk = aesGcmDecrypt(kek, Buffer.from(entry.nonce, "base64"), blob.subarray(0, blob.length - 16), blob.subarray(blob.length - 16), aad(entry.id, entry.type));
+  } catch (e) {
+    // Only a failed tag (or a blob or nonce of the wrong size) is "that key does not open it". A refusal by
+    // the provider (FIPS required, no validated module) is not a wrong passphrase and must not read as one.
+    if (e instanceof CryptoAuthError || e instanceof RangeError) throw new ProtectorError("auth", "that protector did not unwrap the vault key");
+    throw e;
+  }
   if (vmk.length !== KEY_LEN) { vmk.fill(0); throw new ProtectorError("format", "the wrapped key is not a 32-byte VMK"); }
   if (!vmkCheckOk(vmk, doc.vmk_check)) { vmk.fill(0); throw new ProtectorError("format", "the protector file's vmk_check does not match the key it unwrapped"); }
   return vmk;

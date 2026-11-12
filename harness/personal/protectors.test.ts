@@ -6,6 +6,7 @@
 // these tests fail the moment this implementation drifts from the format the Hub reads and writes.
 
 import { expect, test } from "bun:test";
+import { _forceModuleForTest, FipsRequiredError } from "../crypto/fips_crypto.ts";
 import { deriveKey } from "./crypto.ts";
 import {
   createProtectors, newEntry, parseProtectors, ProtectorError, rewrapPassword, unlockWithPassword, unwrapEntry, withProtector, withoutProtector,
@@ -88,4 +89,24 @@ test("the password protector is irremovable; a device type has at most one entry
   expect(twice.protectors.filter((e) => e.type === "hello").map((e) => e.key_name)).toEqual(["b"]);
   expect(withoutProtector(twice, "hello").protectors.map((e) => e.type)).toEqual(["password"]);
   expect(parseProtectors(JSON.stringify(twice)).protectors.length).toBe(2);
+});
+
+// ADR-0473 (Contract A): the wrap and unwrap run in the FIPS provider. When validated cryptography is required
+// and no validated module is usable, they refuse; the refusal is never reported as a wrong key.
+test("FIPS required with no validated module: unwrap and wrap refuse, and it is not an auth failure", () => {
+  const doc = parseProtectors(HUB_FILE);
+  const pw = doc.protectors[0]!;
+  const kek = deriveKey("correct-horse-battery", Buffer.from(pw.kdf!.salt, "base64"), pw.kdf!.iterations);
+  const saved = process.env.LUCID_FIPS_REQUIRED;
+  try {
+    _forceModuleForTest("bun-boringssl");
+    process.env.LUCID_FIPS_REQUIRED = "1";
+    expect(() => unwrapEntry(doc, pw, kek)).toThrow(FipsRequiredError);
+    expect(() => newEntry(kek, HUB_VMK, "hello", "Windows Hello")).toThrow(FipsRequiredError);
+    expect(() => createProtectors(HUB_VMK, "a-new-passphrase")).toThrow(FipsRequiredError);
+  } finally {
+    if (saved === undefined) delete process.env.LUCID_FIPS_REQUIRED; else process.env.LUCID_FIPS_REQUIRED = saved;
+    _forceModuleForTest(null);
+  }
+  expect(unwrapEntry(doc, pw, kek).equals(HUB_VMK)).toBe(true); // the same call opens it once the requirement is gone
 });

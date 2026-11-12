@@ -961,6 +961,9 @@ let kgAutoUnlockTried = false;
 async function kgAutoUnlock(): Promise<void> {
   if (kgAutoUnlockTried) return;
   kgAutoUnlockTried = true;
+  // The file answers first: status() starts the OS helper (a PowerShell compile on Windows), which a launch on a
+  // machine that never turned device unlock on should not pay for.
+  if (!kgDevice.autoUnlockEnrolled()) return;
   const st = await kgDevice.status().catch(() => null);
   if (!st?.enrolled || !st.autoUnlock) return;
   const p = await engineData(await fetch(`http://127.0.0.1:${PORT}/api/personal`, { headers: { "x-lucid-token": MAIN_TOKEN } }).catch(() => null));
