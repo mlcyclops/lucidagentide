@@ -11,6 +11,7 @@
 // (DECISIONS ADR-0006).
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { StepTextJoiner } from "./step_text.ts"; // P-STEPTEXT.1: a paragraph break between a turn's tool steps
 import { designDocPath, designInvariantsBlock, isDesignDocPath } from "./design_doc.ts"; // P-DESIGN.1/.2 (ADR-0154): honor DESIGN.md + detect writes
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -22,10 +23,15 @@ import type { IncidentEvent, IncidentKind, IncidentOutcome } from "./incident_re
 import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts"; // P-FLEET.L14 (ADR-0337): one shared definition
 import { AGENT_BUILDER_POLICY, BUILD_POLICY, DATA_INTEGRATION_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, JEV_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
+import { workspaceSecretEnv } from "./vault_env_import.ts"; // P-VAULT-ENV.1 (ADR-0477): the workspace's scoped secrets
+import { vaultRedactEnv } from "./vault_env.ts"; // security review SECRET-INTAKE-AGENT-ENV-READBACK: names the redaction hook hides
+import { masterSecretRequestEnv } from "./secret_routes.ts"; // security review SECRET-INTAKE-REQUESTER-SPOOF: master-only request_secret env
 import { PendingWrites } from "./checkout_owners.ts"; // P-OWN.1: ownership only for writes that completed
 import { PREVIEW_ACTIVITY, previewActivityLabel, type PreviewActivityKind } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
 import { extractToolImages } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): images out of tool results
-import { recordAiLoc } from "./ailoc_log.ts"; // P-LOC.4 (ADR-0211): GUI-owned AI-LOC ledger the dashboard reads
+import { isInternalUri } from "./ailoc_log.ts"; // #483: device/internal-URI calls are never authored code
+import { AiLocCaptureTracker } from "./ailoc_capture.ts";
+import { toolCode } from "./tool_code.ts";
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
 import { flavorInfo, normalizeUiMode, resolveBuildFlavor, uiModePosture, type UiMode } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279)
@@ -38,9 +44,9 @@ import { recordLatency } from "./latency_log.ts"; // P-EVAL.2 (ADR-0187): per-tu
 import { beginStepTurn, endStepTurn, noteStepEvent } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
-import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, resolveOmpBin } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
+import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, type OmpResolution, resolveOmpBin, resolveOmpBinAsync } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
 import { gatePath, gateRefusal, repoAsset, resolvedRepo } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
-import { asksageOnly, attribution, checkerModel, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, modelRolesOverlayFile, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
+import { asksageOnly, attribution, checkerModel, chosenModel, localProviderPrefixes, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, modelRolesOverlayFile, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
 import { heavyRoleModel, writeModelRolesOverlay } from "./model_roles.ts"; // P-MODEL.8 (ADR-0448)
 import { judgeChain, resolveJudgmentProvider, writeJudgmentOverlay, type ResolvedJudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374) + P-JEV.5 (ADR-0416)
 import { bannedJudges, judgeBanEnv } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416): local judges that failed more than once
@@ -59,7 +65,7 @@ import { caps } from "../harness/runs/profiles.ts";
 import { recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, type ModelOption } from "./checker_model.ts";
 import { enclaveHostSet, enclaveProviderSet, isAsksageRouted, isLockdownRoutable, lockdownEgressExempt, LOCKDOWN_SWITCH_FAILED_ERROR } from "./lockdown_route.ts"; // CUI lockdown: AskSage + DGX enclave routes
 import { resolveStartupModel } from "./startup_model.ts"; // P-MODEL.1 (ADR-0250): fresh-session picker default
-import { providerAllowedOnPlatform, providerPrefixOf } from "./renderer/model_families.ts"; // P-MODEL.6: platform-bound providers
+import { isLocalModel, providerAllowedOnPlatform, providerPrefixOf } from "./renderer/model_families.ts"; // P-MODEL.6: platform-bound providers
 import { providerAuth, typesafeKeySet, type ProviderAuth } from "./auth_status.ts";
 import { providerForModel } from "./renderer/budget_gate.ts"; // DOM-free (see its header note)
 import { parseGoalVerdict } from "./goal_verdict.ts";
@@ -91,6 +97,7 @@ import { agentBuilderOpenSpec } from "../harness/agent/handoff.ts"; // P-AGENT.8
 import type { AgentSpec } from "../harness/agent/spec.ts";
 import { slashCommandCreateDraft } from "../harness/commands/handoff.ts"; // P-CMD.1: chat -> user slash command
 import type { UserCommand } from "../harness/commands/spec.ts";
+import type { SecretRequestView } from "./secret_intake_view.ts"; // P-SECRET-INTAKE.1 (ADR-0476)
 import { gateDenyReason } from "./gate_audit.ts";
 import { type ElicitationAnswer, type ExecChoice, type ExecClass, classifyCommand, classifyEval, elicitationAnswer, elicitationOptions, execStore, execVerdict, recordExec } from "./exec_policy.ts";
 import { toolFailureCommand, toolFailureDetail, toolFailureReason } from "./tool_failure.ts";
@@ -204,6 +211,18 @@ const COMMIT_GATE_EXT = repoAsset("harness", "omp", "commit_gate_extension.ts");
 // lanes driving one shared window would fight over it (same rationale that keeps preview off lanes).
 // The extension self-skips when LUCID_BROWSER_URL is absent (no Electron main = no window executor).
 const BROWSER_EXT = repoAsset("harness", "omp", "browser_extension.ts");
+// P-SECRET-INTAKE.1 (ADR-0476): `request_secret` asks the USER for a secret through the LUCID dialog and
+// stores it in the engine vault; the model only ever gets {stored, ref, envName} or {stored:false, reason}.
+// MASTER ONLY: the dialog rides the master turn's event stream (requestSecretDialog), and only the master
+// spawn env carries its URL and master-only token (secret_routes.masterSecretRequestEnv). Self-skips
+// without them.
+const SECRET_INTAKE_EXT = repoAsset("harness", "omp", "secret_intake_extension.ts");
+// Security review SECRET-INTAKE-AGENT-ENV-READBACK: vault values are in the agent's own env (workspace
+// secrets, provider keys, credential env), so a `printenv` would hand them to the model. This tool_result
+// hook replaces each one (plain, JSON-escaped, base64, URL-encoded) with [vault:<NAME>]. The spawn env
+// names the variables (vault_env.vaultRedactEnv, names only). Master AND lanes, LAST of all extensions so
+// it rewrites what every gate and the interject drain produced. Self-skips without names.
+const VAULT_REDACT_EXT = repoAsset("harness", "omp", "vault_redact_extension.ts");
 // P-EVAL.4 (ADR-0318): reports the REAL tool name (+ pass/fail) of every tool call over a token'd
 // loopback URL, because omp's ACP tool_call update carries only a coarse `kind` and an intent-shadowed
 // title (ADR-0308) - so the chat's chips and the engineering report's per-tool breakdown had degraded to
@@ -212,7 +231,7 @@ const BROWSER_EXT = repoAsset("harness", "omp", "browser_extension.ts");
 const TOOL_META_EXT = repoAsset("harness", "omp", "tool_meta_extension.ts");
 // P-JEV.2 (ADR-0377): reports EVERY typed judgment (question, answers, probabilities, which backend
 // answered, latency, error) over a token'd loopback URL, because omp records none of them and has no hook
-// for them: the extension wraps pi-ai's TypeSafeJudge / TextJudge in-process. Observability only, fail-soft,
+// for them: the extension wraps pi-ai's NativeJudge / TextJudge in-process. Observability only, fail-soft,
 // self-skips when LUCID_JUDGMENT_URL is absent.
 const JUDGMENT_EXT = repoAsset("harness", "omp", "judgment_extension.ts");
 // Design suite: design_read / design_apply / design_request let the agent read the Creator Design editor's
@@ -225,6 +244,11 @@ const DESIGN_EXT = repoAsset("harness", "omp", "design_extension.ts");
 // in dev.ts). MASTER ONLY, like the Design suite: there is one editor. Self-skips when LUCID_DRIFT_CALL_URL is
 // absent, which is every non-Creator build.
 const DRIFT_EXT = repoAsset("harness", "omp", "drift_extension.ts");
+// CREATOR-OPENFILM (ADR-0457): openfilm_look / openfilm_render / openfilm_job run OpenFilm's look and render as
+// fixed-argv engine jobs through the /api/creator/openfilm/* routes (job ledger, artifact library, governor, CUI
+// gate all live in dev.ts). MASTER ONLY, like the Drift tools. Self-skips unless LUCID_OPENFILM_LOOK_URL,
+// LUCID_OPENFILM_RENDER_URL and LUCID_OPENFILM_JOB_URL are all set, which is every non-Creator build.
+const OPENFILM_EXT = repoAsset("harness", "omp", "openfilm_extension.ts");
 // P-HEALTH.3: a liveness beat while the model streams a tool call's arguments, which omp's ACP mapper never
 // forwards, so the stall watchdog stops reading a long write as a wedged session. Master AND lanes; each
 // beat names its omp session id, so the engine credits the right one. Fail-soft, self-skips when
@@ -333,14 +357,39 @@ function ompBin(): string {
       return bunProbeVerdict(Bun.spawnSync([candidate, "--version"], { stdout: "ignore", stderr: "ignore", timeout: OMP_PROBE_TIMEOUT_MS }));
     } catch { return false; }
   };
-  const r = resolveOmpBin(
-    { envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join },
-    probe,
-  );
+  return adoptOmpResolution(resolveOmpBin({ envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join }, probe));
+}
+function adoptOmpResolution(r: OmpResolution): string {
   if (r.indeterminate) console.error(`[omp] probe timed out; using ${r.bin} anyway (slow cold start, not a missing binary): ${r.timedOut.join(", ")}`);
   else if (!r.proven) console.error(`[omp] no runnable omp found; tried: ${r.rejected.join(", ")}`);
   ompBinCache = r.bin;
   return r.bin;
+}
+/** P-BOOTPERF.1 (ADR-pending): the same proven resolution as ompBin(), probed WITHOUT blocking the
+ *  engine. The sync probe is Bun.spawnSync on the event loop that serves every route, so on a cold,
+ *  antivirus-scanned Windows launch (OMP_PROBE_TIMEOUT_MS per candidate) the renderer's workspace bar,
+ *  turn-status and net-status probes all hung behind it; the status probe then timed out into the
+ *  composer's Reconnect button. start() awaits this first, so the sync ompBin() callers after it hit the
+ *  cache. One resolution per engine, shared by concurrent callers. Never rejects. */
+let ompBinPending: Promise<string> | null = null;
+function ompBinAsync(): Promise<string> {
+  if (ompBinCache) return Promise.resolve(ompBinCache);
+  ompBinPending ??= resolveOmpBinAsync(
+    { envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join },
+    ompProbeAsync,
+  ).then(adoptOmpResolution);
+  return ompBinPending;
+}
+/** `<candidate> --version` as a non-blocking capability probe: true ran, false failed to run or exited
+ *  non-zero, "timeout" did not answer in OMP_PROBE_TIMEOUT_MS (slow machine, not a missing binary). */
+async function ompProbeAsync(candidate: string): Promise<boolean | "timeout"> {
+  try {
+    const child = Bun.spawn([candidate, "--version"], { stdin: "ignore", stdout: "ignore", stderr: "ignore", windowsHide: true });
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill(); }, OMP_PROBE_TIMEOUT_MS);
+    try { await child.exited; } finally { clearTimeout(timer); }
+    return timedOut ? "timeout" : bunProbeVerdict({ exitCode: child.exitCode, signalCode: child.signalCode });
+  } catch { return false; } // ENOENT / EPERM / EACCES: cannot run this one
 }
 
 /** P-FLEET.L1: the gated omp argv for a LOCAL LANE. Same fail-closed security gate (-e GATE, invariant 4)
@@ -355,7 +404,8 @@ export function fleetLaneArgv(): { cmd: string; args: string[] } {
   const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : [];
   const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
   const ownArgs = [...(existsSync(CHECKIN_EXT) ? ["-e", CHECKIN_EXT] : []), ...(existsSync(COMMIT_GATE_EXT) ? ["-e", COMMIT_GATE_EXT] : [])]; // P-OWN.1
-  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...ownArgs, ...STREAM_BEAT_ARGS, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
+  const redactArgs = existsSync(VAULT_REDACT_EXT) ? ["-e", VAULT_REDACT_EXT] : []; // last: see VAULT_REDACT_EXT
+  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...ownArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
   return { cmd: argv[0]!, args: argv.slice(1) };
 }
 
@@ -474,6 +524,7 @@ export type ChatEvent =
   | { type: "design-available"; path: string } // P-FIGMA.2 (ADR-0154): the agent wrote/updated DESIGN.md → offer to pop it out in the IDE
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
+  | { type: "secret-request"; request: SecretRequestView } // P-SECRET-INTAKE.1 (ADR-0476): show the secret dialog (names only, never a value)
   | { type: "usage"; used: number; size: number; cost: number }
   // P-STALL.1 (ADR-0186) / P-STALL.2 (ADR-0263): the provider has emitted NOTHING for waitedMs — the UI
   // shows "still waiting" instead of a frozen pane. Repeats each silent 2-min mark; any real activity
@@ -559,6 +610,7 @@ class Backend {
   // session's task to the other writers (the user's last prompt, clipped).
   onAuthoredPath: ((path: string) => void) | null = null;
   private readonly pendingWrites = new PendingWrites();
+  private readonly aiLoc = new AiLocCaptureTracker();
   checkoutBriefing: (() => Promise<string>) | null = null;
   /** ADR-0414: drains the operator notes still waiting for "master" into a block that opens the next
    *  prompt ("" when none). dev.ts wires interject_store.carryPendingNotes. */
@@ -590,10 +642,16 @@ class Backend {
   // P-GOAL.2 (ADR-0046): a /goal loop is running, and a request to stop it after the current iteration.
   private goalActive = false;
   private goalCancelled = false;
+  /** #460 case 1: resolves when runGoal has FULLY unwound (goalActive false, report written, `done`
+   *  emitted), so a forced session switch can wait for the loop instead of racing it. Null when idle. */
+  private goalSettled: Promise<void> | null = null;
   // P-GOAL.5 (ADR-0047): in-process automation scheduler. A timer ticks while the app is open and runs
   // the first DUE automation through runGoal. `autoRunning` guards against a tick overlapping itself.
   private autoTimer: ReturnType<typeof setInterval> | null = null;
   private autoRunning = false;
+  // #460 case 2: true only while the RUNNING automation drives Main's ACP session (every kind except
+  // "agent", which runs through startAgentRun's own child pipeline). Only that kind may block a switch.
+  private autoOwnsMain = false;
   private static readonly AUTO_TICK_MS = 30_000;
   private askActive = false;            // true only during a chat turn (never the util `complete()`)
   // P-EXEC.1 (ADR-0066): the in-memory allow-turn scope — risky programs the user OK'd for the rest of
@@ -616,6 +674,8 @@ class Backend {
   // keyed by toolCallId - snapshot rides on every { type:"slow" } notice so the user can SEE what a
   // long-quiet turn is still waiting on. Cleared at turn boundaries + restart.
   private openCalls = new Map<string, PendingCall>();
+  /** The current turn's assistant text across its tool steps; reset at each turn start. */
+  private stepText = new StepTextJoiner();
   private static readonly PERM_MS = 300_000; // 5 min to decide, then fail-closed (deny)
   // -- P-PROGRESS.1: progress and the estimate; P-WAIT.1: the file-scoped write claims ---------------------
   /** Turn and tool lengths behind the estimate. dev.ts hands in the instance shared with the fleet lanes
@@ -732,6 +792,14 @@ class Backend {
    *  fire-and-forget emit with no return value to check. */
   notePreviewActivity(kind: PreviewActivityKind): void {
     this.emit({ type: "preview-activity", label: PREVIEW_ACTIVITY[kind] });
+  }
+
+  /** P-SECRET-INTAKE.1 (ADR-0476): show the secret dialog for a parked `request_secret` call (dev.ts
+   *  /api/secret/request -> secret_intake.ts). Emits into the ACTIVE turn's stream like the approval cards;
+   *  the view names what is asked and why, never a value. A renderer that missed it re-syncs from
+   *  /api/secret/pending. */
+  requestSecretDialog(request: SecretRequestView): void {
+    this.emit({ type: "secret-request", request });
   }
 
   /** P-EVAL.4 (ADR-0318): relay a self-reported tool name (and, on the result report, its pass/fail) into
@@ -992,13 +1060,16 @@ class Backend {
         const knowledgeArgs = existsSync(KNOWLEDGE_EXT) ? ["-e", KNOWLEDGE_EXT] : []; // ADR-0220: knowledge_search (non-AskSage RAG)
         const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
         const browserArgs = existsSync(BROWSER_EXT) ? ["-e", BROWSER_EXT] : []; // P-BROWSER.1: master-only, see BROWSER_EXT
+        const secretArgs = existsSync(SECRET_INTAKE_EXT) ? ["-e", SECRET_INTAKE_EXT] : []; // P-SECRET-INTAKE.1: master-only, see SECRET_INTAKE_EXT
         const designArgs = existsSync(DESIGN_EXT) ? ["-e", DESIGN_EXT] : []; // Design suite: master-only, see DESIGN_EXT
         const driftArgs = existsSync(DRIFT_EXT) ? ["-e", DRIFT_EXT] : []; // CREATOR-DRIFT: master-only, see DRIFT_EXT
+        const openfilmArgs = existsSync(OPENFILM_EXT) ? ["-e", OPENFILM_EXT] : []; // CREATOR-OPENFILM: master-only, see OPENFILM_EXT
         const ownArgs = [...(existsSync(CHECKIN_EXT) ? ["-e", CHECKIN_EXT] : []), ...(existsSync(COMMIT_GATE_EXT) ? ["-e", COMMIT_GATE_EXT] : [])]; // P-OWN.1
         // P-EVAL.4 (ADR-0318): last of the observability extensions. Loaded AFTER the gates so its hooks
         // see the same calls the gates already ruled on, and it can never sit between a tool and its gate.
         const toolMetaArgs = existsSync(TOOL_META_EXT) ? ["-e", TOOL_META_EXT] : [];
         const judgmentArgs = existsSync(JUDGMENT_EXT) ? ["-e", JUDGMENT_EXT] : []; // P-JEV.2: judgment trace, see JUDGMENT_EXT
+        const redactArgs = existsSync(VAULT_REDACT_EXT) ? ["-e", VAULT_REDACT_EXT] : []; // last: see VAULT_REDACT_EXT
         // P-SANDBOX.1 (ADR-0157): the runtime execution boundary, decided at THE spawn. On Linux with
         // bwrap the whole omp process tree (bash/eval/python/pip children included) is namespaced; on
         // platforms without a backend this is the DISCLOSED passthrough - unless managed policy
@@ -1010,7 +1081,8 @@ class Backend {
         // log, and the session ran UNGATED while every surface reported healthy. start() rejects, so the
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...designArgs, ...driftArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
+        // P-BOOTPERF.1 (ADR-pending): probe omp off the event loop; the engine keeps serving meanwhile.
+        const ompArgv = [await ompBinAsync(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...secretArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
         // P-SANDBOX.16 (ADR-0397): a git the host never put on PATH (MinGit, scoop, GitHub Desktop's copy)
@@ -1018,12 +1090,26 @@ class Backend {
         // shim, P-SANDBOX.17).
         const planSetsPath = Object.keys(spawnPlan.env).some((k) => k.toUpperCase() === "PATH");
         const gitEnv = process.platform === "win32" && !planSetsPath ? prependPathOverlay(process.env, gitCmdDir()) : {};
-        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), { ...spawnPlan.env, ...gitEnv, ...interjectChildEnv("master") }, spawnPlan.contained ? { windowsHide: true } : {});
+        // P-VAULT-ENV.1 (ADR-0477): this workspace's scoped secrets, under everything the plan sets. The
+        // request_secret URL + master-only token and the names the redaction hook hides ride this spawn only.
+        const wsCwd = currentWorkspace();
+        const wsSecrets = workspaceSecretEnv(wsCwd);
+        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, wsCwd, { ...wsSecrets, ...spawnPlan.env, ...gitEnv, ...interjectChildEnv("master"), ...masterSecretRequestEnv(), ...vaultRedactEnv(wsSecrets) }, spawnPlan.contained ? { windowsHide: true } : {});
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
+          // P-LOC.5: exclude history and shared utility sessions, whose model is not Main's.
+          const notificationSessionId = typeof params?.sessionId === "string" ? params.sessionId : this.sessionId;
+          if (!this.replaying && this.sessionId && notificationSessionId === this.sessionId &&
+              (u?.sessionUpdate === "tool_call" || u?.sessionUpdate === "tool_call_update")) {
+            const a = attribution();
+            this.aiLoc.observe(notificationSessionId, u, {
+              model: this.activeModel() || lastModel(), identity: a.identity,
+              identitySource: a.source, repo: currentWorkspace(),
+            });
+          }
           switch (u?.sessionUpdate) {
-            case "agent_message_chunk": if (u.content?.type === "text") this.emit({ type: "token", text: u.content.text }); break;
+            case "agent_message_chunk": if (u.content?.type === "text") this.emit({ type: "token", text: this.stepText.text(String(u.content.text ?? "")) }); break;
             // P-ACP.1 (ADR-0027): the model's reasoning stream. omp emits these BEFORE the answer when
             // thinking is on; without this case they were dropped, so the whole reasoning phase showed
             // nothing and the answer then arrived in a burst (the "big dump"). Surface them so the UI
@@ -1031,6 +1117,7 @@ class Backend {
             // the personalization distiller learns from, and never persisted.
             case "agent_thought_chunk": if (u.content?.type === "text") this.emit({ type: "thinking", text: u.content.text }); break;
             case "tool_call": {
+              this.stepText.tool(); // every call, job-coordination ones included: text after it is a new message
               trackToolCall(this.openCalls, u, Date.now()); // P-STALL.2: this call is now awaited
               // P-REPO.1 (ADR-0406): which repo this session works on. Keyed by the notification's own
               // session id so a session/load replay (which streams before this.sessionId is set) counts too.
@@ -1057,30 +1144,17 @@ class Backend {
                 // job-coordination calls on background subagents (omp 18 moved them from the task tool to
                 // the `hub` tool) are internal bookkeeping while a task runs - no separate tool chips.
               } else {
-                // P-CHAT.1 (ADR-0104): carry the tool's authored code for the chat's inline preview. A
-                // write's `content`, or an edit's `oldText`/`newText` (→ diff). Bounded so a huge file can't
-                // bloat the event stream; the content is already gate-scanned (it's the same tool_call text).
-                const CODE_CAP = 64 * 1024;
-                const clip = (s: unknown) => (typeof s === "string" ? s.slice(0, CODE_CAP) : undefined);
-                // The agent often writes/edits with a RELATIVE path (relative to the workspace it runs in).
-                // Preview + "Open in editor" need an ABSOLUTE path, so resolve any relative path against the
-                // workspace here (a path that's already file://, a URL, or OS-absolute is left untouched).
-                const absPath = absWorkspacePath; // P-PREVIEW.11 (ADR-0308): shared with openPreview() below
-                const codePath = absPath(typeof ri.path === "string" ? ri.path : typeof ri.file_path === "string" ? ri.file_path : "");
-                let code: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } | undefined;
-                if (typeof ri.content === "string") code = { path: codePath, content: clip(ri.content) };
-                // `replace` mode (ADR-0105, our configured edit tool) sends `edits: [{ old_text, new_text }]`
-                // (one call may bundle several hunks) — join them into one before/after pair for the diff.
-                // camelCase + top-level are kept as fallbacks for other edit-tool variants.
-                else if (Array.isArray(ri.edits) && ri.edits.length) {
-                  const olds = ri.edits.map((e: any) => String(e?.old_text ?? e?.oldText ?? "")).join("\n");
-                  const news = ri.edits.map((e: any) => String(e?.new_text ?? e?.newText ?? "")).join("\n");
-                  code = { path: codePath, oldText: clip(olds) ?? "", newText: clip(news) ?? "" };
-                }
-                else if (typeof ri.old_text === "string" || typeof ri.new_text === "string") code = { path: codePath, oldText: clip(ri.old_text) ?? "", newText: clip(ri.new_text) ?? "" };
-                else if (typeof ri.oldText === "string" || typeof ri.newText === "string") code = { path: codePath, oldText: clip(ri.oldText) ?? "", newText: clip(ri.newText) ?? "" };
-                // omp's default `hashline` edit sends a patch in a single `input` string (kept for completeness).
-                else if (typeof ri.input === "string" && (u.kind === "edit" || /\bedit\b/i.test(String(u.title ?? "")))) code = { path: codePath, patch: clip(ri.input) };
+                // Display previews are bounded. P-LOC.5 counts the successful result independently.
+                const absPath = absWorkspacePath;
+                const rawPath = typeof ri.path === "string" ? ri.path : typeof ri.file_path === "string" ? ri.file_path : "";
+                // #483: xd:// device calls (and other internal URIs: local://, agent://, skill://, ...)
+                // send JSON `content` to a scheme path. They are tool INVOCATIONS, not authored workspace
+                // files - never build `code` for them: no ownership claim, no inline diff, and no preview
+                // below. (Before this guard, `xd://knowledge_search` was resolved against the workspace into
+                // `<workspace>/xd:/knowledge_search` and counted as code.) The AI-LOC tracker refuses them too.
+                const internalUri = isInternalUri(rawPath);
+                const code = internalUri ? undefined : toolCode(u, absPath);
+                const codePath = code?.path ?? absPath(rawPath);
                 // P-EVAL.4 (ADR-0318): carry omp's toolCallId so the real tool name (self-reported by the
                 // tool_meta extension, which is the only place it exists) can be joined onto this call.
                 const callId = typeof u.toolCallId === "string" ? u.toolCallId : "";
@@ -1092,22 +1166,10 @@ class Backend {
                 // P-PROGRESS.1: a call that arrives already terminal never gets a tool_call_update; settle its
                 // step now so the live row does not spin forever.
                 if (callId && !this.openCalls.has(callId)) { this.stepsDone++; this.emit({ type: "tool-meta", id: callId, name: String(u.kind ?? "tool"), ok: u.status === "completed", elapsedMs: 0 }); }
-                // P-LOC.4 (ADR-0211): mirror this authored write/edit into the GUI-owned AI-LOC ledger the
-                // dashboard reads. The gate ALSO records it into agent_obs.duckdb (the BI system-of-record),
-                // but the omp child holds that DuckDB read-write for the whole session, so the desktop can't
-                // read it live — this JSONL is the live-readable copy (same linediff count as the chat chip).
+                // P-OWN.1: ownership also waits for a completed write, independently of the AI-LOC ledger.
                 if (code) {
-                  // P-OWN.1: the path becomes this session's only once the call completes (tool_call_update below).
                   const now = code.path ? this.pendingWrites.opened(callId, code.path, u.status) : null;
                   if (now && this.onAuthoredPath) { try { this.onAuthoredPath(now); } catch { /* the ledger never breaks the chat */ } }
-                  const a = attribution();
-                  recordAiLoc({
-                    model: this.activeModel() || lastModel(),
-                    identity: a.identity, identitySource: a.source, repo: currentWorkspace(),
-                    filePath: code.path || undefined, tool: String(u.kind ?? "edit"),
-                    code: { content: code.content, oldText: code.oldText, newText: code.newText, patch: code.patch },
-                    sessionId: this.sessionId ?? undefined,
-                  });
                 }
                 // P-PREVIEW.2 (ADR-0096): if this write/edit produced a browser-previewable file, tell the UI
                 // so it can auto-surface it in the Preview panel. Pure detection (previewablePath); the path
@@ -1117,7 +1179,7 @@ class Backend {
                 // A CUSTOM tool's name does NOT survive as `u.kind` (ACP maps it to "other"); omp renders the
                 // call title as `"preview_open: <path>"`, so preview_open must be matched against the TITLE.
                 // A write/edit, by contrast, keeps a real `kind` ("edit"), which previewablePath keys on.
-                const pvRaw = previewOpenPath(String(u.title ?? ""), ri) ?? previewablePath(String(u.kind ?? u.title ?? ""), ri);
+                const pvRaw = internalUri ? undefined : previewOpenPath(String(u.title ?? ""), ri) ?? previewablePath(String(u.kind ?? u.title ?? ""), ri);
                 const pv = pvRaw ? absPath(pvRaw) : pvRaw; // resolve a relative write path to absolute so the panel can render it
                 if (pv) this.emit({ type: "preview-available", path: pv });
                 // P-PREVIEW.6a (ADR-0153): the agent is looking at / testing the live preview (screenshot,
@@ -1417,7 +1479,12 @@ class Backend {
     // providerConfigured's exact test (renderer/provider_hub.ts), inlined: importing provider_hub would
     // pull the DOM-typed bridge.ts into the server program.
     const configured = (p: ProviderAuth) => !!(p.oauthActive || p.keySet || (p.fields ?? []).some((f) => f.set));
+    // Cloud-only default: only an EXPLICIT picker choice may restore a local model; the automatic rungs
+    // skip anything local (omp's implicit Ollama/llama.cpp/LM Studio engines or a configured Local Provider).
+    const localPx = localProviderPrefixes();
     const pick = resolveStartupModel({
+      chosen: chosenModel(),
+      isLocal: (value) => isLocalModel(value, localPx),
       lastUsed: remembered,
       current,
       options: this.accessibleModels(),
@@ -1688,10 +1755,11 @@ class Backend {
    *  work right now, or null when nothing would be lost. loadSession/newSession run clearTurnRecovery,
    *  which cancels a live turn (ADR-0385, and correctly so), so the HTTP routes ask this first and refuse
    *  unless the caller explicitly chose to stop. A loop or automation outranks the turn it is running
-   *  because it is the bigger thing the user would lose. */
+   *  because it is the bigger thing the user would lose. Only an automation that OWNS Main blocks: an
+   *  agent-kind run lives in startAgentRun's own child, so a switch stops nothing of it (#460 case 2). */
   switchBlocker(): string | null {
     if (this.goalActive) return "a goal loop is running";
-    if (this.autoRunning) return "an automation is running";
+    if (this.autoRunning && this.autoOwnsMain) return "an automation is running";
     if (this.askActive || this.recoveryTurn?.running) return "a turn is running";
     return null;
   }
@@ -1734,6 +1802,7 @@ class Backend {
     this.turnSink = null;
     this.askActive = false;
     this.openCalls.clear();
+    this.aiLoc.clear();
     this.chatGate.end();
     try { for (const fn of this.permPending.values()) fn(null); }
     finally { turn?.finish(); }
@@ -1744,14 +1813,25 @@ class Backend {
 
   /** Resume a past session so the next prompt continues it. */
   async loadSession(id: string): Promise<void> {
+    // #460 case 1 (P-SWITCH.1 follow-up): a running /goal loop (or a Main-owned automation, which runs
+    // through runGoal) is stopped and FULLY unwound before the session changes. Only forced or
+    // destructive callers reach here while a loop runs: the unforced HTTP routes already refused via
+    // switchBlocker(), so this never widens a plain switch into a work-cancelling path (#390).
+    await this.stopGoalForSwitch();
     this.clearTurnRecovery();
     await this.start();
     await this.releaseOtherSession(this.acp!, id);
-    await this.acp!.request("session/load", { sessionId: id, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }).catch(() => {});
-    this.sessionId = id;
+    this.replaying = true;
+    try {
+      await this.acp!.request("session/load", { sessionId: id, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }).catch(() => {});
+      this.sessionId = id;
+    } finally {
+      this.replaying = false;
+    }
   }
 
   async newSession(): Promise<void> {
+    await this.stopGoalForSwitch(); // #460 case 1: same contract as loadSession above
     this.clearTurnRecovery();
     await this.start();
     if (this.sessionId) await this.acp!.request("session/close", { sessionId: this.sessionId }).catch(() => {});
@@ -1778,7 +1858,8 @@ class Backend {
     // Drop any parked permission (deny) but KEEP permissionMode — the user's Ask choice survives a respawn.
     for (const [, fn] of this.permPending) fn(null);
     this.permPending.clear(); this.pendingPerms = 0; this.askActive = false;
-    this.openCalls.clear(); // P-STALL.2: a respawn orphans any tracked calls
+    this.openCalls.clear();
+    this.aiLoc.clear(); // P-STALL.2: a respawn orphans any tracked calls
   }
 
   // P-STALL.2 (ADR-0263): there is NO time-based turn cutoff anymore. P-STALL.1's 10-minute silence
@@ -1801,6 +1882,7 @@ class Backend {
     const turn = new LiveTurn<ChatEvent>(options?.prompt ?? text, this.sessionId, () => pendingSnapshot(this.openCalls, Date.now()), options?.requestId);
     this.recoveryTurn = turn;
     this.openCalls.clear();
+    this.aiLoc.clear();
     turn.attach(onEventRaw, options?.signal);
     const onEvent = (e: ChatEvent) => turn.emit(e);
     let lockBlocked = false; // ADR-0217: the turn was refused because AskSage lockdown couldn't be satisfied
@@ -1858,7 +1940,9 @@ class Backend {
     this.turnSink = sink; // P-RECOVER.1: what clearTurnRecovery may release
     this.streamArm = arm; // P-HEALTH.3: a tool-call streaming beat is activity, exactly like an ACP update
     this.turnStartedAtMs = Date.now(); // P-INTERJECT.1: the /api/processes master-turn start stamp
-    this.openCalls.clear(); // P-STALL.2: fresh turn, fresh pending-call set
+    this.stepText.reset();
+    this.openCalls.clear();
+    this.aiLoc.clear(); // P-STALL.2: fresh turn, fresh pending-call set
     this.pulse.reset(); // P-LIVENESS.1: a new turn never inherits the last one's evidence
     this.recoverMark.clear(); // P-HEALTH.2: a new run never inherits a previous run's recovery marker
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
@@ -1976,6 +2060,7 @@ class Backend {
       if (this.recoveryTurn === turn) {
       this.writeClaims.endTurn("master"); // P-WAIT.1: the files this turn wrote are free for other workers
       this.openCalls.clear(); // P-STALL.2: pending-call tracking is per-turn
+      this.aiLoc.clear();
       this.askActive = false;
       this.chatGate.end(); // P-KG-INGEST.3: chat turn done → release any extraction waiting to resume
       // Fail-closed: any permission still parked at turn's end (stall/disconnect) is denied.
@@ -2036,6 +2121,7 @@ class Backend {
         this.turnStartedAtMs = null;
         this.askActive = false;
         this.openCalls.clear();
+        this.aiLoc.clear();
         this.chatGate.end();
         for (const fn of this.permPending.values()) fn(null);
       }
@@ -2058,6 +2144,8 @@ class Backend {
     const prevMode = this.permissionMode;
     this.permissionMode = "auto"; // unattended: auto-approve tool calls (the gate still scans every one)
     this.goalActive = true; this.goalCancelled = false;
+    let settleGoal: () => void = () => {};
+    this.goalSettled = new Promise<void>((r) => { settleGoal = r; });
     // P-GOAL.13 (ADR-0067): the loop's exec policy is the per-command-type DIAL, clamped by the managed
     // loop ceiling (ADR-0068, tighten-only). An unset dial defaults to the safest posture (T0 only).
     const loopMax = managedConfig().config?.security?.loop?.maxAutoTier;
@@ -2209,6 +2297,10 @@ class Backend {
       } catch { /* the report never blocks the loop's completion */ }
       // P-GOAL.13: clear the loop's exec posture so a later interactive turn isn't governed by a stale dial.
       this.loopDial = null; this.loopBlocks = []; this.loopIter = 0;
+      // #460 case 1: release the forced-switch waiter. Placed before the `done` emit on purpose: both run
+      // in this same synchronous frame, so `done` still reaches the stream before any waiter resumes, and
+      // a theoretical throw from the emit can never strand the waiter until its timeout.
+      this.goalSettled = null; settleGoal();
       onEvent({ type: "done" });
     }
   }
@@ -2231,6 +2323,23 @@ class Backend {
   cancelGoal(): void { if (this.goalActive) { this.goalCancelled = true; this.cancel(); } }
   /** Whether a /goal loop is currently running (so the UI routes Stop to cancelGoal, not cancelChat). */
   isGoalRunning(): boolean { return this.goalActive; }
+
+  /** #460 case 1 (P-SWITCH.1 follow-up): stop the running /goal loop, or a Main-owned automation (those
+   *  run through runGoal), and WAIT for it to unwind before the caller touches the session. Cancelling
+   *  alone is not enough: the forced switch previously cancelled only the maker TURN (clearTurnRecovery),
+   *  goalCancelled stayed false, and the loop's checker or next iteration then ran inside the newly
+   *  loaded session. Bounded so a wedged unwind can never hang the switch; goalCancelled stays true, so
+   *  a late-waking loop still exits at its next checkpoint without doing any work. No-op when idle. */
+  async stopGoalForSwitch(timeoutMs = 15_000): Promise<void> {
+    if (!this.goalActive) return;
+    this.cancelGoal();
+    const settled = this.goalSettled;
+    if (!settled) return;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, timeoutMs);
+      void settled.then(() => { clearTimeout(timer); resolve(); });
+    });
+  }
 
   /** P-GOAL.10 (ADR-0055): the cross-run evaluation surface — aggregate stats over the run-log plus the
    *  most-recent runs for a compact history view. Reads the workspace's `.omp/loops/run-log.jsonl`. */
@@ -2304,6 +2413,7 @@ class Backend {
     const a: Automation | undefined = listAutomations(ws).find((x) => x.id === id);
     if (!a) return { ran: false };
     this.autoRunning = true;
+    this.autoOwnsMain = a.kind !== "agent"; // agent runs live in startAgentRun's child, never Main's session
     // Stamp lastRunAt up-front so a slow run can't be re-fired by the next tick before it finishes.
     updateAutomation(ws, id, { lastRunAt: Date.now() });
     // P-AGENT.14 (ADR-0142): scheduled BUILT-AGENT runs. Fail-closed gate first: only a trusted, loadable,
@@ -2335,6 +2445,7 @@ class Backend {
         result = `error: ${e instanceof Error ? e.message : String(e)}`;
       } finally {
         this.autoRunning = false;
+        this.autoOwnsMain = false;
         updateAutomation(ws, id, { lastRunAt: Date.now(), lastResult: result.slice(0, 200) });
       }
       return { ran: true, result };
@@ -2353,6 +2464,7 @@ class Backend {
       result = `error: ${String((e as Error)?.message ?? e)}`;
     } finally {
       this.autoRunning = false;
+      this.autoOwnsMain = false;
       updateAutomation(ws, id, { lastRunAt: Date.now(), lastResult: result.slice(0, 200) });
     }
     return { ran: true, result };
@@ -2679,6 +2791,7 @@ class Backend {
     for (const fn of this.permPending.values()) fn(null);
     this.permPending.clear(); this.pendingPerms = 0;
     this.openCalls.clear();
+    this.aiLoc.clear();
     console.error(`[recover] master agent process is gone; starting a replacement${this.reviveId ? " and resuming the same chat session" : ""}`);
   }
 
@@ -2828,7 +2941,9 @@ class Backend {
           // gets the same refusal as the chat spawn. Returning null degrades to the shared (also gated)
           // connection; it never becomes an ungated shortcut. Logged because the catch below is silent.
           if (!GATE) { console.error(`[acp:util] ${gateRefusal()}`); return null; }
-          const acp = spawned = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...(existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []), ...ompConfigArgs()], currentWorkspace());
+          // Security review residual: the util child inherits the engine env (global provider keys, credential
+          // env) and runs real tools, so it gets the same fail-closed redaction hook as master and lanes, last.
+          const acp = spawned = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...(existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []), ...(existsSync(VAULT_REDACT_EXT) ? ["-e", VAULT_REDACT_EXT] : []), ...ompConfigArgs()], currentWorkspace(), vaultRedactEnv({}));
           // A util completion is TEXT-ONLY: collect assistant text into the active sink, ignore everything
           // else (no tool calls, no permissions, no gate-block surfacing — that's the chat connection's job).
           acp.onNotify = (method: string, params: any) => {

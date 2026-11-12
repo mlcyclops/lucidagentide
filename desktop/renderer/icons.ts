@@ -150,6 +150,8 @@ const RAW: Record<string, string> = {
   // P-MARKET.1: plugin marketplace — a package cube (lid fold + seam)
   market: P("M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z")
     + P("M3.3 7 12 12l8.7-5") + P("M12 12v9.4") + P("M16.5 9.4 7.5 4.2"),
+  // P-PLUGINS.1 (ADR-0461): the Plugins drawer - a jigsaw piece (tab up and right, sockets left and down)
+  plugins: P("M5 8.5h3.2a2.3 2.3 0 1 1 4.6 0H16v3.2a2.3 2.3 0 1 1 0 4.6v3.2h-3.2a2.3 2.3 0 1 0-4.6 0H5v-3.4a2.3 2.3 0 1 0 0-4.6z"),
   // P-FAV.1: favorite star (model picker) - filled via CSS when starred
   star: P("M12 4.4l2.35 4.9 5.15.65-3.8 3.55 1 5.1L12 16.05 7.3 18.6l1-5.1-3.8-3.55 5.15-.65z"),
   // P-TOOLFAIL.2: toolbox (failed tool-call actions) — box + lid fold + top handle + latch
@@ -182,6 +184,10 @@ export function icon(name: keyof typeof RAW | string, size = 18, extraClass = ""
   const hook = ACTION.has(name as string) ? " ic-action" : "";
   return `<svg class="ic${hook}${extraClass ? " " + extraClass : ""}" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 }
+
+/** The raw 24×24 path markup of a glyph, for drawing it inside a larger SVG (the generated plugin posters).
+ *  Unknown names fall back to `info`, like icon(). */
+export function iconBody(name: string): string { return RAW[name] ?? RAW.info!; }
 
 /** The LUCID wordmark π glyph used in the titlebar. */
 export const piMark = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 8h14"/><path d="M9 8v9"/><path d="M16 8v7a2 2 0 0 0 2 2"/></svg>`;

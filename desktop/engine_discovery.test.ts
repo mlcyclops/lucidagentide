@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  discoveryDir, discoveryPath, listDiscoveries, parseDiscovery,
+  discoveryDir, discoveryPath, listDiscoveries, parseDiscovery, pidAlive, pruneStaleDiscovery,
   readDiscovery, removeDiscovery, verifyDiscovery, writeDiscovery,
 } from "./engine_discovery.ts";
 import type { EngineDiscovery } from "./engine_discovery.ts";
@@ -86,6 +86,20 @@ describe("engine discovery (P-TUI.0)", () => {
     removeDiscovery(p);
     expect(readDiscovery(p)).toBeNull();
     removeDiscovery(p); // second remove: no throw
+  });
+
+  test("a stale file goes only when its process is gone; a live pid (booting engine, reused pid) keeps it", () => {
+    const p = discoveryPath(dir, 5319);
+    writeDiscovery(p, d());
+    expect(pruneStaleDiscovery(p, d(), () => true)).toBe(false);
+    expect(readDiscovery(p)).not.toBeNull();
+    expect(pruneStaleDiscovery(p, d(), () => false)).toBe(true);
+    expect(readDiscovery(p)).toBeNull();
+  });
+
+  test("pidAlive: this process is alive; a pid no process holds is not", () => {
+    expect(pidAlive(process.pid)).toBe(true);
+    expect(pidAlive(2 ** 22 + 7)).toBe(false);
   });
 
   test("the dir is userData when Electron launched us, else ~/.omp", () => {

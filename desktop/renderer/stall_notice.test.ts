@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { pendingSummaryLine, slowPhaseLabel, slowToastCopy } from "./stall_notice.ts";
+import { pendingSummaryLine, slowPhaseLabel, slowToastCopy, snapshotPhaseLabel, STARTING_AGENT_PHASE } from "./stall_notice.ts";
 
 const PENDING = [
   { label: "subagent explore: map callers", elapsedMs: 12 * 60_000 },
@@ -24,6 +24,27 @@ describe("slowPhaseLabel", () => {
   test("with pending tasks the quiet reads as WORK, with the count", () => {
     expect(slowPhaseLabel(240_000, PENDING)).toBe("Working · waiting on 2 tasks · quiet for 4 min");
     expect(slowPhaseLabel(120_000, [PENDING[0]!])).toContain("1 task ·");
+  });
+});
+
+describe("snapshotPhaseLabel", () => {
+  const T0 = 1_000_000;
+  const running = { running: true, sessionId: "s1", startedAt: T0, pending: [] };
+  test("a fresh send's opening snapshot never says Reconnected: it keeps the turn's own phase", () => {
+    expect(snapshotPhaseLabel(running, false, "Sizing up the problem\u2026", T0)).toBe("Sizing up the problem\u2026");
+  });
+  test("a fresh send whose agent session does not exist yet says the agent is starting", () => {
+    expect(snapshotPhaseLabel({ ...running, sessionId: null }, false, "Sizing up the problem\u2026", T0)).toBe(STARTING_AGENT_PHASE);
+  });
+  test("only a re-joined stream (adopted or re-attached) says Reconnected", () => {
+    expect(snapshotPhaseLabel(running, true, "[connection to the engine dropped]", T0)).toBe("Reconnected");
+    expect(snapshotPhaseLabel({ ...running, sessionId: null }, true, "x", T0)).toBe("Reconnected");
+  });
+  test("pending work and a finished turn read the same either way", () => {
+    for (const rejoined of [false, true]) {
+      expect(snapshotPhaseLabel({ ...running, pending: PENDING }, rejoined, "x", T0 + 240_000)).toBe("Working \u00b7 waiting on 2 tasks \u00b7 quiet for 4 min");
+      expect(snapshotPhaseLabel({ ...running, running: false }, rejoined, "x", T0)).toBe("Finishing reply");
+    }
   });
 });
 

@@ -21,11 +21,11 @@ import { cuiProviderVerdict, type CuiVerdict } from "./cui_policy.ts";
 /** Closed set of provider ids. A new provider is a deliberate registry change. */
 export type CreatorProviderId =
   | "elevenlabs" | "dots-tts" | "whistle" | "suno" | "comfyui" | "threejs" | "blender" | "unreal"
-  | "hyperframes" | "dgx-avatar" | "heygen" | "dgx-vision" | "design" | "drift"
+  | "hyperframes" | "openfilm" | "dgx-avatar" | "heygen" | "dgx-vision" | "design" | "drift"
   | "dgx-cad" | "pdf-markup" | "autodesk-aps" | "bluebeam-studio" | "classcad" | "oda-drawings";
 export const CREATOR_PROVIDER_IDS: readonly CreatorProviderId[] = [
   "elevenlabs", "dots-tts", "whistle", "suno", "comfyui", "threejs", "blender", "unreal",
-  "hyperframes", "dgx-avatar", "heygen", "dgx-vision", "design", "drift",
+  "hyperframes", "openfilm", "dgx-avatar", "heygen", "dgx-vision", "design", "drift",
   "dgx-cad", "pdf-markup", "autodesk-aps", "bluebeam-studio", "classcad", "oda-drawings",
 ] as const;
 
@@ -288,7 +288,7 @@ const UNREAL: CreatorIntegrationSpec = {
 
 // ── video composition + avatars (free / self-hosted first, paid catalogued) ──
 // HyperFrames (Apache-2.0, hyperframes.heygen.com) renders HTML compositions to video with headless Chrome
-// plus FFmpeg. The DGX avatar service is the Loader's MuseTalk / EchoMimic pipeline behind a loopback HTTP
+// plus FFmpeg. The DGX avatar service is the platform's MuseTalk / EchoMimic pipeline behind a loopback HTTP
 // API on the box (contract section 2a). HeyGen is the paid cloud counterpart, catalogued only.
 
 const HYPERFRAMES: CreatorIntegrationSpec = {
@@ -309,6 +309,26 @@ const HYPERFRAMES: CreatorIntegrationSpec = {
   cui: { posture: "on-device" },
 };
 
+// OpenFilm (MIT, github.com/openfilm/openfilm) is an HTML film format plus a CLI: `look` checks that the same
+// t draws the same picture and writes a contact sheet, `render` encodes the film. CREATOR-OPENFILM (ADR-0457).
+const OPENFILM: CreatorIntegrationSpec = {
+  id: "openfilm",
+  name: "OpenFilm (local)",
+  group: "video",
+  kind: "local-app",
+  transports: ["child-process"],
+  authKind: "local",
+  consentRequired: false,
+  docsUrl: "https://github.com/openfilm/openfilm",
+  capabilities: [
+    { id: "video-compose", status: "available", surface: "cli", detail: "openfilm render turns a film.html (tracks of page, video, image, and sound clips) into MP4, WebM, or MOV with headless Chromium and FFmpeg." },
+    { id: "render-animation", status: "available", surface: "cli", detail: "Pages draw by window.film.frame(t): the same t draws the same picture, so a render is deterministic." },
+    { id: "runtime-feedback", status: "available", surface: "cli", detail: "openfilm look draws a contact sheet twice in shuffled orders and reports nondeterministic frames, page errors, failed fonts, missing sounds, and cut-off text." },
+  ],
+  note: "MIT CLI run as a fixed-argv child process: only look and render ever run (get, open, update, skill, skills, and doctor never do), no Studio server is spawned (LUCID marks the project as shown first), and telemetry, the update check, and browser opening are off. Declare node.exe plus node_modules/openfilm/bin/openfilm.mjs as its first arg; npx and shell shims are refused.",
+  cui: { posture: "on-device" },
+};
+
 const DGX_AVATAR: CreatorIntegrationSpec = {
   id: "dgx-avatar",
   name: "DGX avatar render",
@@ -322,7 +342,7 @@ const DGX_AVATAR: CreatorIntegrationSpec = {
     { id: "avatar-video", status: "available", surface: "api", detail: "Lip-synced talking-head video from a WAV plus a template clip (MuseTalk or EchoMimic) on your own DGX GPU." },
     { id: "video-compose", status: "available", surface: "api", detail: "Optional HyperFrames title, subtitle, and caption compose on the box; caption timing is an estimate from character counts." },
   ],
-  note: "The DGX Loader's avatar service (port 8088, loopback on the box) reached through an SSH forward. Import it from the Loader mailbox so it arrives attested as an enclave host. A real person's likeness needs their consent.",
+  note: "The Private AI Platform's avatar service (port 8088, loopback on the box) reached through an SSH forward. Import it from the platform mailbox so it arrives attested as an enclave host. A real person's likeness needs their consent.",
   cui: { posture: "enclave" },
 };
 
@@ -345,7 +365,7 @@ const HEYGEN: CreatorIntegrationSpec = {
 };
 
 // ── Design suite (image, vector, motion) ─────────────────────────────────────
-// The DGX vision service is the Loader's `vision` kind (port 8090, loopback on the box): SAM 2.1, Florence-2
+// The DGX vision service is the platform's `vision` kind (port 8090, loopback on the box): SAM 2.1, Florence-2
 // (the native florence-community port), Depth Anything V2 Small, Swin2SR and VTracer, all permissively
 // licensed, loaded from SHA-256-verified local snapshots with trust_remote_code off. The editor itself is
 // in the renderer and needs nothing but this machine.
@@ -369,7 +389,7 @@ const DGX_VISION: CreatorIntegrationSpec = {
     { id: "vision-label", status: "available", surface: "api", detail: "Short region labels from Florence-2. Labels are model output: untrusted data, never instructions." },
     { id: "vectorize", status: "available", surface: "api", detail: "Raster to SVG with VTracer; the SVG is allowlist-checked on the box and again before LUCID stores it." },
   ],
-  note: "The DGX Loader's vision service (port 8090, loopback on the box) reached through an SSH forward. Capability comes from its /health probe: a model the box has not fetched and verified is reported absent, never assumed. Import it from the Loader mailbox so it arrives attested as an enclave host.",
+  note: "The Private AI Platform's vision service (port 8090, loopback on the box) reached through an SSH forward. Capability comes from its /health probe: a model the box has not fetched and verified is reported absent, never assumed. Import it from the platform mailbox so it arrives attested as an enclave host.",
   cui: { posture: "enclave" },
 };
 
@@ -438,7 +458,7 @@ const DGX_CAD: CreatorIntegrationSpec = {
     { id: "cad-convert", status: "available", surface: "api", detail: "DWG to DXF through the LibreDWG dwg2dxf CLI, run out of process on the box." },
     { id: "bim-inspect", status: "available", surface: "api", detail: "Read IFC models with IfcOpenShell: schema, project name, element counts, and storeys." },
   ],
-  note: "The DGX Loader's CAD service (port 8089, loopback on the box). Capability comes from its /health probe: a library the box lacks is reported absent, never assumed.",
+  note: "The Private AI Platform's CAD service (port 8089, loopback on the box). Capability comes from its /health probe: a library the box lacks is reported absent, never assumed.",
   cui: { posture: "enclave" },
 };
 
@@ -531,7 +551,7 @@ const ODA_DRAWINGS: CreatorIntegrationSpec = {
 
 export const CREATOR_INTEGRATIONS: readonly CreatorIntegrationSpec[] = [
   ELEVENLABS, DOTS_TTS, WHISTLE, SUNO, COMFYUI, THREEJS, BLENDER, UNREAL,
-  HYPERFRAMES, DGX_AVATAR, HEYGEN, DGX_VISION, DESIGN, DRIFT,
+  HYPERFRAMES, OPENFILM, DGX_AVATAR, HEYGEN, DGX_VISION, DESIGN, DRIFT,
   DGX_CAD, PDF_MARKUP, AUTODESK_APS, BLUEBEAM_STUDIO, CLASSCAD, ODA_DRAWINGS,
 ] as const;
 
@@ -562,7 +582,7 @@ export interface CreatorEndpointDef {
    *  and never invented by LUCID: without it, generation refuses instead of guessing a graph. */
   workflow?: string;
   /** CUI lockdown: this endpoint is a DGX enclave host, either user-attested in Creator Studio or imported
-   *  from the DGX Loader mailbox (lucid-creator-endpoint v1). Absent means not attested. */
+   *  from the Private AI Platform mailbox (lucid-creator-endpoint v1). Absent means not attested. */
   enclave?: boolean;
   enabled: boolean;
 }

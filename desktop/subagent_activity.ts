@@ -64,11 +64,23 @@ const clip = (s: unknown, n: number): string => {
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 };
 
-/** A tool call's one-line label: the model's own intent note (`_i`) when present, else the most
- *  path/command-shaped argument. */
+/** A run of one character this long is a model stuck in a loop, not prose (a local model on a mismatched
+ *  chat template streamed 4,096 "!" per message until its token cap). */
+const DEGENERATE_RUN = /(\S)\1{63,}/u;
+
+/** A thinking/text step's label. Degenerate output names the failure instead of quoting it, so the
+ *  card says what went wrong rather than painting a row of "!!!!". */
+function proseLabel(text: string): string {
+  const run = DEGENERATE_RUN.exec(text);
+  if (run) return `model output degenerated ("${run[1]}" repeated ${run[0].length.toLocaleString("en-US")} times)`;
+  return clip(text, LABEL_CAP);
+}
+
+/** A tool call's one-line label: the model's own intent note when present (omp now sends it as `i`;
+ *  older transcripts carry `_i`), else the most path/command-shaped argument. */
 function toolLabel(args: Record<string, unknown> | undefined): string {
   if (!args || typeof args !== "object") return "";
-  for (const k of ["_i", "path", "file_path", "command", "url", "pattern", "query", "title"]) {
+  for (const k of ["i", "_i", "path", "file_path", "command", "url", "pattern", "query", "title"]) {
     const v = (args as Record<string, unknown>)[k];
     if (typeof v === "string" && v.trim()) return clip(v, 120);
   }
@@ -103,9 +115,9 @@ export function parseSubagentTranscript(jsonl: string, maxSteps = STEP_CAP): { a
     }
     if (role !== "assistant") continue;
     for (const c of content as { type?: string; thinking?: string; text?: string; name?: string; arguments?: Record<string, unknown> }[]) {
-      if (c?.type === "thinking" && c.thinking) push({ kind: "thinking", label: clip(c.thinking, LABEL_CAP) });
-      else if (c?.type === "toolCall") { tools += 1; push({ kind: "tool", tool: clip(c.name, 30) || "tool", label: toolLabel(c.arguments) }); }
-      else if (c?.type === "text" && c.text) push({ kind: "text", label: clip(c.text, LABEL_CAP) });
+      if (c?.type === "thinking" && c.thinking) push({ kind: "thinking", label: proseLabel(c.thinking) });
+      else if (c?.type === "toolCall") { tools += 1; push({ kind: "tool", tool: clip(c.name, 30) || "tool", label: toolLabel(c.arguments) || (c.name === "yield" ? "result" : "") }); } // a structured yield ({ data: {...} }) has no string argument; it is still the run's final step
+      else if (c?.type === "text" && c.text) push({ kind: "text", label: proseLabel(c.text) });
     }
   }
   return { assignment, model, tools, steps };

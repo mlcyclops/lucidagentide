@@ -20,6 +20,7 @@ import { closeSync, fchmodSync, mkdirSync, openSync, readFileSync, writeFileSync
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { nextFire, parseCron } from "./cron.ts";
+import type { RepoView } from "./repo_identity.ts";
 
 export type MissedPolicy = "run-once" | "skip";
 export type RunOutcome = "ok" | "error" | "timeout" | "waiting" | "suspended" | "cancelled";
@@ -107,6 +108,14 @@ export function normalizeJobSpec(raw: unknown): { ok: true; spec: Required<JobSp
   const maxMinutes = Math.min(MAX_MINUTES_CAP, Math.max(1, Math.round(Number(o.maxMinutes ?? MAX_MINUTES_DEFAULT) || MAX_MINUTES_DEFAULT)));
   const missed: MissedPolicy = o.missed === "skip" ? "skip" : "run-once";
   return { ok: true, spec: { name, prompt, target, cron, armed: o.armed === true, autoApprove: o.autoApprove === true, maxMinutes, missed } };
+}
+
+/** A lane's repo as the Jobs sheet shows it (JobTarget.repo, display only): the push target's web page, else
+ *  `owner/repo`, else the repo folder's name; undefined outside a repo. */
+export function jobTargetRepo(view: RepoView | null): string | undefined {
+  if (!view) return undefined;
+  const push = view.push;
+  return push?.webUrl || (push?.owner && push.repo ? `${push.owner}/${push.repo}` : "") || view.name || undefined;
 }
 
 export function createJob(spec: Required<JobSpec>, now = Date.now(), id = `job_${now.toString(36)}_${Math.random().toString(36).slice(2, 8)}`): ScheduledJob {

@@ -3,8 +3,9 @@
 
 // Increment P-JEV.2 (ADR-0377) - Jev in the chat: the per-turn judgment trace. Proves, against the REAL
 // pi-ai judge classes, the REAL extension entry point and the BUILT renderer bundle, that:
-//   (1) the extension loaded the way omp loads it (default export, env-driven) wraps pi-ai's TypeSafeJudge
-//       so a judgment answered by a (local, fake) TypeSafe endpoint reaches the desktop's receiver as a
+//   (1) the extension loaded the way omp loads it (default export, env-driven) wraps pi-ai's NativeJudge
+//       (pi-ai 18.9.2's rename of the TypeSafe judge class) so a judgment answered by a (local, fake)
+//       TypeSafe endpoint reaches the desktop's receiver as a
 //       parseable report BEFORE omp gets the answer, and the answer omp gets is untouched;
 //   (2) a failing TypeSafe call is reported with its error, still throws (omp's fallback stays intact), and
 //       the TextJudge fallback that answers next is reported too, naming the model that answered;
@@ -17,7 +18,7 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TextJudge, TypeSafeJudge } from "@oh-my-pi/pi-ai/judgment";
+import { NativeJudge, TextJudge } from "@oh-my-pi/pi-ai/judgment";
 import judgmentExtension from "../../harness/omp/judgment_extension.ts";
 import { parseJudgmentReport } from "../../harness/judgment/trace_schema.ts";
 import { jevConsulted, judgmentPurpose, type JudgmentReport } from "../../harness/judgment/trace.ts";
@@ -74,14 +75,14 @@ try {
   process.env.LUCID_JUDGMENT_URL = `${base}/api/judgment/trace?t=demo-token`;
   process.env.LUCID_INTERJECT_TARGET = "master";
   judgmentExtension({});
-  const judge = new TypeSafeJudge({ apiKey: "demo-key", baseUrl: base, timeoutMs: 2000 });
+  const judge = new NativeJudge({ apiKey: "demo-key", baseUrl: base, timeoutMs: 2000 });
   const questions = {
     level: { type: "choice" as const, instructions: "How hard is this?", criteria: { low: null, high: "needs planning" } },
     stopped: { type: "noul" as const, instructions: "Did it stop early?" },
   };
   const result = await judge.judge({ state: { request: "refactor the parser" }, questions });
   order.push("returned");
-  check("the real TypeSafeJudge still answers through the wrapper (answer untouched)", result.model === "jev-1.13.0" && result.answers.level.choice === "high" && result.answers.stopped.noul === 0.9);
+  check("the real NativeJudge (TypeSafe wire) still answers through the wrapper (answer untouched)", result.model === "jev-1.13.0" && result.answers.level.choice === "high" && result.answers.stopped.noul === 0.9);
   check("the desktop RECEIVED the report before omp got the answer (awaited POST, no race with done)", order.join(">") === "received>returned");
   const r0 = received[0];
   check("the report parses at the boundary and names Jev by model", !!r0 && r0.backend === "typesafe" && r0.model === "jev-1.13.0" && r0.target === "master");

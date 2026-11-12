@@ -62,6 +62,28 @@ describe("parseSubagentTranscript", () => {
     expect(p.tools).toBe(2);
     expect(p.steps.length).toBeGreaterThan(0);
   });
+  test("a tool step reads the agent's intent (omp's current `i`, and the older `_i`) before its path", () => {
+    const p = parseSubagentTranscript([
+      msg("assistant", [{ type: "toolCall", name: "read", arguments: { i: "Reading the registry reader", path: "desktop/managed_config.ts" } }]),
+      msg("assistant", [{ type: "toolCall", name: "grep", arguments: { _i: "Finding reg query", pattern: "reg" } }]),
+      msg("assistant", [{ type: "toolCall", name: "read", arguments: { path: "desktop/dev.ts" } }]),
+    ].join("\n"));
+    expect(p.steps.map((s) => s.label)).toEqual(["Reading the registry reader", "Finding reg query", "desktop/dev.ts"]);
+  });
+  test("a scout's structured yield ({ data: {...} }) is still the run's last step", () => {
+    const p = parseSubagentTranscript([
+      msg("assistant", [{ type: "toolCall", name: "grep", arguments: { pattern: "fleet" } }]),
+      msg("assistant", [{ type: "toolCall", name: "yield", arguments: { data: { summary: "done", files: [] } } }]),
+    ].join("\n"));
+    expect(p.steps.at(-1)).toEqual({ kind: "tool", tool: "yield", label: "result" });
+  });
+  test("degenerate model output is named, not quoted (the AosGapMap '!!!!' row)", () => {
+    const p = parseSubagentTranscript([
+      msg("assistant", [{ type: "thinking", thinking: `The${"!".repeat(4095)}` }]),
+      msg("assistant", [{ type: "text", text: "a row of ==== is fine" }]),
+    ].join("\n"));
+    expect(p.steps.map((s) => s.label)).toEqual(['model output degenerated ("!" repeated 4,095 times)', "a row of ==== is fine"]);
+  });
   test("empty transcript → empty view", () => {
     const p = parseSubagentTranscript("");
     expect(p).toEqual({ assignment: "", model: null, tools: 0, steps: [] });

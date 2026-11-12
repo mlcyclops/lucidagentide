@@ -22,7 +22,7 @@
 export const LUCID_INACTIVE_CAUSE = "lucid:inactive-account";
 
 /** A named account persisted in the settings store. `key` holds the secret for kind "key" (same
- *  0600-file posture as the legacy GuiSettings.keys slot). For kind "oauth" the record exists only to
+ *  custody as GuiSettings.keys: the engine OS vault, ADR-0472, hydrated by load()). For kind "oauth" the record exists only to
  *  carry a user rename; the credential itself lives in omp's vault under `identityKey`. */
 export interface StoredAccount {
   id: string;               // "key:<uuid>" | "oauth:<identityKey>"

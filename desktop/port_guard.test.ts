@@ -123,7 +123,6 @@ describe("ownerProbeSpec", () => {
     const script = spec!.args[1];
     expect(script).toContain("lsof -tnP -iTCP:5320 -sTCP:LISTEN");
     expect(script).toContain("ps -p");
-    expect(script).toContain("-o pid=,lstart=,command=");
   });
   test("unknown platforms get null, not a guessed probe", () => {
     expect(ownerProbeSpec("freebsd", 5319)).toBeNull();
@@ -151,7 +150,12 @@ describe("parseOwnerProbe", () => {
       name: "bun",
       startedAt: "2026-08-27T09:14:02.0000000-07:00",
       command: "C:\\Users\\dev\\.bun\\bin\\bun.exe",
+      parentPid: null,
     });
+  });
+  test("win32 carries the listener's parent pid, which tells a live instance's engine from an orphan", () => {
+    const withParent = JSON.stringify({ Id: 30984, ProcessName: "lucid-engine", StartTime: null, Path: "C:\\x\\lucid-engine.exe", ParentProcessId: 28400 });
+    expect(parseOwnerProbe("win32", withParent)!.parentPid).toBe(28400);
   });
   test("win32 prefers the full CommandLine over the bare image Path (argv identifies the squatter)", () => {
     const withArgv = JSON.stringify({
@@ -177,17 +181,18 @@ describe("parseOwnerProbe", () => {
     expect(info!.startedAt).toBe(new Date(1756300000000).toISOString());
     expect(info!.command).toBe("C:\\Users\\dev\\.bun\\bin\\bun.exe");
   });
-  test("posix ps line: pid, five-token lstart, command with spaces", () => {
-    const info = parseOwnerProbe("linux", " 40409 Wed Aug 27 09:14:02 2026 bun server.ts --port 5319\n");
+  test("posix ps line: pid, ppid, five-token lstart, command with spaces", () => {
+    const info = parseOwnerProbe("linux", " 40409     1 Wed Aug 27 09:14:02 2026 bun server.ts --port 5319\n");
     expect(info).toEqual({
       pid: 40409,
       name: "bun",
       startedAt: "Wed Aug 27 09:14:02 2026",
       command: "bun server.ts --port 5319",
+      parentPid: 1,
     });
   });
   test("posix ps pads single-digit days with an extra space; the parse still lands", () => {
-    const info = parseOwnerProbe("darwin", "312 Mon Sep  7 08:00:00 2026 /usr/local/bin/node dist/index.js");
+    const info = parseOwnerProbe("darwin", "312 77 Mon Sep  7 08:00:00 2026 /usr/local/bin/node dist/index.js");
     expect(info).not.toBeNull();
     expect(info!.pid).toBe(312);
     expect(info!.startedAt).toBe("Mon Sep 7 08:00:00 2026");

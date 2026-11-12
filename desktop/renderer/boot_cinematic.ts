@@ -10,8 +10,12 @@
 // half: a minimum beat so it never strobes, a HARD CAP so it can never outlive readiness by long, done
 // gates on the session actually arriving (voice is reported, never awaited), Esc/Skip always works, and
 // prefers-reduced-motion collapses it to a static card. Mounts at most once per app load (caller gates).
+// P-SEASON.1 (ADR-0525): when the root carries data-season, the sprinter wears that season's costume and
+// the finale is the season's act (mascot_season.ts) instead of the keyboard slice.
 
-import { BLADE_DIAG, BLADE_FLAT, KEYBOARD_LEFT, KEYBOARD_RIGHT, KEYBOARD_WHOLE, MASCOT_PALETTE, MASCOT_W, MASCOT_H, MASCOT_RUN_FRAMES, MASCOT_RUN_BEAT_MS, keyboardLitKeys, paintFrame, paintRows } from "./mascot.ts";
+import { BLADE_DIAG, BLADE_FLAT, KEYBOARD_LEFT, KEYBOARD_RIGHT, KEYBOARD_WHOLE, MASCOT_FRAMES, MASCOT_PALETTE, MASCOT_W, MASCOT_H, MASCOT_RUN_FRAMES, MASCOT_RUN_BEAT_MS, keyboardLitKeys, mirrorFrame, paintFrame, paintRows } from "./mascot.ts";
+import { paintSeasonExtras, seasonActAt, seasonActMs, seasonPalette } from "./mascot_season.ts";
+import { seasonById, type SeasonId } from "./seasons.ts";
 
 export interface BootSignals {
   /** The local gate answered (we are running, so this is true the moment the shell paints). */
@@ -109,6 +113,21 @@ export function paintFinaleScene(ctx: CanvasRenderingContext2D, tMs: number, sca
   }
 }
 
+/** How long the finale plays before hand-off: the keyboard slice, or the active season's act in its
+ *  place (P-SEASON.1). Pure. */
+export function finaleMs(season: SeasonId | null): number {
+  return season ? seasonActMs(season) : FINALE_MS;
+}
+
+/** P-SEASON.1: the seasonal finale. The costumed ninja performs the season's act (props and all) where
+ *  the keyboard slice would play; `nx/footY` = ninja top-left, as for paintFinaleScene. */
+export function paintSeasonFinale(ctx: CanvasRenderingContext2D, season: SeasonId, tMs: number, scale: number, nx: number, footY: number): void {
+  const act = seasonActAt(season, tMs);
+  const rows = MASCOT_FRAMES[act.frame] ?? MASCOT_FRAMES.idleA!;
+  paintRows(ctx, act.mirrored ? mirrorFrame(rows) : rows, scale, nx, footY - act.lift * scale, seasonPalette(season, MASCOT_PALETTE));
+  paintSeasonExtras(ctx, season, act, act.frame, act.mirrored, scale, nx, footY);
+}
+
 export interface BootHandle { dispose(): void }
 
 /** Mount the full-screen cinematic. `reducedMotion` renders the static card variant (no rain, no
@@ -125,6 +144,9 @@ export function mountBootCinematic(getSignals: () => BootSignals, onDone: () => 
   const linesEl = ov.querySelector(".bc-lines") as HTMLElement;
   const ctx = cv.getContext("2d")!;
   const t0 = performance.now();
+  // P-SEASON.1: app.ts stamps the active season on the root before boot; absent = the classic splash.
+  const season = seasonById(document.documentElement.dataset.season)?.id ?? null;
+  const palette = seasonPalette(season, MASCOT_PALETTE);
   let disposed = false;
   let finishing = false;
   let raf = 0;
@@ -205,11 +227,17 @@ export function mountBootCinematic(getSignals: () => BootSignals, onDone: () => 
     const spriteW = MASCOT_W * scale;
     const footY = cv.height - MASCOT_H * scale - 8;
     if (readyAt) {
-      // The finale: stop, draw, slice the keyboard, follow through (shared painter - see QA pins).
-      paintFinaleScene(ctx, now - readyAt, scale, Math.floor(cv.width / 2 - spriteW * 1.6), footY);
+      // The finale: stop, draw, slice the keyboard, follow through (shared painter - see QA pins), or
+      // the season's act in its place.
+      const nx = Math.floor(cv.width / 2 - spriteW * 1.6);
+      if (season) paintSeasonFinale(ctx, season, now - readyAt, scale, nx, footY);
+      else paintFinaleScene(ctx, now - readyAt, scale, nx, footY);
     } else {
       const r = bootRunnerX(now - t0, cv.width, spriteW);
-      if (r.x > -spriteW && r.x < cv.width) paintFrame(ctx, r.frame, scale, Math.floor(r.x), footY);
+      if (r.x > -spriteW && r.x < cv.width) {
+        paintFrame(ctx, r.frame, scale, Math.floor(r.x), footY, palette);
+        if (season) paintSeasonExtras(ctx, season, null, r.frame, false, scale, Math.floor(r.x), footY);
+      }
     }
   };
   loop();
@@ -217,9 +245,9 @@ export function mountBootCinematic(getSignals: () => BootSignals, onDone: () => 
     paintLines();
     const elapsed = performance.now() - t0;
     if (bootDone(getSignals(), elapsed)) {
-      // Play the blade finale to the end, then hand off.
+      // Play the finale (blade or season act) to the end, then hand off.
       readyAt = performance.now();
-      window.setTimeout(() => finish(false), FINALE_MS + 150);
+      window.setTimeout(() => finish(false), finaleMs(season) + 150);
       window.clearInterval(lineTimer);
     }
   }, 250);

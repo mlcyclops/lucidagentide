@@ -58,7 +58,8 @@ jobs:
           - os: windows-latest
             label: Windows (NSIS + portable + MSI + AppX, x64)
             script: dist:win
-          - os: ubuntu-latest
+          # ADR-0459: pinned. ubuntu-latest moved to 26.04, whose 7.9 GB tmpfs /tmp fails rpm packaging.
+          - os: ubuntu-24.04
             label: Linux (AppImage + deb + rpm, x64)
             script: dist:linux
           # P-ARM64.B: GitHub's native arm64 Linux runner, so no cross-build and no QEMU. Everything
@@ -441,8 +442,8 @@ jobs:
             [ -n "$d" ] || { echo "::error::no sha256 for release asset $1"; exit 1; }
             echo "$d"
           }
-          ARM=$(sha "LucidAgent-mac-arm64.pkg")
-          X64=$(sha "LucidAgent-mac-x64.pkg")
+          ARM=$(sha "LucidAgent-mac-arm64.zip")
+          X64=$(sha "LucidAgent-mac-x64.zip")
           sed -i -E \
             -e "s|^  version \".*\"$|  version \"${V}\"|" \
             -e "s|^  sha256 arm:   \".*\",$|  sha256 arm:   \"${ARM}\",|" \

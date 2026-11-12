@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { JobScheduler, type JobSchedulerDeps, type SchedulerLaneView } from "./job_scheduler.ts";
-import { createJob, dueVerdict, normalizeJobSpec, withRun, type ScheduledJob } from "./scheduled_jobs.ts";
+import { createJob, dueVerdict, jobTargetRepo, normalizeJobSpec, withRun, type ScheduledJob } from "./scheduled_jobs.ts";
 
 const T0 = new Date(2026, 9, 8, 1, 0, 0, 0).getTime(); // 2026-10-08 01:00 local
 const H = 3600_000;
@@ -35,6 +35,16 @@ describe("normalizeJobSpec", () => {
       expect(r.spec).toMatchObject({ name: "n", armed: false, autoApprove: false, missed: "run-once", maxMinutes: 720 });
       expect(r.spec.target).toEqual({ name: "repo", cwd: "C:\\work\\repo" });
     }
+  });
+});
+
+describe("jobTargetRepo", () => {
+  const view = { root: "C:\\w\\lucid", name: "lucid", branch: "main", worktree: false, remotes: 1, push: { remote: "origin", branch: "main", host: "github.com", provider: "github", owner: "mlcyclops", repo: "lucidagentide", webUrl: "https://github.com/mlcyclops/lucidagentide" } } as const;
+  test("a lane's repo reads as the push target's page, else owner/repo, else the folder; none outside a repo", () => {
+    expect(jobTargetRepo(view)).toBe("https://github.com/mlcyclops/lucidagentide");
+    expect(jobTargetRepo({ ...view, push: { ...view.push, webUrl: "" } })).toBe("mlcyclops/lucidagentide");
+    expect(jobTargetRepo({ ...view, remotes: 0, push: null })).toBe("lucid");
+    expect(jobTargetRepo(null)).toBeUndefined();
   });
 });
 
