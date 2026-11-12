@@ -4,7 +4,11 @@
 // hub with the drive scope through the signed op POST /v1/console/invite, for the user its certificate names, good
 // once and for 24 hours), a passkey registered from it (WebAuthn ES256, user verification required), a server-side
 // session in the cookie `__Host-lrc` (12 h idle, 7 days at most), every POST with this console's Origin and the header
-// `X-Lucid-Console: 1`, and sign-in attempts limited per source address. Admin actions go to the security log.
+// `X-Lucid-Console: 1`, and sign-in attempts limited per source address (behind a TLS front, the address the front
+// appends to X-Forwarded-For). Admin actions go to the security log. An admin keeps the serial of the hub certificate
+// whose invite made it: once the relay's CRL revokes that serial its sessions end and it cannot sign in. A signed-in
+// admin removes another (POST /console/api/admins/remove; never the last one itself), and `lucid-relay console
+// remove-admin <email>` does it with the relay stopped.
 //
 // It shows, read-only: relay health, license, seats, nodes seen, CRL and directory versions (State::console_status),
 // the relay's own recent log lines (a ring fed by the logger's tap, newest first, by category and level, downloadable
@@ -13,14 +17,14 @@
 use crate::codec::{b64u, exact_keys, is_int, js_trim, num_is, parse_json, sha256_hex, str_of, stringify, unb64u};
 use crate::console_page::{APP_CSS, APP_JS, INDEX_HTML};
 use crate::console_webauthn::{credential_id, verify_assertion, verify_registration, Refusal};
-use crate::identity::is_node_id;
+use crate::identity::{is_node_id, is_serial};
 use crate::log::{secret_field, Fields, Level, Logger, Tap};
 use crate::relay::Dialed;
 use crate::store::{read_text, write_private};
 use indexmap::IndexMap;
 use parking_lot::Mutex;
 use serde_json::{json, Map, Value};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -38,6 +42,8 @@ const SESSION_MAX_MS: i64 = 7 * 24 * 3_600_000;
 const SESSIONS_MAX: usize = 200;
 const CEREMONY_MS: i64 = 300_000;
 const CEREMONIES_MAX: usize = 1000;
+/// Pending sign-in or registration requests one source holds at once; a newer one replaces its oldest.
+pub const CEREMONIES_PER_SOURCE: usize = 4;
 pub const SIGNIN_LIMIT: usize = 30;
 pub const SIGNIN_WINDOW_MS: i64 = 600_000;
 const SOURCES_MAX: usize = 10_000;
@@ -61,6 +67,7 @@ const PAGE_LINES: usize = 500;
 const QUOTA_EVENTS: [&str; 6] = ["send.rate-limited", "send.quota", "mailbox.full", "store.full", "user.refused", "logs.rate-limited"];
 const GONE: &str = "This invite link has expired or was already used. Ask for a new one from the IDE (Relay, Control panel).";
 const NO_ADMIN: &str = "This control panel has no admin yet: ask for an invite from the IDE (Relay, Control panel).";
+const REVOKED: &str = "The hub that invited this admin was revoked: ask for a new invite from a hub that is still trusted.";
 const SECURITY_HEADERS: [(&str, &str); 8] = [
     ("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"),
     ("X-Content-Type-Options", "nosniff"),
@@ -259,6 +266,8 @@ struct Invite {
     email: String,
     expires: i64,
     by: String,
+    /// The serial of the inviting hub's certificate (absent in a book written before it was kept).
+    serial: Option<String>,
 }
 
 struct Passkey {
@@ -275,10 +284,21 @@ struct Admin {
     created: i64,
     last_sign_in: i64,
     passkeys: Vec<Passkey>,
+    /// The certificate serial of the hub whose invite last added a passkey: when the relay's CRL revokes it, this
+    /// admin cannot sign in and its sessions end.
+    serial: Option<String>,
+}
+
+/// An optional `serial` in the book: Some(None) when absent, Some(Some) for a certificate serial, None when malformed.
+fn serial_of(v: Option<&Value>) -> Option<Option<String>> {
+    match v {
+        None => Some(None),
+        Some(v) => v.as_str().filter(|s| is_serial(s)).map(|s| Some(s.to_owned())),
+    }
 }
 
 /// What console.json keeps: the origin the first invite fixed, open invites by the SHA-256 of their token, and the
-/// admins by email with their passkeys.
+/// admins by email with their passkeys and the serial of the hub certificate that invited them.
 #[derive(Default)]
 struct Book {
     origin: Option<String>,
@@ -300,7 +320,8 @@ impl Book {
         for (hash, v) in o.get("invites").and_then(Value::as_object).ok_or_else(broken)? {
             let i = v.as_object().ok_or_else(broken)?;
             let (Some(email), Some(expires), Some(by)) = (str_of(i.get("email")), is_int(i.get("expires")), str_of(i.get("by"))) else { return Err(broken()) };
-            book.invites.insert(hash.clone(), Invite { email: email.into(), expires, by: by.into() });
+            let serial = serial_of(i.get("serial")).ok_or_else(broken)?;
+            book.invites.insert(hash.clone(), Invite { email: email.into(), expires, by: by.into(), serial });
         }
         for (email, v) in o.get("admins").and_then(Value::as_object).ok_or_else(broken)? {
             let a = v.as_object().ok_or_else(broken)?;
@@ -313,19 +334,26 @@ impl Book {
                 let count = u32::try_from(count).map_err(|_| broken())?;
                 passkeys.push(Passkey { id: id.into(), cose: cose.into(), count, label: label.into(), created, last_used });
             }
-            book.admins.insert(email.clone(), Admin { handle: handle.into(), created, last_sign_in, passkeys });
+            let serial = serial_of(a.get("serial")).ok_or_else(broken)?;
+            book.admins.insert(email.clone(), Admin { handle: handle.into(), created, last_sign_in, passkeys, serial });
         }
         Ok(book)
     }
 
     fn save(&self, file: &Path) -> Result<(), String> {
-        let invites: Map<String, Value> = self.invites.iter().map(|(h, i)| (h.clone(), json!({ "email": i.email, "expires": i.expires, "by": i.by }))).collect();
+        let with_serial = |mut v: Value, serial: &Option<String>| {
+            if let (Some(s), Some(o)) = (serial, v.as_object_mut()) {
+                o.insert("serial".into(), Value::from(s.as_str()));
+            }
+            v
+        };
+        let invites: Map<String, Value> = self.invites.iter().map(|(h, i)| (h.clone(), with_serial(json!({ "email": i.email, "expires": i.expires, "by": i.by }), &i.serial))).collect();
         let admins: Map<String, Value> = self
             .admins
             .iter()
             .map(|(e, a)| {
                 let keys: Vec<Value> = a.passkeys.iter().map(|p| json!({ "id": p.id, "cose": p.cose, "count": p.count, "label": p.label, "created": p.created, "lastUsed": p.last_used })).collect();
-                (e.clone(), json!({ "handle": a.handle, "created": a.created, "lastSignIn": a.last_sign_in, "passkeys": keys }))
+                (e.clone(), with_serial(json!({ "handle": a.handle, "created": a.created, "lastSignIn": a.last_sign_in, "passkeys": keys }), &a.serial))
             })
             .collect();
         let text = format!("{}\n", stringify(&json!({ "v": 1, "origin": self.origin, "invites": invites, "admins": admins })));
@@ -339,6 +367,14 @@ impl Book {
         let hash = sha256_hex(token.as_bytes());
         let i = self.invites.get(&hash).filter(|i| i.expires > t).ok_or_else(gone)?;
         Ok((hash, i))
+    }
+
+    /// Remove an admin (its passkeys with it) and the open invites for its email: (passkeys, invites) removed.
+    fn remove_admin(&mut self, email: &str) -> (usize, usize) {
+        let passkeys = self.admins.shift_remove(email).map_or(0, |a| a.passkeys.len());
+        let before = self.invites.len();
+        self.invites.retain(|_, i| i.email != email);
+        (passkeys, before - self.invites.len())
     }
 
     /// The admin and passkey with this credential id: (email, COSE key, sign count, user handle).
@@ -395,6 +431,13 @@ struct Ceremony {
     invite: String,
     handle: String,
     allow: Vec<String>,
+    /// The address that asked for it.
+    source: String,
+}
+
+/// Whether the CRL revokes the hub certificate that invited `a`.
+fn revoked(serials: &HashSet<String>, a: &Admin) -> bool {
+    a.serial.as_ref().is_some_and(|s| serials.contains(s))
 }
 
 #[derive(Default)]
@@ -403,15 +446,21 @@ struct Inner {
     sessions: HashMap<String, Session>,
     ceremonies: IndexMap<String, Ceremony>,
     attempts: HashMap<String, VecDeque<i64>>,
+    /// The serials the relay's CRL revokes (State tells the console at start and with every newer CRL).
+    revoked: HashSet<String>,
 }
 
 impl Inner {
     /// One sign-in attempt from `ip`: at most SIGNIN_LIMIT in SIGNIN_WINDOW_MS, else 429 with the wait.
     fn limit(&mut self, ip: &str, t: i64) -> Result<(), ApiError> {
-        if self.attempts.len() >= SOURCES_MAX {
+        if !self.attempts.contains_key(ip) && self.attempts.len() >= SOURCES_MAX {
             self.attempts.retain(|_, v| v.back().is_some_and(|at| t - *at < SIGNIN_WINDOW_MS));
             if self.attempts.len() >= SOURCES_MAX {
-                self.attempts.clear();
+                // Full of live sources: the one that tried least recently goes, never every counter at once.
+                let oldest = self.attempts.iter().min_by_key(|(_, v)| v.back().copied().unwrap_or(i64::MIN)).map(|(k, _)| k.clone());
+                if let Some(k) = oldest {
+                    self.attempts.remove(&k);
+                }
             }
         }
         let v = self.attempts.entry(ip.to_owned()).or_default();
@@ -428,6 +477,11 @@ impl Inner {
 
     fn ceremony(&mut self, c: Ceremony, t: i64) -> Result<String, ApiError> {
         self.ceremonies.retain(|_, c| c.expires > t);
+        // One source holds at most CEREMONIES_PER_SOURCE: its own oldest goes first, never another source's.
+        while self.ceremonies.values().filter(|x| x.source == c.source).count() >= CEREMONIES_PER_SOURCE {
+            let Some(i) = self.ceremonies.values().position(|x| x.source == c.source) else { break };
+            self.ceremonies.shift_remove_index(i);
+        }
         while self.ceremonies.len() >= CEREMONIES_MAX {
             self.ceremonies.shift_remove_index(0);
         }
@@ -447,12 +501,22 @@ impl Inner {
             return None;
         }
         let s = self.sessions.get_mut(sid)?;
-        if t - s.last <= SESSION_IDLE_MS && t - s.created <= SESSION_MAX_MS && self.book.admins.contains_key(&s.email) {
+        let admin_ok = self.book.admins.get(&s.email).is_some_and(|a| !revoked(&self.revoked, a));
+        if t - s.last <= SESSION_IDLE_MS && t - s.created <= SESSION_MAX_MS && admin_ok {
             s.last = t;
             return Some(s.email.clone());
         }
         self.sessions.remove(sid);
         None
+    }
+
+    /// The open invite a token names, unless the hub that sent it was revoked (403).
+    fn open_invite(&self, token: Option<&str>, t: i64) -> Result<(String, &Invite), ApiError> {
+        let (hash, i) = self.book.invite(token, t)?;
+        if i.serial.as_ref().is_some_and(|s| self.revoked.contains(s)) {
+            return Err(api_err(403, "The hub that sent this invite was revoked: ask for a new invite from a hub that is still trusted."));
+        }
+        Ok((hash, i))
     }
 
     /// A new session for `email`; the Set-Cookie value.
@@ -585,10 +649,40 @@ pub fn open(flag: Option<&String>, env: impl Fn(&str) -> Option<String>, state: 
     Ok((logger, Some(Arc::new(console))))
 }
 
+/// `lucid-relay console remove-admin <email> --state <dir>`: remove an admin, its passkeys and open invites from the
+/// book with the relay stopped (a running relay writes its own copy back). The last admin may go too: this is the
+/// operator's way back in, through a new invite. What was removed, or why not.
+pub fn remove_admin_offline(file: &Path, email: &str) -> Result<String, String> {
+    let email = js_trim(email).to_lowercase();
+    let mut book = Book::read(file)?;
+    if !book.admins.contains_key(&email) {
+        let known: Vec<&str> = book.admins.keys().map(String::as_str).collect();
+        return Err(format!("{} has no admin {email} (admins: {})", file.display(), if known.is_empty() { "none".into() } else { known.join(", ") }));
+    }
+    let (passkeys, invites) = book.remove_admin(&email);
+    book.save(file)?;
+    Ok(format!("removed admin {email}: {passkeys} passkey(s), {invites} open invite(s); {} admin(s) left", book.admins.len()))
+}
+
 impl Console {
     pub fn load(file: PathBuf, logger: Arc<Logger>, ring: Arc<LineRing>) -> Result<Console, String> {
         let book = Book::read(&file)?;
         Ok(Console { file, logger, ring, inner: Mutex::new(Inner { book, ..Inner::default() }), spokes: Mutex::new(SpokeLogs::default()) })
+    }
+
+    /// The serials the relay's CRL revokes, at start and with every newer CRL: an admin a revoked hub invited is
+    /// signed out now and cannot sign in again.
+    pub fn set_revoked(&self, serials: &HashSet<String>) {
+        let mut inner = self.inner.lock();
+        inner.revoked = serials.clone();
+        let gone: Vec<String> = inner.book.admins.iter().filter(|(_, a)| revoked(serials, a)).map(|(e, _)| e.clone()).collect();
+        for email in gone {
+            let before = inner.sessions.len();
+            inner.sessions.retain(|_, s| s.email != email);
+            let ended = before - inner.sessions.len();
+            let f = Fields::new().with("email", &email).with("sessionsEnded", ended).with("why", "the hub certificate that invited this admin is revoked");
+            self.logger.security("console.admin-revoked", &f, Level::Warn);
+        }
     }
 
     /// POST /v1/logs from an authenticated spoke: the number of lines kept, or why not.
@@ -597,8 +691,9 @@ impl Console {
     }
 
     /// POST /v1/console/invite from a hub with the drive scope, for the user its certificate names. The first invite
-    /// fixes the console's origin; a newer invite for the same email replaces the older one.
-    pub fn invite(&self, email: &str, by: &str, dialed: &Dialed, t: i64) -> Result<Invited, Refused> {
+    /// fixes the console's origin; a newer invite for the same email replaces the older one. `serial` is the hub
+    /// certificate's: the admin this invite makes stands only while the CRL does not revoke it.
+    pub fn invite(&self, email: &str, by: &str, serial: &str, dialed: &Dialed, t: i64) -> Result<Invited, Refused> {
         let origin = origin_of(dialed).map_err(|e| refused(409, e, "console.invite-refused"))?;
         let mut inner = self.inner.lock();
         if let Some(o) = inner.book.origin.as_ref().filter(|o| **o != origin) {
@@ -612,7 +707,7 @@ impl Console {
             book.invites.shift_remove_index(0);
         }
         let expires = t + INVITE_MS;
-        book.invites.insert(sha256_hex(token.as_bytes()), Invite { email: email.to_owned(), expires, by: by.to_owned() });
+        book.invites.insert(sha256_hex(token.as_bytes()), Invite { email: email.to_owned(), expires, by: by.to_owned(), serial: Some(serial.to_owned()) });
         book.origin = Some(origin.clone());
         if let Err(e) = book.save(&self.file) {
             self.logger.ops("console.write-failed", &Fields::new().with("reason", e), Level::Error);
@@ -669,6 +764,7 @@ impl Console {
             ("POST", "login/begin") => self.login_begin(r.ip, &body, &origin, t),
             ("POST", "login/finish") => self.login_finish(r.ip, &body, &origin, t),
             ("POST", "logout") => Ok(self.logout(sid, r.ip)),
+            ("POST", "admins/remove") => self.remove_admin(sid, r.ip, &body, t),
             ("GET", "status") => {
                 // The console's lock is let go before the relay's status is asked for.
                 let who = self.inner.lock().session(sid, t);
@@ -707,7 +803,7 @@ impl Console {
     fn join(&self, ip: &str, body: &Value, t: i64) -> Answer {
         let mut inner = self.inner.lock();
         inner.limit(ip, t)?;
-        let (_, i) = inner.book.invite(str_of(body.get("token")), t)?;
+        let (_, i) = inner.open_invite(str_of(body.get("token")), t)?;
         Ok((json!({ "ok": true, "email": i.email, "expires": i.expires }), None))
     }
 
@@ -715,7 +811,7 @@ impl Console {
         let mut inner = self.inner.lock();
         inner.limit(ip, t)?;
         let (hash, email) = {
-            let (h, i) = inner.book.invite(str_of(body.get("token")), t)?;
+            let (h, i) = inner.open_invite(str_of(body.get("token")), t)?;
             (h, i.email.clone())
         };
         let existing = inner.book.admins.get(&email);
@@ -725,7 +821,7 @@ impl Console {
         };
         let exclude: Vec<Value> = existing.map(|a| a.passkeys.iter().map(|p| json!({ "type": "public-key", "id": p.id })).collect()).unwrap_or_default();
         let challenge = random(32).ok_or_else(|| api_err(500, "The control panel could not draw random bytes; see the relay's log."))?;
-        let c = Ceremony { kind: Kind::Register, challenge: challenge.clone(), expires: t + CEREMONY_MS, email: email.clone(), invite: hash, handle: handle.clone(), allow: Vec::new() };
+        let c = Ceremony { kind: Kind::Register, challenge: challenge.clone(), expires: t + CEREMONY_MS, email: email.clone(), invite: hash, handle: handle.clone(), allow: Vec::new(), source: ip.to_owned() };
         let id = inner.ceremony(c, t)?;
         let public_key = json!({
             "challenge": b64u(&challenge),
@@ -750,8 +846,10 @@ impl Console {
             ApiError::from(e)
         })?;
         // Single use: checked again, then gone with the passkey saved.
-        if !inner.book.invites.get(&c.invite).is_some_and(|i| i.expires > t) {
-            return Err(api_err(410, GONE));
+        let Some(invite) = inner.book.invites.get(&c.invite).filter(|i| i.expires > t) else { return Err(api_err(410, GONE)) };
+        let serial = invite.serial.clone();
+        if serial.as_ref().is_some_and(|s| inner.revoked.contains(s)) {
+            return Err(api_err(403, REVOKED));
         }
         let id = b64u(&made.id);
         if inner.book.admins.values().any(|a| a.passkeys.iter().any(|p| p.id == id)) {
@@ -762,9 +860,11 @@ impl Console {
         }
         let label = label_of(body.get("label"));
         inner.book.invites.shift_remove(&c.invite);
-        let admin = inner.book.admins.entry(c.email.clone()).or_insert_with(|| Admin { handle: c.handle.clone(), created: t, last_sign_in: 0, passkeys: Vec::new() });
+        let admin = inner.book.admins.entry(c.email.clone()).or_insert_with(|| Admin { handle: c.handle.clone(), created: t, last_sign_in: 0, passkeys: Vec::new(), serial: None });
         admin.passkeys.push(Passkey { id, cose: b64u(&made.cose), count: made.sign_count, label: label.clone(), created: t, last_used: t });
         admin.last_sign_in = t;
+        // The hub that vouched for this admin most recently.
+        admin.serial = serial;
         self.save(&inner.book)?;
         let cookie = inner.new_session(&c.email, t)?;
         self.logger.security("console.passkey-registered", &Fields::new().with("email", &c.email).with("label", &label).with("ip", ip), Level::Info);
@@ -778,7 +878,7 @@ impl Console {
         let allow: Vec<String> = inner.book.admins.get(&email).map(|a| a.passkeys.iter().map(|p| p.id.clone()).collect()).unwrap_or_default();
         let challenge = random(32).ok_or_else(|| api_err(500, "The control panel could not draw random bytes; see the relay's log."))?;
         let offered: Vec<Value> = allow.iter().map(|i| json!({ "type": "public-key", "id": i })).collect();
-        let c = Ceremony { kind: Kind::Login, challenge: challenge.clone(), expires: t + CEREMONY_MS, email: String::new(), invite: String::new(), handle: String::new(), allow };
+        let c = Ceremony { kind: Kind::Login, challenge: challenge.clone(), expires: t + CEREMONY_MS, email: String::new(), invite: String::new(), handle: String::new(), allow, source: ip.to_owned() };
         let id = inner.ceremony(c, t)?;
         let public_key = json!({ "challenge": b64u(&challenge), "rpId": rp_id_of(origin), "timeout": CEREMONY_MS, "userVerification": "required", "allowCredentials": offered });
         Ok((json!({ "ok": true, "ceremony": id, "publicKey": public_key }), None))
@@ -800,6 +900,9 @@ impl Console {
         let Some((email, cose, stored, handle)) = inner.book.find(&id) else {
             return Err(refuse(403, "This passkey is not registered here (or was removed).", None));
         };
+        if inner.book.admins.get(&email).is_some_and(|a| revoked(&inner.revoked, a)) {
+            return Err(refuse(403, REVOKED, Some(email.as_str())));
+        }
         let given = credential.get("response").and_then(|r| r.get("userHandle")).and_then(Value::as_str).unwrap_or("");
         if !given.is_empty() && given != handle {
             return Err(refuse(403, "The passkey belongs to someone else.", Some(email.as_str())));
@@ -831,6 +934,31 @@ impl Console {
         (json!({ "ok": true }), Some(format!("{COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0")))
     }
 
+    /// POST /console/api/admins/remove {"email"}: a signed-in admin removes an admin, its passkeys, sessions and open
+    /// invites; never the last admin removing itself (the panel would have nobody left to invite through it).
+    fn remove_admin(&self, sid: &str, ip: &str, body: &Value, t: i64) -> Answer {
+        let mut inner = self.inner.lock();
+        let Some(by) = inner.session(sid, t) else { return Err(api_err(401, "Sign in first.")) };
+        let email = str_of(body.get("email")).map(|e| js_trim(e).to_lowercase()).unwrap_or_default();
+        if !inner.book.admins.contains_key(&email) {
+            return Err(api_err(404, "There is no such admin."));
+        }
+        if email == by && inner.book.admins.len() == 1 {
+            return Err(api_err(409, "You are the last admin: invite another admin before removing yourself."));
+        }
+        let (passkeys, invites) = inner.book.remove_admin(&email);
+        let before = inner.sessions.len();
+        inner.sessions.retain(|_, s| s.email != email);
+        let ended = before - inner.sessions.len();
+        self.save(&inner.book)?;
+        let f = Fields::new().with("email", &email).with("by", &by).with("passkeys", passkeys).with("invites", invites).with("sessionsEnded", ended).with("ip", ip);
+        self.logger.security("console.admin-removed", &f, Level::Info);
+        let admins: Vec<Value> = inner.book.admins.keys().map(|e| Value::from(e.as_str())).collect();
+        // Removing yourself signs you out here too.
+        let cookie = (email == by).then(|| format!("{COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0"));
+        Ok((json!({ "ok": true, "removed": email, "admins": admins }), cookie))
+    }
+
     fn save(&self, book: &Book) -> Result<(), ApiError> {
         book.save(&self.file).map_err(|e| {
             self.logger.ops("console.write-failed", &Fields::new().with("reason", e), Level::Error);
@@ -842,7 +970,7 @@ impl Console {
     fn status(&self, view: Value, t: i64) -> Value {
         let console = {
             let inner = self.inner.lock();
-            let admins: Vec<Value> = inner.book.admins.iter().map(|(e, a)| json!({ "email": e, "passkeys": a.passkeys.len(), "lastSignIn": a.last_sign_in })).collect();
+            let admins: Vec<Value> = inner.book.admins.iter().map(|(e, a)| json!({ "email": e, "passkeys": a.passkeys.len(), "lastSignIn": a.last_sign_in, "revoked": revoked(&inner.revoked, a) })).collect();
             json!({ "origin": inner.book.origin, "admins": admins, "invitesOpen": inner.book.invites.values().filter(|i| i.expires > t).count(), "sessions": inner.sessions.len() })
         };
         let spokes: Vec<Value> = self.spokes.lock().nodes.iter().rev().map(|(n, r)| json!({ "node": n, "lines": r.lines.len(), "lastAt": r.last })).collect();
@@ -929,6 +1057,8 @@ mod tests {
     const ORIGIN: &str = "https://relay.example.com:8787";
     const RP: &str = "relay.example.com";
     const T0: i64 = 1_800_000_000_000;
+    /// The certificate serial of the hub that sends the tests' invites.
+    const HUB_SERIAL: &str = "0000000000000000000000000000000a";
 
     /// A dialed DNS name or IPv4 address, with or without a port (server.rs dialed_of for TLS).
     fn dialed(host: &str) -> Dialed {
@@ -1013,7 +1143,12 @@ mod tests {
 
     /// Invite, then register a passkey from the link: the session cookie.
     fn enrol(c: &Console, a: &mut Authenticator, email: &str, t: i64) -> String {
-        let inv = c.invite(email, "n_0123456789abcdef0123456789abcdef", &dialed("relay.example.com:8787"), t).unwrap();
+        enrol_by(c, a, email, HUB_SERIAL, t)
+    }
+
+    /// enrol, the invite sent by the hub whose certificate has `serial`.
+    fn enrol_by(c: &Console, a: &mut Authenticator, email: &str, serial: &str, t: i64) -> String {
+        let inv = c.invite(email, "n_0123456789abcdef0123456789abcdef", serial, &dialed("relay.example.com:8787"), t).unwrap();
         let token = token_of(&inv.link);
         let begin = json_of(&send(c, call("POST", "/console/api/register/begin", json!({ "token": token }), ""), t));
         let challenge = unb64u(begin["publicKey"]["challenge"].as_str().unwrap()).unwrap();
@@ -1026,7 +1161,7 @@ mod tests {
     #[test]
     fn an_invite_is_a_link_good_once_for_24_hours() {
         let (c, log) = console("invite");
-        let inv = c.invite("alice@acme.example", "n_0123456789abcdef0123456789abcdef", &dialed("relay.example.com:8787"), T0).unwrap();
+        let inv = c.invite("alice@acme.example", "n_0123456789abcdef0123456789abcdef", HUB_SERIAL, &dialed("relay.example.com:8787"), T0).unwrap();
         assert_eq!(inv.origin, ORIGIN);
         assert_eq!(inv.expires, T0 + 24 * 3_600_000);
         let token = token_of(&inv.link);
@@ -1040,7 +1175,7 @@ mod tests {
         let late = send(&c, call("POST", "/console/api/join", json!({ "token": token }), ""), T0 + 24 * 3_600_000);
         assert_eq!(late.status, 410);
         // A newer invite for the same person replaces the older one.
-        let again = c.invite("alice@acme.example", "n_0123456789abcdef0123456789abcdef", &dialed("relay.example.com:8787"), T0 + 2000).unwrap();
+        let again = c.invite("alice@acme.example", "n_0123456789abcdef0123456789abcdef", HUB_SERIAL, &dialed("relay.example.com:8787"), T0 + 2000).unwrap();
         assert_eq!(send(&c, call("POST", "/console/api/join", json!({ "token": token }), ""), T0 + 3000).status, 410);
         // Used once: registering a passkey spends it.
         let mut a = Authenticator::new(3);
@@ -1067,14 +1202,14 @@ mod tests {
     fn an_invite_needs_a_dns_name_and_the_console_origin() {
         let (c, _) = console("origin");
         let by = "n_0123456789abcdef0123456789abcdef";
-        let e = c.invite("alice@acme.example", by, &dialed("10.0.0.5:8787"), T0).err().unwrap();
+        let e = c.invite("alice@acme.example", by, HUB_SERIAL, &dialed("10.0.0.5:8787"), T0).err().unwrap();
         assert_eq!(e.status, 409);
         assert!(e.error.contains("IP address"));
-        assert_eq!(c.invite("alice@acme.example", by, &Dialed { host: "[::1]:8787".into(), hostname: "[::1]".into(), port: 8787 }, T0).err().unwrap().status, 409);
+        assert_eq!(c.invite("alice@acme.example", by, HUB_SERIAL, &Dialed { host: "[::1]:8787".into(), hostname: "[::1]".into(), port: 8787 }, T0).err().unwrap().status, 409);
         // Port 443, given or not, is the same origin.
-        assert_eq!(c.invite("alice@acme.example", by, &dialed("relay.example.com:443"), T0).unwrap().origin, "https://relay.example.com");
-        assert_eq!(c.invite("bob@acme.example", by, &Dialed { host: "relay.example.com".into(), hostname: "relay.example.com".into(), port: 80 }, T0).unwrap().origin, "https://relay.example.com");
-        let e = c.invite("alice@acme.example", by, &dialed("other.example.com"), T0).err().unwrap();
+        assert_eq!(c.invite("alice@acme.example", by, HUB_SERIAL, &dialed("relay.example.com:443"), T0).unwrap().origin, "https://relay.example.com");
+        assert_eq!(c.invite("bob@acme.example", by, HUB_SERIAL, &Dialed { host: "relay.example.com".into(), hostname: "relay.example.com".into(), port: 80 }, T0).unwrap().origin, "https://relay.example.com");
+        let e = c.invite("alice@acme.example", by, HUB_SERIAL, &dialed("other.example.com"), T0).err().unwrap();
         assert_eq!(e.status, 409);
         assert!(e.error.contains("https://relay.example.com"));
     }
@@ -1082,7 +1217,7 @@ mod tests {
     #[test]
     fn posts_need_the_console_origin_and_header() {
         let (c, log) = console("posts");
-        c.invite("alice@acme.example", "n_0123456789abcdef0123456789abcdef", &dialed("relay.example.com:8787"), T0).unwrap();
+        c.invite("alice@acme.example", "n_0123456789abcdef0123456789abcdef", HUB_SERIAL, &dialed("relay.example.com:8787"), T0).unwrap();
         let mut k = call("POST", "/console/api/login/begin", json!({}), "");
         k.marker = None;
         let r = send(&c, k, T0);
@@ -1179,7 +1314,7 @@ mod tests {
     #[test]
     fn a_registration_for_another_site_is_refused() {
         let (c, _) = console("othersite");
-        let inv = c.invite("alice@acme.example", "n_0123456789abcdef0123456789abcdef", &dialed("relay.example.com:8787"), T0).unwrap();
+        let inv = c.invite("alice@acme.example", "n_0123456789abcdef0123456789abcdef", HUB_SERIAL, &dialed("relay.example.com:8787"), T0).unwrap();
         let token = token_of(&inv.link);
         let begin = json_of(&send(&c, call("POST", "/console/api/register/begin", json!({ "token": token }), ""), T0));
         let challenge = unb64u(begin["publicKey"]["challenge"].as_str().unwrap()).unwrap();
@@ -1194,7 +1329,7 @@ mod tests {
     #[test]
     fn sign_in_attempts_are_limited_per_address() {
         let (c, _) = console("limit");
-        c.invite("alice@acme.example", "n_0123456789abcdef0123456789abcdef", &dialed("relay.example.com:8787"), T0).unwrap();
+        c.invite("alice@acme.example", "n_0123456789abcdef0123456789abcdef", HUB_SERIAL, &dialed("relay.example.com:8787"), T0).unwrap();
         for i in 0..SIGNIN_LIMIT {
             assert_eq!(send(&c, call("POST", "/console/api/login/begin", json!({}), ""), T0 + i as i64).status, 200);
         }
@@ -1205,6 +1340,127 @@ mod tests {
         other.ip = "198.51.100.9";
         assert_eq!(send(&c, other, T0 + 100).status, 200);
         assert_eq!(send(&c, call("POST", "/console/api/login/begin", json!({}), ""), T0 + SIGNIN_WINDOW_MS).status, 200);
+    }
+
+    #[test]
+    fn a_full_source_table_evicts_the_oldest_source_never_every_counter() {
+        let mut inner = Inner::default();
+        for i in 0..SOURCES_MAX - 1 {
+            inner.limit(&format!("198.51.{}.{}", i / 256, i % 256), T0 + i as i64).ok().unwrap();
+        }
+        let busy = "203.0.113.1";
+        let t = T0 + SOURCES_MAX as i64;
+        for i in 0..SIGNIN_LIMIT {
+            inner.limit(busy, t + i as i64).ok().unwrap();
+        }
+        assert_eq!(inner.attempts.len(), SOURCES_MAX);
+        // One more source: the one that tried least recently goes, and the busy one stays limited.
+        inner.limit("203.0.113.2", t + 100).ok().unwrap();
+        assert_eq!(inner.attempts.len(), SOURCES_MAX);
+        assert!(!inner.attempts.contains_key("198.51.0.0"));
+        assert_eq!(inner.limit(busy, t + 101).err().map(|e| e.status), Some(429));
+    }
+
+    #[test]
+    fn one_source_holds_a_few_pending_ceremonies_at_most() {
+        let (c, _) = console("ceremonies");
+        c.invite("alice@acme.example", "n_0123456789abcdef0123456789abcdef", HUB_SERIAL, &dialed("relay.example.com:8787"), T0).unwrap();
+        let mut other = call("POST", "/console/api/login/begin", json!({}), "");
+        other.ip = "198.51.100.9";
+        let theirs = json_of(&send(&c, other, T0))["ceremony"].as_str().unwrap().to_owned();
+        let first = json_of(&send(&c, call("POST", "/console/api/login/begin", json!({}), ""), T0))["ceremony"].as_str().unwrap().to_owned();
+        for i in 1..=CEREMONIES_PER_SOURCE as i64 {
+            assert_eq!(send(&c, call("POST", "/console/api/login/begin", json!({}), ""), T0 + i).status, 200);
+        }
+        let inner = c.inner.lock();
+        assert_eq!(inner.ceremonies.values().filter(|x| x.source == "192.0.2.7").count(), CEREMONIES_PER_SOURCE);
+        // Its own oldest went; another source's stays.
+        assert!(!inner.ceremonies.contains_key(&first) && inner.ceremonies.contains_key(&theirs));
+    }
+
+    /// Sign in with `a`'s passkey: the answer.
+    fn sign_in(c: &Console, a: &mut Authenticator, t: i64) -> ConsoleReply {
+        let begin = json_of(&send(c, call("POST", "/console/api/login/begin", json!({}), ""), t));
+        let challenge = unb64u(begin["publicKey"]["challenge"].as_str().unwrap()).unwrap();
+        let got = a.assert(RP, ORIGIN, &challenge, None);
+        send(c, call("POST", "/console/api/login/finish", json!({ "ceremony": begin["ceremony"], "credential": got }), ""), t)
+    }
+
+    #[test]
+    fn an_admin_a_revoked_hub_invited_is_signed_out_and_refused() {
+        let (c, log) = console("revoked");
+        let other_hub = "0000000000000000000000000000000b";
+        let mut alice = Authenticator::new(21);
+        let mut bob = Authenticator::new(22);
+        let sid_alice = enrol(&c, &mut alice, "alice@acme.example", T0);
+        let sid_bob = enrol_by(&c, &mut bob, "bob@acme.example", other_hub, T0);
+        let carol = c.invite("carol@acme.example", "n_0123456789abcdef0123456789abcdef", HUB_SERIAL, &dialed("relay.example.com:8787"), T0).unwrap();
+        // The CRL now lists the hub that invited alice (and carol).
+        c.set_revoked(&[HUB_SERIAL.to_owned()].into_iter().collect());
+        assert_eq!(send(&c, call("GET", "/console/api/status", Value::Null, &sid_alice), T0 + 1).status, 401);
+        assert!(c.inner.lock().sessions.values().all(|s| s.email != "alice@acme.example"));
+        let r = sign_in(&c, &mut alice, T0 + 2);
+        assert_eq!(r.status, 403);
+        assert!(json_of(&r)["error"].as_str().unwrap().contains("was revoked"));
+        let r = send(&c, call("POST", "/console/api/join", json!({ "token": token_of(&carol.link) }), ""), T0 + 3);
+        assert_eq!(r.status, 403);
+        // The admin another hub invited goes on.
+        assert_eq!(send(&c, call("GET", "/console/api/status", Value::Null, &sid_bob), T0 + 4).status, 200);
+        assert_eq!(sign_in(&c, &mut bob, T0 + 5).status, 200);
+        let v = json_of(&send(&c, call("GET", "/console/api/status", Value::Null, &sid_bob), T0 + 6));
+        let shown: Vec<(String, bool)> = v["console"]["admins"].as_array().unwrap().iter().map(|a| (a["email"].as_str().unwrap().to_owned(), a["revoked"].as_bool().unwrap())).collect();
+        assert_eq!(shown, vec![("alice@acme.example".to_owned(), true), ("bob@acme.example".to_owned(), false)]);
+        assert!(lines_of(&log).iter().any(|l| l.contains("\"event\":\"console.admin-revoked\"") && l.contains("alice@acme.example")));
+        // The serial is kept in the book.
+        let ring = Arc::new(LineRing::default());
+        let again = Console::load(c.file.clone(), c.logger.clone(), ring).unwrap();
+        assert_eq!(again.inner.lock().book.admins["alice@acme.example"].serial.as_deref(), Some(HUB_SERIAL));
+    }
+
+    #[test]
+    fn an_admin_removes_another_but_the_last_one_stays() {
+        let (c, log) = console("remove");
+        let mut alice = Authenticator::new(31);
+        let mut bob = Authenticator::new(32);
+        let sid_alice = enrol(&c, &mut alice, "alice@acme.example", T0);
+        let sid_bob = enrol(&c, &mut bob, "bob@acme.example", T0);
+        let remove = |sid: &str, email: &str, t: i64| send(&c, call("POST", "/console/api/admins/remove", json!({ "email": email }), sid), t);
+        assert_eq!(remove("", "bob@acme.example", T0 + 1).status, 401);
+        assert_eq!(remove(&sid_alice, "nobody@acme.example", T0 + 1).status, 404);
+        let r = remove(&sid_alice, "Bob@acme.example", T0 + 2);
+        assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+        assert_eq!(json_of(&r)["admins"], json!(["alice@acme.example"]));
+        // Bob's session, passkey and record are gone.
+        assert_eq!(send(&c, call("GET", "/console/api/status", Value::Null, &sid_bob), T0 + 3).status, 401);
+        assert_eq!(sign_in(&c, &mut bob, T0 + 4).status, 403);
+        assert!(lines_of(&log).iter().any(|l| l.contains("\"event\":\"console.admin-removed\"") && l.contains("bob@acme.example")));
+        // The last admin may not remove itself.
+        let r = remove(&sid_alice, "alice@acme.example", T0 + 5);
+        assert_eq!(r.status, 409);
+        assert_eq!(send(&c, call("GET", "/console/api/status", Value::Null, &sid_alice), T0 + 6).status, 200);
+        // With another admin, it may: its own session ends and the cookie is cleared.
+        let _carol = enrol(&c, &mut Authenticator::new(33), "carol@acme.example", T0 + 7);
+        let r = remove(&sid_alice, "alice@acme.example", T0 + 8);
+        assert_eq!(r.status, 200);
+        assert!(header(&r, "Set-Cookie").unwrap().contains("Max-Age=0"));
+        assert_eq!(send(&c, call("GET", "/console/api/status", Value::Null, &sid_alice), T0 + 9).status, 401);
+        let ring = Arc::new(LineRing::default());
+        let again = Console::load(c.file.clone(), c.logger.clone(), ring).unwrap();
+        assert_eq!(again.inner.lock().book.admins.keys().cloned().collect::<Vec<_>>(), vec!["carol@acme.example".to_owned()]);
+    }
+
+    #[test]
+    fn an_admin_is_removed_offline_with_its_passkeys_and_invites() {
+        let (c, _) = console("offline");
+        enrol(&c, &mut Authenticator::new(41), "alice@acme.example", T0);
+        c.invite("alice@acme.example", "n_0123456789abcdef0123456789abcdef", HUB_SERIAL, &dialed("relay.example.com:8787"), T0 + 1).unwrap();
+        let done = remove_admin_offline(&c.file, " Alice@acme.example ").unwrap();
+        assert!(done.contains("1 passkey(s), 1 open invite(s); 0 admin(s) left"), "{done}");
+        let ring = Arc::new(LineRing::default());
+        let again = Console::load(c.file.clone(), c.logger.clone(), ring).unwrap();
+        let inner = again.inner.lock();
+        assert!(inner.book.admins.is_empty() && inner.book.invites.is_empty());
+        assert!(remove_admin_offline(&c.file, "alice@acme.example").err().unwrap().contains("has no admin alice@acme.example"));
     }
 
     #[test]
@@ -1300,9 +1556,9 @@ mod tests {
 
     /// A node certificate signed by `root` (identity.ts issueCert's shape).
     fn node(root: &SigningKey, seed: u8, role: &str, scopes: &[&str], email: Option<&str>) -> Node {
-        let root_id = node_id_of(&p256_spki_der(root.verifying_key()));
+        let root_id = node_id_of(&p256_spki_der(&root.verifying_key().into()));
         let key = SigningKey::from_slice(&[seed; 32]).unwrap();
-        let spki = p256_spki_der(key.verifying_key());
+        let spki = p256_spki_der(&key.verifying_key().into());
         let id = node_id_of(&spki);
         let now = T0 / 1000;
         let mut p = json!({
@@ -1318,7 +1574,7 @@ mod tests {
     fn relay(console: Option<Arc<Console>>, root: &SigningKey) -> State {
         let logger = Arc::new(Logger::capture("relay", Box::new(|_, _| {})));
         let opts = Options {
-            root: *root.verifying_key(),
+            root: root.verifying_key().into(),
             owner: None,
             license: None,
             crl_file: None,
@@ -1405,6 +1661,23 @@ mod tests {
         assert_eq!(op(&mut st, &spoke, "/v1/console/invite", "{}", T0, 5).0, 403);
         assert_eq!(op(&mut st, &hub, "/v1/console/invite", "{\"email\":\"eve@evil.example\"}", T0, 6).0, 400);
         assert_eq!(op(&mut st, &hub, "/v1/console/invite", "{}", T0, 2).0, 401);
+    }
+
+    #[test]
+    fn a_newer_crl_on_the_relay_signs_out_the_admins_its_hubs_invited() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let spoke = node(&root, 2, "spoke", &[], None);
+        let hub_serial = format!("{:032x}", 3);
+        let (c, _) = console("route-crl");
+        let c = Arc::new(c);
+        let mut st = relay(Some(c.clone()), &root);
+        let sid = enrol_by(&c, &mut Authenticator::new(51), "alice@acme.example", &hub_serial, T0);
+        assert_eq!(send(&c, call("GET", "/console/api/status", Value::Null, &sid), T0 + 1).status, 200);
+        let root_id = node_id_of(&p256_spki_der(&root.verifying_key().into()));
+        let crl = compact(&root, &json!({ "v": 1, "typ": "lucid-crl", "root": root_id, "version": 1, "serials": [hub_serial], "iat": T0 / 1000 }));
+        let (s, _) = op(&mut st, &spoke, "/v1/crl", &stringify(&json!({ "crl": crl })), T0 + 2, 1);
+        assert_eq!(s, 200);
+        assert_eq!(send(&c, call("GET", "/console/api/status", Value::Null, &sid), T0 + 3).status, 401);
     }
 
     #[test]

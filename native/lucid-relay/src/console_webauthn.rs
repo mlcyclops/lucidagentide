@@ -5,8 +5,7 @@
 // authenticatorData || SHA-256(clientDataJSON) with the stored key. A small CBOR reader for what WebAuthn sends.
 
 use crate::codec::{parse_json, sha256, str_of, unb64u};
-use crate::der::ecdsa_verify;
-use p256::ecdsa::VerifyingKey;
+use crate::der::{ecdsa_verify, P256Key};
 use serde_json::Value;
 
 /// COSE algorithm ES256 (ECDSA P-256 with SHA-256).
@@ -194,7 +193,7 @@ pub fn parse_auth_data(d: &[u8]) -> Result<AuthData, Refusal> {
 }
 
 /// The P-256 key of a COSE EC2 key with alg ES256; anything else is refused.
-pub fn cose_es256(cose: &Cbor) -> Result<VerifyingKey, Refusal> {
+pub fn cose_es256(cose: &Cbor) -> Result<P256Key, Refusal> {
     if cose.int_key(3) != Some(&Cbor::Int(ES256)) {
         return Err(bad("this passkey uses an algorithm the control panel does not accept (ES256 only)"));
     }
@@ -211,7 +210,7 @@ pub fn cose_es256(cose: &Cbor) -> Result<VerifyingKey, Refusal> {
     sec1.push(4u8);
     sec1.extend_from_slice(x);
     sec1.extend_from_slice(y);
-    VerifyingKey::from_sec1_bytes(&sec1).map_err(|_| bad("the passkey's public key is not a valid P-256 point"))
+    P256Key::from_sec1(&sec1).ok_or_else(|| bad("the passkey's public key is not a valid P-256 point"))
 }
 
 /// Byte strings compared in time that does not depend on where they differ.

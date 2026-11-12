@@ -3,10 +3,9 @@
 // grace, expired) and the user book `license-users.json`.
 
 use crate::codec::{as_object, b64_decode_lenient, exact_keys, is_int, js_trim, num_is, parse_json, str_of, unb64u, utf16_len, utf8_lossy};
-use crate::der::{ed25519_verify, parse_spki, PublicKey};
+use crate::der::{ed25519_verify, parse_spki, Ed25519Key, P256Key, PublicKey};
 use crate::identity::{is_node_id, is_serial, open_compact, NodeCert};
 use indexmap::IndexMap;
-use p256::ecdsa::VerifyingKey;
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -43,8 +42,6 @@ const CLOCK_SKEW_SEC: i64 = 120;
 const MAX_LICENSE_TOKEN: usize = 4096;
 const ARMOR_BEGIN: &str = "-----BEGIN LUCID RELAY LICENSE-----";
 const ARMOR_END: &str = "-----END LUCID RELAY LICENSE-----";
-
-pub type Ed25519Key = ed25519_dalek::VerifyingKey;
 
 /// The keys a license may be signed with.
 pub struct LicenseKeys {
@@ -254,7 +251,7 @@ pub fn license_user_of(cert: &NodeCert) -> String {
 /// F2 (ADR-A100), license.ts seatProblem word for word: why `seat` (the request's `lucid-seat` header) does not count
 /// hub certificate `cert` under license `license` at `now` (seconds), or None. A seat is the org root's word that it
 /// counted that one certificate's user: { v: 1, typ: "lucid-license-seat", root, license, node, serial, user, iat, exp }.
-pub fn seat_problem(seat: Option<&str>, root: &VerifyingKey, root_id: &str, license: &str, cert: &NodeCert, now: i64) -> Option<&'static str> {
+pub fn seat_problem(seat: Option<&str>, root: &P256Key, root_id: &str, license: &str, cert: &NodeCert, now: i64) -> Option<&'static str> {
     let Some(token) = seat.filter(|s| !s.is_empty()) else { return Some("no license seat") };
     let Some(p) = open_compact(Some(&Value::String(token.to_owned())), root, MAX_SEAT_TOKEN) else { return Some("license seat is not signed by this root") };
     const MALFORMED: Option<&str> = Some("malformed license seat");
@@ -443,7 +440,8 @@ mod tests {
         use p256::ecdsa::{Signature, SigningKey};
         let root = SigningKey::from_slice(&[7u8; 32]).unwrap();
         let other = SigningKey::from_slice(&[8u8; 32]).unwrap();
-        let root_id = node_id_of(&p256_spki_der(root.verifying_key()));
+        let root_key: crate::der::P256Key = root.verifying_key().into();
+        let root_id = node_id_of(&p256_spki_der(&root_key));
         let now = 1_800_000_000;
         let cert = NodeCert {
             serial: "a".repeat(32),
@@ -467,7 +465,7 @@ mod tests {
             let sig: Signature = key.sign(body.as_bytes());
             format!("{}.{}", b64u(body.as_bytes()), b64u(sig.to_der().as_bytes()))
         };
-        let judge = |token: Option<&str>| seat_problem(token, root.verifying_key(), &root_id, "l_0123456789abcdef", &cert, now);
+        let judge = |token: Option<&str>| seat_problem(token, &root_key, &root_id, "l_0123456789abcdef", &cert, now);
         let set = |key: &'static str, v: Value| move |p: &mut Value| p[key] = v.clone();
         assert_eq!(judge(Some(seat(&root, &|_: &mut Value| {}).as_str())), None);
         assert_eq!(judge(None), Some("no license seat"));

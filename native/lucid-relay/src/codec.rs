@@ -3,7 +3,6 @@
 // writes the same bytes as the Bun relay.
 
 use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
 
 /// Number.MAX_SAFE_INTEGER.
 pub const MAX_SAFE: i64 = 9_007_199_254_740_991;
@@ -69,8 +68,12 @@ pub fn b64u(data: &[u8]) -> String {
     out
 }
 
+/// SHA-256 on AWS-LC (its FIPS module with the `fips` feature).
 pub fn sha256(data: &[u8]) -> [u8; 32] {
-    Sha256::digest(data).into()
+    let d = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, data);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(d.as_ref());
+    out
 }
 
 pub fn hex(data: &[u8]) -> String {
@@ -128,7 +131,7 @@ pub fn exact_keys(o: &Map<String, Value>, allowed: &[&str], required: &[&str]) -
 pub fn safe_int(v: Option<&Value>) -> Option<i64> {
     let n = v?.as_number()?;
     if let Some(i) = n.as_i64() {
-        return (i.abs() <= MAX_SAFE).then_some(i);
+        return (i.unsigned_abs() <= MAX_SAFE as u64).then_some(i);
     }
     if n.is_u64() {
         return None;
@@ -328,6 +331,17 @@ mod tests {
         assert_eq!(stringify(&v), r#"{"v":1,"ts":1700000000000,"x":1.5}"#);
         assert_eq!(safe_int(v.get("ts")), Some(1_700_000_000_000));
         assert_eq!(safe_int(v.get("x")), None);
+        // i64::MIN has no absolute value in i64: it is refused, never an overflow.
+        assert_eq!(safe_int(Some(&Value::from(i64::MIN))), None);
+        assert_eq!(safe_int(parse_json("-9223372036854775808").as_ref()), None);
+        assert_eq!(safe_int(Some(&Value::from(-MAX_SAFE))), Some(-MAX_SAFE));
+        assert_eq!(safe_int(Some(&Value::from(-MAX_SAFE - 1))), None);
+    }
+
+    #[test]
+    fn sha256_is_the_standard_digest() {
+        assert_eq!(sha256_hex(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     }
 
     #[test]
