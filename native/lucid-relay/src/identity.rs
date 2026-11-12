@@ -4,8 +4,7 @@
 // string is the one the Bun relay logs.
 
 use crate::codec::{as_object, exact_keys, is_int, num_is, parse_json, sha256_hex, str_of, unb64u, utf16_len, utf8_lossy};
-use crate::der::{ecdsa_verify, p256_from_spki, p256_spki_der, parse_spki, PublicKey};
-use p256::ecdsa::VerifyingKey;
+use crate::der::{ecdsa_verify, p256_from_spki, p256_spki_der, parse_spki, P256Key, PublicKey};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 
@@ -89,7 +88,7 @@ pub fn user_id_of(email: &str) -> String {
 // ── The compact signed token ─────────────────────────────────────────────────────────────────────────────────
 
 /// Verify a compact token and return its payload object, or None. Signature first, parse second.
-pub fn open_compact(token: Option<&Value>, key: &VerifyingKey, max_len: usize) -> Option<Map<String, Value>> {
+pub fn open_compact(token: Option<&Value>, key: &P256Key, max_len: usize) -> Option<Map<String, Value>> {
     let token = token?.as_str()?;
     if utf16_len(token) > max_len {
         return None;
@@ -118,7 +117,7 @@ pub fn peek_compact(token: &str) -> Option<Map<String, Value>> {
 }
 
 /// A P-256 key from base64url SPKI (identity.ts importPublicSpki).
-pub fn import_public_spki(spki_b64u: &str) -> Option<VerifyingKey> {
+pub fn import_public_spki(spki_b64u: &str) -> Option<P256Key> {
     p256_from_spki(&unb64u(spki_b64u)?)
 }
 
@@ -401,7 +400,7 @@ fn leaf_problem(d: &Delegation, c: &NodeCert) -> Option<String> {
 /// A verified certificate and its public key.
 pub struct CertOk {
     pub cert: NodeCert,
-    pub key: VerifyingKey,
+    pub key: P256Key,
 }
 
 /// The CRL fields the store keeps.
@@ -412,7 +411,7 @@ struct HeldCrl {
 
 /// The root public key and the newest CRL seen.
 pub struct TrustStore {
-    root: VerifyingKey,
+    root: P256Key,
     pub root_id: String,
     crl: Option<HeldCrl>,
     crl_token: Option<String>,
@@ -420,12 +419,12 @@ pub struct TrustStore {
 }
 
 impl TrustStore {
-    pub fn new(root: VerifyingKey) -> TrustStore {
+    pub fn new(root: P256Key) -> TrustStore {
         let root_id = node_id_of(&p256_spki_der(&root));
         TrustStore { root, root_id, crl: None, crl_token: None, revoked: HashSet::new() }
     }
 
-    pub fn root_key(&self) -> &VerifyingKey {
+    pub fn root_key(&self) -> &P256Key {
         &self.root
     }
 
@@ -439,6 +438,11 @@ impl TrustStore {
 
     pub fn is_revoked(&self, serial: &str) -> bool {
         self.revoked.contains(serial)
+    }
+
+    /// Every serial the held CRL revokes.
+    pub fn revoked_serials(&self) -> &HashSet<String> {
+        &self.revoked
     }
 
     /// Take a CRL only if the root signed it and it is NEWER than the one held; once a held list carries a
@@ -479,7 +483,7 @@ impl TrustStore {
         Ok(true)
     }
 
-    fn verify_delegation(&self, token: Option<&Value>, now: i64) -> Result<(Delegation, VerifyingKey), String> {
+    fn verify_delegation(&self, token: Option<&Value>, now: i64) -> Result<(Delegation, P256Key), String> {
         let Some(p) = open_compact(token, &self.root, 8192) else { return Err("delegation is not signed by this root".into()) };
         if let Some(problem) = delegation_problem(&p, &self.root_id) {
             return Err(format!("malformed delegation: {problem}"));

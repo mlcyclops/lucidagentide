@@ -3,9 +3,57 @@
 // the rules kept here are the ones its answers depend on (src/identity.ts importPublicSpki, src/presence.ts
 // presencePublicKey, X509Certificate.checkHost and checkIP).
 
-use p256::ecdsa::VerifyingKey;
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use aws_lc_rs::encoding::AsDer;
+use aws_lc_rs::signature::{ParsedPublicKey, ECDSA_P256_SHA256_ASN1, ED25519};
 use std::net::IpAddr;
+
+/// A P-256 public key, read and checked on the curve by AWS-LC (its FIPS module with the `fips` feature), with its
+/// uncompressed SEC1 point for the SPKI and node id.
+#[derive(Clone, Debug)]
+pub struct P256Key {
+    key: ParsedPublicKey,
+    point: [u8; 65],
+}
+
+impl P256Key {
+    /// From a SEC1 point (uncompressed or compressed), or None when it is not a point on P-256.
+    pub fn from_sec1(sec1: &[u8]) -> Option<P256Key> {
+        let key = ParsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, sec1).ok()?;
+        let point: [u8; 65] = if sec1.len() == 65 && sec1[0] == 4 {
+            sec1.try_into().ok()?
+        } else {
+            // AWS-LC writes the SPKI with the uncompressed point: its last 65 bytes.
+            let der = key.as_der().ok()?;
+            let d: &[u8] = der.as_ref();
+            d.get(d.len().checked_sub(65)?..)?.try_into().ok()?
+        };
+        (point[0] == 4).then_some(P256Key { key, point })
+    }
+
+    /// The uncompressed SEC1 point (0x04, x, y).
+    pub fn point(&self) -> &[u8; 65] {
+        &self.point
+    }
+}
+
+#[cfg(test)]
+impl From<&p256::ecdsa::VerifyingKey> for P256Key {
+    fn from(k: &p256::ecdsa::VerifyingKey) -> P256Key {
+        use p256::elliptic_curve::sec1::ToEncodedPoint;
+        P256Key::from_sec1(k.as_affine().to_encoded_point(false).as_bytes()).expect("a P-256 point")
+    }
+}
+
+/// An Ed25519 public key, read by AWS-LC.
+#[derive(Clone, Debug)]
+pub struct Ed25519Key(ParsedPublicKey);
+
+impl Ed25519Key {
+    /// From its 32 raw bytes, or None.
+    pub fn from_raw(raw: &[u8; 32]) -> Option<Ed25519Key> {
+        ParsedPublicKey::new(&ED25519, raw).ok().map(Ed25519Key)
+    }
+}
 
 pub struct Tlv<'a> {
     pub tag: u8,
@@ -43,8 +91,8 @@ const OID_ED25519: &[u8] = &[0x2b, 0x65, 0x70];
 const OID_RSA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
 
 pub enum PublicKey {
-    P256(VerifyingKey),
-    Ed25519(ed25519_dalek::VerifyingKey),
+    P256(P256Key),
+    Ed25519(Ed25519Key),
     /// RSA (rsaEncryption): only its modulus length matters here (a Windows Hello presence key).
     Rsa { bits: usize },
 }
@@ -74,14 +122,14 @@ pub fn parse_spki(der: &[u8]) -> Option<PublicKey> {
             if params.tag != 0x06 || params.value != OID_P256 {
                 return None;
             }
-            VerifyingKey::from_sec1_bytes(key).ok().map(PublicKey::P256)
+            P256Key::from_sec1(key).map(PublicKey::P256)
         }
         v if v == OID_ED25519 => {
             if !oid.rest.is_empty() {
                 return None;
             }
             let k: [u8; 32] = key.try_into().ok()?;
-            ed25519_dalek::VerifyingKey::from_bytes(&k).ok().map(PublicKey::Ed25519)
+            Ed25519Key::from_raw(&k).map(PublicKey::Ed25519)
         }
         v if v == OID_RSA => {
             if !oid.rest.is_empty() && oid.rest != &[0x05u8, 0x00][..] {
@@ -114,7 +162,7 @@ pub fn parse_spki(der: &[u8]) -> Option<PublicKey> {
 }
 
 /// A P-256 key from its SubjectPublicKeyInfo DER, or None (identity.ts importPublicSpki after the decode).
-pub fn p256_from_spki(der: &[u8]) -> Option<VerifyingKey> {
+pub fn p256_from_spki(der: &[u8]) -> Option<P256Key> {
     if der.is_empty() {
         return None;
     }
@@ -125,26 +173,21 @@ pub fn p256_from_spki(der: &[u8]) -> Option<VerifyingKey> {
 }
 
 /// The SubjectPublicKeyInfo DER Node exports for a P-256 key (uncompressed point).
-pub fn p256_spki_der(k: &VerifyingKey) -> Vec<u8> {
-    let mut out = vec![0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00];
-    out.extend_from_slice(k.as_affine().to_encoded_point(false).as_bytes());
+pub fn p256_spki_der(k: &P256Key) -> Vec<u8> {
+    let mut out = Vec::with_capacity(91);
+    out.extend_from_slice(&[0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00]);
+    out.extend_from_slice(k.point());
     out
 }
 
-/// ECDSA P-256 / SHA-256 over `msg` with a DER signature (Node's verify("sha256", ...) for an EC key).
-pub fn ecdsa_verify(key: &VerifyingKey, msg: &[u8], sig_der: &[u8]) -> bool {
-    use p256::ecdsa::signature::Verifier;
-    match p256::ecdsa::Signature::from_der(sig_der) {
-        Ok(sig) => key.verify(msg, &sig).is_ok(),
-        Err(_) => false,
-    }
+/// ECDSA P-256 / SHA-256 over `msg` with a DER signature (Node's verify("sha256", ...) for an EC key), on AWS-LC.
+pub fn ecdsa_verify(key: &P256Key, msg: &[u8], sig_der: &[u8]) -> bool {
+    key.key.verify_sig(msg, sig_der).is_ok()
 }
 
-/// Ed25519 over `msg` (Node's verify(null, ...) for an Ed25519 key); the signature must be 64 bytes.
-pub fn ed25519_verify(key: &ed25519_dalek::VerifyingKey, msg: &[u8], sig: &[u8]) -> bool {
-    use ed25519_dalek::Verifier;
-    let Ok(bytes) = <[u8; 64]>::try_from(sig) else { return false };
-    key.verify(msg, &ed25519_dalek::Signature::from_bytes(&bytes)).is_ok()
+/// Ed25519 over `msg` (Node's verify(null, ...) for an Ed25519 key), on AWS-LC; the signature must be 64 bytes.
+pub fn ed25519_verify(key: &Ed25519Key, msg: &[u8], sig: &[u8]) -> bool {
+    sig.len() == 64 && key.0.verify_sig(msg, sig).is_ok()
 }
 
 /// The blocks of one PEM type in a text, decoded.
@@ -348,5 +391,39 @@ mod tests {
         assert!(cn_only.check_host("relay.lan"));
         let too_wide = CertNames { dns: vec!["*.com".into()], ips: vec![], cns: vec![] };
         assert!(!too_wide.check_host("example.com"));
+    }
+
+    #[test]
+    fn aws_lc_verifies_what_rustcrypto_signs() {
+        use p256::ecdsa::signature::Signer;
+        use p256::ecdsa::{Signature, SigningKey};
+        use p256::elliptic_curve::sec1::ToEncodedPoint;
+        let sk = SigningKey::from_slice(&[3u8; 32]).unwrap();
+        let key: P256Key = sk.verifying_key().into();
+        let sig: Signature = sk.sign(b"lucid");
+        assert!(ecdsa_verify(&key, b"lucid", sig.to_der().as_bytes()));
+        assert!(!ecdsa_verify(&key, b"lucie", sig.to_der().as_bytes()));
+        assert!(!ecdsa_verify(&key, b"lucid", &sig.to_bytes()));
+        // A compressed point reads to the same key and the same SPKI.
+        let compressed = sk.verifying_key().as_affine().to_encoded_point(true);
+        let same = P256Key::from_sec1(compressed.as_bytes()).unwrap();
+        assert_eq!(p256_spki_der(&same), p256_spki_der(&key));
+        assert!(ecdsa_verify(&same, b"lucid", sig.to_der().as_bytes()));
+        // A point off the curve is no key.
+        let mut off = *key.point();
+        off[64] ^= 1;
+        assert!(P256Key::from_sec1(&off).is_none());
+        assert!(p256_from_spki(&p256_spki_der(&key)).is_some());
+    }
+
+    #[test]
+    fn ed25519_follows_rfc_8032() {
+        let hex = |s: &str| (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect::<Vec<u8>>();
+        let public: [u8; 32] = hex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a").try_into().unwrap();
+        let sig = hex("e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b");
+        let key = Ed25519Key::from_raw(&public).unwrap();
+        assert!(ed25519_verify(&key, b"", &sig));
+        assert!(!ed25519_verify(&key, b"x", &sig));
+        assert!(!ed25519_verify(&key, b"", &sig[..63]));
     }
 }
