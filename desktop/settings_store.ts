@@ -9,20 +9,29 @@
 // primary API-key mechanism). Keys never leave the machine; the HTTP API only
 // ever returns masked status (set? + last-4), never the raw key.
 //
+// P-VAULT-KEYS.1 (ADR-0472): the secret fields (provider keys, named-account keys, MCP bearer tokens,
+// the TURN credential) live in the engine's OS vault (engine_vault.ts), not in lucid-gui.json. load()
+// hydrates them back into the same GuiSettings shape, so every consumer is unchanged; save() seals them
+// first and writes the file without them. With no usable OS vault the file keeps them (0600), as before.
+//
 // (OAuth is handled separately via omp's own credential vault / auth-broker -
 //  that's the more secure path and omp owns the storage there.)
 
-import { closeSync, fchmodSync, fstatSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir, hostname } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { errCode, RETRYABLE, withRetry, writeAtomic as writeFileAtomic } from "./atomic_file.ts";
+import { engineVaultDir, readVault, updateVault, vaultStatus, type VaultDelta, type VaultSource, type VaultStatus } from "./engine_vault.ts"; // P-VAULT-KEYS.1 (ADR-0472), P-VAULT-V2.1 (ADR-0474)
 import { emailDomainAllowed, managedConfig, skipAllowed } from "./managed_config.ts";
 import { DEFAULT_JUDGMENT_PROVIDER, parseJudgmentProvider, type JudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374) + P-JEV.5
 import { bannedJudges, noteJudgeOutcome, type JudgeFailureLedger } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416)
 import { validAccountName, type StoredAccount } from "./account_policy.ts"; // P-ACCT.1 (ADR-0375)
 import { remoteAgentMcpServers } from "../harness/mcp/registry.ts";
+import { pluginMcpServers } from "./plugins/mcp.ts"; // P-PLUGINS.2 (ADR-0462)
 import { DEFAULT_RELAY_URL } from "@oh-my-pi/pi-wire"; // P-COLLAB.3: the public-relay fallback origin
 import { sanitizeModelCompat, validateLocalProvider, type LocalModelDef, type LocalProviderDef } from "./local_providers.ts";
+import { isLocalModel } from "./renderer/model_families.ts"; // cloud-only default: explicit-choice migration
 import { validateCreatorEndpoint, type CreatorEndpointDef } from "./creator_registry.ts"; // CREATOR-0 (ADR-0282)
 
 // LUCID_GUI_SETTINGS_FILE is a supported instance-isolation seam. Creator and Fleet builds point it at
@@ -58,6 +67,8 @@ export interface GuiSettings {
   // email prompt, so fall back to the machine hostname (still traceable, still rolls up to the
   // dashboard / MCP push). `undefined` = not decided yet → show the first-open prompt.
   attributionMode?: "email" | "workstation";
+  // Provider API keys + config, by env var. P-VAULT-KEYS.1 (ADR-0472): held in the engine OS vault and
+  // hydrated by load(); in lucid-gui.json only when no OS vault is usable (0600 fallback).
   keys?: Record<string, string>;
   workspace?: string;
   recentWorkspaces?: string[];
@@ -81,8 +92,8 @@ export interface GuiSettings {
   // until reset. P-JEV.6 (ADR-0421): a judge of ANY provider whose account said the model does not exist
   // is banned outright. Fed by the judgment trace, read at every omp spawn.
   judgeFailures?: JudgeFailureLedger;
-  // P-ACCT.1 (ADR-0375): named provider accounts. Key accounts carry their secret here (same 0600-file
-  // posture as `keys`); oauth records exist only to carry a rename of an identity that lives in omp's
+  // P-ACCT.1 (ADR-0375): named provider accounts. Key accounts carry their secret in `key` (same custody
+  // as `keys`: the engine OS vault, ADR-0472); oauth records exist only to carry a rename of an identity that lives in omp's
   // vault. `activeAccount` maps providerId -> accountId ("key:<uuid>" | "oauth:<identityKey>").
   accounts?: Record<string, StoredAccount[]>;
   activeAccount?: Record<string, string>;
@@ -125,8 +136,8 @@ export interface GuiSettings {
   developerMode?: boolean;
   // P-KG-SYM.1: expose the workspace code graph to the agent as a read-only `codegraph_query` tool.
   codeGraphAgent?: boolean;
-  // P-MCP.1 (ADR-0020): configured MCP servers, fed into omp's session/new mcpServers. Tokens live
-  // in THIS git-ignored file (mode 0600) like provider keys; safeStorage custody is a later phase.
+  // P-MCP.1 (ADR-0020): configured MCP servers, fed into omp's session/new mcpServers. Tokens have the
+  // same custody as provider keys: the engine OS vault (ADR-0472), this file only as the 0600 fallback.
   mcpServers?: McpServerEntry[];
   // Personalization knowledge graph (ADR-0010, P9.x): opt-in, encrypted-at-rest.
   // OFF by default - no user-fact distillation, recall, or store until enabled.
@@ -143,6 +154,9 @@ export interface GuiSettings {
   // backend also writes from omp's reported default "did the user deliberately choose a model?". Empty ⇒
   // never chosen ⇒ the renderer boots to the highest-level available model for the active provider.
   chosenModel?: string;
+  // fix/v2.5.1-provider-default-models: the explicit-choice marker written by setChosenModel. Absent on
+  // values written before the fix; chosenModel() then refuses to restore a LOCAL value (read-time migration).
+  chosenModelSource?: "user";
   // P-IDE.1c (ADR-0029): the user acknowledged the data-sovereignty warning for China-origin models
   // (DeepSeek/Kimi/MiniMax/GLM/…). Until set, those models are hidden from the picker. Off by default.
   chinaModelsAcknowledged?: boolean;
@@ -168,8 +182,9 @@ export interface GuiSettings {
   // sovereignty control is `asksageOnly` (lockdown) + the fail-closed backend clamp (ADR-0217).
   govconCui?: boolean;
   // P-VOICE.1 (ADR-0115): voice (TTS/STT) config.
-  // sttProvider: mic engine — "elevenlabs" (cloud Scribe) or "whisper" (offline, air-gap/DoD). Default whisper.
-  sttProvider?: "elevenlabs" | "whisper";
+  // sttProvider: mic engine - "elevenlabs" (cloud Scribe), "whisper" (offline, air-gap/DoD) or "whistle"
+  // (CREATOR-WHISTLE, ADR-0432: in-process, ships with LUCID). Default whisper.
+  sttProvider?: SttProvider;
   // sttUrl: the offline OpenAI-compatible Whisper server (whisper.cpp / faster-whisper). Default :9000.
   sttUrl?: string;
   // ttsProvider: default engine for the brief podcast + read-aloud.
@@ -219,8 +234,8 @@ export interface GuiSettings {
   // DataChannel forms. STUN/TURN servers help traverse NAT (empty = LAN/VPN host candidates suffice).
   collabPreferDirectP2P?: boolean;
   collabIceUrls?: string[];         // stun:/turn: server URLs for NAT traversal
-  collabTurnUsername?: string;      // TURN long-term credential (user-local file; not a high-value secret)
-  collabTurnCredential?: string;
+  collabTurnUsername?: string;      // TURN long-term credential username (user-local file)
+  collabTurnCredential?: string;    // its secret: engine OS vault like provider keys (ADR-0472)
   // CREATOR-0 (ADR-0282): Creator integration endpoints (ComfyUI, a dots.tts server, a Suno partner base
   // URL, Blender, Unreal). DECLARATIONS only - each carries an opaque `vaultRef`; the token itself lives
   // in the OS-encrypted vault, exactly like localProviders. Only a Creator build ever writes these.
@@ -228,6 +243,24 @@ export interface GuiSettings {
   // CREATOR-0 (ADR-0283): remote monitoring targets (a DGX Spark, a GPU VM) - a DCGM/Prometheus exporter
   // or a LUCID JSON agent URL plus an optional vault credential NAME. Never a secret value.
   creatorTargets?: CreatorRemoteTargetDef[];
+  // P-VAULT-DEST.1 (ADR-0478, Contract C): enterprise secrets-manager destinations the vault backs up to.
+  // NON-SECRET config only (vault name, cloud, auth mode, tenant/client ids); a client secret is named by
+  // `clientSecretRef`, a vault ref, and resolved just-in-time per call. Read and written by vault_destinations.ts.
+  vaultDestinations?: VaultDestination[];
+}
+
+/** P-VAULT-DEST.1 (Contract C): the kinds of enterprise secrets manager a destination can be. */
+export type VaultDestinationKind = "azure-kv" | "aws-sm" | "gcp-sm" | "hashicorp-vault";
+/** P-VAULT-DEST.1 (Contract C): one stored destination. `config` is NON-SECRET (for azure-kv: vaultName,
+ *  cloud, auth, tenantId?, clientId?, clientSecretRef? = a vault ref, never the secret). Validated and
+ *  written only by vault_destinations.ts. */
+export interface VaultDestination {
+  id: string;
+  name: string;
+  kind: VaultDestinationKind;
+  config: Record<string, string>;
+  autoBackup?: boolean;
+  addedAt: number;
 }
 
 /** CREATOR-0: the stored shape of a remote monitoring target. Mirrors creator_monitor's RemoteTargetDef
@@ -334,8 +367,11 @@ import type { VoiceEndpointConfig } from "../harness/voice/voice_endpoint.ts"; /
 import { applyReadAloudPatch, effectiveReadAloud, touchesReadAloud } from "./voice_flags.ts"; // P-VOICE.8 (ADR-0400)
 
 // P-VOICE.1 (ADR-0115): voice (TTS/STT) config. Effective values with defaults, for the server + UI.
+export type SttProvider = "elevenlabs" | "whisper" | "whistle";
+const STT_PROVIDERS: Record<SttProvider, true> = { elevenlabs: true, whisper: true, whistle: true };
+
 export interface VoiceSettings {
-  sttProvider: "elevenlabs" | "whisper";
+  sttProvider: SttProvider;
   sttUrl: string;
   ttsProvider: "elevenlabs" | "openai-tts" | "local-tts" | "dots-tts";
   /** P-VOICE.6: base URL of the self-hosted dots.tts service (SSH forward / proxy of the DGX's :8084). */
@@ -363,7 +399,7 @@ export function voiceSettings(): VoiceSettings {
   const perProvider = s.ttsVoices?.[ttsProvider];
   const readAloud = effectiveReadAloud(s);
   return {
-    sttProvider: s.sttProvider === "elevenlabs" ? "elevenlabs" : "whisper", // offline is the safe default
+    sttProvider: s.sttProvider && STT_PROVIDERS[s.sttProvider] ? s.sttProvider : "whisper", // offline is the safe default
     sttUrl: s.sttUrl || process.env.LUCID_STT_URL || "http://localhost:9000",
     ttsProvider,
     ttsVoice: perProvider ?? (ttsProvider === "elevenlabs" ? s.ttsVoice ?? "" : ""),
@@ -384,7 +420,7 @@ export function voiceSettings(): VoiceSettings {
 }
 
 /** P-VOICE.7: upsert an imported endpoint (validated upstream by parseVoiceEndpointConfig). Dedupe by
- *  id; a re-import of the same id replaces the stored copy (the loader re-exports after edits). The
+ *  id; a re-import of the same id replaces the stored copy (the Private AI Platform re-exports after edits). The
  *  list is capped defensively - an import can never grow the settings file without bound. */
 export function importVoiceEndpoint(cfg: VoiceEndpointConfig): VoiceSettings {
   const s = load();
@@ -424,7 +460,7 @@ export function removeVoiceEndpoint(id: string): VoiceSettings {
  *  voice independently and each engine keeps its own remembered voice. */
 export function setVoiceSettings(patch: Partial<VoiceSettings>): VoiceSettings {
   const s = load();
-  if (patch.sttProvider) s.sttProvider = patch.sttProvider === "elevenlabs" ? "elevenlabs" : "whisper";
+  if (patch.sttProvider) s.sttProvider = STT_PROVIDERS[patch.sttProvider] ? patch.sttProvider : "whisper";
   if (patch.sttUrl !== undefined) s.sttUrl = patch.sttUrl.trim() || undefined;
   if (patch.ttsProvider) s.ttsProvider = patch.ttsProvider;
   if (patch.ttsVoice !== undefined) {
@@ -501,7 +537,8 @@ export function mcpServersForAcp(): Record<string, unknown>[] {
     .map((e) => ({ type: e.transport, name: e.name, url: e.url, headers: e.token ? [{ name: "Authorization", value: `Bearer ${e.token}` }] : [] }));
   // P-AGENTFW.1 (ADR-0147): enabled remote ACP agents (hermes/openclaw) attach as stdio "agent-firewall"
   // MCP servers — omp spawns `lucid agent-firewall --conn <id>`, which scans both directions fail-closed.
-  return [...http, ...remoteAgentMcpServers()];
+  // P-PLUGINS.2 (ADR-0462): every RUNNING plugin that declares `mcp` (desktop/plugins/mcp.ts).
+  return [...http, ...remoteAgentMcpServers(), ...pluginMcpServers()];
 }
 export function setPersonalScope(scope: GuiSettings["personalScope"]): GuiSettings {
   const s = load(); s.personalScope = scope; save(s); return s;
@@ -555,45 +592,370 @@ export function setLocalProviderEnabled(id: string, enabled: boolean): void {
 // P-PERF.5 (ADR-0132): load() used to read + JSON.parse the file on EVERY call - and nearly every
 // request handler calls it (often several times). Memoize the parse on the file's mtime; callers get a
 // structuredClone so today's read-modify-save pattern keeps its exact semantics (every load() is an
-// independent object - a caller mutating without save() can never corrupt the memo). A missing or
-// corrupt file is just {}.
+// independent object - a caller mutating without save() can never corrupt the memo). A missing file is
+// just {}; a corrupt one is NOT (P-SETTINGS.1, see below).
 // Memo key = mtime AND size: two writes can land in the same mtime tick, but a content change almost
 // always changes the byte length too. (Residual blind spot - same-ms, same-size external rewrite -
 // is accepted: this process is the file's only writer in practice.)
 // stat and read/write go through ONE file descriptor (fstat on the open fd), so the metadata the memo
 // is keyed on always describes the exact bytes read/written - no check-then-use race (js/file-system-race).
+//
+// P-SETTINGS.1 (ADR-0439): the settings file must never be silently wiped. save() used to open the
+// file with "w" (truncate) and write in place, and load() turned ANY read/parse failure into {}. An
+// engine killed mid-save (the window's frozen-engine restart does exactly that), or a load() racing a
+// save(), saw an empty profile; the next read-modify-save then persisted that empty profile, onboarding
+// re-ran, and every setting (Windows sandbox off, model, keys) silently reverted to its default. Now:
+//   - save() writes a temp file, fsyncs it, and renames it over the original (readers see old or new
+//     bytes, never a torn file), after copying the last good file to `<file>.bak`.
+//   - load() treats a corrupt file as corrupt, not empty: it keeps the bad bytes aside as
+//     `<file>.corrupt-<ts>`, restores `<file>.bak` if that parses, and only then falls back to {}.
+//   - Review fixes (2026-10-09): only a MISSING file is {}. A file that exists but cannot be opened or
+//     read (a lock that outlives the retries, a permission or I/O error) throws, so no read-modify-save
+//     can persist an empty profile over it. A parsed backup is served even when the primary cannot be
+//     rewritten. Recovery acts only on the file that failed to parse: if another writer replaced the
+//     path after the read, the replacement is loaded, never renamed aside or overwritten.
 let loadMemo: { file: string; mtimeMs: number; size: number; s: GuiSettings } | null = null;
+const bakFile = (file: string): string => `${file}.bak`;
+
+/** The fs calls whose Windows failure modes P-SETTINGS.1 must survive. Production always uses node:fs;
+ *  tests swap entries through _setSettingsIoForTest to hold a lock or land a concurrent save on cue.
+ *  The open is NOT swappable: `openFault` runs just before the real openSync and can only throw, so the
+ *  descriptor that is fstat'd and read stays visibly an openSync handle (CodeQL js/file-system-race). */
+const realIo = { renameSync, statSync, openFault: null as ((file: string) => void) | null };
+const io = { ...realIo };
+/** Test-only: replace some of the fs calls above; null restores node:fs. */
+export function _setSettingsIoForTest(patch: Partial<typeof realIo> | null): void { Object.assign(io, realIo, patch ?? {}); }
+
+/** Parse settings bytes; anything that is not a JSON object is corrupt (throws). */
+function parseSettings(text: string): GuiSettings {
+  const v: unknown = JSON.parse(text);
+  if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("settings file is not a JSON object");
+  return v as GuiSettings;
+}
+
+/** Write `data` to `path` atomically (atomic_file.ts), renaming through the test seam above. */
+function writeAtomic(path: string, data: string | Uint8Array): { mtimeMs: number; size: number } {
+  return writeFileAtomic(path, data, (from, to) => io.renameSync(from, to));
+}
+
+/** True while `file` is still the exact file whose bytes were read (same identity, size and mtime). */
+function samePrimary(file: string, read: Stats): boolean {
+  try {
+    const now = io.statSync(file);
+    return now.ino === read.ino && now.size === read.size && now.mtimeMs === read.mtimeMs;
+  } catch { return false; } // gone or unreadable: not ours to touch
+}
+
+/** The primary parsed as corrupt: restore the backup if it parses, keep the bad bytes for forensics, and
+ *  never act on a path another writer replaced after the read (that writer's save would be lost). */
+function recoverCorrupt(file: string, err: unknown, read: { st: Stats; bytes: Buffer }, mayReread: boolean): GuiSettings {
+  if (!samePrimary(file, read.st)) {
+    if (mayReread) return loadFile(file, false);
+    throw new Error(`settings: ${file} kept changing during corrupt-file recovery; refusing to guess`);
+  }
+  let restored: GuiSettings | null = null;
+  try { restored = parseSettings(readFileSync(bakFile(file), "utf8")); } catch { /* no usable backup */ }
+  const why = String((err as Error)?.message ?? err).slice(0, 120);
+  const kept = `${file}.corrupt-${Date.now()}`;
+  if (!restored) {
+    // Nothing to restore: move the bad file aside (copy it if the rename is refused) and start from defaults.
+    try { withRetry(() => io.renameSync(file, kept)); } catch {
+      try { writeFileSync(kept, read.bytes, { flag: "wx", mode: 0o600 }); } catch { /* best effort */ }
+    }
+    console.error(`[settings] ${file} was unreadable (${why}); no usable backup, starting from defaults.`);
+    loadMemo = null;
+    return {};
+  }
+  // A copy, not a rename: the restore below replaces the primary atomically, so the path is never empty.
+  try { writeFileSync(kept, read.bytes, { flag: "wx", mode: 0o600 }); } catch { /* best effort */ }
+  console.error(`[settings] ${file} was unreadable (${why}); restored the last good copy from ${bakFile(file)}.`);
+  try {
+    const st = writeAtomic(file, JSON.stringify(restored, null, 2));
+    loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: restored };
+  } catch (e) {
+    // A lock outlived the retries. The parsed backup is still the user's profile: serve it, never {},
+    // and let the next load() finish the restore.
+    loadMemo = null;
+    console.error(`[settings] could not rewrite ${file} from the backup (${errCode(e) ?? String(e).slice(0, 120)}); serving the backup until it can be.`);
+  }
+  return structuredClone(restored);
+}
+
+function loadFile(file: string, mayReread: boolean): GuiSettings {
+  let read: { st: Stats; bytes: Buffer };
+  try {
+    let fd: number;
+    for (let attempt = 0; ; attempt++) { // withRetry inlined: fd must stay a direct openSync handle
+      try { io.openFault?.(file); fd = openSync(file, "r"); break; } catch (e) {
+        if (attempt >= 9 || !RETRYABLE.includes(errCode(e) ?? "")) throw e;
+        Bun.sleepSync(15);
+      }
+    }
+    try {
+      const st = fstatSync(fd);
+      if (loadMemo && loadMemo.file === file && loadMemo.mtimeMs === st.mtimeMs && loadMemo.size === st.size) {
+        return structuredClone(loadMemo.s);
+      }
+      read = { st, bytes: readFileSync(fd) };
+    } finally { closeSync(fd); }
+  } catch (e) {
+    if (errCode(e) === "ENOENT") return {}; // missing (first run, or the user deleted it) -> {}
+    // It exists but cannot be opened or read (a lock that outlived the retries, a permission or I/O
+    // error). An empty profile here is what the next read-modify-save would persist over it.
+    throw new Error(`settings: ${file} exists but cannot be read (${errCode(e) ?? String(e).slice(0, 120)}); refusing to treat it as an empty profile`, { cause: e });
+  }
+  let s: GuiSettings;
+  try { s = parseSettings(read.bytes.toString("utf8")); } catch (e) { return recoverCorrupt(file, e, read, mayReread); }
+  loadMemo = { file, mtimeMs: read.st.mtimeMs, size: read.st.size, s };
+  return structuredClone(s);
+}
+
+// ── P-VAULT-KEYS.1 (ADR-0472): secret custody ─────────────────────────────────────────────────────────
+// Vault refs: keys[ENV] -> "key:<ENV>", accounts[p][i].key -> "account:<id>", mcpServers[i].token ->
+// "mcp:<id>", collabTurnCredential -> "turn:credential". loadMemo above holds the file AS WRITTEN (no
+// vaulted secrets); every load() merges the vault in from readVault, which is itself memoized on the
+// secrets file's mtime + size, so the effective memo key covers both files.
+const TURN_REF = "turn:credential";
+
+/** Visit every vault-owned secret value in `s` as (ref, value); with `strip`, also delete those fields
+ *  from `s` (mutates). Empty values are dropped, never vaulted. */
+function eachSecret(s: GuiSettings, visit: (ref: string, value: string) => void, strip: boolean): void {
+  if (s.keys && typeof s.keys === "object") {
+    for (const [env, v] of Object.entries(s.keys)) if (typeof v === "string" && v) visit(`key:${env}`, v);
+    if (strip) delete s.keys;
+  }
+  for (const list of Object.values(s.accounts ?? {})) {
+    if (!Array.isArray(list)) continue;
+    for (const a of list) {
+      if (!a || typeof a !== "object" || !("key" in a)) continue;
+      if (typeof a.key === "string" && a.key) visit(`account:${a.id}`, a.key);
+      if (strip) delete a.key;
+    }
+  }
+  for (const e of Array.isArray(s.mcpServers) ? s.mcpServers : []) {
+    if (!e || typeof e !== "object" || !("token" in e)) continue;
+    if (typeof e.token === "string" && e.token) visit(`mcp:${e.id}`, e.token);
+    if (strip) delete e.token;
+  }
+  if ("collabTurnCredential" in s) {
+    if (typeof s.collabTurnCredential === "string" && s.collabTurnCredential) visit(TURN_REF, s.collabTurnCredential);
+    if (strip) delete s.collabTurnCredential;
+  }
+}
+function holdsSecrets(s: GuiSettings): boolean {
+  let any = false;
+  eachSecret(s, () => { any = true; }, false);
+  return any;
+}
+/** The secrets `s` holds, keyed by vault ref. */
+function secretsOf(s: GuiSettings): Record<string, string> {
+  const out: Record<string, string> = {};
+  eachSecret(s, (ref, v) => { out[ref] = v; }, false);
+  return out;
+}
+/** A deep copy of `s` without its secret fields. */
+function withoutSecrets(s: GuiSettings): GuiSettings {
+  const copy = structuredClone(s);
+  eachSecret(copy, () => {}, true);
+  return copy;
+}
+/** Put vaulted secrets back into `s` (mutates). A value already in the file wins: it is what an older
+ *  build or a crash between the two writes left there, and the next save moves it into the vault. */
+function hydrateSecrets(s: GuiSettings, vault: Readonly<Record<string, string>>): void {
+  for (const [ref, v] of Object.entries(vault)) {
+    if (!ref.startsWith("key:")) continue;
+    const env = ref.slice("key:".length);
+    s.keys = s.keys ?? {};
+    if (!s.keys[env]) s.keys[env] = v;
+  }
+  for (const list of Object.values(s.accounts ?? {})) {
+    if (!Array.isArray(list)) continue;
+    for (const a of list) if (a && typeof a === "object" && !a.key && vault[`account:${a.id}`]) a.key = vault[`account:${a.id}`];
+  }
+  for (const e of Array.isArray(s.mcpServers) ? s.mcpServers : []) {
+    if (e && typeof e === "object" && !e.token && vault[`mcp:${e.id}`]) e.token = vault[`mcp:${e.id}`];
+  }
+  if (!s.collabTurnCredential && vault[TURN_REF]) s.collabTurnCredential = vault[TURN_REF];
+}
+
+// Several engines share one vault, so a save never writes back a whole map: it sends the vault a DELTA
+// (engine_vault.updateVault applies it under a cross-process lock to a freshly decrypted map). The delta is
+// measured against what the vault held, per ref, for the object load() returned (`baselines`): only refs
+// this caller actually changed are set or deleted, so a stale object can neither drop a key another
+// engine added nor bring back one another engine deleted. An object load() did not return (a literal, a
+// spread copy) has no baseline: its secrets are set and nothing is deleted.
+const baselines = new WeakMap<GuiSettings, Record<string, string | undefined>>();
+
+function deltaFor(s: GuiSettings, current: Record<string, string>, source: VaultSource): VaultDelta {
+  const base = baselines.get(s);
+  if (!base) return { set: { ...current }, del: [], source };
+  const set: Record<string, string> = {};
+  for (const [ref, v] of Object.entries(current)) if (base[ref] !== v) set[ref] = v;
+  const del = Object.keys(base).filter((ref) => base[ref] !== undefined && current[ref] === undefined);
+  return { set, del, source };
+}
+
+/** Write `s`: secrets to the vault first, then the file without them. Returns true when the file was
+ *  written stripped. The plaintext fallback (file keeps its secrets, 0600) is decided BEFORE any write and
+ *  only when the vault was already not usable; a vault write that fails throws, and the file is left
+ *  untouched, so a failed write can never push a secret into lucid-gui.json. A crash between the two
+ *  writes leaves the secrets in both places, which is safe: the file value wins on load and moves.
+ *  `source` (P-VAULT-V2.1) is the provenance a ref NEW to the vault is recorded with. */
+function persist(file: string, s: GuiSettings, source: VaultSource = "typed"): boolean {
+  const dir = engineVaultDir(file);
+  const current = secretsOf(s);
+  const status = vaultStatus(dir);
+  let vaulted = false;
+  if (status.state !== "unavailable") {
+    const delta = deltaFor(s, current, source);
+    const empty = Object.keys(delta.set).length === 0 && delta.del.length === 0;
+    if (status.state === "ok") {
+      if (!empty) updateVault(dir, delta);
+      vaulted = true;
+    } else if (!empty) {
+      // Unreadable: a real change starts a fresh vault (the old record is set aside), and that vault must
+      // receive every secret this object holds, not just the change. Only when this account's master key
+      // is readable: with the key record missing over sealed data, or a file in a newer format,
+      // updateVault throws and nothing is written (ADR-0474 security review).
+      updateVault(dir, { set: current, del: [], source });
+      vaulted = true;
+    } // Unreadable and nothing secret changed: leave every secret-related byte as it is.
+  }
+  // Keep the previous generation as the backup, but never let a corrupt primary overwrite a good backup.
+  // Once the vault holds the secrets the backup is written stripped too: plaintext never survives in .bak.
+  try {
+    const prev = readFileSync(file, "utf8");
+    const prevS = parseSettings(prev);
+    writeAtomic(bakFile(file), vaulted && holdsSecrets(prevS) ? JSON.stringify(withoutSecrets(prevS), null, 2) : prev);
+  } catch { /* first save, or the primary is unreadable: leave the existing backup alone */ }
+  const body = vaulted ? withoutSecrets(s) : structuredClone(s);
+  const st = writeAtomic(file, JSON.stringify(body, null, 2));
+  loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: body };
+  if (vaulted) baselines.set(s, { ...current });
+  return vaulted;
+}
+
+const SCRUB_MARKER = "scrub.pending";
+const MOVED = "[moved to OS vault]";
+
+/** After a migration: strip the secret fields from `.bak` and every parseable `.corrupt-*` copy, and in
+ *  copies that do not parse replace each moved secret VALUE (as written, and JSON-escaped) with
+ *  `[moved to OS vault]`, keeping every other byte for forensics. True when nothing was left behind. */
+function scrubSecretCopies(file: string, values: readonly string[]): boolean {
+  const dir = dirname(file);
+  const base = basename(file);
+  let names: string[];
+  try { names = readdirSync(dir); } catch { return false; }
+  // Byte-exact needles (latin1 maps each byte to one char); very short values would shred unrelated bytes.
+  const needles = [...new Set(values.filter((v) => v.length >= 6).flatMap((v) => [v, JSON.stringify(v).slice(1, -1)]))]
+    .map((n) => Buffer.from(n, "utf8").toString("latin1"))
+    .sort((a, b) => b.length - a.length);
+  let clean = true;
+  for (const name of names) {
+    if (name !== `${base}.bak` && !name.startsWith(`${base}.corrupt-`)) continue;
+    const path = join(dir, name);
+    try {
+      const bytes = readFileSync(path);
+      let copy: GuiSettings | null = null;
+      try { copy = parseSettings(bytes.toString("utf8")); } catch { /* unparseable: redact by value below */ }
+      if (copy) {
+        if (holdsSecrets(copy)) writeAtomic(path, JSON.stringify(withoutSecrets(copy), null, 2));
+        continue;
+      }
+      const raw = bytes.toString("latin1");
+      let text = raw;
+      for (const n of needles) text = text.split(n).join(MOVED);
+      if (text !== raw) writeAtomic(path, Buffer.from(text, "latin1"));
+    } catch { clean = false; }
+  }
+  return clean;
+}
+
+/** Scrub the copies; on any failure leave `scrub.pending` in the vault dir so later loads retry. */
+function scrubAfterMigration(file: string, dir: string, values: readonly string[]): void {
+  const marker = join(dir, SCRUB_MARKER);
+  if (scrubSecretCopies(file, values)) {
+    try { unlinkSync(marker); } catch { /* there was none */ }
+    return;
+  }
+  try { writeFileAtomic(marker, `${file}\n`); } catch { /* retried with the next migration */ }
+  console.error(`[settings] could not yet remove plaintext keys from the backups of ${file}; retrying on a later load.`);
+}
+
+let migrateRetryAt = 0;
+/** The file still holds plaintext secrets and the vault is usable: move them now (existing installs
+ *  migrate on the first engine load, with no re-entry). Idempotent; a failure keeps the plaintext and
+ *  retries a minute later. */
+function migratePlaintext(file: string, s: GuiSettings): void {
+  const dir = engineVaultDir(file);
+  if (Date.now() < migrateRetryAt || vaultStatus(dir).state !== "ok") return;
+  try {
+    if (persist(file, s, "migrated-settings")) {
+      scrubAfterMigration(file, dir, Object.values(secretsOf(s)));
+      console.error(`[settings] moved saved keys and tokens from ${file} into the OS vault (${vaultStatus(dir).custody}).`);
+      return;
+    }
+  } catch (e) {
+    console.error(`[settings] could not move saved keys into the OS vault yet (${String((e as Error)?.message ?? e).slice(0, 160)}); they stay in ${file}.`);
+  }
+  migrateRetryAt = Date.now() + 60_000;
+}
+
+let unreadableNoted = "";
+
 export function load(): GuiSettings {
   const file = settingsFile();
-  try {
-    const fd = openSync(file, "r"); // throws when missing -> {}
-    try {
-      const st = fstatSync(fd);
-      if (!loadMemo || loadMemo.file !== file || loadMemo.mtimeMs !== st.mtimeMs || loadMemo.size !== st.size) {
-        loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: JSON.parse(readFileSync(fd, "utf8")) as GuiSettings };
-      }
-    } finally { closeSync(fd); }
-    return structuredClone(loadMemo.s);
-  } catch { return {}; }
+  const s = loadFile(file, true);
+  const dir = engineVaultDir(file);
+  const vault = readVault(dir);
+  if (vault.problem) {
+    // Fail closed: serve the file as it is, never strip or rewrite anything secret-related.
+    const note = `${file}|${vault.problem}`;
+    if (note !== unreadableNoted) {
+      unreadableNoted = note;
+      console.error(`[settings] saved keys in the OS vault could not be decrypted (${vault.problem}); they are left untouched. Re-entering a key starts a fresh vault.`);
+    }
+    baselines.set(s, secretsOf(s)); // only what the caller changes from here is a delta
+    return s;
+  }
+  const plaintext = holdsSecrets(s);
+  hydrateSecrets(s, vault.secrets);
+  // Baseline = what the VAULT holds for each secret this object carries (undefined for a file-only value,
+  // so the next save moves it).
+  const base: Record<string, string | undefined> = {};
+  for (const ref of Object.keys(secretsOf(s))) base[ref] = vault.secrets[ref];
+  baselines.set(s, base);
+  if (plaintext) migratePlaintext(file, s);
+  else if (vault.exists && existsSync(join(dir, SCRUB_MARKER))) scrubAfterMigration(file, dir, Object.values(vault.secrets));
+  return s;
 }
+
+/** Persist `s`. Throws when its secret changes cannot be sealed into a usable vault (the file is then
+ *  left untouched); callers that take a key from the user surface that error. */
 export function save(s: GuiSettings): void {
-  const file = settingsFile();
-  const fd = openSync(file, "w");
-  try {
-    writeFileSync(fd, JSON.stringify(s, null, 2), "utf8");
-    try { fchmodSync(fd, 0o600); } catch { /* best-effort on Windows */ }
-    try {
-      const st = fstatSync(fd);
-      loadMemo = { file, mtimeMs: st.mtimeMs, size: st.size, s: structuredClone(s) };
-    } catch { loadMemo = null; }
-  } finally { closeSync(fd); }
+  persist(settingsFile(), s);
+}
+
+/** P-VAULT-KEYS.1: where saved keys live for this settings file (the Settings note; never a secret). */
+export function keyVaultStatus(): VaultStatus {
+  return vaultStatus(keyVaultDir());
+}
+
+/** P-VAULT-V2.1 (ADR-0474): the engine vault directory for this settings file (the one vault every
+ *  engine-side secret lives in: settings keys, migrated safeStorage credentials, new credentials). */
+export function keyVaultDir(): string {
+  return engineVaultDir(settingsFile());
 }
 
 /** Push stored keys + AskSage base URL into process.env so child `omp acp`
- *  (and the AskSage extension) inherit them. */
-export function applyEnv(): void {
+ *  (and the AskSage extension) inherit them. `allow` filters the key names: the engine passes
+ *  env_name_policy.mayHoldGlobalEnv, so a key under a reserved env name (PATH, NODE_*, *_PROXY,
+ *  *_BASE_URL, LUCID_*, ...) that Settings > Providers does not configure itself stays in the vault and
+ *  out of the env every child inherits (security review SECRET-INTAKE-ENVNAME-UNRESTRICTED). Injected,
+ *  not imported: this module is also bundled into Electron main, which must not load the provider table. */
+export function applyEnv(allow: (envName: string) => boolean = () => true): void {
   const s = load();
-  for (const [k, v] of Object.entries(s.keys ?? {})) if (v) process.env[k] = v;
+  for (const [k, v] of Object.entries(s.keys ?? {})) if (v && allow(k)) process.env[k] = v;
   if (s.asksageBaseUrl) process.env.ASKSAGE_BASE_URL = s.asksageBaseUrl;
   if (s.asksageDatasets?.length) process.env.ASKSAGE_DATASETS = s.asksageDatasets.join(",");
   if (s.asksageQueryModel) process.env.ASKSAGE_QUERY_MODEL = s.asksageQueryModel;
@@ -674,11 +1036,27 @@ export function setLastModel(model: string): void {
 /** P-MODELDEF: the user's explicitly-chosen model ("" if they've never picked one). Set ONLY on a genuine
  *  user selection in the picker; never from a system switch (lockdown clamp, no-response
  *  fallback, collab-guest mirror, boot default-select), so it cleanly signals an explicit preference. */
-export function chosenModel(): string { return load().chosenModel ?? ""; }
+//
+// Cloud-only default (fix/v2.5.1-provider-default-models): every write from now on carries
+// `chosenModelSource: "user"`, the explicit-choice marker. MIGRATION: a stored LOCAL value WITHOUT the
+// marker (written before this fix) is treated as not explicit and reads as "", so it never auto-applies;
+// the user re-picks it once if they really want it. A legacy CLOUD value is still honored (it can only
+// ever resolve to a cloud default). The stored value is left on disk untouched (read-time migration).
+export function chosenModel(): string {
+  const s = load();
+  const v = s.chosenModel ?? "";
+  if (!v || s.chosenModelSource === "user") return v;
+  return isLocalModel(v, localProviderPrefixes()) ? "" : v;
+}
 export function setChosenModel(model: string): GuiSettings {
   const s = load(); const m = (model ?? "").trim();
-  if (m) s.chosenModel = m; else delete s.chosenModel;
+  if (m) { s.chosenModel = m; s.chosenModelSource = "user"; } else { delete s.chosenModel; delete s.chosenModelSource; }
   save(s); return s;
+}
+/** Every configured Local Provider's omp prefix, enabled or not (a disabled one is still LOCAL), for
+ *  isLocalModel. The implicit engines (Ollama, llama.cpp, LM Studio, ...) are covered by isLocalModel itself. */
+export function localProviderPrefixes(): Set<string> {
+  return new Set(listLocalProviders().map((p) => p.ompProvider).filter(Boolean));
 }
 // P-THEME.1: the user's chosen app theme id (see desktop/renderer/theme.ts THEMES). "" / unset means
 // "not chosen", which resolveTheme folds to the DEFAULT (lucid-dark). P-THEME.2: it used to fold to the
@@ -822,6 +1200,9 @@ export function resetJudgeBans(): GuiSettings {
 /** P-JEV.1: the omp `--config` overlay LUCID rewrites at every spawn, beside the settings file so the
  *  LUCID_GUI_SETTINGS_FILE isolation seam isolates it too. */
 export function judgmentOverlayFile(): string { return join(dirname(settingsFile()), "lucid-judgment.yml"); }
+/** P-MODEL.8 (ADR-0448): the omp `--config` overlay carrying the heavy model roles (model_roles.ts). Same
+ *  directory and isolation seam as the judgment overlay. */
+export function modelRolesOverlayFile(): string { return join(dirname(settingsFile()), "lucid-model-roles.yml"); }
 /** ADR-0221: the stored embeddings config (non-secret), or null when semantic search was never set up. */
 export type StoredEmbeddingsConfig = NonNullable<GuiSettings["embeddings"]>;
 export function embeddingsConfig(): StoredEmbeddingsConfig | null { return load().embeddings ?? null; }
@@ -891,7 +1272,8 @@ export function attribution(): Attribution {
 }
 export function setKey(env: string, key: string): GuiSettings {
   const s = load(); s.keys = s.keys ?? {};
-  if (key) { s.keys[env] = key; process.env[env] = key; }
-  else { delete s.keys[env]; delete process.env[env]; }
-  save(s); return s;
+  if (key) s.keys[env] = key; else delete s.keys[env];
+  save(s); // throws when the vault cannot take the key: then the env slot keeps its old value too
+  if (key) process.env[env] = key; else delete process.env[env];
+  return s;
 }

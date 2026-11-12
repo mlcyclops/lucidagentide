@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   chipState, chipStripHtml, confidenceLabel, confidenceOpacity, creatorEditorHtml, dropTargetMs, formatClock,
-  isEditorSession, isWavTrack, msAtX, playheadX, selectionRange, waveformBars,
+  isEditorAlignData, isEditorSession, isWavTrack, msAtX, playheadX, selectionRange, waveformBars,
   type CreatorEditorView, type EditorSession,
 } from "./creator_editor.ts";
 import { DERIVED_CONFIDENCE_CEILING, type TimelineDoc, type TimelineItem } from "../../harness/creator/timeline.ts";
@@ -136,6 +136,12 @@ describe("confidenceLabel: a guess can never print as engine timing", () => {
     expect(confidenceLabel(item("i1", "the", 0, 1, { confidence: NaN }))).toBe("Engine timing, 0% confidence.");
   });
 
+  test("a MEASURED item prints the word probability Whistle gave it, uncapped and never as engine timing", () => {
+    const measured = item("i1", "the", 0, 1, { source: "measured", confidence: 0.93 });
+    expect(confidenceLabel(measured)).toBe("Measured by Whistle: 93% word probability.");
+    expect(confidenceOpacity(measured)).toBe(Math.round((0.45 + 0.93 * 0.55) * 100) / 100);
+  });
+
   test("opacity carries confidence but a faint word stays visible and a derived one stays capped", () => {
     expect(confidenceOpacity(item("i1", "a", 0, 1, { confidence: 0 }))).toBe(0.45);
     expect(confidenceOpacity(item("i1", "a", 0, 1))).toBe(1);
@@ -214,6 +220,19 @@ describe("the pane keeps its honesty in the markup", () => {
     const html = chipStripHtml(doc([item("i1", "maybe", 0, 100, { source: "derived", confidence: 0.7 })]), 0, []);
     expect(html).toContain("ced-chip derived on");
     expect(html).toContain("never engine timing");
+    expect(html).not.toContain("Measured by Whistle");
+    expect(html).not.toMatch(/class="ced-chip[^"]*\bmeasured\b/);
+  });
+
+  test("a measured word wears the measured class and the Whistle label; a derived neighbour keeps its own", () => {
+    const html = chipStripHtml(doc([
+      item("i1", "quick", 0, 100, { source: "measured", confidence: 0.88 }),
+      item("i2", "brown", 100, 200, { source: "derived", confidence: 0.5 }),
+    ]), 0, []);
+    expect(html).toContain('class="ced-chip measured on" data-ced-chip="i1"');
+    expect(html).toContain("Measured by Whistle: 88% word probability.");
+    expect(html).toContain('class="ced-chip derived" data-ced-chip="i2"');
+    expect(html).toContain("never engine timing");
   });
 
   test("the provenance note renders ONCE, as a block paragraph above the strip", () => {
@@ -281,5 +300,22 @@ describe("the open-session shape gate", () => {
     expect(isEditorSession({ ...session(), peaks: "lots" })).toBe(false);
     expect(isEditorSession({ ...session(), audioB64: 42 })).toBe(false);
     expect(isEditorSession({ ...session(), sources: null })).toBe(false);
+  });
+});
+
+describe("the align payload shape gate (CREATOR-WHISTLE)", () => {
+  const aligned = {
+    trackId: "t1", items: [item("i1", "the", 0, 100, { source: "measured", confidence: 0.9 })],
+    note: "measured in-process by Whistle: 1 of 1 words matched, 0 interpolated",
+    alignedBy: { provider: "whistle", modelSha256: "b6e02f04" },
+    matched: 1, interpolated: 0, transcript: "the", language: "en", windows: 1, jobId: "j1",
+  };
+
+  test("a well-formed answer passes; one without items, a note, or its provenance is refused", () => {
+    expect(isEditorAlignData(aligned)).toBe(true);
+    expect(isEditorAlignData(null)).toBe(false);
+    expect(isEditorAlignData({ ...aligned, items: "words" })).toBe(false);
+    expect(isEditorAlignData({ ...aligned, note: undefined })).toBe(false);
+    expect(isEditorAlignData({ ...aligned, alignedBy: { provider: "whistle" } })).toBe(false);
   });
 });

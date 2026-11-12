@@ -28,7 +28,7 @@
 
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
-import { DERIVED_CONFIDENCE_CEILING, docDurationMs, type TimelineDoc, type TimelineItem } from "../../harness/creator/timeline.ts";
+import { DERIVED_CONFIDENCE_CEILING, docDurationMs, type AlignedBy, type TimelineDoc, type TimelineItem } from "../../harness/creator/timeline.ts";
 
 // ── view types (mirror of desktop/creator_editor.ts; bridge.ts imports these) ──
 
@@ -59,6 +59,28 @@ export function isEditorSession(v: unknown): v is EditorSession {
   return !!o && typeof o.trackId === "string" && typeof o.audioB64 === "string" && typeof o.note === "string"
     && Array.isArray(o.peaks) && Array.isArray(o.sources)
     && !!o.doc && Array.isArray(o.doc.items) && Array.isArray(o.doc.clips) && typeof o.doc.sampleRate === "number";
+}
+
+/** CREATOR-WHISTLE (ADR-0432): what `POST /api/creator/align` answers on success. `items` replace the
+ *  derived items of the open document; `note` is the measured provenance line, printed verbatim. */
+export interface EditorAlignData {
+  trackId: string;
+  items: TimelineItem[];
+  note: string;
+  alignedBy: AlignedBy;
+  matched: number;
+  interpolated: number;
+  transcript: string;
+  language: string;
+  windows: number;
+  jobId: string;
+}
+
+/** Shape gate for the align payload. Fail-closed: a malformed answer keeps the derived document. */
+export function isEditorAlignData(v: unknown): v is EditorAlignData {
+  const o = v as EditorAlignData | null;
+  return !!o && typeof o.trackId === "string" && Array.isArray(o.items) && typeof o.note === "string"
+    && !!o.alignedBy && typeof o.alignedBy.provider === "string" && typeof o.alignedBy.modelSha256 === "string";
 }
 
 /** One library track offered in the picker. */
@@ -139,6 +161,7 @@ export function chipState(item: TimelineItem, playheadMs: number, selected: Read
 export function confidenceLabel(item: TimelineItem): string {
   const raw = Number.isFinite(item.confidence) ? clamp(item.confidence, 0, 1) : 0;
   if (item.source === "vendor") return `Engine timing, ${Math.round(raw * 100)}% confidence.`;
+  if (item.source === "measured") return `Measured by Whistle: ${Math.round(raw * 100)}% word probability.`;
   const capped = Math.min(raw, DERIVED_CONFIDENCE_CEILING);
   return `LUCID measured this: ${Math.round(capped * 100)}% confidence at most. A derived guess, never engine timing.`;
 }
@@ -146,7 +169,7 @@ export function confidenceLabel(item: TimelineItem): string {
 /** Chip opacity from confidence: a low-confidence word is visibly fainter, but never invisible. */
 export function confidenceOpacity(item: TimelineItem): number {
   const raw = Number.isFinite(item.confidence) ? clamp(item.confidence, 0, 1) : 0;
-  const capped = item.source === "vendor" ? raw : Math.min(raw, DERIVED_CONFIDENCE_CEILING);
+  const capped = item.source === "derived" ? Math.min(raw, DERIVED_CONFIDENCE_CEILING) : raw;
   return Math.round((0.45 + capped * 0.55) * 100) / 100;
 }
 
@@ -209,11 +232,13 @@ function openerHtml(v: CreatorEditorView): string {
 }
 
 /** One word. ONE line, always: nowrap plus an ellipsis plus a max-width, so a pathological token cannot
- *  blow the strip out (invariant 11). Its confidence is in its opacity, and a derived word wears a dotted
- *  underline so provenance is legible at a glance, not only in the tooltip. */
+ *  blow the strip out (invariant 11). Its confidence is in its opacity, a derived word wears a dotted
+ *  underline and a Whistle-measured word a solid one, so provenance is legible at a glance, not only in
+ *  the tooltip. */
 function chipHtml(item: TimelineItem, st: ChipState): string {
   const cls = ["ced-chip"];
   if (st.derived) cls.push("derived");
+  if (item.source === "measured") cls.push("measured");
   if (st.playing) cls.push("on");
   if (st.selected) cls.push("sel");
   if (st.locked) cls.push("lock");

@@ -6,7 +6,7 @@
 // returned (or threw), and the desktop must have the report BEFORE omp gets it.
 
 import { describe, expect, test } from "bun:test";
-import { TextJudge, TypeSafeJudge } from "@oh-my-pi/pi-ai/judgment";
+import { NativeJudge, TextJudge } from "@oh-my-pi/pi-ai/judgment";
 import type { JudgmentReport } from "../judgment/trace.ts";
 import { JudgeBreaker, traceJudgePrototype, type JudgeLike } from "./judgment_extension.ts";
 
@@ -83,7 +83,7 @@ describe("traceJudgePrototype", () => {
   });
 
   test("the real pi-ai classes expose the method the wrapper needs (the seam this increment rests on)", () => {
-    expect(typeof TypeSafeJudge.prototype.judge).toBe("function");
+    expect(typeof NativeJudge.prototype.judge).toBe("function");
     expect(typeof TextJudge.prototype.judge).toBe("function");
   });
 });

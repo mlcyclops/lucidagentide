@@ -177,8 +177,25 @@ describe("the free / self-hosted additions and the paid catalog", () => {
     expect(spec("pdf-markup").group).toBe("cad");
   });
 
+  test("OpenFilm is an on-device child process, right after HyperFrames, whose note names what never runs", () => {
+    expect(spec("openfilm")).toMatchObject({
+      name: "OpenFilm (local)", group: "video", kind: "local-app", transports: ["child-process"], authKind: "local",
+      consentRequired: false, docsUrl: "https://github.com/openfilm/openfilm", cui: { posture: "on-device" },
+    });
+    expect(spec("openfilm").capabilities.map((c) => [c.id, c.status, c.surface])).toEqual([
+      ["video-compose", "available", "cli"], ["render-animation", "available", "cli"], ["runtime-feedback", "available", "cli"],
+    ]);
+    expect(CREATOR_PROVIDER_IDS.indexOf("openfilm")).toBe(CREATOR_PROVIDER_IDS.indexOf("hyperframes") + 1);
+    const ids = CREATOR_INTEGRATIONS.map((s) => s.id);
+    expect(ids.indexOf("openfilm")).toBe(ids.indexOf("hyperframes") + 1);
+    const note = spec("openfilm").note;
+    for (const word of ["MIT", "fixed-argv", "look and render", "get", "open", "update", "skill", "Studio server", "telemetry", "update check", "browser opening"]) {
+      expect(note).toContain(word);
+    }
+  });
+
   test("a DGX service claims nothing usable until its /health probe attests it; pdf-markup is built in", () => {
-    for (const id of ["dgx-avatar", "dgx-cad", "hyperframes"]) {
+    for (const id of ["dgx-avatar", "dgx-cad", "hyperframes", "openfilm"]) {
       expect(foldProviderStatus(spec(id), { endpoints: [], secretPresent: false }).usable).toEqual([]);
     }
     const cad: CreatorEndpointDef = { id: "nick-dgx-cad", providerId: "dgx-cad", label: "CAD", baseUrl: "http://127.0.0.1:8089", zone: "internal", enclave: true, enabled: true };
@@ -229,6 +246,31 @@ describe("the free / self-hosted additions and the paid catalog", () => {
     expect(spec("bluebeam-studio").note).toContain("production app approval");
     expect(spec("classcad").note).toContain("CLASSCAD_SHARE=off");
     expect(spec("oda-drawings").capabilities.every((c) => c.status === "planned")).toBe(true);
+  });
+
+  // CREATOR-WHISTLE (ADR-0432 decision 6)
+  test("Whistle is an in-engine provider: no endpoint, no key, on-device, sitting right after dots.tts", () => {
+    expect(spec("whistle")).toMatchObject({
+      name: "Whistle (in-process)", group: "audio", kind: "local-service", transports: ["in-engine"], authKind: "none",
+      consentRequired: false, docsUrl: "https://huggingface.co/Cactus-Compute/whistle", cui: { posture: "on-device" },
+    });
+    expect(spec("whistle").secretEnv).toBeUndefined();
+    expect(spec("whistle").capabilities.map((c) => [c.id, c.status, c.surface])).toEqual([["stt", "available", "runtime"], ["alignment", "available", "runtime"]]);
+    expect(spec("whistle").note).toContain("no socket imports");
+    const ids = CREATOR_INTEGRATIONS.map((s) => s.id);
+    expect(ids.indexOf("whistle")).toBe(ids.indexOf("dots-tts") + 1);
+    expect(CREATOR_PROVIDER_IDS.indexOf("whistle")).toBe(CREATOR_PROVIDER_IDS.indexOf("dots-tts") + 1);
+  });
+
+  test("an in-engine transport needs no declaration: the row folds to built-in with both runtime capabilities usable", () => {
+    expect(foldProviderStatus(spec("whistle"), { endpoints: [], secretPresent: false })).toMatchObject({ state: "built-in", usable: ["stt", "alignment"], endpointCount: 0 });
+    expect(foldProviderStatus(spec("whistle"), { endpoints: [], secretPresent: false, locked: true }).cui).toMatchObject({ allowed: true, posture: "on-device" });
+  });
+
+  test("dots.tts alignment is available because Whistle measures it, and the detail says dots.tts emits none itself", () => {
+    const align = spec("dots-tts").capabilities.find((c) => c.id === "alignment")!;
+    expect(align.status).toBe("available");
+    expect(align.detail).toBe("Measured in-process by Whistle; dots.tts itself emits no timestamps.");
   });
 });
 

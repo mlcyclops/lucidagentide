@@ -126,6 +126,21 @@ export function localPrefixSet(providers: readonly LocalProviderRef[]): Set<stri
   return new Set(providers.filter((p) => p.enabled && p.ompProvider).map((p) => p.ompProvider));
 }
 
+/** omp's KEYLESS local engines, which it probes on its own with no LUCID configuration at all
+ *  (pi-coding-agent model-registry.ts #addImplicitDiscoverableProviders: Ollama on :11434, llama.cpp on
+ *  :8080, LM Studio on :1234, Apple's on-device model, plus the keyless `local` provider). */
+export const IMPLICIT_LOCAL_PROVIDERS: ReadonlySet<string> = new Set(["ollama", "llama.cpp", "lm-studio", "apple", "local"]);
+
+/** A model served from the user's own machine or network rather than a cloud provider: an omp implicit
+ *  local engine, or one of the user's configured Local Providers (`localPrefixes`, see localPrefixSet).
+ *  Cloud-only default (fix/v2.5.1-provider-default-models): the AUTOMATIC default never selects one of
+ *  these. A local model becomes active only through an explicit user pick. */
+export function isLocalModel(value: string, localPrefixes: ReadonlySet<string> = new Set()): boolean {
+  const p = providerPrefixOf(value);
+  if (!p) return false;
+  return IMPLICIT_LOCAL_PROVIDERS.has(p.toLowerCase()) || localPrefixes.has(p);
+}
+
 /** Split a curated list into local-provider models (pinned first) and everything else. Relative
  *  order inside each half is preserved: the caller already curated it. */
 export function splitLocalModels(models: readonly ModelOption[], prefixes: ReadonlySet<string>): { local: ModelOption[]; rest: ModelOption[] } {
@@ -161,8 +176,23 @@ export function pendingLocalModels(
 /** Gov-gateway (AskSage CIV/MIL) model - only shown when an AskSage key is configured. */
 export function isGovModel(value: string): boolean { return /asksage/i.test(value); }
 
-/** omp auxiliary (non-chat) models - tab-completion + codex auto-review. Never shown in the picker. */
-export function isAuxiliaryModel(value: string): boolean { return /tab_flash|tab_jump|auto-review/i.test(value); }
+/** An EMBEDDING / reranker model: it turns text into vectors and cannot answer a chat turn at all.
+ *  omp's implicit Ollama probe (127.0.0.1:11434, model-discovery.ts) lists EVERY pulled tag as a chat
+ *  model, ignoring Ollama's `capabilities: ["embedding"]`, so a user who pulled `nomic-embed-text` for
+ *  RAG got it in the picker. Worse, with no cloud provider authed yet it was the only survivor of the
+ *  fresh-install default ladder (`qwen…` is China-gated, `…:7b` is tier 0), so LUCID opened on it, every
+ *  turn came back empty ("returned nothing ... end_turn"), and lastModel pinned it across the later
+ *  OAuth and every relaunch. Id heuristic: anything naming `embed`, `rerank`, or a well-known embedding
+ *  family that does not (bge, gte, e5, all-minilm, paraphrase-multilingual). */
+export function isEmbeddingModel(value: string): boolean {
+  return /embed|rerank|(^|[/:_-])(bge|gte|e5|all-minilm|paraphrase-multilingual)([-:._]|$)/i.test(value);
+}
+
+/** omp auxiliary (non-chat) models - tab-completion, codex auto-review, and embedding/reranker models.
+ *  Never shown in the picker and never eligible as a default, fallback, or remembered chat model. */
+export function isAuxiliaryModel(value: string): boolean {
+  return /tab_flash|tab_jump|auto-review/i.test(value) || isEmbeddingModel(value);
+}
 
 /** China-origin model (no U.S. data sovereignty). Hidden until the user acknowledges in Settings.
  *  Forward-looking: matches the providers the user flagged (DeepSeek, Kimi/Moonshot, MiniMax, GLM/Zhipu)
@@ -170,9 +200,11 @@ export function isAuxiliaryModel(value: string): boolean { return /tab_flash|tab
  *  P-MODEL.6: StepFun (omp 18.4's `stepfun` provider, and its ids resold as `stepfun/…` / `stepfun-ai/…`
  *  by aggregators) by name, and a bare StepFun id (`step-3.7-flash`, `step-5-preview`, `step-r1-v-mini`)
  *  only where a path segment STARTS with `step-` and a version digit (or `r` + digit) follows, so
- *  `step-by-step`, `multistep-2` or `footstep-3` never gate. */
+ *  `step-by-step`, `multistep-2` or `footstep-3` never gate.
+ *  P-MODEL.7: omp 18.8's `helmcode` (an EU gateway) resells GLM as the bare id `glm5.3`, no hyphen, which
+ *  the `glm(-|\b)` tail missed; a version digit straight after `glm` now gates too. */
 export function isChinaModel(value: string): boolean {
-  return /deepseek|kimi|moonshot|minimax|(^|[-/])glm(-|\b)|zhipu|qwen|ernie|hunyuan|doubao|(^|[-/])yi-|01-ai|stepfun|(^|\/)step-r?\d/i.test(value);
+  return /deepseek|kimi|moonshot|minimax|(^|[-/])glm(-|\d|\b)|zhipu|qwen|ernie|hunyuan|doubao|(^|[-/])yi-|01-ai|stepfun|(^|\/)step-r?\d/i.test(value);
 }
 
 /** The GPT-5.x/4.x numeric version (e.g. 5.4), or null for non-versioned GPT (o-series, gpt-oss). */
@@ -236,6 +268,7 @@ export function capabilityTier(value: string): 0 | 1 | 2 {
   const gv = gptVersion(s);
   if (gv !== null && gv >= 5) return 2;                                   // gpt-5/6/7… incl. tier codenames
   if (/opus|pro|max|fable|mythos|ultra|grok|gpt-o/.test(s)) return 2;     // `grok` folded in from startup_model
+  if (/gemini-\d+(?:\.\d+)?-argon/.test(s)) return 2;                     // P-MODEL.8: Gemini 4 Argon, Google's flagship (no "pro" in the id)
   return 1;
 }
 /** Compare two model ids by LEVEL — highest capability first, then newest version, then alpha. Unlike
@@ -267,12 +300,23 @@ export function topModel<T extends { value: string }>(models: readonly T[], acce
 // than a decision. Landing a new flagship is now a deliberate one-line edit HERE, reviewed like any other
 // product choice, and can never be an emergent property of a number.
 
+/** P-MODEL.8: the ONE deliberate small-tier default. When Google is the provider on offer, the session
+ *  opens on Gemini 3.8 Flash, not on a Pro and never on Gemini 4 Argon: Argon is the flagship
+ *  (capabilityTier 2) but bills heavily (about 2x the output tokens per task of its peers, at an
+ *  introductory rate Google says will double), so it is reserved for the heavy omp roles instead of every
+ *  turn (desktop/model_roles.ts). Exact id, end-anchored: it admits `gemini-3.8-flash` / `gemini-3-8-flash`
+ *  and nothing else (no -lite, -tts, -live), which is why preferredDefaultModel exempts it from the
+ *  small-model guard. */
+export const GEMINI_DEFAULT = /gemini-3[-.]8-flash(?![\w.-])/;
+
 /** P-MODEL.2: the ordered list of ids we deliberately want a FRESH install to open on, best first.
  *  Matched UNANCHORED against the provider-stripped, lowercased id (`bareId`, hence no `i` flag), so a gov
  *  copy (`asksage-anthropic/google-claude-fable-5`) hits the same entry as the direct route and the two are
  *  separated by cmpModelsByLevel. Every entry ends in `(?![\w.-])` = "the id stops here", so
  *  `claude-opus-5` can never also match `claude-opus-5-mini` at the wrong rank, and each optional
- *  tier-codename group excludes the small-model tokens so no entry can select a tier-0 model. */
+ *  tier-codename group excludes the small-model tokens so no entry can select a tier-0 model, with ONE
+ *  deliberate exception, GEMINI_DEFAULT. Google sits below every Claude/GPT flagship, so a Gemini default
+ *  only applies when no curated Anthropic/OpenAI model is on offer. */
 export const DEFAULT_MODEL_PREFERENCE: readonly RegExp[] = [
   /claude-opus-5[-.]5(?![\w.-])/,                                       // Opus 5.5 (2026-09-22): Fable-5.1-level on most work, 40% cheaper to run than Opus 5
   /claude-opus-5(?![\w.-])/,                                            // Opus 5: 1M ctx Anthropic flagship, the prior house default
@@ -283,8 +327,10 @@ export const DEFAULT_MODEL_PREFERENCE: readonly RegExp[] = [
   /gpt-6(?:\.\d+)?-sol(?![\w.-])/,
   /gpt-6(?:\.\d+)?(?:-(?!mini|nano|lite|flash|oss|luna)[a-z]+)?(?![\w.-])/, // any other GPT-6 tier, and bare gpt-6
   /gpt-6(?:\.\d+)?-luna(?![\w.-])/,
-  /claude-fable-5[-.]1(?![\w.-])/,                                      // Fable 5.1 (API-credit billed, see isApiOnlyModel)
-  /claude-mythos-5[-.]1(?![\w.-])/,                                     // Mythos 5.1, shipped alongside Fable 5.1
+  // P-MODEL.10 (ADR-pending): Fable 5.2 / Mythos 5.2 (omp 18.18.6, $8/$40) replace the 5.1 pair here.
+  // Mythos 5.2 matches only when the account's model list carries it (Anthropic-verified orgs).
+  /claude-fable-5[-.]2(?![\w.-])/,                                      // Fable 5.2 (API-credit billed, see isApiOnlyModel)
+  /claude-mythos-5[-.]2(?![\w.-])/,                                     // Mythos 5.2, the same model for verified orgs
   /claude-fable-5(?![\w.-])/,
   // Sonnet 5.5 (omp 18.4.4, 2026-09-30): the balanced tier of the 5.5 family, directly above the Sonnet it
   // supersedes and below every flagship entry. `[-.]` takes both `claude-sonnet-5-5` and the aggregators'
@@ -293,6 +339,7 @@ export const DEFAULT_MODEL_PREFERENCE: readonly RegExp[] = [
   /claude-sonnet-5(?![\w.-])/,
   /gpt-5[-.]6(?:-(?!mini|nano|lite|flash|oss)[a-z]+)?(?![\w.-])/,       // 5.6 + the gov tier codenames (luna/sol/terra)
   /claude-opus-4[-.]8(?![\w.-])/,
+  GEMINI_DEFAULT,
   /gemini-3[-.]1-pro(?:-(?!mini|nano|lite|flash|oss)[a-z]+)?(?![\w.-])/, // the gov gateway exposes it as …-pro-com
 ];
 
@@ -314,10 +361,11 @@ export function preferredDefaultModel<T extends { value: string }>(
   if (!survivors.length) return null;
   for (const pat of DEFAULT_MODEL_PREFERENCE) {
     // The capabilityTier guard is belt-and-braces: no curated entry may EVER resolve to a small model, even
-    // if a vendor invents a suffix ("-tiny") that a pattern happens to admit before we notice.
+    // if a vendor invents a suffix ("-tiny") that a pattern happens to admit before we notice. The one
+    // exemption is GEMINI_DEFAULT, an exact id chosen BECAUSE it is the fast tier (P-MODEL.8).
     let best: T | null = null;
     for (const m of survivors) {
-      if (!pat.test(bareId(m.value)) || capabilityTier(m.value) === 0) continue;
+      if (!pat.test(bareId(m.value)) || (capabilityTier(m.value) === 0 && pat !== GEMINI_DEFAULT)) continue;
       if (!best || cmpModelsByLevel(m.value, best.value) < 0) best = m;
     }
     if (best) return best;
@@ -391,6 +439,20 @@ export function providerLabelOf(value: string): string {
 }
 
 export interface FallbackRecs { sameFamily: ModelOption | null; otherProvider: ModelOption | null }
+
+/** The restart hint on the "no response" card. A turn that returns nothing right after a cloud sign-in is
+ *  very often the picker never receiving that provider's models (the OAuth broker or omp respawn hung), so
+ *  the session sat on whatever model it already had. `strong` = a cloud provider is connected but none of
+ *  its models are listed, or the failed model is local while a cloud provider is connected: in both cases
+ *  refreshing providers is the likeliest fix. Otherwise a milder last-resort line. Wording is advisory only
+ *  (the card offers a non-destructive "Refresh providers" action; it never restarts anything by itself). */
+export interface RestartHint { strong: boolean; text: string }
+export function noResponseRestartHint(input: { cloudConnected: boolean; cloudModelsListed: boolean; failedIsLocal: boolean }): RestartHint {
+  const strong = input.cloudConnected && (!input.cloudModelsListed || input.failedIsLocal);
+  return strong
+    ? { strong, text: "If you just signed in, your cloud providers may still be loading. Refresh providers below, or restart LUCID, to reload your providers and the model list, then try again." }
+    : { strong, text: "Still not responding? Restart LUCID to refresh your providers and the model list, then try again." };
+}
 
 /** When `failed` returned nothing (likely overloaded), recommend fallbacks from the user's ACCESSIBLE
  *  list, matching the failed model's gov-ness (so a lockdown session stays gov-routed):

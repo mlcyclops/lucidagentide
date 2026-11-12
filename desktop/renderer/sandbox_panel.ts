@@ -17,8 +17,28 @@ const BACKEND_LABEL: Record<string, string> = {
   bwrap: "Linux bubblewrap",
   seatbelt: "macOS Seatbelt",
   appcontainer: "Windows AppContainer",
+  mxc: "Microsoft eXecution Container",
   noop: "disclosed passthrough",
 };
+/** P-MXC.1 (ADR-0441): the tier MXC runs at, in words a person can act on. */
+const TIER_LABEL: Record<string, string> = {
+  "base-container": "kernel BaseContainer tier",
+  "appcontainer-bfs": "AppContainer + BFS tier",
+  "appcontainer-dacl": "AppContainer tier",
+};
+/** The one-time elevated steps MXC still needs here, or "" once the host is prepared. Pure. */
+export function mxcPrepSection(c: SandboxControlView | undefined): string {
+  const m = c?.mxc;
+  if (!m?.staged) return "";
+  const steps = [
+    ...(m.prepNeeded.includes("prepare-system-drive") ? ["grant the container read access to the system-drive root"] : []),
+    ...(m.prepNeeded.includes("prepare-null-device") ? ["make the NUL device usable by the container (resets at every boot)"] : []),
+    ...(m.loopbackNeeded ? ["register the container's loopback exemption so it can reach the egress proxy"] : []),
+  ];
+  if (!steps.length) return `<div class="sbx-row muted"><span>MXC executor staged (${esc(TIER_LABEL[m.tier ?? ""] ?? m.tier ?? "unknown tier")}); the host is prepared.</span></div>`;
+  return `<div class="sbx-ctl"><div class="sbx-ctl-txt">The <b>Microsoft eXecution Container</b> executor is staged (${esc(TIER_LABEL[m.tier ?? ""] ?? m.tier ?? "unknown tier")}) but this host still needs ${steps.length === 1 ? "one" : String(steps.length)} administrator step${steps.length === 1 ? "" : "s"}: ${esc(steps.join("; "))}. Until then the agent runs on the previous sandbox or the disclosed passthrough.</div>
+    <div class="sbx-ctl-btns"><button class="btn-mini ok" data-mxc-prepare data-tip="Prepare host (administrator)|Runs wxc-host-prep and the loopback registration behind one Windows administrator prompt. Nothing runs without that approval; LUCID re-checks the real state afterwards.">${icon("shield", 13)} Prepare host (administrator)</button></div></div>`;
+}
 
 /** P-SANDBOX.12 (ADR-0390): the user's Windows sandbox switch. Policy-locked ⇒ a note, never a button;
  *  off ⇒ "Turn on" (+ "Remove from Windows" while the loopback registration stands); on ⇒ "Turn off".
@@ -51,10 +71,10 @@ function postureLine(s: SandboxStateView, c?: SandboxControlView): string {
   }
   if (s.isolated) {
     return `<div class="sbx-row good"><span class="pill">${icon("shield", 12)} isolated</span>
-      <span>Exec runs runtime-isolated via <b>${esc(BACKEND_LABEL[s.backend ?? "noop"] ?? s.backend ?? "?")}</b> - declared network/exec caps enforced.</span></div>`;
+      <span>Exec runs runtime-isolated via <b>${esc(BACKEND_LABEL[s.backend ?? "noop"] ?? s.backend ?? "?")}</b>${s.tier ? ` (${esc(TIER_LABEL[s.tier] ?? s.tier)})` : ""} - declared network/exec caps enforced.</span></div>`;
   }
   return `<div class="sbx-row warn"><span class="pill dismissed">not isolated</span>
-    <span>Exec is <b>not runtime-isolated</b> on ${esc(s.platform)} (disclosed passthrough). The argv gate + in-process scanner still apply; no capable sandbox backend on this host - on Windows the bundled lucid-appcontainer helper is missing or failed its containment probe.</span></div>`;
+    <span>Exec is <b>not runtime-isolated</b> on ${esc(s.platform)} (disclosed passthrough). The argv gate + in-process scanner still apply; no capable sandbox backend on this host - on Windows the MXC executor or the lucid-appcontainer helper is missing, needs host prep, or failed its containment probe.</span></div>`;
 }
 
 /** The mediated-egress line (only meaningful when isolated). Pure. */
@@ -110,7 +130,7 @@ function grantsSection(grants: SandboxGrantView[]): string {
 export function renderSandboxSection(status: SandboxStatusView | null | undefined, open = false): string {
   const s = status?.state;
   const grants = status?.grants ?? [];
-  const ctl = controlSection(status?.control);
+  const ctl = controlSection(status?.control) + mxcPrepSection(status?.control);
   const folders = addFolderRow(status?.control) + grantsSection(grants) + runtimeFoldersSection(status?.runtimeFolders ?? []);
   if (!s && !grants.length && !ctl) return "";
   if (!s) {

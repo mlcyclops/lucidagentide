@@ -89,4 +89,8 @@ cfg.linux = {
 cfg.deb = { ...cfg.deb, artifactName: "lucidcreator-desktop_${version}_${arch}.${ext}" };
 cfg.rpm = { ...cfg.rpm, artifactName: "lucidcreator-desktop-${version}.${arch}.${ext}" };
 
-module.exports = cfg;
+// P-RELEASE.6 (ADR-0447): the same Azure Artifact Signing switch as the Agent Windows build. Unlike Agent's
+// electron-builder.win.cjs, this file is loaded on ALL THREE runners (and by release-identity-gate.ts), so
+// build-creator.yml sets LUCID_RELEASE_RUN only on the Windows runner (ADR-0459): the P-RELEASE.7 gate
+// guards Windows bytes, and a macOS or Linux job has no Windows signer to give it.
+module.exports = require("./win-signing.cjs").withWindowsSigning(cfg);

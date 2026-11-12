@@ -23,6 +23,7 @@
 import { modelAllowed, type ManagedModels } from "./managed_config.ts";
 // The lockdown predicate lives in the DOM-free lockdown_route.ts so the renderer evaluates the identical test.
 import { isLockdownRoutable, LOCKDOWN_NO_ROUTE_ERROR } from "./lockdown_route.ts";
+import { isAuxiliaryModel } from "./renderer/model_families.ts"; // ADR-0498: embedding models never chat
 
 /** A model option as omp reports it in the `model` config (provider-prefixed value + display name). */
 export interface ModelOption { value: string; name?: string; description?: string }
@@ -92,7 +93,7 @@ function provider(value: string): string {
  *  prefers the cheaper family, e.g. sonnet over opus, and "max" tiers rank last). */
 function sizePenalty(name: string): number {
   const n = name.toLowerCase();
-  if (/opus|ultra|-max\b/.test(n)) return 400;
+  if (/opus|ultra|-max\b|-argon\b/.test(n)) return 400; // P-MODEL.8: Gemini 4 Argon bills like an Opus
   if (/\bpro\b|-pro\b/.test(n)) return 150;
   return 0;
 }
@@ -104,8 +105,9 @@ function isAlias(value: string): boolean {
   return !/\d{6,8}/.test(id);
 }
 
-/** A RAG / image / preview-only route can't act as a checker. */
+/** A RAG / image / preview-only route, or an embedding/auxiliary model (ADR-0498), can't act as a checker. */
 function isUsable(value: string): boolean {
+  if (isAuxiliaryModel(value)) return false;
   const n = value.toLowerCase();
   return !/\b(rag|image|review|tab_)\b|antigravity\/tab|query\/rag|codex-auto-review/.test(n);
 }
@@ -146,7 +148,7 @@ export function recommendCheckerModel(models: ModelOption[], current: string): C
  *  Fail-safe: a stale/removed override never blocks the loop — it falls through to the recommendation. */
 export function resolveCheckerModel(opts: { chosen: string; models: ModelOption[]; current: string }): { value: string; source: "chosen" | "recommended" | "maker" } {
   const has = (v: string) => opts.models.some((m) => m.value === v);
-  if (opts.chosen && has(opts.chosen)) return { value: opts.chosen, source: "chosen" };
+  if (opts.chosen && isUsable(opts.chosen) && has(opts.chosen)) return { value: opts.chosen, source: "chosen" };
   const rec = recommendCheckerModel(opts.models, opts.current);
   if (rec) return { value: rec.value, source: "recommended" };
   return { value: opts.current, source: "maker" };

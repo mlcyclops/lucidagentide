@@ -129,7 +129,7 @@ function licensingChip(l: PackLicensing): string {
 function packRow(p: KgPack): string {
   return `<div class="mkt-row" data-kgpack-id="${esc(p.id)}">
     <div class="mkt-main">
-      <div class="mkt-name">${esc(p.name)}${tierChip(p.tier)}${licensingChip(p.licensing)}<span class="mkt-cat">${esc(p.role)}</span></div>
+      <div class="mkt-name"><span class="mkt-title" title="${esc(p.name)}">${esc(p.name)}</span><div class="mkt-badges">${tierChip(p.tier)}${licensingChip(p.licensing)}<span class="mkt-cat" title="${esc(p.role)}">${esc(p.role)}</span></div></div>
       <div class="mkt-desc">${esc(p.desc)}</div>
       <div class="mkt-plan">${icon("bulb", 12)}${esc(p.highlights)} · ${esc(p.author)}</div>
     </div>

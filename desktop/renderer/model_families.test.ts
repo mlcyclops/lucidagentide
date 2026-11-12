@@ -7,7 +7,7 @@
 // GPT) and the gateway-prefix robustness are the easy things to break, so they're pinned here.
 
 import { describe, expect, it } from "bun:test";
-import { ASKSAGE_FAMILY_ORDER, capabilityTier, cmpModelsByLevel, cmpModelsNewestFirst, DEFAULT_MODEL_PREFERENCE, familyOf, filterModels, groupByFamily, gptVersion, isApiOnlyModel, isAuxiliaryModel, isChinaModel, isDeprecatedModel, isGovModel, isSpecialVariantModel, isUnconfiguredAmbientModel, localPrefixSet, MODEL_FAMILIES, orderByUsage, pendingLocalModels, preferredDefaultModel, providerAllowedOnPlatform, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions, type LocalProviderRef, type ModelOption } from "./model_families.ts";
+import { ASKSAGE_FAMILY_ORDER, capabilityTier, cmpModelsByLevel, cmpModelsNewestFirst, DEFAULT_MODEL_PREFERENCE, familyOf, filterModels, groupByFamily, gptVersion, isApiOnlyModel, isAuxiliaryModel, isLocalModel, noResponseRestartHint, isChinaModel, isDeprecatedModel, isGovModel, isSpecialVariantModel, isUnconfiguredAmbientModel, localPrefixSet, MODEL_FAMILIES, orderByUsage, pendingLocalModels, preferredDefaultModel, providerAllowedOnPlatform, providerLabelOf, providerPrefixOf, recommendFallbacks, sortGovFirstByLevel, splitLocalModels, topModel, usageFromSessions, type LocalProviderRef, type ModelOption } from "./model_families.ts";
 
 describe("familyOf", () => {
   it("classifies direct Anthropic models (incl. fable) as Claude", () => {
@@ -147,6 +147,46 @@ describe("P-IDE.1c - gov / auxiliary / china detection", () => {
     expect(isAuxiliaryModel("openai-codex/codex-auto-review")).toBe(true);
     expect(isAuxiliaryModel("openai-codex/gpt-5.4")).toBe(false);
   });
+  it("isAuxiliaryModel treats embedding/reranker models as non-chat (v2.5.1 nomic-embed-text default bug)", () => {
+    for (const e of ["ollama/nomic-embed-text:latest", "ollama/mxbai-embed-large", "ollama/bge-m3", "ollama/all-minilm:l6-v2",
+      "ollama/snowflake-arctic-embed2", "ollama/granite-embedding:278m", "openai/text-embedding-3-small", "ollama/bge-reranker-v2-m3"]) {
+      expect(isAuxiliaryModel(e)).toBe(true);
+    }
+    for (const c of ["ollama/qwen2.5:7b-instruct", "ollama/llama3.1:8b", "ollama/gemma3:12b", "anthropic/claude-opus-5-5",
+      "openai-codex/gpt-5.5", "openai-codex/gpt-6-astra", "google-antigravity/gemini-3.8-flash"]) {
+      expect(isAuxiliaryModel(c)).toBe(false);
+    }
+  });
+  it("preferredDefaultModel never lands on an embedding model, even when it is the only local survivor", () => {
+    const localOnly = [{ value: "ollama/nomic-embed-text:latest" }, { value: "ollama/qwen2.5:7b-instruct" }];
+    expect(preferredDefaultModel(localOnly)).toBeNull();
+    const withCloud = [...localOnly, { value: "anthropic/claude-opus-5-5" }];
+    expect(preferredDefaultModel(withCloud)?.value).toBe("anthropic/claude-opus-5-5");
+  });
+  it("isLocalModel: omp's implicit engines and configured Local Providers are local; cloud ids are not", () => {
+    for (const l of ["ollama/llama3.1:8b", "llama.cpp/qwen3-8b", "lm-studio/gemma-3", "apple/on-device", "local/x"]) expect(isLocalModel(l)).toBe(true);
+    expect(isLocalModel("dgx-spark/glm-5.3-flash", new Set(["dgx-spark"]))).toBe(true);
+    expect(isLocalModel("dgx-spark/glm-5.3-flash")).toBe(false); // unknown prefix without the configured set
+    for (const c of ["anthropic/claude-opus-5-5", "openai-codex/gpt-5.5", "ollama-cloud/gpt-oss-120b", "asksage-openai/gpt-5.6-luna", "openrouter/meta-llama/llama-3.3-70b", "bare-id"]) {
+      expect(isLocalModel(c)).toBe(false);
+    }
+  });
+  it("noResponseRestartHint: strong when a cloud provider is connected but its models are missing, or the failed model is local", () => {
+    expect(noResponseRestartHint({ cloudConnected: true, cloudModelsListed: false, failedIsLocal: false }).strong).toBe(true);
+    expect(noResponseRestartHint({ cloudConnected: true, cloudModelsListed: true, failedIsLocal: true }).strong).toBe(true);
+    expect(noResponseRestartHint({ cloudConnected: true, cloudModelsListed: true, failedIsLocal: false }).strong).toBe(false);
+    expect(noResponseRestartHint({ cloudConnected: false, cloudModelsListed: false, failedIsLocal: true }).strong).toBe(false);
+    const strong = noResponseRestartHint({ cloudConnected: true, cloudModelsListed: false, failedIsLocal: false }).text;
+    expect(strong).toContain("If you just signed in");
+    expect(strong).toContain("restart LUCID");
+    expect(noResponseRestartHint({ cloudConnected: false, cloudModelsListed: false, failedIsLocal: false }).text).toContain("Restart LUCID");
+    for (const t of [strong, noResponseRestartHint({ cloudConnected: false, cloudModelsListed: true, failedIsLocal: false }).text]) expect(t).not.toContain(String.fromCharCode(0x2014)); // CLAUDE.md: no em dashes in UI copy
+  });
+  it("recommendFallbacks never suggests an embedding model", () => {
+    const models = [{ value: "ollama/nomic-embed-text:latest", name: "nomic" }, { value: "ollama/llama3.1:8b", name: "llama" }];
+    const r = recommendFallbacks("ollama/llama3.2:3b", models);
+    expect([r.sameFamily?.value, r.otherProvider?.value]).not.toContain("ollama/nomic-embed-text:latest");
+  });
   it("isChinaModel matches flagged providers, not Western ones", () => {
     for (const c of ["deepseek/deepseek-v3", "moonshot/kimi-k2", "minimax/abab", "zhipu/glm-4.6", "openrouter/glm-4", "qwen/qwen-max"]) expect(isChinaModel(c)).toBe(true);
     for (const w of ["anthropic/claude-opus-4-8", "openai-codex/gpt-5.4", "google-antigravity/gemini-3-pro", "asksage-google/google-gemini-2.5-pro"]) expect(isChinaModel(w)).toBe(false);
@@ -161,6 +201,10 @@ describe("P-IDE.1c - gov / auxiliary / china detection", () => {
                      "vendor/model-step-2", "openai/gpt-6-stepwise", "stepper/llama-3.3-70b"]) {
       expect(isChinaModel(w)).toBe(false);
     }
+  });
+  it("P-MODEL.7: helmcode's bare `glm5.3` (no hyphen) gates like every other GLM spelling; `gemma4` beside it does not", () => {
+    for (const c of ["helmcode/glm5.3", "helmcode/deepseek-v4-flash", "helmcode/qwen3.6", "openrouter/glm5"]) expect(isChinaModel(c)).toBe(true);
+    for (const w of ["helmcode/gemma4", "helmcode/claude-sonnet-5-5", "acme/glmnet-1", "vendor/paradigm-7"]) expect(isChinaModel(w)).toBe(false);
   });
 });
 
@@ -406,13 +450,74 @@ describe("P-MODEL.2 - preferredDefaultModel (the curated fresh-install default)"
     expect(preferredDefaultModel(mk("deepseek/deepseek-v3", "asksage-query/rag"))).toBeNull();
     expect(preferredDefaultModel(mk("stepfun/step-5-preview", "openrouter/stepfun/step-3.7-flash"))).toBeNull(); // P-MODEL.6: StepFun is China-gated
   });
-  it("no curated entry can ever select a small/fast model", () => {
+  it("no curated entry can ever select a small/fast model except the exact Gemini 3.8 Flash id", () => {
     for (const pat of DEFAULT_MODEL_PREFERENCE) {
-      for (const small of ["claude-opus-5-mini", "claude-opus-5-5-mini", "gpt-6-mini", "gpt-6-nano", "gpt-5.6-mini", "gemini-3.1-pro-lite", "claude-fable-5-lite"]) {
+      for (const small of ["claude-opus-5-mini", "claude-opus-5-5-mini", "gpt-6-mini", "gpt-6-nano", "gpt-5.6-mini", "gemini-3.1-pro-lite", "claude-fable-5-lite",
+                           "gemini-3.8-flash-lite", "gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-3.7-flash", "gemini-3.1-flash-lite"]) {
         expect(pat.test(small)).toBe(false);
       }
     }
     expect(preferredDefaultModel(mk("openai-codex/gpt-6-mini", "openai-codex/gpt-6-astra"))?.value).toBe("openai-codex/gpt-6-astra");
+  });
+});
+
+describe("P-MODEL.10 - Fable 5.2 / Mythos 5.2 (omp 18.18.6)", () => {
+  const mk = (...values: string[]): ModelOption[] => values.map((value) => ({ value, name: value }));
+  const F52 = "anthropic/claude-fable-5-2", M52 = "anthropic/claude-mythos-5-2";
+
+  it("are Claude-family, flagship-tier, API-credit billed and never deprecated", () => {
+    for (const v of [F52, M52, "openrouter/anthropic/claude-fable-5.2"]) {
+      expect(familyOf(v).id).toBe("claude");
+      expect(capabilityTier(v)).toBe(2);
+      expect(isApiOnlyModel(v)).toBe(true);
+      expect(isDeprecatedModel(v)).toBe(false);
+    }
+  });
+  it("rank above 5.1 and 5 within their families (the version tiebreak at the same tier)", () => {
+    expect(cmpModelsByLevel(F52, "anthropic/claude-fable-5-1")).toBeLessThan(0);
+    expect(cmpModelsByLevel(F52, "anthropic/claude-fable-5")).toBeLessThan(0);
+    expect(cmpModelsByLevel(M52, "anthropic/claude-mythos-5-1")).toBeLessThan(0);
+    expect(topModel(mk("anthropic/claude-fable-5", "anthropic/claude-fable-5-1", F52))?.value).toBe(F52);
+  });
+  it("Fable 5.2 replaces 5.1 in the curated default; it still sits below Opus 5.5 / Opus 5 and GPT-6", () => {
+    expect(preferredDefaultModel(mk("anthropic/claude-fable-5", "anthropic/claude-fable-5-1", F52))?.value).toBe(F52);
+    expect(preferredDefaultModel(mk(F52, "anthropic/claude-opus-5-5"))?.value).toBe("anthropic/claude-opus-5-5");
+    expect(preferredDefaultModel(mk(F52, "openai-codex/gpt-6-astra"))?.value).toBe("openai-codex/gpt-6-astra");
+    // The 5.2 entries are version-anchored: neither can be selected by a 5.1 or a future 5.20 id.
+    expect(DEFAULT_MODEL_PREFERENCE.some((p) => p.test("claude-fable-5-1") || p.test("claude-mythos-5-1"))).toBe(false);
+    expect(DEFAULT_MODEL_PREFERENCE.some((p) => p.test("claude-fable-5-20"))).toBe(false);
+  });
+  it("Mythos 5.2 is never synthesized: it is picked only when the account's model list carries it", () => {
+    // Without Mythos in the reported list, the Fable 5.2 entry wins and nothing names Mythos.
+    expect(preferredDefaultModel(mk(F52, "anthropic/claude-haiku-4-5"))?.value).toBe(F52);
+    // A verified org whose list carries ONLY Mythos 5.2 (no Fable 5.2) defaults to it.
+    expect(preferredDefaultModel(mk(M52, "anthropic/claude-fable-5-1"))?.value).toBe(M52);
+  });
+});
+
+describe("P-MODEL.8 - Gemini 4 Argon is the flagship, Gemini 3.8 Flash the Gemini default", () => {
+  const mk = (...values: string[]): ModelOption[] => values.map((value) => ({ value, name: value }));
+  // The Google API-key catalog as omp discovers it from GET /v1beta/models (2026-10-14), chat routes only.
+  const GOOGLE = mk("google/gemini-2.5-pro", "google/gemini-3.1-pro-preview", "google/gemini-3.5-flash",
+    "google/gemini-3.7-flash", "google/gemini-3.8-flash", "google/gemini-3.8-flash-lite-tts", "google/gemini-4-argon");
+
+  it("Argon ranks as a flagship and leads the Gemini group, above 3.1 Pro", () => {
+    expect(capabilityTier("google/gemini-4-argon")).toBe(2);
+    expect(capabilityTier("google/gemini-4-argon-lite")).toBe(0); // the small-model test still runs first
+    expect(capabilityTier("google/gemini-3.8-flash")).toBe(0);
+    expect(sortGovFirstByLevel(GOOGLE)[0]!.value).toBe("google/gemini-4-argon");
+    expect(topModel(GOOGLE)?.value).toBe("google/gemini-4-argon");
+  });
+  it("a Google-only install opens on 3.8 Flash, never on the expensive Argon or a Pro", () => {
+    expect(preferredDefaultModel(GOOGLE)?.value).toBe("google/gemini-3.8-flash");
+    expect(preferredDefaultModel(mk("google/gemini-3-8-flash", "google/gemini-4-argon"))?.value).toBe("google/gemini-3-8-flash");
+  });
+  it("without 3.8 Flash the Gemini pick falls to 3.1 Pro, not an older Flash", () => {
+    expect(preferredDefaultModel(mk("google/gemini-3.7-flash", "google/gemini-3.1-pro-preview"))?.value).toBe("google/gemini-3.1-pro-preview");
+  });
+  it("a curated Claude or GPT flagship still outranks the Gemini default", () => {
+    expect(preferredDefaultModel([...GOOGLE, ...mk("anthropic/claude-opus-5-5")])?.value).toBe("anthropic/claude-opus-5-5");
+    expect(preferredDefaultModel([...GOOGLE, ...mk("openai-codex/gpt-6-sol")])?.value).toBe("openai-codex/gpt-6-sol");
   });
 });
 

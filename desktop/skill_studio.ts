@@ -193,11 +193,11 @@ export async function gatherWorkDigest(window: StudioWindow, workspace: string =
   const cutoff = window === "today" ? new Date().setHours(0, 0, 0, 0) : Date.now() - 7 * 24 * 3600_000;
 
   let model = "unknown";
-  try { model = usageLedger().models[0]?.model ?? "unknown"; } catch { /* no usage ledger yet */ }
+  try { model = (await usageLedger()).models[0]?.model ?? "unknown"; } catch { /* no usage ledger yet */ }
 
   const sessions: WorkDigestInput["sessions"] = [];
   try {
-    for (const s of listSessions(workspace).sessions.filter((x) => x.kind !== "kg-ingest" && x.updatedAt >= cutoff).slice(0, 8)) {
+    for (const s of (await listSessions(workspace)).sessions.filter((x) => x.kind !== "kg-ingest" && x.updatedAt >= cutoff).slice(0, 8)) {
       let userExcerpts: string[] = [];
       try {
         userExcerpts = sessionMessages(s.id, 40).messages.filter((m) => m.role === "user" && m.text.trim()).map((m) => m.text).slice(-6);

@@ -110,8 +110,11 @@ jobs:
 
       # The same exclusion-only scope as the local gate (ADR-0303: scope by exclusion, never by
       # positional pattern) - vendored trees and the packaged release copy stay out.
+      # --timeout 30000: shared Windows runners starve real-I/O tests past bun's 5 s default
+      # (observed on four unrelated tests 2026-10-17, plus kb_cli on a rerun); per-site budgets
+      # above 30 s (the chat_stream heartbeat test) still override per test.
       - name: Full test suite (Windows)
-        run: bun test --path-ignore-patterns="desktop/release/**" --path-ignore-patterns="vendor/**" --path-ignore-patterns="lucidaddon_audit/**"
+        run: bun test --timeout 30000 --path-ignore-patterns="desktop/release/**" --path-ignore-patterns="vendor/**" --path-ignore-patterns="lucidaddon_audit/**"
 
   scanner:
     name: Unicode scanner tests (Python, ${{ matrix.os }})

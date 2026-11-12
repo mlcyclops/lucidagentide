@@ -18,8 +18,8 @@ AppX/MSIX package. Upgrades happen in place and never touch user data.
 | Install location | `C:\Program Files\LucidAgentIDE\` (MSI is `perMachine`) |
 | App id | `com.lucidagentide.desktop` |
 | MSI UpgradeCode | `2568ebca-6784-4546-9463-9765440afaf3`, pinned forever in `desktop/package.json` and enforced by `desktop/win_packaging.test.ts` |
-| AppX identity | `TechLead187.LucidAgent`, publisher `CN=TechLead 187 LLC` |
-| Signature | **unsigned from CI** by default; Authenticode rides the `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` secrets when present, or the org signs post-build (see 2) |
+| AppX identity | `TechLead187.LucidAgent`, publisher `CN=TECHLEAD 187 LLC, O=TECHLEAD 187 LLC, L=Sun City Center, S=Florida, C=US` (the Azure Artifact Signing certificate subject) |
+| Signature | **signed in CI** (exe, msi, appx) by Azure Artifact Signing as `CN=TECHLEAD 187 LLC`, RFC 3161 timestamped (ADR-0447, `desktop/SIGNING.md`); the publisher's certificate chains to Microsoft's public root, so devices need no extra trust. An org can still re-sign post-build with its own cert (see 2) |
 | Upgrade behavior | MSI major upgrade replaces only what the package owns under Program Files; MSIX updates by version on the same identity |
 | User data | `%APPDATA%\LucidAgentIDE` (+ `%LOCALAPPDATA%` cache): settings, the encrypted knowledge graph, `knowledge.duckdb`, the audit log. **Never packaged, never touched** on upgrade or uninstall |
 | Admin policy | `%ProgramData%\LucidAgentIDE\managed-config.json`: **not packaged** (deployed via ADR-A010 GPO/ADMX or Intune), so upgrades never clobber it |
@@ -85,7 +85,8 @@ signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
 Rules that bite if skipped:
 
 - **MSIX/AppX must be signed** with a cert the target devices trust, and the cert
-  subject must equal the package `publisher` (`CN=TechLead 187 LLC`). Intune refuses
+  subject must equal the package `publisher` (`CN=TECHLEAD 187 LLC, O=TECHLEAD 187 LLC,
+  L=Sun City Center, S=Florida, C=US`; the CI-signed appx already satisfies this). Intune refuses
   unsigned LOB MSIX. For a different org CN, re-set `appx.publisher` at build time
   or repackage; do not edit the checked-in value casually (the identity test pins
   its shape, and changing publisher makes updates look like a new app).

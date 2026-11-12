@@ -11,7 +11,8 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { load } from "./settings_store.ts";
+import { keyVaultStatus, load } from "./settings_store.ts";
+import type { VaultStatus } from "./engine_vault.ts";
 
 // P-PROV.1 (ADR-0210): extra per-provider config env beyond the single primary key. Azure OpenAI and
 // Vertex/Gemini-Enterprise need MORE than one value (resource/base/version; project/location/ADC path),
@@ -26,6 +27,8 @@ export interface ProviderFieldAuth extends ProviderField { set: boolean; value?:
 export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
   oauthActive: boolean; oauthIdentity?: string;
+  /** P-PROV.3: the device-code broker id offered beside the redirect sign-in (OpenAI). */
+  deviceOauthId?: string;
   keySet: boolean; keyLast4?: string;
   fields?: ProviderFieldAuth[];
   /** Why the LAST OAuth attempt died after the browser said "success" (broker exited without a
@@ -33,8 +36,9 @@ export interface ProviderAuth {
   oauthError?: { message: string; at: number };
 }
 
-/** The full per-section auth snapshot `/api/auth` returns (mirrored as AuthStatus in bridge.ts). */
-export interface ProviderAuthSnapshot { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[] }
+/** The full per-section auth snapshot `/api/auth` returns (mirrored as AuthStatus in bridge.ts). `vault`
+ *  (P-VAULT-KEYS.1, ADR-0472) says where saved keys live: custody + state only, never a secret. */
+export interface ProviderAuthSnapshot { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[]; vault: VaultStatus }
 
 // The AskSage gov gateway (ADR-0007): API-key only, key in keys.ASKSAGE_API_KEY. Surfaced ABOVE the
 // Providers section in its own card (it routes through an accredited gov proxy, not a direct provider).
@@ -43,12 +47,19 @@ export const GATEWAY: Provider[] = [
 ];
 // A provider descriptor: primary key `env` (may be "" for OAuth-only providers), the omp broker `oauthId`,
 // and optional extra config `fields`. Every string here (env names, oauthId) must match what omp 16.x reads.
-export interface Provider { id: string; name: string; env: string; oauthId: string; canOauth: boolean; fields?: ProviderField[] }
+export interface Provider {
+  id: string; name: string; env: string; oauthId: string; canOauth: boolean; fields?: ProviderField[];
+  /** P-PROV.3: a second broker id for the same account that runs a DEVICE-CODE flow (the user types a
+   *  short code on the provider's page; no loopback callback). Offered beside the redirect sign-in for
+   *  hosts where port 1455 or the browser callback is blocked. Its credential lands under `oauthId`
+   *  (omp's `storeCredentialsAs`, mirrored in desktop/device_code.ts). */
+  deviceOauthId?: string;
+}
 
 // Primary providers (the Providers card): U.S. frontier labs, key or OAuth. omp's broker provider ids
 // drive the OAuth path.
 export const MAJORS: Provider[] = [
-  { id: "openai", name: "OpenAI · ChatGPT", env: "OPENAI_API_KEY", oauthId: "openai-codex", canOauth: true },
+  { id: "openai", name: "OpenAI · ChatGPT", env: "OPENAI_API_KEY", oauthId: "openai-codex", canOauth: true, deviceOauthId: "openai-codex-device" },
   // Google consumer Gemini (AI Studio key) OR the Gemini-CLI / Code-Assist OAuth. omp's google-gemini-cli
   // login ALREADY onboards Workspace/Enterprise (standard-tier) accounts — but only when GOOGLE_CLOUD_PROJECT
   // is set; without it omp aborts non-personal accounts with "requires setting GOOGLE_CLOUD_PROJECT". So we
@@ -175,10 +186,11 @@ export function providerAuth(): ProviderAuthSnapshot {
     });
     return {
       id: m.id, name: m.name, env: m.env, oauthId: m.oauthId, canOauth: m.canOauth,
+      ...(m.deviceOauthId ? { deviceOauthId: m.deviceOauthId } : {}),
       oauthActive: !!oauth, oauthIdentity: oauth?.identity_key ?? undefined,
       keySet: !!key, keyLast4: key ? String(key).slice(-4) : undefined,
       ...(fields ? { fields } : {}),
     };
   };
-  return { gateway: GATEWAY.map(map), majors: MAJORS.map(map), others: OTHERS.map(map) };
+  return { gateway: GATEWAY.map(map), majors: MAJORS.map(map), others: OTHERS.map(map), vault: keyVaultStatus() };
 }

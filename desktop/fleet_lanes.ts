@@ -43,6 +43,9 @@ import { stopCallProcesses, workerProcesses } from "./call_pulse_proc.ts"; // P-
 import type { ProcRow } from "./leftover_reaper.ts";
 import { WriteClaims, type WaitView } from "./write_claims.ts"; // P-WAIT.1: file-scoped write waits
 import { toolInput, toolIntent } from "./tool_input.ts"; // P-PROGRESS.1: one extractor for lanes and the master
+import { toolCode } from "./tool_code.ts";
+import { StepTextJoiner } from "./step_text.ts"; // P-STEPTEXT.1: a paragraph break between a turn's tool steps
+import type { AosLaneInput } from "./aos.ts"; // P-AOS.1 (ADR-0452): the fleet goal's view of a lane
 import { laneHoldsSession, type OwnerLane } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
 import type { RepoContext } from "./repo_identity.ts";
 // P-REMOTE.16 (ADR-0431): the rich turn shapes a remote guest replays, and the desktop's one diffstat
@@ -186,10 +189,18 @@ const HANDSHAKE_MS = 30_000;
  *  seconds is generous for a healthy disk and short enough that a OneDrive hydration stall reads as
  *  the refusal it is instead of a frozen button. */
 const STAT_DIR_MS = 10_000;
-/** The transcript kept for recovery replay, per lane: enough memory to resume mid-task, bounded so a
- *  chatty lane cannot grow without limit. Oldest turns fall off first; the byte cap trims per turn. */
+/** The transcript kept per lane: what promote() seeds the main composer with, what a remote guest's
+ *  lane-sync replays, and what the recovery preamble is built from. Oldest turns fall off first. */
 export const TRANSCRIPT_MAX_TURNS = 40;
-const TRANSCRIPT_MAX_TURN_CHARS = 8_000;
+/** Per-turn memory ceiling for the KEPT text. Generous on purpose: switching a lane to the main space must
+ *  show the whole answer, and an 8K clamp here cut long answers mid-sentence with "[truncated]". This only
+ *  stops a pathological turn from pinning unbounded memory. Remote replays are bounded by boundTranscript. */
+const TRANSCRIPT_MAX_TURN_CHARS = 200_000;
+/** Per-turn clamp applied only when building the recovery preamble, so a respawned lane's first prompt
+ *  stays a bounded memory aid rather than a replay of every long answer. */
+const RESUME_MAX_TURN_CHARS = 8_000;
+/** P-REMOTE.16: the in-flight thinking kept for replay memory. */
+const THINKING_MAX_CHARS = 8_000;
 /** P-REMOTE.16: tool records kept per recorded turn (the compact `[ran: ...]` titles keep their own 40 cap). */
 const TRANSCRIPT_MAX_TOOLS = 64;
 /** P-FLEET.L3: staged prompts per lane. Mirrors P-FLEET.1's job-queue cap - past it, refuse loudly. */
@@ -256,8 +267,9 @@ export interface FleetLaneDeps {
   /** P-INTERJECT.1: per-lane spawn env OVERLAY (on top of the inherited process.env - ACPClient
    *  semantics). dev.ts supplies interjectChildEnv(laneId), which stamps LUCID_INTERJECT_TARGET=<laneId>
    *  (+ LUCID_DEV_URL) so the lane's interject_extension drains only ITS notes. Optional: absent means
-   *  a bare inherit, exactly the pre-seam behavior. Applied at spawn AND at every in-place recovery. */
-  env?: (laneId: string) => Record<string, string>;
+   *  a bare inherit, exactly the pre-seam behavior. Applied at spawn AND at every in-place recovery.
+   *  `cwd` is the lane's working folder: P-VAULT-ENV.1 adds that workspace's scoped secrets from it. */
+  env?: (laneId: string, cwd: string) => Record<string, string>;
   /** P-HEALTH.1: deliver an OPERATOR note to a lane's in-flight turn (dev.ts supplies addInterject).
    *  This is how a stall probe reaches a busy session: the lane already has a turn open, and a second
    *  session/prompt on one session would cross collectors (the ADR-0268 lesson). Optional, because a
@@ -345,6 +357,9 @@ interface Lane {
   pending: { summary: string; kind: string; resolve: (allow: boolean) => void } | null;
   /** P-FLEET.L6: approve every ask without a human (per-lane; initialized from the manager default). */
   autoApprove: boolean;
+  /** P-CTRL.2 (ADR-0438): a controller lane is pinned supervised. Neither the fleet-wide auto default nor a
+   *  per-lane auto switch reaches it; auto for controller lanes needs the P-CTRL.4 consent, not a toggle. */
+  supervised: boolean;
   /** P-FLEET.L6: ask kinds the user granted for this lane's lifetime via scope "session". */
   sessionAllow: Set<string>;
   /** A prompt turn is in flight (one at a time per lane). */
@@ -371,6 +386,8 @@ interface Lane {
   transcript: LaneTurnRecord[];
   /** Assistant text accumulating during the CURRENT turn; folded into `transcript` when it settles. */
   liveText: string;
+  /** The current turn's text across its tool steps (reset with liveText). */
+  stepText: StepTextJoiner;
   /** Compact tool titles for the current turn, folded with the assistant text. */
   liveTools: string[];
   /** P-REMOTE.16: the current turn's thinking, fed from the same chunk the card renders; folded as `thinking`. */
@@ -439,7 +456,7 @@ export class FleetLaneManager {
    *  model) when it advertises loadSession; otherwise the caller's transcript (read from the on-disk
    *  session) rides the next prompt as the fallback preamble, exactly like an in-place respawn. Either
    *  way the transcript seeds what the composer shows on promote, and `turns` keeps the count honest. */
-  async spawn(opts: { cwd: string; model?: string; name?: string; resume?: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }> {
+  async spawn(opts: { cwd: string; model?: string; name?: string; supervised?: boolean; resume?: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }> {
     const cwd = (opts.cwd ?? "").trim();
     if (!cwd) return { ok: false, reason: `not a directory: ""` };
     const claim = this.#claimRefusal(opts.resume?.sessionId ?? null);
@@ -482,12 +499,13 @@ export class FleetLaneManager {
       createdAt: t,
       lastActivityAt: t,
       turns: opts.resume ? Math.max(0, Math.floor(opts.resume.turns)) : 0,
-      client: new ACPClient(plan.cmd, plan.args, cwd, this.#deps.env?.(id) ?? {}),
+      client: new ACPClient(plan.cmd, plan.args, cwd, this.#deps.env?.(id, cwd) ?? {}),
       sessionId: opts.resume?.sessionId ?? null,
       hubSessionId: this.#hub(), // P-SWITCH.3: born under the hub of the moment, kept for life
       sinks: new Set(),
       pending: null,
-      autoApprove: this.#autoDefault,
+      autoApprove: opts.supervised ? false : this.#autoDefault,
+      supervised: opts.supervised === true,
       sessionAllow: new Set(),
       busy: false,
       openCalls: new Map(),
@@ -497,6 +515,7 @@ export class FleetLaneManager {
       promoted: false,
       transcript: [],
       liveText: "",
+      stepText: new StepTextJoiner(),
       liveTools: [],
       liveThinking: "",
       liveToolRecords: [],
@@ -563,6 +582,7 @@ export class FleetLaneManager {
     lane.lastPrompt = text;
     lane.lastImages = images;
     lane.liveText = "";
+    lane.stepText.reset();
     lane.liveTools = [];
     lane.liveThinking = "";
     lane.liveToolRecords = [];
@@ -707,11 +727,40 @@ export class FleetLaneManager {
     return { ok: true, queued: lane.queue.length };
   }
 
-  queueRemove(laneId: string, index: number): { ok: boolean } {
+  /** P-PUSH.PAR1 (ADR-pending): `expect` is the item's full text as the caller last read it. A push to a
+   *  parallel lane takes seconds (worktree + spawn), and a drain in that window shifts every index, so a
+   *  bare index could delete a DIFFERENT staged prompt. With `expect`, the item at `index` must carry that
+   *  text, else the first item that does is removed; none matching is a refusal (fail-closed). */
+  queueRemove(laneId: string, index: number, expect?: string): { ok: boolean } {
     const lane = this.#lanes.get(laneId);
-    if (!lane || index < 0 || index >= lane.queue.length) return { ok: false };
-    lane.queue.splice(index, 1);
+    if (!lane) return { ok: false };
+    let at = index;
+    if (expect !== undefined && lane.queue[at]?.text !== expect) at = lane.queue.findIndex((q) => q.text === expect);
+    if (!Number.isInteger(at) || at < 0 || at >= lane.queue.length) return { ok: false };
+    lane.queue.splice(at, 1);
     return { ok: true };
+  }
+
+  /** P-PUSH.PAR1 (ADR-pending): read a staged item's FULL text and its own images WITHOUT removing it. Copy
+   *  and Push now on a lane chip need the whole prompt (the status view clips it at 140 chars), and Push now
+   *  keeps the item staged until the parallel lane accepted it. Out-of-range is a refusal. */
+  queuePeek(laneId: string, index: number): { ok: boolean; item?: { text: string; images: LaneImage[] }; reason?: string } {
+    const lane = this.#lanes.get(laneId);
+    if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
+    if (!Number.isInteger(index) || index < 0 || index >= lane.queue.length) return { ok: false, reason: "that staged prompt already ran or was removed" };
+    const item = lane.queue[index]!;
+    return { ok: true, item: { text: item.text, images: item.images.slice() } };
+  }
+
+  /** P-QUEUE-IMG.1 (ADR-0469): Update on a staged chip. Removes the item and hands back its FULL text and
+   *  its own images (the status view only carries a clipped preview and a count), so the card composer can
+   *  load exactly what was staged for editing. Out-of-range is a refusal, never a different item. */
+  queueTake(laneId: string, index: number): { ok: boolean; item?: { text: string; images: LaneImage[] }; reason?: string } {
+    const lane = this.#lanes.get(laneId);
+    if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
+    if (!Number.isInteger(index) || index < 0 || index >= lane.queue.length) return { ok: false, reason: "that staged prompt already ran or was removed" };
+    const [item] = lane.queue.splice(index, 1);
+    return { ok: true, item: { text: item!.text, images: item!.images.slice() } };
   }
 
   /** Move a staged prompt one slot up (-1) or down (+1). Out-of-range is a quiet no-op. */
@@ -763,6 +812,7 @@ export class FleetLaneManager {
   setAuto(laneId: string, on: boolean): { ok: boolean; lane?: LaneView; reason?: string } {
     const lane = this.#lanes.get(laneId);
     if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
+    if (on && lane.supervised) return { ok: false, reason: "a controller lane stays supervised - auto needs the controller consent (P-CTRL.4)" };
     lane.autoApprove = on;
     if (on) lane.pending?.resolve(true);
     return { ok: true, lane: this.#view(lane) };
@@ -772,6 +822,7 @@ export class FleetLaneManager {
   setAutoAll(on: boolean): void {
     this.#autoDefault = on;
     for (const lane of this.#lanes.values()) {
+      if (lane.supervised) continue;
       lane.autoApprove = on;
       if (on) lane.pending?.resolve(true);
     }
@@ -996,6 +1047,14 @@ export class FleetLaneManager {
     return out;
   }
 
+  /** P-AOS.1 (ADR-0452): what the fleet goal's heartbeat observes of every lane. Synchronous: a tick
+   *  never awaits. `cost` is omp's cumulative session cost from the last usage_update. */
+  goalLanes(): AosLaneInput[] {
+    const out: AosLaneInput[] = [];
+    for (const lane of this.#lanes.values()) out.push({ id: lane.id, name: lane.name, status: lane.status, busy: lane.busy, lastActivityAt: lane.lastActivityAt, cost: lane.lastUsage?.cost ?? 0 });
+    return out;
+  }
+
   /** ADR-0414: is a turn running on this lane right now? Null for a lane this manager does not know
    *  (dismissed, or never existed), so a live push to it is refused by name instead of parked forever. */
   laneRunning(laneId: string): boolean | null {
@@ -1214,7 +1273,7 @@ export class FleetLaneManager {
     // the same way. A lane must never come back to life ungated.
     let plan: { cmd: string; args: string[] };
     try { plan = this.#deps.argv(); } catch (e) { return { ok: false, reason: e instanceof Error ? e.message : String(e) }; }
-    lane.client = new ACPClient(plan.cmd, plan.args, lane.cwd, this.#deps.env?.(lane.id) ?? {});
+    lane.client = new ACPClient(plan.cmd, plan.args, lane.cwd, this.#deps.env?.(lane.id, lane.cwd) ?? {});
     this.#wire(lane);
     this.#setStatus(lane, "starting");
     try {
@@ -1234,7 +1293,10 @@ export class FleetLaneManager {
    *  TRANSCRIPT (data to remember, not instructions to re-execute). Tool effects on disk are real - the
    *  work is not redone, it is remembered. */
   #resumePreamble(lane: Lane): string {
-    const lines = lane.transcript.map((t) => `${t.role === "user" ? "USER" : "LANE"}: ${t.text}`).join("\n\n");
+    const lines = lane.transcript.map((t) => {
+      const text = t.text.length > RESUME_MAX_TURN_CHARS ? `${t.text.slice(0, RESUME_MAX_TURN_CHARS)}\u2026[truncated]` : t.text;
+      return `${t.role === "user" ? "USER" : "LANE"}: ${text}`;
+    }).join("\n\n");
     return (
       `[SESSION RECOVERY] You are the same worker lane, resumed after your previous process died. ` +
       `The transcript of your session so far follows between the markers. Treat it as MEMORY: do not ` +
@@ -1243,12 +1305,12 @@ export class FleetLaneManager {
     );
   }
 
-  /** Append a turn to the bounded recovery transcript (per-turn char clamp, oldest turns fall off). */
+  /** Append a turn to the bounded lane transcript (per-turn memory ceiling, oldest turns fall off). */
   #record(lane: Lane, turn: LaneTurnRecord): void {
     const text = turn.text.length > TRANSCRIPT_MAX_TURN_CHARS ? `${turn.text.slice(0, TRANSCRIPT_MAX_TURN_CHARS)}\u2026[truncated]` : turn.text;
     const rec: LaneTurnRecord = { role: turn.role, text };
     // P-REMOTE.16: the rich detail, bounded like the text (the tool records were already capped at the wire).
-    if (turn.thinking) rec.thinking = turn.thinking.length > TRANSCRIPT_MAX_TURN_CHARS ? `${turn.thinking.slice(0, TRANSCRIPT_MAX_TURN_CHARS)}\u2026[truncated]` : turn.thinking;
+    if (turn.thinking) rec.thinking = turn.thinking.length > THINKING_MAX_CHARS ? `${turn.thinking.slice(0, THINKING_MAX_CHARS)}\u2026[truncated]` : turn.thinking;
     if (turn.tools?.length) rec.tools = turn.tools.slice(0, TRANSCRIPT_MAX_TOOLS).map(copyTool);
     if (turn.error) rec.error = turn.error;
     lane.transcript.push(rec);
@@ -1270,6 +1332,7 @@ export class FleetLaneManager {
       this.#record(lane, rec);
     }
     lane.liveText = "";
+    lane.stepText.reset();
     lane.liveTools = [];
     lane.liveThinking = "";
     lane.liveToolRecords = [];
@@ -1287,7 +1350,7 @@ export class FleetLaneManager {
       switch (u?.sessionUpdate) {
         case "agent_message_chunk":
           if (u.content?.type === "text") {
-            const text = String(u.content.text);
+            const text = lane.stepText.text(String(u.content.text));
             lane.liveText += text; // recovery memory rides the same stream the card renders
             this.#emit(lane, { type: "token", text });
           }
@@ -1295,7 +1358,7 @@ export class FleetLaneManager {
         case "agent_thought_chunk":
           if (u.content?.type === "text") {
             const text = String(u.content.text);
-            if (lane.liveThinking.length < TRANSCRIPT_MAX_TURN_CHARS) lane.liveThinking += text; // P-REMOTE.16: replay memory
+            if (lane.liveThinking.length < THINKING_MAX_CHARS) lane.liveThinking += text; // P-REMOTE.16: replay memory
             this.#emit(lane, { type: "thinking", text });
           }
           break;
@@ -1323,13 +1386,13 @@ export class FleetLaneManager {
             this.#emit(lane, { type: "tool", id, name, detail: title, status: u.status === "completed" ? "done" : "failed", elapsedMs });
             break;
           }
+          lane.stepText.tool(); // text after a new call is a new model message
           if (title && lane.liveTools.length < 40) lane.liveTools.push(title.slice(0, 160));
           trackToolCall(lane.openCalls, u, lane.lastActivityAt); // P-HEALTH.1: this call is now awaited
           this.#deps.repo?.observe(typeof params?.sessionId === "string" ? params.sessionId : lane.sessionId, u, lane.cwd); // P-REPO.1
-          // P-FLEET.L3 (mirrors P-CHAT.1): the authored code rides the CALL's rawInput - a write's
-          // `content`, an edit's `edits[{old_text,new_text}]` joined into one before/after pair, or omp's
-          // hashline patch in a single `input` string. Relative paths resolve against the LANE's cwd.
-          const code = this.#toolCode(lane, u);
+          // P-FLEET.L3 (mirrors P-CHAT.1): shared extraction handles writes, replacement pairs, and
+          // patches. Resolve relative paths against this LANE's cwd, never the master's workspace.
+          const code = toolCode(u, (path) => !path || /^(file:\/\/|https?:\/\/|[A-Za-z]:[\\/]|\/|\\\\|~[\\/])/i.test(path) ? path : join(lane.cwd, path), CODE_CAP);
           // P-OWN.1: an authored path becomes this lane's in the checkout ownership ledger (path only) once
           // the call COMPLETES: a denied or failed edit must not make the lane the owner of another's file.
           // A call that arrives already completed settles at once; otherwise the terminal update above does.
@@ -1418,29 +1481,6 @@ export class FleetLaneManager {
       lane.pending?.resolve(false);
       if (lane.status !== "stopped") this.#setStatus(lane, lane.busy ? "error" : "stopped");
     };
-  }
-
-  /** P-FLEET.L3 (mirrors acp_backend's P-CHAT.1 extraction): the code a write/edit call authored, from
-   *  its rawInput. Returns undefined for tools with no authored code (read/search/bash). The content is
-   *  already gate-scanned - it is the same tool_call text the in-omp gate saw. */
-  #toolCode(lane: Lane, u: { kind?: unknown; title?: unknown; rawInput?: unknown; input?: unknown }): LaneToolCode | undefined {
-    const riRaw = u.rawInput ?? u.input;
-    if (!riRaw || typeof riRaw !== "object") return undefined;
-    const ri = riRaw as Record<string, unknown>;
-    const clip = (s: unknown) => (typeof s === "string" ? s.slice(0, CODE_CAP) : undefined);
-    // The agent writes/edits with paths relative to ITS workspace - the lane's cwd, not the master's.
-    const rawPath = typeof ri.path === "string" ? ri.path : typeof ri.file_path === "string" ? ri.file_path : "";
-    const path = !rawPath || /^(file:\/\/|https?:\/\/|[A-Za-z]:[\\/]|\/|\\\\|~[\\/])/i.test(rawPath) ? rawPath : join(lane.cwd, rawPath);
-    if (typeof ri.content === "string") return { path, content: clip(ri.content) };
-    if (Array.isArray(ri.edits) && ri.edits.length) {
-      const olds = ri.edits.map((e) => String((e as Record<string, unknown>)?.old_text ?? (e as Record<string, unknown>)?.oldText ?? "")).join("\n");
-      const news = ri.edits.map((e) => String((e as Record<string, unknown>)?.new_text ?? (e as Record<string, unknown>)?.newText ?? "")).join("\n");
-      return { path, oldText: clip(olds) ?? "", newText: clip(news) ?? "" };
-    }
-    if (typeof ri.old_text === "string" || typeof ri.new_text === "string") return { path, oldText: clip(ri.old_text) ?? "", newText: clip(ri.new_text) ?? "" };
-    if (typeof ri.oldText === "string" || typeof ri.newText === "string") return { path, oldText: clip(ri.oldText) ?? "", newText: clip(ri.newText) ?? "" };
-    if (typeof ri.input === "string" && (u.kind === "edit" || /\bedit\b/i.test(String(u.title ?? "")))) return { path, patch: clip(ri.input) };
-    return undefined;
   }
 
   #askUser(lane: Lane, summary: string, kind: string): Promise<boolean> {

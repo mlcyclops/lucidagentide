@@ -23,7 +23,7 @@ test("ingestPreview shows the learned snippet, not the extractor prompt", () => 
   expect(ingestPreview(EXTRACT_SYSTEM)).toBe("ingested message"); // nothing after the prompt → fallback
 });
 
-test("listSessions splits ingest throwaways out of the chat list (titled by the snippet)", () => {
+test("listSessions splits ingest throwaways out of the chat list (titled by the snippet)", async () => {
   const root = mkdtempSync(join(tmpdir(), "lucid-sess-")); // atomic, random name (js/insecure-temporary-file)
   const cwd = "/test/repo";
   const dir = join(root, "enc");
@@ -39,7 +39,7 @@ test("listSessions splits ingest throwaways out of the chat list (titled by the 
   writeFileSync(join(dir, "ing2.jsonl"), file("i2", `${EXTRACT_SYSTEM}\n\nI use vim`));
 
   try {
-    const { sessions, ingest } = listSessions(cwd, root);
+    const { sessions, ingest } = await listSessions(cwd, root);
     expect(sessions.map((s) => s.id)).toEqual(["c1"]);
     expect(sessions[0]!.kind).toBe("chat");
     expect(ingest.map((s) => s.id).sort()).toEqual(["i1", "i2"]);
@@ -49,7 +49,7 @@ test("listSessions splits ingest throwaways out of the chat list (titled by the 
     // P-KG-INGEST.2: clearing removes ONLY the ingest throwaways; the real chat survives.
     const cleared = clearIngestSessions(cwd, root);
     expect(cleared).toEqual({ ok: true, cleared: 2 });
-    const after = listSessions(cwd, root);
+    const after = await listSessions(cwd, root);
     expect(after.ingest).toHaveLength(0);
     expect(after.sessions.map((s) => s.id)).toEqual(["c1"]); // chat untouched
     expect(clearIngestSessions(cwd, root).cleared).toBe(0); // idempotent — nothing left to clear
@@ -58,7 +58,7 @@ test("listSessions splits ingest throwaways out of the chat list (titled by the 
   }
 });
 
-test("clearIngestSessions only touches the CURRENT workspace's ingest sessions", () => {
+test("clearIngestSessions only touches the CURRENT workspace's ingest sessions", async () => {
   const root = mkdtempSync(join(tmpdir(), "lucid-sess-ws-")); // atomic, random name (js/insecure-temporary-file)
   const dir = join(root, "enc");
   mkdirSync(dir, { recursive: true });
@@ -71,7 +71,7 @@ test("clearIngestSessions only touches the CURRENT workspace's ingest sessions",
   writeFileSync(join(dir, "other.jsonl"), fileFor("o1", "/other/repo", `${EXTRACT_SYSTEM}\n\nother`));
   try {
     expect(clearIngestSessions("/me/repo", root).cleared).toBe(1); // only my workspace's ingest session
-    expect(listSessions("/other/repo", root).ingest.map((s) => s.id)).toEqual(["o1"]); // the other repo's is intact
+    expect((await listSessions("/other/repo", root)).ingest.map((s) => s.id)).toEqual(["o1"]); // the other repo's is intact
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

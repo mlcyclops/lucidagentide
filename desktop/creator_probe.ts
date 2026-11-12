@@ -24,6 +24,7 @@ import { avatarHealthCapabilities, parseAvatarHealth } from "./creator_dgx_avata
 import { cadHealthCapabilities, parseCadHealth } from "./creator_dgx_cad.ts";
 import { parseVisionHealth, visionHealthCapabilities, visionHealthDetail } from "./creator_dgx_vision.ts";
 import { hyperframesVersionArgv } from "./creator_hyperframes.ts";
+import { openfilmVersionArgv } from "./creator_openfilm.ts"; // CREATOR-OPENFILM (ADR-0457)
 import { DRIFT_SESSION_ENDPOINT_ID, DriftClient, defaultDriftExePaths, type DriftSessionState } from "./creator_drift.ts"; // CREATOR-DRIFT
 
 /** Closed set. `skipped` = nothing to probe (no endpoint declared, or a built-in). */
@@ -71,6 +72,17 @@ export interface ProbeDeps {
   /** Platform and env for the default executable paths (process.platform / process.env in the engine). */
   readonly platform?: string;
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /** CREATOR-WHISTLE (ADR-0432): the engine's own in-process check, supplied by dev.ts: it resolves the
+   *  staged assets, verifies their hashes, starts the worker, and transcribes a second of silence. The
+   *  registry row never stands in for it: with no checker the probe says not-installed. */
+  readonly whistle?: () => Promise<WhistleProbeAnswer>;
+}
+
+export interface WhistleProbeAnswer {
+  readonly state: "ready" | "not-installed" | "unreachable";
+  /** The verify/start/transcribe reason verbatim, or what ready proved. */
+  readonly detail: string;
+  readonly version: string;
 }
 
 const result = (
@@ -229,6 +241,17 @@ export function probeBuiltIn(deps: ProbeDeps, providerId: CreatorProviderId, att
   return result(providerId, "ready", "Built into the renderer: no endpoint, no credential, no network.", startedAt, deps.now(), attested);
 }
 
+/** Whistle: no endpoint and no executable, so the engine's own checker is the only honest witness. `ready`
+ *  attests both capabilities because the one call that proved it (a decode) is the same call both use. */
+export async function probeWhistle(deps: ProbeDeps): Promise<ProbeResult> {
+  const startedAt = deps.now();
+  if (!deps.whistle) return result("whistle", "not-installed", "Whistle assets are not staged on this engine.", startedAt, deps.now());
+  let answer: WhistleProbeAnswer;
+  try { answer = await deps.whistle(); }
+  catch (e) { return result("whistle", "unreachable", e instanceof Error ? e.message : String(e), startedAt, deps.now()); }
+  return result("whistle", answer.state, answer.detail, startedAt, deps.now(), answer.state === "ready" ? ["stt", "alignment"] : [], answer.version);
+}
+
 /** Probe one provider, choosing the adapter its transports imply. */
 export async function probeProvider(deps: ProbeDeps, providerId: CreatorProviderId, endpoints: readonly CreatorEndpointDef[]): Promise<ProbeResult> {
   const ep = endpoints.find((e) => e.enabled && e.providerId === providerId);
@@ -243,6 +266,8 @@ export async function probeProvider(deps: ProbeDeps, providerId: CreatorProvider
       return ep
         ? probeHttpService(deps, "dots-tts", ep, { paths: ["/v1/models", "/health", "/"], attestOnOk: ["tts"] })
         : result("dots-tts", "skipped", "No dots.tts server is declared yet.", deps.now(), deps.now());
+    case "whistle":
+      return probeWhistle(deps);
     case "suno":
       return ep
         ? probeHttpService(deps, "suno", ep, { paths: ["/v1/models", "/"] })
@@ -257,12 +282,14 @@ export async function probeProvider(deps: ProbeDeps, providerId: CreatorProvider
         : result("unreal", "skipped", "No Unreal executable is declared yet.", deps.now(), deps.now());
     case "hyperframes":
       return ep ? probeHyperframes(deps, ep) : result("hyperframes", "skipped", "No HyperFrames executable is declared yet.", deps.now(), deps.now());
+    case "openfilm":
+      return ep ? probeOpenfilm(deps, ep) : result("openfilm", "skipped", "No OpenFilm executable is declared yet.", deps.now(), deps.now());
     case "dgx-avatar":
-      return ep ? probeDgxHealth(deps, "dgx-avatar", ep) : result("dgx-avatar", "skipped", "No DGX avatar endpoint is declared yet. Import one from the DGX Loader mailbox.", deps.now(), deps.now());
+      return ep ? probeDgxHealth(deps, "dgx-avatar", ep) : result("dgx-avatar", "skipped", "No DGX avatar endpoint is declared yet. Import one from the Private AI Platform mailbox.", deps.now(), deps.now());
     case "dgx-cad":
-      return ep ? probeDgxHealth(deps, "dgx-cad", ep) : result("dgx-cad", "skipped", "No DGX CAD endpoint is declared yet. Import one from the DGX Loader mailbox.", deps.now(), deps.now());
+      return ep ? probeDgxHealth(deps, "dgx-cad", ep) : result("dgx-cad", "skipped", "No DGX CAD endpoint is declared yet. Import one from the Private AI Platform mailbox.", deps.now(), deps.now());
     case "dgx-vision":
-      return ep ? probeDgxHealth(deps, "dgx-vision", ep) : result("dgx-vision", "skipped", "No DGX vision endpoint is declared yet. Import one from the DGX Loader mailbox.", deps.now(), deps.now());
+      return ep ? probeDgxHealth(deps, "dgx-vision", ep) : result("dgx-vision", "skipped", "No DGX vision endpoint is declared yet. Import one from the Private AI Platform mailbox.", deps.now(), deps.now());
     case "pdf-markup":
       return probeBuiltIn(deps, "pdf-markup", ["pdf-markup"]);
     case "design":
@@ -291,6 +318,21 @@ export function probeHyperframes(deps: ProbeDeps, ep: CreatorEndpointDef): Probe
   try { version = (deps.exec(v.argv).split("\n")[0] ?? "").trim().slice(0, 80); }
   catch { return result("hyperframes", "not-installed", `${exe} is present but did not answer --version.`, startedAt, deps.now()); }
   return result("hyperframes", "ready", `hyperframes ${version || "(no version line)"} responded on this machine.`, startedAt, deps.now(), ["video-compose", "render-animation", "runtime-feedback"], version);
+}
+
+/** CREATOR-OPENFILM (ADR-0457): `<exe> [prefix] --version`, which the CLI answers before any network work. A
+ *  shell shim, a package runner (npx and friends), or declared args naming a refused subcommand are refused here
+ *  exactly as look and render refuse them, so the probe never runs what a job would not. */
+export function probeOpenfilm(deps: ProbeDeps, ep: CreatorEndpointDef): ProbeResult {
+  const startedAt = deps.now();
+  const v = openfilmVersionArgv({ exe: ep.command ?? "", prefixArgs: ep.args });
+  if (!v.ok) return result("openfilm", "not-installed", v.error, startedAt, deps.now());
+  const exe = v.argv[0]!;
+  if (!deps.exists(exe)) return result("openfilm", "not-installed", `${exe} is not on disk.`, startedAt, deps.now());
+  let version = "";
+  try { version = (deps.exec(v.argv).split("\n")[0] ?? "").trim().slice(0, 80); }
+  catch { return result("openfilm", "not-installed", `${exe} is present but did not answer --version.`, startedAt, deps.now()); }
+  return result("openfilm", "ready", `openfilm ${version || "(no version line)"} responded on this machine.`, startedAt, deps.now(), ["video-compose", "render-animation", "runtime-feedback"], version);
 }
 
 const DRIFT_ENABLE_HINT = "In Drift: Settings -> Agent access -> On, then probe again.";
@@ -351,7 +393,7 @@ export async function probeDrift(deps: ProbeDeps, ep: CreatorEndpointDef | undef
   return result("drift", "ready", `Drift ${version} answered at ${baseUrl}${fromSession ? " (Agent access session)" : " (declared endpoint)"}; proven: ${attested.join(", ")}.`, startedAt, deps.now(), attested, init.version);
 }
 
-/** The DGX Loader services: `/health` both proves reachability AND reports what the box can do. */
+/** The Private AI Platform services: `/health` both proves reachability AND reports what the box can do. */
 export async function probeDgxHealth(deps: ProbeDeps, providerId: "dgx-avatar" | "dgx-cad" | "dgx-vision", ep: CreatorEndpointDef): Promise<ProbeResult> {
   const startedAt = deps.now();
   const base = (ep.baseUrl ?? "").replace(/\/+$/, "");
@@ -359,7 +401,7 @@ export async function probeDgxHealth(deps: ProbeDeps, providerId: "dgx-avatar" |
   const r = await readJson(deps, `${base}/health`, {});
   const now = deps.now();
   if (r.status === 401 || r.status === 403) return result(providerId, "unauthorized", `${base} refused the request.`, startedAt, now);
-  if (!r.status) return result(providerId, "unreachable", `${base} did not answer. Is the SSH forward from the DGX Loader running?`, startedAt, now);
+  if (!r.status) return result(providerId, "unreachable", `${base} did not answer. Is the SSH forward from the Private AI Platform running?`, startedAt, now);
   if (r.status >= 400) return result(providerId, "unreachable", `${base} answered ${r.status}.`, startedAt, now);
   if (providerId === "dgx-avatar") {
     const h = parseAvatarHealth(r.body);

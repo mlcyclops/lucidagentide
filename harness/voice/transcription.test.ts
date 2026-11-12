@@ -6,9 +6,74 @@
 // and the fail-safe (transport error / non-200 → empty text, never throws).
 
 import { test, expect, describe } from "bun:test";
-import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, sttTransportFailed, stripNonSpeech } from "./transcription.ts";
+import { buildWav, type WavFormat } from "../brief/tts_backend.ts";
+import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, WhistleSttBackend, sttTransportFailed, stripNonSpeech } from "./transcription.ts";
+import type { WhistleOptions, WhistleTranscript } from "./whistle.ts";
+import type { WhistleTranscriber } from "./whistle_client.ts";
 
 const audio = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+
+// CREATOR-WHISTLE (ADR-0432): the in-process backend. A fake transcriber stands in for the worker; no
+// model is loaded here. The backend's job is shaping + refusing by name, and that is what is pinned.
+describe("WhistleSttBackend", () => {
+  const words = [{ word: "hello", startMs: 10, endMs: 300, probability: 0.9 }, { word: "there", startMs: 320, endMs: 600, probability: 0.8 }];
+  function fake(reject?: string): WhistleTranscriber & { calls: { samples: number; opts: WhistleOptions | undefined }[] } {
+    const calls: { samples: number; opts: WhistleOptions | undefined }[] = [];
+    return {
+      calls,
+      modelSha256: "abc",
+      async transcribe(pcm: Float32Array, opts?: WhistleOptions): Promise<WhistleTranscript> {
+        calls.push({ samples: pcm.length, opts });
+        if (reject) throw new Error(reject);
+        return { text: " hello there ", language: "en", ttftMs: 1, decodeTps: 2, words, windows: 1 };
+      },
+    };
+  }
+  /** One second of silence in `fmt`. */
+  const wav = (fmt: WavFormat): Uint8Array => buildWav(fmt, new Uint8Array(fmt.sampleRate * fmt.channels * (fmt.bitsPerSample >> 3)));
+
+  test("16 kHz mono WAV goes through untouched; text is trimmed and words carried", async () => {
+    const t = fake();
+    const r = await new WhistleSttBackend(t).transcribe(wav({ channels: 1, sampleRate: 16000, bitsPerSample: 16 }), { mimeType: "audio/wav", language: "en" });
+    expect(r).toEqual({ backendId: "whistle", text: "hello there", note: "", words });
+    expect(t.calls).toEqual([{ samples: 16000, opts: { language: "en", wordTimestamps: true } }]);
+    expect(sttTransportFailed(r)).toBe(false);
+  });
+  test("48 kHz stereo is folded to mono and resampled to 16 kHz for the model's ears only", async () => {
+    const t = fake();
+    const r = await new WhistleSttBackend(t).transcribe(wav({ channels: 2, sampleRate: 48000, bitsPerSample: 16 }));
+    expect(r.text).toBe("hello there");
+    expect(t.calls[0]!.samples).toBe(16000);
+    expect(t.calls[0]!.opts).toEqual({ language: undefined, wordTimestamps: true });
+  });
+  test("refuses a non-WAV mime by name without touching the worker", async () => {
+    const t = fake();
+    const r = await new WhistleSttBackend(t).transcribe(audio, { mimeType: "audio/webm" });
+    expect(r).toEqual({ backendId: "whistle", text: "", note: "Whistle takes 16-bit PCM WAV; got audio/webm", words: [] });
+    expect(t.calls).toHaveLength(0);
+  });
+  test("refuses a non-16-bit WAV and a non-RIFF buffer by name", async () => {
+    const t = fake();
+    const r8 = await new WhistleSttBackend(t).transcribe(wav({ channels: 1, sampleRate: 16000, bitsPerSample: 8 }));
+    expect(r8.note).toBe("Whistle takes 16-bit PCM WAV; got 8-bit");
+    const junk = await new WhistleSttBackend(t).transcribe(audio);
+    expect(junk.text).toBe("");
+    expect(junk.note).toMatch(/Whistle STT unavailable \(not a RIFF\/WAVE buffer\)/);
+    expect(t.calls).toHaveLength(0);
+  });
+  test("refuses an unsupported language by name", async () => {
+    const t = fake();
+    const r = await new WhistleSttBackend(t).transcribe(wav({ channels: 1, sampleRate: 16000, bitsPerSample: 16 }), { language: "ja" });
+    expect(r.note).toBe('Whistle supports en, de, fr, es, it, nl, pl; got "ja"');
+    expect(t.calls).toHaveLength(0);
+  });
+  test("a dead worker becomes an unavailable note, never a throw", async () => {
+    const r = await new WhistleSttBackend(fake("Whistle worker exited (code 1)")).transcribe(wav({ channels: 1, sampleRate: 16000, bitsPerSample: 16 }));
+    expect(r.text).toBe("");
+    expect(r.note).toBe("Whistle STT unavailable (Whistle worker exited (code 1))");
+    expect(sttTransportFailed(r)).toBe(true);
+  });
+});
 
 // P-STT.2b: whisper.cpp's whisper-server uses the NATIVE /inference route (verified live), not the OpenAI
 // /v1/audio/transcriptions path. This backend posts there and parses { text }.

@@ -113,3 +113,19 @@ export async function verifyDiscovery(
 export function removeDiscovery(path: string): void {
   try { rmSync(path, { force: true }); } catch { /* verification catches leftovers */ }
 }
+
+/** Whether a process with this pid exists: signal 0 probes without signalling, and EPERM means it
+ *  exists but belongs to someone else. */
+export function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }
+}
+
+/** A file left by an engine that was killed (no exit handler ran: SIGKILL, taskkill /F, any kill on
+ *  Windows) stays inert, but piles up with its token in it. Call only after verifyDiscovery failed:
+ *  the file goes when its process is gone; a live pid (an engine still booting, or a reused pid) keeps
+ *  it, so pruning can never remove a running engine's file. Returns whether the file was removed. */
+export function pruneStaleDiscovery(path: string, d: EngineDiscovery, alive: (pid: number) => boolean = pidAlive): boolean {
+  if (alive(d.pid)) return false;
+  removeDiscovery(path);
+  return true;
+}

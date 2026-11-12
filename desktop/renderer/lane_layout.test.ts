@@ -10,10 +10,12 @@
 import { describe, expect, it } from "bun:test";
 import { clampToViewport } from "./share_dock.ts";
 import {
-  widthFromDrag, maxCardW, heightFromDrag, clampSize, snapSlot, reorder, reconcile, loadLayout, saveLayout,
+  widthFromDrag, maxCardW, defaultCardW, heightFromDrag, clampSize, snapSlot, reorder, reconcile, loadLayout, saveLayout,
   resizeShape,
+  autofitGrid, autofitSections, autofitPlan, distribute, shareResize, sharesOf, isAutofit,
   CARD_COL_W, CARD_GAP, CARD_MIN_H, CARD_MAX_H, CARD_MIN_W, CARD_MAX_W, CARD_DEF_W,
-  type CardRect, type LaneLayout,
+  FIT_MIN_W, FIT_MIN_H, FIT_WEIGHT_MAX,
+  type CardRect, type FitPlan, type LaneLayout,
 } from "./lane_layout.ts";
 
 const MIN_W = 296, MIN_H = 200;
@@ -80,6 +82,42 @@ describe("maxCardW (P-FLEET.L12)", () => {
     expect(maxCardW(Number.NaN)).toBe(CARD_MAX_W);
     expect(maxCardW(Number.POSITIVE_INFINITY)).toBe(CARD_MAX_W);
     expect(maxCardW(undefined as unknown as number)).toBe(CARD_MAX_W);
+  });
+});
+
+describe("defaultCardW: an unsized card tiles the panel, never max-content", () => {
+  it("fits as many default columns as the body holds and shares the slack between them", () => {
+    // 1180px body: three 300px cards + two 10px gaps = 920 fit, four do not, so three columns of 386.
+    expect(defaultCardW(1180)).toBe(386);
+    // Exactly three columns with no slack stays at the default width.
+    expect(defaultCardW(3 * CARD_DEF_W + 2 * CARD_GAP)).toBe(CARD_DEF_W);
+    // One px short of a fourth column still tiles three; one px more tiles four.
+    expect(defaultCardW(4 * CARD_DEF_W + 3 * CARD_GAP - 1)).toBe(Math.floor((4 * CARD_DEF_W + 3 * CARD_GAP - 1 - 2 * CARD_GAP) / 3));
+    expect(defaultCardW(4 * CARD_DEF_W + 3 * CARD_GAP)).toBe(CARD_DEF_W);
+  });
+
+  it("the tiled row always FITS: cols * w + gaps never exceeds the body (floor, not round)", () => {
+    for (let body = CARD_DEF_W; body <= 2000; body += 7) {
+      const w = defaultCardW(body);
+      const cols = Math.floor((body + CARD_GAP) / (CARD_DEF_W + CARD_GAP));
+      expect(cols * w + (cols - 1) * CARD_GAP).toBeLessThanOrEqual(body);
+      expect(w).toBeGreaterThanOrEqual(CARD_DEF_W);
+    }
+  });
+
+  it("a body narrower than one default card is one full-width column, floored at the minimum", () => {
+    expect(defaultCardW(280)).toBe(280);
+    expect(defaultCardW(100)).toBe(CARD_MIN_W);
+  });
+
+  it("never exceeds the panel's own ceiling", () => {
+    for (const w of [280, 500, 1180, 3000]) expect(defaultCardW(w)).toBeLessThanOrEqual(maxCardW(w));
+  });
+
+  it("an UNMEASURABLE body falls back to the default width, not the minimum", () => {
+    expect(defaultCardW(0)).toBe(CARD_DEF_W);
+    expect(defaultCardW(Number.NaN)).toBe(CARD_DEF_W);
+    expect(defaultCardW(-1)).toBe(CARD_DEF_W);
   });
 });
 
@@ -415,5 +453,220 @@ describe("resizeShape (P-FLEET.L9)", () => {
     expect(on.y).toBeGreaterThanOrEqual(0);
     expect(on.x + on.w).toBeLessThanOrEqual(1440);
     expect(on.y + on.h).toBeLessThanOrEqual(900);
+  });
+});
+
+// P-FLEET.FIT1: autofit, the default fleet layout. The load-bearing promise is "no dead space": every row's
+// widths plus gaps equal the body width EXACTLY and the rows' heights plus gaps equal the body height
+// EXACTLY (one px over wraps a card, one px under is a seam), at equal sizes unless the user re-weighted.
+function expectFills(plan: FitPlan | null, W: number, H: number): FitPlan {
+  expect(plan).not.toBeNull();
+  const p = plan as FitPlan;
+  for (const r of p.rowW) expect(r.reduce((a, b) => a + b, 0) + CARD_GAP * (r.length - 1)).toBe(W);
+  if (!p.grid.scroll) expect(p.rowH.reduce((a, b) => a + b, 0) + CARD_GAP * (p.rowH.length - 1)).toBe(H);
+  return p;
+}
+const ids = (n: number): string[] => Array.from({ length: n }, (_, i) => `l${i + 1}`);
+
+describe("autofitGrid (P-FLEET.FIT1)", () => {
+  it("tiles 1..8 lanes in a 1600x900 body with no scroll, no empty row and no overflow", () => {
+    const shapes: string[] = [];
+    for (let n = 1; n <= 8; n++) {
+      const g = autofitGrid(n, 1600, 900);
+      expect(g).not.toBeNull();
+      if (!g) continue;
+      expect(g.scroll).toBe(false);
+      expect(g.cols * g.rows).toBeGreaterThanOrEqual(n);
+      expect((g.rows - 1) * g.cols).toBeLessThan(n); // never a whole empty row
+      expect(g.cardW).toBeGreaterThanOrEqual(FIT_MIN_W);
+      expect(g.cardH).toBeGreaterThanOrEqual(FIT_MIN_H);
+      expect(g.cols * g.cardW + CARD_GAP * (g.cols - 1)).toBeLessThanOrEqual(1600);
+      expect(g.rows * g.cardH + CARD_GAP * (g.rows - 1)).toBeLessThanOrEqual(900);
+      shapes.push(`${g.cols}x${g.rows}`);
+    }
+    // Pinned so a scoring change is a visible decision, not drift.
+    expect(shapes).toEqual(["1x1", "2x1", "2x2", "2x2", "3x2", "3x2", "4x2", "4x2"]);
+  });
+
+  it("4 lanes: 2x2 in a squarish dock, one row of 4 in a wide shallow one", () => {
+    expect(autofitGrid(4, 1200, 800)).toEqual({ cols: 2, rows: 2, cardW: 595, cardH: 395, scroll: false });
+    // 2x2 here would be 245px tall, under FIT_MIN_H, so it is infeasible and 4x1 wins.
+    expect(autofitGrid(4, 1800, 500)).toEqual({ cols: 4, rows: 1, cardW: 442, cardH: 500, scroll: false });
+  });
+
+  it("very wide: one row; very tall: one column", () => {
+    expect(autofitGrid(3, 3000, 400)).toEqual({ cols: 3, rows: 1, cardW: 993, cardH: 400, scroll: false });
+    expect(autofitGrid(4, 400, 2000)).toEqual({ cols: 1, rows: 4, cardW: 400, cardH: 492, scroll: false });
+  });
+
+  it("below the minimum tile it falls back to equal min-height tiles and scrolls", () => {
+    // 6 lanes in 700x400: no shape reaches 320x260, so: as many 320px columns as fit, 260px tall, scroll.
+    expect(autofitGrid(6, 700, 400)).toEqual({ cols: 2, rows: 3, cardW: 345, cardH: FIT_MIN_H, scroll: true });
+    // Narrower than one minimum tile: one full-width column; tall enough, so no scroll after all.
+    expect(autofitGrid(2, 300, 1000)).toEqual({ cols: 1, rows: 2, cardW: 300, cardH: 495, scroll: false });
+  });
+
+  it("is null for nothing to tile or an unmeasured body (the caller keeps its last plan)", () => {
+    for (const [n, w, h] of [[0, 1200, 800], [-3, 1200, 800], [4, 0, 800], [4, 1200, 0], [4, Number.NaN, 800], [4, 1200, Number.POSITIVE_INFINITY], [Number.NaN, 1200, 800]] as const) {
+      expect(autofitGrid(n, w, h)).toBeNull();
+    }
+  });
+
+  it("sections (lane groups) each start a fresh row", () => {
+    // [3, 1]: 3 columns -> rows 1 + 1 = 2 beats 2 columns -> rows 2 + 1 = 3.
+    expect(autofitSections([3, 1], 1200, 800)).toEqual({ cols: 3, rows: 2, cardW: 393, cardH: 395, scroll: false });
+    expect(autofitSections([0, 2, -1], 1200, 800)).toEqual(autofitGrid(2, 1200, 800));
+  });
+});
+
+describe("distribute (P-FLEET.FIT1)", () => {
+  it("splits in whole px that sum to EXACTLY the total", () => {
+    expect(distribute(1190, [1, 1], 0)).toEqual([595, 595]);
+    expect(distribute(1000, [1, 1, 1], 0)).toEqual([334, 333, 333]);
+    const r = distribute(1190, [2, 1], 0);
+    expect(r[0]! + r[1]!).toBe(1190);
+    expect(r[0]).toBeGreaterThan(r[1]!);
+  });
+
+  it("pins a member under the minimum and re-splits the rest", () => {
+    expect(distribute(1180, [10, 1, 1], CARD_MIN_W)).toEqual([1180 - 2 * CARD_MIN_W, CARD_MIN_W, CARD_MIN_W]);
+  });
+
+  it("degrades the minimum to the equal floor when min * k cannot fit, never overflowing", () => {
+    const r = distribute(500, [1, 1, 1], 260);
+    expect(r.reduce((a, b) => a + b, 0)).toBe(500);
+    expect(Math.max(...r) - Math.min(...r)).toBeLessThanOrEqual(1);
+  });
+
+  it("treats junk weights as the equal share and junk totals as zero", () => {
+    expect(distribute(600, [Number.NaN, -1, 0], 0)).toEqual([200, 200, 200]);
+    expect(distribute(Number.NaN, [1, 1], 0)).toEqual([0, 0]);
+    expect(distribute(100, [], 0)).toEqual([]);
+  });
+});
+
+describe("autofitPlan (P-FLEET.FIT1)", () => {
+  it("4 equal lanes fill a 1200x800 body exactly, 2x2", () => {
+    const p = expectFills(autofitPlan([ids(4)], 1200, 800), 1200, 800);
+    expect(p.rows).toEqual([["l1", "l2"], ["l3", "l4"]]);
+    for (const id of ids(4)) expect(p.cells[id]).toMatchObject({ w: 595, h: 395 });
+  });
+
+  it("fills exactly for every lane count 1..8, wide or tall", () => {
+    for (const [W, H] of [[1600, 900], [3000, 400], [420, 2400], [1201, 777]] as const) {
+      for (let n = 1; n <= 8; n++) expectFills(autofitPlan([ids(n)], W, H), W, H);
+    }
+  });
+
+  it("a ragged last row STRETCHES across the empty cell instead of leaving dead space", () => {
+    const p = expectFills(autofitPlan([ids(3)], 1600, 900), 1600, 900);
+    expect(p.rows).toEqual([["l1", "l2"], ["l3"]]);
+    expect(p.cells.l3?.w).toBe(1600);
+  });
+
+  it("the scroll fallback keeps equal widths across the full row and equal min-height tiles", () => {
+    const p = expectFills(autofitPlan([ids(6)], 700, 400), 700, 400);
+    expect(p.grid.scroll).toBe(true);
+    for (const id of ids(6)) expect(p.cells[id]).toMatchObject({ w: 345, h: FIT_MIN_H });
+  });
+
+  it("re-weights a card within its row and a row against the others, still filling", () => {
+    const p = expectFills(autofitPlan([ids(4)], 1200, 800, { l1: { fw: 2, fh: 1.5 }, l2: { fw: 1, fh: 1.5 } }), 1200, 800);
+    expect(p.cells.l1!.w).toBeGreaterThan(p.cells.l2!.w);
+    expect(p.cells.l3!.w).toBe(p.cells.l4!.w); // the other row is untouched
+    expect(p.rowH[0]).toBeGreaterThan(p.rowH[1]!);
+  });
+
+  it("groups: each section starts its own row; junk and duplicate ids are skipped", () => {
+    const p = expectFills(autofitPlan([["a", "b", "c"], ["d"]], 1200, 800), 1200, 800);
+    expect(p.rows).toEqual([["a", "b", "c"], ["d"]]);
+    expect(p.cells.d).toMatchObject({ w: 1200, row: 1 });
+    const q = autofitPlan([["a", "a", "", null as unknown as string], [], ["a", "b"]], 1200, 800);
+    expect(q?.rows).toEqual([["a"], ["b"]]);
+  });
+
+  it("is null with nothing visible or an unmeasured body", () => {
+    expect(autofitPlan([], 1200, 800)).toBeNull();
+    expect(autofitPlan([[]], 1200, 800)).toBeNull();
+    expect(autofitPlan([ids(2)], 0, 800)).toBeNull();
+  });
+});
+
+describe("shareResize / sharesOf (P-FLEET.FIT1: auto fit and equally resize)", () => {
+  it("the dragged member takes the new size and the others share the rest EQUALLY", () => {
+    expect(shareResize([400, 400, 400], 0, 600, 260)).toEqual([600, 300, 300]);
+    expect(shareResize([400, 400, 400], 1, 500, 260)).toEqual([350, 500, 350]);
+  });
+
+  it("clamps so every sibling keeps the minimum, and the total never changes", () => {
+    expect(shareResize([400, 400, 400], 0, 1000, 260)).toEqual([680, 260, 260]);
+    expect(shareResize([400, 400, 400], 2, 10, 260)).toEqual([470, 470, 260]);
+    for (const next of [-50, 0, 333, 9999, Number.NaN]) {
+      expect(shareResize([300, 500, 400], 1, next, 260).reduce((a, b) => a + b, 0)).toBe(1200);
+    }
+  });
+
+  it("a lone member or a bad index changes nothing (no sibling to give way)", () => {
+    expect(shareResize([1200], 0, 600, 260)).toEqual([1200]);
+    expect(shareResize([400, 400], 5, 600, 260)).toEqual([400, 400]);
+  });
+
+  it("sharesOf stores mean-1 shares, so equal is all ones", () => {
+    expect(sharesOf([600, 300, 300])).toEqual([1.5, 0.75, 0.75]);
+    expect(sharesOf([395, 395])).toEqual([1, 1]);
+    expect(sharesOf([0, 0])).toEqual([1, 1]);
+  });
+
+  it("a drag round-trips: shares fed back through autofitPlan reproduce the dragged px", () => {
+    const p = autofitPlan([ids(2)], 1200, 800)!;
+    const px = shareResize(p.rowW[0]!, 0, 700, CARD_MIN_W);
+    const [a, b] = sharesOf(px);
+    const q = autofitPlan([ids(2)], 1200, 800, { l1: { fw: a!, fh: 1 }, l2: { fw: b!, fh: 1 } })!;
+    expect(q.rowW[0]).toEqual(px);
+  });
+});
+
+describe("autofit persistence (P-FLEET.FIT1)", () => {
+  it("a layout saved before autofit loads as autofit ON with equal shares", () => {
+    const l = loadLayout('{"order":["a"],"size":{"a":{"w":610,"h":300}}}');
+    expect(isAutofit(l)).toBe(true);
+    expect(l.autofit).toBeUndefined();
+    expect(l.fit).toBeUndefined();
+    expect(isAutofit(loadLayout(null))).toBe(true);
+    expect(isAutofit(loadLayout("not json"))).toBe(true);
+  });
+
+  it("a default layout still serializes to the exact pre-autofit bytes", () => {
+    expect(saveLayout({ order: ["a"], size: {} })).toBe('{"order":["a"],"size":{}}');
+    expect(saveLayout({ order: ["a"], size: {}, autofit: true, fit: { a: { fw: 1, fh: 1 } } })).toBe('{"order":["a"],"size":{}}');
+  });
+
+  it("only an explicit boolean false turns autofit off, and it round-trips", () => {
+    const raw = saveLayout({ order: ["a"], size: {}, autofit: false });
+    expect(raw).toBe('{"order":["a"],"size":{},"autofit":false}');
+    expect(isAutofit(loadLayout(raw))).toBe(false);
+    expect(isAutofit(loadLayout('{"order":["a"],"size":{},"autofit":"false"}'))).toBe(true);
+    expect(isAutofit(loadLayout('{"order":["a"],"size":{},"autofit":0}'))).toBe(true);
+  });
+
+  it("shares round-trip byte-identically, equal entries are dropped, junk is clamped or ignored", () => {
+    const l: LaneLayout = { order: ["a", "b"], size: {}, fit: { a: { fw: 1.5, fh: 0.75 }, b: { fw: 1, fh: 1 } } };
+    const raw = saveLayout(l);
+    expect(loadLayout(raw).fit).toEqual({ a: { fw: 1.5, fh: 0.75 } });
+    expect(saveLayout(loadLayout(raw))).toBe(raw);
+    expect(loadLayout('{"order":["a"],"size":{},"fit":{"a":{"fw":999,"fh":1}}}').fit).toEqual({ a: { fw: FIT_WEIGHT_MAX, fh: 1 } });
+    expect(loadLayout('{"order":["a"],"size":{},"fit":{"a":{"fw":"x","fh":-2}}}').fit).toBeUndefined();
+    // A malformed `fit` costs only the shares, never the order or sizes beside it.
+    const junk = loadLayout('{"order":["a"],"size":{"a":{"w":610,"h":300}},"fit":7}');
+    expect(junk.order).toEqual(["a"]);
+    expect(junk.size.a).toEqual({ w: 610, h: 300 });
+    expect(junk.fit).toBeUndefined();
+  });
+
+  it("reconcile keeps the mode and releases a vanished lane's share", () => {
+    const r = reconcile({ order: ["a", "b"], size: {}, autofit: false, fit: { a: { fw: 2, fh: 1 }, b: { fw: 0.5, fh: 1 } } }, ["a", "c"]);
+    expect(r.autofit).toBe(false);
+    expect(r.fit).toEqual({ a: { fw: 2, fh: 1 } });
+    expect(isAutofit(reconcile({ order: [], size: {} }, ["a"]))).toBe(true);
   });
 });

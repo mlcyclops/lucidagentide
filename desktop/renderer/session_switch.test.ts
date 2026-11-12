@@ -4,8 +4,10 @@
 // P-SWITCH.1 (ADR-0403): opening a session never stops Main's work unless the user chose to, and never puts
 // one session in two omp processes.
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { liveBadge, planSessionSwitch, switchSheetCopy, type SwitchLane } from "./session_switch.ts";
+import { currentSwitchPreflight, liveBadge, planSessionSwitch, switchOutcome, switchSheetCopy, type SwitchLane } from "./session_switch.ts";
 
 const lane = (id: string, sessionId: string | null, status: string): SwitchLane => ({ id, sessionId, status });
 
@@ -73,5 +75,74 @@ describe("switchSheetCopy", () => {
     expect(c.spoke).toBe("Start it as a spoke");
     expect(c.stop).toBe("Stop it and start new");
     expect(c.spokeHint).toContain("A new session opens in its own spoke");
+  });
+});
+
+// #460 cases 3+4: the answer to the actual load/new POST decides, because the plan above was made from
+// the renderer's own view, which can be stale (a goal or automation starting between the check and the
+// load) or missing (fleetStatus unreachable). The engine's registry (ADR-0404) is the authority.
+describe("switchOutcome", () => {
+  test("heldBy attaches to the holding spoke, whatever the renderer's fleet view said (#460 case 4)", () => {
+    expect(switchOutcome({ ok: false, heldBy: { laneId: "L2" } }, "B")).toEqual({ kind: "attach", laneId: "L2" });
+  });
+
+  test("a busy 409 between turns shows the session the engine kept, not the target (#460 case 3)", () => {
+    expect(switchOutcome({ ok: false, busy: "a goal loop is running", sessionId: "A" }, "B"))
+      .toEqual({ kind: "show-holder", holderId: "A", reason: "a goal loop is running" });
+    // A refused New session already seeded an empty thread; that view is just as wrong as the target's.
+    expect(switchOutcome({ ok: false, busy: "a goal loop is running", sessionId: "A" }, null))
+      .toEqual({ kind: "show-holder", holderId: "A", reason: "a goal loop is running" });
+  });
+
+  test("a busy 409 on the target itself, or naming no session, rechecks the live turn as before", () => {
+    expect(switchOutcome({ ok: false, busy: "a turn is running", sessionId: "B" }, "B")).toEqual({ kind: "recheck", reason: "a turn is running" });
+    expect(switchOutcome({ ok: false, busy: "a turn is running" }, "B")).toEqual({ kind: "recheck", reason: "a turn is running" });
+  });
+
+  test("no answer is never a switch: an unreachable engine does not make the session free (#460 case 4)", () => {
+    expect(switchOutcome({ ok: false }, "B")).toEqual({ kind: "unconfirmed" });
+  });
+
+  test("ok means the engine switched", () => {
+    expect(switchOutcome({ ok: true }, "B")).toEqual({ kind: "done" });
+  });
+});
+
+// #460 case 5 (the #392 review): "openSession awaits two preflights before any epoch check, so clicking
+// A then B quickly can let A's late plan win. Take a generation number before the await." The generation
+// lives inside currentSwitchPreflight, taken synchronously at the call, so it can never be taken late.
+describe("currentSwitchPreflight (#460 case 5: a superseded open's plan is discarded)", () => {
+  test("a single uncontested open gets its preflight result back unchanged", async () => {
+    expect(await currentSwitchPreflight(Promise.resolve("preflight"))).toBe("preflight");
+  });
+
+  test("THE BUG: click A, then B while A's preflight is in flight - A's late result must not win", async () => {
+    let landA!: (v: string) => void;
+    const a = currentSwitchPreflight(new Promise<string>((resolve) => { landA = resolve; })); // A's preflight hangs at the engine
+    const b = currentSwitchPreflight(Promise.resolve("B")); // B is clicked before A's preflight lands
+    expect(await b).toBe("B"); // the newest click proceeds with its own plan
+    landA("A"); // A's preflight finally lands, after B already decided
+    expect(await a).toBeNull(); // superseded: A's stale result is discarded, its plan never applied
+  });
+
+  test("the newest click wins even when its preflight lands second", async () => {
+    let landB!: (v: string) => void;
+    const a = currentSwitchPreflight(Promise.resolve("A"));
+    const b = currentSwitchPreflight(new Promise<string>((resolve) => { landB = resolve; })); // B clicked right after A
+    expect(await a).toBeNull(); // A's preflight landed first, but B is the newer intent
+    landB("B");
+    expect(await b).toBe("B");
+  });
+
+  test("openSession wires the guard around its preflights, with no earlier await (pinned at the source)", () => {
+    const src = readFileSync(join(import.meta.dir, "app.ts"), "utf8");
+    const start = src.indexOf("async function openSession");
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf("\n}", start));
+    const code = body.split("\n").filter((line) => !line.trim().startsWith("//")).join("\n");
+    // The first await in openSession is the guarded Promise.all of the two preflights: the generation
+    // is taken synchronously inside currentSwitchPreflight, before sessionBusy/fleetStatus can land.
+    expect(code.indexOf("await")).toBe(code.indexOf("await currentSwitchPreflight(Promise.all([bridge.sessionBusy"));
+    expect(code).toContain("if (!pre) return;");
   });
 });

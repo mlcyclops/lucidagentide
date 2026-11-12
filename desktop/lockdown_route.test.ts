@@ -108,6 +108,9 @@ describe("lockdownVoiceVerdict", () => {
     expect(lockdownVoiceVerdict(true, "tts", "dots-tts", "http://10.0.0.21:8084", hosts).allowed).toBe(true);
     expect(lockdownVoiceVerdict(true, "tts", "dots-tts", "http://[::1]:8084", hosts).allowed).toBe(true);
   });
+  test("lock on: Whistle runs in-process with no URL at all, so it is allowed by construction (ADR-0432)", () => {
+    expect(lockdownVoiceVerdict(true, "stt", "whistle", undefined, hosts)).toEqual({ allowed: true, reason: "" });
+  });
   test("lock on: a local engine pointed at a public host, or an unknown engine, is refused (fail-closed)", () => {
     expect(lockdownVoiceVerdict(true, "stt", "whisper", "https://stt.example.com", hosts).allowed).toBe(false);
     expect(lockdownVoiceVerdict(true, "stt", "whisper", "not a url", hosts).allowed).toBe(false);

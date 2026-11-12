@@ -25,6 +25,12 @@ describe("recommendCheckerModel", () => {
     expect(r!.why).toContain("anthropic");
   });
 
+  test("P-MODEL.7: once the account lists Haiku 5.5 it outranks Haiku 4.5 as the checker, and Opus 5.5 never is one", () => {
+    const list = [...ANTHROPIC, opt("anthropic/claude-haiku-5-5"), opt("anthropic/claude-opus-5-5")];
+    const r = recommendCheckerModel(list, "anthropic/claude-opus-5-5");
+    expect(r!.value).toBe("anthropic/claude-haiku-5-5");
+  });
+
   test("openai maker → newest *mini* (small) over nano (weaker) and over the full gpt-5.5 (overkill)", () => {
     const r = recommendCheckerModel(OPENAI, "openai-codex/gpt-5.5");
     expect(r!.value).toBe("openai-codex/gpt-5.4-mini");
@@ -62,6 +68,13 @@ describe("resolveCheckerModel", () => {
     const r = resolveCheckerModel({ chosen: "anthropic/removed-model", models, current: "anthropic/claude-opus-4-8" });
     expect(r.source).toBe("recommended");
     expect(r.value).toBe("anthropic/claude-haiku-4-5");
+  });
+  test("an embedding model is never the checker, even as a saved override (ADR-0498)", () => {
+    const list = [opt("ollama/nomic-embed-text:latest"), ...ANTHROPIC];
+    expect(recommendCheckerModel(list, "ollama/nomic-embed-text:latest")!.value).toBe("anthropic/claude-haiku-4-5");
+    expect(resolveCheckerModel({ chosen: "ollama/nomic-embed-text:latest", models: list, current: "anthropic/claude-opus-4-8" }))
+      .toEqual({ value: "anthropic/claude-haiku-4-5", source: "recommended" });
+    expect(recommendCheckerModel([opt("ollama/nomic-embed-text:latest")], "anthropic/claude-opus-4-8")).toBeNull();
   });
   test("no choice + no models ⇒ falls back to the maker model (ADR-0046 default)", () => {
     expect(resolveCheckerModel({ chosen: "", models: [], current: "anthropic/claude-opus-4-8" }))

@@ -9,6 +9,7 @@
 // New GUI chats write new files here, so they appear on the next poll.
 
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { open, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
@@ -102,13 +103,14 @@ interface IndexEntry { mtimeMs: number; size: number; scwd: string; meta: Omit<S
 const sessionIndex = new Map<string, IndexEntry>();
 let indexParses = 0; // test seam: how many files were actually (re)parsed
 
-/** Parse one session .jsonl into list metadata. `meta: null` = an empty/probe session (cached too, so
- *  it isn't re-parsed every poll just to be skipped again). */
-function parseSessionFile(p: string, f: string): { scwd: string; meta: Omit<SessionInfo, "updatedAt"> | null } {
+/** Parse one session .jsonl's TEXT into list metadata. `meta: null` = an empty/probe session (cached
+ *  too, so it isn't re-parsed every poll just to be skipped again). Takes text rather than a path so
+ *  the timeline's async scan can read the file off the event loop. */
+function parseSessionText(text: string, f: string): { scwd: string; meta: Omit<SessionInfo, "updatedAt"> | null } {
   indexParses++;
   let id = "", scwd = "", model = "", title = "", turns = 0;
   let kind: "chat" | "kg-ingest" = "chat";
-  for (const ln of readFileSync(p, "utf8").split("\n")) {
+  for (const ln of text.split("\n")) {
     if (!ln) continue;
     let o: any;
     try { o = JSON.parse(ln); } catch { continue; }
@@ -146,37 +148,28 @@ export function canonicalModelId(model: string, provider?: unknown): string {
 }
 
 export function __sessionIndexStats(): { parses: number; entries: number } { return { parses: indexParses, entries: sessionIndex.size }; }
-export function __resetSessionIndex(): void { sessionIndex.clear(); indexParses = 0; }
+/** The index entry for `p` given its handle's stat: the cached one when size and mtime still match,
+ *  else a fresh parse of `text`. */
+function indexedEntry(p: string, f: string, st: { mtimeMs: number; size: number }, text: string): IndexEntry {
+  const hit = sessionIndex.get(p);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit;
+  const e: IndexEntry = { mtimeMs: st.mtimeMs, size: st.size, ...parseSessionText(text, f) };
+  sessionIndex.set(p, e);
+  return e;
+}
 
-export function listSessions(cwd: string = currentWorkspace(), root: string = join(homedir(), ".omp", "agent", "sessions")): SessionList {
-  if (!existsSync(root)) return { sessions: [], ingest: [] };
+export function __resetSessionIndex(): void { sessionIndex.clear(); allScans.clear(); indexParses = 0; }
+
+/** The sidebar's list: this workspace's sessions, newest first, chats and ingest throwaways split.
+ *  P-BOOTPERF.1 (ADR-pending): ASYNC, over the same scan as listAllSessions. The synchronous walk read
+ *  and parsed every .jsonl on the engine's one event loop, and the sidebar asks at boot, when the index
+ *  is cold: on a large corpus (13k files, an antivirus scanning each open) that froze every other route
+ *  for tens of seconds, the workspace bar and the turn-status probe included. It joins an in-flight scan
+ *  but never reuses a finished one (reuseMs 0), so a chat that just changed always shows. */
+export async function listSessions(cwd: string = currentWorkspace(), root: string = join(homedir(), ".omp", "agent", "sessions")): Promise<SessionList> {
   const want = norm(cwd);
   const all: SessionInfo[] = [];
-  const seen = new Set<string>();
-  for (const d of readdirSync(root)) {
-    const dir = join(root, d);
-    try {
-      if (!statSync(dir).isDirectory()) continue;
-      for (const f of readdirSync(dir)) {
-        if (!f.endsWith(".jsonl")) continue;
-        const p = join(dir, f);
-        try {
-          const st = statSync(p);
-          seen.add(p);
-          let e = sessionIndex.get(p);
-          if (!e || e.mtimeMs !== st.mtimeMs || e.size !== st.size) {
-            e = { mtimeMs: st.mtimeMs, size: st.size, ...parseSessionFile(p, f) };
-            sessionIndex.set(p, e);
-          }
-          if (!e.meta || norm(e.scwd) !== want) continue;
-          all.push({ ...e.meta, updatedAt: st.mtimeMs });
-        } catch { /* skip unreadable file */ }
-      }
-    } catch { /* skip dir */ }
-  }
-  // Prune index entries for files deleted under THIS root (other roots - e.g. tests - are untouched).
-  for (const k of sessionIndex.keys()) if (k.startsWith(root) && !seen.has(k)) sessionIndex.delete(k);
-  all.sort((a, b) => b.updatedAt - a.updatedAt);
+  for (const { cwd: scwd, ...s } of await listAllSessions(root, 0)) if (norm(scwd) === want) all.push(s);
   // Split: real chats (capped) vs the collapsed ingest group — so a big import can't crowd out chats.
   return {
     sessions: all.filter((s) => s.kind !== "kg-ingest").slice(0, 40),
@@ -189,32 +182,63 @@ export function listSessions(cwd: string = currentWorkspace(), root: string = jo
  *  to the current one like the sidebar. */
 export interface SessionRow extends SessionInfo { cwd: string }
 
+/** How long a finished all-workspace scan answers repeat callers. A real corpus is ~13k files, and even
+ *  warm a scan is ~1.5 s of stats; the Timeline dock and the orbit's ghost read land together at boot,
+ *  and a paged read asks once per page, so they share one scan instead of each paying for their own. */
+const ALL_SCAN_REUSE_MS = 2_000;
+/** Files stat'ed / read concurrently: parallel enough to beat the sequential scan, bounded so a cold
+ *  scan never holds hundreds of multi-MB transcripts in memory at once. */
+const ALL_SCAN_BATCH = 64;
+/** Per root: the in-flight (doneAt null) or recently finished scan. Single-flight + short reuse. */
+const allScans = new Map<string, { rows: Promise<SessionRow[]>; doneAt: number | null }>();
+
 /** Every parseable session on disk, across ALL workspaces, newest first, uncapped. Rides the SAME
- *  mtime+size index as listSessions (P-PERF.4), so a timeline poll re-parses only what changed. */
-export function listAllSessions(root: string = join(homedir(), ".omp", "agent", "sessions")): SessionRow[] {
+ *  mtime+size index as listSessions (P-PERF.4), so a timeline read re-parses only what changed. ASYNC,
+ *  unlike the sidebar's per-workspace listing: this walks every workspace the machine has ever had, and
+ *  doing that synchronously froze the whole engine for seconds per call (11 s cold, 1.5-2.6 s warm on
+ *  a 13k-session corpus), starving the Timeline dock's own request behind the orbit's paged reads.
+ *  Concurrent and back-to-back callers share one scan (`reuseMs`, ALL_SCAN_REUSE_MS by default; 0 joins
+ *  only a scan still in flight). */
+export function listAllSessions(root: string = join(homedir(), ".omp", "agent", "sessions"), reuseMs: number = ALL_SCAN_REUSE_MS): Promise<SessionRow[]> {
+  const hit = allScans.get(root);
+  if (hit && (hit.doneAt === null || Date.now() - hit.doneAt < reuseMs)) return hit.rows;
+  const scan: { rows: Promise<SessionRow[]>; doneAt: number | null } = { rows: scanAllSessions(root), doneAt: null };
+  allScans.set(root, scan);
+  scan.rows.then(
+    () => { scan.doneAt = Date.now(); },
+    () => { if (allScans.get(root) === scan) allScans.delete(root); },
+  );
+  return scan.rows;
+}
+
+async function scanAllSessions(root: string): Promise<SessionRow[]> {
   if (!existsSync(root)) return [];
   const all: SessionRow[] = [];
   const seen = new Set<string>();
-  for (const d of readdirSync(root)) {
+  let dirs: string[];
+  try { dirs = await readdir(root); } catch { return []; }
+  for (const d of dirs) {
     const dir = join(root, d);
-    try {
-      if (!statSync(dir).isDirectory()) continue;
-      for (const f of readdirSync(dir)) {
-        if (!f.endsWith(".jsonl")) continue;
+    let files: string[];
+    try { files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl")); } catch { continue; } // not a dir / unreadable
+    for (let i = 0; i < files.length; i += ALL_SCAN_BATCH) {
+      await Promise.all(files.slice(i, i + ALL_SCAN_BATCH).map(async (f) => {
         const p = join(dir, f);
         try {
-          const st = statSync(p);
+          // One handle for the size/mtime check and the read: nothing can swap the file in between.
+          const h = await open(p, "r");
+          let e: IndexEntry;
+          try {
+            const st = await h.stat();
+            const hit = sessionIndex.get(p);
+            e = hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size ? hit : indexedEntry(p, f, st, await h.readFile("utf8"));
+          } finally { await h.close(); }
           seen.add(p);
-          let e = sessionIndex.get(p);
-          if (!e || e.mtimeMs !== st.mtimeMs || e.size !== st.size) {
-            e = { mtimeMs: st.mtimeMs, size: st.size, ...parseSessionFile(p, f) };
-            sessionIndex.set(p, e);
-          }
-          if (!e.meta) continue; // empty/probe session
-          all.push({ ...e.meta, updatedAt: st.mtimeMs, cwd: e.scwd });
+          if (!e.meta) return; // empty/probe session
+          all.push({ ...e.meta, updatedAt: e.mtimeMs, cwd: e.scwd });
         } catch { /* skip unreadable file */ }
-      }
-    } catch { /* skip dir */ }
+      }));
+    }
   }
   for (const k of sessionIndex.keys()) if (k.startsWith(root) && !seen.has(k)) sessionIndex.delete(k);
   all.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -226,6 +250,7 @@ export function listAllSessions(root: string = join(homedir(), ".omp", "agent", 
  *  (`isIngestPrompt` on the first user message) — a real chat is never touched. Returns the count removed. */
 export function clearIngestSessions(cwd: string = currentWorkspace(), root: string = join(homedir(), ".omp", "agent", "sessions")): { ok: boolean; cleared: number } {
   if (!existsSync(root)) return { ok: true, cleared: 0 };
+  allScans.delete(root); // P-BOOTPERF.1: a scan in flight may predate the removal; the next list rescans
   const want = norm(cwd);
   let cleared = 0;
   for (const d of readdirSync(root)) {
@@ -327,6 +352,7 @@ export function sessionMessages(id: string, limit = 0, root: string = join(homed
  *  and is intentionally untouched (issue #53). */
 export function deleteSession(id: string, cwd: string = currentWorkspace(), root: string = join(homedir(), ".omp", "agent", "sessions")): { ok: boolean; error?: string } {
   if (!existsSync(root)) return { ok: false, error: "no sessions directory" };
+  allScans.delete(root); // P-BOOTPERF.1: a scan in flight may predate the removal; the next list rescans
   const want = norm(cwd);
   for (const d of readdirSync(root)) {
     const dir = join(root, d);
