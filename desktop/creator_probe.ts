@@ -20,6 +20,12 @@
 // moment the user installs a node or their VPN drops.
 
 import type { CreatorCapabilityId, CreatorEndpointDef, CreatorProviderId } from "./creator_registry.ts";
+import { avatarHealthCapabilities, parseAvatarHealth } from "./creator_dgx_avatar.ts";
+import { cadHealthCapabilities, parseCadHealth } from "./creator_dgx_cad.ts";
+import { parseVisionHealth, visionHealthCapabilities, visionHealthDetail } from "./creator_dgx_vision.ts";
+import { hyperframesVersionArgv } from "./creator_hyperframes.ts";
+import { openfilmVersionArgv } from "./creator_openfilm.ts"; // CREATOR-OPENFILM (ADR-0457)
+import { DRIFT_SESSION_ENDPOINT_ID, DriftClient, defaultDriftExePaths, type DriftSessionState } from "./creator_drift.ts"; // CREATOR-DRIFT
 
 /** Closed set. `skipped` = nothing to probe (no endpoint declared, or a built-in). */
 export type ProbeState = "ready" | "unauthorized" | "unreachable" | "not-installed" | "no-capabilities" | "skipped";
@@ -60,6 +66,23 @@ export interface ProbeDeps {
   /** Secret for this provider, resolved by the caller from env or the vault. Never logged. */
   readonly secret: (providerId: CreatorProviderId) => string;
   readonly timeoutMs?: number;
+  /** CREATOR-DRIFT: Drift's own mcp-session.json, read fresh per probe. The token inside it goes to the
+   *  Authorization header only; nothing here echoes it. */
+  readonly driftSession?: () => DriftSessionState;
+  /** Platform and env for the default executable paths (process.platform / process.env in the engine). */
+  readonly platform?: string;
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  /** CREATOR-WHISTLE (ADR-0432): the engine's own in-process check, supplied by dev.ts: it resolves the
+   *  staged assets, verifies their hashes, starts the worker, and transcribes a second of silence. The
+   *  registry row never stands in for it: with no checker the probe says not-installed. */
+  readonly whistle?: () => Promise<WhistleProbeAnswer>;
+}
+
+export interface WhistleProbeAnswer {
+  readonly state: "ready" | "not-installed" | "unreachable";
+  /** The verify/start/transcribe reason verbatim, or what ready proved. */
+  readonly detail: string;
+  readonly version: string;
 }
 
 const result = (
@@ -218,6 +241,17 @@ export function probeBuiltIn(deps: ProbeDeps, providerId: CreatorProviderId, att
   return result(providerId, "ready", "Built into the renderer: no endpoint, no credential, no network.", startedAt, deps.now(), attested);
 }
 
+/** Whistle: no endpoint and no executable, so the engine's own checker is the only honest witness. `ready`
+ *  attests both capabilities because the one call that proved it (a decode) is the same call both use. */
+export async function probeWhistle(deps: ProbeDeps): Promise<ProbeResult> {
+  const startedAt = deps.now();
+  if (!deps.whistle) return result("whistle", "not-installed", "Whistle assets are not staged on this engine.", startedAt, deps.now());
+  let answer: WhistleProbeAnswer;
+  try { answer = await deps.whistle(); }
+  catch (e) { return result("whistle", "unreachable", e instanceof Error ? e.message : String(e), startedAt, deps.now()); }
+  return result("whistle", answer.state, answer.detail, startedAt, deps.now(), answer.state === "ready" ? ["stt", "alignment"] : [], answer.version);
+}
+
 /** Probe one provider, choosing the adapter its transports imply. */
 export async function probeProvider(deps: ProbeDeps, providerId: CreatorProviderId, endpoints: readonly CreatorEndpointDef[]): Promise<ProbeResult> {
   const ep = endpoints.find((e) => e.enabled && e.providerId === providerId);
@@ -232,6 +266,8 @@ export async function probeProvider(deps: ProbeDeps, providerId: CreatorProvider
       return ep
         ? probeHttpService(deps, "dots-tts", ep, { paths: ["/v1/models", "/health", "/"], attestOnOk: ["tts"] })
         : result("dots-tts", "skipped", "No dots.tts server is declared yet.", deps.now(), deps.now());
+    case "whistle":
+      return probeWhistle(deps);
     case "suno":
       return ep
         ? probeHttpService(deps, "suno", ep, { paths: ["/v1/models", "/"] })
@@ -244,7 +280,149 @@ export async function probeProvider(deps: ProbeDeps, providerId: CreatorProvider
       return ep
         ? probeExecutable(deps, "unreal", ep, { attested: ["engine-build", "engine-test", "runtime-feedback"] })
         : result("unreal", "skipped", "No Unreal executable is declared yet.", deps.now(), deps.now());
+    case "hyperframes":
+      return ep ? probeHyperframes(deps, ep) : result("hyperframes", "skipped", "No HyperFrames executable is declared yet.", deps.now(), deps.now());
+    case "openfilm":
+      return ep ? probeOpenfilm(deps, ep) : result("openfilm", "skipped", "No OpenFilm executable is declared yet.", deps.now(), deps.now());
+    case "dgx-avatar":
+      return ep ? probeDgxHealth(deps, "dgx-avatar", ep) : result("dgx-avatar", "skipped", "No DGX avatar endpoint is declared yet. Import one from the Private AI Platform mailbox.", deps.now(), deps.now());
+    case "dgx-cad":
+      return ep ? probeDgxHealth(deps, "dgx-cad", ep) : result("dgx-cad", "skipped", "No DGX CAD endpoint is declared yet. Import one from the Private AI Platform mailbox.", deps.now(), deps.now());
+    case "dgx-vision":
+      return ep ? probeDgxHealth(deps, "dgx-vision", ep) : result("dgx-vision", "skipped", "No DGX vision endpoint is declared yet. Import one from the Private AI Platform mailbox.", deps.now(), deps.now());
+    case "pdf-markup":
+      return probeBuiltIn(deps, "pdf-markup", ["pdf-markup"]);
+    case "design":
+      return probeBuiltIn(deps, "design", ["layers", "mask-trace", "vector-draw", "motion", "gif-export", "svg-export", "psd-export"]);
+    case "drift":
+      return probeDrift(deps, ep);
+    case "heygen":
+    case "autodesk-aps":
+    case "bluebeam-studio":
+    case "classcad":
+      return result(providerId, "skipped", "Catalogued as a declarable paid provider only in this phase: LUCID makes no calls to it, so there is nothing to probe.", deps.now(), deps.now());
+    case "oda-drawings":
+      return result("oda-drawings", "skipped", "Planned: the ODA Drawings SDK is not wired in this build.", deps.now(), deps.now());
   }
+}
+
+/** HyperFrames: the declared launcher exists and answers `--version` on a fixed argv. A shell launcher
+ *  (.cmd/.bat) is refused here exactly as the render refuses it, so the probe never runs what a render would not. */
+export function probeHyperframes(deps: ProbeDeps, ep: CreatorEndpointDef): ProbeResult {
+  const startedAt = deps.now();
+  const v = hyperframesVersionArgv({ exe: ep.command ?? "", prefixArgs: ep.args });
+  if (!v.ok) return result("hyperframes", "not-installed", v.error, startedAt, deps.now());
+  const exe = v.argv[0]!;
+  if (!deps.exists(exe)) return result("hyperframes", "not-installed", `${exe} is not on disk.`, startedAt, deps.now());
+  let version = "";
+  try { version = (deps.exec(v.argv).split("\n")[0] ?? "").trim().slice(0, 80); }
+  catch { return result("hyperframes", "not-installed", `${exe} is present but did not answer --version.`, startedAt, deps.now()); }
+  return result("hyperframes", "ready", `hyperframes ${version || "(no version line)"} responded on this machine.`, startedAt, deps.now(), ["video-compose", "render-animation", "runtime-feedback"], version);
+}
+
+/** CREATOR-OPENFILM (ADR-0457): `<exe> [prefix] --version`, which the CLI answers before any network work. A
+ *  shell shim, a package runner (npx and friends), or declared args naming a refused subcommand are refused here
+ *  exactly as look and render refuse them, so the probe never runs what a job would not. */
+export function probeOpenfilm(deps: ProbeDeps, ep: CreatorEndpointDef): ProbeResult {
+  const startedAt = deps.now();
+  const v = openfilmVersionArgv({ exe: ep.command ?? "", prefixArgs: ep.args });
+  if (!v.ok) return result("openfilm", "not-installed", v.error, startedAt, deps.now());
+  const exe = v.argv[0]!;
+  if (!deps.exists(exe)) return result("openfilm", "not-installed", `${exe} is not on disk.`, startedAt, deps.now());
+  let version = "";
+  try { version = (deps.exec(v.argv).split("\n")[0] ?? "").trim().slice(0, 80); }
+  catch { return result("openfilm", "not-installed", `${exe} is present but did not answer --version.`, startedAt, deps.now()); }
+  return result("openfilm", "ready", `openfilm ${version || "(no version line)"} responded on this machine.`, startedAt, deps.now(), ["video-compose", "render-animation", "runtime-feedback"], version);
+}
+
+const DRIFT_ENABLE_HINT = "In Drift: Settings -> Agent access -> On, then probe again.";
+
+/** CutWire Drift: a declared headless endpoint (baseUrl + vault credential) wins; else Drift's own
+ *  mcp-session.json, written while Agent access is on. `initialize` proves the token and names the version;
+ *  `market_status` adds `stock-media` only when the marketplace is actually configured. Without a session the
+ *  executable on disk distinguishes "installed, Agent access off" from "not installed". */
+export async function probeDrift(deps: ProbeDeps, ep: CreatorEndpointDef | undefined): Promise<ProbeResult> {
+  const startedAt = deps.now();
+  // The engine hands the probe the endpoint a call would use; when that is the declaration it synthesizes
+  // from Drift's own session file, the session path (its token, its stale-file hints) is the truth.
+  const declaredBase = ep && ep.id !== DRIFT_SESSION_ENDPOINT_ID ? (ep.baseUrl ?? "").replace(/\/+$/, "") : "";
+  let baseUrl = "";
+  let token = "";
+  let fromSession = false;
+  let sessionPath = "";
+  if (declaredBase) {
+    baseUrl = declaredBase;
+    token = deps.secret("drift");
+  } else {
+    const state = deps.driftSession?.();
+    sessionPath = state?.path ?? "";
+    if (state?.session) {
+      baseUrl = `http://127.0.0.1:${state.session.port}`;
+      token = state.session.token;
+      fromSession = true;
+    }
+  }
+  if (!baseUrl) {
+    const paths = defaultDriftExePaths(deps.platform ?? process.platform, deps.env ?? process.env);
+    const exe = paths.find((p) => deps.exists(p));
+    if (exe) return result("drift", "unreachable", `Drift is installed (${exe}) but Agent access is off. ${DRIFT_ENABLE_HINT}`, startedAt, deps.now());
+    return result("drift", "not-installed", `Drift was not found at ${paths.join(" or ")}. Install it from github.com/CutWire-Studios/Drift, or declare a headless endpoint.`, startedAt, deps.now());
+  }
+  if (!token) return result("drift", "unauthorized", `${baseUrl} is declared but no Drift token is present: set DRIFT_MCP_TOKEN or store the token in the vault under the declaration's credential name.`, startedAt, deps.now());
+  const client = new DriftClient({ baseUrl, token, fetchImpl: deps.fetchImpl, timeoutMs: deps.timeoutMs ?? 8000 });
+  const init = await client.initialize();
+  if (!init.ok) {
+    const now = deps.now();
+    if (init.status === 401 || init.status === 403) {
+      return result("drift", "unauthorized", fromSession
+        ? `${baseUrl} refused the token from ${sessionPath}. Turn Agent access off and on in Drift to rewrite the session file.`
+        : `${baseUrl} refused the declared token.`, startedAt, now);
+    }
+    if (init.status === 0) {
+      return result("drift", "unreachable", fromSession
+        ? `${baseUrl} did not answer; ${sessionPath} may be stale from an earlier Drift run. ${DRIFT_ENABLE_HINT}`
+        : `${baseUrl} did not answer. Start Drift headless (drift --headless --mcp-port <port> --mcp-token <token>) or turn Agent access on in Drift.`, startedAt, now);
+    }
+    return result("drift", "unreachable", `${baseUrl}: ${init.error}`, startedAt, now);
+  }
+  const attested: CreatorCapabilityId[] = ["video-edit", "motion", "transcript-edit"];
+  const market = await client.call("market_status", {}, Math.min(deps.timeoutMs ?? 8000, 8000));
+  const configured = market.ok && market.payload && typeof market.payload === "object" && "configured" in market.payload && market.payload.configured === true;
+  if (configured) attested.push("stock-media");
+  const version = init.version || "(unknown version)";
+  return result("drift", "ready", `Drift ${version} answered at ${baseUrl}${fromSession ? " (Agent access session)" : " (declared endpoint)"}; proven: ${attested.join(", ")}.`, startedAt, deps.now(), attested, init.version);
+}
+
+/** The Private AI Platform services: `/health` both proves reachability AND reports what the box can do. */
+export async function probeDgxHealth(deps: ProbeDeps, providerId: "dgx-avatar" | "dgx-cad" | "dgx-vision", ep: CreatorEndpointDef): Promise<ProbeResult> {
+  const startedAt = deps.now();
+  const base = (ep.baseUrl ?? "").replace(/\/+$/, "");
+  if (!base) return result(providerId, "skipped", "No base URL is declared for this endpoint.", startedAt, deps.now());
+  const r = await readJson(deps, `${base}/health`, {});
+  const now = deps.now();
+  if (r.status === 401 || r.status === 403) return result(providerId, "unauthorized", `${base} refused the request.`, startedAt, now);
+  if (!r.status) return result(providerId, "unreachable", `${base} did not answer. Is the SSH forward from the Private AI Platform running?`, startedAt, now);
+  if (r.status >= 400) return result(providerId, "unreachable", `${base} answered ${r.status}.`, startedAt, now);
+  if (providerId === "dgx-avatar") {
+    const h = parseAvatarHealth(r.body);
+    if (!h) return result(providerId, "no-capabilities", `${base} answered, but not as the dgx-avatar service.`, startedAt, now);
+    const attested = avatarHealthCapabilities(h);
+    const engines = (["musetalk", "echomimic"] as const).map((e) => `${e} ${h.engines[e].ready ? "ready" : `not ready${h.engines[e].detail ? ` (${h.engines[e].detail})` : ""}`}`).join(", ");
+    if (!attested.length) return result(providerId, "no-capabilities", `dgx-avatar ${h.version}: ${engines}; compose ${h.compose.ready ? "ready" : "not ready"}.`, startedAt, now, [], h.version);
+    return result(providerId, "ready", `dgx-avatar ${h.version}: ${engines}; compose ${h.compose.ready ? "ready" : "not ready"}.`, startedAt, now, attested, h.version);
+  }
+  if (providerId === "dgx-vision") {
+    const h = parseVisionHealth(r.body);
+    if (!h) return result(providerId, "no-capabilities", `${base} answered, but not as the dgx-vision service.`, startedAt, now);
+    const attested = visionHealthCapabilities(h);
+    return result(providerId, attested.length ? "ready" : "no-capabilities", visionHealthDetail(h), startedAt, now, attested, h.version);
+  }
+  const h = parseCadHealth(r.body);
+  if (!h) return result(providerId, "no-capabilities", `${base} answered, but not as the dgx-cad service.`, startedAt, now);
+  const attested = cadHealthCapabilities(h);
+  const missing = (["model", "dxf", "ifc", "dwg"] as const).filter((k) => !h.capabilities[k]).map((k) => `${k}${h.detail[k] ? ` (${h.detail[k]})` : ""}`);
+  const detail = `dgx-cad ${h.version}: proven ${attested.length ? attested.join(", ") : "nothing"}${missing.length ? `; absent: ${missing.join(", ")}` : ""}.`;
+  return result(providerId, attested.length ? "ready" : "no-capabilities", detail, startedAt, now, attested, h.version);
 }
 
 /** The probe cache: last result per provider, plus its freshness at read time. In memory by design. */

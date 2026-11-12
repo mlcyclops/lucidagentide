@@ -44,7 +44,7 @@ describe("CollabHost broadcasts user turns (P-COLLAB.15)", () => {
     host.pushUserTurn("check the auth guard");
     const turns = t.userTurns();
     expect(turns.length).toBe(1);
-    expect(turns[0]).toEqual({ t: "user-turn", text: "check the auth guard", from: "alice" });
+    expect(turns[0]).toEqual({ t: "user-turn", text: "check the auth guard", from: "alice", seq: 1 }); // P-REMOTE.16: journal seq rides along
     expect(t.sent.find((s) => s.frame.t === "user-turn")!.targetPeer).toBe(0); // broadcast to all
   });
 
@@ -53,7 +53,7 @@ describe("CollabHost broadcasts user turns (P-COLLAB.15)", () => {
     const host = new CollabHost(t, { header: HEADER });
     host.start();
     host.pushUserTurn("tighten it", "bob");
-    expect(t.userTurns()[0]).toEqual({ t: "user-turn", text: "tighten it", from: "bob" });
+    expect(t.userTurns()[0]).toEqual({ t: "user-turn", text: "tighten it", from: "bob", seq: 1 });
   });
 
   it("also records the turn in the replay transcript a later joiner receives", () => {

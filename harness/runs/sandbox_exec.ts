@@ -35,9 +35,13 @@
 // `lucid-appcontainer` helper land here; the native helper itself + Linux slirp raw-socket forwarding are
 // follow-ups. Pure + hermetic: `which` is injectable and `ctx.proxy` is a plain path/URL record.
 
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { win32 as win32Path } from "node:path";
 import type { ProfileCaps } from "./profiles.ts";
+// P-MXC.1 (ADR-0441): the MXC backend lives in its own file and imports only TYPES (plus proxyChildEnv)
+// from here, so this value import is the single direction the cycle runs at module init.
+import { MxcBackend, type MxcHost } from "./sandbox_mxc.ts";
 
 /** Presence probe for a binary on PATH. Injectable so tests never depend on the host. */
 export type WhichFn = (bin: string) => boolean;
@@ -153,6 +157,11 @@ let loopbackExemptCache: boolean | undefined;
 /** Is the exemption registered on THIS host? Cached per run (a WFP config change mid-run is not a
  *  supported flow — restart the app after `--register-loopback`). Never throws: an unreadable
  *  listing means "not exempt", which degrades to the disclosed passthrough, never to a dead child. */
+/** P-SANDBOX.12 (ADR-0390): forget the cached answer after LUCID itself (un)registers the exemption. */
+export function resetLoopbackExemptCache(): void {
+  loopbackExemptCache = undefined;
+}
+
 export function loopbackExempted(): boolean {
   if (loopbackExemptCache !== undefined) return loopbackExemptCache;
   let ok = false;
@@ -226,7 +235,131 @@ export function proxyChildEnv(httpProxyUrl: string): Record<string, string> {
  *        `bun add -g` tree or ~/.bun) by its install root, two levels above `bin\omp.exe`.
  *    rw: ~/.omp. tmp: ~/.omp/lucid-sandbox-tmp (the user's %TEMP% is not granted).
  *  Windows paths via path.win32, so the rule is testable on any host. Deduped case-insensitively. */
-export function appContainerRuntimeGrants(i: { repoRoot: string; home: string; bunBin?: string | null; ompBin?: string | null }): {
+/** PURE: the `shellPath` the user pinned in omp's config.yml, or null. P-SANDBOX.11 (ADR-0389): omp
+ *  THROWS when an explicit shellPath does not exist ("Custom shell path not found"), and inside the
+ *  AppContainer an ungranted path does not exist, so the first contained turn died on the user's own
+ *  `...\AppData\Local\Programs\MinGit\usr\bin\sh.exe`. A top-level scalar only; quotes stripped. */
+export function parseOmpShellPath(yml: string): string | null {
+  const m = /^shellPath:[ \t]*(.+?)[ \t]*$/m.exec(yml);
+  if (!m) return null;
+  let v = m[1]!;
+  if (/^".*"$/.test(v)) v = v.slice(1, -1).replace(/\\\\/g, "\\"); // YAML double quotes escape backslashes
+  else if (/^'.*'$/.test(v)) v = v.slice(1, -1).replace(/''/g, "'");
+  else v = v.replace(/\s+#.*$/, ""); // a plain scalar may carry a trailing comment
+  v = v.trim();
+  return v && !v.startsWith("#") ? v : null;
+}
+
+/** PURE: the install root of a shell exe, so its sibling tools (MinGit's git.exe, coreutils) come with
+ *  it: strip a trailing `bin`, then a trailing `usr` (`<root>\usr\bin\sh.exe`, `<root>\bin\bash.exe`). */
+export function shellInstallRoot(shell: string): string {
+  const w = win32Path;
+  let d = w.dirname(shell);
+  if (w.basename(d).toLowerCase() === "bin") d = w.dirname(d);
+  if (w.basename(d).toLowerCase() === "usr") d = w.dirname(d);
+  return d;
+}
+
+/** PURE: the install ROOTS where git commonly lives on Windows, in lookup order. P-SANDBOX.16 (ADR-0397):
+ *  a git the host never put on PATH (MinGit, a per-user install, scoop, GitHub Desktop's embedded copy)
+ *  was invisible to the agent, and inside the AppContainer an ungranted one does not exist at all. The
+ *  host PATH comes first (the user's own choice wins), then the vendor defaults. Every root's launcher is
+ *  `<root>\cmd\git.exe`. A `*` segment is a version dir the caller expands, newest first. */
+export function gitRootCandidates(env: Record<string, string | undefined>): string[] {
+  const w = win32Path;
+  const out: string[] = [];
+  for (const dir of (env.PATH ?? env.Path ?? "").split(";")) {
+    if (!dir || !w.isAbsolute(dir)) continue;
+    // `<root>\cmd`, `<root>\bin`, `<root>\mingw64\bin` are the three dirs git's installers put on PATH.
+    let d = w.normalize(dir).replace(/\\+$/, "");
+    const leaf = w.basename(d).toLowerCase();
+    if (leaf !== "cmd" && leaf !== "bin") continue;
+    d = w.dirname(d);
+    if (w.basename(d).toLowerCase() === "mingw64") d = w.dirname(d);
+    out.push(d);
+  }
+  const pf = env.ProgramW6432 ?? env.ProgramFiles;
+  if (pf) out.push(w.join(pf, "Git"));
+  if (env["ProgramFiles(x86)"]) out.push(w.join(env["ProgramFiles(x86)"]!, "Git"));
+  const local = env.LOCALAPPDATA ?? (env.USERPROFILE ? w.join(env.USERPROFILE, "AppData", "Local") : "");
+  if (local) out.push(w.join(local, "Programs", "Git"), w.join(local, "Programs", "MinGit"));
+  const scoop = env.SCOOP ?? (env.USERPROFILE ? w.join(env.USERPROFILE, "scoop") : "");
+  if (scoop) out.push(w.join(scoop, "apps", "git", "current"), w.join(scoop, "apps", "mingit", "current"));
+  const choco = env.ChocolateyInstall ?? (env.ProgramData ? w.join(env.ProgramData, "chocolatey") : "");
+  if (choco) out.push(w.join(choco, "lib", "git.portable", "tools"), w.join(choco, "lib", "mingit", "tools"));
+  if (local) {
+    out.push(w.join(local, "Microsoft", "WinGet", "Packages", "Git.MinGit_*"));
+    out.push(w.join(local, "GitHubDesktop", "app-*", "resources", "app", "git"));
+  }
+  return out;
+}
+
+/** The first candidate root that really holds `cmd\git.exe`, or null. `io` is injectable (like `which`)
+ *  so the lookup order and wildcard expansion are testable on any host. */
+export function discoverGitRoot(
+  env: Record<string, string | undefined>,
+  io: { exists(p: string): boolean; list(dir: string): string[] } = { exists: existsSync, list: (d) => readdirSync(d) },
+): string | null {
+  const w = win32Path;
+  const newestFirst = (a: string, b: string) => b.localeCompare(a, undefined, { numeric: true });
+  for (const cand of gitRootCandidates(env)) {
+    let roots = [cand];
+    const star = cand.split("\\").findIndex((seg) => seg.includes("*"));
+    if (star >= 0) {
+      const segs = cand.split("\\");
+      const parent = segs.slice(0, star).join("\\");
+      const prefix = segs[star]!.slice(0, segs[star]!.indexOf("*"));
+      let names: string[] = [];
+      try { names = io.list(parent); } catch { /* vendor dir absent */ }
+      roots = names.filter((n) => n.toLowerCase().startsWith(prefix.toLowerCase())).sort(newestFirst).map((n) => w.join(parent, n, ...segs.slice(star + 1)));
+    }
+    const hit = roots.find((r) => io.exists(w.join(r, "cmd", "git.exe")));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** The discovered git's launcher dir (`<root>\cmd`, holding git.exe), or null when no git is installed. */
+export function gitCmdDir(env: Record<string, string | undefined> = process.env): string | null {
+  const root = discoverGitRoot(env);
+  return root ? win32Path.join(root, "cmd") : null;
+}
+
+let gitExeCache: string | undefined;
+/** The host git executable for the ENGINE's own git calls: on Windows the git gitCmdDir discovers (MinGit,
+ *  scoop, GitHub Desktop's copy - none of which put themselves on PATH), else PATH's `git`. Every engine
+ *  spawn of git goes through this rather than a bare "git": the installed app's PATH commonly has no git,
+ *  and a bare spawn then throws ENOENT. The engine's own PATH is deliberately left alone, because the
+ *  contained agent inherits it behind its git broker shim (P-SANDBOX.17) and a real git.exe there would let
+ *  a PATHEXT-less lookup (libuv searches .com/.exe only) step past the broker's git.cmd. */
+export function gitExe(): string {
+  if (gitExeCache !== undefined) return gitExeCache;
+  const dir = process.platform === "win32" ? gitCmdDir() : null;
+  gitExeCache = dir ? win32Path.join(dir, "git.exe") : "git";
+  return gitExeCache;
+}
+
+/** PURE: the PATH overlay that puts `dir` first (a discovered git's `cmd` dir, or the contained agent's git
+ *  broker shim, P-SANDBOX.17), keyed by the env's OWN spelling of PATH (Windows env names are
+ *  case-insensitive, so a second `PATH` beside `Path` is ambiguous at spawn). Empty when there is no dir or
+ *  it is already on PATH. */
+export function prependPathOverlay(env: Record<string, string | undefined>, dir: string | null): Record<string, string> {
+  if (!dir) return {};
+  const key = Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+  const cur = env[key] ?? "";
+  const norm = (p: string) => win32Path.normalize(p).replace(/\\+$/, "").toLowerCase();
+  if (cur.split(";").some((p) => p && norm(p) === norm(dir))) return {};
+  return { [key]: cur ? `${dir};${cur}` : dir };
+}
+
+/** PURE: already readable by every AppContainer ("ALL APPLICATION PACKAGES" on the OS dirs), and not
+ *  ours to re-ACL: a standard user cannot write their DACLs, so granting there would fail closed. */
+function osReadable(p: string): boolean {
+  const n = p.replace(/\//g, "\\").toLowerCase();
+  return /^[a-z]:\\windows(\\|$)/.test(n) || /^[a-z]:\\program files( \(x86\))?(\\|$)/.test(n);
+}
+
+export function appContainerRuntimeGrants(i: { repoRoot: string; home: string; bunBin?: string | null; ompBin?: string | null; shellPath?: string | null; gitRoot?: string | null }): {
   grantRx: string[];
   grantRw: string[];
   tmpDir: string;
@@ -239,8 +372,13 @@ export function appContainerRuntimeGrants(i: { repoRoot: string; home: string; b
   const rx = [i.repoRoot];
   if (i.bunBin && w.isAbsolute(i.bunBin)) rx.push(w.dirname(i.bunBin));
   if (i.ompBin && w.isAbsolute(i.ompBin) && !under(i.ompBin, i.repoRoot)) rx.push(w.dirname(w.dirname(i.ompBin)));
+  // P-SANDBOX.11 (ADR-0389): the shell the user pinned in omp's config, by its install root.
+  if (i.shellPath && w.isAbsolute(i.shellPath)) rx.push(shellInstallRoot(i.shellPath));
+  // P-SANDBOX.16 (ADR-0397): the discovered git install (discoverGitRoot), so the agent can exec it.
+  if (i.gitRoot && w.isAbsolute(i.gitRoot)) rx.push(i.gitRoot);
   const seen = new Set<string>();
   const grantRx = rx.filter((d) => {
+    if (osReadable(d)) return false;
     const k = w.normalize(d).replace(/\\+$/, "").toLowerCase();
     if (seen.has(k)) return false;
     seen.add(k);
@@ -273,7 +411,8 @@ export interface SandboxPlan {
 }
 
 export interface SandboxBackend {
-  readonly name: "bwrap" | "seatbelt" | "appcontainer" | "noop";
+  /** P-MXC.1 (ADR-0441): `mxc` is the Microsoft eXecution Container executor (sandbox_mxc.ts). */
+  readonly name: "bwrap" | "seatbelt" | "appcontainer" | "mxc" | "noop";
   /** true ⇒ this backend provides REAL OS-level containment (namespaces), not a passthrough. */
   readonly isolates: boolean;
   available(): boolean;
@@ -282,19 +421,72 @@ export interface SandboxBackend {
   wrap(argv: string[], caps: ProfileCaps, ctx: SandboxCtx): SandboxPlan;
 }
 
+/** The host tree an absolute exec path needs visible inside bwrap.
+ *  A packaged Linux install lives at `/opt/LucidAgentIDE/resources/...`. The stock mounts are only
+ *  `/usr` `/lib` `/bin` `/etc`, `$HOME`, and the workspace, so `execvp` of the bundled omp reports
+ *  "No such file or directory" for a file that exists on the host. Bind the install root (the parent
+ *  of `resources`) so the shim, its node_modules target, and `resources/runtimes/bun` are all visible.
+ *  Otherwise bind the path's directory. `/` is never a bind. */
+export function bwrapExecRoot(absPath: string): string | null {
+  const n = absPath.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!n.startsWith("/")) return null;
+  const marker = "/resources/";
+  const i = n.indexOf(marker);
+  if (i > 0) return n.slice(0, i);
+  const slash = n.lastIndexOf("/");
+  if (slash <= 0) return null;
+  return n.slice(0, slash);
+}
+
+/** True when `p` is `root` or a child of it. A mount of `/` covers everything. */
+export function pathCovered(p: string, mounted: readonly string[]): boolean {
+  const n = p.replace(/\\/g, "/").replace(/\/+$/, "") || "/";
+  return mounted.some((m) => {
+    const root = m.replace(/\\/g, "/").replace(/\/+$/, "") || "/";
+    if (root === "/") return true;
+    return n === root || n.startsWith(root + "/");
+  });
+}
+
+/** Extra `--ro-bind-try` pairs for absolute paths the stock mount plan cannot see. One bind per
+ *  install root. A path already under a mounted prefix is skipped. `--ro-bind-try` so a stale path
+ *  does not abort the sandbox; a path that exists on the host is mounted. */
+export function bwrapHostBinds(paths: readonly string[], mounted: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of paths) {
+    if (pathCovered(p, mounted)) continue;
+    const root = bwrapExecRoot(p);
+    if (!root || seen.has(root) || pathCovered(root, mounted)) continue;
+    seen.add(root);
+    out.push("--ro-bind-try", root, root);
+  }
+  return out;
+}
+
 /** Linux bubblewrap backend. Mount plan per ADR-0157: workspace rw, system paths ro(-try so a
- *  missing path never aborts), fresh proc/dev/tmp, die-with-parent, and — the enforcement bit —
- *  `--unshare-net` when the profile denies network (total deny; DNS included). */
+ *  missing path never aborts), fresh proc/dev/tmp, die-with-parent, and the enforcement bit
+ *  `--unshare-net` when the profile denies network (total deny; DNS included).
+ *  The packaged install root is bound too: `/opt` is not one of the stock mounts, and that is why a
+ *  Mint deb died at `bwrap: execvp /opt/LucidAgentIDE/.../omp: No such file or directory`. */
 export class BwrapBackend implements SandboxBackend {
   readonly name = "bwrap" as const;
   readonly isolates = true;
   constructor(private readonly which: WhichFn = defaultWhich, private readonly probe: ProbeFn = defaultProbe) {}
-  /** Presence AND capability — a bwrap that cannot unshare a user namespace is not a backend. */
+  /** Presence AND capability: a bwrap that cannot unshare a user namespace is not a backend. */
   available(): boolean {
     return this.which("bwrap") && this.probe("bwrap");
   }
   wrap(argv: string[], caps: ProfileCaps, ctx: SandboxCtx): SandboxPlan {
     const home = ctx.home ?? homedir();
+    const mounted = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", home, ctx.workspace];
+    // The literal argv plus argv[0]'s real path, so a symlink whose target sits outside the install
+    // root is still mounted. A missing host path is not an error: the literal bind still applies.
+    const hostPaths = [...argv];
+    const bin = argv[0];
+    if (bin && bin.startsWith("/")) {
+      try { hostPaths.push(realpathSync(bin)); } catch { /* not on this host */ }
+    }
     const args = [
       "--die-with-parent",
       "--proc", "/proc",
@@ -306,6 +498,9 @@ export class BwrapBackend implements SandboxBackend {
       "--ro-bind-try", "/bin", "/bin",
       "--ro-bind-try", "/sbin", "/sbin",
       "--ro-bind-try", "/etc", "/etc",
+      // Install root BEFORE the rw binds, so a workspace inside the install stays writable
+      // (bwrap last-writer-wins). --ro-bind-try: a missing path must not abort the sandbox.
+      ...bwrapHostBinds(hostPaths, mounted),
       // omp session state / config / credentials; fs containment is omp --isolate's job (ADR-0028).
       "--bind-try", home, home,
       "--bind", ctx.workspace, ctx.workspace,
@@ -455,8 +650,8 @@ export class NoopBackend implements SandboxBackend {
  *  audit trail is greppable (mirrors the ext_parity discipline for the gate's block line). */
 export function sandboxDisclosure(platform: NodeJS.Platform = process.platform): string {
   return (
-    `[sandbox] exec is NOT runtime-isolated on this platform (${platform}) — no sandbox backend available. ` +
-    `The argv gate + in-process scanner gate still apply (ADR-0157 P-SANDBOX.1; Linux bwrap + macOS Seatbelt lead; Windows AppContainer needs a WORKING lucid-appcontainer helper — missing here, or it failed its containment probe).`
+    `[sandbox] exec is NOT runtime-isolated on this platform (${platform}) - no sandbox backend available. ` +
+    `The argv gate + in-process scanner gate still apply (ADR-0157 P-SANDBOX.1; Linux bwrap + macOS Seatbelt lead; Windows needs a WORKING container runtime - the MXC executor (ADR-0441) or the lucid-appcontainer helper - and neither is staged here, or both failed their containment probe).`
   );
 }
 
@@ -480,6 +675,11 @@ export interface ResolveBackendOpts {
    *  (desktop resolves `<repo>/bin/lucid-appcontainer.exe` via repo_root and passes it ONLY when it
    *  exists on disk). Absent ⇒ bare-name PATH lookup, which is the dev loop. */
   appContainerHelper?: string;
+  /** P-MXC.1 (ADR-0441): the verified MXC executor on this host, when the caller has one (desktop resolves
+   *  the staged `wxc-exec.exe`, checks its hash against the pin and reads its tier with `--probe`; it
+   *  passes this ONLY when all three held and the network precondition for the profile is met). Tried
+   *  BEFORE the first-party helper; its round-trip probe decides, like every other backend's. */
+  mxc?: MxcHost;
 }
 
 /** Pick the backend for this platform. PURE given its inputs (platform/which/probe injectable). */
@@ -487,6 +687,10 @@ export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution
   const platform = opts.platform ?? process.platform;
   const which = opts.which ?? defaultWhich;
   const probe = opts.probe ?? defaultProbe;
+  if (platform === "win32" && opts.mxc) {
+    const mxc = new MxcBackend(opts.mxc);
+    if (mxc.available()) return { ok: true, backend: mxc, disclosed: false };
+  }
   if (platform === "linux") {
     const bwrap = new BwrapBackend(which, probe);
     if (bwrap.available()) return { ok: true, backend: bwrap, disclosed: false };
@@ -512,7 +716,7 @@ export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution
       reason:
         platform === "linux"
           ? which("bwrap")
-            ? "managed policy requires runtime isolation, but bwrap cannot create a user namespace on this host — Ubuntu/Debian 24.04+ block unprivileged user namespaces via AppArmor (allow with `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, or ship an AppArmor profile for bwrap)"
+            ? "managed policy requires runtime isolation, but bwrap cannot create a user namespace on this host - Ubuntu/Debian 24.04+ block unprivileged user namespaces via AppArmor (allow with `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, or ship an AppArmor profile for bwrap)"
             : "managed policy requires runtime isolation, but bwrap is not installed (install bubblewrap)"
           : platform === "darwin"
             ? which("sandbox-exec")
@@ -520,7 +724,7 @@ export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution
               : "managed policy requires runtime isolation, but sandbox-exec is not available (macOS Seatbelt)"
             : platform === "win32"
               ? which(opts.appContainerHelper ?? "lucid-appcontainer")
-                ? "managed policy requires runtime isolation, but the lucid-appcontainer helper failed its containment probe on this host — the smallest real AppContainer could not be established (profile creation or the workspace ACL grant refused); exec would be fail-closed blocked by the helper anyway"
+                ? "managed policy requires runtime isolation, but the lucid-appcontainer helper failed its containment probe on this host - the smallest real AppContainer could not be established (profile creation or the workspace ACL grant refused); exec would be fail-closed blocked by the helper anyway"
                 : "managed policy requires runtime isolation, but the lucid-appcontainer helper is not installed (Windows AppContainer; `<repo>/bin/lucid-appcontainer.exe`, built by `make build-appcontainer`)"
               : `managed policy requires runtime isolation, but no sandbox backend exists for ${platform} yet`,
     };
@@ -544,14 +748,14 @@ export function wrapForProfile(o: {
 }): SandboxDecision {
   if (!o.resolution.ok) return { action: "refuse", reason: o.resolution.reason };
   if (!o.caps.canExec) {
-    return { action: "refuse", reason: "profile forbids exec (canExec=false) — refusing to spawn an exec-capable agent process" };
+    return { action: "refuse", reason: "profile forbids exec (canExec=false) - refusing to spawn an exec-capable agent process" };
   }
   const { backend, disclosed } = o.resolution;
   if (!o.caps.canNetwork && !backend.isolates) {
     return {
       action: "refuse",
       reason:
-        "profile requires network isolation (canNetwork=false) but no isolating backend is available — " +
+        "profile requires network isolation (canNetwork=false) but no isolating backend is available - " +
         "refusing rather than running networked (fail-closed)",
     };
   }

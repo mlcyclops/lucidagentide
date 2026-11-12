@@ -51,6 +51,29 @@ Both can run at once: different app ids mean different single-instance locks, di
 collision, and different userData means the Windows `safeStorage` key is not shared (which is exactly why
 the vault is separate - see ADR-0278).
 
+**Launching one from inside the other (ADR-0458).** Every LUCID engine exports its own `LUCID_*`
+environment (flavor, data root, vault directory, token'd loopback URLs) to the agent's shells and
+terminals. An installed app now takes its identity from its own package (`lucidBuildFlavor`, stamped
+`agent` or `creator` at packaging) before any environment variable, and an app started inside another
+LUCID's process tree drops every inherited `LUCID_*` variable except `LUCID_PORT` at startup. So asking
+the Agent to open Creator (or the reverse) opens the right app with its own vault and data, and never
+treats the other app's live engine as an orphan to stop: an engine whose parent app is still running is
+left alone.
+
+**When the default port is taken (ADR-0458).** If something already listens on 5320 (5319 for the
+standard app), the engine binds a free loopback port instead of refusing to start. Only the port moves:
+userData, the vault key, the single-instance lock, the deep-link claim and the resume record stay keyed on
+the usual port, so nothing about your install changes. `engine.log` names what held the port, and the window
+shows a notice saying where this launch runs; the next launch tries the usual port again. An explicit
+`LUCID_PORT` is your own choice and is never moved: a busy explicit port still stops with the
+"Another program is using LUCID's port" report.
+
+**Installer ACL (ADR-0458).** On machines where `%LOCALAPPDATA%\Programs` carries an AppContainer SID (the
+ADR-0246 zombie SID), Electron refuses to start with `FATAL install_dir_access: Sandboxed processes cannot
+read ...`. The installer now grants ALL APPLICATION PACKAGES read/execute on the install folder (the access
+Program Files already gives), on every install and update. For an install made before this change, run the
+command Electron prints once: `icacls "<install dir>" /grant *S-1-15-2-1:(OI)(CI)(RX)`.
+
 **Shared, deliberately:** omp's own session store and provider OAuth under `~/.omp/agent`. No supported omp
 relocation seam exists, so Creator does not pretend to isolate it. Your chat history and model logins are
 common to both flavors; your GUI settings, personal knowledge, vault, and library are not.
@@ -74,6 +97,9 @@ puts the Agent bundle back. Never interleave the two in one packaging run.
 
 Overrides for a one-off run: `LUCID_BUILD_FLAVOR=creator`, `LUCID_PORT`, `LUCID_GUI_SETTINGS_FILE`,
 `LUCID_PERSONAL_DIR`, `LUCID_CRED_VAULT_DIR`, `LUCID_CREATOR_DIR`, `LUCID_RELAY_PORT`, `LUCID_WHISPER_PORT`.
+Set them in a plain terminal: inside a LUCID agent's terminal they cannot be told from the parent app's own
+exported values, so everything except `LUCID_PORT` is dropped there (use `bun run start:creator`, which bakes
+the flavor in).
 
 ## Releasing Creator
 
@@ -245,7 +271,15 @@ Registered providers, and what is true about each as of 2026:
   isolation. Studio project-timeline editing is **vendor app only**. Cloud egress applies.
 - **dots.tts (local)** - 2B continuous autoregressive TTS at 48 kHz, Apache-2.0, with zero-shot cloning from
   a reference clip plus transcript, on your own GPU. LUCID ships no Python for it (invariant 2): you run the
-  server and register its URL. No official timestamp output.
+  server and register its URL. No official timestamp output: word timing is measured in-process by Whistle.
+- **Whistle (in-process)** - the zero-install speech-to-text and word-timing model (Cactus Compute,
+  Apache-2.0, 16.9 MB model plus a 0.9 MB WASM engine) that ships with LUCID and runs in a worker inside the
+  engine: no server, no port, no Python, and no network path (its wasm import table has no socket import).
+  Seven languages (en, de, fr, es, it, nl, pl), 30 s windows, CPU only. It backs the `whistle` STT choice in
+  Voice settings and `POST /api/creator/align`, which gives the follow-along editor `measured` word chips with
+  the model's per-word probability. Probe: `not-installed` until the pinned assets are staged, `unreachable`
+  on a hash mismatch or a dead worker (reason quoted), `ready` only after it decodes a second of silence to
+  empty text.
 - **Suno** - see the next section.
 - **ComfyUI** - workflow submission, live progress and previews over the websocket, artifact fetch, image
   and video and 3D nodes **as installed on that server**. Capability comes from a live `/object_info` probe,
@@ -361,6 +395,15 @@ What the editor will and will not claim about timing is the important part:
 
 Edits are non-destructive by construction: the track you opened keeps every one of its bytes and its row in
 the ledger, and the save is an append. Proof: `make demo-CREATOR-2`.
+
+- **Words Whistle heard are labeled `measured`** (ADR-0432, CREATOR-WHISTLE). When you open a take, the
+  editor shows the `derived` alignment first, then asks the engine to measure it: Whistle (Apache-2.0,
+  16.9 MB, WASM, ships with LUCID) runs inside the engine with no server, no port and no network path, and
+  returns a start, an end and a probability per word. A measured word wears a solid underline and its
+  confidence is the model's probability. A word the model heard differently from the text you pasted stays
+  `derived`, interpolated between its measured neighbours and capped at 70%. The note above the strip says
+  how many words matched and how many were interpolated. Seven languages (en, de, fr, es, it, nl, pl);
+  anything else keeps the `derived` alignment. Proof: `make demo-CREATOR-WHISTLE`.
 
 ## Mixing: layering takes into one file
 
@@ -650,6 +693,136 @@ While you are on that box, it can also feed the GPU odometer: run NVIDIA's DCGM 
 remote target (`dcgm-exporter` kind), and the Spark's GPU load, VRAM, temperature, and power appear in the
 Resources flyout beside this machine's.
 
+## DGX avatars, HyperFrames, CAD, and PDF markup (ADR-0427)
+
+Everything in this section is free or self-hosted. The paid services (HeyGen, Autodesk APS, Bluebeam Studio,
+ClassCAD, ODA Drawings SDK) are in the registry as catalog entries you can declare, with honest statuses and
+pricing notes, but Creator ships no client for them yet.
+
+**Getting the DGX services into Creator.** The TL187 Private AI Platform (formerly DGX Loader) serves two kinds on the box, both bound to
+127.0.0.1: `avatar` (port 8088, MuseTalk or EchoMimicV3 plus an optional HyperFrames compose) and `cad`
+(port 8089). On a probed card the platform's **Send to LUCID Creator** writes a `lucid-creator-endpoint` v1
+file into `<personal dir>/creator_endpoints/`. Creator imports the folder at startup and from the **Import**
+button in the Video and CAD panes. The file carries the URL (the local mouth of an SSH forward), the forward
+command to run, and `enclave: { kind: "dgx", host }`. A file with a credential-like key, a userinfo URL, an id
+outside 2 to 49 characters, or no enclave block is rejected with the reason.
+
+**Video pane.** Pick the avatar endpoint, engine, template, dots.tts voice and script; optionally a title,
+subtitle and captions (timing is estimated from character count, not force-aligned). Creator synthesizes the
+speech through your dots.tts endpoint, uploads it to the avatar service, follows the job, and stores the
+composed video (or the bare avatar video if compose failed) in the library. The HyperFrames row renders a
+project directory you authored with the local `hyperframes` CLI: declare it as `node` with the CLI entry as
+the first argument (`.cmd` shims are refused). Creator always sets `HYPERFRAMES_NO_TELEMETRY=1`, lints before
+rendering, and refuses the `cloud`, `publish`, `auth` and `lambda` subcommands.
+
+**OpenFilm row (ADR-0457).** [OpenFilm](https://github.com/openfilm/openfilm) (MIT) writes a film as web pages:
+a project folder holds `film.html` (each `<section>` a track; each `<iframe>`, `<video>`, `<img>` or `<audio>` a
+clip, trimmed with `#t=in,out` and placed with `at` and CSS) plus pages that set
+`window.film = { frame(t), duration }` and draw any moment `t` on request. Install it yourself
+(`npm i openfilm` in a folder of your choice; it needs Node 22.2+ and ffmpeg/ffprobe on the PATH) and declare
+it in Integrations as the `node` executable with `node_modules/openfilm/bin/openfilm.mjs` as the first argument.
+Shell shims and package runners (`npx`, `pnpm dlx`, `bunx`, ...) are refused because they fetch code at run time.
+
+- **Look** runs `openfilm look`: every frame of a contact sheet is drawn twice in two shuffled orders, and the
+  verdict names any `t` that drew two different pictures, page errors, fonts that failed, missing sounds, text
+  cut off by the frame, and clips that overlap on a track. The sheet PNGs land in the library; the verdict text
+  is film content and is shown (and handed to agents) as untrusted data.
+- **Render** runs `openfilm render` to MP4, or to transparent WebM / MOV, at the FPS you pick, optionally 4K
+  or with motion blur. One worker; the video lands in the library. Burned-in subtitles (`--subtitles`) are not
+  offered: OpenFilm 0.2.5, the current release, rejects that option.
+- Creator only ever runs `--version`, `look` and `render`. `get` (cloud media with your OpenFilm keys), `open`
+  (OpenFilm Studio's server and GitHub fetches), `update` and the skill commands are never run; open OpenFilm
+  Studio yourself when you want its editor. Before a run Creator writes the CLI's own `.film/opened` marker so
+  the CLI does not start a detached Studio server, and sets `OPENFILM_NO_BROWSER=1`,
+  `OPENFILM_NO_UPDATE_CHECK=1` and a Creator-owned `OPENFILM_HOME`; no engine secret reaches the child.
+- The first run downloads Playwright's headless Chromium (about 100 MB). Under CUI lockdown that download is
+  pointed at a dead loopback address, so it fails instead of leaving the machine: install the browser while
+  unlocked. Under lockdown any external URL in `film.html` or a page, script or stylesheet refuses the run.
+- Agents get `openfilm_look`, `openfilm_render` and `openfilm_job`.
+
+**CAD pane.** Open a `.dxf`, `.dwg`, `.ifc` or `.step` file and it goes only to the selected dgx-cad
+endpoint: layers, entity counts, extents, IFC storeys and counts, and an SVG preview that is sanitized and
+shown as an image. DWG is converted on the box by LibreDWG's `dwg2dxf` as a separate process (an admin
+installs `libredwg-tools`); nothing GPL is linked into Creator. The CadQuery box runs a script on the DGX
+only after you approve the exact text in a dialog, and the STEP, STL, SVG or DXF it returns lands in the
+library.
+
+**Markup pane.** Fully on this machine: pdf.js (Apache-2.0) renders, pdf-lib (MIT) writes standard PDF
+annotations with appearance streams (Square, cloud as Square with a cloudy border effect, Circle, Line with
+an arrow head, Ink, FreeText, Highlight), so Bluebeam Revu and other viewers read them natively. XFDF export
+and import are supported. Bluebeam BAX is shown as not supported because its schema is not published.
+
+**CUI lockdown.** The existing lockdown (Settings, AskSage gov gateway card, now labeled "CUI lockdown") also
+governs Creator. While it is on, a provider is usable only if it runs on this machine, or its endpoint is
+attested as a DGX enclave host (imported from the Private AI Platform, or the **Enclave** checkbox on the endpoint form),
+or it is a CUI-authorized service. Cloud providers without an authorization are refused before any call,
+probes are skipped with the reason, and every refusal is audited. Each provider row shows a posture chip
+(on-device, DGX enclave, cloud) and the reason when refused. An org-managed lock stays AskSage-only: a user's
+enclave attestation never widens it.
+
+## Design: layers, vector, motion (ADR-0429)
+
+Studio > **Design** is a native image, vector and motion editor on one document. Pixels stay in the window;
+only the DGX buttons send an image, to the `dgx-vision` service (Loader ADR-0020, port 8090), and only when
+the CUI policy allows it.
+
+- **Image:** open PNG / JPEG / GIF / WebP / BMP (headers are checked against a decode budget first), layers
+  with 16 blend modes, opacity, groups, crop, Lanczos-3 resize, magic wand, and the DGX actions: Decompose
+  (layers plus an inpainted background, each layer labeled by a model; labels are shown as untrusted chips),
+  Remove background, Refine mask, AI upscale, Vectorize, Label layers.
+- **Brush mask tracer:** press and drag; the circle is drawn at true size. Size 1 to 2000 px (`[` `]`,
+  Shift+wheel), hardness, Alt to subtract. Name what you traced and pick an intent (isolate, remove, keep,
+  refine): that is a hint. **Refine with DGX** grows a partial trace to the whole object.
+- **Vector:** pen with bezier handles, rectangle, ellipse, line, freehand, text (system fonts), node edit,
+  trace to vector, SVG import through the hardened sanitizer (no script, style, external refs, SMIL).
+- **Motion:** keyframes for x, y, scale, rotation, opacity with linear / hold / ease presets or a
+  cubic-bezier curve; play and scrub.
+- **Export:** PNG (tiled for large sizes), animated GIF (dither and palette options), APNG, SVG static or
+  animated (CSS keyframes, safety-checked), PSD / PSB (no EXIF or XMP), layer PNGs, the design file, and a
+  HyperFrames project rendered to MP4 by the HyperFrames runner. Every export is stored in the library.
+- **Agents:** `design_read` returns the layer list and your hints; `design_apply` changes structure only
+  (names, visibility, opacity, blend, order, transforms, labels, groups, keyframes) and each batch is one
+  Undo; `design_request` asks for pixel work (decompose, upscale, ...) that waits for your **Allow**. Model
+  labels and file-derived names reach agents as untrusted data, your hint labels as your words.
+
+## Drift: editing video together (ADR-0430)
+
+Studio > **Drift** connects Creator to [CutWire Drift](https://github.com/CutWire-Studios/Drift), the free
+GPL-3.0 Qt + FFmpeg desktop editor the XDA review praised for Adobe-class keyframing. Drift ships its own
+localhost agent protocol (`docs/MCP.md` in its repo): a bearer-token JSON-RPC server on 127.0.0.1 that is
+**off at every launch** until the user turns on Drift's *Settings > Agent access*. LUCID never spawns Drift,
+never scripts its window, and never turns Agent access on.
+
+- **Discovery.** When Agent access is on, Drift writes `mcp-session.json` (port, token, pid) into its runtime
+  directory (`%USERPROFILE%\drift\` on Windows, `~/Library/Application Support/drift/` on macOS,
+  `$XDG_RUNTIME_DIR/drift/` on Linux, or `$DRIFT_MCP_SESSION_PATH`). The engine reads it at call time and
+  uses the token only in the `Authorization` header: it is never stored, shown, or logged. A headless
+  instance (`drift --headless --mcp-port 4731 --mcp-token T`) is declared like any other provider: base URL
+  plus a vault credential NAME (`DRIFT_MCP_TOKEN` is also honoured).
+- **Probe.** `not-installed` when no Drift executable is on disk; `unreachable` with the enable steps when
+  it is installed but Agent access is off; `unauthorized` on a stale token; `ready` once `initialize`
+  answers, attesting `video-edit`, `motion`, `transcript-edit` (and `stock-media` only when Drift's
+  `market_status` reports a configured marketplace).
+- **The tab.** Connection state and probe line; the open project (canvas, fps, duration, tracks, clips,
+  selection, revision) with Capture, Contact sheet, Undo and Redo; the collaboration feed listing every call
+  the agent (or you) made with an **Undo last agent batch** button; prompt starters that fill the composer;
+  Export (MP4 / WebM / GIF) with progress and **Save to library**, which stores the file by its magic bytes
+  with sha256 and provenance; and the license note below.
+- **Agent tools** (`harness/omp/drift_extension.ts`, master session only): `drift_status`, `drift_read`
+  (read-only ops: inspect, catalog, search, toolbox, activity, frames, capture, `list_*`, `get_*`, ...),
+  `drift_apply` (an `apply` batch: one undo step, not atomic, the reply names the op that stopped it) and
+  `drift_export` (export, wait, import into the library). Project text reaches the model inside the
+  `UNTRUSTED_CONTENT` delimiters.
+- **CUI lockdown.** Drift itself is on-device. Three things inside it reach a cloud and are refused by op
+  name under the lockdown, audited like every other Creator refusal: the `voice` toolbox (ElevenLabs / Fish
+  Audio, billable), every `market_*` op (CutWire marketplace, spends quota) and `transcribe` /
+  `generate_subtitles` with `engine:"elevenlabs"`. Unlocked, they still need the user's consent inside Drift;
+  there is deliberately no op that grants it.
+- **Licenses.** Drift is GPL-3.0; LUCID talks to it over its own protocol and links, vendors and bundles
+  nothing. **Drift Assets** (the Market's Lottie graphics) are CC BY-NC-SA 4.0: credit "Drift Assets",
+  non-commercial, adaptations under the same license, so keep them off monetized channels. The **Stock** tab
+  browses third-party sources whose terms the user accepts in Drift.
+
 ## Provider setup, safely
 
 1. Store the secret in the vault (Settings, credentials) and note its NAME.
@@ -659,7 +832,8 @@ Resources flyout beside this machine's.
 3. Save. The declaration is validated fail-closed; the secret itself never enters settings.
 
 Environment variables the engine reads for provider secrets: `ELEVENLABS_API_KEY`, `LUCID_SUNO_TOKEN`,
-`LUCID_COMFY_TOKEN`, and `LUCID_CREATOR_TARGET_<VAULTREF>` for a monitoring target.
+`LUCID_COMFY_TOKEN`, `DRIFT_MCP_TOKEN` (a headless Drift's fixed token; the GUI session needs none), and
+`LUCID_CREATOR_TARGET_<VAULTREF>` for a monitoring target.
 
 ## Hardware notes, without the hype
 
@@ -710,6 +884,19 @@ Built so far on this branch:
   never hang or corrupt a render, deterministic frame capture that reports which of the two ways a capture
   lied, a fixed-argv Blender runner with no shell, and a model manifest that stays a claim until the probe
   agrees. Proof: `make demo-CREATOR-3`.
+- **CREATOR-DGX** (ADR-0427) - the DGX avatar and CAD services through the Loader's endpoint mailbox, the
+  HyperFrames runner, the Video, CAD and Markup panes, nine new registry providers (four free, five paid
+  catalog entries), and CUI lockdown over every Creator provider. Proof: the bun tests named in ADR-0427 plus
+  the live smoke recorded there.
+- **CREATOR-OPENFILM** (ADR-0457) - OpenFilm films (`film.html` plus `frame(t)` pages) checked by
+  `openfilm look` and rendered by `openfilm render` as fixed-argv jobs, the Video pane's OpenFilm row, and the
+  `openfilm_look` / `openfilm_render` / `openfilm_job` agent tools. Proof: `make demo-CREATOR-OPENFILM`.
+- **CREATOR-EXPLAINER** (ADR-0460) - two Creator-only built-in skills: **Explainer Studio** (plan-first,
+  procedural three.js explainers under 1 MB with exact math, an honest write-up, and Preview plus headless
+  Chromium verification) and **Explainer Assets (GPU)** (when to use this machine or the DGX fleet for code,
+  CAD parts, textures, narration, presenter video, clips, and baking, and how to reach the DGX safely). The
+  long form, with references and evals, is in `.agents/skills/explainer-studio` and
+  `.agents/skills/explainer-assets-gpu`. Proof: `cd desktop && bun test renderer/skills.test.ts`.
 
 ## Checking that the Creator engine actually works
 
@@ -720,6 +907,8 @@ After pulling these changes:
 make demo-CREATOR-0
 make demo-CREATOR-IMG
 make demo-CREATOR-1
+make demo-CREATOR-DRIFT   # Drift over a fake server speaking its real wire format: no Drift install needed
+make demo-CREATOR-OPENFILM  # OpenFilm look/render runners over a fake CLI: no OpenFilm install needed
 
 # 2. the unit suites for everything Creator
 bun test desktop/build_flavor.test.ts desktop/creator_monitor.test.ts desktop/creator_registry.test.ts \

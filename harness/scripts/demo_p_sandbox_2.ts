@@ -11,7 +11,9 @@
 //      not-approved host), an unparseable host, or a THROWN decision all DENY (fail-closed, invariant #3);
 //   2. live DNS: a denied `gethostbyname` gets REFUSED and the upstream resolver is NEVER contacted (the
 //      exfil channel is dead); an allowed query is forwarded + relayed (pip/apt still resolve);
-//   3. live CONNECT: a denied host gets 403; an allowed one tunnels through (pip install over https works);
+//   3. live HTTP proxy: a denied CONNECT gets 403; an allowed one tunnels through (pip install over https
+//      works); an absolute-form plain-HTTP request (a LAN model server under HTTP_PROXY) goes through the
+//      SAME decision: denied ⇒ 403 with the target never dialed, allowed ⇒ forwarded and streamed (ADR-0445);
 //   4. proxy DEAD ⇒ egress denied but LOCAL EXEC still runs (wrap falls back to --unshare-net, not refuse);
 //   5. the spawn is WIRED: an isolating backend + a started proxy ⇒ omp wrapped in bwrap with HTTP(S)_PROXY
 //      set and the child steered at the proxy; a proxy that fails to start ⇒ network-off fallback, still spawns.
@@ -20,6 +22,7 @@
 
 import { createSocket } from "node:dgram";
 import { connect as tcpConnect } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import { decideEgress, EgressProxy, type DecideFn } from "../runs/egress_proxy.ts";
 import { BwrapBackend, wrapForProfile, type BackendResolution, type SandboxProxy } from "../runs/sandbox_exec.ts";
 import { caps } from "../runs/profiles.ts";
@@ -51,6 +54,15 @@ function connectExpect(port: number, send: string, timeoutMs = 1500): Promise<st
     s.once("data", (d) => { clearTimeout(t); const out = d.toString("latin1"); s.destroy(); resolve(out); });
     s.once("error", (e) => { clearTimeout(t); reject(e); });
   });
+}
+function readAll(port: number, send: string): Promise<string> {
+  const { promise, resolve, reject } = Promise.withResolvers<string>();
+  const s = tcpConnect({ host: "127.0.0.1", port }, () => s.write(send));
+  let buf = "";
+  s.on("data", (d) => (buf += d.toString("latin1")));
+  s.once("close", () => resolve(buf));
+  s.once("error", reject);
+  return promise;
 }
 
 console.log("== #ADR-0166 P-SANDBOX.2: mediated subprocess egress (the DNS-TXT exfil is contained) ==\n");
@@ -84,12 +96,28 @@ ok(upstreamHits === 1, "…and the allowed query is exactly what reached the ups
 await dnsProxy.stop();
 upstream.close();
 
-// ── [3] live CONNECT mediation ───────────────────────────────────────────────
-console.log("\n[3] live CONNECT — deny → 403, allow → tunnelled");
+// ── [3] live HTTP proxy mediation (CONNECT + absolute-form plain HTTP) ───────
+console.log("\n[3] live HTTP proxy: CONNECT and absolute-form plain HTTP, one decision brain (deny → 403, allow → through)");
 const httpProxy = new EgressProxy({ decide: allowOnly(["pypi.org"]) });
 const hep = await httpProxy.start();
 ok((await connectExpect(hep.httpPort, "CONNECT evil.cn:443 HTTP/1.1\r\n\r\n")).includes("403"), "a denied CONNECT is refused (403 Forbidden)");
-ok((await connectExpect(hep.httpPort, "GET http://evil.cn/x HTTP/1.1\r\n\r\n")).includes("405"), "a plain (non-CONNECT) proxied request is rejected — only tunnels are mediated");
+ok((await connectExpect(hep.httpPort, "GET /relative HTTP/1.1\r\n\r\n")).includes("400"), "an origin-form request (not a proxy request at all) is refused 400, fail-closed");
+let lanDials = 0;
+const lan = createHttpServer((_req, res) => { lanDials++; res.writeHead(200, { "content-type": "text/event-stream" }); res.write("data: tok1\n\n"); res.end("data: tok2\n\n"); });
+const lanUp = Promise.withResolvers<void>();
+lan.listen(0, "127.0.0.1", () => lanUp.resolve());
+await lanUp.promise;
+const lanAddr = lan.address();
+const lanReq = `GET http://127.0.0.1:${typeof lanAddr === "object" && lanAddr ? lanAddr.port : 0}/api/chat HTTP/1.1\r\n\r\n`;
+ok((await readAll(hep.httpPort, lanReq)).startsWith("HTTP/1.1 403 Forbidden"), "a plain-HTTP request to a host the brain does not allow gets the same 403 as a denied CONNECT");
+ok(lanDials === 0, "…and the denied target was never dialed");
+const lanProxy = new EgressProxy({ decide: allowOnly(["127.0.0.1"]) });
+const lep = await lanProxy.start();
+const streamed = await readAll(lep.httpPort, lanReq);
+ok(streamed.startsWith("HTTP/1.1 200") && streamed.includes("data: tok1") && streamed.includes("data: tok2") && lanDials === 1,
+  "an ALLOWED plain-HTTP request (the LAN model server case) is forwarded and its chunked stream arrives");
+await lanProxy.stop();
+lan.close();
 ok(httpProxy.events.some((e) => e.channel === "connect" && e.decision.action === "deny"), "every refusal is recorded in the observable event log");
 await httpProxy.stop();
 

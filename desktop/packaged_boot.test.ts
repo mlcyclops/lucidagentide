@@ -14,7 +14,8 @@
 // so the package-subtree half of the filter was silently unenforced.
 //
 // This version is honest: it MATERIALIZES a filtered installation in a temp dir -
-//   - every kept node_modules package is linked in (junction/symlink; excluded packages are ABSENT),
+//   - every kept node_modules package is linked in (junction, or a directory symlink when the checkout is
+//     on a network share - see linkDir; excluded packages are ABSENT),
 //   - the in-process-imported @oh-my-pi packages are hardlink-copied and the filter's file-type
 //     exclusions (*.md, *.map, *.d.ts) are ACTUALLY DELETED from the copy,
 //   - the repo source files ship like extraResources ships them -
@@ -25,35 +26,52 @@
 
 import { afterAll, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const REPO = join(import.meta.dir, "..");
 
 interface ResourceEntry { to?: string; filter?: string[] }
-function nodeModulesExclusions(): string[] {
+function repoFilter(): string[] {
   const pkg = JSON.parse(readFileSync(join(import.meta.dir, "package.json"), "utf8")) as { build?: { extraResources?: ResourceEntry[] } };
   const repo = (pkg.build?.extraResources ?? []).find((r) => r?.to === "repo");
-  return (repo?.filter ?? []).filter((f) => f.startsWith("!node_modules"));
+  return repo?.filter ?? [];
 }
 const SUFFIXES = (ex: string[]) => ex.map((e) => /^!node_modules\/\*\*\/\*(\.[a-z.]+)$/.exec(e)?.[1]).filter((s): s is string => !!s);
 const SUBTREES = (ex: string[]) => ex.map((e) => /^!node_modules\/([^*]+?)\/?\*\*$/.exec(e)?.[1]).filter((s): s is string => !!s);
 
-/** Hardlink a tree (falls back to copy across filesystems), skipping files with excluded suffixes -
- *  i.e. the packaging filter's file-type stripping, applied FOR REAL. */
-function linkTreeFiltered(src: string, dst: string, dropSuffixes: string[]): void {
+/** Hardlink a tree (falls back to copy across filesystems), skipping files with excluded suffixes
+ *  unless literally re-included - i.e. the packaging filter's file-type stripping, applied FOR REAL. */
+function linkTreeFiltered(src: string, dst: string, dropSuffixes: string[], keep: Set<string>): void {
   mkdirSync(dst, { recursive: true });
   for (const e of readdirSync(src, { withFileTypes: true })) {
     const s = join(src, e.name), d = join(dst, e.name);
-    if (e.isDirectory()) linkTreeFiltered(s, d, dropSuffixes);
-    else if (e.isFile() && !dropSuffixes.some((suf) => e.name.endsWith(suf))) {
+    if (e.isDirectory()) linkTreeFiltered(s, d, dropSuffixes, keep);
+    else if (e.isFile() && (keep.has(s) || !dropSuffixes.some((suf) => e.name.endsWith(suf)))) {
       try { linkSync(s, d); } catch { copyFileSync(s, d); }
     }
   }
 }
 
-const linkDir = (target: string, path: string): void => symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir");
+/** Link a kept package into the sim. On Windows a junction needs no privilege but can only target a LOCAL
+ *  volume: for a checkout on a network share (a UNC path) it is created without error and resolves to
+ *  nothing, so the sim silently had no node_modules (ADR-0178 amendment). Such a checkout gets a real
+ *  directory symlink instead (Developer Mode or admin; local-to-remote evaluation is on by default), and a
+ *  link that still does not resolve fails the build with the reason rather than as a missing module. */
+let winLink: "junction" | "dir" = "junction";
+function linkDir(target: string, path: string): void {
+  if (process.platform !== "win32") return symlinkSync(target, path, "dir");
+  if (winLink === "junction") {
+    symlinkSync(target, path, "junction");
+    if (existsSync(path)) return;
+    rmdirSync(path); // a junction to a remote target: present, resolving to nothing
+    winLink = "dir";
+  }
+  try { symlinkSync(target, path, "dir"); }
+  catch (e) { throw new Error(`packaged_boot: the checkout ${REPO} is on a network share, which a junction cannot target, and a directory symlink needs Windows Developer Mode or an elevated shell (${String(e)}). Enable Developer Mode or run from a local-disk checkout.`); }
+  if (!existsSync(path)) throw new Error(`packaged_boot: directory symlink ${path} -> ${target} does not resolve; a checkout on a network share needs local-to-remote symlink evaluation (fsutil behavior set SymlinkEvaluation L2R:1).`);
+}
 
 /** Copy the desktop repo sources the way the `to:"repo"` extraResources filter ships them: EVERY
  *  `desktop/**\/*.ts` (any depth), the whole `desktop/renderer/**`, and desktop/package.json - so a new
@@ -74,8 +92,12 @@ function copyDesktopSources(srcRoot: string, dstRoot: string, rel = ""): void {
 
 /** Materialize the filtered install: repo sources + node_modules with the LIVE exclusions applied. */
 function buildFilteredInstall(): string {
-  const exclusions = nodeModulesExclusions();
+  const filter = repoFilter();
+  const exclusions = filter.filter((f) => f.startsWith("!node_modules"));
   const suffixes = SUFFIXES(exclusions);
+  // Literal `node_modules/<file>` entries (no glob): electron-builder applies the filter in order, so a
+  // later positive entry re-includes a file an earlier `!node_modules/**/*.<ext>` prune dropped (#365).
+  const reincluded = new Set(filter.filter((f) => f.startsWith("node_modules/") && !/[*?[{]/.test(f)).map((f) => join(REPO, f)));
   const subtrees = new Set(SUBTREES(exclusions).map((t) => t.replace(/\/$/, "")));
   const sim = mkdtempSync(join(tmpdir(), "lucid-pkg-guard-"));
 
@@ -98,7 +120,7 @@ function buildFilteredInstall(): string {
       for (const m of readdirSync(src, { withFileTypes: true })) {
         const full = `${e.name}/${m.name}`;
         if (subtrees.has(full)) continue;
-        if (e.name === "@oh-my-pi") linkTreeFiltered(join(src, m.name), join(dst, m.name), suffixes);
+        if (e.name === "@oh-my-pi") linkTreeFiltered(join(src, m.name), join(dst, m.name), suffixes, reincluded);
         else linkDir(join(src, m.name), join(dst, m.name));
       }
     } else {
@@ -151,3 +173,23 @@ test("lazily-imported feature deps load from the filtered install (no broken-but
   if (!r.ok) throw new Error(`a lazy feature dep cannot load from the filtered install - its feature would ship broken-but-quiet:\n${r.out.slice(-1500)}`);
   expect(r.ok).toBe(true);
 }, 90_000);
+
+// #365: omp imports some `.d.ts` files as TEXT (`with { type: "text" }`), so they are runtime assets the
+// blanket `!node_modules/**/*.d.ts` prune must not drop, or compile-engine from an installed tree fails.
+// Discovered from source, so an omp bump that adds or moves one fails here instead of in the installer.
+test("every .d.ts omp imports as text survives the packaging filter", async () => {
+  const textImport = /from\s+["']([^"']+\.d\.ts)["']\s+with\s*\{\s*type:\s*["']text["']\s*\}/g;
+  const assets: string[] = [];
+  let scanned = 0;
+  for await (const f of new Bun.Glob("@oh-my-pi/*/src/**/*.ts").scan({ cwd: join(REPO, "node_modules"), followSymlinks: true })) {
+    if (f.endsWith(".d.ts")) continue;
+    scanned++;
+    const src = readFileSync(join(REPO, "node_modules", f), "utf8");
+    for (const m of src.matchAll(textImport)) assets.push(join("node_modules", dirname(f), m[1]));
+  }
+  // P-MODEL.10 (ADR-pending): omp 18.18.6 imports no `.d.ts` as text any more (the eval preludes now
+  // import their `.md` docs instead), so an empty asset list is legitimate; the sanity check is that the
+  // scan still reached omp's sources at all.
+  expect(scanned).toBeGreaterThan(0);
+  expect(assets.filter((a) => !existsSync(join(SIM, a)))).toEqual([]);
+}, 30_000);

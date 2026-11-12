@@ -16,9 +16,16 @@ import {
   appContainerProbePassed,
   appContainerRuntimeGrants,
   APPCONTAINER_PROBE_MARKER,
+  discoverGitRoot,
+  parseOmpShellPath,
+  prependPathOverlay,
   proxyChildEnv,
+  shellInstallRoot,
   runtimeProbeVerdict,
   BwrapBackend,
+  bwrapExecRoot,
+  bwrapHostBinds,
+  pathCovered,
   listingExemptsMoniker,
   NoopBackend,
   resolveBackend,
@@ -366,6 +373,35 @@ test("the wrapped argv is preserved verbatim after the -- separator", () => {
   expect(plan.args.slice(sep + 1)).toEqual(ARGV);
 });
 
+// Mint deb, 2.3.0-beta.14: bwrap execvp of the packaged omp died with "No such file or directory".
+// The file exists on the host. The stock mount plan never binds /opt, so the sandbox cannot see it.
+const MINT_OMP = "/opt/LucidAgentIDE/resources/repo/node_modules/.bin/omp";
+const MINT_GATE = "/opt/LucidAgentIDE/resources/repo/harness/omp/security_extension.ts";
+
+test("bwrapExecRoot of a packaged path is the install prefix, not all of /opt", () => {
+  expect(bwrapExecRoot(MINT_OMP)).toBe("/opt/LucidAgentIDE");
+  expect(bwrapExecRoot("/opt/omp")).toBe("/opt");
+  expect(bwrapExecRoot("omp")).toBeNull();
+  expect(bwrapExecRoot("/")).toBeNull();
+});
+
+test("a path already under home or /usr needs no extra bind", () => {
+  expect(pathCovered("/home/u/.bun/bin/omp", ["/home/u", "/usr"])).toBe(true);
+  expect(bwrapHostBinds(["/home/u/.bun/bin/omp", "/usr/bin/bun"], ["/home/u", "/usr"])).toEqual([]);
+});
+
+test("bwrap binds the packaged install root so execvp can see omp and the bundled bun", () => {
+  const plan = new BwrapBackend(hasBwrap).wrap([MINT_OMP, "acp", "-e", MINT_GATE], caps("trusted-local"), CTX);
+  const a = plan.args.join(" ");
+  expect(a).toContain("--ro-bind-try /opt/LucidAgentIDE /opt/LucidAgentIDE");
+  expect(a).not.toContain("--ro-bind-try /opt /opt");
+  // one bind for the whole install, not one per argv path
+  expect(a.split("--ro-bind-try /opt/LucidAgentIDE /opt/LucidAgentIDE").length - 1).toBe(1);
+  // the rw workspace bind stays after the ro install bind, so a project inside the install stays writable
+  expect(a.indexOf("--ro-bind-try /opt/LucidAgentIDE")).toBeLessThan(a.indexOf("--bind /work/ws"));
+  expect(plan.args.slice(plan.args.indexOf("--") + 1)).toEqual([MINT_OMP, "acp", "-e", MINT_GATE]);
+});
+
 // ── wrapForProfile: the fail-closed decision point ────────────────────────────
 
 const bwrapRes: BackendResolution = { ok: true, backend: new BwrapBackend(hasBwrap), disclosed: false };
@@ -516,4 +552,68 @@ test("runtimeProbeVerdict: only a clean exit WITH output commits the session to 
   expect(runtimeProbeVerdict({ exitCode: 0, stdout: "  ", stderr: "" }).ok).toBe(false); // no stdio carried
   expect(runtimeProbeVerdict({ exitCode: null, stdout: "", stderr: "", timedOut: true }).ok).toBe(false);
   expect(runtimeProbeVerdict({ exitCode: 3, stdout: "", stderr: "" }).ok).toBe(false); // helper fail-closed
+});
+
+// ── P-SANDBOX.11 (ADR-0389): a shellPath pinned in omp's config is reachable in the container ──
+test("parseOmpShellPath reads plain, single- and double-quoted scalars (unescaping YAML backslashes)", () => {
+  expect(parseOmpShellPath("theme: dark\nshellPath: C:\\Users\\User\\AppData\\Local\\Programs\\MinGit\\usr\\bin\\sh.exe\n")).toBe("C:\\Users\\User\\AppData\\Local\\Programs\\MinGit\\usr\\bin\\sh.exe");
+  expect(parseOmpShellPath('shellPath: "C:\\\\Tools\\\\Git\\\\bin\\\\bash.exe"')).toBe("C:\\Tools\\Git\\bin\\bash.exe");
+  expect(parseOmpShellPath("shellPath: 'D:\\git\\bin\\bash.exe'")).toBe("D:\\git\\bin\\bash.exe");
+  expect(parseOmpShellPath("shellPath: C:\\g\\bin\\bash.exe  # pinned")).toBe("C:\\g\\bin\\bash.exe");
+  expect(parseOmpShellPath("model: x\n  shellPath: nested-is-not-top-level\n")).toBeNull();
+  expect(parseOmpShellPath("theme: dark\n")).toBeNull();
+});
+
+test("shellInstallRoot climbs out of bin and usr\\bin so the sibling tools come with the shell", () => {
+  expect(shellInstallRoot("C:\\Users\\U\\AppData\\Local\\Programs\\MinGit\\usr\\bin\\sh.exe")).toBe("C:\\Users\\U\\AppData\\Local\\Programs\\MinGit");
+  expect(shellInstallRoot("C:\\Users\\U\\scoop\\apps\\git\\current\\bin\\bash.exe")).toBe("C:\\Users\\U\\scoop\\apps\\git\\current");
+  expect(shellInstallRoot("C:\\tools\\busybox.exe")).toBe("C:\\tools");
+});
+
+test("appContainerRuntimeGrants adds the pinned shell's root, and never re-ACLs Program Files / Windows", () => {
+  const g = appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\Users\\U", shellPath: "C:\\Users\\U\\AppData\\Local\\Programs\\MinGit\\usr\\bin\\sh.exe" });
+  expect(g.grantRx).toEqual(["C:\\r", "C:\\Users\\U\\AppData\\Local\\Programs\\MinGit"]);
+  const pf = appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\Users\\U", shellPath: "C:\\Program Files\\Git\\bin\\bash.exe", bunBin: "C:\\Windows\\bun.exe" });
+  expect(pf.grantRx).toEqual(["C:\\r"]); // already readable by every AppContainer; a standard user cannot write those DACLs
+  expect(appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\h", shellPath: "bash" }).grantRx).toEqual(["C:\\r"]); // a bare name is not a path
+});
+
+// P-SANDBOX.16 (ADR-0397): git discovery. A fake filesystem keyed by lowercase path.
+const fakeFs = (files: string[], dirs: Record<string, string[]> = {}) => ({
+  exists: (p: string) => files.some((f) => f.toLowerCase() === p.toLowerCase()),
+  list: (d: string) => { const k = Object.keys(dirs).find((x) => x.toLowerCase() === d.toLowerCase()); if (!k) throw new Error("ENOENT"); return dirs[k]!; },
+});
+const WIN_ENV = { LOCALAPPDATA: "C:\\Users\\U\\AppData\\Local", USERPROFILE: "C:\\Users\\U", ProgramFiles: "C:\\Program Files", ProgramW6432: "C:\\Program Files" };
+
+test("discoverGitRoot finds a MinGit the host never put on PATH", () => {
+  const fs = fakeFs(["C:\\Users\\U\\AppData\\Local\\Programs\\MinGit\\cmd\\git.exe"]);
+  expect(discoverGitRoot({ ...WIN_ENV, PATH: "C:\\Windows\\system32" }, fs)).toBe("C:\\Users\\U\\AppData\\Local\\Programs\\MinGit");
+});
+
+test("discoverGitRoot prefers the git on the host PATH over a vendor default, from cmd, bin or mingw64\\bin", () => {
+  const fs = fakeFs(["C:\\Program Files\\Git\\cmd\\git.exe", "D:\\tools\\git\\cmd\\git.exe"]);
+  expect(discoverGitRoot({ ...WIN_ENV, PATH: "C:\\Windows;D:\\tools\\git\\mingw64\\bin" }, fs)).toBe("D:\\tools\\git");
+  expect(discoverGitRoot({ ...WIN_ENV, Path: "D:\\tools\\git\\cmd\\" }, fs)).toBe("D:\\tools\\git");
+  expect(discoverGitRoot({ ...WIN_ENV, PATH: "" }, fs)).toBe("C:\\Program Files\\Git");
+});
+
+test("discoverGitRoot picks the NEWEST GitHub Desktop version dir, and skips a root with no cmd\\git.exe", () => {
+  const gd = "C:\\Users\\U\\AppData\\Local\\GitHubDesktop";
+  const fs = fakeFs(
+    [`${gd}\\app-3.9.2\\resources\\app\\git\\cmd\\git.exe`, `${gd}\\app-3.10.1\\resources\\app\\git\\cmd\\git.exe`, "C:\\Users\\U\\AppData\\Local\\Programs\\Git\\bin\\bash.exe"],
+    { [gd]: ["app-3.9.2", "app-3.10.1", "packages"] },
+  );
+  expect(discoverGitRoot(WIN_ENV, fs)).toBe(`${gd}\\app-3.10.1\\resources\\app\\git`);
+  expect(discoverGitRoot(WIN_ENV, fakeFs([]))).toBeNull();
+});
+
+test("prependPathOverlay puts a dir first under the env's own PATH spelling, once", () => {
+  expect(prependPathOverlay({ Path: "C:\\Windows" }, "C:\\g\\cmd")).toEqual({ Path: "C:\\g\\cmd;C:\\Windows" });
+  expect(prependPathOverlay({ PATH: "c:\\G\\CMD\\;C:\\Windows" }, "C:\\g\\cmd")).toEqual({});
+  expect(prependPathOverlay({ PATH: "C:\\Windows" }, null)).toEqual({});
+});
+
+test("appContainerRuntimeGrants grants a discovered git root outside Program Files", () => {
+  expect(appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\Users\\U", gitRoot: "C:\\Users\\U\\scoop\\apps\\git\\current" }).grantRx).toEqual(["C:\\r", "C:\\Users\\U\\scoop\\apps\\git\\current"]);
+  expect(appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\Users\\U", gitRoot: "C:\\Program Files\\Git" }).grantRx).toEqual(["C:\\r"]);
 });

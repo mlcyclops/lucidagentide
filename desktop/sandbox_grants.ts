@@ -22,9 +22,11 @@
 // Store shape mirrors egress_policy (pure updaters over a small JSON file); persistence mirrors
 // settings_store (one fd for write + fchmod 0600 best-effort).
 
-import { closeSync, existsSync, fchmodSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fchmodSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { managedConfig, managedSandboxFolders } from "./managed_config.ts";
+import { policyFolderPlan, type PolicyFolderPlan } from "./sandbox_control.ts";
 
 /** "rx" = read-only (GENERIC_READ|GENERIC_EXECUTE); "rw" = read-write (GENERIC_ALL). Helper vocabulary. */
 export type GrantMode = "rx" | "rw";
@@ -146,6 +148,14 @@ function runHelperElevated(helper: string, args: string[]): boolean {
   return (r.exitCode ?? 1) === 0;
 }
 
+/** P-SANDBOX.12 (ADR-0390): (un)register the one-time loopback exemption from the Security panel. It needs
+ *  admin, so it always goes through the same UAC path as the ACL retries above. The exit code of an
+ *  elevated Start-Process is only "the prompt was accepted and the helper ran"; the caller re-checks the
+ *  real state (loopbackExempted, after resetLoopbackExemptCache) before reporting success. */
+export function setLoopbackRegistrationElevated(helper: string, register: boolean): boolean {
+  return runHelperElevated(helper, [register ? "--register-loopback" : "--unregister-loopback"]);
+}
+
 /** Does the container SID currently hold an ACE on `path`? (helper `--check-acl`: 0 yes, 1 no). */
 export function checkGrantAce(helper: string, path: string): boolean {
   return runHelper(helper, ["--check-acl", path]).code === 0;
@@ -178,4 +188,17 @@ export function revokeGrantAce(helper: string, path: string): { ok: boolean; det
     return { ok: false, detail: `elevated retry ${launched ? "did not take effect" : "was refused"} · ${r.stderr || `exit ${r.code}`}` };
   }
   return { ok: false, detail: r.stderr || `helper exit ${r.code}` };
+}
+
+// ── P-SANDBOX.14 (ADR-0394): the admin-approved folders, resolved for this user and host ───────────────
+/** The managed folder lists expanded and checked against this machine (see policyFolderPlan). Impure edge:
+ *  reads managed policy, the environment, and the filesystem. `log` names each skipped entry in the engine
+ *  log (the spawn path logs; the panel's poll reads quietly). */
+export function managedPolicyFolderPlan(log = true): PolicyFolderPlan {
+  const { read, readWrite } = managedSandboxFolders(managedConfig().config);
+  if (!read.length && !readWrite.length) return { grantRx: [], grantRw: [], skipped: [] };
+  const isDir = (p: string) => { try { return statSync(p).isDirectory(); } catch { return false; } };
+  const plan = policyFolderPlan({ read, readWrite, env: process.env, home: homedir(), isDir });
+  if (log) for (const s of plan.skipped) console.error(`[sandbox] policy folder skipped: ${s.entry} (${s.why})`);
+  return plan;
 }

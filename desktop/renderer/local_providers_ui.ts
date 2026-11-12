@@ -20,6 +20,10 @@ import {
   type LocalProviderDef,
 } from "../local_providers.ts";
 
+// CUI lockdown: the DGX enclave attestation, shown on the add form and on each internal provider's row.
+const ENCLAVE_LABEL = "DGX enclave host, CUI-authorized";
+const ENCLAVE_TIP = "Tick only for a DGX box inside your enclave. Under CUI lockdown its models become an allowed route next to AskSage (your own lockdown only; an organization-managed lockdown stays AskSage-only).";
+
 export function authLabel(k: LocalAuthKind): string {
   return k === "none" ? "No auth (open, e.g. local Ollama)"
     : k === "bearer" ? "Bearer token"
@@ -55,6 +59,7 @@ function providerRow(p: LocalProviderDef, vaultRefs: Set<string>): string {
       <div class="lp-meta">
         <div class="lp-name">${esc(p.name)} <span class="lp-pill ${st.tone}">${esc(st.label)}</span></div>
         <div class="lp-sub">${esc(p.baseUrl)} · ${modelSummary(p.models)}</div>
+        ${p.zone === "internal" ? `<label class="lp-ext" title="${esc(ENCLAVE_TIP)}"><input type="checkbox" data-lp-enclave ${p.enclave ? "checked" : ""}/> <span>${esc(ENCLAVE_LABEL)}</span></label>` : ""}
       </div>
       <button class="btn-mini" data-lp-test data-url="${esc(p.baseUrl)}" title="Check the endpoint is reachable (no key sent)">Test</button>
       <button class="btn-mini" data-lp-discover title="Ask this endpoint what it serves and refresh the model list (uses the key from the vault)">Discover</button>
@@ -96,6 +101,7 @@ export function localProvidersCardBody(providers: LocalProviderDef[], vaultRefs:
           <input class="prov-key" id="lpKey" type="password" placeholder="API key / token (stored in the vault)" autocomplete="off" />
         </div>
         <label class="lp-ext"><input type="checkbox" id="lpExternal" /> <span>This endpoint is on the public internet (external). Leave off for a LAN / VPN / localhost box.</span></label>
+        <label class="lp-ext" title="${esc(ENCLAVE_TIP)}"><input type="checkbox" id="lpEnclave" /> <span>${esc(ENCLAVE_LABEL)}: allowed under CUI lockdown. Never for an external endpoint.</span></label>
         <div class="lp-add-actions">
           <button class="btn-mini" data-lp-test-form title="Check the endpoint is reachable (no key sent)">${icon("shield", 12)} Test connection</button>
           <button class="btn-mini" data-lp-discover-form title="Ask the endpoint what it serves and fill the model ids from its answer">${icon("bolt", 12)} Discover models</button>
@@ -105,7 +111,7 @@ export function localProvidersCardBody(providers: LocalProviderDef[], vaultRefs:
     </div>`;
 }
 
-export interface LpFormInput { name: string; baseUrl: string; auth: string; models: string; headerName?: string; external?: boolean }
+export interface LpFormInput { name: string; baseUrl: string; auth: string; models: string; headerName?: string; external?: boolean; enclave?: boolean }
 
 /** PURE: build a validated LocalProviderDef draft from the add-form values (no vaultRef yet — app.ts stores
  *  the key in the vault and sets it). Returns `errors` (fail-closed) when the draft is malformed. */
@@ -129,6 +135,8 @@ export function draftFromForm(inp: LpFormInput, now: number): { def?: LocalProvi
     api: "openai-completions",
     authKind,
     zone: inp.external ? "external" : "internal",
+    // CUI lockdown: only an explicit tick attests; external + enclave is refused by validateLocalProvider.
+    ...(inp.enclave === true ? { enclave: true } : {}),
     headerName: authKind === "apikey" ? (inp.headerName?.trim() || undefined) : undefined,
     models,
     enabled: true,

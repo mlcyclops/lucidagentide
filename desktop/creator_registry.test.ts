@@ -153,3 +153,166 @@ describe("availability folding", () => {
     expect(all.find((p) => p.id === "unreal")!.state).toBe("needs-endpoint");
   });
 });
+
+describe("the free / self-hosted additions and the paid catalog", () => {
+  const spec = (id: string) => CREATOR_INTEGRATIONS.find((s) => s.id === id)!;
+
+  test("every spec carries a CUI posture, and exactly the third-party services are cloud", () => {
+    for (const s of CREATOR_INTEGRATIONS) expect(["on-device", "enclave", "cloud"]).toContain(s.cui.posture);
+    expect(CREATOR_INTEGRATIONS.filter((s) => s.cui.posture === "cloud").map((s) => s.id).sort())
+      .toEqual(["autodesk-aps", "bluebeam-studio", "elevenlabs", "heygen", "suno"]);
+    // No Creator provider is CUI-authorized today: an authorization string is a deliberate, reviewed claim.
+    expect(CREATOR_INTEGRATIONS.filter((s) => s.cui.authorization)).toEqual([]);
+    expect(spec("dgx-avatar").cui.posture).toBe("enclave");
+    expect(spec("dgx-cad").cui.posture).toBe("enclave");
+    expect(spec("classcad").cui.posture).toBe("enclave"); // key sign-in + relay by default: never "on-device"
+  });
+
+  test("the free providers are available through the surface that really backs them", () => {
+    expect(spec("hyperframes").transports).toEqual(["child-process"]);
+    expect(spec("hyperframes").capabilities.find((c) => c.id === "video-compose")!.status).toBe("available");
+    expect(spec("dgx-avatar").capabilities.find((c) => c.id === "avatar-video")!.status).toBe("available");
+    expect(spec("dgx-cad").capabilities.map((c) => c.id).sort()).toEqual(["bim-inspect", "cad-convert", "cad-drawing", "cad-model"]);
+    expect(spec("pdf-markup").transports).toEqual(["in-renderer"]);
+    expect(spec("pdf-markup").group).toBe("cad");
+  });
+
+  test("OpenFilm is an on-device child process, right after HyperFrames, whose note names what never runs", () => {
+    expect(spec("openfilm")).toMatchObject({
+      name: "OpenFilm (local)", group: "video", kind: "local-app", transports: ["child-process"], authKind: "local",
+      consentRequired: false, docsUrl: "https://github.com/openfilm/openfilm", cui: { posture: "on-device" },
+    });
+    expect(spec("openfilm").capabilities.map((c) => [c.id, c.status, c.surface])).toEqual([
+      ["video-compose", "available", "cli"], ["render-animation", "available", "cli"], ["runtime-feedback", "available", "cli"],
+    ]);
+    expect(CREATOR_PROVIDER_IDS.indexOf("openfilm")).toBe(CREATOR_PROVIDER_IDS.indexOf("hyperframes") + 1);
+    const ids = CREATOR_INTEGRATIONS.map((s) => s.id);
+    expect(ids.indexOf("openfilm")).toBe(ids.indexOf("hyperframes") + 1);
+    const note = spec("openfilm").note;
+    for (const word of ["MIT", "fixed-argv", "look and render", "get", "open", "update", "skill", "Studio server", "telemetry", "update check", "browser opening"]) {
+      expect(note).toContain(word);
+    }
+  });
+
+  test("a DGX service claims nothing usable until its /health probe attests it; pdf-markup is built in", () => {
+    for (const id of ["dgx-avatar", "dgx-cad", "hyperframes", "openfilm"]) {
+      expect(foldProviderStatus(spec(id), { endpoints: [], secretPresent: false }).usable).toEqual([]);
+    }
+    const cad: CreatorEndpointDef = { id: "nick-dgx-cad", providerId: "dgx-cad", label: "CAD", baseUrl: "http://127.0.0.1:8089", zone: "internal", enclave: true, enabled: true };
+    expect(foldProviderStatus(spec("dgx-cad"), { endpoints: [cad], secretPresent: false, discovered: ["cad-drawing"] }).usable).toEqual(["cad-drawing"]);
+    expect(foldProviderStatus(spec("pdf-markup"), { endpoints: [], secretPresent: false })).toMatchObject({ state: "built-in", usable: ["pdf-markup"] });
+  });
+
+  test("the Design suite: dgx-vision is an enclave service attested by probe, design is built into the renderer", () => {
+    expect(spec("dgx-vision")).toMatchObject({ group: "video", kind: "local-service", transports: ["local-http"], cui: { posture: "enclave" } });
+    expect(spec("dgx-vision").capabilities.map((c) => c.id).sort())
+      .toEqual(["depth", "inpaint", "layer-decompose", "matte", "segment", "upscale", "vectorize", "vision-label"]);
+    expect(foldProviderStatus(spec("dgx-vision"), { endpoints: [], secretPresent: false })).toMatchObject({ state: "needs-endpoint", usable: [] });
+    const vision: CreatorEndpointDef = { id: "nick-dgx-vision", providerId: "dgx-vision", label: "Vision", baseUrl: "http://127.0.0.1:8090", zone: "internal", enclave: true, enabled: true };
+    expect(foldProviderStatus(spec("dgx-vision"), { endpoints: [vision], secretPresent: false, discovered: ["segment", "upscale", "cad-model"] }).usable).toEqual(["segment", "upscale"]);
+    expect(spec("design")).toMatchObject({ kind: "renderer", transports: ["in-renderer"], cui: { posture: "on-device" } });
+    expect(foldProviderStatus(spec("design"), { endpoints: [], secretPresent: false })).toMatchObject({
+      state: "built-in", usable: ["layers", "mask-trace", "vector-draw", "motion", "gif-export", "svg-export", "psd-export"],
+    });
+  });
+
+  test("Drift is an on-device local app over its own localhost protocol with a bearer session token", () => {
+    expect(spec("drift")).toMatchObject({
+      group: "video", kind: "local-app", transports: ["local-http"], authKind: "bearer",
+      secretEnv: "DRIFT_MCP_TOKEN", vaultRefHint: "drift_mcp_token", consentRequired: false, cui: { posture: "on-device" },
+    });
+    expect(spec("drift").capabilities.map((c) => c.id).sort()).toEqual(["motion", "stock-media", "transcript-edit", "video-edit"]);
+    expect(spec("drift").capabilities.find((c) => c.id === "stock-media")!.detail).toContain("CC BY-NC-SA 4.0");
+    expect(foldProviderStatus(spec("drift"), { endpoints: [], secretPresent: false })).toMatchObject({ state: "needs-endpoint" });
+    const session: CreatorEndpointDef = { id: "drift-session", providerId: "drift", label: "Drift", baseUrl: "http://127.0.0.1:4731", zone: "local", enabled: true };
+    expect(foldProviderStatus(spec("drift"), { endpoints: [session], secretPresent: false }).state).toBe("needs-credential");
+    expect(foldProviderStatus(spec("drift"), { endpoints: [session], secretPresent: true, locked: true, discovered: ["video-edit", "motion"] }))
+      .toMatchObject({ state: "ready", usable: ["video-edit", "motion"], cui: { allowed: true } });
+  });
+
+  test("under lockdown dgx-vision needs an enclave attestation; the design editor stays allowed", () => {
+    const loopback: CreatorEndpointDef = { id: "my-vision", providerId: "dgx-vision", label: "Vision", baseUrl: "http://127.0.0.1:8090", zone: "local", enabled: true };
+    const locked = creatorRegistryStatus({ "dgx-vision": { endpoints: [loopback], secretPresent: false } }, true);
+    expect(locked.find((p) => p.id === "dgx-vision")!.cui).toMatchObject({ allowed: false, posture: "enclave" });
+    expect(locked.find((p) => p.id === "design")!.cui.allowed).toBe(true);
+    const attested = creatorRegistryStatus({ "dgx-vision": { endpoints: [{ ...loopback, zone: "internal", enclave: true }], secretPresent: false } }, true);
+    expect(attested.find((p) => p.id === "dgx-vision")!.cui.allowed).toBe(true);
+  });
+
+  test("paid entries are honest about price and reach, and ODA is only planned", () => {
+    expect(spec("heygen").docsUrl).toBe("https://docs.heygen.com");
+    expect(spec("autodesk-aps").note).toContain("Flex tokens");
+    expect(spec("autodesk-aps").note).toContain("no self-hosted option");
+    expect(spec("bluebeam-studio").note).toContain("production app approval");
+    expect(spec("classcad").note).toContain("CLASSCAD_SHARE=off");
+    expect(spec("oda-drawings").capabilities.every((c) => c.status === "planned")).toBe(true);
+  });
+
+  // CREATOR-WHISTLE (ADR-0432 decision 6)
+  test("Whistle is an in-engine provider: no endpoint, no key, on-device, sitting right after dots.tts", () => {
+    expect(spec("whistle")).toMatchObject({
+      name: "Whistle (in-process)", group: "audio", kind: "local-service", transports: ["in-engine"], authKind: "none",
+      consentRequired: false, docsUrl: "https://huggingface.co/Cactus-Compute/whistle", cui: { posture: "on-device" },
+    });
+    expect(spec("whistle").secretEnv).toBeUndefined();
+    expect(spec("whistle").capabilities.map((c) => [c.id, c.status, c.surface])).toEqual([["stt", "available", "runtime"], ["alignment", "available", "runtime"]]);
+    expect(spec("whistle").note).toContain("no socket imports");
+    const ids = CREATOR_INTEGRATIONS.map((s) => s.id);
+    expect(ids.indexOf("whistle")).toBe(ids.indexOf("dots-tts") + 1);
+    expect(CREATOR_PROVIDER_IDS.indexOf("whistle")).toBe(CREATOR_PROVIDER_IDS.indexOf("dots-tts") + 1);
+  });
+
+  test("an in-engine transport needs no declaration: the row folds to built-in with both runtime capabilities usable", () => {
+    expect(foldProviderStatus(spec("whistle"), { endpoints: [], secretPresent: false })).toMatchObject({ state: "built-in", usable: ["stt", "alignment"], endpointCount: 0 });
+    expect(foldProviderStatus(spec("whistle"), { endpoints: [], secretPresent: false, locked: true }).cui).toMatchObject({ allowed: true, posture: "on-device" });
+  });
+
+  test("dots.tts alignment is available because Whistle measures it, and the detail says dots.tts emits none itself", () => {
+    const align = spec("dots-tts").capabilities.find((c) => c.id === "alignment")!;
+    expect(align.status).toBe("available");
+    expect(align.detail).toBe("Measured in-process by Whistle; dots.tts itself emits no timestamps.");
+  });
+});
+
+describe("enclave attestation and the CUI fold", () => {
+  const avatar = (over: Partial<CreatorEndpointDef> = {}): CreatorEndpointDef => ({
+    id: "nick-dgx-avatar", providerId: "dgx-avatar", label: "Avatar (Nick DGX)", baseUrl: "http://127.0.0.1:8088", zone: "internal", enclave: true, enabled: true, ...over,
+  });
+
+  test("enclave must be a boolean when present", () => {
+    expect(validateCreatorEndpoint(avatar()).ok).toBe(true);
+    expect(validateCreatorEndpoint(avatar({ enclave: false })).ok).toBe(true);
+    const bad = validateCreatorEndpoint({ ...avatar(), enclave: "yes" as unknown as boolean });
+    expect(bad.ok).toBe(false);
+    expect(bad.errors.join(" ")).toContain("enclave must be true or false");
+  });
+
+  test("unlocked, every provider is allowed; locked, cloud flips to refused and the enclave stays allowed", () => {
+    const ctx = { "dgx-avatar": { endpoints: [avatar()], secretPresent: false }, elevenlabs: { endpoints: [], secretPresent: true } };
+    const open = creatorRegistryStatus(ctx, false);
+    expect(open.every((p) => p.cui.allowed)).toBe(true);
+    const locked = creatorRegistryStatus(ctx, true);
+    expect(locked.find((p) => p.id === "elevenlabs")!.cui).toMatchObject({ allowed: false, posture: "cloud" });
+    expect(locked.find((p) => p.id === "heygen")!.cui.allowed).toBe(false);
+    expect(locked.find((p) => p.id === "dgx-avatar")!.cui).toMatchObject({ allowed: true, posture: "enclave" });
+    expect(locked.find((p) => p.id === "threejs")!.cui.allowed).toBe(true);
+  });
+
+  test("each declaration is listed with its own verdict and never leaks its vault reference or workflow", () => {
+    const st = foldProviderStatus(CREATOR_INTEGRATIONS.find((s) => s.id === "comfyui")!, {
+      endpoints: [endpoint({ id: "lab-comfy", baseUrl: "http://10.0.0.9:8188", zone: "internal", vaultRef: "comfyui_token", workflow: "{}" }), endpoint()],
+      secretPresent: true, locked: true,
+    });
+    expect(st.endpoints.map((e) => [e.id, e.cui.allowed])).toEqual([["lab-comfy", false], ["local-comfy", true]]);
+    expect(JSON.stringify(st.endpoints)).not.toContain("comfyui_token");
+    expect(JSON.stringify(st.endpoints)).not.toContain("workflow");
+    // The row reads allowed because a usable declaration exists, the one a route would pick.
+    expect(st.cui.allowed).toBe(true);
+  });
+
+  test("a provider whose only declaration is refused reads refused, with the reason", () => {
+    const st = foldProviderStatus(CREATOR_INTEGRATIONS.find((s) => s.id === "dgx-avatar")!, { endpoints: [avatar({ enclave: undefined })], secretPresent: false, locked: true });
+    expect(st.cui.allowed).toBe(false);
+    expect(st.cui.reason).toContain("not attested as a DGX enclave host");
+  });
+});

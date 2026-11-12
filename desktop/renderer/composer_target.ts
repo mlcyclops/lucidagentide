@@ -57,19 +57,19 @@ export function targetBadge(t: ComposerTarget): TargetBadge | null {
 }
 
 /** What a lane target CANNOT do, so the UI hides those controls instead of shipping dead ones.
- *  A lane's wire has no image block on this path, no master session config, and no goal loop. */
-export interface TargetCaps { images: boolean; modes: boolean; goalLoop: boolean; slashCommands: boolean; why: string }
+ *  A lane has no master session config and no goal loop. Images are NOT a capability: every target takes
+ *  them (P-FLEET.L19), because a lane's prompt wire carries ACP image blocks after the text (P-FLEET.L3)
+ *  exactly like the master chat. */
+export interface TargetCaps { modes: boolean; goalLoop: boolean; slashCommands: boolean; why: string }
 
 export function targetCaps(t: ComposerTarget): TargetCaps {
-  if (!isLaneTarget(t)) return { images: true, modes: true, goalLoop: true, slashCommands: true, why: "" };
+  if (!isLaneTarget(t)) return { modes: true, goalLoop: true, slashCommands: true, why: "" };
   return {
-    images: false,
     modes: false,
     goalLoop: false,
     slashCommands: false,
-    why: "A lane runs its own omp child, so the composer is only a front end for it: the lane wire carries no "
-      + "image block, so pasted images cannot be sent; modes live in the master session config the lane does "
-      + "not share, so the mode picker is hidden; the goal loop drives the master session only, so it cannot "
+    why: "A lane runs its own omp child, so the composer is only a front end for it: modes live in the master "
+      + "session config the lane does not share, so the mode picker is hidden; the goal loop drives the master session only, so it cannot "
       + "steer a lane; slash commands are expanded by the master composer and would never reach the lane. "
       + "Demote back to the main chat to use any of these.",
   };

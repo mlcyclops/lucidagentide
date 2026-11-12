@@ -15,6 +15,7 @@ import { join, dirname, basename } from "node:path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { ndjsonStream } from "./chat_stream.ts";
 import { ENGINE_EXIT_PORT_BUSY } from "./engine_boot.ts"; // P-PORTGUARD.2: the bind-failure exit code main classifies on
+import { discoveryDir, discoveryPath, removeDiscovery, writeDiscovery } from "./engine_discovery.ts"; // P-TUI.0 (ADR-0419)
 import { parentAlive, parentWatchConfig } from "./parent_watch.ts"; // P-PORTGUARD.2: never outlive the Electron main
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
@@ -36,28 +37,47 @@ import { loadChatBg, saveChatBg, type ChatBg } from "./chat_bg.ts"; // P-APPEAR.
 import { ingestCodeGraph, loadCodeGraph } from "./code_graph.ts"; // P-KG-CODE.1: workspace code graph
 import { ingestSymbolGraph, loadSymbolGraph } from "./symbol_graph.ts"; // P-KG-SYM.1: AST symbol graph
 import { assessSystem, sampleSystem, topProcesses, type ProcGroup, type ProfileIo, type SystemSnapshot, type SystemVerdict } from "./system_profile.ts"; // P-SYSRES.1: resource guard
-import { flavorInfo, buildInfoView, normalizeUiMode, resolveBuildFlavor, type UiMode } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279)
+import { flavorInfo, buildInfoView, normalizeUiMode, resolveBuildFlavor, uiModePosture, type UiMode } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279)
+import { buildLocalAgentManifest, writeLocalAgentManifest } from "./local_agent_manifest.ts"; // P-LEGIBLE.1 (ADR-0384)
+import { mcpServersForAcp } from "./settings_store.ts"; // P-LEGIBLE.1: the configured MCP servers the manifest declares
 import { APP_VERSION } from "./version.ts"; // CREATOR-0: /api/build-info reports the single-sourced version
 import {
   CREATOR_PRESSURE_PCT, CREATOR_SUSTAIN_MS, CREATOR_WARM_PCT, creatorAdmission, freshnessOf, gpuFromDcgm,
   pushCreatorSample, sampleCreatorCpu, sampleLocalGpu, sampleOf, telemetryFromAgentJson, validateRemoteTarget,
   type CreatorResourcesData, type CreatorSample, type TargetTelemetry,
 } from "./creator_monitor.ts"; // CREATOR-0 (ADR-0283): normalized CPU/GPU telemetry + job admission
-import { CREATOR_PROVIDER_IDS, creatorRegistryStatus, type CreatorCapabilityId, type CreatorEndpointDef, type CreatorProviderId, type CreatorProviderStatus } from "./creator_registry.ts"; // CREATOR-0 (ADR-0282)
+import { CREATOR_PROVIDER_IDS, creatorRegistryStatus, creatorSpec, type CreatorCapabilityId, type CreatorEndpointDef, type CreatorProviderId, type CreatorProviderStatus } from "./creator_registry.ts"; // CREATOR-0 (ADR-0282)
+import { cuiProviderVerdict, cuiRefusal, gateCreatorProvider, isLoopbackHost, type CuiVerdict } from "./cui_policy.ts"; // CUI lockdown verdict for every provider-reaching Creator route
+import { scanCreatorMailbox, type CreatorMailboxReport } from "./creator_mailbox.ts"; // lucid-creator-endpoint v1 mailbox import
+import { DgxAvatarClient, buildAvatarSpec } from "./creator_dgx_avatar.ts"; // DGX avatar service client (contract 2a)
+import { DgxCadClient, buildCadModelRequest, checkInspectName, modelRunBody, CAD_ARTIFACT_ID, CAD_MAX_UPLOAD_BYTES } from "./creator_dgx_cad.ts"; // DGX CAD service client (contract 2c)
+import {
+  DgxVisionClient, buildVisionRequest, checkVisionImage, decodeB64, isVisionOp, parseVisionResult, visionRemoteRow,
+  VISION_MAX_IMAGE_BYTES, type VisionImage, type VisionRemoteRow,
+} from "./creator_dgx_vision.ts"; // Design suite: DGX vision service client (design contract section 4)
+import { DESIGN_STATE_MAX_BYTES, DesignStore, planDesignExport, planHyperframesExport } from "./creator_design.ts"; // Design suite: state, agent-op queue, export validation
+// The child spawn shape is HyperFrames' (OpenfilmSpawn is the same type); one spawn helper serves both CLIs.
+import { planHyperframesRender, preflightHyperframes, runHyperframesRender, type HyperframesFormat, type HyperframesQuality, type HyperframesSpawn as CreatorChildSpawn } from "./creator_hyperframes.ts"; // local HyperFrames renders
+import {
+  planOpenfilmLook, planOpenfilmRender, preflightOpenfilm, runOpenfilmLook, runOpenfilmRender,
+  type OpenfilmDeps, type OpenfilmDirEntry, type OpenfilmFormat, type OpenfilmLookVerdict,
+} from "./creator_openfilm.ts"; // CREATOR-OPENFILM (ADR-0457): local OpenFilm look + render
 import { addTrack, foldLibrary, libraryLedger, libraryStats, removeTrack, trackAudio, updateTrack, type CreatorTrack, type LibraryIo, type LibraryStats, type TrackOrigin } from "./creator_library.ts"; // CREATOR-0 (ADR-0281)
 import {
   ComfyClient, applyWorkflowTemplate, artifactDir, artifactLedger, buildGif, buildSpriteSheet, decodePngDataUrl,
   decodeWireFrames, foldArtifacts, storeArtifact, type ArtifactIo, type ArtifactKind, type CompositionInput,
   type CreatorArtifact,
 } from "./creator_image.ts"; // CREATOR-IMG (ADR-0291): generation, mixing, sheets, GIFs, memes
-import { decodeTimelineDoc, openEditor, saveEdit, type EditorIo } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): the follow-along audio editor
+import { decodeTimelineDoc, measureEditorAlignment, openEditor, saveEdit, type EditorIo } from "./creator_editor.ts"; // CREATOR-2 (ADR-0286): the follow-along audio editor
 import { decodeMixGraph, mixerTracks, renderAndSaveMix } from "./creator_mixer.ts"; // CREATOR-5 (ADR-0289): the mixer
 import { openComfyProgress, runRenderPipeline, type PipelineDeps, type ScanVerdict } from "./creator_pipeline.ts"; // CREATOR-3 (ADR-0287): the video/3D pipeline + its /ws telemetry
 import { blenderJobNeed, runBlenderRender, type SpawnLike } from "./creator_blender.ts"; // CREATOR-3: Blender background renders
 import { manifestCapabilities, parseModelManifest, reconcileManifest } from "../harness/creator/model_manifest.ts"; // CREATOR-3: declared models, reconciled against the probe
 import type { MediaKind } from "../harness/creator/comfy_stream.ts"; // CREATOR-3: the closed media kinds
 import { scanAndDecide } from "../harness/security/gate.ts"; // CREATOR-3: the fail-closed gate every artifact's metadata passes
-import { ProbeCache, probeProvider, type ProbeDeps, type ProbeResult } from "./creator_probe.ts"; // CREATOR-1 (ADR-0292): capability probes
+import { ProbeCache, probeProvider, type ProbeDeps, type ProbeResult, type WhistleProbeAnswer } from "./creator_probe.ts"; // CREATOR-1 (ADR-0292): capability probes
+import { DriftActivityLog, DriftClient, defaultDriftExePaths, driftSessionEndpointDef, driftSessionPath, driftSessionStatus, parseDriftSession, planDriftLibraryImport, type DriftActivityEntry, type DriftSessionState } from "./creator_drift.ts"; // CREATOR-DRIFT: CutWire Drift over its localhost agent protocol
+import { driftOpPolicy, isDriftMutation, summarizeDriftCall } from "../harness/creator/drift_policy.ts"; // CREATOR-DRIFT: the shared CUI / mutation policy
 import {
   createJob, finishJob, jobStats, listJobs, recordJobArtifact, requestJobCancel, startJob,
   type CreatorJobKind, type JobAdmissionSnapshot, type JobIo,
@@ -80,37 +100,56 @@ import { ElevenLabsTtsBackend, ElevenLabsSttBackend, elevenLabsSpeak, listEleven
 import { TTS_PROVIDERS, mapDotsVoices, normalizeTtsProvider, resolveVoice, ttsEngineStatus, voicesForProvider, type TtsProviderInfo } from "../harness/voice/catalog.ts"; // P-VOICE.2 (ADR-0247) + P-VOICE.6 dots
 import { digestSpokenReply } from "../harness/voice/spoken_digest.ts"; // P-VOICE.6: slow-engine spoken digest
 import { parseVoiceEndpointConfig } from "../harness/voice/voice_endpoint.ts"; // P-VOICE.7: portable endpoint contract
-import { activateVoiceEndpoint, importVoiceEndpoint, removeVoiceEndpoint } from "./settings_store.ts";
-import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, sttTransportFailed } from "../harness/voice/transcription.ts";
+import { activateVoiceEndpoint, importVoiceEndpoint, removeVoiceEndpoint, type VoiceSettings } from "./settings_store.ts";
+import { enclaveHostSet, httpHost, lockdownEgressExempt, lockdownVoiceVerdict, type VoiceKind } from "./lockdown_route.ts"; // CUI lockdown: cloud voice refused, loopback/enclave engines allowed
+import { OpenAiCompatibleSttBackend, WhisperCppSttBackend, WhistleSttBackend, sttTransportFailed } from "../harness/voice/transcription.ts";
+import { WhistleClient, type WhistleTranscriber } from "../harness/voice/whistle_client.ts"; // CREATOR-WHISTLE (ADR-0432): the one in-process STT worker
+import { WHISTLE_ASSETS, WHISTLE_MODEL_SHA256, resolveWhistleDir, verifyWhistleAsset } from "./whistle_assets.ts"; // CREATOR-WHISTLE: pinned assets
+import { stageWhistleAssets } from "./whistle_stage.ts"; // CREATOR-WHISTLE: dev-run staging of the pinned assets
 import { installWhisper, removeWhisperModel, shouldAutostartWhisper, startWhisper, stopWhisper, whisperStatus as whisperRuntimeStatus, type WhisperRuntimeDeps } from "./whisper_runtime.ts"; // P-STT.2b: managed offline Whisper
 import { downloadWhisperModel, resolveWhisperBin, spawnWhisperServer } from "./whisper_manager.ts";
 import { stageWhisperBinary } from "./whisper_binary_stage.ts"; // P-STT.7: dev-run pinned-binary staging
 import { whisperServeUrl, type WhisperTier } from "./whisper_install.ts";
 import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
 import { sandboxStatus } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
-import { addGrant, applyGrantAce, consumePending, loadGrants, removeGrant, revokeGrantAce, sandboxGrantsView, saveGrants, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
-import { repoAsset } from "./repo_root.ts"; // P-SANDBOX.8: the bundled lucid-appcontainer helper, probed-root resolved (ADR-0356)
+import { addGrant, applyGrantAce, consumePending, loadGrants, managedPolicyFolderPlan, removeGrant, revokeGrantAce, sandboxGrantsView, saveGrants, setLoopbackRegistrationElevated, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
+import { repoAsset, resolvedRepo } from "./repo_root.ts"; // P-SANDBOX.8: the bundled lucid-appcontainer helper, probed-root resolved (ADR-0356)
 import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } from "./netdiag.ts";
 import { clearAllOauthCredentials, clearDisabledCredential, credentialSnapshot, disconnectCredential, landedFreshCredential } from "./auth_vault.ts";
 import { clearOauthFailure, extractOauthFailure, getOauthFailure, recordOauthFailure } from "./oauth_failure.ts";
+import { DeviceCodeScanner, deviceUrlAllowed, isShowCodeLogin, vaultProviderFor } from "./device_code.ts"; // P-PROV.3: OpenAI device-code sign-in
+import { mxcHost, resetMxcProbeCache, runMxcHostPrepElevated } from "./mxc_runtime.ts"; // P-MXC.1 (ADR-0441): the MXC executor posture + host prep
 import { GUIDE_FILES } from "./guides_manifest.ts";
+import { ARCADE_GAMES } from "./arcade_games.ts";
 import { approveBlock, dismissAllBlocks, dismissBlock, liveBlocks } from "./security_log.ts";
 import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECACK.1 (ADR-0170)
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { probeRateLimits } from "./ratelimit_probe.ts";
-import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger } from "../tools/memory_data.ts";
-import { backend, fleetLaneArgv, interjectChildEnv } from "./acp_backend.ts";
-import { FleetLaneManager } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
-import { addInterject, drainInterjects, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes
+import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger, type CodeActivity, type UsageLedger } from "../tools/memory_data.ts";
+import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, TURN_ALREADY_RUNNING, type JudgePlan } from "./acp_backend.ts";
+import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
+import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
+import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
+import { sessionLive, withLiveState, type SessionLiveSpoke } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
+import { addInterject, addPeerNote, awaitPeerReply, carryPendingNotes, drainInterjects, drainPeerNotes, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes; P-OWN.1: peer notes
+import { CheckoutRegistry, gitDirtyPaths, type CheckoutSession } from "./checkout_registry.ts"; // P-OWN.1: who is writing in which checkout
+import { WRITE_WAIT_MAX_MS, writeRefusal, type WaitView } from "./write_claims.ts"; // P-WAIT.1: file-scoped write waits
 import { browserProcesses, setBrowserProcessSource, type ProcessView } from "./process_view.ts"; // P-INTERJECT.1: the /api/processes shape + wave-2 browser seam
 import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, failAllBrowserCommands, getBrowserStatus, lastBrowserActivityAt, latestBrowserShot, setBrowserStatus, setLatestBrowserShot, waitBrowserResult } from "./browser_control.ts"; // P-BROWSER.1 (wave 2): agent-browser mailbox + status
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: shared combo parse, so a typo fails fast at the route
 import { isBrowserAction, isBrowserPageShape } from "./browser_snapshot.ts"; // P-JEV.4 (ADR-0379): the policy's act/snapshot shapes
-import { appendLaneLedger, listTimeline } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline
+import { FleetGoal } from "./fleet_goal.ts"; // P-AOS.1 (ADR-0452): the standing fleet goal + the AOS-1 heartbeat
+import { appendLaneLedger, isTimelineKind, listTimeline, readLaneLedger } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline; P-SCHED.1 reads it to recover a job's lane
+import { JobScheduler, type LedgerHit } from "./job_scheduler.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs
+import { createJob as createScheduledJob, jobTargetRepo, loadJobs, normalizeJobSpec, saveJobs, updateJob, nextFireAt } from "./scheduled_jobs.ts"; // P-SCHED.1 (aliased: creator_jobs.ts exports a createJob too, and the second import silently replaced the first at runtime)
+import { firesBetween } from "./cron.ts"; // P-SCHED.1
 import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
 import { providerAuth, typesafeKeySet, type ProviderAuthSnapshot } from "./auth_status.ts";
 import { parseJudgmentReport } from "../harness/judgment/trace_schema.ts"; // P-JEV.2 (ADR-0377): the loopback boundary for judgment traces
-import { cloneRepo, removeRecentWorkspace, setWorkspace, workspaceInfo } from "./workspace.ts";
+import { openHubWindow } from "./hub_launch.ts"; // P-TUI.2: the Fleet view's Terminal hub button
+import { createLaneWorktree, removeLaneWorktree } from "./lane_worktree.ts"; // P-FLEET.WT1: a lane in its own git worktree
+import { cloneRepo, CLONE_ROOT, hostTokenForUrl, removeRecentWorkspace, setWorkspace, workspaceInfo } from "./workspace.ts";
+import { ghToken, githubRepoChoices, localRepoChoices, observeToolCall, peekRepoContext, repoContext, type RepoChoiceSource } from "./repo_probe.ts"; // P-REPO.1 (ADR-0406)
 import { egressAllowAllManaged, egressDecision, egressPosture } from "./egress_policy.ts"; // P-PREVIEW.3b + P-NETWL.5
 import { loadWhitelist, removeEntry, saveWhitelist, setPosture, upsertEntry, type WhitelistEntry } from "./network_whitelist.ts"; // P-NETWL.2/.5: whitelist CRUD + posture
 import { probePreviewFile, readPreviewFile, toFsPath } from "./preview_file.ts";
@@ -128,12 +167,24 @@ import { injectPreviewBridge, injectPreviewShim, injectPreviewZoom } from "./pre
 import { InspectRelay } from "./preview_inspect_relay.ts"; // P-PREVIEW.6b: agent preview_inspect ↔ renderer relay
 import { parseFigmaFileKey, collectTopFrames, figmaBoardHtml, FIGMA_API, type BoardFrame } from "./figma_client.ts"; // P-FIGMA.1 (ADR-0154)
 import { designDocPath, DESIGN_DOC_NAME } from "./design_doc.ts"; // P-FIGMA.2 / P-DESIGN.1 (ADR-0154)
+import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_REF } from "./meetings_hub.ts"; // P-MEET.1: Meeting Hub client; loading it takes LUCID_MEETING_HUB_TOKEN out of process.env before any child spawns
+import { handleVaultRoutes } from "./vault_routes.ts"; // P-VAULT-V2.1 (ADR-0474): /api/vault/*; loading it takes LUCID_VAULT_MAIN_TOKEN out of process.env
+import { applyVaultEnv, vaultRedactEnv } from "./vault_env.ts"; // P-VAULT-V2.1 (ADR-0474): engine-side credential env; security review: a lane's redaction names
+import { handleVaultBackupRoutes } from "./vault_backup_routes.ts"; // P-VAULT-UI.1 (ADR-0475): /api/vault/backup|restore
+import { configureSecretRequestEndpoint, handleSecretRoutes, SECRET_AGENT_ROUTE } from "./secret_routes.ts"; // P-SECRET-INTAKE.1 (ADR-0476): /api/secret/*
+import { workspaceSecretEnv } from "./vault_env_import.ts"; // P-VAULT-ENV.1 (ADR-0477): a lane's workspace-scoped secrets
+import { upsertVaultDestination } from "./vault_destinations.ts"; // ADR-0476 x ADR-0478: a remembered secrets manager becomes a destination
+import { vaultStartupCleanup } from "./vault_lifecycle.ts"; // security review: plaintext a dead engine left behind
+import { mayHoldGlobalEnv } from "./env_name_policy.ts"; // security review SECRET-INTAKE-ENVNAME-UNRESTRICTED: the one reserved-name rule
 import { engineDesktopDir } from "./engine_launch.ts"; // P-WINBOOT.2 (ADR-0260): compiled-engine base-dir resolution
+import { ensureHiddenConsole, ompWindowsHide } from "./console_host.ts"; // P-BROWSER.4 (ADR-0415): a hidden console the omp children share
+import { setDefaultWindowsHide } from "./acp.ts";
+import { HeadedBrowserRevealer } from "./headed_browser_reveal.ts"; // P-BROWSER.5 (ADR-0456): show the headed browser omp's broker spawns hidden
 import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { discoveryHeaders, MAX_DISCOVERY_BYTES, parseDiscoveredModels, providerEnvVar, providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
-import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThemeId, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, themeId, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
+import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setSandboxWindowsMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThemeId, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, themeId, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
 // CREATOR-0: Creator endpoint + remote-target declarations, and the personalization root the build-info
 // route reports (both flavors resolve it through the same seam).
 import { listCreatorEndpoints, listCreatorTargets, personalBaseDir, removeCreatorEndpoint, removeCreatorTarget, upsertCreatorEndpoint, upsertCreatorTarget, type CreatorRemoteTargetDef } from "./settings_store.ts";
@@ -160,20 +211,156 @@ function settingsData() {
 async function transcribeClip(audio: Uint8Array, mimeType?: string, language?: string): Promise<{ text: string; note: string }> {
   const v = voiceSettings();
   const topts = { mimeType, language };
+  const refused = voiceLockdownRefusal("stt", v.sttProvider, v);
+  if (refused) return { text: "", note: refused };
   if (v.sttProvider === "elevenlabs") {
     const key = process.env.ELEVENLABS_API_KEY;
     if (!key) return { text: "", note: "Add your ElevenLabs API key (Settings \u2192 Voice), or switch STT to offline Whisper." };
     const er = await new ElevenLabsSttBackend({ apiKey: key }).transcribe(audio, topts);
     return { text: er.text, note: er.note ?? "" };
   }
+  // CREATOR-WHISTLE (ADR-0432 decision 4): the in-process model. No server, no port; a missing or
+  // mismatched asset is the note, never a silent fall-through to whisper.
+  if (v.sttProvider === "whistle") {
+    const w = await whistleClient();
+    if (!w.ok) return { text: "", note: `Whistle STT unavailable (${w.reason})` };
+    const wr = await new WhistleSttBackend(whistleTranscriber(w.client)).transcribe(audio, topts);
+    return { text: wr.text, note: wr.note };
+  }
   let r = await new WhisperCppSttBackend({ baseUrl: v.sttUrl }).transcribe(audio, topts);
   if (sttTransportFailed(r)) r = await new OpenAiCompatibleSttBackend({ baseUrl: v.sttUrl, apiKey: process.env.OPENAI_API_KEY, model: process.env.LUCID_STT_MODEL || "whisper-1" }).transcribe(audio, topts);
   return { text: r.text, note: r.note ?? "" };
 }
 
+/** CUI lockdown voice gate, run before ANY speech dispatch. Lock off: "". Lock on: cloud engines (ElevenLabs
+ *  TTS/STT, OpenAI TTS) are refused, and a local engine must point at loopback or a DGX enclave host (an
+ *  enabled enclave Local Provider, or an imported Loader voice endpoint). A refusal is AUDITED as a blocked
+ *  egress decision and returns the user-facing reason. `audit: false` is for readiness listings, which
+ *  only explain; the dispatch that would have sent content is what gets recorded. */
+function voiceLockdownRefusal(kind: VoiceKind, engine: string, v: VoiceSettings, audit = true): string {
+  const managed = managedAsksageOnly();
+  if (!asksageOnly() && !managed) return "";
+  const url = engine === "whisper" ? v.sttUrl : engine === "dots-tts" ? v.dotsTtsUrl : engine === "local-tts" ? LOCAL_TTS_URL() : undefined;
+  // Under the org-managed lock no attestation or import widens it: loopback engines only.
+  const hosts = enclaveHostSet(listLocalProviders(), managed);
+  if (!managed) for (const e of v.voiceEndpoints) { const h = httpHost(e.url); if (h) hosts.add(h); }
+  const verdict = lockdownVoiceVerdict(true, kind, engine, url, hosts);
+  if (verdict.allowed) return "";
+  if (audit) emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: `voice-lockdown-${kind}`, reason: `${engine}: ${verdict.reason}`.slice(0, 200), sessionId: backend.currentSessionId() ?? undefined });
+  return verdict.reason;
+}
+
 function whisperModelDir(): string { return join(homedir(), ".omp", "whisper"); }
 
-// P-VOICE.7: the same-machine handoff mailbox. The DGX Loader's "Send to LUCID" writes
+// ── CREATOR-WHISTLE (ADR-0432): the in-process STT + word-timing model ──────────────────────────────
+// One worker for the whole engine (the model is process-global and not thread-safe), started on the first
+// align / probe / STT call, never at boot. Resolution mirrors whisper: LUCID_WHISTLE_DIR, then the
+// packaged <resources>/whistle, then ~/.omp/whistle, which a dev run stages ON DEMAND from the pinned
+// URLs once. All three files are hashed and checked against the pins before the first needle_load; a
+// mismatch, a failed download or a dead worker is a NAMED reason, retried on the next call, never cached.
+const WHISTLE_STAGED_DIR = join(homedir(), ".omp", "whistle");
+
+function whistleDir(): string | null {
+  const r = resolveWhistleDir({
+    env: process.env,
+    exists: existsSync,
+    resourcesPath: process.env.LUCID_RESOURCES || engineDesktopDir(import.meta.dir, process.execPath, existsSync),
+    stagedDir: WHISTLE_STAGED_DIR,
+  });
+  return r ? r.dir : null;
+}
+
+/** Null until a dev run has tried to stage; then the result of that ONE attempt (a failure is the probe's
+ *  not-installed detail). */
+let whistleStage: Promise<{ ok: boolean; reason: string }> | null = null;
+
+/** The staged-or-bundled dir, staging once on a dev run that has none. `reason` names why there is none. */
+async function ensureWhistleDir(): Promise<{ ok: true; dir: string } | { ok: false; reason: string }> {
+  const found = whistleDir();
+  if (found) return { ok: true, dir: found };
+  if (!whistleStage) {
+    whistleStage = stageWhistleAssets({}, WHISTLE_STAGED_DIR).then((r) => {
+      if (r.ok) console.log(`[whistle] staged ${r.staged.length ? r.staged.join(", ") : "nothing new"} in ${r.dir}`);
+      else console.warn(`[whistle] staging failed: ${r.reason}`);
+      return { ok: r.ok, reason: r.ok ? "" : r.reason };
+    });
+  }
+  const staged = await whistleStage;
+  const after = staged.ok ? whistleDir() : null;
+  if (after) return { ok: true, dir: after };
+  return { ok: false, reason: staged.ok ? `Whistle assets are missing from ${WHISTLE_STAGED_DIR}` : staged.reason };
+}
+
+type WhistleReady = { ok: true; client: WhistleClient } | { ok: false; reason: string };
+let whistleLive: WhistleClient | null = null;
+let whistleStarting: Promise<WhistleReady> | null = null;
+
+async function startWhistle(): Promise<WhistleReady> {
+  const dir = await ensureWhistleDir();
+  if (!dir.ok) return dir;
+  const bytes: Uint8Array[] = [];
+  for (const spec of WHISTLE_ASSETS) {
+    let data: Uint8Array;
+    try { data = new Uint8Array(readFileSync(join(dir.dir, spec.name))); }
+    catch (e) { return { ok: false, reason: `${spec.name}: cannot read (${e instanceof Error ? e.message : String(e)})` }; }
+    const hasher = new Bun.CryptoHasher("sha256");
+    hasher.update(data);
+    const verdict = verifyWhistleAsset(spec, data, hasher.digest("hex"));
+    if (!verdict.ok) return { ok: false, reason: verdict.reason };
+    bytes.push(data);
+  }
+  try {
+    const client = await WhistleClient.start({ gluePath: join(dir.dir, WHISTLE_ASSETS[0]!.name), wasm: bytes[1]!, cact: bytes[2]!, modelSha256: WHISTLE_MODEL_SHA256 });
+    whistleLive = client;
+    console.log(`[whistle] worker ready (${dir.dir})`);
+    return { ok: true, client };
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** The live worker, or the reason there is none. A success is cached; a failure is not (the next call
+ *  verifies and starts again); a worker that dies mid-call is dropped by `whistleTranscriber`. */
+async function whistleClient(): Promise<WhistleReady> {
+  if (whistleLive) return { ok: true, client: whistleLive };
+  if (!whistleStarting) {
+    whistleStarting = startWhistle().finally(() => { whistleStarting = null; });
+  }
+  return whistleStarting;
+}
+
+/** A transcriber view of the live client that forgets the client when the worker reports itself dead, so
+ *  the next caller starts a fresh one instead of talking to a corpse. */
+function whistleTranscriber(client: WhistleClient): WhistleTranscriber {
+  return {
+    modelSha256: client.modelSha256,
+    async transcribe(pcm, opts) {
+      try { return await client.transcribe(pcm, opts); }
+      catch (e) {
+        if (e instanceof Error && /Whistle worker/.test(e.message) && whistleLive === client) { whistleLive = null; client.close(); }
+        throw e;
+      }
+    },
+  };
+}
+
+/** The probe's witness (creator_probe.ts `probeWhistle`): assets resolved and verified, worker started, one
+ *  second of silence decoded to empty text. Anything else is the exact reason, verbatim. */
+async function whistleProbe(): Promise<WhistleProbeAnswer> {
+  const dir = await ensureWhistleDir();
+  if (!dir.ok) return { state: "not-installed", detail: dir.reason, version: "" };
+  const w = await whistleClient();
+  if (!w.ok) return { state: "unreachable", detail: w.reason, version: "" };
+  try {
+    const t = await whistleTranscriber(w.client).transcribe(new Float32Array(16000), { wordTimestamps: false });
+    if (t.text.trim()) return { state: "unreachable", detail: "Whistle answered non-empty text for silence", version: "" };
+    return { state: "ready", detail: `Verified ${WHISTLE_ASSETS.length} pinned assets in ${dir.dir}; transcribed 1 s of silence to empty text.`, version: `whistle ${WHISTLE_MODEL_SHA256.slice(0, 12)}` };
+  } catch (e) {
+    return { state: "unreachable", detail: e instanceof Error ? e.message : String(e), version: "" };
+  }
+}
+
+// P-VOICE.7: the same-machine handoff mailbox. The Private AI Platform's "Send to LUCID" writes
 // <home>/.omp/voice_endpoints/<id>.json (ADR-0017 in that repo); LUCID auto-scans on every endpoints
 // read, so the transfer is: click there, pick it here. Per-file fail-soft: one malformed file is
 // reported by name and skipped, never fatal, and NOTHING is imported without passing the fail-closed
@@ -256,15 +443,23 @@ function whisperDeps(): WhisperRuntimeDeps {
     },
   };
 }
-import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, skipAllowed } from "./managed_config.ts";
+import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedSandboxFoldersLocked, managedSandboxLocksOn, skipAllowed } from "./managed_config.ts";
+import { mxcHostPrepSteps, planModeChange, refuseGrantPath, refuseUserFolderAdd, runtimeFolderView, sandboxControlView, type ModeRequest, type RuntimeFolderView, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
+import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, gitExe, loopbackExempted, parseOmpShellPath, prependPathOverlay, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12/.13
+import { runningEgressProxyUrl } from "../harness/runs/egress_proxy.ts";
+import { runBrokeredGit } from "./git_broker.ts"; // P-SANDBOX.17 (ADR-0399)
 import { startRelayServer, type RelayHandle } from "./collab/relay_server.ts"; // P-COLLAB.7 (ADR-0193): the optional embedded relay
 import { localBindAddresses } from "./collab/net_addrs.ts"; // P-COLLAB.14 (ADR-0199): LAN/VPN bind options
 import { asksageConfig, listDatasets, listPersonas, monthlyTokens, scanPersona, wrapPersona } from "./asksage.ts";
+import { NetProbe } from "./net_probe.ts"; // P-NETSTAT.1 (ADR-0423): the status-bar network indicator's probe
+import { probeTargetFor } from "./renderer/net_status.ts"; // P-NETSTAT.1: fixed model -> provider-host table (pure)
 import { inspectSkill, listSkills, removeSkill, rescanSkill } from "./skills_data.ts"
 import { intelNews } from "./intel_news.ts"; // P-TRIV.3 (ADR-0176): the executive Trivia Wire's news feed
 import { seedTrivia } from "./trivia_seed.ts"; // P-TRIV.4 (ADR-0191): AI re-seed the Trivia Wire (scanned, tool-free)
 import { detectElectronApp, electronLaunchPlan } from "./preview_electron.ts"; // P-PREVIEW.7 (ADR-0179)
-import { listSubagentRuns } from "./subagent_activity.ts"; // P-TASK.5 (ADR-0180): live delegation-card activity
+import { listSubagentRuns, subagentPulse } from "./subagent_activity.ts"; // P-TASK.5 (ADR-0180): live delegation-card activity; P-LIVENESS.1 pulse read
+import { listProcesses } from "./leftover_reaper.ts"; // P-LIVENESS.1 (ADR-0418): one process-table look per pulse sample
+import { PULSE_SAMPLE_MS } from "./call_pulse.ts"; // P-LIVENESS.1
 import { emitSecurityEvent } from "./audit_export.ts"; // P-PREVIEW.7: audit the user-initiated external launch
 import { spawn as spawnChild } from "node:child_process";
 import { installRegistrySkill, type RegistrySkillArtifact } from "./skills_registry.ts"
@@ -274,7 +469,7 @@ import { RelayTokenCache } from "./collab/relay_token_cache.ts"; // P-REMOTE.2c:
 import { CollabGuest } from "./collab/guest.ts"; // P-COLLAB.10 (ADR-0196): watch a shared session read-only
 import { parseShareLink } from "./collab/link.ts";
 import { importRoomKey } from "./collab/crypto.ts";
-import type { CollabOptions, SttSource } from "./collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder picks; P-REMOTE.14: voice provenance
+import type { CollabOptions, CollabTranscriptTurn, SttSource } from "./collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder picks; P-REMOTE.14: voice provenance; P-REMOTE.16: rich lane replay
 import { laneEventToChatEvent } from "./collab/lane_event_adapter.ts"; // P-PWA-FOCUS.1: lane engine event -> guest-facing ChatEvent (pure)
 import { MAX_FAVS, offeredModels } from "./renderer/model_favorites.ts"; // P-REMOTE.11b (ADR-0238): favorites-filtered guest picker (pure, DOM-free)
 import { accessCounts, buildShareAwareness, type ShareCounts } from "./collab/share_awareness.ts"; // P-PREVIEW-PWA.3 (ADR-0240): agent share-awareness preamble
@@ -283,8 +478,19 @@ import { authorizeRelayConnect } from "./managed_config.ts";
 import { collabRelayConfig, setCollabRelay, collabP2PConfig, setCollabP2P } from "./settings_store.ts";
 import { asksageOnly, sessionMode, setSessionMode } from "./settings_store.ts"; // ADR-0219: per-session CUI/Search mode; ADR-0217: the AskSage lockdown flag
 import { embeddingsConfig, setEmbeddingsConfig } from "./settings_store.ts"; // ADR-0221: BYO-embeddings config
-import { judgmentProvider, setJudgmentProvider } from "./settings_store.ts"; // P-JEV.1 (ADR-0374): the judgment backend choice
+import { judgeFailures, judgmentProvider, noteJudgeFailure, resetJudgeBans, setJudgmentProvider } from "./settings_store.ts"; // P-JEV.1 (ADR-0374): the judgment backend choice; P-JEV.5: the local-judge ledger
 import { jevActive, resolveJudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1: the lockdown clamp; P-JEV.2: the Jev-active rule
+import { JUDGE_BAN_FAILURES, judgeBanEnv } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416)
+/** P-JEV.5 (ADR-0416): the Settings > Judgment card's answer (renderer/bridge.ts JudgmentView). */
+function judgmentView(plan: JudgePlan) {
+  const ledger = judgeFailures();
+  return {
+    ...plan.resolved,
+    configured: jevActive(plan.resolved.effective, plan.keySet),
+    chain: plan.chain,
+    bans: plan.banned.map((label) => ({ label, failures: ledger[label]?.failures ?? JUDGE_BAN_FAILURES, lastError: ledger[label]?.lastError ?? "", lastAt: ledger[label]?.lastAt ?? 0 })),
+  };
+}
 import { activeAccountId, addKeyAccount, providerAccounts, removeAccount, renameAccount, setActiveAccount } from "./settings_store.ts"; // P-ACCT.1 (ADR-0375)
 import { activateOauthIdentity, disconnectOauthIdentity, listOauthRows, parkAllOauth } from "./auth_vault.ts"; // P-ACCT.1: omp-vault appliers
 import { deriveAccounts, LEGACY_KEY_ACCOUNT_ID, type AccountView } from "./account_policy.ts"; // P-ACCT.1: pure derivation
@@ -314,7 +520,24 @@ function accountsSnapshot(): Record<string, AccountView[]> {
 
 // ADR-0221: the desktop's Embedder — an ApiEmbedder built from the stored config + the vault secret injected as
 // LUCID_EMBEDDINGS_KEY by main, or null when semantic search is off/incomplete (retrieval stays lexical).
-function desktopEmbedder() { return resolveApiEmbedder(embeddingsConfig() ?? undefined, process.env.LUCID_EMBEDDINGS_KEY); }
+// CUI lockdown: embedding sends KB page text to the endpoint, so under lockdown it must be loopback or a DGX
+// enclave host (user lock only); otherwise semantic search is OFF (retrieval stays lexical) and the refusal is
+// audited once per endpoint host rather than on every query.
+let embedLockAuditedHost = "";
+function desktopEmbedder() {
+  const cfg = embeddingsConfig() ?? undefined;
+  const managed = managedAsksageOnly();
+  if (cfg?.enabled && (asksageOnly() || managed) && !lockdownEgressExempt(cfg.baseUrl, enclaveHostSet(listLocalProviders(), managed))) {
+    const host = httpHost(cfg.baseUrl) ?? "(invalid URL)";
+    if (embedLockAuditedHost !== host) {
+      embedLockAuditedHost = host;
+      emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "embeddings-lockdown", reason: `CUI lockdown: embeddings endpoint ${host} is neither on this workstation nor a DGX enclave host; semantic search is off`.slice(0, 200) });
+    }
+    return null;
+  }
+  embedLockAuditedHost = "";
+  return resolveApiEmbedder(cfg, process.env.LUCID_EMBEDDINGS_KEY);
+}
 
 // ADR-0221: (re)build a KG's SEMANTIC vector index from its COMPILED PAGES — the canonical, always-available
 // corpus (so incremental ingest AND the explicit "re-index" action stay consistent). Idempotent: clears the
@@ -343,6 +566,8 @@ import { kbScanner, kbStore, kgEntry, listKgs, activeKgId, createKg, renameKg, s
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.ts"
+import { installPluginFromUrl, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462)
+import { PluginRuntime, resolvePluginNode } from "./plugins/runtime.ts" // P-PLUGINS.2 (ADR-0462)
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
 import { retrieveKnowledge, type RetrieveMode, type RetrieveArgs } from "../harness/kb/retrieve.ts"
@@ -369,7 +594,9 @@ function markWorkspaceSetupAsked(path: string): void {
   s.workspaceSetupAsked = Object.fromEntries(keep);
   saveSettings(s);
 }
-import { recordSkillActivated } from "./skills_log.ts";
+import { EVENTS_LOG_PATH, recordSkillActivated } from "./skills_log.ts";
+import { CONTROLLER_ROUTES, handleController, type ControllerDeps } from "./controller/routes.ts"; // P-CTRL.2 (ADR-0438)
+import { PairingStore, type Pairing } from "./controller/store.ts"; // P-CTRL.2: the hashed pairing store
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
 import { addReportToKg, agentRecall, agentRetain, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unrelateEntities } from "./personal.ts";
@@ -379,13 +606,14 @@ import { readEditorFile, saveEditorFile } from "./editor.ts";
 import { cancelImport, importJobStatus, startImport } from "./import_job.ts";
 import type { CompleteFn } from "../harness/personal/distiller.ts";
 import { homedir } from "node:os";
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, statSync, openSync, fstatSync, closeSync } from "node:fs";
 import { listDir } from "./fs_browse.ts";
 import { pickFolderNative } from "./native_dialog.ts"; // P-FS.2 (ADR-0265): real OS folder dialog for the browser build
 import { DIAL_TYPES, type LoopDial } from "./exec_policy.ts";
 import { audit } from "./audit_export.ts";
+import { handleComplianceRoutes } from "./compliance_routes.ts"; // P-COMPLY.1 (ADR-0479)
 import { isRiskTier, managedWorkspaceRoots } from "./managed_config.ts";
-import { isAllowedRequest, reqShape, tokenValid } from "./origin_guard.ts";
+import { apiAuthorized, isAllowedRequest, reqShape, tokenValid } from "./origin_guard.ts";
 
 /** Sanitize an untrusted /api/goal `dial` payload into a LoopDial — only known command types + valid
  *  risk tiers survive; everything else is dropped (the backend clamps it by the managed ceiling anyway). */
@@ -405,7 +633,9 @@ import { Db } from "../harness/memory/db.ts";
 import type { ImportVendor } from "../harness/personal/import_adapters.ts";
 import type { CuiDesignation } from "../harness/export/vault_export.ts";
 
-applyEnv(); // make stored API keys available to a spawned omp acp
+vaultStartupCleanup(); // security review: re-blank a `.env` and wipe secret temp folders a killed or crashed engine left, before anything else
+applyEnv(mayHoldGlobalEnv); // make stored API keys available to a spawned omp acp (never under a reserved env name)
+applyVaultEnv(); // P-VAULT-V2.1 (ADR-0474): credentials the engine vault holds, under the env names main used to inject
 if (loadSettings().headroomEnabled) startHeadroom(); // resume the opt-in compression proxy
 
 // P-COLLAB.3 (ADR-0192): the one live-share host for this backend. Real deps: a CollabSocket over the
@@ -670,9 +900,23 @@ const collabManager = new CollabManager({
   // next token. The lane manager already returns a COPY; the explicit per-turn map is the deliberate part.
   // LaneTurnRecord and CollabTranscriptTurn are structurally compatible TODAY, so passing the array
   // straight through would typecheck - and would silently ship any future ENGINE-only field (cwd, model,
-  // internal ids) to a remote guest the moment someone widens LaneTurnRecord. Naming role+text here is
+  // internal ids) to a remote guest the moment someone widens LaneTurnRecord. Naming the fields here is
   // what stops that: a new engine field cannot ride along, it has to be added on purpose.
-  laneTranscript: (laneId) => fleet.laneTranscript(laneId).map((t) => ({ role: t.role, text: t.text })),
+  // P-REMOTE.16 (ADR-0431): the replay is RICH (thinking / tool records with code + diffstat / error) at
+  // fleet-lane parity, and the lane's IN-FLIGHT turn rides last as `live: true` so a guest that taps a
+  // working lane sees the work so far. The host bounds the whole replay under the relay frame budget.
+  laneTranscript: (laneId) => {
+    const turns: CollabTranscriptTurn[] = fleet.laneTranscript(laneId).map((t) => {
+      const turn: CollabTranscriptTurn = { role: t.role, text: t.text };
+      if (t.thinking !== undefined) turn.thinking = t.thinking;
+      if (t.tools) turn.tools = t.tools;
+      if (t.error !== undefined) turn.error = t.error;
+      return turn;
+    });
+    const live = fleet.laneLiveTurn(laneId);
+    if (live) turns.push(live);
+    return turns;
+  },
   // P-COLLAB.18 (ADR-0204): host-authoritative audit — a guest joined/left the RELAY share. Metadata only.
   onParticipant: (kind, guest) => {
     const meta = { transport: "relay" as const, access: guest.access, roomId: collabManager.status().roomId, guest: guest.name };
@@ -723,7 +967,9 @@ setInterval(() => {
 }, 5000);
 
 // 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
-let codeActivityCache: { at: number; data: ReturnType<typeof codeActivity> } | null = null;
+let codeActivityCache: { at: number; data: Promise<CodeActivity> } | null = null; // P-BOOTPERF.1: async, single-flight
+// P-NETSTAT.1 (ADR-0423): one probe window per engine, shared by every renderer that polls it.
+const netProbe = new NetProbe();
 // P-PERF.3: the dashboard poll hammers these obs-DB reads (~every 4s). Each can take SECONDS as the DB grows,
 // and they run on the server's single event loop — so overlapping polls pile up and stall model streaming
 // (the "replies slow coming back" symptom). Memoize with SINGLE-FLIGHT (concurrent polls share one in-flight
@@ -735,8 +981,8 @@ function securitySnapshotMemo(): ReturnType<typeof securitySnapshot> {
   if (!secSnapMemo || t - secSnapMemo.at > SNAP_TTL_MS) secSnapMemo = { at: t, p: securitySnapshot() };
   return secSnapMemo.p; // concurrent callers await the SAME query
 }
-let usageMemo: { at: number; data: ReturnType<typeof usageLedger> } | null = null;
-function usageLedgerMemo(): ReturnType<typeof usageLedger> {
+let usageMemo: { at: number; data: Promise<UsageLedger> } | null = null; // P-BOOTPERF.1: async, single-flight
+function usageLedgerMemo(): Promise<UsageLedger> {
   const t = Date.now();
   if (!usageMemo || t - usageMemo.at > SNAP_TTL_MS) usageMemo = { at: t, data: usageLedger() };
   return usageMemo.data;
@@ -800,12 +1046,37 @@ const CREATOR_SECRET_ENV: Record<string, string> = {
   elevenlabs: "ELEVENLABS_API_KEY",
   suno: "LUCID_SUNO_TOKEN",
   comfyui: "LUCID_COMFY_TOKEN",
+  heygen: "HEYGEN_API_KEY",
+  "autodesk-aps": "LUCID_APS_TOKEN",
+  "bluebeam-studio": "LUCID_BLUEBEAM_TOKEN",
+  classcad: "LUCID_CLASSCAD_KEY",
+  drift: "DRIFT_MCP_TOKEN",
 };
+
+// CREATOR-DRIFT: Drift writes mcp-session.json while Agent access is on and removes it when it goes off, so
+// the file is read fresh on every use (read-then-parse: a vanished file is simply "no session"). The token
+// inside it is only ever handed to DriftClient for the Authorization header.
+function driftSessionState(): DriftSessionState {
+  const path = driftSessionPath(process.env, process.platform, homedir());
+  let text: string;
+  try { text = readFileSync(path, "utf8"); }
+  catch (e) {
+    const code = e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : "";
+    return { path, session: null, error: code === "ENOENT" ? "Agent access is off (no session file)." : `The session file could not be read${code ? ` (${code})` : ""}.` };
+  }
+  const session = parseDriftSession(text);
+  return { path, session, error: session ? "" : "The session file is incomplete: turn Agent access off and on in Drift." };
+}
+// The in-memory collaboration feed (agent and user calls alike) and the version the last initialize reported.
+const driftActivity = new DriftActivityLog();
+let driftVersion = "";
 
 interface CreatorRegistryData extends CreatorLibraryData {
   providers: CreatorProviderStatus[];
   /** CREATOR-1: the last probe per provider, so the UI can show what was proven and how fresh it is. */
   probes: ProbeResult[];
+  /** The CUI lockdown (asksageLocked semantics) the per-provider `cui` verdicts were folded under. */
+  cui: { lockdown: boolean };
 }
 // CREATOR-1 (ADR-0292): the last probe per provider. In memory by design - a capability answer goes stale
 // the moment a node is installed or a VPN drops, so it is never persisted as if it were fact.
@@ -815,9 +1086,12 @@ function creatorSecretFor(id: CreatorProviderId): string {
   const env = CREATOR_SECRET_ENV[id];
   if (env && (process.env[env] ?? "").trim()) return process.env[env]!.trim();
   const ref = listCreatorEndpoints().find((e) => e.enabled && e.providerId === id && !!e.vaultRef)?.vaultRef;
-  if (!ref) return "";
-  const name = `LUCID_CREATOR_TARGET_${ref.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}`;
-  return (process.env[name] ?? "").trim();
+  const name = ref ? `LUCID_CREATOR_TARGET_${ref.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}` : "";
+  const fromVault = name ? (process.env[name] ?? "").trim() : "";
+  if (fromVault) return fromVault;
+  // CREATOR-DRIFT: with no env var and no vault target, Drift's own session file carries the token.
+  if (id === "drift") return driftSessionState().session?.token ?? "";
+  return "";
 }
 
 const probeDeps: ProbeDeps = {
@@ -827,6 +1101,10 @@ const probeDeps: ProbeDeps = {
   now: () => Date.now(),
   secret: creatorSecretFor,
   timeoutMs: 8000,
+  driftSession: driftSessionState,
+  platform: process.platform,
+  env: process.env,
+  whistle: whistleProbe, // CREATOR-WHISTLE (ADR-0432): the engine's own in-process witness
 };
 
 function creatorRegistryData(): CreatorRegistryData {
@@ -838,11 +1116,304 @@ function creatorRegistryData(): CreatorRegistryData {
     const env = CREATOR_SECRET_ENV[id];
     // Honest "a credential is registered": either the engine env carries it, or the user stored one in the
     // vault and the declaration references it by NAME. Nothing here reads a secret value.
-    const secretPresent = !!(env && (process.env[env] ?? "").trim()) || mine.some((e) => e.enabled && !!e.vaultRef);
+    let secretPresent = !!(env && (process.env[env] ?? "").trim()) || mine.some((e) => e.enabled && !!e.vaultRef);
+    let endpoints: CreatorEndpointDef[] = mine;
+    // CREATOR-DRIFT: Drift's own Agent access session stands in for a declaration (and its token for the
+    // credential) when the user declared nothing. The status row sees a loopback endpoint, never the token.
+    if (id === "drift" && !mine.some((e) => e.enabled)) {
+      const s = driftSessionState().session;
+      if (s) { endpoints = [...mine, driftSessionEndpointDef(s)]; secretPresent = true; }
+    }
     // CREATOR-1: `ready` now requires a LIVE probe that attested something. An expired answer is dropped.
-    byProvider[id] = { endpoints: mine, secretPresent, discovered: probeCache.discovered(id, now) };
+    byProvider[id] = { endpoints, secretPresent, discovered: probeCache.discovered(id, now) };
   }
-  return { providers: creatorRegistryStatus(byProvider), probes: probeCache.all(), ...creatorLibraryData() };
+  const lockdown = creatorLocked();
+  return { providers: creatorRegistryStatus(byProvider, lockdown), probes: probeCache.all(), cui: { lockdown }, ...creatorLibraryData() };
+}
+
+// ---- CUI lockdown for Creator providers (contract section 4) ----
+// The lockdown IS the AskSage lock (ADR-0217/0218/0219): the user's flag OR the org-managed one, exactly what
+// acp_backend's asksageLocked() reads. No second toggle. Every route that reaches a provider calls
+// creatorGate first; a refusal is audited through the same SecurityEvent sink as the lockdown egress block.
+
+const creatorLocked = (): boolean => asksageOnly() || managedAsksageOnly();
+
+function creatorGate(providerId: CreatorProviderId, ep: CreatorEndpointDef | undefined): CuiVerdict {
+  return gateCreatorProvider(creatorLocked(), creatorSpec(providerId), ep, (ev) => {
+    emitSecurityEvent({
+      category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "creator-cui-lockdown",
+      reason: `Creator provider ${ev.providerId}${ev.endpointId ? ` (${ev.endpointId})` : ""} refused under CUI lockdown: ${ev.reason}`.slice(0, 200),
+    });
+  });
+}
+
+/** The declaration a route uses: the named one when the caller picked an id, else the first enabled one the
+ *  lockdown allows, else the first enabled one (whose refusal the gate then reports). Mirrors the registry row. */
+function creatorEndpointFor(providerId: CreatorProviderId, endpointId?: string): CreatorEndpointDef | undefined {
+  const enabled = listCreatorEndpoints().filter((e) => e.enabled && e.providerId === providerId);
+  if (endpointId) return enabled.find((e) => e.id === endpointId);
+  const spec = creatorSpec(providerId);
+  const locked = creatorLocked();
+  const declared = enabled.find((e) => cuiProviderVerdict(locked, spec, e).allowed) ?? enabled[0];
+  if (declared || providerId !== "drift") return declared;
+  // CREATOR-DRIFT: no declaration, so Drift's own Agent access session is the endpoint when it parses.
+  const s = driftSessionState().session;
+  return s ? driftSessionEndpointDef(s) : undefined;
+}
+
+/** The dots.tts voice backend as a Creator declaration, so the avatar route gates its speech step with the
+ *  same verdict. A Creator dots-tts declaration for the same URL carries the user's own attestation; else an
+ *  imported voice endpoint written by the Private AI Platform attests the enclave; else loopback counts as on-device. */
+function dotsTtsEndpointDef(url: string): CreatorEndpointDef {
+  const base = url.replace(/\/+$/, "");
+  const declared = listCreatorEndpoints().find((e) => e.enabled && e.providerId === "dots-tts" && (e.baseUrl ?? "").replace(/\/+$/, "") === base);
+  if (declared) return declared;
+  const v = voiceSettings();
+  const active = v.voiceEndpoints.find((e) => e.id === v.activeVoiceEndpointId && e.url.replace(/\/+$/, "") === base);
+  let loopback = false;
+  try { loopback = isLoopbackHost(new URL(base).hostname); } catch { loopback = false; }
+  return {
+    id: "voice-dots-tts", providerId: "dots-tts", label: active?.label ?? "dots.tts voice endpoint", baseUrl: base,
+    zone: loopback ? "local" : "internal", ...(active && /^dgx-loader\b/i.test(active.source ?? "") ? { enclave: true } : {}), enabled: true,
+  };
+}
+
+// lucid-creator-endpoint v1: the Private AI Platform writes <personal dir>/creator_endpoints/<id>.json. Scanned at
+// engine start (Creator builds) and on POST /api/creator/endpoint/import-mailbox.
+const creatorEndpointMailboxDir = (): string => join(personalBaseDir(), "creator_endpoints");
+function scanCreatorEndpointMailbox(): CreatorMailboxReport {
+  return scanCreatorMailbox({
+    listJson: (dir) => readdirSync(dir),
+    readText: (path) => readFileSync(path, "utf8"),
+    endpoints: () => listCreatorEndpoints(),
+    upsert: (def) => upsertCreatorEndpoint(def),
+  }, creatorEndpointMailboxDir());
+}
+
+// The avatar service's own job id, per Creator job, so GET /api/creator/avatar/job survives an engine restart.
+const avatarRemoteLedger = (): string => join(CREATOR_DIR, "jobs", "avatar_remote.jsonl");
+interface AvatarRemoteRow { jobId: string; endpointId: string; remoteJobId: string; artifactId?: string }
+function avatarRemoteRow(jobId: string): AvatarRemoteRow | null {
+  let found: AvatarRemoteRow | null = null;
+  for (const line of jobIo.readText(avatarRemoteLedger()).split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const r = JSON.parse(line) as Partial<AvatarRemoteRow>;
+      if (r.jobId === jobId && typeof r.endpointId === "string" && typeof r.remoteJobId === "string") found = { jobId, endpointId: r.endpointId, remoteJobId: r.remoteJobId, ...(typeof r.artifactId === "string" ? { artifactId: r.artifactId } : {}) };
+    } catch { /* torn line */ }
+  }
+  return found;
+}
+
+/** GET /api/creator/avatar/job's answer. `artifactId` appears once the video is in the Creator library. */
+interface AvatarJobView { jobId: string; state: string; stage: string; message: string; error?: string; artifactId?: string }
+type AvatarJobReply = { ok: true; data: AvatarJobView } | { ok: false; error: string; data?: { cui: CuiVerdict } | { jobId: string } };
+// One download per job: a second poll while the first is storing the video reports progress, not a duplicate.
+const avatarFinalizing = new Set<string>();
+
+/** Poll the box for one avatar job and, on `done`, pull the composed video (else the plain avatar render)
+ *  into the Creator library as a `video` artifact, settling the ledger job. Remote text is bounded data. */
+async function avatarJobView(jobId: string): Promise<AvatarJobReply> {
+  const row = avatarRemoteRow(jobId);
+  if (!row) return { ok: false, error: "That is not an avatar job this LUCID started." };
+  const job = listJobs(jobIo, CREATOR_DIR).find((j) => j.id === jobId);
+  if (row.artifactId || job?.state === "done") {
+    const artifactId = row.artifactId ?? job?.artifacts[0] ?? "";
+    return { ok: true, data: { jobId, state: "done", stage: "done", message: "The video is in the Creator library.", ...(artifactId ? { artifactId } : {}) } };
+  }
+  if (job && (job.state === "failed" || job.state === "cancelled" || job.state === "refused")) {
+    return { ok: true, data: { jobId, state: job.state, stage: "done", message: job.error || `The job ${job.state}.`, ...(job.error ? { error: job.error } : {}) } };
+  }
+  const ep = creatorEndpointFor("dgx-avatar", row.endpointId);
+  if (!ep?.baseUrl) return { ok: false, error: `The avatar endpoint ${row.endpointId} is no longer declared or enabled.`, data: { jobId } };
+  const verdict = creatorGate("dgx-avatar", ep);
+  if (!verdict.allowed) return cuiRefusal(verdict);
+  const client = new DgxAvatarClient({ baseUrl: ep.baseUrl });
+  if (job?.cancelRequested) await client.cancel(row.remoteJobId);
+  const st = await client.job(row.remoteJobId);
+  if (!st.ok) return { ok: false, error: st.error, data: { jobId } };
+  const s = st.data;
+  if (s.state === "failed" || s.state === "cancelled") {
+    const err = s.error || s.message || `the avatar render ${s.state}`;
+    finishJob(jobIo, CREATOR_DIR, jobId, s.state === "failed" ? "failed" : "cancelled", err);
+    return { ok: true, data: { jobId, state: s.state, stage: s.stage, message: s.message, error: err } };
+  }
+  if (s.state !== "done") return { ok: true, data: { jobId, state: s.state, stage: s.stage, message: s.message } };
+  if (avatarFinalizing.has(jobId)) return { ok: true, data: { jobId, state: "running", stage: "done", message: "Downloading the video into the Creator library." } };
+  avatarFinalizing.add(jobId);
+  try {
+    const variant = s.outputs.composed ? "composed" : "avatar";
+    const v = await client.video(row.remoteJobId, variant);
+    if (!v.ok) {
+      finishJob(jobIo, CREATOR_DIR, jobId, "failed", v.error);
+      return { ok: true, data: { jobId, state: "failed", stage: "done", message: v.error, error: v.error } };
+    }
+    const stored = storeArtifact(artifactIo, CREATOR_DIR, { kind: "video", bytes: v.data.bytes, mime: v.data.mime, width: 0, height: 0, source: "dgx-avatar", prompt: job?.label ?? "", model: variant });
+    if (!stored.ok || !stored.artifact) {
+      const err = stored.error ?? "The avatar video could not be stored.";
+      finishJob(jobIo, CREATOR_DIR, jobId, "failed", err);
+      return { ok: true, data: { jobId, state: "failed", stage: "done", message: err, error: err } };
+    }
+    recordJobArtifact(jobIo, CREATOR_DIR, jobId, stored.artifact.id);
+    finishJob(jobIo, CREATOR_DIR, jobId, "done", "");
+    jobIo.appendLine(avatarRemoteLedger(), JSON.stringify({ ...row, artifactId: stored.artifact.id }));
+    return { ok: true, data: { jobId, state: "done", stage: "done", message: `Stored the ${variant} video in the Creator library.`, artifactId: stored.artifact.id } };
+  } finally { avatarFinalizing.delete(jobId); }
+}
+
+/** A dgx-cad output's library kind and mime, by its declared kind (else its file extension). SVG previews
+ *  ride the response inline and are never stored: the library refuses SVG as a script risk. */
+function cadArtifactKind(a: { kind: string; name: string }): { kind: ArtifactKind; mime: string } | null {
+  const k = (a.kind || a.name.split(".").pop() || "").toLowerCase();
+  if (k === "step" || k === "stp") return { kind: "model-3d", mime: "model/step" };
+  if (k === "stl") return { kind: "model-3d", mime: "model/stl" };
+  if (k === "dxf") return { kind: "drawing", mime: "image/vnd.dxf" };
+  return null;
+}
+
+// ---- Design suite: the Design editor's state + agent-op queue, and the DGX vision service ----
+// The document lives in the renderer; the engine keeps only the last validated copy in memory (no CUI on disk
+// from here) plus the queue of agent op batches. Vision jobs (decompose, upscale) ride the Creator job ledger
+// with a remote-id row, like the avatar service, so a poll survives an engine restart.
+
+const designStore = new DesignStore();
+const visionRemoteLedger = (): string => join(CREATOR_DIR, "jobs", "vision_remote.jsonl");
+// One artifact download per job: a second poll while the first is storing reports progress, not a duplicate.
+const visionFinalizing = new Set<string>();
+/** The engine's request body limit (Bun's default maxRequestBodySize). */
+const ENGINE_MAX_BODY = 128 * 1024 * 1024;
+
+/** Read a JSON body of at most `max` bytes. */
+async function readJsonCapped(req: Request, max: number): Promise<{ ok: true; body: unknown; bytes: number } | { ok: false; error: string }> {
+  const limitMb = Math.round(max / (1024 * 1024));
+  if (Number(req.headers.get("content-length") ?? "0") > max) return { ok: false, error: `That request is over the ${limitMb} MB limit.` };
+  let text: string;
+  try { text = await req.text(); } catch { return { ok: false, error: "That request body could not be read." }; }
+  if (text.length > max) return { ok: false, error: `That request is over the ${limitMb} MB limit.` };
+  try { return { ok: true, body: JSON.parse(text), bytes: text.length }; } catch { return { ok: false, error: "That request was not JSON." }; }
+}
+
+const VISION_INPUT_MIMES: readonly string[] = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/apng"];
+
+/** A vision call's input: inline `{ dataB64 }` or a library `{ artifactId }`, sniffed and budget-checked. */
+function visionImageFrom(raw: unknown): { ok: true; image: VisionImage } | { ok: false; error: string } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "Send image: { dataB64 } or { artifactId }." };
+  let bytes: Uint8Array;
+  if ("artifactId" in raw && typeof raw.artifactId === "string") {
+    const id = raw.artifactId;
+    const art = creatorArtifacts().find((a) => a.id === id);
+    if (!art) return { ok: false, error: "That artifact is not in the library." };
+    if (!VISION_INPUT_MIMES.includes(art.mime)) return { ok: false, error: `That artifact is ${art.mime}, not an image the vision service takes.` };
+    try { bytes = new Uint8Array(readFileSync(join(artifactDir(CREATOR_DIR), art.file))); }
+    catch { return { ok: false, error: "That artifact's file is missing." }; }
+  } else {
+    const d = decodeB64("dataB64" in raw ? raw.dataB64 : undefined, VISION_MAX_IMAGE_BYTES);
+    if (!d.ok) return { ok: false, error: `The image was refused: ${d.error}.` };
+    bytes = d.bytes;
+  }
+  return checkVisionImage(bytes);
+}
+
+type VisionJobReply = { ok: true; data: Record<string, unknown> } | { ok: false; error: string; data?: { cui: CuiVerdict } | { jobId: string } };
+
+/** Poll the box for one vision job. On `done` the result is validated against the input image; an upscale
+ *  too big to ride inline is downloaded into the Creator library (kind image) and returned as that artifact. */
+async function visionJobView(jobId: string): Promise<VisionJobReply> {
+  const row: VisionRemoteRow | null = visionRemoteRow(jobIo.readText(visionRemoteLedger()), jobId);
+  if (!row) return { ok: false, error: "That is not a vision job this LUCID started." };
+  const job = listJobs(jobIo, CREATOR_DIR).find((j) => j.id === jobId);
+  if (job && (job.state === "failed" || job.state === "cancelled" || job.state === "refused")) {
+    return { ok: true, data: { jobId, state: job.state === "failed" ? "error" : "cancelled", progress: 1, message: job.error, ...(job.error ? { error: job.error } : {}) } };
+  }
+  const ep = creatorEndpointFor("dgx-vision", row.endpointId);
+  if (!ep?.baseUrl) return { ok: false, error: `The vision endpoint ${row.endpointId} is no longer declared or enabled.`, data: { jobId } };
+  const verdict = creatorGate("dgx-vision", ep);
+  if (!verdict.allowed) return cuiRefusal(verdict);
+  const client = new DgxVisionClient({ baseUrl: ep.baseUrl });
+  const st = await client.job(row.remoteJobId);
+  if (!st.ok) return { ok: false, error: st.error, data: { jobId } };
+  const s = st.data;
+  if (s.state === "error" || s.state === "cancelled") {
+    const err = s.error || s.message || `the vision ${row.op} ${s.state === "error" ? "failed" : "was cancelled"}`;
+    finishJob(jobIo, CREATOR_DIR, jobId, s.state === "error" ? "failed" : "cancelled", err);
+    return { ok: true, data: { jobId, state: s.state, progress: s.progress, message: s.message, error: err } };
+  }
+  if (s.state !== "done") return { ok: true, data: { jobId, state: s.state, progress: s.progress, message: s.message } };
+  const parsed = parseVisionResult(row.op, s.result, { width: row.width, height: row.height }, row.scale);
+  if (!parsed.ok) {
+    finishJob(jobIo, CREATOR_DIR, jobId, "failed", parsed.error);
+    return { ok: true, data: { jobId, state: "error", progress: 1, message: parsed.error, error: parsed.error } };
+  }
+  let result: Record<string, unknown> = parsed.data;
+  const remoteArtifact = typeof result.artifactId === "string" ? result.artifactId : "";
+  if (row.op === "upscale" && remoteArtifact) {
+    const ow = row.width * row.scale;
+    const oh = row.height * row.scale;
+    const known = row.artifactId ? creatorArtifacts().find((a) => a.id === row.artifactId) : undefined;
+    if (known) result = { width: ow, height: oh, artifact: known };
+    else {
+      if (visionFinalizing.has(jobId)) return { ok: true, data: { jobId, state: "running", progress: 1, message: "Downloading the upscaled image into the Creator library." } };
+      visionFinalizing.add(jobId);
+      try {
+        const dl = await client.artifact(remoteArtifact, ow, oh);
+        if (!dl.ok) {
+          finishJob(jobIo, CREATOR_DIR, jobId, "failed", dl.error);
+          return { ok: true, data: { jobId, state: "error", progress: 1, message: dl.error, error: dl.error } };
+        }
+        const stored = storeArtifact(artifactIo, CREATOR_DIR, { kind: "image", bytes: dl.data.bytes, mime: "image/png", width: ow, height: oh, source: "dgx-vision", prompt: `Upscale ${row.scale}x`, model: "upscale" });
+        if (!stored.ok || !stored.artifact) {
+          const err = stored.error ?? "The upscaled image could not be stored.";
+          finishJob(jobIo, CREATOR_DIR, jobId, "failed", err);
+          return { ok: true, data: { jobId, state: "error", progress: 1, message: err, error: err } };
+        }
+        recordJobArtifact(jobIo, CREATOR_DIR, jobId, stored.artifact.id);
+        jobIo.appendLine(visionRemoteLedger(), JSON.stringify({ ...row, artifactId: stored.artifact.id }));
+        result = { width: ow, height: oh, artifact: stored.artifact };
+      } finally { visionFinalizing.delete(jobId); }
+    }
+  }
+  finishJob(jobIo, CREATOR_DIR, jobId, "done", "");
+  return { ok: true, data: { jobId, state: "done", progress: 1, message: s.message, result } };
+}
+
+/** HyperFrames and OpenFilm run as a fixed argument vector with an explicit env (never the engine's). No shell. */
+const creatorChildSpawn: CreatorChildSpawn = async (argv, opts) => {
+  const proc = Bun.spawn([...argv], { cwd: opts.cwd, env: opts.env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+  const timer = setTimeout(() => { try { proc.kill(); } catch { /* already exited */ } }, opts.timeoutMs);
+  try {
+    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    return { code, stdout: stdout.slice(-20_000), stderr: stderr.slice(-20_000) };
+  } finally { clearTimeout(timer); }
+};
+
+// CREATOR-OPENFILM (ADR-0457): the look verdicts this engine produced, keyed by job id. Bounded; the oldest goes
+// first. Job state, error, and artifacts are the ledger's; only the parsed verdict lives here.
+const OPENFILM_VERDICTS_MAX = 64;
+const openfilmVerdicts = new Map<string, OpenfilmLookVerdict>();
+function rememberOpenfilmVerdict(jobId: string, verdict: OpenfilmLookVerdict): void {
+  openfilmVerdicts.delete(jobId);
+  openfilmVerdicts.set(jobId, verdict);
+  while (openfilmVerdicts.size > OPENFILM_VERDICTS_MAX) {
+    const oldest = openfilmVerdicts.keys().next().value;
+    if (oldest === undefined) break;
+    openfilmVerdicts.delete(oldest);
+  }
+}
+
+/** The OpenFilm runners' real I/O: node:fs, the shared child spawn, and the Creator job + artifact ledgers. */
+function openfilmDeps(): OpenfilmDeps {
+  return {
+    spawn: creatorChildSpawn,
+    exists: (path) => existsSync(path),
+    readText: (path) => readFileSync(path, "utf8"),
+    readBytes: (path) => new Uint8Array(readFileSync(path)),
+    fileSize: (path) => statSync(path).size,
+    listDir: (dir) => readdirSync(dir, { withFileTypes: true })
+      .map((d): OpenfilmDirEntry => ({ name: d.name, kind: d.isDirectory() ? "dir" : d.isFile() ? "file" : "other" })),
+    writeText: (path, text) => writeFileSync(path, text),
+    ensureDir: (dir) => { mkdirSync(dir, { recursive: true }); },
+    jobIo, artifactIo, env: process.env, now: () => Date.now(),
+  };
 }
 
 // ---- CREATOR-1: jobs ----
@@ -1130,6 +1701,28 @@ const CREATOR_DIR = process.env.LUCID_CREATOR_DIR || join(process.env.LUCID_DATA
 // no other channel from this child back up to its parent). Still one random value per launch; a
 // standalone `bun run desktop/dev.ts` has no main and mints its own exactly as before.
 const TOKEN = process.env.LUCID_MAIN_TOKEN || randomBytes(32).toString("hex");
+// P-SANDBOX.15 (ADR-0396): whether an Electron main launched us (it delivers TOKEN to its window over IPC,
+// so the served HTML must not carry it). Captured, then the variable is REMOVED from process.env so no omp
+// child or fleet lane (they inherit process.env) ever holds the UI token.
+const HAS_MAIN = !!process.env.LUCID_MAIN_TOKEN;
+delete process.env.LUCID_MAIN_TOKEN;
+// P-BROWSER.4 (ADR-0415): before any omp child spawns, own a HIDDEN console window so those children can
+// attach to it (acp.ts spawns them with windowsHide only when there is none). omp decides from its own
+// console whether ITS children (the shared headed Chromium, the Python kernel, hub daemons) are spawned
+// with SW_HIDE; without this the agent's visible browser came up as a white, unclosable rectangle.
+{
+  const con = ensureHiddenConsole();
+  setDefaultWindowsHide(ompWindowsHide); // omp children attach to the (hidden) console from here on
+  if (con.allocated) console.error(`[console] hidden console window allocated for the agent's children${con.hidden ? "" : " (WARNING: it could not be hidden)"}`);
+  else if (process.platform === "win32" && !con.window) console.error(`[console] no console window for the agent's children (${con.reason ?? "unknown"}): windows the agent opens may stay hidden`);
+}
+// P-BROWSER.5 (ADR-0456): omp 18.8 spawns its broker detached and console-less, so the console above no longer
+// reaches the shared headed Chromium: it is born hidden again (a white, frameless rectangle). Show it.
+new HeadedBrowserRevealer().start();
+// P-SANDBOX.15 (ADR-0396): the omp children's OWN token. Every LUCID_*_URL handed to a child carries this,
+// never TOKEN, and the engine accepts it only on AGENT_ROUTES (below), so the agent cannot reach human-only
+// routes such as /api/security/approve or the sandbox switch.
+const AGENT_TOKEN = randomBytes(32).toString("hex");
 // Routes the OMP CHILD (or the Electron main) calls directly. They cannot set an `x-lucid-token` header,
 // so each inherits a ready URL with `?t=<TOKEN>` and these paths additionally accept the query token.
 // Everything else stays header-only. Hoisted to module scope (was a 17-clause `||` chain rebuilt on every
@@ -1139,24 +1732,151 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/kb/retrieve",        // ADR-0220: the knowledge_search tool grounds on the local compiled KB
   "/api/fleet/status",       // P-FLEET.L1: the master's fleet_status tool
   "/api/sandbox/grant",      // P-SANDBOX.8: the omp child's sandbox_grant_dir tool POSTs the approved grant claim
+  "/api/git/exec",           // P-SANDBOX.17 (ADR-0399): the contained agent's git shim asks the host to run git
   "/api/interject/pending",  // P-INTERJECT.1: the child drains operator notes addressed to it
+  "/api/checkout/peers", "/api/checkout/gate", "/api/checkin", "/api/checkin/reply", // P-OWN.1: checkin_* tools + the commit gate
+  "/api/checkout/write",     // P-WAIT.1: the checkout gate hook claims a write's file (waits only on the same file)
   "/api/tool/meta",          // P-EVAL.4 (ADR-0318): the tool_meta extension reports real tool names
+  "/api/agent/beat",         // P-HEALTH.3: the stream_beat extension says a tool call is still being written
   "/api/judgment/trace",     // P-JEV.2 (ADR-0377): the judgment extension reports each typed judgment
   "/api/kg/recall", "/api/kg/retain", // P-KG.3: the memory_recall / memory_retain tools
+  // Design suite: design_read / design_apply / design_request. The agent reads a manifest REBUILT from the
+  // validated document and queues ops; it can never push state, ack batches, or export (UI token only).
+  "/api/creator/design/manifest", "/api/creator/design/ops", "/api/creator/design/ops/result",
+  // CREATOR-DRIFT: the drift_status / drift_read / drift_apply / drift_export tools (harness/omp/drift_extension.ts).
+  "/api/creator/drift/status", "/api/creator/drift/call", "/api/creator/drift/library",
+  // CREATOR-OPENFILM (ADR-0457): the openfilm_look / openfilm_render / openfilm_job tools. Each route still runs
+  // the Creator build check, the CUI gate, the project scan, and the governor exactly as the UI's call does.
+  "/api/creator/openfilm/look", "/api/creator/openfilm/render", "/api/creator/openfilm/job",
   "/api/browser/open", "/api/browser/capture", "/api/browser/scroll", "/api/browser/close",
   "/api/browser/shot", "/api/browser/click", "/api/browser/type", "/api/browser/drag", "/api/browser/keys",
   "/api/browser/snapshot", "/api/browser/act", // P-JEV.4 (ADR-0379): the browser_run policy loop
 ]);
+// P-SANDBOX.15 (ADR-0396): the routes the AGENT token opens - every child-called route above. Only
+// /api/preview/serve is left out: the renderer's iframe loads it with the UI token, and no child calls it.
+const AGENT_ROUTES: ReadonlySet<string> = new Set([...QUERY_TOKEN_ROUTES].filter((r) => r !== "/api/preview/serve"));
 // P-FLEET.L1/L2/L4/L5: the local lane manager - N gated headless LUCID agents on this machine under the
 // sustained-pressure guard. Lanes default to the MASTER session's current model unless the user picks
 // another. Every spawned/recovered session is NAMED in the durable lane-session ledger (P-FLEET.L5), so
 // the timeline can label its on-disk history and a stopped lane stays reviewable across engine restarts.
 // P-INTERJECT.1: each lane's spawn env overlay stamps LUCID_INTERJECT_TARGET=<laneId> so the lane's
 // interject_extension drains only the notes addressed to it (the master child gets target "master").
-const fleet = new FleetLaneManager({ argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger, env: (laneId) => interjectChildEnv(laneId), interject: (laneId, text) => { addInterject(laneId, text); } });
+// P-OWN.1: who is writing where. Sessions = the main composer plus every live spoke; dirty files come
+// from git itself (the user's git, or the sandbox's MinGit when that is what is on this host).
+const checkouts: CheckoutRegistry = new CheckoutRegistry({
+  sessions: (): CheckoutSession[] => [
+    { id: "master", name: "main composer", cwd: currentWorkspace(), task: backend.currentTask(), running: backend.midTurn().busy },
+    ...fleet.sessionsView(),
+  ],
+  gitStatus: (root) => gitDirtyPaths(gitExe(), root),
+});
+backend.onAuthoredPath = (path) => checkouts.recordWrite({ id: "master", name: "main composer" }, path, currentWorkspace());
+// P-WAIT.1: a write claim counts only while its holder's turn runs (the backstop behind endTurn).
+backend.writeClaims.isRunning = (id) => id === "master" ? backend.midTurn().busy : fleet.sessionsView().some((s) => s.id === id && s.running);
+backend.checkoutBriefing = () => checkouts.briefingFor("master", currentWorkspace());
+// P-PROGRESS.1: the estimate's history starts from the latency ledger's tail (every past chat turn's
+// length, per model), then grows live from master and lane turns alike. Fail-quiet: an unreadable ledger
+// means the estimate starts empty, which shows nothing rather than a wrong number.
+try {
+  if (existsSync(LATENCY_LOG_PATH)) backend.durations.seedFromLatencyLines(readFileSync(LATENCY_LOG_PATH, "utf8").split("\n").slice(-200));
+} catch { /* no history yet */ }
+backend.carriedNotes = () => carryPendingNotes("master"); // ADR-0414: same carry as the lanes
+const fleet: FleetLaneManager = new FleetLaneManager({
+  argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger,
+  masterSessionId: () => backend.currentSessionId(), // P-SWITCH.2 (ADR-0404): one session, one owner
+  claims: backend.writeClaims, history: backend.durations, // P-WAIT.1: one set of file claims, P-PROGRESS.1: one estimate history, with the master
+  env: (laneId, cwd) => {
+    const wsSecrets = workspaceSecretEnv(cwd); // P-VAULT-ENV.1; vaultRedactEnv: the lane's tool results hide them (security review)
+    return { ...wsSecrets, ...(process.platform === "win32" ? prependPathOverlay(process.env, gitCmdDir()) : {}), ...interjectChildEnv(laneId), ...vaultRedactEnv(wsSecrets) };
+  },
+  interject: (laneId, text) => { addInterject(laneId, text); },
+  carriedNotes: carryPendingNotes, // ADR-0414: notes no tool step picked up ride the lane's next prompt
+  // P-OWN.1: a spoke's authored path lands in the ledger; its prompts open with the checkout briefing.
+  onWrite: (lane, path) => checkouts.recordWrite({ id: lane.id, name: lane.name }, path, lane.cwd),
+  preface: (lane): Promise<string> => checkouts.briefingFor(lane.id, lane.cwd),
+  repo: { observe: observeToolCall, peek: peekRepoContext }, // P-REPO.1 (ADR-0406)
+});
 // P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
 // /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
 fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
+// P-AOS.1 (ADR-0452): the AOS-1 orchestrator state. Its heartbeat is this engine's own pulse: an orbit that
+// sees it age past 1.5x / 3x the interval is looking at a frozen or dead engine.
+const fleetGoal = new FleetGoal({
+  lanes: () => fleet.goalLanes(),
+  // P-AOS.2 (ADR-0453): a dispatched task turn rides the fleet's own prompt path (gate, approvals, write
+  // claims and the card's live stream all apply), and resolves with the turn's text or its error.
+  dispatch: async (laneId, text) => {
+    const turn = { text: "", error: "" };
+    await fleet.prompt(laneId, text, (e) => {
+      if (e.type === "token") turn.text += e.text;
+      else if (e.type === "error") turn.error = e.message;
+    });
+    return turn.error ? { ok: false, error: turn.error } : { ok: true, text: turn.text };
+  },
+});
+fleetGoal.start();
+// P-SCHED.1 (ADR-0443): scheduled lane jobs. The scheduler sees the fleet only through these six edges:
+// the live lane list, "is it busy", the manager's own prompt path, Recover (the orbit's path: name,
+// folder, model and the recorded session from the ledger), the per-lane auto-mode switch, and cancel.
+function ledgerLookup(target: { laneId?: string; name: string; cwd: string }): LedgerHit | null {
+  const rows = readLaneLedger();
+  const same = (a: string, b: string) => a.replace(/[\\/]+$/, "").toLowerCase() === b.replace(/[\\/]+$/, "").toLowerCase();
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i]!;
+    if ((target.laneId && r.laneId === target.laneId) || (r.name === target.name && same(r.cwd, target.cwd))) {
+      return { laneId: r.laneId, name: r.name, cwd: r.cwd, model: r.model, sessionId: r.sessionId };
+    }
+  }
+  return null;
+}
+const jobScheduler = new JobScheduler({
+  lanes: async () => (await fleet.status()).lanes.map((l) => ({ id: l.id, name: l.name, cwd: l.cwd, model: l.model, status: l.status, autoApprove: l.autoApprove })),
+  laneBusy: (id) => fleet.laneRunning(id),
+  prompt: (laneId, text, sink) => fleet.prompt(laneId, text, sink),
+  recover: async (hit) => {
+    let resume: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } | undefined;
+    if (hit.sessionId) {
+      const page = sessionMessages(hit.sessionId, TRANSCRIPT_MAX_TURNS);
+      const transcript: LaneTurnRecord[] = [];
+      for (const m of page.messages) if ((m.role === "user" || m.role === "assistant") && m.text.trim()) transcript.push({ role: m.role, text: m.text });
+      resume = { sessionId: hit.sessionId, transcript, turns: page.userTotal };
+    }
+    const r = await fleet.spawn({ cwd: hit.cwd, name: hit.name, model: hit.model, ...(resume ? { resume } : {}) });
+    return r.ok && r.lane ? { ok: true, lane: { id: r.lane.id, name: r.lane.name, cwd: r.lane.cwd, model: r.lane.model, status: r.lane.status, autoApprove: r.lane.autoApprove } } : { ok: false, reason: r.reason };
+  },
+  ledgerLookup,
+  setAuto: (laneId, on) => { fleet.setAuto(laneId, on); },
+  cancel: (laneId) => { fleet.cancel(laneId); },
+  audit: (e) => {
+    emitSecurityEvent({ category: "exec", type: "scheduled_job", decision: e.outcome === "error" || e.outcome === "timeout" || e.outcome === "suspended" ? "block" : "allow", severity: e.outcome === "started" || e.outcome === "ok" ? "info" : "medium", tool: "scheduled_job", reason: `${e.name} [${e.jobId}] ${e.outcome}${e.laneId ? ` lane ${e.laneId}` : ""}${e.note ? `: ${e.note}` : ""}`.slice(0, 200) });
+  },
+});
+/** P-SWITCH.2 (ADR-0404): the live spoke holding session `id`, if any (Main's own claim is checked by the
+ *  lane manager itself, through masterSessionId above). */
+function spokeHolding(id: string): SessionLiveSpoke | null {
+  const live = sessionLive(id, { sessionId: null, busy: false }, fleet.owners());
+  return live?.where === "spoke" ? live : null;
+}
+// P-LEGIBLE.1 (ADR-0384): publish the metadata-only local-agent manifest into this install's userData, so
+// endpoint tooling (Defender / Intune) can identify the agent instead of classifying it as shadow AI. Only
+// when Electron launched us (LUCID_DATA_ROOT); a standalone dev engine is not an install. Rewritten each
+// launch, so MCP changes surface at the next start. Advisory: a failed write is logged, never fatal.
+if (process.env.LUCID_DATA_ROOT) {
+  const manifest = buildLocalAgentManifest({
+    build: BUILD,
+    version: APP_VERSION,
+    port: PORT,
+    hostExecutable: process.env.LUCID_HOST_EXE || null,
+    engineExecutable: basename(process.execPath),
+    // Agent mode answers omp's per-tool asks itself (the in-process gate and the exec/egress tier prompts
+    // still apply), and fleet full-auto removes the human ask for lanes.
+    autoApprove: uiModePosture("agent").permissionMode === "auto" || !!loadSettings().fleetAutoApprove,
+    mcpServers: mcpServersForAcp(),
+    now: new Date(),
+  });
+  const written = writeLocalAgentManifest(process.env.LUCID_DATA_ROOT, manifest);
+  if (!written.ok) console.error(`[legibility] local-agent manifest not written: ${written.error}`);
+}
 // P-HEALTH.1: the harness watches its OWN sessions so a stalled long run never needs an app restart. The
 // master session and every lane climb the same ladder (quiet, then the canned status probe, then a
 // cancel-and-resume in place). The ticker is coarse on purpose: the thresholds are minutes, and a tick
@@ -1164,6 +1884,35 @@ fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
 // the event loop is a worse bug than the stall it watches for.
 backend.startHealthWatch();
 setInterval(() => { void fleet.healthTick().catch(() => {}); }, 30_000).unref?.();
+// P-LIVENESS.1 (ADR-0418): evidence for OPEN tool calls. The watchdog above never touches a turn with an open
+// call (ADR-0263), so a hung command and a long build looked identical. While any worker has an open call
+// and has been quiet for 30 s, one process-table look per tick is folded into that worker's watch, and the
+// progress view marks the call "likely stuck" after minutes of no CPU, disk or subagent activity. Marking
+// only: stopping is the user's Stop command. No quiet open call means no look at all.
+let pulseLooking = false;
+setInterval(() => {
+  if (pulseLooking) return;
+  const master = backend.pulseTarget();
+  const lanes = fleet.pulseTargets();
+  if (!master && !lanes.length) return;
+  pulseLooking = true;
+  void listProcesses().catch(() => null).then((rows) => {
+    const at = Date.now();
+    if (master) backend.observePulse(rows, at, subagentPulse(sessionPathById(master.sessionId), master.since));
+    for (const l of lanes) fleet.observePulse(l.laneId, rows, at, subagentPulse(sessionPathById(l.sessionId), l.since));
+  }).catch(() => {}).finally(() => { pulseLooking = false; });
+}, PULSE_SAMPLE_MS).unref?.();
+// P-RECOVER.1 (ADR-0385): the master session the PREVIOUS engine process was talking to, read here, once,
+// BEFORE the persister below is wired (the backend can only write the file through it, so nothing in this
+// process can overwrite the record first). /api/recovery/state offers it for resume after an unclean exit.
+// P-PORTGUARD.4 (ADR-0458): keyed on the instance's IDENTITY port, so an engine Electron moved off a busy
+// default port still resumes the session the same install recorded last time. Honored only from the
+// Electron main that spawned THIS engine: an engine started from an agent shell inherits that shell's LUCID
+// env and must not write another instance's resume file.
+const IDENTITY_PORT = process.env.LUCID_MAIN_PID === String(process.ppid) ? Number(process.env.LUCID_IDENTITY_PORT) || PORT : PORT;
+const LAST_SESSION_FILE = lastSessionPath(IDENTITY_PORT);
+const PREVIOUS_SESSION = readLastSession(LAST_SESSION_FILE);
+backend.configureRecovery({ persistSession: (sessionId) => { writeLastSession(LAST_SESSION_FILE, { sessionId, cwd: currentWorkspace(), at: Date.now() }); } });
 // P-PWA-FOCUS.1: the lane-to-guest tap. ONE persistent observer, registered here at module scope right
 // after the lane manager exists (this file is evaluated once per engine process, and this statement sits
 // outside every route handler and every poll tick) - so it is installed exactly once and covers all lanes
@@ -1221,6 +1970,15 @@ function laneImages(raw: unknown): { data: string; mimeType: string }[] {
 process.on("exit", () => { try { fleet.stopAll(); } catch { /* dying anyway */ } });
 process.on("SIGINT", () => { try { fleet.stopAll(); } catch { /* dying */ } process.exit(0); });
 process.on("SIGTERM", () => { try { fleet.stopAll(); } catch { /* dying */ } process.exit(0); });
+// P-PLUGINS.2 (ADR-0462): installed plugins run as engine children (server kind under Electron's Node,
+// LUCID_ELECTRON_EXE from main). A running plugin's MCP server joins omp's session config, so a change
+// respawns omp exactly like an /api/mcp edit. The SIGINT/SIGTERM handlers above exit through "exit".
+const plugins = new PluginRuntime({
+  nodeExe: () => resolvePluginNode(DESKTOP_DIR),
+  agentBin: () => ompBin(),
+  onMcpChange: () => backend.restart(),
+});
+process.on("exit", () => { try { plugins.stopAllSync(); } catch { /* dying anyway */ } });
 // P-PREVIEW.3a-shot (ADR-0096): latest PNG of the rendered preview, pushed by the renderer after each render
 // (Electron capturePage → /api/preview/shot-cache) and read by the agent's preview_screenshot tool. In-memory.
 let latestPreviewShot: string | null = null;
@@ -1237,7 +1995,7 @@ setBrowserProcessSource(() => {
 });
 // P-PREVIEW.6b (ADR-0153): relay for the agent's read-only DOM inspect of the sandboxed preview.
 const inspectRelay = new InspectRelay();
-const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
+const CT: Record<string, string> = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".mp4": "video/mp4", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
 // Text-ish types take a charset; binary (images/fonts) must not (a bogus "image/png; charset" suffix).
 const isTextCT = (ct: string) => /^(text\/|application\/(javascript|json)|image\/svg)/.test(ct);
 
@@ -1304,10 +2062,39 @@ async function bundleApp(): Promise<{ js: string; ok: boolean }> {
   }
 }
 
+/** Design suite: the Design editor's Web Worker (decode, composite, resample, trace, GIF quantize), served
+ *  SAME-ORIGIN so `worker-src 'self'` covers it with no blob: or eval. Same ADR-0260 rule as bundleApp: a
+ *  packaged build ships the prebuilt design_worker.bundle.js (build-renderer emits it) and never Bun.build()s
+ *  renderer TypeScript at runtime; dev builds it live. Null on failure (the error stays in the server log). */
+async function bundleDesignWorker(): Promise<string | null> {
+  const prebuilt = join(ROOT, "design_worker.bundle.js");
+  if (existsSync(prebuilt)) {
+    try { return await Bun.file(prebuilt).text(); }
+    catch (e) { console.error("[designWorker] prebuilt worker unreadable, rebuilding:", e); }
+  }
+  try {
+    const out = await Bun.build({ entrypoints: [join(ROOT, "design_worker.ts")], target: "browser", sourcemap: "inline" });
+    if (!out.success || !out.outputs[0]) { console.error("[designWorker] build failed:", out.logs.map((l) => String(l)).join("\n")); return null; }
+    return await out.outputs[0].text();
+  } catch (e) {
+    console.error("[designWorker] build failed:", e);
+    return null;
+  }
+}
+
 const json = (data: unknown) =>
   new Response(JSON.stringify(data, (_k, v) => (typeof v === "bigint" ? Number(v) : v)), {
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
+
+/** P-SWITCH.1 (ADR-0403): the one refusal both session routes send while Main is busy. 409 because the
+ *  request is fine and the state is not; `busy` is the engine's reason, shown to the user verbatim. */
+const switchRefused = (busy: string, sessionId: string | null) =>
+  Response.json({ ok: false, busy, sessionId, error: `Main is busy (${busy}). Send force: true to stop it and switch.` }, { status: 409, headers: { "cache-control": "no-store" } });
+/** P-SWITCH.2 (ADR-0404): the 409 for a session a live spoke holds. `heldBy` lets a client attach to that
+ *  spoke instead; no flag overrides it, because two processes on one session corrupt its history. */
+const sessionHeld = (lane: SessionLiveSpoke) =>
+  Response.json({ ok: false, heldBy: { laneId: lane.laneId, name: lane.name, status: lane.status }, error: `This session is running in spoke "${lane.name}". Attach to that spoke instead.` }, { status: 409, headers: { "cache-control": "no-store" } });
 
 // P-SEC.1 (ADR-0209): a caught exception's message/stack must never flow into a client response
 // (CWE-209/497 — CodeQL js/stack-trace-exposure). This control plane is loopback-only (ADR-0022 H1), so the
@@ -1351,17 +2138,23 @@ async function ttsEngines(): Promise<(TtsProviderInfo & { ready: boolean; reason
   const auth = providerAuth(); // one SQLite read, not one per engine
   const rows = [...auth.majors, ...auth.others];
   const localUrl = LOCAL_TTS_URL();
-  return TTS_PROVIDERS.map((e) => ({
-    ...e,
-    ...ttsEngineStatus(e.id, {
-      keySet: !!(e.keyEnv && process.env[e.keyEnv]),
-      // The OpenAI engine's OAuth row is the CHAT sign-in ("openai"); ttsEngineStatus uses it to explain why
-      // being signed in still isn't enough for the platform speech API.
-      oauthActive: !!rows.find((r) => r.id === (e.id === "openai-tts" ? "openai" : e.id))?.oauthActive,
-      localUp: e.id === "dots-tts" ? dotsUp : localUp,
-      localUrl: e.id === "dots-tts" ? v.dotsTtsUrl : localUrl,
-    }),
-  }));
+  return TTS_PROVIDERS.map((e) => {
+    // CUI lockdown: a refused engine reads not-ready with the lockdown reason, so the picker explains it.
+    // Not audited here (a listing sends nothing); the dispatch routes audit the attempt.
+    const locked = voiceLockdownRefusal("tts", e.id, v, false);
+    if (locked) return { ...e, ready: false, reason: locked };
+    return {
+      ...e,
+      ...ttsEngineStatus(e.id, {
+        keySet: !!(e.keyEnv && process.env[e.keyEnv]),
+        // The OpenAI engine's OAuth row is the CHAT sign-in ("openai"); ttsEngineStatus uses it to explain why
+        // being signed in still isn't enough for the platform speech API.
+        oauthActive: !!rows.find((r) => r.id === (e.id === "openai-tts" ? "openai" : e.id))?.oauthActive,
+        localUp: e.id === "dots-tts" ? dotsUp : localUp,
+        localUrl: e.id === "dots-tts" ? v.dotsTtsUrl : localUrl,
+      }),
+    };
+  });
 }
 
 // A caught exception must never reach the client verbatim (CWE-209/497). Log it, return a curated message.
@@ -1381,7 +2174,9 @@ async function readBody<T>(req: Request): Promise<T> {
 // active id, plus an optional `error` a mutation attaches instead of nulling the list.
 function kgListView(error?: string) {
   return {
-    kgs: listKgs().map((k) => ({ kg_id: k.kg_id, name: k.name, read_only: k.read_only, source_kind: k.source_kind })),
+    // P-TUI (2026-09-29): `provenance` rides along so terminal clients can answer "where is this
+    // knowledge FROM" without a second route. Additive; the GUI ignores unknown fields.
+    kgs: listKgs().map((k) => ({ kg_id: k.kg_id, name: k.name, read_only: k.read_only, source_kind: k.source_kind, provenance: k.provenance })),
     activeId: activeKgId(),
     ...(error ? { error } : {}),
   };
@@ -1398,6 +2193,15 @@ function agentScanner(): ScannerClient {
   }
   return _agentScanner;
 }
+
+// P-CTRL.2 (ADR-0438): the external-controller policy core. Pairings (hashed tokens, fixed workspace, owned
+// lanes) persist owner-only under the engine data root; the prompt scan reuses the fail-closed agent scanner.
+const controllerDeps: ControllerDeps = {
+  store: new PairingStore(join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "controller-pairings.json")),
+  fleet,
+  scan: (text) => scanAndDecide(agentScanner(), text),
+  sink: EVENTS_LOG_PATH,
+};
 
 // P-AGENT.9/.10/.17: the ONE gated import path — every external spec (share file, n8n workflow, template)
 // runs the P-AGENT.5 scanner gate and persists WITH its trust label; nothing external skips the gate.
@@ -1457,7 +2261,7 @@ function listAgentTemplates(): AgentTemplateSummary[] {
 // working tree. Fail-soft: any git error → empty strings (the annex then reports "no changes detected").
 function gitOut(repo: string, args: string[]): string {
   try {
-    const r = Bun.spawnSync(["git", ...args], { cwd: repo, stdout: "pipe", stderr: "ignore", timeout: 8000 });
+    const r = Bun.spawnSync([gitExe(), ...args], { cwd: repo, stdout: "pipe", stderr: "ignore", timeout: 8000 });
     return r.exitCode === 0 ? r.stdout.toString() : "";
   } catch { return ""; }
 }
@@ -1493,11 +2297,16 @@ const oauthBrokers = new Map<string, ReturnType<typeof Bun.spawn>>();
 // github.com) and BLOCKS on stdin before it ever prints the device URL. So for github-copilot we must feed
 // that first line up front, or the login hangs at the prompt and no URL surfaces. `promptAnswer` is that
 // line (the GHE domain, or "" for github.com); it's written to stdin immediately after spawn.
-function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string }> {
+function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ started: boolean; url: string; output: string; code?: string }> {
+  // P-PROV.3: a login ALIAS (`openai-codex-device`) files its credential under its target provider
+  // (`openai-codex`), so every vault read and the failure note use the stored id; otherwise a successful
+  // device login reads as "no credential landed" and the OpenAI card never learns why a failed one died.
+  const vaultId = vaultProviderFor(oauthId);
+  const showCode = isShowCodeLogin(oauthId);
   // Snapshot the vault BEFORE the broker runs, so the exit handler below can tell whether a genuinely
   // fresh token landed rather than trusting the broker's exit code. Read-only; absent row => not present.
-  const beforeCred = credentialSnapshot(oauthId);
-  clearOauthFailure(oauthId); // a fresh attempt owns the failure slot - stale reasons never linger
+  const beforeCred = credentialSnapshot(vaultId);
+  clearOauthFailure(vaultId); // a fresh attempt owns the failure slot - stale reasons never linger
   let proc: ReturnType<typeof Bun.spawn>;
   try { proc = Bun.spawn([ompBin(), "auth-broker", "login", oauthId], { stdout: "pipe", stderr: "pipe", stdin: "pipe" }); }
   // stdin: "pipe" (NOT "ignore") — the broker reads stdin as a fallback for pasting the auth code.
@@ -1534,23 +2343,26 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
   const dec = new TextDecoder();
   let out = "", err = "";
   proc.exited.then(() => {
-    if (!landedFreshCredential(beforeCred, credentialSnapshot(oauthId))) {
-      const f = recordOauthFailure(oauthId, extractOauthFailure(out, err));
+    if (!landedFreshCredential(beforeCred, credentialSnapshot(vaultId))) {
+      const f = recordOauthFailure(vaultId, extractOauthFailure(out, err));
       console.error(`[oauth] ${oauthId} login left no new credential - not respawning omp: ${f.message}`);
       return;
     }
-    clearOauthFailure(oauthId);
+    clearOauthFailure(vaultId);
     // omp's login writes the fresh token but may leave a stale `disabled_cause` from a prior logout,
     // so the just-fetched credential stays ignored. Clear that one flag (token blob untouched) so the
     // login actually "sticks", THEN respawn omp to pick up the now-active provider.
-    const r = clearDisabledCredential(oauthId);
+    const r = clearDisabledCredential(vaultId);
     if (r.cleared) console.log(`[oauth] re-enabled ${oauthId} after login (cleared stale disabled flag)`);
     console.log(`[oauth] ${oauthId} credential landed - respawning omp so its models surface`);
     backend.restart();
   }).catch(() => { /* ignore */ });
-  const { promise, resolve } = Promise.withResolvers<{ started: boolean; url: string; output: string }>();
+  const { promise, resolve } = Promise.withResolvers<{ started: boolean; url: string; output: string; code?: string }>();
   {
     let done = false, ended = 0;
+    // P-PROV.3: show-the-code flows carry the one-time code in the stream; the guarded scanner (device_code.ts,
+    // issue #490) only accepts a standalone code after the official instruction, bounded across chunks.
+    const codes = showCode ? new DeviceCodeScanner() : null;
     const finish = (url: string) => {
       if (done) return; done = true;
       if (!url && loadSettings().developerMode) {
@@ -1558,20 +2370,34 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
         // browser. Log what we DID see so it's diagnosable (which omp, and its output on each stream).
         console.error(`[oauth] no URL from broker for ${oauthId} via ${ompBin()} — stdout=${JSON.stringify(out.slice(0, 200))} stderr=${JSON.stringify(err.slice(0, 200))}`);
       }
-      resolve({ started: true, url, output: (out || err).slice(0, 600) });
+      // A device broker may only hand the UI an ALLOWLISTED https URL (the renderer opens it); anything
+      // else is reported in the output text, never opened. Non-device flows keep today's behaviour.
+      const safeUrl = showCode && url && !deviceUrlAllowed(oauthId, url) ? "" : url;
+      if (showCode && url && !safeUrl) console.error(`[oauth] ${oauthId} printed a sign-in URL outside its allowlist; not opening it`);
+      const code = codes?.code ?? undefined;
+      resolve({ started: true, url: safeUrl, output: (out || err).slice(0, 600), ...(code ? { code } : {}) });
     };
     // Match a COMPLETE url (followed by whitespace) so a chunk boundary mid-URL can't resolve a truncated
     // link; scan BOTH streams — omp prints the URL to stdout today, but tolerate a future move to stderr.
     // `m[1]` is `string | undefined` under noUncheckedIndexedAccess, and finish() takes a string: an
     // unguarded m[1] fails the desktop server typecheck AND would hand the caller `undefined` as a URL.
-    const scan = () => { const m = (out + "\n" + err).match(/(https?:\/\/\S+?)(?=\s)/); if (m?.[1]) finish(m[1]); };
+    // A show-the-code flow waits for BOTH the URL and the code (they arrive within one print), with a
+    // short grace after the URL so a split chunk cannot leave the card with a link and no code.
+    let urlSeen = "";
+    const scan = () => {
+      const m = (out + "\n" + err).match(/(https?:\/\/\S+?)(?=\s)/);
+      if (!m?.[1]) return;
+      if (!codes) { finish(m[1]); return; }
+      if (codes.code) { finish(m[1]); return; }
+      if (!urlSeen) { urlSeen = m[1]; setTimeout(() => finish(urlSeen), 5_000); }
+    };
     // Drain stdout + stderr fully (never stop) so the broker can't block on a full pipe; grab the URL when it appears.
     (async () => {
-      try { for await (const c of proc.stdout as ReadableStream<Uint8Array>) { out += dec.decode(c); scan(); } } catch { /* stream ended */ }
+      try { for await (const c of proc.stdout as ReadableStream<Uint8Array>) { const s = dec.decode(c); out += s; codes?.push(s); scan(); } } catch { /* stream ended */ }
       if (++ended === 2) finish(""); // both streams hit EOF without a URL
     })();
     (async () => {
-      try { for await (const c of proc.stderr as ReadableStream<Uint8Array>) { err += dec.decode(c); scan(); } } catch { /* ended */ }
+      try { for await (const c of proc.stderr as ReadableStream<Uint8Array>) { const s = dec.decode(c); err += s; codes?.push(s); scan(); } } catch { /* ended */ }
       if (++ended === 2) finish("");
     })();
     setTimeout(() => finish(""), 60_000); // 60s — OTP/MFA flows need time (phone unlock, SMS delay)
@@ -1590,6 +2416,14 @@ function sendOauthCode(oauthId: string, code: string): { sent: boolean; reason?:
   catch (e) { console.error(`[oauth] send code failed for ${oauthId}:`, e); return { sent: false, reason: "could not send code" }; }
 }
 
+// lucid-creator-endpoint v1: import whatever the Private AI Platform dropped in the mailbox while LUCID was closed.
+// Per-file fail-soft; a scan failure never blocks the engine from starting.
+if (BUILD.creatorBuild) {
+  try {
+    const r = scanCreatorEndpointMailbox();
+    if (r.imported.length || r.rejected.length) console.log(`[creator] mailbox: imported ${r.imported.join(", ") || "nothing"}; rejected ${r.rejected.map((x) => `${x.file} (${x.reason})`).join("; ") || "nothing"}`);
+  } catch (e) { console.warn("[creator] mailbox scan failed:", e); }
+}
 
 // P-PORTGUARD.2: the bind is the engine's first load-bearing act, and it CAN fail - something else may
 // already hold the port (in the field: this app's own orphaned engine). Unguarded, Bun's throw escaped
@@ -1605,9 +2439,10 @@ return Bun.serve({
   hostname: "127.0.0.1", // H1 (ADR-0022): loopback only — this control plane handles keys/passphrases.
   // ADR-0305 invariant: the window only renders the nonce-verified LOOPBACK engine; this bind is load-bearing.
   idleTimeout: 60,
-  async fetch(req) {
+  async fetch(req, srv) {
     const url = new URL(req.url);
     const p = url.pathname;
+    let ctrlPairing: Pairing | null = null;
     // H2 (ADR-0022): reject anything a web page or DNS-rebind could forge against
     // the fixed local port (foreign Host/Origin, or a non-JSON state-changing body).
     if (!isAllowedRequest(reqShape(req), PORT)) return new Response("forbidden", { status: 403 });
@@ -1618,7 +2453,9 @@ return Bun.serve({
     // OWN CSP applies instead of the renderer's strict inherited one). An iframe `src` GET cannot send a
     // custom header, so this ONE endpoint also accepts the per-launch token as a `?t=` query param — same
     // token, still behind the loopback (H1) + Origin/Host/CSRF (H2) gate above. Every other /api needs the header.
-    if (p.startsWith("/api/") && p !== "/api/health") {
+    // Security review SECRET-INTAKE-REQUESTER-SPOOF: /api/secret/request takes only a requester token in
+    // the header (the master's own, never AGENT_TOKEN or a `?t=`), which handleSecretRoutes checks itself.
+    if (p.startsWith("/api/") && p !== "/api/health" && p !== SECRET_AGENT_ROUTE) {
       // `/api/preview/serve` (iframe src) and `/api/preview/shot` (fetched by the omp subprocess, which
       // inherits a ready URL incl. the token via LUCID_PREVIEW_SHOT_URL) can't set a header, so they also
       // accept the per-launch token as a `?t=` query param — same token, still behind the H1/H2 gate above.
@@ -1632,13 +2469,26 @@ return Bun.serve({
       // browser_* tools (via the token'd LUCID_BROWSER_URL it inherits), same ?t= convention. The two
       // main-process endpoints (/commands, /result) and the status push stay header-only: main MINTED the
       // token (LUCID_MAIN_TOKEN) and sends it as x-lucid-token on every poll.
-      const queryTokenOk = QUERY_TOKEN_ROUTES.has(p);
-      const tok = queryTokenOk ? (req.headers.get("x-lucid-token") ?? url.searchParams.get("t")) : req.headers.get("x-lucid-token");
-      if (!tokenValid(tok, TOKEN)) return new Response("forbidden", { status: 403 });
+      // P-SANDBOX.15 (ADR-0396): the agent's token (AGENT_TOKEN) opens AGENT_ROUTES only; TOKEN opens all.
+      // P-CTRL.2 (ADR-0438): a paired controller's token (header only) opens CONTROLLER_ROUTES and nothing else.
+      const headerToken = req.headers.get("x-lucid-token");
+      ctrlPairing = CONTROLLER_ROUTES.has(p) && !tokenValid(headerToken, TOKEN) ? await controllerDeps.store.verify(headerToken) : null;
+      const authorized = apiAuthorized({ path: p, headerToken, queryToken: url.searchParams.get("t"), uiToken: TOKEN, agentToken: AGENT_TOKEN, queryRoutes: QUERY_TOKEN_ROUTES, agentRoutes: AGENT_ROUTES, controllerRoutes: CONTROLLER_ROUTES, controllerAuthorized: ctrlPairing !== null });
+      if (!authorized) return new Response("forbidden", { status: 403 });
     }
     try {
+      if (p.startsWith("/api/controller/")) return await handleController(req, p, ctrlPairing, controllerDeps);
+      const vr = await handleVaultRoutes(req, p, { uiToken: TOKEN }); if (vr) return vr; // P-VAULT-V2.1 (ADR-0474)
+      const vb = await handleVaultBackupRoutes(req, p, { uiToken: TOKEN }); if (vb) return vb; // P-VAULT-UI.1 (ADR-0475)
+      const sr = await handleSecretRoutes(req, p, { uiToken: TOKEN, srv, emit: (r) => backend.requestSecretDialog(r), destinations: { upsert: upsertVaultDestination } }); if (sr) return sr; // P-SECRET-INTAKE.1 (ADR-0476)
       if (p === "/app.js") {
         const { js } = await bundleApp();
+        return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
+      }
+      // Design suite: the editor's same-origin module worker (`new Worker("/design_worker.js", { type: "module" })`).
+      if (p === "/design_worker.js") {
+        const js = await bundleDesignWorker();
+        if (js === null) return new Response("// design worker build failed", { status: 500, headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
         return new Response(js, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
       }
       // P-AVATAR.2a: split chunks (lazy three.js). A miss after a server restart rebuilds once - the
@@ -1695,7 +2545,7 @@ return Bun.serve({
       if (p === "/api/security") {
         const snap = await securitySnapshotMemo(); // memoized + single-flight (P-PERF.3); live/sandbox/acks stay fresh (in-memory, cheap)
         // P-SANDBOX.8: the standing directory grants ride the sandbox slice so the panel lists them with Revoke.
-        return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks(), sandbox: { ...sandboxStatus(), grants: sandboxGrantsView() }, acks: ackView() } });
+        return json({ ok: true, data: { ...(snap ?? {}), live: liveBlocks(), sandbox: { ...sandboxStatus(), grants: sandboxGrantsView(), control: sandboxControlNow(), runtimeFolders: sandboxRuntimeFoldersNow() }, acks: ackView() } });
       }
       // P-SANDBOX.8: the omp child's sandbox_grant_dir tool claims a user-approved directory grant.
       // Defense in depth over the dialog: win32 + bundled helper + an EXISTING directory + a FRESH
@@ -1717,6 +2567,8 @@ return Bun.serve({
         let isDir = false;
         try { isDir = statSync(dirPath).isDirectory(); } catch { /* missing → not a dir */ }
         if (!dirPath || !isDir) return deny(`not an existing directory: ${dirPath || "(no path)"}`);
+        // P-SANDBOX.14 (ADR-0394): managed policy owns the folder list (checked before the one-shot claim).
+        if (managedSandboxFoldersLocked(managedConfig().config)) return deny("your organization manages which folders the sandbox can reach");
         // ONE-SHOT claim: any attempt consumes the parked approval; only a fresh exact match proceeds.
         const claim = consumePending(loadGrants(), dirPath, mode, Date.now());
         saveGrants(claim.store);
@@ -1726,7 +2578,103 @@ return Bun.serve({
         if (!applied.ok) return deny(`the ACL grant did not apply: ${applied.detail}`);
         saveGrants(addGrant(loadGrants(), { path: dirPath, mode, grantedAt: new Date().toISOString(), reason }));
         console.log(`[sandbox-grant] granted ${mode} on ${dirPath}${reason ? ` (${reason})` : ""}`);
-        return json({ ok: true, data: { granted: true, detail: `granted ${mode === "rw" ? "read-write" : "read-only"} access to ${dirPath} — standing until the user revokes it in the Security panel (${applied.detail})` } });
+        return json({ ok: true, data: { granted: true, detail: `granted ${mode === "rw" ? "read-write" : "read-only"} access to ${dirPath} - standing until the user revokes it in the Security panel (${applied.detail})` } });
+      }
+      // P-SANDBOX.17 (ADR-0399): the contained agent's git. Git for Windows cannot start inside the
+      // AppContainer, so its shim asks the engine to run the real git as the user. git_broker.ts owns
+      // every check (subcommand + option allowlist, workspace-confined paths, validated and held repo
+      // config, forced overrides, network through the egress proxy); every call is audited.
+      if (p === "/api/git/exec" && req.method === "POST") {
+        const b = await readBody<{ args?: unknown; cwd?: unknown; target?: unknown }>(req);
+        const args = Array.isArray(b.args) ? b.args.map(String) : [];
+        const cmdDir = gitCmdDir();
+        // P-OWN.1: the shim names its session; a shim that names none is gated as "unknown", which owns
+        // nothing, so any sweep over another session's dirty files is refused (fail-closed on identity).
+        const gateTarget = String(b.target ?? "").trim() || "unknown";
+        const r = await runBrokeredGit({ args, cwd: String(b.cwd ?? "") }, {
+          workspace: currentWorkspace(), gitExe: cmdDir ? join(cmdDir, "git.exe") : null, proxyUrl: runningEgressProxyUrl(),
+          sweepGate: async (command, cwd) => { const d = await checkouts.gate(gateTarget, cwd, command); return d.block ? d.reason ?? "refused by the checkout gate" : null; },
+        });
+        emitSecurityEvent({ category: "exec", type: "git_broker", decision: r.refused ? "block" : "allow", severity: r.refused ? "medium" : "info", tool: "git", reason: `${r.sub || "(none)"}${r.refused ? ` refused: ${r.refused}` : ` exit ${r.code}`}`.slice(0, 200) });
+        return json({ ok: true, data: { code: r.code, stdout: Buffer.from(r.stdout).toString("base64"), stderr: Buffer.from(r.stderr, "utf8").toString("base64") } });
+      }
+      // P-SANDBOX.12 (ADR-0390): the Security panel's sandbox switch. Off is a LUCID setting (no admin);
+      // On registers the loopback exemption behind UAC when it is missing; "unregister" removes it. Every
+      // change is audited, and the agent is restarted so the next spawn takes the new posture.
+      // P-MXC.1 (ADR-0441 decision 5): the operator's one elevated step for the MXC executor. The steps come
+      // from the LIVE view (what --probe still recommends, plus the loopback exemption when a network-on
+      // session needs it); they run behind one UAC prompt, and the truth is re-read afterwards. Audited; the
+      // agent restarts so the next spawn takes the new posture.
+      if (p === "/api/security/mxc/prepare" && req.method === "POST") {
+        const before = sandboxControlNow();
+        const steps = mxcHostPrepSteps(before);
+        if (!steps) return json({ ok: true, data: { changed: false, detail: before.mxc?.staged ? "the host is already prepared" : "the MXC executor is not staged on this host" } });
+        const m = mxcHost({ resourcesPath: process.env.LUCID_RESOURCES || undefined });
+        if (!m.host) return json({ ok: true, data: { changed: false, detail: m.reason } });
+        const launched = runMxcHostPrepElevated(m.executors.prep, steps);
+        resetMxcProbeCache(); resetLoopbackExemptCache();
+        const after = sandboxControlNow();
+        const remaining = mxcHostPrepSteps(after);
+        const changed = launched && !remaining;
+        const detail = changed
+          ? "the host is prepared - the agent restarts inside the MXC container"
+          : !launched ? "the administrator prompt was declined or a step failed - nothing changed"
+          : `the prompt ran but the host still needs: ${[remaining?.systemDrive && "prepare-system-drive", remaining?.nullDevice && "prepare-null-device", remaining?.loopback && "the loopback exemption"].filter(Boolean).join(", ")}`;
+        emitSecurityEvent({ category: "approval", type: "sandbox_host_prep", decision: changed ? "allow" : "block", severity: "medium", tool: "wxc-host-prep", reason: detail.slice(0, 200) });
+        if (changed) backend.restart();
+        return json({ ok: true, data: { changed, detail } });
+      }
+      if (p === "/api/security/sandbox/mode" && req.method === "POST") {
+        const b = await readBody<{ mode?: unknown }>(req);
+        const mode = String(b.mode ?? "");
+        if (mode !== "off" && mode !== "auto" && mode !== "unregister") return json({ ok: true, data: { changed: false, detail: "unknown mode" } });
+        const helper = repoAsset("bin", "lucid-appcontainer.exe");
+        const plan = planModeChange({ mode } as ModeRequest, sandboxControlNow());
+        let changed = false;
+        let detail = "";
+        if (plan.action === "refuse") detail = plan.reason;
+        else if (plan.action === "set-off") { setSandboxWindowsMode("off"); changed = true; detail = "the sandbox is off - the agent restarts as the disclosed passthrough"; }
+        else if (plan.action === "unregister") {
+          const launched = setLoopbackRegistrationElevated(helper, false);
+          resetLoopbackExemptCache();
+          changed = launched && !loopbackExempted();
+          detail = changed ? "the sandbox's Windows loopback registration was removed" : launched ? "the helper ran but the registration is still present" : "the administrator prompt was declined";
+        } else {
+          if (plan.registerFirst) {
+            const launched = setLoopbackRegistrationElevated(helper, true);
+            resetLoopbackExemptCache();
+            if (!launched || !loopbackExempted()) detail = launched ? "the helper ran but Windows still lists no loopback exemption" : "the administrator prompt was declined - the sandbox stays off";
+          }
+          if (!detail) { setSandboxWindowsMode("auto"); changed = true; detail = "the sandbox is on - the agent restarts inside the AppContainer if its runtime boots there"; }
+        }
+        emitSecurityEvent({ category: "approval", type: "sandbox_mode", decision: changed ? "allow" : "block", severity: "medium", tool: "sandbox_mode", reason: `${mode}: ${detail}`.slice(0, 200) });
+        console.log(`[sandbox] panel request ${mode}: ${detail}`);
+        if (changed && mode !== "unregister") backend.restart();
+        return json({ ok: true, data: { changed, detail, control: sandboxControlNow() } });
+      }
+      // P-SANDBOX.13 (ADR-0391): the user adds a folder from the Security panel. The PATH NEVER COMES FROM
+      // THE CALLER: the engine opens the native Explorer dialog itself and grants only what a person picks
+      // there, so nothing holding the loopback token (the agent included) can name a folder to grant.
+      if (p === "/api/security/sandbox-grant/add" && req.method === "POST") {
+        const b = await readBody<{ mode?: unknown }>(req);
+        const mode: GrantMode = b.mode === "rw" ? "rw" : "rx";
+        // P-SANDBOX.14 (ADR-0394): refused before any dialog opens when policy owns the folder list.
+        const refusedAdd = refuseUserFolderAdd(sandboxControlNow());
+        if (refusedAdd) return json({ ok: true, data: { added: false, detail: refusedAdd } });
+        // P-SANDBOX.13b (ADR-0393): helperFallback opens the shell's folder dialog through the bundled helper
+        // when PowerShell's Constrained Language Mode (Smart App Control / WDAC) refuses the scripted picker.
+        const picked = await pickFolderNative({ title: `Give the LUCID sandbox ${mode === "rw" ? "read-write" : "read-only"} access to a folder`, buttonLabel: mode === "rw" ? "Allow read-write" : "Allow read-only", helperFallback: repoAsset("bin", "lucid-appcontainer.exe") });
+        if (!picked.supported) return json({ ok: true, data: { added: false, detail: `no folder dialog could open: ${picked.reason ?? "unknown cause"}` } });
+        if (!picked.path) return json({ ok: true, data: { added: false, cancelled: true, detail: "cancelled" } });
+        const refused = refuseGrantPath(picked.path, homedir());
+        if (refused) return json({ ok: true, data: { added: false, detail: refused } });
+        const helper = repoAsset("bin", "lucid-appcontainer.exe");
+        const applied = applyGrantAce(helper, mode, picked.path);
+        emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: applied.ok ? "allow" : "block", severity: "medium", tool: "sandbox_panel", reason: `${applied.ok ? "acl granted by the user" : `acl grant failed: ${applied.detail}`} · ${mode} ${picked.path}`.slice(0, 200) });
+        if (!applied.ok) return json({ ok: true, data: { added: false, detail: `the permission did not apply: ${applied.detail}` } });
+        saveGrants(addGrant(loadGrants(), { path: picked.path, mode, grantedAt: new Date().toISOString(), reason: "added by you in the Security panel" }));
+        console.log(`[sandbox-grant] user added ${mode} on ${picked.path}`);
+        return json({ ok: true, data: { added: true, path: picked.path, detail: `the sandbox can now ${mode === "rw" ? "read and write" : "read"} ${picked.path}` } });
       }
       // P-SANDBOX.8: revoke one standing directory grant from the Security panel. The record leaves the
       // list ONLY when the helper's `--revoke-acl` succeeded — a failed revoke keeps the row visible
@@ -1857,10 +2805,13 @@ return Bun.serve({
       // (cached 5 min; [] when off); POST {enabled} flips the opt-in.
       if (p === "/api/ratelimits") {
         if (req.method === "POST") { const b = await readBody<{ enabled?: unknown }>(req); return json({ ok: true, data: setRateLimitProbe(!!b.enabled) }); }
-        return json({ ok: true, data: { enabled: !!loadSettings().rateLimitProbe, limits: await probeRateLimits(url.searchParams.get("force") === "1") } });
+        // CUI lockdown: no direct-provider turns run, so the probe (a keyed request to api.anthropic.com /
+        // api.openai.com) has nothing to measure and is not sent.
+        const probeLocked = asksageOnly() || managedAsksageOnly();
+        return json({ ok: true, data: { enabled: !!loadSettings().rateLimitProbe, limits: probeLocked ? [] : await probeRateLimits(url.searchParams.get("force") === "1") } });
       }
       // P10.2: cross-model usage & cost ledger (per-model totals + estimated cache savings).
-      if (p === "/api/usage") return json({ ok: true, data: usageLedgerMemo() }); // P-PERF.3 memo
+      if (p === "/api/usage") return json({ ok: true, data: await usageLedgerMemo() }); // P-PERF.3 memo
       // ADR-0030 P-CODE.1: per-workspace git diffstat for the current month (repo
       // activity, not AI authorship). Read-only, metadata-only, fail-closed per workspace.
       // Cached 30s — each call spawns `git log` per workspace, so don't re-run it on
@@ -1869,7 +2820,7 @@ return Bun.serve({
         const now = Date.now();
         if (!codeActivityCache || now - codeActivityCache.at > 30_000 || url.searchParams.get("force") === "1")
           codeActivityCache = { at: now, data: codeActivity() };
-        return json({ ok: true, data: codeActivityCache.data });
+        return json({ ok: true, data: await codeActivityCache.data });
       }
       // P-PORTGUARD.1 (ADR-0305): echo the per-launch nonce main minted for THIS child. Main only
       // trusts a health answer carrying it, so a squatter on the port can never win the window. The
@@ -1878,6 +2829,7 @@ return Bun.serve({
       // P-ENT.2 (ADR-0069): the unified security-event stream (metadata-only, OCSF-ready) + per-sink
       // delivery status, for the in-app dashboard. Read-only; the file sink is the SIEM export source.
       if (p === "/api/audit") return json({ ok: true, data: { events: audit.recent(100), sinks: audit.sinkStatuses() } });
+      const compliance = await handleComplianceRoutes(req, p); if (compliance) return compliance;
       // P-BRIEF.3 (ADR-0072): generate the Executive Engineering Update from the repo's own logs. Pure +
       // air-gap (reads DECISIONS.md/PROGRESS.md from the repo root); returns the written brief + the
       // two-host podcast script. Audio synthesis (a TTS backend) is a later slice; this is the brief.
@@ -2136,8 +3088,8 @@ return Bun.serve({
         try {
           const hdr = { headers: { "X-Figma-Token": pat } };
           const fileRes = await fetch(`${FIGMA_API}/files/${key}?depth=2`, { ...hdr, signal: AbortSignal.timeout(20000) });
-          if (fileRes.status === 403) return fail("Figma rejected the token (403) — check the PAT and that it can read this file.");
-          if (fileRes.status === 404) return fail("Figma file not found (404) — check the file URL/key.");
+          if (fileRes.status === 403) return fail("Figma rejected the token (403). Check the PAT and that it can read this file.");
+          if (fileRes.status === 404) return fail("Figma file not found (404). Check the file URL/key.");
           if (!fileRes.ok) return fail(`Figma API error ${fileRes.status}.`);
           const file = (await fileRes.json()) as { name?: string; document?: unknown };
           const fileName = String(file?.name ?? "Figma file").slice(0, 200); // bound the network-derived title we persist
@@ -2179,7 +3131,7 @@ return Bun.serve({
           const hasDesign = existsSync(designDocPath(currentWorkspace()));
           return json({ ok: true, data: { path: outPath, fileName, frames: board.length, hasDesign } });
         } catch (e) {
-          return fail(clientError(e, "Couldn't import the Figma file — check the file URL/key and that your token can read it."));
+          return fail(clientError(e, "Couldn't import the Figma file. Check the file URL/key and that your token can read it."));
         }
       }
       // P-FIGMA.2 / P-DESIGN.1 (ADR-0154): read the workspace DESIGN.md so the renderer can pop it out in the
@@ -2199,7 +3151,7 @@ return Bun.serve({
           const r = await fetch(target, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(4500) });
           return json({ ok: true, data: { reachable: true, status: r.status, authed: r.status === 401 || r.status === 403 } });
         } catch (e) {
-          return json({ ok: true, data: { reachable: false, error: clientError(e, "not reachable — check the URL and that the endpoint is up") } });
+          return json({ ok: true, data: { reachable: false, error: clientError(e, "not reachable: check the URL and that the endpoint is up") } });
         }
       }
       // P-LOCAL.6: ASK THE SERVER. `GET <baseUrl>/models` is the same list omp's own discovery reads, so a
@@ -2388,7 +3340,7 @@ return Bun.serve({
         if (!loadSpecFile(currentWorkspace(), id)) return json({ ok: false, error: "unknown agent id", data: { error: "unknown agent id" } });
         const cur = loadSpecTrust(currentWorkspace(), id);
         if (cur.trustLabel === "quarantined") {
-          const msg = "this agent is quarantined (flagged content) — it cannot be approved; fix the source and re-import";
+          const msg = "this agent is quarantined (flagged content). It cannot be approved; fix the source and re-import";
           return json({ ok: false, error: msg, data: { error: msg } });
         }
         saveSpecTrust(currentWorkspace(), id, { trustLabel: "trusted", reason: "approved by the user after review", reviewed_at: Date.now() });
@@ -2456,15 +3408,23 @@ return Bun.serve({
       if (p === "/api/explain" && req.method === "POST") {
         const b = await readBody<{ command?: unknown }>(req);
         const cmd = String(b.command ?? "");
-        let r = await explainCommand(cmd); // direct keyed path first (cheapest, no session spawn)
+        // CUI lockdown: explainCommand refuses its direct keyed path (Anthropic / OpenAI / Gemini) and the SAME
+        // prompt goes through the omp util session instead, which Backend.complete pins to an allowed model
+        // (AskSage, or a user-lock DGX enclave provider) or refuses with an audit.
+        let r = await explainCommand(cmd, asksageOnly() || managedAsksageOnly()); // direct keyed path first (cheapest, no session spawn)
         // P-EXEC.3 fix: OAuth-only users have NO direct API key - don't dead-end them. Route the SAME
         // inert-DATA prompt through the omp session (which holds the OAuth/key auth) with a cheap accessible
         // model. Uses the dedicated util connection, so it never clobbers the live chat turn.
-        if (!r.ok && /Add an Anthropic/.test(r.error ?? "")) {
+        if (!r.ok && (r.lockdown || /Add an Anthropic/.test(r.error ?? ""))) {
           const trimmed = cmd.trim();
           if (trimmed && trimmed.length <= 8000) {
             try {
-              const model = backend.checkerModelInfo().recommended || undefined; // cheapest accessible (OAuth-safe)
+              const pin = backend.completionModel(backend.checkerModelInfo().recommended || undefined); // cheapest accessible (OAuth-safe), clamped under lockdown
+              if (!pin.ok) {
+                emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "explain-lockdown", reason: (pin.error ?? "no allowed model").slice(0, 200), sessionId: backend.currentSessionId() ?? undefined });
+                return json({ ok: false, data: { ok: false, error: pin.error }, error: pin.error });
+              }
+              const model = pin.model;
               const text = (await backend.complete(EXPLAIN_SYSTEM, explainUserPrompt(trimmed), { model, idleMs: 20_000 })).trim();
               r = text
                 ? { ok: true, text, model: model ? model.replace(/^[^/]*\//, "") : undefined }
@@ -2483,6 +3443,9 @@ return Bun.serve({
       if (p === "/api/brief/audio" && req.method === "POST") {
         const b = await readBody<{ provider?: unknown; voiceId?: unknown }>(req);
         const provider = b.provider === "local-tts" ? "local-tts" : b.provider === "elevenlabs" ? "elevenlabs" : b.provider === "dots-tts" ? "dots-tts" : "openai-tts";
+        // CUI lockdown: the podcast script is repo content, so a cloud engine is refused (and audited) first.
+        const lockdownRefusal = voiceLockdownRefusal("tts", provider, voiceSettings());
+        if (lockdownRefusal) return json({ ok: false, data: { note: lockdownRefusal, audioB64: null, mime: "audio/wav", turns: 0, blocked: true }, error: lockdownRefusal });
         const pickedVoice = typeof b.voiceId === "string" && b.voiceId ? b.voiceId : "";
         const repo = REPO_DIR;
         const rd = (f: string) => { try { return existsSync(join(repo, f)) ? readFileSync(join(repo, f), "utf8") : ""; } catch { return ""; } };
@@ -2525,24 +3488,42 @@ return Bun.serve({
       // P-JEV.2 (ADR-0377): both answers also carry `configured`: can Jev answer a judgment in the running
       // child (effective mode + a saved TypeSafe key). The chat's per-turn "Jev not consulted" note is gated
       // on it, so a user who never set Jev up is never told about it.
+      // P-JEV.5 (ADR-0416): the answer also carries the judge CHAIN omp is told at the next spawn and the
+      // local judges banned after failing more than once; the reset forgets those failures and restarts.
       if (p === "/api/judgment") {
         if (req.method === "POST") {
           const b = await readBody<{ mode?: unknown }>(req);
-          const before = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly()).effective;
+          const before = judgePlan().chain.join(",");
           setJudgmentProvider(b.mode);
-          const r = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly());
-          if (r.effective !== before) backend.restart();
-          return json({ ok: true, data: { ...r, configured: jevActive(r.effective, typesafeKeySet()) } });
+          const plan = judgePlan();
+          if (plan.chain.join(",") !== before) backend.restart();
+          return json({ ok: true, data: judgmentView(plan) });
         }
-        const r = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly());
-        return json({ ok: true, data: { ...r, configured: jevActive(r.effective, typesafeKeySet()) } });
+        return json({ ok: true, data: judgmentView(judgePlan()) });
+      }
+      if (p === "/api/judgment/bans/reset" && req.method === "POST") {
+        const had = judgePlan().banned.length > 0;
+        resetJudgeBans();
+        if (had) backend.restart(); // the running child holds the ban in memory; a fresh spawn reads the ledger
+        return json({ ok: true, data: judgmentView(judgePlan()) });
       }
       // P-JEV.2 (ADR-0377): the omp child reports each typed judgment here (the judgment extension wraps
       // pi-ai's judge classes in-process and AWAITS this POST, so the chat has the row before omp acts on the
       // answer). Same token'd self-report shape as /api/tool/meta. Parsed at this boundary, never trusted
       // because it was JSON; an unparseable body is ignored, never an error the child could stall on.
+      // P-JEV.5 (ADR-0416): a FAILED judgment by a local model counts against it; from the second failure the
+      // model is banned (left out of the chain at the next spawn; the child skips it at once). P-JEV.6
+      // (ADR-0421): a judge whose account says the model does not exist is banned from that one answer.
       if (p === "/api/judgment/trace" && req.method === "POST") {
         const report = parseJudgmentReport(await readBody<unknown>(req));
+        if (report?.error) {
+          const before = judgePlan().banned.length;
+          const banned = noteJudgeFailure(report, judgePlan().localProviders);
+          if (banned.length > before) {
+            console.error(`[judgment] ${report.label} is no longer asked as a judge (${report.error.slice(0, 120)}); Settings > Judgment resets this`);
+            Object.assign(process.env, judgeBanEnv(judgePlan().localProviders, banned));
+          }
+        }
         return json({ ok: true, data: { noted: !!report && backend.noteJudgment(report) } });
       }
       // P-VOICE.1 + P-VOICE.2 (ADR-0247): list the selectable voices for ONE engine, so the picker works for
@@ -2566,10 +3547,13 @@ return Bun.serve({
           }
         }
         if (provider !== "elevenlabs") return json({ ok: true, data: { ...base, voices: voicesForProvider(provider) } });
+        // CUI lockdown: the engine is refused, so its account is not contacted for a voice list either.
+        const elLocked = voiceLockdownRefusal("tts", "elevenlabs", v, false);
+        if (elLocked) return json({ ok: true, data: { ...base, voices: [], note: elLocked } });
         const key = process.env.ELEVENLABS_API_KEY;
         if (!key) return json({ ok: true, data: { ...base, voices: [], note: "Add your ElevenLabs API key (Settings → Voice) to list voices." } });
         try { return json({ ok: true, data: { ...base, voices: await listElevenVoices({ apiKey: key }) } }); }
-        catch (e) { return json({ ok: true, data: { ...base, voices: [], note: clientError(e, "Could not list voices — check the provider key/URL.") } }); }
+        catch (e) { return json({ ok: true, data: { ...base, voices: [], note: clientError(e, "Could not list voices. Check the provider key/URL.") } }); }
       }
       // P-VOICE.7: portable voice endpoints. GET scans the handoff mailbox then lists; import is the
       // manual-upload fallback (the renderer posts the file's text); activate makes an endpoint THE
@@ -2656,6 +3640,9 @@ return Bun.serve({
         if (!text.trim()) return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: "nothing to speak" } });
         const v = voiceSettings();
         const provider = typeof b.provider === "string" && b.provider ? normalizeTtsProvider(b.provider) : v.ttsProvider;
+        // CUI lockdown: refused fail-closed (and audited) BEFORE any text leaves for a cloud engine.
+        const lockdownRefusal = voiceLockdownRefusal("tts", provider, v);
+        if (lockdownRefusal) return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: lockdownRefusal, blocked: true } });
         try {
           // P-VOICE.2: the SAME readiness reason the picker shows, so a failure never contradicts the menu
           // (notably: an OpenAI OAuth sign-in cannot reach the speech API - only a platform key can).
@@ -2688,7 +3675,7 @@ return Bun.serve({
           const audioB64 = r.audio ? Buffer.from(r.audio).toString("base64") : null;
           return json({ ok: true, data: { audioB64, mime: "audio/wav", note: audioB64 ? "" : r.note } });
         } catch (e) {
-          return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: clientError(e, "TTS failed — check the provider key/URL.") } });
+          return json({ ok: true, data: { audioB64: null, mime: "audio/mpeg", note: clientError(e, "TTS failed. Check the provider key/URL.") } });
         }
       }
       // In-app folder browser (works in the browser build AND Electron). Full-tree traversal
@@ -2708,6 +3695,7 @@ return Bun.serve({
         const r = await pickFolderNative({
           title: typeof b.title === "string" ? b.title : undefined,
           buttonLabel: typeof b.buttonLabel === "string" ? b.buttonLabel : undefined,
+          helperFallback: process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : undefined, // P-SANDBOX.13b
         });
         return json({ ok: true, data: r });
       }
@@ -2767,7 +3755,7 @@ return Bun.serve({
         // every preview pill was dark. Emitted BEFORE the await so the pill shows during the wait.
         backend.notePreviewActivity("inspect");
         const { id, promise } = inspectRelay.enqueue({ selector: url.searchParams.get("selector") ?? undefined, what: url.searchParams.get("what") ?? undefined });
-        const t = setTimeout(() => inspectRelay.abandon(id, { error: "no preview is open (or it didn't respond) — open a preview first, then inspect it" }), 8000);
+        const t = setTimeout(() => inspectRelay.abandon(id, { error: "no preview is open (or it didn't respond). Open a preview first, then inspect it" }), 8000);
         const result = await promise; clearTimeout(t);
         return json({ ok: true, data: { result } });
       }
@@ -2776,7 +3764,7 @@ return Bun.serve({
       if (p === "/api/preview/act") {
         backend.notePreviewActivity("act"); // P-PREVIEW.11b (ADR-0308): as above, before the await
         const { id, promise } = inspectRelay.enqueue({ action: url.searchParams.get("action") ?? undefined, selector: url.searchParams.get("selector") ?? undefined, value: url.searchParams.get("value") ?? undefined });
-        const t = setTimeout(() => inspectRelay.abandon(id, { error: "no preview is open (or it didn't respond) — open a preview first, then act on it" }), 8000);
+        const t = setTimeout(() => inspectRelay.abandon(id, { error: "no preview is open (or it didn't respond). Open a preview first, then act on it" }), 8000);
         const result = await promise; clearTimeout(t);
         return json({ ok: true, data: { result } });
       }
@@ -2837,6 +3825,16 @@ return Bun.serve({
           name: typeof b.name === "string" ? b.name : "",
           ...(typeof b.ok === "boolean" ? { ok: b.ok } : {}),
         });
+        return json({ ok: true, data: { noted } });
+      }
+      // P-HEALTH.3: omp's ACP mapper never forwards tool-call argument streaming, so a long write looked
+      // like a wedged session to the stall watchdog. stream_beat_extension posts { session } while it streams;
+      // the owner (master chat or the lane with that omp session id) counts it as activity. A beat for no
+      // running turn is dropped. Liveness only: it never authorizes anything.
+      if (p === "/api/agent/beat" && req.method === "POST") {
+        const b = await readBody<{ session?: unknown }>(req);
+        const session = typeof b.session === "string" ? b.session.trim() : "";
+        const noted = backend.noteStreaming(session) || fleet.noteStreaming(session);
         return json({ ok: true, data: { noted } });
       }
       // ── P-BROWSER.1 (wave 2): the agent-controlled VISIBLE browser window ──────────────────────────
@@ -3146,6 +4144,8 @@ return Bun.serve({
           dataRoot: process.env.LUCID_DATA_ROOT || "",
           settingsFile: process.env.LUCID_GUI_SETTINGS_FILE || join(homedir(), ".omp", "lucid-gui.json"),
           personalDir: personalBaseDir(),
+          platform: process.platform,
+          ...(IDENTITY_PORT !== PORT ? { portRolledFrom: IDENTITY_PORT, portRollHolder: (process.env.LUCID_PORT_ROLL_HOLDER || "").slice(0, 200) } : {}),
         }) });
       }
       // CREATOR-0 (ADR-0283): normalized CPU/GPU/memory telemetry for the odometer rail. Creator builds
@@ -3179,10 +4179,19 @@ return Bun.serve({
           zone: raw.zone === "internal" || raw.zone === "external" ? raw.zone : "local",
           vaultRef: raw.vaultRef ? String(raw.vaultRef).trim() : undefined,
           workflow: raw.workflow ? String(raw.workflow) : undefined,
+          // CUI lockdown: the user's own attestation that this endpoint is a DGX enclave host. Only `true` counts.
+          ...(raw.enclave === true ? { enclave: true } : {}),
           enabled: raw.enabled !== false,
         };
         const r = upsertCreatorEndpoint(def);
         return json({ ok: r.ok, error: r.ok ? undefined : r.errors.join("; "), data: { registry: creatorRegistryData() } });
+      }
+      // lucid-creator-endpoint v1: rescan the Private AI Platform mailbox (<personal dir>/creator_endpoints). Each file
+      // passes the fail-closed contract gate and the declaration validator, or is reported by name.
+      if (p === "/api/creator/endpoint/import-mailbox" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator registry is only in the Creator build." });
+        const r = scanCreatorEndpointMailbox();
+        return json({ ok: true, data: { imported: r.imported, rejected: r.rejected, mailbox: creatorEndpointMailboxDir(), registry: creatorRegistryData() } });
       }
       // CREATOR-0 (ADR-0283): remote monitoring targets (a DGX Spark, a GPU VM behind the VPN).
       if (p === "/api/creator/target" && req.method === "POST") {
@@ -3248,14 +4257,20 @@ return Bun.serve({
       if (p === "/api/creator/probe" && req.method === "POST") {
         if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator probes are only in the Creator build." });
         const b = await readBody<{ providerId?: unknown }>(req);
-        const endpoints = listCreatorEndpoints();
         const wanted = (CREATOR_PROVIDER_IDS as readonly string[]).includes(String(b.providerId))
           ? [String(b.providerId) as CreatorProviderId]
           : [...CREATOR_PROVIDER_IDS];
         for (const id of wanted) {
+          // CUI lockdown first. A probe only reaches something when a declaration or a credential exists, so
+          // only then is a refusal an audited block; otherwise the verdict is just the honest skip reason.
+          const ep = creatorEndpointFor(id);
+          const reaches = !!ep || !!creatorSecretFor(id);
+          const verdict = reaches ? creatorGate(id, ep) : cuiProviderVerdict(creatorLocked(), creatorSpec(id), ep);
           const job = createJob(jobIo, CREATOR_DIR, { kind: "probe", label: `probe ${id}`, provider: id });
           startJob(jobIo, CREATOR_DIR, job.id);
-          const r = await probeProvider(probeDeps, id, endpoints);
+          const r: ProbeResult = verdict.allowed
+            ? await probeProvider(probeDeps, id, ep ? [ep] : [])
+            : { providerId: id, state: "skipped", at: Date.now(), latencyMs: 0, detail: `CUI lockdown: ${verdict.reason}`, attested: [], version: "" };
           probeCache.set(r);
           finishJob(jobIo, CREATOR_DIR, job.id, r.state === "ready" ? "done" : "failed", r.state === "ready" ? "" : `${r.state}: ${r.detail}`);
         }
@@ -3277,6 +4292,8 @@ return Bun.serve({
         if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator image tools are only in the Creator build." });
         const ep = comfyEndpoint();
         if (!ep) return json({ ok: true, data: { models: [], endpoint: "", note: "Connect a ComfyUI endpoint in Creator Studio to list its models." } });
+        const cuiModels = creatorGate("comfyui", ep);
+        if (!cuiModels.allowed) return json(cuiRefusal(cuiModels));
         const probe = await comfyClient(ep).probeModels();
         return json({ ok: true, data: { models: probe.models, endpoint: ep.baseUrl ?? "", note: probe.note } });
       }
@@ -3286,6 +4303,8 @@ return Bun.serve({
       if (p === "/api/creator/image" && req.method === "POST") {
         if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator image tools are only in the Creator build." });
         const b = await readBody<Record<string, unknown>>(req);
+        const imageEp = comfyEndpoint();
+        if (imageEp) { const cuiImage = creatorGate("comfyui", imageEp); if (!cuiImage.allowed) return json(cuiRefusal(cuiImage)); }
         // CREATOR-1: a generation is a JOB - admitted by the governor, recorded with what it produced.
         const label = typeof b.prompt === "string" && b.prompt.trim() ? b.prompt.trim().slice(0, 80) : "image generation";
         const admit = await admitCreatorJob("image", label, "comfyui", { gpu: true });
@@ -3306,6 +4325,8 @@ return Bun.serve({
         const kind: MediaKind = b.kind === "model-3d" ? "model-3d" : b.kind === "image" ? "image" : "video";
         const ep = comfyEndpoint();
         if (!ep) return json({ ok: false, error: "No ComfyUI endpoint is configured. Add one in Creator Studio first." });
+        const cuiRender = creatorGate("comfyui", ep);
+        if (!cuiRender.allowed) return json(cuiRefusal(cuiRender));
         const templateRaw = typeof b.workflow === "string" && b.workflow.trim() ? b.workflow : ep.workflow;
         if (!templateRaw || !templateRaw.trim()) {
           return json({ ok: false, error: `No workflow template is saved for this endpoint. Export the graph that produces your ${kind} from ComfyUI with Save (API Format) and paste it into the endpoint, using {{prompt}}, {{model}} and {{seed}} where LUCID should fill values in.` });
@@ -3355,6 +4376,8 @@ return Bun.serve({
         const ep = listCreatorEndpoints().find((e) => e.enabled && e.providerId === "blender" && !!e.command);
         const exe = typeof b.exe === "string" && b.exe.trim() ? b.exe.trim() : (ep?.command ?? "");
         if (!exe) return json({ ok: false, error: "No Blender executable is configured. Add it in Creator Studio first." });
+        const cuiBlender = creatorGate("blender", ep);
+        if (!cuiBlender.allowed) return json(cuiRefusal(cuiBlender));
         const range = b.range && typeof b.range === "object"
           ? { start: Number((b.range as Record<string, unknown>).start), end: Number((b.range as Record<string, unknown>).end) }
           : undefined;
@@ -3379,6 +4402,488 @@ return Bun.serve({
         const run = await runBlenderRender({ spawn: blenderSpawn, jobIo, exists: (path) => existsSync(path), now: () => Date.now() }, CREATOR_DIR, input);
         return json({ ok: run.ok, error: run.error, data: { run, ...creatorJobsData() } });
       }
+      // DGX avatar (contract 2a): the template clips the box offers for one engine.
+      if (p === "/api/creator/avatar/templates") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator video tools are only in the Creator build." });
+        const engine = url.searchParams.get("engine") ?? "musetalk";
+        if (engine !== "musetalk" && engine !== "echomimic") return json({ ok: false, error: "engine must be musetalk or echomimic." });
+        const ep = creatorEndpointFor("dgx-avatar", url.searchParams.get("endpointId") || undefined);
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX avatar endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
+        const cuiTpl = creatorGate("dgx-avatar", ep);
+        if (!cuiTpl.allowed) return json(cuiRefusal(cuiTpl));
+        const r = await new DgxAvatarClient({ baseUrl: ep.baseUrl }).templates(engine);
+        return json(r.ok ? { ok: true, data: { templates: r.data.templates, folders: r.data.folders, endpointId: ep.id } } : { ok: false, error: r.error });
+      }
+      // DGX avatar: speak the text through the dots.tts backend, then queue the lip-sync render on the box.
+      // Both hops are CUI-gated (the speech engine AND the avatar service); the job is recorded in the ledger
+      // and GET /api/creator/avatar/job pulls the finished video into the library.
+      if (p === "/api/creator/avatar/render" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator video tools are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req).catch(() => null);
+        if (!b) return json({ ok: false, error: "That avatar request was not JSON." });
+        const ep = creatorEndpointFor("dgx-avatar", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX avatar endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
+        const cuiAvatar = creatorGate("dgx-avatar", ep);
+        if (!cuiAvatar.allowed) return json(cuiRefusal(cuiAvatar));
+        const spec = buildAvatarSpec(b);
+        if (!spec.ok) return json({ ok: false, error: spec.error });
+        const text = typeof b.text === "string" ? b.text.trim().slice(0, 8000) : "";
+        if (!text) return json({ ok: false, error: "Write the words the avatar should speak." });
+        const vs = voiceSettings();
+        const ttsStatus = (await ttsEngines()).find((e) => e.id === "dots-tts");
+        if (ttsStatus && !ttsStatus.ready) return json({ ok: false, error: `dots.tts is not ready: ${ttsStatus.reason}` });
+        const cuiTts = creatorGate("dots-tts", dotsTtsEndpointDef(vs.dotsTtsUrl));
+        if (!cuiTts.allowed) return json(cuiRefusal(cuiTts));
+        const voice = resolveVoice("dots-tts", (typeof b.voice === "string" && b.voice) || vs.ttsVoice);
+        if (!voice) return json({ ok: false, error: "Pick one of your DGX voices first (Settings > Voice)." });
+        let wav: Uint8Array = new Uint8Array(0);
+        try {
+          const speech = await new OpenAiCompatibleTtsBackend({ baseUrl: vs.dotsTtsUrl, model: vs.dotsTtsModel, voices: { default: voice } })
+            .synthesize({ title: "avatar", turns: [{ speaker: "default", text }] });
+          if (!speech.audio?.length) return json({ ok: false, error: `dots.tts produced no audio: ${speech.note || "no reason given"}` });
+          wav = speech.audio;
+        } catch (e) { return json({ ok: false, error: clientError(e, "dots.tts failed - check the voice endpoint.") }); }
+        const job = createJob(jobIo, CREATOR_DIR, { kind: "render", label: `avatar (${spec.spec.engine}): ${text.slice(0, 60)}`, provider: "dgx-avatar" });
+        startJob(jobIo, CREATOR_DIR, job.id);
+        const sub = await new DgxAvatarClient({ baseUrl: ep.baseUrl }).submit(wav, spec.spec);
+        if (!sub.ok) {
+          finishJob(jobIo, CREATOR_DIR, job.id, "failed", sub.error);
+          return json({ ok: false, error: sub.error, data: { jobId: job.id, busy: sub.status === 409 } });
+        }
+        jobIo.appendLine(avatarRemoteLedger(), JSON.stringify({ jobId: job.id, endpointId: ep.id, remoteJobId: sub.data.jobId }));
+        return json({ ok: true, data: { jobId: job.id, remoteJobId: sub.data.jobId } });
+      }
+      // DGX avatar: one job's state; on `done` the video lands in the Creator library as kind "video".
+      if (p === "/api/creator/avatar/job") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator video tools are only in the Creator build." });
+        return json(await avatarJobView(url.searchParams.get("jobId") ?? ""));
+      }
+      // HyperFrames: render a local composition folder on THIS machine. Fixed argv, telemetry off, one worker,
+      // lint first, path-confined; the job returns at once and the artifact lands in the library when it ends.
+      if (p === "/api/creator/hyperframes/render" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator video tools are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req).catch(() => null);
+        if (!b) return json({ ok: false, error: "That HyperFrames request was not JSON." });
+        const ep = creatorEndpointFor("hyperframes", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
+        if (!ep?.command) return json({ ok: false, error: "No HyperFrames executable is declared. Add it in Creator Studio first." });
+        const cuiHf = creatorGate("hyperframes", ep);
+        if (!cuiHf.allowed) return json(cuiRefusal(cuiHf));
+        const format: HyperframesFormat = b.format === "webm" || b.format === "mov" ? b.format : "mp4";
+        const quality: HyperframesQuality = b.quality === "draft" || b.quality === "high" ? b.quality : "standard";
+        const outDir = join(CREATOR_DIR, "hyperframes", `hf_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`);
+        const planned = planHyperframesRender({
+          exe: ep.command, prefixArgs: ep.args, projectDir: typeof b.projectDir === "string" ? b.projectDir : "",
+          outPath: join(outDir, `render.${format}`), format, quality, roots: managedWorkspaceRoots() ?? [],
+        });
+        if (!planned.ok) return json({ ok: false, error: planned.error });
+        const locked = creatorLocked();
+        const pre = preflightHyperframes({ exists: (path) => existsSync(path), readText: (path) => readFileSync(path, "utf8") }, planned.plan, ep.command, locked);
+        if (!pre.ok) {
+          if (pre.stage === "external-refs") emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "creator-cui-lockdown", reason: `HyperFrames render refused under CUI lockdown: external URLs in ${planned.plan.projectDir}`.slice(0, 200) });
+          return json({ ok: false, error: pre.error, data: { stage: pre.stage } });
+        }
+        const label = `HyperFrames ${format}: ${basename(planned.plan.projectDir)}`;
+        const admit = await admitCreatorJob("render", label, "hyperframes");
+        if (!admit.ok) return json({ ok: false, error: admit.reason, data: { jobId: admit.jobId } });
+        try { mkdirSync(outDir, { recursive: true }); } catch { /* the runner reports a missing output */ }
+        void runHyperframesRender({
+          spawn: creatorChildSpawn, exists: (path) => existsSync(path), readText: (path) => readFileSync(path, "utf8"),
+          readBytes: (path) => new Uint8Array(readFileSync(path)), ensureDir: (dir) => mkdirSync(dir, { recursive: true }),
+          jobIo, artifactIo, env: process.env, now: () => Date.now(),
+        }, CREATOR_DIR, admit.jobId, planned.plan, { label, note: pre.note })
+          .then((r) => { if (!r.ok) console.warn(`[creator] hyperframes ${admit.jobId} ${r.stage}: ${r.error}`); })
+          .catch((e) => { finishJob(jobIo, CREATOR_DIR, admit.jobId, "failed", String(e).slice(0, 300)); })
+          .finally(() => { try { rmSync(outDir, { recursive: true, force: true }); } catch { /* the library copy is the record */ } });
+        return json({ ok: true, data: { jobId: admit.jobId, note: pre.note } });
+      }
+      // CREATOR-OPENFILM (ADR-0457): `openfilm look` (determinism + film check, contact-sheet PNGs) and `openfilm
+      // render` of a local film folder on THIS machine. Fixed argv, forced opt-outs, .film/opened written first so no
+      // Studio server is spawned, path-confined, every page scanned for external URLs; the job returns at once.
+      if ((p === "/api/creator/openfilm/look" || p === "/api/creator/openfilm/render") && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator video tools are only in the Creator build." });
+        const isLook = p === "/api/creator/openfilm/look";
+        const b = await readBody<Record<string, unknown>>(req).catch(() => null);
+        if (!b || typeof b !== "object" || Array.isArray(b)) return json({ ok: false, error: "That OpenFilm request was not JSON." });
+        const ep = creatorEndpointFor("openfilm", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
+        if (!ep?.command) return json({ ok: false, error: "No OpenFilm executable is declared. Add it in Creator Studio first." });
+        const cuiOf = creatorGate("openfilm", ep);
+        if (!cuiOf.allowed) return json(cuiRefusal(cuiOf));
+        const projectDir = typeof b.projectDir === "string" ? b.projectDir : "";
+        const roots = managedWorkspaceRoots() ?? [];
+        const format: OpenfilmFormat = b.format === "webm" || b.format === "mov" ? b.format : "mp4";
+        const outDir = join(CREATOR_DIR, "openfilm", `of_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`);
+        // A present-but-mistyped field reaches the planner as is, so it is refused rather than silently dropped.
+        const planned = isLook
+          ? planOpenfilmLook({
+            exe: ep.command, prefixArgs: ep.args, projectDir, roots,
+            at: b.at == null ? undefined : b.at as number,
+            range: b.range == null ? undefined : b.range as [number, number],
+            count: b.count == null ? undefined : b.count as number,
+          })
+          : planOpenfilmRender({
+            exe: ep.command, prefixArgs: ep.args, projectDir, roots, outPath: join(outDir, `render.${format}`), format,
+            fps: b.fps == null ? undefined : b.fps as number, fourK: b.fourK === true, blur: b.blur === true,
+          });
+        if (!planned.ok) return json({ ok: false, error: planned.error });
+        const locked = creatorLocked();
+        const deps = openfilmDeps();
+        const pre = preflightOpenfilm(deps, planned.plan, ep.command, locked);
+        if (!pre.ok) {
+          if (pre.stage === "external-refs") emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "creator-cui-lockdown", reason: `OpenFilm ${isLook ? "look" : "render"} refused under CUI lockdown: external URLs in ${planned.plan.projectDir}`.slice(0, 200) });
+          return json({ ok: false, error: pre.error, data: { stage: pre.stage } });
+        }
+        const name = basename(planned.plan.projectDir);
+        const label = isLook ? `OpenFilm look: ${name}` : `OpenFilm ${format}: ${name}`;
+        const admit = await admitCreatorJob(isLook ? "test" : "render", label, "openfilm");
+        if (!admit.ok) return json({ ok: false, error: admit.reason, data: { jobId: admit.jobId } });
+        const runOpts = { label, home: join(CREATOR_DIR, "openfilm", "home"), locked, note: pre.note };
+        const settle = (stage: string, ok: boolean, error: string): void => { if (!ok) console.warn(`[creator] openfilm ${admit.jobId} ${stage}: ${error}`); };
+        const crashed = (e: unknown): void => { finishJob(jobIo, CREATOR_DIR, admit.jobId, "failed", String(e).slice(0, 300)); };
+        if (planned.plan.kind === "look") {
+          void runOpenfilmLook(deps, CREATOR_DIR, admit.jobId, planned.plan, runOpts)
+            .then((r) => { if (r.verdict) rememberOpenfilmVerdict(admit.jobId, r.verdict); settle(r.stage, r.ok, r.error); })
+            .catch(crashed);
+        } else {
+          try { mkdirSync(outDir, { recursive: true }); } catch { /* the runner reports a missing output */ }
+          void runOpenfilmRender(deps, CREATOR_DIR, admit.jobId, planned.plan, runOpts)
+            .then((r) => settle(r.stage, r.ok, r.error))
+            .catch(crashed)
+            .finally(() => { try { rmSync(outDir, { recursive: true, force: true }); } catch { /* the library copy is the record */ } });
+        }
+        return json({ ok: true, data: { jobId: admit.jobId, note: pre.note } });
+      }
+      // CREATOR-OPENFILM: one job's view. State, error, and artifacts come from the job ledger; the look verdict
+      // from this engine's bounded memory (null after a restart, or for a render).
+      if (p === "/api/creator/openfilm/job") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator video tools are only in the Creator build." });
+        const jobId = url.searchParams.get("jobId") ?? "";
+        if (!jobId) return json({ ok: false, error: "Name the OpenFilm job (jobId)." });
+        const job = listJobs(jobIo, CREATOR_DIR).find((j) => j.id === jobId);
+        if (!job || job.provider !== "openfilm") return json({ ok: false, error: "No OpenFilm job has that id." });
+        const kind = job.kind === "test" ? "look" : "render";
+        return json({
+          ok: true,
+          data: {
+            jobId: job.id, kind, state: job.state, error: job.error, artifacts: [...job.artifacts],
+            look: kind === "look" ? openfilmVerdicts.get(job.id) ?? null : null,
+          },
+        });
+      }
+      // DGX CAD (contract 2c): inspect a DXF / DWG / IFC / STEP file on the box. The origin guard requires a
+      // JSON content type on every POST, so the bytes ride either as the raw body (sent with content-type
+      // application/json) or as JSON `{ "dataB64": "..." }`; a CAD file never starts with "{".
+      if (p === "/api/creator/cad/inspect" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator CAD tools are only in the Creator build." });
+        const name = checkInspectName(url.searchParams.get("name"));
+        if (!name.ok) return json({ ok: false, error: name.error });
+        const ep = creatorEndpointFor("dgx-cad", url.searchParams.get("endpointId") || undefined);
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
+        const cuiInspect = creatorGate("dgx-cad", ep);
+        if (!cuiInspect.allowed) return json(cuiRefusal(cuiInspect));
+        if (Number(req.headers.get("content-length") ?? "0") > CAD_MAX_UPLOAD_BYTES * 1.4) return json({ ok: false, error: "That file is over the 200 MB inspect limit." });
+        let bytes = new Uint8Array(await req.arrayBuffer());
+        if (bytes[0] === 0x7b) {
+          try {
+            const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+            if (!parsed || typeof parsed !== "object" || !("dataB64" in parsed) || typeof parsed.dataB64 !== "string") return json({ ok: false, error: "Send the file bytes, or JSON with a dataB64 field." });
+            bytes = new Uint8Array(Buffer.from(parsed.dataB64, "base64"));
+          } catch { return json({ ok: false, error: "That inspect body looked like JSON but did not parse." }); }
+        }
+        const r = await new DgxCadClient({ baseUrl: ep.baseUrl }).inspect(name.name, bytes);
+        return json(r.ok ? { ok: true, data: r.data } : { ok: false, error: r.error });
+      }
+      // DGX CAD: run the user's CadQuery / build123d script on the box. It EXECUTES user code, so it needs
+      // the exec-approval decision (`approved: true`, same contract as the Blender --python path) before the
+      // service is ever called with approved:true. Outputs land in the library (STEP/STL as model-3d, DXF as
+      // drawing); the SVG preview rides the response.
+      if (p === "/api/creator/cad/model" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator CAD tools are only in the Creator build." });
+        const b = await readBody<Record<string, unknown>>(req).catch(() => null);
+        if (!b) return json({ ok: false, error: "That CAD request was not JSON." });
+        const ep = creatorEndpointFor("dgx-cad", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
+        const cuiModel = creatorGate("dgx-cad", ep);
+        if (!cuiModel.allowed) return json(cuiRefusal(cuiModel));
+        const built = buildCadModelRequest(b);
+        if (!built.ok) return json({ ok: false, error: built.error });
+        if (b.approved !== true) {
+          return json({ ok: false, error: "This script is your own code and the CAD service would execute it on the DGX box. That needs exec approval first: LUCID never runs it silently.", data: { stage: "approval", needsApproval: true } });
+        }
+        emitSecurityEvent({ category: "exec", type: "exec_decision", decision: "allow", severity: "medium", tool: "creator-cad-model", reason: `CAD script approved for ${ep.id}: ${built.request.script.length} chars, outputs ${built.request.outputs.join("+")}`.slice(0, 200) });
+        const job = createJob(jobIo, CREATOR_DIR, { kind: "render", label: `CAD model: ${built.request.outputs.join(", ")}`, provider: "dgx-cad" });
+        startJob(jobIo, CREATOR_DIR, job.id);
+        const client = new DgxCadClient({ baseUrl: ep.baseUrl });
+        const r = await client.modelRun(modelRunBody(built.request, true));
+        if (!r.ok) { finishJob(jobIo, CREATOR_DIR, job.id, "failed", r.error); return json({ ok: false, error: r.error, data: { jobId: job.id } }); }
+        if (!r.data.ok) {
+          const err = r.data.error || "the script did not produce a result";
+          finishJob(jobIo, CREATOR_DIR, job.id, "failed", err);
+          return json({ ok: false, error: err, data: { jobId: job.id, result: r.data } });
+        }
+        const stored: CreatorArtifact[] = [];
+        const skipped: { id: string; reason: string }[] = [];
+        for (const a of r.data.artifacts) {
+          const kind = cadArtifactKind(a);
+          if (!kind) continue; // svg: inline in the result
+          const dl = await client.artifact(a.id);
+          if (!dl.ok) { skipped.push({ id: a.id, reason: dl.error }); continue; }
+          const s = storeArtifact(artifactIo, CREATOR_DIR, { kind: kind.kind, bytes: dl.data.bytes, mime: kind.mime, width: 0, height: 0, source: "dgx-cad", prompt: `CAD model (${ep.id})`, model: a.name });
+          if (!s.ok || !s.artifact) { skipped.push({ id: a.id, reason: s.error ?? "not stored" }); continue; }
+          recordJobArtifact(jobIo, CREATOR_DIR, job.id, s.artifact.id);
+          stored.push(s.artifact);
+        }
+        finishJob(jobIo, CREATOR_DIR, job.id, "done", "");
+        return json({ ok: true, data: { jobId: job.id, result: r.data, stored, skipped } });
+      }
+      // DGX CAD: one artifact's bytes, passed through with its type and a sanitized file name. Never rendered
+      // inline as a document of this origin (attachment + sandbox CSP + nosniff), because an SVG is a script.
+      if (p === "/api/creator/cad/artifact") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator CAD tools are only in the Creator build." });
+        const id = url.searchParams.get("id") ?? "";
+        if (!CAD_ARTIFACT_ID.test(id)) return json({ ok: false, error: "That is not a CAD artifact id." });
+        const ep = creatorEndpointFor("dgx-cad", url.searchParams.get("endpointId") || undefined);
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX CAD endpoint is declared." });
+        const cuiArt = creatorGate("dgx-cad", ep);
+        if (!cuiArt.allowed) return json(cuiRefusal(cuiArt));
+        const r = await new DgxCadClient({ baseUrl: ep.baseUrl }).artifact(id);
+        if (!r.ok) return json({ ok: false, error: r.error });
+        const filename = r.data.filename.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120) || `${id}.bin`;
+        return new Response(r.data.bytes, {
+          headers: {
+            "content-type": r.data.mime, "content-disposition": `attachment; filename="${filename}"`,
+            "cache-control": "no-store", "x-content-type-options": "nosniff", "content-security-policy": "sandbox",
+          },
+        });
+      }
+      // ── Design suite: DGX vision (design contract sections 3-4) ──────────────────────────────────────────
+      // Every call: Creator build, then the dgx-vision declaration, then the CUI gate (refusals audited by
+      // creatorGate), then the image sniff + decode budget, then a request REBUILT from validated fields.
+      // decompose and upscale are jobs on the box: the route answers { jobId } and the renderer polls.
+      if (p === "/api/creator/vision/job") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator vision tools are only in the Creator build." });
+        return json(await visionJobView(url.searchParams.get("jobId") ?? ""));
+      }
+      if (p.startsWith("/api/creator/vision/") && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Creator vision tools are only in the Creator build." });
+        const op = p.slice("/api/creator/vision/".length);
+        if (!isVisionOp(op)) return json({ ok: false, error: "Unknown vision operation." });
+        const read = await readJsonCapped(req, ENGINE_MAX_BODY);
+        if (!read.ok) return json({ ok: false, error: read.error });
+        if (!read.body || typeof read.body !== "object" || Array.isArray(read.body)) return json({ ok: false, error: "Send a JSON object." });
+        const b = read.body as Record<string, unknown>;
+        const ep = creatorEndpointFor("dgx-vision", typeof b.endpointId === "string" && b.endpointId ? b.endpointId : undefined);
+        if (!ep?.baseUrl) return json({ ok: false, error: "No DGX vision endpoint is declared. Import one from the Private AI Platform mailbox in Creator Studio." });
+        const cuiVision = creatorGate("dgx-vision", ep);
+        if (!cuiVision.allowed) return json(cuiRefusal(cuiVision));
+        const img = visionImageFrom(b.image);
+        if (!img.ok) return json({ ok: false, error: img.error });
+        const built = buildVisionRequest(op, b, img.image);
+        if (!built.ok) return json({ ok: false, error: built.error });
+        const client = new DgxVisionClient({ baseUrl: ep.baseUrl });
+        if (op === "decompose" || op === "upscale") {
+          const sub = await client.submit(op, built.body);
+          if (!sub.ok) return json({ ok: false, error: sub.error });
+          const job = createJob(jobIo, CREATOR_DIR, { kind: "render", label: `Vision ${op} ${img.image.width}x${img.image.height}`, provider: "dgx-vision" });
+          startJob(jobIo, CREATOR_DIR, job.id);
+          const row: VisionRemoteRow = {
+            jobId: job.id, endpointId: ep.id, remoteJobId: sub.data.remoteJobId, op,
+            width: img.image.width, height: img.image.height, scale: op === "upscale" && typeof built.body.scale === "number" ? built.body.scale : 1,
+          };
+          jobIo.appendLine(visionRemoteLedger(), JSON.stringify(row));
+          return json({ ok: true, data: { jobId: job.id } });
+        }
+        const r = await client.run(op, built.body, img.image);
+        return json(r.ok ? { ok: true, data: r.data } : { ok: false, error: r.error });
+      }
+      // ── Design suite: the editor's document, the agent-op queue, and exports ────────────────────────────
+      // UI token: state (push/read), ops GET + ack, export. Agent token (AGENT_ROUTES): manifest, ops POST,
+      // ops/result. The agent's manifest is rebuilt from the validated document, never taken from a request.
+      if (p === "/api/creator/design/state") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Design editor is only in the Creator build." });
+        if (req.method === "POST") {
+          const read = await readJsonCapped(req, DESIGN_STATE_MAX_BYTES);
+          if (!read.ok) return json({ ok: false, error: read.error });
+          const r = designStore.setState(read.body, read.bytes);
+          return json(r.ok ? { ok: true, data: r.data } : { ok: false, error: r.error });
+        }
+        const s = designStore.state();
+        return json({ ok: true, data: s ? { doc: s.doc, manifest: s.manifest, savedAt: s.savedAt, ...(s.thumbB64 ? { thumbB64: s.thumbB64 } : {}) } : null });
+      }
+      if (p === "/api/creator/design/manifest") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Design editor is only in the Creator build." });
+        return json({ ok: true, data: designStore.agentView(url.searchParams.get("thumb") === "1") });
+      }
+      if (p === "/api/creator/design/ops") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Design editor is only in the Creator build." });
+        if (req.method === "POST") {
+          const read = await readJsonCapped(req, 2 * 1024 * 1024);
+          if (!read.ok) return json({ ok: false, error: read.error });
+          const r = designStore.enqueue(read.body);
+          return json(r.ok ? { ok: true, data: r.data } : { ok: false, error: r.error });
+        }
+        return json({ ok: true, data: designStore.since(url.searchParams.get("since")) });
+      }
+      if (p === "/api/creator/design/ops/ack" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Design editor is only in the Creator build." });
+        const read = await readJsonCapped(req, 256 * 1024);
+        if (!read.ok) return json({ ok: false, error: read.error });
+        const r = designStore.ack(read.body);
+        return json(r.ok ? { ok: true, data: r.data } : { ok: false, error: r.error });
+      }
+      if (p === "/api/creator/design/ops/result") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Design editor is only in the Creator build." });
+        const r = designStore.result(url.searchParams.get("seq"));
+        return json(r.ok ? { ok: true, data: r.data } : { ok: false, error: r.error });
+      }
+      // CREATOR-DRIFT: CutWire Drift over its own localhost agent protocol. The agent reaches these through the
+      // ?t= AGENT_TOKEN URLs it inherits; the Studio tab sends the UI token in the header. That is how a feed
+      // entry knows whether the agent or the user made the call: a header UI token is the user, else the agent.
+      if (p === "/api/creator/drift/status") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Drift is only in the Creator build." });
+        const state = driftSessionState();
+        const exePaths = defaultDriftExePaths(process.platform, process.env);
+        const exePath = exePaths.find((x) => existsSync(x)) ?? "";
+        const declared = listCreatorEndpoints().find((e) => e.enabled && e.providerId === "drift");
+        const ep = creatorEndpointFor("drift");
+        const lockdown = creatorLocked();
+        const sinceRaw = url.searchParams.get("since");
+        const since = sinceRaw !== null && /^\d{1,15}$/.test(sinceRaw) ? Number(sinceRaw) : null;
+        return json({ ok: true, data: {
+          installed: !!exePath || !!state.session || !!declared,
+          exePath,
+          session: driftSessionStatus(state),
+          endpoint: ep ? { id: ep.id, label: ep.label, baseUrl: ep.baseUrl ?? "", source: declared && ep.id === declared.id ? "declared" : "session", cui: cuiProviderVerdict(lockdown, creatorSpec("drift"), ep) } : null,
+          lockdown,
+          probe: probeCache.get("drift"),
+          version: driftVersion,
+          activity: since === null ? driftActivity.latest(50) : driftActivity.since(since),
+        } });
+      }
+      if (p === "/api/creator/drift/call" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Drift is only in the Creator build." });
+        const read = await readJsonCapped(req, 4 * 1024 * 1024);
+        if (!read.ok) return json({ ok: false, error: read.error });
+        const b = read.body && typeof read.body === "object" && !Array.isArray(read.body) ? read.body : {};
+        const tool = "tool" in b && typeof b.tool === "string" ? b.tool.trim().slice(0, 80) : "";
+        if (!tool || !/^[a-z][a-z0-9_]*$/.test(tool)) return json({ ok: false, error: "`tool` must be a Drift tool name (lowercase letters, digits, underscores)." });
+        const rawArgs = "args" in b ? b.args : undefined;
+        if (rawArgs !== undefined && (!rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs))) return json({ ok: false, error: "`args` must be an object." });
+        const args: Record<string, unknown> = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? { ...rawArgs } : {};
+        const source: DriftActivityEntry["source"] = tokenValid(req.headers.get("x-lucid-token"), TOKEN) ? "ui" : "agent";
+        const ep = creatorEndpointFor("drift");
+        if (!ep) return json({ ok: false, error: "Drift is not reachable: no Agent access session and no declared endpoint. In Drift: Settings -> Agent access -> On, then try again." });
+        const cui = creatorGate("drift", ep);
+        if (!cui.allowed) return json(cuiRefusal(cui));
+        const locked = creatorLocked();
+        const verdict = driftOpPolicy(tool, args, locked);
+        if (!verdict.allowed) {
+          emitSecurityEvent({
+            category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "creator-cui-lockdown",
+            reason: `Drift op ${verdict.tool} refused under CUI lockdown: ${verdict.reason}`.slice(0, 200),
+          });
+          // The feed shows the attempt too, so the user sees what the agent tried and why nothing happened.
+          const entry = driftActivity.push({ at: Date.now(), source, tool, ok: false, summary: `refused under CUI lockdown: ${verdict.tool}`.slice(0, 160), undoable: false, revision: null });
+          return json({ ok: false, error: `CUI lockdown: ${verdict.reason}`, data: { cui: { allowed: false, posture: cui.posture, reason: verdict.reason }, entry } });
+        }
+        const token = creatorSecretFor("drift");
+        if (!token) return json({ ok: false, error: `No Drift token: set DRIFT_MCP_TOKEN, store it in the vault under the declaration's credential name, or turn Agent access on in Drift (Settings -> Agent access) so it writes its session file.` });
+        const client = new DriftClient({ baseUrl: ep.baseUrl ?? "", token, timeoutMs: 120_000 });
+        if (!driftVersion) {
+          const init = await client.initialize();
+          if (!init.ok) {
+            return json({ ok: false, error: init.status === 401 || init.status === 403
+              ? "Drift refused the token. Turn Agent access off and on in Drift to rewrite its session file, or update the declared credential."
+              : init.error });
+          }
+          driftVersion = init.version;
+        }
+        const r = await client.call(tool, args);
+        const payload = r.payload && typeof r.payload === "object" && !Array.isArray(r.payload) ? r.payload : {};
+        const revision = "revision" in payload && typeof payload.revision === "number" ? payload.revision : null;
+        const entry = driftActivity.push({
+          at: Date.now(), source, tool, ok: r.ok,
+          // A transport or JSON-RPC failure has no payload: the summary quotes the client's error line instead.
+          summary: r.payload === null && r.error ? summarizeDriftCall(tool, args, { error: r.error }, true) : summarizeDriftCall(tool, args, r.payload, r.isError),
+          undoable: r.ok && isDriftMutation(tool), revision,
+        });
+        // No payload at all means Drift never ran the op (dead port, bad token, JSON-RPC rejection): a refusal.
+        // A `{ok:false}` payload is Drift's own answer and travels back as data with isError set.
+        if (r.status === 0 || r.status === 401 || r.status === 403) driftVersion = "";
+        if (r.payload === null && !r.ok) {
+          const error = r.status === 401 || r.status === 403
+            ? "Drift refused the token. Turn Agent access off and on in Drift to rewrite its session file, or update the declared credential."
+            : r.error ?? "Drift did not answer. In Drift: Settings -> Agent access -> On, then try again.";
+          return json({ ok: false, error, data: { tool, entry } });
+        }
+        return json({ ok: true, data: { tool, isError: r.isError, text: r.text, payload: r.payload, images: r.images, entry } });
+      }
+      if (p === "/api/creator/drift/library" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "Drift is only in the Creator build." });
+        const read = await readJsonCapped(req, 256 * 1024);
+        if (!read.ok) return json({ ok: false, error: read.error });
+        const b = read.body && typeof read.body === "object" && !Array.isArray(read.body) ? read.body : {};
+        const path = "path" in b && typeof b.path === "string" ? b.path.trim() : "";
+        if (!path) return json({ ok: false, error: "`path` is required: the absolute path Drift's export_video echoed back." });
+        if (!/^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(path)) return json({ ok: false, error: "The export path must be absolute." });
+        const prompt = "prompt" in b && typeof b.prompt === "string" ? b.prompt.trim().slice(0, 4000) : "";
+        const label = "label" in b && typeof b.label === "string" ? b.label.trim().slice(0, 200) : "";
+        const source: DriftActivityEntry["source"] = tokenValid(req.headers.get("x-lucid-token"), TOKEN) ? "ui" : "agent";
+        // One file handle for the size check and the read, so nothing can swap the file between the two.
+        let fd = -1;
+        try { fd = openSync(path, "r"); }
+        catch { return json({ ok: false, error: `${path} does not exist yet. Wait for export_status to report done, then try again.` }); }
+        let bytes: Uint8Array;
+        try {
+          const size = fstatSync(fd).size;
+          if (size > 4 * 1024 * 1024 * 1024) return json({ ok: false, error: `${path} is ${Math.round(size / (1024 * 1024 * 1024))} GiB; the library import stops at 4 GiB.` });
+          bytes = new Uint8Array(readFileSync(fd));
+        } catch (e) {
+          return json({ ok: false, error: `${path} could not be read: ${String(e).slice(0, 160)}` });
+        } finally {
+          try { closeSync(fd); } catch { /* already closed */ }
+        }
+        const plan = planDriftLibraryImport(path, bytes);
+        if (!plan.ok) return json({ ok: false, error: plan.error });
+        const stored = storeArtifact(artifactIo, CREATOR_DIR, {
+          kind: plan.kind, bytes, mime: plan.mime, width: 0, height: 0, source: "drift",
+          prompt: prompt || label || `Drift export: ${basename(path)}`, model: `drift ${driftVersion || "(version unknown)"}`,
+        });
+        if (!stored.ok || !stored.artifact) return json({ ok: false, error: stored.error ?? "The export could not be stored." });
+        const entry = driftActivity.push({ at: Date.now(), source, tool: "library", ok: true, summary: `library <- ${basename(path)}`.slice(0, 160), undoable: false, revision: null });
+        return json({ ok: true, data: { artifact: stored.artifact, path: stored.path, entry } });
+      }
+      // Exports land in the Creator library after magic-byte, svgSafetyCheck, and validateDoc gates. A
+      // HyperFrames project is written to a fresh folder this engine owns (inside the first managed workspace
+      // root when the organization sets roots, so planHyperframesRender accepts it) for /hyperframes/render.
+      if (p === "/api/creator/design/export" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Design editor is only in the Creator build." });
+        const read = await readJsonCapped(req, ENGINE_MAX_BODY);
+        if (!read.ok) return json({ ok: false, error: read.error });
+        const body = read.body;
+        if (body && typeof body === "object" && !Array.isArray(body) && "kind" in body && body.kind === "hyperframes") {
+          const hf = planHyperframesExport(body);
+          if (!hf.ok) return json({ ok: false, error: hf.error });
+          const roots = managedWorkspaceRoots() ?? [];
+          const base = roots.length ? join(roots[0]!, ".lucid-design") : join(CREATOR_DIR, "design", "hyperframes");
+          const projectDir = join(base, `hf_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`);
+          try {
+            mkdirSync(join(projectDir, "assets"), { recursive: true });
+            for (const f of hf.data.files) writeFileSync(join(projectDir, ...f.path.split("/")), f.bytes, { mode: 0o600 });
+          } catch (e) {
+            try { rmSync(projectDir, { recursive: true, force: true }); } catch { /* nothing to clean */ }
+            return json({ ok: false, error: `The HyperFrames project could not be written: ${String(e).slice(0, 200)}` });
+          }
+          return json({ ok: true, data: { projectDir, name: hf.data.name } });
+        }
+        const plan = planDesignExport(body);
+        if (!plan.ok) return json({ ok: false, error: plan.error });
+        const e = plan.data;
+        const stored = storeArtifact(artifactIo, CREATOR_DIR, {
+          kind: e.artifactKind, bytes: e.bytes, mime: e.mime, width: e.width, height: e.height,
+          source: "design", prompt: `Design export: ${e.name}`, model: e.kind, ...(e.ext ? { ext: e.ext } : {}),
+        });
+        return json(stored.ok && stored.artifact ? { ok: true, data: { artifact: stored.artifact } } : { ok: false, error: stored.error ?? "The export could not be stored." });
+      }
       // CREATOR-3: the model MANIFEST. A declaration of what a given install can do, reconciled against what
       // the probe actually reported: the probe is the truth and the manifest is only the claim, so a declared
       // model the server does not list is reported ABSENT rather than offered.
@@ -3388,6 +4893,7 @@ return Bun.serve({
         const parsed = parseModelManifest(b.manifest);
         if (!parsed.ok) return json({ ok: false, error: parsed.error });
         const ep = comfyEndpoint();
+        if (ep) { const cuiManifest = creatorGate("comfyui", ep); if (!cuiManifest.allowed) return json(cuiRefusal(cuiManifest)); }
         const probe = probeCache.get("comfyui");
         const models = ep ? (await comfyClient(ep).probeModels()).models : [];
         const reconciliation = reconcileManifest(parsed.manifest, {
@@ -3487,6 +4993,33 @@ return Bun.serve({
         });
         return json({ ok: r.ok, error: r.error, session: r.session });
       }
+      // CREATOR-WHISTLE (ADR-0432 decision 4): measure the word timing of one library track with the
+      // in-process model. The track is read by id (no upload), refused by name exactly as the editor
+      // refuses it, and the answer carries the mapped `measured` items plus what the model heard. There is
+      // no creatorGate: the provider has no endpoint and its registry posture is on-device (checked, not
+      // assumed), so nothing leaves the process. Admission still goes through the job ledger: a 3 minute
+      // take is ~45 s of CPU, and a hot box refuses with the measured reason.
+      if (p === "/api/creator/align" && req.method === "POST") {
+        if (!BUILD.creatorBuild) return json({ ok: false, error: "The Creator editor is only in the Creator build." });
+        const b = await readBody<{ trackId?: unknown; text?: unknown; language?: unknown }>(req).catch(() => null);
+        if (!b) return json({ ok: false, error: "That align request was not JSON." });
+        if (creatorSpec("whistle").cui.posture !== "on-device") return json({ ok: false, error: "Whistle is not registered as on-device, so the alignment is refused." });
+        const trackId = typeof b.trackId === "string" ? b.trackId.trim() : "";
+        const w = await whistleClient();
+        if (!w.ok) return json({ ok: false, error: w.reason });
+        const track = foldLibrary(libraryIo.readText(libraryLedger(CREATOR_DIR))).find((t) => t.id === trackId);
+        const admit = await admitCreatorJob("align", `align: ${track?.title || trackId || "(no track)"}`.slice(0, 80), "whistle", { gpu: false });
+        if (!admit.ok) return json({ ok: false, error: admit.reason, data: { jobId: admit.jobId } });
+        const r = await measureEditorAlignment(libraryIo, CREATOR_DIR, {
+          trackId,
+          text: typeof b.text === "string" ? b.text : undefined,
+          language: typeof b.language === "string" ? b.language : undefined,
+        }, whistleTranscriber(w.client));
+        finishJob(jobIo, CREATOR_DIR, admit.jobId, r.ok ? "done" : "failed", r.ok ? "" : r.error);
+        if (!r.ok) return json({ ok: false, error: r.error, data: { jobId: admit.jobId } });
+        const { trackId: id, items, note, alignedBy, matched, interpolated, transcript, language, windows } = r;
+        return json({ ok: true, data: { trackId: id, items, note, alignedBy, matched, interpolated, transcript, language, windows, jobId: admit.jobId } });
+      }
       // CREATOR-2: save an edit. The document is gated off the wire fail-closed (one malformed word refuses
       // the body), then rendered and APPENDED as a remix - the edited track keeps its bytes and its row.
       if (p === "/api/creator/editor/save" && req.method === "POST") {
@@ -3544,7 +5077,14 @@ return Bun.serve({
         return json(r);
       }
       // real omp ACP backend (genuine model replies + live session config)
-      if (p === "/api/sessions") return json({ ok: true, data: listSessions() });
+      if (p === "/api/sessions") {
+        // P-SWITCH.2 (ADR-0404): each row says where it is live (Main, working or not, or a spoke and its
+        // state), so the sidebar shows what is running before anyone clicks.
+        const list = await listSessions(); // P-BOOTPERF.1: async, so a cold index never freezes the engine
+        const main = { sessionId: backend.currentSessionId(), busy: backend.switchBlocker() !== null };
+        const lanes = fleet.owners();
+        return json({ ok: true, data: { sessions: withLiveState(list.sessions, main, lanes), ingest: list.ingest } });
+      }
       if (p === "/api/sessions/ingest/clear" && req.method === "POST") return json({ ok: true, data: clearIngestSessions() }); // P-KG-INGEST.2
       if (p === "/api/session" && url.searchParams.get("id")) { // P-PERF.4: tail-first page (limit=0 = all)
         const lim = Math.max(0, Math.trunc(Number(url.searchParams.get("limit")) || 0));
@@ -3555,10 +5095,26 @@ return Bun.serve({
         syncStepTurns(sid, page.userTotal);
         return json({ ok: true, data: { ...page, steps: readTurnSteps(sid) } });
       }
-      if (p === "/api/session/load" && req.method === "POST") { const { id } = await readBody<{ id?: unknown }>(req); await backend.loadSession(String(id)); return json({ ok: true }); }
+      // P-SWITCH.1 (ADR-0403): opening a session never stops Main's work unless the caller chose to. Every
+      // client (desktop, PWA, a script) gets the same refusal; `force: true` is the explicit "stop it".
+      if (p === "/api/session/busy") return json({ ok: true, data: { busy: backend.switchBlocker(), sessionId: backend.currentSessionId() } });
+      if (p === "/api/session/load" && req.method === "POST") {
+        const { id, force } = await readBody<{ id?: unknown; force?: unknown }>(req);
+        // P-SWITCH.2 (ADR-0404): a session a live spoke holds is never loaded into Main as well; `force`
+        // stops Main's own work, it does not take a session away from a spoke.
+        const held = spokeHolding(String(id));
+        if (held) return sessionHeld(held);
+        const busy = force === true ? null : backend.switchBlocker();
+        if (busy) return switchRefused(busy, backend.currentSessionId());
+        await backend.loadSession(String(id));
+        return json({ ok: true });
+      }
       if (p === "/api/session/delete" && req.method === "POST") {
         const { id } = await readBody<{ id?: unknown }>(req);
         const sid = String(id);
+        // P-SWITCH.2: deleting the file under a running spoke would leave it appending to nothing.
+        const held = spokeHolding(sid);
+        if (held) return json({ ok: true, data: { ok: false, error: `This session is running in spoke "${held.name}". Stop that spoke first, then delete it.` } });
         // If it's the live session, close it first so omp releases the file handle (Windows
         // locks open files), then start fresh. newSession() does session/close + ensureSession.
         if (backend.currentSessionId() === sid) await backend.newSession().catch(() => {});
@@ -3571,6 +5127,26 @@ return Bun.serve({
       if (p === "/api/workspace") {
         if (req.method === "POST") { const b = await readBody<{ path?: unknown }>(req); setWorkspace(String(b.path ?? "")); backend.restart(); if (collabManager.active) collabManager.refreshOptions(); /* P-COLLAB.14: mirror the folder switch to edit guests */ }
         return json({ ok: true, data: workspaceInfo() });
+      }
+      // P-REPO.1 (ADR-0406): which repo Main works on (from its own tool calls, else the workspace folder)
+      // and where its commits go. Lanes carry the same shape on /api/fleet/status (LaneView.repo).
+      if (p === "/api/repo/context") return json({ ok: true, data: await repoContext(backend.currentSessionId(), currentWorkspace()) });
+      // P-REPO.1: the repos a spoke can start on without typing a path. Local only (fast); GitHub is its own
+      // route so a slow network never holds the list back.
+      if (p === "/api/repo/choices") {
+        const s = loadSettings();
+        const ws = currentWorkspace();
+        const lanes = (await fleet.status()).lanes;
+        const seeds: { path: string; source: RepoChoiceSource }[] = [
+          { path: ws, source: "workspace" },
+          ...lanes.map((l) => ({ path: l.cwd, source: "lane" as const })),
+          ...(s.recentWorkspaces ?? []).map((path) => ({ path, source: "recent" as const })),
+          ...(s.reportRepos ?? []).map((path) => ({ path, source: "report" as const })),
+        ];
+        return json({ ok: true, data: await localRepoChoices(seeds, [{ dir: ws, source: "nearby" }, { dir: CLONE_ROOT(), source: "clone" }]) });
+      }
+      if (p === "/api/repo/github") {
+        return json({ ok: true, data: await githubRepoChoices({ ghAuthed: ghAvailable, token: hostTokenForUrl("https://github.com/x/y"), refresh: url.searchParams.get("refresh") === "1" }) });
       }
       // Drop a folder from the recents pills. Local list change only - the active workspace is untouched, so
       // NO backend restart (unlike setWorkspace/clone). Returns the refreshed workspace info.
@@ -3693,6 +5269,32 @@ return Bun.serve({
         }
         return json({ ok: true, data: { config: embeddingsConfig(), active: !!desktopEmbedder() } });
       }
+      // P-MEET.1: the Meetings panel's window onto the Lucid Meeting Hub (its one write: marking an action item
+      // done). UI token only - none of these is in AGENT_ROUTES, so an omp child cannot reach them. Everything here is a
+      // pass-through to the Hub's bearer-scoped /ext/* surface, normalized for the renderer. Nothing about a
+      // meeting is cached or written to disk on this side. The renderer never receives the bearer: it rides
+      // from meetings_hub.ts straight to the Hub, and only the one-time pairing claim returns it (so the
+      // renderer can push it into the OS-encrypted vault, which is reachable only from the Electron main
+      // process - see meetings_hub.ts for why this transit exists).
+      if (p === "/api/meetings") {
+        const limit = Number(url.searchParams.get("limit") ?? 50);
+        const offset = Number(url.searchParams.get("offset") ?? 0);
+        return json({ ok: true, data: await meetingsView({ limit, offset, q: url.searchParams.get("q") ?? "" }) });
+      }
+      if (p === "/api/meetings/detail") {
+        const r = await meetingDetail(url.searchParams.get("file") ?? "");
+        return json({ ok: true, data: r });
+      }
+      if (p === "/api/meetings/todo" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; done?: unknown }>(req);
+        return json({ ok: true, data: await markTodo(String(b.id ?? ""), !!b.done) });
+      }
+      if (p === "/api/meetings/pair" && req.method === "POST") {
+        const b = await readBody<{ code?: unknown }>(req);
+        const r = await claimPairing(String(b.code ?? ""));
+        // `vaultRef` tells the renderer WHERE to store the token; the token itself is returned exactly once.
+        return json({ ok: true, data: { ok: r.ok, error: r.error, token: r.token, vaultRef: MEETING_HUB_CRED_REF } });
+      }
       // ADR-0221: "Test endpoint" - a one-vector connectivity probe against the ENTERED values (incl. an inline
       // key, so it works before saving/relaunch), reporting the dimension the model returns so the UI auto-fills it.
       if (p === "/api/embeddings/test" && req.method === "POST") {
@@ -3732,10 +5334,21 @@ return Bun.serve({
         }
         return json({ ok: true, data: out });
       }
+      // P-GAME.1: only manifest-listed local games can be opened in the same opaque Preview frame.
+      if (p === "/api/arcade/games") {
+        const out: Record<string, string> = {};
+        for (const [id, game] of Object.entries(ARCADE_GAMES)) {
+          const abs = join(ROOT, "games", game.file);
+          if (existsSync(abs)) out[id] = abs;
+        }
+        return json({ ok: true, data: out });
+      }
       if (p === "/api/auth") return json({ ok: true, data: authWithOauthErrors() });
       if (p === "/api/auth/key" && req.method === "POST") {
         const { env, key } = await readBody<{ env?: unknown; key?: unknown }>(req);
-        setKey(String(env), String(key ?? ""));
+        // P-VAULT-KEYS.1 (ADR-0472): a key the OS vault cannot take is refused, never written in plaintext.
+        try { setKey(String(env), String(key ?? "")); }
+        catch (e) { return json({ ok: false, error: clientError(e, "the key could not be stored in the OS vault - nothing was saved") }); }
         backend.restart(); // pick up the new env on next turn
         return json({ ok: true, data: providerAuth() });
       }
@@ -3935,11 +5548,12 @@ return Bun.serve({
       if (p === "/api/trivia/reseed" && req.method === "POST") {
         const b = await readBody<{ model?: unknown; role?: unknown; sources?: { sessions?: unknown; kg?: unknown; codegraph?: unknown } }>(req);
         const sources = { sessions: !!b.sources?.sessions, kg: !!b.sources?.kg, codegraph: !!b.sources?.codegraph };
+        const sessionTitles = sources.sessions ? (await listSessions()).sessions.map((s) => s.title) : [];
         const data = await seedTrivia(
           { role: typeof b.role === "string" ? b.role : "developer", sources, model: typeof b.model === "string" ? b.model : "" },
           {
             providers: {
-              sessions: () => listSessions().sessions.map((s) => s.title),
+              sessions: () => sessionTitles,
               kg: () => { const g = personalGraph(); return g ? [...g.facts.map((f) => f.statement), ...g.nodes.map((n) => n.name)] : []; },
               code: () => (loadCodeGraph(currentWorkspace())?.nodes ?? []).map((n) => n.name),
             },
@@ -4017,7 +5631,7 @@ return Bun.serve({
         const b = await readBody<{ sourcePath?: unknown; title?: unknown; text?: unknown }>(req);
         const text = String(b.text ?? "");
         if (!text.trim()) return json({ ok: true, data: { documentId: "", status: "quarantined", pagesCompiled: 0, pagesQuarantined: 0, links: 0, pageIds: [], blocked: [{ stage: "source", reason: "empty document", trustLabel: "quarantined", findings: 0 }] } });
-        const model = usageLedger().models[0]?.model;
+        const model = (await usageLedger()).models[0]?.model;
         const result = await ingestDocument({
           store: await kbStore(),
           scanner: kbScanner(),
@@ -4156,7 +5770,7 @@ return Bun.serve({
           else { targetId = (typeof b.kgId === "string" && b.kgId) ? b.kgId : (activeKgId() ?? ""); kgName = listKgs().find((k) => k.kg_id === targetId)?.name ?? ""; }
         } catch (e) { return json({ ok: true, data: { ok: false, error: clientError(e, "could not create or resolve the knowledge graph") } }); }
         if (!targetId) return json({ ok: true, data: { ok: false, error: "No target knowledge graph." } });
-        const model = usageLedger().models[0]?.model;
+        const model = (await usageLedger()).models[0]?.model;
         const started = startKbIngest({
           kgId: targetId, kgName,
           run: async (onTick, signal) => {
@@ -4220,6 +5834,33 @@ return Bun.serve({
         const url = String(b.url ?? "");
         if (!url) return json({ ok: true, data: { ok: false, error: "url is required" } });
         return json({ ok: true, data: await installPackFromUrl(url) });
+      }
+      // P-PLUGINS.2 (ADR-0462): `.lplugin` plugins. Install runs every gate fail-closed (download, manifest,
+      // hash, signature, authenticode, scan; desktop/plugins/install.ts) and stops a running copy before the
+      // version pointer moves; start/stop drive desktop/plugins/runtime.ts; uninstall keeps the data dir
+      // unless keepData is explicitly false.
+      if (p === "/api/plugins" && req.method === "GET") return json({ ok: true, data: { plugins: plugins.list() } });
+      if (p === "/api/plugins/license" && req.method === "GET") return json({ ok: true, data: readPluginLicense(url.searchParams.get("id") ?? "") });
+      if (p === "/api/plugins/install-from-url" && req.method === "POST") {
+        srv.timeout(req, 0); // a large package (download + per-file scan) can outlast the 60 s idle limit
+        const b = await readBody<{ url?: unknown; expectId?: unknown }>(req);
+        const r = await installPluginFromUrl(String(b.url ?? ""), String(b.expectId ?? ""), { beforeSwitch: async (id) => { await plugins.stop(id); } });
+        return json({ ok: true, data: r.ok ? { ok: true, id: r.id, version: r.version } : r });
+      }
+      if (p === "/api/plugins/start" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        return json({ ok: true, data: await plugins.start(String(b.id ?? "")) });
+      }
+      if (p === "/api/plugins/stop" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        return json({ ok: true, data: await plugins.stop(String(b.id ?? "")) });
+      }
+      if (p === "/api/plugins/uninstall" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; keepData?: unknown }>(req);
+        const id = String(b.id ?? "");
+        const stopped = await plugins.stop(id);
+        if (!stopped.ok) return json({ ok: true, data: stopped });
+        return json({ ok: true, data: uninstallPlugin(id, b.keepData !== false) });
       }
       // P-SKILLREG.2 (ADR-0102): the PUBLISH seam. Reads a codified skill's SKILL.md and publishes it as a
       // versioned artifact to the configured targets (fail-safe fan-out). Public ships the LOCAL publisher;
@@ -4376,17 +6017,26 @@ return Bun.serve({
         return json({ ok: true, data: { recorded: true } });
       }
       // ADR-0009 Phase A: re-load the cross-session recall block for the fresh session (read-only).
-      if (p === "/api/newSession" && req.method === "POST") { await backend.newSession(); await refreshRecall(); return json({ ok: true }); }
+      if (p === "/api/newSession" && req.method === "POST") {
+        const { force } = await readBody<{ force?: unknown }>(req).catch(() => ({ force: undefined }));
+        const busy = force === true ? null : backend.switchBlocker(); // P-SWITCH.1 (ADR-0403)
+        if (busy) return switchRefused(busy, backend.currentSessionId());
+        await backend.newSession(); await refreshRecall(); return json({ ok: true });
+      }
       // P-FLEET.L5 (ADR-0274): the reviewable timeline - every session on this machine (master chats,
       // lane sessions labeled through the durable ledger, ingest throwaways), across ALL workspaces,
       // newest first. Reading a point reuses the same transcript reader the sidebar resume uses; the
       // injected user-turn preamble is already stripped for display there (issue #52).
       // `?selfTest=1` opts the repo's own echo/demo throwaways back IN (held back by default).
+      // `?kind=lane|chat|ingest` narrows to one kind before paging (the orbit reads lanes only).
       if (p === "/api/timeline") {
         const limit = Number(url.searchParams.get("limit") ?? 100);
         const offset = Number(url.searchParams.get("offset") ?? 0);
         const includeSelfTest = url.searchParams.get("selfTest") === "1";
-        return json({ ok: true, data: listTimeline({ limit: Number.isFinite(limit) ? limit : 100, offset: Number.isFinite(offset) ? offset : 0, includeSelfTest }) });
+        const kindParam = url.searchParams.get("kind");
+        const kind = kindParam === null ? undefined : isTimelineKind(kindParam) ? kindParam : null;
+        if (kind === null) return Response.json({ ok: false, error: "kind must be chat, lane, or ingest" }, { status: 400 });
+        return json({ ok: true, data: await listTimeline({ limit: Number.isFinite(limit) ? limit : 100, offset: Number.isFinite(offset) ? offset : 0, includeSelfTest, ...(kind ? { kind } : {}) }) });
       }
       if (p === "/api/timeline/session" && req.method === "POST") {
         const b = await readBody<{ id?: unknown; limit?: unknown }>(req);
@@ -4396,9 +6046,102 @@ return Bun.serve({
       // P-FLEET.L1/L2: the local lane fleet. Status is metadata (lanes + pressure evidence); prompt streams
       // the lane's turn as NDJSON exactly like /api/chat; answer resolves a pending approval (fail-closed on
       // silence).
+      // P-SCHED.1 (ADR-0443): scheduled lane jobs. UI token only (never in AGENT_ROUTES): a prompt-injected
+      // transcript must not be able to arm a 3:00 AM run of itself. The list carries each job's next fire
+      // and the next seven days of fires for the rail tile's day-by-hour hover.
+      if (p === "/api/jobs" && req.method === "GET") {
+        const now = Date.now();
+        const jobs = loadJobs().map((j) => ({ ...j, nextFireAt: j.armed && !j.suspended ? nextFireAt(j, now) : null }));
+        const upcoming = jobs.flatMap((j) => (j.armed && !j.suspended ? firesBetween(j.cron, new Date(now), new Date(now + 7 * 86_400_000), 64).map((d) => ({ at: d.getTime(), jobId: j.id, name: j.name, lane: j.target.name, repo: j.target.repo ?? j.target.cwd.split(/[\\/]/).filter(Boolean).pop() ?? "" })) : []))
+          .sort((a, b) => a.at - b.at).slice(0, 200);
+        return json({ ok: true, data: { jobs, running: jobScheduler.running(), upcoming } });
+      }
+      if (p === "/api/jobs" && req.method === "POST") {
+        const v = normalizeJobSpec(await readBody<unknown>(req));
+        if (!v.ok) return json({ ok: false, error: v.reason });
+        const job = createScheduledJob(v.spec);
+        saveJobs([job, ...loadJobs()]);
+        emitSecurityEvent({ category: "exec", type: "scheduled_job", decision: "allow", severity: "info", tool: "scheduled_job", reason: `created ${job.name} [${job.id}] ${job.cron}${job.armed ? " armed" : " disarmed"}`.slice(0, 200) });
+        return json({ ok: true, data: job });
+      }
+      if (p === "/api/jobs/update" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; patch?: unknown }>(req);
+        const id = String(b.id ?? "");
+        const patch = (b.patch && typeof b.patch === "object" ? b.patch : {}) as Record<string, unknown>;
+        const current = loadJobs().find((j) => j.id === id);
+        if (!current) return json({ ok: false, error: "no such job" });
+        const merged = normalizeJobSpec({ name: current.name, prompt: current.prompt, target: current.target, cron: current.cron, armed: current.armed, autoApprove: current.autoApprove, maxMinutes: current.maxMinutes, missed: current.missed, ...patch });
+        if (!merged.ok) return json({ ok: false, error: merged.reason });
+        // Arming a suspended job is the user saying "I fixed it": the suspension clears and the cursor
+        // restarts from now, so the fires missed while suspended are not owed.
+        const rearmed = merged.spec.armed && (!current.armed || current.suspended);
+        const job = updateJob(id, (j) => ({ ...j, ...merged.spec, ...(rearmed ? { suspended: undefined, lastFireAt: Date.now() } : {}) }));
+        emitSecurityEvent({ category: "exec", type: "scheduled_job", decision: "allow", severity: "info", tool: "scheduled_job", reason: `updated ${merged.spec.name} [${id}]${"armed" in patch ? (merged.spec.armed ? " armed" : " disarmed") : ""}`.slice(0, 200) });
+        return json({ ok: true, data: job });
+      }
+      if (p === "/api/jobs/delete" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        const id = String(b.id ?? "");
+        const before = loadJobs();
+        const after = before.filter((j) => j.id !== id);
+        if (after.length === before.length) return json({ ok: false, error: "no such job" });
+        saveJobs(after);
+        emitSecurityEvent({ category: "exec", type: "scheduled_job", decision: "allow", severity: "info", tool: "scheduled_job", reason: `deleted [${id}]` });
+        return json({ ok: true, data: { deleted: true } });
+      }
+      if (p === "/api/jobs/run" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        const job = loadJobs().find((j) => j.id === String(b.id ?? ""));
+        if (!job) return json({ ok: false, error: "no such job" });
+        if (jobScheduler.running().includes(job.id)) return json({ ok: false, error: "this job is running right now" });
+        // Run now is a manual fire: it does not move the schedule's cursor past a future fire.
+        void jobScheduler.fire(job, job.lastFireAt ?? job.createdAt, Date.now(), true);
+        return json({ ok: true, data: { started: true } });
+      }
+      // The lanes a job can target: live lanes first, then every lane the ledger remembers (newest line
+      // per lane id), so a job can name a lane that is not running right now.
+      if (p === "/api/jobs/targets" && req.method === "GET") {
+        const live = (await fleet.status()).lanes.filter((l) => l.status !== "stopped").map((l) => ({ laneId: l.id, name: l.name, cwd: l.cwd, model: l.model, live: true, repo: jobTargetRepo(l.repo?.repo ?? null) }));
+        const seen = new Set(live.map((l) => l.laneId));
+        const remembered: { laneId: string; name: string; cwd: string; model?: string; live: boolean; repo?: string }[] = [];
+        const rows = readLaneLedger();
+        for (let i = rows.length - 1; i >= 0 && remembered.length < 60; i--) {
+          const r = rows[i]!;
+          if (seen.has(r.laneId)) continue;
+          seen.add(r.laneId);
+          remembered.push({ laneId: r.laneId, name: r.name, cwd: r.cwd, model: r.model, live: false });
+        }
+        return json({ ok: true, data: { targets: [...live, ...remembered] } });
+      }
       if (p === "/api/fleet/status") return json({ ok: true, data: await fleet.status() });
+      // P-AOS.1 (ADR-0452): the standing fleet goal. UI token only (never AGENT_ROUTES): criteria are verified
+      // and the goal is paused, resumed or cancelled by the human, per AOS-1 section 7.
+      if (p === "/api/fleet/goal" && req.method === "GET") return json({ ok: true, data: fleetGoal.snapshot() });
+      if (p === "/api/fleet/goal" && req.method === "POST") return json({ ok: true, data: fleetGoal.set(await readBody<unknown>(req)) });
+      if (p === "/api/fleet/goal/criterion" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; met?: unknown }>(req);
+        return json({ ok: true, data: fleetGoal.criterion(b.id, b.met) });
+      }
+      if (p === "/api/fleet/goal/control" && req.method === "POST") {
+        const b = await readBody<{ action?: unknown }>(req);
+        return json({ ok: true, data: fleetGoal.control(b.action) });
+      }
+      // P-AOS.2 (ADR-0453): tasks under the goal. UI token only, like the goal: a person writes the task,
+      // ticks its human checks, and cancels it.
+      if (p === "/api/fleet/goal/task" && req.method === "POST") return json({ ok: true, data: fleetGoal.addTask(await readBody<unknown>(req)) });
+      if (p === "/api/fleet/goal/task/check" && req.method === "POST") {
+        const b = await readBody<{ taskId?: unknown; checkId?: unknown; passed?: unknown }>(req);
+        return json({ ok: true, data: fleetGoal.taskCheck(b.taskId, b.checkId, b.passed) });
+      }
+      if (p === "/api/fleet/goal/task/cancel" && req.method === "POST") {
+        const b = await readBody<{ taskId?: unknown }>(req);
+        return json({ ok: true, data: fleetGoal.cancelTask(b.taskId) });
+      }
+      // P-TUI.2: open `lucid hub` in a new terminal window, attached to THIS engine. UI token only (never in
+      // AGENT_ROUTES): one fixed command, no argument from the request, never inside the agent sandbox.
+      if (p === "/api/hub/open" && req.method === "POST") return json({ ok: true, data: await openHubWindow(resolvedRepo().root, process.env.LUCID_RESOURCES ?? "") });
       if (p === "/api/fleet/spawn" && req.method === "POST") {
-        const b = await readBody<{ cwd?: unknown; model?: unknown; name?: unknown; repoUrl?: unknown; pat?: unknown }>(req);
+        const b = await readBody<{ cwd?: unknown; model?: unknown; name?: unknown; repoUrl?: unknown; pat?: unknown; sessionId?: unknown; worktree?: unknown }>(req);
         // P-FLEET.L2: a lane can be spawned straight from a GitHub / GitLab / Azure DevOps remote. The clone
         // lands INSIDE the folder the user picked in the OS dialog (or under ~/.omp/lucid-workspaces when
         // they picked none) and an existing clone is reused, so re-spawning the same repo is idempotent.
@@ -4408,12 +6151,33 @@ return Bun.serve({
         const repoUrl = typeof b.repoUrl === "string" ? b.repoUrl.trim() : "";
         let cwd = String(b.cwd ?? "");
         if (repoUrl) {
-          const c = await cloneRepo(repoUrl, typeof b.pat === "string" && b.pat ? b.pat : undefined, cwd || undefined);
+          let pat = typeof b.pat === "string" && b.pat ? b.pat : undefined;
+          // P-REPO.1 (ADR-0406): a private repo the picker listed through the GitHub CLI sign-in clones with
+          // that same sign-in when no token was typed or saved for github.com.
+          if (!pat && /^https:\/\/github\.com\//i.test(repoUrl) && !hostTokenForUrl(repoUrl) && await ghAvailable()) pat = (await ghToken()) || undefined;
+          const c = await cloneRepo(repoUrl, pat, cwd || undefined);
           if (!c.ok || !c.path) return json({ ok: true, data: { ok: false, reason: c.error || "git clone failed" } });
           cwd = c.path;
         }
-        const r = await fleet.spawn({ cwd, model: typeof b.model === "string" && b.model ? b.model : undefined, name: typeof b.name === "string" && b.name ? b.name : undefined });
-        return json({ ok: true, data: r });
+        // P-FLEET.WT1: the user accepted the merge-conflict risk and asked for the lane's OWN worktree, so it
+        // works on its own branch beside other agents in this repo instead of sharing the checkout. A refused
+        // spawn removes the worktree it just made; a started lane keeps it (its branch is the lane's work).
+        const lane = b.worktree === true ? await createLaneWorktree(cwd, typeof b.name === "string" && b.name.trim() ? b.name : basename(cwd)) : null;
+        if (lane && !lane.ok) return json({ ok: true, data: { ok: false, reason: lane.reason, ...(lane.code ? { code: lane.code } : {}) } }); // P-PUSH.PAR1: `code` lets Push now fall back
+        if (lane?.ok) cwd = lane.laneCwd;
+        // P-FLEET.L17: recovering a historical spoke brings its RECORDED session back (omp loads it
+        // natively; the on-disk transcript seeds the composer and is the fallback memory).
+        const sessionId = typeof b.sessionId === "string" ? b.sessionId.trim() : "";
+        let resume: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } | undefined;
+        if (sessionId) {
+          const page = sessionMessages(sessionId, TRANSCRIPT_MAX_TURNS);
+          const transcript: LaneTurnRecord[] = [];
+          for (const m of page.messages) if ((m.role === "user" || m.role === "assistant") && m.text.trim()) transcript.push({ role: m.role, text: m.text });
+          resume = { sessionId, transcript, turns: page.userTotal };
+        }
+        const r = await fleet.spawn({ cwd, model: typeof b.model === "string" && b.model ? b.model : undefined, name: typeof b.name === "string" && b.name ? b.name : undefined, ...(resume ? { resume } : {}) });
+        if (lane?.ok && !r.ok) await removeLaneWorktree(lane);
+        return json({ ok: true, data: lane?.ok && r.ok ? { ...r, worktree: { path: lane.path, branch: lane.branch } } : r });
       }
       // P-FLEET.L3: lane prompts carry P-VISION.1 image blocks like /api/chat (defensively filtered,
       // capped at 6). The same filter guards the queue and its drain below.
@@ -4430,8 +6194,19 @@ return Bun.serve({
         return json({ ok: true, data: fleet.enqueue(String(b.laneId ?? ""), String(b.text ?? ""), laneImages(b.images)) });
       }
       if (p === "/api/fleet/queue/remove" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; index?: unknown; expect?: unknown }>(req);
+        // P-PUSH.PAR1 (ADR-pending): `expect` (the item's full text) guards a remove that lands seconds later.
+        return json({ ok: true, data: fleet.queueRemove(String(b.laneId ?? ""), Number(b.index), typeof b.expect === "string" ? b.expect : undefined) });
+      }
+      // P-PUSH.PAR1 (ADR-pending): Copy and Push now read a staged item whole, without removing it.
+      if (p === "/api/fleet/queue/peek" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown; index?: unknown }>(req);
-        return json({ ok: true, data: fleet.queueRemove(String(b.laneId ?? ""), Number(b.index)) });
+        return json({ ok: true, data: fleet.queuePeek(String(b.laneId ?? ""), Number(b.index)) });
+      }
+      // P-QUEUE-IMG.1 (ADR-0469): Update pulls a staged item (full text + its own images) back into the card.
+      if (p === "/api/fleet/queue/take" && req.method === "POST") {
+        const b = await readBody<{ laneId?: unknown; index?: unknown }>(req);
+        return json({ ok: true, data: fleet.queueTake(String(b.laneId ?? ""), Number(b.index)) });
       }
       if (p === "/api/fleet/queue/move" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown; index?: unknown; dir?: unknown }>(req);
@@ -4469,12 +6244,12 @@ return Bun.serve({
         const on = b.on === true;
         if (on && !loadSettings().fleetAutoRiskAcceptedAt) {
           if (b.acceptRisk !== true) return json({ ok: false, error: "full auto-mode needs an explicit risk acceptance first" });
-          saveSettings({ ...loadSettings(), fleetAutoRiskAcceptedAt: Date.now() });
+          const accepted = loadSettings(); accepted.fleetAutoRiskAcceptedAt = Date.now(); saveSettings(accepted); // a load()-sourced object: secret deltas stay exact (ADR-0472)
         }
         const laneId = typeof b.laneId === "string" && b.laneId ? b.laneId : "";
         if (laneId) return json({ ok: true, data: fleet.setAuto(laneId, on) });
         fleet.setAutoAll(on);
-        saveSettings({ ...loadSettings(), fleetAutoApprove: on });
+        const s = loadSettings(); s.fleetAutoApprove = on; saveSettings(s);
         return json({ ok: true, data: { ok: true } });
       }
       if (p === "/api/fleet/cancel" && req.method === "POST") {
@@ -4530,6 +6305,11 @@ return Bun.serve({
           else req.signal.addEventListener("abort", stop, { once: true });
           const seed = fleet.laneTranscript(laneId);
           if (seed.length) emit({ type: "watch-seed", turns: seed });
+          // The status as of NOW, after the observer is attached: a turn that ended between the promote
+          // response and this subscription sends no further event, and the composer would keep treating
+          // the lane as mid-turn (every send staged, nothing ever releasing it).
+          const attached = fleet.promotedLane();
+          if (attached?.id === laneId) emit({ type: "status", status: attached.status });
           await gate.promise;
         });
       }
@@ -4546,28 +6326,144 @@ return Bun.serve({
       // foreign process squatting the engine port has to be detectable before anything is authenticated.
       // Reusing it would have both shadowed this route (the guard is registered first and wins) and hung
       // session telemetry off an unauthenticated path.
-      if (p === "/api/session-health") return json({ ok: true, data: { master: backend.healthStatus(), lanes: fleet.healthReport() } });
+      if (p === "/api/session-health") return json({ ok: true, data: { master: backend.healthStatus(), lanes: fleet.healthReport(), progress: backend.progressView() } }); // P-PROGRESS.1: progress rides along
       if (p === "/api/session-health/tick" && req.method === "POST") {
         const [master, lanes] = await Promise.all([backend.healthTick(), fleet.healthTick()]);
         return json({ ok: true, data: { master, lanes } });
+      }
+      // P-NETSTAT.1 (ADR-0423): the network indicator's feed. `model` only SELECTS a row of the fixed
+      // provider-host table (probeTargetFor), so a caller can never make the engine fetch a URL of its
+      // choosing; LUCID_NET_PROBE_URL is the operator's override for air-gapped or proxied networks.
+      if (p === "/api/net-status") {
+        const model = url.searchParams.get("model") || backend.activeModelName();
+        const target = probeTargetFor(model, { override: process.env.LUCID_NET_PROBE_URL, asksageBase: asksageConfig().base });
+        return json({ ok: true, data: await netProbe.check(target) });
+      }
+      // P-RECOVER.1 (ADR-0385): self-recovery the user can see. Behind the same token gate as every /api
+      // route above. Every body field is type- and shape-checked before it reaches the backend or the
+      // incident store (ids address files and ACP sessions, so a malformed one is a 400, never a lookup).
+      // Nothing here submits anything: submission is the user opening the prefilled issue URL themselves.
+      if (p === "/api/recovery/state" && req.method === "GET") {
+        return json({ ok: true, data: { previous: PREVIOUS_SESSION, currentSessionId: backend.currentSessionId(), incidents: listIncidents().filter((m) => !m.seen).map(incidentView) } });
+      }
+      if (p === "/api/recovery/resume" && req.method === "POST") {
+        const b = parseResumeBody(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        const held = spokeHolding(b.value.sessionId); // P-SWITCH.2 (ADR-0404)
+        if (held) return json({ ok: true, data: { ok: false, error: `That session is running in spoke "${held.name}", so it was not reopened in Main.` } });
+        return json({ ok: true, data: await backend.resumeSession(b.value.sessionId) });
+      }
+      if (p === "/api/recovery/recover" && req.method === "POST") return json({ ok: true, data: await backend.recoverMaster() });
+      if (p === "/api/incidents" && req.method === "GET") {
+        return json({ ok: true, data: listIncidents().map(incidentView) });
+      }
+      if (p === "/api/incidents/report" && req.method === "GET") {
+        const q = parseIncidentIdBody({ id: url.searchParams.get("id") });
+        if (!q.ok) return Response.json({ ok: false, error: q.error }, { status: 400 });
+        // Rebuilt from the validated record (incident_store.ts), never a file's text: no path is read from
+        // the metadata, and the report is redacted again on the way out.
+        const markdown = incidentReport(q.value.id);
+        if (markdown === null) return Response.json({ ok: false, error: "no such incident" }, { status: 404 });
+        return json({ ok: true, data: { markdown } });
+      }
+      if (p === "/api/incidents/seen" && req.method === "POST") {
+        const b = parseIncidentIdBody(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        return json({ ok: true, data: { ok: markIncidentSeen(b.value.id) } });
+      }
+      if (p === "/api/incidents/update" && req.method === "POST") {
+        const b = parseIncidentUpdate(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        const { id, outcome, note } = b.value;
+        // The store redacts the note (home folder included) before it is written.
+        const meta = updateIncident(id, { outcome, events: note ? [{ at: Date.now(), what: note }] : [] });
+        return json({ ok: true, data: meta ? incidentView(meta) : null });
       }
       // P-INTERJECT.1: mid-turn operator interjections. POST queues a note for "master" or a laneId
       // (store enforces trim/4000-char/8-note discipline; validation here mirrors it for a crisp error).
       // GET /pending returns AND clears atomically - the single consumer is the target's omp child
       // (interject_extension.ts polls it once per tool result via the token'd LUCID_INTERJECT_URL).
+      // ADR-0414: a note for a session that does not exist is refused (`unknown-target`). `live: true`
+      // marks the USER's push (Push now, Check in), which is also refused (`idle`) when the target's turn
+      // is not running, because a push parked on an idle target is read by nothing until some later turn.
+      // Every refusal carries `code` + `error`; the renderer shows the reason and keeps the text.
       if (p === "/api/interject" && req.method === "POST") {
-        const b = await readBody<{ target?: unknown; text?: unknown }>(req);
+        const b = await readBody<{ target?: unknown; text?: unknown; live?: unknown }>(req);
         const target = String(b.target ?? "").trim();
-        const text = String(b.text ?? "").trim();
+        const running = target === "master" ? backend.turnStatus()?.running === true : fleet.laneRunning(target);
+        const r = addInterject(target, String(b.text ?? ""), { running, live: b.live === true });
+        return r.ok ? json({ ok: true, data: { pending: pendingInterjectCount(target) } }) : json({ ok: false, code: r.code, error: r.reason });
+      }
+      // P-LIVENESS.1 (ADR-0418): the user's "Stop command" on a call marked likely stuck. Ends only the
+      // processes the open call started ("master" or a laneId), queues a note so the agent knows why, and
+      // leaves the turn running.
+      if (p === "/api/liveness/stop-call" && req.method === "POST") {
+        const b = await readBody<{ target?: unknown }>(req);
+        const target = String(b.target ?? "").trim();
         if (!target) return json({ ok: false, error: "target required" });
-        if (!text) return json({ ok: false, error: "text required" });
-        if (text.length > 4000) return json({ ok: false, error: "note too long (max 4000 chars)" });
-        const r = addInterject(target, text);
-        return r.ok ? json({ ok: true, data: { pending: pendingInterjectCount(target) } }) : json({ ok: false, error: r.reason });
+        const r = target === "master" ? await backend.stopOpenCall() : await fleet.stopOpenCall(target);
+        return json({ ok: true, data: r });
       }
       if (p === "/api/interject/pending" && req.method === "GET") {
         const target = String(url.searchParams.get("target") ?? "").trim();
-        return json({ ok: true, data: { notes: target ? drainInterjects(target) : [] } });
+        // P-OWN.1: peer notes ride the same drain as a separate kind; the child marks them untrusted.
+        return json({ ok: true, data: { notes: target ? drainInterjects(target) : [], peer: target ? drainPeerNotes(target) : [] } });
+      }
+      // P-OWN.1: one checkout, known writers. `peers` is what the checkin_peers tool and the prompt
+      // briefing read; `gate` is asked by the commit_gate extension before a bash `git` call runs;
+      // `checkin` queues an agent-to-agent note and `checkin/reply` waits for one. Every caller is an
+      // omp child carrying its own LUCID_INTERJECT_TARGET as `target`/`from`; the engine never trusts a
+      // child to speak for another session beyond that name (a wrong name only mislabels a note, and the
+      // note is delivered as untrusted peer data either way).
+      if (p === "/api/checkout/peers" && req.method === "GET") {
+        const target = String(url.searchParams.get("target") ?? "").trim();
+        const cwd = String(url.searchParams.get("cwd") ?? "").trim() || currentWorkspace();
+        if (!target) return json({ ok: false, error: "target required" });
+        return json({ ok: true, data: await checkouts.peers(target, cwd) });
+      }
+      if (p === "/api/checkout/gate" && req.method === "GET") {
+        const target = String(url.searchParams.get("target") ?? "").trim();
+        const cwd = String(url.searchParams.get("cwd") ?? "").trim() || currentWorkspace();
+        const command = String(url.searchParams.get("command") ?? "");
+        if (!target) return json({ ok: false, error: "target required" });
+        const d = await checkouts.gate(target, cwd, command);
+        if (d.block) emitSecurityEvent({ category: "exec", type: "checkout_gate", decision: "block", severity: "low", tool: "git", reason: (d.reason ?? "").slice(0, 200) });
+        return json({ ok: true, data: d });
+      }
+      // P-WAIT.1: a write/edit is about to run. Claim its file(s) for the caller's running turn, waiting
+      // (bounded by waitMs, under omp's 30 s hook limit) only while ANOTHER worker's running turn holds one of
+      // them. The caller's card or HUD says whom it waits for; a refusal names the holder for the model. An
+      // unknown caller is let through: this is coordination between cooperating agents, not a trust boundary.
+      if (p === "/api/checkout/write" && req.method === "GET") {
+        const target = String(url.searchParams.get("target") ?? "").trim();
+        const cwd = String(url.searchParams.get("cwd") ?? "").trim() || currentWorkspace();
+        const paths = url.searchParams.getAll("path").map((s) => s.trim()).filter(Boolean);
+        const waitMs = Math.min(WRITE_WAIT_MAX_MS, Math.max(0, Number(url.searchParams.get("waitMs")) || 0));
+        if (!target || paths.length === 0) return json({ ok: false, error: "target and path required" });
+        const lane = target === "master" ? null : fleet.sessionsView().find((s) => s.id === target);
+        if (target !== "master" && !lane) return json({ ok: true, data: { block: false } });
+        const me = lane ? { id: lane.id, name: lane.name } : { id: "master", name: "Main" };
+        const onWait = (w: WaitView | null) => { if (lane) fleet.noteWriteWait(lane.id, w); else backend.noteWriteWait(w); };
+        const startedAt = Date.now();
+        const v = await backend.writeClaims.acquire(me, paths, cwd, { waitMs, onWait });
+        return json({ ok: true, data: v.held ? { block: true, reason: writeRefusal(v, Date.now() - startedAt) } : { block: false } });
+      }
+      if (p === "/api/checkin" && req.method === "POST") {
+        const b = await readBody<{ from?: unknown; to?: unknown; text?: unknown }>(req);
+        const from = String(b.from ?? "").trim();
+        const to = String(b.to ?? "").trim();
+        const known = [{ id: "master", name: "main composer" }, ...fleet.sessionsView()];
+        const sender = known.find((s) => s.id === from);
+        if (!sender) return json({ ok: true, data: { ok: false, reason: `unknown sender "${from}"` } });
+        if (!known.some((s) => s.id === to)) return json({ ok: true, data: { ok: false, reason: `unknown session "${to}" - call checkin_peers for the live ids` } });
+        return json({ ok: true, data: addPeerNote(to, from, sender.name, String(b.text ?? "")) });
+      }
+      if (p === "/api/checkin/reply" && req.method === "GET") {
+        const target = String(url.searchParams.get("target") ?? "").trim();
+        const from = String(url.searchParams.get("from") ?? "").trim();
+        const timeoutMs = Math.min(90_000, Math.max(0, Number(url.searchParams.get("timeoutMs")) || 0));
+        if (!target || !from) return json({ ok: false, error: "target and from required" });
+        return json({ ok: true, data: { reply: await awaitPeerReply(target, from, timeoutMs) } });
       }
       // P-INTERJECT.1: the unified Processes list (master turn, live lanes, import job, wave-2 browsers).
       if (p === "/api/processes") return json({ ok: true, data: { processes: await buildProcessViews() } });
@@ -4626,7 +6522,15 @@ return Bun.serve({
           const shared = collabManager.active ? backend.attachTurn((event) => {
             try { collabManager.tapEvent(event as unknown as Parameters<typeof collabManager.tapEvent>[0]); } catch { /* non-fatal */ }
           }) : undefined;
-          try { await execution; } finally { shared?.detach(); }
+          try { await execution; }
+          catch (e) {
+            // P-RECOVER.1 (ADR-0385): the stream wrapper masks every error as "The chat stream failed.", which
+            // hid the one refusal the window can act on. Pass exactly that fixed text through; nothing else.
+            if (!(e instanceof Error) || e.message !== TURN_ALREADY_RUNNING) throw e;
+            emit({ type: "error", message: TURN_ALREADY_RUNNING });
+            emit({ type: "done" });
+          }
+          finally { shared?.detach(); }
         };
         const activeTurn = backend.turnStatus();
         if (activeTurn?.running) {
@@ -4886,9 +6790,14 @@ return Bun.serve({
       // to the real renderer; no-store so it's never cached across launches.
       // P-TRAINER.7: trainer.html is a same-origin iframe that calls the token-gated /api/trainer routes, so
       // it needs the per-launch token meta injected exactly like index.html.
+      // P-SANDBOX.15 (ADR-0396): NOT when an Electron main launched us. `GET /` needs no token, so any local
+      // process (the agent's own curl included) could read the meta tag; under Electron the preload fetches
+      // the token from main over IPC instead. Only a standalone browser dev run (`bun run web`) still injects.
       if (rel === "index.html" || rel === "trainer.html") {
         const html = (await Bun.file(join(ROOT, rel)).text())
-          .replace("</head>", `  <meta name="lucid-token" content="${TOKEN}">\n</head>`);
+          // ADR-0458: the window and taskbar title is the page title, so Creator beside Agent reads "Lucid Creator".
+          .replace("<title>Lucid Agent</title>", `<title>${BUILD.displayName}</title>`)
+          .replace("</head>", HAS_MAIN ? "</head>" : `  <meta name="lucid-token" content="${TOKEN}">\n</head>`);
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
       }
       const file = Bun.file(join(ROOT, rel));
@@ -4931,55 +6840,106 @@ return Bun.serve({
 }
 }
 
+// P-TUI.0 (ADR-0419): publish this launch's coordinates for terminal clients (`lucid hub`, docs/TUI.md).
+// One 0600 file per bound port under userData (or ~/.omp standalone): port, per-launch nonce, UI token,
+// pid, version, flavor. A client must still win the ADR-0305 health handshake against the file's nonce
+// before trusting anything, so a stale or squatted-over file is inert. Standalone runs (no Electron main)
+// mint the nonce here - /api/health reads process.env each request, and the nonce is deliberately
+// non-secret (it proves launch identity, gates nothing else). Removed on every exit path the whisper/fleet
+// handlers already cover (SIGINT/SIGTERM re-enter process.exit, which fires "exit").
+if (!process.env.LUCID_ENGINE_NONCE) process.env.LUCID_ENGINE_NONCE = randomBytes(16).toString("hex");
+const ENGINE_PORT = server.port ?? PORT; // Bun types port as optional (unix-socket servers); a TCP bind always has one
+const DISCOVERY_PATH = discoveryPath(discoveryDir(process.env), ENGINE_PORT);
+try {
+  writeDiscovery(DISCOVERY_PATH, {
+    v: 1, pid: process.pid, port: ENGINE_PORT, nonce: process.env.LUCID_ENGINE_NONCE,
+    token: TOKEN, version: APP_VERSION, flavor: BUILD.flavor, startedAt: new Date().toISOString(),
+  });
+} catch (err) {
+  // Advisory seam: a client that finds no file falls back to spawning its own engine. Never fatal.
+  console.error(`[discovery] could not publish ${DISCOVERY_PATH}: ${String(err)}`);
+}
+process.on("exit", () => removeDiscovery(DISCOVERY_PATH));
+
 // P-PREVIEW.3a-shot (ADR-0096): hand the omp subprocess a ready-to-use URL (real bound port + token) for the
 // agent's preview_screenshot tool to fetch the cached shot. omp is spawned later (lazily, by acp_backend in
 // THIS process) and inherits process.env, so setting it here — after the server binds — is enough; no
 // ACPClient env plumbing needed. 127.0.0.1 (not localhost) matches the loopback bind.
-process.env.LUCID_PREVIEW_SHOT_URL = `http://127.0.0.1:${server.port}/api/preview/shot?t=${TOKEN}`;
+process.env.LUCID_PREVIEW_SHOT_URL = `http://127.0.0.1:${server.port}/api/preview/shot?t=${AGENT_TOKEN}`;
 // P-PREVIEW.6b (ADR-0153): the agent's preview_inspect tool GETs this (with ?selector=&what=) to read the DOM.
-process.env.LUCID_PREVIEW_INSPECT_URL = `http://127.0.0.1:${server.port}/api/preview/inspect?t=${TOKEN}`;
+process.env.LUCID_PREVIEW_INSPECT_URL = `http://127.0.0.1:${server.port}/api/preview/inspect?t=${AGENT_TOKEN}`;
 // P-PREVIEW.6c (ADR-0153): preview_click / preview_type GET this (with ?action=&selector=&value=) to act.
-process.env.LUCID_PREVIEW_ACT_URL = `http://127.0.0.1:${server.port}/api/preview/act?t=${TOKEN}`;
+process.env.LUCID_PREVIEW_ACT_URL = `http://127.0.0.1:${server.port}/api/preview/act?t=${AGENT_TOKEN}`;
 // P-PREVIEW.11 (ADR-0308): preview_open POSTs {path} here so the panel opens from the TOOL's own call.
 // The old path (acp_backend matching "preview_open: <path>" in the ACP title) is dead under intent
 // tracing, which rewrites that title to the model's intent prose; it stays only as a fallback.
-process.env.LUCID_PREVIEW_OPEN_URL = `http://127.0.0.1:${server.port}/api/preview/open?t=${TOKEN}`;
+process.env.LUCID_PREVIEW_OPEN_URL = `http://127.0.0.1:${server.port}/api/preview/open?t=${AGENT_TOKEN}`;
 // ADR-0220: the `knowledge_search` tool (omp subprocess) POSTs the user's query here to ground on the local
 // compiled knowledge base. Token'd URL, same pattern as the preview tools; retrieval returns delimited untrusted DATA.
-process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retrieve?t=${TOKEN}`;
+process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retrieve?t=${AGENT_TOKEN}`;
 // P-FLEET.L1: the master agent's fleet_status tool (omp subprocess) GETs this to see local lane status -
 // metadata only (lane replies render in the fleet dashboard, never through this URL).
-process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/status?t=${TOKEN}`;
+process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/status?t=${AGENT_TOKEN}`;
 // P-SANDBOX.8: the sandbox_grant_dir tool (omp subprocess) POSTs its user-approved {path,mode,reason}
 // claim here. Same token'd convention as LUCID_FLEET_STATUS_URL; the endpoint applies NOTHING without a
 // fresh matching approval parked by the desktop's grant dialog (fail-closed, defense in depth).
-process.env.LUCID_SANDBOX_GRANT_URL = `http://127.0.0.1:${server.port}/api/sandbox/grant?t=${TOKEN}`;
+process.env.LUCID_SANDBOX_GRANT_URL = `http://127.0.0.1:${server.port}/api/sandbox/grant?t=${AGENT_TOKEN}`;
+// P-SECRET-INTAKE.1 (ADR-0476): request_secret. Not in process.env (security review SECRET-INTAKE-REQUESTER-SPOOF):
+// only the master spawn gets the URL and its own token (acp_backend.ts, secret_routes.masterSecretRequestEnv).
+configureSecretRequestEndpoint(`http://127.0.0.1:${server.port}`);
+// P-SANDBOX.17 (ADR-0399): tools/git-broker/git_shim.ts POSTs the contained agent's git calls here.
+process.env.LUCID_GIT_URL = `http://127.0.0.1:${server.port}/api/git/exec?t=${AGENT_TOKEN}`;
 // P-EVAL.4 (ADR-0318): the tool_meta extension POSTs {id,name,ok?} here for every tool call, because the
 // real tool name exists ONLY inside omp's hook API - the ACP update carries a coarse `kind` and an
 // intent-shadowed title. Unset means the extension self-skips, and reports fall back to the coarse kind.
-process.env.LUCID_TOOL_META_URL = `http://127.0.0.1:${server.port}/api/tool/meta?t=${TOKEN}`;
+process.env.LUCID_TOOL_META_URL = `http://127.0.0.1:${server.port}/api/tool/meta?t=${AGENT_TOKEN}`;
 // P-JEV.2 (ADR-0377): the judgment extension POSTs every typed judgment (question, answers, backend,
 // latency, error) here, because omp records none of them and has no hook for them. Unset means the
 // extension self-skips and the chat draws no judgment row.
-process.env.LUCID_JUDGMENT_URL = `http://127.0.0.1:${server.port}/api/judgment/trace?t=${TOKEN}`;
+// P-HEALTH.3: stream_beat_extension (master and lanes) POSTs { session } here while a tool call streams.
+process.env.LUCID_STREAM_BEAT_URL = `http://127.0.0.1:${server.port}/api/agent/beat?t=${AGENT_TOKEN}`;
+process.env.LUCID_JUDGMENT_URL = `http://127.0.0.1:${server.port}/api/judgment/trace?t=${AGENT_TOKEN}`;
 // P-KG.3: the agent's memory_recall / memory_retain tools reach the UNLOCKED personal knowledge graph
 // through these. Both fail closed when the vault is locked: recall returns no hits and retain refuses,
 // so a locked vault can never be mistaken for an empty one (which would teach the model it has no memory)
 // nor silently swallow a write (which would teach it that it does).
-process.env.LUCID_KG_RECALL_URL = `http://127.0.0.1:${server.port}/api/kg/recall?t=${TOKEN}`;
-process.env.LUCID_KG_RETAIN_URL = `http://127.0.0.1:${server.port}/api/kg/retain?t=${TOKEN}`;
+process.env.LUCID_KG_RECALL_URL = `http://127.0.0.1:${server.port}/api/kg/recall?t=${AGENT_TOKEN}`;
+process.env.LUCID_KG_RETAIN_URL = `http://127.0.0.1:${server.port}/api/kg/retain?t=${AGENT_TOKEN}`;
+// Design suite: design_read / design_apply / design_request (harness/omp/design_extension.ts). Creator builds
+// only: without LUCID_DESIGN_OPS_URL the extension registers nothing, so other flavors never see the tools.
+if (BUILD.creatorBuild) {
+  process.env.LUCID_DESIGN_MANIFEST_URL = `http://127.0.0.1:${server.port}/api/creator/design/manifest?t=${AGENT_TOKEN}`;
+  process.env.LUCID_DESIGN_OPS_URL = `http://127.0.0.1:${server.port}/api/creator/design/ops?t=${AGENT_TOKEN}`;
+  process.env.LUCID_DESIGN_RESULT_URL = `http://127.0.0.1:${server.port}/api/creator/design/ops/result?t=${AGENT_TOKEN}`;
+  // CREATOR-DRIFT: drift_status / drift_read / drift_apply / drift_export (harness/omp/drift_extension.ts).
+  process.env.LUCID_DRIFT_STATUS_URL = `http://127.0.0.1:${server.port}/api/creator/drift/status?t=${AGENT_TOKEN}`;
+  process.env.LUCID_DRIFT_CALL_URL = `http://127.0.0.1:${server.port}/api/creator/drift/call?t=${AGENT_TOKEN}`;
+  process.env.LUCID_DRIFT_LIBRARY_URL = `http://127.0.0.1:${server.port}/api/creator/drift/library?t=${AGENT_TOKEN}`;
+  // CREATOR-OPENFILM (ADR-0457): openfilm_look / openfilm_render / openfilm_job (harness/omp/openfilm_extension.ts).
+  // The job URL already carries ?t=; callers append &jobId=<encoded id>.
+  process.env.LUCID_OPENFILM_LOOK_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/look?t=${AGENT_TOKEN}`;
+  process.env.LUCID_OPENFILM_RENDER_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/render?t=${AGENT_TOKEN}`;
+  process.env.LUCID_OPENFILM_JOB_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/job?t=${AGENT_TOKEN}`;
+}
 // P-INTERJECT.1: the omp children (master + lanes) reach this server for mid-turn operator notes.
 // LUCID_DEV_URL is the bare base URL from the shared contract; LUCID_INTERJECT_URL is the ready-to-use
 // token'd drain endpoint (same pattern as LUCID_FLEET_STATUS_URL - /api requires the per-launch token,
 // which a child can only carry as ?t=). Per-child LUCID_INTERJECT_TARGET rides the spawn env overlay
 // (interjectChildEnv in acp_backend.ts for the master, the fleet env dep above for lanes).
 process.env.LUCID_DEV_URL = `http://127.0.0.1:${server.port}`;
-process.env.LUCID_INTERJECT_URL = `http://127.0.0.1:${server.port}/api/interject/pending?t=${TOKEN}`;
+process.env.LUCID_INTERJECT_URL = `http://127.0.0.1:${server.port}/api/interject/pending?t=${AGENT_TOKEN}`;
+// P-OWN.1: the checkin_* tools and the commit gate, one complete token'd URL each (the child appends
+// `&target=...` and the rest). Per-child identity is LUCID_INTERJECT_TARGET, as for the notes.
+process.env.LUCID_CHECKIN_PEERS_URL = `http://127.0.0.1:${server.port}/api/checkout/peers?t=${AGENT_TOKEN}`;
+process.env.LUCID_CHECKIN_SEND_URL = `http://127.0.0.1:${server.port}/api/checkin?t=${AGENT_TOKEN}`;
+process.env.LUCID_CHECKIN_REPLY_URL = `http://127.0.0.1:${server.port}/api/checkin/reply?t=${AGENT_TOKEN}`;
+process.env.LUCID_CHECKOUT_GATE_URL = `http://127.0.0.1:${server.port}/api/checkout/gate?t=${AGENT_TOKEN}`;
+process.env.LUCID_CHECKOUT_WRITE_URL = `http://127.0.0.1:${server.port}/api/checkout/write?t=${AGENT_TOKEN}`; // P-WAIT.1
 // P-BROWSER.1 (wave 2): the omp child's browser_* tools reach the agent-browser routes through this
 // token'd BASE (the extension appends /open, /capture, /scroll, /close, /shot and keeps the ?t=).
 // Gated on LUCID_MAIN_TOKEN: without the Electron main there is no window executor, so the env stays
 // unset and browser_extension.ts skips registration entirely (bun-only / plain-browser dev runs).
-if (process.env.LUCID_MAIN_TOKEN) process.env.LUCID_BROWSER_URL = `http://127.0.0.1:${server.port}/api/browser?t=${TOKEN}`;
+if (HAS_MAIN) process.env.LUCID_BROWSER_URL = `http://127.0.0.1:${server.port}/api/browser?t=${AGENT_TOKEN}`;
 
 // Build recall once at startup — the FIRST session is created lazily on the first /api/chat (never
 // via /api/newSession), so this is what carries prior-session facts into it. Best-effort; the omp
@@ -4989,5 +6949,41 @@ await refreshRecall();
 // P-GOAL.5 (ADR-0047): arm the in-process automation scheduler. It only ticks while this dev server
 // (and thus the app) is running; nothing is registered with the OS, so closing the app stops it.
 backend.startAutomationScheduler();
+// P-SCHED.1 (ADR-0443): the scheduled LANE jobs tick beside it, same envelope (only while the app runs).
+jobScheduler.start();
 
 console.log(`\n  ◆ LucidAgentIDE desktop renderer (dev)\n  → http://localhost:${server.port}\n`);
+
+/** P-SANDBOX.12 (ADR-0390): the facts the panel's sandbox switch is drawn from (see sandbox_control.ts). */
+function sandboxControlNow(): SandboxControlView {
+  const helper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : "";
+  const helperBundled = !!helper && existsSync(helper);
+  // P-MXC.1 (ADR-0441): the MXC executor's posture rides the same view: staged + verified, its tier, and the
+  // elevated steps still pending (the "Prepare host" button). The loopback exemption is shared with the helper.
+  let mxc: SandboxControlView["mxc"];
+  if (process.platform === "win32") {
+    const m = mxcHost({ resourcesPath: process.env.LUCID_RESOURCES || undefined });
+    mxc = m.host
+      ? { staged: true, tier: m.host.tier, prepNeeded: m.probe.prepNeeded, loopbackNeeded: m.host.tier !== "base-container" && !loopbackExempted(), source: m.executors.source }
+      : { staged: false, prepNeeded: [], loopbackNeeded: false };
+  }
+  return sandboxControlView({
+    platform: process.platform,
+    helperBundled,
+    mode: loadSettings().sandboxWindowsMode,
+    policyRequiresIsolation: managedSandboxLocksOn(managedConfig().config), // P-SANDBOX.14: either policy knob
+    registered: (helperBundled || !!mxc?.staged) && loopbackExempted(),
+    foldersLocked: managedSandboxFoldersLocked(managedConfig().config),
+    mxc,
+  });
+}
+
+/** P-SANDBOX.13 (ADR-0391): the folders LUCID itself grants the contained agent, for the panel's list. The
+ *  same inputs acp_backend passes to appContainerRuntimeGrants, so the list matches the real grants. */
+function sandboxRuntimeFoldersNow(): RuntimeFolderView[] {
+  if (!sandboxControlNow().available) return [];
+  let shellPath: string | null = null;
+  try { shellPath = parseOmpShellPath(readFileSync(join(homedir(), ".omp", "agent", "config.yml"), "utf8")); } catch { /* no config */ }
+  const g = appContainerRuntimeGrants({ repoRoot: resolvedRepo().root, home: homedir(), bunBin: process.env.LUCID_BUN_BIN, ompBin: process.env.LUCID_OMP_BIN, shellPath, gitRoot: discoverGitRoot(process.env) });
+  return runtimeFolderView({ workspace: currentWorkspace(), grantRx: g.grantRx, grantRw: g.grantRw, tmpDir: g.tmpDir, policy: managedPolicyFolderPlan(false) });
+}

@@ -4,7 +4,7 @@
 // harness/judgment/trace.ts - P-JEV.2 (ADR-0377): the one shape a traced judgment travels in.
 //
 // omp answers its typed judgments (auto-thinking effort, the smart unexpected-stop check, git AI staging,
-// the eval `judge()` helper) through pi-ai's `Judge` classes: `TypeSafeJudge` (Jev, api.typesafe.ai) and
+// the eval `judge()` helper) through pi-ai's `Judge` classes: `NativeJudge` (Jev, api.typesafe.ai) and
 // `TextJudge` (a chat or local model answering by keyword). omp records NONE of the answers anywhere and
 // exposes no hook for them, so the only place the full request + result exist is inside those two calls.
 // `harness/omp/judgment_extension.ts` wraps them in-process and posts one of these per call; the desktop
@@ -69,6 +69,15 @@ export function judgmentPurpose(report: Pick<JudgmentReport, "questions">): stri
   if (ids.length === 1 && ids[0] === "stopped") return "Unexpected-stop check";
   if (ids.length && ids.every((id) => id === "matches" || /^file\d+$/.test(id))) return "Git AI staging";
   return "Agent judge() call";
+}
+
+/** P-JEV.7: the level a successful auto-thinking effort pick chose, else null. With the Judgment backend
+ *  on None this is the ONLY judgment omp still makes (Thinking: Auto cannot skip it), and the chat model
+ *  makes it itself, so the trace view labels it as that pick instead of as a judge being consulted. */
+export function effortPick(report: Pick<JudgmentReport, "questions" | "answers" | "error">): string | null {
+  if (report.error || judgmentPurpose(report) !== "Auto-thinking effort") return null;
+  const a = report.answers?.[Object.keys(report.questions)[0]!];
+  return a?.type === "choice" ? a.choice : null;
 }
 
 /** True when at least one report in the turn was ANSWERED by Jev (a TypeSafe call that threw and fell back

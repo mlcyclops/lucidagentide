@@ -71,9 +71,9 @@ export function agentAutomationGate(
 ): { run: boolean; result?: string; disable?: boolean } {
   if (!spec) return { run: false, disable: true, result: "suspended: the agent no longer exists in this workspace" };
   if (trustLabel !== "trusted")
-    return { run: false, disable: true, result: `suspended: the agent is ${trustLabel} — review + approve it in the Agent Builder, then re-arm` };
+    return { run: false, disable: true, result: `suspended: the agent is ${trustLabel}. Review + approve it in the Agent Builder, then re-arm` };
   if (spec.nodes.some((n) => n.kind === "approval"))
-    return { run: false, result: "refused: the workflow has human-approval checkpoints — run it manually from the Builder" };
+    return { run: false, result: "refused: the workflow has human-approval checkpoints. Run it manually from the Builder" };
   return { run: true };
 }
 

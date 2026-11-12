@@ -113,18 +113,17 @@ describe("targetBadge (P-FLEET.L8)", () => {
 describe("targetCaps (P-FLEET.L8)", () => {
   it("master is all-true with an empty why", () => {
     const c = targetCaps(MASTER_TARGET);
-    expect(c).toEqual({ images: true, modes: true, goalLoop: true, slashCommands: true, why: "" });
+    expect(c).toEqual({ modes: true, goalLoop: true, slashCommands: true, why: "" });
   });
 
-  it("a lane is all-false with a why that explains each removal", () => {
+  it("a lane loses modes, goal loop and slash commands, with a why for each removal (never images)", () => {
     const c = targetCaps(lane());
-    expect(c.images).toBe(false);
     expect(c.modes).toBe(false);
     expect(c.goalLoop).toBe(false);
     expect(c.slashCommands).toBe(false);
     const why = c.why.toLowerCase();
     expect(why.length).toBeGreaterThan(0);
-    expect(why).toContain("image");
+    expect(why).not.toContain("image");
     expect(why).toContain("mode");
     expect(why).toContain("goal loop");
     expect(why).toContain("slash command");

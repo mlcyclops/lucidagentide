@@ -22,30 +22,51 @@
 import { $, el } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { popover, showToast } from "./ui.ts"; // P-FLEET.L18: the per-card group menu; P-PUSH.PAR1: the parallel-push notice
+// P-PUSH.PAR1 (ADR-pending): staged chips get the shared right-click / long-press menu, and Push now runs the
+// prompt in a new worktree lane (the decision rules are pure, in queue_model).
+import { bindItemMenu, copyToClipboard, openCtxMenu, type CtxMenuEntry } from "./ctxmenu.ts";
+import { canSteer, laneDrainReady, mainCheckoutCwd, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pushLaneName, type PushSource } from "./queue_model.ts";
+// P-FLEET.L18: the grid and the orbit are two faces of one fleet - the grid links back to the map and
+// shares the "which view does the Fleet button open" pin. Acyclic: fleet_orbit never imports the grid.
+import { fleetHome, openFleetOrbit, setFleetHome } from "./fleet_orbit.ts";
+// P-FLEET.L18: named lane groups - pure model; this file owns only chips, dividers and storage.
+import { assignLane, createGroup, groupSections, laneCollapsed, loadGroups, pruneLanes, removeGroup, saveGroups, toggleCollapsed, type LaneGroups } from "./lane_groups.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { clampToViewport, DOCK_MIN_H, DOCK_MIN_W, loadDockState, saveDockState, snapDecision, type DockShape, type DockState, type DockStorage } from "./share_dock.ts";
 import { isAutoPreviewPath } from "./preview_tabs.ts";
 // P-FLEET.L13: the catch-up scroll math, shared with the main chat thread so the two cannot drift.
 import { LANE_JUMP_SHOW_PX, pageDownTarget, shouldShowJump } from "./scroll_jump.ts";
+import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new lanes open on the last lane's model; colliding names show the route
 import type { ApprovalScope, FleetStatusView, LaneEvent, LaneImage, LaneView, LucidBridge } from "./bridge.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts";
+import { openRepoDetails, paintRepoChip } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): the lane's repo + push target
+import { githubPickNote, mountRepoPicker, repoPickerHtml } from "./repo_picker.ts"; // P-REPO.1: pick a repo instead of typing a URL
 import { laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order + wording + counts shared with the phone's fleet bar
 // P-FLEET.L7: the transcript MODEL - stable ids, the chip glance line, the chevron body, the clipboard text.
 // Every one of those was hand-rolled here before; a lane chip and a composer chip can now not disagree.
-import { laneChip, laneChipBody, mintId, transcriptCopyText, turnCopyText, type LaneToolRow, type LaneTurnRow } from "./lane_transcript.ts";
+import { laneChip, laneChipBody, laneToolDoing, mintId, settleToolRow, transcriptCopyText, turnCopyText, type LaneToolRow, type LaneTurnRow } from "./lane_transcript.ts";
+import { agedProgress, humanMs, progressLine, STREAMING_MS, withoutEstimate, type ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free)
+import { ringView, statusDetail, statusEta, statusRing } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
+import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
 // P-FLEET.L9: ALL card + dock geometry. This file does pointer plumbing and nothing else.
-import { CARD_DEF_W, clampSize, heightFromDrag, loadLayout, maxCardW, reconcile, reorder, resizeShape, saveLayout, snapSlot, widthFromDrag, type CardRect, type CardSize, type LaneLayout } from "./lane_layout.ts";
+// P-FLEET.FIT1 (ADR-pending): plus the autofit tiling (autofitPlan / shareResize / sharesOf), also pure;
+// this file only measures the grid body and paints the plan.
+import { autofitPlan, CARD_DEF_W, CARD_GAP, CARD_MIN_H, CARD_MIN_W, clampSize, defaultCardW, heightFromDrag, isAutofit, loadLayout, maxCardW, reconcile, reorder, resizeShape, saveLayout, shareResize, sharesOf, snapSlot, widthFromDrag, type CardRect, type CardSize, type FitPlan, type FitWeight, type LaneLayout } from "./lane_layout.ts";
 // P-TOKENS.1: the lane's context-fill chip escalates on the SAME thresholds as the composer's token button.
 import { fmtTokens, fmtUsd, meterBadge, newMeter, onUsage, type MeterState } from "./token_meter.ts";
 import type { ChipKind } from "./answer_chips.ts";
+import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
 
 /** The seven lane functions, typed straight off the bridge so the seam can never drift (results are
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
-type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject">;
+type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueuePeek" | "fleetQueueTake" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject" | "stopCall" | "repoChoices" | "repoGithub">;
 type FleetResources = FleetStatusView["resources"];
 
 export interface FleetGridDeps extends FleetFns {
-  /** The master agent's current model - the default for a new lane. */
+  /** P-TUI.2: open `lucid hub` in a new terminal window (app.ts toasts a refusal). */
+  hubOpen: () => Promise<unknown>;
+  /** The master agent's current model - a new lane's default until a lane model is remembered (P-SCROLL.1). */
   getMasterModel: () => string;
   /** The model catalog for the per-lane pickers. */
   getModelOptions: () => { value: string; label?: string }[];
@@ -70,6 +91,8 @@ export interface FleetGridDeps extends FleetFns {
    *  actually holds the composer, so it is free to ignore it. */
   promoteLane?: (laneId: string) => void;
   demoteLane?: (laneId: string) => void;
+  /** P-REPO.1 (ADR-0406): open a repo's web page from its details card (OS browser in the desktop app). */
+  openUrl?: (url: string) => void;
 }
 
 const FLEET_DOCK_KEY = "lucid.fleetDock.v1";
@@ -103,6 +126,12 @@ interface LaneRun {
   /** P-FLEET.L11: the FOLLOW subscription held open while the MAIN COMPOSER drives this lane, so turns it
    *  asked for still land in this card's transcript. Null whenever the card owns the turn itself. */
   follow: { done: Promise<void>; stop: () => void } | null;
+  /** P-PROGRESS.1: the freshest progress view (stream or poll) and when it arrived, aged locally on the
+   *  card's ticker so the numbers move between samples. */
+  progress: ProgressView | null;
+  progressAt: number;
+  /** P-WAIT.1: one of the lane's writes waits for a file another worker's running turn is editing. */
+  waiting: WaitView | null;
 }
 
 function newRun(view: LaneView): LaneRun {
@@ -110,6 +139,7 @@ function newRun(view: LaneView): LaneRun {
     view, turns: [], pending: "", pendingThinking: "", pendingTools: [],
     streaming: false, collapsed: false, card: null, attached: [],
     seq: 0, meter: newMeter(Date.now()), follow: null,
+    progress: null, progressAt: 0, waiting: null,
   };
 }
 
@@ -128,6 +158,9 @@ const runs = new Map<string, LaneRun>();
 /** P-FLEET.L9: card order + per-card size, persisted apart from the dock shape. A corrupt payload loads as
  *  an EMPTY layout by design (lane_layout.loadLayout), which reconcile then refills from the server. */
 let layout: LaneLayout = { order: [], size: {} };
+/** P-FLEET.L18: named groups (presentation only). Loaded with the layout, persisted beside it. */
+let groups: LaneGroups = loadGroups(null);
+const FLEET_GROUPS_KEY = "lucid.fleetGroups.v1";
 
 // localStorage-backed persistence; a broken/absent store degrades to in-memory (the dock still works).
 function storage(): DockStorage {
@@ -136,6 +169,21 @@ function storage(): DockStorage {
 }
 function persist(): void { if (dockState) saveDockState(storage(), dockState, FLEET_DOCK_KEY); }
 function persistLayout(): void { storage().set(FLEET_LAYOUT_KEY, saveLayout(layout)); }
+/** Persist groups, shedding assignments for lanes that no longer exist. Empty groups survive - the
+ *  user just made one to file the NEXT lane into. */
+function persistGroups(): void {
+  groups = pruneLanes(groups, [...runs.keys()]);
+  storage().set(FLEET_GROUPS_KEY, saveGroups(groups));
+}
+
+/** P-FLEET.L18: the grid header's default-view pin (fleet_orbit owns the one storage key). */
+function paintGridPin(): void {
+  const pin = dock ? ($("[data-fleet-pin]", dock) as HTMLElement | null) : null;
+  if (!pin) return;
+  const on = fleetHome() === "grid";
+  pin.classList.toggle("on", on);
+  pin.innerHTML = `${icon("star", 12)}${on ? " Default" : ""}`;
+}
 
 /** Wide and shallow: a grid of cards wants width first. Clamped to the viewport on load. */
 const fleetFallback = (vw: number, vh: number): DockShape => {
@@ -160,12 +208,18 @@ export function openFleetGrid(): void {
   if (dock) { restore(); return; }
   dockState = loadDockState(storage(), window.innerWidth, window.innerHeight, FLEET_DOCK_KEY, fleetFallback(window.innerWidth, window.innerHeight));
   layout = loadLayout(storage().get(FLEET_LAYOUT_KEY)); // P-FLEET.L9: card order + sizes from the last run
+  groups = loadGroups(storage().get(FLEET_GROUPS_KEY)); // P-FLEET.L18: named groups from the last run
+  lastGroupSig = ""; // a fresh dock has no dividers yet - an unchanged signature must not skip building them
   dockState.minimized = false; // an explicit open always shows the panel, never just the pill
   dock = el(`<div id="fleetDock" class="share-dock fleet-dock side-${dockState.side}" role="dialog" aria-label="LUCID Fleet - local lanes">
     <div class="share-dock-head" data-dock-drag>
       <span class="share-dock-grip">${icon("bolt", 14)}</span>
       <span class="share-dock-title">LUCID Fleet</span>
       <span class="fleet-headroom" id="fleetHeadroom" data-tip="Local headroom|Live CPU and memory. Lanes are UNLIMITED - a new one is refused only while a metric stays at or above the tick for 30 seconds straight, so a burst never blocks you."></span>
+      <button class="btn-mini fleet-add-btn" data-fleet-orbit data-tip="Orbit|Back to the hub-and-spoke map. Same lanes, same colors - the grid and the orbit are two faces of one fleet.">${icon("share", 12)} Orbit</button>
+      <button class="btn-mini fleet-add-btn fleet-pin" data-fleet-pin data-tip="Default view|Make the GRID what the Fleet button opens. The orbit header has the same pin."></button>
+      <button class="btn-mini fleet-add-btn" data-fleet-hub data-tip="Terminal hub|Open lucid hub in a new terminal window: this fleet as tmux-style panes (Fleet, Security, Sessions, Audit, Usage and a live agent pane), attached to this app. Also runs as lucid hub from any terminal.">${icon("terminal", 12)} Terminal</button>
+      <button class="btn-mini fleet-add-btn fleet-fit-btn" data-fleet-fit aria-pressed="true" data-tip="Autofit|Lanes tile the whole panel at equal sizes and refit as it resizes. Drag a card edge to resize it, its neighbours share the rest; double-click an edge to reset to equal. Off: free layout.">${icon("layout", 12)}<span>Autofit</span></button>
       <button class="btn-mini fleet-add-btn" data-fleet-add title="Spawn a new local lane">${icon("plus", 12)} Lane</button>
       <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" title="Minimize (lanes keep running)">${UP_ARROW}</button>
       <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" title="Close (lanes keep running)">${icon("close", 15)}</button>
@@ -181,6 +235,7 @@ export function openFleetGrid(): void {
     <div class="share-dock-rz sw" data-dock-rz="sw" aria-hidden="true"></div>
   </div>`);
   document.body.appendChild(dock);
+  paintGridPin();
   applyShape();
   wireDrag();
   wireResize();
@@ -190,6 +245,9 @@ export function openFleetGrid(): void {
   dock.addEventListener("input", onInput);
   dock.addEventListener("paste", onPaste); // P-FLEET.L3: paste an image into a lane composer
   dock.addEventListener("pointerdown", onDockPointerDown); // P-FLEET.L9: per-card resize + drag-to-reorder
+  dock.addEventListener("dblclick", onFitReset); // P-FLEET.FIT1: double-click a card edge = equal shares again
+  paintFitBtn();
+  wireAutofit();
   // P-FLEET.L13: catch-up buttons + their visibility. Both are DELEGATED on the dock: lane cards are
   // built and destroyed on every poll, so per-card listeners would leak with them (the same reason
   // onDockPointerDown is delegated). `scroll` does not bubble, so it is captured instead.
@@ -206,6 +264,7 @@ export function closeFleetGrid(): void {
   removePill();
   window.removeEventListener("resize", onWinResize);
   document.removeEventListener("keydown", onKey);
+  unwireAutofit(); // P-FLEET.FIT1: the observers die with the dock, never outlive it
   dock?.remove();
   dock = null;
   dockState = null;
@@ -285,9 +344,13 @@ const DRAG_SLOP = 4;
 
 /** The widest a card may be right now. Every width clamp is measured against THIS, so a card can never
  *  persist wider than the panel it lives in. */
-function maxCols(): number {
+function maxCols(): number { return maxCardW(gridWidth()); }
+
+/** The grid body's measured width in px; 0 while the panel is hidden or not yet laid out (the pure
+ *  helpers treat 0 as "unmeasured", never as "zero wide"). */
+function gridWidth(): number {
   const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
-  return maxCardW(grid ? Math.round(grid.getBoundingClientRect().width) : 0);
+  return grid ? Math.round(grid.getBoundingClientRect().width) : 0;
 }
 
 /** The size a drag starts from: the persisted entry if the user has sized this card, else its MEASURED
@@ -302,8 +365,10 @@ function startSize(card: HTMLElement): CardSize {
   return clampSize({ w: Math.round(r.width) || CARD_DEF_W, h: Math.round(r.height) }, hi);
 }
 
-/** A sized card carries its width and height INLINE; an unsized one carries neither, so it keeps the
- *  container's own sizing and its content-driven height.
+/** A sized card carries its width and height INLINE; an unsized one takes the panel's TILE width
+ *  (lane_layout.defaultCardW: as many default columns as fit, sharing the slack) and keeps its
+ *  content-driven height. The tile width is re-derived on every apply, so a dock resize re-tiles the
+ *  unsized cards while the user-sized ones only re-clamp.
  *
  *  P-FLEET.L12: the width is a flex BASIS, not a grid span. `0 1 Wpx` is deliberate in both numbers:
  *  grow 0 so a card never stretches to fill a short row (the user sized it, that size is the answer), and
@@ -311,22 +376,210 @@ function startSize(card: HTMLElement): CardSize {
 function applySize(run: LaneRun | undefined): void {
   const card = run?.card; if (!card) return;
   const s = layout.size[run.view.id];
-  if (!s) { card.style.flex = ""; card.style.height = ""; return; }
+  if (!s) { card.style.flex = `0 1 ${defaultCardW(gridWidth())}px`; card.style.height = ""; return; }
   const c = clampSize(s, maxCols());
   card.style.flex = `0 1 ${c.w}px`;
   card.style.height = `${c.h}px`;
 }
-function applySizes(): void { for (const run of runs.values()) applySize(run); }
+/** P-FLEET.FIT1 (ADR-pending): the free layout above, or (the DEFAULT) the autofit tiling below. Runs on
+ *  every poll, dock drag and window resize, so it is idempotent and cheap: autofit re-measures nothing
+ *  unless the set of tiles changed, it re-applies the cached plan; the observers own re-measuring. */
+function applySizes(): void {
+  const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
+  const fit = isAutofit(layout);
+  grid?.classList.toggle("autofit", fit);
+  if (fit && grid) { applyFit(grid, false); return; }
+  for (const run of runs.values()) applySize(run);
+}
+
+// ------------------------------------------------- P-FLEET.FIT1: autofit, the default card layout
+
+/** The last plan, the tile set it was planned for (`sig`) and the body size it was measured at. A poll
+ *  re-applies THIS; only the observers, a toggle, or a changed tile set measure the DOM again. */
+let fitPlan: (FitPlan & { sig: string; w: number; h: number }) | null = null;
+let fitObs: ResizeObserver | null = null;
+let fitMut: MutationObserver | null = null;
+let fitRaf = 0;
+
+/** The visible tiles in the order applyOrder lays them out: one section per group (a collapsed group's
+ *  lanes are display:none, so they take no tile), then the ungrouped tail. */
+function fitSections(): string[][] {
+  const live = layout.order.filter((id) => runs.get(id)?.card);
+  return groupSections(live, groups).map((s) => s.ids.filter((id) => !laneCollapsed(groups, id)));
+}
+
+/** The grid body's usable px. Group dividers and the + Lane form own full rows in autofit (styles.css),
+ *  so their height comes off the top before tiling. Null while the body is unmeasurable (hidden /
+ *  minimized): the caller then plans against its last good size instead of collapsing every card. */
+function measureFit(grid: HTMLElement): { w: number; h: number } | null {
+  const body = grid.parentElement;
+  if (!body || body.clientHeight <= 0 || body.clientWidth <= 0) return null;
+  const px = (v: string): number => Number.parseFloat(v) || 0;
+  const bs = getComputedStyle(body);
+  let h = body.clientHeight - px(bs.paddingTop) - px(bs.paddingBottom);
+  for (const x of grid.querySelectorAll<HTMLElement>(":scope > .fleet-group-head, :scope > .fleet-spawn-card")) {
+    const xs = getComputedStyle(x);
+    h -= x.getBoundingClientRect().height + px(xs.marginTop) + px(xs.marginBottom) + CARD_GAP;
+  }
+  // A + Lane form taller than the panel leaves nothing to tile: plan at 1px and autofit's own floor
+  // (FIT_MIN_H tiles, the body scrolls) takes over, rather than report "unmeasured" and keep a stale plan.
+  return { w: Math.floor(grid.getBoundingClientRect().width), h: Math.max(1, Math.floor(h)) };
+}
+
+/** Plan and paint. The width is a flex basis exactly like the free layout (`0 1 Wpx`: shrink 1 so a
+ *  sub-pixel overshoot gives way instead of wrapping a row); the height is inline, which is also what
+ *  lets the transcript take the slack and pins the composer to the card's bottom. Writes are skipped
+ *  when unchanged so the 2.5s poll costs no style invalidation. */
+function applyFit(grid: HTMLElement, remeasure: boolean): void {
+  const secs = fitSections();
+  const sig = `${secs.map((s) => s.join(",")).join("|")}#${grid.querySelectorAll(":scope > .fleet-group-head").length}${$(".fleet-spawn-card", grid) ? "+" : ""}`;
+  const dims = (!remeasure && fitPlan?.sig === sig ? fitPlan : measureFit(grid)) ?? fitPlan;
+  if (!dims) { for (const run of runs.values()) applySize(run); return; } // never measured yet: free sizes until it lays out
+  const plan = autofitPlan(secs, dims.w, dims.h, layout.fit);
+  fitPlan = plan ? { ...plan, sig, w: dims.w, h: dims.h } : null;
+  if (!plan) return;
+  for (const run of runs.values()) {
+    const card = run.card;
+    const c = plan.cells[run.view.id];
+    if (!card || !c) continue; // no tile = hidden in a collapsed group; its size is moot until it shows
+    const flex = `0 1 ${c.w}px`;
+    const height = `${c.h}px`;
+    if (card.style.flex !== flex) card.style.flex = flex;
+    if (card.style.height !== height) card.style.height = height;
+  }
+}
+
+/** ONE ResizeObserver on the grid body (dock drag, window resize, minimize / restore all land here as a
+ *  body resize) plus a childList-only MutationObserver on the grid (a lane spawned or closed, the + Lane
+ *  form opened, a group divider added). Both coalesce into one rAF, so a drag that fires 60 resizes a
+ *  second measures at most once a frame. Neither fires on a card's own style writes, so no feedback loop. */
+function wireAutofit(): void {
+  const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
+  const body = grid?.parentElement;
+  if (!grid || !body) return;
+  const kick = (): void => {
+    if (fitRaf) return;
+    fitRaf = requestAnimationFrame(() => {
+      fitRaf = 0;
+      const g = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
+      if (g && isAutofit(layout)) { g.classList.add("autofit"); applyFit(g, true); }
+    });
+  };
+  fitObs = new ResizeObserver(kick);
+  fitObs.observe(body);
+  fitMut = new MutationObserver(kick);
+  fitMut.observe(grid, { childList: true });
+}
+
+function unwireAutofit(): void {
+  fitObs?.disconnect(); fitObs = null;
+  fitMut?.disconnect(); fitMut = null;
+  if (fitRaf) cancelAnimationFrame(fitRaf);
+  fitRaf = 0;
+  fitPlan = null;
+}
+
+/** The header toggle mirrors the persisted mode. */
+function paintFitBtn(): void {
+  const btn = dock ? ($("[data-fleet-fit]", dock) as HTMLElement | null) : null;
+  if (!btn) return;
+  const on = isAutofit(layout);
+  btn.classList.toggle("on", on);
+  btn.setAttribute("aria-pressed", String(on));
+}
+
+/** Header toggle. ON is the default, so it is stored as the ABSENCE of `autofit:false`. Off hands every
+ *  card straight back to the free layout's own sizes (applySize rewrites both inline values); the user's
+ *  autofit shares are kept, so toggling back on restores them. */
+function toggleAutofit(): void {
+  if (isAutofit(layout)) layout.autofit = false; else delete layout.autofit;
+  persistLayout();
+  paintFitBtn();
+  fitPlan = null;
+  applySizes();
+}
+
+/** Double-click any card edge in autofit: every lane back to the equal share. Free layout: no-op. */
+function onFitReset(ev: Event): void {
+  if (!isAutofit(layout) || !(ev.target as HTMLElement).closest(".fleet-card-rz")) return;
+  ev.preventDefault();
+  delete layout.fit;
+  persistLayout();
+  applySizes();
+}
+
+/** Autofit's resize gesture: the dragged card takes the pointer 1:1 and its siblings share the rest
+ *  EQUALLY (lane_layout.shareResize), so the panel stays full. An east drag re-shares the card's ROW
+ *  widths; a south drag re-shares the ROW heights. The start sizes are frozen at pointerdown from the
+ *  plan, and shares (not px) are stored, so the drag survives a later dock resize proportionally. */
+function startFitResize(e: PointerEvent, rz: HTMLElement, id: string): void {
+  const plan = fitPlan;
+  const cell = plan?.cells[id];
+  const row = cell ? plan?.rows[cell.row] : undefined;
+  const rowW = cell ? plan?.rowW[cell.row]?.slice() : undefined;
+  if (!plan || !cell || !row || !rowW) return;
+  const rowH = plan.rowH.slice();
+  const col = row.indexOf(id);
+  const dir = rz.dataset.cardRz ?? "se";
+  const sx = e.clientX, sy = e.clientY;
+  try { rz.setPointerCapture(e.pointerId); } catch { /* non-fatal */ }
+  const move = (m: Event): void => {
+    const pm = m as PointerEvent;
+    const fit: Record<string, FitWeight> = {};
+    for (const [k, v] of Object.entries(layout.fit ?? {})) fit[k] = { ...v };
+    if (dir.includes("e")) {
+      const ws = sharesOf(shareResize(rowW, col, rowW[col]! + pm.clientX - sx, CARD_MIN_W));
+      row.forEach((lid, i) => { fit[lid] = { fw: ws[i]!, fh: fit[lid]?.fh ?? 1 }; });
+    }
+    if (dir.includes("s")) {
+      const hs = sharesOf(shareResize(rowH, cell.row, rowH[cell.row]! + pm.clientY - sy, CARD_MIN_H));
+      plan.rows.forEach((r, ri) => r.forEach((lid) => { fit[lid] = { fw: fit[lid]?.fw ?? 1, fh: hs[ri]! }; }));
+    }
+    layout.fit = fit;
+    applySizes();
+  };
+  // Window-level for the same reason as the free gesture below: the poll can replace the handle mid-drag.
+  const up = (): void => {
+    window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
+    persistLayout();
+  };
+  window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
+}
 
 /** Sync the DOM to `layout.order` - but ONLY when it actually differs. Re-appending an already-correctly
  *  placed node detaches and reinserts it, which restarts the awaiting-input / needs-approval glow: the
  *  cards would visibly pulse-stutter every 2.5s poll, the same trap the minimized pill documents. */
 function applyOrder(grid: HTMLElement): void {
-  const want = layout.order.filter((id) => runs.get(id)?.card);
-  const have = [...grid.querySelectorAll<HTMLElement>(".fleet-card[data-lane]")].map((c) => c.dataset.lane ?? "");
-  if (want.length === have.length && want.every((id, i) => id === have[i])) return;
-  for (const id of want) { const card = runs.get(id)?.card; if (card) grid.append(card); }
+  // P-FLEET.L18: the flat order folds into GROUP sections (named groups first, ungrouped tail); within
+  // a section the relative order is still layout.order, so drag-to-reorder semantics survive intact.
+  const live = layout.order.filter((id) => runs.get(id)?.card);
+  const sections = groupSections(live, groups);
+  // The change signature covers order, membership AND collapse - re-appending an unchanged card
+  // restarts its state-glow animation (the pill lesson), so an unchanged frame must cost nothing.
+  const sig = sections.map((s) => `${s.group ?? "\u0001"}${groups.collapsed[s.group ?? ""] ? "^" : ""}:${s.ids.join(",")}`).join("|");
+  if (sig === lastGroupSig && grid.querySelectorAll(".fleet-card[data-lane]").length === live.length) return;
+  lastGroupSig = sig;
+  for (const d of grid.querySelectorAll(".fleet-group-head")) d.remove();
+  for (const s of sections) {
+    const closed = s.group !== null && !!groups.collapsed[s.group];
+    if (s.group !== null) {
+      grid.append(el(`<div class="fleet-group-head${closed ? " closed" : ""}" data-group="${esc(s.group)}">
+        <button class="fleet-grp-btn" data-grp-toggle="${esc(s.group)}" data-tip="${closed ? "Expand" : "Collapse"}|The lanes keep running either way; collapse only tidies the grid.">${icon("chevron", 11)}</button>
+        <b>${esc(s.group)}</b><span>${s.ids.length}</span>
+        <button class="fleet-grp-btn" data-grp-disband="${esc(s.group)}" data-tip="Disband group|Frees its lanes back to the ungrouped tail. Never touches the lanes themselves.">${icon("close", 11)}</button>
+      </div>`));
+    }
+    for (const id of s.ids) {
+      const card = runs.get(id)?.card;
+      if (!card) continue;
+      card.classList.toggle("grp-hidden", laneCollapsed(groups, id)); // paintFrame derives it the same way
+      grid.append(card);
+    }
+  }
 }
+let lastGroupSig = "";
 
 /** The laid-out rectangles, in `layout.order`, frozen at pointerdown. snapSlot reads row identity off
  *  `y + h` (bottom-anchored cards share a bottom edge, never a top), so these must be real viewport rects. */
@@ -353,16 +606,19 @@ function onDockPointerDown(ev: Event): void {
   // windows aren't easily draggable": the header is the only drag surface, and it is packed with buttons,
   // a select and chips, all of which are correctly excluded below - which left almost no draggable pixels
   // in a real lane header. An explicit grip is a target the user can actually aim at.
-  if (t.closest("[data-fleet-grip]")) { startCardDrag(e, head); return; }
+  if (t.closest("[data-fleet-grip]")) { startCardDrag(e, head, true); return; }
   // Elsewhere on the header: controls act, they do not drag, and the textarea/select inside a card must
-  // keep their own gestures.
-  if (!t.closest("button") && !t.closest("select") && !t.closest("input") && !t.closest("textarea")) startCardDrag(e, head);
+  // keep their own gestures. P-FLEET.L17: a press that RELEASES within the drag slop is a CLICK, and a
+  // header click is the same takeover as clicking the lane's spoke in the orbit (grip excluded - its one
+  // job is reordering).
+  if (!t.closest("button") && !t.closest("select") && !t.closest("input") && !t.closest("textarea")) startCardDrag(e, head, false);
 }
 
 function startCardResize(e: PointerEvent, rz: HTMLElement): void {
   const card = rz.closest(".fleet-card[data-lane]") as HTMLElement | null; if (!card) return;
   const id = card.dataset.lane ?? ""; if (!id) return;
   e.preventDefault(); e.stopPropagation();
+  if (isAutofit(layout)) { startFitResize(e, rz, id); return; } // P-FLEET.FIT1: siblings share the rest
   const dir = rz.dataset.cardRz ?? "n";
   const sx = e.clientX, sy = e.clientY;
   const start = startSize(card);
@@ -396,12 +652,23 @@ function startCardResize(e: PointerEvent, rz: HTMLElement): void {
 
 /** Drag the header to reorder. The rects are collected ONCE, so inserting the placeholder (which reflows
  *  the grid under the pointer) cannot feed the next snapSlot a moved target and make the drop jitter. */
-function startCardDrag(e: PointerEvent, head: HTMLElement): void {
+function startCardDrag(e: PointerEvent, head: HTMLElement, fromGrip: boolean): void {
   const card = head.closest(".fleet-card[data-lane]") as HTMLElement | null; if (!card) return;
   const id = card.dataset.lane ?? ""; if (!id) return;
   const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null; if (!grid) return;
   const rects = cardRects(grid);
-  if (rects.length < 2) return; // one card has nowhere to go, and a lone placeholder is just noise
+  if (rects.length < 2) {
+    // One card has nowhere to DRAG, but its header click must still take over (P-FLEET.L17) - the
+    // single-lane fleet is exactly where a new user tries the gesture first.
+    if (!fromGrip) {
+      const clickUp = (): void => {
+        window.removeEventListener("pointerup", clickUp); window.removeEventListener("pointercancel", clickUp);
+        deps?.promoteLane?.(id);
+      };
+      window.addEventListener("pointerup", clickUp); window.addEventListener("pointercancel", clickUp);
+    }
+    return;
+  }
   e.preventDefault();
   const ox = e.clientX, oy = e.clientY;
   try { head.setPointerCapture(e.pointerId); } catch { /* non-fatal */ }
@@ -432,7 +699,12 @@ function startCardDrag(e: PointerEvent, head: HTMLElement): void {
     window.removeEventListener("pointercancel", up);
     card.classList.remove("dragging");
     slotEl.remove();
-    if (!moved) return;
+    if (!moved) {
+      // P-FLEET.L17: released within the slop = a CLICK on the header = the orbit's spoke takeover.
+      // The grip stays reorder-only, and app.ts promoteLane already refuses bad states with the reason.
+      if (!fromGrip) deps?.promoteLane?.(id);
+      return;
+    }
     // Commit through the target's ID, not the raw slot index: `rects` is the cards on screen and
     // `layout.order` is every live lane, and translating keeps the drop honest if the two ever differ.
     const target = rects[slot]?.id ?? id;
@@ -452,7 +724,7 @@ function startCardDrag(e: PointerEvent, head: HTMLElement): void {
 function onLaneJumpClick(ev: Event): void {
   const btn = (ev.target as HTMLElement | null)?.closest("[data-lane-jump]") as HTMLElement | null;
   if (!btn) return;
-  const out = btn.closest("[data-fleet-out]") as HTMLElement | null;
+  const out = btn.closest(".fleet-out-wrap")?.querySelector("[data-fleet-out]") as HTMLElement | null;
   if (!out) return;
   ev.preventDefault();
   ev.stopPropagation(); // never let a jump click reach the card header's drag-to-reorder gesture
@@ -567,6 +839,10 @@ async function refresh(): Promise<void> {
     } else {
       run.view = lane; // the server is the source of truth on poll; stream events fill the gaps between
     }
+    // P-PROGRESS.1: the poll's view is the truth for progress and the wait too (a stream sample between
+    // polls only fills the gap; the poll's absence of either clears it).
+    run.progress = lane.progress ?? null; run.progressAt = Date.now();
+    run.waiting = lane.waiting ?? null;
     if (grid && !run.card) { run.card = buildCard(run); grid.append(run.card); paintOutput(run); }
     paintFrame(run);
     maybeDrain(run); // P-FLEET.L3: an idle lane with staged prompts runs the next one, streamed visibly
@@ -588,6 +864,7 @@ async function refresh(): Promise<void> {
   paintEmpty();
   paintPill();
 }
+
 
 /** The header HUD. There is no cap to show any more, so the numbers that matter are the two live percents
  *  and - when one of them is over the line - HOW LONG it has been over: `93% 12s/30s` is a burst you can
@@ -631,11 +908,13 @@ function buildCard(run: LaneRun): HTMLElement {
     <div class="fleet-card-head">
       <span class="fleet-grip" data-fleet-grip title="Drag to reorder this lane" aria-hidden="true"></span>
       <span class="fleet-led" aria-hidden="true"></span>
-      <span class="fleet-lane-name" data-fleet-name></span>
+      <span class="fleet-lane-name" data-fleet-name data-tip="Open in composer|Click the header to drive this lane from the full composer - the same takeover as clicking its spoke in the orbit. Drag the grip to reorder."></span>
       <span class="fleet-cwd-chip" data-fleet-cwd></span>
+      <button class="fleet-grp-chip" data-fleet-grp data-tip="Group|File this lane under a named group on the grid. Presentation only - the lane's work is untouched."></button>
       <span class="fleet-usage" data-fleet-usage data-tone="ok" hidden></span>
       <span class="fleet-health" data-fleet-health data-health-action="quiet" hidden></span>
       <span class="fleet-quiet" data-fleet-quiet hidden></span>
+      <span class="hud-ring lane-ring" data-lane-ring hidden data-tip="Progress|Working."><svg viewBox="0 0 22 22" width="15" height="15" aria-hidden="true"><circle class="hud-ring-track" cx="11" cy="11" r="8"/><circle class="hud-ring-arc" pathLength="100" cx="11" cy="11" r="8"/></svg></span>
       <select class="fleet-model" data-fleet-model aria-label="Lane model"></select>
       <button class="fleet-card-btn fleet-promote" data-fleet-promote aria-label="Drive this lane from the main composer" title="Promote: point the main composer at this lane" hidden>${icon("arrowRight", 12)}</button>
       <button class="fleet-card-btn fleet-copy" data-fleet-copy aria-label="Copy this lane's transcript" title="Copy the whole transcript as plain text">${icon("copy", 12)}</button>
@@ -644,19 +923,24 @@ function buildCard(run: LaneRun): HTMLElement {
       <button class="fleet-card-btn" data-fleet-collapse aria-label="Collapse the lane card" title="Collapse (keeps the header)">${icon("minus", 12)}</button>
       <button class="fleet-card-btn fleet-dismiss" data-fleet-stop aria-label="Stop this lane" title="Stop the lane">${icon("close", 12)}</button>
     </div>
+    <button class="repo-chip fleet-repo" data-fleet-repo type="button" hidden aria-label="This lane's repository and push target"></button>
     <div class="fleet-card-main">
-      <div class="fleet-out" data-fleet-out>
+      <div class="fleet-out-wrap">
+        <div class="fleet-out" data-fleet-out>
+          <div class="fleet-out-empty" data-lane-empty hidden><span data-lane-empty-txt></span></div>
+          <div data-lane-live hidden>
+            <div class="fleet-think" data-lane-think hidden></div>
+            <div class="fleet-text" data-lane-text hidden><span data-lane-txt></span><span class="fleet-cursor">\u258b</span></div>
+          </div>
+        </div>
         <!-- P-FLEET.L13: the same catch-up pair the main composer carries. Single chevron steps ONE page
-             keeping a line of overlap, double chevron runs to the newest line. They are inside the
-             scroller (which is position:relative) so they float over the transcript, and they stay
-             hidden until there is more than a lane-sized threshold below the fold. -->
+             keeping a line of overlap, double chevron runs to the newest line. They are SIBLINGS of the
+             scroller, not children: an absolutely positioned child of a scroll container scrolls away with
+             its content, which is exactly how they used to vanish mid-transcript. The wrapper is the
+             position:relative anchor, so they stay pinned over the bottom-right of the viewport until the
+             reader is within the lane's own at-the-bottom threshold. -->
         <button class="fleet-jump fleet-jump-page" data-lane-jump="page" type="button" aria-label="Scroll down one page" title="Down one page">${icon("chevronDown", 13)}</button>
         <button class="fleet-jump fleet-jump-end" data-lane-jump="end" type="button" aria-label="Scroll to the newest line" title="Jump to the end">${icon("chevronsDown", 13)}</button>
-        <div class="fleet-out-empty" data-lane-empty hidden><span data-lane-empty-txt></span></div>
-        <div data-lane-live hidden>
-          <div class="fleet-think" data-lane-think hidden></div>
-          <div class="fleet-text" data-lane-text hidden><span data-lane-txt></span><span class="fleet-cursor">\u258b</span></div>
-        </div>
       </div>
       <div class="fleet-approve" data-fleet-approve hidden>
         <span class="fleet-approve-txt" data-fleet-approve-txt></span>
@@ -673,6 +957,12 @@ function buildCard(run: LaneRun): HTMLElement {
           <button class="btn-mini" data-fleet-respawn>${icon("bolt", 11)} Respawn</button>
         </span>
       </div>
+      <div class="lane-progress" data-lane-progress hidden>
+        <div class="lane-bar"><div class="lane-fill"></div></div>
+        <div class="lane-progress-line" data-lane-est></div>
+        <div class="lane-alive-row"><span class="lane-alive" data-lane-alive data-state="idle"></span><span class="lane-signal" data-lane-signal></span><button class="btn-mini lane-stopcall" data-lane-stopcall hidden title="Ends only the processes this tool call started. The agent is told why and continues.">Stop command</button><button class="btn-mini lane-restart" data-fleet-respawn data-lane-restart hidden>Restart this lane</button></div>
+        <div class="lane-wait" data-lane-wait hidden></div>
+      </div>
       <div class="fleet-queue" data-fleet-queue hidden></div>
       <div class="fleet-attach" data-fleet-attach hidden></div>
       <div class="fleet-compose">
@@ -687,6 +977,75 @@ function buildCard(run: LaneRun): HTMLElement {
   </div>`);
 }
 
+/** P-PROGRESS.3 (ADR-0412 amendment): the master HUD's progress ring, in the lane card header beside the
+ *  lane's status chips. Shown while the lane's turn runs (and red once its process is gone) with the setting
+ *  "Show a progress ring" on; hidden while the lane is idle or done. A write waiting for another worker's
+ *  file (P-WAIT.1) is still a running turn, so the ring stays. The tooltip is only rewritten when its words
+ *  change, so an open tooltip is not rebuilt on every progress tick. */
+function paintRing(card: HTMLElement, p: ProgressView | null, at: number): void {
+  const ring = $("[data-lane-ring]", card) as HTMLElement | null; if (!ring) return;
+  ring.hidden = !p || p.liveness.state === "idle" || !statusRing();
+  if (ring.hidden || !p) return;
+  const v = ringView(agedProgress(p, Math.max(0, Date.now() - at)), statusEta(), "Restart this lane");
+  ($(".hud-ring-arc", ring) as SVGCircleElement).style.strokeDashoffset = String(100 - Math.min(100, Math.max(0, v.pct ?? 0)));
+  ring.dataset.tone = v.tone;
+  ring.dataset.empty = v.pct === null ? "1" : "0";
+  if (ring.getAttribute("data-tip") !== v.tip) ring.setAttribute("data-tip", v.tip);
+}
+
+/** P-PROGRESS.1: the progress strip: the history-estimate bar (95% at most while the turn runs), the
+ *  progress line, the liveness pill (with the restart action when the child is gone), and the wait line
+ *  while one of the turn's writes waits for a file another worker is editing (P-WAIT.1). Ages the last
+ *  sample locally so the words keep moving. */
+function paintProgress(run: LaneRun): void {
+  const card = run.card; if (!card) return;
+  const p = run.progress;
+  const w = run.waiting;
+  paintRing(card, p, run.progressAt);
+  const strip = $("[data-lane-progress]", card) as HTMLElement | null; if (!strip) return;
+  // P-PROGRESS.3 (ADR-0412): the quiet default (the beta.10 lane card) shows only what the user must know: the
+  // process is gone (the red pill + Restart this lane), or a write waits for another worker's file (the wait line).
+  // "Full detail" is the whole P-PROGRESS.1 strip.
+  const full = statusDetail() === "full";
+  // P-LIVENESS.1 (ADR-0418): a call marked likely stuck is something the user must know too.
+  const urgent = p?.liveness.state === "dead" || p?.liveness.state === "stuck";
+  strip.hidden = (!p && !w) || (!full && !urgent && !w);
+  strip.classList.toggle("quiet", !full);
+  if (strip.hidden) return;
+  const bar = $(".lane-bar", strip) as HTMLElement, fill = $(".lane-fill", strip) as HTMLElement;
+  const est = $("[data-lane-est]", strip) as HTMLElement, alive = $("[data-lane-alive]", strip) as HTMLElement;
+  const signal = $("[data-lane-signal]", strip) as HTMLElement, restart = $("[data-lane-restart]", strip) as HTMLElement;
+  const wait = $("[data-lane-wait]", strip) as HTMLElement;
+  const stopCall = $("[data-lane-stopcall]", strip) as HTMLButtonElement;
+  if (p) {
+    const running = p.liveness.state !== "idle" && p.liveness.state !== "dead";
+    const eta = statusEta();
+    const sampled = agedProgress(p, Math.max(0, Date.now() - run.progressAt));
+    const aged = eta ? sampled : withoutEstimate(sampled); // P-PROGRESS.3: the estimate is opt-in
+    est.textContent = w ? "" : progressLine(aged, eta);
+    bar.classList.toggle("indeterminate", aged.estimate.percent === null && running && !w);
+    fill.style.width = aged.estimate.percent === null ? "0%" : `${Math.min(95, aged.estimate.percent)}%`;
+    alive.hidden = !full && !urgent; // quiet: the pill appears only for a dead process or a likely-stuck call
+    alive.dataset.state = w ? "waiting" : p.liveness.state;
+    alive.textContent = w ? "waiting for a file" : p.liveness.label;
+    alive.title = w ? "Another worker's running turn is editing this file; the write goes through when it ends." : p.liveness.detail;
+    signal.textContent = running && !w ? (aged.lastSignalMs < STREAMING_MS ? "signal just now" : `last signal ${humanMs(aged.lastSignalMs)} ago`) : "";
+    // P-LIVENESS.1 (ADR-0418): a call marked likely stuck offers its two ways out; LUCID takes neither.
+    restart.hidden = !urgent;
+    stopCall.hidden = !(p.liveness.state === "stuck" && p.liveness.canStopCall);
+    if (stopCall.hidden && !stopCall.disabled) stopCall.textContent = "Stop command";
+  } else {
+    est.textContent = ""; bar.classList.remove("indeterminate"); fill.style.width = "0%";
+    alive.hidden = !full; alive.dataset.state = "waiting"; alive.textContent = "waiting for a file"; alive.title = "";
+    signal.textContent = ""; restart.hidden = true; stopCall.hidden = true;
+  }
+  wait.hidden = !w;
+  if (w) {
+    const line = `Waiting for ${w.on.name} to finish with ${w.file}`;
+    wait.textContent = line; wait.title = line;
+  }
+}
+
 /** Repaint everything on the card EXCEPT the output stream: the status frame (class + LED + border), the
  *  labels, the model pick, the promote affordance, the context-fill and health chips, the approval bar, the
  *  recovery bar, the quiet chip, and the compose row's enable/cancel state. Never touches the textarea's
@@ -697,8 +1056,10 @@ function paintFrame(run: LaneRun): void {
   // P-FLEET.L8: `promoted` is the SERVER's answer to "which lane owns the main composer", so the class is
   // rewritten from the poll on every repaint and local click state never gets a vote. `dragging` is the one
   // class this paint must preserve: a poll landing mid-drag would otherwise drop the card back into the grid.
+  // P-FLEET.L18: `grp-hidden` is re-derived from the group model, never dropped - applyOrder skips an
+  // unchanged frame, so a class this write erased would unfold a collapsed group on the next poll.
   const dragging = card.classList.contains("dragging");
-  card.className = `fleet-card lane-${v.status}${v.promoted ? " promoted" : ""}${dragging ? " dragging" : ""}`;
+  card.className = `fleet-card lane-${v.status}${v.promoted ? " promoted" : ""}${dragging ? " dragging" : ""}${laneCollapsed(groups, v.id) ? " grp-hidden" : ""}`;
   // P-FLEET.L8: promote / pull back. Hidden entirely when app.ts did not thread the dep, because a button
   // that cannot act is worse than no button.
   const promote = $("[data-fleet-promote]", card) as HTMLButtonElement | null;
@@ -739,6 +1100,17 @@ function paintFrame(run: LaneRun): void {
   }
   const cwd = $("[data-fleet-cwd]", card) as HTMLElement | null;
   if (cwd) { cwd.textContent = baseName(v.cwd); cwd.title = v.cwd; }
+  // P-REPO.1 (ADR-0406): the repo this lane works in and where its commits go. Hidden until probed.
+  const repo = $("[data-fleet-repo]", card) as HTMLElement | null;
+  if (repo) { if (v.repo) paintRepoChip(repo, v.repo); else repo.hidden = true; }
+  // P-FLEET.L18: the group chip - the assigned name, or a bare glyph inviting one.
+  const grp = $("[data-fleet-grp]", card) as HTMLElement | null;
+  if (grp) {
+    const name = groups.byLane[v.id];
+    const html = name ? `${icon("graph", 10)}<span>${esc(name)}</span>` : icon("graph", 10);
+    if (grp.innerHTML !== html) grp.innerHTML = html;
+    grp.classList.toggle("named", !!name);
+  }
   // P-TOKENS.1: the lane's OWN context fill, MEASURED - the chip stays hidden until a `usage` event has
   // actually reported, because an unreported window is not an empty one. token_meter owns the thresholds, so
   // this chip and the composer's token button turn amber and red at the same fill.
@@ -766,6 +1138,7 @@ function paintFrame(run: LaneRun): void {
         : `The harness cancelled and resumed this lane in place: ${h.reason}`;
     }
   }
+  paintProgress(run); // P-PROGRESS.1
   // P-FLEET.L4: lanes have NO turn clock, so a long silent stretch must be LEGIBLE instead of fatal.
   // P-HEALTH.1: `openCalls` is WHY a silent lane is only quiet and not probed - a tool call is still out.
   const quiet = $("[data-fleet-quiet]", card) as HTMLElement | null;
@@ -815,15 +1188,30 @@ function paintFrame(run: LaneRun): void {
     }
   }
   // P-FLEET.L3: the staged-prompt strip - one compact chip per queued prompt, in run order, each with
-  // reorder/delete + Push now (P-INTERJECT.2: interject the RUNNING turn instead of waiting for idle).
-  // Chips ellipsize on one line (invariant 11); the queue itself lives in the manager.
+  // reorder/delete + Push now. P-PUSH.PAR1: Push now runs the prompt in a NEW lane on its own worktree
+  // (lane prompts carry images, so no text-only refusal); right-click / long-press a chip for Copy,
+  // Copy and remove, and Steer running turn (the old interject). Chips ellipsize on one line (invariant 11).
   const q = $("[data-fleet-queue]", card) as HTMLElement | null;
   if (q) {
     q.hidden = v.queued.length === 0;
+    // Delegated and bound ONCE per strip element (the flag survives the innerHTML rebuilds below); the run
+    // is resolved at open time because the poll may replace it.
+    if (!q.dataset.menuBound) {
+      q.dataset.menuBound = "1";
+      bindItemMenu(q, "[data-q-row]", (row, x, y) => {
+        const r = runs.get((row.closest(".fleet-card[data-lane]") as HTMLElement | null)?.dataset.lane ?? "");
+        if (r) openStagedMenu(r, Number(row.dataset.qRow), x, y, row);
+      });
+    }
+    const pushing = pushingLanes.has(v.id);
     const html = v.queued
-      .map((item, i) => `<span class="fleet-q-chip"><b>${i + 1}</b><span class="fleet-q-txt" title="${esc(item.text)}">${esc(item.text)}${item.images ? ` [${item.images} img]` : ""}</span><button class="fleet-q-btn fleet-q-push" data-q-go="${i}" title="Push now - interject this into the running turn instead of waiting" aria-label="Push staged prompt ${i + 1} into the running turn now">Push now</button><button class="fleet-q-btn" data-q-up="${i}" title="Run earlier" aria-label="Move staged prompt ${i + 1} up" ${i === 0 ? "disabled" : ""}>\u2191</button><button class="fleet-q-btn" data-q-dn="${i}" title="Run later" aria-label="Move staged prompt ${i + 1} down" ${i === v.queued.length - 1 ? "disabled" : ""}>\u2193</button><button class="fleet-q-btn" data-q-x="${i}" title="Remove" aria-label="Remove staged prompt ${i + 1}">\u00d7</button></span>`)
+      .map((item, i) => `<span class="fleet-q-chip" data-q-row="${i}" title="Right-click or long-press to copy"><b>${i + 1}</b><span class="fleet-q-txt" title="${esc(item.text)}">${esc(item.text)}</span>${item.images ? `<span class="fleet-q-img" title="${item.images} image${item.images === 1 ? "" : "s"} ride with this prompt">${item.images} img</span>` : ""}<button class="fleet-q-btn fleet-q-edit" data-q-edit="${i}" title="Update - pull this prompt and its images back into the composer to edit" aria-label="Update staged prompt ${i + 1}">Update</button>${pushing
+        ? `<button class="fleet-q-btn fleet-q-push" data-q-go="${i}" aria-disabled="true" title="Pushing - a new lane on its own worktree is starting for a prompt from this lane" aria-label="Push in progress">Pushing\u2026</button>`
+        : `<button class="fleet-q-btn fleet-q-push" data-q-go="${i}" title="Push now - run this in parallel in a new lane on its own worktree while this lane keeps working" aria-label="Push staged prompt ${i + 1} to a new parallel lane on its own worktree">Push now</button>`}<button class="fleet-q-btn" data-q-up="${i}" title="Run earlier" aria-label="Move staged prompt ${i + 1} up" ${i === 0 ? "disabled" : ""}>\u2191</button><button class="fleet-q-btn" data-q-dn="${i}" title="Run later" aria-label="Move staged prompt ${i + 1} down" ${i === v.queued.length - 1 ? "disabled" : ""}>\u2193</button><button class="fleet-q-btn" data-q-x="${i}" title="Remove" aria-label="Remove staged prompt ${i + 1}">\u00d7</button></span>`)
       .join("");
-    if (q.innerHTML !== html) q.innerHTML = html;
+    // Compared with the HTML last WRITTEN, never `q.innerHTML`: the browser re-serializes (`disabled` reads
+    // back as `disabled=""`), so that comparison never matched and rebuilt the chips on every paint.
+    if (stripHtml.get(q) !== html) { q.innerHTML = html; stripHtml.set(q, html); }
   }
   const cancel = $("[data-fleet-cancel]", card) as HTMLElement | null;
   if (cancel) cancel.hidden = !(run.streaming || v.status === "working");
@@ -845,13 +1233,14 @@ function paintFrame(run: LaneRun): void {
 
 function fillModelSelect(sel: HTMLSelectElement, current: string): void {
   const opts = deps?.getModelOptions() ?? [];
-  const all = opts.some((o) => o.value === current) || !current ? opts : [{ value: current, label: current }, ...opts];
-  const sig = all.map((o) => o.value).join("\n");
+  const all = fleetModelOptions(opts.some((o) => o.value === current) || !current ? opts : [{ value: current, label: current }, ...opts]);
+  const sig = all.map((o) => `${o.value}\t${o.label}`).join("\n");
   if (sel.dataset.sig !== sig) {
     sel.dataset.sig = sig;
-    sel.innerHTML = all.map((o) => `<option value="${esc(o.value)}">${esc(o.label ?? o.value)}</option>`).join("");
+    sel.innerHTML = all.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
   }
   sel.value = current || (all[0]?.value ?? "");
+  sel.title = all.find((o) => o.value === sel.value)?.label ?? current;
 }
 
 // ---------------------------------------------------------------- output stream
@@ -901,13 +1290,22 @@ function chipRow(t: LaneToolRow): HTMLElement {
   // is the accessible-tree version of the dead chevron this increment exists to remove.
   const chev = c.hasBody ? `<span class="fleet-tchip-chev">${icon("chevron", 11)}</span>` : "";
   const expand = c.hasBody ? ` aria-expanded="false"` : "";
+  // P-PROGRESS.1: the state mark (spinning while the call is open, its length once settled) and the doing
+  // line in the head: what the call is doing, in the agent's own words when it gave them.
+  const state = t.status ? `<span class="fleet-tchip-state" data-state="${esc(t.status)}"></span>` : "";
   const row = el(`<div class="fleet-chip-row" data-lane-chip="${esc(t.id)}">
-    <button class="fleet-tchip ${c.kind}${c.failed ? " fail" : ""}" type="button" data-fleet-chip="${esc(t.id)}"${expand}>${icon(CHIP_ICON[c.kind], 11)}<span class="fleet-tchip-k"></span><span class="fleet-tchip-d"></span>${file}${stat}${chev}</button>
+    <button class="fleet-tchip ${c.kind}${c.failed ? " fail" : ""}" type="button" data-fleet-chip="${esc(t.id)}"${expand}>${icon(CHIP_ICON[c.kind], 11)}<span class="fleet-tchip-k"></span><span class="fleet-tchip-d"></span>${file}${stat}${state}${chev}</button>
   </div>`);
   const btn = $(".fleet-tchip", row) as HTMLButtonElement;
   // textContent, never interpolation: a hostile tool name / path / detail cannot break out of the markup.
   ($(".fleet-tchip-k", btn) as HTMLElement).textContent = c.k;
-  ($(".fleet-tchip-d", btn) as HTMLElement).textContent = c.detail;
+  ($(".fleet-tchip-d", btn) as HTMLElement).textContent = laneToolDoing(t);
+  const stateEl = $(".fleet-tchip-state", btn) as HTMLElement | null;
+  if (stateEl && t.status) {
+    const took = t.elapsedMs !== undefined ? humanMs(t.elapsedMs) : "";
+    stateEl.textContent = t.status === "open" ? "" : took;
+    stateEl.title = t.status === "open" ? "running" : t.status === "done" ? (took ? `done in ${took}` : "done") : (took ? `failed after ${took}` : "failed");
+  }
   const path = $(".fleet-diff-path", btn) as HTMLElement | null;
   if (path && t.code?.path) { path.textContent = baseName(t.code.path); path.title = t.code.path; }
   btn.title = t.code?.path ? `${c.k}: ${t.code.path}` : c.detail || c.k;
@@ -1023,7 +1421,7 @@ function paintOutput(run: LaneRun): void {
   const card = run.card; if (!card) return;
   const out = $("[data-fleet-out]", card) as HTMLElement | null; if (!out) return;
   const live = $("[data-lane-live]", out) as HTMLElement | null; if (!live) return;
-  const nearBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 28;
+  const nearBottom = out.scrollHeight - out.scrollTop - out.clientHeight < LANE_JUMP_SHOW_PX;
   syncTurns(run, out, live);
   paintLive(run, live);
   const empty = $("[data-lane-empty]", out) as HTMLElement | null;
@@ -1037,11 +1435,14 @@ function paintOutput(run: LaneRun): void {
 }
 
 /** P-FLEET.L13: show or hide a lane's catch-up buttons. Driven by the SHARED rule (scroll_jump.ts) that
- *  the main chat thread uses, on the lane threshold: a 180px transcript would essentially never clear the
- *  chat's 140px bar, so the pair would have been dead weight. */
+ *  the main chat thread uses, on the lane threshold: the buttons live until the reader is at the bottom
+ *  by the same measure the lane uses to auto-follow new tokens (paintOutput's nearBottom), so they never
+ *  vanish while there is still unread transcript below. The buttons are siblings of the scroller (see
+ *  buildCard), so they are looked up on the wrapper, not inside `out`. */
 function syncLaneJump(out: HTMLElement): void {
   const show = shouldShowJump(out, LANE_JUMP_SHOW_PX);
-  for (const b of out.querySelectorAll<HTMLElement>("[data-lane-jump]")) b.classList.toggle("show", show);
+  const wrap = out.parentElement ?? out;
+  for (const b of wrap.querySelectorAll<HTMLElement>("[data-lane-jump]")) b.classList.toggle("show", show);
 }
 
 /** The transcript's own line height, for the page step's line of overlap. Measured off a real rendered
@@ -1077,16 +1478,25 @@ function foldPending(run: LaneRun, error?: string): void {
 function onLaneEvent(id: string, e: LaneEvent): void {
   const run = runs.get(id); if (!run) return;
   switch (e.type) {
-    case "token": run.pending += e.text; paintOutput(run); break;
-    case "thinking": run.pendingThinking += e.text; paintOutput(run); break;
+    case "token": run.pending += e.text; run.waiting = null; paintOutput(run); break;
+    case "thinking": run.pendingThinking += e.text; run.waiting = null; paintOutput(run); break;
     case "tool":
+      // P-PROGRESS.1: a settle event closes the row its call opened (done / failed, with its length); a
+      // settle for a call this card never saw paints nothing. Only an OPEN event appends a row.
+      if (e.id && (e.status === "done" || e.status === "failed")) {
+        if (settleToolRow(run.pendingTools, e.id, e.status, e.elapsedMs)) paintOutput(run);
+        break;
+      }
       // P-FLEET.L7: `input` is the bounded, code-stripped command the engine now carries. Without it a
       // bash/read/search chip had nothing under its chevron at all, which is why it never grew one.
       run.pendingTools.push({
         id: nextId(run, "c"), name: e.name, detail: e.detail,
         ...(e.code ? { code: e.code } : {}), ...(e.input ? { input: e.input } : {}),
+        ...(e.id ? { callId: e.id } : {}), ...(e.intent ? { intent: e.intent } : {}),
+        ...(e.status ? { status: e.status } : {}), ...(e.elapsedMs !== undefined ? { elapsedMs: e.elapsedMs } : {}),
         open: false,
       });
+      run.waiting = null; // a tool event means the write wait is over
       paintOutput(run);
       // P-PREVIEW.10: a lane write worth LOOKING at (html/svg/pdf) earns the lane its own Preview panel
       // tab. P-PREVIEW.18: narrowed from "anything renderable" - a lane writing notes.md or a config.json
@@ -1113,6 +1523,17 @@ function onLaneEvent(id: string, e: LaneEvent): void {
       // P-HEALTH.1: the harness acted on this lane by itself. Showing it is the point: a user watching a
       // silent card needs to know it was handled, not wonder whether anything is alive.
       run.health = { action: e.action, reason: e.reason };
+      paintFrame(run);
+      break;
+    // P-PROGRESS.1: the lane's progress view, streamed every few seconds; a sample means the turn runs, so
+    // any wait is over. The wait says what the turn is in line behind, and the next real event clears it.
+    case "progress":
+      // P-WAIT.1: the turn keeps ticking while a write waits, so a tick does not end the wait; the poll does.
+      run.progress = e.progress; run.progressAt = Date.now();
+      paintFrame(run);
+      break;
+    case "waiting":
+      run.waiting = e.wait;
       paintFrame(run);
       break;
     case "status":
@@ -1170,12 +1591,203 @@ function sendPrompt(run: LaneRun): void {
     .finally(() => { run.streaming = false; foldPending(run); paintFrame(run); paintOutput(run); paintPill(); maybeDrain(run); });
 }
 
+/** P-QUEUE-IMG.1 (ADR-0469): Update on a staged chip. The manager hands back the item's FULL text and its
+ *  own images (the poll only carries a clipped preview and a count) and they load into this card's
+ *  composer: the image strip shows them removable, paste adds more, and Send/Stage uses the edited prompt
+ *  (a re-stage appends; the manager queue has no item ids to anchor a slot to). A draft in the card
+ *  composer, text or images, is never overwritten: the Update is refused with a note. */
+function editStaged(run: LaneRun, i: number): void {
+  if (!deps) return;
+  const input = run.card ? ($("[data-fleet-input]", run.card) as HTMLTextAreaElement | null) : null;
+  if (!input) return;
+  if (input.value.trim() || run.attached.length) { setLaneNote(run, "Update never overwrites a draft. Send, stage or clear this lane's composer, then press Update."); return; }
+  if (!run.view.queued[i]) return;
+  const id = run.view.id;
+  run.view.queued = run.view.queued.filter((_, n) => n !== i); // optimistic; the poll is truth
+  paintFrame(run);
+  void deps.fleetQueueTake(id, i).then((r) => {
+    if (!r?.ok || !r.item) { void refresh(); setLaneNote(run, `Not updated: ${r?.reason ?? "the engine did not answer"}.`); return; }
+    const item = r.item;
+    // Typed or pasted into while the take was in flight: the item is already out of the manager queue, so
+    // it goes back on the end of it rather than over the new draft.
+    if (input.value.trim() || run.attached.length) {
+      void deps?.fleetQueueAdd(id, item.text, item.images).then((a) => {
+        void refresh();
+        if (a?.ok) { setLaneNote(run, "Your composer got a draft first, so the staged prompt went back on the end of the queue."); return; }
+        // Could not re-stage either: the composer is the only place left, so it is added after the draft.
+        input.value = [input.value.trim(), item.text].filter(Boolean).join("\n\n");
+        run.attached = [...run.attached, ...item.images].slice(0, 6);
+        paintAttach(run);
+        setLaneNote(run, `Could not re-stage it (${a?.reason ?? "no answer"}), so it was added after your draft in the composer.`);
+      });
+      return;
+    }
+    input.value = item.text;
+    input.style.height = "auto";
+    input.style.height = `${Math.min(64, input.scrollHeight)}px`;
+    run.attached = item.images.slice();
+    paintAttach(run);
+    input.focus();
+  }).catch(() => { void refresh(); });
+}
+
+// ── P-PUSH.PAR1 (ADR-pending): the staged chip's item menu, and Push now as a parallel worktree lane ──────
+
+/** Lanes with a parallel push in flight. Their Push now buttons read "Pushing..." until it settles, so a
+ *  double click cannot start two lanes for one prompt. */
+const pushingLanes = new Set<string>();
+/** The staged strip's last written HTML per strip element (see the paint that writes it). */
+const stripHtml = new WeakMap<HTMLElement, string>();
+
+/** Right-click / long-press on a lane's staged chip: Copy prompt, Copy and remove, and (text-only, while
+ *  the lane runs a turn) Steer running turn, the old Push now. Text is read WHOLE from the manager (the
+ *  chip only holds a 140-char preview). */
+function openStagedMenu(run: LaneRun, i: number, x: number, y: number, row: HTMLElement): void {
+  const item = run.view.queued[i]; if (!item) return;
+  const busy = run.streaming || run.view.status === "working" || run.view.status === "needs-approval";
+  const entries: CtxMenuEntry[] = [
+    { label: "Copy prompt", run: () => void copyStaged(run, i, false) },
+    { label: "Copy and remove", run: () => void copyStaged(run, i, true) },
+  ];
+  if (canSteer({ hold: true, running: busy, images: item.images })) entries.push({ label: "Steer running turn", run: () => void steerStaged(run, i) });
+  const focused = row.contains(document.activeElement) ? (document.activeElement as HTMLElement) : (row.querySelector("button") as HTMLElement | null);
+  openCtxMenu(x, y, entries, { returnFocus: focused, className: "ctx-menu-stage" });
+}
+
+/** Copy a staged prompt's full text; `remove` then takes it out of the queue so it can be re-pasted and
+ *  edited. The clipboard write comes FIRST and the remove is guarded by the text, so a refused clipboard
+ *  or a drain in between never loses the prompt. Images are not text: they stay with a kept item, and a
+ *  removed one says they went with it. */
+async function copyStaged(run: LaneRun, i: number, remove: boolean): Promise<void> {
+  if (!deps) return;
+  const id = run.view.id;
+  const r = await deps.fleetQueuePeek(id, i).catch(() => null);
+  if (!r?.ok || !r.item) { void refresh(); setLaneNote(run, `Not copied: ${r?.reason ?? "the engine did not answer"}.`); return; }
+  const imgs = r.item.images.length;
+  if (!(await copyToClipboard(r.item.text))) { setLaneNote(run, "Not copied: the clipboard refused. The prompt stays staged."); return; }
+  if (!remove) { setLaneNote(run, imgs ? "Copied the prompt text. Its images stay with the staged prompt." : "Copied. Paste it into any prompt bar."); return; }
+  const gone = await deps.fleetQueueRemove(id, i, r.item.text).catch(() => null);
+  void refresh();
+  if (!gone?.ok) { setLaneNote(run, "Copied. It had already left the queue (it ran or was removed)."); return; }
+  setLaneNote(run, `Copied and removed. Paste it into a prompt bar to edit or keep it${imgs ? `; its ${imgs} image${imgs === 1 ? " was" : "s were"} removed with it` : ""}.`);
+}
+
+/** Steer running turn: the OLD Push now, kept so no capability is lost. The full text goes into this lane's
+ *  running turn as a note; ADR-0414: it leaves the queue only once the note is accepted. */
+async function steerStaged(run: LaneRun, i: number): Promise<void> {
+  if (!deps) return;
+  const id = run.view.id;
+  const r = await deps.fleetQueuePeek(id, i).catch(() => null);
+  if (!r?.ok || !r.item) { void refresh(); setLaneNote(run, `Not steered: ${r?.reason ?? "the engine did not answer"}.`); return; }
+  if (r.item.images.length) { setLaneNote(run, "Steer is text only. This prompt carries images, so it stays staged; Push now runs it with them in a parallel lane."); return; }
+  const text = r.item.text;
+  run.view.queued = run.view.queued.filter((_, n) => n !== i); // optimistic; the poll is truth
+  paintFrame(run);
+  const res = await deps.interject(id, text, { live: true });
+  if (res.ok) { void deps.fleetQueueRemove(id, i, text).catch(() => { /* the next poll corrects it */ }); return; }
+  void refresh(); // repaint the chip the optimistic removal hid
+  setLaneNote(run, `Not steered: ${res.reason}. It stays staged and runs as this lane's next prompt.`);
+}
+
+/** Push now on a lane's staged chip: the prompt (full text + its own images) runs at once in a NEW lane on
+ *  its own git worktree, while this lane keeps working. The user is told immediately (card note + toast)
+ *  and again with the branch once the new lane runs. ADR-0414's rule holds: the chip leaves this lane's
+ *  queue only after the new lane accepted the prompt; any refusal keeps it staged and says why. */
+async function pushStagedParallel(run: LaneRun, i: number): Promise<void> {
+  if (!deps) return;
+  const id = run.view.id;
+  if (pushingLanes.has(id)) { setLaneNote(run, "A parallel lane from this lane is still starting. Push the next prompt once it runs."); return; }
+  if (!run.view.queued[i]) return;
+  pushingLanes.add(id); paintFrame(run);
+  try {
+    const peek = await deps.fleetQueuePeek(id, i).catch(() => null);
+    if (!peek?.ok || !peek.item) { setLaneNote(run, `Not pushed: ${peek?.reason ?? "the engine did not answer"}.`); return; }
+    const item = peek.item;
+    const src: PushSource = { kind: "lane", name: run.view.name, cwd: run.view.cwd, model: run.view.model };
+    const busy = run.streaming || run.view.status === "working" || run.view.status === "needs-approval";
+    const r = await pushToNewLane(src, item.text, item.images, {
+      announce: (lane) => {
+        const n = parallelPushNotice(src, lane, { busy });
+        setLaneNote(run, n.desc);
+        showToast({ tone: "info", title: n.title, desc: n.desc, timeout: 6000 });
+      },
+    });
+    if (!r.ok) {
+      const plan = parallelPushRefusal(r, { canSteer: false, images: item.images.length });
+      setLaneNote(run, plan.desc);
+      showToast({ tone: "warn", title: plan.title, desc: plan.desc, timeout: 9000 });
+      return;
+    }
+    const gone = await deps.fleetQueueRemove(id, i, item.text).catch(() => null);
+    const n = parallelPushNotice(src, r.name, { busy, branch: r.branch });
+    // The source drained it while the new lane was starting: it now runs in both, which is said plainly.
+    const desc = gone?.ok ? n.desc : `${n.desc} ${run.view.name} had already started it as its next turn, so it runs in both.`;
+    setLaneNote(run, desc);
+    showToast({ tone: "info", title: n.title, desc, timeout: 9000 });
+  } finally {
+    pushingLanes.delete(id);
+    // The queue held for the push (maybeDrain); refresh re-reads it, so the pushed item is gone, and
+    // resumes the drain for every idle lane.
+    void refresh();
+  }
+}
+
+export type ParallelPushResult = { ok: true; laneId: string; name: string; branch: string } | { ok: false; reason: string; code?: "no-repo" };
+
+/** P-PUSH.PAR1 (ADR-pending): run `text` (+ `images`) in a NEW lane on its own git worktree of the source's
+ *  repo (its MAIN checkout, queue_model.mainCheckoutCwd), on the source's model, named `<source>-push-<n>`.
+ *  `announce(name)` fires once the name is known, before the slow part (worktree + omp handshake), so the
+ *  user hears what is happening at once. The grid opens if it was closed, and the new lane's card streams
+ *  the turn like any other. Resolves ok only once the new lane ACCEPTED the prompt (its first stream event
+ *  is not an error); a lane that started but refused the prompt is a refusal, and the lane stays visible.
+ *  Used by the lane chips here and by the main composer's chips (app.ts). */
+export async function pushToNewLane(src: PushSource, text: string, images: LaneImage[], opts: { announce: (lane: string) => void }): Promise<ParallelPushResult> {
+  if (!deps) return { ok: false, reason: "the fleet is not ready yet" };
+  const d = deps;
+  const st = await d.fleetStatus().catch(() => null);
+  if (!st) return { ok: false, reason: "the fleet engine did not answer" };
+  const name = pushLaneName(src, st.lanes.map((l) => l.name));
+  opts.announce(name);
+  if (!dock) openFleetGrid();
+  const r = await d.fleetSpawn({ cwd: mainCheckoutCwd(src.cwd), model: src.model || undefined, name, worktree: true })
+    .catch((e: unknown) => ({ ok: false, reason: e instanceof Error ? e.message : String(e), code: undefined, lane: undefined, worktree: undefined }));
+  if (!r?.ok || !r.lane || !r.worktree) return { ok: false, reason: r?.reason || "the engine refused the lane", ...(r?.code ? { code: r.code } : {}) };
+  const lane = r.lane;
+  const branch = r.worktree.branch;
+  await refresh();
+  let run = runs.get(lane.id);
+  if (!run) { run = newRun(lane); runs.set(lane.id, run); }
+  const target = run;
+  const full = parallelPushPrompt(src, { branch, path: lane.cwd }, text);
+  target.turns.push({ id: nextId(target, "t"), role: "user", text: full, tools: [], ...(images.length ? { images: images.map((im) => `data:${im.mimeType};base64,${im.data}`) } : {}) });
+  target.pending = ""; target.pendingThinking = ""; target.pendingTools = [];
+  target.streaming = true;
+  target.view.status = "working"; // optimistic; the stream's status events correct it
+  paintFrame(target); paintOutput(target); paintPill();
+  const refused = await new Promise<string | null>((resolve) => {
+    let settled = false;
+    const settle = (why: string | null): void => { if (!settled) { settled = true; resolve(why); } };
+    void d.fleetPrompt(lane.id, full, (e) => { settle(e.type === "error" ? e.message : null); onLaneEvent(lane.id, e); }, images)
+      .catch((err: unknown) => {
+        const m = err instanceof Error ? err.message : String(err);
+        settle(m);
+        onLaneEvent(lane.id, { type: "error", message: m });
+      })
+      .finally(() => {
+        settle("the stream closed before the turn started");
+        target.streaming = false; foldPending(target); paintFrame(target); paintOutput(target); paintPill(); maybeDrain(target);
+      });
+  });
+  if (refused) return { ok: false, reason: `the new lane ${name} started but did not take the prompt: ${refused}` };
+  return { ok: true, laneId: lane.id, name, branch };
+}
+
 /** P-FLEET.L3: run the next STAGED prompt when the lane is idle - streamed into the card like any turn.
  *  Guarded so only one drain fires per lane; approvals still glow and wait for a human mid-drain. */
 function maybeDrain(run: LaneRun): void {
-  if (!deps || run.streaming) return;
-  if (!run.view.queued.length) return;
-  if (run.view.status !== "awaiting-input" && run.view.status !== "done") return;
+  // P-PUSH.PAR1: the queue holds while a push from this lane is in flight; the push's settle (refresh)
+  // resumes it.
+  if (!deps || !laneDrainReady({ streaming: run.streaming, queued: run.view.queued.length, status: run.view.status, pushing: pushingLanes.has(run.view.id) })) return;
   const id = run.view.id;
   const next = run.view.queued[0]!;
   run.view.queued = run.view.queued.slice(1);
@@ -1247,12 +1859,18 @@ function runRetry(run: LaneRun): void {
     .finally(() => { run.streaming = false; foldPending(run); paintFrame(run); paintOutput(run); paintPill(); });
 }
 
-/** Respawn in place (memory carried); the returned view or the next poll repaints the frame. */
+/** Respawn in place (memory carried); the returned view or the next poll repaints the frame. A refusal
+ *  (the lane's session is held elsewhere, the gate is missing) is said on the card and the poll restores
+ *  the real status: Restart this lane doing nothing visible is indistinguishable from a broken button. */
 function runRespawn(run: LaneRun): void {
   if (!deps) return;
   run.view.status = "starting"; paintFrame(run); paintPill();
   void deps.fleetRespawn(run.view.id)
-    .then((r) => { if (r?.ok && r.lane) { run.view = r.lane; } paintFrame(run); paintOutput(run); paintPill(); })
+    .then((r) => {
+      if (r?.ok && r.lane) { run.view = r.lane; paintFrame(run); paintOutput(run); paintPill(); return; }
+      setLaneNote(run, r?.reason ?? "the lane could not be restarted");
+      void refresh();
+    })
     .catch(() => { /* the next poll corrects it */ });
 }
 
@@ -1359,10 +1977,11 @@ function toggleSpawnForm(): void {
   const existing = $(".fleet-spawn-card", dock);
   if (existing) { existing.remove(); paintEmpty(); return; }
   const grid = $("#fleetGrid", dock) as HTMLElement | null; if (!grid) return;
-  const master = deps.getMasterModel();
   const options = deps.getModelOptions();
-  const all = options.some((o) => o.value === master) || !master ? options : [{ value: master, label: master }, ...options];
-  const opts = all.map((o) => `<option value="${esc(o.value)}"${o.value === master ? " selected" : ""}>${esc(o.label ?? o.value)}</option>`).join("");
+  // P-SCROLL.1 (ADR-0405): preselect the model the last lane ran, else the master's (the orbit form's rule).
+  const pick = spawnModelDefault(options, rememberedSpokeModel(), deps.getMasterModel());
+  const all = fleetModelOptions(options.some((o) => o.value === pick) || !pick ? options : [{ value: pick, label: pick }, ...options]);
+  const opts = all.map((o) => `<option value="${esc(o.value)}"${o.value === pick ? " selected" : ""}>${esc(o.label)}</option>`).join("");
   const form = el(`<div class="fleet-card fleet-spawn-card">
     <div class="fleet-card-head">
       <span class="fleet-led" aria-hidden="true"></span>
@@ -1375,13 +1994,18 @@ function toggleSpawnForm(): void {
         <input class="fleet-spawn-in" data-spawn-cwd type="text" value="${esc(deps.getMasterCwd())}" spellcheck="false" aria-label="The folder this lane works in" />
         <button class="btn-mini fleet-browse" data-spawn-browse title="Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button>
       </div>
-      <label class="fleet-spawn-lbl">Repo URL <span class="fleet-spawn-opt">optional</span></label>
-      <input class="fleet-spawn-in" data-spawn-repo type="text" spellcheck="false" autocomplete="off" aria-label="A GitHub, GitLab or Azure DevOps repository URL to clone" placeholder="https://github.com/org/repo.git or git@github.com:org/repo.git" />
+      ${repoPickerHtml()}
       <div class="fleet-spawn-note" data-spawn-repo-note hidden></div>
+      <details class="fleet-spawn-more" data-spawn-more>
+        <summary>Clone from a URL</summary>
+        <label class="fleet-spawn-lbl">Repo URL <span class="fleet-spawn-opt">optional</span></label>
+        <input class="fleet-spawn-in" data-spawn-repo type="text" spellcheck="false" autocomplete="off" aria-label="A GitHub, GitLab or Azure DevOps repository URL to clone" placeholder="https://github.com/org/repo.git or git@github.com:org/repo.git" />
+      </details>
       <div class="fleet-spawn-auth" data-spawn-auth hidden>
         <input class="fleet-spawn-in" data-spawn-pat type="password" autocomplete="off" spellcheck="false" aria-label="Personal access token for this repository host" placeholder="Personal access token (private repos)" />
         <label class="fleet-spawn-save"><input type="checkbox" data-spawn-save checked /><span data-spawn-save-txt>Remember this token for this host</span></label>
       </div>
+      <label class="fleet-spawn-save fleet-spawn-wt" title="The worktree is created next to the repo, starts at its last commit (uncommitted edits in this folder are not copied), and is kept when the lane closes."><input type="checkbox" data-spawn-wt /><span>Own worktree: this lane gets a new branch and its own copy of the repo, so it runs beside other agents here. I accept that merging it back can conflict.</span></label>
       <label class="fleet-spawn-lbl">Name <span class="fleet-spawn-opt">optional</span></label>
       <input class="fleet-spawn-in" data-spawn-name type="text" placeholder="lane-${runs.size + 1}" spellcheck="false" aria-label="A name for this lane" />
       <label class="fleet-spawn-lbl">Model</label>
@@ -1393,7 +2017,42 @@ function toggleSpawnForm(): void {
   grid.prepend(form);
   paintEmpty();
   paintRepoHint(form);
-  ($("[data-spawn-cwd]", form) as HTMLInputElement | null)?.focus();
+  revealPathEnd($("[data-spawn-cwd]", form) as HTMLInputElement | null);
+  // P-REPO.1 (ADR-0406): the Folder field (prefilled, with Browse) is enough to spawn; "Find repos" is
+  // opt-in and fetches nothing until its Search button. A pick fills the same folder / URL fields the form
+  // always submitted, so the spawn path and its clone rules are unchanged, and Spawn never waits on a search.
+  const cwdIn = $("[data-spawn-cwd]", form) as HTMLInputElement | null;
+  const repoIn = $("[data-spawn-repo]", form) as HTMLInputElement | null;
+  const nameIn = $("[data-spawn-name]", form) as HTMLInputElement | null;
+  const d = deps;
+  mountRepoPicker(form, d, () => cwdIn?.value ?? "", (pick) => {
+    if (!cwdIn || !repoIn) return;
+    if (pick.kind === "local") { cwdIn.value = pick.path; repoIn.value = ""; }
+    else { repoIn.value = pick.cloneUrl; cwdIn.value = d.getMasterCwd(); }
+    revealPathEnd(cwdIn);
+    if (nameIn) nameIn.placeholder = pick.name;
+    paintRepoHint(form);
+    const signIn = githubPickNote(pick, cwdIn.value.trim());
+    const note = $("[data-spawn-repo-note]", form) as HTMLElement | null;
+    const auth = $("[data-spawn-auth]", form) as HTMLElement | null;
+    if (signIn && note) { note.textContent = signIn; note.className = "fleet-spawn-note"; if (auth) auth.hidden = true; }
+  });
+  cwdIn?.focus();
+}
+
+/** A long folder path overflows a 360px card from the left. Scroll to the end so the folder name
+ *  stays visible, and keep the full path on the tooltip. Called after layout, because scrollWidth is
+ *  0 until the input has a width. */
+function revealPathEnd(input: HTMLInputElement | null): void {
+  if (!input) return;
+  input.title = input.value;
+  const show = (): void => {
+    const end = input.value.length;
+    try { input.setSelectionRange(end, end); } catch { /* detached, or a type that has no selection */ }
+    input.scrollLeft = input.scrollWidth;
+  };
+  show();
+  requestAnimationFrame(show);
 }
 
 /** The REAL OS dialog (Explorer / Finder / zenity), where the user can also CREATE the folder. A cancel
@@ -1405,6 +2064,7 @@ async function browseSpawnFolder(): Promise<void> {
   if (!picked) return;
   const input = $("[data-spawn-cwd]", form) as HTMLInputElement | null;
   if (input) input.value = picked;
+  revealPathEnd(input);
   paintRepoHint(form);
 }
 
@@ -1449,6 +2109,7 @@ async function submitSpawn(): Promise<void> {
   const patInput = $("[data-spawn-pat]", form) as HTMLInputElement | null;
   const pat = patInput?.value ?? "";
   const remember = ($("[data-spawn-save]", form) as HTMLInputElement | null)?.checked === true;
+  const worktree = ($("[data-spawn-wt]", form) as HTMLInputElement | null)?.checked === true; // P-FLEET.WT1
   const err = $("[data-spawn-err]", form) as HTMLElement | null;
   const fail = (msg: string): void => { if (err) { err.textContent = msg; err.hidden = false; } };
   const remote = repoRaw ? parseGitRemote(repoRaw) : null;
@@ -1481,11 +2142,12 @@ async function submitSpawn(): Promise<void> {
     name: name || undefined,
     ...(remote ? { repoUrl: repoRaw } : {}),
     ...(remote && pat ? { pat } : {}),
+    ...(worktree ? { worktree: true } : {}),
   }).catch((e: unknown) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }));
   clearTimeout(slow);
   if (err && err.hidden === false && r?.ok) err.hidden = true; // the slow-note must not outlive a success
   if (patInput) patInput.value = ""; // never leave the plaintext sitting in the DOM
-  if (r?.ok) { form.remove(); paintEmpty(); await refresh(); return; }
+  if (r?.ok) { rememberSpokeModel(model); form.remove(); paintEmpty(); await refresh(); return; }
   if (go) { go.disabled = false; go.innerHTML = goHtml; }
   // A refusal carries the measured numbers ("system CPU has been at 93% for 34s") or the redacted git
   // failure - show it verbatim, it is the whole point of the guard.
@@ -1494,10 +2156,84 @@ async function submitSpawn(): Promise<void> {
 
 // ---------------------------------------------------------------- delegated events
 
+/** P-FLEET.L18: the per-card group menu - pick an existing group, clear, or create one inline. The
+ *  rows reuse the spoke-switch menu classes so the fleet's two menus cannot drift apart visually. */
+function openGroupMenu(run: LaneRun, anchor: HTMLElement): void {
+  const cur = groups.byLane[run.view.id] ?? null;
+  const rows = [
+    `<button class="spoke-sw-row${cur === null ? " current" : ""}" data-grp-pick="">${icon("close", 12)}<span>No group</span></button>`,
+    ...groups.groups.map((n) => `<button class="spoke-sw-row${cur === n ? " current" : ""}" data-grp-pick-name="${esc(n)}">${icon("graph", 12)}<span>${esc(n)}</span></button>`),
+    `<div class="spoke-sw-div" aria-hidden="true"></div>`,
+    `<div class="fleet-grp-new"><input type="text" data-grp-newname placeholder="New group\u2026" maxlength="40"><button class="btn-mini" data-grp-createnew>${icon("plus", 11)} Create</button></div>`,
+  ].join("");
+  const p = popover(anchor, `<div class="spoke-switch">${rows}</div>`);
+  const commit = (name: string | null): void => {
+    if (name === null) groups = assignLane(groups, run.view.id, null);
+    else {
+      const made = createGroup(groups, name);
+      if (!made.name) return; // a blank name creates nothing and keeps the menu open
+      groups = assignLane(made.next, run.view.id, made.name);
+    }
+    persistGroups();
+    paintFrame(run);
+    const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
+    if (grid) applyOrder(grid);
+    p.close();
+  };
+  p.node.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t.closest("[data-grp-pick]")) { commit(null); return; }
+    const pick = t.closest("[data-grp-pick-name]") as HTMLElement | null;
+    if (pick) { commit(pick.dataset.grpPickName ?? null); return; }
+    if (t.closest("[data-grp-createnew]")) commit(($("[data-grp-newname]", p.node) as HTMLInputElement | null)?.value ?? "");
+  });
+  const input = $("[data-grp-newname]", p.node) as HTMLInputElement | null;
+  input?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); commit(input.value); } });
+  input?.focus();
+}
+
 function onClick(ev: Event): void {
   const t = ev.target as HTMLElement;
   if (t.closest("[data-fleet-close]")) { closeFleetGrid(); return; }
   if (t.closest("[data-dock-min]")) { minimize(); return; }
+  // P-FLEET.L18: back to the map, and the default-view pin.
+  if (t.closest("[data-fleet-orbit]")) { openFleetOrbit(); return; }
+  if (t.closest("[data-fleet-fit]")) { toggleAutofit(); return; } // P-FLEET.FIT1: autofit on / free layout
+  // P-TUI.2: the terminal hub. A refusal names why on the button's tooltip line (this module has no toasts).
+  const hubBtn = t.closest("[data-fleet-hub]") as HTMLButtonElement | null;
+  if (hubBtn) { void openHubFrom(hubBtn, () => deps?.hubOpen()); return; }
+  if (t.closest("[data-fleet-pin]")) { setFleetHome("grid"); paintGridPin(); return; }
+  // P-FLEET.L18: group divider controls + the per-card group chip.
+  const gt = t.closest("[data-grp-toggle]") as HTMLElement | null;
+  if (gt) {
+    groups = toggleCollapsed(groups, gt.dataset.grpToggle ?? "");
+    persistGroups();
+    const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
+    if (grid) applyOrder(grid);
+    return;
+  }
+  const gd = t.closest("[data-grp-disband]") as HTMLElement | null;
+  if (gd) {
+    groups = removeGroup(groups, gd.dataset.grpDisband ?? "");
+    persistGroups();
+    const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
+    if (grid) applyOrder(grid);
+    for (const r of runs.values()) if (r.card) paintFrame(r); // chips lose their freed group name
+    return;
+  }
+  const rc = t.closest("[data-fleet-repo]") as HTMLElement | null;
+  if (rc) {
+    const rrun = runs.get((rc.closest(".fleet-card[data-lane]") as HTMLElement | null)?.dataset.lane ?? "");
+    if (rrun?.view.repo) openRepoDetails(rc, rrun.view.repo, `spoke ${rrun.view.name}`, (u) => deps?.openUrl?.(u));
+    return;
+  }
+  const gc = t.closest("[data-fleet-grp]") as HTMLElement | null;
+  if (gc) {
+    const gcard = gc.closest(".fleet-card[data-lane]") as HTMLElement | null;
+    const grun = runs.get(gcard?.dataset.lane ?? "");
+    if (grun) openGroupMenu(grun, gc);
+    return;
+  }
   if (t.closest("[data-fleet-add]")) { toggleSpawnForm(); return; }
   if (t.closest("[data-spawn-go]")) { void submitSpawn(); return; }
   if (t.closest("[data-spawn-cancel]")) { toggleSpawnForm(); return; }
@@ -1557,26 +2293,37 @@ function onClick(ev: Event): void {
   if (t.closest("[data-fleet-deny]")) { answer(run, false); return; }
   if (t.closest("[data-fleet-retry]")) { runRetry(run); return; }
   if (t.closest("[data-fleet-respawn]")) { runRespawn(run); return; }
+  // P-LIVENESS.1 (ADR-0418): the user's Stop command on a call marked likely stuck.
+  const stopCallBtn = t.closest("[data-lane-stopcall]") as HTMLButtonElement | null;
+  if (stopCallBtn) {
+    stopCallBtn.disabled = true; stopCallBtn.textContent = "Stopping...";
+    void deps.stopCall(run.view.id).then((r) => {
+      stopCallBtn.disabled = false; stopCallBtn.textContent = "Stop command";
+      if (r?.ok) stopCallBtn.hidden = true;
+      setLaneNote(run, r?.reason ?? "Stop command: the engine did not answer.");
+    });
+    return;
+  }
   // P-INTERJECT.2/.3: the per-lane Check in card + its actions (before the generic chip handlers so
   // clicks inside the card never fall through to them).
   if (t.closest("[data-fleet-checkin]")) { toggleLaneCheckin(run); return; }
   if (t.closest("[data-fleet-ck-x]")) { $("[data-fleet-checkin-card]", card)?.remove(); return; }
   const ask = t.closest("[data-fleet-ask]") as HTMLButtonElement | null;
   if (ask) {
-    ask.disabled = true; ask.textContent = "Sent - answers at the next tool boundary";
-    void deps.interject(run.view.id, LANE_STATUS_ASK).catch(() => { /* the reply simply never lands */ });
+    ask.disabled = true; ask.textContent = "Sending...";
+    // ADR-0414: a refused ask says why on the card and re-arms the button, instead of claiming "Sent".
+    void deps.interject(run.view.id, LANE_STATUS_ASK, { live: true }).then((r) => {
+      // P-LIVENESS.1: inside an open call the note waits for that call to return; say so.
+      if (r.ok) { ask.textContent = run.progress?.stepsOpen.length ? "Queued - lands when the running call returns" : "Sent - answers at the next tool boundary"; return; }
+      ask.disabled = false; ask.textContent = "Ask for status";
+      setLaneNote(run, `Status ask not sent: ${r.reason}.`);
+    });
     return;
   }
   const qgo = t.closest("[data-q-go]") as HTMLElement | null;
-  if (qgo) {
-    const i = Number(qgo.dataset.qGo);
-    const item = run.view.queued[i]; if (!item) return;
-    run.view.queued = run.view.queued.filter((_, n) => n !== i); // optimistic; the poll is truth
-    paintFrame(run);
-    void deps.interject(run.view.id, item.text).catch(() => { /* the next poll corrects it */ });
-    void deps.fleetQueueRemove(run.view.id, i).catch(() => { /* the next poll corrects it */ });
-    return;
-  }
+  if (qgo) { void pushStagedParallel(run, Number(qgo.dataset.qGo)); return; } // P-PUSH.PAR1
+  const qed = t.closest("[data-q-edit]") as HTMLElement | null;
+  if (qed) { editStaged(run, Number(qed.dataset.qEdit)); return; }
   // P-FLEET.L3: the pasted-image strip and the staged-prompt chips.
   const ax = t.closest("[data-attach-x]") as HTMLElement | null;
   if (ax) { run.attached.splice(Number(ax.dataset.attachX), 1); paintAttach(run); return; }
@@ -1635,7 +2382,7 @@ function onChange(ev: Event): void {
   const run = card ? runs.get(card.dataset.lane ?? "") : null; if (!run) return;
   const next = sel.value;
   void deps.fleetSetModel(run.view.id, next)
-    .then((r) => { if (r?.ok) run.view.model = r.model ?? next; else fillModelSelect(sel, run.view.model); })
+    .then((r) => { if (r?.ok) { run.view.model = r.model ?? next; rememberSpokeModel(next); } else fillModelSelect(sel, run.view.model); })
     .catch(() => fillModelSelect(sel, run.view.model));
 }
 

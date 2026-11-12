@@ -21,7 +21,7 @@ PY         := $(UV) run --project $(SIDECAR_DIR) python
 # ---------------------------------------------------------------------------
 
 .PHONY: install
-install: install-harness install-sidecar install-hooks ## Install harness + sidecar deps + git hooks
+install: install-harness install-desktop install-sidecar install-hooks ## Install harness + desktop + sidecar deps + git hooks
 
 .PHONY: install-hooks
 install-hooks: ## Point git at .githooks/ so the pre-commit license-header hook runs
@@ -31,6 +31,10 @@ install-hooks: ## Point git at .githooks/ so the pre-commit license-header hook 
 .PHONY: install-harness
 install-harness: ## Install Bun/TypeScript harness deps
 	$(BUN) install
+
+.PHONY: install-desktop
+install-desktop: ## Install desktop deps. Load-bearing for the symbol graph: desktop pins typescript 6 (the runtime compiler API), while the root pin is the TS 7 Go CLI whose package root exports only version fields. Without this install, loadTs() finds no usable compiler and P-KG-SYM.1 builds empty graphs (CI installs desktop deps; make install must match).
+	cd desktop && $(BUN) install
 
 .PHONY: install-sidecar
 install-sidecar: ## Create/sync the pinned Python sidecar venv
@@ -361,6 +365,39 @@ demo-P-MASCOT.5: demo-P-MASCOT.4 ## Arcade-parity prompt-bar runner (2x sprite, 
 	$(BUN) test ./desktop/renderer/mascot_runner.test.ts ./desktop/renderer/mascot_minigames.test.ts
 	$(BUN) run desktop/scripts/demo_p_mascot_5.ts
 
+.PHONY: demo-P-SEASON.1
+demo-P-SEASON.1: ## P-SEASON.1 (ADR-0525): U.S. holiday + event-month special themes - the calendar (nth weekdays, Easter, year-spanning windows, peak-day precedence), 16 special palettes held to the token contract, 16 animated backdrops valid at any t/size/season, 21 mascot acts + costumes, flush eye band, 16-beat no-slip gait, hover hop + click leap
+	$(BUN) test ./desktop/renderer/seasons.test.ts ./desktop/renderer/theme.test.ts ./desktop/renderer/scenes/scenes_paint.test.ts ./desktop/renderer/mascot_season.test.ts ./desktop/renderer/mascot.test.ts ./desktop/renderer/mascot_runner.test.ts ./desktop/renderer/boot_cinematic.test.ts
+
+.PHONY: demo-P-MODEL.10
+demo-P-MODEL.10: ## P-MODEL.10 (ADR-0526): omp 18.18.6 with Claude Fable 5.2 / Mythos 5.2 - six packages pinned together, NativeJudge migration, R-07 at 92 ids, 8/40 USD per Mtok version-anchored price row, 1M windows, picker cards, frozen prefix still byte-stable
+	$(BUN) test $(TEST_IGNORES) harness/prompt/prefix_compaction.test.ts harness/omp/provider_catalog.test.ts harness/omp/judgment_extension.test.ts desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/packaged_boot.test.ts
+	$(BUN) run harness/scripts/demo02_prefix_hash.ts
+
+.PHONY: demo-P-BOOTPERF.1
+demo-P-BOOTPERF.1: ## P-BOOTPERF.1 (ADR-0527): the renderer's boot burst never blocks the engine's event loop - async sessions/usage/code-activity/compaction-policy/omp probe, cached workspace bar, self-healing Reconnect button (a dead engine keeps it)
+	$(BUN) test $(TEST_IGNORES) desktop/omp_bin.test.ts desktop/renderer/turn_restore.test.ts desktop/sessions_index.test.ts desktop/sessions_ingest.test.ts harness/usage_ledger.test.ts harness/code_activity.test.ts
+	$(BUN) run desktop/scripts/demo_p_perf_4.ts
+	$(BUN) run harness/scripts/demo_pcode1.ts
+
+.PHONY: demo-P-FLEET.FIT1
+demo-P-FLEET.FIT1: ## P-FLEET.FIT1 (ADR-0528): fleet lanes autofit the dock in both directions at equal sizes (on by default, header toggle), refit on resize/spawn/close, a card-edge drag shares the rest equally, double-click resets
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/lane_layout.test.ts
+
+.PHONY: demo-P-PUSH.PAR1
+demo-P-PUSH.PAR1: ## P-PUSH.PAR1 (ADR-0529): staged-chip copy menu (right-click / long-press) + Push now runs the prompt in a parallel lane on its own git worktree (main-checkout mapping, unique <source>-push-<n> names, preamble, dequeue only on acceptance, text-guarded remove, no-repo steer fallback)
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/queue_model.test.ts desktop/renderer/ctxmenu.test.ts desktop/lane_worktree.test.ts desktop/fleet_lanes.test.ts
+
+.PHONY: demo-P-PRIVAI.1
+demo-P-PRIVAI.1: ## P-PRIVAI.1 (ADR-0530): the DGX Loader is now the Private AI Platform - the renderer bundle carries "Import from the Private AI Platform" and no "DGX Loader", while the /^dgx-loader\b/i enclave attestation regex and the dgx-avatar/dgx-cad/dgx-vision provider ids stay
+	$(BUN) run desktop/scripts/demo_p_privai_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/creator_probe.test.ts desktop/creator_mailbox.test.ts desktop/creator_registry.test.ts desktop/cui_policy.test.ts
+
+.PHONY: demo-P-RUNTIME-PY.1
+demo-P-RUNTIME-PY.1: ## P-RUNTIME-PY.1 (ADR-0548): the bundled CPython moves to python-build-standalone 20261026 (3.12.16, OpenSSL 3.5.9); fetch-runtimes runs it and refuses a tree that is not PY_VERSION or whose OpenSSL is below PY_OPENSSL_MIN
+	$(BUN) test $(TEST_IGNORES) desktop/build/python_floor.test.ts
+	cd desktop && $(BUN) run build/fetch-runtimes.ts
+
 .PHONY: demo-P-AVATAR.4
 demo-P-AVATAR.4: ## P-AVATAR.4 (ADR-0251): the LUCID Agent enter flow - fast-model preference order (Terra > Sonnet 5 > Flash, no pointless switch), one-gap-at-a-time readiness (provider > tts > stt), the one-time KG offer, exit model restoration
 	$(BUN) run desktop/scripts/demo_p_avatar_4.ts
@@ -381,6 +418,11 @@ demo-P-REMOTE.12: ## P-REMOTE.12 (ADR-0251): PWA push-to-talk - fail-closed Prom
 demo-P-REMOTE.13: ## P-REMOTE.13 (ADR-0251): the invisible hourly reconnect - grace-window presentation (young flap = Live, real outage surfaces, terminal never masked); the 60-min cap + hourly re-verify stay
 	$(BUN) run desktop/scripts/demo_p_remote_13.ts
 
+.PHONY: demo-P-REMOTE.16
+demo-P-REMOTE.16: ## P-REMOTE.16 (ADR-0431): the phone resumes with exactly what it missed - REAL gated relay + host + socket + guest + viewer + history. Fresh join gets rich seq turns (thinking, edit with code, ok/elapsed, +/-); the diff drilldown renders with hostile code escaped; on-device history round-trips, rejects another room, stores nothing under CUI; an unlock with since=2 receives only seq 3 + the in-flight seq 4 and merges without duplicates; a planned pre-cap rotation re-hellos, replays nothing, keeps the guest live; a short-absence probe is answered by the relay pong
+	$(BUN) run harness/scripts/demo_premote16.ts
+	$(BUN) test $(TEST_IGNORES) desktop/collab/turn_journal.test.ts desktop/collab/host.test.ts desktop/collab/guest.test.ts desktop/collab/pwa_view.test.ts desktop/collab/pwa_history.test.ts desktop/collab/relay_client.test.ts desktop/collab/relay_server.test.ts
+
 .PHONY: demo-P-GOVCUI.1
 demo-P-GOVCUI.1: ## P-GOVCUI.1: first-run Government/CUI step - asks once if the user is a Government/GovCon user handling CUI; a "yes" walks a novice into the CUI-safe posture (AskSage gov gateway in LOCKDOWN) with the CIV routing endpoint PREFILLED + step-by-step token instructions. Pure core: decideGovOnboarding (ask/skip/auto-enable, exactly once; org-forced routing auto-enables) + planGovSetup (with a key -> CIV persisted + lockdown ON; no key -> endpoint prefilled but lockdown NEVER flipped, since a keyless lockdown leaves no gov model and the backend fail-closes)
 	$(BUN) run harness/scripts/demo_pgovcui1.ts
@@ -400,6 +442,10 @@ demo-P-LOC.3: ## P-LOC.3 (ADR-0095): the AI-authored code ledger is discoverable
 .PHONY: demo-P-LOC.4
 demo-P-LOC.4: ## P-LOC.4 (ADR-0211): AI-authored lines reach the UI again - the gate holds agent_obs.duckdb read-write for the whole session, so the desktop's READ_ONLY aiLocSummary() lock-failed -> null -> "none yet" despite rows in the DB. Fix (mirrors turns/security/latency logs): the desktop appends every edit to a GUI-owned JSONL it can read live (same linediff count as the chat chip); the dashboard aggregates that lock-free. Proves count (write/edit/patch) + record (no-op on 0 lines) + read/aggregate roll-up + empty-null
 	$(BUN) run desktop/scripts/demo_p_loc_4.ts
+
+.PHONY: demo-P-LOC.5
+demo-P-LOC.5: ## P-LOC.5 (ADR-0451): completion-only AI-LOC from real gated omp tools, canonical edit previews, actual diff counts
+	$(BUN) run desktop/scripts/demo_p_loc_5.ts
 
 demo-P-PREVIEW.1: ## P-PREVIEW.1 (ADR-0096): in-app browser preview - resolver renders local files the agent builds, gates remote (egress, P-PREVIEW.3), blocks the ambiguous; panel + screenshot-to-chat seam
 	$(BUN) run desktop/scripts/demo_p_preview_1.ts
@@ -469,6 +515,11 @@ demo-P-PERF.3: ## P-PERF.3 (ADR-0130): KG layout continuity — re-open is a sta
 .PHONY: demo-P-PERF.4
 demo-P-PERF.4: ## P-PERF.4 (ADR-0131): incremental session index (warm polls parse nothing) + tail-first transcript pages + AC-only prefetch gate
 	$(BUN) run desktop/scripts/demo_p_perf_4.ts
+
+.PHONY: demo-P-SETTINGS.1
+demo-P-SETTINGS.1: ## P-SETTINGS.1 (ADR-0439): settings are never silently wiped - atomic temp+fsync+rename save with a last-good .bak; a corrupt file is kept aside and restored from the backup, never read as an empty profile. Real processes: 25 hard kills of a saving writer, a concurrent reader never sees a torn file, the 2026-10-05 0-byte file keeps the Windows sandbox opt-out
+	$(BUN) run desktop/scripts/demo_p_settings_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/settings_store_atomic.test.ts
 
 .PHONY: demo-P-PERF.5
 demo-P-PERF.5: ## P-PERF.5 (ADR-0132): switch hygiene - optimistic model switch, debounced lastModel write-behind (read-your-writes), memoized settings load, memoized picker
@@ -563,6 +614,20 @@ demo-P-FLEET.L4: ## P-FLEET.L4 (ADR-0274): lanes that SURVIVE - no lane turn clo
 demo-P-FLEET.L5: ## P-FLEET.L5 (ADR-0274): histories + the reviewable TIMELINE - every lane spawn/recovery NAMES its omp session in a durable JSONL ledger (~/.omp/lucid-fleet-lanes.jsonl), so the .jsonl histories omp already persists become attributable; one timeline surface merges master chats + lane sessions + kg-ingest throwaways across EVERY workspace, newest first, lanes labeled with their names (latest ledger record wins); a stopped lane's transcript still opens (review is an index over existing files, never a second recording); torn ledger lines skip and a missing ledger degrades labels, never the surface
 	$(BUN) run harness/scripts/demo_pfleetl5.ts
 
+.PHONY: demo-P-AOS.1
+demo-P-AOS.1: ## P-AOS.1 (ADR-0452): one standing fleet goal (AOS-1) with a mandatory budget, a heartbeat any observer reads as alive / late / dead, stalled spokes reaped, spend since the start blocking at the cap, human-verified criteria achieving the goal, durable across restarts.
+	$(BUN) run harness/scripts/demo_paos1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/aos.test.ts desktop/fleet_goal.test.ts
+
+.PHONY: demo-P-AOS.2
+demo-P-AOS.2: ## P-AOS.2 (ADR-0453): tasks under the fleet goal - a deliverable and a check required, the heartbeat dispatches one task per spoke in dependency order, command checks verified in a separate fail-closed turn, retries with the reason up to the limit, human review completes a task, restart never strands one mid-turn.
+	$(BUN) run harness/scripts/demo_paos2.ts
+	$(BUN) test $(TEST_IGNORES) desktop/aos.test.ts desktop/fleet_goal.test.ts
+
+.PHONY: demo-P-STEPTEXT.1
+demo-P-STEPTEXT.1: ## P-STEPTEXT.1: narration resumed after a tool call starts a new paragraph (master + lanes, stream and saved answer), the answer's tool chips interleave between the steps again, and a subagent row names a looping model ("model output degenerated") instead of painting "!!!!", with a scout's structured yield shown as its final step.
+	$(BUN) run harness/scripts/demo_psteptext1.ts
+
 .PHONY: demo-P-FLEET.L7
 demo-P-FLEET.L7: ## P-FLEET.L7: lane tool-call FIDELITY + a transcript that survives its own stream - a code-less call (bash/read/search) now carries the bounded, code-stripped rawInput so "the command used" is drillable (before L7 the chevron had literally nothing to open), an edit still carries `code` and never a duplicate `input`, hasBody and laneChipBody agree BY CONSTRUCTION so a dead chevron is impossible, a lane chip DELEGATES kind/detail/diffstat to the same answer_chips.toolChip the master composer uses (the two surfaces cannot disagree), ids are monotone and never reused (the precondition for patching DOM instead of the innerHTML-per-token rebuild that destroyed mid-stream text selection and slammed every open tool call shut), an oversized command or diff is clipped AND SAYS SO, and the lane forwards omp's MEASURED context/window/cost while inventing no output figure
 	$(BUN) run harness/scripts/demo_pfleetl7.ts
@@ -581,6 +646,10 @@ demo-P-HEALTH.1: ## P-HEALTH.1: the harness watches its OWN sessions so a stalle
 .PHONY: demo-P-HEALTH.2
 demo-P-HEALTH.2: demo-P-HEALTH.1 ## P-HEALTH.2 (runs with P-HEALTH.1): a recovered session now RESUMES THE RUN the recovery interrupted. P-HEALTH.1's `recover` reloads the same session id so the conversation survives, but dropping the omp child rejects the in-flight session/prompt, so the turn printed "[agent unavailable]" and settled: the session was healthy again and the WORK was gone, with nothing telling the user which, so they still had to notice the stall and re-ask. The run is now re-sent on the recovered session with a short operator note (do NOT start over, re-read and verify any file you were part-way through writing) and the user is told plainly that the stalled session is restarting and picking up where it left off. The refusals are the design: a user STOP is never resumed (Stop means stop), one mark authorizes exactly ONE resume so a repeat failure cannot reuse it, a session that failed to reload is never resumed rather than talking to a phantom, and the budget is per RUN and NOT refilled by activity - so wedge/resume/wedge/resume/wedge STOPS and says the work so far is saved, even though that same activity deliberately refills the health episode's own probe/recover budget.
 	$(BUN) run harness/scripts/demo_phealth2.ts
+
+.PHONY: demo-P-HEALTH.3
+demo-P-HEALTH.3: demo-P-HEALTH.2 ## P-HEALTH.3: a model writing a large tool call is not a stall. omp's ACP mapper drops toolcall_start/toolcall_delta, so a long write reached the desktop as minutes of silence with no tool call open and the watchdog probed ("Status?") and then cancelled and respawned a healthy session (incident 20260930T022224Z-mlnj). harness/omp/stream_beat_extension.ts posts a throttled beat carrying the omp session id while arguments stream; the engine credits it only to the master turn or busy lane with that id (no id, no beat). A successful self-heal no longer leaves chat chips; only a run that did not continue on its own (needsUser) does.
+	$(BUN) test $(TEST_IGNORES) harness/omp/stream_beat_extension.test.ts desktop/health_watch.test.ts
 
 .PHONY: demo-P-TOKENS.1
 demo-P-TOKENS.1: ## P-TOKENS.1 / P-FLEET.L9: the token-spend accounting behind the fleet card's context-fill chip (the composer popover it was first built for was removed at the user's request, ADR-0315; the module stays because each lane card folds its own usage and reads meterBadge for the value and the escalation thresholds) - the central assertion is NEGATIVE: omp reports only context fill, window, and cost, so a metric that never arrived reads "not reported", never a plausible $0.00 or 0 tokens a user would budget against. A REPORTED zero renders $0.00 and stays measured because a reported zero is a fact while an unreported one is an invention; every output row is unmeasured with a hint containing "estimate"; per-call context delta is ATTRIBUTION that says so when unbracketed rather than showing 0; 70 calls keep the newest 60 and no reducer mutates its input. Plus the geometry: dragging a card's BOTTOM edge DOWN grows it (the grip follows the cursor, cards top-anchored so the row holds still), the dock's north edge keeps its BOTTOM edge pinned even once height pins at the minimum, 7 corrupt saved layouts degrade to empty without throwing, and resizeShape composes with share_dock's viewport clamp
@@ -649,9 +718,9 @@ demo-P-PREVIEW.6c: ## P-PREVIEW.6c (ADR-0153): the agent CLICKS/TYPES in the liv
 demo-P-DESIGN.1: ## P-DESIGN.1 (ADR-0154): the agent honors a workspace DESIGN.md — read + wrapped as a <design-invariants> block and re-delivered in the user-turn preamble EVERY turn (never the frozen prefix); no DESIGN.md → no block
 	$(BUN) run desktop/scripts/demo_p_design_1.ts
 
-.PHONY: demo-P-MARKET.1
-demo-P-MARKET.1: ## P-MARKET.1 (ADR-0158): the Plugin Marketplace popup - Excalidraw pinned first, then Obsidian's top-ranked integrations by community downloads; searchable scrim-modal on the About//goal conventions; rows only open their GitHub repo (installs are P-MARKET.2)
-	$(BUN) run desktop/scripts/demo_p_market_1.ts
+.PHONY: demo-P-MARKET.1c
+demo-P-MARKET.1c: ## P-MARKET.1c (ADR-0446): live Role KG Pack title layout at desktop and narrow widths (the plugin modal it also covered was retired by ADR-0461); set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL for an isolated QA browser and engine
+	$(BUN) run desktop/scripts/demo_p_market_1c.mjs
 
 .PHONY: demo-P-FIGMA.1
 demo-P-FIGMA.1: ## P-FIGMA.1 (ADR-0154): /figma — parse a Figma file URL → key, walk the doc → top frames (capped), build a design-board HTML with frames inlined as PNG data URLs (names escaped, only data:image src) for the sandboxed preview
@@ -666,7 +735,7 @@ demo-P-SANDBOX.1: ## P-SANDBOX.1 (ADR-0157): the runtime execution boundary — 
 	$(BUN) run harness/scripts/demo_p_sandbox_1.ts
 
 .PHONY: demo-P-SANDBOX.2
-demo-P-SANDBOX.2: ## P-SANDBOX.2 (ADR-0166): mediated subprocess egress — a loopback DNS + CONNECT proxy decided by the agent's own egressDecisionDetailed brain (only allow passes; prompt/foreign-ccTLD/IP-literal/unparseable/thrown all DENY). Live: denied gethostbyname → REFUSED, upstream never contacted; allowed → forwarded. Proxy dead ⇒ egress denied but local exec still runs; wired at the omp spawn (HTTP(S)_PROXY + resolv.conf steer)
+demo-P-SANDBOX.2: ## P-SANDBOX.2 (ADR-0166, ADR-0445): mediated subprocess egress: a loopback DNS + HTTP proxy (CONNECT tunnels and absolute-form plain-HTTP forwards) decided by the agent's own egressDecisionDetailed brain (only allow passes; prompt/foreign-ccTLD/IP-literal/unparseable/thrown all DENY). Live: denied gethostbyname → REFUSED, upstream never contacted; allowed → forwarded; a denied plain-HTTP request → 403, target never dialed; allowed → streamed. Proxy dead ⇒ egress denied but local exec still runs; wired at the omp spawn (HTTP(S)_PROXY + resolv.conf steer)
 	$(BUN) run harness/scripts/demo_p_sandbox_2.ts
 
 .PHONY: demo-P-SANDBOX.3
@@ -700,6 +769,30 @@ demo-P-SANDBOX.9: ## P-SANDBOX.9 (ADR-0386): a green AppContainer pill means a w
 .PHONY: demo-P-SANDBOX.10
 demo-P-SANDBOX.10: ## P-SANDBOX.10 (ADR-0387): the AppContainer pill needs the REAL runtime to boot - bundled bun 1.3.14 -> 1.4.2 (1.3.14 cannot start a script in the container, no ACL fixes it), the engine probes the contained omp --version through the same wrap before committing (passthrough with the reason otherwise), and a Windows CI smoke runs the real contained omp on the bundled bun
 	$(BUN) run harness/scripts/demo_p_sandbox_10.ts
+
+.PHONY: demo-P-SANDBOX.12
+demo-P-SANDBOX.12: ## P-SANDBOX.12 (ADR-0390): the Security panel's Windows sandbox switch - Off is a per-user LUCID setting (no admin, honored at the next spawn), On registers the loopback exemption behind UAC only when missing, Remove from Windows unregisters it, managed require-isolation locks the switch (note, no button)
+	$(BUN) run harness/scripts/demo_p_sandbox_12.ts
+
+.PHONY: demo-P-SANDBOX.13
+demo-P-SANDBOX.13: ## P-SANDBOX.13 (ADR-0391): Add folder (read-only / read-write) from the Security panel - the ENGINE opens the native Explorer picker and grants only the pick (no caller can name a path), too-broad picks refused, audited, and the panel lists user folders (revocable) plus LUCID's always-allowed runtime folders
+	$(BUN) run harness/scripts/demo_p_sandbox_13.ts
+
+.PHONY: demo-P-SANDBOX.14
+demo-P-SANDBOX.14: ## P-SANDBOX.14 (ADR-0394): enterprise policy for the Windows sandbox - SandboxAllowUserOff=0 keeps the switch on, SandboxReadFolders / SandboxReadWriteFolders apply admin folders at every contained spawn (bounded like a user pick, %VAR% expanded), SandboxLockFolders stops user and agent folder adds (revoke still works)
+	$(BUN) run harness/scripts/demo_p_sandbox_14.ts
+
+.PHONY: demo-P-SANDBOX.15
+demo-P-SANDBOX.15: ## P-SANDBOX.15 (ADR-0396): the omp child gets its own AGENT token (accepted only on the routes it calls, never on approve / the sandbox switch / Add folder), no longer inherits LUCID_MAIN_TOKEN, and under Electron the served HTML carries no token (the window gets it from main over IPC)
+	$(BUN) run harness/scripts/demo_p_sandbox_15.ts
+
+.PHONY: demo-P-SANDBOX.16
+demo-P-SANDBOX.16: ## P-SANDBOX.16 (ADR-0397): the agent finds git wherever it was installed (host PATH first, then Git for Windows, MinGit, scoop, Chocolatey, winget, GitHub Desktop) - the root is granted rx to the AppContainer, its cmd dir goes first on the agent's PATH, and the Security panel lists it
+	$(BUN) run harness/scripts/demo_p_sandbox_16.ts
+
+.PHONY: demo-P-SANDBOX.17
+demo-P-SANDBOX.17: ## P-SANDBOX.17 (ADR-0399): the contained agent's git runs on the host through a broker - subcommand/option allowlist, workspace-confined paths, allowlisted repo config held open (share modes) from check to use, forced no-hooks/https-only overrides, network via the egress proxy; git.cmd shim round trip
+	$(BUN) run harness/scripts/demo_p_sandbox_17.ts
 
 .PHONY: build-appcontainer
 build-appcontainer: ## P-SANDBOX.7: cross-compile the native lucid-appcontainer.exe helper (bun build --compile, Windows x64) into bin/ (ships via the `repo` extraResources; resolveBackend probes <repo>/bin first, PATH second)
@@ -786,8 +879,8 @@ kg-pack-all: ## Build every KG pack in the catalog, sequentially (long — one m
 # ---------------------------------------------------------------------------
 
 .PHONY: typecheck
-typecheck: ## TS typecheck (no emit)
-	$(BUN) x tsc --noEmit
+typecheck: ## TS typecheck (no emit); tools/typecheck.ts also works from a checkout on a network share
+	$(BUN) tools/typecheck.ts
 
 .PHONY: license-headers
 license-headers: ## Apply the BUSL-1.1 SPDX header to first-party source (idempotent)
@@ -796,6 +889,15 @@ license-headers: ## Apply the BUSL-1.1 SPDX header to first-party source (idempo
 .PHONY: license-check
 license-check: ## Fail if any first-party source file is missing the BUSL-1.1 header (CI guard)
 	$(BUN) run tools/license_headers.ts --check
+
+EVIDENCE_OUT ?= compliance-evidence
+.PHONY: compliance-evidence
+compliance-evidence: ## P-COMPLY.1 (ADR-0479): NIST SP 800-171 r3 host evidence -> $(EVIDENCE_OUT)/evidence.json + evidence.md (read-only)
+	$(BUN) run tools/compliance/evidence.ts --out $(EVIDENCE_OUT)
+
+.PHONY: compliance-matrix
+compliance-matrix: ## P-COMPLY.1: re-render docs/compliance/control-matrix-r3.md from the CSV
+	$(BUN) run tools/compliance/matrix.ts
 
 .PHONY: clean
 clean: ## Remove build/test artifacts (keeps committed source + DBs)
@@ -826,6 +928,85 @@ demo-P-PREVIEW.7: ## P-PREVIEW.7 (ADR-0179): the silent-white preview explained 
 .PHONY: demo-P-TASK.5
 demo-P-TASK.5: ## P-TASK.5 (ADR-0180): live subagent activity - the delegation card opens each subtask (generated name, live now-line, thinking/tool/text steps tailed from omp's per-subtask transcripts); read-only + path-confined + corrupt-tolerant + bounded; never-delegated sessions fail-quiet
 	$(BUN) run harness/scripts/demo_ptask5.ts
+
+.PHONY: demo-P-TASK.6
+demo-P-TASK.6: ## P-TASK.6 (ADR-0398): the delegation card for omp 18's task tool (per-item agent, task/name) - detected again, scoped to its runs by name, live until its BACKGROUND runs finish, with a green-neon clipboard whose lines write in and out
+	$(BUN) run harness/scripts/demo_p_task_6.ts
+
+.PHONY: demo-P-VOICE.8
+demo-P-VOICE.8: ## P-VOICE.8 (ADR-0400): the read-aloud checkboxes mean what the user clicked - one rule shared by the engine store and every control (auto-speak off clears conversation for good), clicks apply before the engine answers, older answers never overwrite newer clicks, and the LUCID Agent stage respects a user's own setting
+	$(BUN) run harness/scripts/demo_p_voice_8.ts
+
+.PHONY: demo-P-FLEET.L20
+demo-P-FLEET.L20: ## P-FLEET.L20 (ADR-0402): close a spoke from where it is shown - an X on the orbit node (beside click-to-open) and on the takeover banner (beside Switch), the grid's two-step (a live spoke stops, a stopped one dismisses), one pure function deciding the step, label and tip
+	$(BUN) run desktop/scripts/demo_p_fleet_l20.ts
+
+.PHONY: demo-P-PROGRESS.1
+demo-P-PROGRESS.1: ## P-PROGRESS.1 (ADR-0409, amended): workers say what they are doing (every tool step opens on its doing line, arguments and outcome) and a dead agent process shows one line with an in-place restart; turns on one folder take turns in order, and a waiter is told whom it waits for and its place in line (no estimates, no ETAs by default; P-PROGRESS.3 makes them opt-in)
+	$(BUN) run harness/scripts/demo_p_progress_1.ts
+.PHONY: demo-P-SCROLL.1
+demo-P-SCROLL.1: ## P-SCROLL.1 (ADR-0405): the chat follows new output until the reader scrolls up (a fast burst no longer releases it); a spoke switch lands on the newest message or, by preference, where the reader left off; the attached spoke's live turn renders in arrival order; a new spoke opens on the last spoke's model
+	$(BUN) run harness/scripts/demo_p_scroll_1.ts
+.PHONY: demo-P-REPO.1
+demo-P-REPO.1: ## P-REPO.1 (ADR-0406): every session names the repo it works on and where its commits go (git's own push rules, no token in the view), taken from the files the session edits when its folder holds several repos; a spoke is started by picking a repo (local checkouts or the user's GitHub repos) instead of typing a URL
+	$(BUN) run desktop/scripts/demo_p_repo_1.ts
+
+.PHONY: demo-P-PROGRESS.2
+demo-P-PROGRESS.2: ## P-PROGRESS.2 (ADR-0408, amended): the activity window folds calls under 5 s into one summary line and failed, repeated or empty calls into "processing", so only long calls keep a row (with elapsed time); no ETA or estimate on any worker, subagent run or the prompt by default (P-PROGRESS.3 makes them opt-in)
+	$(BUN) run harness/scripts/demo_p_progress_2.ts
+
+.PHONY: demo-P-PROGRESS.3
+demo-P-PROGRESS.3: ## P-PROGRESS.3 (ADR-0412): the beta.10 quiet footer stays the default; the progress detail (per turn with Details, or always with Settings > Working status > Full detail) and the experimental time estimate are opt-ins; estimate off means no number on any surface, and on never shows the "ETA estimating" placeholder; a green progress ring (on by default) sits beside the one line, empty without history, red only when the process is gone
+	$(BUN) run harness/scripts/demo_p_progress_3.ts
+
+.PHONY: demo-P-PROGRESS.4
+demo-P-PROGRESS.4: ## P-PROGRESS.4 (ADR-0413): the turn ETA replayed against finished turns (a synthetic corpus and, read-only, this machine's latency ledger); prints the P-PROGRESS.1 baseline and the current estimator (time left given the time already run) side by side, median error and share within +/-30%, and fails unless the current one wins on the synthetic corpus
+	$(BUN) run harness/scripts/eta_backtest.ts --check
+
+.PHONY: demo-P-LIVENESS.1
+demo-P-LIVENESS.1: ## P-LIVENESS.1 (ADR-0418): an open tool call is judged on evidence (its processes' CPU and disk counters, process churn, subagent transcript writes), marked "likely stuck" after 5 min of none (12 min with a live subagent), and stopped only by the user's Stop command, which ends just the processes that call started
+	$(BUN) run harness/scripts/demo_p_liveness_1.ts
+
+.PHONY: demo-P-NETSTAT.1
+demo-P-NETSTAT.1: ## P-NETSTAT.1 (ADR-0423): a status-bar network indicator with provider latency; a turn that died on the network or on omp's startup handshake gets a stand-by card that resends once the link is stable, instead of blaming the model; outage toasts are held in the indicator's popover, security notices never are
+	$(BUN) run harness/scripts/demo_p_netstat_1.ts
+.PHONY: demo-P-SANDBOX.18
+demo-P-SANDBOX.18: ## P-SANDBOX.18 (ADR-0424): the AppContainer helper skips a grant already on disk instead of re-walking every file under it (23 s per spawn on this repo), so the contained agent answers initialize in time and respawns work; a contained handshake failure names the sandbox and never offers a model switch
+	$(BUN) run harness/scripts/demo_p_sandbox_18.ts
+.PHONY: demo-P-GAME.1
+demo-P-GAME.1: ## P-GAME.1: original offline games pass the Preview gate and exercise win/loss/replay from their inline scripts
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.7
+demo-P-GAME.7: ## P-GAME.7: Chroma Cadence joins the arcade. Proves the Preview gate, then plays whole seeded songs headless: a player 40 ms late reads as ~40 ms late, the results offer that sync, and the retry with it applied is all PERFECT; pause freezes the track, the count-in holds it, the drained meter fails the song
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.8
+demo-P-GAME.8: ## P-GAME.8: Gravity Gambit joins the arcade. Proves the Preview gate, then drives it headless: a landscape panel stays landscape, a 400x720 panel turns the course (scale 0.38 vs 0.25) and a pull-down sling on the turned screen aims at the wormhole; recall, crash, pause; then every sector is solved with the flight's own integrator and flown into the wormhole (sector 5 was unwinnable before this), debrief, replay
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.9
+demo-P-GAME.9: ## P-GAME.9: Silent Fathom joins the arcade. Proves the Preview gate, then drives it headless at 400x720: the view zooms out (0.65) so the sub sees as far as it is heard, the cave is black until a ping lights its walls, the ping cooldown holds, thrust is loud and silence settles, pause freezes the abyss; the autopilot (BFS path, hull-wide line of sight) surfaces through all 5 zones while leviathans hear it; with the hull unlocked it dies with the cause on the card; dive again restarts at zone 1
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.10
+demo-P-GAME.10: ## P-GAME.10: Skyhook joins the arcade. Proves the Preview gate, then drives it headless at 400x720: the view zooms out (0.5) so anchors in rope reach are on screen, holding Space latches and letting go flings forward into a FLOW chain, pause freezes the run, restart from pause; every anchor hangs within rope reach of its floor and a player idle on the floor can still latch (both were lost runs before the playability fix); the autopilot carries a seeded run past 2000 m; an idle player is then caught by the Cascade; the best distance carries to the menu
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.11
+demo-P-GAME.11: ## P-GAME.11: Deck Guard: Deck the Halls joins the arcade next to Deck Guard. Proves the Preview gate, then drives it headless at 400x720: the attract demo flies behind the title, the autoplay bot pops swarms, unwraps presents and takes workshop gifts between waves, pause, restart resets the ladder; an idle player (any cleared wave's workshop gift taken by key) lets the undefended workshop fall (WORKSHOP CRIPPLED or OUT OF JETS); scramble again starts a fresh run
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
+
+.PHONY: demo-P-GAME.12
+demo-P-GAME.12: ## P-GAME.12: Chimney Rush and Gobble Getaway join the arcade. Proves the Preview gate, then drives both headless at 400x720: Chimney Rush autoplay reaches town 3+ with perfect chimneys, pause/resume, an idle sleigh is caught by the sunrise and still banks cookies, ride again; Gobble Getaway autoplay hops past row 40, pause/resume, restart, an idle turkey is caught and the game over names who did it, hop again
+	$(BUN) test desktop/arcade_games.test.ts
+	$(BUN) run desktop/scripts/demo_p_game_1.mjs
 
 .PHONY: demo-P-SYSRES.1
 demo-P-SYSRES.1: ## P-SYSRES.1 (ADR-0182): the system resource guard - a weak CPU under heavy load / RAM pressure pauses the KG + Code Graph builds behind a notice (why + machine line + top-processes panel + re-check, no escape hatch); FAIL-OPEN (no evidence never blocks); read-only fixed-argv process listing
@@ -929,6 +1110,12 @@ demo-preview-open: ## P-PREVIEW.11 (ADR-0308): the agent's `preview_open` opens 
 .PHONY: demo-release-identity
 demo-release-identity: ## P-RELEASE.4 (ADR-0307): the release-identity gate - CI reads each artifact's EMBEDDED identity before upload (pkg bundle id + payload .app path + version out of the xar Distribution/PackageInfo, deb package name out of the gunzipped ar control member, rpm name out of the 96-byte lead, the updater feed's declared path because both flavors emit a file named latest.yml, filename stem for the rest) and FAILS the build on a mismatch; the demo proves the swap case - correct Agent filenames wrapping Creator bytes, invisible to every name check - plus fail-closed on an empty/missing dir and an unaccounted-for file
 	$(BUN) run desktop/scripts/demo_release_identity.ts
+.PHONY: demo-P-RELEASE.6
+demo-P-RELEASE.6: ## P-RELEASE.6 (ADR-0447): Windows Authenticode through Azure Artifact Signing - runs both workflows' real Configure step on every secret combination (Azure wins, the .pfx is the fallback, secretless and non-Windows never switch it on) and resolves both Windows configs through electron-builder's own getConfig (signing off: no azureSignOptions; on: exact account/profile/timestamp + updater publisherName, Creator keeps Creator identity), and pins the appx publisher to the certificate subject; LUCID_DEMO_AZ=1 also checks the live profile's certificate
+	$(BUN) run desktop/scripts/demo_p_release_6.ts
+.PHONY: demo-P-RELEASE.7
+demo-P-RELEASE.7: ## P-RELEASE.7 (ADR-0450): every RELEASED Windows build is signed by TECHLEAD 187 LLC, fail-closed - runs both workflows' real Configure step (a tag/publish_latest/beta_release run on Windows with no signer secret exits non-zero, Azure or the .pfx fallback satisfies it, a test dispatch may stay unsigned, macOS is only marked), proves win-signing.cjs throws on an unsigned release run directly and through electron-builder's own getConfig for both Windows configs, and pins one publisher identity (the certificate CN) on package.json author/appx/linux, the About source and the served renderer bundle
+	$(BUN) run desktop/scripts/demo_p_release_7.ts
 .PHONY: demo-office
 demo-office: ## P-OFFICE.1 (ADR-0306): Word/Excel/PowerPoint through the pinned OfficeCLI binary as a GATED skill - the skill is version-pinned and forbids the piped `curl | bash` installer (which exec_policy independently classifies T4 always-prompt), exec_policy grades officecli by subcommand (view/get safe T0, create/add/set/remove/close T1, install/watch T2, an unknown verb fail-closed T3), and the live create -> add -> view outline -> view html -> close round-trip runs wherever the pinned binary is installed and prints a VISIBLE skip where it is not
 	$(BUN) run desktop/scripts/demo_office.ts
@@ -1098,7 +1285,7 @@ demo-P-UX-JEV.1: ## P-UX-JEV.1 (ADR-0376): the link that restarted the front end
 	$(BUN) run desktop/scripts/demo_p_ux_jev_1.ts
 
 .PHONY: demo-P-JEV.2
-demo-P-JEV.2: ## P-JEV.2 (ADR-0377): Jev in the chat. omp answers typed judgments out of band and records none of them, so the user could never see whether Jev was used. A new in-process omp extension wraps pi-ai TypeSafeJudge / TextJudge (the only place the question, the typed answers with probabilities, the backend, the latency and any error exist), AWAITS a token-d loopback POST so the desktop has each report before omp acts on the answer, and the chat draws a per-turn judgment window with one table per judgment (question / answer + probability bars / confidence, backend, ms, judged state). A turn with no judgment while Jev is configured gets a quiet "Jev not consulted" note; an unconfigured Jev shows nothing. Proves the wrap on the real classes, the ordering, the fallback capture, the master-only relay, the active gate and the served bytes.
+demo-P-JEV.2: ## P-JEV.2 (ADR-0377): Jev in the chat. omp answers typed judgments out of band and records none of them, so the user could never see whether Jev was used. A new in-process omp extension wraps pi-ai NativeJudge / TextJudge (the only place the question, the typed answers with probabilities, the backend, the latency and any error exist), AWAITS a token-d loopback POST so the desktop has each report before omp acts on the answer, and the chat draws a per-turn judgment window with one table per judgment (question / answer + probability bars / confidence, backend, ms, judged state). A turn with no judgment while Jev is configured gets a quiet "Jev not consulted" note; an unconfigured Jev shows nothing. Proves the wrap on the real classes, the ordering, the fallback capture, the master-only relay, the active gate and the served bytes.
 	$(BUN) test $(TEST_IGNORES) harness/judgment/trace.test.ts harness/omp/judgment_extension.test.ts desktop/judgment_policy.test.ts
 	$(BUN) run desktop/scripts/demo_p_jev_2.ts
 
@@ -1122,3 +1309,169 @@ demo-P-PORTGUARD.3: demo-portguard-2 ## P-PORTGUARD.3 (ADR-0382): reap our OWN o
 .PHONY: demo-P-MODEL.4
 demo-P-MODEL.4: ## P-MODEL.4 (ADR-0383): GPT-6 Sol and Luna. omp 18.2.7 -> 18.2.10 carries both ids natively; LUCID adds the cataloged prices (Astra 10/50, Sol 2/10, Luna 0.10/0.50), the 1M windows and cards, an Astra > Sol > Luna fresh-install order, and pins the Regular/Max walk across the three tiers.
 	$(BUN) test $(TEST_IGNORES) desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/renderer/agent_flow.test.ts desktop/startup_model.test.ts harness/prompt/prefix_compaction.test.ts
+
+.PHONY: demo-P-MODEL.6
+demo-P-MODEL.6: ## P-MODEL.6 (ADR-0422): Claude Sonnet 5.5 on omp 18.4.4. The six-package pin moves 18.2.10 -> 18.4.4 (three API moves: keys.setRuntime, cfg*.override, JudgeDeps.purpose); LUCID adds Sonnet 5.5's $2/$10 row on every route spelling, the 1M window, a card, and a default rank above Sonnet 5 below every flagship. R-07 re-pinned: StepFun gates behind the China-origin ACKNOWLEDGE and never resolves in lockdown; omp's on-device apple provider lists on darwin only (providerAllowedOnPlatform, engine platform via build-info).
+	$(BUN) test $(TEST_IGNORES) harness/omp/provider_catalog.test.ts harness/prompt/prefix_compaction.test.ts harness/testing/echo.test.ts harness/prompt/prompt_audit.test.ts harness/omp/browser_extension.test.ts harness/hooks/quarantine_hook.test.ts desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/renderer/agent_flow.test.ts desktop/startup_model.test.ts desktop/checker_model.test.ts desktop/build_flavor.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-MXC.1
+demo-P-MXC.1: ## P-MXC.1 (ADR-0441): Microsoft eXecution Container behind the sandbox seam, Windows first. The pinned, hash-verified `wxc-exec.exe` (staged by `bun run mxc`, bundled under <resources>/mxc) is tried before the first-party helper; the request rides argv as --config-base64 (no file), the command as a vector; proxy env rides inside the request; raw egress is in no mapping; mediated mode on the AppContainer tier runs under the helper's moniker so ADR-0174's one loopback exemption serves both. The executor's own --probe gates the offer: pending host prep (system-drive metadata, NUL device) keeps MXC unoffered and the Security panel grows "Prepare host (administrator)", one UAC prompt for all three steps. Proves a-f and i on the REAL executor where staged, the seam order and the posture everywhere.
+	$(BUN) test $(TEST_IGNORES) harness/runs/sandbox_mxc.test.ts harness/runs/sandbox_exec.test.ts desktop/mxc_runtime.test.ts desktop/sandbox_control.test.ts desktop/sandbox_status.test.ts desktop/renderer/sandbox_panel.test.ts harness/adr_numbering.test.ts
+	$(BUN) run harness/scripts/demo_p_mxc_1.ts
+
+.PHONY: demo-P-PROV.3
+demo-P-PROV.3: ## P-PROV.3 (ADR-0444): OpenAI sign-in by device code. The OpenAI card offers "Connect with a device code" beside the redirect sign-in, running omp's `openai-codex-device` alias (no loopback :1455, the fix for a blocked callback or a proxy 403). The engine reads the one-time code with the guarded parser from issue #490 (ANSI stripped, only a standalone code AFTER the official instruction, bounded across chunks, URL allowlisted to auth.openai.com), files the credential under openai-codex, and the card shows the code large with Copy and Open; nothing is pasted back. Proven on the real broker in a browser smoke.
+	$(BUN) test $(TEST_IGNORES) desktop/device_code.test.ts desktop/auth_status.test.ts desktop/auth_vault.test.ts desktop/oauth_failure.test.ts desktop/renderer/provider_hub.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-MODEL.7
+demo-P-MODEL.7: ## P-MODEL.7 (ADR-0442): Claude Haiku 5.5 on omp 18.8.6. The six-package pin moves 18.4.4 -> 18.8.6 (no API moves; one packaging re-include for omp's archive declarations.d.ts); LUCID adds Haiku 5.5's $0.10/$0.50 row on both route spellings, the 1M window, a card, and it becomes the recommended checker when listed. R-07 re-pinned at 85 ids: factory-droid and snowflake listed as allied aggregators, helmcode's bare `glm5.3` gates behind the China-origin ACKNOWLEDGE. The omp-compat probe recognises the ADR-0422 override spelling again (issue #491), proven by migrating the real regression file.
+	$(BUN) test $(TEST_IGNORES) harness/omp/provider_catalog.test.ts harness/prompt/prefix_compaction.test.ts harness/testing/echo.test.ts harness/prompt/prompt_audit.test.ts desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/renderer/agent_flow.test.ts desktop/startup_model.test.ts desktop/checker_model.test.ts desktop/packaged_boot.test.ts harness/adr_numbering.test.ts
+	node -e 'import("./.github/scripts/omp-compat.mjs").then(m=>{const fs=require("fs");const src=fs.readFileSync("harness/prompt/prefix_compaction.test.ts","utf8");const cur=m.currentPin(JSON.parse(fs.readFileSync("package.json","utf8")),src);const out=m.migrateCandidateSource(src,cur,"99.0.0");if(!out.includes("const SUPPORTED_OMP = \"99.0.0\";"))throw new Error("probe migration lost the pin");console.log("omp-compat probe migrates the override-form regression from "+cur+" OK")})'
+	$(BUN) run harness/scripts/demo02_prefix_hash.ts
+
+.PHONY: demo-P-MODEL.8
+demo-P-MODEL.8: ## P-MODEL.8 (ADR-0448): Gemini 4 Argon is the Gemini flagship (capability tier 2, first in the Gemini section, $4/$20 standard-rate estimate, exp 5 card) and Gemini 3.8 Flash is the Gemini default (the one exempt small-tier curated entry). A direct Gemini session's omp Thinking / Architect / Subtask roles (slow, plan, task) resolve to Argon, then the session's Flash, via a per-spawn --config overlay; Claude/GPT sessions, lockdown and an org deny get none. Live discovery self-skips without a GEMINI_API_KEY.
+	$(BUN) test $(TEST_IGNORES) desktop/model_roles.test.ts desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/checker_model.test.ts desktop/startup_model.test.ts desktop/renderer/agent_flow.test.ts harness/adr_numbering.test.ts
+	$(BUN) run desktop/scripts/demo_p_model_8.ts
+
+.PHONY: demo-P-SCHED.1
+demo-P-SCHED.1: ## P-SCHED.1 + .2 (ADR-0443, issue #497): scheduled jobs that wake a Fleet lane while the operator is away. A pure local-time cron (Vixie day rule, @hourly/@daily/@weekly, DST-safe), a 0600 per-user job store (created disarmed, 60 min cap, missed = run once within 2 h), and a 30 s scheduler that prompts a live idle lane through its queue, waits on a busy one, brings a gone lane back from the ledger, applies the job's auto-mode snapshot only for the run, cancels at the cap, and suspends a job whose folder is gone. The rail gains a Jobs tile after LUCID points with a 7-day by hour hover and a sheet (add / arm / run now / history / delete); /api/jobs* is UI-token only. Proves cron, store, scheduler over fakes, and the tile/hover builders.
+	$(BUN) run harness/scripts/demo_p_sched_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/cron.test.ts desktop/scheduled_jobs.test.ts desktop/renderer/jobs_view.test.ts desktop/origin_guard.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-LEGIBLE.1
+demo-P-LEGIBLE.1: ## P-LEGIBLE.1 (ADR-0384, issue #302): legible to Defender / Agent 365 without a content path. Each launch writes a metadata-only local-agent manifest (Defender's vendor / relatedProcess / autoApprove / mcpServers / localMcps vocabulary) to userData; MCP entries keep only name, type, URL origin or command basename, so no header, arg, env, path or query can leak. No hook seam, no listener, gate untouched.
+	$(BUN) test $(TEST_IGNORES) desktop/local_agent_manifest.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-LEGIBLE.2
+demo-P-LEGIBLE.2: ## P-LEGIBLE.2 (ADR-0437, issue #302): the Defender / Agent 365 runbook corrected against Microsoft's sources (Entra Agent ID matters to Global Secure Access, not the Defender inventory; Shadow AI is a fixed catalog; Agent Registration API is Global-cloud only). Docs only: re-proves the metadata-only manifest shape and ADR numbering, gate untouched.
+	$(BUN) test $(TEST_IGNORES) desktop/local_agent_manifest.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-SWITCH.1
+demo-P-SWITCH.1: ## P-SWITCH.1 (ADR-0403, issue #390): opening a session never stops the running one unless you choose to. /api/session/load and /api/newSession answer 409 while Main is busy (turn, goal loop, automation) unless force; the sidebar and New session ask first and offer Open as a spoke (session resumed in a lane, composer attached) or Stop it and switch. A session a live spoke holds attaches to that spoke instead of loading a second copy. Proves the busy predicate on the real backend over the fake agent, the switch plan, and the sheet wording.
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/session_switch.test.ts desktop/acp_backend_recovery.test.ts desktop/renderer/composer_target.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-SWITCH.2
+demo-P-SWITCH.2: demo-P-SWITCH.1 ## P-SWITCH.2 (ADR-0404, issue #390): one omp session, one owner. /api/session/load, /api/recovery/resume and /api/session/delete refuse a session a live spoke holds (409 heldBy, no override); a lane spawn or respawn refuses a session Main or another live lane holds, and creates nothing. /api/sessions stamps where each session is live and the sidebar shows it in the orbit colors. Proves the rule, the refusals against the real lane manager over the fake ACP agent, and the badge wording.
+	$(BUN) test $(TEST_IGNORES) desktop/session_owner.test.ts desktop/fleet_lanes.test.ts desktop/renderer/session_switch.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-INTERJECT.5
+demo-P-INTERJECT.5: ## P-INTERJECT.5 (ADR-0414): "Push not delivered" on an attached spoke. Notes no tool step picked up (attach / release notes on an idle spoke) now ride the target's next prompt instead of filling the 8-note cap across turns; a live push to an idle or unknown target is refused with a typed code; the toast quotes the engine's reason and the text is sent, staged or put back, never dropped. Proves it against the real lane manager over the fake ACP agent.
+	$(BUN) test $(TEST_IGNORES) desktop/interject_delivery.test.ts desktop/interject_store.test.ts desktop/renderer/queue_model.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-JEV.5
+demo-P-JEV.5: ## P-JEV.5 (ADR-0416): the Judge fixed, None by default, and no local model that failed more than once. omp 18.2.10 answers judgments through its `judge` model role; LUCID's legacy providers.judgmentProvider overlay was migrated into that role, whose default chain resolved `@tiny` through omp's smol priority patterns to the DGX local provider (dgx-spark/glm-5.3-flash), and a timeout there ended every judgment. LUCID now writes the role explicitly (none = no judge model, the default; llm = local providers then the chat model; typesafe/auto = Jev first), counts failed judgments per LOCAL model and bans it from the second on (left out at the next spawn, refused in-process at once). Proves it against omp's real Settings loader and role resolver, then the ledger and the in-process breaker.
+	$(BUN) run desktop/scripts/demo_p_jev_5.ts
+	$(BUN) run desktop/scripts/demo_p_jev_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/judgment_policy.test.ts harness/judgment/judge_bans.test.ts harness/omp/judgment_extension.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-BROWSER.4
+demo-P-BROWSER.4: ## P-BROWSER.4 (ADR-0415): the agent's visible browser came up as a white, unclosable rectangle. The engine had spawned omp with windowsHide, so omp had no console window and its daemon broker spawned the shared headed Chromium with SW_HIDE (omp hides its children's windows when it has no console). The engine now owns a HIDDEN console at boot and spawns a passthrough omp against it; the AppContainer spawn stays console-less. Proves the pure policy, then the real chain with real processes: a child started like the engine allocates a hidden console and its stdout still arrives; a grandchild in omp's seat inherits it hidden.
+	$(BUN) run desktop/scripts/demo_p_browser_4.ts
+	$(BUN) test $(TEST_IGNORES) desktop/console_host.test.ts desktop/acp.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-SWITCH.3
+demo-P-SWITCH.3: demo-P-SWITCH.2 ## P-SWITCH.3 (ADR-0410/0411): a new session is a new hub. Every spoke records the master session it was born under and keeps it for life; the orbit draws only the current session's spokes (plus hubless ones, so none is unreachable) and lists the other hubs. Proves the stamp against the real lane manager over the fake ACP agent (whose lane children mint their own session ids), the hub filter and the hub list.
+	$(BUN) test $(TEST_IGNORES) desktop/fleet_lanes.test.ts desktop/renderer/orbit_layout.test.ts harness/mcp/agent_firewall.integration.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-TUI.0
+demo-P-TUI.0: ## P-TUI.0 (ADR-0419): the engine discovery seam. The engine publishes engine-discovery-<port>.json (0600, port + per-launch nonce + UI token) into LUCID_DATA_ROOT (or ~/.omp standalone) on boot and removes it on exit; a terminal client (lucid hub, docs/TUI.md) finds it and must win the ADR-0305 health handshake against the file's own nonce before trusting anything - a stale file, a recycled port or a squatter verifies dead, fail-closed. Proves it against the REAL dev.ts engine: publish, verify, two concurrent token'd clients, squatter refusal, removal on SIGTERM.
+	$(BUN) run desktop/scripts/demo_p_tui_0.ts
+	$(BUN) test $(TEST_IGNORES) desktop/engine_discovery.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-TUI.1
+demo-P-TUI.1: demo-P-TUI.0 ## P-TUI.1 part (ADR-0420): `lucid hub` - the terminal hub as a PANE MULTIPLEXER (herdr/tmux idiom, operator direction 2026-09-28). Attaches to the running engine through the discovery seam only (never a guessed port); a binary split tree of panes each hosting a capability deck (Overview, Security with audited approve/dismiss, Fleet, Sessions, Audit, Usage) over the SAME /api routes the GUI calls; | and - split, tab walks focus, z zooms, x closes, 1-6 rebinds, hostile engine strings flatten to single rows. Proves it headless against the REAL engine: attach, real facts, side-by-side split, zoom/close, honest engine-unreachable status.
+	$(BUN) run desktop/scripts/demo_p_tui_1.ts
+	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_tui.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-TUI.2
+demo-P-TUI.2: demo-P-TUI.1 ## P-TUI.2: lucid hub without a checkout or a manual command. The packaged app writes a marked one-line lucid.cmd forwarder into the per-user WindowsApps folder (on PATH by default) pointing at the bin\lucid.exe every dist already compiles; a lucid.cmd without the marker is never overwritten, and the uninstaller deletes only a marked one. The Fleet grid and orbit gain a Terminal button (engine route /api/hub/open, UI token only, fixed command) and LucidAgentIDE.bat gains H, both opening lucid hub in a new console attached to the running engine.
+	$(BUN) test $(TEST_IGNORES) desktop/cli_forwarder.test.ts
+
+.PHONY: demo-P-TUI.3
+demo-P-TUI.3: demo-P-TUI.2 ## P-TUI.3 (ADR-0436): the lucid hub CONTROL PLANE, so an agent drives the hub the way the herdr CLI drives herdr. Spaces (named root layouts, stable pane ids s1:p2 that are never reused), one parser for the grouped and tmux vocabularies shared by `lucid hub <cmd>`, the control server and the TUI's `:` prompt, and a loopback control server inside the hub found through hub-discovery-<pid>.json (0600) and the nonce handshake. Agent ops are a fixed list of engine fleet routes; nothing on the control plane scans, approves or releases. Proves it with the REAL headless hub, the REAL engine and the REAL CLI: no_hub, stale and squatted files inert, split + pane read, spaces round-trip, agent spawn/prompt/read/cancel, wrong token and Origin 403, cleanup and layout restore.
+	$(BUN) run desktop/scripts/demo_p_tui_3.ts
+	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_spaces.test.ts harness/launcher/hub_tmux_verbs.test.ts harness/launcher/hub_control.test.ts harness/launcher/hub_tui.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-TUI.4
+demo-P-TUI.4: demo-P-TUI.3 ## P-TUI.4: the herdr-parity decks join the hub's ring. Deck 9 (Agents) is a live agent table over the same fleet routes the Fleet deck uses: name, model, verbatim LaneStatus, elapsed since spawn, repo#branch (+ worktree) when the probe landed; Enter attaches the selected agent into THIS pane (ADR-0420), n spawns, c cancels the turn, x dismisses only a STOPPED lane (a live one is refused with the way out named). Deck 0 (Spaces) lists the control plane's spaces with pane counts and the focus marker; Enter focuses, n creates, r renames inline, x closes and the LAST space's refusal surfaces verbatim. Sidebar badges count agents and spaces; digits 1-9,0 rebind. Proves it headless against the REAL engine: both decks render real rows, the Enter/n/c/x paths run, the six prior decks still land on 1-6.
+	$(BUN) run desktop/scripts/demo_p_tui_4.ts
+	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_tui.test.ts
+
+.PHONY: demo-P-TUI.5
+demo-P-TUI.5: demo-P-TUI.4 ## P-TUI.5 (ADR-0433): spaces hold TABS and a persistent left RAIL shows them. hub-spaces.json v2 (space -> tabs -> panes; pane ids stay space-scoped so every v1 id still resolves; a v1 file migrates one way into tab t1, a v2 file never reads as v1); grouped `tab list|create|rename|close|focus`; the tmux mapping corrected (window = TAB, session = SPACE: new/kill/rename/select/list-window and new/kill/rename-session, switch-client, list-sessions). The rail (b toggles, persisted; B puts the keyboard on it) lists each space with its tabs, focus marker, pane counts and live lane badges, and an AGENTS seam header; SGR clicks focus a space, a tab or a pane. Proves it with the REAL headless hub, engine and CLI plus the real input path fed terminal mouse bytes.
+	$(BUN) run desktop/scripts/demo_p_tui_5.ts
+	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_spaces.test.ts harness/launcher/hub_tmux_verbs.test.ts harness/launcher/hub_control.test.ts harness/launcher/hub_tui.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-TUI.5e2
+demo-P-TUI.5e2: demo-P-TUI.5 ## P-TUI.5 E2 (ADR-0434): the rail's AGENTS panel + priority. Every fleet lane is one rail row - status glyph colored by the LaneStatus vocabulary (blocked-on-a-human amber and first among equals), name, model short-name, space:tab of its live pane, elapsed, p<n> badge - sorted priority DESC then status then name (hub_agents_panel.ts, pure and unit-tested). Priority is a user-set 1-9 PER LANE NAME in hub-agent-priorities.json (v1, 0600, beside hub-spaces.json): a digit on the selected row, or `lucid hub agent priority <name|id> <1-9>` - DISPLAY ORDER only, never scheduling. Click once selects, click again (or Enter) attaches via the existing ADR-0420 bind, c cancels via /api/fleet/cancel; approvals are never answered from the panel. Proves it with the REAL headless hub, engine (house fake ACP agent) and CLI, plus the real SGR input path.
+	$(BUN) run desktop/scripts/demo_p_tui_5e2.ts
+	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_agents_panel.test.ts harness/launcher/hub_tui.test.ts harness/launcher/hub_tmux_verbs.test.ts harness/launcher/hub_control.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-TUI.6
+demo-P-TUI.6: demo-P-TUI.5e2 ## P-TUI.6 (ADR-0435): the deck STRIP + the fuzzy PALETTE (operator direction 2026-10-04). The strip is one line directly above the status bar - every deck as `digit glyph name count` with the SAME live counts the sidebar badges carry (Security quarantined, Fleet/Agents lanes, Sessions on disk, Spaces client-side), the focused pane's deck highlighted; narrowing drops names, then glyphs, then counts (digits stay); with the rail open it is the ONE deck surface; a click on a cell rebinds the focused pane (clickTarget's deck branch), digits 1-9,0 unchanged. The palette (ctrl+k or `:palette`, hub-owned focus only - the `:` prompt's guard) is ONE fused scored list: spaces (switch), tabs as space > tab (focus), agents (Enter attaches via the existing ADR-0420 bind), decks (rebind); the scorer is a pure subsequence matcher ranked consecutive-run length, then word-boundary hits, then shorter target (hub_palette.ts, unit-tested). Proves it on the real engine + real input paths: strip counts = badge counts on one frame, digit and click rebinds, asserted ranking on a seeded set, the Enter dispatch per kind, and the composer guard.
+	$(BUN) run desktop/scripts/demo_p_tui_6.ts
+	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_palette.test.ts harness/launcher/hub_tui.test.ts harness/launcher/hub_agents_panel.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-FLEET.WT1
+demo-P-FLEET.WT1: ## P-FLEET.WT1: a lane can run in its OWN git worktree (spawn option, the user accepts the merge-conflict risk): a new branch lucid/<name>-<id> from HEAD in <repo>.lucid-worktrees/<slug> beside the repo, the lane starting in the same subfolder the user picked; the original checkout is untouched, so the shared-checkout coordination (write waits, sweep refusals, check-ins) does not apply; a refused spawn removes the worktree, branch and folder it just made; not-a-repo and no-commits are named refusals.
+	$(BUN) test $(TEST_IGNORES) desktop/lane_worktree.test.ts
+
+.PHONY: demo-P-JEV.6
+demo-P-JEV.6: ## P-JEV.6 (ADR-0421): a judge whose account says the model does not exist is not asked again, cloud or local. omp's smol priority patterns name gpt-5.3-codex-spark for the openai-codex OAuth provider and match openai/gpt-5.3-codex-spark under an API-key account with no such model; omp cools down only 401/402/403, so that judge answered every judgment with a 404 (model_not_found) before the chain moved on. P-JEV.5 counted only LOCAL failures. Now ONE missing-model answer bans (ledger + in-process breaker), a transient cloud failure still never does, and a banned chat model is not named in the chain. Proves it against the ledger, the breaker and omp's real role resolver.
+	$(BUN) run desktop/scripts/demo_p_jev_6.ts
+	$(BUN) test $(TEST_IGNORES) desktop/judgment_policy.test.ts harness/judgment/judge_bans.test.ts harness/omp/judgment_extension.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-CTRL.1
+demo-P-CTRL.1: ## P-CTRL.1 (ADR-0426; design ADR-0425, issue #449): the seven controller_* event names (controller_paired/_unpaired/_turn_started/_turn_blocked/_auto_consented/_auto_revoked/_ruling) are in the frozen EventName contract. Each one emits through the real Telemetry envelope with the stable run/session ids; a typo'd controller_* name still raises UnknownEventError and writes nothing (invariant #8); the ADR numbering stays unique.
+	$(BUN) run harness/scripts/demo_p_ctrl_1.ts
+	$(BUN) test $(TEST_IGNORES) harness/telemetry/events.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-CTRL.2
+demo-P-CTRL.2: ## P-CTRL.2 (ADR-0438; design ADR-0425, issue #449): the controller policy core on the REAL loopback engine. Pairing (UI token) mints a third-scope controller token shown once and stored only as an argon2id hash in a 0600 store under the data root; the token opens /api/controller/{lanes,spawn,prompt,status,result,cancel} (header only) and is 403 everywhere else; spawn runs in the pairing's fixed workspace, pinned supervised (fleet auto never reaches it); two controllers and the user's own lane are mutually invisible; a hidden-Unicode prompt is quarantined by the real scanner and a killed scanner refuses (fail-closed); unpair revokes at once; controller_* events carry run_id/session_id and never a token or prompt text.
+	$(BUN) run desktop/scripts/demo_p_ctrl_2.ts
+	$(BUN) test $(TEST_IGNORES) desktop/controller/controller.test.ts desktop/origin_guard.test.ts harness/telemetry/events.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-CREATOR-DRIFT
+demo-CREATOR-DRIFT: ## CREATOR-DRIFT (ADR-0430): CutWire Drift (GPL-3.0 Qt + FFmpeg video editor) as a Creator provider over its OWN localhost agent protocol, never spawned or scripted. The session Drift writes when the user turns on Agent access is discovered and folded into an on-device declaration whose status never carries the token; the probe is honest (not-installed, installed-but-Agent-access-off with the enable steps, unauthorized without echoing the token, ready with the version and only the attested set); the egress hiding inside Drift (cloud voices, the marketplace, ElevenLabs transcription) is refused BY NAME under CUI lockdown, recursively inside apply({ops}); an apply batch is one undo step reported exactly as Drift reports it (done / stopped / failed); an export lands in the library by its MAGIC BYTES, never its extension. The agent gets drift_status / drift_read / drift_apply / drift_export (project text fenced as untrusted data); the Studio gets a Drift tab with a live collaboration feed and Undo. Proven against a fake Drift speaking the real wire format.
+	$(BUN) run desktop/scripts/demo_creator_drift.ts
+	$(BUN) test $(TEST_IGNORES) harness/creator/drift_policy.test.ts desktop/creator_drift.test.ts desktop/creator_probe.test.ts desktop/creator_registry.test.ts harness/omp/drift_extension.test.ts desktop/renderer/creator_drift_view.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-CREATOR-WHISTLE
+demo-CREATOR-WHISTLE: ## CREATOR-WHISTLE (ADR-0432): word timing measured IN-PROCESS by the pinned Whistle model (Needle wasm, no socket import): the three assets verify by size and sha256 and a one-byte flip refuses the load by name and both hashes, the real model transcribes a 16 kHz fixture at 90%+ token match with monotonic word times, a clip over 30 s is windowed with no word split, one substituted word becomes the ONE derived item capped at 0.7, load and transcribe make zero network attempts, a hot CPU refuses the align job with the measured reason, confidence 1.2 is rejected, and a scratch Creator engine's POST /api/creator/align returns a validated, model-pinned document the editor paints with measured chips. Fails (exit 1) when the assets are missing
+	$(BUN) run harness/scripts/demo_creator_whistle.ts
+	$(BUN) test $(TEST_IGNORES) harness/voice/whistle.test.ts harness/voice/whistle_client.test.ts harness/voice/resample.test.ts harness/voice/transcription.test.ts harness/creator/timeline.test.ts desktop/whistle_assets.test.ts desktop/whistle_stage.test.ts desktop/creator_registry.test.ts desktop/creator_probe.test.ts desktop/creator_editor.test.ts desktop/renderer/creator_editor.test.ts desktop/lockdown_route.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-PORTGUARD.4
+demo-P-PORTGUARD.4: ## P-PORTGUARD.4 (ADR-0458): Creator beside Agent. A packaged app's own lucidBuildFlavor beats an inherited LUCID_BUILD_FLAVOR (the standard package is stamped agent), a LUCID engine whose parent app is alive is LIVE and never offered for reaping, and the owner probe carries the parent pid on win32 and POSIX. The busy-default-port roll and the inherited-env scrub live in main.ts and were proven on a real Electron launch (ADR-0458 Consequences)
+	$(BUN) run desktop/scripts/demo_portguard.ts
+	$(BUN) test $(TEST_IGNORES) desktop/build_flavor.test.ts desktop/orphan_engine.test.ts desktop/port_guard.test.ts desktop/build/electron-builder.creator.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-CREATOR-OPENFILM
+demo-CREATOR-OPENFILM: ## CREATOR-OPENFILM (ADR-0457): OpenFilm (MIT, film.html + frame(t) pages) as an on-device Creator provider run ONLY as `--version`, `look` and `render` on a fixed argv: shell shims, package runners (npx, bunx, dlx) and the get/open/update/skill subcommands are refused before anything runs; the child env carries no engine secret and forces the browser, update-check and telemetry opt-outs (plus a dead download host under CUI lockdown); the CLI's own .film/opened marker is written so no detached Studio server is spawned; an external URL in any page refuses under lockdown; the look verdict (same t, same picture) is parsed with its untrusted text sanitized, only PNG sheets from .film/cache/look are stored; a render lands in the library as video and an exit-2 run fails its job
+	$(BUN) run desktop/scripts/demo_creator_openfilm.ts
+	$(BUN) test $(TEST_IGNORES) desktop/creator_openfilm.test.ts desktop/creator_registry.test.ts desktop/creator_probe.test.ts desktop/cui_policy.test.ts harness/omp/openfilm_extension.test.ts desktop/renderer/creator_video.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-VAULT-KEYS.1
+demo-P-VAULT-KEYS.1: ## P-VAULT-KEYS.1 (ADR-0472): provider keys, named-account keys, MCP bearer tokens and the TURN credential leave lucid-gui.json for an ENGINE-side OS vault (DPAPI / Keychain / libsecret master key, AES-256-GCM records) that headless engines open themselves. Real processes and the real backend: a plaintext settings file and its .bak migrate on the first engine start with no re-entry, a second engine reads the same keys, a missing master key reads as unreadable and rewrites nothing, a re-entered key sets the old vault aside, and the vault bundled for Node (Electron main) reports unavailable without touching a vault file
+	$(BUN) run desktop/scripts/demo_p_vault_keys_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/engine_vault.test.ts desktop/settings_vault.test.ts desktop/settings_store_atomic.test.ts desktop/auth_status.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-VAULT-V2.1
+demo-P-VAULT-V2.1: ## P-VAULT-V2.1 (ADR-0474): one engine vault. Sealed format v2 with per-entry metadata (v1 read and upgraded on the first real write), the Electron safeStorage credential vault migrated into it (import, engine read-back, only then delete; crash-safe, idempotent), credentials resolved engine-side under the env names main injected, and the vault API (/api/vault/list|put|rotate|delete, UI token only; main-only routes behind a per-launch vault token). Real engines in a scratch dir: no route response ever carries a value
+	$(BUN) run desktop/scripts/demo_p_vault_v2_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/vault_v2.test.ts desktop/cred_migration.test.ts desktop/engine_vault.test.ts desktop/settings_vault.test.ts desktop/cred_vault.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-VAULT-DEST.1
+demo-P-VAULT-DEST.1: ## P-VAULT-DEST.1 (ADR-0478): enterprise vault destinations, core half. Settings "Vault destinations (Enterprise)" over /api/vault/destinations*, /api/vault/push, /api/vault/pull (UI token only); requests to the add-on kms connector (put/list/pull/check, ADR-A044) written 0600 in a private temp dir and wiped after every call; name mapping char for char the add-on's; auto-backup on vaultPut/vaultRotate; honest not-installed state. Real engines in a scratch dir (set LUCID_ADDON_DIR to the add-on checkout): no route response or log line carries a value
+	$(BUN) run desktop/scripts/demo_p_vault_dest_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/vault_destinations.test.ts desktop/renderer/vault_dest_card.test.ts desktop/vault_v2.test.ts desktop/addon_seam.test.ts
+
+.PHONY: demo-P-FIPS.1
+demo-P-FIPS.1: ## P-FIPS.1 (ADR-0473): AES-256-GCM, PBKDF2-HMAC-SHA256, SHA-256, HMAC-SHA256 and the DRBG run in the OS FIPS 140 module (Windows CNG / Apple corecrypto / OpenSSL FIPS provider) after power-on known-answer tests; output is byte-identical to node:crypto so personal-kg.v1 stores open unchanged; fips is claimed only by the documented rule; LUCID_FIPS_REQUIRED=1 or managed security.crypto.requireFips fails every op closed when no validated module is usable; the Node (Electron main) bundle never loads bun:ffi
+	$(BUN) run desktop/scripts/demo_p_fips_1.ts
+	$(BUN) test $(TEST_IGNORES) harness/crypto/fips_crypto.test.ts harness/personal/personal.test.ts desktop/managed_config.test.ts
+
+.PHONY: demo-P-BREW.1
+demo-P-BREW.1: ## P-BREW.1: the Homebrew cask is an app cask over the release .zip - no pkg stanza, no allow_untrusted / package trust (deprecated in Homebrew 6), pinned per-arch sha256, and the cask url / electron-builder artifactName / update-cask job all name the same zips
+	$(BUN) run tools/cask_check.ts
+.PHONY: demo-P-RECOVER.4
+demo-P-RECOVER.4: ## P-RECOVER.4 (ADR-0481): the main window recovers its own renderer. A render-process-gone that is not a clean exit is logged with reason + exit code and the app is loaded again after a backoff (250ms to 10s), at most 5 reloads per 60s sliding window; past the cap the window is left as it is and the log says to relaunch; a clean exit is ignored; an unresponsive renderer is logged, never reloaded. Wiring lives in main.ts createWindow (proven on a real Electron launch, ADR-0481 Consequences)
+	$(BUN) test $(TEST_IGNORES) desktop/renderer_watchdog.test.ts desktop/gpu_watchdog.test.ts desktop/navigation_policy.test.ts harness/adr_numbering.test.ts

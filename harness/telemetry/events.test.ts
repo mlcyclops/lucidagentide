@@ -48,6 +48,29 @@ test("unknown event name raises and writes nothing", () => {
   expect(events).toHaveLength(0);
 });
 
+test("P-CTRL.1 (ADR-0426): the seven controller_* names are contract-valid and emit", () => {
+  const { tel, events } = collector();
+  const names = [
+    "controller_paired",
+    "controller_unpaired",
+    "controller_turn_started",
+    "controller_turn_blocked",
+    "controller_auto_consented",
+    "controller_auto_revoked",
+    "controller_ruling",
+  ] as const;
+  for (const name of names) {
+    const rec = tel.emit(name, { pairing: "p1", lane_id: "lane-1" });
+    expect(rec.event).toBe(name);
+    expect(rec.run_id).toBe("run-1");
+    expect(rec.session_id).toBe("sess-1");
+  }
+  expect(events).toHaveLength(names.length);
+  // A near-miss controller_* name is still unknown (fail-closed, invariant #8).
+  expect(() => tel.emit("controller_turn_startd" as never)).toThrow(UnknownEventError);
+  expect(events).toHaveLength(names.length);
+});
+
 test("the file sink writes parseable NDJSON", () => {
   const dir = mkdtempSync(join(tmpdir(), "events-test-"));
   try {

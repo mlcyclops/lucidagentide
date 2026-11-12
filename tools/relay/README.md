@@ -27,6 +27,10 @@ between segmented networks) a shared broker is the clean answer. This one is **y
   or forge** a session (AES-256-GCM tag + wrong-key rejection live in the clients). Even a fully-compromised
   broker learns nothing but traffic timing + `IP:port`.
 - **Hard limits** bound abuse: `MAX_ROOMS`, `MAX_PEERS_PER_ROOM`, max frame bytes, idle timeout.
+- **Keepalive** (P-REMOTE.16, ADR-0431): a client's exact `{"t":"ping"}` string is answered with `{"t":"pong"}`
+  on the same socket (never forwarded). Clients use the pong as liveness evidence: once seen, two missed
+  round-trips mean a half-open socket and they replace it; they also rotate the socket themselves ~55 min in,
+  ahead of a hosting cap such as Cloud Run's 60-minute request window (a gated host re-claims its room by uid).
 - **`/healthz`** exposes only aggregate counts (rooms/peers) — never a roomId, key, or session bytes.
 - Pair with LUCID's managed policy **`collab.allowedRelays`** (ADR-0193) so managed clients only ever connect
   to *this* approved broker, and `collab.allowedBinds` to control who may *host* one.

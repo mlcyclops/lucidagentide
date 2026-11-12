@@ -26,7 +26,8 @@ beforeAll(() => { scanner = new ScannerClient({ timeoutMs: 4000 }); scanner.star
 afterAll(() => { scanner.stop(); });
 
 function fakeClient(mode: string): AcpAgentClient {
-  return new AcpAgentClient({ command: "bun", args: [FAKE], env: { FAKE_ACP_MODE: mode } }, { promptTimeoutMs: 15_000 });
+  // LUCID_INTERJECT_TARGET pinned: a run from inside a LUCID lane would otherwise make the fake tag its ids.
+  return new AcpAgentClient({ command: "bun", args: [FAKE], env: { FAKE_ACP_MODE: mode, LUCID_INTERJECT_TARGET: "master" } }, { promptTimeoutMs: 15_000 });
 }
 
 function firewallFor(remote: AcpAgentClient) {

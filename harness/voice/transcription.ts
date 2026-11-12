@@ -17,11 +17,26 @@
 // an EMPTY transcript with a note rather than throwing, so a broken/absent STT endpoint never crashes the
 // composer (the user just sees nothing transcribed and can type).
 
+import { parseWav } from "../brief/tts_backend.ts";
+import { pcm16ToMonoFloat, resampleLinearPcm } from "./resample.ts";
+import { WHISTLE_SAMPLE_RATE, whistleLanguageRefusal } from "./whistle.ts";
+import type { WhistleTranscriber } from "./whistle_client.ts";
+
 export interface TranscriptionResult {
   backendId: string;
   /** The recognized text (empty string on failure — never throws). */
   text: string;
   note: string;
+  /** CREATOR-WHISTLE (ADR-0432): per-word timings when the backend measures them (Whistle). The HTTP
+   *  backends leave this absent: they return `{ text }` only. */
+  words?: readonly TranscribedWord[];
+}
+
+export interface TranscribedWord {
+  readonly word: string;
+  readonly startMs: number;
+  readonly endMs: number;
+  readonly probability: number;
 }
 
 /** True when a transcribe attempt did NOT reach a working STT server (transport error / non-2xx), as opposed
@@ -134,6 +149,35 @@ export class WhisperCppSttBackend implements TranscriptionBackend {
       return { backendId: this.id, text, note: `transcribed ${audio.length} bytes via ${url}` };
     } catch (e) {
       return { backendId: this.id, text: "", note: `whisper.cpp STT unavailable (${e instanceof Error ? e.message : String(e)})` };
+    }
+  }
+}
+
+// CREATOR-WHISTLE (ADR-0432 decision 4): the zero-install local STT. No server, no port: the model runs
+// in the engine's own Whistle worker (harness/voice/whistle_client.ts) and this backend only shapes the
+// audio for it. It decodes 16-bit PCM WAV and SAYS SO: any other container or depth is refused by name
+// (there is no transcoder in LUCID, by design), an unsupported language is refused by name, and a dead
+// worker's reason comes back verbatim in the note. Never throws. The note is "" on success so the caller's
+// `sttTransportFailed` classifier and the renderer's note line see only real refusals.
+export class WhistleSttBackend implements TranscriptionBackend {
+  readonly id = "whistle";
+  constructor(private readonly transcriber: WhistleTranscriber) {}
+
+  async transcribe(audio: Uint8Array, opts: TranscribeOptions = {}): Promise<TranscriptionResult> {
+    const refuse = (note: string): TranscriptionResult => ({ backendId: this.id, text: "", note, words: [] });
+    const mime = opts.mimeType ?? "audio/wav";
+    if (mime !== "audio/wav") return refuse(`Whistle takes 16-bit PCM WAV; got ${mime}`);
+    const languageRefusal = whistleLanguageRefusal(opts.language);
+    if (languageRefusal) return refuse(languageRefusal);
+    try {
+      const { fmt, data } = parseWav(audio);
+      if (fmt.bitsPerSample !== 16) return refuse(`Whistle takes 16-bit PCM WAV; got ${fmt.bitsPerSample}-bit`);
+      const mono = pcm16ToMonoFloat(data, fmt.channels);
+      const pcm16k = fmt.sampleRate === WHISTLE_SAMPLE_RATE ? mono : resampleLinearPcm(mono, fmt.sampleRate, WHISTLE_SAMPLE_RATE);
+      const t = await this.transcriber.transcribe(pcm16k, { language: opts.language || undefined, wordTimestamps: true });
+      return { backendId: this.id, text: t.text.trim(), note: "", words: t.words };
+    } catch (e) {
+      return refuse(`Whistle STT unavailable (${e instanceof Error ? e.message : String(e)})`);
     }
   }
 }

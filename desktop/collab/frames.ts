@@ -35,10 +35,42 @@ export interface CollabSessionHeader {
   startedAt: number; // UNIX ms
 }
 
-/** One prior turn, replayed to a joining guest so they see the conversation so far (sanitized transcript). */
+/** P-REMOTE.16 (ADR-0431): one recorded tool call inside a replayed turn - the SAME fields the live `tool` +
+ *  `tool-meta` ChatEvents carry, so a replayed call renders exactly like a live one (chip + diff drilldown,
+ *  fleet-lane parity). `code.path` is the tool's own relative path, as the live event already sends it; never
+ *  an absolute filesystem path. `add`/`del` is the diffstat PRECOMPUTED by the host so a replay that had to
+ *  shed `code` to fit the frame budget still shows +/-. */
+export interface CollabToolRecord {
+  id?: string;
+  name: string;
+  detail: string;
+  code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string };
+  input?: string;
+  intent?: string;
+  ok?: boolean;
+  elapsedMs?: number;
+  add?: number;
+  del?: number;
+}
+
+/** One prior turn, replayed to a joining guest so they see the conversation so far (sanitized transcript).
+ *  P-REMOTE.16 (ADR-0431): the turn is RICH - thinking, tool calls (with code), gate blocks and the author
+ *  ride along, so a phone that reconnects (hourly Cloud Run cap, screen lock) gets back exactly what it
+ *  missed at fleet-lane detail. Every added field is OPTIONAL: an older host sends role+text only and an
+ *  older guest renders role+text only. `seq` is the host journal's monotonic turn number (master session);
+ *  `live` marks the trailing in-flight turn (its text/tools are partial and will be superseded). */
 export interface CollabTranscriptTurn {
   role: "user" | "assistant";
   text: string;
+  seq?: number;
+  /** User turn: the author's display name (a guest's name for a guest-driven turn; absent = the host). */
+  from?: string;
+  thinking?: string;
+  tools?: CollabToolRecord[];
+  blocks?: { reason: string; severity: string }[];
+  /** A lane turn that ended in error (lane transcripts only). */
+  error?: string;
+  live?: boolean;
 }
 
 // ── P-COLLAB.14 (ADR-0228): edit-guest model + already-used-folder selection ───
@@ -71,13 +103,29 @@ export interface WelcomeFrame {
    *  speech-to-text is allowed before it records anything. Absent = the guest assumes the strictest
    *  posture (fail-closed), because an older host that cannot answer must never buy a cloud transcriber. */
   posture?: { cui: boolean; lockdown: boolean };
+  /** P-REMOTE.16: echo of `hello.since` - the guest's highest SETTLED master turn seq. When present, `transcript`
+   *  holds only turns with seq > since (plus the live one); the guest keeps what it had up to `since` and
+   *  appends. Absent (fresh join / older host) = `transcript` is the whole window and replaces the view. */
+  since?: number;
+  /** P-REMOTE.16: false when the host's bounded journal no longer covers every turn after `since` (the guest was
+   *  away longer than the window, or the replay had to be trimmed to fit a frame): the guest should mark a gap.
+   *  Absent = true. */
+  complete?: boolean;
 }
 /** A single live chat event (token / thinking / tool / subagent / done / ...), rendered by the guest as-is.
  *  P-PWA-FOCUS.1: `lane` scopes the event to a FLEET LANE's conversation instead of the master session's.
  *  Absent = the master session, which is what every pre-focus host and guest means by an event, so the field
  *  is additive in both directions. A lane-scoped event is only ever sent to a guest that ASKED to watch that
  *  lane (`WatchFrame`), so N idle lanes never stream tokens at a phone on cellular. */
-export interface EventFrame { t: "event"; event: ChatEvent; lane?: string }
+export interface EventFrame {
+  t: "event";
+  event: ChatEvent;
+  lane?: string;
+  /** P-REMOTE.16: the master-journal seq of the turn this event folds into (absent on lane events and from an
+   *  older host). Lets the guest tag its live-folded items with their turn, so a `welcome` after a reconnect
+   *  can replace exactly the turns the host re-sends and nothing else. */
+  seq?: number;
+}
 /** Footer refresh: the roster + the model + context fill, so guests mirror the host's status line.
  *  P-REMOTE.14: `posture` rides every push, so a guest re-decides whether device speech-to-text is
  *  allowed the moment the host flips CUI mode or lockdown. Absent = assume the strictest posture. */
@@ -89,7 +137,7 @@ export interface OptionsFrame { t: "options"; options: CollabOptions }
 /** P-COLLAB.15: a user turn was submitted to the host's session, broadcast LIVE so every participant sees who
  *  typed what, in order. `from` is the author's display name (the host's name for a local turn, the guest's
  *  name for a guest-driven turn). Metadata only - the same sanitized prompt text the replay transcript holds. */
-export interface UserTurnFrame { t: "user-turn"; text: string; from: string }
+export interface UserTurnFrame { t: "user-turn"; text: string; from: string; seq?: number }
 /** The share ended (host stopped, or the session closed). */
 export interface ByeFrame { t: "bye"; reason: string }
 /** A host-side refusal (e.g. a view-only guest attempted a mutating action). */
@@ -97,7 +145,15 @@ export interface ErrorFrame { t: "error"; message: string }
 
 // ── guest -> host ────────────────────────────────────────────────────────────
 /** A joining guest introduces itself; `writeToken` (base64url) is present only from a FULL link. */
-export interface HelloFrame { t: "hello"; protocol: number; name: string; writeToken?: string }
+export interface HelloFrame {
+  t: "hello";
+  protocol: number;
+  name: string;
+  writeToken?: string;
+  /** P-REMOTE.16: the highest SETTLED master turn seq this guest already holds (from a previous connection or
+   *  its on-device history). The host answers with only the turns after it. Absent = fresh join. */
+  since?: number;
+}
 /** P-COLLAB.12: a guest with EDIT access drives the host's session. The prompt RUNS ON THE HOST, so it passes
  *  the host's fail-closed scan gate + exec/egress approvals exactly like a local prompt - the guest cannot
  *  bypass any host approval. A view-only guest's prompt is refused with an `error` frame.
@@ -191,6 +247,10 @@ export type LucidCollabFrame = HostFrame | GuestFrame | SignalFrame;
 // master, so a new guest that asked to watch a lane simply sees nothing arrive for it. An older GUEST never
 // sends `watch` at all, and the host sends a lane-scoped event ONLY to a guest that asked for that lane - so
 // an old guest cannot receive one and cannot mistake it for a master event. Protocol stays 1.
+// P-REMOTE.16 (ADR-0431) additions (`hello.since`, `welcome.since`/`complete`, `event.seq`, `user-turn.seq`,
+// and the rich optional fields on CollabTranscriptTurn) are additive the same way: an older host ignores
+// `since` and sends its whole text-only window, which a new guest treats as a fresh full replay; an older
+// guest ignores the extra fields and renders role+text as before. Protocol stays 1.
 const GUEST_FRAME_TYPES: Record<string, true> = { hello: true, prompt: true, abort: true, "set-model": true, "set-workspace": true, "fleet-prompt": true, "fleet-stop": true, "fleet-answer": true, interject: true, watch: true };
 /** Narrowing helpers (kept tiny + pure so the host/guest logic in P-COLLAB.2/.3 reads cleanly). A `signal`
  *  frame is neither a host nor a guest session frame - the demux routes it to WebRTC signaling instead. */

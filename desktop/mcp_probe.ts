@@ -130,7 +130,7 @@ export async function probeEnabledServers(servers: McpServerEntry[], now = Date.
   const out: McpProbeResult[] = [];
   for (const s of servers.filter((x) => x.enabled)) {
     if (s.transport === "sse") {
-      out.push({ ok: false, server: s.name, tools: [], error: "legacy SSE transport — tool discovery not supported yet; the server's tools still run under omp" });
+      out.push({ ok: false, server: s.name, tools: [], error: "legacy SSE transport: tool discovery not supported yet; the server's tools still run under omp" });
       continue;
     }
     const hit = cache.get(s.id);

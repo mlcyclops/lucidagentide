@@ -69,7 +69,7 @@ export async function importSkill(filename: string, content: string, workspace: 
     decision = await scanAndDecide(getScanner(), content, DEFAULT_POLICY);
   } catch (e) {
     // Fail-closed (invariant #3): no valid scan ⇒ block, record for review, never write.
-    recordBlock({ tool: "skill_import", severity: "high", findings: "scanner-unavailable", reason: `skill "${slug}" import blocked — scanner unavailable` });
+    recordBlock({ tool: "skill_import", severity: "high", findings: "scanner-unavailable", reason: `skill "${slug}" import blocked: scanner unavailable` });
     return { ok: false, name: slug, blocked: true, reason: `scanner unavailable: ${String((e as Error)?.message ?? e)}`, findings: 0 };
   }
 
@@ -78,7 +78,7 @@ export async function importSkill(filename: string, content: string, workspace: 
       tool: "skill_import",
       severity: decision.trustLabel === "quarantined" ? "high" : "medium",
       findings: String(decision.findings.length),
-      reason: `skill "${slug}" import blocked — ${decision.reason}`,
+      reason: `skill "${slug}" import blocked: ${decision.reason}`,
     });
     return { ok: false, name: slug, blocked: true, reason: decision.reason, trustLabel: decision.trustLabel, findings: decision.findings.length };
   }

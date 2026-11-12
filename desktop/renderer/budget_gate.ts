@@ -30,8 +30,17 @@ export function providerKeywords(model: string): string[] {
 /** The provider-auth row that governs `model`, searched across every auth group, or undefined if none match. */
 export function providerForModel<T extends ProviderAuthLike>(auth: AuthGroupsLike<T> | null, model: string): T | undefined {
   if (!auth) return undefined;
-  const kws = providerKeywords(model);
   const all = [...(auth.gateway ?? []), ...(auth.majors ?? []), ...(auth.others ?? [])];
+  // An omp provider prefix that IS a LUCID provider id wins outright: `amazon-bedrock/global.anthropic.claude-…`
+  // is governed by the Bedrock credential, not the Anthropic one its family keyword would guess, so an
+  // unconfigured Bedrock never counts as "configured" on the strength of a direct Anthropic login.
+  const slash = model.indexOf("/");
+  if (slash > 0) {
+    const prefix = model.slice(0, slash).toLowerCase();
+    const exact = all.find((p) => p.id.toLowerCase() === prefix);
+    if (exact) return exact;
+  }
+  const kws = providerKeywords(model);
   return all.find((p) => { const id = p.id.toLowerCase(); return kws.some((k) => id.includes(k) || k.includes(id)); });
 }
 

@@ -25,6 +25,10 @@ describe("resolveAgentTierModel - accessible provider-isolated tiers", () => {
     // Opus 5.5 (2026-09-22): the hyphenated-minor spelling parses as [5,5] and outranks Opus 5's [5].
     const opus55 = models("anthropic/claude-opus-5", "anthropic/claude-opus-5-5", "anthropic/claude-fable-5.1");
     expect(resolveAgentTierModel(opus55, opus55[2]!.value, "regular")).toBe("anthropic/claude-opus-5-5");
+    // Sonnet 5.5 (P-MODEL.6) is the balanced tier: a role never lands on it, and from it Regular climbs to Opus 5.5.
+    const sonnet55 = models("anthropic/claude-sonnet-5-5", "anthropic/claude-opus-5-5", "anthropic/claude-fable-5.1");
+    expect(resolveAgentTierModel(sonnet55, sonnet55[0]!.value, "regular")).toBe("anthropic/claude-opus-5-5");
+    expect(resolveAgentTierModel(sonnet55, sonnet55[2]!.value, "regular")).toBe("anthropic/claude-opus-5-5");
   });
 
   it("Max prefers accessible Fable 5+ and Astra 6+", () => {

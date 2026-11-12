@@ -187,3 +187,90 @@ describe("CollabGuest (P-COLLAB.4)", () => {
     expect(g.sendPrompt("   ")).toBe(false);
   });
 });
+
+// ── P-REMOTE.16 (ADR-0431): the settled-seq cursor (`hello.since`) + welcome merge ──────────────────────
+
+type Hello = Extract<LucidCollabFrame, { t: "hello" }>;
+const hellos = (t: MockTransport): Hello[] => t.sent.filter((s) => s.frame.t === "hello").map((s) => s.frame as Hello);
+
+describe("CollabGuest since cursor (P-REMOTE.16)", () => {
+  it("a fresh hello carries NO since; after a welcome the next hello carries the highest settled seq", () => {
+    const t = new MockTransport();
+    const g = new CollabGuest(t, { name: "bob" });
+    g.start();
+    expect(hellos(t)[0]!.since).toBeUndefined();
+    expect(g.since()).toBe(0);
+    t.host({ ...welcome(), transcript: [{ role: "user", text: "a", seq: 1 }, { role: "assistant", text: "b", seq: 2 }, { role: "assistant", text: "half", seq: 3, live: true }] });
+    expect(g.since()).toBe(2); // the live turn never counts as settled
+    t.drop("cap", true);
+    t.connect(); // the socket reopened: a new hello
+    expect(hellos(t)[1]!.since).toBe(2);
+  });
+
+  it("done / no-response / user-turn with a seq advance the cursor; token events and seq-less frames do not", () => {
+    const t = new MockTransport();
+    const seqs: (number | undefined)[] = [];
+    const g = new CollabGuest(t, { name: "bob" }, { onEvent: (_e, seq) => seqs.push(seq), onUserTurn: (_t, _f, seq) => seqs.push(seq) });
+    g.start();
+    t.host(welcome());
+    t.host({ t: "event", event: { type: "token", text: "x" }, seq: 4 });
+    expect(g.since()).toBe(0);
+    t.host({ t: "event", event: { type: "done", text: "xy" }, seq: 4 });
+    expect(g.since()).toBe(4);
+    t.host({ t: "user-turn", text: "next", from: "alice", seq: 5 });
+    expect(g.since()).toBe(5);
+    t.host({ t: "event", event: { type: "no-response", model: "m" }, seq: 6 });
+    expect(g.since()).toBe(6);
+    t.host({ t: "event", event: { type: "done", text: "old host" } }); // no seq: cursor untouched
+    expect(g.since()).toBe(6);
+    expect(seqs).toEqual([4, 4, 5, 6, undefined]);
+    // the folded done carries its seq into the view transcript
+    expect(g.view().transcript.at(-1)).toEqual({ role: "assistant", text: "old host" });
+    expect(g.view().transcript.at(-2)).toEqual({ role: "assistant", text: "xy", seq: 4 });
+    t.connect();
+    expect(hellos(t).at(-1)!.since).toBe(6);
+  });
+
+  it("a welcome echoing since MERGES: keeps older turns, replaces newer ones, appends the replay", () => {
+    const t = new MockTransport();
+    const g = new CollabGuest(t, { name: "bob" });
+    g.start();
+    t.host({ ...welcome(), transcript: [{ role: "user", text: "a", seq: 1 }, { role: "assistant", text: "b", seq: 2 }] });
+    t.host({ t: "event", event: { type: "done", text: "partial" }, seq: 3 }); // folded locally with seq 3: superseded
+    t.host({ ...welcome(), since: 2, transcript: [{ role: "assistant", text: "full three", seq: 3 }, { role: "user", text: "d", seq: 4 }] });
+    expect(g.view().transcript).toEqual([
+      { role: "user", text: "a", seq: 1 },
+      { role: "assistant", text: "b", seq: 2 },
+      { role: "assistant", text: "full three", seq: 3 },
+      { role: "user", text: "d", seq: 4 },
+    ]);
+    expect(g.since()).toBe(4);
+  });
+
+  it("a welcome WITHOUT since replaces everything, cursor included", () => {
+    const t = new MockTransport();
+    const g = new CollabGuest(t, { name: "bob" });
+    g.seedSince(40);
+    g.start();
+    expect(hellos(t)[0]!.since).toBe(40);
+    t.host({ ...welcome(), transcript: [{ role: "user", text: "fresh", seq: 7 }] });
+    expect(g.view().transcript).toEqual([{ role: "user", text: "fresh", seq: 7 }]);
+    expect(g.since()).toBe(7); // an older host's full window resets the cursor to what it actually sent
+  });
+
+  it("seedSince preloads the cursor before start, only ever moves it up, and ignores junk", () => {
+    const t = new MockTransport();
+    const g = new CollabGuest(t, { name: "bob" });
+    g.seedSince(12);
+    g.seedSince(5);
+    g.seedSince(NaN);
+    g.seedSince(-3);
+    g.seedSince(Infinity);
+    expect(g.since()).toBe(12);
+    g.start();
+    expect(hellos(t)[0]!.since).toBe(12);
+    const fresh = new CollabGuest(new MockTransport(), { name: "bob" });
+    fresh.seedSince(0);
+    expect(fresh.since()).toBe(0);
+  });
+});

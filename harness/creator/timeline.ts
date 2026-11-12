@@ -33,7 +33,14 @@ import { buildWav, parseWav, type WavFormat } from "../brief/tts_backend.ts";
 // ── the document ────────────────────────────────────────────────────────────
 
 /** Where an item's timing came from. A closed set: anything else would be an unlabeled guess. */
-export type AlignSource = "vendor" | "derived";
+export type AlignSource = "vendor" | "derived" | "measured";
+
+/** One recognized word with its times and the decoder's probability. The same shape as the engine's
+ *  `WhistleWord`, declared here so this pure module never imports harness/voice. */
+export interface MeasuredWord { readonly word: string; readonly startMs: number; readonly endMs: number; readonly probability: number }
+
+/** Which in-process model measured the `measured` items, pinned by hash so the provenance is checkable. */
+export interface AlignedBy { readonly provider: string; readonly modelSha256: string }
 
 /** A derived alignment is a measurement plus a distribution, never ground truth. Vendor timings get 1;
  *  everything LUCID works out itself is capped here so the UI can always tell the two apart. */
@@ -78,6 +85,8 @@ export interface TimelineDoc {
   readonly bitsPerSample: number;
   readonly items: readonly TimelineItem[];
   readonly clips: readonly TimelineClip[];
+  /** Present when the items were measured in-process (ADR-0432); absent for vendor or derived timing. */
+  readonly alignedBy?: AlignedBy;
 }
 
 export type OpResult = { ok: true; doc: TimelineDoc } | { ok: false; error: string };
@@ -135,8 +144,11 @@ export function validateDoc(doc: TimelineDoc): string[] {
     if (c.srcStartMs < 0) problems.push(`clip ${c.id} has a negative source offset`);
     at = c.endMs;
   }
+  let prevStart = -Infinity;
   for (const it of doc.items) {
     if (it.endMs < it.startMs) problems.push(`item ${it.id} ends before it starts`);
+    if (it.startMs < prevStart) problems.push(`item ${it.id} starts at ${it.startMs}, before the item preceding it`);
+    prevStart = it.startMs;
     if (it.confidence < 0 || it.confidence > 1) problems.push(`item ${it.id} has an out-of-range confidence`);
     if (it.source === "derived" && it.confidence > DERIVED_CONFIDENCE_CEILING) {
       problems.push(`item ${it.id} is derived but claims vendor-grade confidence`);
@@ -616,12 +628,129 @@ export function deriveAlignment(text: string, pcm: Uint8Array, fmt: WavFormat, o
   return { items, runs, note };
 }
 
+export interface MeasuredAlignment {
+  readonly items: TimelineItem[];
+  /** User words the model recognized verbatim (after normalization). */
+  readonly matched: number;
+  /** User words the model substituted or dropped, so their span is interpolated and labeled derived. */
+  readonly interpolated: number;
+  readonly note: string;
+}
+
+/** The form two spellings of the same spoken word share: NFKC, lowercase, outer punctuation stripped. Inner
+ *  apostrophes and hyphens stay, so "don't" and "well-known" remain one word each. */
+function normalizeWord(raw: string): string {
+  return raw.normalize("NFKC").toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+}
+
+/** Per user token: the index of the recognized word it matched, or -1 when substituted or dropped. Standard
+ *  Levenshtein DP with equal unit costs and a backtrace; an inserted model word consumes nothing. */
+function matchTokens(user: readonly string[], model: readonly string[]): number[] {
+  const n = user.length;
+  const m = model.length;
+  const width = m + 1;
+  const dp = new Uint32Array((n + 1) * width);
+  for (let i = 0; i <= n; i++) dp[i * width] = i;
+  for (let j = 0; j <= m; j++) dp[j] = j;
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      const sub = dp[(i - 1) * width + (j - 1)]! + (user[i - 1] === model[j - 1] ? 0 : 1);
+      const del = dp[(i - 1) * width + j]! + 1;
+      const ins = dp[i * width + (j - 1)]! + 1;
+      dp[i * width + j] = Math.min(sub, del, ins);
+    }
+  }
+  const out = new Array<number>(n).fill(-1);
+  let i = n;
+  let j = m;
+  while (i > 0 && j > 0) {
+    const here = dp[i * width + j]!;
+    const equal = user[i - 1] === model[j - 1];
+    if (here === dp[(i - 1) * width + (j - 1)]! + (equal ? 0 : 1)) {
+      if (equal) out[i - 1] = j - 1;
+      i--;
+      j--;
+    } else if (here === dp[(i - 1) * width + j]! + 1) {
+      i--;
+    } else {
+      j--;
+    }
+  }
+  return out;
+}
+
+/** Map the user's text onto words a speech model recognized with timestamps. Each user word becomes a
+ *  `measured` item carrying the recognized word's times and probability, or, where the model substituted or
+ *  dropped it, a `derived` item whose span is interpolated between its nearest measured neighbours (the clip
+ *  edges bound the ends) at a confidence that can never pass for a measurement. Items come back in text
+ *  order with non-decreasing starts, so the document they feed validates. */
+export function alignFromMeasured(text: string, words: readonly MeasuredWord[], durationMs: number, providerLabel: string): MeasuredAlignment {
+  const tokens = tokenizeWords(text);
+  const total = tokens.length;
+  const clipEnd = Math.max(0, Math.round(durationMs));
+  const link = matchTokens(tokens.map((t) => normalizeWord(t.text)), words.map((w) => normalizeWord(w.word)));
+  const confidenceDerived = Math.min(DERIVED_CONFIDENCE_CEILING, 0.5);
+
+  // Pass 1: measured items in place, with the spans of unmatched tokens left to fill.
+  const spans: { startMs: number; endMs: number }[] = new Array(total);
+  let matched = 0;
+  for (let i = 0; i < total; i++) {
+    const w = link[i]! >= 0 ? words[link[i]!] : undefined;
+    if (!w) continue;
+    const startMs = Math.min(clipEnd, Math.max(0, Math.round(w.startMs)));
+    spans[i] = { startMs, endMs: Math.min(clipEnd, Math.max(startMs, Math.round(w.endMs))) };
+    matched++;
+  }
+
+  // Pass 2: each run of unmatched tokens shares the gap between its measured neighbours (or the clip edges)
+  // proportionally by character length, the same weighting deriveAlignment uses.
+  let i = 0;
+  while (i < total) {
+    if (spans[i]) { i++; continue; }
+    let j = i;
+    while (j < total && !spans[j]) j++;
+    const gapStart = i === 0 ? 0 : spans[i - 1]!.endMs;
+    const gapEnd = j === total ? clipEnd : spans[j]!.startMs;
+    const lo = Math.max(gapStart, i === 0 ? 0 : spans[i - 1]!.startMs);
+    const hi = Math.max(lo, gapEnd);
+    let weightTotal = 0;
+    for (let k = i; k < j; k++) weightTotal += Math.max(1, tokens[k]!.text.length);
+    let cursor = lo;
+    let used = 0;
+    for (let k = i; k < j; k++) {
+      used += Math.max(1, tokens[k]!.text.length);
+      const next = Math.round(lo + ((hi - lo) * used) / weightTotal);
+      spans[k] = { startMs: cursor, endMs: Math.max(cursor, next) };
+      cursor = Math.max(cursor, next);
+    }
+    i = j;
+  }
+
+  // Pass 3: repair any measured overlap the model reported so starts never go backwards.
+  const items: TimelineItem[] = [];
+  let floor = 0;
+  for (let k = 0; k < total; k++) {
+    const s = spans[k]!;
+    const startMs = Math.max(floor, s.startMs);
+    const endMs = Math.max(startMs, s.endMs);
+    floor = startMs;
+    const w = link[k]! >= 0 ? words[link[k]!] : undefined;
+    items.push(w
+      ? { id: `item-${k + 1}`, text: tokens[k]!.text, startMs, endMs, confidence: Math.min(1, Math.max(0, w.probability)), source: "measured", locked: false }
+      : { id: `item-${k + 1}`, text: tokens[k]!.text, startMs, endMs, confidence: confidenceDerived, source: "derived", locked: false });
+  }
+  const interpolated = total - matched;
+  const note = `measured in-process by ${providerLabel}: ${matched} of ${total} words matched, ${interpolated} interpolated`;
+  return { items, matched, interpolated, note };
+}
+
 /** A whole-file document from one source: one clip covering it, plus whatever alignment the caller has. */
 export function docFromSource(opts: {
   sourceId: string;
   fmt: WavFormat;
   durationMs: number;
   items: readonly TimelineItem[];
+  alignedBy?: AlignedBy;
 }): TimelineDoc {
   return {
     sampleRate: opts.fmt.sampleRate,
@@ -629,6 +758,7 @@ export function docFromSource(opts: {
     bitsPerSample: opts.fmt.bitsPerSample,
     items: [...opts.items],
     clips: [{ id: "clip-1", startMs: 0, endMs: Math.max(1, Math.round(opts.durationMs)), sourceId: opts.sourceId, srcStartMs: 0, gain: 1 }],
+    ...(opts.alignedBy ? { alignedBy: opts.alignedBy } : {}),
   };
 }
 

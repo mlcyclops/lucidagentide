@@ -64,7 +64,7 @@ export function figmaBoardHtml(fileName: string, frames: BoardFrame[]): string {
     return `<figure class="ff-card"><figcaption class="ff-cap"><span class="ff-name">${esc(f.name)}</span><span class="ff-page">${esc(f.page)}</span></figcaption>${body}</figure>`;
   }).join("\n");
   const count = frames.length;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${esc(fileName)} — Figma</title>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${esc(fileName)} - Figma</title>
 <style>
   :root{color-scheme:dark}
   body{margin:0;background:#0b0b10;color:#e7e7ee;font:14px/1.4 system-ui,Segoe UI,Roboto,sans-serif}

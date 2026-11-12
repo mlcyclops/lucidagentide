@@ -136,6 +136,16 @@ export const EVENT_NAMES = [
   "trainer_unit_confirmed",
   "trainer_unit_rejected",
   "trainer_pack_exported",
+  // P-CTRL.1 (ADR-0426; design ADR-0425, issue #449) - the external-controller surface (Hermes as
+  // a paired MCP client). Metadata ONLY: pairing name, lane id, verdict, ruling, levels, backend,
+  // counts - never prompt or assignment text.
+  "controller_paired",
+  "controller_unpaired",
+  "controller_turn_started",
+  "controller_turn_blocked",
+  "controller_auto_consented",
+  "controller_auto_revoked",
+  "controller_ruling",
 ] as const;
 export type EventName = (typeof EVENT_NAMES)[number];
 

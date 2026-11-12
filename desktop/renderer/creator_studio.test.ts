@@ -3,8 +3,8 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  creatorIntegrationsHtml, creatorJobsHtml, creatorLibraryHtml, creatorStudioHtml, fmtAgo, fmtBytes,
-  isCreatorStudio, type CreatorStudioView, type JobView, type ProbeResultView, type ProviderStatusView,
+  creatorIntegrationsHtml, creatorJobsHtml, creatorLibraryHtml, creatorStudioHtml, cuiBannerHtml, fmtAgo, fmtBytes,
+  isCreatorStudio, postureChip, type CreatorStudioView, type JobView, type ProbeResultView, type ProviderStatusView,
   type TrackView,
 } from "./creator_studio.ts";
 
@@ -254,6 +254,47 @@ describe("the job strip (CREATOR-1, ADR-0292)", () => {
     const html = creatorJobsHtml([job({ label: "<script>1</script>", error: "<img src=x>" })]);
     expect(html).not.toContain("<script>");
     expect(html).not.toContain("<img src=x");
+  });
+});
+
+describe("CUI lockdown surfaces", () => {
+  test("posture chips map the three postures and never treat a missing verdict as allowed", () => {
+    expect(postureChip({ posture: "on-device", allowed: true, reason: "in-renderer" }, true)).toMatchObject({ label: "on-device", tone: "local" });
+    expect(postureChip({ posture: "enclave", allowed: true, reason: "enclave endpoint" }, true)).toMatchObject({ label: "DGX enclave", tone: "enclave" });
+    expect(postureChip({ posture: "cloud", allowed: false, reason: "no CUI authorization" }, true)).toMatchObject({ label: "cloud", tone: "cloud" });
+    expect(postureChip(undefined, true)).toMatchObject({ label: "posture unknown", tone: "unknown" });
+    expect(postureChip({ posture: "orbital", allowed: true, reason: "" }, false).tone).toBe("unknown");
+  });
+
+  test("the chip tooltip carries the verdict only when the lockdown is on", () => {
+    const cloud = { posture: "cloud", allowed: false, reason: "cloud provider without a CUI authorization" };
+    expect(postureChip(cloud, true).tip).toContain("Refused under CUI lockdown: cloud provider without a CUI authorization");
+    expect(postureChip({ ...cloud, allowed: true }, false).tip).toContain("CUI lockdown is off.");
+  });
+
+  test("a refused provider is shown disabled with the reason, but can still be declared (an enclave clears it)", () => {
+    const html = creatorIntegrationsHtml([provider({ cui: { posture: "cloud", allowed: false, reason: "no CUI authorization" } })], [], Date.now(), true);
+    expect(html).toContain("cst-row-refused");
+    expect(html).toMatch(/data-creator-probe="suno" disabled/);
+    expect(html).toContain("Refused under CUI lockdown: no CUI authorization");
+    expect(html).toContain('data-creator-endpoint="suno"');
+  });
+
+  test("an allowed provider keeps its Probe", () => {
+    const html = creatorIntegrationsHtml([provider({ cui: { posture: "enclave", allowed: true, reason: "enclave" } })], [], Date.now(), true);
+    expect(html).not.toContain("cst-row-refused");
+    expect(html).not.toMatch(/data-creator-probe="suno" disabled/);
+  });
+
+  test("the banner states the lockdown both ways and is absent when the engine did not report it", () => {
+    expect(cuiBannerHtml(true)).toContain("CUI lockdown is on");
+    expect(cuiBannerHtml(true)).toContain("supply-chain pipeline");
+    expect(cuiBannerHtml(false)).toContain("CUI lockdown is off");
+    expect(cuiBannerHtml(undefined)).toBe("");
+  });
+
+  test("CAD providers get their own group", () => {
+    expect(creatorIntegrationsHtml([provider({ id: "dgx-cad", name: "DGX CAD", group: "cad" })])).toContain("CAD and drawings");
   });
 });
 

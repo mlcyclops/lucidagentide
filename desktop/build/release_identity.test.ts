@@ -438,6 +438,10 @@ describe("classifyArtifact", () => {
     ["lucidagentide-desktop-1.14.1.x86_64.rpm", "rpm"],
     ["LucidAgent-Setup.exe", "win-nsis"],
     ["LucidAgent-portable.exe", "win-portable"],
+    // WINPKG (issue #345): the enterprise packages. Their first CI build failed this gate as
+    // "unrecognized artifact" after both had built, because no kind existed for them.
+    ["LucidAgent-2.3.1-test.131-x64.msi", "win-msi"],
+    ["LucidAgent-2.3.1-test.131-x64.appx", "win-appx"],
     ["LucidAgent-x86_64.AppImage", "appimage"],
     ["latest.yml", "updater-feed"],
     ["latest-mac.yml", "updater-feed"],
@@ -458,8 +462,10 @@ describe("classifyArtifact", () => {
     // fails the whole gate: nothing may be uploaded when one file cannot be identified.
     ["latest-linux-arm64.yml", "updater-feed"],
     ["latest-mac-arm64.yml", "updater-feed"],
-    // The alien file, named after the actual incident report.
-    ["TacticalGenAITrainer-Setup.msi", "unknown"],
+    // The alien file, named after the actual incident report. An .msi is a known KIND since WINPKG, so
+    // what refuses it is the stem check (asserted in "a Creator artifact is still refused" below).
+    ["TacticalGenAITrainer-Setup.msi", "win-msi"],
+    ["TacticalGenAITrainer-Setup.dmg", "unknown"],
   ];
   for (const [file, kind] of cases) {
     test(`${file} -> ${kind}`, () => {
@@ -514,6 +520,8 @@ describe("checkArtifact - the stem must END where the name says it does", () => 
     for (const [file, kind] of [
       ["LucidAgent-Setup.exe", "win-nsis"],
       ["LucidAgent-portable.exe", "win-portable"],
+      ["LucidAgent-2.3.1-test.131-x64.msi", "win-msi"],
+      ["LucidAgent-2.3.1-test.131-x64.appx", "win-appx"],
       ["LucidAgent-x86_64.AppImage", "appimage"],
       ["LucidAgent-arm64.AppImage", "appimage"],
     ] as const) expect(checkArtifact(AGENT, { ...BLANK, kind, file }).ok, file).toBe(true);
@@ -525,6 +533,10 @@ describe("checkArtifact - the stem must END where the name says it does", () => 
   test("a Creator artifact is still refused for an Agent build", () => {
     // The delimiter rule must not accidentally widen what counts as this flavor.
     expect(checkArtifact(AGENT, zip("LucidCreator-mac-x64.zip")).ok).toBe(false);
+    // Nor did giving .msi a kind (WINPKG): an alien or Creator-named package is refused by its stem.
+    for (const file of ["TacticalGenAITrainer-Setup.msi", "LucidCreator-2.3.1-x64.msi"]) {
+      expect(checkArtifact(AGENT, { ...BLANK, kind: "win-msi", file }).ok, file).toBe(false);
+    }
   });
 });
 

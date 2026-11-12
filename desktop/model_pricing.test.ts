@@ -24,6 +24,13 @@ describe("listPrice tiers", () => {
     expect(listPrice("google/gemini-3-pro").inPerM).toBe(1.25);
     expect(listPrice("openai-codex/gpt-5.5").inPerM).toBe(1.25);
   });
+  test("Gemini 4 Argon (P-MODEL.8) is estimated at the $4/$20 standard rate; other Gemini rows unchanged", () => {
+    for (const id of ["google/gemini-4-argon", "gemini-4-argon", "openrouter/google/gemini-4-argon"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 4, outPerM: 20 });
+    }
+    expect(listPrice("google/gemini-3.8-flash")).toEqual({ inPerM: 0.30, outPerM: 2.50 });
+    expect(listPrice("google/gemini-3.1-pro-preview")).toEqual({ inPerM: 1.25, outPerM: 10 });
+  });
   // P-MODEL.2: the three rows added for the current catalog. Each is order-sensitive, so these assertions
   // are really guarding TABLE's ordering: a future insert above them silently re-prices the flagships.
   test("Opus 5 is priced at its own halved rate, NOT the generic Opus row", () => {
@@ -34,9 +41,39 @@ describe("listPrice tiers", () => {
     expect(listPrice("anthropic/claude-opus-5-5")).toEqual({ inPerM: 4, outPerM: 20 });
     expect(listPrice("anthropic/claude-opus-5")).toEqual({ inPerM: 5, outPerM: 25 }); // Opus 5 unchanged
   });
+  test("Haiku 5.5 (P-MODEL.7) carries its cataloged $0.10/$0.50 on both route spellings; Haiku 4.5 keeps $0.80/$4", () => {
+    for (const id of ["anthropic/claude-haiku-5-5", "vercel-ai-gateway/anthropic/claude-haiku-5.5", "claude-haiku-5-5"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 0.10, outPerM: 0.50 });
+    }
+    for (const id of ["anthropic/claude-haiku-4-5", "anthropic/claude-haiku-4-5-20251001", "anthropic/claude-haiku-5-50"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 0.80, outPerM: 4.00 });
+    }
+  });
+  test("Sonnet 5.5 (P-MODEL.6) carries its cataloged $2/$10 on every route spelling; other Sonnets keep $3/$15", () => {
+    for (const id of ["anthropic/claude-sonnet-5-5", "amazon-bedrock/global.anthropic.claude-sonnet-5-5",
+                      "google-vertex/claude-sonnet-5-5@default", "openrouter/anthropic/claude-sonnet-5.5",
+                      "kilo/anthropic/claude-sonnet-5.5", "vercel-ai-gateway/anthropic/claude-sonnet-5.5", "claude-sonnet-5-5"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 2, outPerM: 10 });
+    }
+    for (const id of ["anthropic/claude-sonnet-5", "anthropic/claude-sonnet-4-6", "anthropic/claude-sonnet-5-50"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 3, outPerM: 15 });
+    }
+  });
+  test("omp's on-device apple provider has no API bill, so it lists at zero, not the default", () => {
+    expect(listPrice("apple/on-device")).toEqual({ inPerM: 0, outPerM: 0 });
+    expect(listPrice("pineapple/on-device")).toEqual({ inPerM: 3, outPerM: 15 }); // anchored on the provider prefix
+  });
   test("Fable / Mythos are priced at the frontier rate, not the sonnet-ish default", () => {
     for (const m of ["anthropic/claude-fable-5", "anthropic/claude-fable-5-1", "anthropic/claude-mythos-5-1"]) {
       expect(listPrice(m)).toEqual({ inPerM: 10, outPerM: 50 });
+    }
+  });
+  test("Fable / Mythos 5.2 (P-MODEL.10) carry their cataloged $8/$40 on every route spelling; 5 and 5.1 keep $10/$50", () => {
+    for (const id of ["anthropic/claude-fable-5-2", "anthropic/claude-mythos-5-2", "vercel-ai-gateway/anthropic/claude-fable-5.2", "amazon-bedrock/anthropic.claude-mythos-5-2"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 8, outPerM: 40 });
+    }
+    for (const id of ["anthropic/claude-fable-5", "anthropic/claude-fable-5-1", "anthropic/claude-mythos-5-1", "anthropic/claude-fable-5-20"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 10, outPerM: 50 });
     }
   });
   test("the GPT-6 tiers carry their cataloged rates: Astra, Sol, Luna are three different prices", () => {
@@ -77,5 +114,16 @@ describe("assumedCacheRate", () => {
     expect(assumedCacheRate({ totals: { cacheHitRate: 0.7 } })).toBe(0.7);
     expect(assumedCacheRate(null)).toBe(0.35);
     expect(assumedCacheRate({ totals: { cacheHitRate: 2 } })).toBe(0.35); // out of range ⇒ default
+  });
+});
+
+describe("Grok 4.6 / 4.7 (omp 18.2.10 catalog)", () => {
+  test("price at the cataloged $2/$6 per Mtok, with or without a provider prefix", () => {
+    for (const id of ["xai-oauth/grok-4.7", "xai/grok-4.7", "grok-4.7", "xai/grok-4.6", "github-copilot/grok-4.7"]) {
+      expect(listPrice(id)).toEqual({ inPerM: 2.0, outPerM: 6.0 });
+    }
+  });
+  test("older Grok ids the catalog prices differently are not swept into the 4.6/4.7 row", () => {
+    expect(listPrice("xai/grok-4.20-0309-reasoning")).not.toEqual({ inPerM: 2.0, outPerM: 6.0 });
   });
 });

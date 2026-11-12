@@ -12,7 +12,14 @@
 
 import { load } from "./settings_store.ts";
 
-export interface ExplainResult { ok: boolean; text?: string; model?: string; error?: string }
+/** `lockdown: true` marks the CUI-lockdown refusal of the direct keyed path, so the caller reroutes through
+ *  the governed omp util session instead of treating it as a missing key. */
+export interface ExplainResult { ok: boolean; text?: string; model?: string; error?: string; lockdown?: boolean }
+
+/** CUI lockdown: the direct keyed path posts the command to api.anthropic.com / api.openai.com / Gemini, none
+ *  of which is CUI-authorized, so under lockdown it is never taken. */
+export const EXPLAIN_LOCKDOWN_REFUSAL =
+  "CUI lockdown: TLDR does not send commands to Anthropic, OpenAI or Gemini directly (not CUI-authorized).";
 
 export const EXPLAIN_SYSTEM =
   "You explain shell/terminal commands to a non-expert in plain English. Given a command, reply with 2-4 " +
@@ -68,11 +75,13 @@ async function viaGemini(key: string, cmd: string): Promise<ExplainResult> {
   return text ? { ok: true, text, model } : { ok: false, error: "empty response" };
 }
 
-/** Explain a command with the cheapest available keyed model. Fail-soft with an actionable message. */
-export async function explainCommand(command: string): Promise<ExplainResult> {
+/** Explain a command with the cheapest available keyed model. Fail-soft with an actionable message.
+ *  `locked` (CUI lockdown on) refuses BEFORE any key is read or request built: `{ ok:false, lockdown:true }`. */
+export async function explainCommand(command: string, locked: boolean): Promise<ExplainResult> {
   const cmd = (command ?? "").trim();
   if (!cmd) return { ok: false, error: "no command" };
   if (cmd.length > 8000) return { ok: false, error: "command too long to explain" };
+  if (locked) return { ok: false, lockdown: true, error: EXPLAIN_LOCKDOWN_REFUSAL };
   const keys = load().keys ?? {};
   try {
     if (keys.ANTHROPIC_API_KEY) return await viaAnthropic(keys.ANTHROPIC_API_KEY, cmd);

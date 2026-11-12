@@ -170,6 +170,9 @@ export function buildAcpArgs(o: BuildArgsOpts): string[] {
   const args = ["acp", "-e", o.gate];
   if (o.mcpResultGate) args.push("-e", o.mcpResultGate);
   if (o.asksage) args.push("-e", o.asksage);
+  // The same `--config` overlay the desktop gives every omp child (acp_backend ompConfigArgs): approval
+  // prompts for egress/exec tools, the replace edit mode, and omp's `ask` tool off (P-ASK.1, ADR-0523).
+  if (o.acpConfig) args.push("--config", o.acpConfig);
   if (o.isolate && o.acpConfig) args.push("--isolate", o.acpConfig);
   args.push("--append-system-prompt", APPENDED_POLICY);
   return args;
@@ -334,7 +337,14 @@ export async function runAcp(o: RunAcpOpts = {}): Promise<number> {
 
   const omp = resolveOmp(env, a.repo);
   const asksage = existsSync(a.asksage) ? a.asksage : undefined;
-  const args = buildAcpArgs({ gate: a.gate, asksage, acpConfig: a.acpConfig, isolate: o.isolate, mcpResultGate: existsSync(a.mcpResultGate) ? a.mcpResultGate : undefined });
+  // A missing --config file is a hard error in omp, so the overlay is present-only (as on the desktop).
+  // --isolate needs it, so an isolation request without it refuses rather than running un-isolated.
+  const acpConfig = existsSync(a.acpConfig) ? a.acpConfig : undefined;
+  if (o.isolate && !acpConfig) {
+    err(`[lucid acp] FAIL-CLOSED: --isolate needs ${a.acpConfig}, which is missing\n`);
+    return 1;
+  }
+  const args = buildAcpArgs({ gate: a.gate, asksage, acpConfig, isolate: o.isolate, mcpResultGate: existsSync(a.mcpResultGate) ? a.mcpResultGate : undefined });
   const cwd = o.cwd ?? env.LUCID_WORKSPACE ?? process.cwd();
   const spawnFn = o.spawnFn ?? ((c, ar, op) => nodeSpawn(c, ar, op as never) as unknown as SpawnedLike);
 
@@ -449,15 +459,23 @@ export async function main(argv: string[], env: Env = process.env, deps?: { tui?
       return await new Promise<number>((res) => proc.on("close", (c) => res(c ?? 1)));
     }
   }
+  if (sub === "hub") {
+    // P-TUI.1/P-TUI.3: bare `lucid hub` is the pane-multiplexer TUI; with args it is the hub's control
+    // CLI (ADR-0436). Lazy import: pi-tui and the discovery client stay out of every other subcommand.
+    const { runHub } = await import("./hub_cli.ts");
+    return runHub(rest, env, repoRoot());
+  }
   if (sub === "tui") return tui({ passthru: rest, env });
   if (sub === "acp") return acp({ isolate: rest.includes("--isolate"), env });
 
   if (sub === "-h" || sub === "--help" || sub === "help") {
     process.stderr.write(
-      "usage: lucid [omp args…] | lucid acp [--isolate] | lucid tui [omp args…] | lucid kb [list|pages|show|search] | lucid stats [--json] | lucid check | lucid agent-firewall --conn <id>\n" +
+      "usage: lucid [omp args…] | lucid acp [--isolate] | lucid tui [omp args…] | lucid hub [--headless | --skill | <command>] | lucid kb [list|pages|show|search] | lucid stats [--json] | lucid check | lucid agent-firewall --conn <id>\n" +
         "  (default)       Bare `lucid` starts the gated TUI — same as `lucid tui`. Non-subcommand args pass through to omp (initial prompt, --model, -p, …).\n" +
         "  acp             Start the gated Lucid ACP agent (omp + the in-process security gate) for an IDE client.\n" +
         "  tui             Start the gated Lucid agent in omp's native terminal UI (explicit alias of the default).\n" +
+        "  hub             The terminal hub: pane multiplexer over the running engine (split/focus/zoom panes; Security, Fleet, Sessions, Audit, Usage decks).\n" +
+        "                  With a command it drives the RUNNING hub (JSON out): status | space … | pane … | agent … | tmux verbs (split-window, send-keys, …). --skill prints the agent guide.\n" +
         "  stats           Print session spend + KV-cache + context metrics (--json for editors; --budgets adds rate limits).\n" +
         "  kb              Browse the knowledge graph(s): list | pages | show <id|slug> | search <query> (--json for editors, --kg <id> to target a KG).\n" +
         "  check           Run the fail-closed preflight (gate + scanner) and exit 0 (ready) / 1 (unavailable).\n" +

@@ -1,8 +1,9 @@
-# Build the LucidAgentIDE desktop installers (macOS .zip+.pkg + Windows .exe + Linux AppImage/.deb/.rpm).
+# Build the LucidAgentIDE desktop installers (macOS .zip+.pkg + Windows .exe/.msi/.appx + Linux AppImage/.deb/.rpm).
 #
 # electron-builder can't cross-build/sign a mac app from Windows, so this runs
 # the real packaging on native runners: macOS for the .zip bundle, Windows for the
-# NSIS installer + portable .exe, and Ubuntu for the AppImage. All bundle the repo
+# NSIS installer + portable .exe + enterprise MSI (SCCM) and AppX/MSIX (Intune), and
+# Ubuntu for the AppImage. All bundle the repo
 # into the app (extraResources) per desktop/package.json.
 #
 # (macOS ships .zip, not .dmg: the default DMG layout drives a Finder/AppleScript
@@ -15,8 +16,10 @@
 #              GitHub Release for that tag.
 #
 # Output: downloadable artifacts on every run; release assets on tag builds.
-# Builds are UNSIGNED (no Apple/Windows code-signing certs needed) — see
-# desktop/README.md for how to add signing/notarization later.
+# Windows bytes are Authenticode-signed by TECHLEAD 187 LLC through Azure Artifact Signing
+# (P-RELEASE.6, ADR-0447; desktop/SIGNING.md). A RELEASE run (tag push, publish_latest, beta_release)
+# FAILS if the Windows signer is not configured (P-RELEASE.7, ADR-0450); a plain test dispatch may build
+# unsigned. macOS is not signed or notarized (no Apple certificate yet).
 
 name: Build desktop installers
 
@@ -25,6 +28,15 @@ on:
     inputs:
       publish_latest:
         description: 'Publish to the rolling "latest" release (pushes to EXISTING users via auto-update). Leave OFF for test builds.'
+        type: boolean
+        default: false
+      # ADR-0395 (P-REL.1): cut a beta without a local tag push. Builds the version COMMITTED in
+      # desktop/package.json (must be a prerelease like 2.3.0-beta.8) and the attach step creates the
+      # tag v<version> on this commit plus a GitHub PRERELEASE through the API. Never marks latest, never
+      # moves the cask. Run it on master. The tag it creates is made with GITHUB_TOKEN, which does not
+      # start another workflow run, so the release is built exactly once.
+      beta_release:
+        description: 'Cut a beta PRERELEASE: tag v<desktop/package.json version> on this commit and attach the installers (version must contain a dash, e.g. 2.3.0-beta.8). Never marks latest.'
         type: boolean
         default: false
   push:
@@ -44,9 +56,10 @@ jobs:
             label: macOS (.zip, arm64+x64)
             script: dist:mac
           - os: windows-latest
-            label: Windows (NSIS + portable, x64)
+            label: Windows (NSIS + portable + MSI + AppX, x64)
             script: dist:win
-          - os: ubuntu-latest
+          # ADR-0459: pinned. ubuntu-latest moved to 26.04, whose 7.9 GB tmpfs /tmp fails rpm packaging.
+          - os: ubuntu-24.04
             label: Linux (AppImage + deb + rpm, x64)
             script: dist:linux
           # P-ARM64.B: GitHub's native arm64 Linux runner, so no cross-build and no QEMU. Everything
@@ -102,6 +115,7 @@ jobs:
       # code is in the installer, but auto-update refuses to fetch it). Stamp a MONOTONIC version per
       # build: the git tag for tagged releases, else 0.1.<run number>. Build-time only (not committed).
       - name: Set build version (so auto-update sees a newer release)
+        id: stamp
         shell: bash
         working-directory: desktop
         env:
@@ -119,6 +133,20 @@ jobs:
               echo "::warning::tag '${GITHUB_REF#refs/tags/}' is not a clean semver — using package.json version"
               V="$(node -p "require('./package.json').version")"
             fi
+          elif [ "${{ inputs.beta_release }}" = "true" ]; then
+            # BETA RELEASE dispatch (ADR-0395): the committed version IS the release version. Fail-closed on
+            # anything that is not a prerelease, or on a run that also asks to publish the rolling latest.
+            V="$(node -p "require('./package.json').version")"
+            if [[ ! "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.]+$ ]]; then
+              echo "::error::beta_release needs a prerelease version (x.y.z-beta.N) in desktop/package.json, found '$V'"; exit 1
+            fi
+            if [ "${{ inputs.publish_latest }}" = "true" ]; then
+              echo "::error::beta_release and publish_latest are exclusive: a beta never touches the rolling latest"; exit 1
+            fi
+            if [ "${GITHUB_REF}" != "refs/heads/master" ]; then
+              echo "::error::beta_release runs on master only (got ${GITHUB_REF})"; exit 1
+            fi
+            echo "beta release stamp: committed prerelease version -> $V (tag v$V)"
           elif [ "${{ inputs.publish_latest }}" = "true" ]; then
             # PUBLISHING dispatch: this is a RELEASE, not a test. It refreshes the rolling `latest`
             # release, whose artifacts the website's version-pinned .deb/.rpm links resolve through
@@ -149,6 +177,7 @@ jobs:
           fi
           node -e "const fs=require('fs'),p=require('./package.json');p.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$V"
           echo "build version = $V"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
 
       # electron-builder's deb/rpm targets shell out to fpm; building an .rpm on the Ubuntu runner needs
       # the `rpm` toolchain (rpmbuild), which isn't installed by default. (.deb needs only fpm + dpkg,
@@ -170,6 +199,14 @@ jobs:
       # '' as a cert path, resolves it to the project dir, and dies "<projectDir> not a file" (only the
       # pkg target trips this — the zip/app path short-circuits on identity:null). So export CSC_LINK /
       # CSC_KEY_PASSWORD ONLY when a real cert secret exists; never as empty strings.
+      # Windows prefers Azure Artifact Signing (P-RELEASE.6, ADR-0447): when AZURE_CLIENT_ID exists, the
+      # switch below makes desktop/build/win-signing.cjs add win.azureSignOptions, and electron-builder
+      # then FAILS rather than ship unsigned if the Azure credentials are incomplete. The .pfx path stays
+      # as the fallback for a fork that brings its own certificate.
+      # P-RELEASE.7 (ADR-0450): a RELEASE run (tag push, publish_latest, beta_release) is any run whose
+      # Windows bytes reach a GitHub Release. On Windows such a run FAILS here when no signer secret exists,
+      # and LUCID_RELEASE_RUN=1 is exported so desktop/build/win-signing.cjs enforces the same rule inside
+      # electron-builder's config load. A plain test dispatch may still build unsigned.
       - name: Configure code-signing (only when a cert secret exists)
         shell: bash
         env:
@@ -177,12 +214,29 @@ jobs:
           MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          RELEASE_RUN: ${{ (startsWith(github.ref, 'refs/tags/') || inputs.publish_latest || inputs.beta_release) && '1' || '' }}
         run: |
+          if [[ "$RELEASE_RUN" == "1" ]]; then
+            echo "LUCID_RELEASE_RUN=1" >> "$GITHUB_ENV"
+          fi
           if [[ "$RUNNER_OS" == "macOS" && -n "$MAC_CSC_LINK" ]]; then
             { echo "CSC_LINK=$MAC_CSC_LINK"; echo "CSC_KEY_PASSWORD=$MAC_CSC_KEY_PASSWORD"; } >> "$GITHUB_ENV"
+          elif [[ "$RUNNER_OS" == "Windows" && -n "$AZURE_CLIENT_ID" ]]; then
+            echo "LUCID_WIN_AZURE_SIGN=1" >> "$GITHUB_ENV"
           elif [[ "$RUNNER_OS" == "Windows" && -n "$WIN_CSC_LINK" ]]; then
             { echo "CSC_LINK=$WIN_CSC_LINK"; echo "CSC_KEY_PASSWORD=$WIN_CSC_KEY_PASSWORD"; } >> "$GITHUB_ENV"
+          elif [[ "$RUNNER_OS" == "Windows" && "$RELEASE_RUN" == "1" ]]; then
+            echo "::error::release run on Windows with no code-signing secret (AZURE_CLIENT_ID or WIN_CSC_LINK): every released Windows build must be signed by TECHLEAD 187 LLC (P-RELEASE.7, ADR-0450)"
+            exit 1
           fi
+
+      # electron-builder signs four files at once and each first Invoke-TrustedSigning installs its NuGet
+      # tools, deleting the others' half-installed copies; stage them once, hash-verified, before signing.
+      - name: Stage Azure Artifact Signing tools (Windows)
+        if: runner.os == 'Windows' && env.LUCID_WIN_AZURE_SIGN == '1'
+        shell: pwsh
+        run: ./desktop/build/stage-trusted-signing.ps1
 
       - name: Build installer (${{ matrix.script }})
         run: bun run ${{ matrix.script }}
@@ -196,8 +250,39 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Azure Artifact Signing credentials (EnvironmentCredential), read by Invoke-TrustedSigning. Handed
+          # to the Windows build only; consulted only when LUCID_WIN_AZURE_SIGN=1.
+          AZURE_TENANT_ID: ${{ runner.os == 'Windows' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ runner.os == 'Windows' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ runner.os == 'Windows' && secrets.AZURE_CLIENT_SECRET || '' }}
           # softprops attaches the release; don't let electron-builder also upload.
           GH_TOKEN: ""
+
+      # P-RELEASE.6 (ADR-0447): when Azure signing was switched on, prove it took before anything uploads.
+      # Every installer plus the app exe must carry a VALID Authenticode signature from the Artifact
+      # Signing profile AND a timestamp (the certificate itself lives 72 hours). The appx needs no line
+      # here: signtool refuses an appx whose publisher differs from the certificate, failing the build.
+      # P-RELEASE.7 (ADR-0450): the installers and the app exe must also NAME the publisher in their
+      # version resource (CompanyName, what Explorer's Properties > Details and Add/Remove Programs show),
+      # so the name a user sees on the UAC prompt, in the file's details and in the installed-programs
+      # list is the same one: TECHLEAD 187 LLC.
+      - name: Verify Authenticode signatures (Windows, Azure Artifact Signing)
+        if: runner.os == 'Windows' && env.LUCID_WIN_AZURE_SIGN == '1'
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          $files = @(Get-ChildItem release -File | Where-Object { $_.Extension -in '.exe', '.msi' }) + @(Get-ChildItem release/win-unpacked -File -Filter *.exe)
+          if ($files.Count -eq 0) { throw "no Windows artifacts found under desktop/release" }
+          $bad = 0
+          foreach ($f in $files) {
+            $s = Get-AuthenticodeSignature -LiteralPath $f.FullName
+            $subject = if ($s.SignerCertificate) { $s.SignerCertificate.Subject } else { '<none>' }
+            $company = if ($f.Extension -eq '.exe') { $f.VersionInfo.CompanyName } else { 'TECHLEAD 187 LLC' }
+            Write-Host "$($s.Status)  $subject  ts=$([bool]$s.TimeStamperCertificate)  company=$company  $($f.Name)"
+            if ($s.Status -ne 'Valid' -or $subject -notlike 'CN=TECHLEAD 187 LLC,*' -or -not $s.TimeStamperCertificate) { $bad++ }
+            if ($company -ne 'TECHLEAD 187 LLC') { $bad++ }
+          }
+          if ($bad -gt 0) { throw "$bad Windows artifact check(s) failed: every exe/msi must be validly signed and timestamped by TECHLEAD 187 LLC and name it as CompanyName" }
 
       # Air-gap gate (ADR-0225): prove the PACKAGED app is self-contained — omp + the scanner's Python
       # resolve and RUN from bundled resources, so an air-gapped host works cold with no `bun add -g` /
@@ -260,6 +345,8 @@ jobs:
             desktop/release/*.pkg
             desktop/release/*Setup*.exe
             desktop/release/*portable*.exe
+            desktop/release/*.msi
+            desktop/release/*.appx
             desktop/release/*.AppImage
             desktop/release/*.deb
             desktop/release/*.rpm
@@ -272,12 +359,16 @@ jobs:
       # /releases/latest (the rolling "latest" release, which only the publish_latest dispatch touches),
       # and electron-updater skips prerelease versions unless the installed version is itself a prerelease.
       # So a beta build updates itself to the next beta, and a stable install never sees one.
-      - name: Attach installers to the Release (tag builds only)
-        if: startsWith(github.ref, 'refs/tags/')
+      # ADR-0395: a beta_release dispatch attaches here too, naming the tag itself (v<committed version>)
+      # and pinning it to this commit; softprops creates the tag and the prerelease through the API.
+      - name: Attach installers to the Release (tag builds and beta_release dispatches)
+        if: startsWith(github.ref, 'refs/tags/') || inputs.beta_release
         uses: softprops/action-gh-release@v3
         with:
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.stamp.outputs.version) }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ (inputs.beta_release || contains(github.ref_name, '-')) && 'true' || 'false' }}
+          make_latest: ${{ (inputs.beta_release || contains(github.ref_name, '-')) && 'false' || 'true' }}
           # Installers + the electron-updater feed (latest*.yml + .blockmap) so
           # in-app auto-update can find new versions.
           files: |
@@ -286,6 +377,8 @@ jobs:
             desktop/release/*.pkg
             desktop/release/*Setup*.exe
             desktop/release/*portable*.exe
+            desktop/release/*.msi
+            desktop/release/*.appx
             desktop/release/*.AppImage
             desktop/release/*.deb
             desktop/release/*.rpm
@@ -297,12 +390,19 @@ jobs:
   # per release (version + per-arch sha256) because the in-app updater cannot install updates
   # on the unsigned mac build (ADR-0246), which makes `brew upgrade` the working macOS update
   # channel - so the pin must move with every release, automatically. This job rewrites the
-  # pin from the tag's uploaded release assets and pushes it to master, so `brew update` sees
-  # the new version the moment the release is live. Fail-closed: a missing asset or checksum
-  # fails the job loudly instead of leaving the cask silently stale (the pre-fix failure mode:
-  # the cask tracked the rolling "latest" release, which tag builds never refresh, so
-  # `brew install` served a weeks-old build - see ADR-0258).
+  # pin from the tag's uploaded release assets and OPENS A PULL REQUEST against master (branch
+  # `chore/cask-<tag>`), so `brew update` sees the new version as soon as that PR merges.
+  # It used to push master directly; the repository ruleset refuses that ("Changes must be made
+  # through a pull request"), which turned every stable tag's run red (v2.3.1, v2.4.0) and left
+  # the pin to a hand-made PR. Fail-closed: a missing asset or checksum fails the job loudly
+  # instead of leaving the cask silently stale (the pre-fix failure mode: the cask tracked the
+  # rolling "latest" release, which tag builds never refresh, so `brew install` served a
+  # weeks-old build - see ADR-0258).
   # Stable tags only: a beta tag (`v2.3.0-beta.1`) must not move every `brew upgrade` user onto the beta.
+  # Token: a PR pushed with the workflow's own GITHUB_TOKEN gets NO CI runs (GitHub never triggers
+  # workflows from that token), so it cannot satisfy the required checks and needs an admin merge.
+  # Add a fine-grained PAT (contents + pull-requests: write) as the CASK_PR_TOKEN secret and the
+  # PR gets CI like any other and merges normally; without it the job still opens the PR and says so.
   update-cask:
     name: Pin the Homebrew cask to this release
     needs: build
@@ -310,14 +410,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
         with:
           ref: master
+          token: ${{ secrets.CASK_PR_TOKEN || github.token }}
 
-      - name: Rewrite Casks/lucidagentide.rb from the release assets
+      - name: Rewrite Casks/lucidagentide.rb from the release assets and open the pin PR
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.CASK_PR_TOKEN || github.token }}
+          HAS_PAT: ${{ secrets.CASK_PR_TOKEN != '' }}
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF#refs/tags/}"
@@ -339,8 +442,8 @@ jobs:
             [ -n "$d" ] || { echo "::error::no sha256 for release asset $1"; exit 1; }
             echo "$d"
           }
-          ARM=$(sha "LucidAgent-mac-arm64.pkg")
-          X64=$(sha "LucidAgent-mac-x64.pkg")
+          ARM=$(sha "LucidAgent-mac-arm64.zip")
+          X64=$(sha "LucidAgent-mac-x64.zip")
           sed -i -E \
             -e "s|^  version \".*\"$|  version \"${V}\"|" \
             -e "s|^  sha256 arm:   \".*\",$|  sha256 arm:   \"${ARM}\",|" \
@@ -356,10 +459,24 @@ jobs:
           grep -q "${X64}" Casks/lucidagentide.rb
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BRANCH="chore/cask-${TAG}"
+          git checkout -b "$BRANCH"
           git add Casks/lucidagentide.rb
           git commit -m "chore(brew): pin cask to ${TAG} (auto, update-cask job)"
-          git pull --rebase origin master
-          git push origin master
+          # A rerun of this job rebuilds the same pin; force-update the branch rather than fail on it.
+          git push --force origin "HEAD:refs/heads/${BRANCH}"
+          EXISTING=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "pin PR already open: #${EXISTING}"; exit 0
+          fi
+          if [ "$HAS_PAT" = "true" ]; then
+            NOTE="Opened with CASK_PR_TOKEN, so CI runs on it; merge when green."
+          else
+            NOTE="Opened with the workflow's GITHUB_TOKEN, which never triggers CI, so the required checks will not appear: merge with \`gh pr merge --admin --merge\`, or add a CASK_PR_TOKEN secret (fine-grained PAT, contents + pull-requests: write) so future pin PRs get CI."
+          fi
+          gh pr create --repo "$GITHUB_REPOSITORY" --base master --head "$BRANCH" \
+            --title "chore(brew): pin cask to ${TAG}" \
+            --body "Automated by the update-cask job of build-desktop.yml for the ${TAG} release: version ${V}, per-arch sha256 from the release assets' API digests. ${NOTE}"
 
   # Rolling "latest" release — every successful build (both platforms) publishes the newest
   # installers to a single `latest`-tagged release, so the README download buttons
@@ -416,6 +533,8 @@ jobs:
             dist/*.dmg
             dist/*Setup*.exe
             dist/*portable*.exe
+            dist/*.msi
+            dist/*.appx
             dist/*.AppImage
             dist/*.deb
             dist/*.rpm

@@ -13,8 +13,13 @@ import type { AgentSpec } from "../../harness/agent/spec.ts"; // P-AGENT.2b: Age
 import type { UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user-authored slash commands
 import type { JudgmentReport } from "../../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the judgment trace (DOM-free)
 import type { ProcessView } from "../process_view.ts"; // P-PWA-FLEET.1: pure process rows (DOM-free)
+import type { SecretRequestView } from "../secret_intake_view.ts"; // P-SECRET-INTAKE.1 (ADR-0476): pure (DOM-free)
 import type { TurnSnapshot } from "../turn_recovery.ts";
+import type { ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure progress + liveness view
+import type { WaitView } from "../write_claims.ts"; // P-WAIT.1: the same-file write wait view
 export type { TurnStatus, TurnSnapshot } from "../turn_recovery.ts";
+export type { ProgressView, Liveness, LivenessState, TurnEstimate, OpenStep } from "../turn_progress.ts";
+export type { WaitView } from "../write_claims.ts";
 
 /** P-PWA-FLEET.1: one fleet lane's status as mirrored to phone guests. `cwd` carries only the folder
  *  BASENAME (the frames.ts "no file paths" invariant - a full path never crosses the wire). */
@@ -35,16 +40,25 @@ export type ChatEvent =
   | { type: "thinking"; text: string }
   // P-EVAL.4 (ADR-0318): `id` is omp's toolCallId; `name` is only omp's COARSE ACP kind ("other" for
   // every custom and MCP tool), because the ACP tool_call update structurally carries no tool name.
-  | { type: "tool"; id?: string; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } } // P-CHAT.1: inline code/diff preview
+  // P-PROGRESS.1: `input` is the bounded, code-stripped arguments ("the command used", desktop/tool_input.ts)
+  // and `intent` the agent's own `i` phrase, so the live step can say what the call is doing and open on it.
+  | { type: "tool"; id?: string; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string }; input?: string; intent?: string } // P-CHAT.1: inline code/diff preview
   // P-EVAL.4 (ADR-0318): the real tool name (and later its pass/fail) for a call already streamed as
   // `tool`, self-reported from inside omp where the hook API does have it. Display + report metadata.
-  | { type: "tool-meta"; id: string; name: string; ok?: boolean }
+  // P-PROGRESS.1: `elapsedMs` rides the settling report (ok defined), so the step can show how long it took.
+  | { type: "tool-meta"; id: string; name: string; ok?: boolean; elapsedMs?: number }
+  // P-PROGRESS.1: the worker's progress view, every PROGRESS_TICK_MS while a turn runs (and once on every
+  // tool call settle). Goes through onEvent directly, like `slow`: telling the user never counts as activity.
+  | { type: "progress"; progress: ProgressView }
+  // P-WAIT.1: a write in this turn waits for a file another worker's running turn is editing
+  // (write_claims.ts). Emitted when the wait begins or its holder changes; the next real event ends it.
+  | { type: "waiting"; wait: WaitView }
   // P-JEV.2 (ADR-0377): one typed judgment (Jev / chat model) the omp child answered during this turn,
   // self-reported by the judgment extension with the question, the answers and which backend answered.
   | { type: "judgment"; report: JudgmentReport }
   | { type: "tool-image"; images: { dataUrl: string; mimeType: string }[]; tool?: string; title?: string } // P-IMG.1 (ADR-0208): a tool result produced image(s) → render inline + download + push-to-preview
   | { type: "preview-snapshot"; image: string; label?: string } // P-PREVIEW-PWA.1 (ADR-0237): a scaled-down capture of the host's Preview panel, broadcast to phone guests only (never fed to the local desktop transcript)
-  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[]; names?: string[] } // names = per-task ids from the delegation rawInput (absent when all auto-generated)
+  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[]; names?: string[] } // names = per-task names from the delegation rawInput, each a run's transcript stem (absent when all auto-generated)
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean; command?: string; detail?: string }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
@@ -52,6 +66,7 @@ export type ChatEvent =
   | { type: "design-available"; path: string } // P-FIGMA.2 (ADR-0154): the agent wrote/updated DESIGN.md
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
+  | { type: "secret-request"; request: SecretRequestView } // P-SECRET-INTAKE.1 (ADR-0476): the agent asks the user for a secret (names only)
   | { type: "usage"; used: number; size: number; cost: number }
   // P-STALL.1 (ADR-0186) / P-STALL.2 (ADR-0263): the provider is silent - the UI shows "still waiting";
   // `pending` names the open tool calls / spawned subagent tasks the turn is waiting on (longest first).
@@ -81,4 +96,4 @@ export type ChatEvent =
   // P-HEALTH.1: the harness acted on this session BY ITSELF - it probed a silent turn with the canned
   // status ask, or cancelled and resumed a wedged one in place. Surfaced so a self-heal is visible work
   // rather than an unexplained gap, and so the token meter can count what the harness spent.
-  | { type: "health"; action: "probe" | "recover"; reason: string };
+  | { type: "health"; action: "probe" | "recover"; reason: string; /** P-HEALTH.3: the run did not continue on its own, so the user has to act. Only then does the chat keep a note. */ needsUser?: boolean };

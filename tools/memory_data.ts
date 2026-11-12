@@ -15,9 +15,13 @@
 
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { DuckDBInstance } from "@duckdb/node-api";
+import { existsSync } from "node:fs";
+import { open, readFile, readdir, stat } from "node:fs/promises";
+import { Db } from "../harness/memory/db.ts";
+import { resolveMigrationsDir } from "../harness/migrations_dir.ts";
+import { readHarnessMirror, snapshotHarnessMemory, type HarnessMemory } from "../harness/memory/obs_mirror.ts";
 import { pathWithin } from "../desktop/path_guard.ts";
+import { gitExe } from "../harness/runs/sandbox_exec.ts";
 import { aggregateAiLoc, readAiLocSamples } from "../desktop/ailoc_read.ts"; // P-LOC.4 (ADR-0211): AI-LOC from the GUI-owned ledger
 
 // Session / context / KV-cache / spend metrics live in the DuckDB-FREE session_metrics.ts (so the
@@ -81,11 +85,11 @@ export function ledgerProvider(modelShort: string): string {
 }
 
 /** Per-model accumulators for ONE session file (a session may switch models mid-way). */
-function ledgerFromFile(path: string): Map<string, Acc> {
+async function ledgerFromFile(path: string): Promise<Map<string, Acc>> {
   const out = new Map<string, Acc>();
   let model = "?";
   let text: string;
-  try { text = readFileSync(path, "utf8"); } catch { return out; }
+  try { text = await readFile(path, "utf8"); } catch { return out; }
   for (const line of text.split("\n")) {
     if (!line) continue;
     let o: any;
@@ -112,38 +116,53 @@ const fileCache = new Map<string, { mtime: number; per: Map<string, Acc> }>();
 // reply streaming with it. Cache the directory WALK for a short TTL so repeat polls reuse the file list; the
 // per-file `fileCache` already re-parses only genuinely-changed files, and a brand-new session shows within the
 // TTL. Shared by the two walkers (usageLedger + discoverWorkspaces). Live token counts still come from the HUD.
+// P-BOOTPERF.1 (ADR-pending): the walk, the ledger reads and the code-activity git calls are ASYNC. The
+// renderer's first dashboard refresh lands with the boot burst, when every cache here is cold, and the
+// synchronous versions held the engine's one event loop for the whole cold pass (thousands of transcripts,
+// a `git log --numstat` per repo): the workspace bar, the turn-status probe and every other route waited.
+// Concurrent callers share one walk (the cached promise).
 const SESSION_SCAN_TTL_MS = 15_000;
-const sessionScanCache = new Map<string, { at: number; files: { p: string; mtime: number }[] }>();
-function scanSessionFiles(root: string): { p: string; mtime: number }[] {
+interface SessionFile { p: string; mtime: number }
+const sessionScanCache = new Map<string, { at: number; files: Promise<SessionFile[]> }>();
+function scanSessionFiles(root: string): Promise<SessionFile[]> {
   const hit = sessionScanCache.get(root);
   if (hit && Date.now() - hit.at < SESSION_SCAN_TTL_MS) return hit.files;
-  const files: { p: string; mtime: number }[] = [];
-  if (existsSync(root)) for (const d of readdirSync(root)) {
+  const files = walkSessionFiles(root);
+  sessionScanCache.set(root, { at: Date.now(), files });
+  return files;
+}
+async function walkSessionFiles(root: string): Promise<SessionFile[]> {
+  const files: SessionFile[] = [];
+  let dirs: string[];
+  try { dirs = await readdir(root); } catch { return files; } // missing root: nothing to walk
+  for (const d of dirs) {
     const dir = join(root, d);
-    try { if (!statSync(dir).isDirectory()) continue; for (const f of readdirSync(dir)) if (f.endsWith(".jsonl")) files.push({ p: join(dir, f), mtime: statSync(join(dir, f)).mtimeMs }); }
-    catch { /* skip unreadable dirs */ }
+    let names: string[];
+    try { names = (await readdir(dir)).filter((f) => f.endsWith(".jsonl")); } catch { continue; } // not a dir / unreadable
+    await Promise.all(names.map(async (f) => {
+      try { files.push({ p: join(dir, f), mtime: (await stat(join(dir, f))).mtimeMs }); } catch { /* vanished mid-walk */ }
+    }));
   }
   files.sort((a, b) => b.mtime - a.mtime);
-  sessionScanCache.set(root, { at: Date.now(), files });
   return files;
 }
 
 /** Aggregate per-model usage + cost across all omp sessions. `root`/`maxFiles` are for tests. */
-export function usageLedger(opts: { root?: string; maxFiles?: number } = {}): UsageLedger {
+export async function usageLedger(opts: { root?: string; maxFiles?: number } = {}): Promise<UsageLedger> {
   const root = opts.root ?? join(homedir(), ".omp", "agent", "sessions");
   const cap = opts.maxFiles ?? 1500;
   const generatedAt = new Date().toISOString();
   const empty: UsageLedger = { models: [], totals: { sessions: 0, turns: 0, tokens: 0, cost: 0, savings: 0, cacheHitRate: 0 }, bySource: { subscription: { cost: 0, tokens: 0 }, local: { cost: 0, tokens: 0 } }, files: 0, truncated: false, generatedAt };
   if (!existsSync(root)) return empty;
 
-  const files = scanSessionFiles(root); // P-PERF.3: TTL-cached walk (was a per-poll stat storm over 1000s of files)
+  const files = await scanSessionFiles(root); // P-PERF.3: TTL-cached walk (was a per-poll stat storm over 1000s of files)
   const truncated = files.length > cap;
   const scan = truncated ? files.slice(0, cap) : files;
 
   const byModel = new Map<string, Acc & { sessions: number }>();
   for (const { p, mtime } of scan) {
     let per = fileCache.get(p);
-    if (!per || per.mtime !== mtime) { per = { mtime, per: ledgerFromFile(p) }; fileCache.set(p, per); }
+    if (!per || per.mtime !== mtime) { per = { mtime, per: await ledgerFromFile(p) }; fileCache.set(p, per); }
     for (const [model, a] of per.per) {
       const m = byModel.get(model) ?? byModel.set(model, { ...newAcc(), sessions: 0 }).get(model)!;
       m.sessions++; m.turns += a.turns;
@@ -221,9 +240,9 @@ export function parseNumstat(output: string): { added: number; deleted: number; 
 }
 
 /** Light read of an omp session file's working dir (the `session` line is first). */
-function readSessionCwd(path: string): string | undefined {
+async function readSessionCwd(path: string): Promise<string | undefined> {
   try {
-    for (const line of readFileSync(path, "utf8").split("\n")) {
+    for (const line of (await readFile(path, "utf8")).split("\n")) {
       if (!line) continue;
       if (line.includes('"type":"session"')) {
         try { const o = JSON.parse(line); if (o.cwd) return String(o.cwd); } catch { /* keep scanning */ }
@@ -234,14 +253,14 @@ function readSessionCwd(path: string): string | undefined {
 }
 
 /** Distinct git-repo working dirs seen across recent omp sessions (newest first). */
-function discoverWorkspaces(root?: string, cap = 500): string[] {
+async function discoverWorkspaces(root?: string, cap = 500): Promise<string[]> {
   const base = root ?? join(homedir(), ".omp", "agent", "sessions");
   if (!existsSync(base)) return [];
-  const files = scanSessionFiles(base); // P-PERF.3: shared TTL-cached walk
+  const files = await scanSessionFiles(base); // P-PERF.3: shared TTL-cached walk
   const seen = new Set<string>();
   const out: string[] = [];
   for (const { p } of files.slice(0, cap)) {
-    const cwd = readSessionCwd(p);
+    const cwd = await readSessionCwd(p);
     if (!cwd || seen.has(cwd)) continue;
     seen.add(cwd);
     if (existsSync(join(cwd, ".git"))) out.push(cwd);
@@ -253,7 +272,7 @@ function discoverWorkspaces(root?: string, cap = 500): string[] {
  *  Workspaces: `opts.workspaces` if given, else discovered from omp session cwds.
  *  Fail-closed: a workspace outside the home subtree, a non-git dir, or a failed
  *  `git` invocation is OMITTED — never faked (CLAUDE.md invariant #3). */
-export function codeActivity(opts: { workspaces?: string[]; root?: string; now?: Date; timeoutMs?: number } = {}): CodeActivity {
+export async function codeActivity(opts: { workspaces?: string[]; root?: string; now?: Date; timeoutMs?: number } = {}): Promise<CodeActivity> {
   const now = opts.now ?? new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const month = monthStart.toLocaleString("en-US", { month: "long", year: "numeric" });
@@ -261,7 +280,7 @@ export function codeActivity(opts: { workspaces?: string[]; root?: string; now?:
   const timeout = opts.timeoutMs ?? 15_000; // generous — a large repo's `git log --numstat`
   // can take several seconds; the result is cached 30s, so we'd rather wait than fail-close to
   // an empty dashboard. A truly hung git still trips the timeout and the workspace is omitted.
-  const candidates = opts.workspaces ?? discoverWorkspaces(opts.root);
+  const candidates = opts.workspaces ?? await discoverWorkspaces(opts.root);
 
   const workspaces: CodeActivity["workspaces"] = [];
   for (const ws of candidates) {
@@ -271,13 +290,18 @@ export function codeActivity(opts: { workspaces?: string[]; root?: string; now?:
     // Args ARRAY, never a shell string (no injection via paths/refs). Exclude vendored/
     // generated churn so the metric reflects real source. `--format=` suppresses commit
     // headers, leaving only numstat rows + blank separators.
-    const r = Bun.spawnSync(
-      ["git", "log", `--since=${monthStart.toISOString()}`, "--numstat", "--no-color", "--format=",
-        "--", ".", ":(exclude)node_modules", ":(exclude)vendor", ":(exclude)dist", ":(exclude)*.lock", ":(exclude)*.min.*"],
-      { cwd: safe, timeout, stdout: "pipe", stderr: "pipe" },
-    );
-    if (!r.success) continue;                           // git missing/failed/timeout → omit (never fake)
-    const { added, deleted, files } = parseNumstat(r.stdout.toString());
+    // gitExe(), never a bare "git": the installed app's PATH commonly has no git (MinGit is not on it), and
+    // Bun.spawn THROWS ENOENT for a missing executable rather than returning a failed result.
+    let out: string | null;
+    try {
+      out = await runStdout(
+        [gitExe(), "log", `--since=${monthStart.toISOString()}`, "--numstat", "--no-color", "--format=",
+          "--", ".", ":(exclude)node_modules", ":(exclude)vendor", ":(exclude)dist", ":(exclude)*.lock", ":(exclude)*.min.*"],
+        { cwd: safe, timeoutMs: timeout },
+      );
+    } catch { break; }                                  // no git at all → every workspace would fail: omit all
+    if (out === null) continue;                         // git failed/timeout → omit (never fake)
+    const { added, deleted, files } = parseNumstat(out);
     if (files.length === 0) continue;                   // no activity this month → not listed
     workspaces.push({ name: basename(safe), path: safe, added, deleted, files: files.length, spend: 0 });
   }
@@ -299,23 +323,40 @@ export function ompBin(): string {
   return "omp";
 }
 
+/** P-BOOTPERF.1 (ADR-pending): a fixed argv run OFF the event loop. stdout when it exits 0, null when it
+ *  fails or outlives `timeoutMs` (then it is killed). Throws, like Bun.spawnSync did, only when the
+ *  executable cannot be started at all (ENOENT). stderr is ignored, so a chatty child cannot fill a pipe. */
+async function runStdout(argv: string[], opts: { cwd?: string; timeoutMs: number }): Promise<string | null> {
+  const child = Bun.spawn(argv, { cwd: opts.cwd, stdin: "ignore", stdout: "pipe", stderr: "ignore", windowsHide: true });
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; child.kill(); }, opts.timeoutMs);
+  try {
+    const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+    return !timedOut && code === 0 ? out : null;
+  } finally { clearTimeout(timer); }
+}
+
 // P-PERF.3: this SPAWNS an omp subprocess (`config list`) SYNCHRONOUSLY on every call — ~2s of booting omp just
 // to read basically-static compaction settings, and it's on the memory-snapshot poll path, so it blocked the
 // event loop (and the model's reply) every few seconds. This was the single biggest stall. Cache it for a long
 // TTL; the config almost never changes and a manual refresh re-reads within the window.
-let _cpCache: { at: number; data: Record<string, string> | undefined } | null = null;
+// P-BOOTPERF.1 (ADR-pending): and the spawn itself is async now. The first memory snapshot lands in the boot
+// burst, where a cold, antivirus-scanned omp start held the engine's event loop for as long as it took. The
+// cached promise is shared by concurrent callers; a hung omp is killed after CP_TIMEOUT_MS (reads as unknown).
+let _cpCache: { at: number; data: Promise<Record<string, string> | undefined> } | null = null;
 const _CP_TTL_MS = 60_000;
-export function compactionPolicy(): Record<string, string> | undefined {
+const CP_TIMEOUT_MS = 30_000;
+export function compactionPolicy(): Promise<Record<string, string> | undefined> {
   if (_cpCache && Date.now() - _cpCache.at < _CP_TTL_MS) return _cpCache.data;
   const data = _compactionPolicyUncached();
   _cpCache = { at: Date.now(), data };
   return data;
 }
-function _compactionPolicyUncached(): Record<string, string> | undefined {
+async function _compactionPolicyUncached(): Promise<Record<string, string> | undefined> {
   try {
-    const r = Bun.spawnSync([ompBin(), "config", "list", "--json"]);
-    if (!r.success) return undefined;
-    const o = JSON.parse(r.stdout.toString());
+    const out = await runStdout([ompBin(), "config", "list", "--json"], { timeoutMs: CP_TIMEOUT_MS });
+    if (out === null) return undefined;
+    const o = JSON.parse(out);
     const pick = (k: string) => (o[k]?.value === undefined ? "—" : String(o[k].value));
     return {
       enabled: pick("compaction.enabled"),
@@ -333,16 +374,19 @@ function _compactionPolicyUncached(): Record<string, string> | undefined {
 }
 
 
-// ── Lucid harness memory (agent_obs.duckdb, READ_ONLY) ────────────────────────
-export interface HarnessMemory {
-  counts: { working: number; archive: number; entities: number; facts: number };
-  layers: { layer: string; rows: string; detail: string }[];
-  facts: { entity: string; statement: string; trust_label: string }[];
-  gate: { promoted: number; blocked: number };
-}
+// ── Lucid harness memory (agent_obs.duckdb READ_ONLY, else its lock-free mirror) ──────────────
+export type { HarnessMemory };
 
-/** Path to the live observability DB written by the security gate. */
-export const OBS_DB_PATH = join(import.meta.dir, "..", "agent_obs.duckdb");
+/** Path to the live observability DB written by the security gate.
+ *  NOT `join(import.meta.dir, "..")`: in the shipped `bun build --compile` engine (ADR-0260)
+ *  import.meta.dir is a VIRTUAL bunfs path, so that resolved to `B:\~BUN\root\agent_obs.duckdb`,
+ *  existsSync was false, and the Memory panel showed its empty state forever in installed builds
+ *  (the ADR-0303 bug class). Derive the repo root by PROBING through the memory store's real
+ *  migrations directory - dev runs, LUCID_RESOURCES, and the execPath fallback all covered. */
+export const OBS_DB_PATH = join(
+  resolveMigrationsDir("harness/memory", join(import.meta.dir, "..", "harness", "memory")),
+  "..", "..", "..", "agent_obs.duckdb",
+);
 
 // P-PERF.3: harnessMemory + aiLocSummary each open a fresh READ_ONLY DuckDB per call (~1s each as the obs DB
 // grows) — both on the memory-snapshot poll path, so they blocked model streaming. Semantic-memory + AI-LOC
@@ -357,50 +401,20 @@ export async function harnessMemory(): Promise<HarnessMemory | null> {
   return data;
 }
 async function _harnessMemoryUncached(): Promise<HarnessMemory | null> {
-  if (!existsSync(OBS_DB_PATH)) return null;
-  try {
-    const instance = await DuckDBInstance.create(OBS_DB_PATH, { access_mode: "READ_ONLY" });
-    const conn = await instance.connect();
-    const one = async (sql: string): Promise<number> => {
+  if (existsSync(OBS_DB_PATH)) {
+    try {
+      const db = await Db.openReadOnly(OBS_DB_PATH);
       try {
-        return Number((((await conn.runAndReadAll(sql)).getRowObjects()[0] as any)?.n) ?? 0);
-      } catch {
-        return 0;
+        return await snapshotHarnessMemory(db);
+      } finally {
+        db.close();
       }
-    };
-    const rows = async (sql: string): Promise<any[]> => {
-      try {
-        return (await conn.runAndReadAll(sql)).getRowObjects() as any[];
-      } catch {
-        return [];
-      }
-    };
-
-    const working = await one("SELECT count(*)::INT n FROM working_state");
-    const archive = await one("SELECT count(*)::INT n FROM archive_chunks");
-    const entities = await one("SELECT count(*)::INT n FROM semantic_entities");
-    const facts = await one("SELECT count(*)::INT n FROM semantic_facts");
-    const blocked = await one("SELECT count(*)::INT n FROM telemetry_events WHERE event = 'memory_promotion_blocked'");
-    const factRows = (await rows(
-      `SELECT e.name AS entity, f.statement, f.trust_label
-       FROM semantic_facts f JOIN semantic_entities e ON e.entity_id = f.entity_id
-       ORDER BY f.promoted_at DESC LIMIT 8`,
-    )).map((r) => ({ entity: String(r.entity), statement: String(r.statement), trust_label: String(r.trust_label) }));
-
-    instance.closeSync();
-    return {
-      counts: { working, archive, entities, facts },
-      layers: [
-        { layer: "working", rows: String(working), detail: "current goal / next-step / blockers per run" },
-        { layer: "archive", rows: String(archive), detail: "raw source-of-truth spans (immutable)" },
-        { layer: "semantic", rows: `${facts} facts / ${entities} entities`, detail: "promoted facts w/ provenance + trust" },
-      ],
-      facts: factRows,
-      gate: { promoted: facts, blocked },
-    };
-  } catch {
-    return null; // missing schema, or held read-write by the live gate
+    } catch {
+      // The gate's omp child holds the DB read-write; DuckDB refuses ANY cross-process open of it
+      // (even READ_ONLY - the ADR-0211 bug class). Fall through to the writer-maintained mirror.
+    }
   }
+  return readHarnessMirror(OBS_DB_PATH);
 }
 
 // ── P-LOC.2 (ADR-0031): AI-LOC attribution roll-up for the dashboard ──────────
@@ -462,8 +476,34 @@ export interface MemorySnapshot {
   aiLoc: AiLocSummary | null; // P-LOC.2 (ADR-0031): AI-authored lines per model/repo/identity
 }
 
+/** P-BOOTPERF.1 (ADR-pending): findSession's no-argument rule (the newest session whose first line is a
+ *  session record for `cwd`, else the newest session) for the live dashboard, off the event loop. The sync
+ *  version read EVERY transcript whole to look at its first line, and the GUI asks with no session at a
+ *  fresh launch, when nothing matches the engine's cwd (and omp 18's title slot is line one), so the first
+ *  memory snapshot read the entire corpus synchronously. Here each candidate costs one bounded head read. */
+const HEAD_BYTES = 4096;
+async function newestSessionFor(cwd: string): Promise<string | undefined> {
+  const files = await scanSessionFiles(join(homedir(), ".omp", "agent", "sessions"));
+  for (let i = 0; i < files.length; i += 64) {
+    const batch = files.slice(i, i + 64);
+    const hits = await Promise.all(batch.map(async ({ p }) => {
+      try {
+        const h = await open(p, "r");
+        try {
+          const { buffer, bytesRead } = await h.read(Buffer.alloc(HEAD_BYTES), 0, HEAD_BYTES, 0);
+          const o = JSON.parse(buffer.toString("utf8", 0, bytesRead).split("\n", 1)[0] ?? "");
+          return o?.type === "session" && o.cwd === cwd;
+        } finally { await h.close(); }
+      } catch { return false; }
+    }));
+    const at = hits.indexOf(true);
+    if (at >= 0) return batch[at]!.p;
+  }
+  return files[0]?.p;
+}
+
 export async function memorySnapshot(sessionArg?: string): Promise<MemorySnapshot> {
-  const sp = findSession(sessionArg);
+  const sp = sessionArg ? findSession(sessionArg) : await newestSessionFor(process.cwd());
   let session: MemorySnapshot["session"] = null;
   if (sp) {
     const s = parseSession(sp);
@@ -489,7 +529,7 @@ export async function memorySnapshot(sessionArg?: string): Promise<MemorySnapsho
   }
   return {
     session,
-    compaction: compactionPolicy() ?? null,
+    compaction: (await compactionPolicy()) ?? null,
     budgets: rateLimits(),
     harness: await harnessMemory(),
     aiLoc: await aiLocSummary(),

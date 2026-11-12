@@ -34,6 +34,8 @@ const RAW: Record<string, string> = {
   search: P("M11 4.5a6 6 0 1 0 0 12 6 6 0 0 0 0-12z") + P("M20 20l-4.4-4.4"),
   // send (paper plane)
   send: P("M5 12 20 5l-4.5 14.5-3.8-5.7z") + P("M11.7 13.8 20 5"),
+  // P-TUI.2: a terminal window with a prompt (the Fleet view's Terminal hub button)
+  terminal: P("M4 5.5h16v13H4z") + P("M7.5 10l3 2.5-3 2.5") + P("M12.5 15.5h4"),
   // plus
   plus: P("M12 5v14") + P("M5 12h14"),
   // chevron right (rotate via CSS)
@@ -44,6 +46,9 @@ const RAW: Record<string, string> = {
   bolt: P("M12 3 6 13h5l-1 8 6-11h-5z"),
   // clock (scheduled automations) - ring + hands
   clock: P("M12 5a7 7 0 1 0 0 14 7 7 0 0 0 0-14z") + P("M12 8.5V12l2.5 1.6"),
+  // P-MEET.1: calendar (Meetings) - frame, two hangers, the header rule, one marked day
+  calendar: P("M4.5 6.5h15v12a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1z") + P("M8 4.5v4") + P("M16 4.5v4")
+    + P("M4.5 10.5h15") + "<circle cx='9' cy='14.5' r='1.2' fill='currentColor' stroke='none'/>",
   // close
   close: P("M6 6l12 12") + P("M18 6 6 18"),
   // trash / delete
@@ -145,6 +150,8 @@ const RAW: Record<string, string> = {
   // P-MARKET.1: plugin marketplace — a package cube (lid fold + seam)
   market: P("M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z")
     + P("M3.3 7 12 12l8.7-5") + P("M12 12v9.4") + P("M16.5 9.4 7.5 4.2"),
+  // P-PLUGINS.1 (ADR-0461): the Plugins drawer - a jigsaw piece (tab up and right, sockets left and down)
+  plugins: P("M5 8.5h3.2a2.3 2.3 0 1 1 4.6 0H16v3.2a2.3 2.3 0 1 1 0 4.6v3.2h-3.2a2.3 2.3 0 1 0-4.6 0H5v-3.4a2.3 2.3 0 1 0 0-4.6z"),
   // P-FAV.1: favorite star (model picker) - filled via CSS when starred
   star: P("M12 4.4l2.35 4.9 5.15.65-3.8 3.55 1 5.1L12 16.05 7.3 18.6l1-5.1-3.8-3.55 5.15-.65z"),
   // P-TOOLFAIL.2: toolbox (failed tool-call actions) — box + lid fold + top handle + latch
@@ -158,6 +165,10 @@ const RAW: Record<string, string> = {
   // P-COLLAB (ADR-0192): live session share — three nodes linked (broadcast to guests)
   share: "<circle cx='6' cy='12' r='2.4'/><circle cx='18' cy='6' r='2.4'/><circle cx='18' cy='18' r='2.4'/>"
     + P("M8.1 10.9 15.9 7.1") + P("M8.1 13.1 15.9 16.9"),
+  // horizontal ellipsis (overflow menu)
+  more: P("M6 12h.01") + P("M12 12h.01") + P("M18 12h.01"),
+  // four-way move arrows (pan)
+  move: P("M12 3v18") + P("M3 12h18") + P("M9 6l3-3 3 3") + P("M9 18l3 3 3-3") + P("M6 9l-3 3 3 3") + P("M18 9l3 3-3 3"),
   // a chain link (copy invite link)
   link: P("M9.5 14.5a3.5 3.5 0 0 1 0-5l2-2a3.5 3.5 0 0 1 5 5l-1 1")
     + P("M14.5 9.5a3.5 3.5 0 0 1 0 5l-2 2a3.5 3.5 0 0 1-5-5l1-1"),
@@ -173,6 +184,10 @@ export function icon(name: keyof typeof RAW | string, size = 18, extraClass = ""
   const hook = ACTION.has(name as string) ? " ic-action" : "";
   return `<svg class="ic${hook}${extraClass ? " " + extraClass : ""}" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 }
+
+/** The raw 24×24 path markup of a glyph, for drawing it inside a larger SVG (the generated plugin posters).
+ *  Unknown names fall back to `info`, like icon(). */
+export function iconBody(name: string): string { return RAW[name] ?? RAW.info!; }
 
 /** The LUCID wordmark π glyph used in the titlebar. */
 export const piMark = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 8h14"/><path d="M9 8v9"/><path d="M16 8v7a2 2 0 0 0 2 2"/></svg>`;

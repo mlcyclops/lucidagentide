@@ -68,10 +68,12 @@ try {
     if (voiceSettings().ttsConversation !== true) fail("conversation mode did not persist");
     setVoiceSettings({ ttsAutoSpeak: false });
     if (voiceSettings().ttsConversation !== false) fail("conversation mode must read false while auto-speak is off");
-    if (load().ttsConversation !== true) fail("the stored preference should survive, not be erased");
+    // P-VOICE.8 (ADR-0400): turning auto-speak off turns conversation off for good (stored too), so it never
+    // comes back on by itself when auto-speak does.
+    if (load().ttsConversation !== false) fail("auto-speak off must clear the stored conversation flag");
     setVoiceSettings({ ttsAutoSpeak: true });
-    if (voiceSettings().ttsConversation !== true) fail("conversation mode should come back with auto-speak");
-    ok("conversation mode is gated on auto-speak but remembers the preference");
+    if (voiceSettings().ttsConversation !== false) fail("conversation mode must not come back with auto-speak");
+    ok("conversation mode needs auto-speak, and auto-speak off turns it off for good");
 
     // The legacy scalar is a READ fallback until the user picks an ElevenLabs voice for real; at that point
     // the per-engine map owns the value and the scalar is retired so the two can never disagree.

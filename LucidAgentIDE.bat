@@ -24,10 +24,10 @@ call :ensurepath
 
 rem --- defaults ---
 set "PROVIDER=Anthropic"
-set "MODEL=claude-opus-4-8"
+set "MODEL=claude-opus-5-5"
 set "KEYVAR=ANTHROPIC_API_KEY"
 rem  Models offered to omp's live Ctrl+P switcher (--models). Kept in sync with MODEL.
-set "MODELS=claude-opus-4-8,claude-sonnet-4-6,claude-haiku-4-5"
+set "MODELS=claude-opus-5-5,claude-opus-5,claude-sonnet-4-6,claude-haiku-4-5"
 
 rem --- arg dispatch (non-interactive helpers) ---
 if /i "%~1"=="doctor"    ( call :doctor & exit /b 0 )
@@ -92,6 +92,8 @@ where bun >nul 2>&1 && (
   del "%TEMP%\lucid_auth.txt" >nul 2>&1
 ) || echo      ^( -- ^) bun not on PATH - cannot read omp vault
 echo.
+rem  Any Anthropic auth (OAuth login or env key) means the default model is Opus 5.5; say so.
+if defined VAULT_ANTHROPIC ( echo    Anthropic OAuth found - default model claude-opus-5-5 ) else if defined ANTHROPIC_API_KEY ( echo    Anthropic API key found - default model claude-opus-5-5 )
 rem  Only nag for a key if there's NO Anthropic auth at all (no env key AND no omp OAuth login).
 if not defined ANTHROPIC_API_KEY if not defined VAULT_ANTHROPIC (
   echo    No Anthropic auth found ^(no ANTHROPIC_API_KEY and no omp OAuth login^).
@@ -112,8 +114,10 @@ echo  ---------------------------------------------------------------------
 echo    provider : %PROVIDER%        model : %MODEL%
 echo  ---------------------------------------------------------------------
 echo     1^)  Launch / relaunch omp   ^(terminal, with the security gate^)
-echo     G^)  Desktop GUI             ^(chat + dashboards in a window^)
+echo     G^)  Desktop GUI             ^(the installed app: your history + settings^)
+echo     D^)  Desktop GUI from source ^(dev: runs THIS checkout, whatever version it is^)
 echo     F^)  Fleet GUI               ^(project-bound window: own workspace + Knowledge^)
+echo     H^)  Terminal hub            ^(lucid hub: the fleet as tmux-style panes, in a new window^)
 echo     2^)  Switch model
 echo     3^)  Switch provider
 echo     4^)  Dashboards  ^(security  /  memory ^& context^)
@@ -126,8 +130,10 @@ echo     0^)  Quit
 echo.
 set /p "CH=    select: "
 if "%CH%"=="1" goto :launch
-if /i "%CH%"=="G" ( call :gui & goto :menu )
+if /i "%CH%"=="G" ( call :appgui & goto :menu )
+if /i "%CH%"=="D" ( call :gui & goto :menu )
 if /i "%CH%"=="F" ( call :fleetgui & goto :menu )
+if /i "%CH%"=="H" ( call :hub & goto :menu )
 if "%CH%"=="2" goto :pickmodel
 if "%CH%"=="3" goto :pickprovider
 if "%CH%"=="4" ( call :dashboardmenu & goto :menu )
@@ -141,6 +147,22 @@ echo    ^(unrecognized^)
 goto :menu
 
 rem ===========================================================================
+rem  H: P-TUI.2 - lucid hub in its own window. It attaches to the running app's engine (the discovery
+rem  file) or starts one headless. Uses bin\lucid.exe when this checkout compiled it, else bun on the source.
+:hub
+echo.
+if exist "%REPO%\bin\lucid.exe" (
+  start "LUCID hub" cmd /s /k ""%REPO%\bin\lucid.exe" hub"
+) else (
+  where bun >nul 2>&1 || ( echo    bun not found - install it with option 9, or use the Terminal button in the app's Fleet view. & goto :eof )
+  start "LUCID hub" cmd /s /k "bun "%REPO%\harness\launcher\lucid_acp.ts" hub"
+)
+echo    Opened lucid hub in a new window.
+echo    Keys: ^| and - split, tab moves focus, z zooms, x closes a pane, ? help, q quits.
+echo.
+goto :eof
+
+rem ===========================================================================
 :launch
 echo.
 echo    Launching omp with model "%MODEL%" + the security gate in a new window...
@@ -151,7 +173,49 @@ timeout /t 2 >nul
 goto :menu
 
 rem ===========================================================================
-rem  Launch the desktop GUI (chat + dashboards). Prefers the native Electron app
+rem  G: the INSTALLED app (%%LOCALAPPDATA%%\Programs\LucidAgentIDE), i.e. the release the user
+rem  runs every day, with its own profile, history and updater. Running the source checkout here
+rem  used to start whatever version the checkout happened to be on (a stale master opened beta.7)
+rem  on a fresh port-suffixed Electron profile and the repo as its workspace, so it looked like a
+rem  first run: the role picker and no history. Not installed yet: fall back to the source launch.
+:appgui
+echo.
+set "APPEXE=%LOCALAPPDATA%\Programs\LucidAgentIDE\LucidAgentIDE.exe"
+if not exist "%APPEXE%" (
+  echo    The installed app was not found at "%APPEXE%" - starting this checkout from source instead.
+  call :gui
+  goto :eof
+)
+rem  Say which version will open. When the install is older than this checkout (the current release),
+rem  offer the download page: the app also updates itself from the beta feed, but only after it starts.
+call :pkgver "%LOCALAPPDATA%\Programs\LucidAgentIDE\resources\repo\desktop\package.json" APPVER
+call :pkgver "%REPO%\desktop\package.json" CURVER
+if not defined APPVER set "APPVER=unknown"
+echo    Installed app: v!APPVER!    current release: v!CURVER!
+if defined CURVER if /i not "!APPVER!"=="!CURVER!" (
+  echo    The installed app is not on the current version. It updates itself on launch, or install
+  echo    v!CURVER! now from https://github.com/mlcyclops/lucidagentide/releases/tag/v!CURVER!
+  set "UPD="
+  set /p "UPD=    Open that download page now? (Y/N): "
+  if /i "!UPD!"=="Y" start "" "https://github.com/mlcyclops/lucidagentide/releases/tag/v!CURVER!"
+)
+echo    Launching the installed Lucid Agent IDE...
+start "" "%APPEXE%"
+echo    Done.
+echo.
+goto :eof
+
+rem  %1 = a package.json, %2 = the variable that receives its "version" (unset when unreadable).
+:pkgver
+set "%~2="
+if not exist "%~1" goto :eof
+for /f "usebackq tokens=2 delims=:," %%V in (`findstr /c:"\"version\"" "%~1"`) do if not defined %~2 set "%~2=%%~V"
+if defined %~2 set "%~2=!%~2: =!"
+if defined %~2 set "%~2=!%~2:"=!"
+goto :eof
+
+rem ===========================================================================
+rem  D: launch the desktop GUI from THIS checkout (dev). Prefers the native Electron app
 rem  if its binary is installed; otherwise opens the browser GUI and the browser.
 :gui
 echo.
@@ -293,18 +357,20 @@ rem ===========================================================================
 :pickmodel
 echo.
 echo    Anthropic models (current):
-echo       1^)  claude-opus-4-8     most capable
-echo       2^)  claude-sonnet-4-6   balanced speed/intelligence
-echo       3^)  claude-haiku-4-5    fastest / cheapest
-echo       4^)  custom  (type any id, e.g. openai/gpt-5.2)
+echo       1^)  claude-opus-5-5     most capable (default)
+echo       2^)  claude-opus-5       prior Opus
+echo       3^)  claude-sonnet-4-6   balanced speed/intelligence
+echo       4^)  claude-haiku-4-5    fastest / cheapest
+echo       5^)  custom  (type any id, e.g. openai/gpt-6-astra)
 echo.
 set /p "M=    select: "
-if "%M%"=="1" set "MODEL=claude-opus-4-8"
-if "%M%"=="2" set "MODEL=claude-sonnet-4-6"
-if "%M%"=="3" set "MODEL=claude-haiku-4-5"
-if "%M%"=="4" ( set /p "MODEL=    enter model id: " )
+if "%M%"=="1" set "MODEL=claude-opus-5-5"
+if "%M%"=="2" set "MODEL=claude-opus-5"
+if "%M%"=="3" set "MODEL=claude-sonnet-4-6"
+if "%M%"=="4" set "MODEL=claude-haiku-4-5"
+if "%M%"=="5" ( set /p "MODEL=    enter model id: " )
 rem  put the chosen model at the head of the Ctrl+P cycle list
-set "MODELS=%MODEL%,claude-opus-4-8,claude-sonnet-4-6,claude-haiku-4-5"
+set "MODELS=%MODEL%,claude-opus-5-5,claude-opus-5,claude-sonnet-4-6,claude-haiku-4-5"
 echo    model is now: %MODEL%
 goto :applychange
 
@@ -317,11 +383,11 @@ echo       3^)  OpenRouter  (OPENROUTER_API_KEY)
 echo       4^)  custom
 echo.
 set /p "P=    select: "
-if "%P%"=="1" ( set "PROVIDER=Anthropic"  & set "MODEL=claude-opus-4-8" )
-if "%P%"=="2" ( set "PROVIDER=OpenAI"     & set "MODEL=gpt-5.2" )
-if "%P%"=="3" ( set "PROVIDER=OpenRouter" & set "MODEL=anthropic/claude-opus-4-8" )
+if "%P%"=="1" ( set "PROVIDER=Anthropic"  & set "MODEL=claude-opus-5-5" )
+if "%P%"=="2" ( set "PROVIDER=OpenAI"     & set "MODEL=gpt-6-astra" )
+if "%P%"=="3" ( set "PROVIDER=OpenRouter" & set "MODEL=anthropic/claude-opus-5-5" )
 if "%P%"=="4" ( set /p "PROVIDER=    provider name: " )
-set "MODELS=%MODEL%,claude-opus-4-8,claude-sonnet-4-6,claude-haiku-4-5"
+set "MODELS=%MODEL%,claude-opus-5-5,claude-opus-5,claude-sonnet-4-6,claude-haiku-4-5"
 echo    provider: %PROVIDER%   default model: %MODEL%
 echo    (omp resolves the provider from the model id + its OAuth login or API key)
 goto :applychange
@@ -407,7 +473,7 @@ echo    In THIS control panel:
 echo       1 launch omp   G desktop GUI   F fleet GUI   2 switch model   3 switch provider
 echo       4 dashboards   5 status         6 demo   7 doctor   9 install
 echo.
-echo    Models (current):  claude-opus-4-8 . claude-sonnet-4-6 . claude-haiku-4-5
+echo    Models (current):  claude-opus-5-5 . claude-opus-5 . claude-sonnet-4-6 . claude-haiku-4-5
 echo    Keys (env var):    ANTHROPIC_API_KEY . OPENAI_API_KEY . OPENROUTER_API_KEY
 echo    =====================================================================
 echo.

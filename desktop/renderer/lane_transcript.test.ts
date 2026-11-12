@@ -298,3 +298,36 @@ describe("copy text", () => {
     expect(transcriptCopyText([], { text: "", tools: [bashTool] })).toBe("[assistant, in progress]\n[ran: bash] bun test x\n  bun test x");
   });
 });
+
+// ── P-PROGRESS.1: a settle closes the row its call opened; the head says what the call is doing ──────
+import { laneToolDoing, settleToolRow } from "./lane_transcript.ts";
+import { test } from "bun:test";
+
+describe("settleToolRow (P-PROGRESS.1)", () => {
+  test("a settle marks the matching open row in place and returns true; an unknown call id appends nothing", () => {
+    const rows = [
+      { id: "c1", name: "run", detail: "bun test", input: "bun test", callId: "call-1", status: "open" as const, open: false },
+      { id: "c2", name: "read", detail: "a.ts", open: false },
+    ];
+    expect(settleToolRow(rows, "call-1", "done", 4200)).toBe(true);
+    expect(rows[0]).toMatchObject({ status: "done", elapsedMs: 4200 });
+    expect(settleToolRow(rows, "call-9", "failed", 10)).toBe(false);
+    expect(rows).toHaveLength(2);
+    expect(rows[1]!.status).toBeUndefined();
+  });
+
+  test("a failed settle marks the chip failed, and a garbage length is not recorded", () => {
+    const rows = [{ id: "c1", name: "run", detail: "bun test", callId: "call-1", status: "open" as const, open: false }];
+    expect(settleToolRow(rows, "call-1", "failed", Number.NaN)).toBe(true);
+    expect(rows[0]!.status).toBe("failed");
+    expect(rows[0]!.elapsedMs).toBeUndefined();
+    expect(laneChip(rows[0]!).failed).toBe(true);
+  });
+});
+
+describe("laneToolDoing (P-PROGRESS.1)", () => {
+  test("the intent line wins; a code-less call falls back to its command", () => {
+    expect(laneToolDoing({ id: "c1", name: "run", detail: "bun test", intent: "Running the lane tests", open: false })).toBe("Running the lane tests");
+    expect(laneToolDoing({ id: "c2", name: "execute", detail: "execute", input: "bun test desktop", open: false })).toBe("Running bun test desktop");
+  });
+});

@@ -14,6 +14,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { load, save } from "./settings_store.ts";
 import { gitTokenEnvName, parseGitRemote } from "./git_url.ts";
+import { gitExe } from "../harness/runs/sandbox_exec.ts";
 
 const REPO = join(import.meta.dir, "..");
 
@@ -146,12 +147,12 @@ export function cloneErrorHint(stderr: string, hadToken: boolean, ssh = false): 
   const auth = /authentication failed|could not read (?:username|password)|terminal prompts disabled|invalid username or password|403|permission denied|repository not found|fatal: could not read/i.test(s);
   const keyTrouble = ssh && /host key verification failed|permission denied \(publickey|no such identity|could not resolve hostname|passphrase|batch mode/i.test(s);
   if (keyTrouble || (ssh && auth)) {
-    return `SSH authentication failed — this remote needs an ssh key this machine can use without a prompt. Add the key to your agent (ssh-add), or paste the https:// URL instead and use a personal access token. ${s}`.slice(0, 400);
+    return `SSH authentication failed. This remote needs an ssh key this machine can use without a prompt. Add the key to your agent (ssh-add), or paste the https:// URL instead and use a personal access token. ${s}`.slice(0, 400);
   }
   if (auth) {
     return hadToken
-      ? `Authentication failed — the configured git token was rejected (check it has access to this private repo). ${s}`.slice(0, 400)
-      : `Authentication failed — this looks like a private repo. Paste a personal access token in the form (GitHub: repo · GitLab: read_repository · Azure DevOps: Code read), or clone via the agent (which uses your saved git credentials). ${s}`.slice(0, 400);
+      ? `Authentication failed. The configured git token was rejected (check it has access to this private repo). ${s}`.slice(0, 400)
+      : `Authentication failed. This looks like a private repo. Paste a personal access token in the form (GitHub: repo · GitLab: read_repository · Azure DevOps: Code read), or clone via the agent (which uses your saved git credentials). ${s}`.slice(0, 400);
   }
   return s.slice(0, 400) || "git clone failed";
 }
@@ -184,7 +185,7 @@ export async function cloneRepo(url: string, tokenOverride?: string, parentDir?:
   // still resolves cached credentials, so this preserves the agent's working path while adding token auth.
   // GIT_SSH_COMMAND BatchMode=yes does the same job for an ssh remote: an encrypted key or an unknown host
   // key FAILS with a message instead of blocking forever on a passphrase prompt nobody can see.
-  const proc = Bun.spawn(["git", ...cloneArgv(url, dest, token)], {
+  const proc = Bun.spawn([gitExe(), ...cloneArgv(url, dest, token)], {
     stdout: "pipe", stderr: "pipe",
     env: {
       ...process.env,

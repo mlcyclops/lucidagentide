@@ -4,9 +4,47 @@
 // desktop/interject_store.test.ts - P-INTERJECT.1: queue discipline for mid-turn operator notes.
 
 import { beforeEach, describe, expect, test } from "bun:test";
-import { __resetInterjects, addInterject, drainInterjects, pendingInterjectCount } from "./interject_store.ts";
+import { __resetInterjects, addInterject, addPeerNote, awaitPeerReply, drainInterjects, drainPeerNotes, pendingInterjectCount } from "./interject_store.ts";
 
 beforeEach(() => __resetInterjects());
+
+// P-OWN.1: peer notes are a separate queue with the same discipline; a waiter consumes exactly one.
+describe("peer notes", () => {
+  test("queue and drain FIFO, separately from operator notes", () => {
+    addInterject("lane-b", "operator says hi");
+    expect(addPeerNote("lane-b", "lane-a", "alpha", "  I am about to edit app.ts  ")).toEqual({ ok: true });
+    expect(drainPeerNotes("lane-b")).toEqual([{ from: "lane-a", name: "alpha", text: "I am about to edit app.ts" }]);
+    expect(drainPeerNotes("lane-b")).toEqual([]);
+    expect(pendingInterjectCount("lane-b")).toBe(1); // the operator note is still there
+  });
+
+  test("refuses self, empty, over-long, and the ninth note", () => {
+    expect(addPeerNote("lane-a", "lane-a", "alpha", "hello").ok).toBe(false);
+    expect(addPeerNote("lane-b", "lane-a", "alpha", "   ").ok).toBe(false);
+    expect(addPeerNote("lane-b", "lane-a", "alpha", "x".repeat(4001)).ok).toBe(false);
+    for (let i = 0; i < 8; i++) expect(addPeerNote("lane-b", "lane-a", "alpha", `n${i}`).ok).toBe(true);
+    expect(addPeerNote("lane-b", "lane-a", "alpha", "ninth").ok).toBe(false);
+  });
+
+  test("a queued matching note answers a waiter at once and leaves the queue", async () => {
+    addPeerNote("lane-a", "lane-b", "beta", "take it");
+    addPeerNote("lane-a", "master", "main composer", "unrelated");
+    const r = await awaitPeerReply("lane-a", "lane-b", 0);
+    expect(r).toEqual({ from: "lane-b", name: "beta", text: "take it" });
+    expect(drainPeerNotes("lane-a")).toEqual([{ from: "master", name: "main composer", text: "unrelated" }]);
+  });
+
+  test("a note arriving while someone waits resolves the wait and is never drained again", async () => {
+    const pending = awaitPeerReply("lane-a", "lane-b", 5_000);
+    expect(addPeerNote("lane-a", "lane-b", "beta", "give me two minutes")).toEqual({ ok: true });
+    expect(await pending).toEqual({ from: "lane-b", name: "beta", text: "give me two minutes" });
+    expect(drainPeerNotes("lane-a")).toEqual([]);
+  });
+
+  test("a wait with no note times out to null; a zero timeout on an empty queue is null", async () => {
+    expect(await awaitPeerReply("lane-a", "lane-b", 0)).toBeNull();
+  });
+});
 
 describe("addInterject", () => {
   test("accepts a note and reports it pending", () => {

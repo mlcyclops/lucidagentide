@@ -34,7 +34,17 @@ export function laneEventToChatEvent(e: LaneEvent): ChatEvent | null {
       return { type: "thinking", text: e.text };
 
     case "tool": {
+      // P-PROGRESS.1: a settling event (id + done/failed) is the master's `tool-meta` shape: it closes the
+      // step the open event painted, with its outcome and length, instead of painting a second step.
+      if (e.id && (e.status === "done" || e.status === "failed")) {
+        const meta: Extract<ChatEvent, { type: "tool-meta" }> = { type: "tool-meta", id: e.id, name: e.name, ok: e.status === "done" };
+        if (e.elapsedMs !== undefined) meta.elapsedMs = e.elapsedMs;
+        return meta;
+      }
       const out: ToolEvent = { type: "tool", name: e.name, detail: e.detail };
+      if (e.id) out.id = e.id;
+      if (e.input !== undefined) out.input = e.input;
+      if (e.intent !== undefined) out.intent = e.intent;
       if (e.code) {
         // `LaneToolCode` and the ChatEvent `code` shape are field-for-field identical (path + the
         // content / oldText+newText / patch alternatives fleet_lanes.ts's #toolCode produces), so every
@@ -60,6 +70,14 @@ export function laneEventToChatEvent(e: LaneEvent): ChatEvent | null {
 
     case "error":
       return { type: "lane-error", message: e.message };
+
+    // P-PROGRESS.1: the lane's progress view and its folder wait are the same shapes the master stream
+    // carries (pure, path-free except the wait's folder, which the guest renders by its basename).
+    case "progress":
+      return { type: "progress", progress: e.progress };
+
+    case "waiting":
+      return { type: "waiting", wait: e.wait };
 
     // The lane CARD already reports these, and it ships in the fleet-status snapshot every guest gets
     // regardless of what it is watching: `permission` and `auto-approved` are the card's pendingApproval,

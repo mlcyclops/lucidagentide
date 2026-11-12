@@ -10,7 +10,7 @@
 // one REJECTS. A regression here reintroduces an unkillable import, so treat a failure as stop-the-line.
 
 import { expect, test } from "bun:test";
-import { ACPClient } from "./acp.ts";
+import { ACPClient, rpcError } from "./acp.ts";
 
 // Child processes are driven with `bun -e`, using the same runtime that runs the tests.
 const BUN = process.execPath;
@@ -102,4 +102,18 @@ test("stop() settles anything still waiting", async () => {
   const pending = acp.request("initialize", {});
   acp.stop();
   await expect(pending).rejects.toThrow(/stopped/i);
+});
+
+// ── P-NORESP.2: a JSON-RPC error reaches the chat as words, never "[object Object]" ──
+test("rpcError turns omp's {code,message,data} into a readable Error that keeps code and data", () => {
+  const e = rpcError({ code: -32603, message: "Internal error", data: { details: "403 Request not allowed" } });
+  expect(e).toBeInstanceOf(Error);
+  expect(String(e)).not.toContain("[object Object]");
+  expect(e.message).toContain("Internal error");
+  expect(e.message).toContain("403 Request not allowed");
+  expect(e.message).toContain("code -32603");
+  expect(e.code).toBe(-32603);
+  expect(rpcError({ code: 1, message: "boom", data: "boom" }).message).toBe("boom (code 1)"); // no echo
+  expect(rpcError({}).message).toBe("agent returned an error");
+  expect(rpcError("plain").message).toBe("plain");
 });

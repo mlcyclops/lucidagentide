@@ -10,25 +10,74 @@
 // could not be exercised headlessly).
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { closeSync, constants, fstatSync, ftruncateSync, mkdtempSync, openSync, readSync, writeSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+
+// P-BROWSER.4 (ADR-0415): the `windowsHide` a spawn uses when its caller does not pass one. This module is
+// also bundled into the Node-hosted VS Code extension, so it must not import console_host.ts (bun:ffi):
+// the engine installs console_host's `ompWindowsHide` here at boot (dev.ts, after ensureHiddenConsole), and
+// every other host keeps CREATE_NO_WINDOW, the contract from before the hidden console existed.
+let defaultWindowsHide: () => boolean = () => true;
+export function setDefaultWindowsHide(fn: () => boolean): void { defaultWindowsHide = fn; }
 
 // Support diagnosability (the "agent process exited (code 1)" support ticket): every omp child's stderr
 // is appended to ONE rolling log so a fresh-install failure leaves evidence a human can send in. The
 // write is best-effort - diagnostics must never break the client - and the file is bounded: past 512KB
 // it is rewritten keeping the newest 256KB.
-const ACP_LOG = join(homedir(), ".omp", "lucid-acp.log");
+//
+// The recovery incident report quotes this log's tail as its only evidence, so it must hold the operator's
+// real omp children and nothing else. Every suite that drives the fake ACP agent spawns through this
+// client; resolved to the real home, a full `bun test` run filled the tail with `[fake-acp] ready` lines
+// and pushed the real omp stderr out of the report. So under `bun test` (NODE_ENV=test) it NEVER resolves
+// to the real log (the security_log.ts rule). `LUCID_ACP_LOG` gives a test a deterministic file. Resolved
+// per call, never at import: import order must not decide where a line lands. The test file lives in a
+// private mkdtemp directory (0700), never at a predictable name in the shared temp dir.
+let testLogDir: string | null = null;
+export function acpLogPath(): string {
+  const override = process.env.LUCID_ACP_LOG?.trim();
+  if (override) return override;
+  if (process.env.NODE_ENV === "test") return join(testLogDir ??= mkdtempSync(join(tmpdir(), "lucid-acp-test-")), "lucid-acp.log");
+  return join(homedir(), ".omp", "lucid-acp.log");
+}
 const ACP_LOG_MAX = 512 * 1024;
 const ACP_LOG_KEEP = 256 * 1024;
+/** Append, and past ACP_LOG_MAX keep the newest ACP_LOG_KEEP bytes. Every step goes through ONE descriptor,
+ *  so the size checked is the size of the file rewritten (no path re-resolved between check and use). Writes
+ *  are positional rather than O_APPEND because Windows refuses to truncate a handle opened for append. */
 function acpLog(text: string): void {
+  let fd: number | null = null;
   try {
-    appendFileSync(ACP_LOG, text);
-    if (statSync(ACP_LOG).size > ACP_LOG_MAX) {
-      const tail = readFileSync(ACP_LOG, "utf8").slice(-ACP_LOG_KEEP);
-      writeFileSync(ACP_LOG, tail);
+    fd = openSync(acpLogPath(), constants.O_RDWR | constants.O_CREAT, 0o600);
+    const line = Buffer.from(text, "utf8");
+    const at = fstatSync(fd).size;
+    writeSync(fd, line, 0, line.length, at);
+    const size = at + line.length;
+    if (size > ACP_LOG_MAX) {
+      const tail = Buffer.alloc(ACP_LOG_KEEP);
+      const n = readSync(fd, tail, 0, ACP_LOG_KEEP, size - ACP_LOG_KEEP);
+      ftruncateSync(fd, 0);
+      writeSync(fd, tail, 0, n, 0);
     }
   } catch { /* best-effort; never break the client over a log line */ }
+  finally { if (fd !== null) { try { closeSync(fd); } catch { /* already closed */ } } }
+}
+
+/** A JSON-RPC error object from the agent, as a real Error whose message says what went wrong.
+ *  P-NORESP.2: rejecting with the raw `{code, message, data}` object reached the chat as
+ *  "[object Object]" (every `String(e)` downstream), hiding the provider's actual failure. The
+ *  message folds in `data` (where omp puts the provider detail), clamped; `code` and `data` stay on
+ *  the Error for any caller that branches on them. Pure. */
+export function rpcError(err: unknown): Error & { code?: number; data?: unknown } {
+  const o = (err && typeof err === "object" ? err : { message: String(err) }) as { code?: number; message?: unknown; data?: unknown };
+  const base = typeof o.message === "string" && o.message ? o.message : "agent returned an error";
+  const d = o.data;
+  const detail = d === undefined || d === null ? "" : typeof d === "string" ? d : (() => { try { return JSON.stringify(d); } catch { return String(d); } })();
+  const msg = detail && !base.includes(detail) ? `${base}: ${detail}` : base;
+  const e = new Error((o.code !== undefined ? `${msg} (code ${o.code})` : msg).slice(0, 500)) as Error & { code?: number; data?: unknown };
+  e.code = o.code;
+  e.data = d;
+  return e;
 }
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void; cleanup: () => void };
@@ -61,14 +110,19 @@ export class ACPClient {
   // only — the mediated-egress proxy sets HTTP(S)_PROXY here so the omp child (and its bash/pip children)
   // tunnel through the proxy, WITHOUT polluting the desktop process's own environment. Default {} ⇒ the
   // child inherits process.env exactly as before.
-  constructor(private cmd: string, private args: string[], private cwd: string, private env: Record<string, string> = {}) {}
+  // `spawnOpts.windowsHide` (P-BROWSER.4, ADR-0415): by default the child attaches to this process's hidden
+  // console when there is one (console_host.ts), so omp sees a console and spawns ITS children, the visible
+  // browser above all, without SW_HIDE. Passing `true` keeps the child console-less (CREATE_NO_WINDOW), the
+  // AppContainer helper's contract.
+  constructor(private cmd: string, private args: string[], private cwd: string, private env: Record<string, string> = {}, private spawnOpts: { windowsHide?: boolean } = {}) {}
 
   /** Newest stderr bytes from THIS child (bounded). A non-zero exit quotes the last line so the UI
    *  error names the actual failure instead of a bare exit code. */
   private errTail = "";
 
   start(): void {
-    this.proc = spawn(this.cmd, this.args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: { ...process.env, ...this.env } });
+    const windowsHide = this.spawnOpts.windowsHide ?? defaultWindowsHide();
+    this.proc = spawn(this.cmd, this.args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide, env: { ...process.env, ...this.env } });
     acpLog(`\n[acp spawn ${new Date().toISOString()} cmd=${this.cmd} cwd=${this.cwd}]\n`);
     this.proc.stdout!.on("data", (d) => this.onData(String(d)));
     this.proc.stderr!.on("data", (d) => {
@@ -110,6 +164,9 @@ export class ACPClient {
   /** True once the child has exited or failed to spawn: the connection can never answer again. */
   get isDead(): boolean { return this.dead !== null; }
 
+  /** P-LIVENESS.1: the spawned child's pid (the root of the agent's process tree), while it runs. */
+  get pid(): number | null { return this.dead === null ? this.proc?.pid ?? null : null; }
+
   private onData(s: string): void {
     this.buf += s;
     let nl: number;
@@ -127,7 +184,7 @@ export class ACPClient {
     // response to one of our requests
     if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
       const p = this.pending.get(msg.id);
-      if (p) { this.pending.delete(msg.id); p.cleanup(); msg.error ? p.reject(msg.error) : p.resolve(msg.result); }
+      if (p) { this.pending.delete(msg.id); p.cleanup(); msg.error ? p.reject(rpcError(msg.error)) : p.resolve(msg.result); }
       return;
     }
     // request FROM the agent (needs a response)
@@ -180,9 +237,88 @@ export class ACPClient {
     this.proc?.stdin!.write(JSON.stringify(o) + "\n");
   }
 
-  stop(): void {
-    try { this.proc?.kill(); } catch { /* ignore */ }
-    // kill() is async on every platform; drain now so callers awaiting a reply fail fast.
+  /** The stop in progress or finished. stop() is idempotent: every call shares it, except that a FAILED
+   *  attempt is dropped while its root process still runs, so the next call tries again. */
+  private stopping: Promise<boolean> | null = null;
+
+  /**
+   * End the child and everything it started. Requests still waiting are rejected at once; the returned
+   * promise resolves true only once the end is CONFIRMED, and false when part of the tree may still be
+   * running, so a caller about to start a replacement can refuse instead of letting two agents act in one
+   * workspace. Never rejects. Callers that only need the connection gone may ignore the result.
+   */
+  stop(): Promise<boolean> {
+    if (!this.stopping) {
+      const attempt = this.endTree();
+      this.stopping = attempt;
+      // Once the root is gone nothing can walk its tree again, so only a failure with the root still
+      // running is worth a retry.
+      void attempt.then((ok) => { if (!ok && this.stopping === attempt && this.proc && running(this.proc)) this.stopping = null; });
+    }
+    // Ending the process is async on every platform; drain now so callers awaiting a reply fail fast.
     this.die("acp: agent connection stopped", null);
+    return this.stopping;
   }
+
+  private async endTree(): Promise<boolean> {
+    const proc = this.proc;
+    if (!proc || proc.pid === undefined || !running(proc)) return true; // never spawned, or already exited
+    if (process.platform === "win32") {
+      // P-RECOVER.1 (ADR-0385): on Windows `omp.exe` is a Bun shim and the real agent is a `bun.exe cli.js`
+      // GRANDCHILD, with the agent's own tool processes under it. kill() ends only the shim, so the agent
+      // outlived stop() until it noticed stdin EOF (or never, when wedged). taskkill /T ends the whole tree.
+      // Ownership is proven: this is the pid WE spawned and it has not exited (a reused pid is impossible
+      // while our handle is still live), and taskkill is named by its absolute System32 path so PATH cannot
+      // substitute another binary. Confirmed means taskkill reported every process ended (exit 0) and the
+      // child's own exit was observed. If taskkill fails, the direct child is still killed so the
+      // connection does not linger, but the result is false: the rest of the tree is unaccounted for.
+      const treeEnded = await taskkillTree(proc.pid);
+      if (!treeEnded) { try { proc.kill(); } catch { /* already gone */ } }
+      const childExited = await exited(proc, STOP_EXIT_MS);
+      return treeEnded && childExited;
+    }
+    // POSIX: `omp` is the agent process itself. SIGTERM, then SIGKILL if it has not exited in time.
+    try { proc.kill(); } catch { /* already gone */ }
+    if (await exited(proc, STOP_EXIT_MS)) return true;
+    try { proc.kill("SIGKILL"); } catch { /* already gone */ }
+    return exited(proc, STOP_EXIT_MS);
+  }
+}
+
+/** Bounds for stop(): taskkill's own run, then the child's exit. */
+const TASKKILL_MS = 10_000;
+const STOP_EXIT_MS = 5_000;
+
+function running(proc: ChildProcess): boolean {
+  return proc.exitCode === null && proc.signalCode === null;
+}
+
+/** True once `proc` has exited, false if it is still running after `ms`. */
+function exited(proc: ChildProcess, ms: number): Promise<boolean> {
+  if (!running(proc)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const onExit = (): void => { clearTimeout(timer); resolve(true); };
+    const timer = setTimeout(() => { proc.off("exit", onExit); resolve(false); }, ms);
+    timer.unref?.();
+    proc.once("exit", onExit);
+  });
+}
+
+/** `taskkill /PID <pid> /T /F`, awaited. True only when it exits 0, which it does when every process in
+ *  the tree was ended; any failure, a spawn error, or no answer in TASKKILL_MS is false. */
+function taskkillTree(pid: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let tk: ChildProcess;
+    try {
+      tk = spawn(join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe"), ["/PID", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+    } catch {
+      resolve(false);
+      return;
+    }
+    const timer = setTimeout(() => { try { tk.kill(); } catch { /* already gone */ } resolve(false); }, TASKKILL_MS);
+    timer.unref?.();
+    tk.once("error", () => { clearTimeout(timer); resolve(false); });
+    tk.once("exit", (code) => { clearTimeout(timer); resolve(code === 0); });
+    tk.unref();
+  });
 }

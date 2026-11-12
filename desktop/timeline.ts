@@ -95,6 +95,14 @@ export interface TimelineEntry {
  *  (or, with includeSelfTest, merely marked) across the WHOLE corpus, never just this page. */
 export interface TimelinePage { entries: TimelineEntry[]; total: number; selfTest: number }
 
+/** One listing request. `kind` restricts it to a single closed-set kind (see buildTimeline). */
+export interface TimelineQuery { limit?: number; offset?: number; includeSelfTest?: boolean; kind?: TimelineKind }
+
+/** The route's gate for `?kind=`: only the closed set passes, so a typo is refused, never widened. */
+export function isTimelineKind(v: unknown): v is TimelineKind {
+  return v === "chat" || v === "lane" || v === "ingest";
+}
+
 /** basename(cwd) with trailing separators trimmed - the workspace label a row shows. */
 const byName = (p: string): string => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
 
@@ -128,15 +136,18 @@ export function isSelfTestSession(row: { cwd: string; wsName: string; title: str
  *  LATEST record per session wins (a respawn may rename nothing, but the freshest name is the honest
  *  one). Ingest classification rides the parser's own kind - the ledger never overrides it, because a
  *  lane cannot be an extractor throwaway. Self-test throwaways are held back by DEFAULT (they drown a
- *  real chronology dozens-to-the-minute); `includeSelfTest` keeps them, still marked. */
-export function buildTimeline(sessions: SessionRow[], ledger: LaneSessionRecord[], opts: { limit?: number; offset?: number; includeSelfTest?: boolean } = {}): TimelinePage {
+ *  real chronology dozens-to-the-minute); `includeSelfTest` keeps them, still marked. `kind` narrows
+ *  the listing to one closed-set kind BEFORE paging, so a lane-only reader (the orbit's recoverable
+ *  spokes) gets every lane row in one page instead of paging through the whole corpus to find them;
+ *  `total` and `selfTest` then count within that kind. */
+export function buildTimeline(sessions: SessionRow[], ledger: LaneSessionRecord[], opts: TimelineQuery = {}): TimelinePage {
   const laneBySession = new Map<string, { laneId: string; name: string; events: number; at: number }>();
   for (const rec of ledger) {
     const cur = laneBySession.get(rec.sessionId);
     if (!cur) laneBySession.set(rec.sessionId, { laneId: rec.laneId, name: rec.name, events: 1, at: rec.at });
     else { cur.events++; if (rec.at >= cur.at) { cur.laneId = rec.laneId; cur.name = rec.name; cur.at = rec.at; } }
   }
-  const all: TimelineEntry[] = sessions.map((s) => {
+  const classified: TimelineEntry[] = sessions.map((s) => {
     const lane = laneBySession.get(s.id);
     const kind: TimelineKind = s.kind === "kg-ingest" ? "ingest" : lane ? "lane" : "chat";
     const wsName = byName(s.cwd);
@@ -154,6 +165,7 @@ export function buildTimeline(sessions: SessionRow[], ledger: LaneSessionRecord[
       ...(junk ? { selfTest: true as const } : {}),
     };
   });
+  const all = opts.kind ? classified.filter((e) => e.kind === opts.kind) : classified;
   const selfTest = all.reduce((n, e) => n + (e.selfTest ? 1 : 0), 0);
   const entries = opts.includeSelfTest ? all : all.filter((e) => !e.selfTest);
   entries.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -162,7 +174,8 @@ export function buildTimeline(sessions: SessionRow[], ledger: LaneSessionRecord[
   return { entries: entries.slice(offset, offset + limit), total: entries.length, selfTest };
 }
 
-/** The live listing dev.ts serves: corpus scan (index-cached) + ledger read + pure merge. */
-export function listTimeline(opts: { limit?: number; offset?: number; includeSelfTest?: boolean } = {}, root?: string, ledgerPath?: string): TimelinePage {
-  return buildTimeline(listAllSessions(root), readLaneLedger(ledgerPath), opts);
+/** The live listing dev.ts serves: corpus scan (async, index-cached, shared across concurrent and
+ *  back-to-back callers) + ledger read + pure merge. */
+export async function listTimeline(opts: TimelineQuery = {}, root?: string, ledgerPath?: string): Promise<TimelinePage> {
+  return buildTimeline(await listAllSessions(root), readLaneLedger(ledgerPath), opts);
 }

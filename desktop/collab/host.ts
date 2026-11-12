@@ -9,7 +9,9 @@
 //   - Answer a guest `hello` with a `welcome` (session header + recent transcript + current roster + the
 //     guest's read-only flag), unicast to that peer.
 //   - Broadcast every LUCID `ChatEvent` as an `event` frame so guests render the turn natively.
-//   - Keep a rolling roster + transcript, and push a `state` frame on every join/leave.
+//   - Keep a rolling roster + transcript, and push a `state` frame on every join/leave. P-REMOTE.16
+//     (ADR-0431): the transcript is a seq-numbered RICH journal (turn_journal.ts); a reconnecting guest's
+//     `hello.since` gets only the turns it missed, and every live event/user-turn frame carries its seq.
 //   - On stop, broadcast `bye` and close the transport.
 //
 // Security posture (invariant #3, fail-closed): Phase 1 is VIEW-ONLY. Even a guest that presents a valid write
@@ -30,6 +32,7 @@ import type {
 } from "./frames.ts";
 import { COLLAB_PROTOCOL_VERSION, isGuestFrame, validPromptAudio, validSttSource } from "./frames.ts";
 import type { PromptAudio, SttSource } from "./frames.ts";
+import { TurnJournal, boundTranscript, clip } from "./turn_journal.ts"; // P-REMOTE.16 (ADR-0431): seq-numbered rich replay
 import type { RelayControlMessage } from "@oh-my-pi/pi-wire";
 
 /** The slice of {@link CollabSocket} the host needs - so a mock transport can stand in for tests. */
@@ -120,7 +123,9 @@ export class CollabHost {
   #laneTranscript?: (laneId: string) => CollabTranscriptTurn[];
 
   #participants = new Map<number, CollabParticipant>();
-  #transcript: CollabTranscriptTurn[] = [];
+  /** P-REMOTE.16: the master session's seq-numbered rich turns. Retains twice the fresh-join window so a
+   *  reconnecting guest that was away a while can still be backfilled exactly. */
+  readonly #journal: TurnJournal;
   #model: string;
   #contextPct: number | null = null;
   #stopped = false;
@@ -132,6 +137,7 @@ export class CollabHost {
     this.#writeTokenB64 = opts.writeToken ? b64url(opts.writeToken) : null;
     this.#allowGuestWrite = opts.allowGuestWrite ?? false;
     this.#transcriptLimit = opts.transcriptLimit ?? DEFAULT_TRANSCRIPT_LIMIT;
+    this.#journal = new TurnJournal({ maxTurns: this.#transcriptLimit * 2 });
     this.#onGuestPrompt = opts.onGuestPrompt;
     this.#onGuestAbort = opts.onGuestAbort;
     this.#onParticipant = opts.onParticipant;
@@ -165,10 +171,11 @@ export class CollabHost {
   /** Record a user prompt into the replay transcript AND broadcast it LIVE (P-COLLAB.15) so every joined guest
    *  sees who typed what, in order. `from` is the author's display name (default: the host's own name). */
   pushUserTurn(text: string, from?: string): void {
-    const clipped = clip(text);
-    this.#appendTranscript({ role: "user", text: clipped });
+    // P-REMOTE.16: the journal settles any in-flight answer first and mints the turn's seq; the live frame
+    // carries that seq so a guest can tag what it folded and later replace exactly the turns a welcome re-sends.
+    const seq = this.#journal.user(text, from);
     if (this.#stopped) return;
-    this.#broadcast({ t: "user-turn", text: clipped, from: (from || this.#header.hostName || "host") });
+    this.#broadcast({ t: "user-turn", text: clip(text), from: (from || this.#header.hostName || "host"), seq });
   }
 
   /** P-COLLAB.14: refresh the pickable model + already-used-folder allowlists (call when the host switches
@@ -204,13 +211,14 @@ export class CollabHost {
       }
       return;
     }
-    // Fold state BEFORE broadcasting so a race-y join still gets a consistent welcome.
-    if (event.type === "done" && typeof event.text === "string" && event.text.trim()) {
-      this.#appendTranscript({ role: "assistant", text: clip(event.text) });
-    } else if (event.type === "usage" && event.size > 0) {
+    // Fold state BEFORE broadcasting so a race-y join still gets a consistent welcome. P-REMOTE.16: the
+    // journal folds every conversation event (token/thinking/tool/tool-meta/block/done/no-response) into the
+    // current turn and hands back that turn's seq, which rides the frame; status events fold to null.
+    const seq = this.#journal.fold(event);
+    if (event.type === "usage" && event.size > 0) {
       this.#contextPct = Math.min(100, Math.round((event.used / event.size) * 100));
     }
-    this.#broadcast({ t: "event", event });
+    this.#broadcast(seq === null ? { t: "event", event } : { t: "event", event, seq });
   }
 
   /** P-PWA-FOCUS.1: is anyone watching this lane? The lane observer asks before doing translation work. */
@@ -340,16 +348,24 @@ export class CollabHost {
     this.#participants.set(fromPeer, participant);
     this.#onParticipant?.("join", participant); // P-COLLAB.18: host-authoritative join audit
 
+    // P-REMOTE.16: a RECONNECTING guest says the highest settled seq it holds, and gets only what came after
+    // (plus the in-flight turn). Fail-closed on the claim: anything but a finite non-negative integer is
+    // treated as a fresh join, which replays the recent window and never trusts a junk cursor.
+    const claimed: unknown = hello.since; // wire input: the declared type is a hope, not a fact
+    const since = typeof claimed === "number" && Number.isInteger(claimed) && claimed >= 0 ? claimed : undefined;
+    const replay = this.#replay(since);
     // Unicast the welcome to the joiner, then refresh everyone's roster.
     this.#transport.send(
       {
         t: "welcome",
         protocol: COLLAB_PROTOCOL_VERSION,
         header: this.#header,
-        transcript: this.#transcript.slice(-this.#transcriptLimit),
+        transcript: replay.turns,
         participants: this.participants(),
         readOnly: !canWrite,
         posture: this.#currentPosture(), // P-REMOTE.14: the guest decides device-STT from this, fail-closed
+        ...(since === undefined ? {} : { since }),
+        ...(replay.complete ? {} : { complete: false }),
       },
       fromPeer,
     );
@@ -387,11 +403,22 @@ export class CollabHost {
     } catch { return { cui: true, lockdown: true }; }
   }
 
-  #appendTranscript(turn: CollabTranscriptTurn): void {
-    this.#transcript.push(turn);
-    // Keep a little more than we replay, so folding recent state stays cheap.
-    const cap = this.#transcriptLimit * 2;
-    if (this.#transcript.length > cap) this.#transcript.splice(0, this.#transcript.length - cap);
+  /** P-REMOTE.16: the welcome transcript. A fresh join (no `since`) gets the last `transcriptLimit` settled
+   *  turns + the live one; a reconnect gets every retained turn after `since` + the live one. Either way the
+   *  replay is bounded under the relay frame budget; `complete` is false when the journal no longer covers
+   *  every turn after `since` OR the bounder had to drop whole turns to fit. */
+  #replay(since: number | undefined): { turns: CollabTranscriptTurn[]; complete: boolean } {
+    const r = this.#journal.since(since);
+    let turns = r.turns;
+    if (since === undefined) {
+      const last = turns[turns.length - 1];
+      const live = last?.live ? last : null;
+      const settled = live ? turns.slice(0, -1) : turns;
+      turns = settled.slice(-this.#transcriptLimit);
+      if (live) turns.push(live);
+    }
+    const bounded = boundTranscript(turns);
+    return { turns: bounded.turns, complete: r.complete && !bounded.trimmed };
   }
 
   /** P-PWA-FOCUS.1: which conversation each guest is looking at, by peerId. Absent or "master" = the master
@@ -407,7 +434,9 @@ export class CollabHost {
     // been working for ten minutes must not look like an empty conversation. The lane engine already keeps a
     // bounded transcript for its respawn replay, so this reuses that memory rather than retaining more.
     // No provider (an older wiring) means no replay, and the live stream still arrives - never a crash.
-    const transcript = this.#laneTranscript?.(target) ?? [];
+    // P-REMOTE.16: the lane replay is RICH (thinking/tools/error + a trailing live turn) and bounded under the
+    // relay frame budget the same way a welcome is. Lane turns carry no seq: a lane-sync replaces the lane.
+    const transcript = boundTranscript(this.#laneTranscript?.(target) ?? []).turns;
     this.#transport.send({ t: "lane-sync", lane: target, transcript }, fromPeer);
   }
 
@@ -421,13 +450,6 @@ export class CollabHost {
 }
 
 // ── helpers (pure) ───────────────────────────────────────────────────────────
-
-const TRANSCRIPT_CLIP = 4_000; // per-turn text cap in the replay (keeps welcome bounded)
-
-function clip(text: string): string {
-  const t = text ?? "";
-  return t.length > TRANSCRIPT_CLIP ? `${t.slice(0, TRANSCRIPT_CLIP)}…` : t;
-}
 
 /** Sanitize a guest-supplied display name: strip control chars, collapse whitespace, cap length. */
 function cleanName(name: string | undefined): string {

@@ -64,3 +64,16 @@ describe("providerHasApiKey - hide the budget pill for OAuth-only, show it for A
     expect(providerHasApiKey(AUTH, "perplexity/sonar")).toBe(false);
   });
 });
+
+describe("providerForModel - an exact provider prefix outranks the family keyword", () => {
+  const withBedrock: AuthStatus = { ...AUTH, majors: [...AUTH.majors, p("amazon-bedrock", false, false)] };
+  test("a Bedrock-routed Claude is governed by the Bedrock credential, not the Anthropic login", () => {
+    expect(providerForModel(withBedrock, "amazon-bedrock/global.anthropic.claude-opus-5-5")?.id).toBe("amazon-bedrock");
+    // Without a Bedrock descriptor the keyword fallback still answers (nothing regresses for older snapshots).
+    expect(providerForModel(AUTH, "amazon-bedrock/global.anthropic.claude-opus-5-5")?.id).toBe("anthropic");
+  });
+  test("prefixes that are not LUCID ids keep resolving by keyword", () => {
+    expect(providerForModel(withBedrock, "openai-codex/gpt-5.2")?.id).toBe("openai");
+    expect(providerForModel(withBedrock, "anthropic/claude-opus-5-5")?.id).toBe("anthropic");
+  });
+});

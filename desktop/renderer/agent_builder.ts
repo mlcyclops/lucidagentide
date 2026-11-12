@@ -35,9 +35,9 @@ export function agentInterviewPrompt(description: string): string {
   return [
     "I want to build a reusable AGENT using LUCID's Agent Builder. Please run the \"what kind of agent do you want to build\" interview with me, step by step:",
     desc ? `\nWhat I have in mind: ${desc}` : "",
-    "\n1. Ask what the agent should DO — its goal and the ordered steps of its workflow.",
+    "\n1. Ask what the agent should DO: its goal and the ordered steps of its workflow.",
     "2. Ask which tools it needs and which websites / APIs it must reach.",
-    "3. Ask which CREDENTIALS it needs — but declare each by NAME only (e.g. SALESFORCE_API_TOKEN). NEVER ask me for a password, API key, or token VALUE; I add values in the Secrets & connections panel, which stores them in the encrypted vault.",
+    "3. Ask which CREDENTIALS it needs, but declare each by NAME only (e.g. SALESFORCE_API_TOKEN). NEVER ask me for a password, API key, or token VALUE; I add values in the Secrets & connections panel, which stores them in the encrypted vault.",
     "4. If I don't know how to obtain a credential, read the vendor's official docs and walk me through generating it.",
     "Keep each step short and ask ONE thing at a time. Once we've agreed on the plan, call the `agent_builder_open` tool to open it in the Agent Builder for me to review and confirm.",
     desc ? "\nStart by briefly confirming my idea, then ask your first clarifying question." : "\nAsk your first question now: what should this agent do?",
@@ -114,19 +114,19 @@ export function agentBuilderPanelHtml(): string {
       <div class="ab-tools">
         ${addNodeButtons()}
         <button class="ab-btn" id="abConnect" data-tip="Connect mode|Drag from one node to another to add a step edge; toggle off to reposition nodes">Connect</button>
-        <button class="ab-btn" id="abToolsBtn" data-tip="Tools|Manage the tool allow-list — remove a tool to BLOCK the agent from ever calling it">Tools</button>
-                <button class="ab-btn" id="abRunsBtn" data-tip="Runs|Recent executions of this agent — per-step trace, approvals, sub-agent hops">Runs</button>
+        <button class="ab-btn" id="abToolsBtn" data-tip="Tools|Manage the tool allow-list. Remove a tool to BLOCK the agent from ever calling it">Tools</button>
+                <button class="ab-btn" id="abRunsBtn" data-tip="Runs|Recent executions of this agent: per-step trace, approvals, sub-agent hops">Runs</button>
                 <button class="ab-btn" id="abScheduleBtn" data-tip="Schedule|Run this agent on a cadence while LUCID is open. Only TRUSTED, approval-free agents run unattended; schedules are created disarmed">Schedule</button>
-        <button class="ab-btn" id="abHistoryBtn" data-tip="History|The last 20 saved revisions of this agent — restore any of them (the restore is itself a new revision)">History</button>
+        <button class="ab-btn" id="abHistoryBtn" data-tip="History|The last 20 saved revisions of this agent. Restore any of them (the restore is itself a new revision)">History</button>
         <button class="ab-btn" id="abTemplatesBtn" data-tip="Templates|Start from a curated example workflow. Templates go through the same scan + review as any import">Templates</button>
         <button class="ab-btn" id="abValidate" data-tip="Check the workflow is a valid DAG">Validate</button>
         <button class="ab-btn ok" id="abSave" data-tip="Validate + save this agent">Save</button>
         <button class="ab-btn" id="abSecrets" data-tip="Secrets & connections|Add the API credentials this agent needs to the encrypted vault (never to the agent), and confirm the sites it may reach">Secrets &amp; connections</button>
         <button class="ab-btn" id="abRun" data-tip="Run|Give the agent a task and run it live inside LUCID (under the security gate + its tool allow-list)">Run ▸</button>
         <button class="ab-btn" id="abExport" data-tip="Export|Compile + package this agent (electron target) as a portable, tamper-evident bundle for the enterprise add-on">Export</button>
-        <button class="ab-btn" id="abShare" data-tip="Share|Save a portable .lucid-agent.json another LUCID Agent IDE can import. Carries the workflow + credential NAMES and setup guidance — never credential values">Share</button>
+        <button class="ab-btn" id="abShare" data-tip="Share|Save a portable .lucid-agent.json another LUCID Agent IDE can import. Carries the workflow + credential NAMES and setup guidance, never credential values">Share</button>
         <button class="ab-btn" id="abImportBtn" data-tip="Import|Load a shared .lucid-agent.json OR an n8n workflow JSON. Either is security-scanned and held for YOUR review before it can run">Import</button>
-        <button class="ab-btn" id="abN8n" data-tip="Export for n8n|Save this workflow as an importable n8n workflow JSON — approvals become real Wait nodes; a provenance sticky embeds the portable LUCID agent for lossless round-trip">n8n ⇩</button>
+        <button class="ab-btn" id="abN8n" data-tip="Export for n8n|Save this workflow as an importable n8n workflow JSON. Approvals become real Wait nodes; a provenance sticky embeds the portable LUCID agent for lossless round-trip">n8n ⇩</button>
         <button class="ab-btn" id="abN8nPush" data-tip="Push to n8n|Send this workflow straight to your private hosted n8n instance. Requires the LUCID enterprise add-on's n8n connector">n8n ⇧</button>
         <input type="file" id="abImportFile" accept=".json,application/json" hidden />
       </div>
@@ -179,10 +179,10 @@ export function secretsPanelHtml(spec: AgentSpec, inVault: Set<string>, isElectr
           const p = s.provisioning;
           const provBits: string[] = [];
           if (p?.provider)
-            provBits.push(`<div class="ab-cred-purpose">Fetched just-in-time from <b>${esc(p.provider.kind)}</b> (${esc(p.provider.ref)}) when a run starts — requires the enterprise KMS connector; no value is stored in LUCID.</div>`);
+            provBits.push(`<div class="ab-cred-purpose">Fetched just-in-time from <b>${esc(p.provider.kind)}</b> (${esc(p.provider.ref)}) when a run starts. Requires the enterprise KMS connector; no value is stored in LUCID.</div>`);
           if (p?.instructions) provBits.push(`<div class="ab-cred-purpose">${esc(p.instructions)}</div>`);
           if (p?.method === "jit-ticket") {
-            provBits.push(`<div class="ab-cred-purpose">Request a Just-In-Time token via <b>${esc(p.ticket?.system ?? "your IT ticketing system")}</b>, then paste the issued value below — it goes to the vault, never into the agent.</div>`);
+            provBits.push(`<div class="ab-cred-purpose">Request a Just-In-Time token via <b>${esc(p.ticket?.system ?? "your IT ticketing system")}</b>, then paste the issued value below. It goes to the vault, never into the agent.</div>`);
             if (p.ticket?.rationale) provBits.push(`<div class="ab-cred-purpose">Ticket rationale: ${esc(p.ticket.rationale)}</div>`);
             const tpl = Object.entries(p.ticket?.template ?? {});
             if (tpl.length)
@@ -199,7 +199,7 @@ export function secretsPanelHtml(spec: AgentSpec, inVault: Set<string>, isElectr
         .join("")
     : `<li class="ab-cred-row ab-conn-empty">No credentials required.</li>`;
   const vaultNote = isElectron
-    ? `Credentials are encrypted by your OS keystore and are NEVER given to the agent, the spec, or chat — the agent only sees the name.`
+    ? `Credentials are encrypted by your OS keystore and are NEVER given to the agent, the spec, or chat. The agent only sees the name.`
     : `The credential vault is available in the LUCID desktop app only; open it there to store secrets securely.`;
   return `<div class="ab-conn">
     <div class="ab-ed-head"><span class="ab-kind">Secrets &amp; connections</span></div>
@@ -265,14 +265,14 @@ export function toolChipsHtml(spec: AgentSpec, mcpTools: McpCatalogTool[] = []):
         .map((t) => {
           const uses = inUse.get(t) ?? 0;
           const badge = uses
-            ? `<span class="ab-chip-uses" title="Used by ${uses} step${uses > 1 ? "s" : ""} — removing blocks the call and flags the step">${uses} step${uses > 1 ? "s" : ""}</span>`
+            ? `<span class="ab-chip-uses" title="Used by ${uses} step${uses > 1 ? "s" : ""}; removing blocks the call and flags the step">${uses} step${uses > 1 ? "s" : ""}</span>`
             : "";
           const mcp = mcpByName.get(t);
-          const title = mcp ? `${mcp.desc} — third-party MCP tool from "${mcp.server}"` : t.startsWith("mcp__") ? "Third-party MCP tool" : TOOL_DESC[t];
-          return `<li class="ab-chip" data-tool="${esc(t)}"><span class="ab-chip-name"${title ? ` title="${esc(title)}"` : ""}>${esc(t)}</span>${badge}<button class="ab-chip-rm" data-rm-tool="${esc(t)}" data-tip="Remove ${esc(t)} — the agent will be BLOCKED from calling it">×</button></li>`;
+          const title = mcp ? `${mcp.desc} (third-party MCP tool from "${mcp.server}")` : t.startsWith("mcp__") ? "Third-party MCP tool" : TOOL_DESC[t];
+          return `<li class="ab-chip" data-tool="${esc(t)}"><span class="ab-chip-name"${title ? ` title="${esc(title)}"` : ""}>${esc(t)}</span>${badge}<button class="ab-chip-rm" data-rm-tool="${esc(t)}" data-tip="Remove ${esc(t)}: the agent will be BLOCKED from calling it">×</button></li>`;
         })
         .join("")
-    : `<li class="ab-chip ab-chip-empty">No tools allow-listed — this agent cannot call any tools.</li>`;
+    : `<li class="ab-chip ab-chip-empty">No tools allow-listed. This agent cannot call any tools.</li>`;
   const addable = TOOL_CATALOG.filter((t) => !spec.tools.includes(t.name));
   const addableMcp = mcpTools.filter((t) => !spec.tools.includes(t.name));
   const adder = addable.length || addableMcp.length
@@ -280,13 +280,13 @@ export function toolChipsHtml(spec: AgentSpec, mcpTools: McpCatalogTool[] = []):
         addable.length ? `<optgroup label="omp tools">${addable.map((t) => `<option value="${esc(t.name)}" title="${esc(t.desc)}">${esc(t.name)}</option>`).join("")}</optgroup>` : ""
       }${
         addableMcp.length
-          ? `<optgroup label="MCP tools (third-party)">${addableMcp.map((t) => `<option value="${esc(t.name)}" title="${esc(`${t.desc} — third-party MCP tool from \"${t.server}\"`)}">${esc(t.name)}</option>`).join("")}</optgroup>`
+          ? `<optgroup label="MCP tools (third-party)">${addableMcp.map((t) => `<option value="${esc(t.name)}" title="${esc(`${t.desc} (third-party MCP tool from \"${t.server}\")`)}">${esc(t.name)}</option>`).join("")}</optgroup>`
           : ""
       }</select></div>`
     : "";
   return `<div class="ab-toolchips">
     <div class="ab-ed-head"><span class="ab-kind">Tool allow-list</span></div>
-    <div class="ab-conn-note">The agent may ONLY call tools on this list — every other tool call is denied at run time by its compiled allow-list and LUCID's security gate. Remove a tool to block it.</div>
+    <div class="ab-conn-note">The agent may ONLY call tools on this list. Every other tool call is denied at run time by its compiled allow-list and LUCID's security gate. Remove a tool to block it.</div>
     <ul class="ab-chip-list">${chips}</ul>
     ${adder}
   </div>`;
@@ -298,10 +298,10 @@ export function historyPanelHtml(revisions: SpecRevisionSummary[]): string {
     ? revisions
         .map(
           (r) =>
-            `<li class="ab-runrow" data-rev="${r.updated_at}"><span class="ab-runrow-when">${esc(new Date(r.updated_at).toLocaleString())}</span><span class="ab-runrow-meta">${esc(r.name)} · ${r.nodes} node${r.nodes === 1 ? "" : "s"} / ${r.edges} edge${r.edges === 1 ? "" : "s"}</span><button class="ab-btn" data-restore="${r.updated_at}" data-tip="Restore this revision as the current spec (the restore itself is versioned — nothing is lost)">Restore</button></li>`,
+            `<li class="ab-runrow" data-rev="${r.updated_at}"><span class="ab-runrow-when">${esc(new Date(r.updated_at).toLocaleString())}</span><span class="ab-runrow-meta">${esc(r.name)} · ${r.nodes} node${r.nodes === 1 ? "" : "s"} / ${r.edges} edge${r.edges === 1 ? "" : "s"}</span><button class="ab-btn" data-restore="${r.updated_at}" data-tip="Restore this revision as the current spec (the restore itself is versioned; nothing is lost)">Restore</button></li>`,
         )
         .join("")
-    : `<li class="ab-runrow ab-runrow-empty">No revisions yet — every save snapshots one (the newest 20 are kept).</li>`;
+    : `<li class="ab-runrow ab-runrow-empty">No revisions yet. Every save snapshots one (the newest 20 are kept).</li>`;
   return `<div class="ab-runs">
     <div class="ab-ed-head"><span class="ab-kind">Revision history</span></div>
     <ul class="ab-run-list">${rows}</ul>
@@ -321,7 +321,7 @@ export function templatesPanelHtml(templates: AgentTemplateInfo[]): string {
     : `<li class="ab-runrow ab-runrow-empty">No templates found in this build.</li>`;
   return `<div class="ab-runs">
     <div class="ab-ed-head"><span class="ab-kind">Starter templates</span></div>
-    <div class="ab-conn-note">Templates are scanned and held for your review exactly like any imported agent — then they're yours to edit.</div>
+    <div class="ab-conn-note">Templates are scanned and held for your review exactly like any imported agent, then they're yours to edit.</div>
     <ul class="ab-run-list">${rows}</ul>
   </div>`;
 }
@@ -346,7 +346,7 @@ export function schedulePanelHtml(spec: AgentSpec, blockedWhy: string | null): s
       <label class="ab-fld"><span>Value</span>
         <input class="ab-in" id="abSchedValue" value="60" placeholder="60  |  09:30" /></label>
     </div>
-    <div class="ab-conn-note">Runs only while LUCID is open, through the same gate + allow-list + trust checks as Run ▸, and each run leaves a trace in Runs. Created DISARMED — arm it in the Goal panel's Automations list. If this agent is ever un-trusted, the schedule suspends itself.</div>
+    <div class="ab-conn-note">Runs only while LUCID is open, through the same gate + allow-list + trust checks as Run ▸, and each run leaves a trace in Runs. Created DISARMED: arm it in the Goal panel's Automations list. If this agent is ever un-trusted, the schedule suspends itself.</div>
     <button class="ab-btn ok" id="abSchedCreate">Create schedule (disarmed)</button>
   </div>`;
 }
@@ -357,11 +357,11 @@ export function runsPanelHtml(traces: TraceSummary[]): string {
     ? traces
         .map((t) => {
           const when = new Date(t.started_at).toLocaleString();
-          const dur = t.finished_at ? `${Math.max(1, Math.round((t.finished_at - t.started_at) / 1000))}s` : "—";
+          const dur = t.finished_at ? `${Math.max(1, Math.round((t.finished_at - t.started_at) / 1000))}s` : "-";
           return `<li class="ab-runrow" data-run="${esc(t.run_id)}"><span class="pill ${esc(t.status)}">${esc(t.status)}</span><span class="ab-runrow-when">${esc(when)}</span><span class="ab-runrow-meta">${t.steps} step${t.steps === 1 ? "" : "s"} · ${esc(dur)}</span></li>`;
         })
         .join("")
-    : `<li class="ab-runrow ab-runrow-empty">No runs yet — use Run ▸ and the trace lands here.</li>`;
+    : `<li class="ab-runrow ab-runrow-empty">No runs yet. Use Run ▸ and the trace lands here.</li>`;
   return `<div class="ab-runs">
     <div class="ab-ed-head"><span class="ab-kind">Recent runs</span></div>
     <ul class="ab-run-list">${rows}</ul>
@@ -390,11 +390,11 @@ export function traceDetailHtml(trace: AgentRunTrace): string {
  *  enforced server-side by the SegmentedRun machine — this card is the resume/deny control, not the guard. */
 export function runApprovalHtml(label: string, outputSoFar: string): string {
   return `<div class="ab-run-approval">
-    <div class="ab-run-approval-head">⏸ Waiting for your approval — <b>${esc(label)}</b></div>
+    <div class="ab-run-approval-head">⏸ Waiting for your approval: <b>${esc(label)}</b></div>
     ${outputSoFar.trim() ? `<div class="ab-run-out ab-run-approval-out">${esc(outputSoFar)}</div>` : ""}
     <div class="ab-run-approval-acts">
-      <button class="ab-btn ok" id="abRunApprove" data-tip="Approve|Continue the workflow past this checkpoint">Approve — continue</button>
-      <button class="ab-btn" id="abRunDeny" data-tip="Deny|Stop the workflow here. The remaining steps never run">Deny — stop</button>
+      <button class="ab-btn ok" id="abRunApprove" data-tip="Approve|Continue the workflow past this checkpoint">Approve and continue</button>
+      <button class="ab-btn" id="abRunDeny" data-tip="Deny|Stop the workflow here. The remaining steps never run">Deny and stop</button>
     </div>
   </div>`;
 }
@@ -428,7 +428,7 @@ export function nodeEditorHtml(node: AgentNode, tools: string[], mcpTools: McpCa
     const inList = new Set(tools);
     const opt = (t: string) => {
       const mcp = mcpByName.get(t);
-      const title = mcp ? `${mcp.desc} — third-party MCP tool from "${mcp.server}"; calls leave LUCID via that server` : TOOL_DESC[t];
+      const title = mcp ? `${mcp.desc} (third-party MCP tool from "${mcp.server}"; calls leave LUCID via that server)` : TOOL_DESC[t];
       return `<option value="${esc(t)}"${t === node.tool ? " selected" : ""}${title ? ` title="${esc(title)}"` : ""}>${esc(t)}</option>`;
     };
     const listed = names.filter((t) => inList.has(t)).map(opt).join("");
@@ -436,7 +436,7 @@ export function nodeEditorHtml(node: AgentNode, tools: string[], mcpTools: McpCa
     const mcp = names.filter((t) => !inList.has(t) && mcpByName.has(t)).map(opt).join("");
     const placeholder = node.tool ? "" : `<option value="" selected disabled>(choose a tool)</option>`;
     kindFields = `<label class="ab-fld"><span>Tool</span>
-      <select class="ab-in" id="abTool">${placeholder}${listed ? `<optgroup label="In the allow-list">${listed}</optgroup>` : ""}${builtin ? `<optgroup label="omp tools — picking one adds it to the allow-list">${builtin}</optgroup>` : ""}${mcp ? `<optgroup label="MCP tools (third-party) — picking one adds it to the allow-list">${mcp}</optgroup>` : ""}</select></label>
+      <select class="ab-in" id="abTool">${placeholder}${listed ? `<optgroup label="In the allow-list">${listed}</optgroup>` : ""}${builtin ? `<optgroup label="omp tools (picking one adds it to the allow-list)">${builtin}</optgroup>` : ""}${mcp ? `<optgroup label="MCP tools (third-party). Picking one adds it to the allow-list">${mcp}</optgroup>` : ""}</select></label>
     <div class="ab-conn-note">This agent may only call allow-listed tools; choosing a tool here allow-lists it automatically.${mcp ? " MCP tools run on the third-party server that provides them." : ""}</div>`;
   } else if (node.kind === "subagent") {
     kindFields = `<label class="ab-fld"><span>Sub-agent spec id</span>
@@ -447,7 +447,7 @@ export function nodeEditorHtml(node: AgentNode, tools: string[], mcpTools: McpCa
     const outs = spec ? spec.edges.filter((e) => e.from === node.id) : [];
     const nodeById = new Map((spec?.nodes ?? []).map((n) => [n.id, n])); // dynamic per-call lookup
     kindFields = outs.length
-      ? `<div class="ab-conn-note">Name each choice — the agent picks exactly one path at run time.</div>${outs
+      ? `<div class="ab-conn-note">Name each choice. The agent picks exactly one path at run time.</div>${outs
           .map((e) => `<label class="ab-fld"><span>Choice → ${esc(nodeById.get(e.to)?.label ?? e.to)}</span><input class="ab-in" data-edge-label="${esc(e.id)}" value="${esc(e.label ?? "")}" placeholder="e.g. yes / no / escalate" /></label>`)
           .join("")}`
       : `<div class="ab-conn-note">Connect this branch to at least two next steps (Connect mode), then name the choices here.</div>`;

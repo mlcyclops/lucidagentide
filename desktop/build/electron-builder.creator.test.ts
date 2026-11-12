@@ -20,6 +20,9 @@ interface BuilderConfig {
   pkg?: { mustClose?: string[] };
   nsis?: { artifactName?: string; shortcutName?: string; perMachine?: boolean; oneClick?: boolean };
   portable?: { artifactName?: string };
+  win?: { target?: ({ target: string } | string)[] };
+  msi?: { artifactName?: string };
+  appx?: { artifactName?: string; identityName?: string };
   linux?: { artifactName?: string; desktop?: Record<string, string> };
   deb?: { artifactName?: string };
   rpm?: { artifactName?: string };
@@ -61,7 +64,8 @@ describe("Creator packaging overlay (CREATOR-0, ADR-0279)", () => {
     expect(base.productName).toBe(AGENT_FLAVOR.productName);
     expect(base.directories?.output).toBe("release");
     expect(base.nsis?.artifactName).toBe("LucidAgent-Setup.${ext}");
-    expect(base.extraMetadata).toBeUndefined();
+    // ADR-0458: the standard package is stamped `agent` so an inherited LUCID_BUILD_FLAVOR cannot flip it.
+    expect(base.extraMetadata).toEqual({ lucidBuildFlavor: "agent" });
     expect(base.protocols).toBeUndefined();
     expect(base.publish?.[0]?.provider).toBe("github");
   });
@@ -89,6 +93,17 @@ describe("Creator packaging overlay (CREATOR-0, ADR-0279)", () => {
     for (const name of [cfg.nsis?.artifactName, cfg.portable?.artifactName, cfg.mac?.artifactName, cfg.linux?.artifactName]) {
       expect(name).not.toContain("LucidAgent");
     }
+  });
+
+  // WINPKG (issue #345) added msi + appx to the BASE win targets, named `LucidAgent-*` with Agent's appx
+  // identityName. Inherited through the clone, every Creator Windows build would emit Agent-identity
+  // packages, which the release-identity gate refuses, failing the Creator Windows leg outright.
+  test("Creator builds no Agent-identity Windows package: msi + appx stay Agent-only", () => {
+    const names = (c: BuilderConfig) => (c.win?.target ?? []).map((t) => (typeof t === "string" ? t : t.target));
+    expect(names(base)).toEqual(expect.arrayContaining(["nsis", "portable", "msi", "appx"]));
+    expect(names(cfg).toSorted()).toEqual(["nsis", "portable"]);
+    expect(cfg.msi).toBeUndefined();
+    expect(cfg.appx).toBeUndefined();
   });
 
   test("display names and mac uninstall targeting follow the Creator identity", () => {

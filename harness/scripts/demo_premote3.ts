@@ -15,7 +15,7 @@ import { CollabHost } from "../../desktop/collab/host.ts";
 import { CollabGuest } from "../../desktop/collab/guest.ts";
 import { generateRoomKey, importRoomKey } from "../../desktop/collab/crypto.ts";
 import { generateRoomId } from "../../desktop/collab/link.ts";
-import { foldEvent, renderTranscript, renderHeader, statusLabel, type ViewItem } from "../../desktop/collab/pwa_view.ts";
+import { foldEvent, mergeWelcome, renderTranscript, renderHeader, statusLabel, type ViewItem } from "../../desktop/collab/pwa_view.ts";
 import type { AuthVerdict } from "../../desktop/collab/relay_auth.ts";
 import type { ChatEvent } from "../../desktop/renderer/chat_events.ts";
 
@@ -46,7 +46,9 @@ host.pushUserTurn("clean up the tokenizer");
 let items: ViewItem[] = [];
 const guestSock = new CollabSocket({ wsUrl, role: "guest", key, authToken: () => "tok-phone" });
 const guest = new CollabGuest(guestSock, { name: "nick@phone", writeToken: null }, {
-  onEvent: (e: ChatEvent) => { items = foldEvent(items, e); },
+  // P-REMOTE.16: ONE item list - the welcome replay expands into it, live events fold into it by turn seq.
+  onWelcome: (w) => { items = mergeWelcome(items, w); },
+  onEvent: (e: ChatEvent, seq?: number) => { items = foldEvent(items, e, seq); },
 });
 guest.start();
 
@@ -64,7 +66,7 @@ host.pushEvent({ type: "token", text: "I'll hoist " });
 host.pushEvent({ type: "token", text: "the switch." });
 host.pushEvent({ type: "done", text: "I'll hoist the switch." });
 await until(() => items.some((i) => i.kind === "answer" && !i.streaming), "answer finalized");
-const html = renderTranscript(guest.view().transcript, items);
+const html = renderTranscript(items);
 if (!html.includes("clean up the tokenizer")) fail("prior user turn missing");
 if (!html.includes("Thinking") || !html.includes("the lexer is the hot path")) fail("thinking not rendered");
 if (!html.includes("read") || !html.includes("src/lexer.ts")) fail("tool chip not rendered");
@@ -74,8 +76,8 @@ pass("live turn renders on the phone: thinking block + tool chip + reconciled st
 // [3] hostile host-echoed content is ESCAPED (never live markup on the phone)
 host.pushEvent({ type: "token", text: `<img src=x onerror=alert(1)>` });
 host.pushEvent({ type: "done", text: `<img src=x onerror=alert(1)>` });
-await until(() => renderTranscript(guest.view().transcript, items).includes("&lt;img"), "hostile answer escaped");
-const h2 = renderTranscript(guest.view().transcript, items);
+await until(() => renderTranscript(items).includes("&lt;img"), "hostile answer escaped");
+const h2 = renderTranscript(items);
 if (h2.includes("<img src=x")) fail("hostile content rendered as live markup");
 pass("hostile host-echoed content is escaped to text (no live markup on the phone)");
 

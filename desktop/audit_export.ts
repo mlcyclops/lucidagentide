@@ -129,7 +129,7 @@ export interface Sink {
  *  paths used to append to ~/.omp/lucid-audit.jsonl and silently grow the operator's real SIEM export with
  *  fixture events. `LUCID_AUDIT_PATH` overrides it explicitly; under test without an override it goes to a
  *  per-process temp file. Same rule and same reasoning as the block ledger in security_log.ts. */
-function defaultAuditPath(): string {
+export function defaultAuditPath(): string {
   const override = process.env.LUCID_AUDIT_PATH?.trim();
   if (override) return override;
   if (process.env.NODE_ENV === "test") return join(tmpdir(), `lucid-audit-test-${process.pid}.jsonl`);

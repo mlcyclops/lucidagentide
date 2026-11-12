@@ -1,0 +1,213 @@
+<!doctype html>
+<!--
+  Copyright (c) 2026 TechLead 187 LLC
+  SPDX-License-Identifier: BUSL-1.1
+
+  DRAFT for TechLead187/lucidagentIDEaddon: website/public/index.html (the lucid-agents.com
+  marketing page). Prepared in the public repo because the add-on checkout is not on this
+  machine, same convention as the other files in docs/addon-drafts/.
+
+  HOW TO APPLY (three edits, nothing else on the page changes):
+  1. HERO: replace
+       <span class="badge-pill">v2.2.0 · Themes + current-gen models</span>
+     with
+       <a class="badge-pill" href="#beta"><span class="pulse"></span>v2.3.0 beta is open · help us test</a>
+     (.badge-pill and .pulse already exist in the page CSS.)
+  2. SECTION: paste everything between BEGIN and END below immediately after the closing
+     </section> of the DOWNLOAD section (id="download"), before the "See it in action" section.
+     It uses only classes, icons and inline styles the page already has; the one new icon
+     reference, #i-bug, is already in the page's sprite.
+  3. Leave "softwareVersion": "2.2.0" in the JSON-LD and the /releases/latest/ download buttons
+     alone until 2.3.0 ships as a stable release: betas are prereleases, and the latest/ links
+     must keep pointing at stable.
+  Deploy the marketing page with the add-on's website/deploy.sh (the Cloud Run service that
+  lucid-agents.com maps to and that Firebase Hosting falls back to). This edit does not touch
+  firebase-public/ (/signin, /remote, /admin, /r/**).
+
+  Everything outside BEGIN/END is PREVIEW-ONLY scaffolding: the CSS is copied verbatim from the
+  live page, plus one override that shows .reveal elements without the scroll observer.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PREVIEW: lucid-agents.com v2.3.0 beta section</title>
+<style>
+  :root{
+    --bg:#04060a; --bg2:#070b12; --ink:#eef3f7;
+    --dim:#93a4b3; --faint:#586470;
+    --green:#4fe08a; --green-d:#2ea44f; --mag:#c86be0; --mag2:#e79bf2;
+    --cyan:#54d6e6; --violet:#8a86f5;
+    --line:rgba(255,255,255,.09); --line-s:rgba(255,255,255,.05);
+    --glass:rgba(255,255,255,.028); --glass-2:rgba(255,255,255,.05);
+    --mono:ui-monospace,"SFMono-Regular",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --maxw:1180px;
+    --grad:linear-gradient(100deg,var(--green),var(--cyan) 45%,var(--violet) 72%,var(--mag));
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth; -webkit-text-size-adjust:100%}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+  body{
+    margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans);
+    line-height:1.62; -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+    overflow-x:hidden;
+  }
+  a{color:var(--green); text-decoration:none; transition:color .18s}
+  a:hover{color:var(--mag2)}
+  h1,h2,h3,h4{line-height:1.08; letter-spacing:-.02em; margin:0; font-weight:750}
+  p{margin:0}
+  ::selection{background:rgba(79,224,138,.28); color:#fff}
+  :focus-visible{outline:2px solid var(--green); outline-offset:3px; border-radius:6px}
+  .wrap{position:relative; z-index:3; max-width:var(--maxw); margin:0 auto; padding:0 24px}
+  .btn{--bc:var(--green); font-family:var(--sans); font-weight:650; font-size:14px; cursor:pointer;
+    display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:11px 18px; border-radius:999px; border:1px solid transparent; transition:transform .16s, box-shadow .16s, background .16s; white-space:nowrap}
+  .btn.stack{flex-direction:column; gap:2px; white-space:normal; line-height:1.15; padding:12px 22px}
+  .btn svg{width:17px;height:17px}
+  .btn.solid{background:var(--grad); color:#03110a; box-shadow:0 6px 26px rgba(79,224,138,.26); background-size:180% 180%}
+  .btn.solid:hover{transform:translateY(-2px); box-shadow:0 12px 40px rgba(79,224,138,.4)}
+  .btn.ghost{border-color:var(--line); color:var(--ink); background:var(--glass)}
+  .btn.ghost:hover{border-color:var(--mag); color:#fff; background:rgba(200,107,224,.12)}
+  .btn.sm{padding:8px 15px; font-size:13px}
+  .badge-pill{display:inline-flex; align-items:center; gap:9px; font-family:var(--mono); font-size:12px; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--green); padding:7px 15px; border:1px solid var(--line); border-radius:999px; background:var(--glass)}
+  .badge-pill .pulse{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 0 rgba(79,224,138,.7);animation:ring 2.4s infinite}
+  @keyframes ring{0%{box-shadow:0 0 0 0 rgba(79,224,138,.6)}70%{box-shadow:0 0 0 9px rgba(79,224,138,0)}100%{box-shadow:0 0 0 0 rgba(79,224,138,0)}}
+  /* ── sections ───────────────────────────────────────────────── */
+  section{position:relative; padding:92px 0}
+  .eyebrow{display:flex; align-items:center; gap:14px; font-family:var(--mono); font-size:12.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--green)}
+  .eyebrow .num{font-weight:700; color:#03110a; background:var(--grad); padding:3px 9px; border-radius:7px; font-size:12px}
+  .eyebrow .rule{height:1px; flex:1; background:linear-gradient(90deg,var(--line),transparent)}
+  h2.big{font-size:clamp(28px,4.8vw,50px); font-weight:800; margin:20px 0 14px; max-width:19ch; letter-spacing:-.03em}
+  .sub{color:var(--dim); max-width:66ch; font-size:clamp(15px,1.9vw,17.5px)}
+
+  .reveal{opacity:0; transform:translateY(26px); transition:opacity .8s cubic-bezier(.2,.7,.2,1), transform .8s cubic-bezier(.2,.7,.2,1)}
+  .reveal.in{opacity:1; transform:none}
+  @media (prefers-reduced-motion:reduce){.reveal{opacity:1; transform:none; transition:none}}
+
+  .grid{display:grid; gap:16px; margin-top:38px}
+  .g2{grid-template-columns:repeat(2,1fr)} .g3{grid-template-columns:repeat(3,1fr)} .g4{grid-template-columns:repeat(4,1fr)}
+  @media(max-width:900px){.g3,.g4{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:600px){.g2,.g3,.g4{grid-template-columns:1fr}}
+
+  .card{position:relative; border:1px solid var(--line); border-radius:18px; padding:24px; background:var(--glass); backdrop-filter:blur(10px); overflow:hidden; transition:transform .25s, border-color .25s, box-shadow .25s}
+  .card::after{content:"";position:absolute;inset:0;border-radius:18px;padding:1px;background:var(--grad);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:0;transition:opacity .25s;pointer-events:none}
+  .card:hover{transform:translateY(-5px); box-shadow:0 22px 50px rgba(0,0,0,.5)}
+  .card:hover::after{opacity:.55}
+  .card .ico{width:46px;height:46px;border-radius:12px;display:grid;place-items:center;border:1px solid var(--line);background:radial-gradient(circle at 30% 25%,rgba(79,224,138,.18),transparent 70%);margin-bottom:16px}
+  .card .ico svg{width:24px;height:24px;color:var(--green)}
+  .card h3{font-size:16.5px; color:#fff; margin-bottom:8px; letter-spacing:-.01em}
+  .card p{color:var(--dim); font-size:14.5px}
+  .card p code, .callout code, .term code{font-family:var(--mono);font-size:.86em;color:var(--green);background:rgba(79,224,138,.1);padding:2px 6px;border-radius:5px}
+
+  .lbl-tag{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;color:var(--faint);text-transform:uppercase;margin-bottom:10px;display:block}
+
+  /* ── download ───────────────────────────────────────────────── */
+  .dl-card{transition:border-color .3s, transform .3s, background .3s; display:flex; flex-direction:column; padding-bottom:12px}
+  .dl-card p{margin-bottom:auto}
+  .dl-note{margin-top:22px; font-family:var(--mono); font-size:12.5px; color:var(--faint); text-align:center}
+  .callout{margin-top:34px; border:1px solid var(--line); border-left:2px solid var(--green); border-radius:14px; padding:22px 24px; background:var(--glass); font-size:15.5px; color:var(--ink)}
+  .callout b{color:#fff}
+  /* ── faq ────────────────────────────────────────────────────── */
+  details.faq{border:1px solid var(--line); border-radius:14px; margin-top:12px; background:var(--glass); overflow:hidden; transition:border-color .2s}
+  details.faq[open]{border-color:rgba(79,224,138,.35)}
+  details.faq summary{cursor:pointer; padding:19px 22px; font-weight:650; font-size:16.5px; color:#fff; list-style:none; display:flex; justify-content:space-between; align-items:center; gap:16px}
+  details.faq.sm summary{padding:14px 16px; font-size:14.5px}
+  details.faq summary::-webkit-details-marker{display:none}
+  details.faq summary .chev{width:22px;height:22px;flex:none;color:var(--green);transition:transform .25s}
+  details.faq.sm summary .chev{width:18px;height:18px}
+  details.faq[open] summary .chev{transform:rotate(45deg)}
+  details.faq .ans{padding:0 22px 20px; color:var(--dim); font-size:15px}
+  details.faq.sm .ans{padding:0 16px 16px; font-size:14px}
+  /* PREVIEW-ONLY: the live page reveals these on scroll */
+  .reveal{opacity:1; transform:none}
+  .preview-hero{text-align:center; padding:48px 0 0}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-contain" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></symbol>
+    <symbol id="i-brain" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="6" r="2.3"/><circle cx="6" cy="16.5" r="2.3"/><circle cx="18" cy="16.5" r="2.3"/><path d="M10.5 7.7 7.4 14.4M13.5 7.7 16.6 14.4M8.3 16.5h7.4"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 3.5 8 12 12.5 20.5 8z"/><path d="M4 12l8 4.2 8-4.2M4 16l8 4.2 8-4.2"/></symbol>
+    <symbol id="i-route" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="18" r="2.2"/><path d="M8 6h6a4 4 0 0 1 0 8h-4a4 4 0 0 0 0 8" transform="translate(0 -4)"/></symbol>
+    <symbol id="i-fan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 6.6 17 11M7 17.4 17 13"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 10 17 19 7"/></symbol>
+    <symbol id="i-dl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0 4-4m-4 4-4-4"/><path d="M5 19h14"/></symbol>
+    <symbol id="i-bug" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="8" height="10" rx="4"/><path d="M12 5v3M8 10 5.5 8M16 10l2.5-2M8 14H5M19 14h-3M8 17l-2 2M16 17l2 2"/></symbol>
+    <symbol id="i-term" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 9l3 3-3 3M13 15h4"/></symbol>
+    <symbol id="i-scan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5h3M20 8V5h-3M4 16v3h3M20 16v3h-3"/><path d="M4 12h16"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v12M6 12h12"/></symbol>
+  </defs>
+</svg>
+<!-- PREVIEW-ONLY: the hero badge from step 1 -->
+<div class="preview-hero wrap"><a class="badge-pill" href="#beta"><span class="pulse"></span>v2.3.0 beta is open · help us test</a></div>
+
+<!-- ===== BEGIN v2.3.0 BETA SECTION (paste after the DOWNLOAD section) ===== -->
+  <!-- v2.3.0 BETA -->
+  <section id="beta" aria-labelledby="s-beta">
+    <div class="wrap">
+      <div class="reveal">
+        <p class="eyebrow"><span class="num">2.3</span> Coming soon · open beta <span class="rule"></span></p>
+        <h2 class="big" id="s-beta">v2.3.0 is almost here. Help us break it first.</h2>
+        <p class="sub">Everything in the next release is already out as a <b>public beta</b>. Install it, use it on real work, and tell us what breaks before it reaches everyone. Betas ship as GitHub <b>prereleases</b>: the download buttons above stay on 2.2.x, stable installs are never offered a beta, and a beta install updates itself to the next beta.</p>
+        <p style="margin-top:26px;display:flex;gap:12px;flex-wrap:wrap">
+          <a class="btn solid" href="https://github.com/mlcyclops/lucidagentide/releases" rel="noopener"><svg aria-hidden="true"><use href="#i-dl"/></svg> Get the newest beta</a>
+          <a class="btn ghost" href="https://github.com/mlcyclops/lucidagentide/issues/new?template=bug_report.yml" rel="noopener"><svg aria-hidden="true"><use href="#i-bug"/></svg> Report a bug</a>
+          <a class="btn ghost" href="#beta-logs"><svg aria-hidden="true"><use href="#i-term"/></svg> How to pull your logs</a>
+        </p>
+      </div>
+
+      <div class="grid g3">
+        <div class="card reveal"><span class="lbl-tag">Coming in 2.3.0</span><div class="ico"><svg aria-hidden="true"><use href="#i-contain"/></svg></div><h3>A Windows sandbox chat works inside</h3><p>The agent runtime runs inside a <b>Windows AppContainer</b>: files only in the folders it has been granted, <b>no direct internet</b>, and model traffic through LUCID's audited proxy. The pill turns green <b>only after the real runtime boots inside it</b>. The Security panel has the switch, a Windows folder picker, and the list of every folder the sandbox can reach.</p></div>
+        <div class="card reveal"><span class="lbl-tag">Coming in 2.3.0</span><div class="ico"><svg aria-hidden="true"><use href="#i-brain"/></svg></div><h3>Jev, typed judgment</h3><p>Classifications, yes/no checks and scores come back as <b>typed answers with probabilities and a confidence</b>, not a keyword parsed out of prose. Add a TypeSafe key under Settings, and every judgment in a turn is drawn under the reply. No key, and the same calls fall back to your chat model.</p></div>
+        <div class="card reveal"><span class="lbl-tag">Coming in 2.3.0</span><div class="ico"><svg aria-hidden="true"><use href="#i-route"/></svg></div><h3>A browser agent that reads before it clicks</h3><p>Give it one goal. It reads the page's real controls and has Jev pick each click, dropdown and field from what is actually on screen. <b>No model ever writes the text it types</b>: every typed value is one you supplied.</p></div>
+        <div class="card reveal"><span class="lbl-tag">Coming in 2.3.0</span><div class="ico"><svg aria-hidden="true"><use href="#i-fan"/></svg></div><h3>The newest models</h3><p><b>Claude Opus 5.5</b> is the new default, and <b>GPT-6 Astra, Sol and Luna</b> are in the picker with cost cards and their real <b>1M</b> context windows. <b>Grok 4.7</b> joins them under a new xAI Grok family.</p></div>
+        <div class="card reveal"><span class="lbl-tag">Coming in 2.3.0</span><div class="ico"><svg aria-hidden="true"><use href="#i-layers"/></svg></div><h3>Several accounts per provider</h3><p>Keep multiple sign-ins or named API keys on one provider and switch between them in Settings or the Provider Hub. Inactive accounts are parked, never deleted.</p></div>
+        <div class="card reveal"><span class="lbl-tag">Coming in 2.3.0</span><div class="ico"><svg aria-hidden="true"><use href="#i-check"/></svg></div><h3>Fewer dead ends</h3><p>Past sessions open again, a leftover engine from an earlier session <b>no longer blocks launch</b> (LUCID names it and offers to stop it), an external link in a preview no longer blanks the window, and agent errors read as words instead of <code>[object Object]</code>.</p></div>
+      </div>
+
+      <div class="callout reveal"><b>Windows testers, turn the sandbox on:</b> v2.3.0-beta.8 is the build where chat works inside the container. Switch it on under <b>Security &gt; Runtime sandbox</b> (Windows asks for administrator approval once if it needs to). If the panel stays on <b>disclosed</b> instead of <b>isolated</b>, LUCID fell back safely. Send us a screenshot of that section and your logs; that is exactly the report we need.</div>
+
+      <div class="reveal" id="beta-logs" style="margin-top:72px">
+        <p class="eyebrow">Found a bug? <span class="rule"></span></p>
+        <p class="sub" style="margin-top:16px">Open an issue on GitHub with <b>what happened</b>, a <b>screenshot</b>, and your <b>logs</b>. Three minutes of your time saves us days of guessing.</p>
+      </div>
+      <div class="grid g3">
+        <div class="card reveal"><span class="lbl-tag">Step 1</span><div class="ico"><svg aria-hidden="true"><use href="#i-bug"/></svg></div><h3>Check, then open an issue</h3><p>Look through the <a href="https://github.com/mlcyclops/lucidagentide/issues?q=is%3Aissue+is%3Aopen+label%3Abug" rel="noopener">open bugs</a> first. New one? <a href="https://github.com/mlcyclops/lucidagentide/issues/new?template=bug_report.yml" rel="noopener">Open an issue</a>: the form asks for your LUCID version from the <b>About</b> button at the bottom of the left rail, your OS, the model you used, the steps, and what you expected.</p></div>
+        <div class="card reveal"><span class="lbl-tag">Step 2</span><div class="ico"><svg aria-hidden="true"><use href="#i-scan"/></svg></div><h3>Show us</h3><p>Capture the whole window (<code>Win+Shift+S</code>, <code>Cmd+Shift+4</code> then <code>Space</code>, or <code>PrtSc</code>) and paste it into the issue. For a sandbox problem include the <b>Security</b> panel; for a blocked tool call, turn on Developer mode and include the <b>Logs</b> panel.</p></div>
+        <div class="card reveal"><span class="lbl-tag">Step 3</span><div class="ico"><svg aria-hidden="true"><use href="#i-term"/></svg></div><h3>Attach your logs</h3><p>On Windows, one command builds a <b>redacted</b> support zip. On macOS and Linux, attach three log files. Both are below.</p></div>
+      </div>
+
+      <details class="faq reveal" style="margin-top:22px">
+        <summary>Windows: build a support zip with one command<svg class="chev" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="ans">
+          <p style="margin:0 0 10px">Open <b>PowerShell</b> (Start, type <i>PowerShell</i>) and run:</p>
+          <pre style="margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--mono);font-size:12px;color:var(--ink);background:rgba(0,0,0,.25);padding:10px 12px;border-radius:8px;border:1px solid var(--line)">powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Programs\LucidAgentIDE\resources\repo\tools\collect-support-logs.ps1"</pre>
+          <p style="margin:12px 0 10px">It writes <code>lucid-support-&lt;date&gt;-&lt;time&gt;.zip</code> to your Desktop: the engine log, the last 7 days of agent runtime logs, a redacted settings summary, and a system report. Keys, tokens and passwords are redacted and the credential vaults are never read. It <b>does</b> include your sign-in email, folder paths and the last four characters of each key, so open the zip and remove anything you would not post publicly.</p>
+          <p style="margin:0 0 10px">Script not at that path? Download it and run it:</p>
+          <pre style="margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--mono);font-size:12px;color:var(--ink);background:rgba(0,0,0,.25);padding:10px 12px;border-radius:8px;border:1px solid var(--line)">irm https://raw.githubusercontent.com/mlcyclops/lucidagentide/master/tools/collect-support-logs.ps1 -OutFile "$env:TEMP\collect-support-logs.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\collect-support-logs.ps1"</pre>
+        </div>
+      </details>
+      <details class="faq reveal">
+        <summary>macOS and Linux: attach three log files<svg class="chev" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="ans">
+          <p style="margin:0 0 10px">The <b>engine log</b> (<code>~/Library/Application Support/lucidagentide-desktop/engine.log</code> on macOS, <code>~/.config/lucidagentide-desktop/engine.log</code> on Linux), the <b>runtime stderr</b> (<code>~/.omp/lucid-acp.log</code>), and the newest one or two <b>runtime daily logs</b> (<code>~/.omp/logs/omp.*.log</code>). One command zips them:</p>
+          <pre style="margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--mono);font-size:12px;color:var(--ink);background:rgba(0,0,0,.25);padding:10px 12px;border-radius:8px;border:1px solid var(--line)"># macOS
+cd ~ &amp;&amp; zip -j ~/Desktop/lucid-logs.zip "Library/Application Support/lucidagentide-desktop/engine.log" .omp/lucid-acp.log $(ls -t .omp/logs/omp.*.log | head -2)
+# Linux
+cd ~ &amp;&amp; tar czf ~/lucid-logs.tar.gz .config/lucidagentide-desktop/engine.log .omp/lucid-acp.log $(ls -t .omp/logs/omp.*.log | head -2)</pre>
+          <p style="margin:12px 0 0">These files are <b>not</b> redacted: search them for <code>sk-</code>, <code>Bearer</code>, <code>token</code> and <code>key</code> before you attach them.</p>
+        </div>
+      </details>
+      <details class="faq reveal">
+        <summary>Never attach these files<svg class="chev" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+        <div class="ans"><code>~/.omp/lucid-gui.json</code> holds provider keys in plain text. <code>~/.omp/agent/agent.db</code> and <code>~/.omp/lucid-cred-vault/</code> are your credential vaults. Anything under <code>~/.omp/logs/http-400-requests/</code> is a full copy of a rejected request, including your prompt and file contents.</div>
+      </details>
+      <p class="dl-note reveal">Issues are public. Never paste an API key, token, password, or CUI into an issue, a screenshot, or a log.</p>
+    </div>
+  </section>
+<!-- ===== END v2.3.0 BETA SECTION ===== -->
+</body>
+</html>

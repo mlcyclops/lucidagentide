@@ -20,10 +20,14 @@ contextBridge.exposeInMainWorld("__LUCID_MARKET__", marketBootConfig());
 
 contextBridge.exposeInMainWorld("lucid", {
   isElectron: true,
+  // P-SANDBOX.15 (ADR-0396): the per-launch UI token, from main over IPC (the served HTML no longer carries it).
+  token: (): string => { try { return String(ipcRenderer.sendSync("lucid:token") ?? ""); } catch { return ""; } },
   setZoom: (factor: number) => { try { webFrame.setZoomFactor(factor); } catch { /* ignore */ } },
   pickFolder: (opts?: { title?: string; defaultPath?: string; buttonLabel?: string }): Promise<string | null> => ipcRenderer.invoke("lucid:pickFolder", opts ?? {}),
   // P-NETWL.1 (ADR-0106): native FILE picker (auth config / token / PEM / API-key upload).
   pickFile: (opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null> => ipcRenderer.invoke("lucid:pickFile", opts ?? {}),
+  // P-VAULT-UI.1 (ADR-0475): native SAVE dialog for text the renderer holds (the encrypted vault backup).
+  saveTextFile: (opts: { title?: string; defaultName?: string; filters?: { name: string; extensions: string[] }[]; text: string }): Promise<string | { error: string } | null> => ipcRenderer.invoke("lucid:saveTextFile", opts),
   // P-NETWL.1 (ADR-0106): OS-encrypted credential vault (safeStorage). Store/list/delete only; a plaintext
   // secret never comes back to the renderer (decrypt is main-process-only).
   credStore: (input: { ref?: string; kind: string; secret: string; label?: string }) => ipcRenderer.invoke("lucid:credStore", input),
@@ -43,6 +47,10 @@ contextBridge.exposeInMainWorld("lucid", {
   showInFolder: (path: string): Promise<boolean> => ipcRenderer.invoke("lucid:showInFolder", path),
   // P-LOCAL.3 polish: restart the app so a freshly-spawned omp picks up new/changed local providers.
   relaunch: (): Promise<void> => ipcRenderer.invoke("lucid:relaunch"),
+  // P-RECOVER.1 (ADR-0385): restart ONLY the engine when the window has lost it. Main refuses while the
+  // engine answers its nonce health check ("engine-healthy") and allows one restart a minute ("rate-limited").
+  // On ok:true the renderer reloads the window.
+  restartEngine: (): Promise<{ ok: boolean; reason: string; incidentId?: string }> => ipcRenderer.invoke("lucid:engineRestart"),
   // P-KGMARKET.4 (ADR-0206): the OS forwards the lucid://auth?token=... deep link (after hosted marketplace
   // sign-in) to the main process, which relays it here for market_boot.handleAuthCallback.
   onAuthCallback: (cb: (url: string) => void): void => { ipcRenderer.on("lucid:authCallback", (_e, url: string) => cb(url)); },

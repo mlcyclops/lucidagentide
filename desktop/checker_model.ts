@@ -15,27 +15,51 @@
 // credentials/billing they're already using; (2) prefer the small-but-capable tier (haiku / flash /
 // mini) over both ultra-cheap-but-weak (nano / lite / oss) and flagship overkill (opus / sonnet / pro /
 // full gpt); (3) prefer the NEWEST version; (4) prefer a clean "latest" alias over a date-pinned id.
+//
+// R-07 (#347): resolveGovernedModel extends the ADR-0217 lockdown clamp with the managed
+// allowed/denied model policy (ADR-0068). Still pure: the policy arrives as a parameter, never read
+// from ambient config here.
+
+import { modelAllowed, type ManagedModels } from "./managed_config.ts";
+// The lockdown predicate lives in the DOM-free lockdown_route.ts so the renderer evaluates the identical test.
+import { isLockdownRoutable, LOCKDOWN_NO_ROUTE_ERROR } from "./lockdown_route.ts";
+import { isAuxiliaryModel } from "./renderer/model_families.ts"; // ADR-0498: embedding models never chat
 
 /** A model option as omp reports it in the `model` config (provider-prefixed value + display name). */
 export interface ModelOption { value: string; name?: string; description?: string }
 
-/** ADR-0217: a model id is "AskSage-routed" (goes through the accredited gov gateway) when omp reports it with
- *  an `asksage` provider prefix, e.g. `asksage-openai/gpt-5.6-luna`. The sovereignty test is this substring — NOT a
- *  `/gov/i` NAME match, which real ids like `asksage-openai/gpt-5.6-luna` do not contain (the "Gov" is only in the
- *  DISPLAY name). Matches the renderer's `isGovModel`/`isAsksage` so both sides agree on the boundary. */
-export function isAsksageRouted(value: string): boolean { return /asksage/i.test(value); }
+/** No enclave providers: the fail-closed default (only AskSage-routed models pass under lockdown). */
+const NO_ENCLAVE: ReadonlySet<string> = new Set();
 
-/** ADR-0217: FAIL-CLOSED resolution of the model a turn MUST use under AskSage lockdown. Lock off → the current
- *  model stands. Lock on → keep the current model if it's already AskSage-routed, else pick the first
- *  AskSage-routed option from the accessible list. Lock on but NO AskSage model available (lockdown enabled
- *  without a configured gateway) → { ok:false } so the caller BLOCKS the turn rather than silently routing to a
- *  direct provider. Pure + unit-tested. */
-export function resolveLockdownModel(locked: boolean, current: string, optionValues: string[]): { ok: boolean; model?: string; error?: string } {
+/** ADR-0217, extended for CUI lockdown: FAIL-CLOSED resolution of the model a turn MUST use under lockdown.
+ *  Lock off → the current model stands. Lock on → keep the current model if it is lockdown-routable
+ *  (AskSage-routed, or served by an enabled DGX enclave Local Provider in `enclaveProviders`, see
+ *  lockdown_route.ts), else pick the first routable option from the accessible list. Lock on but NOTHING
+ *  routable → { ok:false } so the caller BLOCKS the turn rather than silently routing to a direct provider.
+ *  The enclave set is passed in (never read from settings here) so this stays pure + unit-tested. */
+export function resolveLockdownModel(locked: boolean, current: string, optionValues: string[], enclaveProviders: ReadonlySet<string> = NO_ENCLAVE): { ok: boolean; model?: string; error?: string } {
   if (!locked) return { ok: true, model: current };
-  if (isAsksageRouted(current)) return { ok: true, model: current };
-  const gov = optionValues.filter(isAsksageRouted);
-  if (!gov.length) return { ok: false, error: "AskSage lockdown is ON but no AskSage gov model is available. Add your AskSage API key in Settings, or turn lockdown off." };
-  return { ok: true, model: gov[0]! };
+  if (isLockdownRoutable(current, enclaveProviders)) return { ok: true, model: current };
+  const first = optionValues.find((v) => isLockdownRoutable(v, enclaveProviders));
+  if (!first) return { ok: false, error: LOCKDOWN_NO_ROUTE_ERROR };
+  return { ok: true, model: first };
+}
+
+/** R-07 (#347): FAIL-CLOSED resolution of the model a turn MUST use under the FULL model policy:
+ *  the AskSage lockdown (ADR-0217) AND the managed allowed/denied lists (ADR-0068, previously
+ *  schema-only). The lock resolves first (sovereignty routing), then the allowlist; when the resolved
+ *  model is denied, the first option satisfying BOTH constraints wins; nothing qualifies -> { ok:false }
+ *  so the caller BLOCKS the turn rather than routing to a denied provider. Unmanaged + unlocked ->
+ *  the current model stands. `enclaveProviders` widens the lock exactly as in resolveLockdownModel.
+ *  Pure + unit-tested. */
+export function resolveGovernedModel(locked: boolean, models: ManagedModels | undefined, current: string, optionValues: string[], enclaveProviders: ReadonlySet<string> = NO_ENCLAVE): { ok: boolean; model?: string; error?: string } {
+	const lock = resolveLockdownModel(locked, current, optionValues, enclaveProviders);
+	if (!lock.ok) return lock;
+	const resolved = lock.model ?? current;
+	if (modelAllowed(resolved, models)) return { ok: true, model: resolved };
+	const candidate = optionValues.find((v) => modelAllowed(v, models) && (!locked || isLockdownRoutable(v, enclaveProviders)));
+	if (candidate) return { ok: true, model: candidate };
+	return { ok: false, error: "Your organization's model policy denies the current model, and no permitted model is available in the picker. Ask your admin to adjust the managed models policy or add a permitted provider." };
 }
 
 /** Checker fitness tier of a model name. Higher = better fit for a frequent, cheap judgement call. */
@@ -69,7 +93,7 @@ function provider(value: string): string {
  *  prefers the cheaper family, e.g. sonnet over opus, and "max" tiers rank last). */
 function sizePenalty(name: string): number {
   const n = name.toLowerCase();
-  if (/opus|ultra|-max\b/.test(n)) return 400;
+  if (/opus|ultra|-max\b|-argon\b/.test(n)) return 400; // P-MODEL.8: Gemini 4 Argon bills like an Opus
   if (/\bpro\b|-pro\b/.test(n)) return 150;
   return 0;
 }
@@ -81,8 +105,9 @@ function isAlias(value: string): boolean {
   return !/\d{6,8}/.test(id);
 }
 
-/** A RAG / image / preview-only route can't act as a checker. */
+/** A RAG / image / preview-only route, or an embedding/auxiliary model (ADR-0498), can't act as a checker. */
 function isUsable(value: string): boolean {
+  if (isAuxiliaryModel(value)) return false;
   const n = value.toLowerCase();
   return !/\b(rag|image|review|tab_)\b|antigravity\/tab|query\/rag|codex-auto-review/.test(n);
 }
@@ -123,7 +148,7 @@ export function recommendCheckerModel(models: ModelOption[], current: string): C
  *  Fail-safe: a stale/removed override never blocks the loop — it falls through to the recommendation. */
 export function resolveCheckerModel(opts: { chosen: string; models: ModelOption[]; current: string }): { value: string; source: "chosen" | "recommended" | "maker" } {
   const has = (v: string) => opts.models.some((m) => m.value === v);
-  if (opts.chosen && has(opts.chosen)) return { value: opts.chosen, source: "chosen" };
+  if (opts.chosen && isUsable(opts.chosen) && has(opts.chosen)) return { value: opts.chosen, source: "chosen" };
   const rec = recommendCheckerModel(opts.models, opts.current);
   if (rec) return { value: rec.value, source: "recommended" };
   return { value: opts.current, source: "maker" };

@@ -58,6 +58,9 @@ export function initTooltips(): void {
     if (t && t === cur) { cur = null; clearTimeout(timer); tip.classList.remove("show"); }
   });
   window.addEventListener("scroll", () => { tip.classList.remove("show"); cur = null; }, true);
+  // A click means the user has moved on from reading the hint: a menu or panel is about to open under
+  // the pointer, and a tooltip lingering beside (or behind) it reads as a stray card.
+  document.addEventListener("pointerdown", () => { clearTimeout(timer); tip.classList.remove("show"); cur = null; }, true);
 }
 
 // ───────────────────────── rich (hoverable) tooltip ─────────────────────────
@@ -203,7 +206,14 @@ export interface ToastOpts { title: string; desc: string; meta?: string; actions
 // tone:"danger" (shield + red), warnings into tone:"warn".
 const TONE_ICON: Record<ToastTone, string> = { ok: "check", info: "info", warn: "bolt", danger: "shield" };
 
+// P-NETSTAT.1 (ADR-0423): while the network is down, the owner of the network indicator may take a
+// warn/danger toast instead of letting it pop (it lists held notices in its popover). Returning true
+// means "held"; the caller gets a no-op dismiss.
+let toastHold: ((o: ToastOpts) => boolean) | null = null;
+export function setToastHold(fn: ((o: ToastOpts) => boolean) | null): void { toastHold = fn; }
+
 export function showToast(o: ToastOpts): () => void {
+  if (toastHold?.(o)) return () => {};
   const host = $("#toasts")!;
   const toneClass = o.tone ? ` ${o.tone}` : "";
   const ico = o.tone ? (TONE_ICON[o.tone] ?? "shield") : "check";

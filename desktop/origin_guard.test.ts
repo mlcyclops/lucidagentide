@@ -3,7 +3,7 @@
 
 // Tests for the local control-plane request guard (H1/H2, ADR-0022).
 import { describe, expect, test } from "bun:test";
-import { hostAllowed, isAllowedRequest, reqShape, tokenValid, type ReqShape } from "./origin_guard.ts";
+import { apiAuthorized, hostAllowed, isAllowedRequest, isEngineDocument, reqShape, tokenValid, type ReqShape } from "./origin_guard.ts";
 
 const PORT = 5319;
 const base: ReqShape = { method: "GET", host: `localhost:${PORT}`, origin: null, contentType: null };
@@ -90,5 +90,49 @@ describe("reqShape", () => {
     expect(s.origin).toBe(`http://localhost:${PORT}`);
     expect(s.contentType).toContain("application/json");
     expect(isAllowedRequest(s, PORT)).toBe(true);
+  });
+});
+
+// ── P-SANDBOX.15 (ADR-0396): the agent's own, narrower token ──
+describe("apiAuthorized (UI token vs agent token)", () => {
+  const UI = "u".repeat(64), AGENT = "a".repeat(64);
+  const queryRoutes = new Set(["/api/preview/serve", "/api/sandbox/grant", "/api/kb/retrieve"]);
+  const agentRoutes = new Set(["/api/sandbox/grant", "/api/kb/retrieve"]);
+  const ask = (path: string, headerToken: string | null, queryToken: string | null = null) =>
+    apiAuthorized({ path, headerToken, queryToken, uiToken: UI, agentToken: AGENT, queryRoutes, agentRoutes });
+
+  test("the UI token keeps its reach: header anywhere, ?t= on query routes only", () => {
+    expect(ask("/api/security/approve", UI)).toBe(true);
+    expect(ask("/api/preview/serve", null, UI)).toBe(true);
+    expect(ask("/api/security/approve", null, UI)).toBe(false); // header-only route
+  });
+
+  test("the agent token opens only the agent routes, by header or ?t=", () => {
+    expect(ask("/api/sandbox/grant", null, AGENT)).toBe(true);
+    expect(ask("/api/kb/retrieve", AGENT)).toBe(true);
+    for (const human of ["/api/security/approve", "/api/security/sandbox/mode", "/api/security/sandbox-grant/add", "/api/settings", "/api/chat"]) {
+      expect(ask(human, AGENT)).toBe(false);
+      expect(ask(human, null, AGENT)).toBe(false);
+    }
+    expect(ask("/api/preview/serve", null, AGENT)).toBe(false); // a query route that is NOT an agent route
+  });
+
+  test("fail-closed: no token, a wrong token, or an unset agent token", () => {
+    expect(ask("/api/sandbox/grant", null, null)).toBe(false);
+    expect(ask("/api/sandbox/grant", "x".repeat(64))).toBe(false);
+    expect(apiAuthorized({ path: "/api/sandbox/grant", headerToken: "", queryToken: "", uiToken: UI, agentToken: "", queryRoutes, agentRoutes })).toBe(false);
+  });
+});
+
+describe("isEngineDocument (who may receive the UI token over IPC)", () => {
+  test("only this engine's loopback origin", () => {
+    expect(isEngineDocument("http://localhost:5319/", 5319)).toBe(true);
+    expect(isEngineDocument("http://127.0.0.1:5319/index.html", 5319)).toBe(true);
+    expect(isEngineDocument("http://localhost:5320/", 5319)).toBe(false);
+    expect(isEngineDocument("https://localhost:5319/", 5319)).toBe(false);
+    expect(isEngineDocument("http://evil.example/", 5319)).toBe(false);
+    expect(isEngineDocument("", 5319)).toBe(false);
+    expect(isEngineDocument(undefined, 5319)).toBe(false);
+    expect(isEngineDocument("not a url", 5319)).toBe(false);
   });
 });

@@ -62,6 +62,28 @@ describe("parseSubagentTranscript", () => {
     expect(p.tools).toBe(2);
     expect(p.steps.length).toBeGreaterThan(0);
   });
+  test("a tool step reads the agent's intent (omp's current `i`, and the older `_i`) before its path", () => {
+    const p = parseSubagentTranscript([
+      msg("assistant", [{ type: "toolCall", name: "read", arguments: { i: "Reading the registry reader", path: "desktop/managed_config.ts" } }]),
+      msg("assistant", [{ type: "toolCall", name: "grep", arguments: { _i: "Finding reg query", pattern: "reg" } }]),
+      msg("assistant", [{ type: "toolCall", name: "read", arguments: { path: "desktop/dev.ts" } }]),
+    ].join("\n"));
+    expect(p.steps.map((s) => s.label)).toEqual(["Reading the registry reader", "Finding reg query", "desktop/dev.ts"]);
+  });
+  test("a scout's structured yield ({ data: {...} }) is still the run's last step", () => {
+    const p = parseSubagentTranscript([
+      msg("assistant", [{ type: "toolCall", name: "grep", arguments: { pattern: "fleet" } }]),
+      msg("assistant", [{ type: "toolCall", name: "yield", arguments: { data: { summary: "done", files: [] } } }]),
+    ].join("\n"));
+    expect(p.steps.at(-1)).toEqual({ kind: "tool", tool: "yield", label: "result" });
+  });
+  test("degenerate model output is named, not quoted (the AosGapMap '!!!!' row)", () => {
+    const p = parseSubagentTranscript([
+      msg("assistant", [{ type: "thinking", thinking: `The${"!".repeat(4095)}` }]),
+      msg("assistant", [{ type: "text", text: "a row of ==== is fine" }]),
+    ].join("\n"));
+    expect(p.steps.map((s) => s.label)).toEqual(['model output degenerated ("!" repeated 4,095 times)', "a row of ==== is fine"]);
+  });
   test("empty transcript → empty view", () => {
     const p = parseSubagentTranscript("");
     expect(p).toEqual({ assignment: "", model: null, tools: 0, steps: [] });
@@ -106,5 +128,16 @@ describe("listSubagentRuns", () => {
     const runs = listSubagentRuns("C:/s/2026_parent.jsonl", io3);
     expect(runs.length).toBe(1);
     expect(runs[0]!.steps.some((s) => s.label === "final write")).toBe(true);
+  });
+  test("P-PROGRESS.2: a run starts at its session header, even when the tail cut drops the head; it ends at its .md", () => {
+    const header = JSON.stringify({ type: "session", version: 3, id: "x", timestamp: "2026-09-27T01:34:27.654Z", parentSession: "C:/s/2026_parent.jsonl" });
+    const pad = msg("toolResult", [{ type: "text", text: "x".repeat(1024) }]);
+    const big = [header, ...Array.from({ length: 3000 }, () => pad)].join("\n");
+    const io4: SubagentIo = { ...io, list: () => ["Big.jsonl", "Big.md"], readText: () => big, size: () => big.length,
+      exists: (p) => /2026_parent(\/Big\.md)?$/.test(p.replace(/\\/g, "/")), mtime: (p) => (p.endsWith(".md") ? 9_999 : 5_555) };
+    const [run] = listSubagentRuns("C:/s/2026_parent.jsonl", io4);
+    expect(run!.startedAt).toBe(Date.parse("2026-09-27T01:34:27.654Z"));
+    expect(run!.endedAt).toBe(9_999);
+    expect(listSubagentRuns("C:/s/2026_parent.jsonl", io)[1]!).toMatchObject({ done: false, startedAt: 0, endedAt: 0 }); // no header, still running
   });
 });

@@ -144,3 +144,47 @@ describe("P-REMOTE.4a: the stale-invite fallback redirect at /", () => {
     expect(await res.text()).toBe("not a relay room");
   });
 });
+
+describe("P-REMOTE.16 (ADR-0431): the keepalive pong", () => {
+  /** A raw socket that records every string it receives and its close code. */
+  function rawDial(url: string): Promise<{ ws: WebSocket; strings: string[]; closes: number[] }> {
+    const { promise, resolve } = Promise.withResolvers<{ ws: WebSocket; strings: string[]; closes: number[] }>();
+    const conn = { ws: new WebSocket(url), strings: [] as string[], closes: [] as number[] };
+    conn.ws.onmessage = (ev) => { if (typeof ev.data === "string") conn.strings.push(ev.data); };
+    conn.ws.onclose = (ev) => { conn.closes.push(ev.code); resolve(conn); };
+    conn.ws.onopen = () => resolve(conn);
+    return promise;
+  }
+
+  it("answers the exact client keepalive with a pong on the same socket, which the client consumes", async () => {
+    const { key, wsUrl } = await room();
+    const ctrl: { t: string }[] = [];
+    const host = new CollabSocket({ wsUrl, role: "host", key, keepaliveMs: 10 });
+    host.onControl = (m) => { ctrl.push(m); };
+    host.connect();
+    await waitFor(() => relay!.roomCount() === 1, "the room");
+
+    const guest = await rawDial(`${wsUrl}?role=guest`);
+    guest.ws.send('{"t":"ping"}');
+    guest.ws.send('{"t":"ping","extra":1}'); // not the keepalive: ignored, no reply
+    await waitFor(() => guest.strings.length > 0, "the pong");
+    expect(guest.strings).toEqual(['{"t":"pong"}']);
+    // The host CollabSocket has pinged several times by now: its pongs never reach onControl.
+    await waitFor(() => ctrl.some((m) => m.t === "peer-joined"), "the guest's peer-joined");
+    expect(ctrl.map((m) => m.t)).not.toContain("pong");
+    guest.ws.close();
+    host.close();
+  });
+
+  it("still refuses a pre-auth ping on a gated relay (4401): the keepalive is not a credential", async () => {
+    relay = startRelayServer({
+      port: 0,
+      auth: { verify: async () => ({ ok: true, uid: "u", email: "u@x.io", premium: true, admin: false }) },
+    });
+    const c = await rawDial(`ws://127.0.0.1:${relay.port}/r/${generateRoomId()}?role=host`);
+    c.ws.send('{"t":"ping"}');
+    await waitFor(() => c.closes.length > 0, "the refusal");
+    expect(c.closes).toEqual([4401]);
+    expect(c.strings).toEqual([]);
+  });
+});

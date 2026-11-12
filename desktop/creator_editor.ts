@@ -24,10 +24,13 @@
 //     substituting silence for audio the user asked for would be a lie the rendered file could not admit.
 
 import {
-  SILENCE_SOURCE, deriveAlignment, docFromSource, durationOfWav, renderTimeline, validateDoc, waveformPeaks,
-  type SourceAudio, type TimelineClip, type TimelineDoc, type TimelineItem,
+  SILENCE_SOURCE, alignFromMeasured, deriveAlignment, docFromSource, durationOfWav, renderTimeline, validateDoc, waveformPeaks,
+  type AlignedBy, type SourceAudio, type TimelineClip, type TimelineDoc, type TimelineItem,
 } from "../harness/creator/timeline.ts";
 import type { WavFormat } from "../harness/brief/tts_backend.ts";
+import { pcm16ToMonoFloat, resampleLinearPcm } from "../harness/voice/resample.ts";
+import { WHISTLE_SAMPLE_RATE, type WhistleTranscript } from "../harness/voice/whistle.ts";
+import type { WhistleTranscriber } from "../harness/voice/whistle_client.ts";
 import {
   MAX_TRACK_BYTES, addTrack, foldLibrary, libraryAudioDir, libraryLedger,
   type CreatorTrack, type LibraryIo,
@@ -158,28 +161,42 @@ function renderableSources(io: LibraryIo, base: string, tracks: readonly Creator
   return out;
 }
 
-/** Open one library track as a timeline document: its audio, its waveform, the words bound to it, and the
- *  provenance of that binding. Every refusal names the track and the property that caused it. */
-export function openEditor(io: LibraryIo, base: string, input: OpenEditorInput): OpenEditorResult {
-  const trackId = typeof input.trackId === "string" ? input.trackId.trim() : "";
+type TrackLoad =
+  | { ok: true; tracks: CreatorTrack[]; track: CreatorTrack; wav: TrackWav }
+  | { ok: false; error: string };
+
+/** Resolve a track id to its ledger row and decoded WAV. One phrasing for every "the editor cannot decode
+ *  this" refusal: the reason is always the track's own property (its mime, its bit depth, its unreadable
+ *  header), never a vague failure. Shared by the editor session and the measured alignment so both refuse
+ *  the same audio with the same words. */
+function loadTrackWav(io: LibraryIo, base: string, rawId: unknown): TrackLoad {
+  const trackId = typeof rawId === "string" ? rawId.trim() : "";
   if (!trackId) return { ok: false, error: "no track id was given" };
   const tracks = foldLibrary(io.readText(libraryLedger(base)));
   const track = tracks.find((t) => t.id === trackId);
   if (!track) return { ok: false, error: `no track ${trackId}` };
-  // One phrasing for every "the editor cannot decode this" refusal: the reason is always the track's own
-  // property (its mime, its bit depth, its unreadable header), never a vague failure.
   if (track.mime !== WAV_MIME) return { ok: false, error: `the editor works on 16-bit PCM WAV; "${track.title}" is ${track.mime}` };
-
   const path = join(libraryAudioDir(base), track.file);
   if (!io.exists(path)) return { ok: false, error: `the audio file for "${track.title}" is missing` };
   const read = readTrackWav(io, path);
   if (!read.ok) return { ok: false, error: `the editor works on 16-bit PCM WAV; "${track.title}" is ${read.reason}` };
-  const wav = read.wav;
+  return { ok: true, tracks, track, wav: read.wav };
+}
 
-  // The caller's text wins (they are pasting the words they want followed); the track's own lyrics are the
-  // fallback, because that is the text the library already holds for this audio.
-  const supplied = typeof input.text === "string" ? input.text.trim() : "";
-  const text = supplied || track.lyrics.trim();
+/** The caller's text wins (they are pasting the words they want followed); the track's own lyrics are the
+ *  fallback, because that is the text the library already holds for this audio. */
+function editorText(supplied: unknown, track: CreatorTrack): string {
+  const given = typeof supplied === "string" ? supplied.trim() : "";
+  return given || track.lyrics.trim();
+}
+
+/** Open one library track as a timeline document: its audio, its waveform, the words bound to it, and the
+ *  provenance of that binding. Every refusal names the track and the property that caused it. */
+export function openEditor(io: LibraryIo, base: string, input: OpenEditorInput): OpenEditorResult {
+  const loaded = loadTrackWav(io, base, input.trackId);
+  if (!loaded.ok) return { ok: false, error: loaded.error };
+  const { tracks, track, wav } = loaded;
+  const text = editorText(input.text, track);
   const aligned = text ? deriveAlignment(text, wav.data, wav.fmt) : null;
 
   return {
@@ -195,6 +212,81 @@ export function openEditor(io: LibraryIo, base: string, input: OpenEditorInput):
       durationMs: wav.durationMs,
       sources: renderableSources(io, base, tracks, track.id, wav.fmt),
     },
+  };
+}
+
+// ── measured alignment (CREATOR-WHISTLE, ADR-0432) ──────────────────────────
+
+export interface MeasureEditorInput {
+  trackId: string;
+  text?: string;
+  language?: string;
+}
+
+export type MeasureEditorResult =
+  | {
+    ok: true;
+    trackId: string;
+    items: TimelineItem[];
+    note: string;
+    alignedBy: AlignedBy;
+    matched: number;
+    interpolated: number;
+    /** What the model heard, verbatim, so the user can see WHY a word fell back to `derived`. */
+    transcript: string;
+    language: string;
+    windows: number;
+  }
+  | { ok: false; error: string };
+
+/** The keyword bias handed to the model: the distinct words of the text the user is following, in their
+ *  spoken form, bounded so a pasted chapter does not become a 10,000-line prompt. */
+export const MAX_ALIGN_KEYWORDS = 64;
+
+function alignKeywords(text: string): string[] {
+  const seen = new Set<string>();
+  for (const raw of text.split(/\s+/)) {
+    const word = raw.normalize("NFKC").toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+    if (!word || seen.has(word)) continue;
+    seen.add(word);
+    if (seen.size >= MAX_ALIGN_KEYWORDS) break;
+  }
+  return [...seen];
+}
+
+/** Measure the word timing of one library track with the in-process model. Same audio refusals as
+ *  `openEditor` (the track is read by id; nothing is uploaded), the same text rule (supplied, else lyrics),
+ *  and the user's samples are never touched: the 16 kHz buffer exists only for the model's ears. A worker
+ *  that rejects turns into `{ ok:false }` with its reason so the editor keeps its derived alignment and says
+ *  why the measurement did not happen. */
+export async function measureEditorAlignment(io: LibraryIo, base: string, input: MeasureEditorInput, transcriber: WhistleTranscriber): Promise<MeasureEditorResult> {
+  const loaded = loadTrackWav(io, base, input.trackId);
+  if (!loaded.ok) return { ok: false, error: loaded.error };
+  const { track, wav } = loaded;
+  const text = editorText(input.text, track);
+  if (!text) return { ok: false, error: NO_TEXT_NOTE };
+  const language = typeof input.language === "string" && input.language ? input.language : undefined;
+
+  const mono = pcm16ToMonoFloat(wav.data, wav.fmt.channels);
+  const pcm16k = wav.fmt.sampleRate === WHISTLE_SAMPLE_RATE ? mono : resampleLinearPcm(mono, wav.fmt.sampleRate, WHISTLE_SAMPLE_RATE);
+  let transcript: WhistleTranscript;
+  try {
+    transcript = await transcriber.transcribe(pcm16k, { keywords: alignKeywords(text), language, wordTimestamps: true });
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  const aligned = alignFromMeasured(text, transcript.words, wav.durationMs, "Whistle");
+  return {
+    ok: true,
+    trackId: track.id,
+    items: aligned.items,
+    note: aligned.note,
+    alignedBy: { provider: "whistle", modelSha256: transcriber.modelSha256 },
+    matched: aligned.matched,
+    interpolated: aligned.interpolated,
+    transcript: transcript.text,
+    language: transcript.language,
+    windows: transcript.windows,
   };
 }
 
@@ -311,7 +403,7 @@ function decodeItem(raw: unknown, at: number): { ok: true; item: TimelineItem } 
   const confidence = asNumber(raw.confidence);
   const source = raw.source;
   const locked = raw.locked;
-  if (source !== "vendor" && source !== "derived") return broken;
+  if (source !== "vendor" && source !== "derived" && source !== "measured") return broken;
   if (typeof locked !== "boolean") return broken;
   if (!id || text === null || startMs === null || endMs === null || confidence === null) return broken;
   return { ok: true, item: { id, text, startMs, endMs, confidence, source, locked } };
@@ -367,5 +459,14 @@ export function decodeTimelineDoc(raw: unknown): { ok: true; doc: TimelineDoc } 
     if (!r.ok) return { ok: false, error: r.error };
     clips.push(r.clip);
   }
-  return { ok: true, doc: { sampleRate, channels, bitsPerSample, items, clips } };
+  // CREATOR-WHISTLE (ADR-0432): the measured provenance rides with the doc. Present but malformed refuses,
+  // so a save can never keep `measured` words while silently losing which pinned model measured them.
+  if (raw.alignedBy === undefined) return { ok: true, doc: { sampleRate, channels, bitsPerSample, items, clips } };
+  const ab = raw.alignedBy;
+  const provider = isObject(ab) ? asText(ab.provider, 60) : null;
+  const modelSha256 = isObject(ab) ? ab.modelSha256 : null;
+  if (!provider || typeof modelSha256 !== "string" || !/^[0-9a-f]{64}$/.test(modelSha256)) {
+    return { ok: false, error: "that timeline's alignedBy is not a provider plus a sha256" };
+  }
+  return { ok: true, doc: { sampleRate, channels, bitsPerSample, items, clips, alignedBy: { provider, modelSha256 } } };
 }

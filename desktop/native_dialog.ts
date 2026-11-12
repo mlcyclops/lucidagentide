@@ -27,11 +27,26 @@
 export interface NativePickOpts {
   title?: string;
   buttonLabel?: string;
+  /** P-SANDBOX.13b (ADR-0393): absolute path of the bundled lucid-appcontainer.exe. When the PowerShell
+   *  picker cannot run (Constrained Language Mode), win32 falls back to `<helper> --pick-folder`, which
+   *  opens the shell's folder dialog through a plain shell32 call. Omitted: no fallback. */
+  helperFallback?: string;
 }
 
 export interface NativePickResult {
   supported: boolean;
   path: string | null;
+  /** P-SANDBOX.13b (ADR-0393): why the dialog could not open, when known (e.g. PowerShell's Constrained
+   *  Language Mode refusing Add-Type under Smart App Control / WDAC). Diagnostic text only. */
+  reason?: string;
+}
+
+/** PURE: the one-line cause of a failed win32 picker run, from PowerShell's stderr. Constrained Language
+ *  Mode (Smart App Control / WDAC) refuses Add-Type, which is the picker's C# shim, so it gets named. */
+export function winPickFailureReason(stderr: string): string {
+  if (/language mode/i.test(stderr)) return "PowerShell is in Constrained Language Mode (Smart App Control or WDAC), which blocks the folder dialog script";
+  const line = stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
+  return line ? `the folder dialog script failed: ${line.slice(0, 160)}` : "the folder dialog script produced no result";
 }
 
 /** Parsed outcome of the win32 powershell run (exported for tests). */
@@ -197,7 +212,15 @@ async function winPick(opts: NativePickOpts): Promise<NativePickResult> {
   const parsed = parseWinPick(r.stdout);
   if (parsed.status === "picked") return { supported: true, path: parsed.path };
   if (parsed.status === "cancelled") return { supported: true, path: null };
-  return { supported: false, path: null };
+  const reason = winPickFailureReason(r.stderr);
+  if (opts.helperFallback) {
+    const h = await runToText([opts.helperFallback, "--pick-folder", opts.title ?? "Choose a folder"]);
+    const hp = parseWinPick(h.stdout);
+    if (hp.status === "picked") return { supported: true, path: hp.path };
+    if (hp.status === "cancelled") return { supported: true, path: null };
+    return { supported: false, path: null, reason: `${reason}; the helper fallback also failed${h.stderr.trim() ? `: ${h.stderr.trim().slice(0, 120)}` : ""}` };
+  }
+  return { supported: false, path: null, reason };
 }
 
 async function macPick(opts: NativePickOpts): Promise<NativePickResult> {

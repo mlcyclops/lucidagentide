@@ -42,4 +42,4 @@ const wf = readFileSync(".github/workflows/appcontainer-smoke.yml", "utf8");
 ok(wf.includes("runs-on: windows-latest") && wf.includes("BUN_VERSION"), "the smoke runs on Windows with the bun version read from fetch-runtimes.ts");
 ok(readFileSync("harness/scripts/appcontainer_smoke.ps1", "utf8").includes("omp/"), "and fails unless the contained omp prints its version");
 
-console.log("\n✓ P-SANDBOX.10 demo passed - bun 1.4.2 is bundled, the pill needs a booted runtime, and Windows CI proves it on every sandbox change.");
+console.log(`\n✓ P-SANDBOX.10 demo passed - bun ${ver![1]}.${ver![2]}.${ver![3]} is bundled, the pill needs a booted runtime, and Windows CI proves it on every sandbox change.`);

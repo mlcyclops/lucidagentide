@@ -11,7 +11,8 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { load } from "./settings_store.ts";
+import { keyVaultStatus, load } from "./settings_store.ts";
+import type { VaultStatus } from "./engine_vault.ts";
 
 // P-PROV.1 (ADR-0210): extra per-provider config env beyond the single primary key. Azure OpenAI and
 // Vertex/Gemini-Enterprise need MORE than one value (resource/base/version; project/location/ADC path),
@@ -26,6 +27,8 @@ export interface ProviderFieldAuth extends ProviderField { set: boolean; value?:
 export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
   oauthActive: boolean; oauthIdentity?: string;
+  /** P-PROV.3: the device-code broker id offered beside the redirect sign-in (OpenAI). */
+  deviceOauthId?: string;
   keySet: boolean; keyLast4?: string;
   fields?: ProviderFieldAuth[];
   /** Why the LAST OAuth attempt died after the browser said "success" (broker exited without a
@@ -33,8 +36,9 @@ export interface ProviderAuth {
   oauthError?: { message: string; at: number };
 }
 
-/** The full per-section auth snapshot `/api/auth` returns (mirrored as AuthStatus in bridge.ts). */
-export interface ProviderAuthSnapshot { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[] }
+/** The full per-section auth snapshot `/api/auth` returns (mirrored as AuthStatus in bridge.ts). `vault`
+ *  (P-VAULT-KEYS.1, ADR-0472) says where saved keys live: custody + state only, never a secret. */
+export interface ProviderAuthSnapshot { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[]; vault: VaultStatus }
 
 // The AskSage gov gateway (ADR-0007): API-key only, key in keys.ASKSAGE_API_KEY. Surfaced ABOVE the
 // Providers section in its own card (it routes through an accredited gov proxy, not a direct provider).
@@ -43,19 +47,26 @@ export const GATEWAY: Provider[] = [
 ];
 // A provider descriptor: primary key `env` (may be "" for OAuth-only providers), the omp broker `oauthId`,
 // and optional extra config `fields`. Every string here (env names, oauthId) must match what omp 16.x reads.
-export interface Provider { id: string; name: string; env: string; oauthId: string; canOauth: boolean; fields?: ProviderField[] }
+export interface Provider {
+  id: string; name: string; env: string; oauthId: string; canOauth: boolean; fields?: ProviderField[];
+  /** P-PROV.3: a second broker id for the same account that runs a DEVICE-CODE flow (the user types a
+   *  short code on the provider's page; no loopback callback). Offered beside the redirect sign-in for
+   *  hosts where port 1455 or the browser callback is blocked. Its credential lands under `oauthId`
+   *  (omp's `storeCredentialsAs`, mirrored in desktop/device_code.ts). */
+  deviceOauthId?: string;
+}
 
 // Primary providers (the Providers card): U.S. frontier labs, key or OAuth. omp's broker provider ids
 // drive the OAuth path.
 export const MAJORS: Provider[] = [
-  { id: "openai", name: "OpenAI · ChatGPT", env: "OPENAI_API_KEY", oauthId: "openai-codex", canOauth: true },
+  { id: "openai", name: "OpenAI · ChatGPT", env: "OPENAI_API_KEY", oauthId: "openai-codex", canOauth: true, deviceOauthId: "openai-codex-device" },
   // Google consumer Gemini (AI Studio key) OR the Gemini-CLI / Code-Assist OAuth. omp's google-gemini-cli
   // login ALREADY onboards Workspace/Enterprise (standard-tier) accounts — but only when GOOGLE_CLOUD_PROJECT
   // is set; without it omp aborts non-personal accounts with "requires setting GOOGLE_CLOUD_PROJECT". So we
   // expose that project field here to make Enterprise OAuth work (personal accounts leave it blank).
   { id: "google", name: "Google · Gemini", env: "GEMINI_API_KEY", oauthId: "google-gemini-cli", canOauth: true,
     fields: [
-      { env: "GOOGLE_CLOUD_PROJECT", label: "GCP project ID (Workspace / Enterprise OAuth)", placeholder: "my-project-123 — required for non-personal Google accounts" },
+      { env: "GOOGLE_CLOUD_PROJECT", label: "GCP project ID (Workspace / Enterprise OAuth)", placeholder: "my-project-123 (required for non-personal Google accounts)" },
     ] },
   { id: "anthropic", name: "Anthropic · Claude", env: "ANTHROPIC_API_KEY", oauthId: "anthropic", canOauth: true },
   { id: "xai", name: "xAI · Grok", env: "XAI_API_KEY", oauthId: "xai-oauth", canOauth: true },
@@ -95,13 +106,25 @@ export const MAJORS: Provider[] = [
     fields: [
       { env: "GOOGLE_CLOUD_PROJECT", label: "GCP project ID", placeholder: "my-project-123" },
       { env: "GOOGLE_CLOUD_LOCATION", label: "Location", placeholder: "us-central1 (or global)" },
-      { env: "GOOGLE_APPLICATION_CREDENTIALS", label: "Service-account JSON (blank = gcloud OAuth / ADC)", placeholder: "/path/to/sa.json — or run: gcloud auth application-default login" },
+      { env: "GOOGLE_APPLICATION_CREDENTIALS", label: "Service-account JSON (blank = gcloud OAuth / ADC)", placeholder: "/path/to/sa.json, or run: gcloud auth application-default login" },
       { env: "NODE_EXTRA_CA_CERTS", label: "Private CA bundle (air-gapped / GDC zone CA)", placeholder: "/path/to/zone-ca.pem, trust for private Gemini endpoints (GDC air-gapped, NIPRNet+)" },
     ] },
   // Perplexity (Sonar) is U.S.-based. omp supports OAuth too, but its login is interactive email-OTP /
   // the macOS app token — neither works through our non-interactive broker spawn — so we expose the
   // API-key path. canOauth:false hides the dead OAuth button.
   { id: "perplexity", name: "Perplexity · Sonar", env: "PERPLEXITY_API_KEY", oauthId: "perplexity", canOauth: false },
+  // Amazon Bedrock: omp's transport self-resolves the AWS credential chain, so a stray ~/.aws profile makes
+  // omp list EVERY Bedrock model (six regional Claude variants and more) while nothing in LUCID was ever
+  // configured, and each one fails on the first turn. This descriptor is what "configured" means to LUCID:
+  // a Bedrock bearer token or an explicit access-key pair saved HERE (a ~/.aws profile is exactly the ambient
+  // case, so it is not offered). The picker hides amazon-bedrock/* until a key is set (renderer
+  // curatedModels via credentialedProviderIds). Region is optional: omp derives it from the inference profile.
+  { id: "amazon-bedrock", name: "Amazon · Bedrock", env: "AWS_BEARER_TOKEN_BEDROCK", oauthId: "", canOauth: false,
+    fields: [
+      { env: "AWS_ACCESS_KEY_ID", label: "Access key ID", placeholder: "AKIA…", secret: true },
+      { env: "AWS_SECRET_ACCESS_KEY", label: "Secret access key", placeholder: "wJalr…", secret: true },
+      { env: "AWS_REGION", label: "Region (optional)", placeholder: "us-east-1" },
+    ] },
 ];
 // More providers (third-party / non-U.S. / custom aggregators) - gated behind a typed acknowledgement
 // in the UI because they route to servers outside U.S. jurisdiction or aggregate many origins.
@@ -163,10 +186,11 @@ export function providerAuth(): ProviderAuthSnapshot {
     });
     return {
       id: m.id, name: m.name, env: m.env, oauthId: m.oauthId, canOauth: m.canOauth,
+      ...(m.deviceOauthId ? { deviceOauthId: m.deviceOauthId } : {}),
       oauthActive: !!oauth, oauthIdentity: oauth?.identity_key ?? undefined,
       keySet: !!key, keyLast4: key ? String(key).slice(-4) : undefined,
       ...(fields ? { fields } : {}),
     };
   };
-  return { gateway: GATEWAY.map(map), majors: MAJORS.map(map), others: OTHERS.map(map) };
+  return { gateway: GATEWAY.map(map), majors: MAJORS.map(map), others: OTHERS.map(map), vault: keyVaultStatus() };
 }

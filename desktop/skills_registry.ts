@@ -147,7 +147,7 @@ export async function installRegistrySkill(
   const trusted = opts.trusted ?? loadTrustedKeys();
   const sig = verifyArtifactSignature(artifact.content, String(artifact.signature ?? ""), trusted);
   if (!sig.ok) {
-    record({ tool: "skill_registry_install", severity: "high", findings: "signature", reason: `registry skill "${name}" rejected — ${sig.reason}` });
+    record({ tool: "skill_registry_install", severity: "high", findings: "signature", reason: `registry skill "${name}" rejected: ${sig.reason}` });
     return { ok: false, name, installed: false, stage: "signature", reason: sig.reason };
   }
 
@@ -161,12 +161,12 @@ export async function installRegistrySkill(
     try {
       decision = await decide(text);
     } catch (e) {
-      record({ tool: "skill_registry_install", severity: "high", findings: "scanner-unavailable", reason: `registry skill "${name}" blocked — scanner unavailable` });
+      record({ tool: "skill_registry_install", severity: "high", findings: "scanner-unavailable", reason: `registry skill "${name}" blocked: scanner unavailable` });
       return { ok: false, name, installed: false, stage: "scan", trust: "quarantined", reason: `scanner unavailable: ${String((e as Error)?.message ?? e)}` };
     }
     findings += decision.findings.length;
     if (decision.block) {
-      record({ tool: "skill_registry_install", severity: "high", findings: String(decision.findings.length), reason: `registry skill "${name}" blocked at the gate — ${decision.reason}` });
+      record({ tool: "skill_registry_install", severity: "high", findings: String(decision.findings.length), reason: `registry skill "${name}" blocked at the gate: ${decision.reason}` });
       return { ok: false, name, installed: false, stage: "scan", trust: decision.trustLabel, findings, reason: decision.reason };
     }
   }

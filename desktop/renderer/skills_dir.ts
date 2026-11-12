@@ -37,10 +37,10 @@ export interface SkillDirRow {
 }
 
 const TRUST_TIP: Record<TrustLabel, string> = {
-  trusted: "Reviewed / scanned clean — safe to enable.",
+  trusted: "Reviewed / scanned clean. Safe to enable.",
   untrusted: "Not yet scanned. Loads today (status quo); re-scan to certify it clean.",
-  suspicious: "Scan found sub-threshold findings — enabling is LOCKED until it re-scans clean.",
-  quarantined: "Scan flagged this (or the scanner was unavailable) — enabling is LOCKED (fail-closed).",
+  suspicious: "Scan found sub-threshold findings. Enabling is LOCKED until it re-scans clean.",
+  quarantined: "Scan flagged this (or the scanner was unavailable). Enabling is LOCKED (fail-closed).",
 };
 
 /** The trust pill for a row. */
@@ -54,7 +54,7 @@ function rowActions(r: SkillDirRow): string {
   const btns: string[] = [];
   if (r.enableable) {
     btns.push(
-      `<button class="skdir-btn skdir-toggle ${r.enabled ? "on" : "off"}" data-skill-act="toggle" data-skill-key="${esc(r.key)}" data-skill-trust="${r.trust}" title="${r.enabled ? "Disable — stop offering + loading this skill" : "Enable — offer + load this skill"}">${r.enabled ? "On" : "Off"}</button>`,
+      `<button class="skdir-btn skdir-toggle ${r.enabled ? "on" : "off"}" data-skill-act="toggle" data-skill-key="${esc(r.key)}" data-skill-trust="${r.trust}" title="${r.enabled ? "Disable: stop offering + loading this skill" : "Enable: offer + load this skill"}">${r.enabled ? "On" : "Off"}</button>`,
     );
   } else {
     btns.push(`<span class="skdir-locked" title="${esc(TRUST_TIP[r.trust])}">${icon("shield", 12)} locked</span>`);
@@ -76,7 +76,7 @@ function row(r: SkillDirRow): string {
       <div class="skdir-hd"><b class="skdir-name">${esc(r.name)}</b> ${trustPill(r.trust)}
         <code class="skdir-inv">${esc(r.invocation)}</code>
         <span class="skdir-ready" title="Deployment readiness (advisory)\n${esc(readyTip)}">${readyOk}/${ready.length}</span>${findings}</div>
-      <div class="skdir-desc">${esc(r.description || "—")}</div>
+      <div class="skdir-desc">${esc(r.description || "-")}</div>
     </div>
     ${rowActions(r)}
   </div>`;
@@ -89,7 +89,7 @@ function row(r: SkillDirRow): string {
 export function renderSkillsDirectory(rows: SkillDirRow[]): string {
   const total = rows.length;
   const active = rows.filter((r) => r.enabled).length;
-  const note = `<div class="skdir-note">${icon("info", 12)} Skills cost only a few metadata tokens until a task triggers them — the full body + resources load on invocation. <b>${active}</b> of <b>${total}</b> enabled.</div>`;
+  const note = `<div class="skdir-note">${icon("info", 12)} Skills cost only a few metadata tokens until a task triggers them; the full body + resources load on invocation. <b>${active}</b> of <b>${total}</b> enabled.</div>`;
 
   const groups = ROOT_ORDER.map((root) => {
     const inRoot = rows.filter((r) => r.root === root);
@@ -132,7 +132,7 @@ export function renderSkillInspect(v: SkillInspectView): string {
     <div class="skdir-inspect-hd"><b>${esc(v.name)}</b> ${trustPill(trust)} <span class="skdir-inspect-root">${esc(v.root ? ROOT_LABEL[v.root] : "")}</span></div>
     ${prov}${enableNote}
     <ul class="skdir-ready-list">${readyRows}</ul>
-    <div class="skdir-databanner">${icon("shield", 12)} Skill body — shown as <b>data</b>, never run as instructions.</div>
+    <div class="skdir-databanner">${icon("shield", 12)} Skill body: shown as <b>data</b>, never run as instructions.</div>
     <pre class="skdir-body">${esc(v.body ?? "")}</pre>
     <div class="skdir-res-hd">Bundled resources</div>${resources}
   </div>`;

@@ -11,6 +11,8 @@ import { afterEach, expect, test } from "bun:test";
 import { join } from "node:path";
 import { FleetLaneManager, type LaneEvent } from "./fleet_lanes.ts";
 import type { SystemSnapshot } from "./system_profile.ts";
+import { DurationHistory } from "./turn_progress.ts";
+import { WriteClaims } from "./write_claims.ts";
 
 const FAKE = join(import.meta.dir, "..", "harness", "mcp", "testing", "fake_acp_agent.ts");
 const TIMEOUT = 20_000;
@@ -19,13 +21,15 @@ const healthy: SystemSnapshot = { cpuModel: "t", cores: 8, speedMHz: 4000, cpuBu
 /** Pegged on BOTH metrics: 100% cpu, ~94% memory used. */
 const pegged: SystemSnapshot = { ...healthy, cpuBusyPct: 100, memTotalMB: 16_000, memFreeMB: 1_000 };
 
-function manager(opts: { snap?: SystemSnapshot; mode?: string; now?: () => number } = {}): FleetLaneManager {
+function manager(opts: { snap?: SystemSnapshot; mode?: string; now?: () => number; history?: DurationHistory; claims?: WriteClaims } = {}): FleetLaneManager {
   if (opts.mode) process.env.FAKE_ACP_MODE = opts.mode; else delete process.env.FAKE_ACP_MODE;
   return new FleetLaneManager({
     argv: () => ({ cmd: "bun", args: [FAKE] }),
     masterModel: () => "master-model-a",
     sample: async () => opts.snap ?? healthy,
     ...(opts.now ? { now: opts.now } : {}),
+    ...(opts.history ? { history: opts.history } : {}),
+    ...(opts.claims ? { claims: opts.claims } : {}),
   });
 }
 
@@ -68,6 +72,18 @@ test("a gate-less argv refuses the lane by NAME and creates nothing", async () =
   expect(r.reason).toBe(refusal);
   expect(r.lane).toBeUndefined();
   expect((await live.status()).lanes).toEqual([]); // no orphan lane in the map
+}, TIMEOUT);
+
+// P-FLEET.L17 (found live): Recover handed omp a model id it did not know, the handshake failed, and the
+// half-built lane stayed in the map as "error": a crashed spoke on the orbit whose Respawn could only
+// fail the same way. A spawn refused in the handshake reports WHY and creates nothing.
+test("a model omp refuses in the handshake is a named refusal and leaves no orphan lane", async () => {
+  live = manager({ mode: "badmodel" });
+  const r = await live.spawn({ cwd: import.meta.dir, model: "gpt-6-astra" });
+  expect(r.ok).toBe(false);
+  expect(r.reason).toContain("Unknown ACP model: gpt-6-astra");
+  expect(r.lane).toBeUndefined();
+  expect((await live.status()).lanes).toEqual([]);
 }, TIMEOUT);
 
 // P-FLEET.L16 (the frozen "Spawning\u2026" button): a filesystem that never answers the directory check
@@ -151,6 +167,26 @@ test("one turn at a time per lane - an overlapping prompt is refused, not crosse
   expect(st.lanes[0]!.status).toBe("awaiting-input"); // a cancelled turn is not an error
 }, TIMEOUT);
 
+// P-FLEET.L8: the transcript holds SETTLED turns only, so a composer attached mid-turn used to land on the
+// bare prompt of a lane that had been working for minutes and read as "the spoke stopped".
+test("promote MID-TURN carries the in-flight output (tools + text); an idle lane carries none", async () => {
+  live = manager({ mode: "midturn" });
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const firstToken = Promise.withResolvers<void>();
+  const turn = live.prompt(r.lane!.id, "long task", (e) => { if (e.type === "token") firstToken.resolve(); });
+  await firstToken.promise; // the chunk crossing the real subprocess boundary IS the mid-turn signal
+  const mid = live.promote(r.lane!.id);
+  expect(mid.ok).toBe(true);
+  expect(mid.lane!.status).toBe("working");
+  expect(mid.transcript?.map((t) => t.role)).toEqual(["user"]); // the running turn is not settled yet
+  expect(mid.live).toEqual({ text: "so far: ", tools: ["read notes.md"] });
+  live.cancel(r.lane!.id);
+  await turn;
+  const idle = live.promote(r.lane!.id);
+  expect(idle.live).toBeUndefined();
+  expect(idle.transcript?.map((t) => t.role)).toEqual(["user", "assistant"]); // folded on settle
+}, TIMEOUT);
+
 test("a permission ask lands needs-approval and DENY resolves it fail-closed", async () => {
   live = manager({ mode: "permission" });
   const r = await live.spawn({ cwd: import.meta.dir });
@@ -210,6 +246,79 @@ test("a mid-turn CRASH lands error event-driven (no clock), and the next prompt 
   expect(st.lanes[0]!.id).toBe(id);                            // same logical lane, same id (invariant 9)
   expect(st.lanes[0]!.respawns).toBe(1);
   expect(st.lanes[0]!.status).toBe("done");
+}, TIMEOUT);
+
+// P-FLEET.L17 (found live): Recover on a historical spoke came back with "the whole history gone", because
+// it was a plain spawn under the old name. A spawn with `resume` is the spoke's OLD session: the seeded
+// transcript is what promote shows, the recorded turn count stands, and (with an agent that cannot load
+// sessions natively, like this fake) the memory rides the first prompt as the recovery preamble.
+test("spawn with resume brings the recorded conversation back: seeded transcript, kept turns, memory on the wire", async () => {
+  live = manager();
+  const r = await live.spawn({
+    cwd: import.meta.dir, name: "fix it", resume: {
+      sessionId: "01a0-recorded",
+      transcript: [{ role: "user", text: "the codeword is PELICAN" }, { role: "assistant", text: "noted" }],
+      turns: 434,
+    },
+  });
+  expect(r.ok).toBe(true);
+  expect(r.lane!.turns).toBe(434);
+  expect(r.lane!.name).toBe("fix it");
+  expect(live.promote(r.lane!.id).transcript?.map((t) => t.text)).toEqual(["the codeword is PELICAN", "noted"]);
+  const events: LaneEvent[] = [];
+  await live.prompt(r.lane!.id, "what was the codeword?", (e) => events.push(e));
+  const reply = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(reply).toContain("PELICAN");
+  expect(reply).toContain("TRANSCRIPT START");
+  expect((await live.status()).lanes[0]!.turns).toBe(435);
+}, TIMEOUT);
+
+// Found live: switching a lane to the main space cut a long answer mid-sentence with "[truncated]", because
+// the 8K recovery clamp was applied to the transcript promote() hands the composer. Promote shows the whole
+// answer; only the recovery preamble stays clamped.
+test("promote seeds a long answer in full while the recovery preamble stays clamped", async () => {
+  live = manager();
+  const long = `${"x".repeat(12_000)} TAIL-OF-ANSWER`;
+  const r = await live.spawn({ cwd: import.meta.dir, resume: { sessionId: "01a0-long", transcript: [{ role: "user", text: "write it up" }, { role: "assistant", text: long }], turns: 1 } });
+  expect(r.ok).toBe(true);
+  const seeded = live.promote(r.lane!.id).transcript!;
+  expect(seeded[1]!.text).toBe(long);
+  const events: LaneEvent[] = [];
+  await live.prompt(r.lane!.id, "continue", (e) => events.push(e));
+  const reply = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(reply).toContain("TRANSCRIPT START");
+  expect(reply).toContain("[truncated]");
+  expect(reply).not.toContain("TAIL-OF-ANSWER");
+}, TIMEOUT);
+
+// P-SWITCH.2 (ADR-0404): one session, one owner. A lane never loads a session Main or another live lane
+// holds; a spawn that would is refused by name and creates nothing, and a stopped lane cannot come back
+// on a session someone else opened meanwhile.
+test("spawn refuses a session Main or a live lane holds, and creates nothing", async () => {
+  let mainSession: string | null = "main-held";
+  delete process.env.FAKE_ACP_MODE;
+  live = new FleetLaneManager({ argv: () => ({ cmd: "bun", args: [FAKE] }), masterModel: () => "m", masterSessionId: () => mainSession, sample: async () => healthy });
+  const resume = (sessionId: string) => ({ cwd: import.meta.dir, resume: { sessionId, transcript: [], turns: 0 } });
+
+  const onMain = await live.spawn(resume("main-held"));
+  expect(onMain.ok).toBe(false);
+  expect(onMain.reason).toContain("main composer");
+
+  const first = await live.spawn({ cwd: import.meta.dir, name: "first" });
+  const held = first.lane!.sessionId!;
+  const twice = await live.spawn(resume(held));
+  expect(twice.ok).toBe(false);
+  expect(twice.reason).toContain(`spoke "first"`);
+  expect((await live.status()).lanes).toHaveLength(1);
+
+  // Stopped, the lane lets go; Main opens that session; the lane may not come back onto it.
+  live.stop(first.lane!.id);
+  mainSession = held;
+  const back = await live.respawn(first.lane!.id);
+  expect(back.ok).toBe(false);
+  expect(back.reason).toContain("main composer");
+  mainSession = null;
+  expect((await live.respawn(first.lane!.id)).ok).toBe(true);
 }, TIMEOUT);
 
 test("retry re-sends the LAST prompt after a crash, without the user asking twice", async () => {
@@ -310,6 +419,19 @@ test("images ride the prompt as ACP blocks; the transcript remembers the COUNT, 
   expect(reply2).not.toContain("aGVsbG8="); // the bytes, never
 }, TIMEOUT);
 
+// P-FLEET.L19: a composer attaching to an IDLE lane seeds its ctx counter from status, so the manager must
+// keep the last measured usage after the turn that reported it ends - and never invent one before that.
+test("status carries the lane's last measured usage after the turn ends, and none before omp reports", async () => {
+  live = manager({ mode: "lanefidelity" });
+  const r = await live.spawn({ cwd: import.meta.dir });
+  expect(r.lane!.usage).toBeUndefined();
+  await live.prompt(r.lane!.id, "measure me", () => {});
+  const lane = (await live.status()).lanes[0]!;
+  expect(lane.status).toBe("done");
+  expect(lane.usage).toEqual({ used: 4200, size: 200_000, cost: 0.0731 });
+  expect(live.promote(r.lane!.id).lane?.usage).toEqual({ used: 4200, size: 200_000, cost: 0.0731 });
+}, TIMEOUT);
+
 test("staged prompts run FIFO when the lane goes idle; reorder and remove work; the cap refuses loudly", async () => {
   live = manager();
   const r = await live.spawn({ cwd: import.meta.dir });
@@ -346,6 +468,68 @@ test("staged prompts run FIFO when the lane goes idle; reorder and remove work; 
   await hangTurn;
 }, TIMEOUT);
 
+// P-QUEUE-IMG.1 (ADR-0469): a staged lane prompt carries its OWN images through the manager queue: the
+// drain sends them with that prompt and not the next, and Update (queueTake) hands back the full text and
+// the actual images, not the clipped preview and count the status view carries.
+test("staged lane prompts carry their own images through drain; queueTake returns full text + images", async () => {
+  live = manager();
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  const png = { data: "aGVsbG8=", mimeType: "image/png" };
+  const long = `with images ${"x".repeat(200)}`;
+  expect(live.enqueue(id, "staged with two images", [png, png]).ok).toBe(true);
+  expect(live.enqueue(id, "staged text only").ok).toBe(true);
+  expect(live.enqueue(id, long, [png]).ok).toBe(true);
+  expect((await live.status()).lanes[0]!.queued.map((q) => q.images)).toEqual([2, 0, 1]);
+  const first: LaneEvent[] = [];
+  await live.drain(id, (e) => first.push(e));
+  expect(first.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("")).toContain("[images: 2]");
+  const second: LaneEvent[] = [];
+  await live.drain(id, (e) => second.push(e));
+  expect(second.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("")).not.toContain("[images:");
+  // Update: the remaining item comes back whole and leaves the queue.
+  const took = live.queueTake(id, 0);
+  expect(took.ok).toBe(true);
+  expect(took.item?.text).toBe(long);
+  expect(took.item?.images).toEqual([png]);
+  expect((await live.status()).lanes[0]!.queued.length).toBe(0);
+  // Out of range is a refusal, never a different item.
+  expect(live.queueTake(id, 0).ok).toBe(false);
+  expect(live.queueTake("no-such-lane", 0).ok).toBe(false);
+}, TIMEOUT);
+
+// P-PUSH.PAR1 (ADR-pending): Copy and Push now read a staged item WHOLE without removing it, and the remove
+// that follows a slow parallel push is guarded by the item's text, so a drain that shifted the indexes in
+// between can never make it delete a different staged prompt.
+test("queuePeek reads full text + images in place; queueRemove with expect follows the item or refuses", async () => {
+  live = manager();
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  const png = { data: "aGVsbG8=", mimeType: "image/png" };
+  const long = `peeked ${"y".repeat(200)}`;
+  expect(live.enqueue(id, "first").ok).toBe(true);
+  expect(live.enqueue(id, long, [png]).ok).toBe(true);
+  const peek = live.queuePeek(id, 1);
+  expect(peek.ok).toBe(true);
+  expect(peek.item?.text).toBe(long);
+  expect(peek.item?.images).toEqual([png]);
+  expect((await live.status()).lanes[0]!.queued.length).toBe(2); // still staged
+  expect(live.queuePeek(id, 5).ok).toBe(false);
+  expect(live.queuePeek("no-such-lane", 0).ok).toBe(false);
+  // The head drains while the push is in flight: index 1 is now out of range, and the guarded remove finds
+  // the item by its text instead of refusing or deleting the wrong one.
+  await live.drain(id, () => {});
+  expect(live.queueRemove(id, 1, long).ok).toBe(true);
+  expect((await live.status()).lanes[0]!.queued.length).toBe(0);
+  // Nothing carries that text any more: a refusal, never a different item.
+  expect(live.enqueue(id, "unrelated").ok).toBe(true);
+  expect(live.queueRemove(id, 0, long).ok).toBe(false);
+  expect((await live.status()).lanes[0]!.queued.map((q) => q.text)).toEqual(["unrelated"]);
+  // A NaN index without `expect` used to splice the head; it is a refusal now.
+  expect(live.queueRemove(id, Number.NaN).ok).toBe(false);
+  expect((await live.status()).lanes[0]!.queued.length).toBe(1);
+}, TIMEOUT);
+
 // ── P-FLEET.L5 (ADR-0274): the durable lane-session ledger ───────────────────────────────────────────
 
 test("spawn and every recovery NAME the session in the ledger; the view exposes the session id", async () => {
@@ -356,6 +540,9 @@ test("spawn and every recovery NAME the session in the ledger; the view exposes 
     argv: () => ({ cmd: "bun", args: [FAKE] }),
     masterModel: () => "master-model-a",
     sample: async () => healthy,
+    // A bare spawn, pinned: a run from inside a LUCID lane inherits that lane's target, and the fake then
+    // tags its ids with it ("fake-session-lane-<id>-1").
+    env: () => ({ LUCID_INTERJECT_TARGET: "master" }),
     recordLaneSession: (rec) => records.push({ laneId: rec.laneId, name: rec.name, sessionId: rec.sessionId, event: rec.event }),
   });
   const r = await live.spawn({ cwd: import.meta.dir, name: "ledgered" });
@@ -366,6 +553,34 @@ test("spawn and every recovery NAME the session in the ledger; the view exposes 
   expect(records.length).toBe(2);
   expect(records[1]!.event).toBe("respawn");
   expect(records[1]!.laneId).toBe(r.lane!.id); // same logical lane, whole lineage in the ledger
+}, TIMEOUT);
+
+// ── P-SWITCH.3 (ADR-0410): a spoke is born under the master session of the moment and keeps it ──────
+
+test("a spoke keeps the hub it was born under after the master starts a new session; the ledger names it", async () => {
+  const hubs: (string | undefined)[] = [];
+  let master: string | null = "sess-one";
+  delete process.env.FAKE_ACP_MODE;
+  live = new FleetLaneManager({
+    argv: () => ({ cmd: "bun", args: [FAKE] }),
+    masterModel: () => "master-model-a",
+    masterSessionId: () => master,
+    sample: async () => healthy,
+    recordLaneSession: (rec) => hubs.push(rec.hub),
+  });
+  const first = await live.spawn({ cwd: import.meta.dir, name: "under-one" });
+  expect(first.lane!.hubSessionId).toBe("sess-one");
+  master = "sess-two"; // the user started a new session: a new hub
+  const second = await live.spawn({ cwd: import.meta.dir, name: "under-two" });
+  expect(second.lane!.hubSessionId).toBe("sess-two");
+  const s = await live.status();
+  expect(s.hub).toBe("sess-two");
+  expect(s.lanes.map((l) => l.hubSessionId)).toEqual(["sess-one", "sess-two"]); // the first spoke was not reparented
+  expect(hubs).toEqual(["sess-one", "sess-two"]);
+  master = null; // no master session at all: a hubless spoke, and no hub on its ledger line
+  const third = await live.spawn({ cwd: import.meta.dir, name: "hubless" });
+  expect(third.lane!.hubSessionId).toBeNull();
+  expect(hubs[2]).toBeUndefined();
 }, TIMEOUT);
 
 // ── P-FLEET.L6: approval scopes ("allow for session") + full auto-mode ───────────────────────────────
@@ -516,4 +731,79 @@ test("laneTranscript hands out a COPY of the lane's memory, and [] for an unknow
   const again = live.laneTranscript(id);
   expect(again.length).toBeGreaterThanOrEqual(2);
   expect(again[0]).toEqual({ role: "user", text: "remember: OTTER" });
+  // P-REMOTE.16: a user record carries no rich fields, a settled assistant record never claims an error for
+  // a turn that completed, and an idle lane has no in-flight turn to replay.
+  expect(again[0]!.thinking).toBeUndefined();
+  expect(again[0]!.tools).toBeUndefined();
+  expect(again.find((t) => t.role === "assistant")!.error).toBeUndefined();
+  expect(live.laneLiveTurn(id)).toBeNull();
+  expect(live.laneLiveTurn("lane-does-not-exist")).toBeNull();
+}, TIMEOUT);
+
+// ── P-WAIT.1: workers in one folder run at once; only a write to the same file waits ─────────────
+
+/** Resolves once `events` holds one matching `pred` (no guessed sleep). */
+function firstEvent<T extends LaneEvent>(events: LaneEvent[], pred: (e: LaneEvent) => e is T): Promise<T> {
+  const { promise, resolve } = Promise.withResolvers<T>();
+  const tick = () => { const hit = events.find(pred); if (hit) resolve(hit); else setTimeout(tick, 10); };
+  tick();
+  return promise;
+}
+const isOutput = (e: LaneEvent): e is Extract<LaneEvent, { type: "token" }> => e.type === "token";
+
+test("two lanes on ONE folder both reach their agent at once: no folder lease, no waiting", async () => {
+  // `midturn`: each child streams output as soon as its prompt arrives, then keeps the turn open. Under the
+  // old folder lease, beta's prompt never left the engine while alpha's turn was open.
+  live = manager({ mode: "midturn" });
+  const a = await live.spawn({ cwd: import.meta.dir, name: "alpha" });
+
+  const b = await live.spawn({ cwd: import.meta.dir, name: "beta" });
+  const aEvents: LaneEvent[] = [];
+  const bEvents: LaneEvent[] = [];
+  const aTurn = live.prompt(a.lane!.id, "first", (e) => aEvents.push(e));
+  const bTurn = live.prompt(b.lane!.id, "second", (e) => bEvents.push(e));
+  await Promise.all([firstEvent(aEvents, isOutput), firstEvent(bEvents, isOutput)]);
+  const st = await live.status();
+  expect(st.lanes.filter((l) => l.status === "working").map((l) => l.name).sort()).toEqual(["alpha", "beta"]);
+  expect([...aEvents, ...bEvents].some((e) => e.type === "waiting")).toBe(false);
+  expect(st.lanes.every((l) => l.waiting === undefined)).toBe(true);
+  live.cancel(a.lane!.id); live.cancel(b.lane!.id);
+  await Promise.all([aTurn, bTurn]);
+}, TIMEOUT);
+
+test("a lane's write wait shows on its card, and its turn end frees its files and clears the wait", async () => {
+  const claims = new WriteClaims();
+  live = manager({ mode: "midturn", claims });
+  const a = await live.spawn({ cwd: import.meta.dir, name: "alpha" });
+  const aEvents: LaneEvent[] = [];
+  const aTurn = live.prompt(a.lane!.id, "first", (e) => aEvents.push(e));
+  await firstEvent(aEvents, isOutput);
+  // Alpha's running turn claims a file; Main's write to that file waits on it.
+  expect(await claims.acquire({ id: a.lane!.id, name: "alpha" }, ["shared.ts"], import.meta.dir, { waitMs: 0 })).toEqual({ held: false });
+  const mainWrite = claims.acquire({ id: "master", name: "Main" }, ["shared.ts"], import.meta.dir, { waitMs: 10_000 });
+  // The engine route reports an alpha-side wait the same way; the card reads it from status and the event.
+  live.noteWriteWait(a.lane!.id, { on: { id: "master", name: "Main" }, file: "other.ts" });
+  const waited = await firstEvent(aEvents, (e): e is Extract<LaneEvent, { type: "waiting" }> => e.type === "waiting");
+  expect(waited.wait).toEqual({ on: { id: "master", name: "Main" }, file: "other.ts" });
+  expect((await live.status()).lanes[0]!.waiting?.file).toBe("other.ts");
+  live.cancel(a.lane!.id);
+  await aTurn;
+  expect(await mainWrite).toEqual({ held: false }); // alpha's turn ended: Main's write goes through
+  expect((await live.status()).lanes[0]!.waiting).toBeUndefined();
+  live.noteWriteWait(a.lane!.id, { on: { id: "master", name: "Main" }, file: "late.ts" }); // idle lane: ignored
+  expect((await live.status()).lanes[0]!.waiting).toBeUndefined();
+}, TIMEOUT);
+
+test("a code-less tool call carries the command, its intent, and settles its own step", async () => {
+  live = manager({ mode: "lanefidelity" });
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const events: LaneEvent[] = [];
+  await live.prompt(r.lane!.id, "go", (e) => events.push(e));
+  const tools = events.filter((e): e is Extract<LaneEvent, { type: "tool" }> => e.type === "tool");
+  expect(tools).toHaveLength(2); // the edit-shaped call (no id) and the bash call
+  expect(tools[0]!.id).toBeUndefined();
+  expect(tools[0]!.status).toBeUndefined(); // no id: nothing to settle against
+  expect(tools[1]!.id).toBe("call-bash-1");
+  expect(tools[1]!.input).toContain("bun test desktop/health_watch.test.ts");
+  expect(tools[1]!.status).toBe("done"); // the fake reports the call already completed: settled at once
 }, TIMEOUT);

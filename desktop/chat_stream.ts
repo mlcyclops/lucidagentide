@@ -1,6 +1,10 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
+/** Silence after which the stream sends a ping; worst-case quiet is this plus HEARTBEAT_CHECK_MS. */
+const HEARTBEAT_IDLE_MS = 15_000;
+const HEARTBEAT_CHECK_MS = 1_000;
+
 /** The HTTP connection owns its observer, never the work awaited by run. */
 export function ndjsonStream(
   label: string,
@@ -15,9 +19,12 @@ export function ndjsonStream(
       let open = true;
       let lastSend = Date.now();
       let reportedFailure = false;
+      // Check more often than the ping period: with check == period, a send just after one check left
+      // ~30 s of silence before the next ping, so a briefly stalled engine event loop ran the client into
+      // its 45 s idle deadline (ndjson_stream.ts) and a healthy turn read as a dropped connection.
       const heartbeat = setInterval(() => {
-        if (Date.now() - lastSend >= 15_000) emit({ type: "ping" });
-      }, 15_000);
+        if (Date.now() - lastSend >= HEARTBEAT_IDLE_MS) emit({ type: "ping" });
+      }, HEARTBEAT_CHECK_MS);
       const onRequestAbort = () => close(requestSignal?.reason);
       const close = (reason?: unknown, readerCancelled = false) => {
         if (!open) return;

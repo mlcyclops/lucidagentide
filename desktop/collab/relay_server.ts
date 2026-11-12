@@ -11,7 +11,8 @@
 //     the header to the SENDER's peer id on delivery (host = peer 0; guests are 1,2,3…). A host frame with
 //     targetPeer 0 broadcasts to all guests; a non-zero target unicasts. A guest frame always goes to the host.
 //   - STRING frames are relay→client JSON control: `peer-joined`/`peer-left` (to the host), `room-closed`
-//     (to guests). Fatal close codes: 4004 no such room, 4009 host already connected, 4029 room full.
+//     (to guests), and `pong` answering the client's `{"t":"ping"}` keepalive (P-REMOTE.16, ADR-0431).
+//     Fatal close codes: 4004 no such room, 4009 host already connected, 4029 room full.
 //
 // SECURITY (the one genuinely new attack surface, so it is guard-railed and OPT-IN, never on by default):
 //   - a SEPARATE listener from LUCID's authenticated /api server - this port serves ONLY the relay protocol,
@@ -92,6 +93,11 @@ const DEFAULTS = {
   maxFrameBytes: 512 * 1024, // 512 KiB - a sealed ChatEvent is tiny; a big one is a red flag
   idleTimeoutSec: 120,
 };
+
+/** P-REMOTE.16 (ADR-0431): the client keepalive string (exact bytes, matched verbatim) and its reply. Both
+ *  are relay-level strings that never enter a room: a ping is answered on the SAME socket, never forwarded. */
+const KEEPALIVE_PING = '{"t":"ping"}';
+const KEEPALIVE_PONG = '{"t":"pong"}';
 
 type Role = "host" | "guest";
 interface SockData {
@@ -331,11 +337,13 @@ export function startRelayServer(opts: RelayServerOptions): RelayHandle {
       },
       message(ws: WS, message: string | Uint8Array | ArrayBuffer) {
         if (auth && !ws.data.authed) { handlePreAuthFrame(ws, message); return; }
-        // The client's exact keepalive frame is the only client string with telemetry meaning. It remains
-        // otherwise ignored (there is no response and no new control-plane behavior).
+        // The client's exact keepalive frame is the only client string with meaning. P-REMOTE.16 (ADR-0431):
+        // it is answered with `{"t":"pong"}` so the client can tell a live socket from a half-open one (a
+        // phone NAT / Cloud Run drop that never delivers a close); every other post-auth string stays ignored.
         if (typeof message === "string") {
-          if (message === '{"t":"ping"}') {
+          if (message === KEEPALIVE_PING) {
             emitPresence(() => presence!.activity(ws.data.roomId, ws.data.role, ws.data.peerId, "heartbeat"));
+            try { ws.send(KEEPALIVE_PONG); } catch { /* gone; the close path reaps it */ }
           }
           return;
         }

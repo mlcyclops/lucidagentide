@@ -38,6 +38,8 @@ export interface SubagentRun {
   name: string;         // the generated subtask name (transcript filename minus .jsonl)
   done: boolean;        // the sibling <name>.md output exists
   lastAt: number;       // transcript mtime (ms)
+  startedAt: number;    // P-PROGRESS.2: the transcript's `session` line timestamp (ms); 0 when unreadable
+  endedAt: number;      // P-PROGRESS.2: the <name>.md mtime (ms) once done; 0 while running
   assignment: string;   // the subtask's own first user message (its assignment), clipped
   model: string | null;
   tools: number;        // total tool calls so far
@@ -62,11 +64,23 @@ const clip = (s: unknown, n: number): string => {
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 };
 
-/** A tool call's one-line label: the model's own intent note (`_i`) when present, else the most
- *  path/command-shaped argument. */
+/** A run of one character this long is a model stuck in a loop, not prose (a local model on a mismatched
+ *  chat template streamed 4,096 "!" per message until its token cap). */
+const DEGENERATE_RUN = /(\S)\1{63,}/u;
+
+/** A thinking/text step's label. Degenerate output names the failure instead of quoting it, so the
+ *  card says what went wrong rather than painting a row of "!!!!". */
+function proseLabel(text: string): string {
+  const run = DEGENERATE_RUN.exec(text);
+  if (run) return `model output degenerated ("${run[1]}" repeated ${run[0].length.toLocaleString("en-US")} times)`;
+  return clip(text, LABEL_CAP);
+}
+
+/** A tool call's one-line label: the model's own intent note when present (omp now sends it as `i`;
+ *  older transcripts carry `_i`), else the most path/command-shaped argument. */
 function toolLabel(args: Record<string, unknown> | undefined): string {
   if (!args || typeof args !== "object") return "";
-  for (const k of ["_i", "path", "file_path", "command", "url", "pattern", "query", "title"]) {
+  for (const k of ["i", "_i", "path", "file_path", "command", "url", "pattern", "query", "title"]) {
     const v = (args as Record<string, unknown>)[k];
     if (typeof v === "string" && v.trim()) return clip(v, 120);
   }
@@ -101,12 +115,48 @@ export function parseSubagentTranscript(jsonl: string, maxSteps = STEP_CAP): { a
     }
     if (role !== "assistant") continue;
     for (const c of content as { type?: string; thinking?: string; text?: string; name?: string; arguments?: Record<string, unknown> }[]) {
-      if (c?.type === "thinking" && c.thinking) push({ kind: "thinking", label: clip(c.thinking, LABEL_CAP) });
-      else if (c?.type === "toolCall") { tools += 1; push({ kind: "tool", tool: clip(c.name, 30) || "tool", label: toolLabel(c.arguments) }); }
-      else if (c?.type === "text" && c.text) push({ kind: "text", label: clip(c.text, LABEL_CAP) });
+      if (c?.type === "thinking" && c.thinking) push({ kind: "thinking", label: proseLabel(c.thinking) });
+      else if (c?.type === "toolCall") { tools += 1; push({ kind: "tool", tool: clip(c.name, 30) || "tool", label: toolLabel(c.arguments) || (c.name === "yield" ? "result" : "") }); } // a structured yield ({ data: {...} }) has no string argument; it is still the run's final step
+      else if (c?.type === "text" && c.text) push({ kind: "text", label: proseLabel(c.text) });
     }
   }
   return { assignment, model, tools, steps };
+}
+
+/** P-PROGRESS.2: when the run began, from omp's `session` header line (one of the first few lines). Only
+ *  the head is scanned, so a big transcript costs nothing extra. 0 when absent or unparsable. */
+export function transcriptStartedAt(jsonl: string): number {
+  for (const ln of jsonl.slice(0, 16 * 1024).split("\n", 8)) {
+    if (!ln.includes("\"session\"")) continue;
+    try {
+      const o = JSON.parse(ln) as { type?: string; timestamp?: unknown };
+      if (o.type !== "session" || typeof o.timestamp !== "string") continue;
+      const t = Date.parse(o.timestamp);
+      return Number.isFinite(t) ? t : 0;
+    } catch { /* a torn head line is not a start time */ }
+  }
+  return 0;
+}
+
+/** P-LIVENESS.1 (ADR-0418): the cheap liveness read of a parent's subagent runs written since `since`:
+ *  the newest transcript write and how many runs have no result file yet. readdir + stat only, no
+ *  transcript reads, so it can run on every pulse sample. Missing dir / unreadable → nothing. */
+export function subagentPulse(sessionFile: string | null | undefined, since: number, io: SubagentIo = REAL_IO): { lastWriteAt: number; live: number } {
+  const none = { lastWriteAt: 0, live: 0 };
+  const dir = subagentArtifactsDir(sessionFile);
+  if (!dir || !io.exists(dir)) return none;
+  let entries: string[];
+  try { entries = io.list(dir); } catch { return none; }
+  let lastWriteAt = 0;
+  let live = 0;
+  for (const f of entries) {
+    if (!f.endsWith(".jsonl")) continue;
+    const at = io.mtime(join(dir, f));
+    if (at < since) continue;
+    lastWriteAt = Math.max(lastWriteAt, at);
+    if (!io.exists(join(dir, `${f.slice(0, -6)}.md`))) live++;
+  }
+  return { lastWriteAt, live };
 }
 
 /** List the live/finished subagent runs behind a parent session file. Missing dir / no runs → []
@@ -123,6 +173,7 @@ export function listSubagentRuns(sessionFile: string | null | undefined, io: Sub
     const name = f.slice(0, -6);
     try {
       let text = io.readText(file);
+      const startedAt = transcriptStartedAt(text); // before the tail cut: the header line is at the top
       // Tail-read big transcripts: drop everything before the last TAIL_BYTES, then skip the first
       // (possibly torn) line. The parser tolerates the missing head - assignment may be absent then.
       if (io.size(file) > TAIL_BYTES && text.length > TAIL_BYTES) {
@@ -130,7 +181,9 @@ export function listSubagentRuns(sessionFile: string | null | undefined, io: Sub
         text = text.slice(text.indexOf("\n") + 1);
       }
       const parsed = parseSubagentTranscript(text);
-      runs.push({ name, done: io.exists(join(dir, `${name}.md`)), lastAt: io.mtime(file), ...parsed });
+      const md = join(dir, `${name}.md`);
+      const done = io.exists(md);
+      runs.push({ name, done, lastAt: io.mtime(file), startedAt, endedAt: done ? io.mtime(md) : 0, ...parsed });
     } catch { /* unreadable transcript - skip the run, never the list */ }
   }
   return runs.sort((a, b) => a.name.localeCompare(b.name));

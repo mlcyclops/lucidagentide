@@ -9,7 +9,8 @@
 // excluded; and that resolveCheckerModel honors a valid override but fails safe past a stale one.
 
 import { describe, expect, test } from "bun:test";
-import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
+import { recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
+import { isAsksageRouted } from "./lockdown_route.ts";
 
 const opt = (value: string): ModelOption => ({ value });
 // A realistic slice of the live picker (multiple providers, snapshots + aliases).
@@ -22,6 +23,12 @@ describe("recommendCheckerModel", () => {
     const r = recommendCheckerModel(ANTHROPIC, "anthropic/claude-opus-4-8");
     expect(r!.value).toBe("anthropic/claude-haiku-4-5"); // tier 2, newest (4.5), clean alias
     expect(r!.why).toContain("anthropic");
+  });
+
+  test("P-MODEL.7: once the account lists Haiku 5.5 it outranks Haiku 4.5 as the checker, and Opus 5.5 never is one", () => {
+    const list = [...ANTHROPIC, opt("anthropic/claude-haiku-5-5"), opt("anthropic/claude-opus-5-5")];
+    const r = recommendCheckerModel(list, "anthropic/claude-opus-5-5");
+    expect(r!.value).toBe("anthropic/claude-haiku-5-5");
   });
 
   test("openai maker → newest *mini* (small) over nano (weaker) and over the full gpt-5.5 (overkill)", () => {
@@ -62,6 +69,13 @@ describe("resolveCheckerModel", () => {
     expect(r.source).toBe("recommended");
     expect(r.value).toBe("anthropic/claude-haiku-4-5");
   });
+  test("an embedding model is never the checker, even as a saved override (ADR-0498)", () => {
+    const list = [opt("ollama/nomic-embed-text:latest"), ...ANTHROPIC];
+    expect(recommendCheckerModel(list, "ollama/nomic-embed-text:latest")!.value).toBe("anthropic/claude-haiku-4-5");
+    expect(resolveCheckerModel({ chosen: "ollama/nomic-embed-text:latest", models: list, current: "anthropic/claude-opus-4-8" }))
+      .toEqual({ value: "anthropic/claude-haiku-4-5", source: "recommended" });
+    expect(recommendCheckerModel([opt("ollama/nomic-embed-text:latest")], "anthropic/claude-opus-4-8")).toBeNull();
+  });
   test("no choice + no models ⇒ falls back to the maker model (ADR-0046 default)", () => {
     expect(resolveCheckerModel({ chosen: "", models: [], current: "anthropic/claude-opus-4-8" }))
       .toEqual({ value: "anthropic/claude-opus-4-8", source: "maker" });
@@ -79,6 +93,9 @@ describe("isAsksageRouted", () => {
     expect(isAsksageRouted("anthropic/claude-opus-4-8")).toBe(false);
     expect(isAsksageRouted("openai-codex/gpt-5.5")).toBe(false);
   });
+  test("a self-hosted model whose id merely CONTAINS 'asksage' is not gov-routed (provider segment only)", () => {
+    expect(isAsksageRouted("dgx-spark/asksage-clone")).toBe(false);
+  });
 });
 
 describe("resolveLockdownModel", () => {
@@ -92,9 +109,75 @@ describe("resolveLockdownModel", () => {
   test("lock ON + on a DIRECT model ⇒ switch to the first gov option (the startup/respawn bug)", () => {
     expect(resolveLockdownModel(true, "anthropic/claude-opus-4-8", values)).toEqual({ ok: true, model: "asksage-openai/gpt-5.6-luna" });
   });
+  test("P-MODEL.6: lock ON never resolves a StepFun model, whether current, offered, or the only option", () => {
+    const withStep = ["stepfun/step-5-preview", "openrouter/stepfun/step-3.7-flash", ...values];
+    expect(resolveLockdownModel(true, "stepfun/step-5-preview", withStep)).toEqual({ ok: true, model: "asksage-openai/gpt-5.6-luna" });
+    expect(resolveLockdownModel(true, "stepfun/step-5-preview", ["stepfun/step-5-preview", "stepfun/step-3.7-flash"]).ok).toBe(false);
+    expect(resolveGovernedModel(true, { allowed: ["step"] }, "stepfun/step-5-preview", withStep).ok).toBe(false);
+  });
   test("lock ON + NO gov model available ⇒ FAIL-CLOSED (block, never route direct)", () => {
     const r = resolveLockdownModel(true, "anthropic/claude-opus-4-8", ["anthropic/claude-opus-4-8", "openai-codex/gpt-5.5"]);
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/AskSage API key|lockdown/i);
+  });
+  // CUI lockdown: an enabled DGX enclave Local Provider is an allowed route next to AskSage.
+  const ENCLAVE = new Set(["dgx-spark"]);
+  test("lock ON + already on an enclave local model ⇒ keep it (no forced hop to AskSage)", () => {
+    expect(resolveLockdownModel(true, "dgx-spark/glm-5.3-flash", [...values, "dgx-spark/glm-5.3-flash"], ENCLAVE)).toEqual({ ok: true, model: "dgx-spark/glm-5.3-flash" });
+  });
+  test("lock ON + no AskSage at all, but an enclave model exists ⇒ switch to it", () => {
+    const r = resolveLockdownModel(true, "anthropic/claude-opus-4-8", ["anthropic/claude-opus-4-8", "ollama-local/llama3.1:8b", "dgx-spark/glm-5.3-flash"], ENCLAVE);
+    expect(r).toEqual({ ok: true, model: "dgx-spark/glm-5.3-flash" });
+  });
+  test("lock ON + only a NON-enclave local provider ⇒ FAIL-CLOSED, and the refusal names both ways out", () => {
+    const r = resolveLockdownModel(true, "ollama-local/llama3.1:8b", ["ollama-local/llama3.1:8b", "anthropic/claude-opus-4-8"], ENCLAVE);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/AskSage/);
+    expect(r.error).toMatch(/DGX enclave/);
+  });
+  test("the enclave set defaults to empty: omitting it can only refuse, never widen", () => {
+    expect(resolveLockdownModel(true, "dgx-spark/glm-5.3-flash", ["dgx-spark/glm-5.3-flash"]).ok).toBe(false);
+  });
+});
+
+// R-07 (#347): the managed allowed/denied lists, wired fail-closed on top of the lockdown clamp.
+describe("resolveGovernedModel", () => {
+  const values = ["anthropic/claude-opus-4-8", "asksage-openai/gpt-5.6-luna", "openai/gpt-5.5"];
+  test("unmanaged + unlocked => the current model passes through", () => {
+    expect(resolveGovernedModel(false, undefined, "openai/gpt-5.5", values)).toEqual({ ok: true, model: "openai/gpt-5.5" });
+  });
+  test("a denied current model switches to the first permitted option", () => {
+    const r = resolveGovernedModel(false, { denied: ["openai"] }, "openai/gpt-5.5", values);
+    expect(r).toEqual({ ok: true, model: "anthropic/claude-opus-4-8" });
+  });
+  test("a non-empty allow-list restricts: non-matching current swaps to a matching option", () => {
+    const r = resolveGovernedModel(false, { allowed: ["asksage"] }, "anthropic/claude-opus-4-8", values);
+    expect(r).toEqual({ ok: true, model: "asksage-openai/gpt-5.6-luna" });
+  });
+  test("deny wins over allow (the ADR-0068 rule holds through the resolver)", () => {
+    const r = resolveGovernedModel(false, { allowed: ["claude"], denied: ["opus"] }, "anthropic/claude-opus-4-8", ["anthropic/claude-opus-4-8"]);
+    expect(r.ok).toBe(false);
+  });
+  test("everything denied => FAIL-CLOSED block, never a silent pass", () => {
+    const r = resolveGovernedModel(false, { denied: ["anthropic", "asksage", "openai"] }, "openai/gpt-5.5", values);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/organization's model policy/);
+  });
+  test("lockdown + policy must BOTH hold: only an AskSage-routed AND allowed model qualifies", () => {
+    const r = resolveGovernedModel(true, { denied: ["gpt-5.6"] }, "anthropic/claude-opus-4-8", [...values, "asksage-anthropic/google-claude-sonnet-5"]);
+    expect(r).toEqual({ ok: true, model: "asksage-anthropic/google-claude-sonnet-5" });
+  });
+  test("lockdown on + policy denies every gov model => blocks (never routes direct even if allowed)", () => {
+    const r = resolveGovernedModel(true, { denied: ["asksage"] }, "anthropic/claude-opus-4-8", values);
+    expect(r.ok).toBe(false);
+  });
+  test("lockdown + policy denying the gov model swaps to an allowed ENCLAVE model, never a direct one", () => {
+    const r = resolveGovernedModel(true, { denied: ["asksage"] }, "asksage-openai/gpt-5.6-luna", [...values, "dgx-spark/glm-5.3-flash"], new Set(["dgx-spark"]));
+    expect(r).toEqual({ ok: true, model: "dgx-spark/glm-5.3-flash" });
+  });
+  test("the lockdown failure surfaces first (no gov model available)", () => {
+    const r = resolveGovernedModel(true, undefined, "openai/gpt-5.5", ["openai/gpt-5.5"]);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/AskSage/);
   });
 });

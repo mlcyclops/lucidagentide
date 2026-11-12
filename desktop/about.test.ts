@@ -36,7 +36,7 @@ describe("aboutHtml", () => {
   test("carries the product + company identity", () => {
     expect(html).toContain("LUCID");
     expect(html).toContain("AGENT&nbsp;IDE");
-    expect(html).toContain("TechLead&nbsp;187&nbsp;LLC");
+    expect(html).toContain("TECHLEAD&nbsp;187&nbsp;LLC");
   });
 
   test("states the BUSL-1.1 license, the change date, and that it is not OSI open-source", () => {

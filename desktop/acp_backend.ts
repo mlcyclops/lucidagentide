@@ -11,17 +11,27 @@
 // (DECISIONS ADR-0006).
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { StepTextJoiner } from "./step_text.ts"; // P-STEPTEXT.1: a paragraph break between a turn's tool steps
 import { designDocPath, designInvariantsBlock, isDesignDocPath } from "./design_doc.ts"; // P-DESIGN.1/.2 (ADR-0154): honor DESIGN.md + detect writes
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ACPClient } from "./acp.ts";
+import { ACPClient, acpLogPath } from "./acp.ts";
 import { LiveTurn, type TurnAttachment, type TurnSnapshot, type TurnStatus } from "./turn_recovery.ts";
+import { engineIncident, logTail } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
+import { incidentDir, recordIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
+import type { IncidentEvent, IncidentKind, IncidentOutcome } from "./incident_report.ts";
 import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts"; // P-FLEET.L14 (ADR-0337): one shared definition
 import { AGENT_BUILDER_POLICY, BUILD_POLICY, DATA_INTEGRATION_POLICY, DELEGATION_POLICY, ENGAGEMENT_POLICY, JEV_POLICY, PREVIEW_POLICY, SLASH_COMMAND_POLICY } from "../harness/prompt/assembler.ts";
 import { currentWorkspace } from "./workspace.ts";
+import { workspaceSecretEnv } from "./vault_env_import.ts"; // P-VAULT-ENV.1 (ADR-0477): the workspace's scoped secrets
+import { vaultRedactEnv } from "./vault_env.ts"; // security review SECRET-INTAKE-AGENT-ENV-READBACK: names the redaction hook hides
+import { masterSecretRequestEnv } from "./secret_routes.ts"; // security review SECRET-INTAKE-REQUESTER-SPOOF: master-only request_secret env
+import { PendingWrites } from "./checkout_owners.ts"; // P-OWN.1: ownership only for writes that completed
 import { PREVIEW_ACTIVITY, previewActivityLabel, type PreviewActivityKind } from "./preview_activity.ts"; // P-PREVIEW.6a (ADR-0153): reviewing/testing pill
 import { extractToolImages } from "./renderer/chat_images.ts"; // P-IMG.1 (ADR-0208): images out of tool results
-import { recordAiLoc } from "./ailoc_log.ts"; // P-LOC.4 (ADR-0211): GUI-owned AI-LOC ledger the dashboard reads
+import { isInternalUri } from "./ailoc_log.ts"; // #483: device/internal-URI calls are never authored code
+import { AiLocCaptureTracker } from "./ailoc_capture.ts";
+import { toolCode } from "./tool_code.ts";
 import { learnFromTurn, recallPreamble } from "./personal.ts";
 import { buildUserTurnPreamble } from "./preamble.ts";
 import { flavorInfo, normalizeUiMode, resolveBuildFlavor, uiModePosture, type UiMode } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279)
@@ -34,29 +44,43 @@ import { recordLatency } from "./latency_log.ts"; // P-EVAL.2 (ADR-0187): per-tu
 import { beginStepTurn, endStepTurn, noteStepEvent } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
-import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, resolveOmpBin } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
+import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, type OmpResolution, resolveOmpBin, resolveOmpBinAsync } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
 import { gatePath, gateRefusal, repoAsset, resolvedRepo } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
-import { asksageOnly, attribution, checkerModel, judgmentOverlayFile, judgmentProvider, lastModel, load as loadSettings, mcpServersForAcp, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
-import { resolveJudgmentProvider, writeJudgmentOverlay } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374)
+import { asksageOnly, attribution, checkerModel, chosenModel, localProviderPrefixes, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, modelRolesOverlayFile, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
+import { heavyRoleModel, writeModelRolesOverlay } from "./model_roles.ts"; // P-MODEL.8 (ADR-0448)
+import { judgeChain, resolveJudgmentProvider, writeJudgmentOverlay, type ResolvedJudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374) + P-JEV.5 (ADR-0416)
+import { bannedJudges, judgeBanEnv } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416): local judges that failed more than once
 import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
-import { managedAsksageOnly, managedConfig, managedRequireIsolation } from "./managed_config.ts";
-import { appContainerRuntimeGrants, loopbackExempted, resolveBackend, runtimeProbeVerdict, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
+import { managedAsksageOnly, managedConfig, managedRequireIsolation, managedSandboxFoldersLocked, managedSandboxLocksOn, modelAllowed } from "./managed_config.ts";
+import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, gitExe, loopbackExempted, parseOmpShellPath, prependPathOverlay, resolveBackend, runtimeProbeVerdict, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
+import type { MxcHost } from "../harness/runs/sandbox_mxc.ts"; // P-MXC.1 (ADR-0441)
+import { mxcHost } from "./mxc_runtime.ts"; // P-MXC.1 (ADR-0441): the staged, verified MXC executor
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
-import { loadGrants, saveGrants, setPending, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
+import { observeToolCall } from "./repo_probe.ts"; // P-REPO.1 (ADR-0406): which repo a session works on
+import { userTurnedSandboxOff } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
+import { loadGrants, managedPolicyFolderPlan, saveGrants, setPending, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
 import { caps } from "../harness/runs/profiles.ts";
-import { isAsksageRouted, recommendCheckerModel, resolveCheckerModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
+import { recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, type ModelOption } from "./checker_model.ts";
+import { enclaveHostSet, enclaveProviderSet, isAsksageRouted, isLockdownRoutable, lockdownEgressExempt, LOCKDOWN_SWITCH_FAILED_ERROR } from "./lockdown_route.ts"; // CUI lockdown: AskSage + DGX enclave routes
 import { resolveStartupModel } from "./startup_model.ts"; // P-MODEL.1 (ADR-0250): fresh-session picker default
-import { providerAuth, type ProviderAuth } from "./auth_status.ts";
+import { isLocalModel, providerAllowedOnPlatform, providerPrefixOf } from "./renderer/model_families.ts"; // P-MODEL.6: platform-bound providers
+import { providerAuth, typesafeKeySet, type ProviderAuth } from "./auth_status.ts";
 import { providerForModel } from "./renderer/budget_gate.ts"; // DOM-free (see its header note)
 import { parseGoalVerdict } from "./goal_verdict.ts";
 import { appendGoalIteration, appendRunLog, finishGoalMemory, type GoalMemory, readRunLog, resumeGoalMemory, saveGoalReport, savePreflightReport, startGoalMemory } from "./goal_memory.ts";
 import { extractUrls, type IterStat, type LocStat, type LoopBlock, type LoopMetrics, type LoopOutcome, normalizeToolName, parseNumstat, renderLoopReport, stallSignature, summarizeLoop } from "./loop_report.ts";
 import { type LoopDial, clampDialRow, loopVerdict } from "./exec_policy.ts";
-import { type PendingCall, type PendingView, pendingSnapshot, settleToolCall, trackToolCall } from "./turn_pending.ts"; // P-STALL.2 (ADR-0263)
-import { HEALTH_PROBE_NOTE, RecoverMarker, RESUME_MAX_PER_RUN, buildResumeNote, healthVerdict, newEpisode, onActivity, onProbe, onRecover, resumeVerdict, type HealthAction, type HealthEpisode } from "./health_watch.ts"; // P-HEALTH.1; P-HEALTH.2 resume
+import { type PendingCall, type PendingView, parseTaskCall, pendingSnapshot, settleToolCall, trackToolCall } from "./turn_pending.ts"; // P-STALL.2 (ADR-0263)
+import { HEALTH_DEFAULTS, HEALTH_PROBE_NOTE, RecoverMarker, RESUME_MAX_PER_RUN, buildResumeNote, healthVerdict, newEpisode, onActivity, onProbe, onRecover, resumeVerdict, type HealthAction, type HealthEpisode, type HealthInput, type HealthVerdict } from "./health_watch.ts"; // P-HEALTH.1; P-HEALTH.2 resume
 import { addInterject } from "./interject_store.ts"; // P-HEALTH.1: the probe rides the operator-note path
+import { DurationHistory, PROGRESS_TICK_MS, QUIET_MS, progressView, type ProgressView } from "./turn_progress.ts"; // P-PROGRESS.1
+import { PulseTracker, oldestCallStart, pulseVerdict, stoppedCallNote, type SubagentSignal } from "./call_pulse.ts"; // P-LIVENESS.1 (ADR-0418)
+import { stopCallProcesses, workerProcesses } from "./call_pulse_proc.ts"; // P-LIVENESS.1
+import type { ProcRow } from "./leftover_reaper.ts";
+import { WriteClaims, type WaitView } from "./write_claims.ts"; // P-WAIT.1: file-scoped write waits shared with the fleet
+import { toolInput, toolIntent } from "./tool_input.ts"; // P-PROGRESS.1
 import { emitSecurityEvent } from "./audit_export.ts";
 import { aggregateRuns, type LoopRunRecord, type RunStats, summarizeRunStats, toRunRecord } from "./loop_runlog.ts";
 import { addTurnSpend, type LoopSpend, newLoopSpend, normalizeBudget, overBudget } from "./loop_budget.ts";
@@ -73,6 +97,7 @@ import { agentBuilderOpenSpec } from "../harness/agent/handoff.ts"; // P-AGENT.8
 import type { AgentSpec } from "../harness/agent/spec.ts";
 import { slashCommandCreateDraft } from "../harness/commands/handoff.ts"; // P-CMD.1: chat -> user slash command
 import type { UserCommand } from "../harness/commands/spec.ts";
+import type { SecretRequestView } from "./secret_intake_view.ts"; // P-SECRET-INTAKE.1 (ADR-0476)
 import { gateDenyReason } from "./gate_audit.ts";
 import { type ElicitationAnswer, type ExecChoice, type ExecClass, classifyCommand, classifyEval, elicitationAnswer, elicitationOptions, execStore, execVerdict, recordExec } from "./exec_policy.ts";
 import { toolFailureCommand, toolFailureDetail, toolFailureReason } from "./tool_failure.ts";
@@ -175,11 +200,29 @@ const KNOWLEDGE_EXT = repoAsset("harness", "omp", "knowledge_extension.ts");
 // its tool_result hook sees already-wrapped content and appends OUTSIDE the untrusted envelope.
 // Only added when the file exists - a missing extension never blocks omp launch.
 const INTERJECT_EXT = repoAsset("harness", "omp", "interject_extension.ts");
+// P-OWN.1: one checkout, known writers. checkin_extension registers checkin_peers / checkin_send (the
+// agent-to-agent channel, delivered as untrusted PEER notes by the interject drain above);
+// commit_gate_extension refuses a sweeping `git add -A` / `commit -a` while another session's edits are
+// uncommitted. Master AND lanes; AFTER the security gate (it is a coordination guard, never a substitute).
+const CHECKIN_EXT = repoAsset("harness", "omp", "checkin_extension.ts");
+const COMMIT_GATE_EXT = repoAsset("harness", "omp", "commit_gate_extension.ts");
 // P-BROWSER.1 (wave 2): the agent-controlled visible browser window's tools (browser_open /
 // browser_screenshot / browser_scroll / browser_close). MASTER ONLY - the window is a singleton and
 // lanes driving one shared window would fight over it (same rationale that keeps preview off lanes).
 // The extension self-skips when LUCID_BROWSER_URL is absent (no Electron main = no window executor).
 const BROWSER_EXT = repoAsset("harness", "omp", "browser_extension.ts");
+// P-SECRET-INTAKE.1 (ADR-0476): `request_secret` asks the USER for a secret through the LUCID dialog and
+// stores it in the engine vault; the model only ever gets {stored, ref, envName} or {stored:false, reason}.
+// MASTER ONLY: the dialog rides the master turn's event stream (requestSecretDialog), and only the master
+// spawn env carries its URL and master-only token (secret_routes.masterSecretRequestEnv). Self-skips
+// without them.
+const SECRET_INTAKE_EXT = repoAsset("harness", "omp", "secret_intake_extension.ts");
+// Security review SECRET-INTAKE-AGENT-ENV-READBACK: vault values are in the agent's own env (workspace
+// secrets, provider keys, credential env), so a `printenv` would hand them to the model. This tool_result
+// hook replaces each one (plain, JSON-escaped, base64, URL-encoded) with [vault:<NAME>]. The spawn env
+// names the variables (vault_env.vaultRedactEnv, names only). Master AND lanes, LAST of all extensions so
+// it rewrites what every gate and the interject drain produced. Self-skips without names.
+const VAULT_REDACT_EXT = repoAsset("harness", "omp", "vault_redact_extension.ts");
 // P-EVAL.4 (ADR-0318): reports the REAL tool name (+ pass/fail) of every tool call over a token'd
 // loopback URL, because omp's ACP tool_call update carries only a coarse `kind` and an intent-shadowed
 // title (ADR-0308) - so the chat's chips and the engineering report's per-tool breakdown had degraded to
@@ -188,9 +231,30 @@ const BROWSER_EXT = repoAsset("harness", "omp", "browser_extension.ts");
 const TOOL_META_EXT = repoAsset("harness", "omp", "tool_meta_extension.ts");
 // P-JEV.2 (ADR-0377): reports EVERY typed judgment (question, answers, probabilities, which backend
 // answered, latency, error) over a token'd loopback URL, because omp records none of them and has no hook
-// for them: the extension wraps pi-ai's TypeSafeJudge / TextJudge in-process. Observability only, fail-soft,
+// for them: the extension wraps pi-ai's NativeJudge / TextJudge in-process. Observability only, fail-soft,
 // self-skips when LUCID_JUDGMENT_URL is absent.
 const JUDGMENT_EXT = repoAsset("harness", "omp", "judgment_extension.ts");
+// Design suite: design_read / design_apply / design_request let the agent read the Creator Design editor's
+// layer manifest and the user's traced hints, and QUEUE edits the renderer applies (requests need the user's
+// Allow). MASTER ONLY, like the browser tools: there is one editor. Self-skips when LUCID_DESIGN_OPS_URL is
+// absent, which is every non-Creator build (dev.ts sets the design URLs only in Creator builds).
+const DESIGN_EXT = repoAsset("harness", "omp", "design_extension.ts");
+// CREATOR-DRIFT: drift_status / drift_read / drift_apply / drift_export let the agent collaborate with the user in
+// CutWire Drift through the engine's /api/creator/drift/* routes (session, token, CUI gate, activity feed all live
+// in dev.ts). MASTER ONLY, like the Design suite: there is one editor. Self-skips when LUCID_DRIFT_CALL_URL is
+// absent, which is every non-Creator build.
+const DRIFT_EXT = repoAsset("harness", "omp", "drift_extension.ts");
+// CREATOR-OPENFILM (ADR-0457): openfilm_look / openfilm_render / openfilm_job run OpenFilm's look and render as
+// fixed-argv engine jobs through the /api/creator/openfilm/* routes (job ledger, artifact library, governor, CUI
+// gate all live in dev.ts). MASTER ONLY, like the Drift tools. Self-skips unless LUCID_OPENFILM_LOOK_URL,
+// LUCID_OPENFILM_RENDER_URL and LUCID_OPENFILM_JOB_URL are all set, which is every non-Creator build.
+const OPENFILM_EXT = repoAsset("harness", "omp", "openfilm_extension.ts");
+// P-HEALTH.3: a liveness beat while the model streams a tool call's arguments, which omp's ACP mapper never
+// forwards, so the stall watchdog stops reading a long write as a wedged session. Master AND lanes; each
+// beat names its omp session id, so the engine credits the right one. Fail-soft, self-skips when
+// LUCID_STREAM_BEAT_URL is absent.
+const STREAM_BEAT_EXT = repoAsset("harness", "omp", "stream_beat_extension.ts");
+const STREAM_BEAT_ARGS: readonly string[] = existsSync(STREAM_BEAT_EXT) ? ["-e", STREAM_BEAT_EXT] : [];
 // P-TASK.3/4 (ADR-0028): config overlay that turns ON task isolation (mode: auto) so subagents
 // can run isolated and return a reviewable patch — containing the blast radius of a bad tool call.
 const ACP_CONFIG = repoAsset("harness", "omp", "acp_config.yml");
@@ -204,10 +268,35 @@ const ACP_CONFIG = repoAsset("harness", "omp", "acp_config.yml");
  *  lockdown is CUI backflow, so "could not pin" must never degrade to "unpinned". */
 function ompConfigArgs(): string[] {
   const args = existsSync(ACP_CONFIG) ? ["--config", ACP_CONFIG] : [];
-  const r = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly());
   const overlay = judgmentOverlayFile();
-  writeJudgmentOverlay(overlay, r.effective); // throws -> the caller's spawn rejects, named
-  return [...args, "--config", overlay];
+  const plan = judgePlan();
+  writeJudgmentOverlay(overlay, plan.chain); // throws -> the caller's spawn rejects, named
+  // P-JEV.5 (ADR-0416): the judgment extension in the child skips a banned local judge in-process and counts
+  // new failures against the same list; children inherit process.env, so this is set here, at every spawn.
+  Object.assign(process.env, judgeBanEnv(plan.localProviders, plan.banned));
+  // P-MODEL.8 (ADR-0448): a Gemini session's Thinking / Architect / Subtask roles go to Gemini 4 Argon.
+  // Rewritten every spawn (an empty map when it does not apply) so a stale role never survives a switch.
+  const roles = modelRolesOverlayFile();
+  writeModelRolesOverlay(roles, heavyRoleModel({ chatModel: lastModel(), locked: asksageOnly() || managedAsksageOnly(), allowed: modelAllowed }));
+  return [...args, "--config", overlay, "--config", roles];
+}
+
+/** P-JEV.5 (ADR-0416): everything the judge chain is built from, read live: the stored choice under the
+ *  lock state, the TypeSafe key, the enabled LUCID local providers' models minus the banned ones, and the
+ *  session's chat model. One place, so the spawn overlay and the Settings card say the same chain. */
+export interface JudgePlan { resolved: ResolvedJudgmentProvider; chain: string[]; keySet: boolean; localProviders: string[]; banned: string[] }
+export function judgePlan(): JudgePlan {
+  const resolved = resolveJudgmentProvider(judgmentProvider(), asksageOnly() || managedAsksageOnly());
+  const keySet = typesafeKeySet();
+  const providers = listLocalProviders();
+  const localProviders = providers.map((p) => p.ompProvider);
+  const banned = bannedJudges(judgeFailures());
+  const locals = providers.filter((p) => p.enabled).flatMap((p) => p.models.map((m) => `${p.ompProvider}/${m.id}`)).filter((l) => !banned.includes(l));
+  // P-JEV.6 (ADR-0421): a banned model is never NAMED in the chain, the chat model included (omp still
+  // appends the live session model itself for the effort pick; the breaker refuses that call in-process).
+  const chatModel = lastModel();
+  const chain = judgeChain({ effective: resolved.effective, keySet, locals, chatModel: banned.includes(chatModel) ? "" : chatModel });
+  return { resolved, chain, keySet, localProviders, banned };
 }
 
 // P-DESIGN.1 (ADR-0154): read the workspace DESIGN.md (if any) and wrap it as standing design-invariant
@@ -268,14 +357,39 @@ function ompBin(): string {
       return bunProbeVerdict(Bun.spawnSync([candidate, "--version"], { stdout: "ignore", stderr: "ignore", timeout: OMP_PROBE_TIMEOUT_MS }));
     } catch { return false; }
   };
-  const r = resolveOmpBin(
-    { envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join },
-    probe,
-  );
+  return adoptOmpResolution(resolveOmpBin({ envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join }, probe));
+}
+function adoptOmpResolution(r: OmpResolution): string {
   if (r.indeterminate) console.error(`[omp] probe timed out; using ${r.bin} anyway (slow cold start, not a missing binary): ${r.timedOut.join(", ")}`);
   else if (!r.proven) console.error(`[omp] no runnable omp found; tried: ${r.rejected.join(", ")}`);
   ompBinCache = r.bin;
   return r.bin;
+}
+/** P-BOOTPERF.1 (ADR-pending): the same proven resolution as ompBin(), probed WITHOUT blocking the
+ *  engine. The sync probe is Bun.spawnSync on the event loop that serves every route, so on a cold,
+ *  antivirus-scanned Windows launch (OMP_PROBE_TIMEOUT_MS per candidate) the renderer's workspace bar,
+ *  turn-status and net-status probes all hung behind it; the status probe then timed out into the
+ *  composer's Reconnect button. start() awaits this first, so the sync ompBin() callers after it hit the
+ *  cache. One resolution per engine, shared by concurrent callers. Never rejects. */
+let ompBinPending: Promise<string> | null = null;
+function ompBinAsync(): Promise<string> {
+  if (ompBinCache) return Promise.resolve(ompBinCache);
+  ompBinPending ??= resolveOmpBinAsync(
+    { envBin: process.env.LUCID_OMP_BIN, home: homedir(), exeSuffix: process.platform === "win32" ? ".exe" : "", join },
+    ompProbeAsync,
+  ).then(adoptOmpResolution);
+  return ompBinPending;
+}
+/** `<candidate> --version` as a non-blocking capability probe: true ran, false failed to run or exited
+ *  non-zero, "timeout" did not answer in OMP_PROBE_TIMEOUT_MS (slow machine, not a missing binary). */
+async function ompProbeAsync(candidate: string): Promise<boolean | "timeout"> {
+  try {
+    const child = Bun.spawn([candidate, "--version"], { stdin: "ignore", stdout: "ignore", stderr: "ignore", windowsHide: true });
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill(); }, OMP_PROBE_TIMEOUT_MS);
+    try { await child.exited; } finally { clearTimeout(timer); }
+    return timedOut ? "timeout" : bunProbeVerdict({ exitCode: child.exitCode, signalCode: child.signalCode });
+  } catch { return false; } // ENOENT / EPERM / EACCES: cannot run this one
 }
 
 /** P-FLEET.L1: the gated omp argv for a LOCAL LANE. Same fail-closed security gate (-e GATE, invariant 4)
@@ -289,7 +403,9 @@ export function fleetLaneArgv(): { cmd: string; args: string[] } {
   if (!GATE) throw new Error(gateRefusal());
   const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : [];
   const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
-  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
+  const ownArgs = [...(existsSync(CHECKIN_EXT) ? ["-e", CHECKIN_EXT] : []), ...(existsSync(COMMIT_GATE_EXT) ? ["-e", COMMIT_GATE_EXT] : [])]; // P-OWN.1
+  const redactArgs = existsSync(VAULT_REDACT_EXT) ? ["-e", VAULT_REDACT_EXT] : []; // last: see VAULT_REDACT_EXT
+  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...ownArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
   return { cmd: argv[0]!, args: argv.slice(1) };
 }
 
@@ -322,9 +438,28 @@ const SESSION_MS = 30_000;   // session/new, session/set_config_option
 // Whole-completion ceiling for ONE utility extraction (spawn + handshake + session + prompt). The import
 // runs hundreds of these back-to-back behind utilLock, so one wedged call must never stall the queue.
 const COMPLETE_MS = 180_000;
+// P-RECOVER.1 (ADR-0385): a recovery's session/load is bounded. Unbounded, one hung load held the watchdog's
+// healthBusy forever, so no later recovery could ever run. Generous: omp replays the whole history on load.
+const RESUME_MS = 120_000;
+/** The refusal a second concurrent chat turn gets. Exported so dev.ts can pass it through verbatim. */
+export const TURN_ALREADY_RUNNING = "A chat turn is already running";
+/** P-RECOVER.1: why no replacement agent starts while the previous one's process tree may still be running. */
+const AGENT_NOT_STOPPED = "The previous agent process could not be confirmed stopped, so LUCID will not start another one beside it. Quit and reopen LUCID.";
+
+/** P-RECOVER.1: one bounded line for a recovery log/incident. ACP errors arrive as plain `{ code, message }`
+ *  objects (ACPClient rejects with the JSON-RPC error as-is), not Error instances. */
+function errText(e: unknown): string {
+  if (e instanceof Error) return e.message.slice(0, 200);
+  if (e && typeof e === "object" && "message" in e && typeof e.message === "string") return e.message.slice(0, 200);
+  return String(e).slice(0, 200);
+}
 
 /** Options for one utility completion. `signal` lets a batch caller (chat-history import) stop mid-flight. */
 export type CompleteOpts = { idleMs?: number; model?: string; signal?: AbortSignal };
+
+/** The resolved omp spawn: the command (omp itself, or a sandbox wrapper around it), its args, the env
+ *  overlay for this child only, and whether the command is the Windows AppContainer helper (P-BROWSER.4). */
+export type SpawnPlan = { cmd: string; args: string[]; env: Record<string, string>; contained: boolean };
 
 /** A composed abort: fires after `ms`, or as soon as `parent` aborts. dispose() clears the timer. */
 export type Deadline = { readonly signal: AbortSignal; dispose(): void };
@@ -363,10 +498,16 @@ export type ChatEvent =
   // ACP update itself cannot carry (`name` here is only the coarse ACP `kind`: "other" for every custom
   // and MCP tool). The renderer keeps it on the chip so a later `tool-meta` event can relabel it, and
   // sends it with the engineering report so the server can resolve real names.
-  | { type: "tool"; id?: string; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } }
+  // P-PROGRESS.1: `input` (bounded, code-stripped arguments) and `intent` (the agent's `i` phrase).
+  | { type: "tool"; id?: string; name: string; detail: string; code?: { path: string; content?: string; oldText?: string; newText?: string; patch?: string }; input?: string; intent?: string }
   // P-EVAL.4 (ADR-0318): the tool_meta extension reported the real name (and later the pass/fail) for a
   // call already streamed as `tool`. Display + report metadata only, never a gate.
-  | { type: "tool-meta"; id: string; name: string; ok?: boolean }
+  // P-PROGRESS.1: the engine's own settle report adds `elapsedMs`.
+  | { type: "tool-meta"; id: string; name: string; ok?: boolean; elapsedMs?: number }
+  // P-PROGRESS.1: the turn's progress view (every PROGRESS_TICK_MS and on each settled call) and the
+  // same-folder wait. Both go through onEvent directly, never the activity sink, like `slow`.
+  | { type: "progress"; progress: ProgressView }
+  | { type: "waiting"; wait: WaitView }
   // P-JEV.2 (ADR-0377): one typed judgment the omp child answered during this turn (question, answers with
   // probabilities, which backend answered, latency, error). Self-reported by the judgment extension, which
   // awaits the desktop's acknowledgement before omp acts on the answer, so this always precedes `done`.
@@ -375,7 +516,7 @@ export type ChatEvent =
   // images are validated + capped in extractToolImages before this event is emitted; the UI renders them
   // inline in the reply with a download + "send to preview" (for markup) affordance.
   | { type: "tool-image"; images: { dataUrl: string; mimeType: string }[]; tool?: string; title?: string }
-  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[]; names?: string[] } // names = per-task ids from rawInput.tasks[].id (absent when all auto-generated)
+  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[]; names?: string[] } // names = per-task names from the task call (parseTaskCall; absent when all auto-generated)
   | { type: "block"; tool: string; reason: string; severity: string; findings: string; id?: string; quarantined?: boolean; command?: string; detail?: string }
   | { type: "permission"; id: string; tool: string; detail: string; options: { optionId: string; name: string; kind?: string }[]; url?: string; egress?: boolean; localFile?: boolean; exec?: boolean; program?: string; reason?: string; danger?: boolean }
   | { type: "preview-available"; path: string } // P-PREVIEW.2 (ADR-0096): the agent wrote a previewable file
@@ -383,6 +524,7 @@ export type ChatEvent =
   | { type: "design-available"; path: string } // P-FIGMA.2 (ADR-0154): the agent wrote/updated DESIGN.md → offer to pop it out in the IDE
   | { type: "agent-builder-open"; spec: AgentSpec } // P-AGENT.8.2 (ADR-0134): open the Agent Builder pre-populated
   | { type: "slash-command-created"; command: UserCommand } // P-CMD.1 (ADR-0146): the agent created a user "/" command
+  | { type: "secret-request"; request: SecretRequestView } // P-SECRET-INTAKE.1 (ADR-0476): show the secret dialog (names only, never a value)
   | { type: "usage"; used: number; size: number; cost: number }
   // P-STALL.1 (ADR-0186) / P-STALL.2 (ADR-0263): the provider has emitted NOTHING for waitedMs — the UI
   // shows "still waiting" instead of a frozen pane. Repeats each silent 2-min mark; any real activity
@@ -404,7 +546,7 @@ export type ChatEvent =
   // P-HEALTH.1: the harness acted on this session BY ITSELF - it probed a silent turn with the canned
   // status ask, or cancelled and resumed a wedged one in place. Kept in parity with the renderer's
   // chat_events.ts union (the two are mirrored at this one boundary, like every other variant here).
-  | { type: "health"; action: "probe" | "recover"; reason: string }
+  | { type: "health"; action: "probe" | "recover"; reason: string; /** P-HEALTH.3: the run did not continue on its own, so the user has to act. Only then does the chat keep a note. */ needsUser?: boolean }
   | { type: "done"; text?: string }; // text = the authoritative full assistant reply (reconciles lossy streaming)
 
 // The agent often writes/edits with a RELATIVE path (relative to the workspace it runs in). Preview +
@@ -418,7 +560,34 @@ function absWorkspacePath(p: string): string {
 
 class Backend {
   private acp: ACPClient | null = null;
-  private sessionId: string | null = null;
+  // P-RECOVER.1 (ADR-0385): every write of the master session id goes through the setter, so the id is
+  // persisted (dev.ts: ~/.omp/lucid-last-session-<PORT>.json) whichever of the many paths set it. That file
+  // is what the NEXT engine offers to resume after an unclean exit.
+  private liveSessionId: string | null = null;
+  private get sessionId(): string | null { return this.liveSessionId; }
+  private set sessionId(v: string | null) {
+    const changed = v !== this.liveSessionId;
+    this.liveSessionId = v;
+    if (v && changed) { try { this.persistSession?.(v); } catch { /* bookkeeping never breaks a chat */ } }
+  }
+  private persistSession: ((id: string) => void) | null = null;
+  private incidentsDir = incidentDir();
+  /** Test override of the log an incident quotes; null reads the one acp.ts writes (acpLogPath). */
+  private acpLogOverride: string | null = null;
+  /** P-RECOVER.1: the session a DEAD master was holding. start() resumes it on the replacement child, and
+   *  keeps it across a failed spawn so the next attempt still resumes rather than starting fresh. */
+  private reviveId: string | null = null;
+  /** P-RECOVER.1: an on-demand revival is under way and has not yet written its incident. */
+  private revivePending = false;
+  /** P-RECOVER.1: the event sink of the current chat turn. clearTurnRecovery releases the listener only
+   *  when it is still THIS sink, so a util completeShared() listener is never clobbered. */
+  private turnSink: ((e: ChatEvent) => void) | null = null;
+  /** P-RECOVER.1: true while a session/load replays history. The replay is old conversation, and it must
+   *  not stream into a live turn's pane (or its step sidecar) when a revival happens mid-prompt. */
+  private replaying = false;
+  /** P-RECOVER.1: the master child restart() stopped, until its whole process tree is confirmed ended.
+   *  start() spawns nothing while this is set. */
+  private retired: ACPClient | null = null;
   private starting: Promise<void> | null = null;
   private sessioning: Promise<void> | null = null; // dedupe concurrent session/new (getConfig races it with a timeout)
   private listener: ((e: ChatEvent) => void) | null = null;
@@ -435,6 +604,20 @@ class Backend {
   // guidance) — never the frozen prefix (invariant #5/#6). Distinct from the P9.2 recall above.
   private memoryRecall: string | null = null;
   private memoryRecallDelivered = false;
+  // P-OWN.1: the checkout ownership seams dev.ts wires. `onAuthoredPath` is told every path the master's
+  // write/edit tool calls name (path only); `checkoutBriefing` yields the standing "who else writes
+  // here" block for each prompt ("" when alone). `lastTask` is what the registry reports as this
+  // session's task to the other writers (the user's last prompt, clipped).
+  onAuthoredPath: ((path: string) => void) | null = null;
+  private readonly pendingWrites = new PendingWrites();
+  private readonly aiLoc = new AiLocCaptureTracker();
+  checkoutBriefing: (() => Promise<string>) | null = null;
+  /** ADR-0414: drains the operator notes still waiting for "master" into a block that opens the next
+   *  prompt ("" when none). dev.ts wires interject_store.carryPendingNotes. */
+  carriedNotes: (() => string) | null = null;
+  private lastTask = "";
+  /** P-OWN.1: what this session is working on, for the other writers' briefing. */
+  currentTask(): string { return this.lastTask; }
   // P-IDE.2 (ADR-0029): an active BUNDLED skill's trusted guidance. STANDING guidance: re-delivered
   // every turn (never the frozen prefix, never --append-system-prompt) so the skill keeps guiding the
   // agent until cleared (issue #54). Already wrapped (`<active-skill name="…">…</active-skill>`).
@@ -459,10 +642,16 @@ class Backend {
   // P-GOAL.2 (ADR-0046): a /goal loop is running, and a request to stop it after the current iteration.
   private goalActive = false;
   private goalCancelled = false;
+  /** #460 case 1: resolves when runGoal has FULLY unwound (goalActive false, report written, `done`
+   *  emitted), so a forced session switch can wait for the loop instead of racing it. Null when idle. */
+  private goalSettled: Promise<void> | null = null;
   // P-GOAL.5 (ADR-0047): in-process automation scheduler. A timer ticks while the app is open and runs
   // the first DUE automation through runGoal. `autoRunning` guards against a tick overlapping itself.
   private autoTimer: ReturnType<typeof setInterval> | null = null;
   private autoRunning = false;
+  // #460 case 2: true only while the RUNNING automation drives Main's ACP session (every kind except
+  // "agent", which runs through startAgentRun's own child pipeline). Only that kind may block a switch.
+  private autoOwnsMain = false;
   private static readonly AUTO_TICK_MS = 30_000;
   private askActive = false;            // true only during a chat turn (never the util `complete()`)
   // P-EXEC.1 (ADR-0066): the in-memory allow-turn scope — risky programs the user OK'd for the rest of
@@ -485,7 +674,80 @@ class Backend {
   // keyed by toolCallId - snapshot rides on every { type:"slow" } notice so the user can SEE what a
   // long-quiet turn is still waiting on. Cleared at turn boundaries + restart.
   private openCalls = new Map<string, PendingCall>();
+  /** The current turn's assistant text across its tool steps; reset at each turn start. */
+  private stepText = new StepTextJoiner();
   private static readonly PERM_MS = 300_000; // 5 min to decide, then fail-closed (deny)
+  // -- P-PROGRESS.1: progress and the estimate; P-WAIT.1: the file-scoped write claims ---------------------
+  /** Turn and tool lengths behind the estimate. dev.ts hands in the instance shared with the fleet lanes
+   *  (seeded from the latency ledger); a backend built without one keeps its own. */
+  durations = new DurationHistory();
+  /** Write claims shared with the fleet lanes: a write waits only on a file another worker's running turn
+   *  is editing. The master's claims drop when its turn ends. */
+  readonly writeClaims = new WriteClaims();
+  /** Tool calls settled in the current turn. */
+  private stepsDone = 0;
+  /** Per-turn: the real tool name behind a toolCallId, once the tool_meta extension reported it. */
+  private toolNames = new Map<string, string>();
+  /** The live turn's progress emitter (set for the turn's life), so a settled call can push a fresh view. */
+  private progressTick: (() => void) | null = null;
+
+  /** P-WAIT.1: one of this turn's writes waits for another worker's file (null: the wait ended). Told
+   *  to the window directly, never through the sink, so a wait never counts as activity. A bounded wait
+   *  (under omp's 30 s hook limit), far below the health watch's quiet threshold, so it needs no flag. */
+  noteWriteWait(w: WaitView | null): void {
+    if (w) { try { this.recoveryTurn?.emit({ type: "waiting", wait: w }); } catch { /* stream gone */ } }
+  }
+
+  /** P-PROGRESS.1: where the master turn stands right now: elapsed, last sign of life, steps, the liveness
+   *  verdict and the history-based estimate. Read-only; also served on GET /api/session-health. */
+  progressView(now = Date.now()): ProgressView {
+    return progressView({
+      busy: this.listener !== null, dead: this.acp?.isDead ?? false,
+      startedAt: this.turnStartedAtMs, lastActivityAt: this.healthActivityAt,
+      stepsDone: this.stepsDone, stepsOpen: pendingSnapshot(this.openCalls, now), lastHealth: this.lastHealth,
+      model: this.activeModel(), scope: this.sessionId ?? "", history: this.durations, now, // P-PROGRESS.4: the session keys its own history
+      toolNameOf: (label) => { for (const [id, c] of this.openCalls) if (c.label === label) return this.toolNames.get(id); return undefined; },
+      pulse: this.openCalls.size ? this.pulse.evidence : null,
+    });
+  }
+
+  // -- P-LIVENESS.1 (ADR-0418): evidence for an open call, never an action ----------------------------
+  /** The master turn's open-call watch, fed by dev.ts's process sampler. */
+  private pulse = new PulseTracker();
+
+  /** Should the sampler look at the master now? Yes while a turn has an open call and nothing has streamed
+   *  for QUIET_MS. Otherwise the watch is forgotten: a streaming or idle turn needs no evidence, and the
+   *  next quiet stretch starts a fresh one. Returns what the sampler needs for the subagent read. */
+  pulseTarget(now = Date.now()): { sessionId: string | null; since: number } | null {
+    const want = this.listener !== null && this.openCalls.size > 0 && this.acp?.pid != null && now - this.healthActivityAt >= QUIET_MS;
+    if (!want) { this.pulse.reset(); return null; }
+    return { sessionId: this.sessionId, since: this.turnStartedAtMs ?? now };
+  }
+
+  /** Fold one process-table look (null = the look failed) into the master's watch. */
+  observePulse(rows: ProcRow[] | null, at: number, subagent: SubagentSignal): void {
+    const pid = this.acp?.pid;
+    const oldest = oldestCallStart(this.openCalls);
+    if (pid == null || oldest === null) { this.pulse.reset(); return; }
+    this.pulse.observe({ at, work: rows ? workerProcesses(rows, pid, process.platform) : null, callStartedAt: oldest, subagent });
+    this.progressTick?.();
+  }
+
+  /** The user's "Stop command": end only the processes the oldest open call started, then tell the agent
+   *  why its call failed. The turn keeps running; this never cancels it. */
+  async stopOpenCall(): Promise<{ ok: boolean; stopped: string[]; reason: string }> {
+    const pid = this.acp?.pid;
+    const oldest = oldestCallStart(this.openCalls);
+    if (!this.listener || pid == null || oldest === null) return { ok: false, stopped: [], reason: "No tool call is running in the chat." };
+    const label = pendingSnapshot(this.openCalls, Date.now())[0]?.label ?? "the running call";
+    const ev = this.pulse.evidence;
+    const flatMs = ev ? pulseVerdict(ev, this.healthActivityAt, Date.now() - oldest).flatMs : 0;
+    const r = await stopCallProcesses(pid, oldest);
+    if (!r.stopped.length) return { ok: false, stopped: [], reason: r.failed.length ? `Could not stop ${r.failed.join(", ")}.` : "The running call has no process of its own to stop. Use Stop to end the turn." };
+    try { addInterject("master", stoppedCallNote(label, flatMs)); } catch { /* the kill already ended the call */ }
+    this.pulse.reset();
+    return { ok: true, stopped: r.stopped, reason: `Stopped ${r.stopped.join(", ")}. The agent is told why and continues.${r.failed.length ? ` Could not stop ${r.failed.join(", ")}.` : ""}` };
+  }
 
   /** Set/clear the active persona. Pass the ALREADY-scanned, delimiter-wrapped text. */
   setPersona(wrapped: string | null): void { this.persona = wrapped; }
@@ -502,7 +764,7 @@ class Backend {
   // P-RESUME.1 (ADR-0171): every event funnels through here, so this is the ONE tee that records
   // thinking/tool/failure steps into the per-session sidecar (survives session switches). Cheap for
   // hot token chunks (noteStepEvent returns immediately on any other type) and never throws.
-  private emit(e: ChatEvent): void { noteStepEvent(this.sessionId, e); this.listener?.(e); }
+  private emit(e: ChatEvent): void { if (this.replaying) return; noteStepEvent(this.sessionId, e); this.listener?.(e); }
 
   /** P-PREVIEW.11 (ADR-0308): open the Preview panel on `path`, driven by the `preview_open` tool's OWN
    *  HTTP call (dev.ts /api/preview/open) instead of pattern-matching omp's ACP call title.
@@ -532,6 +794,14 @@ class Backend {
     this.emit({ type: "preview-activity", label: PREVIEW_ACTIVITY[kind] });
   }
 
+  /** P-SECRET-INTAKE.1 (ADR-0476): show the secret dialog for a parked `request_secret` call (dev.ts
+   *  /api/secret/request -> secret_intake.ts). Emits into the ACTIVE turn's stream like the approval cards;
+   *  the view names what is asked and why, never a value. A renderer that missed it re-syncs from
+   *  /api/secret/pending. */
+  requestSecretDialog(request: SecretRequestView): void {
+    this.emit({ type: "secret-request", request });
+  }
+
   /** P-EVAL.4 (ADR-0318): relay a self-reported tool name (and, on the result report, its pass/fail) into
    *  the ACTIVE turn's event stream. Called by dev.ts /api/tool/meta, which the tool_meta omp extension
    *  POSTs to.
@@ -549,7 +819,17 @@ class Backend {
   noteToolMeta(report: { id: string; name: string; ok?: boolean }): boolean {
     const id = (report.id ?? "").trim(), name = (report.name ?? "").trim();
     if (!id || !name) return false;
+    this.toolNames.set(id, name); // P-PROGRESS.1: the settle report and the estimate key on the real name
     this.emit({ type: "tool-meta", id, name, ...(report.ok === undefined ? {} : { ok: report.ok }) });
+    return true;
+  }
+
+  /** P-HEALTH.3: stream_beat_extension says the model is still writing a tool call's arguments in
+   *  `sessionId`. Credited only to THIS session's running turn (a lane's beat must never hide a master
+   *  stall), through the same `arm` every ACP update uses, so the slow notice and the watchdog agree. */
+  noteStreaming(sessionId: string): boolean {
+    if (!sessionId || sessionId !== this.sessionId || !this.streamArm) return false;
+    this.streamArm();
     return true;
   }
 
@@ -624,7 +904,10 @@ class Backend {
    *  P-SANDBOX.2 (ADR-0166): on an ISOLATING backend, egress is routed through the mediated proxy — its
    *  HTTP(S)_PROXY env rides back in `env` (applied to the child only, never process.env). If the proxy
    *  can't start, `wrap` falls back to network-off (fail-closed). Async because starting the proxy is. */
-  private async resolveSandboxPlan(argv: string[]): Promise<{ cmd: string; args: string[]; env: Record<string, string> }> {
+  // P-BROWSER.4 (ADR-0415): `contained` = the command is the AppContainer helper. That spawn stays console-less
+  // (CREATE_NO_WINDOW, the helper's own rule when it has no console); only a passthrough omp shares the
+  // engine's hidden console. Whether a contained omp can attach to a console it inherits is not proven.
+  private async resolveSandboxPlan(argv: string[]): Promise<SpawnPlan> {
     const at = new Date().toISOString(); // P-SANDBOX.5 (ADR-0169): surface the posture in the Security panel
     // P-SANDBOX.7 (ADR-0173): the packaged Windows helper ships at <repo>/bin/lucid-appcontainer.exe
     // (bin/** rides the `repo` extraResources), resolved through repo_root — NEVER import.meta.dir
@@ -638,22 +921,50 @@ class Backend {
     const profileCaps = caps("trusted-local");
     const acHelper = process.platform === "win32" ? repoAsset("bin", "lucid-appcontainer.exe") : null;
     const acBundled = !!acHelper && existsSync(acHelper);
-    const acUsable = acBundled && (!profileCaps.canNetwork || loopbackExempted());
-    if (acBundled && !acUsable) {
+    // P-SANDBOX.12 (ADR-0390): the user's Off switch (a LUCID setting, no admin needed). Managed
+    // require-isolation wins: a policy-required sandbox is never turned off from the panel. P-SANDBOX.14
+    // (ADR-0394): so does a managed sandbox.allowUserOff === false.
+    const offSwitch = process.platform === "win32" && userTurnedSandboxOff(loadSettings().sandboxWindowsMode, managedSandboxLocksOn(managedConfig().config));
+    const userOff = acBundled && offSwitch;
+    if (offSwitch) console.error("[sandbox] the Windows sandbox is turned OFF in the Security panel - this session runs as the disclosed passthrough (ADR-0390).");
+    const acUsable = acBundled && !userOff && (!profileCaps.canNetwork || loopbackExempted());
+    if (acBundled && !userOff && !acUsable) {
       console.error(
-        `[sandbox] the AppContainer helper is bundled but the loopback exemption is NOT registered — this network-on session runs as the disclosed passthrough. ` +
+        `[sandbox] the AppContainer helper is bundled but the loopback exemption is NOT registered - this network-on session runs as the disclosed passthrough. ` +
           `Enable full Windows isolation once, from an elevated shell: "${acHelper}" --register-loopback  (then restart LUCID).`,
       );
+    }
+    // P-MXC.1 (ADR-0441): the Microsoft eXecution Container executor is tried BEFORE the first-party
+    // helper when it is staged, verified against the pin and answered --probe. Same Off switch; the same
+    // loopback precondition for a network-on profile on the AppContainer (DACL) tier, because MXC runs under
+    // the helper's moniker and reaches the egress proxy only through that one-time exemption; the kernel
+    // tier (BaseContainer) takes an explicit host-loopback allow and needs no exemption.
+    let mxc: MxcHost | undefined;
+    if (process.platform === "win32" && !offSwitch) {
+      const m = mxcHost({ resourcesPath: process.env.LUCID_RESOURCES || undefined });
+      if (m.host) {
+        const loopbackOk = !profileCaps.canNetwork || m.host.tier === "base-container" || loopbackExempted();
+        // The executor's own --probe names the elevated steps the host still needs (system-drive metadata,
+        // the NUL device). Until they are done, cmd.exe / node / bun subprocesses die with EPERM inside the
+        // container, so a committed MXC would light the pill and break every exec: not offered, and said so.
+        const prepOk = m.probe.prepNeeded.length === 0;
+        if (loopbackOk && prepOk) mxc = m.host;
+        else if (!prepOk) console.error(`[sandbox] the MXC executor is staged (${m.host.tier}) but this host still needs: ${m.probe.prepNeeded.join(", ")} - not offered until "Prepare host" has run (Security panel, administrator).`);
+        else console.error(`[sandbox] the MXC executor is staged (${m.host.tier}) but the loopback exemption is NOT registered - this network-on session cannot use it. Use "Prepare host" in the Security panel once (administrator).`);
+      } else if (loadSettings().developerMode) {
+        console.error(`[sandbox] MXC not offered: ${m.reason}`);
+      }
     }
     const res = resolveBackend({
       requireIsolation: managedRequireIsolation(managedConfig().config),
       appContainerHelper: acUsable ? acHelper! : undefined,
+      mxc,
     });
     if (!res.ok) {
       this.sandboxExecBlock = res.reason;
       setSandboxState({ backend: null, isolated: false, disclosed: false, platform: process.platform, execBlocked: res.reason, proxied: false, at });
       console.error(`[sandbox] FAIL-CLOSED: ${res.reason} - exec is BLOCKED for this session (ADR-0157).`);
-      return { cmd: argv[0]!, args: argv.slice(1), env: {} };
+      return { cmd: argv[0]!, args: argv.slice(1), env: {}, contained: false };
     }
     let proxy: SandboxProxy | undefined;
     if (res.backend.isolates && profileCaps.canNetwork) {
@@ -664,8 +975,15 @@ class Backend {
     // P-SANDBOX.9 (ADR-0386): an AppContainer child reads NOTHING it was not granted, so the contained
     // omp also needs the repo tree, the bun runtime its shim execs, and rw on ~/.omp (+ a temp dir in it).
     let acGrants: ReturnType<typeof appContainerRuntimeGrants> | undefined;
-    if (res.backend.name === "appcontainer") {
-      acGrants = appContainerRuntimeGrants({ repoRoot: resolvedRepo().root, home: homedir(), bunBin: process.env.LUCID_BUN_BIN, ompBin: argv[0] });
+    if (res.backend.name === "appcontainer" || res.backend.name === "mxc") {
+      // P-SANDBOX.11 (ADR-0389): a shellPath pinned in omp's config must be reachable inside the container.
+      let shellPath: string | null = null;
+      try { shellPath = parseOmpShellPath(readFileSync(join(homedir(), ".omp", "agent", "config.yml"), "utf8")); } catch { /* no config: omp discovers a shell itself */ }
+      acGrants = appContainerRuntimeGrants({ repoRoot: resolvedRepo().root, home: homedir(), bunBin: process.env.LUCID_BUN_BIN, ompBin: argv[0], shellPath, gitRoot: discoverGitRoot(process.env) });
+      // P-SANDBOX.14 (ADR-0394): the admin-approved folders ride every contained spawn (the runtime probe
+      // below uses the same ctx, so a grant the helper cannot apply keeps the session off the container).
+      const policy = managedPolicyFolderPlan();
+      acGrants = { ...acGrants, grantRx: [...acGrants.grantRx, ...policy.grantRx], grantRw: [...acGrants.grantRw, ...policy.grantRw] };
       try { mkdirSync(acGrants.tmpDir, { recursive: true }); } catch { /* the helper's grant then fails closed, loudly */ }
     }
     const d: SandboxDecision = wrapForProfile({ argv, caps: profileCaps, ctx: { workspace: currentWorkspace(), proxy, ...acGrants }, resolution: res });
@@ -673,12 +991,12 @@ class Backend {
       this.sandboxExecBlock = d.reason;
       setSandboxState({ backend: res.backend.name, isolated: res.backend.isolates, disclosed: res.disclosed, platform: process.platform, execBlocked: d.reason, proxied: false, at });
       console.error(`[sandbox] FAIL-CLOSED: ${d.reason} - exec is BLOCKED for this session (ADR-0157).`);
-      return { cmd: argv[0]!, args: argv.slice(1), env: {} };
+      return { cmd: argv[0]!, args: argv.slice(1), env: {}, contained: false };
     }
     // P-SANDBOX.10 (ADR-0387): presence and a stdio round trip are not "chat works". Before committing
     // to the AppContainer, prove the REAL runtime boots through the SAME wrap. A failure keeps chat up on
     // the disclosed passthrough (or blocks exec under managed require-isolation), with the reason logged.
-    if (res.backend.name === "appcontainer") {
+    if (res.backend.name === "appcontainer" || res.backend.name === "mxc") {
       const ctx = { workspace: currentWorkspace(), proxy, ...acGrants };
       const verdict = await appContainerRuntimeProbe(res.backend.wrap([argv[0]!, "--version"], profileCaps, ctx));
       if (!verdict.ok) {
@@ -687,19 +1005,36 @@ class Backend {
         this.sandboxExecBlock = requireIso ? `managed policy requires runtime isolation, but ${verdict.reason}` : null;
         setSandboxState({ backend: requireIso ? null : "noop", isolated: false, disclosed: !requireIso, platform: process.platform, execBlocked: this.sandboxExecBlock, proxied: false, at });
         if (!requireIso) console.error(sandboxDisclosure());
-        return { cmd: argv[0]!, args: argv.slice(1), env: {} };
+        return { cmd: argv[0]!, args: argv.slice(1), env: {}, contained: false };
       }
     }
     this.sandboxExecBlock = null;
-    setSandboxState({ backend: res.backend.name, isolated: d.isolated, disclosed: d.disclosed, platform: process.platform, execBlocked: null, proxied: !!proxy, at });
+    setSandboxState({ backend: res.backend.name, ...(mxc && res.backend.name === "mxc" ? { tier: mxc.tier } : {}), isolated: d.isolated, disclosed: d.disclosed, platform: process.platform, execBlocked: null, proxied: !!proxy, at });
     if (d.disclosed) console.error(sandboxDisclosure());
-    return { cmd: d.plan.cmd, args: d.plan.args, env: d.plan.env };
+    // P-SANDBOX.17 (ADR-0399): Git for Windows cannot start inside the AppContainer, so the contained agent's
+    // `git` is the broker shim (tools/git-broker/git.cmd), which asks the engine to run the real git.
+    const gitShim = res.backend.name === "appcontainer" || res.backend.name === "mxc" ? prependPathOverlay(process.env, join(resolvedRepo().root, "tools", "git-broker")) : {};
+    return { cmd: d.plan.cmd, args: d.plan.args, env: { ...d.plan.env, ...gitShim }, contained: res.backend.name === "appcontainer" || res.backend.name === "mxc" };
   }
 
   private async start(): Promise<void> {
+    // P-RECOVER.1 (ADR-0385): a dead connection is ABSENT. Returning early on it (the old `if (this.acp)`)
+    // handed every caller a corpse that rejects each request with "agent process exited" until the 30s
+    // watchdog noticed, and after the watchdog's budget it never did. The util connection already had
+    // this rule (startUtil); the master now shares it, and resumes the session the dead child held.
+    if (this.acp?.isDead) this.dropDeadMaster();
     if (this.acp) return;
     if (!this.starting) {
       this.starting = (async () => {
+        // P-RECOVER.1 (ADR-0385): never spawn beside the child restart() retired. Its whole process tree must
+        // be confirmed ended first (ACPClient.stop), or the old agent and its tools could still be working in
+        // the workspace while the replacement resumes the same turn. If it cannot be confirmed, every start
+        // refuses; each attempt asks the old client again, which retries while its root is still running.
+        while (this.retired) {
+          const old = this.retired;
+          if (!(await old.stop())) throw new Error(AGENT_NOT_STOPPED);
+          if (this.retired === old) this.retired = null;
+        }
         // P-TASK.2 (ADR-0028): append the byte-stable proactive-delegation policy to omp's system
         // prompt. omp owns the system prompt on the ACP path, so --append-system-prompt is how our
         // cached, stable layer-3 policy reaches the chat model (no volatile bytes → cache stays hot).
@@ -725,10 +1060,16 @@ class Backend {
         const knowledgeArgs = existsSync(KNOWLEDGE_EXT) ? ["-e", KNOWLEDGE_EXT] : []; // ADR-0220: knowledge_search (non-AskSage RAG)
         const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
         const browserArgs = existsSync(BROWSER_EXT) ? ["-e", BROWSER_EXT] : []; // P-BROWSER.1: master-only, see BROWSER_EXT
+        const secretArgs = existsSync(SECRET_INTAKE_EXT) ? ["-e", SECRET_INTAKE_EXT] : []; // P-SECRET-INTAKE.1: master-only, see SECRET_INTAKE_EXT
+        const designArgs = existsSync(DESIGN_EXT) ? ["-e", DESIGN_EXT] : []; // Design suite: master-only, see DESIGN_EXT
+        const driftArgs = existsSync(DRIFT_EXT) ? ["-e", DRIFT_EXT] : []; // CREATOR-DRIFT: master-only, see DRIFT_EXT
+        const openfilmArgs = existsSync(OPENFILM_EXT) ? ["-e", OPENFILM_EXT] : []; // CREATOR-OPENFILM: master-only, see OPENFILM_EXT
+        const ownArgs = [...(existsSync(CHECKIN_EXT) ? ["-e", CHECKIN_EXT] : []), ...(existsSync(COMMIT_GATE_EXT) ? ["-e", COMMIT_GATE_EXT] : [])]; // P-OWN.1
         // P-EVAL.4 (ADR-0318): last of the observability extensions. Loaded AFTER the gates so its hooks
         // see the same calls the gates already ruled on, and it can never sit between a tool and its gate.
         const toolMetaArgs = existsSync(TOOL_META_EXT) ? ["-e", TOOL_META_EXT] : [];
         const judgmentArgs = existsSync(JUDGMENT_EXT) ? ["-e", JUDGMENT_EXT] : []; // P-JEV.2: judgment trace, see JUDGMENT_EXT
+        const redactArgs = existsSync(VAULT_REDACT_EXT) ? ["-e", VAULT_REDACT_EXT] : []; // last: see VAULT_REDACT_EXT
         // P-SANDBOX.1 (ADR-0157): the runtime execution boundary, decided at THE spawn. On Linux with
         // bwrap the whole omp process tree (bash/eval/python/pip children included) is namespaced; on
         // platforms without a backend this is the DISCLOSED passthrough - unless managed policy
@@ -740,15 +1081,35 @@ class Backend {
         // log, and the session ran UNGATED while every surface reported healthy. start() rejects, so the
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
-        const ompArgv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...browserArgs, ...toolMetaArgs, ...judgmentArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
+        // P-BOOTPERF.1 (ADR-pending): probe omp off the event loop; the engine keeps serving meanwhile.
+        const ompArgv = [await ompBinAsync(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...secretArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
-        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, currentWorkspace(), { ...spawnPlan.env, ...interjectChildEnv("master") });
+        // P-SANDBOX.16 (ADR-0397): a git the host never put on PATH (MinGit, scoop, GitHub Desktop's copy)
+        // goes first on the agent's PATH - unless the plan already set PATH (the contained agent's git broker
+        // shim, P-SANDBOX.17).
+        const planSetsPath = Object.keys(spawnPlan.env).some((k) => k.toUpperCase() === "PATH");
+        const gitEnv = process.platform === "win32" && !planSetsPath ? prependPathOverlay(process.env, gitCmdDir()) : {};
+        // P-VAULT-ENV.1 (ADR-0477): this workspace's scoped secrets, under everything the plan sets. The
+        // request_secret URL + master-only token and the names the redaction hook hides ride this spawn only.
+        const wsCwd = currentWorkspace();
+        const wsSecrets = workspaceSecretEnv(wsCwd);
+        const acp = new ACPClient(spawnPlan.cmd, spawnPlan.args, wsCwd, { ...wsSecrets, ...spawnPlan.env, ...gitEnv, ...interjectChildEnv("master"), ...masterSecretRequestEnv(), ...vaultRedactEnv(wsSecrets) }, spawnPlan.contained ? { windowsHide: true } : {});
         acp.onNotify = (method, params) => {
           if (method !== "session/update") return;
           const u = params?.update ?? params;
+          // P-LOC.5: exclude history and shared utility sessions, whose model is not Main's.
+          const notificationSessionId = typeof params?.sessionId === "string" ? params.sessionId : this.sessionId;
+          if (!this.replaying && this.sessionId && notificationSessionId === this.sessionId &&
+              (u?.sessionUpdate === "tool_call" || u?.sessionUpdate === "tool_call_update")) {
+            const a = attribution();
+            this.aiLoc.observe(notificationSessionId, u, {
+              model: this.activeModel() || lastModel(), identity: a.identity,
+              identitySource: a.source, repo: currentWorkspace(),
+            });
+          }
           switch (u?.sessionUpdate) {
-            case "agent_message_chunk": if (u.content?.type === "text") this.emit({ type: "token", text: u.content.text }); break;
+            case "agent_message_chunk": if (u.content?.type === "text") this.emit({ type: "token", text: this.stepText.text(String(u.content.text ?? "")) }); break;
             // P-ACP.1 (ADR-0027): the model's reasoning stream. omp emits these BEFORE the answer when
             // thinking is on; without this case they were dropped, so the whole reasoning phase showed
             // nothing and the answer then arrived in a burst (the "big dump"). Surface them so the UI
@@ -756,69 +1117,59 @@ class Backend {
             // the personalization distiller learns from, and never persisted.
             case "agent_thought_chunk": if (u.content?.type === "text") this.emit({ type: "thinking", text: u.content.text }); break;
             case "tool_call": {
+              this.stepText.tool(); // every call, job-coordination ones included: text after it is a new message
               trackToolCall(this.openCalls, u, Date.now()); // P-STALL.2: this call is now awaited
-              // P-TASK.1 (ADR-0028): omp's `task` tool surfaces as a generic tool_call (kind "other")
-              // whose rawInput carries { agent, context, tasks[] } (batch) or { agent, assignment } (flat).
-              // Detect it and emit a distinct `subagent` event so the UI shows a delegation card instead
-              // of a nameless "other" chip. (The rawInput strings are still scanned by the pre-hook gate.)
+              // P-REPO.1 (ADR-0406): which repo this session works on. Keyed by the notification's own
+              // session id so a session/load replay (which streams before this.sessionId is set) counts too.
+              observeToolCall(typeof params?.sessionId === "string" ? params.sessionId : this.sessionId, u, currentWorkspace());
+              // P-TASK.1 (ADR-0028): omp's `task` tool surfaces as a generic tool_call (kind "other").
+              // Detect it by shape (parseTaskCall, P-TASK.6 / ADR-0398: omp 18's per-item agent) and emit a
+              // distinct `subagent` event so the UI shows a delegation card instead of a nameless "other"
+              // chip. (The rawInput strings are still scanned by the pre-hook gate.)
               const ri = u.rawInput ?? {};
-              if (ri.agent && (Array.isArray(ri.tasks) || typeof ri.assignment === "string")) {
-                const items: any[] = Array.isArray(ri.tasks) ? ri.tasks : [{ assignment: ri.assignment, description: ri.description }];
-                // P-TASK.5a: per-task ids (rawInput.tasks[].id) scope each delegation card to ITS batch's
-                // runs - without them two batches in one turn render the union of all runs on every card.
-                // Only emitted when at least one task carried an explicit id (they may be auto-generated).
-                const names = items.map((t) => (typeof t?.id === "string" ? t.id.trim() : "")).filter(Boolean);
+              const taskItems = parseTaskCall(ri);
+              if (taskItems) {
+                const agent = [...new Set(taskItems.map((t) => t.agent))].join(" + ");
+                // P-TASK.5a: per-task names (also each run's transcript stem) scope each delegation card to
+                // ITS batch's runs - without them two batches in one turn render the union of all runs on
+                // every card. Only emitted when at least one task carried a name (omp may generate them).
+                const names = taskItems.map((t) => t.name).filter(Boolean);
                 this.emit({
-                  type: "subagent", id: String(u.toolCallId ?? u.title ?? ""), agent: String(ri.agent),
-                  title: String(u.title ?? `${ri.agent} subagent`),
-                  assignments: items.map((t) => String(t?.description ?? t?.assignment ?? "").slice(0, 200)).filter(Boolean),
+                  type: "subagent", id: String(u.toolCallId ?? u.title ?? ""), agent,
+                  title: String(u.title ?? `${agent} subagent`),
+                  assignments: taskItems.map((t) => t.task.replace(/^#+\s*/gm, "").replace(/\s+/g, " ").trim().slice(0, 200)).filter(Boolean),
                   ...(names.length ? { names } : {}),
                 });
-              } else if (ri.poll || ri.cancel || ri.list || ri.wait) {
-                // job-coordination calls (poll/list/cancel/wait of background subagents) are internal
-                // bookkeeping while a task runs — don't surface them as separate tool chips.
+              } else if (ri.op === "wait" || ri.op === "jobs" || ri.op === "inbox" || (ri.op === "cancel" && Array.isArray(ri.ids))) {
+                // job-coordination calls on background subagents (omp 18 moved them from the task tool to
+                // the `hub` tool) are internal bookkeeping while a task runs - no separate tool chips.
               } else {
-                // P-CHAT.1 (ADR-0104): carry the tool's authored code for the chat's inline preview. A
-                // write's `content`, or an edit's `oldText`/`newText` (→ diff). Bounded so a huge file can't
-                // bloat the event stream; the content is already gate-scanned (it's the same tool_call text).
-                const CODE_CAP = 64 * 1024;
-                const clip = (s: unknown) => (typeof s === "string" ? s.slice(0, CODE_CAP) : undefined);
-                // The agent often writes/edits with a RELATIVE path (relative to the workspace it runs in).
-                // Preview + "Open in editor" need an ABSOLUTE path, so resolve any relative path against the
-                // workspace here (a path that's already file://, a URL, or OS-absolute is left untouched).
-                const absPath = absWorkspacePath; // P-PREVIEW.11 (ADR-0308): shared with openPreview() below
-                const codePath = absPath(typeof ri.path === "string" ? ri.path : typeof ri.file_path === "string" ? ri.file_path : "");
-                let code: { path: string; content?: string; oldText?: string; newText?: string; patch?: string } | undefined;
-                if (typeof ri.content === "string") code = { path: codePath, content: clip(ri.content) };
-                // `replace` mode (ADR-0105, our configured edit tool) sends `edits: [{ old_text, new_text }]`
-                // (one call may bundle several hunks) — join them into one before/after pair for the diff.
-                // camelCase + top-level are kept as fallbacks for other edit-tool variants.
-                else if (Array.isArray(ri.edits) && ri.edits.length) {
-                  const olds = ri.edits.map((e: any) => String(e?.old_text ?? e?.oldText ?? "")).join("\n");
-                  const news = ri.edits.map((e: any) => String(e?.new_text ?? e?.newText ?? "")).join("\n");
-                  code = { path: codePath, oldText: clip(olds) ?? "", newText: clip(news) ?? "" };
-                }
-                else if (typeof ri.old_text === "string" || typeof ri.new_text === "string") code = { path: codePath, oldText: clip(ri.old_text) ?? "", newText: clip(ri.new_text) ?? "" };
-                else if (typeof ri.oldText === "string" || typeof ri.newText === "string") code = { path: codePath, oldText: clip(ri.oldText) ?? "", newText: clip(ri.newText) ?? "" };
-                // omp's default `hashline` edit sends a patch in a single `input` string (kept for completeness).
-                else if (typeof ri.input === "string" && (u.kind === "edit" || /\bedit\b/i.test(String(u.title ?? "")))) code = { path: codePath, patch: clip(ri.input) };
+                // Display previews are bounded. P-LOC.5 counts the successful result independently.
+                const absPath = absWorkspacePath;
+                const rawPath = typeof ri.path === "string" ? ri.path : typeof ri.file_path === "string" ? ri.file_path : "";
+                // #483: xd:// device calls (and other internal URIs: local://, agent://, skill://, ...)
+                // send JSON `content` to a scheme path. They are tool INVOCATIONS, not authored workspace
+                // files - never build `code` for them: no ownership claim, no inline diff, and no preview
+                // below. (Before this guard, `xd://knowledge_search` was resolved against the workspace into
+                // `<workspace>/xd:/knowledge_search` and counted as code.) The AI-LOC tracker refuses them too.
+                const internalUri = isInternalUri(rawPath);
+                const code = internalUri ? undefined : toolCode(u, absPath);
+                const codePath = code?.path ?? absPath(rawPath);
                 // P-EVAL.4 (ADR-0318): carry omp's toolCallId so the real tool name (self-reported by the
                 // tool_meta extension, which is the only place it exists) can be joined onto this call.
                 const callId = typeof u.toolCallId === "string" ? u.toolCallId : "";
-                this.emit({ type: "tool", ...(callId ? { id: callId } : {}), name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? ri.command ?? ""), ...(code ? { code } : {}) });
-                // P-LOC.4 (ADR-0211): mirror this authored write/edit into the GUI-owned AI-LOC ledger the
-                // dashboard reads. The gate ALSO records it into agent_obs.duckdb (the BI system-of-record),
-                // but the omp child holds that DuckDB read-write for the whole session, so the desktop can't
-                // read it live — this JSONL is the live-readable copy (same linediff count as the chat chip).
+                // P-PROGRESS.1: the arguments (only when no authored code rides along) and the agent's own
+                // intent line, so the live step can say what the call is doing and open on it.
+                const input = code ? undefined : toolInput(u);
+                const intent = toolIntent(u);
+                this.emit({ type: "tool", ...(callId ? { id: callId } : {}), name: String(u.kind ?? u.title ?? "tool"), detail: String(u.title ?? ri.command ?? ""), ...(code ? { code } : {}), ...(input ? { input } : {}), ...(intent ? { intent } : {}) });
+                // P-PROGRESS.1: a call that arrives already terminal never gets a tool_call_update; settle its
+                // step now so the live row does not spin forever.
+                if (callId && !this.openCalls.has(callId)) { this.stepsDone++; this.emit({ type: "tool-meta", id: callId, name: String(u.kind ?? "tool"), ok: u.status === "completed", elapsedMs: 0 }); }
+                // P-OWN.1: ownership also waits for a completed write, independently of the AI-LOC ledger.
                 if (code) {
-                  const a = attribution();
-                  recordAiLoc({
-                    model: this.activeModel() || lastModel(),
-                    identity: a.identity, identitySource: a.source, repo: currentWorkspace(),
-                    filePath: code.path || undefined, tool: String(u.kind ?? "edit"),
-                    code: { content: code.content, oldText: code.oldText, newText: code.newText, patch: code.patch },
-                    sessionId: this.sessionId ?? undefined,
-                  });
+                  const now = code.path ? this.pendingWrites.opened(callId, code.path, u.status) : null;
+                  if (now && this.onAuthoredPath) { try { this.onAuthoredPath(now); } catch { /* the ledger never breaks the chat */ } }
                 }
                 // P-PREVIEW.2 (ADR-0096): if this write/edit produced a browser-previewable file, tell the UI
                 // so it can auto-surface it in the Preview panel. Pure detection (previewablePath); the path
@@ -828,7 +1179,7 @@ class Backend {
                 // A CUSTOM tool's name does NOT survive as `u.kind` (ACP maps it to "other"); omp renders the
                 // call title as `"preview_open: <path>"`, so preview_open must be matched against the TITLE.
                 // A write/edit, by contrast, keeps a real `kind` ("edit"), which previewablePath keys on.
-                const pvRaw = previewOpenPath(String(u.title ?? ""), ri) ?? previewablePath(String(u.kind ?? u.title ?? ""), ri);
+                const pvRaw = internalUri ? undefined : previewOpenPath(String(u.title ?? ""), ri) ?? previewablePath(String(u.kind ?? u.title ?? ""), ri);
                 const pv = pvRaw ? absPath(pvRaw) : pvRaw; // resolve a relative write path to absolute so the panel can render it
                 if (pv) this.emit({ type: "preview-available", path: pv });
                 // P-PREVIEW.6a (ADR-0153): the agent is looking at / testing the live preview (screenshot,
@@ -866,7 +1217,22 @@ class Backend {
             // P-TOOLFAIL.2 (ADR-0163): also carry the COMMAND the call attempted + the full error
             // text, so the renderer's collapsed toolbox badge can expand into an honest per-action view.
             case "tool_call_update": {
+              // P-PROGRESS.1: read the open call before it settles; its startedAt is the step's only clock.
+              const settleId = typeof u.toolCallId === "string" ? u.toolCallId : "";
+              const wasOpen = settleId ? this.openCalls.get(settleId) : undefined;
               settleToolCall(this.openCalls, u); // P-STALL.2: a terminal status closes the awaited call
+              if (typeof u.toolCallId === "string") { // P-OWN.1: a completed write is now this session's
+                const wrote = this.pendingWrites.settled(u.toolCallId, u.status);
+                if (wrote && this.onAuthoredPath) { try { this.onAuthoredPath(wrote); } catch { /* the ledger never breaks the chat */ } }
+              }
+              if (wasOpen && !this.openCalls.has(settleId)) {
+                const elapsedMs = Math.max(0, Date.now() - wasOpen.startedAt);
+                const realName = this.toolNames.get(settleId);
+                this.stepsDone++;
+                this.durations.addTool(realName ?? String(u.kind ?? "tool"), elapsedMs);
+                this.emit({ type: "tool-meta", id: settleId, name: realName ?? String(u.kind ?? "tool"), ok: u.status === "completed", elapsedMs });
+                this.progressTick?.();
+              }
               if (u.status === "failed" || u.status === "rejected") { this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: toolFailureReason(u).reason, command: toolFailureCommand(u) || undefined, detail: toolFailureDetail(u) || undefined, severity: "low", findings: "", quarantined: false }); break; }
               // P-IMG.1 (ADR-0208): surface image output from a tool result (a generated image, a rendered
               // chart, etc.). extractToolImages validates every block through the strict image-data-URL gate
@@ -955,14 +1321,20 @@ class Backend {
               // SEARCH mode (user affirmed no CUI datasets) is exempt and falls through to the normal posture.
               // The mode is per-session (ADR-0219), read fail-closed (default CUI) by the ACTIVE session id; the
               // sanctioned "search" for a CUI thread is a SEPARATE Search-mode session, or the AskSage RAG model.
-              if (this.asksageLocked() && sessionMode(this.sessionId ?? "") === "cui" && !localFile) {
+              // CUI lockdown: an http(s) target on LOOPBACK or an enabled DGX enclave Local Provider host (user lock
+              // only; the org-managed lock gets loopback alone) is not public egress either, so it falls through
+              // to the normal whitelist/approval posture. Never for a
+              // web_search call: that goes to omp's public search providers whatever URL it carries.
+              const isWebSearch = toolName.includes("web_search") || toolName.includes("web-search");
+              if (this.asksageLocked() && sessionMode(this.sessionId ?? "") === "cui" && !localFile
+                && (isWebSearch || !lockdownEgressExempt(target, enclaveHostSet(listLocalProviders(), managedAsksageOnly())))) {
                 this.recordGateDiag({ kind: "egress", tool: toolName.slice(0, 40), target: (target ?? "").slice(0, 80), localFile: false, askActive: this.askActive, listener: !!this.listener, goalActive: this.goalActive, autoRunning: this.autoRunning, decision: "block(asksage-lockdown-cui)" });
                 emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "egress-lockdown-cui", reason: `public web egress blocked: CUI session under AskSage lockdown · ${target ?? toolName}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
                 return { outcome: { outcome: "cancelled" } };
               }
               // P-NETWL.5 (ADR-0108): a web_search call (omp's default search providers, no arbitrary browse)
               // auto-approves when the user's posture allows web search - the pre-checked personal default.
-              if ((toolName.includes("web_search") || toolName.includes("web-search")) && egressPosture().allowWebSearch) {
+              if (isWebSearch && egressPosture().allowWebSearch) {
                 this.recordGateDiag({ kind: "egress", tool: toolName.slice(0, 40), target: (target ?? "").slice(0, 80), localFile: false, askActive: this.askActive, listener: !!this.listener, goalActive: this.goalActive, autoRunning: this.autoRunning, decision: "allow(web-search)" });
                 const a = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
                 return a ? { outcome: { outcome: "selected", optionId: a.optionId } } : { outcome: { outcome: "cancelled" } };
@@ -1041,13 +1413,24 @@ class Backend {
           await acp.request("initialize", { protocolVersion: 1, clientCapabilities: ACP_INTERACTIVE_CLIENT_CAPS }, { timeoutMs: HANDSHAKE_MS });
         } catch (e) {
           try { acp.stop(); } catch { /* ignore */ }
+          // P-SANDBOX.18 (ADR-0424): say WHERE the agent failed to start. A contained handshake failure read
+          // exactly like a model or network fault, and the only way anyone found the sandbox was by turning it off.
+          if (/lucid-appcontainer(\.exe)?$/i.test(spawnPlan.cmd)) throw new Error(`${errText(e)} (inside the Windows AppContainer sandbox)`);
           throw e;
         }
+        // P-RECOVER.1: log the death the moment it happens (main tees stderr into engine.log). The revival
+        // itself is on demand, in start(), so a child that dies while idle costs nothing until it is needed.
+        acp.onExit = (code) => { if (this.acp === acp) console.error(`[recover] master agent process exited (code ${code ?? "null"})`); };
+        // A revival resumes the dead child's session BEFORE the connection is published: until then every
+        // other caller awaits `starting`, so none can see a session-less child and mint a fresh session
+        // that the resume would then silently replace.
+        if (this.revivePending || this.reviveId) await this.finishRevival(acp);
         this.acp = acp;
       })().catch((e) => {
         // A failed handshake must not poison every later call: drop the memoized promise so the NEXT
         // start() respawns. Without this, one timed-out initialize disables chat until app restart.
         this.starting = null;
+        if (this.revivePending) this.failRevival(e);
         throw e;
       });
     }
@@ -1072,15 +1455,16 @@ class Backend {
         if (s?.modes) { this.availableModes = s.modes.availableModes ?? []; this.currentModeId = String(s.modes.currentModeId ?? "default"); }
         await sleep(350); // let available_commands_update arrive
         this.syncModelEnv();
-        // ADR-0217: on a FRESH session (launch / respawn), apply the AskSage lockdown so the picker + status
-        // reflect the gov model. FIRE-AND-FORGET (never awaited): a slow/hung model switch must NOT block
-        // session init — which getConfig()/loadConfig() lean on — else the picker freezes on "updating…". The
-        // prompt() clamp (before every turn) is the authoritative fail-closed guarantee; this is best-effort UI sync.
-        if (this.asksageLocked()) void this.enforceAsksageLock().catch(() => ({ ok: false }));
+        // ADR-0217 + R-07 (#347): on a FRESH session (launch / respawn), apply the model policy (AskSage
+        // lockdown + managed allowed/denied) so the picker + status reflect a permitted model. FIRE-AND-FORGET
+        // (never awaited): a slow/hung model switch must NOT block session init - which getConfig()/loadConfig()
+        // lean on - else the picker freezes on "updating...". The prompt() clamp (before every turn) is the
+        // authoritative fail-closed guarantee; this is best-effort UI sync.
+        if (this.asksageLocked()) void this.enforceModelPolicy().catch(() => ({ ok: false }));
         // P-MODEL.1 (ADR-0250): otherwise never leave the fresh session on omp's hardcoded Opus default -
-        // open on the last-used model, else the best one the user's configured providers expose. Same
-        // fire-and-forget rationale as the lockdown above: a hung switch must not block session init.
-        else void this.applyStartupModel(remembered).catch(() => {});
+        // open on the last-used model, else the best one the user's configured providers expose, THEN clamp it to
+        // the managed policy (a no-op when unmanaged), so a remembered model the organization denies never stays.
+        else void this.applyStartupModel(remembered).catch(() => {}).then(() => this.enforceModelPolicy()).catch(() => ({ ok: false }));
       })().finally(() => { this.sessioning = null; });
     }
     await this.sessioning;
@@ -1095,7 +1479,12 @@ class Backend {
     // providerConfigured's exact test (renderer/provider_hub.ts), inlined: importing provider_hub would
     // pull the DOM-typed bridge.ts into the server program.
     const configured = (p: ProviderAuth) => !!(p.oauthActive || p.keySet || (p.fields ?? []).some((f) => f.set));
+    // Cloud-only default: only an EXPLICIT picker choice may restore a local model; the automatic rungs
+    // skip anything local (omp's implicit Ollama/llama.cpp/LM Studio engines or a configured Local Provider).
+    const localPx = localProviderPrefixes();
     const pick = resolveStartupModel({
+      chosen: chosenModel(),
+      isLocal: (value) => isLocalModel(value, localPx),
       lastUsed: remembered,
       current,
       options: this.accessibleModels(),
@@ -1263,13 +1652,20 @@ class Backend {
       console.error("[sandbox-grant] cancelled without asking: the tool call named no directory");
       return cancelled;
     }
+    // P-SANDBOX.14 (ADR-0394): managed policy owns the folder list; never ask the user for a grant the
+    // endpoint would refuse anyway.
+    if (managedSandboxFoldersLocked(managedConfig().config)) {
+      emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: "block", severity: "medium", tool: "sandbox_grant_dir", reason: `blocked (folders managed by policy) · ${modeWord} ${dirPath}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
+      console.error(`[sandbox-grant] cancelled without asking: your organization manages the sandbox's folders · ${dirPath}`);
+      return cancelled;
+    }
     if (!(this.askActive && this.listener)) {
       emitSecurityEvent({ category: "approval", type: "sandbox_grant", decision: "block", severity: "medium", tool: "sandbox_grant_dir", reason: `blocked (no UI to ask) · ${modeWord} ${dirPath}`.slice(0, 200), sessionId: this.sessionId ?? undefined });
       return cancelled;
     }
     const id = `perm_${++this.permSeq}`;
     this.pendingPerms++;
-    this.emit({ type: "permission", id, tool: "sandbox_grant_dir", detail: `${modeWord} access to ${dirPath}${reason ? ` — ${reason}` : ""}`, egress: false, options: SANDBOX_GRANT_OPTIONS });
+    this.emit({ type: "permission", id, tool: "sandbox_grant_dir", detail: `${modeWord} access to ${dirPath}${reason ? ` - ${reason}` : ""}`, egress: false, options: SANDBOX_GRANT_OPTIONS });
     const allowOpt = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? "")) ?? opts[0];
     const denyOpt = opts.find((o) => /(deny|reject|cancel|no)/i.test(o.kind ?? o.optionId ?? ""));
     const approve = () => allowOpt ? { outcome: { outcome: "selected", optionId: allowOpt.optionId } } : cancelled;
@@ -1355,6 +1751,19 @@ class Backend {
    *  Used by the delete route to close the session before removing its file (#53). */
   currentSessionId(): string | null { return this.sessionId; }
 
+  /** P-SWITCH.1 (ADR-0403): why loading another session into Main, or starting a new one, would stop
+   *  work right now, or null when nothing would be lost. loadSession/newSession run clearTurnRecovery,
+   *  which cancels a live turn (ADR-0385, and correctly so), so the HTTP routes ask this first and refuse
+   *  unless the caller explicitly chose to stop. A loop or automation outranks the turn it is running
+   *  because it is the bigger thing the user would lose. Only an automation that OWNS Main blocks: an
+   *  agent-kind run lives in startAgentRun's own child, so a switch stops nothing of it (#460 case 2). */
+  switchBlocker(): string | null {
+    if (this.goalActive) return "a goal loop is running";
+    if (this.autoRunning && this.autoOwnsMain) return "an automation is running";
+    if (this.askActive || this.recoveryTurn?.running) return "a turn is running";
+    return null;
+  }
+
   /** P-INTERJECT.1: whether a chat turn is streaming right now (listener armed), and when it started.
    *  Feeds the /api/processes "Master chat turn" entry; a util completion riding the chat connection
    *  counts as busy too (it occupies the session either way). */
@@ -1379,8 +1788,21 @@ class Backend {
   private clearTurnRecovery(): void {
     const turn = this.recoveryTurn;
     this.recoveryTurn = null;
+    // P-RECOVER.1 (ADR-0385): the session-switch wedge. Clearing only `recoveryTurn` left the cleared turn's
+    // listener armed and its session/prompt still running in omp, so every later prompt() threw "already
+    // running" while /api/chat/status said idle, until the watchdog recovered ~7 minutes later. A cleared
+    // turn now gives up both: omp is told to stop it (the pending request then settles as cancelled and its
+    // prompt() unwinds without touching the new turn), and its sink stops being the listener. Only ITS sink:
+    // a util completeShared() listener is never clobbered. A session switch is the user acting, so a
+    // pending watchdog resume must not revive the cleared run either.
+    this.recoverMark.clear();
+    const cancelId = turn?.running ? (turn.sessionId ?? this.sessionId) : null;
+    if (cancelId && this.acp && !this.acp.isDead) { try { this.acp.notify("session/cancel", { sessionId: cancelId }); } catch { /* best-effort */ } }
+    if (this.turnSink && this.listener === this.turnSink) { this.listener = null; this.turnStartedAtMs = null; }
+    this.turnSink = null;
     this.askActive = false;
     this.openCalls.clear();
+    this.aiLoc.clear();
     this.chatGate.end();
     try { for (const fn of this.permPending.values()) fn(null); }
     finally { turn?.finish(); }
@@ -1391,13 +1813,25 @@ class Backend {
 
   /** Resume a past session so the next prompt continues it. */
   async loadSession(id: string): Promise<void> {
+    // #460 case 1 (P-SWITCH.1 follow-up): a running /goal loop (or a Main-owned automation, which runs
+    // through runGoal) is stopped and FULLY unwound before the session changes. Only forced or
+    // destructive callers reach here while a loop runs: the unforced HTTP routes already refused via
+    // switchBlocker(), so this never widens a plain switch into a work-cancelling path (#390).
+    await this.stopGoalForSwitch();
     this.clearTurnRecovery();
     await this.start();
-    await this.acp!.request("session/load", { sessionId: id, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }).catch(() => {});
-    this.sessionId = id;
+    await this.releaseOtherSession(this.acp!, id);
+    this.replaying = true;
+    try {
+      await this.acp!.request("session/load", { sessionId: id, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }).catch(() => {});
+      this.sessionId = id;
+    } finally {
+      this.replaying = false;
+    }
   }
 
   async newSession(): Promise<void> {
+    await this.stopGoalForSwitch(); // #460 case 1: same contract as loadSession above
     this.clearTurnRecovery();
     await this.start();
     if (this.sessionId) await this.acp!.request("session/close", { sessionId: this.sessionId }).catch(() => {});
@@ -1407,19 +1841,25 @@ class Backend {
   }
 
   /** Tear down the omp process so the next call respawns it (e.g. after an API
-   *  key changes - the new env is picked up on the fresh spawn). */
+   *  key changes - the new env is picked up on the fresh spawn). P-RECOVER.1: the next spawn waits until
+   *  the old child's whole process tree is confirmed ended (see `retired`). */
   restart(options?: { preserveTurn?: boolean }): void {
     if (!options?.preserveTurn) this.clearTurnRecovery();
-    try { this.acp?.stop(); } catch { /* ignore */ }
+    // Detach before stopping so the exit handler knows this death was deliberate (no "[recover]" line).
+    const old = this.acp;
+    this.acp = null;
+    if (old) { this.retired = old; try { void old.stop(); } catch { /* ignore */ } }
     try { this.utilAcp?.stop(); } catch { /* ignore */ } // P-KG-INGEST.4: respawn the util omp too (fresh env/keys)
-    this.acp = null; this.starting = null; this.sessionId = null; this.listener = null;
+    this.starting = null; this.sessionId = null; this.listener = null;
+    this.reviveId = null; this.revivePending = false; // P-RECOVER.1: a deliberate restart supersedes an on-demand revival
     this.utilAcp = null; this.utilStarting = null; this.utilSink = null;
     this.memoryRecallDelivered = false; // persona/skill/profile are re-delivered every turn anyway (#54)
     this.availableModes = []; this.currentModeId = "default"; // re-captured from the fresh session
     // Drop any parked permission (deny) but KEEP permissionMode — the user's Ask choice survives a respawn.
     for (const [, fn] of this.permPending) fn(null);
     this.permPending.clear(); this.pendingPerms = 0; this.askActive = false;
-    this.openCalls.clear(); // P-STALL.2: a respawn orphans any tracked calls
+    this.openCalls.clear();
+    this.aiLoc.clear(); // P-STALL.2: a respawn orphans any tracked calls
   }
 
   // P-STALL.2 (ADR-0263): there is NO time-based turn cutoff anymore. P-STALL.1's 10-minute silence
@@ -1438,14 +1878,21 @@ class Backend {
    *  P-STALL.2 (ADR-0263): the turn waits as long as the work takes - no time cutoff. Stop ends it, and
    *  a dead omp child rejects the in-flight request (ACPClient drains pending on exit). */
   async prompt(text: string, onEventRaw: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[], options?: { signal?: AbortSignal; prompt?: string; requestId?: string }): Promise<void> {
-    if (this.recoveryTurn?.running || this.listener) throw new Error("A chat turn is already running");
+    if (this.recoveryTurn?.running || this.listener) throw new Error(TURN_ALREADY_RUNNING);
     const turn = new LiveTurn<ChatEvent>(options?.prompt ?? text, this.sessionId, () => pendingSnapshot(this.openCalls, Date.now()), options?.requestId);
     this.recoveryTurn = turn;
     this.openCalls.clear();
+    this.aiLoc.clear();
     turn.attach(onEventRaw, options?.signal);
     const onEvent = (e: ChatEvent) => turn.emit(e);
     let lockBlocked = false; // ADR-0217: the turn was refused because AskSage lockdown couldn't be satisfied
     let slow: Timer | undefined;
+    // P-PROGRESS.1: the progress view goes to the window every PROGRESS_TICK_MS and on every settled tool
+    // call, through onEvent DIRECTLY (never the sink): telling the user never counts as activity.
+    let progressTimer: Timer | undefined;
+    this.stepsDone = 0;
+    this.toolNames.clear();
+    this.progressTick = () => { try { onEvent({ type: "progress", progress: this.progressView() }); } catch { /* stream gone */ } };
     try {
     let silentSince = Date.now();
     // While a permission is awaiting the user (Ask mode), pause the slow-notice clock \u2014 a human
@@ -1490,8 +1937,13 @@ class Backend {
       try { onEvent(e); } catch { enqueueErr++; }
     };
     this.listener = sink;
+    this.turnSink = sink; // P-RECOVER.1: what clearTurnRecovery may release
+    this.streamArm = arm; // P-HEALTH.3: a tool-call streaming beat is activity, exactly like an ACP update
     this.turnStartedAtMs = Date.now(); // P-INTERJECT.1: the /api/processes master-turn start stamp
-    this.openCalls.clear(); // P-STALL.2: fresh turn, fresh pending-call set
+    this.stepText.reset();
+    this.openCalls.clear();
+    this.aiLoc.clear(); // P-STALL.2: fresh turn, fresh pending-call set
+    this.pulse.reset(); // P-LIVENESS.1: a new turn never inherits the last one's evidence
     this.recoverMark.clear(); // P-HEALTH.2: a new run never inherits a previous run's recovery marker
     this.askActive = true; // permission requests in THIS turn may be forwarded to the UI (Ask mode)
     this.execTurnPrograms.clear(); this.execTurnAll = false; // P-EXEC.1: allow-turn scope is per-turn
@@ -1501,12 +1953,13 @@ class Backend {
       await this.ensureSession();
       if (this.recoveryTurn !== turn) return;
       turn.sessionId = this.sessionId;
-      // ADR-0217: FAIL-CLOSED AskSage lockdown. Force the model to the gov gateway before sending; if the lock
-      // is on but no gov model exists, REFUSE the turn rather than route to a direct provider. This is the
-      // authoritative enforcement (the renderer's toggle-time switch does not survive an omp respawn / relaunch).
-      const lock = await this.enforceAsksageLock();
+      // ADR-0217 + R-07 (#347): FAIL-CLOSED model policy. Force the model to one permitted by the AskSage
+      // lockdown AND the managed allowed/denied lists before sending; when nothing qualifies, REFUSE the turn
+      // rather than route to a denied provider. This is the authoritative enforcement (the renderer's
+      // toggle-time switch and picker filtering do not survive an omp respawn / relaunch).
+      const lock = await this.enforceModelPolicy();
       if (this.recoveryTurn !== turn) return;
-      if (!lock.ok) { lockBlocked = true; throw new Error(lock.error ?? "AskSage lockdown could not be satisfied."); }
+      if (!lock.ok) { lockBlocked = true; throw new Error(lock.error ?? "The managed model policy could not be satisfied."); }
       beginStepTurn(this.sessionId); // P-RESUME.1: anchor this turn's recorded steps to the new user message
       // Assemble the user-turn preamble (never the frozen prefix; invariant #5/#6). Issue #54:
       // persona + skill + the live <user-profile> profile are STANDING guidance re-delivered every
@@ -1524,13 +1977,28 @@ class Backend {
         memoryRecallDelivered: this.memoryRecallDelivered,
       });
       this.memoryRecallDelivered = built.memoryRecallDelivered;
-      const body = built.preamble + text;
+      // P-OWN.1: standing, rebuilt every turn from the live registry (a spoke may have started since).
+      // Harness-origin like the rest of the preamble; "" when nobody else writes in this checkout.
+      let checkoutBlock = "";
+      if (this.checkoutBriefing) { try { checkoutBlock = await this.checkoutBriefing(); } catch { checkoutBlock = ""; } }
+      this.lastTask = text.replace(/\s+/g, " ").trim().slice(0, 200);
+      const head = built.preamble + (checkoutBlock ? `${checkoutBlock}\n\n` : "");
+      const body = head + text;
       // P-VISION.1 (ADR-0136): user-attached images ride as ACP image content blocks after the text. omp's
       // session/prompt accepts `(text|image)[]` (same shape the preview_screenshot tool returns). Only
       // well-formed blocks (base64 data + image mime) are appended — the renderer already validated them.
       const imageBlocks = (images ?? []).filter((im) => im?.data && im?.mimeType).map((im) => ({ type: "image" as const, data: im.data, mimeType: im.mimeType }));
       let content: { type: "text" | "image"; text?: string; data?: string; mimeType?: string }[] =
         [{ type: "text" as const, text: body }, ...imageBlocks];
+      // P-WAIT.1: no folder lease. The turn starts now; it waits only if one of its writes lands on a
+      // file another worker's running turn is editing (write_claims.ts, asked by the checkout gate hook).
+      // ADR-0414: operator notes still waiting for the master (queued after the last tool step of an
+      // earlier turn, or while it was idle) open this prompt, right before the user's text.
+      let carried = "";
+      if (this.carriedNotes) { try { carried = this.carriedNotes(); } catch { carried = ""; } }
+      if (carried) content[0] = { type: "text" as const, text: `${head}${carried}\n\n${text}` };
+      progressTimer = setInterval(this.progressTick, PROGRESS_TICK_MS);
+      progressTimer.unref?.();
       arm(); // start the slow-notice clock now (covers silence BEFORE the first token)
       tSent = Date.now(); // P-EVAL.2: t_sent \u2014 the prompt is handed to the model
       // P-STALL.2 (ADR-0263): no Promise.race against a clock - the request runs until the work ends,
@@ -1554,13 +2022,14 @@ class Backend {
           const v = resumeVerdict({ recovered: true, sessionAlive: !!this.sessionId, resumesSoFar: resumes });
           this.turnDiag(`prompt.recovered session=${this.sessionId} resumes=${resumes} resume=${v.resume} silentMs=${rec.silentMs}`);
           // Either way the user is TOLD, through the same health channel the recovery itself reports on.
-          onEvent({ type: "health", action: "recover", reason: v.reason });
+          onEvent({ type: "health", action: "recover", reason: v.reason, needsUser: !v.resume });
           if (!v.resume) throw err;
           resumes++;
           // `restart()` nulls the listener and clears askActive. Without re-asserting both, the resumed run
           // would stream into nothing and its permission requests would never reach the UI - which is the
           // "listener clobber" failure mode this increment exists to close, not to reintroduce.
           this.listener = sink;
+          this.turnSink = sink;
           this.askActive = true;
           content = [{ type: "text" as const, text: buildResumeNote({
             request: text, progress: turn.text, pending: rec.pending,
@@ -1586,8 +2055,12 @@ class Backend {
       else if (sawOutput) onEvent({ type: "token", text: `\n[agent unavailable: ${failMsg}]` });
     } finally {
       clearTimeout(slow);
+      clearInterval(progressTimer);
+      this.progressTick = null;
       if (this.recoveryTurn === turn) {
+      this.writeClaims.endTurn("master"); // P-WAIT.1: the files this turn wrote are free for other workers
       this.openCalls.clear(); // P-STALL.2: pending-call tracking is per-turn
+      this.aiLoc.clear();
       this.askActive = false;
       this.chatGate.end(); // P-KG-INGEST.3: chat turn done → release any extraction waiting to resume
       // Fail-closed: any permission still parked at turn's end (stall/disconnect) is denied.
@@ -1596,6 +2069,8 @@ class Backend {
       endStepTurn(this.sessionId); // P-RESUME.1: persist the buffered thinking for this turn
       }
       if (this.listener === sink) { this.listener = null; this.turnStartedAtMs = null; }
+      if (this.turnSink === sink) this.turnSink = null;
+      if (this.streamArm === arm) this.streamArm = null;
     }
     if (this.recoveryTurn !== turn) return;
     // P-NORESP.1: the turn produced NO content at all (no token/thinking/tool) — either a silent empty
@@ -1632,6 +2107,7 @@ class Backend {
     // this case self-evident in one line (no first token, 21.7k in, NOT ok), and stopReason still
     // reaches the user through the no-response event above. Adding columns is its own increment.
     const produced = sawOutput && !errored;
+    if (tSent > 0 && produced) this.durations.addTurn(this.activeModel(), Date.now() - tSent, this.sessionId ?? ""); // P-PROGRESS.1; .4: keyed by session like the ledger line below
     if (tSent > 0) recordLatency({
       model: this.activeModel(), sessionId: this.sessionId ?? undefined,
       tSent, tFirstToken, tEnd: Date.now(), ok: produced,
@@ -1645,6 +2121,7 @@ class Backend {
         this.turnStartedAtMs = null;
         this.askActive = false;
         this.openCalls.clear();
+        this.aiLoc.clear();
         this.chatGate.end();
         for (const fn of this.permPending.values()) fn(null);
       }
@@ -1667,6 +2144,8 @@ class Backend {
     const prevMode = this.permissionMode;
     this.permissionMode = "auto"; // unattended: auto-approve tool calls (the gate still scans every one)
     this.goalActive = true; this.goalCancelled = false;
+    let settleGoal: () => void = () => {};
+    this.goalSettled = new Promise<void>((r) => { settleGoal = r; });
     // P-GOAL.13 (ADR-0067): the loop's exec policy is the per-command-type DIAL, clamped by the managed
     // loop ceiling (ADR-0068, tighten-only). An unset dial defaults to the safest posture (T0 only).
     const loopMax = managedConfig().config?.security?.loop?.maxAutoTier;
@@ -1774,7 +2253,7 @@ class Backend {
         const sig = stallSignature(verdict.reason);
         stallCount = sig && sig === lastSig ? stallCount + 1 : 1;
         lastSig = sig;
-        if (stallCount >= 3) { terminalReason = `stopped: not converging — the same blocker held for ${stallCount} rounds (${verdict.reason})`; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, terminalReason); return; }
+        if (stallCount >= 3) { terminalReason = `stopped: not converging; the same blocker held for ${stallCount} rounds (${verdict.reason})`; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, terminalReason); return; }
 
         noProgress = actedThisIter ? 0 : noProgress + 1;
         if (noProgress >= 2) { terminalReason = "stopped: two iterations with no actions and the condition still unmet"; onEvent({ type: "goal-stop", reason: terminalReason }); finishGoalMemory(mem, "stopped: no progress for two iterations"); return; }
@@ -1818,6 +2297,10 @@ class Backend {
       } catch { /* the report never blocks the loop's completion */ }
       // P-GOAL.13: clear the loop's exec posture so a later interactive turn isn't governed by a stale dial.
       this.loopDial = null; this.loopBlocks = []; this.loopIter = 0;
+      // #460 case 1: release the forced-switch waiter. Placed before the `done` emit on purpose: both run
+      // in this same synchronous frame, so `done` still reaches the stream before any waiter resumes, and
+      // a theoretical throw from the emit can never strand the waiter until its timeout.
+      this.goalSettled = null; settleGoal();
       onEvent({ type: "done" });
     }
   }
@@ -1825,13 +2308,13 @@ class Backend {
   /** P-GOAL.9: the current HEAD commit, or null when the workspace isn't a git repo / git is absent.
    *  Best-effort and quick (5s cap); a missing baseline just means the report shows "LOC n/a". */
   private gitHead(): string | null {
-    try { return execFileSync("git", ["rev-parse", "HEAD"], { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }).trim() || null; }
+    try { return execFileSync(gitExe(), ["rev-parse", "HEAD"], { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }).trim() || null; }
     catch { return null; }
   }
   /** P-GOAL.9: parsed `git diff --numstat <ref>` for the working tree vs `ref` (tracked changes,
    *  staged + unstaged + committed-since). Null on any git failure — LOC tracking is best-effort. */
   private gitDiffVs(ref: string): LocStat | null {
-    try { return parseNumstat(execFileSync("git", ["diff", "--numstat", ref], { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })); }
+    try { return parseNumstat(execFileSync(gitExe(), ["diff", "--numstat", ref], { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })); }
     catch { return null; }
   }
 
@@ -1840,6 +2323,23 @@ class Backend {
   cancelGoal(): void { if (this.goalActive) { this.goalCancelled = true; this.cancel(); } }
   /** Whether a /goal loop is currently running (so the UI routes Stop to cancelGoal, not cancelChat). */
   isGoalRunning(): boolean { return this.goalActive; }
+
+  /** #460 case 1 (P-SWITCH.1 follow-up): stop the running /goal loop, or a Main-owned automation (those
+   *  run through runGoal), and WAIT for it to unwind before the caller touches the session. Cancelling
+   *  alone is not enough: the forced switch previously cancelled only the maker TURN (clearTurnRecovery),
+   *  goalCancelled stayed false, and the loop's checker or next iteration then ran inside the newly
+   *  loaded session. Bounded so a wedged unwind can never hang the switch; goalCancelled stays true, so
+   *  a late-waking loop still exits at its next checkpoint without doing any work. No-op when idle. */
+  async stopGoalForSwitch(timeoutMs = 15_000): Promise<void> {
+    if (!this.goalActive) return;
+    this.cancelGoal();
+    const settled = this.goalSettled;
+    if (!settled) return;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, timeoutMs);
+      void settled.then(() => { clearTimeout(timer); resolve(); });
+    });
+  }
 
   /** P-GOAL.10 (ADR-0055): the cross-run evaluation surface — aggregate stats over the run-log plus the
    *  most-recent runs for a compact history view. Reads the workspace's `.omp/loops/run-log.jsonl`. */
@@ -1851,7 +2351,7 @@ class Backend {
 
   /** P-GOAL.12 (ADR-0057): the branches + worktrees the Pre-Flight Audit offers as loop scope. Best-effort. */
   private gitLines(args: string[]): string[] {
-    try { return execFileSync("git", args, { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, maxBuffer: 2 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).split("\n").map((s) => s.trim()).filter(Boolean); }
+    try { return execFileSync(gitExe(), args, { cwd: currentWorkspace(), encoding: "utf8", timeout: 5_000, maxBuffer: 2 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).split("\n").map((s) => s.trim()).filter(Boolean); }
     catch { return []; }
   }
   loopScopes(): { current: string; branches: string[]; worktrees: string[] } {
@@ -1913,6 +2413,7 @@ class Backend {
     const a: Automation | undefined = listAutomations(ws).find((x) => x.id === id);
     if (!a) return { ran: false };
     this.autoRunning = true;
+    this.autoOwnsMain = a.kind !== "agent"; // agent runs live in startAgentRun's child, never Main's session
     // Stamp lastRunAt up-front so a slow run can't be re-fired by the next tick before it finishes.
     updateAutomation(ws, id, { lastRunAt: Date.now() });
     // P-AGENT.14 (ADR-0142): scheduled BUILT-AGENT runs. Fail-closed gate first: only a trusted, loadable,
@@ -1944,6 +2445,7 @@ class Backend {
         result = `error: ${e instanceof Error ? e.message : String(e)}`;
       } finally {
         this.autoRunning = false;
+        this.autoOwnsMain = false;
         updateAutomation(ws, id, { lastRunAt: Date.now(), lastResult: result.slice(0, 200) });
       }
       return { ran: true, result };
@@ -1962,6 +2464,7 @@ class Backend {
       result = `error: ${String((e as Error)?.message ?? e)}`;
     } finally {
       this.autoRunning = false;
+      this.autoOwnsMain = false;
       updateAutomation(ws, id, { lastRunAt: Date.now(), lastResult: result.slice(0, 200) });
     }
     return { ran: true, result };
@@ -1971,34 +2474,54 @@ class Backend {
    *  `models.asksageOnly` block plus the legacy top-level flag, via managedAsksageOnly). */
   private asksageLocked(): boolean { return asksageOnly() || managedAsksageOnly(); }
 
+  /** CUI lockdown: omp provider keys of the enabled Local Providers attested as DGX enclave hosts, the
+   *  allowed routes under lockdown next to AskSage. Empty under the org-managed lock (a user attestation
+   *  never widens an org control). Read fresh per call (a Settings edit applies at once). */
+  private enclaveProviders(): Set<string> { return enclaveProviderSet(listLocalProviders(), managedAsksageOnly()); }
+
   /** The model ids omp currently reports in the `model` config option. */
   private modelOptionValues(): string[] {
     const opt = this.configOptions.find((c) => c?.id === "model");
     return (Array.isArray(opt?.options) ? opt!.options : []).map((o: any) => String(o?.value ?? "")).filter(Boolean);
   }
 
-  /** ADR-0217: FAIL-CLOSED server-side enforcement of AskSage lockdown. When the lock is on, force omp's active
-   *  model to an AskSage-routed (gov-gateway) one BEFORE a turn is sent. Returns { ok:false, error } when the
-   *  lock is on but no gov model exists (lockdown enabled without a configured gateway) so the caller can BLOCK
-   *  the turn - a turn must NEVER route to a direct provider under lockdown. No-op when the lock is off. This is
-   *  the authoritative guarantee: the renderer's toggle-time switch + picker hiding are cosmetic and do not
-   *  survive an omp respawn or a fresh launch with lockdown already persisted ON. */
-  private async enforceAsksageLock(): Promise<{ ok: boolean; error?: string }> {
-    const r = resolveLockdownModel(this.asksageLocked(), this.activeModel(), this.modelOptionValues());
+  /** ADR-0217 + R-07 (#347): FAIL-CLOSED server-side enforcement of the model policy: the AskSage lockdown
+   *  AND the managed allowed/denied model lists (ADR-0068, schema-only until #347 wired it here). When the
+   *  active model is not permitted, switch omp to the first option satisfying BOTH constraints BEFORE a turn
+   *  is sent. Returns { ok:false, error } when nothing qualifies so the caller can BLOCK the turn - a turn
+   *  must NEVER route to a denied provider. No-op when unlocked and unmanaged. This is the authoritative
+   *  guarantee: renderer-side picker filtering is cosmetic and does not survive an omp respawn or a fresh
+   *  launch with policy already persisted. */
+  private async enforceModelPolicy(): Promise<{ ok: boolean; error?: string }> {
+    const managed = managedConfig().config?.models;
+    const enclave = this.enclaveProviders();
+    const r = resolveGovernedModel(this.asksageLocked(), managed, this.activeModel(), this.modelOptionValues(), enclave);
     if (!r.ok) return { ok: false, error: r.error };
     if (r.model && r.model !== this.activeModel()) {
       await this.setConfig("model", r.model).catch(() => {});
-      if (!isAsksageRouted(this.activeModel())) return { ok: false, error: "Could not switch to an AskSage gov model for lockdown." };
+      const now = this.activeModel();
+      if (this.asksageLocked() && !isLockdownRoutable(now, enclave)) return { ok: false, error: LOCKDOWN_SWITCH_FAILED_ERROR };
+      if (!modelAllowed(now, managed)) return { ok: false, error: "Could not switch to a model permitted by your organization's policy." };
     }
     return { ok: true };
   }
 
-  /** ADR-0218: resolve the model a BUILT-AGENT run must use, honoring AskSage lockdown. PUBLIC so the dev.ts
-   *  Builder "Run" route can clamp before spawning a run (the scheduled-automation path calls it too). Under
-   *  lockdown a direct model is swapped for a gov one; `{ ok:false }` ⇒ the caller must REFUSE, never route
-   *  direct. Lock off ⇒ the desired model passes through unchanged. */
+  /** ADR-0218 + R-07: resolve the model a BUILT-AGENT run must use, honoring the AskSage lockdown AND the
+   *  managed allowed/denied lists. PUBLIC so the dev.ts Builder "Run" route can clamp before spawning a run
+   *  (the scheduled-automation path calls it too). A denied model is swapped for a permitted one;
+   *  `{ ok:false }` ⇒ the caller must REFUSE, never route denied. Unlocked + unmanaged ⇒ the desired model
+   *  passes through unchanged. */
   resolveAgentRunModel(desired: string): { ok: boolean; model?: string; error?: string } {
-    return resolveLockdownModel(this.asksageLocked(), desired || "haiku", this.modelOptionValues());
+    return resolveGovernedModel(this.asksageLocked(), managedConfig().config?.models, desired || "haiku", this.modelOptionValues(), this.enclaveProviders());
+  }
+
+  /** CUI lockdown: the model a utility completion (complete()) MUST run on. Lock off: the caller's model
+   *  (undefined = omp's default) exactly as before. Lock on: ALWAYS an explicit allowed model (the caller's,
+   *  else the active one, clamped like a turn: AskSage or a user-lock enclave provider), or `{ ok:false }`.
+   *  PUBLIC so a route can report the refusal before spending a request (dev.ts /api/explain). */
+  completionModel(requested: string | undefined): { ok: boolean; model?: string; error?: string } {
+    if (!this.asksageLocked()) return { ok: true, model: requested };
+    return resolveGovernedModel(true, managedConfig().config?.models, requested || this.activeModel(), this.modelOptionValues(), this.enclaveProviders());
   }
 
   // P-GOAL.6 (ADR-0048): the user's accessible models, as the model config reports them (provider-
@@ -2006,15 +2529,27 @@ class Backend {
   private accessibleModels(): ModelOption[] {
     const opt = this.configOptions.find((c) => c?.id === "model");
     const list = Array.isArray(opt?.options) ? opt!.options : [];
-    const models = list.filter((o: any) => o?.value).map((o: any) => ({ value: String(o.value), name: o.name, description: o.description }));
+    let models = list.filter((o: any) => o?.value).map((o: any) => ({ value: String(o.value), name: o.name, description: o.description }));
+    // P-MODEL.6: the same platform rule the picker applies (omp's on-device `apple` on darwin only), so the
+    // startup default and the checker recommendation can never pick a model the picker would not list.
+    models = models.filter((m: ModelOption) => providerAllowedOnPlatform(providerPrefixOf(m.value), process.platform));
     // P-GOAL.6.1: when the AskSage lock is on, the checker must use a model routed through the AskSage gateway.
     // Fail-safe: only narrow if such models exist (never empty the list, which would drop the picker / the
     // recommendation to the maker model). ADR-0217: match on the `asksage` provider prefix - real gov ids like
     // `asksage-openai/gpt-5.6-luna` carry no "gov" SUBSTRING (the earlier `/gov/i` test matched none of them, so the
-    // checker silently fell through to ALL models, including direct providers).
+    // checker silently fell through to ALL models, including direct providers). CUI lockdown: the same shared
+    // predicate as the turn clamp, so an enabled DGX enclave Local Provider's models qualify too.
     if (this.asksageLocked()) {
-      const gov = models.filter((m: ModelOption) => isAsksageRouted(m.value));
-      if (gov.length) return gov;
+      const enclave = this.enclaveProviders();
+      const allowed = models.filter((m: ModelOption) => isLockdownRoutable(m.value, enclave));
+      if (allowed.length) models = allowed;
+    }
+    // R-07 (#347): the managed allowed/denied lists narrow the pickers too. Same fail-safe shape as the
+    // AskSage narrowing (only narrow when non-empty); enforceModelPolicy's pre-turn clamp stays authoritative.
+    const managed = managedConfig().config?.models;
+    if (managed) {
+      const permitted = models.filter((m: ModelOption) => modelAllowed(m.value, managed));
+      if (permitted.length) models = permitted;
     }
     return models;
   }
@@ -2065,6 +2600,9 @@ class Backend {
     // P-HEALTH.2: a USER Stop is never auto-resumed - stopping means stop. Only the recovery path keeps the
     // marker, and it passes `forRecover` because it cancels the wedged turn through this same method.
     if (!opts?.forRecover) this.recoverMark.clear();
+    // A user Stop that reaches a running /goal loop through the plain chat cancel (the composer's turn view
+    // routes Stop there) must end the LOOP, not just this iteration, or the next iteration starts at once.
+    if (!opts?.forRecover && this.goalActive) this.goalCancelled = true;
     try { if (this.acp && this.sessionId) this.acp.notify("session/cancel", { sessionId: this.sessionId }); } catch { /* best-effort */ }
   }
 
@@ -2081,6 +2619,8 @@ class Backend {
   // Only a DEAD child overrides, and that is evidence rather than a guess about how long work may take.
   private healthEpisode: HealthEpisode = newEpisode(Date.now());
   private healthActivityAt = Date.now();
+  /** P-HEALTH.3: the running turn's activity clock (its `arm`), so a streaming beat can reset it. */
+  private streamArm: (() => void) | null = null;
   private healthTimer: Timer | null = null;
   private healthBusy = false;
   /** The last self-action, surfaced in status so the user can see the harness handled it. */
@@ -2092,17 +2632,21 @@ class Backend {
   private recoverMark = new RecoverMarker();
   /** The in-flight recovery. A rejected request awaits this, so the resume happens only after the respawn
    *  and `session/load` have finished and `sessionId` is either restored or definitively null. */
-  private recovering: Promise<void> | null = null;
+  private recovering: Promise<unknown> | null = null;
+  /** P-RECOVER.1: the stall episode (by its start stamp) that already wrote its recovery-exhausted incident. */
+  private exhaustedEpisodeAt: number | null = null;
 
-
-  /** Where the master session stands right now. Read-only: takes no action, mutates nothing. */
-  healthStatus(): { action: HealthAction; silentMs: number; reason: string; pending: PendingView[]; last: { action: string; reason: string; at: number } | null } {
+  /** Where the master session stands right now. Read-only: takes no action, mutates nothing.
+   *  P-RECOVER.1: `exhausted` = the ladder stopped retrying (the window offers Recover); `dead` = the
+   *  child is gone (the next use revives it). */
+  healthStatus(): { action: HealthAction; silentMs: number; reason: string; pending: PendingView[]; last: { action: string; reason: string; at: number } | null; exhausted: boolean; dead: boolean } {
     const now = Date.now();
-    const v = healthVerdict({
+    const input: HealthInput = {
       busy: this.listener !== null, dead: this.acp?.isDead ?? false,
       lastActivityAt: this.healthActivityAt, now, openCalls: this.openCalls.size, episode: this.healthEpisode,
-    });
-    return { action: v.action, silentMs: v.silentMs, reason: v.reason, pending: pendingSnapshot(this.openCalls, now), last: this.lastHealth };
+    };
+    const v = healthVerdict(input);
+    return { action: v.action, silentMs: v.silentMs, reason: v.reason, pending: pendingSnapshot(this.openCalls, now), last: this.lastHealth, exhausted: this.ladderExhausted(v, input), dead: input.dead };
   }
 
   /** Run the ladder once and act on it. Returns what it did, or null when nothing was warranted.
@@ -2111,11 +2655,23 @@ class Backend {
   async healthTick(): Promise<{ action: "probe" | "recover"; reason: string } | null> {
     if (this.healthBusy) return null;
     const now = Date.now();
-    const v = healthVerdict({
+    const input: HealthInput = {
       busy: this.listener !== null, dead: this.acp?.isDead ?? false,
       lastActivityAt: this.healthActivityAt, now, openCalls: this.openCalls.size, episode: this.healthEpisode,
-    });
-    if (v.action !== "probe" && v.action !== "recover") return null;
+    };
+    const v = healthVerdict(input);
+    if (v.action !== "probe" && v.action !== "recover") {
+      // P-RECOVER.1 (ADR-0385): the first frame of an episode where the ladder has given up writes ONE
+      // report. Before this the pin at "needs a manual restart" was silent: nothing on disk said so.
+      if (this.ladderExhausted(v, input) && this.exhaustedEpisodeAt !== this.healthEpisode.startedAt) {
+        this.exhaustedEpisodeAt = this.healthEpisode.startedAt;
+        console.error(`[recover] automatic recovery stopped retrying after ${this.healthEpisode.recovers} attempts`);
+        this.recordRecovery("recovery-exhausted", "not-recovered",
+          `LUCID's automatic recovery restarted the chat agent process ${this.healthEpisode.recovers} times without the chat making progress, and stopped retrying so it would not loop. The chat needs a manual recovery.`,
+          [{ at: this.healthEpisode.startedAt, what: "The chat stopped making progress." }, { at: now, what: v.reason }]);
+      }
+      return null;
+    }
     this.healthBusy = true;
     try {
       this.lastHealth = { action: v.action, reason: v.reason, at: now };
@@ -2137,8 +2693,15 @@ class Backend {
         reason: v.reason, at: now, silentMs: v.silentMs,
         pending: pendingSnapshot(this.openCalls, now).map((p) => p.label),
       });
-      this.recovering = this.healthRecover();
-      await this.recovering;
+      console.error(`[recover] watchdog: ${v.reason}`);
+      const hadSession = this.sessionId !== null;
+      const pending = this.healthRecover();
+      this.recovering = pending;
+      const r = await pending;
+      // P-RECOVER.1 (ADR-0385): every automatic recovery leaves a report, whether or not it worked.
+      this.recordRecovery("agent-child-failed", r.ok ? "recovered" : "not-recovered",
+        "The chat session stopped making progress (or its agent process exited), so LUCID's watchdog cancelled the turn, restarted the agent process, and tried to resume the same session.",
+        [{ at: now, what: v.reason }, { at: Date.now(), what: !r.ok ? `The recovery did not complete (${r.error ?? "unknown error"}).` : hadSession ? "The agent process was restarted and the chat session was resumed." : "The agent process was restarted. No chat session was open." }]);
       return { action: "recover", reason: v.reason };
     } finally {
       this.healthBusy = false;
@@ -2150,18 +2713,191 @@ class Backend {
    *  so the conversation survives. This is the whole point of the increment - restart() alone would mint
    *  a fresh session on the next prompt and silently throw the thread away, which is worse than the stall
    *  it was fixing. A resume that fails leaves sessionId null, so the next prompt starts clean rather
-   *  than talking to a half-dead child (fail-closed: no session is better than a phantom one). */
-  private async healthRecover(): Promise<void> {
+   *  than talking to a half-dead child (fail-closed: no session is better than a phantom one).
+   *  P-RECOVER.1 (ADR-0385): the replacement is spawned only after the wedged child's whole process tree is
+   *  confirmed ended (start() waits on `retired`). If it cannot be confirmed, the recovery fails here with
+   *  nothing spawned and no session, so the interrupted turn is not re-sent beside the old agent. */
+  private async healthRecover(): Promise<{ ok: boolean; error?: string }> {
     const resumeId = this.sessionId;
     this.cancel({ forRecover: true }); // keep the resume marker: this is the harness acting, not the user
     this.restart({ preserveTurn: true });
-    if (!resumeId) return;
     try {
       await this.start();
-      await this.acp!.request("session/load", { sessionId: resumeId, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() });
-      this.sessionId = resumeId;
-    } catch {
+    } catch (e) {
+      console.error(`[recover] the replacement agent process could not be started: ${errText(e)}`);
+      return { ok: false, error: errText(e) };
+    }
+    return resumeId ? this.loadVerified(resumeId) : { ok: true };
+  }
+
+  /** P-ASYNCJOBS.1: omp gives its AsyncJobManager ONLY to the first live top-level session in a process
+   *  (sdk.ts: `!AsyncJobManager.instance()`); any later one gets none. Boot's ensureSession() opens an empty
+   *  session, so a chat resumed beside it had no manager: long bash never auto-backgrounds, `async: true`
+   *  fails, `task` runs synchronously, and the turn sits silent inside one tool call for as long as the
+   *  command takes (the "waiting on 1 task, quiet for 8 min" stall). Close the session this child already
+   *  holds, including a session/new still in flight, so the chat about to be loaded becomes the owner.
+   *  A replacement child (revival) is not `this.acp` yet and holds nothing, so it is left alone. */
+  private async releaseOtherSession(acp: ACPClient, keep: string): Promise<void> {
+    if (acp !== this.acp) return;
+    await this.sessioning?.catch(() => {});
+    const prev = this.sessionId;
+    if (prev && prev !== keep) await acp.request("session/close", { sessionId: prev }, { timeoutMs: SESSION_MS }).catch(() => {});
+  }
+
+  // -- P-RECOVER.1 (ADR-0385): self-recovery the user can see, and a report of every one ------------------
+
+  /** `session/load` on the live master, VERIFIED: the one resume primitive the watchdog, the on-demand
+   *  revival and the recovery API share. Success restores the id; failure leaves it null so the next prompt
+   *  starts clean (fail-closed, as P-HEALTH.2). omp replays the whole history as session/update during a
+   *  load; that is old conversation, so it is muted rather than streamed into a live turn's pane. */
+  private async loadVerified(id: string, acp: ACPClient | null = this.acp): Promise<{ ok: boolean; error?: string }> {
+    this.replaying = true;
+    try {
+      if (!acp) throw new Error("no agent process");
+      await this.releaseOtherSession(acp, id);
+      await acp.request("session/load", { sessionId: id, cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }, { timeoutMs: RESUME_MS });
+      this.sessionId = id;
+      console.error("[recover] chat session resumed on the agent process");
+      return { ok: true };
+    } catch (e) {
       this.sessionId = null;
+      console.error(`[recover] chat session could not be resumed: ${errText(e)}`);
+      return { ok: false, error: errText(e) };
+    } finally {
+      this.replaying = false;
+    }
+  }
+
+  /** Write one incident. Best-effort (the store returns null rather than throw). The log tail is the omp
+   *  children's shared stderr log, redacted by the store before it touches disk and never part of the
+   *  public issue body. `summary`/`events` are harness-authored: never prompts, transcripts or model text. */
+  private recordRecovery(kind: IncidentKind, outcome: IncidentOutcome, summary: string, events: IncidentEvent[]): string | undefined {
+    const tail = logTail(this.acpLogOverride ?? acpLogPath());
+    const meta = recordIncident(engineIncident(kind, outcome, summary, events, tail ? [{ name: "lucid-acp.log", text: tail }] : undefined), this.incidentsDir);
+    if (meta) console.error(`[recover] incident ${meta.id} recorded (${kind}, ${outcome})`);
+    return meta?.id;
+  }
+
+  /** A dead master is forgotten and start() replaces it, resuming the session it held. Everything that
+   *  belonged to the dead child goes with it: parked permissions are denied (fail-closed) and open calls
+   *  can never settle. No kill here: the child is already gone, and a pid it no longer owns is never
+   *  signalled. */
+  private dropDeadMaster(): void {
+    this.acp = null;
+    this.starting = null;
+    if (this.sessionId) this.reviveId = this.sessionId;
+    this.sessionId = null;
+    this.revivePending = true;
+    for (const fn of this.permPending.values()) fn(null);
+    this.permPending.clear(); this.pendingPerms = 0;
+    this.openCalls.clear();
+    this.aiLoc.clear();
+    console.error(`[recover] master agent process is gone; starting a replacement${this.reviveId ? " and resuming the same chat session" : ""}`);
+  }
+
+  /** The replacement child is up: resume the dead child's session and write the incident. */
+  private async finishRevival(acp: ACPClient): Promise<void> {
+    const at = Date.now();
+    const id = this.reviveId;
+    this.reviveId = null;
+    this.revivePending = false;
+    const r: { ok: boolean; error?: string } = id ? await this.loadVerified(id, acp) : { ok: true };
+    const after = !id ? "No chat session was open, so there was nothing to resume."
+      : r.ok ? "The same chat session was resumed on the new agent process."
+      : `The chat session could not be resumed (${r.error ?? "unknown error"}). The next message starts a new chat session.`;
+    this.recordRecovery("agent-child-failed", r.ok ? "recovered" : "not-recovered",
+      "The agent process behind the chat had exited. LUCID started a replacement the next time the chat needed it and tried to resume the same session.",
+      [{ at, what: "The chat agent process was found exited; a replacement was started." }, { at: Date.now(), what: after }]);
+  }
+
+  /** The replacement could not be spawned. One incident per revival; `reviveId` stays so the next start()
+   *  still resumes the session instead of silently starting fresh. */
+  private failRevival(e: unknown): void {
+    this.revivePending = false;
+    this.recordRecovery("agent-child-failed", "not-recovered",
+      "The agent process behind the chat had exited, and LUCID could not start a replacement. It will try again with the next message.",
+      [{ at: Date.now(), what: `Starting a replacement agent process failed (${errText(e)}).` }]);
+  }
+
+  /** Has the ladder spent its recovery budget and pinned at `quiet`? Mirrors health_watch's recoverOrStop:
+   *  a quiet verdict with the budget spent, on a frame where the ladder WOULD otherwise recover (a dead
+   *  child, or a turn silent past recoverMs with no tool call open). */
+  private ladderExhausted(v: HealthVerdict, i: HealthInput): boolean {
+    if (v.action !== "quiet" || i.episode.recovers < HEALTH_DEFAULTS.maxRecovers) return false;
+    return i.dead || (i.busy && i.openCalls === 0 && v.silentMs >= HEALTH_DEFAULTS.recoverMs);
+  }
+
+  /** Configure where recovery bookkeeping goes. dev.ts wires the last-session persister (it owns PORT);
+   *  tests point the incident directory and log at a temp dir. */
+  configureRecovery(opts: { persistSession?: (id: string) => void; incidentDir?: string; acpLog?: string }): void {
+    if (opts.persistSession) this.persistSession = opts.persistSession;
+    if (opts.incidentDir) this.incidentsDir = opts.incidentDir;
+    if (opts.acpLog) this.acpLogOverride = opts.acpLog;
+  }
+
+  /** POST /api/recovery/resume: a VERIFIED resume of `id` as the master session. Unlike loadSession (the
+   *  sidebar, which swallows a failed load), ok is true only when omp accepted the session/load. A failure
+   *  records a session-unrecoverable incident and leaves no session, so the next prompt starts fresh.
+   *  Serialized with the watchdog. `id` is shape-validated by the route. */
+  async resumeSession(id: string): Promise<{ ok: boolean; sessionId?: string; error?: string; incidentId?: string }> {
+    if (this.healthBusy) return { ok: false, error: "A recovery is already in progress. Try again in a moment." };
+    this.healthBusy = true;
+    const at = Date.now();
+    try {
+      this.clearTurnRecovery();
+      if (this.sessionId === id && this.acp && !this.acp.isDead) return { ok: true, sessionId: id };
+      let r: { ok: boolean; error?: string };
+      try {
+        await this.start();
+        r = await this.loadVerified(id);
+      } catch (e) {
+        this.sessionId = null;
+        r = { ok: false, error: errText(e) };
+      }
+      if (r.ok) return { ok: true, sessionId: id };
+      this.memoryRecallDelivered = false; // a fresh session gets the one-time recall again
+      const incidentId = this.recordRecovery("session-unrecoverable", "not-recovered",
+        "LUCID tried to reopen the previous chat session and the agent could not load it. A new chat session starts with the next message.",
+        [{ at, what: "Resuming the previous chat session was requested." }, { at: Date.now(), what: `The agent could not load it (${r.error ?? "unknown error"}).` }]);
+      return { ok: false, error: "The previous chat session could not be loaded. A new session will start with your next message.", ...(incidentId ? { incidentId } : {}) };
+    } finally {
+      this.healthBusy = false;
+      this.healthActivityAt = Date.now();
+    }
+  }
+
+  /** POST /api/recovery/recover: the window asks for the same in-place recovery the watchdog performs
+   *  (cancel, drop the child tree, respawn, session/load the same id), on demand. Serialized with the
+   *  watchdog through `healthBusy`. A live turn is marked exactly as the watchdog marks it, so its run
+   *  resumes in place (bounded by RESUME_MAX_PER_RUN). The user acting restores the watchdog's budget. */
+  async recoverMaster(): Promise<{ ok: boolean; sessionId: string | null; reason: string; incidentId?: string }> {
+    if (this.healthBusy) return { ok: false, sessionId: this.sessionId, reason: "A recovery is already in progress. Try again in a moment." };
+    this.healthBusy = true;
+    const now = Date.now();
+    const hadSession = this.sessionId !== null;
+    const wasDead = this.acp?.isDead ?? false;
+    try {
+      console.error("[recover] recovery of the master agent process requested from the window");
+      const reason = "Recovery was requested from the window, so the harness is cancelling and respawning the agent process in place.";
+      this.lastHealth = { action: "recover", reason, at: now };
+      try { this.listener?.({ type: "health", action: "recover", reason }); } catch { /* stream gone */ }
+      if (this.recoveryTurn?.running) {
+        this.recoverMark.set({ reason, at: now, silentMs: Math.max(0, now - this.healthActivityAt), pending: pendingSnapshot(this.openCalls, now).map((p) => p.label) });
+      }
+      const pending = this.healthRecover();
+      this.recovering = pending;
+      const r = await pending;
+      this.healthEpisode = newEpisode(Date.now());
+      const result = !r.ok ? `The agent process could not be recovered (${r.error ?? "unknown error"}).${hadSession ? " The next message starts a new chat session." : ""}`
+        : hadSession ? "The agent process was restarted and the chat session was resumed."
+        : "The agent process was restarted. No chat session was open.";
+      const incidentId = this.recordRecovery("agent-child-failed", r.ok ? "recovered" : "not-recovered",
+        "The chat stopped making progress and recovery was requested from the window. LUCID cancelled the turn, restarted the agent process, and tried to resume the same session.",
+        [{ at: now, what: `Recovery was requested from the window (agent process ${wasDead ? "had exited" : "was still running"}).` }, { at: Date.now(), what: result }]);
+      return { ok: r.ok, sessionId: this.sessionId, reason: result, ...(incidentId ? { incidentId } : {}) };
+    } finally {
+      this.healthBusy = false;
+      this.healthActivityAt = Date.now();
     }
   }
 
@@ -2205,7 +2941,9 @@ class Backend {
           // gets the same refusal as the chat spawn. Returning null degrades to the shared (also gated)
           // connection; it never becomes an ungated shortcut. Logged because the catch below is silent.
           if (!GATE) { console.error(`[acp:util] ${gateRefusal()}`); return null; }
-          const acp = spawned = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...(existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []), ...ompConfigArgs()], currentWorkspace());
+          // Security review residual: the util child inherits the engine env (global provider keys, credential
+          // env) and runs real tools, so it gets the same fail-closed redaction hook as master and lanes, last.
+          const acp = spawned = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...(existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []), ...(existsSync(VAULT_REDACT_EXT) ? ["-e", VAULT_REDACT_EXT] : []), ...ompConfigArgs()], currentWorkspace(), vaultRedactEnv({}));
           // A util completion is TEXT-ONLY: collect assistant text into the active sink, ignore everything
           // else (no tool calls, no permissions, no gate-block surfacing — that's the chat connection's job).
           acp.onNotify = (method: string, params: any) => {
@@ -2249,10 +2987,17 @@ class Backend {
       const deadline = deadlineSignal(COMPLETE_MS, opts.signal);
       try {
         await this.start();
+        // CUI lockdown: a throwaway util session starts on omp's DEFAULT model (a direct provider), so under
+        // lockdown the model is always pinned through the same governed clamp as a turn, or refused + audited.
+        const pin = this.completionModel(opts.model);
+        if (!pin.ok) {
+          emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "complete-lockdown", reason: (pin.error ?? "no allowed model").slice(0, 200), sessionId: this.sessionId ?? undefined });
+          return "";
+        }
         // P-KG-INGEST.4: prefer the DEDICATED util connection (true concurrency, never touches chat). If it
         // couldn't spawn, fall back to the shared connection with the ChatGate (chat preempts, max 1 extraction).
         const util = await this.startUtil();
-        const inner = { ...opts, signal: deadline.signal };
+        const inner = { ...opts, model: pin.model, signal: deadline.signal };
         return completionPath(!!util) === "dedicated" ? await this.completeOn(util!, system, user, inner) : await this.completeShared(system, user, inner);
       } catch { return ""; } // start()/startUtil() can now REJECT (timeout); an extraction failure is just "no facts"
       finally { deadline.dispose(); }
@@ -2274,7 +3019,10 @@ class Backend {
       const s: any = await acp.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }, { timeoutMs: SESSION_MS, signal });
       sid = s?.sessionId ?? s?.id ?? null;
       if (!sid) return "";
-      if (opts.model) await acp.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }, { timeoutMs: SESSION_MS, signal }).catch(() => {});
+      if (opts.model) {
+        const pinned = await acp.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }, { timeoutMs: SESSION_MS, signal }).then(() => true, () => false);
+        if (!pinned && this.asksageLocked()) return ""; // CUI lockdown: never fall back to omp's default (direct) model
+      }
       const IDLE = opts.idleMs ?? 60_000;
       const arm = () => { clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
       this.utilSink = (t) => { arm(); text += t; };
@@ -2315,7 +3063,10 @@ class Backend {
       const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }, { timeoutMs: SESSION_MS, signal });
       sid = s?.sessionId ?? s?.id ?? null;
       if (!sid) return "";
-      if (opts.model) await this.acp!.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }, { timeoutMs: SESSION_MS, signal }).catch(() => {});
+      if (opts.model) {
+        const pinned = await this.acp!.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }, { timeoutMs: SESSION_MS, signal }).then(() => true, () => false);
+        if (!pinned && this.asksageLocked()) return ""; // CUI lockdown: never fall back to omp's default (direct) model
+      }
       const IDLE = opts.idleMs ?? 60_000;
       const arm = () => { clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
       myListener = (e: ChatEvent) => { arm(); if (e.type === "token") text += e.text; };
@@ -2336,7 +3087,9 @@ class Backend {
       // Only restore if WE are still the active listener (a chat turn may have taken over a long overlap).
       const clobber = myListener !== null && this.listener !== myListener;
       this.turnDiag(`complete.shared clobberAvoided=${clobber} chars=${text.length}`);
-      if (!clobber) this.listener = prev;
+      // P-RECOVER.1: restore the previous listener only if it is still the live turn's sink. A turn cleared
+      // meanwhile (session switch) released its sink, and restoring it would re-create the wedge.
+      if (!clobber) this.listener = prev !== null && prev !== this.turnSink ? null : prev;
       if (sid) this.acp?.request("session/close", { sessionId: sid }, { timeoutMs: SESSION_MS }).catch(() => {});
     }
   }

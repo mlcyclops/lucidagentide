@@ -69,6 +69,15 @@ cfg.mac = {
   extendInfo: { ...(cfg.mac && cfg.mac.extendInfo), CFBundleDisplayName: "Lucid Creator" },
 };
 cfg.pkg = { ...cfg.pkg, mustClose: ["com.lucidcreator.desktop"] };
+// The enterprise msi (SCCM) + appx (Intune) packages (WINPKG, issue #345) are an AGENT deliverable. The
+// clone above copied both targets, with Agent's `LucidAgent-*` artifact names and Agent's appx
+// identityName, so a Creator build would have emitted Agent-identity packages into release-creator (and
+// the release-identity gate refuses exactly that, failing the whole Creator Windows leg). Creator ships
+// nsis + portable, so the two targets and their config blocks are dropped rather than renamed.
+const AGENT_ONLY_WIN_TARGETS = ["msi", "appx"];
+const winTargetName = (t) => (typeof t === "string" ? t : t && t.target);
+cfg.win = { ...cfg.win, target: (cfg.win.target || []).filter((t) => !AGENT_ONLY_WIN_TARGETS.includes(winTargetName(t))) };
+for (const name of AGENT_ONLY_WIN_TARGETS) delete cfg[name];
 cfg.nsis = { ...cfg.nsis, shortcutName: "Lucid Creator", artifactName: "LucidCreator-Setup.${ext}" };
 cfg.portable = { ...cfg.portable, artifactName: "LucidCreator-portable.${ext}" };
 cfg.linux = {
@@ -80,4 +89,8 @@ cfg.linux = {
 cfg.deb = { ...cfg.deb, artifactName: "lucidcreator-desktop_${version}_${arch}.${ext}" };
 cfg.rpm = { ...cfg.rpm, artifactName: "lucidcreator-desktop-${version}.${arch}.${ext}" };
 
-module.exports = cfg;
+// P-RELEASE.6 (ADR-0447): the same Azure Artifact Signing switch as the Agent Windows build. Unlike Agent's
+// electron-builder.win.cjs, this file is loaded on ALL THREE runners (and by release-identity-gate.ts), so
+// build-creator.yml sets LUCID_RELEASE_RUN only on the Windows runner (ADR-0459): the P-RELEASE.7 gate
+// guards Windows bytes, and a macOS or Linux job has no Windows signer to give it.
+module.exports = require("./win-signing.cjs").withWindowsSigning(cfg);
