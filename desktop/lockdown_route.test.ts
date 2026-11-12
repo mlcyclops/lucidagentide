@@ -18,7 +18,7 @@ import {
   type EnclaveProviderRef,
 } from "./lockdown_route.ts";
 
-const DGX: EnclaveProviderRef = { ompProvider: "dgx-spark", enabled: true, enclave: true, baseUrl: "http://10.0.0.21:8000/v1" };
+const DGX: EnclaveProviderRef = { ompProvider: "dgx-spark", enabled: true, enclave: true, baseUrl: "http://192.0.2.21:8000/v1" };
 const OLLAMA: EnclaveProviderRef = { ompProvider: "ollama-local", enabled: true, baseUrl: "http://localhost:11434/v1" };
 const DGX_OFF: EnclaveProviderRef = { ...DGX, ompProvider: "dgx-off", enabled: false, baseUrl: "http://10.0.0.99:8000/v1" };
 const PROVIDERS = [DGX, OLLAMA, DGX_OFF];
@@ -105,7 +105,7 @@ describe("lockdownVoiceVerdict", () => {
   test("lock on: loopback Whisper / Kokoro and an enclave-host dots.tts still work", () => {
     expect(lockdownVoiceVerdict(true, "stt", "whisper", "http://localhost:9000", hosts).allowed).toBe(true);
     expect(lockdownVoiceVerdict(true, "tts", "local-tts", "http://127.0.0.1:8880", hosts).allowed).toBe(true);
-    expect(lockdownVoiceVerdict(true, "tts", "dots-tts", "http://10.0.0.21:8084", hosts).allowed).toBe(true);
+    expect(lockdownVoiceVerdict(true, "tts", "dots-tts", "http://192.0.2.21:8084", hosts).allowed).toBe(true);
     expect(lockdownVoiceVerdict(true, "tts", "dots-tts", "http://[::1]:8084", hosts).allowed).toBe(true);
   });
   test("lock on: Whistle runs in-process with no URL at all, so it is allowed by construction (ADR-0432)", () => {
@@ -123,12 +123,12 @@ describe("lockdownEgressExempt", () => {
   test("under the ORG-managed lock only loopback is exempt (the enclave host is not)", () => {
     const managed = enclaveHostSet(PROVIDERS, true);
     expect(lockdownEgressExempt("http://127.0.0.1:8088/health", managed)).toBe(true);
-    expect(lockdownEgressExempt("http://10.0.0.21:8000/v1/models", managed)).toBe(false);
+    expect(lockdownEgressExempt("http://192.0.2.21:8000/v1/models", managed)).toBe(false);
   });
   test("loopback and enabled enclave hosts are not public egress", () => {
     expect(lockdownEgressExempt("http://localhost:5173/", hosts)).toBe(true);
     expect(lockdownEgressExempt("http://127.0.0.1:8088/health", hosts)).toBe(true);
-    expect(lockdownEgressExempt("http://10.0.0.21:8000/v1/models", hosts)).toBe(true);
+    expect(lockdownEgressExempt("http://192.0.2.21:8000/v1/models", hosts)).toBe(true);
   });
   test("public hosts, a disabled enclave host, a non-enclave LAN host and non-URL targets stay blocked", () => {
     expect(lockdownEgressExempt("https://example.com/", hosts)).toBe(false);

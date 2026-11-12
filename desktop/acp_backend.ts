@@ -252,6 +252,11 @@ const DRIFT_EXT = repoAsset("harness", "omp", "drift_extension.ts");
 // gate all live in dev.ts). MASTER ONLY, like the Drift tools. Self-skips unless LUCID_OPENFILM_LOOK_URL,
 // LUCID_OPENFILM_RENDER_URL and LUCID_OPENFILM_JOB_URL are all set, which is every non-Creator build.
 const OPENFILM_EXT = repoAsset("harness", "omp", "openfilm_extension.ts");
+// CREATOR-IMG2THREEJS (ADR-0562): img2threejs_probe / _assess / _validate / _generate / _state, the pure TypeScript
+// port of img2threejs (image to procedural three.js) with its strict-quality, pass-lock and checklist gates. No
+// engine route: the tools are in-process and touch only files under the workspace. MASTER ONLY. Self-skips unless
+// LUCID_IMG2THREEJS=1, which dev.ts sets in Creator builds only.
+const IMG2THREEJS_EXT = repoAsset("harness", "omp", "img2threejs_extension.ts");
 // P-HEALTH.3: a liveness beat while the model streams a tool call's arguments, which omp's ACP mapper never
 // forwards, so the stall watchdog stops reading a long write as a wedged session. Master AND lanes; each
 // beat names its omp session id, so the engine credits the right one. Fail-soft, self-skips when
@@ -1067,6 +1072,7 @@ class Backend {
         const designArgs = existsSync(DESIGN_EXT) ? ["-e", DESIGN_EXT] : []; // Design suite: master-only, see DESIGN_EXT
         const driftArgs = existsSync(DRIFT_EXT) ? ["-e", DRIFT_EXT] : []; // CREATOR-DRIFT: master-only, see DRIFT_EXT
         const openfilmArgs = existsSync(OPENFILM_EXT) ? ["-e", OPENFILM_EXT] : []; // CREATOR-OPENFILM: master-only, see OPENFILM_EXT
+        const img2threejsArgs = existsSync(IMG2THREEJS_EXT) ? ["-e", IMG2THREEJS_EXT] : []; // CREATOR-IMG2THREEJS: master-only, see IMG2THREEJS_EXT
         const ownArgs = [...(existsSync(CHECKIN_EXT) ? ["-e", CHECKIN_EXT] : []), ...(existsSync(COMMIT_GATE_EXT) ? ["-e", COMMIT_GATE_EXT] : [])]; // P-OWN.1
         // P-EVAL.4 (ADR-0318): last of the observability extensions. Loaded AFTER the gates so its hooks
         // see the same calls the gates already ruled on, and it can never sit between a tool and its gate.
@@ -1085,7 +1091,7 @@ class Backend {
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
         // P-BOOTPERF.1 (ADR-pending): probe omp off the event loop; the engine keeps serving meanwhile.
-        const ompArgv = [await ompBinAsync(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, "-e", AZURE_ENTRA, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...secretArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
+        const ompArgv = [await ompBinAsync(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, "-e", AZURE_ENTRA, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...secretArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...img2threejsArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
         // P-SANDBOX.16 (ADR-0397): a git the host never put on PATH (MinGit, scoop, GitHub Desktop's copy)
