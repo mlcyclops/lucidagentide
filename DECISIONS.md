@@ -23505,7 +23505,7 @@ Closing Preview invalidates pending checks and suppresses both its visible Agent
 
 ## ADR-0334 -- P-FLEET.DGX: the DGX fleet as one configured provider plus one agent registry, never as hostnames in code (2026-09-05)
 
-**Status:** Proposed -- NOT BUILT. Written by the TL187 DGX Loader's agent as a cross-repo handoff, to be
+**Status:** Superseded by ADR-0550 and ADR-0549: a box joins as a Remote Spoke and is chosen by capability in the hub picker; Herd's `machine add --profile` stays refused and points at Remote Spokes. Never built. Was: Proposed -- NOT BUILT. Written by the TL187 DGX Loader's agent as a cross-repo handoff, to be
 adopted increment by increment when a session picks it up. Wire contracts and the build-to-test path live
 in `DGX-FLEET-INTEGRATION.md` at this repo's root (pointed to from `HANDOFF.md`, Cross-repo briefs); the
 source of truth for the fleet side is the DGX Loader repo's ADRs 0001 to 0014. Numbering note: if another
@@ -26698,3 +26698,31 @@ Every change tightens: nothing that was refused or parked before runs now. Proof
 **Proof.** `make demo-P-RUNTIME-PY.1`: `desktop/build/python_floor.test.ts` (5), then a real fetch on Windows: python-win32-x64 verified and reported CPython 3.12.16 with OpenSSL 3.5.9. Live negative: the 3.12.13 tree of an installed 2.5.x copied into `runtimes/` stopped the build with "the bundled tree is CPython 3.12.13, but PY_VERSION is 3.12.16".
 
 **Consequences.** A local checkout with a cached 3.12.13 tree stops at the next build until `desktop/runtimes/python-*` is deleted (ADR-0547 refetches it automatically once both land). OpenSSL 3.5.10 (2026-11-10, five Lows) is in no python-build-standalone release yet; when one ships, move `PY_TAG` and raise `PY_OPENSSL_MIN` together. The add-on's Tahiti overlay carries the same bump as `0010-runtimes.patch` (add-on ADR-A102) and drops it when Tahiti pins a core release with this change. Relates to ADR-0225, ADR-0387, ADR-0547.
+
+## ADR-0550 -- P-GPU.JOINT: GPU boxes join as Remote Spokes; the Private AI Platform manages what runs on them (2026-11-10)
+
+**Status:** Accepted (owner approval 2026-11-10). Decision record; the follow-ups below are their own increments. Numbered after ADR-0548 (master) and ADR-0549 (the Herd close-out). Supersedes ADR-0334.
+
+**Context.** A review on 2026-11-10 of how LUCID reaches the DGX Spark class boxes found four overlaps:
+- Two GPU inventories: Remote Spokes report `capabilities.host` gpus and vram for every spoke, while the Private AI Platform (formerly DGX Loader, repo `TechLead187/tl187-dgx-loader`) keeps its own picture of the boxes and what is loaded on them.
+- Three model routes to the same vLLM: a spoke's model gate reaching the box on loopback, the platform's `lucid-model-endpoint` mailbox (platform ADR-0018), and a hand-made Local Provider pointed at a box address over an SSH forward or the VPN.
+- Two trust models: Remote Spokes identify a box by a root-signed certificate with approvals and the relay transport; the platform's mailboxes attest a box by `enclave: { kind: "dgx", host }` and reach it over SSH forwards.
+- ADR-0334 (P-FLEET.DGX, Fleet Profiles) was design only and never built, and Herd's `machine add --profile` already refuses it.
+The review also found stale facts in the docs: vLLM was written as port 8080, and a handoff said the box's vLLM rejects reasoning effort.
+
+**Decision.**
+1. Each GPU box joins LUCID as a Remote Spoke. Identity (root-signed certificate), trust, approvals, the relay transport and GPU reporting (`capabilities.host` gpus and vram) come from Remote Spokes. Nothing new reaches a box over SSH forwards or a bearer proxy.
+2. The Private AI Platform is the box-side manager: what runs on the box (load and unload models, the serve kinds LLM, TTS, cloned voice, avatar, CAD, vision), its telemetry, and the mailbox files it writes for LUCID. The wire contracts stay frozen: source `dgx-loader`, creator kinds `dgx-avatar`, `dgx-cad`, `dgx-vision`, provider id `dgx-spark` (ADR-0530).
+3. One model route per place work runs. Work on a spoke uses that spoke's LAN model route (its model gate reaching the box's vLLM on loopback). The workstation's own chat gets a DGX model only through the platform's `lucid-model-endpoint` mailbox (platform ADR-0018, Accepted for that purpose). A hand-made Local Provider pointed at a box address is not a supported route.
+4. Choosing a box by capability is the Remote Spokes hub picker ("Find a spoke for this work": classification, region, model local or frontier, free lanes). ADR-0334 is superseded by it. Herd's `machine add --profile` stays refused and tells the user to add the box as a spoke.
+5. The creator and voice mailboxes keep their SSH-forward transport until a later increment carries them over the spoke. That is the only remaining SSH path, and it is documented as such.
+6. Corrections: the box's vLLM listens on port 8000 (8080 is the platform's planned proxy); the current vLLM accepts reasoning effort, so a handoff saying `supportsReasoningEffort: false` is stale; code and tests use no person names or real box addresses (RFC 5737 documentation addresses such as 192.0.2.10 and 198.51.100.20, and neutral user names such as `operator`).
+
+**Consequences.**
+- One inventory (the spoke's capability record), one trust model (spoke certificates and approvals) and one route per place work runs. The platform stays the authority for what is loaded, not for who the box is.
+- `DGX-FLEET-INTEGRATION.md` and `docs/CREATOR-MODE.md` point here for the current direction; their SSH-forward steps describe the remaining mailbox path and history.
+- Tests and demos were moved to documentation addresses and neutral names (`192.0.2.21`, `192.0.2.8`, `operator@`).
+- The GLM preset's `supportsReasoningEffort: false` compat (P-LOCAL.5) is stale under item 6 and is corrected in its own increment.
+- Follow-ups: (a) carry the creator and voice mailboxes over the spoke and retire their SSH forwards; (b) feed the platform's telemetry (loaded models, serve kinds, GPU use) into the spoke's capability record so the hub picker sees it.
+
+Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-out on the 2.6.0 line, which supersedes ADR-0334 there), platform ADR-0018 and ADR-0033.

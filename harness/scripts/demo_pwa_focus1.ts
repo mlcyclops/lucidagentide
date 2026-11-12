@@ -109,7 +109,7 @@ console.log("== P-PWA-FOCUS.1: tap a lane, get its conversation (real CollabHost
 
 const relay = new FakeRelay();
 const host = new CollabHost(relay, {
-  header: { sessionId: "s1", title: "Refactor the parser", model: "claude-opus-4-8", hostName: "nick@desktop", startedAt: 1000 },
+  header: { sessionId: "s1", title: "Refactor the parser", model: "claude-opus-4-8", hostName: "operator@desktop", startedAt: 1000 },
   // The host contract asks the provider for a COPY: a guest must never be handed a reference the lane engine
   // still owns and mutates.
   laneTranscript: (laneId) => (LANE_REPLAY[laneId] ?? []).map((turn) => ({ ...turn })),
@@ -119,7 +119,7 @@ host.pushUserTurn("clean up the tokenizer"); // one master turn, so `welcome` re
 
 const phoneSink: LaneSink = { events: [], syncs: [], masterEvents: [] };
 const phonePipe = relay.attach(11);
-const phone = new CollabGuest(phonePipe, { name: "nick@phone", writeToken: null }, {
+const phone = new CollabGuest(phonePipe, { name: "operator@phone", writeToken: null }, {
   onEvent: (e) => { phoneSink.masterEvents.push(e); },
   onLaneEvent: (lane, e) => { phoneSink.events.push({ lane, event: e }); },
   onLaneSync: (lane, turns) => { phoneSink.syncs.push({ lane, turns }); },
@@ -128,7 +128,7 @@ phone.start();
 
 const tabletSink: LaneSink = { events: [], syncs: [], masterEvents: [] };
 const tabletPipe = relay.attach(12);
-const tablet = new CollabGuest(tabletPipe, { name: "nick@tablet", writeToken: null }, {
+const tablet = new CollabGuest(tabletPipe, { name: "operator@tablet", writeToken: null }, {
   onEvent: (e) => { tabletSink.masterEvents.push(e); },
   onLaneEvent: (lane, e) => { tabletSink.events.push({ lane, event: e }); },
   onLaneSync: (lane, turns) => { tabletSink.syncs.push({ lane, turns }); },
