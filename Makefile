@@ -1434,6 +1434,11 @@ demo-CREATOR-DRIFT: ## CREATOR-DRIFT (ADR-0430): CutWire Drift (GPL-3.0 Qt + FFm
 	$(BUN) run desktop/scripts/demo_creator_drift.ts
 	$(BUN) test $(TEST_IGNORES) harness/creator/drift_policy.test.ts desktop/creator_drift.test.ts desktop/creator_probe.test.ts desktop/creator_registry.test.ts harness/omp/drift_extension.test.ts desktop/renderer/creator_drift_view.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-P-KSYNC.L1
+demo-P-KSYNC.L1: ## P-KSYNC.L1 + L6 (#360): memory.fact journaling at the gate's single-writer seam. OFF unless LUCID_KSYNC_JOURNAL names a sync root (identity from LUCID_KSYNC_IDENTITY, refused inside the root); the producer rebuilds every Knowledge Envelope v1 conformance vector byte-for-byte (HKDF + ChaCha20-Poly1305 + Ed25519, canonical lines on disk); a promoted fact journals as body_v-null memory.fact; an unwritable root degrades to no-emit with the fact kept and the gate still blocking; the spec + vectors are sha256-pinned so a spec edit fails loudly.
+	$(BUN) run harness/scripts/demo_pksync_l1.ts
+	$(BUN) test $(TEST_IGNORES) harness/knowledge/envelope.test.ts harness/knowledge/spec_pin.test.ts harness/security/gate.failclosed.test.ts
+
 .PHONY: demo-CREATOR-WHISTLE
 demo-CREATOR-WHISTLE: ## CREATOR-WHISTLE (ADR-0432): word timing measured IN-PROCESS by the pinned Whistle model (Needle wasm, no socket import): the three assets verify by size and sha256 and a one-byte flip refuses the load by name and both hashes, the real model transcribes a 16 kHz fixture at 90%+ token match with monotonic word times, a clip over 30 s is windowed with no word split, one substituted word becomes the ONE derived item capped at 0.7, load and transcribe make zero network attempts, a hot CPU refuses the align job with the measured reason, confidence 1.2 is rejected, and a scratch Creator engine's POST /api/creator/align returns a validated, model-pinned document the editor paints with measured chips. Fails (exit 1) when the assets are missing
 	$(BUN) run harness/scripts/demo_creator_whistle.ts
