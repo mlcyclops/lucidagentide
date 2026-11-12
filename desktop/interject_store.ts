@@ -56,8 +56,9 @@ export function addInterject(target: string, text: string, state?: { running: bo
 
 /** The marker a carried note opens with. Operator origin like the tool-result MARKER in
  *  harness/omp/interject_extension.ts, and it says WHEN the note was written so the model does not
- *  mistake an older note for part of the request that follows. */
-const CARRIED_MARKER = "[LUCID OPERATOR NOTE - sent while no tool step was running, so it is delivered with this prompt; weigh it, then handle the request below]";
+ *  mistake an older note for part of the request that follows. Exported so sessions.ts can keep a carried
+ *  note out of the session title and the search text (P-SESS-SEARCH.1). */
+export const CARRIED_MARKER = "[LUCID OPERATOR NOTE - sent while no tool step was running, so it is delivered with this prompt; weigh it, then handle the request below]";
 
 /** ADR-0414: drain every note still waiting for `target` into the block that opens its next prompt
  *  ("" when none). Called by the prompt paths (acp_backend for "master", fleet_lanes for a lane) at the

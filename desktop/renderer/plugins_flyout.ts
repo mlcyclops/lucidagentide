@@ -4,11 +4,17 @@
 // desktop/renderer/plugins_flyout.ts - P-PLUGINS.1 (ADR-0461): the Plugins drawer.
 //
 // A drawer that slides out of the Preview panel's left edge over the chat, `min(1180px, 88vw)` wide, with a
-// PREMIUM | FREE toggle (default PREMIUM, remembered) and techlead187.com-style cards. It replaces the ADR-0158
+// PREMIUM | FREE | INSTALLED toggle (default PREMIUM, remembered) and techlead187.com-style cards. It replaces the ADR-0158
 // `#scrim` marketplace modal. Every card's state comes from plugin_catalog.ts `decideCardAction`; this module
 // only renders it and runs the side effects through injected dependencies (the market provider for sign-in,
 // checkout, entitlement and government access; the engine bridge for install / start / license), so app.ts
 // keeps the singletons and this file has no hidden globals.
+//
+// P-PLUGINS.7 (ADR-0505): a third tab, INSTALLED, lists what is on this machine and is the one place a private
+// plugin (a .lplugin.zip the user picked) is installed, opened and removed. Installing is two explicit steps:
+// the engine inspects the file and installs nothing, the user reviews it on a sheet (an unsigned package needs
+// the unsigned box ticked), then the engine installs exactly the reviewed bytes. Opening uses the same
+// runtime start and plugin Preview tab as a store plugin.
 //
 // Media is bundled under assets/plugins/ (offline). A loop only gets its `src` while its card is on screen
 // (IntersectionObserver), and never under prefers-reduced-motion: then the poster is the picture.
@@ -17,13 +23,15 @@ import { esc } from "./format.ts";
 import { icon, iconBody } from "./icons.ts";
 import {
   BLACK_ARROW, FREE_PLUGINS, PLUGIN_LICENSE_NAME, PLUGIN_LICENSE_URL, PLUGIN_PRICE_LABEL, PREMIUM_PLUGINS,
-  cardActionLabel, decideCardAction, fmtDownloads, matchesQuery, parseCageOrUei, parseTierPref, sortFree,
-  type CardAction, type FreePlugin, type PluginMedia, type PluginTier, type PosterTone, type PremiumPlugin, type SoldPlugin,
+  cardActionLabel, decideCardAction, fmtDownloads, matchesQuery, parseCageOrUei, parseTierPref, provenanceChip, sortFree, storeInstalledVersion,
+  type CardAction, type DrawerTab, type FreePlugin, type PluginMedia, type PosterTone, type PremiumPlugin, type SoldPlugin,
 } from "./plugin_catalog.ts";
 import { shouldResumeCheckout, type PendingCheckout } from "./pack_cta.ts";
 import type { AuthState, Entitlement, GovAccessStatus } from "../../harness/market/entitlement.ts";
 import type { EntitlementProvider } from "./market_gate.ts";
-import type { InstalledPluginView, PluginGate, PluginInstallView, PluginLicenseView, PluginStartView, PluginsListView } from "./bridge.ts";
+import type {
+  InstalledPluginView, PluginActionView, PluginFileInspectView, PluginGate, PluginInstallView, PluginLicenseView, PluginStartView, PluginsListView,
+} from "./bridge.ts";
 import type { ToastOpts } from "./ui.ts";
 
 export const TIER_PREF_KEY = "lucid.plugins-tier";
@@ -154,13 +162,102 @@ export function licenseTextSheetHtml(name: string, version: string, text: string
   </div>`;
 }
 
-export function drawerShellHtml(tier: PluginTier, query: string): string {
-  const tab = (t: PluginTier, label: string) =>
+// ── the INSTALLED tab (ADR-0505) ───────────────────────────────────────────────────────────────────
+
+const KIND_LABEL: Record<InstalledPluginView["kind"], string> = { web: "Web app", server: "Local server", daemon: "Local program" };
+
+function installedDesc(p: InstalledPluginView): string {
+  if (p.source === "catalog") return "From the LUCID store. Updates come from its card on the Premium tab.";
+  return p.signed
+    ? "Installed from a file you chose, signed by TECHLEAD 187 LLC. Never updated automatically: install a newer file to update it."
+    : "Installed from a file you chose. LUCID cannot confirm who made it. It runs in the same sandbox as store plugins and is never updated automatically.";
+}
+
+/** The footer of an Installed row: Open for every plugin, Remove for a private one (a store plugin is managed
+ *  from its card). Re-rendered alone on every state change. */
+export function installedFootHtml(p: InstalledPluginView, note: CardNote | null): string {
+  const state = p.state === "running" ? "Running" : p.state === "starting" ? "Starting" : p.state === "error" ? "Stopped with an error" : "Not running";
+  const remove = p.source === "private" ? `<button type="button" class="plg-lic" data-plg-iremove="${esc(p.id)}">Remove</button>` : "";
+  return `<div class="plg-foot"><span class="plg-meta">${esc(state)}</span>${remove}<button type="button" class="plg-act" data-kind="open" data-plg-iopen="${esc(p.id)}">Open</button></div>`
+    + (note ? `<p class="plg-note" data-tone="${note.tone}" role="status">${esc(note.text)}</p>` : "");
+}
+
+export function installedCardHtml(p: InstalledPluginView, note: CardNote | null): string {
+  const chip = provenanceChip(p);
+  const tone: PosterTone = p.source === "catalog" ? "green" : p.signed ? "cyan" : "amber";
+  return `<article class="plg-card" data-plg-card="${esc(p.id)}" data-plg-source="${p.source}">${shotHtml(p.id, p.name, { loop: false, poster: "generated", glyph: "plugins", tone })}
+    <div class="plg-cbody">
+      <b class="plg-name">${esc(p.name)}</b>
+      <span class="plg-kind">${esc(KIND_LABEL[p.kind])} ${esc(p.version)}<span class="plg-chip" data-status="${chip.tone === "warn" ? "unsigned" : "verified"}">${esc(chip.label)}</span></span>
+      <p class="plg-pitch">${esc(installedDesc(p))}</p>
+      <div class="plg-foot-slot" data-plg-ifoot="${esc(p.id)}">${installedFootHtml(p, note)}</div>
+    </div>
+  </article>`;
+}
+
+/** The whole INSTALLED tab: the explicit install-from-file entry, then every installed plugin. */
+export function installedBodyHtml(list: readonly InstalledPluginView[], query: string, notes: ReadonlyMap<string, CardNote>, canPick: boolean): string {
+  const pick = canPick
+    ? `<button type="button" class="plg-act" data-kind="install" data-plg-file>${icon("folder", 13)}Install from file</button>`
+    : `<span class="plg-meta">Installing from a file needs the LUCID desktop app.</span>`;
+  const lede = `<div class="plg-inst-head"><p class="plg-lede">Plugins on this machine. Store plugins install and update from their cards. A private plugin is a .lplugin.zip you install here yourself: it runs in the same sandbox as a store plugin, is marked when it is unsigned, and is never updated automatically.</p>${pick}</div>`;
+  const shown = list.filter((p) => matchesQuery([p.name, p.id, KIND_LABEL[p.kind], provenanceChip(p).label], query));
+  if (!list.length) return lede + `<p class="plg-empty">No plugins are installed yet.</p>`;
+  if (!shown.length) return lede + `<p class="plg-empty">No plugins match "${esc(query.trim())}".</p>`;
+  return lede + `<div class="plg-grid">${shown.map((p) => installedCardHtml(p, notes.get(p.id) ?? null)).join("")}</div>`;
+}
+
+type InspectedFile = Extract<PluginFileInspectView, { ok: true }>;
+
+const PERMISSION_TEXT: Record<string, string> = {
+  "network:loopback": "Talk to programs on this machine",
+  "network:internet": "Reach the internet",
+  "fs:plugin-data": "Keep its own data folder",
+};
+
+/** The review sheet before a private install. An unsigned package says so first, and Install stays disabled
+ *  until the unsigned box is ticked; a signed one needs only the click. */
+export function privateInstallSheetHtml(v: InspectedFile): string {
+  const perms = v.permissions.length ? v.permissions.map((p) => `<li>${esc(PERMISSION_TEXT[p] ?? p)}</li>`).join("") : "<li>No extra permissions</li>";
+  const warn = v.signed ? "" : `<div class="plg-warn" role="alert">${icon("shield", 16)}<p><b>This plugin is not signed.</b> LUCID cannot confirm who made it or that nobody changed it. The publisher name below is what the package claims. It still runs in the plugin sandbox: its own local web address, no access to your provider keys or other settings, and the same security scan as store plugins. Install it only if you got the file from someone you trust.</p></div>`;
+  const accept = v.signed ? "" : `<label class="plg-accept"><input type="checkbox" data-plg-unsigned-ok> I understand this plugin is unsigned and want to install it.</label>`;
+  return `<div class="plg-sheet" role="dialog" aria-modal="true" aria-labelledby="plgSheetTitle">
+    <div class="plg-sheet-h"><b id="plgSheetTitle">Install ${esc(v.name)} ${esc(v.version)}</b><button type="button" class="set-close" data-plg-sheet-close aria-label="Close">${icon("close", 15)}</button></div>
+    ${warn}
+    <ul class="plg-sheet-list">
+      <li>Plugin id: ${esc(v.id)}</li>
+      <li>Publisher: ${esc(v.publisher)}${v.signed ? " (signature verified)" : " (not verified)"}</li>
+      <li>${esc(KIND_LABEL[v.kind])}${v.hasMcp ? ", adds tools the agent can call while it runs" : ""}</li>
+      ${v.replaces ? `<li>Replaces the installed version ${esc(v.replaces)}; its data folder is kept.</li>` : ""}
+    </ul>
+    <p class="plg-sheet-sub">It asks to:</p>
+    <ul class="plg-sheet-list">${perms}</ul>
+    ${accept}
+    <div class="plg-form-row"><button type="button" class="btn-mini" data-plg-sheet-close>Cancel</button><button type="button" class="plg-act" data-kind="install" data-plg-fileinstall${v.signed ? "" : " disabled"}>Install</button></div>
+  </div>`;
+}
+
+/** Confirm removing a private plugin. Its data folder stays unless the box is ticked. */
+export function removeSheetHtml(p: InstalledPluginView): string {
+  return `<div class="plg-sheet" role="dialog" aria-modal="true" aria-labelledby="plgSheetTitle">
+    <div class="plg-sheet-h"><b id="plgSheetTitle">Remove ${esc(p.name)}?</b><button type="button" class="set-close" data-plg-sheet-close aria-label="Close">${icon("close", 15)}</button></div>
+    <p class="plg-sheet-price">It stops if it is running, and its files are deleted from this machine.</p>
+    <label class="plg-accept"><input type="checkbox" data-plg-remove-data> Also delete its data folder</label>
+    <div class="plg-form-row"><button type="button" class="btn-mini" data-plg-sheet-close>Cancel</button><button type="button" class="plg-act" data-kind="remove" data-plg-remove-go="${esc(p.id)}">Remove</button></div>
+  </div>`;
+}
+
+const TABS: readonly { tab: DrawerTab; label: string }[] = [
+  { tab: "premium", label: "Premium" }, { tab: "free", label: "Free" }, { tab: "installed", label: "Installed" },
+];
+
+export function drawerShellHtml(tier: DrawerTab, query: string): string {
+  const tab = (t: DrawerTab, label: string) =>
     `<button type="button" role="tab" id="plgTab-${t}" aria-controls="plgBody" aria-selected="${tier === t}" tabindex="${tier === t ? 0 : -1}" data-plg-tier="${t}">${label}</button>`;
   return `<div class="plg-drawer" id="plgDrawer" role="dialog" aria-modal="true" aria-labelledby="plgTitle">
     <div class="plg-head">
       <div class="plg-title" id="plgTitle">${icon("plugins", 17)}<span>Plugins</span></div>
-      <div class="plg-seg" role="tablist" aria-label="Plugin tier">${tab("premium", "Premium")}${tab("free", "Free")}</div>
+      <div class="plg-seg" role="tablist" aria-label="Plugin tier">${TABS.map((t) => tab(t.tab, t.label)).join("")}</div>
       <input class="plg-search" id="plgSearch" type="search" value="${esc(query)}" placeholder="Search plugins" aria-label="Search plugins" autocomplete="off" spellcheck="false">
       <button type="button" class="set-close" data-plg-close aria-label="Close plugins">${icon("close", 16)}</button>
     </div>
@@ -176,6 +273,11 @@ export interface PluginsFlyoutDeps {
   beginSignIn: () => { opened: boolean; signedIn: boolean; reason?: string };
   pluginsList: () => Promise<PluginsListView | null>;
   installFromUrl: (url: string, expectId: string) => Promise<PluginInstallView | null>;
+  /** The native file picker; absent outside the desktop app (the Installed tab then cannot pick a file). */
+  pickFile?: (opts: { title: string; filters: { name: string; extensions: string[] }[] }) => Promise<string | null>;
+  inspectFile: (path: string) => Promise<PluginFileInspectView | null>;
+  installFile: (input: { path: string; sha256: string; acceptUnsigned: boolean }) => Promise<PluginInstallView | null>;
+  uninstall: (id: string, keepData: boolean) => Promise<PluginActionView | null>;
   start: (id: string) => Promise<PluginStartView | null>;
   license: (id: string) => Promise<PluginLicenseView | null>;
   openExternal: (url: string) => void;
@@ -192,7 +294,7 @@ export interface PluginsFlyoutDeps {
 
 export interface PluginsFlyout {
   /** Open (or switch tier when already open). Focus returns to `from` on close (default: the focused element). */
-  open(tier?: PluginTier, from?: HTMLElement | null): void;
+  open(tier?: DrawerTab, from?: HTMLElement | null): void;
   close(): void;
   /** The toolbar button: open when closed, close when open. Focus returns to `opener` on close. */
   toggle(opener?: HTMLElement | null): void;
@@ -211,6 +313,7 @@ const GATE_TEXT: Record<PluginGate, string> = {
   authenticode: "A program in the package is not signed by TECHLEAD 187 LLC",
   scan: "The security scan stopped the package",
   download: "The package could not be downloaded",
+  private: "This package cannot be installed from a file",
 };
 
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -218,7 +321,9 @@ const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), textar
 export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
   let root: HTMLElement | null = null;
   let opener: HTMLElement | null = null;
-  let tier: PluginTier = parseTierPref(deps.storage.getItem(TIER_PREF_KEY));
+  let tier: DrawerTab = parseTierPref(deps.storage.getItem(TIER_PREF_KEY));
+  /** The file on the private-install review sheet: its path and exactly what the engine saw in it. */
+  let reviewing: { path: string; view: InspectedFile } | null = null;
   let query = "";
   let videos: IntersectionObserver | null = null;
   const ents = new Map<string, Entitlement | null>();
@@ -239,7 +344,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
       signedIn: deps.user().signedIn,
       entitlement: ents.get(p.id) ?? null,
       gov,
-      installedVersion: installed.get(p.id)?.version ?? null,
+      installedVersion: storeInstalledVersion(installed.get(p.id)),
       busy: busy.has(p.id),
       nowIso: new Date(deps.now()).toISOString(),
     });
@@ -250,10 +355,14 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     paintFoot(id);
   }
 
+  /** Repaint one card's footer: a store card on PREMIUM, or an Installed row (both can carry a note). */
   function paintFoot(id: string): void {
     const p = premium(id);
     const slot = root?.querySelector(`[data-plg-foot="${CSS.escape(id)}"]`);
-    if (p && slot) slot.innerHTML = premiumFootHtml(p, actionFor(p), installed.has(id), notes.get(id) ?? null);
+    if (p && slot) slot.innerHTML = premiumFootHtml(p, actionFor(p), storeInstalledVersion(installed.get(id)) !== null, notes.get(id) ?? null);
+    const row = installed.get(id);
+    const islot = root?.querySelector(`[data-plg-ifoot="${CSS.escape(id)}"]`);
+    if (row && islot) islot.innerHTML = installedFootHtml(row, notes.get(id) ?? null);
   }
 
   function paintGov(): void {
@@ -270,9 +379,10 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
       return `<p class="plg-lede">Integrations that are free with LUCID Agent: the ones already built in, and the ones on the way.</p>`
         + (cards.length ? `<div class="plg-grid">${cards.join("")}</div>` : empty);
     }
+    if (tier === "installed") return installedBodyHtml([...installed.values()], query, notes, !!deps.pickFile);
     const section = (s: "civilian" | "government") => PREMIUM_PLUGINS
       .filter((p) => p.section === s && matchesQuery([p.name, p.kicker, p.pitch, p.lucid, p.sale === "link" ? (p.partner ?? "") : ""], query))
-      .map((p) => premiumCardHtml(p, actionFor(p), installed.has(p.id), notes.get(p.id) ?? null));
+      .map((p) => premiumCardHtml(p, actionFor(p), storeInstalledVersion(installed.get(p.id)) !== null, notes.get(p.id) ?? null));
     const civ = section("civilian"), govCards = section("government");
     if (!civ.length && !govCards.length) return empty;
     return `<p class="plg-lede">Full LUCID apps that install in one click and open in a Preview tab. ${PLUGIN_PRICE_LABEL} each, one time, under the <button type="button" class="plg-inline" data-plg-ext="${esc(PLUGIN_LICENSE_URL)}">${esc(PLUGIN_LICENSE_NAME)}</button>.</p>`
@@ -324,10 +434,10 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     for (const p of list?.plugins ?? []) installed.set(p.id, p);
     sold.forEach((p, i) => ents.set(p.id, entList[i] ?? null));
     gov = govStatus;
-    paintAllFeet();
+    if (tier === "installed") render(); else paintAllFeet();
   }
 
-  function setTier(t: PluginTier): void {
+  function setTier(t: DrawerTab): void {
     if (t === tier) return;
     tier = t;
     try { deps.storage.setItem(TIER_PREF_KEY, t); } catch { /* private mode: the choice lasts this session */ }
@@ -368,11 +478,12 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
       else if (!e.shiftKey && (document.activeElement === last || !inside)) { e.preventDefault(); first.focus(); }
       return;
     }
-    // Arrow keys move between the two tier tabs (the WAI-ARIA tabs pattern).
+    // Arrow keys move between the tabs, wrapping at either end (the WAI-ARIA tabs pattern).
     const tab = (e.target as HTMLElement).closest?.("[data-plg-tier]");
     if (tab && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
       e.preventDefault();
-      setTier(tier === "premium" ? "free" : "premium");
+      const at = TABS.findIndex((x) => x.tab === tier);
+      setTier(TABS[(at + (e.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length]!.tab);
       (root.querySelector(`[data-plg-tier="${tier}"]`) as HTMLElement | null)?.focus();
     }
   }
@@ -402,7 +513,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     (focusables(scrim.querySelector(".plg-sheet") as HTMLElement)[0] ?? scrim).focus();
   }
 
-  function open(t?: PluginTier, from?: HTMLElement | null): void {
+  function open(t?: DrawerTab, from?: HTMLElement | null): void {
     if (t) setTier(t);
     if (root) return;
     opener = from ?? opener ?? (document.activeElement as HTMLElement | null);
@@ -457,6 +568,10 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
       const go = root?.querySelector("[data-plg-checkout]") as HTMLButtonElement | null;
       if (go) go.disabled = !t.checked;
     }
+    if (t.matches("[data-plg-unsigned-ok]")) {
+      const go = root?.querySelector("[data-plg-fileinstall]") as HTMLButtonElement | null;
+      if (go) go.disabled = !t.checked;
+    }
   }
 
   function onClick(e: MouseEvent): void {
@@ -474,7 +589,60 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     if (hit("[data-plg-signin]")) { signIn(null); return; }
     if (hit("[data-plg-govopen]")) { openGovForm(); return; }
     if (hit("[data-plg-govcancel]")) { govFormOpen = false; govError = ""; paintGov(); return; }
+    if (hit("[data-plg-file]")) { void reviewFile(); return; }
+    if (hit("[data-plg-fileinstall]")) { void installReviewed(); return; }
+    if ((el = hit("[data-plg-iopen]"))) { const p = installed.get(el.dataset.plgIopen!); if (p) void openPlugin(p); return; }
+    if ((el = hit("[data-plg-iremove]"))) { const p = installed.get(el.dataset.plgIremove!); if (p?.source === "private") showSheet(removeSheetHtml(p)); return; }
+    if ((el = hit("[data-plg-remove-go]"))) { void removePrivate(el.dataset.plgRemoveGo!); return; }
     if ((el = hit("[data-plg-act]"))) void act(el.dataset.plgAct!);
+  }
+
+  /** Step one of a private install: pick a file, let the engine say what it is, show the review sheet. */
+  async function reviewFile(): Promise<void> {
+    const path = await deps.pickFile?.({ title: "Choose a LUCID plugin package (.lplugin.zip)", filters: [{ name: "LUCID plugin", extensions: ["zip"] }] }).catch(() => null);
+    if (!path) return;
+    const v = await deps.inspectFile(path).catch(() => null);
+    if (!v) { deps.toast({ tone: "danger", title: "The plugin was not checked", desc: "The install service did not answer. Is the LUCID engine running?", timeout: 6000 }); return; }
+    if (!v.ok) {
+      deps.toast({ tone: "danger", title: "This plugin cannot be installed", desc: `${GATE_TEXT[v.gate]}: ${v.reason}`, timeout: 0, actions: [{ label: "OK" }] });
+      return;
+    }
+    reviewing = { path, view: v };
+    showSheet(privateInstallSheetHtml(v));
+  }
+
+  /** Step two: install exactly the reviewed bytes. The unsigned box is read from the sheet itself. */
+  async function installReviewed(): Promise<void> {
+    const r0 = reviewing;
+    if (!r0) return;
+    const ok = root?.querySelector("[data-plg-unsigned-ok]") as HTMLInputElement | null;
+    const acceptUnsigned = r0.view.signed ? false : ok?.checked === true;
+    if (!r0.view.signed && !acceptUnsigned) return;
+    reviewing = null;
+    closeSheet();
+    const { id, name } = r0.view;
+    const r = await deps.installFile({ path: r0.path, sha256: r0.view.sha256, acceptUnsigned }).catch(() => null);
+    if (!r) { deps.toast({ tone: "danger", title: `${name} was not installed`, desc: "The install service did not answer. Is the LUCID engine running?", timeout: 6000 }); return; }
+    if (!r.ok) {
+      deps.toast({ tone: "danger", title: `${name} was not installed`, desc: `${GATE_TEXT[r.gate]}: ${r.reason}`, timeout: 0, actions: [{ label: "OK" }] });
+      return;
+    }
+    await refresh();
+    setNote(id, { tone: r.signed ? "ok" : "info", text: `Installed version ${r.version}${r.signed ? "" : ", unsigned"}.` });
+    const row = installed.get(id);
+    deps.toast({ tone: "ok", title: `${name} is installed`, desc: "It runs on this machine. Open it in a Preview tab.", timeout: 6000, ...(row ? { actions: [{ label: "Open", kind: "ok", run: () => void openPlugin(row) }] } : {}) });
+  }
+
+  async function removePrivate(id: string): Promise<void> {
+    const p = installed.get(id);
+    if (p?.source !== "private") return;
+    const keepData = !(root?.querySelector("[data-plg-remove-data]") as HTMLInputElement | null)?.checked;
+    closeSheet();
+    const r = await deps.uninstall(id, keepData).catch(() => null);
+    if (!r?.ok) { setNote(id, { tone: "danger", text: `${p.name} was not removed${r && !r.ok ? `: ${r.error}` : "."}` }); return; }
+    notes.delete(id);
+    await refresh();
+    deps.toast({ tone: "ok", title: `${p.name} was removed`, desc: keepData ? "Its data folder was kept." : "Its data folder was deleted too.", timeout: 5000 });
   }
 
   function openGovForm(): void {
@@ -564,7 +732,9 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     }
   }
 
-  async function openPlugin(p: PremiumPlugin): Promise<void> {
+  /** Start any installed plugin (store or private) through the runtime and show it in its plugin Preview tab:
+   *  the one sanctioned way a plugin's loopback URL reaches the Preview panel. */
+  async function openPlugin(p: { id: string; name: string }): Promise<void> {
     setNote(p.id, { tone: "info", text: `Starting ${p.name}.` });
     const r = await deps.start(p.id).catch(() => null);
     if (r?.ok) {
@@ -579,7 +749,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
   async function showLicense(id: string): Promise<void> {
     const p = premium(id);
     if (!p) return;
-    if (!installed.has(id)) { deps.openExternal(PLUGIN_LICENSE_URL); return; }
+    if (storeInstalledVersion(installed.get(id)) === null) { deps.openExternal(PLUGIN_LICENSE_URL); return; }
     const v = await deps.license(id).catch(() => null);
     if (!v?.ok || !v.text) { deps.openExternal(PLUGIN_LICENSE_URL); return; }
     showSheet(licenseTextSheetHtml(p.name, v.version ?? installed.get(id)?.version ?? "", v.text));

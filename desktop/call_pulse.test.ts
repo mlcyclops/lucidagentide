@@ -87,6 +87,22 @@ describe("PulseTracker + livenessVerdict", () => {
     expect(verdict(t, now + PULSE_SAMPLE_MS).state).toBe("working");
   });
 
+  // P-STUCK-SHOW.1 (ADR-0519): the "might be stuck" warning starts at half the threshold, never earlier, so a
+  // short network wait stays an ordinary "working" line in the quiet default.
+  test("a call flat for half the threshold might be stuck; shorter flatness carries no warning", () => {
+    const t = new PulseTracker();
+    const half = Math.ceil(PULSE_STUCK_MS / 2 / PULSE_SAMPLE_MS);
+    let now = feed(t, CALL + 30_000, half, () => work(proc(40, 10, "node.exe", CALL + 500)));
+    const early = verdict(t, now);
+    expect(early.state).toBe("working");
+    expect(early.flatMs).toBeUndefined();
+    now = feed(t, now + PULSE_SAMPLE_MS, 1, () => work(proc(40, 10, "node.exe", CALL + 500)));
+    const warn = verdict(t, now);
+    expect(warn.state).toBe("working");
+    expect(warn.flatMs).toBeGreaterThanOrEqual(PULSE_STUCK_MS / 2);
+    expect(warn.label.startsWith("might be stuck: no activity for")).toBe(true); // leads, so an ellipsized line keeps it
+  });
+
   test("where counters cannot be read (POSIX), nothing is ever marked stuck", () => {
     const t = new PulseTracker();
     const now = feed(t, CALL + 30_000, 60, () => ({ procs: [proc(40, 10, "node", CALL + 500)], measurable: false }));

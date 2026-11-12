@@ -17,9 +17,12 @@
 
 import type { LaneStatus } from "./bridge.ts";
 import type { OrbitMode } from "./orbit_layout.ts";
+import type { RemoteTone } from "./remote_spokes_model.ts";
 
+/** What a line shows: a local lane's status (or P-STUCK-SHOW.1's likely-stuck), or a remote spoke's tone. */
+export type SpokeStatus = LaneStatus | "likely-stuck" | `remote-${RemoteTone}`;
 /** One spoke: the card's offset from the stage center (orbitSlots' x, y) and what its line shows. */
-export interface OrbitSpoke { x: number; y: number; status: LaneStatus; promoted: boolean }
+export interface OrbitSpoke { x: number; y: number; status: SpokeStatus; promoted: boolean }
 /** One decorative ring: ellipse radii around the stage center. */
 export interface OrbitRing { rx: number; ry: number }
 export interface OrbitScene { spokes: readonly OrbitSpoke[]; rings: readonly OrbitRing[] }
@@ -34,18 +37,29 @@ export interface OrbitCanvasHandle {
 
 /** How a status line moves: a dash that flows outward (px per second), an opacity pulse, or nothing. */
 type Motion = { kind: "flow"; pxPerSec: number } | { kind: "pulse"; periodMs: number; lo: number } | { kind: "none" };
-type Paint = "lineStrong" | "line" | "cyan" | "amber" | "red" | "green";
+type Paint = "lineStrong" | "line" | "cyan" | "amber" | "red" | "green" | "blue";
 export interface SpokeStyle { paint: Paint; alpha: number; width: number; dash: readonly number[]; motion: Motion }
 
-// The fleet grid's state language, identical to the retired .orbit-line[data-status] rules.
-const STYLE: Record<LaneStatus, SpokeStyle> = {
+const STILL: Motion = { kind: "none" };
+const REMOTE_DASH = [3, 6] as const;
+// The fleet grid's state language, identical to the retired .orbit-line[data-status] and .orbit-line.remote.rs-* rules.
+const STYLE: Record<SpokeStatus, SpokeStyle> = {
   starting: { paint: "lineStrong", alpha: 0.6, width: 1.5, dash: [2, 6], motion: { kind: "flow", pxPerSec: 16 / 1.4 } },
   working: { paint: "cyan", alpha: 0.75, width: 2, dash: [7, 9], motion: { kind: "flow", pxPerSec: 16 / 0.9 } },
-  "awaiting-input": { paint: "amber", alpha: 1, width: 1.5, dash: [], motion: { kind: "pulse", periodMs: 2600, lo: 0.55 } },
+  "awaiting-input": { paint: "blue", alpha: 1, width: 1.5, dash: [], motion: { kind: "pulse", periodMs: 2600, lo: 0.55 } },
+  "likely-stuck": { paint: "red", alpha: 1, width: 2, dash: [], motion: { kind: "pulse", periodMs: 2600, lo: 0.55 } },
   "needs-approval": { paint: "red", alpha: 1, width: 2.5, dash: [], motion: { kind: "pulse", periodMs: 1600, lo: 0.6 } },
-  done: { paint: "green", alpha: 0.6, width: 1.5, dash: [], motion: { kind: "none" } },
-  error: { paint: "red", alpha: 0.55, width: 1.5, dash: [4, 5], motion: { kind: "none" } },
-  stopped: { paint: "line", alpha: 0.5, width: 1.5, dash: [], motion: { kind: "none" } },
+  done: { paint: "green", alpha: 0.6, width: 1.5, dash: [], motion: STILL },
+  error: { paint: "red", alpha: 0.55, width: 1.5, dash: [4, 5], motion: STILL },
+  stopped: { paint: "line", alpha: 0.5, width: 1.5, dash: [], motion: STILL },
+  // Remote spokes (P-IDE-SPOKES.1): always dashed, so a remote line never reads as a local one, Lite included.
+  "remote-approval": { paint: "red", alpha: 1, width: 2.5, dash: REMOTE_DASH, motion: { kind: "pulse", periodMs: 1600, lo: 0.6 } },
+  "remote-stuck": { paint: "red", alpha: 0.6, width: 1.5, dash: REMOTE_DASH, motion: STILL },
+  "remote-maybe": { paint: "amber", alpha: 0.7, width: 1.5, dash: REMOTE_DASH, motion: STILL },
+  "remote-busy": { paint: "cyan", alpha: 0.75, width: 2, dash: REMOTE_DASH, motion: STILL },
+  "remote-ready": { paint: "blue", alpha: 0.7, width: 1.5, dash: REMOTE_DASH, motion: STILL },
+  "remote-checking": { paint: "lineStrong", alpha: 1, width: 1.5, dash: REMOTE_DASH, motion: STILL },
+  "remote-off": { paint: "line", alpha: 1, width: 1.5, dash: REMOTE_DASH, motion: STILL },
 };
 const RING_DASH = [3, 9] as const;
 const RING_PX_PER_SEC = 4; // 240 px of dash offset per 60 s, the retired orbitRingDrift
@@ -54,12 +68,12 @@ export const RING_TICK_MS = 250;
 /** Flowing dashes and pulses: FLOW_TICK_MS between frames. */
 export const FLOW_TICK_MS = 50;
 
-/** The line a spoke draws in this mode. Lite drops every dash except `starting`'s (its only cue that
- *  differs from a stopped spoke) and every motion; motion mode under reduced motion keeps dashes, still. */
-export function spokeStyle(status: LaneStatus, mode: OrbitMode, reducedMotion: boolean): SpokeStyle {
+/** The line a spoke draws in this mode. Lite drops every motion and every dash except `starting`'s (its only
+ *  cue that differs from a stopped spoke) and the remote dash; motion mode under reduced motion keeps dashes, still. */
+export function spokeStyle(status: SpokeStatus, mode: OrbitMode, reducedMotion: boolean): SpokeStyle {
   const s = STYLE[status];
-  if (mode === "static") return { ...s, dash: status === "starting" ? s.dash : [], motion: { kind: "none" } };
-  if (reducedMotion) return { ...s, motion: { kind: "none" } };
+  if (mode === "static") return { ...s, dash: status === "starting" || status.startsWith("remote-") ? s.dash : [], motion: STILL };
+  if (reducedMotion) return { ...s, motion: STILL };
   return s;
 }
 
@@ -85,7 +99,7 @@ export function mountOrbitCanvas(stage: HTMLElement, initialMode: OrbitMode): Or
   let raf = 0, timer = 0;
   let W = 0, H = 0, dpr = 1;
   let theme: Record<Paint | "lineSoft" | "accentRgb", string> = {
-    lineStrong: "#323a4f", line: "#252a3a", lineSoft: "#1a1e2a", cyan: "70 200 220", amber: "#e8b23c", red: "#e5534b", green: "80 200 120", accentRgb: "198 75 214",
+    lineStrong: "#323a4f", line: "#252a3a", lineSoft: "#1a1e2a", cyan: "70 200 220", amber: "#e8b23c", red: "#e5534b", green: "80 200 120", blue: "#5b8def", accentRgb: "198 75 214",
   };
 
   const readTheme = () => {
@@ -94,7 +108,7 @@ export function mountOrbitCanvas(stage: HTMLElement, initialMode: OrbitMode): Or
     theme = {
       lineStrong: v("--line-strong", theme.lineStrong), line: v("--line", theme.line), lineSoft: v("--line-soft", theme.lineSoft),
       cyan: v("--cyan-rgb", theme.cyan), amber: v("--amber", theme.amber), red: v("--red", theme.red), green: v("--green-rgb", theme.green),
-      accentRgb: v("--accent-rgb", theme.accentRgb),
+      blue: v("--blue", theme.blue), accentRgb: v("--accent-rgb", theme.accentRgb),
     };
   };
   const paint = (t: number) => {

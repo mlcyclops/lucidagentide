@@ -176,6 +176,9 @@ const MCP_RESULT_GATE = repoAsset("harness", "omp", "mcp_result_gate.ts");
 // AskSage gov-gateway provider extension, loaded alongside the gate (omp -e is
 // repeatable). No-op unless ASKSAGE_API_KEY is set in the spawn env. ADR-0007.
 const ASKSAGE = repoAsset("harness", "omp", "asksage_extension.ts");
+// P-AZURE-ENTRA.1 (ADR-0504): Azure OpenAI signed in with Microsoft Entra ID (managed identity or the
+// Azure CLI) instead of a key. No-op unless AZURE_OPENAI_AUTH_MODE names an Entra mode in the spawn env.
+const AZURE_ENTRA = repoAsset("harness", "omp", "azure_entra_extension.ts");
 // P-PREVIEW.3a (ADR-0096) — DRAFT: registers the agent-callable `preview_open` tool. Defensively wrapped so
 // a registration failure never breaks omp launch (see preview_extension.ts). Only added when the file exists.
 const PREVIEW_EXT = repoAsset("harness", "omp", "preview_extension.ts");
@@ -405,7 +408,7 @@ export function fleetLaneArgv(): { cmd: string; args: string[] } {
   const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
   const ownArgs = [...(existsSync(CHECKIN_EXT) ? ["-e", CHECKIN_EXT] : []), ...(existsSync(COMMIT_GATE_EXT) ? ["-e", COMMIT_GATE_EXT] : [])]; // P-OWN.1
   const redactArgs = existsSync(VAULT_REDACT_EXT) ? ["-e", VAULT_REDACT_EXT] : []; // last: see VAULT_REDACT_EXT
-  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...interjectArgs, ...ownArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
+  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, "-e", AZURE_ENTRA, ...interjectArgs, ...ownArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
   return { cmd: argv[0]!, args: argv.slice(1) };
 }
 
@@ -1082,7 +1085,7 @@ class Backend {
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
         // P-BOOTPERF.1 (ADR-pending): probe omp off the event loop; the engine keeps serving meanwhile.
-        const ompArgv = [await ompBinAsync(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...secretArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
+        const ompArgv = [await ompBinAsync(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, "-e", AZURE_ENTRA, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...secretArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
         // P-SANDBOX.16 (ADR-0397): a git the host never put on PATH (MinGit, scoop, GitHub Desktop's copy)
@@ -2943,7 +2946,7 @@ class Backend {
           if (!GATE) { console.error(`[acp:util] ${gateRefusal()}`); return null; }
           // Security review residual: the util child inherits the engine env (global provider keys, credential
           // env) and runs real tools, so it gets the same fail-closed redaction hook as master and lanes, last.
-          const acp = spawned = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, ...(existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []), ...(existsSync(VAULT_REDACT_EXT) ? ["-e", VAULT_REDACT_EXT] : []), ...ompConfigArgs()], currentWorkspace(), vaultRedactEnv({}));
+          const acp = spawned = new ACPClient(ompBin(), ["acp", "-e", GATE, "-e", ASKSAGE, "-e", AZURE_ENTRA, ...(existsSync(PREVIEW_EXT) ? ["-e", PREVIEW_EXT] : []), ...(existsSync(VAULT_REDACT_EXT) ? ["-e", VAULT_REDACT_EXT] : []), ...ompConfigArgs()], currentWorkspace(), vaultRedactEnv({}));
           // A util completion is TEXT-ONLY: collect assistant text into the active sink, ignore everything
           // else (no tool calls, no permissions, no gate-block surfacing — that's the chat connection's job).
           acp.onNotify = (method: string, params: any) => {

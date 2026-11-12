@@ -51,7 +51,7 @@ const ws = mkdtempSync(join(tmpdir(), "lucid-ro1a-ws-"));
 try {
   const file = join(dir, "controller-pairings.json");
   const store = new PairingStore(file);
-  const minted = await store.pair("observer", ws, true);
+  const minted = await store.pair("observer", ws, undefined, undefined, undefined, true);
   if (!minted.ok) { console.error(`  \u2717 pair failed: ${minted.error}`); process.exit(1); }
   assert(minted.pairing.readOnly === true, "minted read-only; the plaintext token exists only in the reply");
   const raw = readFileSync(file, "utf8");

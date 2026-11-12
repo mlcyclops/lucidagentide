@@ -19,10 +19,10 @@
 // only in this increment; any future FTS is a derived, disposable index. The .jsonl files stay the
 // truth - this module never writes to the session corpus, and reading a point reuses sessionMessages.
 
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { listAllSessions, type SessionRow } from "./sessions.ts";
+import { archiveRootFor, listAllSessions, sessionsRoot, type SessionRow } from "./sessions.ts";
 import type { LaneSessionRecord } from "./fleet_lanes.ts";
 
 /** The durable lane-session ledger. Beside the cred vault dir, not inside the session corpus. */
@@ -65,6 +65,20 @@ export function readLaneLedger(path: string = LANE_LEDGER_PATH()): LaneSessionRe
     } catch { /* torn line - skip, never throw */ }
   }
   return out;
+}
+
+/** P-SESS-SEARCH.1 (ADR-0515): session id -> the name of the lane that ran it, for the sidebar's spoke
+ *  filter. The ledger is append-only, so the last line for a session carries its freshest name. The
+ *  sidebar polls; the parse is cached on the ledger's mtime+size. No ledger = no known spokes. */
+let ledgerNames: { path: string; key: string; names: Map<string, string> } | null = null;
+export function laneSessionNames(path: string = LANE_LEDGER_PATH()): ReadonlyMap<string, string> {
+  let key: string;
+  try { const st = statSync(path); key = `${st.mtimeMs}:${st.size}`; } catch { return new Map(); }
+  if (ledgerNames?.path === path && ledgerNames.key === key) return ledgerNames.names;
+  const names = new Map<string, string>();
+  for (const rec of readLaneLedger(path)) names.set(rec.sessionId, rec.name);
+  ledgerNames = { path, key, names };
+  return names;
 }
 
 /** Closed set. `chat` = a human-driven session (master or any full GUI instance); `lane` = a fleet
@@ -176,6 +190,9 @@ export function buildTimeline(sessions: SessionRow[], ledger: LaneSessionRecord[
 
 /** The live listing dev.ts serves: corpus scan (async, index-cached, shared across concurrent and
  *  back-to-back callers) + ledger read + pure merge. */
-export async function listTimeline(opts: TimelineQuery = {}, root?: string, ledgerPath?: string): Promise<TimelinePage> {
-  return buildTimeline(await listAllSessions(root), readLaneLedger(ledgerPath), opts);
+export async function listTimeline(opts: TimelineQuery = {}, root: string = sessionsRoot(), ledgerPath?: string): Promise<TimelinePage> {
+  // P-SESS-ARCHIVE.1 (ADR-0517): archived sessions stay on the timeline (and so stay recoverable as ghost
+  // spokes); recovering one restores its file first (dev.ts /api/fleet/spawn).
+  const [active, archived] = await Promise.all([listAllSessions(root), listAllSessions(archiveRootFor(root))]);
+  return buildTimeline([...active, ...archived], readLaneLedger(ledgerPath), opts);
 }

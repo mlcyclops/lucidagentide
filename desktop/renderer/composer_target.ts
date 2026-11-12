@@ -101,12 +101,12 @@ export function seedTurns(transcript: readonly SeedTurn[]): SeedTurn[] {
  *  they are the audit trail: they MUST name the lane, its folder, its model, and the turn count carried. */
 export function promoteNotice(t: Extract<ComposerTarget, { kind: "lane" }>, turns: number): string {
   return `Composer attached to ${lanePhrase(t)}, carrying ${turnCount(turns)}. `
-    + "The lane keeps running in the fleet; this composer now drives it.";
+    + "The spoke keeps running in the fleet; this composer now drives it.";
 }
 
 export function demoteNotice(t: Extract<ComposerTarget, { kind: "lane" }>): string {
   return `Composer detached from ${lanePhrase(t)}. `
-    + "The lane keeps running in the fleet; the composer is back on the main session.";
+    + "The spoke keeps running in the fleet; the composer is back on the main session.";
 }
 
 /** A lane in one of these states cannot be promoted, with the reason to show. `null` = promotion allowed.
@@ -120,18 +120,18 @@ export function promoteRefusal(status: string): string | null {
     case "done":
       return null;
     case "starting":
-      return "This lane is still starting and has no session yet. Promote it once it reports its first status.";
+      return "This spoke is still starting and has no session yet. Open it once it reports its first status.";
     case "needs-approval":
-      return "This lane is waiting on a permission decision. Answer it on the lane card, then promote the lane.";
+      return "This spoke is waiting on a permission decision. Answer it on the spoke card, then open the spoke.";
     case "stopped":
-      return "This lane is stopped and its child process is gone. Respawn the lane, then promote it.";
+      return "This spoke is stopped and its child process is gone. Respawn the spoke, then open it.";
     case "error":
-      return "This lane ended in an error and its child process is gone. Respawn the lane, then promote it.";
+      return "This spoke ended in an error and its child process is gone. Respawn the spoke, then open it.";
     default:
       // Fail-closed: an unreported or unrecognized status is NOT evidence that attaching is safe.
       return s
-        ? `This lane reports an unrecognized status "${s.length <= 40 ? s : `${s.slice(0, 39)}\u2026`}", so promotion is refused. Refresh the fleet and try again.`
-        : "This lane did not report a status, so promotion is refused. Refresh the fleet and try again.";
+        ? `This spoke reports an unrecognized status "${s.length <= 40 ? s : `${s.slice(0, 39)}\u2026`}", so opening it is refused. Refresh the fleet and try again.`
+        : "This spoke did not report a status, so opening it is refused. Refresh the fleet and try again.";
   }
 }
 
@@ -150,7 +150,7 @@ export function promoteRefusal(status: string): string | null {
 export function promoteAgentNote(t: Extract<ComposerTarget, { kind: "lane" }>): string {
   return [
     "OPERATOR NOTE (not from the user, no reply needed): your session is now being driven from the MAIN COMPOSER",
-    `of the LUCID desktop app instead of your fleet lane card (${lanePhrase(t)}).`,
+    `of the LUCID desktop app instead of your fleet spoke card (${lanePhrase(t)}).`,
     "Nothing else changed: same session, same conversation, same working folder, same model.",
     "If the user refers to \"the main composer\" or \"the main chat\", they mean the surface you are reading now.",
     "Continue whatever you were doing.",
@@ -159,7 +159,7 @@ export function promoteAgentNote(t: Extract<ComposerTarget, { kind: "lane" }>): 
 
 export function demoteAgentNote(t: Extract<ComposerTarget, { kind: "lane" }>): string {
   return [
-    "OPERATOR NOTE (not from the user, no reply needed): your session has been RETURNED to your fleet lane card",
+    "OPERATOR NOTE (not from the user, no reply needed): your session has been RETURNED to your fleet spoke card",
     `(${lanePhrase(t)}); the main composer is back on the master agent.`,
     "Everything you did while the main composer was driving you is still your own history, in this same session.",
     "If the user asks what happened \"in the main composer\", they mean those turns.",
@@ -188,10 +188,11 @@ function folderName(cwd: string): string {
  *  the transcript and in the ledger is what makes the two comparable after the fact; an unreported field says
  *  so rather than rendering as a blank that reads like an empty path. */
 function lanePhrase(t: Extract<ComposerTarget, { kind: "lane" }>): string {
-  const name = oneLine(t.name) || oneLine(t.laneId) || "unnamed lane";
+  const name = oneLine(t.name) || oneLine(t.laneId) || "unnamed spoke";
   const cwd = oneLine(t.cwd) || "a folder that was not reported";
   const model = oneLine(t.model) || "a model that was not reported";
-  return `lane "${name}" in ${cwd} on ${model}`;
+  // P-HUB-PICK.1 (ADR-0516): the product word is "spoke"; "lane" is the code's word and never the user's.
+  return `spoke "${name}" in ${cwd} on ${model}`;
 }
 
 /** Never fake a count: a non-finite or negative turn count is reported as unknown, not as zero. */

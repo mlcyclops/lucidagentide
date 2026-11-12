@@ -7,8 +7,10 @@
 // glance wording per lane state, and the spoke-switch menu model the takeover banner renders. DOM-free /
 // IO-free so all three are unit-tested headless; fleet_orbit.ts owns the DOM, the SVG and the polling.
 
-import type { LaneStatus } from "./bridge.ts";
-import { LANE_ATTENTION } from "../collab/fleet_status.ts"; // P-SWITCH.3: one rule for "waiting on you", shared with the dock pill and the phone bar
+import type { LaneStatus, RepoContext } from "./bridge.ts";
+import { spokeRepo, type SpokeRepo } from "./spoke_repo.ts"; // P-HUB-PICK.1 (ADR-0516)
+import { humanMs } from "../turn_progress.ts"; // P-STUCK-SHOW.1: the same duration words as the liveness pill
+import { LANE_ATTENTION, displayStatus } from "../collab/fleet_status.ts"; // P-SWITCH.3: one rule for "waiting on you", shared with the dock pill and the phone bar
 import { promoteRefusal } from "./composer_target.ts";
 
 /** One spoke's resting place, in stage coordinates relative to the hub (0,0 = stage center). `ring` is
@@ -86,14 +88,20 @@ export function orbitSlots(count: number, w: number, h: number, opts?: OrbitOpts
 }
 
 /** The glance line under a spoke's name: one short sentence answering "what is this lane doing and does
- *  it need me". Wording is load-bearing: the amber and red states name the USER's next move, because
- *  those are the two states that block on a human (the fleet grid's own animation rule). */
-export function spokeGlance(l: { status: LaneStatus; turns: number; queued: readonly unknown[]; waiting?: { on: { name: string } }; progress?: { estimate: { percent: number | null } } }, showEstimate: boolean): string {
+ *  it need me". Wording is load-bearing: the blue and red states name the USER's next move, because
+ *  those are the states that block on a human (the fleet grid's own animation rule). */
+export function spokeGlance(l: { status: LaneStatus; turns: number; queued: readonly unknown[]; waiting?: { on: { name: string } }; progress?: { estimate: { percent: number | null }; liveness?: { state: string; label: string; flatMs?: number } } }, showEstimate: boolean): string {
   const q = l.queued.length > 0 ? ` \u00b7 ${l.queued.length} queued` : "";
   // P-WAIT.1: a lane whose write waits for another worker's file says whom it waits for; a running one
   // with history shows how far along it probably is (labelled as the estimate it is). P-PROGRESS.3: only
   // when the user opted into the experimental estimate.
   if (l.waiting && l.status === "working") return `waiting for ${l.waiting.on.name}${q}`;
+  // P-STUCK-SHOW.1 (ADR-0519): the evidence verdict on an open call outranks "working". The node is 172 px
+  // wide, so the glance is the verdict and how long nothing moved; the full sentence is the node's tooltip.
+  const live = l.status === "working" ? l.progress?.liveness : undefined;
+  if (live?.flatMs !== undefined && (live.state === "stuck" || live.state === "working")) {
+    return `${live.state === "stuck" ? "likely stuck" : "might be stuck"} \u00b7 quiet ${humanMs(live.flatMs)}`;
+  }
   const pct = showEstimate ? l.progress?.estimate.percent : null;
   const est = l.status === "working" && pct !== null && pct !== undefined ? ` \u00b7 ${pct}% (est.)` : "";
   switch (l.status) {
@@ -190,29 +198,43 @@ export function hubLanes<L extends { hubSessionId?: string | null }>(lanes: read
   return lanes.filter((l) => !l.hubSessionId || l.hubSessionId === hub);
 }
 
-/** One OTHER hub with live spokes, for the orbit's Hubs panel. */
+/** One hub for the Hubs menu (P-HUB-PICK.1, ADR-0516): its spokes, each named with its codebase, and the
+ *  distinct codebases the hub's spokes work on, so hubs over different repos are told apart at a glance. */
 export interface HubEntry {
   sessionId: string;
-  lanes: { id: string; name: string; status: LaneStatus }[];
+  /** The hub the orbit shows now (Main's session). Listed first, even with no spokes. */
+  current: boolean;
+  lanes: { id: string; name: string; status: LaneStatus; repo: SpokeRepo }[];
   /** How many of its spokes block on a human right now (fleet_status.LANE_ATTENTION, the rollup's rule). */
   waiting: number;
+  repos: SpokeRepo[];
 }
 
-/** Every hub other than the current one, newest activity first, with its spokes in fleet order. */
-export function otherHubs(
-  lanes: readonly { id: string; name: string; status: LaneStatus; hubSessionId?: string | null; lastActivityAt: number }[],
-  hub: string | null,
-): HubEntry[] {
+type HubLaneInput = { id: string; name: string; status: LaneStatus; cwd: string; repo?: RepoContext | null; hubSessionId?: string | null; lastActivityAt: number; progress?: { liveness?: { state?: string } } | null };
+
+/** Every hub with its spokes in fleet order: the current one first (hubless spokes ride it, as on the
+ *  orbit), then the other hubs by newest spoke activity. `hub` null = no Main session yet: no current
+ *  entry, and hubless spokes are listed under no hub at all (they reach the orbit through hubLanes). */
+export function hubEntries(lanes: readonly HubLaneInput[], hub: string | null): HubEntry[] {
   const byHub = new Map<string, { entry: HubEntry; latest: number }>();
+  const entryFor = (sessionId: string): { entry: HubEntry; latest: number } => {
+    let h = byHub.get(sessionId);
+    if (!h) { h = { entry: { sessionId, current: sessionId === hub, lanes: [], waiting: 0, repos: [] }, latest: 0 }; byHub.set(sessionId, h); }
+    return h;
+  };
+  if (hub) entryFor(hub);
   for (const l of lanes) {
-    if (!l.hubSessionId || l.hubSessionId === hub) continue;
-    let h = byHub.get(l.hubSessionId);
-    if (!h) { h = { entry: { sessionId: l.hubSessionId, lanes: [], waiting: 0 }, latest: 0 }; byHub.set(l.hubSessionId, h); }
-    h.entry.lanes.push({ id: l.id, name: l.name, status: l.status });
-    if (LANE_ATTENTION[l.status]) h.entry.waiting++;
+    const owner = l.hubSessionId || hub;
+    if (!owner) continue;
+    const h = entryFor(owner);
+    h.entry.lanes.push({ id: l.id, name: l.name, status: l.status, repo: spokeRepo(l) });
+    if (LANE_ATTENTION[displayStatus(l)]) h.entry.waiting++; // P-STUCK-SHOW.1: a likely-stuck spoke waits on you too
     h.latest = Math.max(h.latest, l.lastActivityAt);
   }
-  return [...byHub.values()].sort((a, b) => b.latest - a.latest).map((h) => h.entry);
+  for (const h of byHub.values()) h.entry.repos = [...new Map(h.entry.lanes.map((l) => [l.repo.key, l.repo])).values()];
+  return [...byHub.values()]
+    .sort((a, b) => Number(b.entry.current) - Number(a.entry.current) || b.latest - a.latest)
+    .map((h) => h.entry);
 }
 
 /** P-FLEET.L17: a HISTORICAL spoke - a lane the durable ledger remembers (P-FLEET.L5 timeline) that is

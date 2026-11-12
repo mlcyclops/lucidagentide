@@ -113,12 +113,22 @@
   <div class="t">The short version</div>
   <p>There is <b>no OAuth button</b> on this card and no plan to buy. Create an <b>Azure OpenAI resource</b>
      in your tenant, deploy the models you want, then fill two fields in LUCID: the resource
-     <b>key</b> and the <b>resource name</b>. Everything else has a working default.</p>
+     <b>key</b> and the <b>resource name</b>. Everything else has a working default. If your
+     organization disables keys, choose a <b>Microsoft Entra ID</b> sign-in instead and leave the key empty.</p>
 </div>
-<p>In <b>Settings &gt; Providers &gt; Azure OpenAI</b>, the card takes four fields:</p>
+<p>In <b>Settings &gt; Providers &gt; Azure OpenAI</b>, the card takes these fields:</p>
 <table>
   <tr><th>Field</th><th>Required?</th><th>What to put there</th></tr>
-  <tr><td>AZURE_OPENAI_API_KEY</td><td>Yes</td>
+  <tr><td>Sign-in</td><td>No</td>
+      <td><b>API key</b> (the default), <b>Microsoft Entra ID: managed identity</b> when LUCID runs on an Azure
+          VM with a managed identity, or <b>Microsoft Entra ID: Azure CLI</b> to use your own
+          <code>az login</code> (run it as the same user LUCID runs as). Entra needs the
+          <b>Cognitive Services OpenAI User</b> role for that identity on the resource. LUCID asks for a
+          short-lived token, keeps it in memory only, and renews it five minutes before it expires.</td></tr>
+  <tr><td>Managed identity client ID</td><td>No</td>
+      <td>Only for a <b>user-assigned</b> identity: its client ID (a GUID). Blank uses the VM's
+          system-assigned identity.</td></tr>
+  <tr><td>AZURE_OPENAI_API_KEY</td><td>With API key sign-in</td>
       <td>A key from your Azure OpenAI resource (Azure portal: your resource, then Keys and Endpoint).</td></tr>
   <tr><td>Resource name or base URL</td><td>Yes</td>
       <td>Either the bare resource name, or the full base URL if your setup uses a custom endpoint.
@@ -132,6 +142,7 @@
 </table>
 <div class="chips">
   <span class="chip ok">API key auth</span>
+  <span class="chip ok">Microsoft Entra ID (managed identity or Azure CLI)</span>
   <span class="chip info">API version defaults to v1</span>
   <span class="chip info">Deployment map optional</span>
   <span class="chip dead">No OAuth on this card</span>
@@ -157,8 +168,8 @@
       invoice your finance team already reads.</li>
 </ul>
 <p>The setup flow on the Azure side: create an <b>Azure OpenAI resource</b>, then <b>deploy</b> each model
-   you want under a deployment name, then use the resource key and endpoint. LUCID takes it from there with
-   the four fields above.</p>
+   you want under a deployment name, then use the resource key and endpoint (or grant an Entra identity the
+   Cognitive Services OpenAI User role). LUCID takes it from there with the fields above.</p>
 
 <h2 id="when"><span class="no">3</span>When to pick it over an OpenAI key</h2>
 <table>
@@ -189,6 +200,8 @@
 <ul>
   <li>Azure OpenAI documentation:
       <a href="https://learn.microsoft.com/azure/ai-services/openai/">learn.microsoft.com/azure/ai-services/openai</a></li>
+  <li>Microsoft Entra ID authentication for Azure OpenAI:
+      <a href="https://learn.microsoft.com/azure/ai-services/openai/how-to/managed-identity">learn.microsoft.com/azure/ai-services/openai/how-to/managed-identity</a></li>
   <li>Azure OpenAI pricing:
       <a href="https://azure.microsoft.com/pricing/details/cognitive-services/openai-service/">azure.microsoft.com/pricing/details/cognitive-services/openai-service</a></li>
 </ul>

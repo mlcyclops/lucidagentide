@@ -37,6 +37,10 @@ describe("spokeStyle", () => {
     expect(spokeStyle("error", "static", false).dash).toEqual([]);
     expect(spokeStyle("starting", "static", false)).toMatchObject({ dash: [2, 6], motion: { kind: "none" } });
   });
+  test("a remote spoke's line stays dashed in Lite, so it never reads as a local spoke", () => {
+    expect(spokeStyle("remote-busy", "static", false)).toMatchObject({ dash: [3, 6], motion: { kind: "none" } });
+    expect(spokeStyle("remote-approval", "static", false).dash).toEqual([3, 6]);
+  });
   test("reduced motion in motion mode keeps the dashes and stops them", () => {
     expect(spokeStyle("working", "motion", true)).toMatchObject({ dash: [7, 9], motion: { kind: "none" } });
     expect(spokeStyle("working", "motion", false).motion.kind).toBe("flow");

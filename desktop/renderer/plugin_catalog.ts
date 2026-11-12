@@ -88,6 +88,16 @@ export const PREMIUM_PLUGINS: PremiumPlugin[] = [
     media: { loop: true, poster: "webp", glyph: "calendar", tone: "violet" },
   },
   {
+    // ADR-0505: the remote-spokes hub (TechLead187/lucidagentIDEaddon remote-spoke/plugin). Coming soon until a
+    // build signed with the TECHLEAD 187 LLC publisher key is uploaded and the entitlements catalog sells
+    // PLG-REMOTESPOKES-OTF; until then a private build installs from the Installed tab, shown as unsigned.
+    id: "remote-spokes", name: "Remote Spokes", section: "civilian", sale: "buy", lookupKey: "PLG-REMOTESPOKES-OTF", available: false,
+    kicker: "LUCID on your other machines",
+    pitch: "Drive headless LUCID engines on your VMs, a DGX Spark, or a cloud VM from this IDE through a sealed relay: pair a spoke once, hand it tasks, watch its lanes, and approve or reject what it asks with a decision the spoke's engine verifies.",
+    lucid: "A hub that runs on this machine and opens in a Preview tab. Until the signed release is on sale, a private build installs from the Installed tab and is marked unsigned.",
+    media: { loop: false, poster: "generated", glyph: "share", tone: "cyan" },
+  },
+  {
     id: "leaps", name: "LEAPS", section: "civilian", sale: "link",
     href: "https://l-e-a-p-s-947863229376.us-west1.run.app", linkLabel: "Subscription on leaps",
     kicker: "Spaced repetition studio",
@@ -294,9 +304,28 @@ export function fmtDownloads(n: number | null): string {
   return String(n);
 }
 
-/** The drawer opens on PREMIUM unless the user last chose FREE (ADR-0461). Anything else stored reads as PREMIUM. */
-export function parseTierPref(raw: string | null | undefined): PluginTier {
-  return raw === "free" ? "free" : "premium";
+/** The drawer's tabs: the two catalog tiers, and INSTALLED (ADR-0505), what is on this machine. */
+export type DrawerTab = PluginTier | "installed";
+
+/** The drawer opens on PREMIUM unless the user last chose FREE or INSTALLED (ADR-0461/0505). Anything else
+ *  stored reads as PREMIUM. */
+export function parseTierPref(raw: string | null | undefined): DrawerTab {
+  return raw === "free" || raw === "installed" ? raw : "premium";
+}
+
+/** What an installed package says about where it came from (the engine's `GET /api/plugins` row). */
+export interface InstalledFacts { id: string; version: string; source: "catalog" | "private"; signed: boolean }
+
+/** The version a store card counts as installed: only a store install. A private copy under a store id is
+ *  not the purchased package, so the card neither opens it nor offers to update it (ADR-0505). Pure. */
+export function storeInstalledVersion(p: InstalledFacts | null | undefined): string | null {
+  return p && p.source === "catalog" ? p.version : null;
+}
+
+/** The provenance chip on an Installed row. A private unsigned package always says so. Pure. */
+export function provenanceChip(p: InstalledFacts): { tone: "ok" | "warn"; label: string } {
+  if (p.source === "catalog") return { tone: "ok", label: "LUCID store" };
+  return p.signed ? { tone: "ok", label: "Private, signed by TECHLEAD 187 LLC" } : { tone: "warn", label: "Private, unsigned" };
 }
 
 /** Is `candidate` a strictly newer release than `installed`? Numeric `major.minor.patch`, where a prerelease

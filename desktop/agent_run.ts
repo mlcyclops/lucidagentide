@@ -11,7 +11,7 @@
 // invalid spec is refused. Runs in an isolated per-agent dir under `.omp/agent-runs/` (v1 doesn't touch the
 // user's workspace). Bounded by a hard timeout so a wedged run can't hang the engine.
 
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { buildAgent } from "../harness/agent/compiler.ts";
@@ -23,7 +23,7 @@ import { TraceRecorder } from "../harness/agent/trace.ts"; // P-AGENT.13: best-e
 import { buildKmsFetchRequest } from "../harness/agent/kms.ts"; // P-AGENT.16: provider-sourced secrets
 import { connectorStatus, runConnector } from "./addon_seam.ts"; // P-AGENT.16: enterprise kms connector
 import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, resolveOmpBin } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + acp_backend.ts
-import { gatePath, gateRefusal } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
+import { gatePath, gateRefusal, repoAsset } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
 import { validateSpec, type AgentSpec } from "../harness/agent/spec.ts";
 import type { TrustLabel } from "../harness/contracts.ts";
 
@@ -157,7 +157,11 @@ function spawnGatedOmp(o: SpawnOpts): AgentRunResult {
     if (!gate) return { ok: false, blocked: true, reason: gateRefusal(), error: gateRefusal() };
     gateArgs.push("-e", gate);
   }
-  const args = ["-p", "--model", o.model, "--no-lsp", "--no-session", ...gateArgs, ...o.ompExtensionArgs, "--append-system-prompt", o.systemPrompt, o.prompt];
+  // ADR-0504: a built agent on an Azure model signs in exactly like the chat (Entra ID when
+  // AZURE_OPENAI_AUTH_MODE asks for it; a no-op on the key path). Optional, like every provider extension.
+  const azureEntra = repoAsset("harness", "omp", "azure_entra_extension.ts");
+  const providerArgs = existsSync(azureEntra) ? ["-e", azureEntra] : [];
+  const args = ["-p", "--model", o.model, "--no-lsp", "--no-session", ...gateArgs, ...providerArgs, ...o.ompExtensionArgs, "--append-system-prompt", o.systemPrompt, o.prompt];
   try {
     const proc = Bun.spawnSync([ompBin(), ...args], {
       cwd: o.runDir,

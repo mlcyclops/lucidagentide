@@ -19,7 +19,7 @@ import { resolveReconnect, RELAY_FILE_NAME } from "../../desktop/collab/drive_re
 import { findRelayFile, readRelayFile } from "../../desktop/collab/drive_file.ts";
 import { escapeHtml, foldEvent, expandTurns, mergeWelcome, renderControls, renderTranscript, renderHeader, renderLaneCard, renderProcessRow, presentedStatus, RECONNECT_GRACE_MS, buildTurnReport, renderReportHtml, reportMarkdown, type ViewItem, type TurnReport } from "../../desktop/collab/pwa_view.ts";
 import { parseHistory, serializeHistory } from "../../desktop/collab/pwa_history.ts"; // P-REMOTE.16 (ADR-0431): the on-device settled-history store (CUI fail-closed)
-import { laneRollup } from "../../desktop/collab/fleet_status.ts"; // P-PWA-FLEET.2: the SAME order/wording/counting the desktop dock pill uses
+import { displayStatus, laneRollup } from "../../desktop/collab/fleet_status.ts"; // P-PWA-FLEET.2: the SAME order/wording/counting the desktop dock pill uses
 import { planSync, type SyncPlan, type TargetProgress } from "../../desktop/collab/sync_state.ts"; // P-PWA-FOCUS.2: the pure unseen-per-target decision
 import { createRemoteCheckout, entitlementActive, isEntitlementDenied } from "../../desktop/collab/remote_entitlement.ts";
 import { acceptAttachment, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "../../desktop/renderer/composer_attachments.ts"; // P-REMOTE.8 (ADR-0229): pasted/attached images
@@ -560,7 +560,7 @@ function main(): void {
     const snap = items.find((i) => i.kind === "fleet-lanes");
     if (!snap || snap.kind !== "fleet-lanes" || snap.lanes.length === 0) { el.hidden = true; return; }
     el.toggleAttribute("data-readonly", guestReadOnly);
-    const roll = laneRollup(snap.lanes);
+    const roll = laneRollup(snap.lanes.map((l) => ({ ...l, status: displayStatus(l) }))); // P-STUCK-SHOW.3: likely-stuck is its own red count
     // A lane needing a human tints the BAR and nothing more. Do NOT add an auto-expand here: the user
     // rejected it outright (2026-08-30, ADR-0302) as annoying and disruptive, and they are right - a panel
     // that opens itself steals the screen mid-read and moves whatever the thumb was about to tap. The red
