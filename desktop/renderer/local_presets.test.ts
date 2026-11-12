@@ -81,7 +81,7 @@ describe("localPresetChipsHtml", () => {
 
 /** The REAL chain a chip click travels: quick-add fill -> draftFromForm -> validate -> the omp entry. */
 const chipsToProvider = (ids: string[]) => {
-  const f = unifiedEndpointForm({ name: "Spark", baseUrl: "http://10.0.0.21:8000/v1", modelIds: ids });
+  const f = unifiedEndpointForm({ name: "Spark", baseUrl: "http://192.0.2.21:8000/v1", modelIds: ids });
   const { def, errors } = draftFromForm(f, 1_700_000_000_000);
   expect(errors).toEqual([]);
   return toOmpProviderEntry(def!, "tok");

@@ -636,6 +636,16 @@ demo-P-AOS.2: ## P-AOS.2 (ADR-0453): tasks under the fleet goal - a deliverable 
 	$(BUN) run harness/scripts/demo_paos2.ts
 	$(BUN) test $(TEST_IGNORES) desktop/aos.test.ts desktop/fleet_goal.test.ts
 
+.PHONY: demo-P-KGBIO.1
+demo-P-KGBIO.1: ## P-KGBIO.1 (ADR-0454): unlock the knowledge graph with Windows Hello (face, fingerprint, PIN) or Touch ID / Apple Watch as Lucid Vault Protector Spec v1 entries (the Hub's protectors.json format, pinned by a Hub-written fixture) - an existing store migrates with zero re-encryption, the passphrase is needed to turn it on and still opens the store, one OS check releases the key to the engine, an unknown protector-file version fails closed. LUCID_DEMO_REAL_HELLO=1 on Windows uses the real Hello prompt; LUCID_DEMO_REAL_SEP=1 on a Mac (after `cd desktop && bun run compile-sep`) uses real Touch ID.
+	$(BUN) run desktop/scripts/demo_p_kgbio_1.ts
+	$(BUN) test $(TEST_IGNORES) harness/personal/protectors.test.ts desktop/kg_device_unlock.test.ts
+
+.PHONY: demo-P-KGPASS.1
+demo-P-KGPASS.1: ## P-KGPASS.1 (ADR-0455): change the knowledge graph passphrase (main and CUI) - a re-wrap of the same data key under a fresh salt, refused while locked or with a wrong current passphrase, the old passphrase revoked, the graph intact, Windows Hello / Touch ID unlock carried over, CUI keeps its own passphrase.
+	$(BUN) run desktop/scripts/demo_p_kgpass_1.ts
+	$(BUN) test $(TEST_IGNORES) harness/personal/personal.test.ts desktop/kg_device_unlock.test.ts
+
 .PHONY: demo-P-STEPTEXT.1
 demo-P-STEPTEXT.1: ## P-STEPTEXT.1: narration resumed after a tool call starts a new paragraph (master + lanes, stream and saved answer), the answer's tool chips interleave between the steps again, and a subagent row names a looping model ("model output degenerated") instead of painting "!!!!", with a scout's structured yield shown as its final step.
 	$(BUN) run harness/scripts/demo_psteptext1.ts
@@ -1477,6 +1487,11 @@ demo-P-CTRL.2: ## P-CTRL.2 (ADR-0438; design ADR-0425, issue #449): the controll
 	$(BUN) run desktop/scripts/demo_p_ctrl_2.ts
 	$(BUN) test $(TEST_IGNORES) desktop/controller/controller.test.ts desktop/origin_guard.test.ts harness/telemetry/events.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-P-CTRL-RO.1a
+demo-P-CTRL-RO.1a: ## P-CTRL-RO.1a (ADR-0560; design ADR-0449, issue #449): the read-only controller contract sub-step. controller_read is tail-appended to the frozen EventName contract and emits through the real Telemetry envelope with the stable run/session ids; a typo'd controller_* name still raises UnknownEventError and writes nothing (invariant #8); a pairing minted read-only round-trips the 0600 argon2id store with the capability intact; a legacy pairing without the flag loads as not read-only; a hand-edited non-boolean flag makes the store malformed so every token is refused (fail-closed). No guard, route or listener changes here (those are 1b+).
+	$(BUN) run desktop/scripts/demo_p_ctrl_ro_1a.ts
+	$(BUN) test $(TEST_IGNORES) harness/telemetry/events.test.ts desktop/controller/controller.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-P-CTRL-REMOTE.1
 demo-P-CTRL-REMOTE.1: ## P-CTRL-REMOTE.1 (ADR-0531): remote controller lanes. The REAL lane manager and controller routes over the fake ACP agent: the engine's tier policy runs T0/T1 inside the workspace, refuses known destructive actions and edits outside with no way to approve, and parks the rest; only a decision the engine verifies against the paired root (approve scope, not revoked, this lane, this ask, this digest, in date) releases a parked ask; replay, misreport, revocation and expiry are refused; deny and cancel release; the off-task check only tightens.
 	$(BUN) test $(TEST_IGNORES) desktop/controller/remote_approval.test.ts desktop/controller/controller.test.ts desktop/exec_policy.test.ts harness/adr_numbering.test.ts
@@ -1527,6 +1542,11 @@ demo-CREATOR-DRIFT: ## CREATOR-DRIFT (ADR-0430): CutWire Drift (GPL-3.0 Qt + FFm
 	$(BUN) run desktop/scripts/demo_creator_drift.ts
 	$(BUN) test $(TEST_IGNORES) harness/creator/drift_policy.test.ts desktop/creator_drift.test.ts desktop/creator_probe.test.ts desktop/creator_registry.test.ts harness/omp/drift_extension.test.ts desktop/renderer/creator_drift_view.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-P-KSYNC.L1
+demo-P-KSYNC.L1: ## P-KSYNC.L1 + L6 (#360): memory.fact journaling at the gate's single-writer seam. OFF unless LUCID_KSYNC_JOURNAL names a sync root (identity from LUCID_KSYNC_IDENTITY, refused inside the root); the producer rebuilds every Knowledge Envelope v1 conformance vector byte-for-byte (HKDF + ChaCha20-Poly1305 + Ed25519, canonical lines on disk); a promoted fact journals as body_v-null memory.fact; an unwritable root degrades to no-emit with the fact kept and the gate still blocking; the spec + vectors are sha256-pinned so a spec edit fails loudly.
+	$(BUN) run harness/scripts/demo_pksync_l1.ts
+	$(BUN) test $(TEST_IGNORES) harness/knowledge/envelope.test.ts harness/knowledge/spec_pin.test.ts harness/security/gate.failclosed.test.ts
+
 .PHONY: demo-CREATOR-WHISTLE
 demo-CREATOR-WHISTLE: ## CREATOR-WHISTLE (ADR-0432): word timing measured IN-PROCESS by the pinned Whistle model (Needle wasm, no socket import): the three assets verify by size and sha256 and a one-byte flip refuses the load by name and both hashes, the real model transcribes a 16 kHz fixture at 90%+ token match with monotonic word times, a clip over 30 s is windowed with no word split, one substituted word becomes the ONE derived item capped at 0.7, load and transcribe make zero network attempts, a hot CPU refuses the align job with the measured reason, confidence 1.2 is rejected, and a scratch Creator engine's POST /api/creator/align returns a validated, model-pinned document the editor paints with measured chips. Fails (exit 1) when the assets are missing
 	$(BUN) run harness/scripts/demo_creator_whistle.ts
@@ -1541,6 +1561,11 @@ demo-P-PORTGUARD.4: ## P-PORTGUARD.4 (ADR-0458): Creator beside Agent. A package
 demo-CREATOR-OPENFILM: ## CREATOR-OPENFILM (ADR-0457): OpenFilm (MIT, film.html + frame(t) pages) as an on-device Creator provider run ONLY as `--version`, `look` and `render` on a fixed argv: shell shims, package runners (npx, bunx, dlx) and the get/open/update/skill subcommands are refused before anything runs; the child env carries no engine secret and forces the browser, update-check and telemetry opt-outs (plus a dead download host under CUI lockdown); the CLI's own .film/opened marker is written so no detached Studio server is spawned; an external URL in any page refuses under lockdown; the look verdict (same t, same picture) is parsed with its untrusted text sanitized, only PNG sheets from .film/cache/look are stored; a render lands in the library as video and an exit-2 run fails its job
 	$(BUN) run desktop/scripts/demo_creator_openfilm.ts
 	$(BUN) test $(TEST_IGNORES) desktop/creator_openfilm.test.ts desktop/creator_registry.test.ts desktop/creator_probe.test.ts desktop/cui_policy.test.ts harness/omp/openfilm_extension.test.ts desktop/renderer/creator_video.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-CREATOR-IMG2THREEJS
+demo-CREATOR-IMG2THREEJS: ## CREATOR-IMG2THREEJS (ADR-0562): img2threejs (image to procedural three.js, Apache-2.0) ported to pure TypeScript under harness/creator/img2threejs/ (no Python outside the sidecar, invariant 2) and exposed to the agent as img2threejs_probe / _assess / _validate / _generate / _state (Creator builds only, in-process, workspace-confined). Proves, through the REAL tools against a temp workspace: the strict-quality gate FAILS a shallow spec and PASSES the lantern fixture; blockout emits macro parts only; a locked pass and unported geometry are BLOCKED by name with nothing written; the factory is TypeScript Bun transpiles with every spec string a JSON literal; the checklist refuses evidence-free and out-of-order marks, reopens a pass on refine, and hard-stops at the loop limit; forged delimiters in a spec reach the model neutralized inside the fence
+	$(BUN) run harness/scripts/demo_creator_img2threejs.ts
+	$(BUN) test $(TEST_IGNORES) harness/creator/img2threejs/img2threejs.test.ts harness/omp/img2threejs_extension.test.ts desktop/creator_registry.test.ts desktop/creator_probe.test.ts desktop/renderer/skills.test.ts harness/adr_numbering.test.ts
 
 .PHONY: demo-P-VAULT-KEYS.1
 demo-P-VAULT-KEYS.1: ## P-VAULT-KEYS.1 (ADR-0472): provider keys, named-account keys, MCP bearer tokens and the TURN credential leave lucid-gui.json for an ENGINE-side OS vault (DPAPI / Keychain / libsecret master key, AES-256-GCM records) that headless engines open themselves. Real processes and the real backend: a plaintext settings file and its .bak migrate on the first engine start with no re-entry, a second engine reads the same keys, a missing master key reads as unreadable and rewrites nothing, a re-entered key sets the old vault aside, and the vault bundled for Node (Electron main) reports unavailable without touching a vault file
@@ -1574,3 +1599,7 @@ demo-P-HOLDER.1: ## P-HOLDER.1 (ADR-0533, ADR-0534): a lane's agent runs under l
 .PHONY: demo-P-RECOVER.4
 demo-P-RECOVER.4: ## P-RECOVER.4 (ADR-0481): the main window recovers its own renderer. A render-process-gone that is not a clean exit is logged with reason + exit code and the app is loaded again after a backoff (250ms to 10s), at most 5 reloads per 60s sliding window; past the cap the window is left as it is and the log says to relaunch; a clean exit is ignored; an unresponsive renderer is logged, never reloaded. Wiring lives in main.ts createWindow (proven on a real Electron launch, ADR-0481 Consequences)
 	$(BUN) test $(TEST_IGNORES) desktop/renderer_watchdog.test.ts desktop/gpu_watchdog.test.ts desktop/navigation_policy.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-METRICS.1
+demo-P-METRICS.1: ## P-METRICS.1 (ADR-0561): long-term download and clone tracking. The real collector CLI, tokens in its env as the repo-metrics workflow passes them, against a local server that answers like api.github.com: two runs a week apart keep clone history GitHub has dropped and show each release's 7-day change; no traffic token records releases and says traffic was not collected (no invented zeros); a 403 exits 1, names the permission, keeps the release snapshot; a failed release fetch writes nothing; no token in any output or file
+	$(BUN) run tools/metrics/demo_p_metrics_1.ts
+	$(BUN) test $(TEST_IGNORES) tools/metrics/repo_metrics.test.ts harness/adr_numbering.test.ts

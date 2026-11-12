@@ -1,5 +1,13 @@
 # DGX Fleet Integration: what the fleet ships, and the ADRs LUCID needs
 
+> **Current direction (2026-11-10): see ADR-0550 in `DECISIONS.md`.** Each GPU box joins LUCID as a
+> Remote Spoke (identity, trust, approvals, transport, GPU reporting); the Private AI Platform manages what
+> runs on the box. Work on a spoke uses that spoke's LAN model route; the workstation's chat gets a DGX model
+> only through the `lucid-model-endpoint` mailbox. A hand-made Local Provider at a box address is not a
+> supported route, and ADR-0334 is superseded. The SSH-forward steps below remain only for the creator and
+> voice mailboxes until they move over the spoke; the rest of this file is the 2026-09 handoff, kept as history.
+> vLLM listens on port 8000; 8080 is the platform's planned proxy.
+
 - **Source:** TL187 Private AI Platform (formerly DGX Loader) repo (sibling checkout: `..\..\15-DGX\dgx`),
   its ADRs 0001 to 0018, and its `docs/LUCID-INTEGRATION.md` voice contract
   plus `docs/HANDOFF-LUCID-MODEL-PICKER.md` (the model-picker contract).
@@ -34,7 +42,7 @@ specific hostname.
 
 | Capability | Wire contract | Port (loopback) |
 |---|---|---|
-| LLM serving (vLLM) | OpenAI `/v1/chat/completions`, `/v1/models` | 8080 |
+| LLM serving (vLLM) | OpenAI `/v1/chat/completions`, `/v1/models` | 8000 (8080 is the platform's planned proxy, not vLLM) |
 | LLM serving (llama.cpp, GGUF) | OpenAI-compatible | 8083 |
 | STT (Whisper family) | OpenAI-compatible | 8081 |
 | TTS | OpenAI-compatible | 8082 |
@@ -65,7 +73,7 @@ over it.
 - Two DGX Spark boxes on an isolated network, reached over a configurable
   transport (direct, SSH jump, or a named VPN tunnel; DGX ADR-0007). Call
   them `<dgx-a>` and `<dgx-b>` in every example and config sample.
-- Role split as of today: one box leans serving (vLLM on :8080), the other
+- Role split as of today: one box leans serving (vLLM on :8000), the other
   leans bursty GPU work (voice service on :8084 plus avatar rendering that
   spikes the GPU for minutes). Roles are operational facts, not identities;
   they can and will swap. This is exactly why nothing may hardcode them.
@@ -79,11 +87,11 @@ over it.
 ## Build-to-test on this environment, today
 
 1. Pick placeholders in local config only: `<dgx-a>` = the serving box.
-2. Tunnel the LLM: `ssh -N -L 18080:127.0.0.1:8080 <user>@<dgx-a>`.
-3. Smoke: `GET http://127.0.0.1:18080/v1/models` names the served checkpoint;
+2. Tunnel the LLM: `ssh -N -L 18000:127.0.0.1:8000 <user>@<dgx-a>`.
+3. Smoke: `GET http://127.0.0.1:18000/v1/models` names the served checkpoint;
    one `/v1/chat/completions` round trip at temperature 0 proves the path.
 4. Register the fleet as ONE Local Provider (P-LOCAL.4 flow): base URL
-   `http://127.0.0.1:18080/v1`, models list from step 3. No token yet; the
+   `http://127.0.0.1:18000/v1`, models list from step 3. No token yet; the
    token requirement arrives with the proxy and changes nothing structurally.
 5. Agent registry smoke, over one SSH connection:
    `ssh <user>@<dgx-a> "cd ~/dgx-loader && .venv/bin/python -m dgx.agents list"`,
@@ -168,8 +176,8 @@ sections, this is right.
 |---|---|---|
 | vLLM port | `:8080` | **`:8000`** |
 | Served model | (unnamed) | **`glm-5.3-flash`** |
-| Serving box | "one box leans serving" | **Alex, `spark-5495`, `10.0.0.21`** |
-| Second box | "bursty GPU work" | **Nick, `spark-a816`, tensor-parallel MEMBER of the same server** |
+| Serving box | "one box leans serving" | **the head, `<dgx-a>` (for example `192.0.2.21`)** |
+| Second box | "bursty GPU work" | **`<dgx-b>`, tensor-parallel MEMBER of the same server** |
 
 The head's serve command, verbatim from the process table:
 
@@ -189,9 +197,9 @@ Four consequences for LUCID, in order of how much they cost if ignored:
    `401 {"error":"Unauthorized"}`, so `max_model_len` could not be read. It
    has now been read. The real figure is **524288**, four times the seed, and
    the P-LOCAL.6 discovery path resolves it correctly because the server wins.
-2. **`--tensor-parallel-size 2` means ONE server, not two endpoints.** Nick is
-   rank 1: it holds a shard, talks to Alex over the local 400Gb link, and
-   serves **no HTTP at all**. Measured on Nick: `VLLM::Worker_TP` resident,
+2. **`--tensor-parallel-size 2` means ONE server, not two endpoints.** `<dgx-b>` is
+   rank 1: it holds a shard, talks to the head over the local 400Gb link, and
+   serves **no HTTP at all**. Measured on `<dgx-b>`: `VLLM::Worker_TP` resident,
    114 of 121 GB of unified memory committed, nothing listening on 8000, 8080
    or 1234. A probe against it refuses the connection and looks exactly like a
    dead pool. **Point at the head, only ever the head.** This is NCCL plus
@@ -255,7 +263,7 @@ is open lands without a restart.
 
 ### One correction the fleet side owes LUCID
 
-An earlier note from this side read Nick's resident `VLLM::Worker_TP` and its
+An earlier note from this side read `<dgx-b>`'s resident `VLLM::Worker_TP` and its
 114 GB as an orphaned process holding memory while serving nothing. That was
 wrong, and it is exactly the misreading item 2 above exists to prevent. A
 tensor-parallel member is SUPPOSED to look like that.

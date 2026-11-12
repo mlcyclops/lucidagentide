@@ -157,9 +157,44 @@ describe("the tier policy decides a remote lane's asks in the engine", () => {
     expect(r.rulings).toEqual(["tier_auto", "tier_auto", "tier_blocked", "tier_blocked", "parked"]);
   }, TIMEOUT);
 
+  test("a rated command runs on its own only when everything it is pointed at is inside the workspace", () => {
+    const run = (command: string, extra: Record<string, unknown> = {}) => classifyAsk({ kind: "execute", rawInput: { command, ...extra } }, ws);
+    // Inside: these run on their own, as before.
+    for (const ok of [
+      "git status", "git diff HEAD~1", "git log --oneline -5", "git show HEAD^:src/a.ts", 'git commit -m "feat: add /api/users (see ../notes)"',
+      "git add src/a.ts", "git checkout -b fix/x", "ls -la", "ls src/*.ts", "cat src/a.ts", "head -n 20 src/a.ts", 'grep -rn "foo\\.bar$" src',
+      "grep -rn 'a.*b' src", "find . -name '*.ts'", "mkdir -p build/out", "cp src/a.ts src/b.ts", "mv src/b.ts src/c.ts", "sort src/a.ts -o build/sorted.txt",
+    ]) {
+      expect([ok, run(ok).action]).toEqual([ok, "auto"]);
+    }
+    // Outside, or a way to run something else: a human decides (T2), nothing is allowed that was refused before.
+    for (const parks of [
+      "cat ~/.aws/credentials", "cat /etc/passwd", "cat ../outside.txt", "cat src/../../outside.txt", 'cat "/etc/passwd"', "cat /e'tc'/passwd",
+      "cat $HOME/.ssh/id_rsa", 'cat "$HOME/.ssh/id_rsa"', "cat </etc/passwd", "cat {/etc/passwd,src/a.ts}", "cat \\/etc/passwd",
+      "head -c 64 /dev/urandom", "cp /etc/passwd src/p", "cp src/a.ts /tmp/a.ts", "mv src/a.ts ~/a.ts", "ln -s /etc/passwd src/p", "sort src/a.ts -o/tmp/x",
+      "sort --output=/tmp/x src/a.ts", "tee /tmp/x", "find / -name id_rsa", "ls C:x",
+      "sed -i s/a/b/ src/a.ts", "awk 'BEGIN{system(\"id\")}'", "GIT_EXTERNAL_DIFF=id git diff", "env ls", "./ls", "/tmp/cat src/a.ts",
+      "git -c core.pager=id log", "git config core.fsmonitor id", "git fetch https://example.com/r", "git remote add x https://example.com/r", "git ls-remote origin",
+      "git grep -O id foo", "git diff --ext-diff", "git diff --output=/tmp/x", "git log --output=../x", "git bisect run id", "git add /etc/passwd",
+    ]) {
+      expect([parks, run(parks)]).toEqual([parks, expect.objectContaining({ tier: "T2", action: "remote" })]);
+    }
+    // The call's own working directory: relative paths resolve there, and it must be inside.
+    expect(run("cat a.ts", { cwd: "src" }).action).toBe("auto");
+    expect(run("cat ../../outside.txt", { cwd: "src" }).action).toBe("remote");
+    expect(run("cat credentials", { cwd: join(ws, "..") }).action).toBe("remote");
+    // A URL is not a path inside the workspace, and git's own files are not ordinary files.
+    expect(classifyAsk({ kind: "read", rawInput: { path: "https://example.com/x" } }, ws)).toMatchObject({ tier: "T2", action: "remote" });
+    expect(classifyAsk({ kind: "edit", rawInput: { path: ".git/config" } }, ws)).toMatchObject({ tier: "T2", action: "remote" });
+    expect(classifyAsk({ kind: "edit", rawInput: { path: join(ws, ".git", "hooks", "pre-commit") } }, ws)).toMatchObject({ tier: "T2", action: "remote" });
+    expect(classifyAsk({ kind: "edit", rawInput: { path: "src/.gitignore" } }, ws).action).toBe("auto");
+    // A workspace that cannot be resolved puts every argument outside: nothing runs on its own.
+    expect(classifyAsk({ kind: "execute", rawInput: { command: "git status" } }, "/no/such/workspace").action).toBe("remote");
+  });
+
   test("classification table", () => {
     const w = "/w";
-    expect(classifyAsk({ kind: "execute", rawInput: { command: "git status" } }, w).action).toBe("auto");
+    expect(classifyAsk({ kind: "execute", rawInput: { command: "git status" } }, ws).action).toBe("auto");
     expect(classifyAsk({ kind: "execute", rawInput: { command: "bun test" } }, w)).toMatchObject({ tier: "T3", action: "remote" });
     expect(classifyAsk({ kind: "execute", rawInput: { command: "ls | grep a" } }, w).action).toBe("remote");
     expect(classifyAsk({ kind: "execute", rawInput: { command: "chmod 777 x" } }, w).action).toBe("block");
@@ -302,6 +337,18 @@ describe("only an engine-verified decision releases a parked ask", () => {
     expect(two.parked).not.toBeNull();
     expect((await r.call("cancel", pairing, { laneId })).status).toBe(200);
     expect(fleet!.pendingAsk(laneId)).toBeNull();
+  }, TIMEOUT);
+
+  test("the local answer route cannot allow a remote lane's parked ask; it can still deny it", async () => {
+    const r = rig({ presence: "required" });
+    const { pairing, laneId } = await r.setup();
+    const one = await r.askFor(pairing, laneId, { kind: "fetch", title: "fetch a", rawInput: { url: "https://a" } });
+    expect(fleet!.answer(laneId, true)).toEqual({ ok: false });
+    expect(fleet!.answer(laneId, true, "session")).toEqual({ ok: false });
+    expect(fleet!.pendingAsk(laneId)?.id).toBe(one.parked!.id); // still parked, nothing ran
+    expect(fleet!.answer(laneId, false)).toEqual({ ok: true });
+    expect(await r.settled(laneId)).toContain(CANCELLED);
+    expect(r.rulings).toEqual(["parked"]); // no allow was ever recorded
   }, TIMEOUT);
 
   test("a pairing without an approver root has no remote policy and accepts no decision", async () => {

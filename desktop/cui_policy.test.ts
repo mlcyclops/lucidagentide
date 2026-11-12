@@ -55,7 +55,7 @@ describe("locked: rule by rule", () => {
 
   test("an endpoint attested as an enclave is allowed whatever its zone", () => {
     for (const zone of ["local", "internal", "external"] as const) {
-      const v = cuiProviderVerdict(true, spec("dgx-avatar"), ep({ providerId: "dgx-avatar", baseUrl: "http://10.0.0.8:8088", zone, enclave: true }));
+      const v = cuiProviderVerdict(true, spec("dgx-avatar"), ep({ providerId: "dgx-avatar", baseUrl: "http://192.0.2.8:8088", zone, enclave: true }));
       expect(v).toMatchObject({ allowed: true, posture: "enclave" });
     }
   });
