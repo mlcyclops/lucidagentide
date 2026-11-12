@@ -20,7 +20,7 @@
 // and runs from the temp dir (the repo_probe rule), never prompts, and times out.
 
 import { randomBytes } from "node:crypto";
-import { rmdirSync, rmSync } from "node:fs";
+import { existsSync, rmdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { gitExe } from "../harness/runs/sandbox_exec.ts";
@@ -44,10 +44,21 @@ export interface WorktreePlan {
 export function worktreePlan(root: string, cwd: string, name: string, suffix: string): WorktreePlan {
   const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "lane";
   const slug = `${base}-${suffix}`;
+  return placed(root, cwd, slug, `lucid/${slug}`);
+}
+
+/** ADR-0502: a REMOTE controller lane's review worktree. Same placement as worktreePlan (beside the repo, the
+ *  picked subfolder kept), but the branch is `remote/<lane id>`, so the owner finds every remote lane's work by
+ *  its lane id. `laneId` is the engine's own `lane-<8 hex>`, already a valid branch and folder name. */
+export function remoteWorktreePlan(root: string, cwd: string, laneId: string): WorktreePlan {
+  return placed(root, cwd, `remote-${laneId}`, `remote/${laneId}`);
+}
+
+function placed(root: string, cwd: string, slug: string, branch: string): WorktreePlan {
   const path = join(dirname(root), `${basename(root)}.lucid-worktrees`, slug);
   const sub = relative(root, cwd);
   const inside = sub && !sub.startsWith("..") && !sub.startsWith(sep);
-  return { path, branch: `lucid/${slug}`, laneCwd: inside ? join(path, sub) : path };
+  return { path, branch, laneCwd: inside ? join(path, sub) : path };
 }
 
 async function git(dir: string, args: string[]): Promise<{ ok: boolean; out: string; err: string }> {
@@ -74,16 +85,61 @@ export type WorktreeResult =
 /** Create the lane's worktree on a new branch from the checkout's HEAD. Every refusal names why, in words
  *  the spawn form shows verbatim. */
 export async function createLaneWorktree(cwd: string, name: string): Promise<WorktreeResult> {
+  const root = await repoRoot(cwd);
+  if (!root) return { ok: false, code: "no-repo", reason: `"${cwd}" is not inside a git repository, so it cannot have its own worktree. Spawn it without the worktree option, or pick a folder inside a repo.` };
+  return addWorktree(root, worktreePlan(root, cwd, name, randomBytes(3).toString("hex")));
+}
+
+/** ADR-0502: the review worktree of a remote controller lane, on `remote/<lane id>`. Null when `workspace` is
+ *  not inside a git repository (the lane then runs in the workspace itself, as before ADR-0502). */
+export async function createRemoteLaneWorktree(workspace: string, laneId: string): Promise<WorktreeResult | null> {
+  const root = await repoRoot(workspace);
+  return root ? addWorktree(root, remoteWorktreePlan(root, workspace, laneId)) : null;
+}
+
+/** The repository top level holding `cwd`, or null when it is not inside one. */
+async function repoRoot(cwd: string): Promise<string | null> {
   const top = await git(cwd, ["rev-parse", "--show-toplevel"]);
-  if (!top.ok || !top.out) return { ok: false, code: "no-repo", reason: `"${cwd}" is not inside a git repository, so it cannot have its own worktree. Spawn it without the worktree option, or pick a folder inside a repo.` };
+  if (!top.ok || !top.out) return null;
   // git prints forward slashes on Windows; normalize so the plan's path math matches the picked folder.
-  const root = process.platform === "win32" ? top.out.replace(/\//g, "\\") : top.out;
+  return process.platform === "win32" ? top.out.replace(/\//g, "\\") : top.out;
+}
+
+async function addWorktree(root: string, plan: WorktreePlan): Promise<WorktreeResult> {
   const head = await git(root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
   if (!head.ok) return { ok: false, code: "no-repo", reason: `the repository at "${root}" has no commits yet, so there is nothing to start a worktree from. Commit once, then spawn again.` };
-  const plan = worktreePlan(root, cwd, name, randomBytes(3).toString("hex"));
   const add = await git(root, ["worktree", "add", "-b", plan.branch, plan.path, "HEAD"]);
   if (!add.ok) return { ok: false, reason: `git could not create the worktree: ${add.err.split(/\r?\n/).pop() || "unknown error"}` };
   return { ok: true, root, ...plan };
+}
+
+/** ADR-0502: the identity of the snapshot commit a closing lane leaves. The engine made it, so it carries the
+ *  engine's name; the user's own identity never claims an agent's work, and no signing prompt can stall it. */
+const SNAPSHOT_IDENTITY = ["-c", "user.name=LUCID remote lane", "-c", "user.email=remote-lane@lucid.invalid", "-c", "commit.gpgsign=false"];
+
+/** ADR-0502: end a lane's worktree and KEEP its branch. Uncommitted work in the worktree (tracked changes and
+ *  new files; ignored files are not work) is first committed onto the branch as one snapshot commit, so
+ *  removing the folder loses nothing; only then is the worktree removed. A snapshot git refuses leaves the
+ *  worktree where it is (and says why): the folder is the only copy of that work. `commit` is the snapshot's
+ *  sha, or null when the worktree was clean (or already gone). */
+export async function closeLaneWorktree(wt: { root: string; path: string; branch: string }, message: string): Promise<{ ok: true; commit: string | null } | { ok: false; reason: string }> {
+  let commit: string | null = null;
+  if (existsSync(wt.path)) {
+    const status = await git(wt.path, ["status", "--porcelain"]);
+    if (!status.ok) return { ok: false, reason: `git could not read the worktree: ${status.err.split(/\r?\n/).pop() || "unknown error"}` };
+    if (status.out) {
+      const add = await git(wt.path, ["add", "-A"]);
+      const made = add.ok ? await git(wt.path, [...SNAPSHOT_IDENTITY, "commit", "--no-verify", "-q", "-m", message]) : add;
+      if (!made.ok) return { ok: false, reason: `git could not commit the lane's work to ${wt.branch}, so its worktree stays at ${wt.path}: ${made.err.split(/\r?\n/).pop() || "unknown error"}` };
+      commit = (await git(wt.path, ["rev-parse", "HEAD"])).out || null;
+    }
+    await git(wt.root, ["worktree", "remove", "--force", wt.path]);
+    // The lane's child may still hold the folder as its cwd on Windows while git runs (see removeLaneWorktree).
+    try { rmSync(wt.path, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch { /* still held: an empty folder, harmless */ }
+    try { rmdirSync(dirname(wt.path)); } catch { /* other worktrees live there */ }
+  }
+  await git(wt.root, ["worktree", "prune"]);
+  return { ok: true, commit };
 }
 
 /** Undo a worktree whose lane never started (the spawn was refused after git made it). Only ever called on

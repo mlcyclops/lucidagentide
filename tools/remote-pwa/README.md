@@ -34,7 +34,9 @@ Reach a running desktop LUCID from your phone's browser. A standalone static app
 bun run tools/remote-pwa/build.ts   # or: make pwa-build
 ```
 
-Deploy config + Firebase Hosting live in the add-on mirror: `lucidaddon_audit/iac/remote-pwa/`.
+Firebase Hosting (project `lucid-agent`) lives in the private add-on repo `lucidagentIDEaddon`, folder `website/`:
+copy the build outputs from `dist/` into `website/firebase-public/remote/` (never over the live `config.js`), then
+run `firebase deploy --only hosting` from `website/`.
 
 ## Security
 

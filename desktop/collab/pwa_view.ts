@@ -25,6 +25,7 @@ import { parseImageDataUrl } from "../renderer/image_data_url.ts"; // the strict
 import type { CollabSessionHeader, CollabTranscriptTurn, WelcomeFrame } from "./frames.ts";
 import type { GuestPhase, GuestView } from "./guest.ts";
 import type { ProcessView } from "../process_view.ts"; // P-PWA-FLEET.1: pure process rows (type-only)
+import { displayStatus } from "./fleet_status.ts"; // P-STUCK-SHOW.3 (ADR-0521)
 
 /** Escape the five HTML-significant characters. The only text→markup boundary in the PWA. */
 export function escapeHtml(s: string): string {
@@ -292,7 +293,7 @@ export function laneCwdName(cwd: string): string {
  * the master composer. All host strings escaped, including data attributes.
  *
  * The card carries `lane-<status>` so the phone's CSS can reuse the DESKTOP fleet colour mapping verbatim
- * (cyan working, amber waiting, red needs-approval, green done, dim starting/stopped) instead of inventing
+ * (cyan working, blue waiting on you, red needs-approval, green done, dim starting/stopped) instead of inventing
  * a second palette; `data-status` stays for the dot.
  *
  * Its composer offers EXACTLY what `CollabGuest` can do for a lane and nothing more (a dead control is
@@ -310,7 +311,7 @@ export function laneCwdName(cwd: string): string {
  */
 export function renderLaneCard(lane: FleetLaneStatus): string {
   const id = escapeHtml(lane.id);
-  const status = escapeHtml(lane.status);
+  const status = escapeHtml(displayStatus(lane)); // P-STUCK-SHOW.3 (ADR-0521): a likely-stuck lane is red, not "working"
   const pend = lane.pendingApproval
     ? `<div class="lane-pend"><span class="lane-pend-sum">${escapeHtml(lane.pendingApproval.kind)}: ${escapeHtml(lane.pendingApproval.summary)}</span></div>` +
       `<div class="lane-approve">` +

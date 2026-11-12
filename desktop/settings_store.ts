@@ -72,6 +72,8 @@ export interface GuiSettings {
   keys?: Record<string, string>;
   workspace?: string;
   recentWorkspaces?: string[];
+  // P-SESS-ARCHIVE.1 (ADR-0517): the session auto-archive rule (sessions.ts archivePolicy clamps it on read).
+  sessionArchive?: { auto?: boolean; days?: number; spokeDays?: number };
   // P-REPORT.9 (ADR-0162): repos the user wants INCLUDED IN REPORTS but not necessarily opened as the
   // active workspace. Tracked separately from `workspace`/`recentWorkspaces` so adding a report target
   // never restarts the omp session. The Reports repo picker offers the union of all three.
@@ -283,9 +285,15 @@ export const ASKSAGE_DEFAULT_LIMIT = 200_000;
 export function personalBaseDir(): string {
   return process.env.LUCID_PERSONAL_DIR || join(homedir(), ".omp");
 }
-/** Default on-disk location of the encrypted personalization store (P9.1) — work + personal. */
-export function personalStorePath(): string {
-  return join(personalBaseDir(), "lucid-personal.kg.enc");
+/** Default on-disk location of the encrypted personalization store (P9.1) - work + personal. `base` lets
+ *  the Electron main process resolve the Creator flavor's relocated dir (set only in the engine's env). */
+export function personalStorePath(base = personalBaseDir()): string {
+  return join(base, "lucid-personal.kg.enc");
+}
+/** P-KGBIO.1 (ADR-0454): the main store's Lucid Vault Protector Spec v1 file (the Hub's `protectors.json`
+ *  format): the mandatory password protector plus any Windows Hello / Touch ID protector. */
+export function personalProtectorsPath(base = personalBaseDir()): string {
+  return join(base, "lucid-personal.kg.protectors.json");
 }
 /** The SEPARATE encrypted CUI store (P9.5a, ADR-0014) — its own file, DEK, and passphrase, so
  *  one key never decrypts both CUI and non-CUI. */

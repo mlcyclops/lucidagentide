@@ -21,7 +21,9 @@ import type { VaultStatus } from "./engine_vault.ts";
 // all on startup, /api/auth/key restarts omp), so no new storage is introduced. `secret:false` values are
 // non-sensitive (a project id, a region, a resource name) and are echoed back to pre-fill the input; a
 // secret field is masked like the primary key.
-export interface ProviderField { env: string; label: string; placeholder?: string; secret?: boolean }
+// `options` makes the field a closed choice (a select in the card; the first option is the default when
+// unset), for a mode switch such as Azure's sign-in (ADR-0504).
+export interface ProviderField { env: string; label: string; placeholder?: string; secret?: boolean; options?: { value: string; label: string }[] }
 export interface ProviderFieldAuth extends ProviderField { set: boolean; value?: string; last4?: string }
 
 export interface ProviderAuth {
@@ -75,12 +77,21 @@ export const MAJORS: Provider[] = [
   // (env ""), device-flow (the paste-code UI + DEVICE_FLOW_IDS already handle it), and the broker prompts
   // for a GitHub Enterprise domain (blank = github.com) so GHE/self-hosted orgs work too.
   { id: "github-copilot", name: "GitHub · Copilot", env: "", oauthId: "github-copilot", canOauth: true },
-  // Azure OpenAI (ADR-0210): key-only (no OAuth broker). omp reads AZURE_OPENAI_API_KEY plus a base:
+  // Azure OpenAI (ADR-0210): no OAuth broker. omp reads AZURE_OPENAI_API_KEY plus a base:
   // either AZURE_OPENAI_RESOURCE_NAME (→ https://<name>.openai.azure.com/openai/v1) or a full
   // AZURE_OPENAI_BASE_URL; API version defaults to "v1"; an optional deployment-name map aliases model
   // ids to Azure deployment names. All ride the same setKey→env→omp seam as any key.
+  // ADR-0504: AZURE_OPENAI_AUTH_MODE switches the sign-in to Microsoft Entra ID (the VM's managed identity,
+  // optionally a user-assigned one by client id, or the signed-in Azure CLI); harness/omp/azure_entra_extension.ts
+  // then signs each request with a short-lived token held in omp's memory, so the key box stays empty.
   { id: "azure", name: "Azure · OpenAI", env: "AZURE_OPENAI_API_KEY", oauthId: "", canOauth: false,
     fields: [
+      { env: "AZURE_OPENAI_AUTH_MODE", label: "Sign-in", options: [
+        { value: "key", label: "API key" },
+        { value: "managed-identity", label: "Microsoft Entra ID: managed identity (Azure VM)" },
+        { value: "azure-cli", label: "Microsoft Entra ID: Azure CLI (az login)" },
+      ] },
+      { env: "AZURE_OPENAI_CLIENT_ID", label: "Managed identity client ID (optional)", placeholder: "user-assigned identity; blank = the VM's system-assigned identity" },
       { env: "AZURE_OPENAI_RESOURCE_NAME", label: "Resource name", placeholder: "my-resource → my-resource.openai.azure.com" },
       { env: "AZURE_OPENAI_BASE_URL", label: "…or full base URL", placeholder: "https://my-resource.openai.azure.com/openai/v1" },
       { env: "AZURE_OPENAI_API_VERSION", label: "API version", placeholder: "v1 (default)" },

@@ -512,6 +512,18 @@ demo-P-PERF.2: ## P-PERF.2 (ADR-0129): power/spec-aware perf tiers — battery�
 demo-P-PERF.3: ## P-PERF.3 (ADR-0130): KG layout continuity — re-open is a static paint (0 sim frames), refresh nestles newcomers, cold open exits on energy, positions never touch disk
 	$(BUN) run desktop/scripts/demo_p_perf_3.ts
 
+.PHONY: demo-P-SESS-ARCHIVE.1
+demo-P-SESS-ARCHIVE.1: ## P-SESS-ARCHIVE.1 (ADR-0517): the session index survives restarts; archive / restore / auto-archive, never a live session
+	$(BUN) run desktop/scripts/demo_p_sess_archive_1.ts
+
+.PHONY: demo-P-HUB-PICK.1
+demo-P-HUB-PICK.1: ## P-HUB-PICK.1 (ADR-0516): hub picker, a codebase name + color on every spoke, By repo grid, "spoke" in every agent note
+	$(BUN) run desktop/scripts/demo_p_hub_pick_1.ts
+
+.PHONY: demo-P-SESS-SEARCH.1
+demo-P-SESS-SEARCH.1: ## P-SESS-SEARCH.1 (ADR-0515): sidebar session search by title + what was said, spokes hidden by default, carried notes never title a session
+	$(BUN) run desktop/scripts/demo_p_sess_search_1.ts
+
 .PHONY: demo-P-PERF.4
 demo-P-PERF.4: ## P-PERF.4 (ADR-0131): incremental session index (warm polls parse nothing) + tail-first transcript pages + AC-only prefetch gate
 	$(BUN) run desktop/scripts/demo_p_perf_4.ts
@@ -624,6 +636,16 @@ demo-P-AOS.2: ## P-AOS.2 (ADR-0453): tasks under the fleet goal - a deliverable 
 	$(BUN) run harness/scripts/demo_paos2.ts
 	$(BUN) test $(TEST_IGNORES) desktop/aos.test.ts desktop/fleet_goal.test.ts
 
+.PHONY: demo-P-KGBIO.1
+demo-P-KGBIO.1: ## P-KGBIO.1 (ADR-0454): unlock the knowledge graph with Windows Hello (face, fingerprint, PIN) or Touch ID / Apple Watch as Lucid Vault Protector Spec v1 entries (the Hub's protectors.json format, pinned by a Hub-written fixture) - an existing store migrates with zero re-encryption, the passphrase is needed to turn it on and still opens the store, one OS check releases the key to the engine, an unknown protector-file version fails closed. LUCID_DEMO_REAL_HELLO=1 on Windows uses the real Hello prompt; LUCID_DEMO_REAL_SEP=1 on a Mac (after `cd desktop && bun run compile-sep`) uses real Touch ID.
+	$(BUN) run desktop/scripts/demo_p_kgbio_1.ts
+	$(BUN) test $(TEST_IGNORES) harness/personal/protectors.test.ts desktop/kg_device_unlock.test.ts
+
+.PHONY: demo-P-KGPASS.1
+demo-P-KGPASS.1: ## P-KGPASS.1 (ADR-0455): change the knowledge graph passphrase (main and CUI) - a re-wrap of the same data key under a fresh salt, refused while locked or with a wrong current passphrase, the old passphrase revoked, the graph intact, Windows Hello / Touch ID unlock carried over, CUI keeps its own passphrase.
+	$(BUN) run desktop/scripts/demo_p_kgpass_1.ts
+	$(BUN) test $(TEST_IGNORES) harness/personal/personal.test.ts desktop/kg_device_unlock.test.ts
+
 .PHONY: demo-P-STEPTEXT.1
 demo-P-STEPTEXT.1: ## P-STEPTEXT.1: narration resumed after a tool call starts a new paragraph (master + lanes, stream and saved answer), the answer's tool chips interleave between the steps again, and a subagent row names a looping model ("model output degenerated") instead of painting "!!!!", with a scout's structured yield shown as its final step.
 	$(BUN) run harness/scripts/demo_psteptext1.ts
@@ -721,6 +743,10 @@ demo-P-DESIGN.1: ## P-DESIGN.1 (ADR-0154): the agent honors a workspace DESIGN.m
 .PHONY: demo-P-MARKET.1c
 demo-P-MARKET.1c: ## P-MARKET.1c (ADR-0446): live Role KG Pack title layout at desktop and narrow widths (the plugin modal it also covered was retired by ADR-0461); set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL for an isolated QA browser and engine
 	$(BUN) run desktop/scripts/demo_p_market_1c.mjs
+
+.PHONY: demo-P-PLUGINS.7
+demo-P-PLUGINS.7: ## P-PLUGINS.7 (ADR-0505): private plugin install from a file on a RUNNING engine (ENGINE=http://127.0.0.1:<port> TOKEN=<ui token>): tampered refused, unsigned needs acceptance, listed private+unsigned, opens, uninstalls; set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to also drive the drawer's Installed tab
+	$(BUN) run desktop/scripts/demo_p_plugins_7.mjs --engine $(ENGINE) --token $(TOKEN)
 
 .PHONY: demo-P-FIGMA.1
 demo-P-FIGMA.1: ## P-FIGMA.1 (ADR-0154): /figma — parse a Figma file URL → key, walk the doc → top frames (capped), build a design-board HTML with frames inlined as PNG data URLs (names escaped, only data:image src) for the sandboxed preview
@@ -1429,10 +1455,65 @@ demo-P-CTRL.2: ## P-CTRL.2 (ADR-0438; design ADR-0425, issue #449): the controll
 	$(BUN) run desktop/scripts/demo_p_ctrl_2.ts
 	$(BUN) test $(TEST_IGNORES) desktop/controller/controller.test.ts desktop/origin_guard.test.ts harness/telemetry/events.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-P-CTRL-RO.1a
+demo-P-CTRL-RO.1a: ## P-CTRL-RO.1a (ADR-0560; design ADR-0449, issue #449): the read-only controller contract sub-step. controller_read is tail-appended to the frozen EventName contract and emits through the real Telemetry envelope with the stable run/session ids; a typo'd controller_* name still raises UnknownEventError and writes nothing (invariant #8); a pairing minted read-only round-trips the 0600 argon2id store with the capability intact; a legacy pairing without the flag loads as not read-only; a hand-edited non-boolean flag makes the store malformed so every token is refused (fail-closed). No guard, route or listener changes here (those are 1b+).
+	$(BUN) run desktop/scripts/demo_p_ctrl_ro_1a.ts
+	$(BUN) test $(TEST_IGNORES) harness/telemetry/events.test.ts desktop/controller/controller.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-CTRL-REMOTE.1
+demo-P-CTRL-REMOTE.1: ## P-CTRL-REMOTE.1 (ADR-0531): remote controller lanes. The REAL lane manager and controller routes over the fake ACP agent: the engine's tier policy runs T0/T1 inside the workspace, refuses known destructive actions and edits outside with no way to approve, and parks the rest; only a decision the engine verifies against the paired root (approve scope, not revoked, this lane, this ask, this digest, in date) releases a parked ask; replay, misreport, revocation and expiry are refused; deny and cancel release; the off-task check only tightens.
+	$(BUN) test $(TEST_IGNORES) desktop/controller/remote_approval.test.ts desktop/controller/controller.test.ts desktop/exec_policy.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-CTRL-LANES.1
+demo-P-CTRL-LANES.1: ## P-CTRL-LANES.1 (ADR-0500/0501/0502): controller lane lifecycle over the REAL lane manager, the fake ACP agent and real git. close denies a parked ask, cancels the turn and frees the two-lane slot (another pairing's lane is the same 404); an engine booted from the files a dying engine left brings the lane back idle on its id and omp session, reports the cut-off turn interrupted and never re-runs it, and gives nothing back to a revoked pairing; a remote lane in a git workspace works in its own worktree on remote/<lane id>, the tier boundary follows it, and close commits the rest onto the branch, removes the worktree and keeps the branch.
+	$(BUN) test $(TEST_IGNORES) desktop/controller/lane_lifecycle.test.ts desktop/controller/controller.test.ts desktop/controller/remote_approval.test.ts desktop/lane_worktree.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-CTRL-REMOTE.2
+demo-P-CTRL-REMOTE.2: ## P-CTRL-REMOTE.2 (ADR-0507): user presence on remote approve. A pairing made with presence required releases a remote allow only when the decision carries presence evidence (a Windows Hello or Secure Enclave key's signature over that one decision) from the presence key the approver's root- or delegate-signed certificate names; no evidence, no presence key, a foreign key, evidence moved to another ask or flipped from a deny are refused and nothing is released; a signed deny needs no presence.
+	$(BUN) test $(TEST_IGNORES) desktop/controller/remote_approval.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-CTRL-NONCE
+demo-P-CTRL-NONCE: ## P-CTRL-NONCE (ADR-0503): the nonce-only discovery record. Beside the 0600 token-bearing engine-discovery-<port>.json the engine publishes engine-nonce-<port>.json (port, nonce, pid, version, flavor, startedAt; never the UI token), 0600 by default, or chowned to LUCID_DISCOVERY_NONCE_GROUP and made 0640 in LUCID_DISCOVERY_NONCE_DIR; an unknown group or a refused chown publishes nothing. Proves it against the REAL dev.ts engine: the record has no token and the expected mode and group, a controller client wins the ADR-0305 handshake from it and reads /api/controller/lanes with only its controller token, a squatter verifies dead, exit removes both files, the token file is unchanged.
+	$(BUN) run desktop/scripts/demo_p_tui_0.ts
+	$(BUN) test $(TEST_IGNORES) desktop/engine_discovery.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-AZURE-ENTRA.1
+demo-P-AZURE-ENTRA.1: ## P-AZURE-ENTRA.1 (ADR-0504): Azure OpenAI signed in with Microsoft Entra ID. omp's REAL Azure Responses provider, driven through the registered Entra stream against a fake IMDS and a fake Azure OpenAI v1 endpoint: the token is fetched once, sent as Authorization Bearer to /openai/v1/responses with no api-key header, reused, renewed 5 minutes before expiry and dropped on a 401; a failed sign-in ends the turn with a named error, sends nothing and leaks no token; the az mode runs the exact get-access-token command; key mode registers nothing; the Settings card offers exactly the engine's modes.
+	$(BUN) test $(TEST_IGNORES) harness/omp/azure_entra.test.ts desktop/auth_status.test.ts harness/launcher/lucid_acp.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-IDE-SPOKES.1
+demo-P-IDE-SPOKES.1: ## P-IDE-SPOKES.1 (ADR-0506): remote spokes in the IDE. The engine reaches the remote-spokes hub plugin only with the per-launch host token the REAL plugin runtime mints (a real server plugin accepts it, its MCP child never sees it, a restart rotates it); the view model maps each spoke's state, lanes, model and tasks; every action is gated by the hub certificate's scopes before anything is forwarded; recalled journal text passes the REAL fail-closed scanAndDecide and leaves only inside one UNTRUSTED_CONTENT envelope with embedded delimiters neutralized; an instruction hidden in invisible characters is withheld; a dead scanner withholds everything; a flagged parked action can only be denied
+	$(BUN) test $(TEST_IGNORES) desktop/remote_spokes.test.ts desktop/renderer/remote_spokes_model.test.ts desktop/plugins/runtime.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-IDE-SPOKES.2
+demo-P-IDE-SPOKES.2: ## P-IDE-SPOKES.2 (ADR-0508): the Start-a-task selector and each spoke's models. The view model maps the hub plugin's optional answer time, route, certificate region and classification and the spoke's models answer (signed-in providers only, every id validated, lists clipped; malformed or absent fields read as unknown, so an older plugin still works) and orders the selector's rows: eligible first, then fastest answer, each ineligible row saying why; visual proof: desktop/scripts/demo_p_ide_spokes_1_shot.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/remote_spokes_model.test.ts desktop/remote_spokes.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-RS-FLEET-OPS.1
+demo-P-RS-FLEET-OPS.1: ## P-RS-FLEET-OPS.1 (ADR-0509): remote spokes sized to their machines and watched. A pairing may carry maxLanes (1 to 8, absent means 2): one granted 4 admits 4 lanes and refuses the 5th, 0 or 9 is refused at pair time and in the store file, and GET /api/controller/lanes reports it. The view model maps each spoke's machine (CPUs, memory, disk, GPUs and VRAM, local model endpoint) and lane policy, the hub's lastSeen, silentSince and alerts (validated, clipped, absent reads as unknown); a spoke the hub reports silent reads "silent since" and cannot take a task; alert lines name interrupted tasks; Resume is offered only where a follow-up can land and sends exactly the contract text; visual proof: desktop/scripts/demo_p_ide_spokes_1_shot.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/controller/controller.test.ts desktop/controller/lane_lifecycle.test.ts desktop/renderer/remote_spokes_model.test.ts desktop/remote_spokes.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-RS-TRUST.1
+demo-P-RS-TRUST.1: ## P-RS-TRUST.1 (ADR-0510): the add-on's RS-ID-01 and RS-CRL-01 in the engine. A pairing may name its spoke (spokeNode, n_ and 32 hex, else 400); a delegate-certified approver decides only with that spoke's own certificate (spokeCert), which must verify under the paired root, chain included, and sit inside the approver delegation's label prefix, regions and classifications, else "the approver's delegation does not cover this spoke"; root-signed approvers are unaffected; a delegation's users limit admits only the listed approvers. A CRL more than 3 days past its nextUpdate refuses every decision; a legacy CRL never goes stale; once one with nextUpdate is held, a list without it is never taken. The view model maps the crl-stale and cert-expiring alerts and the laptop lane limit
+	$(BUN) test $(TEST_IGNORES) desktop/controller/remote_approval.test.ts desktop/renderer/remote_spokes_model.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-RS-TASK-MODEL.1
+demo-P-RS-TASK-MODEL.1: ## P-RS-TASK-MODEL.1 (ADR-0511): a model chosen per task. POST /api/controller/spawn may name a model, only one the engine lists as available (else 400 "this engine has no model <id>", nothing starts); the lane runs on it and its restart record keeps it; no model keeps the default. The IDE route forwards a well-formed model to the hub plugin; the Start-a-task selector offers the picked spoke's models, default first; visual proof: desktop/scripts/demo_p_ide_spokes_1_shot.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/controller/controller.test.ts desktop/remote_spokes.test.ts desktop/renderer/remote_spokes_model.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-RS-DEACTIVATE.1
+demo-P-RS-DEACTIVATE.1: ## P-RS-DEACTIVATE.1 (ADR-0512): a spoke deactivated on purpose. The view model maps the hub plugin's optional deactivated {since, reason} to the deactivated state, which wins over silent: dim grey, never animated, "Deactivated since <date>: <reason>", no alert lines, no selector row and no panel action; the engine refuses every action and read for it before anything is forwarded; without the field (an older plugin, or after hub reactivate) every spoke behaves as before
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/remote_spokes_model.test.ts desktop/remote_spokes.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-CREATOR-DRIFT
 demo-CREATOR-DRIFT: ## CREATOR-DRIFT (ADR-0430): CutWire Drift (GPL-3.0 Qt + FFmpeg video editor) as a Creator provider over its OWN localhost agent protocol, never spawned or scripted. The session Drift writes when the user turns on Agent access is discovered and folded into an on-device declaration whose status never carries the token; the probe is honest (not-installed, installed-but-Agent-access-off with the enable steps, unauthorized without echoing the token, ready with the version and only the attested set); the egress hiding inside Drift (cloud voices, the marketplace, ElevenLabs transcription) is refused BY NAME under CUI lockdown, recursively inside apply({ops}); an apply batch is one undo step reported exactly as Drift reports it (done / stopped / failed); an export lands in the library by its MAGIC BYTES, never its extension. The agent gets drift_status / drift_read / drift_apply / drift_export (project text fenced as untrusted data); the Studio gets a Drift tab with a live collaboration feed and Undo. Proven against a fake Drift speaking the real wire format.
 	$(BUN) run desktop/scripts/demo_creator_drift.ts
 	$(BUN) test $(TEST_IGNORES) harness/creator/drift_policy.test.ts desktop/creator_drift.test.ts desktop/creator_probe.test.ts desktop/creator_registry.test.ts harness/omp/drift_extension.test.ts desktop/renderer/creator_drift_view.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-KSYNC.L1
+demo-P-KSYNC.L1: ## P-KSYNC.L1 + L6 (#360): memory.fact journaling at the gate's single-writer seam. OFF unless LUCID_KSYNC_JOURNAL names a sync root (identity from LUCID_KSYNC_IDENTITY, refused inside the root); the producer rebuilds every Knowledge Envelope v1 conformance vector byte-for-byte (HKDF + ChaCha20-Poly1305 + Ed25519, canonical lines on disk); a promoted fact journals as body_v-null memory.fact; an unwritable root degrades to no-emit with the fact kept and the gate still blocking; the spec + vectors are sha256-pinned so a spec edit fails loudly.
+	$(BUN) run harness/scripts/demo_pksync_l1.ts
+	$(BUN) test $(TEST_IGNORES) harness/knowledge/envelope.test.ts harness/knowledge/spec_pin.test.ts harness/security/gate.failclosed.test.ts
 
 .PHONY: demo-CREATOR-WHISTLE
 demo-CREATOR-WHISTLE: ## CREATOR-WHISTLE (ADR-0432): word timing measured IN-PROCESS by the pinned Whistle model (Needle wasm, no socket import): the three assets verify by size and sha256 and a one-byte flip refuses the load by name and both hashes, the real model transcribes a 16 kHz fixture at 90%+ token match with monotonic word times, a clip over 30 s is windowed with no word split, one substituted word becomes the ONE derived item capped at 0.7, load and transcribe make zero network attempts, a hot CPU refuses the align job with the measured reason, confidence 1.2 is rejected, and a scratch Creator engine's POST /api/creator/align returns a validated, model-pinned document the editor paints with measured chips. Fails (exit 1) when the assets are missing
@@ -1448,6 +1529,11 @@ demo-P-PORTGUARD.4: ## P-PORTGUARD.4 (ADR-0458): Creator beside Agent. A package
 demo-CREATOR-OPENFILM: ## CREATOR-OPENFILM (ADR-0457): OpenFilm (MIT, film.html + frame(t) pages) as an on-device Creator provider run ONLY as `--version`, `look` and `render` on a fixed argv: shell shims, package runners (npx, bunx, dlx) and the get/open/update/skill subcommands are refused before anything runs; the child env carries no engine secret and forces the browser, update-check and telemetry opt-outs (plus a dead download host under CUI lockdown); the CLI's own .film/opened marker is written so no detached Studio server is spawned; an external URL in any page refuses under lockdown; the look verdict (same t, same picture) is parsed with its untrusted text sanitized, only PNG sheets from .film/cache/look are stored; a render lands in the library as video and an exit-2 run fails its job
 	$(BUN) run desktop/scripts/demo_creator_openfilm.ts
 	$(BUN) test $(TEST_IGNORES) desktop/creator_openfilm.test.ts desktop/creator_registry.test.ts desktop/creator_probe.test.ts desktop/cui_policy.test.ts harness/omp/openfilm_extension.test.ts desktop/renderer/creator_video.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-CREATOR-IMG2THREEJS
+demo-CREATOR-IMG2THREEJS: ## CREATOR-IMG2THREEJS (ADR-0562): img2threejs (image to procedural three.js, Apache-2.0) ported to pure TypeScript under harness/creator/img2threejs/ (no Python outside the sidecar, invariant 2) and exposed to the agent as img2threejs_probe / _assess / _validate / _generate / _state (Creator builds only, in-process, workspace-confined). Proves, through the REAL tools against a temp workspace: the strict-quality gate FAILS a shallow spec and PASSES the lantern fixture; blockout emits macro parts only; a locked pass and unported geometry are BLOCKED by name with nothing written; the factory is TypeScript Bun transpiles with every spec string a JSON literal; the checklist refuses evidence-free and out-of-order marks, reopens a pass on refine, and hard-stops at the loop limit; forged delimiters in a spec reach the model neutralized inside the fence
+	$(BUN) run harness/scripts/demo_creator_img2threejs.ts
+	$(BUN) test $(TEST_IGNORES) harness/creator/img2threejs/img2threejs.test.ts harness/omp/img2threejs_extension.test.ts desktop/creator_registry.test.ts desktop/creator_probe.test.ts desktop/renderer/skills.test.ts harness/adr_numbering.test.ts
 
 .PHONY: demo-P-VAULT-KEYS.1
 demo-P-VAULT-KEYS.1: ## P-VAULT-KEYS.1 (ADR-0472): provider keys, named-account keys, MCP bearer tokens and the TURN credential leave lucid-gui.json for an ENGINE-side OS vault (DPAPI / Keychain / libsecret master key, AES-256-GCM records) that headless engines open themselves. Real processes and the real backend: a plaintext settings file and its .bak migrate on the first engine start with no re-entry, a second engine reads the same keys, a missing master key reads as unreadable and rewrites nothing, a re-entered key sets the old vault aside, and the vault bundled for Node (Electron main) reports unavailable without touching a vault file
@@ -1475,3 +1561,7 @@ demo-P-BREW.1: ## P-BREW.1: the Homebrew cask is an app cask over the release .z
 .PHONY: demo-P-RECOVER.4
 demo-P-RECOVER.4: ## P-RECOVER.4 (ADR-0481): the main window recovers its own renderer. A render-process-gone that is not a clean exit is logged with reason + exit code and the app is loaded again after a backoff (250ms to 10s), at most 5 reloads per 60s sliding window; past the cap the window is left as it is and the log says to relaunch; a clean exit is ignored; an unresponsive renderer is logged, never reloaded. Wiring lives in main.ts createWindow (proven on a real Electron launch, ADR-0481 Consequences)
 	$(BUN) test $(TEST_IGNORES) desktop/renderer_watchdog.test.ts desktop/gpu_watchdog.test.ts desktop/navigation_policy.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-METRICS.1
+demo-P-METRICS.1: ## P-METRICS.1 (ADR-0561): long-term download and clone tracking. The real collector CLI, tokens in its env as the repo-metrics workflow passes them, against a local server that answers like api.github.com: two runs a week apart keep clone history GitHub has dropped and show each release's 7-day change; no traffic token records releases and says traffic was not collected (no invented zeros); a 403 exits 1, names the permission, keeps the release snapshot; a failed release fetch writes nothing; no token in any output or file
+	$(BUN) run tools/metrics/demo_p_metrics_1.ts
+	$(BUN) test $(TEST_IGNORES) tools/metrics/repo_metrics.test.ts harness/adr_numbering.test.ts

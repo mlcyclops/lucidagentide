@@ -11,8 +11,12 @@
 //   - passphrase custody: the DEK is wrapped by a PBKDF2-HMAC-SHA256 key-encryption key.
 //   - keystore custody:   the DEK is sealed by the OS keystore (Electron safeStorage) by
 //                         the desktop main process, and handed to openWithKey() unsealed.
+// A passphrase-custodied store can ALSO be opened with its DEK via openWithKey(): the main store's DEK is
+// the Lucid Vault Protector Spec v1 VMK (ADR-0454), unwrapped from protectors.ts by the password or a
+// Windows Hello / Touch ID protector.
 // Format is versioned `personal-kg.v1` (its own frozen contract; a bump re-encrypts).
 
+import { timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import type { Telemetry } from "../telemetry/events.ts";
@@ -90,12 +94,13 @@ export class PersonalStore {
 
   // ── passphrase custody ──────────────────────────────────────────────────────
   /** Create a brand-new encrypted store sealed by a passphrase. `version` selects the
-   *  variant (default = the main work/personal store; CUI_STORE_VERSION = the CUI store). */
-  static createWithPassphrase(path: string, passphrase: string, opts: { version?: StoreVersion } = {}): PersonalStore {
+   *  variant (default = the main work/personal store; CUI_STORE_VERSION = the CUI store). `dek` lets the
+   *  caller supply the key it also wraps elsewhere (the protector file, ADR-0454); default a fresh one. */
+  static createWithPassphrase(path: string, passphrase: string, opts: { version?: StoreVersion; dek?: Buffer } = {}): PersonalStore {
     const version = opts.version ?? STORE_VERSION;
     const salt = randomSalt();
     const kek = deriveKey(passphrase, salt, KDF_ITERS);
-    const dek = randomKey();
+    const dek = opts.dek ?? randomKey();
     const wrappedDek = encrypt(dek, kek);
     const kdf = { algo: "pbkdf2-hmac-sha256" as const, iters: KDF_ITERS, salt: salt.toString("base64") };
     const s = new PersonalStore(path, dek, "passphrase", structuredClone(EMPTY), version, kdf, wrappedDek);
@@ -108,12 +113,16 @@ export class PersonalStore {
   static openWithPassphrase(path: string, passphrase: string, opts: { telemetry?: Telemetry; version?: StoreVersion } = {}): PersonalStore {
     const version = opts.version ?? STORE_VERSION;
     const env = readEnvelope(path, version);
-    if (env.custody !== "passphrase" || !env.kdf || !env.wrappedDek) throw new Error("store is not passphrase-sealed");
-    const kek = deriveKey(passphrase, Buffer.from(env.kdf.salt, "base64"), env.kdf.iters);
-    const dek = decrypt(env.wrappedDek, kek); // throws if passphrase is wrong (GCM auth)
+    const dek = dekFromEnvelope(env, passphrase);
     const graph = decodeGraph(decrypt(env.data, dek));
     opts.telemetry?.emit(version === CUI_STORE_VERSION ? "personal_cui_store_unlocked" : "personal_store_unlocked", { custody: "passphrase", entities: graph.entities.length, facts: graph.facts.length });
     return new PersonalStore(path, dek, "passphrase", graph, version, env.kdf, env.wrappedDek);
+  }
+
+  /** The DEK from a passphrase-sealed file's own envelope, without opening the graph. The protector-file
+   *  migration (ADR-0454) uses it to adopt the existing DEK as the VMK. THROWS like openWithPassphrase. */
+  static unwrapPassphraseDek(path: string, passphrase: string, opts: { version?: StoreVersion } = {}): Buffer {
+    return dekFromEnvelope(readEnvelope(path, opts.version ?? STORE_VERSION), passphrase);
   }
 
   // ── OS-keystore custody (DEK sealed externally by Electron safeStorage) ──────
@@ -124,14 +133,17 @@ export class PersonalStore {
     s.save();
     return s;
   }
-  /** Open a keystore-custodied store with the DEK the OS keystore unsealed. */
+  /** Open a store with its raw DEK, whatever sealed that DEK at rest. A keystore-custodied store gets
+   *  the DEK the OS keystore unsealed; a passphrase-custodied store can get the DEK a device unlock
+   *  (P-KGBIO.1, ADR-0454) released, and keeps its passphrase envelope (kdf + wrappedDek) on save, so
+   *  the passphrase still opens it. THROWS on a wrong key (GCM auth) or a format-variant mismatch. */
   static openWithKey(path: string, dek: Buffer, opts: { telemetry?: Telemetry; version?: StoreVersion } = {}): PersonalStore {
     const version = opts.version ?? STORE_VERSION;
     const env = readEnvelope(path, version);
-    if (env.custody !== "keystore") throw new Error("store is not keystore-sealed");
+    if (env.custody === "passphrase" && (!env.kdf || !env.wrappedDek)) throw new Error("passphrase store is missing its key envelope");
     const graph = decodeGraph(decrypt(env.data, dek)); // throws on a wrong key
-    opts.telemetry?.emit(version === CUI_STORE_VERSION ? "personal_cui_store_unlocked" : "personal_store_unlocked", { custody: "keystore", entities: graph.entities.length, facts: graph.facts.length });
-    return new PersonalStore(path, dek, "keystore", graph, version);
+    opts.telemetry?.emit(version === CUI_STORE_VERSION ? "personal_cui_store_unlocked" : "personal_store_unlocked", { custody: env.custody, entities: graph.entities.length, facts: graph.facts.length });
+    return new PersonalStore(path, dek, env.custody, graph, version, env.kdf, env.wrappedDek);
   }
 
   static exists(path: string): boolean { return existsSync(path); }
@@ -241,6 +253,58 @@ export class PersonalStore {
     writeFileSync(this.#path, JSON.stringify(env), { encoding: "utf8", mode: 0o600 });
     try { chmodSync(this.#path, 0o600); } catch { /* best-effort on Windows */ }
   }
+  /** P-KGPASS.1 (ADR-0455): change the passphrase of an OPEN passphrase-custodied store. A re-wrap: the
+   *  DEK is unchanged (no re-key), and it is wrapped again under a KEK from the new
+   *  passphrase with a FRESH salt (and the current KDF_ITERS), and the envelope is saved. Returns false,
+   *  changing nothing, when `current` is not the passphrase. THROWS for a non-passphrase store. */
+  changePassphrase(current: string, next: string): boolean {
+    if (this.#custody !== "passphrase" || !this.#kdf || !this.#wrappedDek) throw new Error("store is not passphrase-sealed");
+    const oldKek = deriveKey(current, Buffer.from(this.#kdf.salt, "base64"), this.#kdf.iters);
+    let proven: Buffer | null = null;
+    try { proven = decrypt(this.#wrappedDek, oldKek); } catch { return false; } // GCM auth: wrong passphrase
+    finally { oldKek.fill(0); }
+    const same = proven.equals(this.#dek);
+    proven.fill(0);
+    if (!same) return false;
+    this.#rewrapUnder(next);
+    return true;
+  }
+  /** True when this store carries a passphrase envelope (the only kind a passphrase change applies to). */
+  get passphraseSealed(): boolean {
+    return this.#custody === "passphrase" && !!this.#kdf && !!this.#wrappedDek;
+  }
+  /** True when `key` is this open store's DEK. */
+  holdsKey(key: Buffer): boolean {
+    return key.length === this.#dek.length && timingSafeEqual(key, this.#dek);
+  }
+  /** P-KGPASS.1 (ADR-0455): re-wrap the envelope under `next` for a caller that proved the current
+   *  passphrase somewhere else (the protector file) and holds this store's key as the evidence. The
+   *  envelope is NOT asked for the current passphrase, so a change that was interrupted after the
+   *  protector file was written, leaving the envelope on the old passphrase, can be finished. Returns
+   *  false, changing nothing, when `key` is not the DEK. THROWS for a non-passphrase store. */
+  rewrapPassphraseWithKey(key: Buffer, next: string): boolean {
+    if (!this.passphraseSealed) throw new Error("store is not passphrase-sealed");
+    if (!this.holdsKey(key)) return false;
+    this.#rewrapUnder(next);
+    return true;
+  }
+  /** Wrap the DEK under `passphrase` with a fresh salt and save. The in-memory envelope changes only
+   *  when the write lands: after a failed save this instance, and its next save, stay on the envelope
+   *  the caller was told is still current. */
+  #rewrapUnder(passphrase: string): void {
+    const previous = { wrappedDek: this.#wrappedDek, kdf: this.#kdf };
+    const salt = randomSalt();
+    const kek = deriveKey(passphrase, salt, KDF_ITERS);
+    try { this.#wrappedDek = encrypt(this.#dek, kek); } finally { kek.fill(0); }
+    this.#kdf = { algo: "pbkdf2-hmac-sha256", iters: KDF_ITERS, salt: salt.toString("base64") };
+    try {
+      this.save();
+    } catch (e) {
+      this.#wrappedDek = previous.wrappedDek;
+      this.#kdf = previous.kdf;
+      throw e;
+    }
+  }
   /** Zero the in-memory key (call when locking the store). */
   lock(): void { this.#dek.fill(0); }
 }
@@ -249,6 +313,12 @@ function readEnvelope(path: string, expected: StoreVersion): Envelope {
   const env = JSON.parse(readFileSync(path, "utf8")) as Envelope;
   if (env.v !== expected) throw new Error(`store format mismatch: file is ${env.v}, expected ${expected}`);
   return env;
+}
+/** Unwrap a passphrase envelope's DEK. THROWS for a non-passphrase store or a wrong passphrase (GCM auth). */
+function dekFromEnvelope(env: Envelope, passphrase: string): Buffer {
+  if (env.custody !== "passphrase" || !env.kdf || !env.wrappedDek) throw new Error("store is not passphrase-sealed");
+  const kek = deriveKey(passphrase, Buffer.from(env.kdf.salt, "base64"), env.kdf.iters);
+  try { return decrypt(env.wrappedDek, kek); } finally { kek.fill(0); }
 }
 function decodeGraph(buf: Buffer): PersonalGraph {
   const g = JSON.parse(buf.toString("utf8")) as Partial<PersonalGraph>;

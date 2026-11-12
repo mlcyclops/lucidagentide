@@ -18,8 +18,9 @@ Implements ADR-0449. Phase 1 only: read-only introspection for an external MCP o
 ### (a) MCP server scaffold + loopback/bearer/fail-closed transport  [P-CTRL-RO.1c]
 - Reuse `McpStdioServer` (`harness/mcp/mcp_server.ts`). Add `lucid mcp-serve --read-only`
   registering exactly three tools.
-- Attach to the engine via `engine-discovery-<port>.json` (port + nonce only), win the ADR-0305
-  handshake; read `LUCID_CONTROLLER_TOKEN` from env; send it in the `x-lucid-token` header only.
+- Attach to the engine via the nonce-only record `engine-nonce-<port>.json` (ADR-0503:
+  `listNonceRecords(nonceDir(env))` in `desktop/engine_discovery.ts`; never the token-bearing
+  `engine-discovery-<port>.json`), win the ADR-0305 handshake (`verifyDiscovery`); read `LUCID_CONTROLLER_TOKEN` from env; send it in the `x-lucid-token` header only.
 - Fail-closed: no engine / bad handshake / revoked token / a write tool requested all return an
   MCP `isError` naming the cause. Never spawn an engine, never fall back to another credential.
 - Exit: scripted stdio MCP client lists tools and gets the three; `tools/call` on a would-be write

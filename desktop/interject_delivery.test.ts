@@ -67,7 +67,7 @@ test("notes queued while the lane had no tool step reach the agent once, with th
   await live.prompt(id, "REQ-7731", (e) => first.push(e));
   const said = first.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
   expect(said).toContain("your session is now being driven from the MAIN COMPOSER");
-  expect(said).toContain("RETURNED to your fleet lane card");
+  expect(said).toContain("RETURNED to your fleet");
   expect(said).not.toContain("Status?");
   expect(said.indexOf("RETURNED")).toBeLessThan(said.indexOf("REQ-7731")); // before the request, not after
   const second: LaneEvent[] = [];

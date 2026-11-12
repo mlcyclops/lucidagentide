@@ -116,6 +116,9 @@ const DESTRUCTIVE = new Set([
   // on these lowercase entries (issue #449, the "fix first" gap).
   "del", "erase", "rd", "remove-item", "ri",
 ]);
+/** P-CTRL-REMOTE.1 (ADR-0531): a remote lane refuses KNOWN destructive programs outright but lets a human decide
+ *  on an unknown one (also T3 here, fail-closed), so the two must be told apart. */
+export const isDestructiveProgram = (prog: string): boolean => DESTRUCTIVE.has(prog);
 const LOCAL_MUTATE = new Set(["mkdir", "touch", "ln", "cp", "mv", "tee", "sed", "awk", "patch"]);
 const PKG = /^(npm|pnpm|yarn|pip|pip3|pipx|apt|apt-get|yum|dnf|brew|gem|cargo|go|bundle|composer)$/;
 const PKG_MUTATE = /\b(install|add|upgrade|update|i|get|remove|uninstall)\b/;

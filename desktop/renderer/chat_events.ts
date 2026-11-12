@@ -31,6 +31,9 @@ export interface FleetLaneStatus {
   turns: number;
   lastActivityAt: number;
   pendingApproval?: { summary: string; kind: string };
+  /** P-STUCK-SHOW.3 (ADR-0521): the lane's open call is marked likely stuck (ADR-0418); fleet_status
+   *  displayStatus shows it as `likely-stuck`. Display only. */
+  stuck?: true;
 }
 
 export type ChatEvent =

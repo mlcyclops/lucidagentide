@@ -19,11 +19,13 @@
 // Env: a plugin gets an ALLOWLISTED environment (OS basics plus the contract vars), never the engine's
 // env, which carries provider keys and vault-injected tokens. PORT, HOST, LUCID_PLUGIN_ID,
 // LUCID_PLUGIN_DATA, LUCID_PLUGIN_ROOT, LUCID_PLUGIN_URL, LUCID_AGENT_BIN (the omp the engine itself runs:
-// plugin AI goes through LUCID Agent).
+// plugin AI goes through LUCID Agent). A server or daemon process also gets LUCID_PLUGIN_HOST_TOKEN, a secret
+// minted per launch that only this engine holds (P-IDE-SPOKES.1, ADR-0506): with it the engine calls the plugin's
+// own /host/* routes (hostEndpoint). Its MCP child never gets it.
 
 import type { Server } from "bun";
 import { spawn, spawnSync, execFile, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, extname, join, resolve, sep } from "node:path";
@@ -44,6 +46,8 @@ export interface PluginStatus {
   kind: PluginManifest["kind"]; tier: PluginManifest["tier"]; section: PluginManifest["section"];
   state: PluginState; url?: string; error?: string;
   license: string; hasMcp: boolean;
+  /** ADR-0505: a store install or a private one from a file, and whether a trusted publisher signed it. */
+  source: InstalledPlugin["source"]; signed: boolean;
 }
 
 export interface RuntimeDeps {
@@ -64,6 +68,8 @@ interface Running {
   url: string;
   proc?: ChildProcess;
   server?: Server<undefined>;
+  /** ADR-0506: this launch's LUCID_PLUGIN_HOST_TOKEN (server and daemon kinds). */
+  hostToken?: string;
   error?: string;
   tail: string;
   stopping: boolean;
@@ -219,8 +225,16 @@ export class PluginRuntime {
         url: r?.state === "running" ? r.url : undefined,
         error: r?.state === "error" ? r.error : undefined,
         license: p.manifest.license, hasMcp: !!p.manifest.mcp,
+        source: p.source, signed: p.signed,
       };
     });
+  }
+
+  /** ADR-0506: where the engine reaches a RUNNING server or daemon plugin's /host/* routes, and the per-launch
+   *  token they accept. Null while it is not running, and for web plugins (no process to hold a token). */
+  hostEndpoint(id: string): { url: string; token: string } | null {
+    const r = this.running.get(id);
+    return r?.state === "running" && r.hostToken ? { url: `http://127.0.0.1:${r.port}`, token: r.hostToken } : null;
   }
 
   /** Start (or return the running instance of) a plugin. Concurrent calls share one start. */
@@ -301,15 +315,16 @@ export class PluginRuntime {
       const e = p.manifest.entry as DaemonEntry;
       cmd = join(p.dir, e.exe); args = e.args ?? []; asNode = false; healthPath = e.healthPath;
     }
+    const hostToken = randomBytes(32).toString("hex");
     let proc: ChildProcess;
     try {
       proc = spawn(cmd, args, {
-        cwd: p.dir, env: childEnv(contract, asNode), stdio: ["ignore", "pipe", "pipe"],
+        cwd: p.dir, env: childEnv({ ...contract, LUCID_PLUGIN_HOST_TOKEN: hostToken }, asNode), stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true, detached: this.platform !== "win32",
       });
     } catch (err) { return { ok: false, error: `could not start: ${(err as Error).message}` }; }
     const exit = Promise.withResolvers<void>();
-    const r: Running = { state: "starting", port, url, proc, tail: "", stopping: false, exited: exit.promise };
+    const r: Running = { state: "starting", port, url, proc, hostToken, tail: "", stopping: false, exited: exit.promise };
     const onExit = (why: string): void => {
       if (!r.stopping && this.running.get(id) === r && r.state !== "error") {
         r.state = "error";

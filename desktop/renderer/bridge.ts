@@ -138,6 +138,7 @@ export interface AgentTemplateInfo {
 }
 import type { LocalModelDef, LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3/.6: self-hosted/custom LLM providers
 import type { NativePickResult } from "../native_dialog.ts"; // P-FS.2 (ADR-0265): backend-opened OS folder dialog
+import type { DeviceStatus } from "../kg_device_unlock.ts"; // P-KGBIO.1 (ADR-0454): Windows Hello / Touch ID unlock
 import type { RestoredTurn } from "../session_steps.ts"; // P-RESUME.1 (ADR-0171): restored agent activity
 import type { SessionLive } from "../session_owner.ts"; // P-SWITCH.2 (ADR-0404): where a listed session is live
 export type { RestoredTurn };
@@ -292,6 +293,7 @@ import type { JobsData, JobTargetView, JobView } from "./jobs_view.ts"; // P-SCH
 export type { NetView };
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
 import type { AosControl, AosSnapshot } from "../aos.ts"; // P-AOS.1 (ADR-0452): the fleet goal (types only, owned there)
+import type { RecallView, RemoteActionView, RemoteApprovalsView, RemoteHubView } from "./remote_spokes_model.ts"; // P-IDE-SPOKES.1 (ADR-0506): owned there
 export type { AosControl, AosSnapshot };
 /** P-AOS.1: a fleet-goal change: the new snapshot, or the engine's refusal in words. */
 export type FleetGoalReply = { ok: true; data: AosSnapshot } | { ok: false; error: string };
@@ -513,9 +515,17 @@ export interface EvalReportResult { kind: string; id: string; rel: string | null
 export interface ModeOption { id: string; name: string; description?: string }
 export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "creator" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
 export interface OmpCommand { name: string; description?: string; hint?: string }
-export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest"; live?: SessionLive }
+export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest"; live?: SessionLive; spoke?: string; archived?: true }
 // P-KG-INGEST.1b (ADR-0076): chats, with throwaway extraction sessions split into a collapsible group.
-export interface SessionList { sessions: SessionInfo[]; ingest: SessionInfo[] }
+// P-SESS-SEARCH.1 (ADR-0515): `hiddenSpokes` = spoke sessions held back while the Spokes toggle is off.
+// P-SESS-ARCHIVE.1 (ADR-0517): `archived` = this workspace's archived chats (the Archived group's count).
+export interface SessionList { sessions: SessionInfo[]; ingest: SessionInfo[]; hiddenSpokes?: number; archived?: number }
+/** P-SESS-ARCHIVE.1 (ADR-0517): mirrors desktop/sessions.ts ArchivePolicy / ArchiveRun. */
+export interface ArchivePolicyView { auto: boolean; days: number; spokeDays: number }
+export interface ArchiveRunView { candidates: number; archived: number; skipped: number; at: number }
+export interface ArchivePolicyState { policy: ArchivePolicyView; wouldArchive: number; lastRun: ArchiveRunView | null }
+/** P-SESS-SEARCH.1: a sidebar search across every session of the workspace (mirrors desktop/sessions.ts). */
+export interface SessionSearch { hits: (SessionInfo & { snippet?: string })[]; total: number; hiddenSpokes: number }
 // P-SKILL.1 (ADR-0045): per-file result of a gated skill import (mirrors desktop/skills_import.ts).
 export interface SkillImportResult { ok: boolean; name: string; written?: boolean; path?: string; blocked?: boolean; reason?: string; trustLabel?: string; findings?: number }
 
@@ -580,7 +590,7 @@ export interface KbPackImportView {
 // running kind is opened at `url` (http://localhost:<port>/, the plugin's own loopback origin).
 export type PluginKind = "web" | "server" | "daemon";
 export type PluginState = "installed" | "running" | "starting" | "error";
-export type PluginGate = "manifest" | "hash" | "signature" | "authenticode" | "scan" | "download";
+export type PluginGate = "manifest" | "hash" | "signature" | "authenticode" | "scan" | "download" | "private";
 export interface InstalledPluginView {
   id: string; name: string; version: string; kind: PluginKind;
   tier: "premium" | "free"; section: "civilian" | "government";
@@ -589,17 +599,30 @@ export interface InstalledPluginView {
   license: string;
   /** The plugin registers agent tools (MCP) while it runs. */
   hasMcp: boolean;
+  /** ADR-0505: installed from the store, or privately from a file the user picked. */
+  source: "catalog" | "private";
+  /** Signed by a publisher key baked into this build. */
+  signed: boolean;
 }
 export interface PluginsListView { plugins: InstalledPluginView[] }
 export type PluginInstallView =
-  | { ok: true; id: string; version: string }
+  | { ok: true; id: string; version: string; signed?: boolean }
+  | { ok: false; gate: PluginGate; reason: string; logPath?: string };
+/** P-PLUGINS.7 (ADR-0505): what a picked `.lplugin.zip` is, before anything installs. `sha256` names the
+ *  reviewed bytes; `replaces` is the installed private version it would replace. */
+export type PluginFileInspectView =
+  | {
+    ok: true; id: string; name: string; version: string; publisher: string; kind: PluginKind;
+    permissions: string[]; hasMcp: boolean; signed: boolean; keyId?: string; sha256: string; replaces: string | null;
+  }
   | { ok: false; gate: PluginGate; reason: string; logPath?: string };
 export type PluginStartView = { ok: true; url: string } | { ok: false; error: string };
 export type PluginActionView = { ok: true } | { ok: false; error: string };
 export interface PluginLicenseView { ok: boolean; id?: string; version?: string; text?: string; error?: string }
 // P-PROV.1 (ADR-0210): extra per-provider config env (Azure resource/version, Vertex project/location/ADC,
 // Gemini-Enterprise project). Non-secret fields echo `value` to pre-fill; secret fields report `last4`.
-export interface ProviderFieldAuth { env: string; label: string; placeholder?: string; secret?: boolean; set: boolean; value?: string; last4?: string }
+// `options` (ADR-0504): a closed choice rendered as a select, the first option being the unset default.
+export interface ProviderFieldAuth { env: string; label: string; placeholder?: string; secret?: boolean; options?: { value: string; label: string }[]; set: boolean; value?: string; last4?: string }
 export interface ProviderAuth {
   id: string; name: string; env: string; oauthId: string; canOauth: boolean;
   /** P-PROV.3: a device-code broker for the same account (OpenAI `openai-codex-device`); the card offers it
@@ -629,6 +652,11 @@ import type { TriviaQuestion } from "./trivia.ts";
 export interface TriviaSeedSources { sessions: boolean; kg: boolean; codegraph: boolean }
 export interface TriviaSeedView { ok: boolean; questions: TriviaQuestion[]; count: number; usedSources: string[]; model: string; blocked?: boolean; reason?: string }
 export type PersonalScopeView = "work" | "personal" | "cui" | "combined";
+/** P-KGBIO.1 (ADR-0454): device-unlock status from main (kg_device_unlock.ts). */
+export type KgDeviceStatus = DeviceStatus;
+/** `code` is a DeviceUnlockCode; "cancelled" is the user's choice, never an error toast. */
+export type KgDeviceReply = { ok: true } | { ok: false; code: string; error: string };
+const KG_DEVICE_DESKTOP_ONLY: KgDeviceReply = { ok: false, code: "unsupported", error: "Device unlock needs the LUCID desktop app." };
 export interface PersonalStatus {
   enabled: boolean; aiExtract: boolean; configured: boolean; unlocked: boolean;
   scope: PersonalScopeView; counts: { work: number; personal: number; cui: number } | null;
@@ -1128,6 +1156,17 @@ export interface LucidBridge {
   /** P-FLEET.L4: revive an error/stopped lane in place - same id, transcript memory carried. */
   fleetRespawn(laneId: string): Promise<{ ok: boolean; lane?: LaneView; reason?: string } | null>;
   fleetAnswer(laneId: string, allow: boolean, scope?: ApprovalScope): Promise<{ ok: boolean } | null>;
+  /** P-IDE-SPOKES.1 (ADR-0506): the remote-spokes hub plugin's spokes, scopes and actions, through the engine.
+   *  Recall and parked actions come back scanned; recalled text is shown as text and enters a prompt only as the
+   *  delimited `context`. Every action is re-gated by the hub certificate's scopes engine-side. */
+  remoteSpokes(): Promise<RemoteHubView | null>;
+  remoteSpokeRecall(node: string, task?: string): Promise<RecallView | null>;
+  remoteSpokeApprovals(node: string): Promise<RemoteApprovalsView | null>;
+  /** `password`: a `password` hub's presence password, on an allow only (ADR-0507); sent once, never kept. */
+  remoteSpokeDecide(input: { node: string; task: string; ask: string; digest: string; allow: boolean; password?: string }): Promise<RemoteActionView | null>;
+  /** submit {node, text, name?, model?}; followup {node, task, text}; cancel and close {node, task}. `model`
+   *  (ADR-0511): one the spoke reports, "provider/id"; absent, the spoke engine's default. */
+  remoteSpokeAct(op: "submit" | "followup" | "cancel" | "close", input: { node: string; task?: string; text?: string; name?: string; model?: string }): Promise<RemoteActionView | null>;
   /** Full auto-mode. laneId omitted = ALL lanes + persisted default for new ones. The server refuses
    *  on=true unless the risk was accepted before or acceptRisk is true (which persists the acceptance). */
   fleetAuto(opts: { laneId?: string; on: boolean; acceptRisk?: boolean }): Promise<{ ok: boolean } | null>;
@@ -1201,6 +1240,9 @@ export interface LucidBridge {
   // P-PLUGINS.2 (ADR-0462): install (every gate fail-closed), run, stop and remove `.lplugin` plugins.
   pluginsList(): Promise<PluginsListView | null>;
   pluginsInstallFromUrl(url: string, expectId: string): Promise<PluginInstallView | null>;
+  // P-PLUGINS.7 (ADR-0505): a private install from a picked file, in two explicit steps.
+  pluginsInspectFile(path: string): Promise<PluginFileInspectView | null>;
+  pluginsInstallFile(input: { path: string; sha256: string; acceptUnsigned: boolean }): Promise<PluginInstallView | null>;
   pluginsStart(id: string): Promise<PluginStartView | null>;
   pluginsStop(id: string): Promise<PluginActionView | null>;
   /** keepData defaults to true: the plugin's data dir survives unless the user asks to delete it. */
@@ -1219,7 +1261,9 @@ export interface LucidBridge {
   clearActiveSkill(): Promise<{ active: string } | null>;
   // P-IDE.3: record a skill activation as telemetry (metadata only).
   skillActivated(command: string, name: string, source: "bundled" | "project" | "task"): Promise<unknown>;
-  sessions(): Promise<SessionList | null>;
+  sessions(spokes?: boolean): Promise<SessionList | null>;
+  /** P-SESS-SEARCH.1: title, model, spoke name, and conversation text; `spokes` shows spoke sessions. */
+  searchSessions(q: string, spokes: boolean): Promise<SessionSearch | null>;
   // P-PERF.4: tail-first transcript page - `limit` returns only the last N messages (+ the true total).
   // P-RESUME.1 (ADR-0171): user messages carry their `turn` ordinal; `steps` is the restored agent
   // activity (thinking/tool/failure groups) recorded in the lucid-steps sidecar, keyed by that ordinal.
@@ -1232,6 +1276,12 @@ export interface LucidBridge {
   resumeSession(id: string, opts?: { force?: boolean }): Promise<SessionSwitchResult>;
   deleteSession(id: string): Promise<{ ok: boolean; error?: string }>;
   clearIngestSessions(): Promise<{ ok: boolean; cleared: number } | null>; // P-KG-INGEST.2: bulk-delete ingest throwaways
+  // P-SESS-ARCHIVE.1 (ADR-0517): archive / restore, the Archived group, the auto-archive rule.
+  archiveSession(id: string): Promise<{ ok: boolean; error?: string } | null>;
+  restoreSession(id: string): Promise<{ ok: boolean; restored: boolean; error?: string } | null>;
+  archivedSessions(): Promise<{ sessions: SessionInfo[] } | null>;
+  archivePolicy(set?: ArchivePolicyView): Promise<ArchivePolicyState | null>;
+  archiveNow(): Promise<ArchiveRunView | null>;
   /** Same refusal rule as resumeSession. */
   newSession(opts?: { force?: boolean }): Promise<SessionSwitchResult>;
   setZoom(factor: number): void;
@@ -1305,6 +1355,15 @@ export interface LucidBridge {
   personalSetup(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
   personalUnlock(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
   personalLock(): Promise<PersonalStatus | null>;
+  // P-KGPASS.1 (ADR-0455): change the main or CUI store's passphrase (the store must be unlocked)
+  personalChangePassphrase(which: "main" | "cui", current: string, next: string): Promise<{ ok: boolean; error?: string } | null>;
+  // P-KGBIO.1 (ADR-0454): device unlock (desktop app only; null / unsupported in a plain browser)
+  kgDeviceStatus(): Promise<KgDeviceStatus | null>;
+  kgDeviceEnroll(passphrase: string, opts?: { autoUnlock?: boolean; companion?: boolean }): Promise<KgDeviceReply>;
+  kgDeviceUnlock(): Promise<KgDeviceReply>;
+  kgDeviceAuto(on: boolean): Promise<boolean>;
+  kgDeviceForget(): Promise<boolean>;
+  onKgDeviceUnlocked(cb: (r: KgDeviceReply & { label?: string | null }) => void): void;
   personalScope(scope: PersonalScopeView): Promise<PersonalStatus | null>;
   // P9.5a: the isolated CUI store's own setup / unlock / lock
   personalCuiSetup(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
@@ -1596,6 +1655,13 @@ interface NativeShell {
   credList?(): Promise<CredMetaView[]>;
   credDelete?(ref: string): Promise<{ deleted: boolean } | { error: string }>;
   credEncryptionAvailable?(): Promise<boolean>;
+  // P-KGBIO.1 (ADR-0454): Windows Hello / Touch ID unlock of the knowledge graph (main holds the key path).
+  kgDeviceStatus?(): Promise<KgDeviceStatus | null>;
+  kgDeviceEnroll?(input: { passphrase: string; autoUnlock?: boolean; companion?: boolean }): Promise<KgDeviceReply>;
+  kgDeviceUnlock?(): Promise<KgDeviceReply>;
+  kgDeviceAuto?(on: boolean): Promise<boolean>;
+  kgDeviceForget?(): Promise<boolean>;
+  onKgDeviceUnlocked?(cb: (r: KgDeviceReply & { label?: string | null }) => void): void;
 }
 declare global { interface Window { lucid?: NativeShell } }
 const shell: NativeShell | undefined = typeof window !== "undefined" ? window.lucid : undefined;
@@ -1982,6 +2048,11 @@ export const bridge: LucidBridge = {
   },
   fleetRespawn: (laneId) => post("/api/fleet/respawn", { laneId }),
   fleetAnswer: (laneId, allow, scope) => post("/api/fleet/answer", { laneId, allow, ...(scope ? { scope } : {}) }),
+  remoteSpokes: () => getData("/api/remote-spokes"), // P-IDE-SPOKES.1 (ADR-0506)
+  remoteSpokeRecall: (node, task) => post("/api/remote-spokes/recall", { node, ...(task ? { task } : {}) }),
+  remoteSpokeApprovals: (node) => getData(`/api/remote-spokes/approvals?node=${encodeURIComponent(node)}`),
+  remoteSpokeDecide: (input) => post("/api/remote-spokes/decide", input),
+  remoteSpokeAct: (op, input) => post(`/api/remote-spokes/${op}`, input),
   fleetAuto: (opts) => post("/api/fleet/auto", opts),
   fleetCancel: (laneId) => post("/api/fleet/cancel", { laneId }),
   fleetStop: (laneId) => post("/api/fleet/stop", { laneId }),
@@ -2046,6 +2117,8 @@ export const bridge: LucidBridge = {
   kbPackInstallFromUrl: (url) => post("/api/kb/pack/install-from-url", { url }),
   pluginsList: () => getData("/api/plugins"),
   pluginsInstallFromUrl: (url, expectId) => post("/api/plugins/install-from-url", { url, expectId }),
+  pluginsInspectFile: (path) => post("/api/plugins/inspect-file", { path }),
+  pluginsInstallFile: (input) => post("/api/plugins/install-file", input),
   pluginsStart: (id) => post("/api/plugins/start", { id }),
   pluginsStop: (id) => post("/api/plugins/stop", { id }),
   pluginsUninstall: (id, keepData = true) => post("/api/plugins/uninstall", { id, keepData }),
@@ -2053,9 +2126,10 @@ export const bridge: LucidBridge = {
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
   clearActiveSkill: () => post("/api/skill", { clear: true }),
   skillActivated: (command, name, source) => post("/api/skill/activated", { command, name, source }),
-  sessions: async () => {
+  searchSessions: (q, spokes) => getData(`/api/sessions/search?q=${encodeURIComponent(q)}${spokes ? "&spokes=1" : ""}`),
+  sessions: async (spokes = false) => {
     try {
-      const r = await fetch("/api/sessions", { cache: "no-store", headers: authHeaders() });
+      const r = await fetch(`/api/sessions${spokes ? "?spokes=1" : ""}`, { cache: "no-store", headers: authHeaders() });
       if (r.status === 404) return null; // server predates the sessions route → out of date
       const data = (await r.json())?.data;
       // Tolerate an older server that returned a bare array (pre-1b): wrap it as { sessions, ingest }.
@@ -2074,6 +2148,11 @@ export const bridge: LucidBridge = {
   resumeSession: (id, opts) => postSessionSwitch("/api/session/load", { id, force: opts?.force === true }),
   deleteSession: async (id) => (await post("/api/session/delete", { id })) ?? { ok: false, error: "no response" },
   clearIngestSessions: () => post("/api/sessions/ingest/clear", {}),
+  archiveSession: (id) => post("/api/session/archive", { id }), // P-SESS-ARCHIVE.1
+  restoreSession: (id) => post("/api/session/restore", { id }),
+  archivedSessions: () => getData("/api/sessions/archived"),
+  archivePolicy: (set) => (set ? post("/api/sessions/archive-policy", set) : getData("/api/sessions/archive-policy")),
+  archiveNow: () => post("/api/sessions/archive-now", {}),
   newSession: (opts) => postSessionSwitch("/api/newSession", { force: opts?.force === true }),
   // P-COLLAB.3 (ADR-0192): live session sharing.
   collabStatus: () => getData("/api/collab/status"),
@@ -2189,6 +2268,13 @@ export const bridge: LucidBridge = {
   personalSetup: (passphrase) => post("/api/personal/setup", { passphrase }),
   personalUnlock: (passphrase) => post("/api/personal/unlock", { passphrase }),
   personalLock: () => post("/api/personal/lock", {}),
+  personalChangePassphrase: (which, current, next) => post("/api/personal/passphrase", { which, current, next }),
+  kgDeviceStatus: () => (shell?.kgDeviceStatus ? shell.kgDeviceStatus().catch(() => null) : Promise.resolve(null)),
+  kgDeviceEnroll: (passphrase, opts) => (shell?.kgDeviceEnroll ? shell.kgDeviceEnroll({ passphrase, ...opts }) : Promise.resolve(KG_DEVICE_DESKTOP_ONLY)),
+  kgDeviceUnlock: () => (shell?.kgDeviceUnlock ? shell.kgDeviceUnlock() : Promise.resolve(KG_DEVICE_DESKTOP_ONLY)),
+  kgDeviceAuto: (on) => (shell?.kgDeviceAuto ? shell.kgDeviceAuto(on) : Promise.resolve(false)),
+  kgDeviceForget: () => (shell?.kgDeviceForget ? shell.kgDeviceForget() : Promise.resolve(false)),
+  onKgDeviceUnlocked: (cb) => { shell?.onKgDeviceUnlocked?.(cb); },
   personalScope: (scope) => post("/api/personal/scope", { scope }),
   personalCuiSetup: (passphrase) => post("/api/personal/cui/setup", { passphrase }),
   personalCuiUnlock: (passphrase) => post("/api/personal/cui/unlock", { passphrase }),

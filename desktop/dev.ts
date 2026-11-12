@@ -15,7 +15,7 @@ import { join, dirname, basename } from "node:path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { ndjsonStream } from "./chat_stream.ts";
 import { ENGINE_EXIT_PORT_BUSY } from "./engine_boot.ts"; // P-PORTGUARD.2: the bind-failure exit code main classifies on
-import { discoveryDir, discoveryPath, removeDiscovery, writeDiscovery } from "./engine_discovery.ts"; // P-TUI.0 (ADR-0419)
+import { discoveryDir, discoveryPath, nonceDir, noncePath, removeDiscovery, resolveNonceGroup, writeDiscovery, writeNonceRecord, type EngineNonceRecord } from "./engine_discovery.ts"; // P-TUI.0 (ADR-0419), ADR-0503
 import { parentAlive, parentWatchConfig } from "./parent_watch.ts"; // P-PORTGUARD.2: never outlive the Electron main
 import { buildEngineeringUpdate, renderEngineeringBrief, buildPodcastScript, renderScript, type PodcastBackend, type BriefRole } from "../harness/brief/engineering_update.ts";
 import { buildComplianceRows, renderPoamCsv, renderCkl } from "../harness/brief/compliance.ts"; // P-REPORT.6/.8: POA&M + CKL
@@ -130,6 +130,7 @@ import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, TURN_ALREADY_RUNN
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
+import { displayStatus } from "./collab/fleet_status.ts"; // P-STUCK-SHOW.3 (ADR-0521): phone guests see likely-stuck spokes too
 import { sessionLive, withLiveState, type SessionLiveSpoke } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
 import { addInterject, addPeerNote, awaitPeerReply, carryPendingNotes, drainInterjects, drainPeerNotes, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes; P-OWN.1: peer notes
 import { CheckoutRegistry, gitDirtyPaths, type CheckoutSession } from "./checkout_registry.ts"; // P-OWN.1: who is writing in which checkout
@@ -139,11 +140,12 @@ import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, fa
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: shared combo parse, so a typo fails fast at the route
 import { isBrowserAction, isBrowserPageShape } from "./browser_snapshot.ts"; // P-JEV.4 (ADR-0379): the policy's act/snapshot shapes
 import { FleetGoal } from "./fleet_goal.ts"; // P-AOS.1 (ADR-0452): the standing fleet goal + the AOS-1 heartbeat
-import { appendLaneLedger, isTimelineKind, listTimeline, readLaneLedger } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline; P-SCHED.1 reads it to recover a job's lane
+import { appendLaneLedger, isTimelineKind, laneSessionNames, listTimeline, readLaneLedger } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline; P-SCHED.1 reads it to recover a job's lane; P-SESS-SEARCH.1 tags spoke sessions
 import { JobScheduler, type LedgerHit } from "./job_scheduler.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs
 import { createJob as createScheduledJob, jobTargetRepo, loadJobs, normalizeJobSpec, saveJobs, updateJob, nextFireAt } from "./scheduled_jobs.ts"; // P-SCHED.1 (aliased: creator_jobs.ts exports a createJob too, and the second import silently replaced the first at runtime)
 import { firesBetween } from "./cron.ts"; // P-SCHED.1
-import { clearIngestSessions, deleteSession, listSessions, sessionMessages } from "./sessions.ts";
+import { LIVE_HEARTBEAT_MS, otherEnginesSessions, publishLiveSessions, withdrawLiveSessions } from "./live_sessions.ts"; // P-SESS-ARCHIVE.1: sessions other engines hold
+import { archivedSessions, archivePolicy, archiveSession, autoArchive, clearIngestSessions, deleteSession, flushSessionIndex, listSessions, restoreSession, searchSessions, sessionMessages, type ArchiveRun, type SpokeFilter } from "./sessions.ts";
 import { providerAuth, typesafeKeySet, type ProviderAuthSnapshot } from "./auth_status.ts";
 import { parseJudgmentReport } from "../harness/judgment/trace_schema.ts"; // P-JEV.2 (ADR-0377): the loopback boundary for judgment traces
 import { openHubWindow } from "./hub_launch.ts"; // P-TUI.2: the Fleet view's Terminal hub button
@@ -566,7 +568,7 @@ import { kbScanner, kbStore, kgEntry, listKgs, activeKgId, createKg, renameKg, s
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.ts"
-import { installPluginFromUrl, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462)
+import { inspectPluginFile, installPluginFile, installPluginFromUrl, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505)
 import { PluginRuntime, resolvePluginNode } from "./plugins/runtime.ts" // P-PLUGINS.2 (ADR-0462)
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
@@ -595,11 +597,14 @@ function markWorkspaceSetupAsked(path: string): void {
   saveSettings(s);
 }
 import { EVENTS_LOG_PATH, recordSkillActivated } from "./skills_log.ts";
-import { CONTROLLER_ROUTES, handleController, type ControllerDeps } from "./controller/routes.ts"; // P-CTRL.2 (ADR-0438)
+import { auditTierVerdict, CONTROLLER_ROUTES, forgetControllerLane, handleController, restoreControllerLanes, type ControllerDeps } from "./controller/routes.ts"; // P-CTRL.2 (ADR-0438); lane lifecycle ADR-0500/0501
+import { ControllerLaneStore } from "./controller/lane_store.ts"; // ADR-0501: controller lanes survive a restart
+import { OFF_TASK_SYSTEM, offTaskPrompt, parseOffTask } from "./controller/remote_policy.ts"; // P-CTRL-REMOTE.1 (ADR-0531)
 import { PairingStore, type Pairing } from "./controller/store.ts"; // P-CTRL.2: the hashed pairing store
+import { handleRemoteSpokes, REMOTE_SPOKES_PLUGIN, remoteSpokesPanelUrl, type RemoteSpokesDeps } from "./remote_spokes.ts"; // P-IDE-SPOKES.1 (ADR-0506)
 import { recentTurns } from "./turns_log.ts";
 import { headroomStatus, setHeadroomEnabled, startHeadroom } from "./headroom.ts";
-import { addReportToKg, agentRecall, agentRetain, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unrelateEntities } from "./personal.ts";
+import { addReportToKg, agentRecall, agentRetain, changePersonalPassphrase, destroyCui, enablePersonal, estimateChatExport, exportCuiArchive, exportHistory, exportVault, forgetFact, importChatExport, lockCui, lockPersonal, migrateCuiIntoStore, personalGraph, personalStatus, relateEntities, setScope, setupCui, setupPersonal, unlockCui, unlockPersonal, unlockPersonalWithKey, unrelateEntities } from "./personal.ts";
 import { EXPLAIN_SYSTEM, explainCommand, explainUserPrompt } from "./explain_command.ts";
 import type { PersonalScope } from "../harness/personal/store.ts";
 import { readEditorFile, saveEditorFile } from "./editor.ts";
@@ -944,6 +949,7 @@ setInterval(() => {
         id: l.id, name: l.name, status: l.status as string, cwd: basename(l.cwd), turns: l.turns,
         lastActivityAt: l.lastActivityAt,
         ...(l.pendingApproval ? { pendingApproval: { summary: l.pendingApproval.summary, kind: l.pendingApproval.kind } } : {}),
+        ...(displayStatus(l) === "likely-stuck" ? { stuck: true as const } : {}), // P-STUCK-SHOW.3 (ADR-0521)
       }));
       const body = JSON.stringify(lanes);
       const stamp = `${body}#${count}`;
@@ -1795,6 +1801,11 @@ const fleet: FleetLaneManager = new FleetLaneManager({
   onWrite: (lane, path) => checkouts.recordWrite({ id: lane.id, name: lane.name }, path, lane.cwd),
   preface: (lane): Promise<string> => checkouts.briefingFor(lane.id, lane.cwd),
   repo: { observe: observeToolCall, peek: peekRepoContext }, // P-REPO.1 (ADR-0406)
+  // P-CTRL-REMOTE.1 (ADR-0531): the off-task check runs as a one-shot completion on the lane's own model (the
+  // util connection, never the chat turn). Tighten only: "" (any failure) parses as unknown, which parks.
+  offTask: async (lane, action) => parseOffTask(await backend.complete(OFF_TASK_SYSTEM, offTaskPrompt(lane.assignment, action), { model: lane.model, idleMs: 20_000 })),
+  // Throws when the line cannot be written; the fleet then refuses the action instead of running it unaudited.
+  remoteAudit: (laneId, v) => auditTierVerdict(controllerDeps, laneId, v),
 });
 // P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
 // /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
@@ -1836,6 +1847,11 @@ const jobScheduler = new JobScheduler({
   recover: async (hit) => {
     let resume: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } | undefined;
     if (hit.sessionId) {
+      // P-SESS-ARCHIVE.1: a spoke whose session the auto-archive rule moved comes back with its file, as it
+      // does on /api/fleet/spawn. omp loads only from the sessions folder, so without this the job's recovery
+      // would spawn against a session it cannot load.
+      const back = restoreSession(hit.sessionId);
+      if (!back.ok && back.error !== "session not found") return { ok: false, reason: `Could not restore the archived session: ${back.error}` };
       const page = sessionMessages(hit.sessionId, TRANSCRIPT_MAX_TURNS);
       const transcript: LaneTurnRecord[] = [];
       for (const m of page.messages) if ((m.role === "user" || m.role === "assistant") && m.text.trim()) transcript.push({ role: m.role, text: m.text });
@@ -1851,6 +1867,52 @@ const jobScheduler = new JobScheduler({
     emitSecurityEvent({ category: "exec", type: "scheduled_job", decision: e.outcome === "error" || e.outcome === "timeout" || e.outcome === "suspended" ? "block" : "allow", severity: e.outcome === "started" || e.outcome === "ok" ? "info" : "medium", tool: "scheduled_job", reason: `${e.name} [${e.jobId}] ${e.outcome}${e.laneId ? ` lane ${e.laneId}` : ""}${e.note ? `: ${e.note}` : ""}`.slice(0, 200) });
   },
 });
+/** P-SESS-ARCHIVE.1 (ADR-0517): sessions archiving must never move: Main's, and every spoke's (a stopped spoke
+ *  resumes its session on respawn). Moving a file omp appends to would split the session in two. */
+function ownSessionIds(): Set<string> {
+  const ids = new Set<string>();
+  const main = backend.currentSessionId();
+  if (main) ids.add(main);
+  for (const l of fleet.owners()) if (l.sessionId) ids.add(l.sessionId);
+  return ids;
+}
+/** This engine's sessions plus every session another running engine publishes (live_sessions.ts): omp does
+ *  not keep a session file open, so the OS would let another engine's session be moved out from under it. */
+function liveSessionIds(): Set<string> {
+  const ids = ownSessionIds();
+  for (const id of otherEnginesSessions()) ids.add(id);
+  return ids;
+}
+let liveHeartbeat: Timer | null = null;
+/** Publish what this engine holds, now and every LIVE_HEARTBEAT_MS; withdrawn on exit. */
+function startLiveHeartbeat(): void {
+  publishLiveSessions(ownSessionIds());
+  liveHeartbeat = setInterval(() => publishLiveSessions(ownSessionIds()), LIVE_HEARTBEAT_MS);
+  liveHeartbeat.unref();
+  process.on("exit", () => { withdrawLiveSessions(); flushSessionIndex(); });
+}
+/** The last archive pass (automatic or Archive now), for the policy panel. */
+let lastArchiveRun: (ArchiveRun & { at: number }) | null = null;
+const AUTO_ARCHIVE_FIRST_MS = 120_000;
+const AUTO_ARCHIVE_EVERY_MS = 6 * 3_600_000;
+let autoArchiveTimer: Timer | null = null;
+/** (Re)arm the auto-archive pass: first two minutes after start (or after the rule is saved), then every six
+ *  hours, only while the rule is on. Unref'd: it never keeps the engine alive. */
+function scheduleAutoArchive(): void {
+  if (autoArchiveTimer) { clearTimeout(autoArchiveTimer); autoArchiveTimer = null; }
+  const tick = (delay: number): void => {
+    autoArchiveTimer = setTimeout(async () => {
+      const policy = archivePolicy(loadSettings().sessionArchive);
+      if (!policy.auto) { autoArchiveTimer = null; return; }
+      try { lastArchiveRun = { at: Date.now(), ...await autoArchive(policy, liveSessionIds(), laneSessionNames()) }; flushSessionIndex(); }
+      catch (e) { console.error(`[archive] auto-archive pass failed: ${e instanceof Error ? e.message : String(e)}`); }
+      tick(AUTO_ARCHIVE_EVERY_MS);
+    }, delay);
+    autoArchiveTimer.unref();
+  };
+  if (archivePolicy(loadSettings().sessionArchive).auto) tick(AUTO_ARCHIVE_FIRST_MS);
+}
+
 /** P-SWITCH.2 (ADR-0404): the live spoke holding session `id`, if any (Main's own claim is checked by the
  *  lane manager itself, through masterSessionId above). */
 function spokeHolding(id: string): SessionLiveSpoke | null {
@@ -2196,11 +2258,29 @@ function agentScanner(): ScannerClient {
 
 // P-CTRL.2 (ADR-0438): the external-controller policy core. Pairings (hashed tokens, fixed workspace, owned
 // lanes) persist owner-only under the engine data root; the prompt scan reuses the fail-closed agent scanner.
+// ADR-0501: each controller lane's restart record sits beside the pairings. The restore gate is shut from here,
+// before the server binds, until the boot-time restore (near the end of this file) settles, so a controller that
+// asks in between waits for the full lane list instead of reading a half-restored one.
+const controllerRestore = Promise.withResolvers<void>();
 const controllerDeps: ControllerDeps = {
   store: new PairingStore(join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "controller-pairings.json")),
+  lanes: new ControllerLaneStore(join(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"), "controller-lanes.json")),
   fleet,
+  // ADR-0511: a controller may name one of the models the picker lists. checkerModelInfo().options is the backend's
+  // accessible list (platform, AskSage and managed-policy narrowing applied), not only the checker's.
+  models: () => backend.checkerModelInfo().options.map((o) => o.value),
   scan: (text) => scanAndDecide(agentScanner(), text),
   sink: EVENTS_LOG_PATH,
+  restoring: controllerRestore.promise,
+};
+
+// P-IDE-SPOKES.1 (ADR-0506): the remote-spokes hub plugin, reached over its /host/* routes with the token the
+// plugin runtime minted for this engine. Recalled text and parked actions pass the same fail-closed scanner.
+const remoteSpokesDeps: RemoteSpokesDeps = {
+  endpoint: () => plugins.hostEndpoint(REMOTE_SPOKES_PLUGIN),
+  installed: () => plugins.list().some((p) => p.id === REMOTE_SPOKES_PLUGIN),
+  scan: (text) => scanAndDecide(agentScanner(), text),
+  record: recordBlock,
 };
 
 // P-AGENT.9/.10/.17: the ONE gated import path — every external spec (share file, n8n workflow, template)
@@ -2478,6 +2558,10 @@ return Bun.serve({
     }
     try {
       if (p.startsWith("/api/controller/")) return await handleController(req, p, ctrlPairing, controllerDeps);
+      if (p === "/api/remote-spokes" || p.startsWith("/api/remote-spokes/")) {
+        srv.timeout(req, 0); // a recall pages the journal over the relay, and a decision may wait on a presence gesture
+        return await handleRemoteSpokes(req, p, remoteSpokesDeps);
+      }
       const vr = await handleVaultRoutes(req, p, { uiToken: TOKEN }); if (vr) return vr; // P-VAULT-V2.1 (ADR-0474)
       const vb = await handleVaultBackupRoutes(req, p, { uiToken: TOKEN }); if (vb) return vb; // P-VAULT-UI.1 (ADR-0475)
       const sr = await handleSecretRoutes(req, p, { uiToken: TOKEN, srv, emit: (r) => backend.requestSecretDialog(r), destinations: { upsert: upsertVaultDestination } }); if (sr) return sr; // P-SECRET-INTAKE.1 (ADR-0476)
@@ -5077,13 +5161,25 @@ return Bun.serve({
         return json(r);
       }
       // real omp ACP backend (genuine model replies + live session config)
-      if (p === "/api/sessions") {
+      if (p === "/api/sessions" || p === "/api/sessions/search") {
         // P-SWITCH.2 (ADR-0404): each row says where it is live (Main, working or not, or a spoke and its
         // state), so the sidebar shows what is running before anyone clicks.
-        const list = await listSessions(); // P-BOOTPERF.1: async, so a cold index never freezes the engine
+
         const main = { sessionId: backend.currentSessionId(), busy: backend.switchBlocker() !== null };
         const lanes = fleet.owners();
-        return json({ ok: true, data: { sessions: withLiveState(list.sessions, main, lanes), ingest: list.ingest } });
+        // P-SESS-SEARCH.1 (ADR-0515): sessions a fleet lane ran are hidden unless `spokes=1`; the session
+        // Main holds and the lane the main composer is driving stay listed either way.
+        const keep = new Set<string>();
+        if (main.sessionId) keep.add(main.sessionId);
+        const driven = fleet.promotedLane()?.sessionId;
+        if (driven) keep.add(driven);
+        const filter: SpokeFilter = { spokes: laneSessionNames(), show: url.searchParams.get("spokes") === "1", keep };
+        if (p === "/api/sessions/search") {
+          const found = await searchSessions((url.searchParams.get("q") ?? "").slice(0, 200), { filter });
+          return json({ ok: true, data: { ...found, hits: withLiveState(found.hits, main, lanes) } });
+        }
+        const list = await listSessions(undefined, undefined, filter);
+        return json({ ok: true, data: { sessions: withLiveState(list.sessions, main, lanes), ingest: list.ingest, hiddenSpokes: list.hiddenSpokes, archived: list.archived } });
       }
       if (p === "/api/sessions/ingest/clear" && req.method === "POST") return json({ ok: true, data: clearIngestSessions() }); // P-KG-INGEST.2
       if (p === "/api/session" && url.searchParams.get("id")) { // P-PERF.4: tail-first page (limit=0 = all)
@@ -5106,8 +5202,43 @@ return Bun.serve({
         if (held) return sessionHeld(held);
         const busy = force === true ? null : backend.switchBlocker();
         if (busy) return switchRefused(busy, backend.currentSessionId());
+        // P-SESS-ARCHIVE.1 (ADR-0517): omp loads only from the sessions folder, and a load it cannot find is
+        // swallowed (acp_backend.loadSession), so an archived session comes back BEFORE the load.
+        const back = restoreSession(String(id));
+        // Not 409: that status means "busy or held" to the client. Any other non-2xx is a plain failed switch.
+        if (!back.ok && back.error !== "session not found") return Response.json({ ok: false, error: `Could not restore the archived session: ${back.error}` }, { status: 422, headers: { "cache-control": "no-store" } });
         await backend.loadSession(String(id));
+        publishLiveSessions(ownSessionIds()); // other engines must not archive it from this moment
         return json({ ok: true });
+      }
+      // P-SESS-ARCHIVE.1 (ADR-0517): archive / restore one session, the Archived group, the auto-archive rule.
+      if (p === "/api/session/archive" && req.method === "POST") {
+        const { id } = await readBody<{ id?: unknown }>(req);
+        const sid = String(id ?? "");
+        if (ownSessionIds().has(sid)) return json({ ok: true, data: { ok: false, error: "This session is open in Main or a spoke. Switch away from it (or stop the spoke) first." } });
+        if (otherEnginesSessions().has(sid)) return json({ ok: true, data: { ok: false, error: "This session is open in another LUCID window. Switch away from it there first." } });
+        return json({ ok: true, data: archiveSession(sid, { cwd: currentWorkspace() }) });
+      }
+      if (p === "/api/session/restore" && req.method === "POST") {
+        const { id } = await readBody<{ id?: unknown }>(req);
+        return json({ ok: true, data: restoreSession(String(id ?? "")) });
+      }
+      if (p === "/api/sessions/archived") return json({ ok: true, data: { sessions: (await archivedSessions()).slice(0, 300) } });
+      if (p === "/api/sessions/archive-policy") {
+        if (req.method === "POST") {
+          const s = loadSettings();
+          s.sessionArchive = archivePolicy(await readBody<unknown>(req));
+          saveSettings(s);
+          scheduleAutoArchive();
+        }
+        const policy = archivePolicy(loadSettings().sessionArchive);
+        const preview = await autoArchive(policy, liveSessionIds(), laneSessionNames(), { dryRun: true });
+        return json({ ok: true, data: { policy, wouldArchive: preview.candidates, lastRun: lastArchiveRun } });
+      }
+      if (p === "/api/sessions/archive-now" && req.method === "POST") {
+        lastArchiveRun = { at: Date.now(), ...await autoArchive(archivePolicy(loadSettings().sessionArchive), liveSessionIds(), laneSessionNames()) };
+        flushSessionIndex();
+        return json({ ok: true, data: lastArchiveRun });
       }
       if (p === "/api/session/delete" && req.method === "POST") {
         const { id } = await readBody<{ id?: unknown }>(req);
@@ -5847,9 +5978,28 @@ return Bun.serve({
         const r = await installPluginFromUrl(String(b.url ?? ""), String(b.expectId ?? ""), { beforeSwitch: async (id) => { await plugins.stop(id); } });
         return json({ ok: true, data: r.ok ? { ok: true, id: r.id, version: r.version } : r });
       }
+      // P-PLUGINS.7 (ADR-0505): a private install from a .lplugin.zip the user picked. inspect-file reads it
+      // and installs nothing; install-file installs exactly the bytes the user reviewed (sha256) and, when
+      // unsigned, only with acceptUnsigned. Same gates and runtime as a store install.
+      if (p === "/api/plugins/inspect-file" && req.method === "POST") {
+        srv.timeout(req, 0);
+        const b = await readBody<{ path?: unknown }>(req);
+        return json({ ok: true, data: inspectPluginFile(String(b.path ?? "")) });
+      }
+      if (p === "/api/plugins/install-file" && req.method === "POST") {
+        srv.timeout(req, 0);
+        const b = await readBody<{ path?: unknown; sha256?: unknown; acceptUnsigned?: unknown }>(req);
+        const r = await installPluginFile(String(b.path ?? ""), { sha256: String(b.sha256 ?? ""), acceptUnsigned: b.acceptUnsigned === true }, { beforeSwitch: async (id) => { await plugins.stop(id); } });
+        return json({ ok: true, data: r.ok ? { ok: true, id: r.id, version: r.version, signed: r.signed } : r });
+      }
       if (p === "/api/plugins/start" && req.method === "POST") {
         const b = await readBody<{ id?: unknown }>(req);
-        return json({ ok: true, data: await plugins.start(String(b.id ?? "")) });
+        const id = String(b.id ?? "");
+        const started = await plugins.start(id);
+        // ADR-0514: the hub plugin's panel opens only with a one-time bootstrap secret it minted for this engine,
+        // framed only by this window (engineAppUrl's origin).
+        if (started.ok && id === REMOTE_SPOKES_PLUGIN) return json({ ok: true, data: await remoteSpokesPanelUrl(remoteSpokesDeps, `http://127.0.0.1:${ENGINE_PORT}`) });
+        return json({ ok: true, data: started });
       }
       if (p === "/api/plugins/stop" && req.method === "POST") {
         const b = await readBody<{ id?: unknown }>(req);
@@ -5899,6 +6049,10 @@ return Bun.serve({
       if (p === "/api/personal/ai-extract" && req.method === "POST") { const b = await readBody<{ enabled?: unknown }>(req); setPersonalAiExtract(!!b.enabled); return json({ ok: true, data: personalStatus() }); }
       if (p === "/api/personal/setup" && req.method === "POST") { const b = await readBody<{ passphrase?: unknown }>(req); return json({ ok: true, data: setupPersonal(String(b.passphrase ?? "")) }); }
       if (p === "/api/personal/unlock" && req.method === "POST") { const b = await readBody<{ passphrase?: unknown }>(req); return json({ ok: true, data: unlockPersonal(String(b.passphrase ?? "")) }); }
+      // P-KGBIO.1 (ADR-0454): the desktop main process hands over the DEK a Windows Hello / Touch ID check released.
+      if (p === "/api/personal/unlock-key" && req.method === "POST") { const b = await readBody<{ dek?: unknown }>(req); return json({ ok: true, data: unlockPersonalWithKey(String(b.dek ?? "")) }); }
+      // P-KGPASS.1 (ADR-0455): change the main or CUI store's passphrase (a DEK re-wrap; both passphrases stay in this handler).
+      if (p === "/api/personal/passphrase" && req.method === "POST") { const b = await readBody<{ which?: unknown; current?: unknown; next?: unknown }>(req); return json({ ok: true, data: changePersonalPassphrase(b.which === "cui" ? "cui" : "main", String(b.current ?? ""), String(b.next ?? "")) }); }
       if (p === "/api/personal/lock" && req.method === "POST") return json({ ok: true, data: lockPersonal() });
       if (p === "/api/personal/scope" && req.method === "POST") { const b = await readBody<{ scope?: unknown }>(req); return json({ ok: true, data: setScope(String(b.scope ?? "personal") as any) }); }
       // P9.5a: the isolated CUI store has its OWN setup/unlock/lock (separate file + passphrase).
@@ -6021,7 +6175,9 @@ return Bun.serve({
         const { force } = await readBody<{ force?: unknown }>(req).catch(() => ({ force: undefined }));
         const busy = force === true ? null : backend.switchBlocker(); // P-SWITCH.1 (ADR-0403)
         if (busy) return switchRefused(busy, backend.currentSessionId());
-        await backend.newSession(); await refreshRecall(); return json({ ok: true });
+        await backend.newSession(); await refreshRecall();
+        publishLiveSessions(ownSessionIds()); // P-SESS-ARCHIVE.1: other engines see the switch now, not at the next beat
+        return json({ ok: true });
       }
       // P-FLEET.L5 (ADR-0274): the reviewable timeline - every session on this machine (master chats,
       // lane sessions labeled through the durable ledger, ingest throwaways), across ALL workspaces,
@@ -6170,6 +6326,9 @@ return Bun.serve({
         const sessionId = typeof b.sessionId === "string" ? b.sessionId.trim() : "";
         let resume: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } | undefined;
         if (sessionId) {
+          // P-SESS-ARCHIVE.1: a ghost spoke whose session was archived comes back with its file.
+          const back = restoreSession(sessionId);
+          if (!back.ok && back.error !== "session not found") return json({ ok: true, data: { ok: false, reason: `Could not restore the archived session: ${back.error}` } });
           const page = sessionMessages(sessionId, TRANSCRIPT_MAX_TURNS);
           const transcript: LaneTurnRecord[] = [];
           for (const m of page.messages) if ((m.role === "user" || m.role === "assistant") && m.text.trim()) transcript.push({ role: m.role, text: m.text });
@@ -6266,7 +6425,13 @@ return Bun.serve({
       // dismissed lane is still reviewable on the timeline.
       if (p === "/api/fleet/remove" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown; force?: unknown }>(req);
-        return json({ ok: true, data: fleet.remove(String(b.laneId ?? ""), b.force === true) });
+        const laneId = String(b.laneId ?? "");
+        const existed = fleet.laneRunning(laneId) !== null;
+        const r = fleet.remove(laneId, b.force === true);
+        // ADR-0500: a dismissed controller lane is over for its controller too (it does not come back after a
+        // restart, and a remote lane's review worktree is committed onto its branch and removed).
+        if (existed && r.ok) await forgetControllerLane(controllerDeps, laneId);
+        return json({ ok: true, data: r });
       }
       if (p === "/api/fleet/model" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown; model?: unknown }>(req);
@@ -6848,18 +7013,28 @@ return Bun.serve({
 // non-secret (it proves launch identity, gates nothing else). Removed on every exit path the whisper/fleet
 // handlers already cover (SIGINT/SIGTERM re-enter process.exit, which fires "exit").
 if (!process.env.LUCID_ENGINE_NONCE) process.env.LUCID_ENGINE_NONCE = randomBytes(16).toString("hex");
-const ENGINE_PORT = server.port ?? PORT; // Bun types port as optional (unix-socket servers); a TCP bind always has one
+const ENGINE_PORT: number = server.port ?? PORT; // Bun types port as optional (unix-socket servers); a TCP bind always has one
 const DISCOVERY_PATH = discoveryPath(discoveryDir(process.env), ENGINE_PORT);
+// ADR-0503: the nonce-only record (no UI token) for controller clients, owner-only by default; shared with
+// LUCID_DISCOVERY_NONCE_GROUP (0640) in LUCID_DISCOVERY_NONCE_DIR when the operator names them.
+const NONCE_PATH = noncePath(nonceDir(process.env), ENGINE_PORT);
+const LAUNCH: EngineNonceRecord = {
+  v: 1, pid: process.pid, port: ENGINE_PORT, nonce: process.env.LUCID_ENGINE_NONCE,
+  version: APP_VERSION, flavor: BUILD.flavor, startedAt: new Date().toISOString(),
+};
 try {
-  writeDiscovery(DISCOVERY_PATH, {
-    v: 1, pid: process.pid, port: ENGINE_PORT, nonce: process.env.LUCID_ENGINE_NONCE,
-    token: TOKEN, version: APP_VERSION, flavor: BUILD.flavor, startedAt: new Date().toISOString(),
-  });
+  writeDiscovery(DISCOVERY_PATH, { ...LAUNCH, token: TOKEN });
 } catch (err) {
   // Advisory seam: a client that finds no file falls back to spawning its own engine. Never fatal.
   console.error(`[discovery] could not publish ${DISCOVERY_PATH}: ${String(err)}`);
 }
-process.on("exit", () => removeDiscovery(DISCOVERY_PATH));
+try {
+  writeNonceRecord(NONCE_PATH, LAUNCH, resolveNonceGroup(process.env.LUCID_DISCOVERY_NONCE_GROUP));
+} catch (err) {
+  // Fail-closed: an unknown group or a refused chown publishes no record, never a wrongly shared one.
+  console.error(`[discovery] could not publish ${NONCE_PATH}: ${String(err)}`);
+}
+process.on("exit", () => { removeDiscovery(DISCOVERY_PATH); removeDiscovery(NONCE_PATH); });
 
 // P-PREVIEW.3a-shot (ADR-0096): hand the omp subprocess a ready-to-use URL (real bound port + token) for the
 // agent's preview_screenshot tool to fetch the cached shot. omp is spawned later (lazily, by acp_backend in
@@ -6880,6 +7055,8 @@ process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retr
 // P-FLEET.L1: the master agent's fleet_status tool (omp subprocess) GETs this to see local lane status -
 // metadata only (lane replies render in the fleet dashboard, never through this URL).
 process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/status?t=${AGENT_TOKEN}`;
+startLiveHeartbeat(); // P-SESS-ARCHIVE.1 (ADR-0517): tell other engines which sessions must not be archived
+scheduleAutoArchive(); // P-SESS-ARCHIVE.1: only does anything while the rule is on
 // P-SANDBOX.8: the sandbox_grant_dir tool (omp subprocess) POSTs its user-approved {path,mode,reason}
 // claim here. Same token'd convention as LUCID_FLEET_STATUS_URL; the endpoint applies NOTHING without a
 // fresh matching approval parked by the desktop's grant dialog (fail-closed, defense in depth).
@@ -6920,6 +7097,9 @@ if (BUILD.creatorBuild) {
   process.env.LUCID_OPENFILM_LOOK_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/look?t=${AGENT_TOKEN}`;
   process.env.LUCID_OPENFILM_RENDER_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/render?t=${AGENT_TOKEN}`;
   process.env.LUCID_OPENFILM_JOB_URL = `http://127.0.0.1:${server.port}/api/creator/openfilm/job?t=${AGENT_TOKEN}`;
+  // CREATOR-IMG2THREEJS (ADR-0562): img2threejs_* (harness/omp/img2threejs_extension.ts). A flag, not a URL: the
+  // tools are pure and in-process, so there is no engine route for them to call. Unset outside Creator builds.
+  process.env.LUCID_IMG2THREEJS = "1";
 }
 // P-INTERJECT.1: the omp children (master + lanes) reach this server for mid-turn operator notes.
 // LUCID_DEV_URL is the bare base URL from the shared contract; LUCID_INTERJECT_URL is the ready-to-use
@@ -6951,6 +7131,13 @@ await refreshRecall();
 backend.startAutomationScheduler();
 // P-SCHED.1 (ADR-0443): the scheduled LANE jobs tick beside it, same envelope (only while the app runs).
 jobScheduler.start();
+// ADR-0501: controller lanes the previous engine ran come back idle on their own lane ids and omp sessions (after
+// the child env above is set, so a restored lane is wired like a new one). Detached: the bind never waits on omp;
+// controller routes do (the gate set with controllerDeps), and open when this settles, success or not.
+void restoreControllerLanes(controllerDeps).then(
+  (back) => { if (back.length) console.log(`[controller] restored ${back.length} lane(s): ${back.join(", ")}`); },
+  (e) => console.warn("[controller] lane restore failed:", e),
+).finally(() => { controllerDeps.restoring = null; controllerRestore.resolve(); });
 
 console.log(`\n  ◆ LucidAgentIDE desktop renderer (dev)\n  → http://localhost:${server.port}\n`);
 

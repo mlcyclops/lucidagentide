@@ -27,6 +27,41 @@ export interface Pairing {
   createdAt: string;
   /** Lane ids this pairing spawned: the ONLY lanes it can see or act on. */
   lanes: string[];
+  /** P-CTRL-RO.1a (ADR-0560; design ADR-0449): issued for observation only. Set when the pairing is
+   *  minted and never widened in place (no store API mutates it); granting write scope means unpair
+   *  and re-pair. Absent on pairings minted before this field existed; absent means not read-only. */
+  readOnly?: boolean;
+  /** P-CTRL-REMOTE.1 (ADR-0531): set by the human at pairing time, never by the controller. Its lanes run the
+   *  tiered remote policy and accept decisions verified against `root`. */
+  remote?: RemotePolicy;
+  /** ADR-0509: how many live lanes this pairing may hold (1 to PAIRING_LANES_MAX), set by the human at pairing
+   *  time from the spoke's lane policy. Absent: the ADR-0425 default of two (also every pairing stored before). */
+  maxLanes?: number;
+  /** ADR-0510: the paired spoke's node id (`n_` and 32 hex), set by the human at pairing time. A delegate-certified
+   *  approver decides only when its delegation covers this spoke, and every approver only when cleared for its
+   *  classification (ADR-0513). Absent: no remote decision is accepted until the spoke is paired again. */
+  spokeNode?: string;
+}
+
+/** ADR-0510: a node id, `n_` and the first 32 hex of sha256(SPKI DER). */
+export const SPOKE_NODE_RE = /^n_[0-9a-f]{32}$/;
+
+/** ADR-0509: the most live lanes one pairing may be granted. */
+export const PAIRING_LANES_MAX = 8;
+
+export interface RemotePolicy {
+  /** The owner root's P-256 public key, base64url SPKI DER. */
+  root: string;
+  /** How long a parked ask waits for a remote decision before it is denied (1 to 24). */
+  approvalHours: number;
+  /** Run the off-task check before a T0/T1 action runs on its own. */
+  offTask: boolean;
+  /** The newest root-signed CRL this engine has seen. Only ever moves forward. ADR-0510: `nextUpdate` (seconds)
+   *  when the list carried one; once held, a list without it is never taken. */
+  crl: { version: number; serials: string[]; nextUpdate?: number };
+  /** ADR-0507: every remote allow must carry user-presence evidence from a presence key the approver's
+   *  certificate names. Absent: not required (also every pairing stored before ADR-0507). */
+  presence?: "required";
 }
 
 /** `lucidctl_<16 hex id>_<43 base64url secret>`; the id lets verify() hash against one record, not all. */
@@ -57,14 +92,22 @@ export class PairingStore {
     }
   }
 
-  /** Mint a pairing and its token. The token is returned ONCE and never stored in the clear. */
-  async pair(name: string, workspace: string): Promise<{ ok: true; pairing: Pairing; token: string } | { ok: false; error: string }> {
+  /** Mint a pairing and its token. The token is returned ONCE and never stored in the clear.
+   *  `readOnly` (P-CTRL-RO.1a) marks an observation-only pairing; it is persisted only when true. */
+  async pair(name: string, workspace: string, remote?: RemotePolicy, maxLanes?: number, spokeNode?: string, readOnly = false): Promise<{ ok: true; pairing: Pairing; token: string } | { ok: false; error: string }> {
     if (this.#broken) return { ok: false, error: this.#broken };
     if (!PAIRING_NAME_RE.test(name)) return { ok: false, error: "invalid pairing name" };
     if (this.#pairings.some((p) => p.name === name)) return { ok: false, error: "a pairing with that name exists" };
+    if (remote && !isRemotePolicy(remote)) return { ok: false, error: "invalid remote policy" };
+    if (maxLanes !== undefined && !isLaneCount(maxLanes)) return { ok: false, error: `maxLanes must be an integer from 1 to ${PAIRING_LANES_MAX}` };
+    if (spokeNode !== undefined && !SPOKE_NODE_RE.test(spokeNode)) return { ok: false, error: "spokeNode must be n_ and 32 hex" };
     const id = randomBytes(8).toString("hex");
     const token = `lucidctl_${id}_${randomBytes(32).toString("base64url")}`;
-    const pairing: Pairing = { id, name, workspace, hash: await Bun.password.hash(token, { algorithm: "argon2id" }), createdAt: new Date().toISOString(), lanes: [] };
+    const pairing: Pairing = {
+      id, name, workspace, hash: await Bun.password.hash(token, { algorithm: "argon2id" }), createdAt: new Date().toISOString(), lanes: [],
+      ...(readOnly ? { readOnly: true } : {}),
+      ...(remote ? { remote } : {}), ...(maxLanes !== undefined ? { maxLanes } : {}), ...(spokeNode !== undefined ? { spokeNode } : {}),
+    };
     this.#pairings.push(pairing);
     this.#save();
     return { ok: true, pairing, token };
@@ -101,6 +144,50 @@ export class PairingStore {
     this.#save();
   }
 
+  /** Why the store refuses everything (an unreadable or malformed file), or null. The boot-time lane restore
+   *  (ADR-0501) touches nothing while it is set, so a torn file never reads as "every pairing was revoked". */
+  get broken(): string | null {
+    return this.#broken;
+  }
+
+  /** ADR-0500: a closed lane is no longer this pairing's; its slot and its id are gone. */
+  removeLane(pairingId: string, laneId: string): void {
+    const p = this.#pairings.find((x) => x.id === pairingId);
+    if (!p || !p.lanes.includes(laneId)) return;
+    p.lanes = p.lanes.filter((l) => l !== laneId);
+    this.#save();
+  }
+
+  /** ADR-0501: at boot, keep only the lane ids that came back. The rest ended with the previous engine. */
+  retainLanes(keep: ReadonlySet<string>): void {
+    if (this.#broken) return;
+    let changed = false;
+    for (const p of this.#pairings) {
+      const kept = p.lanes.filter((l) => keep.has(l));
+      if (kept.length !== p.lanes.length) { p.lanes = kept; changed = true; }
+    }
+    if (changed) this.#save();
+  }
+
+  /** The live pairing with this id (a revoked pairing is gone), for the boot-time lane restore (ADR-0501). */
+  byId(pairingId: string): Pairing | null {
+    return this.#pairings.find((p) => p.id === pairingId) ?? null;
+  }
+
+  /** The pairing that spawned `laneId`, for audit lines raised inside the fleet (P-CTRL-REMOTE.1). */
+  pairingForLane(laneId: string): Pairing | null {
+    return this.#pairings.find((p) => p.lanes.includes(laneId)) ?? null;
+  }
+
+  /** Record a newer CRL for a remote pairing. An older or equal version changes nothing (tighten only), and neither
+   *  does one without `nextUpdate` once a list with it is held (ADR-0510). */
+  advanceCrl(pairingId: string, crl: RemotePolicy["crl"]): void {
+    const p = this.#pairings.find((x) => x.id === pairingId);
+    if (!p?.remote || crl.version <= p.remote.crl.version || (p.remote.crl.nextUpdate !== undefined && crl.nextUpdate === undefined)) return;
+    p.remote.crl = { version: crl.version, serials: [...crl.serials], ...(crl.nextUpdate !== undefined ? { nextUpdate: crl.nextUpdate } : {}) };
+    this.#save();
+  }
+
   #save(): void {
     mkdirSync(dirname(this.#file), { recursive: true, mode: 0o700 });
     const tmp = `${this.#file}.tmp-${process.pid}`;
@@ -112,5 +199,22 @@ export class PairingStore {
 function isPairing(v: unknown): v is Pairing {
   const p = v as Pairing;
   return !!p && typeof p.id === "string" && typeof p.name === "string" && typeof p.workspace === "string" && typeof p.hash === "string"
-    && typeof p.createdAt === "string" && Array.isArray(p.lanes) && p.lanes.every((l) => typeof l === "string");
+    && typeof p.createdAt === "string" && Array.isArray(p.lanes) && p.lanes.every((l) => typeof l === "string")
+    && (p.readOnly === undefined || typeof p.readOnly === "boolean")
+    && (p.remote === undefined || isRemotePolicy(p.remote)) && (p.maxLanes === undefined || isLaneCount(p.maxLanes))
+    && (p.spokeNode === undefined || (typeof p.spokeNode === "string" && SPOKE_NODE_RE.test(p.spokeNode)));
+}
+
+/** ADR-0509: a pairing's lane grant, an integer from 1 to PAIRING_LANES_MAX (the pair route, the store, the file). */
+export function isLaneCount(n: unknown): n is number {
+  return typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= PAIRING_LANES_MAX;
+}
+
+function isRemotePolicy(v: unknown): v is RemotePolicy {
+  const r = v as RemotePolicy;
+  return !!r && typeof r.root === "string" && /^[A-Za-z0-9_-]{40,400}$/.test(r.root)
+    && Number.isInteger(r.approvalHours) && r.approvalHours >= 1 && r.approvalHours <= 24 && typeof r.offTask === "boolean"
+    && !!r.crl && Number.isSafeInteger(r.crl.version) && r.crl.version >= 0 && Array.isArray(r.crl.serials) && r.crl.serials.every((s) => typeof s === "string")
+    && (r.crl.nextUpdate === undefined || (Number.isSafeInteger(r.crl.nextUpdate) && r.crl.nextUpdate >= 0))
+    && (r.presence === undefined || r.presence === "required");
 }

@@ -13,6 +13,7 @@ import { ScanUnavailableError, type ScannerClient } from "../../harness/security
 import type { TelemetryEvent } from "../../harness/telemetry/events.ts";
 import type { LaneView } from "../fleet_lanes.ts";
 import { apiAuthorized } from "../origin_guard.ts";
+import { ControllerLaneStore } from "./lane_store.ts";
 import { CONTROLLER_ROUTES, controllerPreamble, handleController, type ControllerDeps } from "./routes.ts";
 import { PairingStore, type Pairing } from "./store.ts";
 
@@ -29,27 +30,33 @@ afterEach(() => {
 
 const CLEAN: GateDecision = { block: false, reason: "clean", trustLabel: "trusted", findings: [], failClosed: false };
 /** The fields these tests read from the handler's JSON replies. */
-interface Reply { error: string; data: { token: string; lane: { id: string }; lanes: { id: string }[]; turns: unknown; runId: string } }
+interface Reply { error: string; data: { token: string; lane: { id: string }; lanes: { id: string }[]; turns: unknown; runId: string; maxLanes: number } }
 
-function rig(scan: (t: string) => Promise<GateDecision> = async () => CLEAN) {
+/** `models` (ADR-0511): the engine's available model ids; absent, the rig has no model list. */
+function rig(scan: (t: string) => Promise<GateDecision> = async () => CLEAN, models?: string[]) {
   const store = new PairingStore(join(dir, "controller-pairings.json"));
   const lanes = new Map<string, LaneView>();
   const prompts: { laneId: string; text: string }[] = [];
-  const spawns: { cwd: string; name?: string; supervised: true }[] = [];
+  const spawns: { cwd: string; name?: string; model?: string; supervised: true }[] = [];
   const events: TelemetryEvent[] = [];
-  let n = 0;
   const view = (id: string, name: string, cwd: string): LaneView => ({ id, name, cwd, model: "m", status: "awaiting-input", createdAt: 0, lastActivityAt: 0, turns: 0, canRetry: false, respawns: 0, autoApprove: false, sessionAllow: [], sessionId: `sess-${id}`, hubSessionId: null, queued: [], promoted: false, openCalls: 0 });
   lanes.set("lane-user", view("lane-user", "user's own", "/home/u/secret"));
+  const removed: string[] = [];
   const deps: ControllerDeps = {
     store,
+    lanes: new ControllerLaneStore(join(dir, "controller-lanes.json")),
     fleet: {
-      spawn: async (o) => { spawns.push(o); const l = view(`lane-${++n}`, o.name ?? "x", o.cwd); lanes.set(l.id, l); return { ok: true, lane: l }; },
+      spawn: async (o) => { spawns.push(o); const l = { ...view(o.id, o.name ?? "x", o.cwd), model: o.model ?? "m" }; lanes.set(l.id, l); return { ok: true, lane: l }; },
+      remove: (laneId) => { removed.push(laneId); lanes.delete(laneId); return { ok: true }; },
       prompt: async (laneId, text) => { prompts.push({ laneId, text }); },
       status: async () => ({ lanes: [...lanes.values()] }),
       laneTranscript: () => [{ role: "user", text: "q" }, { role: "assistant", text: "a0" }, { role: "user", text: "q2" }, { role: "assistant", text: "a1" }],
       laneRunning: () => false,
       cancel: () => ({ ok: true }),
+      pendingAsk: () => null,
+      answerAsk: () => ({ ok: false }),
     },
+    ...(models ? { models: () => models } : {}),
     scan,
     sink: (e) => events.push(e),
   };
@@ -65,7 +72,7 @@ function rig(scan: (t: string) => Promise<GateDecision> = async () => CLEAN) {
     expect(r.status).toBe(200);
     return { token: r.body.data.token as string, pairing: (await store.verify(r.body.data.token))! };
   };
-  return { store, lanes, prompts, spawns, events, call, pair };
+  return { store, lanes, prompts, spawns, removed, events, call, pair };
 }
 
 describe("controller token: hashed, revocable, never stored in the clear", () => {
@@ -76,7 +83,9 @@ describe("controller token: hashed, revocable, never stored in the clear", () =>
     const file = join(dir, "controller-pairings.json");
     const raw = readFileSync(file, "utf8");
     expect(raw).not.toContain(token);
-    expect(raw).not.toContain(token.split("_").at(-1)!);
+    // the WHOLE secret (base64url can contain "_", and a short post-split fragment can collide
+    // with the PHC hash bytes by chance, which made this assertion flaky)
+    expect(raw).not.toContain(token.split("_").slice(2).join("_"));
     expect(JSON.parse(raw).pairings[0].hash).toStartWith("$argon2id$");
     if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
     // a fresh engine (new store over the same file) still accepts it
@@ -102,6 +111,30 @@ describe("controller token: hashed, revocable, never stored in the clear", () =>
     expect((await broken.pair("again", ws)).ok).toBe(false);
     expect(readFileSync(file, "utf8")).toBe("{torn");
   });
+
+  test("P-CTRL-RO.1a (ADR-0560): a read-only pairing round-trips; a legacy pairing loads as not read-only", async () => {
+    const file = join(dir, "controller-pairings.json");
+    const store = new PairingStore(file);
+    const minted = await store.pair("observer", ws, undefined, undefined, undefined, true);
+    if (!minted.ok) throw new Error(minted.error);
+    expect(minted.pairing.readOnly).toBe(true);
+    expect(JSON.parse(readFileSync(file, "utf8")).pairings[0].readOnly).toBe(true);
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
+    // a fresh engine (new store over the same file) keeps the capability on the verified pairing
+    expect((await new PairingStore(file).verify(minted.token))?.readOnly).toBe(true);
+    // a pairing minted without the flag persists no field at all and loads as not read-only
+    const writer = await store.pair("writer", ws);
+    if (!writer.ok) throw new Error(writer.error);
+    const raw = JSON.parse(readFileSync(file, "utf8")) as { pairings: Pairing[] };
+    expect("readOnly" in raw.pairings[1]!).toBe(false);
+    expect((await new PairingStore(file).verify(writer.token))?.readOnly).toBeUndefined();
+    // widening in place is impossible: no store API mutates the flag, and a hand-edited non-boolean
+    // value makes the store malformed, which refuses every token (fail-closed, the ADR-0438 rule)
+    raw.pairings[0]!.readOnly = "yes" as never;
+    writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
+    expect(await new PairingStore(file).verify(minted.token)).toBeNull();
+    expect(await new PairingStore(file).verify(writer.token)).toBeNull();
+  });
 });
 
 describe("scope isolation", () => {
@@ -121,8 +154,12 @@ describe("scope isolation", () => {
       expect((await r.call("result", a.pairing, undefined, `?laneId=${foreign}`)).status).toBe(404);
       expect((await r.call("cancel", a.pairing, { laneId: foreign })).status).toBe(404);
       expect((await r.call("prompt", a.pairing, { laneId: foreign, text: "hi" })).status).toBe(404);
+      // ADR-0500: closing someone else's lane (or the user's, or none) is the same not-found as every route.
+      const close = await r.call("close", a.pairing, { laneId: foreign });
+      expect([close.status, close.body]).toEqual([404, { ok: false, error: "unknown lane" } as never]);
     }
     expect(r.prompts).toEqual([]);
+    expect(r.removed).toEqual([]);
     expect((await r.call("status", b.pairing, undefined, `?laneId=${lb}`)).status).toBe(200);
   });
 
@@ -135,7 +172,104 @@ describe("scope isolation", () => {
     expect((await r.call("spawn", pairing, "{not json")).status).toBe(400);
     expect((await r.call("spawn", pairing, {})).status).toBe(200);
     expect((await r.call("spawn", pairing, {})).status).toBe(200);
+    const third = await r.call("spawn", pairing, {});
+    expect([third.status, third.body.error]).toEqual([429, "at most 2 lanes per pairing"]);
+  });
+
+  test("ADR-0511: spawn may name a model the engine lists; an unlisted one is 400 and starts nothing; none keeps the default", async () => {
+    const r = rig(async () => CLEAN, ["anthropic/claude-sonnet-4-5", "ollama/qwen2.5-coder:32b"]);
+    const { pairing } = await r.pair("hermes");
+    const unlisted = await r.call("spawn", pairing, { model: "openai/gpt-9" });
+    expect([unlisted.status, unlisted.body.error]).toEqual([400, "this engine has no model openai/gpt-9"]);
+    // Not `provider/model`: malformed before any list is consulted.
+    for (const bad of [{ model: "" }, { model: 5 }, { model: "a".repeat(201) }, { model: "anthropic/claude-sonnet-4-5 " }, { model: "x" }]) expect((await r.call("spawn", pairing, bad)).status).toBe(400);
+    expect(r.spawns).toEqual([]);
+    const chosen = await r.call("spawn", pairing, { name: "local", model: "ollama/qwen2.5-coder:32b" });
+    expect(chosen.status).toBe(200);
+    expect(r.spawns[0]!.model).toBe("ollama/qwen2.5-coder:32b");
+    // the controller is not shown the model, but the lane's restart record keeps it (ADR-0501 brings it back on it)
+    expect(chosen.text).not.toContain("qwen");
+    const id = chosen.body.data.lane.id;
+    expect(new ControllerLaneStore(join(dir, "controller-lanes.json")).get(id)?.model).toBe("ollama/qwen2.5-coder:32b");
+    const plain = await r.call("spawn", pairing, {});
+    expect(plain.status).toBe(200);
+    expect(r.spawns[1]).not.toHaveProperty("model");
+  });
+
+  // Live on a headless spoke engine: no omp session had reported its model config, the list was empty, and every
+  // named model was refused, real ones included. With no list the lane's own resolution and the policy clamp decide.
+  test("ADR-0511: an engine that has reported no model list passes a named model to the lane", async () => {
+    for (const r of [rig(), rig(undefined, [])]) {
+      const { pairing } = await r.pair("hermes");
+      const res = await r.call("spawn", pairing, { model: "anthropic/claude-sonnet-4-5" });
+      expect(res.status).toBe(200);
+      expect(r.spawns[0]?.model).toBe("anthropic/claude-sonnet-4-5");
+    }
+  });
+
+  test("ADR-0509: a pairing granted 4 lanes admits 4 and refuses the 5th; absent means 2; the grant survives a reload", async () => {
+    const r = rig();
+    const paired = await r.call("pair", null, { name: "big", workspace: ws, maxLanes: "4" });
+    expect(paired.status).toBe(200);
+    expect(paired.body.data.maxLanes).toBe(4);
+    const big = (await r.store.verify(paired.body.data.token))!;
+    expect(big.maxLanes).toBe(4);
+    for (let i = 0; i < 4; i++) expect((await r.call("spawn", big, {})).status).toBe(200);
+    const fifth = await r.call("spawn", big, {});
+    expect([fifth.status, fifth.body.error]).toEqual([429, "at most 4 lanes per pairing"]);
+    expect((await r.call("lanes", big)).body.data.maxLanes).toBe(4);
+    expect(r.events.find((e) => e.event === "controller_paired")).toMatchObject({ pairing: "big", max_lanes: 4 });
+    // absent: the ADR-0425 default, stored as nothing (so a pairing written before ADR-0509 reads the same)
+    const { pairing: plain } = await r.pair("plain");
+    expect(plain.maxLanes).toBeUndefined();
+    expect((await r.call("lanes", plain)).body.data.maxLanes).toBe(2);
+    const file = join(dir, "controller-pairings.json");
+    const reloaded = new PairingStore(file);
+    expect([reloaded.byId(big.id)?.maxLanes, reloaded.byId(plain.id)?.maxLanes]).toEqual([4, undefined]);
+    expect(reloaded.broken).toBeNull();
+  });
+
+  test("ADR-0509: a lane grant outside 1..8, or not decimal digits, is refused at pair time and in the file", async () => {
+    const r = rig();
+    for (const maxLanes of ["0", "9", "-1", "2.5", " 4", "4x", "", "08x", 4]) {
+      expect((await r.call("pair", null, { name: "bad", workspace: ws, maxLanes })).status).toBe(400);
+    }
+    // nothing was stored: the name is still free
+    expect((await r.call("pair", null, { name: "bad", workspace: ws })).status).toBe(200);
+    expect((await r.call("pair", null, { name: "one", workspace: ws, maxLanes: "1" })).status).toBe(200);
+    expect((await r.call("pair", null, { name: "eight", workspace: ws, maxLanes: "8" })).status).toBe(200);
+    expect((await r.store.pair("direct", ws, undefined, 9)).ok).toBe(false);
+    // a hand-edited store that grants 9 is malformed, not silently clamped
+    const file = join(dir, "controller-pairings.json");
+    const stored = JSON.parse(readFileSync(file, "utf8")) as { pairings: { maxLanes?: number }[] };
+    stored.pairings[0]!.maxLanes = 9;
+    writeFileSync(file, JSON.stringify(stored), { mode: 0o600 });
+    expect(new PairingStore(file).broken).toBe("pairing store is malformed");
+  });
+
+  test("ADR-0500: close ends the controller's own lane, frees its slot, and leaves no restart record", async () => {
+    const r = rig();
+    const { pairing } = await r.pair("hermes");
+    const one = (await r.call("spawn", pairing, {})).body.data.lane.id;
+    const two = (await r.call("spawn", pairing, {})).body.data.lane.id;
     expect((await r.call("spawn", pairing, {})).status).toBe(429);
+    for (const bad of [{}, { laneId: one, force: "yes" }, { laneId: 5 }]) expect((await r.call("close", pairing, bad)).status).toBe(400);
+    const closed = await r.call("close", pairing, { laneId: one });
+    expect(closed.status).toBe(200);
+    expect(closed.body.data).toEqual({ closed: one, cancelledTurn: false } as never);
+    expect(r.removed).toEqual([one]);
+    // the slot is free, the closed lane is gone from every route, and its ownership went with it
+    expect((await r.call("lanes", pairing)).body.data.lanes.map((l) => l.id)).toEqual([two]);
+    expect((await r.call("status", pairing, undefined, `?laneId=${one}`)).status).toBe(404);
+    expect((await r.call("close", pairing, { laneId: one })).status).toBe(404);
+    expect(r.store.pairingForLane(one)).toBeNull();
+    const three = await r.call("spawn", pairing, {});
+    expect(three.status).toBe(200);
+    expect((await r.call("spawn", pairing, {})).status).toBe(429);
+    // a reloaded lane store (the next boot) no longer holds the closed lane
+    const ids = new ControllerLaneStore(join(dir, "controller-lanes.json")).all().map((l) => l.id).sort();
+    expect(ids).toEqual([two, three.body.data.lane.id].sort());
+    expect(r.events.filter((e) => e.event === "controller_ruling")).toEqual([expect.objectContaining({ ruling: "lane_closed", lane_id: one, pairing: "hermes", backend: "lane-lifecycle" })]);
   });
 
   test("result returns assistant turns from `since`", async () => {
