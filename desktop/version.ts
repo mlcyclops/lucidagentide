@@ -730,4 +730,24 @@
 //            costumes and acts in the prompt-bar runner and the splash, a flush eye band, a 16-beat walk,
 //            and a hover hop and click leap. PRERELEASE: never marked Latest; the Homebrew cask and stable
 //            installs stay on 2.5.2.
-export const APP_VERSION = "2.5.3-beta.1";
+// v2.5.3-beta.2 = 2.5.3-beta.1 plus omp 18.18.6 on bundled Bun 1.4.4 with Claude Fable 5.2 and Mythos 5.2
+//            (P-MODEL.10, ADR-0526), a Windows boot that no longer blocks the workspace bar or the
+//            connection check behind heavy startup requests (P-BOOTPERF.1, ADR-0527), fleet lanes that autofit the dock
+//            at equal sizes and still resize (P-FLEET.FIT1, ADR-0528), and a staged-prompt copy menu with
+//            Push now running the prompt in a parallel worktree lane (P-PUSH.PAR1, ADR-0529). PRERELEASE:
+//            never marked Latest; the Homebrew cask and stable installs stay on 2.5.2.
+// v2.5.3-beta.3 = 2.5.3-beta.2 plus the DGX Loader's new name, the Private AI Platform, in every current
+//            UI string, toast, route error, probe note, CUI refusal reason, skill and guide; provider ids,
+//            the mailbox contract and the enclave attestation tag are unchanged (P-PRIVAI.1, ADR-0530).
+//            PRERELEASE: never marked Latest; the Homebrew cask and stable installs stay on 2.5.2.
+// v2.5.3-beta.4 = 2.5.3-beta.3 plus three holiday games in the arcade: Deck Guard: Deck the Halls (P-GAME.11,
+//            11b), Chimney Rush and Gobble Getaway (P-GAME.12), each with a between-runs shop, missions and a
+//            seeded daily run, sound off in the Preview and a memory fallback for storage; and promoting a fleet
+//            lane to the main space keeps the whole answer instead of an 8K [truncated] cut (#597).
+//            PRERELEASE: never marked Latest; the Homebrew cask and stable installs stay on 2.5.2.
+// v2.5.3 = 2.5.3-beta.4 promoted to stable unchanged: the four 2.5.3 betas on top of 2.5.2 (special themes
+//            P-SEASON.1; omp 18.18.6 on Bun 1.4.4 with Fable/Mythos 5.2, the Windows boot, fleet autofit and
+//            parallel Push now, ADR-0526 to ADR-0529; the Private AI Platform name, ADR-0530; the holiday
+//            arcade P-GAME.11, 11b, 12 and whole lane answers on promote, #597). A plain v2.5.3 tag, marked
+//            Latest, so the download buttons, the electron-updater feed and the Homebrew cask follow it.
+export const APP_VERSION = "2.5.3";
