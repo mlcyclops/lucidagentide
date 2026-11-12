@@ -27,7 +27,7 @@ ok("no guests -> no preamble (the block vanishes from the next turn when the las
 
 // [2] a real roster folds to counts and builds the actionable block
 const roster = [
-  { access: "edit", name: "nick@phone" },
+  { access: "edit", name: "operator@phone" },
   { access: "view", name: "dana@team.io" },
   { access: "view", name: "guest" },
 ];

@@ -40,6 +40,11 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "electron-builder"
         update-types: ["version-update:semver-major"]
+      # desktop/symbol_graph.ts uses the TypeScript compiler API (ts.Node, ts.isIdentifier ...). TypeScript 7
+      # ships the native compiler without that JavaScript API, so the desktop package stays on 6.x until the
+      # symbol graph moves off it. The root package runs tsc 7 for type checks only.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     labels: ["dependencies", "desktop"]
 
   # Python scanner sidecar (pyproject; zero runtime deps today, pytest dev only).

@@ -750,7 +750,17 @@
 //            parallel Push now, ADR-0526 to ADR-0529; the Private AI Platform name, ADR-0530; the holiday
 //            arcade P-GAME.11, 11b, 12 and whole lane answers on promote, #597). A plain v2.5.3 tag, marked
 //            Latest, so the download buttons, the electron-updater feed and the Homebrew cask follow it.
+// v2.5.4-beta.1 = 2.5.3 plus the eleven pull requests reviewed and fixed on 2026-11-11 and 12: remote spokes
+//            core with controller lanes, verified remote approvals and presence, and the session search,
+//            hub picker and archive it carries (#573, P-CTRL-REMOTE.1, ADR-0531 and ADR-0532), where a remote
+//            lane's command is now held to the workspace boundary on its arguments; the Fleet Orbit on one
+//            canvas (#571, ADR-0522); Windows Hello and Touch ID unlock of the knowledge graph and a passphrase
+//            change (#524, #525, ADR-0454, ADR-0455), with the protector file's crypto in the FIPS provider;
+//            memory.fact journaling behind LUCID_KSYNC_JOURNAL (#457); controller_read in the event contract
+//            (#512, ADR-0560); img2threejs for Creator (#584, ADR-0562); repo metrics history (#579, ADR-0561);
+//            the Bun pin guard (#599, ADR-0547); desktop KaTeX 0.18.10 and Monaco 0.56.0 (#351); ADR-0550 docs
+//            (#605). PRERELEASE: never marked Latest; the Homebrew cask and stable installs stay on 2.5.3.
 // v2.6.0-dev.1 = a local development build of the 2.6.0 line (feat/lane-holder: lanes under lucid-holder, OSC 7501
 //            fleet status, the controller OpenAPI document, PORT=0), so an installed dev build is told apart from
-//            the 2.5.3 release at a glance. Never tagged or published; the release sets 2.6.0.
+//            the 2.5.4 beta at a glance. Never tagged or published; the release sets 2.6.0.
 export const APP_VERSION = "2.6.0-dev.1";

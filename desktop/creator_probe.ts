@@ -257,7 +257,7 @@ export async function probeProvider(deps: ProbeDeps, providerId: CreatorProvider
   const ep = endpoints.find((e) => e.enabled && e.providerId === providerId);
   switch (providerId) {
     case "threejs":
-      return probeBuiltIn(deps, "threejs", ["scene-preview", "render-still", "runtime-feedback", "asset-import"]);
+      return probeBuiltIn(deps, "threejs", ["scene-preview", "render-still", "runtime-feedback", "asset-import", "image-to-model"]);
     case "elevenlabs":
       return probeElevenlabs(deps);
     case "comfyui":

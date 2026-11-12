@@ -5,11 +5,11 @@ import { describe, expect, test } from "bun:test";
 import { creatorEndpointFromConfig, scanCreatorMailbox, type CreatorMailboxIo } from "./creator_mailbox.ts";
 import { validateCreatorEndpoint, type CreatorEndpointDef } from "./creator_registry.ts";
 
-const DIR = "/home/nick/.omp/creator_endpoints";
+const DIR = "/home/operator/.omp/creator_endpoints";
 const docJson = (over: Record<string, unknown> = {}): string => JSON.stringify({
-  kind: "lucid-creator-endpoint", version: 1, id: "nick-dgx-avatar", label: "Avatar render (Nick DGX)", provider: "dgx-avatar",
-  url: "http://127.0.0.1:8088", enclave: { kind: "dgx", host: "10.0.0.8" },
-  transport: { kind: "ssh-forward", command: "ssh -N -L 8088:127.0.0.1:8088 nick@10.0.0.8" }, exportedAt: 1790000000000, source: "dgx-loader 1.x",
+  kind: "lucid-creator-endpoint", version: 1, id: "box-dgx-avatar", label: "Avatar render (DGX box)", provider: "dgx-avatar",
+  url: "http://127.0.0.1:8088", enclave: { kind: "dgx", host: "192.0.2.8" },
+  transport: { kind: "ssh-forward", command: "ssh -N -L 8088:127.0.0.1:8088 operator@192.0.2.8" }, exportedAt: 1790000000000, source: "dgx-loader 1.x",
   ...over,
 });
 
@@ -37,10 +37,10 @@ describe("the creator endpoint mailbox", () => {
   });
 
   test("an import becomes an internal-zone declaration attested as an enclave (contract section 3)", () => {
-    const h = harness({ "nick-dgx-avatar.json": docJson(), "nick-dgx-cad.json": docJson({ id: "nick-dgx-cad", provider: "dgx-cad", url: "http://127.0.0.1:8089", label: "CAD (Nick DGX)" }) });
+    const h = harness({ "box-dgx-avatar.json": docJson(), "box-dgx-cad.json": docJson({ id: "box-dgx-cad", provider: "dgx-cad", url: "http://127.0.0.1:8089", label: "CAD (DGX box)" }) });
     const r = scanCreatorMailbox(h.io, DIR);
-    expect(r).toEqual({ imported: ["nick-dgx-avatar", "nick-dgx-cad"], rejected: [] });
-    expect(h.saved[0]).toEqual({ id: "nick-dgx-avatar", providerId: "dgx-avatar", label: "Avatar render (Nick DGX)", baseUrl: "http://127.0.0.1:8088", zone: "internal", enclave: true, enabled: true });
+    expect(r).toEqual({ imported: ["box-dgx-avatar", "box-dgx-cad"], rejected: [] });
+    expect(h.saved[0]).toEqual({ id: "box-dgx-avatar", providerId: "dgx-avatar", label: "Avatar render (DGX box)", baseUrl: "http://127.0.0.1:8088", zone: "internal", enclave: true, enabled: true });
     expect(h.saved[1]!.providerId).toBe("dgx-cad");
   });
 
@@ -52,7 +52,7 @@ describe("the creator endpoint mailbox", () => {
       "d-notes.txt": "ignored, not json",
     });
     const r = scanCreatorMailbox(h.io, DIR);
-    expect(r.imported).toEqual(["nick-dgx-avatar"]);
+    expect(r.imported).toEqual(["box-dgx-avatar"]);
     expect(r.rejected.map((x) => x.file)).toEqual(["b-not-json.json", "c-secret.json"]);
     expect(r.rejected[0]!.reason).toBe("unreadable or not JSON");
     expect(r.rejected[1]!.reason).toContain("credential-like field");
@@ -74,14 +74,14 @@ describe("the creator endpoint mailbox", () => {
 
   test("a moved tunnel updates the URL but keeps the user's enabled choice", () => {
     const h = harness({ "a.json": docJson({ url: "http://127.0.0.1:18088" }) }, [
-      { ...creatorEndpointFromConfig({ kind: "lucid-creator-endpoint", version: 1, id: "nick-dgx-avatar", label: "Avatar render (Nick DGX)", provider: "dgx-avatar", url: "http://127.0.0.1:8088", enclave: { kind: "dgx", host: "10.0.0.8" } }), enabled: false },
+      { ...creatorEndpointFromConfig({ kind: "lucid-creator-endpoint", version: 1, id: "box-dgx-avatar", label: "Avatar render (DGX box)", provider: "dgx-avatar", url: "http://127.0.0.1:8088", enclave: { kind: "dgx", host: "192.0.2.8" } }), enabled: false },
     ]);
-    expect(scanCreatorMailbox(h.io, DIR).imported).toEqual(["nick-dgx-avatar"]);
+    expect(scanCreatorMailbox(h.io, DIR).imported).toEqual(["box-dgx-avatar"]);
     expect(h.saved[0]).toMatchObject({ baseUrl: "http://127.0.0.1:18088", enabled: false, enclave: true });
   });
 
   test("a file cannot take over an id that names another provider's declaration", () => {
-    const comfy: CreatorEndpointDef = { id: "nick-dgx-avatar", providerId: "comfyui", label: "Mine", baseUrl: "http://127.0.0.1:8188", zone: "local", enabled: true };
+    const comfy: CreatorEndpointDef = { id: "box-dgx-avatar", providerId: "comfyui", label: "Mine", baseUrl: "http://127.0.0.1:8188", zone: "local", enabled: true };
     const h = harness({ "a.json": docJson() }, [comfy]);
     const r = scanCreatorMailbox(h.io, DIR);
     expect(r.imported).toEqual([]);
