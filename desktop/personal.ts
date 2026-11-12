@@ -19,6 +19,7 @@ import { LOCKED_READ_REASON, LOCKED_WRITE_REASON, searchGraph, vetAgentWrite, ty
 import { load, personalAuditPath, personalCuiArchiveDir, personalCuiStorePath, personalProtectorsPath, personalStorePath, personalVaultDir, setPersonalization, setPersonalScope } from "./settings_store.ts";
 // ADR-0454: the main store's Lucid Vault Protector Spec v1 file (password + Windows Hello / Touch ID protectors)
 import { createProtectors, ProtectorError, readProtectors, rewrapPassword, unlockWithPassword, writeProtectors, type ProtectorDoc } from "../harness/personal/protectors.ts";
+import { FipsRequiredError } from "../harness/crypto/fips_crypto.ts";
 import { randomKey } from "../harness/personal/crypto.ts";
 import { buildRecall, buildRecallFromGraph } from "../harness/personal/recall.ts";
 import { distillTurn, heuristicExtractor, modelExtractor, type CompleteFn, type Extractor } from "../harness/personal/distiller.ts";
@@ -111,7 +112,11 @@ export function unlockPersonal(passphrase: string): { ok: boolean; error?: strin
   }
   let vmk: Buffer;
   try { vmk = unlockWithPassword(doc, passphrase); }
-  catch (e) { return { ok: false, error: e instanceof ProtectorError && e.code !== "auth" ? `The store's protector file is unusable: ${e.message}.` : "Wrong passphrase, or the store could not be read." }; }
+  catch (e) {
+    // A policy refusal (FIPS required, no validated module) says nothing about the passphrase.
+    if (e instanceof FipsRequiredError) return { ok: false, error: `FIPS mode refused the operation: ${e.message}` };
+    return { ok: false, error: e instanceof ProtectorError && e.code !== "auth" ? `The store's protector file is unusable: ${e.message}.` : "Wrong passphrase, or the store could not be read." };
+  }
   try { store = PersonalStore.openWithKey(personalStorePath(), vmk); return { ok: true }; }
   catch { vmk.fill(0); return { ok: false, error: "The protector file does not belong to this store." }; }
 }

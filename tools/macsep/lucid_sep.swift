@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // tools/macsep/lucid_sep.swift - the macOS Secure Enclave bridge for the knowledge graph's `sep` protector
-// (Lucid Vault Protector Spec v1 §4.4; P-KGBIO.2, ADR-0456).
+// (Lucid Vault Protector Spec v1 §4.4; P-KGBIO.1, ADR-0454).
 //
 // A CryptoKit SecureEnclave.P256.KeyAgreement key created with access control
 // `.privateKeyUsage | .biometryCurrentSet`. The private key never leaves the Secure Enclave; CryptoKit returns

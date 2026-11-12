@@ -155,6 +155,35 @@ test("an OS cancel surfaces as cancelled; a swapped blob as mismatch", async () 
   expect(await codeOf(() => du.unlock())).toBe("mismatch");
 });
 
+test("FIPS required: device unlock is refused before any OS prompt, and nothing is offered", async () => {
+  const f = fakeProvider();
+  const du = new KgDeviceUnlock({ provider: f.p, protectorsPath });
+  (await du.enroll(PASS)).fill(0);
+  expect(du.autoUnlockEnrolled()).toBe(true);
+  const saved = process.env.LUCID_FIPS_REQUIRED;
+  try {
+    process.env.LUCID_FIPS_REQUIRED = "1";
+    const opened = f.calls.open;
+    expect(await codeOf(() => du.unlock())).toBe("unsupported");
+    expect(await codeOf(() => du.enroll(PASS))).toBe("unsupported");
+    expect(f.calls.open).toBe(opened); // the OS was never asked
+    expect(await du.status()).toMatchObject({ supported: false, enrolled: true });
+    expect(du.autoUnlockEnrolled()).toBe(false);
+  } finally {
+    if (saved === undefined) delete process.env.LUCID_FIPS_REQUIRED; else process.env.LUCID_FIPS_REQUIRED = saved;
+  }
+  expect((await du.unlock()).length).toBe(32); // the entry is untouched: it works again without the requirement
+});
+
+test("an enrollment that fails after the OS key was made removes that key", async () => {
+  const f = fakeProvider();
+  const du = new KgDeviceUnlock({ provider: f.p, protectorsPath: () => (f.calls.create ? join(dir, "no-such-dir", "p.json") : protectorsPath()) });
+  expect(await codeOf(() => du.enroll(PASS))).not.toBe("no-throw"); // the file "moved" after the prompt: the write cannot land
+  expect(f.calls.create).toBe(1);
+  expect(f.calls.destroyed).toHaveLength(1);
+  expect(doc()!.protectors.map((e) => e.type)).toEqual(["password"]);
+});
+
 test("auto-unlock toggles; forget drops the entry and the OS key, the password is unaffected", async () => {
   const f = fakeProvider();
   const du = new KgDeviceUnlock({ provider: f.p, protectorsPath });

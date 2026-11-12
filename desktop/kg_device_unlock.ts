@@ -32,6 +32,7 @@
 // The provider is injected, so this unit-tests with no TPM and no Secure Enclave.
 
 import { createECDH, hkdfSync, randomBytes } from "node:crypto";
+import { fipsRequired } from "../harness/crypto/fips_crypto.ts";
 import { KEY_LEN } from "../harness/personal/crypto.ts";
 import {
   newEntry, ProtectorError, readProtectors, unlockWithPassword, unwrapEntry, vmkCheckOk, withoutProtector, withProtector, writeProtectors,
@@ -95,12 +96,24 @@ export class KgDeviceUnlock {
   }
   #provider(): DeviceKeyProvider {
     if (!this.deps.provider) throw new DeviceUnlockError("unsupported", "Device unlock is not available on this machine.");
+    // ADR-0473: this runs in Electron main, where the key agreement (HKDF, ECDH) and the unwrap are node:crypto
+    // and the validated module cannot be loaded. When policy requires validated cryptography the device
+    // protector is refused before any OS prompt; the passphrase path runs in the engine, inside the module.
+    if (fipsRequired()) throw new DeviceUnlockError("unsupported", "Device unlock is off while FIPS-validated cryptography is required. Unlock with your passphrase.");
     return this.deps.provider;
+  }
+
+  /** True when the protector file holds this provider's entry with unlock-at-launch on. Reads the file only:
+   *  no OS helper is started, so a launch on a machine that never enrolled costs nothing. */
+  autoUnlockEnrolled(): boolean {
+    if (fipsRequired()) return false;
+    const found = this.#enrolledEntry();
+    return !!found && found.entry.auto_unlock !== false;
   }
 
   async status(): Promise<DeviceStatus> {
     const p = this.deps.provider;
-    const supported = p ? await p.available().catch(() => false) : false;
+    const supported = p && !fipsRequired() ? await p.available().catch(() => false) : false;
     let entry: ProtectorEntry | undefined;
     let problem: string | null = null;
     try { entry = p ? this.#doc().protectors.find((e) => e.type === p.type) : undefined; }
@@ -128,10 +141,14 @@ export class KgDeviceUnlock {
       if (e instanceof DeviceUnlockError) throw e;
       throw e instanceof ProtectorError && e.code === "auth" ? new DeviceUnlockError("wrong-passphrase", "Wrong passphrase.") : new DeviceUnlockError("failed", (e as Error).message);
     }
+    // The OS key this enrollment made, until an entry in the file points at it. A failure before that would
+    // otherwise leave a key in the TPM or the enclave that nothing names and nothing ever removes.
+    let unowned: ProtectorEntry | null = null;
     try {
       const id = randomBytes(8).toString("hex");
       const { kek, fields } = await p.create(id, { companion });
       const label = companion && p.companion ? p.companion.label : p.label;
+      unowned = { ...fields, id, type: p.type, created: "", label, wrapped_vmk: "", nonce: "" };
       let entry: ProtectorEntry;
       try { entry = newEntry(kek, vmk, p.type, label, { ...fields, auto_unlock: opts.autoUnlock ?? true, ...(companion ? { companion: true } : {}) }, id); } finally { kek.fill(0); }
       // Re-read after the prompt: the file may have changed while the user looked at the camera. The entry is
@@ -140,9 +157,14 @@ export class KgDeviceUnlock {
       if (!vmkCheckOk(vmk, doc.vmk_check)) throw new DeviceUnlockError("failed", "The store's key changed while enrolling - try again.");
       const prior = doc.protectors.find((e) => e.type === p.type);
       writeProtectors(this.deps.protectorsPath(), withProtector(doc, entry));
+      unowned = null;
       if (prior) await p.destroy(prior).catch(() => {});
       return vmk;
-    } catch (e) { vmk.fill(0); throw e; }
+    } catch (e) {
+      vmk.fill(0);
+      if (unowned) await p.destroy(unowned).catch(() => {});
+      throw e;
+    }
   }
 
   /** One OS prompt -> the VMK, proven against the file's vmk_check. Throws DeviceUnlockError. */
@@ -155,7 +177,11 @@ export class KgDeviceUnlock {
     if (!entry) throw new DeviceUnlockError("not-enrolled", `${p.label} unlock is not set up - unlock with your passphrase and turn it on.`);
     const kek = await p.open(entry);
     try { return unwrapEntry(doc, entry, kek); }
-    catch { throw new DeviceUnlockError("mismatch", `The ${p.label} key no longer matches - unlock with your passphrase and turn ${p.label} unlock on again.`); }
+    catch (e) {
+      // Only a key that does not open the entry is a mismatch. Anything else (a provider refusal) is reported as itself.
+      if (e instanceof ProtectorError) throw new DeviceUnlockError("mismatch", `The ${p.label} key no longer matches - unlock with your passphrase and turn ${p.label} unlock on again.`);
+      throw new DeviceUnlockError("failed", e instanceof Error ? e.message : String(e));
+    }
     finally { kek.fill(0); }
   }
 

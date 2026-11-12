@@ -25270,6 +25270,9 @@ Two traps found by measurement before writing anything:
 - **UI.** Settings shows "Turn on Windows Hello" (passphrase once), the "Unlock with … when LUCID opens" toggle, and "Turn off". The locked graph view has "Unlock with Windows Hello" and "Use Windows Hello next time"; the latter unlocks with the passphrase first (which migrates), then adds the protector. An unusable protector file is shown as such and nothing is offered.
 - **CUI is out of scope.** The CUI store has no protector file. ADR-0014 requires its own passphrase to return to it.
 - **No new EventName.** `personal_store_unlocked` carries the store's custody, unchanged.
+- **FIPS (ADR-0473, Contract A).** In `harness/personal/protectors.ts` the VMK wrap and unwrap (AES-256-GCM), every salt, nonce and id (the DRBG), the vmk_check MAC (HMAC-SHA256) and the password KEK (PBKDF2) go through `fips_crypto.ts`: the validated module when one is usable, `FipsRequiredError` when one is required and absent. That refusal is reported as itself, never as a wrong passphrase or a key mismatch. Two things stay outside the validated module, and each is handled, not hidden:
+  - **The vmk_check's AES-128-CBC** runs in `node:crypto`. The Hub's spec fixes that token as Fernet, the provider has no CBC, and the block it encrypts is the public constant `LUCID_VMK_V1` (a key-check value, not stored data). This is the one recorded exception.
+  - **The device protector** (HKDF, the Touch ID ECDH, and its unwrap) runs in Electron main, where the validated module cannot be loaded. When validated cryptography is required, device unlock is refused before any OS prompt and is not offered in Settings; the passphrase path runs in the engine, inside the module.
 
 **Not in this increment.**
 - The spec's remote-session policy (§5: lock on remote connect, refuse quick unlock in an RDP session) and auto-lock on idle, screen lock, or sleep. Windows itself does not serve Hello prompts inside an RDP session (§4.1).
