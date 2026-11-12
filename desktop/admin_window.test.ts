@@ -2,12 +2,26 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 import { describe, expect, test } from "bun:test";
-import { ADMIN_DEFAULT_SIZE, adminBounds, adminNavigation } from "./admin_window.ts";
+import { ADMIN_DEFAULT_SIZE, adminBounds, adminNavigation, adminOpenAction } from "./admin_window.ts";
 import { pluginOrigin } from "./plugins/ports.ts";
 
 // P-RS-WINDOW.1 (ADR-0543): what the Remote Spokes admin window may load, and where it opens.
 const PANEL = "http://127.0.0.1:47555";
 const SCREEN = [{ x: 0, y: 0, width: 1920, height: 1040 }];
+
+describe("adminOpenAction", () => {
+  test("a new window loads; the very URL already shown only comes forward", () => {
+    expect(adminOpenAction("", `${PANEL}/#bootstrap=a`)).toBe("load");
+    expect(adminOpenAction(`${PANEL}/#bootstrap=a`, `${PANEL}/#bootstrap=a`)).toBe("focus");
+  });
+
+  test("a fresh secret on the same page is loaded (the page takes it on hashchange); another path or port loads it", () => {
+    expect(adminOpenAction(`${PANEL}/#bootstrap=a`, `${PANEL}/#bootstrap=b`)).toBe("load");
+    expect(adminOpenAction(`${PANEL}/`, `${PANEL}/#bootstrap=b`)).toBe("load");
+    expect(adminOpenAction(`${PANEL}/spokes`, `${PANEL}/#bootstrap=b`)).toBe("load");
+    expect(adminOpenAction("http://127.0.0.1:47556/#bootstrap=a", `${PANEL}/#bootstrap=b`)).toBe("load");
+  });
+});
 
 describe("adminNavigation", () => {
   test("the panel's own origin stays in the window; the same port under another host name is not the same origin", () => {
