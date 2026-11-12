@@ -1556,3 +1556,7 @@ demo-P-BREW.1: ## P-BREW.1: the Homebrew cask is an app cask over the release .z
 .PHONY: demo-P-RECOVER.4
 demo-P-RECOVER.4: ## P-RECOVER.4 (ADR-0481): the main window recovers its own renderer. A render-process-gone that is not a clean exit is logged with reason + exit code and the app is loaded again after a backoff (250ms to 10s), at most 5 reloads per 60s sliding window; past the cap the window is left as it is and the log says to relaunch; a clean exit is ignored; an unresponsive renderer is logged, never reloaded. Wiring lives in main.ts createWindow (proven on a real Electron launch, ADR-0481 Consequences)
 	$(BUN) test $(TEST_IGNORES) desktop/renderer_watchdog.test.ts desktop/gpu_watchdog.test.ts desktop/navigation_policy.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-METRICS.1
+demo-P-METRICS.1: ## P-METRICS.1 (ADR-0561): long-term download and clone tracking. The real collector CLI, tokens in its env as the repo-metrics workflow passes them, against a local server that answers like api.github.com: two runs a week apart keep clone history GitHub has dropped and show each release's 7-day change; no traffic token records releases and says traffic was not collected (no invented zeros); a 403 exits 1, names the permission, keeps the release snapshot; a failed release fetch writes nothing; no token in any output or file
+	$(BUN) run tools/metrics/demo_p_metrics_1.ts
+	$(BUN) test $(TEST_IGNORES) tools/metrics/repo_metrics.test.ts harness/adr_numbering.test.ts
