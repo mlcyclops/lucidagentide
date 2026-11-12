@@ -6,7 +6,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { createHash, createPrivateKey, createPublicKey, hkdfSync, verify } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
@@ -195,6 +195,16 @@ describe("memory.fact journaling (LUCID_KSYNC_JOURNAL)", () => {
     writeFileSync(inside, JSON.stringify(IDENTITY_FILE));
     process.env.LUCID_KSYNC_JOURNAL = root;
     process.env.LUCID_KSYNC_IDENTITY = inside;
+    expect(emitMemoryFact(FACT)).toBeNull();
+    expect(readdirSync(root)).toEqual(["identity.json"]);
+  });
+
+  test("an identity reached through a link into the sync root is refused", () => {
+    writeFileSync(join(root, "identity.json"), JSON.stringify(IDENTITY_FILE));
+    const alias = join(dir, "alias"); // lexically outside the root, really the root itself
+    symlinkSync(root, alias, "junction");
+    process.env.LUCID_KSYNC_JOURNAL = root;
+    process.env.LUCID_KSYNC_IDENTITY = join(alias, "identity.json");
     expect(emitMemoryFact(FACT)).toBeNull();
     expect(readdirSync(root)).toEqual(["identity.json"]);
   });

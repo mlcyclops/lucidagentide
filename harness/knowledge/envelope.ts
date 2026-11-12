@@ -18,8 +18,8 @@
 // is inert on the wire; the default (unset) emits nothing, which is what 4.2 asks of a producer.
 
 import { createHash, createPrivateKey, hkdfSync, randomBytes, sign } from "node:crypto";
-import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
 import type { Db } from "../memory/db.ts";
 
@@ -241,6 +241,17 @@ export interface FactBody {
 
 let clock: Hlc | null = null;
 
+/** Where a path really is, links and junctions resolved. A path that does not exist yet (the sync root
+ *  before its first write) resolves through its nearest existing ancestor. */
+function realPath(p: string): string {
+  try {
+    return realpathSync.native(p);
+  } catch {
+    const parent = dirname(p);
+    return parent === p ? p : join(realPath(parent), basename(p));
+  }
+}
+
 /** Journal one memory.fact. Returns the segment path, or null for every reason not to (flag off, no
  *  identity, identity inside the sync root, any build or I/O failure). Never throws. */
 export function emitMemoryFact(fact: FactBody, opts: { now?: number; random?: Uint8Array } = {}): string | null {
@@ -250,7 +261,11 @@ export function emitMemoryFact(fact: FactBody, opts: { now?: number; random?: Ui
     if (!root || !idPath) return null;
     const absRoot = resolve(root);
     const absId = resolve(idPath);
-    if (absId === absRoot || absId.startsWith(absRoot + sep)) return null; // a device seed must never replicate
+    // A device seed must never replicate. Judged on the real locations: an identity path that is lexically
+    // outside the root but reaches a file inside it through a link or junction would pass a string check.
+    const realRoot = realPath(absRoot);
+    const realId = realPath(absId);
+    if (realId === realRoot || realId.startsWith(realRoot + sep)) return null;
     const ident = identityFrom(JSON.parse(readFileSync(absId, "utf8")));
     if (clock?.device !== ident.device) clock = new Hlc(ident.device);
     const { ms, hlc } = clock.stamp(opts.now ?? Date.now());
