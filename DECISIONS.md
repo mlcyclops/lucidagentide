@@ -26634,6 +26634,8 @@ Parity already held and left alone: workspace, tab, pane hierarchy and ids; the 
 
 ## ADR-0543 -- P-RS-WINDOW.1: the Remote Spokes admin panel opens in a window of its own (2026-11-10)
 
+**Amendment (2026-11-12, review of #593).** An Open on a window already showing the panel only focused it, so after the plugin restarted on the same port the page kept a spent one-time `#bootstrap` secret and every API call answered 403. Each Open now loads its fresh URL unless the window shows that exact URL (`adminOpenAction` in `desktop/admin_window.ts`); a fragment-only change stays in the page and fires `hashchange`, which the panel answers by exchanging the new secret, so nothing typed there is lost. The navigation and window-open rules are unchanged.
+
 **Status:** Accepted -- BUILT. Checks: `bun test desktop/admin_window.test.ts desktop/renderer/remote_admin_launch.test.ts`; desktop typecheck; `desktop/scripts/demo_p_ide_spokes_1_shot.mjs` (Admin tab section rewritten for this change).
 
 **Context.** The owner, 2026-11-10: "Since the spoke admin panel has so much information it should spawn a whole window, not just a small menu." ADR-0539 framed the plugin's panel inside the Remote spokes view's Admin tab, which is a right-edge surface beside the chat, too narrow for setup, presence, custody, models, relays and licenses.

@@ -44,7 +44,7 @@ import { BROWSER_POLICY_WORLD, SNAPSHOT_JS, freshnessJs, isBrowserAction, isBrow
 import { captureCropFromCssRect } from "./preview_capture.ts"; // P-PREVIEW.1: CSS-px rect -> DIP crop (zoom-aware)
 import { flavorInfo, resolveBuildFlavor } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279): the product-line identity
 import { installAppNavigation, openExternalHttp } from "./navigation_policy.ts";
-import { ADMIN_BOUNDS_FILE, ADMIN_MIN_SIZE, ADMIN_PARTITION, ADMIN_WINDOW_TITLE, adminBounds, adminNavigation } from "./admin_window.ts"; // P-RS-WINDOW.1 (ADR-0543)
+import { ADMIN_BOUNDS_FILE, ADMIN_MIN_SIZE, ADMIN_PARTITION, ADMIN_WINDOW_TITLE, adminBounds, adminNavigation, adminOpenAction } from "./admin_window.ts"; // P-RS-WINDOW.1 (ADR-0543)
 import { pluginOrigin } from "./plugins/ports.ts";
 import { isEngineDocument } from "./origin_guard.ts"; // P-SANDBOX.15 (ADR-0396): the UI token goes only to our own window
 import { installCliForwarder } from "./cli_forwarder.ts"; // P-TUI.2: `lucid hub` from any terminal on an installed machine
@@ -1412,13 +1412,13 @@ ipcMain.handle("lucid:openRemoteSpokesAdmin", async (e, u: unknown) => {
   const w = adminWin && !adminWin.isDestroyed() ? adminWin : createAdminWindow();
   const fresh = w !== adminWin;
   adminWin = w;
-  // An open window already on this origin keeps its page (and whatever is typed there) and only comes forward.
-  // A new window, or a plugin that restarted on another port, loads the fresh one-time URL.
-  const reload = fresh || adminAllowed !== origin || pluginOrigin(w.webContents.getURL()) !== origin;
+  // Each Open carries a fresh one-time #bootstrap secret, so the window loads it unless it already shows that very
+  // URL; a page kept on a spent token answers 403 to everything (a plugin restarted on the same port).
+  const action = adminOpenAction(fresh ? "" : w.webContents.getURL(), u);
   adminAllowed = origin;
-  if (reload) {
-    try { await w.loadURL(u); } catch { /* a failed load still shows the window, with the browser's error page */ }
-  }
+  try {
+    if (action === "load") await w.loadURL(u);
+  } catch { /* a failed load still shows the window, with the browser's error page */ }
   if (w.isDestroyed()) return false;
   if (w.isMinimized()) w.restore();
   w.show();
