@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  AUTOSTART_RETRY_DELAYS_MS, autostartPlugins, clearRunIntent, launchSelection, readRunIntents, setRunIntent,
+  AUTOSTART_RETRY_DELAYS_MS, autostartPlugins, clearRunIntent, isDevelopmentVersion, launchSelection, readRunIntents, readRunIntentVersion, setRunIntent,
   type AutostartDeps,
 } from "./intent.ts";
 
@@ -55,7 +55,9 @@ describe("launch selection", () => {
 });
 
 /** A scripted launch: `plan[id]` lists each attempt's answer in order (true = it came up). */
-function harness(plan: Record<string, boolean[]>, opts: { installed?: string[]; onSleep?: (ms: number) => void } = {}) {
+function harness(plan: Record<string, boolean[]>, opts: {
+  installed?: string[]; onSleep?: (ms: number) => void; appVersion?: string; writtenBy?: Record<string, string | null>; tampered?: string[];
+} = {}) {
   const intents = new Set(Object.keys(plan));
   const calls: string[] = [];
   const sleeps: number[] = [];
@@ -65,6 +67,9 @@ function harness(plan: Record<string, boolean[]>, opts: { installed?: string[]; 
   const deps: AutostartDeps = {
     intents: () => [...intents].sort(),
     installed: (id) => installed.has(id),
+    appVersion: opts.appVersion ?? "2.6.0-dev.1",
+    writtenBy: (id) => (opts.writtenBy && id in opts.writtenBy ? (opts.writtenBy[id] ?? null) : "2.6.0-dev.1"),
+    integrityProblem: (id) => (opts.tampered?.includes(id) ? `${id}/LICENSE does not match its sha256 (tampered or corrupt)` : null),
     start: async (id) => {
       calls.push(id);
       const ok = plan[id]!.shift() ?? false;
@@ -137,5 +142,46 @@ describe("autostart at launch", () => {
     const h = harness({});
     expect(await autostartPlugins(h.deps)).toEqual([]);
     expect(h.calls).toEqual([]);
+  });
+
+  test("a release build does not start what a development build left running, and forgets it", async () => {
+    const h = harness({ "dev-plugin": [true], "old-record": [true] }, { appVersion: "2.6.0", writtenBy: { "dev-plugin": "2.6.0-dev.1", "old-record": null } });
+    expect(await autostartPlugins(h.deps)).toEqual([]);
+    expect(h.calls).toEqual([]);
+    expect(h.forgotten).toEqual(["dev-plugin", "old-record"]);
+    expect(h.logs.join("\n")).toContain("dev-plugin was left running by a development build (2.6.0-dev.1)");
+    expect(h.logs.join("\n")).toContain("old-record was left running by a development build (unknown version)");
+  });
+
+  test("a release build starts what a release build left running; a development build starts either", async () => {
+    const rel = harness({ pathfinder: [true] }, { appVersion: "2.6.0", writtenBy: { pathfinder: "2.5.4-beta.1" } });
+    expect(await autostartPlugins(rel.deps)).toEqual([{ id: "pathfinder", ok: true, attempts: 1 }]);
+    expect(rel.forgotten).toEqual([]);
+    const dev = harness({ a: [true], b: [true] }, { appVersion: "2.6.0-dev.2", writtenBy: { a: "2.6.0-dev.1", b: null } });
+    expect(await autostartPlugins(dev.deps)).toEqual([{ id: "a", ok: true, attempts: 1 }, { id: "b", ok: true, attempts: 1 }]);
+  });
+
+  test("a plugin whose installed files fail the hash check is not started and is forgotten", async () => {
+    const h = harness({ tampered: [true], pathfinder: [true] }, { tampered: ["tampered"] });
+    expect(await autostartPlugins(h.deps)).toEqual([{ id: "pathfinder", ok: true, attempts: 1 }]);
+    expect(h.calls).toEqual(["pathfinder"]);
+    expect(h.forgotten).toEqual(["tampered"]);
+    expect(h.logs.join("\n")).toContain("tampered was not started: its installed files fail the hash check");
+  });
+});
+
+describe("development versions", () => {
+  test("only a -dev. build is a development build", () => {
+    expect(isDevelopmentVersion("2.6.0-dev.1")).toBe(true);
+    expect(isDevelopmentVersion("2.6.0")).toBe(false);
+    expect(isDevelopmentVersion("2.5.0-beta.4")).toBe(false);
+  });
+
+  test("the ledger records the writing version; an old timestamp-only record has none", () => {
+    setRunIntent("pathfinder", dir, "2.6.0");
+    expect(readRunIntentVersion("pathfinder", dir)).toBe("2.6.0");
+    writeFileSync(join(dir, "legacy"), "2026-11-01T00:00:00.000Z\n");
+    expect(readRunIntentVersion("legacy", dir)).toBeNull();
+    expect(readRunIntentVersion("absent", dir)).toBeNull();
   });
 });

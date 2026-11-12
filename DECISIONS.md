@@ -26867,3 +26867,17 @@ The review also found stale facts in the docs: vLLM was written as port 8080, an
 - Follow-ups: (a) carry the creator and voice mailboxes over the spoke and retire their SSH forwards; (b) feed the platform's telemetry (loaded models, serve kinds, GPU use) into the spoke's capability record so the hub picker sees it.
 
 Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-out on the 2.6.0 line, which supersedes ADR-0334 there), platform ADR-0018 and ADR-0033.
+
+## ADR-0564 -- Plugin autostart trusts only intents a release wrote and files that still match their manifest; a Stop cancels a start in flight (2026-11-12)
+
+**Status:** Accepted. Amends ADR-0546. Context: the 2026-11-12 review of #596 found three ways autostart could run a plugin against the user's or the release's intent.
+1. A development build's running intent could start, on a release, an unsigned development plugin that release cleanup (ADR-0542, #594) left installed after a failed removal.
+2. Autostart treated `readInstalled()` as proof the plugin is intact, but that checks only the version pointer and the manifest schema, not the file hashes.
+3. A Stop that arrived while a start was still choosing its port returned success, and the start then launched the plugin and wrote the intent again.
+
+**Decision.**
+1. Each running-intent record stores the `APP_VERSION` that wrote it. On a build whose version has no `-dev.`, autostart ignores, clears and logs an intent written by a development build (an intent with no version counts as one); the user starts that plugin once by hand.
+2. Before autostarting, every installed file is checked against the manifest's sha256 list with the installer's own check (`payloadHashProblem`, now shared from `harness/plugins/package.ts`). A mismatch or a missing file is not started, its intent is cleared, and a high-severity `plugin_autostart` security block is recorded.
+3. `stop()` bumps a per-plugin stop count and drops the pending start; a start that sees the count change does not launch, stops anything it did launch and writes no intent. The runtime's own clean-up stops do not count.
+
+**Consequences.** After moving from a development build to a release, plugins are started once by hand. A tampered or corrupted install no longer comes back at launch and shows in the Security panel. Proof: `desktop/plugins/intent.test.ts` and `desktop/plugins/runtime.test.ts` (release and development intents, one byte changed in an installed file, a Stop during a held start).
