@@ -376,10 +376,15 @@ if (!REFRESH) {
 		const engines = ompPkg && typeof ompPkg === "object" && "engines" in ompPkg ? ompPkg.engines : null;
 		const range = engines && typeof engines === "object" && "bun" in engines && typeof engines.bun === "string" ? engines.bun : null;
 		const version = (await $`${plain} --version`.text()).trim();
-		if (range !== null && !satisfiesMinimum(version, range)) {
+		// No declared range is not "any bun will do": the check could not run, and a check that cannot run must
+		// not read as a pass. Stop, so a person looks at what omp now requires.
+		if (range === null) {
+			throw new Error(`fetch-runtimes: the bundled omp declares no engines.bun, so the bundled bun ${version} cannot be checked against it. Read omp's package.json for what it needs now and update this check.`);
+		}
+		if (!satisfiesMinimum(version, range)) {
 			throw new Error(`fetch-runtimes: the bundled bun is ${version}, but omp needs bun ${range}; the packaged agent would not start. Raise BUN_VERSION.`);
 		}
-		console.log(`runtimes: bundled bun ${version} satisfies omp's engines.bun ${range ?? "(none declared)"}`);
+		console.log(`runtimes: bundled bun ${version} satisfies omp's engines.bun ${range}`);
 	}
 	// P-RUNTIME-PY.1 (ADR-0548): run the bundled CPython and read what it carries. A tree that is not
 	// PY_VERSION (a stale cached runtimes/ dir) or whose OpenSSL is below PY_OPENSSL_MIN stops the build:
