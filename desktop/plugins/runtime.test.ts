@@ -8,7 +8,7 @@
 // the way Electron's Node does in the app.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLEAN, buildServerFixture, testKey, writeStage } from "./fixtures.ts";
@@ -16,7 +16,7 @@ import { installPluginBytes, pluginDataDir, readInstalled } from "./install.ts";
 import { readRunIntents, runIntentDir, setRunIntent } from "./intent.ts";
 import { pluginMcpServers } from "./mcp.ts";
 import { pluginOrigin, PLUGIN_PORT_MAX, PLUGIN_PORT_MIN } from "./ports.ts";
-import { PluginRuntime, preferredPort, resolveWebFile, webCsp } from "./runtime.ts";
+import { PluginRuntime, preferredPort, resolveWebFile, webCsp, type RuntimeDeps } from "./runtime.ts";
 import { buildPlugin } from "../../tools/build_plugin.ts";
 import { pluginSelfNavigation } from "../navigation_policy.ts";
 import type { PluginManifest } from "../../harness/plugins/package.ts";
@@ -45,8 +45,8 @@ afterEach(async () => {
 
 const deps = { trusted: KEY.trusted, decide: async () => CLEAN, record: () => {}, managedEgress: {} };
 
-function makeRuntime(healthTimeoutMs = 20_000): PluginRuntime {
-  runtime = new PluginRuntime({ nodeExe: () => process.execPath, agentBin: () => "C:/lucid/omp.exe", onMcpChange: () => { mcpChanges++; }, healthTimeoutMs });
+function makeRuntime(healthTimeoutMs = 20_000, extra: Partial<RuntimeDeps> = {}): PluginRuntime {
+  runtime = new PluginRuntime({ nodeExe: () => process.execPath, agentBin: () => "C:/lucid/omp.exe", onMcpChange: () => { mcpChanges++; }, healthTimeoutMs, ...extra });
   return runtime;
 }
 
@@ -247,6 +247,56 @@ describe("running intent across launches", () => {
 
     setRunIntent("gone-private", runIntentDir()); // e.g. an unsigned private install a release cleanup removed
     expect(await makeRuntime().autostart()).toEqual([]);
+    expect(readRunIntents(runIntentDir())).toEqual([]);
+  }, 30_000);
+
+  test("a release build ignores and forgets a development build's intent but honors a release one", async () => {
+    await installWebFixture();
+    setRunIntent("fixture-web", runIntentDir(), "2.6.0-dev.1");
+    let rt = makeRuntime(20_000, { appVersion: "2.6.0" });
+    expect(await rt.autostart()).toEqual([]);
+    expect(stateOf(rt, "fixture-web")).toBe("installed");
+    expect(readRunIntents(runIntentDir())).toEqual([]);
+
+    setRunIntent("fixture-web", runIntentDir(), "2.6.0");
+    rt = makeRuntime(20_000, { appVersion: "2.6.0" });
+    expect(await rt.autostart()).toEqual([{ id: "fixture-web", ok: true, attempts: 1 }]);
+    await rt.stopAll();
+
+    setRunIntent("fixture-web", runIntentDir(), "2.6.0-dev.1");
+    rt = makeRuntime(20_000, { appVersion: "2.6.0-dev.2" });
+    expect(await rt.autostart()).toEqual([{ id: "fixture-web", ok: true, attempts: 1 }]);
+  }, 30_000);
+
+  test("an installed file with one byte changed is not autostarted; its intent goes and a block is recorded", async () => {
+    await installWebFixture();
+    const p = readInstalled("fixture-web")!;
+    const file = join(p.dir, "web/index.html");
+    const bytes = readFileSync(file);
+    bytes[0] = bytes[0]! ^ 1;
+    writeFileSync(file, bytes);
+    setRunIntent("fixture-web", runIntentDir());
+    const blocks: { tool: string; reason: string }[] = [];
+    const rt = makeRuntime(20_000, { record: (b) => { blocks.push(b); } });
+    expect(await rt.autostart()).toEqual([]);
+    expect(stateOf(rt, "fixture-web")).toBe("installed");
+    expect(readRunIntents(runIntentDir())).toEqual([]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.tool).toBe("plugin_autostart");
+    expect(blocks[0]!.reason).toContain("web/index.html does not match its sha256");
+  }, 30_000);
+
+  test("a Stop while a start awaits its port cancels the launch and the intent", async () => {
+    await installWebFixture();
+    const port = Promise.withResolvers<number>();
+    const asked = Promise.withResolvers<void>();
+    const rt = makeRuntime(20_000, { pickPort: () => { asked.resolve(); return port.promise; } });
+    const started = rt.start("fixture-web");
+    await asked.promise; // the start is now held on its port
+    expect(await rt.stop("fixture-web", { byUser: true })).toEqual({ ok: true });
+    port.resolve(PLUGIN_PORT_MIN + 7);
+    expect((await started).ok).toBe(false);
+    expect(stateOf(rt, "fixture-web")).toBe("installed");
     expect(readRunIntents(runIntentDir())).toEqual([]);
   }, 30_000);
 

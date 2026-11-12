@@ -14,8 +14,9 @@
 // its own intent through LUCID_PLUGIN_DATA, and an update (which clears `plugins/<id>/` of all but the version)
 // never drops it. A newly installed plugin has no file, so it runs only once the user opens it (ADR-0541).
 
-import { chmodSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { APP_VERSION } from "../version.ts";
 import { PLUGIN_ID_RE, pluginDataRoot } from "./install.ts";
 
 /** Waits before the second and third launch attempt: three tries in all, then the plugin waits for the user. */
@@ -24,13 +25,17 @@ export const AUTOSTART_RETRY_DELAYS_MS: readonly number[] = [5_000, 20_000];
 /** Where the ledger lives; one file per plugin id. */
 export function runIntentDir(): string { return join(pluginDataRoot(), ".running-intent"); }
 
-/** Record that `id` should be running (idempotent). Never throws: a failed write costs only the next launch's restart. */
-export function setRunIntent(id: string, dir: string): void {
+/** A local development build (`2.6.0-dev.1`), as opposed to a beta or a release. Pure. */
+export function isDevelopmentVersion(version: string): boolean { return version.includes("-dev."); }
+
+/** Record that `id` should be running (idempotent), with the app version that recorded it. Never throws: a failed
+ *  write costs only the next launch's restart. */
+export function setRunIntent(id: string, dir: string, appVersion: string = APP_VERSION): void {
   if (!PLUGIN_ID_RE.test(id)) return;
   const file = join(dir, id);
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    writeFileSync(file, `${new Date().toISOString()}\n`, { mode: 0o600 });
+    writeFileSync(file, `${JSON.stringify({ at: new Date().toISOString(), appVersion })}\n`, { mode: 0o600 });
     chmodSync(file, 0o600); // the create mode does not apply to a file that already existed
   } catch (e) { console.error(`[plugins] ${id}: could not record that it should run at the next launch: ${(e as Error).message}`); }
 }
@@ -48,6 +53,17 @@ export function readRunIntents(dir: string): string[] {
   return names.filter((n) => PLUGIN_ID_RE.test(n)).sort();
 }
 
+/** The app version that recorded `id`'s intent, or null for a record written before versions were stored (or an
+ *  unreadable one): autostart treats null as written by a development build. */
+export function readRunIntentVersion(id: string, dir: string): string | null {
+  if (!PLUGIN_ID_RE.test(id)) return null;
+  try {
+    const rec: unknown = JSON.parse(readFileSync(join(dir, id), "utf8"));
+    if (rec && typeof rec === "object" && "appVersion" in rec && typeof rec.appVersion === "string") return rec.appVersion;
+  } catch { /* an old timestamp-only record or an unreadable one */ }
+  return null;
+}
+
 /** Which recorded plugins to start at launch, and which have no package any more (a plugin removed behind the
  *  IDE's back, such as the release cleanup of unsigned private installs, ADR-0542): those are skipped quietly. */
 export function launchSelection(intents: readonly string[], installed: (id: string) => boolean): { start: string[]; missing: string[] } {
@@ -61,6 +77,13 @@ export interface AutostartDeps {
   /** The recorded intents right now (re-read before every retry, so a user's Stop meanwhile cancels it). */
   intents(): string[];
   installed(id: string): boolean;
+  /** This build's version (APP_VERSION). */
+  appVersion: string;
+  /** The version that recorded `id`'s intent (readRunIntentVersion). */
+  writtenBy(id: string): string | null;
+  /** Why the installed files of `id` cannot be trusted (a hash mismatch), or null when every file matches. The
+   *  caller records the security event; autostart only refuses and forgets. */
+  integrityProblem(id: string): string | null;
   start(id: string): Promise<{ ok: boolean; error?: string }>;
   /** Drop the intent of a plugin whose package is gone, so a later fresh install of that id waits for the user. */
   forget(id: string): void;
@@ -79,8 +102,27 @@ export async function autostartPlugins(deps: AutostartDeps): Promise<AutostartOu
   const delays = deps.retryDelaysMs ?? AUTOSTART_RETRY_DELAYS_MS;
   const { start, missing } = launchSelection(deps.intents(), deps.installed);
   for (const id of missing) deps.forget(id);
+  const releaseBuild = !isDevelopmentVersion(deps.appVersion);
+  const trusted: string[] = [];
+  for (const id of start) {
+    const by = deps.writtenBy(id);
+    // A dev build may have run an unsigned dev plugin that the release cleanup could not remove (ADR-0542): a
+    // release never brings that back on its own; the user starts it once by hand.
+    if (releaseBuild && (by === null || isDevelopmentVersion(by))) {
+      deps.forget(id);
+      deps.log(`[plugins] ${id} was left running by a development build (${by ?? "unknown version"}); not starting it on ${deps.appVersion}. Start it from the Plugins drawer.`);
+      continue;
+    }
+    const problem = deps.integrityProblem(id);
+    if (problem) {
+      deps.forget(id);
+      deps.log(`[plugins] ${id} was not started: its installed files fail the hash check (${problem}). Reinstall it.`);
+      continue;
+    }
+    trusted.push(id);
+  }
   const outcomes = new Map<string, AutostartOutcome>();
-  let pending = start;
+  let pending = trusted;
   for (let attempt = 1; pending.length; attempt++) {
     const failed: string[] = [];
     for (const id of pending) {

@@ -199,6 +199,20 @@ export type PackageCheck =
   | { ok: true; manifest: PluginManifest; payload: { name: string; data: Buffer }[]; signed: boolean; keyId?: string }
   | { ok: false; gate: PluginGate; reason: string; manifest?: PluginManifest };
 
+/** The hash gate: every payload file matches its sha256 in the signed `files` list, none is unlisted, none is
+ *  missing. Shared by the installer (zip entries) and launch-time autostart (the installed files, ADR-0546).
+ *  Returns the first problem, or null. Pure. */
+export function payloadHashProblem(files: Record<string, string>, payload: readonly { name: string; data: Buffer }[]): string | null {
+  for (const e of payload) {
+    const want = files[e.name];
+    if (!want) return `${e.name} is in the package but not in the signed file list`;
+    if (sha256Bytes(e.data) !== want) return `${e.name} does not match its sha256 (tampered or corrupt)`;
+  }
+  const present = new Set(payload.map((e) => e.name));
+  for (const p of Object.keys(files)) if (!present.has(p)) return `${p} is listed but missing from the package`;
+  return null;
+}
+
 /**
  * The package gates that need no disk and no OS: manifest schema, path safety, every file's hash (and no
  * file missing or unlisted), then the signature (REQUIRED for premium; when present on a free plugin it
@@ -222,15 +236,9 @@ export function verifyPluginEntries(entries: { name: string; data: Buffer }[], o
   const manifest = v.manifest;
   if (manifest.id !== opts.expectId) return { ok: false, gate: "manifest", reason: `package id "${manifest.id}" does not match the requested plugin "${opts.expectId}"`, manifest };
 
-  const files = manifest.files!;
   const payload = entries.filter((e) => e.name !== PLUGIN_MANIFEST && e.name !== PLUGIN_SIGNATURE);
-  for (const e of payload) {
-    const want = files[e.name];
-    if (!want) return { ok: false, gate: "hash", reason: `${e.name} is in the package but not in the signed file list`, manifest };
-    if (sha256Bytes(e.data) !== want) return { ok: false, gate: "hash", reason: `${e.name} does not match its sha256 (tampered or corrupt)`, manifest };
-  }
-  const present = new Set(payload.map((e) => e.name));
-  for (const p of Object.keys(files)) if (!present.has(p)) return { ok: false, gate: "hash", reason: `${p} is listed but missing from the package`, manifest };
+  const hashProblem = payloadHashProblem(manifest.files!, payload);
+  if (hashProblem) return { ok: false, gate: "hash", reason: hashProblem, manifest };
 
   const sigEntry = entries.find((e) => e.name === PLUGIN_SIGNATURE);
   if (!sigEntry) {

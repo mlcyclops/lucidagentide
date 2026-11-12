@@ -26523,6 +26523,14 @@ Parity already held and left alone: workspace, tab, pane hierarchy and ids; the 
 
 **Consequences.** `classifyAsk` now reads the filesystem (a few `realpath`/`lstat` calls per named path), so `remote_policy.ts` is no longer pure in that one function. Tests on real links (junctions on Windows, symlinks elsewhere): a directory link out of the workspace refuses its edit and parks its read; a file symlink out parks its read (skipped where the platform refuses file symlinks, as on Windows without Developer Mode); a link back in stays T0/T1; a new file under a linked directory follows the link; a dangling link refuses; `link/../x.txt` refuses while `src/../x.txt` runs; an unresolvable workspace refuses; an 8.3 workspace or path is inside. Against the pre-fix source six of these fail, the 8.3 case included. Relates to ADR-0531, ADR-0502 (the boundary is the lane's worktree cwd), ADR-0067.
 
+**Addendum (2026-11-11, review of #573).** The boundary above was applied to an ask's named paths only, and a shell command names its paths in its text. `cat ~/.aws/credentials`, `cp ~/.ssh/id_rsa ./k` and `git fetch https://host/r` were rated by program alone (T0, T1, T0) and ran with no approver; `GIT_EXTERNAL_DIFF=x git diff`, `git -c core.pager=x log`, `./ls` and `awk 'BEGIN{system(...)}'` ran a second, unrated program the same way.
+1. `commandNeedsHuman` reads a command the ladder rates T0 or T1 and sends it to a human (T2) unless every argument, read as a path, is inside the workspace by the rule above. A URL, a drive-relative path, a call `cwd` outside the workspace, an environment assignment, a wrapper (`env`, `nice`, `time`), a program named by path, `awk` and `sed`, a git option before the subcommand, a git subcommand outside the reads and local history changes, and a git option that names a program all go to a human.
+2. It is not a shell: words, single and double quotes and globs are read; an expansion, a redirect, an escape, a brace or a leading tilde sends the ask to a human. A git `-m` message is the one argument read as text.
+3. An edit under `.git` goes to a human (it changes what every later git command runs). A `read` whose path is a URL is outside the workspace.
+4. `FleetLaneManager.answer` (the UI-token route and the collab edit guest) refuses an ALLOW for a remote lane's parked ask: only `answerAsk`, after `verifyRemoteDecision` and its audit line, releases one. A deny is unchanged.
+5. The hub reads a parked action's kind, title and input at the sizes a spoke can park (input `MAX_REMOTE_INPUT`), so the approver sees and the scanner scans all of what an allow covers; it read the first 8,000 characters before. An allow is forwarded only when `askDigest` over those three fields equals the digest the spoke reports, the same check the hub plugin makes before it signs.
+Every change tightens: nothing that was refused or parked before runs now. Proof: the "a rated command runs on its own only when" and "the local answer route cannot allow" tests in `remote_approval.test.ts`, and "shown and scanned whole" in `remote_spokes.test.ts`.
+
 ## ADR-0533 -- Native sidecars may be Rust, under `native/` only; amends the language boundary of ADR-0001 and invariant 2 (2026-11-09)
 
 **Status:** Accepted -- BUILT with P-HOLDER.1 (ADR-0534). The owner asked for it: "lets implement and build the source in rust if needed".
@@ -26634,6 +26642,8 @@ Parity already held and left alone: workspace, tab, pane hierarchy and ids; the 
 
 ## ADR-0543 -- P-RS-WINDOW.1: the Remote Spokes admin panel opens in a window of its own (2026-11-10)
 
+**Amendment (2026-11-12, review of #593).** An Open on a window already showing the panel only focused it, so after the plugin restarted on the same port the page kept a spent one-time `#bootstrap` secret and every API call answered 403. Each Open now loads its fresh URL unless the window shows that exact URL (`adminOpenAction` in `desktop/admin_window.ts`); a fragment-only change stays in the page and fires `hashchange`, which the panel answers by exchanging the new secret, so nothing typed there is lost. The navigation and window-open rules are unchanged.
+
 **Status:** Accepted -- BUILT. Checks: `bun test desktop/admin_window.test.ts desktop/renderer/remote_admin_launch.test.ts`; desktop typecheck; `desktop/scripts/demo_p_ide_spokes_1_shot.mjs` (Admin tab section rewritten for this change).
 
 **Context.** The owner, 2026-11-10: "Since the spoke admin panel has so much information it should spawn a whole window, not just a small menu." ADR-0539 framed the plugin's panel inside the Remote spokes view's Admin tab, which is a right-edge surface beside the chat, too narrow for setup, presence, custody, models, relays and licenses.
@@ -26664,14 +26674,7 @@ Parity already held and left alone: workspace, tab, pane hierarchy and ids; the 
 **Rejected.** Starting every installed plugin at launch: breaks ADR-0541. Persisting "was running when the engine stopped" from the exit handlers: a killed engine (the installer's upgrade) runs no handler, and a crashed plugin would be forgotten. Keeping the intent inside the plugin's own data dir: the plugin owns that dir and could write or wipe it. Retrying without a bound: a broken plugin would spin for the whole session.
 
 **Consequences.** A plugin with an MCP server registers it when it comes back, which respawns omp as a user start always has; at launch that normally happens before the first turn. A failed autostart is visible as the plugin's usual error state and in the engine log (`[plugins] <id> did not come back after 3 attempts`). Rollback: revert this commit; the ledger dir is inert without it.
-**Addendum (2026-11-11, review of #573).** The boundary above was applied to an ask's named paths only, and a shell command names its paths in its text. `cat ~/.aws/credentials`, `cp ~/.ssh/id_rsa ./k` and `git fetch https://host/r` were rated by program alone (T0, T1, T0) and ran with no approver; `GIT_EXTERNAL_DIFF=x git diff`, `git -c core.pager=x log`, `./ls` and `awk 'BEGIN{system(...)}'` ran a second, unrated program the same way.
-1. `commandNeedsHuman` reads a command the ladder rates T0 or T1 and sends it to a human (T2) unless every argument, read as a path, is inside the workspace by the rule above. A URL, a drive-relative path, a call `cwd` outside the workspace, an environment assignment, a wrapper (`env`, `nice`, `time`), a program named by path, `awk` and `sed`, a git option before the subcommand, a git subcommand outside the reads and local history changes, and a git option that names a program all go to a human.
-2. It is not a shell: words, single and double quotes and globs are read; an expansion, a redirect, an escape, a brace or a leading tilde sends the ask to a human. A git `-m` message is the one argument read as text.
-3. An edit under `.git` goes to a human (it changes what every later git command runs). A `read` whose path is a URL is outside the workspace.
-4. `FleetLaneManager.answer` (the UI-token route and the collab edit guest) refuses an ALLOW for a remote lane's parked ask: only `answerAsk`, after `verifyRemoteDecision` and its audit line, releases one. A deny is unchanged.
-5. The hub reads a parked action's kind, title and input at the sizes a spoke can park (input `MAX_REMOTE_INPUT`), so the approver sees and the scanner scans all of what an allow covers; it read the first 8,000 characters before. An allow is forwarded only when `askDigest` over those three fields equals the digest the spoke reports, the same check the hub plugin makes before it signs.
-Every change tightens: nothing that was refused or parked before runs now. Proof: the "a rated command runs on its own only when" and "the local answer route cannot allow" tests in `remote_approval.test.ts`, and "shown and scanned whole" in `remote_spokes.test.ts`.
-**Consequences.** No multiple-choice question UI in the IDE; questions arrive as text and the user answers in the composer. Approval and plan-mode elicitations are unchanged (they still go through `elicitationAnswer`).
+
 ## ADR-0561 -- P-METRICS.1: a daily job keeps download, clone and view history on a `metrics` branch, because GitHub forgets traffic after 14 days (2026-11-08)
 
 **Status:** Accepted. First real run happens after merge, because GitHub only runs scheduled and manually started workflows from the default branch.
@@ -26884,3 +26887,17 @@ The review also found stale facts in the docs: vLLM was written as port 8080, an
 - Follow-ups: (a) carry the creator and voice mailboxes over the spoke and retire their SSH forwards; (b) feed the platform's telemetry (loaded models, serve kinds, GPU use) into the spoke's capability record so the hub picker sees it.
 
 Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-out on the 2.6.0 line, which supersedes ADR-0334 there), platform ADR-0018 and ADR-0033.
+
+## ADR-0564 -- Plugin autostart trusts only intents a release wrote and files that still match their manifest; a Stop cancels a start in flight (2026-11-12)
+
+**Status:** Accepted. Amends ADR-0546. Context: the 2026-11-12 review of #596 found three ways autostart could run a plugin against the user's or the release's intent.
+1. A development build's running intent could start, on a release, an unsigned development plugin that release cleanup (ADR-0542, #594) left installed after a failed removal.
+2. Autostart treated `readInstalled()` as proof the plugin is intact, but that checks only the version pointer and the manifest schema, not the file hashes.
+3. A Stop that arrived while a start was still choosing its port returned success, and the start then launched the plugin and wrote the intent again.
+
+**Decision.**
+1. Each running-intent record stores the `APP_VERSION` that wrote it. On a build whose version has no `-dev.`, autostart ignores, clears and logs an intent written by a development build (an intent with no version counts as one); the user starts that plugin once by hand.
+2. Before autostarting, every installed file is checked against the manifest's sha256 list with the installer's own check (`payloadHashProblem`, now shared from `harness/plugins/package.ts`). A mismatch or a missing file is not started, its intent is cleared, and a high-severity `plugin_autostart` security block is recorded.
+3. `stop()` bumps a per-plugin stop count and drops the pending start; a start that sees the count change does not launch, stops anything it did launch and writes no intent. The runtime's own clean-up stops do not count.
+
+**Consequences.** After moving from a development build to a release, plugins are started once by hand. A tampered or corrupted install no longer comes back at launch and shows in the Security panel. Proof: `desktop/plugins/intent.test.ts` and `desktop/plugins/runtime.test.ts` (release and development intents, one byte changed in an installed file, a Stop during a held start).

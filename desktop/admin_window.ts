@@ -32,6 +32,18 @@ export function adminNavigation(panelOrigin: string, url: unknown): AdminNavigat
   return out !== null && new URL(out).protocol === "https:" ? "external" : "deny";
 }
 
+/** What an Open does with the window: `focus` keeps the page (the same URL is already shown), `load` loads the new
+ *  URL. A load that changes only the fragment stays in the page and fires `hashchange`, which the panel answers by
+ *  exchanging the new secret (plugin/web/app.js openSession), so what was typed in the panel is kept. */
+export type AdminOpenAction = "focus" | "load";
+
+/** Every Open carries a fresh one-time `#bootstrap` secret, so the panel must receive it: a window kept on its old
+ *  token answers 403 to every API call (a plugin restarted on the same port). Only the very URL already shown keeps
+ *  the page as it is. `current` is the window's URL, or "" for a window that loaded nothing. */
+export function adminOpenAction(current: string, next: string): AdminOpenAction {
+  return current === next ? "focus" : "load";
+}
+
 const whole = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v);
 
 /** Read the saved bounds. A bad file, a size under the minimum or a position off every screen falls back to the
