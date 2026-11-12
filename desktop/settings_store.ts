@@ -420,7 +420,7 @@ export function voiceSettings(): VoiceSettings {
 }
 
 /** P-VOICE.7: upsert an imported endpoint (validated upstream by parseVoiceEndpointConfig). Dedupe by
- *  id; a re-import of the same id replaces the stored copy (the loader re-exports after edits). The
+ *  id; a re-import of the same id replaces the stored copy (the Private AI Platform re-exports after edits). The
  *  list is capped defensively - an import can never grow the settings file without bound. */
 export function importVoiceEndpoint(cfg: VoiceEndpointConfig): VoiceSettings {
   const s = load();
