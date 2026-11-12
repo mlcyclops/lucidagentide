@@ -23,7 +23,7 @@
 // Fail-closed, like the library: a BLOCKED report is an error result and NO factory file is written; a state
 // file that fails validation is never rewritten; an unreadable spec is an error, never an empty spec.
 
-import { existsSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, closeSync } from "node:fs";
+import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import {
   DEFAULT_MAX_PER_PASS, DEFAULT_MAX_TOTAL, STATE_RELATIVE_PATH, WorkflowStateError, generateFactory, isAssessableTier,
@@ -81,14 +81,13 @@ export function confinePath(root: string, raw: unknown, purpose: string): Confin
   const realRoot = realpathSync(root);
   const abs = resolve(realRoot, cleaned);
   if (!inside(realRoot, abs)) return { ok: false, error: `${purpose}: ${JSON.stringify(cleaned)} resolves outside the workspace; the img2threejs tools only read and write under it` };
-  let probe = abs;
-  while (!existsSync(probe)) {
-    const parent = dirname(probe);
-    if (parent === probe) break;
-    probe = parent;
+  // Resolve the nearest existing ancestor's real path by TRYING realpath and walking up on failure, not by
+  // asking "does it exist?" first: a check followed by a use is the race CodeQL flags, and the walk needs no check.
+  let real = "";
+  for (let probe = abs; ; probe = dirname(probe)) {
+    try { real = realpathSync(probe); break; } catch { /* not there yet: try the parent */ }
+    if (dirname(probe) === probe) return { ok: false, error: `${purpose}: ${JSON.stringify(cleaned)} cannot be resolved` };
   }
-  let real: string;
-  try { real = realpathSync(probe); } catch { return { ok: false, error: `${purpose}: ${JSON.stringify(cleaned)} cannot be resolved` }; }
   if (!inside(realRoot, real)) return { ok: false, error: `${purpose}: ${JSON.stringify(cleaned)} points outside the workspace through a link` };
   return { ok: true, abs, rel: relative(realRoot, abs).split(sep).join("/") || "." };
 }
@@ -96,11 +95,16 @@ export function confinePath(root: string, raw: unknown, purpose: string): Confin
 function readJsonUnder(root: string, raw: unknown, purpose: string, maxBytes: number): { ok: true; value: unknown; rel: string } | { ok: false; error: string } {
   const c = confinePath(root, raw, purpose);
   if (!c.ok) return c;
-  let size: number;
-  try { size = statSync(c.abs).size; } catch { return { ok: false, error: `${purpose}: ${JSON.stringify(c.rel)} does not exist` }; }
-  if (size > maxBytes) return { ok: false, error: `${purpose}: ${JSON.stringify(c.rel)} is ${size} bytes, over the ${maxBytes} byte cap` };
+  // One descriptor for the size check AND the read, so the file measured is the file read (no stat-then-open race).
+  let fd: number;
+  try { fd = openSync(c.abs, "r"); } catch { return { ok: false, error: `${purpose}: ${JSON.stringify(c.rel)} does not exist` }; }
   let body: string;
-  try { body = readFileSync(c.abs, "utf8"); } catch { return { ok: false, error: `${purpose}: ${JSON.stringify(c.rel)} could not be read` }; }
+  try {
+    const size = fstatSync(fd).size;
+    if (size > maxBytes) return { ok: false, error: `${purpose}: ${JSON.stringify(c.rel)} is ${size} bytes, over the ${maxBytes} byte cap` };
+    body = readFileSync(fd, "utf8");
+  } catch { return { ok: false, error: `${purpose}: ${JSON.stringify(c.rel)} could not be read` }; }
+  finally { closeSync(fd); }
   try { return { ok: true, value: JSON.parse(body), rel: c.rel }; } catch { return { ok: false, error: `${purpose}: ${JSON.stringify(c.rel)} is not valid JSON` }; }
 }
 
@@ -131,13 +135,17 @@ export function runProbe(root: string, params: unknown): TextResult {
   const p = isRecord(params) ? params : {};
   const c = confinePath(root, p.image, "img2threejs_probe");
   if (!c.ok) return text(c.error, true);
+  // Open first, then measure and read through the same descriptor (no stat-then-open race).
+  let fd: number;
+  try { fd = openSync(c.abs, "r"); } catch { return text(`img2threejs_probe: ${JSON.stringify(c.rel)} does not exist`, true); }
   let total: number;
-  try { total = statSync(c.abs).size; } catch { return text(`img2threejs_probe: ${JSON.stringify(c.rel)} does not exist`, true); }
-  const buffer = new Uint8Array(Math.min(total, PROBE_READ_BYTES));
+  let buffer: Uint8Array;
   try {
-    const fd = openSync(c.abs, "r");
-    try { readSync(fd, buffer, 0, buffer.length, 0); } finally { closeSync(fd); }
+    total = fstatSync(fd).size;
+    buffer = new Uint8Array(Math.min(total, PROBE_READ_BYTES));
+    readSync(fd, buffer, 0, buffer.length, 0);
   } catch { return text(`img2threejs_probe: ${JSON.stringify(c.rel)} could not be read`, true); }
+  finally { closeSync(fd); }
   const probe = probeImage(buffer, total);
   const head = probe.type
     ? `probe: ${probe.type} ${probe.width ?? "?"}x${probe.height ?? "?"}, ${probe.bytes} bytes, technical suitability ${probe.technicalSuitability}`
@@ -252,7 +260,6 @@ export function runState(root: string, params: unknown): TextResult {
     if (action === "init") {
       const c = statePath(root, p);
       if (!c.ok) return text(c.error, true);
-      if (existsSync(c.abs)) return text(`img2threejs_state: refusing to overwrite the existing checklist at ${JSON.stringify(c.rel)}; use action status, mark or sync`, true);
       const reference = confinePath(root, p.reference, "img2threejs_state init reference");
       if (!reference.ok) return text(reference.error, true);
       const spec = p.spec === undefined ? { ok: true as const, rel: "" } : confinePath(root, p.spec, "img2threejs_state init spec");
@@ -263,7 +270,11 @@ export function runState(root: string, params: unknown): TextResult {
         maxPerPass: typeof p.maxPerPass === "number" ? p.maxPerPass : DEFAULT_MAX_PER_PASS,
         maxTotal: typeof p.maxTotal === "number" ? p.maxTotal : DEFAULT_MAX_TOTAL,
       });
-      const rel = saveState({ abs: c.abs, rel: c.rel }, state);
+      // The "never overwrite" rule is the file system's exclusive create, not an existence check a later write
+      // could race; a claim that cannot then be written is released so a retry is not refused by our own stub.
+      if (!claimNew(c.abs)) return text(`img2threejs_state: refusing to overwrite the existing checklist at ${JSON.stringify(c.rel)}; use action status, mark or sync`, true);
+      let rel: string;
+      try { rel = saveState({ abs: c.abs, rel: c.rel }, state); } catch (e) { rmSync(c.abs, { force: true }); throw e; }
       return text(`checklist created at ${rel}. It is the authority on progress; the conversation is not.\n${statusText(statusPayload(state))}`);
     }
     const loaded = loadState(root, p);
