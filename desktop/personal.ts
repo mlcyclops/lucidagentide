@@ -121,7 +121,8 @@ export function unlockPersonal(passphrase: string): { ok: boolean; error?: strin
  *  - main: the protector file's password entry is re-wrapped (spec `rewrap_password`; every device protector
  *    keeps working), then the store envelope is re-wrapped too, so the old passphrase opens neither and an
  *    older build still opens the store with the new one. Protector file first: a crash between the two writes
- *    leaves the NEW passphrase working (unlock prefers the protector file).
+ *    leaves the NEW passphrase working (unlock prefers the protector file) and the envelope still on the old
+ *    one; the next change, made with the passphrase that unlocks, re-wraps the envelope and ends that.
  *  - cui: the CUI store's own envelope only (it has no protector file; ADR-0014).
  *  Passphrases never leave here. */
 export function changePersonalPassphrase(which: "main" | "cui", current: string, next: string): { ok: boolean; error?: string } {
@@ -141,14 +142,20 @@ export function changePersonalPassphrase(which: "main" | "cui", current: string,
     let vmk: Buffer;
     try { vmk = unlockWithPassword(doc, current); } catch (e) { if (e instanceof ProtectorError && e.code === "auth") return wrong; throw e; }
     try {
-      // Both copies must carry the same passphrase before either is replaced.
-      const envelopeDek = PersonalStore.unwrapPassphraseDek(personalStorePath(), current);
-      const same = envelopeDek.equals(vmk);
-      envelopeDek.fill(0);
-      if (!same) return { ok: false, error: "The store and its protector file disagree - nothing was changed." };
+      // Both copies must be one store before either is replaced: the protector file's key has to be the
+      // open store's key. `current` is proven by the protector entry above; the envelope is NOT asked
+      // for it. An earlier change that died between the two writes leaves the envelope on the passphrase
+      // before it, and asking would make that state unrepairable (no passphrase would pass both checks).
+      if (!target.passphraseSealed) return { ok: false, error: "This store has no passphrase to change." };
+      if (!target.holdsKey(vmk)) return { ok: false, error: "The store and its protector file disagree - nothing was changed." };
       writeProtectors(personalProtectorsPath(), rewrapPassword(doc, vmk, next));
+      try {
+        target.rewrapPassphraseWithKey(vmk, next);
+      } catch (e) {
+        const why = e instanceof Error ? e.message : String(e);
+        return { ok: false, error: `The new passphrase is set, but the store file could not be rewritten (${why}). Unlock with the new passphrase and change it once more to finish.` };
+      }
     } finally { vmk.fill(0); }
-    if (!target.changePassphrase(current, next)) return { ok: false, error: "The protector file was changed but the store envelope was not - unlock with the new passphrase, then change it again." };
     return { ok: true };
   } catch (e) { return { ok: false, error: String((e as Error)?.message ?? e) }; }
 }

@@ -6,7 +6,7 @@
 // holds the user's private personalization graph. Wrong key / tampering MUST fail.
 
 import { afterAll, expect, test } from "bun:test";
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Telemetry, type TelemetryEvent } from "../telemetry/events.ts";
@@ -128,6 +128,30 @@ test("store: changing the passphrase revokes the old one, keeps the data and the
   s.save();
   expect(() => PersonalStore.openWithPassphrase(path, "old-passphrase-1")).toThrow();
   expect(PersonalStore.openWithPassphrase(path, "new-passphrase-2").graph().facts.length).toBe(2);
+});
+
+test("store: a change whose save fails is not applied by a later save", () => {
+  const path = tmp();
+  const s = PersonalStore.createWithPassphrase(path, "old-passphrase-1");
+  rmSync(path);
+  mkdirSync(path); // a directory where the file goes: the write fails
+  expect(() => s.changePassphrase("old-passphrase-1", "new-passphrase-2")).toThrow();
+  rmSync(path, { recursive: true });
+  s.save(); // an ordinary later save, as a fact write would do
+  expect(PersonalStore.openWithPassphrase(path, "old-passphrase-1").graph().facts.length).toBe(0);
+  expect(() => PersonalStore.openWithPassphrase(path, "new-passphrase-2")).toThrow();
+});
+
+test("store: a key-proven re-wrap needs the store's own key and does not ask the envelope", () => {
+  const path = tmp();
+  const s = PersonalStore.createWithPassphrase(path, "old-passphrase-1");
+  const dek = PersonalStore.unwrapPassphraseDek(path, "old-passphrase-1");
+  expect(s.rewrapPassphraseWithKey(randomKey(), "new-passphrase-2")).toBe(false);
+  expect(PersonalStore.openWithPassphrase(path, "old-passphrase-1").graph().facts.length).toBe(0); // nothing changed
+  expect(s.rewrapPassphraseWithKey(dek, "new-passphrase-2")).toBe(true);
+  expect(() => PersonalStore.openWithPassphrase(path, "old-passphrase-1")).toThrow();
+  expect(PersonalStore.openWithKey(path, dek).graph().facts.length).toBe(0); // the same DEK
+  expect(() => PersonalStore.createWithKey(tmp(), dek).rewrapPassphraseWithKey(dek, "new-passphrase-2")).toThrow();
 });
 
 test("store: a wrong current passphrase changes nothing; a keystore store refuses", () => {

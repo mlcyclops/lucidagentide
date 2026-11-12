@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createECDH, createHash, hkdfSync, randomBytes, type ECDH } from "node:crypto";
 import { PersonalStore } from "../harness/personal/store.ts";
-import { readProtectors, unlockWithPassword } from "../harness/personal/protectors.ts";
+import { readProtectors, rewrapPassword, unlockWithPassword, writeProtectors } from "../harness/personal/protectors.ts";
 import {
   DeviceUnlockError, helloError, HELLO_MARK, KgDeviceUnlock, macSecureEnclaveProvider, parseBridgeReply, SEP_MARK, sepError, windowsHelloProvider,
   type DeviceKeyProvider, type DeviceUnlockCode,
@@ -199,6 +199,26 @@ test("changing the main passphrase revokes the old one everywhere and keeps Wind
   expect(() => PersonalStore.openWithPassphrase(storePath(), PASS)).toThrow(); // the envelope revoked it too
   expect(PersonalStore.openWithPassphrase(storePath(), "a-new-passphrase").graph().facts.length).toBe(0); // older builds: new one
   expect(unlockPersonalWithKey((await du.unlock()).toString("base64")).ok).toBe(true);
+});
+
+test("a change interrupted between the two writes is finished by the next change", () => {
+  // The state a crash leaves: the protector file already on the new passphrase, the envelope still on the old.
+  const before = doc()!;
+  const vmk = unlockWithPassword(before, PASS);
+  writeProtectors(protectorsPath(), rewrapPassword(before, vmk, "a-new-passphrase"));
+  vmk.fill(0);
+  expect(PersonalStore.openWithPassphrase(storePath(), PASS).graph().facts.length).toBe(0); // envelope: still the old one
+  expect(unlockPersonal(PASS).ok).toBe(false); // unlock prefers the protector file
+  expect(unlockPersonal("a-new-passphrase").ok).toBe(true);
+  expect(changePersonalPassphrase("main", PASS, "a-third-passphrase").error).toContain("wrong");
+  expect(changePersonalPassphrase("main", "a-new-passphrase", "a-third-passphrase")).toEqual({ ok: true });
+  lockPersonal();
+  for (const stale of [PASS, "a-new-passphrase"]) {
+    expect(unlockPersonal(stale).ok).toBe(false);
+    expect(() => PersonalStore.openWithPassphrase(storePath(), stale)).toThrow();
+  }
+  expect(PersonalStore.openWithPassphrase(storePath(), "a-third-passphrase").graph().facts.length).toBe(0);
+  expect(unlockPersonal("a-third-passphrase").ok).toBe(true);
 });
 
 test("a never-migrated store changes its envelope and then migrates under the new passphrase", () => {

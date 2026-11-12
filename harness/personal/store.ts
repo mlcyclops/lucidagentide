@@ -16,6 +16,7 @@
 // Windows Hello / Touch ID protector.
 // Format is versioned `personal-kg.v1` (its own frozen contract; a bump re-encrypts).
 
+import { timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import type { Telemetry } from "../telemetry/events.ts";
@@ -265,12 +266,44 @@ export class PersonalStore {
     const same = proven.equals(this.#dek);
     proven.fill(0);
     if (!same) return false;
+    this.#rewrapUnder(next);
+    return true;
+  }
+  /** True when this store carries a passphrase envelope (the only kind a passphrase change applies to). */
+  get passphraseSealed(): boolean {
+    return this.#custody === "passphrase" && !!this.#kdf && !!this.#wrappedDek;
+  }
+  /** True when `key` is this open store's DEK. */
+  holdsKey(key: Buffer): boolean {
+    return key.length === this.#dek.length && timingSafeEqual(key, this.#dek);
+  }
+  /** P-KGPASS.1 (ADR-0455): re-wrap the envelope under `next` for a caller that proved the current
+   *  passphrase somewhere else (the protector file) and holds this store's key as the evidence. The
+   *  envelope is NOT asked for the current passphrase, so a change that was interrupted after the
+   *  protector file was written, leaving the envelope on the old passphrase, can be finished. Returns
+   *  false, changing nothing, when `key` is not the DEK. THROWS for a non-passphrase store. */
+  rewrapPassphraseWithKey(key: Buffer, next: string): boolean {
+    if (!this.passphraseSealed) throw new Error("store is not passphrase-sealed");
+    if (!this.holdsKey(key)) return false;
+    this.#rewrapUnder(next);
+    return true;
+  }
+  /** Wrap the DEK under `passphrase` with a fresh salt and save. The in-memory envelope changes only
+   *  when the write lands: after a failed save this instance, and its next save, stay on the envelope
+   *  the caller was told is still current. */
+  #rewrapUnder(passphrase: string): void {
+    const previous = { wrappedDek: this.#wrappedDek, kdf: this.#kdf };
     const salt = randomSalt();
-    const kek = deriveKey(next, salt, KDF_ITERS);
+    const kek = deriveKey(passphrase, salt, KDF_ITERS);
     try { this.#wrappedDek = encrypt(this.#dek, kek); } finally { kek.fill(0); }
     this.#kdf = { algo: "pbkdf2-hmac-sha256", iters: KDF_ITERS, salt: salt.toString("base64") };
-    this.save();
-    return true;
+    try {
+      this.save();
+    } catch (e) {
+      this.#wrappedDek = previous.wrappedDek;
+      this.#kdf = previous.kdf;
+      throw e;
+    }
   }
   /** Zero the in-memory key (call when locking the store). */
   lock(): void { this.#dek.fill(0); }
