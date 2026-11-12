@@ -138,6 +138,7 @@ export interface AgentTemplateInfo {
 }
 import type { LocalModelDef, LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3/.6: self-hosted/custom LLM providers
 import type { NativePickResult } from "../native_dialog.ts"; // P-FS.2 (ADR-0265): backend-opened OS folder dialog
+import type { DeviceStatus } from "../kg_device_unlock.ts"; // P-KGBIO.1 (ADR-0454): Windows Hello / Touch ID unlock
 import type { RestoredTurn } from "../session_steps.ts"; // P-RESUME.1 (ADR-0171): restored agent activity
 import type { SessionLive } from "../session_owner.ts"; // P-SWITCH.2 (ADR-0404): where a listed session is live
 export type { RestoredTurn };
@@ -629,6 +630,11 @@ import type { TriviaQuestion } from "./trivia.ts";
 export interface TriviaSeedSources { sessions: boolean; kg: boolean; codegraph: boolean }
 export interface TriviaSeedView { ok: boolean; questions: TriviaQuestion[]; count: number; usedSources: string[]; model: string; blocked?: boolean; reason?: string }
 export type PersonalScopeView = "work" | "personal" | "cui" | "combined";
+/** P-KGBIO.1 (ADR-0454): device-unlock status from main (kg_device_unlock.ts). */
+export type KgDeviceStatus = DeviceStatus;
+/** `code` is a DeviceUnlockCode; "cancelled" is the user's choice, never an error toast. */
+export type KgDeviceReply = { ok: true } | { ok: false; code: string; error: string };
+const KG_DEVICE_DESKTOP_ONLY: KgDeviceReply = { ok: false, code: "unsupported", error: "Device unlock needs the LUCID desktop app." };
 export interface PersonalStatus {
   enabled: boolean; aiExtract: boolean; configured: boolean; unlocked: boolean;
   scope: PersonalScopeView; counts: { work: number; personal: number; cui: number } | null;
@@ -1305,6 +1311,15 @@ export interface LucidBridge {
   personalSetup(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
   personalUnlock(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
   personalLock(): Promise<PersonalStatus | null>;
+  // P-KGPASS.1 (ADR-0455): change the main or CUI store's passphrase (the store must be unlocked)
+  personalChangePassphrase(which: "main" | "cui", current: string, next: string): Promise<{ ok: boolean; error?: string } | null>;
+  // P-KGBIO.1 (ADR-0454): device unlock (desktop app only; null / unsupported in a plain browser)
+  kgDeviceStatus(): Promise<KgDeviceStatus | null>;
+  kgDeviceEnroll(passphrase: string, opts?: { autoUnlock?: boolean; companion?: boolean }): Promise<KgDeviceReply>;
+  kgDeviceUnlock(): Promise<KgDeviceReply>;
+  kgDeviceAuto(on: boolean): Promise<boolean>;
+  kgDeviceForget(): Promise<boolean>;
+  onKgDeviceUnlocked(cb: (r: KgDeviceReply & { label?: string | null }) => void): void;
   personalScope(scope: PersonalScopeView): Promise<PersonalStatus | null>;
   // P9.5a: the isolated CUI store's own setup / unlock / lock
   personalCuiSetup(passphrase: string): Promise<{ ok: boolean; error?: string } | null>;
@@ -1596,6 +1611,13 @@ interface NativeShell {
   credList?(): Promise<CredMetaView[]>;
   credDelete?(ref: string): Promise<{ deleted: boolean } | { error: string }>;
   credEncryptionAvailable?(): Promise<boolean>;
+  // P-KGBIO.1 (ADR-0454): Windows Hello / Touch ID unlock of the knowledge graph (main holds the key path).
+  kgDeviceStatus?(): Promise<KgDeviceStatus | null>;
+  kgDeviceEnroll?(input: { passphrase: string; autoUnlock?: boolean; companion?: boolean }): Promise<KgDeviceReply>;
+  kgDeviceUnlock?(): Promise<KgDeviceReply>;
+  kgDeviceAuto?(on: boolean): Promise<boolean>;
+  kgDeviceForget?(): Promise<boolean>;
+  onKgDeviceUnlocked?(cb: (r: KgDeviceReply & { label?: string | null }) => void): void;
 }
 declare global { interface Window { lucid?: NativeShell } }
 const shell: NativeShell | undefined = typeof window !== "undefined" ? window.lucid : undefined;
@@ -2189,6 +2211,13 @@ export const bridge: LucidBridge = {
   personalSetup: (passphrase) => post("/api/personal/setup", { passphrase }),
   personalUnlock: (passphrase) => post("/api/personal/unlock", { passphrase }),
   personalLock: () => post("/api/personal/lock", {}),
+  personalChangePassphrase: (which, current, next) => post("/api/personal/passphrase", { which, current, next }),
+  kgDeviceStatus: () => (shell?.kgDeviceStatus ? shell.kgDeviceStatus().catch(() => null) : Promise.resolve(null)),
+  kgDeviceEnroll: (passphrase, opts) => (shell?.kgDeviceEnroll ? shell.kgDeviceEnroll({ passphrase, ...opts }) : Promise.resolve(KG_DEVICE_DESKTOP_ONLY)),
+  kgDeviceUnlock: () => (shell?.kgDeviceUnlock ? shell.kgDeviceUnlock() : Promise.resolve(KG_DEVICE_DESKTOP_ONLY)),
+  kgDeviceAuto: (on) => (shell?.kgDeviceAuto ? shell.kgDeviceAuto(on) : Promise.resolve(false)),
+  kgDeviceForget: () => (shell?.kgDeviceForget ? shell.kgDeviceForget() : Promise.resolve(false)),
+  onKgDeviceUnlocked: (cb) => { shell?.onKgDeviceUnlocked?.(cb); },
   personalScope: (scope) => post("/api/personal/scope", { scope }),
   personalCuiSetup: (passphrase) => post("/api/personal/cui/setup", { passphrase }),
   personalCuiUnlock: (passphrase) => post("/api/personal/cui/unlock", { passphrase }),
