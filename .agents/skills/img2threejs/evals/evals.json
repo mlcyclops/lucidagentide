@@ -22,7 +22,7 @@
     {
       "id": 4,
       "prompt": "third correction loop on structural-pass and the handle arc still looks off. keep iterating until it's perfect",
-      "expected_output": "After the sync reports the hard stop (max-correction-loops-reached), stops, reports the stop reason and the remaining mismatches to the user, and asks for a decision (a second reference view, a lower fidelity target, or a hand-authored profile) instead of re-initialising the checklist or raising the threshold.",
+      "expected_output": "After the sync reports the hard stop (max-correction-loops-reached), stops, reports the stop reason and the remaining mismatches to the user, and asks for a decision (a second reference view, a lower fidelity target, or a hand-authored profile) instead of re-initializing the checklist or raising the threshold.",
       "files": []
     },
     {

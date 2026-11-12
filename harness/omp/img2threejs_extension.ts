@@ -149,7 +149,7 @@ export function runProbe(root: string, params: unknown): TextResult {
   const probe = probeImage(buffer, total);
   const head = probe.type
     ? `probe: ${probe.type} ${probe.width ?? "?"}x${probe.height ?? "?"}, ${probe.bytes} bytes, technical suitability ${probe.technicalSuitability}`
-    : `probe: not a recognised image container (${probe.bytes} bytes); technical suitability ${probe.technicalSuitability}`;
+    : `probe: not a recognized image container (${probe.bytes} bytes); technical suitability ${probe.technicalSuitability}`;
   return text(`${head}\n${JSON.stringify({ path: c.rel, ...probe }, null, 2)}\n${probe.note} Record the verdict in the checklist with img2threejs_state mark image-probe.`, !probe.type);
 }
 
