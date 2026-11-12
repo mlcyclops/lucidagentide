@@ -116,6 +116,23 @@ describe("runReleaseCleanup", () => {
     expect(pendingReleaseCleanup(work)).toBeNull();
   }, 60_000);
 
+  test("a removal that fails is tried again at the next start; the move ends when nothing is left", async () => {
+    await installThree();
+    marker("2.6.0-dev.3");
+    const locked = () => ({ ok: false as const, error: "EBUSY: the package is in use" });
+    expect(runReleaseCleanup("2.6.0", { dir: work, env: {}, uninstall: locked })?.removed).toEqual([]);
+    expect(markerVersion()).toBe("2.6.0-dev.3"); // the move is still due
+    expect(listInstalled().map((p) => p.manifest.id)).toContain("dev-mod");
+    expect(pendingReleaseCleanup(work)).toBeNull(); // nothing was removed, so there is nothing to announce
+
+    const r = runReleaseCleanup("2.6.0", { dir: work, env: {}, now: () => AT });
+    expect(r?.removed).toEqual([{ id: "dev-mod", name: "Dev Mod", version: "0.1.0" }]);
+    expect(listInstalled().map((p) => p.manifest.id).sort()).toEqual(["fixture-server", "signed-mod"]);
+    expect(markerVersion()).toBe("2.6.0");
+    expect(pendingReleaseCleanup(work)?.removed).toHaveLength(1);
+    expect(runReleaseCleanup("2.6.0", { dir: work, env: {} })).toBeNull(); // finished: once per move
+  }, 60_000);
+
   test("a release start with nothing to remove leaves no notice", () => {
     marker("2.6.0-dev.3");
     expect(runReleaseCleanup("2.6.0", { dir: work, env: {} })?.removed).toEqual([]);
