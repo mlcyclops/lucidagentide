@@ -249,3 +249,30 @@ export function verifyPluginEntries(entries: { name: string; data: Buffer }[], o
   if (!s.ok) return { ok: false, gate: "signature", reason: s.reason, manifest };
   return { ok: true, manifest, payload, signed: true, keyId: s.keyId };
 }
+
+// ── offered add-ons (ADR-0541) ─────────────────────────────────────────────────────────────────────
+
+/** The index a build writes beside the optional add-on packages it offers (`desktop/addons/index.json`,
+ *  shipped as extraResources `addons`, written by tools/build_addons.ts). Nothing in it installs until the
+ *  user presses Install on the add-on's card. */
+export const ADDONS_INDEX = "index.json";
+
+/** One offered add-on: its id and version, the package file beside the index, and that file's sha256. */
+export interface OfferedAddon { id: string; version: string; file: string; sha256: string }
+
+/** Parse an add-ons index. Pure and fail-closed: anything but an array offers nothing, and a row with a bad
+ *  id, version or sha256, or a file that is not exactly `<id>-<version>.lplugin.zip` (never a path), is
+ *  dropped. A repeated id keeps its first row. */
+export function parseOfferedIndex(raw: unknown): OfferedAddon[] {
+  if (!Array.isArray(raw)) return [];
+  const out: OfferedAddon[] = [];
+  for (const row of raw) {
+    if (!isObj(row)) continue;
+    const { id, version, file, sha256 } = row;
+    if (typeof id !== "string" || !ID_RE.test(id) || typeof version !== "string" || !VERSION_RE.test(version)) continue;
+    if (typeof file !== "string" || file !== `${id}-${version}.lplugin.zip`) continue;
+    if (typeof sha256 !== "string" || !SHA_RE.test(sha256) || out.some((o) => o.id === id)) continue;
+    out.push({ id, version, file, sha256 });
+  }
+  return out;
+}

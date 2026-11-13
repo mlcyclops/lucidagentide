@@ -8,7 +8,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLEAN, buildServerFixture, testKey } from "./plugins/fixtures.ts";
-import { installPluginBytes, listInstalled, pluginDataDir, type InstalledPlugin } from "./plugins/install.ts";
+import { installPluginBytes } from "./plugins/install.ts";
+import { listInstalled, pluginDataDir, type InstalledPlugin } from "./plugins/installed.ts";
 import {
   MARKER_FILE, acknowledgeReleaseCleanup, developmentModules, isDevVersion, pendingReleaseCleanup, releaseCleanupDue, runReleaseCleanup,
 } from "./release_cleanup.ts";

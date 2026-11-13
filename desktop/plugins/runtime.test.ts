@@ -12,7 +12,8 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLEAN, buildServerFixture, testKey, writeStage } from "./fixtures.ts";
-import { installPluginBytes, pluginDataDir, readInstalled } from "./install.ts";
+import { installPluginBytes } from "./install.ts";
+import { pluginDataDir, readInstalled } from "./installed.ts";
 import { readRunIntents, runIntentDir, setRunIntent } from "./intent.ts";
 import { pluginMcpServers } from "./mcp.ts";
 import { pluginOrigin, PLUGIN_PORT_MAX, PLUGIN_PORT_MIN } from "./ports.ts";

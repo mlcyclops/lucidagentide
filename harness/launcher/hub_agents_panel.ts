@@ -32,7 +32,14 @@ export interface AgentsPanelRow {
   status: string;
   /** 1-9 user-set display order; 0 = unset. */
   priority: number;
+  /** P-HERD.5 (ADR-0494; set only when a Herd server supplies attention): needs-you sorts first,
+   *  unseen second among equal priorities. Absent in the classic hub. */
+  attention?: LaneAttention;
 }
+
+/** P-HERD.5 (ADR-0494): waiting on the human, finished and not yet looked at, or neither. */
+export type LaneAttention = "needs-you" | "unseen" | "none";
+const ATTENTION_RANK: Record<LaneAttention, number> = { "needs-you": 0, unseen: 1, none: 2 };
 
 /** The full row the panel builds: the seam shape plus the display-only cells. */
 export interface AgentRow extends AgentsPanelRow {
@@ -92,14 +99,17 @@ export function laneLocations(spaces: readonly Pick<Space, "name" | "tabs">[]): 
 }
 
 /** The panel's rows from the same /api/fleet/status lanes the decks render: priority DESCENDING,
- *  then status (blocked first among equals - it needs the human), then name. Pure. */
+ *  then status (blocked first among equals - it needs the human), then name. With `attention` (a
+ *  Herd server, ADR-0494) each row carries it and, among equal priorities, needs-you sorts first
+ *  and unseen second, ahead of the status order. Pure. */
 export function buildAgentRows(
   lanes: readonly Record<string, unknown>[],
   locations: Readonly<Record<string, string>>,
   priorities: Readonly<Record<string, number>>,
   now = Date.now(),
+  attention?: (laneId: string) => LaneAttention,
 ): AgentRow[] {
-  const rows = lanes.map(rec).map((l) => {
+  const rows = lanes.map(rec).map((l): AgentRow => {
     const id = str(l.id);
     const name = str(l.name) || id;
     const p = priorities[name];
@@ -113,8 +123,11 @@ export function buildAgentRows(
       elapsed: fmtElapsed(Number(l.createdAt), now),
     };
   });
+  if (attention) for (const r of rows) r.attention = attention(r.id);
   return rows.sort((a, b) =>
-    b.priority - a.priority || statusRank(a.status) - statusRank(b.status) || a.name.localeCompare(b.name));
+    b.priority - a.priority
+    || (attention ? ATTENTION_RANK[a.attention ?? "none"] - ATTENTION_RANK[b.attention ?? "none"] : 0)
+    || statusRank(a.status) - statusRank(b.status) || a.name.localeCompare(b.name));
 }
 
 // ---- line painting (pure) ------------------------------------------------------------------------
@@ -200,6 +213,8 @@ export interface AgentsPanelHost {
   cancel(id: string, name: string): void;
   /** The priority store file (agentPrioritiesPath). */
   path: string;
+  /** P-HERD.5 (ADR-0494; Herd only): a lane's attention, for the rail order. */
+  attention?: (laneId: string) => LaneAttention;
 }
 
 /** The RailAgentsPanel seam, implemented. Click once = select; click the selected row (or Enter on
@@ -216,7 +231,7 @@ export class HubAgentsPanel {
   }
 
   rows(): AgentRow[] {
-    return buildAgentRows(this.#host.lanes(), this.#host.locations(), this.#priorities);
+    return buildAgentRows(this.#host.lanes(), this.#host.locations(), this.#priorities, Date.now(), this.#host.attention);
   }
 
   #row(id: string): AgentRow | undefined {

@@ -18,7 +18,8 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { dataRoot, listInstalled, logPluginAttempt, uninstallPlugin, type InstalledPlugin } from "./plugins/install.ts";
+import { logPluginAttempt, uninstallPlugin } from "./plugins/install.ts";
+import { dataRoot, listInstalled, type InstalledPlugin } from "./plugins/installed.ts";
 
 /** Development environment overrides a plugin sees only under a dev build of the IDE. */
 export const DEV_ONLY_ENV = ["LUCID_LICENSE_DEV", "LUCID_LICENSE_DEV_PUB"] as const;

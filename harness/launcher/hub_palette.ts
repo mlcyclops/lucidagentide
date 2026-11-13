@@ -70,7 +70,8 @@ export function fuzzyScore(query: string, target: string): FuzzyScore | null {
 /** One palette row. `label` is what the scorer sees and the list shows; `hint` is the dim
  *  right-hand cell naming what Enter does; `icon` is the LUCID glyph family, not a bullet. */
 export interface PaletteItem {
-  kind: "space" | "tab" | "agent" | "deck";
+  /** "host": a row the embedding host adds (P-HERD.2: the Herd add-on's layouts); never built here. */
+  kind: "space" | "tab" | "agent" | "deck" | "host";
   id: string;
   label: string;
   hint: string;

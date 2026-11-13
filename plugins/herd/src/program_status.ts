@@ -1,7 +1,8 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-HERD-OSC.1 (ADR-0536) - the Program Status Protocol, OSC 7501, as a pure report builder.
+// P-HERD-OSC.1 (ADR-0536, moved into the Herd add-on by ADR-0541) - the Program Status Protocol,
+// OSC 7501, as a pure report builder.
 //
 // Spec: https://www.superlogical.com/rex/docs/build/program-status (revision 0.4). A report is
 // `ESC ] 7501 ; key=value(:key=value)* ESC \`; a terminal that supports it (Herdr, Ghostty, Rex)

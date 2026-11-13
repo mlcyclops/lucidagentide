@@ -7,7 +7,10 @@
 import { describe, expect, test } from "bun:test";
 import { resolvePreview } from "../preview_resolve.ts";
 import type { InstalledPluginView, PluginFileInspectView } from "./bridge.ts";
-import { drawerGeometry, drawerShellHtml, installedBodyHtml, privateInstallSheetHtml, removeSheetHtml } from "./plugins_flyout.ts";
+import { FREE_PLUGINS, type FreePlugin } from "./plugin_catalog.ts";
+import {
+  addonFootHtml, addonOpenSheetHtml, drawerGeometry, drawerShellHtml, freeCardHtml, installedBodyHtml, privateInstallSheetHtml, removeSheetHtml,
+} from "./plugins_flyout.ts";
 
 // P-PLUGINS.7 (ADR-0505): what the INSTALLED tab shows and what its sheets let a user do.
 const row = (over: Partial<InstalledPluginView>): InstalledPluginView => ({
@@ -78,6 +81,66 @@ describe("the INSTALLED tab", () => {
       expect(t.kind).toBe("remote");
       expect(t.src).toBe("");
     }
+  });
+});
+
+// ADR-0541: the Herd card on the Free tab. One state button, Remove only once installed, nothing clickable
+// when this build does not ship the package.
+describe("the optional add-on card", () => {
+  const herd: FreePlugin | undefined = FREE_PLUGINS.find((p) => p.id === "herd");
+  if (!herd) throw new Error("the herd row is missing from FREE_PLUGINS");
+
+  test("the card carries the Optional add-on chip and its live footer", () => {
+    const html = freeCardHtml(herd, { action: { kind: "install", version: "0.1.0" }, note: null });
+    expect(html).toContain('data-status="add-on"');
+    expect(html).toContain("Optional add-on");
+    expect(html).toContain('data-plg-afoot="herd"');
+    expect(html).toContain('data-plg-addon="herd"');
+    expect(html).not.toContain("data-plg-repo");
+  });
+
+  test("Install when offered; Not in this build is disabled; Open comes with Remove", () => {
+    const install = addonFootHtml(herd, { kind: "install", version: "0.1.0" }, null);
+    expect(install).toMatch(/data-kind="install" data-plg-addon="herd">Install</);
+    expect(install).not.toContain("data-plg-iremove");
+
+    const missing = addonFootHtml(herd, { kind: "not-offered" }, null);
+    expect(missing).toMatch(/data-plg-addon="herd" disabled>Not in this build</);
+    expect(missing).not.toContain("data-plg-iremove");
+
+    const open = addonFootHtml(herd, { kind: "open" }, { tone: "ok", text: "Installed version 0.1.0." });
+    expect(open).toContain('data-plg-iremove="herd"');
+    expect(open).toMatch(/data-kind="open" data-plg-addon="herd">Open</);
+    expect(open).toContain("Installed version 0.1.0.");
+
+    expect(addonFootHtml(herd, { kind: "installing" }, null)).toMatch(/disabled aria-busy="true">Installing</);
+    expect(addonFootHtml(herd, { kind: "checking" }, null)).toMatch(/disabled>Checking</);
+  });
+
+  test("a row that is not an add-on keeps its link footer", () => {
+    const excalidraw = FREE_PLUGINS.find((p) => p.id === "excalidraw");
+    if (!excalidraw) throw new Error("excalidraw row missing");
+    const html = freeCardHtml(excalidraw);
+    expect(html).toContain("data-plg-repo");
+    expect(html).not.toContain("data-plg-addon");
+  });
+
+  test("the Open sheet lists how to run it, escaped", () => {
+    const sheet = addonOpenSheetHtml(herd);
+    expect(sheet).toContain("Herd is running");
+    expect(sheet).toContain('<code class="plg-cmd">lucid herd</code>');
+    expect(sheet).toContain("lucid herd server stop");
+    const hostile = addonOpenSheetHtml({ ...herd, name: "<b>x</b>", howTo: [{ command: "<script>", what: "x" }] });
+    expect(hostile).not.toContain("<b>x</b>");
+    expect(hostile).not.toContain("<script>");
+  });
+
+  test("an add-on with a page says its live view is open, and still lists the commands", () => {
+    expect(herd.page).toBe(true);
+    const sheet = addonOpenSheetHtml(herd);
+    expect(sheet).toContain("live view, read only, is open in the Herd Preview tab");
+    expect(sheet).toContain('<code class="plg-cmd">lucid herd</code>');
+    expect(addonOpenSheetHtml({ ...herd, page: false })).not.toContain("Preview tab");
   });
 });
 

@@ -33,8 +33,8 @@ import { dirname, extname, join, resolve, sep } from "node:path";
 import { payloadHashProblem, safeRelPath, type DaemonEntry, type PluginManifest, type ServerEntry, type WebEntry } from "../../harness/plugins/package.ts";
 import { formatSquatter, ownerProbeSpec, parseOwnerProbe } from "../port_guard.ts";
 import { recordBlock } from "../security_log.ts";
-import { APP_VERSION } from "../version.ts";
-import { listInstalled, pluginDataDir, pluginsRoot, readInstalled, uninstallPlugin, type InstalledPlugin } from "./install.ts";
+import { uninstallPlugin } from "./install.ts";
+import { listInstalled, pluginDataDir, pluginsRoot, readInstalled, type InstalledPlugin } from "./installed.ts";
 import {
   autostartPlugins, clearRunIntent, readRunIntents, readRunIntentVersion, runIntentDir, setRunIntent, type AutostartOutcome,
 } from "./intent.ts";

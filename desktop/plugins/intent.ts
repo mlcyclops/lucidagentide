@@ -17,7 +17,7 @@
 import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { APP_VERSION } from "../version.ts";
-import { PLUGIN_ID_RE, pluginDataRoot } from "./install.ts";
+import { PLUGIN_ID_RE, pluginDataRoot } from "./installed.ts";
 
 /** Waits before the second and third launch attempt: three tries in all, then the plugin waits for the user. */
 export const AUTOSTART_RETRY_DELAYS_MS: readonly number[] = [5_000, 20_000];

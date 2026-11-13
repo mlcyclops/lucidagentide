@@ -148,13 +148,92 @@ status` first, learn flags from `--help`, pass explicit ids, and leave approvals
 engine, and the UI token alone. `lucid hub --skill` prints the same file, so an agent
 on any machine with LUCID installed can load it without the repo.
 
-## Fleet status for the terminal (OSC 7501, P-HERD-OSC.1, ADR-0536)
+## Herd, the optional add-on (P-HERD, ADR-0541)
 
-`lucid hub` tells the terminal it runs in what the fleet is doing, with the
+Herd is a free, optional add-on that makes the hub a server that outlives its terminal,
+in the Herdr and tmux idiom. It is not part of the default install: `lucid hub` stays the
+classic hub (one process, `q` quits, no server, no OSC 7501). Install Herd in the IDE:
+Plugins, Free, Herd, Install (the package is offered inside the app and signed; nothing
+installs it for you). Without it, `lucid herd` prints how to install it and exits 2.
+
+- **Attach, detach, reattach.** `lucid herd` attaches this terminal to the Herd server,
+  starting it (detached) when none runs. `Q` (also `q`, `ctrl+c`) detaches: the server,
+  the engine it spawned and every lane keep running. `lucid herd` again reattaches to the
+  same panes. Any number of terminals can attach; they share one layout, rendered at the
+  smallest attached size. Herd uses the classic hub's keymap, decks and `:` commands.
+- **Server verbs.** `lucid herd server list`, `lucid herd server start [--name <n>]` (in
+  this terminal), `lucid herd server stop [--name <n>]` (an engine the server spawned stops
+  with it; one it only attached to is left alone). `lucid herd [--name <n>] <command>` takes
+  the same JSON control commands as `lucid hub <command>`.
+- **Named instances.** `--name <n>` picks an instance (default `main`); each has its own
+  server, layout, agent priorities and discovery file.
+- **Files.** Everything Herd writes lives in the add-on's data folder
+  (`<data root>/plugin-data/herd/`): `hub-<name>-spaces.json` with a `.bak` and the last
+  ten writes under `hub-snapshots/<name>/` (a truncated or corrupt layout restores from the
+  newest snapshot that parses, and the status line says so), `hub-<name>-agent-priorities.json`,
+  and `run/<name>/hub-discovery-<pid>.json` (0600). The classic `hub-spaces.json` is only
+  read, once, to seed `main` the first time it starts; it is never moved or written.
+- **In the IDE.** The Herd card's Open starts the add-on through the plugin runtime (instance
+  `main`, health at `/healthz`) and shows the `lucid herd` command to run in a terminal.
+- **Security.** The same control plane as the hub: the hub token, a loopback Host, no
+  browser Origin, a timing-safe compare, and the nonce handshake before the token leaves
+  a client. A terminal client holds the hub token only, never the engine's UI token. The
+  Security deck's `a` (release) and `i` (dismiss) are refused in Herd and send nothing:
+  security decisions are made in the IDE (ADR-0563; the classic hub keeps them). A parked
+  ask (Main's or a lane's) is answered in the IDE, never in Herd: an attached client holds
+  the same token any same-user script does, so `y`, `s` and `d` are refused there and send
+  nothing; the pane shows the ask's kind and summary and points at the IDE. Engine text
+  (titles, model, tool and option names, turn text) is sanitized before it reaches the
+  terminal. Stopping or removing the add-on stops every Herd server it can verify, and one
+  name runs one server (an exclusive lock in the data folder).
+
+### Layouts and keys (P-HERD.2 and P-HERD.3, ADR-0491 and ADR-0492)
+
+- **Layouts are files.** `hub-layouts/<name>.json` in the add-on's data folder:
+  `{ v: 1, name, tree, rail? }`, where `tree` is a split tree of `{ dir: "h"|"v", ratio, a, b }`
+  and panes `{ deck }` or `{ deck: "agent", slot }`. A slot is `{ by: "priority", index }` (that
+  place in the rail's agents list) or `{ by: "name", pattern }` (a `*`/`?` glob on the lane
+  name). An agent pane whose slot has no lane yet says what it waits for and fills when the
+  lane appears. A layout never carries a lane id, a cwd, a model or a prompt: such a file is
+  refused, as is one over 32 panes or 64 KiB. Names are 1-40 of `a-z 0-9 - _`.
+- **Presets.** `solo`, `columns-3`, `columns-4`, `review`, `orbit` and `command` (Main beside
+  two agents) are read-only and copied under `hub-layouts/builtin/`. A new instance opens on
+  `solo`.
+- **Verbs.** `lucid herd layout list | show <name> | save <name> [-t <tab>] | apply <name>
+  [-t <tab>] | delete <name> | tree [-t <tab>] | export <name> <path> | import <path> [--as
+  <name>]`, also in the `:` prompt and the palette (`layout <name>`). List, show, delete,
+  export and import work on the files without a server; export never overwrites; import
+  takes a new name (`-2`, `-3`) when its name is taken. Over the control plane an agent can
+  save and apply, but not export or import (they name files).
+- **The prefix.** `ctrl+b`, then one key, works from a composer too, and a composer never
+  loses a printed key to the hub. Defaults: `c` new tab, `v` split right, `-` split down,
+  `h j k l` focus by geometry, `H J K L` swap, `z` zoom, `x` close, `r` resize mode (`h j k l`
+  move the divider one cell, capitals five, `esc` ends), `[` copy mode, `,` name the pane,
+  `!` pane to a new tab, `n`/`p` next and previous tab, `1`-`9` a tab, `T`/`X` rename and close
+  the tab, `N`/`W`/`D` new, rename and close space, `w` the spaces panel, `g` the palette, `b`
+  the rail, `space` the next layout, `a` the next lane waiting on you, `q` detach, `?` the live
+  bindings. Bare keys without the prefix work as in the classic hub.
+- **`hub-keys.json`** in the data folder: `{ v: 1, prefix, bindings: { <action>: [<key>, ...] },
+  direct: { <action>: [...] }, mouse, notify }`. `direct` keys act without the prefix and need
+  `ctrl` or `alt`. Unknown actions and unreadable keys are skipped and named in the status line
+  and in `ctrl+b ?`, which shows the table as the file has it now. `lucid herd --default-keys`
+  prints the defaults. `mouse: false` leaves mouse capture off so the terminal selects text.
+- **Copy mode.** `h j k l`, `w b`, `0 $`, `g G`, page keys, `/` search with `n N`, `v` select,
+  `y` (or enter) yank, `q`/`esc` leave. A yank goes to the clipboard of the terminal that
+  pressed it (OSC 52) and to the OS clipboard command when there is one (not over SSH).
+- **Pane verbs.** `pane focus|swap [-t <pane>] --direction left|right|up|down` (and tmux
+  `select-pane -L|-R|-U|-D`), `pane resize [-t <pane>] -L|-R|-U|-D --cells <n>`, `pane move
+  <pane> --tab <tab> --split right|down`, `pane move <pane> --new-tab [-n <name>]` (the id
+  stays; into another space the pane gets a new id there) and `pane rename <pane> <label> |
+  --clear`. Dragging a divider with the mouse resizes it.
+
+### Fleet status for the terminal (OSC 7501, P-HERD-OSC.1, ADR-0536)
+
+The Herd client tells the terminal it runs in what the fleet is doing, with the
 [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status)
 (OSC 7501). A terminal that speaks it (Herdr, Ghostty, Rex) can show a badge, a
-spinner or a "needs you" mark on the hub's pane or tab; any other terminal ignores
-the sequence.
+spinner or a "needs you" mark on the pane or tab; any other terminal ignores the
+sequence. The classic `lucid hub` writes none of it.
 
 - **Records.** One root record for the whole fleet, plus one record per lane: id =
   the lane id (cut to the protocol's `[A-Za-z0-9_.+-]{1,32}`), title = the lane name,
@@ -168,10 +247,10 @@ the sequence.
   `working` when any lane works, else `done` when any finished, else `idle`. Failed
   lanes are added to the message ("1 lane failed").
 - **When.** Each poll tick (2 s) writes only the records that changed, through the
-  hub's own terminal output, never inside a frame. A lane that leaves the fleet is
-  cleared (`state=clear:id=<lane>`); quitting the hub clears every record.
+  client's own terminal output, never inside a frame. A lane that leaves the fleet is
+  cleared (`state=clear:id=<lane>`); detaching clears every record.
 - **Off switch.** `LUCID_PROGRAM_STATUS=0` (or `false`, `off`, `no`) turns it off.
-  Nothing is written when stdout is not a TTY, nor by `lucid hub --headless`.
+  Nothing is written when stdout is not a TTY.
 
 ## Capability map
 
@@ -294,3 +373,12 @@ panes (ADR-0495); P-HERD.7 machines: several engines in one hub (ADR-0496);
 P-HERD.8 the GUI Fleet dock mirroring the same layouts and attention
 (ADR-0497). Vocabulary: a Herdr "session" is a hub INSTANCE (`--name`) here,
 because a LUCID session is a conversation on disk.
+
+All eight are built in Herd, the optional add-on (`lucid herd`, ADR-0541,
+ADR-0545), each proven by `make demo-P-HERD.<n>`; the classic `lucid hub` is
+unchanged. ADR-0549 closes P-HERD.7 and P-HERD.8: other engines on this box are
+added by `--dir`, and a box elsewhere joins as a Remote Spoke instead of an SSH
+machine; `machine add spokes` lists the Remote Spokes hub's tasks through the
+engine's `/api/remote-spokes` routes, and Herd may submit a task or a follow-up
+there, while every decision stays a person's (`human_only`). P-HERD.8 is Herd's
+read-only mirror page; the core Fleet dock does not read Herd's files.

@@ -17,9 +17,17 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DeckId } from "./hub_tui.ts";
 
-/** A leaf is a capability deck, or a live AGENT pane bound to a fleet lane. */
-export type PaneDeck = DeckId | "agent";
-export interface PaneLeaf { kind: "leaf"; id: string; deck: PaneDeck; lane?: string; laneName?: string }
+/** A leaf is a capability deck, or a live AGENT pane bound to a fleet lane. `main` (P-HERD.6,
+ *  ADR-0495; Herd only, ADR-0541) is the engine's own conversation, drawn by the host's deck seam
+ *  (hub_tui.ts HubHostDeck); the classic hub's isDeck never accepts it, so no classic layout has one. */
+export type PaneDeck = DeckId | "agent" | "main";
+/** P-HERD.2 (ADR-0491; set by the Herd add-on only, ADR-0541): what an agent pane with no lane yet
+ *  is waiting for. `priority` is the n-th lane (1-based) in the rail's agents order, `name` a glob on
+ *  the lane name, `main` the engine's Main pane (P-HERD.6) before the host can show it. */
+export type PaneSlot = { by: "priority"; index: number } | { by: "name"; pattern: string } | { by: "main" };
+/** `label` (P-HERD.3, ADR-0492 item 4; Herd only) names the pane in its title. An agent leaf has a
+ *  `lane`, or (Herd only) a `slot` it is waiting to fill. */
+export interface PaneLeaf { kind: "leaf"; id: string; deck: PaneDeck; lane?: string; laneName?: string; slot?: PaneSlot; label?: string }
 /** dir "v" = side by side (vertical divider), "h" = stacked. ratio = share of `a`, default 0.5. */
 export interface PaneSplit { kind: "split"; dir: "h" | "v"; ratio?: number; a: PaneNode; b: PaneNode }
 export type PaneNode = PaneLeaf | PaneSplit;
@@ -72,6 +80,108 @@ export function layoutOf(node: PaneNode): string {
   return node.kind === "leaf" ? node.id : `[${layoutOf(node.a)} ${node.dir === "v" ? "|" : "/"} ${layoutOf(node.b)}]`;
 }
 
+// ---- P-HERD.2 / P-HERD.3 (ADR-0491, ADR-0492): pure geometry and slot helpers. Called by the Herd
+// add-on only (ADR-0541); the classic hub never reaches them. ----------------------------------------
+
+export type PaneDirection = "left" | "right" | "up" | "down";
+/** A pane's rectangle in cells; hub_tui.paneRects builds these with the renderer's arithmetic. */
+export interface PaneBox { index: number; x: number; y: number; w: number; h: number }
+
+/** The pane beside `from` in `dir`, by geometry: the nearest box on that side that shares rows (left,
+ *  right) or columns (up, down) with it; ties go to the larger shared edge, then the box aligned
+ *  closest to `from`. Null at the edge of the tab (no wrap). */
+export function neighborPane(boxes: readonly PaneBox[], from: number, dir: PaneDirection): number | null {
+  const a = boxes.find((b) => b.index === from);
+  if (!a) return null;
+  const across = dir === "left" || dir === "right";
+  let best: { index: number; gap: number; overlap: number; offset: number } | null = null;
+  for (const b of boxes) {
+    if (b.index === from) continue;
+    const gap = dir === "left" ? a.x - (b.x + b.w) : dir === "right" ? b.x - (a.x + a.w) : dir === "up" ? a.y - (b.y + b.h) : b.y - (a.y + a.h);
+    if (gap < 0) continue;
+    const overlap = across ? Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) : Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+    if (overlap <= 0) continue;
+    const offset = across ? Math.abs(b.y - a.y) : Math.abs(b.x - a.x);
+    if (!best || gap < best.gap || (gap === best.gap && (overlap > best.overlap || (overlap === best.overlap && offset < best.offset)))) {
+      best = { index: b.index, gap, overlap, offset };
+    }
+  }
+  return best ? best.index : null;
+}
+
+/** A split's region in cells under the renderer's floor arithmetic, and `at`, the cells its `a` side
+ *  takes. `path` walks from the tab's root: "" is the root, "ab" its a-child's b-child. */
+export interface SplitBox { path: string; dir: "h" | "v"; x: number; y: number; w: number; h: number; at: number }
+
+export function splitBoxes(node: PaneNode, w: number, h: number, x = 0, y = 0, path = ""): SplitBox[] {
+  if (node.kind === "leaf") return [];
+  const at = Math.floor((node.dir === "v" ? w : h) * (node.ratio ?? 0.5));
+  const self: SplitBox = { path, dir: node.dir, x, y, w, h, at };
+  return node.dir === "v"
+    ? [self, ...splitBoxes(node.a, at, h, x, y, `${path}a`), ...splitBoxes(node.b, w - at, h, x + at, y, `${path}b`)]
+    : [self, ...splitBoxes(node.a, w, at, x, y, `${path}a`), ...splitBoxes(node.b, w, h - at, x, y + at, `${path}b`)];
+}
+
+/** The path of the leaf with `id`, or null. */
+export function leafPath(node: PaneNode, id: string, path = ""): string | null {
+  if (node.kind === "leaf") return node.id === id ? path : null;
+  return leafPath(node.a, id, `${path}a`) ?? leafPath(node.b, id, `${path}b`);
+}
+
+/** The divider under cell (x, y) of a pane region w x h: the two border columns (or rows) where a
+ *  split's sides meet. The innermost split wins where two dividers cross. */
+export function dividerAt(node: PaneNode, w: number, h: number, x: number, y: number): SplitBox | null {
+  let best: SplitBox | null = null;
+  for (const s of splitBoxes(node, w, h)) {
+    const on = s.dir === "v"
+      ? (x === s.x + s.at - 1 || x === s.x + s.at) && y >= s.y && y < s.y + s.h
+      : (y === s.y + s.at - 1 || y === s.y + s.at) && x >= s.x && x < s.x + s.w;
+    if (on && (!best || s.path.length > best.path.length)) best = s;
+  }
+  return best;
+}
+
+/** The ratio that gives a split `size` cells wide (or tall) exactly `cells` on its `a` side under the
+ *  renderer's floor, clamped so neither side drops below 10%. Rounded to 4 places: the rounding
+ *  moves size*ratio by at most 0.1 of a cell, inside the half cell of margin. */
+export function ratioForCells(cells: number, size: number): number {
+  if (size <= 1) return 0.5;
+  const c = Math.min(Math.floor(size * 0.9), Math.max(Math.ceil(size * 0.1), Math.round(cells)));
+  return Math.min(0.9, Math.max(0.1, Math.round(((c + 0.5) / size) * 10_000) / 10_000));
+}
+
+/** The most panes one tab template (a Herd layout) may hold. */
+export const SLOT_INDEX_MAX = 32;
+
+/** A slot from untrusted JSON: exactly the documented keys, or null. */
+export function parsePaneSlot(v: unknown): PaneSlot | null {
+  if (typeof v !== "object" || v === null || Array.isArray(v) || !("by" in v)) return null;
+  const keys = Object.keys(v).length;
+  if (v.by === "main") return keys === 1 ? { by: "main" } : null;
+  if (v.by === "priority" && keys === 2 && "index" in v && typeof v.index === "number" && Number.isInteger(v.index) && v.index >= 1 && v.index <= SLOT_INDEX_MAX) return { by: "priority", index: v.index };
+  if (v.by === "name" && keys === 2 && "pattern" in v && typeof v.pattern === "string" && NAME_RE.test(v.pattern)) return { by: "name", pattern: v.pattern };
+  return null;
+}
+
+/** How a waiting pane names what it waits for, in its title and body. */
+export function slotLabel(slot: PaneSlot): string {
+  return slot.by === "priority" ? `agent #${slot.index} in the rail` : slot.by === "name" ? `an agent named ${slot.pattern}` : "Main";
+}
+
+/** A tab's tree without ids: Spaces.applyTree mints them. An agent leaf here always waits on a slot. */
+export type PaneTemplate =
+  | { kind: "leaf"; deck: PaneDeck; slot?: PaneSlot; label?: string }
+  | { kind: "split"; dir: "h" | "v"; ratio?: number; a: PaneTemplate; b: PaneTemplate };
+
+const nodeAt = (node: PaneNode, path: string): PaneNode | null => {
+  let n: PaneNode = node;
+  for (const c of path) {
+    if (n.kind !== "split") return null;
+    n = c === "a" ? n.a : n.b;
+  }
+  return n;
+};
+
 // Space and tab names render in the top bar and the rail: one physical row, no control bytes, bounded.
 const NAME_RE = /^[^\u0000-\u001f\u007f]{1,40}$/;
 const SPACE_ID_RE = /^s(\d+)$/;
@@ -121,7 +231,7 @@ export class Spaces {
     return { space, tab };
   }
 
-  #name(name: string, what: "space" | "tab"): string {
+  #name(name: string, what: "space" | "tab" | "pane"): string {
     const n = name.trim();
     if (!NAME_RE.test(n)) throw new HubOpError("bad_name", `a ${what} name is 1-40 printable characters`);
     return n;
@@ -232,6 +342,7 @@ export class Spaces {
   split(ref: string | undefined, dir: "right" | "down"): PaneLeaf {
     const { space, tab, index, leaf } = this.pane(ref);
     const fresh: PaneLeaf = { ...leaf, id: `${space.id}:p${space.nextPane++}` };
+    delete fresh.label; // a pane's name is its own (P-HERD.3); the copy starts unnamed
     tab.tree = mapLeaf(tab.tree, index, (l) => ({ kind: "split", dir: dir === "right" ? "v" : "h", a: l, b: fresh }));
     tab.zoom = false;
     this.onChange();
@@ -278,6 +389,7 @@ export class Spaces {
     const { tab, index, leaf } = this.pane(ref);
     if (deck === "agent" && !lane) throw new HubOpError("usage", "an agent pane needs a lane");
     const next: PaneLeaf = deck === "agent" ? { kind: "leaf", id: leaf.id, deck, lane: lane!.id, laneName: lane!.name } : { kind: "leaf", id: leaf.id, deck };
+    if (leaf.label) next.label = leaf.label; // P-HERD.3: a renamed pane keeps its name across rebinds
     tab.tree = mapLeaf(tab.tree, index, () => next);
     this.onChange();
     return next;
@@ -323,6 +435,132 @@ export class Spaces {
     this.onChange();
   }
 
+  /** P-HERD.1 (ADR-0490 item 5, called by the Herd add-on's server only, ADR-0541; the classic hub
+   *  never relinks): a server outlives engine restarts, and an engine that recovers a lane may give
+   *  it a new id (P-FLEET.L4). An agent pane whose lane id the engine no longer lists
+   *  re-binds to the ONE live lane carrying its saved name; with none (or two), it stays put and
+   *  renders "this agent is gone". Returns how many panes moved. */
+  relinkLanes(lanes: readonly { id: string; name: string }[]): number {
+    const ids = new Set(lanes.map((l) => l.id));
+    let moved = 0;
+    for (const s of this.spaces) for (const t of s.tabs) {
+      leaves(t.tree).forEach((leaf, i) => {
+        if (leaf.deck !== "agent" || !leaf.lane || ids.has(leaf.lane) || !leaf.laneName) return;
+        const named = lanes.filter((l) => l.name === leaf.laneName);
+        if (named.length !== 1) return;
+        t.tree = mapLeaf(t.tree, i, () => ({ ...leaf, lane: named[0]!.id }));
+        moved++;
+      });
+    }
+    if (moved) this.onChange();
+    return moved;
+  }
+
+  // ---- P-HERD.2 / P-HERD.3 (ADR-0491, ADR-0492): called by the Herd add-on only (ADR-0541) ----
+
+  /** Name a pane (null clears the name). The name shows in the pane's title; the id never changes. */
+  renamePane(ref: string, label: string | null): PaneLeaf {
+    const { tab, index, leaf } = this.pane(ref);
+    const next: PaneLeaf = { ...leaf };
+    if (label === null) delete next.label;
+    else next.label = this.#name(label, "pane");
+    tab.tree = mapLeaf(tab.tree, index, () => next);
+    this.onChange();
+    return next;
+  }
+
+  /** Move a pane into another tab (split off that tab's focused pane) or out into a new tab of its
+   *  space. Within its space the pane keeps its id; into another space it gets a fresh id there (pane
+   *  ids are space-scoped and never reused), and `from` names the old one. The moved pane takes focus.
+   *  A tab's last pane refuses: a tab keeps one pane. */
+  movePane(ref: string, to: { tab: string; split: "right" | "down" } | { newTab: true; name?: string }): { pane: PaneLeaf; from: string; tab: Tab } {
+    const src = this.pane(ref);
+    const dst = "tab" in to ? this.findTab(to.tab) : null;
+    if (dst && dst.tab === src.tab) throw new HubOpError("same_tab", `${src.leaf.id} is already in ${dst.tab.id} (swap-pane reorders panes inside a tab)`);
+    const rest = closeLeaf(src.tab.tree, src.index);
+    if (!rest) throw new HubOpError("last_pane", `${src.leaf.id} is the last pane of ${src.tab.id}; a tab keeps one pane`);
+    const name = "newTab" in to && to.name !== undefined ? this.#name(to.name, "tab") : undefined;
+    const space = dst ? dst.space : src.space;
+    const pane: PaneLeaf = space === src.space ? src.leaf : { ...src.leaf, id: `${space.id}:p${space.nextPane++}` };
+    src.tab.tree = rest;
+    if (src.index < src.tab.focus) src.tab.focus--;
+    src.tab.focus = Math.min(src.tab.focus, leaves(rest).length - 1);
+    src.tab.zoom = false;
+    let tab: Tab;
+    if ("tab" in to && dst) {
+      tab = dst.tab;
+      const at = Math.min(tab.focus, leaves(tab.tree).length - 1);
+      tab.tree = mapLeaf(tab.tree, at, (l) => ({ kind: "split", dir: to.split === "right" ? "v" : "h", a: l, b: pane }));
+      tab.focus = leaves(tab.tree).findIndex((l) => l.id === pane.id);
+      tab.zoom = false;
+    } else {
+      const id = `${space.id}:t${space.nextTab++}`;
+      tab = { id, name: name ?? id.slice(space.id.length + 1), tree: pane, focus: 0, zoom: false };
+      space.tabs.push(tab);
+    }
+    this.active = space.id;
+    space.activeTab = tab.id;
+    this.onChange();
+    return { pane, from: src.leaf.id, tab };
+  }
+
+  /** Replace a tab's tree with a template (a Herd layout), minting a fresh id for every pane. The old
+   *  panes' ids are retired, never reused. Focus goes to the first pane. */
+  applyTree(ref: string | undefined, tpl: PaneTemplate): Tab {
+    const { space, tab } = this.findTab(ref);
+    const check = (t: PaneTemplate): void => {
+      if (t.kind === "split") { check(t.a); check(t.b); return; }
+      if ((t.deck === "agent") !== (t.slot !== undefined)) throw new HubOpError("usage", "in a template an agent pane waits on a slot, and only an agent pane does");
+      if (t.label !== undefined) this.#name(t.label, "pane");
+    };
+    check(tpl);
+    const build = (t: PaneTemplate): PaneNode => {
+      if (t.kind === "split") {
+        const ratio = t.ratio !== undefined && t.ratio >= 0.1 && t.ratio <= 0.9 ? t.ratio : undefined;
+        return { kind: "split", dir: t.dir, ...(ratio === undefined ? {} : { ratio }), a: build(t.a), b: build(t.b) };
+      }
+      const leaf: PaneLeaf = { kind: "leaf", id: `${space.id}:p${space.nextPane++}`, deck: t.deck };
+      if (t.slot) leaf.slot = t.slot;
+      if (t.label !== undefined) leaf.label = t.label.trim();
+      return leaf;
+    };
+    tab.tree = build(tpl);
+    tab.focus = 0;
+    tab.zoom = false;
+    this.onChange();
+    return tab;
+  }
+
+  /** Move the divider of the nearest split of the right orientation around a pane by `cells`, against
+   *  the pane region `w` x `h` the hub renders at: L/U move it left/up, R/D right/down. */
+  resizeCells(ref: string | undefined, dir: "L" | "R" | "U" | "D", cells: number, w: number, h: number): { pane: string; ratio: number; cells: number; size: number } {
+    const { tab, leaf } = this.pane(ref);
+    const want = dir === "L" || dir === "R" ? "v" : "h";
+    const path = leafPath(tab.tree, leaf.id) ?? "";
+    let box: SplitBox | null = null;
+    for (const s of splitBoxes(tab.tree, w, h)) if (s.dir === want && path.startsWith(s.path) && (!box || s.path.length > box.path.length)) box = s;
+    if (!box) throw new HubOpError("no_split", `no ${want === "v" ? "side-by-side" : "stacked"} split around ${leaf.id}`);
+    return { pane: leaf.id, ...this.#setSplit(tab, box, box.at + (dir === "L" || dir === "U" ? -cells : cells)) };
+  }
+
+  /** Put the divider of the split at `path` (splitBoxes) so its `a` side is `cells` wide (a divider
+   *  drag lands here). */
+  setSplitCells(tabRef: string | undefined, path: string, cells: number, w: number, h: number): { ratio: number; cells: number; size: number } {
+    const { tab } = this.findTab(tabRef);
+    const box = splitBoxes(tab.tree, w, h).find((s) => s.path === path);
+    if (!box) throw new HubOpError("not_found", `no split at "${path}" in ${tab.id}`);
+    return this.#setSplit(tab, box, cells);
+  }
+
+  #setSplit(tab: Tab, box: SplitBox, cells: number): { ratio: number; cells: number; size: number } {
+    const size = box.dir === "v" ? box.w : box.h;
+    const node = nodeAt(tab.tree, box.path);
+    if (node?.kind !== "split") throw new HubOpError("not_found", "that split is gone");
+    node.ratio = ratioForCells(cells, size);
+    this.onChange();
+    return { ratio: node.ratio, cells: Math.floor(size * node.ratio), size };
+  }
+
   list(): { id: string; name: string; active: boolean; panes: number; tabs: number; activeTab: string }[] {
     return this.spaces.map((s) => ({ id: s.id, name: s.name, active: s.id === this.active, panes: spacePanes(s), tabs: s.tabs.length, activeTab: s.activeTab }));
   }
@@ -337,12 +575,13 @@ export class Spaces {
   }
 
   /** Panes of every space, one space, or one tab. */
-  paneList(scope: { space?: string; tab?: string } = {}): { id: string; space: string; tab: string; deck: PaneDeck; lane?: string; laneName?: string; focused: boolean; zoomed: boolean }[] {
+  paneList(scope: { space?: string; tab?: string } = {}): { id: string; space: string; tab: string; deck: PaneDeck; lane?: string; laneName?: string; slot?: PaneSlot; label?: string; focused: boolean; zoomed: boolean }[] {
     const tabs = scope.tab !== undefined
       ? [this.findTab(scope.tab)]
       : (scope.space === undefined ? this.spaces : [this.space(scope.space)]).flatMap((space) => space.tabs.map((tab) => ({ space, tab })));
     return tabs.flatMap(({ space: s, tab: t }) => leaves(t.tree).map((l, i) => ({
       id: l.id, space: s.id, tab: t.id, deck: l.deck, ...(l.lane ? { lane: l.lane, laneName: l.laneName } : {}),
+      ...(l.slot ? { slot: l.slot } : {}), ...(l.label ? { label: l.label } : {}),
       focused: s.id === this.active && s.activeTab === t.id && i === t.focus, zoomed: t.zoom && i === t.focus,
     })));
   }
@@ -378,11 +617,20 @@ export class Spaces {
         const m = typeof x.id === "string" ? PANE_ID_RE.exec(x.id) : null;
         if (!m || m[1] !== sid || Number(m[2]) >= max || ids.has(x.id as string)) return null;
         if (typeof x.deck !== "string" || (x.deck !== "agent" && !isDeck(x.deck))) return null;
-        if (x.deck === "agent" && (typeof x.lane !== "string" || !x.lane)) return null;
+        // P-HERD (Herd only): an agent leaf has a lane, or a slot it waits on (never both); a label is a name.
+        const hasLane = typeof x.lane === "string" && x.lane !== "";
+        const slot = x.slot === undefined ? undefined : parsePaneSlot(x.slot);
+        if (slot === null || (slot !== undefined && (x.deck !== "agent" || hasLane))) return null;
+        if (x.deck === "agent" && !hasLane && !slot) return null;
+        if (x.label !== undefined && (typeof x.label !== "string" || !NAME_RE.test(x.label))) return null;
         ids.add(x.id as string);
-        return x.deck === "agent"
-          ? { kind: "leaf", id: x.id as string, deck: "agent", lane: x.lane as string, laneName: typeof x.laneName === "string" ? x.laneName : (x.lane as string) }
+        const leaf: PaneLeaf = x.deck === "agent"
+          ? hasLane
+            ? { kind: "leaf", id: x.id as string, deck: "agent", lane: x.lane as string, laneName: typeof x.laneName === "string" ? x.laneName : (x.lane as string) }
+            : { kind: "leaf", id: x.id as string, deck: "agent", ...(slot ? { slot } : {}) }
           : { kind: "leaf", id: x.id as string, deck: x.deck as DeckId };
+        if (typeof x.label === "string") leaf.label = x.label;
+        return leaf;
       }
       if (x.kind !== "split" || (x.dir !== "h" && x.dir !== "v")) return null;
       const a = node(x.a, sid, max);

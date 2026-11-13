@@ -159,3 +159,6 @@ tools/lucid-support-*.zip
 # bundled Microsoft eXecution Container executors (ADR-0441): staged per-arch by build/fetch-mxc.ts, never committed
 desktop/mxc/*
 !desktop/mxc/.gitkeep
+
+# offered add-ons (ADR-0541): signed .lplugin.zip packages + index.json written by tools/build_addons.ts, never committed
+desktop/addons/

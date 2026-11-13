@@ -1,9 +1,13 @@
 ---
 name: lucid-hub
-description: "Control LUCID's terminal hub (`lucid hub`) from a coding agent: check that a hub is running, list and arrange its spaces, tabs, and panes, put decks in panes, spawn and prompt fleet agents, poll their status, and read their output, all through the JSON control CLI. Use this skill whenever the user mentions lucid hub, lucid-hub, the LUCID hub, hub panes, hub spaces, hub tabs, the hub sidebar, agent priority, the spaces panel, the agents panel, fleet lanes or the Fleet deck, tmux-style verbs aimed at LUCID (split-window, send-keys, list-panes, new-window), or asks you to drive, watch, or script LUCID from a terminal or from a herdr pane, even if they never say 'skill'. Read it before running any `lucid hub ...` command, because bare `lucid hub` launches the interactive TUI instead of answering, and because the hub has hard rules about approvals and the engine that you must not break."
+description: "Control LUCID's terminal hub (`lucid hub`) from a coding agent: check that a hub is running, list and arrange its spaces, tabs, and panes, put decks in panes, spawn and prompt fleet agents, poll their status, and read their output, all through the JSON control CLI. Use this skill whenever the user mentions lucid hub, lucid-hub, the LUCID hub, hub panes, hub spaces, hub tabs, the hub sidebar, agent priority, the spaces panel, the agents panel, fleet lanes or the Fleet deck, tmux-style verbs aimed at LUCID (split-window, send-keys, list-panes, new-window), or asks you to drive, watch, or script LUCID from a terminal or from a herdr pane, even if they never say 'skill'. Also use it for Herd, the optional add-on (`lucid herd`): hub servers, named instances, layouts, agent waits and events, the next lane that needs a person, other machines and Remote Spokes tasks. Read it before running any `lucid hub ...` or `lucid herd ...` command, because bare `lucid hub` and bare `lucid herd` launch an interactive TUI instead of answering, and because the hub has hard rules about approvals and the engine that you must not break."
+metadata:
+  contract: "v3"
 ---
 
 # LUCID hub
+
+Contract v3: the classic `lucid hub` control CLI (v2) plus the optional Herd add-on (`lucid herd`, last section).
 
 `lucid hub` is LUCID's terminal UI. It is a client of the LUCID engine, the same loopback, token-gated engine the desktop app talks to. The hub arranges the terminal into **spaces**, each space holds **tabs**, each tab splits into **panes**, and each pane shows one **deck**: overview, security, fleet, sessions, audit, usage, network, kg. A persistent **sidebar** (toggle `b`) holds a spaces panel and an agents panel. **Agents** are fleet lanes run by the engine. Every lane is an omp child with LUCID's security gate loaded in-process, so the gate applies to an agent you start from the CLI exactly as it does to one started from the GUI.
 
@@ -252,3 +256,31 @@ Herdr and the hub stack cleanly: herdr owns terminal layout and the hub owns LUC
 - Use herdr commands only for herdr layout, such as starting the hub in a new pane as shown above. Do not use `herdr pane run` or `herdr pane send-keys` to type into the hub TUI. That reaches the human's keyboard surface, including the approval keys, and bypasses the control plane's refusals.
 - Keep the two id spaces apart: herdr `w1:p1`, hub `s1:p1`.
 - The herdr skill's own rules still apply to the herdr side: `--no-focus`, explicit pane ids, and no closing panes you did not create.
+
+## Herd (optional add-on)
+
+Herd is a free, optional add-on (in the IDE: Plugins, Free, Herd) that turns the hub into a Herdr-style server: the hub keeps running when its terminal closes, several terminals attach to one hub, and named instances keep separate layouts. It is never installed for the user. Without it, `lucid herd` prints that it is not installed and exits 2; say so and use the classic `lucid hub` above, which is unchanged either way. Everything above applies to Herd too, with `lucid herd` in place of `lucid hub`. A failed `lucid herd` command prints its JSON error on stderr and exits 1.
+
+```text
+lucid herd server list                         every running instance (start here: no instance, no control)
+lucid herd server start|stop [--name <name>]   start one here, or end one (a spawned engine stops with it)
+lucid herd --name <name> <command>             aim any command at an instance (default `main`)
+lucid herd layout list|show|save|apply|delete|tree|export|import ...   named layouts; export and import run from the shell only
+lucid herd agent wait <lane> [--until <status>]... [--timeout <ms>]   block until the lane gets there
+lucid herd agent prompt --wait [--until <status>]... [--timeout <ms>] <lane> <text>   submit and wait in one call
+lucid herd agent spawn ... --wait [--timeout <ms>]   return once the lane is ready
+lucid herd agent events [--lane <lane>] [--since <cursor>]   NDJSON lane transitions until you stop it
+lucid herd next                                focus the next lane waiting on a person (that is a person's screen: only when asked)
+lucid herd machine list                        this engine, other engines on this box, and `spokes` (Remote Spokes tasks)
+lucid herd main prompt <text> [--wait]         prompt the engine's own conversation as typed
+lucid herd --help                              the authority on flags
+```
+
+Rules that come with Herd:
+
+- **Never stop a server you did not start.** `server stop` on an instance that spawned its engine ends that engine and every lane on it. Check `server list` and stop only an instance you started in this task.
+- **Wait, do not poll.** The recipe is: spawn, `agent prompt --wait --timeout <ms>`, `agent read`, then decide. Always pass a timeout. `timeout` or `agent_prompt_stalled` does not mean the turn stopped; check `agent status` before you send anything again.
+- **`agent_blocked` means stop.** A prompt to a lane, or to Main, that waits on an open ask is refused `agent_blocked` and nothing is sent. Read the ask with `agent read`, tell the human, and wait for them.
+- **Other machines.** Agent verbs take `<machine>/<lane>` refs, and `agent spawn|list` take `--machine <name>`. Waits and events follow this server's own engine only (`not_local` elsewhere).
+- **Remote Spokes.** On the `spokes` machine you may list tasks (`agent list --machine spokes`), start one (`agent spawn --machine spokes --spoke <node> --text <text>`) and follow one up (`agent prompt spokes/<node>:<task> <text>`), nothing else. A spoke task parked on an approval refuses a follow-up with `agent_blocked`.
+- **Human-only is unchanged.** No `lucid herd` verb approves, denies, answers an ask, signs a spoke decision or proves presence: those are refused `human_only` (or simply do not exist), and the same ban on `send-keys`, the `:` prompt and direct engine calls applies. The answer keys belong to a person at an attached terminal or in the IDE.
