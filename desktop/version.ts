@@ -760,7 +760,15 @@
 //            (#512, ADR-0560); img2threejs for Creator (#584, ADR-0562); repo metrics history (#579, ADR-0561);
 //            the Bun pin guard (#599, ADR-0547); desktop KaTeX 0.18.10 and Monaco 0.56.0 (#351); ADR-0550 docs
 //            (#605). PRERELEASE: never marked Latest; the Homebrew cask and stable installs stay on 2.5.3.
-// v2.6.0-dev.1 = a local development build of the 2.6.0 line (feat/lane-holder: lanes under lucid-holder, OSC 7501
-//            fleet status, the controller OpenAPI document, PORT=0), so an installed dev build is told apart from
-//            the 2.5.4 beta at a glance. Never tagged or published; the release sets 2.6.0.
-export const APP_VERSION = "2.6.0-dev.1";
+// v2.5.4-beta.2 = 2.5.4-beta.1 plus the lane-holder stack, each pull request with the 2026-11-12 review fixes:
+//            lanes under lucid-holder (Rust) so a turn outlives its engine, OSC 7501 fleet status, the controller
+//            OpenAPI document and PORT=0 (#583, ADR-0533 to ADR-0538); the holder security closure, a per-request
+//            channel MAC and handshake v2 (#595, ADR-0544, ADR-0565, ADR-0566); the Rust relay (#585, ADR-0540);
+//            American English across the IDE (#590); a release removes development modules (#594, ADR-0542);
+//            Herd as an optional add-on that answers no ask (#591, ADR-0541, ADR-0545, ADR-0563); the Remote
+//            spokes view (#592, ADR-0539); the spoke admin panel in its own window (#593, ADR-0543); plugins the
+//            user was running start again, only from release intents and verified files (#596, ADR-0546,
+//            ADR-0564); remote spoke tasks as Fleet lanes (#609, ADR-0551). The Herd package is offered only by
+//            a build that signs it; otherwise its card says Not in this build. PRERELEASE: never marked Latest;
+//            the Homebrew cask and stable installs stay on 2.5.3.
+export const APP_VERSION = "2.5.4-beta.2";

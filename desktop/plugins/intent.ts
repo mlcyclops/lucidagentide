@@ -16,6 +16,7 @@
 
 import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { isDevVersion } from "../release_cleanup.ts";
 import { APP_VERSION } from "../version.ts";
 import { PLUGIN_ID_RE, pluginDataRoot } from "./installed.ts";
 
@@ -24,9 +25,6 @@ export const AUTOSTART_RETRY_DELAYS_MS: readonly number[] = [5_000, 20_000];
 
 /** Where the ledger lives; one file per plugin id. */
 export function runIntentDir(): string { return join(pluginDataRoot(), ".running-intent"); }
-
-/** A local development build (`2.6.0-dev.1`), as opposed to a beta or a release. Pure. */
-export function isDevelopmentVersion(version: string): boolean { return version.includes("-dev."); }
 
 /** Record that `id` should be running (idempotent), with the app version that recorded it. Never throws: a failed
  *  write costs only the next launch's restart. */
@@ -102,13 +100,13 @@ export async function autostartPlugins(deps: AutostartDeps): Promise<AutostartOu
   const delays = deps.retryDelaysMs ?? AUTOSTART_RETRY_DELAYS_MS;
   const { start, missing } = launchSelection(deps.intents(), deps.installed);
   for (const id of missing) deps.forget(id);
-  const releaseBuild = !isDevelopmentVersion(deps.appVersion);
+  const releaseBuild = !isDevVersion(deps.appVersion);
   const trusted: string[] = [];
   for (const id of start) {
     const by = deps.writtenBy(id);
     // A dev build may have run an unsigned dev plugin that the release cleanup could not remove (ADR-0542): a
     // release never brings that back on its own; the user starts it once by hand.
-    if (releaseBuild && (by === null || isDevelopmentVersion(by))) {
+    if (releaseBuild && (by === null || isDevVersion(by))) {
       deps.forget(id);
       deps.log(`[plugins] ${id} was left running by a development build (${by ?? "unknown version"}); not starting it on ${deps.appVersion}. Start it from the Plugins drawer.`);
       continue;

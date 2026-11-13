@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  AUTOSTART_RETRY_DELAYS_MS, autostartPlugins, clearRunIntent, isDevelopmentVersion, launchSelection, readRunIntents, readRunIntentVersion, setRunIntent,
+  AUTOSTART_RETRY_DELAYS_MS, autostartPlugins, clearRunIntent, launchSelection, readRunIntents, readRunIntentVersion, setRunIntent,
   type AutostartDeps,
 } from "./intent.ts";
 
@@ -171,12 +171,6 @@ describe("autostart at launch", () => {
 });
 
 describe("development versions", () => {
-  test("only a -dev. build is a development build", () => {
-    expect(isDevelopmentVersion("2.6.0-dev.1")).toBe(true);
-    expect(isDevelopmentVersion("2.6.0")).toBe(false);
-    expect(isDevelopmentVersion("2.5.0-beta.4")).toBe(false);
-  });
-
   test("the ledger records the writing version; an old timestamp-only record has none", () => {
     setRunIntent("pathfinder", dir, "2.6.0");
     expect(readRunIntentVersion("pathfinder", dir)).toBe("2.6.0");
