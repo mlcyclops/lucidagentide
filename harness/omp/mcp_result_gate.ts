@@ -84,7 +84,7 @@ export function blockNotice(server: string, reason: string): string {
 /** Wrap a clean/suspicious MCP result as delimited, trust-labeled untrusted data (never `trusted`). */
 export function wrapUntrusted(server: string, decision: GateDecision, rawText: string): string {
   const trust: TrustLabel = decision.trustLabel === "suspicious" ? "suspicious" : "untrusted";
-  return `${UNTRUSTED_START}\n[mcp-server name="${server}" trust="${trust}"]\n${neutralizeDelimiters(rawText)}\n${UNTRUSTED_END}`;
+  return `${UNTRUSTED_START}\n[mcp-server name="${neutralizeDelimiters(server)}" trust="${trust}"]\n${neutralizeDelimiters(rawText)}\n${UNTRUSTED_END}`;
 }
 
 // ── the extension shell (I/O; wires the pure core to omp's tool_result hook) ──────────────────────────

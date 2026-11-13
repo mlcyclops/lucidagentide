@@ -21,6 +21,8 @@ const SAFE_CORPUS = [
   "git status", "git diff", "git log --oneline -10", "git show HEAD", "git branch -a",
   "git rev-parse HEAD", "git ls-files", "git blame file.ts", "/usr/bin/cat /etc/hostname",
   "LANG=C ls -l", "env FOO=bar grep x file",
+  // #616: a destructive command quoted as an ARGUMENT is text, not a command.
+  'grep "rm -rf" log.txt', 'echo "rm -rf /"',
 ];
 
 // ── the RISKY (non-catastrophic) corpus: every one must classify risky, NOT catastrophic ─────────────
@@ -32,6 +34,8 @@ const RISKY_CORPUS = [
   "git push origin main", "git checkout -b feat", "find . -name '*.log' -delete",
   "find . -exec grep x {} +", "sort -o out.txt in.txt", "echo hi > out.txt", "cat a | wc -l",
   "ls && rm x", "make build", "docker run alpine", "unknownbinary --flag",
+  // #616: the non-recursive forms keep their tiers.
+  "rm -r build", "git format-patch -1", "bash -c 'bun test'",
 ];
 
 // ── the CATASTROPHIC corpus: every one must set alwaysPrompt ──────────────────────────────────────────
@@ -41,6 +45,12 @@ const CATASTROPHIC_CORPUS = [
   "echo x | sudo bash", "dd if=/dev/zero of=/dev/sda", "mkfs.ext4 /dev/sdb",
   ":(){ :|:& };:", "git reset --hard HEAD~3", "git clean -fd", "git push --force origin main",
   "git push -f", "git push --force-with-lease",
+  // #616: a program named by path, behind env, or inside a launcher's payload; the Windows recursive and format forms.
+  "/bin/rm -rf /", "env X=1 /bin/rm -rf /", "bash -c 'rm -rf /'", "sh -lc '/bin/rm -rf ~'",
+  'cmd /c "del /s /q C:\\*"', 'powershell -Command "Remove-Item -Recurse -Force C:\\"', "pwsh -NoProfile -c Remove-Item -r x",
+  `powershell -enc ${Buffer.from("Remove-Item -Recurse -Force C:\\", "utf16le").toString("base64")}`,
+  "Remove-Item -Recurse -Force C:\\", "del /s /q C:\\*", "rd /s /q build", "RD /S /Q build", "rm -Recurse pkg",
+  "format C:", "Format-Volume -DriveLetter D",
 ];
 
 describe("classifyCommand — SAFE corpus produces zero false prompts", () => {
@@ -151,6 +161,14 @@ describe("execFloor: the floor no standing scope crosses", () => {
   test("an ask that is not exec (no command, no exec-named tool) has no floor", () => {
     expect(execFloor({ kind: "edit", title: "rm -rf notes" }, {})).toBeNull();
   });
+  test("#616: the request-level tool name makes a title-only ask an exec ask", () => {
+    expect(execFloor({ title: "rm -rf /" }, {})).toBeNull();
+    expect(execFloor({ title: "rm -rf /" }, {}, "bash")).toContain("rm -rf");
+  });
+  test("#616: a patch in an edit's input is not a command; the same field on an exec tool is", () => {
+    expect(execFloor({ kind: "edit", title: "apply patch", rawInput: { input: "- rm -rf /" } }, {})).toBeNull();
+    expect(execFloor({ kind: "execute", title: "shell", rawInput: { input: "rm -rf /" } }, {})).toContain("rm -rf");
+  });
 });
 
 describe("applyExecChoice — pure, never mutates", () => {
@@ -222,8 +240,9 @@ describe("classifyCommand — graded tier ladder", () => {
 // would run, while benign lookalikes (a word CONTAINING del, a path segment rd/) stay unflagged and the
 // POSIX verbs keep their exact prior tiers.
 describe("classifyCommand: Windows delete verbs are destructive T3 (issue #449)", () => {
+  // A recursive form (`rd /s`, `del /s`, `Remove-Item -Recurse`) is catastrophic since #616, like `rm -rf`.
   const winDelete = [
-    "del file.txt", "erase file.txt", "rd /s /q build", "rmdir build",
+    "del file.txt", "erase file.txt", "rd /q build", "rmdir build",
     "Remove-Item old.log", "ri old.log",
   ];
   for (const cmd of winDelete) {
@@ -238,8 +257,8 @@ describe("classifyCommand: Windows delete verbs are destructive T3 (issue #449)"
   test("mixed case matches the way a Windows shell accepts it", () => {
     const cased = [
       "DEL file.txt", "Del file.txt", "ERASE f.txt", "Erase f.txt",
-      "RD /S /Q build", "Rd build", "RMDIR build",
-      "Remove-Item -Recurse pkg", "remove-item pkg", "REMOVE-ITEM pkg", "RI pkg",
+      "Rd build", "RMDIR build",
+      "remove-item pkg", "REMOVE-ITEM pkg", "RI pkg",
     ];
     for (const cmd of cased) {
       const c = classifyCommand(cmd);

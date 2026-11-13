@@ -1676,7 +1676,7 @@ export class FleetLaneManager {
         // #612: auto mode and session grants never cross the exec floor the main chat keeps under danger mode
         // (a catastrophic command, a managed-denylisted program): such an ask always reaches the human, and
         // turning auto on while it is open does not answer it (setAuto).
-        const floor = execFloor(tc, execStore());
+        const floor = execFloor(tc, execStore(), params?.tool, params?.toolName);
         if ((lane.autoApprove || lane.sessionAllow.has(kind)) && floor === null) {
           this.#emit(lane, { type: "auto-approved", summary, mode: lane.autoApprove ? "auto" : "session" });
           return pick();

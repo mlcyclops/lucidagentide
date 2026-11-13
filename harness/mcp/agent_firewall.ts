@@ -338,8 +338,9 @@ export class AgentFirewall {
   }
 
   #wrap(trust: TrustLabel, res: AcpPromptResult): string {
-    // The header is first-party; the remote's text/activity/permission-asks are neutralized so they can't forge the envelope.
-    const header = `[remote-agent name="${this.deps.connName}" kind="${this.deps.connKind}" trust="${trust}" stop="${res.stopReason}"]`;
+    // The header's shape is first-party, but the connection name is configured and the stop reason is the remote's:
+    // both are neutralized, like the remote's text/activity/permission-asks, so none of them can forge the envelope.
+    const header = `[remote-agent name="${neutralizeDelimiters(this.deps.connName)}" kind="${this.deps.connKind}" trust="${trust}" stop="${neutralizeDelimiters(String(res.stopReason))}"]`;
     const body = res.text.trim() ? neutralizeDelimiters(res.text) : "(the remote agent returned no text)";
     const activity = res.toolActivity.length ? `\n\n[tool-activity]\n${res.toolActivity.map(neutralizeDelimiters).join("\n")}` : "";
     const perms = res.permissionRequests && res.permissionRequests.length ? `\n\n[permission-requests]\n${res.permissionRequests.map(neutralizeDelimiters).join("\n")}` : "";
