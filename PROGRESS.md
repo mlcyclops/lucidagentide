@@ -6167,3 +6167,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-13):** `remote_session.ts` (status every 3 s while working, recall `since` on change), `sessionRows`, `mapTasks`, engine `GET /api/remote-spokes/status` and recall `since`; Session section in the per-spoke panel (task row click picks), session in each Fleet remote lane card; prompts sent from this window shown by hash.
 - **stubbed:** tool calls are not journaled by the spoke, so no tool chips; needs plugin 0.10.1 (ADR-A106) for `since` to read incrementally (an older plugin reads from 0 each time).
 - **next:** see it live on the owner's hub with a working task; consider a spoke-side `task.turn` tool summary.
+
+## P-HOLDER.2: held lanes run from a per-version runtime copy; the update prompt asks about the lanes (ADR-0573)
+- **shipped (2026-11-13):** `lane_runtime.ts` (copy, key, map, cleanup), `HolderPool` launches from the copy and records its key, `LaneView.heldRuntime`, `update_lanes.ts` (stuck/idle/working, prompt, stop-for-update), engine `GET /api/fleet/update-check` and `POST /api/fleet/stop-for-update`, updater prompt with the lanes and no silent install on quit, a toast after restart for lanes still on the previous version. 11 new tests; holder and fleet suites pass; live Windows proof with the packaged binaries.
+- **stubbed:** nothing; the external install-on-close watcher on the owner's PC is outside the repo (it now names held lanes that block it).
+- **next:** live: install this build, start a lane, install another build over it while the lane runs.

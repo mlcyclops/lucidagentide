@@ -18,6 +18,7 @@ import { connect, createServer } from "node:net";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
+import { parseUpdateCheck } from "./update_lanes.ts";
 import { ensureRuntimes, findBun, needsBootstrap, ompResolution } from "./runtime.ts";
 import { ompUnavailableReport } from "./omp_bin.ts"; // P-OMP-BOOT.1 (ADR-0357): the one-shot loud boot report
 import { createSplash, setSplashStatus } from "./splash.ts";
@@ -1648,7 +1649,17 @@ app.whenReady().then(async () => {
     }
     dialog.showErrorBox(report.title, detail);
   }
-  initAutoUpdate(() => win); // packaged-only; checks GitHub Releases, prompts on download
+  // Packaged-only; checks GitHub Releases, prompts on download. P-HOLDER.2 (ADR-0573): the prompt names the lanes
+  // that run and offers to stop the idle and stuck ones first.
+  initAutoUpdate(() => win, {
+    check: async () => parseUpdateCheck(await engineData(await fetch(`http://127.0.0.1:${PORT}/api/fleet/update-check`, { headers: { "x-lucid-token": MAIN_TOKEN }, signal: AbortSignal.timeout(5000) }).catch(() => null))),
+    stop: async (laneIds) => {
+      const d = await engineData(await fetch(`http://127.0.0.1:${PORT}/api/fleet/stop-for-update`, {
+        method: "POST", headers: { "x-lucid-token": MAIN_TOKEN, "content-type": "application/json" }, body: JSON.stringify({ laneIds }), signal: AbortSignal.timeout(20_000),
+      }).catch(() => null));
+      return d && Array.isArray(d.stopped) ? { stopped: d.stopped.filter((x): x is string => typeof x === "string") } : null;
+    },
+  });
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 } // end single-instance guard (P-KGMARKET.4)

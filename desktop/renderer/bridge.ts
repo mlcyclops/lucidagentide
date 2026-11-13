@@ -305,6 +305,9 @@ export type ApprovalScope = "once" | "session";
 export interface LaneView {
   id: string; name: string; cwd: string; model: string; status: LaneStatus;
   createdAt: number; lastActivityAt: number; turns: number;
+  /** P-HOLDER.2 (ADR-0573): a held lane runs from this version's runtime copy, an earlier version's, or the install
+   *  folder; absent for a lane that is the engine's own child. */
+  heldRuntime?: "current" | "previous" | "install";
   /** P-FLEET.L4: Retry is offered only when a last prompt exists; respawns counts in-place revivals. */
   canRetry: boolean; respawns: number;
   /** P-FLEET.L5: the omp session id behind this lane - the key into its on-disk history. */
