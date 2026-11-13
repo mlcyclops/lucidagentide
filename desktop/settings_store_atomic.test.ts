@@ -31,7 +31,7 @@ const quiet = <T>(fn: () => T): T => {
   try { return fn(); } finally { console.error = orig; }
 };
 
-const PROFILE = { username: "Nick", sandboxWindowsMode: "off" as const, lastModel: "anthropic/claude-opus-5-5", tourSeen: true };
+const PROFILE = { username: "operator", sandboxWindowsMode: "off" as const, lastModel: "anthropic/claude-opus-5-5", tourSeen: true };
 
 describe("P-SETTINGS.1 atomic save", () => {
   test("save round-trips, leaves no temp files, and backs up the previous generation", () => {
@@ -63,7 +63,7 @@ describe("P-SETTINGS.1 corrupt-file recovery", () => {
     writeFileSync(file, "");
     const after = quiet(() => setDeveloperMode(true)); // any read-modify-save after the crash
     expect(after.sandboxWindowsMode).toBe("off");
-    expect(after.username).toBe("Nick");
+    expect(after.username).toBe("operator");
     expect(after.tourSeen).toBe(true);
     expect(load()).toEqual({ ...PROFILE, developerMode: true });
     // the torn bytes are kept for forensics, not deleted
@@ -73,7 +73,7 @@ describe("P-SETTINGS.1 corrupt-file recovery", () => {
   test("a half-written file is restored from the backup and the primary is rewritten", () => {
     const { file } = scratch();
     save(PROFILE); save(PROFILE);
-    writeFileSync(file, "{\"username\": \"Nick\", \"sandboxWin");
+    writeFileSync(file, "{\"username\": \"operator\", \"sandboxWin");
     expect(quiet(() => load())).toEqual(PROFILE);
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(PROFILE);
   });

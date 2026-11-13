@@ -41,7 +41,7 @@ set "CONFIRM="
 set /p "CONFIRM=  Type YES and press Enter to wipe all OAuth logins: "
 if /I not "%CONFIRM%"=="YES" (
   echo(
-  echo   Cancelled - nothing was changed.
+  echo   Canceled - nothing was changed.
   echo(
   pause
   exit /b 0

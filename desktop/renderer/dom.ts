@@ -17,10 +17,10 @@ export function el(html: string): HTMLElement {
   return t.content.firstElementChild as HTMLElement;
 }
 
-/** `good=true` flips the colour ramp so a HIGH value reads as healthy (cache hit). */
+/** `good=true` flips the color ramp so a HIGH value reads as healthy (cache hit). */
 export function gauge(label: string, frac: number, valHtml = "", good = false): string {
   const p = pct(frac), c = good ? goodColor(frac) : loadColor(frac);
-  // --gc carries the gauge colour to CSS so the plasma sheen + hover glow tint to match.
+  // --gc carries the gauge color to CSS so the plasma sheen + hover glow tint to match.
   return `<div class="gauge-row"><span class="lab">${esc(label)}</span>
     <span class="gbar"><span class="fill" style="width:${p}%;background:${c};--gc:${c}"></span></span>
     <span class="val"><b style="color:${c}">${p}%</b> ${valHtml}</span></div>`;

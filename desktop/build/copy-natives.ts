@@ -49,7 +49,7 @@ const flag = (name: string): string | null => {
 
 const PLAT = (flag("platform") ?? process.platform) as NodeJS.Platform;
 const ARCH = flag("arch") ?? process.arch;
-// Windows: no reliable symlinks through the installers. Otherwise honour --copy.
+// Windows: no reliable symlinks through the installers. Otherwise honor --copy.
 const COPY = argv.includes("--copy") || PLAT === "win32";
 
 function fail(msg: string): never {

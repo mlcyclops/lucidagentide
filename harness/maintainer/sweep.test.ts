@@ -4,7 +4,7 @@
 // P-MAINT.1: a full sweep with every piece of I/O injected. No filesystem, no network, no clock.
 // This is where the four steps are proven to compose: discover + parse, OSV, SBOM drift, ordering.
 //
-// The behaviours that matter most:
+// The behaviors that matter most:
 //   [1] a real multi-ecosystem repository produces a correctly ordered, correctly counted report,
 //   [2] an unavailable advisory feed is PINNED to the front of the findings, never buried and never
 //       silently absent (a sweep that cannot check must not look like a sweep that found nothing),

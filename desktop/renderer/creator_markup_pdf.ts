@@ -49,7 +49,7 @@ function addAnnotation(doc: PDFDocument, page: PDFPage, m: Markup): void {
     Border: [0, 0, m.width],
     AP: { N: apRef },
   };
-  // FreeText's /C is the box FILL in Acrobat and Revu, so its colour rides /DA (and /DS) instead.
+  // FreeText's /C is the box FILL in Acrobat and Revu, so its color rides /DA (and /DS) instead.
   if (m.kind !== "text") dict.C = [r, g, b];
   if (m.text) dict.Contents = PDFHexString.fromText(m.text);
   switch (m.kind) {

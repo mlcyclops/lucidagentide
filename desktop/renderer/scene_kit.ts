@@ -23,7 +23,7 @@ export interface SceneFrame {
   h: number;
   /** Milliseconds since the backdrop mounted (monotonic, starts at 0). */
   t: number;
-  /** The season the scene is painting for (null in a scene-only preview); scenes vary colours by it. */
+  /** The season the scene is painting for (null in a scene-only preview); scenes vary colors by it. */
   season: SeasonId | null;
 }
 
@@ -71,7 +71,7 @@ export function wrap(v: number, m: number): number {
   return ((v % m) + m) % m;
 }
 
-/** A vertical sky gradient across the whole frame. Stops are [offset 0..1, css colour]. */
+/** A vertical sky gradient across the whole frame. Stops are [offset 0..1, css color]. */
 export function sky(f: SceneFrame, stops: readonly (readonly [number, string])[]): void {
   const g = f.ctx.createLinearGradient(0, 0, 0, f.h);
   for (const [o, c] of stops) g.addColorStop(o, c);

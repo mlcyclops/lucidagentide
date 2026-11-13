@@ -25,7 +25,7 @@ const ROW = {
   title: "Pricing sync", duration: "42m", todos: 2, has_video: true,
 };
 const TODO = {
-  todo: "Nick to draft the pricing page", meeting_date: "2026-09-18 14:05", app: "zoom",
+  todo: "Operator to draft the pricing page", meeting_date: "2026-09-18 14:05", app: "zoom",
   meeting_file: "2026-09-18_14-05_zoom.json.enc", id: "a".repeat(40), done: false,
 };
 
@@ -76,7 +76,7 @@ beforeAll(() => {
         // The real Hub's record carries NO filename key - the caller's requested name is the id.
         return Response.json(hub.locked
           ? { locked: true, meeting: null }
-          : { locked: false, meeting: { app: "zoom", start_time: "2026-09-18T14:05:00", end_time: "2026-09-18T14:47:00", notes: "## Decisions\n- Ship it\n", todos: ["Nick to draft the pricing page"], metadata: { window_title: "Pricing sync" }, has_video: true } });
+          : { locked: false, meeting: { app: "zoom", start_time: "2026-09-18T14:05:00", end_time: "2026-09-18T14:47:00", notes: "## Decisions\n- Ship it\n", todos: ["Operator to draft the pricing page"], metadata: { window_title: "Pricing sync" }, has_video: true } });
       }
       if (p === "/ext/meeting/missing.json.enc") return Response.json({ error: "meeting not found" }, { status: 404 });
       if (p === "/ext/todos/mark" && req.method === "POST") {
@@ -281,7 +281,7 @@ describe("paired reads", () => {
     expect(r.ok).toBe(true);
     expect(r.meeting!.filename).toBe(ROW.filename);
     expect(r.meeting!.notes).toContain("Ship it");
-    expect(r.meeting!.todos).toEqual(["Nick to draft the pricing page"]);
+    expect(r.meeting!.todos).toEqual(["Operator to draft the pricing page"]);
   });
   test("a locked detail is reported as locked, with no meeting - never an exception", async () => {
     setMeetingHubToken("hub-bearer-token");

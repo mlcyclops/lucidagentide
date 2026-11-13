@@ -9,7 +9,7 @@
 //
 // The single-string fast paths come first so the common case reads as itself (a shell line, not a JSON
 // object wrapping a shell line). Everything else serializes, with the code-bearing keys STRIPPED: they are
-// already carried as authored code, and a 16KB file body pasted under a chevron labelled "command" is
+// already carried as authored code, and a 16KB file body pasted under a chevron labeled "command" is
 // noise. Serialization is defensive - a rawInput holding a cycle or a BigInt must never take down the
 // notify handler, which is the worker's only channel. Pure.
 

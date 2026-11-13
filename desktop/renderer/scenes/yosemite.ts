@@ -4,7 +4,7 @@
 // desktop/renderer/scenes/yosemite.ts
 //
 // P-SEASON.1 (ADR-0525): a granite valley at golden hour, composed like the classic tunnel view: a
-// great El Capitan-like monolith on the left, a Half Dome-like dome far off centre-right, spired
+// great El Capitan-like monolith on the left, a Half Dome-like dome far off center-right, spired
 // cathedral rocks with a ribbon waterfall on the right, and pine forest on the valley floor. Each
 // distance is its own cached layer tinted toward the sky (atmospheric perspective); slow fog bands
 // drift between them, sun rays break through, and two or three bald eagles (dark body, white head
@@ -113,7 +113,7 @@ function paintSky(ctx: CanvasRenderingContext2D, w: number, h: number, L: Look):
   ctx.fillRect(0, 0, w, h);
   glow(ctx, w * SUN.x, h * SUN.y, Math.max(w, h) * 0.6, L.sun, 0.35);
   glow(ctx, w * SUN.x, h * SUN.y, Math.min(w, h) * 0.12, "255 246 220", 0.6);
-  // Two far ranges, pale and cool, the farthest nearly the colour of the sky.
+  // Two far ranges, pale and cool, the farthest nearly the color of the sky.
   for (let k = 0; k < 2; k++) {
     ctx.beginPath();
     ctx.moveTo(0, h);

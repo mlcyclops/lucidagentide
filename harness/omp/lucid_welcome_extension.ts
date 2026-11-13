@@ -6,7 +6,7 @@
 // P-BRAND.1 (issue #314): the omp `-e` that paints the LUCID welcome over omp's suppressed welcome box.
 // Thin wrapper around the PURE core (lucid_welcome.ts): on `session_start` it gathers the same content
 // omp's own welcome carried — the workspace's LSP servers (from omp's config) and recent sessions — plus
-// the static tips, then sets an above-editor widget with the LUCID wordmark (accent-coloured by the
+// the static tips, then sets an above-editor widget with the LUCID wordmark (accent-colored by the
 // P-THEME.1 skin). It clears the banner on the first `turn_start` so it greets without lingering.
 //
 // omp's own welcome box is a frozen module constant with no injection seam, so — extending, never forking

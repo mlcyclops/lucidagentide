@@ -142,7 +142,7 @@ describe("JobScheduler", () => {
     expect(f.calls.auto).toEqual([["lane-a", true], ["lane-a", false]]);
     expect(f.lanes[0]!.autoApprove).toBe(false);
   });
-  test("maxMinutes: a run that outlives its budget is cancelled and recorded as timeout", async () => {
+  test("maxMinutes: a run that outlives its budget is canceled and recorded as timeout", async () => {
     let cancelled = false;
     const f = fakeDeps({ prompt: async () => { f.advance(61 * 60_000); } });
     f.deps.cancel = () => { cancelled = true; };

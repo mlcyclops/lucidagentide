@@ -4,7 +4,7 @@
 // desktop/renderer/model_families.ts
 //
 // P-IDE.1 (ADR-0029): model family classification for the picker. Pure, DOM-free, and unit-tested
-// here so the regex order + grouping behaviour can't silently regress as the model list grows. The
+// here so the regex order + grouping behavior can't silently regress as the model list grows. The
 // renderer (app.ts) wraps these in collapsible sections + the per-model hover card.
 
 export interface ModelOption { value: string; name: string }
@@ -42,7 +42,7 @@ export function familyOf(value: string): ModelFamily {
 // the likeliest first choice, and they were the least visible: a self-hosted id matches no family
 // regex, so `dgx-spark/glm-5.3-flash` landed in "Other models" at the very bottom. Worse, a freshly
 // DISCOVERED model is absent from omp's report until the app restarts, so the picker showed nothing
-// at all and gave no reason. These helpers are pure so both behaviours are unit-tested.
+// at all and gave no reason. These helpers are pure so both behaviors are unit-tested.
 
 /** The minimal slice of a LocalProviderDef the picker needs. Kept structural so this module stays
  *  free of desktop imports and the tests need no fixture heavier than an object literal. */

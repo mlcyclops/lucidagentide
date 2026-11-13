@@ -483,7 +483,7 @@ function actionFrame(p: ActionPose): Rows {
   }
   expressiveEyes(grid, p.expression ?? 'focused', 1 + p.bob, p.gaze ?? 1);
   if (p.armsOverHood) {
-    // Lit colours: a hand raised in front of the hood is the subject of the pose, not a far limb.
+    // Lit colors: a hand raised in front of the hood is the subject of the pose, not a far limb.
     limb([24 + p.lean, 27 + p.bob], p.backElbow, p.backHand, false); hand(p.backHand);
     limb([12 + p.lean, 27 + p.bob], p.frontElbow, p.frontHand, false); hand(p.frontHand);
   }
@@ -535,7 +535,7 @@ MASCOT_FRAMES.kickB = actionFrame({ ...stance, lean: -2, backKnee: [27, 34], bac
 MASCOT_FRAMES.kickC = actionFrame({ ...stance, lean: -1, backKnee: [26, 33], backFoot: [26, 38] });
 MASCOT_FRAMES.kickD = actionFrame({ ...stance, backKnee: [25, 40], backFoot: [27, 45] });
 // P-SEASON.1 gait: 16 beats of 50 ms (one 800 ms stride pair; 50 ms is exactly 3 frames at 60 Hz, so
-// no beat is held longer than its neighbours). Each foot is planted for half the cycle and its sole
+// no beat is held longer than its neighbors). Each foot is planted for half the cycle and its sole
 // slides back exactly GAIT_SWEEP cells a beat (26 -> 10), LINEARLY, so a body translating that far per
 // beat keeps it pinned to the ground (P-MASCOT.5's no-skate contract). The swing foot travels forward
 // on a smoothstep under a sine lift, knees are solved from two equal bones bending forward (+x, the

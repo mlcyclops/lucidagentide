@@ -16,7 +16,7 @@ const LEGACY = 'session.settings.set("compaction.strategy", "context-full");';
 // omp 18.4 removed `Settings.set`; the regression writes the registered setting through its own
 // `override` (ADR-0422). The probe failed every run from 18.4.4 on (issue #491: "18.6.1 fails") because
 // it still looked for the `Settings.set` spelling and threw before installing a candidate. Both
-// spellings are recognised, so the pre-18.4 history still migrates and the current one is found.
+// spellings are recognized, so the pre-18.4 history still migrates and the current one is found.
 const ORDERED = 'cfgCompactionMethodOrder.override(session.settings, ["soft"]);';
 const COMPACTION_SETTING = /(?:session\.settings\.set\("compaction\.(?:strategy|methodOrder)"|cfgCompactionMethodOrder\.override\(session\.settings,)[^\r\n]*/g;
 

@@ -30,6 +30,9 @@ import { canSteer, laneDrainReady, mainCheckoutCwd, parallelPushNotice, parallel
 // P-FLEET.L18: the grid and the orbit are two faces of one fleet - the grid links back to the map and
 // shares the "which view does the Fleet button open" pin. Acyclic: fleet_orbit never imports the grid.
 import { fleetHome, openFleetOrbit, setFleetHome } from "./fleet_orbit.ts";
+// P-RS-LANES.1 (ADR-0551): remote spoke tasks are lanes here too. orbit_remote builds and answers their cards (the
+// per-spoke panel's own actions, through its one write path); this file only places them and counts them in the pill.
+import { onRemoteChange, onRemoteLaneClick, paintRemoteLanes, refreshRemote, remoteCounts } from "./orbit_remote.ts";
 // P-FLEET.L18: named lane groups - pure model; this file owns only chips, dividers and storage.
 import { assignLane, createGroup, groupSections, laneCollapsed, loadGroups, pruneLanes, removeGroup, saveGroups, toggleCollapsed, type LaneGroups } from "./lane_groups.ts";
 import { renderMarkdown } from "./markdown.ts";
@@ -207,6 +210,7 @@ const fleetFallback = (vw: number, vh: number): DockShape => {
  *  the panel and restores its saved geometry and card layout. */
 export function initFleetGrid(d: FleetGridDeps): void {
   deps = d;
+  onRemoteChange(onRemoteSnapshot); // P-RS-LANES.1 (ADR-0551)
 }
 
 export function toggleFleetGrid(): void {
@@ -223,8 +227,9 @@ export function openFleetGrid(): void {
   groups = loadGroups(storage().get(FLEET_GROUPS_KEY)); // P-FLEET.L18: named groups from the last run
   groupByRepo = storage().get(FLEET_BY_REPO_KEY) === "1"; // P-HUB-PICK.1
   lastGroupSig = ""; // a fresh dock has no dividers yet - an unchanged signature must not skip building them
+  remoteSig = ""; // P-RS-LANES.1: likewise its Remote section, which has no cards placed or sized yet
   dockState.minimized = false; // an explicit open always shows the panel, never just the pill
-  dock = el(`<div id="fleetDock" class="share-dock fleet-dock side-${dockState.side}" role="dialog" aria-label="LUCID Fleet - local spokes">
+  dock = el(`<div id="fleetDock" class="share-dock fleet-dock side-${dockState.side}" role="dialog" aria-label="LUCID Fleet - local and remote spokes">
     <div class="share-dock-head" data-dock-drag>
       <span class="share-dock-grip">${icon("bolt", 14)}</span>
       <span class="share-dock-title">LUCID Fleet</span>
@@ -233,7 +238,7 @@ export function openFleetGrid(): void {
       <button class="btn-mini fleet-add-btn fleet-pin" data-fleet-byrepo aria-pressed="false" data-tip="Group by repo|Section the cards by the codebase each spoke works on, in the same colors as the orbit. Your named groups are kept and come back when this is off.">${icon("git", 12)} By repo</button>
       <button class="btn-mini fleet-add-btn fleet-pin" data-fleet-pin data-tip="Default view|Make the GRID what the Fleet button opens. The orbit header has the same pin."></button>
       <button class="btn-mini fleet-add-btn" data-fleet-hub data-tip="Terminal hub|Open lucid hub in a new terminal window: this fleet as tmux-style panes (Fleet, Security, Sessions, Audit, Usage and a live agent pane), attached to this app. Also runs as lucid hub from any terminal.">${icon("terminal", 12)} Terminal</button>
-      <button class="btn-mini fleet-add-btn fleet-fit-btn" data-fleet-fit aria-pressed="true" data-tip="Autofit|Lanes tile the whole panel at equal sizes and refit as it resizes. Drag a card edge to resize it, its neighbours share the rest; double-click an edge to reset to equal. Off: free layout.">${icon("layout", 12)}<span>Autofit</span></button>
+      <button class="btn-mini fleet-add-btn fleet-fit-btn" data-fleet-fit aria-pressed="true" data-tip="Autofit|Lanes tile the whole panel at equal sizes and refit as it resizes. Drag a card edge to resize it, its neighbors share the rest; double-click an edge to reset to equal. Off: free layout.">${icon("layout", 12)}<span>Autofit</span></button>
       <button class="btn-mini fleet-add-btn" data-fleet-add title="Spawn a new local spoke">${icon("plus", 12)} Spoke</button>
       <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" title="Minimize (spokes keep running)">${UP_ARROW}</button>
       <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" title="Close (spokes keep running)">${icon("close", 15)}</button>
@@ -405,6 +410,18 @@ function applySizes(): void {
   grid?.classList.toggle("autofit", fit);
   if (fit && grid) { applyFit(grid, false); return; }
   for (const run of runs.values()) applySize(run);
+  if (grid) applyRemoteFree(grid);
+}
+
+/** P-RS-LANES.1 (ADR-0551): a remote card in the free layout takes the panel's tile width (lane_layout.defaultCardW,
+ *  as an unsized local card does) and its own height. Remote cards are not sized or reordered by hand: their order
+ *  is the hub's, grouped by spoke. */
+function applyRemoteFree(grid: HTMLElement): void {
+  const flex = `0 1 ${defaultCardW(gridWidth())}px`;
+  for (const card of remoteCards(grid)) {
+    if (card.style.flex !== flex) card.style.flex = flex;
+    if (card.style.height) card.style.height = "";
+  }
 }
 
 // ------------------------------------------------- P-FLEET.FIT1: autofit, the default card layout
@@ -417,10 +434,13 @@ let fitMut: MutationObserver | null = null;
 let fitRaf = 0;
 
 /** The visible tiles in the order applyOrder lays them out: one section per group (a collapsed group's
- *  lanes are display:none, so they take no tile), then the ungrouped tail. */
-function fitSections(): string[][] {
+ *  lanes are display:none, so they take no tile), then the ungrouped tail. P-RS-LANES.1 (ADR-0551): then the
+ *  Remote section's cards, by lane key, so the tiling counts them like any lane. */
+function fitSections(grid: HTMLElement): string[][] {
   const live = layout.order.filter((id) => runs.get(id)?.card);
-  return groupSections(live, groups).map((s) => s.ids.filter((id) => !laneCollapsed(groups, id)));
+  const secs = groupSections(live, groups).map((s) => s.ids.filter((id) => !laneCollapsed(groups, id)));
+  const remote = remoteCards(grid).map((c) => c.dataset.rsLane ?? "");
+  return remote.length ? [...secs, remote] : secs;
 }
 
 /** The grid body's usable px. Group dividers and the + Lane form own full rows in autofit (styles.css),
@@ -432,7 +452,8 @@ function measureFit(grid: HTMLElement): { w: number; h: number } | null {
   const px = (v: string): number => Number.parseFloat(v) || 0;
   const bs = getComputedStyle(body);
   let h = body.clientHeight - px(bs.paddingTop) - px(bs.paddingBottom);
-  for (const x of grid.querySelectorAll<HTMLElement>(":scope > .fleet-group-head, :scope > .fleet-spawn-card")) {
+  // P-RS-LANES.1: the Remote section's head owns a full row too (its wrapper is display:contents).
+  for (const x of grid.querySelectorAll<HTMLElement>(":scope > .fleet-group-head, :scope > .fleet-spawn-card, :scope > .fleet-remote > .fleet-remote-head")) {
     const xs = getComputedStyle(x);
     h -= x.getBoundingClientRect().height + px(xs.marginTop) + px(xs.marginBottom) + CARD_GAP;
   }
@@ -446,22 +467,29 @@ function measureFit(grid: HTMLElement): { w: number; h: number } | null {
  *  lets the transcript take the slack and pins the composer to the card's bottom. Writes are skipped
  *  when unchanged so the 2.5s poll costs no style invalidation. */
 function applyFit(grid: HTMLElement, remeasure: boolean): void {
-  const secs = fitSections();
+  const secs = fitSections(grid);
   const sig = `${secs.map((s) => s.join(",")).join("|")}#${grid.querySelectorAll(":scope > .fleet-group-head").length}${$(".fleet-spawn-card", grid) ? "+" : ""}`;
   const dims = (!remeasure && fitPlan?.sig === sig ? fitPlan : measureFit(grid)) ?? fitPlan;
-  if (!dims) { for (const run of runs.values()) applySize(run); return; } // never measured yet: free sizes until it lays out
+  if (!dims) { for (const run of runs.values()) applySize(run); applyRemoteFree(grid); return; } // never measured yet: free sizes until it lays out
   const plan = autofitPlan(secs, dims.w, dims.h, layout.fit);
   fitPlan = plan ? { ...plan, sig, w: dims.w, h: dims.h } : null;
   if (!plan) return;
   for (const run of runs.values()) {
-    const card = run.card;
     const c = plan.cells[run.view.id];
-    if (!card || !c) continue; // no tile = hidden in a collapsed group; its size is moot until it shows
-    const flex = `0 1 ${c.w}px`;
-    const height = `${c.h}px`;
-    if (card.style.flex !== flex) card.style.flex = flex;
-    if (card.style.height !== height) card.style.height = height;
+    if (run.card && c) fitCard(run.card, c); // no tile = hidden in a collapsed group; its size is moot until it shows
   }
+  for (const card of remoteCards(grid)) {
+    const c = plan.cells[card.dataset.rsLane ?? ""];
+    if (c) fitCard(card, c);
+  }
+}
+
+/** One tile's plan onto its card, writing only what changed. */
+function fitCard(card: HTMLElement, c: { w: number; h: number }): void {
+  const flex = `0 1 ${c.w}px`;
+  const height = `${c.h}px`;
+  if (card.style.flex !== flex) card.style.flex = flex;
+  if (card.style.height !== height) card.style.height = height;
 }
 
 /** ONE ResizeObserver on the grid body (dock drag, window resize, minimize / restore all land here as a
@@ -577,7 +605,7 @@ function applyOrder(grid: HTMLElement): void {
     const rsig = `repo|${repoSecs.map((s) => `${s.repo.key}:${s.ids.join(",")}`).join("|")}`;
     if (rsig === lastGroupSig && grid.querySelectorAll(".fleet-card[data-lane]").length === live.length) return;
     lastGroupSig = rsig;
-    for (const d of grid.querySelectorAll(".fleet-group-head")) d.remove();
+    for (const d of grid.querySelectorAll(":scope > .fleet-group-head")) d.remove(); // never the Remote section's head
     for (const s of repoSecs) {
       grid.append(el(`<div class="fleet-group-head fleet-repo-head" style="--repo-hue:${s.repo.hue}" title="${esc(s.repo.key)}">
         <span class="spoke-repo-tag">${esc(s.repo.name)}</span><span>${s.ids.length}</span>
@@ -589,6 +617,7 @@ function applyOrder(grid: HTMLElement): void {
         grid.append(card);
       }
     }
+    keepRemoteLast(grid);
     return;
   }
   const sections = groupSections(live, groups);
@@ -597,7 +626,7 @@ function applyOrder(grid: HTMLElement): void {
   const sig = sections.map((s) => `${s.group ?? "\u0001"}${groups.collapsed[s.group ?? ""] ? "^" : ""}:${s.ids.join(",")}`).join("|");
   if (sig === lastGroupSig && grid.querySelectorAll(".fleet-card[data-lane]").length === live.length) return;
   lastGroupSig = sig;
-  for (const d of grid.querySelectorAll(".fleet-group-head")) d.remove();
+  for (const d of grid.querySelectorAll(":scope > .fleet-group-head")) d.remove(); // never the Remote section's head
   for (const s of sections) {
     const closed = s.group !== null && !!groups.collapsed[s.group];
     if (s.group !== null) {
@@ -614,8 +643,55 @@ function applyOrder(grid: HTMLElement): void {
       grid.append(card);
     }
   }
+  keepRemoteLast(grid);
 }
 let lastGroupSig = "";
+
+// ------------------------------------------------- P-RS-LANES.1 (ADR-0551): the Remote section
+
+/** The Remote section's wrapper. `display:contents` (styles.css), so its head and cards are items of the grid's own
+ *  flex row and tile with the local lanes; orbit_remote.ts paints what is inside it. */
+function remoteWrap(grid: HTMLElement): HTMLElement {
+  let wrap = $(":scope > .fleet-remote", grid);
+  if (!wrap) { wrap = el(`<div class="fleet-remote"></div>`); grid.append(wrap); }
+  return wrap;
+}
+
+/** The remote lane cards in the order they are laid out, for the tiling (their lane keys) and the free sizes. */
+function remoteCards(grid: HTMLElement): HTMLElement[] {
+  return [...grid.querySelectorAll<HTMLElement>(":scope > .fleet-remote > .fleet-card[data-rs-lane]")];
+}
+
+/** The Remote section stays after the local lanes, which applyOrder and a new card append at the grid's end. Moved
+ *  only when out of place, so an unchanged frame restarts no glow. */
+function keepRemoteLast(grid: HTMLElement): void {
+  const wrap = $(":scope > .fleet-remote", grid);
+  if (wrap?.firstChild && grid.lastElementChild !== wrap) grid.append(wrap);
+}
+
+/** The remote lane keys last laid out; a change re-tiles the grid. */
+let remoteSig = "";
+
+/** Repaint the Remote section (after a poll or any answered hub read), keep it last, and re-tile when its lanes
+ *  changed. A remote lane is another machine's task: it is never promoted into the composer. */
+function paintRemoteSection(): void {
+  const grid = dock ? $("#fleetGrid", dock) : null;
+  if (!grid) return;
+  paintRemoteLanes(remoteWrap(grid));
+  paintEmpty();
+  keepRemoteLast(grid);
+  const sig = remoteCards(grid).map((c) => c.dataset.rsLane ?? "").join(",");
+  if (sig === remoteSig) return;
+  remoteSig = sig;
+  applySizes();
+}
+
+/** P-RS-LANES.1 (ADR-0551): told after every answered hub read, whoever asked (this grid's poll, the orbit, the
+ *  Remote spokes view): the Remote section and the minimized pill's remote attention. */
+function onRemoteSnapshot(): void {
+  paintRemoteSection();
+  paintPill();
+}
 
 /** The laid-out rectangles, in `layout.order`, frozen at pointerdown. snapSlot reads row identity off
  *  `y + h` (bottom-anchored cards share a bottom edge, never a top), so these must be real viewport rects. */
@@ -720,7 +796,7 @@ function startCardDrag(e: PointerEvent, head: HTMLElement, fromGrip: boolean): v
   };
   const move = (m: Event): void => {
     const pm = m as PointerEvent;
-    // The card only LIFTS after the pointer has actually travelled: a header click (which lands a
+    // The card only LIFTS after the pointer has actually traveled: a header click (which lands a
     // sub-pixel pointermove on most hardware) must not flash a placeholder or count as a reorder.
     if (!moved) {
       if (Math.abs(pm.clientX - ox) < DRAG_SLOP && Math.abs(pm.clientY - oy) < DRAG_SLOP) return;
@@ -827,23 +903,33 @@ export function mountFleetPill(): void {
  *  names the lanes - enough to keep working in the main window and still know a lane is blocked on you.
  *  Order, wording, and counting come from the shared `laneRollup` (P-PWA-FLEET.2), so this pill and the
  *  phone's collapsed fleet bar can never disagree; the dots reuse the cards' own `lane-<status>` classes,
- *  so neither can drift from the panel's colours either.
+ *  so neither can drift from the panel's colors either.
  *  The markup is compared before it is written, because an identical repaint every 2.5s is precisely what
  *  made the pulse animation stutter. */
 function paintPill(): void {
   if (!pill) return;
   const roll = laneRollup([...runs.values()].map((r) => ({ ...r.view, status: displayStatus(r.view) }))); // P-STUCK-SHOW.1
+  // P-RS-LANES.1 (ADR-0551): a remote spoke parked on a human, or an alert line not dismissed, needs the user as much
+  // as a local approval does. Counted by remoteCounts, the same numbers as the Hubs and rail badges.
+  const remote = remoteCounts();
+  const remoteAttn = remote.waiting + remote.alerts;
+  const remoteLine = [
+    remote.waiting ? `${remote.waiting} remote waiting on you` : "",
+    remote.alerts ? `${remote.alerts} remote ${remote.alerts === 1 ? "alert" : "alerts"}` : "",
+  ].filter(Boolean).join(", ");
   const box = $("[data-fleet-pips]", pill) as HTMLElement | null;
   if (box) {
-    const html = roll.counts
+    const remotePip = remoteAttn ? `<span class="fleet-pip rs-${remote.waiting ? "approval" : "stuck"}" title="${esc(remoteLine)}"><i aria-hidden="true"></i><b>${remoteAttn}</b></span>` : "";
+    const html = (roll.counts
       .map((c, i) => `<span class="fleet-pip lane-${c.status}" title="${esc(roll.lines[i] ?? "")}"><i aria-hidden="true"></i><b>${c.count}</b></span>`)
-      .join("") || `<span class="fleet-pip lane-idle" title="No spokes running"><i aria-hidden="true"></i><b>0</b></span>`;
+      .join("") + remotePip) || `<span class="fleet-pip lane-idle" title="No spokes running"><i aria-hidden="true"></i><b>0</b></span>`;
     if (box.innerHTML !== html) box.innerHTML = html;
   }
-  const tip = roll.lines.length ? roll.lines.join(" \u00b7 ") : "no spokes running";
+  const lines = remoteLine ? [...roll.lines, remoteLine] : roll.lines;
+  const tip = lines.length ? lines.join(" \u00b7 ") : "no spokes running";
   pill.title = `LUCID Fleet - ${tip}. Click to reopen; spokes keep running either way.`;
   pill.classList.toggle("live", roll.busy);
-  pill.classList.toggle("attn", roll.attention);
+  pill.classList.toggle("attn", roll.attention || remoteAttn > 0);
 }
 
 // ---------------------------------------------------------------- polling + reconciliation
@@ -859,6 +945,9 @@ function stopPoll(): void {
 
 async function refresh(): Promise<void> {
   if (!deps) return;
+  // P-RS-LANES.1 (ADR-0551): the remote hub on the same beat, apart from the lane poll so a slow plugin never holds
+  // the local lanes back (refreshRemote is single-flight; onRemoteSnapshot paints what it answers).
+  void refreshRemote();
   let st: FleetStatusView | null = null;
   try { st = await deps.fleetStatus(); } catch { st = null; }
   if (dockState?.minimized) mountPill();
@@ -896,6 +985,7 @@ async function refresh(): Promise<void> {
   // the store can neither grow forever nor hold a slot for a lane that is gone.
   layout = reconcile(layout, st.lanes.map((l) => l.id));
   if (grid) { applyOrder(grid); applySizes(); }
+  paintRemoteSection();
   if (hr) paintHeadroom(hr, st.resources, st.lanes.length);
   paintEmpty();
   paintPill();
@@ -927,7 +1017,7 @@ function paintEmpty(): void {
   if (!dock) return;
   const grid = $("#fleetGrid", dock) as HTMLElement | null; if (!grid) return;
   const empty = $(".fleet-empty", grid);
-  const need = runs.size === 0 && !$(".fleet-spawn-card", grid);
+  const need = runs.size === 0 && !$(".fleet-spawn-card", grid) && remoteCards(grid).length === 0; // P-RS-LANES.1
   if (need && !empty) grid.append(el(`<div class="fleet-empty">${icon("info", 13)}<span>No spokes yet - spawn one with + Spoke. Each spoke is a headless LUCID engine working its own folder.</span></div>`));
   else if (!need && empty) empty.remove();
 }
@@ -1180,7 +1270,7 @@ function paintFrame(run: LaneRun): void {
       health.textContent = h.action === "probe" ? "probed" : "recovered";
       health.title = h.action === "probe"
         ? `The harness asked this spoke for a status because it went quiet: ${h.reason}`
-        : `The harness cancelled and resumed this spoke in place: ${h.reason}`;
+        : `The harness canceled and resumed this spoke in place: ${h.reason}`;
     }
   }
   paintProgress(run); // P-PROGRESS.1
@@ -2292,6 +2382,8 @@ function onClick(ev: Event): void {
   if (t.closest("[data-spawn-go]")) { void submitSpawn(); return; }
   if (t.closest("[data-spawn-cancel]")) { toggleSpawnForm(); return; }
   if (t.closest("[data-spawn-browse]")) { void browseSpawnFolder(); return; }
+  // P-RS-LANES.1 (ADR-0551): a remote lane's controls are the per-spoke panel's own (orbit_remote.ts).
+  if (onRemoteLaneClick(t)) return;
   const card = t.closest(".fleet-card[data-lane]") as HTMLElement | null; if (!card || !deps) return;
   const run = runs.get(card.dataset.lane ?? ""); if (!run) return;
   // P-FLEET.L7: the chevron. `.open` goes on BOTH the button and the inline body, exactly as the composer's

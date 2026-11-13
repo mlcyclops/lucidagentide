@@ -221,7 +221,7 @@ export function creatorIntegrationsHtml(providers: readonly ProviderStatusView[]
 // ── CREATOR-1: the job strip ────────────────────────────────────────────────
 
 const JOB_STATE_LABEL: Record<string, string> = {
-  queued: "queued", running: "running", done: "done", failed: "failed", cancelled: "cancelled", refused: "refused",
+  queued: "queued", running: "running", done: "done", failed: "failed", cancelled: "canceled", refused: "refused",
 };
 
 function jobRowHtml(j: JobView, now: number): string {

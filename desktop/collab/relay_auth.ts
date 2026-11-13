@@ -194,6 +194,8 @@ export function createFirebaseVerifier(cfg: FirebaseVerifierConfig): (token: str
  *   RELAY_ALLOWED_EMAILS=a@b,c@d   (optional; admitted without a premium/admin claim)
  *   RELAY_JWKS_URL=<url>           (optional; tests / mirrors)
  *   RELAY_AUTH_DEADLINE_MS=5000    (optional)
+ *   RELAY_MAX_ROOMS_PER_USER=4, RELAY_MAX_CONNECTS_PER_MINUTE=30, RELAY_RECLAIM_GRACE_MS=30000 (optional; the
+ *   gate's quotas and re-claim grace, ADR-0540: so a broker, Bun or Rust, is configured by environment alone)
  */
 export function authFromEnv(
   env: Record<string, string | undefined>,
@@ -210,9 +212,16 @@ export function authFromEnv(
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean);
   const deadline = Number(env.RELAY_AUTH_DEADLINE_MS);
+  const roomsPerUser = Number(env.RELAY_MAX_ROOMS_PER_USER);
+  const connectsPerMinute = Number(env.RELAY_MAX_CONNECTS_PER_MINUTE);
+  // Unset is NaN, never 0: an empty grace variable keeps the default rather than disabling re-claim.
+  const grace = env.RELAY_RECLAIM_GRACE_MS?.trim() ? Number(env.RELAY_RECLAIM_GRACE_MS) : Number.NaN;
   const auth: RelayAuthGate = {
     verify: createFirebaseVerifier({ projectId, allowedEmails, jwksUrl: env.RELAY_JWKS_URL?.trim() || undefined }),
     ...(Number.isFinite(deadline) && deadline > 0 ? { deadlineMs: deadline } : {}),
+    ...(Number.isInteger(roomsPerUser) && roomsPerUser > 0 ? { maxRoomsPerUser: roomsPerUser } : {}),
+    ...(Number.isInteger(connectsPerMinute) && connectsPerMinute > 0 ? { maxConnectsPerMinute: connectsPerMinute } : {}),
+    ...(Number.isFinite(grace) && grace >= 0 ? { reclaimGraceMs: grace } : {}),
   };
   return {
     auth,

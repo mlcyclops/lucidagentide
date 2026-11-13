@@ -15,6 +15,6 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["bun"]
   },
-  "include": ["harness/**/*.ts", "tools/**/*.ts"],
+  "include": ["harness/**/*.ts", "tools/**/*.ts", "plugins/**/*.ts"],
   "exclude": ["node_modules", "vendor", "tools/remote-pwa/app.ts"]
 }

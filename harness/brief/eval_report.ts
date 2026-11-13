@@ -46,7 +46,7 @@ export interface ObservedTool {
 /** A settled chat turn's observed telemetry - everything the report needs that is actually knowable at the
  *  chat seam. The AC / lint / test signals (and P-EVAL.2's DuckDB capture) are deferred, so the MEASURED
  *  metrics that depend on them stay `null` + `needs_signal` rather than being faked, which is the ADR-A016
- *  honesty rule and is what gets persisted. P-EVAL.4 then renders a clearly-labelled `derived` proxy in
+ *  honesty rule and is what gets persisted. P-EVAL.4 then renders a clearly-labeled `derived` proxy in
  *  their place so the report is readable, without that proxy ever entering the eval_metrics ledger. */
 export interface ObservedTurn {
   runId: string;

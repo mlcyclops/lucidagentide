@@ -25,7 +25,7 @@ console.log("== P-REMOTE.2b: token refresh custody + PWA-pointing invite links =
 const NOW = 1_800_000_000_000;
 const mem = (): AuthStorage => { let v: string | null = null; return { get: () => v, set: (x) => { v = x; }, remove: () => { v = null; } }; };
 const auth = new MarketAuth(mem(), () => NOW);
-auth.applyCallback("lucid://auth?token=old&refresh=r0&email=nick%40x.com&exp=1800000030"); // expires in 30s
+auth.applyCallback("lucid://auth?token=old&refresh=r0&email=operator%40example.com&exp=1800000030"); // expires in 30s
 let exchanged = false;
 const fakeSecuretoken = (async (url: string) => {
   if (!String(url).includes("securetoken.googleapis.com")) fail("did not call the securetoken endpoint");
@@ -51,7 +51,7 @@ class MockTransport implements HostTransport {
 }
 const mkDeps = (relay: RelayTarget): CollabManagerDeps => ({
   resolveRelay: () => relay,
-  sessionInfo: () => ({ sessionId: "s1", title: "LUCID session", model: "claude-opus-4-8", hostName: "nick" }),
+  sessionInfo: () => ({ sessionId: "s1", title: "LUCID session", model: "claude-opus-4-8", hostName: "operator" }),
   makeTransport: () => new MockTransport(),
   now: () => NOW,
 });

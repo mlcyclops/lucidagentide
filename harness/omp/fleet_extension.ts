@@ -15,6 +15,8 @@
 // Defensively wrapped: a registration failure NEVER breaks omp launch - worst case the tool is absent
 // and the user still sees every lane in the fleet dashboard.
 
+import { engineFetch } from "./engine_channel.ts"; // LH-03 (ADR-0544): a held lane's call is MACed and its answer proven
+
 // omp's plugin API is a library boundary whose type isn't exported to us; type the minimal surface we use.
 interface TypeBoxType {
   Object: (props: Record<string, unknown>) => unknown;
@@ -159,7 +161,7 @@ export default function fleetExtension(piRaw: unknown): void {
         if (!url) return unavailable("the LUCID desktop engine isn't running (no LUCID_FLEET_STATUS_URL).");
         let body: unknown;
         try {
-          const r = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+          const r = await engineFetch(url, { signal: AbortSignal.timeout(5_000) });
           if (!r.ok) return unavailable(`the engine responded ${r.status}.`);
           body = await r.json().catch(() => null);
         } catch (e) {

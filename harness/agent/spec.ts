@@ -175,7 +175,7 @@ export function clampSelfEdit(spec: AgentSpec, managedAllowsSelfEdit: boolean): 
 const isStr = (v: unknown): v is string => typeof v === "string";
 const isNonEmpty = (v: unknown): v is string => isStr(v) && v.trim().length > 0;
 
-/** Detect a cycle in the node/edge graph via DFS colouring. Returns true if any cycle exists. */
+/** Detect a cycle in the node/edge graph via DFS coloring. Returns true if any cycle exists. */
 function hasCycle(nodeIds: Set<string>, edges: AgentEdge[]): boolean {
   const adj = new Map<string, string[]>();
   for (const id of nodeIds) adj.set(id, []);

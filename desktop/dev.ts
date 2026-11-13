@@ -41,6 +41,7 @@ import { flavorInfo, buildInfoView, normalizeUiMode, resolveBuildFlavor, uiModeP
 import { buildLocalAgentManifest, writeLocalAgentManifest } from "./local_agent_manifest.ts"; // P-LEGIBLE.1 (ADR-0384)
 import { mcpServersForAcp } from "./settings_store.ts"; // P-LEGIBLE.1: the configured MCP servers the manifest declares
 import { APP_VERSION } from "./version.ts"; // CREATOR-0: /api/build-info reports the single-sourced version
+import { acknowledgeReleaseCleanup, pendingReleaseCleanup, runReleaseCleanup } from "./release_cleanup.ts"; // ADR-0542
 import {
   CREATOR_PRESSURE_PCT, CREATOR_SUSTAIN_MS, CREATOR_WARM_PCT, creatorAdmission, freshnessOf, gpuFromDcgm,
   pushCreatorSample, sampleCreatorCpu, sampleLocalGpu, sampleOf, telemetryFromAgentJson, validateRemoteTarget,
@@ -130,6 +131,8 @@ import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, TURN_ALREADY_RUNN
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
+import { HolderPool } from "./lane_holder.ts"; // P-HOLDER.1 (ADR-0534): lanes outlive the engine
+import { answerChannel, CHANNEL_ROUTES, channelAdmits } from "./lane_channel.ts"; // LH-03 (ADR-0544): a held lane's channel
 import { displayStatus } from "./collab/fleet_status.ts"; // P-STUCK-SHOW.3 (ADR-0521): phone guests see likely-stuck spokes too
 import { sessionLive, withLiveState, type SessionLiveSpoke } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
 import { addInterject, addPeerNote, awaitPeerReply, carryPendingNotes, drainInterjects, drainPeerNotes, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes; P-OWN.1: peer notes
@@ -568,7 +571,7 @@ import { kbScanner, kbStore, kgEntry, listKgs, activeKgId, createKg, renameKg, s
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.ts"
-import { inspectPluginFile, installPluginFile, installPluginFromUrl, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505)
+import { addonsDir, inspectPluginFile, installOfferedPlugin, installPluginFile, installPluginFromUrl, readOfferedAddons, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505), ADR-0541 offered add-ons
 import { PluginRuntime, resolvePluginNode } from "./plugins/runtime.ts" // P-PLUGINS.2 (ADR-0462)
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
@@ -777,7 +780,7 @@ let collabWsById: Record<string, string> = {};
 // audited turn with NO protocol change and no UserTurnFrame consumer touched. `sttSource` also rides the
 // inbox record as an adjacent field, for any consumer that wants the raw value instead of the label.
 // Only the NOTABLE cases are marked. "host" is the default and safe path (the desktop's own offline
-// whisper), so labelling it would put "(voice: desktop)" on every hold-to-talk turn and make the author
+// whisper), so labeling it would put "(voice: desktop)" on every hold-to-talk turn and make the author
 // column noise; absence of a marker already means "transcribed here".
 const STT_MARKER: Record<SttSource, string> = {
   "device-local": " (voice: on-device)",
@@ -1340,7 +1343,7 @@ async function visionJobView(jobId: string): Promise<VisionJobReply> {
   if (!st.ok) return { ok: false, error: st.error, data: { jobId } };
   const s = st.data;
   if (s.state === "error" || s.state === "cancelled") {
-    const err = s.error || s.message || `the vision ${row.op} ${s.state === "error" ? "failed" : "was cancelled"}`;
+    const err = s.error || s.message || `the vision ${row.op} ${s.state === "error" ? "failed" : "was canceled"}`;
     finishJob(jobIo, CREATOR_DIR, jobId, s.state === "error" ? "failed" : "cancelled", err);
     return { ok: true, data: { jobId, state: s.state, progress: s.progress, message: s.message, error: err } };
   }
@@ -1690,6 +1693,8 @@ function ompBin(): string {
 // process.execPath (the on-disk binary at <repo>/bin/lucid-engine); a dev run uses import.meta.dir as-is.
 const DESKTOP_DIR = engineDesktopDir(import.meta.dir, process.execPath, existsSync);
 const REPO_DIR = join(DESKTOP_DIR, "..");
+// ADR-0541: the offered add-ons, <resources>/addons in a packaged app and desktop/addons in a dev run.
+const ADDONS_DIR = addonsDir(process.env.LUCID_RESOURCES || DESKTOP_DIR);
 const ROOT = join(DESKTOP_DIR, "renderer");
 // CREATOR-0 (ADR-0279): the engine serves on its FLAVOR's native port (Agent 5319, Creator 5320) unless
 // PORT overrides it, so both products can run side by side with no launcher gymnastics.
@@ -1761,6 +1766,9 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
 // P-SANDBOX.15 (ADR-0396): the routes the AGENT token opens - every child-called route above. Only
 // /api/preview/serve is left out: the renderer's iframe loads it with the UI token, and no child calls it.
 const AGENT_ROUTES: ReadonlySet<string> = new Set([...QUERY_TOKEN_ROUTES].filter((r) => r !== "/api/preview/serve"));
+// LH-03 (ADR-0544 as amended): the routes a held lane's channel opens. lane_channel.ts CHANNEL_ROUTES lists them with
+// the speaker each one names; only agent routes count, so the channel never reaches a route the agent token cannot.
+const CHANNEL_AUTH_ROUTES: ReadonlySet<string> = new Set(Object.keys(CHANNEL_ROUTES).filter((r) => AGENT_ROUTES.has(r)));
 // P-FLEET.L1/L2/L4/L5: the local lane manager - N gated headless LUCID agents on this machine under the
 // sustained-pressure guard. Lanes default to the MASTER session's current model unless the user picks
 // another. Every spawned/recovered session is NAMED in the durable lane-session ledger (P-FLEET.L5), so
@@ -1787,7 +1795,12 @@ try {
   if (existsSync(LATENCY_LOG_PATH)) backend.durations.seedFromLatencyLines(readFileSync(LATENCY_LOG_PATH, "utf8").split("\n").slice(-200));
 } catch { /* no history yet */ }
 backend.carriedNotes = () => carryPendingNotes("master"); // ADR-0414: same carry as the lanes
+// P-HOLDER.1 (ADR-0534): lanes run under lucid-holder when it is built or shipped, so a restart, an update or a
+// closed window leaves their agents running. LUCID_LANE_HOLDERS=0 turns it off (lanes are this engine's children).
+const laneHolders = process.env.LUCID_LANE_HOLDERS === "0" ? null : HolderPool.forEngine();
+console.log(laneHolders ? `[fleet] lane holders on (${laneHolders.binary})` : "[fleet] lane holders off: lanes end with this engine");
 const fleet: FleetLaneManager = new FleetLaneManager({
+  holders: laneHolders,
   argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger,
   masterSessionId: () => backend.currentSessionId(), // P-SWITCH.2 (ADR-0404): one session, one owner
   claims: backend.writeClaims, history: backend.durations, // P-WAIT.1: one set of file claims, P-PROGRESS.1: one estimate history, with the master
@@ -1923,11 +1936,13 @@ function spokeHolding(id: string): SessionLiveSpoke | null {
 // endpoint tooling (Defender / Intune) can identify the agent instead of classifying it as shadow AI. Only
 // when Electron launched us (LUCID_DATA_ROOT); a standalone dev engine is not an install. Rewritten each
 // launch, so MCP changes surface at the next start. Advisory: a failed write is logged, never fatal.
-if (process.env.LUCID_DATA_ROOT) {
+// ADR-0538: written once the port is bound (PORT=0 picks it then), so it never names port 0.
+function publishLocalAgentManifest(port: number): void {
+  if (!process.env.LUCID_DATA_ROOT) return;
   const manifest = buildLocalAgentManifest({
     build: BUILD,
     version: APP_VERSION,
-    port: PORT,
+    port,
     hostExecutable: process.env.LUCID_HOST_EXE || null,
     engineExecutable: basename(process.execPath),
     // Agent mode answers omp's per-tool asks itself (the in-process gate and the exec/egress tier prompts
@@ -2041,6 +2056,9 @@ const plugins = new PluginRuntime({
   onMcpChange: () => backend.restart(),
 });
 process.on("exit", () => { try { plugins.stopAllSync(); } catch { /* dying anyway */ } });
+// ADR-0542: the first start of a release after a dev build removes the development modules (data kept), before
+// any plugin can start. Every start records the version that ran. A failure here must never stop the engine.
+try { runReleaseCleanup(APP_VERSION); } catch (e) { console.error(`[release-cleanup] ${e instanceof Error ? e.message : String(e)}`); }
 // P-PREVIEW.3a-shot (ADR-0096): latest PNG of the rendered preview, pushed by the renderer after each render
 // (Electron capturePage → /api/preview/shot-cache) and read by the agent's preview_screenshot tool. In-memory.
 let latestPreviewShot: string | null = null;
@@ -2451,7 +2469,7 @@ function startOauthBroker(oauthId: string, promptAnswer?: string): Promise<{ sta
         console.error(`[oauth] no URL from broker for ${oauthId} via ${ompBin()} — stdout=${JSON.stringify(out.slice(0, 200))} stderr=${JSON.stringify(err.slice(0, 200))}`);
       }
       // A device broker may only hand the UI an ALLOWLISTED https URL (the renderer opens it); anything
-      // else is reported in the output text, never opened. Non-device flows keep today's behaviour.
+      // else is reported in the output text, never opened. Non-device flows keep today's behavior.
       const safeUrl = showCode && url && !deviceUrlAllowed(oauthId, url) ? "" : url;
       if (showCode && url && !safeUrl) console.error(`[oauth] ${oauthId} printed a sign-in URL outside its allowlist; not opening it`);
       const code = codes?.code ?? undefined;
@@ -2519,13 +2537,17 @@ return Bun.serve({
   hostname: "127.0.0.1", // H1 (ADR-0022): loopback only — this control plane handles keys/passphrases.
   // ADR-0305 invariant: the window only renders the nonce-verified LOOPBACK engine; this bind is load-bearing.
   idleTimeout: 60,
-  async fetch(req, srv) {
+  // LH-03 (ADR-0544 as amended): a request whose MAC verifies under a held lane's channel key (fresh time, new nonce)
+  // is that lane's; its reply, whatever it is, carries the proof the lane's side checks. Every other reply passes
+  // through untouched. The handler body below keeps its indentation (same reason as the bind wrapper).
+  async fetch(req, srv) { const channel = laneHolders === null ? null : await laneHolders.channels.authenticate(req, new URL(req.url)); const reply = await (async (): Promise<Response> => {
     const url = new URL(req.url);
     const p = url.pathname;
     let ctrlPairing: Pairing | null = null;
     // H2 (ADR-0022): reject anything a web page or DNS-rebind could forge against
     // the fixed local port (foreign Host/Origin, or a non-JSON state-changing body).
-    if (!isAllowedRequest(reqShape(req), PORT)) return new Response("forbidden", { status: 403 });
+    // ADR-0538: PORT=0 binds an ephemeral port, so the Host a client must use is the bound one.
+    if (!isAllowedRequest(reqShape(req), srv.port ?? PORT)) return new Response("forbidden", { status: 403 });
     // ADR-0024: the sensitive /api surface additionally requires the per-launch token (carried by
     // the renderer from the injected HTML). /api/health is exempt — main.ts polls it before the
     // page (and thus the token) exists, and it returns no data. Static assets/HTML aren't /api/*.
@@ -2553,7 +2575,10 @@ return Bun.serve({
       // P-CTRL.2 (ADR-0438): a paired controller's token (header only) opens CONTROLLER_ROUTES and nothing else.
       const headerToken = req.headers.get("x-lucid-token");
       ctrlPairing = CONTROLLER_ROUTES.has(p) && !tokenValid(headerToken, TOKEN) ? await controllerDeps.store.verify(headerToken) : null;
-      const authorized = apiAuthorized({ path: p, headerToken, queryToken: url.searchParams.get("t"), uiToken: TOKEN, agentToken: AGENT_TOKEN, queryRoutes: QUERY_TOKEN_ROUTES, agentRoutes: AGENT_ROUTES, controllerRoutes: CONTROLLER_ROUTES, controllerAuthorized: ctrlPairing !== null });
+      // LH-03 (ADR-0544 as amended): a request that authenticated as a held lane (above) opens CHANNEL_AUTH_ROUTES,
+      // and only where every speaker it names is that lane (a beat's session is the omp session the lane runs).
+      const channelAuthorized = channel !== null && channelAdmits(channel, url, (laneId) => fleet.owners().find((o) => o.id === laneId)?.sessionId ?? null);
+      const authorized = apiAuthorized({ path: p, headerToken, queryToken: url.searchParams.get("t"), uiToken: TOKEN, agentToken: AGENT_TOKEN, queryRoutes: QUERY_TOKEN_ROUTES, agentRoutes: AGENT_ROUTES, controllerRoutes: CONTROLLER_ROUTES, controllerAuthorized: ctrlPairing !== null, channelAuthorized, channelRoutes: CHANNEL_AUTH_ROUTES });
       if (!authorized) return new Response("forbidden", { status: 403 });
     }
     try {
@@ -3750,7 +3775,7 @@ return Bun.serve({
           }
           const kokoro = provider === "local-tts";
           const key = kokoro ? undefined : process.env.OPENAI_API_KEY; // presence guaranteed by the readiness check above
-          // P-VOICE.2: honour the SELECTED voice (this was pinned to alloy/af_heart, which made the picker a
+          // P-VOICE.2: honor the SELECTED voice (this was pinned to alloy/af_heart, which made the picker a
           // no-op for these engines). resolveVoice falls back to the engine default when the stored id
           // belongs to a different engine, so a mid-session provider switch can't 400 the request.
           const voice = resolveVoice(provider, (typeof b.voiceId === "string" && b.voiceId) || v.ttsVoice);
@@ -4224,7 +4249,7 @@ return Bun.serve({
       if (p === "/api/build-info") {
         return json({ ok: true, data: buildInfoView(BUILD, {
           version: APP_VERSION,
-          port: PORT,
+          port: ENGINE_PORT,
           dataRoot: process.env.LUCID_DATA_ROOT || "",
           settingsFile: process.env.LUCID_GUI_SETTINGS_FILE || join(homedir(), ".omp", "lucid-gui.json"),
           personalDir: personalBaseDir(),
@@ -5352,13 +5377,13 @@ return Bun.serve({
           locks: managedLocks(mc.config),
         } });
       }
-      // P-IDE.1c (ADR-0029): the China-origin data-sovereignty acknowledgement gate. GET returns the
+      // P-IDE.1c (ADR-0029): the China-origin data-sovereignty acknowledgment gate. GET returns the
       // flag; POST {acknowledge:true} after the user types ACKNOWLEDGE unlocks those models in the picker.
       if (p === "/api/china-ack") {
         if (req.method === "POST") { const b = await readBody<{ acknowledge?: unknown }>(req); return json({ ok: true, data: { acknowledged: !!setChinaModelsAcknowledged(!!b.acknowledge).chinaModelsAcknowledged } }); }
         return json({ ok: true, data: { acknowledged: chinaModelsAcknowledged() } });
       }
-      // The third-party / non-U.S. / custom "More providers" acknowledgement gate (mirrors china-ack).
+      // The third-party / non-U.S. / custom "More providers" acknowledgment gate (mirrors china-ack).
       if (p === "/api/thirdparty-ack") {
         if (req.method === "POST") { const b = await readBody<{ acknowledge?: unknown }>(req); return json({ ok: true, data: { acknowledged: !!setThirdPartyProvidersAcknowledged(!!b.acknowledge).thirdPartyProvidersAcknowledged } }); }
         return json({ ok: true, data: { acknowledged: thirdPartyProvidersAcknowledged() } });
@@ -5970,7 +5995,12 @@ return Bun.serve({
       // hash, signature, authenticode, scan; desktop/plugins/install.ts) and stops a running copy before the
       // version pointer moves; start/stop drive desktop/plugins/runtime.ts; uninstall keeps the data dir
       // unless keepData is explicitly false.
-      if (p === "/api/plugins" && req.method === "GET") return json({ ok: true, data: { plugins: plugins.list() } });
+      // ADR-0541: `offered` is what this build ships in <resources>/addons (desktop/addons in a dev run), listed
+      // so the card can say Install or Not in this build. Nothing there installs until install-offered.
+      if (p === "/api/plugins" && req.method === "GET") {
+        const offered = readOfferedAddons(ADDONS_DIR).map((a) => ({ id: a.id, version: a.version }));
+        return json({ ok: true, data: { plugins: plugins.list(), offered } });
+      }
       if (p === "/api/plugins/license" && req.method === "GET") return json({ ok: true, data: readPluginLicense(url.searchParams.get("id") ?? "") });
       if (p === "/api/plugins/install-from-url" && req.method === "POST") {
         srv.timeout(req, 0); // a large package (download + per-file scan) can outlast the 60 s idle limit
@@ -5992,26 +6022,35 @@ return Bun.serve({
         const r = await installPluginFile(String(b.path ?? ""), { sha256: String(b.sha256 ?? ""), acceptUnsigned: b.acceptUnsigned === true }, { beforeSwitch: async (id) => { await plugins.stop(id); } });
         return json({ ok: true, data: r.ok ? { ok: true, id: r.id, version: r.version, signed: r.signed } : r });
       }
+      // ADR-0541: install an add-on this build offers (the user pressed Install on its card). Only an id the
+      // addons index names, only the bytes its sha256 names, signed, through the private-install gates.
+      if (p === "/api/plugins/install-offered" && req.method === "POST") {
+        srv.timeout(req, 0);
+        const b = await readBody<{ id?: unknown }>(req);
+        const r = await installOfferedPlugin(String(b.id ?? ""), ADDONS_DIR, { beforeSwitch: async (id) => { await plugins.stop(id); } });
+        return json({ ok: true, data: r.ok ? { ok: true, id: r.id, version: r.version, signed: r.signed } : r });
+      }
       if (p === "/api/plugins/start" && req.method === "POST") {
         const b = await readBody<{ id?: unknown }>(req);
         const id = String(b.id ?? "");
         const started = await plugins.start(id);
         // ADR-0514: the hub plugin's panel opens only with a one-time bootstrap secret it minted for this engine,
-        // framed only by this window (engineAppUrl's origin).
+        // framed by nothing but this window's origin. ADR-0543: the IDE opens it top level in its own window.
         if (started.ok && id === REMOTE_SPOKES_PLUGIN) return json({ ok: true, data: await remoteSpokesPanelUrl(remoteSpokesDeps, `http://127.0.0.1:${ENGINE_PORT}`) });
         return json({ ok: true, data: started });
       }
+      // ADR-0546: these are the USER's stop and uninstall, so the plugin also stays stopped at the next launch.
       if (p === "/api/plugins/stop" && req.method === "POST") {
         const b = await readBody<{ id?: unknown }>(req);
-        return json({ ok: true, data: await plugins.stop(String(b.id ?? "")) });
+        return json({ ok: true, data: await plugins.stop(String(b.id ?? ""), { byUser: true }) });
       }
       if (p === "/api/plugins/uninstall" && req.method === "POST") {
         const b = await readBody<{ id?: unknown; keepData?: unknown }>(req);
-        const id = String(b.id ?? "");
-        const stopped = await plugins.stop(id);
-        if (!stopped.ok) return json({ ok: true, data: stopped });
-        return json({ ok: true, data: uninstallPlugin(id, b.keepData !== false) });
+        return json({ ok: true, data: await plugins.uninstall(String(b.id ?? ""), b.keepData !== false) });
       }
+      // ADR-0542: the notice for the last dev-to-release cleanup, shown once; ack marks it seen.
+      if (p === "/api/release-cleanup" && req.method === "GET") return json({ ok: true, data: pendingReleaseCleanup() });
+      if (p === "/api/release-cleanup/ack" && req.method === "POST") return json({ ok: true, data: acknowledgeReleaseCleanup() });
       // P-SKILLREG.2 (ADR-0102): the PUBLISH seam. Reads a codified skill's SKILL.md and publishes it as a
       // versioned artifact to the configured targets (fail-safe fan-out). Public ships the LOCAL publisher;
       // a declared remote with no registered publisher is a clean no-op. Publishing establishes NO trust:
@@ -6146,7 +6185,7 @@ return Bun.serve({
       if (p === "/api/chat/cancel" && req.method === "POST") {
         const body = req.body ? await readBody<{ turnId?: unknown; requestId?: unknown }>(req) : {};
         if ((body.turnId !== undefined && typeof body.turnId !== "string") || (body.requestId !== undefined && typeof body.requestId !== "string")) return Response.json({ ok: false, error: "turnId and requestId must be strings" }, { status: 400 });
-        if ((body.turnId !== undefined || body.requestId !== undefined) && !backend.turnStatus(body.turnId, body.requestId)) return Response.json({ ok: false, error: "The requested chat turn is no longer available. A different turn will not be cancelled." }, { status: 409 });
+        if ((body.turnId !== undefined || body.requestId !== undefined) && !backend.turnStatus(body.turnId, body.requestId)) return Response.json({ ok: false, error: "The requested chat turn is no longer available. A different turn will not be canceled." }, { status: 409 });
         backend.cancel();
         return json({ ok: true, data: { cancelled: true } });
       }
@@ -6271,7 +6310,7 @@ return Bun.serve({
       }
       if (p === "/api/fleet/status") return json({ ok: true, data: await fleet.status() });
       // P-AOS.1 (ADR-0452): the standing fleet goal. UI token only (never AGENT_ROUTES): criteria are verified
-      // and the goal is paused, resumed or cancelled by the human, per AOS-1 section 7.
+      // and the goal is paused, resumed or canceled by the human, per AOS-1 section 7.
       if (p === "/api/fleet/goal" && req.method === "GET") return json({ ok: true, data: fleetGoal.snapshot() });
       if (p === "/api/fleet/goal" && req.method === "POST") return json({ ok: true, data: fleetGoal.set(await readBody<unknown>(req)) });
       if (p === "/api/fleet/goal/criterion" && req.method === "POST") {
@@ -6676,7 +6715,7 @@ return Bun.serve({
         // P-REATTACH.1 + P-INTERJECT.1: a prompt that arrives while the master turn is RUNNING is an
         // INTERJECTION, not a superseding turn. The old path called backend.prompt() unconditionally,
         // which silently stole the running turn's listener and raced a second session/prompt onto the
-        // same session - omp cancelled the in-flight turn (stopReason=cancelled), the new stream never
+        // same session - omp canceled the in-flight turn (stopReason=cancelled), the new stream never
         // saw the events, and the composer froze on a blinking cursor while work continued invisibly.
         // Now: attach THIS stream as the running turn's live output, then queue the text on the
         // interject store (delivered into the turn at its next tool boundary). Attach BEFORE queueing:
@@ -6991,7 +7030,7 @@ return Bun.serve({
       return json({ ok: false, error: "internal error" });
     }
     return new Response("not found", { status: 404 });
-  },
+  })(); return channel === null ? reply : answerChannel(channel, reply); },
 });
 } catch (err) {
   const e = err as NodeJS.ErrnoException;
@@ -7035,6 +7074,7 @@ try {
   console.error(`[discovery] could not publish ${NONCE_PATH}: ${String(err)}`);
 }
 process.on("exit", () => { removeDiscovery(DISCOVERY_PATH); removeDiscovery(NONCE_PATH); });
+publishLocalAgentManifest(ENGINE_PORT);
 
 // P-PREVIEW.3a-shot (ADR-0096): hand the omp subprocess a ready-to-use URL (real bound port + token) for the
 // agent's preview_screenshot tool to fetch the cached shot. omp is spawned later (lazily, by acp_backend in
@@ -7131,10 +7171,23 @@ await refreshRecall();
 backend.startAutomationScheduler();
 // P-SCHED.1 (ADR-0443): the scheduled LANE jobs tick beside it, same envelope (only while the app runs).
 jobScheduler.start();
+// P-PLUGINS.8 (ADR-0546): the plugins the user left running come back, once, now that the engine serves. Detached:
+// the bind never waits on a plugin; each one gets a bounded retry, and a user's Stop meanwhile cancels its retry.
+void plugins.autostart().catch((e) => console.warn("[plugins] autostart failed:", e));
 // ADR-0501: controller lanes the previous engine ran come back idle on their own lane ids and omp sessions (after
 // the child env above is set, so a restored lane is wired like a new one). Detached: the bind never waits on omp;
 // controller routes do (the gate set with controllerDeps), and open when this settles, success or not.
-void restoreControllerLanes(controllerDeps).then(
+// P-HOLDER.1 (ADR-0534): first take back every lane a holder kept running (its turn, if any, carries on), so the
+// controller restore below finds those lanes running instead of respawning them and calling their turns interrupted.
+async function reattachHeldLanes(): Promise<void> {
+  if (!laneHolders) return;
+  for (const rec of laneHolders.all()) {
+    // One record that throws must not keep the others (and the controller restore after them) from coming back.
+    const r = await fleet.reattach(rec).catch((e) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }));
+    console.log(r.ok ? `[fleet] reattached ${rec.laneId} (${rec.name})${rec.inFlight ? ", its turn carries on" : ""}` : `[fleet] ${rec.laneId} did not come back: ${r.reason}`);
+  }
+}
+void reattachHeldLanes().catch((e) => console.warn("[fleet] reattach failed:", e)).then(() => restoreControllerLanes(controllerDeps)).then(
   (back) => { if (back.length) console.log(`[controller] restored ${back.length} lane(s): ${back.join(", ")}`); },
   (e) => console.warn("[controller] lane restore failed:", e),
 ).finally(() => { controllerDeps.restoring = null; controllerRestore.resolve(); });

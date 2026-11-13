@@ -14,10 +14,13 @@
 //     it may also name a model, only one this engine lists as available (else 400); absent, the fleet's default.
 //   - prompt text goes through the fail-closed scan before it reaches a lane. Scan unavailable == refused.
 //   - Malformed anything (bad JSON, extra keys, wrong types, oversize text) is refused, never coerced.
+//   - schema (ADR-0537) answers this API as an OpenAPI 3.1 document (openapi.ts), to the UI token and to any paired
+//     controller alike, so outside clients can be built against it. A route added here goes into that document too:
+//     openapi.test.ts fails on a route the document misses or names wrongly.
 // Events are metadata only (pairing, lane, verdict, counts); prompt text and tokens never reach them.
 //
 // Lane lifecycle (ADR-0500/0501/0502):
-//   - close ends one of the controller's OWN lanes: an open parked ask is denied, a running turn is cancelled, the
+//   - close ends one of the controller's OWN lanes: an open parked ask is denied, a running turn is canceled, the
 //     lane is removed, and its slot frees (the two-lane cap counts live lanes only).
 //   - a controller lane's identity is recorded (lane_store.ts), so after an engine restart it comes back idle on
 //     the same lane id and omp session; a turn that was running is reported interrupted, never re-run. A pairing
@@ -36,6 +39,7 @@ import { Telemetry, type EventSink } from "../../harness/telemetry/events.ts";
 import type { LaneEvent, LaneTurnRecord, LaneView } from "../fleet_lanes.ts";
 import { closeLaneWorktree, createRemoteLaneWorktree, removeLaneWorktree } from "../lane_worktree.ts";
 import type { ControllerLane, ControllerLaneStore } from "./lane_store.ts";
+import { controllerOpenApi } from "./openapi.ts";
 import { DEFAULT_APPROVAL_HOURS, MAX_APPROVAL_HOURS, p256FromSpki, verifyRemoteDecision, type RemoteAsk } from "./remote_policy.ts";
 import { isLaneCount, PAIRING_NAME_RE, SPOKE_NODE_RE, type Pairing, type PairingStore, type RemotePolicy } from "./store.ts";
 
@@ -43,8 +47,8 @@ import { isLaneCount, PAIRING_NAME_RE, SPOKE_NODE_RE, type Pairing, type Pairing
 export const CONTROLLER_ROUTES: ReadonlySet<string> = new Set(
   // ask, decide, deny: P-CTRL-REMOTE.1 (ADR-0531). The controller can read a remote ask and deny it; an allow
   // needs a decision the engine verifies against the paired root, so the controller only carries it.
-  // close: ADR-0500.
-  ["lanes", "spawn", "prompt", "status", "result", "cancel", "close", "ask", "decide", "deny"].map((r) => `/api/controller/${r}`),
+  // close: ADR-0500. schema: ADR-0537, the one route the UI token also reads here.
+  ["lanes", "spawn", "prompt", "status", "result", "cancel", "close", "ask", "decide", "deny", "schema"].map((r) => `/api/controller/${r}`),
 );
 
 /** ADR-0425: at most two controller-owned live lanes per pairing, unless the human granted the pairing its own
@@ -65,14 +69,21 @@ export interface ControllerDeps {
   lanes: ControllerLaneStore;
   fleet: {
     spawn(opts: { cwd: string; id: string; name?: string; model?: string; supervised: true; remote?: { approvalHours: number; offTask: boolean }; resume?: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }>;
-    remove(laneId: string, force: boolean): { ok: boolean; reason?: string };
+    /** `ended` settles once the lane's agent is confirmed ended (a held lane: its holder too). */
+    remove(laneId: string, force: boolean): { ok: boolean; reason?: string; ended?: Promise<void> };
     pendingAsk(laneId: string): RemoteAsk | null;
     answerAsk(laneId: string, askId: string, allow: boolean): { ok: boolean };
     prompt(laneId: string, text: string, sink: (e: LaneEvent) => void): Promise<void>;
     status(): Promise<{ lanes: LaneView[] }>;
     laneTranscript(laneId: string): { role: "user" | "assistant"; text: string }[];
     laneRunning(laneId: string): boolean | null;
+    lanePolicy(laneId: string): { supervised: boolean; remote: { approvalMs: number; offTask: boolean } | null } | null;
     cancel(laneId: string): { ok: boolean };
+    /** P-HOLDER.1: the settle of a turn a reattach resumed on this lane, or null when none is running. */
+    resumedTurn(laneId: string): Promise<void> | null;
+    /** LH-04: why this lane's holder, alive, did not answer its reattach (its agent may still run), or null. Absent:
+     *  a fleet without holders. */
+    unreachedHolder?(laneId: string): string | null;
   };
   /** ADR-0511: the model ids this engine lists as available (the model picker's list, with its platform, AskSage
    *  and managed-policy narrowing). A spawn may name one of these. Absent: a spawn that names a model is refused. */
@@ -131,8 +142,11 @@ async function resolveWorkspace(path: string): Promise<string | null> {
   }
 }
 
-const reply = (status: number, data: Record<string, unknown>) =>
-  new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
+const reply = (status: number, data: Record<string, unknown>) => new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
+/** ADR-0537: this API as OpenAPI 3.1, built on the first request (not at import, so no import order can see a
+ *  constant it reads still uninitialized) from the limits this handler enforces, then kept. */
+let schemaJson: string | null = null;
 const malformed = () => reply(400, { ok: false, error: "malformed request" });
 const UNKNOWN_LANE = { ok: false, error: "unknown lane" };
 /** A JSON object body carrying exactly `keys` (each optional unless `required`), every value a string. */
@@ -243,6 +257,14 @@ export async function handleController(req: Request, path: string, pairing: Pair
     return reply(200, { ok: true });
   }
 
+  // ADR-0537: the API's own description, for the UI token (no pairing here) and any paired controller alike. The
+  // engine's /api gate has already refused every other caller (no token, the agent token, an unverified one).
+  if (path === "/api/controller/schema") {
+    if (req.method !== "GET" || url.search) return malformed();
+    schemaJson ??= JSON.stringify(controllerOpenApi({ maxPromptChars: MAX_PROMPT_CHARS, maxModelChars: MAX_MODEL_CHARS, modelId: MODEL_ID_RE, defaultMaxLanes: MAX_LANES_PER_PAIRING, restoreWaitMs: RESTORE_WAIT_MS }));
+    return new Response(schemaJson, { status: 200, headers: JSON_HEADERS });
+  }
+
   // ── Controller routes: a live pairing or nothing ────────────────────────────────────────────────────────
   if (!pairing || !CONTROLLER_ROUTES.has(path)) return new Response("forbidden", { status: 403 });
 
@@ -315,7 +337,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
   }
 
   if (path === "/api/controller/deny") {
-    // Refusing is always safe, so the controller may do it on its own (an expired wait, a cancelled task).
+    // Refusing is always safe, so the controller may do it on its own (an expired wait, a canceled task).
     if (!b) return malformed();
     const r = deps.fleet.answerAsk(laneId, b.askId!, false);
     if (!r.ok) return reply(409, { ok: false, error: "no such open ask" });
@@ -355,7 +377,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
   }
 
   // ── ADR-0500: close one of this pairing's lanes ─────────────────────────────────────────────────────────
-  // A busy lane is cancelled, then closed (not refused): close is the controller's final word on its own lane, a
+  // A busy lane is canceled, then closed (not refused): close is the controller's final word on its own lane, a
   // parked ask means the lane is mid-turn anyway, and nothing on disk is lost (a remote lane's work is committed
   // onto its review branch; the omp session log stays). Audit lines land before the effect.
   if (path === "/api/controller/close") {
@@ -398,21 +420,67 @@ export async function handleController(req: Request, path: string, pairing: Pair
   return reply(202, { ok: true, data: { runId: ids.runId, verdict: verdict.trustLabel } });
 }
 
+/** Whether a running lane's policy is the one a pairing's lane is spawned with (supervised; the pairing's remote
+ *  approval window and off-task check, or none). */
+function samePolicy(
+  policy: { supervised: boolean; remote: { approvalMs: number; offTask: boolean } | null } | null,
+  remote: { approvalHours: number; offTask: boolean } | null | undefined,
+): boolean {
+  if (!policy?.supervised) return false;
+  if (!remote) return policy.remote === null;
+  return policy.remote !== null && policy.remote.approvalMs === remote.approvalHours * 3_600_000 && policy.remote.offTask === remote.offTask;
+}
+
 /** ADR-0501: at engine boot, bring every recorded controller lane back, idle, under its own lane id, on its own
  *  omp session (session/load when omp offers it; otherwise a fresh session that carries the recorded transcript
  *  as memory, the P-FLEET.L4 fallback). A turn that was running when the engine died is NOT re-run: it is closed
  *  in the transcript with INTERRUPTED_NOTE and the lane reports `interrupted`. A lane whose pairing was revoked
- *  (or no longer owns it), or that cannot start again, is retired like a close. Nothing is touched while either
- *  store is broken. Returns the lane ids that came back. */
+ *  (or no longer owns it), or that cannot start again, is retired like a close (a held lane the fleet already took
+ *  back is ended first). Neither store is touched while either is broken; held controller lanes already back are
+ *  ended then. A lane whose holder is alive but did not answer is left alone this boot. Returns the lane ids that
+ *  came back. */
 export async function restoreControllerLanes(deps: ControllerDeps): Promise<string[]> {
-  if (deps.store.broken || deps.lanes.broken) return [];
+  if (deps.store.broken || deps.lanes.broken) {
+    // P-HOLDER.1: the held lanes are reattached before this restore (dev.ts), so a controller lane (supervised) may
+    // already run again. A store that cannot be read cannot say which pairing owns it or under what policy, so none
+    // runs unchecked: each is ended (the stores themselves are left as they are).
+    for (const lane of (await deps.fleet.status()).lanes) {
+      if (deps.fleet.lanePolicy(lane.id)?.supervised) await deps.fleet.remove(lane.id, true).ended;
+    }
+    return [];
+  }
   const back: string[] = [];
+  // LH-04: lanes whose holder is alive but did not answer keep their slot and their record for the next start.
+  const kept: string[] = [];
   for (const rec of deps.lanes.all()) {
     const pairing = deps.store.byId(rec.pairingId);
     const ids = { runId: Snowflake.next(), sessionId: rec.sessionId ?? `controller:${rec.pairingId}` };
+    // LH-04: its agent may still run in the lane's folder under a holder that did not answer, so the lane is neither
+    // retired (its worktree is in use) nor started again over it this boot; a later start tries the holder again.
+    const unreached = deps.fleet.unreachedHolder?.(rec.id) ?? null;
+    if (unreached !== null) {
+      emit(deps, "controller_ruling", ids, { pairing: pairing?.name ?? "", lane_id: rec.id, ruling: "lane_not_restored", backend: "lane-lifecycle", reason: `its holder did not answer; tried again at the next start (${unreached})`.slice(0, 200) });
+      kept.push(rec.id);
+      continue;
+    }
     if (!pairing || !pairing.lanes.includes(rec.id)) {
+      // A lane its holder kept running is already back in the fleet: it ends before it is retired.
+      if (deps.fleet.laneRunning(rec.id) !== null) await deps.fleet.remove(rec.id, true).ended;
       const review = await retireLane(deps, rec.id, pairing?.id ?? null, "ended: its pairing was revoked before the engine restarted");
       emit(deps, "controller_ruling", ids, { pairing: pairing?.name ?? "", lane_id: rec.id, ruling: "lane_not_restored", backend: "lane-lifecycle", reason: "pairing revoked", ...(review.reviewBranch ? { branch: review.reviewBranch } : {}) });
+      continue;
+    }
+    // P-HOLDER.1 (ADR-0534): a holder kept this lane's agent running and the fleet already took it back, its turn
+    // (if any) still going: nothing was interrupted. The turn records itself when it settles, as a live one does.
+    // LH-02: only when it runs under the pairing's policy (supervised, the pairing's remote approval). A held lane
+    // that came back under any other policy is ended and started again the normal way below.
+    if (deps.fleet.laneRunning(rec.id) !== null && !samePolicy(deps.fleet.lanePolicy(rec.id), pairing.remote)) await deps.fleet.remove(rec.id, true).ended;
+    if (deps.fleet.laneRunning(rec.id) !== null) {
+      const runId = rec.inFlight?.runId;
+      const resumed = deps.fleet.resumedTurn(rec.id);
+      if (runId) void (resumed ?? Promise.resolve()).finally(() => settleLane(deps, rec.id, runId)).catch(() => {});
+      emit(deps, "controller_ruling", ids, { pairing: pairing.name, lane_id: rec.id, ruling: "lane_restored", backend: "lane-lifecycle", reason: rec.inFlight ? "reattached to its running agent; the turn carries on" : "reattached to its running agent" });
+      back.push(rec.id);
       continue;
     }
     const transcript: LaneTurnRecord[] = rec.inFlight
@@ -435,7 +503,7 @@ export async function restoreControllerLanes(deps: ControllerDeps): Promise<stri
     back.push(rec.id);
   }
   // Every other lane id a pairing held ended with the previous engine; its slot and its id go.
-  deps.store.retainLanes(new Set(back));
+  deps.store.retainLanes(new Set([...back, ...kept]));
   return back;
 }
 

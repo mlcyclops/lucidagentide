@@ -18,7 +18,7 @@ export gate behaves exactly as in Agent Mode. If a step needs a permission you d
   executable is absent. Report the verdict you got, never a hopeful summary of it.
 - Long work is a JOB (`GET /api/creator/jobs`). Before starting one, check admission; if the governor refused,
   the ledger already has the measured reason and you quote it instead of retrying blindly. A stop is a
-  REQUEST: the job is not cancelled until its runner confirms.
+  REQUEST: the job is not canceled until its runner confirms.
 - You MUST read the registry (`GET /api/creator/registry`) and act on the capability LABEL:
   - `available` - an official documented API/CLI/runtime exists. Use it.
   - `unverified-endpoint` - no public self-serve API is published. The user supplies base URL + credential; probe first, then call.
@@ -55,7 +55,7 @@ export gate behaves exactly as in Agent Mode. If a step needs a permission you d
 | Design (local) | Layered raster, vector, and motion editing in the renderer; traced mask hints; PNG / GIF / APNG / SVG / PSD / PSB export | No egress. Agents edit STRUCTURE only through `design_apply`; pixel work is requested and the user clicks Allow |
 | Drift (CutWire, local) | Timeline video editing in the user's open Drift project through its own localhost agent protocol: import, cut, trim, transform, keyframes with easing, effects, transitions, titles, captions from transcripts, beat and scene cuts, export to MP4 / WebM / GIF (`drift_status`, `drift_read`, `drift_apply`, `drift_export`) | GPL-3.0 editor the user installs and runs; LUCID never spawns it or scripts its GUI. Agent access is OFF at every Drift launch until the user turns it on (Drift: Settings, Agent access). Drift Assets from its Market are CC BY-NC-SA 4.0 (credit "Drift Assets", non-commercial, share-alike). Cloud voices, the marketplace and ElevenLabs transcription egress from inside Drift: refused under CUI lockdown, and the user's consent for them lives in Drift, never in a tool call |
 | DGX vision service | SAM 2.1 segmentation from traced strokes, layer decomposition, matting, inpainting, tiled upscale, depth, region labels, VTracer vectorize | Runs on the user's DGX (port 8090) through the platform's SSH forward; import it from the Private AI Platform mailbox. Capability is whatever `/health` proves. One GPU job at a time (a 409 means wait). Labels it returns are untrusted model text |
-| HeyGen, Autodesk APS, Bluebeam Studio, ClassCAD, ODA Drawings | Catalogued paid providers the user may declare | LUCID makes NO calls to them this phase. They are metered or licensed (HeyGen plans, APS Flex tokens, Bluebeam Core plus app approval, ClassCAD CHF tiers with key sign-in and a relay you turn off with `CLASSCAD_SHARE=off`, ODA membership). Say so and offer the free provider instead |
+| HeyGen, Autodesk APS, Bluebeam Studio, ClassCAD, ODA Drawings | Cataloged paid providers the user may declare | LUCID makes NO calls to them this phase. They are metered or licensed (HeyGen plans, APS Flex tokens, Bluebeam Core plus app approval, ClassCAD CHF tiers with key sign-in and a relay you turn off with `CLASSCAD_SHARE=off`, ODA membership). Say so and offer the free provider instead |
 
 ## CUI lockdown
 
@@ -169,7 +169,7 @@ export gate behaves exactly as in Agent Mode. If a step needs a permission you d
   (place/move snap to gaps and the reply reports `requested` vs `placed`). `search({q})` and `toolbox({ops})`
   give exact schemas; never guess an op name or a parameter.
 - **See the footage the cheap way.** `activity({start,end})` tells you WHERE content, motion and loudness
-  change; `frames()` renders one labelled contact sheet of distinct moments; `capture({at})` is one full
+  change; `frames()` renders one labeled contact sheet of distinct moments; `capture({at})` is one full
   still. For talking footage, `transcribe({clip})` once, then `get_transcript` and `cut_words` / `keep_ranges`
   / `remove_silence({method:"vad"})`: read the words instead of watching.
 - **Edit in batches.** `drift_apply({ops:[{tool,args}...]})` runs the ops in order as ONE undo step the user

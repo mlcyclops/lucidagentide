@@ -92,7 +92,7 @@ describe("anti-fabrication: a fresh meter claims nothing (P-TOKENS.1)", () => {
       const r = row(rows, label);
       expect(r.value).toBe("not reported");
       expect(r.measured).toBe(false);
-      expect(r.hint && r.hint.length > 0).toBe(true); // an unmeasured row is never shown unlabelled
+      expect(r.hint && r.hint.length > 0).toBe(true); // an unmeasured row is never shown unlabeled
     }
     for (const r of rows) {
       expect(r.value).not.toContain("$0.00");

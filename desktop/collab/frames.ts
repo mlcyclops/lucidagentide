@@ -243,7 +243,7 @@ export type LucidCollabFrame = HostFrame | GuestFrame | SignalFrame;
 // P-PWA-FLEET.1 additions (`fleet-prompt`, `fleet-stop`, `fleet-answer`, `interject`) follow the same
 // additive rule: an older host simply drops them, so the protocol version stays 1.
 // P-PWA-FOCUS.1 additions (`watch`, `lane-sync`, and `EventFrame.lane`) are additive the same way, and the
-// DEFAULT on both ends is the pre-focus behaviour. An older HOST drops `watch` and keeps streaming only the
+// DEFAULT on both ends is the pre-focus behavior. An older HOST drops `watch` and keeps streaming only the
 // master, so a new guest that asked to watch a lane simply sees nothing arrive for it. An older GUEST never
 // sends `watch` at all, and the host sends a lane-scoped event ONLY to a guest that asked for that lane - so
 // an old guest cannot receive one and cannot mistake it for a master event. Protocol stays 1.

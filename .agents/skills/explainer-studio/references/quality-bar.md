@@ -38,7 +38,7 @@ Grade a finished explainer against every line. A single "no" means it is not don
 - [ ] Procedural sky gradient, matching fog, hemisphere fill plus one shadowed key light.
 - [ ] The subject sits on a ground or plinth; nothing floats without a reason.
 - [ ] At least 2 named views plus a cinematic camera that any input cancels.
-- [ ] One accent colour per concept, used identically in scene, label, and readout.
+- [ ] One accent color per concept, used identically in scene, label, and readout.
 
 ### Console
 

@@ -71,7 +71,7 @@ export const heuristicExtractor = (turn: { user: string; assistant: string }): F
   const seen = new Set<string>();
   const facts = out.filter((c) => { const k = `${c.kind}|${c.statement.toLowerCase()}`; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 12);
   // Co-occurrence: facts stated in the SAME turn are related context. Chain the non-link
-  // facts (URLs don't chain) with a weak, clearly-labelled "mentioned with" relation so the
+  // facts (URLs don't chain) with a weak, clearly-labeled "mentioned with" relation so the
   // graph shows connections offline. The model extractor supplies richer, semantic relations.
   const chainable = facts.filter((c) => c.kind !== "user:link");
   for (let i = 0; i < chainable.length - 1; i++) (chainable[i]!.relations ??= []).push({ to: chainable[i + 1]!.entity, relation: "mentioned with" });
@@ -148,7 +148,7 @@ export async function distillTurn(
   scanner: ScannerClient,
   opts: { userText: string; assistantText?: string; scope: PersonalScope; sessionId?: string; runId?: string; extract: Extractor; telemetry?: Telemetry; persist?: boolean; signal?: AbortSignal },
 ): Promise<DistillResult> {
-  // 0. Cancelled before we started: learn nothing, and do NOT count it as a gate block.
+  // 0. Canceled before we started: learn nothing, and do NOT count it as a gate block.
   if (opts.signal?.aborted) return { learned: 0, blocked: false, reason: "cancelled" };
   // 1. Scan the SOURCE (the user's own text). Anything not clean+trusted => learn nothing.
   const decision = await scanAndDecide(scanner, opts.userText, DEFAULT_POLICY);

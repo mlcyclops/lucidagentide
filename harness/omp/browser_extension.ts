@@ -40,6 +40,7 @@
 
 import { actionSpace, decide, DEFAULT_STEPS, type HistoryEntry, MAX_STEPS, PolicyError, policyQuestions, policyState, stalled } from "../browser_policy.ts";
 import { type BrowserAction, type BrowserFreshness, type BrowserPage, freshnessOf, isBrowserPageShape } from "../../desktop/browser_snapshot.ts";
+import { engineFetch } from "./engine_channel.ts"; // LH-03 (ADR-0544): a held lane's call is MACed and its answer proven
 
 interface ToolContentBlock { type: string; text?: string; data?: string; mimeType?: string }
 interface ToolResult { content: ToolContentBlock[]; isError?: boolean }
@@ -177,7 +178,7 @@ function renderRun(status: BrowserRunStatus, page: BrowserPage | null, history: 
     needs_values: `Supply values=${JSON.stringify({ [detail]: "..." })} and call browser_run again.`,
     max_steps: "The step budget ran out. Call browser_screenshot to check progress, then browser_run again to continue.",
     judgment_budget: "The judgment budget ran out (too many stale re-decisions). Call browser_screenshot to check the page, then browser_run again.",
-    cancelled: "The run was cancelled; nothing further was executed.",
+    cancelled: "The run was canceled; nothing further was executed.",
     failed: "No further action was executed. Call browser_screenshot to see the page state.",
   };
   lines.push(hint[status]);
@@ -290,7 +291,7 @@ export default function browserExtension(pi: unknown, deps: BrowserExtensionDeps
       const url = browserEndpoint(base, path);
       if (!url) return null;
       try {
-        const r = await fetch(url, {
+        const r = await engineFetch(url, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
@@ -375,7 +376,7 @@ export default function browserExtension(pi: unknown, deps: BrowserExtensionDeps
       description:
         "Click a point in the agent browser window. Coordinates are in SCREENSHOT pixel space: the " +
         "origin is the top-left of the most recent browser_screenshot image, x grows right, y grows " +
-        "down. Take a screenshot first, find the target in it, then click its centre. The window " +
+        "down. Take a screenshot first, find the target in it, then click its center. The window " +
         "receives it as ordinary pointer input, so hover menus and custom controls behave normally. " +
         "Set button to \"right\" to open a page's own context menu (no native OS menu appears, so a " +
         "web app's custom menu is what you get). Screenshot again afterwards to confirm what changed.",

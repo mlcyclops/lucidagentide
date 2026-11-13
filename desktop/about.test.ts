@@ -45,7 +45,7 @@ describe("aboutHtml", () => {
     expect(html).toContain("source-available, not OSI open-source");
   });
 
-  test("is a labelled, modal dialog with closable controls", () => {
+  test("is a labeled, modal dialog with closable controls", () => {
     expect(html).toContain('role="dialog"');
     expect(html).toContain('aria-modal="true"');
     expect(html).toContain("data-about-close");

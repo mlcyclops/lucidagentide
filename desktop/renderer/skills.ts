@@ -203,10 +203,10 @@ export const INSTALLED_SKILLS: BundledSkill[] = [
       "(action, scene, readouts, success check), Views, Console and keyboard map, Math model, Honesty table, Look, " +
       "Accessibility, Performance budget, Assets (default none), Kid safety, Verification plan, Out of scope. Show it; build " +
       "once it is complete and approved. Then: pure math module with a self-test, skeleton, one chapter at a time, write-up, verify. " +
-      "SCENE: gradient sky sphere shader (BackSide, depthWrite false) with Fog in the horizon colour; HemisphereLight fill plus " +
+      "SCENE: gradient sky sphere shader (BackSide, depthWrite false) with Fog in the horizon color; HemisphereLight fill plus " +
       "ONE shadowed DirectionalLight with a tight shadow camera; ACES tone mapping, sRGB output; a ground that fades into fog; " +
       "OrbitControls with damping and clamped polar angle and distance; presets eased over about 0.8 s; a cinematic orbit any " +
-      "input cancels; one accent colour per concept shared by mesh, label and readout. One state object drives scene, console " +
+      "input cancels; one accent color per concept shared by mesh, label and readout. One state object drives scene, console " +
       "and readouts and serializes to the URL hash. Keys: 1-9 chapters, V views, C cinematic, L labels, R replay. " +
       "EXACT MATH: integers and reduced rationals (BigInt, gcd, lcm, cross-multiplied comparison); NEVER display a binary " +
       "float; terminating decimals printed exactly, repeating blocks marked, rounded values shown with an approximately-equals " +
@@ -214,7 +214,7 @@ export const INSTALLED_SKILLS: BundledSkill[] = [
       "WRITE-UP: How it works, The idea, Worked examples (exact arithmetic), What's real, What's calculated, What's drawn to " +
       "illustrate, What's simplified, Controls, and a simplified-models line; say what is not to scale and give the real " +
       "figures; if unsure of a fact, leave it out. " +
-      "ACCESSIBILITY: semantic buttons, labelled ranges, visible focus, a full keyboard path, an aria-live readout, a canvas " +
+      "ACCESSIBILITY: semantic buttons, labeled ranges, visible focus, a full keyboard path, an aria-live readout, a canvas " +
       "text alternative, AA contrast; prefers-reduced-motion stops the cinematic camera, shake and auto-play and turns tweens " +
       "into cuts. " +
       "PERFORMANCE: setPixelRatio(min(devicePixelRatio, 2)); InstancedMesh for repeats; shared geometry and materials; " +
@@ -275,8 +275,8 @@ export const INSTALLED_SKILLS: BundledSkill[] = [
       "commit, endpoint file or chat, and never echo one. Check the Creator Resources tab before local GPU work; unknown load " +
       "is not spare capacity. Under CUI lockdown only on-device or attested DGX enclave endpoints are allowed. " +
       "BUDGET: total under about 5 MB with assets (under 1 MB without); GLB compressed with meshopt (preferred) or Draco via " +
-      "gltf-transform; KTX2 textures (ETC1S colour, UASTC normals) no larger than displayed; narration as Opus webm; decoders " +
-      "vendored locally and counted; record generator, prompt or script, model, licence and sha256 for every asset. When " +
+      "gltf-transform; KTX2 textures (ETC1S color, UASTC normals) no larger than displayed; narration as Opus webm; decoders " +
+      "vendored locally and counted; record generator, prompt or script, model, license and sha256 for every asset. When " +
       ".agents/skills/explainer-assets-gpu exists in the workspace, read references/dgx-access.md and asset-pipeline.md first.",
   },
   // CREATOR-CURRICULUM (ADR-0467): the curriculum crafts, generic and first-party, under ADR-0460's rules.

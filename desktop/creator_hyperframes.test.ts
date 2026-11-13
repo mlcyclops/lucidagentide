@@ -55,8 +55,8 @@ describe("the fixed argv", () => {
     expect(refusal({ projectDir: "C:/work/promo\nrm" })).toContain("control characters");
     expect(refusal({ roots: ["D:/approved"] })).toContain("workspace roots");
     expect(plan({ roots: ["c:\\work"] }).projectDir).toBe(PROJECT);
-    expect(plan({ projectDir: "/home/nick/promo", roots: ["/home/nick"] }).projectDir).toBe("/home/nick/promo");
-    expect(refusal({ projectDir: "/home/nickel/promo", roots: ["/home/nick"] })).toContain("workspace roots");
+    expect(plan({ projectDir: "/home/operator/promo", roots: ["/home/operator"] }).projectDir).toBe("/home/operator/promo");
+    expect(refusal({ projectDir: "/home/operators/promo", roots: ["/home/operator"] })).toContain("workspace roots");
   });
 
   test("unknown format or quality is refused, not defaulted", () => {
@@ -67,8 +67,8 @@ describe("the fixed argv", () => {
 
 describe("the child env", () => {
   test("telemetry is off, and engine secrets never reach the child", () => {
-    const env = hyperframesEnv({ PATH: "/usr/bin", HOME: "/home/nick", ELEVENLABS_API_KEY: "sk-secret", LUCID_COMFY_TOKEN: "t", HYPERFRAMES_NO_TELEMETRY: "0", HYPERFRAMES_BROWSER_PATH: "/usr/bin/chromium" });
-    expect(env).toEqual({ PATH: "/usr/bin", HOME: "/home/nick", HYPERFRAMES_BROWSER_PATH: "/usr/bin/chromium", HYPERFRAMES_NO_TELEMETRY: "1", DO_NOT_TRACK: "1" });
+    const env = hyperframesEnv({ PATH: "/usr/bin", HOME: "/home/operator", ELEVENLABS_API_KEY: "sk-secret", LUCID_COMFY_TOKEN: "t", HYPERFRAMES_NO_TELEMETRY: "0", HYPERFRAMES_BROWSER_PATH: "/usr/bin/chromium" });
+    expect(env).toEqual({ PATH: "/usr/bin", HOME: "/home/operator", HYPERFRAMES_BROWSER_PATH: "/usr/bin/chromium", HYPERFRAMES_NO_TELEMETRY: "1", DO_NOT_TRACK: "1" });
   });
 });
 

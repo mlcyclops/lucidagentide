@@ -14,7 +14,7 @@ the JVM.
   `lucid` on `PATH`. Only a `lucid` binary can ever be a candidate; if none is found the plugin asks
   you to install Lucid — it does **not** fall back to anything ungated.
 - **Project dir = boundary:** the open project is the agent's cwd (path containment, ADR-0022/0023).
-- **Fail-closed permissions:** an Ask-mode permission dialog that is cancelled/closed denies the call.
+- **Fail-closed permissions:** an Ask-mode permission dialog that is canceled/closed denies the call.
 - **Block banner:** the gate's `[BLOCKED …]` stderr signal surfaces in the tool window.
 
 ## Shared security contract

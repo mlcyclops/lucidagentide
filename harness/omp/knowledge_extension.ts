@@ -54,7 +54,8 @@ import {
   trustAdmits,
   type KgHit,
 } from "../personal/agent_kg.ts";
-import { neutralizeDelimiters } from "./mcp_result_gate.ts";
+import { engineFetch } from "./engine_channel.ts"; // LH-03 (ADR-0544): a held lane's call is MACed and its answer proven
+import { neutralizeDelimiters } from "../prompt/untrusted.ts";
 
 /** Shape the /api/kb/retrieve response into the tool's text result. PURE + exported for tests.
  *  - no URL (desktop not running / older omp) → a clear "unavailable" message.
@@ -212,7 +213,7 @@ export default function knowledgeExtension(pi: any): void {
         if (!url) return text(formatKnowledgeResult(null, false, query));
         const k = Number.isFinite(params?.k) ? Math.max(1, Math.min(20, Math.floor(params.k))) : 5;
         try {
-          const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query, mode: "compiled", k }) });
+          const r = await engineFetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query, mode: "compiled", k }) });
           if (!r.ok) return text(`Knowledge search failed (HTTP ${r.status}). The knowledge base may be empty — the user can ingest notes in the Knowledge panel.`);
           const body = await r.json().catch(() => null);
           return text(formatKnowledgeResult(body, true, query));
@@ -259,7 +260,7 @@ export default function knowledgeExtension(pi: any): void {
           ? Math.max(1, Math.min(MAX_LIMIT, Math.floor(p.limit)))
           : DEFAULT_LIMIT;
         try {
-          const r = await fetch(url, {
+          const r = await engineFetch(url, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ query, kinds: parseKinds(p.kinds), limit }),
@@ -316,7 +317,7 @@ export default function knowledgeExtension(pi: any): void {
         const entity = typeof p.entity === "string" ? p.entity.trim() : "";
         if (entity) write.entity = entity;
         try {
-          const r = await fetch(url, {
+          const r = await engineFetch(url, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(write),

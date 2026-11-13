@@ -10,7 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   ALERTS_MAX, approvalButtons, armClick, ARM_MS, clockLabel, deployChoices, hostLabel, hubActions, lanePolicyLabel, latencyLabel, mapHubSnapshot, mapSpokeRow, mibLabel,
-  MODEL_LIST_MAX, modelCount, REMOTE_TONE, remoteGlance, RESUME_TEXT, spokeActions, spokeAlerts, spokeState, stateLabel, taskButtons, taskModelChoices,
+  MODEL_LIST_MAX, modelCount, onOrbit, REMOTE_TONE, remoteGlance, remoteLanes, remoteTotals, RESUME_TEXT, spokeActions, spokeAlerts, spokeState, stateLabel, taskButtons, taskModelChoices,
   type RemoteApprovalView, type RemoteSpokeView, type RemoteTaskView,
 } from "./remote_spokes_model.ts";
 
@@ -454,5 +454,76 @@ describe("ADR-0512: a spoke deactivated on purpose", () => {
     for (const deactivated of [undefined, null, "yes", true, {}, { since: 0, reason: "x" }, { since: -5, reason: "x" }, { since: "2026-11-05", reason: "x" }]) {
       expect(mapSpokeRow({ ...row, deactivated })).toEqual(back);
     }
+  });
+});
+
+describe("P-RS-VIEW.1 (ADR-0539): which remote spokes the Fleet Orbit draws", () => {
+  const spoke = (tasks: Record<string, unknown>[], over: Record<string, unknown> = {}): RemoteSpokeView =>
+    mapSpokeRow({ node: NODE, label: "vm-218", reachable: true, caps, tasks, ...over })!;
+
+  test("a spoke is on the orbit while a task holds a lane on it, whatever that task is doing", () => {
+    for (const state of ["working", "awaiting_approval", "idle", "error"]) expect(onOrbit(spoke([task({ state })]))).toBe(true);
+    // One open task among finished ones is enough.
+    expect(onOrbit(spoke([task({ state: "closed" }), task({ id: "t_fedcba9876543210", state: "idle" })]))).toBe(true);
+  });
+
+  test("an online idle machine, or one whose tasks all closed or stopped, is not", () => {
+    expect(onOrbit(spoke([]))).toBe(false);
+    expect(onOrbit(spoke([task({ state: "closed" }), task({ id: "t_fedcba9876543210", state: "stopped" })]))).toBe(false);
+    expect(onOrbit(spoke([], { reachable: false }))).toBe(false);
+  });
+
+  test("silence keeps a spoke with open work on the orbit; deactivation takes any spoke off", () => {
+    expect(onOrbit(spoke([task({ state: "working" })], { silentSince: 500 }))).toBe(true);
+    expect(onOrbit(spoke([task({ state: "working" })], { deactivated: { since: 500, reason: "shipped" } }))).toBe(false);
+  });
+});
+
+describe("P-RS-LANES.1 (ADR-0551): one count for every view, and the Fleet grid's remote lanes", () => {
+  const NODE2 = `n_${"2".repeat(32)}`;
+  const NODE3 = `n_${"3".repeat(32)}`;
+  const T2 = "t_fedcba9876543210";
+  const spoke = (node: string, label: string, tasks: Record<string, unknown>[], over: Record<string, unknown> = {}): RemoteSpokeView =>
+    mapSpokeRow({ node, label, reachable: true, caps, tasks, ...over })!;
+  const off = { deactivated: { since: 500, reason: "shipped" } };
+
+  test("spokes counts every spoke; working those holding a task; waiting those parked on a human", () => {
+    const list = [
+      spoke(NODE, "vm-a", [task({ state: "awaiting_approval" })]),
+      spoke(NODE2, "vm-b", [task({ state: "working" }), task({ id: T2, state: "closed" })]),
+      spoke(NODE3, "vm-c", []),
+    ];
+    expect(remoteTotals(list, 2)).toEqual({ spokes: 3, working: 2, waiting: 1, alerts: 2 });
+    expect(remoteTotals([], 0)).toEqual({ spokes: 0, working: 0, waiting: 0, alerts: 0 });
+  });
+
+  test("a spoke waiting with no task listed counts as waiting, not working, and still gets a lane", () => {
+    const waiting: RemoteSpokeView = { ...spoke(NODE, "vm-a", []), state: "approval" };
+    expect(remoteTotals([waiting], 0)).toEqual({ spokes: 1, working: 0, waiting: 1, alerts: 0 });
+    expect(remoteLanes([waiting])).toEqual([{ key: `rs:${NODE}:`, spoke: waiting, task: null, state: "approval" }]);
+  });
+
+  test("a deactivated spoke counts as a spoke but never as working or waiting, and has no lane", () => {
+    const parked = spoke(NODE, "vm-a", [task({ state: "awaiting_approval" })], off);
+    const forced: RemoteSpokeView = { ...parked, state: "approval" };
+    expect(remoteTotals([parked, forced], 0)).toEqual({ spokes: 2, working: 0, waiting: 0, alerts: 0 });
+    expect(remoteLanes([parked, forced])).toEqual([]);
+  });
+
+  test("one lane per open task, grouped by spoke label; closed and stopped tasks hold none", () => {
+    const b = spoke(NODE, "vm-b", [task({ state: "working" }), task({ id: T2, state: "awaiting_approval" })]);
+    const a = spoke(NODE2, "vm-a", [task({ state: "idle" }), task({ id: T2, state: "stopped" })]);
+    const c = spoke(NODE3, "vm-c", [task({ state: "closed" })]);
+    expect(remoteLanes([b, c, a]).map((l) => [l.key, l.spoke.label, l.task?.state, l.state])).toEqual([
+      [`rs:${NODE2}:t_0123456789abcdef`, "vm-a", "idle", "idle"],
+      [`rs:${NODE}:t_0123456789abcdef`, "vm-b", "working", "busy"],
+      [`rs:${NODE}:${T2}`, "vm-b", "awaiting_approval", "approval"],
+    ]);
+  });
+
+  test("a silent or offline spoke's lanes take the spoke's state, not a stale task state", () => {
+    const silent = spoke(NODE, "vm-a", [task({ state: "working" })], { silentSince: 500 });
+    const gone = spoke(NODE2, "vm-b", [task({ state: "idle" })], { reachable: false });
+    expect(remoteLanes([silent, gone]).map((l) => l.state)).toEqual(["silent", "offline"]);
   });
 });

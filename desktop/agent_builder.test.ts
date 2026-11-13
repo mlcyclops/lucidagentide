@@ -294,7 +294,7 @@ describe("spec ↔ canvas adapters (P-AGENT.2)", () => {
     // node b is on two edges → degree 2
     expect(g.nodes.find((n) => n.id === "b")!.count).toBe(2);
     expect(g.edges).toContainEqual({ from: "a", to: "b", relation: "then" });
-    // kind is preserved so the engine's kind-lens colours nodes by step type
+    // kind is preserved so the engine's kind-lens colors nodes by step type
     expect(g.nodes.find((n) => n.id === "b")!.kind).toBe("tool");
   });
 

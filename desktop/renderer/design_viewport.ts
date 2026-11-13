@@ -6,7 +6,7 @@
 // Pixels live in the engine TileStore (256 px tiles). The viewport keeps a bounded LRU of tile canvases
 // (RGBA tiles as-is; 1-channel mask tiles expanded to an alpha or a tint canvas) and draws only the tiles
 // a layer shows on screen, through the layer's full matrix (groups included) and its blend mode. Far-out
-// zoom levels use a nearest-neighbour preview (at most 2048 px on the long side) sampled straight from the
+// zoom levels use a nearest-neighbor preview (at most 2048 px on the long side) sampled straight from the
 // tiles, so a 65k px document never builds thousands of tile canvases just to show a thumbnail.
 
 import type { DesignDoc, Layer, RasterLayer } from "../../harness/creator/design/types.ts";
@@ -84,7 +84,7 @@ export class DesignViewport {
     return c;
   }
 
-  /** A nearest-neighbour preview of a whole key (RGBA layer, mask alpha, or tinted mask), rebuilt when the
+  /** A nearest-neighbor preview of a whole key (RGBA layer, mask alpha, or tinted mask), rebuilt when the
    *  key changes. */
   preview(key: string, w: number, h: number, kind: Kind, maxSide = PREVIEW_MAX, tint: [number, number, number, number] = [0, 0, 0, 0]): { canvas: OffscreenCanvas; p: number } | null {
     const ver = this.version(key);
@@ -158,7 +158,7 @@ export class DesignViewport {
       if (pv) { ctx.drawImage(pv.canvas, 0, 0, pv.canvas.width / pv.p, pv.canvas.height / pv.p); return; }
     }
     if (axisAligned) {
-      // Seam-free: every tile edge is mapped to device pixels and ROUNDED, so neighbours share the exact
+      // Seam-free: every tile edge is mapped to device pixels and ROUNDED, so neighbors share the exact
       // same edge (no anti-aliased half-covered column or row between tiles at fractional zoom).
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       for (let ty = range.ty0; ty <= range.ty1; ty++) {

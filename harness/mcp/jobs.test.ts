@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // P-FLEET.1 (ADR-0268): the pure job table. What matters: the closed state set, sticky terminals (a
-// cancelled job whose remote turn later settles must never become done), the unknown-id rule, key dedupe,
+// canceled job whose remote turn later settles must never become done), the unknown-id rule, key dedupe,
 // the queue cap, and the custody rule that metadata views can never leak an envelope or a prompt.
 
 import { expect, test } from "bun:test";
@@ -28,7 +28,7 @@ test("admit -> queued with a stable job-<8> id; start returns the prompt and cle
   expect(tb.view(a.id)!.prompt).toBe(""); // minimal retention: the prompt does not linger
 });
 
-test("terminal states are sticky - a cancelled job can never become done", () => {
+test("terminal states are sticky - a canceled job can never become done", () => {
   const { tb } = table();
   const a = tb.admit("x");
   if (!a.ok) throw new Error("admit refused");

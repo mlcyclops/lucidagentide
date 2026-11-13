@@ -209,7 +209,7 @@ function main(): void {
   // a Map. Cleared per lane on a successful send.
   const laneDrafts = new Map<string, string>();
   // P-REMOTE.14: OPTIONAL device dictation. `pendingSttSource` labels the NEXT send with where its text was
-  // transcribed. P-REMOTE.15: the LONG explanation is no longer a wall of small grey text under the composer -
+  // transcribed. P-REMOTE.15: the LONG explanation is no longer a wall of small gray text under the composer -
   // it lives in the "?" sheet (`voiceInfo`, `voiceRisk`), and only a SHORT transient line ever shows inline.
   let pendingSttSource: SttSource | null = null;
   let voiceInfo = ""; // the mode-specific explanation the "?" sheet leads with ("" = nothing decided yet)
@@ -548,7 +548,7 @@ function main(): void {
   };
   $("focus-back").addEventListener("click", () => setFocus("master"));
   // P-PWA-FLEET.2: the strip is a double-decker whose bar carries the same count pips as the DESKTOP's
-  // minimized dock pill (shared order/wording/counting via fleet_status.ts, shared colours via the
+  // minimized dock pill (shared order/wording/counting via fleet_status.ts, shared colors via the
   // `lane-<status>` class), and which stays COLLAPSED until the user opens it - a fleet must not cost the
   // transcript its screen. Re-typing the panel's markup while it is closed would be wasted work, so the
   // cards render only when open; the bar is always current.
@@ -566,7 +566,7 @@ function main(): void {
     // that opens itself steals the screen mid-read and moves whatever the thumb was about to tap. The red
     // bar plus the red pip is the whole signal; opening it stays the user's decision, always.
     el.toggleAttribute("data-attn", roll.attention);
-    // The pips: one per state present, attention-first, coloured by class. Counts are host-derived numbers
+    // The pips: one per state present, attention-first, colored by class. Counts are host-derived numbers
     // and the state strings are escaped by the shared renderer's own contract, so this markup is safe.
     $("fleet-pips").innerHTML = roll.counts
       .map((c) => `<span class="fleet-pip lane-${escapeHtml(c.status)}"><i aria-hidden="true"></i><b>${c.count}</b></span>`)
@@ -706,7 +706,7 @@ function main(): void {
     const sent = act === "push" ? guest.interject(laneId, text) : guest.fleetPrompt(laneId, text);
     if (!sent) return;
     // P-PWA-FOCUS.1: the turn belongs to THAT lane's conversation, so it lands in that lane's list. The
-    // master keeps its labelled echo only while the lane is not the focused transcript - otherwise the send
+    // master keeps its labeled echo only while the lane is not the focused transcript - otherwise the send
     // would be invisible in the very view the user is watching.
     targetItems.set(laneId, [...(targetItems.get(laneId) ?? []), { kind: "user", text }, ...(act === "push" ? [{ kind: "note" as const, text: "pushed mid-turn" }] : [])]);
     if (focus !== laneId) items = [...items, { kind: "user", text: `[lane: ${name}] ${text}` }, ...(act === "push" ? [{ kind: "note" as const, text: `pushed mid-turn to lane ${name}` }] : [])];
@@ -971,14 +971,14 @@ function main(): void {
     },
   };
   // P-REMOTE.15: the "?" sheet - the voice explanation that used to be crammed under the composer in small
-  // grey type, with room to actually read it. Built at open time: the first paragraph is whatever the CURRENT
+  // gray type, with room to actually read it. Built at open time: the first paragraph is whatever the CURRENT
   // decision (or the last failure) has to say, so the sheet is never stale.
   const voiceSheetBody = (): string[] => {
     const paras: string[] = [];
     if (voiceInfo) paras.push(voiceInfo);
     paras.push("Hold the mic button to talk. This phone records the clip, your own desktop turns it into text offline with its own engine, and the audio never goes anywhere else.");
     if (!dictateItem.hidden) paras.push("The composer's menu can also let this phone type for you: its own recognizer puts the words straight into the message box, so you read them over first. A transcript is never sent on its own - you always tap Send.");
-    paras.push("Either way the words reach your desktop labelled with where they were transcribed, so the shared transcript and its audit trail show whether the phone or the desktop did the work.");
+    paras.push("Either way the words reach your desktop labeled with where they were transcribed, so the shared transcript and its audit trail show whether the phone or the desktop did the work.");
     return paras;
   };
   const openSttSheet = (kind: "install" | "cloud" | "voice"): void => {
@@ -1160,7 +1160,7 @@ function main(): void {
     const others = plan.unseen.filter((u) => u.target !== focus);
     if (others.length) showSyncCard(plan, false); else catchup.hidden = true;
     if (guest) render(guest.view());
-    // Scroll AFTER the repaint so the marker exists; centred, because landing it at the very top hides the
+    // Scroll AFTER the repaint so the marker exists; centered, because landing it at the very top hides the
     // last thing the user HAD seen, which is the context that makes the new run readable.
     const mark = $("transcript").querySelector("[data-sync-mark]");
     if (mark) mark.scrollIntoView({ block: "center" });

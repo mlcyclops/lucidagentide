@@ -62,7 +62,7 @@ function paintBack(ctx: CanvasRenderingContext2D, w: number, h: number): void {
   ctx.fillRect(0, 0, w, h);
   glow(ctx, w * 0.05, h * 0.5, Math.max(w, h) * 0.6, "255 220 150", 0.22);
   // The rainbow: one annulus filled with a radial gradient whose stops are the bands, so the
-  // colours blend softly into each other and into the sky at both edges.
+  // colors blend softly into each other and into the sky at both edges.
   const cx = w * ((BOW_X + BOW_END) / 2);
   const R = w * ((BOW_END - BOW_X) / 2);
   const cy = h * 0.66;

@@ -9,7 +9,7 @@
 // not), a prompt, a five-field cron (the sheet builds it from daily / weekly pickers; cron.ts evaluates
 // it in local time), and the unattended knobs: `armed` (jobs are created DISARMED, ADR-0047's rule),
 // `autoApprove` (applied for the run and restored after, so a lane left in ask-mode never silently
-// becomes auto-mode forever), `maxMinutes` (the run is cancelled past it), `missed` (what to do with a
+// becomes auto-mode forever), `maxMinutes` (the run is canceled past it), `missed` (what to do with a
 // fire that fell in a sleep: run once within the grace window, or skip).
 //
 // Store: `~/.omp/lucid-scheduled-jobs.json` (the sandbox_grants.ts pattern: 0600, fail-safe reads, the
@@ -82,7 +82,7 @@ export const MISSED_GRACE_MS = 2 * 3600_000;
 export const MAX_MINUTES_DEFAULT = 60;
 export const MAX_MINUTES_CAP = 12 * 60;
 
-/** PURE: validate + normalise what the sheet / API sent. A reason instead of a job for anything that
+/** PURE: validate + normalize what the sheet / API sent. A reason instead of a job for anything that
  *  must not arm: no name, no prompt, no folder, a cron that does not parse or never fires. */
 export function normalizeJobSpec(raw: unknown): { ok: true; spec: Required<JobSpec> } | { ok: false; reason: string } {
   if (!raw || typeof raw !== "object") return { ok: false, reason: "job must be an object" };

@@ -25,8 +25,8 @@ console.log("== P-EGRESS.2 — local-file browser open: accurate + auditable =="
 // (1) The originating case: "Opening game in browser" pointed at a local path.
 console.log("\n1) a local file is recognized (open-once/block, not a website)");
 const localTargets = [
-  "C:\\Users\\neorc\\Documents\\My Music\\hormuz-minesweeper.html",
-  "file:///C:/Users/neorc/game.html",
+  "C:\\Users\\operator\\Documents\\My Music\\hormuz-minesweeper.html",
+  "file:///C:/Users/operator/game.html",
   "/home/n/game.html",
   "~/game.html",
   "\\\\server\\share\\x.html",

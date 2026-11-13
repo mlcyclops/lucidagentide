@@ -20,7 +20,7 @@ function lane(over: Partial<Lane> = {}): Lane {
     kind: "lane",
     laneId: "L1",
     name: "refactor auth",
-    cwd: "C:\\Users\\neorc\\Desktop\\LucidAgentIDE",
+    cwd: "C:\\Users\\operator\\Desktop\\LucidAgentIDE",
     model: "anthropic/claude-opus-5",
     ...over,
   };
@@ -69,7 +69,7 @@ describe("targetBadge (P-FLEET.L8)", () => {
     expect(b.label).toContain("LucidAgentIDE");
     expect(b.label).not.toContain("C:\\Users"); // the full path would blow out the chip
     expect(b.label).not.toContain("Users");
-    expect(b.title).toContain("C:\\Users\\neorc\\Desktop\\LucidAgentIDE");
+    expect(b.title).toContain("C:\\Users\\operator\\Desktop\\LucidAgentIDE");
     expect(b.title).toContain("anthropic/claude-opus-5");
     // The verb names the DESTINATION the user has in mind. "Back to main chat" described the wrong object
     // (it read as navigating away, not as releasing the lane), so the wording is pinned here.
@@ -269,7 +269,7 @@ describe("promoteNotice / demoteNotice (P-FLEET.L8)", () => {
   it("promoteNotice names the lane, folder, model and turn count", () => {
     const n = promoteNotice(lane(), 7);
     expect(n).toContain("refactor auth");
-    expect(n).toContain("C:\\Users\\neorc\\Desktop\\LucidAgentIDE");
+    expect(n).toContain("C:\\Users\\operator\\Desktop\\LucidAgentIDE");
     expect(n).toContain("anthropic/claude-opus-5");
     expect(n).toContain("7 turns");
     expect(n).not.toContain(EM_DASH);
@@ -293,7 +293,7 @@ describe("promoteNotice / demoteNotice (P-FLEET.L8)", () => {
   it("demoteNotice names the lane, folder and model, and says the lane keeps running", () => {
     const n = demoteNotice(lane());
     expect(n).toContain("refactor auth");
-    expect(n).toContain("C:\\Users\\neorc\\Desktop\\LucidAgentIDE");
+    expect(n).toContain("C:\\Users\\operator\\Desktop\\LucidAgentIDE");
     expect(n).toContain("anthropic/claude-opus-5");
     expect(n.toLowerCase()).toContain("keeps running");
     expect(n).not.toContain(EM_DASH);

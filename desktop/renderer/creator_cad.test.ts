@@ -11,8 +11,8 @@ const dxf: CadDxfInspect = {
 };
 
 const view = (over: Partial<CreatorCadView> = {}): CreatorCadView => ({
-  endpoints: [{ id: "nick-dgx-cad", label: "CAD (Nick DGX)", cui: { posture: "enclave", allowed: true, reason: "enclave endpoint" } }],
-  endpointId: "nick-dgx-cad", fileName: "", busy: "", status: "", statusTone: "", inspect: null,
+  endpoints: [{ id: "gpu-box-cad", label: "CAD (GPU box)", cui: { posture: "enclave", allowed: true, reason: "enclave endpoint" } }],
+  endpointId: "gpu-box-cad", fileName: "", busy: "", status: "", statusTone: "", inspect: null,
   script: "result = 1", outputs: ["step"], modelBusy: "", modelStatus: "", modelTone: "", model: null, ...over,
 });
 

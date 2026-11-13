@@ -10,7 +10,7 @@
 // which is exactly the bug that made addReportToKg lose every report it ever wrote), and that a LOCKED or
 // disabled vault fails closed on both directions.
 //
-// The locked-vault behaviour is the load-bearing one. A read against a locked vault must not look like
+// The locked-vault behavior is the load-bearing one. A read against a locked vault must not look like
 // "the user has told me nothing", and a write must not look like it succeeded: either lie teaches the
 // model it has memory it does not have. So `locked` is asserted explicitly, not just the absence of hits.
 //

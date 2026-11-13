@@ -3,7 +3,7 @@
 
 // desktop/renderer/scenes/scenes_paint.test.ts
 //
-// P-SEASON.1 (ADR-0525): behavioural checks for EVERY registered backdrop, under every season that uses
+// P-SEASON.1 (ADR-0525): behavioral checks for EVERY registered backdrop, under every season that uses
 // it, against a recording 2D context: no call that a real canvas would reject or silently drop
 // (non-finite numbers, negative radii, gradient stops outside [0, 1]) at any t, size or season, and
 // painting is stateless (the same t always yields the same frame, whatever came before).

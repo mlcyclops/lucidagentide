@@ -51,7 +51,7 @@ const esc = (s: unknown): string =>
 
 export interface BoardFrame { name: string; page: string; dataUrl: string }
 
-/** Build the design-board HTML: each frame is a labelled card with its PNG inlined as a data URL. This is
+/** Build the design-board HTML: each frame is a labeled card with its PNG inlined as a data URL. This is
  *  written to a local file and loaded through the normal preview pipeline (serve + inline + the inspect
  *  bridge). Only `data:image/*` URLs are accepted for the src (a bad/missing render is shown as a placeholder),
  *  so nothing but an image can land in the markup. */

@@ -64,7 +64,7 @@ context size.*
 > and save the frontier model for hard reasoning.
 
 > [!NOTE]
-> Non-U.S. / restricted-origin models stay behind a data-sovereignty acknowledgement,
+> Non-U.S. / restricted-origin models stay behind a data-sovereignty acknowledgment,
 > and an enterprise policy can pin your org to the gov gateway only.[3]
 
 ## Choose an edit mode: Plan, Ask, or Agent
@@ -192,7 +192,7 @@ panel and a command.*
 
 1. "ADR-0088 — Role-based onboarding + opinionated, progressively-disclosed views (Dev / Sec / Mgr / Exec)." *LucidAgentIDE DECISIONS.md*, 2026, github.com/mlcyclops/lucidagentide/blob/master/DECISIONS.md. Accessed 29 June 2026. — Why roles change defaults and chrome, never enforcement.
 2. "Invariants." *LucidAgentIDE CLAUDE.md*, 2026, github.com/mlcyclops/lucidagentide/blob/master/CLAUDE.md. Accessed 29 June 2026. — The fail-closed gate and byte-stable prefix that hold for every role.
-3. "Any model, any provider." *LucidAgentIDE README.md*, 2026, github.com/mlcyclops/lucidagentide/blob/master/README.md. Accessed 29 June 2026. — OAuth-or-API-key sign-in, the cost + intelligence card, and the sovereignty acknowledgement.
+3. "Any model, any provider." *LucidAgentIDE README.md*, 2026, github.com/mlcyclops/lucidagentide/blob/master/README.md. Accessed 29 June 2026. Covers OAuth-or-API-key sign-in, the cost + intelligence card, and the sovereignty acknowledgment.
 4. "ADR-0027 — ACP edit modes (Plan / Ask / Agent) + live thought streaming." *LucidAgentIDE DECISIONS.md*, 2026, github.com/mlcyclops/lucidagentide/blob/master/DECISIONS.md. Accessed 29 June 2026. — The three edit modes and the live thought stream.
 5. "Architecture." *LucidAgentIDE README.md*, 2026, github.com/mlcyclops/lucidagentide/blob/master/README.md. Accessed 29 June 2026. — The frozen, cache-stable prefix and the volatile post-cache tail that keep cache-% high.
 6. "ADR-0036 / ADR-0037 — Read-write IDE with a gated Save." *LucidAgentIDE DECISIONS.md*, 2026, github.com/mlcyclops/lucidagentide/blob/master/DECISIONS.md. Accessed 29 June 2026. — Save routed through the scanner gate; a high finding or dead scanner blocks the write.

@@ -65,7 +65,7 @@ describe("viewport math", () => {
 });
 
 describe("seam-free tile placement", () => {
-  test("neighbouring 256 px tiles share device edges exactly at fractional zooms and offsets", () => {
+  test("neighboring 256 px tiles share device edges exactly at fractional zooms and offsets", () => {
     for (const zoom of [1.15, 0.73, 2.333, 1.5 * 1.25, 6.4]) {
       for (const off of [0, 0.37, -13.62, 101.5]) {
         const m = [zoom, 0, 0, zoom, off, off * 0.7];

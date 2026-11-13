@@ -9,7 +9,7 @@
 // spawns the remote's `… acp` command, runs the ACP handshake with LEAST PRIVILEGE (no client filesystem),
 // drives session/new → session/prompt, and collects the streamed reply.
 //
-// Fail-closed posture: the remote's `session/request_permission` asks are DENIED (cancelled) — LUCID is not
+// Fail-closed posture: the remote's `session/request_permission` asks are DENIED (outcome "cancelled"): LUCID is not
 // a confused deputy for the remote's privileged tools. A prompt that does not resolve within the timeout
 // rejects, so the firewall returns an error result rather than hanging.
 
@@ -244,7 +244,7 @@ export class AcpAgentClient implements RemoteAgent {
   }
 
   /** Answer an agent→client request. `session/request_permission` follows the connection's policy
-   *  ("deny" default → cancelled; "allow" → select an approve option); every ask is RECORDED so the
+   *  ("deny" default → outcome "cancelled"; "allow" → select an approve option); every ask is RECORDED so the
    *  firewall can surface it (scanned + delimited). Other agent requests are declined. */
   #answer(id: number, method: string, params: unknown): void {
     if (method === "session/request_permission") {

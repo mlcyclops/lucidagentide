@@ -38,6 +38,10 @@ export interface FirestoreRelayPresenceConfig {
   maxPendingRooms?: number;
   activityThrottleMs?: number;
   requestTimeoutMs?: number;
+  /** The token endpoint (default: the Cloud Run metadata server) and the Firestore REST origin (default
+   *  https://firestore.googleapis.com), for an emulator or a conformance run against another broker (ADR-0540). */
+  metadataTokenUrl?: string;
+  firestoreUrl?: string;
   fetchImpl?: typeof fetch;
   now?: () => number;
   onLog?: (message: string, detail?: unknown) => void;
@@ -78,6 +82,7 @@ interface PendingWrite {
 
 const METADATA_TOKEN_URL =
   "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
+const FIRESTORE_URL = "https://firestore.googleapis.com";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Stable Firestore document id. The raw room id never leaves the process. */
@@ -147,6 +152,8 @@ export class FirestoreRelayPresence implements RelayPresenceHooks {
   readonly #maxPendingRooms: number;
   readonly #activityThrottleMs: number;
   readonly #requestTimeoutMs: number;
+  readonly #metadataTokenUrl: string;
+  readonly #firestoreUrl: string;
   readonly #fetch: typeof fetch;
   readonly #now: () => number;
   readonly #onLog?: (message: string, detail?: unknown) => void;
@@ -176,6 +183,8 @@ export class FirestoreRelayPresence implements RelayPresenceHooks {
     this.#maxPendingRooms = maxPendingRooms;
     this.#activityThrottleMs = activityThrottleMs;
     this.#requestTimeoutMs = requestTimeoutMs;
+    this.#metadataTokenUrl = config.metadataTokenUrl?.trim() || METADATA_TOKEN_URL;
+    this.#firestoreUrl = (config.firestoreUrl?.trim() || FIRESTORE_URL).replace(/\/+$/, "");
     this.#fetch = config.fetchImpl ?? fetch;
     this.#now = config.now ?? Date.now;
     this.#onLog = config.onLog;
@@ -332,7 +341,7 @@ export class FirestoreRelayPresence implements RelayPresenceHooks {
       try {
         const roomHash = await this.#hash(roomId);
         const token = await this.#accessToken();
-        const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(this.#projectId)}`
+        const url = `${this.#firestoreUrl}/v1/projects/${encodeURIComponent(this.#projectId)}`
           + `/databases/${encodeURIComponent(this.#databaseId)}/documents/remote_sessions/${encodeURIComponent(roomHash)}`;
         const response = await this.#request(url, {
           method: "PATCH",
@@ -360,7 +369,7 @@ export class FirestoreRelayPresence implements RelayPresenceHooks {
   async #accessToken(): Promise<string> {
     const now = this.#now();
     if (this.#token && now < this.#token.refreshAt) return this.#token.value;
-    const response = await this.#request(METADATA_TOKEN_URL, { headers: { "Metadata-Flavor": "Google" } });
+    const response = await this.#request(this.#metadataTokenUrl, { headers: { "Metadata-Flavor": "Google" } });
     if (!response.ok) throw new Error("metadata token request failed");
     const body = await response.json() as { access_token?: unknown; expires_in?: unknown };
     if (typeof body.access_token !== "string" || !body.access_token) throw new Error("metadata token response invalid");
@@ -403,6 +412,8 @@ export function relayPresenceFromEnv(
     projectId: env.RELAY_FIRESTORE_PROJECT ?? env.RELAY_FIREBASE_PROJECT ?? "",
     databaseId: env.RELAY_FIRESTORE_DATABASE ?? "(default)",
     retentionDays: retention,
+    metadataTokenUrl: env.RELAY_METADATA_TOKEN_URL,
+    firestoreUrl: env.RELAY_FIRESTORE_URL,
     onLog,
   });
   return { presence, summary: "relay telemetry: metadata-only Firestore presence enabled" };

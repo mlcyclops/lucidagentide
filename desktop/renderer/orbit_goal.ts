@@ -190,7 +190,7 @@ async function apply(box: HTMLElement, el: HTMLButtonElement | HTMLInputElement,
 
 /** Board order: what needs a person first, then what is moving, then what is waiting, then the past. */
 const BOARD: readonly AosTaskStatus[] = ["needs_review", "running", "ready", "pending", "failed", "done", "cancelled"];
-const STATUS_WORD: Record<AosTaskStatus, string> = { pending: "waiting on a dependency", ready: "ready", running: "running", needs_review: "needs your review", done: "done", failed: "failed", cancelled: "cancelled" };
+const STATUS_WORD: Record<AosTaskStatus, string> = { pending: "waiting on a dependency", ready: "ready", running: "running", needs_review: "needs your review", done: "done", failed: "failed", cancelled: "canceled" };
 
 function laneName(id: string): string {
   return snap?.agents.find((a) => a.laneId === id)?.name ?? "a spoke that is gone";

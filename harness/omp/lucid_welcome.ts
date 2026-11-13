@@ -22,7 +22,7 @@ export const WELCOME_ENV = "LUCID_WELCOME";
 /** The LUCID brand tagline. Omp-free by construction — the splash names LUCID, never omp. */
 export const TAGLINE = "security · provenance · memory";
 
-/** The static composer affordances omp's welcome lists under "Tips" (stable omp behaviour). */
+/** The static composer affordances omp's welcome lists under "Tips" (stable omp behavior). */
 export const TIP_HINTS = "# prompt actions  ·  / commands  ·  ! bash  ·  $ python";
 
 /** Cap LSP + recent-session rows so the banner height stays bounded (mirrors omp's welcome slot caps). */

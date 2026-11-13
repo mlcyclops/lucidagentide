@@ -13,6 +13,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, constants, fstatSync, ftruncateSync, mkdtempSync, openSync, readSync, writeSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 // P-BROWSER.4 (ADR-0415): the `windowsHide` a spawn uses when its caller does not pass one. This module is
 // also bundled into the Node-hosted VS Code extension, so it must not import console_host.ts (bun:ffi):
@@ -82,6 +83,30 @@ export function rpcError(err: unknown): Error & { code?: number; data?: unknown 
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void; cleanup: () => void };
 
+/** P-HOLDER.1 (ADR-0534): a connection to a `lucid-holder` that owns the agent process (desktop/lane_holder.ts
+ *  HolderLink). Structural, so this module, which the VS Code extension also bundles, imports nothing of the
+ *  engine's. Frames wait until `resume()`, so the client wires its handlers before the replay arrives. */
+export interface HeldIO {
+  readonly hello: { childPid: number };
+  /** Offset one past the last stdout byte delivered. */
+  readonly offset: number;
+  onStdout: (chunk: Buffer, endOffset: number) => void;
+  onStderr: (chunk: Buffer) => void;
+  onExit: (code: number) => void;
+  onClose: () => void;
+  resume(): void;
+  write(data: string): void;
+  /** The holder may forget stdout before `offset`. */
+  trim(offset: number): void;
+  /** How long the holder keeps the agent with no engine attached. */
+  keepFor(ms: number): void;
+  /** End the agent's tree and the holder; true once confirmed. A closed connection sends it on a new one. */
+  kill(): Promise<boolean>;
+  detach(): void;
+  /** A new connection to the same holder, replaying stdout from `from` (the holder dropped this one). */
+  reconnect(from: number): Promise<HeldIO>;
+}
+
 /** Per-request bounds. Without at least one of these a request waits forever (P-KG-INGEST.5, ADR-0264). */
 export type RequestOpts = {
   /** Reject after this many ms with no response. Omit only for calls already raced against another clock. */
@@ -97,6 +122,22 @@ export class ACPClient {
   private buf = "";
   /** Set once the child is gone (exit or spawn error). Every later request rejects with this reason. */
   private dead: string | null = null;
+  /** P-HOLDER.1: the agent runs under a holder instead of as this process's child. */
+  private held: HeldIO | null = null;
+  /** Offset one past the last held stdout byte received, and its UTF-8 decoder (a character may span chunks). */
+  private heldEnd = 0;
+  private decoder = new StringDecoder("utf8");
+  /** Set by detach(): the connection was let go on purpose, so nobody is told the agent ended. */
+  private detached = false;
+  /** While the holder connection is being made again: what was sent meanwhile, in order, for the new connection. */
+  private reconnecting: ((io: HeldIO) => void)[] | null = null;
+  /** The offset the last reconnect replayed from; a connection that closes again with nothing handled since ends. */
+  private reconnectedFrom = -1;
+
+  /** P-HOLDER.1: an agent request a previous engine already answered (a replay brings it again). Skipped. */
+  skipRequest: (id: number | string) => boolean = () => false;
+  /** P-HOLDER.1: an agent request was answered (the lane records it for a later replay). */
+  onAnswered: (id: number | string) => void = () => {};
 
   /** notifications from the agent (e.g. "session/update"). */
   onNotify: (method: string, params: any) => void = () => {};
@@ -141,6 +182,108 @@ export class ACPClient {
     });
   }
 
+  /** P-HOLDER.1: start the agent under a holder. `launch` gets exactly what start() would spawn (this client's
+   *  command, arguments, cwd and the full child environment) and returns the attached connection. */
+  async startHeld(launch: (cmd: string, args: string[], cwd: string, env: Record<string, string | undefined>) => Promise<HeldIO>): Promise<void> {
+    acpLog(`\n[acp held spawn ${new Date().toISOString()} cmd=${this.cmd} cwd=${this.cwd}]\n`);
+    this.attachHeld(await launch(this.cmd, this.args, this.cwd, { ...process.env, ...this.env }));
+  }
+
+  /** P-HOLDER.1: speak to an agent a holder already runs (a new one, or one a previous engine started). The
+   *  replay from the connection's offset arrives first, so any adopt() must be registered before this. */
+  attachHeld(io: HeldIO): void {
+    this.held = io;
+    this.heldEnd = io.offset;
+    io.onStdout = (chunk, end) => { this.heldEnd = end; this.onData(this.decoder.write(chunk)); };
+    io.onStderr = (chunk) => {
+      const s = chunk.toString("utf8");
+      this.errTail = (this.errTail + s).slice(-4096);
+      acpLog(s);
+      this.onStderr(s);
+    };
+    io.onExit = (code) => {
+      const hint = code ? this.lastStderrLine() : "";
+      this.die(`acp: agent process exited (code ${code})${hint ? ` - last stderr: ${hint}` : ""}`, code);
+    };
+    io.onClose = () => { void this.reconnectHeld(io); };
+    io.resume();
+  }
+
+  /** P-HOLDER.1: the holder closed this connection while nobody here let go of it. It drops a client that fell too
+   *  far behind (its queue for it is bounded) and the agent runs on, so attach again from the last handled line: the
+   *  replay brings every byte after it. What is sent meanwhile waits for the new connection. A reconnect that fails,
+   *  or a connection that closes again before anything new was handled, ends the client as before. */
+  private async reconnectHeld(io: HeldIO): Promise<void> {
+    if (this.dead || this.held !== io) return;
+    const from = this.consumedOffset;
+    if (from === this.reconnectedFrom) { this.die("acp: the lane holder closed the connection", null); return; }
+    this.reconnectedFrom = from;
+    this.reconnecting = [];
+    let next: HeldIO;
+    try { next = await io.reconnect(from); }
+    catch (e) {
+      this.reconnecting = null;
+      this.die(`acp: the lane holder closed the connection and did not take it back (${e instanceof Error ? e.message : String(e)})`, null);
+      return;
+    }
+    const queued = this.reconnecting ?? [];
+    this.reconnecting = null;
+    // Stopped, detached or ended meanwhile: whoever did that acts on the agent; this connection only lets go.
+    if (this.dead || this.held !== io) { next.detach(); return; }
+    // The replay starts at a line start, so the partial line and any half character go.
+    this.buf = "";
+    this.decoder = new StringDecoder("utf8");
+    this.attachHeld(next);
+    for (const send of queued) send(next);
+  }
+
+  /** P-HOLDER.1: hand `send` the holder connection now, or the next one while it is being made again. */
+  private toHeld(send: (io: HeldIO) => void): void {
+    if (!this.held || this.dead) return;
+    if (this.reconnecting) this.reconnecting.push(send);
+    else send(this.held);
+  }
+
+  /** P-HOLDER.1: every held stdout byte before this offset was handled (a partial line is not). */
+  get consumedOffset(): number { return this.heldEnd - Buffer.byteLength(this.buf, "utf8"); }
+
+  /** P-HOLDER.1: tell the holder how long to keep the agent if this engine goes away, and that everything handled
+   *  so far may be forgotten (`trim`, at a turn's end). No-ops for an agent this process spawned itself. */
+  holdFor(ms: number, trim = false): void {
+    const handled = this.consumedOffset;
+    this.toHeld((io) => {
+      if (trim) io.trim(handled);
+      io.keepFor(ms);
+    });
+  }
+
+  /** The id the last request() used (0 before any). */
+  get lastRequestId(): number { return this.nextId - 1; }
+
+  /** P-HOLDER.1: a reattached client must never reuse an id the previous engine sent on this agent. */
+  reserveIds(above: number): void { if (above >= this.nextId) this.nextId = above + 1; }
+
+  /** P-HOLDER.1: the reply to a request a PREVIOUS engine sent on this agent (a held turn in flight). No timeout:
+   *  like a prompt, it is raced only against the agent's life. */
+  adopt<T = unknown>(id: number): Promise<T> {
+    if (this.dead) return Promise.reject(new Error(this.dead));
+    // Classic executor, like request(): the VS Code extension typechecks this file under a pre-ES2024 lib.
+    const promise = new Promise<T>((resolve, reject) => {
+      this.pending.set(id, { resolve: (v) => resolve(v as T), reject, cleanup: () => {} });
+    });
+    this.reserveIds(id);
+    return promise;
+  }
+
+  /** P-HOLDER.1: let go of a held agent and leave it running (this engine is going away; the next one
+   *  reattaches). Requests still waiting are dropped quietly and onExit is not called. */
+  detach(): void {
+    if (!this.held || this.dead) return;
+    this.detached = true;
+    this.held.detach();
+    this.die("acp: detached from the lane holder", null);
+  }
+
   /** The newest non-empty stderr line, clamped for a UI-safe error suffix. */
   private lastStderrLine(): string {
     const lines = this.errTail.split("\n");
@@ -157,7 +300,9 @@ export class ACPClient {
     this.dead = reason;
     const waiting = [...this.pending.values()];
     this.pending.clear();
-    for (const p of waiting) { p.cleanup(); p.reject(new Error(reason)); }
+    for (const p of waiting) p.cleanup();
+    if (this.detached) return; // the agent runs on under its holder; nobody here may act on its end
+    for (const p of waiting) p.reject(new Error(reason));
     this.onExit(code);
   }
 
@@ -165,7 +310,10 @@ export class ACPClient {
   get isDead(): boolean { return this.dead !== null; }
 
   /** P-LIVENESS.1: the spawned child's pid (the root of the agent's process tree), while it runs. */
-  get pid(): number | null { return this.dead === null ? this.proc?.pid ?? null : null; }
+  get pid(): number | null { return this.dead === null ? (this.held ? this.held.hello.childPid : this.proc?.pid ?? null) : null; }
+
+  /** P-HOLDER.1: the agent runs under a holder. */
+  get isHeld(): boolean { return this.held !== null; }
 
   private onData(s: string): void {
     this.buf += s;
@@ -189,8 +337,10 @@ export class ACPClient {
     }
     // request FROM the agent (needs a response)
     if (msg.method && msg.id !== undefined) {
+      if (this.skipRequest(msg.id)) return; // P-HOLDER.1: answered before a reattach; the agent has its answer
       try { const result = await this.onRequest(msg.method, msg.params); this.write({ jsonrpc: "2.0", id: msg.id, result }); }
       catch (e) { this.write({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: String(e) } }); }
+      this.onAnswered(msg.id);
       return;
     }
     // notification
@@ -199,8 +349,8 @@ export class ACPClient {
 
   request<T = any>(method: string, params?: any, opts: RequestOpts = {}): Promise<T> {
     if (this.dead) return Promise.reject(new Error(this.dead));
-    if (!this.proc) return Promise.reject(new Error("acp: agent process not started"));
-    if (opts.signal?.aborted) return Promise.reject(new Error(`acp: ${method} cancelled`));
+    if (!this.proc && !this.held) return Promise.reject(new Error("acp: agent process not started"));
+    if (opts.signal?.aborted) return Promise.reject(new Error(`acp: ${method} canceled`));
     const id = this.nextId++;
     // Classic executor (not Promise.withResolvers): the VS Code extension typechecks this file under a
     // pre-ES2024 lib, and the desktop tsconfig targets Node types - the executor form works on every
@@ -214,7 +364,7 @@ export class ACPClient {
       timer = undefined;
       opts.signal?.removeEventListener("abort", onAbort);
     };
-    const onAbort = () => { this.pending.delete(id); cleanup(); reject(new Error(`acp: ${method} cancelled`)); };
+    const onAbort = () => { this.pending.delete(id); cleanup(); reject(new Error(`acp: ${method} canceled`)); };
     // The JSON-RPC result is untyped on the wire; the caller declares the shape it expects.
     this.pending.set(id, { resolve: (v) => resolve(v as T), reject, cleanup });
     if (opts.timeoutMs && opts.timeoutMs > 0) {
@@ -229,12 +379,14 @@ export class ACPClient {
 
   /** Send a JSON-RPC NOTIFICATION (no id, no response) — e.g. ACP `session/cancel`. */
   notify(method: string, params?: any): void {
-    if (!this.proc) return;
+    if (!this.proc && !this.held) return;
     this.write({ jsonrpc: "2.0", method, params });
   }
 
   private write(o: unknown): void {
-    this.proc?.stdin!.write(JSON.stringify(o) + "\n");
+    const line = JSON.stringify(o) + "\n";
+    if (this.held) { this.toHeld((io) => io.write(line)); return; }
+    this.proc?.stdin!.write(line);
   }
 
   /** The stop in progress or finished. stop() is idempotent: every call shares it, except that a FAILED
@@ -261,6 +413,9 @@ export class ACPClient {
   }
 
   private async endTree(): Promise<boolean> {
+    // P-HOLDER.1: the holder owns the agent's tree (a job object on Windows, a process group elsewhere) and ends
+    // it whole; confirmed once the holder closed the connection.
+    if (this.held) return this.held.kill();
     const proc = this.proc;
     if (!proc || proc.pid === undefined || !running(proc)) return true; // never spawned, or already exited
     if (process.platform === "win32") {

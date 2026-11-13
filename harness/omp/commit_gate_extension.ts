@@ -25,6 +25,9 @@
 // boundary. The security gate stays authoritative and fails closed; this one, on a dead or slow engine or
 // a torn payload, writes one stderr line and lets the command through. A stalled engine must never freeze
 // every git command in every lane. Commands without a `git` token never touch the network at all.
+// LH-03 (ADR-0544): two answers are NOT a dead engine and fail CLOSED: a 401 or 403 (an engine is there and
+// refuses this session's credentials, as a new engine did with a held lane's old token), and, on a held lane,
+// an answer without the engine's channel proof (whatever holds the port is not the lane's engine).
 //
 // HOW IT REACHES THE ENGINE: dev.ts convention. LUCID_CHECKOUT_GATE_URL is one complete token'd URL
 // (`/api/checkout/gate?t=<TOKEN>`); `&target=<me>&cwd=<abs>&command=<text>` are appended. The write claim
@@ -33,6 +36,7 @@
 // identity are set; with neither, nothing registers.
 
 import type { createAgentSession } from "@oh-my-pi/pi-coding-agent";
+import { ChannelProofError, engineFetch } from "./engine_channel.ts";
 import { writeStderrNotice } from "./stderr_notice.ts";
 
 type SessionOpts = NonNullable<Parameters<typeof createAgentSession>[0]>;
@@ -72,6 +76,12 @@ export function mentionsGit(command: string): boolean {
   return /\bgit\b/.test(command);
 }
 
+/** LH-03 (ADR-0544): the refusal when the gate's answer cannot be trusted (refused credentials, or no channel
+ *  proof). Says why and what to do, since no engine verdict names an owner. */
+export function unverifiedRefusal(what: string, why: string): string {
+  return `${REFUSAL_PREFIX}the LUCID engine this session reports to could not be verified (${why}), so this ${what} was not allowed. Wait for LUCID to come back, or ask the user.`;
+}
+
 /** The engine's verdict, or null when the body isn't gate-shaped (treated as a failure: fail-open). */
 export function parseGateVerdict(raw: unknown): { block: boolean; reason: string } | null {
   if (!raw || typeof raw !== "object" || !("data" in raw)) return null;
@@ -108,7 +118,10 @@ const commitGateExtension: ExtensionFactory = (pi) => {
         what = "command";
       }
       try {
-        const res = await fetch(ask, { signal: AbortSignal.timeout(timeoutMs) });
+        const res = await engineFetch(ask, { signal: AbortSignal.timeout(timeoutMs) });
+        // LH-03: an engine that refuses this session's credentials is up and does not know it; whatever answers is
+        // not the coordinator this session started under, so its silence is no permission.
+        if (res.status === 401 || res.status === 403) return { block: true, reason: unverifiedRefusal(what, `the engine refused this session's credentials (${res.status})`) };
         if (!res.ok) throw new Error(`the engine responded ${res.status}`);
         const verdict = parseGateVerdict(await res.json());
         if (!verdict) throw new Error("malformed gate response");
@@ -116,6 +129,9 @@ const commitGateExtension: ExtensionFactory = (pi) => {
         return { block: true, reason: `${REFUSAL_PREFIX}${verdict.reason}` };
       } catch (e) {
         const msg = e && typeof e === "object" && "message" in e ? String(e.message) : String(e);
+        // LH-03: an answer that does not prove it came from the engine holding this lane (a squatter on the port)
+        // fails CLOSED; only a dead or slow engine keeps the fail-open rule above.
+        if (e instanceof ChannelProofError) return { block: true, reason: unverifiedRefusal(what, msg) };
         writeStderrNotice(`\n[LucidAgentIDE] checkout gate unreachable, ${what} allowed (fail-open): ${msg}\n`);
         return undefined;
       }

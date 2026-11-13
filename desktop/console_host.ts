@@ -16,7 +16,7 @@
 // console-less omp child opens (the Python kernel, hub daemons, the folder pop-up from a lane).
 //
 // Fix, in this order: at boot the engine gives itself a console window when it has none (FreeConsole
-// drops the windowless conhost CREATE_NO_WINDOW attached; AllocConsole creates one whose window honours
+// drops the windowless conhost CREATE_NO_WINDOW attached; AllocConsole creates one whose window honors
 // the SW_HIDE the engine was started with, and is hidden again if it somehow shows), and the omp spawn
 // (acp.ts) passes `windowsHide: false` whenever the engine has a console window, so omp attaches to the
 // hidden console instead of getting none. omp then sees a console, spawns its broker and Chrome without

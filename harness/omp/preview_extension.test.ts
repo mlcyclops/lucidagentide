@@ -133,7 +133,7 @@ describe("preview_extension (mock pi)", () => {
   test("execute rejects a non-local or non-previewable path (isError), and NAMES the kinds", async () => {
     const { pi, tools } = capture();
     previewExtension(pi);
-    // Fail-closed is unchanged: a bad path is an ERROR, never a cheerful acknowledgement.
+    // Fail-closed is unchanged: a bad path is an ERROR, never a cheerful acknowledgment.
     const bad = await tools[0].execute("id", { path: "src/index.ts" });
     expect(bad.isError).toBe(true);
     expect(bad.content[0].text).toContain("markdown"); // the refusal teaches what IS previewable

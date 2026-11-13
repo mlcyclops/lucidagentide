@@ -2291,7 +2291,7 @@ function drawSleigh(){
   ctx.strokeStyle = P.trim; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(-36, -13); ctx.lineTo(22, -13); ctx.stroke();
   ctx.beginPath(); ctx.arc(-38, -36, 4, 0, Math.PI * 1.5); ctx.stroke();
-  // santa: suit colours, hat pompom on a spring, reactions
+  // santa: suit colors, hat pompom on a spring, reactions
   const sa = S.santa, re = sa.react;
   const coat = SU.disco ? 'hsl(' + Math.round((S.t * 90) % 360) + ',85%,58%)' : SU.coat;
   const bob = re === 'laugh' ? Math.abs(Math.sin(S.t * 22)) * 2 : 0;
@@ -2757,7 +2757,7 @@ function renderShop(){
       if (SHOP.tab === 'deer') bg = it.col + ';box-shadow:inset 0 -6px 0 ' + it.acc;
       else if (SHOP.tab === 'paint') bg = it.stripes ? 'repeating-linear-gradient(45deg,' + it.body + ' 0 4px,' + it.trim + ' 4px 8px)' : it.aurora ? 'linear-gradient(90deg,#3fe0b0,#c070ff,#ff7ad9)' : it.metal ? 'linear-gradient(#fff1b0,' + it.body + ',#8a6410)' : it.body;
       else bg = it.disco ? 'linear-gradient(90deg,#ff4dd2,#9fe6ff,#ffd36b)' : 'linear-gradient(' + it.coat + ' 0 65%,' + it.fur + ' 65%)';
-      const desc = SHOP.tab === 'deer' ? it.perk : SHOP.tab === 'paint' ? 'A fresh coat for the sleigh, trimmed in ' + (it.stripes ? 'candy stripes' : it.aurora ? 'shifting northern colours' : 'polished accents') + '.' : 'Santa suit' + (it.disco ? ' that never stops shimmering.' : '.');
+      const desc = SHOP.tab === 'deer' ? it.perk : SHOP.tab === 'paint' ? 'A fresh coat for the sleigh, trimmed in ' + (it.stripes ? 'candy stripes' : it.aurora ? 'shifting northern colors' : 'polished accents') + '.' : 'Santa suit' + (it.disco ? ' that never stops shimmering.' : '.');
       let btn;
       if (eq) btn = '<button class="buy eq" disabled>EQUIPPED</button>';
       else if (own) btn = '<button class="buy eq" data-act="equip" data-kind="' + SHOP.tab + '" data-id="' + it.id + '">EQUIP</button>';

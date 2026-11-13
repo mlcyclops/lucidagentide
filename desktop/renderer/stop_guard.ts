@@ -8,7 +8,7 @@
 // the instant a turn starts. Some turns start without a click at that moment: a held "next turn" prompt
 // releasing when the previous turn ends, a voice send, a resumed run. A press aimed at Send (a double
 // click on Send, or a click that landed just as one of those turns began) arrived on the Stop face and
-// cancelled the new turn, which then read exactly like the user had pressed Stop. Pure: time arrives as
+// canceled the new turn, which then read exactly like the user had pressed Stop. Pure: time arrives as
 // arguments.
 
 /** How long Stop must have been on screen before a press on it counts as a Stop. Long enough to cover a

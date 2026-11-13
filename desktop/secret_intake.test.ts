@@ -225,7 +225,7 @@ describe("text-file fallback through the intake", () => {
     expect(f.audit.join("\n")).not.toContain("MIIB");
   });
 
-  test("cancelling while the text file is open wipes and deletes it", async () => {
+  test("canceling while the text file is open wipes and deletes it", async () => {
     const base = scratch();
     const workspace = scratch(); // the default fake workspace is tmpdir() itself, which would rule out every base
     const f = fakeDeps({ workspace: () => workspace, fallback: (o) => startFallback({ ...o, bases: [base], restrict: () => {}, userOnly: () => true, openEditor: () => {}, ticker: () => () => {} }) });

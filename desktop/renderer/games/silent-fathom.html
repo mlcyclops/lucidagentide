@@ -583,7 +583,7 @@ function collideCircle(o,r){
 /* ---------- playtest autopilot ---------- */
 /* 'explore': nearest uncollected recorder, then the exit. 'mines': the nearest live mine (the loss
    path). Walks a BFS distance field over the cave grid toward the target for up to 8 cells and aims at
-   the farthest of those cell centres the hull can reach in a straight line (a 26 px wide sweep), so it
+   the farthest of those cell centers the hull can reach in a straight line (a 26 px wide sweep), so it
    never aims a corner into a wall and dithers there; a velocity controller caps it at 150 px/s. */
 function hullClear(x0,y0,x1,y1){
   var d=hyp(x1-x0,y1-y0),n=Math.max(1,Math.ceil(d/6));
@@ -1176,7 +1176,7 @@ function render(){
   ctx.globalAlpha=1;
   if(!sub)return;
 
-  // World view: centred on the camera at scale VS (see resize); culling uses the scaled half-extent.
+  // World view: centered on the camera at scale VS (see resize); culling uses the scaled half-extent.
   var hw=W/2/VS,hh=H/2/VS;
   ctx.save();
   ctx.translate(W/2+(Math.random()-0.5)*shake,H/2+(Math.random()-0.5)*shake);
@@ -1460,7 +1460,7 @@ function renderHUD(){
   ctx.fillText(sc,23,60);
   var rt='REC '+recGot+'/'+recTotal;
   ctx.textAlign='center';
-  // Centred, the REC chip sits on the zone chip and the top buttons below about 600 px wide; there it
+  // Centered, the REC chip sits on the zone chip and the top buttons below about 600 px wide; there it
   // takes the next row of the left column instead.
   var rcx=W<600?64:W/2,rcy=W<600?74:12;
   chip(rcx-52,rcy,104,26);

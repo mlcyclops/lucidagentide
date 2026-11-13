@@ -670,7 +670,7 @@ demo-P-HEALTH.2: demo-P-HEALTH.1 ## P-HEALTH.2 (runs with P-HEALTH.1): a recover
 	$(BUN) run harness/scripts/demo_phealth2.ts
 
 .PHONY: demo-P-HEALTH.3
-demo-P-HEALTH.3: demo-P-HEALTH.2 ## P-HEALTH.3: a model writing a large tool call is not a stall. omp's ACP mapper drops toolcall_start/toolcall_delta, so a long write reached the desktop as minutes of silence with no tool call open and the watchdog probed ("Status?") and then cancelled and respawned a healthy session (incident 20260930T022224Z-mlnj). harness/omp/stream_beat_extension.ts posts a throttled beat carrying the omp session id while arguments stream; the engine credits it only to the master turn or busy lane with that id (no id, no beat). A successful self-heal no longer leaves chat chips; only a run that did not continue on its own (needsUser) does.
+demo-P-HEALTH.3: demo-P-HEALTH.2 ## P-HEALTH.3: a model writing a large tool call is not a stall. omp's ACP mapper drops toolcall_start/toolcall_delta, so a long write reached the desktop as minutes of silence with no tool call open and the watchdog probed ("Status?") and then canceled and respawned a healthy session (incident 20260930T022224Z-mlnj). harness/omp/stream_beat_extension.ts posts a throttled beat carrying the omp session id while arguments stream; the engine credits it only to the master turn or busy lane with that id (no id, no beat). A successful self-heal no longer leaves chat chips; only a run that did not continue on its own (needsUser) does.
 	$(BUN) test $(TEST_IGNORES) harness/omp/stream_beat_extension.test.ts desktop/health_watch.test.ts
 
 .PHONY: demo-P-TOKENS.1
@@ -1146,7 +1146,7 @@ demo-P-RELEASE.7: ## P-RELEASE.7 (ADR-0450): every RELEASED Windows build is sig
 demo-office: ## P-OFFICE.1 (ADR-0306): Word/Excel/PowerPoint through the pinned OfficeCLI binary as a GATED skill - the skill is version-pinned and forbids the piped `curl | bash` installer (which exec_policy independently classifies T4 always-prompt), exec_policy grades officecli by subcommand (view/get safe T0, create/add/set/remove/close T1, install/watch T2, an unknown verb fail-closed T3), and the live create -> add -> view outline -> view html -> close round-trip runs wherever the pinned binary is installed and prints a VISIBLE skip where it is not
 	$(BUN) run desktop/scripts/demo_office.ts
 .PHONY: demo-P-KG-INGEST.5
-demo-P-KG-INGEST.5: ## P-KG-INGEST.5 (ADR-0264): the chat-history ingest can no longer hang and Stop always stops - ACP requests are bounded (timeout + signal) and drained when the omp child exits (an unanswered `initialize` used to freeze the import at 0/500 forever), cancel is checked per MESSAGE and reaches the extractor so an in-flight model call is interrupted rather than awaited, a wedged job is force-cancelled after a grace period so single-flight releases and the user can retry without restarting, and the pill reports a silent run as STALLED instead of rendering a healthy-looking bar
+demo-P-KG-INGEST.5: ## P-KG-INGEST.5 (ADR-0264): the chat-history ingest can no longer hang and Stop always stops - ACP requests are bounded (timeout + signal) and drained when the omp child exits (an unanswered `initialize` used to freeze the import at 0/500 forever), cancel is checked per MESSAGE and reaches the extractor so an in-flight model call is interrupted rather than awaited, a wedged job is force-canceled after a grace period so single-flight releases and the user can retry without restarting, and the pill reports a silent run as STALLED instead of rendering a healthy-looking bar
 	$(BUN) run desktop/scripts/demo_p_kg_ingest_5.ts
 .PHONY: demo-P-EVAL.2
 demo-P-EVAL.2: ## P-EVAL.2 (ADR-0187): the API-latency CAPTURE + PERSISTENCE pipeline - the GUI-side sink turns t_sent/t_first_token/t_end into a LatencySample appended to an append-only JSONL (the GUI opens the observer DB read-only), the frozen migration 0011 creates api_latency + eval_metrics + the latency_rollup view, the single-writer ingest loads the JSONL idempotently, and readLatencyCalls round-trips the rows back into evals.ts's ApiLatencyCall (ok-only) so rollupLatency + render stay the P-EVAL.1 source of truth
@@ -1176,7 +1176,7 @@ demo-P-REMOTE.3: ## P-REMOTE.3 (ADR-0226/0227): the phone guest PWA data path - 
 demo-P-REMOTE.4a: ## P-REMOTE.4a (ADR-0226/0227): the invite-link QR - a dependency-free byte-mode encoder renders a real invite link as a scannable QR (printed to the terminal + a self-contained SVG); asserts finder/timing/dark structure + a safe-to-inline SVG. The room key rides IN the link fragment, so scanning carries the E2E secret exactly like copying it
 	$(BUN) run harness/scripts/demo_premote4a.ts
 .PHONY: demo-P-REMOTE.6
-demo-P-REMOTE.6: ## P-REMOTE.6 (ADR-0227): the paid Remote Access tier - over a REAL gated relay, a premium phone goes live (never shown Subscribe) while a verified-but-unentitled token is refused 4403 and the pure detector routes it to Subscribe; createRemoteCheckout opens a Stripe session fail-closed (null on error / no token); and a post-webhook refreshed token gains the `premium` claim so the phone recognises entitlement + reconnects
+demo-P-REMOTE.6: ## P-REMOTE.6 (ADR-0227): the paid Remote Access tier - over a REAL gated relay, a premium phone goes live (never shown Subscribe) while a verified-but-unentitled token is refused 4403 and the pure detector routes it to Subscribe; createRemoteCheckout opens a Stripe session fail-closed (null on error / no token); and a post-webhook refreshed token gains the `premium` claim so the phone recognizes entitlement + reconnects
 	$(BUN) run harness/scripts/demo_premote6.ts
 .PHONY: demo-P-REMOTE.8
 demo-P-REMOTE.8: ## P-REMOTE.8 (ADR-0229): PWA composer image attachments + reconnect-status recovery - over a REAL relay an EDIT guest attaches validated image data URLs to a prompt; they arrive E2E-sealed at the host's onGuestPrompt (staged into the host composer -> model vision input, host-gated), image-only messages work, and a VIEW guest's image prompt is refused. Then a transient drop shows a reconnect note and the next live host frame CLEARS it - no more stale "connection lost" banner while streaming
@@ -1350,7 +1350,7 @@ demo-P-PROV.3: ## P-PROV.3 (ADR-0444): OpenAI sign-in by device code. The OpenAI
 	$(BUN) test $(TEST_IGNORES) desktop/device_code.test.ts desktop/auth_status.test.ts desktop/auth_vault.test.ts desktop/oauth_failure.test.ts desktop/renderer/provider_hub.test.ts harness/adr_numbering.test.ts
 
 .PHONY: demo-P-MODEL.7
-demo-P-MODEL.7: ## P-MODEL.7 (ADR-0442): Claude Haiku 5.5 on omp 18.8.6. The six-package pin moves 18.4.4 -> 18.8.6 (no API moves; one packaging re-include for omp's archive declarations.d.ts); LUCID adds Haiku 5.5's $0.10/$0.50 row on both route spellings, the 1M window, a card, and it becomes the recommended checker when listed. R-07 re-pinned at 85 ids: factory-droid and snowflake listed as allied aggregators, helmcode's bare `glm5.3` gates behind the China-origin ACKNOWLEDGE. The omp-compat probe recognises the ADR-0422 override spelling again (issue #491), proven by migrating the real regression file.
+demo-P-MODEL.7: ## P-MODEL.7 (ADR-0442): Claude Haiku 5.5 on omp 18.8.6. The six-package pin moves 18.4.4 -> 18.8.6 (no API moves; one packaging re-include for omp's archive declarations.d.ts); LUCID adds Haiku 5.5's $0.10/$0.50 row on both route spellings, the 1M window, a card, and it becomes the recommended checker when listed. R-07 re-pinned at 85 ids: factory-droid and snowflake listed as allied aggregators, helmcode's bare `glm5.3` gates behind the China-origin ACKNOWLEDGE. The omp-compat probe recognizes the ADR-0422 override spelling again (issue #491), proven by migrating the real regression file.
 	$(BUN) test $(TEST_IGNORES) harness/omp/provider_catalog.test.ts harness/prompt/prefix_compaction.test.ts harness/testing/echo.test.ts harness/prompt/prompt_audit.test.ts desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/renderer/agent_flow.test.ts desktop/startup_model.test.ts desktop/checker_model.test.ts desktop/packaged_boot.test.ts harness/adr_numbering.test.ts
 	node -e 'import("./.github/scripts/omp-compat.mjs").then(m=>{const fs=require("fs");const src=fs.readFileSync("harness/prompt/prefix_compaction.test.ts","utf8");const cur=m.currentPin(JSON.parse(fs.readFileSync("package.json","utf8")),src);const out=m.migrateCandidateSource(src,cur,"99.0.0");if(!out.includes("const SUPPORTED_OMP = \"99.0.0\";"))throw new Error("probe migration lost the pin");console.log("omp-compat probe migrates the override-form regression from "+cur+" OK")})'
 	$(BUN) run harness/scripts/demo02_prefix_hash.ts
@@ -1436,6 +1436,38 @@ demo-P-TUI.6: demo-P-TUI.5e2 ## P-TUI.6 (ADR-0435): the deck STRIP + the fuzzy P
 	$(BUN) run desktop/scripts/demo_p_tui_6.ts
 	$(BUN) test $(TEST_IGNORES) harness/launcher/hub_palette.test.ts harness/launcher/hub_tui.test.ts harness/launcher/hub_agents_panel.test.ts harness/adr_numbering.test.ts
 
+.PHONY: demo-P-HERD.1
+demo-P-HERD.1: ## P-HERD.1 (ADR-0490, ADR-0541): Herd, the optional add-on: a hub server that outlives its terminal, clients that attach, detach and reattach, named instances with their own layout files and snapshots, the `lucid herd` client and server list|start|stop, the runtime host's /healthz, and the staged package.
+	$(BUN) test $(TEST_IGNORES) plugins/herd/test/hub_server.test.ts plugins/herd/test/cli.test.ts plugins/herd/test/runtime_host.test.ts plugins/herd/test/stage.test.ts
+
+.PHONY: demo-P-HERD.2
+demo-P-HERD.2: ## P-HERD.2 (ADR-0491, ADR-0545): named layouts as untrusted files: the parser refuses a lane id, cwd, model or prompt, presets, slots by priority or name, save, apply, cycle, and export and import from the shell only.
+	$(BUN) test $(TEST_IGNORES) plugins/herd/test/hub_layouts.test.ts
+
+.PHONY: demo-P-HERD.3
+demo-P-HERD.3: ## P-HERD.3 (ADR-0492, ADR-0545): the key model: prefix ctrl+b with terminal, prefix and navigate modes, hub-keys.json, directional focus and swap, resize by cells, copy mode with search and OSC 52 yank, pane move and rename.
+	$(BUN) test $(TEST_IGNORES) plugins/herd/test/hub_keys.test.ts plugins/herd/test/hub_herd_keys.test.ts plugins/herd/test/copy_mode.test.ts
+
+.PHONY: demo-P-HERD.4
+demo-P-HERD.4: ## P-HERD.4 (ADR-0493, ADR-0545): agent wait, prompt --wait, spawn --wait and agent events over the per-lane watch streams, pane wait-output, agent_blocked on an open ask, agent_prompt_stalled, timeouts; no verb answers an ask.
+	$(BUN) test $(TEST_IGNORES) plugins/herd/test/waits.test.ts
+
+.PHONY: demo-P-HERD.5
+demo-P-HERD.5: ## P-HERD.5 (ADR-0494, ADR-0545): attention: the seen ledger (done means not yet seen), needs-you first, `next` and ctrl+b a, the bell and terminal alerts with lane name and status only, notify rate limits.
+	$(BUN) test $(TEST_IGNORES) plugins/herd/test/attention.test.ts
+
+.PHONY: demo-P-HERD.6
+demo-P-HERD.6: ## P-HERD.6 (ADR-0495, ADR-0545): Main as a pane: the engine's own conversation over /api/chat, the parked ask answered only by keys, main prompt refused agent_blocked while Main waits on a person, session list and open --as main|lane.
+	$(BUN) test $(TEST_IGNORES) plugins/herd/test/hub_main_pane.test.ts
+
+.PHONY: demo-P-HERD.7
+demo-P-HERD.7: ## P-HERD.7 (ADR-0496, ADR-0549, ADR-0559): machines: engines on this box by --dir behind the nonce handshake with their own backoff, `<machine>/<lane>` refs, and the `spokes` machine listing Remote Spokes tasks (submit and follow-up only, a follow-up checks the task fresh, decisions refused human_only); a spoke task opens read-only in a pane; --ssh and --profile refused.
+	$(BUN) test $(TEST_IGNORES) plugins/herd/test/hub_machines.test.ts plugins/herd/test/spoke_pane.test.ts
+
+.PHONY: demo-P-HERD.8
+demo-P-HERD.8: ## P-HERD.8 (ADR-0497, ADR-0549): the read-only mirror page Herd serves on the runtime port: tabs, split tree, agent status and attention over Server-Sent Events; loopback Host, GET only, no foreign Origin, host token, a CSP of default-src none.
+	$(BUN) test $(TEST_IGNORES) plugins/herd/test/gui_mirror.test.ts plugins/herd/test/gui_server.test.ts
+
 .PHONY: demo-P-FLEET.WT1
 demo-P-FLEET.WT1: ## P-FLEET.WT1: a lane can run in its OWN git worktree (spawn option, the user accepts the merge-conflict risk): a new branch lucid/<name>-<id> from HEAD in <repo>.lucid-worktrees/<slug> beside the repo, the lane starting in the same subfolder the user picked; the original checkout is untouched, so the shared-checkout coordination (write waits, sweep refusals, check-ins) does not apply; a refused spawn removes the worktree, branch and folder it just made; not-a-repo and no-commits are named refusals.
 	$(BUN) test $(TEST_IGNORES) desktop/lane_worktree.test.ts
@@ -1502,7 +1534,7 @@ demo-P-RS-TASK-MODEL.1: ## P-RS-TASK-MODEL.1 (ADR-0511): a model chosen per task
 	$(BUN) test $(TEST_IGNORES) desktop/controller/controller.test.ts desktop/remote_spokes.test.ts desktop/renderer/remote_spokes_model.test.ts harness/adr_numbering.test.ts
 
 .PHONY: demo-P-RS-DEACTIVATE.1
-demo-P-RS-DEACTIVATE.1: ## P-RS-DEACTIVATE.1 (ADR-0512): a spoke deactivated on purpose. The view model maps the hub plugin's optional deactivated {since, reason} to the deactivated state, which wins over silent: dim grey, never animated, "Deactivated since <date>: <reason>", no alert lines, no selector row and no panel action; the engine refuses every action and read for it before anything is forwarded; without the field (an older plugin, or after hub reactivate) every spoke behaves as before
+demo-P-RS-DEACTIVATE.1: ## P-RS-DEACTIVATE.1 (ADR-0512): a spoke deactivated on purpose. The view model maps the hub plugin's optional deactivated {since, reason} to the deactivated state, which wins over silent: dim gray, never animated, "Deactivated since <date>: <reason>", no alert lines, no selector row and no panel action; the engine refuses every action and read for it before anything is forwarded; without the field (an older plugin, or after hub reactivate) every spoke behaves as before
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/remote_spokes_model.test.ts desktop/remote_spokes.test.ts harness/adr_numbering.test.ts
 
 .PHONY: demo-CREATOR-DRIFT
@@ -1558,6 +1590,12 @@ demo-P-FIPS.1: ## P-FIPS.1 (ADR-0473): AES-256-GCM, PBKDF2-HMAC-SHA256, SHA-256,
 .PHONY: demo-P-BREW.1
 demo-P-BREW.1: ## P-BREW.1: the Homebrew cask is an app cask over the release .zip - no pkg stanza, no allow_untrusted / package trust (deprecated in Homebrew 6), pinned per-arch sha256, and the cask url / electron-builder artifactName / update-cask job all name the same zips
 	$(BUN) run tools/cask_check.ts
+.PHONY: demo-P-HOLDER.1
+demo-P-HOLDER.1: ## P-HOLDER.1 (ADR-0533, ADR-0534): a lane's agent runs under lucid-holder (Rust, native/lucid-holder), so an engine killed mid-turn (a crash, an update, a closed window) leaves the turn running; the next engine reattaches and the same turn settles on the same agent process, nothing re-sent, asks already answered not asked again, open ones asked again; stopping a lane ends the holder and the agent tree. Real engines, the real holder, the house fake agent. Needs `bun run build-holder` (Rust)
+	cd desktop && $(BUN) run build-holder
+	$(BUN) run desktop/scripts/demo_p_holder_1.ts
+	$(BUN) test $(TEST_IGNORES) desktop/lane_holder.test.ts desktop/controller/lane_lifecycle.test.ts desktop/fleet_lanes.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-P-RECOVER.4
 demo-P-RECOVER.4: ## P-RECOVER.4 (ADR-0481): the main window recovers its own renderer. A render-process-gone that is not a clean exit is logged with reason + exit code and the app is loaded again after a backoff (250ms to 10s), at most 5 reloads per 60s sliding window; past the cap the window is left as it is and the log says to relaunch; a clean exit is ignored; an unresponsive renderer is logged, never reloaded. Wiring lives in main.ts createWindow (proven on a real Electron launch, ADR-0481 Consequences)
 	$(BUN) test $(TEST_IGNORES) desktop/renderer_watchdog.test.ts desktop/gpu_watchdog.test.ts desktop/navigation_policy.test.ts harness/adr_numbering.test.ts

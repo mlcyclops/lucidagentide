@@ -42,7 +42,7 @@ if (!cb || cb.port !== 1455 || cb.proc !== "omp.exe" || cb.state !== "LISTENING"
 ok(`netstat: 127.0.0.1:1455 LISTENING → ${cb.proc} (pid ${cb.pid})`);
 
 // (2) macOS/Linux parse reaches the same shape from `lsof`.
-const lsof = parseLsofLine("omp     4242 nick    7u  IPv4 0x1  0t0  TCP 127.0.0.1:1455 (LISTEN)");
+const lsof = parseLsofLine("omp     4242 operator    7u  IPv4 0x1  0t0  TCP 127.0.0.1:1455 (LISTEN)");
 if (!lsof || lsof.port !== 1455 || lsof.proc !== "omp" || lsof.state !== "LISTENING") fail("lsof callback row mis-parsed");
 ok(`lsof: same NetSocket shape on macOS/Linux → ${lsof.proc} on :${lsof.port}`);
 

@@ -60,7 +60,7 @@ export function isCreatorResources(v: unknown): v is CreatorResourcesView {
 
 export type LoadBand = "unknown" | "cool" | "warm" | "hot";
 
-/** The colour ramp: green under warm, amber to the pressure line, red at or above it. Null is its own
+/** The color ramp: green under warm, amber to the pressure line, red at or above it. Null is its own
  *  band - it is NOT the bottom of the scale. */
 export function loadBand(pct: number | null, warmPct = 70, hotPct = 90): LoadBand {
   if (pct === null || !Number.isFinite(pct)) return "unknown";
@@ -92,7 +92,7 @@ const polar = (cx: number, cy: number, r: number, deg: number): [number, number]
   return [Math.round((cx + r * Math.cos(rad)) * 100) / 100, Math.round((cy + r * Math.sin(rad)) * 100) / 100];
 };
 
-/** A 270-degree odometer: graduated track, a coloured value arc, a needle, and the value in the hub.
+/** A 270-degree odometer: graduated track, a colored value arc, a needle, and the value in the hub.
  *  `pct === null` paints the track and needle at rest with no value arc (the "no signal" face). */
 export function odometerSvg(pct: number | null, opts: { size?: number; warmPct?: number; hotPct?: number } = {}): string {
   const size = opts.size ?? 68;

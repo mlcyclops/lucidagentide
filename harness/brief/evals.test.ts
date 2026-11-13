@@ -6,7 +6,7 @@
 // direct/proxy/needs_signal tiers (never zero-as-truth), and the per-model x hour rollup + WoW deltas.
 //
 // P-EVAL.4 (ADR-0187) adds the second half: the four metrics nothing in the pipeline ever populated now
-// carry a labelled DERIVED substitute, the per-tool breakdown groups by real tool name, and the report
+// carry a labeled DERIVED substitute, the per-tool breakdown groups by real tool name, and the report
 // states its gaps out loud. The tests below pin BOTH axes, because the whole point is that the derived
 // proxies improve the report without ever entering the measured values migration 0011 persists.
 
@@ -149,7 +149,7 @@ test("render: markdown emits mermaid xychart the viewer bar-ifies; ASCII-only", 
   expect(em).toContain("xychart-beta"); // provenance chart
   // P-EVAL.4: baseRun has tests + AC, so nothing on its rendered table is unmeasurable any more. The old
   // assertion here was a bare `toContain("needs_signal")`, which only ever passed because tokens-per-clean-
-  // line printed that jargon on EVERY report; it now shows a labelled derived proxy instead. What has to
+  // line printed that jargon on EVERY report; it now shows a labeled derived proxy instead. What has to
   // stay honest is the provenance column, so assert that directly.
   expect(em).toContain("| Tokens per clean line | 12.3 gen/line | proxy | derived |");
   expect(em).toContain("| Test pass rate | 100% | direct | measured |");

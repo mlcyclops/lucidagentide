@@ -604,7 +604,9 @@ export interface InstalledPluginView {
   /** Signed by a publisher key baked into this build. */
   signed: boolean;
 }
-export interface PluginsListView { plugins: InstalledPluginView[] }
+/** ADR-0541: an optional add-on this build ships (desktop/addons/index.json). Offered, never installed by setup. */
+export interface OfferedAddonView { id: string; version: string }
+export interface PluginsListView { plugins: InstalledPluginView[]; offered: OfferedAddonView[] }
 export type PluginInstallView =
   | { ok: true; id: string; version: string; signed?: boolean }
   | { ok: false; gate: PluginGate; reason: string; logPath?: string };
@@ -619,6 +621,8 @@ export type PluginFileInspectView =
 export type PluginStartView = { ok: true; url: string } | { ok: false; error: string };
 export type PluginActionView = { ok: true } | { ok: false; error: string };
 export interface PluginLicenseView { ok: boolean; id?: string; version?: string; text?: string; error?: string }
+/** ADR-0542: what the first start of a release after a dev build removed (data kept) and which dev settings it ignores. */
+export interface ReleaseCleanupView { from: string; to: string; at: string; removed: { id: string; name: string; version: string }[]; envIgnored: string[] }
 // P-PROV.1 (ADR-0210): extra per-provider config env (Azure resource/version, Vertex project/location/ADC,
 // Gemini-Enterprise project). Non-secret fields echo `value` to pre-fill; secret fields report `last4`.
 // `options` (ADR-0504): a closed choice rendered as a select, the first option being the unset default.
@@ -1243,11 +1247,16 @@ export interface LucidBridge {
   // P-PLUGINS.7 (ADR-0505): a private install from a picked file, in two explicit steps.
   pluginsInspectFile(path: string): Promise<PluginFileInspectView | null>;
   pluginsInstallFile(input: { path: string; sha256: string; acceptUnsigned: boolean }): Promise<PluginInstallView | null>;
+  /** ADR-0541: install an add-on this build offers; the engine refuses any id its add-ons index does not name. */
+  pluginsInstallOffered(id: string): Promise<PluginInstallView | null>;
   pluginsStart(id: string): Promise<PluginStartView | null>;
   pluginsStop(id: string): Promise<PluginActionView | null>;
   /** keepData defaults to true: the plugin's data dir survives unless the user asks to delete it. */
   pluginsUninstall(id: string, keepData?: boolean): Promise<PluginActionView | null>;
   pluginsLicense(id: string): Promise<PluginLicenseView | null>;
+  /** ADR-0542: the last dev-to-release cleanup the user has not seen yet (null when none), and marking it seen. */
+  releaseCleanup(): Promise<ReleaseCleanupView | null>;
+  releaseCleanupAck(): Promise<boolean | null>;
   // P-CMD.1 (ADR-0146): user-authored "/" slash commands (workspace .omp/commands/). Create validates +
   // scans fail-closed server-side. `list` = stored commands; `create` returns the persisted command or errors.
   userCommands(): Promise<UserCommand[]>;
@@ -1301,10 +1310,10 @@ export interface LucidBridge {
   setTheme(theme: string): Promise<ProfileSettings | null>;
   // Enterprise-managed policy (read-only; placed by admins via GPO/MDM).
   managed(): Promise<ManagedPolicy | null>;
-  // P-IDE.1c: China-origin model data-sovereignty acknowledgement gate.
+  // P-IDE.1c: China-origin model data-sovereignty acknowledgment gate.
   chinaAck(): Promise<{ acknowledged: boolean } | null>;
   setChinaAck(acknowledge: boolean): Promise<{ acknowledged: boolean } | null>;
-  // Third-party / non-U.S. / custom "More providers" acknowledgement gate (mirrors chinaAck).
+  // Third-party / non-U.S. / custom "More providers" acknowledgment gate (mirrors chinaAck).
   thirdPartyAck(): Promise<{ acknowledged: boolean } | null>;
   setThirdPartyAck(acknowledge: boolean): Promise<{ acknowledged: boolean } | null>;
   // ADR-0219: per chat-session CUI vs Search mode (defaults to the ACTIVE session when no id is given).
@@ -1410,7 +1419,7 @@ export interface LucidBridge {
    *  browser (LucidAgentIDE.bat / lucid.exe + default browser). The server runs on the same machine
    *  (loopback bind), so it opens the real Explorer / Finder / zenity dialog itself. `supported:false`
    *  (or null: request failed) = fall back to the in-app browser; `supported:true, path:null` = the
-   *  user CANCELLED, never re-prompt. */
+   *  user CANCELED, never re-prompt. */
   pickFolderNative(opts?: PickFolderOpts): Promise<NativePickResult | null>;
   // P-NETWL.1 (ADR-0106): native FILE picker + OS-encrypted credential vault. All Electron-only; in a plain
   // browser pickFile/credList resolve null/[] and credStore reports the vault as unavailable (fail-closed).
@@ -1578,6 +1587,9 @@ export interface LucidBridge {
   showInFolder(path: string): Promise<boolean>; // P-FSREVEAL.1: reveal a FILE highlighted in its parent folder (Electron only; false in browser)
   canShowInFolder(): boolean; // whether the native shell can reveal a file in its folder (Electron only)
   openExternal(url: string): Promise<boolean>; // open an http(s) URL in the OS browser (OAuth); false in browser → caller falls back to window.open
+  /** P-RS-WINDOW.1 (ADR-0543): the Remote Spokes admin window at a minted panel URL. False when main refuses it,
+   *  null outside Electron (the caller then opens a named browser tab). */
+  openRemoteSpokesAdmin(url: string): Promise<boolean | null>;
   // P-INTERJECT.1/.2 (wave 2): mid-turn operator interjection - queue a note the running turn's agent
   // reads at its next tool boundary (target "master" or a laneId; the server enforces trim, the 4000-char
   // limit, and the 8-note-per-target cap). ADR-0414: `live` marks the user's own push, which the engine
@@ -1639,6 +1651,7 @@ interface NativeShell {
   pickFolder?(opts?: PickFolderOpts): Promise<string | null>;
   capturePreview?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
   openExternal?(url: string): Promise<boolean>;
+  openRemoteSpokesAdmin?(url: string): Promise<boolean>;
   revealPath?(path: string): Promise<boolean>;
   showInFolder?(path: string): Promise<boolean>; // P-FSREVEAL.1: reveal a file highlighted in its parent folder
   relaunch?(): Promise<void>; // P-LOCAL.3 polish: restart the app to apply local-provider changes
@@ -2119,10 +2132,13 @@ export const bridge: LucidBridge = {
   pluginsInstallFromUrl: (url, expectId) => post("/api/plugins/install-from-url", { url, expectId }),
   pluginsInspectFile: (path) => post("/api/plugins/inspect-file", { path }),
   pluginsInstallFile: (input) => post("/api/plugins/install-file", input),
+  pluginsInstallOffered: (id) => post("/api/plugins/install-offered", { id }),
   pluginsStart: (id) => post("/api/plugins/start", { id }),
   pluginsStop: (id) => post("/api/plugins/stop", { id }),
   pluginsUninstall: (id, keepData = true) => post("/api/plugins/uninstall", { id, keepData }),
   pluginsLicense: (id) => getData(`/api/plugins/license?id=${encodeURIComponent(id)}`),
+  releaseCleanup: () => getData("/api/release-cleanup"),
+  releaseCleanupAck: () => post("/api/release-cleanup/ack", {}),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
   clearActiveSkill: () => post("/api/skill", { clear: true }),
   skillActivated: (command, name, source) => post("/api/skill/activated", { command, name, source }),
@@ -2399,7 +2415,7 @@ export const bridge: LucidBridge = {
     return isSystemStatus(v) ? v : null;
   },
   // CREATOR-0 (ADR-0279): identity + feature reveal. A null (old backend, failed call) means NO Creator
-  // surface renders - absent, never a greyed hint.
+  // surface renders - absent, never a grayed hint.
   buildInfo: async () => {
     const v: unknown = await getData("/api/build-info").catch(() => null);
     const o = v as BuildInfoView | null;
@@ -2644,6 +2660,7 @@ export const bridge: LucidBridge = {
   revealPath: (path) => (shell?.revealPath ? shell.revealPath(path) : Promise.resolve(false)),
   canRevealPath: () => !!shell?.revealPath,
   openExternal: (url) => (shell?.openExternal ? shell.openExternal(url) : Promise.resolve(false)),
+  openRemoteSpokesAdmin: (url) => (shell?.openRemoteSpokesAdmin ? shell.openRemoteSpokesAdmin(url) : Promise.resolve(null)),
   showInFolder: (path) => (shell?.showInFolder ? shell.showInFolder(path) : Promise.resolve(false)), // P-FSREVEAL.1 (ADR-0212)
   canShowInFolder: () => !!shell?.showInFolder,
   // P-RECOVER.1 (ADR-0385): every answer is shape-checked here, so app.ts only ever sees the contract types.

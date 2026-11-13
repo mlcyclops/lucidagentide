@@ -198,7 +198,7 @@ describe("the free / self-hosted additions and the paid catalog", () => {
     for (const id of ["dgx-avatar", "dgx-cad", "hyperframes", "openfilm"]) {
       expect(foldProviderStatus(spec(id), { endpoints: [], secretPresent: false }).usable).toEqual([]);
     }
-    const cad: CreatorEndpointDef = { id: "nick-dgx-cad", providerId: "dgx-cad", label: "CAD", baseUrl: "http://127.0.0.1:8089", zone: "internal", enclave: true, enabled: true };
+    const cad: CreatorEndpointDef = { id: "gpu-box-cad", providerId: "dgx-cad", label: "CAD", baseUrl: "http://127.0.0.1:8089", zone: "internal", enclave: true, enabled: true };
     expect(foldProviderStatus(spec("dgx-cad"), { endpoints: [cad], secretPresent: false, discovered: ["cad-drawing"] }).usable).toEqual(["cad-drawing"]);
     expect(foldProviderStatus(spec("pdf-markup"), { endpoints: [], secretPresent: false })).toMatchObject({ state: "built-in", usable: ["pdf-markup"] });
   });
@@ -208,7 +208,7 @@ describe("the free / self-hosted additions and the paid catalog", () => {
     expect(spec("dgx-vision").capabilities.map((c) => c.id).sort())
       .toEqual(["depth", "inpaint", "layer-decompose", "matte", "segment", "upscale", "vectorize", "vision-label"]);
     expect(foldProviderStatus(spec("dgx-vision"), { endpoints: [], secretPresent: false })).toMatchObject({ state: "needs-endpoint", usable: [] });
-    const vision: CreatorEndpointDef = { id: "nick-dgx-vision", providerId: "dgx-vision", label: "Vision", baseUrl: "http://127.0.0.1:8090", zone: "internal", enclave: true, enabled: true };
+    const vision: CreatorEndpointDef = { id: "gpu-box-vision", providerId: "dgx-vision", label: "Vision", baseUrl: "http://127.0.0.1:8090", zone: "internal", enclave: true, enabled: true };
     expect(foldProviderStatus(spec("dgx-vision"), { endpoints: [vision], secretPresent: false, discovered: ["segment", "upscale", "cad-model"] }).usable).toEqual(["segment", "upscale"]);
     expect(spec("design")).toMatchObject({ kind: "renderer", transports: ["in-renderer"], cui: { posture: "on-device" } });
     expect(foldProviderStatus(spec("design"), { endpoints: [], secretPresent: false })).toMatchObject({
@@ -276,7 +276,7 @@ describe("the free / self-hosted additions and the paid catalog", () => {
 
 describe("enclave attestation and the CUI fold", () => {
   const avatar = (over: Partial<CreatorEndpointDef> = {}): CreatorEndpointDef => ({
-    id: "nick-dgx-avatar", providerId: "dgx-avatar", label: "Avatar (Nick DGX)", baseUrl: "http://127.0.0.1:8088", zone: "internal", enclave: true, enabled: true, ...over,
+    id: "gpu-box-avatar", providerId: "dgx-avatar", label: "Avatar (GPU box)", baseUrl: "http://127.0.0.1:8088", zone: "internal", enclave: true, enabled: true, ...over,
   });
 
   test("enclave must be a boolean when present", () => {

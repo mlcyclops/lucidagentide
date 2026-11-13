@@ -88,7 +88,7 @@ function paintBowl(c: CanvasRenderingContext2D, w: number, h: number): void {
     glow(c, x, rimY(x, w, h) - 4, 7, "255 236 200", 0.6);
   }
 
-  // Field: dark infield, lit centre, a running-track oval.
+  // Field: dark infield, lit center, a running-track oval.
   c.beginPath();
   c.moveTo(0, h);
   for (let x = 0; x <= w + 8; x += 8) c.lineTo(x, fieldY(x, w, h));

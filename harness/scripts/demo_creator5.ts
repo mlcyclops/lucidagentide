@@ -438,15 +438,15 @@ check("hard left puts the signal ONLY on the left: the right channel is exactly 
 check("and a stereo render never reports an ignored pan, because it honored it",
   panR.panIgnored === false);
 
-const CENTRE = Math.round(LEVEL * Math.SQRT1_2);
-const centred: MixGraph = {
+const CENTER = Math.round(LEVEL * Math.SQRT1_2);
+const centered: MixGraph = {
   ...emptyMix(FMT.sampleRate, 2),
-  tracks: [mixTrack({ id: "mid", label: "Centre", pan: 0, clips: [clip({ id: "m1", sourceId: "level", durationMs: LEVEL_MS })] })],
+  tracks: [mixTrack({ id: "mid", label: "Center", pan: 0, clips: [clip({ id: "m1", sourceId: "level", durationMs: LEVEL_MS })] })],
 };
-const centrePcm = parseWav(mustRender("render a centred track", centred, SOURCES).wav).data;
-check("equal-power centre sits at 1/sqrt(2) per side, not at unity per side",
-  pcmAt(centrePcm, 0, 2, 0) === CENTRE && pcmAt(centrePcm, 0, 2, 1) === CENTRE,
-  `${LEVEL} x ${Math.SQRT1_2.toFixed(6)} = ${CENTRE} on both channels`);
+const centerPcm = parseWav(mustRender("render a centered track", centered, SOURCES).wav).data;
+check("equal-power center sits at 1/sqrt(2) per side, not at unity per side",
+  pcmAt(centerPcm, 0, 2, 0) === CENTER && pcmAt(centerPcm, 0, 2, 1) === CENTER,
+  `${LEVEL} x ${Math.SQRT1_2.toFixed(6)} = ${CENTER} on both channels`);
 const positions = [-1, -0.5, 0, 0.5, 1];
 const powers = positions.map((p) => {
   const g = panGains(p, 2);

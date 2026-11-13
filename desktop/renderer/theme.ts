@@ -52,7 +52,7 @@ export const THEMES: readonly ThemeDef[] = [
     id: "slate",
     label: "Slate",
     scheme: "dark",
-    blurb: "Neutral grey with the colour turned right down.",
+    blurb: "Neutral gray with the color turned right down.",
     swatch: ["#101114", "#a878b8", "#e8eaee"],
   },
   {

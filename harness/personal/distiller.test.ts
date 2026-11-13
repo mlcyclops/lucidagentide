@@ -40,13 +40,13 @@ test("heuristicExtractor finds preferences, interests, and links", () => {
 });
 
 test("heuristicExtractor captures natural-language facts (decision, role, goal, avoid, name)", () => {
-  const facts = heuristicExtractor({ user: "I'm a security engineer and I decided to go with Postgres. I avoid Java. My goal is to ship v1. Call me Nick.", assistant: "" });
+  const facts = heuristicExtractor({ user: "I'm a security engineer and I decided to go with Postgres. I avoid Java. My goal is to ship v1. Call me Operator.", assistant: "" });
   const kinds = facts.map((f) => f.kind);
   expect(kinds).toContain("user:decision");    // Chose Postgres
-  expect(kinds).toContain("user:personality");  // Is a security engineer / Goes by Nick
+  expect(kinds).toContain("user:personality");  // Is a security engineer / Goes by Operator
   expect(kinds).toContain("user:goal");         // ship v1
   expect(facts.some((f) => /avoids java/i.test(f.statement))).toBe(true);
-  expect(facts.some((f) => /goes by nick/i.test(f.statement))).toBe(true);
+  expect(facts.some((f) => /goes by operator/i.test(f.statement))).toBe(true);
 });
 
 test("heuristicExtractor learns nothing from a plain coding question (no personal facts)", () => {
@@ -85,7 +85,7 @@ test("modelExtractor forwards the abort signal to the model call", async () => {
   expect(received).toBe(ctl.signal);
 });
 
-test("modelExtractor skips the model call entirely once cancelled", async () => {
+test("modelExtractor skips the model call entirely once canceled", async () => {
   let calls = 0;
   const callModel = async () => { calls++; return '[{"kind":"user:goal","entity":"x","statement":"y"}]'; };
   const facts = await modelExtractor(callModel)({ user: "anything", assistant: "", signal: AbortSignal.abort() });
@@ -93,7 +93,7 @@ test("modelExtractor skips the model call entirely once cancelled", async () => 
   expect(facts).toEqual([]);
 });
 
-test("distillTurn learns nothing once cancelled, and does not report it as a gate block", async () => {
+test("distillTurn learns nothing once canceled, and does not report it as a gate block", async () => {
   const store = newStore();
   let extracted = false;
   const r = await distillTurn(store, cleanScanner, {
@@ -102,7 +102,7 @@ test("distillTurn learns nothing once cancelled, and does not report it as a gat
   });
   expect(extracted).toBe(false);
   expect(r.learned).toBe(0);
-  expect(r.blocked).toBe(false); // cancelled is NOT quarantined; conflating them would corrupt the audit
+  expect(r.blocked).toBe(false); // canceled is NOT quarantined; conflating them would corrupt the audit
   expect(store.graph({ scope: "combined" }).facts.length).toBe(0);
 });
 

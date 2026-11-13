@@ -3,7 +3,7 @@
 
 // desktop/renderer/voice_eq.ts
 //
-// P-VOICE.4 (ADR-0248): the glowing spectrum analyser that dances to the agent's voice - a segmented,
+// P-VOICE.4 (ADR-0248): the glowing spectrum analyzer that dances to the agent's voice - a segmented,
 // peak-holding LED display of the kind that sat on the front of a 1980s hi-fi.
 //
 // It taps the REAL audio: one persistent <audio> element is routed through a Web Audio AnalyserNode, so the
@@ -14,7 +14,7 @@
 //     ONLY through the graph. If the AudioContext can't run (autoplay policy), routing it would mute the
 //     agent. So the graph is built lazily and ONLY after resume() has actually succeeded - failing that,
 //     playback stays native and the display simply idles. Sound is never traded for a visual.
-//   · One analyser feeds EVERY mounted canvas (the mini strip under the prompt bar AND the floating dock),
+//   · One analyzer feeds EVERY mounted canvas (the mini strip under the prompt bar AND the floating dock),
 //     from a single rAF loop that stops itself once the display has settled. Two canvases cost one FFT.
 //
 // The ballistics + band folding are pure and tested (harness/voice/eq_bands.ts); this file is the audio graph
@@ -29,7 +29,7 @@ export const EQ_BANDS = 14;
 /** LED rows per bar. The segmentation IS the look - a smooth gradient bar reads as a progress meter. */
 const SEGMENTS = 12;
 
-/** Classic analyser ramp, nudged towards LUCID's palette at the quiet end: teal -> amber -> red. */
+/** Classic analyzer ramp, nudged towards LUCID's palette at the quiet end: teal -> amber -> red. */
 function segColor(t: number, alpha: number): string {
   const rgb = t < 0.55 ? "62,214,178" : t < 0.8 ? "240,196,84" : "236,92,92";
   return `rgba(${rgb},${alpha})`;
@@ -99,9 +99,9 @@ export class VoiceEqualizer {
   private live = false; // audio is currently playing — keep painting even through a silent passage
 
   /** Whether real spectrum data is flowing (false = the display idles; playback is unaffected). */
-  get analysing(): boolean { return this.analyser !== null; }
+  get analyzing(): boolean { return this.analyser !== null; }
 
-  /** Route `el` through the analyser, building the graph on first use. Returns false when Web Audio can't be
+  /** Route `el` through the analyzer, building the graph on first use. Returns false when Web Audio can't be
    *  started - the caller must carry on playing regardless, because silence is worse than a still display. */
   async ensure(el: HTMLAudioElement): Promise<boolean> {
     if (typeof AudioContext === "undefined") return false;
@@ -118,7 +118,7 @@ export class VoiceEqualizer {
         an.fftSize = 2048;
         an.smoothingTimeConstant = 0.6; // a little smoothing before our own ballistics
         src.connect(an);
-        an.connect(ctx.destination); // MUST reach the speakers - the analyser is a tap, not a sink
+        an.connect(ctx.destination); // MUST reach the speakers - the analyzer is a tap, not a sink
         this.analyser = an;
         this.bins = new Uint8Array(new ArrayBuffer(an.frequencyBinCount));
         this.edges = bandEdges(an.frequencyBinCount, EQ_BANDS, EQ_MIN_HZ, EQ_MAX_HZ, ctx.sampleRate / 2);

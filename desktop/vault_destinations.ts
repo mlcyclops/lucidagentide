@@ -426,7 +426,7 @@ export interface DestinationListResult {
 }
 
 /** What one destination holds (connector `list`, metadata only). Only secrets whose `lucid-ref` tag maps to
- *  their own name count as LUCID entries, so a mislabelled secret can never land under another ref. */
+ *  their own name count as LUCID entries, so a mislabeled secret can never land under another ref. */
 export async function listDestination(id: string): Promise<DestinationListResult> {
   const d = destinationOf(id);
   requireAddon();

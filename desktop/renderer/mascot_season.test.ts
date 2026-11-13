@@ -99,7 +99,7 @@ describe("sprites - well-formed pixel grids", () => {
 });
 
 describe("headAnchor - hats ride the hood on every frame", () => {
-  it("finds the hood top near the top of the box and roughly centred, for every body frame", () => {
+  it("finds the hood top near the top of the box and roughly centered, for every body frame", () => {
     for (const f of Object.keys(MASCOT_FRAMES)) {
       const a = headAnchor(f);
       const grid = MASCOT_FRAMES[f]!;
@@ -114,7 +114,7 @@ describe("headAnchor - hats ride the hood on every frame", () => {
   });
 });
 
-describe("seasonPalette - costume colours, face untouched", () => {
+describe("seasonPalette - costume colors, face untouched", () => {
   it("null is the base palette itself", () => {
     expect(seasonPalette(null, MASCOT_PALETTE)).toBe(MASCOT_PALETTE);
   });

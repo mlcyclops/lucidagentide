@@ -24,6 +24,10 @@
 // Everything is still defensively wrapped: a registration failure NEVER breaks omp launch — worst case
 // `preview_open` is simply absent and the user keeps auto-on-write preview (P-PREVIEW.2) + the manual panel.
 
+// LH-03 (ADR-0544): a held lane's call is MACed and its answer proven. engine_channel's module scope only defines
+// constants and functions (fips_crypto binds its native module on first use), so this import cannot throw at load.
+import { engineFetch } from "./engine_channel.ts";
+
 /** Minimal, self-contained checks (no desktop import - this runs in omp's process). The renderer's
  *  resolvePreview/readPreviewFile is the authoritative gate before anything renders; this is belt-and-braces. */
 const LOCAL_PATH = /^(file:\/\/|[A-Za-z]:[\\/]|\/|~[\\/]|\\\\)/;
@@ -159,7 +163,7 @@ export default function previewExtension(pi: any): void {
         let blocked = "";
         if (openUrl) {
           try {
-            const r = await fetch(openUrl, {
+            const r = await engineFetch(openUrl, {
               method: "POST",
               headers: { "content-type": "application/json" },
               body: JSON.stringify({ path }),
@@ -202,7 +206,7 @@ export default function previewExtension(pi: any): void {
         const url = process.env.LUCID_PREVIEW_SHOT_URL;
         if (!url) return text("Preview screenshots aren't available in this environment (the desktop preview isn't running).");
         try {
-          const r = await fetch(url);
+          const r = await engineFetch(url);
           if (!r.ok) return text(unavailable);
           const body: any = await r.json().catch(() => null);
           // The dev server wraps responses as { ok, data: { png } }; tolerate a top-level { png } too.
@@ -247,7 +251,7 @@ export default function previewExtension(pi: any): void {
         if (params?.selector) u.searchParams.set("selector", String(params.selector).slice(0, 400));
         if (params?.what) u.searchParams.set("what", String(params.what).slice(0, 40));
         try {
-          const r = await fetch(u.toString());
+          const r = await engineFetch(u.toString());
           if (!r.ok) return text("No preview is open to inspect yet — write an .html/.svg or call preview_open first, then retry.");
           const body: any = await r.json().catch(() => null);
           const result = body?.data?.result ?? body?.result;
@@ -275,7 +279,7 @@ export default function previewExtension(pi: any): void {
       u.searchParams.set("selector", selector.slice(0, 400));
       if (value != null) u.searchParams.set("value", String(value).slice(0, 2000));
       try {
-        const r = await fetch(u.toString());
+        const r = await engineFetch(u.toString());
         if (!r.ok) return text6c("No preview is open — write an .html/.svg or call preview_open first, then retry.");
         const body: any = await r.json().catch(() => null);
         const res = body?.data?.result ?? body?.result;

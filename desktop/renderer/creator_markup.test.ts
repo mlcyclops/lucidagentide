@@ -172,7 +172,7 @@ describe("XFDF", () => {
     expect(byId.get("t1")!.fontSize).toBe(14);
   });
 
-  test("a text box's colour is written to the default appearance, never as its box fill", () => {
+  test("a text box's color is written to the default appearance, never as its box fill", () => {
     const xml = markupsToXfdf([all[5]!], "x.pdf");
     expect(xml).toMatch(/<freetext (?![^>]*color=)/);
     expect(xml).toContain("<defaultappearance>/Helv 14 Tf 0 0.502 0 rg</defaultappearance>");

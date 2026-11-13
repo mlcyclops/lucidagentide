@@ -9,6 +9,8 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  # A branch that is not yet aimed at master (a stacked PR) can still run the whole gate on demand.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -58,6 +60,11 @@ jobs:
       - name: Harness test suite
         run: bun test harness
 
+      # P-HOLDER.1 (ADR-0533/0534): the one Rust crate. The runner image ships rustup and cargo.
+      - name: lucid-holder (Rust) tests
+        working-directory: native/lucid-holder
+        run: cargo test --release --locked
+
       - name: Install + typecheck (desktop)
         working-directory: desktop
         run: |
@@ -87,6 +94,34 @@ jobs:
       - name: Packaged-boot guard (release boots under the packaging filter)
         run: bun test desktop/packaged_boot.test.ts
 
+  # P-HOLDER.1 (ADR-0534): the holder's POSIX half (setsid, the agent's process group, the Unix socket) only runs
+  # here; the Windows gate below covers the job object and the named pipe.
+  holder-posix:
+    name: Lane holder (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install (root)
+        run: bun install
+      - name: Install (desktop)
+        working-directory: desktop
+        run: bun install
+      - name: Build lucid-holder (Rust)
+        working-directory: desktop
+        run: bun run build-holder
+      - name: lucid-holder (Rust) tests
+        working-directory: native/lucid-holder
+        run: cargo test --release --locked
+      - name: Held lanes against the real holder
+        run: bun test --timeout 30000 desktop/lane_holder.test.ts desktop/controller/lane_lifecycle.test.ts desktop/fleet_lanes.test.ts
+
   # ADR-0352 (P-TEST.W2): the developer machine is Windows, CI was Linux-only, and the gap grew
   # 8 standing environmental test failures that no PR ever saw (ADR-0351 fixed them). This leg
   # replicates the LOCAL gate (`make test`'s bun half: the full suite under TEST_IGNORES) on
@@ -107,6 +142,11 @@ jobs:
       - name: Install (desktop)
         working-directory: desktop
         run: bun install
+
+      # P-HOLDER.1: desktop/lane_holder.test.ts drives the real holder (and fails under CI when it is missing).
+      - name: Build lucid-holder (Rust)
+        working-directory: desktop
+        run: bun run build-holder
 
       # The same exclusion-only scope as the local gate (ADR-0303: scope by exclusion, never by
       # positional pattern) - vendored trees and the packaged release copy stay out.

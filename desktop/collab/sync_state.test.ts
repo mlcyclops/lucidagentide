@@ -161,7 +161,7 @@ describe("planSync: the auto window", () => {
     expect(planSync([], "master", Number.NEGATIVE_INFINITY).auto).toBe(true);
   });
 
-  it("honours a caller-supplied window", () => {
+  it("honors a caller-supplied window", () => {
     expect(planSync([], "master", 1_000, 1_000).auto).toBe(true);
     expect(planSync([], "master", 1_001, 1_000).auto).toBe(false);
     expect(planSync([], "master", 120_000, 600_000).auto).toBe(true);

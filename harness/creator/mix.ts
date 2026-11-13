@@ -56,7 +56,7 @@ export interface MixTrack {
   readonly label: string;
   readonly clips: readonly MixClip[];
   readonly gain: number;
-  /** -1 hard left, 0 centre, 1 hard right. Ignored by a mono render, which SAYS so in the result. */
+  /** -1 hard left, 0 center, 1 hard right. Ignored by a mono render, which SAYS so in the result. */
   readonly pan: number;
   readonly muted: boolean;
   readonly solo: boolean;
@@ -181,7 +181,7 @@ export function clipFadeGain(clip: MixClip, offsetMs: number): number {
   return g;
 }
 
-/** Equal-power pan: centre sits at 1/sqrt(2) per side, so sweeping a track across the image does not make
+/** Equal-power pan: center sits at 1/sqrt(2) per side, so sweeping a track across the image does not make
  *  it louder in the middle. A mono render ignores pan entirely. */
 export function panGains(pan: number, channels: number): number[] {
   if (channels === 1) return [1];
@@ -343,7 +343,7 @@ export interface NewTrackInput {
   busId?: string;
 }
 
-/** A track with the defaults spelled out, so every caller starts from unity gain, centred, audible. */
+/** A track with the defaults spelled out, so every caller starts from unity gain, centered, audible. */
 export function mixTrack(input: NewTrackInput): MixTrack {
   return {
     id: input.id,

@@ -638,7 +638,7 @@ export interface ImportResult {
   ok: boolean; error?: string;
   vendor?: ImportVendor; conversations?: number; messages?: number; learned?: number; blocked?: number;
   skipped?: number; extractor?: "heuristic" | "model";
-  cancelled?: boolean; // P-KG-INGEST.1: the background run was cancelled mid-flight (partial facts kept)
+  cancelled?: boolean; // P-KG-INGEST.1: the background run was canceled mid-flight (partial facts kept)
 }
 
 // Model-mode bounds cost: at most this many user messages get a model call per import. The

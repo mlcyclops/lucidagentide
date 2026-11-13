@@ -116,7 +116,7 @@ describe("control (pause / resume / cancel at any time; dismiss a finished goal)
     const d = control(done, HB, "dismiss", T0);
     expect(d.ok && d.goal).toBeNull();
   });
-  test("an open goal cannot be dismissed, only cancelled", () => {
+  test("an open goal cannot be dismissed, only canceled", () => {
     expect(control(goal(), HB, "dismiss", T0).ok).toBe(false);
   });
 });
@@ -202,7 +202,7 @@ describe("taskTurnEnded (verify before done, fail-closed)", () => {
     const rejected = setTaskCheck(v.goal, "t-1", "k2", false, T0 + 3);
     expect(rejected.ok && rejected.goal.tasks[0]).toMatchObject({ status: "ready", lastFailure: "a reviewer rejected: rows show within 3 s" });
   });
-  test("an outcome for a task no longer running (cancelled meanwhile) changes nothing", () => {
+  test("an outcome for a task no longer running (canceled meanwhile) changes nothing", () => {
     const g = started();
     const cancelled = { ...g, tasks: g.tasks.map((t) => ({ ...t, status: "cancelled" as const })) };
     expect(taskTurnEnded(cancelled, "t-1", "work", { ok: true, text: "x" }, T0 + 1).goal).toBe(cancelled);
@@ -219,7 +219,7 @@ describe("parseCheckVerdict", () => {
 });
 
 describe("goal lifecycle reaches tasks", () => {
-  test("cancelling the goal cancels its open tasks; an engine restart sends a mid-turn task back to ready", () => {
+  test("canceling the goal cancels its open tasks; an engine restart sends a mid-turn task back to ready", () => {
     const g = planTasks(withTasks({}, { assignee: "b" }), [idle("a"), lane("b", 0)], T0).goal; // b is busy: its task stays ready
     const c = control(g, HB, "cancel", T0 + 1);
     expect(c.ok && c.goal?.tasks.map((t) => t.status)).toEqual(["cancelled", "cancelled"]);

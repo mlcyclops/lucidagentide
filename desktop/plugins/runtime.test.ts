@@ -8,20 +8,22 @@
 // the way Electron's Node does in the app.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLEAN, buildServerFixture, testKey, writeStage } from "./fixtures.ts";
-import { installPluginBytes, pluginDataDir } from "./install.ts";
+import { installPluginBytes } from "./install.ts";
+import { pluginDataDir, readInstalled } from "./installed.ts";
+import { readRunIntents, runIntentDir, setRunIntent } from "./intent.ts";
 import { pluginMcpServers } from "./mcp.ts";
 import { pluginOrigin, PLUGIN_PORT_MAX, PLUGIN_PORT_MIN } from "./ports.ts";
-import { PluginRuntime, preferredPort, resolveWebFile, webCsp } from "./runtime.ts";
+import { PluginRuntime, preferredPort, resolveWebFile, webCsp, type RuntimeDeps } from "./runtime.ts";
 import { buildPlugin } from "../../tools/build_plugin.ts";
 import { pluginSelfNavigation } from "../navigation_policy.ts";
 import type { PluginManifest } from "../../harness/plugins/package.ts";
 
 const KEY = testKey();
-const ENV_KEYS = ["LUCID_PLUGINS_DIR", "LUCID_PLUGIN_DATA_DIR", "LUCID_PLUGIN_LOG_PATH"] as const;
+const ENV_KEYS = ["LUCID_PLUGINS_DIR", "LUCID_PLUGIN_DATA_DIR", "LUCID_PLUGIN_LOG_PATH", "LUCID_LICENSE_DEV", "LUCID_LICENSE_DEV_PUB", "OPENAI_API_KEY"] as const;
 let saved: Record<string, string | undefined> = {};
 let work = "";
 let runtime: PluginRuntime | null = null;
@@ -44,8 +46,8 @@ afterEach(async () => {
 
 const deps = { trusted: KEY.trusted, decide: async () => CLEAN, record: () => {}, managedEgress: {} };
 
-function makeRuntime(healthTimeoutMs = 20_000): PluginRuntime {
-  runtime = new PluginRuntime({ nodeExe: () => process.execPath, agentBin: () => "C:/lucid/omp.exe", onMcpChange: () => { mcpChanges++; }, healthTimeoutMs });
+function makeRuntime(healthTimeoutMs = 20_000, extra: Partial<RuntimeDeps> = {}): PluginRuntime {
+  runtime = new PluginRuntime({ nodeExe: () => process.execPath, agentBin: () => "C:/lucid/omp.exe", onMcpChange: () => { mcpChanges++; }, healthTimeoutMs, ...extra });
   return runtime;
 }
 
@@ -101,6 +103,33 @@ describe("server plugins", () => {
     const again = await rt.start("fixture-server");
     expect(again.ok && again.url).toBe(url);
   }, 60_000);
+
+  // A plugin that checks a development license (remote-spokes ADR-A092) gets the developer's two variables under a
+  // dev build of the IDE; an engine secret still never crosses.
+  test("under a dev build the development license variables reach a plugin; the engine's other environment does not", async () => {
+    process.env.LUCID_LICENSE_DEV = "1";
+    process.env.LUCID_LICENSE_DEV_PUB = "MCowBQYDK2VwAyEAdevpublickey";
+    process.env.OPENAI_API_KEY = "sk-not-for-plugins";
+    expect((await installPluginBytes(buildServerFixture(KEY), "fixture-server", deps)).ok).toBe(true);
+    const rt = makeRuntime(20_000, { appVersion: "2.6.0-dev.3" });
+    expect((await rt.start("fixture-server")).ok).toBe(true);
+    const env = pluginMcpServers()[0]!.env;
+    expect(env).toContainEqual({ name: "LUCID_LICENSE_DEV", value: "1" });
+    expect(env).toContainEqual({ name: "LUCID_LICENSE_DEV_PUB", value: "MCowBQYDK2VwAyEAdevpublickey" });
+    expect(env.map((e) => e.name)).not.toContain("OPENAI_API_KEY");
+  }, 60_000);
+
+  // ADR-0542: a release drops the development overrides, so a plugin there accepts publisher licenses only.
+  test("a release drops the development license variables", async () => {
+    process.env.LUCID_LICENSE_DEV = "1";
+    process.env.LUCID_LICENSE_DEV_PUB = "MCowBQYDK2VwAyEAdevpublickey";
+    expect((await installPluginBytes(buildServerFixture(KEY), "fixture-server", deps)).ok).toBe(true);
+    const p = readInstalled("fixture-server")!;
+    const names = makeRuntime(20_000, { appVersion: "2.6.0" }).mcpServerFor(p, PLUGIN_PORT_MIN)!.env.map((e) => e.name);
+    expect(names).not.toContain("LUCID_LICENSE_DEV");
+    expect(names).not.toContain("LUCID_LICENSE_DEV_PUB");
+    expect(names).toContain("LUCID_PLUGIN_ID");
+  });
 
   // ADR-0506: the engine's own way into a server plugin. The token exists only while the plugin runs, only the
   // plugin process holds it (never its MCP child, never the renderer's list), and a restart mints a new one.
@@ -197,6 +226,125 @@ describe("web plugins", () => {
     expect(csp).toContain("img-src 'self' data: blob:;");
     expect(csp).toContain("frame-ancestors http://localhost:* http://127.0.0.1:*");
   });
+});
+
+// P-PLUGINS.8 (ADR-0546): what the runtime does to the running-intent ledger. A new PluginRuntime over the same
+// folders is the next launch.
+describe("running intent across launches", () => {
+  async function installWebFixture(): Promise<void> {
+    const src = writeStage({ "LICENSE": "license\n", "web/index.html": "<!doctype html>" }, {
+      schema: 1, id: "fixture-web", name: "Fixture Web", version: "1.0.0", publisher: "TECHLEAD 187 LLC",
+      license: "LUCID-Premium-Plugin-1.0", tier: "premium", section: "government", kind: "web",
+      entry: { root: "web", index: "index.html" }, permissions: ["network:internet"],
+    });
+    const zip = readFileSync(buildPlugin({ src, out: mkdtempSync(join(tmpdir(), "lplugin-out-")), privateKey: KEY.privateKey }).zipPath);
+    expect((await installPluginBytes(zip, "fixture-web", deps)).ok).toBe(true);
+  }
+  const stateOf = (rt: PluginRuntime, id: string) => rt.list().find((p) => p.id === id)?.state;
+
+  test("a new install waits for the user; a started plugin comes back at the next launch; the user's Stop holds", async () => {
+    await installWebFixture();
+    let rt = makeRuntime();
+    expect(await rt.autostart()).toEqual([]); // newly installed: nothing runs unasked (ADR-0541)
+    expect(stateOf(rt, "fixture-web")).toBe("installed");
+
+    expect((await rt.start("fixture-web")).ok).toBe(true);
+    expect(readRunIntents(runIntentDir())).toEqual(["fixture-web"]);
+    if (process.platform !== "win32") expect(statSync(join(runIntentDir(), "fixture-web")).mode & 0o777).toBe(0o600);
+
+    await rt.stopAll(); // the engine quitting is not the user stopping it
+    expect(readRunIntents(runIntentDir())).toEqual(["fixture-web"]);
+    rt = makeRuntime();
+    expect(await rt.autostart()).toEqual([{ id: "fixture-web", ok: true, attempts: 1 }]);
+    expect(stateOf(rt, "fixture-web")).toBe("running");
+
+    expect(await rt.stop("fixture-web", { byUser: true })).toEqual({ ok: true });
+    expect(readRunIntents(runIntentDir())).toEqual([]);
+    rt = makeRuntime();
+    expect(await rt.autostart()).toEqual([]);
+    expect(stateOf(rt, "fixture-web")).toBe("installed");
+  }, 30_000);
+
+  test("uninstall forgets the intent; a recorded plugin with no package is skipped and forgotten", async () => {
+    await installWebFixture();
+    const rt = makeRuntime();
+    expect((await rt.start("fixture-web")).ok).toBe(true);
+    expect(await rt.uninstall("fixture-web", true)).toEqual({ ok: true });
+    expect(readInstalled("fixture-web")).toBeNull();
+    expect(readRunIntents(runIntentDir())).toEqual([]);
+
+    setRunIntent("gone-private", runIntentDir()); // e.g. an unsigned private install a release cleanup removed
+    expect(await makeRuntime().autostart()).toEqual([]);
+    expect(readRunIntents(runIntentDir())).toEqual([]);
+  }, 30_000);
+
+  test("a release build ignores and forgets a development build's intent but honors a release one", async () => {
+    await installWebFixture();
+    setRunIntent("fixture-web", runIntentDir(), "2.6.0-dev.1");
+    let rt = makeRuntime(20_000, { appVersion: "2.6.0" });
+    expect(await rt.autostart()).toEqual([]);
+    expect(stateOf(rt, "fixture-web")).toBe("installed");
+    expect(readRunIntents(runIntentDir())).toEqual([]);
+
+    setRunIntent("fixture-web", runIntentDir(), "2.6.0");
+    rt = makeRuntime(20_000, { appVersion: "2.6.0" });
+    expect(await rt.autostart()).toEqual([{ id: "fixture-web", ok: true, attempts: 1 }]);
+    await rt.stopAll();
+
+    setRunIntent("fixture-web", runIntentDir(), "2.6.0-dev.1");
+    rt = makeRuntime(20_000, { appVersion: "2.6.0-dev.2" });
+    expect(await rt.autostart()).toEqual([{ id: "fixture-web", ok: true, attempts: 1 }]);
+  }, 30_000);
+
+  test("an installed file with one byte changed is not autostarted; its intent goes and a block is recorded", async () => {
+    await installWebFixture();
+    const p = readInstalled("fixture-web")!;
+    const file = join(p.dir, "web/index.html");
+    const bytes = readFileSync(file);
+    bytes[0] = bytes[0]! ^ 1;
+    writeFileSync(file, bytes);
+    setRunIntent("fixture-web", runIntentDir());
+    const blocks: { tool: string; reason: string }[] = [];
+    const rt = makeRuntime(20_000, { record: (b) => { blocks.push(b); } });
+    expect(await rt.autostart()).toEqual([]);
+    expect(stateOf(rt, "fixture-web")).toBe("installed");
+    expect(readRunIntents(runIntentDir())).toEqual([]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.tool).toBe("plugin_autostart");
+    expect(blocks[0]!.reason).toContain("web/index.html does not match its sha256");
+  }, 30_000);
+
+  test("a Stop while a start awaits its port cancels the launch and the intent", async () => {
+    await installWebFixture();
+    const port = Promise.withResolvers<number>();
+    const asked = Promise.withResolvers<void>();
+    const rt = makeRuntime(20_000, { pickPort: () => { asked.resolve(); return port.promise; } });
+    const started = rt.start("fixture-web");
+    await asked.promise; // the start is now held on its port
+    expect(await rt.stop("fixture-web", { byUser: true })).toEqual({ ok: true });
+    port.resolve(PLUGIN_PORT_MIN + 7);
+    expect((await started).ok).toBe(false);
+    expect(stateOf(rt, "fixture-web")).toBe("installed");
+    expect(readRunIntents(runIntentDir())).toEqual([]);
+  }, 30_000);
+
+  test("a crash and an update's stop keep the intent; only the user's stop clears it", async () => {
+    expect((await installPluginBytes(buildServerFixture(KEY), "fixture-server", deps)).ok).toBe(true);
+    const rt = makeRuntime();
+    expect((await rt.start("fixture-server")).ok).toBe(true);
+    const pids = JSON.parse(readFileSync(join(pluginDataDir("fixture-server"), "pids.json"), "utf8")) as { server: number; child: number };
+    process.kill(pids.server);
+    expect(await until(() => stateOf(rt, "fixture-server") === "error", 10_000)).toBe(true);
+    try { process.kill(pids.child); } catch { /* already gone */ }
+    expect(readRunIntents(runIntentDir())).toEqual(["fixture-server"]);
+
+    const up = await installPluginBytes(buildServerFixture(KEY, { version: "0.2.0" }), "fixture-server", { ...deps, beforeSwitch: async (id: string) => { await rt.stop(id); } });
+    expect(up.ok).toBe(true);
+    expect(readRunIntents(runIntentDir())).toEqual(["fixture-server"]);
+
+    expect(await rt.stop("fixture-server", { byUser: true })).toEqual({ ok: true });
+    expect(readRunIntents(runIntentDir())).toEqual([]);
+  }, 60_000);
 });
 
 describe("ports and navigation", () => {

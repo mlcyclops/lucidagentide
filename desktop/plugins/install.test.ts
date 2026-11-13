@@ -7,7 +7,7 @@
 // and uninstalls while the plugin's data directory survives.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sha256Bytes } from "../../harness/kb/pack.ts";
@@ -17,13 +17,14 @@ import { signPluginManifest, type PluginManifest } from "../../harness/plugins/p
 import { authenticodeVerdict } from "./authenticode.ts";
 import { CLEAN, buildServerFixture, testKey } from "./fixtures.ts";
 import {
-  downloadUrlProblem, inspectPluginFile, installPluginBytes, installPluginFile, installPluginFromUrl, listInstalled, pluginDataDir,
-  pluginLogPath, readInstalled, readPluginLicense, uninstallPlugin, type InstallDeps,
+  addonsDir, downloadUrlProblem, inspectPluginFile, installOfferedPlugin, installPluginBytes, installPluginFile, installPluginFromUrl,
+  pluginLogPath, readOfferedAddons, readPluginLicense, uninstallPlugin, type InstallDeps,
 } from "./install.ts";
+import { listInstalled, pluginDataDir, readInstalled } from "./installed.ts";
 import { PluginRuntime } from "./runtime.ts";
 
 const KEY = testKey();
-const ENV_KEYS = ["LUCID_PLUGINS_DIR", "LUCID_PLUGIN_DATA_DIR", "LUCID_PLUGIN_LOG_PATH", "LUCID_PLUGIN_DEV_LOOPBACK"] as const;
+const ENV_KEYS = ["LUCID_PLUGINS_DIR", "LUCID_PLUGIN_DATA_DIR", "LUCID_PLUGIN_LOG_PATH", "LUCID_PLUGIN_DEV_LOOPBACK", "LUCID_ADDONS_DIR"] as const;
 let saved: Record<string, string | undefined> = {};
 let work = "";
 
@@ -338,5 +339,87 @@ describe("private install from a file", () => {
     expect(await installPluginFile(next, { sha256: v2.sha256, acceptUnsigned: false }, deps())).toMatchObject({ ok: true, version: "0.2.0" });
     expect(readInstalled("fixture-server")).toMatchObject({ source: "private", signed: true, manifest: { version: "0.2.0" } });
     expect(readFileSync(join(pluginDataDir("fixture-server"), "state.json"), "utf8")).toBe("{\"kept\":true}");
+  });
+});
+
+// ADR-0541: an add-on the build OFFERS (desktop/addons, index.json). It installs only through install-offered,
+// only for an id the index names, only the bytes its sha256 names, and only signed.
+describe("offered add-ons", () => {
+  const FILE = "fixture-server-0.1.0.lplugin.zip";
+  /** Lay out `<work>/addons` the way tools/build_addons.ts does: the package beside its index. */
+  const offer = (zip: Buffer, index: unknown = [{ id: "fixture-server", version: "0.1.0", file: FILE, sha256: sha256Bytes(zip) }]): string => {
+    const dir = join(work, "addons");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, FILE), zip);
+    writeFileSync(join(dir, "index.json"), JSON.stringify(index));
+    return dir;
+  };
+  const offeredActions = (): string[] => readFileSync(pluginLogPath(), "utf8").trim().split("\n")
+    .map((l) => JSON.parse(l) as { action: string; ok: boolean; gate?: string })
+    .filter((a) => a.action === "install-offered").map((a) => (a.ok ? "ok" : a.gate ?? ""));
+
+  test("a signed offered package installs as a private signed install", async () => {
+    const dir = offer(buildServerFixture(KEY, { tier: "free" }));
+    expect(readOfferedAddons(dir)).toEqual([{ id: "fixture-server", version: "0.1.0", file: FILE, sha256: expect.any(String) }]);
+    expect(await installOfferedPlugin("fixture-server", dir, deps())).toMatchObject({ ok: true, id: "fixture-server", version: "0.1.0", signed: true });
+    expect(readInstalled("fixture-server")).toMatchObject({ source: "private", signed: true });
+    expect(offeredActions()).toEqual(["ok"]);
+  });
+
+  test("an id the index does not name is refused, even when a package for it sits in the folder", async () => {
+    const dir = offer(buildServerFixture(KEY, { tier: "free" }), []);
+    expect(readOfferedAddons(dir)).toEqual([]);
+    const r = await installOfferedPlugin("fixture-server", dir, deps());
+    expect(r).toMatchObject({ ok: false, gate: "private" });
+    expect(r.ok ? "" : r.reason).toContain("not an add-on this build offers");
+    expect(await installOfferedPlugin("herd", offer(buildServerFixture(KEY, { tier: "free" })), deps())).toMatchObject({ ok: false, gate: "private" });
+    expect(nothingInstalled()).toBe(true);
+  });
+
+  test("a package that does not match the index sha256 is refused", async () => {
+    const zip = buildServerFixture(KEY, { tier: "free" });
+    const dir = offer(zip, [{ id: "fixture-server", version: "0.1.0", file: FILE, sha256: "0".repeat(64) }]);
+    const r = await installOfferedPlugin("fixture-server", dir, deps());
+    expect(r).toMatchObject({ ok: false, gate: "private" });
+    expect(r.ok ? "" : r.reason).toContain("add-on index");
+    expect(nothingInstalled()).toBe(true);
+  });
+
+  test("an unsigned offered package is refused, with no unsigned acceptance to give", async () => {
+    const dir = offer(buildServerFixture(null, { tier: "free" }));
+    expect(await installOfferedPlugin("fixture-server", dir, deps())).toMatchObject({ ok: false, gate: "signature" });
+    expect(nothingInstalled()).toBe(true);
+    expect(offeredActions()).toEqual(["signature"]);
+  });
+
+  test("a package whose id differs from its index row is refused", async () => {
+    const zip = buildServerFixture(KEY, { tier: "free", id: "other-addon" });
+    const dir = join(work, "addons");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "herd-0.1.0.lplugin.zip"), zip);
+    writeFileSync(join(dir, "index.json"), JSON.stringify([{ id: "herd", version: "0.1.0", file: "herd-0.1.0.lplugin.zip", sha256: sha256Bytes(zip) }]));
+    expect(await installOfferedPlugin("herd", dir, deps())).toMatchObject({ ok: false, gate: "manifest" });
+    expect(listInstalled()).toEqual([]);
+  });
+
+  test("a missing or malformed index offers nothing; a row naming a path is dropped", () => {
+    expect(readOfferedAddons(join(work, "no-such-addons"))).toEqual([]);
+    const zip = buildServerFixture(KEY, { tier: "free" });
+    expect(readOfferedAddons(offer(zip, { id: "fixture-server" }))).toEqual([]);
+    const sha256 = sha256Bytes(zip);
+    const rows = [
+      { id: "fixture-server", version: "0.1.0", file: "../fixture-server-0.1.0.lplugin.zip", sha256 },
+      { id: "fixture-server", version: "0.1.0", file: "sub/fixture-server-0.1.0.lplugin.zip", sha256 },
+      { id: "Fixture", version: "0.1.0", file: "Fixture-0.1.0.lplugin.zip", sha256 },
+      { id: "fixture-server", version: "0.1.0", file: FILE, sha256: "not-a-sha" },
+    ];
+    expect(readOfferedAddons(offer(zip, rows))).toEqual([]);
+  });
+
+  test("the add-ons folder sits beside the app resources unless LUCID_ADDONS_DIR overrides it", () => {
+    delete process.env.LUCID_ADDONS_DIR;
+    expect(addonsDir(join(work, "resources"))).toBe(join(work, "resources", "addons"));
+    process.env.LUCID_ADDONS_DIR = join(work, "elsewhere");
+    expect(addonsDir(join(work, "resources"))).toBe(join(work, "elsewhere"));
   });
 });

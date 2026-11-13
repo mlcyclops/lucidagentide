@@ -25,7 +25,7 @@ console.log("== P-PREVIEW.2 — auto-surface the agent's freshly-written app =="
 // (1) The minesweeper case continued: the agent's write tool produces game.html → auto-surface.
 console.log("\n1) a write of a previewable file → surfaced");
 for (const [tool, ri, want] of [
-  ["write", { path: "C:\\Users\\neorc\\Documents\\My Music\\hormuz-minesweeper.html" }, "C:\\Users\\neorc\\Documents\\My Music\\hormuz-minesweeper.html"],
+  ["write", { path: "C:\\Users\\operator\\Documents\\My Music\\hormuz-minesweeper.html" }, "C:\\Users\\operator\\Documents\\My Music\\hormuz-minesweeper.html"],
   ["edit", { file_path: "/home/n/app.htm" }, "/home/n/app.htm"],
   ["write", { filename: "diagram.svg" }, "diagram.svg"],
   // P-PREVIEW.18: a generated PDF is unreadable as bytes, so showing it IS the deliverable.

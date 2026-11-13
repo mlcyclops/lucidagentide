@@ -10,7 +10,7 @@
 // browser build and the desktop app share one real backend. The preload only
 // adds native window controls + crisp zoom.
 
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, safeStorage, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, safeStorage, screen, shell } from "electron";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -44,6 +44,8 @@ import { BROWSER_POLICY_WORLD, SNAPSHOT_JS, freshnessJs, isBrowserAction, isBrow
 import { captureCropFromCssRect } from "./preview_capture.ts"; // P-PREVIEW.1: CSS-px rect -> DIP crop (zoom-aware)
 import { flavorInfo, resolveBuildFlavor } from "./build_flavor.ts"; // CREATOR-0 (ADR-0279): the product-line identity
 import { installAppNavigation, openExternalHttp } from "./navigation_policy.ts";
+import { ADMIN_BOUNDS_FILE, ADMIN_MIN_SIZE, ADMIN_PARTITION, ADMIN_WINDOW_TITLE, adminBounds, adminNavigation, adminOpenAction } from "./admin_window.ts"; // P-RS-WINDOW.1 (ADR-0543)
+import { pluginOrigin } from "./plugins/ports.ts";
 import { isEngineDocument } from "./origin_guard.ts"; // P-SANDBOX.15 (ADR-0396): the UI token goes only to our own window
 import { installCliForwarder } from "./cli_forwarder.ts"; // P-TUI.2: `lucid hub` from any terminal on an installed machine
 
@@ -982,7 +984,7 @@ ipcMain.handle("lucid:credStoreFile", async (e, input: { kind: string; label?: s
       title: "Choose an auth file (token / PEM / API key / config)",
       filters: [{ name: "Keys & tokens", extensions: ["pem", "key", "crt", "cer", "jwt", "json", "txt", "token"] }, { name: "All files", extensions: ["*"] }],
     });
-    if (r.canceled || !r.filePaths[0]) return null; // user cancelled
+    if (r.canceled || !r.filePaths[0]) return null; // user canceled
     const p = r.filePaths[0];
     const secret = readFileSync(p, "utf8");
     const label = input.label && input.label.trim() ? input.label : p.replace(/^.*[\\/]/, ""); // default label = filename
@@ -1365,6 +1367,63 @@ function startAgentBrowserLoop(): void {
 ipcMain.handle("lucid:openExternal", async (e, u: unknown) => {
   if (!win || win.isDestroyed() || e.sender !== win.webContents || e.senderFrame !== win.webContents.mainFrame) return false;
   return openExternalHttp(u, (url) => shell.openExternal(url));
+});
+
+// P-RS-WINDOW.1 (ADR-0543): the Remote Spokes plugin's panel in ONE window of its own. The renderer mints a fresh
+// panel URL through the engine first; this loads it top level, on the plugin's loopback origin only, in an
+// in-memory session of its own, with no preload. Closing it leaves the plugin running. Same sender check as
+// openExternal: only the main window's main frame may ask.
+let adminWin: BrowserWindow | null = null;
+/** The one origin the admin window may show: the panel URL it was last given (a restarted plugin may move ports). */
+let adminAllowed = "";
+const adminBoundsPath = (): string => join(app.getPath("userData"), ADMIN_BOUNDS_FILE);
+/** Window opens and top-level navigations: same origin stays, https goes to the system browser, the rest is refused. */
+function adminRoute(url: string): boolean {
+  const nav = adminNavigation(adminAllowed, url);
+  if (nav === "external") void openExternalHttp(url, (out) => shell.openExternal(out));
+  return nav === "allow";
+}
+function createAdminWindow(): BrowserWindow {
+  const w = new BrowserWindow({
+    ...adminBounds(readTextBestEffort(adminBoundsPath()), screen.getAllDisplays().map((d) => d.workArea)),
+    minWidth: ADMIN_MIN_SIZE.width, minHeight: ADMIN_MIN_SIZE.height,
+    show: false, autoHideMenuBar: true, title: ADMIN_WINDOW_TITLE, backgroundColor: "#0a0b0f",
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, partition: ADMIN_PARTITION },
+  });
+  w.webContents.setWindowOpenHandler(({ url }) => { adminRoute(url); return { action: "deny" }; });
+  w.webContents.on("will-navigate", (ev, url) => { if (!adminRoute(url)) ev.preventDefault(); });
+  w.webContents.on("will-redirect", (ev, url) => { if (ev.isMainFrame && adminNavigation(adminAllowed, url) !== "allow") ev.preventDefault(); });
+  // The title stays the window's own, whatever the panel's document calls itself.
+  w.on("page-title-updated", (ev) => { ev.preventDefault(); });
+  const save = (): void => {
+    if (w.isDestroyed() || w.isMinimized() || w.isMaximized() || w.isFullScreen()) return;
+    try { writeFileSync(adminBoundsPath(), JSON.stringify(w.getBounds())); } catch { /* the default size next time */ }
+  };
+  w.on("resized", save);
+  w.on("moved", save);
+  w.on("close", save);
+  w.on("closed", () => { if (adminWin === w) adminWin = null; });
+  return w;
+}
+ipcMain.handle("lucid:openRemoteSpokesAdmin", async (e, u: unknown) => {
+  if (!win || win.isDestroyed() || e.sender !== win.webContents || e.senderFrame !== win.webContents.mainFrame) return false;
+  const origin = pluginOrigin(u);
+  if (!origin || typeof u !== "string") return false;
+  const w = adminWin && !adminWin.isDestroyed() ? adminWin : createAdminWindow();
+  const fresh = w !== adminWin;
+  adminWin = w;
+  // Each Open carries a fresh one-time #bootstrap secret, so the window loads it unless it already shows that very
+  // URL; a page kept on a spent token answers 403 to everything (a plugin restarted on the same port).
+  const action = adminOpenAction(fresh ? "" : w.webContents.getURL(), u);
+  adminAllowed = origin;
+  try {
+    if (action === "load") await w.loadURL(u);
+  } catch { /* a failed load still shows the window, with the browser's error page */ }
+  if (w.isDestroyed()) return false;
+  if (w.isMinimized()) w.restore();
+  w.show();
+  w.focus();
+  return true;
 });
 
 // P-RECOVER.1 (ADR-0385): the window lost the engine ("reconnecting" and nothing happens). Same sender

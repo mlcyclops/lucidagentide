@@ -335,7 +335,7 @@
 
     /* P-PWA-FLEET.2: the FLEET strip - an auto-collapsed double-decker above the transcript.
 
-       COLOUR PARITY WITH THE DESKTOP IS THE POINT. The five lane colours, the two animations, and the rule
+       COLOR PARITY WITH THE DESKTOP IS THE POINT. The five lane colors, the two animations, and the rule
        that ONLY the two action-needed states animate are lifted from desktop/renderer/styles.css
        (.fleet-card.lane-*), keyed off the SAME `lane-<status>` class, so a lane that is red in the desktop
        dock is red here. The phone's own hues are used where the desktop's palette has an equivalent, and
@@ -351,7 +351,7 @@
     #fleet[data-attn] .fleet-title { color: var(--red); }
     #fleet[data-attn] .fleet-sum { color: var(--txt); }
 
-    /* the collapsed bar's count pips - one per state present, coloured by the same lane-<status> mapping
+    /* the collapsed bar's count pips - one per state present, colored by the same lane-<status> mapping
        as the desktop's minimized dock pill (.fleet-pip there, identical structure: dot + count) */
     .fleet-pips { display: inline-flex; align-items: center; gap: 7px; flex: none; white-space: nowrap; }
     .fleet-pip { display: inline-flex; align-items: center; gap: 3px; flex: none; }
@@ -375,7 +375,7 @@
     .fleet-lanes { display: contents; }
     .fleet-empty { font-size: 12.5px; color: var(--txt3); padding: 4px 0; }
 
-    /* THE LANE COLOUR MAPPING - desktop parity, one custom property per state */
+    /* THE LANE COLOR MAPPING - desktop parity, one custom property per state */
     .lane-card { --lane: var(--txt3); --lane-dim: transparent; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 7px; }
     .lane-card.lane-starting { --lane: #64748b; }
     .lane-card.lane-working { --lane: #46c8dc; --lane-dim: rgba(70,200,220,.35); border-color: rgba(70,200,220,.5); }
@@ -398,7 +398,7 @@
     @keyframes fleetGlowBlue { 0%,100% { box-shadow: 0 0 0 0 rgba(94,141,242,0); } 50% { box-shadow: 0 0 14px 2px rgba(94,141,242,.4); } }
     @keyframes fleetGlowRed { 0%,100% { box-shadow: 0 0 2px 0 rgba(239,95,95,.3); } 50% { box-shadow: 0 0 18px 3px rgba(239,95,95,.6); } }
     @keyframes lanePulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
-    /* the desktop honours this; so does the phone. Only the two attention states animate at all. */
+    /* the desktop honors this; so does the phone. Only the two attention states animate at all. */
     @media (prefers-reduced-motion: reduce) {
       .lane-card.lane-awaiting-input, .lane-card.lane-needs-approval, .lane-card.lane-likely-stuck,
       .fleet-pip.lane-needs-approval i, .fleet-pip.lane-working i { animation: none; }
@@ -476,7 +476,7 @@
     .lane-card[data-focused] { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(14, 165, 233, 0.55); }
 
     /* P-REMOTE.15: Check in + Push now moved into the composer menus, so the row no longer grows a button
-       per mid-turn action. The amber Push now keeps its caution colour as a menu row. */
+       per mid-turn action. The amber Push now keeps its caution color as a menu row. */
     #mi-push .cx-mi-l { color: var(--amber); }
     #mi-checkin .cx-mi-l { color: var(--cyan); }
   </style>

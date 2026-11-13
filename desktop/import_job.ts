@@ -3,7 +3,7 @@
 
 // desktop/import_job.ts — P-KG-INGEST.1 (ADR-0076): run a chat-history import as a tracked BACKGROUND
 // job so the HTTP request returns immediately, the app stays usable, and the UI can show a live countdown
-// + cancel. A single active job at a time (an import is heavy and serialises through one encrypted store);
+// + cancel. A single active job at a time (an import is heavy and serializes through one encrypted store);
 // a second start is refused rather than racing two writers. Fail-safe: a cancelled/failed run keeps the
 // facts already learned (importer saves partial progress) and never leaves a torn write.
 
@@ -84,7 +84,7 @@ export function startImport(opts: {
 
 /** Request cancellation of the running job. The abort reaches the importer at the next MESSAGE (and
  *  interrupts the in-flight model call), so a healthy run stops in seconds. A wedged run cannot be
- *  awaited forever, so the job is force-cancelled after CANCEL_GRACE_MS regardless, and pressing
+ *  awaited forever, so the job is force-canceled after CANCEL_GRACE_MS regardless, and pressing
  *  Stop while it is already stopping force-cancels immediately. Either way the UI settles and a new
  *  import can start. */
 export function cancelImport(jobId?: string): { ok: boolean } {

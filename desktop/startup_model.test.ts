@@ -91,7 +91,7 @@ describe("resolveStartupModel - cloud-only default, local strictly opt-in", () =
     const r = resolveStartupModel({ lastUsed: "", current: "", options: [opt("dgx-spark/glm-5.3-flash")], isConfigured: () => true, isLocal });
     expect(r).toBeNull();
   });
-  it("a CLOUD last-used model is still restored (P-MODEL.2 behaviour kept)", () => {
+  it("a CLOUD last-used model is still restored (P-MODEL.2 behavior kept)", () => {
     const r = resolveStartupModel({ lastUsed: "openai-codex/gpt-5.5", current: "", options: [...LOCAL, ...OPTIONS], isConfigured: postOauth, isLocal });
     expect(r).toEqual({ value: "openai-codex/gpt-5.5", source: "last-used" });
   });

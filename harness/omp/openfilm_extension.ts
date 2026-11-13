@@ -21,7 +21,8 @@
 // Never throws: a missing URL, a dead engine, or a malformed answer degrades to explanatory text.
 
 import { UNTRUSTED_END, UNTRUSTED_START } from "../prompt/assembler.ts";
-import { neutralizeDelimiters } from "./mcp_result_gate.ts";
+import { engineFetch } from "./engine_channel.ts"; // LH-03 (ADR-0544): a held lane's call is MACed and its answer proven
+import { neutralizeDelimiters } from "../prompt/untrusted.ts";
 
 export const OPENFILM_TOOL_NAMES = ["openfilm_look", "openfilm_render", "openfilm_job"] as const;
 export const LOOK_WAIT_DEFAULT_S = 300;
@@ -97,7 +98,7 @@ export function formatOpenfilmJob(body: unknown, waited: number | null = null): 
     );
   }
   if (state === "refused") return refusal(error, `OpenFilm ${kind} job ${jobId} was refused.`);
-  if (state === "cancelled") return text(`OpenFilm ${kind} job ${jobId} was cancelled${error ? `: ${error}` : ""}. Nothing was produced; start a new one only if the user still wants it.`, true);
+  if (state === "cancelled") return text(`OpenFilm ${kind} job ${jobId} was canceled${error ? `: ${error}` : ""}. Nothing was produced; start a new one only if the user still wants it.`, true);
 
   if (kind === "render") {
     if (state === "failed") return text(`OpenFilm render job ${jobId} failed: ${error || "no error text"}. No video was added to the Creator library. Run openfilm_look and fix every error before rendering again.`, true);
@@ -303,7 +304,7 @@ async function getJob(jobId: string): Promise<unknown> {
   const url = process.env.LUCID_OPENFILM_JOB_URL;
   if (!url) return { ok: false, error: "OpenFilm is not reachable in this environment (no Creator engine)." };
   try {
-    const r = await fetch(`${url}&jobId=${encodeURIComponent(jobId)}`, { method: "GET", signal: AbortSignal.timeout(15000) });
+    const r = await engineFetch(`${url}&jobId=${encodeURIComponent(jobId)}`, { method: "GET", signal: AbortSignal.timeout(15000) });
     return (await r.json().catch(() => null)) ?? { ok: false, error: "The Creator engine gave no usable answer for this OpenFilm job." };
   } catch {
     return { ok: false, error: `Could not reach the Creator engine for OpenFilm job ${jobId}; assume nothing about it and call openfilm_job again.` };
@@ -316,7 +317,7 @@ async function startAndWait(urlKey: "LUCID_OPENFILM_LOOK_URL" | "LUCID_OPENFILM_
   if (!url) return text("OpenFilm is not reachable in this environment (no Creator engine).", true);
   let started: unknown;
   try {
-    const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(30000) });
+    const r = await engineFetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(30000) });
     started = await r.json().catch(() => null);
   } catch {
     return text("Could not reach the Creator engine; nothing was started in OpenFilm.", true);

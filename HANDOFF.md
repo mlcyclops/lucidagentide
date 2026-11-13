@@ -132,7 +132,7 @@ previous stable release: 2.4.0 plus the bug fixes merged to master the same
 day via #514 and #516, tagged `v2.4.1` and marked Latest at the time. No new
 product surface beyond a launcher convenience. SWITCHING (#460, cases 1-5):
 #507 makes "Stop it and switch" stop a running /goal loop and wait for it to
-unwind before the session changes (the maker turn used to be cancelled while
+unwind before the session changes (the maker turn used to be canceled while
 the loop lived on inside the newly loaded session); #509 limits the "an
 automation is running" blocker to goal-kind automations that own Main's
 session, agent-kind ones run in their own child pipeline and no longer refuse
@@ -391,10 +391,10 @@ Queued alongside it:
   make failures say why.
 - **A test must never open real UI on a CI runner.** A test that expected the
   off-Windows refusal opened a real modal dialog on `windows-latest` and hung
-  the Full test gate (no `timeout-minutes`) until it was cancelled. Gate
+  the Full test gate (no `timeout-minutes`) until it was canceled. Gate
   platform-specific calls on `process.platform`, and when a job hangs, read the
   last test line of its log before re-running anything.
-- **A green check suite on an OLD head is not a pass.** Each push cancelled the
+- **A green check suite on an OLD head is not a pass.** Each push canceled the
   previous CI run, so the Windows gate had never completed on the PR until the
   merge head. Before merging, confirm every check completed on the exact head
   SHA being merged.

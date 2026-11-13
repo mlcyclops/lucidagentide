@@ -107,8 +107,8 @@ describe("the fixed argv", () => {
     expect(lookRefusal({ projectDir: "C:/work/t\nrm" })).toContain("control characters");
     expect(lookRefusal({ roots: ["D:/approved"] })).toContain("workspace roots");
     expect(look({ roots: ["c:\\work"] }).projectDir).toBe(PROJECT);
-    expect(look({ projectDir: "/home/nick/film", roots: ["/home/nick"] }).projectDir).toBe("/home/nick/film");
-    expect(renderRefusal({ projectDir: "/home/nickel/film", roots: ["/home/nick"] })).toContain("workspace roots");
+    expect(look({ projectDir: "/home/operator/film", roots: ["/home/operator"] }).projectDir).toBe("/home/operator/film");
+    expect(renderRefusal({ projectDir: "/home/operators/film", roots: ["/home/operator"] })).toContain("workspace roots");
   });
 });
 

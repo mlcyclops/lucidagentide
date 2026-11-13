@@ -5,7 +5,7 @@
 //
 // The main BrowserWindow is frameless and its only page is the app. When Chromium's renderer process
 // for that window dies (a crash, an OOM kill, the OS or a user killing it), the window keeps painting
-// its background colour and nothing else, forever: the window object still exists, so a second launch
+// its background color and nothing else, forever: the window object still exists, so a second launch
 // only focuses it; the custom title-bar close button lived in the dead renderer; a frameless window
 // has no menu, so Electron's default Ctrl+R accelerator never fires; and the browser build at the
 // engine's port is token-gated (ADR-0396), so it cannot stand in. Observed live on 2026-11-03 (v2.5.0):

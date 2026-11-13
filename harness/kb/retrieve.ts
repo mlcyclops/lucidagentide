@@ -10,13 +10,13 @@
 //   • compiled — VECTORLESS structural retrieval over the page graph: keyword relevance over page
 //     title+body, then link-neighbor expansion (a hit's linked concept/entity pages are surfaced too).
 //   • hybrid   — run both, normalize each store's scores, merge + dedupe by citation, and return one
-//     ranked set wrapped in the trust-boundary delimiters (each item labelled with its store + citation).
+//     ranked set wrapped in the trust-boundary delimiters (each item labeled with its store + citation).
 //
 // SECURITY (#5/#6, keystone #2): this is PURE READ — it stores nothing and mints no trust. Every hit
 // carries the store's own trust_label, and the wrapped output is delimited UNTRUSTED data destined for
 // the user-turn tail (never the frozen prefix). The stores + query embedder are injected (testable).
 
-import { UNTRUSTED_END, UNTRUSTED_START } from "../prompt/assembler.ts";
+import { fenceUntrusted } from "../prompt/untrusted.ts";
 import type { Embedder } from "../knowledge/embedder.ts";
 import type { KnowledgeStore } from "../knowledge/store.ts";
 import type { KbGraphStore, KbLink, KbPage } from "./store.ts";
@@ -108,7 +108,7 @@ export function normalizeScores(items: RetrievedItem[]): RetrievedItem[] {
 export function wrapKnowledge(items: RetrievedItem[]): string {
   if (!items.length) return "";
   const body = items.map((it, i) => `[${i + 1}] (${it.store}:${it.citation}) ${it.title}\n${it.text}`).join("\n\n");
-  return `${UNTRUSTED_START}\n${body}\n${UNTRUSTED_END}`;
+  return fenceUntrusted(body);
 }
 
 async function retrieveVector(v: NonNullable<RetrieveArgs["vector"]>, query: string, k: number): Promise<RetrievedItem[]> {

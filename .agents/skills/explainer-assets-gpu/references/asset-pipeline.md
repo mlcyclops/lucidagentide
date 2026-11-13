@@ -54,7 +54,7 @@ gltf-transform inspect part.opt.glb                  # confirm the saving
 KTX2 encoding needs KTX-Software's `toktx` (or the newer `ktx` CLI) on PATH.
 
 ```bash
-# standalone texture (sky, decal atlas): ETC1S for colour
+# standalone texture (sky, decal atlas): ETC1S for color
 toktx --t2 --encode etc1s --genmipmap sky.ktx2 sky.png
 # normal or detail maps: UASTC keeps quality
 toktx --t2 --encode uastc --genmipmap ground_normal.ktx2 ground_normal.png
@@ -136,5 +136,5 @@ For Draco instead of meshopt: `DRACOLoader` with `setDecoderPath('./vendor/three
 
 - Sum every file the page loads: the headless capture in explainer-studio's `references/verification.md`
   reports `transferKB`. With assets the ceiling is about 5 MB; without, under 1 MB.
-- List each asset in PLAN.md with its bytes, generator, prompt or script, model, licence, and sha256
+- List each asset in PLAN.md with its bytes, generator, prompt or script, model, license, and sha256
   (`certutil -hashfile part.final.glb SHA256` on Windows, `sha256sum part.final.glb` elsewhere).

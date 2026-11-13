@@ -292,6 +292,36 @@ export function execVerdict(
   return gate;
 }
 
+/** P-EXEC.1 (ADR-0066): the exec tools omp is told to PROMPT for, by name. A `command` string in the call's
+ *  rawInput is the stronger signal (execCommand). */
+export const EXEC_TOOLS = /\b(bash|eval|shell|execute|terminal)\b/;
+
+const record = (v: unknown): Record<string, unknown> => (v && typeof v === "object" ? (v as Record<string, unknown>) : {});
+
+/** Pull the command/code an exec tool call will run, from its rawInput. */
+export function execCommand(toolCall: unknown): string | null {
+  const tc = record(toolCall);
+  const ri = record(tc.rawInput ?? tc.input);
+  for (const k of ["command", "cmd", "script", "code", "source", "input"]) {
+    const v = ri[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return null;
+}
+
+/** #612: the floor that no standing scope crosses, for an ask answered WITHOUT a human (Fleet full auto-mode, a
+ *  lane's session grant). It is the floor execVerdict keeps under danger mode and allow-turn: a catastrophic
+ *  command (ALWAYS_PROMPT) or a managed-denylisted program. Returns why the ask must reach a human, or null when
+ *  it is not an exec ask or may run unasked. Pure apart from `store`. */
+export function execFloor(toolCall: unknown, store: ExecStore): string | null {
+  const tc = record(toolCall);
+  const name = [tc.kind, tc.title, tc.name, tc.toolName].filter((v) => typeof v === "string" && v).join(" ").toLowerCase();
+  const cmd = execCommand(tc);
+  if (cmd === null && !EXEC_TOOLS.test(name)) return null;
+  const cls = /\beval\b/.test(name) ? classifyEval() : classifyCommand(cmd ?? name);
+  return execVerdict({ ...store, dangerMode: true }, cls, { turnAllowed: true }) === "allow" ? null : cls.reason;
+}
+
 /** P-EXEC.2 (ADR-0110): omp (≥16.1) delivers its per-tool "Approve/Deny" approval — and plan-mode
  *  approval — as an ACP FORM elicitation whose single `value` property carries the option strings. Pick
  *  the affirmative option to ACCEPT (this elicitation is a redundant INNER gate that only fires after our

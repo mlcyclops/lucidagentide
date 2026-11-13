@@ -77,7 +77,7 @@ test("renderTurnEvalReport reuses evals.ts: titled markdown, provenance chart, h
   // P-EVAL.4: still no AC / tests at the chat seam, so those MEASURED metrics stay null + needs_signal and
   // that is what gets persisted. This test previously asserted the rendered rows read
   // "Spec conformance | needs AC | needs_signal" / "Predicted acceptance | needs AC + tests | needs_signal";
-  // those rows now show a labelled derived proxy instead, because a report where 40% of the table says
+  // those rows now show a labeled derived proxy instead, because a report where 40% of the table says
   // "no signal" reads as broken. The honesty moved to the Source column, so assert it there.
   const m = evalMetricsForTurn(base({ tools: [{ name: "edit", path: "app.ts", add: 63, del: 4 }] }));
   expect(m.specConformance.value).toBeNull();

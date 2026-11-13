@@ -1009,12 +1009,12 @@ export function setProfile(p: { username?: string; email?: string }): GuiSetting
   }
   save(s); return s;
 }
-/** P-IDE.1c (ADR-0029): the data-sovereignty acknowledgement gate for China-origin models. */
+/** P-IDE.1c (ADR-0029): the data-sovereignty acknowledgment gate for China-origin models. */
 export function chinaModelsAcknowledged(): boolean { return !!load().chinaModelsAcknowledged; }
 export function setChinaModelsAcknowledged(on: boolean): GuiSettings {
   const s = load(); s.chinaModelsAcknowledged = on; save(s); return s;
 }
-/** Acknowledgement gate for the third-party / non-U.S. / custom "More providers" section. */
+/** Acknowledgment gate for the third-party / non-U.S. / custom "More providers" section. */
 export function thirdPartyProvidersAcknowledged(): boolean { return !!load().thirdPartyProvidersAcknowledged; }
 export function setThirdPartyProvidersAcknowledged(on: boolean): GuiSettings {
   const s = load(); s.thirdPartyProvidersAcknowledged = on; save(s); return s;
@@ -1068,7 +1068,7 @@ export function localProviderPrefixes(): Set<string> {
 }
 // P-THEME.1: the user's chosen app theme id (see desktop/renderer/theme.ts THEMES). "" / unset means
 // "not chosen", which resolveTheme folds to the DEFAULT (lucid-dark). P-THEME.2: it used to fold to the
-// OS colour-scheme preference, which silently moved long-time users off the dark UI they already had;
+// OS color-scheme preference, which silently moved long-time users off the dark UI they already had;
 // following the OS is now the explicit `system` id. Stored as an opaque STRING, deliberately not a union:
 // the renderer's
 // theme registry is the single source of truth for which ids exist, and resolveTheme already treats an

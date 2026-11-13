@@ -107,6 +107,10 @@ tools/seed_personal_facts.ts
 # no bin/ dir fails ENOENT under current Bun (it no longer creates the outfile parent).
 /bin/*
 !/bin/.gitkeep
+# P-HOLDER.1: cargo's build output for the one Rust crate (desktop/build/build-holder.ts copies the binary to bin/).
+/native/lucid-holder/target/
+# ADR-0540: the Rust relay's build output.
+/native/lucid-relay/target/
 netwatch.log
 
 # Machine-generated memory/fact extraction scratch (local analysis artifacts, never source)
@@ -155,3 +159,6 @@ tools/lucid-support-*.zip
 # bundled Microsoft eXecution Container executors (ADR-0441): staged per-arch by build/fetch-mxc.ts, never committed
 desktop/mxc/*
 !desktop/mxc/.gitkeep
+
+# offered add-ons (ADR-0541): signed .lplugin.zip packages + index.json written by tools/build_addons.ts, never committed
+desktop/addons/

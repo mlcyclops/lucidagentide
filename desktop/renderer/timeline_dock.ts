@@ -357,7 +357,7 @@ function detailHeadHtml(e: TimelineEntry): string {
 }
 
 /** Which gutter label a transcript role gets. Closed set over what the session parser actually emits;
- *  anything unrecognised keeps its own name rather than being mislabelled as the agent. */
+ *  anything unrecognized keeps its own name rather than being mislabeled as the agent. */
 const ROLE_LABEL: Record<string, string> = { user: "you", assistant: "agent", agent: "agent", tool: "tool", system: "system" };
 
 /** One transcript message: an uppercase monospace role in a fixed left gutter, the text as a block

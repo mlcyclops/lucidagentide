@@ -60,8 +60,8 @@ pendulum-rhythm, lightning-path). Every one was procedural three.js, and that is
 7. **Math model**: the exact number types, every formula, edge cases (zero, maximum, invalid input), and the
    self-test cases.
 8. **Honesty table**: real, calculated, drawn to illustrate, simplified, one row per claim.
-9. **Look**: palette (one accent colour per concept), lighting, camera, typography.
-10. **Accessibility**: keyboard paths, live regions, text alternatives, reduced-motion behaviour.
+9. **Look**: palette (one accent color per concept), lighting, camera, typography.
+10. **Accessibility**: keyboard paths, live regions, text alternatives, reduced-motion behavior.
 11. **Performance budget**: transfer size, draw calls, instance counts, target frame rate.
 12. **Assets**: "none" by default; otherwise each asset with its source, size, and the budget rule it meets.
 13. **Kid safety**: required when the audience includes children.
@@ -74,7 +74,7 @@ A complete worked example is in `references/sample-plan.md`; a matching build pr
 ## Scene, lighting, and camera
 
 - **Sky and fog:** a large inside-out sphere with a two- or three-stop gradient shader (`depthWrite: false`),
-  and `scene.fog` set to the horizon colour so the ground melts into the sky. Dusk palettes read well: a warm
+  and `scene.fog` set to the horizon color so the ground melts into the sky. Dusk palettes read well: a warm
   horizon under a deep blue zenith.
 - **Lighting:** a `HemisphereLight` for soft fill plus ONE shadow-casting `DirectionalLight` whose shadow
   camera is fitted tightly to the stage. ACES filmic tone mapping, sRGB output. Avoid more than three lights.
@@ -83,7 +83,7 @@ A complete worked example is in `references/sample-plan.md`; a matching build pr
 - **Camera:** `OrbitControls` with damping, a clamped polar angle (never under the ground), and min/max
   distance. Presets ease position and target together over about 0.8 s. The cinematic camera is a slow orbit
   or dolly that ANY user input cancels.
-- **Materials:** `MeshStandardMaterial` with restrained roughness and metalness. The accent colour of a
+- **Materials:** `MeshStandardMaterial` with restrained roughness and metalness. The accent color of a
   concept is the same in the scene, the label, and the readout that names it.
 
 Copy-ready, original recipes (renderer setup, the sky shader, light rig, presets with easing, labels,
@@ -153,7 +153,7 @@ frame.
 
 ## Accessibility and reduced motion
 
-- Semantic `<button>`, labelled `<input type="range">`, visible focus, no keyboard traps, logical tab order.
+- Semantic `<button>`, labeled `<input type="range">`, visible focus, no keyboard traps, logical tab order.
 - The main readout is an `aria-live="polite"` region; the canvas has a text alternative that describes the
   current state, updated with it.
 - Contrast meets WCAG 2.1 AA over the scene (put readouts on a translucent panel).
@@ -192,7 +192,7 @@ frame.
 3. **Preview clip:** render frames deterministically and encode a short muted clip with ffmpeg (VP9 webm or
    H.264 mp4, about 25 to 260 KB), plus a poster image.
 4. **Report** the measured transfer size, the console error count, `renderer.info` numbers, and the paths of
-   every screenshot, poster, and clip. Anything you did not run is labelled unverified.
+   every screenshot, poster, and clip. Anything you did not run is labeled unverified.
 
 The serve and capture scripts and the exact ffmpeg commands are in `references/verification.md`.
 

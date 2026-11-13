@@ -7,7 +7,7 @@
 // custom claim. The RELAY is the authoritative gate — a verified-but-unentitled token is refused 4403. This
 // drives that exact path over a REAL gated relay: an entitled phone goes live (never shown Subscribe), an
 // unentitled phone is refused and the pure detector routes it to Subscribe, `createRemoteCheckout` opens a
-// Stripe session fail-closed, and after the webhook sets the claim the refreshed token is recognised so the
+// Stripe session fail-closed, and after the webhook sets the claim the refreshed token is recognized so the
 // phone can retry. Only Firebase + Stripe + the DOM are absent (live-QA); everything the phone computes runs.
 
 import { startRelayServer } from "../../desktop/collab/relay_server.ts";
@@ -56,7 +56,7 @@ const noClaimSock = new CollabSocket({ wsUrl, role: "guest", key, authToken: () 
 const noClaimGuest = new CollabGuest(noClaimSock, { name: "free@phone", writeToken: null }, {});
 noClaimGuest.start();
 await until(() => noClaimGuest.view().phase === "ended", "unentitled guest ended");
-if (!isEntitlementDenied(noClaimGuest.view())) fail("4403 close was not recognised as an entitlement denial");
+if (!isEntitlementDenied(noClaimGuest.view())) fail("4403 close was not recognized as an entitlement denial");
 if (remoteGate(true, isEntitlementDenied(noClaimGuest.view())) !== "subscribe") fail("denied phone not routed to Subscribe");
 if (relay.roomCount() !== 0) fail("an unentitled socket opened a room");
 pass("real relay refuses the no-claim token 4403 -> guest ended -> isEntitlementDenied -> Subscribe (no room)");
@@ -85,7 +85,7 @@ if (await createRemoteCheckout({ functionsBaseUrl: "https://fns.example.com", to
 if (await createRemoteCheckout({ functionsBaseUrl: "https://fns.example.com", token: null, fetchImpl: okFetch }) !== null) fail("a missing token was not fail-closed");
 pass("createRemoteCheckout: returns the Stripe URL on success, null fail-closed on error / no token");
 
-// [5] POST-CHECKOUT: the refreshed token gains the claim -> the phone recognises it and retries
+// [5] POST-CHECKOUT: the refreshed token gains the claim -> the phone recognizes it and retries
 if (entitlementActive(jwt({ email: "paid@gmail.com" }))) fail("a pre-webhook token must NOT be active");
 pass("before the webhook the refreshed token has no claim -> entitlementActive false (stay on Subscribe)");
 if (!entitlementActive(jwt({ premium: true, email: "paid@gmail.com" }))) fail("a post-webhook premium token must be active");

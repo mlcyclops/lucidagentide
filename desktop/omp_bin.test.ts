@@ -135,7 +135,7 @@ describe("a timed-out probe", () => {
 
   test("THE REGRESSION: a timeout must never degrade to the bare name", () => {
     // This is precisely what produced `Executable not found in $PATH: "omp"` 192 times in the field log:
-    // the resolver discarded a real, working, installed shim in favour of a name with nothing behind it.
+    // the resolver discarded a real, working, installed shim in favor of a name with nothing behind it.
     const r = resolveOmpBin(input({ envBin: BUNDLED }), (c) => (c === BUNDLED ? "timeout" : false));
     expect(r.bin).not.toBe("omp");
     expect(r.bin).toBe(BUNDLED);

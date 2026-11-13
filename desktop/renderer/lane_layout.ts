@@ -268,7 +268,9 @@ export function loadLayout(raw: string | null | undefined): LaneLayout {
     order.push(id);
   }
 
-  const size: Record<string, CardSize> = {};
+  // Collected as entries and built with Object.fromEntries, so a stored lane id can never write the prototype
+  // (the same rule as the autofit shares, CodeQL js/remote-property-injection).
+  const sizes: [string, CardSize][] = [];
   const rawSize = p.size;
   if (rawSize !== undefined && rawSize !== null) {
     if (typeof rawSize !== "object" || Array.isArray(rawSize)) return empty;
@@ -288,9 +290,10 @@ export function loadLayout(raw: string | null | undefined): LaneLayout {
           ? Number(cell.cols) * CARD_COL_W + Math.max(0, Number(cell.cols) - 1) * CARD_GAP
           : Number.NaN;
       if (!Number.isFinite(w)) continue;
-      size[id] = clampSize({ w, h }, CARD_MAX_W);
+      sizes.push([id, clampSize({ w, h }, CARD_MAX_W)]);
     }
   }
+  const size: Record<string, CardSize> = Object.fromEntries(sizes);
   // P-FLEET.FIT1: a payload from before autofit has no `autofit` key and loads as ON; a malformed `fit`
   // only loses the shares (equal is a safe answer), never the order or sizes beside it.
   return withFit({ order, size }, p.autofit, p.fit, order);

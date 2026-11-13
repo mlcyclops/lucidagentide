@@ -4,7 +4,7 @@
 // desktop/renderer/graph.ts - a tiny, dependency-free force-directed SVG graph for the
 // personalization Knowledge view (ADR-0010 P9.3). Nodes = entities, edges = links; click
 // a node to drill in. Hand-rolled simulation (O(n^2) - personal KGs are small). Supports
-// drag, pan, wheel-zoom, and a kind/trust colour lens.
+// drag, pan, wheel-zoom, and a kind/trust color lens.
 //
 // P9.3+ polish (ideas ported from vasturiano's force-graph, kept ZERO-DEP per ADR-0010):
 //   - curved links (quadratic bezier) instead of straight lines
@@ -27,7 +27,7 @@ export const KIND_COLOR: Record<string, string> = {
 export const TRUST_COLOR: Record<string, string> = { trusted: "#46d27e", untrusted: "#5e8df2", suspicious: "#e8b23c", quarantined: "#ef5f5f" };
 export const kindLabel = (k: string): string => k.replace(/^user:/, "");
 // P-KG-ORBIT.1 (ADR-0470): a stable hue for kinds outside KIND_COLOR (code-graph directories and symbol
-// kinds), so the orbit view and the search dropdown can tell kinds apart. The flat view keeps its grey.
+// kinds), so the orbit view and the search dropdown can tell kinds apart. The flat view keeps its gray.
 const KIND_PALETTE = ["#46c8dc", "#7ef0a8", "#5e8df2", "#e8b23c", "#e07bf0", "#f3b8ff", "#84e3a6", "#f08a5d", "#9bd2e0", "#c3e86b", "#ff9db0", "#b39cff"];
 export function kindColor(kind: string): string {
   const k = kindLabel(kind);
@@ -114,7 +114,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   let springs = staticLayout ? [] : buildSprings();
 
   // P-KG-FLAT.1: unknown kinds (code-graph dirs, symbol kinds, KB page kinds) get the same stable hue as
-  // in Orbit instead of one flat grey, so the flat view reads by kind too.
+  // in Orbit instead of one flat gray, so the flat view reads by kind too.
   const colorOf = (n: SimNode): string => (lens === "trust" ? TRUST_COLOR[n.trust] ?? "#888" : kindColor(n.kind));
 
   const svg = make("svg"); svg.setAttribute("class", "kg-svg"); svg.setAttribute("width", "100%"); svg.setAttribute("height", "100%");
@@ -204,7 +204,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
       const a = byId.get(ed.e.from)!, b = byId.get(ed.e.to)!;
       const [ccx, ccy] = ctrl(a, b);
       ed.path.setAttribute("d", `M${a.x.toFixed(1)} ${a.y.toFixed(1)} Q${ccx.toFixed(1)} ${ccy.toFixed(1)} ${b.x.toFixed(1)} ${b.y.toFixed(1)}`);
-      ed.geom = { ax: a.x, ay: a.y, ccx, ccy, bx: b.x, by: b.y, col: colorOf(a) }; // source node → flow colour
+      ed.geom = { ax: a.x, ay: a.y, ccx, ccy, bx: b.x, by: b.y, col: colorOf(a) }; // source node → flow color
     }
     for (const n of nodes) {
       const e = elFor.get(n.id)!;
@@ -372,7 +372,7 @@ export function mountGraph(host: HTMLElement, data: PersonalGraphData, onSelect:
   if (formed && !calm) svg.classList.add("kg-form");
 
   // Position-preserving merge of fresh data into the LIVE simulation (issue #54 follow-up): keep
-  // existing nodes AND their x/y (so the layout doesn't jump), add new nodes near the centre so they
+  // existing nodes AND their x/y (so the layout doesn't jump), add new nodes near the center so they
   // animate in, drop removed ones, then rebuild the cheap edge layer. Reheats so new nodes settle.
   const update = (next: PersonalGraphData) => {
     const incoming = new Map(next.nodes.map((n) => [n.id, n]));

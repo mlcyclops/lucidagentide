@@ -214,7 +214,7 @@ export function estimateTurn(i: EstimateInput): TurnEstimate {
 /** No history, no number. */
 export const NO_ESTIMATE: Readonly<TurnEstimate> = { etaMs: null, percent: null, basis: "none", samples: 0, typicalMs: null, overrun: false };
 
-/** P-PROGRESS.2: the same labelled percentile for any worker with a sample set (a subagent run against
+/** P-PROGRESS.2: the same labeled percentile for any worker with a sample set (a subagent run against
  *  the lengths of finished runs, a turn against past turns). Fewer than `minSamples` usable lengths is
  *  basis "none": no number. Pure. */
 export function estimateFromSamples(elapsedMs: number, samples: readonly number[], minSamples = 2, basis: TurnEstimate["basis"] = "any"): TurnEstimate {

@@ -223,7 +223,7 @@ describe("the job strip (CREATOR-1, ADR-0292)", () => {
     expect(html).toContain("1 active");
   });
 
-  test("a stop REQUEST says stopping, and the Stop button is gone (it is not cancelled yet)", () => {
+  test("a stop REQUEST says stopping, and the Stop button is gone (it is not canceled yet)", () => {
     const html = creatorJobsHtml([job({ cancelRequested: true })]);
     expect(html).toContain("(stopping)");
     expect(html).not.toContain("data-job-cancel");

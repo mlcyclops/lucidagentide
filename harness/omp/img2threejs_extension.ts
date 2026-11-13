@@ -32,7 +32,7 @@ import {
 } from "../creator/img2threejs/index.ts";
 import { isRecord, type JsonRecord } from "../creator/img2threejs/contract.ts";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../prompt/assembler.ts";
-import { neutralizeDelimiters } from "./mcp_result_gate.ts";
+import { neutralizeDelimiters } from "../prompt/untrusted.ts";
 
 export const IMG2THREEJS_TOOL_NAMES = ["img2threejs_probe", "img2threejs_assess", "img2threejs_validate", "img2threejs_generate", "img2threejs_state"] as const;
 export const IMG2THREEJS_ENV = "LUCID_IMG2THREEJS";
@@ -149,7 +149,7 @@ export function runProbe(root: string, params: unknown): TextResult {
   const probe = probeImage(buffer, total);
   const head = probe.type
     ? `probe: ${probe.type} ${probe.width ?? "?"}x${probe.height ?? "?"}, ${probe.bytes} bytes, technical suitability ${probe.technicalSuitability}`
-    : `probe: not a recognised image container (${probe.bytes} bytes); technical suitability ${probe.technicalSuitability}`;
+    : `probe: not a recognized image container (${probe.bytes} bytes); technical suitability ${probe.technicalSuitability}`;
   return text(`${head}\n${JSON.stringify({ path: c.rel, ...probe }, null, 2)}\n${probe.note} Record the verdict in the checklist with img2threejs_state mark image-probe.`, !probe.type);
 }
 

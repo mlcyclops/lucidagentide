@@ -46,7 +46,7 @@ describe("collectTopFrames", () => {
 
 describe("figmaBoardHtml", () => {
   const png = "data:image/png;base64,iVBORw0KGgo=";
-  test("renders a labelled card per frame with the PNG inlined; escapes names", () => {
+  test("renders a labeled card per frame with the PNG inlined; escapes names", () => {
     const h = figmaBoardHtml("My App", [{ name: '<b>Home</b>', page: "Page 1", dataUrl: png }]);
     expect(h).toContain("1 frame");
     expect(h).toContain(png);

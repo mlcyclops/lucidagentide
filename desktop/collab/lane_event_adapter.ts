@@ -81,7 +81,7 @@ export function laneEventToChatEvent(e: LaneEvent): ChatEvent | null {
 
     // The lane CARD already reports these, and it ships in the fleet-status snapshot every guest gets
     // regardless of what it is watching: `permission` and `auto-approved` are the card's pendingApproval,
-    // `status` is its status colour. Re-emitting them as conversation would double-report the same fact in
+    // `status` is its status color. Re-emitting them as conversation would double-report the same fact in
     // two places that can then disagree, and an approval rendered as a transcript line would look
     // actionable on a surface that cannot answer it.
     case "permission":

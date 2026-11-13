@@ -199,7 +199,7 @@ describe("progressLine tells one honest sentence, never a fake bar", () => {
     expect(line).not.toContain("61%");
   });
 
-  test("a status LUCID does not recognise is printed, not guessed at", () => {
+  test("a status LUCID does not recognize is printed, not guessed at", () => {
     expect(progressLine(prog({ status: "reticulating", pct: null }))).toContain("reticulating");
     expect(progressLine(prog({ status: "", pct: null }))).toContain("an empty status");
   });

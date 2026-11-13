@@ -235,7 +235,7 @@ describe("rooftop stack", () => {
     expect(after.height).toBe(1);
   });
 
-  it("a perfect centre hands width back and pays a bonus", () => {
+  it("a perfect center hands width back and pays a bonus", () => {
     const off = dropStackBlock(tower(100, 60, 101, 60));
     expect(off.perfects).toBe(1);
     expect(off.tower[1]!.width).toBe(60 + STACK_PERFECT_GAIN);

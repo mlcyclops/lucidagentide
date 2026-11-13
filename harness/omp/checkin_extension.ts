@@ -28,6 +28,7 @@
 // dead engine degrades to "unavailable" text rather than a failed turn. Registers nothing unless the
 // LUCID env vars are present, so a plain `omp` run never sees these tools.
 
+import { engineFetch } from "./engine_channel.ts";
 import { formatPeerNote } from "./interject_extension.ts";
 import { writeStderrNotice } from "./stderr_notice.ts";
 
@@ -172,7 +173,9 @@ export function formatPeers(view: PeersView, cwd: string): string {
 
 /** One bounded JSON round-trip; the caller turns a thrown error into an "unavailable" sentence. */
 async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
-  const r = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  // LH-03 (ADR-0544): on a held lane a reply without the engine's channel proof throws, so a squatter on the port
+  // can neither forge a peer's reply nor read back a send as delivered.
+  const r = await engineFetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
   if (!r.ok) throw new Error(`the engine responded ${r.status}.`);
   return r.json();
 }

@@ -332,7 +332,7 @@ function recoverOrStop(
 ): HealthVerdict {
   const recovers = count(e.recovers);
   if (recovers < count(cfg.maxRecovers)) {
-    return at("recover", `${lead}, so the harness is cancelling and respawning it in place.`);
+    return at("recover", `${lead}, so the harness is canceling and respawning it in place.`);
   }
   const tried = recovers === 1 ? "1 recovery attempt" : `${recovers} recovery attempts`;
   return at("quiet", `${lead}, and the harness has stopped retrying after ${tried}, so this session needs a manual restart.`);

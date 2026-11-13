@@ -27,7 +27,7 @@ describe("extractDeviceCode", () => {
     expect(extractDeviceCode("Enter code: WXYZ-1234 (expires soon)\n")).toBeNull();
   });
 
-  test("ANSI colour and cursor sequences around the prompt and the code are invisible", () => {
+  test("ANSI color and cursor sequences around the prompt and the code are invisible", () => {
     const colored = "\u001b[1;32mEnter code:\u001b[0m \u001b[36mLT9B-4W72V\u001b[0m\n";
     expect(extractDeviceCode(colored)).toBe("LT9B-4W72V");
     expect(extractDeviceCode("\u001b]0;title\u0007Enter code: AAAA-BBBB\n")).toBe("AAAA-BBBB");

@@ -63,7 +63,7 @@ function showResult(wrap: HTMLElement, ok: boolean, text: string): void {
   if (span) span.textContent = text;
 }
 
-/** Run `fn` with `btn` disabled and relabelled; restores it afterwards. */
+/** Run `fn` with `btn` disabled and relabeled; restores it afterwards. */
 async function busy(btn: HTMLButtonElement, label: string, fn: () => Promise<void>): Promise<void> {
   const orig = btn.innerHTML;
   btn.disabled = true;

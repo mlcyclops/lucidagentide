@@ -7,6 +7,10 @@
 // agent's PATH) runs this with the agent's argv. It hands {args, cwd} to the engine's /api/git/exec
 // (LUCID_GIT_URL carries the agent's own token) and replays the host git's stdout, stderr and exit code.
 // The engine decides what may run (desktop/git_broker.ts); this side only carries bytes. No stdin.
+// LH-03 (ADR-0544): the call goes through engineFetch, so a session with a lane channel key MACs it and takes the
+// answer only with the engine's proof (an unproven answer is a broker failure, exit 128, never replayed output).
+
+import { engineFetch } from "../../harness/omp/engine_channel.ts";
 
 const url = process.env.LUCID_GIT_URL;
 if (!url) {
@@ -17,7 +21,7 @@ let res: Response;
 try {
   // P-OWN.1: `target` names this session (LUCID_INTERJECT_TARGET, inherited from the engine) so the
   // checkout commit gate knows whose edits are whose. It labels; it authorizes nothing.
-  res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), target: process.env.LUCID_INTERJECT_TARGET ?? "" }) });
+  res = await engineFetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), target: process.env.LUCID_INTERJECT_TARGET ?? "" }) });
 } catch (e) {
   process.stderr.write(`git: could not reach LUCID's git broker: ${e instanceof Error ? e.message : String(e)}\n`);
   process.exit(128);

@@ -32,7 +32,7 @@ export interface MeetingsPanelView {
   error: string | null;
   query: string;
   selected: string | null;
-  /** The engine-validated loopback Hub origin (honours a configured port). The ONE recording-side
+  /** The engine-validated loopback Hub origin (honors a configured port). The ONE recording-side
    *  affordance the proposal allows the IDE is a deep link to that window - no start/stop controls
    *  ever live here. null: nothing safe to link, so no link is drawn. */
   dashboardUrl: string | null;

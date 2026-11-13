@@ -8,7 +8,7 @@
 // Proven headless against the real seams:
 //   [1] the defaults: quiet (one line), no estimate, and both choices persist;
 //   [2] estimate off: the progress line, the tool-row / subagent / HUD ETA and the folder queue carry no number;
-//   [3] estimate on: a number appears once history supports one, labelled as an estimate, and the
+//   [3] estimate on: a number appears once history supports one, labeled as an estimate, and the
 //       "ETA estimating" placeholder the operator objected to never reaches the user;
 //   [4] the progress ring (on by default): the arc is the percent, empty without history, red when dead.
 // (The orbit glance takes the same switch; orbit_layout.test.ts covers it. It is not imported here because it

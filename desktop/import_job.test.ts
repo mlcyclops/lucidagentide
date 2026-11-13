@@ -78,7 +78,7 @@ test("pressing Stop twice force-cancels a run that ignores its abort signal", ()
   expect(importJobStatus(jobId)!.state).toBe("cancelled");
 });
 
-test("a force-cancelled job releases single-flight so the user can retry", async () => {
+test("a force-canceled job releases single-flight so the user can retry", async () => {
   const first = jobIdOf(startImport({ run: wedged }));
   cancelImport(first);
   cancelImport(first);
@@ -88,7 +88,7 @@ test("a force-cancelled job releases single-flight so the user can retry", async
   expect(importJobStatus(jobIdOf(second))!.state).toBe("done");
 });
 
-test("a late result cannot resurrect a job the user already force-cancelled", async () => {
+test("a late result cannot resurrect a job the user already force-canceled", async () => {
   let finish!: (v: ImportResult) => void;
   const jobId = jobIdOf(startImport({ run: () => new Promise<ImportResult>((res) => { finish = res; }) }));
   cancelImport(jobId);
