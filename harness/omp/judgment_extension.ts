@@ -31,6 +31,7 @@ import { NativeJudge, TextJudge } from "@oh-my-pi/pi-ai/judgment";
 import { captureJudgment } from "../judgment/trace_schema.ts";
 import { isLocalJudge, isMissingModelError, JUDGE_BAN_FAILURES, parseCommaList } from "../judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416) + P-JEV.6 (ADR-0421)
 import type { JudgmentBackend, JudgmentReport } from "../judgment/trace.ts";
+import { engineFetch } from "./engine_channel.ts"; // LH-03 (ADR-0544): a held lane's report is MACed like any agent call
 
 /** Upper bound on one awaited loopback POST. Local, so 1.5 s is already an outage, not latency. */
 export const POST_TIMEOUT_MS = 1500;
@@ -117,7 +118,7 @@ export function traceJudgePrototype(proto: JudgeLike, backend: JudgmentBackend, 
  *  trace, and the caller has nothing to do about it. */
 export async function postReport(url: string, report: JudgmentReport): Promise<void> {
   try {
-    await fetch(url, {
+    await engineFetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(report),

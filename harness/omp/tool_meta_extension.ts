@@ -33,6 +33,8 @@
 // URL is unset, the POST fails, or the hook API is missing, the correct outcome is a coarser report, not a
 // blocked tool call. Every path is wrapped and fire-and-forget.
 
+import { engineFetch } from "./engine_channel.ts"; // LH-03 (ADR-0544): a held lane's report is MACed like any agent call
+
 /** One report. `ok` is absent on the start event and set on the result event, so the desktop can upgrade
  *  a pending call to a settled one without a second lookup. */
 export interface ToolMetaReport {
@@ -71,7 +73,7 @@ export default function toolMetaExtension(pi: unknown): void {
     const post = (report: ToolMetaReport): void => {
       // Fire-and-forget. No await, no retry, no backpressure: a slow desktop must never stall a tool call,
       // and a dropped label costs a coarser report and nothing else.
-      void fetch(url, {
+      void engineFetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(report),

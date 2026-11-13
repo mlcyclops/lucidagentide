@@ -113,6 +113,12 @@ export interface ApiAuthInput {
   /** P-CTRL.2: the HEADER token verified against a live pairing (async argon2id, so the caller does it).
    *  Never from `?t=`: a controller token is header-only. */
   controllerAuthorized?: boolean;
+  /** LH-03 (ADR-0544 as amended): the request authenticated as a held lane (`LaneChannels.authenticate`) and names
+   *  no speaker but that lane (`channelAdmits`); the caller resolves both. It opens channelRoutes that are also
+   *  agentRoutes, and nothing else. */
+  channelAuthorized?: boolean;
+  /** The routes a held lane's channel opens (lane_channel.ts CHANNEL_ROUTES). */
+  channelRoutes?: ReadonlySet<string>;
 }
 
 /** PURE: may this /api request proceed? The UI token works in the header everywhere and as `?t=` on the query
@@ -124,6 +130,7 @@ export function apiAuthorized(i: ApiAuthInput): boolean {
   if (tokenValid(i.headerToken, i.uiToken) || tokenValid(query, i.uiToken)) return true;
   if (i.controllerRoutes?.has(i.path)) return i.controllerAuthorized === true;
   if (!i.agentRoutes.has(i.path)) return false;
+  if (i.channelAuthorized === true) return i.channelRoutes?.has(i.path) === true;
   return tokenValid(i.headerToken, i.agentToken) || tokenValid(i.queryToken, i.agentToken);
 }
 

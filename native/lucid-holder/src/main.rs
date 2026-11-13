@@ -11,8 +11,10 @@
 //! (`{"v":1,"id","pid","childPid","endpoint"}`, also kept in `<dir>/<id>.json`) and exits, so the engine that
 //! called it is never the holder's parent: a tree kill of the engine does not reach the agent.
 //!
-//! The attach token comes from LUCID_HOLDER_TOKEN (at least 32 characters); the agent never sees it. A client
-//! sends one JSON line `{"v":1,"token","from":<offset>}` and then speaks the frames in proto.rs.
+//! The attach token is the first line of stdin (32 to 1024 printable characters; LH-06: never an environment
+//! variable, so neither this process's environment nor the agent's holds it), and it never crosses the endpoint:
+//! a client and the holder prove to each other that they hold it (handshake v2 in proto.rs, HMAC-SHA256 over
+//! each other's fresh nonce), the client names the offset to replay from, and both then speak the frames in proto.rs.
 //! `<dir>` must already exist and be private to the account (the engine makes it 0700).
 
 mod platform;
@@ -21,6 +23,7 @@ mod serve;
 mod spool;
 
 use std::ffi::OsString;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
@@ -67,17 +70,31 @@ fn parse(mut it: impl Iterator<Item = OsString>) -> Result<Args, String> {
     Ok(Args { dir, id, cwd, orphan_ms, program, args: it.collect() })
 }
 
-fn token() -> Result<String, String> {
-    let t = std::env::var("LUCID_HOLDER_TOKEN").map_err(|_| "LUCID_HOLDER_TOKEN is not set")?;
-    if t.len() < 32 {
-        return Err("LUCID_HOLDER_TOKEN is shorter than 32 characters".into());
+/// LH-06: the attach token arrives as the first line of stdin (the engine writes it to `run`, `run` to `serve`), never
+/// in an environment variable, so it is not in this process's environment block or the agent's. At most 4 KiB is
+/// read; the token is 32 to 1024 printable ASCII characters.
+fn read_token(r: &mut impl Read) -> Result<String, String> {
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    while line.len() < 4096 {
+        match r.read(&mut byte) {
+            Ok(0) => break,
+            Ok(_) if byte[0] == b'\n' => break,
+            Ok(_) => line.push(byte[0]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(format!("the attach token could not be read from stdin: {e}")),
+        }
     }
-    Ok(t)
+    let t = String::from_utf8(line).map_err(|_| "the attach token on stdin is not text")?;
+    let t = t.trim_end_matches('\r');
+    if t.len() < 32 || t.len() > 1024 || !t.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err("the attach token on stdin is not 32 to 1024 printable characters".into());
+    }
+    Ok(t.to_string())
 }
 
-/// `run`: start `serve` detached and wait for its ready record.
-fn run(raw: Vec<OsString>, a: &Args) -> Result<String, String> {
-    token()?;
+/// `run`: start `serve` detached, hand it the token on its stdin, and wait for its ready record.
+fn run(raw: Vec<OsString>, a: &Args, token: &str) -> Result<String, String> {
     let ready = serve::ready_path(&a.dir, &a.id);
     let error = serve::error_path(&a.dir, &a.id);
     if ready.exists() {
@@ -86,8 +103,12 @@ fn run(raw: Vec<OsString>, a: &Args) -> Result<String, String> {
     let _ = std::fs::remove_file(&error);
     let exe = std::env::current_exe().map_err(|e| format!("cannot find this program: {e}"))?;
     let mut cmd = Command::new(exe);
-    cmd.arg("serve").args(raw).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.arg("serve").args(raw).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
     let mut child = platform::spawn_detached(&mut cmd).map_err(|e| format!("the holder did not start: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        // Dropped right after: `serve` reads one line and then sees the end of its input.
+        let _ = stdin.write_all(format!("{token}\n").as_bytes()).and_then(|_| stdin.flush());
+    }
     let until = Instant::now() + READY_WAIT;
     while Instant::now() < until {
         if let Ok(text) = std::fs::read_to_string(&ready) {
@@ -122,8 +143,9 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let token = read_token(&mut std::io::stdin().lock());
     if mode == "run" {
-        return match run(raw, &a) {
+        return match token.and_then(|token| run(raw, &a, &token)) {
             Ok(ready) => {
                 println!("{ready}");
                 ExitCode::SUCCESS
@@ -134,7 +156,7 @@ fn main() -> ExitCode {
             }
         };
     }
-    let result = token().and_then(|token| {
+    let result = token.and_then(|token| {
         serve::serve(serve::Config {
             dir: a.dir.clone(),
             id: a.id.clone(),
@@ -178,5 +200,17 @@ mod tests {
         assert!(parse(os(&["--dir", &d, "--id", "ok"])).is_err());
         assert!(parse(os(&["--dir", &d, "--", "omp"])).is_err());
         assert!(parse(os(&["--dir", "/definitely/not/here", "--id", "ok", "--", "omp"])).is_err());
+    }
+
+    #[test]
+    fn the_token_is_one_line_of_stdin_and_nothing_else() {
+        let tok = "a".repeat(64);
+        assert_eq!(read_token(&mut format!("{tok}\nrest").as_bytes()).unwrap(), tok, "only the first line");
+        assert_eq!(read_token(&mut format!("{tok}\r\n").as_bytes()).unwrap(), tok);
+        assert_eq!(read_token(&mut tok.as_bytes()).unwrap(), tok, "end of input ends the line");
+        assert!(read_token(&mut &b""[..]).is_err(), "no token");
+        assert!(read_token(&mut "short\n".as_bytes()).is_err());
+        assert!(read_token(&mut format!("{} {}\n", "a".repeat(20), "b".repeat(20)).as_bytes()).is_err(), "no spaces");
+        assert!(read_token(&mut "a".repeat(5000).as_bytes()).is_err(), "bounded");
     }
 }

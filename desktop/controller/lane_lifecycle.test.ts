@@ -70,6 +70,13 @@ async function until(cond: () => boolean, what: string): Promise<void> {
   throw new Error(`timed out waiting for ${what}`);
 }
 
+const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+/** End every holder a pool still has records for, so nothing outlives the test. */
+async function endHolders(pool: HolderPool): Promise<void> {
+  for (const rec of pool.all()) { try { await (await HolderLink.connect(rec.endpoint, rec.token, rec.inFlight?.offset ?? rec.consumed)).kill(); } catch { /* gone */ } }
+}
+
 type Json = { ok?: boolean; error?: string; data?: Record<string, unknown> };
 
 /** One engine: its own data root (the pairing and lane stores), lane manager and routes. `tag` makes the session
@@ -205,6 +212,30 @@ describe("ADR-0501: lanes survive an engine restart", () => {
     return { repo, token, laneId: lane.id, before, b: engine(dataB, { ...opts, tag: "b" }) };
   }
 
+  /** The same under a holder: A's lane is mid-turn when A lets go, and its agent runs on. `bootB` starts engine B
+   *  from A's files (a test may change them first) and, as dev.ts does, takes the held lanes back before anything. */
+  async function heldDiedMidTurn() {
+    const repo = newRepo();
+    const pool = new HolderPool(join(temp("holders"), "lane-holders"), holderBinary()!);
+    const dataA = temp("data-a"), dataB = temp("data-b");
+    const a = engine(dataA, { loadSession: true, tag: "a", holders: pool });
+    const { token, pairing } = await a.pairRemote(repo);
+    const lane = await a.spawn(pairing);
+    const before = (await a.view(lane.id))!;
+    writeFileSync(join(before.cwd, "NOTES.md"), "lane work\n");
+    expect((await a.call("prompt", pairing, { laneId: lane.id, text: "a long task [slow 30s]" })).status).toBe(202);
+    await until(() => !!pool.all()[0]?.inFlight, "the turn to be recorded in flight");
+    for (const f of ["controller-pairings.json", "controller-lanes.json"]) copyFileSync(join(dataA, f), join(dataB, f));
+    a.fleet.stopAll();
+    const rec = pool.all()[0]!;
+    const bootB = async (reattach = true) => {
+      const b = engine(dataB, { loadSession: true, tag: "b", holders: pool });
+      if (reattach) for (const r of pool.all()) expect((await b.fleet.reattach(r)).ok).toBe(true);
+      return b;
+    };
+    return { repo, token, pool, dataB, laneId: lane.id, before, rec, bootB };
+  }
+
   test("the lane comes back idle on its id and session; the cut-off turn is interrupted, not re-run; a follow-up continues", async () => {
     const { token, laneId, before, b } = await diedMidTurn({ loadSession: true });
     expect(await restoreControllerLanes(b.deps)).toEqual([laneId]);
@@ -257,7 +288,7 @@ describe("ADR-0501: lanes survive an engine restart", () => {
       const p = (await b.store.verify(token))!;
       expect(((await b.call("lanes", p)).json.data!.lanes as Record<string, unknown>[])[0]).not.toHaveProperty("interrupted");
     } finally {
-      for (const rec of pool.all()) { try { await (await HolderLink.connect(rec.endpoint, rec.token, rec.inFlight?.offset ?? rec.consumed)).kill(); } catch { /* gone */ } }
+      await endHolders(pool);
     }
   }, TIMEOUT);
 
@@ -330,5 +361,59 @@ describe("ADR-0501: lanes survive an engine restart", () => {
     const s = await e.call("spawn", pairing, {});
     expect([s.status, s.json.error]).toEqual([503, "controller lane store is malformed"]);
     expect(readFileSync(join(data, "controller-lanes.json"), "utf8")).toBe("{torn");
+  }, TIMEOUT);
+
+  // The held variants: the holder kept the agent running and the fleet took the lane back before the restore.
+  test.skipIf(!holderBinary())("under a holder, a revoked pairing's lane is ended before it is retired, and its branch keeps the work", async () => {
+    const { repo, pool, laneId, before, rec, bootB } = await heldDiedMidTurn();
+    const b = await bootB();
+    try {
+      expect(b.fleet.laneRunning(laneId)).toBe(true); // its turn carries on under the holder
+      expect(b.store.unpair("spoke")).not.toBeNull();
+      expect(await restoreControllerLanes(b.deps)).toEqual([]);
+      expect((await b.fleet.status()).lanes).toEqual([]);
+      await until(() => !alive(rec.pid) && !alive(rec.childPid), "the holder and its agent to end");
+      expect(pool.all()).toEqual([]);
+      expect(b.deps.lanes.all()).toEqual([]);
+      await until(() => !existsSync(before.cwd), "the worktree folder to go");
+      expect(git(repo, "show", `remote/${laneId}:NOTES.md`).out).toBe("lane work");
+      expect(b.rulings()).toEqual([expect.objectContaining({ ruling: "lane_not_restored", lane_id: laneId, reason: "pairing revoked", branch: `remote/${laneId}` })]);
+    } finally {
+      await endHolders(pool);
+    }
+  }, TIMEOUT);
+
+  test.skipIf(!holderBinary())("under a holder, a broken lane store ends the controller lanes the holders brought back and touches no store", async () => {
+    const { pool, dataB, rec, bootB } = await heldDiedMidTurn();
+    writeFileSync(join(dataB, "controller-lanes.json"), "{torn", { mode: 0o600 });
+    const b = await bootB();
+    try {
+      expect(await restoreControllerLanes(b.deps)).toEqual([]);
+      expect((await b.fleet.status()).lanes).toEqual([]); // no supervised lane runs with no pairing to check it against
+      await until(() => !alive(rec.pid) && !alive(rec.childPid), "the holder and its agent to end");
+      expect(pool.all()).toEqual([]);
+      expect(readFileSync(join(dataB, "controller-lanes.json"), "utf8")).toBe("{torn");
+    } finally {
+      await endHolders(pool);
+    }
+  }, TIMEOUT);
+
+  test.skipIf(!holderBinary())("under a holder that is alive but does not answer, the lane is neither started again over it nor retired", async () => {
+    const { token, pool, laneId, before, rec, bootB } = await heldDiedMidTurn();
+    const b = await bootB(false);
+    try {
+      // The holder runs but cannot prove a token it never had: to this engine it did not answer.
+      expect((await b.fleet.reattach({ ...rec, token: "f".repeat(64) })).ok).toBe(false);
+      expect(await restoreControllerLanes(b.deps)).toEqual([]);
+      expect((await b.fleet.status()).lanes).toEqual([]); // nothing was spawned over it
+      expect(alive(rec.childPid)).toBe(true);
+      expect(existsSync(before.cwd)).toBe(true); // its worktree is still in use, so it stays
+      expect(b.deps.lanes.get(laneId)).toBeDefined(); // tried again at the next start
+      expect(pool.all().map((r) => r.laneId)).toEqual([laneId]);
+      expect((await b.store.verify(token))!.lanes).toContain(laneId); // its slot is kept
+      expect(b.rulings()).toEqual([expect.objectContaining({ ruling: "lane_not_restored", lane_id: laneId, reason: expect.stringContaining("did not answer") })]);
+    } finally {
+      await endHolders(pool);
+    }
   }, TIMEOUT);
 });

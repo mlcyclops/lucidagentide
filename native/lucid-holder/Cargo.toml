@@ -11,9 +11,14 @@ license = "BUSL-1.1"
 publish = false
 
 [dependencies]
+# The OS random source (the endpoint name's random part, the handshake nonce).
+getrandom = "0.2"
+# The handshake proof (HMAC-SHA256 keyed with the attach token; the token never crosses the endpoint).
+hmac = "0.12"
 interprocess = "2"
 parking_lot = "0.12"
 serde_json = "1"
+sha2 = "0.10"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
