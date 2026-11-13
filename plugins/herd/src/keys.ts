@@ -18,7 +18,7 @@
 // is reported (status line, `prefix+?`) and skipped, never fatal. A missing file is the defaults.
 // `lucid herd --default-keys` prints the defaults as a starting file.
 
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { decodePrintableKey, matchesKey, type KeyId } from "@oh-my-pi/pi-tui";
 import { isRecord } from "./events.ts";
@@ -255,11 +255,19 @@ const MAX_KEYS_BYTES = 64 * 1024;
 
 /** The active key model from `<data>/hub-keys.json`; never throws. */
 export function loadKeysConfig(data: string): KeysConfig {
-  const path = keysPath(data);
+  // One open file: the size checked is the size of the file read (no check-then-use on the path).
+  let fd: number;
+  try { fd = openSync(keysPath(data), constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)); } catch { return parseKeysConfig(null); }
   try {
-    if (statSync(path).size > MAX_KEYS_BYTES) return { ...parseKeysConfig(null), problems: ["hub-keys.json is larger than 64 KiB; the default keys are on"] };
-  } catch { return parseKeysConfig(null); }
-  try { return parseKeysConfig(readFileSync(path, "utf8")); } catch { return parseKeysConfig(null); }
+    const st = fstatSync(fd);
+    if (!st.isFile()) return parseKeysConfig(null);
+    if (st.size > MAX_KEYS_BYTES) return { ...parseKeysConfig(null), problems: ["hub-keys.json is larger than 64 KiB; the default keys are on"] };
+    return parseKeysConfig(readFileSync(fd, "utf8"));
+  } catch {
+    return parseKeysConfig(null);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** P-HERD.5 (ADR-0494): the notification switches, all off unless the file turns one on. */

@@ -18,7 +18,7 @@ import type { Db } from "../memory/db.ts";
 import { ingestArtifact } from "../memory/ingest.ts";
 import type { ScannerClient } from "../security/scanner_client.ts";
 import { DEFAULT_POLICY, type GateDecision, type GatePolicy, scanAndDecide } from "../security/gate.ts";
-import { UNTRUSTED_START, UNTRUSTED_END } from "../prompt/assembler.ts";
+import { fenceUntrusted } from "../prompt/untrusted.ts";
 import type { Telemetry } from "../telemetry/events.ts";
 import { type UnitKind, isUnitKind } from "./coverage.ts";
 import { redactPii } from "./redact.ts";
@@ -174,7 +174,7 @@ export async function distillSpan(args: DistillArgs): Promise<DistillResult> {
   // One corrective retry on a malformed reply: weaker configured models (flash/mini/local tiers,
   // which desktop/trainer_model.ts deliberately keeps eligible) often need the reminder; still
   // fail-safe after that - the trainer never loops on a model that cannot comply.
-  const user = `${UNTRUSTED_START}\n${red.text}\n${UNTRUSTED_END}\nObjective: ${args.objectiveId}`;
+  const user = `${fenceUntrusted(red.text)}\nObjective: ${args.objectiveId}`;
   let unit = parseDistilled(await args.complete(DISTILL_SYSTEM, user));
   if (!unit) {
     const retryUser = `${user}\nYour previous reply could not be parsed. Reply again with ONLY the JSON object described in the instructions: no prose, no code fence, no commentary.`;

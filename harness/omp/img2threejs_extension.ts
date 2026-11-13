@@ -32,7 +32,7 @@ import {
 } from "../creator/img2threejs/index.ts";
 import { isRecord, type JsonRecord } from "../creator/img2threejs/contract.ts";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../prompt/assembler.ts";
-import { neutralizeDelimiters } from "./mcp_result_gate.ts";
+import { neutralizeDelimiters } from "../prompt/untrusted.ts";
 
 export const IMG2THREEJS_TOOL_NAMES = ["img2threejs_probe", "img2threejs_assess", "img2threejs_validate", "img2threejs_generate", "img2threejs_state"] as const;
 export const IMG2THREEJS_ENV = "LUCID_IMG2THREEJS";

@@ -26,7 +26,7 @@
 
 import { UNTRUSTED_END, UNTRUSTED_START } from "../prompt/assembler.ts";
 import { engineFetch } from "./engine_channel.ts"; // LH-03 (ADR-0544): a held lane's call is MACed and its answer proven
-import { neutralizeDelimiters } from "./mcp_result_gate.ts";
+import { neutralizeDelimiters } from "../prompt/untrusted.ts";
 
 export const DESIGN_REQUEST_KINDS = ["decompose", "segment-hint", "matte", "upscale", "vectorize", "label"] as const;
 export type DesignRequestKind = (typeof DESIGN_REQUEST_KINDS)[number];

@@ -13,7 +13,7 @@
 // to treat it as data, never instructions. `parseCompiled` NEVER throws (the output is untrusted): it
 // slugs page ids, validates kinds/titles/bodies, drops malformed pages/links, and caps counts + sizes.
 
-import { UNTRUSTED_END, UNTRUSTED_START } from "../prompt/assembler.ts";
+import { fenceUntrusted } from "../prompt/untrusted.ts";
 import type { PageKind } from "./store.ts";
 
 export interface CompiledPage {
@@ -114,6 +114,6 @@ export function parseCompiled(raw: string): CompiledOutput {
 /** Compile a document by asking the injected model, then defensively parse its output. The document is
  *  delimited as untrusted DATA; parsing tolerates any model misbehavior. */
 export async function compileDocument(docText: string, complete: (system: string, user: string) => Promise<string>): Promise<CompiledOutput> {
-  const raw = await complete(COMPILE_SYSTEM, `${UNTRUSTED_START}\n${docText}\n${UNTRUSTED_END}`);
+  const raw = await complete(COMPILE_SYSTEM, fenceUntrusted(docText));
   return parseCompiled(raw);
 }

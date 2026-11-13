@@ -16,7 +16,7 @@
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { connect, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -236,9 +236,15 @@ describe.skipIf(!BIN)("P-HOLDER.1: lanes under lucid-holder", () => {
   test("a client that falls behind is cut off on both halves and comes back from its offset with every byte", async () => {
     const pool = holderFolder();
     const total = 24 * 1024 * 1024;
-    // 24 MiB of output at once, three times the most the holder queues for one client.
-    const script = "const b = Buffer.alloc(1 << 20, 120); for (let i = 0; i < 24; i++) process.stdout.write(b); setInterval(() => {}, 1000);";
-    const h = await pool.launch("lane-0f0e0d0c", "bun", ["-e", script], temp("ws"), { ...process.env });
+    // 24 MiB of output at once, three times the most the holder queues for one client. The agent writes only once
+    // the go file exists, which is after launch() returned with the client attached: output that reached the spool
+    // before the attach would be streamed as the replay snapshot, which no queue counts, so nothing would be cut.
+    const go = join(temp("go"), "go");
+    const script =
+      "const fs = require('node:fs'); const t = setInterval(() => { if (!fs.existsSync(process.env.LUCID_TEST_GO)) return; clearInterval(t); " +
+      "const b = Buffer.alloc(1 << 20, 120); for (let i = 0; i < 24; i++) process.stdout.write(b); setInterval(() => {}, 1000); }, 20);";
+    const h = await pool.launch("lane-0f0e0d0c", "bun", ["-e", script], temp("ws"), { ...process.env, LUCID_TEST_GO: go });
+    writeFileSync(go, "");
     const spool = join(pool.dir, `${h.holderId}.spool`);
     // The link is not resumed yet: its frames wait in the socket, so the holder's queue for it fills.
     await until(() => statSync(spool, { throwIfNoEntry: false })?.size === total, "the agent's output to reach the spool", 1200);

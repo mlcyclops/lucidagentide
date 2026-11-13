@@ -22,6 +22,7 @@
 // recorded write is the best available answer to "whose edit is in the working tree right now".
 
 import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
+import { neutralizeDelimiters } from "../harness/prompt/untrusted.ts";
 
 export type Owner = { id: string; name: string };
 export type OwnerAt = Owner & { at: number };
@@ -186,7 +187,7 @@ const UNOWNED_LINE_CAP = 8;
  *  the envelope tokens neutralized, so it can neither break out of the untrusted block nor start a line
  *  that reads as harness text. */
 function neutral(s: string): string {
-  return s.replace(/\s+/g, " ").split(UNTRUSTED_END).join("[lucid-neutralized-delimiter]").split(UNTRUSTED_START).join("[lucid-neutralized-delimiter]");
+  return neutralizeDelimiters(s.replace(/\s+/g, " "));
 }
 
 function clip(s: string, max: number): string {

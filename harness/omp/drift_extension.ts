@@ -25,7 +25,7 @@
 import { isDriftReadTool } from "../creator/drift_policy.ts";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../prompt/assembler.ts";
 import { engineFetch } from "./engine_channel.ts"; // LH-03 (ADR-0544): a held lane's call is MACed and its answer proven
-import { neutralizeDelimiters } from "./mcp_result_gate.ts";
+import { neutralizeDelimiters } from "../prompt/untrusted.ts";
 
 export const DRIFT_TOOL_NAMES = ["drift_status", "drift_read", "drift_apply", "drift_export"] as const;
 export const MAX_DRIFT_OPS = 50;

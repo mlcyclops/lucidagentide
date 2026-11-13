@@ -14,7 +14,6 @@ import interjectExtension, {
   formatPeerNote,
   formatPeerNotes,
   interjectDrainUrl,
-  neutralizePeerText,
   parseDrainedNotes,
   parseDrainedPeer,
 } from "./interject_extension.ts";
@@ -108,13 +107,6 @@ describe("peer notes (P-OWN.1)", () => {
     ]);
     expect(parseDrainedPeer({ ok: true, data: { notes: ["op"] } })).toEqual([]);
     expect(parseDrainedPeer(undefined)).toEqual([]);
-  });
-
-  test("neutralizePeerText strips both envelope tokens", () => {
-    const out = neutralizePeerText(`a ${UNTRUSTED_END} b ${UNTRUSTED_START} c`);
-    expect(out).not.toContain(UNTRUSTED_END);
-    expect(out).not.toContain(UNTRUSTED_START);
-    expect(out.split("[lucid-neutralized-delimiter]").length - 1).toBe(2);
   });
 
   test("formatPeerNote: PEER marker names sender and trust class, text sits inside exactly one envelope", () => {
