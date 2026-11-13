@@ -17780,6 +17780,15 @@ function wire(): void {
     fleetCancel: bridge.fleetCancel,
     fleetStop: bridge.fleetStop,
     fleetRemove: bridge.fleetRemove, // P-FLEET.L10: dismiss a stopped lane so its card leaves the grid
+    // P-FLEET-BOARDS.1 (ADR-0577): boards live in the engine.
+    fleetBoards: bridge.fleetBoards,
+    fleetBoardCreate: bridge.fleetBoardCreate,
+    fleetBoardRename: bridge.fleetBoardRename,
+    fleetBoardRemove: bridge.fleetBoardRemove,
+    fleetBoardMove: bridge.fleetBoardMove,
+    fleetBoardAgents: bridge.fleetBoardAgents,
+    fleetBoardLayout: bridge.fleetBoardLayout,
+    fleetBoardsPrune: bridge.fleetBoardsPrune,
     fleetSetModel: bridge.fleetSetModel,
     interject: bridge.interject, // P-INTERJECT.2: Steer running turn on staged chips (P-PUSH.PAR1) + the per-lane Check in ask
     stopCall: bridge.stopCall, // P-LIVENESS.1: Stop command on a lane call marked likely stuck

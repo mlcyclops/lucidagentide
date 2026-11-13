@@ -5710,9 +5710,8 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
    against the 10px gap it adds, so a full tile row never wraps while a card is being dragged across it. */
 .fleet-grid.autofit .fleet-drop-slot{flex:0 0 4px;margin-right:-14px;align-self:stretch;min-height:0;border:0;border-radius:2px;
   background:var(--accent)}
-/* The header toggle: lit while autofit is on. One text child, nowrap (invariant 11). */
+/* P-FLEET-BOARDS.1 (ADR-0577): the header's Layout control (it replaced the Autofit toggle). One text child, nowrap (invariant 11). */
 .fleet-fit-btn span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fleet-fit-btn.on{color:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
 .fleet-out-empty{display:flex;align-items:center;min-width:0;color:var(--txt-4);font-size:11px}
 .fleet-out-empty span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fleet-turn-user{flex:none;color:var(--accent-2);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -7515,6 +7514,60 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-pin .ic,.fleet-pin .ic{fill:none}
 .orbit-pin.on,.fleet-pin.on{color:var(--amber-txt,var(--amber));border-color:rgb(var(--amber-rgb) / .5)}
 .orbit-pin.on .ic,.fleet-pin.on .ic{fill:currentColor}
+
+/* ── P-FLEET-BOARDS.1 (ADR-0577): boards, layout presets and Next that needs you ───────────────────────────────────────── */
+/* The tab row under the dock header: Everything, each board (its name, a dot when an agent on it needs you,
+   and its small menu), + Board. Scrolls sideways rather than wrap; every label is nowrap+ellipsis. */
+.fleet-boards{flex:none;display:flex;align-items:center;gap:4px;min-width:0;padding:5px 8px;border-bottom:1px solid var(--line-soft);
+  background:var(--bg-1);overflow-x:auto;scrollbar-width:thin}
+.fleet-boards:empty{display:none}
+.fleet-board-tab{flex:none;display:inline-flex;align-items:center;gap:5px;max-width:180px;min-width:0;height:24px;padding:0 9px;
+  border:1px solid transparent;border-radius:7px;background:transparent;color:var(--txt-3);font:inherit;font-size:11.5px;font-weight:600;
+  white-space:nowrap;cursor:pointer;transition:color var(--t-fast),background var(--t-fast),border-color var(--t-fast)}
+.fleet-board-tab span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.fleet-board-tab:hover{color:var(--txt);background:var(--bg-2)}
+.fleet-board-tab.on{color:var(--accent-2);background:var(--bg-2);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.fleet-board-tabwrap{flex:none;display:inline-flex;align-items:center;min-width:0}
+.fleet-board-tabwrap .fleet-board-tab{border-top-right-radius:0;border-bottom-right-radius:0;padding-right:5px}
+.fleet-board-more{flex:none;display:inline-flex;align-items:center;justify-content:center;width:18px;height:24px;padding:0;
+  border:1px solid transparent;border-left:0;border-radius:0 7px 7px 0;background:transparent;color:var(--txt-4);cursor:pointer;opacity:.6}
+.fleet-board-tabwrap:hover .fleet-board-more,.fleet-board-tabwrap.on .fleet-board-more,.fleet-board-more:focus-visible{opacity:1}
+.fleet-board-tabwrap.on .fleet-board-more{background:var(--bg-2);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.fleet-board-more:hover{color:var(--txt)}
+.fleet-board-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--red);box-shadow:0 0 0 2px rgb(var(--red-rgb) / .25)}
+.fleet-board-add{flex:none;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:1px dashed var(--line);
+  border-radius:7px;background:transparent;color:var(--txt-3);font:inherit;font-size:11.5px;white-space:nowrap;cursor:pointer}
+.fleet-board-add:hover:not(:disabled){color:var(--txt);border-color:var(--accent)}
+.fleet-board-add:disabled{opacity:.45;cursor:default}
+.fleet-board-rename{flex:none;width:150px;height:24px;padding:0 7px;border:1px solid var(--accent);border-radius:7px;
+  background:var(--bg-2);color:var(--txt);font:inherit;font-size:11.5px}
+.fleet-board-rename:focus{outline:none}
+.fleet-board-confirm{max-width:280px;padding:4px 2px;font-size:12px;line-height:1.45;color:var(--txt-2)}
+.fleet-board-confirm p{margin:0 0 8px}
+.fleet-board-confirm-acts{display:flex;gap:6px;justify-content:flex-end}
+/* Next that needs you: red like the states it jumps to. Hidden (by the attribute) while nothing needs you. */
+.fleet-next{color:var(--red);border-color:rgb(var(--red-rgb) / .45)}
+/* A card the shown board does not have: hidden, never removed, so its typed text and stream survive. An
+   attribute, because paintFrame and orbit_remote both rewrite className. */
+.fleet-grid [data-board-off]{display:none}
+/* Grid of four and Focus one are fixed shapes: no card edge to drag. */
+.fleet-grid.lay-grid4 .fleet-card-rz,.fleet-grid.lay-focus .fleet-card-rz{display:none}
+/* Focus one: the large card in the first column spans the strip's rows plus a closing 1fr row (fleet_grid.ts sets
+   grid-template-rows), so it never stretches the strip apart; everything else stacks in the strip as header-only
+   cards (their composers are kept, just not shown). The + Spoke form and the empty note run full width under
+   both. Too narrow for both columns (`.one-col`): the large card first, the strip under it. */
+.fleet-grid.lay-focus{display:grid;grid-template-columns:minmax(0,1fr) var(--fleet-strip-w,260px);align-items:start;align-content:start}
+.fleet-grid.lay-focus>*,.fleet-grid.lay-focus>.fleet-remote>*{grid-column:2;min-width:0}
+.fleet-grid.lay-focus>.fleet-spawn-card,.fleet-grid.lay-focus>.fleet-empty{grid-column:1 / -1;width:auto}
+.fleet-grid.lay-focus .fleet-card[data-focus-main]{grid-column:1;grid-row:1 / -1}
+.fleet-grid.lay-focus .fleet-card:not([data-focus-main]):not(.fleet-spawn-card)>:not(.fleet-card-head):not(.rs-lane-head){display:none}
+.fleet-grid.lay-focus .fleet-card:not([data-focus-main]):not(.fleet-spawn-card){cursor:pointer}
+.fleet-grid.lay-focus.one-col{grid-template-columns:minmax(0,1fr)}
+.fleet-grid.lay-focus.one-col>*,.fleet-grid.lay-focus.one-col>.fleet-remote>*{grid-column:1}
+.fleet-grid.lay-focus.one-col .fleet-card[data-focus-main]{grid-row:auto;order:-1}
+/* Next that needs you lands here: the settings highlight (setflash), once. */
+.fleet-card[data-fleet-flash]{animation:setflash 1.5s ease-in-out}
+@media (prefers-reduced-motion:reduce){.fleet-card[data-fleet-flash]{animation:none;outline:2px solid var(--accent-2);outline-offset:-2px}}
 
 /* P-FLEET.L18: the on-orbit form's repo affordances (mirrors the grid form's anatomy). */
 .orbit-spawn-l i{font-style:normal;font-size:8.5px;color:var(--txt-4);letter-spacing:.06em;margin-left:2px}

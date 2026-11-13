@@ -27,10 +27,12 @@ export interface CardSize { w: number; h: number }
  *  cards in the same row, `fh` weighs its row's height against the other rows. 1 is the equal share; the
  *  absence of an entry means "equal" too, so a layout that never touched autofit carries none. */
 export interface FitWeight { fw: number; fh: number }
-/** `autofit` and `fit` are OPTIONAL on purpose: a layout saved before P-FLEET.FIT1 has neither, and must
- *  load as autofit ON with equal shares. Only the non-default values are ever written (`autofit:false`,
- *  a non-empty `fit`), so a default layout still serializes to exactly the pre-FIT1 bytes. */
-export interface LaneLayout { order: string[]; size: Record<string, CardSize>; autofit?: boolean; fit?: Record<string, FitWeight> }
+/** `fit` is OPTIONAL on purpose: a layout saved before P-FLEET.FIT1 has none and loads with equal shares. Only a
+ *  non-empty `fit` is ever written, so a default layout still serializes to exactly the pre-FIT1 bytes.
+ *  P-FLEET-BOARDS.1 (ADR-0577): WHICH layout a board shows (side by side, grid of four, focus one, free) is the engine's, stored per
+ *  board; this file keeps only the geometry the user made: card order, the Free sizes and the side-by-side
+ *  shares. A pre-boards payload's `autofit:false` is dropped on load. */
+export interface LaneLayout { order: string[]; size: Record<string, CardSize>; fit?: Record<string, FitWeight> }
 
 export const CARD_COL_W = 300;      // the DEFAULT card width, and the legacy track width migrations read
 export const CARD_GAP = 10;
@@ -213,16 +215,15 @@ export function reconcile(layout: LaneLayout, laneIds: readonly string[]): LaneL
     const s = src[id];
     if (s) size[id] = { w: s.w, h: s.h };
   }
-  // P-FLEET.FIT1: the mode survives, and fit shares are released with their lane exactly like sizes.
-  return withFit({ order, size }, layout?.autofit, layout?.fit, order);
+  // P-FLEET.FIT1: fit shares are released with their lane exactly like sizes.
+  return withFit({ order, size }, layout?.fit, order);
 }
 
-/** Attach the optional P-FLEET.FIT1 fields: `autofit` only when explicitly OFF, `fit` only when some lane
- *  holds a non-equal share. Shared by reconcile / loadLayout / saveLayout so the three cannot disagree on
- *  what "default" means. Entries are copied (never aliased), clamped, and kept only for lanes in `order`. */
-function withFit(base: LaneLayout, autofit: unknown, fit: unknown, order: readonly string[]): LaneLayout {
+/** Attach the optional P-FLEET.FIT1 `fit`, only when some lane holds a non-equal share. Shared by reconcile /
+ *  loadLayout / saveLayout so the three cannot disagree on what "default" means. Entries are copied (never
+ *  aliased), clamped, and kept only for lanes in `order`. */
+function withFit(base: LaneLayout, fit: unknown, order: readonly string[]): LaneLayout {
   const out: LaneLayout = base;
-  if (autofit === false) out.autofit = false;
   if (fit && typeof fit === "object" && !Array.isArray(fit)) {
     const bag = fit as Record<string, unknown>;
     // Built through fromEntries, never `kept[id] = w`: a stored lane id is untrusted, and `__proto__` as
@@ -255,7 +256,7 @@ export function loadLayout(raw: string | null | undefined): LaneLayout {
   try { parsed = JSON.parse(raw); } catch { return empty; }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return empty;
 
-  const p = parsed as { order?: unknown; size?: unknown; autofit?: unknown; fit?: unknown };
+  const p = parsed as { order?: unknown; size?: unknown; fit?: unknown };
   // Fail closed on the load-bearing field: an `order` that is not a clean string array makes the WHOLE
   // payload untrustworthy, so it is discarded rather than partially salvaged.
   if (!Array.isArray(p.order)) return empty;
@@ -294,9 +295,9 @@ export function loadLayout(raw: string | null | undefined): LaneLayout {
     }
   }
   const size: Record<string, CardSize> = Object.fromEntries(sizes);
-  // P-FLEET.FIT1: a payload from before autofit has no `autofit` key and loads as ON; a malformed `fit`
-  // only loses the shares (equal is a safe answer), never the order or sizes beside it.
-  return withFit({ order, size }, p.autofit, p.fit, order);
+  // P-FLEET.FIT1: a malformed `fit` only loses the shares (equal is a safe answer), never the order or sizes
+  // beside it.
+  return withFit({ order, size }, p.fit, order);
 }
 
 export function saveLayout(l: LaneLayout): string {
@@ -311,8 +312,8 @@ export function saveLayout(l: LaneLayout): string {
     if (s) size[id] = clampSize(s, CARD_MAX_W);
   }
   // Keys are emitted in `order` sequence, so an unchanged layout always serializes to identical bytes.
-  // P-FLEET.FIT1: the optional fields go through the same normalizer as load, so save(load(x)) is stable.
-  return JSON.stringify(withFit({ order, size }, l?.autofit, l?.fit, order));
+  // P-FLEET.FIT1: the optional shares go through the same normalizer as load, so save(load(x)) is stable.
+  return JSON.stringify(withFit({ order, size }, l?.fit, order));
 }
 
 /** The dock's missing edges. `dir` is any subset of "n"/"s"/"e"/"w" (e.g. "n", "ne", "se"). A north drag
@@ -525,5 +526,70 @@ export function sharesOf(sizes: readonly number[]): number[] {
   return sizes.map((v) => clampWeight((Math.max(0, num(v, 0)) * k) / total));
 }
 
-/** Autofit is the DEFAULT: only an explicit `autofit:false` turns it off. */
-export function isAutofit(l: LaneLayout | null | undefined): boolean { return l?.autofit !== false; }
+// ------------------------------------------------------------------ P-FLEET-BOARDS.1 (ADR-0577): the board layout presets
+//
+// Side by side is autofitPlan above and Free is the per-card `size`. The two below are fixed shapes: they keep
+// no shares and no sizes, so they need nothing persisted beyond the board's choice (and its focused agent).
+
+/** Grid of four: two columns by two rows of the panel, whatever the count. A fifth agent starts a third row at
+ *  the same tile size (the body scrolls); a lone card in a row keeps its column width instead of stretching, so
+ *  the 2 by 2 rhythm holds. Each section (lane group) starts its own row. A panel too narrow for two minimum
+ *  cards falls back to one column. Tiles never go under CARD_MIN_H. Same FitPlan shape as autofitPlan, so the
+ *  grid paints both the same way. Null when there is nothing to tile or the body is unmeasured. */
+export function gridFourPlan(sections: readonly (readonly string[])[], w: number, h: number): FitPlan | null {
+  const W = Math.floor(num(w, 0));
+  const H = Math.floor(num(h, 0));
+  if (!(W > 0) || !(H > 0)) return null;
+  const seen = new Set<string>();
+  const secs: string[][] = [];
+  for (const s of sections ?? []) {
+    const ids: string[] = [];
+    for (const id of s ?? []) {
+      if (typeof id !== "string" || !id || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+    if (ids.length) secs.push(ids);
+  }
+  if (!secs.length) return null;
+  const cols = W >= 2 * CARD_MIN_W + CARD_GAP ? 2 : 1;
+  const colW = distribute(W - CARD_GAP * (cols - 1), new Array<number>(cols).fill(1), CARD_MIN_W);
+  const cardH = Math.max(CARD_MIN_H, Math.floor((H - CARD_GAP) / 2));
+  const rows: string[][] = [];
+  for (const s of secs) for (let i = 0; i < s.length; i += cols) rows.push(s.slice(i, i + cols));
+  const rowW = rows.map((r) => colW.slice(0, r.length));
+  const rowH = rows.map(() => cardH);
+  const cells: Record<string, FitCell> = {};
+  rows.forEach((r, ri) => r.forEach((id, ci) => { cells[id] = { w: colW[ci]!, h: cardH, row: ri }; }));
+  const scroll = rows.length * cardH + CARD_GAP * (rows.length - 1) > H;
+  return { grid: { cols, rows: rows.length, cardW: colW[0]!, cardH, scroll }, rows, rowW, rowH, cells };
+}
+
+/** Focus one: the strip's width beside the focused agent. CARD_MIN_W, the narrowest a card header still fits. */
+export const FOCUS_STRIP_W = CARD_MIN_W;
+
+/** Focus one: which agent is large, the rest in the strip (in `ids` order), and the sizes. `oneColumn` when the
+ *  strip is empty or the panel is too narrow for a minimum card beside the strip: the focused agent then spans
+ *  the width and the strip runs under it. */
+export interface FocusPlan { focus: string; strip: string[]; mainW: number; mainH: number; stripW: number; oneColumn: boolean }
+
+/** The focused agent is `focus` when it is among `ids`, else the first one (a stale or missing focus never
+ *  leaves the panel without a large card). The large card fills the body's height, never under CARD_MIN_H.
+ *  Null when there is nothing to show or the body is unmeasured. */
+export function focusPlan(ids: readonly string[], focus: string | undefined, w: number, h: number): FocusPlan | null {
+  const W = Math.floor(num(w, 0));
+  const H = Math.floor(num(h, 0));
+  if (!(W > 0) || !(H > 0)) return null;
+  const list = [...new Set((ids ?? []).filter((id) => typeof id === "string" && id !== ""))];
+  if (!list.length) return null;
+  const main = focus !== undefined && list.includes(focus) ? focus : list[0]!;
+  const strip = list.filter((id) => id !== main);
+  const oneColumn = strip.length === 0 || W < CARD_MIN_W + CARD_GAP + FOCUS_STRIP_W;
+  return {
+    focus: main, strip,
+    mainW: oneColumn ? W : W - CARD_GAP - FOCUS_STRIP_W,
+    mainH: Math.max(CARD_MIN_H, H),
+    stripW: oneColumn ? W : FOCUS_STRIP_W,
+    oneColumn,
+  };
+}

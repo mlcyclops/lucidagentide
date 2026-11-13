@@ -18,6 +18,11 @@
 //   - MINIMIZED, the status-bar pill is a real snapshot: one colored dot per lane state with its count and
 //     a hover naming the lanes. It is re-adopted after every status-bar repaint and only repainted when the
 //     markup actually changes, which is what stops it flickering while a lane works.
+//
+// P-FLEET-BOARDS.1 (ADR-0577, phase 2 of ADR-0575) adds BOARDS, owned by the engine: a tab row (Everything,
+// each board, + Board) picks which agents the grid shows (the rest are hidden, never destroyed), each board
+// keeps a layout preset (Side by side, Grid of four, Focus one, Free), and "Next that needs you" walks the
+// agents waiting on the user across boards.
 
 import { $, el } from "./dom.ts";
 import { esc } from "./format.ts";
@@ -32,7 +37,10 @@ import { canSteer, laneDrainReady, mainCheckoutCwd, parallelPushNotice, parallel
 import { fleetHome, openFleetOrbit, setFleetHome } from "./fleet_orbit.ts";
 // P-RS-LANES.1 (ADR-0551): remote spoke tasks are lanes here too. orbit_remote builds and answers their cards (the
 // per-spoke panel's own actions, through its one write path); this file only places them and counts them in the pill.
-import { onRemoteChange, onRemoteLaneClick, paintRemoteLanes, refreshRemote, remoteCounts } from "./orbit_remote.ts";
+import { onRemoteChange, onRemoteLaneClick, paintRemoteLanes, refreshRemote, remoteCounts, remoteSnapshot } from "./orbit_remote.ts";
+import { remoteLanes, type RemoteSpokeState } from "./remote_spokes_model.ts";
+// P-FLEET-BOARDS.1: boards are the ENGINE's (/api/fleet/boards/*); the rules this grid asks of them are pure, in fleet_boards_view.
+import { agentsOn, BOARD_AGENTS_MAX, BOARD_LAYOUTS, BOARD_NAME_MAX, boardHasNeeds, boardLayoutOf, boardNameProblem, BOARDS_MAX, EVERYTHING, findBoard, liveForPrune, needsYou, nextBoardName, nextNeedingYou, type LiveAgent, type NextJump } from "./fleet_boards_view.ts";
 // P-FLEET.L18: named lane groups - pure model; this file owns only chips, dividers and storage.
 import { assignLane, createGroup, groupSections, laneCollapsed, loadGroups, pruneLanes, removeGroup, saveGroups, toggleCollapsed, type LaneGroups } from "./lane_groups.ts";
 import { renderMarkdown } from "./markdown.ts";
@@ -41,7 +49,7 @@ import { isAutoPreviewPath } from "./preview_tabs.ts";
 // P-FLEET.L13: the catch-up scroll math, shared with the main chat thread so the two cannot drift.
 import { LANE_JUMP_SHOW_PX, pageDownTarget, shouldShowJump } from "./scroll_jump.ts";
 import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModelDefault } from "./spoke_prefs.ts"; // P-SCROLL.1: new lanes open on the last lane's model; colliding names show the route
-import type { ApprovalScope, FleetStatusView, LaneEvent, LaneImage, LaneView, LucidBridge } from "./bridge.ts";
+import type { ApprovalScope, BoardLayout, BoardsView, FleetStatusView, LaneEvent, LaneImage, LaneView, LucidBridge } from "./bridge.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts";
 import { openRepoDetails, paintRepoChip } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): the lane's repo + push target
 import { repoSections, spokeRepo } from "./spoke_repo.ts"; // P-HUB-PICK.1 (ADR-0516): codebase name, color and the By repo grouping
@@ -56,7 +64,8 @@ import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
 // P-FLEET.L9: ALL card + dock geometry. This file does pointer plumbing and nothing else.
 // P-FLEET.FIT1 (ADR-pending): plus the autofit tiling (autofitPlan / shareResize / sharesOf), also pure;
 // this file only measures the grid body and paints the plan.
-import { autofitPlan, CARD_DEF_W, CARD_GAP, CARD_MIN_H, CARD_MIN_W, clampSize, defaultCardW, heightFromDrag, isAutofit, loadLayout, maxCardW, reconcile, reorder, resizeShape, saveLayout, shareResize, sharesOf, snapSlot, widthFromDrag, type CardRect, type CardSize, type FitPlan, type FitWeight, type LaneLayout } from "./lane_layout.ts";
+// P-FLEET-BOARDS.1: plus the two fixed board layouts, Grid of four and Focus one.
+import { autofitPlan, CARD_DEF_W, CARD_GAP, CARD_MIN_H, CARD_MIN_W, clampSize, defaultCardW, focusPlan, gridFourPlan, heightFromDrag, loadLayout, maxCardW, reconcile, reorder, resizeShape, saveLayout, shareResize, sharesOf, snapSlot, widthFromDrag, type CardRect, type CardSize, type FitPlan, type FitWeight, type LaneLayout } from "./lane_layout.ts";
 // P-TOKENS.1: the lane's context-fill chip escalates on the SAME thresholds as the composer's token button.
 import { fmtTokens, fmtUsd, meterBadge, newMeter, onUsage, type MeterState } from "./token_meter.ts";
 import type { ChipKind } from "./answer_chips.ts";
@@ -64,7 +73,8 @@ import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
 
 /** The seven lane functions, typed straight off the bridge so the seam can never drift (results are
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
-type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueuePeek" | "fleetQueueTake" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject" | "stopCall" | "repoChoices" | "repoGithub">;
+type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueuePeek" | "fleetQueueTake" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject" | "stopCall" | "repoChoices" | "repoGithub"
+  | "fleetBoards" | "fleetBoardCreate" | "fleetBoardRename" | "fleetBoardRemove" | "fleetBoardMove" | "fleetBoardAgents" | "fleetBoardLayout" | "fleetBoardsPrune">; // P-FLEET-BOARDS.1
 type FleetResources = FleetStatusView["resources"];
 
 export interface FleetGridDeps extends FleetFns {
@@ -169,6 +179,31 @@ const FLEET_GROUPS_KEY = "lucid.fleetGroups.v1";
 const FLEET_BY_REPO_KEY = "lucid.fleetByRepo";
 let groupByRepo = false;
 
+// P-FLEET-BOARDS.1: boards. The engine owns them; this module holds the last answer and which board is shown.
+/** The board shown, remembered per machine. A board id, or `all` for Everything. */
+const FLEET_BOARD_KEY = "lucid.fleetBoard.v1";
+/** Boards ride the status poll, but are asked for at most this often (a board change answers with them anyway). */
+const BOARDS_MS = 10_000;
+/** Agents that are gone are pruned off the boards at most this often. */
+const PRUNE_MS = 60_000;
+/** The remote computer states that mean it is answering, so a task it no longer lists is really gone
+ *  (remote_spokes_model remoteLanes reads the same four). */
+const ANSWERING: Readonly<Record<RemoteSpokeState, boolean>> = {
+  approval: true, busy: true, error: true, idle: true, checking: false, offline: false, silent: false, deactivated: false,
+};
+let boards: BoardsView | null = null;
+/** When boards were last asked for; 0 asks on the next poll (after a refused change, so the truth comes back). */
+let boardsAt = 0;
+let prunedAt = 0;
+let currentBoard: string = EVERYTHING;
+/** The last "Next that needs you" jump, handed back so a round of presses keeps its order. */
+let lastJump: NextJump | null = null;
+/** The board whose tab is being renamed inline; the tab row is not rebuilt under the input meanwhile. */
+let renamingBoard: string | null = null;
+/** The tab row's last built signature (board ids, names, the cap). Which tab is current is a class, never a
+ *  rebuild, so the first click of a double-click cannot replace the tab the second click lands on. */
+let tabsSig = "";
+
 // localStorage-backed persistence; a broken/absent store degrades to in-memory (the dock still works).
 function storage(): DockStorage {
   try { const ls = window.localStorage; return { get: (k) => ls.getItem(k), set: (k, v) => ls.setItem(k, v) }; }
@@ -228,21 +263,25 @@ export function openFleetGrid(): void {
   groupByRepo = storage().get(FLEET_BY_REPO_KEY) === "1"; // P-HUB-PICK.1
   lastGroupSig = ""; // a fresh dock has no dividers yet - an unchanged signature must not skip building them
   remoteSig = ""; // P-RS-LANES.1: likewise its Remote section, which has no cards placed or sized yet
+  currentBoard = storage().get(FLEET_BOARD_KEY) || EVERYTHING; // P-FLEET-BOARDS.1: the board shown last time
+  boardsAt = 0; tabsSig = ""; renamingBoard = null; lastJump = null;
   dockState.minimized = false; // an explicit open always shows the panel, never just the pill
   dock = el(`<div id="fleetDock" class="share-dock fleet-dock side-${dockState.side}" role="dialog" aria-label="LUCID Fleet - local and remote spokes">
     <div class="share-dock-head" data-dock-drag>
       <span class="share-dock-grip">${icon("bolt", 14)}</span>
       <span class="share-dock-title">LUCID Fleet</span>
       <span class="fleet-headroom" id="fleetHeadroom" data-tip="Local headroom|Live CPU and memory. Spokes are UNLIMITED - a new one is refused only while a metric stays at or above the tick for 30 seconds straight, so a burst never blocks you."></span>
+      <button class="btn-mini fleet-add-btn fleet-next" data-fleet-next hidden data-tip="Next that needs you|Jumps to the next agent waiting for your approval or likely stuck: this board first, then your other boards, then Everything. Press again for the one after."></button>
       <button class="btn-mini fleet-add-btn" data-fleet-orbit data-tip="Orbit|Back to the hub-and-spoke map. Same spokes, same colors - the grid and the orbit are two faces of one fleet.">${icon("share", 12)} Orbit</button>
       <button class="btn-mini fleet-add-btn fleet-pin" data-fleet-byrepo aria-pressed="false" data-tip="Group by repo|Section the cards by the codebase each spoke works on, in the same colors as the orbit. Your named groups are kept and come back when this is off.">${icon("git", 12)} By repo</button>
       <button class="btn-mini fleet-add-btn fleet-pin" data-fleet-pin data-tip="Default view|Make the GRID what the Fleet button opens. The orbit header has the same pin."></button>
       <button class="btn-mini fleet-add-btn" data-fleet-hub data-tip="Open in terminal (classic hub)|Opens the classic hub in a new terminal window: your agents and their boards as panes (Fleet, Security, Sessions, Audit, Usage and a live agent), linked to this app. You can also type lucid hub in any terminal.">${icon("terminal", 12)} Classic hub</button>
-      <button class="btn-mini fleet-add-btn fleet-fit-btn" data-fleet-fit aria-pressed="true" data-tip="Autofit|Lanes tile the whole panel at equal sizes and refit as it resizes. Drag a card edge to resize it, its neighbors share the rest; double-click an edge to reset to equal. Off: free layout.">${icon("layout", 12)}<span>Autofit</span></button>
+      <button class="btn-mini fleet-add-btn fleet-fit-btn" data-fleet-layout aria-haspopup="menu" data-tip="Layout|How the agents on this board share the panel. Side by side: they fill it, drag an edge to resize, double-click an edge for equal sizes. Grid of four: two by two. Focus one: one agent large, the rest in a strip; click a strip card to bring it up. Free: you size each card.">${icon("layout", 12)}<span data-fleet-layout-name>Side by side</span></button>
       <button class="btn-mini fleet-add-btn" data-fleet-add title="Start a new agent on this computer">${icon("plus", 12)} Agent</button>
       <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" title="Minimize (spokes keep running)">${UP_ARROW}</button>
       <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" title="Close (spokes keep running)">${icon("close", 15)}</button>
     </div>
+    <div class="fleet-boards" data-fleet-boards role="tablist" aria-label="Boards"></div>
     <div class="share-dock-body fleet-body"><div class="fleet-grid" id="fleetGrid"></div></div>
     <div class="share-dock-rz n" data-dock-rz="n" aria-hidden="true"></div>
     <div class="share-dock-rz s" data-dock-rz="s" aria-hidden="true"></div>
@@ -265,8 +304,9 @@ export function openFleetGrid(): void {
   dock.addEventListener("input", onInput);
   dock.addEventListener("paste", onPaste); // P-FLEET.L3: paste an image into a lane composer
   dock.addEventListener("pointerdown", onDockPointerDown); // P-FLEET.L9: per-card resize + drag-to-reorder
-  dock.addEventListener("dblclick", onFitReset); // P-FLEET.FIT1: double-click a card edge = equal shares again
-  paintFitBtn();
+  dock.addEventListener("dblclick", onDockDblClick); // P-FLEET.FIT1: a card edge = equal shares again; P-FLEET-BOARDS.1: a board tab = rename
+  paintTabs();
+  paintLayoutBtn();
   wireAutofit();
   // P-FLEET.L13: catch-up buttons + their visibility. Both are DELEGATED on the dock: lane cards are
   // built and destroyed on every poll, so per-card listeners would leak with them (the same reason
@@ -401,16 +441,23 @@ function applySize(run: LaneRun | undefined): void {
   card.style.flex = `0 1 ${c.w}px`;
   card.style.height = `${c.h}px`;
 }
-/** P-FLEET.FIT1 (ADR-pending): the free layout above, or (the DEFAULT) the autofit tiling below. Runs on
- *  every poll, dock drag and window resize, so it is idempotent and cheap: autofit re-measures nothing
- *  unless the set of tiles changed, it re-applies the cached plan; the observers own re-measuring. */
+/** P-FLEET.FIT1 (ADR-pending): the free layout above, or the autofit tiling below. P-FLEET-BOARDS.1: which one is the
+ *  shown board's choice (Side by side is the autofit tiling, Free the free layout), plus Grid of four (the same
+ *  tiling painter on a fixed 2 by 2 plan) and Focus one. Runs on every poll, dock drag and window resize, so it
+ *  is idempotent and cheap: a tiling re-measures nothing unless the set of tiles changed, it re-applies the
+ *  cached plan; the observers own re-measuring. `.autofit` marks every tiled layout (the inside-of-a-tile rules
+ *  in styles.css), `lay-<layout>` the one shown. */
 function applySizes(): void {
   const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
-  const fit = isAutofit(layout);
-  grid?.classList.toggle("autofit", fit);
-  if (fit && grid) { applyFit(grid, false); return; }
+  if (!grid) return;
+  const mode = boardLayoutOf(boards, currentBoard).layout;
+  grid.classList.toggle("autofit", mode !== "free");
+  for (const l of BOARD_LAYOUTS) grid.classList.toggle(`lay-${l.id}`, l.id === mode);
+  if (mode !== "focus") clearFocus(grid);
+  if (mode === "focus") { applyFocus(grid); return; }
+  if (mode !== "free") { applyFit(grid, false); return; }
   for (const run of runs.values()) applySize(run);
-  if (grid) applyRemoteFree(grid);
+  applyRemoteFree(grid);
 }
 
 /** P-RS-LANES.1 (ADR-0551): a remote card in the free layout takes the panel's tile width (lane_layout.defaultCardW,
@@ -435,25 +482,30 @@ let fitRaf = 0;
 
 /** The visible tiles in the order applyOrder lays them out: one section per group (a collapsed group's
  *  lanes are display:none, so they take no tile), then the ungrouped tail. P-RS-LANES.1 (ADR-0551): then the
- *  Remote section's cards, by lane key, so the tiling counts them like any lane. */
+ *  Remote section's cards, by lane key, so the tiling counts them like any lane. P-FLEET-BOARDS.1: only the agents the
+ *  shown board has (its other cards are hidden, not tiles). */
 function fitSections(grid: HTMLElement): string[][] {
-  const live = layout.order.filter((id) => runs.get(id)?.card);
+  const shown = shownSet();
+  const live = layout.order.filter((id) => runs.get(id)?.card && (!shown || shown.has(id)));
   const secs = groupSections(live, groups).map((s) => s.ids.filter((id) => !laneCollapsed(groups, id)));
-  const remote = remoteCards(grid).map((c) => c.dataset.rsLane ?? "");
+  const remote = remoteCards(grid).filter((c) => !c.hasAttribute("data-board-off")).map((c) => c.dataset.rsLane ?? "");
   return remote.length ? [...secs, remote] : secs;
 }
 
 /** The grid body's usable px. Group dividers and the + Lane form own full rows in autofit (styles.css),
  *  so their height comes off the top before tiling. Null while the body is unmeasurable (hidden /
- *  minimized): the caller then plans against its last good size instead of collapsing every card. */
-function measureFit(grid: HTMLElement): { w: number; h: number } | null {
+ *  minimized): the caller then plans against its last good size instead of collapsing every card.
+ *  P-FLEET-BOARDS.1: `heads` false measures the whole body (Focus one puts the dividers in its strip, not above it). */
+function measureFit(grid: HTMLElement, heads: boolean): { w: number; h: number } | null {
   const body = grid.parentElement;
   if (!body || body.clientHeight <= 0 || body.clientWidth <= 0) return null;
   const px = (v: string): number => Number.parseFloat(v) || 0;
   const bs = getComputedStyle(body);
   let h = body.clientHeight - px(bs.paddingTop) - px(bs.paddingBottom);
-  // P-RS-LANES.1: the Remote section's head owns a full row too (its wrapper is display:contents).
-  for (const x of grid.querySelectorAll<HTMLElement>(":scope > .fleet-group-head, :scope > .fleet-spawn-card, :scope > .fleet-remote > .fleet-remote-head")) {
+  // P-RS-LANES.1: the Remote section's head owns a full row too (its wrapper is display:contents). A head the
+  // shown board hides takes no row.
+  const sel = ":scope > .fleet-group-head, :scope > .fleet-spawn-card, :scope > .fleet-remote > .fleet-remote-head:not([data-board-off])";
+  for (const x of heads ? grid.querySelectorAll<HTMLElement>(sel) : []) {
     const xs = getComputedStyle(x);
     h -= x.getBoundingClientRect().height + px(xs.marginTop) + px(xs.marginBottom) + CARD_GAP;
   }
@@ -468,10 +520,12 @@ function measureFit(grid: HTMLElement): { w: number; h: number } | null {
  *  when unchanged so the 2.5s poll costs no style invalidation. */
 function applyFit(grid: HTMLElement, remeasure: boolean): void {
   const secs = fitSections(grid);
-  const sig = `${secs.map((s) => s.join(",")).join("|")}#${grid.querySelectorAll(":scope > .fleet-group-head").length}${$(".fleet-spawn-card", grid) ? "+" : ""}`;
-  const dims = (!remeasure && fitPlan?.sig === sig ? fitPlan : measureFit(grid)) ?? fitPlan;
+  // P-FLEET-BOARDS.1: Grid of four paints through here on its own fixed plan; Side by side is the shares-weighted tiling.
+  const four = boardLayoutOf(boards, currentBoard).layout === "grid4";
+  const sig = `${four ? "4:" : ""}${secs.map((s) => s.join(",")).join("|")}#${grid.querySelectorAll(":scope > .fleet-group-head").length}${$(".fleet-spawn-card", grid) ? "+" : ""}`;
+  const dims = (!remeasure && fitPlan?.sig === sig ? fitPlan : measureFit(grid, true)) ?? fitPlan;
   if (!dims) { for (const run of runs.values()) applySize(run); applyRemoteFree(grid); return; } // never measured yet: free sizes until it lays out
-  const plan = autofitPlan(secs, dims.w, dims.h, layout.fit);
+  const plan = four ? gridFourPlan(secs, dims.w, dims.h) : autofitPlan(secs, dims.w, dims.h, layout.fit);
   fitPlan = plan ? { ...plan, sig, w: dims.w, h: dims.h } : null;
   if (!plan) return;
   for (const run of runs.values()) {
@@ -504,8 +558,8 @@ function wireAutofit(): void {
     if (fitRaf) return;
     fitRaf = requestAnimationFrame(() => {
       fitRaf = 0;
-      const g = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
-      if (g && isAutofit(layout)) { g.classList.add("autofit"); applyFit(g, true); }
+      fitPlan = null; // re-measure: the body or the tile set changed under the cached plan
+      applySizes();
     });
   };
   fitObs = new ResizeObserver(kick);
@@ -522,33 +576,101 @@ function unwireAutofit(): void {
   fitPlan = null;
 }
 
-/** The header toggle mirrors the persisted mode. */
-function paintFitBtn(): void {
-  const btn = dock ? ($("[data-fleet-fit]", dock) as HTMLElement | null) : null;
-  if (!btn) return;
-  const on = isAutofit(layout);
-  btn.classList.toggle("on", on);
-  btn.setAttribute("aria-pressed", String(on));
+/** P-FLEET-BOARDS.1: the header's Layout control names the shown board's layout. */
+function paintLayoutBtn(): void {
+  const name = dock ? $("[data-fleet-layout-name]", dock) : null;
+  if (!name) return;
+  const mode = boardLayoutOf(boards, currentBoard).layout;
+  const label = BOARD_LAYOUTS.find((l) => l.id === mode)?.label ?? "";
+  if (name.textContent !== label) name.textContent = label;
 }
 
-/** Header toggle. ON is the default, so it is stored as the ABSENCE of `autofit:false`. Off hands every
- *  card straight back to the free layout's own sizes (applySize rewrites both inline values); the user's
- *  autofit shares are kept, so toggling back on restores them. */
-function toggleAutofit(): void {
-  if (isAutofit(layout)) layout.autofit = false; else delete layout.autofit;
-  persistLayout();
-  paintFitBtn();
+/** P-FLEET-BOARDS.1: the Layout menu, the four presets for the shown board. The old Autofit toggle is its Side by side
+ *  (on) and Free (off); the side-by-side shares and the Free sizes stay in lane_layout, so switching back
+ *  restores them. */
+function openLayoutMenu(btn: HTMLElement): void {
+  const mode = boardLayoutOf(boards, currentBoard).layout;
+  const r = btn.getBoundingClientRect();
+  openCtxMenu(r.left, r.bottom + 4, BOARD_LAYOUTS.map((l) => ({ label: l.label, kbd: l.id === mode ? "\u2713" : "", run: () => setBoardLayout(l.id) })), { returnFocus: btn });
+}
+
+/** Set the shown board's layout (and, for Focus one, which agent is large). Applied at once, then stored with
+ *  the engine, whose answer replaces the guess. The engine's layout write SETS the focus, so the current one is
+ *  passed along when only the layout changes. */
+function setBoardLayout(mode: BoardLayout, focus?: string): void {
+  if (!deps) return;
+  const id = shownId();
+  const f = focus ?? boardLayoutOf(boards, id).focus;
+  if (boards) {
+    const pick = f === undefined ? { layout: mode } : { layout: mode, focus: f };
+    boards = id === EVERYTHING
+      ? { ...boards, everything: pick }
+      : { ...boards, boards: boards.boards.map((b) => (b.id === id ? { ...b, ...pick } : b)) };
+  }
   fitPlan = null;
+  paintLayoutBtn();
   applySizes();
+  void boardChange(deps.fleetBoardLayout(id, mode, f), "The layout was not saved");
 }
 
-/** Double-click any card edge in autofit: every lane back to the equal share. Free layout: no-op. */
-function onFitReset(ev: Event): void {
-  if (!isAutofit(layout) || !(ev.target as HTMLElement).closest(".fleet-card-rz")) return;
+/** Double-click: a board tab renames it inline (P-FLEET-BOARDS.1); any card edge in Side by side puts every lane back
+ *  to the equal share (P-FLEET.FIT1; no-op in the other layouts). */
+function onDockDblClick(ev: Event): void {
+  const t = ev.target;
+  if (!(t instanceof HTMLElement)) return;
+  const tab = t.closest<HTMLElement>("[data-board-tab]");
+  if (tab) {
+    const id = tab.dataset.boardTab ?? "";
+    if (findBoard(boards, id)) { ev.preventDefault(); startRename(id); }
+    return;
+  }
+  if (boardLayoutOf(boards, currentBoard).layout !== "side" || !t.closest(".fleet-card-rz")) return;
   ev.preventDefault();
   delete layout.fit;
   persistLayout();
   applySizes();
+}
+
+// ------------------------------------------------- P-FLEET-BOARDS.1: Focus one
+
+/** Focus one: the focused agent large in the first column, every other visible card and the group and Remote
+ *  headings in the narrow strip beside it (styles.css `.lay-focus`). The strip is a
+ *  column of header-only cards, so typed text in a strip card's composer is kept, just not shown. The large
+ *  card spans the strip's rows plus one flexible row, which is what keeps it from stretching the strip apart. */
+function applyFocus(grid: HTMLElement): void {
+  const dims = measureFit(grid, false);
+  if (!dims) return; // hidden or minimized: keep what is painted
+  const plan = focusPlan(fitSections(grid).flat(), boardLayoutOf(boards, currentBoard).focus, dims.w, dims.h);
+  grid.classList.toggle("one-col", plan?.oneColumn ?? true);
+  const stripW = plan ? `${plan.stripW}px` : "";
+  if (grid.style.getPropertyValue("--fleet-strip-w") !== stripW) grid.style.setProperty("--fleet-strip-w", stripW);
+  const cards = [...runs.values()].flatMap((r) => (r.card ? [r.card] : [])).concat(remoteCards(grid));
+  for (const card of cards) {
+    const main = plan !== null && (card.dataset.lane ?? card.dataset.rsLane) === plan.focus;
+    if (card.hasAttribute("data-focus-main") !== main) card.toggleAttribute("data-focus-main", main);
+    if (card.style.flex) card.style.flex = "";
+    const height = main && plan ? `${plan.mainH}px` : "";
+    if (card.style.height !== height) card.style.height = height;
+  }
+  // Every item placed in the strip gets one auto row; the large card spans them and the closing 1fr row. The
+  // + Spoke form and the empty note run full width under both (styles.css), so they take no strip row.
+  let strip = 0;
+  const wrap = $(":scope > .fleet-remote", grid);
+  for (const x of [...grid.children, ...(wrap ? [...wrap.children] : [])]) {
+    if (x === wrap || x.hasAttribute("data-focus-main") || x.hasAttribute("data-board-off") || x.hasAttribute("hidden")) continue;
+    if (x.classList.contains("grp-hidden") || x.classList.contains("fleet-spawn-card") || x.classList.contains("fleet-empty")) continue;
+    strip++;
+  }
+  const rows = plan && !plan.oneColumn && strip > 0 ? `repeat(${strip}, auto) 1fr` : "";
+  if (grid.style.gridTemplateRows !== rows) grid.style.gridTemplateRows = rows;
+}
+
+/** Leaving Focus one: drop its marks so the tiling or the free layout owns the cards again. */
+function clearFocus(grid: HTMLElement): void {
+  for (const c of grid.querySelectorAll<HTMLElement>("[data-focus-main]")) c.removeAttribute("data-focus-main");
+  if (grid.style.gridTemplateRows) grid.style.gridTemplateRows = "";
+  if (grid.style.getPropertyValue("--fleet-strip-w")) grid.style.removeProperty("--fleet-strip-w");
+  grid.classList.remove("one-col");
 }
 
 /** Autofit's resize gesture: the dragged card takes the pointer 1:1 and its siblings share the rest
@@ -597,13 +719,18 @@ function startFitResize(e: PointerEvent, rz: HTMLElement, id: string): void {
 function applyOrder(grid: HTMLElement): void {
   // P-FLEET.L18: the flat order folds into GROUP sections (named groups first, ungrouped tail); within
   // a section the relative order is still layout.order, so drag-to-reorder semantics survive intact.
-  const live = layout.order.filter((id) => runs.get(id)?.card);
+  // P-FLEET-BOARDS.1: only the shown board's agents are placed; the others are HIDDEN (data-board-off), never removed,
+  // so their typed text, open chevrons and streams survive a board switch. Groups stay sections inside it.
+  const shown = shownSet();
+  for (const r of runs.values()) if (r.card) markShown(r.card, !shown || shown.has(r.view.id));
+  const live = layout.order.filter((id) => runs.get(id)?.card && (!shown || shown.has(id)));
+  const placed = grid.querySelectorAll(".fleet-card[data-lane]:not([data-board-off])").length;
   // P-HUB-PICK.1 (ADR-0516): "By repo" sections the grid by codebase instead of by named group. A view, not
   // an assignment: the named groups are kept and come back when it is turned off.
   if (groupByRepo) {
     const repoSecs = repoSections(live, (id) => { const r = runs.get(id); return r ? spokeRepo(r.view) : null; });
     const rsig = `repo|${repoSecs.map((s) => `${s.repo.key}:${s.ids.join(",")}`).join("|")}`;
-    if (rsig === lastGroupSig && grid.querySelectorAll(".fleet-card[data-lane]").length === live.length) return;
+    if (rsig === lastGroupSig && placed === live.length) return;
     lastGroupSig = rsig;
     for (const d of grid.querySelectorAll(":scope > .fleet-group-head")) d.remove(); // never the Remote section's head
     for (const s of repoSecs) {
@@ -624,7 +751,7 @@ function applyOrder(grid: HTMLElement): void {
   // The change signature covers order, membership AND collapse - re-appending an unchanged card
   // restarts its state-glow animation (the pill lesson), so an unchanged frame must cost nothing.
   const sig = sections.map((s) => `${s.group ?? "\u0001"}${groups.collapsed[s.group ?? ""] ? "^" : ""}:${s.ids.join(",")}`).join("|");
-  if (sig === lastGroupSig && grid.querySelectorAll(".fleet-card[data-lane]").length === live.length) return;
+  if (sig === lastGroupSig && placed === live.length) return;
   lastGroupSig = sig;
   for (const d of grid.querySelectorAll(":scope > .fleet-group-head")) d.remove(); // never the Remote section's head
   for (const s of sections) {
@@ -677,10 +804,24 @@ let remoteSig = "";
 function paintRemoteSection(): void {
   const grid = dock ? $("#fleetGrid", dock) : null;
   if (!grid) return;
-  paintRemoteLanes(remoteWrap(grid));
+  const wrap = remoteWrap(grid);
+  paintRemoteLanes(wrap);
+  // P-FLEET-BOARDS.1: the shown board's remote agents only (the rest hidden, kept), each with the card's Boards button;
+  // the Remote heading goes when the board shows none of them. Marks are attributes: orbit_remote owns className.
+  const shown = shownSet();
+  let anyShown = false;
+  for (const card of remoteCards(grid)) {
+    const on = !shown || shown.has(card.dataset.rsLane ?? "");
+    anyShown ||= on;
+    markShown(card, on);
+    const head = $(".rs-lane-head", card);
+    if (head && !$("[data-fleet-card-boards]", head)) head.insertBefore(el(CARD_BOARDS_BTN), $("[data-rs-stop]", head));
+  }
+  const rhead = $(":scope > .fleet-remote-head", wrap);
+  if (rhead) markShown(rhead, anyShown);
   paintEmpty();
   keepRemoteLast(grid);
-  const sig = remoteCards(grid).map((c) => c.dataset.rsLane ?? "").join(",");
+  const sig = remoteCards(grid).filter((c) => !c.hasAttribute("data-board-off")).map((c) => c.dataset.rsLane ?? "").join(",");
   if (sig === remoteSig) return;
   remoteSig = sig;
   applySizes();
@@ -691,13 +832,14 @@ function paintRemoteSection(): void {
 function onRemoteSnapshot(): void {
   paintRemoteSection();
   paintPill();
+  paintNeeds(); // P-FLEET-BOARDS.1: a remote approval moves the Next count and the tab dots
 }
 
 /** The laid-out rectangles, in `layout.order`, frozen at pointerdown. snapSlot reads row identity off
  *  `y + h` (bottom-anchored cards share a bottom edge, never a top), so these must be real viewport rects. */
 function cardRects(grid: HTMLElement): CardRect[] {
   const out: CardRect[] = [];
-  for (const card of grid.querySelectorAll<HTMLElement>(".fleet-card[data-lane]")) {
+  for (const card of grid.querySelectorAll<HTMLElement>(SHOWN_LOCAL_CARDS)) {
     const r = card.getBoundingClientRect();
     out.push({ id: card.dataset.lane ?? "", x: r.left, y: r.top, w: r.width, h: r.height });
   }
@@ -714,6 +856,8 @@ function onDockPointerDown(ev: Event): void {
   if (rz) { startCardResize(e, rz); return; }
   const head = t.closest(".fleet-card-head") as HTMLElement | null;
   if (!head) return;
+  // P-FLEET-BOARDS.1: in Focus one a strip card's header is a click that brings it up (onClick), not a drag or a takeover.
+  if (boardLayoutOf(boards, currentBoard).layout === "focus" && !head.closest("[data-focus-main]")) return;
   // P-FLEET.L12: the GRIP always drags, even though it lives among the controls. Reported as "the lane
   // windows aren't easily draggable": the header is the only drag surface, and it is packed with buttons,
   // a select and chips, all of which are correctly excluded below - which left almost no draggable pixels
@@ -730,7 +874,9 @@ function startCardResize(e: PointerEvent, rz: HTMLElement): void {
   const card = rz.closest(".fleet-card[data-lane]") as HTMLElement | null; if (!card) return;
   const id = card.dataset.lane ?? ""; if (!id) return;
   e.preventDefault(); e.stopPropagation();
-  if (isAutofit(layout)) { startFitResize(e, rz, id); return; } // P-FLEET.FIT1: siblings share the rest
+  const mode = boardLayoutOf(boards, currentBoard).layout;
+  if (mode === "side") { startFitResize(e, rz, id); return; } // P-FLEET.FIT1: siblings share the rest
+  if (mode !== "free") return; // P-FLEET-BOARDS.1: Grid of four and Focus one are fixed shapes (their handles are hidden)
   const dir = rz.dataset.cardRz ?? "n";
   const sx = e.clientX, sy = e.clientY;
   const start = startSize(card);
@@ -790,7 +936,7 @@ function startCardDrag(e: PointerEvent, head: HTMLElement, fromGrip: boolean): v
   const place = (n: number): void => {
     if (n === slot && slotEl.parentElement) return;
     slot = n;
-    const cards = [...grid.querySelectorAll<HTMLElement>(".fleet-card[data-lane]")];
+    const cards = [...grid.querySelectorAll<HTMLElement>(SHOWN_LOCAL_CARDS)];
     const ref = cards[n] ?? null;
     if (ref) grid.insertBefore(slotEl, ref); else grid.append(slotEl);
   };
@@ -932,6 +1078,322 @@ function paintPill(): void {
   pill.classList.toggle("attn", roll.attention || remoteAttn > 0);
 }
 
+// ---------------------------------------------------------------- P-FLEET-BOARDS.1: boards
+//
+// The engine owns the boards; every change goes through the bridge and its answer (the whole Boards) replaces
+// what is held here. A change is applied at once as a guess so the panel answers the click, and a refused one
+// says so and reads the truth back on the next poll. The tab row sits under the dock header: Everything, each
+// board, + Board. A board shows only its agents: the others' cards are HIDDEN, never destroyed.
+
+/** Every card's Boards button (local cards in buildCard; remote cards get it after each Remote repaint). */
+const CARD_BOARDS_BTN = `<button class="fleet-card-btn" data-fleet-card-boards aria-label="Boards for this agent" data-tip="Boards|Add this agent to a board, or take it off the board shown. The agent keeps running either way.">${icon("layout", 12)}</button>`;
+/** The local cards the shown board lays out (the drag-to-reorder targets). */
+const SHOWN_LOCAL_CARDS = ".fleet-card[data-lane]:not([data-board-off]):not(.grp-hidden)";
+
+/** The id of the board shown: a stored board, or Everything (also before boards load or after one is deleted). */
+function shownId(): string { return findBoard(boards, currentBoard)?.id ?? EVERYTHING; }
+
+/** The agent keys the shown board has, or null for Everything (show every card). */
+function shownSet(): Set<string> | null {
+  const b = findBoard(boards, currentBoard);
+  return b ? new Set(b.agents) : null;
+}
+
+/** Show or hide a card (or the Remote heading) for the board shown, writing only on a change so a poll costs
+ *  no style work. An attribute, not a class: paintFrame and orbit_remote both rewrite className. */
+function markShown(node: HTMLElement, on: boolean): void {
+  if (node.hasAttribute("data-board-off") === on) node.toggleAttribute("data-board-off", !on);
+}
+
+/** Every live agent in the grid's order (local lanes, then remote ones) and whether it needs the user. */
+function liveAgents(): LiveAgent[] {
+  const out: LiveAgent[] = [];
+  for (const id of layout.order) {
+    const r = runs.get(id);
+    if (r) out.push({ key: id, needs: needsYou({ kind: "local", lane: r.view }) });
+  }
+  const snap = remoteSnapshot();
+  for (const l of snap?.available ? remoteLanes(snap.spokes) : []) out.push({ key: l.key, needs: needsYou({ kind: "remote", state: l.state }) });
+  return out;
+}
+
+async function loadBoards(): Promise<void> {
+  if (!deps) return;
+  boardsAt = Date.now(); // single-flight: the next poll does not ask again while this one is out
+  const b = await deps.fleetBoards().catch(() => null);
+  if (b) setBoards(b);
+}
+
+/** Take the engine's boards. A shown board that is gone (deleted elsewhere) falls back to Everything. */
+function setBoards(b: BoardsView): void {
+  boards = b;
+  boardsAt = Date.now();
+  if (currentBoard !== EVERYTHING && !findBoard(b, currentBoard)) {
+    currentBoard = EVERYTHING;
+    storage().set(FLEET_BOARD_KEY, EVERYTHING);
+  }
+  repaintBoards();
+}
+
+/** Send one board change; its answer replaces the boards, a refusal says so and reads them back next poll. */
+async function boardChange(req: Promise<BoardsView | null>, fail: string): Promise<BoardsView | null> {
+  const b = await req.catch(() => null);
+  if (b) setBoards(b);
+  else {
+    boardsAt = 0;
+    showToast({ title: fail, desc: "The engine did not take the change. The boards reload in a moment.", tone: "warn" });
+  }
+  return b;
+}
+
+/** Everything a board change can move: the tabs, the Layout name, which cards show, and their layout. */
+function repaintBoards(): void {
+  paintTabs();
+  paintLayoutBtn();
+  const grid = dock ? $("#fleetGrid", dock) : null;
+  if (grid) applyOrder(grid);
+  paintRemoteSection();
+  applySizes();
+  paintEmpty();
+}
+
+/** Switch the shown board, remembered for the next open. */
+function showBoard(id: string): void {
+  const next = findBoard(boards, id)?.id ?? EVERYTHING;
+  if (next === shownId()) return;
+  currentBoard = next;
+  storage().set(FLEET_BOARD_KEY, next);
+  fitPlan = null;
+  repaintBoards();
+}
+
+/** The tab row. Rebuilt only when the boards' ids or names change (never under an inline rename); which tab is
+ *  current and which carry a dot are painted by paintNeeds on every poll. */
+function paintTabs(): void {
+  const row = dock ? $("[data-fleet-boards]", dock) : null;
+  if (!row) return;
+  const list = boards?.boards ?? [];
+  const full = list.length >= BOARDS_MAX;
+  const sig = JSON.stringify([list.map((b) => [b.id, b.name]), full]);
+  if (sig !== tabsSig && renamingBoard === null) {
+    tabsSig = sig;
+    const dot = `<i class="fleet-board-dot" data-board-dot title="An agent here needs you" hidden></i>`;
+    row.innerHTML = [
+      `<button class="fleet-board-tab" role="tab" aria-selected="false" data-board-tab="${EVERYTHING}" data-tip="Everything|Every agent on this computer and on your remote computers. A board shows just the ones you pick.">Everything${dot}</button>`,
+      ...list.map((b) => `<span class="fleet-board-tabwrap" data-board-wrap="${esc(b.id)}"><button class="fleet-board-tab" role="tab" aria-selected="false" data-board-tab="${esc(b.id)}" title="Double-click to rename"><span>${esc(b.name)}</span>${dot}</button><button class="fleet-board-more" data-board-menu="${esc(b.id)}" aria-label="${esc(`Board options: ${b.name}`)}" title="Rename, move or delete this board">${icon("more", 11)}</button></span>`),
+      full
+        ? `<button class="fleet-board-add" disabled title="You have ${BOARDS_MAX} boards, the most there can be. Delete one to make another.">${icon("plus", 11)} Board</button>`
+        : `<button class="fleet-board-add" data-board-add title="Make a new board, then add agents to it">${icon("plus", 11)} Board</button>`,
+    ].join("");
+  }
+  paintNeeds();
+}
+
+/** "Next that needs you (N)" (shown only when N > 0), the current tab, and each tab's dot. */
+function paintNeeds(): void {
+  if (!dock) return;
+  const live = liveAgents();
+  const n = live.filter((a) => a.needs).length;
+  const next = $("[data-fleet-next]", dock);
+  if (next) {
+    if (next.hidden !== (n === 0)) next.hidden = n === 0;
+    const label = `Next that needs you (${n})`;
+    if (n > 0 && next.textContent !== label) next.textContent = label;
+  }
+  const row = $("[data-fleet-boards]", dock);
+  if (!row) return;
+  const cur = shownId();
+  for (const tab of row.querySelectorAll<HTMLElement>("[data-board-tab]")) {
+    const id = tab.dataset.boardTab ?? "";
+    const on = id === cur;
+    if (tab.classList.contains("on") !== on) { tab.classList.toggle("on", on); tab.setAttribute("aria-selected", String(on)); }
+    tab.closest(".fleet-board-tabwrap")?.classList.toggle("on", on);
+    const b = findBoard(boards, id);
+    const needs = id === EVERYTHING ? boardHasNeeds(EVERYTHING, live) : b !== null && boardHasNeeds(b, live);
+    const dot = $("[data-board-dot]", tab);
+    if (dot && dot.hidden === needs) dot.hidden = !needs;
+  }
+}
+
+/** Rename a board inline: its tab becomes a text field. Enter or leaving the field saves, Escape keeps the old
+ *  name. A name the engine would refuse is caught here and said in plain words. */
+function startRename(id: string): void {
+  const b = findBoard(boards, id);
+  const row = dock ? $("[data-fleet-boards]", dock) : null;
+  const wrap = row ? [...row.querySelectorAll<HTMLElement>("[data-board-wrap]")].find((w) => w.dataset.boardWrap === id) : undefined;
+  if (!b || !wrap || !deps) return;
+  const d = deps;
+  renamingBoard = id;
+  const input = document.createElement("input");
+  input.className = "fleet-board-rename";
+  input.type = "text";
+  input.maxLength = BOARD_NAME_MAX;
+  input.spellcheck = false;
+  input.value = b.name;
+  input.setAttribute("data-board-rename", "");
+  input.setAttribute("aria-label", "Board name");
+  wrap.replaceChildren(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (save: boolean): void => {
+    if (done) return;
+    done = true;
+    renamingBoard = null;
+    tabsSig = ""; // rebuild the tab, with the new name or the old one
+    const name = input.value.trim();
+    const changed = save && name !== b.name;
+    const why = changed ? boardNameProblem(boards, name, id) : null;
+    if (why) showToast({ title: "Board not renamed", desc: why, tone: "warn" });
+    else if (changed && boards) {
+      boards = { ...boards, boards: boards.boards.map((x) => (x.id === id ? { ...x, name } : x)) };
+      void boardChange(d.fleetBoardRename(id, name), "The board was not renamed");
+    }
+    paintTabs();
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(false); } // never minimize the dock
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+
+/** + Board: a new board named "Board <n>", shown at once with its name ready to type over. */
+async function addBoard(): Promise<void> {
+  if (!deps) return;
+  const b = await boardChange(deps.fleetBoardCreate(nextBoardName(boards)), "The board was not made");
+  const made = b ? b.boards[b.boards.length - 1] : undefined;
+  if (!made) return;
+  showBoard(made.id);
+  startRename(made.id);
+}
+
+/** A board tab's small menu: Rename, Move left, Move right, Delete. */
+function openBoardMenu(id: string, anchor: HTMLElement): void {
+  const list = boards?.boards ?? [];
+  const i = list.findIndex((b) => b.id === id);
+  if (i < 0) return;
+  const r = anchor.getBoundingClientRect();
+  openCtxMenu(r.left, r.bottom + 4, [
+    { label: "Rename", run: () => startRename(id) },
+    { label: "Move left", enabled: i > 0, run: () => moveBoard(id, i - 1) },
+    { label: "Move right", enabled: i < list.length - 1, run: () => moveBoard(id, i + 1) },
+    { label: "Delete", run: () => confirmDelete(id, anchor) },
+  ], { returnFocus: anchor });
+}
+
+function moveBoard(id: string, to: number): void {
+  if (!deps || !boards) return;
+  const list = boards.boards.slice();
+  const from = list.findIndex((b) => b.id === id);
+  const moved = from < 0 ? undefined : list.splice(from, 1)[0];
+  if (!moved) return;
+  list.splice(to, 0, moved);
+  boards = { ...boards, boards: list };
+  paintTabs();
+  void boardChange(deps.fleetBoardMove(id, to), "The board was not moved");
+}
+
+/** Delete asks once, and says what it does NOT do: the agents keep running, only the board goes. */
+function confirmDelete(id: string, anchor: HTMLElement): void {
+  const b = findBoard(boards, id);
+  if (!b || !deps) return;
+  const d = deps;
+  const p = popover(anchor, `<div class="fleet-board-confirm"><p>Delete the board <b>${esc(b.name)}</b>? Its agents keep running; only the board goes.</p>
+    <div class="fleet-board-confirm-acts"><button class="btn-mini danger" data-board-del-yes>${icon("close", 11)} Delete board</button><button class="btn-mini" data-board-del-no>Keep it</button></div></div>`);
+  p.node.addEventListener("click", (ev) => {
+    const t = ev.target;
+    if (!(t instanceof Element)) return;
+    if (t.closest("[data-board-del-yes]")) { p.close(); void boardChange(d.fleetBoardRemove(id), "The board was not deleted"); }
+    else if (t.closest("[data-board-del-no]")) p.close();
+  });
+}
+
+/** A card's Boards menu: add the agent to any board it is not on (or to a new one), or take it off the board
+ *  shown. The agent itself is never touched. */
+function openCardBoardsMenu(key: string, anchor: HTMLElement): void {
+  const list = boards?.boards ?? [];
+  const shown = findBoard(boards, currentBoard);
+  const entries: CtxMenuEntry[] = list.filter((b) => !b.agents.includes(key)).map((b) => {
+    const room = b.agents.length < BOARD_AGENTS_MAX;
+    return { label: room ? `Add to board: ${b.name}` : `Board full: ${b.name}`, enabled: room, run: () => changeAgents(b.id, { add: [key] }, "The agent was not added to the board") };
+  });
+  if (list.length < BOARDS_MAX) entries.push({ label: "Add to a new board", run: () => void addToNewBoard(key) });
+  if (shown?.agents.includes(key)) entries.push({ label: "Remove from this board", run: () => changeAgents(shown.id, { drop: [key] }, "The agent was not taken off the board") });
+  if (!entries.length) entries.push({ label: "Already on every board", enabled: false, run: () => undefined });
+  const r = anchor.getBoundingClientRect();
+  openCtxMenu(r.left, r.bottom + 4, entries, { returnFocus: anchor });
+}
+
+/** Add or drop agents on one board: applied at once, then stored with the engine. */
+function changeAgents(id: string, change: { add?: string[]; drop?: string[] }, fail: string): void {
+  if (!deps || !boards) return;
+  const add = change.add ?? [];
+  const drop = change.drop ?? [];
+  boards = {
+    ...boards,
+    boards: boards.boards.map((b) => (b.id !== id ? b : { ...b, agents: [...b.agents.filter((k) => !drop.includes(k)), ...add.filter((k) => !b.agents.includes(k))] })),
+  };
+  repaintBoards();
+  void boardChange(deps.fleetBoardAgents(id, change), fail);
+}
+
+/** A new agent started while a board is shown joins that board. */
+function addToShownBoard(laneId: string): void {
+  const b = findBoard(boards, currentBoard);
+  if (b) changeAgents(b.id, { add: [laneId] }, "The new agent was not added to this board");
+}
+
+async function addToNewBoard(key: string): Promise<void> {
+  if (!deps) return;
+  const b = await boardChange(deps.fleetBoardCreate(nextBoardName(boards)), "The board was not made");
+  const made = b ? b.boards[b.boards.length - 1] : undefined;
+  if (made) changeAgents(made.id, { add: [key] }, "The agent was not added to the board");
+}
+
+/** "Next that needs you": switch to the board the walk picked, open the agent's collapsed group, bring it up in
+ *  Focus one, then scroll its card into view and flash it (the settings highlight, `setflash`). */
+function jumpNext(): void {
+  const j = nextNeedingYou(boards, currentBoard, liveAgents(), lastJump);
+  if (!j) { paintNeeds(); return; }
+  lastJump = j;
+  showBoard(j.board);
+  const grid = dock ? $("#fleetGrid", dock) : null;
+  const grp = groups.byLane[j.key];
+  if (grp !== undefined && groups.collapsed[grp]) {
+    groups = toggleCollapsed(groups, grp);
+    persistGroups();
+    if (grid) applyOrder(grid);
+    applySizes();
+  }
+  const lay = boardLayoutOf(boards, j.board);
+  if (lay.layout === "focus" && lay.focus !== j.key) setBoardLayout("focus", j.key);
+  const card = runs.get(j.key)?.card ?? (grid ? remoteCards(grid).find((c) => c.dataset.rsLane === j.key) : undefined);
+  if (!card) return;
+  card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  card.removeAttribute("data-fleet-flash");
+  void card.offsetWidth; // restart the flash when the same card is shown twice in a row
+  card.setAttribute("data-fleet-flash", "");
+  window.setTimeout(() => card.removeAttribute("data-fleet-flash"), 1600);
+}
+
+/** Drop agents that are gone from every board, at most once a minute and only after a local status read that
+ *  answered. A remote agent this machine cannot see right now is kept (fleet_boards_view liveForPrune); nothing
+ *  is sent when nothing would go. */
+function pruneBoards(local: readonly string[]): void {
+  if (!deps || !boards) return;
+  prunedAt = Date.now();
+  const snap = remoteSnapshot();
+  const answering = new Set<string>();
+  for (const s of snap?.available ? snap.spokes : []) if (ANSWERING[s.state]) answering.add(s.node);
+  const onBoards = boards.boards.flatMap((b) => (b.focus === undefined ? b.agents : [...b.agents, b.focus]));
+  if (boards.everything.focus !== undefined) onBoards.push(boards.everything.focus);
+  const live = liveForPrune(local, snap?.available ? remoteLanes(snap.spokes).map((l) => l.key) : null, answering, onBoards);
+  const keep = new Set(live);
+  if (onBoards.every((k) => keep.has(k))) return;
+  void deps.fleetBoardsPrune(live).then((b) => { if (b) setBoards(b); }, () => undefined);
+}
+
 // ---------------------------------------------------------------- polling + reconciliation
 
 function startPoll(): void {
@@ -948,6 +1410,7 @@ async function refresh(): Promise<void> {
   // P-RS-LANES.1 (ADR-0551): the remote hub on the same beat, apart from the lane poll so a slow plugin never holds
   // the local lanes back (refreshRemote is single-flight; onRemoteSnapshot paints what it answers).
   void refreshRemote();
+  if (Date.now() - boardsAt >= BOARDS_MS) void loadBoards(); // P-FLEET-BOARDS.1: not every 2.5s
   let st: FleetStatusView | null = null;
   try { st = await deps.fleetStatus(); } catch { st = null; }
   if (dockState?.minimized) mountPill();
@@ -989,6 +1452,9 @@ async function refresh(): Promise<void> {
   if (hr) paintHeadroom(hr, st.resources, st.lanes.length);
   paintEmpty();
   paintPill();
+  paintNeeds();
+  // P-FLEET-BOARDS.1: only after a local status that answered, so a failed read can never empty the boards.
+  if (boards && Date.now() - prunedAt >= PRUNE_MS) pruneBoards(st.lanes.map((l) => l.id));
 }
 
 
@@ -1017,9 +1483,18 @@ function paintEmpty(): void {
   if (!dock) return;
   const grid = $("#fleetGrid", dock) as HTMLElement | null; if (!grid) return;
   const empty = $(".fleet-empty", grid);
-  const need = runs.size === 0 && !$(".fleet-spawn-card", grid) && remoteCards(grid).length === 0; // P-RS-LANES.1
-  if (need && !empty) grid.append(el(`<div class="fleet-empty">${icon("info", 13)}<span>No agents yet. Start one with + Agent: an AI helper working on one job in one folder.</span></div>`));
-  else if (!need && empty) empty.remove();
+  const form = $(".fleet-spawn-card", grid) !== null;
+  const none = runs.size === 0 && !form && remoteCards(grid).length === 0; // P-RS-LANES.1
+  // P-FLEET-BOARDS.1: a board with none of the live agents on it says how to fill it.
+  const board = findBoard(boards, currentBoard);
+  const bare = !none && !form && board !== null && agentsOn(board, liveAgents().map((a) => a.key)).length === 0;
+  const kind = none ? "none" : bare ? "board" : "";
+  if (empty && empty.dataset.kind !== kind) empty.remove();
+  if (!kind || (empty && empty.dataset.kind === kind)) return;
+  const text = kind === "none"
+    ? "No agents yet. Start one with + Agent: an AI helper working on one job in one folder."
+    : "No agents on this board yet. Open Everything and use the board button on an agent's card, or start a new agent while this board is shown.";
+  grid.append(el(`<div class="fleet-empty" data-kind="${kind}">${icon("info", 13)}<span>${esc(text)}</span></div>`));
 }
 
 // ---------------------------------------------------------------- lane cards
@@ -1043,6 +1518,7 @@ function buildCard(run: LaneRun): HTMLElement {
       <span class="hud-ring lane-ring" data-lane-ring hidden data-tip="Progress|Working."><svg viewBox="0 0 22 22" width="15" height="15" aria-hidden="true"><circle class="hud-ring-track" cx="11" cy="11" r="8"/><circle class="hud-ring-arc" pathLength="100" cx="11" cy="11" r="8"/></svg></span>
       <select class="fleet-model" data-fleet-model aria-label="Spoke model"></select>
       <button class="fleet-card-btn fleet-promote" data-fleet-promote aria-label="Drive this spoke from the main composer" title="Promote: point the main composer at this spoke" hidden>${icon("arrowRight", 12)}</button>
+      ${CARD_BOARDS_BTN}
       <button class="fleet-card-btn fleet-copy" data-fleet-copy aria-label="Copy this spoke's transcript" title="Copy the whole transcript as plain text">${icon("copy", 12)}</button>
       <button class="fleet-card-btn fleet-auto-btn" data-fleet-auto aria-label="Toggle full auto-mode" title="Full auto-mode: approve every ask automatically">${icon("bolt", 12)}</button>
       <button class="fleet-card-btn" data-fleet-checkin aria-label="Check in on this spoke" title="Check in: status, turns, last activity, queue depth">${icon("eye", 12)}</button>
@@ -1889,6 +2365,7 @@ export async function pushToNewLane(src: PushSource, text: string, images: LaneI
   if (!r?.ok || !r.lane || !r.worktree) return { ok: false, reason: r?.reason || "the engine refused the lane", ...(r?.code ? { code: r.code } : {}) };
   const lane = r.lane;
   const branch = r.worktree.branch;
+  addToShownBoard(lane.id); // P-FLEET-BOARDS.1: a new agent joins the board shown
   await refresh();
   let run = runs.get(lane.id);
   if (!run) { run = newRun(lane); runs.set(lane.id, run); }
@@ -2282,7 +2759,13 @@ async function submitSpawn(): Promise<void> {
   clearTimeout(slow);
   if (err && err.hidden === false && r?.ok) err.hidden = true; // the slow-note must not outlive a success
   if (patInput) patInput.value = ""; // never leave the plaintext sitting in the DOM
-  if (r?.ok) { rememberSpokeModel(model); form.remove(); paintEmpty(); await refresh(); return; }
+  if (r?.ok) {
+    rememberSpokeModel(model); form.remove(); paintEmpty();
+    const laneId = "lane" in r ? r.lane?.id : undefined;
+    if (laneId) addToShownBoard(laneId); // P-FLEET-BOARDS.1: a new agent joins the board it was started on
+    await refresh();
+    return;
+  }
   if (go) { go.disabled = false; go.innerHTML = goHtml; }
   // A refusal carries the measured numbers ("system CPU has been at 93% for 34s") or the redacted git
   // failure - show it verbatim, it is the whole point of the guard.
@@ -2333,7 +2816,29 @@ function onClick(ev: Event): void {
   if (t.closest("[data-dock-min]")) { minimize(); return; }
   // P-FLEET.L18: back to the map, and the default-view pin.
   if (t.closest("[data-fleet-orbit]")) { openFleetOrbit(); return; }
-  if (t.closest("[data-fleet-fit]")) { toggleAutofit(); return; } // P-FLEET.FIT1: autofit on / free layout
+  // P-FLEET-BOARDS.1: the Layout menu, Next that needs you, and the board tabs.
+  const layBtn = t.closest<HTMLElement>("[data-fleet-layout]");
+  if (layBtn) { openLayoutMenu(layBtn); return; }
+  if (t.closest("[data-fleet-next]")) { jumpNext(); return; }
+  const boardTab = t.closest<HTMLElement>("[data-board-tab]");
+  if (boardTab) { showBoard(boardTab.dataset.boardTab ?? EVERYTHING); return; }
+  const boardMenu = t.closest<HTMLElement>("[data-board-menu]");
+  if (boardMenu) { openBoardMenu(boardMenu.dataset.boardMenu ?? "", boardMenu); return; }
+  if (t.closest("[data-board-add]")) { void addBoard(); return; }
+  if (t.closest("[data-board-rename]")) return; // typing a board name, not switching boards
+  // P-FLEET-BOARDS.1: a card's Boards button (local and remote cards alike), and a Focus one strip card coming up.
+  const cardBoards = t.closest<HTMLElement>("[data-fleet-card-boards]");
+  if (cardBoards) {
+    const owner = cardBoards.closest<HTMLElement>(".fleet-card");
+    const key = owner?.dataset.lane ?? owner?.dataset.rsLane;
+    if (key) openCardBoardsMenu(key, cardBoards);
+    return;
+  }
+  const stripCard = t.closest<HTMLElement>(".fleet-card[data-lane], .fleet-card[data-rs-lane]");
+  if (stripCard && !stripCard.hasAttribute("data-focus-main") && boardLayoutOf(boards, currentBoard).layout === "focus" && !t.closest("button, select, input, textarea, a")) {
+    const key = stripCard.dataset.lane ?? stripCard.dataset.rsLane;
+    if (key) { setBoardLayout("focus", key); return; }
+  }
   // P-TUI.2: the terminal hub. A refusal names why on the button's tooltip line (this module has no toasts).
   const hubBtn = t.closest("[data-fleet-hub]") as HTMLButtonElement | null;
   if (hubBtn) { void openHubFrom(hubBtn, () => deps?.hubOpen()); return; }
