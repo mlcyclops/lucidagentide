@@ -21,7 +21,7 @@
 // Node-safe on purpose (node:fs and node:path only, no Bun API): the GUI mirror (P-HERD.8) and the
 // Node-side runtime host can read the same files with the same parser.
 
-import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import {
   HubOpError,
@@ -329,14 +329,22 @@ export class LayoutLibrary {
 /** A file's text when it is a regular file no larger than MAX_LAYOUT_BYTES; null when unreadable.
  *  Larger refuses (an import never reads a huge file into memory). */
 function readLimited(path: string): string | null {
-  let size: number;
+  // One open file: the checks apply to the file that is read (no check-then-use on the path). Non-blocking open,
+  // so a FIFO named as a layout cannot hang the hub; fstat then refuses it as not a regular file.
+  let fd: number;
+  try { fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)); } catch { return null; }
   try {
-    const st = statSync(path);
-    if (!st.isFile()) return null;
-    size = st.size;
-  } catch { return null; }
-  if (size > MAX_LAYOUT_BYTES) throw invalid(`larger than ${MAX_LAYOUT_BYTES / 1024} KiB`);
-  try { return readFileSync(path, "utf8"); } catch { return null; }
+    let size: number;
+    try {
+      const st = fstatSync(fd);
+      if (!st.isFile()) return null;
+      size = st.size;
+    } catch { return null; }
+    if (size > MAX_LAYOUT_BYTES) throw invalid(`larger than ${MAX_LAYOUT_BYTES / 1024} KiB`);
+    try { return readFileSync(fd, "utf8"); } catch { return null; }
+  } finally {
+    closeSync(fd);
+  }
 }
 
 // ---- the verbs (ADR-0491 items 2 and 4) ---------------------------------------------------------
