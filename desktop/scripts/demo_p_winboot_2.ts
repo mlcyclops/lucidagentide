@@ -16,7 +16,8 @@
 //
 // Run with: bun run desktop/scripts/demo_p_winboot_2.ts
 
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { engineDesktopDir, engineExeName, resolveEngineSpawn } from "../engine_launch.ts";
 
@@ -64,7 +65,11 @@ try {
   const ce = Bun.spawnSync(["bun", "build", "--compile", "dev.ts", "--outfile", tmpExe, "--external", "*.node"], { cwd: DESKTOP, stdout: "ignore", stderr: "pipe" });
   assert(ce.exitCode === 0 && existsSync(tmpExe), "compile-engine produced the standalone binary (DuckDB natives external, all JS embedded)");
   const port = 5300 + Math.floor(Math.random() * 400);
-  const proc = Bun.spawn([tmpExe], { cwd: REPO, env: { ...process.env, PORT: String(port) }, stdout: "ignore", stderr: "ignore" });
+  // Its own data root and no inherited LUCID_* variable: run inside the IDE, LUCID_DATA_ROOT is the user's userData,
+  // where an engine of another version runs the dev-to-release cleanup on the user's plugins (ADR-0542).
+  const dataRoot = mkdtempSync(join(tmpdir(), "lucid-winboot-data-"));
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^LUCID_/i.test(k))), LUCID_DATA_ROOT: dataRoot, PORT: String(port) };
+  const proc = Bun.spawn([tmpExe], { cwd: REPO, env, stdout: "ignore", stderr: "ignore" });
   try {
     for (let i = 0; i < 48; i++) {
       await Bun.sleep(250);
@@ -78,6 +83,7 @@ try {
     }
   } finally {
     try { if (process.platform === "win32") Bun.spawnSync(["taskkill", "/PID", String(proc.pid), "/T", "/F"]); else proc.kill(); } catch { /* best effort */ }
+    try { rmSync(dataRoot, { recursive: true, force: true }); } catch { /* a temp dir; best effort */ }
   }
   assert(health !== null && JSON.parse(health).ok === true, "the compiled engine booted and answered /api/health (DuckDB natives resolved at runtime)");
   assert(appjs !== null && appjs.status === 200 && appjs.bytes > 1_000_000 && !appjs.isError, "it served the prebuilt /app.js from the execPath-derived root (no runtime Bun.build, nothing .ts loaded off disk)");
