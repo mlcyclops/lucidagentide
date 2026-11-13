@@ -49,8 +49,7 @@
 import { createHash, createPublicKey, verify, type KeyObject } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
-import { neutralizeDelimiters } from "../../harness/omp/mcp_result_gate.ts";
-import { UNTRUSTED_END, UNTRUSTED_START } from "../../harness/prompt/assembler.ts";
+import { fenceUntrusted } from "../../harness/prompt/untrusted.ts";
 import { classifyCommand, isDestructiveProgram, type RiskTier } from "../exec_policy.ts";
 
 export type AskAction = "auto" | "remote" | "block";
@@ -344,7 +343,7 @@ export const OFF_TASK_SYSTEM =
 
 /** The user message for the off-task check: assignment and action, each delimited and neutralized. */
 export function offTaskPrompt(assignment: string, action: string): string {
-  const fence = (s: string, n: number) => `${UNTRUSTED_START}\n${neutralizeDelimiters(s.slice(0, n))}\n${UNTRUSTED_END}`;
+  const fence = (s: string, n: number) => fenceUntrusted(s.slice(0, n));
   return `Assignment:\n${fence(assignment, 6000)}\n\nAction about to run:\n${fence(action, 4000)}\n\nAnswer ON_TASK or OFF_TASK.`;
 }
 

@@ -40,6 +40,7 @@ import {
   createJob, finishJob, recordJobArtifact, startJob,
   type CreatorJobKind, type JobAdmissionSnapshot, type JobIo,
 } from "./creator_jobs.ts";
+import { fenceUntrusted } from "../harness/prompt/untrusted.ts";
 
 // ── the seams this module is given ──────────────────────────────────────────
 
@@ -244,16 +245,14 @@ export async function trackProgress(
 /** Everything a remote server said about one output, as one delimited block of DATA. The delimiters are the
  *  same contract the prompt path uses (invariant 5): the content inside is never instructions. */
 export function metadataBlock(ref: ComfyOutputRef, claimedMime: string, source: string): string {
-  return [
-    "UNTRUSTED_CONTENT_START",
+  return fenceUntrusted([
     `source: ${source}`,
     `filename: ${ref.filename}`,
     `subfolder: ${ref.subfolder}`,
     `type: ${ref.type}`,
     `output-key: ${ref.key}`,
     `claimed-mime: ${claimedMime}`,
-    "UNTRUSTED_CONTENT_END",
-  ].join("\n");
+  ].join("\n"));
 }
 
 /** Scan one output's metadata, fail-closed. A thrown scanner error, a missing verdict, or a malformed

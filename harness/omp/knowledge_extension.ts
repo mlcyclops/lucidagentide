@@ -55,7 +55,7 @@ import {
   type KgHit,
 } from "../personal/agent_kg.ts";
 import { engineFetch } from "./engine_channel.ts"; // LH-03 (ADR-0544): a held lane's call is MACed and its answer proven
-import { neutralizeDelimiters } from "./mcp_result_gate.ts";
+import { neutralizeDelimiters } from "../prompt/untrusted.ts";
 
 /** Shape the /api/kb/retrieve response into the tool's text result. PURE + exported for tests.
  *  - no URL (desktop not running / older omp) → a clear "unavailable" message.

@@ -22,6 +22,7 @@
 // mapping from observed state to questions and from typed answers to exactly one executable decision.
 
 import type { BrowserAction, BrowserPage } from "../desktop/browser_snapshot.ts";
+import { fenceUntrusted } from "./prompt/untrusted.ts";
 
 /** Hard cap on browser actions per run; judgments are capped at twice this. */
 export const MAX_STEPS = 60;
@@ -174,7 +175,7 @@ export function policyQuestions(space: ActionSpace, goal: string, values: Record
 /** The judgment state: what the judge may look at. Page text is delimited as untrusted content. */
 export function policyState(page: BrowserPage, space: ActionSpace, history: readonly HistoryEntry[], values: Record<string, string>): Record<string, unknown> {
   return {
-    page: { url: page.url, title: page.title, text: `UNTRUSTED_CONTENT_START\n${page.text}\nUNTRUSTED_CONTENT_END` },
+    page: { url: page.url, title: page.title, text: fenceUntrusted(page.text) },
     elements: space.elements,
     supplied_values: Object.keys(values),
     recent_actions: history.slice(-10).map((h) => ({ action: h.action, kind: h.kind, text: h.text, page_changed: h.page_changed })),

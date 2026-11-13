@@ -22,7 +22,7 @@
 
 import { UNTRUSTED_END, UNTRUSTED_START } from "../prompt/assembler.ts";
 import { engineFetch } from "./engine_channel.ts"; // LH-03 (ADR-0544): a held lane's call is MACed and its answer proven
-import { neutralizeDelimiters } from "./mcp_result_gate.ts";
+import { neutralizeDelimiters } from "../prompt/untrusted.ts";
 
 export const OPENFILM_TOOL_NAMES = ["openfilm_look", "openfilm_render", "openfilm_job"] as const;
 export const LOOK_WAIT_DEFAULT_S = 300;
