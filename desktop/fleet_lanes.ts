@@ -73,6 +73,11 @@ export interface LaneView {
   lastActivityAt: number;
   /** Completed prompt turns. */
   turns: number;
+  /** P-HOLDER.2 (ADR-0573): where a held lane's processes run from: `current` (this version's runtime copy),
+   *  `previous` (an earlier version's copy: it keeps running across an update and picks up this one when started
+   *  again), `install` (the install folder: an update cannot replace those files while it runs). Absent when the
+   *  lane is this engine's own child (it ends with the engine). */
+  heldRuntime?: "current" | "previous" | "install";
   /** P-FLEET.L4: a failed/stopped lane can re-send its last prompt (Retry) when one was recorded. */
   canRetry: boolean;
   /** P-FLEET.L4: how many times this lane has been respawned in place (same id, memory carried). */
@@ -440,7 +445,7 @@ interface Lane {
   pulse: PulseTracker;
   /** P-HOLDER.1: the holder that runs this lane's agent, and the turn it has in flight; null when the agent is
    *  this engine's own child. */
-  held: (HolderIdentity & { holderId: string; endpoint: string; token: string; channel: string; inFlight: HeldLaneRecord["inFlight"] }) | null;
+  held: (HolderIdentity & { holderId: string; endpoint: string; token: string; channel: string; inFlight: HeldLaneRecord["inFlight"]; runtime: string | null }) | null;
 }
 
 export class FleetLaneManager {
@@ -650,7 +655,7 @@ export class FleetLaneManager {
       liveToolRecords: [], lastPrompt: null, lastImages: [], turnStartedAt: null, stepsDone: 0, waiting: null,
       pulse: new PulseTracker(), canLoadSession: rec.canLoadSession, resumeContext: null, respawns: 0, queue: [],
       held: {
-        holderId: rec.holderId, endpoint: rec.endpoint, token: rec.token, channel: rec.channel, inFlight: rec.inFlight,
+        holderId: rec.holderId, endpoint: rec.endpoint, token: rec.token, channel: rec.channel, inFlight: rec.inFlight, runtime: rec.runtime ?? null,
         // LH-07: sampled while the connection the holder just answered (and proved itself on) is open.
         ...holderIdentity(link.hello.pid, link.hello.childPid),
       },
@@ -1421,7 +1426,7 @@ export class FleetLaneManager {
       // P-HOLDER.1: the same command, cwd and environment, owned by a holder instead of this process.
       await lane.client.startHeld(async (cmd, args, cwd, env) => {
         const h = await pool.launch(lane.id, cmd, args, cwd, env);
-        lane.held = { holderId: h.holderId, endpoint: h.endpoint, token: h.token, channel: h.channel, pid: h.pid, childPid: h.childPid, start: h.start, childStart: h.childStart, inFlight: null };
+        lane.held = { holderId: h.holderId, endpoint: h.endpoint, token: h.token, channel: h.channel, pid: h.pid, childPid: h.childPid, start: h.start, childStart: h.childStart, inFlight: null, runtime: h.runtime };
         return h.link;
       });
     } else {
@@ -1721,7 +1726,7 @@ export class FleetLaneManager {
         pid: lane.held.pid, childPid: lane.held.childPid, start: lane.held.start, childStart: lane.held.childStart, channel: lane.held.channel, name: lane.name, cwd: lane.cwd, model: lane.model,
         sessionId: lane.sessionId, canLoadSession: lane.canLoadSession, turns: lane.turns, transcript: lane.transcript,
         supervised: lane.supervised, autoApprove: lane.autoApprove, remote: lane.remote, hubSessionId: lane.hubSessionId, createdAt: lane.createdAt,
-        consumed: lane.client.consumedOffset, lastRequestId: lane.client.lastRequestId, inFlight: lane.held.inFlight,
+        consumed: lane.client.consumedOffset, lastRequestId: lane.client.lastRequestId, inFlight: lane.held.inFlight, runtime: lane.held.runtime,
       });
     } catch (e) {
       console.warn(`[fleet] lane ${lane.id}: its holder record was not written (${e instanceof Error ? e.message : String(e)})`);
@@ -1841,6 +1846,7 @@ export class FleetLaneManager {
       createdAt: lane.createdAt,
       lastActivityAt: lane.lastActivityAt,
       turns: lane.turns,
+      ...(lane.held ? { heldRuntime: lane.held.runtime === null ? "install" as const : lane.held.runtime === this.#holders?.runtime?.key ? "current" as const : "previous" as const } : {}),
       canRetry: lane.lastPrompt !== null,
       respawns: lane.respawns,
       sessionId: lane.sessionId,

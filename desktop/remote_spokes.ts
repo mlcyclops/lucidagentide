@@ -8,7 +8,9 @@
 // renderer never sees that token and never talks to the plugin. Every /api/remote-spokes/* route lands here:
 //
 //   GET  /api/remote-spokes             the hub, its scopes and every spoke (orbit, hub picker)
-//   POST /api/remote-spokes/recall      {node, task?}            recall scope
+//   POST /api/remote-spokes/recall      {node, task?, since?}    recall scope; since (P-RS-SESSION.1, ADR-0572): only
+//                                       entries after that journal seq, so an open session reads only what is new
+//   GET  /api/remote-spokes/status      ?node=                   recall scope; the spoke's own task list, read now
 //   GET  /api/remote-spokes/approvals   ?node=                   recall scope
 //   POST /api/remote-spokes/decide      {node, task, ask, digest, allow, password?}   allow: approve; deny: drive or
 //                                       approve; password: a `password` hub's presence password, on an allow only
@@ -33,8 +35,8 @@ import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
 import { neutralizeDelimiters } from "../harness/prompt/untrusted.ts";
 import { askDigest, MAX_REMOTE_INPUT } from "./controller/remote_policy.ts";
 import {
-  deactivatedLabel, mapHubSnapshot, MODEL_ID_RE, NODE_RE, TASK_RE,
-  type RecallEntryView, type RecallView, type RemoteActionView, type RemoteApprovalView, type RemoteApprovalsView, type RemoteHubView,
+  deactivatedLabel, mapHubSnapshot, mapTasks, MODEL_ID_RE, NODE_RE, TASK_RE,
+  type RecallEntryView, type RecallView, type RemoteActionView, type RemoteApprovalView, type RemoteApprovalsView, type RemoteHubView, type RemoteStatusView,
 } from "./renderer/remote_spokes_model.ts";
 
 export const REMOTE_SPOKES_PLUGIN = "remote-spokes";
@@ -204,22 +206,23 @@ export async function gateApprovals(raw: unknown, label: string, deps: Pick<Remo
 const reply = (data: unknown): Response => Response.json({ ok: true, data });
 const refuse = (error: string): Response => reply({ ok: false, error });
 
-/** A JSON object body with exactly the allowed keys (strings or booleans as listed), or null. */
-async function strictBody(req: Request, allowed: Record<string, "string" | "boolean">, required: readonly string[]): Promise<Record<string, string | boolean> | null> {
+/** A JSON object body with exactly the allowed keys (strings, booleans or whole numbers as listed), or null. */
+async function strictBody(req: Request, allowed: Record<string, "string" | "boolean" | "number">, required: readonly string[]): Promise<Record<string, string | boolean | number> | null> {
   let b: unknown;
   try { b = await req.json(); } catch { return null; }
   if (!b || typeof b !== "object" || Array.isArray(b)) return null;
-  const out: Record<string, string | boolean> = {};
+  const out: Record<string, string | boolean | number> = {};
   for (const [k, v] of Object.entries(b)) {
     if (!(k in allowed) || typeof v !== allowed[k]) return null;
-    out[k] = v as string | boolean;
+    if (typeof v === "number" && (!Number.isSafeInteger(v) || v < 0)) return null;
+    out[k] = v as string | boolean | number;
   }
   return required.every((k) => k in out) ? out : null;
 }
 
 /** `decision`: an allow needs approve (it is signed), a deny needs drive or approve (refusing is always safe). */
-const ACTION_BODIES: Record<string, { allowed: Record<string, "string" | "boolean">; required: string[]; scope: "recall" | "drive" | "decision" }> = {
-  recall: { allowed: { node: "string", task: "string" }, required: ["node"], scope: "recall" },
+const ACTION_BODIES: Record<string, { allowed: Record<string, "string" | "boolean" | "number">; required: string[]; scope: "recall" | "drive" | "decision" }> = {
+  recall: { allowed: { node: "string", task: "string", since: "number" }, required: ["node"], scope: "recall" },
   submit: { allowed: { node: "string", text: "string", name: "string", model: "string" }, required: ["node", "text"], scope: "drive" },
   followup: { allowed: { node: "string", task: "string", text: "string" }, required: ["node", "task", "text"], scope: "drive" },
   cancel: { allowed: { node: "string", task: "string" }, required: ["node", "task"], scope: "drive" },
@@ -254,6 +257,23 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
     return reply(out);
   }
 
+  // P-RS-SESSION.1 (ADR-0572): the spoke's own task list now, for an open session's live status. Task names and
+  // states pass the same validation as the hub snapshot's rows (mapTasks); nothing else a spoke wrote is returned.
+  if (op === "status") {
+    if (req.method !== "GET") return new Response("method not allowed", { status: 405 });
+    const node = new URL(req.url).searchParams.get("node") ?? "";
+    const hub = await loadHub(deps);
+    const gate = checkHub(hub, node, "recall");
+    if (gate) return refuse(gate);
+    const r = await callPlugin(deps, "GET", `/host/spokes/${node}/status`, undefined, ACTION_TIMEOUT_MS);
+    if (!r.ok) return refuse(r.error);
+    if (r.status !== 200) return refuse(pluginError(r));
+    const d = asRecord(r.data);
+    const head = d?.journalHead;
+    const out: RemoteStatusView = { ok: true, journalHead: typeof head === "number" && Number.isSafeInteger(head) && head >= 0 ? head : 0, tasks: mapTasks(d?.tasks) };
+    return reply(out);
+  }
+
   const spec = ACTION_BODIES[op];
   if (!spec) return new Response("not found", { status: 404 });
   if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
@@ -274,14 +294,16 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
   const label = labelOf(hub, node);
   // ADR-0507 amendment: a `password` hub signs an allow only with its presence password, typed for this one
   // approval. It goes to the plugin once and nowhere else (never stored, logged, echoed or put in model context);
-  // a deny, or an allow on a hub of another kind, never carries it.
+  // a deny, or an allow on a hub of another kind, never carries it. Plugin ADR-A105: while the hub holds its
+  // presence key unlocked, an allow without a password is signed with the held key; a typed one still passes.
   const needsPassword = op === "decide" && b.allow === true && hub.available && hub.hub.presence === "password";
   const password = needsPassword && typeof b.password === "string" && b.password ? b.password : undefined;
-  if (needsPassword && !password) return refuse("this hub approves with its presence password: type it to sign the approval");
+  if (needsPassword && !password && !hub.hub.presenceUnlocked) return refuse("this hub approves with its presence password: type it to sign the approval");
   if (password && password.length > MAX_PASSWORD) return refuse(`the presence password is at most ${MAX_PASSWORD} characters`);
 
   if (op === "recall") {
-    const r = await callPlugin(deps, "POST", `/host/spokes/${node}/recall`, task ? { task } : {}, RECALL_TIMEOUT_MS);
+    const since = typeof b.since === "number" ? b.since : undefined;
+    const r = await callPlugin(deps, "POST", `/host/spokes/${node}/recall`, { ...(task ? { task } : {}), ...(since !== undefined ? { since } : {}) }, RECALL_TIMEOUT_MS);
     if (!r.ok) return refuse(r.error);
     if (r.status !== 200) return refuse(pluginError(r));
     return reply(await gateRecall(asRecord(r.data)?.entries, { node, label, ...(task ? { task } : {}) }, deps));

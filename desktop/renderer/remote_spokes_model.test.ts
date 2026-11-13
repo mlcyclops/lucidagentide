@@ -10,8 +10,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   ALERTS_MAX, approvalButtons, armClick, ARM_MS, clockLabel, deployChoices, hostLabel, hubActions, lanePolicyLabel, latencyLabel, mapHubSnapshot, mapSpokeRow, mibLabel,
-  MODEL_LIST_MAX, modelCount, onOrbit, REMOTE_TONE, remoteGlance, remoteLanes, remoteTotals, RESUME_TEXT, spokeActions, spokeAlerts, spokeState, stateLabel, taskButtons, taskModelChoices,
-  type RemoteApprovalView, type RemoteSpokeView, type RemoteTaskView,
+  MODEL_LIST_MAX, modelCount, onOrbit, REMOTE_TONE, remoteGlance, remoteLanes, remoteTotals, RESUME_TEXT, sessionRows, spokeActions, spokeAlerts, spokeState, stateLabel, taskButtons, taskModelChoices,
+  type RecallEntryView, type RemoteApprovalView, type RemoteSpokeView, type RemoteTaskView,
 } from "./remote_spokes_model.ts";
 
 const NODE = `n_${"1".repeat(32)}`;
@@ -316,7 +316,7 @@ describe("mapHubSnapshot: the hub, its scopes and every spoke", () => {
   test("a set-up hub lists its spokes with the actions its certificate's scopes allow", () => {
     const v = mapHubSnapshot({ hub: { node: HUB, label: "workstation", scopes: ["recall", "drive", "root-ish"] }, spokes: [{ node: NODE, label: "vm-218", reachable: true, tasks: [] }, { node: "bad" }] });
     expect(v).toEqual({
-      available: true, hub: { node: HUB, label: "workstation", scopes: ["recall", "drive"], presence: null },
+      available: true, hub: { node: HUB, label: "workstation", scopes: ["recall", "drive"], presence: null, presenceUnlocked: false },
       actions: { recall: true, drive: true, approve: false, deny: true },
       spokes: [{ node: NODE, label: "vm-218", state: "idle", lanes: null, tasks: [], checkedAt: null, ...UNKNOWN, models: { default: null, local: [], frontier: [] } }],
     });
@@ -332,6 +332,18 @@ describe("mapHubSnapshot: the hub, its scopes and every spoke", () => {
     expect(kind("none")).toBe("none");
     expect(kind("retina-scan")).toBeNull();
     expect(kind(undefined)).toBeNull();
+  });
+
+  test("presenceUnlocked is true only when the plugin says exactly true (plugin ADR-A105)", () => {
+    const unlocked = (presenceUnlocked: unknown) => {
+      const v = mapHubSnapshot({ hub: { node: HUB, label: "workstation", scopes: ["approve"], presence: "password", presenceUnlocked }, spokes: [] });
+      return v.available ? v.hub.presenceUnlocked : "unavailable";
+    };
+    expect(unlocked(true)).toBe(true);
+    expect(unlocked(false)).toBe(false);
+    expect(unlocked(undefined)).toBe(false);
+    expect(unlocked("true")).toBe(false);
+    expect(unlocked(1)).toBe(false);
   });
 
   test("no hub yet is the setup state, with the plugin's own error when the hub failed to open", () => {
@@ -352,11 +364,12 @@ describe("scope gating: the IDE offers only what the hub certificate allows", ()
     expect(taskButtons({ ...t("idle"), interrupted: 5 }, a(["recall"])).resume).toBe(false);
   });
 
-  test("drive: follow-up when the turn is over, cancel while it runs, close while it holds a lane", () => {
+  test("drive: ADR-0576 follow-up on any open task (queued while it works), cancel while it runs, close while it holds a lane", () => {
     const d = a(["recall", "drive"]);
     expect(taskButtons(t("idle"), d)).toEqual({ recall: true, followup: true, cancel: false, close: true, resume: false });
-    expect(taskButtons(t("working"), d)).toEqual({ recall: true, followup: false, cancel: true, close: true, resume: false });
-    expect(taskButtons(t("awaiting_approval"), d)).toEqual({ recall: true, followup: false, cancel: true, close: true, resume: false });
+    expect(taskButtons(t("error"), d).followup).toBe(true);
+    expect(taskButtons(t("working"), d)).toEqual({ recall: true, followup: true, cancel: true, close: true, resume: false });
+    expect(taskButtons(t("awaiting_approval"), d)).toEqual({ recall: true, followup: true, cancel: true, close: true, resume: false });
     expect(taskButtons(t("closed"), d)).toEqual({ recall: true, followup: false, cancel: false, close: false, resume: false });
     expect(taskButtons(t("stopped"), d)).toEqual({ recall: true, followup: false, cancel: false, close: false, resume: false });
   });
@@ -525,5 +538,50 @@ describe("P-RS-LANES.1 (ADR-0551): one count for every view, and the Fleet grid'
     const silent = spoke(NODE, "vm-a", [task({ state: "working" })], { silentSince: 500 });
     const gone = spoke(NODE2, "vm-b", [task({ state: "idle" })], { reachable: false });
     expect(remoteLanes([silent, gone]).map((l) => l.state)).toEqual(["silent", "offline"]);
+  });
+});
+
+describe("P-RS-SESSION.1 (ADR-0572): a remote task's session rows from its scanned journal", () => {
+  const e = (seq: number, kind: string, data: unknown, trust: RecallEntryView["trust"] = "untrusted"): RecallEntryView =>
+    ({ seq, ts: 1000 + seq, task: "t_0123456789abcdef", kind, trust, text: kind === "task.turn" ? String(data) : JSON.stringify(data) });
+
+  test("prompts, turns and state read in journal order; a prompt this window sent shows its text, another its size", () => {
+    const rows = sessionRows([
+      e(5, "task.turn", "Done: 3 files changed."),
+      e(1, "task.created", { originLabel: "FASTPC workstation", name: "triage" }),
+      e(2, "task.prompted", { textSha256: "a".repeat(64), chars: 11 }),
+      e(3, "task.state", { state: "working" }),
+      e(4, "task.prompted", { textSha256: "b".repeat(64), chars: 40 }),
+      e(6, "task.state", { state: "awaiting_approval", awaiting: "bash" }),
+    ], new Map([["a".repeat(64), "fix the bug"]]));
+    expect(rows).toEqual([
+      { seq: 1, ts: 1001, kind: "event", text: "Task started by FASTPC workstation" },
+      { seq: 2, ts: 1002, kind: "prompt", text: "fix the bug", chars: 11 },
+      { seq: 3, ts: 1003, kind: "event", text: "Working" },
+      { seq: 4, ts: 1004, kind: "prompt", text: null, chars: 40 },
+      { seq: 5, ts: 1005, kind: "turn", text: "Done: 3 files changed.", trust: "untrusted" },
+      { seq: 6, ts: 1006, kind: "event", text: "Waiting for your approval" },
+    ]);
+  });
+
+  test("audit and other records are left out; a withheld entry says so; refusals and cut-off turns are errors", () => {
+    const rows = sessionRows([
+      e(1, "audit", { op: "recall", ok: true }),
+      e(2, "task.turn", "", "quarantined"),
+      e(3, "task.refused", { reason: "the scanner blocked the prompt" }),
+      e(4, "task.interrupted", { startedAt: 1 }),
+      e(5, "approval.requested", { tier: "T3", kind: "execute", title: "bun test" }),
+      e(6, "approval.decided", { allow: true, byLabel: "FASTPC workstation" }),
+      e(7, "task.state", { state: "error", reason: "lane gone" }),
+      e(8, "crl", { version: 3 }),
+    ], new Map());
+    expect(rows.map((r) => [r.kind, "text" in r ? r.text : null])).toEqual([
+      ["withheld", "Withheld by the scanner: flagged"],
+      ["error", "The spoke refused the prompt: the scanner blocked the prompt"],
+      ["error", "A spoke restart cut this turn off; Resume asks the task to continue."],
+      ["event", "Parked for approval: T3 execute: bun test"],
+      ["event", "Approved by FASTPC workstation"],
+      ["error", "Stopped with an error: lane gone"],
+    ]);
   });
 });

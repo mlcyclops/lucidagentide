@@ -121,14 +121,15 @@ export interface RemoteSpokeView {
   error?: string;
 }
 
-/** How the hub proves user presence on approve (ADR-0507, add-on ADR-A067): `password` needs the hub's password
- *  typed for every Approve (the orbit asks for it and the engine passes it through once); the platform kinds ask
+/** How the hub proves user presence on approve (ADR-0507, add-on ADR-A067): `password` asks for the hub's password
+ *  on Approve only while the hub has not unlocked it (plugin ADR-A105 remembers it for a window; `presenceUnlocked`);
+ *  when asked, the orbit takes it and the engine passes it through once; the platform kinds ask
  *  on the hub machine itself; `none` approves without evidence. null: not set up, or not reported. */
 export const HUB_PRESENCE = ["password", "windows-hello", "macos-secure-enclave", "none"] as const;
 export type HubPresence = (typeof HUB_PRESENCE)[number];
 
 export type RemoteHubView =
-  | { available: true; hub: { node: string; label: string; scopes: HubScope[]; presence: HubPresence | null }; actions: HubActions; spokes: RemoteSpokeView[] }
+  | { available: true; hub: { node: string; label: string; scopes: HubScope[]; presence: HubPresence | null; presenceUnlocked: boolean }; actions: HubActions; spokes: RemoteSpokeView[] }
   | { available: false; plugin: "missing" | "stopped" | "running"; reason: string };
 
 export const NODE_RE = /^n_[0-9a-f]{32}$/;
@@ -137,6 +138,11 @@ export const TASK_RE = /^t_[0-9a-f]{16}$/;
 const clip = (v: unknown, max: number): string | null => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
 const count = (v: unknown): number | null => (typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : null);
 const record = (v: unknown): Record<string, unknown> | null => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
+
+/** A spoke's own `status` task list, validated as the hub snapshot's rows are (P-RS-SESSION.1). */
+export function mapTasks(raw: unknown): RemoteTaskView[] {
+  return Array.isArray(raw) ? raw.map(mapTask).filter((t): t is RemoteTaskView => t !== null) : [];
+}
 
 function mapTask(raw: unknown): RemoteTaskView | null {
   const t = record(raw);
@@ -340,7 +346,7 @@ export function mapHubSnapshot(raw: unknown): RemoteHubView {
   const scopes = HUB_SCOPES.filter((s) => granted.includes(s));
   const spokes = Array.isArray(r.spokes) ? r.spokes.map(mapSpokeRow).filter((s): s is RemoteSpokeView => s !== null) : [];
   const presence = HUB_PRESENCE.find((k) => k === hub.presence) ?? null;
-  return { available: true, hub: { node: hub.node, label: clip(hub.label, 64) ?? hub.node.slice(0, 12), scopes, presence }, actions: hubActions(scopes), spokes };
+  return { available: true, hub: { node: hub.node, label: clip(hub.label, 64) ?? hub.node.slice(0, 12), scopes, presence, presenceUnlocked: hub.presenceUnlocked === true }, actions: hubActions(scopes), spokes };
 }
 
 // ---------------------------------------------------------------------------------------- display rules
@@ -383,7 +389,7 @@ export function spokeActions(s: RemoteSpokeView, a: HubActions): HubActions {
  *  stopped tasks hold no lane. An idle machine, an offline one with nothing on it and a deactivated one live only
  *  in the Remote spokes view. A silent spoke that still holds a task stays: the work on it is what went quiet. */
 export function onOrbit(s: RemoteSpokeView): boolean {
-  return !s.deactivated && s.tasks.some((t) => t.state !== "closed" && t.state !== "stopped");
+  return !s.deactivated && s.tasks.some((t) => !taskEnded(t));
 }
 
 /** P-RS-LANES.1 (ADR-0551): the remote hub's numbers, one definition for the Fleet pill, the Hubs badge, the rail
@@ -409,6 +415,12 @@ export function remoteTotals(list: readonly RemoteSpokeView[], alerts: number): 
  *  spoke answers, else the spoke's (silent, offline, checking say more than a stale task state). */
 export interface RemoteLane { key: string; spoke: RemoteSpokeView; task: RemoteTaskView | null; state: RemoteSpokeState }
 
+/** A task whose lane is gone: closed by a hub, or stopped when the spoke's engine restarted or lost it. Nothing more
+ *  runs in it; it holds no lane and offers only its session and recall (ADR-0574: the panel's Past tasks). */
+export function taskEnded(t: RemoteTaskView): boolean {
+  return t.state === "closed" || t.state === "stopped";
+}
+
 /** P-RS-LANES.1 (ADR-0551): the Fleet grid's Remote section: one lane per open task (closed and stopped tasks hold
  *  no lane, as onOrbit says), spokes grouped by their label, a waiting spoke with no open task as one lane of its
  *  own. A deactivated spoke has none (ADR-0512): nothing can be sent to it. */
@@ -417,7 +429,7 @@ export function remoteLanes(list: readonly RemoteSpokeView[]): RemoteLane[] {
   const spokes = list.filter((s) => !s.deactivated).sort((a, b) => a.label.localeCompare(b.label) || a.node.localeCompare(b.node));
   for (const s of spokes) {
     const answers = s.state === "approval" || s.state === "busy" || s.state === "error" || s.state === "idle";
-    const open = s.tasks.filter((t) => t.state !== "closed" && t.state !== "stopped");
+    const open = s.tasks.filter((t) => !taskEnded(t));
     for (const t of open) out.push({ key: `rs:${s.node}:${t.id}`, spoke: s, task: t, state: answers ? spokeState(true, [t]) : s.state });
     if (open.length === 0 && s.state === "approval") out.push({ key: `rs:${s.node}:`, spoke: s, task: null, state: s.state });
   }
@@ -569,17 +581,18 @@ export function deployChoices(spokes: readonly RemoteSpokeView[], a: HubActions)
 }
 
 /** Which buttons a task row offers: what the certificate allows AND what the spoke would accept in this state
- *  (a follow-up waits for the turn to end; a closed or stopped task holds no lane to cancel or close). ADR-0509:
+ *  (a follow-up goes to any open task; a closed or stopped task holds no lane to cancel or close). ADR-0509:
  *  a task whose turn a restart cut off offers Resume, a follow-up with RESUME_TEXT; a new turn clears the mark. */
 export function taskButtons(t: RemoteTaskView, a: HubActions): { recall: boolean; followup: boolean; cancel: boolean; close: boolean; resume: boolean } {
-  const live = t.state !== "closed" && t.state !== "stopped";
-  const followup = a.drive && (t.state === "idle" || t.state === "error");
+  const live = !taskEnded(t);
+  // ADR-0576: the reply box is always on for an open task; a new spoke queues a note sent while the task works.
+  const turnOver = a.drive && (t.state === "idle" || t.state === "error");
   return {
     recall: a.recall,
-    followup,
+    followup: a.drive && live,
     cancel: a.drive && (t.state === "working" || t.state === "awaiting_approval"),
     close: a.drive && live,
-    resume: followup && t.interrupted !== undefined,
+    resume: turnOver && t.interrupted !== undefined,
   };
 }
 
@@ -616,6 +629,59 @@ export interface RecallEntryView {
 export type RecallView =
   | { ok: true; node: string; label: string; task?: string; entries: RecallEntryView[]; quarantined: number; omitted: number; context: string }
   | { ok: false; error: string };
+
+/** P-RS-SESSION.1 (ADR-0572): a spoke's own `status` answer, read directly (not the hub's 15 s summary). */
+export type RemoteStatusView = { ok: true; journalHead: number; tasks: RemoteTaskView[] } | { ok: false; error: string };
+
+/** P-RS-SESSION.1: one row of a remote task's session screen, built from its scanned journal. `prompt`: a prompt the
+ *  hub sent (the journal keeps only its hash and length; `text` is the prompt this window sent with that hash, or
+ *  null). `turn`: the model's words. `event`: a state change, a parked or decided action, start, close; `error`: a
+ *  refusal or a cut-off turn; `withheld`: an entry the scanner quarantined. */
+export type SessionRow =
+  | { seq: number; ts: number; kind: "prompt"; text: string | null; chars: number }
+  | { seq: number; ts: number; kind: "turn"; text: string; trust: "untrusted" | "suspicious" }
+  | { seq: number; ts: number; kind: "event" | "error" | "withheld"; text: string };
+
+const TASK_STATE_WORDS: Record<RemoteTaskState, string> = {
+  working: "Working", awaiting_approval: "Waiting for your approval", idle: "Idle: waiting for a follow-up", error: "Stopped with an error", stopped: "Lane stopped", closed: "Closed",
+};
+
+/** The session rows for `entries` (seq order), skipping what a person does not read in a session (audit, CRL,
+ *  custody and model records). `prompts`: sha256 hex of a prompt this window sent, to its text. A non-turn entry's
+ *  text is its data as JSON (the engine scanned it so); one that does not parse shows its kind only. */
+export function sessionRows(entries: readonly RecallEntryView[], prompts: ReadonlyMap<string, string>): SessionRow[] {
+  const out: SessionRow[] = [];
+  for (const e of [...entries].sort((a, b) => a.seq - b.seq)) {
+    const base = { seq: e.seq, ts: e.ts };
+    if (e.trust === "quarantined") { out.push({ ...base, kind: "withheld", text: `Withheld by the scanner: ${e.reason ?? "flagged"}` }); continue; }
+    if (e.kind === "task.turn") { out.push({ ...base, kind: "turn", text: e.text, trust: e.trust }); continue; }
+    let d: Record<string, unknown> | null = null;
+    try { d = record(JSON.parse(e.text)); } catch { d = null; }
+    const s = (k: string, max = 300): string => clip(d?.[k], max) ?? "";
+    switch (e.kind) {
+      case "task.prompted": {
+        const sha = s("textSha256", 64);
+        out.push({ ...base, kind: "prompt", text: prompts.get(sha) ?? null, chars: count(d?.chars) ?? 0 });
+        break;
+      }
+      case "task.created": out.push({ ...base, kind: "event", text: `Task started${s("originLabel") ? ` by ${s("originLabel")}` : ""}` }); break;
+      case "task.state": {
+        const state = TASK_STATES.find((x) => x === d?.state);
+        if (state) out.push({ ...base, kind: state === "error" ? "error" : "event", text: `${TASK_STATE_WORDS[state]}${s("reason") ? `: ${s("reason")}` : ""}` });
+        break;
+      }
+      case "approval.requested": out.push({ ...base, kind: "event", text: `Parked for approval: ${s("tier", 8)} ${s("kind", 40)}: ${s("title")}` }); break;
+      case "approval.decided": out.push({ ...base, kind: "event", text: `${d?.allow === true ? "Approved" : "Denied"}${s("byLabel") ? ` by ${s("byLabel")}` : ""}` }); break;
+      case "task.refused": out.push({ ...base, kind: "error", text: `The spoke refused the prompt: ${s("reason") || "no reason given"}` }); break;
+      case "task.interrupted": out.push({ ...base, kind: "error", text: "A spoke restart cut this turn off; Resume asks the task to continue." }); break;
+      case "task.cancelled": out.push({ ...base, kind: "event", text: `Canceled${s("byLabel") ? ` by ${s("byLabel")}` : ""}` }); break;
+      case "task.closed": out.push({ ...base, kind: "event", text: `Closed${s("byLabel") ? ` by ${s("byLabel")}` : ""}` }); break;
+      case "task.handoff": out.push({ ...base, kind: "event", text: `Handoff note committed on ${s("branch", 128)}` }); break;
+      default: break;
+    }
+  }
+  return out;
+}
 
 /** A parked action on a remote spoke, scanned like recalled text. `quarantined`: the scanner flagged the action's
  *  text, so its input is withheld and only Deny is offered. */

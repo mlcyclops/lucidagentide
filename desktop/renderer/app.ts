@@ -16957,6 +16957,22 @@ async function showReleaseCleanupNotice(): Promise<void> {
     actions: [...(r.removed.length ? [{ label: "Open Installed", kind: "ok" as const, run: () => openPluginsDrawer("installed") }] : []), { label: "OK" }],
   });
 }
+/** P-HOLDER.2 (ADR-0573): once after start, remind that lanes which kept running across an update still run the
+ *  previous version (they pick this one up when started again). Read after the engine has reattached its lanes. */
+async function showPreviousVersionLanes(): Promise<void> {
+  const wait = Promise.withResolvers<void>();
+  setTimeout(wait.resolve, 15_000);
+  await wait.promise;
+  const s = await bridge.fleetStatus().catch(() => null);
+  const old = (s?.lanes ?? []).filter((l) => l.heldRuntime === "previous" && l.status !== "stopped");
+  if (!old.length) return;
+  const shown = old.slice(0, 4).map((l) => `"${l.name}"`).join(", ");
+  showToast({
+    tone: "info", title: `${old.length} ${old.length === 1 ? "lane runs" : "lanes run"} the previous version`, timeout: 0,
+    desc: `${shown}${old.length > 4 ? ` and ${old.length - 4} more` : ""} kept running through the update. Stop and respawn ${old.length === 1 ? "it" : "them"} when idle to use this version.`,
+    actions: [{ label: "OK" }],
+  });
+}
 /** Scripts, same-origin storage, forms, popups and downloads: what a real app needs. Safe to combine because the
  *  plugin's origin is never the renderer's, so allow-same-origin cannot reach this window. */
 const PLUGIN_FRAME_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-downloads";
@@ -17367,6 +17383,7 @@ function wire(): void {
   $("#prevPlugins")?.addEventListener("click", (e) => pluginsFlyout.toggle(e.currentTarget as HTMLElement)); // P-PLUGINS.1
   window.addEventListener("focus", () => pluginsFlyout.onWindowFocus()); // P-PLUGINS.1: finish a checkout done in the browser
   void showReleaseCleanupNotice(); // ADR-0542
+  void showPreviousVersionLanes(); // P-HOLDER.2 (ADR-0573)
   // CREATOR-0 (ADR-0282): the Creator Studio rail entry + its whole delegated surface.
   $("#railStudio")?.addEventListener("click", () => openCreatorStudio());
   $("#studioClose")?.addEventListener("click", () => closeCreatorStudio());
@@ -17821,6 +17838,7 @@ function wire(): void {
     remoteSpokes: bridge.remoteSpokes,
     remoteSpokeRecall: bridge.remoteSpokeRecall,
     remoteSpokeApprovals: bridge.remoteSpokeApprovals,
+    remoteSpokeStatus: bridge.remoteSpokeStatus,
     remoteSpokeDecide: bridge.remoteSpokeDecide,
     remoteSpokeAct: bridge.remoteSpokeAct,
     startRemoteSpokes: async () => {

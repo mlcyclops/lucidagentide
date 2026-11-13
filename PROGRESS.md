@@ -6157,3 +6157,18 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-12):** v2.5.4-beta.3 published (run 43343887347, all four legs green; its x64 zip read back as x86_64 lucid, lucid-engine, lucid-holder, natives and bun, arm64 zip as arm64). For #616: catastrophic matching also runs per segment with the program resolved by name and inside `bash -c`, `cmd /c`, `powershell -Command`/`-EncodedCommand`; the catastrophic set adds `del`/`rd /s`, `Remove-Item -Recurse`, `format <drive>:`, `Format-Volume`, `Clear-Disk`; `askToolName` names an ask for the main chat and the lanes and the lane passes the request-level tool to the floor; `execCommand` reads `input`/`code`/`source` only on exec tools; the firewall and MCP gate headers neutralize their names. exec_policy, fleet_lanes, remote_approval, acp_backend_recovery, agent_firewall, mcp_result_gate: 352 pass; demo-P-EXEC.1, demo-P-GOAL.13 and the P-OFFICE.1 demo pass. Version 2.5.4-beta.4.
 - **stubbed:** a remote agent connection with `permissionPolicy: "allow"` (ADR-0149) still answers its own asks without the floor, by design. An Intel Mac has not booted the x64 app.
 - **next:** merge the release pull request once CI is green, dispatch build-desktop.yml with beta_release on, and drive an auto-mode lane on Windows through `rd /s /q` to see it stop for the human.
+
+## P-RS-APPROVE-UX: approve without retyping on an unlocked hub; parked actions show on their own (ADR-0571)
+- **shipped (2026-11-13):** `hub.presenceUnlocked` mapped from `/host/spokes`; the decide route and the approval card skip the password while the hub is unlocked (plugin ADR-A105); the per-spoke panel reads parked actions once per new set of awaiting tasks, Check stays manual.
+- **stubbed:** needs a plugin build with ADR-A105 to see the unlocked path live; older plugins keep asking for the password.
+- **next:** rebuild app.bundle.js, approve twice on an unlocked password hub and confirm no prompt, and open a parked spoke to see its action without Check.
+
+## P-RS-SESSION.1: a remote task's live session screen (ADR-0572)
+- **shipped (2026-11-13):** `remote_session.ts` (status every 3 s while working, recall `since` on change), `sessionRows`, `mapTasks`, engine `GET /api/remote-spokes/status` and recall `since`; Session section in the per-spoke panel (task row click picks), session in each Fleet remote lane card; prompts sent from this window shown by hash.
+- **stubbed:** tool calls are not journaled by the spoke, so no tool chips; needs plugin 0.10.1 (ADR-A106) for `since` to read incrementally (an older plugin reads from 0 each time).
+- **next:** see it live on the owner's hub with a working task; consider a spoke-side `task.turn` tool summary.
+
+## P-HOLDER.2: held lanes run from a per-version runtime copy; the update prompt asks about the lanes (ADR-0573)
+- **shipped (2026-11-13):** `lane_runtime.ts` (copy, key, map, cleanup), `HolderPool` launches from the copy and records its key, `LaneView.heldRuntime`, `update_lanes.ts` (stuck/idle/working, prompt, stop-for-update), engine `GET /api/fleet/update-check` and `POST /api/fleet/stop-for-update`, updater prompt with the lanes and no silent install on quit, a toast after restart for lanes still on the previous version. 11 new tests; holder and fleet suites pass; live Windows proof with the packaged binaries.
+- **stubbed:** nothing; the external install-on-close watcher on the owner's PC is outside the repo (it now names held lanes that block it).
+- **next:** live: install this build, start a lane, install another build over it while the lane runs.

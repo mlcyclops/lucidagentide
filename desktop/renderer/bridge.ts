@@ -293,7 +293,7 @@ import type { JobsData, JobTargetView, JobView } from "./jobs_view.ts"; // P-SCH
 export type { NetView };
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
 import type { AosControl, AosSnapshot } from "../aos.ts"; // P-AOS.1 (ADR-0452): the fleet goal (types only, owned there)
-import type { RecallView, RemoteActionView, RemoteApprovalsView, RemoteHubView } from "./remote_spokes_model.ts"; // P-IDE-SPOKES.1 (ADR-0506): owned there
+import type { RecallView, RemoteActionView, RemoteApprovalsView, RemoteHubView, RemoteStatusView } from "./remote_spokes_model.ts"; // P-IDE-SPOKES.1 (ADR-0506): owned there
 export type { AosControl, AosSnapshot };
 /** P-AOS.1: a fleet-goal change: the new snapshot, or the engine's refusal in words. */
 export type FleetGoalReply = { ok: true; data: AosSnapshot } | { ok: false; error: string };
@@ -305,6 +305,9 @@ export type ApprovalScope = "once" | "session";
 export interface LaneView {
   id: string; name: string; cwd: string; model: string; status: LaneStatus;
   createdAt: number; lastActivityAt: number; turns: number;
+  /** P-HOLDER.2 (ADR-0573): a held lane runs from this version's runtime copy, an earlier version's, or the install
+   *  folder; absent for a lane that is the engine's own child. */
+  heldRuntime?: "current" | "previous" | "install";
   /** P-FLEET.L4: Retry is offered only when a last prompt exists; respawns counts in-place revivals. */
   canRetry: boolean; respawns: number;
   /** P-FLEET.L5: the omp session id behind this lane - the key into its on-disk history. */
@@ -1164,7 +1167,10 @@ export interface LucidBridge {
    *  Recall and parked actions come back scanned; recalled text is shown as text and enters a prompt only as the
    *  delimited `context`. Every action is re-gated by the hub certificate's scopes engine-side. */
   remoteSpokes(): Promise<RemoteHubView | null>;
-  remoteSpokeRecall(node: string, task?: string): Promise<RecallView | null>;
+  /** `since` (P-RS-SESSION.1, ADR-0572): only the entries after that journal seq. */
+  remoteSpokeRecall(node: string, task?: string, since?: number): Promise<RecallView | null>;
+  /** P-RS-SESSION.1: the spoke's own task list, read now (not the hub's 15 s summary). */
+  remoteSpokeStatus(node: string): Promise<RemoteStatusView | null>;
   remoteSpokeApprovals(node: string): Promise<RemoteApprovalsView | null>;
   /** `password`: a `password` hub's presence password, on an allow only (ADR-0507); sent once, never kept. */
   remoteSpokeDecide(input: { node: string; task: string; ask: string; digest: string; allow: boolean; password?: string }): Promise<RemoteActionView | null>;
@@ -2062,7 +2068,8 @@ export const bridge: LucidBridge = {
   fleetRespawn: (laneId) => post("/api/fleet/respawn", { laneId }),
   fleetAnswer: (laneId, allow, scope) => post("/api/fleet/answer", { laneId, allow, ...(scope ? { scope } : {}) }),
   remoteSpokes: () => getData("/api/remote-spokes"), // P-IDE-SPOKES.1 (ADR-0506)
-  remoteSpokeRecall: (node, task) => post("/api/remote-spokes/recall", { node, ...(task ? { task } : {}) }),
+  remoteSpokeRecall: (node, task, since) => post("/api/remote-spokes/recall", { node, ...(task ? { task } : {}), ...(since !== undefined ? { since } : {}) }),
+  remoteSpokeStatus: (node) => getData(`/api/remote-spokes/status?node=${encodeURIComponent(node)}`),
   remoteSpokeApprovals: (node) => getData(`/api/remote-spokes/approvals?node=${encodeURIComponent(node)}`),
   remoteSpokeDecide: (input) => post("/api/remote-spokes/decide", input),
   remoteSpokeAct: (op, input) => post(`/api/remote-spokes/${op}`, input),
