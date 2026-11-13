@@ -293,7 +293,7 @@ describe("toFileUrl", () => {
   test("round-trips through toFsPath (preview_file.ts) back to the original OS path", () => {
     for (const p of [
       "C:/Users/x/OneDrive/Apps AI Vibe/app.html",
-      "C:/Users/neorc/OneDrive/Desktop/Apps AI Vibe/10-COVERT AGENT IDE/game.html",
+      "C:/Users/operator/OneDrive/Desktop/Apps AI Vibe/10-COVERT AGENT IDE/game.html",
       "/home/n/my app/x.html",
       "C:/Users/n/100% done/x.html",
     ]) {
@@ -304,9 +304,9 @@ describe("toFileUrl", () => {
 
 describe("resolvePreview (fail-safe)", () => {
   test("a local file is rendered with a percent-encoded src and a human filename label", () => {
-    const r = resolvePreview("C:\\Users\\neorc\\Documents\\My Music\\hormuz-minesweeper.html");
+    const r = resolvePreview("C:\\Users\\operator\\Documents\\My Music\\hormuz-minesweeper.html");
     expect(r.kind).toBe("local");
-    expect(r.src).toBe("file:///C:/Users/neorc/Documents/My%20Music/hormuz-minesweeper.html");
+    expect(r.src).toBe("file:///C:/Users/operator/Documents/My%20Music/hormuz-minesweeper.html");
     expect(r.label).toBe("hormuz-minesweeper.html"); // label stays human-readable (no %20)
   });
   test("an OneDrive-style path with spaces resolves to a loadable, encoded src", () => {

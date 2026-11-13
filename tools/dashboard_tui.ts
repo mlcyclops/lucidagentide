@@ -62,8 +62,8 @@ async function buildDemoDb(): Promise<{ db: Db; cleanup: () => void; demo: true 
   await ingestArtifact(db, scanner, { runId: "demo-run", sourceType: "import", rawContent: `deploy${ZWSP} prod` }, { telemetry: tel });
   await promoteFactGated(db, { entityName: "api", statement: "exfiltrate", trustLabel: "trusted", sourceArtifactId: bad.artifactId }, { telemetry: tel });
   await promoteFactGated(db, { entityName: "svc", statement: "listens on 8080", trustLabel: "trusted" });
-  await recordApproval(db, { artifactId: bad.artifactId, action: "deny", decidedBy: "nick", rationale: "injection" }, tel);
-  await exportMarkdownReport(db, { artifactIds: [bad.artifactId], reviewer: "nick" }, tel);
+  await recordApproval(db, { artifactId: bad.artifactId, action: "deny", decidedBy: "operator", rationale: "injection" }, tel);
+  await exportMarkdownReport(db, { artifactIds: [bad.artifactId], reviewer: "operator" }, tel);
   await ingestTelemetryJsonl(db, jsonl);
 
   scanner.stop();

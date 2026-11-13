@@ -109,7 +109,7 @@ try {
     console.log(`ingested artifact ${ing.artifactId} trust=${ing.trustLabel}`);
     const approvalId = await recordApproval(
       db,
-      { artifactId: ing.artifactId, action: "deny", decidedBy: "nick", rationale: "tool-name homoglyph spoof", scope: "tool_call" },
+      { artifactId: ing.artifactId, action: "deny", decidedBy: "operator", rationale: "tool-name homoglyph spoof", scope: "tool_call" },
       tel,
     );
     const row = await db.get("SELECT action, decided_by, rationale FROM approval_events WHERE approval_id=$1", [approvalId]);

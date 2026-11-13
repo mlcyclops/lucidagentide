@@ -98,7 +98,7 @@ const jwks = Bun.serve({
 
 const verify = createFirebaseVerifier({
   projectId: PROJECT,
-  allowedEmails: ["nicholas.chadwick.ctr@gmail.com"],
+  allowedEmails: ["operator@example.com"],
   jwksUrl: `http://127.0.0.1:${jwks.port}/`,
 });
 
@@ -114,7 +114,7 @@ pass("premium Google sign-in → first-frame auth → auth-ok → room open (tok
 
 // [2] allowlisted email, NO paid claim → admitted; E2E envelope round-trips opaquely
 const guest = await dial(`${base}/r/demo?role=guest`);
-guest.ws.send(JSON.stringify({ t: "auth", token: mint({ email: "nicholas.chadwick.ctr@gmail.com", sub: "uid-nick" }) }));
+guest.ws.send(JSON.stringify({ t: "auth", token: mint({ email: "operator@example.com", sub: "uid-operator" }) }));
 await until(() => guest.strings.some((s) => s.includes("auth-ok")), "guest auth-ok");
 guest.ws.send(new Uint8Array([0, 0, 0, 0, 222, 173, 190, 239])); // [4B target][opaque ciphertext]
 await until(() => host.binaries.length === 1, "envelope at host");

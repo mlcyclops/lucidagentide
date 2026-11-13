@@ -44,9 +44,9 @@ scanner.start();
 
 try {
   const ing = await ingestArtifact(db, scanner, { runId: "run-x", sourceType: "import", sourcePath: "PR#7", rawContent: POISON });
-  await recordApproval(db, { artifactId: ing.artifactId, action: "deny", decidedBy: "nick", rationale: "tag-block injection" });
+  await recordApproval(db, { artifactId: ing.artifactId, action: "deny", decidedBy: "operator", rationale: "tag-block injection" });
   console.log(`ingested poisoned artifact ${ing.artifactId} (${ing.trustLabel}, ${ing.findingCount} findings)`);
-  const input = { artifactIds: [ing.artifactId], reviewer: "nick" };
+  const input = { artifactIds: [ing.artifactId], reviewer: "operator" };
 
   // ── 1. escaped Markdown report ─────────────────────────────────────────────
   const md = await exportMarkdownReport(db, input);

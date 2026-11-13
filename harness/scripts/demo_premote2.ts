@@ -28,7 +28,7 @@ function mint(claims: Record<string, unknown>): string {
   const now = Math.floor(Date.now() / 1000);
   const payload = {
     aud: PROJECT, iss: `https://securetoken.google.com/${PROJECT}`, sub: "host-uid",
-    email: "nicholas.chadwick.ctr@gmail.com", email_verified: true, iat: now - 30, exp: now + 3600,
+    email: "operator@example.com", email_verified: true, iat: now - 30, exp: now + 3600,
     firebase: { sign_in_provider: "google.com" }, ...claims,
   };
   const si = `${Buffer.from(JSON.stringify({ alg: "RS256", kid: KID, typ: "JWT" })).toString("base64url")}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;

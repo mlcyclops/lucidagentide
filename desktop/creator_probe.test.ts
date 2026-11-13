@@ -251,8 +251,8 @@ describe("provider routing + the cache", () => {
 });
 
 describe("the Private AI Platform services and HyperFrames", () => {
-  const avatarEp = ep({ id: "nick-dgx-avatar", providerId: "dgx-avatar", baseUrl: "http://127.0.0.1:8088", zone: "internal", enclave: true });
-  const cadEp = ep({ id: "nick-dgx-cad", providerId: "dgx-cad", baseUrl: "http://127.0.0.1:8089", zone: "internal", enclave: true });
+  const avatarEp = ep({ id: "gpu-box-avatar", providerId: "dgx-avatar", baseUrl: "http://127.0.0.1:8088", zone: "internal", enclave: true });
+  const cadEp = ep({ id: "gpu-box-cad", providerId: "dgx-cad", baseUrl: "http://127.0.0.1:8089", zone: "internal", enclave: true });
 
   test("dgx-avatar attests avatar-video only when an engine is ready, and video-compose only when compose is", async () => {
     let asked = "";
@@ -282,7 +282,7 @@ describe("the Private AI Platform services and HyperFrames", () => {
   });
 
   test("dgx-vision attests only the capabilities /health reports and names models that are not ready", async () => {
-    const visionEp = ep({ id: "nick-dgx-vision", providerId: "dgx-vision", baseUrl: "http://127.0.0.1:8090/", zone: "internal", enclave: true });
+    const visionEp = ep({ id: "gpu-box-vision", providerId: "dgx-vision", baseUrl: "http://127.0.0.1:8090/", zone: "internal", enclave: true });
     let asked = "";
     const health = {
       ok: true, service: "dgx-vision", version: "0.1.0",
@@ -359,7 +359,7 @@ describe("the Private AI Platform services and HyperFrames", () => {
 
 describe("CutWire Drift (CREATOR-DRIFT)", () => {
   const session = { port: 4731, url: "http://127.0.0.1:4731/mcp", token: "hex-token-never-shown", pid: 5152 };
-  const sessionPath = "C:\\Users\\nick/drift/mcp-session.json";
+  const sessionPath = "C:\\Users\\operator/drift/mcp-session.json";
   const withSession = (s: typeof session | null, error = "") => () => ({ path: sessionPath, session: s, error });
   const rpc = (body: unknown) => async (_url: string, init?: RequestInit) => {
     const req = JSON.parse(String(init?.body)) as { method: string; params?: { name?: string } };

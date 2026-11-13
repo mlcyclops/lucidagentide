@@ -60,7 +60,7 @@ const onDisk = (vault: string, store: OsKeyStore): Record<string, string> =>
 
 const SECRET = { key: "sk-live-MIGRATE-0001", acct: "sk-acct-MIGRATE-0002", mcp: "mcp-bearer-MIGRATE-0003", turn: "turn-cred-MIGRATE-0004" };
 const LEGACY: GuiSettings = {
-  username: "Nick",
+  username: "operator",
   keys: { LUCID_VAULT_TEST_KEY: SECRET.key, LUCID_VAULT_TEST_REGION: "us-east-1" }, // a non-secret config value rides the same slot
   accounts: { openai: [
     { id: "key:acct-1", name: "Work", kind: "key", key: SECRET.acct, createdAt: 1 },
@@ -83,7 +83,7 @@ describe("migration of a plaintext lucid-gui.json", () => {
     for (const path of [file, `${file}.bak`, `${file}.corrupt-1700000000000`]) {
       const text = readFileSync(path, "utf8");
       for (const v of Object.values(SECRET)) expect(text).not.toContain(v);
-      expect(JSON.parse(text).username).toBe("Nick");
+      expect(JSON.parse(text).username).toBe("operator");
     }
     expect(readVault(vault).secrets).toEqual({
       "key:LUCID_VAULT_TEST_KEY": SECRET.key, "key:LUCID_VAULT_TEST_REGION": "us-east-1", "account:key:acct-1": SECRET.acct,
@@ -230,7 +230,7 @@ describe("a vault write that fails", () => {
   test("throws from setKey and never puts the key in lucid-gui.json", () => {
     const { file, vault } = scratch();
     _setVaultBackendForTest(() => ({ kind: "dpapi", read: () => ({ missing: "absent" }), create: () => false }));
-    save({ username: "Nick" });
+    save({ username: "operator" });
     const before = readFileSync(file);
     expect(() => setKey("LUCID_VAULT_TEST_KEY", "sk-NOPE-6666")).toThrow(/master key/);
     expect(readFileSync(file).equals(before)).toBe(true);
@@ -266,7 +266,7 @@ describe("plaintext copies after a migration", () => {
     useFakeStore();
     writeFileSync(file, JSON.stringify(LEGACY, null, 2));
     const corrupt = `${file}.corrupt-1700000000001`;
-    const torn = `{"username":"Nick","keys": {"LUCID_VAULT_TEST_KEY": "${SECRET.key}"}, "mcpServers": [{"id":"mcp-1","token": "${SECRET.mcp}"`;
+    const torn = `{"username":"operator","keys": {"LUCID_VAULT_TEST_KEY": "${SECRET.key}"}, "mcpServers": [{"id":"mcp-1","token": "${SECRET.mcp}"`;
     writeFileSync(corrupt, torn);
     quiet(() => load());
     expect(readFileSync(corrupt, "utf8")).toBe(torn.replace(SECRET.key, "[moved to OS vault]").replace(SECRET.mcp, "[moved to OS vault]"));

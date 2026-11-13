@@ -53,7 +53,7 @@ try {
   const childTel = new Telemetry({ runId: childId, sessionId, sink: fileSink(jsonl) });
   await startRun(db, { runId: childId, parentRunId: rootId, kind: "subagent", mode: "general", sandboxProfile: "container-local" }, childTel);
   const poison = await ingestArtifact(db, scanner, { runId: childId, sourceType: "comment", rawContent: `act${ZWSP} now` }, { telemetry: childTel });
-  await recordApproval(db, { artifactId: poison.artifactId, action: "deny", decidedBy: "nick" }, childTel);
+  await recordApproval(db, { artifactId: poison.artifactId, action: "deny", decidedBy: "operator" }, childTel);
   await endRun(db, childId, "completed", childTel);
   await endRun(db, rootId, "completed", rootTel);
 

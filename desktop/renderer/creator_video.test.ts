@@ -6,8 +6,8 @@ import { creatorVideoHtml, hyperframesRenderBlock, isOpenfilmJob, openfilmBlock,
 
 const view = (over: Partial<CreatorVideoView> = {}): CreatorVideoView => ({
   lockdown: true,
-  endpoints: [{ id: "nick-dgx-avatar", label: "Avatar (Nick DGX)", cui: { posture: "enclave", allowed: true, reason: "enclave endpoint" } }],
-  endpointId: "nick-dgx-avatar", engine: "musetalk", templates: [{ path: "/t/a.mp4", name: "a.mp4", sizeBytes: 1 }], templatesNote: "",
+  endpoints: [{ id: "gpu-box-avatar", label: "Avatar (GPU box)", cui: { posture: "enclave", allowed: true, reason: "enclave endpoint" } }],
+  endpointId: "gpu-box-avatar", engine: "musetalk", templates: [{ path: "/t/a.mp4", name: "a.mp4", sizeBytes: 1 }], templatesNote: "",
   templatePath: "/t/a.mp4", voices: [{ id: "v1", name: "Voice 1" }], voice: "v1", text: "Hello", title: "", subtitle: "", captions: false,
   busy: "", status: "", statusTone: "", jobId: "", job: null, artifactId: "",
   hyperframes: { projectDir: "C:/comp", format: "mp4", quality: "standard", jobId: "", status: "", statusTone: "" },

@@ -40,13 +40,13 @@ test("heuristicExtractor finds preferences, interests, and links", () => {
 });
 
 test("heuristicExtractor captures natural-language facts (decision, role, goal, avoid, name)", () => {
-  const facts = heuristicExtractor({ user: "I'm a security engineer and I decided to go with Postgres. I avoid Java. My goal is to ship v1. Call me Nick.", assistant: "" });
+  const facts = heuristicExtractor({ user: "I'm a security engineer and I decided to go with Postgres. I avoid Java. My goal is to ship v1. Call me Operator.", assistant: "" });
   const kinds = facts.map((f) => f.kind);
   expect(kinds).toContain("user:decision");    // Chose Postgres
-  expect(kinds).toContain("user:personality");  // Is a security engineer / Goes by Nick
+  expect(kinds).toContain("user:personality");  // Is a security engineer / Goes by Operator
   expect(kinds).toContain("user:goal");         // ship v1
   expect(facts.some((f) => /avoids java/i.test(f.statement))).toBe(true);
-  expect(facts.some((f) => /goes by nick/i.test(f.statement))).toBe(true);
+  expect(facts.some((f) => /goes by operator/i.test(f.statement))).toBe(true);
 });
 
 test("heuristicExtractor learns nothing from a plain coding question (no personal facts)", () => {
