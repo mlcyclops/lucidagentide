@@ -312,6 +312,9 @@ interface PanelState {
   sig: string;
   /** The models last painted, so a poll repaints the Models section (and folds its lists) only on a change. */
   modelsSig: string;
+  /** The awaiting-approval task ids whose parked actions were last read on their own ("" = none): a spoke with a
+   *  parked action reads them once, and again when a new one parks (as a Fleet lane card's asksRead). */
+  asksRead: string;
 }
 let panel: PanelState | null = null;
 
@@ -384,7 +387,7 @@ function paintModels(host: HTMLElement, m: RemoteModelsView): void {
 
 /** Paint the panel for `node` once; polls only touch its head and task list (typed text survives a poll). */
 export function paintRemotePanel(box: HTMLElement, node: string, closeHtml: string): void {
-  panel = { node, followTask: null, armed: {}, approvals: [], recall: null, sig: "", modelsSig: "" };
+  panel = { node, followTask: null, armed: {}, approvals: [], recall: null, sig: "", modelsSig: "", asksRead: "" };
   // ADR-0512: a deactivated spoke's panel offers no new task, parked actions or recall.
   const s0 = spokeOf(node);
   const a = snap?.available ? (s0 ? spokeActions(s0, snap.actions) : snap.actions) : null;
@@ -445,6 +448,10 @@ export function refreshRemotePanel(box: HTMLElement): void {
   if (!panel) return;
   const s = spokeOf(panel.node);
   const a = snap?.available && s ? spokeActions(s, snap.actions) : null;
+  // A parked action shows without pressing Check: read once per new set of awaiting tasks, never per poll.
+  const parkedKey = s && a?.recall ? s.tasks.filter((t) => t.state === "awaiting_approval").map((t) => t.id).sort().join(",") : "";
+  if (!parkedKey) panel.asksRead = "";
+  else if (parkedKey !== panel.asksRead && $("[data-rs-approvals-out]", box)) { panel.asksRead = parkedKey; void loadApprovals(box); }
   const sig = JSON.stringify([s, a]);
   if (sig === panel.sig) return;
   panel.sig = sig;
@@ -690,7 +697,8 @@ function approvalCard(v: RemoteApprovalView, i: number, b: { approve: boolean; d
   if (b.approve) {
     const ok = document.createElement("button"); ok.className = "btn-mini orbit-allow"; ok.dataset.rsApprove = ""; ok.textContent = "Approve";
     // ADR-0507 amendment: a `password` hub's Approve opens this field; the typed password is the second step.
-    if (snap?.available && snap.hub.presence === "password") {
+    // Plugin ADR-A105: while the hub holds its presence key unlocked, Approve signs with it and asks for nothing.
+    if (snap?.available && snap.hub.presence === "password" && !snap.hub.presenceUnlocked) {
       const pw = document.createElement("input");
       pw.type = "password"; pw.className = "rs-pw"; pw.dataset.rsPassword = ""; pw.hidden = true; pw.maxLength = 1024; pw.autocomplete = "off"; pw.placeholder = "the hub's presence password";
       pw.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); ok.click(); } });
@@ -716,7 +724,7 @@ async function decide(box: HTMLElement, item: RemoteApprovalView, allow: boolean
  *  panel (decide) and the Fleet grid's remote lanes (laneDecide) both go through here; `say` reports each step. */
 async function sendDecide(node: string, item: RemoteApprovalView, allow: boolean, password: string | undefined, say: (text: string, ok?: boolean) => void): Promise<void> {
   if (!deps) return;
-  say(allow ? (password ? "Signing with the hub's password\u2026" : "Signing; the hub may ask you to confirm it is you\u2026") : "Denying\u2026");
+  say(allow ? (password ? "Signing with the hub's password\u2026" : "Signing (with the hub's remembered password if unlocked); the hub may ask you to confirm it is you\u2026") : "Denying\u2026");
   const r = await deps.remoteSpokeDecide({ node, task: item.task, ask: item.ask.id, digest: item.ask.digest, allow, ...(password ? { password } : {}) }).catch(() => null);
   if (!r) { say("The engine did not answer."); return; }
   say(r.ok ? (allow ? "Approved: the spoke's engine verified the signed decision." : "Denied.") : r.error, r.ok);

@@ -274,10 +274,11 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
   const label = labelOf(hub, node);
   // ADR-0507 amendment: a `password` hub signs an allow only with its presence password, typed for this one
   // approval. It goes to the plugin once and nowhere else (never stored, logged, echoed or put in model context);
-  // a deny, or an allow on a hub of another kind, never carries it.
+  // a deny, or an allow on a hub of another kind, never carries it. Plugin ADR-A105: while the hub holds its
+  // presence key unlocked, an allow without a password is signed with the held key; a typed one still passes.
   const needsPassword = op === "decide" && b.allow === true && hub.available && hub.hub.presence === "password";
   const password = needsPassword && typeof b.password === "string" && b.password ? b.password : undefined;
-  if (needsPassword && !password) return refuse("this hub approves with its presence password: type it to sign the approval");
+  if (needsPassword && !password && !hub.hub.presenceUnlocked) return refuse("this hub approves with its presence password: type it to sign the approval");
   if (password && password.length > MAX_PASSWORD) return refuse(`the presence password is at most ${MAX_PASSWORD} characters`);
 
   if (op === "recall") {

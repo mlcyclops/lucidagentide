@@ -316,7 +316,7 @@ describe("mapHubSnapshot: the hub, its scopes and every spoke", () => {
   test("a set-up hub lists its spokes with the actions its certificate's scopes allow", () => {
     const v = mapHubSnapshot({ hub: { node: HUB, label: "workstation", scopes: ["recall", "drive", "root-ish"] }, spokes: [{ node: NODE, label: "vm-218", reachable: true, tasks: [] }, { node: "bad" }] });
     expect(v).toEqual({
-      available: true, hub: { node: HUB, label: "workstation", scopes: ["recall", "drive"], presence: null },
+      available: true, hub: { node: HUB, label: "workstation", scopes: ["recall", "drive"], presence: null, presenceUnlocked: false },
       actions: { recall: true, drive: true, approve: false, deny: true },
       spokes: [{ node: NODE, label: "vm-218", state: "idle", lanes: null, tasks: [], checkedAt: null, ...UNKNOWN, models: { default: null, local: [], frontier: [] } }],
     });
@@ -332,6 +332,18 @@ describe("mapHubSnapshot: the hub, its scopes and every spoke", () => {
     expect(kind("none")).toBe("none");
     expect(kind("retina-scan")).toBeNull();
     expect(kind(undefined)).toBeNull();
+  });
+
+  test("presenceUnlocked is true only when the plugin says exactly true (plugin ADR-A105)", () => {
+    const unlocked = (presenceUnlocked: unknown) => {
+      const v = mapHubSnapshot({ hub: { node: HUB, label: "workstation", scopes: ["approve"], presence: "password", presenceUnlocked }, spokes: [] });
+      return v.available ? v.hub.presenceUnlocked : "unavailable";
+    };
+    expect(unlocked(true)).toBe(true);
+    expect(unlocked(false)).toBe(false);
+    expect(unlocked(undefined)).toBe(false);
+    expect(unlocked("true")).toBe(false);
+    expect(unlocked(1)).toBe(false);
   });
 
   test("no hub yet is the setup state, with the plugin's own error when the hub failed to open", () => {

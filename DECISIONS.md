@@ -27135,3 +27135,17 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 5. The agent firewall's header neutralizes the connection name and stop reason, and the MCP gate's header the server name (left over from ADR-0568).
 
 **Consequences.** `rd /s /q build` and `Remove-Item -Recurse` now always ask, as `rm -rf build` does; remote lanes refuse them outright. A command quoted as an argument is not read as one. Left as designed: a remote agent connection with `permissionPolicy: "allow"` (ADR-0149, a per-connection opt-in for a trusted gateway) answers its own asks without this floor.
+
+## ADR-0571 -- P-RS-APPROVE-UX: an unlocked password hub approves without retyping, and a parked spoke shows its parked actions on its own (2026-11-13)
+
+**Status:** Accepted. Amends ADR-0507 (its password amendment) and ADR-0551. Pairs with Remote Spokes plugin ADR-A105. Proof: `bun test desktop/renderer/remote_spokes_model.test.ts desktop/remote_spokes.test.ts`; desktop typecheck.
+
+**Context.** The owner approves parked actions from the Orbit "Remote spokes" view. Two complaints: a `password` hub asked for its presence password on every Approve, and a spoke with a parked action showed nothing under Parked actions until Check was pressed. Plugin ADR-A105 lets the hub hold its presence key unlocked for a window after the password is typed once, and reports it as `hub.presenceUnlocked` on `/host/spokes`.
+
+**Decision.**
+1. `mapHubSnapshot` maps `hub.presenceUnlocked` to a boolean (exactly `true` is true; missing or anything else is false, so an older plugin keeps asking).
+2. The engine's decide route refuses a password-less allow on a `password` hub only while the hub is not unlocked; while unlocked it forwards the allow without a password and the plugin signs it with the held key. A typed password still passes through once, as before.
+3. The approval card shows the password field only on a `password` hub that is not unlocked; otherwise Approve is the two-click path.
+4. The per-spoke panel reads its parked actions once on its own when the spoke has a task awaiting approval and the viewer has recall, and again when the set of awaiting tasks changes; it resets when nothing is parked. Check stays a manual refresh; approvals are not polled per tick.
+
+**Consequences.** While the hub is unlocked, anyone at the IDE can approve without the password; the window and its lock live in the plugin (ADR-A105). Approvals are read once per new park, not per poll.

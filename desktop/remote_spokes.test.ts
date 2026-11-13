@@ -316,6 +316,18 @@ describe("ADR-0507 amendment: a password hub's Approve carries the presence pass
     expect((await r.call("POST", "/api/remote-spokes/decide", { node: NODE, task: TASK, ask: "ask-1", digest: DIGEST, allow: true, password: SECRET })).data).toMatchObject({ ok: true });
     expect(r.forwarded().filter((c) => c.path.endsWith("/decide")).map((c) => c.body)).toEqual([{ task: TASK, ask: "ask-1", digest: DIGEST, allow: true }]);
   });
+
+  test("plugin ADR-A105: an unlocked password hub takes an allow without a password; a typed one still passes", async () => {
+    const unlocked = hubOf("password");
+    const r = rig({ hub: { ...unlocked, hub: { ...unlocked.hub, presenceUnlocked: true } }, approvals: [ask()] });
+    const decide = (b: Record<string, unknown>) => r.call("POST", "/api/remote-spokes/decide", { node: NODE, task: TASK, ask: "ask-1", digest: DIGEST, ...b });
+    expect((await decide({ allow: true })).data).toMatchObject({ ok: true });
+    expect((await decide({ allow: true, password: SECRET })).data).toMatchObject({ ok: true });
+    expect(r.forwarded().filter((c) => c.path.endsWith("/decide")).map((c) => c.body)).toEqual([
+      { task: TASK, ask: "ask-1", digest: DIGEST, allow: true },
+      { task: TASK, ask: "ask-1", digest: DIGEST, allow: true, password: SECRET },
+    ]);
+  });
 });
 
 describe("ADR-0514: the hub panel opens with a one-time bootstrap secret the plugin minted for this engine", () => {
