@@ -1399,8 +1399,12 @@ class Backend {
             if (m) {
               // The authoritative security-gate block. Persist it GUI-side (the gate's own omp
               // child can't co-write the DB) so it reaches the Security panel + is reviewable.
-              const rec = recordBlock({ tool: m[1]!, severity: m[2]!, findings: m[3]!, reason: "hidden-Unicode content quarantined", sessionId: this.sessionId ?? undefined });
-              this.emit({ type: "block", tool: m[1]!, reason: "hidden-Unicode content quarantined", severity: m[2]!, findings: m[3]!, id: rec.id, quarantined: true });
+              // P-SCANLIVE.1 (ADR-0571): `scan-unavailable` means NOTHING was found; the scanner could not
+              // answer and the gate failed closed. Labeling that "hidden-Unicode" sent a user hunting for
+              // invisible characters in content that had none.
+              const reason = m[3] === "scan-unavailable" ? "security scanner unavailable, blocked fail-closed" : "hidden-Unicode content quarantined";
+              const rec = recordBlock({ tool: m[1]!, severity: m[2]!, findings: m[3]!, reason, sessionId: this.sessionId ?? undefined });
+              this.emit({ type: "block", tool: m[1]!, reason, severity: m[2]!, findings: m[3]!, id: rec.id, quarantined: true });
             }
           }
         };
