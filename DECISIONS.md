@@ -27210,3 +27210,19 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 4. **Hub and spoke:** boards live on the hub only. A board holds `spoke:task` references, and a spoke never learns about boards. A Windows or Mac spoke shows its own person what runs there ("This computer is helping <hub>") with Pause, Stop all and per-task Stop. Approvals stay the hub's signed decisions.
 
 **Consequences.** Phases: (1) plain-language setup and errors, a one-confirm Stop and an always-on reply box on remote cards; (2) engine-owned boards, layout presets and Next; (3) New agent, Computers and pairing by check code, plus the spoke's own view; (4) Herd reads the engine's boards; (5) the spoke's ended-task retention. The Remote Spokes add-on carries the spoke-side pieces (queued follow-up, a local view and stop, pairing by code, retention).
+
+## ADR-0576 -- P-FLEET-UX.1: plain-language Herd setup, one-confirm Stop and an always-on reply box on remote agents (2026-11-13)
+
+**Status:** Accepted. Implements phase 1 of ADR-0575. Amends ADR-0541 (the Herd card), ADR-0509 (task buttons) and ADR-0551 (remote lane cards). Proof: `bun test desktop/renderer/remote_spokes_model.test.ts plugins/herd` and the typecheck.
+
+**Context.** A non-technical user met Herd as "A Herdr-style terminal fleet: a hub server...", a disabled "Not in this build" with no reason or way forward, and, with the IDE closed, an error that told them to run the very command that had just failed. On remote agents, Stop was an archive icon that needed two clicks, unlike a local lane's ✕, and the reply box vanished whenever the agent was working.
+
+**Decision.**
+1. **Herd card in plain words** (`plugin_catalog.ts`): it says what you get (your agents in a terminal, boards that keep running when you close the window). The commands are unchanged; their notes are plain.
+2. **Not in this build says why and what next** (`plugins_flyout.ts`): this copy of LUCID does not include the signed Herd package, and the card offers the Installed tab's own Install from file (the same review sheet and install path). Without the desktop app, it says installing from a file needs it.
+3. **No circular error** (`plugins/herd/src/hub_server.ts`): when no IDE engine runs, Herd says to open the LUCID IDE and try again.
+4. **Terminal button** (`fleet_grid.ts`): it reads "Open in terminal (classic hub)", and its tooltip says it opens the classic hub in a terminal window.
+5. **One-confirm Stop on remote agents** (`orbit_remote.ts`): a remote lane card has a ✕ Stop in its header with the local lane's class and look, and the per-spoke panel's task rows have a Stop. Both ask once, through the IDE's toast with actions: `Stop "<name>" on <computer>? What it did so far is kept under Past tasks.` Stop still sends `close` through the same path.
+6. **Always-on reply box** (`remote_spokes_model.ts`, `orbit_remote.ts`): `taskButtons` offers a follow-up for any open task when the hub may drive; Resume keeps its meaning (idle or error, and interrupted). While the task works, the placeholder says the note waits for its next step. An answer with `queued: true` shows "Queued: it reads this after its current step."; a refusal shows the spoke's own words.
+
+**Consequences.** A new spoke (Remote Spokes add-on) queues up to 8 notes per task and gives them as one follow-up turn when the current turn ends; `cancel` and `close` drop the queue. An older spoke still refuses a note while the task works ("task is still working; one turn at a time"), and the IDE shows that text as is. Local lane Stop is unchanged.

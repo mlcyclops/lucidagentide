@@ -581,17 +581,18 @@ export function deployChoices(spokes: readonly RemoteSpokeView[], a: HubActions)
 }
 
 /** Which buttons a task row offers: what the certificate allows AND what the spoke would accept in this state
- *  (a follow-up waits for the turn to end; a closed or stopped task holds no lane to cancel or close). ADR-0509:
+ *  (a follow-up goes to any open task; a closed or stopped task holds no lane to cancel or close). ADR-0509:
  *  a task whose turn a restart cut off offers Resume, a follow-up with RESUME_TEXT; a new turn clears the mark. */
 export function taskButtons(t: RemoteTaskView, a: HubActions): { recall: boolean; followup: boolean; cancel: boolean; close: boolean; resume: boolean } {
   const live = !taskEnded(t);
-  const followup = a.drive && (t.state === "idle" || t.state === "error");
+  // ADR-0576: the reply box is always on for an open task; a new spoke queues a note sent while the task works.
+  const turnOver = a.drive && (t.state === "idle" || t.state === "error");
   return {
     recall: a.recall,
-    followup,
+    followup: a.drive && live,
     cancel: a.drive && (t.state === "working" || t.state === "awaiting_approval"),
     close: a.drive && live,
-    resume: followup && t.interrupted !== undefined,
+    resume: turnOver && t.interrupted !== undefined,
   };
 }
 

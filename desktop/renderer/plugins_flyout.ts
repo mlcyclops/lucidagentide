@@ -107,19 +107,22 @@ const STATUS_CHIP: Record<FreePlugin["status"], string> = { featured: "Featured"
 
 /** The footer of an optional add-on's card (ADR-0541): the one state button, Remove once installed, and the
  *  status note. Re-rendered alone on every state change. */
-export function addonFootHtml(p: FreePlugin, a: AddonAction, note: CardNote | null): string {
-  const meta = a.kind === "install" ? `Free, version ${esc(a.version)}` : a.kind === "update" ? `Free, version ${esc(a.from)}, ${esc(a.to)} available` : a.kind === "not-offered" ? "Free, not shipped with this build" : "Free";
+export function addonFootHtml(p: FreePlugin, a: AddonAction, note: CardNote | null, canPick = false): string {
+  const meta = a.kind === "install" ? `Free, version ${esc(a.version)}` : a.kind === "update" ? `Free, version ${esc(a.from)}, ${esc(a.to)} available` : a.kind === "not-offered" ? "Free, not included in this copy" : "Free";
   const disabled = a.kind === "checking" || a.kind === "not-offered" || a.kind === "installing" ? " disabled" : "";
   const busy = a.kind === "installing" ? ` aria-busy="true"` : "";
   const remove = a.kind === "open" || a.kind === "update" ? `<button type="button" class="plg-lic" data-plg-iremove="${esc(p.id)}">Remove</button>` : "";
+  // Not in this build: say why and offer the one other install path, the Installed tab's Install from file.
+  const why = a.kind !== "not-offered" ? "" : `<div class="plg-foot plg-foot-why"><span class="plg-meta">This copy of LUCID does not include the signed ${esc(p.name)} package. ${canPick ? "If you have the package file, install it here." : "To install it from a package file, use the LUCID desktop app."}</span>${canPick ? `<button type="button" class="plg-act" data-kind="install" data-plg-file>${icon("folder", 13)}Install from file</button>` : ""}</div>`;
   return `<div class="plg-foot"><span class="plg-meta">${meta}</span>${remove}<button type="button" class="plg-act" data-kind="${a.kind}" data-plg-addon="${esc(p.id)}"${disabled}${busy}>${esc(addonActionLabel(a))}</button></div>`
+    + why
     + (note ? `<p class="plg-note" data-tone="${note.tone}" role="status">${esc(note.text)}</p>` : "");
 }
 
 /** A free card. An add-on row takes its live state (`addon`); every other row is a link or a built-in. */
-export function freeCardHtml(p: FreePlugin, addon?: { action: AddonAction; note: CardNote | null }): string {
+export function freeCardHtml(p: FreePlugin, addon?: { action: AddonAction; note: CardNote | null; canPick?: boolean }): string {
   let foot: string;
-  if (addon) foot = `<div class="plg-foot-slot" data-plg-afoot="${esc(p.id)}">${addonFootHtml(p, addon.action, addon.note)}</div>`;
+  if (addon) foot = `<div class="plg-foot-slot" data-plg-afoot="${esc(p.id)}">${addonFootHtml(p, addon.action, addon.note, addon.canPick)}</div>`;
   else {
     const dl = fmtDownloads(p.downloads);
     const action = p.repo
@@ -414,7 +417,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     if (p && slot) slot.innerHTML = premiumFootHtml(p, actionFor(p), storeInstalledVersion(installed.get(id)) !== null, notes.get(id) ?? null);
     const a = addon(id);
     const aslot = root?.querySelector(`[data-plg-afoot="${CSS.escape(id)}"]`);
-    if (a && aslot) aslot.innerHTML = addonFootHtml(a, addonActionFor(id), notes.get(id) ?? null);
+    if (a && aslot) aslot.innerHTML = addonFootHtml(a, addonActionFor(id), notes.get(id) ?? null, !!deps.pickFile);
     const row = installed.get(id);
     const islot = root?.querySelector(`[data-plg-ifoot="${CSS.escape(id)}"]`);
     if (row && islot) islot.innerHTML = installedFootHtml(row, notes.get(id) ?? null);
@@ -436,7 +439,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     if (tier === "free") {
       const cards = sortFree(FREE_PLUGINS)
         .filter((p) => matchesQuery([p.name, p.desc, p.category, p.lucid], query))
-        .map((p) => freeCardHtml(p, p.status === "add-on" ? { action: addonActionFor(p.id), note: notes.get(p.id) ?? null } : undefined));
+        .map((p) => freeCardHtml(p, p.status === "add-on" ? { action: addonActionFor(p.id), note: notes.get(p.id) ?? null, canPick: !!deps.pickFile } : undefined));
       return `<p class="plg-lede">Integrations that are free with LUCID Agent: the ones already built in, optional add-ons that install only when you press Install, and the ones on the way.</p>`
         + (cards.length ? `<div class="plg-grid">${cards.join("")}</div>` : empty);
     }

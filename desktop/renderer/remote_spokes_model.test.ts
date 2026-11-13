@@ -364,11 +364,12 @@ describe("scope gating: the IDE offers only what the hub certificate allows", ()
     expect(taskButtons({ ...t("idle"), interrupted: 5 }, a(["recall"])).resume).toBe(false);
   });
 
-  test("drive: follow-up when the turn is over, cancel while it runs, close while it holds a lane", () => {
+  test("drive: ADR-0576 follow-up on any open task (queued while it works), cancel while it runs, close while it holds a lane", () => {
     const d = a(["recall", "drive"]);
     expect(taskButtons(t("idle"), d)).toEqual({ recall: true, followup: true, cancel: false, close: true, resume: false });
-    expect(taskButtons(t("working"), d)).toEqual({ recall: true, followup: false, cancel: true, close: true, resume: false });
-    expect(taskButtons(t("awaiting_approval"), d)).toEqual({ recall: true, followup: false, cancel: true, close: true, resume: false });
+    expect(taskButtons(t("error"), d).followup).toBe(true);
+    expect(taskButtons(t("working"), d)).toEqual({ recall: true, followup: true, cancel: true, close: true, resume: false });
+    expect(taskButtons(t("awaiting_approval"), d)).toEqual({ recall: true, followup: true, cancel: true, close: true, resume: false });
     expect(taskButtons(t("closed"), d)).toEqual({ recall: true, followup: false, cancel: false, close: false, resume: false });
     expect(taskButtons(t("stopped"), d)).toEqual({ recall: true, followup: false, cancel: false, close: false, resume: false });
   });

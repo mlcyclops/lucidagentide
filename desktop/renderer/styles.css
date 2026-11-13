@@ -2016,6 +2016,9 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .plg-foot-slot{margin-top:auto}
 .plg-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line-soft)}
 .plg-meta{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:11px;color:var(--txt-3);white-space:nowrap}
+/* ADR-0576: Not in this build says why in a sentence, so that line wraps, and offers Install from file. */
+.plg-foot-why{margin-top:8px;padding-top:0;border-top:0}
+.plg-foot-why .plg-meta{flex:1 1 200px;font-family:inherit;white-space:normal}
 .plg-lic{display:inline-flex;align-items:center;gap:4px;border:0;background:none;padding:0;font:inherit;font-size:11.5px;color:var(--cyan);cursor:pointer}
 .plg-lic:hover{text-decoration:underline;text-underline-offset:3px}
 .plg-act{margin-left:auto;display:inline-flex;align-items:center;gap:6px;flex:none;white-space:nowrap;font:inherit;font-size:12.5px;font-weight:650;
