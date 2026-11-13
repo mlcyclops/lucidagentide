@@ -30,7 +30,7 @@
 
 import type { GateDecision } from "../harness/security/gate.ts";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
-import { neutralizeDelimiters } from "../harness/omp/mcp_result_gate.ts";
+import { neutralizeDelimiters } from "../harness/prompt/untrusted.ts";
 import { askDigest, MAX_REMOTE_INPUT } from "./controller/remote_policy.ts";
 import {
   deactivatedLabel, mapHubSnapshot, MODEL_ID_RE, NODE_RE, TASK_RE,

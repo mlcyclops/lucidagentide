@@ -23,6 +23,7 @@
 // skill is a plain project skill (shown untrusted until re-scanned). No contract change — the `skill_drafted`
 // EventName is deferred to a contracts increment.
 
+import { fenceUntrusted } from "../harness/prompt/untrusted.ts";
 import { aiLocSummary, usageLedger } from "../tools/memory_data.ts";
 import { readRunLog } from "./goal_memory.ts";
 import { listSessions, sessionMessages } from "./sessions.ts";
@@ -97,7 +98,7 @@ export function buildWorkDigest(input: WorkDigestInput): string {
   }
   if (!input.sessions.length && !input.aiLoc.length && !input.loops.length) lines.push("No significant recent work was found in this window.");
   const body = lines.join("\n").trim();
-  return `UNTRUSTED_CONTENT_START\n${body}\nUNTRUSTED_CONTENT_END`;
+  return fenceUntrusted(body);
 }
 
 /** Lower-kebab a candidate name; "" if nothing usable remains. PURE. */

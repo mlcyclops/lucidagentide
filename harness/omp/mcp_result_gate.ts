@@ -24,6 +24,7 @@ import type { TrustLabel } from "../contracts.ts";
 import { DEFAULT_POLICY, scanAndDecide, type GateDecision } from "../security/gate.ts";
 import { ScannerClient } from "../security/scanner_client.ts";
 import { UNTRUSTED_START, UNTRUSTED_END } from "../prompt/assembler.ts";
+import { neutralizeDelimiters } from "../prompt/untrusted.ts";
 
 type SessionOpts = NonNullable<Parameters<typeof createAgentSession>[0]>;
 type ExtensionFactory = NonNullable<SessionOpts["extensions"]>[number];
@@ -73,12 +74,6 @@ export function mcpServerName(ev: ToolResultMeta): string {
     return i > 0 ? rest.slice(0, i) : rest;
   }
   return "mcp";
-}
-
-/** Neutralize the UNTRUSTED_CONTENT delimiter literals so a hostile MCP result cannot break out of the
- *  envelope (the Unicode scanner does not catch this ASCII token). Mirrors the agent-firewall's guard. */
-export function neutralizeDelimiters(s: string): string {
-  return s.split(UNTRUSTED_END).join("[lucid-neutralized-delimiter]").split(UNTRUSTED_START).join("[lucid-neutralized-delimiter]");
 }
 
 /** The replacement text when an MCP result is quarantined — the poison is withheld, only a reason shown. */

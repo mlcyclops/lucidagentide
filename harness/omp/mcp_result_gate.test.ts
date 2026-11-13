@@ -8,7 +8,8 @@
 // neutralized, and the real-scanner decision→result mapping incl. fail-closed.
 
 import { test, expect, beforeAll, afterAll } from "bun:test";
-import { isMcpToolResult, mcpServerName, neutralizeDelimiters, blockNotice, wrapUntrusted, gateToolResult } from "./mcp_result_gate.ts";
+import { isMcpToolResult, mcpServerName, blockNotice, wrapUntrusted, gateToolResult } from "./mcp_result_gate.ts";
+import { neutralizeDelimiters } from "../prompt/untrusted.ts";
 import { ScannerClient } from "../security/scanner_client.ts";
 import { scanAndDecide, type GateDecision } from "../security/gate.ts";
 

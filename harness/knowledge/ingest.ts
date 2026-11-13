@@ -18,7 +18,7 @@
 
 import type { ScannerClient } from "../security/scanner_client.ts";
 import { DEFAULT_POLICY, scanAndDecide, type GatePolicy } from "../security/gate.ts";
-import { UNTRUSTED_START, UNTRUSTED_END } from "../prompt/assembler.ts";
+import { fenceUntrusted } from "../prompt/untrusted.ts";
 import { chunkText, type ChunkOptions } from "./chunk.ts";
 import type { Embedder } from "./embedder.ts";
 import type { KnowledgeStore, RetrievedChunk } from "./store.ts";
@@ -109,5 +109,5 @@ export function wrapRetrieved(chunks: RetrievedChunk[]): string {
   const body = chunks
     .map((c, i) => `[${i + 1}] (${c.source_path}#${c.ordinal})\n${c.text}`)
     .join("\n\n");
-  return `${UNTRUSTED_START}\n${body}\n${UNTRUSTED_END}`;
+  return fenceUntrusted(body);
 }
