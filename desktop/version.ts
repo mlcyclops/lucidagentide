@@ -773,4 +773,8 @@
 //            envelope, so an embedded delimiter can no longer close it early (ADR-0568). The Herd package is offered only by
 //            a build that signs it; otherwise its card says Not in this build. PRERELEASE: never marked Latest;
 //            the Homebrew cask and stable installs stay on 2.5.3.
-export const APP_VERSION = "2.5.4-beta.2";
+// v2.5.4-beta.3 = 2.5.4-beta.2 plus the macOS x64 app with x64 binaries: the one mac job stages lucid,
+//            lucid-engine, lucid-holder and the natives per arch, and a Mach-O gate fails a build whose app carries
+//            another CPU's binary (#614, #615, ADR-0569). PRERELEASE: never marked Latest; the Homebrew cask and
+//            stable installs stay on 2.5.3.
+export const APP_VERSION = "2.5.4-beta.3";

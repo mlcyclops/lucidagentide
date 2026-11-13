@@ -32,6 +32,7 @@
 //   bun run build/copy-natives.ts                  # host platform/arch, link on POSIX
 //   bun run build/copy-natives.ts --copy           # force real copies
 //   bun run build/copy-natives.ts --platform=linux --arch=arm64   # cross-target
+//   bun run build/copy-natives.ts --platform=darwin --arch=x64 --outdir=bin-darwin-x64   # per-arch mac staging
 
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -39,7 +40,6 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // desktop/build
 const REPO = join(HERE, "..", ".."); // repo root — where `bun install` hoists node_modules
-const BIN = join(REPO, "bin"); // compile-lucid's --outfile dir
 
 const argv = process.argv.slice(2);
 const flag = (name: string): string | null => {
@@ -47,6 +47,9 @@ const flag = (name: string): string | null => {
   return hit ? hit.slice(name.length + 3) : null;
 };
 
+// #614 (ADR-0569): build/stage-mac-arch.ts stages each mac arch into its own `bin-darwin-<arch>/` (relative to
+// the repo root). It sits beside bin/, so the relative link into node_modules has the same shape.
+const BIN = join(REPO, flag("outdir") ?? "bin");
 const PLAT = (flag("platform") ?? process.platform) as NodeJS.Platform;
 const ARCH = flag("arch") ?? process.arch;
 // Windows: no reliable symlinks through the installers. Otherwise honor --copy.
@@ -118,7 +121,7 @@ for (const name of addons) {
 const mb = (n: number) => `${(n / 1024 / 1024).toFixed(0)} MB`;
 const bytes = addons.reduce((sum, n) => sum + statSync(join(pkgDir, n)).size, 0);
 console.log(
-  `  natives OK (${triple}) - ${addons.length} addon${addons.length === 1 ? "" : "s"} ${COPY ? `copied (+${mb(bytes)})` : `linked (0 MB added; ${mb(bytes)} referenced)`} into bin/`,
+  `  natives OK (${triple}) - ${addons.length} addon${addons.length === 1 ? "" : "s"} ${COPY ? `copied (+${mb(bytes)})` : `linked (0 MB added; ${mb(bytes)} referenced)`} into ${relative(REPO, BIN)}/`,
 );
 for (const name of addons) {
   const dst = join(BIN, name);

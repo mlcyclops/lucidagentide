@@ -35,9 +35,9 @@ cask "lucidagentide" do
   # The .pkg release assets still exist for MDM fleets (Jamf/Munki/Intune), see
   # docs/MACOS-ENTERPRISE-DEPLOYMENT.md; the cask just no longer uses them.
   app "LucidAgentIDE.app"
-  # The compiled fail-closed launcher ships INSIDE the app bundle: desktop/package.json
-  # compile-lucid writes ../bin/lucid and the extraResources "repo" copy packs bin/**/* into
-  # Contents/Resources/repo. Put it on PATH for Homebrew installs, plus a lucid-hub command
+  # The compiled fail-closed launcher ships INSIDE the app bundle: desktop/build/stage-mac-arch.ts
+  # writes ../bin-darwin-<arch>/lucid for each arch and the mac extraResources pack that arch's set
+  # into Contents/Resources/repo/bin (#614). Put it on PATH for Homebrew installs, plus a lucid-hub command
   # wrapper that execs `lucid hub "$@"`, so the terminal hub runs from any terminal
   # (including inside herdr) without typing the bundle path.
   binary "#{appdir}/LucidAgentIDE.app/Contents/Resources/repo/bin/lucid"

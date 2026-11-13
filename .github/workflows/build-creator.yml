@@ -118,6 +118,12 @@ jobs:
         if: runner.os == 'macOS'
         run: cmake --version || brew install cmake
 
+      # #614 (ADR-0569): dist:mac:creator's stage-mac step builds lucid-holder once per mac arch on this
+      # arm64 runner (`cargo build --target <arch>-apple-darwin`), exactly as build-desktop.yml does.
+      - name: Rust targets for both mac arches (lucid-holder per-arch build)
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
       # An EMPTY CSC_LINK is not the same as unset: electron-builder treats '' as a cert path and dies.
       # Export the signing vars ONLY when a real cert secret exists.
       # Windows prefers Azure Artifact Signing (P-RELEASE.6, ADR-0447), exactly as build-desktop.yml does.
@@ -200,6 +206,14 @@ jobs:
       # cold with no `bun add -g` / `uv venv` / network. Fails before any artifact is uploaded.
       - name: Air-gap smoke test (bundled runtimes resolve offline)
         run: bun run build/airgap-smoke.ts
+        working-directory: desktop
+        env:
+          LUCID_RELEASE_DIR: release-creator
+
+      # Mac arch gate (#614, ADR-0569): every Mach-O in BOTH packed Creator mac apps runs on its app's CPU.
+      - name: Mac arch gate (every packed Mach-O runs on its app's CPU)
+        if: runner.os == 'macOS'
+        run: bun run build/mac-arch-gate.ts
         working-directory: desktop
         env:
           LUCID_RELEASE_DIR: release-creator

@@ -107,6 +107,10 @@ tools/seed_personal_facts.ts
 # no bin/ dir fails ENOENT under current Bun (it no longer creates the outfile parent).
 /bin/*
 !/bin/.gitkeep
+# #614 (ADR-0569): the per-arch mac binaries and plain-bun aliases desktop/build/stage-mac-arch.ts and
+# fetch-runtimes.ts stage for electron-builder's `mac.extraResources` (one set per packaged arch).
+/bin-darwin-*/
+/desktop/runtimes-darwin-*/
 # P-HOLDER.1: cargo's build output for the one Rust crate (desktop/build/build-holder.ts copies the binary to bin/).
 /native/lucid-holder/target/
 # ADR-0540: the Rust relay's build output.

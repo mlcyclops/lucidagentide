@@ -194,6 +194,13 @@ jobs:
         if: runner.os == 'macOS'
         run: cmake --version || brew install cmake
 
+      # #614 (ADR-0569): this one job packages BOTH mac apps, and it runs on an arm64 runner. dist:mac's
+      # stage-mac step (desktop/build/stage-mac-arch.ts) builds lucid-holder once per arch with
+      # `cargo build --target <arch>-apple-darwin`, so both Rust targets must be installed.
+      - name: Rust targets for both mac arches (lucid-holder per-arch build)
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
       # electron-builder's pkg target resolves the signing cert even for an unsigned (identity:null)
       # build. An EMPTY CSC_LINK is NOT the same as unset: '' != null in JS, so electron-builder treats
       # '' as a cert path, resolves it to the project dir, and dies "<projectDir> not a file" (only the
@@ -290,6 +297,15 @@ jobs:
       # fails the build (before any artifact is uploaded) if a runtime is missing or lost its exec bit.
       - name: Air-gap smoke test (bundled runtimes resolve offline)
         run: bun run build/airgap-smoke.ts
+        working-directory: desktop
+
+      # Mac arch gate (#614, ADR-0569): v2.5.4-beta.1's x64 zip shipped an arm64 lucid-engine, because the
+      # air-gap smoke above only opens the runner's own (arm64) app and nothing read the CPU of what was packed.
+      # This reads the Mach-O header of every file in BOTH packed apps and fails the build, before any upload,
+      # when one would not run on its app's CPU (repo/bin strictly; elsewhere only arch-keyed copies may differ).
+      - name: Mac arch gate (every packed Mach-O runs on its app's CPU)
+        if: runner.os == 'macOS'
+        run: bun run build/mac-arch-gate.ts
         working-directory: desktop
 
       # Program Files boot gate (ADR-0261): the gap that shipped the v1.12.0 brick - nothing ever

@@ -1,7 +1,7 @@
 {
   "name": "lucidagentide-desktop",
   "private": true,
-  "version": "2.5.4-beta.2",
+  "version": "2.5.4-beta.3",
   "trustedDependencies": [
     "electron",
     "@resvg/resvg-js"
@@ -25,6 +25,7 @@
     "compile-engine": "bun build --compile dev.ts --outfile ../bin/lucid-engine --external '*.node' --external 'omp-legacy-pi-modules'",
     "build-holder": "bun run build/build-holder.ts",
     "compile-sep": "bun run build/compile-sep.ts",
+    "stage-mac": "bun run build/stage-mac-arch.ts",
     "compile-appcontainer": "bun build --compile ../tools/appcontainer/lucid_appcontainer.ts --target=bun-windows-x64 --outfile ../bin/lucid-appcontainer.exe",
     "build-renderer": "bun build renderer/app.ts --target=browser --outfile renderer/app.bundle.js --sourcemap=inline && bun build renderer/design_worker.ts --target=browser --outfile renderer/design_worker.bundle.js --sourcemap=inline",
     "natives": "bun run build/copy-natives.ts",
@@ -34,12 +35,12 @@
     "web:creator": "bun run creator_dev.ts",
     "web": "bun run dev.ts",
     "typecheck": "tsc --noEmit",
-    "dist:mac": "bun run runtimes:mac && bun run whisper && bun run whistle && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && bun run build-holder && bun run compile-sep && bun run addons && electron-builder --mac pkg --arm64 --publish never && electron-builder --mac pkg --x64 --publish never && electron-builder --mac zip --arm64 --x64 --publish never",
+    "dist:mac": "bun run runtimes:mac && bun run whisper && bun run whistle && bun run icons && bun run build && bun run build-renderer && bun run stage-mac && bun run compile-sep && bun run addons && electron-builder --mac pkg --arm64 --publish never && electron-builder --mac pkg --x64 --publish never && electron-builder --mac zip --arm64 --x64 --publish never",
     "dist:win": "bun run runtimes:win && bun run whisper && bun run whistle && bun run mxc && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && bun run build-holder && bun run compile-appcontainer && bun run addons && electron-builder --win --config build/electron-builder.win.cjs --publish never",
     "dist:linux": "bun run runtimes:linux && bun run whisper && bun run whistle && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && bun run build-holder && bun run addons && electron-builder --linux --publish never",
-    "dist": "bun run runtimes && bun run whisper && bun run whistle && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && bun run build-holder && bun run compile-sep && bun run addons && electron-builder --publish never",
+    "dist": "bun run runtimes && bun run whisper && bun run whistle && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && bun run build-holder && bun run compile-sep && bun run stage-mac && bun run addons && electron-builder --publish never",
     "dist:win:creator": "bun run runtimes:win && bun run whisper && bun run whistle && bun run icons && bun run build:creator && bun run compile-lucid && bun run build-renderer && bun run compile-engine && bun run build-holder && bun run compile-appcontainer && bun run addons && electron-builder --win --config build/electron-builder.creator.cjs --publish never",
-    "dist:mac:creator": "bun run runtimes:mac && bun run whisper && bun run whistle && bun run icons && bun run build:creator && bun run compile-lucid && bun run build-renderer && bun run compile-engine && bun run build-holder && bun run compile-sep && bun run addons && electron-builder --mac zip --arm64 --x64 --config build/electron-builder.creator.cjs --publish never",
+    "dist:mac:creator": "bun run runtimes:mac && bun run whisper && bun run whistle && bun run icons && bun run build:creator && bun run build-renderer && bun run stage-mac && bun run compile-sep && bun run addons && electron-builder --mac zip --arm64 --x64 --config build/electron-builder.creator.cjs --publish never",
     "dist:linux:creator": "bun run runtimes:linux && bun run whisper && bun run whistle && bun run icons && bun run build:creator && bun run compile-lucid && bun run build-renderer && bun run compile-engine && bun run build-holder && bun run addons && electron-builder --linux --config build/electron-builder.creator.cjs --publish never",
     "dist:linux:arm": "bun run runtimes:linux && bun run whisper && bun run whistle && bun run icons && bun run build && bun run compile-lucid && bun run build-renderer && bun run compile-engine && bun run build-holder && bun run addons && electron-builder --linux AppImage --arm64 --publish never"
   },
@@ -134,7 +135,11 @@
           "!node_modules/onnxruntime-node/**",
           "!node_modules/onnxruntime-web/**",
           "!node_modules/date-fns/**",
-          "!node_modules/lucide-react/**"
+          "!node_modules/lucide-react/**",
+          "!node_modules/*-darwin-arm64/**",
+          "!node_modules/@*/*-darwin-arm64/**",
+          "!node_modules/*-darwin-x64/**",
+          "!node_modules/@*/*-darwin-x64/**"
         ]
       }
     ],
@@ -146,6 +151,24 @@
       "extendInfo": {
         "CFBundleDisplayName": "Lucid Agent"
       },
+      "extraResources": [
+        {
+          "from": "../bin-darwin-${arch}",
+          "to": "repo/bin"
+        },
+        {
+          "from": "../node_modules",
+          "to": "repo/node_modules",
+          "filter": [
+            "*-darwin-${arch}/**",
+            "@*/*-darwin-${arch}/**"
+          ]
+        },
+        {
+          "from": "runtimes-darwin-${arch}",
+          "to": "runtimes"
+        }
+      ],
       "target": [
         {
           "target": "zip",
