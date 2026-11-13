@@ -7334,6 +7334,20 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .rs-entry-h>span:last-child{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rs-entry-h .pill{flex:none}
 .rs-ask-h{font-size:12px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* P-RS-SESSION.1 (ADR-0572): a remote task's session, in the per-spoke panel and in its Fleet lane card. It reuses
+   the local lane output's look (.fleet-out, .fleet-turn-user, .fleet-md, .fleet-errline); a turn is text with its
+   line breaks kept, never markdown (the untrusted text rule). */
+.rs-sess{display:flex;flex-direction:column;gap:4px;margin:0 4px 6px;min-width:0}
+.rs-sess-status{display:flex;align-items:center;gap:7px;min-width:0;font-size:11px;color:var(--txt-3)}
+.rs-sess-status span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rs-sess-out{max-height:360px;border:1px solid var(--line-soft);border-radius:9px;background:var(--bg-2)}
+.rs-lane-session .rs-sess-out{max-height:200px}
+.rs-sess-turn{white-space:pre-wrap;overflow-wrap:anywhere}
+.rs-sess-prompt{white-space:pre-wrap;overflow:visible;text-overflow:clip;max-height:6.2em;overflow-y:auto}
+.rs-sess-evt{font-size:10.5px;color:var(--txt-4)}
+.rs-sess-err span{white-space:normal}
+.rs-task{cursor:pointer}
+.rs-task.shown{background:var(--bg-2);box-shadow:inset 3px 0 0 var(--accent)}
 .rs-ask .orbit-spawn-row{gap:6px;align-items:center;flex-wrap:wrap}
 /* The presence password field takes its own line: beside "Sign with the hub's password" and Deny it was squeezed
    to one character wide. */

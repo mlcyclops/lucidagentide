@@ -139,6 +139,11 @@ const clip = (v: unknown, max: number): string | null => (typeof v === "string" 
 const count = (v: unknown): number | null => (typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : null);
 const record = (v: unknown): Record<string, unknown> | null => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
 
+/** A spoke's own `status` task list, validated as the hub snapshot's rows are (P-RS-SESSION.1). */
+export function mapTasks(raw: unknown): RemoteTaskView[] {
+  return Array.isArray(raw) ? raw.map(mapTask).filter((t): t is RemoteTaskView => t !== null) : [];
+}
+
 function mapTask(raw: unknown): RemoteTaskView | null {
   const t = record(raw);
   if (!t || typeof t.id !== "string" || !TASK_RE.test(t.id)) return null;
@@ -617,6 +622,59 @@ export interface RecallEntryView {
 export type RecallView =
   | { ok: true; node: string; label: string; task?: string; entries: RecallEntryView[]; quarantined: number; omitted: number; context: string }
   | { ok: false; error: string };
+
+/** P-RS-SESSION.1 (ADR-0572): a spoke's own `status` answer, read directly (not the hub's 15 s summary). */
+export type RemoteStatusView = { ok: true; journalHead: number; tasks: RemoteTaskView[] } | { ok: false; error: string };
+
+/** P-RS-SESSION.1: one row of a remote task's session screen, built from its scanned journal. `prompt`: a prompt the
+ *  hub sent (the journal keeps only its hash and length; `text` is the prompt this window sent with that hash, or
+ *  null). `turn`: the model's words. `event`: a state change, a parked or decided action, start, close; `error`: a
+ *  refusal or a cut-off turn; `withheld`: an entry the scanner quarantined. */
+export type SessionRow =
+  | { seq: number; ts: number; kind: "prompt"; text: string | null; chars: number }
+  | { seq: number; ts: number; kind: "turn"; text: string; trust: "untrusted" | "suspicious" }
+  | { seq: number; ts: number; kind: "event" | "error" | "withheld"; text: string };
+
+const TASK_STATE_WORDS: Record<RemoteTaskState, string> = {
+  working: "Working", awaiting_approval: "Waiting for your approval", idle: "Idle: waiting for a follow-up", error: "Stopped with an error", stopped: "Lane stopped", closed: "Closed",
+};
+
+/** The session rows for `entries` (seq order), skipping what a person does not read in a session (audit, CRL,
+ *  custody and model records). `prompts`: sha256 hex of a prompt this window sent, to its text. A non-turn entry's
+ *  text is its data as JSON (the engine scanned it so); one that does not parse shows its kind only. */
+export function sessionRows(entries: readonly RecallEntryView[], prompts: ReadonlyMap<string, string>): SessionRow[] {
+  const out: SessionRow[] = [];
+  for (const e of [...entries].sort((a, b) => a.seq - b.seq)) {
+    const base = { seq: e.seq, ts: e.ts };
+    if (e.trust === "quarantined") { out.push({ ...base, kind: "withheld", text: `Withheld by the scanner: ${e.reason ?? "flagged"}` }); continue; }
+    if (e.kind === "task.turn") { out.push({ ...base, kind: "turn", text: e.text, trust: e.trust }); continue; }
+    let d: Record<string, unknown> | null = null;
+    try { d = record(JSON.parse(e.text)); } catch { d = null; }
+    const s = (k: string, max = 300): string => clip(d?.[k], max) ?? "";
+    switch (e.kind) {
+      case "task.prompted": {
+        const sha = s("textSha256", 64);
+        out.push({ ...base, kind: "prompt", text: prompts.get(sha) ?? null, chars: count(d?.chars) ?? 0 });
+        break;
+      }
+      case "task.created": out.push({ ...base, kind: "event", text: `Task started${s("originLabel") ? ` by ${s("originLabel")}` : ""}` }); break;
+      case "task.state": {
+        const state = TASK_STATES.find((x) => x === d?.state);
+        if (state) out.push({ ...base, kind: state === "error" ? "error" : "event", text: `${TASK_STATE_WORDS[state]}${s("reason") ? `: ${s("reason")}` : ""}` });
+        break;
+      }
+      case "approval.requested": out.push({ ...base, kind: "event", text: `Parked for approval: ${s("tier", 8)} ${s("kind", 40)}: ${s("title")}` }); break;
+      case "approval.decided": out.push({ ...base, kind: "event", text: `${d?.allow === true ? "Approved" : "Denied"}${s("byLabel") ? ` by ${s("byLabel")}` : ""}` }); break;
+      case "task.refused": out.push({ ...base, kind: "error", text: `The spoke refused the prompt: ${s("reason") || "no reason given"}` }); break;
+      case "task.interrupted": out.push({ ...base, kind: "error", text: "A spoke restart cut this turn off; Resume asks the task to continue." }); break;
+      case "task.cancelled": out.push({ ...base, kind: "event", text: `Canceled${s("byLabel") ? ` by ${s("byLabel")}` : ""}` }); break;
+      case "task.closed": out.push({ ...base, kind: "event", text: `Closed${s("byLabel") ? ` by ${s("byLabel")}` : ""}` }); break;
+      case "task.handoff": out.push({ ...base, kind: "event", text: `Handoff note committed on ${s("branch", 128)}` }); break;
+      default: break;
+    }
+  }
+  return out;
+}
 
 /** A parked action on a remote spoke, scanned like recalled text. `quarantined`: the scanner flagged the action's
  *  text, so its input is withheld and only Deny is offered. */

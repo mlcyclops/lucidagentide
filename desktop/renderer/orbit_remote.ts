@@ -28,6 +28,9 @@
 // sendDecide. Every count of the remote hub (badges, the Fleet pill, the hub summary, the Remote spokes view) is
 // remoteCounts, which is remote_spokes_model.ts remoteTotals.
 //
+// P-RS-SESSION.1 (ADR-0572): the per-spoke panel opens on a Session (the busiest task's, or the task row clicked) and
+// each Fleet lane card shows its task's session too, kept live by remote_session.ts like a local lane's output.
+//
 // Untrusted text rule: everything a spoke wrote reaches the DOM through textContent or esc(), never as markup.
 // Recalled entries arrive already scanned (a quarantined entry has no text at all); the only way recalled text
 // leaves this panel is "Copy for a prompt", which copies the engine's delimited UNTRUSTED_CONTENT envelope.
@@ -42,6 +45,7 @@ import { icon } from "./icons.ts";
 import type { LucidBridge } from "./bridge.ts";
 import type { OrbitSlot } from "./orbit_layout.ts";
 import type { OrbitSpoke } from "./orbit_canvas.ts";
+import { initRemoteSession, mountSession, rememberPrompt } from "./remote_session.ts";
 import {
   approvalButtons, armClick, clockLabel, deployChoices, hostLabel, lanePolicyLabel, latencyLabel, mibLabel, modelCount, onOrbit, REMOTE_STATE_LABEL, REMOTE_TONE,
   remoteGlance, remoteLanes, remoteTotals, RESUME_TEXT, spokeActions, spokeAlerts, stateLabel, taskButtons, taskModelChoices, VIA_LABEL,
@@ -53,6 +57,7 @@ export interface OrbitRemoteDeps {
   remoteSpokes: LucidBridge["remoteSpokes"];
   remoteSpokeRecall: LucidBridge["remoteSpokeRecall"];
   remoteSpokeApprovals: LucidBridge["remoteSpokeApprovals"];
+  remoteSpokeStatus: LucidBridge["remoteSpokeStatus"];
   remoteSpokeDecide: LucidBridge["remoteSpokeDecide"];
   remoteSpokeAct: LucidBridge["remoteSpokeAct"];
   /** Start the remote-spokes plugin (the sanctioned pluginsStart path) so its spokes appear. */
@@ -71,7 +76,7 @@ const remoteNodes = new Map<string, { card: HTMLElement }>();
 /** P-RS-VIEW.1: told after every hub read that got an answer (the rail button and the Remote spokes view). */
 const listeners = new Set<() => void>();
 
-export function initOrbitRemote(d: OrbitRemoteDeps): void { deps = d; }
+export function initOrbitRemote(d: OrbitRemoteDeps): void { deps = d; initRemoteSession(d); }
 
 /** P-RS-VIEW.1: call `fn` after each answered hub read, whoever asked for it. */
 export function onRemoteChange(fn: () => void): void { listeners.add(fn); }
@@ -315,6 +320,8 @@ interface PanelState {
   /** The awaiting-approval task ids whose parked actions were last read on their own ("" = none): a spoke with a
    *  parked action reads them once, and again when a new one parks (as a Fleet lane card's asksRead). */
   asksRead: string;
+  /** P-RS-SESSION.1: the task whose session the panel shows; null picks the busiest, else the newest. */
+  sessionTask: string | null;
 }
 let panel: PanelState | null = null;
 
@@ -387,7 +394,7 @@ function paintModels(host: HTMLElement, m: RemoteModelsView): void {
 
 /** Paint the panel for `node` once; polls only touch its head and task list (typed text survives a poll). */
 export function paintRemotePanel(box: HTMLElement, node: string, closeHtml: string): void {
-  panel = { node, followTask: null, armed: {}, approvals: [], recall: null, sig: "", modelsSig: "", asksRead: "" };
+  panel = { node, followTask: null, armed: {}, approvals: [], recall: null, sig: "", modelsSig: "", asksRead: "", sessionTask: null };
   // ADR-0512: a deactivated spoke's panel offers no new task, parked actions or recall.
   const s0 = spokeOf(node);
   const a = snap?.available ? (s0 ? spokeActions(s0, snap.actions) : snap.actions) : null;
@@ -396,6 +403,8 @@ export function paintRemotePanel(box: HTMLElement, node: string, closeHtml: stri
     <p class="rs-note" data-rs-host hidden></p>
     <p class="rs-note" data-rs-lanes hidden></p>
     <p class="rs-note" data-rs-scopes></p>
+    ${a?.recall ? `<div class="rs-sec-h"><span>Session</span><small class="rs-note" data-rs-sess-name></small></div>
+    <div data-rs-session></div>` : ""}
     <div class="rs-sec-h"><span>Tasks</span></div>
     <div data-rs-tasks></div>
     <div class="rs-form" data-rs-follow hidden>
@@ -452,7 +461,18 @@ export function refreshRemotePanel(box: HTMLElement): void {
   const parkedKey = s && a?.recall ? s.tasks.filter((t) => t.state === "awaiting_approval").map((t) => t.id).sort().join(",") : "";
   if (!parkedKey) panel.asksRead = "";
   else if (parkedKey !== panel.asksRead && $("[data-rs-approvals-out]", box)) { panel.asksRead = parkedKey; void loadApprovals(box); }
-  const sig = JSON.stringify([s, a]);
+  // P-RS-SESSION.1 (ADR-0572): the chosen task's session, kept live by remote_session.ts. With none chosen: a task
+  // that works or waits on you, else the newest open one, else the newest.
+  const sessHost = $("[data-rs-session]", box) as HTMLElement | null;
+  if (s && a?.recall && sessHost) {
+    const rank = (t: RemoteTaskView): number => (t.state === "working" || t.state === "awaiting_approval" ? 2 : t.state === "closed" ? 0 : 1);
+    const pick = s.tasks.find((t) => t.id === panel!.sessionTask) ?? [...s.tasks].sort((x, y) => rank(y) - rank(x) || y.updatedAt - x.updatedAt)[0];
+    if (pick) {
+      mountSession(sessHost, s.node, pick.id, pick);
+      setText(box, "[data-rs-sess-name]", `${pick.name} \u00b7 click a task below to show another`);
+    } else if (!sessHost.dataset.rsSession) sessHost.innerHTML = `<div class="orbit-ghosts-empty">No task on this spoke yet: start one below.</div>`;
+  }
+  const sig = JSON.stringify([s, a, panel.sessionTask]);
   if (sig === panel.sig) return;
   panel.sig = sig;
   if (!s || !a) {
@@ -498,7 +518,8 @@ export function refreshRemotePanel(box: HTMLElement): void {
   if (s.tasks.length === 0) { host.innerHTML = `<div class="orbit-ghosts-empty">No tasks on this spoke yet.</div>`; return; }
   host.innerHTML = s.tasks.map((t, i) => {
     const b = taskButtons(t, a);
-    return `<div class="orbit-ghost rs-task${t.interrupted ? " interrupted" : ""}" data-rs-task-i="${i}">
+    const shown = $("[data-rs-session]", box)?.getAttribute("data-rs-session") === `${s.node}:${t.id}`;
+    return `<div class="orbit-ghost rs-task${t.interrupted ? " interrupted" : ""}${shown ? " shown" : ""}" data-rs-task-i="${i}" data-tip="Show this task's session above">
       <i class="orbit-ghost-dot rs-dot-${esc(t.state)}"></i>
       <span class="orbit-ghost-id"><b>${esc(t.name)}</b><small>${esc(taskMeta(t, now))}</small></span>
       ${b.resume ? RESUME_BTN : ""}
@@ -559,7 +580,14 @@ export function onRemotePanelClick(t: HTMLElement, box: HTMLElement): boolean {
   const card = t.closest<HTMLElement>("[data-rs-ask-i]");
   const item = card ? panel.approvals[Number(card.dataset.rsAskI)] : undefined;
   if (item && card && askClick(t, card, item, panel.armed, box, (allow, password) => void decide(box, item, allow, password))) return true;
-  return t.closest("[data-rs-new], [data-rs-follow], [data-rs-password]") !== null;
+  // P-RS-SESSION.1: a click on a task row (not one of its buttons) shows that task's session.
+  if (task && !t.closest("button")) {
+    panel.sessionTask = task.id;
+    panel.sig = "";
+    refreshRemotePanel(box);
+    return true;
+  }
+  return t.closest("[data-rs-new], [data-rs-follow], [data-rs-password], [data-rs-session]") !== null;
 }
 
 /** A task's Cancel, Resume and Close, for the per-spoke panel and the Fleet grid's remote lanes alike. ADR-0509:
@@ -622,6 +650,8 @@ type RemoteOp = "submit" | "followup" | "cancel" | "close";
  *  Returns null when the spoke accepted it, else the refusal in words. */
 async function sendAct(node: string, op: RemoteOp, input: { task?: string; text?: string; name?: string; model?: string }): Promise<string | null> {
   if (!deps) return "The fleet is not ready.";
+  // P-RS-SESSION.1: the spoke journals a prompt as its hash only; remembered here, its session shows the text.
+  if ((op === "submit" || op === "followup") && input.text) await rememberPrompt(input.text).catch(() => undefined);
   const r = await deps.remoteSpokeAct(op, { node, ...input }).catch(() => null);
   if (!r) return "The engine did not answer.";
   if (!r.ok) return r.error;
@@ -771,6 +801,7 @@ function buildLaneCard(lane: RemoteLane): LaneCard {
     </div>
     <div class="fleet-card-main rs-lane-main">
       <div class="rs-lane-task"><b data-rs-lane-task></b><small data-rs-lane-meta></small></div>
+      <div class="rs-lane-session" data-rs-lane-session hidden></div>
       <div class="rs-lane-acts" data-rs-lane-acts></div>
       <div class="rs-lane-follow" data-rs-lane-follow hidden>
         <textarea data-rs-follow-text rows="2" maxlength="32000" placeholder="Follow-up: what the task should do next. Enter sends, Shift+Enter starts a new line."></textarea>
@@ -815,6 +846,12 @@ function paintLaneCard(entry: LaneCard, lane: RemoteLane, a: HubActions, now: nu
     if (asks) asks.hidden = !parked;
   }
   if (parked && !entry.asksRead) { entry.asksRead = true; void loadLaneAsks(entry); }
+  // P-RS-SESSION.1 (ADR-0572): the task's session in the card, live like a local lane's output.
+  const sess = $("[data-rs-lane-session]", card) as HTMLElement | null;
+  if (sess) {
+    sess.hidden = !(t && a.recall);
+    if (t && a.recall) mountSession(sess, s.node, t.id, t);
+  }
 }
 
 async function loadLaneAsks(entry: LaneCard): Promise<void> {

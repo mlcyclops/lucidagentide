@@ -17821,6 +17821,7 @@ function wire(): void {
     remoteSpokes: bridge.remoteSpokes,
     remoteSpokeRecall: bridge.remoteSpokeRecall,
     remoteSpokeApprovals: bridge.remoteSpokeApprovals,
+    remoteSpokeStatus: bridge.remoteSpokeStatus,
     remoteSpokeDecide: bridge.remoteSpokeDecide,
     remoteSpokeAct: bridge.remoteSpokeAct,
     startRemoteSpokes: async () => {

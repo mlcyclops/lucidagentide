@@ -27149,3 +27149,19 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 4. The per-spoke panel reads its parked actions once on its own when the spoke has a task awaiting approval and the viewer has recall, and again when the set of awaiting tasks changes; it resets when nothing is parked. Check stays a manual refresh; approvals are not polled per tick.
 
 **Consequences.** While the hub is unlocked, anyone at the IDE can approve without the password; the window and its lock live in the plugin (ADR-A105). Approvals are read once per new park, not per poll.
+
+## ADR-0572 -- P-RS-SESSION.1: a remote task shows a live session screen, like a local lane's, with no Refresh (2026-11-13)
+
+**Status:** Accepted. Amends ADR-0506 and ADR-0551. Pairs with Remote Spokes plugin ADR-A106. Proof: `bun test desktop/remote_spokes.test.ts desktop/renderer/remote_spokes_model.test.ts`.
+
+**Context.** The owner: "when i click on a remote spoke, i don't get a omp screen to see the last entries or to see the status. I also have to click refresh status, why are we not using the same experience as a regular spoke?" A local lane's card and the composer show its transcript live; a remote spoke's panel showed task rows, a "Whole journal" recall button and parked actions behind Check, and its status came from the hub's 15 s summary.
+
+**Decision.**
+1. `desktop/renderer/remote_session.ts` keeps a remote task's session on screen: the prompts, the model's turns, state changes, parked and decided actions, refusals and cut-off turns, read from the spoke's scanned journal (`sessionRows` in remote_spokes_model.ts leaves out audit, CRL, custody and model records). It uses the local lane output's look (`.fleet-out`, `.fleet-turn-user`, `.fleet-md`, `.fleet-errline`).
+2. Live without a button: while a session is on screen the spoke's own `status` is read every 3 s while the task works or waits for approval (20 s otherwise), one read per spoke however many of its sessions are open; the journal is read again only when the task's state, turn count or last change moved, and only after the last seq shown (recall `since`). A session whose element left the document stops.
+3. The per-spoke panel opens on a Session section: the task that works or waits on you, else the newest open one, else the newest; clicking a task row shows that task's session. Each Fleet grid remote lane card shows its task's session too.
+4. Engine: `GET /api/remote-spokes/status?node=` (recall scope; tasks validated by `mapTasks`, as the hub snapshot's rows) and `since` on `POST /api/remote-spokes/recall` (a whole non-negative number, else the body is refused).
+5. Prompts: the journal keeps a prompt as its hash and length only. A prompt sent from this window is remembered in memory under that hash, so its text shows; any other shows its size.
+6. Untrusted text rule kept: a turn is text with its line breaks (pre-wrap), not markdown; a quarantined entry shows only that it was withheld.
+
+**Consequences.** No Refresh or Check is needed to follow a remote task. A watched working task costs a status read every 3 s (each journaled by the spoke as an audit entry under no task) and one recall per change (journaled under the task, left out of the session). Tool calls are not in the journal, so a remote session shows the model's words and the state, not tool chips. The Whole journal recall stays for the full record.

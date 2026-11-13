@@ -43,7 +43,7 @@ const ask = (over: Record<string, unknown> = {}) => ({ task: TASK, name: "triage
 
 interface Call { method: string; path: string; token: string | undefined; body: unknown }
 
-function rig(o: { scopes?: string[]; endpoint?: boolean; installed?: boolean; hub?: unknown; entries?: unknown[]; approvals?: unknown[]; scanner?: ScannerClient; status?: Record<string, number> } = {}) {
+function rig(o: { scopes?: string[]; endpoint?: boolean; installed?: boolean; hub?: unknown; entries?: unknown[]; approvals?: unknown[]; scanner?: ScannerClient; status?: Record<string, number>; spokeStatus?: unknown } = {}) {
   const calls: Call[] = [];
   const blocks: { tool: string; reason: string }[] = [];
   const hubBody = o.hub ?? { hub: { node: HUB, label: "workstation", scopes: o.scopes ?? ["recall", "drive", "approve"] }, spokes: [{ node: NODE, label: "azure-eastus", reachable: true, checkedAt: 1, tasks: [{ id: TASK, name: "triage", state: "awaiting_approval", turns: 1, updatedAt: 1 }] }] };
@@ -57,6 +57,7 @@ function rig(o: { scopes?: string[]; endpoint?: boolean; installed?: boolean; hu
     if (path === "/host/spokes") return Response.json(hubBody);
     if (op === "recall") return Response.json({ entries: o.entries ?? [], head: (o.entries ?? []).length });
     if (op === "approvals") return Response.json({ approvals: o.approvals ?? [] });
+    if (op === "status") return Response.json(o.spokeStatus ?? { journalHead: 0, tasks: [] });
     return Response.json({ task: TASK, forwarded: op });
   };
   const deps: RemoteSpokesDeps = {
@@ -241,6 +242,34 @@ describe("recall: journal text is scanned and delimited before it can reach a mo
     expect(data.omitted).toBe(51);
     expect(data.entries.at(-1)).toMatchObject({ trust: "quarantined", reason: "malformed journal entry", text: "" });
     expect(data.entries[0]).toMatchObject({ kind: "task.state", text: '{"state":"idle"}', trust: "untrusted" });
+  });
+});
+
+describe("P-RS-SESSION.1: an open session reads only what is new, and the spoke's status now", () => {
+  test("recall forwards `since` only as a whole non-negative number; anything else is refused before any forward", async () => {
+    const r = rig({ entries: [entry(8, "task.turn", { index: 3, text: "next step done" })] });
+    const { data } = await r.call("POST", "/api/remote-spokes/recall", { node: NODE, task: TASK, since: 7 });
+    expect(data.entries).toEqual([expect.objectContaining({ seq: 8, text: "next step done" })]);
+    expect(r.forwarded()).toEqual([expect.objectContaining({ path: `/host/spokes/${NODE}/recall`, body: { task: TASK, since: 7 } })]);
+    for (const since of [-1, 1.5, "7", null]) {
+      const bad = rig();
+      expect((await bad.call("POST", "/api/remote-spokes/recall", { node: NODE, task: TASK, since })).data).toEqual({ ok: false, error: "malformed request" });
+      expect(bad.forwarded()).toEqual([]);
+    }
+  });
+
+  test("status returns the spoke's own tasks, validated like the hub's rows, and needs the recall scope", async () => {
+    const spokeStatus = { journalHead: 42, tasks: [
+      { id: TASK, name: "triage", state: "working", turns: 3, updatedAt: 9 },
+      { id: "t_bad", name: "x", state: "working", turns: 1, updatedAt: 1 },
+      { id: "t_fedcba9876543210", name: "fix", state: "exploded", turns: 1, updatedAt: 1 },
+    ] };
+    const r = rig({ spokeStatus });
+    expect((await r.call("GET", `/api/remote-spokes/status?node=${NODE}`)).data).toEqual({ ok: true, journalHead: 42, tasks: [{ id: TASK, name: "triage", state: "working", turns: 3, updatedAt: 9 }] });
+    expect(r.forwarded()).toEqual([expect.objectContaining({ method: "GET", path: `/host/spokes/${NODE}/status` })]);
+    const blind = rig({ scopes: ["drive"], spokeStatus });
+    expect((await blind.call("GET", `/api/remote-spokes/status?node=${NODE}`)).data).toEqual({ ok: false, error: "this hub's certificate does not carry the recall scope" });
+    expect(blind.forwarded()).toEqual([]);
   });
 });
 

@@ -6162,3 +6162,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-13):** `hub.presenceUnlocked` mapped from `/host/spokes`; the decide route and the approval card skip the password while the hub is unlocked (plugin ADR-A105); the per-spoke panel reads parked actions once per new set of awaiting tasks, Check stays manual.
 - **stubbed:** needs a plugin build with ADR-A105 to see the unlocked path live; older plugins keep asking for the password.
 - **next:** rebuild app.bundle.js, approve twice on an unlocked password hub and confirm no prompt, and open a parked spoke to see its action without Check.
+
+## P-RS-SESSION.1: a remote task's live session screen (ADR-0572)
+- **shipped (2026-11-13):** `remote_session.ts` (status every 3 s while working, recall `since` on change), `sessionRows`, `mapTasks`, engine `GET /api/remote-spokes/status` and recall `since`; Session section in the per-spoke panel (task row click picks), session in each Fleet remote lane card; prompts sent from this window shown by hash.
+- **stubbed:** tool calls are not journaled by the spoke, so no tool chips; needs plugin 0.10.1 (ADR-A106) for `since` to read incrementally (an older plugin reads from 0 each time).
+- **next:** see it live on the owner's hub with a working task; consider a spoke-side `task.turn` tool summary.
