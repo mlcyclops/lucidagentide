@@ -195,6 +195,9 @@ describe.skipIf(!BIN)("P-HOLDER.1: lanes under lucid-holder", () => {
     expect(alive(rec.pid) && alive(rec.childPid)).toBe(true);
     expect(a.stop(id).ok).toBe(true);
     await until(() => !alive(rec.pid) && !alive(rec.childPid), "the holder and the agent to end");
+    // LH-05: the record goes once the holder has CONFIRMED the end, which can land just after the processes are
+    // gone; waiting for it (bounded) keeps the assertion and drops the race the ubuntu runner hit.
+    await until(() => pool.all().length === 0, "the record to be forgotten");
     expect(pool.all()).toEqual([]);
   }, TIMEOUT);
 
