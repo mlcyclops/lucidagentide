@@ -27183,3 +27183,16 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 **Live proof (2026-11-13, Windows, `release/win-unpacked`):** copy made in 7 s (14,957 files, 651 MB); `omp --version` from the copy printed omp/18.18.6; a held lane launched through `HolderPool` ran its holder and child from the copy; the install folder's `lucid-holder.exe` and `bun.exe` could then be replaced while it ran; the copy's own `bun.exe` could not be deleted while in use (why cleanup honors the records).
 
 **Consequences.** Each app version costs one copy on disk while a lane uses it, and the first held lane after an update waits for the copy if the background one has not finished. Lanes held before this change still run from the install folder; the prompt names them, and the first update after this change is the last that has to wait for them. Lanes keep running the version they started on until they are started again.
+
+## ADR-0574 -- P-RS-PAST.1: a spoke's finished tasks fold under Past tasks (2026-11-13)
+
+**Status:** Accepted. Amends ADR-0509 (the per-spoke panel's task list) and ADR-0572 (which task the Session section picks).
+
+**Context.** A spoke keeps every task it ever ran in its `status` answer, and the per-spoke panel listed all of them. On the workstation hub, spoke-01 showed 27 rows: 2 open, 8 closed and 17 `stopped` (their lanes ended when the spoke's engine restarted). Stopped rows offer no Close, so they could never be tidied, and the Session section ranked a stopped task like an idle one when picking which task to show.
+
+**Decision.**
+1. `taskEnded(t)` (closed or stopped) is the one rule for "nothing more runs here". The orbit, the Fleet grid's remote lanes and the task buttons read it.
+2. The panel lists open tasks. Ended tasks fold into one collapsed **Past tasks (N)** row, newest first, dimmed. Each one is still a click away from its session and its Recall, so history stays readable. A repaint keeps the fold open or shut as the user left it.
+3. With no task chosen, the Session section picks a working or waiting task first, then an open one, then an ended one.
+
+**Consequences.** Nothing is deleted. The spoke still sends every task in each `status` answer, so the answer grows with the spoke's history. Trimming that is the add-on's call (a retention window for ended tasks), and recall reads the journal by task id either way.

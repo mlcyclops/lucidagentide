@@ -48,7 +48,7 @@ import type { OrbitSpoke } from "./orbit_canvas.ts";
 import { initRemoteSession, mountSession, rememberPrompt } from "./remote_session.ts";
 import {
   approvalButtons, armClick, clockLabel, deployChoices, hostLabel, lanePolicyLabel, latencyLabel, mibLabel, modelCount, onOrbit, REMOTE_STATE_LABEL, REMOTE_TONE,
-  remoteGlance, remoteLanes, remoteTotals, RESUME_TEXT, spokeActions, spokeAlerts, stateLabel, taskButtons, taskModelChoices, VIA_LABEL,
+  remoteGlance, remoteLanes, remoteTotals, RESUME_TEXT, spokeActions, spokeAlerts, stateLabel, taskButtons, taskEnded, taskModelChoices, VIA_LABEL,
   type DeployChoice, type HubActions, type RecallView, type RemoteAlertItem, type RemoteApprovalView, type RemoteClassification, type RemoteHubView, type RemoteLane,
   type RemoteModelsView, type RemoteSpokeView, type RemoteTaskView, type RemoteTotals,
 } from "./remote_spokes_model.ts";
@@ -465,7 +465,7 @@ export function refreshRemotePanel(box: HTMLElement): void {
   // that works or waits on you, else the newest open one, else the newest.
   const sessHost = $("[data-rs-session]", box) as HTMLElement | null;
   if (s && a?.recall && sessHost) {
-    const rank = (t: RemoteTaskView): number => (t.state === "working" || t.state === "awaiting_approval" ? 2 : t.state === "closed" ? 0 : 1);
+    const rank = (t: RemoteTaskView): number => (t.state === "working" || t.state === "awaiting_approval" ? 2 : taskEnded(t) ? 0 : 1);
     const pick = s.tasks.find((t) => t.id === panel!.sessionTask) ?? [...s.tasks].sort((x, y) => rank(y) - rank(x) || y.updatedAt - x.updatedAt)[0];
     if (pick) {
       mountSession(sessHost, s.node, pick.id, pick);
@@ -516,7 +516,10 @@ export function refreshRemotePanel(box: HTMLElement): void {
     : `This hub's certificate allows: ${may || "nothing"}. Actions it does not allow are not offered.`);
   const host = $("[data-rs-tasks]", box) as HTMLElement;
   if (s.tasks.length === 0) { host.innerHTML = `<div class="orbit-ghosts-empty">No tasks on this spoke yet.</div>`; return; }
-  host.innerHTML = s.tasks.map((t, i) => {
+  // P-RS-PAST.1 (ADR-0574): open tasks are the list; closed and stopped ones (their lane is gone, nothing more runs)
+  // fold into Past tasks, newest first, still a click away from their session and recall. A repaint keeps the fold
+  // as the user left it. Rows keep their index into s.tasks, which the click handler reads.
+  const row = (t: RemoteTaskView, i: number): string => {
     const b = taskButtons(t, a);
     const shown = $("[data-rs-session]", box)?.getAttribute("data-rs-session") === `${s.node}:${t.id}`;
     return `<div class="orbit-ghost rs-task${t.interrupted ? " interrupted" : ""}${shown ? " shown" : ""}" data-rs-task-i="${i}" data-tip="Show this task's session above">
@@ -528,7 +531,16 @@ export function refreshRemotePanel(box: HTMLElement): void {
       ${b.cancel ? CANCEL_BTN : ""}
       ${b.close ? CLOSE_BTN : ""}
     </div>`;
-  }).join("");
+  };
+  const indexed = s.tasks.map((t, i) => ({ t, i }));
+  const open = indexed.filter(({ t }) => !taskEnded(t));
+  const past = indexed.filter(({ t }) => taskEnded(t)).sort((x, y) => y.t.updatedAt - x.t.updatedAt);
+  const pastOpen = ($<HTMLDetailsElement>("[data-rs-past]", host))?.open ?? false;
+  host.innerHTML = (open.length ? open.map(({ t, i }) => row(t, i)).join("") : `<div class="orbit-ghosts-empty">No open tasks. Start one below, or open a past task to read it.</div>`)
+    + (past.length ? `<details class="rs-past" data-rs-past${pastOpen ? " open" : ""}>
+      <summary data-tip="Past tasks|Closed, or ended when the spoke's engine restarted. Nothing more runs in them; click one to read its session.">Past tasks (${past.length})</summary>
+      ${past.map(({ t, i }) => row(t, i)).join("")}
+    </details>` : "");
 }
 
 /** The panel's one status line. `ok` marks a success ("Task started", "Approved") so it is not drawn in the error
@@ -587,7 +599,7 @@ export function onRemotePanelClick(t: HTMLElement, box: HTMLElement): boolean {
     refreshRemotePanel(box);
     return true;
   }
-  return t.closest("[data-rs-new], [data-rs-follow], [data-rs-password], [data-rs-session]") !== null;
+  return t.closest("[data-rs-new], [data-rs-follow], [data-rs-password], [data-rs-session], [data-rs-past]") !== null;
 }
 
 /** A task's Cancel, Resume and Close, for the per-spoke panel and the Fleet grid's remote lanes alike. ADR-0509:

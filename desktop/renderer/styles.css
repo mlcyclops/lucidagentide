@@ -7348,6 +7348,12 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .rs-sess-err span{white-space:normal}
 .rs-task{cursor:pointer}
 .rs-task.shown{background:var(--bg-2);box-shadow:inset 3px 0 0 var(--accent)}
+/* ADR-0574: closed and stopped tasks fold under one quiet row; opened, they read dimmer than the open ones. */
+.rs-past{margin-top:6px}
+.rs-past>summary{cursor:pointer;padding:4px;font-size:11px;color:var(--txt-3);user-select:none}
+.rs-past>summary:hover{color:var(--txt)}
+.rs-past .rs-task{opacity:.72}
+.rs-past .rs-task:hover,.rs-past .rs-task.shown{opacity:1}
 .rs-ask .orbit-spawn-row{gap:6px;align-items:center;flex-wrap:wrap}
 /* The presence password field takes its own line: beside "Sign with the hub's password" and Deny it was squeezed
    to one character wide. */

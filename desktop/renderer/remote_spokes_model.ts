@@ -389,7 +389,7 @@ export function spokeActions(s: RemoteSpokeView, a: HubActions): HubActions {
  *  stopped tasks hold no lane. An idle machine, an offline one with nothing on it and a deactivated one live only
  *  in the Remote spokes view. A silent spoke that still holds a task stays: the work on it is what went quiet. */
 export function onOrbit(s: RemoteSpokeView): boolean {
-  return !s.deactivated && s.tasks.some((t) => t.state !== "closed" && t.state !== "stopped");
+  return !s.deactivated && s.tasks.some((t) => !taskEnded(t));
 }
 
 /** P-RS-LANES.1 (ADR-0551): the remote hub's numbers, one definition for the Fleet pill, the Hubs badge, the rail
@@ -415,6 +415,12 @@ export function remoteTotals(list: readonly RemoteSpokeView[], alerts: number): 
  *  spoke answers, else the spoke's (silent, offline, checking say more than a stale task state). */
 export interface RemoteLane { key: string; spoke: RemoteSpokeView; task: RemoteTaskView | null; state: RemoteSpokeState }
 
+/** A task whose lane is gone: closed by a hub, or stopped when the spoke's engine restarted or lost it. Nothing more
+ *  runs in it; it holds no lane and offers only its session and recall (ADR-0574: the panel's Past tasks). */
+export function taskEnded(t: RemoteTaskView): boolean {
+  return t.state === "closed" || t.state === "stopped";
+}
+
 /** P-RS-LANES.1 (ADR-0551): the Fleet grid's Remote section: one lane per open task (closed and stopped tasks hold
  *  no lane, as onOrbit says), spokes grouped by their label, a waiting spoke with no open task as one lane of its
  *  own. A deactivated spoke has none (ADR-0512): nothing can be sent to it. */
@@ -423,7 +429,7 @@ export function remoteLanes(list: readonly RemoteSpokeView[]): RemoteLane[] {
   const spokes = list.filter((s) => !s.deactivated).sort((a, b) => a.label.localeCompare(b.label) || a.node.localeCompare(b.node));
   for (const s of spokes) {
     const answers = s.state === "approval" || s.state === "busy" || s.state === "error" || s.state === "idle";
-    const open = s.tasks.filter((t) => t.state !== "closed" && t.state !== "stopped");
+    const open = s.tasks.filter((t) => !taskEnded(t));
     for (const t of open) out.push({ key: `rs:${s.node}:${t.id}`, spoke: s, task: t, state: answers ? spokeState(true, [t]) : s.state });
     if (open.length === 0 && s.state === "approval") out.push({ key: `rs:${s.node}:`, spoke: s, task: null, state: s.state });
   }
@@ -578,7 +584,7 @@ export function deployChoices(spokes: readonly RemoteSpokeView[], a: HubActions)
  *  (a follow-up waits for the turn to end; a closed or stopped task holds no lane to cancel or close). ADR-0509:
  *  a task whose turn a restart cut off offers Resume, a follow-up with RESUME_TEXT; a new turn clears the mark. */
 export function taskButtons(t: RemoteTaskView, a: HubActions): { recall: boolean; followup: boolean; cancel: boolean; close: boolean; resume: boolean } {
-  const live = t.state !== "closed" && t.state !== "stopped";
+  const live = !taskEnded(t);
   const followup = a.drive && (t.state === "idle" || t.state === "error");
   return {
     recall: a.recall,
