@@ -27196,3 +27196,17 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 3. With no task chosen, the Session section picks a working or waiting task first, then an open one, then an ended one.
 
 **Consequences.** Nothing is deleted. The spoke still sends every task in each `status` answer, so the answer grows with the spoke's history. Trimming that is the add-on's call (a retention window for ended tasks), and recall reads the journal by task id either way.
+
+## ADR-0575 -- P-FLEET-UX: the Fleet window is the front door for everyone, the engine owns boards, and Herd is the terminal face (2026-11-13)
+
+**Status:** Accepted (owner, 2026-11-13: "1) A, 2) Ok"). Amends ADR-0489 to ADR-0497 and ADR-0541 (where Herd's spaces live). Relates to issue #610. Proposal and mockup: `deliverables/herd-gui-2026-11/` in the workspace.
+
+**Context.** The IDE is for non-technical users too. Herd (ADR-0541) gave terminal users tabs, layouts, attention and machines. The IDE got only a read-only mirror of it, with "Not in this build", `--dir <absolute discovery folder>` and an error that points back at the failing command on the way. The Fleet window already had cards, groups, sizes, remote lanes and in-card approvals, but no boards, presets or "next that needs you".
+
+**Decision.**
+1. **The Fleet window is the front door.** Boards, layout presets, "Next that needs you", "+ New agent" (where: This PC or a computer you added), Computers, and one card for local and remote agents all live there. No add-on and no terminal is needed for any of it.
+2. **The engine owns boards** (option A of the proposal): the spaces model (boards, their agents, layout, attention) moves under the engine, behind engine routes. The Fleet window and Herd's terminal are both clients of it. Herd stays an optional add-on for the terminal face (ADR-0541 holds). "Open in terminal" replaces the Fleet window's Terminal button once Herd reads the engine's boards. Until then the button says it opens the classic hub.
+3. **Words in the UI:** *agent* (one AI helper on one job), *board* (a set of agents), *computer* (This PC, or one you added). *Hub* names only the machine whose boards start the work, and *spoke* only appears in admin and setup screens.
+4. **Hub and spoke:** boards live on the hub only. A board holds `spoke:task` references, and a spoke never learns about boards. A Windows or Mac spoke shows its own person what runs there ("This computer is helping <hub>") with Pause, Stop all and per-task Stop. Approvals stay the hub's signed decisions.
+
+**Consequences.** Phases: (1) plain-language setup and errors, a one-confirm Stop and an always-on reply box on remote cards; (2) engine-owned boards, layout presets and Next; (3) New agent, Computers and pairing by check code, plus the spoke's own view; (4) Herd reads the engine's boards; (5) the spoke's ended-task retention. The Remote Spokes add-on carries the spoke-side pieces (queued follow-up, a local view and stop, pairing by code, retention).
