@@ -378,6 +378,52 @@ export function spokeActions(s: RemoteSpokeView, a: HubActions): HubActions {
   return s.deactivated ? { recall: false, drive: false, approve: false, deny: false } : a;
 }
 
+/** P-RS-VIEW.1 (ADR-0539): whether a remote spoke is on the Fleet Orbit. The orbit shows work, so a spoke is there
+ *  only while it holds a task (working, parked on an approval, failed, or waiting for a follow-up); closed and
+ *  stopped tasks hold no lane. An idle machine, an offline one with nothing on it and a deactivated one live only
+ *  in the Remote spokes view. A silent spoke that still holds a task stays: the work on it is what went quiet. */
+export function onOrbit(s: RemoteSpokeView): boolean {
+  return !s.deactivated && s.tasks.some((t) => t.state !== "closed" && t.state !== "stopped");
+}
+
+/** P-RS-LANES.1 (ADR-0551): the remote hub's numbers, one definition for the Fleet pill, the Hubs badge, the rail
+ *  badge, the hub summary and the Remote spokes view, so no two of them can disagree. spokes: every spoke the hub
+ *  holds, deactivated ones included. working: holding a task (onOrbit). waiting: parked on a human (state
+ *  `approval`), with or without a task listed; a deactivated spoke never waits. alerts: the alert lines not
+ *  dismissed yet (dismissals live in the renderer, so the caller counts them). */
+export interface RemoteTotals { spokes: number; working: number; waiting: number; alerts: number }
+
+export function remoteTotals(list: readonly RemoteSpokeView[], alerts: number): RemoteTotals {
+  let working = 0;
+  let waiting = 0;
+  for (const s of list) {
+    if (onOrbit(s)) working++;
+    if (!s.deactivated && s.state === "approval") waiting++;
+  }
+  return { spokes: list.length, working, waiting, alerts };
+}
+
+/** P-RS-LANES.1 (ADR-0551): one remote lane in the Fleet grid. `key` is stable across polls (the node and task ids
+ *  are NODE_RE and TASK_RE checked); `task` is null only for a spoke parked on a human with no open task listed, so
+ *  its parked actions stay reachable. `state` is the lane's own: its task's (spokeState of that one task) while the
+ *  spoke answers, else the spoke's (silent, offline, checking say more than a stale task state). */
+export interface RemoteLane { key: string; spoke: RemoteSpokeView; task: RemoteTaskView | null; state: RemoteSpokeState }
+
+/** P-RS-LANES.1 (ADR-0551): the Fleet grid's Remote section: one lane per open task (closed and stopped tasks hold
+ *  no lane, as onOrbit says), spokes grouped by their label, a waiting spoke with no open task as one lane of its
+ *  own. A deactivated spoke has none (ADR-0512): nothing can be sent to it. */
+export function remoteLanes(list: readonly RemoteSpokeView[]): RemoteLane[] {
+  const out: RemoteLane[] = [];
+  const spokes = list.filter((s) => !s.deactivated).sort((a, b) => a.label.localeCompare(b.label) || a.node.localeCompare(b.node));
+  for (const s of spokes) {
+    const answers = s.state === "approval" || s.state === "busy" || s.state === "error" || s.state === "idle";
+    const open = s.tasks.filter((t) => t.state !== "closed" && t.state !== "stopped");
+    for (const t of open) out.push({ key: `rs:${s.node}:${t.id}`, spoke: s, task: t, state: answers ? spokeState(true, [t]) : s.state });
+    if (open.length === 0 && s.state === "approval") out.push({ key: `rs:${s.node}:`, spoke: s, task: null, state: s.state });
+  }
+  return out;
+}
+
 /** ADR-0509: a time of day ("14:05"), with the date in front when it is not today. Local time. */
 export function clockLabel(ms: number, now: number): string {
   const d = new Date(ms);

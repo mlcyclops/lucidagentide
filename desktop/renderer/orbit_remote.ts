@@ -18,6 +18,16 @@
 // host facts and the lane policy's why in the selector rows and the panel; a task a restart interrupted offers
 // Resume, armed like Approve, which sends RESUME_TEXT through the existing followup route. Nothing re-runs alone.
 //
+// P-RS-VIEW.1 (ADR-0539): only a spoke holding a task is on the ring (remote_spokes_model.ts onOrbit). Every spoke,
+// the alert list and the plugin's own panel live in the Remote spokes view (remote_spokes_view.ts, on the left
+// rail), which reuses this file's per-spoke panel and Start-a-task selector; the Hubs panel keeps a one-line
+// summary of the remote hub that opens it.
+//
+// P-RS-LANES.1 (ADR-0551): the Fleet lanes grid ends with a Remote section, one card per open remote task, built and
+// answered here (paintRemoteLanes, onRemoteLaneClick) with the panel's own actions through the same sendAct and
+// sendDecide. Every count of the remote hub (badges, the Fleet pill, the hub summary, the Remote spokes view) is
+// remoteCounts, which is remote_spokes_model.ts remoteTotals.
+//
 // Untrusted text rule: everything a spoke wrote reaches the DOM through textContent or esc(), never as markup.
 // Recalled entries arrive already scanned (a quarantined entry has no text at all); the only way recalled text
 // leaves this panel is "Copy for a prompt", which copies the engine's delimited UNTRUSTED_CONTENT envelope.
@@ -33,10 +43,10 @@ import type { LucidBridge } from "./bridge.ts";
 import type { OrbitSlot } from "./orbit_layout.ts";
 import type { OrbitSpoke } from "./orbit_canvas.ts";
 import {
-  approvalButtons, armClick, clockLabel, deployChoices, hostLabel, lanePolicyLabel, latencyLabel, mibLabel, modelCount, REMOTE_TONE, remoteGlance, RESUME_TEXT,
-  spokeActions, spokeAlerts, stateLabel, taskButtons, taskModelChoices, VIA_LABEL,
-  type DeployChoice, type RecallView, type RemoteAlertItem, type RemoteApprovalView, type RemoteClassification, type RemoteHubView, type RemoteModelsView,
-  type RemoteSpokeView,
+  approvalButtons, armClick, clockLabel, deployChoices, hostLabel, lanePolicyLabel, latencyLabel, mibLabel, modelCount, onOrbit, REMOTE_STATE_LABEL, REMOTE_TONE,
+  remoteGlance, remoteLanes, remoteTotals, RESUME_TEXT, spokeActions, spokeAlerts, stateLabel, taskButtons, taskModelChoices, VIA_LABEL,
+  type DeployChoice, type HubActions, type RecallView, type RemoteAlertItem, type RemoteApprovalView, type RemoteClassification, type RemoteHubView, type RemoteLane,
+  type RemoteModelsView, type RemoteSpokeView, type RemoteTaskView, type RemoteTotals,
 } from "./remote_spokes_model.ts";
 
 export interface OrbitRemoteDeps {
@@ -47,16 +57,24 @@ export interface OrbitRemoteDeps {
   remoteSpokeAct: LucidBridge["remoteSpokeAct"];
   /** Start the remote-spokes plugin (the sanctioned pluginsStart path) so its spokes appear. */
   startRemoteSpokes: () => Promise<void>;
-  /** Start it and open its own panel in a plugin tab (setup, presence, custody: everything the IDE leaves there). */
-  openRemoteSpokesPanel: () => void;
+  /** P-RS-VIEW.1 (ADR-0539): open the Remote spokes view (rail), on a tab or on one spoke. app.ts closes the orbit
+   *  first, so one surface drives a spoke at a time. */
+  openRemoteView: (at?: { tab?: "spokes" | "admin"; node?: string }) => void;
+  /** P-RS-WINDOW.1 (ADR-0543): open or bring forward the plugin's admin panel window (setup, presence, custody). */
+  openRemoteAdmin: () => void;
 }
 
 let deps: OrbitRemoteDeps | null = null;
 /** The engine's last answer; null before the first one (or when the engine did not answer). */
 let snap: RemoteHubView | null = null;
 const remoteNodes = new Map<string, { card: HTMLElement }>();
+/** P-RS-VIEW.1: told after every hub read that got an answer (the rail button and the Remote spokes view). */
+const listeners = new Set<() => void>();
 
 export function initOrbitRemote(d: OrbitRemoteDeps): void { deps = d; }
+
+/** P-RS-VIEW.1: call `fn` after each answered hub read, whoever asked for it. */
+export function onRemoteChange(fn: () => void): void { listeners.add(fn); }
 
 let inflight: Promise<void> | null = null;
 
@@ -66,13 +84,25 @@ export function refreshRemote(): Promise<void> {
   if (!deps) return Promise.resolve();
   if (inflight) return inflight;
   const d = deps;
-  inflight = d.remoteSpokes().catch(() => null).then((s) => { if (s) snap = s; }).finally(() => { inflight = null; });
+  inflight = d.remoteSpokes().catch(() => null).then((s) => {
+    if (!s) return;
+    snap = s;
+    for (const fn of listeners) fn();
+  }).finally(() => { inflight = null; });
   return inflight;
 }
 
 export function remoteList(): RemoteSpokeView[] {
   return snap?.available ? snap.spokes : [];
 }
+
+/** P-RS-VIEW.1 (ADR-0539): the remote spokes the orbit draws: only those holding a task (onOrbit). */
+export function orbitRemoteList(): RemoteSpokeView[] {
+  return remoteList().filter(onOrbit);
+}
+
+/** P-RS-VIEW.1: the hub view as last read, for the Remote spokes view's header and notices. */
+export function remoteSnapshot(): RemoteHubView | null { return snap; }
 
 // ------------------------------------------------------------------------------ alerts (ADR-0509)
 
@@ -106,9 +136,10 @@ function openAlerts(now: number): RemoteAlertItem[] {
 
 // ------------------------------------------------------------------------------------ nodes on the ring
 
-/** Create, repaint and drop remote nodes like reconcile() does for lanes (cards are never rebuilt). */
+/** Create, repaint and drop remote nodes like reconcile() does for lanes (cards are never rebuilt). P-RS-VIEW.1:
+ *  a spoke whose last task closes falls back into the hub like a dismissed lane, and one that takes a task flies out. */
 export function reconcileRemote(stage: HTMLElement, first: boolean): void {
-  const spokes = remoteList();
+  const spokes = orbitRemoteList();
   const seen = new Set<string>();
   spokes.forEach((s, i) => {
     seen.add(s.node);
@@ -193,7 +224,7 @@ export function remoteDeployVisible(): boolean {
 /** Place remote nodes on the slots after the local lanes'; their lines go to the orbit canvas (ADR-0522). */
 export function layoutRemote(slots: readonly OrbitSlot[]): OrbitSpoke[] {
   const lines: OrbitSpoke[] = [];
-  remoteList().forEach((s, i) => {
+  orbitRemoteList().forEach((s, i) => {
     const entry = remoteNodes.get(s.node);
     const slot = slots[i];
     if (!entry || !slot) return;
@@ -206,11 +237,11 @@ export function layoutRemote(slots: readonly OrbitSlot[]): OrbitSpoke[] {
 
 // ------------------------------------------------------------------------- the hub picker's section
 
-/** Remote spokes, how many are parked on an approval, and (ADR-0509) how many alert lines are not dismissed, for
- *  the Other hubs badge. */
-export function remoteCounts(): { spokes: number; waiting: number; alerts: number } {
-  const list = remoteList();
-  return { spokes: list.length, waiting: list.filter((s) => s.state === "approval").length, alerts: openAlerts(Date.now()).length };
+/** Remote spokes, how many hold a task, how many are parked on an approval, and (ADR-0509) how many alert lines are
+ *  not dismissed. P-RS-LANES.1 (ADR-0551): the one count (remote_spokes_model.ts remoteTotals) behind the Hubs
+ *  badge, the rail badge, the Fleet pill, the hub summary and the Remote spokes view. */
+export function remoteCounts(): RemoteTotals {
+  return remoteTotals(remoteList(), openAlerts(Date.now()).length);
 }
 
 /** Whether the Other hubs panel has a Remote hub section to show: the hub's spokes, or a plugin that is installed
@@ -219,36 +250,40 @@ export function remoteHubVisible(): boolean {
   return snap !== null && (snap.available || snap.plugin !== "missing");
 }
 
-/** The Remote hub section of the Other hubs panel: the add-on hub and its spokes, or why there are none. Empty
- *  while the engine has not answered, so a panel never flashes a wrong reason. */
+/** The Remote hub row of the Hubs panel: the add-on hub in one line, or why there are none. Empty while the engine
+ *  has not answered, so a panel never flashes a wrong reason. P-RS-VIEW.1 (ADR-0539): the spoke list, its alerts
+ *  and the plugin's own panel live in the Remote spokes view, which Open shows; this row only summarizes. */
 export function remoteHubSectionHtml(): string {
   if (!snap || !remoteHubVisible()) return "";
   if (!snap.available) {
     const btn = snap.plugin === "stopped"
-      ? `<button class="btn-mini orbit-btn" data-rs-start data-tip="Start Remote Spokes|Starts the Remote Spokes plugin so this hub's remote spokes join the orbit.">${icon("bolt", 12)} Start</button>`
-      : `<button class="btn-mini orbit-btn" data-rs-panel>${icon("link", 12)} Open panel</button>`;
+      ? `<button class="btn-mini orbit-btn" data-rs-start data-tip="Start Remote Spokes|Starts the Remote Spokes plugin so this hub's remote spokes can be reached.">${icon("bolt", 12)} Start</button>`
+      : `<button class="btn-mini orbit-btn" data-rs-panel>${icon("link", 12)} Set up</button>`;
     return `<div class="orbit-hubrow rs-hubrow"><span class="orbit-ghost-id"><b>Remote hub</b><small>${esc(snap.reason)}</small></span>${btn}</div>`;
   }
-  const { hub, spokes } = snap;
-  const waiting = spokes.filter((s) => s.state === "approval").length;
-  // ADR-0512: a deactivated spoke still counts as the hub's, said plainly; it is never a target.
-  const off = spokes.filter((s) => s.deactivated).length;
+  const { hub } = snap;
+  const { spokes, working, waiting, alerts } = remoteCounts();
+  const summary = [
+    `${spokes} remote ${spokes === 1 ? "spoke" : "spokes"}`,
+    working ? `${working} working` : "none working",
+    waiting ? `${waiting} waiting on you` : "",
+    alerts ? `${alerts} ${alerts === 1 ? "alert" : "alerts"}` : "",
+  ].filter(Boolean).join(" \u00b7 ");
   return `<div class="orbit-hubrow rs-hubrow" title="${esc(hub.node)}">
-      <span class="orbit-ghost-id"><b>${esc(hub.label)}</b><small>remote hub \u00b7 ${spokes.length} ${spokes.length === 1 ? "spoke" : "spokes"}${off ? ` (${off} deactivated)` : ""}${waiting ? ` \u00b7 ${waiting} waiting on you` : ""} \u00b7 may ${esc(hub.scopes.join(", ") || "nothing")}</small></span>
+      <span class="orbit-ghost-id"><b>${esc(hub.label)}</b><small>${esc(summary)}</small></span>
       ${remoteDeployVisible() ? `<button class="btn-mini orbit-btn" data-rs-deploy data-tip="Start a task on a remote spoke|Pick a spoke by how fast it answers, its models and its free lanes, then start a task there.">${icon("bolt", 12)} Start a task</button>` : ""}
-      <button class="btn-mini orbit-btn" data-rs-panel data-tip="Remote Spokes panel|Setup, user presence, custody, models and provisioning stay in the plugin's own panel.">${icon("link", 12)} Panel</button>
-    </div>
-    <div class="orbit-hubrow-lanes">${spokes.map((s) => `<button class="fleet-pip rs-pip rs-${REMOTE_TONE[s.state]}" data-rs-open="${esc(s.node)}" data-tip="${esc(s.label)}|${esc(remoteGlance(s))}"><i></i>${esc(s.label)}</button>`).join("")}</div>${alertListHtml()}`;
+      <button class="btn-mini orbit-btn" data-rs-view data-tip="Remote spokes|Every remote spoke and its alerts, in their own view, with a button for the hub's admin panel. Also on the left rail.">${icon("link", 12)} Open</button>
+    </div>`;
 }
 
-/** ADR-0509: how many alert lines the Remote hub section lists; the rest wait behind "Dismiss all". */
+/** ADR-0509: how many alert lines the Remote spokes view lists; the rest wait behind "Dismiss all". */
 const ALERT_LIST_MAX = 12;
 
 /** ADR-0509: the alert lines not dismissed yet, newest first: a spoke gone silent, crashed, restarted, or a turn a
  *  restart cut off (resumed from the spoke's panel, never on its own). Each line opens its spoke or is dismissed.
  *  Every spoke-written word goes through esc(); the dismiss key is built from the node id, a closed kind and a
- *  number. */
-function alertListHtml(): string {
+ *  number. P-RS-VIEW.1: shown in the Remote spokes view; its clicks go through onRemoteHubClick. */
+export function remoteAlertListHtml(): string {
   const items = openAlerts(Date.now());
   if (items.length === 0) return "";
   const more = items.length > ALERT_LIST_MAX ? `<div class="rs-alert-more">${items.length - ALERT_LIST_MAX} older not shown</div>` : "";
@@ -372,13 +407,37 @@ export function paintRemotePanel(box: HTMLElement, node: string, closeHtml: stri
     </details>` : ""}
     <div class="rs-sec-h"><span>Models</span></div>
     <div data-rs-models></div>
-    <p class="rs-note">The default is what new tasks use; change it in the Remote Spokes panel (it restarts the spoke's engine).</p>
+    <p class="rs-note">The default is what new tasks use; change it in the Remote Spokes admin panel (it restarts the spoke's engine).</p>
     ${a?.recall ? `<div class="rs-sec-h"><span>Parked actions</span><button class="btn-mini orbit-btn" data-rs-approvals>${icon("refresh", 12)} Check</button></div>
     <div data-rs-approvals-out></div>
     <div class="rs-sec-h"><span>Recall</span><button class="btn-mini orbit-btn" data-rs-recall-all data-tip="Recall|Reads this spoke's signed journal. Every entry passes the scanner first; a flagged entry is withheld.">${icon("restore", 12)} Whole journal</button><button class="btn-mini orbit-btn" data-rs-copy hidden data-tip="Copy for a prompt|Copies the entries that passed the scanner inside UNTRUSTED_CONTENT delimiters, the only form recalled text may take into a prompt. Withheld entries are not included.">${icon("copy", 12)} Copy for a prompt</button></div>
     <div data-rs-recall-out></div>` : ""}
     <small class="orbit-ghost-err" data-rs-err></small>`;
+  enterSends($<HTMLTextAreaElement>("[data-rs-follow-text]", box), $("[data-rs-follow-go]", box));
+  enterSends($<HTMLTextAreaElement>("[data-rs-new-text]", box), $("[data-rs-new-go]", box));
   refreshRemotePanel(box);
+}
+
+/** P-RS-LANES.1 (ADR-0551): Enter (without Shift, outside an IME composition) in a remote prompt field presses its
+ *  send button, as Enter does in a local lane's [data-fleet-input]; the click then takes the button's own path. */
+function enterSends(field: HTMLTextAreaElement | null, go: HTMLElement | null): void {
+  if (!field || !go) return;
+  field.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+    e.preventDefault();
+    go.click();
+  });
+}
+
+/** A task row's buttons, shared by the per-spoke panel and the Fleet grid's remote lanes (P-RS-LANES.1), so both
+ *  answer to the same clicks (taskOpClick). Resume and Close are armed (two clicks). */
+const RESUME_BTN = `<button class="btn-mini orbit-btn rs-resume" data-rs-resume data-tip="Resume|Sends one follow-up asking the task to continue and to check what was already done first. Click twice. Nothing re-runs on its own.">${icon("restore", 12)} Resume</button>`;
+const CANCEL_BTN = `<button class="btn-mini orbit-btn" data-rs-cancel>${icon("close", 12)} Cancel</button>`;
+const CLOSE_BTN = `<button class="orbit-ghost-x" data-rs-close data-tip="Close|Ends this task's lane on the spoke and frees its slot. Click twice.">${icon("archive", 12)}</button>`;
+
+/** A task's one-line facts: state, turns, last change, review branch, a restart's cut-off and the shadow mark. */
+function taskMeta(t: RemoteTaskView, now: number): string {
+  return `${t.state.replace("_", " ")} \u00b7 ${t.turns} ${t.turns === 1 ? "turn" : "turns"} \u00b7 ${new Date(t.updatedAt).toLocaleString()}${t.reviewBranch ? ` \u00b7 review ${t.reviewBranch}` : ""}${t.interrupted ? ` \u00b7 interrupted by a restart at ${clockLabel(t.interrupted, now)}` : ""}${t.shadow ? " \u00b7 shadow" : ""}`;
 }
 
 /** Per poll: the head and the task list, only when they changed. Gone from the hub: say so, keep the panel. */
@@ -432,15 +491,14 @@ export function refreshRemotePanel(box: HTMLElement): void {
   if (s.tasks.length === 0) { host.innerHTML = `<div class="orbit-ghosts-empty">No tasks on this spoke yet.</div>`; return; }
   host.innerHTML = s.tasks.map((t, i) => {
     const b = taskButtons(t, a);
-    const meta = `${t.state.replace("_", " ")} \u00b7 ${t.turns} ${t.turns === 1 ? "turn" : "turns"} \u00b7 ${new Date(t.updatedAt).toLocaleString()}${t.reviewBranch ? ` \u00b7 review ${t.reviewBranch}` : ""}${t.interrupted ? ` \u00b7 interrupted by a restart at ${clockLabel(t.interrupted, now)}` : ""}${t.shadow ? " \u00b7 shadow" : ""}`;
     return `<div class="orbit-ghost rs-task${t.interrupted ? " interrupted" : ""}" data-rs-task-i="${i}">
       <i class="orbit-ghost-dot rs-dot-${esc(t.state)}"></i>
-      <span class="orbit-ghost-id"><b>${esc(t.name)}</b><small>${esc(meta)}</small></span>
-      ${b.resume ? `<button class="btn-mini orbit-btn rs-resume" data-rs-resume data-tip="Resume|Sends one follow-up asking the task to continue and to check what was already done first. Click twice. Nothing re-runs on its own.">${icon("restore", 12)} Resume</button>` : ""}
+      <span class="orbit-ghost-id"><b>${esc(t.name)}</b><small>${esc(taskMeta(t, now))}</small></span>
+      ${b.resume ? RESUME_BTN : ""}
       ${b.recall ? `<button class="btn-mini orbit-btn" data-rs-recall data-tip="Recall this task|Its journal entries, scanned.">${icon("restore", 12)}</button>` : ""}
       ${b.followup ? `<button class="btn-mini orbit-btn" data-rs-follow-open>${icon("send", 12)} Follow up</button>` : ""}
-      ${b.cancel ? `<button class="btn-mini orbit-btn" data-rs-cancel>${icon("close", 12)} Cancel</button>` : ""}
-      ${b.close ? `<button class="orbit-ghost-x" data-rs-close data-tip="Close|Ends this task's lane on the spoke and frees its slot. Click twice.">${icon("archive", 12)}</button>` : ""}
+      ${b.cancel ? CANCEL_BTN : ""}
+      ${b.close ? CLOSE_BTN : ""}
     </div>`;
   }).join("");
 }
@@ -468,26 +526,7 @@ export function onRemotePanelClick(t: HTMLElement, box: HTMLElement): boolean {
     ($("[data-rs-follow-text]", box) as HTMLTextAreaElement).focus();
     return true;
   }
-  if (task && t.closest("[data-rs-cancel]")) { void act(box, "cancel", { task: task.id }); return true; }
-  // ADR-0509: Resume is the human's call, armed like Approve; the second click sends RESUME_TEXT as a follow-up.
-  const resumeBtn = t.closest("[data-rs-resume]") as HTMLElement | null;
-  if (task && resumeBtn) {
-    const key = `resume:${task.id}`;
-    const step = armClick(panel.armed[key] ?? null, Date.now());
-    if (step.act === "arm") { panel.armed[key] = step.armedAt!; resumeBtn.textContent = "Click again to resume"; resumeBtn.classList.add("armed"); return true; }
-    delete panel.armed[key];
-    void act(box, "followup", { task: task.id, text: RESUME_TEXT });
-    return true;
-  }
-  const closeBtn = t.closest("[data-rs-close]") as HTMLElement | null;
-  if (task && closeBtn) {
-    const key = `close:${task.id}`;
-    const step = armClick(panel.armed[key] ?? null, Date.now());
-    if (step.act === "arm") { panel.armed[key] = step.armedAt!; closeBtn.classList.add("armed"); closeBtn.dataset.tip = "Click again to close|Ends the lane on the spoke."; return true; }
-    delete panel.armed[key];
-    void act(box, "close", { task: task.id });
-    return true;
-  }
+  if (task && taskOpClick(t, task, panel.armed, (op, input) => void act(box, op, input))) return true;
   if (t.closest("[data-rs-follow-go]")) {
     const text = ($("[data-rs-follow-text]", box) as HTMLTextAreaElement).value;
     if (panel.followTask && text.trim()) void act(box, "followup", { task: panel.followTask, text }, () => {
@@ -510,39 +549,70 @@ export function onRemotePanelClick(t: HTMLElement, box: HTMLElement): boolean {
     if (ctx) void navigator.clipboard.writeText(ctx).then(() => showErr(box, "Copied, delimited as untrusted content.", true), () => showErr(box, "The clipboard refused the copy."));
     return true;
   }
-  const card = t.closest("[data-rs-ask-i]") as HTMLElement | null;
+  const card = t.closest<HTMLElement>("[data-rs-ask-i]");
   const item = card ? panel.approvals[Number(card.dataset.rsAskI)] : undefined;
-  if (item && card) {
-    const approve = t.closest("[data-rs-approve]") as HTMLButtonElement | null;
-    const field = card.querySelector("[data-rs-password]") as HTMLInputElement | null;
-    if (approve && field) {
-      // A password hub: the first click opens the field, the next (or Enter) signs with what was typed. The field
-      // is emptied at once; the password lives only in this one request.
-      if (field.hidden) { field.hidden = false; approve.textContent = "Sign with the hub's password"; approve.classList.add("armed"); field.focus(); return true; }
-      const password = field.value;
-      field.value = "";
-      if (!password) { showErr(box, "Type this hub's presence password to sign the approval."); field.focus(); return true; }
-      void decide(box, item, true, password);
-      return true;
-    }
-    if (approve) {
-      const key = `approve:${item.task}:${item.ask.id}`;
-      const step = armClick(panel.armed[key] ?? null, Date.now());
-      if (step.act === "arm") { panel.armed[key] = step.armedAt!; approve.textContent = "Click again to sign the approval"; approve.classList.add("armed"); return true; }
-      delete panel.armed[key];
-      void decide(box, item, true);
-      return true;
-    }
-    if (t.closest("[data-rs-deny]")) { void decide(box, item, false); return true; }
-  }
+  if (item && card && askClick(t, card, item, panel.armed, box, (allow, password) => void decide(box, item, allow, password))) return true;
   return t.closest("[data-rs-new], [data-rs-follow], [data-rs-password]") !== null;
+}
+
+/** A task's Cancel, Resume and Close, for the per-spoke panel and the Fleet grid's remote lanes alike. ADR-0509:
+ *  Resume is the human's call, armed like Approve; the second click sends RESUME_TEXT as a follow-up. Close is armed
+ *  too. Every write goes to `send` (act or laneAct, both through sendAct). True when the click was one of them. */
+function taskOpClick(t: HTMLElement, task: RemoteTaskView, armed: Record<string, number>, send: (op: RemoteOp, input: { task: string; text?: string }) => void): boolean {
+  if (t.closest("[data-rs-cancel]")) { send("cancel", { task: task.id }); return true; }
+  const resumeBtn = t.closest<HTMLElement>("[data-rs-resume]");
+  if (resumeBtn) {
+    const key = `resume:${task.id}`;
+    const step = armClick(armed[key] ?? null, Date.now());
+    if (step.act === "arm") { armed[key] = step.armedAt!; resumeBtn.textContent = "Click again to resume"; resumeBtn.classList.add("armed"); return true; }
+    delete armed[key];
+    send("followup", { task: task.id, text: RESUME_TEXT });
+    return true;
+  }
+  const closeBtn = t.closest<HTMLElement>("[data-rs-close]");
+  if (closeBtn) {
+    const key = `close:${task.id}`;
+    const step = armClick(armed[key] ?? null, Date.now());
+    if (step.act === "arm") { armed[key] = step.armedAt!; closeBtn.classList.add("armed"); closeBtn.dataset.tip = "Click again to close|Ends the lane on the spoke."; return true; }
+    delete armed[key];
+    send("close", { task: task.id });
+    return true;
+  }
+  return false;
+}
+
+/** A parked action's Approve and Deny (`card` is its approvalCard), for the per-spoke panel and the remote lanes
+ *  alike. `go` signs or refuses (decide or laneDecide, both through sendDecide). True when the click was one of them. */
+function askClick(t: HTMLElement, card: HTMLElement, item: RemoteApprovalView, armed: Record<string, number>, box: HTMLElement, go: (allow: boolean, password?: string) => void): boolean {
+  const approve = t.closest<HTMLButtonElement>("[data-rs-approve]");
+  const field = card.querySelector<HTMLInputElement>("[data-rs-password]");
+  if (approve && field) {
+    // A password hub: the first click opens the field, the next (or Enter) signs with what was typed. The field
+    // is emptied at once; the password lives only in this one request.
+    if (field.hidden) { field.hidden = false; approve.textContent = "Sign with the hub's password"; approve.classList.add("armed"); field.focus(); return true; }
+    const password = field.value;
+    field.value = "";
+    if (!password) { showErr(box, "Type this hub's presence password to sign the approval."); field.focus(); return true; }
+    go(true, password);
+    return true;
+  }
+  if (approve) {
+    const key = `approve:${item.task}:${item.ask.id}`;
+    const step = armClick(armed[key] ?? null, Date.now());
+    if (step.act === "arm") { armed[key] = step.armedAt!; approve.textContent = "Click again to sign the approval"; approve.classList.add("armed"); return true; }
+    delete armed[key];
+    go(true);
+    return true;
+  }
+  if (t.closest("[data-rs-deny]")) { go(false); return true; }
+  return false;
 }
 
 type RemoteOp = "submit" | "followup" | "cancel" | "close";
 
 /** One action on a spoke through the engine, then a fresh hub read so every view shows its effect. The panel's
- *  buttons and the Start-a-task selector both go through here. Returns null when the spoke accepted it, else
- *  the refusal in words. */
+ *  buttons, the Start-a-task selector and the Fleet grid's remote lanes (P-RS-LANES.1) all go through here.
+ *  Returns null when the spoke accepted it, else the refusal in words. */
 async function sendAct(node: string, op: RemoteOp, input: { task?: string; text?: string; name?: string; model?: string }): Promise<string | null> {
   if (!deps) return "The fleet is not ready.";
   const r = await deps.remoteSpokeAct(op, { node, ...input }).catch(() => null);
@@ -566,19 +636,29 @@ async function act(box: HTMLElement, op: RemoteOp, input: { task?: string; text?
 }
 
 async function loadApprovals(box: HTMLElement): Promise<void> {
-  if (!panel || !deps) return;
+  if (!panel) return;
   const node = panel.node;
-  const out = $("[data-rs-approvals-out]", box) as HTMLElement | null;
+  const out = $("[data-rs-approvals-out]", box);
   if (!out) return;
+  const list = await readApprovals(out, node, null, () => panel?.node === node, "Nothing is waiting on this spoke.");
+  if (list && panel) panel.approvals = list;
+}
+
+/** Read a spoke's parked actions into `out` as approvalCards (only `task`'s when one is named) and return them in
+ *  card order, since the buttons address them by index; null when the read failed (`out` says why) or `current`
+ *  says the panel or lane moved on while the spoke answered. */
+async function readApprovals(out: HTMLElement, node: string, task: string | null, current: () => boolean, empty: string): Promise<RemoteApprovalView[] | null> {
+  if (!deps) return null;
   out.textContent = "Asking the spoke\u2026";
   const r = await deps.remoteSpokeApprovals(node).catch(() => null);
-  if (panel?.node !== node) return;
-  if (!r || !r.ok) { out.textContent = r ? r.error : "The engine did not answer."; return; }
-  panel.approvals = r.approvals;
+  if (!current()) return null;
+  if (!r || !r.ok) { out.textContent = r ? r.error : "The engine did not answer."; return null; }
+  const list = task ? r.approvals.filter((v) => v.task === task) : r.approvals;
   const s = spokeOf(node);
   const a = snap?.available && s ? spokeActions(s, snap.actions) : null;
-  if (r.approvals.length === 0) { out.textContent = "Nothing is waiting on this spoke."; return; }
-  out.replaceChildren(...r.approvals.map((v, i) => approvalCard(v, i, a ? approvalButtons(v, a) : { approve: false, deny: false })));
+  if (list.length === 0) out.textContent = empty;
+  else out.replaceChildren(...list.map((v, i) => approvalCard(v, i, a ? approvalButtons(v, a) : { approve: false, deny: false })));
+  return list;
 }
 
 /** A parked action, built node by node: every spoke-written field is textContent. */
@@ -612,7 +692,7 @@ function approvalCard(v: RemoteApprovalView, i: number, b: { approve: boolean; d
     // ADR-0507 amendment: a `password` hub's Approve opens this field; the typed password is the second step.
     if (snap?.available && snap.hub.presence === "password") {
       const pw = document.createElement("input");
-      pw.type = "password"; pw.dataset.rsPassword = ""; pw.hidden = true; pw.maxLength = 1024; pw.autocomplete = "off"; pw.placeholder = "the hub's presence password";
+      pw.type = "password"; pw.className = "rs-pw"; pw.dataset.rsPassword = ""; pw.hidden = true; pw.maxLength = 1024; pw.autocomplete = "off"; pw.placeholder = "the hub's presence password";
       pw.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); ok.click(); } });
       row.append(pw);
     }
@@ -626,14 +706,189 @@ function approvalCard(v: RemoteApprovalView, i: number, b: { approve: boolean; d
 
 /** `password`: a password hub's presence password for this one allow; passed straight to the engine, never kept. */
 async function decide(box: HTMLElement, item: RemoteApprovalView, allow: boolean, password?: string): Promise<void> {
-  if (!panel || !deps) return;
+  if (!panel) return;
   const node = panel.node;
-  showErr(box, allow ? (password ? "Signing with the hub's password\u2026" : "Signing; the hub may ask you to confirm it is you\u2026") : "Denying\u2026");
+  await sendDecide(node, item, allow, password, (text, ok) => { if (panel?.node === node) showErr(box, text, ok); });
+  if (panel?.node === node) await loadApprovals(box);
+}
+
+/** One approve or deny on a spoke through the engine, then a fresh hub read so every view and count shows it. The
+ *  panel (decide) and the Fleet grid's remote lanes (laneDecide) both go through here; `say` reports each step. */
+async function sendDecide(node: string, item: RemoteApprovalView, allow: boolean, password: string | undefined, say: (text: string, ok?: boolean) => void): Promise<void> {
+  if (!deps) return;
+  say(allow ? (password ? "Signing with the hub's password\u2026" : "Signing; the hub may ask you to confirm it is you\u2026") : "Denying\u2026");
   const r = await deps.remoteSpokeDecide({ node, task: item.task, ask: item.ask.id, digest: item.ask.digest, allow, ...(password ? { password } : {}) }).catch(() => null);
-  if (panel?.node !== node) return;
-  if (!r) { showErr(box, "The engine did not answer."); return; }
-  showErr(box, r.ok ? (allow ? "Approved: the spoke's engine verified the signed decision." : "Denied.") : r.error, r.ok);
-  await loadApprovals(box);
+  if (!r) { say("The engine did not answer."); return; }
+  say(r.ok ? (allow ? "Approved: the spoke's engine verified the signed decision." : "Denied.") : r.error, r.ok);
+  if (r.ok) await refreshRemote();
+}
+
+// ------------------------------------------------- P-RS-LANES.1 (ADR-0551): remote tasks as Fleet grid lanes
+//
+// Fleet mode has two faces, the orbit and the lanes grid. Before this a remote spoke's tasks were on the orbit's
+// ring and in the Remote spokes view only, so the lanes grid lost them. The grid now ends with a Remote section: one
+// card per open remote task (remote_spokes_model.ts remoteLanes), offering exactly what the hub's scopes and the
+// task's state allow (taskButtons, approvalButtons). This file builds, repaints and answers the cards; fleet_grid.ts
+// only places them. Every write goes through sendAct and sendDecide like the panel's, every spoke-written word
+// reaches the DOM as textContent, and a remote lane is never promoted into the composer.
+
+/** One remote lane's card, kept across polls so a typed follow-up, an open password field and an armed button
+ *  survive a repaint. */
+interface LaneCard {
+  card: HTMLElement;
+  node: string;
+  /** The task this lane is; null for a waiting spoke with no open task listed. */
+  task: string | null;
+  /** Two-click arms by button key, as the panel's. */
+  armed: Record<string, number>;
+  /** The parked actions last shown, by index (the buttons address them by index, never by spoke-written ids). */
+  approvals: RemoteApprovalView[];
+  sig: string;
+  /** Whether the parked actions were read since the lane became parked: a parked lane reads them once on its own. */
+  asksRead: boolean;
+}
+const laneCards = new Map<string, LaneCard>();
+
+/** The card's frame, all static markup; paintLaneCard fills in what the spoke wrote, as text. */
+function buildLaneCard(lane: RemoteLane): LaneCard {
+  const card = document.createElement("div");
+  card.className = "fleet-card rs-lane";
+  card.dataset.rsLane = lane.key;
+  card.innerHTML = `<div class="rs-lane-head">
+      <i class="orbit-led" aria-hidden="true"></i>
+      <b class="rs-lane-spoke" data-rs-lane-spoke></b>
+      <span class="orbit-remote-tag">${icon("link", 10)} remote</span>
+      <span class="rs-state" data-rs-lane-state></span>
+      <button class="btn-mini orbit-btn rs-lane-open" data-rs-lane-open data-tip="Open|This spoke's own panel in the Remote spokes view: every task, parked actions, models and recall.">${icon("arrowRight", 12)} Open</button>
+    </div>
+    <div class="fleet-card-main rs-lane-main">
+      <div class="rs-lane-task"><b data-rs-lane-task></b><small data-rs-lane-meta></small></div>
+      <div class="rs-lane-acts" data-rs-lane-acts></div>
+      <div class="rs-lane-follow" data-rs-lane-follow hidden>
+        <textarea data-rs-follow-text rows="2" maxlength="32000" placeholder="Follow-up: what the task should do next. Enter sends, Shift+Enter starts a new line."></textarea>
+        <button class="btn-mini orbit-btn" data-rs-lane-send>${icon("send", 12)} Send</button>
+      </div>
+      <div class="rs-lane-asks" data-rs-lane-asks hidden>
+        <div class="rs-sec-h"><span>Parked actions</span><button class="btn-mini orbit-btn" data-rs-lane-check>${icon("refresh", 12)} Check</button></div>
+        <div data-rs-lane-asks-out></div>
+      </div>
+      <small class="orbit-ghost-err" data-rs-err></small>
+    </div>`;
+  enterSends($<HTMLTextAreaElement>("[data-rs-follow-text]", card), $("[data-rs-lane-send]", card));
+  return { card, node: lane.spoke.node, task: lane.task?.id ?? null, armed: {}, approvals: [], sig: "", asksRead: false };
+}
+
+/** Per poll: the frame's tone always, the words and buttons only when they changed (a typed follow-up and the
+ *  parked actions shown are never rebuilt). A lane that becomes parked reads its parked actions once. */
+function paintLaneCard(entry: LaneCard, lane: RemoteLane, a: HubActions, now: number): void {
+  const { card } = entry;
+  const s = lane.spoke;
+  const t = lane.task;
+  const cls = `fleet-card rs-lane rs-${REMOTE_TONE[lane.state]}`;
+  if (card.className !== cls) card.className = cls;
+  const parked = a.recall && lane.state === "approval";
+  if (!parked) entry.asksRead = false;
+  const sig = JSON.stringify([s.label, s.state, s.silentSince, lane.state, t, a]);
+  if (sig !== entry.sig) {
+    entry.sig = sig;
+    card.title = `${s.label} (${s.node})`;
+    setText(card, "[data-rs-lane-spoke]", s.label);
+    setText(card, "[data-rs-lane-state]", lane.state === s.state ? stateLabel(s, now) : REMOTE_STATE_LABEL[lane.state]);
+    setText(card, "[data-rs-lane-task]", t ? t.name : "Waiting on you, no open task listed");
+    setText(card, "[data-rs-lane-meta]", t ? taskMeta(t, now) : "The spoke parked an action: check it below, or open the spoke.");
+    const b = t ? taskButtons(t, a) : null;
+    // The task buttons are rebuilt, so their arms go; an armed Approve lives on in the parked actions shown.
+    for (const k of Object.keys(entry.armed)) if (!k.startsWith("approve:")) delete entry.armed[k];
+    const acts = $("[data-rs-lane-acts]", card);
+    if (acts) acts.innerHTML = b ? `${b.resume ? RESUME_BTN : ""}${b.cancel ? CANCEL_BTN : ""}${b.close ? CLOSE_BTN : ""}` : "";
+    const follow = $("[data-rs-lane-follow]", card);
+    if (follow) follow.hidden = !b?.followup;
+    const asks = $("[data-rs-lane-asks]", card);
+    if (asks) asks.hidden = !parked;
+  }
+  if (parked && !entry.asksRead) { entry.asksRead = true; void loadLaneAsks(entry); }
+}
+
+async function loadLaneAsks(entry: LaneCard): Promise<void> {
+  const out = $("[data-rs-lane-asks-out]", entry.card);
+  if (!out) return;
+  const list = await readApprovals(out, entry.node, entry.task, () => entry.card.isConnected, entry.task ? "Nothing is waiting on this task now." : "Nothing is waiting on this spoke now.");
+  if (list) entry.approvals = list;
+}
+
+async function laneAct(entry: LaneCard, op: RemoteOp, input: { task: string; text?: string }, done?: () => void): Promise<void> {
+  showErr(entry.card, "Sent; waiting for the spoke\u2026");
+  const error = await sendAct(entry.node, op, input);
+  if (error) { showErr(entry.card, error); return; }
+  showErr(entry.card, op === "close" ? "Closed: the spoke freed the lane." : "Done.", true);
+  done?.();
+}
+
+async function laneDecide(entry: LaneCard, item: RemoteApprovalView, allow: boolean, password?: string): Promise<void> {
+  await sendDecide(entry.node, item, allow, password, (text, ok) => showErr(entry.card, text, ok));
+  if (entry.card.isConnected) await loadLaneAsks(entry);
+}
+
+/** Paint the grid's Remote section into `host`, a wrapper fleet_grid.ts keeps after the local lanes: a head (the
+ *  hub and the lane count), then one card per remote lane in remoteLanes order. Cards are kept by lane key and
+ *  moved only when out of place, so a poll never restarts a glow or drops typed text. */
+export function paintRemoteLanes(host: HTMLElement): void {
+  const lanes = snap?.available ? remoteLanes(snap.spokes) : [];
+  if (!snap?.available || lanes.length === 0) {
+    if (host.firstChild) host.replaceChildren();
+    laneCards.clear();
+    return;
+  }
+  let head = $(":scope > .fleet-remote-head", host);
+  if (!head) {
+    head = document.createElement("div");
+    head.className = "fleet-group-head fleet-remote-head";
+    head.innerHTML = `${icon("link", 11)}<b>Remote</b><span data-rs-lanes-n></span><small data-rs-lanes-hub></small>`;
+    host.prepend(head);
+  }
+  setText(head, "[data-rs-lanes-n]", String(lanes.length));
+  setText(head, "[data-rs-lanes-hub]", `on ${snap.hub.label}`);
+  const now = Date.now();
+  const seen = new Set<string>();
+  let prev: Element = head;
+  for (const lane of lanes) {
+    seen.add(lane.key);
+    let entry = laneCards.get(lane.key);
+    if (!entry) { entry = buildLaneCard(lane); laneCards.set(lane.key, entry); }
+    paintLaneCard(entry, lane, spokeActions(lane.spoke, snap.actions), now);
+    if (prev.nextElementSibling !== entry.card) prev.after(entry.card);
+    prev = entry.card;
+  }
+  for (const [key, entry] of laneCards) {
+    if (seen.has(key)) continue;
+    entry.card.remove();
+    laneCards.delete(key);
+  }
+}
+
+/** Clicks inside a remote lane card. Open shows the spoke's own panel in the Remote spokes view (the per-spoke panel
+ *  the orbit and that view share); the rest are the panel's own actions on this one task. True for any click inside
+ *  a remote card, so the grid never reads it as a local lane's. */
+export function onRemoteLaneClick(t: HTMLElement): boolean {
+  const card = t.closest<HTMLElement>("[data-rs-lane]");
+  if (!card) return false;
+  const entry = laneCards.get(card.dataset.rsLane ?? "");
+  if (!entry || !deps) return true;
+  if (t.closest("[data-rs-lane-open]")) { deps.openRemoteView({ node: entry.node }); return true; }
+  if (t.closest("[data-rs-lane-check]")) { void loadLaneAsks(entry); return true; }
+  const task = entry.task ? spokeOf(entry.node)?.tasks.find((x) => x.id === entry.task) ?? null : null;
+  if (task && t.closest("[data-rs-lane-send]")) {
+    const field = $<HTMLTextAreaElement>("[data-rs-follow-text]", card);
+    const text = field?.value ?? "";
+    if (!text.trim()) { showErr(card, "Write the follow-up first."); field?.focus(); return true; }
+    void laneAct(entry, "followup", { task: task.id, text }, () => { if (field) field.value = ""; });
+    return true;
+  }
+  if (task && taskOpClick(t, task, entry.armed, (op, input) => void laneAct(entry, op, input))) return true;
+  const ask = t.closest<HTMLElement>("[data-rs-ask-i]");
+  const item = ask ? entry.approvals[Number(ask.dataset.rsAskI)] : undefined;
+  if (item && ask) askClick(t, ask, item, entry.armed, card, (allow, password) => void laneDecide(entry, item, allow, password));
+  return true;
 }
 
 async function runRecall(box: HTMLElement, task: string | undefined): Promise<void> {
@@ -760,7 +1015,7 @@ export function refreshDeployPanel(box: HTMLElement): void {
     // ADR-0512: deactivated spokes are not targets, so a hub with only those has none to offer.
     list.innerHTML = snap.spokes.length
       ? `<div class="orbit-ghosts-empty">Every spoke on this hub is deactivated. Reactivate one on the hub (hub reactivate) to start a task there.</div>`
-      : `<div class="orbit-ghosts-empty">This hub has no spokes yet. Enroll one in the Remote Spokes panel.</div>`;
+      : `<div class="orbit-ghosts-empty">This hub has no spokes yet. Enroll one in the Remote Spokes admin panel.</div>`;
     return;
   }
   const now = Date.now();
@@ -822,16 +1077,18 @@ async function startDeploy(box: HTMLElement, openSpoke: (node: string) => void):
   showErr(box, `Task started on ${choice.spoke.label}; it shows in Tasks at the next refresh (up to 15 s).`, true);
 }
 
-/** The hub picker's buttons (Start, Panel, Start a task, a spoke pip or alert's Open, an alert's dismiss). Returns
- *  the node to open, "deploy" for the Start-a-task selector, "repaint" after a dismissal (the section, the badge
- *  and the cards' alert lines change), "handled", or null. */
+/** The remote hub's buttons, in the Hubs panel and the Remote spokes view (Start, Set up, Open, Start a task, a
+ *  spoke row or alert's Open, an alert's dismiss). Returns the node to open, "deploy" for the Start-a-task
+ *  selector, "repaint" after a dismissal (the alert list, the badges and the cards' alert lines change),
+ *  "handled", or null. */
 export function onRemoteHubClick(t: HTMLElement): string | "deploy" | "repaint" | "handled" | null {
   if (!deps) return null;
   const x = t.closest("[data-rs-alert-x]") as HTMLElement | null;
   if (x) { dismissAlerts([x.dataset.rsAlertX ?? ""]); return "repaint"; }
   if (t.closest("[data-rs-alert-clear]")) { dismissAlerts(openAlerts(Date.now()).map((a) => a.key)); return "repaint"; }
   if (t.closest("[data-rs-start]")) { void deps.startRemoteSpokes().then(refreshRemote); return "handled"; }
-  if (t.closest("[data-rs-panel]")) { deps.openRemoteSpokesPanel(); return "handled"; }
+  if (t.closest("[data-rs-panel]")) { deps.openRemoteAdmin(); return "handled"; }
+  if (t.closest("[data-rs-view]")) { deps.openRemoteView(); return "handled"; }
   if (t.closest("[data-rs-deploy]")) return "deploy";
   const pip = t.closest("[data-rs-open]") as HTMLElement | null;
   return pip?.dataset.rsOpen ?? null;

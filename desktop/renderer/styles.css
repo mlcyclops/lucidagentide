@@ -3649,6 +3649,50 @@ body.preview-open .thread{font-size:.9em}
 .meet-todo.unknown:hover{background:none;border-color:transparent}
 .meet-todo.unknown .meet-todo-mark{border-style:dashed;color:var(--txt-3);font-size:10px;line-height:1}
 .meet-todo-text{min-width:0}
+/* ============================================================================================
+   P-RS-VIEW.1 (ADR-0539): the Remote spokes view. The .kg shell with its own width var, wide enough
+   for the plugin's Admin panel. Spokes tab: the list on the left, the picked spoke's panel (the
+   orbit's own .rs-* panel) on the right. Rows are grids, every text run its own ellipsized block
+   (invariant #11). Admin tab: a launcher for the plugin's panel, which opens in its own window (ADR-0543).
+   ============================================================================================ */
+#remoteSpokes{width:var(--remoteSpokes-w,min(960px,70vw))}
+#remoteSpokes .set-head{padding-top:6px;padding-bottom:6px;gap:10px}
+#remoteSpokes .set-title{min-width:0;white-space:nowrap;overflow:hidden}
+#remoteSpokes .set-sub{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rsv-tabs{display:inline-flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--bg-2)}
+.rsv-tab{border:0;border-radius:6px;background:none;color:var(--txt-3);font:inherit;font-size:12px;padding:3px 11px;cursor:pointer;
+  transition:background var(--t-fast),color var(--t-fast)}
+.rsv-tab:hover{color:var(--txt)}
+.rsv-tab.on{background:var(--bg-3);color:var(--txt)}
+.rsv-main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);overflow:hidden}
+.rsv-main[hidden],.rsv-admin[hidden]{display:none}
+.rsv-list{overflow:auto;padding:8px 6px;border-right:1px solid var(--line-soft)}
+.rsv-detail{overflow:auto;padding:10px 12px;min-width:0}
+.rsv-detail .orbit-panel-h [data-rsv-detail-close]{margin-left:auto}
+.rsv-rows{display:grid;gap:2px;margin:0 0 6px}
+.rsv-row{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:8px;width:100%;text-align:left;
+  padding:7px 9px;border:1px solid transparent;border-radius:9px;background:none;color:var(--txt-2);font:inherit;cursor:pointer;
+  transition:background var(--t-fast),border-color var(--t-fast)}
+.rsv-row:hover{background:var(--bg-2);border-color:var(--line-soft)}
+.rsv-row.on{background:var(--bg-2);border-color:var(--lane,var(--accent))}
+.rsv-row .orbit-led{margin-top:5px}
+.rsv-row-main{min-width:0}
+.rsv-row-main>b,.rsv-row-main>small{display:block;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rsv-row-main>b{font-size:12.5px;color:var(--txt)}
+.rsv-row-main>small{font-size:11px;line-height:1.5;color:var(--txt-3)}
+.rsv-row-main>small.rsv-row-model{font-family:var(--mono);font-size:10.5px;color:var(--txt-4)}
+.rsv-row.rs-approval,.rsv-row.rs-stuck{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .4)}
+.rsv-row.rs-maybe{--lane:var(--amber);--lane-dim:rgb(var(--amber-rgb) / .4)}
+.rsv-row.rs-busy{--lane:var(--cyan);--lane-dim:rgb(var(--cyan-rgb) / .35)}
+.rsv-row.rs-busy .orbit-led{animation:hudpulse 2.2s ease-in-out infinite}
+.rsv-row.rs-ready{--lane:var(--blue);--lane-dim:rgb(var(--blue-rgb) / .4)}
+.rsv-row.rs-checking,.rsv-row.rs-off{--lane:var(--txt-4)}
+.rsv-row.rs-off{opacity:.6}
+.rsv-notice{display:grid;gap:6px;justify-items:start;padding:8px 4px}
+.rsv-foot{margin-top:10px}
+.rsv-admin{flex:1;min-height:0;overflow:auto}
+.rsv-launch{display:grid;gap:10px;justify-items:start;max-width:560px;padding:16px}
+@media (prefers-reduced-motion:reduce){.rsv-row.rs-busy .orbit-led{animation:none}}
 /* P-KG-CODE.1: trim the Knowledge-graph header's vertical padding too (ID beats the shared .set-head rule). */
 #knowledge .set-head{padding-top:6px;padding-bottom:6px}
 /* P-KGUI.1 (ADR-0184): the consolidated views dropdown replaces the three-button vertical stack. */
@@ -7250,19 +7294,18 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-node.remote .orbit-node-card{border-style:dashed;border-color:var(--lane,var(--line))}
 .orbit-remote-tag{flex:none;display:inline-flex;align-items:center;gap:3px;font-size:9px;letter-spacing:.06em;
   text-transform:uppercase;color:var(--blue-txt);white-space:nowrap}
-.orbit-node.rs-approval,.fleet-pip.rs-approval,.rs-state.rs-approval{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .55)}
+.orbit-node.rs-approval,.fleet-pip.rs-approval,.rs-state.rs-approval,.rs-lane.rs-approval{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .55)}
 .orbit-node.rs-approval .orbit-node-card::after{box-shadow:0 0 18px 3px rgb(var(--red-rgb) / .6);animation:orbitGlow 1.6s ease-in-out infinite}
-.orbit-node.rs-stuck,.fleet-pip.rs-stuck,.rs-state.rs-stuck{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .4)}
-.orbit-node.rs-maybe,.fleet-pip.rs-maybe,.rs-state.rs-maybe{--lane:var(--amber);--lane-dim:rgb(var(--amber-rgb) / .4)}
-.orbit-node.rs-busy,.fleet-pip.rs-busy,.rs-state.rs-busy{--lane:var(--cyan);--lane-dim:rgb(var(--cyan-rgb) / .35)}
-.orbit-node.rs-busy .orbit-led,.fleet-pip.rs-busy i{animation:hudpulse 2.2s ease-in-out infinite}
-.orbit-node.rs-ready,.fleet-pip.rs-ready,.rs-state.rs-ready{--lane:var(--blue);--lane-dim:rgb(var(--blue-rgb) / .4)}
-.orbit-node.rs-checking,.fleet-pip.rs-checking,.rs-state.rs-checking{--lane:var(--txt-4)}
+.orbit-node.rs-stuck,.fleet-pip.rs-stuck,.rs-state.rs-stuck,.rs-lane.rs-stuck{--lane:var(--red);--lane-dim:rgb(var(--red-rgb) / .4)}
+.orbit-node.rs-maybe,.fleet-pip.rs-maybe,.rs-state.rs-maybe,.rs-lane.rs-maybe{--lane:var(--amber);--lane-dim:rgb(var(--amber-rgb) / .4)}
+.orbit-node.rs-busy,.fleet-pip.rs-busy,.rs-state.rs-busy,.rs-lane.rs-busy{--lane:var(--cyan);--lane-dim:rgb(var(--cyan-rgb) / .35)}
+.orbit-node.rs-busy .orbit-led,.fleet-pip.rs-busy i,.rs-lane.rs-busy .orbit-led{animation:hudpulse 2.2s ease-in-out infinite}
+.orbit-node.rs-ready,.fleet-pip.rs-ready,.rs-state.rs-ready,.rs-lane.rs-ready{--lane:var(--blue);--lane-dim:rgb(var(--blue-rgb) / .4)}
+.orbit-node.rs-checking,.fleet-pip.rs-checking,.rs-state.rs-checking,.rs-lane.rs-checking{--lane:var(--txt-4)}
 /* ADR-0512: deactivated on purpose (shipped, lent, unplugged): the dimmest grey, faded, never animated. */
-.orbit-node.rs-off,.fleet-pip.rs-off,.rs-state.rs-off{--lane:var(--txt-4)}
+.orbit-node.rs-off,.fleet-pip.rs-off,.rs-state.rs-off,.rs-lane.rs-off{--lane:var(--txt-4)}
 .orbit-node.rs-off .orbit-node-card{opacity:.55}
 .orbit-node.rs-off .orbit-led,.fleet-pip.rs-off i{animation:none}
-.fleet-pip.rs-pip{border:0;background:none;padding:0;font:inherit;color:var(--txt-2)}
 .rs-hubrow small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* The per-spoke panel. Every text run is its own block (invariant 11: no prose as flex siblings). */
 .rs-state{margin-left:2px;padding:1px 7px;border-radius:999px;font-size:10px;white-space:nowrap;
@@ -7288,7 +7331,47 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .rs-entry-h>span:last-child{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rs-entry-h .pill{flex:none}
 .rs-ask-h{font-size:12px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.rs-ask .orbit-spawn-row{gap:6px;align-items:center}
+.rs-ask .orbit-spawn-row{gap:6px;align-items:center;flex-wrap:wrap}
+/* The presence password field takes its own line: beside "Sign with the hub's password" and Deny it was squeezed
+   to one character wide. */
+.rs-ask .orbit-spawn-row input.rs-pw{flex:1 1 100%;min-width:0;background:var(--bg-2);border:1px solid var(--line);
+  border-radius:8px;color:var(--txt);font:inherit;font-size:12px;padding:7px 9px}
+.rs-ask .orbit-spawn-row input.rs-pw:focus{outline:none;border-color:var(--accent)}
+/* P-RS-LANES.1 (ADR-0551): remote spoke tasks as lanes in the Fleet grid. The wrapper is display:contents, so the
+   head and the cards are items of the grid's own flex row (autofit tiles them with the local lanes) and the head
+   owns a full row in both layouts. A remote card keeps the lane card's frame (.fleet-card, .fleet-card-main) and
+   the orbit's remote look: a dashed border in the shared state hue; only a parked approval glows. */
+.fleet-remote{display:contents}
+.fleet-remote-head{flex:0 0 100%}
+.fleet-remote-head .ic{flex:none;color:var(--blue-txt)}
+.fleet-remote-head small{min-width:0;font-size:10px;color:var(--txt-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fleet-card.rs-lane{border-style:dashed;border-color:var(--lane,var(--line))}
+.fleet-card.rs-lane.rs-approval::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  box-shadow:inset 0 0 18px 3px rgb(var(--red-rgb) / .6);opacity:.1;will-change:opacity;animation:orbitGlow 1.6s ease-in-out infinite}
+.rs-lane-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px;row-gap:5px;padding:6px 7px;min-width:0;
+  border-bottom:1px solid var(--line-soft);background:var(--bg-3)}
+.rs-lane-spoke{flex:1 1 90px;min-width:0;font-size:12px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rs-lane-head .rs-state{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.rs-lane-open{flex:none;white-space:nowrap}
+.rs-lane-main{gap:7px;padding:7px 8px;overflow:auto}
+.rs-lane-task{display:flex;flex-direction:column;gap:1px;min-width:0}
+.rs-lane-task b{font-size:12.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rs-lane-task small{font-size:10.5px;color:var(--txt-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rs-lane-acts{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.rs-lane-acts:empty{display:none}
+.rs-lane-acts .btn-mini{flex:none;white-space:nowrap}
+/* The follow-up field takes the card's full width on its own line, never squeezed beside its button. */
+.rs-lane-follow{display:flex;flex-direction:column;gap:5px}
+.rs-lane-follow textarea{width:100%;min-width:0;min-height:44px;box-sizing:border-box;resize:vertical;background:var(--bg-2);
+  border:1px solid var(--line);border-radius:8px;color:var(--txt);font:inherit;font-size:12px;padding:6px 8px}
+.rs-lane-follow textarea:focus{outline:none;border-color:var(--accent)}
+.rs-lane-follow .btn-mini{align-self:flex-end;white-space:nowrap}
+.rs-lane-asks .rs-sec-h{margin:2px 0 4px}
+.rs-lane-asks .rs-ask{margin:0 0 6px}
+@media (prefers-reduced-motion:reduce){
+  .rs-lane.rs-busy .orbit-led{animation:none}
+  .fleet-card.rs-lane.rs-approval::after{animation:none;opacity:.5}
+}
 /* ADR-0508: the Start-a-task selector and the panel's Models section. Rows are grids, every text run its own
    block line that ellipsizes (invariant 11); chips are inline blocks inside one block line, never flex prose. */
 .rs-choices{display:grid;gap:6px;margin:0 4px 10px}

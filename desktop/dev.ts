@@ -130,6 +130,7 @@ import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, TURN_ALREADY_RUNN
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
+import { HolderPool } from "./lane_holder.ts"; // P-HOLDER.1 (ADR-0534): lanes outlive the engine
 import { displayStatus } from "./collab/fleet_status.ts"; // P-STUCK-SHOW.3 (ADR-0521): phone guests see likely-stuck spokes too
 import { sessionLive, withLiveState, type SessionLiveSpoke } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
 import { addInterject, addPeerNote, awaitPeerReply, carryPendingNotes, drainInterjects, drainPeerNotes, pendingInterjectCount } from "./interject_store.ts"; // P-INTERJECT.1 + P-PWA-FLEET.1: mid-turn operator notes; P-OWN.1: peer notes
@@ -568,7 +569,7 @@ import { kbScanner, kbStore, kgEntry, listKgs, activeKgId, createKg, renameKg, s
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.ts"
-import { inspectPluginFile, installPluginFile, installPluginFromUrl, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505)
+import { inspectPluginFile, installPluginFile, installPluginFromUrl, readPluginLicense } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505)
 import { PluginRuntime, resolvePluginNode } from "./plugins/runtime.ts" // P-PLUGINS.2 (ADR-0462)
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
@@ -1787,7 +1788,12 @@ try {
   if (existsSync(LATENCY_LOG_PATH)) backend.durations.seedFromLatencyLines(readFileSync(LATENCY_LOG_PATH, "utf8").split("\n").slice(-200));
 } catch { /* no history yet */ }
 backend.carriedNotes = () => carryPendingNotes("master"); // ADR-0414: same carry as the lanes
+// P-HOLDER.1 (ADR-0534): lanes run under lucid-holder when it is built or shipped, so a restart, an update or a
+// closed window leaves their agents running. LUCID_LANE_HOLDERS=0 turns it off (lanes are this engine's children).
+const laneHolders = process.env.LUCID_LANE_HOLDERS === "0" ? null : HolderPool.forEngine();
+console.log(laneHolders ? `[fleet] lane holders on (${laneHolders.binary})` : "[fleet] lane holders off: lanes end with this engine");
 const fleet: FleetLaneManager = new FleetLaneManager({
+  holders: laneHolders,
   argv: fleetLaneArgv, masterModel: () => backend.activeModelName(), recordLaneSession: appendLaneLedger,
   masterSessionId: () => backend.currentSessionId(), // P-SWITCH.2 (ADR-0404): one session, one owner
   claims: backend.writeClaims, history: backend.durations, // P-WAIT.1: one set of file claims, P-PROGRESS.1: one estimate history, with the master
@@ -1923,11 +1929,13 @@ function spokeHolding(id: string): SessionLiveSpoke | null {
 // endpoint tooling (Defender / Intune) can identify the agent instead of classifying it as shadow AI. Only
 // when Electron launched us (LUCID_DATA_ROOT); a standalone dev engine is not an install. Rewritten each
 // launch, so MCP changes surface at the next start. Advisory: a failed write is logged, never fatal.
-if (process.env.LUCID_DATA_ROOT) {
+// ADR-0538: written once the port is bound (PORT=0 picks it then), so it never names port 0.
+function publishLocalAgentManifest(port: number): void {
+  if (!process.env.LUCID_DATA_ROOT) return;
   const manifest = buildLocalAgentManifest({
     build: BUILD,
     version: APP_VERSION,
-    port: PORT,
+    port,
     hostExecutable: process.env.LUCID_HOST_EXE || null,
     engineExecutable: basename(process.execPath),
     // Agent mode answers omp's per-tool asks itself (the in-process gate and the exec/egress tier prompts
@@ -2525,7 +2533,8 @@ return Bun.serve({
     let ctrlPairing: Pairing | null = null;
     // H2 (ADR-0022): reject anything a web page or DNS-rebind could forge against
     // the fixed local port (foreign Host/Origin, or a non-JSON state-changing body).
-    if (!isAllowedRequest(reqShape(req), PORT)) return new Response("forbidden", { status: 403 });
+    // ADR-0538: PORT=0 binds an ephemeral port, so the Host a client must use is the bound one.
+    if (!isAllowedRequest(reqShape(req), srv.port ?? PORT)) return new Response("forbidden", { status: 403 });
     // ADR-0024: the sensitive /api surface additionally requires the per-launch token (carried by
     // the renderer from the injected HTML). /api/health is exempt — main.ts polls it before the
     // page (and thus the token) exists, and it returns no data. Static assets/HTML aren't /api/*.
@@ -4224,7 +4233,7 @@ return Bun.serve({
       if (p === "/api/build-info") {
         return json({ ok: true, data: buildInfoView(BUILD, {
           version: APP_VERSION,
-          port: PORT,
+          port: ENGINE_PORT,
           dataRoot: process.env.LUCID_DATA_ROOT || "",
           settingsFile: process.env.LUCID_GUI_SETTINGS_FILE || join(homedir(), ".omp", "lucid-gui.json"),
           personalDir: personalBaseDir(),
@@ -5997,20 +6006,18 @@ return Bun.serve({
         const id = String(b.id ?? "");
         const started = await plugins.start(id);
         // ADR-0514: the hub plugin's panel opens only with a one-time bootstrap secret it minted for this engine,
-        // framed only by this window (engineAppUrl's origin).
+        // framed by nothing but this window's origin. ADR-0543: the IDE opens it top level in its own window.
         if (started.ok && id === REMOTE_SPOKES_PLUGIN) return json({ ok: true, data: await remoteSpokesPanelUrl(remoteSpokesDeps, `http://127.0.0.1:${ENGINE_PORT}`) });
         return json({ ok: true, data: started });
       }
+      // ADR-0546: these are the USER's stop and uninstall, so the plugin also stays stopped at the next launch.
       if (p === "/api/plugins/stop" && req.method === "POST") {
         const b = await readBody<{ id?: unknown }>(req);
-        return json({ ok: true, data: await plugins.stop(String(b.id ?? "")) });
+        return json({ ok: true, data: await plugins.stop(String(b.id ?? ""), { byUser: true }) });
       }
       if (p === "/api/plugins/uninstall" && req.method === "POST") {
         const b = await readBody<{ id?: unknown; keepData?: unknown }>(req);
-        const id = String(b.id ?? "");
-        const stopped = await plugins.stop(id);
-        if (!stopped.ok) return json({ ok: true, data: stopped });
-        return json({ ok: true, data: uninstallPlugin(id, b.keepData !== false) });
+        return json({ ok: true, data: await plugins.uninstall(String(b.id ?? ""), b.keepData !== false) });
       }
       // P-SKILLREG.2 (ADR-0102): the PUBLISH seam. Reads a codified skill's SKILL.md and publishes it as a
       // versioned artifact to the configured targets (fail-safe fan-out). Public ships the LOCAL publisher;
@@ -7035,6 +7042,7 @@ try {
   console.error(`[discovery] could not publish ${NONCE_PATH}: ${String(err)}`);
 }
 process.on("exit", () => { removeDiscovery(DISCOVERY_PATH); removeDiscovery(NONCE_PATH); });
+publishLocalAgentManifest(ENGINE_PORT);
 
 // P-PREVIEW.3a-shot (ADR-0096): hand the omp subprocess a ready-to-use URL (real bound port + token) for the
 // agent's preview_screenshot tool to fetch the cached shot. omp is spawned later (lazily, by acp_backend in
@@ -7131,10 +7139,23 @@ await refreshRecall();
 backend.startAutomationScheduler();
 // P-SCHED.1 (ADR-0443): the scheduled LANE jobs tick beside it, same envelope (only while the app runs).
 jobScheduler.start();
+// P-PLUGINS.8 (ADR-0546): the plugins the user left running come back, once, now that the engine serves. Detached:
+// the bind never waits on a plugin; each one gets a bounded retry, and a user's Stop meanwhile cancels its retry.
+void plugins.autostart().catch((e) => console.warn("[plugins] autostart failed:", e));
 // ADR-0501: controller lanes the previous engine ran come back idle on their own lane ids and omp sessions (after
 // the child env above is set, so a restored lane is wired like a new one). Detached: the bind never waits on omp;
 // controller routes do (the gate set with controllerDeps), and open when this settles, success or not.
-void restoreControllerLanes(controllerDeps).then(
+// P-HOLDER.1 (ADR-0534): first take back every lane a holder kept running (its turn, if any, carries on), so the
+// controller restore below finds those lanes running instead of respawning them and calling their turns interrupted.
+async function reattachHeldLanes(): Promise<void> {
+  if (!laneHolders) return;
+  for (const rec of laneHolders.all()) {
+    // One record that throws must not keep the others (and the controller restore after them) from coming back.
+    const r = await fleet.reattach(rec).catch((e) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }));
+    console.log(r.ok ? `[fleet] reattached ${rec.laneId} (${rec.name})${rec.inFlight ? ", its turn carries on" : ""}` : `[fleet] ${rec.laneId} did not come back: ${r.reason}`);
+  }
+}
+void reattachHeldLanes().catch((e) => console.warn("[fleet] reattach failed:", e)).then(() => restoreControllerLanes(controllerDeps)).then(
   (back) => { if (back.length) console.log(`[controller] restored ${back.length} lane(s): ${back.join(", ")}`); },
   (e) => console.warn("[controller] lane restore failed:", e),
 ).finally(() => { controllerDeps.restoring = null; controllerRestore.resolve(); });

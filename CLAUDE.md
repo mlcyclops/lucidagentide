@@ -84,6 +84,10 @@ The harness is TypeScript. The ONLY directory containing Python is
 scanner in TypeScript. If a second Python surface seems necessary, that’s a
 drift signal — stop and write an ADR.
 
+Native sidecars the engine launches may be Rust, one crate per folder under
+`native/` only (ADR-0533). They hold no policy: hooks, tools, the gate and the
+engine stay TypeScript.
+
 ### 3. Fail-closed is law.
 
 Any failure to obtain a valid scan result — sidecar dead, malformed response,

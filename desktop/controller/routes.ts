@@ -14,6 +14,9 @@
 //     it may also name a model, only one this engine lists as available (else 400); absent, the fleet's default.
 //   - prompt text goes through the fail-closed scan before it reaches a lane. Scan unavailable == refused.
 //   - Malformed anything (bad JSON, extra keys, wrong types, oversize text) is refused, never coerced.
+//   - schema (ADR-0537) answers this API as an OpenAPI 3.1 document (openapi.ts), to the UI token and to any paired
+//     controller alike, so outside clients can be built against it. A route added here goes into that document too:
+//     openapi.test.ts fails on a route the document misses or names wrongly.
 // Events are metadata only (pairing, lane, verdict, counts); prompt text and tokens never reach them.
 //
 // Lane lifecycle (ADR-0500/0501/0502):
@@ -36,6 +39,7 @@ import { Telemetry, type EventSink } from "../../harness/telemetry/events.ts";
 import type { LaneEvent, LaneTurnRecord, LaneView } from "../fleet_lanes.ts";
 import { closeLaneWorktree, createRemoteLaneWorktree, removeLaneWorktree } from "../lane_worktree.ts";
 import type { ControllerLane, ControllerLaneStore } from "./lane_store.ts";
+import { controllerOpenApi } from "./openapi.ts";
 import { DEFAULT_APPROVAL_HOURS, MAX_APPROVAL_HOURS, p256FromSpki, verifyRemoteDecision, type RemoteAsk } from "./remote_policy.ts";
 import { isLaneCount, PAIRING_NAME_RE, SPOKE_NODE_RE, type Pairing, type PairingStore, type RemotePolicy } from "./store.ts";
 
@@ -43,8 +47,8 @@ import { isLaneCount, PAIRING_NAME_RE, SPOKE_NODE_RE, type Pairing, type Pairing
 export const CONTROLLER_ROUTES: ReadonlySet<string> = new Set(
   // ask, decide, deny: P-CTRL-REMOTE.1 (ADR-0531). The controller can read a remote ask and deny it; an allow
   // needs a decision the engine verifies against the paired root, so the controller only carries it.
-  // close: ADR-0500.
-  ["lanes", "spawn", "prompt", "status", "result", "cancel", "close", "ask", "decide", "deny"].map((r) => `/api/controller/${r}`),
+  // close: ADR-0500. schema: ADR-0537, the one route the UI token also reads here.
+  ["lanes", "spawn", "prompt", "status", "result", "cancel", "close", "ask", "decide", "deny", "schema"].map((r) => `/api/controller/${r}`),
 );
 
 /** ADR-0425: at most two controller-owned live lanes per pairing, unless the human granted the pairing its own
@@ -72,7 +76,10 @@ export interface ControllerDeps {
     status(): Promise<{ lanes: LaneView[] }>;
     laneTranscript(laneId: string): { role: "user" | "assistant"; text: string }[];
     laneRunning(laneId: string): boolean | null;
+    lanePolicy(laneId: string): { supervised: boolean; remote: { approvalMs: number; offTask: boolean } | null } | null;
     cancel(laneId: string): { ok: boolean };
+    /** P-HOLDER.1: the settle of a turn a reattach resumed on this lane, or null when none is running. */
+    resumedTurn(laneId: string): Promise<void> | null;
   };
   /** ADR-0511: the model ids this engine lists as available (the model picker's list, with its platform, AskSage
    *  and managed-policy narrowing). A spawn may name one of these. Absent: a spawn that names a model is refused. */
@@ -131,8 +138,11 @@ async function resolveWorkspace(path: string): Promise<string | null> {
   }
 }
 
-const reply = (status: number, data: Record<string, unknown>) =>
-  new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
+const reply = (status: number, data: Record<string, unknown>) => new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
+/** ADR-0537: this API as OpenAPI 3.1, built on the first request (not at import, so no import order can see a
+ *  constant it reads still uninitialized) from the limits this handler enforces, then kept. */
+let schemaJson: string | null = null;
 const malformed = () => reply(400, { ok: false, error: "malformed request" });
 const UNKNOWN_LANE = { ok: false, error: "unknown lane" };
 /** A JSON object body carrying exactly `keys` (each optional unless `required`), every value a string. */
@@ -241,6 +251,14 @@ export async function handleController(req: Request, path: string, pairing: Pair
     if (!gone) return reply(404, { ok: false, error: "unknown pairing" });
     emit(deps, "controller_unpaired", { runId: Snowflake.next(), sessionId: `controller:${gone.id}` }, { pairing: gone.name, pairing_id: gone.id, lanes: gone.lanes.length });
     return reply(200, { ok: true });
+  }
+
+  // ADR-0537: the API's own description, for the UI token (no pairing here) and any paired controller alike. The
+  // engine's /api gate has already refused every other caller (no token, the agent token, an unverified one).
+  if (path === "/api/controller/schema") {
+    if (req.method !== "GET" || url.search) return malformed();
+    schemaJson ??= JSON.stringify(controllerOpenApi({ maxPromptChars: MAX_PROMPT_CHARS, maxModelChars: MAX_MODEL_CHARS, modelId: MODEL_ID_RE, defaultMaxLanes: MAX_LANES_PER_PAIRING, restoreWaitMs: RESTORE_WAIT_MS }));
+    return new Response(schemaJson, { status: 200, headers: JSON_HEADERS });
   }
 
   // ── Controller routes: a live pairing or nothing ────────────────────────────────────────────────────────
@@ -398,6 +416,17 @@ export async function handleController(req: Request, path: string, pairing: Pair
   return reply(202, { ok: true, data: { runId: ids.runId, verdict: verdict.trustLabel } });
 }
 
+/** Whether a running lane's policy is the one a pairing's lane is spawned with (supervised; the pairing's remote
+ *  approval window and off-task check, or none). */
+function samePolicy(
+  policy: { supervised: boolean; remote: { approvalMs: number; offTask: boolean } | null } | null,
+  remote: { approvalHours: number; offTask: boolean } | null | undefined,
+): boolean {
+  if (!policy?.supervised) return false;
+  if (!remote) return policy.remote === null;
+  return policy.remote !== null && policy.remote.approvalMs === remote.approvalHours * 3_600_000 && policy.remote.offTask === remote.offTask;
+}
+
 /** ADR-0501: at engine boot, bring every recorded controller lane back, idle, under its own lane id, on its own
  *  omp session (session/load when omp offers it; otherwise a fresh session that carries the recorded transcript
  *  as memory, the P-FLEET.L4 fallback). A turn that was running when the engine died is NOT re-run: it is closed
@@ -413,6 +442,19 @@ export async function restoreControllerLanes(deps: ControllerDeps): Promise<stri
     if (!pairing || !pairing.lanes.includes(rec.id)) {
       const review = await retireLane(deps, rec.id, pairing?.id ?? null, "ended: its pairing was revoked before the engine restarted");
       emit(deps, "controller_ruling", ids, { pairing: pairing?.name ?? "", lane_id: rec.id, ruling: "lane_not_restored", backend: "lane-lifecycle", reason: "pairing revoked", ...(review.reviewBranch ? { branch: review.reviewBranch } : {}) });
+      continue;
+    }
+    // P-HOLDER.1 (ADR-0534): a holder kept this lane's agent running and the fleet already took it back, its turn
+    // (if any) still going: nothing was interrupted. The turn records itself when it settles, as a live one does.
+    // LH-02: only when it runs under the pairing's policy (supervised, the pairing's remote approval). A held lane
+    // that came back under any other policy is ended and started again the normal way below.
+    if (deps.fleet.laneRunning(rec.id) !== null && !samePolicy(deps.fleet.lanePolicy(rec.id), pairing.remote)) deps.fleet.remove(rec.id, true);
+    if (deps.fleet.laneRunning(rec.id) !== null) {
+      const runId = rec.inFlight?.runId;
+      const resumed = deps.fleet.resumedTurn(rec.id);
+      if (runId) void (resumed ?? Promise.resolve()).finally(() => settleLane(deps, rec.id, runId)).catch(() => {});
+      emit(deps, "controller_ruling", ids, { pairing: pairing.name, lane_id: rec.id, ruling: "lane_restored", backend: "lane-lifecycle", reason: rec.inFlight ? "reattached to its running agent; the turn carries on" : "reattached to its running agent" });
+      back.push(rec.id);
       continue;
     }
     const transcript: LaneTurnRecord[] = rec.inFlight

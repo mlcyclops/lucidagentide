@@ -760,4 +760,7 @@
 //            (#512, ADR-0560); img2threejs for Creator (#584, ADR-0562); repo metrics history (#579, ADR-0561);
 //            the Bun pin guard (#599, ADR-0547); desktop KaTeX 0.18.10 and Monaco 0.56.0 (#351); ADR-0550 docs
 //            (#605). PRERELEASE: never marked Latest; the Homebrew cask and stable installs stay on 2.5.3.
-export const APP_VERSION = "2.5.4-beta.1";
+// v2.6.0-dev.1 = a local development build of the 2.6.0 line (feat/lane-holder: lanes under lucid-holder, OSC 7501
+//            fleet status, the controller OpenAPI document, PORT=0), so an installed dev build is told apart from
+//            the 2.5.4 beta at a glance. Never tagged or published; the release sets 2.6.0.
+export const APP_VERSION = "2.6.0-dev.1";

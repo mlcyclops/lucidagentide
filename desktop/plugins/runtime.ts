@@ -14,7 +14,8 @@
 // answer 2xx within the timeout, else the process tree is killed and the plugin reports `error`. A crash
 // after that flips the state to `error` and unregisters its MCP server. Processes are never detached on
 // Windows, and every stop is a tree kill (taskkill /T, by absolute path, the acp.ts rule), so a plugin
-// cannot outlive the engine: main's quit tree-kills the engine and everything under it.
+// cannot outlive the engine: main's quit tree-kills the engine and everything under it. ADR-0546: a plugin the
+// user started and did not stop starts again at the next launch (the running-intent ledger, plugins/intent.ts).
 //
 // Env: a plugin gets an ALLOWLISTED environment (OS basics plus the contract vars), never the engine's
 // env, which carries provider keys and vault-injected tokens. PORT, HOST, LUCID_PLUGIN_ID,
@@ -29,9 +30,14 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, extname, join, resolve, sep } from "node:path";
-import { safeRelPath, type DaemonEntry, type PluginManifest, type ServerEntry, type WebEntry } from "../../harness/plugins/package.ts";
+import { payloadHashProblem, safeRelPath, type DaemonEntry, type PluginManifest, type ServerEntry, type WebEntry } from "../../harness/plugins/package.ts";
 import { formatSquatter, ownerProbeSpec, parseOwnerProbe } from "../port_guard.ts";
-import { listInstalled, pluginDataDir, pluginsRoot, readInstalled, type InstalledPlugin } from "./install.ts";
+import { recordBlock } from "../security_log.ts";
+import { APP_VERSION } from "../version.ts";
+import { listInstalled, pluginDataDir, pluginsRoot, readInstalled, uninstallPlugin, type InstalledPlugin } from "./install.ts";
+import {
+  autostartPlugins, clearRunIntent, readRunIntents, readRunIntentVersion, runIntentDir, setRunIntent, type AutostartOutcome,
+} from "./intent.ts";
 import { removePluginMcp, setPluginMcp, type PluginMcpServer } from "./mcp.ts";
 import { PLUGIN_PORT_MAX, PLUGIN_PORT_MIN } from "./ports.ts";
 
@@ -59,7 +65,26 @@ export interface RuntimeDeps {
   onMcpChange: () => void;
   healthTimeoutMs?: number;
   root?: string;
+  /** ADR-0546: the running-intent ledger (default plugin-data/.running-intent). */
+  intentDir?: string;
   platform?: string;
+  /** This build's version (default APP_VERSION): written into each running intent and checked by autostart. */
+  appVersion?: string;
+  /** Records a security event (default recordBlock), such as autostart refusing tampered installed files. */
+  record?: (b: Parameters<typeof recordBlock>[0]) => unknown;
+  /** Chooses the plugin's port (default: the persisted home port, else the next free one). */
+  pickPort?: (id: string) => Promise<number>;
+}
+
+/** The first installed file of `p` that is missing or no longer matches its sha256 in the signed manifest, or null
+ *  when every one matches. The installer checked the same list before the switch (ADR-0546). */
+export function installedFilesProblem(p: InstalledPlugin): string | null {
+  const files = p.manifest.files ?? {};
+  const payload: { name: string; data: Buffer }[] = [];
+  for (const name of Object.keys(files)) {
+    try { payload.push({ name, data: readFileSync(join(p.dir, name)) }); } catch { /* reported as missing below */ }
+  }
+  return payloadHashProblem(files, payload);
 }
 
 interface Running {
@@ -206,6 +231,8 @@ function killTree(proc: ChildProcess, platform: string, sync: boolean): void {
 export class PluginRuntime {
   private running = new Map<string, Running>();
   private starting = new Map<string, Promise<{ ok: true; url: string } | { ok: false; error: string }>>();
+  /** Bumped by every stop(): a start begun before it sees a different value and neither launches nor records. */
+  private stopGen = new Map<string, number>();
   private readonly platform: string;
 
   constructor(private readonly deps: RuntimeDeps) {
@@ -213,6 +240,7 @@ export class PluginRuntime {
   }
 
   private root(): string { return this.deps.root ?? pluginsRoot(); }
+  private intentDir(): string { return this.deps.intentDir ?? runIntentDir(); }
 
   /** Every installed plugin with its live state. */
   list(): PluginStatus[] {
@@ -237,16 +265,27 @@ export class PluginRuntime {
     return r?.state === "running" && r.hostToken ? { url: `http://127.0.0.1:${r.port}`, token: r.hostToken } : null;
   }
 
-  /** Start (or return the running instance of) a plugin. Concurrent calls share one start. */
+  /** Start (or return the running instance of) a plugin. Concurrent calls share one start. ADR-0546: a start that
+   *  comes up records that the plugin should run again at the next launch; a failed one changes nothing. */
   start(id: string): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
     const live = this.running.get(id);
     if (live?.state === "running") return Promise.resolve({ ok: true as const, url: live.url });
     const pending = this.starting.get(id);
     if (pending) return pending;
-    const p = this.doStart(id).finally(() => this.starting.delete(id));
+    const gen = this.generation(id);
+    const p = this.doStart(id, gen).then(async (r) => {
+      if (this.generation(id) !== gen) { // a Stop landed while this start was in flight: it wins
+        if (r.ok) await this.stopInstance(id);
+        return { ok: false as const, error: "stopped before it finished starting" };
+      }
+      if (r.ok) setRunIntent(id, this.intentDir(), this.deps.appVersion ?? APP_VERSION);
+      return r;
+    }).finally(() => { if (this.starting.get(id) === p) this.starting.delete(id); });
     this.starting.set(id, p);
     return p;
   }
+
+  private generation(id: string): number { return this.stopGen.get(id) ?? 0; }
 
   private async pickPort(id: string): Promise<number> {
     const file = join(this.root(), "ports.json");
@@ -271,13 +310,14 @@ export class PluginRuntime {
     throw new Error(`no free loopback port in ${PLUGIN_PORT_MIN}-${PLUGIN_PORT_MAX}`);
   }
 
-  private async doStart(id: string): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
+  private async doStart(id: string, gen: number): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
     const p = readInstalled(id, this.root());
     if (!p) return { ok: false, error: "that plugin is not installed" };
     const old = this.running.get(id);
-    if (old) await this.stop(id); // a crashed instance: clear it before a fresh start
+    if (old) await this.stopInstance(id); // a crashed instance: clear it before a fresh start
     let port: number;
-    try { port = await this.pickPort(id); } catch (e) { return { ok: false, error: (e as Error).message }; }
+    try { port = await (this.deps.pickPort ? this.deps.pickPort(id) : this.pickPort(id)); } catch (e) { return { ok: false, error: (e as Error).message }; }
+    if (this.generation(id) !== gen) return { ok: false, error: "stopped before it finished starting" };
     mkdirSync(pluginDataDir(id), { recursive: true });
     const url = `http://localhost:${port}/`;
 
@@ -362,7 +402,7 @@ export class PluginRuntime {
       await Bun.sleep(250);
     }
     const tail = r.tail.trim().slice(-600);
-    await this.stop(id);
+    await this.stopInstance(id);
     return { ok: false, error: `no healthy answer from ${healthPath} within ${Math.round((this.deps.healthTimeoutMs ?? HEALTH_TIMEOUT_MS) / 1000)}s${tail ? `: ${tail}` : ""}` };
   }
 
@@ -388,8 +428,19 @@ export class PluginRuntime {
     this.deps.onMcpChange();
   }
 
-  /** Stop one plugin (idempotent): unregister its MCP, end its server or process tree, wait for exit. */
-  async stop(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  /** Stop one plugin (idempotent): unregister its MCP, end its server or process tree, wait for exit. ADR-0546: only
+   *  a stop the user asked for (`byUser`) forgets that it should run at the next launch; the engine's own stops (a
+   *  crashed instance, a failed health check, an update's switch, quitting) keep that intent. A start still in
+   *  flight (awaiting its port, say) is cancelled: it neither launches afterwards nor records the intent. */
+  async stop(id: string, opts: { byUser?: boolean } = {}): Promise<{ ok: true } | { ok: false; error: string }> {
+    this.stopGen.set(id, this.generation(id) + 1);
+    this.starting.delete(id); // the next start begins afresh instead of joining the cancelled one
+    if (opts.byUser) clearRunIntent(id, this.intentDir());
+    return this.stopInstance(id);
+  }
+
+  /** End the live instance of `id` (if any) without cancelling a start: the runtime's own clean-ups use this. */
+  private async stopInstance(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
     const r = this.running.get(id);
     if (!r) return { ok: true };
     r.stopping = true;
@@ -406,6 +457,37 @@ export class PluginRuntime {
     }
     this.running.delete(id);
     return { ok: true };
+  }
+
+  /** The user removes a plugin: stop it as the user's stop (its intent goes too), then remove the package. */
+  async uninstall(id: string, keepData: boolean): Promise<{ ok: true } | { ok: false; error: string }> {
+    const stopped = await this.stop(id, { byUser: true });
+    if (!stopped.ok) return stopped;
+    return uninstallPlugin(id, keepData, this.root());
+  }
+
+  /** ADR-0546: once per launch, after the engine serves, start every plugin the user left running (bounded retry).
+   *  A recorded plugin with no package any more is skipped quietly and forgotten; one left running by a development
+   *  build is not started on a release build; one whose installed files fail the hash check is refused, forgotten,
+   *  and recorded as a security block. */
+  autostart(): Promise<AutostartOutcome[]> {
+    const dir = this.intentDir();
+    return autostartPlugins({
+      intents: () => readRunIntents(dir),
+      installed: (id) => readInstalled(id, this.root()) !== null,
+      appVersion: this.deps.appVersion ?? APP_VERSION,
+      writtenBy: (id) => readRunIntentVersion(id, dir),
+      integrityProblem: (id) => {
+        const p = readInstalled(id, this.root());
+        const problem = p ? installedFilesProblem(p) : "that plugin is not installed";
+        if (problem) (this.deps.record ?? recordBlock)({ tool: "plugin_autostart", severity: "high", findings: "hash", reason: `plugin ${id} not started at launch: ${problem}` });
+        return problem;
+      },
+      start: (id) => this.start(id),
+      forget: (id) => clearRunIntent(id, dir),
+      sleep: Bun.sleep,
+      log: console.log,
+    });
   }
 
   async stopAll(): Promise<void> { await Promise.all([...this.running.keys()].map((id) => this.stop(id))); }
