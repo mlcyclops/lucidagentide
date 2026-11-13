@@ -87,6 +87,25 @@ interface Pending {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/** Reported when the sidecar ends without `stop()`: why it ended, the tail of its stderr, and how
+ *  long until the next scan may respawn it. */
+export interface ScannerExit {
+  reason: string;
+  stderrTail: string;
+  restartInMs: number;
+}
+
+const STDERR_TAIL_CHARS = 2000;
+const RESPAWN_BACKOFF_MIN_MS = 500;
+const RESPAWN_BACKOFF_MAX_MS = 30_000;
+
+/** P-SCANLIVE.1 (ADR-0571): a sidecar that dies on its own is RESPAWNED by the next scan, after a
+ *  backoff that doubles while it keeps dying and resets on the first good response. Before this, a
+ *  sidecar killed from outside (an installer closing every python.exe, AV, OOM) left the client dead
+ *  for the life of the process: every later tool call failed closed with "scanner not running" and
+ *  only restarting the app recovered it. Fail-closed is unchanged: the requests in flight when it
+ *  dies are rejected, a scan during the backoff is rejected, and a respawn that cannot start rejects.
+ *  `stop()` is terminal: a stopped client never respawns itself. */
 export class ScannerClient {
   #proc: ReturnType<typeof spawn> | undefined;
   #pending = new Map<string, Pending>();
@@ -94,17 +113,36 @@ export class ScannerClient {
   #seq = 0;
   #alive = false;
   #timeoutMs: number;
+  #onExit: ((e: ScannerExit) => void) | undefined;
+  /** Set when the sidecar ended without stop(): the next scan may respawn it. */
+  #crashed = false;
+  #lastExit = "";
+  #restartAt = 0;
+  #backoffMs = 0;
+  #stderrTail = "";
+  /** Why this client is about to kill its own sidecar (a hung scan), reported instead of the signal. */
+  #killReason = "";
 
-  constructor(opts: { timeoutMs?: number } = {}) {
+  constructor(opts: { timeoutMs?: number; onExit?: (e: ScannerExit) => void } = {}) {
     this.#timeoutMs = opts.timeoutMs ?? 5000;
+    this.#onExit = opts.onExit;
   }
 
   get alive(): boolean {
     return this.#alive;
   }
 
+  /** The running sidecar's pid, for diagnostics; undefined when none is running. */
+  get pid(): number | undefined {
+    return this.#proc?.pid;
+  }
+
   start(): void {
     if (this.#proc) return;
+    this.#crashed = false;
+    this.#buf = "";
+    this.#stderrTail = "";
+    this.#killReason = "";
     const py = resolvePython();
     const proc = spawn(py, ["server.py"], {
       cwd: sidecarDir(),
@@ -114,17 +152,39 @@ export class ScannerClient {
     this.#alive = true;
 
     proc.stdout.setEncoding("utf8");
-    proc.stdout.on("data", (chunk: string) => this.#onData(chunk));
+    proc.stdout.on("data", (chunk: string) => {
+      if (this.#proc === proc) this.#onData(chunk);
+    });
+    // Drain stderr: an unread pipe fills and blocks the sidecar's next write, which hangs every scan.
+    // The tail goes into the exit report, the only record of why a sidecar died.
+    proc.stderr.setEncoding("utf8");
+    proc.stderr.on("data", (chunk: string) => {
+      if (this.#proc === proc) this.#stderrTail = (this.#stderrTail + chunk).slice(-STDERR_TAIL_CHARS);
+    });
 
-    // Death of the sidecar fails every in-flight request closed.
+    // Death of the sidecar fails every in-flight request closed. Only the CURRENT process may do this:
+    // the exit of one already replaced (stop() then start(), or a respawn) must not touch its successor.
     const die = (why: string) => {
+      if (this.#proc !== proc) return;
+      this.#proc = undefined;
       this.#alive = false;
-      const err = new ScanUnavailableError(`scanner sidecar unavailable: ${why}`);
+      // Close our end: on Windows a venv python.exe is a launcher, and a killed launcher can leave the
+      // real interpreter running on the inherited pipe until it reads EOF.
+      proc.stdin?.destroy();
+      const reason = this.#killReason || why;
+      const err = new ScanUnavailableError(`scanner sidecar unavailable: ${reason}`);
       for (const [, p] of this.#pending) {
         clearTimeout(p.timer);
         p.reject(err);
       }
       this.#pending.clear();
+      this.#crashed = true;
+      this.#lastExit = reason;
+      this.#backoffMs = Math.min(Math.max(this.#backoffMs * 2, RESPAWN_BACKOFF_MIN_MS), RESPAWN_BACKOFF_MAX_MS);
+      this.#restartAt = Date.now() + this.#backoffMs;
+      try {
+        this.#onExit?.({ reason, stderrTail: this.#stderrTail.trim(), restartInMs: this.#backoffMs });
+      } catch { /* a reporting failure never changes the outcome: the requests are already rejected */ }
     };
     proc.on("exit", (code, signal) => die(`exited code=${code} signal=${signal}`));
     proc.on("error", (e) => die(`spawn error: ${String(e)}`));
@@ -165,6 +225,7 @@ export class ScannerClient {
       pending.reject(new ScanUnavailableError("malformed scan response"));
       return;
     }
+    this.#backoffMs = 0; // a sidecar that answers is healthy: the next death starts the backoff over
     pending.resolve({
       id,
       findings: r.findings as Finding[],
@@ -172,11 +233,23 @@ export class ScannerClient {
     });
   }
 
+  /** A scan timed out: the sidecar is hung or still busy with an oversized request, and every request
+   *  queued behind it would time out too. Kill it so the exit path rejects those and the next scan
+   *  respawns a fresh one. */
+  #killHung(): void {
+    const proc = this.#proc;
+    if (!proc) return;
+    this.#killReason = `no response within ${this.#timeoutMs}ms, killed`;
+    proc.kill();
+  }
+
   /** Scan text. Resolves with findings on success; REJECTS (fail-closed) on any
    *  inability to obtain a valid result. */
   scan(text: string, policy?: Record<string, unknown>): Promise<ScanResponse> {
+    if (!this.#alive && this.#crashed && Date.now() >= this.#restartAt) this.start();
     if (!this.#proc || !this.#alive) {
-      return Promise.reject(new ScanUnavailableError("scanner not running"));
+      const why = this.#crashed ? `scanner not running (last exit: ${this.#lastExit}; restart pending)` : "scanner not running";
+      return Promise.reject(new ScanUnavailableError(why));
     }
     const id = `s${++this.#seq}`;
     const payload = JSON.stringify({ id, text, policy: policy ?? {} }) + "\n";
@@ -185,6 +258,7 @@ export class ScannerClient {
       const timer = setTimeout(() => {
         this.#pending.delete(id);
         reject(new ScanUnavailableError(`scan timeout after ${this.#timeoutMs}ms`));
+        this.#killHung();
       }, this.#timeoutMs);
       this.#pending.set(id, { resolve, reject, timer });
 
@@ -205,8 +279,10 @@ export class ScannerClient {
     });
   }
 
+  /** Terminal: the sidecar is killed and never respawned by scan(); only an explicit start() revives it. */
   stop(): void {
     this.#alive = false;
+    this.#crashed = false;
     this.#proc?.kill();
     this.#proc = undefined;
   }

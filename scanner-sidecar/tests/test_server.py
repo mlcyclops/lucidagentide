@@ -47,3 +47,17 @@ def test_missing_text_is_error_but_keeps_id():
     resp = _handle('{"id": "r3"}')
     assert resp["id"] == "r3"
     assert "error" in resp
+
+
+def test_scanner_exception_is_error_reply_not_crash(monkeypatch):
+    """P-SCANLIVE.1: a scanner exception answers that request with an error; the loop survives."""
+    import server
+
+    def boom(_text):
+        raise RuntimeError("scanner bug")
+
+    monkeypatch.setattr(server, "inspect_text", boom)
+    resp = _handle('{"id": "r4", "text": "hello"}')
+    assert resp["id"] == "r4"
+    assert "error" in resp
+    assert "findings" not in resp

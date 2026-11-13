@@ -27135,3 +27135,19 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 5. The agent firewall's header neutralizes the connection name and stop reason, and the MCP gate's header the server name (left over from ADR-0568).
 
 **Consequences.** `rd /s /q build` and `Remove-Item -Recurse` now always ask, as `rm -rf build` does; remote lanes refuse them outright. A command quoted as an argument is not read as one. Left as designed: a remote agent connection with `permissionPolicy: "allow"` (ADR-0149, a per-connection opt-in for a trusted gateway) answers its own asks without this floor.
+
+
+## ADR-0571 -- A dead or hung scanner sidecar is respawned, and a scan-unavailable block says so (P-SCANLIVE.1) (2026-11-13)
+
+**Status:** Accepted. Amends ADR-0002 (the scanner IPC client) and ADR-0019 C (the live block label). Invariant #3 is unchanged. Proof: `bun test ./harness/security/scanner_client.test.ts` (an outside kill blocks, reports the exit, and a later scan respawns a real scanner; `stop()` never respawns; a hung sidecar is killed on timeout and replaced), `./harness/security/gate.failclosed.test.ts`, and `pytest scanner-sidecar/tests/test_server.py`.
+
+**Context.** A field report from a v2.5.3 Windows install: every read, bash, edit, write and eval call was blocked for ten minutes until the user restarted the app. All 11 blocks carried `findings: "scan-unavailable"` and the agent quoted the gate's error, `fail-closed: scan unavailable (scanner not running)`: the Python sidecar had exited about 3h48m into the omp process. `ScannerClient` marked itself dead on exit but kept the dead process, so `start()` returned early and nothing ever spawned another; each omp process holds one client for its life, so only an app restart recovered. The sidecar's stderr was piped and never read and its exit was not logged, so why it died is unknown. The desktop also labeled every gate block "hidden-Unicode content quarantined", so a scanner outage read as a zero-width-character detection, and the content the agent was working on was blamed.
+
+**Decision.**
+1. On exit, `ScannerClient` drops the dead process, closes its stdin, rejects the requests in flight, and records the exit. The next `scan()` after a backoff (500ms, doubling to 30s while it keeps dying, reset by the first good response) spawns a fresh sidecar. A scan inside the backoff rejects with the last exit reason. `stop()` stays terminal.
+2. A scan timeout kills the sidecar, because a hung or overloaded sidecar makes every request queued behind it time out too; the exit path then respawns it.
+3. The client drains the sidecar's stderr (an unread pipe can fill and hang it) and keeps a 2000-character tail. `onExit` reports the reason, the tail and the backoff; the tool gate (`security_extension.ts`) writes it to stderr, which the desktop keeps in `lucid-acp.log`.
+4. `scanner-sidecar/server.py` answers a scanner exception with an error reply for that request instead of ending the loop.
+5. `acp_backend.ts` labels a `scan-unavailable` block "security scanner unavailable, blocked fail-closed"; a block with findings keeps "hidden-Unicode content quarantined".
+
+**Consequences.** Fail-closed holds at every step: the call in flight when the sidecar dies, every call during the backoff, and a respawn that cannot start are all blocked. A sidecar killed from outside costs one blocked call and a half-second gap instead of the session. Left as is: on Windows the venv `python.exe` is a launcher, so killing a hung sidecar can orphan its interpreter until it reads EOF on the closed stdin. Installs pick this up from the next release.
