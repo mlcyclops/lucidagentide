@@ -5365,6 +5365,9 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .share-dock-head{display:flex;align-items:center;gap:8px;padding:8px 8px 8px 11px;border-bottom:1px solid var(--line-soft);
   background:var(--bg-2);cursor:grab;flex:none;touch-action:none;user-select:none}
 .share-dock.dragging .share-dock-head{cursor:grabbing}
+/* ADR-0576: the Fleet header holds more controls than a narrow dock is wide; it wraps instead of pushing Minimize
+   and Close off the edge. */
+.fleet-dock .share-dock-head{flex-wrap:wrap;row-gap:6px}
 .share-dock-grip{display:inline-flex;color:var(--accent-2)}
 .share-dock-title{flex:1;font-size:12.5px;font-weight:700;color:var(--txt);letter-spacing:.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* P-SHARE.2 (ADR-0234): the cold-boot "updating\2026" chip (mirrors the Settings model-list indicator) shown

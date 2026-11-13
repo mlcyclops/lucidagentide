@@ -237,9 +237,9 @@ export function openFleetGrid(): void {
       <button class="btn-mini fleet-add-btn" data-fleet-orbit data-tip="Orbit|Back to the hub-and-spoke map. Same spokes, same colors - the grid and the orbit are two faces of one fleet.">${icon("share", 12)} Orbit</button>
       <button class="btn-mini fleet-add-btn fleet-pin" data-fleet-byrepo aria-pressed="false" data-tip="Group by repo|Section the cards by the codebase each spoke works on, in the same colors as the orbit. Your named groups are kept and come back when this is off.">${icon("git", 12)} By repo</button>
       <button class="btn-mini fleet-add-btn fleet-pin" data-fleet-pin data-tip="Default view|Make the GRID what the Fleet button opens. The orbit header has the same pin."></button>
-      <button class="btn-mini fleet-add-btn" data-fleet-hub data-tip="Open in terminal (classic hub)|Opens the classic hub in a new terminal window: your agents and their boards as panes (Fleet, Security, Sessions, Audit, Usage and a live agent), linked to this app. You can also type lucid hub in any terminal.">${icon("terminal", 12)} Open in terminal (classic hub)</button>
+      <button class="btn-mini fleet-add-btn" data-fleet-hub data-tip="Open in terminal (classic hub)|Opens the classic hub in a new terminal window: your agents and their boards as panes (Fleet, Security, Sessions, Audit, Usage and a live agent), linked to this app. You can also type lucid hub in any terminal.">${icon("terminal", 12)} Classic hub</button>
       <button class="btn-mini fleet-add-btn fleet-fit-btn" data-fleet-fit aria-pressed="true" data-tip="Autofit|Lanes tile the whole panel at equal sizes and refit as it resizes. Drag a card edge to resize it, its neighbors share the rest; double-click an edge to reset to equal. Off: free layout.">${icon("layout", 12)}<span>Autofit</span></button>
-      <button class="btn-mini fleet-add-btn" data-fleet-add title="Spawn a new local spoke">${icon("plus", 12)} Spoke</button>
+      <button class="btn-mini fleet-add-btn" data-fleet-add title="Start a new agent on this computer">${icon("plus", 12)} Agent</button>
       <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" title="Minimize (spokes keep running)">${UP_ARROW}</button>
       <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" title="Close (spokes keep running)">${icon("close", 15)}</button>
     </div>
@@ -1018,7 +1018,7 @@ function paintEmpty(): void {
   const grid = $("#fleetGrid", dock) as HTMLElement | null; if (!grid) return;
   const empty = $(".fleet-empty", grid);
   const need = runs.size === 0 && !$(".fleet-spawn-card", grid) && remoteCards(grid).length === 0; // P-RS-LANES.1
-  if (need && !empty) grid.append(el(`<div class="fleet-empty">${icon("info", 13)}<span>No spokes yet - spawn one with + Spoke. Each spoke is a headless LUCID engine working its own folder.</span></div>`));
+  if (need && !empty) grid.append(el(`<div class="fleet-empty">${icon("info", 13)}<span>No agents yet. Start one with + Agent: an AI helper working on one job in one folder.</span></div>`));
   else if (!need && empty) empty.remove();
 }
 
