@@ -4,8 +4,9 @@
 // desktop/build/compile-sep.ts - build the macOS Secure Enclave helper (tools/macsep/lucid_sep.swift) into
 // bin/lucid-sep for the knowledge graph's `sep` protector (P-KGBIO.1, ADR-0454; spec §4.4).
 //
-// A universal binary (arm64 + x86_64, macOS 13+), because dist:mac cuts both architectures from one bin/.
-// bin/** ships as resources/repo/bin, where main.ts looks for it. swiftc ad-hoc signs its output on Apple
+// A universal binary (arm64 + x86_64, macOS 13+), so the one copy in bin/ serves both mac apps (the per-arch
+// binaries come from bin-darwin-<arch>/, build/stage-mac-arch.ts, #614). bin/** ships as resources/repo/bin,
+// where main.ts looks for it. swiftc ad-hoc signs its output on Apple
 // Silicon; the helper needs no entitlement (CryptoKit Secure Enclave keys are not stored in the keychain).
 // On any other platform this is a no-op, so every dist:* chain can call it unconditionally.
 //

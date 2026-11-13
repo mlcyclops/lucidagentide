@@ -50,7 +50,9 @@ assert(dev.includes('join(ROOT, "app.bundle.js")'), "dev.ts serves the prebuilt 
 const pkg = JSON.parse(readFileSync(join(DESKTOP, "package.json"), "utf8"));
 assert(pkg.scripts["compile-engine"].includes("--compile dev.ts") && pkg.scripts["compile-engine"].includes("*.node"), "compile-engine builds the standalone engine with native addons external");
 assert(pkg.scripts["build-renderer"].includes("app.bundle.js"), "build-renderer prebuilds the renderer bundle");
-for (const k of ["dist", "dist:win", "dist:mac", "dist:linux"]) assert(pkg.scripts[k].includes("compile-engine") && pkg.scripts[k].includes("build-renderer"), `${k} runs both engine build steps before electron-builder`);
+for (const k of ["dist", "dist:win", "dist:linux"]) assert(pkg.scripts[k].includes("compile-engine") && pkg.scripts[k].includes("build-renderer"), `${k} runs both engine build steps before electron-builder`);
+// #614 (ADR-0569): macOS compiles the engine once per arch in build/stage-mac-arch.ts (bin-darwin-<arch>/lucid-engine).
+assert(pkg.scripts["dist:mac"].includes("stage-mac") && pkg.scripts["dist:mac"].includes("build-renderer"), "dist:mac runs both engine build steps (per-arch, via stage-mac) before electron-builder");
 
 console.log("\n[3] the compiled engine BUILDS, BOOTS, and serves (the keystone)");
 const tmpExe = join(REPO, "bin", `lucid-engine-demo${process.platform === "win32" ? ".exe" : ""}`);

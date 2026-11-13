@@ -343,31 +343,45 @@ for (const spec of specs) {
 // shell script, and the whole thing surfaces as `runtimes/bun: 1: Syntax error: ")" unexpected`.
 // The same hazard was latent on macOS, where it only worked because `bun-darwin-arm64` happens to be
 // listed before the x64 spec and the runner is arm64.
+//
+// #614 (ADR-0569): and on macOS it was not only latent. One mac job packs BOTH apps from this one runtimes/
+// dir, so whichever arch the alias had, the other app shipped it: the x64 app's plain bun was arm64. On macOS
+// each arch therefore gets its alias in desktop/runtimes-darwin-<arch>/bun, which desktop/package.json
+// `build.mac.extraResources` maps into that app's `runtimes/` only, and runtimes/ itself carries no plain bun.
 if (!REFRESH) {
 	const TARGET_ARCH = process.env.RUNTIME_ARCH ?? process.arch;
-	// The win32 specs carry the extension IN the name (`bun-win32-x64.exe`), which the old
-	// `startsWith("bun-")` match tolerated and an exact match does not. Caught on the first local run
-	// by the fail-closed throw below, which is the entire argument for having it.
-	const wanted = `bun-${TARGET}-${TARGET_ARCH}${TARGET === "win32" ? ".exe" : ""}`;
-	const suffixedBun = SPECS.find((s) => s.platform === TARGET && s.name === wanted);
-	if (!suffixedBun) {
-		// Fail closed rather than aliasing a foreign arch: a package whose omp cannot start has no
-		// models and no OAuth, and that is worse than a build that stops here and says why.
-		throw new Error(
-			`fetch-runtimes: no bun spec named "${wanted}" for ${TARGET}-${TARGET_ARCH}; ` +
-				`cannot emit the plain bun alias omp's shim needs (have: ` +
-				`${SPECS.filter((s) => s.platform === TARGET && s.name.startsWith("bun-")).map((s) => s.name).join(", ")})`,
-		);
+	const EXT = TARGET === "win32" ? ".exe" : "";
+	const aliasArchs = TARGET === "darwin" ? ["arm64", "x64"] : [TARGET_ARCH];
+	const aliasDir = (arch: string): string => (TARGET === "darwin" ? join(HERE, "..", `runtimes-darwin-${arch}`) : OUT);
+	if (TARGET === "darwin") rmSync(join(OUT, "bun"), { force: true });
+	for (const arch of aliasArchs) {
+		// The win32 specs carry the extension IN the name (`bun-win32-x64.exe`), which the old
+		// `startsWith("bun-")` match tolerated and an exact match does not. Caught on the first local run
+		// by the fail-closed throw below, which is the entire argument for having it.
+		const wanted = `bun-${TARGET}-${arch}${EXT}`;
+		const suffixedBun = SPECS.find((s) => s.platform === TARGET && s.name === wanted);
+		if (!suffixedBun) {
+			// Fail closed rather than aliasing a foreign arch: a package whose omp cannot start has no
+			// models and no OAuth, and that is worse than a build that stops here and says why.
+			throw new Error(
+				`fetch-runtimes: no bun spec named "${wanted}" for ${TARGET}-${arch}; ` +
+					`cannot emit the plain bun alias omp's shim needs (have: ` +
+					`${SPECS.filter((s) => s.platform === TARGET && s.name.startsWith("bun-")).map((s) => s.name).join(", ")})`,
+			);
+		}
+		const src = join(OUT, suffixedBun.name);
+		const dir = aliasDir(arch);
+		if (dir !== OUT) mkdirSync(dir, { recursive: true }); // OUT exists (and the OneDrive EEXIST quirk above)
+		const alias = join(dir, `bun${EXT}`);
+		// Copy UNCONDITIONALLY. The old `!existsSync(plain)` guard meant a stale alias from an earlier
+		// build of a DIFFERENT arch was kept, so the wrong-arch bug could not be fixed by rebuilding.
+		if (existsSync(src)) {
+			cpSync(src, alias);
+			chmodSync(alias, 0o755);
+			console.log(`runtimes: bun (plain alias for the omp shim -> ${suffixedBun.name}${dir === OUT ? "" : `, in ${dir}`})`);
+		}
 	}
-	const src = join(OUT, suffixedBun.name);
-	const plain = join(OUT, `bun${TARGET === "win32" ? ".exe" : ""}`);
-	// Copy UNCONDITIONALLY. The old `!existsSync(plain)` guard meant a stale alias from an earlier
-	// build of a DIFFERENT arch was kept, so the wrong-arch bug could not be fixed by rebuilding.
-	if (existsSync(src)) {
-		cpSync(src, plain);
-		chmodSync(plain, 0o755);
-		console.log(`runtimes: bun (plain alias for the omp shim -> ${suffixedBun.name})`);
-	}
+	const plain = join(aliasDir(TARGET_ARCH), `bun${EXT}`);
 	// P-RUNTIME-PIN.1 (ADR-0547, issue #598): the bundled Bun must satisfy the bundled omp's `engines.bun`, or
 	// the packaged app's agent never starts. Checked by running it, so only when it is this machine's own
 	// platform and arch (a cross-staged runtime cannot run here).
