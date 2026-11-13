@@ -777,4 +777,9 @@
 //            lucid-engine, lucid-holder and the natives per arch, and a Mach-O gate fails a build whose app carries
 //            another CPU's binary (#614, #615, ADR-0569). PRERELEASE: never marked Latest; the Homebrew cask and
 //            stable installs stay on 2.5.3.
-export const APP_VERSION = "2.5.4-beta.3";
+// v2.5.4-beta.4 = 2.5.4-beta.3 plus the exec floor reading paths, launchers and the Windows forms: `/bin/rm -rf`,
+//            `bash -c`, `cmd /c`, `powershell -Command`/`-EncodedCommand`, `del`/`rd /s`, `Remove-Item -Recurse` and
+//            drive formats always reach a human, the lane floor sees the request-level tool name, and a patch in an
+//            edit's input is not read as a command (#616, ADR-0570). PRERELEASE: never marked Latest; the Homebrew
+//            cask and stable installs stay on 2.5.3.
+export const APP_VERSION = "2.5.4-beta.4";

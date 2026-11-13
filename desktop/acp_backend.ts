@@ -99,7 +99,7 @@ import { slashCommandCreateDraft } from "../harness/commands/handoff.ts"; // P-C
 import type { UserCommand } from "../harness/commands/spec.ts";
 import type { SecretRequestView } from "./secret_intake_view.ts"; // P-SECRET-INTAKE.1 (ADR-0476)
 import { gateDenyReason } from "./gate_audit.ts";
-import { type ElicitationAnswer, type ExecChoice, type ExecClass, EXEC_TOOLS, classifyCommand, classifyEval, elicitationAnswer, elicitationOptions, execCommand, execStore, execVerdict, recordExec } from "./exec_policy.ts";
+import { type ElicitationAnswer, type ExecChoice, type ExecClass, EXEC_TOOLS, askToolName, classifyCommand, classifyEval, elicitationAnswer, elicitationOptions, execCommand, execStore, execVerdict, recordExec } from "./exec_policy.ts";
 import { toolFailureCommand, toolFailureDetail, toolFailureReason } from "./tool_failure.ts";
 
 // P-EGRESS.1 (ADR-0062): the network-reaching tools omp is told to PROMPT for (acp_config.yml). When omp
@@ -1261,7 +1261,7 @@ class Backend {
           if (m === "session/request_permission") {
             const opts: any[] = params?.options ?? [];
             const tc = params?.toolCall ?? params?.tool_call ?? {};
-            const toolName = [tc.kind, tc.title, tc.name, tc.toolName, params?.tool, params?.toolName].filter(Boolean).join(" ").toLowerCase();
+            const toolName = askToolName(tc, params?.tool, params?.toolName);
             const target = egressTarget(tc);
             // P-SANDBOX.8: the agent asks for standing access to a user-named directory. Handled FIRST
             // (before the exec/egress classifiers can mis-bucket it): always the grant dialog, never an
@@ -1271,7 +1271,7 @@ class Backend {
             // auto-approve — read-only auto-approves, risky gates, a catastrophic set always prompts. A
             // shell command is handled here (not egress), so `curl … | sh` is caught as catastrophic exec.
             const isEvalTool = /\beval\b/.test(toolName);
-            const cmd = execCommand(tc);
+            const cmd = execCommand(tc, toolName);
             if (isEvalTool || cmd !== null || EXEC_TOOLS.test(toolName)) {
               // P-SANDBOX.1 (ADR-0157): managed policy requires runtime isolation this machine cannot
               // provide - exec fail-closes outright (never prompted, never auto-approved), audited.

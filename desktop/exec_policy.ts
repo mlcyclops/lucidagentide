@@ -87,19 +87,74 @@ const ALWAYS_PROMPT: Catastrophic[] = [
   { re: /(^|\s)git\b[^|;&]*\breset\b[^|;&]*--hard/i, why: "git reset --hard (discards work)" },
   { re: /(^|\s)git\b[^|;&]*\bclean\b[^|;&]*\s-[a-z]*f/i, why: "git clean -f (deletes untracked files)" },
   { re: /(^|\s)git\b[^|;&]*\bpush\b[^|;&]*(?:--force(?:-with-lease)?|\s-f\b)/i, why: "git push --force (rewrites remote history)" },
+  // #616: the Windows forms. cmd's recursive switches, PowerShell's -Recurse (any abbreviation on Remove-Item and
+  // `ri`; at least `-rec` on the aliases rm/rmdir/rd/del/erase, so POSIX `rm -r` keeps its tier), drive formats.
+  { re: /(^|\s)(del|erase)\b[^|;&]*\s\/s\b/i, why: "recursive delete (del /s)" },
+  { re: /(^|\s)(rd|rmdir)\b[^|;&]*\s\/s\b/i, why: "recursive directory delete (rd /s)" },
+  { re: /(^|\s)(remove-item|ri)\b[^|;&]*\s-r[a-z]*\b/i, why: "recursive delete (Remove-Item -Recurse)" },
+  { re: /(^|\s)(rm|rmdir|rd|del|erase)\b[^|;&]*\s-rec[a-z]*\b/i, why: "recursive delete (Remove-Item -Recurse)" },
+  { re: /(^|\s)format(\.com)?\s+[a-z]:/i, why: "formats a drive (format)" },
+  { re: /(^|\s)(format-volume|clear-disk)\b/i, why: "formats or wipes a disk" },
 ];
+
+/** The launchers whose argument is itself a command (#616): a shell's `-c`, cmd's `/c` or `/k`, PowerShell's
+ *  `-Command` (any abbreviation) or `-EncodedCommand`. Returns the command they would run, or null. */
+function launcherPayload(prog: string, rest: string[]): string | null {
+  if (/^(sh|bash|zsh|dash|ksh|fish)$/.test(prog)) {
+    const i = rest.findIndex((t) => /^-[a-z]*c[a-z]*$/i.test(t));
+    return i >= 0 && i + 1 < rest.length ? rest[i + 1]! : null;
+  }
+  if (prog === "cmd") {
+    const i = rest.findIndex((t) => /^\/[ck]$/i.test(t));
+    return i >= 0 ? rest.slice(i + 1).join(" ") : null;
+  }
+  if (prog === "powershell" || prog === "pwsh") {
+    const enc = rest.findIndex((t) => /^-e(c|n(c(o(d(e(d(c(o(m(m(a(n(d)?)?)?)?)?)?)?)?)?)?)?)?)?$/i.test(t));
+    // -EncodedCommand is base64 of UTF-16LE text: read the command it carries.
+    if (enc >= 0) return Buffer.from(rest[enc + 1] ?? "", "base64").toString("utf16le");
+    // -Command, or the arguments themselves when no -File names a script (5.1 runs them as a command).
+    return rest.join(" ");
+  }
+  return null;
+}
+
+/** The catastrophic pattern `raw` matches (#616): the raw text first, then each command segment with its program
+ *  resolved to a bare name (`/bin/rm`, `env X=1 rm`), then the command a launcher (`bash -c`, `cmd /c`,
+ *  `powershell -Command`) would run. Only the program position is rewritten, so a quoted argument
+ *  (`grep "rm -rf" log`) is not read as a command. */
+function catastrophicIn(raw: string, depth = 0): Catastrophic | null {
+  for (const c of ALWAYS_PROMPT) if (c.re.test(raw)) return c;
+  if (depth > 4) return null;
+  for (const seg of raw.split(/\|\||&&|[;&|\r\n]/)) {
+    const spans = tokenSpans(seg);
+    const { prog, at } = argv0At(spans.map((s) => s.text));
+    if (!prog || at < 0) continue;
+    const norm = `${prog}${seg.slice(spans[at]!.end)}`;
+    for (const c of ALWAYS_PROMPT) if (c.re.test(norm)) return c;
+    const payload = launcherPayload(prog, spans.slice(at + 1).map((s) => s.text));
+    if (payload !== null) {
+      const hit = catastrophicIn(payload, depth + 1);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
 
 /** Strip leading `VAR=val` assignments and an `env`/`command`/`nice`/`time` wrapper to find the real argv0. */
 function realArgv0(tokens: string[]): { prog: string | null; rest: string[] } {
+  const { prog, at } = argv0At(tokens);
+  return { prog, rest: at < 0 ? [] : tokens.slice(at + 1) };
+}
+/** The real argv0 (basename, lowercased) and its token index, or null and -1 when there is none. */
+function argv0At(tokens: string[]): { prog: string | null; at: number } {
   let i = 0;
   while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]!)) i++; // VAR=val …
   // unwrap a thin launcher prefix (env FOO=bar prog … / command prog … / nice prog … / time prog …)
-  while (i < tokens.length && /^(env|command|nice|time|nohup|stdbuf|setsid)$/.test(base(tokens[i]!))) {
+  while (i < tokens.length && /^(env|command|nice|time|nohup|stdbuf|setsid|exec)$/.test(base(tokens[i]!))) {
     i++;
     while (i < tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]!) || /^-/.test(tokens[i]!))) i++;
   }
-  const prog = i < tokens.length ? base(tokens[i]!) : null;
-  return { prog, rest: tokens.slice(i + 1) };
+  return i < tokens.length ? { prog: base(tokens[i]!), at: i } : { prog: null, at: -1 };
 }
 /** basename without a path or `.exe` suffix, lowercased. `/usr/bin/RM` → `rm`. */
 function base(tok: string): string {
@@ -170,10 +225,12 @@ export function classifyCommand(cmd: string): ExecClass {
   const raw = (cmd ?? "").trim();
   if (!raw) return { risk: "risky", tier: "T3", key: null, alwaysPrompt: false, reason: "empty/unparseable command" };
 
-  // 1. Catastrophic patterns first — they win over everything, even inside a compound command. (T4)
-  for (const c of ALWAYS_PROMPT) if (c.re.test(raw)) {
+  // 1. Catastrophic patterns first — they win over everything, even inside a compound command, a program named by
+  //    path or a launcher's payload (#616). (T4)
+  const cata = catastrophicIn(raw);
+  if (cata) {
     const { prog } = realArgv0(tokenize(raw));
-    return { risk: "risky", tier: "T4", key: prog, alwaysPrompt: true, reason: c.why };
+    return { risk: "risky", tier: "T4", key: prog, alwaysPrompt: true, reason: cata.why };
   }
 
   // 2. Compound / write-capable (pipes, chaining, substitution, redirection) → risky, un-pinnable (T3).
@@ -217,10 +274,14 @@ export function classifyCommand(cmd: string): ExecClass {
 
 /** Split a command into whitespace-separated tokens, honoring simple single/double quotes. */
 function tokenize(cmd: string): string[] {
-  const out: string[] = [];
+  return tokenSpans(cmd).map((s) => s.text);
+}
+/** The tokens of `cmd` with the offset just past each one in the original text. */
+function tokenSpans(cmd: string): { text: string; end: number }[] {
+  const out: { text: string; end: number }[] = [];
   const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(cmd))) out.push(m[1] ?? m[2] ?? m[3] ?? "");
+  while ((m = re.exec(cmd))) out.push({ text: m[1] ?? m[2] ?? m[3] ?? "", end: re.lastIndex });
   return out;
 }
 
@@ -298,11 +359,21 @@ export const EXEC_TOOLS = /\b(bash|eval|shell|execute|terminal)\b/;
 
 const record = (v: unknown): Record<string, unknown> => (v && typeof v === "object" ? (v as Record<string, unknown>) : {});
 
-/** Pull the command/code an exec tool call will run, from its rawInput. */
-export function execCommand(toolCall: unknown): string | null {
+/** The lowercased names a permission ask goes by: the tool call's kind, title and name, plus the request-level tool
+ *  names some agents send beside it (`{ tool: "bash", toolCall: {...} }`). */
+export function askToolName(toolCall: unknown, ...requestTools: unknown[]): string {
+  const tc = record(toolCall);
+  return [tc.kind, tc.title, tc.name, tc.toolName, ...requestTools].filter((v) => typeof v === "string" && v).join(" ").toLowerCase();
+}
+
+/** Pull the command/code an exec tool call will run, from its rawInput. `command`/`cmd`/`script` always name a
+ *  command; `code`/`source`/`input` do only on an exec tool (#616: an edit or apply-patch carries its patch in
+ *  `input`, which is text, not a command). */
+export function execCommand(toolCall: unknown, toolName: string = askToolName(toolCall)): string | null {
   const tc = record(toolCall);
   const ri = record(tc.rawInput ?? tc.input);
-  for (const k of ["command", "cmd", "script", "code", "source", "input"]) {
+  const keys = EXEC_TOOLS.test(toolName) ? ["command", "cmd", "script", "code", "source", "input"] : ["command", "cmd", "script"];
+  for (const k of keys) {
     const v = ri[k];
     if (typeof v === "string" && v.trim()) return v.trim();
   }
@@ -312,11 +383,11 @@ export function execCommand(toolCall: unknown): string | null {
 /** #612: the floor that no standing scope crosses, for an ask answered WITHOUT a human (Fleet full auto-mode, a
  *  lane's session grant). It is the floor execVerdict keeps under danger mode and allow-turn: a catastrophic
  *  command (ALWAYS_PROMPT) or a managed-denylisted program. Returns why the ask must reach a human, or null when
- *  it is not an exec ask or may run unasked. Pure apart from `store`. */
-export function execFloor(toolCall: unknown, store: ExecStore): string | null {
-  const tc = record(toolCall);
-  const name = [tc.kind, tc.title, tc.name, tc.toolName].filter((v) => typeof v === "string" && v).join(" ").toLowerCase();
-  const cmd = execCommand(tc);
+ *  it is not an exec ask or may run unasked. `requestTools` are the request-level tool names (#616). Pure apart
+ *  from `store`. */
+export function execFloor(toolCall: unknown, store: ExecStore, ...requestTools: unknown[]): string | null {
+  const name = askToolName(toolCall, ...requestTools);
+  const cmd = execCommand(toolCall, name);
   if (cmd === null && !EXEC_TOOLS.test(name)) return null;
   const cls = /\beval\b/.test(name) ? classifyEval() : classifyCommand(cmd ?? name);
   return execVerdict({ ...store, dangerMode: true }, cls, { turnAllowed: true }) === "allow" ? null : cls.reason;
