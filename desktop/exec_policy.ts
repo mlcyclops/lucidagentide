@@ -79,8 +79,9 @@ const COMPOUND = /[|;&]|&&|\|\||\$\(|`|>>|>|<\(/;
 interface Catastrophic { re: RegExp; why: string }
 const ALWAYS_PROMPT: Catastrophic[] = [
   { re: /(^|\s)(sudo|doas)\b/i, why: "runs as root (sudo/doas)" },
-  { re: /(^|\s)rm\b(?=[^|;&]*\s-)[^|;&]*\b(?:-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|(?=[^|;&]*\s-[a-z]*r)(?=[^|;&]*\s-[a-z]*f))/i, why: "recursive force-delete (rm -rf)" },
-  { re: /\|\s*(?:sudo\s+)?(?:sh|bash|zsh|dash|ksh|python[0-9.]*|node|perl|ruby)\b/i, why: "pipes downloaded code into an interpreter" },
+  { re: /(^|\s)rm\b(?=[^|;&]*\s-)[^|;&]*\b(?:-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|(?=[^|;&]*\s(?:--recursive|-[a-z]*r))(?=[^|;&]*\s(?:--force|-[a-z]*f)))/i, why: "recursive force-delete (rm -rf)" },
+  // PowerShell's `iex` / `Invoke-Expression` runs the text piped into it, as `sh` does (`irm <url> | iex`).
+  { re: /\|\s*(?:sudo\s+)?(?:sh|bash|zsh|dash|ksh|python[0-9.]*|node|perl|ruby|iex|invoke-expression)\b/i, why: "pipes downloaded code into an interpreter" },
   { re: /(^|\s)dd\b/i, why: "raw disk write (dd)" },
   { re: /(^|\s)mkfs\b/i, why: "formats a filesystem (mkfs)" },
   { re: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/, why: "fork bomb" },
@@ -98,15 +99,23 @@ const ALWAYS_PROMPT: Catastrophic[] = [
 ];
 
 /** The launchers whose argument is itself a command (#616): a shell's `-c`, cmd's `/c` or `/k`, PowerShell's
- *  `-Command` (any abbreviation) or `-EncodedCommand`. Returns the command they would run, or null. */
+ *  `-Command` (any abbreviation) or `-EncodedCommand`, `iex` / `Invoke-Expression`. Returns the command they
+ *  would run, or null. */
 function launcherPayload(prog: string, rest: string[]): string | null {
   if (/^(sh|bash|zsh|dash|ksh|fish)$/.test(prog)) {
     const i = rest.findIndex((t) => /^-[a-z]*c[a-z]*$/i.test(t));
     return i >= 0 && i + 1 < rest.length ? rest[i + 1]! : null;
   }
   if (prog === "cmd") {
-    const i = rest.findIndex((t) => /^\/[ck]$/i.test(t));
-    return i >= 0 ? rest.slice(i + 1).join(" ") : null;
+    // cmd also takes the command glued to the switch (`/c"del /s /q C:\*"`), and strips one pair of outer quotes.
+    const i = rest.findIndex((t) => /^\/[ck]/i.test(t));
+    if (i < 0) return null;
+    return [rest[i]!.slice(2), ...rest.slice(i + 1)].filter(Boolean).join(" ").replace(/^"([\s\S]*)"$/, "$1");
+  }
+  if (prog === "iex" || prog === "invoke-expression") {
+    // Its string argument (or -Command's, any abbreviation) is the command it runs.
+    const args = rest.filter((t) => !/^-c(o(m(m(a(n(d)?)?)?)?)?)?$/i.test(t));
+    return args.length ? args.join(" ") : null;
   }
   if (prog === "powershell" || prog === "pwsh") {
     const enc = rest.findIndex((t) => /^-e(c|n(c(o(d(e(d(c(o(m(m(a(n(d)?)?)?)?)?)?)?)?)?)?)?)?)?$/i.test(t));
@@ -118,13 +127,35 @@ function launcherPayload(prog: string, rest: string[]): string | null {
   return null;
 }
 
+/** The commands a shell runs before the line itself: the inside of `$(...)`, `<(...)`, `>(...)` (PowerShell's
+ *  `$(...)` too) and of backticks. An unclosed one runs to the end of the text (fail-closed). */
+function substitutions(raw: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i + 1 < raw.length; i++) {
+    if (raw[i + 1] !== "(" || !"$<>".includes(raw[i]!)) continue;
+    let open = 0;
+    let j = i + 1;
+    for (; j < raw.length; j++) {
+      if (raw[j] === "(") open++;
+      else if (raw[j] === ")" && --open === 0) break;
+    }
+    out.push(raw.slice(i + 2, j));
+  }
+  for (const m of raw.matchAll(/`([^`]*)`?/g)) if (m[1]) out.push(m[1]);
+  return out;
+}
+
 /** The catastrophic pattern `raw` matches (#616): the raw text first, then each command segment with its program
  *  resolved to a bare name (`/bin/rm`, `env X=1 rm`), then the command a launcher (`bash -c`, `cmd /c`,
- *  `powershell -Command`) would run. Only the program position is rewritten, so a quoted argument
- *  (`grep "rm -rf" log`) is not read as a command. */
+ *  `powershell -Command`, `iex`) or a command substitution would run. Only the program position is rewritten, so
+ *  a quoted argument (`grep "rm -rf" log`) is not read as a command. */
 function catastrophicIn(raw: string, depth = 0): Catastrophic | null {
   for (const c of ALWAYS_PROMPT) if (c.re.test(raw)) return c;
   if (depth > 4) return null;
+  for (const inner of substitutions(raw)) {
+    const hit = catastrophicIn(inner, depth + 1);
+    if (hit) return hit;
+  }
   for (const seg of raw.split(/\|\||&&|[;&|\r\n]/)) {
     const spans = tokenSpans(seg);
     const { prog, at } = argv0At(spans.map((s) => s.text));

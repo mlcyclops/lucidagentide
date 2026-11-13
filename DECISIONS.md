@@ -27135,3 +27135,10 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 5. The agent firewall's header neutralizes the connection name and stop reason, and the MCP gate's header the server name (left over from ADR-0568).
 
 **Consequences.** `rd /s /q build` and `Remove-Item -Recurse` now always ask, as `rm -rf build` does; remote lanes refuse them outright. A command quoted as an argument is not read as one. Left as designed: a remote agent connection with `permissionPolicy: "allow"` (ADR-0149, a per-connection opt-in for a trusted gateway) answers its own asks without this floor.
+
+**Addendum (2026-11-12, review of #617).** Four forms of the families above still ran with no human: `rm --recursive --force /`, a command substitution (`echo $(rm -rf /)`, ``echo `rm -rf /` ``), PowerShell's `iex` / `Invoke-Expression` (`iex 'Remove-Item -Recurse -Force C:\'`, `irm <url> | iex`), and a payload glued to cmd's switch (`cmd /c"del /s /q C:\*"`).
+1. The `rm` pattern reads `--recursive` and `--force` as `-r` and `-f`; one of them alone keeps T3.
+2. The inside of `$(...)`, `<(...)`, `>(...)` and backticks is classified like a launcher's payload (an unclosed one runs to the end of the text). A substitution inside single quotes, which bash does not run, also asks: it fails closed.
+3. `iex` and `Invoke-Expression` are launchers (their string, or `-Command`'s), and a pipe into either is "pipes downloaded code into an interpreter", as a pipe into `sh` is.
+4. cmd's `/c` or `/k` may carry the command glued to it; one pair of outer quotes is stripped, as cmd does.
+Still outside the pattern floor: other recursive deleters (`find / -delete` stays T3 through the dangerous-flag table), `diskpart` scripts, and an interpreter's own code (`python -c "shutil.rmtree('/')"`). Proof: the new rows in the catastrophic and risky corpora of `exec_policy.test.ts`.
