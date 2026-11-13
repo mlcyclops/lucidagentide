@@ -27094,6 +27094,19 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 
 **Consequences.** An auto-mode lane can still stop on a catastrophic command, which is the point. Scheduled jobs that set auto mode get the same floor and fail closed when nobody answers. Remote lanes are unchanged: their tier policy already classifies every command.
 
+## ADR-0568 -- Delimiter breakout closed: one fenceUntrusted for every untrusted envelope (2026-11-12)
+
+**Status:** Accepted. Amends ADR-0147 and ADR-0152 (the neutralizer they introduced moves to one shared home). Proof: `bun test ./harness/prompt/untrusted.test.ts` plus one breakout case in each wrapper's existing test file.
+
+**Context.** Invariant 5 puts untrusted text only between `UNTRUSTED_CONTENT_START` and `UNTRUSTED_CONTENT_END`. The agent firewall and the MCP result gate neutralized a literal marker inside the text, each with its own copy, and the peer-note extension carried a third. The browser policy page text, both RAG wrappers (`wrapRetrieved`, `wrapKnowledge`), the KB compiler, the trainer distiller, Skill Studio, the Trivia seed, the AskSage persona and the Creator metadata block placed raw text between the markers, so text carrying `UNTRUSTED_CONTENT_END` closed the envelope early and its tail read as instructions (the same tag-breakout trick as the Yes Mode report). The Unicode scanner does not see an ASCII token.
+
+**Decision.**
+1. `harness/prompt/untrusted.ts` owns `neutralizeDelimiters(s)` (each literal marker becomes `[lucid-neutralized-delimiter]`, unchanged from the old copies, which were identical) and `fenceUntrusted(body)`, which returns START, newline, the neutralized body, newline, END. The marker strings still come from the frozen `assembler.ts`.
+2. Every wrapper that fences external, retrieved, user-supplied or model-produced text calls `fenceUntrusted`, or `neutralizeDelimiters` on each untrusted piece where it adds its own header lines inside the envelope (agent firewall, MCP gate, AskSage persona, checkout peers, remote spokes, the omp tool extensions).
+3. The copies in `agent_firewall.ts`, `mcp_result_gate.ts` and `interject_extension.ts` (`neutralizePeerText`) are deleted. The peer-note copy existed to avoid importing the scanner client through the MCP gate; the new module imports only `assembler.ts`, so that reason is gone.
+
+**Consequences.** Clean text is wrapped byte for byte as before. Text that carried a marker now shows the neutralized token in its place. The item renderer inside the frozen `assembler.ts` is left as is (frozen contract).
+
 ## ADR-0569 -- The macOS x64 app ships x64 binaries: per-arch staging in the one mac job, and a Mach-O arch gate (#614) (2026-11-12)
 
 **Status:** Accepted. Fixes #614. Proof: `bun test ./desktop/build/macho.test.ts ./desktop/build/darwin_packages.test.ts`; the build-desktop.yml macOS leg's new mac arch gate over both packed apps.
@@ -27107,15 +27120,3 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 4. `desktop/build/mac-arch-gate.ts` runs on the macOS legs of build-desktop.yml and build-creator.yml after the air-gap smoke and before any upload. It reads the Mach-O header (`desktop/build/macho.ts`: thin 0xfeedfacf/0xfeedface, fat 0xcafebabe/0xcafebabf, cputype 0x01000007 x86_64, 0x0100000c arm64) of every file in both packed apps: `repo/bin/**` and `runtimes/bun` must run on the app's CPU whatever their names; elsewhere a binary for the other CPU is allowed only when its path names that arch (`runtimes/python-darwin-arm64/...`). It also requires lucid, lucid-engine, lucid-holder, lucid-sep, the own-arch pi_natives addon, bun, uv and the pi-natives package per app.
 
 **Consequences.** An Intel Mac gets x64 binaries and addons; a wrong-arch file in either mac app fails the build. The mac leg compiles the launcher and engine twice and the holder twice (a few minutes more). Each mac app is smaller by the other arch's addon packages; both still carry both arches' bun, uv and Python (selected by process.arch, as before). The other arch's binaries are never run on the runner; the gate's header read is their check.
-## ADR-0568 -- Delimiter breakout closed: one fenceUntrusted for every untrusted envelope (2026-11-12)
-
-**Status:** Accepted. Amends ADR-0147 and ADR-0152 (the neutralizer they introduced moves to one shared home). Proof: `bun test ./harness/prompt/untrusted.test.ts` plus one breakout case in each wrapper's existing test file.
-
-**Context.** Invariant 5 puts untrusted text only between `UNTRUSTED_CONTENT_START` and `UNTRUSTED_CONTENT_END`. The agent firewall and the MCP result gate neutralized a literal marker inside the text, each with its own copy, and the peer-note extension carried a third. The browser policy page text, both RAG wrappers (`wrapRetrieved`, `wrapKnowledge`), the KB compiler, the trainer distiller, Skill Studio, the Trivia seed, the AskSage persona and the Creator metadata block placed raw text between the markers, so text carrying `UNTRUSTED_CONTENT_END` closed the envelope early and its tail read as instructions (the same tag-breakout trick as the Yes Mode report). The Unicode scanner does not see an ASCII token.
-
-**Decision.**
-1. `harness/prompt/untrusted.ts` owns `neutralizeDelimiters(s)` (each literal marker becomes `[lucid-neutralized-delimiter]`, unchanged from the old copies, which were identical) and `fenceUntrusted(body)`, which returns START, newline, the neutralized body, newline, END. The marker strings still come from the frozen `assembler.ts`.
-2. Every wrapper that fences external, retrieved, user-supplied or model-produced text calls `fenceUntrusted`, or `neutralizeDelimiters` on each untrusted piece where it adds its own header lines inside the envelope (agent firewall, MCP gate, AskSage persona, checkout peers, remote spokes, the omp tool extensions).
-3. The copies in `agent_firewall.ts`, `mcp_result_gate.ts` and `interject_extension.ts` (`neutralizePeerText`) are deleted. The peer-note copy existed to avoid importing the scanner client through the MCP gate; the new module imports only `assembler.ts`, so that reason is gone.
-
-**Consequences.** Clean text is wrapped byte for byte as before. Text that carried a marker now shows the neutralized token in its place. The item renderer inside the frozen `assembler.ts` is left as is (frozen contract).
