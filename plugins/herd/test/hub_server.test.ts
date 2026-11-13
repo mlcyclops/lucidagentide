@@ -141,8 +141,10 @@ describe("attach, detach and reattach", () => {
     const b = await client(d);
     const again = await b.until((f) => text(f).includes("herd main · 1 attached") && text(f).includes("scout") && topsOnRow1(f) === 2);
     expect(await paneCount(d)).toBe(2);
-    // Same hub, same layout: the frame matches what the first client saw, status line aside.
-    expect(again.slice(0, -1)).toEqual(seen.slice(0, -1));
+    // Same hub, same layout: the frame matches what the first client saw, status line aside. A working pane's
+    // spinner (braille U+2800 to U+28FF) moves between the two frames, so it is masked (it failed CI once on ⠧ vs ⠦).
+    const steady = (f: string[]) => f.slice(0, -1).map((l) => l.replace(/[\u2800-\u28ff]/g, "*"));
+    expect(steady(again)).toEqual(steady(seen));
     b.att.detach();
     expect(await b.att.closed).toBe("detached");
   }, 20_000);
