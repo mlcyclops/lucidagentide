@@ -106,7 +106,7 @@ export function rasterizeStroke(mask: MaskData, stroke: BrushStroke, offX: numbe
     return;
   }
   // Walk the polyline, emitting a sample every `step` of arc length (step tracks the local radius).
-  let carry = 0; // arc length travelled since the last emitted sample
+  let carry = 0; // arc length traveled since the last emitted sample
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i - 1]!, b = pts[i]!;
     const axl = a.x - offX, ayl = a.y - offY, ra = R * pressure(a);
@@ -200,7 +200,7 @@ function vhgwLine(line: Uint8Array, n: number, k: number, isMax: boolean, g: Uin
 
 /**
  * Dilate (px > 0) or erode (px < 0) coverage by a (2k + 1)-square structuring element, k = round(|px|),
- * using the separable van Herk / Gil-Werman max/min filter (O(1) per pixel regardless of k). Grey-level:
+ * using the separable van Herk / Gil-Werman max/min filter (O(1) per pixel regardless of k). Gray-level:
  * operates on coverage values, so soft edges stay soft. Pixels outside the mask are the identity element.
  */
 export function growShrinkMask(mask: MaskData, px: number): MaskData {

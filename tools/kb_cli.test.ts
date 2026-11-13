@@ -106,7 +106,7 @@ describe("kb_cli", () => {
 
   // ── snippetAround ──────────────────────────────────────────────────────────
 
-  test("centres on match and adds ellipses when truncated", () => {
+  test("centers on match and adds ellipses when truncated", () => {
     const body = "A".repeat(100) + " MATCH " + "B".repeat(100);
     const s = snippetAround(body, "match", 10);
     expect(s).toContain("MATCH");

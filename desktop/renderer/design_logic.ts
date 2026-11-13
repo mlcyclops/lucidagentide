@@ -77,7 +77,7 @@ export function tileRange(rect: Rect, layerW: number, layerH: number, tile: numb
 
 /** Device-pixel destination of the key-space rect [x0, x1) x [y0, y1) under an axis-aligned matrix
  *  (scale a, d; offset e, f). Edges are rounded, so two rects that share a key-space edge share the exact
- *  device edge: no gap and no overlap between neighbouring tiles at any fractional zoom. */
+ *  device edge: no gap and no overlap between neighboring tiles at any fractional zoom. */
 export function snappedRect(m: readonly number[], x0: number, y0: number, x1: number, y1: number): { x: number; y: number; w: number; h: number } {
   const X0 = Math.round(m[0]! * x0 + m[4]!), X1 = Math.round(m[0]! * x1 + m[4]!);
   const Y0 = Math.round(m[3]! * y0 + m[5]!), Y1 = Math.round(m[3]! * y1 + m[5]!);
@@ -284,7 +284,7 @@ export function translateCmds(cmds: readonly PathCmd[], dx: number, dy: number):
   return cmds.map((c) => translateCmd(c, dx, dy));
 }
 
-/** Move one node. Moving an anchor carries its two neighbouring handles (the in handle of its own cubic,
+/** Move one node. Moving an anchor carries its two neighboring handles (the in handle of its own cubic,
  *  the out handle of the next cubic). Moving the start anchor of a closed subpath also moves the closing
  *  segment's end point, so the shape stays closed. */
 export function moveNode(cmds: readonly PathCmd[], ref: NodeRef, x: number, y: number): PathCmd[] {

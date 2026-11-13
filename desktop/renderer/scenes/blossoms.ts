@@ -21,7 +21,7 @@ const PETAL = (() => {
   return p;
 })();
 
-/** A five-petal blossom with a deep pink centre and stamens. */
+/** A five-petal blossom with a deep pink center and stamens. */
 function flower(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, rot: number, tint: number): void {
   ctx.save();
   ctx.translate(x, y);

@@ -112,7 +112,7 @@ describe("switchEntries", () => {
 });
 
 // P-PROGRESS.1: a spoke in line for its folder names whom it waits for; a running spoke with history shows
-// its estimated percent, labelled as an estimate, and every older glance string is unchanged.
+// its estimated percent, labeled as an estimate, and every older glance string is unchanged.
 describe("spokeGlance (P-PROGRESS.1)", () => {
   test("waiting names the holder; a percent rides only a working spoke", () => {
     const base = { turns: 2, queued: [] as unknown[] };

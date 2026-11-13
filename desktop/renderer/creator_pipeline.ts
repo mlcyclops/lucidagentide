@@ -53,13 +53,13 @@ export interface PipelineMediaView {
   readonly kind: string;
   readonly prompt: string;
   readonly model: string;
-  /** The scan verdict's own words. Empty means no verdict travelled with the record, which the card SAYS
+  /** The scan verdict's own words. Empty means no verdict traveled with the record, which the card SAYS
    *  rather than papering over with a checkmark. */
   readonly scanned: string;
 }
 
 /** One render, as the route reports it: the verdict, where it stopped, what it stored, and what it refused.
- *  `stage` and `kind` are plain strings on purpose - an unrecognised value from a newer server prints
+ *  `stage` and `kind` are plain strings on purpose - an unrecognized value from a newer server prints
  *  verbatim instead of being coerced into a member of a closed set it does not belong to. */
 export interface PipelineRunView {
   readonly ok: boolean;
@@ -125,7 +125,7 @@ export function isPipelineRunView(v: unknown): v is PipelineRunView {
 
 // ── labels (data, so an unknown value falls through verbatim) ────────────────
 
-/** Where the pipeline stopped, in words. An unrecognised stage prints as itself: the pane would rather show
+/** Where the pipeline stopped, in words. An unrecognized stage prints as itself: the pane would rather show
  *  a server's raw word than translate it wrongly. */
 const STAGE_LABEL: Record<string, string> = {
   capability: "capability check",
@@ -189,7 +189,7 @@ export function progressLine(p: PipelineProgressView | null): string {
     case "interrupted":
       return `The render was interrupted before it finished, so any percent already shown is stale${previews}.`;
     default:
-      return `The render reported a status LUCID does not recognise: ${p.status || "an empty status"}.`;
+      return `The render reported a status LUCID does not recognize: ${p.status || "an empty status"}.`;
   }
 }
 

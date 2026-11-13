@@ -5,7 +5,7 @@
 //
 // P-GOAL.6 (ADR-0048): pick a good CHECKER model for the /goal loop. The loop's checker (ADR-0046) runs
 // once per iteration to decide whether the verifiable condition holds — a small, frequent, read-only
-// judgement. Running it on the maker's model (often a flagship) is wasteful: a checker wants a model
+// judgment. Running it on the maker's model (often a flagship) is wasteful: a checker wants a model
 // that's CHEAP and FAST yet capable and RECENT. This module recommends one from the user's OWN model
 // picker — i.e. only models their configured providers/subscriptions actually expose — so the default
 // always works, and the user can still override it with any model they like.
@@ -62,7 +62,7 @@ export function resolveGovernedModel(locked: boolean, models: ManagedModels | un
 	return { ok: false, error: "Your organization's model policy denies the current model, and no permitted model is available in the picker. Ask your admin to adjust the managed models policy or add a permitted provider." };
 }
 
-/** Checker fitness tier of a model name. Higher = better fit for a frequent, cheap judgement call. */
+/** Checker fitness tier of a model name. Higher = better fit for a frequent, cheap judgment call. */
 function tier(name: string): 0 | 1 | 2 {
   const n = name.toLowerCase();
   // Ultra-cheap / possibly-too-weak FIRST (so "flash-lite" scores as lite, not flash).

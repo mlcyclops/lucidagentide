@@ -5,7 +5,7 @@
 // chat thread and every fleet lane transcript.
 //
 // The main composer grew a page stepper (single chevron) and a run-to-end button (double chevron), and the
-// math lived inline in app.ts keyed to `#chat`. A fleet lane needs the identical behaviour in its own
+// math lived inline in app.ts keyed to `#chat`. A fleet lane needs the identical behavior in its own
 // scroller, and a second copy of "one viewport minus a line of overlap" is how the two would drift: the
 // main chat would get a tuning pass the lanes never saw. So the arithmetic lives here, DOM-free, and both
 // callers read it.

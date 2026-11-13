@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // desktop/browser_keys.test.ts - P-BROWSER.2: the agent-supplied key-combo parser. The load-bearing
-// property is FAIL-CLOSED naming: Chromium silently swallows an unrecognised keyCode, so a typo that
+// property is FAIL-CLOSED naming: Chromium silently swallows an unrecognized keyCode, so a typo that
 // parsed "successfully" would ack, do nothing, and send the agent into a retry loop. Every rejection
 // here is a named error the agent can act on.
 

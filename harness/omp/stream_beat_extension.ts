@@ -24,7 +24,7 @@
 // streaming.
 //
 // FAIL-SOFT, like tool_meta_extension.ts. If the URL is unset, the hook API is missing or a POST fails, the
-// outcome is the old behaviour (the watchdog may act on a long write), never a broken omp launch.
+// outcome is the old behavior (the watchdog may act on a long write), never a broken omp launch.
 
 /** At most one beat per session per this many ms. The watchdog's first threshold (quiet) is 90 s, so a
  *  10 s beat keeps a streaming turn far from every threshold while costing one tiny loopback POST. */

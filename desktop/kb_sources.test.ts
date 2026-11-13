@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // desktop/kb_sources.test.ts — P-KGPACK.3 (ADR-0205): the folder → KB-documents reader. Confirms a chat
-// export (reusing the vendor parser) and an Obsidian markdown vault both normalise to KbSourceDoc[], the
+// export (reusing the vendor parser) and an Obsidian markdown vault both normalize to KbSourceDoc[], the
 // chat shape wins when both could match, the markdown walk skips hidden/system dirs + non-md files, and a
 // folder with neither returns a friendly error.
 

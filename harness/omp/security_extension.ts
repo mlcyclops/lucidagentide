@@ -113,7 +113,7 @@ function collectStrings(value: unknown, skip: ReadonlySet<string> = new Set(["ty
   return parts.join("\n");
 }
 
-/** Persist a tool call to the project DB as a scanned, trust-labelled artifact for
+/** Persist a tool call to the project DB as a scanned, trust-labeled artifact for
  *  PROVENANCE (and to keep the security/audit trail complete). It intentionally does
  *  NOT promote a semantic fact: raw tool I/O (bash/read/find/web_search/job/yield,
  *  keyed `omp:<tool>`) is mechanical activity, not durable knowledge. Promoting it

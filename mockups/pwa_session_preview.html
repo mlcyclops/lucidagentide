@@ -106,7 +106,7 @@
   .bs-account button { min-height:36px; padding:0 16px; font-size:13px; width:auto; max-width:max-content; }
 
   /* ---- verbatim from tools/remote-pwa/index.html: the FLEET strip, its pips, and the lane cards ----
-     COLOUR PARITY WITH THE DESKTOP IS THE POINT. The five lane colours, the two animations, and the rule
+     COLOR PARITY WITH THE DESKTOP IS THE POINT. The five lane colors, the two animations, and the rule
      that ONLY the two action-needed states animate are lifted from desktop/renderer/styles.css
      (.fleet-card.lane-*), keyed off the SAME `lane-<status>` class, so a lane that is red in the desktop
      dock is red here. */
@@ -315,7 +315,7 @@
       "Your browser vendor transcribes this audio on its own servers, so your voice leaves the phone: hold the mic button instead and your desktop will transcribe the recording offline to keep it between your devices.",
       "Hold the mic button to talk. This phone records the clip, your own desktop turns it into text offline with its own engine, and the audio never goes anywhere else.",
       "The composer's menu can also let this phone type for you: its own recognizer puts the words straight into the message box, so you read them over first. A transcript is never sent on its own - you always tap Send.",
-      "Either way the words reach your desktop labelled with where they were transcribed, so the shared transcript and its audit trail show whether the phone or the desktop did the work.",
+      "Either way the words reach your desktop labeled with where they were transcribed, so the shared transcript and its audit trail show whether the phone or the desktop did the work.",
     ];
     $("help-btn").addEventListener("click", () => {
       closeMenu();
@@ -346,7 +346,7 @@
 
     // ---- P-PWA-FLEET.2: the fleet strip. The lane markup + the roll-up mirror what
     // desktop/collab/pwa_view.ts renderLaneCard and desktop/collab/fleet_status.ts laneRollup produce, so
-    // this harness exercises the real shape. One lane per status, so every colour is on screen at once.
+    // this harness exercises the real shape. One lane per status, so every color is on screen at once.
     const LANES = [
       { id: "l1", name: "api-refactor", status: "needs-approval", cwd: "api", turns: 7, pend: { kind: "bash", summary: "rm -rf dist && bun run build" } },
       { id: "l2", name: "docs-sweep", status: "awaiting-input", cwd: "docs", turns: 3 },

@@ -28,7 +28,7 @@ export { assertFrame, crc32, lzwEncode, type RgbaFrame } from "./imaging_core.ts
 
 // ── PNG ──────────────────────────────────────────────────────────────────────
 
-/** A true-colour-with-alpha PNG (bit depth 8, colour type 6, filter 0 per scanline). */
+/** A true-color-with-alpha PNG (bit depth 8, color type 6, filter 0 per scanline). */
 export function encodePng(frame: RgbaFrame): Uint8Array {
   assertFrame(frame);
   const { width, height, rgba } = frame;
@@ -57,7 +57,7 @@ export interface Quantized {
   readonly indices: readonly Uint8Array[];
   /** The palette slot reserved for fully transparent pixels, or null when none was needed. */
   readonly transparentIndex: number | null;
-  /** True when every source colour survived exactly (the pixel-art case). */
+  /** True when every source color survived exactly (the pixel-art case). */
   readonly exact: boolean;
 }
 
@@ -87,7 +87,7 @@ export function quantize(frames: readonly RgbaFrame[], maxColors = 256, alphaCut
   const slots: number[] = exact ? ranked : (() => {
     const chosen: number[] = [];
     const seen = new Set<number>();
-    for (const k of ranked) { // keep the most-used exact colours first
+    for (const k of ranked) { // keep the most-used exact colors first
       if (chosen.length >= Math.floor(budget / 2)) break;
       if (!seen.has(k)) { seen.add(k); chosen.push(k); }
     }
@@ -155,7 +155,7 @@ export function encodeGif(frames: readonly RgbaFrame[], opts: GifOptions = {}): 
     if (f.width !== width || f.height !== height) throw new Error("encodeGif: every frame must share one size");
   }
   const q = quantize(frames, Math.max(2, Math.min(256, opts.maxColors ?? 256)));
-  // GIF colour tables are a power of two, minimum 2 entries.
+  // GIF color tables are a power of two, minimum 2 entries.
   let tableSize = 2;
   let sizeExp = 1;
   while (tableSize < q.colors) { tableSize <<= 1; sizeExp++; }
@@ -171,7 +171,7 @@ export function encodeGif(frames: readonly RgbaFrame[], opts: GifOptions = {}): 
   const parts: Uint8Array[] = [
     new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]), // "GIF89a"
     le16(width), le16(height),
-    new Uint8Array([0x80 | (sizeExp - 1), 0, 0]), // global table present, colour resolution, sort flag
+    new Uint8Array([0x80 | (sizeExp - 1), 0, 0]), // global table present, color resolution, sort flag
     table,
     // NETSCAPE2.0 application extension: the loop count
     new Uint8Array([0x21, 0xFF, 0x0B, 0x4E, 0x45, 0x54, 0x53, 0x43, 0x41, 0x50, 0x45, 0x32, 0x2E, 0x30, 0x03, 0x01]),

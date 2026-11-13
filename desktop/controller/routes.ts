@@ -20,7 +20,7 @@
 // Events are metadata only (pairing, lane, verdict, counts); prompt text and tokens never reach them.
 //
 // Lane lifecycle (ADR-0500/0501/0502):
-//   - close ends one of the controller's OWN lanes: an open parked ask is denied, a running turn is cancelled, the
+//   - close ends one of the controller's OWN lanes: an open parked ask is denied, a running turn is canceled, the
 //     lane is removed, and its slot frees (the two-lane cap counts live lanes only).
 //   - a controller lane's identity is recorded (lane_store.ts), so after an engine restart it comes back idle on
 //     the same lane id and omp session; a turn that was running is reported interrupted, never re-run. A pairing
@@ -333,7 +333,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
   }
 
   if (path === "/api/controller/deny") {
-    // Refusing is always safe, so the controller may do it on its own (an expired wait, a cancelled task).
+    // Refusing is always safe, so the controller may do it on its own (an expired wait, a canceled task).
     if (!b) return malformed();
     const r = deps.fleet.answerAsk(laneId, b.askId!, false);
     if (!r.ok) return reply(409, { ok: false, error: "no such open ask" });
@@ -373,7 +373,7 @@ export async function handleController(req: Request, path: string, pairing: Pair
   }
 
   // ── ADR-0500: close one of this pairing's lanes ─────────────────────────────────────────────────────────
-  // A busy lane is cancelled, then closed (not refused): close is the controller's final word on its own lane, a
+  // A busy lane is canceled, then closed (not refused): close is the controller's final word on its own lane, a
   // parked ask means the lane is mid-turn anyway, and nothing on disk is lost (a remote lane's work is committed
   // onto its review branch; the omp session log stays). Audit lines land before the effect.
   if (path === "/api/controller/close") {

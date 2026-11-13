@@ -40,6 +40,8 @@ import {
 } from "./intent.ts";
 import { removePluginMcp, setPluginMcp, type PluginMcpServer } from "./mcp.ts";
 import { PLUGIN_PORT_MAX, PLUGIN_PORT_MIN } from "./ports.ts";
+import { DEV_ONLY_ENV, isDevVersion } from "../release_cleanup.ts";
+import { APP_VERSION } from "../version.ts";
 
 const HEALTH_TIMEOUT_MS = 30_000;
 const STOP_WAIT_MS = 5_000;
@@ -68,7 +70,8 @@ export interface RuntimeDeps {
   /** ADR-0546: the running-intent ledger (default plugin-data/.running-intent). */
   intentDir?: string;
   platform?: string;
-  /** This build's version (default APP_VERSION): written into each running intent and checked by autostart. */
+  /** This build's version (default APP_VERSION): written into each running intent and checked by autostart; a dev
+   *  build also passes the development license variables (ADR-0542). */
   appVersion?: string;
   /** Records a security event (default recordBlock), such as autostart refusing tampered installed files. */
   record?: (b: Parameters<typeof recordBlock>[0]) => unknown;
@@ -186,9 +189,9 @@ export function pluginEnv(p: InstalledPlugin, port: number, agentBin: string): R
   };
 }
 
-function childEnv(contract: Record<string, string>, asNode: boolean): Record<string, string> {
+function childEnv(keys: readonly string[], contract: Record<string, string>, asNode: boolean): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const k of PASS_ENV) { const v = process.env[k]; if (v !== undefined) env[k] = v; }
+  for (const k of keys) { const v = process.env[k]; if (v !== undefined) env[k] = v; }
   Object.assign(env, contract);
   if (asNode) env.ELECTRON_RUN_AS_NODE = "1";
   return env;
@@ -234,9 +237,14 @@ export class PluginRuntime {
   /** Bumped by every stop(): a start begun before it sees a different value and neither launches nor records. */
   private stopGen = new Map<string, number>();
   private readonly platform: string;
+  private readonly envKeys: readonly string[];
 
   constructor(private readonly deps: RuntimeDeps) {
     this.platform = deps.platform ?? process.platform;
+    // The development license variables (remote-spokes add-on ADR-A092: the switch and the development PUBLIC
+    // key, neither a secret) reach a plugin only when the IDE itself is a dev build; a release drops them, so a
+    // plugin there accepts publisher licenses only (ADR-0542).
+    this.envKeys = isDevVersion(deps.appVersion ?? APP_VERSION) ? [...PASS_ENV, ...DEV_ONLY_ENV] : PASS_ENV;
   }
 
   private root(): string { return this.deps.root ?? pluginsRoot(); }
@@ -359,7 +367,7 @@ export class PluginRuntime {
     let proc: ChildProcess;
     try {
       proc = spawn(cmd, args, {
-        cwd: p.dir, env: childEnv({ ...contract, LUCID_PLUGIN_HOST_TOKEN: hostToken }, asNode), stdio: ["ignore", "pipe", "pipe"],
+        cwd: p.dir, env: childEnv(this.envKeys, { ...contract, LUCID_PLUGIN_HOST_TOKEN: hostToken }, asNode), stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true, detached: this.platform !== "win32",
       });
     } catch (err) { return { ok: false, error: `could not start: ${(err as Error).message}` }; }
@@ -417,7 +425,7 @@ export class PluginRuntime {
     const args = (m.args ?? []).map((a) => (safeRelPath(a) && a in files ? join(p.dir, a) : a));
     // The same allowlisted env the plugin's own process gets, so the MCP child starts identically whether or
     // not omp merges its own environment into a stdio server's.
-    const env = Object.entries(childEnv(pluginEnv(p, port, this.deps.agentBin()), asNode)).map(([name, value]) => ({ name, value }));
+    const env = Object.entries(childEnv(this.envKeys, pluginEnv(p, port, this.deps.agentBin()), asNode)).map(([name, value]) => ({ name, value }));
     return { name: `plugin-${p.manifest.id}`, command, args, env };
   }
 

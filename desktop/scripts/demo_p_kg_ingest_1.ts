@@ -8,7 +8,7 @@
 //   A. IMPORTER: emits a per-message progress countdown, and a cancel stops early while KEEPING the facts
 //      learned so far (fail-safe — no torn write).
 //   B. JOB: startImport returns a jobId immediately (the request never blocks), refuses a second
-//      concurrent import, and a cancel marks the job cancelled.
+//      concurrent import, and a cancel marks the job canceled.
 //   C. FORMAT: the pure status-pill line the UI renders.
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -55,7 +55,7 @@ try {
     vendor: "openai", scope: "personal", signal: ac.signal,
     onProgress: (t) => { if (t.conversations === 1) ac.abort(); }, // cancel after conversation 1
   });
-  if (!sum.cancelled) fail("summary should be marked cancelled");
+  if (!sum.cancelled) fail("summary should be marked canceled");
   if (sum.learned <= 0) fail("cancel must KEEP facts learned before the stop");
   if (store2.graph().facts.length !== sum.learned) fail("partial facts must be persisted (no torn write)");
   ok(`cancel stopped early, kept ${sum.learned} fact(s), store consistent (fail-safe)`);
@@ -79,8 +79,8 @@ ok("a second concurrent import is refused (no two writers on the encrypted store
 
 if (!cancelImport(jobId).ok) fail("cancel should succeed");
 await settle();
-if (importJobStatus(jobId)?.state !== "cancelled") fail("job should be cancelled after abort");
-ok("cancel aborts the run; job marked cancelled (partial facts kept)");
+if (importJobStatus(jobId)?.state !== "cancelled") fail("job should be canceled after abort");
+ok("cancel aborts the run; job marked canceled (partial facts kept)");
 
 // ── C. the status line the pill shows ────────────────────────────────────────
 console.log("== [3/3] #110 progress pill line ==");

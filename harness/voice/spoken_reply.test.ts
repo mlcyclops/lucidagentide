@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-VOICE.5 (ADR-0248): the "answer for the ear" guidance. The behaviour that matters is WHEN it applies -
+// P-VOICE.5 (ADR-0248): the "answer for the ear" guidance. The behavior that matters is WHEN it applies -
 // only hands-free conversation mode, never plain auto-speak (where the user is reading along) and never a
 // silent turn - and that it constrains the reply's SHAPE without telling the agent to do less work.
 
@@ -23,7 +23,7 @@ test("the medium follows the two toggles, and conversation never outranks a sile
   expect(replyMedium(false, true)).toBe("screen");
 });
 
-test("the block is a delimited, trusted element the transcript stripper can recognise", () => {
+test("the block is a delimited, trusted element the transcript stripper can recognize", () => {
   const b = spokenReplyGuidance("conversation")!;
   expect(b.startsWith("<spoken-reply")).toBe(true);
   expect(b.trimEnd().endsWith("</spoken-reply>")).toBe(true);

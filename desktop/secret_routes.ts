@@ -74,7 +74,7 @@ export function masterSecretRequestEnv(): Record<string, string> {
 export interface SecretRouteCtx {
   /** dev.ts TOKEN (renderer). */
   uiToken: string;
-  /** Test seam: who may open a request (default: the master agent's token, labelled "Main agent"). */
+  /** Test seam: who may open a request (default: the master agent's token, labeled "Main agent"). */
   requesters?: readonly SecretRequester[];
   /** Bun's server, to lift the 60 s idle timeout on /fallback/wait (the renderer waits for the user's save). */
   srv?: { timeout(req: Request, seconds: number): void };

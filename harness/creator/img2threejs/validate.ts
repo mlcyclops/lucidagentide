@@ -3,7 +3,7 @@
 
 // harness/creator/img2threejs/validate.ts - ObjectSculptSpec validation (CREATOR-IMG2THREEJS, ADR-0562).
 // TypeScript port of forge/stage2_spec/validate_sculpt_spec.py from github.com/img2threejs/img2threejs
-// (Apache-2.0), reduced to the rules the generator in this repo honours (see ADR-0562 "not ported").
+// (Apache-2.0), reduced to the rules the generator in this repo honors (see ADR-0562 "not ported").
 //
 // Two kinds of finding, exactly as upstream:
 //   errors    - the spec is malformed. Nothing downstream may read it.

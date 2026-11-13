@@ -232,7 +232,7 @@ describe("pwa_view: fleet lane cards + process rows", () => {
     for (const act of ["send", "push", "checkin", "stop"]) expect(html).toContain(`data-fleet-act="${act}"`);
     // the retired indirection: no "Prompt" button staging a target on the master composer
     expect(html).not.toContain('data-fleet-act="prompt"');
-    // and nothing the lane protocol cannot honour
+    // and nothing the lane protocol cannot honor
     for (const dead of ["spawn", "model", "retry", "respawn", "queue"]) expect(html).not.toContain(`data-fleet-act="${dead}"`);
   });
 
@@ -245,8 +245,8 @@ describe("pwa_view: fleet lane cards + process rows", () => {
     expect(done).toContain(" hidden>Push</button>"); // idle lane: nothing to interject
   });
 
-  // The colour PARITY seam: the card's `lane-<status>` class is what the phone CSS keys the desktop's
-  // fleet palette off, so losing it silently reverts the phone to its own invented colours.
+  // The color PARITY seam: the card's `lane-<status>` class is what the phone CSS keys the desktop's
+  // fleet palette off, so losing it silently reverts the phone to its own invented colors.
   it("carries the lane-<status> class the desktop palette is keyed on, for every state", () => {
     for (const status of ["starting", "working", "awaiting-input", "needs-approval", "done", "error", "stopped"]) {
       const html = renderLaneCard({ ...LANE, status });

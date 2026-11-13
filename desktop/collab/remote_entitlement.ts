@@ -7,7 +7,7 @@
 // (`premium`, or `admin` which rides free and implies premium). The relay is the AUTHORITATIVE gate — it
 // verifies the claim (P-REMOTE.1) and refuses an unentitled socket with a 4403 close. This module is the
 // CLIENT-side glue that turns that refusal into a "Subscribe" flow: detect the 4403, ask the private backend
-// for a Stripe Checkout URL, and — after the webhook sets the claim — recognise the refreshed token so the
+// for a Stripe Checkout URL, and (after the webhook sets the claim) recognize the refreshed token so the
 // phone can retry the connection.
 //
 // DESIGN: admission stays authoritative on the RELAY, never the client. We do NOT pre-gate on the decoded

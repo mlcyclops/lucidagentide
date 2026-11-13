@@ -619,6 +619,8 @@ export type PluginFileInspectView =
 export type PluginStartView = { ok: true; url: string } | { ok: false; error: string };
 export type PluginActionView = { ok: true } | { ok: false; error: string };
 export interface PluginLicenseView { ok: boolean; id?: string; version?: string; text?: string; error?: string }
+/** ADR-0542: what the first start of a release after a dev build removed (data kept) and which dev settings it ignores. */
+export interface ReleaseCleanupView { from: string; to: string; at: string; removed: { id: string; name: string; version: string }[]; envIgnored: string[] }
 // P-PROV.1 (ADR-0210): extra per-provider config env (Azure resource/version, Vertex project/location/ADC,
 // Gemini-Enterprise project). Non-secret fields echo `value` to pre-fill; secret fields report `last4`.
 // `options` (ADR-0504): a closed choice rendered as a select, the first option being the unset default.
@@ -1248,6 +1250,9 @@ export interface LucidBridge {
   /** keepData defaults to true: the plugin's data dir survives unless the user asks to delete it. */
   pluginsUninstall(id: string, keepData?: boolean): Promise<PluginActionView | null>;
   pluginsLicense(id: string): Promise<PluginLicenseView | null>;
+  /** ADR-0542: the last dev-to-release cleanup the user has not seen yet (null when none), and marking it seen. */
+  releaseCleanup(): Promise<ReleaseCleanupView | null>;
+  releaseCleanupAck(): Promise<boolean | null>;
   // P-CMD.1 (ADR-0146): user-authored "/" slash commands (workspace .omp/commands/). Create validates +
   // scans fail-closed server-side. `list` = stored commands; `create` returns the persisted command or errors.
   userCommands(): Promise<UserCommand[]>;
@@ -1301,10 +1306,10 @@ export interface LucidBridge {
   setTheme(theme: string): Promise<ProfileSettings | null>;
   // Enterprise-managed policy (read-only; placed by admins via GPO/MDM).
   managed(): Promise<ManagedPolicy | null>;
-  // P-IDE.1c: China-origin model data-sovereignty acknowledgement gate.
+  // P-IDE.1c: China-origin model data-sovereignty acknowledgment gate.
   chinaAck(): Promise<{ acknowledged: boolean } | null>;
   setChinaAck(acknowledge: boolean): Promise<{ acknowledged: boolean } | null>;
-  // Third-party / non-U.S. / custom "More providers" acknowledgement gate (mirrors chinaAck).
+  // Third-party / non-U.S. / custom "More providers" acknowledgment gate (mirrors chinaAck).
   thirdPartyAck(): Promise<{ acknowledged: boolean } | null>;
   setThirdPartyAck(acknowledge: boolean): Promise<{ acknowledged: boolean } | null>;
   // ADR-0219: per chat-session CUI vs Search mode (defaults to the ACTIVE session when no id is given).
@@ -1410,7 +1415,7 @@ export interface LucidBridge {
    *  browser (LucidAgentIDE.bat / lucid.exe + default browser). The server runs on the same machine
    *  (loopback bind), so it opens the real Explorer / Finder / zenity dialog itself. `supported:false`
    *  (or null: request failed) = fall back to the in-app browser; `supported:true, path:null` = the
-   *  user CANCELLED, never re-prompt. */
+   *  user CANCELED, never re-prompt. */
   pickFolderNative(opts?: PickFolderOpts): Promise<NativePickResult | null>;
   // P-NETWL.1 (ADR-0106): native FILE picker + OS-encrypted credential vault. All Electron-only; in a plain
   // browser pickFile/credList resolve null/[] and credStore reports the vault as unavailable (fail-closed).
@@ -2127,6 +2132,8 @@ export const bridge: LucidBridge = {
   pluginsStop: (id) => post("/api/plugins/stop", { id }),
   pluginsUninstall: (id, keepData = true) => post("/api/plugins/uninstall", { id, keepData }),
   pluginsLicense: (id) => getData(`/api/plugins/license?id=${encodeURIComponent(id)}`),
+  releaseCleanup: () => getData("/api/release-cleanup"),
+  releaseCleanupAck: () => post("/api/release-cleanup/ack", {}),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
   clearActiveSkill: () => post("/api/skill", { clear: true }),
   skillActivated: (command, name, source) => post("/api/skill/activated", { command, name, source }),
@@ -2403,7 +2410,7 @@ export const bridge: LucidBridge = {
     return isSystemStatus(v) ? v : null;
   },
   // CREATOR-0 (ADR-0279): identity + feature reveal. A null (old backend, failed call) means NO Creator
-  // surface renders - absent, never a greyed hint.
+  // surface renders - absent, never a grayed hint.
   buildInfo: async () => {
     const v: unknown = await getData("/api/build-info").catch(() => null);
     const o = v as BuildInfoView | null;

@@ -224,7 +224,7 @@ describe("the pane keeps its honesty in the markup", () => {
     expect(html).not.toMatch(/class="ced-chip[^"]*\bmeasured\b/);
   });
 
-  test("a measured word wears the measured class and the Whistle label; a derived neighbour keeps its own", () => {
+  test("a measured word wears the measured class and the Whistle label; a derived neighbor keeps its own", () => {
     const html = chipStripHtml(doc([
       item("i1", "quick", 0, 100, { source: "measured", confidence: 0.88 }),
       item("i2", "brown", 100, 200, { source: "derived", confidence: 0.5 }),

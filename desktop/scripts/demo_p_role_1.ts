@@ -4,7 +4,7 @@
 // desktop/scripts/demo_p_role_1.ts
 //
 // Increment P-ROLE.1 (ADR-0088) — role-based onboarding + opinionated, progressively-disclosed views.
-// Proves: (1) the four roles are a closed, ordered set with display metadata; (2) role normalisation
+// Proves: (1) the four roles are a closed, ordered set with display metadata; (2) role normalization
 // is fail-safe — unset/unknown folds to the full-surface "developer" default; (3) each role maps to a
 // CALM default landing surface (Security analyst → the queue, everyone else → Memory); (4) roles are
 // COSMETIC — the mapping never names or touches the security gate.
@@ -29,7 +29,7 @@ for (const r of USER_ROLE_LIST) {
 }
 ok("every role has a label, glyph, landing phrase, and one-line blurb");
 
-// 2. Fail-safe normalisation — unset/unknown → developer (the safe, full-surface default).
+// 2. Fail-safe normalization: unset/unknown → developer (the safe, full-surface default).
 for (const r of USER_ROLE_LIST) if (normalizeRole(r) !== r) fail(`valid role ${r} did not pass through`);
 for (const junk of [undefined, null, "", "root", "ADMIN", "superuser"]) {
   if (normalizeRole(junk as string) !== "developer") fail(`junk role ${String(junk)} did not fold to developer`);

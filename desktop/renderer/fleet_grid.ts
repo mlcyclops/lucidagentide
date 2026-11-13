@@ -238,7 +238,7 @@ export function openFleetGrid(): void {
       <button class="btn-mini fleet-add-btn fleet-pin" data-fleet-byrepo aria-pressed="false" data-tip="Group by repo|Section the cards by the codebase each spoke works on, in the same colors as the orbit. Your named groups are kept and come back when this is off.">${icon("git", 12)} By repo</button>
       <button class="btn-mini fleet-add-btn fleet-pin" data-fleet-pin data-tip="Default view|Make the GRID what the Fleet button opens. The orbit header has the same pin."></button>
       <button class="btn-mini fleet-add-btn" data-fleet-hub data-tip="Terminal hub|Open lucid hub in a new terminal window: this fleet as tmux-style panes (Fleet, Security, Sessions, Audit, Usage and a live agent pane), attached to this app. Also runs as lucid hub from any terminal.">${icon("terminal", 12)} Terminal</button>
-      <button class="btn-mini fleet-add-btn fleet-fit-btn" data-fleet-fit aria-pressed="true" data-tip="Autofit|Lanes tile the whole panel at equal sizes and refit as it resizes. Drag a card edge to resize it, its neighbours share the rest; double-click an edge to reset to equal. Off: free layout.">${icon("layout", 12)}<span>Autofit</span></button>
+      <button class="btn-mini fleet-add-btn fleet-fit-btn" data-fleet-fit aria-pressed="true" data-tip="Autofit|Lanes tile the whole panel at equal sizes and refit as it resizes. Drag a card edge to resize it, its neighbors share the rest; double-click an edge to reset to equal. Off: free layout.">${icon("layout", 12)}<span>Autofit</span></button>
       <button class="btn-mini fleet-add-btn" data-fleet-add title="Spawn a new local spoke">${icon("plus", 12)} Spoke</button>
       <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" title="Minimize (spokes keep running)">${UP_ARROW}</button>
       <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" title="Close (spokes keep running)">${icon("close", 15)}</button>
@@ -796,7 +796,7 @@ function startCardDrag(e: PointerEvent, head: HTMLElement, fromGrip: boolean): v
   };
   const move = (m: Event): void => {
     const pm = m as PointerEvent;
-    // The card only LIFTS after the pointer has actually travelled: a header click (which lands a
+    // The card only LIFTS after the pointer has actually traveled: a header click (which lands a
     // sub-pixel pointermove on most hardware) must not flash a placeholder or count as a reorder.
     if (!moved) {
       if (Math.abs(pm.clientX - ox) < DRAG_SLOP && Math.abs(pm.clientY - oy) < DRAG_SLOP) return;
@@ -903,7 +903,7 @@ export function mountFleetPill(): void {
  *  names the lanes - enough to keep working in the main window and still know a lane is blocked on you.
  *  Order, wording, and counting come from the shared `laneRollup` (P-PWA-FLEET.2), so this pill and the
  *  phone's collapsed fleet bar can never disagree; the dots reuse the cards' own `lane-<status>` classes,
- *  so neither can drift from the panel's colours either.
+ *  so neither can drift from the panel's colors either.
  *  The markup is compared before it is written, because an identical repaint every 2.5s is precisely what
  *  made the pulse animation stutter. */
 function paintPill(): void {
@@ -1270,7 +1270,7 @@ function paintFrame(run: LaneRun): void {
       health.textContent = h.action === "probe" ? "probed" : "recovered";
       health.title = h.action === "probe"
         ? `The harness asked this spoke for a status because it went quiet: ${h.reason}`
-        : `The harness cancelled and resumed this spoke in place: ${h.reason}`;
+        : `The harness canceled and resumed this spoke in place: ${h.reason}`;
     }
   }
   paintProgress(run); // P-PROGRESS.1

@@ -75,7 +75,7 @@ native-only bits are crisp text zoom (`webFrame`) and window controls, from
 - **Live telemetry** — the status bar's context gauge + cost update from the
   session's `usage_update` stream.
 - **`/goal` agentic loop** — run an agent to a *verifiable* stop condition (a
-  shell command that exits 0, or a separate checker model's judgement) with a
+  shell command that exits 0, or a separate checker model's judgment) with a
   cheaper recommended checker, durable on-disk memory + resume, and scheduled
   automations. Built for unattended runs: a **budget kill switch** halts the loop
   at a hard `$` cap, **convergence-stall + tool-failure guards** stop it spinning

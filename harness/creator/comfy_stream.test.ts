@@ -594,7 +594,7 @@ describe("parseHistoryOutputs", () => {
 // ── sniffMime and mimeMismatch ───────────────────────────────────────────────
 
 describe("sniffMime", () => {
-  test("every supported container is recognised by its magic bytes", () => {
+  test("every supported container is recognized by its magic bytes", () => {
     expect(sniffMime(PNG)).toBe("image/png");
     expect(sniffMime(JPEG)).toBe("image/jpeg");
     expect(sniffMime(GIF)).toBe("image/gif");
@@ -604,7 +604,7 @@ describe("sniffMime", () => {
     expect(sniffMime(GLB)).toBe("model/gltf-binary");
   });
 
-  test("bytes with no recognisable magic sniff to null instead of a guess", () => {
+  test("bytes with no recognizable magic sniff to null instead of a guess", () => {
     expect(sniffMime(NOISE)).toBeNull();
     expect(sniffMime(new Uint8Array(0))).toBeNull();
     expect(sniffMime(Uint8Array.from([0x89]))).toBeNull();

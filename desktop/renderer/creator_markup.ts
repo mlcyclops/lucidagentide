@@ -44,7 +44,7 @@ export interface Markup {
   readonly color: string;
   /** Stroke width in PDF points. */
   readonly width: number;
-  /** The drawn geometry: for rect/cloud/ellipse the path rectangle (stroke centre line); for text and
+  /** The drawn geometry: for rect/cloud/ellipse the path rectangle (stroke center line); for text and
    *  highlight the box; for arrow/ink the bounds of the points (recomputed by `withBounds`). */
   readonly rect: Rect;
   /** arrow: one path [start, end]; ink: one path per stroke; empty otherwise. */
@@ -405,7 +405,7 @@ export function markupsToXfdf(markups: readonly Markup[], href: string): string 
   for (const m of markups) {
     const { rect, rd } = annotationRect(m);
     const date = pdfDate(m.modified);
-    // FreeText's `color` (/C) is the BOX FILL in Acrobat and Revu, so a text box carries its colour in the
+    // FreeText's `color` (/C) is the BOX FILL in Acrobat and Revu, so a text box carries its color in the
     // default appearance only; writing it as `color` too would paint red text on a red box.
     const colorAttr = m.kind === "text" ? "" : ` color="${m.color.toUpperCase()}"`;
     const common = `page="${m.page}" rect="${nums(rect)}"${colorAttr} width="${num(m.width)}" name="${xmlEsc(m.id)}" title="${xmlEsc(m.author)}" subject="${xmlEsc(MARKUP_SUBJECT[m.kind])}" date="${date}" creationdate="${date}" flags="print"`;
@@ -456,7 +456,7 @@ function decodeXml(s: string): string {
 const localName = (n: string) => n.slice(n.indexOf(":") + 1).toLowerCase();
 
 /** A small, strict-enough XML reader for XFDF: elements, attributes, text, CDATA. Comments, processing
- *  instructions and DOCTYPE are skipped (no entity definitions are honoured). Throws on malformed input. */
+ *  instructions and DOCTYPE are skipped (no entity definitions are honored). Throws on malformed input. */
 export function parseXml(src: string): XmlNode {
   if (src.length > 50 * 1024 * 1024) throw new Error("XFDF file is larger than 50 MB");
   const root: XmlNode = { name: "#root", attrs: {}, children: [], text: "" };
@@ -596,7 +596,7 @@ export function xfdfToMarkups(xml: string, now = Date.now()): XfdfImport {
         const fs = /([\d.]+)\s+Tf/.exec(da);
         const rg = /([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+rg/.exec(da);
         const fontSize = fs ? Math.max(4, Math.min(144, Number(fs[1]))) : 12;
-        // The text colour lives in the default appearance; `color` on a freetext is its box fill.
+        // The text color lives in the default appearance; `color` on a freetext is its box fill.
         const textColor = rg ? rgbToHex(Number(rg[1]), Number(rg[2]), Number(rg[3])) : color;
         markups.push({ ...base, kind: "text", color: textColor, rect: outer, paths: [], fontSize });
         break;

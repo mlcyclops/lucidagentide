@@ -115,11 +115,11 @@ async function withRecoveryServer(
   }
 }
 
-async function expectCancellation(cancelled: Promise<void>): Promise<void> {
+async function expectCancellation(canceled: Promise<void>): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const observed = await Promise.race([
-      cancelled.then(() => true),
+      canceled.then(() => true),
       new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), 1000); }),
     ]);
     expect(observed).toBe(true);
@@ -130,12 +130,12 @@ describe("streamNdjson connection deadlines", () => {
   test("hanging initial headers attach once without repeating the prompt or aborting the caller", async () => {
     let prompts = 0;
     let attaches = 0;
-    const cancelled = Promise.withResolvers<void>();
+    const canceled = Promise.withResolvers<void>();
     await withRecoveryServer((req) => {
       if (new URL(req.url).pathname === "/chat") {
         prompts += 1;
         return new Promise<Response>((resolve) => {
-          req.signal.addEventListener("abort", () => { cancelled.resolve(); resolve(new Response()); }, { once: true });
+          req.signal.addEventListener("abort", () => { canceled.resolve(); resolve(new Response()); }, { once: true });
         });
       }
       attaches += 1;
@@ -149,20 +149,20 @@ describe("streamNdjson connection deadlines", () => {
       expect(prompts).toBe(1);
       expect(attaches).toBe(1);
       expect(signal.aborted).toBe(false);
-      await expectCancellation(cancelled.promise);
+      await expectCancellation(canceled.promise);
     });
   });
 
-  test("a stalled reader is cancelled and reattached with the latest turn body", async () => {
+  test("a stalled reader is canceled and reattached with the latest turn body", async () => {
     let prompts = 0;
     const bodies: unknown[] = [];
-    const cancelled = Promise.withResolvers<void>();
+    const canceled = Promise.withResolvers<void>();
     await withRecoveryServer(async (req) => {
       if (new URL(req.url).pathname === "/chat") {
         prompts += 1;
         return new Response(new ReadableStream({
           start(c) { c.enqueue(line({ type: "token", text: "acknowledged" })); },
-          cancel() { cancelled.resolve(); },
+          cancel() { canceled.resolve(); },
         }));
       }
       bodies.push(await req.json());
@@ -179,7 +179,7 @@ describe("streamNdjson connection deadlines", () => {
       expect(bodies).toEqual([{ turnId: "owned-turn" }]);
       expect(prompts).toBe(1);
       expect(events.at(-1)).toEqual({ type: "done", text: "full answer" });
-      await expectCancellation(cancelled.promise);
+      await expectCancellation(canceled.promise);
     });
   });
 
@@ -187,7 +187,7 @@ describe("streamNdjson connection deadlines", () => {
     let attaches = 0;
     let ticks = 0;
     let timer: ReturnType<typeof setInterval> | undefined;
-    const cancelled = Promise.withResolvers<void>();
+    const canceled = Promise.withResolvers<void>();
     try {
       await withRecoveryServer((req) => {
         if (new URL(req.url).pathname === "/attach") { attaches += 1; return new Response(null, { status: 404 }); }
@@ -200,7 +200,7 @@ describe("streamNdjson connection deadlines", () => {
               if (ticks === 8) { clearInterval(timer); c.enqueue(line({ type: "done", text: "long work complete" })); }
             }, 50);
           },
-          cancel() { clearInterval(timer); cancelled.resolve(); },
+          cancel() { clearInterval(timer); canceled.resolve(); },
         }));
       }, async (origin, signal) => {
         const events: ChatEvent[] = [];
@@ -211,14 +211,14 @@ describe("streamNdjson connection deadlines", () => {
         expect(ticks).toBe(8);
         expect(attaches).toBe(0);
         expect(events.map((e) => e.type)).not.toContain("ping");
-        await expectCancellation(cancelled.promise);
+        await expectCancellation(canceled.promise);
       });
     } finally { clearInterval(timer); }
   });
 
   test("malformed traffic does not postpone recovery forever", async () => {
     let timer: ReturnType<typeof setInterval> | undefined;
-    const cancelled = Promise.withResolvers<void>();
+    const canceled = Promise.withResolvers<void>();
     try {
       await withRecoveryServer((req) => {
         if (new URL(req.url).pathname === "/attach") return new Response(line({ type: "done", text: "recovered" }));
@@ -227,7 +227,7 @@ describe("streamNdjson connection deadlines", () => {
             c.enqueue(line({ type: "token", text: "initial" }));
             timer = setInterval(() => c.enqueue(enc.encode(" \n{broken\n{}\n{\"type\":7}\n")), 25);
           },
-          cancel() { clearInterval(timer); cancelled.resolve(); },
+          cancel() { clearInterval(timer); canceled.resolve(); },
         }));
       }, async (origin, signal) => {
         const events: ChatEvent[] = [];
@@ -235,7 +235,7 @@ describe("streamNdjson connection deadlines", () => {
           reattach: `${origin}/attach`, connectionTimeoutMs: 100, reattachDelayMs: 0,
         });
         expect(events.at(-1)).toEqual({ type: "done", text: "recovered" });
-        await expectCancellation(cancelled.promise);
+        await expectCancellation(canceled.promise);
       });
     } finally { clearInterval(timer); }
   });
@@ -353,13 +353,13 @@ describe("streamNdjson connection deadlines", () => {
     let attaches = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const stop = new AbortController();
-    const cancelled = Promise.withResolvers<void>();
+    const canceled = Promise.withResolvers<void>();
     try {
       await withRecoveryServer((req) => {
         if (new URL(req.url).pathname === "/attach") { attaches += 1; return new Response(null, { status: 404 }); }
         return new Response(new ReadableStream({
           start(c) { c.enqueue(line({ type: "token", text: "reading" })); },
-          cancel() { cancelled.resolve(); },
+          cancel() { canceled.resolve(); },
         }));
       }, async (origin, signal) => {
         const events: ChatEvent[] = [];
@@ -370,24 +370,24 @@ describe("streamNdjson connection deadlines", () => {
         expect(stop.signal.aborted).toBe(true);
         expect(events).toEqual([{ type: "token", text: "reading" }]);
         expect(attaches).toBe(0);
-        await expectCancellation(cancelled.promise);
+        await expectCancellation(canceled.promise);
       });
     } finally { clearTimeout(timer); }
   });
 
   test.each(["done", "error", "lane-error"])("terminal %s ends an open socket even when its handler throws", async (type) => {
-    const cancelled = Promise.withResolvers<void>();
+    const canceled = Promise.withResolvers<void>();
     await withRecoveryServer(() => new Response(new ReadableStream({
       start(c) {
         c.enqueue(line({ type, text: "finished", message: "finished" }));
         c.enqueue(line({ type: "token", text: "must not render after terminal" }));
       },
-      cancel() { cancelled.resolve(); },
+      cancel() { canceled.resolve(); },
     })), async (origin, signal) => {
       const events: ChatEvent[] = [];
       await streamNdjson(`${origin}/chat`, {}, (e) => { events.push(e); throw new Error("renderer failed"); }, signal);
       expect(events.map((e) => e.type)).toEqual([type]);
-      await expectCancellation(cancelled.promise);
+      await expectCancellation(canceled.promise);
     });
   });
 
@@ -438,17 +438,17 @@ describe("streamNdjson connection deadlines", () => {
   test("each attach gets a fresh deadline for stalled headers and then a stalled reader", async () => {
     let prompts = 0;
     let attaches = 0;
-    const headersCancelled = Promise.withResolvers<void>();
-    const readerCancelled = Promise.withResolvers<void>();
+    const headersCanceled = Promise.withResolvers<void>();
+    const readerCanceled = Promise.withResolvers<void>();
     await withRecoveryServer((req) => {
       if (new URL(req.url).pathname === "/chat") { prompts += 1; return new Response(null, { status: 503 }); }
       attaches += 1;
       if (attaches === 1) return new Promise<Response>((resolve) => {
-        req.signal.addEventListener("abort", () => { headersCancelled.resolve(); resolve(new Response()); }, { once: true });
+        req.signal.addEventListener("abort", () => { headersCanceled.resolve(); resolve(new Response()); }, { once: true });
       });
       if (attaches === 2) return new Response(new ReadableStream({
         start(c) { c.enqueue(line({ type: "ping" })); },
-        cancel() { readerCancelled.resolve(); },
+        cancel() { readerCanceled.resolve(); },
       }));
       return new Response(line({ type: "done", text: "third connection recovered" }));
     }, async (origin, signal) => {
@@ -459,8 +459,8 @@ describe("streamNdjson connection deadlines", () => {
       expect(prompts).toBe(1);
       expect(attaches).toBe(3);
       expect(events.at(-1)).toEqual({ type: "done", text: "third connection recovered" });
-      await expectCancellation(headersCancelled.promise);
-      await expectCancellation(readerCancelled.promise);
+      await expectCancellation(headersCanceled.promise);
+      await expectCancellation(readerCanceled.promise);
     });
   });
 
@@ -529,11 +529,11 @@ describe("streamNdjson connection deadlines", () => {
     });
   });
 
-  test("a failing recovery handler cannot prevent cancelling an unread HTTP error body", async () => {
-    const cancelled = Promise.withResolvers<void>();
+  test("a failing recovery handler cannot prevent canceling an unread HTTP error body", async () => {
+    const canceled = Promise.withResolvers<void>();
     await withRecoveryServer(() => new Response(new ReadableStream({
       start(c) { c.enqueue(enc.encode("not authorized")); },
-      cancel() { cancelled.resolve(); },
+      cancel() { canceled.resolve(); },
     }), { status: 401 }), async (origin, signal) => {
       const events: ChatEvent[] = [];
       await expect(streamNdjson(`${origin}/chat`, {}, (e) => events.push(e), signal, {
@@ -541,7 +541,7 @@ describe("streamNdjson connection deadlines", () => {
         onRecovery() { throw new Error("HUD failed"); },
       })).rejects.toThrow("backend error 401");
       expect(events).toEqual([]);
-      await expectCancellation(cancelled.promise);
+      await expectCancellation(canceled.promise);
     });
   });
 });

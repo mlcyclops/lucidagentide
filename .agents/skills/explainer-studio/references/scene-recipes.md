@@ -1,7 +1,7 @@
 # Scene, lighting, camera, and console recipes
 
 Original recipes for a procedural three.js explainer. They use only core three.js plus two addons
-(`OrbitControls`, `CSS2DRenderer`). Adjust colours and sizes to the plan; keep the structure.
+(`OrbitControls`, `CSS2DRenderer`). Adjust colors and sizes to the plan; keep the structure.
 
 ## Files and vendoring
 
@@ -99,7 +99,7 @@ function makeSky({ zenith = '#14213d', mid = '#3d5a80', horizon = '#f4a261', rad
   return sky;
 }
 scene.add(makeSky());
-scene.fog = new THREE.Fog('#f4a261', 25, 80); // the horizon colour, so the ground melts into the sky
+scene.fog = new THREE.Fog('#f4a261', 25, 80); // the horizon color, so the ground melts into the sky
 ```
 
 Keep `radius` below the camera's far plane and above `controls.maxDistance` plus the stage size.
@@ -303,7 +303,7 @@ function layoutGems(n) {
 }
 ```
 
-One `InstancedMesh` is one draw call for all of them. Per-instance colour: `setColorAt(i, color)` then
+One `InstancedMesh` is one draw call for all of them. Per-instance color: `setColorAt(i, color)` then
 `instanceColor.needsUpdate = true`.
 
 ## Disposal on rebuild

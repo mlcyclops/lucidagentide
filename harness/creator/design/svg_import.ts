@@ -373,7 +373,7 @@ function buildShape(tag: string, node: SvgNode, ctx: Ctx, warn: Warnings, depth:
       const cx = num(node, "cx"), cy = num(node, "cy");
       let rx = parseScalar(attr(node, "rx"));
       let ry = parseScalar(attr(node, "ry"));
-      if (Number.isNaN(rx)) rx = ry; // "auto" behaviour: one radius given
+      if (Number.isNaN(rx)) rx = ry; // "auto" behavior: one radius given
       if (Number.isNaN(ry)) ry = rx;
       if (!(rx > 0 && ry > 0) || !finiteRect(cx - rx, cy - ry, 2 * rx, 2 * ry)) return null;
       return { kind: "ellipse", rect: { x: cx - rx, y: cy - ry, w: 2 * rx, h: 2 * ry }, paint };

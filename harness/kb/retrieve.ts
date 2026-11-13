@@ -10,7 +10,7 @@
 //   • compiled — VECTORLESS structural retrieval over the page graph: keyword relevance over page
 //     title+body, then link-neighbor expansion (a hit's linked concept/entity pages are surfaced too).
 //   • hybrid   — run both, normalize each store's scores, merge + dedupe by citation, and return one
-//     ranked set wrapped in the trust-boundary delimiters (each item labelled with its store + citation).
+//     ranked set wrapped in the trust-boundary delimiters (each item labeled with its store + citation).
 //
 // SECURITY (#5/#6, keystone #2): this is PURE READ — it stores nothing and mints no trust. Every hit
 // carries the store's own trust_label, and the wrapped output is delimited UNTRUSTED data destined for

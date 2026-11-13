@@ -281,7 +281,7 @@ async function save(overwrite: boolean): Promise<void> {
   if (!path) {
     if (!hooks.pickSavePath) { setStatus("Save unavailable", "err"); return; }
     const picked = await hooks.pickSavePath(suggestedFilename());
-    if (!picked) { refreshDirty(); return; } // cancelled - restore the prior status
+    if (!picked) { refreshDirty(); return; } // canceled - restore the prior status
     path = picked;
   }
   setStatus("Saving…");

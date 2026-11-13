@@ -185,7 +185,7 @@ async function backupNow(): Promise<void> {
     if (!file) { showToast({ tone: "danger", title: "Backup not made", desc: "The engine answered without a backup file.", actions: [{ label: "OK" }], timeout: 5200 }); return; }
     const s = await saveBackup(file, filename);
     if ("error" in s) { showToast({ tone: "danger", title: "Backup not saved", desc: s.error, actions: [{ label: "OK" }], timeout: 5200 }); return; }
-    if (!s.saved) { showToast({ tone: "info", title: "Backup not saved", desc: "The save dialog was cancelled.", timeout: 3200 }); return; }
+    if (!s.saved) { showToast({ tone: "info", title: "Backup not saved", desc: "The save dialog was canceled.", timeout: 3200 }); return; }
     if (p1) p1.value = "";
     if (p2) p2.value = "";
     const meter = document.querySelector<HTMLElement>("#vaultBkStrength");

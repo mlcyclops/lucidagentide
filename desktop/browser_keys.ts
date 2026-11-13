@@ -9,7 +9,7 @@
 // authority when it actually presses the key. One implementation, one set of accepted names.
 //
 // FAIL-CLOSED on unknown names. Electron documents keyCode as "the valid key codes in Accelerator", and
-// an unrecognised string is silently swallowed by Chromium: the agent would see a successful ack and a
+// an unrecognized string is silently swallowed by Chromium: the agent would see a successful ack and a
 // page that never changed, then loop. A named error ("unknown key \"pgdown\"") is the useful answer.
 
 /** Electron modifier tokens, in a stable order so the same combo always produces the same array. */
@@ -92,7 +92,7 @@ export function parseKeyCombo(input: string): KeyCombo | { error: string } {
   return { keyCode, modifiers: MODIFIER_ORDER.filter((m) => modifiers.includes(m)) };
 }
 
-/** One key token -> its Accelerator keyCode, or null when nothing recognises it. */
+/** One key token -> its Accelerator keyCode, or null when nothing recognizes it. */
 function normalizeKey(token: string): string | null {
   const named = NAMED_KEYS[token.toLowerCase()];
   if (named) return named;

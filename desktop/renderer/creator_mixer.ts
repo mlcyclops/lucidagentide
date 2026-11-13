@@ -183,8 +183,8 @@ export function formatGain(gain: number): string {
  *  control that does nothing. */
 export function panWords(pan: number, channels: number | null): string {
   const p = Number.isFinite(pan) ? (pan < -1 ? -1 : pan > 1 ? 1 : pan) : 0;
-  if (channels === 1) return "centre (a mono mix has nowhere to place a pan)";
-  if (p === 0) return "centre";
+  if (channels === 1) return "center (a mono mix has nowhere to place a pan)";
+  if (p === 0) return "center";
   return `${Math.round(Math.abs(p) * 100)}% ${p < 0 ? "left" : "right"}`;
 }
 

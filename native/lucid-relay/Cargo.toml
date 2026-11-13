@@ -1,0 +1,50 @@
+# Copyright (c) 2026 TechLead 187 LLC
+# SPDX-License-Identifier: BUSL-1.1
+#
+# lucid-relay (ADR-0540): the remote-spokes relay in Rust. Phase A is a drop-in for the add-on's Bun relay
+# (`lucid-spoke relay serve`): the same flags, environment, routes, answers, limits, log lines and state folder.
+# Phase B (`lucid-relay collab`) is the core's collab broker (tools/relay/serve.ts), wire-compatible with desktop/collab.
+# Phase C (`lucid-relay meet`) is the Meeting Hub rendezvous relay (relay/meet_relay.py): same relay.json and state.json.
+
+[package]
+name = "lucid-relay"
+version = "0.1.0"
+edition = "2021"
+license = "BUSL-1.1"
+publish = false
+
+[features]
+default = []
+# The AWS-LC FIPS module for every primitive the relay uses: TLS (listener and outbound client), ECDSA P-256 and
+# Ed25519 verification, SHA-256, the gate's RS256 check and the random bytes (needs CMake and Go at build time, see
+# aws-lc-rs). A fips build refuses to start unless AWS-LC reports FIPS mode.
+fips = ["rustls/fips", "aws-lc-rs/fips"]
+
+[dependencies]
+aws-lc-rs = "1"
+bytes = "1"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+gethostname = "0.5"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["server", "client", "http1"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "aws-lc-rs", "webpki-roots", "tls12", "logging"] }
+hyper-util = { version = "0.1", features = ["tokio", "client-legacy", "http1"] }
+indexmap = "2"
+parking_lot = "0.12"
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12", "logging"] }
+rustls-pemfile = "2"
+serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "io-util", "sync"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "tls12", "logging"] }
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["handshake"] }
+webpki-roots = "1"
+
+[dev-dependencies]
+# Tests sign certificates, tokens and passkey answers with fixed P-256 keys; the relay itself only verifies, on AWS-LC.
+p256 = { version = "0.13", features = ["ecdsa"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

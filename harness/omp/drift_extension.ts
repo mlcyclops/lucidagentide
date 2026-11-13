@@ -182,7 +182,7 @@ function imagesOf(data: Record<string, unknown>): { type: "image"; data: string;
   return out;
 }
 
-/** Fence a Drift text payload: bounded, neutralized, labelled with the tool name. */
+/** Fence a Drift text payload: bounded, neutralized, labeled with the tool name. */
 function fence(tool: string, raw: string): string {
   let body = blockText(raw);
   let note = "";
@@ -466,7 +466,7 @@ async function runExport(plan: ExportPlan): Promise<TextResult> {
   const pre = await callDrift("export_status", {}, 10000);
   const preEnv = envelope(pre);
   if (preEnv.ok !== true) return text(preEnv.error || "Drift did not answer export_status.", true);
-  // Drift normalises the path (a directory or an extension-less path gets <project>.<suffix>) and echoes it back;
+  // Drift normalizes the path (a directory or an extension-less path gets <project>.<suffix>) and echoes it back;
   // that echoed path is what the library import reads. When we only waited for an export someone else started
   // we never saw an echo, so the caller's own path is the best we have.
   let echoedPath = plan.path;

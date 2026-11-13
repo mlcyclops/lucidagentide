@@ -245,7 +245,7 @@ function emitPromptFrames(q: Queued, clientId: string): void {
     // --ws-error: the run FAILS here, and the socket says so ONCE. No `executed` frames, and deliberately
     // no terminal `executing:node=null` after it - a client that ends a run on frame type alone would hang
     // forever waiting for a signal that is never coming, and that hang is precisely what this flag proves
-    // a decoder must not do. Terminating on the error frame itself is the only correct behaviour.
+    // a decoder must not do. Terminating on the error frame itself is the only correct behavior.
     if (WS_ERROR) {
       text({ type: "execution_error", data: { prompt_id: q.promptId, node_id: "3", exception_type: "RuntimeError", exception_message: WS_ERROR_MESSAGE } });
       return;

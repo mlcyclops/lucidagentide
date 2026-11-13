@@ -748,7 +748,7 @@ export class FleetLaneManager {
       progressTimer = setInterval(() => this.#emit(lane, { type: "progress", progress: this.#progress(lane) }), PROGRESS_TICK_MS);
       progressTimer.unref?.();
       const res = await send();
-      // ACP cancel RESOLVES the prompt with stopReason "cancelled" (it does not reject) - a cancelled
+      // ACP cancel RESOLVES the prompt with stopReason "cancelled" (it does not reject) - a canceled
       // turn goes back to awaiting-input, never "done".
       this.#foldLiveTurn(lane);
       if (typeof res?.stopReason === "string" && /cancel/i.test(res.stopReason)) {
@@ -762,7 +762,7 @@ export class FleetLaneManager {
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
       this.#foldLiveTurn(lane, why);
-      // A cancelled turn settles as done-with-nothing rather than a scary error card.
+      // A canceled turn settles as done-with-nothing rather than a scary error card.
       if (/cancel/i.test(why)) { this.#setStatus(lane, "awaiting-input"); this.#emit(lane, { type: "done" }); }
       else { this.#setStatus(lane, "error"); this.#emit(lane, { type: "error", message: why }); }
     } finally {

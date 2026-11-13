@@ -28,7 +28,7 @@ export interface SubagentBatch {
 const norm = (s: string): string => s.trim().replace(/\s+/g, " ").slice(0, 200);
 
 /** A run is quiet this long (transcript untouched, no final output) = it is not working any more
- *  (cancelled, crashed, or its parent died). Generous: one long tool call writes nothing meanwhile. */
+ *  (canceled, crashed, or its parent died). Generous: one long tool call writes nothing meanwhile. */
 export const RUN_IDLE_MS = 10 * 60_000;
 /** A delegation whose runs never appeared this long after the turn ended is not coming. */
 export const NO_RUNS_GRACE_MS = 15_000;

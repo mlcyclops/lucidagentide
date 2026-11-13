@@ -22,7 +22,7 @@ export interface ImportSummary {
   blocked: number; // user messages the gate refused (suspicious/quarantined source)
   skipped: number; // user messages NOT processed because maxMessages was hit (never silent)
   extractor: "heuristic" | "model"; // which extractor ran (for the UI summary)
-  cancelled?: boolean; // the run was cancelled mid-flight (facts learned so far are kept — fail-safe)
+  cancelled?: boolean; // the run was canceled mid-flight (facts learned so far are kept, fail-safe)
 }
 
 // P-KG-INGEST.1 (ADR-0076): a per-message progress tick, so a long import can show a live countdown
@@ -78,7 +78,7 @@ export async function importConversations(
     tick();
     if (cancelled) break;
   }
-  if (learned) store.save(); // one re-encrypt+write for the entire import (incl. a cancelled run's partial facts)
+  if (learned) store.save(); // one re-encrypt+write for the entire import (incl. a canceled run's partial facts)
   opts.telemetry?.emit("personal_facts_imported", { vendor: opts.vendor, scope: opts.scope, extractor, conversations: idx, messages, learned, blocked, skipped });
   return { vendor: opts.vendor, conversations: conversations.length, messages, learned, blocked, skipped, extractor, cancelled };
 }

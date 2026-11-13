@@ -306,7 +306,7 @@ export class ACPClient {
   request<T = any>(method: string, params?: any, opts: RequestOpts = {}): Promise<T> {
     if (this.dead) return Promise.reject(new Error(this.dead));
     if (!this.proc && !this.held) return Promise.reject(new Error("acp: agent process not started"));
-    if (opts.signal?.aborted) return Promise.reject(new Error(`acp: ${method} cancelled`));
+    if (opts.signal?.aborted) return Promise.reject(new Error(`acp: ${method} canceled`));
     const id = this.nextId++;
     // Classic executor (not Promise.withResolvers): the VS Code extension typechecks this file under a
     // pre-ES2024 lib, and the desktop tsconfig targets Node types - the executor form works on every
@@ -320,7 +320,7 @@ export class ACPClient {
       timer = undefined;
       opts.signal?.removeEventListener("abort", onAbort);
     };
-    const onAbort = () => { this.pending.delete(id); cleanup(); reject(new Error(`acp: ${method} cancelled`)); };
+    const onAbort = () => { this.pending.delete(id); cleanup(); reject(new Error(`acp: ${method} canceled`)); };
     // The JSON-RPC result is untyped on the wire; the caller declares the shape it expects.
     this.pending.set(id, { resolve: (v) => resolve(v as T), reject, cleanup });
     if (opts.timeoutMs && opts.timeoutMs > 0) {

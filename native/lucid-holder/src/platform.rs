@@ -70,8 +70,8 @@ mod imp {
     enum Phase { Armed, Fired, Done }
 
     /// A receive deadline on one connection. Windows pipes ignore receive timeouts (interprocess reads them with
-    /// overlapped I/O), so a watchdog cancels the pipe's pending I/O once the time is up, and keeps cancelling until
-    /// the reader lets go of the deadline (a read that had just returned and is followed by another is cancelled
+    /// overlapped I/O), so a watchdog cancels the pipe's pending I/O once the time is up, and keeps canceling until
+    /// the reader lets go of the deadline (a read that had just returned and is followed by another is canceled
     /// too). The caller must disarm or drop the deadline before the stream closes: the watchdog holds only the raw
     /// handle, and never touches it after Done.
     pub struct Deadline(Arc<Mutex<Phase>>);
@@ -190,7 +190,7 @@ mod imp {
         Ok(opts)
     }
 
-    /// Unix sockets honour the receive timeout set on the stream, so no watchdog is needed.
+    /// Unix sockets honor the receive timeout set on the stream, so no watchdog is needed.
     pub struct Deadline;
 
     impl Deadline {
@@ -198,7 +198,7 @@ mod imp {
         pub fn disarm(&self) -> bool { true }
     }
 
-    /// The agent leads a process group of its own, so its whole tree can be signalled at once.
+    /// The agent leads a process group of its own, so its whole tree can be signaled at once.
     pub fn prepare_child(cmd: &mut Command) {
         cmd.process_group(0);
     }

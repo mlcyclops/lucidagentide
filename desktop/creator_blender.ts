@@ -24,7 +24,7 @@
 // Refusals are VALUES: `runBlenderRender` returns a result and never throws, and every refusal names the
 // stage it stopped at. Blender's stdout and stderr are UNTRUSTED TEXT (invariant 5): they are handed to the
 // pure classifier, which matches patterns and quotes bounded text back. Nothing here reads them as
-// instructions, and nothing here treats an unrecognised run as success.
+// instructions, and nothing here treats an unrecognized run as success.
 //
 // WHAT THE TESTS DO NOT PROVE. No assertion in `creator_blender.test.ts` has met a real Blender: the spawn
 // is injected in every test. The suite proves the vector handed to the spawn, the order of the refusals, and

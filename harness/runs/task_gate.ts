@@ -78,7 +78,7 @@ export interface ResultGateOutcome {
 
 /**
  * P-TASK.4 (ADR-0028): gate a subagent's RETURNED text before it can become durable memory.
- * The result is ingested (scanned → trust-labelled, raw preserved) and then run through the
+ * The result is ingested (scanned → trust-labeled, raw preserved) and then run through the
  * keystone-#2 promotion gate — so a suspicious/quarantined subagent result NEVER auto-promotes into
  * semantic memory. Returns the disposition; the raw artifact is always recorded for provenance.
  */

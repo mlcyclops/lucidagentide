@@ -8,7 +8,7 @@ import {
   spriteCss, spriteSheetLayout, wrapLines, type RgbaFrame,
 } from "./imaging.ts";
 
-/** Solid-colour frame. */
+/** Solid-color frame. */
 const solid = (w: number, h: number, r: number, g: number, b: number, a = 255): RgbaFrame => {
   const rgba = new Uint8Array(w * h * 4);
   for (let i = 0; i < rgba.length; i += 4) { rgba[i] = r; rgba[i + 1] = g; rgba[i + 2] = b; rgba[i + 3] = a; }
@@ -86,7 +86,7 @@ describe("PNG encoder (CREATOR-IMG, ADR-0291)", () => {
     expect((ihdr[2]! << 8) | ihdr[3]!).toBe(7);
     expect((ihdr[6]! << 8) | ihdr[7]!).toBe(5);
     expect(ihdr[8]).toBe(8); // bit depth
-    expect(ihdr[9]).toBe(6); // truecolour + alpha
+    expect(ihdr[9]).toBe(6); // truecolor + alpha
   });
 
   test("the pixels survive: inflating IDAT reproduces every scanline with its filter byte", () => {
@@ -126,7 +126,7 @@ describe("palette quantization", () => {
     expect(q.indices[0]![1]).toBe(q.transparentIndex ?? -1);
   });
 
-  test("more than 256 colours folds deterministically and never exceeds the budget", () => {
+  test("more than 256 colors folds deterministically and never exceeds the budget", () => {
     const w = 40, h = 40;
     const rgba = new Uint8Array(w * h * 4);
     for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {

@@ -85,7 +85,7 @@
 //   • REPORT ANNEXES (ADR-0124): a change-annotated dependency graph + data-schema map (styled SVG image AND
 //     copyable Mermaid for draw.io), page-broken as print annexes; green/red by lines added/removed.
 //   • UI REVAMP (ADR-0118/0120): live "game-HUD" scoreboard (neutral-until-changed + clockwise racing pulse),
-//     beautiful colour report charts with plasma-on-hover, custom premium SVG icons, print/PDF.
+//     beautiful color report charts with plasma-on-hover, custom premium SVG icons, print/PDF.
 //   • EXEC TLDR (ADR-0119): a "TLDR" button explains an intimidating command in plain terms via a cheap model;
 //     plus composer spell-check with correction suggestions.
 //   • CHAT BACKGROUND (ADR-0125): a personal background image at 25% - ambient wash, or a flashlight that
@@ -287,7 +287,7 @@
 //            presets (P-PROV.2 / P-LOCAL.4), and the model-picker cold-start warm-poll.
 // v1.12.0 = Voice mode. Hands-free conversation (Ctrl/Cmd+G: streaming read-aloud that starts after the
 //            first sentence, auto-mic on finish, silence sends the turn), answers shaped for the ear,
-//            the glowing pop-out equalizer, spoken thinking acknowledgements, and the truth-telling
+//            the glowing pop-out equalizer, spoken thinking acknowledgments, and the truth-telling
 //            per-engine voice picker (P-VOICE.2-.6, ADR-0246/0247).
 // v1.12.1 = the LUCID Trainer + role-generic training packs + the LUCID Agent immersive role
 //            (scenario-first expert interviews, fail-closed distillation, teach-back promotion,
@@ -329,7 +329,7 @@
 // v1.14.1 = the phone follow-through + the honest gate: the PWA composer collapses to ONE row (same-family
 //            controls fold into menus, Queue and Send merge, the voice caution moves behind an amber-aware ?),
 //            the fleet strip costs 33px collapsed (double-decker with the desktop pill's own count pips,
-//            per-lane composers, desktop-matched lane colours), a lane's CONVERSATION reaches the phone
+//            per-lane composers, desktop-matched lane colors), a lane's CONVERSATION reaches the phone
 //            (subscribe-only watch frames unicast to peers that asked, bounded lane-sync replay, a distinct
 //            lane-error chip), per-target seen counters draw a "new since you looked away" boundary that
 //            Sync scrolls to, and no phone panel ever opens itself (P-REMOTE.15, P-PWA-FLEET.2,
@@ -597,7 +597,7 @@
 //            stored best never written through innerHTML (CodeQL js/xss-through-dom). A plain stable tag.
 // v2.4.0-beta.1 = 2.3.1 plus the first 2.4.0 train. MODELS: omp 18.4.4 -> 18.8.6 (ADR-0442), Claude Haiku
 //            5.5 ($0.10/$0.50, 1M, the recommended checker once listed), the compat probe fixed (#491), R-07
-//            re-pinned at 85 providers with helmcode's bare `glm5.3` behind the China-origin acknowledgement.
+//            re-pinned at 85 providers with helmcode's bare `glm5.3` behind the China-origin acknowledgment.
 //            AUTH: OpenAI "Connect with a device code" through omp's `openai-codex-device`, read with the #490
 //            guards (ADR-0444). SANDBOX: Microsoft eXecution Container tried before the AppContainer helper,
 //            one-prompt "Prepare host (administrator)" in Security > Runtime sandbox (P-MXC.1, ADR-0441).

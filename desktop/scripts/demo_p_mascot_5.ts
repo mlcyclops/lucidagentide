@@ -33,15 +33,15 @@ ok(`the prompt-bar ninja and the arcade ninja share one pixel scale (${RUNNER_SC
 const L: RunnerLayout = { width: 900, barTop: MASCOT_H * RUNNER_SCALE + 10, barBottom: 300, height: 300, scale: RUNNER_SCALE };
 const soles = (frameId: string): number[] => {
   const bottom = MASCOT_FRAMES[frameId]![MASCOT_H - 1]!;
-  const centres: number[] = [];
+  const centers: number[] = [];
   for (let x = 0; x < MASCOT_W; x++) {
     if (bottom[x] === ".") continue;
     let end = x;
     while (end + 1 < MASCOT_W && bottom[end + 1] !== ".") end++;
-    centres.push((x + end) / 2);
+    centers.push((x + end) / 2);
     x = end;
   }
-  return centres;
+  return centers;
 };
 for (let beat = 1; beat < 8; beat++) {
   const world = (t: number): number[] => {
@@ -79,11 +79,11 @@ for (let t = 0; t < 30_000 && ka.phase !== "input"; t += 16) ka = stepKata(ka, 1
 if (ka.phase !== "input") fail("kata never reaches the input phase");
 const wrong = KATA_POSES.find((p) => p !== ka.sequence[ka.cursor])!;
 if (applyKataInput(ka, wrong).phase !== "over") fail("a broken kata must end the run");
-// Stack: a centred drop builds height; a clean miss ends the tower.
+// Stack: a centered drop builds height; a clean miss ends the tower.
 let st = createStackState(640, 7);
 const base = st.tower[st.tower.length - 1]!;
 st = dropStackBlock({ ...st, blockX: base.x });
-if (st.height !== 1 || st.phase !== "playing") fail("a centred crate must land");
+if (st.height !== 1 || st.phase !== "playing") fail("a centered crate must land");
 const top = st.tower[st.tower.length - 1]!;
 if (dropStackBlock({ ...st, blockX: top.x + top.width + 60 }).phase !== "over") fail("a missed crate must end the run");
 ok("engines: deterministic, scoring reachable, loss conditions fire");

@@ -205,7 +205,7 @@ function paintStatic(c: CanvasRenderingContext2D, w: number, h: number): void {
     }
   }
 
-  // Floodlit turf: brighter centre, darker edges, faint grain.
+  // Floodlit turf: brighter center, darker edges, faint grain.
   const pool = c.createRadialGradient(w * 0.5, h * 0.72, h * 0.05, w * 0.5, h * 0.72, w * 0.6);
   pool.addColorStop(0, "rgb(230 245 220 / 0.14)");
   pool.addColorStop(1, "rgb(0 10 6 / 0.35)");

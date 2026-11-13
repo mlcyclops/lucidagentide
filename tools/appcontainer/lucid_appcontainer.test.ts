@@ -70,7 +70,7 @@ test("buildCommandLine joins the quoted argv", () => {
   expect(buildCommandLine("omp", ["acp", "-e", "gate.ts"])).toBe("omp acp -e gate.ts");
 });
 
-// ── main() fail-closed behaviour (no spawn happens on the error / non-Windows paths) ──
+// ── main() fail-closed behavior (no spawn happens on the error / non-Windows paths) ──
 test("main() returns 2 on a bad-args (parser) failure", () => {
   expect(main(["--deny-network", "--"])).toBe(2); // no command
   expect(main(["--revoke-acl"])).toBe(2); // the revoke subcommand needs its path
@@ -232,7 +232,7 @@ test("--pick-folder speaks the engine's picker markers, so parseWinPick reads it
   expect(parseWinPick(`${PICK_PICKED_MARK}C:\\Users\\U\\Pictures\\Screenshots`)).toEqual({ status: "picked", path: "C:\\Users\\U\\Pictures\\Screenshots" });
   expect(parseWinPick(PICK_CANCEL_MARK)).toEqual({ status: "cancelled" });
   // Off Windows it refuses, never pretends a pick. On Windows it would open a real modal dialog and wait for a
-  // person, so the test never calls it there (it hung the Windows CI gate until cancelled).
+  // person, so the test never calls it there (it hung the Windows CI gate until canceled).
   if (process.platform !== "win32") expect(main(["--pick-folder", "t"])).toBe(3);
 });
 

@@ -133,7 +133,7 @@ console.log("4) cancel returns the lane to awaiting-input; stopAll orphans nothi
   if (st.lanes[0]!.status !== "awaiting-input") fail(`cancel must land awaiting-input, got ${st.lanes[0]!.status}`);
   fleet.stopAll();
   if ((await fleet.status()).lanes[0]!.status !== "stopped") fail("stopAll must stop the lane");
-  ok("cancelled turn is not an error; shutdown stopped every child");
+  ok("canceled turn is not an error; shutdown stopped every child");
 }
 
 // 6. The status payload is metadata: no lane reply text.

@@ -158,7 +158,7 @@ function openDialog(view: SecretRequestView): void {
   const kindSel = q<HTMLSelectElement>(".secret-dest-kind");
   for (const [k, label] of Object.entries(SECRET_MANAGER_LABELS)) kindSel.appendChild(new Option(label, k));
 
-  let finished = false; // the request is over (stored, cancelled, or gone): polling stops
+  let finished = false; // the request is over (stored, canceled, or gone): polling stops
   const step = (name: string) => { for (const s of ov.querySelectorAll<HTMLElement>(".secret-step")) s.hidden = s.dataset.step !== name; };
   const showErr = (text: string) => { err.textContent = text; err.hidden = false; };
   const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); void cancel(); } };

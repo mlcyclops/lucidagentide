@@ -42,7 +42,7 @@ export type ViewToolCode = { path: string; content?: string; oldText?: string; n
  *  reconnect welcome can replace exactly the turns the host re-sends. Absent on a local fold (own echo,
  *  local note) and on anything from an older host. */
 export type ViewItem =
-  | { kind: "user"; seq?: number; text: string; from?: string } // P-REMOTE.9/P-COLLAB.15: a user turn (own echo, or another participant's, labelled by `from`)
+  | { kind: "user"; seq?: number; text: string; from?: string } // P-REMOTE.9/P-COLLAB.15: a user turn (own echo, or another participant's, labeled by `from`)
   | { kind: "answer"; seq?: number; text: string; streaming: boolean }
   | { kind: "thinking"; seq?: number; text: string }
   // P-REMOTE.9: `path` + `add`/`del` present for edit/write/patch tools (the +/- diffstat), else absent.
@@ -292,7 +292,7 @@ export function laneCwdName(cwd: string): string {
  * P-PWA-FLEET.2: one fleet lane card - a lane you can actually DRIVE, in its own lane rather than through
  * the master composer. All host strings escaped, including data attributes.
  *
- * The card carries `lane-<status>` so the phone's CSS can reuse the DESKTOP fleet colour mapping verbatim
+ * The card carries `lane-<status>` so the phone's CSS can reuse the DESKTOP fleet color mapping verbatim
  * (cyan working, blue waiting on you, red needs-approval, green done, dim starting/stopped) instead of inventing
  * a second palette; `data-status` stays for the dot.
  *
@@ -434,7 +434,7 @@ export function renderItem(item: ViewItem, i = 0, activeThinking = false): strin
       return `<div class="proc-list">${item.processes.map(renderProcessRow).join("")}</div>`;
     case "lane-error":
       // Its own class, never `.chip.block`: the phone must not show a lane crash in the security gate's
-      // clothing. Labelled in words too, so the distinction survives someone restyling the CSS.
+      // clothing. Labeled in words too, so the distinction survives someone restyling the CSS.
       return `<div class="chip lane-fail"><span class="chip-name">lane failed</span><span class="chip-detail">${escapeHtml(item.message)}</span></div>`;
     case "note":
       return `<div class="msg note">${escapeHtml(item.text)}</div>`;
@@ -537,7 +537,7 @@ export interface TurnReport {
   answer: string;  // the final assistant reply
   files: ReportFile[]; // files edited/written, +/- summed per path
   // Tool-use counts, busiest first. P-REMOTE.16: `failed` = calls whose `tool-meta` settled `ok: false`
-  // (0 when none did, or when the host never reported), keyed by the REAL name tool-meta relabelled.
+  // (0 when none did, or when the host never reported), keyed by the REAL name tool-meta relabeled.
   tools: { name: string; n: number; failed: number }[];
   totalAdd: number;
   totalDel: number;

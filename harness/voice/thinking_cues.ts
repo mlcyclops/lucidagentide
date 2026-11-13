@@ -8,7 +8,7 @@
 // On screen, a long turn is legible - the thinking block streams, tool chips tick past, the HUD counts. With
 // your eyes off it, all of that is DEAD AIR. Thirty seconds of silence after you have spoken is indis-
 // tinguishable from a crash, and the natural reaction is to talk again, which in conversation mode starts a
-// second turn on top of the first. A short spoken acknowledgement is what a person would give you.
+// second turn on top of the first. A short spoken acknowledgment is what a person would give you.
 //
 // P-VOICE.7 adds three things a person would ALSO give you:
 //   · variety - the opener is picked from a bank of twelve by a per-turn seed, so back-to-back turns never
@@ -23,7 +23,7 @@
 //   · gaps ESCALATE (a few seconds, then ten-ish, then twenty-ish) - reassurance, not nagging;
 //   · after the third cue, ONLY a genuinely new snapshot may speak, and only every half minute;
 //   · a hard cap per turn - past eight, more narration would be worse than silence;
-//   · nothing once the answer has started speaking - the answer IS the acknowledgement;
+//   · nothing once the answer has started speaking - the answer IS the acknowledgment;
 //   · the gap is measured from the last thing SPOKEN, not from the turn start, so a long tool run in the
 //     middle of a reply is covered the same way the opening think is.
 //
@@ -144,7 +144,7 @@ function framedSnapshot(snap: string, seed: number, salt: number): string {
 }
 
 /** Distill the user's prompt into a short restatement for the active-listening opener, or null when it
- *  cannot be restated FAITHFULLY - a clipped or garbled echo is worse than a plain acknowledgement. Pure. */
+ *  cannot be restated FAITHFULLY - a clipped or garbled echo is worse than a plain acknowledgment. Pure. */
 export function distillTopic(prompt: string): string | null {
   const t = (prompt || "")
     .replace(/```[\s\S]*?```/g, " ")           // never restate a code block
@@ -197,7 +197,7 @@ export function nextThinkingCue(s: ThinkingCueState): ThinkingCue | null {
     const gap = CUE_GAPS_MS[s.cuesSpoken];
     if (gap === undefined || s.sinceVoiceMs < gap) return null;
     if (s.cuesSpoken === 0) {
-      // The opener: restate the ask when it can be restated faithfully, otherwise a varied acknowledgement.
+      // The opener: restate the ask when it can be restated faithfully, otherwise a varied acknowledgment.
       const topic = (s.topic ?? "").trim();
       const text = topic ? pick(RESTATE_TEMPLATES, s.seed).replace("{topic}", topic) : pick(OPENERS, s.seed);
       return { text, snapshot: null };

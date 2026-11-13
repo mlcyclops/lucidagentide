@@ -36,7 +36,7 @@ const ACT_GAP_MS = 900;
 // about half the fill cost, and these are soft painterly scenes, not text.
 const MAX_DPR = 1.5;
 
-/** `mascot` (the Settings preview tile) paints LUCID performing the season's act, bottom-centre, over
+/** `mascot` (the Settings preview tile) paints LUCID performing the season's act, bottom-center, over
  *  the scene: the same frames, costume and props the prompt-bar runner and the splash use. */
 export function mountSeasonBackdrop(host: HTMLElement, className = "season-backdrop", mascot = false): BackdropHandle {
   const cv = document.createElement("canvas");

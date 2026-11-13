@@ -222,7 +222,7 @@ console.log("9) cancel semantics for queued vs running");
   if (ca.state !== "cancelled") fail("running cancel failed");
   if (remote.cancels !== 1) fail("session/cancel was not sent to the running turn");
   await sleep(120);
-  if (remote.stops < 1) fail("an unsettled cancelled turn must be force-stopped after the grace window");
+  if (remote.stops < 1) fail("an unsettled canceled turn must be force-stopped after the grace window");
   ok("queued dropped untouched; running got session/cancel then force-stop");
 }
 

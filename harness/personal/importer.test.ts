@@ -226,7 +226,7 @@ test("importConversations: an abort stops mid-conversation, not at the next conv
   expect(seen.length).toBe(1);   // messages 2 and 3 were never extracted
   expect(sum.messages).toBe(1);
   expect(sum.cancelled).toBe(true);
-  expect(sum.blocked).toBe(0);   // a cancelled message is NOT a gate block (that would misreport security)
+  expect(sum.blocked).toBe(0);   // a canceled message is NOT a gate block (that would misreport security)
 });
 
 test("importConversations: the abort signal reaches the extractor so an in-flight model call can stop", async () => {

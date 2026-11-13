@@ -44,7 +44,7 @@ import { deriveLast4 } from "./cred_vault.ts";
 
 /** AAD for v1 sealed records and the DPAPI entropy (never changes: it binds every existing master key). */
 export const VAULT_AAD = "lucid-engine-vault-v1";
-/** AAD for v2 sealed records: binds the format version, so a v2 record relabelled `v: 1` fails to open. */
+/** AAD for v2 sealed records: binds the format version, so a v2 record relabeled `v: 1` fails to open. */
 export const VAULT_AAD_V2 = "lucid-engine-vault-v2";
 export const SECRETS_FILE = "secrets.v1.json";
 const MASTER_DPAPI = "master.dpapi";

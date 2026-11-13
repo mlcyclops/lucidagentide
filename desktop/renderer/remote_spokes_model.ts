@@ -348,7 +348,7 @@ export function mapHubSnapshot(raw: unknown): RemoteHubView {
 /** The orbit's color language for a remote spoke, on the existing state hues: red when it is stuck on a human
  *  or failed, amber when it might be stuck (the hub has not heard from it), cyan while it works, blue when it is
  *  online and ready. Only `approval` animates: it is the one that blocks on a human. ADR-0512: `off`, the dimmest,
- *  for a spoke its owner deactivated: grey and faded, never red or amber, never animated. */
+ *  for a spoke its owner deactivated: gray and faded, never red or amber, never animated. */
 export type RemoteTone = "approval" | "stuck" | "maybe" | "busy" | "ready" | "checking" | "off";
 export const REMOTE_TONE: Readonly<Record<RemoteSpokeState, RemoteTone>> = {
   approval: "approval", error: "stuck", offline: "maybe", busy: "busy", idle: "ready", checking: "checking",
@@ -558,7 +558,7 @@ function deployBlock(s: RemoteSpokeView, a: HubActions): string | null {
 }
 
 /** ADR-0508: every spoke as a selector row, eligible first, then fastest answer (unmeasured last), then label.
- *  ADR-0512: a deactivated spoke is no row at all: it is not a target, not even a greyed-out one. */
+ *  ADR-0512: a deactivated spoke is no row at all: it is not a target, not even a grayed-out one. */
 export function deployChoices(spokes: readonly RemoteSpokeView[], a: HubActions): DeployChoice[] {
   return spokes
     .filter((spoke) => !spoke.deactivated)

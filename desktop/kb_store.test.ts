@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // desktop/kb_store.test.ts — P-KB.2b + P-KGPACK.1 (ADR-0205): the desktop's compiled-KB handle. Confirms
-// the default KG opens at the configured legacy path (singleton, reopen-fresh) AND the multi-KG behaviour:
+// the default KG opens at the configured legacy path (singleton, reopen-fresh) AND the multi-KG behavior:
 // the default adopts the pre-existing kb_graph.duckdb with zero data loss, created KGs are isolated files,
 // rename touches only the label, and switching the active KG re-points a no-arg store lookup.
 

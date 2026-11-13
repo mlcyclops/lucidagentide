@@ -260,8 +260,8 @@ describe("routes", () => {
     const reserved = await quiet(() => call("/api/vault/put", { value: RESERVED_VALUE, kind: "apikey", envName: "LUCID_V2_ROUTE_KEY", label: "Reserved key" }));
     expect(reserved.json.data).toMatchObject({ ref: "key:LUCID_V2_ROUTE_KEY", envName: "LUCID_V2_ROUTE_KEY" });
     expect(process.env.LUCID_V2_ROUTE_KEY).toBeUndefined();
-    const labelled = await quiet(() => call("/api/vault/put", { value: secrets[1], kind: "token", label: "Prod JWT" }));
-    expect(labelled.json.data.ref).toBe("secret:prod_jwt");
+    const labeled = await quiet(() => call("/api/vault/put", { value: secrets[1], kind: "token", label: "Prod JWT" }));
+    expect(labeled.json.data.ref).toBe("secret:prod_jwt");
     const again = await quiet(() => call("/api/vault/put", { value: secrets[2], kind: "token", label: "Prod JWT" }));
     expect(again.json.data.ref).toBe("secret:prod_jwt_2"); // a label never clobbers another entry
     const rot = await quiet(() => call("/api/vault/rotate", { ref: "key:GROQ_API_KEY", value: "sk-ROUTE-ROTATED-00000004" }));

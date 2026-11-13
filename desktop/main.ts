@@ -984,7 +984,7 @@ ipcMain.handle("lucid:credStoreFile", async (e, input: { kind: string; label?: s
       title: "Choose an auth file (token / PEM / API key / config)",
       filters: [{ name: "Keys & tokens", extensions: ["pem", "key", "crt", "cer", "jwt", "json", "txt", "token"] }, { name: "All files", extensions: ["*"] }],
     });
-    if (r.canceled || !r.filePaths[0]) return null; // user cancelled
+    if (r.canceled || !r.filePaths[0]) return null; // user canceled
     const p = r.filePaths[0];
     const secret = readFileSync(p, "utf8");
     const label = input.label && input.label.trim() ? input.label : p.replace(/^.*[\\/]/, ""); // default label = filename

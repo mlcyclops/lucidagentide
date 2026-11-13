@@ -300,7 +300,7 @@ export async function probeProvider(deps: ProbeDeps, providerId: CreatorProvider
     case "autodesk-aps":
     case "bluebeam-studio":
     case "classcad":
-      return result(providerId, "skipped", "Catalogued as a declarable paid provider only in this phase: LUCID makes no calls to it, so there is nothing to probe.", deps.now(), deps.now());
+      return result(providerId, "skipped", "Cataloged as a declarable paid provider only in this phase: LUCID makes no calls to it, so there is nothing to probe.", deps.now(), deps.now());
     case "oda-drawings":
       return result("oda-drawings", "skipped", "Planned: the ODA Drawings SDK is not wired in this build.", deps.now(), deps.now());
   }

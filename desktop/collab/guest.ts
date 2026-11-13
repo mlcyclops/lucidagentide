@@ -117,7 +117,7 @@ export class CollabGuest {
   #reconnecting = false; // P-REMOTE.8: a transient "connection lost - retrying" note is in #note; cleared on recovery
   #ended = false;
   // P-PWA-FOCUS.1: the conversation this guest is looking at. "master" is the default and the pre-focus
-  // behaviour; a lane id means the host is also streaming that lane to us.
+  // behavior; a lane id means the host is also streaming that lane to us.
   #watching = "master";
   // P-REMOTE.16 (ADR-0431): the highest SETTLED master-journal turn seq this guest holds (0 = none). Rides
   // every `hello` as `since`, so a reconnect (hourly Cloud Run cap, screen lock) gets back exactly the turns

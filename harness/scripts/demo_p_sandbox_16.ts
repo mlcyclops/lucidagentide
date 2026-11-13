@@ -42,6 +42,6 @@ ok(Object.keys(prependPathOverlay({ PATH: `${mingit}\\cmd;C:\\Windows` }, `${min
 const g = appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\Users\\U", gitRoot: mingit });
 ok(g.grantRx.includes(mingit), "the install root is granted read+execute to the container");
 ok(!appContainerRuntimeGrants({ repoRoot: "C:\\r", home: "C:\\Users\\U", gitRoot: "C:\\Program Files\\Git" }).grantRx.includes("C:\\Program Files\\Git"), "Program Files is already readable, never re-ACL'd");
-ok(runtimeFolderView({ workspace: "C:\\ws", grantRx: g.grantRx, grantRw: g.grantRw, tmpDir: g.tmpDir }).some((f) => f.path === mingit && f.why.includes("git")), "the Security panel lists the git folder, labelled");
+ok(runtimeFolderView({ workspace: "C:\\ws", grantRx: g.grantRx, grantRw: g.grantRw, tmpDir: g.tmpDir }).some((f) => f.path === mingit && f.why.includes("git")), "the Security panel lists the git folder, labeled");
 
 console.log("\nP-SANDBOX.16 demo passed.");

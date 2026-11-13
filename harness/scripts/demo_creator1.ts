@@ -155,7 +155,7 @@ const mid = listJobs(io, "/creator").find((j) => j.id === slow.id)!;
 check("a stop request is recorded but the job is STILL running (claiming otherwise would be a lie)",
   mid.cancelRequested && mid.state === "running");
 finishJob(io, "/creator", slow.id, "cancelled");
-check("it settles as cancelled only when the runner confirms",
+check("it settles as canceled only when the runner confirms",
   listJobs(io, "/creator").find((j) => j.id === slow.id)!.state === "cancelled");
 check("stopping an already-settled job is refused with the reason",
   (requestJobCancel(io, "/creator", slow.id).error ?? "").includes("already cancelled"));

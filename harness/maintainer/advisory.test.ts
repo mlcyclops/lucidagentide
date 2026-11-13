@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // P-MAINT.1: the OSV advisory client. Runs entirely OFFLINE: every test injects its own fetch, so
-// what is proven here is the wire contract and the failure behaviour, not the network.
+// what is proven here is the wire contract and the failure behavior, not the network.
 //
 // The load-bearing assertions:
 //   [1] ecosystem names go out in OSV's exact spelling (PyPI, crates.io, Go, Maven, NuGet, npm),

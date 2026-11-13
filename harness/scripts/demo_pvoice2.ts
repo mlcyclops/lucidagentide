@@ -187,7 +187,7 @@ try {
     q2.stop();
     if (q2.busy) fail("stop() left the queue busy");
     const playedAtStop = played.length;
-    latch.fire(); // the cancelled clip's play() resolves late - it must not resume the queue
+    latch.fire(); // the canceled clip's play() resolves late - it must not resume the queue
     for (let t = 0; t < 20; t++) await Promise.resolve();
     if (played.length !== playedAtStop) fail("a clip started after stop()");
     if (closed.length !== opened.length) fail(`stop() leaked handles: opened ${opened.length}, closed ${closed.length}`);

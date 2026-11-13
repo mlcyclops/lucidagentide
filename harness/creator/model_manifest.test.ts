@@ -72,7 +72,7 @@ test("a well formed declaration parses into models, nodes, and a timestamp with 
   ]);
 });
 
-test("a model with no label is labelled by its own id rather than left blank", () => {
+test("a model with no label is labeled by its own id rather than left blank", () => {
   expect(parsed({ endpointId: "e", declaredAt: 1, models: [model("a.ckpt")] }).models[0]!.label).toBe("a.ckpt");
 });
 

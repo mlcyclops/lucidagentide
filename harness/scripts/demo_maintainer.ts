@@ -115,7 +115,7 @@ ok(`swept ${live.manifests.length} manifest(s), ${live.report.deps} declaration(
 const offlineNow = live.report.findings.some((f) => f.summary.startsWith(ADVISORY_UNAVAILABLE));
 if (offlineNow) {
   console.log("\nNOTE: OSV was NOT reachable on this run. The report says so in its FIRST finding, which");
-  console.log("      is exactly the fail-closed behaviour: an unreachable feed never reads as clean.");
+  console.log("      is exactly the fail-closed behavior: an unreachable feed never reads as clean.");
 } else {
   console.log("\nNOTE: OSV answered. An empty advisory list here is a real clean bill of health.");
 }
@@ -132,7 +132,7 @@ if (offline.report.deps !== live.report.deps) fail("manifest reading must not de
 console.log(`Pinned first finding: ${gap.summary}`);
 console.log(`Advisory note:        ${offline.advisoryNote}`);
 console.log(`Dependency count unchanged from the live sweep: ${offline.report.deps}`);
-ok("an unreachable OSV degrades to a labelled coverage gap, pinned first, never to a silent clean report");
+ok("an unreachable OSV degrades to a labeled coverage gap, pinned first, never to a silent clean report");
 
 // --- [3] rendered payloads ------------------------------------------------------------------------
 

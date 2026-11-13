@@ -4,7 +4,7 @@
 // desktop/kb_sources.ts — P-KGPACK.3 (ADR-0205): turn a folder into KB source documents.
 //
 // Two shapes seed a named KG: an AI-vendor chat export (ChatGPT/Claude/Gemini) or an Obsidian-style markdown
-// vault. This reader normalises both to `KbSourceDoc[]` (sourcePath/title/text) for the fail-closed batch
+// vault. This reader normalizes both to `KbSourceDoc[]` (sourcePath/title/text) for the fail-closed batch
 // compiler — it does NOT scan or trust anything (that is the pipeline's job). Vendor parsing reuses the
 // existing TOCTOU-safe `loadExportData` + `parseExport`; markdown reading walks the folder ONCE per
 // directory and reads files directly (no `existsSync`-then-read), bounded in file count + depth so a huge or
@@ -76,7 +76,7 @@ export function readKbSources(path: string): { ok: true; scan: KbSourceScan } | 
       const parsed = parseExport(data.data);
       const docs = parsed.conversations.map((c, i) => conversationToDoc(c, parsed.vendor, i)).filter((d) => d.text.trim());
       if (docs.length) return { ok: true, scan: { kind: "chat", vendor: parsed.vendor, docs } };
-    } catch { /* not a recognisable export → fall through to markdown */ }
+    } catch { /* not a recognizable export → fall through to markdown */ }
   }
 
   // 2) Obsidian-style markdown vault.

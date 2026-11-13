@@ -264,8 +264,8 @@ export function control(goal: AosGoal | null, hb: AosHeartbeat, action: AosContr
       return { ok: true, goal, heartbeat: { ...hb, status: "running" } };
     case "cancel":
       if (terminal) return { ok: false, error: `The goal is already ${goal.status}.` };
-      // Its open tasks end with it: nothing may dispatch under a cancelled goal.
-      return { ok: true, goal: { ...goal, status: "cancelled", blockedReason: null, tasks: goal.tasks.map((x) => (isTerminalTask(x.status) ? x : { ...x, status: "cancelled", turn: null, lastFailure: "the goal was cancelled", updatedAt: now })), updatedAt: now }, heartbeat: { ...hb, status: "stopped" } };
+      // Its open tasks end with it: nothing may dispatch under a canceled goal.
+      return { ok: true, goal: { ...goal, status: "cancelled", blockedReason: null, tasks: goal.tasks.map((x) => (isTerminalTask(x.status) ? x : { ...x, status: "cancelled", turn: null, lastFailure: "the goal was canceled", updatedAt: now })), updatedAt: now }, heartbeat: { ...hb, status: "stopped" } };
     case "dismiss":
       if (!terminal) return { ok: false, error: "Cancel the goal before dismissing it." };
       return { ok: true, goal: null, heartbeat: { ...hb, status: "running" } };
@@ -467,7 +467,7 @@ export function planTasks(goal: AosGoal, lanes: readonly AosLaneInput[], now: nu
 }
 
 /** A dispatched turn ended. Work turn: on to verification (command checks), review (human checks), or a
- *  failed attempt. Verify turn: the fail-closed verdict decides. A task cancelled meanwhile is left alone. */
+ *  failed attempt. Verify turn: the fail-closed verdict decides. A task canceled meanwhile is left alone. */
 export function taskTurnEnded(goal: AosGoal, taskId: string, turn: "work" | "verify", outcome: AosTurnOutcome, now: number): { goal: AosGoal; dispatch: AosDispatch[] } {
   const t = goal.tasks.find((x) => x.id === taskId);
   if (!t || t.status !== "running" || t.turn !== turn) return { goal, dispatch: [] };
@@ -508,7 +508,7 @@ export function cancelTask(goal: AosGoal | null, taskId: string, now: number): {
   const t = goal.tasks.find((x) => x.id === taskId);
   if (!t) return { ok: false, error: "No such task." };
   if (isTerminalTask(t.status)) return { ok: false, error: `The task is already ${t.status}.` };
-  return { ok: true, goal: withTask(goal, { ...t, status: "cancelled", turn: null, lastFailure: "cancelled by a person", updatedAt: now }) };
+  return { ok: true, goal: withTask(goal, { ...t, status: "cancelled", turn: null, lastFailure: "canceled by a person", updatedAt: now }) };
 }
 
 /** On engine start: a task that was mid-turn lost its turn with the old process. It goes back to ready

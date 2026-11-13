@@ -3,12 +3,12 @@
 
 // desktop/renderer/pack_cta.test.ts - P-KGMARKET.5. Weighted toward the REFUSALS, because the failure mode
 // of an auto-resume is worse than the bug it fixes: `lucid://auth` is shared with LUCID Remote sign-in and
-// Google Drive authorisation, so a resume that fires on the wrong callback opens a payment page nobody
+// Google Drive authorization, so a resume that fires on the wrong callback opens a payment page nobody
 // asked for.
 
 import { describe, expect, test } from "bun:test";
 import {
-  LICENCE_RATIONALE, PACKS_TIP, PENDING_CHECKOUT_MAX_AGE_MS,
+  LICENSE_RATIONALE, PACKS_TIP, PENDING_CHECKOUT_MAX_AGE_MS,
   kgPacksBtnHtml, packSignInCopy, shouldResumeCheckout, type PendingCheckout,
 } from "./pack_cta.ts";
 
@@ -49,7 +49,7 @@ describe("shouldResumeCheckout", () => {
   });
 
   test("THE REFUSAL: a stale intent must not turn an unrelated sign-in into a checkout", () => {
-    // The user clicked a pack this morning, abandoned it, and this afternoon authorises Google Drive.
+    // The user clicked a pack this morning, abandoned it, and this afternoon authorizes Google Drive.
     // That callback must not resume a purchase.
     expect(shouldResumeCheckout(pend(), 1_000_000 + PENDING_CHECKOUT_MAX_AGE_MS + 1)).toBe(false);
     expect(shouldResumeCheckout(pend(), 1_000_000 + 86_400_000)).toBe(false);
@@ -88,7 +88,7 @@ describe("packSignInCopy", () => {
 
   test("pending promises the resume instead of asking for a second click", () => {
     const c = packSignInCopy("pending", "Backend Engineer");
-    expect(c.desc).toContain(LICENCE_RATIONALE);
+    expect(c.desc).toContain(LICENSE_RATIONALE);
     expect(c.desc).toContain("picks up on its own");
     // The exact instruction this increment removes. It must not survive anywhere in the copy.
     expect(c.desc).not.toContain("click the pack again");
@@ -96,15 +96,15 @@ describe("packSignInCopy", () => {
 
   test("blocked explains WHY an account is needed even when sign-in cannot start", () => {
     const c = packSignInCopy("blocked", "Backend Engineer", "no sign-in URL configured");
-    expect(c.desc).toContain(LICENCE_RATIONALE);
+    expect(c.desc).toContain(LICENSE_RATIONALE);
     expect(c.desc).toContain("no sign-in URL configured");
   });
 
   test("blocked with no reason still carries the rationale and invents no detail", () => {
     const c = packSignInCopy("blocked", "Backend Engineer");
-    expect(c.desc).toBe(LICENCE_RATIONALE);
+    expect(c.desc).toBe(LICENSE_RATIONALE);
     expect(c.desc).not.toContain("unavailable");
-    expect(packSignInCopy("blocked", "Backend Engineer", "   ").desc).toBe(LICENCE_RATIONALE);
+    expect(packSignInCopy("blocked", "Backend Engineer", "   ").desc).toBe(LICENSE_RATIONALE);
   });
 
   test("a missing pack name degrades to a phrase that still reads, never to an empty gap", () => {
@@ -116,7 +116,7 @@ describe("packSignInCopy", () => {
   });
 
   test("no em dashes anywhere in the user-facing copy", () => {
-    const all = [PACKS_TIP, LICENCE_RATIONALE, kgPacksBtnHtml()];
+    const all = [PACKS_TIP, LICENSE_RATIONALE, kgPacksBtnHtml()];
     for (const state of ["pending", "resumed", "blocked"] as const) {
       const c = packSignInCopy(state, "Backend Engineer", "some reason");
       all.push(c.title, c.desc);

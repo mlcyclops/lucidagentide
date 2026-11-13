@@ -50,7 +50,7 @@ const NOT_REPORTED = "not reported";
 /** Why a provider row is blank. Shown verbatim on hover, so it has to read as a sentence to a user. */
 const PROVIDER_HINT =
   "The provider has not reported this over ACP yet, so this build is not claiming a number. Unknown is not zero.";
-/** Why the output row can never be labelled as measured. Contains the word "estimate" on purpose. */
+/** Why the output row can never be labeled as measured. Contains the word "estimate" on purpose. */
 const ESTIMATE_HINT =
   "Local estimate: the provider does not report per-turn output tokens on this path, so the renderer counts the "
   + "streamed text itself. This is an estimate, not a provider figure.";
@@ -212,7 +212,7 @@ export function onTurnEnd(m: MeterState, now: number): MeterState {
 /** A label/value row for the popover. The DOM layer renders these verbatim and does NO arithmetic. */
 export interface MeterRow {
   label: string; value: string;
-  /** Hover explanation. REQUIRED when `measured` is false, so an estimate is never shown unlabelled. */
+  /** Hover explanation. REQUIRED when `measured` is false, so an estimate is never shown unlabeled. */
   hint?: string;
   measured: boolean;
   tone?: "ok" | "warn" | "danger";

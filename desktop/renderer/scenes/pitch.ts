@@ -4,7 +4,7 @@
 // desktop/renderer/scenes/pitch.ts
 //
 // P-SEASON.1 (ADR-0525): a night soccer stadium. A striped, freshly mown pitch in true perspective
-// with its full line markings, the goal and net on the right, LED boards rolling colour along the far
+// with its full line markings, the goal and net on the right, LED boards rolling color along the far
 // touchline, packed stands catching camera flashes, two floodlight towers blooming above the roofline,
 // ticker tape drifting down, and every so often a ball curling in a long arc into the net. No
 // tournament or federation marks. Uses the arena helpers from stadium.ts.
@@ -183,7 +183,7 @@ function paintStatic(c: CanvasRenderingContext2D, w: number, h: number): void {
   }
 }
 
-/** A classic ball: shaded white sphere with dark patches turning about its centre. */
+/** A classic ball: shaded white sphere with dark patches turning about its center. */
 function ball(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, spin: number): void {
   ctx.save();
   ctx.translate(x, y);
@@ -225,10 +225,10 @@ export const scene: SceneDef = {
     const cam = pitchCam(w, h);
     ctx.drawImage(layerCache("pitch:static", w, h, dpr, (c) => paintStatic(c, w, h)), 0, 0, w, h);
 
-    // LED boards along the far touchline, colour slowly rolling along them.
+    // LED boards along the far touchline, color slowly rolling along them.
     const top = camY(cam, 71, 0.9);
     const bot = camY(cam, 71);
-    // Three repeats of a half-width colour cycle, slid left by `roll`, always cover the frame.
+    // Three repeats of a half-width color cycle, slid left by `roll`, always cover the frame.
     const roll = wrap(t * 0.03, w * 0.5);
     const led = ctx.createLinearGradient(-roll, 0, w * 1.5 - roll, 0);
     const cycle = ["#1460d8", "#18b46a", "#e8a830"];

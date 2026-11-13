@@ -1440,7 +1440,7 @@ var KATA_SPEC = {
 var STACK_SPEC = {
   id: "stack",
   name: "Rooftop stack",
-  blurb: "Drop each dojo crate with Space or Ctrl; overhang is trimmed away for good, and a perfect centre pays a bonus and hands some width back.",
+  blurb: "Drop each dojo crate with Space or Ctrl; overhang is trimmed away for good, and a perfect center pays a bonus and hands some width back.",
   ariaLabel: "Rooftop stack. Space or Control drops the sliding crate onto the tower.",
   readyText: "Drop the crate when it lines up with the tower.",
   buttons: [{ action: "drop", label: "Drop", aria: "Drop the sliding crate" }],

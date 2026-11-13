@@ -4,9 +4,9 @@
 // desktop/renderer/design_png.ts - a small, strict PNG decoder for masks coming back from dgx-vision.
 //
 // Why not canvas: a mask is a 1-channel coverage plane. Decoding an 8-bit grayscale (mode L) PNG through
-// createImageBitmap yields RGBA under the browser's colour handling, and any code that then reads those
+// createImageBitmap yields RGBA under the browser's color handling, and any code that then reads those
 // bytes with the wrong stride produces a speckled, striped mask. This decoder reads the samples exactly as
-// stored (no colour management, no premultiplication) and `pngToMask` takes ONE value per pixel.
+// stored (no color management, no premultiplication) and `pngToMask` takes ONE value per pixel.
 //
 // Fail-closed: signature, chunk lengths, CRCs, IHDR fields, dimensions against the caller's expectation and
 // the pixel budget, and the inflated size are all checked before a single byte reaches the document.
@@ -17,7 +17,7 @@ import { DESIGN_LIMITS } from "../../harness/creator/design/limits.ts";
 
 export interface PngImage {
   width: number; height: number;
-  /** 0 gray, 2 RGB, 3 palette, 4 gray+alpha, 6 RGBA (PNG colour types). */
+  /** 0 gray, 2 RGB, 3 palette, 4 gray+alpha, 6 RGBA (PNG color types). */
   colorType: 0 | 2 | 3 | 4 | 6;
   bitDepth: 1 | 2 | 4 | 8 | 16;
   /** Unfiltered scanlines, `rowBytes` each, no filter bytes. */
@@ -100,7 +100,7 @@ export async function decodePngImage(bytes: Uint8Array, expect?: { width: number
   if (!ihdr || !ended || !idat.length) throw new Error("PNG is truncated (no IHDR, IDAT or IEND).");
   const { w, h, depth, type } = ihdr;
   const channels = CHANNELS[type];
-  if (!channels || !DEPTHS[type]!.includes(depth)) throw new Error(`PNG colour type ${type} at ${depth} bits is not valid.`);
+  if (!channels || !DEPTHS[type]!.includes(depth)) throw new Error(`PNG color type ${type} at ${depth} bits is not valid.`);
   if (w < 1 || h < 1 || w > DESIGN_LIMITS.maxSide || h > DESIGN_LIMITS.maxSide || w * h > DESIGN_LIMITS.maxRasterPixels) throw new Error(`PNG is ${w} x ${h}, beyond the decode budget.`);
   if (expect && (w !== expect.width || h !== expect.height)) throw new Error(`PNG is ${w} x ${h}, expected ${expect.width} x ${expect.height}.`);
   if (type === 3 && (!palette || palette.length % 3 !== 0)) throw new Error("Palette PNG has no valid PLTE.");
@@ -150,7 +150,7 @@ function sample(img: PngImage, x: number, y: number, ch: number, channels: numbe
 
 /** One coverage value per pixel. Gray: the gray level. RGB: the red channel (masks are r = g = b). Palette:
  *  the entry's red. Alpha (GA, RGBA, palette tRNS) multiplies the value, so a transparent pixel is
- *  uncovered; a gray/RGB tRNS colour key is ignored. */
+ *  uncovered; a gray/RGB tRNS color key is ignored. */
 export function pngToMask(img: PngImage): MaskData {
   const { width: w, height: h, colorType: t } = img;
   const channels = CHANNELS[t]!;
@@ -205,7 +205,7 @@ export async function encodeMaskPng(mask: MaskData): Promise<Uint8Array> {
     write();
     put32(crc32(out, start, p));
   };
-  // 8-bit, colour type 0 (gray), deflate, filter method 0, no interlace.
+  // 8-bit, color type 0 (gray), deflate, filter method 0, no interlace.
   chunk("IHDR", 13, () => { put32(w); put32(h); out.set([8, 0, 0, 0, 0], p); p += 5; });
   chunk("IDAT", zlen, () => { for (const part of parts) { out.set(part, p); p += part.length; } });
   chunk("IEND", 0, () => undefined);

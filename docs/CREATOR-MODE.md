@@ -173,7 +173,7 @@ the KV cache is not busted (invariant 6, verified by the prefix-hash test).
 ## CPU and GPU pressure in the right rail
 
 The Resources tab carries two odometer chips - CPU and GPU - each a 270 degree graduated dial with a needle
-and a live percentage, coloured green under 70%, amber to 90%, red at or above the pressure line. Hover for
+and a live percentage, colored green under 70%, amber to 90%, red at or above the pressure line. Hover for
 the machine detail; click either chip to expand the detailed flyout in place:
 
 - per-core CPU bars (an unbalanced render is visible instead of averaged away),
@@ -401,7 +401,7 @@ the ledger, and the save is an append. Proof: `make demo-CREATOR-2`.
   16.9 MB, WASM, ships with LUCID) runs inside the engine with no server, no port and no network path, and
   returns a start, an end and a probability per word. A measured word wears a solid underline and its
   confidence is the model's probability. A word the model heard differently from the text you pasted stays
-  `derived`, interpolated between its measured neighbours and capped at 70%. The note above the strip says
+  `derived`, interpolated between its measured neighbors and capped at 70%. The note above the strip says
   how many words matched and how many were interpolated. Seven languages (en, de, fr, es, it, nl, pl);
   anything else keeps the `derived` alignment. Proof: `make demo-CREATOR-WHISTLE`.
 
@@ -500,7 +500,7 @@ that: whether this platform repeats a byte-identical render, and if not, how muc
   equality.
 - **Floor could not be measured at all:** no verdict is drawn, and the panel says that rather than guessing.
 
-This is not a hedge, it is the observed behaviour. A canvas that is attached and visible does not necessarily
+This is not a hedge, it is the observed behavior. A canvas that is attached and visible does not necessarily
 rasterize the same drawing to the same pixels twice. Measured in headless Chromium against a scene whose logic
 is provably pure, two readbacks of one identical render alternate between two bitmaps in a clean 2-cycle,
 differing on a few hundred pixels with channel deltas up to 71 but only 3 or 4 per signature cell. Reading back
@@ -805,7 +805,7 @@ never scripts its window, and never turns Agent access on.
   `$XDG_RUNTIME_DIR/drift/` on Linux, or `$DRIFT_MCP_SESSION_PATH`). The engine reads it at call time and
   uses the token only in the `Authorization` header: it is never stored, shown, or logged. A headless
   instance (`drift --headless --mcp-port 4731 --mcp-token T`) is declared like any other provider: base URL
-  plus a vault credential NAME (`DRIFT_MCP_TOKEN` is also honoured).
+  plus a vault credential NAME (`DRIFT_MCP_TOKEN` is also honored).
 - **Probe.** `not-installed` when no Drift executable is on disk; `unreachable` with the enable steps when
   it is installed but Agent access is off; `unauthorized` on a stale token; `ready` once `initialize`
   answers, attesting `video-edit`, `motion`, `transcript-edit` (and `stock-media` only when Drift's

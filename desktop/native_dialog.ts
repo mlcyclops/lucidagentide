@@ -17,7 +17,7 @@
 // Result contract (NativePickResult):
 //   { supported: false }              -> no native dialog here (headless, no binary, dialog busy);
 //                                        the renderer falls back to the in-app browser.
-//   { supported: true, path: null }   -> the user CANCELLED. The renderer must NOT re-prompt; a
+//   { supported: true, path: null }   -> the user CANCELED. The renderer must NOT re-prompt; a
 //                                        second dialog after a deliberate cancel is hostile.
 //   { supported: true, path: "..." }  -> the picked absolute path.
 //
@@ -126,7 +126,7 @@ public static class LucidFolderPicker
         if (!String.IsNullOrEmpty(title)) dlg.SetTitle(title);
         if (!String.IsNullOrEmpty(okLabel)) dlg.SetOkButtonLabel(okLabel);
         // Owner = whatever is foreground (the user's browser), so the dialog lands on top of it.
-        if (dlg.Show(GetForegroundWindow()) != 0) return null; // cancelled (or failed): both read as cancel
+        if (dlg.Show(GetForegroundWindow()) != 0) return null; // canceled (or failed): both read as cancel
         IShellItem item;
         dlg.GetResult(out item);
         IntPtr ptr;

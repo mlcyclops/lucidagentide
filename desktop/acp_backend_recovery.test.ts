@@ -184,7 +184,7 @@ describe("session-switch wedge: a cleared turn releases the session", () => {
       ]);
       expect(state).toBe("running");
       expect(backend.turnStatus()?.running).toBe(true);
-      backend.cancel(); // the fake answers the hanging prompt as cancelled
+      backend.cancel(); // the fake answers the hanging prompt as canceled
       await second;
       await first; // the first turn unwound on its own cancel, without touching the second
       expect(backend.midTurn().busy).toBe(false);
@@ -208,7 +208,7 @@ describe("switch guard", () => {
 });
 
 // #460 case 1 (P-SWITCH.1 follow-up): the sheet's "Stop it and switch" (force: true) goes straight to
-// loadSession/newSession. Before the fix nothing set goalCancelled, so the maker TURN was cancelled
+// loadSession/newSession. Before the fix nothing set goalCancelled, so the maker TURN was canceled
 // (clearTurnRecovery) but the LOOP lived on: its checker or next maker iteration then ran inside the
 // newly loaded session. The switch must stop the loop and wait for it to unwind BEFORE touching the
 // session. Agent-kind automations (startAgentRun, not Main's session) are #460 case 2, not covered here.
@@ -224,12 +224,12 @@ describe("forced switch during a goal loop (#460 case 1)", () => {
       await until(() => trace().some((t) => t.method === "session/prompt"));
       expect(backend.switchBlocker()).toBe("a goal loop is running");
       await switchSession();
-      // The loop has FULLY unwound by the time the switch resolves: cancelled, reported, done.
+      // The loop has FULLY unwound by the time the switch resolves: canceled, reported, done.
       expect(backend.isGoalRunning()).toBe(false);
       await loop;
       expect(events).toContain("goal-stop");
       expect(events).toContain("done");
-      // And the agent only ever saw the maker's single (cancelled) prompt: no checker completion and no
+      // And the agent only ever saw the maker's single (canceled) prompt: no checker completion and no
       // second iteration reached the newly loaded session.
       expect(trace().filter((t) => t.method === "session/prompt")).toHaveLength(1);
       expect(backend.switchBlocker()).toBeNull();

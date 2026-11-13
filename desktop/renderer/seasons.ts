@@ -9,7 +9,7 @@
 //
 // A special theme is NOT a palette. It names one: several seasons share a palette (Thanksgiving rides
 // Ember, the user's call), and every palette it names is a real ThemeDef with its own `@palette` block,
-// so the token-completeness test in theme.test.ts covers seasonal colours exactly like the base ones.
+// so the token-completeness test in theme.test.ts covers seasonal colors exactly like the base ones.
 // On top of the palette a season picks an animated backdrop scene (season_scenes.ts) and a mascot act
 // (mascot_season.ts), both keyed by the season id.
 //
@@ -19,7 +19,7 @@
 
 export type SeasonKind = "holiday" | "event";
 
-/** The animated backdrops. Several seasons share one; each scene may vary its colours by season id. */
+/** The animated backdrops. Several seasons share one; each scene may vary its colors by season id. */
 export type SceneId =
   | "fireworks" | "sunrise" | "hearts" | "monument" | "clover" | "meadow" | "blossoms" | "yosemite"
   | "beach" | "canyon" | "haunt" | "leaves" | "snow" | "stadium" | "pitch" | "torch";
@@ -74,7 +74,7 @@ export function nthWeekday(y: number, m: number, dow: number, n: number): number
     const first = dayNum(y, m, 1);
     return first + ((dow - new Date(first * DAY_MS).getUTCDay() + 7) % 7) + (n - 1) * 7;
   }
-  const last = dayNum(y, m + 1, 1) - 1; // Date.UTC normalises month 13 to January of y + 1
+  const last = dayNum(y, m + 1, 1) - 1; // Date.UTC normalizes month 13 to January of y + 1
   return last - ((new Date(last * DAY_MS).getUTCDay() - dow + 7) % 7);
 }
 

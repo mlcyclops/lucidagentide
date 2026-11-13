@@ -9,7 +9,7 @@
 // condensation, one angular sector per kind, a funnel that widens with height, seeded jitter. Selecting
 // a node computes its transitive UPSTREAM (what it depends on) and DOWNSTREAM (what depends on it, the
 // blast radius) by BFS and dims everything else; a segmented toggle picks which lineage shows, the HUD
-// lists the direct neighbours (click to walk) and Back steps through the walk. Slow auto-spin stops on
+// lists the direct neighbors (click to walk) and Back steps through the walk. Slow auto-spin stops on
 // hover, selection, search, the calm tier and prefers-reduced-motion. Drag rotates, wheel / pinch zooms,
 // double-click on empty space re-fits. Nodes behind the near plane are skipped.
 //
@@ -273,7 +273,7 @@ export function mountOrbitGraph(host: HTMLElement, data: PersonalGraphData, onSe
       ctx.fillText(`layer ${Math.max(0, L.layers - 1)}`, a1[0] + 6, a1[1] - 4);
     }
 
-    // edges: one batched faint pass, then the selected lineage on top in its direction's colour
+    // edges: one batched faint pass, then the selected lineage on top in its direction's color
     ctx.lineWidth = 1;
     ctx.strokeStyle = theme.line;
     ctx.globalAlpha = selOn || searchOn ? 0.05 : 0.16;
@@ -321,7 +321,7 @@ export function mountOrbitGraph(host: HTMLElement, data: PersonalGraphData, onSe
       ctx.beginPath(); ctx.arc(sx[selIdx]!, sy[selIdx]!, sr[selIdx]! + 4, 0, Math.PI * 2); ctx.stroke();
     }
 
-    // labels: the selection, its direct neighbours, search hits, the hover, else the biggest front hubs
+    // labels: the selection, its direct neighbors, search hits, the hover, else the biggest front hubs
     const want = new Set<number>();
     if (selOn) {
       want.add(selIdx);
