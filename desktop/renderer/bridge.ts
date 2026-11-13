@@ -297,6 +297,9 @@ import type { RecallView, RemoteActionView, RemoteApprovalsView, RemoteHubView, 
 export type { AosControl, AosSnapshot };
 /** P-AOS.1: a fleet-goal change: the new snapshot, or the engine's refusal in words. */
 export type FleetGoalReply = { ok: true; data: AosSnapshot } | { ok: false; error: string };
+// P-FLEET-BOARDS.1 (ADR-0577): the engine's boards (types only, owned by desktop/fleet_boards.ts).
+import type { Board as BoardView, BoardLayout, Boards as BoardsView } from "../fleet_boards.ts";
+export type { BoardLayout, BoardView, BoardsView };
 export type { ProgressView, WaitView };
 export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
 /** Approval scope: "once" answers only the pending ask; "session" also allows every same-kind ask for
@@ -1124,6 +1127,20 @@ export interface LucidBridge {
   fleetTaskAdd(input: { title: string; prompt: string; outputContract: string; checks: string[]; assignee: string; dependsOn: string[] }): Promise<FleetGoalReply | null>;
   fleetTaskCheck(taskId: string, checkId: string, passed: boolean): Promise<FleetGoalReply | null>;
   fleetTaskCancel(taskId: string): Promise<FleetGoalReply | null>;
+  /** P-FLEET-BOARDS.1 (ADR-0577): the engine's boards. Every change resolves to the whole new Boards, or null
+   *  when the engine refused it or could not be reached. Agent keys: a lane id, or `rs:<node>:<task>`. */
+  fleetBoards(): Promise<BoardsView | null>;
+  fleetBoardCreate(name: string): Promise<BoardsView | null>;
+  fleetBoardRename(id: string, name: string): Promise<BoardsView | null>;
+  /** Only the board goes; its agents keep running. */
+  fleetBoardRemove(id: string): Promise<BoardsView | null>;
+  fleetBoardMove(id: string, to: number): Promise<BoardsView | null>;
+  /** Drops apply before adds; a board holds at most 200 agents. */
+  fleetBoardAgents(id: string, change: { add?: string[]; drop?: string[] }): Promise<BoardsView | null>;
+  /** `id` "all" is Everything. A focus not on the board is dropped, and leaving it out clears the focus. */
+  fleetBoardLayout(id: string, layout: BoardLayout, focus?: string): Promise<BoardsView | null>;
+  /** Forget every agent key not in `live`, from every board and focus. */
+  fleetBoardsPrune(live: string[]): Promise<BoardsView | null>;
   /** P-REPO.1 (ADR-0406): the repo Main works on and where its commits go. */
   repoContext(): Promise<RepoContext | null>;
   /** P-REPO.1: local folders a spoke can start in (workspace, lanes, recents, checkouts beside them). */
@@ -2038,6 +2055,14 @@ export const bridge: LucidBridge = {
   fleetTaskAdd: (input) => post("/api/fleet/goal/task", input), // P-AOS.2 (ADR-0453)
   fleetTaskCheck: (taskId, checkId, passed) => post("/api/fleet/goal/task/check", { taskId, checkId, passed }),
   fleetTaskCancel: (taskId) => post("/api/fleet/goal/task/cancel", { taskId }),
+  fleetBoards: () => getData("/api/fleet/boards"), // P-FLEET-BOARDS.1 (ADR-0577)
+  fleetBoardCreate: (name) => post("/api/fleet/boards/create", { name }),
+  fleetBoardRename: (id, name) => post("/api/fleet/boards/rename", { id, name }),
+  fleetBoardRemove: (id) => post("/api/fleet/boards/remove", { id }),
+  fleetBoardMove: (id, to) => post("/api/fleet/boards/move", { id, to }),
+  fleetBoardAgents: (id, change) => post("/api/fleet/boards/agents", { id, ...change }),
+  fleetBoardLayout: (id, layout, focus) => post("/api/fleet/boards/layout", { id, layout, ...(focus !== undefined ? { focus } : {}) }),
+  fleetBoardsPrune: (live) => post("/api/fleet/boards/prune", { live }),
   repoContext: () => getData("/api/repo/context"), // P-REPO.1 (ADR-0406)
   repoChoices: () => getData("/api/repo/choices"),
   repoGithub: (refresh) => getData(`/api/repo/github${refresh ? "?refresh=1" : ""}`),
