@@ -769,7 +769,8 @@
 //            spokes view (#592, ADR-0539); the spoke admin panel in its own window (#593, ADR-0543); plugins the
 //            user was running start again, only from release intents and verified files (#596, ADR-0546,
 //            ADR-0564); remote spoke tasks as Fleet lanes (#609, ADR-0551); Fleet auto mode and session grants
-//            never answer a catastrophic command (#612, ADR-0567). The Herd package is offered only by
+//            never answer a catastrophic command (#612, ADR-0567); one fenceUntrusted for every untrusted
+//            envelope, so an embedded delimiter can no longer close it early (ADR-0568). The Herd package is offered only by
 //            a build that signs it; otherwise its card says Not in this build. PRERELEASE: never marked Latest;
 //            the Homebrew cask and stable installs stay on 2.5.3.
 export const APP_VERSION = "2.5.4-beta.2";
