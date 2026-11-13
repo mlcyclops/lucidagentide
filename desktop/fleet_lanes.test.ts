@@ -585,12 +585,16 @@ test("a spoke keeps the hub it was born under after the master starts a new sess
 
 // ── P-FLEET.L6: approval scopes ("allow for session") + full auto-mode ───────────────────────────────
 
+// A risky command that is NOT under the exec floor (#612): auto mode and session grants may answer it. The fake's
+// default ask ("rm -rf /") is under the floor, so it is what the floor tests use.
+const RISKY = `[ask {"kind":"execute","title":"bun test","rawInput":{"command":"bun test"}}]`;
+
 test("scope 'session' remembers the ask's KIND - the next identical ask is granted without a human", async () => {
   live = manager({ mode: "permission" });
   const r = await live.spawn({ cwd: import.meta.dir });
   const id = r.lane!.id;
   const first: LaneEvent[] = [];
-  const turn = live.prompt(id, "risky one", (e) => first.push(e));
+  const turn = live.prompt(id, `${RISKY} one`, (e) => first.push(e));
   // Real clock on purpose: the ask crosses a REAL subprocess stdio boundary. Bounded poll, fails loudly.
   let pending: { summary: string; kind: string } | undefined;
   for (let i = 0; i < 40 && !pending; i++) { await Bun.sleep(100); pending = (await live.status()).lanes[0]!.pendingApproval; }
@@ -600,7 +604,7 @@ test("scope 'session' remembers the ask's KIND - the next identical ask is grant
   await turn;
   // Turn 2: the SAME kind of ask is granted silently - no permission event, an auto-approved one instead.
   const second: LaneEvent[] = [];
-  await live.prompt(id, "risky two", (e) => second.push(e));
+  await live.prompt(id, `${RISKY} two`, (e) => second.push(e));
   expect(second.some((e) => e.type === "permission")).toBe(false);
   const text = second.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
   expect(text).toContain("selected"); // the fake echoes the outcome: we allowed
@@ -615,7 +619,7 @@ test("full auto-mode answers asks with NO human ask - auto-approved event, never
   expect(set.ok).toBe(true);
   expect(set.lane!.autoApprove).toBe(true);
   const events: LaneEvent[] = [];
-  await live.prompt(r.lane!.id, "risky", (e) => events.push(e));
+  await live.prompt(r.lane!.id, RISKY, (e) => events.push(e));
   expect(events.some((e) => e.type === "permission")).toBe(false);
   const text = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
   expect(text).toContain("selected");
@@ -627,7 +631,7 @@ test("turning auto ON with an ask open resolves the pending ask as an ALLOW - it
   live = manager({ mode: "permission" });
   const r = await live.spawn({ cwd: import.meta.dir });
   const events: LaneEvent[] = [];
-  const turn = live.prompt(r.lane!.id, "risky", (e) => events.push(e));
+  const turn = live.prompt(r.lane!.id, RISKY, (e) => events.push(e));
   let pending = false;
   for (let i = 0; i < 40 && !pending; i++) { await Bun.sleep(100); pending = !!(await live.status()).lanes[0]!.pendingApproval; }
   expect(pending).toBe(true);
@@ -635,6 +639,44 @@ test("turning auto ON with an ask open resolves the pending ask as an ALLOW - it
   await turn;
   const text = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
   expect(text).toContain("selected"); // the human granted everything; the open ask went with it
+}, TIMEOUT);
+
+// #612: the exec floor. A poisoned repo instruction that gets `rm -rf /` asked in an auto-mode lane still reaches
+// the human, the same floor the main chat keeps under danger mode.
+test("auto mode never answers a catastrophic command: the ask reaches the human, and a deny stops it", async () => {
+  live = manager({ mode: "permission" });
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  expect(live.setAuto(id, true).ok).toBe(true);
+  const events: LaneEvent[] = [];
+  const turn = live.prompt(id, "do it", (e) => events.push(e)); // the fake's default ask: rm -rf /
+  let pending: { summary: string; kind: string } | undefined;
+  for (let i = 0; i < 40 && !pending; i++) { await Bun.sleep(100); pending = (await live.status()).lanes[0]!.pendingApproval; }
+  expect(pending?.summary).toContain("always asks: recursive force-delete (rm -rf)");
+  expect(live.answer(id, false).ok).toBe(true);
+  await turn;
+  expect(events.some((e) => e.type === "auto-approved")).toBe(false);
+  const text = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(text).toContain('"cancelled"');
+}, TIMEOUT);
+
+test("turning auto ON does not answer an open catastrophic ask; only the human's answer settles it", async () => {
+  live = manager({ mode: "permission" });
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  const events: LaneEvent[] = [];
+  const turn = live.prompt(id, "do it", (e) => events.push(e));
+  let pending = false;
+  for (let i = 0; i < 40 && !pending; i++) { await Bun.sleep(100); pending = !!(await live.status()).lanes[0]!.pendingApproval; }
+  expect(pending).toBe(true);
+  live.setAutoAll(true);
+  expect(live.setAuto(id, true).ok).toBe(true);
+  // setAuto resolves an open ask synchronously, so the ask still being open right after it is the proof.
+  expect((await live.status()).lanes[0]!.pendingApproval).toBeDefined();
+  expect(live.answer(id, true).ok).toBe(true); // an explicit yes still works
+  await turn;
+  const text = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
+  expect(text).toContain("selected");
 }, TIMEOUT);
 
 test("a DENY with scope 'session' records NOTHING - the next ask still lands needs-approval", async () => {

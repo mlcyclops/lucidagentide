@@ -32,7 +32,7 @@ import { endHolderProcess, HELD_BUSY_KEEP_MS, HELD_IDLE_KEEP_MS, HolderLink, hol
 import { ACP_INTERACTIVE_CLIENT_CAPS } from "./acp_client_caps.ts";
 // P-FLEET.L15 (ADR-0338): the SHARED answerer for omp's form elicitation. The lane used to hand-roll this
 // and got both the options path and the response shape wrong, denying every gated tool call.
-import { elicitationAnswer } from "./exec_policy.ts";
+import { elicitationAnswer, execFloor, execStore } from "./exec_policy.ts";
 import { askDigest, canonical, classifyAsk, MAX_REMOTE_INPUT, type RemoteAsk } from "./controller/remote_policy.ts";
 import { FLEET_PRESSURE_PCT, FLEET_SUSTAIN_MS, laneAdmission, pressureOf, pushSample, type LaneAdmission, type PressureSample } from "./fleet_resources.ts";
 import { sampleSystem, type SystemSnapshot } from "./system_profile.ts";
@@ -375,7 +375,7 @@ interface Lane {
   sinks: Set<(e: LaneEvent) => void>;
   /** The unanswered permission ask, if any. Resolving it answers the remote. `ask` is set on a remote lane:
    *  the bounded view and digest a remote decision must name (P-CTRL-REMOTE.1). */
-  pending: { summary: string; kind: string; resolve: (allow: boolean) => void; ask?: RemoteAsk } | null;
+  pending: { summary: string; kind: string; resolve: (allow: boolean) => void; ask?: RemoteAsk; floor?: true } | null;
   /** P-CTRL-REMOTE.1 (ADR-0531): set from the pairing's human-chosen policy; null for every other lane. */
   remote: RemoteLanePolicy | null;
   /** P-FLEET.L6: approve every ask without a human (per-lane; initialized from the manager default). */
@@ -986,15 +986,16 @@ export class FleetLaneManager {
   }
 
   /** P-FLEET.L6: flip one lane's full auto-mode. Turning it ON with an ask open resolves that ask as an
-   *  ALLOW - the human just granted everything, the pending ask rides along. The in-omp security gate
-   *  (invariant 4) still scans every tool call in auto mode; only the human approval step goes away. */
+   *  ALLOW - the human just granted everything, the pending ask rides along - unless the ask is under the exec
+   *  floor (#612), which only an explicit answer settles. The in-omp security gate (invariant 4) still scans
+   *  every tool call in auto mode; only the human approval step goes away. */
   setAuto(laneId: string, on: boolean): { ok: boolean; lane?: LaneView; reason?: string } {
     const lane = this.#lanes.get(laneId);
     if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
     if (on && lane.supervised) return { ok: false, reason: "a controller lane stays supervised - auto needs the controller consent (P-CTRL.4)" };
     lane.autoApprove = on;
     this.#saveHeld(lane);
-    if (on) lane.pending?.resolve(true);
+    if (on && !lane.pending?.floor) lane.pending?.resolve(true);
     return { ok: true, lane: this.#view(lane) };
   }
 
@@ -1005,7 +1006,7 @@ export class FleetLaneManager {
       if (lane.supervised) continue;
       lane.autoApprove = on;
       this.#saveHeld(lane);
-      if (on) lane.pending?.resolve(true);
+      if (on && !lane.pending?.floor) lane.pending?.resolve(true);
     }
   }
 
@@ -1672,11 +1673,15 @@ export class FleetLaneManager {
         // P-CTRL-REMOTE.1 (ADR-0531): a remote lane never consults auto mode or session grants; its pairing's
         // tier policy decides, and what it does not allow outright waits for a verified remote decision.
         if (lane.remote) return (await this.#remoteAsk(lane, tc, summary, kind)) ? pick() : { outcome: { outcome: "cancelled" } };
-        if (lane.autoApprove || lane.sessionAllow.has(kind)) {
+        // #612: auto mode and session grants never cross the exec floor the main chat keeps under danger mode
+        // (a catastrophic command, a managed-denylisted program): such an ask always reaches the human, and
+        // turning auto on while it is open does not answer it (setAuto).
+        const floor = execFloor(tc, execStore());
+        if ((lane.autoApprove || lane.sessionAllow.has(kind)) && floor === null) {
           this.#emit(lane, { type: "auto-approved", summary, mode: lane.autoApprove ? "auto" : "session" });
           return pick();
         }
-        const allow = await this.#askUser(lane, summary, kind);
+        const allow = await this.#askUser(lane, floor ? `${summary} (always asks: ${floor})`.slice(0, 300) : summary, kind, undefined, floor !== null);
         if (!allow) return { outcome: { outcome: "cancelled" } };
         return pick();
       }
@@ -1789,7 +1794,7 @@ export class FleetLaneManager {
     return this.#askUser(lane, summary, kind, { ask, timeoutMs: policy.approvalMs });
   }
 
-  #askUser(lane: Lane, summary: string, kind: string, remote?: { ask: RemoteAsk; timeoutMs: number }): Promise<boolean> {
+  #askUser(lane: Lane, summary: string, kind: string, remote?: { ask: RemoteAsk; timeoutMs: number }, floor = false): Promise<boolean> {
     lane.pending?.resolve(false); // never two open asks - the older one dies as a deny
     const gate = Promise.withResolvers<boolean>();
     const resolve = (allow: boolean) => {
@@ -1799,7 +1804,7 @@ export class FleetLaneManager {
       gate.resolve(allow);
     };
     const timer = setTimeout(() => resolve(false), remote?.timeoutMs ?? APPROVAL_TIMEOUT_MS);
-    lane.pending = { summary, kind, resolve, ...(remote ? { ask: remote.ask } : {}) };
+    lane.pending = { summary, kind, resolve, ...(remote ? { ask: remote.ask } : {}), ...(floor ? { floor: true as const } : {}) };
     this.#setStatus(lane, "needs-approval");
     this.#emit(lane, { type: "permission", summary, kind });
     return gate.promise;

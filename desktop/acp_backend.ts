@@ -99,7 +99,7 @@ import { slashCommandCreateDraft } from "../harness/commands/handoff.ts"; // P-C
 import type { UserCommand } from "../harness/commands/spec.ts";
 import type { SecretRequestView } from "./secret_intake_view.ts"; // P-SECRET-INTAKE.1 (ADR-0476)
 import { gateDenyReason } from "./gate_audit.ts";
-import { type ElicitationAnswer, type ExecChoice, type ExecClass, classifyCommand, classifyEval, elicitationAnswer, elicitationOptions, execStore, execVerdict, recordExec } from "./exec_policy.ts";
+import { type ElicitationAnswer, type ExecChoice, type ExecClass, EXEC_TOOLS, classifyCommand, classifyEval, elicitationAnswer, elicitationOptions, execCommand, execStore, execVerdict, recordExec } from "./exec_policy.ts";
 import { toolFailureCommand, toolFailureDetail, toolFailureReason } from "./tool_failure.ts";
 
 // P-EGRESS.1 (ADR-0062): the network-reaching tools omp is told to PROMPT for (acp_config.yml). When omp
@@ -107,10 +107,8 @@ import { toolFailureCommand, toolFailureDetail, toolFailureReason } from "./tool
 // silently auto-approving in Agent mode.
 const EGRESS_TOOLS = new Set(["browser", "web_search", "web", "fetch", "navigate"]);
 
-// P-EXEC.1 (ADR-0066): the exec tools omp is told to PROMPT for (acp_config.yml). Each call is classified
-// per-command — read-only auto-approves, risky gates, a catastrophic set always prompts. Detected by the
-// tool name OR (the strong signal) a `command` string in the tool's rawInput.
-const EXEC_TOOLS = /\b(bash|eval|shell|execute|terminal)\b/;
+// P-EXEC.1 (ADR-0066): each exec call (EXEC_TOOLS by name, or a command in its rawInput) is classified
+// per-command — read-only auto-approves, risky gates, a catastrophic set always prompts.
 const EXEC_OPTIONS_FULL = [
   { optionId: "exec:allow-once", name: "Allow once (this command)", kind: "allow" },
   { optionId: "exec:allow-turn", name: "Allow for the rest of this turn", kind: "allow" },
@@ -124,12 +122,6 @@ const EXEC_OPTIONS_LIMITED = [
   { optionId: "exec:allow-turn", name: "Allow for the rest of this turn", kind: "allow" },
   { optionId: "exec:deny", name: "Block", kind: "reject" },
 ];
-/** Pull the command/code an exec tool call will run, from its rawInput. */
-function execCommand(tc: any): string | null {
-  const ri = tc?.rawInput ?? tc?.input ?? {};
-  for (const k of ["command", "cmd", "script", "code", "source", "input"]) if (typeof ri[k] === "string" && ri[k].trim()) return ri[k].trim();
-  return null;
-}
 // The dialog's choices — clear and non-overlapping. ("allow once" and an "ask every time" pin had the
 // same outcome — both ask again next time — so the pin was dropped.) Each maps to an EgressChoice the
 // store folds in; the "allow" variants approve the call to omp, "deny" blocks it.

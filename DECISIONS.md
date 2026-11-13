@@ -27080,3 +27080,16 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 7. Controller restore: a lane the fleet already took back is ended, and its end awaited, before a revoked pairing's retire or a policy-mismatch respawn; with a broken store every supervised lane taken back is ended and no store is touched; a lane whose holder is alive but did not answer is neither retired nor respawned, keeping its records and slot.
 
 **Consequences.** A holder from before v2 is refused and ends by its own keep-for. A client more than 8 MiB behind replays from the spool. Known limit: one record per lane id.
+
+## ADR-0567 -- P-FLEET.L6 exec floor: Fleet auto mode and session grants never answer a catastrophic command (#612) (2026-11-12)
+
+**Status:** Accepted. Amends P-FLEET.L6 (full auto mode, approval scopes). Proof: `bun test desktop/exec_policy.test.ts desktop/fleet_lanes.test.ts`; desktop typecheck.
+
+**Context.** The Yes Mode report (2026-11-01) showed a one-line project `AGENTS.md` injection turning an LLM permission classifier into allow-all. LUCID gates with no LLM classifier, but a local Fleet lane in full auto mode, or holding a session grant for the ask's kind, answered `session/request_permission` without classifying the command. The main chat keeps a floor even under danger mode and allow-turn (ADR-0066: the `ALWAYS_PROMPT` set and the managed deny list); Fleet lanes had none, and the Unicode scanner sees hidden characters, not a plain `rm -rf ~`. A repo whose `AGENTS.md` steers the agent could run any command in an auto-mode lane.
+
+**Decision.**
+1. `execFloor(toolCall, store)` in `desktop/exec_policy.ts` returns why an exec ask must reach a human: a catastrophic command or a managed-denylisted program, computed as `execVerdict` with danger mode and allow-turn on, so the main chat and the lanes share one ordering. `EXEC_TOOLS` and `execCommand` move there from `acp_backend.ts`.
+2. A local lane checks the floor on every ask. Under the floor, auto mode and session grants do not answer; the ask goes to the human with the reason in its summary, and no answer within the cap is a deny.
+3. Turning auto on (one lane or fleet-wide) does not answer an open ask under the floor; only the human's answer settles it.
+
+**Consequences.** An auto-mode lane can still stop on a catastrophic command, which is the point. Scheduled jobs that set auto mode get the same floor and fail closed when nobody answers. Remote lanes are unchanged: their tier policy already classifies every command.
