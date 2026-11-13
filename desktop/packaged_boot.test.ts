@@ -133,8 +133,15 @@ function buildFilteredInstall(): string {
 const SIM = buildFilteredInstall();
 afterAll(() => { try { rmSync(SIM, { recursive: true, force: true }); } catch { /* temp dir; best-effort */ } });
 
+// The booted engine gets a data root of its own and no inherited LUCID_* variable, as on a clean CI runner. Run from
+// inside the IDE, the inherited LUCID_DATA_ROOT is the user's real userData: an engine of another version booted
+// there ran the dev-to-release cleanup (ADR-0542) and deleted the user's installed plugins.
+const SIM_ENV: Record<string, string | undefined> = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^LUCID_/i.test(k)));
+SIM_ENV.LUCID_DATA_ROOT = join(SIM, "data");
+mkdirSync(SIM_ENV.LUCID_DATA_ROOT);
+
 async function runInSim(args: string[], waitPort?: number): Promise<{ ok: boolean; out: string; exit: number | null }> {
-  const child = spawn(process.execPath, args, { cwd: SIM, env: { ...process.env, ...(waitPort ? { PORT: String(waitPort) } : {}) }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, args, { cwd: SIM, env: { ...SIM_ENV, ...(waitPort ? { PORT: String(waitPort) } : {}) }, stdio: ["ignore", "pipe", "pipe"] });
   let out = "";
   child.stdout?.on("data", (d) => { out += String(d); });
   child.stderr?.on("data", (d) => { out += String(d); });
