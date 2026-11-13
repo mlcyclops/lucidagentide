@@ -67,7 +67,7 @@ try {
   if (pre.ok) fail("blocked run must not be dispatchable before review");
 
   // ── 3. human review unblocks dispatch ──────────────────────────────────────
-  await recordApproval(db, { artifactId: bad.artifactId, action: "quarantine_release", decidedBy: "nick", rationale: "reviewed; safe to run" });
+  await recordApproval(db, { artifactId: bad.artifactId, action: "quarantine_release", decidedBy: "operator", rationale: "reviewed; safe to run" });
   const post = await securityPrecondition(db, bad.runId);
   console.log(`3. post-review: run dispatchable? ${post.ok}`);
   if (!post.ok) fail("after review the run should be dispatchable");

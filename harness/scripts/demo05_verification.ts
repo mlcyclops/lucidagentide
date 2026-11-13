@@ -58,7 +58,7 @@ try {
   console.log("  acceptPartial does NOT waive security ✓");
 
   // human review clears it
-  await recordApproval(db, { artifactId: ing.artifactId, action: "quarantine_release", decidedBy: "nick", rationale: "reviewed, benign" });
+  await recordApproval(db, { artifactId: ing.artifactId, action: "quarantine_release", decidedBy: "operator", rationale: "reviewed, benign" });
   const cleared = await verifyTask(db, secRun, [PASS]);
   console.log(`after quarantine_release approval: completionAllowed=${cleared.completionAllowed} (${cleared.reason})`);
   if (!cleared.completionAllowed) fail("approved artifact should no longer block completion");

@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { load, save, setDeveloperMode } from "../settings_store.ts";
 
-const PROFILE = { username: "Nick", sandboxWindowsMode: "off" as const, tourSeen: true, lastModel: "anthropic/claude-opus-5-5" };
+const PROFILE = { username: "operator", sandboxWindowsMode: "off" as const, tourSeen: true, lastModel: "anthropic/claude-opus-5-5" };
 const role = process.argv[2];
 
 // ---- child roles ----------------------------------------------------------------------------------
@@ -31,7 +31,7 @@ if (role === "--reader") {
   let reads = 0;
   while (Date.now() < end) {
     const s = load();
-    if (s.sandboxWindowsMode !== "off" || s.username !== "Nick") { console.log(`TORN after ${reads} reads`); process.exit(3); }
+    if (s.sandboxWindowsMode !== "off" || s.username !== "operator") { console.log(`TORN after ${reads} reads`); process.exit(3); }
     reads++;
   }
   console.log(`CLEAN ${reads}`);
@@ -60,7 +60,7 @@ try {
     w.kill(9);
     await w.exited;
     const s = load();
-    if (s.sandboxWindowsMode !== "off" || s.username !== "Nick" || s.tourSeen !== true) {
+    if (s.sandboxWindowsMode !== "off" || s.username !== "operator" || s.tourSeen !== true) {
       fail(`after hard kill #${k + 1} the profile came back as ${JSON.stringify(s).slice(0, 120)}`);
     }
   }
@@ -84,7 +84,7 @@ try {
   const after = setDeveloperMode(true);
   console.error = orig;
   if (after.sandboxWindowsMode !== "off") fail("the 0-byte file reset the Windows sandbox opt-out");
-  if (after.username !== "Nick" || after.tourSeen !== true) fail("the 0-byte file reset the profile (onboarding would re-run)");
+  if (after.username !== "operator" || after.tourSeen !== true) fail("the 0-byte file reset the profile (onboarding would re-run)");
   if (!logged.includes("restored the last good copy")) fail("the recovery must be logged, not silent");
   if (!readdirSync(dir).some((f) => f.startsWith("lucid-gui.json.corrupt-"))) fail("the torn bytes must be kept aside, not deleted");
   ok("the 2026-10-05 0-byte file: restored from the backup, sandbox stays off, onboarding does not re-run, recovery is logged");

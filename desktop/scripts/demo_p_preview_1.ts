@@ -21,9 +21,9 @@ console.log("== P-PREVIEW.1 — in-app preview target resolver ==");
 
 // (1) The minesweeper case: a local HTML file the agent wrote.
 console.log("\n1) a local file the agent built → rendered");
-const mine = resolvePreview("C:\\Users\\neorc\\Documents\\My Music\\hormuz-minesweeper.html");
+const mine = resolvePreview("C:\\Users\\operator\\Documents\\My Music\\hormuz-minesweeper.html");
 if (mine.kind !== "local") fail("a local html file must render");
-if (mine.src !== "file:///C:/Users/neorc/Documents/My%20Music/hormuz-minesweeper.html") fail(`bad src: ${mine.src}`);
+if (mine.src !== "file:///C:/Users/operator/Documents/My%20Music/hormuz-minesweeper.html") fail(`bad src: ${mine.src}`);
 ok(`local → ${mine.label} (${mine.src})`);
 
 // (2) Remote is recognized but gated, not auto-loaded.

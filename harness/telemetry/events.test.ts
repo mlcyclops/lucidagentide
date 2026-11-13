@@ -103,7 +103,7 @@ test("the file sink writes parseable NDJSON", () => {
 
 test("emit returns the written record", () => {
   const { tel } = collector();
-  const rec = tel.emit("approval_granted", { user: "nick", scope: "promotion" });
+  const rec = tel.emit("approval_granted", { user: "operator", scope: "promotion" });
   expect(rec.event).toBe("approval_granted");
-  expect(rec.user).toBe("nick");
+  expect(rec.user).toBe("operator");
 });

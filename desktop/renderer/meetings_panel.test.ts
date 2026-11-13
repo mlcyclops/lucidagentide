@@ -32,11 +32,11 @@ const detail = (over: Partial<MeetingDetail> = {}): MeetingDetail => ({
   filename: "2026-09-18_14-05_zoom.json.enc", app: "zoom", title: "Pricing sync",
   start: "2026-09-18T14:05:00", end: "2026-09-18T14:47:00",
   notes: "## Summary\nWe agreed the new tiering.\n\n## Decisions\n- Ship tier 3 in October\n- Drop the annual discount\n",
-  todos: ["Nick to draft the pricing page"], hasVideo: false, ...over,
+  todos: ["Operator to draft the pricing page"], hasVideo: false, ...over,
 });
 
 const todo = (over: Partial<TodoRow> = {}): TodoRow => ({
-  id: "a".repeat(40), todo: "Nick to draft the pricing page", meetingDate: "2026-09-18 14:05",
+  id: "a".repeat(40), todo: "Operator to draft the pricing page", meetingDate: "2026-09-18 14:05",
   app: "zoom", meetingFile: "2026-09-18_14-05_zoom.json.enc", done: false, ...over,
 });
 
@@ -121,10 +121,10 @@ describe("notes markdown - the Hub's own section shapes", () => {
 
 describe("action items - only an item the Hub still lists as open can be acted on", () => {
   test("an open item carries its ledger id; one the Hub dropped is already done", () => {
-    const d = detail({ todos: ["Nick to draft the pricing page", "Mail the deck"] });
+    const d = detail({ todos: ["Operator to draft the pricing page", "Mail the deck"] });
     const items = detailTodos(d, [todo()]);
     expect(items).toEqual([
-      { text: "Nick to draft the pricing page", id: "a".repeat(40), status: "open" },
+      { text: "Operator to draft the pricing page", id: "a".repeat(40), status: "open" },
       { text: "Mail the deck", id: null, status: "done" },
     ]);
   });
@@ -134,9 +134,9 @@ describe("action items - only an item the Hub still lists as open can be acted o
     expect(items[0]!.status).toBe("done");
   });
   test("when the open list could not be read, every item is UNKNOWN - never done, never actionable", () => {
-    const d = detail({ todos: ["Nick to draft the pricing page", "Mail the deck"] });
+    const d = detail({ todos: ["Operator to draft the pricing page", "Mail the deck"] });
     expect(detailTodos(d, null)).toEqual([
-      { text: "Nick to draft the pricing page", id: null, status: "unknown" },
+      { text: "Operator to draft the pricing page", id: null, status: "unknown" },
       { text: "Mail the deck", id: null, status: "unknown" },
     ]);
     const h = meetingDetailHtml(d, null);

@@ -18,7 +18,7 @@ const target: MaintainerTarget = {
   id: "lucid-core",
   repoUrl: "https://github.com/techlead187/LucidAgentIDE.git",
   provider: "github",
-  localPath: "C:/Users/neorc/Apps AI Vibe/LucidAgentIDE",
+  localPath: "C:/Users/operator/Apps AI Vibe/LucidAgentIDE",
   cadence: { kind: "daily", hhmm: "02:30" },
   openPr: false,
   openTracker: false,

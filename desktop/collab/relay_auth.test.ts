@@ -198,7 +198,7 @@ describe("relay_auth: authFromEnv (the standalone broker's config seam)", () => 
     const { auth, summary } = authFromEnv({
       RELAY_AUTH: "Firebase",
       RELAY_FIREBASE_PROJECT: "lucid-agent",
-      RELAY_ALLOWED_EMAILS: "Nicholas.Chadwick.CTR@gmail.com, second@x.io,",
+      RELAY_ALLOWED_EMAILS: "Operator.Sample@Example.com, second@x.io,",
       RELAY_AUTH_DEADLINE_MS: "2500",
     });
     expect(auth).toBeDefined();

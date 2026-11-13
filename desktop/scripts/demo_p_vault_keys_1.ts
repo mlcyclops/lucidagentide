@@ -24,7 +24,7 @@ import type { VaultStatus } from "../engine_vault.ts";
 
 const SECRET = { key: "sk-demo-VAULT-0001", acct: "sk-demo-ACCT-0002", mcp: "mcp-demo-BEARER-0003", turn: "turn-demo-CRED-0004" };
 const LEGACY: GuiSettings = {
-  username: "Nick",
+  username: "operator",
   keys: { LUCID_DEMO_VAULT_KEY: SECRET.key },
   accounts: { openai: [{ id: "key:demo-acct", name: "Work", kind: "key", key: SECRET.acct, createdAt: 1 }] },
   mcpServers: [{ id: "mcp-demo", name: "Docs", transport: "http", url: "https://mcp.example.com", token: SECRET.mcp, enabled: true }],

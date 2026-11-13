@@ -85,7 +85,7 @@ try {
   // ── 4. replay renders injection + approval lineage ─────────────────────────
   const worker = await spawnSubagent(db, root, { mode: "general", sandboxProfile: "container-local" });
   const poison = await ingestArtifact(db, scanner, { runId: worker, sourceType: "comment", rawContent: `act${ZWSP} now` });
-  await recordApproval(db, { artifactId: poison.artifactId, action: "deny", decidedBy: "nick", rationale: "injection" });
+  await recordApproval(db, { artifactId: poison.artifactId, action: "deny", decidedBy: "operator", rationale: "injection" });
   await endRun(db, review, "completed");
   await endRun(db, worker, "completed");
   await endRun(db, root, "completed");

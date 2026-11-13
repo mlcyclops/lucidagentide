@@ -55,9 +55,9 @@ try {
   await promoteFactGated(db, { entityName: "x", statement: "y", trustLabel: "trusted", sourceArtifactId: bad.artifactId }, { telemetry: tel }); // blocked
   await promoteFactGated(db, { entityName: "ok", statement: "fine", trustLabel: "trusted" }); // promoted
 
-  await recordApproval(db, { artifactId: bad.artifactId, action: "deny", decidedBy: "nick", rationale: "injection" }, tel);
-  await exportMarkdownReport(db, { artifactIds: [bad.artifactId], reviewer: "nick" }, tel);
-  await exportJsonBundle(db, { artifactIds: [bad.artifactId], includeRaw: true, reviewer: "nick" }, tel);
+  await recordApproval(db, { artifactId: bad.artifactId, action: "deny", decidedBy: "operator", rationale: "injection" }, tel);
+  await exportMarkdownReport(db, { artifactIds: [bad.artifactId], reviewer: "operator" }, tel);
+  await exportJsonBundle(db, { artifactIds: [bad.artifactId], includeRaw: true, reviewer: "operator" }, tel);
 
   // ingest telemetry so the memory-promotion-risk view sees blocked gate events
   await ingestTelemetryJsonl(db, jsonl);

@@ -77,7 +77,7 @@ describe("snapshotVerdict", () => {
 
 describe("snapshotLabel", () => {
   test("a guest sees the basename, never the operator's directory layout", () => {
-    expect(snapshotLabel("C:/Users/neorc/secret-project/game.html")).toBe("Preview: game.html");
+    expect(snapshotLabel("C:/Users/operator/secret-project/game.html")).toBe("Preview: game.html");
     expect(snapshotLabel("/home/n/work/report.md")).toBe("Preview: report.md");
   });
 

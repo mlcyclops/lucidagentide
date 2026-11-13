@@ -44,11 +44,11 @@ describe("parseNetstatLine (Windows)", () => {
 
 describe("parseLsofLine (macOS / Linux)", () => {
   test("a LISTEN row becomes a LISTENING loopback socket using the command as the process", () => {
-    const s = parseLsofLine("omp     1234 nick   7u  IPv4 0x1  0t0  TCP 127.0.0.1:1455 (LISTEN)");
+    const s = parseLsofLine("omp     1234 operator   7u  IPv4 0x1  0t0  TCP 127.0.0.1:1455 (LISTEN)");
     expect(s!).toMatchObject({ proto: "TCP", local: "127.0.0.1:1455", state: "LISTENING", pid: "1234", proc: "omp", port: 1455, loopback: true });
   });
   test("an ESTABLISHED row splits local->foreign", () => {
-    const s = parseLsofLine("firefox 9999 nick  30u  IPv4 0x2  0t0  TCP 127.0.0.1:53998->127.0.0.1:1455 (ESTABLISHED)");
+    const s = parseLsofLine("firefox 9999 operator  30u  IPv4 0x2  0t0  TCP 127.0.0.1:53998->127.0.0.1:1455 (ESTABLISHED)");
     expect(s!).toMatchObject({ local: "127.0.0.1:53998", foreign: "127.0.0.1:1455", state: "ESTABLISHED", port: 53998, loopback: true });
   });
   test("the header line is skipped", () => {

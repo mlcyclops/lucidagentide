@@ -15,11 +15,11 @@ const toolRes = (payload: unknown, isError = false, extra: unknown[] = []) =>
 
 describe("Drift session discovery", () => {
   test("the session path follows the platform, and DRIFT_MCP_SESSION_PATH overrides it", () => {
-    expect(driftSessionPath({}, "win32", "C:\\Users\\nick")).toBe("C:\\Users\\nick/drift/mcp-session.json");
-    expect(driftSessionPath({}, "darwin", "/Users/nick")).toBe("/Users/nick/Library/Application Support/drift/mcp-session.json");
-    expect(driftSessionPath({ XDG_RUNTIME_DIR: "/run/user/1000" }, "linux", "/home/nick")).toBe("/run/user/1000/drift/mcp-session.json");
-    expect(driftSessionPath({}, "linux", "/home/nick")).toBe("/tmp/drift/mcp-session.json");
-    expect(driftSessionPath({ DRIFT_MCP_SESSION_PATH: "D:\\drift\\s.json" }, "win32", "C:\\Users\\nick")).toBe("D:\\drift\\s.json");
+    expect(driftSessionPath({}, "win32", "C:\\Users\\operator")).toBe("C:\\Users\\operator/drift/mcp-session.json");
+    expect(driftSessionPath({}, "darwin", "/Users/operator")).toBe("/Users/operator/Library/Application Support/drift/mcp-session.json");
+    expect(driftSessionPath({ XDG_RUNTIME_DIR: "/run/user/1000" }, "linux", "/home/operator")).toBe("/run/user/1000/drift/mcp-session.json");
+    expect(driftSessionPath({}, "linux", "/home/operator")).toBe("/tmp/drift/mcp-session.json");
+    expect(driftSessionPath({ DRIFT_MCP_SESSION_PATH: "D:\\drift\\s.json" }, "win32", "C:\\Users\\operator")).toBe("D:\\drift\\s.json");
   });
 
   test("a complete loopback session parses; anything incomplete or non-loopback is null", () => {
@@ -33,10 +33,10 @@ describe("Drift session discovery", () => {
   });
 
   test("the default executable paths per platform", () => {
-    expect(defaultDriftExePaths("win32", { LOCALAPPDATA: "C:\\Users\\nick\\AppData\\Local" }))
-      .toEqual(["C:\\Program Files\\Drift\\drift.exe", "C:\\Users\\nick\\AppData\\Local\\Programs\\Drift\\drift.exe"]);
+    expect(defaultDriftExePaths("win32", { LOCALAPPDATA: "C:\\Users\\operator\\AppData\\Local" }))
+      .toEqual(["C:\\Program Files\\Drift\\drift.exe", "C:\\Users\\operator\\AppData\\Local\\Programs\\Drift\\drift.exe"]);
     expect(defaultDriftExePaths("darwin", {})).toEqual(["/Applications/Drift.app/Contents/MacOS/Drift"]);
-    expect(defaultDriftExePaths("linux", { HOME: "/home/nick" })).toContain("/home/nick/.local/share/flatpak/exports/bin/org.cutwire.Drift");
+    expect(defaultDriftExePaths("linux", { HOME: "/home/operator" })).toContain("/home/operator/.local/share/flatpak/exports/bin/org.cutwire.Drift");
   });
 
   test("the synthesized endpoint is loopback, enabled, and carries no token", () => {
@@ -46,7 +46,7 @@ describe("Drift session discovery", () => {
   });
 
   test("the status payload's session block carries port, pid, and path, never the token", () => {
-    const path = "C:\\Users\\nick/drift/mcp-session.json";
+    const path = "C:\\Users\\operator/drift/mcp-session.json";
     const present = driftSessionStatus({ path, session: parseDriftSession(SESSION), error: "" });
     expect(present).toEqual({ path, present: true, port: 4731, pid: 5152, error: "" });
     expect("token" in present).toBe(false);

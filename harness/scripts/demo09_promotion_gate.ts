@@ -80,7 +80,7 @@ try {
   if (r1.safe) fail("resume should be UNSAFE while the poisoned artifact is unreviewed");
 
   // ── 5. human review unblocks promotion ─────────────────────────────────────
-  await recordApproval(db, { artifactId: bad.artifactId, action: "promotion_approve", decidedBy: "nick", rationale: "reviewed; quoting as data only" }, tel);
+  await recordApproval(db, { artifactId: bad.artifactId, action: "promotion_approve", decidedBy: "operator", rationale: "reviewed; quoting as data only" }, tel);
   const afterReview = await promoteFactGated(
     db,
     { entityName: "api", statement: "key handling reviewed", trustLabel: "trusted", sourceArtifactId: bad.artifactId },

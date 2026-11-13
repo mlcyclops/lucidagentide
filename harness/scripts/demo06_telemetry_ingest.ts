@@ -52,7 +52,7 @@ try {
   // ── run a "task": ingest content + a blocked tool call + an approval ───────
   const ing = await ingestArtifact(db, scanner, { runId, sourceType: "import", sourcePath: "pr#7", rawContent: POISON }, { telemetry: tel });
   await ingestArtifact(db, scanner, { runId, sourceType: "paste", rawContent: "a normal note" }, { telemetry: tel });
-  await recordApproval(db, { artifactId: ing.artifactId, action: "deny", decidedBy: "nick", rationale: "homoglyph" }, tel);
+  await recordApproval(db, { artifactId: ing.artifactId, action: "deny", decidedBy: "operator", rationale: "homoglyph" }, tel);
 
   // one blocked tool call (emits tool_call_blocked)
   const toolState = { executed: false };

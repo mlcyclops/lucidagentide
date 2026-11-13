@@ -32,13 +32,13 @@ test("recordApproval persists an audited row", async () => {
   const id = await recordApproval(db, {
     artifactId: "art-1",
     action: "deny",
-    decidedBy: "nick",
+    decidedBy: "operator",
     rationale: "homoglyph spoof",
     scope: "tool_call",
   });
   const row = await db.get("SELECT * FROM approval_events WHERE approval_id=$1", [id]);
   expect(row?.action).toBe("deny");
-  expect(row?.decided_by).toBe("nick");
+  expect(row?.decided_by).toBe("operator");
   expect(row?.rationale).toBe("homoglyph spoof");
   expect(row?.scope).toBe("tool_call");
 });

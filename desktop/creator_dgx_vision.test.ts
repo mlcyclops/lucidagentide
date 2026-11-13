@@ -212,9 +212,9 @@ describe("responses are validated fail-closed", () => {
   test("the remote-job ledger keeps the last valid row for a job and survives torn lines", () => {
     const remote = "0123456789abcdef0123456789abcdef";
     const jsonl = [
-      JSON.stringify({ jobId: "job_1", endpointId: "nick-dgx-vision", remoteJobId: remote, op: "upscale", width: 10, height: 10, scale: 4 }),
+      JSON.stringify({ jobId: "job_1", endpointId: "gpu-box-vision", remoteJobId: remote, op: "upscale", width: 10, height: 10, scale: 4 }),
       "{torn",
-      JSON.stringify({ jobId: "job_1", endpointId: "nick-dgx-vision", remoteJobId: remote, op: "upscale", width: 10, height: 10, scale: 4, artifactId: "art_x" }),
+      JSON.stringify({ jobId: "job_1", endpointId: "gpu-box-vision", remoteJobId: remote, op: "upscale", width: 10, height: 10, scale: 4, artifactId: "art_x" }),
       JSON.stringify({ jobId: "job_2", endpointId: "e", remoteJobId: "nope", op: "upscale", width: 1, height: 1, scale: 1 }),
     ].join("\n");
     expect(visionRemoteRow(jsonl, "job_1")?.artifactId).toBe("art_x");
