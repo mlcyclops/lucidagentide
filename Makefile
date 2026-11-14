@@ -693,6 +693,10 @@ demo-P-CTX.2b: ## P-CTX.2b (ADR-0579): omp's tool-result window sized to the cha
 demo-P-CAP.1a: ## P-CAP.1a (ADR-0589): find, lookup, count and slice over a stored tool result - real omp sessions with the real scanner, gate and tool extension: a 512,000 character MCP result whose bounded view holds none of eight keyed values, all eight returned by one artifact_lookup call with their line numbers in under 2,000 characters inside the untrusted envelope; count, find and slice on the same artifact; a record with a hidden payload refused; a local tool's artifact answered unfenced; an unknown handle an error
 	$(BUN) run harness/scripts/demo_pcap1a.ts
 
+.PHONY: demo-P-CAP.1b
+demo-P-CAP.1b: ## P-CAP.1b (ADR-0590): state tracking, and a derived fact never trusted more than its sources - real omp sessions with the real scanner, gate and tools, and a real DuckDB: artifact_track returning the final state of three variables from 6,000 ordered events in one fenced call; a clean session's memory write reaching the engine labeled untrusted; a session shown a suspicious tool result refused a memory write before any request, both when it read the content and when it derived an answer through the artifact tools; and the promotion gate blocking a fact with one suspicious, quarantined or unknown source among several, with review per source
+	$(BUN) run harness/scripts/demo_pcap1b.ts
+
 .PHONY: demo-P-MINI.1
 demo-P-MINI.1: ## P-MINI.1 (ADR-0580): mini Lucid visits and sits down to type - the seated typing scene (hands alternating, lit keys), his seat on the prompt bar top and never over the prompt, the Developer's first new session of a launch always visited, another role visited at most three times a day and never within thirty minutes, and the Off / Sometimes / Always preference with the LUCID Agent role keeping him
 	$(BUN) run desktop/scripts/demo_p_mini_1.ts

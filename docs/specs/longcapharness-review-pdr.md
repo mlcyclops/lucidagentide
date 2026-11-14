@@ -238,11 +238,15 @@ three lines in PROGRESS.md at the end. Order matters: C can run in parallel with
   the tool and returned by one `artifact_lookup` call with it. A run against a real local model belongs
   with the dev set of Session 5.
 
-### Session 4: ADR-B, P-CAP.1b, state tracking and trust propagation
+### Session 4: ADR-B, P-CAP.1b, state tracking and trust propagation (shipped, ADR-0590)
 
 - `artifact_track`; label propagation rule; `promotion_gate.ts` tests for derived facts from
   `suspicious` and `quarantined` inputs (this is the semantic-promotion keystone, over-test it).
 - `make demo-P-CAP.1b`.
+- As shipped: the rule and the session note are in `harness/security/trust_propagation.ts`. The gap was
+  wider than the tools: `memory_retain` stored every agent-written fact as `untrusted` whatever its
+  session had been shown. A session that was shown suspicious content can no longer write durable
+  memory, and the promotion gate takes every source of a derived fact.
 
 ### Session 5: ADR-C, P-BENCH.2a, dev set and scorer
 

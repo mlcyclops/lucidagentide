@@ -49,6 +49,7 @@ import {
 import { UNTRUSTED_START, UNTRUSTED_END } from "../prompt/assembler.ts";
 import { neutralizeDelimiters } from "../prompt/untrusted.ts";
 import { gateArtifactReentry, reentryBlockNotice } from "./artifact_reentry.ts";
+import { taintFor } from "../security/trust_propagation.ts"; // P-CAP.1b (ADR-0590)
 import { writeStderrNotice } from "./stderr_notice.ts";
 
 type SessionOpts = NonNullable<Parameters<typeof createAgentSession>[0]>;
@@ -71,7 +72,9 @@ export type McpContent = McpTextContent | McpImageContent;
 export interface ToolResultInput extends ToolResultMeta { content: McpContent[]; input?: unknown }
 
 /** The replacement result the gate returns (structurally compatible with omp's ToolResultEventResult). */
-export interface GatedResult { content: McpContent[]; isError?: boolean }
+/** `trust` (P-CAP.1b) is the label the content was let through with. It is for this file's own handler,
+ *  which notes a suspicious result for the session and strips the field before omp sees the result. */
+export interface GatedResult { content: McpContent[]; isError?: boolean; trust?: TrustLabel }
 
 /** Is this tool_result from an MCP server (external / untrusted) rather than a local built-in tool?
  *  omp names MCP tools `mcp__<server>_<tool>` and attaches `details.serverName` (mcp/tool-bridge.ts). */
@@ -131,7 +134,7 @@ export async function gateToolResult(
       ? await scanAndDecide(scanner, rawText, DEFAULT_POLICY)
       : await decideSpilled(scanner, ev, server, rawText, spilled, access);
   if (decision.block) return { content: [{ type: "text", text: blockNotice(server, decision.reason) }], isError: true };
-  return { content: [{ type: "text", text: wrapUntrusted(server, decision, rawText) }, ...images] };
+  return { content: [{ type: "text", text: wrapUntrusted(server, decision, rawText) }, ...images], trust: decision.trustLabel === "suspicious" ? "suspicious" : "untrusted" };
 }
 
 function failClosedDecision(reason: string): GateDecision {
@@ -224,6 +227,18 @@ export async function handleToolResult(scanner: ScannerClient, event: ToolResult
   try {
     const access = spillAccessFromContext(ctx);
     const gated = mcp ? await gateToolResult(scanner, event, access) : await gateArtifactReentry(scanner, event, access);
+    // P-CAP.1b (ADR-0590): suspicious content is about to be shown to the model. Note it for the session,
+    // so anything the session later writes to durable memory is held for review (keystone 2). The note is
+    // written before the result is returned; it never throws and never changes what is returned.
+    if (gated && !gated.isError && gated.trust === "suspicious" && access) {
+      taintFor(access.artifactsDir, access.sessionId).note({
+        session_id: access.sessionId,
+        trust_label: "suspicious",
+        source: mcp ? `mcp:${mcpServerName(event)}` : "an artifact from an external source",
+        tool_name: typeof event.toolName === "string" ? event.toolName : "unknown",
+        created_at: new Date().toISOString(),
+      });
+    }
     if (gated?.isError) {
       writeStderrNotice(
         mcp
@@ -231,7 +246,9 @@ export async function handleToolResult(scanner: ScannerClient, event: ToolResult
           : `\n🛡️  [LucidAgentIDE] withheld a read of an artifact that came from an external source\n`,
       );
     }
-    return gated;
+    if (!gated) return gated;
+    const { trust: _trust, ...result } = gated; // omp is handed its own shape
+    return result;
   } catch {
     // A failure inside the gate must not let the result through. An MCP result is withheld outright. A
     // local result is withheld only when its input names an artifact; any other local result is not this

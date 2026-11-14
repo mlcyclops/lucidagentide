@@ -3,7 +3,7 @@
 
 // harness/omp/artifact_tools_extension.ts - P-CAP.1a (ADR-0589): register artifact_find, artifact_lookup,
 // artifact_count and artifact_slice, the code primitives over a stored tool result
-// (../tools/artifact_primitives.ts).
+// (../tools/artifact_primitives.ts). P-CAP.1b (ADR-0590) adds artifact_track.
 //
 // WHAT THIS FILE ADDS TO THE PURE PRIMITIVES
 //   - the artifact: read through the session omp hands the tool (`ctx.sessionManager`), the same way the
@@ -119,6 +119,27 @@ export function artifactTools(T: any): { name: PrimName; label: string; descript
         to: T.Optional(T.Number({ description: "The last line to return. Defaults to 40 lines from the first." })),
       }),
       execute: run("artifact_slice"),
+    },
+    {
+      // P-CAP.1b (ADR-0590)
+      name: "artifact_track",
+      label: "Track state through a stored result",
+      description:
+        "Apply the events in a stored tool result, in order, to a state, and report where each key ended up. Use it whenever the answer depends on the ORDER of many records: " +
+        "the final value of a variable, a running total, how many times something changed. Never do this by reading. " +
+        "The pattern is a regular expression with a named group (?<key>...) for what the event is about and (?<value>...) for the new value. " +
+        'Modes: "last" (the value each key was last set to, the default), "sum" (the total of each key\'s numbers), "count" (events per key). ' +
+        'With follow true in mode last, a value that names another key takes that key\'s value at that moment (so "b = a" after "a = 5" leaves b at 5).',
+      approval: "read",
+      parameters: T.Object({
+        artifact: T.String({ description: HANDLE }),
+        pattern: T.String({ description: 'A regular expression with named groups, for example "(?<key>\\w+) = (?<value>\\S+)".' }),
+        mode: T.Optional(T.String({ description: 'One of "last", "sum", "count". Default "last".' })),
+        keys: T.Optional(T.Array(T.String(), { description: `Only report these keys (up to ${PRIM_LIMITS.keys}). Default: the first keys seen.` })),
+        follow: T.Optional(T.Boolean({ description: "Mode last only: resolve a value that names another key to that key's value." })),
+        ignoreCase: T.Optional(T.Boolean({ description: "Match upper and lower case alike." })),
+      }),
+      execute: run("artifact_track"),
     },
   ];
 }

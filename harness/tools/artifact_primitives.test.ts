@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { buildMatcher, countIn, findIn, lookupIn, parseHandle, PRIM_LIMITS, primHeader, runPrim, sliceOf, splitLines, tokenHits } from "./artifact_primitives.ts";
+import { buildMatcher, countIn, findIn, lookupIn, parseHandle, PRIM_LIMITS, primHeader, runPrim, sliceOf, splitLines, tokenHits, TRACK_LIMITS, trackIn } from "./artifact_primitives.ts";
 
 /** A haystack of about `chars` characters: numbered filler lines, with needles planted at known lines. */
 function haystack(chars: number, needles: Record<number, string> = {}): { text: string; lines: number } {
@@ -243,3 +243,98 @@ describe("record identity, and determinism", () => {
     expect(primHeader("3", "a\nb\nc", "mcp:github", "untrusted")).toBe("artifact://3: 3 lines, 5 characters. Source: mcp:github. Trust: untrusted.");
   });
 });
+
+// ── P-CAP.1b (ADR-0590): artifact_track ──────────────────────────────────────────
+describe("artifact_track", () => {
+  const SET = "(?<key>\\w+) = (?<value>\\S+)";
+  test("last: each key ends at the value it was last set to, with how often and where", () => {
+    const lines = ["x = 1", "y = 7", "noise", "x = 2", "z = 9", "x = 3"];
+    expect(text(trackIn(lines, { pattern: SET }))).toBe([
+      "5 events over 3 keys in 6 lines, applied in order (mode last).",
+      'key "x": 3 after 3 updates (first on L1, last on L6)',
+      'key "y": 7 after 1 update (on L2)',
+      'key "z": 9 after 1 update (on L5)',
+    ].join("\n"));
+  });
+  for (const [label, chars] of SIZES) {
+    test(`${label}: the final value of a variable set hundreds of times matches a replay by hand`, () => {
+      const out: string[] = [];
+      const want = new Map<string, string>();
+      let size = 0;
+      for (let i = 0; size < chars; i++) {
+        const key = `var${i % 37}`;
+        const value = String((i * 7919) % 100003);
+        const line = i % 5 === 0 ? `[note ${i}] nothing happens here` : `[step ${i}] ${key} = ${value}`;
+        if (i % 5 !== 0) want.set(key, value);
+        out.push(line);
+        size += line.length + 1;
+      }
+      const r = text(trackIn(out, { pattern: SET, keys: ["var0", "var17", "var36", "var99"] }));
+      for (const k of ["var0", "var17", "var36"]) expect(r).toContain(`key "${k}": ${want.get(k)} after `);
+      expect(r).toContain('key "var99": NO EVENTS.');
+      expect(r.length).toBeLessThan(600);
+    });
+  }
+  test("order decides: the same events in another order end elsewhere", () => {
+    expect(text(trackIn(["a = 1", "a = 2"], { pattern: SET }))).toContain('key "a": 2 after 2 updates');
+    expect(text(trackIn(["a = 2", "a = 1"], { pattern: SET }))).toContain('key "a": 1 after 2 updates');
+    expect(text(trackIn(["a = 1 a = 5"], { pattern: SET }))).toContain('key "a": 5 after 2 updates (first on L1, last on L1)'); // left to right on one line
+  });
+  test("follow: a value that names another key takes that key's value at that moment", () => {
+    const lines = ["a = 5", "b = a", "a = 9", "c = b", "d = d", "e = nobody"];
+    const r = text(trackIn(lines, { pattern: SET, follow: true }));
+    expect(r).toContain('key "b": 5 after 1 update'); // a was 5 when b was set; a's later change does not reach back
+    expect(r).toContain('key "a": 9 after 2 updates');
+    expect(r).toContain('key "c": 5 after 1 update');
+    expect(r).toContain('key "d": d after 1 update'); // a key naming itself is a plain value
+    expect(r).toContain('key "e": nobody after 1 update');
+    expect(text(trackIn(lines, { pattern: SET }))).toContain('key "b": a after 1 update'); // without follow, the name is the value
+  });
+  test("sum: a running total per key, with values that are not numbers counted as skipped", () => {
+    const lines = ["acct A credit 10.5", "acct B credit 3", "acct A credit -2.5", "acct A credit n/a", "acct B credit 1,000"];
+    expect(text(trackIn(lines, { pattern: "acct (?<key>\\w+) credit (?<value>\\S+)", mode: "sum" }))).toBe([
+      "5 events over 2 keys in 5 lines, applied in order (mode sum).",
+      'key "A": 8 from 2 events (first on L1, last on L4); 1 skipped as not a number',
+      'key "B": 1,003 from 2 events (first on L2, last on L5)',
+    ].join("\n"));
+  });
+  test("count: events per key, and no value group is needed", () => {
+    const lines = ["GET /a", "GET /b", "POST /a", "GET /a"];
+    expect(text(trackIn(lines, { pattern: "(?<key>GET|POST) ", mode: "count" }))).toBe([
+      "4 events over 2 keys in 4 lines, applied in order (mode count).",
+      'key "GET": 3 events (first on L1, last on L4)',
+      'key "POST": 1 event (on L3)',
+    ].join("\n"));
+  });
+  test("nothing matches: NO EVENTS, never an empty success", () => {
+    expect(text(trackIn(["x"], { pattern: SET }))).toStartWith("NO EVENTS: nothing in 1 lines matches");
+  });
+  test("the pattern must carry the groups, and bad input is refused with the reason", () => {
+    const err = (o: Record<string, unknown>): string => text(trackIn(["a = 1"], o));
+    expect(err({})).toContain("a pattern is required");
+    expect(err({ pattern: "\\w+ = \\S+" })).toContain("needs a named group (?<key>...)");
+    expect(err({ pattern: "(?<key>\\w+) = \\S+" })).toContain("mode last needs a named group (?<value>...)");
+    expect(err({ pattern: "(?<key>\\w+) = \\S+", mode: "count" })).toContain("1 events over 1 key");
+    expect(err({ pattern: SET, mode: "max" })).toContain("mode must be one of last, sum, count");
+    expect(err({ pattern: "(?<key>(unclosed) = (?<value>x)" })).toContain("not valid");
+    expect(err({ pattern: `${SET}${"x".repeat(PRIM_LIMITS.pattern)}` })).toContain("the limit is 300");
+    expect(err({ pattern: SET, keys: Array.from({ length: PRIM_LIMITS.keys + 1 }, (_, i) => `k${i}`) })).toContain("the limit is 20");
+    expect(err({ pattern: SET, keys: [""] })).toContain("non-empty");
+  });
+  test("bounded: the listing, the state, and the time", () => {
+    const many = Array.from({ length: 500 }, (_, i) => `k${i} = ${i}`);
+    const r = text(trackIn(many, { pattern: SET }));
+    expect(r.split("\n").length).toBe(2 + TRACK_LIMITS.shown);
+    expect(r).toContain(`${500 - TRACK_LIMITS.shown} more keys: name the ones you want in keys.`);
+    const flood = Array.from({ length: TRACK_LIMITS.state + 5 }, (_, i) => `k${i} = 1`);
+    expect(text(trackIn(flood, { pattern: SET }))).toContain("distinct keys; narrow the pattern");
+    let t = 0;
+    expect(text(trackIn(many.concat(many, many), { pattern: SET }, () => { t += 1500; return t; }))).toContain("took too long");
+  });
+  test("it runs through runPrim like the others, and twice gives the same bytes", () => {
+    const body = "a = 1\nb = a\na = 3";
+    expect(runPrim("artifact_track", body, { pattern: SET, follow: true })).toEqual(runPrim("artifact_track", body, { pattern: SET, follow: true }));
+    expect(text(runPrim("artifact_track", body, { pattern: SET, follow: true }))).toContain('key "b": 1 after 1 update');
+  });
+});
+

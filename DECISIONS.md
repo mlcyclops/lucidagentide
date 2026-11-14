@@ -27420,3 +27420,26 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 - Lookup's whole-token rule treats letters, digits, underscore and hyphen as part of a token. A key embedded in a longer name is not found, by design.
 - The promotion gate is not changed here: carrying a derived fact's label into memory promotion is P-CAP.1b.
 - No live model ran in this sandbox. The demo shows the mechanism on real omp sessions with a scripted model: the values are absent from the model's view without the tool and present, fenced, with it.
+
+## ADR-0590 -- P-CAP.1b: state tracking in code, and a derived fact is never trusted more than its sources (2026-11-14)
+
+**Status:** Accepted. Session 4 of `docs/specs/longcapharness-review-pdr.md`, completing ADR-B there. Extends correctness keystone 2 (the semantic promotion gate). Proof: `make demo-P-CAP.1b`, `bun test harness/security/trust_propagation.test.ts harness/memory/promotion_gate.test.ts`.
+
+**Context.** Two things were open after ADR-0589. First, the fifth primitive of the reviewed paper: applying ordered events to a state, the job a model does worst by reading. Second, the promise in the PDR that a derived fact can never launder its source. Checking how a derived fact reaches durable memory showed the gap was wider than the new tools. The agent's `memory_retain` writes were always stored as `untrusted`, whatever the session had been shown, and the code said so: the trust gate inside `vetAgentWrite` was "for the day provenance is threaded through per-fact". So a session could be shown a tool result labeled `suspicious`, restate it as a fact in its own words, and have the next session recall it. The promotion gate itself took one source artifact, so a fact computed from several could name a clean one.
+
+**Decision.**
+1. **The rule** (`harness/security/trust_propagation.ts`, `mostSevere`): something derived from several inputs carries the most severe label among them. An input that is not one of the four labels counts as `quarantined`.
+2. **A session remembers what it was shown.** When the result gate lets content through with the label `suspicious` (an MCP result, the view of a spilled one, a page of an external artifact, or an answer from the artifact tools), it writes a note for the session: in memory first, then in `lucid-taint.jsonl` beside the session's artifacts, so it survives a restart and a resume. Writing the note never throws and never changes what the gate returns. Quarantined content is not noted, because it never reaches the model.
+3. **`memory_retain` asks the session.** The label a write carries is the most severe of `untrusted`, every note, and every suspicious unpurged artifact in the spill ledger. If that label needs review, the tool refuses with the reason and the source, before any request is made. A note file or a ledger that cannot be read counts as suspicious. A tool call with no session to ask counts as quarantined.
+4. **The engine applies the same label.** The tool posts it as `sourceTrust`, and `agentRetain` combines it with `untrusted` by severity. A posted label can therefore only make a write stricter; `trusted` is never accepted, and a value outside the closed set is held.
+5. **The promotion gate takes every source.** `promoteFactGated` accepts `derivedFrom`, a list of artifact ids beside `sourceArtifactId`. Each must be found, or the fact is blocked. The fact carries the most severe label. Each source that needs review needs its own approval: one reviewed source never clears another. A stored label outside the closed set now counts as quarantined, where before it passed as unrecognized.
+6. **`artifact_track`**, a fifth read-tier tool: a regex with named groups `key` and `value` applied to the artifact top to bottom, in mode `last` (the value each key was last set to), `sum` or `count`; with `follow`, a value that names another key takes that key's value at that moment. Same bounds, time budget, provenance checks and gate as the other four.
+7. `needsReview` in the propagation module states the two blocked labels for the omp-side tools, which cannot import the promotion gate without loading the database. A test holds it equal to `BLOCKED_TRUST`.
+
+**Consequences.**
+- Taint is per session, not per fact. After suspicious content is shown, that session cannot write durable memory at all, including facts that have nothing to do with the content. That is deliberately coarse: it is the only granularity at which "does not derive from it" can be proven. The model is told to tell the user, who can add the fact in the Knowledge panel, and a new session is clean.
+- There is no approval flow yet that clears a session's note. Until one exists the note is permanent for that session.
+- `memory_retain` now needs the session omp hands a tool. A host that hands none gets a refusal instead of a write.
+- The note covers what the result gate labels. Suspicious text the user pastes into chat, or that a local tool reads from a file, is not a labeled source today and is not noted.
+- An existing row in `content_artifacts` with a label outside the four would now block a promotion that cites it.
+- No schema, event name or frozen contract changed: `derivedFrom` is an optional field on a function input, and the note is a new file beside the ledger of ADR-0578.

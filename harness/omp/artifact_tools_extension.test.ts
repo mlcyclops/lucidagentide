@@ -64,7 +64,7 @@ describe("executeArtifactTool", () => {
     const a = access({ "0": LOG });
     expect(body(await executeArtifactTool("artifact_count", { artifact: "artifact://0", pattern: "[build]" }, a))).toContain('5,999 occurrences of "[build]"');
     expect(body(await executeArtifactTool("artifact_slice", { artifact: "artifact://0", from: 3000, to: 3000 }, a))).toContain("L3000: The special magic number");
-    expect(PRIM_NAMES).toEqual(["artifact_find", "artifact_lookup", "artifact_count", "artifact_slice"]);
+    expect(PRIM_NAMES).toEqual(["artifact_find", "artifact_lookup", "artifact_count", "artifact_slice", "artifact_track"]);
   });
   test("an unknown handle is an error, never an empty success", async () => {
     for (const name of PRIM_NAMES) {
@@ -185,7 +185,7 @@ describe("the tools and the re-entry gate hold together", () => {
 
 describe("registration", () => {
   const T = { Object: (o: unknown) => ({ o }), String: (o?: unknown) => ({ s: o }), Number: (o?: unknown) => ({ n: o }), Boolean: (o?: unknown) => ({ b: o }), Optional: (o: unknown) => ({ opt: o }), Array: (i: unknown, o?: unknown) => ({ a: i, o }) };
-  test("four read-tier tools, each taking the handle", () => {
+  test("five read-tier tools, each taking the handle", () => {
     const tools = artifactTools(T);
     expect(tools.map((t) => t.name)).toEqual([...PRIM_NAMES]);
     for (const t of tools) {

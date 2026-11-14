@@ -102,5 +102,5 @@ export async function gateArtifactReentry(
   for (const r of records) trust = worseLabel(trust, r.trust_label);
   const sources = [...new Set(records.map((r) => r.source))];
   if (unvouched) sources.push("unknown");
-  return { content: [{ type: "text", text: wrapArtifactPage(ids, sources, trust, text) }, ...images] };
+  return { content: [{ type: "text", text: wrapArtifactPage(ids, sources, trust, text) }, ...images], trust: trust === "suspicious" ? "suspicious" : "untrusted" };
 }

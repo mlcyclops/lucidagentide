@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // harness/tools/artifact_primitives.ts - P-CAP.1a (ADR-0589): find, lookup, count and slice over a stored tool result.
+// P-CAP.1b (ADR-0590) adds track: apply the artifact's events, in order, to a state.
 //
 // omp keeps any tool result over its window as a session artifact and shows the model a head and a tail
 // (ADR-0578, ADR-0579). To use the middle, a model had to page through it with `read artifact://N`, which
@@ -278,8 +279,95 @@ export function sliceOf(lines: readonly string[], o: SliceOptions): PrimResult {
   return { ok: true, text: cap(out.join("\n")) };
 }
 
-export type PrimName = "artifact_find" | "artifact_lookup" | "artifact_count" | "artifact_slice";
-export const PRIM_NAMES: readonly PrimName[] = ["artifact_find", "artifact_lookup", "artifact_count", "artifact_slice"];
+export interface TrackOptions { pattern?: unknown; ignoreCase?: unknown; mode?: unknown; keys?: unknown; follow?: unknown }
+export const TRACK_MODES = ["last", "sum", "count"] as const;
+export type TrackMode = (typeof TRACK_MODES)[number];
+/** Distinct keys one call will hold state for, and keys it lists. */
+export const TRACK_LIMITS = { state: 20_000, shown: 40 } as const;
+
+/** PURE: apply the artifact's events, in order, to a state, and report where each key ended up.
+ *
+ *  An event is a match of `pattern`, a regular expression with a named group `key` and, except in `count`
+ *  mode, a named group `value`. Events are applied top to bottom, and left to right on a line.
+ *    last   the value each key was last set to (the default)
+ *    sum    the running total of each key's numeric values
+ *    count  how many events each key had
+ *  With `follow` (mode last), a value that is the name of another key takes that key's value at that
+ *  moment, so `b = a` after `a = 5` leaves b at 5.
+ *
+ *  This is the job a model does worst by reading: holding state across thousands of lines. */
+export function trackIn(lines: readonly string[], o: TrackOptions, now: Clock = Date.now): PrimResult {
+  const pattern = typeof o.pattern === "string" ? o.pattern : "";
+  if (pattern === "") return { ok: false, error: "a pattern is required: a regular expression with a named group (?<key>...) and, unless mode is count, (?<value>...)" };
+  if (pattern.length > PRIM_LIMITS.pattern) return { ok: false, error: `the pattern is ${pattern.length} characters; the limit is ${PRIM_LIMITS.pattern}` };
+  if (/[\r\n]/.test(pattern)) return { ok: false, error: "a pattern is matched one line at a time and cannot contain a line break" };
+  const mode = TRACK_MODES.find((m) => m === (o.mode ?? "last"));
+  if (!mode) return { ok: false, error: `mode must be one of ${TRACK_MODES.join(", ")}` };
+  if (!pattern.includes("(?<key>")) return { ok: false, error: "the pattern needs a named group (?<key>...) that captures what the event is about" };
+  if (mode !== "count" && !pattern.includes("(?<value>")) return { ok: false, error: `mode ${mode} needs a named group (?<value>...) that captures the new value` };
+  let re: RegExp;
+  try { re = new RegExp(pattern, o.ignoreCase === true ? "giu" : "gu"); } catch (e) { return { ok: false, error: `the regular expression is not valid: ${String((e as { message?: unknown })?.message ?? e).slice(0, 160)}` }; }
+  const rawKeys = Array.isArray(o.keys) ? o.keys : typeof o.keys === "string" ? [o.keys] : [];
+  const wanted: string[] = [];
+  for (const k of rawKeys) {
+    const key = typeof k === "string" ? k.trim() : typeof k === "number" ? String(k) : "";
+    if (key === "" || key.length > PRIM_LIMITS.key) return { ok: false, error: `every key must be non-empty and at most ${PRIM_LIMITS.key} characters` };
+    if (!wanted.includes(key)) wanted.push(key);
+  }
+  if (wanted.length > PRIM_LIMITS.keys) return { ok: false, error: `${wanted.length} keys were given; the limit is ${PRIM_LIMITS.keys} in one call` };
+  const follow = o.follow === true && mode === "last";
+
+  interface State { value: string; total: number; events: number; skipped: number; first: number; last: number }
+  const state = new Map<string, State>();
+  const started = now();
+  let events = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if ((i & 1023) === 0 && now() - started > PRIM_LIMITS.budgetMs) return { ok: false, error: TOO_SLOW };
+    const line = lines[i]!;
+    const hay = line.length > PRIM_LIMITS.regexLine ? line.slice(0, PRIM_LIMITS.regexLine) : line;
+    re.lastIndex = 0;
+    for (let m = re.exec(hay), guard = 0; m && guard < 1000; m = re.exec(hay), guard++) {
+      if (m[0] === "") re.lastIndex += 1;
+      const key = (m.groups?.key ?? "").trim();
+      if (key === "") continue;
+      let s = state.get(key);
+      if (!s) {
+        if (state.size >= TRACK_LIMITS.state) return { ok: false, error: `the pattern produced more than ${fmt(TRACK_LIMITS.state)} distinct keys; narrow the pattern` };
+        s = { value: "", total: 0, events: 0, skipped: 0, first: i, last: i };
+        state.set(key, s);
+      }
+      events += 1;
+      s.events += 1;
+      s.last = i;
+      const raw = (m.groups?.value ?? "").trim();
+      if (mode === "last") s.value = follow && state.has(raw) && raw !== key ? state.get(raw)!.value : raw;
+      else if (mode === "sum") {
+        const n = Number(raw.replace(/,/g, ""));
+        if (raw !== "" && Number.isFinite(n)) s.total += n; else s.skipped += 1;
+      }
+    }
+  }
+  if (events === 0) return { ok: true, text: `NO EVENTS: nothing in ${fmt(lines.length)} lines matches regex /${pattern}/.` };
+  const out = [`${fmt(events)} events over ${fmt(state.size)} ${state.size === 1 ? "key" : "keys"} in ${fmt(lines.length)} lines, applied in order (mode ${mode}${follow ? ", following names" : ""}).`];
+  const report = (key: string): void => {
+    const s = state.get(key);
+    if (!s) { out.push(`key "${show(key)}": NO EVENTS.`); return; }
+    const where = s.events === 1 ? `on L${s.first + 1}` : `first on L${s.first + 1}, last on L${s.last + 1}`;
+    if (mode === "last") out.push(`key "${show(key)}": ${show(s.value)} after ${fmt(s.events)} ${s.events === 1 ? "update" : "updates"} (${where})`);
+    else if (mode === "sum") out.push(`key "${show(key)}": ${fmt(Number(s.total.toFixed(6)))} from ${fmt(s.events - s.skipped)} ${s.events - s.skipped === 1 ? "event" : "events"} (${where})${s.skipped ? `; ${fmt(s.skipped)} skipped as not a number` : ""}`);
+    else out.push(`key "${show(key)}": ${fmt(s.events)} ${s.events === 1 ? "event" : "events"} (${where})`);
+  };
+  if (wanted.length > 0) for (const k of wanted) report(k);
+  else {
+    const all = [...state.keys()];
+    for (const k of all.slice(0, TRACK_LIMITS.shown)) report(k);
+    if (all.length > TRACK_LIMITS.shown) out.push(`${fmt(all.length - TRACK_LIMITS.shown)} more keys: name the ones you want in keys.`);
+  }
+  return { ok: true, text: cap(out.join("\n")) };
+}
+
+export type PrimName = "artifact_find" | "artifact_lookup" | "artifact_count" | "artifact_slice" | "artifact_track";
+export const PRIM_NAMES: readonly PrimName[] = ["artifact_find", "artifact_lookup", "artifact_count", "artifact_slice", "artifact_track"];
 
 /** PURE: run one primitive over an artifact's text. */
 export function runPrim(name: PrimName, text: string, params: Record<string, unknown>, now: Clock = Date.now): PrimResult {
@@ -287,6 +375,7 @@ export function runPrim(name: PrimName, text: string, params: Record<string, unk
   if (name === "artifact_find") return findIn(lines, params, now);
   if (name === "artifact_lookup") return lookupIn(lines, params, now);
   if (name === "artifact_count") return countIn(lines, params, now);
+  if (name === "artifact_track") return trackIn(lines, params, now);
   return sliceOf(lines, params);
 }
 
