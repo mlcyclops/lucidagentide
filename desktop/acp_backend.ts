@@ -192,6 +192,12 @@ const CODEGRAPH_EXT = repoAsset("harness", "omp", "codegraph_extension.ts");
 // knowledge base (Obsidian/folders/chat history → compiled KB). Always added when present (self-describing when
 // empty); the non-AskSage RAG path, independent of the gov gateway.
 const KNOWLEDGE_EXT = repoAsset("harness", "omp", "knowledge_extension.ts");
+// P-CAP.1a (ADR-0589): registers the read-tier artifact_find / artifact_lookup / artifact_count /
+// artifact_slice tools, so a model searches a stored tool result in code instead of paging it into its
+// context. Loaded on the master AND on every lane (a small local lane model is who needs it most). It
+// registers tools only, no hooks; the MCP result gate in the same chain scans and fences what the tools
+// return for an external artifact. Only added when the file exists.
+const ARTIFACT_TOOLS_EXT = repoAsset("harness", "omp", "artifact_tools_extension.ts");
 // P-INTERJECT.1: delivers mid-turn operator interjections into tool results (loopback drain of the
 // dev server's interject store). Loaded on the master AND lane argv, AFTER the security/MCP gates so
 // its tool_result hook sees already-wrapped content and appends OUTSIDE the untrusted envelope.
@@ -411,9 +417,10 @@ export function fleetLaneArgv(): { cmd: string; args: string[] } {
   if (!GATE) throw new Error(gateRefusal());
   const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : [];
   const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
+  const artifactToolArgs = existsSync(ARTIFACT_TOOLS_EXT) ? ["-e", ARTIFACT_TOOLS_EXT] : []; // P-CAP.1a (ADR-0589)
   const ownArgs = [...(existsSync(CHECKIN_EXT) ? ["-e", CHECKIN_EXT] : []), ...(existsSync(COMMIT_GATE_EXT) ? ["-e", COMMIT_GATE_EXT] : [])]; // P-OWN.1
   const redactArgs = existsSync(VAULT_REDACT_EXT) ? ["-e", VAULT_REDACT_EXT] : []; // last: see VAULT_REDACT_EXT
-  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, "-e", AZURE_ENTRA, ...interjectArgs, ...ownArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
+  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, "-e", AZURE_ENTRA, ...artifactToolArgs, ...interjectArgs, ...ownArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
   return { cmd: argv[0]!, args: argv.slice(1) };
 }
 
@@ -1074,6 +1081,7 @@ class Backend {
         const sandboxGrantArgs = existsSync(SANDBOX_GRANT_EXT) ? ["-e", SANDBOX_GRANT_EXT] : []; // P-SANDBOX.8: sandbox_grant_dir
         const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : []; // P-MCP-GATE.1
         const knowledgeArgs = existsSync(KNOWLEDGE_EXT) ? ["-e", KNOWLEDGE_EXT] : []; // ADR-0220: knowledge_search (non-AskSage RAG)
+        const artifactToolArgs = existsSync(ARTIFACT_TOOLS_EXT) ? ["-e", ARTIFACT_TOOLS_EXT] : []; // P-CAP.1a (ADR-0589): search a stored result in code
         const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
         const browserArgs = existsSync(BROWSER_EXT) ? ["-e", BROWSER_EXT] : []; // P-BROWSER.1: master-only, see BROWSER_EXT
         const secretArgs = existsSync(SECRET_INTAKE_EXT) ? ["-e", SECRET_INTAKE_EXT] : []; // P-SECRET-INTAKE.1: master-only, see SECRET_INTAKE_EXT
@@ -1099,7 +1107,7 @@ class Backend {
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
         // P-BOOTPERF.1 (ADR-pending): probe omp off the event loop; the engine keeps serving meanwhile.
-        const ompArgv = [await ompBinAsync(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, "-e", AZURE_ENTRA, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...secretArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...img2threejsArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
+        const ompArgv = [await ompBinAsync(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, "-e", AZURE_ENTRA, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...artifactToolArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...secretArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...img2threejsArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
         // P-SANDBOX.16 (ADR-0397): a git the host never put on PATH (MinGit, scoop, GitHub Desktop's copy)

@@ -27395,3 +27395,28 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 - A model without vision costs one failed call per engine run.
 - The capture is of the app's own window only, never the desktop or another window.
 - Verified: the renderer pipeline in a headless browser with the browser's own screenshot standing in for the Electron capture (the composer field, the search field and the panel were gray in the posted JPEG; the title bar and chat were not; pictures off posted none); the live engine route, where omp recorded an image block in the side session and called the provider, which answers 403 in this sandbox, after which the text-only retry ran. Not verified here: the Electron capture itself, and a live vision model reading the picture.
+
+## ADR-0589 -- P-CAP.1a: find, lookup, count and slice run in code over a stored tool result (2026-11-14)
+
+**Status:** Accepted. Session 3 of `docs/specs/longcapharness-review-pdr.md` (ADR-B there). Builds on ADR-0578 (spilled artifacts are scanned, recorded and fenced on re-entry) and ADR-0579 (the window sized to the model). Proof: `make demo-P-CAP.1a`, `bun test harness/tools/artifact_primitives.test.ts harness/omp/artifact_tools_extension.test.ts`.
+
+**Context.** omp keeps a tool result larger than its window as a session artifact and shows the model a head and a tail. To use the middle a model pages through it with `read artifact://N`, which spends the context the window saved, and a small model loses the thread long before the record it wants. The paper reviewed in the PDR (arXiv 2611.10463) found that exact search, keyed lookup, counting and slicing done in code are what let small models work on long inputs, and that those primitives carry across models unchanged.
+
+**Decision.**
+1. Four read-tier tools, registered by `harness/omp/artifact_tools_extension.ts` on the master session and on every lane: `artifact_find` (lines matching a pattern, with context and paging), `artifact_lookup` (up to 20 exact keys in one pass, each as a whole token), `artifact_count` (occurrences and lines, optionally the distinct values) and `artifact_slice` (an exact line range).
+2. The work is in `harness/tools/artifact_primitives.ts`: pure TypeScript with no imports, no model call, no file or network access. The same input gives the same output.
+3. **Bounded output.** At most 40 matches, 5 records per key, 400 lines, and 12,000 characters per result, whatever the artifact's size. A long line is returned as an excerpt around the match. Anything left out is stated with how to get it.
+4. **Record identity.** Every returned line carries its 1-based line number, and a column when the line is long, so a later slice or a citation points at the same record.
+5. **Nothing is never silent.** No match is reported as NOT FOUND, a missing key is named, and a handle the session does not have is an error.
+6. **A pattern is hostile input.** It is bounded at 300 characters and one line. It is literal unless `regex` is set. A regex is applied to the first 4,000 characters of each line, and every call runs under a two second budget that ends in an error, not a partial answer.
+7. **Provenance.** The tool reads the ledger of ADR-0578. A quarantined or purged artifact is refused before a byte of it is read. Every result opens with the artifact's source and trust label.
+8. **The envelope is added by the existing gate, and the tools cannot be used around it.** A handle is accepted only as `artifact://<n>`, which is the string the re-entry gate looks for in a local tool's input. For an artifact from an external source the gate scans the tool's output, wraps it in the untrusted envelope and labels it with the worse of the artifact's label and the scan's, so a derived answer never has a better label than its source. A test holds the handle spelling and the gate's matcher together.
+9. An artifact a local tool wrote is answered unfenced, as `read` answers it today (source scoping, ADR-0152).
+
+**Consequences.**
+- A model reaches a record in the middle of a 512,000 character result with one call and under 1,000 characters of context, where omp's view of that result holds none of it.
+- A regex cannot see past the first 4,000 characters of a line. A literal pattern can.
+- The tools read the whole artifact into memory per call. An artifact is bounded by what a tool returned, and the result gate already withholds an external one over 8,000,000 characters.
+- Lookup's whole-token rule treats letters, digits, underscore and hyphen as part of a token. A key embedded in a longer name is not found, by design.
+- The promotion gate is not changed here: carrying a derived fact's label into memory promotion is P-CAP.1b.
+- No live model ran in this sandbox. The demo shows the mechanism on real omp sessions with a scripted model: the values are absent from the model's view without the tool and present, fenced, with it.

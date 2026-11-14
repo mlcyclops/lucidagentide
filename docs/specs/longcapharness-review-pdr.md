@@ -224,7 +224,7 @@ three lines in PROGRESS.md at the end. Order matters: C can run in parallel with
 - The two unwired output prototypes are deleted; omp's Shell Minimizer does that job.
 - `make demo-P-CTX.2b`: real omp sessions, the overlay loaded through omp's own config loader.
 
-### Session 3: ADR-B, P-CAP.1a, find, lookup, count, slice
+### Session 3: ADR-B, P-CAP.1a, find, lookup, count, slice (shipped, ADR-0589)
 
 - `harness/tools/artifact_primitives.ts`: four tools over omp artifact ids, TypeScript only, no model
   call. Each reads the provenance ledger of ADR-0578 for the artifact's trust label.
@@ -232,6 +232,11 @@ three lines in PROGRESS.md at the end. Order matters: C can run in parallel with
   handle is an error, never an empty success.
 - `make demo-P-CAP.1a`: RULER-style multikey needle at 512K characters answered by a tier-0 model
   through `artifact_find`, zero-shot same model fails.
+- As shipped: the tools live in `harness/tools/artifact_primitives.ts` and are registered by
+  `harness/omp/artifact_tools_extension.ts`. The demo runs real omp sessions with a scripted model: no
+  live tier-0 model was available, so it shows the eight values absent from the model's view without
+  the tool and returned by one `artifact_lookup` call with it. A run against a real local model belongs
+  with the dev set of Session 5.
 
 ### Session 4: ADR-B, P-CAP.1b, state tracking and trust propagation
 
