@@ -9,7 +9,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  CARD_MAX, CARD_PREFIX, computerRows, computerState, ENDED_MAX, helpingTitle, localTaskWords, mapLocalWork, mapThisPc, parseCard, placeChoices,
+  approvalsLock, CARD_MAX, CARD_PREFIX, computerRows, computerState, ENDED_MAX, helpingTitle, localTaskWords, mapLocalWork, mapThisPc, parseCard, placeChoices,
   RENEW_WITHIN_MS, roomLabel, showsHelping, type LocalWorkView, type ThisPcView,
 } from "./fleet_computers.ts";
 import { hubActions, mapSpokeRow, type RemoteHubView, type RemoteSpokeView } from "./remote_spokes_model.ts";
@@ -110,6 +110,24 @@ describe("placeChoices: where + Agent may start", () => {
     const out = spoke({ deactivated: { since: NOW - DAY, reason: "moved" } });
     expect(placeChoices(hub([out]), NOW).map((p) => p.key)).toEqual(["local"]);
     expect(placeChoices({ available: false, plugin: "missing", reason: "x" }, NOW).map((p) => p.key)).toEqual(["local"]);
+  });
+});
+
+describe("approvalsLock: the Fleet header's Unlock shows only where a typed password signs approvals (ADR-0579)", () => {
+  const withPresence = (presence: string | null, unlocked: boolean, scopes: ("recall" | "drive" | "approve")[] = ["recall", "drive", "approve"]): RemoteHubView => {
+    const h = hub([], scopes);
+    return h.available ? { ...h, hub: { ...h.hub, presence: presence as never, presenceUnlocked: unlocked } } : h;
+  };
+  test("locked or unlocked on a password hub that may approve", () => {
+    expect(approvalsLock(withPresence("password", false))).toBe("locked");
+    expect(approvalsLock(withPresence("password", true))).toBe("unlocked");
+  });
+  test("nothing for another presence kind, a hub without approve, an unavailable hub, or none yet", () => {
+    expect(approvalsLock(withPresence("windows-hello", false))).toBeNull();
+    expect(approvalsLock(withPresence("none", false))).toBeNull();
+    expect(approvalsLock(withPresence("password", false, ["recall", "drive"]))).toBeNull();
+    expect(approvalsLock({ available: false, plugin: "stopped", reason: "x" })).toBeNull();
+    expect(approvalsLock(null)).toBeNull();
   });
 });
 

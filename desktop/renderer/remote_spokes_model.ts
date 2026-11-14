@@ -695,5 +695,9 @@ export interface RemoteApprovalView {
 }
 export type RemoteApprovalsView = { ok: true; approvals: RemoteApprovalView[] } | { ok: false; error: string };
 
+/** P-FLEET-UNLOCK.1 (ADR-0579): what Unlock and Lock answer: until when the hub's password presence key is unlocked
+ *  (null when locked), or the refusal in words (a wrong password is the plugin's own words). */
+export type PresenceAnswer = { ok: true; unlockedUntil: number | null } | { ok: false; error: string };
+
 /** What an action route answers: the spoke's reply data, or the refusal in words. */
 export type RemoteActionView = { ok: true; data: unknown } | { ok: false; error: string };

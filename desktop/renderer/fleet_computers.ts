@@ -121,6 +121,13 @@ export function placeChoices(hub: RemoteHubView, now: number): PlaceChoice[] {
   return [self, ...others];
 }
 
+/** P-FLEET-UNLOCK.1 (ADR-0579): the Fleet header's approvals lock, or null when it has no place there: only a hub that
+ *  approves with a typed presence password (add-on ADR-A105) and whose certificate may approve at all. */
+export function approvalsLock(hub: RemoteHubView | null): "locked" | "unlocked" | null {
+  if (!hub?.available || hub.hub.presence !== "password" || !hub.actions.approve) return null;
+  return hub.hub.presenceUnlocked ? "unlocked" : "locked";
+}
+
 /** A pasted connection card (or a spoke certificate) is at most this long; a card is one line of a few KB. */
 export const CARD_MAX = 16_384;
 export const CARD_PREFIX = "lucid-spoke-card:";

@@ -454,6 +454,32 @@ describe("ADR-0578: this computer and + Add a computer", () => {
     expect((await busy.call("POST", "/api/remote-spokes/this-pc/pause", {})).data).toEqual({ ok: false, error: "Another This PC job is still running." });
   });
 
+  test("ADR-0579: Unlock sends the password once and answers only until when; Lock needs nothing; a refusal is the plugin's", async () => {
+    const UNTIL = 1_800_000_000_000;
+    const r = pcRig({
+      "/host/presence/unlock": { body: { presence: { kind: "password", unlockedUntil: UNTIL, checkCode: "SECRET-ISH" }, approvals: { rememberMinutes: 480 } } },
+      "/host/presence/lock": { body: { presence: { kind: "password", unlockedUntil: null } } },
+    });
+    expect((await r.call("POST", "/api/remote-spokes/unlock", { password: "" })).data).toEqual({ ok: false, error: "type the hub's presence password" });
+    expect((await r.call("POST", "/api/remote-spokes/unlock", { password: "pw", node: NODE })).data).toEqual({ ok: false, error: "type the hub's presence password" });
+    expect((await r.call("POST", "/api/remote-spokes/unlock", { password: "x".repeat(1025) })).data).toMatchObject({ ok: false });
+    expect((await r.call("POST", "/api/remote-spokes/unlock", { password: "pw", minutes: 0 })).data).toEqual({ ok: false, error: "minutes is 1 to 1440" });
+    expect(r.calls).toEqual([]);
+    const ok = (await r.call("POST", "/api/remote-spokes/unlock", { password: "correct horse", minutes: 60 })).data;
+    expect(ok).toEqual({ ok: true, unlockedUntil: UNTIL });
+    expect(JSON.stringify(ok)).not.toContain("correct horse");
+    expect((await r.call("POST", "/api/remote-spokes/lock", {})).data).toEqual({ ok: true, unlockedUntil: null });
+    expect(r.calls.map((c) => [c.method, c.path, c.token, c.body])).toEqual([
+      ["POST", "/host/presence/unlock", TOKEN, { password: "correct horse", minutes: 60 }],
+      ["POST", "/host/presence/lock", TOKEN, {}],
+    ]);
+    const wrong = pcRig({ "/host/presence/unlock": { status: 400, body: { error: "wrong presence password" } } });
+    expect((await wrong.call("POST", "/api/remote-spokes/unlock", { password: "nope" })).data).toEqual({ ok: false, error: "wrong presence password" });
+    const old = pcRig({});
+    expect((await old.call("POST", "/api/remote-spokes/lock", {})).data).toEqual({ ok: false, error: "This needs Remote Spokes 0.10.4 or later. Update the add-on, then try again." });
+    expect((await old.call("GET", "/api/remote-spokes/unlock")).status).toBe(405);
+  });
+
   test("+ Add a computer forwards only a card or a certificate, and answers the computer it added", async () => {
     const r = pcRig({ "/host/spokes/add": { body: { node: NODE, mailbox: null } } });
     expect((await r.call("POST", "/api/remote-spokes/add", { cert: "X94X4-DTC3C" })).data).toMatchObject({ ok: false, error: expect.stringContaining("lucid-spoke-card:") });

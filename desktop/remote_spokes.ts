@@ -19,6 +19,8 @@
 //   POST /api/remote-spokes/followup    {node, task, text}       drive
 //   POST /api/remote-spokes/cancel      {node, task}             drive
 //   POST /api/remote-spokes/close       {node, task}             drive
+//   POST /api/remote-spokes/unlock      {password, minutes?}     unlock this hub's password presence key (ADR-0579);
+//   POST /api/remote-spokes/lock                                 lock it again; both answer {unlockedUntil}
 //   POST /api/remote-spokes/add         {cert}                   + Add a computer (ADR-0578): a connection card or a
 //                                       spoke certificate; the hub plugin checks and adds it
 //   GET  /api/remote-spokes/this-pc     this computer's helper (ADR-0578); GET this-pc/tasks: the work hubs run here
@@ -40,7 +42,7 @@ import { neutralizeDelimiters } from "../harness/prompt/untrusted.ts";
 import { askDigest, MAX_REMOTE_INPUT } from "./controller/remote_policy.ts";
 import {
   deactivatedLabel, mapHubSnapshot, mapTasks, MODEL_ID_RE, NODE_RE, TASK_RE,
-  type RecallEntryView, type RecallView, type RemoteActionView, type RemoteApprovalView, type RemoteApprovalsView, type RemoteHubView, type RemoteStatusView,
+  type PresenceAnswer, type RecallEntryView, type RecallView, type RemoteActionView, type RemoteApprovalView, type RemoteApprovalsView, type RemoteHubView, type RemoteStatusView,
 } from "./renderer/remote_spokes_model.ts";
 import {
   addedNode, mapLocalWork, mapThisPc, parseCard,
@@ -247,9 +249,10 @@ const THIS_PC_OPS: Readonly<Record<string, "none" | "task" | "confirm">> = {
   "this-pc/stop-task": "task", "this-pc/stop-all": "confirm",
 };
 
-/** A non-2xx answer from one of ADR-A110's host routes. A plugin older than 0.10.3 does not have them (404). */
-function hostRouteError(r: { status: number; data: unknown }): string {
-  return r.status === 404 ? "This needs Remote Spokes 0.10.3 or later. Update the add-on, then try again." : pluginError(r);
+/** A non-2xx answer from a forwarded host route (add-on ADR-A110, ADR-A112). A plugin older than `since` does not
+ *  have it (404). */
+function hostRouteError(r: { status: number; data: unknown }, since = "0.10.3"): string {
+  return r.status === 404 ? `This needs Remote Spokes ${since} or later. Update the add-on, then try again.` : pluginError(r);
 }
 
 /** The spoke's parked actions through the plugin, scanned; a string is the refusal. */
@@ -291,6 +294,27 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
     const d = asRecord(r.data);
     const head = d?.journalHead;
     const out: RemoteStatusView = { ok: true, journalHead: typeof head === "number" && Number.isSafeInteger(head) && head >= 0 ? head : 0, tasks: mapTasks(d?.tasks) };
+    return reply(out);
+  }
+
+  // P-FLEET-UNLOCK.1 (ADR-0579): unlock or lock this hub's password presence key from the Fleet window (add-on
+  // ADR-A112). The password goes to the plugin once, as an approval's does (ADR-0507 amendment): never stored, logged,
+  // echoed or put in model context. Only whether, and until when, the key is unlocked comes back.
+  if (op === "unlock" || op === "lock") {
+    if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
+    let body: Record<string, unknown> = {};
+    if (op === "unlock") {
+      const b = await strictBody(req, { password: "string", minutes: "number" }, ["password"]);
+      if (!b || typeof b.password !== "string" || !b.password) return refuse("type the hub's presence password");
+      if (b.password.length > MAX_PASSWORD) return refuse(`the presence password is at most ${MAX_PASSWORD} characters`);
+      if (b.minutes !== undefined && (typeof b.minutes !== "number" || b.minutes < 1 || b.minutes > 1440)) return refuse("minutes is 1 to 1440");
+      body = { password: b.password, ...(b.minutes !== undefined ? { minutes: b.minutes } : {}) };
+    }
+    const r = await callPlugin(deps, "POST", `/host/presence/${op}`, body, ACTION_TIMEOUT_MS);
+    if (!r.ok) return refuse(r.error);
+    if (r.status !== 200) return refuse(hostRouteError(r, "0.10.4"));
+    const until = asRecord(asRecord(r.data)?.presence)?.unlockedUntil;
+    const out: PresenceAnswer = { ok: true, unlockedUntil: typeof until === "number" && Number.isSafeInteger(until) && until > 0 ? until : null };
     return reply(out);
   }
 

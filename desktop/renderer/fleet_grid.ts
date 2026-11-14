@@ -40,10 +40,10 @@ import { fleetHome, openFleetOrbit, setFleetHome } from "./fleet_orbit.ts";
 // P-RS-LANES.1 (ADR-0551): remote spoke tasks are lanes here too. orbit_remote builds and answers their cards (the
 // per-spoke panel's own actions, through its one write path); this file only places them and counts them in the pill.
 import { onRemoteChange, onRemoteLaneClick, paintRemoteLanes, refreshRemote, remoteAnsweredAt, remoteCounts, remoteSnapshot, sendAct } from "./orbit_remote.ts";
-import { remoteLanes, taskModelChoices, type RemoteSpokeState } from "./remote_spokes_model.ts";
+import { ARM_MS, armClick, remoteLanes, taskModelChoices, type RemoteSpokeState } from "./remote_spokes_model.ts";
 // P-FLEET-COMPUTERS.1 (ADR-0578): the Computers drawer, + Add a computer and the Helping view; + Agent's place choices.
-import { helpingBadge, initFleetComputers, onThisPcChange, openComputers, openHelping, refreshThisPc } from "./fleet_computers_ui.ts";
-import { placeChoices } from "./fleet_computers.ts";
+import { helpingBadge, initFleetComputers, lockApprovals, onThisPcChange, openComputers, openHelping, openUnlock, refreshThisPc } from "./fleet_computers_ui.ts";
+import { approvalsLock, placeChoices } from "./fleet_computers.ts";
 // P-FLEET-BOARDS.1: boards are the ENGINE's (/api/fleet/boards/*); the rules this grid asks of them are pure, in fleet_boards_view.
 import { agentsOn, BOARD_AGENTS_MAX, BOARD_LAYOUTS, BOARD_NAME_MAX, boardHasNeeds, boardLayoutOf, boardNameProblem, BOARDS_MAX, EVERYTHING, findBoard, liveForPrune, needsYou, nextBoardName, nextNeedingYou, type LiveAgent, type NextJump } from "./fleet_boards_view.ts";
 // P-FLEET.L18: named lane groups - pure model; this file owns only chips, dividers and storage.
@@ -80,7 +80,8 @@ import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
 type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueuePeek" | "fleetQueueTake" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject" | "stopCall" | "repoChoices" | "repoGithub"
   | "fleetBoards" | "fleetBoardCreate" | "fleetBoardRename" | "fleetBoardRemove" | "fleetBoardMove" | "fleetBoardAgents" | "fleetBoardLayout" | "fleetBoardsPrune" // P-FLEET-BOARDS.1
-  | "addComputer" | "thisPc" | "thisPcWork" | "thisPcAct">; // P-FLEET-COMPUTERS.1 (ADR-0578)
+  | "addComputer" | "thisPc" | "thisPcWork" | "thisPcAct" // P-FLEET-COMPUTERS.1 (ADR-0578)
+  | "hubUnlock" | "hubLock">; // P-FLEET-UNLOCK.1 (ADR-0579)
 type FleetResources = FleetStatusView["resources"];
 
 export interface FleetGridDeps extends FleetFns {
@@ -299,11 +300,41 @@ export function initFleetGrid(d: FleetGridDeps): void {
   onRemoteChange(onRemoteSnapshot); // P-RS-LANES.1 (ADR-0551)
   // P-FLEET-COMPUTERS.1 (ADR-0578): the Computers drawer and this computer's own Helping view.
   initFleetComputers({
-    addComputer: d.addComputer, thisPc: d.thisPc, thisPcWork: d.thisPcWork, thisPcAct: d.thisPcAct,
+    addComputer: d.addComputer, thisPc: d.thisPc, thisPcWork: d.thisPcWork, thisPcAct: d.thisPcAct, hubUnlock: d.hubUnlock, hubLock: d.hubLock,
     localRunning: () => [...runs.values()].filter((r) => r.view.status !== "stopped").length,
     ...(d.openRemoteAdmin ? { openRemoteAdmin: d.openRemoteAdmin } : {}),
   });
   onThisPcChange(paintHelpingBtn);
+}
+
+/** P-FLEET-UNLOCK.1 (ADR-0579): when the Unlocked button was first clicked; a second click within ARM_MS locks. */
+let lockArmedAt: number | null = null;
+
+/** ADR-0579: the header's approvals lock: "Unlock approvals" while the hub's password presence key is locked,
+ *  "Approvals unlocked" while it is not, nothing for a hub that does not approve with a password. */
+function paintUnlockBtn(): void {
+  const btn = dock ? ($("[data-fleet-unlock]", dock) as HTMLElement | null) : null;
+  if (!btn) return;
+  const lock = approvalsLock(remoteSnapshot());
+  btn.hidden = lock === null;
+  if (lock === null) return;
+  btn.classList.toggle("on", lock === "unlocked");
+  const armed = lock === "unlocked" && lockArmedAt !== null && Date.now() - lockArmedAt <= ARM_MS;
+  btn.innerHTML = lock === "locked" ? `${icon("shield", 12)} Unlock approvals` : `${icon("shield", 12)} ${armed ? "Click again to lock" : "Approvals unlocked"}`;
+  btn.dataset.tip = lock === "locked"
+    ? "Approvals are locked|Type this hub's presence password once; approving a computer's waiting action then takes one click until it locks again."
+    : "Approvals are unlocked|Approving takes one click until the hub's remember window ends. Click twice to lock now.";
+}
+
+function onUnlockClick(): void {
+  const lock = approvalsLock(remoteSnapshot());
+  if (lock === "locked") { openUnlock(); return; }
+  if (lock !== "unlocked") return;
+  const step = armClick(lockArmedAt, Date.now());
+  lockArmedAt = step.armedAt;
+  if (step.act === "go") void lockApprovals();
+  paintUnlockBtn();
+  if (step.act === "arm") window.setTimeout(paintUnlockBtn, ARM_MS + 50);
 }
 
 /** ADR-0578: the header's Helping button, only while this computer helps a hub, with how many tasks run here. */
@@ -339,6 +370,7 @@ export function openFleetGrid(): void {
       <span class="share-dock-title">LUCID Fleet</span>
       <span class="fleet-headroom" id="fleetHeadroom" data-tip="Local headroom|Live CPU and memory. Agents are UNLIMITED - a new one is refused only while a metric stays at or above the tick for 30 seconds straight, so a burst never blocks you."></span>
       <button class="btn-mini fleet-add-btn fleet-next" data-fleet-next hidden data-tip="Next that needs you|Jumps to the next agent waiting for your approval or likely stuck: this board first, then your other boards, then Everything. Press again for the one after."></button>
+      <button class="btn-mini fleet-add-btn fleet-unlock-btn" data-fleet-unlock hidden></button>
       <button class="btn-mini fleet-add-btn" data-fleet-helping hidden data-tip="This computer is helping|What your hub runs on this computer now. You can pause new work, stop one task or all of them, or stop helping."></button>
       <button class="btn-mini fleet-add-btn" data-ask-lucid data-tip="Ask Lucid (Ctrl+Shift+L)|Ask about anything in this panel. He can read what is on your screen and every agent, and he opens on top of this panel.">${icon("spark", 12)} Ask</button>
       <button class="btn-mini fleet-add-btn" data-fleet-add data-tip="New agent|Say what it should work on and where it runs: This PC, or a computer you added. The Orbit map's + Agent does the same thing.">${icon("plus", 12)} Agent</button>
@@ -373,6 +405,7 @@ export function openFleetGrid(): void {
   dock.addEventListener("dblclick", onDockDblClick); // P-FLEET.FIT1: a card edge = equal shares again; P-FLEET-BOARDS.1: a board tab = rename
   paintTabs();
   paintHelpingBtn(); // ADR-0578: from the last This PC read; the first poll refreshes it
+  paintUnlockBtn(); // ADR-0579: from the last hub read
   wireAutofit();
   // P-FLEET.L13: catch-up buttons + their visibility. Both are DELEGATED on the dock: lane cards are
   // built and destroyed on every poll, so per-card listeners would leak with them (the same reason
@@ -879,6 +912,7 @@ function paintRemoteSection(): void {
 /** P-RS-LANES.1 (ADR-0551): told after every answered hub read, whoever asked (this grid's poll, the orbit, the
  *  Remote spokes view): the Remote section and the minimized pill's remote attention. */
 function onRemoteSnapshot(): void {
+  paintUnlockBtn(); // P-FLEET-UNLOCK.1 (ADR-0579)
   paintRemoteSection();
   paintPill();
   paintNeeds(); // P-FLEET-BOARDS.1: a remote approval moves the Next count and the tab dots
@@ -3183,6 +3217,7 @@ function onClick(ev: Event): void {
     if (grun) openGroupMenu(grun, gc);
     return;
   }
+  if (t.closest("[data-fleet-unlock]")) { onUnlockClick(); return; } // P-FLEET-UNLOCK.1
   if (t.closest("[data-fleet-computers]")) { openComputers(); return; } // P-FLEET-COMPUTERS.1
   if (t.closest("[data-fleet-helping]")) { openHelping(); return; }
   if (t.closest("[data-fleet-add]")) { toggleSpawnForm(); return; }

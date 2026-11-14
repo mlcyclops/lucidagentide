@@ -23,7 +23,7 @@ import { onRemoteChange, refreshRemote, remoteSnapshot } from "./orbit_remote.ts
 import { armClick, clockLabel } from "./remote_spokes_model.ts";
 import { showToast } from "./ui.ts";
 
-export interface ComputersDeps extends Pick<LucidBridge, "addComputer" | "thisPc" | "thisPcWork" | "thisPcAct"> {
+export interface ComputersDeps extends Pick<LucidBridge, "addComputer" | "thisPc" | "thisPcWork" | "thisPcAct" | "hubUnlock" | "hubLock"> {
   /** Agents running on This PC now (the Fleet grid's local lanes that have not ended). */
   localRunning: () => number;
   /** Open the Remote Spokes panel's own window, where the other steps of + Add a computer happen. */
@@ -40,7 +40,8 @@ const listeners = new Set<() => void>();
 const PC_MS = 10_000;
 const HELPING_POLL_MS = 3_000;
 
-let drawer: { kind: "computers" | "helping"; node: HTMLElement; close: () => void } | null = null;
+type DrawerKind = "computers" | "helping" | "unlock";
+let drawer: { kind: DrawerKind; node: HTMLElement; close: () => void } | null = null;
 /** Armed two-step buttons in the Helping drawer ("stop-all", "off", or a task id): when each was first clicked. */
 let armed: Record<string, number> = {};
 let helpingTimer: number | null = null;
@@ -80,7 +81,7 @@ export function refreshThisPc(force = false): Promise<void> {
 
 /** One modal at a time, closed by Done, the backdrop or Escape (captured, so the dock's own Escape does not also
  *  minimize the Fleet window). */
-function openDrawer(kind: "computers" | "helping", html: string): HTMLElement {
+function openDrawer(kind: DrawerKind, html: string): HTMLElement {
   drawer?.close();
   const ov = document.createElement("div");
   ov.className = "modal-ov";
@@ -188,6 +189,60 @@ async function addComputer(ov: HTMLElement): Promise<void> {
   showToast({ title: "Computer added", desc: "It shows in the list once it answers this hub, usually within a minute." });
   await refreshRemote();
   paintComputerList(ov);
+}
+
+// --------------------------------------------------------------------------------------------- Unlock approvals
+
+/** P-FLEET-UNLOCK.1 (ADR-0579): type the hub's presence password once; approvals then sign with one click for the
+ *  hub's remember window (Remote Spokes, Admin, Approvals). The field is cleared at once and the password is kept
+ *  nowhere here. */
+export function openUnlock(): void {
+  if (!deps) return;
+  const ov = openDrawer("unlock", `<div class="modal fleet-unlock-modal" role="dialog" aria-modal="true" aria-labelledby="fleetUnlockTitle">
+    <h2 class="modal-title" id="fleetUnlockTitle">Unlock approvals</h2>
+    <p class="modal-desc">Type this hub's presence password once. Until it locks again, approving a computer's waiting action takes one click. How long it stays unlocked is set in Remote Spokes, Admin, Approvals.</p>
+    <form data-unlock-form>
+      <label class="fleet-spawn-lbl" for="fleetUnlockPw">Presence password</label>
+      <input class="fleet-spawn-in fleet-unlock-pw" id="fleetUnlockPw" type="password" autocomplete="off" maxlength="1024" required />
+      <div class="fleet-spawn-err" data-unlock-err hidden></div>
+      <div class="modal-actions">
+        <button class="btn-mini" type="button" data-comp-close>Cancel</button>
+        <button class="btn-mini ok" type="submit" data-unlock-go>${icon("shield", 12)} Unlock</button>
+      </div>
+    </form>
+  </div>`);
+  const input = $<HTMLInputElement>("#fleetUnlockPw", ov);
+  input?.focus();
+  $("[data-unlock-form]", ov)?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    void (async () => {
+      const go = $<HTMLButtonElement>("[data-unlock-go]", ov);
+      const err = $("[data-unlock-err]", ov);
+      const password = input?.value ?? "";
+      if (input) input.value = "";
+      if (!password || !deps) return;
+      if (go) go.disabled = true;
+      const r = await deps.hubUnlock(password).catch(() => null);
+      if (go) go.disabled = false;
+      if (!r || !r.ok) {
+        if (err) { err.textContent = r ? r.error : "The engine did not answer."; err.hidden = false; }
+        input?.focus();
+        return;
+      }
+      drawer?.close();
+      showToast({ title: "Approvals unlocked", desc: r.unlockedUntil ? `Until ${clockLabel(r.unlockedUntil, Date.now())}. Approving a waiting action now takes one click.` : "Approving a waiting action now takes one click." });
+      await refreshRemote();
+    })();
+  });
+}
+
+/** Lock the hub's presence key now; the next approval asks for the password again. */
+export async function lockApprovals(): Promise<void> {
+  if (!deps) return;
+  const r = await deps.hubLock().catch(() => null);
+  if (!r || !r.ok) { showToast({ title: "Approvals not locked", desc: r ? r.error : "The engine did not answer.", tone: "warn" }); return; }
+  showToast({ title: "Approvals locked", desc: "The next approval asks for the presence password again." });
+  await refreshRemote();
 }
 
 // --------------------------------------------------------------------------------------------- This computer is helping

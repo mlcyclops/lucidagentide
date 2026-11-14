@@ -27880,3 +27880,16 @@ Unchanged on purpose: code identifiers, file names, `data-*` attributes, CSS cla
 5. **Engine routes** (`remote_spokes.ts`, UI token only): `POST /api/remote-spokes/add {cert}`, `GET /api/remote-spokes/this-pc` and `this-pc/tasks`, `POST this-pc/{pause,resume,on,off}`, `this-pc/stop-task {task}`, `this-pc/stop-all {confirm:"stop all"}`. Each forwards to the plugin's ADR-A110 host route with the engine's host token. Setup, activate, update and remove are not forwarded. A stop needs a task id and Stop all its confirmation before anything is forwarded; answers are validated (`mapThisPc`, `mapLocalWork`) and carry only what the views show (no request, card or check code). A 404 from the plugin reads "This needs Remote Spokes 0.10.3 or later".
 
 **Consequences.** The Fleet window polls This PC at most every 10 s (every 3 s while the Helping drawer is open). The Helping view names hubs only from tasks it has seen, so a computer that helps a hub with no task yet reads "This computer is ready to help". "Stop helping" is the plugin's Off, which stops helping every hub, not one: the plugin has no per-hub switch. A Linux server still pairs with the installer command. Phase 4 (Herd reads the engine's boards) is next.
+
+## ADR-0579 -- P-FLEET-UNLOCK.1: approvals unlock from the Fleet header (2026-11-14)
+
+**Status:** Accepted. Needs Remote Spokes 0.10.4 (add-on ADR-A112); an older plugin answers "This needs Remote Spokes 0.10.4 or later". Proof: `bun test desktop/remote_spokes.test.ts desktop/renderer/fleet_computers.test.ts` and the typecheck.
+
+**Context.** Owner, 2026-11-14: "This admin menu is overly complicated". To unlock approvals (add-on ADR-A105: a typed presence password keeps the hub's key unlocked for its remember window, so Approve takes one click) he had to open the Remote Spokes panel and find the Unlock field among setup, relay and provisioning.
+
+**Decision.**
+1. **Header button** (`fleet_grid.ts`): "Unlock approvals" (amber) while the hub's password presence key is locked, "Approvals unlocked" (green) while it is not, nothing for a hub whose presence is not a password or whose certificate cannot approve (`approvalsLock`, `fleet_computers.ts`). Unlocked, two clicks within ARM_MS lock it.
+2. **Dialog** (`fleet_computers_ui.ts` `openUnlock`): one password field; the field is cleared as soon as it is read, and a wrong password shows the plugin's own words. Success toasts until when it stays unlocked.
+3. **Engine** (`remote_spokes.ts`): `POST /api/remote-spokes/unlock {password, minutes?}` and `POST /api/remote-spokes/lock`, forwarded once to the plugin's `/host/presence/unlock` and `/lock`; the answer carries only `unlockedUntil`. The password follows the ADR-0507 amendment: sent once, never stored, logged, echoed or put in model context. Setting up, changing or resetting the password and the remember window stay in the panel (Admin tab).
+
+**Consequences.** Day to day the owner never opens the panel to approve. The header reads the hub summary's `presenceUnlocked`, so it turns back to "Unlock approvals" within one hub read after the window ends.

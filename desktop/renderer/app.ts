@@ -18547,6 +18547,8 @@ function wire(): void {
     thisPcWork: bridge.thisPcWork,
     thisPcAct: bridge.thisPcAct,
     openRemoteAdmin: () => void openRemoteAdmin(),
+    hubUnlock: bridge.hubUnlock, // P-FLEET-UNLOCK.1 (ADR-0579): approvals unlock from the Fleet header
+    hubLock: bridge.hubLock,
     fleetSetModel: bridge.fleetSetModel,
     interject: bridge.interject, // P-INTERJECT.2: Steer running turn on staged chips (P-PUSH.PAR1) + the per-lane Check in ask
     stopCall: bridge.stopCall, // P-LIVENESS.1: Stop command on a lane call marked likely stuck

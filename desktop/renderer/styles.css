@@ -6058,6 +6058,12 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-help-foot{display:flex;align-items:center;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
 .fleet-help-foot span{flex:1 1 auto;font-size:12px;line-height:1.45;color:var(--txt-3)}
 .fleet-help-foot .btn-mini{flex:none;white-space:nowrap}
+/* P-FLEET-UNLOCK.1 (ADR-0579): the approvals lock in the Fleet header, and its password dialog. */
+.fleet-unlock-btn{color:var(--amber);border-color:rgb(var(--amber-rgb) / .45)}
+.fleet-unlock-btn.on{color:var(--green);border-color:rgb(var(--green-rgb) / .4)}
+.modal.fleet-unlock-modal{width:min(420px,94vw);text-align:left}
+.fleet-unlock-modal .modal-desc{margin:0 0 12px;max-width:none}
+.fleet-unlock-pw{width:100%;box-sizing:border-box;margin-top:4px}
 /* P-FLEET.WT1: the worktree risk sentence wraps inside the 360px card, so the box sits on its first line.
    The span is the single text child (invariant 11); overflow-wrap keeps a long token from widening the card. */
 .fleet-spawn-wt{align-items:flex-start}
