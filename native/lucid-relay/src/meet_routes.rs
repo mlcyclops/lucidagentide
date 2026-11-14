@@ -2,7 +2,7 @@
 // caller, body and gate in the order the Python handler does, so the same request gets the same first refusal.
 
 use crate::meet::{self as m, run, Ctx, R, CAPTIONS_LIMIT_MAX};
-use crate::meet_hub::files;
+use crate::meet_hub::{files, E2EE_BODY_MAX};
 use crate::meet_json::{self as pj, obj, Obj};
 use serde_json::Value;
 use std::panic::AssertUnwindSafe;
@@ -302,6 +302,17 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/sfu/token" => |c: &mut Ctx| {
             let (who, _, peer) = peer_gate(c)?;
             c.relay.hub.sfu_token(&peer, &who)
+        },
+        "/v1/e2ee" => |c: &mut Ctx| {
+            let (who, b, peer) = peer_gate(c)?;
+            c.relay.hub.e2ee_publish(&peer, &who, b.get("epk"), b.get("sig"))
+        },
+        // a body up to E2EE_BODY_MAX (E2EE_TO_MAX wrapped keys)
+        "/v1/e2ee/keys" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(E2EE_BODY_MAX)?);
+            let peer = pj::s(&b, "peer");
+            c.gate(&who, None, &peer, "")?;
+            c.relay.hub.e2ee_keys(&peer, &who, b.get("index"), b.get("to"))
         },
         // wave3:guests
         "/v1/guest/link" => |c: &mut Ctx| {

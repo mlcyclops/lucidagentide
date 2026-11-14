@@ -30,8 +30,6 @@ const HANDSHAKE_TIMEOUT: f64 = 10.0;
 const POLL_TIMEOUT: f64 = 30.0;
 /// The guest page: no inline script or style, nothing from another origin, no framing.
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; require-trusted-types-for 'script'";
-/// The LiveKit browser client, served only when the file is next to the guest page.
-const LIVEKIT: &str = "livekit-client.umd.js";
 const GUEST_DIR: &str = "guest";
 const UNKNOWN: &str = "unknown path";
 
@@ -65,13 +63,10 @@ pub fn start(settings: &Settings, hub: Arc<Hub>, secret: Vec<u8>) -> Result<(), 
     };
     let tls = guest_tls_config(settings)?;
     let dir = guest_dir();
-    let mut statics: Vec<(String, PathBuf, &'static str)> = [("/g/", "index.html", "text/html; charset=utf-8"), ("/g/index.html", "index.html", "text/html; charset=utf-8"), ("/g/guest.js", "guest.js", "text/javascript; charset=utf-8"), ("/g/guest.css", "guest.css", "text/css; charset=utf-8")]
+    let statics: Vec<(String, PathBuf, &'static str)> = [("/g/", "index.html", "text/html; charset=utf-8"), ("/g/index.html", "index.html", "text/html; charset=utf-8"), ("/g/guest.js", "guest.js", "text/javascript; charset=utf-8"), ("/g/guest.css", "guest.css", "text/css; charset=utf-8")]
         .into_iter()
         .map(|(path, file, ctype)| (path.to_string(), dir.join(file), ctype))
         .collect();
-    if dir.join(LIVEKIT).is_file() {
-        statics.push((format!("/g/{LIVEKIT}"), dir.join(LIVEKIT), "text/javascript; charset=utf-8"));
-    }
     let listener = TcpListener::bind((settings.host.as_str(), port)).map_err(|e| format!("cannot listen on {}:{port}: {e}", settings.host))?;
     let server = Arc::new(Port { hub, settings: settings.clone(), secret, tls, statics, open: Mutex::new(HashMap::new()), total: AtomicUsize::new(0), refusals: RefusalLog::new() });
     std::thread::Builder::new()
@@ -217,7 +212,7 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Resu
             return Ok(sent.is_ok() && !close);
         }
     }
-    let known = matches!((head.method.as_str(), path.as_str()), ("GET", "/g/v1/wait" | "/g/v1/events") | ("POST", "/g/v1/knock" | "/g/v1/signal" | "/g/v1/chat" | "/g/v1/stage" | "/g/v1/consent" | "/g/v1/leave" | "/g/v1/sfu/token"));
+    let known = matches!((head.method.as_str(), path.as_str()), ("GET", "/g/v1/wait" | "/g/v1/events") | ("POST", "/g/v1/knock" | "/g/v1/signal" | "/g/v1/chat" | "/g/v1/stage" | "/g/v1/consent" | "/g/v1/leave"));
     if !known {
         let post = head.method == "POST";
         if post {
@@ -370,13 +365,10 @@ fn route(req: &mut Req, path: &str) -> R<Obj> {
             let b = req.body()?;
             hub.guests_consent(&pass, &address, b.get("request"), b.get("accepted"))
         }
-        "/g/v1/leave" => {
-            req.body()?;
-            hub.guests_leave(&pass, &address)
-        }
+        // "/g/v1/leave", the last known path
         _ => {
             req.body()?;
-            hub.guests_sfu_token(&pass, &address)
+            hub.guests_leave(&pass, &address)
         }
     }
 }
@@ -425,7 +417,8 @@ const VERBATIM: [&str; 2] = ["text", "data"];
 
 /// _guests_redact: no email address of anyone else, in any field at any depth: a string holding one becomes "", a key
 /// that is one is dropped, reactions become counts, mentions are dropped, a recording owner keeps only its kind and
-/// label, and the lobby list (other waiting people) goes.
+/// label, and the lobby list (other waiting people) goes, and so does a member's `cert` (a certificate names its
+/// holder's email address in DER).
 fn redact(value: &Value) -> Value {
     match value {
         Value::Object(o) => Value::Object(redact_obj(o)),
@@ -438,7 +431,7 @@ fn redact(value: &Value) -> Value {
 fn redact_obj(o: &Obj) -> Obj {
     let mut out = Obj::new();
     for (k, v) in o {
-        if (k == "lobby" && v.is_array()) || k == "mentions" || hide(k) != *k {
+        if (k == "lobby" && v.is_array()) || k == "mentions" || k == "cert" || hide(k) != *k {
             continue;
         }
         let value = if VERBATIM.contains(&k.as_str()) {
@@ -467,8 +460,8 @@ mod tests {
         assert_eq!(hide("1700:guest-0123456789abcdef@guest.invalid"), "1700:guest-0123456789abcdef@guest.invalid");
         assert_eq!(hide("@"), "");
         assert_eq!(hide("no address"), "no address");
-        let event = json!({"type": "chat", "principal": "ben@meet.test", "text": "mail me at ben@meet.test", "reactions": {"x": ["a@b.c", "d@e.f"]}, "mentions": ["cy@meet.test"], "assign": {"cy@meet.test": "r1"}, "stage": {"lobby": [{"name": "N"}], "lobby_count": 1}, "owner": {"kind": "individual", "id": "ben@meet.test", "label": "Ben"}});
+        let event = json!({"type": "chat", "principal": "ben@meet.test", "text": "mail me at ben@meet.test", "reactions": {"x": ["a@b.c", "d@e.f"]}, "mentions": ["cy@meet.test"], "assign": {"cy@meet.test": "r1"}, "stage": {"lobby": [{"name": "N"}], "lobby_count": 1}, "owner": {"kind": "individual", "id": "ben@meet.test", "label": "Ben"}, "members": [{"peer": "p", "cert": "-----BEGIN CERTIFICATE-----\n"}]});
         let out = redact(&event);
-        assert_eq!(out, json!({"type": "chat", "principal": "", "text": "mail me at ben@meet.test", "reactions": {"x": 2}, "assign": {}, "stage": {"lobby_count": 1}, "owner": {"kind": "individual", "label": "Ben"}}));
+        assert_eq!(out, json!({"type": "chat", "principal": "", "text": "mail me at ben@meet.test", "reactions": {"x": 2}, "assign": {}, "stage": {"lobby_count": 1}, "owner": {"kind": "individual", "label": "Ben"}, "members": [{"peer": "p"}]}));
     }
 }

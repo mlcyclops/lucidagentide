@@ -301,6 +301,7 @@ fn ended(why: &str) -> E {
         "denied" => E::Forbidden("the host did not let you in".into()),
         "expired" => E::Gone(EXPIRED.into()),
         "removed" => E::Forbidden("the host removed you from this call".into()),
+        "e2ee" => E::Forbidden(sfu::E2EE_GUESTS.into()),
         _ => E::Gone("this guest pass has ended; open the guest link again".into()),
     }
 }
@@ -830,9 +831,14 @@ impl Hub {
                     changed
                 }
                 "lobby_admit_all" => {
-                    let waiting: Vec<String> = st.guests.rec.values().filter(|r| r.room == room && r.state == "waiting").map(|r| r.id.clone()).collect();
-                    for id in &waiting {
-                        st.guests.admit(id);
+                    let waiting: Vec<(String, bool)> = st.guests.rec.values().filter(|r| r.room == room && r.state == "waiting").map(|r| (r.id.clone(), r.kind == "guest")).collect();
+                    let encrypted = st.sfu_encrypted(&room);
+                    for (id, guest) in &waiting {
+                        if *guest && encrypted {
+                            st.guests_end(id, "e2ee"); // never into a large call
+                        } else {
+                            st.guests.admit(id);
+                        }
                     }
                     !waiting.is_empty()
                 }
@@ -860,6 +866,9 @@ impl Hub {
                         Some(_) => return bad("block must be true or false"),
                     };
                     if admit {
+                        if kind == "guest" && st.sfu_encrypted(&room) {
+                            return forbidden(sfu::E2EE_GUESTS);
+                        }
                         st.guests.admit(t);
                     } else {
                         st.guests_end(t, "denied");
@@ -923,6 +932,9 @@ impl Hub {
             };
             if name.is_empty() || pj::char_len(&name) > NAME_MAX || !pj::printable(&name) {
                 return bad(format!("say your name (1 to {NAME_MAX} characters)"));
+            }
+            if st.sfu_encrypted(&link.room) {
+                return forbidden(sfu::E2EE_GUESTS);
             }
             let live = st.guests.rec.values().filter(|r| r.state != "ended");
             if live.clone().count() >= TOTAL_MAX {
@@ -1004,7 +1016,14 @@ impl Hub {
             (r.room.clone(), r.who.clone(), r.address.clone(), r.exp)
         };
         let ext = obj([("client", Value::Object(obj([("app", Value::from("guest")), ("platform", Value::from("web"))])))]);
-        let mut answer = self.join_held(st, &room, &who, &address, false, &ext)?;
+        let mut answer = match self.join_held(st, &room, &who, &address, false, &ext) {
+            Ok(answer) => answer,
+            Err(E::Forbidden(e)) if e == sfu::E2EE_GUESTS => {
+                st.guests_end(id, "e2ee"); // the call became a large one meanwhile
+                return Err(E::Forbidden(e));
+            }
+            Err(e) => return Err(e),
+        };
         let peer = pj::text_of(&answer, "peer");
         if let Some(r) = st.guests.rec.get_mut(id) {
             r.state = "in";
@@ -1200,11 +1219,6 @@ impl Hub {
         self.wake();
         r?;
         Ok(obj([("ok", Value::Bool(true))]))
-    }
-
-    pub fn guests_sfu_token(&self, header: &str, address: &str) -> R<Obj> {
-        let (peer, who) = self.guests_seat(header, address)?;
-        self.sfu_token(&peer, &who)
     }
 }
 

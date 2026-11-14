@@ -37,6 +37,7 @@ mod breakout;
 mod control;
 #[path = "meet_sfu.rs"]
 mod sfu;
+pub use sfu::E2EE_BODY_MAX;
 #[path = "meet_guests.rs"]
 pub mod guests;
 
@@ -320,6 +321,15 @@ pub struct Peer {
     tally: CallTally,
     /// Monotonic: its last live reaction (CALL_REACT_EVERY).
     react_at: f64,
+    /// The seat's client certificate PEM, the leaf as presented in its mTLS handshake ("" for a web guest). Live only:
+    /// never in state.json.
+    cert: String,
+    /// Its join said `e2ee: true` (it can encrypt frames itself).
+    e2ee: bool,
+    /// Large calls (contract E2EE-1): its ephemeral public key for this stay and the signature over it, base64, opaque
+    /// to the relay ("" until it publishes). Live only, never logged.
+    epk: String,
+    epk_sig: String,
 }
 
 impl Peer {
@@ -649,9 +659,26 @@ impl State {
         }
     }
 
-    /// _members: the people in `room` as a join answer names them ({peer, name, principal, org, weak}).
+    /// _members: the people in `room` as a join answer names them ({peer, name, principal, org, cert?, ..., weak}).
     fn members(&self, room: &str) -> Vec<Value> {
-        self.peers.values().filter(|p| p.room == room && !p.admission_pending).map(|p| Value::Object(with(&self.person(p), obj([("weak", Value::Bool(p.weak))])))).collect()
+        self.peers.values().filter(|p| p.room == room && !p.admission_pending).map(|p| Value::Object(with(&self.member(p), obj([("weak", Value::Bool(p.weak))])))).collect()
+    }
+
+    /// _member: a room seat as join answers (`you`, `members`) and `join` events name it: `person` plus `cert`, its
+    /// client certificate PEM as presented in its mTLS handshake (absent for a seat without one: a web guest). Clients
+    /// check it against their own CA before trusting a signed DTLS fingerprint (mesh) or ephemeral key (large call). A
+    /// large call's rows add `epk` and `sig` (null until published).
+    fn member(&self, p: &Peer) -> Obj {
+        let mut out = self.person(p);
+        if !p.cert.is_empty() {
+            out.insert("cert".into(), Value::from(p.cert.clone()));
+        }
+        self.sfu_member(p, &mut out);
+        out
+    }
+
+    fn member_of(&self, id: &str) -> Obj {
+        self.peers.get(id).map(|p| self.member(p)).unwrap_or_default()
     }
 
     /// _org: this person's organization {id, label} (an admin's change over relay.json), null when none.
@@ -747,8 +774,14 @@ impl State {
 
     /// _stage_event.
     fn stage_event(&mut self, room: &str, why: &str, by: &str, skip: Option<&str>) {
-        let event = obj([("type", Value::from("stage")), ("room", Value::from(room)), ("stage", self.stage_view_ext(room)), ("why", Value::from(why)), ("by", Value::from(by))]);
+        let view = self.stage_view_ext(room);
+        let leader = view.get("e2ee_leader").cloned();
+        let event = obj([("type", Value::from("stage")), ("room", Value::from(room)), ("stage", view), ("why", Value::from(why)), ("by", Value::from(by))]);
         self.broadcast(room, &event, skip);
+        // it named this key leader
+        if let Some(leader) = leader {
+            self.sfu_leader_told(room, &leader);
+        }
     }
 
     /// _stage_entry.
@@ -1045,7 +1078,7 @@ impl State {
                 self.stage_mut(room).insert("host".into(), Value::from(id.clone()));
             }
             let organizer = self.organizer_host(room, &id);
-            let person = self.person_of(&id);
+            let person = self.member_of(&id);
             let members: Vec<Value> = self.members(room).into_iter().filter(|m| m.get("peer").and_then(Value::as_str) != Some(id.as_str())).collect();
             let stage = self.stage_view_ext(room);
             self.push_peer(&id, &obj([("type", Value::from("recording_admitted")), ("members", Value::Array(members)), ("stage", stage)]));
@@ -1054,6 +1087,7 @@ impl State {
                 let by = pj::text_of(&person, "principal");
                 self.stage_event(room, "organizer", &by, Some(&id));
             }
+            self.sfu_leader_sync(room, Some(&id));
         }
     }
 
@@ -1342,7 +1376,7 @@ impl State {
     /// _wave3_each("may_join"): a slice may refuse a join (before any seat changes). `ext`: the join's body.
     fn wave3_may_join(&mut self, room: &str, who: &Identity, ext: &Obj) -> R<()> {
         self.breakout_may_join(room, who)?;
-        m::flag(ext.get("large"), "large")?; // _sfu_may_join: checked before anything changes
+        self.sfu_may_join(room, who, ext)?;
         self.guests_may_join(room, who)
     }
 
@@ -1927,6 +1961,10 @@ impl Hub {
             relay_rtt: None,
             tally: CallTally::new(),
             react_at: 0.0,
+            cert: if who.guest { String::new() } else { who.cert_pem.clone() },
+            e2ee: ext.get("e2ee") == Some(&Value::Bool(true)),
+            epk: String::new(),
+            epk_sig: String::new(),
         };
         let mut members = st.members(room);
         let recording: Vec<Value> = st.peers.values().filter(|p| p.room == room && p.recording).map(|p| Value::from(p.peer_id.clone())).collect();
@@ -1964,7 +2002,7 @@ impl Hub {
         }
         // the organizer of the scheduled meeting in this room takes the host role
         let organizer = st.organizer_host(room, &peer_id);
-        let you = st.person_of(&peer_id);
+        let you = st.member_of(&peer_id);
         if !pending {
             st.broadcast(room, &with(&obj([("type", Value::from("join"))]), you.clone()), Some(&peer_id));
             // a taken-over seat that held a role (host, presenter, grant, request, hand): the others hear where it
@@ -1974,6 +2012,7 @@ impl Hub {
             } else if took_over && stage_before.as_ref().map(|b| *b != st.stage_view(room)).unwrap_or(false) {
                 st.stage_event(room, "join", &who.principal, Some(&peer_id));
             }
+            st.sfu_leader_sync(room, Some(&peer_id));
         }
         let stage_view = st.stage_view_ext(room);
         let log = st.rooms.get(room).cloned().unwrap_or_default();

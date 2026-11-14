@@ -1438,13 +1438,18 @@ impl Ctx<'_> {
 
     /// _body: the JSON object a POST carries ({} without one).
     pub fn body(&mut self) -> R<Obj> {
+        self.body_max(BODY_MAX)
+    }
+
+    /// _body(most): the JSON object a POST carries, of at most `most` bytes.
+    pub fn body_max(&mut self, most: usize) -> R<Obj> {
         let text = self.content_length.clone().unwrap_or_default();
         let length = if text.trim().is_empty() { 0 } else { py_int(&text)? };
         if length <= 0 {
             self.body_read = true;
             return Ok(Obj::new());
         }
-        if length as usize > BODY_MAX {
+        if length as usize > most {
             return bad("request too large");
         }
         let mut raw = vec![0u8; length as usize];
