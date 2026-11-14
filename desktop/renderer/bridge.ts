@@ -137,6 +137,9 @@ export interface AgentTemplateInfo {
   tools: string[];
 }
 import type { LocalModelDef, LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3/.6: self-hosted/custom LLM providers
+import type { ResultWindow, ResultWindowSetting } from "../result_window.ts"; // P-CTX.2b (ADR-0579): pure, types only
+/** P-CTX.2b (ADR-0579): the stored tool-result window choice and what it resolves to for the chat model. */
+export interface ResultWindowView { setting: ResultWindowSetting; model: string; contextTokens: number | null; window: ResultWindow | null }
 import type { NativePickResult } from "../native_dialog.ts"; // P-FS.2 (ADR-0265): backend-opened OS folder dialog
 import type { DeviceStatus } from "../kg_device_unlock.ts"; // P-KGBIO.1 (ADR-0454): Windows Hello / Touch ID unlock
 import type { RestoredTurn } from "../session_steps.ts"; // P-RESUME.1 (ADR-0171): restored agent activity
@@ -910,6 +913,9 @@ export interface LucidBridge {
   codeGraphIngest(level: "file" | "symbol"): Promise<CodeGraphView | null>;
   /** P-KG-SYM.1: read / set whether the agent gets the read-only codegraph_query tool (set restarts the backend). */
   codeGraphAgent(): Promise<{ enabled: boolean } | null>;
+  /** P-CTX.2b (ADR-0579): read / store the tool-result window choice (applies at the next agent start). */
+  resultWindow(): Promise<ResultWindowView | null>;
+  setResultWindow(setting: ResultWindowSetting): Promise<ResultWindowView | null>;
   /** P-AGENT.2b: Agent Builder spec persistence (workspace .omp/agents/). Save validates fail-closed server-side. */
   agentList(): Promise<SpecFileSummary[]>;
   agentLoad(id: string): Promise<AgentSpec | null>;
@@ -1898,6 +1904,8 @@ export const bridge: LucidBridge = {
   codeGraph: (level) => getData(`/api/codegraph?level=${level}`),
   codeGraphIngest: (level) => post("/api/codegraph", { level }),
   codeGraphAgent: () => getData("/api/codegraph/agent"),
+  resultWindow: () => getData("/api/result-window"), // P-CTX.2b (ADR-0579)
+  setResultWindow: (setting) => post("/api/result-window", { setting }),
   agentList: async () => (await getData("/api/agent"))?.specs ?? [], // P-AGENT.2b
   agentLoad: async (id) => (await getData(`/api/agent?id=${encodeURIComponent(id)}`))?.spec ?? null, // P-AGENT.2b
   agentSave: (spec) => post("/api/agent", { spec }), // P-AGENT.2b (server validates fail-closed)

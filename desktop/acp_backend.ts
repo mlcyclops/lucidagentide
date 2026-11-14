@@ -46,8 +46,10 @@ import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, type OmpResolution, resolveOmpBin, resolveOmpBinAsync } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
 import { gatePath, gateRefusal, repoAsset, resolvedRepo } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
-import { asksageOnly, attribution, checkerModel, chosenModel, localProviderPrefixes, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, modelRolesOverlayFile, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
+import { asksageOnly, attribution, checkerModel, chosenModel, localProviderPrefixes, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, modelRolesOverlayFile, resultWindowOverlayFile, resultWindowSetting, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
 import { heavyRoleModel, writeModelRolesOverlay } from "./model_roles.ts"; // P-MODEL.8 (ADR-0448)
+import { chatModelContextWindow, resolveResultWindow, spillFromRawOutput, type ResultSpill } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
+import { writeResultWindowOverlay } from "./result_window_overlay.ts";
 import { judgeChain, resolveJudgmentProvider, writeJudgmentOverlay, type ResolvedJudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374) + P-JEV.5 (ADR-0416)
 import { bannedJudges, judgeBanEnv } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416): local judges that failed more than once
 import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
@@ -278,7 +280,13 @@ function ompConfigArgs(): string[] {
   // Rewritten every spawn (an empty map when it does not apply) so a stale role never survives a switch.
   const roles = modelRolesOverlayFile();
   writeModelRolesOverlay(roles, heavyRoleModel({ chatModel: lastModel(), locked: asksageOnly() || managedAsksageOnly(), allowed: modelAllowed }));
-  return [...args, "--config", overlay, "--config", roles];
+  // P-CTX.2b (ADR-0579): omp's tool-result window, sized to the chat model's context window when a Local
+  // Provider serves it. Rewritten every spawn (an empty map when omp's 50 KB default stands) so a small
+  // window never survives a switch to a large model. A write failure throws and the spawn rejects, named,
+  // like the two overlays above: a window the user chose must not silently fall back to 50 KB.
+  const windowFile = resultWindowOverlayFile();
+  writeResultWindowOverlay(windowFile, resolveResultWindow(resultWindowSetting(), chatModelContextWindow(lastModel(), listLocalProviders())));
+  return [...args, "--config", overlay, "--config", roles, "--config", windowFile];
 }
 
 /** P-JEV.5 (ADR-0416): everything the judge chain is built from, read live: the stored choice under the
@@ -503,7 +511,8 @@ export type ChatEvent =
   // P-EVAL.4 (ADR-0318): the tool_meta extension reported the real name (and later the pass/fail) for a
   // call already streamed as `tool`. Display + report metadata only, never a gate.
   // P-PROGRESS.1: the engine's own settle report adds `elapsedMs`.
-  | { type: "tool-meta"; id: string; name: string; ok?: boolean; elapsedMs?: number }
+  // P-CTX.2b (ADR-0579): `window` says how much of the result the model was shown when omp cut it.
+  | { type: "tool-meta"; id: string; name: string; ok?: boolean; elapsedMs?: number; window?: ResultSpill }
   // P-PROGRESS.1: the turn's progress view (every PROGRESS_TICK_MS and on each settled call) and the
   // same-folder wait. Both go through onEvent directly, never the activity sink, like `slow`.
   | { type: "progress"; progress: ProgressView }
@@ -1231,7 +1240,10 @@ class Backend {
                 const realName = this.toolNames.get(settleId);
                 this.stepsDone++;
                 this.durations.addTool(realName ?? String(u.kind ?? "tool"), elapsedMs);
-                this.emit({ type: "tool-meta", id: settleId, name: realName ?? String(u.kind ?? "tool"), ok: u.status === "completed", elapsedMs });
+                // P-CTX.2b (ADR-0579): a completed call whose result omp cut reports stored and shown bytes.
+                // A failed or withheld result reports none: nothing of it was shown.
+                const spill = u.status === "completed" ? spillFromRawOutput((u as { rawOutput?: unknown }).rawOutput) : null;
+                this.emit({ type: "tool-meta", id: settleId, name: realName ?? String(u.kind ?? "tool"), ok: u.status === "completed", elapsedMs, ...(spill ? { window: spill } : {}) });
                 this.progressTick?.();
               }
               if (u.status === "failed" || u.status === "rejected") { this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: toolFailureReason(u).reason, command: toolFailureCommand(u) || undefined, detail: toolFailureDetail(u) || undefined, severity: "low", findings: "", quarantined: false }); break; }

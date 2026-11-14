@@ -102,6 +102,10 @@ async function paneCount(d: HubDiscovery): Promise<number> {
 const text = (f: string[]) => f.join("\n");
 /** Pane tops on the first body row: 2 once a split-right is on screen. */
 const topsOnRow1 = (f: string[]) => (f[1]?.match(/╭/g) ?? []).length;
+/** A frame with the "working" spinner held still. The spinner in a pane title is picked from the wall
+ *  clock, one glyph per 200 ms (hub_tui.ts, main_pane.ts), so two frames drawn at different moments differ
+ *  in that glyph alone when the layout is the same. */
+const still = (f: string[]) => f.map((line) => line.replace(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/g, "⠋"));
 /** Pane tops anywhere in the frame: one more once any split is on screen. */
 const boxes = (f: string[]) => (text(f).match(/╭/g) ?? []).length;
 
@@ -141,8 +145,10 @@ describe("attach, detach and reattach", () => {
     const b = await client(d);
     const again = await b.until((f) => text(f).includes("herd main · 1 attached") && text(f).includes("scout") && topsOnRow1(f) === 2);
     expect(await paneCount(d)).toBe(2);
-    // Same hub, same layout: the frame matches what the first client saw, status line aside.
-    expect(again.slice(0, -1)).toEqual(seen.slice(0, -1));
+    // Same hub, same layout: the frame matches what the first client saw, status line and spinner aside.
+    // The two frames are drawn at different moments; comparing the spinner glyph made this fail whenever a
+    // redraw fell on the far side of a 200 ms tick (the Windows gate on 2026-11-14).
+    expect(still(again.slice(0, -1))).toEqual(still(seen.slice(0, -1)));
     b.att.detach();
     expect(await b.att.closed).toBe("detached");
   }, 20_000);

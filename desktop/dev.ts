@@ -187,6 +187,8 @@ import { setDefaultWindowsHide } from "./acp.ts";
 import { HeadedBrowserRevealer } from "./headed_browser_reveal.ts"; // P-BROWSER.5 (ADR-0456): show the headed browser omp's broker spawns hidden
 import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
+import { lastModel as lastChatModel, resultWindowSetting, setResultWindowSetting } from "./settings_store.ts"; // P-CTX.2b (ADR-0579)
+import { chatModelContextWindow, resolveResultWindow } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 import { discoveryHeaders, MAX_DISCOVERY_BYTES, parseDiscoveredModels, providerEnvVar, providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
 import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setSandboxWindowsMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThemeId, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, themeId, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
@@ -3170,6 +3172,15 @@ return Bun.serve({
           }
         }
         return json({ ok: true, data: { providers: listLocalProviders() } });
+      }
+      // P-CTX.2b (ADR-0579): the tool-result window. GET reports the stored choice and what it resolves to
+      // for the current chat model; POST stores a choice. The window is written at the next omp spawn.
+      if (p === "/api/result-window") {
+        if (req.method === "POST") { const b = await readBody<{ setting?: unknown }>(req); setResultWindowSetting(b.setting); }
+        const setting = resultWindowSetting();
+        const model = lastChatModel();
+        const contextTokens = chatModelContextWindow(model, listLocalProviders());
+        return json({ ok: true, data: { setting, model, contextTokens, window: resolveResultWindow(setting, contextTokens) } });
       }
       if (p === "/api/local-providers/delete" && req.method === "POST") {
         const b = await readBody<{ id?: unknown }>(req);

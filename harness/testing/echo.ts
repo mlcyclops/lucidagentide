@@ -94,6 +94,8 @@ export interface EchoSessionOptions {
   customTools?: SessionOpts["customTools"];
   /** Extensions (incl. tool_call hooks) to register on the session. */
   extensions?: SessionOpts["extensions"];
+  /** omp settings for the session (e.g. `Settings.isolated({ "tools.artifactSpillThreshold": 4 })`). */
+  settings?: SessionOpts["settings"];
 }
 
 /**
@@ -124,6 +126,7 @@ export async function createEchoSession(opts: EchoSessionOptions = {}): Promise<
     ...(opts.systemPrompt !== undefined ? { systemPrompt: opts.systemPrompt } : {}),
     ...(opts.customTools !== undefined ? { customTools: opts.customTools } : {}),
     ...(opts.extensions !== undefined ? { extensions: opts.extensions } : {}),
+    ...(opts.settings !== undefined ? { settings: opts.settings } : {}),
   });
 
   return {

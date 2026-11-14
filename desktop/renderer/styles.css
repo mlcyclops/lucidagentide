@@ -5148,6 +5148,12 @@ pre:hover .code-copy-btn,pre:focus-within .code-copy-btn{opacity:1}
 .lp-add-actions{display:flex;gap:6px;margin-top:2px}
 .lp-apply-row{display:flex;align-items:center;gap:9px;margin:8px 0 2px;flex-wrap:wrap}
 .lp-apply-note{font-size:11px;color:var(--txt-2)}
+/* P-CTX.2b (ADR-0579): the tool-output window control. The label stays on one line and the select takes
+   the rest (invariant 11); the note under it is a .set-note block. */
+.lp-window{margin:10px 0 4px}
+.lp-window-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.lp-window-label{flex:none;font-size:12px;color:var(--txt-1);white-space:nowrap}
+.lp-window-sel{flex:1 1 260px;min-width:220px}
 .lp-add-row .lp-auth-sel{flex:0 0 auto;max-width:52%}
 /* P-VAULT-DEST.1 (ADR-0478): Settings → Vault destinations (Enterprise); reuses the .lp-* row/add-form look */
 .vd-ttl{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -7521,6 +7527,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .tinline-head{padding:6px 10px 4px;border-bottom:1px solid var(--line-soft)}
 .tinline-doing{font-size:12px;color:var(--txt-1)}
 .tinline-tool{font-family:var(--mono);font-size:11px;color:var(--txt-4);margin-top:2px}
+.tinline-window{font-family:var(--mono);font-size:11px;color:var(--txt-4);margin-top:2px}
 
 .hud-progress{margin:6px 0 0;font-family:var(--mono);font-size:11px;color:var(--txt-3)}
 .hud-bar,.lane-bar{position:relative;height:3px;border-radius:2px;background:rgb(var(--tint-rgb) / .08);overflow:hidden}
