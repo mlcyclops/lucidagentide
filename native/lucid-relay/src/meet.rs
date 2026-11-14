@@ -1226,7 +1226,10 @@ fn one_request(relay: &Arc<Relay>, reader: &mut BufReader<Tls>, address: &str, d
     };
     if let Some(raw) = raw {
         // the route answered itself (raw bytes)
-        let keep = send_file(reader.get_mut(), raw, &path, der);
+        let keep = match raw {
+            Raw::File(file) => send_file(reader.get_mut(), file, &path, der),
+            Raw::Bytes(headers, body) => send_bytes(reader.get_mut(), &headers, &body, &path, der),
+        };
         log_debug(&format!("{address} \"{requestline}\" {status} -"));
         return Ok(keep && !close);
     }
@@ -1345,7 +1348,13 @@ pub fn gone(path: &str, der: Option<&[u8]>) {
 const FILE_SEND: usize = 64 * 1024;
 
 /// The answer of a route that sends raw bytes itself (Handler._run with a route returning None): its headers after
-/// the status line, Server and Date, and the part of an open file it sends.
+/// the status line, Server and Date, then the part of an open file or the bytes it sends.
+pub enum Raw {
+    File(RawFile),
+    Bytes(Vec<(&'static str, String)>, Vec<u8>),
+}
+
+/// The part of an open file a raw answer sends (`GET /v1/files/get`).
 pub struct RawFile {
     pub headers: Vec<(&'static str, String)>,
     pub file: std::fs::File,
@@ -1354,6 +1363,26 @@ pub struct RawFile {
     /// For the log lines: the file's id and who fetched it.
     pub id: String,
     pub principal: String,
+}
+
+/// Send a raw answer held in memory; false when the connection ends after it (the client went away).
+fn send_bytes(w: &mut Tls, headers: &[(&'static str, String)], body: &[u8], path: &str, der: Option<&[u8]>) -> bool {
+    let mut head = format!("HTTP/1.1 200 {}\r\nServer: {SERVER_VERSION} \r\nDate: {}\r\n", reason_phrase(200), http_date());
+    for (k, v) in headers {
+        head.push_str(&format!("{k}: {v}\r\n"));
+    }
+    head.push_str("\r\n");
+    match w.write_all(head.as_bytes()).and_then(|()| w.write_all(body)).and_then(|()| w.flush()) {
+        Ok(()) => true,
+        Err(e) => {
+            if is_client_gone(&e) {
+                gone(path, der);
+            } else {
+                log_warn(&format!("{path} failed: {e}"));
+            }
+            false
+        }
+    }
 }
 
 /// Send a raw answer, FILE_SEND bytes at a time; false when the connection ends after it (a file shorter than
@@ -1412,7 +1441,7 @@ pub struct Ctx<'a> {
     pub body_read: bool,
     pub close: bool,
     /// Set by a route that answers raw bytes itself (its JSON answer is then not sent).
-    pub raw: Option<RawFile>,
+    pub raw: Option<Raw>,
 }
 
 impl Ctx<'_> {

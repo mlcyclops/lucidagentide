@@ -37,7 +37,7 @@ mod breakout;
 mod control;
 #[path = "meet_sfu.rs"]
 mod sfu;
-pub use sfu::E2EE_BODY_MAX;
+pub use sfu::{E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
 #[path = "meet_guests.rs"]
 pub mod guests;
 
@@ -774,14 +774,8 @@ impl State {
 
     /// _stage_event.
     fn stage_event(&mut self, room: &str, why: &str, by: &str, skip: Option<&str>) {
-        let view = self.stage_view_ext(room);
-        let leader = view.get("e2ee_leader").cloned();
-        let event = obj([("type", Value::from("stage")), ("room", Value::from(room)), ("stage", view), ("why", Value::from(why)), ("by", Value::from(by))]);
+        let event = obj([("type", Value::from("stage")), ("room", Value::from(room)), ("stage", self.stage_view_ext(room)), ("why", Value::from(why)), ("by", Value::from(by))]);
         self.broadcast(room, &event, skip);
-        // it named this key leader
-        if let Some(leader) = leader {
-            self.sfu_leader_told(room, &leader);
-        }
     }
 
     /// _stage_entry.
@@ -1087,7 +1081,6 @@ impl State {
                 let by = pj::text_of(&person, "principal");
                 self.stage_event(room, "organizer", &by, Some(&id));
             }
-            self.sfu_leader_sync(room, Some(&id));
         }
     }
 
@@ -2012,7 +2005,6 @@ impl Hub {
             } else if took_over && stage_before.as_ref().map(|b| *b != st.stage_view(room)).unwrap_or(false) {
                 st.stage_event(room, "join", &who.principal, Some(&peer_id));
             }
-            st.sfu_leader_sync(room, Some(&peer_id));
         }
         let stage_view = st.stage_view_ext(room);
         let log = st.rooms.get(room).cloned().unwrap_or_default();
@@ -2668,6 +2660,7 @@ impl Hub {
         let dur = ms(dur_v, "dur_ms", DUR_MS_MAX)?;
         let mut st = self.st.lock();
         st.owned(peer_id, who)?;
+        st.sfu_caption_check(peer_id, std::iter::once(text))?;
         let room = st.peers[peer_id].room.clone();
         let (line, repeat) = Self::caption_line(&mut st, peer_id, who, text, cseq, age, dur)?;
         drop(st);
@@ -2686,6 +2679,7 @@ impl Hub {
         let mut done: Vec<(String, Obj, bool)> = Vec::new();
         let mut st = self.st.lock();
         st.owned(peer_id, who)?;
+        st.sfu_caption_check(peer_id, lines.iter().filter_map(Value::as_object).map(|o| pj::s(o, "text")).filter(|t| !t.trim().is_empty()))?;
         let room = st.peers[peer_id].room.clone();
         st.report_weak(peer_id, weak);
         let mut transit = 0i64;

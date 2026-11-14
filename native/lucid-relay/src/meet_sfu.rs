@@ -15,9 +15,10 @@
 // seat joins one only with `e2ee: true` (409 otherwise) and never as a web guest (403). The join answer adds
 // `e2ee: {required: true, stay}` (`stay`: the stay's LiveKit room, bound in what seats sign) and the rows carry each
 // seat's `cert`, `epk` and `sig`. `POST /v1/e2ee` publishes a seat's ephemeral key to the room (`e2ee_epk`);
-// `POST /v1/e2ee/keys` delivers wrapped group keys from the key leader, each only to its recipient (`e2ee_key`). The
-// key leader (`stage.e2ee_leader`) is the host when it is a certificate seat, else the earliest joined certificate
-// seat; a change is a stage event. Nothing of it is kept or logged beyond counts.
+// `POST /v1/e2ee/keys` delivers a seat's own wrapped sender key, each only to its recipient (`e2ee_key`, contract
+// E2EE-2: every member is the only source of its own key, there is no key leader); `POST /v1/e2ee/roster` fans a
+// member's signed list of the members it verified out to the others (`e2ee_roster`). Caption lines of a large call
+// must be ciphertext (409 otherwise). Nothing of it is kept or logged beyond counts.
 
 use super::*;
 use crate::meet_tls;
@@ -41,7 +42,6 @@ const CALL_TIMEOUT: f64 = 5.0;
 // wrapped group keys as opaque base64; it never holds a key.
 const E2EE_REQUIRED: &str = "this call is end-to-end encrypted and this app cannot join it";
 pub(super) const E2EE_GUESTS: &str = "guests cannot join an end-to-end encrypted large call";
-const E2EE_NOT_LEADER: &str = "only the call's key leader can send keys";
 /// An uncompressed P-384 point: 0x04 || X (48) || Y (48).
 const E2EE_EPK_BYTES: usize = 97;
 const E2EE_BAD_EPK: &str = "epk must be a P-384 public key (base64 of 97 bytes)";
@@ -51,10 +51,16 @@ const E2EE_SIG_MAX: usize = 256;
 const E2EE_BLOB_MAX: usize = 512;
 /// Recipients of one key delivery.
 const E2EE_TO_MAX: usize = 200;
-/// Key indexes 0..15 (LiveKit's key ring).
-const E2EE_INDEXES: i64 = 16;
+/// Epochs and attestation counters: JSON integers a browser holds exactly (2^53 - 1).
+const E2EE_COUNT_MAX: i64 = (1 << 53) - 1;
 /// The body of `/v1/e2ee/keys`: a key delivery to E2EE_TO_MAX recipients with the largest blobs fits.
 pub const E2EE_BODY_MAX: usize = 192 * 1024;
+/// One roster entry: {principal, peer, epk_sha256}, exactly these, with these most characters.
+const E2EE_ROSTER_FIELDS: [(&str, usize); 3] = [("principal", 320), ("peer", 64), ("epk_sha256", 128)];
+/// The body of `/v1/e2ee/roster`: a roster of MAX_LIMIT entries of the largest fields fits.
+pub const E2EE_ROSTER_BODY_MAX: usize = 640 * 1024;
+/// A caption line of a large call is the sender's ciphertext, `lme2:<epoch>:<seq>:<base64>`; anything else is refused.
+const E2EE_CAPTION_PLAIN: &str = "captions in an end-to-end encrypted call must be encrypted";
 
 /// The media server, from relay.json (checked at start).
 pub(super) struct Cfg {
@@ -78,8 +84,6 @@ pub(super) struct Sfu {
     rooms: HashMap<String, String>,
     /// room -> the identity the media server lets share a screen ("" = nobody)
     presenter: HashMap<String, String>,
-    /// room -> the key leader (peer id, None: nobody) the room was last told (sfu stays)
-    leaders: HashMap<String, Option<String>>,
     /// time of the next check against seats, and whether one runs now
     next_sync: f64,
     syncing: bool,
@@ -153,6 +157,23 @@ fn e2ee_b64(value: Body, least: usize, most: usize, message: &str) -> R<Vec<u8>>
         Some(raw) if (least..=most).contains(&raw.len()) => Ok(raw),
         _ => bad(message),
     }
+}
+
+/// _e2ee_count: an epoch or attestation counter: a JSON whole number from 0 to E2EE_COUNT_MAX.
+fn e2ee_count(value: Body, what: &str) -> R<i64> {
+    match pj::as_int(value) {
+        Some(n) if (0..=E2EE_COUNT_MAX).contains(&n) => Ok(n),
+        _ => bad(format!("{what} must be a whole number from 0 to {E2EE_COUNT_MAX}")),
+    }
+}
+
+/// E2EE_CAPTION_RE (full match): `lme2:[0-9]+:[0-9]+:[A-Za-z0-9+/=]+`.
+fn sealed_caption(text: &str) -> bool {
+    let Some(rest) = text.strip_prefix("lme2:") else { return false };
+    let mut parts = rest.splitn(3, ':');
+    let (Some(epoch), Some(seq), Some(data)) = (parts.next(), parts.next(), parts.next()) else { return false };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
+    digits(epoch) && digits(seq) && !data.is_empty() && data.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'='))
 }
 
 fn status_text(status: Option<u16>) -> String {
@@ -354,23 +375,17 @@ impl State {
         }
     }
 
-    /// _sfu_left: the seat's media server participant goes too, and the room hears a new key leader (a seat taken
-    /// over by a join: that join tells the room).
+    /// _sfu_left: the seat's media server participant goes too.
     pub(super) fn sfu_left(&mut self, peer: &Peer, why: &str) {
-        if let (Some(cfg), Some(lk_room)) = (self.sfu.cfg.clone(), self.sfu.rooms.get(&peer.room).cloned()) {
-            let (who, why) = (identity(peer), why.to_string());
-            spawn("sfu-remove", move || remove_now(&cfg, &lk_room, &who, &why));
-        }
-        if why != "moved" && why != "rejoined" {
-            self.sfu_leader_sync(&peer.room, None);
-        }
+        let (Some(cfg), Some(lk_room)) = (self.sfu.cfg.clone(), self.sfu.rooms.get(&peer.room).cloned()) else { return };
+        let (who, why) = (identity(peer), why.to_string());
+        spawn("sfu-remove", move || remove_now(&cfg, &lk_room, &who, &why));
     }
 
     /// _sfu_room_empty: the stay is over: anyone still connected to its LiveKit room goes with it.
     pub(super) fn sfu_room_empty(&mut self, room: &str) {
         self.sfu.media.remove(room);
         self.sfu.presenter.remove(room);
-        self.sfu.leaders.remove(room);
         let lk_room = self.sfu.rooms.remove(room);
         if let (Some(cfg), Some(lk_room)) = (self.sfu.cfg.clone(), lk_room) {
             spawn("sfu-delete", move || delete_room(&cfg, &lk_room, "empty"));
@@ -384,15 +399,13 @@ impl State {
             self.sfu.media.remove(&room);
             self.sfu.rooms.remove(&room);
             self.sfu.presenter.remove(&room);
-            self.sfu.leaders.remove(&room);
         }
     }
 
-    /// _sfu_stage_view: runs for every stage view: a large call's view names its key leader (`e2ee_leader`); the media
-    /// server hears only a presenter change (it then lets only that identity share a screen).
-    pub(super) fn sfu_stage_view(&mut self, room: &str, view: &mut Obj) {
+    /// _sfu_stage_view: runs for every stage view; acts only when the presenter changed (the media server then lets
+    /// only that identity share a screen).
+    pub(super) fn sfu_stage_view(&mut self, room: &str, view: &Obj) {
         let (Some(cfg), Some(lk_room)) = (self.sfu.cfg.clone(), self.sfu.rooms.get(room).cloned()) else { return };
-        view.insert("e2ee_leader".into(), self.sfu_leader(room).map(Value::from).unwrap_or(Value::Null));
         let peer = view.get("presenter").and_then(|p| p.get("peer")).map(pj::py_str).unwrap_or_default();
         let now_id = self.peers.get(&peer).filter(|p| p.room == room).map(identity).unwrap_or_default();
         let before = self.sfu.presenter.get(room).cloned().unwrap_or_default();
@@ -432,38 +445,14 @@ impl State {
         self.stays.contains_key(room) && self.sfu.media.get(room) == Some(&"sfu")
     }
 
-    /// _sfu_leader: the key leader of a large call: the host when it is a certificate seat, else the earliest joined
-    /// certificate seat (None: no certificate seat is in the call).
-    fn sfu_leader(&self, room: &str) -> Option<String> {
-        if self.sfu.media.get(room) != Some(&"sfu") {
-            return None;
+    /// _sfu_caption_check: in a large call every caption line is the sender's ciphertext (contract E2EE-2 section 5):
+    /// a line that is not refuses the whole request (409), so a client that would leak its transcript in plain text is
+    /// stopped before anything is kept. Each text is matched trimmed; `texts` is read only in a large call.
+    pub(super) fn sfu_caption_check<S: AsRef<str>>(&self, peer_id: &str, mut texts: impl Iterator<Item = S>) -> R<()> {
+        if self.sfu_encrypted(&self.peers[peer_id].room) && !texts.all(|t| sealed_caption(t.as_ref().trim())) {
+            return Err(E::Conflict(E2EE_CAPTION_PLAIN.into()));
         }
-        let host = self.stage_host(room);
-        let mut first: Option<&Peer> = None;
-        for p in self.peers.values().filter(|p| p.room == room && !p.cert.is_empty() && !p.who.guest && !p.admission_pending) {
-            if host.as_deref() == Some(p.peer_id.as_str()) {
-                return Some(p.peer_id.clone());
-            }
-            if first.map(|b| p.joined < b.joined).unwrap_or(true) {
-                first = Some(p);
-            }
-        }
-        first.map(|p| p.peer_id.clone())
-    }
-
-    /// _sfu_leader_told: a stage event went to the room (State::stage_event): it named this leader.
-    pub(super) fn sfu_leader_told(&mut self, room: &str, leader: &Value) {
-        self.sfu.leaders.insert(room.to_string(), leader.as_str().map(str::to_string));
-    }
-
-    /// _sfu_leader_sync: a large call's key leader changed without a stage event saying so (a join, a departure): one
-    /// now, `why: "e2ee_leader"`.
-    pub(super) fn sfu_leader_sync(&mut self, room: &str, skip: Option<&str>) {
-        let seats = self.peers.values().filter(|p| p.room == room).count();
-        if seats > 0 && self.sfu_encrypted(room) && self.sfu_leader(room) != self.sfu.leaders.get(room).cloned().flatten() {
-            self.stage_event(room, "e2ee_leader", "", skip);
-            log_info(&format!("e2ee leader room={room} seats={seats}"));
-        }
+        Ok(())
     }
 
     /// _sfu_e2ee_seat: the caller's own seat in a large call, ready for keys.
@@ -619,21 +608,17 @@ impl Hub {
         Ok(obj([("ok", Value::Bool(true))]))
     }
 
-    /// `POST /v1/e2ee/keys {peer, index, to: [{peer, blob}]}` -> `{ok, delivered}`: the key leader's wrapped group key
-    /// for each recipient, delivered to that seat only as `e2ee_key {from, index, blob}`. A recipient that is not (or
-    /// not yet) a member of the call is skipped (`delivered` counts the rest). Anyone but the current key leader: 403
-    /// (before the body is looked at).
-    pub fn e2ee_keys(&self, peer_id: &str, who: &Identity, index: Body, to: Body) -> R<Obj> {
+    /// `POST /v1/e2ee/keys {peer, epoch, to: [{peer, blob}]}` -> `{ok, delivered}`: the seat's own sender key of that
+    /// epoch, wrapped for each recipient, delivered to that seat only as `e2ee_key {from, epoch, blob}`. Any seat of
+    /// the large call may send its own keys (there is no key leader). A recipient that is not (or not yet) an admitted
+    /// seat of the call, or the sender itself, is skipped (`delivered` counts the rest). Receivers keep only newer
+    /// epochs: the relay does not order them.
+    pub fn e2ee_keys(&self, peer_id: &str, who: &Identity, epoch: Body, to: Body) -> R<Obj> {
         let mut st = self.st.lock();
-        let r = (|| -> R<(String, i64, usize, usize)> {
+        let r = (|| -> R<(String, usize, usize)> {
             st.sfu_e2ee_seat(peer_id, who)?;
             let room = st.peers[peer_id].room.clone();
-            if st.sfu_leader(&room).as_deref() != Some(peer_id) {
-                return forbidden(E2EE_NOT_LEADER);
-            }
-            let Some(index) = pj::as_int(index).filter(|i| (0..E2EE_INDEXES).contains(i)) else {
-                return bad(format!("index must be a whole number from 0 to {}", E2EE_INDEXES - 1));
-            };
+            let epoch = e2ee_count(epoch, "epoch")?;
             let Some(to) = to.and_then(Value::as_array).filter(|t| (1..=E2EE_TO_MAX).contains(&t.len())) else {
                 return bad(format!("to must list 1 to {E2EE_TO_MAX} recipients ({{peer, blob}})"));
             };
@@ -649,19 +634,60 @@ impl Hub {
             }
             let mut delivered = 0;
             for (target, blob) in &wraps {
-                if !st.peers.get(*target).is_some_and(|seat| seat.room == room && !seat.admission_pending) {
+                if *target == peer_id || !st.peers.get(*target).is_some_and(|seat| seat.room == room && !seat.admission_pending) {
                     continue;
                 }
-                st.push_peer(target, &obj([("type", Value::from("e2ee_key")), ("from", Value::from(peer_id)), ("index", Value::from(index)), ("blob", Value::from(*blob))]));
+                st.push_peer(target, &obj([("type", Value::from("e2ee_key")), ("from", Value::from(peer_id)), ("epoch", Value::from(epoch)), ("blob", Value::from(*blob))]));
                 delivered += 1;
             }
-            Ok((room, index, wraps.len(), delivered))
+            Ok((room, wraps.len(), delivered))
         })();
         drop(st);
         self.wake();
-        let (room, index, sent, delivered) = r?;
-        log_info(&format!("e2ee keys room={room} principal={} index={index} to={sent} delivered={delivered}", who.principal));
+        let (room, sent, delivered) = r?;
+        log_info(&format!("e2ee keys room={room} principal={} to={sent} delivered={delivered}", who.principal));
         Ok(obj([("ok", Value::Bool(true)), ("delivered", Value::from(delivered))]))
+    }
+
+    /// `POST /v1/e2ee/roster {peer, seq, sig, roster: [{principal, peer, epk_sha256}]}` -> `{ok}`: the seat's signed
+    /// attestation of the members it verified, passed to every other admitted seat of the call as
+    /// `e2ee_roster {from, roster_seq, roster, sig}` (`roster_seq`: the attestation's `seq`; an event's own `seq` is its
+    /// queue number). Never stored: a later joiner hears the next one (every 20 s). The relay checks only shapes and
+    /// sizes; members verify the signature and the order.
+    pub fn e2ee_roster(&self, peer_id: &str, who: &Identity, seq: Body, sig: Body, roster: Body) -> R<Obj> {
+        let mut st = self.st.lock();
+        let r = (|| -> R<(String, usize)> {
+            st.sfu_e2ee_seat(peer_id, who)?;
+            let seq = e2ee_count(seq, "seq")?;
+            e2ee_b64(sig, 8, E2EE_SIG_MAX, &format!("sig must be a signature (base64 of at most {E2EE_SIG_MAX} bytes)"))?;
+            let most = st.sfu.cfg.as_ref().map(|c| c.max).unwrap_or_default();
+            let Some(entries) = roster.and_then(Value::as_array).filter(|r| (1..=most).contains(&r.len())) else {
+                return bad(format!("roster must list 1 to {most} members"));
+            };
+            let entry_ok = |item: &Value| {
+                item.as_object().is_some_and(|o| {
+                    o.len() == E2EE_ROSTER_FIELDS.len() && E2EE_ROSTER_FIELDS.iter().all(|(k, n)| o.get(*k).and_then(Value::as_str).is_some_and(|v| (1..=*n).contains(&pj::char_len(v))))
+                })
+            };
+            if !entries.iter().all(entry_ok) {
+                return bad("each roster entry is {principal, peer, epk_sha256}, short texts");
+            }
+            let room = st.peers[peer_id].room.clone();
+            let event = obj([
+                ("type", Value::from("e2ee_roster")),
+                ("from", Value::from(peer_id)),
+                ("roster_seq", Value::from(seq)),
+                ("roster", Value::Array(entries.clone())),
+                ("sig", sig.cloned().unwrap_or(Value::Null)),
+            ]);
+            st.broadcast(&room, &event, Some(peer_id));
+            Ok((room, entries.len()))
+        })();
+        drop(st);
+        self.wake();
+        let (room, members) = r?;
+        m::log_debug(&format!("e2ee roster room={room} principal={} members={members}", who.principal));
+        Ok(obj([("ok", Value::Bool(true))]))
     }
 }
 
@@ -724,7 +750,7 @@ mod tests {
     }
 
     #[test]
-    fn large_calls_carry_certs_keys_and_a_key_leader() {
+    fn large_calls_carry_certs_sender_keys_rosters_and_sealed_captions() {
         let h = Hub::new(None, &[], 168.0, 30.0, 365.0, None, Arc::new(LinkStats::new()));
         // a media server nobody listens on: leaving seats are removed from it on their own threads
         h.st.lock().sfu.cfg = Some(Arc::new(Cfg { url: "ws://127.0.0.1:9".into(), host: "127.0.0.1".into(), port: 9, tls: false, key: "k".into(), secret: b"s".to_vec(), threshold: 9, max: 100 }));
@@ -740,7 +766,6 @@ mod tests {
         assert_eq!(a["e2ee"], serde_json::json!({"required": true, "stay": stay}));
         assert_eq!(a["you"]["cert"], Value::from(ann.cert_pem.clone()));
         assert_eq!((&a["you"]["epk"], &a["you"]["sig"]), (&Value::Null, &Value::Null));
-        assert_eq!(a["stage"]["e2ee_leader"], Value::from(ap.clone()));
         let later = body(serde_json::json!({"e2ee": true}));
         let bp = h.join("big", &ben, "", false, Some(&later)).unwrap()["peer"].as_str().unwrap().to_string();
         let cp = h.join("big", &cy, "", false, Some(&later)).unwrap()["peer"].as_str().unwrap().to_string();
@@ -762,25 +787,56 @@ mod tests {
         let row = h.st.lock().members("big").into_iter().find(|m| m["peer"].as_str() == Some(ap.as_str())).unwrap();
         assert_eq!((row["epk"].as_str(), row["sig"].as_str()), (Some(point.as_str()), Some(sig.as_str())));
 
-        // only the leader sends keys (refused before the body is read), each blob only to its recipient
-        assert_eq!(refusal(h.e2ee_keys(&bp, &ben, Some(&Value::from(99)), None)), E2EE_NOT_LEADER);
-        let to = serde_json::json!([{"peer": bp, "blob": "AAAA"}, {"peer": "gone", "blob": "AAAA"}]);
+        // every seat sends its own sender key, each blob only to its recipient (never back to the sender)
+        assert!(a["stage"].get("e2ee_leader").is_none());
+        let to = serde_json::json!([{"peer": bp, "blob": "AAAA"}, {"peer": "gone", "blob": "AAAA"}, {"peer": ap, "blob": "AAAA"}]);
         assert_eq!(h.e2ee_keys(&ap, &ann, Some(&Value::from(0)), Some(&to)).unwrap()["delivered"], Value::from(1));
-        assert_eq!(events_of(&h, &bp, "e2ee_key")[0]["from"], Value::from(ap.clone()));
-        assert!(events_of(&h, &cp, "e2ee_key").is_empty());
-        assert_eq!(refusal(h.e2ee_keys(&ap, &ann, Some(&Value::from(16)), Some(&to))), "index must be a whole number from 0 to 15");
+        let got = &events_of(&h, &bp, "e2ee_key")[0];
+        assert_eq!((got["from"].as_str(), &got["epoch"]), (Some(ap.as_str()), &Value::from(0)));
+        assert!(events_of(&h, &cp, "e2ee_key").is_empty() && events_of(&h, &ap, "e2ee_key").is_empty());
+        let most = E2EE_COUNT_MAX;
+        assert_eq!(h.e2ee_keys(&cp, &cy, Some(&Value::from(most)), Some(&serde_json::json!([{"peer": ap, "blob": "AAAA"}]))).unwrap()["delivered"], Value::from(1));
+        let bad_epoch = "epoch must be a whole number from 0 to 9007199254740991";
+        for epoch in [Value::from(most + 1), Value::from(-1), Value::Bool(true), Value::from("0"), Value::from(1.5), Value::Null] {
+            assert_eq!(refusal(h.e2ee_keys(&ap, &ann, Some(&epoch), Some(&to))), bad_epoch, "{epoch}");
+        }
         assert_eq!(refusal(h.e2ee_keys(&ap, &ann, Some(&Value::from(1)), Some(&serde_json::json!([])))), "to must list 1 to 200 recipients ({peer, blob})");
         assert_eq!(refusal(h.e2ee_keys(&ap, &ann, Some(&Value::from(1)), Some(&serde_json::json!([{"blob": "AAAA"}])))), "each recipient needs its peer and a blob");
 
-        // the host leaves: the longest-present seat hosts and leads the keys, and the room hears it at once
+        // a signed roster goes to the other members, never kept
+        let entry = serde_json::json!({"principal": "ann@x", "peer": ap, "epk_sha256": "f".repeat(64)});
+        let roster = serde_json::json!([entry]);
+        h.e2ee_roster(&ap, &ann, Some(&Value::from(3)), Some(&Value::from(sig.clone())), Some(&roster)).unwrap();
+        assert!(events_of(&h, &ap, "e2ee_roster").is_empty());
+        let heard = &events_of(&h, &cp, "e2ee_roster")[0];
+        assert_eq!(heard.keys().map(String::as_str).collect::<Vec<_>>(), ["type", "from", "roster_seq", "roster", "sig", "seq"]);
+        assert_eq!((heard["from"].as_str(), &heard["roster_seq"], &heard["roster"]), (Some(ap.as_str()), &Value::from(3), &roster));
+        let bad_entry = "each roster entry is {principal, peer, epk_sha256}, short texts";
+        for item in [serde_json::json!("x"), serde_json::json!({"principal": "a", "peer": "p"}), serde_json::json!({"principal": "a", "peer": "p", "epk_sha256": "f", "extra": "1"}), serde_json::json!({"principal": 7, "peer": "p", "epk_sha256": "f"}), serde_json::json!({"principal": "a", "peer": "p".repeat(65), "epk_sha256": "f"})] {
+            assert_eq!(refusal(h.e2ee_roster(&ap, &ann, Some(&Value::from(4)), Some(&Value::from(sig.clone())), Some(&serde_json::json!([item])))), bad_entry);
+        }
+        assert_eq!(refusal(h.e2ee_roster(&ap, &ann, Some(&Value::from(4)), Some(&Value::from(sig.clone())), Some(&serde_json::json!([])))), "roster must list 1 to 100 members");
+
+        // captions of a large call are ciphertext; plain text is refused whole
+        let sealed = format!("lme2:3:1:{}", pj::b64(&[1u8; 40]));
+        assert!(sealed_caption(&sealed));
+        for text in ["the budget is approved", "lme2:3:1:", "lme2:x:1:QUJD", "lme2:3:1:QUJD!", "LME2:3:1:QUJD", "lme2:3:1:QU:JD"] {
+            assert!(!sealed_caption(text), "{text}");
+            assert_eq!(refusal(h.caption(&ap, &ann, text, Some(&Value::from(1)), None, None)), E2EE_CAPTION_PLAIN, "{text}");
+        }
+        let lines = serde_json::json!([{"text": sealed, "cseq": 1}, {"text": "the budget is approved", "cseq": 2}]);
+        assert_eq!(refusal(h.captions(&ap, &ann, Some(&lines), None, None)), E2EE_CAPTION_PLAIN);
+        assert!(events_of(&h, &bp, "caption").is_empty());
+        assert_eq!(h.caption(&ap, &ann, &sealed, Some(&Value::from(1)), None, None).unwrap()["text"], Value::from(sealed.clone()));
+
+        // the host leaves: nobody leads keys, any seat still sends its own
         h.leave(&ap, &ann).unwrap();
         let stage = events_of(&h, &cp, "stage").into_iter().find(|e| pj::text_of(e, "why") == "leave").unwrap();
-        assert_eq!(stage["stage"]["e2ee_leader"], Value::from(bp.clone()));
-        assert_eq!(refusal(h.e2ee_keys(&cp, &cy, Some(&Value::from(1)), Some(&to))), E2EE_NOT_LEADER);
-        assert_eq!(h.e2ee_keys(&bp, &ben, Some(&Value::from(1)), Some(&serde_json::json!([{"peer": cp, "blob": "AAAA"}]))).unwrap()["delivered"], Value::from(1));
+        assert!(stage["stage"].get("e2ee_leader").is_none());
+        assert_eq!(h.e2ee_keys(&cp, &cy, Some(&Value::from(2)), Some(&serde_json::json!([{"peer": bp, "blob": "AAAA"}]))).unwrap()["delivered"], Value::from(1));
 
         // nothing of it in state.json
         let snapshot = h.st.lock().snapshot();
-        assert!(!snapshot.contains("e2ee") && !snapshot.contains("BEGIN CERTIFICATE") && !snapshot.contains(&point));
+        assert!(!snapshot.contains("e2ee") && !snapshot.contains("BEGIN CERTIFICATE") && !snapshot.contains(&point) && !snapshot.contains(&"f".repeat(64)));
     }
 }

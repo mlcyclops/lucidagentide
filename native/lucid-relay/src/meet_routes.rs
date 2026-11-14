@@ -2,8 +2,10 @@
 // caller, body and gate in the order the Python handler does, so the same request gets the same first refusal.
 
 use crate::meet::{self as m, run, Ctx, R, CAPTIONS_LIMIT_MAX};
-use crate::meet_hub::{files, E2EE_BODY_MAX};
+use crate::meet_hub::{files, E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
 use crate::meet_json::{self as pj, obj, Obj};
+use crate::meet_tls::{crl_path, read_bytes};
+use crate::meet_x509::pem_blocks;
 use serde_json::Value;
 use std::panic::AssertUnwindSafe;
 
@@ -117,6 +119,8 @@ fn get_route(path: &str) -> Option<Route> {
             c.gate(&who, None, &peer, "")?;
             c.relay.hub.tools_board_view(&peer, &who)
         },
+        // wave3:large-calls
+        "/v1/crl" => crl,
         // wave3:guests
         "/v1/lobby" => |c: &mut Ctx| {
             let who = c.who(false)?;
@@ -312,7 +316,14 @@ fn post_route(path: &str) -> Option<Route> {
             let (who, b) = (c.who(false)?, c.body_max(E2EE_BODY_MAX)?);
             let peer = pj::s(&b, "peer");
             c.gate(&who, None, &peer, "")?;
-            c.relay.hub.e2ee_keys(&peer, &who, b.get("index"), b.get("to"))
+            c.relay.hub.e2ee_keys(&peer, &who, b.get("epoch"), b.get("to"))
+        },
+        // a body up to E2EE_ROSTER_BODY_MAX (a roster of the largest call)
+        "/v1/e2ee/roster" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(E2EE_ROSTER_BODY_MAX)?);
+            let peer = pj::s(&b, "peer");
+            c.gate(&who, None, &peer, "")?;
+            c.relay.hub.e2ee_roster(&peer, &who, b.get("seq"), b.get("sig"), b.get("roster"))
         },
         // wave3:guests
         "/v1/guest/link" => |c: &mut Ctx| {
@@ -517,6 +528,27 @@ fn files_chunk(c: &mut Ctx) -> R<Obj> {
     c.relay.hub.files_chunk_write(part, &data)
 }
 
+/// `GET /v1/crl`: every CRL this relay checks client certificates against (the `crl` setting's file, or the bundle in
+/// `state_dir`: the root CA's CRL, then the signer's), each one's DER exactly as its issuer signed it, back to back, as
+/// `application/pkix-crl`. Members check them against the CA themselves (contract E2EE-2 section 4). 404 when the
+/// relay has none.
+fn crl(c: &mut Ctx) -> R<Obj> {
+    c.who(false)?;
+    let data = crl_path(&c.relay.settings).map(|p| read_bytes(&p)).unwrap_or_default();
+    let body: Vec<u8> = pem_blocks(&data, "X509 CRL").into_iter().flat_map(|(_, der)| der).collect();
+    if body.is_empty() {
+        return Err(m::E::NotFound("this relay has no revocation list".into()));
+    }
+    let headers = vec![
+        ("Content-Type", "application/pkix-crl".to_string()),
+        ("Content-Length", body.len().to_string()),
+        ("Cache-Control", "no-store".to_string()),
+        ("X-Content-Type-Options", "nosniff".to_string()),
+    ];
+    c.raw = Some(m::Raw::Bytes(headers, body));
+    Ok(Obj::new())
+}
+
 /// `GET /v1/files/get?session=|peer=&id=&offset=&length=`: the file's bytes (or that range of them), always as an
 /// attachment of type application/octet-stream, sent by the connection (meet::RawFile).
 fn files_get(c: &mut Ctx) -> R<Obj> {
@@ -544,7 +576,7 @@ fn files_get(c: &mut Ctx) -> R<Obj> {
         ("X-File-Sha256", field("sha256")),
         ("X-File-Offset", offset.to_string()),
     ];
-    c.raw = Some(m::RawFile { headers, file: fh, offset, count, id, principal: who.principal });
+    c.raw = Some(m::Raw::File(m::RawFile { headers, file: fh, offset, count, id, principal: who.principal }));
     Ok(Obj::new())
 }
 
