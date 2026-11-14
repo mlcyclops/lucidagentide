@@ -208,14 +208,30 @@ pub struct Settings {
     pub version_exempt: Vec<String>,
     pub recording_enabled: bool,
     /// Explicit issuer-managed membership, keyed by the authenticated certificate principal: {id, label}.
-    /// A relay address or email domain never establishes organization ownership.
-    pub recording_organizations: Obj,
+    /// A relay address or email domain never establishes organization ownership. Admins change it at runtime
+    /// (/v1/admin/organizations, kept in state.json over this).
+    pub organizations: Obj,
 }
 
 const SETTINGS_FIELDS: [&str; 27] = [
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "signer_url", "signer_cert",
-    "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "recording_organizations",
+    "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations",
 ];
+
+/// ORG_FIELD_MAX: characters of an organization id or label.
+pub const ORG_FIELD_MAX: usize = 200;
+pub const ORG_ENTRY: &str = "organization membership needs principal, id and label";
+
+/// _org_entry: one organization membership {id, label} of a lower-case principal; Err (400) when it is not exactly
+/// that.
+pub fn org_entry(principal: &str, owner: &Value) -> R<Obj> {
+    let field_ok = |v: Option<&Value>| matches!(v, Some(Value::String(t)) if !t.trim().is_empty() && t.chars().count() <= ORG_FIELD_MAX);
+    let ok = !principal.is_empty() && principal == principal.to_lowercase() && owner.as_object().map(|o| o.len() == 2 && field_ok(o.get("id")) && field_ok(o.get("label"))).unwrap_or(false);
+    if !ok {
+        return bad(ORG_ENTRY);
+    }
+    Ok(obj([("id", owner["id"].clone()), ("label", owner["label"].clone())]))
+}
 
 impl Default for Settings {
     fn default() -> Settings {
@@ -246,7 +262,7 @@ impl Default for Settings {
             min_client: Obj::new(),
             version_exempt: VERSION_EXEMPT.iter().map(|s| s.to_string()).collect(),
             recording_enabled: true,
-            recording_organizations: Obj::new(),
+            organizations: Obj::new(),
         }
     }
 }
@@ -259,21 +275,15 @@ fn recording_settings(raw: &Obj, s: &mut Settings) -> Result<(), String> {
         Some(Value::Bool(b)) => s.recording_enabled = *b,
         Some(_) => return Err("recording_enabled must be true or false".into()),
     }
-    let orgs = match raw.get("recording_organizations") {
+    let orgs = match raw.get("organizations") {
         None => return Ok(()),
         Some(Value::Object(o)) => o,
-        Some(_) => return Err("recording_organizations must map certificate principals to owners".into()),
+        Some(_) => return Err("organizations must map certificate principals to owners".into()),
     };
-    let field_ok = |v: Option<&Value>| matches!(v, Some(Value::String(t)) if !t.trim().is_empty() && t.chars().count() <= 200);
     for (principal, owner) in orgs {
-        let ok = !principal.is_empty()
-            && *principal == principal.to_lowercase()
-            && owner.as_object().map(|o| o.len() == 2 && field_ok(o.get("id")) && field_ok(o.get("label"))).unwrap_or(false);
-        if !ok {
-            return Err("recording organization membership needs principal, id and label".into());
-        }
+        org_entry(principal, owner).map_err(|e| e.message())?;
     }
-    s.recording_organizations = orgs.clone();
+    s.organizations = orgs.clone();
     Ok(())
 }
 
@@ -282,6 +292,9 @@ impl Settings {
         let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
         let raw: Value = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
         let raw = raw.as_object().ok_or_else(|| format!("{path}: relay settings must be a JSON object"))?;
+        if raw.contains_key("recording_organizations") {
+            return Err("relay settings: recording_organizations is now called organizations; rename the key in relay.json".into());
+        }
         let mut unknown: Vec<&String> = raw.keys().filter(|k| !SETTINGS_FIELDS.contains(&k.as_str())).collect();
         unknown.sort();
         if !unknown.is_empty() {
@@ -835,7 +848,7 @@ fn serve(settings: Settings) -> ! {
     {
         let mut st = hub.st.lock();
         st.recording_enabled = settings.recording_enabled;
-        st.recording_organizations = settings.recording_organizations.clone();
+        st.organizations = settings.organizations.clone();
     }
     let tls = tls_config(&settings).unwrap_or_else(|e| die(&e));
     let listener = TcpListener::bind((settings.host.as_str(), settings.port)).unwrap_or_else(|e| die(&format!("cannot listen on {}:{}: {e}", settings.host, settings.port)));
@@ -1356,19 +1369,19 @@ mod tests {
             recording_settings(v.as_object().unwrap(), &mut s).map(|_| s)
         };
         let s = check(json!({})).unwrap();
-        assert!(s.recording_enabled && s.recording_organizations.is_empty());
-        let s = check(json!({"recording_enabled": false, "recording_organizations": {"ann@x": {"id": "org-1", "label": "Org"}}})).unwrap();
+        assert!(s.recording_enabled && s.organizations.is_empty());
+        let s = check(json!({"recording_enabled": false, "organizations": {"ann@x": {"id": "org-1", "label": "Org"}}})).unwrap();
         assert!(!s.recording_enabled);
-        assert_eq!(s.recording_organizations["ann@x"], json!({"id": "org-1", "label": "Org"}));
+        assert_eq!(s.organizations["ann@x"], json!({"id": "org-1", "label": "Org"}));
         for wrong in [json!({"recording_enabled": 1}), json!({"recording_enabled": null})] {
             assert_eq!(check(wrong).unwrap_err(), "recording_enabled must be true or false");
         }
-        for wrong in [json!({"recording_organizations": []}), json!({"recording_organizations": null})] {
-            assert_eq!(check(wrong).unwrap_err(), "recording_organizations must map certificate principals to owners");
+        for wrong in [json!({"organizations": []}), json!({"organizations": null})] {
+            assert_eq!(check(wrong).unwrap_err(), "organizations must map certificate principals to owners");
         }
         let long = "x".repeat(201);
         for owner in [json!({"Ann@x": {"id": "o", "label": "O"}}), json!({"": {"id": "o", "label": "O"}}), json!({"ann@x": {"id": "o"}}), json!({"ann@x": {"id": "o", "label": "O", "x": "y"}}), json!({"ann@x": {"id": " ", "label": "O"}}), json!({"ann@x": {"id": 1, "label": "O"}}), json!({"ann@x": {"id": long, "label": "O"}}), json!({"ann@x": "org"})] {
-            assert_eq!(check(json!({"recording_organizations": owner})).unwrap_err(), "recording organization membership needs principal, id and label");
+            assert_eq!(check(json!({"organizations": owner})).unwrap_err(), "organization membership needs principal, id and label");
         }
     }
 

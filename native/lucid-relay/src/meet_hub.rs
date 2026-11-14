@@ -31,6 +31,19 @@ const INVITE_TTL: f64 = 2.0 * 3600.0;
 const INVITE_MAX_TO: usize = 50;
 const EMOJI_MAX: usize = 16;
 const REACTIONS_MAX: usize = 32;
+/// Characters of the quoted message a reply keeps (send time).
+const REPLY_PREVIEW: usize = 140;
+const MENTIONS_MAX: usize = 20;
+/// Typing notices: one per sender and conversation this often.
+const TYPING_EVERY: f64 = 2.0;
+const STATUS_STATES: [&str; 4] = ["available", "busy", "dnd", "away"];
+const STATUS_TEXT_MAX: usize = 100;
+/// A granted request to present keeps the presenter slot this long.
+const GRANT_TTL: f64 = 60.0;
+/// Live reactions in a call: one per peer this often.
+const CALL_REACT_EVERY: f64 = 0.5;
+const STAGE_ACTIONS: [&str; 11] = ["present", "stop", "request", "cancel", "grant", "deny", "hand", "make_host", "mute", "remove", "react"];
+const NOT_HOST: &str = "only the host can do that";
 const SAVE_EVERY: f64 = 2.0;
 const REAP_EVERY: f64 = 5.0;
 const PRUNE_EVERY: f64 = 3600.0;
@@ -284,6 +297,8 @@ pub struct Peer {
     clock_gap: Option<f64>,
     relay_rtt: Option<f64>,
     tally: CallTally,
+    /// Monotonic: its last live reaction (CALL_REACT_EVERY).
+    react_at: f64,
 }
 
 impl Peer {
@@ -365,9 +380,122 @@ pub struct State {
     last_prune: f64,
     history_s: f64,
     mail_s: f64,
-    /// relay.json `recording_enabled` and `recording_organizations` (principal -> {id, label}), set at start.
+    /// relay.json `recording_enabled` and `organizations` (principal -> {id, label}), set at start.
     pub recording_enabled: bool,
-    pub recording_organizations: Obj,
+    pub organizations: Obj,
+    /// principal -> {id, label} or null (removed): admins' organization changes (state.json), over relay.json's.
+    org_edits: Obj,
+    /// principal -> {state, text}.
+    statuses: Obj,
+    /// reader -> {other: ts}: the read marks the reader lets the other person see (DM read receipts).
+    receipts: Obj,
+    /// In memory: room -> its stage {host, presenter, grant, requests, hands}, from the first join until the room is
+    /// empty.
+    stages: HashMap<String, Obj>,
+    /// In memory: (principal, conversation) -> monotonic time of the last typing notice.
+    typing: HashMap<(String, String), f64>,
+}
+
+/// _empty_stage.
+fn empty_stage() -> Obj {
+    obj([("host", Value::Null), ("presenter", Value::Null), ("grant", Value::Null), ("requests", Value::Array(Vec::new())), ("hands", Value::Array(Vec::new()))])
+}
+
+/// _expire_grant: a grant whose time ran out goes.
+fn expire_grant(stage: &mut Obj, now: f64) -> bool {
+    if let Some(Value::Object(g)) = stage.get("grant") {
+        if pj::num(g, "until") <= now {
+            stage.insert("grant".into(), Value::Null);
+            return true;
+        }
+    }
+    false
+}
+
+fn entry_peer(v: &Value) -> &str {
+    v.get("peer").and_then(Value::as_str).unwrap_or_default()
+}
+
+fn list_mut<'a>(stage: &'a mut Obj, key: &str) -> &'a mut Vec<Value> {
+    let slot = stage.entry(key.to_string()).or_insert_with(|| Value::Array(Vec::new()));
+    if !slot.is_array() {
+        *slot = Value::Array(Vec::new());
+    }
+    slot.as_array_mut().expect("a list")
+}
+
+/// _message_id: an optional message id (reply_to); None when absent.
+fn message_id(v: Option<&Value>, what: &str) -> R<Option<String>> {
+    match v {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if s.is_empty() => Ok(None),
+        Some(Value::String(s)) if s.chars().count() <= 64 => Ok(Some(s.clone())),
+        _ => bad(format!("{what} must be a message id")),
+    }
+}
+
+/// _mentions: the principals a chat line mentions (absent: none), lower case, each once.
+fn mentions(v: Option<&Value>) -> R<Vec<String>> {
+    let list = match v {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(a)) if a.iter().all(Value::is_string) => a,
+        _ => return bad("mentions must be a list of people"),
+    };
+    let mut out: Vec<String> = Vec::new();
+    for p in list {
+        let p = p.as_str().unwrap_or_default().trim().to_lowercase();
+        if !p.is_empty() && !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    if out.len() > MENTIONS_MAX {
+        return bad(format!("a message can mention at most {MENTIONS_MAX} people"));
+    }
+    Ok(out)
+}
+
+/// _receipt: `receipt` of a read mark; absent or null is true.
+fn receipt(v: Option<&Value>) -> R<bool> {
+    match v {
+        None | Some(Value::Null) => Ok(true),
+        Some(Value::Bool(b)) => Ok(*b),
+        _ => bad("receipt must be true or false"),
+    }
+}
+
+/// _status: a presence status {state, text}; None for automatic (state absent, "" or auto).
+fn status(state: Option<&Value>, text: Option<&Value>) -> R<Option<Obj>> {
+    let state = match state {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(s)) if s.is_empty() || s == "auto" => return Ok(None),
+        Some(Value::String(s)) if STATUS_STATES.contains(&s.as_str()) => s.clone(),
+        _ => return bad("state must be available, busy, dnd, away or auto"),
+    };
+    let text = match text {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(s)) => pj::squash(s),
+        Some(_) => return bad("text must be a short text"),
+    };
+    if pj::char_len(&text) > STATUS_TEXT_MAX || !pj::printable(&text) {
+        return bad(format!("a status is at most {STATUS_TEXT_MAX} printable characters"));
+    }
+    Ok(Some(obj([("state", Value::from(state)), ("text", Value::from(text))])))
+}
+
+/// _org_field: an organization id or label as an admin sends it.
+fn org_field(v: Option<&Value>, what: &str) -> R<String> {
+    match v {
+        Some(Value::String(s)) => Ok(pj::squash(s)),
+        _ => bad(format!("{what} must be a short text")),
+    }
+}
+
+/// _preview: what a reply keeps of the message it answers: id, author and the start of it.
+fn preview(target: &Obj, name: Option<&Value>) -> R<Obj> {
+    if pj::truthy(target.get("deleted")) {
+        return bad("that message was deleted");
+    }
+    Ok(obj([("id", Value::from(str_value(target.get("id")))), ("name", Value::from(pj::str_or(name))), ("text", Value::from(pj::clip(&pj::s(target, "text"), REPLY_PREVIEW)))]))
 }
 
 fn obj_mut<'a>(map: &'a mut Obj, key: &str) -> &'a mut Obj {
@@ -465,8 +593,135 @@ impl State {
         }
     }
 
+    /// _members: the people in `room` as a join answer names them ({peer, name, principal, org, weak}).
     fn members(&self, room: &str) -> Vec<Value> {
-        self.peers.values().filter(|p| p.room == room && !p.admission_pending).map(|p| Value::Object(with(&p.public(), obj([("weak", Value::Bool(p.weak))])))).collect()
+        self.peers.values().filter(|p| p.room == room && !p.admission_pending).map(|p| Value::Object(with(&self.person(p), obj([("weak", Value::Bool(p.weak))])))).collect()
+    }
+
+    /// _org: this person's organization {id, label} (an admin's change over relay.json), null when none.
+    fn org(&self, principal: &str) -> Value {
+        let entry = match self.org_edits.get(principal) {
+            Some(e) => Some(e),
+            None => self.organizations.get(principal),
+        };
+        match entry.and_then(Value::as_object) {
+            Some(o) => Value::Object(obj([("id", o.get("id").cloned().unwrap_or(Value::Null)), ("label", o.get("label").cloned().unwrap_or(Value::Null))])),
+            None => Value::Null,
+        }
+    }
+
+    /// _status_of.
+    fn status_of(&self, principal: &str) -> Value {
+        self.statuses.get(principal).filter(|s| s.is_object()).cloned().unwrap_or(Value::Null)
+    }
+
+    /// _person: a room peer as join answers, join events and the stage name it ({peer, name, principal, org}).
+    fn person(&self, p: &Peer) -> Obj {
+        with(&p.public(), obj([("org", self.org(&p.who.principal))]))
+    }
+
+    fn person_of(&self, id: &str) -> Obj {
+        self.peers.get(id).map(|p| self.person(p)).unwrap_or_default()
+    }
+
+    /// _presence_event.
+    fn presence_event(&self, principal: &str, name: &str, state: &PState) -> Obj {
+        obj([
+            ("type", Value::from("presence")),
+            ("principal", Value::from(principal)),
+            ("name", Value::from(name)),
+            ("online", Value::Bool(state.0)),
+            ("room", Value::from(state.1.clone())),
+            ("devices", Self::devices_value(&state.2)),
+            ("org", self.org(principal)),
+            ("status", self.status_of(principal)),
+        ])
+    }
+
+    /// _tell_presence: a `presence` event about this person to every session (their status or organization
+    /// changed).
+    fn tell_presence(&mut self, principal: &str) {
+        let name = match self.directory.get(principal).and_then(Value::as_object) {
+            Some(e) => {
+                let n = pj::s(e, "name");
+                if n.is_empty() { principal.to_string() } else { n }
+            }
+            None => principal.to_string(),
+        };
+        let state = self.pstate(principal);
+        let event = self.presence_event(principal, &name, &state);
+        for s in self.sessions.values_mut() {
+            push(&mut s.seq, &mut s.events, &event);
+        }
+    }
+
+    // ── the stage: host, presenter, requests to present, raised hands ──
+
+    /// _stage: the room's stage, made when it has none.
+    fn stage_mut(&mut self, room: &str) -> &mut Obj {
+        self.stages.entry(room.to_string()).or_insert_with(empty_stage)
+    }
+
+    fn stage_host(&self, room: &str) -> Option<String> {
+        self.stages.get(room).and_then(|s| s.get("host")).and_then(Value::as_str).map(str::to_string)
+    }
+
+    /// _stage_view: a copy of the room's stage as clients see it (an empty one when it has none).
+    fn stage_view(&self, room: &str) -> Value {
+        Value::Object(self.stages.get(room).cloned().unwrap_or_else(empty_stage))
+    }
+
+    /// _stage_event.
+    fn stage_event(&mut self, room: &str, why: &str, by: &str, skip: Option<&str>) {
+        let event = obj([("type", Value::from("stage")), ("room", Value::from(room)), ("stage", self.stage_view(room)), ("why", Value::from(why)), ("by", Value::from(by))]);
+        self.broadcast(room, &event, skip);
+    }
+
+    /// _stage_entry.
+    fn stage_entry(&self, id: &str, key: &str, at: f64) -> Value {
+        Value::Object(with(&self.person_of(id), obj([(key, f(at))])))
+    }
+
+    /// _next_host: the longest-present admitted peer of `room`.
+    fn next_host(&self, room: &str) -> Value {
+        let mut best: Option<&Peer> = None;
+        for p in self.peers.values().filter(|p| p.room == room && !p.admission_pending) {
+            if best.map(|b| p.joined < b.joined).unwrap_or(true) {
+                best = Some(p);
+            }
+        }
+        best.map(|p| Value::from(p.peer_id.clone())).unwrap_or(Value::Null)
+    }
+
+    /// _stage_drop: a peer left: its presenter slot, grant, request and hand go; a leaving host's role passes to the
+    /// longest-present peer. A seat taken over by a join (`takeover`) leaves the host empty for the join to fill.
+    fn stage_drop(&mut self, peer: &Peer, why: &str, takeover: bool, by: &str) {
+        let me = peer.peer_id.as_str();
+        let next = self.next_host(&peer.room);
+        let Some(stage) = self.stages.get_mut(&peer.room) else { return };
+        let mut changed = false;
+        for key in ["presenter", "grant"] {
+            if stage.get(key).map(|v| v.is_object() && entry_peer(v) == me).unwrap_or(false) {
+                stage.insert(key.into(), Value::Null);
+                changed = true;
+            }
+        }
+        for key in ["requests", "hands"] {
+            let list = list_mut(stage, key);
+            let before = list.len();
+            list.retain(|e| entry_peer(e) != me);
+            if list.len() != before {
+                changed = true;
+            }
+        }
+        if stage.get("host").and_then(Value::as_str) == Some(me) {
+            stage.insert("host".into(), if takeover { Value::Null } else { next });
+            changed = true;
+        }
+        if changed && !takeover {
+            let by = if by.is_empty() { peer.who.principal.as_str() } else { by };
+            self.stage_event(&peer.room, if why == "removed" { "remove" } else { "leave" }, by, None);
+        }
     }
 
     fn set_weak(&mut self, id: &str, why: &str) {
@@ -597,14 +852,7 @@ impl State {
                 self.dirty = true;
             }
         }
-        let event = obj([
-            ("type", Value::from("presence")),
-            ("principal", Value::from(who.principal.clone())),
-            ("name", Value::from(who.name.clone())),
-            ("online", Value::Bool(after.0)),
-            ("room", Value::from(after.1.clone())),
-            ("devices", Self::devices_value(&after.2)),
-        ]);
+        let event = self.presence_event(&who.principal, &who.name, &after);
         for s in self.sessions.values_mut() {
             push(&mut s.seq, &mut s.events, &event);
         }
@@ -672,6 +920,8 @@ impl State {
         }
         for (principal, e) in out.iter_mut() {
             e.insert("devices".into(), Self::devices_value(&self.devices(principal)));
+            e.insert("org".into(), self.org(principal));
+            e.insert("status".into(), self.status_of(principal));
         }
         out
     }
@@ -714,17 +964,23 @@ impl State {
             }
             let Some(p) = self.peers.get_mut(&id) else { continue };
             p.admission_pending = false;
-            let public = p.public();
+            let host_here = self.stage_host(room).map(|h| self.peers.contains_key(&h)).unwrap_or(false);
+            if !host_here {
+                // only waiting joiners were left
+                self.stage_mut(room).insert("host".into(), Value::from(id.clone()));
+            }
+            let person = self.person_of(&id);
             let members: Vec<Value> = self.members(room).into_iter().filter(|m| m.get("peer").and_then(Value::as_str) != Some(id.as_str())).collect();
-            self.push_peer(&id, &obj([("type", Value::from("recording_admitted")), ("members", Value::Array(members))]));
-            self.broadcast(room, &with(&obj([("type", Value::from("join"))]), public), Some(&id));
+            let stage = self.stage_view(room);
+            self.push_peer(&id, &obj([("type", Value::from("recording_admitted")), ("members", Value::Array(members)), ("stage", stage)]));
+            self.broadcast(room, &with(&obj([("type", Value::from("join"))]), person), Some(&id));
         }
     }
 
     /// _recording_owner: the organization the issuer names for this principal, else the person.
     fn recording_owner(&self, who: &Identity) -> Obj {
-        if let Some(org) = as_obj(self.recording_organizations.get(&who.principal)) {
-            return obj([("kind", Value::from("organization")), ("id", Value::from(pj::text_of(org, "id"))), ("label", Value::from(pj::text_of(org, "label")))]);
+        if let Value::Object(org) = self.org(&who.principal) {
+            return obj([("kind", Value::from("organization")), ("id", Value::from(pj::text_of(&org, "id"))), ("label", Value::from(pj::text_of(&org, "label")))]);
         }
         obj([("kind", Value::from("individual")), ("id", Value::from(who.principal.clone())), ("label", Value::from(who.name.clone()))])
     }
@@ -761,8 +1017,8 @@ impl State {
         ])
     }
 
-    /// _drop: remove a room peer.
-    fn drop_peer(&mut self, id: &str, why: &str, announce: bool, end_stay: bool) {
+    /// _drop: remove a room peer. `by`: who removed them (the stage event names them; "" for the peer itself).
+    fn drop_peer(&mut self, id: &str, why: &str, announce: bool, end_stay: bool, by: &str) {
         let Some(p) = self.peers.get(id) else { return };
         let before = self.pstate(&p.who.principal.clone());
         if p.recording || !p.recording_request.is_empty() {
@@ -785,6 +1041,7 @@ impl State {
         ]);
         self.room_log(&peer.room, &mut line);
         obj_mut(&mut self.left, &peer.who.principal).insert(peer.room.clone(), f(now));
+        self.stage_drop(&peer, why, !end_stay, by);
         self.touch_device(&peer.who);
         if announce {
             self.announce(&peer.who, &before);
@@ -802,6 +1059,7 @@ impl State {
             peer.tally.summary(pj::mono())
         ));
         if end_stay && !self.peers.values().any(|p| p.room == peer.room) {
+            self.stages.remove(&peer.room);
             if let Some(stay) = self.stays.remove(&peer.room) {
                 if stay.late_history {
                     log_info(&format!("options room={} late_history=off why=empty", peer.room));
@@ -856,7 +1114,7 @@ impl State {
         for msgs in self.dms.values() {
             for msg in msgs {
                 let (to, from) = (pj::text_of(msg, "to"), pj::text_of(msg, "from"));
-                if to == principal && from != principal && pj::num(msg, "ts") > pj::as_num(marks.get(&from)).unwrap_or(0.0) {
+                if to == principal && from != principal && !pj::truthy(msg.get("deleted")) && pj::num(msg, "ts") > pj::as_num(marks.get(&from)).unwrap_or(0.0) {
                     let n = pj::as_int(out.get(&from)).unwrap_or(0) + 1;
                     out.insert(from, Value::from(n));
                 }
@@ -916,6 +1174,9 @@ impl State {
             ("seed_requests", Value::Object(self.seed_requests.clone())),
             ("seeded", Value::Object(self.seeded.clone())),
             ("denied", Value::Object(self.denied.clone())),
+            ("organizations", Value::Object(self.org_edits.clone())),
+            ("status", Value::Object(self.statuses.clone())),
+            ("receipts", Value::Object(self.receipts.clone())),
         ]));
         pj::dumps(&v)
     }
@@ -924,7 +1185,7 @@ impl State {
         let mut count = 0;
         let peers: Vec<String> = self.peers.values().filter(|p| !p.who.serial.is_empty() && wanted.contains(&m::serial(&p.who.serial))).map(|p| p.peer_id.clone()).collect();
         for id in peers {
-            self.drop_peer(&id, "revoked", true, true);
+            self.drop_peer(&id, "revoked", true, true, "");
             count += 1;
         }
         let sessions: Vec<String> = self.sessions.values().filter(|s| !s.who.serial.is_empty() && wanted.contains(&m::serial(&s.who.serial))).map(|s| s.session_id.clone()).collect();
@@ -1116,7 +1377,12 @@ impl Hub {
             history_s: history_hours * 3600.0,
             mail_s: mail_days * 86400.0,
             recording_enabled: true,
-            recording_organizations: Obj::new(),
+            organizations: Obj::new(),
+            org_edits: Obj::new(),
+            statuses: Obj::new(),
+            receipts: Obj::new(),
+            stages: HashMap::new(),
+            typing: HashMap::new(),
         };
         let hub = Hub { st: Mutex::new(st), cond: Condvar::new(), signer, links, state_dir, save_lock: Mutex::new(()), stop: AtomicBool::new(false) };
         if hub.state_dir.is_some() {
@@ -1166,6 +1432,34 @@ impl Hub {
         st.seed_requests = only_objects(raw.get("seed_requests"));
         st.seeded = only_objects(raw.get("seeded"));
         st.denied = only_objects(raw.get("denied"));
+        for (principal, owner) in section("organizations") {
+            if owner.is_null() {
+                st.org_edits.insert(principal, Value::Null);
+                continue;
+            }
+            match m::org_entry(&principal, &owner) {
+                Ok(entry) => {
+                    st.org_edits.insert(principal, Value::Object(entry));
+                }
+                Err(_) => log_warn(&format!("state file: organization of {principal} unreadable; ignored")),
+            }
+        }
+        for (principal, row) in section("status") {
+            let Some(row) = row.as_object() else { continue };
+            if let Ok(Some(found)) = status(row.get("state"), row.get("text")) {
+                st.statuses.insert(principal, Value::Object(found));
+            }
+        }
+        st.receipts = section("receipts")
+            .into_iter()
+            .filter_map(|(k, v)| {
+                let marks: Obj = v.as_object()?.iter().filter_map(|(o, t)| match t {
+                    Value::Number(n) => n.as_f64().map(|x| (o.clone(), f(x))),
+                    _ => None,
+                }).collect();
+                Some((k, Value::Object(marks)))
+            })
+            .collect();
         st.prune(pj::now());
         let (people, convs, rooms) = (st.directory.len(), st.dms.len(), st.rooms.len());
         drop(st);
@@ -1254,7 +1548,7 @@ impl Hub {
         let mut st = self.st.lock();
         let dead: Vec<String> = st.peers.values().filter(|p| now - p.last_seen > PEER_TIMEOUT).map(|p| p.peer_id.clone()).collect();
         for id in dead {
-            st.drop_peer(&id, "timeout", true, true);
+            st.drop_peer(&id, "timeout", true, true, "");
         }
         let ids: Vec<String> = st.peers.keys().cloned().collect();
         for id in ids {
@@ -1270,6 +1564,14 @@ impl Hub {
             st.end_session(&id, "timeout", true);
         }
         st.moved.retain(|_, v| now - v.at <= PEER_TIMEOUT);
+        let wall = pj::now();
+        let rooms: Vec<String> = st.stages.keys().cloned().collect();
+        for room in rooms {
+            // the granted person never presented
+            if st.stages.get_mut(&room).map(|s| expire_grant(s, wall)).unwrap_or(false) {
+                st.stage_event(&room, "expire", "", None);
+            }
+        }
         if now - st.last_prune >= PRUNE_EVERY {
             st.last_prune = now;
             st.prune(pj::now());
@@ -1309,21 +1611,25 @@ impl Hub {
             return forbidden(format!("room {room} is full ({PEER_MAX_PER_ROOM} people)"));
         }
         let before = st.pstate(&who.principal);
+        // a seat taken over (rejoin, another device) keeps the host role it held
+        let old_host = st.stage_host(room);
+        let was_host = old_host.map(|h| mine.contains(&h)).unwrap_or(false);
+        let took_over = !mine.is_empty();
         for old in mine {
             let device = st.peers[&old].who.device.clone();
             if device != who.device {
                 st.push_peer(&old, &obj([("type", Value::from("moved")), ("room", Value::from(room)), ("to_device", Value::from(who.device.clone())), ("to_label", Value::from(who.device_label.clone()))]));
                 let event = st.peers[&old].events.back().cloned().unwrap_or_default();
                 st.moved.insert(old.clone(), Moved { principal: who.principal.clone(), event, at: pj::mono() });
-                st.drop_peer(&old, "moved", false, false);
+                st.drop_peer(&old, "moved", false, false, "");
             } else {
-                st.drop_peer(&old, "rejoined", false, false);
+                st.drop_peer(&old, "rejoined", false, false, "");
             }
         }
         if who.own_device() {
             let same: Vec<String> = st.peers.values().filter(|p| p.who.principal == who.principal && p.who.device == who.device).map(|p| p.peer_id.clone()).collect();
             for old in same {
-                st.drop_peer(&old, "replaced", false, true);
+                st.drop_peer(&old, "replaced", false, true, "");
             }
         }
         let mut peer = Peer {
@@ -1350,6 +1656,7 @@ impl Hub {
             clock_gap: None,
             relay_rtt: None,
             tally: CallTally::new(),
+            react_at: 0.0,
         };
         let mut members = st.members(room);
         let recording: Vec<Value> = st.peers.values().filter(|p| p.room == room && p.recording).map(|p| Value::from(p.peer_id.clone())).collect();
@@ -1376,13 +1683,23 @@ impl Hub {
         let mut late_join = stay.late_history && !stay.seen.contains_key(&who.principal);
         stay.seen.entry(who.principal.clone()).or_insert(now);
         let (stay_start, stay_late) = (stay.start, stay.late_history);
-        let public = peer.public();
         let peer_id = peer.peer_id.clone();
         st.peers.insert(peer_id.clone(), peer);
         st.seen(who);
-        if !pending {
-            st.broadcast(room, &with(&obj([("type", Value::from("join"))]), public.clone()), Some(&peer_id));
+        st.stage_mut(room);
+        let host_here = st.stage_host(room).map(|h| st.peers.contains_key(&h)).unwrap_or(false);
+        if !pending && (was_host || !host_here) {
+            st.stage_mut(room).insert("host".into(), Value::from(peer_id.clone()));
         }
+        let you = st.person_of(&peer_id);
+        if !pending {
+            st.broadcast(room, &with(&obj([("type", Value::from("join"))]), you.clone()), Some(&peer_id));
+            if took_over {
+                // the others hear where the taken-over seat's roles went
+                st.stage_event(room, "join", &who.principal, Some(&peer_id));
+            }
+        }
+        let stage_view = st.stage_view(room);
         let log = st.rooms.get(room).cloned().unwrap_or_default();
         let chats: Vec<&Obj> = log.iter().filter(|l| pj::text_of(l, "kind") == "chat").collect();
         let history: Vec<Value> = chats[chats.len().saturating_sub(CHAT_KEEP)..].iter().map(|l| Value::Object((*l).clone())).collect();
@@ -1422,7 +1739,7 @@ impl Hub {
         }
         let out = obj([
             ("peer", Value::from(peer_id.clone())),
-            ("you", Value::Object(public)),
+            ("you", Value::Object(you)),
             ("members", Value::Array(members)),
             ("chat", Value::Array(if pending { Vec::new() } else { history })),
             ("missed", Value::Object(if pending { Obj::new() } else { out_missed })),
@@ -1431,6 +1748,8 @@ impl Hub {
             ("admission_pending", Value::Bool(pending)),
             ("rseq", Value::from(rseq)),
             ("options", Value::Object(obj([("late_history", Value::Bool(stay_late))]))),
+            // waiting joiners hear the stage with recording_admitted
+            ("stage", if pending { Value::Null } else { stage_view }),
         ]);
         Ok((out, peer_id))
     }
@@ -1553,7 +1872,12 @@ impl Hub {
         Ok(())
     }
 
-    pub fn say(&self, peer_id: &str, who: &Identity, text: &str) -> R<Obj> {
+    /// say: a room chat line to everyone in the call. `reply_to` (a chat line of this room) stores a short preview of
+    /// it; `mentions` (principals) keeps only the people in the call, and each of them also hears a `mention` on their
+    /// presence sessions.
+    pub fn say(&self, peer_id: &str, who: &Identity, text: &str, reply_to: Body, mentioned: Body) -> R<Obj> {
+        let reply_to = message_id(reply_to, "reply_to")?;
+        let mentioned = mentions(mentioned)?;
         let mut st = self.st.lock();
         st.owned(peer_id, who)?;
         if st.peers[peer_id].admission_pending {
@@ -1567,16 +1891,417 @@ impl Hub {
             ("from", Value::from(peer_id)),
             ("name", Value::from(who.name.clone())),
             ("principal", Value::from(who.principal.clone())),
+            ("org", st.org(&who.principal)),
             ("text", Value::from(text)),
             ("ts", f(pj::now())),
             ("reactions", Value::Object(Obj::new())),
         ]);
+        if let Some(id) = &reply_to {
+            let target = Self::room_line(&mut st, &room, id)?;
+            let quoted = preview(target, target.get("name"))?;
+            line.insert("reply_to".into(), Value::Object(quoted));
+        }
+        let here: Vec<String> = st.peers.values().filter(|p| p.room == room && !p.admission_pending).map(|p| p.who.principal.clone()).collect();
+        let mentioned: Vec<String> = mentioned.into_iter().filter(|p| here.contains(p) && *p != who.principal).collect();
+        if !mentioned.is_empty() {
+            line.insert("mentions".into(), Value::Array(mentioned.iter().cloned().map(Value::from).collect()));
+        }
         st.room_log(&room, &mut line);
         st.broadcast(&room, &line, None);
+        if !mentioned.is_empty() {
+            let event = obj([
+                ("type", Value::from("mention")),
+                ("room", Value::from(room.clone())),
+                ("id", line["id"].clone()),
+                ("from", Value::from(who.principal.clone())),
+                ("name", Value::from(who.name.clone())),
+                ("text", Value::from(text)),
+            ]);
+            st.tell(&mentioned, &event, None);
+        }
         drop(st);
         self.wake();
         log_info(&format!("chat room={room} principal={} chars={}", who.principal, pj::char_len(text)));
         Ok(line)
+    }
+
+    // ── chat changes: edits, deletions, typing (callers hold the lock) ──
+
+    /// _room_line: a chat line of the room by id.
+    fn room_line<'a>(st: &'a mut State, room: &str, id: &str) -> R<&'a mut Obj> {
+        st.rooms.get_mut(room).and_then(|l| l.iter_mut().find(|l| pj::text_of(l, "id") == id && pj::text_of(l, "kind") == "chat")).ok_or_else(|| E::NotFound("that message is no longer kept".into()))
+    }
+
+    /// _dm_message: a direct message between a and b by id.
+    fn dm_message<'a>(st: &'a mut State, a: &str, b: &str, id: &str) -> R<&'a mut Obj> {
+        st.dms.get_mut(&conv(a, b)).and_then(|l| l.iter_mut().find(|m| pj::text_of(m, "id") == id)).ok_or_else(|| E::NotFound("that message is no longer kept".into()))
+    }
+
+    /// _conversation: the caller's room seat (scope room) or the other person (scope dm), checked.
+    fn conversation(st: &State, who: &Identity, scope: &str, peer: Option<&str>, session: Option<&str>, with_: Option<&str>) -> R<(Option<String>, String)> {
+        if scope == "room" {
+            let Some(peer) = peer else { return bad("a room message needs your room session (peer)") };
+            st.owned(peer, who)?;
+            if st.peers[peer].admission_pending {
+                return forbidden(ADMISSION_FIRST);
+            }
+            return Ok((Some(peer.to_string()), String::new()));
+        }
+        if scope == "dm" {
+            if let Some(s) = session {
+                st.session(s, who)?;
+            } else if let Some(p) = peer {
+                st.owned(p, who)?;
+            } else {
+                return bad("a direct message needs your session");
+            }
+            let other = with_.unwrap_or("").trim().to_lowercase();
+            if other.is_empty() {
+                return bad("say whose conversation the message is in (with)");
+            }
+            return Ok((None, other));
+        }
+        bad("scope must be dm or room")
+    }
+
+    /// chat_change: edit (`text`) or delete (`delete`) a room chat line or a direct message. Only the author edits;
+    /// the author or a relay admin deletes. A deletion keeps the line as a tombstone (`deleted`, no text, no
+    /// reactions, no quoted text). Everyone in the conversation hears one `chat_update`; a room also keeps it as a
+    /// history line. Answers the changed message.
+    #[allow(clippy::too_many_arguments)]
+    pub fn chat_change(&self, who: &Identity, scope: &str, id: &str, text: Body, delete: bool, peer: Option<String>, session: Option<String>, with_: Option<String>) -> R<Obj> {
+        let text = if delete { String::new() } else { m::text(text, "messages")? };
+        let mut st = self.st.lock();
+        let r = (|| -> R<(Obj, bool)> {
+            let (p, other) = Self::conversation(&st, who, scope, peer.as_deref(), session.as_deref(), with_.as_deref())?;
+            let room = p.as_ref().map(|id| st.peers[id.as_str()].room.clone());
+            let is_admin = st.admins.contains(&who.principal);
+            let (target, author) = match &room {
+                Some(room) => {
+                    let t = Self::room_line(&mut st, room, id)?;
+                    let a = pj::text_of(t, "principal");
+                    (t, a)
+                }
+                None => {
+                    let t = Self::dm_message(&mut st, &who.principal, &other, id)?;
+                    let a = pj::text_of(t, "from");
+                    (t, a)
+                }
+            };
+            if pj::truthy(target.get("deleted")) {
+                if delete {
+                    // already gone: nothing more to tell
+                    return Ok((target.clone(), false));
+                }
+                return bad("that message was deleted");
+            }
+            if author != who.principal && !(delete && is_admin) {
+                return forbidden(format!("only the person who wrote a message can {} it", if delete { "delete" } else { "edit" }));
+            }
+            let now = pj::now();
+            let mut event = obj([("type", Value::from("chat_update")), ("scope", Value::from(scope)), ("id", Value::from(id))]);
+            if delete {
+                target.insert("text".into(), Value::from(""));
+                target.insert("deleted".into(), f(now));
+                target.insert("reactions".into(), Value::Object(Obj::new()));
+                if let Some(Value::Object(q)) = target.get_mut("reply_to") {
+                    q.insert("text".into(), Value::from(""));
+                }
+                event.insert("text".into(), Value::from(""));
+                event.insert("deleted".into(), f(now));
+            } else {
+                target.insert("text".into(), Value::from(text.clone()));
+                target.insert("edited".into(), f(now));
+                event.insert("text".into(), Value::from(text.clone()));
+                event.insert("edited".into(), f(now));
+            }
+            let out = target.clone();
+            if delete {
+                // replies quoting it and its edits lose the words too
+                let thread = match &room {
+                    Some(room) => st.rooms.get_mut(room),
+                    None => st.dms.get_mut(&conv(&who.principal, &other)),
+                };
+                for msg in thread.into_iter().flatten() {
+                    if let Some(Value::Object(q)) = msg.get_mut("reply_to") {
+                        if q.get("id").and_then(Value::as_str) == Some(id) {
+                            q.insert("text".into(), Value::from(""));
+                        }
+                    }
+                    if pj::text_of(msg, "kind") == "chat_update" && pj::text_of(msg, "target") == id {
+                        msg.insert("text".into(), Value::from(""));
+                    }
+                }
+            }
+            event.insert("by".into(), Value::from(who.principal.clone()));
+            st.dirty = true;
+            match &room {
+                Some(room) => {
+                    event.insert("room".into(), Value::from(room.clone()));
+                    let mut line: Obj = event.iter().filter(|(k, _)| k.as_str() != "type").map(|(k, v)| (k.clone(), v.clone())).collect();
+                    line.insert("kind".into(), Value::from("chat_update"));
+                    line.insert("id".into(), Value::from(pj::token_hex(6)));
+                    line.insert("target".into(), Value::from(id));
+                    line.insert("name".into(), Value::from(who.name.clone()));
+                    line.insert("ts".into(), f(now));
+                    st.room_log(room, &mut line);
+                    st.broadcast(room, &event, None);
+                }
+                None => {
+                    for s in st.sessions.values_mut() {
+                        if s.who.principal == who.principal {
+                            push(&mut s.seq, &mut s.events, &with(&event, obj([("with", Value::from(other.clone()))])));
+                        } else if s.who.principal == other {
+                            push(&mut s.seq, &mut s.events, &with(&event, obj([("with", Value::from(who.principal.clone()))])));
+                        }
+                    }
+                }
+            }
+            Ok((out, true))
+        })();
+        drop(st);
+        self.wake();
+        let (out, changed) = r?;
+        if changed {
+            log_info(&format!("chat_{} scope={scope} principal={}", if delete { "delete" } else { "edit" }, who.principal));
+        }
+        Ok(out)
+    }
+
+    /// typing: `Name is typing`, never stored; one notice per sender and conversation every TYPING_EVERY seconds at
+    /// most (`sent` false when this one was dropped).
+    pub fn typing(&self, who: &Identity, scope: &str, peer: Option<String>, session: Option<String>, with_: Option<String>) -> R<Obj> {
+        let mut st = self.st.lock();
+        let r = (|| -> R<Obj> {
+            let (p, other) = Self::conversation(&st, who, scope, peer.as_deref(), session.as_deref(), with_.as_deref())?;
+            let room = p.as_ref().map(|id| st.peers[id.as_str()].room.clone());
+            let key = (who.principal.clone(), match &room {
+                Some(room) => format!("room {room}"),
+                None => format!("dm {other}"),
+            });
+            let now = pj::mono();
+            if let Some(last) = st.typing.get(&key) {
+                if now - last < TYPING_EVERY {
+                    return Ok(obj([("ok", Value::Bool(true)), ("sent", Value::Bool(false))]));
+                }
+            }
+            if st.typing.len() > 4096 {
+                st.typing.retain(|_, t| now - *t < TYPING_EVERY);
+            }
+            st.typing.insert(key, now);
+            let event = obj([("type", Value::from("typing")), ("scope", Value::from(scope)), ("principal", Value::from(who.principal.clone())), ("name", Value::from(who.name.clone())), ("ts", f(pj::now()))]);
+            match (&room, &p) {
+                (Some(room), Some(me)) => st.broadcast(room, &with(&event, obj([("room", Value::from(room.clone()))])), Some(me.as_str())),
+                _ if other != who.principal => st.tell(std::slice::from_ref(&other), &with(&event, obj([("with", Value::from(who.principal.clone()))])), None),
+                _ => {}
+            }
+            Ok(obj([("ok", Value::Bool(true)), ("sent", Value::Bool(true))]))
+        })();
+        drop(st);
+        self.wake();
+        r
+    }
+
+    /// stage (`POST /v1/stage`): who presents, asks to present, has a hand up, is host, plus the host's mute and
+    /// remove and live reactions. Every change is one `stage` event to the room with the whole state. Relay admins
+    /// count as host in every room. Answers `{ok, stage}` (`sent` too for `react`).
+    pub fn stage(&self, peer_id: &str, who: &Identity, action: Body, target: Body, up: Body, emoji: Body) -> R<Obj> {
+        let action = match action {
+            Some(Value::String(a)) if STAGE_ACTIONS.contains(&a.as_str()) => a.clone(),
+            _ => return bad(format!("action must be one of {}", STAGE_ACTIONS.join(", "))),
+        };
+        let mut emoji_text = String::new();
+        if action == "react" {
+            emoji_text = pj::str_or(emoji).trim().to_string();
+            if emoji_text.is_empty() || pj::char_len(&emoji_text) > EMOJI_MAX {
+                return bad(format!("a reaction is one emoji (at most {EMOJI_MAX} characters)"));
+            }
+        }
+        let up = match up {
+            Some(Value::Bool(b)) => Some(*b),
+            _ if action == "hand" => return bad("up must be true or false"),
+            _ => None,
+        };
+        let mut st = self.st.lock();
+        let r = (|| -> R<(Obj, String, String)> {
+            st.owned(peer_id, who)?;
+            if st.peers[peer_id].admission_pending {
+                return forbidden(ADMISSION_FIRST);
+            }
+            let room = st.peers[peer_id].room.clone();
+            let me = peer_id.to_string();
+            let now = pj::now();
+            if expire_grant(st.stage_mut(&room), now) {
+                st.stage_event(&room, "expire", "", None);
+            }
+            let host = st.stage_host(&room).as_deref() == Some(me.as_str()) || st.admins.contains(&who.principal);
+            let mut other: Option<String> = None;
+            if let Some(t) = target.filter(|t| !t.is_null() && t.as_str() != Some("")) {
+                let id = pj::py_str(t);
+                match st.peers.get(&id) {
+                    Some(o) if o.room == room && !o.admission_pending => other = Some(id),
+                    _ => return Err(E::NotFound("that person is not in this call".into())),
+                }
+            }
+            if matches!(action.as_str(), "grant" | "deny" | "make_host" | "mute" | "remove") && other.is_none() {
+                return bad(format!("say whom to {} (target)", action.replace('_', " ")));
+            }
+            let other_principal = other.as_ref().map(|o| st.peers[o.as_str()].who.principal.clone()).unwrap_or_default();
+            let stage = st.stage_mut(&room).clone();
+            let presenter = stage.get("presenter").filter(|v| v.is_object()).cloned();
+            let presenting = presenter.as_ref().map(|p| entry_peer(p) == me).unwrap_or(false);
+            let in_list = |key: &str, id: &str| stage.get(key).and_then(Value::as_array).map(|l| l.iter().any(|e| entry_peer(e) == id)).unwrap_or(false);
+            let mut changed = true;
+            let mut out = obj([("ok", Value::Bool(true))]);
+            match action.as_str() {
+                "present" => {
+                    let grant = stage.get("grant").filter(|v| v.is_object()).cloned();
+                    if presenting {
+                        changed = false;
+                    } else if !host && !grant.as_ref().map(|g| entry_peer(g) == me).unwrap_or(false) {
+                        if let Some(p) = &presenter {
+                            return Err(E::Conflict(format!("{} is presenting. Ask to present.", pj::s(p.as_object().expect("an entry"), "name"))));
+                        }
+                        if let Some(g) = &grant {
+                            let name = st.peers.get(entry_peer(g)).map(|p| p.who.name.clone()).unwrap_or_else(|| "Someone".into());
+                            return Err(E::Conflict(format!("{name} was asked to present. Ask to present.")));
+                        }
+                    }
+                    if changed {
+                        let entry = st.stage_entry(&me, "since", now);
+                        let s = st.stage_mut(&room);
+                        s.insert("presenter".into(), entry);
+                        s.insert("grant".into(), Value::Null);
+                        list_mut(s, "requests").retain(|r| entry_peer(r) != me);
+                    }
+                }
+                "stop" => {
+                    let subject = other.clone().unwrap_or_else(|| me.clone());
+                    if subject != me && !host {
+                        return forbidden("only the presenter or the host can stop a presentation");
+                    }
+                    if presenter.as_ref().map(|p| entry_peer(p) == subject).unwrap_or(false) {
+                        st.stage_mut(&room).insert("presenter".into(), Value::Null);
+                    } else {
+                        changed = false;
+                    }
+                }
+                "request" => {
+                    if presenting {
+                        return bad("you are presenting already");
+                    }
+                    if in_list("requests", &me) {
+                        changed = false;
+                    } else {
+                        let entry = st.stage_entry(&me, "ts", now);
+                        list_mut(st.stage_mut(&room), "requests").push(entry);
+                    }
+                }
+                "cancel" => {
+                    let list = list_mut(st.stage_mut(&room), "requests");
+                    let before = list.len();
+                    list.retain(|r| entry_peer(r) != me);
+                    changed = list.len() != before;
+                }
+                "grant" | "deny" => {
+                    if !(host || presenting) {
+                        return forbidden("only the presenter or the host can do that");
+                    }
+                    let target = other.clone().expect("a target");
+                    let s = st.stage_mut(&room);
+                    let list = list_mut(s, "requests");
+                    let before = list.len();
+                    list.retain(|r| entry_peer(r) != target);
+                    if list.len() == before {
+                        return Err(E::NotFound("that person has not asked to present".into()));
+                    }
+                    if action == "grant" {
+                        s.insert("presenter".into(), Value::Null);
+                        s.insert("grant".into(), Value::Object(obj([("peer", Value::from(target)), ("until", f(now + GRANT_TTL))])));
+                    }
+                }
+                "hand" => {
+                    let up = up.unwrap_or(false);
+                    let subject = other.clone().unwrap_or_else(|| me.clone());
+                    if subject != me {
+                        if !host {
+                            return forbidden("only the host can lower someone else's hand");
+                        }
+                        if up {
+                            return bad("only the person can raise their own hand");
+                        }
+                    }
+                    let raised = in_list("hands", &subject);
+                    if up && !raised {
+                        let entry = st.stage_entry(&subject, "ts", now);
+                        list_mut(st.stage_mut(&room), "hands").push(entry);
+                    } else if !up && raised {
+                        list_mut(st.stage_mut(&room), "hands").retain(|h| entry_peer(h) != subject);
+                    } else {
+                        changed = false;
+                    }
+                }
+                "make_host" => {
+                    if !host {
+                        return forbidden(NOT_HOST);
+                    }
+                    let target = other.clone().expect("a target");
+                    changed = st.stage_host(&room).as_deref() != Some(target.as_str());
+                    st.stage_mut(&room).insert("host".into(), Value::from(target));
+                }
+                "mute" | "remove" => {
+                    if !host {
+                        return forbidden(NOT_HOST);
+                    }
+                    let target = other.clone().expect("a target");
+                    if target == me {
+                        return bad("choose someone else");
+                    }
+                    changed = false;
+                    let kind = if action == "mute" { "host_mute" } else { "removed" };
+                    st.push_peer(&target, &obj([("type", Value::from(kind)), ("by", Value::from(who.principal.clone())), ("name", Value::from(who.name.clone()))]));
+                    if action == "remove" {
+                        // its next poll still hears `removed` after the seat is gone
+                        let t = &st.peers[target.as_str()];
+                        let moved = Moved { principal: t.who.principal.clone(), event: t.events.back().cloned().unwrap_or_default(), at: pj::mono() };
+                        st.moved.insert(target.clone(), moved);
+                        st.drop_peer(&target, "removed", true, true, &who.principal);
+                    }
+                }
+                _ => {
+                    // react: no state, a live reaction over the sender's tile
+                    changed = false;
+                    let mono = pj::mono();
+                    let p = st.peers.get_mut(peer_id).expect("owned");
+                    let sent = mono - p.react_at >= CALL_REACT_EVERY;
+                    out.insert("sent".into(), Value::Bool(sent));
+                    if sent {
+                        p.react_at = mono;
+                        let event = obj([
+                            ("type", Value::from("call_react")),
+                            ("peer", Value::from(me.clone())),
+                            ("name", Value::from(who.name.clone())),
+                            ("principal", Value::from(who.principal.clone())),
+                            ("emoji", Value::from(emoji_text.clone())),
+                            ("ts", f(now)),
+                        ]);
+                        st.broadcast(&room, &event, None);
+                    }
+                }
+            }
+            if changed {
+                st.stage_event(&room, &action, &who.principal, None);
+            }
+            out.insert("stage".into(), st.stage_view(&room));
+            Ok((out, room, other_principal))
+        })();
+        drop(st);
+        self.wake();
+        let (out, room, target) = r?;
+        if action != "react" {
+            log_info(&format!("stage room={room} principal={} action={action} target={}", who.principal, kv(&target)));
+        }
+        Ok(out)
     }
 
     pub fn caption(&self, peer_id: &str, who: &Identity, text: &str, cseq_v: Body, age_v: Body, dur_v: Body) -> R<Obj> {
@@ -1724,7 +2449,7 @@ impl Hub {
     pub fn leave(&self, peer_id: &str, who: &Identity) -> R<()> {
         let mut st = self.st.lock();
         st.owned(peer_id, who)?;
-        st.drop_peer(peer_id, "left", true, true);
+        st.drop_peer(peer_id, "left", true, true, "");
         drop(st);
         self.wake();
         Ok(())
@@ -1990,6 +2715,8 @@ impl Hub {
                         ("last_seen", if on.is_some() { f(now) } else { e.get("last_seen").cloned().unwrap_or(Value::from(0)) }),
                         ("online", Value::Bool(on.is_some())),
                         ("devices", on.and_then(|o| o.get("devices").cloned()).unwrap_or(Value::Array(Vec::new()))),
+                        ("org", st.org(p)),
+                        ("status", st.status_of(p)),
                     ]))
                 })
                 .collect();
@@ -2079,23 +2806,30 @@ impl Hub {
 
     // ── direct messages and reactions ────────────────────────────────────────────────────────────────────────
 
-    pub fn dm(&self, session: &str, who: &Identity, to: &str, text: Body) -> R<Obj> {
+    pub fn dm(&self, session: &str, who: &Identity, to: &str, text: Body, reply_to: Body) -> R<Obj> {
         let to = to.trim().to_lowercase();
         let text = m::text(text, "messages")?;
+        let reply_to = message_id(reply_to, "reply_to")?;
         let mut st = self.st.lock();
         st.session(session, who)?;
         let Some(entry) = st.directory.get(&to).cloned() else { return Err(E::NotFound("nobody with that address has used this relay yet".into())) };
         let to_name = entry.as_object().map(|e| pj::s(e, "name")).filter(|n| !n.is_empty()).unwrap_or_else(|| to.clone());
-        let msg = obj([
+        let mut msg = obj([
             ("id", Value::from(pj::token_hex(8))),
             ("from", Value::from(who.principal.clone())),
             ("from_name", Value::from(who.name.clone())),
+            ("from_org", st.org(&who.principal)),
             ("to", Value::from(to.clone())),
             ("to_name", Value::from(to_name)),
             ("text", Value::from(text.clone())),
             ("ts", f(pj::now())),
             ("reactions", Value::Object(Obj::new())),
         ]);
+        if let Some(id) = &reply_to {
+            let target = Self::dm_message(&mut st, &who.principal, &to, id)?;
+            let quoted = preview(target, target.get("from_name"))?;
+            msg.insert("reply_to".into(), Value::Object(quoted));
+        }
         let list = st.dms.entry(conv(&who.principal, &to)).or_default();
         list.push(msg.clone());
         if list.len() > DM_KEEP {
@@ -2118,24 +2852,52 @@ impl Hub {
         st.session(session, who)?;
         let msgs: Vec<&Obj> = st.dms.get(&conv(&who.principal, &with_)).map(|l| l.iter().filter(|m| pj::num(m, "ts") > after).collect()).unwrap_or_default();
         let cut = msgs.len().saturating_sub(limit);
-        Ok(obj([("messages", Value::Array(msgs[cut..].iter().map(|m| Value::Object((*m).clone())).collect()))]))
+        // how far the other person has read, if they send read receipts
+        let read_by_them = as_obj(st.receipts.get(&with_)).and_then(|o| o.get(&who.principal)).cloned().unwrap_or(Value::from(0));
+        Ok(obj([("messages", Value::Array(msgs[cut..].iter().map(|m| Value::Object((*m).clone())).collect())), ("read_by_them", read_by_them)]))
     }
 
-    pub fn dm_read(&self, session: &str, who: &Identity, with_: &str, ts: Body) -> R<Obj> {
+    /// dm_read: mark the conversation with `with_` read up to `ts`. With `receipt` (the default) the other person sees
+    /// it: their sessions hear `dm_read` when the mark moves forward. `receipt: false` withdraws a mark they could see
+    /// (`dm_read` with ts 0) and keeps this one to the reader.
+    pub fn dm_read(&self, session: &str, who: &Identity, with_: &str, ts: Body, receipt_v: Body) -> R<Obj> {
         let with_ = with_.trim().to_lowercase();
         let ts = m::number(ts, "ts")?;
+        let receipt = receipt(receipt_v)?;
         let mut st = self.st.lock();
         st.session(session, who)?;
         let marks = obj_mut(&mut st.read, &who.principal);
         if ts > pj::as_num(marks.get(&with_)).unwrap_or(0.0) {
-            marks.insert(with_, f(ts));
+            marks.insert(with_.clone(), f(ts));
             st.dirty = true;
         }
+        let seen = obj_mut(&mut st.receipts, &who.principal);
+        let mut told: Option<Value> = None;
+        if receipt && ts > pj::as_num(seen.get(&with_)).unwrap_or(0.0) {
+            seen.insert(with_.clone(), f(ts));
+            told = Some(f(ts));
+        } else if !receipt && seen.shift_remove(&with_).is_some() {
+            told = Some(Value::from(0));
+        }
+        if seen.is_empty() {
+            st.receipts.shift_remove(&who.principal);
+        }
+        if let Some(ts) = told {
+            if with_ != who.principal {
+                st.dirty = true;
+                st.tell(std::slice::from_ref(&with_), &obj([("type", Value::from("dm_read")), ("by", Value::from(who.principal.clone())), ("ts", ts)]), None);
+            }
+        }
+        drop(st);
+        self.wake();
         Ok(obj([("ok", Value::Bool(true))]))
     }
 
     /// _toggle: the caller's reaction on or off.
     fn toggle(item: &mut Obj, emoji: &str, principal: &str) -> R<bool> {
+        if pj::truthy(item.get("deleted")) {
+            return bad("that message was deleted");
+        }
         let reactions = obj_mut(item, "reactions");
         if let Some(Value::Array(people)) = reactions.get_mut(emoji) {
             if let Some(i) = people.iter().position(|p| p.as_str() == Some(principal)) {
@@ -2243,6 +3005,101 @@ impl Hub {
         drop(st);
         self.wake();
         r
+    }
+
+    // ── presence status and organizations ────────────────────────────────────────────────────────────────────
+
+    /// set_status (`POST /v1/status`): the status this person sets (available, busy, dnd, away and an optional text);
+    /// `state` absent or "auto" goes back to automatic (null). Every session hears a `presence` event about them when
+    /// it changes.
+    pub fn set_status(&self, session: &str, who: &Identity, state: Body, text: Body) -> R<Obj> {
+        let status = status(state, text)?;
+        let mut st = self.st.lock();
+        st.session(session, who)?;
+        let value = status.clone().map(Value::Object);
+        if st.statuses.get(&who.principal) != value.as_ref() {
+            match &value {
+                None => {
+                    st.statuses.shift_remove(&who.principal);
+                }
+                Some(v) => {
+                    st.statuses.insert(who.principal.clone(), v.clone());
+                }
+            }
+            st.dirty = true;
+            st.tell_presence(&who.principal);
+        }
+        drop(st);
+        self.wake();
+        log_info(&format!("status principal={} state={}", who.principal, status.as_ref().map(|s| pj::text_of(s, "state")).unwrap_or_else(|| "auto".into())));
+        Ok(obj([("ok", Value::Bool(true)), ("status", value.unwrap_or(Value::Null))]))
+    }
+
+    /// _org_list: `{members: [{id, label, principal, name}], organizations: [{id, label}]}`.
+    fn org_list(st: &State) -> Obj {
+        let mut principals: Vec<&String> = st.organizations.keys().chain(st.org_edits.keys()).collect();
+        principals.sort();
+        principals.dedup();
+        let mut members: Vec<Value> = Vec::new();
+        let mut known: Vec<(String, String)> = Vec::new();
+        for principal in principals {
+            let Value::Object(org) = st.org(principal) else { continue };
+            let name = st.directory.get(principal).and_then(Value::as_object).map(|e| pj::s(e, "name")).unwrap_or_default();
+            let pair = (pj::text_of(&org, "id"), pj::text_of(&org, "label"));
+            if !known.contains(&pair) {
+                known.push(pair);
+            }
+            members.push(Value::Object(with(&org, obj([("principal", Value::from(principal.clone())), ("name", Value::from(if name.is_empty() { principal.clone() } else { name }))]))));
+        }
+        known.sort();
+        let organizations: Vec<Value> = known.into_iter().map(|(id, label)| Value::Object(obj([("id", Value::from(id)), ("label", Value::from(label))]))).collect();
+        obj([("members", Value::Array(members)), ("organizations", Value::Array(organizations))])
+    }
+
+    /// admin_organizations: `{members: [{id, label, principal, name}], organizations: [{id, label}]}`.
+    pub fn admin_organizations(&self, session: &str, who: &Identity) -> R<Obj> {
+        let st = self.st.lock();
+        st.check_admin(session, who)?;
+        Ok(Self::org_list(&st))
+    }
+
+    /// admin_set_organization: an admin puts a person in an organization (`id`, `label`) or takes them out
+    /// (`remove: true`). Kept in state.json over relay.json's `organizations`; every session hears a `presence` event
+    /// about the person when it changes.
+    pub fn admin_set_organization(&self, session: &str, who: &Identity, principal: Body, id: Body, label: Body, remove: Body) -> R<Obj> {
+        let mut st = self.st.lock();
+        let r = (|| -> R<(Obj, String, Option<Obj>)> {
+            st.check_admin(session, who)?;
+            let principal = m::principal(principal);
+            if principal.is_empty() {
+                return bad("name the person (principal)");
+            }
+            let remove = m::flag(remove, "remove")?;
+            let entry = if remove {
+                None
+            } else {
+                let owner = Value::Object(obj([("id", Value::from(org_field(id, "id")?)), ("label", Value::from(org_field(label, "label")?))]));
+                Some(m::org_entry(&principal, &owner)?)
+            };
+            let before = st.org(&principal);
+            let base = st.organizations.get(&principal).and_then(Value::as_object).cloned();
+            if entry == base {
+                st.org_edits.shift_remove(&principal);
+            } else {
+                st.org_edits.insert(principal.clone(), entry.clone().map(Value::Object).unwrap_or(Value::Null));
+            }
+            st.dirty = true;
+            if st.org(&principal) != before {
+                st.tell_presence(&principal);
+            }
+            Ok((with(&Self::org_list(&st), obj([("ok", Value::Bool(true))])), principal, entry))
+        })();
+        drop(st);
+        self.wake();
+        let (out, principal, entry) = r?;
+        let org = entry.map(|e| pj::text_of(&e, "id")).unwrap_or_else(|| "-".into());
+        log_info(&format!("organization principal={principal} by={} org={}", who.principal, kv(&org)));
+        Ok(out)
     }
 
     // ── invitations ──────────────────────────────────────────────────────────────────────────────────────────
@@ -3103,7 +3960,7 @@ mod tests {
         let a = h.join("ops", &ann, "", false, None).unwrap();
         let b = h.join("ops", &ben, "", false, None).unwrap();
         assert_eq!(b["members"].as_array().unwrap().len(), 1);
-        let line = h.say(a["peer"].as_str().unwrap(), &ann, "hi").unwrap();
+        let line = h.say(a["peer"].as_str().unwrap(), &ann, "hi", None, None).unwrap();
         assert_eq!(line["rseq"], json!(1));
         let got = h.events(b["peer"].as_str().unwrap(), &ben, 0).unwrap();
         assert_eq!(got["events"][0]["type"], json!("chat"));
@@ -3123,7 +3980,7 @@ mod tests {
 
     #[test]
     fn state_json_round_trips_in_python_text() {
-        let text = "{\"v\": 2, \"directory\": {\"ann@x\": {\"name\": \"Ann\", \"last_seen\": 1.5}}, \"dms\": {}, \"read\": {}, \"invites\": {}, \"rooms\": {}, \"left\": {}, \"renewals\": {}, \"renewed\": {}, \"enrollments\": {}, \"consumed_seeds\": {}, \"seed_requests\": {}, \"seeded\": {}, \"denied\": {}}";
+        let text = "{\"v\": 2, \"directory\": {\"ann@x\": {\"name\": \"Ann\", \"last_seen\": 1.5}}, \"dms\": {}, \"read\": {}, \"invites\": {}, \"rooms\": {}, \"left\": {}, \"renewals\": {}, \"renewed\": {}, \"enrollments\": {}, \"consumed_seeds\": {}, \"seed_requests\": {}, \"seeded\": {}, \"denied\": {}, \"organizations\": {\"ben@x\": null, \"cy@x\": {\"id\": \"o\", \"label\": \"O\"}}, \"status\": {\"ann@x\": {\"state\": \"busy\", \"text\": \"\"}}, \"receipts\": {\"ann@x\": {\"ben@x\": 2.5}}}";
         let dir = std::env::temp_dir().join(format!("meet-state-{}", pj::token_hex(4)));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("state.json"), text).unwrap();
@@ -3138,6 +3995,7 @@ mod tests {
         match r {
             Err(E::Forbidden(m)) => format!("403 {m}"),
             Err(E::Bad(m)) => format!("400 {m}"),
+            Err(E::Conflict(m)) => format!("409 {m}"),
             Err(E::Gone(m)) => format!("410 {m}"),
             Err(e) => format!("other {}", e.message()),
             Ok(_) => "ok".into(),
@@ -3207,7 +4065,7 @@ mod tests {
         assert_eq!(refusal(h.recording_consent(&b, &ben, &request, Some(&json!("yes")))), "400 accepted must be true or false");
 
         let refused = h.recording_consent(&b, &ben, &request, Some(&json!(false))).unwrap();
-        assert_eq!(Value::Object(refused), json!({"ok": true, "accepted": false, "admission_pending": false, "members": [{"peer": a, "name": "ANN@X", "principal": "ann@x", "weak": false}]}));
+        assert_eq!(Value::Object(refused), json!({"ok": true, "accepted": false, "admission_pending": false, "members": [{"peer": a, "name": "ANN@X", "principal": "ann@x", "org": null, "weak": false}]}));
         let mut told = queue(&h, &a).pop().unwrap();
         told.shift_remove("seq");
         assert_eq!(told, obj([("type", json!("recording_consent")), ("request", json!(request)), ("peer", json!(b)), ("accepted", json!(false))]));
@@ -3248,13 +4106,13 @@ mod tests {
         let cy = who("cy@x", "cccccccccccccccc");
         let joined = h.join("ops", &cy, "", false, None).unwrap();
         let c = peer_of(&joined);
-        assert_eq!(keys(&joined), ["peer", "you", "members", "chat", "missed", "recording", "recording_notices", "admission_pending", "rseq", "options"]);
-        assert_eq!((&joined["members"], &joined["chat"], &joined["missed"]), (&json!([]), &json!([]), &json!({})));
+        assert_eq!(keys(&joined), ["peer", "you", "members", "chat", "missed", "recording", "recording_notices", "admission_pending", "rseq", "options", "stage"]);
+        assert_eq!((&joined["members"], &joined["chat"], &joined["missed"], &joined["stage"]), (&json!([]), &json!([]), &json!({}), &Value::Null));
         assert_eq!((&joined["recording"], &joined["admission_pending"]), (&json!([a]), &json!(true)));
         assert_eq!(joined["recording_notices"][0]["on"], json!(true));
         assert!(queue(&h, &b).iter().all(|e| e.get("peer") != Some(&json!(c))), "the room does not hear a waiting joiner");
 
-        assert_eq!(refusal(h.say(&c, &cy, "hi")), format!("403 {ADMISSION_FIRST}"));
+        assert_eq!(refusal(h.say(&c, &cy, "hi", None, None)), format!("403 {ADMISSION_FIRST}"));
         assert_eq!(refusal(h.caption(&c, &cy, "hi", None, None, None)), format!("403 {ADMISSION_FIRST}"));
         assert_eq!(refusal(h.captions(&c, &cy, Some(&json!([{"text": "hi"}])), None, None)), format!("403 {ADMISSION_FIRST}"));
         assert_eq!(refusal(h.room_captions(&c, &cy, "0", "10")), format!("403 {ADMISSION_FIRST}"));
@@ -3264,7 +4122,7 @@ mod tests {
         assert_eq!(refusal(on(&h, &c, &cy, true)), "403 recording is not permitted");
         let policy = h.recording_policy(&c, &cy).unwrap();
         assert_eq!((&policy["allowed"], &policy["admission_pending"]), (&json!(false), &json!(true)));
-        h.say(&a, &ann, "not for cy").unwrap();
+        h.say(&a, &ann, "not for cy", None, None).unwrap();
         assert!(queue(&h, &c).is_empty());
         // the recorder's own answer does not wait for a joiner who is not yet in the call
         assert_eq!(on(&h, &a, &ann, false).unwrap()["ok"], json!(true));
@@ -3275,14 +4133,14 @@ mod tests {
         assert!(h.st.lock().peers[&a].recording, "a waiting joiner's refusal does not stop the recording");
         let accepted = h.recording_consent(&c, &cy, &request, Some(&json!(true))).unwrap();
         assert_eq!(accepted["admission_pending"], json!(false));
-        assert_eq!(accepted["members"], json!([{"peer": a, "name": "ANN@X", "principal": "ann@x", "weak": false}, {"peer": b, "name": "BEN@X", "principal": "ben@x", "weak": false}]));
+        assert_eq!(accepted["members"], json!([{"peer": a, "name": "ANN@X", "principal": "ann@x", "org": null, "weak": false}, {"peer": b, "name": "BEN@X", "principal": "ben@x", "org": null, "weak": false}]));
         assert_eq!(types(&h, &c), ["recording_consent", "recording_consent", "recording_admitted"]);
         assert_eq!(queue(&h, &c)[2]["members"], accepted["members"]);
         let joins: Vec<Obj> = queue(&h, &b).into_iter().filter(|e| e["type"] == json!("join")).collect();
         assert_eq!(joins.len(), 1);
-        assert_eq!(keys(&joins[0]), ["type", "peer", "name", "principal", "seq"]);
+        assert_eq!(keys(&joins[0]), ["type", "peer", "name", "principal", "org", "seq"]);
         assert_eq!(joins[0]["peer"], json!(c));
-        assert_eq!(h.say(&c, &cy, "hello").unwrap()["text"], json!("hello"));
+        assert_eq!(h.say(&c, &cy, "hello", None, None).unwrap()["text"], json!("hello"));
     }
 
     #[test]
@@ -3291,7 +4149,9 @@ mod tests {
         let cy = who("cy@x", "cccccccccccccccc");
         let c = peer_of(&h.join("ops", &cy, "", false, None).unwrap());
         h.leave(&a, &ann).unwrap();
-        assert_eq!(types(&h, &c), ["recording", "recording_admitted", "leave"]);
+        // meet_relay._drop admits cy before _stage_drop hands the leaving host's role to ben (why "leave")
+        assert_eq!(types(&h, &c), ["recording", "recording_admitted", "leave", "stage"]);
+        assert_eq!(queue(&h, &c)[3]["stage"]["host"], json!(b));
         let events = queue(&h, &c);
         let peers: Vec<&Value> = events[1]["members"].as_array().unwrap().iter().map(|m| &m["peer"]).collect();
         assert_eq!(peers, [&json!(a), &json!(b)]);
@@ -3320,12 +4180,74 @@ mod tests {
         let ben = who("ben@x", "bbbbbbbbbbbbbbbb");
         let a = peer_of(&h.join("ops", &ann, "", false, None).unwrap());
         let b = peer_of(&h.join("ops", &ben, "", false, None).unwrap());
-        h.st.lock().recording_organizations = json!({"ann@x": {"id": "org-1", "label": "Org One"}}).as_object().unwrap().clone();
+        h.st.lock().organizations = json!({"ann@x": {"id": "org-1", "label": "Org One"}}).as_object().unwrap().clone();
         assert_eq!(h.recording_policy(&a, &ann).unwrap()["owner"], json!({"kind": "organization", "id": "org-1", "label": "Org One"}));
         assert_eq!(h.recording_policy(&b, &ben).unwrap()["owner"], json!({"kind": "individual", "id": "ben@x", "label": "BEN@X"}));
         h.st.lock().recording_enabled = false;
         assert_eq!(h.recording_policy(&a, &ann).unwrap()["allowed"], json!(false));
         assert_eq!(refusal(on(&h, &a, &ann, true)), "403 recording is not permitted");
         assert_eq!(Value::Object(h.recording(&a, &ann, Some(&json!(false)), None, None).unwrap()), json!({"ok": true, "on": false, "paused": false, "request": null}));
+    }
+
+    // ── stage and chat changes ──────────────────────────────────────────────────────────────────────────────
+
+    fn act(h: &Hub, peer: &str, who: &Identity, action: &str, target: Option<&str>) -> R<Obj> {
+        let action = json!(action);
+        let target = target.map(|t| json!(t));
+        h.stage(peer, who, Some(&action), target.as_ref(), None, None)
+    }
+
+    #[test]
+    fn the_stage_follows_present_grant_and_leave() {
+        let h = hub();
+        let ann = who("ann@x", "aaaaaaaaaaaaaaaa");
+        let ben = who("ben@x", "bbbbbbbbbbbbbbbb");
+        let cy = who("cy@x", "cccccccccccccccc");
+        let joined = h.join("ops", &ben, "", false, None).unwrap();
+        let b = peer_of(&joined);
+        assert_eq!(joined["stage"]["host"], json!(b));
+        let c = peer_of(&h.join("ops", &cy, "", false, None).unwrap());
+        let a = peer_of(&h.join("ops", &ann, "", false, None).unwrap());
+        let stage = act(&h, &b, &ben, "present", None).unwrap();
+        assert_eq!(keys(stage["stage"].as_object().unwrap()), ["host", "presenter", "grant", "requests", "hands"]);
+        assert_eq!(refusal(act(&h, &c, &cy, "present", None)), "409 BEN@X is presenting. Ask to present.");
+        act(&h, &c, &cy, "request", None).unwrap();
+        let granted = act(&h, &b, &ben, "grant", Some(&c)).unwrap();
+        assert_eq!(granted["stage"]["grant"]["peer"], json!(c));
+        // the host takes over even while a grant is live (meet_relay.py: `not host and ...`)
+        let taken = act(&h, &b, &ben, "present", None).unwrap();
+        assert_eq!(taken["stage"]["presenter"]["peer"], json!(b));
+        assert_eq!(taken["stage"]["grant"], Value::Null);
+        assert_eq!(refusal(act(&h, &c, &cy, "mute", Some(&b))), format!("403 {NOT_HOST}"));
+        assert_eq!(refusal(act(&h, &a, &ann, "grant", None)), "400 say whom to grant (target)");
+        // ann is a relay admin: host in every room
+        act(&h, &a, &ann, "remove", Some(&c)).unwrap();
+        // cy held no stage slot after the takeover, so removing cy is a plain leave
+        assert_eq!(types(&h, &b).last().map(String::as_str), Some("leave"));
+        h.leave(&b, &ben).unwrap();
+        assert_eq!(queue(&h, &a).last().unwrap()["stage"]["host"], json!(a));
+    }
+
+    #[test]
+    fn a_deleted_line_keeps_no_words() {
+        let h = hub();
+        let ann = who("ann@x", "aaaaaaaaaaaaaaaa");
+        let ben = who("ben@x", "bbbbbbbbbbbbbbbb");
+        let a = peer_of(&h.join("ops", &ann, "", false, None).unwrap());
+        let b = peer_of(&h.join("ops", &ben, "", false, None).unwrap());
+        let line = h.say(&a, &ann, "first draft", None, None).unwrap();
+        let id = line["id"].as_str().unwrap().to_string();
+        let reply = h.say(&b, &ben, "answer", Some(&json!(id)), Some(&json!(["ann@x", "ben@x"]))).unwrap();
+        assert_eq!(reply["reply_to"], json!({"id": id, "name": "ANN@X", "text": "first draft"}));
+        assert_eq!(reply["mentions"], json!(["ann@x"]));
+        let edit = |who: &Identity, peer: &str, text: &str| h.chat_change(who, "room", &id, Some(&json!(text)), false, Some(peer.to_string()), None, None);
+        assert_eq!(refusal(edit(&ben, &b, "mine")), "403 only the person who wrote a message can edit it");
+        edit(&ann, &a, "final words").unwrap();
+        let gone = h.chat_change(&ann, "room", &id, None, true, Some(a.clone()), None, None).unwrap();
+        assert_eq!((&gone["text"], gone.contains_key("deleted")), (&json!(""), true));
+        assert_eq!(h.chat_change(&ann, "room", &id, None, true, Some(a.clone()), None, None).unwrap(), gone);
+        let text = pj::dumps(&lines_value(&h.st.lock().rooms));
+        assert!(!text.contains("first draft") && !text.contains("final words"));
+        assert_eq!(refusal(h.say(&b, &ben, "x", Some(&json!(id)), None)), "400 that message was deleted");
     }
 }

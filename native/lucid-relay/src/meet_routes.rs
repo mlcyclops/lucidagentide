@@ -55,6 +55,10 @@ fn get_route(path: &str) -> Option<Route> {
             let since = if since.is_empty() { None } else { Some(m::py_int(&since)?) };
             c.relay.admin_signer(&c.q("session", ""), &who, &c.q("op", ""), since)
         },
+        "/v1/admin/organizations" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.admin_organizations(&c.q("session", ""), &who)
+        },
         "/v1/version" => |c: &mut Ctx| {
             let who = c.who(false)?;
             c.relay.version(&c.q("session", ""), &who)
@@ -71,6 +75,15 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/signal" => signal,
         "/v1/link" => link,
         "/v1/chat" => chat,
+        "/v1/chat/edit" => |c: &mut Ctx| chat_change(c, false),
+        "/v1/chat/delete" => |c: &mut Ctx| chat_change(c, true),
+        "/v1/typing" => typing,
+        "/v1/stage" => stage,
+        "/v1/status" => status,
+        "/v1/admin/organizations" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.admin_set_organization(&pj::s(&b, "session"), &who, b.get("principal"), b.get("id"), b.get("label"), b.get("remove"))
+        },
         "/v1/caption" => caption,
         "/v1/captions" => captions,
         "/v1/room/options" => room_options,
@@ -272,7 +285,36 @@ fn link(c: &mut Ctx) -> R<Obj> {
 fn chat(c: &mut Ctx) -> R<Obj> {
     let (who, b, peer) = peer_gate(c)?;
     let text = m::text(b.get("text"), "messages")?;
-    c.relay.hub.say(&peer, &who, &text)
+    c.relay.hub.say(&peer, &who, &text, b.get("reply_to"), b.get("mentions"))
+}
+
+/// `str(body.get(key) or "") or None`.
+fn opt(b: &Obj, key: &str) -> Option<String> {
+    Some(pj::s(b, key)).filter(|v| !v.is_empty())
+}
+
+/// _chat_change: `{peer|session, scope: room|dm, with?, id, text}`: edit or delete a message.
+fn chat_change(c: &mut Ctx, delete: bool) -> R<Obj> {
+    let (who, b) = (c.who(false)?, c.body()?);
+    c.gate(&who, None, &pj::s(&b, "peer"), &pj::s(&b, "session"))?;
+    let text = if delete { None } else { b.get("text") };
+    c.relay.hub.chat_change(&who, &pj::s(&b, "scope"), &pj::s(&b, "id"), text, delete, opt(&b, "peer"), opt(&b, "session"), opt(&b, "with"))
+}
+
+fn typing(c: &mut Ctx) -> R<Obj> {
+    let (who, b) = (c.who(false)?, c.body()?);
+    c.gate(&who, None, &pj::s(&b, "peer"), &pj::s(&b, "session"))?;
+    c.relay.hub.typing(&who, &pj::s(&b, "scope"), opt(&b, "peer"), opt(&b, "session"), opt(&b, "with"))
+}
+
+fn stage(c: &mut Ctx) -> R<Obj> {
+    let (who, b, peer) = peer_gate(c)?;
+    c.relay.hub.stage(&peer, &who, b.get("action"), b.get("target"), b.get("up"), b.get("emoji"))
+}
+
+fn status(c: &mut Ctx) -> R<Obj> {
+    let (who, b, session) = session_gate(c)?;
+    c.relay.hub.set_status(&session, &who, b.get("state"), b.get("text"))
 }
 
 fn caption(c: &mut Ctx) -> R<Obj> {
@@ -350,12 +392,12 @@ fn session_gate(c: &mut Ctx) -> R<(m::Identity, Obj, String)> {
 
 fn dm(c: &mut Ctx) -> R<Obj> {
     let (who, b, session) = session_gate(c)?;
-    c.relay.hub.dm(&session, &who, &pj::s(&b, "to"), b.get("text"))
+    c.relay.hub.dm(&session, &who, &pj::s(&b, "to"), b.get("text"), b.get("reply_to"))
 }
 
 fn dm_read(c: &mut Ctx) -> R<Obj> {
     let (who, b, session) = session_gate(c)?;
-    c.relay.hub.dm_read(&session, &who, &pj::s(&b, "with"), b.get("ts"))
+    c.relay.hub.dm_read(&session, &who, &pj::s(&b, "with"), b.get("ts"), b.get("receipt"))
 }
 
 fn react(c: &mut Ctx) -> R<Obj> {
