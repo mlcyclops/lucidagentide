@@ -19,6 +19,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+// Scheduled meetings and conversations (channels, group chats, threads, pins, search): child modules, so they share
+// the hub's one lock and its private state.
+#[path = "meet_meetings.rs"]
+mod meetings;
+#[path = "meet_channels.rs"]
+mod channels;
+
 pub const PEER_TIMEOUT: f64 = 40.0;
 pub const SESSION_TIMEOUT: f64 = 40.0;
 const CHAT_KEEP: usize = 200;
@@ -394,6 +401,17 @@ pub struct State {
     stages: HashMap<String, Obj>,
     /// In memory: (principal, conversation) -> monotonic time of the last typing notice.
     typing: HashMap<(String, String), f64>,
+    /// meeting id (= its room) -> scheduled meeting (/v1/meetings): kept until it ends, while a recurrence is active,
+    /// or mail_days after it was canceled.
+    meetings: Obj,
+    /// channel id -> {id, kind, name, topic, created_by, members, created, archived, last}.
+    channels: Obj,
+    /// channel id -> [message].
+    channel_msgs: Lines,
+    /// reader -> {channel id: ts}.
+    channel_read: Obj,
+    /// relay.json `channel_days` in seconds: channel and group chat message retention.
+    channel_s: f64,
 }
 
 /// _empty_stage.
@@ -496,6 +514,16 @@ fn preview(target: &Obj, name: Option<&Value>) -> R<Obj> {
         return bad("that message was deleted");
     }
     Ok(obj([("id", Value::from(str_value(target.get("id")))), ("name", Value::from(pj::str_or(name))), ("text", Value::from(pj::clip(&pj::s(target, "text"), REPLY_PREVIEW)))]))
+}
+
+const SCOPE_ERROR: &str = "scope must be dm, room or channel";
+
+/// A checked conversation (_conversation): the caller's room seat, the other person of a direct conversation, or a
+/// channel (or group chat) the caller is a member of.
+enum Conv {
+    Room { peer: String, room: String },
+    Dm(String),
+    Channel(String),
 }
 
 fn obj_mut<'a>(map: &'a mut Obj, key: &str) -> &'a mut Obj {
@@ -969,11 +997,16 @@ impl State {
                 // only waiting joiners were left
                 self.stage_mut(room).insert("host".into(), Value::from(id.clone()));
             }
+            let organizer = self.organizer_host(room, &id);
             let person = self.person_of(&id);
             let members: Vec<Value> = self.members(room).into_iter().filter(|m| m.get("peer").and_then(Value::as_str) != Some(id.as_str())).collect();
             let stage = self.stage_view(room);
             self.push_peer(&id, &obj([("type", Value::from("recording_admitted")), ("members", Value::Array(members)), ("stage", stage)]));
-            self.broadcast(room, &with(&obj([("type", Value::from("join"))]), person), Some(&id));
+            self.broadcast(room, &with(&obj([("type", Value::from("join"))]), person.clone()), Some(&id));
+            if organizer {
+                let by = pj::text_of(&person, "principal");
+                self.stage_event(room, "organizer", &by, Some(&id));
+            }
         }
     }
 
@@ -1133,6 +1166,21 @@ impl State {
         };
         keep(&mut self.rooms, hist_cut);
         keep(&mut self.dms, mail_cut);
+        let channel_cut = now - self.channel_s;
+        keep(&mut self.channel_msgs, channel_cut);
+        // archived longer than the retention, nothing kept
+        let msgs = &self.channel_msgs;
+        self.channels.retain(|cid, ch| {
+            let archived = ch.get("archived").and_then(|v| pj::as_num(Some(v))).unwrap_or(0.0);
+            !(archived != 0.0 && archived < channel_cut && !msgs.contains_key(cid))
+        });
+        let channels = &self.channels;
+        for v in self.channel_read.values_mut() {
+            if let Some(o) = v.as_object_mut() {
+                o.retain(|c, _| channels.contains_key(c));
+            }
+        }
+        self.channel_read.retain(|_, v| v.as_object().map(|o| !o.is_empty()).unwrap_or(false));
         keep(&mut self.invites, invite_cut);
         for v in self.left.values_mut() {
             if let Some(o) = v.as_object_mut() {
@@ -1149,6 +1197,15 @@ impl State {
         by_ts(&mut self.seed_requests, "ts", mail_cut);
         by_ts(&mut self.seeded, "ts", mail_cut);
         by_ts(&mut self.denied, "until", now);
+        // scheduled meetings: until they end; a recurring one while its recurrence is active; a canceled one
+        // mail_days after the cancel (so attendees still see it)
+        self.meetings.retain(|_, m| {
+            let Some(m) = m.as_object() else { return false };
+            if pj::truthy(m.get("canceled")) {
+                return pj::num(m, "canceled") >= mail_cut;
+            }
+            pj::text_of(m, "recurrence") != "none" || pj::num(m, "end") >= now
+        });
         for entry in self.directory.values_mut() {
             let Some(e) = entry.as_object_mut() else { continue };
             if let Some(Value::Object(devices)) = e.get_mut("devices") {
@@ -1177,6 +1234,10 @@ impl State {
             ("organizations", Value::Object(self.org_edits.clone())),
             ("status", Value::Object(self.statuses.clone())),
             ("receipts", Value::Object(self.receipts.clone())),
+            ("meetings", Value::Object(self.meetings.clone())),
+            ("channels", Value::Object(self.channels.clone())),
+            ("channel_messages", lines_value(&self.channel_msgs)),
+            ("channel_read", Value::Object(self.channel_read.clone())),
         ]));
         pj::dumps(&v)
     }
@@ -1342,7 +1403,7 @@ pub struct Hub {
 type Body<'a> = Option<&'a Value>;
 
 impl Hub {
-    pub fn new(state_dir: Option<PathBuf>, admins: &[String], history_hours: f64, mail_days: f64, signer: Option<Arc<SignerClient>>, links: Arc<LinkStats>) -> Hub {
+    pub fn new(state_dir: Option<PathBuf>, admins: &[String], history_hours: f64, mail_days: f64, channel_days: f64, signer: Option<Arc<SignerClient>>, links: Arc<LinkStats>) -> Hub {
         let mut list: Vec<String> = Vec::new();
         for a in admins {
             let p = a.trim().to_lowercase();
@@ -1383,6 +1444,11 @@ impl Hub {
             receipts: Obj::new(),
             stages: HashMap::new(),
             typing: HashMap::new(),
+            meetings: Obj::new(),
+            channels: Obj::new(),
+            channel_msgs: Lines::new(),
+            channel_read: Obj::new(),
+            channel_s: channel_days * 86400.0,
         };
         let hub = Hub { st: Mutex::new(st), cond: Condvar::new(), signer, links, state_dir, save_lock: Mutex::new(()), stop: AtomicBool::new(false) };
         if hub.state_dir.is_some() {
@@ -1455,6 +1521,35 @@ impl Hub {
             .filter_map(|(k, v)| {
                 let marks: Obj = v.as_object()?.iter().filter_map(|(o, t)| match t {
                     Value::Number(n) => n.as_f64().map(|x| (o.clone(), f(x))),
+                    _ => None,
+                }).collect();
+                Some((k, Value::Object(marks)))
+            })
+            .collect();
+        for (mid, meeting) in section("meetings") {
+            if meetings::stored_meeting(&mid, &meeting) {
+                st.meetings.insert(mid, meeting);
+            } else {
+                log_warn(&format!("state file: meeting {} unreadable; ignored", kv(&mid)));
+            }
+        }
+        st.channels = section("channels")
+            .into_iter()
+            .filter(|(_, v)| v.as_object().map(|c| channels::CHANNEL_KINDS.contains(&pj::text_of(c, "kind").as_str()) && c.get("members").map(Value::is_array).unwrap_or(false)).unwrap_or(false))
+            .collect();
+        let known = st.channels.clone();
+        st.channel_msgs = section("channel_messages")
+            .into_iter()
+            .filter_map(|(k, v)| {
+                let list = v.as_array().filter(|_| known.contains_key(&k))?;
+                Some((k, list.iter().filter_map(|m| m.as_object().cloned()).collect()))
+            })
+            .collect();
+        st.channel_read = section("channel_read")
+            .into_iter()
+            .filter_map(|(k, v)| {
+                let marks: Obj = v.as_object()?.iter().filter_map(|(c, t)| match t {
+                    Value::Number(n) => n.as_f64().map(|x| (c.clone(), f(x))),
                     _ => None,
                 }).collect();
                 Some((k, Value::Object(marks)))
@@ -1615,6 +1710,7 @@ impl Hub {
         let old_host = st.stage_host(room);
         let was_host = old_host.map(|h| mine.contains(&h)).unwrap_or(false);
         let took_over = !mine.is_empty();
+        let stage_before = st.stages.contains_key(room).then(|| st.stage_view(room));
         for old in mine {
             let device = st.peers[&old].who.device.clone();
             if device != who.device {
@@ -1691,11 +1787,16 @@ impl Hub {
         if !pending && (was_host || !host_here) {
             st.stage_mut(room).insert("host".into(), Value::from(peer_id.clone()));
         }
+        // the organizer of the scheduled meeting in this room takes the host role
+        let organizer = st.organizer_host(room, &peer_id);
         let you = st.person_of(&peer_id);
         if !pending {
             st.broadcast(room, &with(&obj([("type", Value::from("join"))]), you.clone()), Some(&peer_id));
-            if took_over {
-                // the others hear where the taken-over seat's roles went
+            // a taken-over seat that held a role (host, presenter, grant, request, hand): the others hear where it
+            // went; otherwise nothing changed
+            if organizer {
+                st.stage_event(room, "organizer", &who.principal, Some(&peer_id));
+            } else if took_over && stage_before.as_ref().map(|b| *b != st.stage_view(room)).unwrap_or(false) {
                 st.stage_event(room, "join", &who.principal, Some(&peer_id));
             }
         }
@@ -1937,15 +2038,17 @@ impl Hub {
         st.dms.get_mut(&conv(a, b)).and_then(|l| l.iter_mut().find(|m| pj::text_of(m, "id") == id)).ok_or_else(|| E::NotFound("that message is no longer kept".into()))
     }
 
-    /// _conversation: the caller's room seat (scope room) or the other person (scope dm), checked.
-    fn conversation(st: &State, who: &Identity, scope: &str, peer: Option<&str>, session: Option<&str>, with_: Option<&str>) -> R<(Option<String>, String)> {
+    /// _conversation: the caller's room seat (scope room), the other person (scope dm) or the channel the caller is a
+    /// member of (scope channel), checked. `writing` refuses an archived channel.
+    #[allow(clippy::too_many_arguments)]
+    fn conversation(st: &State, who: &Identity, scope: &str, peer: Option<&str>, session: Option<&str>, with_: Option<&str>, channel: Option<&str>, writing: bool) -> R<Conv> {
         if scope == "room" {
             let Some(peer) = peer else { return bad("a room message needs your room session (peer)") };
             st.owned(peer, who)?;
             if st.peers[peer].admission_pending {
                 return forbidden(ADMISSION_FIRST);
             }
-            return Ok((Some(peer.to_string()), String::new()));
+            return Ok(Conv::Room { peer: peer.to_string(), room: st.peers[peer].room.clone() });
         }
         if scope == "dm" {
             if let Some(s) = session {
@@ -1959,9 +2062,61 @@ impl Hub {
             if other.is_empty() {
                 return bad("say whose conversation the message is in (with)");
             }
-            return Ok((None, other));
+            return Ok(Conv::Dm(other));
         }
-        bad("scope must be dm or room")
+        if scope == "channel" {
+            let Some(s) = session else { return bad("a channel message needs your session") };
+            st.session(s, who)?;
+            let Some(c) = channel else { return bad("say which channel the message is in (channel)") };
+            return Ok(Conv::Channel(st.member_channel(c, &who.principal, writing)?));
+        }
+        bad(SCOPE_ERROR)
+    }
+
+    /// The kept messages of a checked conversation (a room: its log).
+    fn conv_list<'a>(st: &'a State, who: &Identity, c: &Conv) -> Option<&'a Vec<Obj>> {
+        match c {
+            Conv::Room { room, .. } => st.rooms.get(room),
+            Conv::Channel(cid) => st.channel_msgs.get(cid),
+            Conv::Dm(other) => st.dms.get(&conv(&who.principal, other)),
+        }
+    }
+
+    fn conv_list_mut<'a>(st: &'a mut State, who: &Identity, c: &Conv) -> Option<&'a mut Vec<Obj>> {
+        match c {
+            Conv::Room { room, .. } => st.rooms.get_mut(room),
+            Conv::Channel(cid) => st.channel_msgs.get_mut(cid),
+            Conv::Dm(other) => st.dms.get_mut(&conv(&who.principal, other)),
+        }
+    }
+
+    /// _scoped_message: where the message `id` is in a checked conversation (a room: one of its chat lines).
+    fn scoped_index(st: &State, who: &Identity, c: &Conv, id: &str) -> R<usize> {
+        let room = matches!(c, Conv::Room { .. });
+        Self::conv_list(st, who, c)
+            .and_then(|l| l.iter().position(|m| pj::text_of(m, "id") == id && (!room || pj::text_of(m, "kind") == "chat")))
+            .ok_or_else(|| E::NotFound("that message is no longer kept".into()))
+    }
+
+    /// _tell_conversation: one event to everyone in a conversation: the room (`room`), every member's sessions
+    /// (`channel`) or both people's sessions (`with` = the other person from each receiver's point of view).
+    fn tell_conversation(st: &mut State, who: &Identity, c: &Conv, event: &Obj) {
+        match c {
+            Conv::Room { room, .. } => st.broadcast(room, &with(event, obj([("room", Value::from(room.clone()))])), None),
+            Conv::Channel(cid) => {
+                let members = channels::members_of(as_obj(st.channels.get(cid)));
+                st.tell(&members, &with(event, obj([("channel", Value::from(cid.clone()))])), None);
+            }
+            Conv::Dm(other) => {
+                for s in st.sessions.values_mut() {
+                    if s.who.principal == who.principal {
+                        push(&mut s.seq, &mut s.events, &with(event, obj([("with", Value::from(other.clone()))])));
+                    } else if s.who.principal == *other {
+                        push(&mut s.seq, &mut s.events, &with(event, obj([("with", Value::from(who.principal.clone()))])));
+                    }
+                }
+            }
+        }
     }
 
     /// chat_change: edit (`text`) or delete (`delete`) a room chat line or a direct message. Only the author edits;
@@ -1969,25 +2124,16 @@ impl Hub {
     /// reactions, no quoted text). Everyone in the conversation hears one `chat_update`; a room also keeps it as a
     /// history line. Answers the changed message.
     #[allow(clippy::too_many_arguments)]
-    pub fn chat_change(&self, who: &Identity, scope: &str, id: &str, text: Body, delete: bool, peer: Option<String>, session: Option<String>, with_: Option<String>) -> R<Obj> {
+    pub fn chat_change(&self, who: &Identity, scope: &str, id: &str, text: Body, delete: bool, peer: Option<String>, session: Option<String>, with_: Option<String>, channel: Option<String>) -> R<Obj> {
         let text = if delete { String::new() } else { m::text(text, "messages")? };
         let mut st = self.st.lock();
         let r = (|| -> R<(Obj, bool)> {
-            let (p, other) = Self::conversation(&st, who, scope, peer.as_deref(), session.as_deref(), with_.as_deref())?;
-            let room = p.as_ref().map(|id| st.peers[id.as_str()].room.clone());
+            let c = Self::conversation(&st, who, scope, peer.as_deref(), session.as_deref(), with_.as_deref(), channel.as_deref(), !delete)?;
+            let i = Self::scoped_index(&st, who, &c, id)?;
             let is_admin = st.admins.contains(&who.principal);
-            let (target, author) = match &room {
-                Some(room) => {
-                    let t = Self::room_line(&mut st, room, id)?;
-                    let a = pj::text_of(t, "principal");
-                    (t, a)
-                }
-                None => {
-                    let t = Self::dm_message(&mut st, &who.principal, &other, id)?;
-                    let a = pj::text_of(t, "from");
-                    (t, a)
-                }
-            };
+            let list = Self::conv_list_mut(&mut st, who, &c).expect("the message's conversation");
+            let target = &mut list[i];
+            let author = pj::s(target, if matches!(c, Conv::Room { .. }) { "principal" } else { "from" });
             if pj::truthy(target.get("deleted")) {
                 if delete {
                     // already gone: nothing more to tell
@@ -2001,28 +2147,20 @@ impl Hub {
             let now = pj::now();
             let mut event = obj([("type", Value::from("chat_update")), ("scope", Value::from(scope)), ("id", Value::from(id))]);
             if delete {
+                // a tombstone: no text, no reactions, no pin, no link preview, no quoted words
                 target.insert("text".into(), Value::from(""));
                 target.insert("deleted".into(), f(now));
                 target.insert("reactions".into(), Value::Object(Obj::new()));
+                target.shift_remove("pinned");
+                target.shift_remove("preview");
                 if let Some(Value::Object(q)) = target.get_mut("reply_to") {
                     q.insert("text".into(), Value::from(""));
                 }
+                let root = pj::truthy(target.get("thread")).then(|| str_value(target.get("thread")));
                 event.insert("text".into(), Value::from(""));
                 event.insert("deleted".into(), f(now));
-            } else {
-                target.insert("text".into(), Value::from(text.clone()));
-                target.insert("edited".into(), f(now));
-                event.insert("text".into(), Value::from(text.clone()));
-                event.insert("edited".into(), f(now));
-            }
-            let out = target.clone();
-            if delete {
                 // replies quoting it and its edits lose the words too
-                let thread = match &room {
-                    Some(room) => st.rooms.get_mut(room),
-                    None => st.dms.get_mut(&conv(&who.principal, &other)),
-                };
-                for msg in thread.into_iter().flatten() {
+                for msg in list.iter_mut() {
                     if let Some(Value::Object(q)) = msg.get_mut("reply_to") {
                         if q.get("id").and_then(Value::as_str) == Some(id) {
                             q.insert("text".into(), Value::from(""));
@@ -2032,31 +2170,30 @@ impl Hub {
                         msg.insert("text".into(), Value::from(""));
                     }
                 }
+                // a deleted thread reply leaves its root's counters
+                if let Some(root) = root {
+                    channels::recount(list, &root);
+                }
+            } else {
+                target.insert("text".into(), Value::from(text.clone()));
+                target.insert("edited".into(), f(now));
+                event.insert("text".into(), Value::from(text.clone()));
+                event.insert("edited".into(), f(now));
             }
+            let out = list[i].clone();
             event.insert("by".into(), Value::from(who.principal.clone()));
             st.dirty = true;
-            match &room {
-                Some(room) => {
-                    event.insert("room".into(), Value::from(room.clone()));
-                    let mut line: Obj = event.iter().filter(|(k, _)| k.as_str() != "type").map(|(k, v)| (k.clone(), v.clone())).collect();
-                    line.insert("kind".into(), Value::from("chat_update"));
-                    line.insert("id".into(), Value::from(pj::token_hex(6)));
-                    line.insert("target".into(), Value::from(id));
-                    line.insert("name".into(), Value::from(who.name.clone()));
-                    line.insert("ts".into(), f(now));
-                    st.room_log(room, &mut line);
-                    st.broadcast(room, &event, None);
-                }
-                None => {
-                    for s in st.sessions.values_mut() {
-                        if s.who.principal == who.principal {
-                            push(&mut s.seq, &mut s.events, &with(&event, obj([("with", Value::from(other.clone()))])));
-                        } else if s.who.principal == other {
-                            push(&mut s.seq, &mut s.events, &with(&event, obj([("with", Value::from(who.principal.clone()))])));
-                        }
-                    }
-                }
+            if let Conv::Room { room, .. } = &c {
+                let mut line: Obj = event.iter().filter(|(k, _)| k.as_str() != "type").map(|(k, v)| (k.clone(), v.clone())).collect();
+                line.insert("room".into(), Value::from(room.clone()));
+                line.insert("kind".into(), Value::from("chat_update"));
+                line.insert("id".into(), Value::from(pj::token_hex(6)));
+                line.insert("target".into(), Value::from(id));
+                line.insert("name".into(), Value::from(who.name.clone()));
+                line.insert("ts".into(), f(now));
+                st.room_log(room, &mut line);
             }
+            Self::tell_conversation(&mut st, who, &c, &event);
             Ok((out, true))
         })();
         drop(st);
@@ -2070,14 +2207,14 @@ impl Hub {
 
     /// typing: `Name is typing`, never stored; one notice per sender and conversation every TYPING_EVERY seconds at
     /// most (`sent` false when this one was dropped).
-    pub fn typing(&self, who: &Identity, scope: &str, peer: Option<String>, session: Option<String>, with_: Option<String>) -> R<Obj> {
+    pub fn typing(&self, who: &Identity, scope: &str, peer: Option<String>, session: Option<String>, with_: Option<String>, channel: Option<String>) -> R<Obj> {
         let mut st = self.st.lock();
         let r = (|| -> R<Obj> {
-            let (p, other) = Self::conversation(&st, who, scope, peer.as_deref(), session.as_deref(), with_.as_deref())?;
-            let room = p.as_ref().map(|id| st.peers[id.as_str()].room.clone());
-            let key = (who.principal.clone(), match &room {
-                Some(room) => format!("room {room}"),
-                None => format!("dm {other}"),
+            let c = Self::conversation(&st, who, scope, peer.as_deref(), session.as_deref(), with_.as_deref(), channel.as_deref(), true)?;
+            let key = (who.principal.clone(), match &c {
+                Conv::Room { room, .. } => format!("room {room}"),
+                Conv::Channel(cid) => format!("channel {cid}"),
+                Conv::Dm(other) => format!("dm {other}"),
             });
             let now = pj::mono();
             if let Some(last) = st.typing.get(&key) {
@@ -2090,10 +2227,14 @@ impl Hub {
             }
             st.typing.insert(key, now);
             let event = obj([("type", Value::from("typing")), ("scope", Value::from(scope)), ("principal", Value::from(who.principal.clone())), ("name", Value::from(who.name.clone())), ("ts", f(pj::now()))]);
-            match (&room, &p) {
-                (Some(room), Some(me)) => st.broadcast(room, &with(&event, obj([("room", Value::from(room.clone()))])), Some(me.as_str())),
-                _ if other != who.principal => st.tell(std::slice::from_ref(&other), &with(&event, obj([("with", Value::from(who.principal.clone()))])), None),
-                _ => {}
+            match &c {
+                Conv::Room { room, peer } => st.broadcast(room, &with(&event, obj([("room", Value::from(room.clone()))])), Some(peer.as_str())),
+                Conv::Channel(cid) => {
+                    let others: Vec<String> = channels::members_of(as_obj(st.channels.get(cid))).into_iter().filter(|p| *p != who.principal).collect();
+                    st.tell(&others, &with(&event, obj([("channel", Value::from(cid.clone()))])), None);
+                }
+                Conv::Dm(other) if *other != who.principal => st.tell(std::slice::from_ref(other), &with(&event, obj([("with", Value::from(who.principal.clone()))])), None),
+                Conv::Dm(_) => {}
             }
             Ok(obj([("ok", Value::Bool(true)), ("sent", Value::Bool(true))]))
         })();
@@ -2806,10 +2947,15 @@ impl Hub {
 
     // ── direct messages and reactions ────────────────────────────────────────────────────────────────────────
 
-    pub fn dm(&self, session: &str, who: &Identity, to: &str, text: Body, reply_to: Body) -> R<Obj> {
+    /// dm: a direct message; `thread` (a message of this conversation) makes it a thread reply whose root counts it,
+    /// `preview` is the sender's Hub's link preview.
+    #[allow(clippy::too_many_arguments)]
+    pub fn dm(&self, session: &str, who: &Identity, to: &str, text: Body, reply_to: Body, thread: Body, link_preview: Body) -> R<Obj> {
         let to = to.trim().to_lowercase();
         let text = m::text(text, "messages")?;
         let reply_to = message_id(reply_to, "reply_to")?;
+        let thread = message_id(thread, "thread")?;
+        let link_preview = channels::link_preview(link_preview)?;
         let mut st = self.st.lock();
         st.session(session, who)?;
         let Some(entry) = st.directory.get(&to).cloned() else { return Err(E::NotFound("nobody with that address has used this relay yet".into())) };
@@ -2830,8 +2976,18 @@ impl Hub {
             let quoted = preview(target, target.get("from_name"))?;
             msg.insert("reply_to".into(), Value::Object(quoted));
         }
+        if let Some(id) = &thread {
+            let root = channels::thread_id(Self::dm_message(&mut st, &who.principal, &to, id)?);
+            msg.insert("thread".into(), Value::from(root));
+        }
+        if let Some(p) = link_preview {
+            msg.insert("preview".into(), Value::Object(p));
+        }
         let list = st.dms.entry(conv(&who.principal, &to)).or_default();
         list.push(msg.clone());
+        if thread.is_some() {
+            channels::recount(list, &pj::text_of(&msg, "thread"));
+        }
         if list.len() > DM_KEEP {
             let cut = list.len() - DM_KEEP;
             list.drain(..cut);
@@ -2844,17 +3000,27 @@ impl Hub {
         Ok(msg)
     }
 
-    pub fn dm_history(&self, session: &str, who: &Identity, with_: &str, after: &Value, limit: i64) -> R<Obj> {
+    /// dm_history: the conversation with `with_` after `after`, oldest first (thread replies included, for apps that
+    /// know no threads). With `thread` (a root id): that root first, then its replies after `after`.
+    pub fn dm_history(&self, session: &str, who: &Identity, with_: &str, after: &Value, limit: i64, thread: Body) -> R<Obj> {
         let with_ = with_.trim().to_lowercase();
         let after = m::number(Some(after), "after")?;
         let limit = limit.clamp(1, DM_LIMIT_MAX) as usize;
+        let thread = message_id(thread, "thread")?;
         let st = self.st.lock();
         st.session(session, who)?;
-        let msgs: Vec<&Obj> = st.dms.get(&conv(&who.principal, &with_)).map(|l| l.iter().filter(|m| pj::num(m, "ts") > after).collect()).unwrap_or_default();
-        let cut = msgs.len().saturating_sub(limit);
+        let empty = Vec::new();
+        let list = st.dms.get(&conv(&who.principal, &with_)).unwrap_or(&empty);
+        let msgs: Vec<Obj> = match &thread {
+            Some(root) => channels::thread_view(list, root, after, limit)?,
+            None => {
+                let kept: Vec<&Obj> = list.iter().filter(|m| pj::num(m, "ts") > after).collect();
+                kept[kept.len().saturating_sub(limit)..].iter().map(|m| (*m).clone()).collect()
+            }
+        };
         // how far the other person has read, if they send read receipts
         let read_by_them = as_obj(st.receipts.get(&with_)).and_then(|o| o.get(&who.principal)).cloned().unwrap_or(Value::from(0));
-        Ok(obj([("messages", Value::Array(msgs[cut..].iter().map(|m| Value::Object((*m).clone())).collect())), ("read_by_them", read_by_them)]))
+        Ok(obj([("messages", Value::Array(msgs.into_iter().map(Value::Object).collect())), ("read_by_them", read_by_them)]))
     }
 
     /// dm_read: mark the conversation with `with_` read up to `ts`. With `receipt` (the default) the other person sees
@@ -2921,7 +3087,7 @@ impl Hub {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn react(&self, who: &Identity, scope: &str, id: &str, emoji: &str, session: Option<String>, peer: Option<String>, with_: Option<String>) -> R<Obj> {
+    pub fn react(&self, who: &Identity, scope: &str, id: &str, emoji: &str, session: Option<String>, peer: Option<String>, with_: Option<String>, channel: Option<String>) -> R<Obj> {
         let emoji = emoji.trim().to_string();
         if emoji.is_empty() || pj::char_len(&emoji) > EMOJI_MAX {
             return bad(format!("a reaction is one emoji (at most {EMOJI_MAX} characters)"));
@@ -2997,8 +3163,29 @@ impl Hub {
                 }
                 st.dirty = true;
                 (on, reactions)
+            } else if scope == "channel" {
+                let c = Self::conversation(&st, who, scope, peer.as_deref(), session.as_deref(), with_.as_deref(), channel.as_deref(), true)?;
+                let Conv::Channel(cid) = &c else { return bad(SCOPE_ERROR) };
+                let i = Self::scoped_index(&st, who, &c, id)?;
+                let target = &mut st.channel_msgs.get_mut(cid).expect("the message's channel")[i];
+                let on = Self::toggle(target, emoji.as_str(), &who.principal)?;
+                let reactions = target.get("reactions").cloned().unwrap_or(Value::Object(Obj::new()));
+                let members = channels::members_of(as_obj(st.channels.get(cid)));
+                let event = obj([
+                    ("type", Value::from("react")),
+                    ("scope", Value::from("channel")),
+                    ("id", Value::from(id)),
+                    ("emoji", Value::from(emoji.clone())),
+                    ("principal", Value::from(who.principal.clone())),
+                    ("name", Value::from(who.name.clone())),
+                    ("on", Value::Bool(on)),
+                    ("channel", Value::from(cid.clone())),
+                ]);
+                st.tell(&members, &event, None);
+                st.dirty = true;
+                (on, reactions)
             } else {
-                return bad("scope must be dm or room");
+                return bad(SCOPE_ERROR);
             };
             Ok(obj([("id", Value::from(id)), ("emoji", Value::from(emoji.clone())), ("on", Value::Bool(on)), ("reactions", reactions)]))
         })();
@@ -3949,7 +4136,7 @@ mod tests {
     }
 
     fn hub() -> Hub {
-        Hub::new(None, &["ann@x".to_string()], 168.0, 30.0, None, Arc::new(LinkStats::new()))
+        Hub::new(None, &["ann@x".to_string()], 168.0, 30.0, 365.0, None, Arc::new(LinkStats::new()))
     }
 
     #[test]
@@ -3980,11 +4167,11 @@ mod tests {
 
     #[test]
     fn state_json_round_trips_in_python_text() {
-        let text = "{\"v\": 2, \"directory\": {\"ann@x\": {\"name\": \"Ann\", \"last_seen\": 1.5}}, \"dms\": {}, \"read\": {}, \"invites\": {}, \"rooms\": {}, \"left\": {}, \"renewals\": {}, \"renewed\": {}, \"enrollments\": {}, \"consumed_seeds\": {}, \"seed_requests\": {}, \"seeded\": {}, \"denied\": {}, \"organizations\": {\"ben@x\": null, \"cy@x\": {\"id\": \"o\", \"label\": \"O\"}}, \"status\": {\"ann@x\": {\"state\": \"busy\", \"text\": \"\"}}, \"receipts\": {\"ann@x\": {\"ben@x\": 2.5}}}";
+        let text = "{\"v\": 2, \"directory\": {\"ann@x\": {\"name\": \"Ann\", \"last_seen\": 1.5}}, \"dms\": {}, \"read\": {}, \"invites\": {}, \"rooms\": {}, \"left\": {}, \"renewals\": {}, \"renewed\": {}, \"enrollments\": {}, \"consumed_seeds\": {}, \"seed_requests\": {}, \"seeded\": {}, \"denied\": {}, \"organizations\": {\"ben@x\": null, \"cy@x\": {\"id\": \"o\", \"label\": \"O\"}}, \"status\": {\"ann@x\": {\"state\": \"busy\", \"text\": \"\"}}, \"receipts\": {\"ann@x\": {\"ben@x\": 2.5}}, \"meetings\": {\"m-abcdefgh23\": {\"id\": \"m-abcdefgh23\", \"room\": \"m-abcdefgh23\", \"title\": \"Weekly\", \"description\": \"\", \"start\": 1700000000.0, \"end\": 1700001800.0, \"recurrence\": \"weekly\", \"tz\": \"Europe/Paris\", \"organizer\": {\"principal\": \"ann@x\", \"name\": \"Ann\"}, \"attendees\": [{\"principal\": \"ben@x\", \"name\": \"Ben\", \"response\": \"none\"}], \"created\": 1.5, \"updated\": 1.5, \"canceled\": null}}, \"channels\": {\"c-01\": {\"id\": \"c-01\", \"kind\": \"public\", \"name\": \"general\", \"topic\": \"\", \"created_by\": \"ann@x\", \"members\": [\"ann@x\"], \"created\": 1.5, \"archived\": null, \"last\": 1.5}}, \"channel_messages\": {\"c-01\": [{\"id\": \"m1\", \"channel\": \"c-01\", \"from\": \"ann@x\", \"from_name\": \"Ann\", \"from_org\": null, \"text\": \"hi\", \"ts\": 1.5, \"reactions\": {}}]}, \"channel_read\": {\"ann@x\": {\"c-01\": 1.5}}}";
         let dir = std::env::temp_dir().join(format!("meet-state-{}", pj::token_hex(4)));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("state.json"), text).unwrap();
-        let h = Hub::new(Some(dir.clone()), &[], 1e9, 1e9, None, Arc::new(LinkStats::new()));
+        let h = Hub::new(Some(dir.clone()), &[], 1e9, 1e9, 1e9, None, Arc::new(LinkStats::new()));
         assert_eq!(h.st.lock().snapshot(), text);
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -4240,12 +4427,12 @@ mod tests {
         let reply = h.say(&b, &ben, "answer", Some(&json!(id)), Some(&json!(["ann@x", "ben@x"]))).unwrap();
         assert_eq!(reply["reply_to"], json!({"id": id, "name": "ANN@X", "text": "first draft"}));
         assert_eq!(reply["mentions"], json!(["ann@x"]));
-        let edit = |who: &Identity, peer: &str, text: &str| h.chat_change(who, "room", &id, Some(&json!(text)), false, Some(peer.to_string()), None, None);
+        let edit = |who: &Identity, peer: &str, text: &str| h.chat_change(who, "room", &id, Some(&json!(text)), false, Some(peer.to_string()), None, None, None);
         assert_eq!(refusal(edit(&ben, &b, "mine")), "403 only the person who wrote a message can edit it");
         edit(&ann, &a, "final words").unwrap();
-        let gone = h.chat_change(&ann, "room", &id, None, true, Some(a.clone()), None, None).unwrap();
+        let gone = h.chat_change(&ann, "room", &id, None, true, Some(a.clone()), None, None, None).unwrap();
         assert_eq!((&gone["text"], gone.contains_key("deleted")), (&json!(""), true));
-        assert_eq!(h.chat_change(&ann, "room", &id, None, true, Some(a.clone()), None, None).unwrap(), gone);
+        assert_eq!(h.chat_change(&ann, "room", &id, None, true, Some(a.clone()), None, None, None).unwrap(), gone);
         let text = pj::dumps(&lines_value(&h.st.lock().rooms));
         assert!(!text.contains("first draft") && !text.contains("final words"));
         assert_eq!(refusal(h.say(&b, &ben, "x", Some(&json!(id)), None)), "400 that message was deleted");

@@ -23,6 +23,9 @@ fips = ["rustls/fips", "aws-lc-rs/fips"]
 [dependencies]
 aws-lc-rs = "1"
 bytes = "1"
+# Scheduled meetings (Meet relay): recurring meetings repeat at the same wall-clock time in the organizer's IANA zone.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = { version = "0.10", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 gethostname = "0.5"
 http-body-util = "0.1"

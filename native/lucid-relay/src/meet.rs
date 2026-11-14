@@ -196,6 +196,8 @@ pub struct Settings {
     pub admins: Vec<String>,
     pub history_hours: f64,
     pub mail_days: f64,
+    /// Channel and group chat message retention.
+    pub channel_days: f64,
     pub signer_url: String,
     pub signer_cert: String,
     pub signer_key: String,
@@ -213,8 +215,8 @@ pub struct Settings {
     pub organizations: Obj,
 }
 
-const SETTINGS_FIELDS: [&str; 27] = [
-    "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "signer_url", "signer_cert",
+const SETTINGS_FIELDS: [&str; 28] = [
+    "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "channel_days", "signer_url", "signer_cert",
     "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations",
 ];
 
@@ -251,6 +253,7 @@ impl Default for Settings {
             admins: Vec::new(),
             history_hours: 168.0,
             mail_days: 30.0,
+            channel_days: 365.0,
             signer_url: String::new(),
             signer_cert: String::new(),
             signer_key: String::new(),
@@ -267,13 +270,19 @@ impl Default for Settings {
     }
 }
 
-/// Settings.__post_init__: the recording switch and each organization membership {id, label} (1 to 200 characters,
-/// not blank) under a lower-case principal.
+/// Settings.__post_init__: the recording switch, the channel retention (a positive number of days) and each
+/// organization membership {id, label} (1 to 200 characters, not blank) under a lower-case principal.
 fn recording_settings(raw: &Obj, s: &mut Settings) -> Result<(), String> {
     match raw.get("recording_enabled") {
         None => {}
         Some(Value::Bool(b)) => s.recording_enabled = *b,
         Some(_) => return Err("recording_enabled must be true or false".into()),
+    }
+    if let Some(v) = raw.get("channel_days") {
+        match pj::as_num(Some(v)) {
+            Some(d) if d > 0.0 => s.channel_days = d,
+            _ => return Err("channel_days must be a number of days".into()),
+        }
     }
     let orgs = match raw.get("organizations") {
         None => return Ok(()),
@@ -844,7 +853,7 @@ fn serve(settings: Settings) -> ! {
     };
     let links = Arc::new(LinkStats::new());
     let state_dir = (!settings.state_dir.is_empty()).then(|| PathBuf::from(&settings.state_dir));
-    let hub = Arc::new(Hub::new(state_dir.clone(), &settings.admins, settings.history_hours, settings.mail_days, signer.clone(), links.clone()));
+    let hub = Arc::new(Hub::new(state_dir.clone(), &settings.admins, settings.history_hours, settings.mail_days, settings.channel_days, signer.clone(), links.clone()));
     {
         let mut st = hub.st.lock();
         st.recording_enabled = settings.recording_enabled;
@@ -1375,6 +1384,10 @@ mod tests {
         assert_eq!(s.organizations["ann@x"], json!({"id": "org-1", "label": "Org"}));
         for wrong in [json!({"recording_enabled": 1}), json!({"recording_enabled": null})] {
             assert_eq!(check(wrong).unwrap_err(), "recording_enabled must be true or false");
+        }
+        assert_eq!(check(json!({"channel_days": 30})).unwrap().channel_days, 30.0);
+        for wrong in [json!({"channel_days": 0}), json!({"channel_days": true}), json!({"channel_days": null}), json!({"channel_days": "365"})] {
+            assert_eq!(check(wrong).unwrap_err(), "channel_days must be a number of days");
         }
         for wrong in [json!({"organizations": []}), json!({"organizations": null})] {
             assert_eq!(check(wrong).unwrap_err(), "organizations must map certificate principals to owners");

@@ -19,6 +19,37 @@ fn get_route(path: &str) -> Option<Route> {
         "/v1/events" => events,
         "/v1/inbox" => inbox,
         "/v1/dm/history" => dm_history,
+        "/v1/channels" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.gate(&who, None, "", &session)?;
+            c.relay.hub.channels_list(&session, &who)
+        },
+        "/v1/channels/history" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.gate(&who, None, "", &session)?;
+            c.relay.hub.channel_history(&session, &who, &c.q("id", ""), &c.q("after", "0"), &c.q("thread", ""), &c.q("limit", "200"))
+        },
+        "/v1/pins" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let (peer, session) = (c.q("peer", ""), c.q("session", ""));
+            c.gate(&who, None, &peer, &session)?;
+            let opt = |v: String| Some(v).filter(|v| !v.is_empty());
+            c.relay.hub.pins(&who, &c.q("scope", ""), opt(session), opt(peer), opt(c.q("with", "")), opt(c.q("channel", "")))
+        },
+        "/v1/search" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.gate(&who, None, "", &session)?;
+            c.relay.hub.search(&session, &who, &c.q("q", ""), &c.q("limit", "20"))
+        },
+        "/v1/meetings" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.gate(&who, None, "", &session)?;
+            c.relay.hub.meetings_list(&session, &who, &c.q("from", ""), &c.q("to", ""))
+        },
         "/v1/room/history" => room_history,
         "/v1/room/captions" => room_captions,
         "/v1/admin/renewals" => |c: &mut Ctx| {
@@ -94,6 +125,60 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/dm" => dm,
         "/v1/dm/read" => dm_read,
         "/v1/react" => react,
+        "/v1/channels" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.channel_create(&session, &who, b.get("kind"), b.get("name"), b.get("topic"), b.get("members"))
+        },
+        "/v1/channels/join" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.channel_join(&session, &who, b.get("id"))
+        },
+        "/v1/channels/leave" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.channel_leave(&session, &who, b.get("id"))
+        },
+        "/v1/channels/archive" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.channel_archive(&session, &who, b.get("id"))
+        },
+        "/v1/channels/invite" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.channel_invite(&session, &who, b.get("id"), b.get("principals"))
+        },
+        "/v1/channels/update" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.channel_update(&session, &who, b.get("id"), b.get("name"), b.get("topic"))
+        },
+        "/v1/channels/post" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.channel_post(&session, &who, b.get("id"), b.get("text"), b.get("reply_to"), b.get("mentions"), b.get("thread"), b.get("also_channel"), b.get("preview"))
+        },
+        "/v1/channels/read" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.channel_read_mark(&session, &who, b.get("id"), b.get("ts"))
+        },
+        "/v1/pins" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.gate(&who, None, &pj::s(&b, "peer"), &pj::s(&b, "session"))?;
+            c.relay.hub.pin(&who, &pj::s(&b, "scope"), &pj::s(&b, "id"), b.get("on"), opt(&b, "session"), opt(&b, "peer"), opt(&b, "with"), opt(&b, "channel"))
+        },
+        "/v1/meetings" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.meeting_create(&session, &who, b.get("title"), b.get("start"), b.get("end"), b.get("attendees"), b.get("description"), b.get("recurrence"), b.get("tz"))
+        },
+        "/v1/meetings/update" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            let changes: Obj = ["title", "start", "end", "attendees", "description", "recurrence", "tz"].iter().filter_map(|k| b.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
+            c.relay.hub.meeting_update(&session, &who, b.get("id"), &changes)
+        },
+        "/v1/meetings/cancel" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.meeting_cancel(&session, &who, b.get("id"))
+        },
+        "/v1/meetings/rsvp" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.meeting_rsvp(&session, &who, b.get("id"), b.get("response"))
+        },
         "/v1/invite" => invite,
         "/v1/recording" => recording,
         "/v1/recording/policy" => recording_policy,
@@ -211,7 +296,8 @@ fn dm_history(c: &mut Ctx) -> R<Obj> {
     let session = c.q("session", "");
     c.gate(&who, None, "", &session)?;
     let limit = m::py_int(&c.q("limit", "200"))?;
-    c.relay.hub.dm_history(&session, &who, &c.q("with", ""), &Value::from(c.q("after", "0")), limit)
+    let thread = Value::from(c.q("thread", ""));
+    c.relay.hub.dm_history(&session, &who, &c.q("with", ""), &Value::from(c.q("after", "0")), limit, Some(&thread))
 }
 
 fn room_history(c: &mut Ctx) -> R<Obj> {
@@ -298,13 +384,13 @@ fn chat_change(c: &mut Ctx, delete: bool) -> R<Obj> {
     let (who, b) = (c.who(false)?, c.body()?);
     c.gate(&who, None, &pj::s(&b, "peer"), &pj::s(&b, "session"))?;
     let text = if delete { None } else { b.get("text") };
-    c.relay.hub.chat_change(&who, &pj::s(&b, "scope"), &pj::s(&b, "id"), text, delete, opt(&b, "peer"), opt(&b, "session"), opt(&b, "with"))
+    c.relay.hub.chat_change(&who, &pj::s(&b, "scope"), &pj::s(&b, "id"), text, delete, opt(&b, "peer"), opt(&b, "session"), opt(&b, "with"), opt(&b, "channel"))
 }
 
 fn typing(c: &mut Ctx) -> R<Obj> {
     let (who, b) = (c.who(false)?, c.body()?);
     c.gate(&who, None, &pj::s(&b, "peer"), &pj::s(&b, "session"))?;
-    c.relay.hub.typing(&who, &pj::s(&b, "scope"), opt(&b, "peer"), opt(&b, "session"), opt(&b, "with"))
+    c.relay.hub.typing(&who, &pj::s(&b, "scope"), opt(&b, "peer"), opt(&b, "session"), opt(&b, "with"), opt(&b, "channel"))
 }
 
 fn stage(c: &mut Ctx) -> R<Obj> {
@@ -392,7 +478,7 @@ fn session_gate(c: &mut Ctx) -> R<(m::Identity, Obj, String)> {
 
 fn dm(c: &mut Ctx) -> R<Obj> {
     let (who, b, session) = session_gate(c)?;
-    c.relay.hub.dm(&session, &who, &pj::s(&b, "to"), b.get("text"), b.get("reply_to"))
+    c.relay.hub.dm(&session, &who, &pj::s(&b, "to"), b.get("text"), b.get("reply_to"), b.get("thread"), b.get("preview"))
 }
 
 fn dm_read(c: &mut Ctx) -> R<Obj> {
@@ -403,8 +489,7 @@ fn dm_read(c: &mut Ctx) -> R<Obj> {
 fn react(c: &mut Ctx) -> R<Obj> {
     let (who, b) = (c.who(false)?, c.body()?);
     c.gate(&who, None, &pj::s(&b, "peer"), &pj::s(&b, "session"))?;
-    let opt = |k: &str| Some(pj::s(&b, k)).filter(|v| !v.is_empty());
-    c.relay.hub.react(&who, &pj::s(&b, "scope"), &pj::s(&b, "id"), &pj::s(&b, "emoji"), opt("session"), opt("peer"), opt("with"))
+    c.relay.hub.react(&who, &pj::s(&b, "scope"), &pj::s(&b, "id"), &pj::s(&b, "emoji"), opt(&b, "session"), opt(&b, "peer"), opt(&b, "with"), opt(&b, "channel"))
 }
 
 fn invite(c: &mut Ctx) -> R<Obj> {
