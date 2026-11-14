@@ -182,7 +182,14 @@ describe("the omp overlay", () => {
   });
 
   test("a write to a path that cannot be opened throws, so the spawn that calls it is refused", () => {
-    expect(() => writeResultWindowOverlay(join(tmpdir(), "no-such-dir-lucid-window", "x.yml"), null)).toThrow();
+    // The unopenable path sits inside a private mkdtemp directory, never at a guessable name directly
+    // under the shared temp directory.
+    const dir = mkdtempSync(join(tmpdir(), "lucid-window-"));
+    try {
+      expect(() => writeResultWindowOverlay(join(dir, "missing-subdir", "x.yml"), null)).toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
