@@ -243,13 +243,18 @@ pub struct Settings {
     /// organization). A missing org is off. Checked at start (meet_bridge); admins change it at runtime
     /// (/v1/admin/bridge, kept in state.json over this).
     pub bridge_policies: Obj,
+    /// Chat encryption (contract CE-1 section 13): "default" or "required" (no bridgeable conversations, no bridge
+    /// links, no call chat while a web guest is here), and whether a device may share message history with another
+    /// device of the same person. Kept as relay.json holds them; meet_chat_e2ee checks them at start.
+    pub chat_e2ee: Value,
+    pub chat_history_share: Value,
 }
 
-const SETTINGS_FIELDS: [&str; 40] = [
+const SETTINGS_FIELDS: [&str; 42] = [
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "channel_days", "signer_url", "signer_cert",
     "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations", "file_max_mb", "files_quota_gb", "guest_port",
     "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max",
-    "bridge_policies",
+    "bridge_policies", "chat_e2ee", "chat_history_share",
 ];
 
 /// ORG_FIELD_MAX: characters of an organization id or label.
@@ -310,6 +315,8 @@ impl Default for Settings {
             sfu_threshold: Value::from(9),
             sfu_max: Value::from(100),
             bridge_policies: Obj::new(),
+            chat_e2ee: Value::from("default"),
+            chat_history_share: Value::Bool(true),
         }
     }
 }
@@ -435,7 +442,7 @@ impl Settings {
         text("sfu_url", &mut s.sfu_url)?;
         text("sfu_api_key", &mut s.sfu_api_key)?;
         text("sfu_secret_file", &mut s.sfu_secret_file)?;
-        for (k, slot) in [("guest_port", &mut s.guest_port), ("sfu_threshold", &mut s.sfu_threshold), ("sfu_max", &mut s.sfu_max)] {
+        for (k, slot) in [("guest_port", &mut s.guest_port), ("sfu_threshold", &mut s.sfu_threshold), ("sfu_max", &mut s.sfu_max), ("chat_e2ee", &mut s.chat_e2ee), ("chat_history_share", &mut s.chat_history_share)] {
             if let Some(v) = raw.get(k) {
                 *slot = v.clone();
             }

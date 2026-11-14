@@ -148,7 +148,7 @@ fn call(cfg: &Cfg, method: &str, body: &Obj, video: Obj) -> (Option<u16>, Option
 
 /// _e2ee_b64: the bytes of `value`: standard base64 with padding (RFC 4648 section 4, no line breaks) of `least` to
 /// `most` bytes; 400 `message` otherwise.
-fn e2ee_b64(value: Body, least: usize, most: usize, message: &str) -> R<Vec<u8>> {
+pub(super) fn e2ee_b64(value: Body, least: usize, most: usize, message: &str) -> R<Vec<u8>> {
     let Some(Value::String(text)) = value else { return bad(message) };
     if text.is_empty() || text.len() > 4 * most.div_ceil(3) {
         return bad(message);
@@ -338,6 +338,11 @@ impl State {
             self.sfu.next_sync = self.sfu.next_sync.min(pj::now() + SYNC_SOON);
             log_info(&format!("sfu room={room} principal={} media=sfu why={why} sfu_room={lk_room}", who.principal));
         }
+    }
+
+    /// The LiveKit room of a large call's stay (its E2EE `stay`), None for a mesh call.
+    pub(super) fn sfu_stay(&self, room: &str) -> Option<String> {
+        self.sfu.rooms.get(room).cloned()
     }
 
     /// _sfu_cap: a large call holds sfu_max people, a mesh PEER_MAX_PER_ROOM.

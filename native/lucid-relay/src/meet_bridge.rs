@@ -574,7 +574,7 @@ impl State {
     // ── policies ─────────────────────────────────────────────────────────────────────────────────────────────
 
     /// _bridge_policy_of: the policy in force for an org: an admin's edit, else relay.json, else off.
-    fn bridge_policy_of(&mut self, oid: &str) -> Obj {
+    pub(super) fn bridge_policy_of(&mut self, oid: &str) -> Obj {
         if let Some(Value::Object(p)) = self.br_part("policies").get(oid) {
             return p.clone();
         }
@@ -595,7 +595,7 @@ impl State {
     }
 
     /// _bridge_org_of: `_none` for people with no organization.
-    fn bridge_org_of(&self, principal: &str) -> (String, String) {
+    pub(super) fn bridge_org_of(&self, principal: &str) -> (String, String) {
         self.bridge_org(principal).unwrap_or_else(|| (NONE.into(), NONE_LABEL.into()))
     }
 
@@ -702,7 +702,7 @@ impl State {
         out
     }
 
-    fn bridge_active(&self, cid: &str) -> Vec<Obj> {
+    pub(super) fn bridge_active(&self, cid: &str) -> Vec<Obj> {
         self.bridge_links_in(cid).into_iter().filter(|l| pj::text_of(l, "state") == "active").collect()
     }
 
@@ -728,6 +728,7 @@ impl State {
             ("from_org", Value::Null),
             ("text", Value::from(text)),
             ("ts", f(now)),
+            ("rts", Value::from((now * 1000.0) as i64)),
             ("reactions", Value::Object(Obj::new())),
             ("system", Value::from("bridge")),
         ]);
@@ -1455,6 +1456,7 @@ impl Hub {
         let r = (|| -> R<(Obj, String)> {
             st.session(session, who)?;
             let cid = st.bridge_member_channel(who, channel, true)?;
+            st.ce_linkable(&cid)?;
             let oid = st.bridge_org_of(&who.principal).0;
             if !on(&st.bridge_policy_of(&oid)) {
                 return forbidden("your organization's policy does not allow bridging");
@@ -1667,6 +1669,7 @@ impl Hub {
             if st.channel(&cid).map(|c| pj::truthy(c.get("archived"))).unwrap_or(true) {
                 return Err(E::NotFound(BAD_CODE.into()));
             }
+            st.ce_linkable(&cid)?;
             let declared = st.br_part("connectors").get(&who.principal).and_then(Value::as_object).map(|r| pj::text_of(r, "platform"));
             if declared.is_some_and(|p| p != platform) {
                 return bad("this connector said hello for another platform");
@@ -1890,6 +1893,7 @@ impl Hub {
                 ("from_org", Value::Object(org.clone())),
                 ("text", Value::from(text.clone())),
                 ("ts", f(now)),
+                ("rts", Value::from((now * 1000.0) as i64)),
                 ("reactions", Value::Object(Obj::new())),
                 ("src", Value::Object(src)),
             ]);

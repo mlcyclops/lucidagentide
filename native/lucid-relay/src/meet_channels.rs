@@ -13,7 +13,7 @@ pub(super) const CHANNEL_KEEP: usize = 10000;
 /// Messages one channel history request returns.
 const CHANNEL_LIMIT_MAX: i64 = 500;
 /// People in one public or private channel.
-const CHANNEL_MEMBERS_MAX: usize = 500;
+pub(super) const CHANNEL_MEMBERS_MAX: usize = 500;
 /// A group chat: me plus 2 to 8 others.
 const GROUP_MIN: usize = 3;
 const GROUP_MAX: usize = 9;
@@ -31,7 +31,7 @@ const SEARCH_MAX: i64 = 50;
 const SEARCH_QUERY_MAX: usize = 200;
 /// Characters of a search hit's excerpt.
 const EXCERPT_MAX: usize = 160;
-const NO_CHANNEL: &str = "there is no such channel";
+pub(super) const NO_CHANNEL: &str = "there is no such channel";
 const ARCHIVED: &str = "this channel is archived";
 const NOT_CREATOR: &str = "only the person who created the channel or an admin can do that";
 
@@ -275,7 +275,7 @@ impl State {
 
     /// _channel_view: a channel as its member sees it, plus `unread` (main conversation messages of others after the
     /// read mark) and `mentions` (of those, and of thread replies, the ones that mention them).
-    fn channel_view(&self, cid: &str, principal: &str) -> Obj {
+    fn channel_view(&mut self, cid: &str, principal: &str) -> Obj {
         let mark = as_obj(self.channel_read.get(principal)).and_then(|o| pj::as_num(o.get(cid))).unwrap_or(0.0);
         let (mut unread, mut mentions) = (0, 0);
         for m in self.channel_msgs.get(cid).into_iter().flatten() {
@@ -290,8 +290,9 @@ impl State {
             }
         }
         let mut view = with(&self.channel(cid).cloned().unwrap_or_default(), obj([("unread", Value::from(unread)), ("mentions", Value::from(mentions))]));
-        // the bridge adds `links`
+        // the bridge adds `links`, chat encryption its flags and member log
         self.bridge_chan_view(cid, &mut view);
+        self.ce_chan_view(cid, &mut view);
         view
     }
 
@@ -323,15 +324,25 @@ impl State {
         Ok(())
     }
 
-    /// _open_group: the group chat of exactly these people: made, or the existing one (back from archived, and anyone
-    /// who had left it back in). Everyone in it hears `channel`.
-    fn open_group(&mut self, who: &Identity, everyone: &[String], topic: &str, now: f64) -> R<String> {
+    /// _open_group: the group chat of exactly these people: made (with its signed `create` entry, `log`), or the
+    /// existing one (back from archived, and anyone who had left it back in: an `add` entry). Everyone in it hears
+    /// `channel`.
+    #[allow(clippy::too_many_arguments)]
+    fn open_group(&mut self, who: &Identity, everyone: &[String], topic: &str, now: f64, log: Body, bridgeable: bool) -> R<String> {
         if !(GROUP_MIN..=GROUP_MAX).contains(&everyone.len()) {
             return bad(format!("a group chat is {GROUP_MIN} to {GROUP_MAX} people (you and {} to {} others)", GROUP_MIN - 1, GROUP_MAX - 1));
         }
         let cid = group_id(everyone);
+        if self.channel(&cid).is_some() && self.ce_bridgeable(&cid) != bridgeable {
+            return Err(E::Conflict(ce::GROUP_OTHER.into()));
+        }
+        let mut entry: Option<Obj> = None;
         let why = match self.channel(&cid) {
             None => {
+                if bridgeable {
+                    self.ce_bridgeable_ok(who)?;
+                }
+                entry = Some(self.ce_first(&cid, log, who, "create", everyone, "group", bridgeable)?);
                 let ch = obj([
                     ("id", Value::from(cid.clone())),
                     ("kind", Value::from("group")),
@@ -349,6 +360,9 @@ impl State {
             Some(ch) if members_of(Some(ch)) != everyone || pj::truthy(ch.get("archived")) => {
                 let before = members_of(Some(ch));
                 let newcomers: Vec<String> = everyone.iter().filter(|p| !before.contains(p)).cloned().collect();
+                if !newcomers.is_empty() {
+                    entry = self.ce_entry_in(&cid, who, log, "add", &newcomers)?;
+                }
                 let last = self.last_ts(&cid);
                 self.mark_read(&newcomers, &cid, last);
                 let ch = self.channel_mut(&cid);
@@ -358,6 +372,11 @@ impl State {
             }
             Some(_) => return Ok(cid),
         };
+        match (why, entry) {
+            ("created", Some(e)) => self.ce_open(&cid, e),
+            (_, Some(e)) => self.ce_keep(&cid, e),
+            _ => {}
+        }
         self.dirty = true;
         let event = channel_event(why, self.channel(&cid).expect("the group"), &who.principal);
         self.tell(everyone, &event, None);
@@ -371,14 +390,17 @@ impl State {
 impl Hub {
     /// channel_create (`POST /v1/channels`): a public or private channel (`name`, unique among channels that are not
     /// archived) with the creator and any `members` in it, or a group chat of `members` and the creator (3 to 9
-    /// people, no name; the same people get the same group back).
-    pub fn channel_create(&self, session: &str, who: &Identity, kind: Body, name: Body, topic_v: Body, members: Body) -> R<Obj> {
+    /// people, no name; the same people get the same group back). `id` is chosen by the creator's device (`c-` and 16
+    /// hex). End-to-end encrypted unless `bridgeable`; either way `log` is its signed `create` entry.
+    #[allow(clippy::too_many_arguments)]
+    pub fn channel_create(&self, session: &str, who: &Identity, kind: Body, name: Body, topic_v: Body, members: Body, id: Body, bridgeable: Body, log: Body) -> R<Obj> {
         let kind = match kind {
             Some(Value::String(k)) if CHANNEL_KINDS.contains(&k.as_str()) => k.clone(),
             _ => return bad("kind must be public, private or group"),
         };
         let topic = topic(topic_v)?;
         let people = people(members, "members", INVITE_CHANNEL_MAX)?;
+        let bridgeable = m::flag(bridgeable, "bridgeable")?;
         if kind == "group" && pj::truthy(name) {
             return bad("a group chat has no name");
         }
@@ -393,15 +415,22 @@ impl Hub {
                 everyone.push(who.principal.clone());
                 everyone.sort();
                 everyone.dedup();
-                st.open_group(who, &everyone, &topic, now)?
+                st.open_group(who, &everyone, &topic, now, log, bridgeable)?
             } else {
                 let taken = st.channels.values().filter_map(Value::as_object).any(|c| pj::text_of(c, "kind") != "group" && !pj::truthy(c.get("archived")) && pj::text_of(c, "name") == name);
                 if taken {
                     return Err(E::Conflict("a channel with that name already exists".into()));
                 }
+                if matches!(log, None | Some(Value::Null)) {
+                    return Err(E::Conflict(ce::CREATE_OLD.into()));
+                }
+                if bridgeable {
+                    st.ce_bridgeable_ok(who)?;
+                }
                 let mut everyone = vec![who.principal.clone()];
                 everyone.extend(people.iter().filter(|p| **p != who.principal).cloned());
-                let cid = format!("c-{}", pj::token_hex(8));
+                let cid = st.ce_new_id(id)?;
+                let entry = st.ce_first(&cid, log, who, "create", &everyone, &kind, bridgeable)?;
                 let ch = obj([
                     ("id", Value::from(cid.clone())),
                     ("kind", Value::from(kind.clone())),
@@ -413,9 +442,11 @@ impl Hub {
                     ("archived", Value::Null),
                     ("last", f(now)),
                 ]);
-                st.channels.insert(cid.clone(), Value::Object(ch.clone()));
+                st.channels.insert(cid.clone(), Value::Object(ch));
+                st.ce_open(&cid, entry);
                 st.dirty = true;
-                st.tell(&everyone, &channel_event("created", &ch, &who.principal), None);
+                let event = channel_event("created", st.channel(&cid).expect("the channel"), &who.principal);
+                st.tell(&everyone, &event, None);
                 cid
             };
             Ok(st.channel_view(&cid, &who.principal))
@@ -435,15 +466,17 @@ impl Hub {
     /// channels_list (`GET /v1/channels`): `{mine: [channel + unread + mentions], browse: [public channels I am not
     /// in]}`: mine newest activity first, browse by name (archived ones are not offered).
     pub fn channels_list(&self, session: &str, who: &Identity) -> R<Obj> {
-        let st = self.st.lock();
+        let mut st = self.st.lock();
         st.session(session, who)?;
         let mut mine: Vec<Obj> = Vec::new();
         let mut browse: Vec<Obj> = Vec::new();
-        for (cid, ch) in st.channels.iter() {
-            let Some(ch) = ch.as_object() else { continue };
+        let ids: Vec<String> = st.channels.keys().cloned().collect();
+        for cid in ids {
+            let Some(ch) = st.channel(&cid) else { continue };
             let member = members_of(Some(ch)).contains(&who.principal);
             if member {
-                mine.push(st.channel_view(cid, &who.principal));
+                let view = st.channel_view(&cid, &who.principal);
+                mine.push(view);
             } else if pj::text_of(ch, "kind") == "public" && !pj::truthy(ch.get("archived")) {
                 browse.push(ch.clone());
             }
@@ -455,8 +488,9 @@ impl Hub {
         Ok(obj([("mine", Value::Array(mine.into_iter().map(Value::Object).collect())), ("browse", Value::Array(browse.into_iter().map(Value::Object).collect()))]))
     }
 
-    /// channel_join: join a public channel (a member already: nothing changes).
-    pub fn channel_join(&self, session: &str, who: &Identity, cid: Body) -> R<Obj> {
+    /// channel_join: join a public channel (a member already: nothing changes); `log` is the signed `join` entry an
+    /// encrypted channel needs.
+    pub fn channel_join(&self, session: &str, who: &Identity, cid: Body, log: Body) -> R<Obj> {
         let cid = pj::str_or(cid);
         let mut st = self.st.lock();
         let r = (|| -> R<Obj> {
@@ -471,12 +505,18 @@ impl Hub {
                 if pj::truthy(ch.get("archived")) {
                     return bad(ARCHIVED);
                 }
-                if members.len() >= CHANNEL_MEMBERS_MAX {
-                    return bad(format!("this channel is full ({CHANNEL_MEMBERS_MAX} people)"));
+                let cap = st.ce_cap(&cid);
+                if members.len() >= cap {
+                    return bad(format!("this channel is full ({cap} people)"));
                 }
+                let entry = st.ce_entry_in(&cid, who, log, "join", std::slice::from_ref(&who.principal))?;
+                st.ce_rate(&who.principal)?;
                 let mut members = members;
                 members.push(who.principal.clone());
                 set_members(st.channel_mut(&cid), &members);
+                if let Some(e) = entry {
+                    st.ce_keep(&cid, e);
+                }
                 let last = st.last_ts(&cid);
                 st.mark_read(std::slice::from_ref(&who.principal), &cid, last);
                 st.dirty = true;
@@ -493,20 +533,25 @@ impl Hub {
     }
 
     /// channel_leave: leave a channel or a group chat. A private channel or group nobody is left in is archived (and
-    /// goes after the retention).
-    pub fn channel_leave(&self, session: &str, who: &Identity, cid: Body) -> R<Obj> {
+    /// goes after the retention). `log` is the signed `leave` entry an encrypted one needs.
+    pub fn channel_leave(&self, session: &str, who: &Identity, cid: Body, log: Body) -> R<Obj> {
         let cid = pj::str_or(cid);
         let mut st = self.st.lock();
         let r = (|| -> R<Obj> {
             st.session(session, who)?;
             let cid = st.member_channel(&cid, &who.principal, false)?;
+            let entry = st.ce_entry_in(&cid, who, log, "leave", std::slice::from_ref(&who.principal))?;
+            st.ce_rate(&who.principal)?;
             let told = members_of(st.channel(&cid));
             let left: Vec<String> = told.iter().filter(|p| **p != who.principal).cloned().collect();
+            set_members(st.channel_mut(&cid), &left);
+            if let Some(e) = entry {
+                st.ce_keep(&cid, e);
+            }
             if let Some(marks) = st.channel_read.get_mut(&who.principal).and_then(Value::as_object_mut) {
                 marks.shift_remove(&cid);
             }
             let ch = st.channel_mut(&cid);
-            set_members(ch, &left);
             if left.is_empty() && pj::text_of(ch, "kind") != "public" && !pj::truthy(ch.get("archived")) {
                 ch.insert("archived".into(), f(pj::now()));
             }
@@ -524,8 +569,9 @@ impl Hub {
     }
 
     /// channel_invite: a member adds people. A group chat stays the same people: inviting into it answers (and opens)
-    /// the group of everyone in it plus the invited.
-    pub fn channel_invite(&self, session: &str, who: &Identity, cid: Body, principals: Body) -> R<Obj> {
+    /// the group of everyone in it plus the invited (`log`: that group's `create` entry, or its `add` entry when it
+    /// exists). Into a channel, `log` is the signed `add` entry an encrypted one needs.
+    pub fn channel_invite(&self, session: &str, who: &Identity, cid: Body, principals: Body, log: Body) -> R<Obj> {
         let people = people(principals, "principals", INVITE_CHANNEL_MAX)?;
         if people.is_empty() {
             return bad("name at least one person to invite");
@@ -545,17 +591,23 @@ impl Hub {
                 let mut sorted = members.clone();
                 sorted.sort();
                 if everyone != sorted {
-                    cid = st.open_group(who, &everyone, "", now)?;
+                    let bridgeable = st.ce_bridgeable(&cid);
+                    cid = st.open_group(who, &everyone, "", now, log, bridgeable)?;
                 }
             } else {
                 let added: Vec<String> = people.iter().filter(|p| !members.contains(p)).cloned().collect();
-                if members.len() + added.len() > CHANNEL_MEMBERS_MAX {
-                    return bad(format!("this channel is full ({CHANNEL_MEMBERS_MAX} people)"));
+                let cap = st.ce_cap(&cid);
+                if members.len() + added.len() > cap {
+                    return bad(format!("this channel is full ({cap} people)"));
                 }
                 if !added.is_empty() {
+                    let entry = st.ce_entry_in(&cid, who, log, "add", &added)?;
                     let mut all = members;
                     all.extend(added.iter().cloned());
                     set_members(st.channel_mut(&cid), &all);
+                    if let Some(e) = entry {
+                        st.ce_keep(&cid, e);
+                    }
                     let last = st.last_ts(&cid);
                     st.mark_read(&added, &cid, last);
                     st.dirty = true;
@@ -663,6 +715,7 @@ impl Hub {
         let r = (|| -> R<Obj> {
             st.session(session, who)?;
             let cid = st.member_channel(&cid, &who.principal, true)?;
+            st.ce_plain(None, Some(&cid))?;
             // strictly after the channel's last message: read marks and `after` compare ts
             let now = pj::now().max(st.last_ts(&cid) + 1e-6);
             let mut msg = obj([
@@ -673,6 +726,7 @@ impl Hub {
                 ("from_org", st.org(&who.principal)),
                 ("text", Value::from(text.clone())),
                 ("ts", f(now)),
+                ("rts", Value::from((now * 1000.0) as i64)),
                 ("reactions", Value::Object(Obj::new())),
             ]);
             if let Some(id) = &reply_to {
@@ -731,7 +785,7 @@ impl Hub {
         let after = m::number(Some(&Value::from(after)), "after")?;
         let limit = (m::number(Some(&Value::from(limit)), "limit")?.trunc() as i64).clamp(1, CHANNEL_LIMIT_MAX) as usize;
         let thread = message_id(Some(&Value::from(thread)), "thread")?;
-        let st = self.st.lock();
+        let mut st = self.st.lock();
         st.session(session, who)?;
         let cid = st.member_channel(cid, &who.principal, false)?;
         let empty = Vec::new();
@@ -743,7 +797,8 @@ impl Hub {
                 main[main.len().saturating_sub(limit)..].iter().map(|m| (*m).clone()).collect()
             }
         };
-        Ok(obj([("channel", Value::Object(st.channel_view(&cid, &who.principal))), ("messages", Value::Array(rows.into_iter().map(Value::Object).collect()))]))
+        let view = st.channel_view(&cid, &who.principal);
+        Ok(obj([("channel", Value::Object(view)), ("messages", Value::Array(rows.into_iter().map(Value::Object).collect()))]))
     }
 
     /// channel_read_mark (`POST /v1/channels/read`): mark a channel read up to `ts` (a mark never moves back).
@@ -770,6 +825,8 @@ impl Hub {
         let mut st = self.st.lock();
         let r = (|| -> R<Obj> {
             let c = Self::conversation(&st, who, scope, peer.as_deref(), session.as_deref(), with_.as_deref(), channel.as_deref(), true)?;
+            // encrypted: a signed `pin` event (/v1/chat/event)
+            st.ce_plain_in(&c)?;
             let i = Self::scoped_index(&st, who, &c, id)?;
             let list = Self::conv_list_mut(&mut st, who, &c).expect("the message's conversation");
             if pj::truthy(list[i].get("deleted")) {
@@ -847,7 +904,8 @@ impl Hub {
         let mut hits: Vec<Obj> = Vec::new();
         let hit = |m: &Obj, mut row: Obj, hits: &mut Vec<Obj>| {
             let text = pj::s(m, "text");
-            if pj::truthy(m.get("deleted")) {
+            // search never looks into an encrypted row
+            if pj::truthy(m.get("deleted")) || m.contains_key("enc") {
                 return;
             }
             let have = words(&text);

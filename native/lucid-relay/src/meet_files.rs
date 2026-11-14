@@ -86,7 +86,11 @@ fn stored(fid: &str, meta: &Value) -> bool {
     if !is_id(fid) || meta.get("id").and_then(Value::as_str) != Some(fid) || !["dm", "channel", "room"].contains(&scope.as_str()) {
         return false;
     }
-    if !["name", "type", "sha256", "from", "from_name", "message"].iter().all(|k| meta.get(*k).map(Value::is_string).unwrap_or(false)) {
+    if !["name", "type", "sha256", "from", "from_name"].iter().all(|k| meta.get(*k).map(Value::is_string).unwrap_or(false)) {
+        return false;
+    }
+    // an encrypted upload waits for the message that names it (`message` null)
+    if !meta.get("message").map(Value::is_string).unwrap_or(false) && !(meta.get("message") == Some(&Value::Null) && meta.get("e2ee") == Some(&Value::Bool(true))) {
         return false;
     }
     if bad_number(meta.get("size")) || bad_number(meta.get("ts")) {
@@ -126,6 +130,8 @@ struct Upload {
     /// A bridge connector's upload (POST /v1/bridge/c/file): the link it is for ("" for anyone else's); only a post
     /// on that link may use it.
     bridge: String,
+    /// The ciphertext of an end-to-end encrypted conversation's file (kept until the encrypted message naming it).
+    e2ee: bool,
 }
 
 /// In memory: the unfinished uploads, the limits (relay.json file_max_mb, files_quota_gb) and the folder of the bytes.
@@ -226,7 +232,6 @@ pub struct FilePart {
 enum Message {
     Room { room: String, line: Obj },
     Channel { cid: String, msg: Obj, session: String, thread: bool },
-    Dm { to: String, msg: Obj, session: Option<String>, thread: bool },
 }
 
 impl State {
@@ -304,8 +309,16 @@ impl State {
     }
 
     /// _files_alive: true while the file's message is kept, not deleted and still names it, and the conversation's
-    /// retention has not passed; otherwise the file goes now.
+    /// retention has not passed (a finished encrypted upload no message names yet: for UPLOAD_TTL); otherwise the file
+    /// goes now.
     fn files_alive(&mut self, fid: &str, meta: &Obj, now: f64) -> bool {
+        if pj::truthy(meta.get("e2ee")) && meta.get("message") == Some(&Value::Null) {
+            if now - pj::num(meta, "ts") < UPLOAD_TTL {
+                return true;
+            }
+            self.files_purge(fid, None);
+            return false;
+        }
         let keep = match pj::text_of(meta, "scope").as_str() {
             "room" => self.history_s,
             "dm" => self.mail_s,
@@ -504,6 +517,7 @@ impl State {
                 let Some(seat) = seat.filter(|s| self.peers.get(s).map(|p| p.room == room).unwrap_or(false)) else {
                     return forbidden("you are not in the call this file was for");
                 };
+                self.ce_plain(Some(&room), None)?;
                 let mut line = obj([
                     ("type", Value::from("chat")),
                     ("kind", Value::from("chat")),
@@ -514,6 +528,7 @@ impl State {
                     ("org", self.org(&who.principal)),
                     ("text", Value::from(text)),
                     ("ts", f(now)),
+                    ("rts", Value::from((now * 1000.0) as i64)),
                     ("reactions", Value::Object(Obj::new())),
                 ]);
                 if let Some(id) = &reply_to {
@@ -529,6 +544,8 @@ impl State {
             "channel" => {
                 let Some(session) = session else { return bad("a channel message needs your session") };
                 let cid = self.member_channel(&pj::text_of(place, "channel"), &who.principal, true)?;
+                // a plain file goes only to a call with a guest or a bridgeable channel
+                self.ce_plain(None, Some(&cid))?;
                 self.session(&session, who)?;
                 let now = now.max(self.last_ts(&cid) + 1e-6);
                 let mut msg = obj([
@@ -539,6 +556,7 @@ impl State {
                     ("from_org", self.org(&who.principal)),
                     ("text", Value::from(text)),
                     ("ts", f(now)),
+                    ("rts", Value::from((now * 1000.0) as i64)),
                     ("reactions", Value::Object(Obj::new())),
                 ]);
                 if let Some(id) = &reply_to {
@@ -555,43 +573,13 @@ impl State {
                 msg.insert("files".into(), Value::Array(vec![Value::Object(file.clone())]));
                 Ok(Message::Channel { cid, msg, session, thread: thread.is_some() })
             }
-            _ => {
-                if let Some(s) = &session {
-                    self.session(s, who)?;
-                }
-                let to = pj::text_of(place, "with");
-                let Some(entry) = self.directory.get(&to) else { return Err(E::NotFound("nobody with that address has used this relay yet".into())) };
-                let to_name = entry.as_object().map(|e| pj::s(e, "name")).filter(|n| !n.is_empty()).unwrap_or_else(|| to.clone());
-                let mut msg = obj([
-                    ("id", Value::from(pj::token_hex(8))),
-                    ("from", Value::from(who.principal.clone())),
-                    ("from_name", Value::from(who.name.clone())),
-                    ("from_org", self.org(&who.principal)),
-                    ("to", Value::from(to.clone())),
-                    ("to_name", Value::from(to_name)),
-                    ("text", Value::from(text)),
-                    ("ts", f(now)),
-                    ("reactions", Value::Object(Obj::new())),
-                ]);
-                if let Some(id) = &reply_to {
-                    let target = Hub::dm_message(self, &who.principal, &to, id)?;
-                    let quoted = preview(target, target.get("from_name"))?;
-                    msg.insert("reply_to".into(), Value::Object(quoted));
-                }
-                if let Some(id) = &thread {
-                    let root = channels::thread_id(Hub::dm_message(self, &who.principal, &to, id)?);
-                    msg.insert("thread".into(), Value::from(root));
-                }
-                file.insert("ts".into(), f(now));
-                file.insert("with".into(), Value::from(to.clone()));
-                msg.insert("files".into(), Value::Array(vec![Value::Object(file.clone())]));
-                Ok(Message::Dm { to, msg, session, thread: thread.is_some() })
-            }
+            // every direct message is encrypted: its files are the encrypted message's (ce_post)
+            _ => Err(E::Conflict(ce::PLAIN.into())),
         }
     }
 
     /// Keep a built message in its conversation and send it to everyone in it, as any message; the message as sent.
-    fn files_deliver(&mut self, who: &Identity, built: Message) -> Obj {
+    fn files_deliver(&mut self, built: Message) -> Obj {
         match built {
             Message::Room { room, mut line } => {
                 self.room_log(&room, &mut line);
@@ -615,20 +603,47 @@ impl State {
                 self.tell(&members, &obj([("type", Value::from("channel_message")), ("message", Value::Object(msg.clone()))]), Some(session.as_str()));
                 msg
             }
-            Message::Dm { to, msg, session, thread } => {
-                let list = self.dms.entry(conv(&who.principal, &to)).or_default();
-                list.push(msg.clone());
-                if thread {
-                    channels::recount(list, &pj::text_of(&msg, "thread"));
-                }
-                if list.len() > DM_KEEP {
-                    let cut = list.len() - DM_KEEP;
-                    list.drain(..cut);
-                }
-                self.tell(&[to, who.principal.clone()], &with(&msg, obj([("type", Value::from("dm"))])), session.as_deref());
-                msg
+        }
+    }
+}
+
+/// Chat encryption's use of the files slice (meet_chat_e2ee): the finished encrypted uploads an encrypted message names.
+impl State {
+    /// _ce_attach: the caller's finished encrypted uploads to this conversation (`place`, as files_where names it)
+    /// that no message names yet, now part of message `mid` (the `files` of its row, each with `e2ee: true`).
+    pub(super) fn files_ce_attach(&mut self, who: &Identity, place: &Obj, files: Body, mid: &str, now: f64) -> R<Vec<Obj>> {
+        let ids: Vec<String> = match files {
+            None | Some(Value::Null) => return Ok(Vec::new()),
+            Some(Value::Array(list)) if list.is_empty() => return Ok(Vec::new()),
+            Some(Value::Array(list)) if list.len() <= ce::FILES_MAX && list.iter().all(Value::is_string) => list.iter().map(pj::py_str).collect(),
+            _ => return bad(format!("files must be a list of at most {} file ids", ce::FILES_MAX)),
+        };
+        if ids.iter().collect::<HashSet<_>>().len() != ids.len() {
+            return bad(format!("files must be a list of at most {} file ids", ce::FILES_MAX));
+        }
+        for fid in &ids {
+            let meta = if is_id(fid) { self.files_meta(fid) } else { None };
+            let ok = meta.as_ref().map(|m| {
+                pj::truthy(m.get("e2ee")) && m.get("message") == Some(&Value::Null) && pj::text_of(m, "from") == who.principal && place.iter().all(|(k, v)| m.get(k) == Some(v))
+            });
+            let alive = match (ok, meta) {
+                (Some(true), Some(meta)) => self.files_alive(fid, &meta, now),
+                _ => false,
+            };
+            if !alive {
+                return Err(E::NotFound(GONE.into()));
             }
         }
+        let mut out = Vec::with_capacity(ids.len());
+        for fid in &ids {
+            if let Some(Value::Object(meta)) = self.files_store().get_mut(fid) {
+                meta.insert("message".into(), Value::from(mid));
+                meta.insert("ts".into(), f(now));
+                out.push(with(&State::files_view(meta, ""), obj([("e2ee", Value::Bool(true))])));
+            }
+        }
+        self.dirty = true;
+        Ok(out)
     }
 }
 
@@ -680,6 +695,7 @@ impl State {
             busy: false,
             expires: now + UPLOAD_TTL,
             bridge: link.to_string(),
+            e2ee: false,
         };
         self.files.uploads.insert(uid.clone(), upload);
         Ok(uid)
@@ -775,9 +791,13 @@ fn io_error(e: std::io::Error) -> E {
 
 impl Hub {
     /// `POST /v1/files/start`: open an upload to a conversation the caller may write to. 413 over the size cap, 507
-    /// over the relay's quota.
+    /// over the relay's quota. `e2ee: true` (an end-to-end encrypted conversation needs it, one that is not refuses
+    /// it): the ciphertext, kept as `encrypted.bin` of type application/octet-stream whatever name and type say.
     #[allow(clippy::too_many_arguments)]
-    pub fn files_start(&self, who: &Identity, scope: &str, name: Body, size: Body, kind: Body, peer: Option<String>, session: Option<String>, with_: Option<String>, channel: Option<String>) -> R<Obj> {
+    pub fn files_start(&self, who: &Identity, scope: &str, name: Body, size: Body, kind: Body, peer: Option<String>, session: Option<String>, with_: Option<String>, channel: Option<String>, e2ee: Body) -> R<Obj> {
+        let e2ee = m::flag(e2ee, "e2ee")?;
+        let (sealed_name, sealed_kind) = (Value::from("encrypted.bin"), Value::from("application/octet-stream"));
+        let (name, kind) = if e2ee { (Some(&sealed_name), Some(&sealed_kind)) } else { (name, kind) };
         let name = file_name(name)?;
         let size = file_size(size)?;
         let kind = file_type(kind);
@@ -785,6 +805,7 @@ impl Hub {
         let now = pj::now();
         st.files.expire(now);
         let place = st.files_where(who, scope, peer.as_deref(), session.as_deref(), with_.as_deref(), channel.as_deref())?;
+        st.ce_files_check(&place, e2ee)?;
         if size > st.files.max {
             return Err(E::Status(413, format!("files are limited to {} MB", st.files.max / MB), false));
         }
@@ -817,10 +838,11 @@ impl Hub {
             busy: false,
             expires: now + UPLOAD_TTL,
             bridge: String::new(),
+            e2ee,
         };
         st.files.uploads.insert(uid.clone(), upload);
         drop(st);
-        log_info(&format!("files_start upload={uid} scope={scope} principal={} size={size}", who.principal));
+        log_info(&format!("files_start upload={uid} scope={scope} principal={} size={size} e2ee={}", who.principal, if e2ee { "yes" } else { "no" }));
         Ok(obj([("upload", Value::from(uid)), ("chunk", Value::from(FILES_PART)), ("expires", f(now + UPLOAD_TTL))]))
     }
 
@@ -898,7 +920,7 @@ impl Hub {
         let reply_to = message_id(reply_to, "reply_to")?;
         let thread = message_id(thread, "thread")?;
         let mut st = self.st.lock();
-        let r = (|| -> R<(Obj, String, u64)> {
+        let r = (|| -> R<(Obj, String, u64, bool)> {
             st.files.expire(pj::now());
             let seat = st.files_caller(who, peer.as_deref(), session.as_deref())?;
             let up = st.files.open_upload(&uid, who)?;
@@ -923,12 +945,34 @@ impl Hub {
                 ("from_name", Value::from(who.name.clone())),
                 ("scope", place.get("scope").cloned().unwrap_or(Value::Null)),
             ]);
+            if up.e2ee {
+                // an encrypted file: kept until the encrypted message naming it (`files`, ce_post)
+                if !text.is_empty() || reply_to.is_some() || thread.is_some() {
+                    return Err(E::Conflict(ce::PLAIN.into()));
+                }
+                let (part, kept) = (st.files.path(&uid, true).map_err(io_error)?, st.files.path(&uid, false).map_err(io_error)?);
+                fs::rename(&part, &kept).map_err(io_error)?;
+                st.files.uploads.shift_remove(&uid);
+                let mut meta = file;
+                meta.insert("ts".into(), f(pj::now()));
+                meta.insert("message".into(), Value::Null);
+                meta.insert("e2ee".into(), Value::Bool(true));
+                for k in ["with", "pair", "channel", "room"] {
+                    if let Some(v) = place.get(k) {
+                        meta.insert(k.into(), v.clone());
+                    }
+                }
+                let out = with(&State::files_view(&meta, &who.principal), obj([("e2ee", Value::Bool(true))]));
+                st.files_store().insert(uid.clone(), Value::Object(meta));
+                st.dirty = true;
+                return Ok((out, pj::text_of(&place, "scope"), size, true));
+            }
             let built = st.files_build(who, &place, seat, session.clone(), &mut file, &text, reply_to.clone(), thread.clone())?;
             let (part, kept) = (st.files.path(&uid, true).map_err(io_error)?, st.files.path(&uid, false).map_err(io_error)?);
             fs::rename(&part, &kept).map_err(io_error)?;
             st.files.uploads.shift_remove(&uid);
             let (ts, mid) = match &built {
-                Message::Room { line: msg, .. } | Message::Channel { msg, .. } | Message::Dm { msg, .. } => (msg.get("ts").cloned(), msg.get("id").cloned()),
+                Message::Room { line: msg, .. } | Message::Channel { msg, .. } => (msg.get("ts").cloned(), msg.get("id").cloned()),
             };
             let mut meta = file;
             meta.insert("ts".into(), ts.unwrap_or(Value::Null));
@@ -940,13 +984,13 @@ impl Hub {
             }
             st.files_store().insert(uid.clone(), Value::Object(meta));
             st.dirty = true;
-            let out = st.files_deliver(who, built);
-            Ok((out, pj::text_of(&place, "scope"), size))
+            let out = st.files_deliver(built);
+            Ok((out, pj::text_of(&place, "scope"), size, false))
         })();
         drop(st);
         self.wake();
-        let (out, scope, size) = r?;
-        log_info(&format!("files_finish id={uid} scope={scope} principal={} size={size}", who.principal));
+        let (out, scope, size, e2ee) = r?;
+        log_info(&format!("files_finish id={uid} scope={scope} principal={} size={size}{}", who.principal, if e2ee { " e2ee=yes" } else { "" }));
         Ok(out)
     }
 
@@ -1102,7 +1146,10 @@ mod tests {
         let a = h.hello(&ann, "", &Obj::new()).unwrap()["session"].as_str().unwrap().to_string();
         let b = h.hello(&ben, "", &Obj::new()).unwrap()["session"].as_str().unwrap().to_string();
         let data = b"hello, file";
-        let up = h.files_start(&ann, "dm", Some(&json!("n.txt")), Some(&json!(data.len())), None, None, Some(a.clone()), Some("ben@x".into()), None).unwrap();
+        // every direct message is encrypted: a plain file is refused, the ciphertext is kept as encrypted.bin
+        let plain = h.files_start(&ann, "dm", Some(&json!("n.txt")), Some(&json!(data.len())), None, None, Some(a.clone()), Some("ben@x".into()), None, None);
+        assert!(matches!(plain, Err(E::Conflict(m)) if m == ce::PLAIN));
+        let up = h.files_start(&ann, "dm", Some(&json!("n.txt")), Some(&json!(data.len())), None, None, Some(a.clone()), Some("ben@x".into()), None, Some(&json!(true))).unwrap();
         let uid = up["upload"].as_str().unwrap().to_string();
         let part = h.files_chunk_begin(&ann, &uid, "0", 5).unwrap();
         assert!(matches!(h.files_chunk_begin(&ann, &uid, "0", 5), Err(E::Conflict(_))));
@@ -1110,8 +1157,15 @@ mod tests {
         let part = h.files_chunk_begin(&ann, &uid, "5", data.len() - 5).unwrap();
         h.files_chunk_write(part, &data[5..]).unwrap();
         let sha = hex(&crate::codec::sha256(data));
-        let msg = h.files_finish(&ann, Some(&json!(uid)), Some(&json!(sha)), None, None, None, None, Some(a.clone())).unwrap();
-        assert_eq!(msg["files"][0]["with"], json!("ben@x"));
+        let kept = h.files_finish(&ann, Some(&json!(uid)), Some(&json!(sha)), None, None, None, None, Some(a.clone())).unwrap();
+        assert_eq!((kept["with"].clone(), kept["name"].clone(), kept["e2ee"].clone()), (json!("ben@x"), json!("encrypted.bin"), json!(true)));
+        // the encrypted message names it
+        let pair = obj([("scope", Value::from("dm")), ("pair", json!(["ann@x", "ben@x"]))]);
+        let mid = "0".repeat(32);
+        let named = h.st.lock().files_ce_attach(&ann, &pair, Some(&json!([uid])), &mid, pj::now()).unwrap();
+        assert_eq!(named[0]["e2ee"], json!(true));
+        assert!(matches!(h.st.lock().files_ce_attach(&ann, &pair, Some(&json!([uid])), &mid, pj::now()), Err(E::NotFound(m)) if m == GONE));
+        h.st.lock().dms.insert(conv("ann@x", "ben@x"), vec![obj([("id", Value::from(mid.clone())), ("from", Value::from("ann@x")), ("ts", f(pj::now())), ("files", Value::Array(named.into_iter().map(Value::Object).collect()))])]);
         let (view, mut fh, start, count) = h.files_open(&ben, &uid, "6", "", None, Some(b.clone())).unwrap();
         assert_eq!((view["with"].clone(), start, count), (json!("ann@x"), 6, 5));
         let mut got = Vec::new();

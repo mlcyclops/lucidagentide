@@ -345,6 +345,8 @@ impl Hub {
         let mut st = self.st.lock();
         let r = (|| -> R<Obj> {
             let c = Self::conversation(&st, who, scope, peer.as_deref(), session.as_deref(), with_.as_deref(), channel.as_deref(), true)?;
+            // encrypted: a post whose payload holds the poll
+            st.ce_plain_in(&c)?;
             let pid = pj::token_hex(8);
             let options: Vec<Value> = texts.iter().enumerate().map(|(i, t)| Value::Object(obj([("id", Value::from(format!("o{}", i + 1))), ("text", Value::from(t.clone()))]))).collect();
             let base = obj([
@@ -370,6 +372,7 @@ impl Hub {
                         ("org", st.org(&who.principal)),
                         ("text", Value::from(question.clone())),
                         ("ts", f(now)),
+                        ("rts", Value::from((now * 1000.0) as i64)),
                         ("reactions", Value::Object(Obj::new())),
                         ("poll", poll),
                     ]);
@@ -387,6 +390,7 @@ impl Hub {
                         ("from_org", st.org(&who.principal)),
                         ("text", Value::from(question.clone())),
                         ("ts", f(now)),
+                        ("rts", Value::from((now * 1000.0) as i64)),
                         ("reactions", Value::Object(Obj::new())),
                         ("poll", poll),
                     ]);
@@ -401,31 +405,8 @@ impl Hub {
                     st.tell(&members, &obj([("type", Value::from("channel_message")), ("message", Value::Object(msg.clone()))]), session.as_deref());
                     (cid.clone(), msg)
                 }
-                Conv::Dm(other) => {
-                    let Some(entry) = st.directory.get(other) else { return Err(E::NotFound("nobody with that address has used this relay yet".into())) };
-                    let to_name = entry.as_object().map(|e| pj::s(e, "name")).filter(|n| !n.is_empty()).unwrap_or_else(|| other.clone());
-                    let place = conv(&who.principal, other);
-                    let msg = obj([
-                        ("id", Value::from(pid.clone())),
-                        ("from", Value::from(who.principal.clone())),
-                        ("from_name", Value::from(who.name.clone())),
-                        ("from_org", st.org(&who.principal)),
-                        ("to", Value::from(other.clone())),
-                        ("to_name", Value::from(to_name)),
-                        ("text", Value::from(question.clone())),
-                        ("ts", f(now)),
-                        ("reactions", Value::Object(Obj::new())),
-                        ("poll", poll),
-                    ]);
-                    let list = st.dms.entry(place.clone()).or_default();
-                    list.push(msg.clone());
-                    if list.len() > DM_KEEP {
-                        let cut = list.len() - DM_KEEP;
-                        list.drain(..cut);
-                    }
-                    st.tell(&[other.clone(), who.principal.clone()], &with(&msg, obj([("type", Value::from("dm"))])), session.as_deref());
-                    (place, msg)
-                }
+                // direct messages are always encrypted (refused above)
+                Conv::Dm(_) => return Err(E::Conflict(ce::PLAIN.into())),
             };
             let record = obj([("scope", Value::from(scope)), ("where", Value::from(place)), ("by", Value::from(who.principal.clone())), ("votes", Value::Object(Obj::new()))]);
             st.tools_polls().insert(pid, Value::Object(record));
@@ -449,6 +430,8 @@ impl Hub {
         let mut st = self.st.lock();
         let r = (|| -> R<(Obj, bool, usize)> {
             let c = Self::conversation(&st, who, scope, peer.as_deref(), session.as_deref(), with_.as_deref(), channel.as_deref(), true)?;
+            // encrypted: a signed `vote` event (/v1/chat/event)
+            st.ce_plain_in(&c)?;
             let i = Self::tools_poll(&mut st, who, &c, &pid)?;
             let poll = Self::conv_list(&st, who, &c).expect("the poll's conversation")[i].get("poll").and_then(Value::as_object).cloned().expect("a poll");
             if pj::truthy(poll.get("closed")) {
@@ -492,6 +475,8 @@ impl Hub {
         let mut st = self.st.lock();
         let r = (|| -> R<Obj> {
             let c = Self::conversation(&st, who, scope, peer.as_deref(), session.as_deref(), with_.as_deref(), channel.as_deref(), false)?;
+            // encrypted: a signed `close` event (/v1/chat/event)
+            st.ce_plain_in(&c)?;
             let i = Self::tools_poll(&mut st, who, &c, &pid)?;
             let record = st.tools_polls().get(&pid).and_then(Value::as_object).cloned().expect("a poll record");
             if pj::text_of(&record, "by") != who.principal && !st.admins.contains(&who.principal) {
@@ -692,6 +677,11 @@ mod tests {
         let (ann, ben) = (who("ann@x", "aaaaaaaaaaaaaaaa"), who("ben@x", "bbbbbbbbbbbbbbbb"));
         let a = peer_of(&h.join("ops", &ann, "", false, None).unwrap());
         let b = peer_of(&h.join("ops", &ben, "", false, None).unwrap());
+        // the call's chat is end-to-end encrypted: a plain poll only while a web guest is in it
+        let plain = h.tools_poll_create(&ann, "room", Some(&json!("Q")), Some(&json!(["a", "b"])), None, None, None, Some(a.clone()), None, None);
+        assert!(matches!(plain, Err(E::Conflict(m)) if m == ce::PLAIN));
+        let g = peer_of(&h.join("ops", &who("cy@x", "cccccccccccccccc"), "", false, None).unwrap());
+        h.st.lock().peers.get_mut(&g).unwrap().who.guest = true;
         let made = h.tools_poll_create(&ann, "room", Some(&json!(" Lunch? ")), Some(&json!(["Pizza", "Salad"])), None, None, None, Some(a.clone()), None, None).unwrap();
         let pid = made["id"].as_str().unwrap().to_string();
         assert_eq!(made["poll"]["voters"], json!({"o1": [], "o2": []}));

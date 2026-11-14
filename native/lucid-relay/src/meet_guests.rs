@@ -1155,6 +1155,9 @@ impl Hub {
                 return forbidden(ADMISSION_FIRST);
             }
             let room = st.peers[peer_id.as_str()].room.clone();
+            // "required": no chat while a guest is here
+            st.ce_room_open(&room)?;
+            let now = pj::now();
             let mut line = obj([
                 ("type", Value::from("chat")),
                 ("kind", Value::from("chat")),
@@ -1165,7 +1168,8 @@ impl Hub {
                 ("org", Value::Null),
                 ("guest", Value::Bool(true)),
                 ("text", Value::from(text.clone())),
-                ("ts", f(pj::now())),
+                ("ts", f(now)),
+                ("rts", Value::from((now * 1000.0) as i64)),
                 ("reactions", Value::Object(Obj::new())),
             ]);
             st.room_log(&room, &mut line);

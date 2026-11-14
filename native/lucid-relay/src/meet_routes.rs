@@ -2,7 +2,7 @@
 // caller, body and gate in the order the Python handler does, so the same request gets the same first refusal.
 
 use crate::meet::{self as m, run, Ctx, R, CAPTIONS_LIMIT_MAX};
-use crate::meet_hub::{bridge, files, E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
+use crate::meet_hub::{bridge, ce, files, E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
 use crate::meet_json::{self as pj, obj, Obj};
 use crate::meet_tls::{crl_path, read_bytes};
 use crate::meet_x509::pem_blocks;
@@ -152,6 +152,25 @@ fn get_route(path: &str) -> Option<Route> {
             c.relay.hub.bridge_c_outbox(&who, &c.q("after", "0"), &c.q("wait", "0"))
         },
         "/v1/bridge/c/file" => bridge_file_get,
+        // wave3:chat-e2ee
+        "/v1/chat/devices" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.gate(&who, None, "", &session)?;
+            c.relay.hub.ce_devices_get(&session, &who, &c.q("p", ""))
+        },
+        "/v1/chat/keys" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.gate(&who, None, "", &session)?;
+            c.relay.hub.ce_keys_get(&session, &who, &c.q("after", "0"), &c.q("limit", "500"))
+        },
+        "/v1/chat/log" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.gate(&who, None, "", &session)?;
+            c.relay.hub.ce_log_get(&session, &who, &c.q("cid", ""), &c.q("after", "0"), &c.q("limit", "500"))
+        },
         _ => return None,
     };
     Some(route)
@@ -184,15 +203,15 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/react" => react,
         "/v1/channels" => |c: &mut Ctx| {
             let (who, b, session) = session_gate(c)?;
-            c.relay.hub.channel_create(&session, &who, b.get("kind"), b.get("name"), b.get("topic"), b.get("members"))
+            c.relay.hub.channel_create(&session, &who, b.get("kind"), b.get("name"), b.get("topic"), b.get("members"), b.get("id"), b.get("bridgeable"), b.get("log"))
         },
         "/v1/channels/join" => |c: &mut Ctx| {
             let (who, b, session) = session_gate(c)?;
-            c.relay.hub.channel_join(&session, &who, b.get("id"))
+            c.relay.hub.channel_join(&session, &who, b.get("id"), b.get("log"))
         },
         "/v1/channels/leave" => |c: &mut Ctx| {
             let (who, b, session) = session_gate(c)?;
-            c.relay.hub.channel_leave(&session, &who, b.get("id"))
+            c.relay.hub.channel_leave(&session, &who, b.get("id"), b.get("log"))
         },
         "/v1/channels/archive" => |c: &mut Ctx| {
             let (who, b, session) = session_gate(c)?;
@@ -200,14 +219,17 @@ fn post_route(path: &str) -> Option<Route> {
         },
         "/v1/channels/invite" => |c: &mut Ctx| {
             let (who, b, session) = session_gate(c)?;
-            c.relay.hub.channel_invite(&session, &who, b.get("id"), b.get("principals"))
+            c.relay.hub.channel_invite(&session, &who, b.get("id"), b.get("principals"), b.get("log"))
         },
         "/v1/channels/update" => |c: &mut Ctx| {
             let (who, b, session) = session_gate(c)?;
             c.relay.hub.channel_update(&session, &who, b.get("id"), b.get("name"), b.get("topic"))
         },
         "/v1/channels/post" => |c: &mut Ctx| {
-            let (who, b, session) = session_gate(c)?;
+            let (who, b, session) = session_gate_max(c, ce::BODY_MAX)?;
+            if b.contains_key("enc") {
+                return c.relay.hub.ce_post(&who, "channel", post(&b, Some(session), None));
+            }
             c.relay.hub.channel_post(&session, &who, b.get("id"), b.get("text"), b.get("reply_to"), b.get("mentions"), b.get("thread"), b.get("also_channel"), b.get("preview"))
         },
         "/v1/channels/read" => |c: &mut Ctx| {
@@ -294,7 +316,7 @@ fn post_route(path: &str) -> Option<Route> {
         // wave3:files
         "/v1/files/start" => |c: &mut Ctx| {
             let (who, b) = conversation_gate(c)?;
-            c.relay.hub.files_start(&who, &pj::s(&b, "scope"), b.get("name"), b.get("size"), b.get("type"), opt(&b, "peer"), opt(&b, "session"), opt(&b, "with"), opt(&b, "channel"))
+            c.relay.hub.files_start(&who, &pj::s(&b, "scope"), b.get("name"), b.get("size"), b.get("type"), opt(&b, "peer"), opt(&b, "session"), opt(&b, "with"), opt(&b, "channel"), b.get("e2ee"))
         },
         "/v1/files/chunk" => files_chunk,
         "/v1/files/finish" => |c: &mut Ctx| {
@@ -409,6 +431,24 @@ fn post_route(path: &str) -> Option<Route> {
             c.relay.hub.bridge_c_call(&who, b.get("link"), b.get("by_name"))
         },
         "/v1/bridge/c/file" => bridge_file_post,
+        // wave3:chat-e2ee
+        "/v1/chat/devices" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate_max(c, ce::BODY_MAX)?;
+            c.relay.hub.ce_devices_post(&session, &who, b.get("bundle"))
+        },
+        "/v1/chat/keys" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate_max(c, ce::KEYS_BODY_MAX)?;
+            c.relay.hub.ce_keys_post(&session, &who, b.get("wraps"), b.get("share"))
+        },
+        "/v1/chat/event" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(ce::BODY_MAX)?);
+            c.gate(&who, None, &pj::s(&b, "peer"), &pj::s(&b, "session"))?;
+            c.relay.hub.ce_event(&who, &pj::s(&b, "scope"), &pj::s(&b, "id"), b.get("event"), b.get("enc"), opt(&b, "session"), opt(&b, "peer"), opt(&b, "with"), opt(&b, "channel"))
+        },
+        "/v1/chat/log" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.ce_log_post(&session, &who, b.get("cid"), b.get("entry"))
+        },
         _ => return None,
     };
     Some(route)
@@ -548,10 +588,34 @@ fn link(c: &mut Ctx) -> R<Obj> {
     Ok(obj([("ok", Value::Bool(true))]))
 }
 
+/// `{peer, id, enc, files?, reply_to?}` (end-to-end encrypted), or a plain `{peer, text, reply_to?, mentions?}` while
+/// a web guest is in the call.
 fn chat(c: &mut Ctx) -> R<Obj> {
-    let (who, b, peer) = peer_gate(c)?;
+    let (who, b) = (c.who(false)?, c.body_max(ce::BODY_MAX)?);
+    let peer = pj::s(&b, "peer");
+    c.gate(&who, None, &peer, "")?;
+    if b.contains_key("enc") {
+        return c.relay.hub.ce_post(&who, "room", post(&b, None, opt(&b, "peer")));
+    }
     let text = m::text(b.get("text"), "messages")?;
     c.relay.hub.say(&peer, &who, &text, b.get("reply_to"), b.get("mentions"))
+}
+
+/// The encrypted message a route's body carries (ce_post).
+fn post(b: &Obj, session: Option<String>, peer: Option<String>) -> ce::Post<'_> {
+    ce::Post {
+        id: b.get("id"),
+        enc: b.get("enc"),
+        files: b.get("files"),
+        thread: b.get("thread"),
+        reply_to: b.get("reply_to"),
+        also_channel: b.get("also_channel"),
+        session,
+        peer,
+        to: b.get("to"),
+        channel: b.get("channel"),
+        plain: ce::plain_fields(b),
+    }
 }
 
 /// `str(body.get(key) or "") or None`.
@@ -737,8 +801,14 @@ fn bridge_file_post(c: &mut Ctx) -> R<Obj> {
 
 /// _chat_change: `{peer|session, scope: room|dm, with?, id, text}`: edit or delete a message.
 fn chat_change(c: &mut Ctx, delete: bool) -> R<Obj> {
-    let (who, b) = (c.who(false)?, c.body()?);
+    let (who, b) = (c.who(false)?, c.body_max(ce::BODY_MAX)?);
     c.gate(&who, None, &pj::s(&b, "peer"), &pj::s(&b, "session"))?;
+    if b.contains_key("enc") {
+        if ce::plain_fields(&b) {
+            return Err(m::E::Conflict(ce::PLAIN.into()));
+        }
+        return c.relay.hub.ce_change(&who, &pj::s(&b, "scope"), &pj::s(&b, "id"), b.get("event"), b.get("enc"), delete, opt(&b, "peer"), opt(&b, "session"), opt(&b, "with"), opt(&b, "channel"));
+    }
     let text = if delete { None } else { b.get("text") };
     c.relay.hub.chat_change(&who, &pj::s(&b, "scope"), &pj::s(&b, "id"), text, delete, opt(&b, "peer"), opt(&b, "session"), opt(&b, "with"), opt(&b, "channel"))
 }
@@ -780,9 +850,16 @@ fn captions(c: &mut Ctx) -> R<Obj> {
     c.relay.hub.captions(&pj::s(&b, "peer"), &who, b.get("lines"), weak, b.get("sent_ms"))
 }
 
+/// `{peer, late_history?, catchup?}` (`catchup`: the signed catch-up option of chat encryption, Hub::ce_catchup).
 fn room_options(c: &mut Ctx) -> R<Obj> {
     let (who, b, peer) = peer_gate(c)?;
-    c.relay.hub.room_options(&peer, &who, b.get("late_history"))
+    if !b.contains_key("catchup") {
+        return c.relay.hub.room_options(&peer, &who, b.get("late_history"));
+    }
+    if b.contains_key("late_history") {
+        c.relay.hub.room_options(&peer, &who, b.get("late_history"))?;
+    }
+    c.relay.hub.ce_catchup(&peer, &who, b.get("catchup"))
 }
 
 fn leave(c: &mut Ctx) -> R<Obj> {
@@ -837,9 +914,20 @@ fn session_gate(c: &mut Ctx) -> R<(m::Identity, Obj, String)> {
     Ok((who, b, session))
 }
 
+/// `{session, to, id, enc, files?, thread?, reply_to?}`; plain text is refused.
 fn dm(c: &mut Ctx) -> R<Obj> {
-    let (who, b, session) = session_gate(c)?;
-    c.relay.hub.dm(&session, &who, &pj::s(&b, "to"), b.get("text"), b.get("reply_to"), b.get("thread"), b.get("preview"))
+    let (who, b, session) = session_gate_max(c, ce::BODY_MAX)?;
+    if b.contains_key("enc") {
+        return c.relay.hub.ce_post(&who, "dm", post(&b, Some(session), None));
+    }
+    c.relay.hub.dm(&session, &who)
+}
+
+fn session_gate_max(c: &mut Ctx, most: usize) -> R<(m::Identity, Obj, String)> {
+    let (who, b) = (c.who(false)?, c.body_max(most)?);
+    let session = pj::s(&b, "session");
+    c.gate(&who, None, "", &session)?;
+    Ok((who, b, session))
 }
 
 fn dm_read(c: &mut Ctx) -> R<Obj> {
