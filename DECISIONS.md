@@ -27299,3 +27299,26 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 - A cross-origin page in the Preview panel reports only what its bridge can read, and a canvas-only page has no text to report.
 - A pixel capture for vision models needs its own ADR: it cannot be scanned by the Unicode scanner.
 - Driven in a browser against a live engine: the dock on top of a modal, the Fleet grid and the Orbit map; Escape closing only the dock in each case; the digest naming the top surface first; the Preview page read with a key in it redacted; the typed question and the path field's value absent from the digest. No live model answered in this sandbox.
+
+## ADR-0585 -- P-ASKLUCID.4: Lucid reads lane conversations and other sessions, and gives a briefing (2026-11-14)
+
+**Status:** Accepted. Session 2 of `docs/specs/ask-lucid-sight-pdr.md`. Amends ADR-0581 (Lucid saw lane names and states, never a conversation, and no session). Proof: `make demo-P-ASKLUCID.4`, `bun test desktop/ask_lucid_briefing.test.ts`.
+
+**Context.** The request is for Lucid to review other sessions, lanes and orbit work and give a briefing. Lucid could say that a lane was working, but not on what, and could not say what a lane had answered or what any other session was about.
+
+**Decision.**
+1. Two more views, built by `desktop/ask_lucid_briefing.ts` (pure, no imports):
+   - **Lane conversations:** for each lane, how many requests it has had, the last request, and the last answer with its tool lines counted and removed. Lanes are ordered by urgency: waiting on the user, failed, working, the rest. A request with no answer yet says so, and a turn that ended in an error names it.
+   - **Sessions:** the sessions in this workspace, spoke sessions included, the open one first and then the most recent, each with its turn count, age and where it lives (the main chat, or the lane that ran it), and the last exchange of the first few. Knowledge-ingest sessions are left out.
+2. Two sizes. An ordinary question gets the short one (3,000 characters of lane conversation across 8 lanes, 2,500 of sessions with 2 last exchanges) so a side question stays cheap. **Brief me** gets the long one (9,000 across 16 lanes, 6,000 with 5 last exchanges). A long answer is cut from the front, because the conclusion is at the end.
+3. Each view is its own block: scanned alone and fenced alone. A poisoned lane conversation is withheld without taking the lane list, the sessions or the orbit with it. A scan that cannot run withholds the view.
+4. The brief gains a briefing order: what needs the user, what is running, what finished, one next step.
+5. A **Brief me** chip sits above the composer and sends one fixed question with `brief: true`.
+6. The route only reads: `fleet.laneTranscript`, `listSessions`, `sessionMessages`. It loads no session, changes no lane and writes no file.
+
+**Consequences.**
+- Lucid can say what a lane was asked, what it answered and whether it is waiting, and what the last exchange in a recent session was. He reads the tail of a conversation, not all of it.
+- Every question now carries the short views, which adds up to about 5,500 characters to a prompt when lanes and sessions exist.
+- Sessions in other workspaces are not listed. A remote spoke's conversation is not read.
+- A lane's in-flight text (the turn still streaming) is not included, only settled turns.
+- The Brief me chip and the posted `brief` flag were driven in a browser against a live engine; the live route answered with the provider's 403 from this sandbox, so no live model wrote a briefing.

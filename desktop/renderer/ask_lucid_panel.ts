@@ -15,6 +15,7 @@
 // Everything outside the DOM is injected, and the small pure helpers are exported for tests.
 
 import { ASK_KIND_LABEL, ASK_RISK_LABEL, actionDetails, type AskAction } from "../ask_lucid_actions.ts"; // P-ASKLUCID.2 (ADR-0582): pure, no imports
+import { BRIEF_QUESTION } from "../ask_lucid_briefing.ts"; // P-ASKLUCID.4 (ADR-0585): pure, no imports
 import { createDock, type DockHandle } from "./dock.ts";
 import { mountMiniMascot, type MiniMascotHandle, type MiniState } from "./mascot_mini.ts";
 
@@ -26,7 +27,7 @@ export interface AskReplyView {
   error?: string;
   model?: string;
   /** `screen` counts the surfaces of the screen Lucid was shown (P-ASKLUCID.3, ADR-0584). */
-  seen: { lanes: number; tasks: number; hits: number; screen?: number };
+  seen: { lanes: number; tasks: number; hits: number; screen?: number; activity?: number; sessions?: number };
   withheld: string[];
   /** P-ASKLUCID.2 (ADR-0582): what Lucid proposes. Each becomes a card; none runs without Confirm. */
   actions?: AskAction[];
@@ -57,8 +58,11 @@ const plural = (n: number, one: string, many: string): string => `${n} ${n === 1
 /** PURE: one line under a reply saying what Lucid was shown, and what was kept from him. */
 export function seenLine(r: Pick<AskReplyView, "seen" | "withheld" | "model">): string {
   const screen = (r.seen.screen ?? 0) > 0 ? `your screen (${plural(r.seen.screen ?? 0, "surface", "surfaces")}), ` : "";
-  const saw = `Saw ${screen}${plural(r.seen.lanes, "lane", "lanes")}, ${plural(r.seen.tasks, "orbit task", "orbit tasks")} and ${plural(r.seen.hits, "knowledge page", "knowledge pages")}.`;
-  const names: Record<string, string> = { screen: "your screen", fleet: "the fleet lanes", orbit: "the Fleet Orbit", knowledge: "the knowledge graph", history: "the earlier turns" };
+  // P-ASKLUCID.4 (ADR-0585): lane conversations and sessions are named only when some were shown.
+  const talk = (r.seen.activity ?? 0) > 0 ? ` (${plural(r.seen.activity ?? 0, "conversation", "conversations")} read)` : "";
+  const sessions = (r.seen.sessions ?? 0) > 0 ? `${plural(r.seen.sessions ?? 0, "session", "sessions")}, ` : "";
+  const saw = `Saw ${screen}${plural(r.seen.lanes, "lane", "lanes")}${talk}, ${sessions}${plural(r.seen.tasks, "orbit task", "orbit tasks")} and ${plural(r.seen.hits, "knowledge page", "knowledge pages")}.`;
+  const names: Record<string, string> = { screen: "your screen", activity: "the lane conversations", sessions: "the sessions", fleet: "the fleet lanes", orbit: "the Fleet Orbit", knowledge: "the knowledge graph", history: "the earlier turns" };
   const kept = r.withheld.map((w) => names[w] ?? w);
   const held = kept.length ? ` Withheld by the security scan: ${kept.join(", ")}.` : "";
   return `${saw}${held}${r.model ? ` Answered by ${r.model}.` : ""}`;
@@ -75,7 +79,7 @@ export function stateLine(state: MiniState): string {
 }
 
 /** What goes to the engine with a question besides its text and the earlier turns. */
-export interface AskExtrasView { screen?: unknown }
+export interface AskExtrasView { screen?: unknown; /** P-ASKLUCID.4: Brief me was pressed. */ brief?: boolean }
 
 export interface AskLucidDeps {
   /** Ask the engine. Null means the request itself failed. */
@@ -103,6 +107,8 @@ export interface AskLucidHandle {
   prefill(text: string): void;
   /** Ask a question as if the user typed it. */
   ask(text: string): void;
+  /** P-ASKLUCID.4 (ADR-0585): ask for a briefing across the screen, the fleet, the orbit and the sessions. */
+  brief(): void;
   /** Add a message from Lucid that did not come from the model (a suggestion, a what's-new note). */
   say(markdown: string): void;
   dock: DockHandle;
@@ -150,6 +156,14 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
   welcome.appendChild(sugs);
   log.appendChild(welcome);
 
+  // P-ASKLUCID.4 (ADR-0585): one tap for a briefing. The row sits above the composer and is always there.
+  const quick = el("div", "al-quick");
+  const briefBtn = el("button", "al-chip al-chip-brief", "Brief me");
+  briefBtn.type = "button";
+  briefBtn.title = "What needs you, what is running, what finished, and what Lucid would do next";
+  briefBtn.addEventListener("click", () => send(BRIEF_QUESTION, { brief: true }));
+  quick.appendChild(briefBtn);
+
   const form = el("form", "al-form");
   const input = el("textarea", "al-input");
   input.rows = 1;
@@ -158,7 +172,7 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
   const sendBtn = el("button", "al-send", "Ask");
   sendBtn.type = "submit";
   form.append(input, sendBtn);
-  panel.append(log, form);
+  panel.append(log, quick, form);
 
   const pillIn = el("span", "al-pill-in", "Ask Lucid");
 
@@ -243,7 +257,7 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     scrollDown();
   };
 
-  function send(raw: string): void {
+  function send(raw: string, more: AskExtrasView = {}): void {
     const text = raw.trim();
     if (!text || busy) return;
     dock.open();
@@ -258,7 +272,7 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     turns.push({ role: "user", text });
     // The screen is read at the moment of asking, so "this" means what the user sees now.
     const screen = deps.screen ? deps.screen().catch(() => null) : Promise.resolve(null);
-    void screen.then((s) => deps.ask(text, history, s ? { screen: s } : {})).catch(() => null).then((r) => {
+    void screen.then((s) => deps.ask(text, history, { ...more, ...(s ? { screen: s } : {}) })).catch(() => null).then((r) => {
       busy = false;
       sendBtn.disabled = false;
       if (r?.ok && r.reply) {
@@ -293,6 +307,7 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     isOpen: () => dock.isOpen(),
     prefill(text) { dock.open(); input.value = text; autosize(); input.focus(); },
     ask: (text) => send(text),
+    brief: () => send(BRIEF_QUESTION, { brief: true }),
     say(markdown) { dock.open(); addLucid(markdown); },
     dock,
   };

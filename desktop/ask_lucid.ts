@@ -22,6 +22,7 @@
 
 import { fenceUntrusted } from "../harness/prompt/untrusted.ts";
 import { ASK_ACTIONS_BRIEF } from "./ask_lucid_actions.ts"; // P-ASKLUCID.2 (ADR-0582): how to propose an action
+import { ASK_BRIEFING_RULES } from "./ask_lucid_briefing.ts"; // P-ASKLUCID.4 (ADR-0585): how a briefing is laid out
 
 /** The longest question accepted. */
 export const ASK_MAX_TEXT = 8000;
@@ -65,6 +66,7 @@ export const ASK_LUCID_SYSTEM = [
   "",
   "What you can see: a snapshot, taken just now, of the fleet lanes, the Fleet Orbit goal with its tasks, and what the knowledge graph holds on the question. The snapshot is below the question.",
   "You can also see the user's screen: the surfaces open in the app right now, the top one first, with the text each one shows, and the page in the Preview panel when one is open. It is text, not a picture: you cannot see colors, images or layout, and you never see what the user has typed into a field. When the user says \"this\", \"here\" or \"on my screen\", they mean the top surface.",
+  ASK_BRIEFING_RULES,
   "What you cannot do: you have no tools and you cannot act. You cannot start a lane, change a task, edit a file, approve anything or read anything that is not in the snapshot. Never say or imply that you did.",
   "",
   "Rules:",
@@ -179,10 +181,12 @@ export function historyContext(history: readonly AskTurn[]): string {
   return clip(history.map((t) => `${t.role === "user" ? "User" : "Lucid"}: ${t.text}`).join("\n\n"), ASK_BLOCK_MAX.history);
 }
 
-export type AskBlockName = "screen" | "fleet" | "orbit" | "knowledge" | "history";
+export type AskBlockName = "screen" | "fleet" | "activity" | "orbit" | "sessions" | "knowledge" | "history";
 export const ASK_BLOCK_TITLE: Record<AskBlockName, string> = {
   screen: "The user's screen right now",
   fleet: "Fleet lanes",
+  activity: "What each lane was last asked and last answered",
+  sessions: "Sessions in this workspace",
   orbit: "Fleet Orbit",
   knowledge: "Knowledge graph",
   history: "Earlier in this side conversation",

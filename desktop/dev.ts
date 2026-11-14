@@ -6330,7 +6330,7 @@ return Bun.serve({
       // P-ASKLUCID.2 (ADR-0582): the reply may carry PROPOSED actions. This route runs none of them; the user
       // confirms a card and the renderer then calls /api/fleet/spawn, /api/fleet/queue or /api/fleet/goal/task.
       if (p === "/api/ask-lucid" && req.method === "POST") {
-        const b = await readBody<{ text?: unknown; history?: unknown; screen?: unknown }>(req);
+        const b = await readBody<{ text?: unknown; history?: unknown; screen?: unknown; brief?: unknown }>(req);
         const q = parseQuestion(b.text);
         if (!q.ok) return json({ ok: false, error: q.error, data: { ok: false, error: q.error, seen: { ...NOTHING_SEEN }, withheld: [], actions: [], actionsDropped: 0 } });
         const reply = await answerAskLucid(q.text, sanitizeHistory(b.history), {
@@ -6341,8 +6341,13 @@ return Bun.serve({
           pinModel: () => backend.completionModel(backend.checkerModelInfo().recommended || undefined),
           complete: (system, user, model) => backend.complete(system, user, { model, idleMs: 45_000 }),
           onLockdownBlock: (reason) => emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "ask-lucid-lockdown", reason: reason.slice(0, 200), sessionId: backend.currentSessionId() ?? undefined }),
+          // P-ASKLUCID.4 (ADR-0585): reads only. Lane conversations and stored sessions, for a briefing.
+          laneTranscript: (laneId) => fleet.laneTranscript(laneId),
+          sessions: async () => (await listSessions(undefined, undefined, { spokes: laneSessionNames(), show: true })).sessions,
+          sessionTail: (id) => sessionMessages(id, 8),
+          currentSessionId: () => backend.currentSessionId(),
           now: () => Date.now(),
-        }, { screen: b.screen });
+        }, { screen: b.screen, brief: b.brief === true });
         return json({ ok: reply.ok, data: reply, ...(reply.error ? { error: reply.error } : {}) });
       }
       // P-AOS.1 (ADR-0452): the standing fleet goal. UI token only (never AGENT_ROUTES): criteria are verified

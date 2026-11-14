@@ -230,7 +230,7 @@ describe("answerAskLucid", () => {
   test("the model gets the brief, the question, and all three views fenced; the reply says what was seen", async () => {
     const { d, probe } = deps();
     const r = await answerAskLucid("what are my lanes doing?", [{ role: "user", text: "hi" }, { role: "lucid", text: "hello" }], d);
-    expect(r).toEqual({ ok: true, reply: "Two lanes: scout is working.", model: "claude-haiku-5-5", seen: { lanes: 2, tasks: 1, hits: 1, screen: 0 }, withheld: [], actions: [], actionsDropped: 0 });
+    expect(r).toEqual({ ok: true, reply: "Two lanes: scout is working.", model: "claude-haiku-5-5", seen: { lanes: 2, tasks: 1, hits: 1, screen: 0, activity: 0, sessions: 0 }, withheld: [], actions: [], actionsDropped: 0 });
     expect(probe.calls).toBe(1);
     expect(probe.system).toBe(ASK_LUCID_SYSTEM);
     expect(probe.model).toBe("anthropic/claude-haiku-5-5");
@@ -251,7 +251,7 @@ describe("answerAskLucid", () => {
     const r = await answerAskLucid("status?", [], d);
     expect(r.ok).toBe(true);
     expect(r.withheld).toEqual(["fleet"]);
-    expect(r.seen).toEqual({ lanes: 0, tasks: 1, hits: 1, screen: 0 }); // a withheld block was not seen
+    expect(r.seen).toEqual({ lanes: 0, tasks: 1, hits: 1, screen: 0, activity: 0, sessions: 0 }); // a withheld block was not seen
     expect(probe.user).not.toContain(poison);
     expect(probe.user).toContain("## Fleet lanes\n[Withheld by LUCID");
     expect(probe.user).toContain("## Fleet Orbit"); // the others arrive
@@ -262,7 +262,7 @@ describe("answerAskLucid", () => {
     const r = await answerAskLucid("anything?", [{ role: "user", text: "earlier" }], d);
     expect(r.ok).toBe(true);
     expect(r.withheld).toEqual(["fleet", "orbit", "knowledge", "history"]);
-    expect(r.seen).toEqual({ lanes: 0, tasks: 0, hits: 0, screen: 0 });
+    expect(r.seen).toEqual({ lanes: 0, tasks: 0, hits: 0, screen: 0, activity: 0, sessions: 0 });
     expect(countOf(probe.user, START)).toBe(0); // nothing untrusted went out
     expect(probe.user).not.toContain("scout");
     expect(probe.user).toContain("The user asks:\nanything?");
@@ -272,7 +272,7 @@ describe("answerAskLucid", () => {
     const { d, probe } = deps({ fleetStatus: async () => { throw new Error("fleet down"); }, knowledge: async () => { throw new Error("no kb"); } });
     const r = await answerAskLucid("status?", [], d);
     expect(r.ok).toBe(true);
-    expect(r.seen).toEqual({ lanes: 0, tasks: 1, hits: 0, screen: 0 });
+    expect(r.seen).toEqual({ lanes: 0, tasks: 1, hits: 0, screen: 0, activity: 0, sessions: 0 });
     expect(r.withheld).toEqual([]);
     expect(probe.user).toContain("The fleet lanes could not be read just now.");
     expect(probe.user).toContain("The knowledge graph could not be read just now.");
@@ -334,7 +334,7 @@ describe("the route and the service cannot act", () => {
 
   test("the service imports only the prompt builder: no fleet, no fs, no process", () => {
     const imports = [...service.matchAll(/\bfrom "([^"]+)";/g)].map((m) => m[1]);
-    expect(imports).toEqual(["./ask_lucid.ts", "./ask_lucid_actions.ts", "./ask_lucid_screen.ts"]); // all pure: prompt text, validation, the screen digest
+    expect(imports).toEqual(["./ask_lucid.ts", "./ask_lucid_actions.ts", "./ask_lucid_briefing.ts", "./ask_lucid_screen.ts"]); // all pure: prompt text, validation, the briefing views, the screen digest
     expect(service).not.toContain("require(");
     expect(service).not.toContain("import(");
   });

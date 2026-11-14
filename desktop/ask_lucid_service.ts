@@ -29,6 +29,7 @@ import {
   type AskTurn,
 } from "./ask_lucid.ts";
 import { actionText, knownFrom, parseActions, type AskAction } from "./ask_lucid_actions.ts";
+import { laneActivityContext, sessionsContext, type BriefMode } from "./ask_lucid_briefing.ts"; // P-ASKLUCID.4 (ADR-0585)
 import { normalizeScreen, screenContext } from "./ask_lucid_screen.ts"; // P-ASKLUCID.3 (ADR-0584)
 
 export interface AskDeps {
@@ -43,6 +44,14 @@ export interface AskDeps {
   /** The model the side completion may use, already clamped by CUI lockdown, or why there is none. */
   pinModel(): { ok: true; model?: string } | { ok: false; error: string };
   complete(system: string, user: string, model: string | undefined): Promise<string>;
+  /** P-ASKLUCID.4 (ADR-0585): one lane's conversation (`fleet.laneTranscript`). Absent = no activity view. */
+  laneTranscript?(laneId: string): unknown;
+  /** P-ASKLUCID.4: the sessions in this workspace, spoke sessions included. Absent = no sessions view. */
+  sessions?(): Promise<unknown>;
+  /** P-ASKLUCID.4: the last few messages of one session (`sessionMessages(id, n)`). */
+  sessionTail?(id: string): unknown;
+  /** P-ASKLUCID.4: the session open in the main chat. */
+  currentSessionId?(): string | null;
   /** Called when lockdown leaves no allowed model, so the refusal is audited. */
   onLockdownBlock?(reason: string): void;
   now(): number;
@@ -64,14 +73,17 @@ export interface AskReply {
   actionsDropped: number;
 }
 
-/** How much of each view Lucid was shown. `screen` counts surfaces (P-ASKLUCID.3). */
-export interface AskSeen { lanes: number; tasks: number; hits: number; screen: number }
-export const NOTHING_SEEN: AskSeen = { lanes: 0, tasks: 0, hits: 0, screen: 0 };
+/** How much of each view Lucid was shown. `screen` counts surfaces (P-ASKLUCID.3); `activity` counts lanes
+ *  whose conversation was shown and `sessions` counts sessions listed (P-ASKLUCID.4). */
+export interface AskSeen { lanes: number; tasks: number; hits: number; screen: number; activity: number; sessions: number }
+export const NOTHING_SEEN: AskSeen = { lanes: 0, tasks: 0, hits: 0, screen: 0, activity: 0, sessions: 0 };
 
 /** What arrives with a question besides its text. */
 export interface AskExtras {
   /** P-ASKLUCID.3 (ADR-0584): the renderer's reading of the screen. Untrusted: parsed again here. */
   screen?: unknown;
+  /** P-ASKLUCID.4 (ADR-0585): the user pressed Brief me: the activity and sessions views get the long size. */
+  brief?: boolean;
 }
 
 const UNAVAILABLE = "Lucid could not answer right now. Check that a model provider is connected in Settings, then try again.";
@@ -114,6 +126,16 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
   } catch { fleetText = "The fleet lanes could not be read just now."; }
   blocks.push({ name: "fleet", text: fleetText });
 
+  // P-ASKLUCID.4 (ADR-0585): what each lane was last asked and last answered. Agent-written, so it is its
+  // own view with its own scan: a poisoned lane conversation is withheld without taking the lane list with it.
+  const mode: BriefMode = extras.brief === true ? "brief" : "normal";
+  if (deps.laneTranscript && fleetRaw) {
+    try {
+      const a = laneActivityContext(fleetRaw, (id) => deps.laneTranscript!(id), mode);
+      if (a.text) { blocks.push({ name: "activity", text: a.text }); seen.activity = a.lanes; }
+    } catch { /* the lane list above still stands */ }
+  }
+
   let orbitText: string;
   try {
     orbitRaw = deps.orbit();
@@ -122,6 +144,14 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
     seen.tasks = o.tasks;
   } catch { orbitText = "The Fleet Orbit could not be read just now."; }
   blocks.push({ name: "orbit", text: orbitText });
+
+  // P-ASKLUCID.4 (ADR-0585): the sessions in this workspace and the last exchange of the most recent ones.
+  if (deps.sessions) {
+    try {
+      const s = sessionsContext(await deps.sessions(), (id) => deps.sessionTail?.(id), { currentId: deps.currentSessionId?.() ?? null, now: deps.now(), mode });
+      if (s.text) { blocks.push({ name: "sessions", text: s.text }); seen.sessions = s.sessions; }
+    } catch { /* a briefing without the sessions view is still a briefing */ }
+  }
 
   let knowledgeText: string;
   try {
@@ -145,6 +175,8 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
     withheld.push(b.name);
     if (b.name === "screen") seen.screen = 0;
     else if (b.name === "fleet") seen.lanes = 0;
+    else if (b.name === "activity") seen.activity = 0;
+    else if (b.name === "sessions") seen.sessions = 0;
     else if (b.name === "orbit") seen.tasks = 0;
     else if (b.name === "knowledge") seen.hits = 0;
   }
