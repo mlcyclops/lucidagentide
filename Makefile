@@ -681,6 +681,10 @@ demo-P-TOKENS.1: ## P-TOKENS.1 / P-FLEET.L9: the token-spend accounting behind t
 demo-P-MCP-GATE.1: ## P-MCP-GATE.1 (ADR-0148): in-process MCP tool_result gate — poisoned MCP result withheld, clean result delimited+labeled untrusted, LOCAL tool results untouched (source-scoped), fail-closed
 	$(BUN) run harness/scripts/demo_pmcpgate1.ts
 
+.PHONY: demo-P-CTX.2a
+demo-P-CTX.2a: ## P-CTX.2a (ADR-0578): a tool result omp spilled to an artifact - real omp sessions and the real scanner: a 2 MB MCP result with a payload in the elided middle is withheld and its artifact purged; a clean one is shown as omp's bounded view in the untrusted envelope, recorded in the provenance ledger with hash and trust label, and fenced when a page is read back; omp's 4 KB spill threshold bounds it under 4.5 KB; a local spill is untouched; a dead scanner withholds (fail-closed)
+	$(BUN) run harness/scripts/demo_pctx2a.ts
+
 .PHONY: demo-P-LOCAL.1
 demo-P-LOCAL.1: ## P-LOCAL.1 (ADR-0135): Local Providers — declare a self-hosted / custom OpenAI-compatible LLM (Ollama, llama.cpp, vLLM, DGX-over-VPN); validate fail-closed, emit the omp --config overlay (secret from the vault, skipped if absent), persist WITHOUT the secret
 	$(BUN) run desktop/scripts/demo_p_local_1.ts

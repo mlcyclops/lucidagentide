@@ -10,6 +10,14 @@ This document is a review plus a proposal. Nothing here is decided. Each propose
 its number only when it is accepted and appended to DECISIONS.md (one branch, one allocation, see
 `harness/adr_numbering.test.ts`). Each proposed increment is one session.
 
+> **Amendment, 2026-11-14 (ADR-0578).** ADR-A was accepted as ADR-0578 and Session 1 shipped, with its
+> premise corrected. The first draft of this document said tool results reach the model whole. They do
+> not: omp 18.18.6 already saves any result over 50 KB as a session artifact and shows a head and tail
+> view with an `artifact://` link, and its threshold is a setting. So LUCID writes no windowing code.
+> Confirming the seam also found a hole in the existing MCP result gate: it scanned only that view, so a
+> payload in the elided middle of a large MCP result could be read back unscanned and unfenced. Session 1
+> closed it. Sections 3, 5 and 6 below are corrected in place and say where they changed.
+
 ## 1. What the paper does
 
 The paper improves long-context reasoning of small models (Llama3-8B at an 8K window, Qwen2.5-3B at
@@ -107,7 +115,7 @@ Mapped from the current tree (see file references).
 | Paper concept | LUCID today | Maturity |
 |---|---|---|
 | Intermediate results outside the context | `harness/memory/compaction.ts` archives raw spans with provenance and summarizes from sanitized parts; `harness/prompt/assembler.ts` keeps the tail after the cache breakpoint | Strong for security and cache, not aimed at reasoning |
-| Bounded prompts per model call | Tool results reach the model whole; `harness/tools/output_minify_proto.ts` and `output_cmdaware_proto.ts` exist but are imported nowhere | Prototype only |
+| Bounded prompts per model call | omp spills any result over `tools.artifactSpillThreshold` (default 50 KB) to a session artifact and shows a head and tail view (corrected, ADR-0578); LUCID does not yet set that threshold per model. `harness/tools/output_minify_proto.ts` and `output_cmdaware_proto.ts` exist but are imported nowhere | Native in omp at 50 KB, not tuned for small windows |
 | Code primitives (match, lookup, count, track) | None exposed as tools; `harness/knowledge/chunk.ts` is fixed 800 char chunking for ingest | Missing |
 | Capability state | `harness/memory/state.ts`, `memory.ts`, `turns.ts`, `promotion_gate.ts`: durable, auditable, trust-labelled | Strong, general purpose |
 | Control logic | `desktop/model_roles.ts` (ADR-0448) sends plan and slow roles to a flagship and per-turn work to a flash model; `harness/agent/runner.ts` runs DAG workflows | Mature, rule based; nothing routes on the capability a query needs |
@@ -116,8 +124,9 @@ Mapped from the current tree (see file references).
 | Small local models | `desktop/local_providers.ts` (ADR-0135), DGX and vLLM, measured windows (ADR-0367); local models strictly opt-in (ADR-0498) | Supported by avoidance, no graceful degradation |
 
 The pattern: LUCID has the state, provenance and model-role machinery the paper's harness needs, and
-lacks the two pieces that produced the paper's gains, namely bounded tool-result windows with code
-primitives over stored artifacts, and an accuracy dev set to measure them against.
+omp supplies the stored artifact and the bounded window. What is missing is a window sized for a small
+model, provenance and trust labels on those artifacts (Session 1, shipped), code primitives over them,
+and an accuracy dev set to measure the result against.
 
 ## 4. Why this matters for LUCID specifically
 
@@ -139,13 +148,14 @@ Numbers are allocated at acceptance. Each is its own increment and its own sessi
 
 ### ADR-A. P-CTX.2: a tool result is a stored artifact; the model receives a bounded window and a handle
 
-A post-tool hook stores every tool result over a size threshold as an archive chunk with `artifact_id`,
-`run_id`, `session_id` and the source trust label, then replaces the content the model sees with a
-bounded window (head, tail, match context) plus the handle and the total size. The frozen
-`harness/tools/result_adapter.ts` is not changed: windowing happens in the hook that consumes its
-output. Fail-closed: a result that cannot be stored is not windowed and is handled as the gate
-handles it today (blocked), never passed through whole. The two unwired minify prototypes are either
-folded in here or deleted; they do not stay as drift.
+**Accepted as ADR-0578, amended.** The storing and the window are omp's (see the amendment at the top),
+so LUCID's part of this ADR is what omp does not do: scan the whole of a spilled result from an external
+source, record the artifact with `artifact_id`, `session_id`, source, hash and trust label before its
+view is released, remove a quarantined artifact's content, and fence the artifact when a local tool
+reads it back. Fail-closed throughout: an artifact that cannot be read, a scan that cannot run and a
+record that cannot be written each withhold the result. The window size becomes omp's own spill
+settings, set per model in P-CTX.2b. The frozen `harness/tools/result_adapter.ts` is not changed. The
+two unwired minify prototypes are decided in P-CTX.2b.
 
 ### ADR-B. P-CAP.1: code primitives over stored artifacts, with trust-label propagation
 
@@ -186,26 +196,32 @@ If a routing event is added it is a new `EventName`, which is a contract increme
 Preconditions for every session: `git fetch --all --prune`, baseline `make test` green, one increment,
 three lines in PROGRESS.md at the end. Order matters: C can run in parallel with A, D waits for all.
 
-### Session 1: ADR-A, P-CTX.2a, window hook and archive
+### Session 1: ADR-A, P-CTX.2a, spilled artifacts are scanned whole, recorded and fenced (shipped, ADR-0578)
 
-- Add `harness/hooks/result_window_hook.ts` as a post-tool hook: threshold, head and tail window,
-  handle format, archive write through `harness/memory/compaction.ts` chunk storage.
-- Tests: large result windowed with correct handle; small result untouched; archive failure blocks
-  rather than passes (the fail-closed case, modelled on `gate.failclosed.test.ts`); the window text is
-  wrapped untrusted and sits after the breakpoint (`prefix_compaction.test.ts` pattern).
-- `make demo-P-CTX.2a`: a 2 MB synthetic log through a lane, the model sees under 4 KB plus a handle.
-- Decide the fate of `output_minify_proto.ts` and `output_cmdaware_proto.ts` in the ADR text.
+- `harness/security/large_scan.ts`: a chunked, fail-closed scan for text too large for one request.
+- `harness/security/spill_provenance.ts`: omp's spill metadata, the provenance ledger beside the
+  artifacts, and the artifact references in a tool call's input.
+- `harness/omp/mcp_result_gate.ts`: a spilled MCP result is scanned whole, purged when quarantined and
+  recorded before release; the handler never throws. `harness/omp/artifact_reentry.ts`: a local read
+  of an external artifact is scanned and fenced.
+- Tests cover each failure path (no artifact access, an unreadable artifact, a dead scanner, a ledger
+  that cannot be written or read) and four real omp sessions.
+- `make demo-P-CTX.2a`: a 2 MB MCP result with a payload in the elided middle is withheld; a clean one
+  is fenced, recorded and fenced again on read-back; a 4 KB omp threshold shows the model 3,769 bytes.
 
-### Session 2: ADR-A, P-CTX.2b, match-context windows and the desktop surface
+### Session 2: ADR-A, P-CTX.2b, the window sized per model and the desktop surface
 
-- Window policy gains a query-aware mode (lines around a term the model named).
+- Set omp's `tools.artifactSpillThreshold`, head and tail from the model's measured context window
+  (ADR-0367), for local and small-window models first; the user can override it.
 - Desktop: the chat shows "N bytes stored, M shown" with a click-through to the artifact.
   Renderer touched, so rebuild `app.bundle.js` and grep the served bytes for a new marker.
+- Decide the two unwired output prototypes: promote one pass into the window, or delete both.
 - `make demo-P-CTX.2b`.
 
 ### Session 3: ADR-B, P-CAP.1a, find, lookup, count, slice
 
-- `harness/tools/artifact_primitives.ts`: four tools over handles, TypeScript only, no model call.
+- `harness/tools/artifact_primitives.ts`: four tools over omp artifact ids, TypeScript only, no model
+  call. Each reads the provenance ledger of ADR-0578 for the artifact's trust label.
 - Tests per primitive with fixtures at 8K, 64K, 512K characters; record identity preserved; unknown
   handle is an error, never an empty success.
 - `make demo-P-CAP.1a`: RULER-style multikey needle at 512K characters answered by a tier-0 model
