@@ -32,7 +32,8 @@ import { actionText, knownFrom, parseActions, settingsContext, type AskAction } 
 import { unusedFeaturesContext } from "./ask_lucid_features.ts"; // P-ASKLUCID.6 (ADR-0587)
 import { splitFollowups } from "./ask_lucid_followups.ts"; // P-ASKLUCID.5 (ADR-0586)
 import { laneActivityContext, sessionsContext, type BriefMode } from "./ask_lucid_briefing.ts"; // P-ASKLUCID.4 (ADR-0585)
-import { normalizeScreen, screenContext } from "./ask_lucid_screen.ts"; // P-ASKLUCID.3 (ADR-0584)
+import { normalizeScreen, REDACTED, screenContext } from "./ask_lucid_screen.ts"; // P-ASKLUCID.3 (ADR-0584)
+import { normalizeShot, shotDecision, SHOT_NOTE, type ShotSkip } from "./ask_lucid_shot.ts"; // P-ASKLUCID.7 (ADR-0588)
 
 export interface AskDeps {
   /** The `/api/fleet/status` payload. */
@@ -45,7 +46,12 @@ export interface AskDeps {
   scan(text: string): Promise<{ block: boolean; reason: string }>;
   /** The model the side completion may use, already clamped by CUI lockdown, or why there is none. */
   pinModel(): { ok: true; model?: string } | { ok: false; error: string };
-  complete(system: string, user: string, model: string | undefined): Promise<string>;
+  /** `images` (P-ASKLUCID.7) ride after the text as picture blocks; an empty list is a text-only call. */
+  complete(system: string, user: string, model: string | undefined, images?: readonly { data: string; mimeType: string }[]): Promise<string>;
+  /** P-ASKLUCID.7 (ADR-0588): did this model already answer a picture with an error in this run? */
+  visionRefused?(model: string | undefined): boolean;
+  /** P-ASKLUCID.7: remember that it did, so the next question does not pay for the same failure. */
+  noteVisionRefused?(model: string | undefined): void;
   /** P-ASKLUCID.4 (ADR-0585): one lane's conversation (`fleet.laneTranscript`). Absent = no activity view. */
   laneTranscript?(laneId: string): unknown;
   /** P-ASKLUCID.4: the sessions in this workspace, spoke sessions included. Absent = no sessions view. */
@@ -75,6 +81,9 @@ export interface AskReply {
   actionsDropped: number;
   /** P-ASKLUCID.5 (ADR-0586): questions Lucid thinks come next. Validated and scanned; shown as chips. */
   followups?: string[];
+  /** P-ASKLUCID.7 (ADR-0588): "sent" when a picture of the screen went with the question, else why it did
+   *  not. Absent when no picture was posted. */
+  picture?: "sent" | ShotSkip;
 }
 
 /** How much of each view Lucid was shown. `screen` counts surfaces (P-ASKLUCID.3); `activity` counts lanes
@@ -92,6 +101,8 @@ export interface AskExtras {
   settings?: unknown;
   /** P-ASKLUCID.6: ids of the features this user has not used. Untrusted: only catalog ids count. */
   unusedFeatures?: unknown;
+  /** P-ASKLUCID.7 (ADR-0588): a picture of the screen (`ScreenShot`). Untrusted: rebuilt and checked here. */
+  shot?: unknown;
 }
 
 const UNAVAILABLE = "Lucid could not answer right now. Check that a model provider is connected in Settings, then try again.";
@@ -111,6 +122,7 @@ export function providerErrorStatus(reply: string): number | null {
 export async function answerAskLucid(question: string, history: readonly AskTurn[], deps: AskDeps, extras: AskExtras = {}): Promise<AskReply> {
   const seen: AskSeen = { ...NOTHING_SEEN };
   const blocks: AskBlock[] = [];
+  let screenRedacted = false;
 
   // P-ASKLUCID.3 (ADR-0584): the screen goes first, because "this" in a question means what is on it. The
   // posted digest is rebuilt from its named fields (bounded and redacted again), then scanned below like
@@ -118,6 +130,7 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
   if (extras.screen !== undefined && extras.screen !== null) {
     const s = screenContext(normalizeScreen(extras.screen));
     seen.screen = s.surfaces;
+    screenRedacted = s.text.includes(REDACTED); // P-ASKLUCID.7: a screen that shows a key sends no picture
     blocks.push({ name: "screen", text: s.text.length > ASK_BLOCK_MAX.screen ? s.text.slice(0, ASK_BLOCK_MAX.screen) : s.text });
   }
   // The raw views, kept so a proposed action can be checked against the ids Lucid was actually shown.
@@ -202,17 +215,44 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
     deps.onLockdownBlock?.(pin.error);
     return { ok: false, error: pin.error, seen, withheld, actions: [], actionsDropped: 0 };
   }
+  // P-ASKLUCID.7 (ADR-0588): may a picture of the screen go with this question? Only beside a screen text
+  // view that was sent, passed its scan and held nothing key-shaped, and only to a model that has not
+  // refused one. The picture is never scanned (the scanner reads text), so it never goes without that view.
+  const shot = normalizeShot(extras.shot);
+  const screenBlock = blocks.find((b) => b.name === "screen");
+  const decision = shotDecision({
+    shot,
+    screenSent: !!screenBlock,
+    screenWithheld: withheld.includes("screen"),
+    screenRedacted: screenRedacted,
+    modelRefused: !!shot && (deps.visionRefused?.(pin.model) ?? false),
+  });
+  const picture: AskReply["picture"] = shot ? (decision.attach ? "sent" : decision.skip ?? undefined) : undefined;
+  const images = decision.attach && shot ? [{ data: shot.data, mimeType: shot.mime }] : [];
+  const failed = (text: string): boolean => !text || providerErrorStatus(text) !== null;
+
   let reply: string;
+  let pictureUsed = picture;
   try {
-    reply = (await deps.complete(ASK_LUCID_SYSTEM, askLucidUser(question, blocks), pin.model)).trim();
+    reply = (await deps.complete(ASK_LUCID_SYSTEM, askLucidUser(question, blocks, images.length ? SHOT_NOTE : ""), pin.model, images)).trim();
   } catch {
-    return { ok: false, error: UNAVAILABLE, seen, withheld, actions: [], actionsDropped: 0 };
+    reply = "";
+    if (images.length === 0) return { ok: false, error: UNAVAILABLE, seen, withheld, actions: [], actionsDropped: 0 };
   }
-  if (!reply) return { ok: false, error: UNAVAILABLE, seen, withheld, actions: [], actionsDropped: 0 };
+  if (images.length > 0 && failed(reply)) {
+    // The model may not read pictures. Ask again with the text alone. Only when THAT works is the model
+    // remembered as refusing pictures: a provider that is down or mis-keyed fails both ways and is not blamed.
+    let again = "";
+    try { again = (await deps.complete(ASK_LUCID_SYSTEM, askLucidUser(question, blocks), pin.model, [])).trim(); } catch { again = ""; }
+    if (!failed(again)) { deps.noteVisionRefused?.(pin.model); pictureUsed = "model-refused"; reply = again; }
+    else if (again) reply = again; // the text-only error is the one worth reporting
+  }
+  const base = { seen, withheld, ...(pictureUsed ? { picture: pictureUsed } : {}) };
+  if (!reply) return { ok: false, error: UNAVAILABLE, ...base, actions: [], actionsDropped: 0 };
   const status = providerErrorStatus(reply);
   if (status !== null) {
     const why = status === 401 || status === 403 ? "it rejected the credentials" : status === 429 ? "it is rate limiting requests" : status >= 500 ? "it had a server error" : "it rejected the request";
-    return { ok: false, error: `The model provider did not answer (HTTP ${status}: ${why}). Check the provider in Settings, then try again.`, seen, withheld, actions: [], actionsDropped: 0 };
+    return { ok: false, error: `The model provider did not answer (HTTP ${status}: ${why}). Check the provider in Settings, then try again.`, ...base, actions: [], actionsDropped: 0 };
   }
 
   // P-ASKLUCID.2 (ADR-0582): what Lucid proposes. The block is model output shaped by untrusted context, so
@@ -240,6 +280,6 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
     if (verdict.block) actionsDropped += 1; else actions.push(a);
   }
   const text = parsed.text || (actions.length ? "Here is what I can set up. Nothing runs until you confirm it." : "");
-  if (!text) return { ok: false, error: UNAVAILABLE, seen, withheld, actions: [], actionsDropped };
-  return { ok: true, reply: text, ...(pin.model ? { model: pin.model.replace(/^[^/]*\//, "") } : {}), seen, withheld, actions, actionsDropped, ...(followups.length ? { followups } : {}) };
+  if (!text) return { ok: false, error: UNAVAILABLE, ...base, actions: [], actionsDropped };
+  return { ok: true, reply: text, ...(pin.model ? { model: pin.model.replace(/^[^/]*\//, "") } : {}), ...base, actions, actionsDropped, ...(followups.length ? { followups } : {}) };
 }

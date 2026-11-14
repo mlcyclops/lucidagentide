@@ -92,6 +92,15 @@ Status: all four sessions shipped 2026-11-14. Follows `docs/specs/mini-lucid-ask
 - More views Lucid can open.
 - `make demo-P-ASKLUCID.6`.
 
+### Session 5: P-ASKLUCID.7, a picture of the screen (added after the first four)
+
+**Shipped 2026-11-14, ADR-0588.**
+
+- The window capture the Preview panel uses, scaled down, with typed fields and the panel painted over.
+- Sent only beside a screen text view that passed its scan and needed no redaction, and only to a
+  model that takes one. Everything else falls back to the text view.
+- `make demo-P-ASKLUCID.7`.
+
 ## 5. What not to do
 
 - No tool access for Lucid, and no action without Confirm.

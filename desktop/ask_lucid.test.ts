@@ -334,7 +334,7 @@ describe("the route and the service cannot act", () => {
 
   test("the service imports only the prompt builder: no fleet, no fs, no process", () => {
     const imports = [...service.matchAll(/\bfrom "([^"]+)";/g)].map((m) => m[1]);
-    expect(imports).toEqual(["./ask_lucid.ts", "./ask_lucid_actions.ts", "./ask_lucid_features.ts", "./ask_lucid_followups.ts", "./ask_lucid_briefing.ts", "./ask_lucid_screen.ts"]); // all pure: prompt text, validation, the feature catalog, follow-ups, the briefing views, the screen digest
+    expect(imports).toEqual(["./ask_lucid.ts", "./ask_lucid_actions.ts", "./ask_lucid_features.ts", "./ask_lucid_followups.ts", "./ask_lucid_briefing.ts", "./ask_lucid_screen.ts", "./ask_lucid_shot.ts"]); // all pure: prompt text, validation, the feature catalog, follow-ups, the briefing views, the screen digest, the picture rules
     expect(service).not.toContain("require(");
     expect(service).not.toContain("import(");
   });

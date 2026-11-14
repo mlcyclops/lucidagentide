@@ -98,7 +98,9 @@ import { localProvidersCardBody, draftFromForm, modelsFieldValue, providerWithDi
 import { parseResultWindowSetting, type ResultSpill } from "../result_window.ts"; // P-CTX.2b (ADR-0579): pure (no Node imports)
 import { resultWindowLine } from "./result_window_view.ts"; // P-CTX.2b (ADR-0579)
 import { createAskLucid, type AskActionResult, type AskExtrasView, type AskLucidHandle } from "./ask_lucid_panel.ts"; // P-ASKLUCID.1 (ADR-0581): the Ask Lucid fly-out
-import { collectScreen, surfaceKinds } from "./screen_digest.ts"; // P-ASKLUCID.3 (ADR-0584): what is on the screen, for Ask Lucid
+import { collectScreen, surfaceKinds } from "./screen_digest.ts";
+import { captureScreen, pictureEnabled, pictureToggleHtml, setPictureEnabled } from "./screen_shot.ts"; // P-ASKLUCID.7 (ADR-0588): a picture of the screen
+import type { ScreenShot } from "../ask_lucid_shot.ts"; // P-ASKLUCID.3 (ADR-0584): what is on the screen, for Ask Lucid
 import type { ScreenDigest, ScreenPreview } from "../ask_lucid_screen.ts";
 import { addSeen, featureQuestion, featuresFromSurfaces, FEATURES_SEEN_KEY, parseSeen, unusedFeatures, type AskFeature } from "../ask_lucid_features.ts"; // P-ASKLUCID.6 (ADR-0587): features not yet used
 import { ASK_SETTINGS, type AskSettingKey } from "../ask_lucid_actions.ts"; // P-ASKLUCID.6: the settings Lucid may propose changing
@@ -4995,6 +4997,7 @@ function askLucid(): AskLucidHandle {
   askLucidPanel ??= createAskLucid({
     ask: (text, history, extras) => bridge.askLucid(text, history, extras),
     screen: readScreenForLucid,
+    shot: shotForLucid,
     recSignals: recSignalsForLucid,
     recStore: miniStore(),
     recTrail: () => recTrail,
@@ -5157,6 +5160,15 @@ function followScreenForLucid(mode: Follow): void {
   };
   sample();
   recSampler = window.setInterval(sample, REC_SAMPLE_MS);
+}
+
+/** P-ASKLUCID.7 (ADR-0588): a picture of the window for a question in Ask Lucid, or null. It is the same
+ *  capture the Preview panel uses (Electron only; a plain browser has none). Typed fields and the Ask Lucid
+ *  panel are painted over inside captureScreen before anything is returned. The engine decides whether the
+ *  picture may go: only beside a screen text view that passed its scan and showed nothing key-shaped. */
+async function shotForLucid(): Promise<ScreenShot | null> {
+  if (!pictureEnabled(miniStore())) return null;
+  return captureScreen(document, (rect) => bridge.capturePreview(rect));
 }
 
 /** P-ASKLUCID.3 (ADR-0584): what the user is looking at, for a question in Ask Lucid. The surfaces come from
@@ -6279,7 +6291,7 @@ function secWorkingStatus(): string {
 // localStorage (mini_lucid.ts), no fetch.
 function secMiniLucid(): string {
   // P-MINI.2 (ADR-0583): the one switch for Lucid's suggestions sits with him.
-  return setCard("miniLucid", "Mini Lucid", "off · sometimes · always · suggestions", `${miniLucidCardHtml(readPresence(miniStore()), esc, icon("info", 12))}\n    ${suggestToggleHtml(suggestEnabled(miniStore()))}`, true);
+  return setCard("miniLucid", "Mini Lucid", "off · sometimes · always · suggestions · sight", `${miniLucidCardHtml(readPresence(miniStore()), esc, icon("info", 12))}\n    ${suggestToggleHtml(suggestEnabled(miniStore()))}\n    ${pictureToggleHtml(pictureEnabled(miniStore()))}`, true);
 }
 
 // ── P-THEME.1: Settings -> Theme ────────────────────────────────────────────────────────────────────
@@ -18376,6 +18388,7 @@ function wire(): void {
     if (t0.id === "statusEta") { setStatusEta((t0 as HTMLInputElement).checked); return; }
     // P-MINI.2 (ADR-0583): "Lucid may suggest things".
     if (t0.id === "lucidSuggest") { setSuggestEnabled(miniStore(), (t0 as HTMLInputElement).checked); return; }
+    if (t0.id === "lucidPicture") { setPictureEnabled(miniStore(), (t0 as HTMLInputElement).checked); return; } // P-ASKLUCID.7 (ADR-0588)
     // P-MINI.1 (ADR-0580): the Mini Lucid preference. Turning him off also ends a visit in progress.
     if ((t0 as HTMLInputElement).name === "miniPresence") {
       const next = parsePresence((t0 as HTMLInputElement).value);

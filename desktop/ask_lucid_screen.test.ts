@@ -207,9 +207,9 @@ describe("answerAskLucid with a screen", () => {
     const at = u.indexOf("## The user's screen right now");
     expect(u.indexOf("## Fleet lanes") - at).toBeLessThan(ASK_BLOCK_MAX.screen + 400);
   });
-  test("the brief says the screen is text, and that typed input is never seen", () => {
-    expect(ASK_LUCID_SYSTEM).toContain("It is text, not a picture");
-    expect(ASK_LUCID_SYSTEM).toContain("you never see what the user has typed into a field");
+  test("the brief says the text is all there is unless a picture is attached, and that typed input is never seen", () => {
+    expect(ASK_LUCID_SYSTEM).toContain("Unless a picture of the screen is attached, that text is all you have");
+    expect(ASK_LUCID_SYSTEM).toContain("You never see what the user has typed into a field");
   });
 });
 

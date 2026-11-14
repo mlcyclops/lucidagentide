@@ -463,7 +463,14 @@ function errText(e: unknown): string {
 }
 
 /** Options for one utility completion. `signal` lets a batch caller (chat-history import) stop mid-flight. */
-export type CompleteOpts = { idleMs?: number; model?: string; signal?: AbortSignal };
+/** `images` (P-ASKLUCID.7, ADR-0588): picture blocks that ride after the text, the same ACP shape a
+ *  user-attached image uses (P-VISION.1). Absent or empty is a text-only completion, as before. */
+export type CompleteOpts = { idleMs?: number; model?: string; signal?: AbortSignal; images?: readonly { data: string; mimeType: string }[] };
+/** The ACP prompt for a side completion: the text, then any pictures. */
+function completionPrompt(system: string, user: string, opts: CompleteOpts): { type: "text" | "image"; text?: string; data?: string; mimeType?: string }[] {
+  const images = (opts.images ?? []).filter((im) => !!im?.data && !!im?.mimeType).map((im) => ({ type: "image" as const, data: im.data, mimeType: im.mimeType }));
+  return [{ type: "text" as const, text: `${system}\n\n${user}` }, ...images];
+}
 
 /** The resolved omp spawn: the command (omp itself, or a sandbox wrapper around it), its args, the env
  *  overlay for this child only, and whether the command is the Windows AppContainer helper (P-BROWSER.4). */
@@ -3044,7 +3051,7 @@ class Backend {
       onStall = stall.reject;
       stall.promise.catch(() => {}); // the race below handles it; keep it from surfacing as unhandled
       await Promise.race([
-        acp.request("session/prompt", { sessionId: sid, prompt: [{ type: "text", text: `${system}\n\n${user}` }] }, { signal }),
+        acp.request("session/prompt", { sessionId: sid, prompt: completionPrompt(system, user, opts) }, { signal }),
         stall.promise,
       ]);
       return text;
@@ -3089,7 +3096,7 @@ class Backend {
       onStall = stall.reject;
       stall.promise.catch(() => {}); // the race below handles it; keep it from surfacing as unhandled
       await Promise.race([
-        this.acp!.request("session/prompt", { sessionId: sid, prompt: [{ type: "text", text: `${system}\n\n${user}` }] }, { signal }),
+        this.acp!.request("session/prompt", { sessionId: sid, prompt: completionPrompt(system, user, opts) }, { signal }),
         stall.promise,
       ]);
       return text;

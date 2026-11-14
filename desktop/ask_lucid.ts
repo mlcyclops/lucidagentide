@@ -67,7 +67,7 @@ export const ASK_LUCID_SYSTEM = [
   "The user is having a side conversation with you. It may be about the work in progress or about something else entirely. Answer what they ask.",
   "",
   "What you can see: a snapshot, taken just now, of the fleet lanes, the Fleet Orbit goal with its tasks, and what the knowledge graph holds on the question. The snapshot is below the question.",
-  "You can also see the user's screen: the surfaces open in the app right now, the top one first, with the text each one shows, and the page in the Preview panel when one is open. It is text, not a picture: you cannot see colors, images or layout, and you never see what the user has typed into a field. When the user says \"this\", \"here\" or \"on my screen\", they mean the top surface.",
+  "You can also see the user's screen: the surfaces open in the app right now, the top one first, with the text each one shows, and the page in the Preview panel when one is open. Unless a picture of the screen is attached, that text is all you have: you cannot see colors, images or layout, and you must say so instead of guessing. You never see what the user has typed into a field. When the user says \"this\", \"here\" or \"on my screen\", they mean the top surface.",
   ASK_BRIEFING_RULES,
   "What you cannot do: you have no tools and you cannot act. You cannot start a lane, change a task, edit a file, approve anything or read anything that is not in the snapshot. Never say or imply that you did.",
   "",
@@ -205,12 +205,14 @@ export interface AskBlock { name: AskBlockName; text: string; withheld?: string 
 
 /** PURE: the user turn. The question comes first, outside any envelope. Each block follows under its own
  *  heading, inside the untrusted envelope; a withheld block says so in one harness-written line instead. */
-export function askLucidUser(question: string, blocks: readonly AskBlock[]): string {
+export function askLucidUser(question: string, blocks: readonly AskBlock[], pictureNote = ""): string {
   const parts = [`The user asks:\n${question.trim()}`];
   for (const b of blocks) {
     if (!b.withheld && !b.text.trim()) continue;
     parts.push(`## ${ASK_BLOCK_TITLE[b.name]}\n${b.withheld ? `[Withheld by LUCID: this block did not pass the security scan (${oneLine(b.withheld, 160)}). Tell the user it could not be read.]` : fenceUntrusted(b.text)}`);
   }
+  // P-ASKLUCID.7 (ADR-0588): written by the harness, outside any envelope, only when a picture is attached.
+  if (pictureNote) parts.push(`## Picture of the screen\n${pictureNote}`);
   return parts.join("\n\n");
 }
 

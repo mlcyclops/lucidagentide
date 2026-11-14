@@ -721,6 +721,10 @@ demo-P-ASKLUCID.5: ## P-ASKLUCID.5 (ADR-0586): suggestions that follow the work 
 demo-P-ASKLUCID.6: ## P-ASKLUCID.6 (ADR-0587): features not yet used, and settings Lucid may propose changing - the real service with the real scanner: which features count as used from what exists and which panels have been open; an empty suggestion row filled with features; the unused features and current settings shown to Lucid from closed lists; a set_setting proposal as a card with the setting, the value and its risk; approvals, the sandbox, lockdown, provider keys and MCP servers refused; five proposed changes cut to three and a poisoned one dropped; and a confirm handler that checks theme ids and names nothing on the security path
 	$(BUN) run desktop/scripts/demo_p_asklucid_6.ts
 
+.PHONY: demo-P-ASKLUCID.7
+demo-P-ASKLUCID.7: ## P-ASKLUCID.7 (ADR-0588): a picture of the screen for models that can read one - the real service with the real scanner: the picture beside the scanned screen text with a harness note outside any envelope; no picture when the screen text is withheld, when the scanner is dead, or when the screen shows a key; a model that cannot read pictures asked again with text alone and remembered; a failing provider not mistaken for one; only a real JPEG or PNG of a sane size accepted; masks that always cover their field; and a renderer that paints over typed fields and the panel from two measurements
+	$(BUN) run desktop/scripts/demo_p_asklucid_7.ts
+
 .PHONY: demo-P-LOCAL.1
 demo-P-LOCAL.1: ## P-LOCAL.1 (ADR-0135): Local Providers — declare a self-hosted / custom OpenAI-compatible LLM (Ollama, llama.cpp, vLLM, DGX-over-VPN); validate fail-closed, emit the omp --config overlay (secret from the vault, skipped if absent), persist WITHOUT the secret
 	$(BUN) run desktop/scripts/demo_p_local_1.ts

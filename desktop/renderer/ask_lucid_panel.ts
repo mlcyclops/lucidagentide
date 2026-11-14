@@ -15,6 +15,7 @@
 // Everything outside the DOM is injected, and the small pure helpers are exported for tests.
 
 import { ASK_KIND_LABEL, ASK_RISK_LABEL, actionDetails, type AskAction } from "../ask_lucid_actions.ts"; // P-ASKLUCID.2 (ADR-0582): pure, no imports
+import { shotSkipLine, type ShotSkip } from "../ask_lucid_shot.ts"; // P-ASKLUCID.7 (ADR-0588): pure, no imports
 import { BRIEF_QUESTION } from "../ask_lucid_briefing.ts"; // P-ASKLUCID.4 (ADR-0585): pure, no imports
 import { createDock, type DockHandle } from "./dock.ts";
 import { followMode, followupRecs, noteMiss, noteOwnQuestion, noteUsed, parseMemory, rank, REC_LIMITS, REC_MEMORY_KEY, type Follow, type Rec, type RecMemory, type RecSignals } from "./lucid_recs.ts"; // P-ASKLUCID.5 (ADR-0586)
@@ -35,6 +36,8 @@ export interface AskReplyView {
   actionsDropped?: number;
   /** P-ASKLUCID.5 (ADR-0586): questions Lucid thinks come next. Shown as chips. */
   followups?: string[];
+  /** P-ASKLUCID.7 (ADR-0588): "sent" when a picture of the screen went with the question, else why not. */
+  picture?: string;
 }
 
 /** What happened when the user confirmed an action. `message` is shown on the card. */
@@ -59,8 +62,10 @@ export const ASK_SUGGESTIONS: readonly string[] = [
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 /** PURE: one line under a reply saying what Lucid was shown, and what was kept from him. */
-export function seenLine(r: Pick<AskReplyView, "seen" | "withheld" | "model">): string {
-  const screen = (r.seen.screen ?? 0) > 0 ? `your screen (${plural(r.seen.screen ?? 0, "surface", "surfaces")}), ` : "";
+export function seenLine(r: Pick<AskReplyView, "seen" | "withheld" | "model" | "picture">): string {
+  // P-ASKLUCID.7 (ADR-0588): "with a picture" only when one really went with the question.
+  const pic = r.picture === "sent" ? ", with a picture" : "";
+  const screen = (r.seen.screen ?? 0) > 0 ? `your screen (${plural(r.seen.screen ?? 0, "surface", "surfaces")}${pic}), ` : "";
   // P-ASKLUCID.4 (ADR-0585): lane conversations and sessions are named only when some were shown.
   const talk = (r.seen.activity ?? 0) > 0 ? ` (${plural(r.seen.activity ?? 0, "conversation", "conversations")} read)` : "";
   const sessions = (r.seen.sessions ?? 0) > 0 ? `${plural(r.seen.sessions ?? 0, "session", "sessions")}, ` : "";
@@ -90,11 +95,15 @@ export interface AskExtrasView {
   settings?: Record<string, string>;
   /** P-ASKLUCID.6: ids of the features this user has not used. */
   unusedFeatures?: string[];
+  /** P-ASKLUCID.7 (ADR-0588): a picture of the screen, already scaled and painted over. */
+  shot?: unknown;
 }
 
 export interface AskLucidDeps {
   /** Ask the engine. Null means the request itself failed. */
   ask(text: string, history: AskTurnView[], extras: AskExtrasView): Promise<AskReplyView | null>;
+  /** P-ASKLUCID.7 (ADR-0588): take a picture of the screen. Null = none (a plain browser, or turned off). */
+  shot?(): Promise<unknown>;
   /** P-ASKLUCID.6 (ADR-0587): more to send with every question (current settings, unused features). */
   extras?(): Promise<AskExtrasView>;
   /** P-ASKLUCID.5 (ADR-0586): what is going on right now, for the suggestions. Absent = the fixed questions. */
@@ -359,13 +368,17 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     // The screen is read at the moment of asking, so "this" means what the user sees now.
     const screen = deps.screen ? deps.screen().catch(() => null) : Promise.resolve(null);
     const extra: Promise<AskExtrasView> = deps.extras ? deps.extras().catch(() => ({})) : Promise.resolve({});
-    void Promise.all([screen, extra]).then(([s, x]) => deps.ask(text, history, { ...x, ...more, ...(s ? { screen: s } : {}) })).catch(() => null).then((r) => {
+    // P-ASKLUCID.7 (ADR-0588): the picture is taken at the same moment as the text view of the screen.
+    const shot = deps.shot ? deps.shot().catch(() => null) : Promise.resolve(null);
+    void Promise.all([screen, extra, shot]).then(([s, x, p]) => deps.ask(text, history, { ...x, ...more, ...(s ? { screen: s } : {}), ...(s && p ? { shot: p } : {}) })).catch(() => null).then((r) => {
       busy = false;
       sendBtn.disabled = false;
       if (r?.ok && r.reply) {
         turns.push({ role: "lucid", text: r.reply });
         addLucid(r.reply, seenLine(r));
         for (const a of r.actions ?? []) addAction(a);
+        const noPicture = shotSkipLine(r.picture as ShotSkip | undefined);
+        if (noPicture) log.appendChild(el("div", "al-meta", noPicture));
         const dropped = droppedLine(r.actionsDropped ?? 0);
         if (dropped) log.appendChild(el("div", "al-meta", dropped));
         setState("done");

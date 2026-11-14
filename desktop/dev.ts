@@ -1913,6 +1913,10 @@ let lastArchiveRun: (ArchiveRun & { at: number }) | null = null;
 const AUTO_ARCHIVE_FIRST_MS = 120_000;
 const AUTO_ARCHIVE_EVERY_MS = 6 * 3_600_000;
 let autoArchiveTimer: Timer | null = null;
+/** P-ASKLUCID.7 (ADR-0588): models that answered a picture of the screen with an error, for this run of the
+ *  engine. In memory on purpose: a provider or a model can gain vision between runs. */
+const askLucidNoPictures = new Set<string>();
+
 /** P-ASKLUCID.5 (ADR-0586): sweep Ask Lucid's throwaway sessions (one per question) once they are an hour
  *  old: two minutes after start, then every six hours. Unref'd: it never keeps the engine alive. */
 function scheduleAskLucidSweep(): void {
@@ -6344,7 +6348,7 @@ return Bun.serve({
       // P-ASKLUCID.2 (ADR-0582): the reply may carry PROPOSED actions. This route runs none of them; the user
       // confirms a card and the renderer then calls /api/fleet/spawn, /api/fleet/queue or /api/fleet/goal/task.
       if (p === "/api/ask-lucid" && req.method === "POST") {
-        const b = await readBody<{ text?: unknown; history?: unknown; screen?: unknown; brief?: unknown; settings?: unknown; unusedFeatures?: unknown }>(req);
+        const b = await readBody<{ text?: unknown; history?: unknown; screen?: unknown; brief?: unknown; settings?: unknown; unusedFeatures?: unknown; shot?: unknown }>(req);
         const q = parseQuestion(b.text);
         if (!q.ok) return json({ ok: false, error: q.error, data: { ok: false, error: q.error, seen: { ...NOTHING_SEEN }, withheld: [], actions: [], actionsDropped: 0 } });
         const reply = await answerAskLucid(q.text, sanitizeHistory(b.history), {
@@ -6353,7 +6357,10 @@ return Bun.serve({
           knowledge: async (query) => (await retrieveKnowledge({ query, mode: "compiled", k: 4, compiled: { store: await kbStore() } })).items,
           scan: async (text) => { const d = await scanAndDecide(agentScanner(), text); return { block: d.block, reason: d.reason }; },
           pinModel: () => backend.completionModel(backend.checkerModelInfo().recommended || undefined),
-          complete: (system, user, model) => backend.complete(system, user, { model, idleMs: 45_000 }),
+          complete: (system, user, model, images) => backend.complete(system, user, { model, idleMs: 45_000, ...(images?.length ? { images } : {}) }),
+          // P-ASKLUCID.7 (ADR-0588): a model that answered a picture with an error is not sent another this run.
+          visionRefused: (model) => askLucidNoPictures.has(model ?? ""),
+          noteVisionRefused: (model) => { askLucidNoPictures.add(model ?? ""); },
           onLockdownBlock: (reason) => emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "ask-lucid-lockdown", reason: reason.slice(0, 200), sessionId: backend.currentSessionId() ?? undefined }),
           // P-ASKLUCID.4 (ADR-0585): reads only. Lane conversations and stored sessions, for a briefing.
           laneTranscript: (laneId) => fleet.laneTranscript(laneId),
@@ -6361,7 +6368,7 @@ return Bun.serve({
           sessionTail: (id) => sessionMessages(id, 8),
           currentSessionId: () => backend.currentSessionId(),
           now: () => Date.now(),
-        }, { screen: b.screen, brief: b.brief === true, settings: b.settings, unusedFeatures: b.unusedFeatures });
+        }, { screen: b.screen, brief: b.brief === true, settings: b.settings, unusedFeatures: b.unusedFeatures, shot: b.shot });
         return json({ ok: reply.ok, data: reply, ...(reply.error ? { error: reply.error } : {}) });
       }
       // P-AOS.1 (ADR-0452): the standing fleet goal. UI token only (never AGENT_ROUTES): criteria are verified

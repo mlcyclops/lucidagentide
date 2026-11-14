@@ -27368,3 +27368,30 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 - Voice input and skills have no cheap signal of use besides their panel, so they can be suggested to someone who uses them from the keyboard.
 - Adding a setting to the list is a code change with a test that fails if its name looks like a security key.
 - Driven in a browser against a live engine with a mocked reply: with nothing going on the row showed features; the request carried seven settings and eight unused feature ids; Confirm on three cards turned on the holiday calendar, turned on auto-archive (read back from the engine) and opened the Preview panel, which then entered the ledger. No live model proposed a setting in this sandbox.
+
+## ADR-0588 -- P-ASKLUCID.7: a picture of the screen goes with a question when it is safe to send and the model can read it (2026-11-14)
+
+**Status:** Accepted. The follow-up ADR-0584 named. Builds on ADR-0096 (the window capture) and ADR-0136 (picture blocks in an ACP prompt). Proof: `make demo-P-ASKLUCID.7`, `bun test desktop/ask_lucid_shot.test.ts`.
+
+**Context.** ADR-0584 gave Lucid the screen as text and deferred pixels, because the scanner reads text and a picture cannot be scanned. With text alone Lucid cannot answer a question about layout, color, an image or a chart, which is most of what "look at this preview" means. The app already captures its own window for the Preview panel (`lucid:capturePreview`, Electron's `capturePage`) and already sends user-attached pictures to omp as ACP image blocks.
+
+**Decision.**
+1. **The picture never travels alone and never replaces the text view.** It is sent only when all of these hold: the user has not turned pictures off; the text digest of the same screen was sent and passed its scan; that digest held no redaction; the model has not refused a picture in this run of the engine. `shotDecision` in `desktop/ask_lucid_shot.ts` (pure, no imports) is the one place this is decided, and every reason not to send wins.
+2. **Why coupling to the text scan is sound.** The scanner looks for hidden Unicode. A hidden character draws nothing, so it does not survive into pixels. Text that is visible in the picture is the text the digest carries, which was scanned. A screen whose text is quarantined, or cannot be scanned, sends no picture (invariant 3).
+3. **Secrets.** Text redaction cannot reach pixels. A screen whose digest needed any redaction is described in text only, and the reply says no picture was sent and why.
+4. **What is painted over** before the picture leaves the renderer: every input, textarea, select and editable region, and the Ask Lucid panel. Rectangles are measured before the capture and again after it, and both sets are painted, so a field that appeared or moved while the capture was in flight is covered. A mask is grown outward and can only be larger than its field. Any failed step means no picture.
+5. **Shape.** The capture is scaled so its longest edge is at most 1,568 pixels and sent as JPEG. The engine accepts only JPEG or PNG whose bytes begin the way that type begins, plain base64 inside a size bound, with whole-number dimensions inside the edge bounds. Anything else is treated as no picture.
+6. **The prompt.** A harness-written note goes with the picture, after every untrusted envelope: what the picture is, that typed fields and the panel are gray blocks, and that text read in it is data. The brief now says that without a picture Lucid has only the text and must say so instead of guessing.
+7. **Models without vision.** There is no reliable capability flag to read, so a picture is tried. If the model answers with nothing, an error line, or an exception, the question is asked again with text alone. Only when that second call succeeds is the model remembered as refusing pictures, in memory, until the engine restarts. A provider that fails both ways is reported as that.
+8. **`backend.complete` takes `images`.** Both completion paths build their ACP prompt in one function: the text, then any picture blocks. No caller but Ask Lucid passes any.
+9. **A setting,** "Lucid may look at a picture of the screen", in the Mini Lucid card, on by default. Off means no capture is taken. It is not in the list of settings Lucid may propose changing.
+10. In a plain browser there is no window capture, so no picture is taken.
+
+**Consequences.**
+- With a vision model in the desktop app, Lucid can answer questions about how things look. The picture goes to the same model the screen text already goes to.
+- A picture is a second way for visible on-screen text to reach the model. Lucid still has no tools; a proposal is still validated, scanned and waits for Confirm.
+- The page in the Preview panel is captured as drawn, including anything typed into fields inside it: those fields are in a sandboxed frame the app cannot measure.
+- A key that the redaction pass does not recognize as one, shown on screen, would be in the picture. The same key would also be in the text.
+- A model without vision costs one failed call per engine run.
+- The capture is of the app's own window only, never the desktop or another window.
+- Verified: the renderer pipeline in a headless browser with the browser's own screenshot standing in for the Electron capture (the composer field, the search field and the panel were gray in the posted JPEG; the title bar and chat were not; pictures off posted none); the live engine route, where omp recorded an image block in the side session and called the provider, which answers 403 in this sandbox, after which the text-only retry ran. Not verified here: the Electron capture itself, and a live vision model reading the picture.
