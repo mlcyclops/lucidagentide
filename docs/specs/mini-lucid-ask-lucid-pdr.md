@@ -64,6 +64,8 @@ LUCID Agent IDE. Each increment below is one session with its own ADR, tests and
 
 ### Session 1: P-MINI.1, mini Lucid visits and sits down to type
 
+**Shipped 2026-11-14, ADR-0580.**
+
 - `desktop/renderer/mascot_mini.ts`: the seated scene from Tradepass, in TypeScript, on this repo's
   own frames. `sceneRows(state, t)` is pure and tested.
 - `mascot_runner.ts`: a `typing` work pose (seated at the keyboard while a turn runs) and a
@@ -76,6 +78,8 @@ LUCID Agent IDE. Each increment below is one session with its own ADR, tests and
 
 ### Session 2: P-ASKLUCID.1, the dock and a read-only Ask Lucid
 
+**Shipped 2026-11-14, ADR-0581.**
+
 - `desktop/renderer/dock.ts`: the Tradepass dock in TypeScript with its geometry tests.
 - `desktop/ask_lucid.ts` (pure): the brief, the context blocks (fleet lanes, orbit goal and tasks,
   knowledge hits for the question), history trimming, all inside the untrusted envelope.
@@ -87,6 +91,8 @@ LUCID Agent IDE. Each increment below is one session with its own ADR, tests and
 
 ### Session 3: P-ASKLUCID.2, Lucid proposes, the user confirms
 
+**Shipped 2026-11-14, ADR-0582.**
+
 - Lucid may end a reply with one fenced `lucid-actions` block. Kinds: `spawn_lane`, `prompt_lane`,
   `add_orbit_task`, `open_view`. A pure validator drops anything else and bounds every field.
 - Each action renders as a card with what it will do, a risk label and Confirm. Nothing runs
@@ -95,6 +101,8 @@ LUCID Agent IDE. Each increment below is one session with its own ADR, tests and
   at most a card.
 
 ### Session 4: P-MINI.2, suggestions
+
+**Shipped 2026-11-14, ADR-0583.**
 
 - A holiday theme suggestion when a season is live, the calendar is not being followed and this
   season has not been asked about: Apply, Not now, Don't ask again.

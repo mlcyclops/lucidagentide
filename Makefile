@@ -701,6 +701,10 @@ demo-P-ASKLUCID.1: ## P-ASKLUCID.1 (ADR-0581): the Ask Lucid fly-out, read-only 
 demo-P-ASKLUCID.2: ## P-ASKLUCID.2 (ADR-0582): Lucid proposes, the user confirms - the real service with the real scanner: a valid proposal becomes an action with a risk label and the block leaves the reply; the card's rows are exactly what Confirm sends; an unknown kind, a lane Lucid was not shown and unnamed fields are dropped; a proposed prompt with a hidden payload is dropped by the scanner; a model talked into forty lanes yields three cards; a dead scanner offers none (fail-closed); and the route, service and validator hold no call that runs an action
 	$(BUN) run desktop/scripts/demo_p_asklucid_2.ts
 
+.PHONY: demo-P-MINI.2
+demo-P-MINI.2: ## P-MINI.2 (ADR-0583): Lucid may suggest things - a live holiday theme offered once per occasion with Wear it / Not now / Don't ask again, the pinned theme coming off the day after the holiday ends unless the user picked another by hand, what is new shown newest first and once per feature, at most one suggestion per launch and none during a turn, over a modal or before the first-run tour, and one setting that silences both
+	$(BUN) run desktop/scripts/demo_p_mini_2.ts
+
 .PHONY: demo-P-LOCAL.1
 demo-P-LOCAL.1: ## P-LOCAL.1 (ADR-0135): Local Providers — declare a self-hosted / custom OpenAI-compatible LLM (Ollama, llama.cpp, vLLM, DGX-over-VPN); validate fail-closed, emit the omp --config overlay (secret from the vault, skipped if absent), persist WITHOUT the secret
 	$(BUN) run desktop/scripts/demo_p_local_1.ts

@@ -27252,3 +27252,25 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 - A new lane starts in the current workspace on the default model. Lucid cannot choose a folder, a model or a worktree.
 - A reply that is only a block is shown with one harness-written sentence above its cards.
 - The cards were driven in a browser against a live engine with a mocked reply: Confirm on a lane proposal started a real lane and staged its prompt. No live model wrote a block in this sandbox.
+
+## ADR-0583 -- P-MINI.2: Lucid may suggest a holiday theme and say what is new, at most once per launch (2026-11-14)
+
+**Status:** Accepted. Session 4 of `docs/specs/mini-lucid-ask-lucid-pdr.md`. Builds on ADR-0580 (mini Lucid) and ADR-0581 (Ask Lucid). Proof: `make demo-P-MINI.2`, `bun test desktop/renderer/lucid_suggest.test.ts`.
+
+**Context.** The request is for Lucid to recommend a holiday theme in a quick popup that asks the user, and to explain new features in the Ask Lucid fly-out, without being annoying. The special themes already exist (`desktop/renderer/seasons.ts`) but nothing offers one: a user has to find the picker in Settings. Nothing told a user what an update added.
+
+**Decision.**
+1. `desktop/renderer/lucid_suggest.ts` holds every rule as pure functions over a passed-in store and clock. The renderer only reads state, shows a toast and applies the answer.
+2. The holiday offer. When a season is live, the user is not following the calendar and is not wearing a special theme, Lucid offers it in a toast with three answers. **Wear it** pins the theme and records which season and the last day of its window; the theme comes off by itself on the first launch or new session after that day, and only if the pinned theme is still the one Lucid set. **Not now** asks again the next time that season comes round. **Don't ask again** ends holiday suggestions. An occasion is the season id plus the day its window starts, so each is asked about once. Closing the toast without an answer counts as Not now.
+3. What is new. `WHATS_NEW` is a list in the source, newest last. The newest unseen note is shown in a toast, once, and is marked seen when shown. **Tell me more** opens the Ask Lucid fly-out, where Lucid says a fixed explanation written in the source. No model call is made.
+4. The limits. At most one suggestion per launch. The decision is made 2.5 seconds after a new session opens, and nothing is shown while a turn runs, while a modal, the tour or the command palette is on screen, or before the first-run tour has been seen. A live holiday goes before a note because it expires. A suggestion that was held back is not retried until the next new session.
+5. One setting, **Lucid may suggest things**, in the Mini Lucid card in Settings, on by default, silences both.
+6. Answers live in `localStorage` (`lucid.suggest.enabled`, `.holiday`, `.news`, `.pin`), like the season and mini Lucid preferences. No engine route, event name or schema is added.
+
+**Consequences.**
+- A new install hears one note per launch for its first launches, newest feature first, starting after the tour.
+- The answers are per browser profile and are not synced between machines.
+- A theme Lucid pinned stays on past its window until the app is next opened or a new session starts, because that is when expiry is checked.
+- A new feature gets a note only when someone adds an entry to `WHATS_NEW`. An entry's id must never be renamed, or the note shows again.
+- Verified in a browser against a live engine with the browser clock set: nothing over the first-run gate, the Thanksgiving offer on Nov 25, Wear it applied and pinned the theme, the Ask Lucid note on the next launch with Tell me more opening the fly-out, the theme off on Nov 30, and no suggestion with the setting off.
+- The Ask Lucid input's placeholder was shortened to "Ask Lucid anything": the longer one wrapped in the docked panel (invariant 11).

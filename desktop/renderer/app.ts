@@ -99,6 +99,7 @@ import { parseResultWindowSetting, type ResultSpill } from "../result_window.ts"
 import { resultWindowLine } from "./result_window_view.ts"; // P-CTX.2b (ADR-0579)
 import { createAskLucid, type AskActionResult, type AskLucidHandle } from "./ask_lucid_panel.ts"; // P-ASKLUCID.1 (ADR-0581): the Ask Lucid fly-out
 import type { AskAction } from "../ask_lucid_actions.ts"; // P-ASKLUCID.2 (ADR-0582): what Lucid may propose
+import { holidayOffer, holidayToast, nextNews, noteHolidayAnswer, noteNewsSeen, pickSuggestion, pinExpired, readHolidayMemory, readPin, readSeenNews, setSuggestEnabled, suggestEnabled, suggestToggleHtml, writePin } from "./lucid_suggest.ts"; // P-MINI.2 (ADR-0583): what Lucid may suggest
 import { hydrateVaultDestinations } from "./vault_dest_ui.ts"; import { VAULT_DEST_SEC, VAULT_DEST_SUB, VAULT_DEST_TITLE } from "./vault_dest_card.ts"; // P-VAULT-DEST.1 (ADR-0478): Settings → Vault destinations (Enterprise)
 import { acceptAttachment, promptImageBlocks, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "./composer_attachments.ts"; // P-VISION.1 (ADR-0136): pasted images
 import { imageFileName } from "./chat_images.ts"; // P-IMG.1 (ADR-0208): inline render + download of tool images
@@ -5084,6 +5085,74 @@ function noteNewSessionForMini(): void {
     }
   }
   syncMiniLucid();
+  // P-MINI.2 (ADR-0583): a new session is also the one moment Lucid may suggest something. Wait until the
+  // session has settled on screen, then decide.
+  setTimeout(maybeSuggest, SUGGEST_DELAY_MS);
+}
+
+// ── P-MINI.2 (ADR-0583): Lucid's suggestions ─────────────────────────────────────────────────────────
+// At most one per launch, decided by lucid_suggest.ts: a holiday theme while one is live, else the newest
+// what's-new note. Shown as a toast that leaves by itself, never during a turn or over a modal.
+const SUGGEST_DELAY_MS = 2500;
+const SUGGEST_TOAST_MS = 20_000;
+let suggestionsShown = 0;
+
+/** Take off a holiday theme Lucid pinned once its occasion is over. If the user has since pinned another
+ *  season by hand, Lucid's note about his own pin is simply forgotten. */
+function expireSuggestedTheme(): void {
+  const store = miniStore();
+  const pin = readPin(store);
+  if (!pin) return;
+  const pinnedNow = seasonPrefs().pick;
+  if (pinExpired(pin, pinnedNow, new Date())) { writePin(store, null); setSeasonPref(SEASON_PICK_KEY, ""); }
+  else if (pinnedNow !== pin.id) writePin(store, null);
+}
+
+function maybeSuggest(): void {
+  expireSuggestedTheme();
+  const store = miniStore();
+  const prefs = seasonPrefs();
+  const enabled = suggestEnabled(store);
+  const s = pickSuggestion({
+    enabled,
+    shownThisLaunch: suggestionsShown,
+    streaming: state.streaming,
+    overlayOpen: !!document.querySelector(".modal-ov, .coach-card, .palette.show, .goal-scrim"),
+    tourSeen: state.tourSeen,
+    holiday: holidayOffer({ now: new Date(), enabled, memory: readHolidayMemory(store), followsCalendar: prefs.auto, pinned: prefs.pick }),
+    news: nextNews(readSeenNews(store)),
+  });
+  if (!s) return;
+  suggestionsShown += 1;
+  if (s.kind === "holiday") {
+    const offer = s.offer;
+    // Asked the moment it is shown: closing the popup without an answer means "not now", never "ask again".
+    noteHolidayAnswer(store, offer, "later");
+    const words = holidayToast(offer);
+    showToast({
+      ...words,
+      tone: "info",
+      timeout: SUGGEST_TOAST_MS,
+      actions: [
+        { label: "Wear it", kind: "ok", run: () => { noteHolidayAnswer(store, offer, "wear"); writePin(store, { id: offer.season.id, until: offer.until }); setSeasonPref(SEASON_PICK_KEY, offer.season.id); } },
+        { label: "Not now" },
+        { label: "Don't ask again", run: () => { noteHolidayAnswer(store, offer, "never"); } },
+      ],
+    });
+    return;
+  }
+  const item = s.item;
+  noteNewsSeen(store, item.id); // shown once, whatever the user does with it
+  showToast({
+    title: item.title,
+    desc: item.summary,
+    tone: "info",
+    timeout: SUGGEST_TOAST_MS,
+    actions: [
+      { label: "Tell me more", kind: "ok", run: () => askLucid().say(item.more) },
+      { label: "Got it" },
+    ],
+  });
 }
 let agentArcade: AgentArcadeHandle | null = null;
 let agentTier: AgentModelTier = (() => { try { return localStorage.getItem("lucid.agent-tier") === "max" ? "max" : "regular"; } catch { return "regular"; } })();
@@ -6014,7 +6083,8 @@ function secWorkingStatus(): string {
 // How much of the prompt-bar mascot the user wants outside the LUCID Agent role. Rendered from
 // localStorage (mini_lucid.ts), no fetch.
 function secMiniLucid(): string {
-  return setCard("miniLucid", "Mini Lucid", "off · sometimes · always", miniLucidCardHtml(readPresence(miniStore()), esc, icon("info", 12)), true);
+  // P-MINI.2 (ADR-0583): the one switch for Lucid's suggestions sits with him.
+  return setCard("miniLucid", "Mini Lucid", "off · sometimes · always · suggestions", `${miniLucidCardHtml(readPresence(miniStore()), esc, icon("info", 12))}\n    ${suggestToggleHtml(suggestEnabled(miniStore()))}`, true);
 }
 
 // ── P-THEME.1: Settings -> Theme ────────────────────────────────────────────────────────────────────
@@ -18090,6 +18160,8 @@ function wire(): void {
     // P-PROGRESS.3: running HUDs, rows and lane cards repaint on their own one-second tick, so nothing else to do.
     if (t0.id === "statusDetail") { setStatusDetail((t0 as HTMLSelectElement).value === "full" ? "full" : "line"); return; }
     if (t0.id === "statusEta") { setStatusEta((t0 as HTMLInputElement).checked); return; }
+    // P-MINI.2 (ADR-0583): "Lucid may suggest things".
+    if (t0.id === "lucidSuggest") { setSuggestEnabled(miniStore(), (t0 as HTMLInputElement).checked); return; }
     // P-MINI.1 (ADR-0580): the Mini Lucid preference. Turning him off also ends a visit in progress.
     if ((t0 as HTMLInputElement).name === "miniPresence") {
       const next = parsePresence((t0 as HTMLInputElement).value);

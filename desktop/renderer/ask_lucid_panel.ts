@@ -146,7 +146,7 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
   const form = el("form", "al-form");
   const input = el("textarea", "al-input");
   input.rows = 1;
-  input.placeholder = "Ask Lucid about your fleet, the orbit, or anything else";
+  input.placeholder = "Ask Lucid anything";
   input.setAttribute("aria-label", "Ask Lucid");
   const sendBtn = el("button", "al-send", "Ask");
   sendBtn.type = "submit";
