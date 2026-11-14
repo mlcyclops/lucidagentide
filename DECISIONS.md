@@ -27345,3 +27345,26 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 - An Ask Lucid session written before this change keeps its `chat` entry in the session index until its file changes or the index is rebuilt.
 - Other side completions (the checker and similar callers of `backend.complete`) still leave visible sessions. That is not changed here.
 - Driven in a browser against a live engine with a mocked fleet: the row showed the waiting lane, the failed lane and the open panel; Something else replaced all three; a pressed chip asked its question; follow-ups replaced the chips; closing an untouched set counted one miss; a typed question reset it. No live model wrote follow-ups in this sandbox.
+
+## ADR-0587 -- P-ASKLUCID.6: Lucid brings up features the user has not used, and may propose changing seven preferences (2026-11-14)
+
+**Status:** Accepted. Session 4 of `docs/specs/ask-lucid-sight-pdr.md`. Amends ADR-0582 (four action kinds, three views, no settings). Proof: `make demo-P-ASKLUCID.6`, `bun test desktop/ask_lucid_features.test.ts`.
+
+**Context.** The request: there is a lot in LUCID that users do not know about, so when Lucid has no good recommendation he should bring up something the user would benefit from, either a feature to use or something he can configure in the harness for them. Lucid knew nothing about what LUCID offers or what the user had tried, and could change no setting.
+
+**Decision.**
+1. **A catalog.** `desktop/ask_lucid_features.ts` (pure, no imports) lists nine things this build has: fleet lanes, the knowledge graph, the Preview panel, a Fleet Orbit goal, skills, local models, voice input, holiday themes, auto-archive. Each has a one or two sentence pitch and exactly one way in: a view Lucid may propose opening, or a setting he may propose changing.
+2. **Not used** is decided from what the app already knows: a lane, a goal, a knowledge graph or a local provider exists; a setting is on; and a ledger of feature ids proven found (`lucid.features.seen.v1`). The ledger is fed by which panels are open, sampled once a minute and whenever the suggestions are built, panel kinds only, and by a view Lucid opened on Confirm.
+3. **The fallback.** The unused features are the suggestion row's fallback (ADR-0586): they fill it when the work suggests fewer than three things, and one leads it after three misses in a row. A feature chip asks Lucid about that feature in the light of the current work.
+4. **Lucid is told.** Two more views reach him: the unused features, and the settings he may propose changing with their current values. The renderer posts ids, keys and values only; the engine rebuilds both views from the closed lists, so the post cannot add a row or a sentence. The brief tells him to bring up one feature when the snapshot points to no next step or the user seems unsure.
+5. **`set_setting`.** A fifth proposal kind over a closed list of seven keys: `season.follow`, `season.theme`, `theme`, `mini.presence`, `suggest.enabled`, `sessions.autoArchive`, `toolOutput.window`. Each has an exact set of values, or is an id that the app checks against its own theme lists on Confirm. The validator rebuilds the action from the key and the value; an unknown key or an out-of-set value drops it. Its risk label is "Changes one preference".
+6. **What is not in the list, and cannot be added by a model:** approvals and auto-approve, the sandbox, lockdown, providers and keys, MCP servers, attribution, developer mode, anything about the scanner or the gate. The brief says so, and Lucid is told to say so if asked.
+7. **Confirm applies it** through the call Settings itself makes (`setSeasonPref`, `pickTheme`, `writePresence`, `setSuggestEnabled`, the archive-policy route, the result-window route). The service changes nothing.
+8. **Five more views** Lucid may propose opening: settings, preview, skills, local-models, voice.
+
+**Consequences.**
+- A user with nothing going on sees three features they have not tried instead of an empty row, and can ask Lucid to set one up.
+- A feature opened before this ledger existed counts as unused until its panel is seen open again or what it creates exists.
+- Voice input and skills have no cheap signal of use besides their panel, so they can be suggested to someone who uses them from the keyboard.
+- Adding a setting to the list is a code change with a test that fails if its name looks like a security key.
+- Driven in a browser against a live engine with a mocked reply: with nothing going on the row showed features; the request carried seven settings and eight unused feature ids; Confirm on three cards turned on the holiday calendar, turned on auto-archive (read back from the engine) and opened the Preview panel, which then entered the ledger. No live model proposed a setting in this sandbox.

@@ -1,6 +1,6 @@
 # PDR: Ask Lucid sees the app, briefs you, and recommends
 
-Status: proposed 2026-11-14. Follows `docs/specs/mini-lucid-ask-lucid-pdr.md` (ADR-0580 to 0583).
+Status: all four sessions shipped 2026-11-14. Follows `docs/specs/mini-lucid-ask-lucid-pdr.md` (ADR-0580 to 0583).
 
 ## 1. What was asked
 
@@ -51,6 +51,8 @@ Status: proposed 2026-11-14. Follows `docs/specs/mini-lucid-ask-lucid-pdr.md` (A
 
 ### Session 1: P-ASKLUCID.3, above every popup, and sees the screen
 
+**Shipped 2026-11-14, ADR-0584.**
+
 - The dock and its pill sit above modals. Escape inside the dock closes only the dock.
 - Two more ways in: a keyboard shortcut that works from any popup, and an Ask Lucid button in the
   Fleet grid and Orbit headers.
@@ -61,12 +63,16 @@ Status: proposed 2026-11-14. Follows `docs/specs/mini-lucid-ask-lucid-pdr.md` (A
 
 ### Session 2: P-ASKLUCID.4, a briefing across sessions, lanes and the orbit
 
+**Shipped 2026-11-14, ADR-0585.**
+
 - The engine adds two views: each lane's last request and last answer, and the recent sessions in
   this workspace with the last exchange of the most recent ones.
 - A **Brief me** button asks for a status briefing with larger budgets for those views.
 - `make demo-P-ASKLUCID.4`.
 
 ### Session 3: P-ASKLUCID.5, recommendations that follow the work
+
+**Shipped 2026-11-14, ADR-0586.**
 
 - `desktop/renderer/lucid_recs.ts`: candidates from the screen, the fleet, the orbit, the session
   and the knowledge graph, ranked by learned weights.
@@ -76,6 +82,8 @@ Status: proposed 2026-11-14. Follows `docs/specs/mini-lucid-ask-lucid-pdr.md` (A
 - `make demo-P-ASKLUCID.5`.
 
 ### Session 4: P-ASKLUCID.6, features you have not used, and Lucid configures on Confirm
+
+**Shipped 2026-11-14, ADR-0587.**
 
 - `desktop/renderer/feature_catalog.ts`: what LUCID can do, and which of it this user has not touched.
   When the contextual recommendations run dry, Lucid recommends one.

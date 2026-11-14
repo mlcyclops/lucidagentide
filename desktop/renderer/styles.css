@@ -7901,6 +7901,7 @@ body.ald-dragging .ald-head{cursor:grabbing}
    Invariant 11: the top row holds two single-text spans; every other line of text is its own block. */
 .al-act{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;background:var(--bg-2);padding:10px 12px;display:flex;flex-direction:column;gap:6px;animation:alIn var(--t) var(--ease-out)}
 .al-act.al-risk-low{border-left-color:var(--line-strong)}
+.al-act.al-risk-setting{border-left-color:var(--accent-2)}
 .al-act.al-risk-command{border-left-color:var(--red)}
 .al-act-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .al-act-kind{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--txt-3);white-space:nowrap}

@@ -28,7 +28,8 @@ import {
   type AskBlockName,
   type AskTurn,
 } from "./ask_lucid.ts";
-import { actionText, knownFrom, parseActions, type AskAction } from "./ask_lucid_actions.ts";
+import { actionText, knownFrom, parseActions, settingsContext, type AskAction } from "./ask_lucid_actions.ts";
+import { unusedFeaturesContext } from "./ask_lucid_features.ts"; // P-ASKLUCID.6 (ADR-0587)
 import { splitFollowups } from "./ask_lucid_followups.ts"; // P-ASKLUCID.5 (ADR-0586)
 import { laneActivityContext, sessionsContext, type BriefMode } from "./ask_lucid_briefing.ts"; // P-ASKLUCID.4 (ADR-0585)
 import { normalizeScreen, screenContext } from "./ask_lucid_screen.ts"; // P-ASKLUCID.3 (ADR-0584)
@@ -87,6 +88,10 @@ export interface AskExtras {
   screen?: unknown;
   /** P-ASKLUCID.4 (ADR-0585): the user pressed Brief me: the activity and sessions views get the long size. */
   brief?: boolean;
+  /** P-ASKLUCID.6 (ADR-0587): the current value of each setting Lucid may propose changing. Untrusted. */
+  settings?: unknown;
+  /** P-ASKLUCID.6: ids of the features this user has not used. Untrusted: only catalog ids count. */
+  unusedFeatures?: unknown;
 }
 
 const UNAVAILABLE = "Lucid could not answer right now. Check that a model provider is connected in Settings, then try again.";
@@ -163,6 +168,14 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
     seen.hits = k.hits;
   } catch { knowledgeText = "The knowledge graph could not be read just now."; }
   blocks.push({ name: "knowledge", text: knowledgeText });
+
+  // P-ASKLUCID.6 (ADR-0587): the settings Lucid may propose changing, with their current values, and the
+  // features this user has not used. Both are rebuilt here from closed lists: the post contributes keys,
+  // accepted values and ids, never a sentence.
+  const settings = settingsContext(extras.settings);
+  if (settings.text) blocks.push({ name: "settings", text: settings.text });
+  const features = unusedFeaturesContext(extras.unusedFeatures);
+  if (features.text) blocks.push({ name: "features", text: features.text });
 
   const past = historyContext(history);
   if (past) blocks.push({ name: "history", text: past });

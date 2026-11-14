@@ -86,9 +86,9 @@ describe("validateAction", () => {
     expect(validateAction(task, KNOWN, 0)?.risk).toBe("command");
   });
 
-  test("open_view takes only the three views and is low risk", () => {
-    for (const view of ["fleet", "orbit", "knowledge"]) expect(validateAction({ kind: "open_view", params: { view } }, KNOWN, 0)).toMatchObject({ risk: "low", params: { view } });
-    expect(validateAction({ kind: "open_view", params: { view: "settings" } }, KNOWN, 0)).toBeNull();
+  test("open_view takes only the listed views and is low risk", () => {
+    for (const view of ["fleet", "orbit", "knowledge", "settings", "preview", "skills", "local-models", "voice"]) expect(validateAction({ kind: "open_view", params: { view } }, KNOWN, 0)).toMatchObject({ risk: "low", params: { view } });
+    for (const view of ["security", "approvals", "terminal", "", 7, null]) expect(validateAction({ kind: "open_view", params: { view } }, KNOWN, 0)).toBeNull();
   });
 
   test("an unknown kind is dropped, whatever it carries", () => {

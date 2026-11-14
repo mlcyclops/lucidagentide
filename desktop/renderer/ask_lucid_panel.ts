@@ -82,11 +82,21 @@ export function stateLine(state: MiniState): string {
 }
 
 /** What goes to the engine with a question besides its text and the earlier turns. */
-export interface AskExtrasView { screen?: unknown; /** P-ASKLUCID.4: Brief me was pressed. */ brief?: boolean }
+export interface AskExtrasView {
+  screen?: unknown;
+  /** P-ASKLUCID.4: Brief me was pressed. */
+  brief?: boolean;
+  /** P-ASKLUCID.6 (ADR-0587): the current value of each setting Lucid may propose changing. */
+  settings?: Record<string, string>;
+  /** P-ASKLUCID.6: ids of the features this user has not used. */
+  unusedFeatures?: string[];
+}
 
 export interface AskLucidDeps {
   /** Ask the engine. Null means the request itself failed. */
   ask(text: string, history: AskTurnView[], extras: AskExtrasView): Promise<AskReplyView | null>;
+  /** P-ASKLUCID.6 (ADR-0587): more to send with every question (current settings, unused features). */
+  extras?(): Promise<AskExtrasView>;
   /** P-ASKLUCID.5 (ADR-0586): what is going on right now, for the suggestions. Absent = the fixed questions. */
   recSignals?(): Promise<RecSignals | null>;
   /** Where the suggestion memory lives (weights, misses). Null = this window only. */
@@ -348,7 +358,8 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     turns.push({ role: "user", text });
     // The screen is read at the moment of asking, so "this" means what the user sees now.
     const screen = deps.screen ? deps.screen().catch(() => null) : Promise.resolve(null);
-    void screen.then((s) => deps.ask(text, history, { ...more, ...(s ? { screen: s } : {}) })).catch(() => null).then((r) => {
+    const extra: Promise<AskExtrasView> = deps.extras ? deps.extras().catch(() => ({})) : Promise.resolve({});
+    void Promise.all([screen, extra]).then(([s, x]) => deps.ask(text, history, { ...x, ...more, ...(s ? { screen: s } : {}) })).catch(() => null).then((r) => {
       busy = false;
       sendBtn.disabled = false;
       if (r?.ok && r.reply) {

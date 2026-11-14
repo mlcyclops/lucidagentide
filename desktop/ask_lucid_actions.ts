@@ -20,25 +20,28 @@
 //
 // Pure, and free of imports: the renderer bundles this file for the cards.
 
-export type AskActionKind = "spawn_lane" | "prompt_lane" | "add_orbit_task" | "open_view";
-export const ASK_ACTION_KINDS: readonly AskActionKind[] = ["spawn_lane", "prompt_lane", "add_orbit_task", "open_view"];
-export const ASK_VIEWS = ["fleet", "orbit", "knowledge"] as const;
+export type AskActionKind = "spawn_lane" | "prompt_lane" | "add_orbit_task" | "open_view" | "set_setting";
+export const ASK_ACTION_KINDS: readonly AskActionKind[] = ["spawn_lane", "prompt_lane", "add_orbit_task", "open_view", "set_setting"];
+// P-ASKLUCID.6 (ADR-0587): settings, preview, skills, local-models and voice joined the first three.
+export const ASK_VIEWS = ["fleet", "orbit", "knowledge", "settings", "preview", "skills", "local-models", "voice"] as const;
 export type AskView = (typeof ASK_VIEWS)[number];
 
-/** low: only changes what is on screen. write: starts or changes agent work. command: also carries a shell
- *  command a spoke will run as a check. */
-export type AskRisk = "low" | "write" | "command";
+/** low: only changes what is on screen. setting: changes one preference from the closed list. write: starts
+ *  or changes agent work. command: also carries a shell command a spoke will run as a check. */
+export type AskRisk = "low" | "setting" | "write" | "command";
 
 export interface SpawnLaneParams { name: string; prompt: string }
 export interface PromptLaneParams { laneId: string; text: string }
 export interface OrbitTaskParams { title: string; prompt: string; outputContract: string; checks: string[]; assignee: string; dependsOn: string[] }
 export interface OpenViewParams { view: AskView }
+export interface SetSettingParams { key: AskSettingKey; value: string }
 
 export type AskAction =
   | { id: string; kind: "spawn_lane"; label: string; why: string; risk: AskRisk; params: SpawnLaneParams }
   | { id: string; kind: "prompt_lane"; label: string; why: string; risk: AskRisk; params: PromptLaneParams }
   | { id: string; kind: "add_orbit_task"; label: string; why: string; risk: AskRisk; params: OrbitTaskParams }
-  | { id: string; kind: "open_view"; label: string; why: string; risk: AskRisk; params: OpenViewParams };
+  | { id: string; kind: "open_view"; label: string; why: string; risk: AskRisk; params: OpenViewParams }
+  | { id: string; kind: "set_setting"; label: string; why: string; risk: AskRisk; params: SetSettingParams };
 
 /** The ids Lucid was actually shown. An action may name only these. */
 export interface KnownIds { laneIds: readonly string[]; taskIds: readonly string[]; hasGoal: boolean }
@@ -52,9 +55,11 @@ export const ASK_KIND_LABEL: Record<AskActionKind, string> = {
   prompt_lane: "Send a prompt to a lane",
   add_orbit_task: "Add a Fleet Orbit task",
   open_view: "Open a view",
+  set_setting: "Change a setting",
 };
 export const ASK_RISK_LABEL: Record<AskRisk, string> = {
   low: "Only changes what you see",
+  setting: "Changes one preference",
   write: "Starts agent work",
   command: "Starts agent work and runs a command",
 };
@@ -68,9 +73,53 @@ export const ASK_ACTIONS_BRIEF = [
   '- spawn_lane {"name": "<short lane name>", "prompt": "<the first prompt for the new lane>"}: start a new fleet lane in the current workspace.',
   '- prompt_lane {"laneId": "<a lane id from the snapshot>", "text": "<the prompt>"}: stage a prompt on an existing lane.',
   '- add_orbit_task {"title": "...", "prompt": "...", "outputContract": "<what the lane must deliver>", "checks": ["<acceptance check>", "$ <command the lane runs as a check>"], "assignee": "<a lane id from the snapshot>", "dependsOn": ["<task ids from the snapshot>"]}: add a task under the open Fleet Orbit goal.',
-  '- open_view {"view": "fleet" | "orbit" | "knowledge"}: open that view for the user.',
+  '- open_view {"view": "fleet" | "orbit" | "knowledge" | "settings" | "preview" | "skills" | "local-models" | "voice"}: open that view for the user.',
+  '- set_setting {"key": "<a setting key from the snapshot>", "value": "<one of the values listed for it>"}: change one preference. Only the keys listed in the snapshot exist. You cannot change anything about approvals, the sandbox, lockdown, providers, keys or MCP servers, and you must say so if asked.',
   "Use only lane ids and task ids that appear in the snapshot. If there is no open Fleet Orbit goal, do not propose add_orbit_task; tell the user to set a goal first.",
 ].join("\n");
+
+// ── P-ASKLUCID.6 (ADR-0587): settings Lucid may propose changing ─────────────────────────────────────
+// A CLOSED list. Every key here is cosmetic or housekeeping: none touches approvals, the sandbox, lockdown,
+// a provider, a key, an MCP server or attribution, and none can be added by a model. `values` is the exact
+// set a value may take; "id" means a short lower-case identifier that the app checks against its own list
+// (themes, holiday themes) when the user confirms.
+export const ASK_SETTINGS = {
+  "season.follow": { label: "Follow the holiday calendar", values: ["on", "off"] },
+  "season.theme": { label: "Holiday theme", values: "id" },
+  "theme": { label: "Color theme", values: "id" },
+  "mini.presence": { label: "Mini Lucid", values: ["off", "sometimes", "always"] },
+  "suggest.enabled": { label: "Lucid may suggest things", values: ["on", "off"] },
+  "sessions.autoArchive": { label: "Auto-archive old sessions", values: ["on", "off"] },
+  "toolOutput.window": { label: "Tool output window", values: ["auto", "2", "4", "8", "16", "32"] },
+} as const satisfies Record<string, { label: string; values: readonly string[] | "id" }>;
+export type AskSettingKey = keyof typeof ASK_SETTINGS;
+export const ASK_SETTING_KEYS = Object.keys(ASK_SETTINGS) as AskSettingKey[];
+const SETTING_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+/** PURE: a value as one this setting accepts, or null. */
+export function settingValue(key: AskSettingKey, raw: unknown): string | null {
+  if (typeof raw !== "string" && typeof raw !== "number" && typeof raw !== "boolean") return null;
+  let v = String(raw).trim().toLowerCase();
+  const allowed: readonly string[] | "id" = ASK_SETTINGS[key].values;
+  if (allowed === "id") return SETTING_ID.test(v) ? v : null;
+  if (v === "true") v = "on"; else if (v === "false") v = "off";
+  return allowed.includes(v) ? v : null;
+}
+
+/** PURE: the current values as text for Lucid, from what the renderer posted. Only known keys with a value
+ *  of the accepted shape appear, so the post cannot add a row or a sentence. */
+export function settingsContext(raw: unknown): { text: string; settings: number } {
+  const r = rec(raw);
+  if (!r) return { text: "", settings: 0 };
+  const rows: string[] = [];
+  for (const key of ASK_SETTING_KEYS) {
+    const v = settingValue(key, r[key]);
+    if (v === null) continue;
+    const spec: { label: string; values: readonly string[] | "id" } = ASK_SETTINGS[key];
+    rows.push(`- ${key} (${spec.label}): now ${v}${spec.values === "id" ? "" : `; can be ${spec.values.join(", ")}`}`);
+  }
+  return rows.length ? { text: `Settings you may propose changing, and their current values:\n${rows.join("\n")}`, settings: rows.length } : { text: "", settings: 0 };
+}
 
 function rec(v: unknown): Record<string, unknown> | null {
   return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
@@ -147,8 +196,17 @@ export function validateAction(raw: unknown, known: KnownIds, index: number): As
   }
   if (kind === "open_view") {
     const view = p.view;
-    if (view !== "fleet" && view !== "orbit" && view !== "knowledge") return null;
-    return { id, kind, label: label(`Open the ${view} view`), why, risk: "low", params: { view } };
+    const known = (ASK_VIEWS as readonly string[]).includes(str(view)) ? (view as AskView) : null;
+    if (!known) return null;
+    return { id, kind, label: label(`Open the ${known} view`), why, risk: "low", params: { view: known } };
+  }
+  if (kind === "set_setting") {
+    // Rebuilt from the closed list: an unknown key, or a value outside the key's set, drops the action.
+    const key = ASK_SETTING_KEYS.find((k) => k === p.key);
+    if (!key) return null;
+    const value = settingValue(key, p.value);
+    if (value === null) return null;
+    return { id, kind, label: label(`Set ${ASK_SETTINGS[key].label} to ${value}`), why, risk: "setting", params: { key, value } };
   }
   return null;
 }
@@ -214,5 +272,6 @@ export function actionDetails(a: AskAction): { label: string; value: string }[] 
       ...(a.params.dependsOn.length ? [{ label: "After", value: a.params.dependsOn.join(", ") }] : []),
     ];
   }
+  if (a.kind === "set_setting") return [{ label: "Setting", value: ASK_SETTINGS[a.params.key].label }, { label: "New value", value: a.params.value }];
   return [{ label: "View", value: a.params.view }];
 }

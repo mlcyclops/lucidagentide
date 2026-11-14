@@ -22,6 +22,7 @@
 
 import { fenceUntrusted } from "../harness/prompt/untrusted.ts";
 import { ASK_ACTIONS_BRIEF } from "./ask_lucid_actions.ts"; // P-ASKLUCID.2 (ADR-0582): how to propose an action
+import { ASK_FEATURES_BRIEF } from "./ask_lucid_features.ts"; // P-ASKLUCID.6 (ADR-0587): features the user has not used
 import { ASK_FOLLOWUPS_BRIEF } from "./ask_lucid_followups.ts"; // P-ASKLUCID.5 (ADR-0586): the questions the user may want next
 import { ASK_BRIEFING_RULES } from "./ask_lucid_briefing.ts"; // P-ASKLUCID.4 (ADR-0585): how a briefing is laid out
 
@@ -75,9 +76,11 @@ export const ASK_LUCID_SYSTEM = [
   "- Write plain American English. Never use em dashes or en dashes; use commas, colons or periods.",
   "- Be brief and concrete. Name lanes and tasks by the names in the snapshot. When the snapshot does not hold the answer, say that instead of guessing.",
   "- Never ask for or repeat passwords, tokens or keys.",
-  "- When the user wants something done (start a lane, prompt a lane, add an orbit task, open a view), propose it as an action. Do not pretend it is done: it happens only if the user presses Confirm.",
+  "- When the user wants something done (start a lane, prompt a lane, add an orbit task, open a view, change a setting), propose it as an action. Do not pretend it is done: it happens only if the user presses Confirm.",
   "",
   ASK_ACTIONS_BRIEF,
+  "",
+  ASK_FEATURES_BRIEF,
   "",
   ASK_FOLLOWUPS_BRIEF,
 ].join("\n");
@@ -184,12 +187,14 @@ export function historyContext(history: readonly AskTurn[]): string {
   return clip(history.map((t) => `${t.role === "user" ? "User" : "Lucid"}: ${t.text}`).join("\n\n"), ASK_BLOCK_MAX.history);
 }
 
-export type AskBlockName = "screen" | "fleet" | "activity" | "orbit" | "sessions" | "knowledge" | "history";
+export type AskBlockName = "screen" | "fleet" | "activity" | "orbit" | "sessions" | "knowledge" | "settings" | "features" | "history";
 export const ASK_BLOCK_TITLE: Record<AskBlockName, string> = {
   screen: "The user's screen right now",
   fleet: "Fleet lanes",
   activity: "What each lane was last asked and last answered",
   sessions: "Sessions in this workspace",
+  settings: "Settings",
+  features: "LUCID features",
   orbit: "Fleet Orbit",
   knowledge: "Knowledge graph",
   history: "Earlier in this side conversation",

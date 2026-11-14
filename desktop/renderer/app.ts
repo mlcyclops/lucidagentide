@@ -97,10 +97,12 @@ import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: impo
 import { localProvidersCardBody, draftFromForm, modelsFieldValue, providerWithDiscovered } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135) / P-LOCAL.6: Settings → Local Providers
 import { parseResultWindowSetting, type ResultSpill } from "../result_window.ts"; // P-CTX.2b (ADR-0579): pure (no Node imports)
 import { resultWindowLine } from "./result_window_view.ts"; // P-CTX.2b (ADR-0579)
-import { createAskLucid, type AskActionResult, type AskLucidHandle } from "./ask_lucid_panel.ts"; // P-ASKLUCID.1 (ADR-0581): the Ask Lucid fly-out
+import { createAskLucid, type AskActionResult, type AskExtrasView, type AskLucidHandle } from "./ask_lucid_panel.ts"; // P-ASKLUCID.1 (ADR-0581): the Ask Lucid fly-out
 import { collectScreen, surfaceKinds } from "./screen_digest.ts"; // P-ASKLUCID.3 (ADR-0584): what is on the screen, for Ask Lucid
 import type { ScreenDigest, ScreenPreview } from "../ask_lucid_screen.ts";
-import { pushTrail, type Follow, type RecSignals } from "./lucid_recs.ts"; // P-ASKLUCID.5 (ADR-0586): suggestions that follow the work
+import { addSeen, featureQuestion, featuresFromSurfaces, FEATURES_SEEN_KEY, parseSeen, unusedFeatures, type AskFeature } from "../ask_lucid_features.ts"; // P-ASKLUCID.6 (ADR-0587): features not yet used
+import { ASK_SETTINGS, type AskSettingKey } from "../ask_lucid_actions.ts"; // P-ASKLUCID.6: the settings Lucid may propose changing
+import { pushTrail, type Follow, type Rec, type RecSignals } from "./lucid_recs.ts"; // P-ASKLUCID.5 (ADR-0586): suggestions that follow the work
 import type { AskAction } from "../ask_lucid_actions.ts"; // P-ASKLUCID.2 (ADR-0582): what Lucid may propose
 import { holidayOffer, holidayToast, nextNews, noteHolidayAnswer, noteNewsSeen, pickSuggestion, pinExpired, readHolidayMemory, readPin, readSeenNews, setSuggestEnabled, suggestEnabled, suggestToggleHtml, writePin } from "./lucid_suggest.ts"; // P-MINI.2 (ADR-0583): what Lucid may suggest
 import { hydrateVaultDestinations } from "./vault_dest_ui.ts"; import { VAULT_DEST_SEC, VAULT_DEST_SUB, VAULT_DEST_TITLE } from "./vault_dest_card.ts"; // P-VAULT-DEST.1 (ADR-0478): Settings → Vault destinations (Enterprise)
@@ -4996,6 +4998,8 @@ function askLucid(): AskLucidHandle {
     recSignals: recSignalsForLucid,
     recStore: miniStore(),
     recTrail: () => recTrail,
+    recFallback: featureRecsForLucid,
+    extras: extrasForLucid,
     onFollow: followScreenForLucid,
     markdown: renderMarkdown,
     enhance: enhanceCodeBlocks,
@@ -5004,6 +5008,100 @@ function askLucid(): AskLucidHandle {
     runAction: runAskAction,
   });
   return askLucidPanel;
+}
+
+// ── P-ASKLUCID.6 (ADR-0587): features not yet used, and the settings Lucid may propose changing ──────
+// What the last look at the fleet, the orbit and the knowledge graph found (set by recSignalsForLucid), so
+// "has this user used it" needs no request of its own.
+let lastFleetLanes = 0;
+let lastOrbitGoal = false;
+let lastKnowledge = false;
+let lastAutoArchive = false;
+const FEATURE_SAMPLE_MS = 60_000;
+
+function readSeenFeatures(): string[] {
+  try { return parseSeen(miniStore()?.getItem(FEATURES_SEEN_KEY) ?? null); } catch { return []; }
+}
+function markFeaturesSeen(ids: readonly string[]): void {
+  const r = addSeen(readSeenFeatures(), ids);
+  if (!r.changed) return;
+  try { miniStore()?.setItem(FEATURES_SEEN_KEY, JSON.stringify(r.seen)); } catch { /* storage blocked: known for this window only */ }
+}
+/** Note which panels are open, once a minute: a panel the user has had open is a feature they found. Panel
+ *  kinds only, never their content. */
+function noteSurfacesSeen(): void {
+  if (document.hidden) return;
+  try { markFeaturesSeen(featuresFromSurfaces(surfaceKinds(document).map((s) => s.kind))); } catch { /* a sample is optional */ }
+}
+function unusedFeaturesForLucid(): AskFeature[] {
+  const prefs = seasonPrefs();
+  return unusedFeatures({
+    seen: readSeenFeatures(), lanes: lastFleetLanes, orbitGoal: lastOrbitGoal, knowledge: lastKnowledge,
+    seasonOn: prefs.auto || !!prefs.pick, autoArchive: lastAutoArchive, localModels: (state.localProviders ?? []).length > 0,
+  });
+}
+/** The suggestions Ask Lucid falls back on when nothing in the work suggests one: a feature not yet used. */
+function featureRecsForLucid(): Rec[] {
+  return unusedFeaturesForLucid().map((f) => ({ id: `feature:${f.id}`, kind: "feature", label: `Try: ${f.title}`, question: featureQuestion(f) }));
+}
+/** What goes to the engine with every question besides the screen: the current value of each setting Lucid
+ *  may propose changing, and the ids of the features this user has not used. The engine keeps only known
+ *  keys, accepted values and catalog ids. */
+async function extrasForLucid(): Promise<AskExtrasView> {
+  const [arch, win] = await Promise.all([bridge.archivePolicy().catch(() => null), bridge.resultWindow().catch(() => null)]);
+  lastAutoArchive = !!arch?.policy.auto;
+  const prefs = seasonPrefs();
+  const settings: Record<string, string> = {
+    "season.follow": prefs.auto ? "on" : "off",
+    "season.theme": prefs.pick || "none",
+    "theme": themePref() || "default",
+    "mini.presence": readPresence(miniStore()),
+    "suggest.enabled": suggestEnabled(miniStore()) ? "on" : "off",
+    "sessions.autoArchive": lastAutoArchive ? "on" : "off",
+  };
+  if (win && (win.setting === "auto" || typeof win.setting === "number")) settings["toolOutput.window"] = String(win.setting);
+  return { settings, unusedFeatures: unusedFeaturesForLucid().map((f) => f.id) };
+}
+/** Apply ONE setting the user just confirmed on a card. Each branch is the call Settings itself makes. A
+ *  theme or holiday theme id is checked against the app's own list here, because the engine only checks its
+ *  shape. */
+async function applyAskSetting(key: AskSettingKey, value: string): Promise<AskActionResult> {
+  const label = ASK_SETTINGS[key].label;
+  const done: AskActionResult = { ok: true, message: `${label} is now ${value}. You can change it back in Settings.` };
+  const refused = (why: string): AskActionResult => ({ ok: false, message: why });
+  if (key === "season.follow") { setSeasonPref(SEASON_AUTO_KEY, value === "on" ? "1" : ""); return done; }
+  if (key === "season.theme") {
+    if (value !== "none" && !seasonById(value)) return refused(`There is no holiday theme called "${value}".`);
+    setSeasonPref(SEASON_PICK_KEY, value === "none" ? "" : value);
+    return done;
+  }
+  if (key === "theme") {
+    if (value !== "default" && value !== SYSTEM_THEME_ID && !THEMES.some((t) => t.id === value)) return refused(`There is no theme called "${value}".`);
+    await pickTheme(value === "default" ? "" : value);
+    return done;
+  }
+  if (key === "mini.presence") {
+    writePresence(miniStore(), parsePresence(value));
+    if (value !== "sometimes") miniVisiting = false;
+    syncMiniLucid();
+    if (state.settingsOpen) fillSec("miniLucid", secMiniLucid());
+    return done;
+  }
+  if (key === "suggest.enabled") {
+    setSuggestEnabled(miniStore(), value === "on");
+    if (state.settingsOpen) fillSec("miniLucid", secMiniLucid());
+    return done;
+  }
+  if (key === "sessions.autoArchive") {
+    const cur = await bridge.archivePolicy().catch(() => null);
+    if (!cur) return refused("The archive rule could not be read.");
+    const next = await bridge.archivePolicy({ ...cur.policy, auto: value === "on" }).catch(() => null);
+    if (!next) return refused("The archive rule could not be saved.");
+    lastAutoArchive = next.policy.auto;
+    return done;
+  }
+  const saved = await bridge.setResultWindow(value === "auto" ? "auto" : Number(value)).catch(() => null);
+  return saved ? done : refused("The tool output window could not be saved.");
 }
 
 // P-ASKLUCID.5 (ADR-0586): what is going on, for Ask Lucid's suggestions. Everything here is already on the
@@ -5023,6 +5121,11 @@ async function recSignalsForLucid(): Promise<RecSignals | null> {
   const path = prevPathByLane[prevLane] ?? "";
   let surfaces: { kind: string; title: string }[] = [];
   try { surfaces = surfaceKinds(document); } catch { surfaces = []; }
+  // P-ASKLUCID.6 (ADR-0587): remembered for "which features has this user not used".
+  lastFleetLanes = lanes.length;
+  lastOrbitGoal = !!(g && typeof g.title === "string" && g.title);
+  lastKnowledge = (kb?.kgs?.length ?? 0) > 0;
+  markFeaturesSeen(featuresFromSurfaces(surfaces.map((s) => s.kind)));
   return {
     surfaces,
     previewTitle: panel && !panel.hidden && path ? (path.split(/[\\/]/).pop() ?? path) : null,
@@ -5088,11 +5191,21 @@ async function readScreenForLucid(): Promise<ScreenDigest | null> {
 async function runAskAction(a: AskAction): Promise<AskActionResult> {
   const failed = (what: string, why: string | undefined): AskActionResult => ({ ok: false, message: `${what}: ${why || "the engine did not answer"}.` });
   if (a.kind === "open_view") {
-    if (a.params.view === "fleet") openFleetGrid();
-    else if (a.params.view === "orbit") openFleetOrbit();
-    else openKnowledge();
-    return { ok: true, message: `Opened the ${a.params.view} view.` };
+    const v = a.params.view;
+    if (v === "fleet") openFleetGrid();
+    else if (v === "orbit") openFleetOrbit();
+    else if (v === "knowledge") openKnowledge();
+    else if (v === "settings") openSettings();
+    else if (v === "preview") openPreview();
+    else if (v === "skills") openSkills();
+    else if (v === "local-models") openSettingsToLocalProviders();
+    else openSettingsToVoice();
+    // P-ASKLUCID.6 (ADR-0587): a view Lucid opened for the user is a feature they have now found.
+    markFeaturesSeen(v === "orbit" ? ["fleet"] : [v]);
+    return { ok: true, message: `Opened the ${v} view.` };
   }
+  // P-ASKLUCID.6 (ADR-0587): one preference from the closed list, applied the way Settings applies it.
+  if (a.kind === "set_setting") return applyAskSetting(a.params.key, a.params.value);
   if (a.kind === "spawn_lane") {
     const cwd = state.workspace?.current ?? "";
     if (!cwd) return { ok: false, message: "There is no workspace folder open to start a lane in." };
@@ -17969,6 +18082,7 @@ function wire(): void {
   // P-AVATAR.1: back into the stage after an Esc exit (chip only visible for the lucid-agent role).
   $("#tbStage")!.addEventListener("click", () => setImmersive(true));
   $("#tbAskLucid")?.addEventListener("click", () => askLucid().toggle()); // P-ASKLUCID.1 (ADR-0581)
+  window.setInterval(noteSurfacesSeen, FEATURE_SAMPLE_MS); // P-ASKLUCID.6 (ADR-0587): which panels the user has found
   // P-ASKLUCID.3 (ADR-0584): Ask Lucid opens over any popup. A popup can cover the title-bar chip, so there
   // are two more ways in: any button marked data-ask-lucid (the Fleet grid and Orbit headers carry one), and
   // Ctrl/Cmd+Shift+L from anywhere.

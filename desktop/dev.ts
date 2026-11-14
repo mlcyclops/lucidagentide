@@ -6344,7 +6344,7 @@ return Bun.serve({
       // P-ASKLUCID.2 (ADR-0582): the reply may carry PROPOSED actions. This route runs none of them; the user
       // confirms a card and the renderer then calls /api/fleet/spawn, /api/fleet/queue or /api/fleet/goal/task.
       if (p === "/api/ask-lucid" && req.method === "POST") {
-        const b = await readBody<{ text?: unknown; history?: unknown; screen?: unknown; brief?: unknown }>(req);
+        const b = await readBody<{ text?: unknown; history?: unknown; screen?: unknown; brief?: unknown; settings?: unknown; unusedFeatures?: unknown }>(req);
         const q = parseQuestion(b.text);
         if (!q.ok) return json({ ok: false, error: q.error, data: { ok: false, error: q.error, seen: { ...NOTHING_SEEN }, withheld: [], actions: [], actionsDropped: 0 } });
         const reply = await answerAskLucid(q.text, sanitizeHistory(b.history), {
@@ -6361,7 +6361,7 @@ return Bun.serve({
           sessionTail: (id) => sessionMessages(id, 8),
           currentSessionId: () => backend.currentSessionId(),
           now: () => Date.now(),
-        }, { screen: b.screen, brief: b.brief === true });
+        }, { screen: b.screen, brief: b.brief === true, settings: b.settings, unusedFeatures: b.unusedFeatures });
         return json({ ok: reply.ok, data: reply, ...(reply.error ? { error: reply.error } : {}) });
       }
       // P-AOS.1 (ADR-0452): the standing fleet goal. UI token only (never AGENT_ROUTES): criteria are verified
