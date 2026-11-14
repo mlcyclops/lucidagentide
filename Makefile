@@ -685,6 +685,10 @@ demo-P-MCP-GATE.1: ## P-MCP-GATE.1 (ADR-0148): in-process MCP tool_result gate â
 demo-P-CTX.2a: ## P-CTX.2a (ADR-0578): a tool result omp spilled to an artifact - real omp sessions and the real scanner: a 2 MB MCP result with a payload in the elided middle is withheld and its artifact purged; a clean one is shown as omp's bounded view in the untrusted envelope, recorded in the provenance ledger with hash and trust label, and fenced when a page is read back; omp's 4 KB spill threshold bounds it under 4.5 KB; a local spill is untouched; a dead scanner withholds (fail-closed)
 	$(BUN) run harness/scripts/demo_pctx2a.ts
 
+.PHONY: demo-P-CTX.2b
+demo-P-CTX.2b: ## P-CTX.2b (ADR-0579): omp's tool-result window sized to the chat model - the spawn overlay is written, loaded through omp's own config loader with acp_config.yml, and real omp sessions show an 8K local model under 2 KB and a 32K model under 8 KB of a 2 MB result, large and cloud models keep omp's 50 KB default, the user's override wins, the desktop's stored and shown report matches the real result, and the ADR-0578 gate still withholds a poisoned MCP result under a 2 KB window
+	$(BUN) run desktop/scripts/demo_p_ctx_2b.ts
+
 .PHONY: demo-P-LOCAL.1
 demo-P-LOCAL.1: ## P-LOCAL.1 (ADR-0135): Local Providers â€” declare a self-hosted / custom OpenAI-compatible LLM (Ollama, llama.cpp, vLLM, DGX-over-VPN); validate fail-closed, emit the omp --config overlay (secret from the vault, skipped if absent), persist WITHOUT the secret
 	$(BUN) run desktop/scripts/demo_p_local_1.ts

@@ -94,6 +94,8 @@ import type { MeetingTodoView } from "./bridge.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
 import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
 import { localProvidersCardBody, draftFromForm, modelsFieldValue, providerWithDiscovered } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135) / P-LOCAL.6: Settings → Local Providers
+import { parseResultWindowSetting, type ResultSpill } from "../result_window.ts"; // P-CTX.2b (ADR-0579): pure (no Node imports)
+import { resultWindowLine } from "./result_window_view.ts"; // P-CTX.2b (ADR-0579)
 import { hydrateVaultDestinations } from "./vault_dest_ui.ts"; import { VAULT_DEST_SEC, VAULT_DEST_SUB, VAULT_DEST_TITLE } from "./vault_dest_card.ts"; // P-VAULT-DEST.1 (ADR-0478): Settings → Vault destinations (Enterprise)
 import { acceptAttachment, promptImageBlocks, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "./composer_attachments.ts"; // P-VISION.1 (ADR-0136): pasted images
 import { imageFileName } from "./chat_images.ts"; // P-IMG.1 (ADR-0208): inline render + download of tool images
@@ -1436,7 +1438,8 @@ type ToolCode = { path: string; content?: string; oldText?: string; newText?: st
 // onto this call for the chip label and the engineering report. `kind` preserves the coarse ACP class even
 // after the label upgrades, so the report can group by real name and still report the class.
 // P-PROGRESS.1: `input`/`intent` fill the drilldown of a code-less call; `elapsedMs` arrives with the settle.
-interface ChipData { code?: ToolCode; detail: string; id?: string; kind?: string; input?: string; intent?: string; elapsedMs?: number; }
+// P-CTX.2b (ADR-0579): `window` arrives with the settle when omp cut the result the model was shown.
+interface ChipData { code?: ToolCode; detail: string; id?: string; kind?: string; input?: string; intent?: string; elapsedMs?: number; window?: ResultSpill; }
 
 /** Fill an expandable step's panel with the tool's code — a write's content (syntax-highlighted via the
  *  vendored Monaco), an edit's hashline `patch` (colored +/− lines), or an old→new pair as a line diff.
@@ -1972,6 +1975,8 @@ function createChipRow(chip: ToolChip, data: ChipData): HTMLElement {
       const head = el(`<div class="tinline-head"><div class="tinline-doing"></div><div class="tinline-tool"></div></div>`);
       ($(".tinline-doing", head) as HTMLElement).textContent = describeTool({ name: chip.k, kind: data.kind, title: data.detail, intent: data.intent, input: data.input, path: data.code?.path }).doing;
       ($(".tinline-tool", head) as HTMLElement).textContent = `Tool: ${chip.k}${data.elapsedMs !== undefined ? ` · ${chip.failed ? "failed after" : "took"} ${humanMs(data.elapsedMs)}` : ""}`;
+      // P-CTX.2b (ADR-0579): how much of the result the model was shown, and where the rest is stored.
+      if (data.window) { const win = el(`<div class="tinline-window"></div>`); win.textContent = resultWindowLine(data.window); head.appendChild(win); }
       panel.appendChild(head);
       if (hasCode && data.code) void renderToolCode(panel, data.code);
       else { panel.dataset.filled = "1"; const pre = el(`<pre class="tinline-detail"></pre>`); pre.textContent = data.input || data.detail || "(no details)"; panel.appendChild(pre); }
@@ -3039,6 +3044,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
         if (!coarse || COARSE_KINDS[m.chip.k.toLowerCase()]) m.chip.k = name;
         if (e.ok === false) m.chip.failed = true;
         if (e.elapsedMs !== undefined) m.data.elapsedMs = e.elapsedMs;
+        if (e.window) m.data.window = e.window; // P-CTX.2b (ADR-0579)
       }
       thoughts?.relabel(e.id, e.name);
       if (e.ok !== undefined) thoughts?.settle(e.id, e.ok, e.elapsedMs);
@@ -6257,7 +6263,7 @@ function settingsShell(): string {
     setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
     setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
     `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - ONLY when the gov gateway is configured (filled in hydrateSettings)
-    setSkel("localProviders", "Local Providers", "self-hosted · Ollama · vLLM · VPN", true), // P-LOCAL.3 (ADR-0135); auto-collapsed
+    setSkel("localProviders", LP_CARD_TITLE, LP_CARD_SUB, true), // P-LOCAL.3 (ADR-0135); auto-collapsed
     setSkel("embeddings", "Semantic search", "knowledge RAG · your own embeddings", true), // ADR-0221; auto-collapsed
     `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
     setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
@@ -6411,15 +6417,30 @@ async function fillPersonalKgCounts(p: PersonalStatus | null, generation: number
 }
 
 // ── P-LOCAL.3 (ADR-0135): Settings → Local Providers ─────────────────────────────────────────────
+const LP_CARD_TITLE = "Local Providers";
+const LP_CARD_SUB = "self-hosted · Ollama · vLLM · VPN";
 /** Re-render the Local Providers card from the current list + which credential refs are in the vault. */
 async function hydrateLocalProviders(): Promise<void> {
-  const [providers, creds] = await Promise.all([
+  const [providers, creds, windowView] = await Promise.all([
     bridge.localProvidersList().catch(() => [] as import("../local_providers.ts").LocalProviderDef[]),
     bridge.credList().catch(() => [] as import("./bridge.ts").CredMetaView[]),
+    bridge.resultWindow().catch(() => null), // P-CTX.2b (ADR-0579): the tool-output window choice
   ]);
   state.localProviders = providers ?? [];
   const vaultRefs = new Set((creds ?? []).map((c) => c.ref));
-  fillSec("localProviders", localProvidersCardBody(state.localProviders, vaultRefs, bridge.isElectron));
+  // The fill must be the WHOLE card. fillSec swaps the element's outerHTML, so passing the bare body (as
+  // this did before ADR-0579) dropped the card's title and its data-sec, and every later refresh of the
+  // list found nothing to fill.
+  fillSec("localProviders", setCard("localProviders", LP_CARD_TITLE, LP_CARD_SUB, localProvidersCardBody(state.localProviders, vaultRefs, bridge.isElectron, windowView), true));
+  // P-CTX.2b: the select is rebuilt with the card, so its listener is attached here each time.
+  document.getElementById("lpResultWindow")?.addEventListener("change", (ev) => {
+    const raw = (ev.target as HTMLSelectElement).value;
+    const setting = parseResultWindowSetting(raw === "auto" || raw === "omp" ? raw : Number(raw));
+    void bridge.setResultWindow(setting).catch(() => null).then((saved) => {
+      showToast(saved ? { title: "Tool output window saved", desc: "It applies the next time LUCID starts.", timeout: 3200 } : { tone: "warn", title: "Couldn't save", desc: "The tool output window was not changed.", timeout: 4000 });
+      void hydrateLocalProviders();
+    });
+  });
   // P-LOCAL.4: a preset picked in the Provider Hub is applied here, once the add form actually exists.
   if (pendingLocalPreset) { const id = pendingLocalPreset; pendingLocalPreset = null; applyLocalPreset(id); }
 }

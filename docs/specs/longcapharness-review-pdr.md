@@ -17,6 +17,10 @@ its number only when it is accepted and appended to DECISIONS.md (one branch, on
 > Confirming the seam also found a hole in the existing MCP result gate: it scanned only that view, so a
 > payload in the elided middle of a large MCP result could be read back unscanned and unfenced. Session 1
 > closed it. Sections 3, 5 and 6 below are corrected in place and say where they changed.
+>
+> **Session 2 shipped, 2026-11-14 (ADR-0579).** omp's window is now sized to the chat model's context
+> window through a spawn overlay, with a Settings override and a stored-versus-shown line on each tool chip.
+> The two unwired output prototypes were deleted: omp ships that function as its Shell Minimizer.
 
 ## 1. What the paper does
 
@@ -115,7 +119,7 @@ Mapped from the current tree (see file references).
 | Paper concept | LUCID today | Maturity |
 |---|---|---|
 | Intermediate results outside the context | `harness/memory/compaction.ts` archives raw spans with provenance and summarizes from sanitized parts; `harness/prompt/assembler.ts` keeps the tail after the cache breakpoint | Strong for security and cache, not aimed at reasoning |
-| Bounded prompts per model call | omp spills any result over `tools.artifactSpillThreshold` (default 50 KB) to a session artifact and shows a head and tail view (corrected, ADR-0578); LUCID does not yet set that threshold per model. `harness/tools/output_minify_proto.ts` and `output_cmdaware_proto.ts` exist but are imported nowhere | Native in omp at 50 KB, not tuned for small windows |
+| Bounded prompts per model call | omp spills any result over `tools.artifactSpillThreshold` (default 50 KB) to a session artifact and shows a head and tail view (corrected, ADR-0578); LUCID sizes that threshold to a local model's context window (ADR-0579) | Shipped for Local Provider models |
 | Code primitives (match, lookup, count, track) | None exposed as tools; `harness/knowledge/chunk.ts` is fixed 800 char chunking for ingest | Missing |
 | Capability state | `harness/memory/state.ts`, `memory.ts`, `turns.ts`, `promotion_gate.ts`: durable, auditable, trust-labelled | Strong, general purpose |
 | Control logic | `desktop/model_roles.ts` (ADR-0448) sends plan and slow roles to a flagship and per-turn work to a flash model; `harness/agent/runner.ts` runs DAG workflows | Mature, rule based; nothing routes on the capability a query needs |
@@ -155,7 +159,7 @@ view is released, remove a quarantined artifact's content, and fence the artifac
 reads it back. Fail-closed throughout: an artifact that cannot be read, a scan that cannot run and a
 record that cannot be written each withhold the result. The window size becomes omp's own spill
 settings, set per model in P-CTX.2b. The frozen `harness/tools/result_adapter.ts` is not changed. The
-two unwired minify prototypes are decided in P-CTX.2b.
+two unwired minify prototypes were decided in P-CTX.2b: deleted (ADR-0579).
 
 ### ADR-B. P-CAP.1: code primitives over stored artifacts, with trust-label propagation
 
@@ -209,14 +213,16 @@ three lines in PROGRESS.md at the end. Order matters: C can run in parallel with
 - `make demo-P-CTX.2a`: a 2 MB MCP result with a payload in the elided middle is withheld; a clean one
   is fenced, recorded and fenced again on read-back; a 4 KB omp threshold shows the model 3,769 bytes.
 
-### Session 2: ADR-A, P-CTX.2b, the window sized per model and the desktop surface
+### Session 2: ADR-A, P-CTX.2b, the window sized per model and the desktop surface (shipped, ADR-0579)
 
-- Set omp's `tools.artifactSpillThreshold`, head and tail from the model's measured context window
-  (ADR-0367), for local and small-window models first; the user can override it.
-- Desktop: the chat shows "N bytes stored, M shown" with a click-through to the artifact.
-  Renderer touched, so rebuild `app.bundle.js` and grep the served bytes for a new marker.
-- Decide the two unwired output prototypes: promote one pass into the window, or delete both.
-- `make demo-P-CTX.2b`.
+- `desktop/result_window.ts`: one tool result may take one sixteenth of the context window (2 KB at
+  8K tokens, 8 KB at 32K, omp's 50 KB default from 204,800 tokens up), for models a Local Provider
+  serves. Written as the `lucid-result-window.yml` overlay at every omp spawn.
+- The user can override it in Settings, Local Providers: automatic, omp's default, or a fixed size.
+- Desktop: a tool chip whose result omp cut shows shown bytes, stored bytes and the artifact id.
+  Opening the artifact from the chip is not built: it is a new read surface over untrusted content.
+- The two unwired output prototypes are deleted; omp's Shell Minimizer does that job.
+- `make demo-P-CTX.2b`: real omp sessions, the overlay loaded through omp's own config loader.
 
 ### Session 3: ADR-B, P-CAP.1a, find, lookup, count, slice
 

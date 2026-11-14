@@ -27164,3 +27164,25 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 - No `EventName` is added (a frozen contract); the ledger is a file beside the artifacts, in the pattern of the turn and latency logs, and its ingest into DuckDB is a later increment.
 - Results from external sources other than MCP servers are scoped as ADR-0152 left them.
 - The PDR is amended: its Session 1 is this increment, and Session 2 (P-CTX.2b) becomes "set omp's spill settings from the model's measured window, show stored and shown bytes in the desktop".
+
+## ADR-0579 -- P-CTX.2b: omp's tool-result window is sized to the chat model's context window, with an override and a stored-versus-shown report (2026-11-14)
+
+**Status:** Accepted. Session 2 of `docs/specs/longcapharness-review-pdr.md`, on the seam ADR-0578 confirmed. Proof: `make demo-P-CTX.2b`, `bun test desktop/result_window.test.ts`.
+
+**Context.** omp shows the model at most `tools.artifactSpillThreshold` (default 50 KB, about 12,500 tokens) of any one tool result and saves the rest as a session artifact (ADR-0578). That default suits a cloud model with a 200,000 token window. A local model with an 8,192 or 32,768 token window is filled by one or two tool results, which is the failure the LongCapHarness paper removes by giving each model call a bounded prompt. LUCID knows the context window of a model served by a Local Provider: the one the endpoint reported through Discover (ADR-0367), or the 8,192 token default omp is given for a model that declares none.
+
+**Decision.**
+1. The rule: one tool result may take one sixteenth of the context window. At about 4 bytes per token the spill threshold is `contextWindow / 4` bytes, in half-KB steps, never under 2 KB and never over omp's 50 KB (`desktop/result_window.ts`, pure). That is 2 KB for an 8K model, 8 KB for 32K and 32 KB for 128K. From 204,800 tokens up the rule reaches omp's default and LUCID writes nothing. Head and tail keep omp's proportions (40 percent of the threshold each).
+2. The window is written as an omp `--config` overlay, `lucid-result-window.yml`, at every spawn in `ompConfigArgs()`, beside the judgment and model-roles overlays (`desktop/result_window_overlay.ts`). It is rewritten every spawn, as an empty map when omp's default stands, so a small window never survives a switch to a large model. A failed write rejects the spawn, as the other two overlays do.
+3. Only a model an enabled Local Provider serves gets a sized window. Every other model keeps omp's default.
+4. The user can override it: a stored `resultWindow` setting (`auto` by default, `omp` for omp's default, or a fixed size in KB), read and written through `/api/result-window` behind the UI token, with a control in the Settings Local Providers card.
+5. The desktop reports what omp did: a completed tool call whose result omp cut carries `window` (stored bytes, shown bytes, artifact id) on its `tool-meta` event, read from omp's own `details.meta.truncation`, and the tool chip's drilldown shows it as one line. A failed or withheld result reports none.
+6. `harness/tools/output_minify_proto.ts` and `output_cmdaware_proto.ts`, with their tests and benches, are deleted. They measured ANSI stripping, repeated-line folding and per-command filtering toward a possible LUCID layer; omp ships that as its Shell Minimizer (`shellMinimizer.enabled`, on by default), so a LUCID copy would break invariant 1 for no gain. This closes item 8 of ADR-0578.
+7. A bug found while verifying the control is fixed with it: `hydrateLocalProviders` filled the Local Providers card with its bare body, and `fillSec` swaps `outerHTML`, so the card lost its title and `data-sec` on first load and every later refresh of the list found nothing to fill. The fill now passes the whole card.
+
+**Consequences.**
+- omp reads `--config` at spawn, so a change of model or of the setting inside a running omp process applies at the next spawn (the limit ADR-0448 has).
+- A lane uses the master session's chat model for its window, because `ompConfigArgs()` reads `lastModel()`. A lane on a smaller model than the master gets the master's window.
+- A smaller window means more of a result sits behind the artifact link. The whole artifact of an MCP result is still scanned and recorded (ADR-0578), which the demo runs under a 2 KB window.
+- The tool chip names the artifact id as text. Opening the artifact from the chip is a new read surface over possibly untrusted content and is left for its own increment.
+- The stored-versus-shown line was verified by its pure functions and in the served bundle, not by a live model turn.
