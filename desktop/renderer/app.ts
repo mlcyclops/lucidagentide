@@ -23,6 +23,7 @@ import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, typ
 import { externalHttpUrl } from "../navigation_policy.ts";
 import type { MascotInputs } from "./mascot.ts"; // One session-reactive sprite: composer or Arcade.
 import { mountComposerRunner, type RunnerHandle } from "./mascot_runner.ts"; // P-MASCOT.2: the prompt-bar parkour mini
+import { miniLucidCardHtml, miniMount, noteVisit, parsePresence, readLedger, readPresence, shouldVisit, writePresence, type MiniMount } from "./mini_lucid.ts"; // P-MINI.1 (ADR-0580): visits and the preference
 import { mountAgentArcade, type AgentArcadeHandle } from "./mascot_game.ts";
 import { ARCADE_GAMES, type ArcadeGameId } from "../arcade_games.ts";
 import { nextGap, readinessChecklist, resolveAgentTierModel, restoreModel, type AgentModelTier, type AgentPrior, type ReadyItem } from "./agent_flow.ts"; // P-AVATAR.4: the enter flow
@@ -4973,18 +4974,67 @@ function syncImmersiveWithRole(role: UserRole | null): void {
   setImmersive(isAgent);
   syncAgentExtras();
   // The runner owns the mascot until Arcade opens, in either stage or parked layout.
-  if (isAgent && !miniRunner) {
-    const wrap = document.querySelector(".composer-wrap") as HTMLElement | null;
-    if (wrap) {
-      miniRunner = mountComposerRunner(wrap, composerMascotInputs);
-      miniRunner.setSuspended(agentArcade?.isOpen() ?? false);
-    }
-  } else if (!isAgent && miniRunner) { miniRunner.dispose(); miniRunner = null; }
+  noteRoleForMini();
+  syncMiniLucid();
   // P-AVATAR.4: entering the role starts the hands-free flow; leaving restores the user's world.
   if (isAgent) void enterAgentFlow();
   else void exitAgentFlow();
 }
 let miniRunner: RunnerHandle | null = null;
+// P-MINI.1 (ADR-0580): which kind of runner is mounted, whether a visit is under way, and how many new
+// sessions this launch has seen (the Developer's first one always gets a visit).
+let miniKind: MiniMount["kind"] = "none";
+let miniVisiting = false;
+let miniNewSessions = 0;
+function miniStore(): Storage | null { try { return localStorage; } catch { return null; } }
+
+/** P-MINI.1 (ADR-0580): mount, swap or remove the prompt-bar runner so it matches the role, the user's
+ *  preference and the visit state. A resident (the LUCID Agent role, or "Always") is greeted by a click; a
+ *  visitor leaves on one. Everyone sits down and types while a turn runs. */
+function syncMiniLucid(): void {
+  const want = miniMount(state.userRole, readPresence(miniStore()), miniVisiting).kind;
+  if (want === miniKind && (want === "none") === (miniRunner === null)) {
+    miniRunner?.setSuspended(agentArcade?.isOpen() ?? false);
+    return;
+  }
+  miniRunner?.dispose();
+  miniRunner = null;
+  miniKind = want;
+  if (want === "none") return;
+  const wrap = document.querySelector(".composer-wrap") as HTMLElement | null;
+  if (!wrap) { miniKind = "none"; return; }
+  miniRunner = mountComposerRunner(wrap, composerMascotInputs, want === "visitor"
+    ? { workPose: "typing", dismissOnClick: true, onDismiss: () => { miniVisiting = false; syncMiniLucid(); } }
+    : { workPose: "typing" });
+  miniRunner.setSuspended(agentArcade?.isOpen() ?? false);
+}
+
+/** P-MINI.1 (ADR-0580): the role just became known or changed. The Developer's first new session of a
+ *  launch always gets a visit, and on a first run the role is picked AFTER that session is already on screen
+ *  (the role gate), so the rule is applied here too while the chat is still empty. */
+function noteRoleForMini(): void {
+  if (miniVisiting || state.userRole !== "developer" || miniNewSessions > 1 || !document.getElementById("chatHint")) return;
+  const now = Date.now();
+  const store = miniStore();
+  if (!shouldVisit({ role: "developer", presence: readPresence(store), newSessionNumber: 1, ledger: readLedger(store, now), now, rand: 1 })) return;
+  miniVisiting = true;
+  noteVisit(store, now);
+}
+
+/** P-MINI.1 (ADR-0580): a new session began (the first paint of a launch, or New chat). Decide whether mini
+ *  Lucid visits it. A visit that is already under way simply carries on. */
+function noteNewSessionForMini(): void {
+  miniNewSessions += 1;
+  if (!miniVisiting) {
+    const now = Date.now();
+    const store = miniStore();
+    if (shouldVisit({ role: state.userRole, presence: readPresence(store), newSessionNumber: miniNewSessions, ledger: readLedger(store, now), now, rand: Math.random() })) {
+      miniVisiting = true;
+      noteVisit(store, now);
+    }
+  }
+  syncMiniLucid();
+}
 let agentArcade: AgentArcadeHandle | null = null;
 let agentTier: AgentModelTier = (() => { try { return localStorage.getItem("lucid.agent-tier") === "max" ? "max" : "regular"; } catch { return "regular"; } })();
 let agentTierApplying = false;
@@ -5910,6 +5960,13 @@ function secWorkingStatus(): string {
   return setCard("workingStatus", "Working status", "one line · details · estimate", inner, true);
 }
 
+// ── P-MINI.1 (ADR-0580): Settings -> Mini Lucid ──────────────────────────────────────────────────────
+// How much of the prompt-bar mascot the user wants outside the LUCID Agent role. Rendered from
+// localStorage (mini_lucid.ts), no fetch.
+function secMiniLucid(): string {
+  return setCard("miniLucid", "Mini Lucid", "off · sometimes · always", miniLucidCardHtml(readPresence(miniStore()), esc, icon("info", 12)), true);
+}
+
 // ── P-THEME.1: Settings -> Theme ────────────────────────────────────────────────────────────────────
 // A tile grid of every registered theme, plus a synthetic "Match system" tile that CLEARS the stored
 // choice (data-theme="") rather than selecting a theme, so "follow the OS" stays a real state and not a
@@ -6280,6 +6337,7 @@ function settingsShell(): string {
     secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
     secChatScroll(), // P-SCROLL.1 (ADR-0405): where a spoke switch lands (rendered from localStorage)
     secWorkingStatus(), // P-PROGRESS.3 (ADR-0412): quiet footer by default; opt-in detail and estimate
+    secMiniLucid(), // P-MINI.1 (ADR-0580): the prompt-bar mascot outside the LUCID Agent role
     secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
     setSkel("developer", "Developer", "logs · diagnostics", true),
     `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
@@ -17981,6 +18039,15 @@ function wire(): void {
     // P-PROGRESS.3: running HUDs, rows and lane cards repaint on their own one-second tick, so nothing else to do.
     if (t0.id === "statusDetail") { setStatusDetail((t0 as HTMLSelectElement).value === "full" ? "full" : "line"); return; }
     if (t0.id === "statusEta") { setStatusEta((t0 as HTMLInputElement).checked); return; }
+    // P-MINI.1 (ADR-0580): the Mini Lucid preference. Turning him off also ends a visit in progress.
+    if ((t0 as HTMLInputElement).name === "miniPresence") {
+      const next = parsePresence((t0 as HTMLInputElement).value);
+      writePresence(miniStore(), next);
+      if (next !== "sometimes") miniVisiting = false;
+      syncMiniLucid();
+      fillSec("miniLucid", secMiniLucid());
+      return;
+    }
     if (t0.id === "statusRing") { setStatusRing((t0 as HTMLInputElement).checked); return; }
     if (t0.id === "bgFile") {
       const f = (t0 as HTMLInputElement).files?.[0]; if (!f) return;
@@ -19025,6 +19092,7 @@ function newSession(force = false): void {
     setRecoveryChecking(false); setSendEnabled(); void loadSessionMode();
   });
   renderStatus(); $("#input")?.focus();
+  noteNewSessionForMini(); // P-MINI.1 (ADR-0580): mini Lucid may drop by on a new session
 }
 
 /** P-PREVIEW.19 (ADR-0339): drop the AGENT preview lane at a session boundary, and leave YOURS alone.
@@ -20498,6 +20566,9 @@ void bridge.getSettings().then((s) => { // your saved name → the "You" label o
   }
   if (state.userRole) applyRoleDefault(state.userRole); // returning user lands on their role's surface
   syncImmersiveWithRole(state.userRole); // P-AVATAR.1: a returning lucid-agent boots straight onto the stage
+  // P-MINI.1 (ADR-0580): a launch that opens on an empty chat counts as a new session; one that is already
+  // showing a restored conversation does not.
+  if (document.getElementById("chatHint")) noteNewSessionForMini(); else syncMiniLucid();
   syncSeasonBackdrop(); // P-SEASON.1: "Behind every chat" users get the backdrop in every role
   // P-AVATAR.6: the lucid-agent role gets a hero opening over the ~6-9s session warm - REAL signals
   // only, min beat + hard cap in boot_cinematic.ts, Esc/Skip always, reduced-motion = static card.

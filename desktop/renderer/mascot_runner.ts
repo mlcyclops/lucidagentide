@@ -9,6 +9,7 @@
 import { MASCOT_FRAMES, MASCOT_H, MASCOT_PALETTE, MASCOT_W, MASCOT_RUN_FRAMES, MASCOT_RUN_BEAT_MS, MASCOT_RUN_SWEEP_CELLS, mirrorFrame, paintRows, stepMascot, mascotFrame, type MascotInputs, type MascotSnap } from "./mascot.ts";
 import { paintSeasonExtras, seasonActAt, seasonActMs, seasonPalette, type SeasonActFrame } from "./mascot_season.ts";
 import { seasonById, type SeasonId } from "./seasons.ts";
+import { SCENE_H, SCENE_W, TYPING_BEAT_MS, typingRows } from "./mascot_mini.ts"; // P-MINI.1 (ADR-0580): the seated typing pose
 
 export const RUNNER_SCALE = 2;
 /** Peak lift of the click leap, in cells. The canvas reserves this much sky above the top lane so the
@@ -161,9 +162,22 @@ export function runnerReaction(kind: RunnerReactionKind, t: number, reduced: boo
 
 export interface RunnerHandle { setSuspended(suspended: boolean): void; dispose(): void }
 
+/** P-MINI.1 (ADR-0580). `workPose: "typing"` seats him at a keyboard while a turn runs, in place of the
+ *  standing activity loop. `dismissOnClick` makes a click send him away (after his leap) instead of only
+ *  greeting him; `onDismiss` is then called once and the owner disposes the runner. */
+export interface RunnerOptions { workPose?: "activity" | "typing"; dismissOnClick?: boolean; onDismiss?: () => void }
+
+/** PURE: where the seated typing scene sits, in device pixels: on the bar top, at the walker's x, kept
+ *  inside the bar's width. */
+export function typingBox(l: RunnerLayout, walkerX: number): { x: number; y: number; w: number; h: number } {
+  const w = SCENE_W * l.scale;
+  const h = SCENE_H * l.scale;
+  return { x: Math.round(Math.max(0, Math.min(l.width - w, walkerX))), y: l.barTop - h, w, h };
+}
+
 /** The canvas is pointer-transparent. Its separate button is clipped to the visible sprite ABOVE
  * the prompt, and uses native Enter/Space activation without a global keyboard handler. */
-export function mountComposerRunner(wrap: HTMLElement, getState: () => MascotInputs = idleState): RunnerHandle {
+export function mountComposerRunner(wrap: HTMLElement, getState: () => MascotInputs = idleState, opts: RunnerOptions = {}): RunnerHandle {
   const cv = document.createElement("canvas");
   cv.setAttribute("aria-hidden", "true");
   cv.style.cssText = `position:absolute;left:0;right:0;top:${-RUNNER_HEADROOM}px;height:calc(100% + ${RUNNER_HEADROOM}px);pointer-events:none;z-index:3`;
@@ -174,7 +188,8 @@ export function mountComposerRunner(wrap: HTMLElement, getState: () => MascotInp
   // every frame, which retriggers the resize observer, which resets the canvas bitmap, which leaves
   // the ninja invisible. The class only carries appearance and the focus ring.
   hit.style.cssText = "position:absolute;padding:0;border:0;background:transparent";
-  hit.setAttribute("aria-label", "Greet LUCID ninja");
+  hit.setAttribute("aria-label", opts.dismissOnClick ? "Send mini Lucid away" : "Greet LUCID ninja");
+  if (opts.dismissOnClick) hit.title = "Click to send mini Lucid away";
   wrap.append(cv, hit);
   const ctx = cv.getContext("2d");
   const mirroredFrames: Record<string, string[]> = Object.fromEntries(Object.entries(MASCOT_FRAMES).map(([id, frame]) => [id, mirrorFrame(frame)]));
@@ -208,6 +223,8 @@ export function mountComposerRunner(wrap: HTMLElement, getState: () => MascotInp
   let leapRouteMs = 0;
   let leapQueued = false;
   let hopCooldownUntil = 0;
+  let dismissing = false; // P-MINI.1: a click asked him to leave; he goes once his leap has landed
+  let typingSince = -1; // P-MINI.1: when the current typing spell began, -1 while he is not typing
   let lastKey = "";
   const events = new AbortController();
   const options = { signal: events.signal };
@@ -276,7 +293,7 @@ export function mountComposerRunner(wrap: HTMLElement, getState: () => MascotInp
   }
   hit.addEventListener("pointerenter", () => react("hop"), options);
   hit.addEventListener("focus", () => react("hop"), options);
-  hit.addEventListener("click", () => react("leap"), options);
+  hit.addEventListener("click", () => { if (opts.dismissOnClick) dismissing = true; react("leap"); }, options);
 
   function tick(now: number): void {
     raf = 0;
@@ -292,6 +309,12 @@ export function mountComposerRunner(wrap: HTMLElement, getState: () => MascotInp
       if (leapQueued) { leapQueued = false; react("leap"); }
     }
     const active = snap.state !== "idle";
+    // P-MINI.1: he leaves once the leap that acknowledged the click is over, or at once when there was no
+    // leap to play (a click while he is seated typing, or one refused mid-climb).
+    if (dismissing && (!reaction || active)) { dismissing = false; opts.onDismiss?.(); return; }
+    const typing = opts.workPose === "typing" && snap.state === "working";
+    if (typing && typingSince < 0) typingSince = now;
+    else if (!typing) typingSince = -1;
     if (!active && !reaction && document.activeElement !== hit) routeTime += dt;
     let act: SeasonActFrame | null = null;
     let lift = 0;
@@ -316,6 +339,26 @@ export function mountComposerRunner(wrap: HTMLElement, getState: () => MascotInp
         pose.mirrored = pose.mirrored !== act.mirrored;
         lift = act.lift;
       }
+    }
+    if (typing) {
+      // Seated at the keyboard on the bar top, where he was walking. Its own paint: the scene is a composed
+      // grid, not a MASCOT_FRAMES id, and a holiday costume is cut for the standing figure.
+      const still = reducedMotion?.matches ?? false;
+      const elapsed = still ? 0 : now - typingSince;
+      const box = typingBox(l, pose.x);
+      const tKey = `typing|${Math.floor(elapsed / TYPING_BEAT_MS)}|${box.x}|${box.y}|${season ?? ""}`;
+      if (tKey !== lastKey) {
+        lastKey = tKey;
+        ctx.clearRect(0, 0, l.width, l.height);
+        paintRows(ctx, typingRows(elapsed), l.scale, box.x, box.y, palette);
+        hit.hidden = false;
+        hit.style.left = `${box.x / dpr}px`;
+        hit.style.top = `${box.y / dpr - RUNNER_HEADROOM}px`;
+        hit.style.width = `${box.w / dpr}px`;
+        hit.style.height = `${box.h / dpr}px`;
+      }
+      raf = requestAnimationFrame(tick);
+      return;
     }
     const px = Math.round(pose.x), py = Math.round(pose.y - lift * l.scale);
     let key = `${pose.frame}|${px}|${py}|${pose.mirrored ? 1 : 0}|${pose.clipBar ? 1 : 0}|${season ?? ""}`;

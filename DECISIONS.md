@@ -27186,3 +27186,22 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 - A smaller window means more of a result sits behind the artifact link. The whole artifact of an MCP result is still scanned and recorded (ADR-0578), which the demo runs under a 2 KB window.
 - The tool chip names the artifact id as text. Opening the artifact from the chip is a new read surface over possibly untrusted content and is left for its own increment.
 - The stored-versus-shown line was verified by its pure functions and in the served bundle, not by a live model turn.
+
+## ADR-0580 -- P-MINI.1: mini Lucid visits other roles on a new session and sits down to type while a turn runs (2026-11-14)
+
+**Status:** Accepted. Session 1 of `docs/specs/mini-lucid-ask-lucid-pdr.md`. Proof: `make demo-P-MINI.1`, `bun test desktop/renderer/mini_lucid.test.ts`.
+
+**Context.** The prompt-bar runner (`mascot_runner.ts`) existed only in the LUCID Agent role, and while a turn ran he stood and cycled through kata, shuriken and other activities. LUCID Tradepass took this repo's frames and built a calmer figure for its Ask Lucid panel: seated, typing on a keyboard on his lap. The request is to bring that pose back, to let him visit the other roles on a new session, and to keep him from being a nuisance.
+
+**Decision.**
+1. `desktop/renderer/mascot_mini.ts` holds the seated scene from Tradepass's `ui/js/mascot-mini.js` (same owner and license), ported to TypeScript on this repo's own frames in `mascot.ts`: idle (seated, breathing, an occasional glance up), working (eyes open, hands alternating on lit keys), done and error. `sceneRows(state, t)` is pure. `mountMiniMascot` is the small standalone canvas the Ask Lucid panel will use.
+2. `mountComposerRunner` takes options. `workPose: "typing"` seats him on the bar top at his walking position while a turn runs, in place of the standing activity loop. `dismissOnClick` makes a click send him away once his leap has landed. Every mount now uses the typing pose, the LUCID Agent role included.
+3. `desktop/renderer/mini_lucid.ts` decides when he visits, as pure rules. The LUCID Agent role keeps him as a resident, as before. The Developer role gets him on the first new session of each launch, also when the role is picked at the first-run gate. Any role gets him on one new session in four, never within thirty minutes of the last visit and at most three times a local day. A visitor leaves on a click; a resident is greeted by one.
+4. A Settings card, "Mini Lucid", stores the user's choice in localStorage: Off, Sometimes (the default) or Always. Off also ends a visit in progress. The LUCID Agent role keeps him whatever the choice.
+5. "Agent mode" in the request is read as the `lucid-agent` role and "Dev mode" as the `developer` role, the two role-picker entries that fit. The diagnostics toggle named developer mode is not involved.
+
+**Consequences.**
+- He is clickable only while his silhouette is above the prompt bar, as before: on the lane that crosses the bar itself he is drawn but does not take the pointer, so the prompt is never blocked. A click to dismiss has to wait for him to come up top.
+- A holiday costume is not drawn on the seated figure, because the costumes are cut for the standing frames. He wears it again when he stands.
+- The visit ledger and the preference are per browser profile (localStorage), like the season and status preferences, not per account.
+- A launch that opens on a restored conversation does not count as a new session.
