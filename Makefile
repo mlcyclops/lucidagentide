@@ -697,6 +697,10 @@ demo-P-MINI.1: ## P-MINI.1 (ADR-0580): mini Lucid visits and sits down to type -
 demo-P-ASKLUCID.1: ## P-ASKLUCID.1 (ADR-0581): the Ask Lucid fly-out, read-only - the real service with the real scanner and a stand-in model that records its prompt: the fleet lanes, the Fleet Orbit and the knowledge graph each arrive inside the untrusted envelope with the question outside it; a lane name with a hidden payload gets the fleet view quarantined and kept from the model; a name that tries to close the envelope stays inside it; a dead scanner withholds every view (fail-closed); CUI lockdown with no allowed model is refused and audited; a provider error line is an error, not an answer; and the dock's placement, snapping and zoom-corrected reserve
 	$(BUN) run desktop/scripts/demo_p_asklucid_1.ts
 
+.PHONY: demo-P-ASKLUCID.2
+demo-P-ASKLUCID.2: ## P-ASKLUCID.2 (ADR-0582): Lucid proposes, the user confirms - the real service with the real scanner: a valid proposal becomes an action with a risk label and the block leaves the reply; the card's rows are exactly what Confirm sends; an unknown kind, a lane Lucid was not shown and unnamed fields are dropped; a proposed prompt with a hidden payload is dropped by the scanner; a model talked into forty lanes yields three cards; a dead scanner offers none (fail-closed); and the route, service and validator hold no call that runs an action
+	$(BUN) run desktop/scripts/demo_p_asklucid_2.ts
+
 .PHONY: demo-P-LOCAL.1
 demo-P-LOCAL.1: ## P-LOCAL.1 (ADR-0135): Local Providers — declare a self-hosted / custom OpenAI-compatible LLM (Ollama, llama.cpp, vLLM, DGX-over-VPN); validate fail-closed, emit the omp --config overlay (secret from the vault, skipped if absent), persist WITHOUT the secret
 	$(BUN) run desktop/scripts/demo_p_local_1.ts

@@ -97,7 +97,8 @@ import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: impo
 import { localProvidersCardBody, draftFromForm, modelsFieldValue, providerWithDiscovered } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135) / P-LOCAL.6: Settings → Local Providers
 import { parseResultWindowSetting, type ResultSpill } from "../result_window.ts"; // P-CTX.2b (ADR-0579): pure (no Node imports)
 import { resultWindowLine } from "./result_window_view.ts"; // P-CTX.2b (ADR-0579)
-import { createAskLucid, type AskLucidHandle } from "./ask_lucid_panel.ts"; // P-ASKLUCID.1 (ADR-0581): the Ask Lucid fly-out
+import { createAskLucid, type AskActionResult, type AskLucidHandle } from "./ask_lucid_panel.ts"; // P-ASKLUCID.1 (ADR-0581): the Ask Lucid fly-out
+import type { AskAction } from "../ask_lucid_actions.ts"; // P-ASKLUCID.2 (ADR-0582): what Lucid may propose
 import { hydrateVaultDestinations } from "./vault_dest_ui.ts"; import { VAULT_DEST_SEC, VAULT_DEST_SUB, VAULT_DEST_TITLE } from "./vault_dest_card.ts"; // P-VAULT-DEST.1 (ADR-0478): Settings → Vault destinations (Enterprise)
 import { acceptAttachment, promptImageBlocks, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "./composer_attachments.ts"; // P-VISION.1 (ADR-0136): pasted images
 import { imageFileName } from "./chat_images.ts"; // P-IMG.1 (ADR-0208): inline render + download of tool images
@@ -121,7 +122,7 @@ import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOpti
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
 import { closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, pushToNewLane, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
-import { closeFleetOrbit, fleetHome, initFleetOrbit, noteSpokeAsk, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
+import { closeFleetOrbit, fleetHome, initFleetOrbit, noteSpokeAsk, openFleetOrbit, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
 import { hideRemoteView, initRemoteView, isRemoteViewOpen, REMOTE_SPOKES_PLUGIN, remoteViewHtml, showRemoteView, type RemoteViewTarget } from "./remote_spokes_view.ts"; // P-RS-VIEW.1 (ADR-0539)
 import { launchRemoteAdmin } from "./remote_admin_launch.ts"; // P-RS-WINDOW.1 (ADR-0543)
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
@@ -4991,8 +4992,43 @@ function askLucid(): AskLucidHandle {
     enhance: enhanceCodeBlocks,
     topBar: ".titlebar",
     zoomOf: "#app",
+    runAction: runAskAction,
   });
   return askLucidPanel;
+}
+
+/** P-ASKLUCID.2 (ADR-0582): carry out one action the user just CONFIRMED on a card in Ask Lucid. This is the
+ *  only place a proposal becomes a call, and each call is the one the Fleet views already make, with the UI
+ *  token, as the user. A prompt is STAGED on its lane (the lane queue), never run blind: the Fleet view
+ *  opens so the lane's card is on screen, where it runs when the lane is idle and where any approval it
+ *  needs can be answered. The engine validates every call again. */
+async function runAskAction(a: AskAction): Promise<AskActionResult> {
+  const failed = (what: string, why: string | undefined): AskActionResult => ({ ok: false, message: `${what}: ${why || "the engine did not answer"}.` });
+  if (a.kind === "open_view") {
+    if (a.params.view === "fleet") openFleetGrid();
+    else if (a.params.view === "orbit") openFleetOrbit();
+    else openKnowledge();
+    return { ok: true, message: `Opened the ${a.params.view} view.` };
+  }
+  if (a.kind === "spawn_lane") {
+    const cwd = state.workspace?.current ?? "";
+    if (!cwd) return { ok: false, message: "There is no workspace folder open to start a lane in." };
+    const r = await bridge.fleetSpawn({ cwd, name: a.params.name }).catch(() => null);
+    if (!r?.ok || !r.lane) return failed("The lane could not start", r?.reason);
+    const q = await bridge.fleetQueueAdd(r.lane.id, a.params.prompt).catch(() => null);
+    openFleetGrid();
+    if (!q?.ok) return failed(`Lane "${r.lane.name}" started, but its first prompt could not be staged`, q?.reason);
+    return { ok: true, message: `Started lane "${r.lane.name}" and staged its first prompt. The Fleet view is open: the prompt runs there.` };
+  }
+  if (a.kind === "prompt_lane") {
+    const q = await bridge.fleetQueueAdd(a.params.laneId, a.params.text).catch(() => null);
+    if (!q?.ok) return failed("The prompt could not be staged", q?.reason);
+    openFleetGrid();
+    return { ok: true, message: `Staged on lane ${a.params.laneId}. The Fleet view is open: it runs there when the lane is idle.` };
+  }
+  const t = await bridge.fleetTaskAdd(a.params).catch(() => null);
+  if (!t?.ok) return failed("The task could not be added", t && !t.ok ? t.error : undefined);
+  return { ok: true, message: `Added "${a.params.title}" to the Fleet Orbit goal, assigned to lane ${a.params.assignee}.` };
 }
 let miniRunner: RunnerHandle | null = null;
 // P-MINI.1 (ADR-0580): which kind of runner is mounted, whether a visit is under way, and how many new

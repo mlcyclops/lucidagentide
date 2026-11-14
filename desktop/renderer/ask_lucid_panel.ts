@@ -14,6 +14,7 @@
 //
 // Everything outside the DOM is injected, and the small pure helpers are exported for tests.
 
+import { ASK_KIND_LABEL, ASK_RISK_LABEL, actionDetails, type AskAction } from "../ask_lucid_actions.ts"; // P-ASKLUCID.2 (ADR-0582): pure, no imports
 import { createDock, type DockHandle } from "./dock.ts";
 import { mountMiniMascot, type MiniMascotHandle, type MiniState } from "./mascot_mini.ts";
 
@@ -26,6 +27,17 @@ export interface AskReplyView {
   model?: string;
   seen: { lanes: number; tasks: number; hits: number };
   withheld: string[];
+  /** P-ASKLUCID.2 (ADR-0582): what Lucid proposes. Each becomes a card; none runs without Confirm. */
+  actions?: AskAction[];
+  actionsDropped?: number;
+}
+
+/** What happened when the user confirmed an action. `message` is shown on the card. */
+export interface AskActionResult { ok: boolean; message: string }
+
+/** PURE: the note shown when some of what Lucid proposed was not turned into a card. */
+export function droppedLine(n: number): string {
+  return n > 0 ? `${n === 1 ? "One proposed action was" : `${n} proposed actions were`} not shown: ${n === 1 ? "it was" : "they were"} not valid, named something Lucid was not shown, or did not pass the security scan.` : "";
 }
 
 export const ASK_DOCK_KEY = "lucid.asklucid.dock.v1";
@@ -71,6 +83,8 @@ export interface AskLucidDeps {
   topBar?: string;
   /** Selector of the zoomed app root (see DockOptions.zoomOf). */
   zoomOf?: string;
+  /** P-ASKLUCID.2 (ADR-0582): carry out one action the user just confirmed. Absent = cards are not offered. */
+  runAction?(action: AskAction): Promise<AskActionResult>;
 }
 
 export interface AskLucidHandle {
@@ -177,6 +191,45 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     scrollDown();
     if (!dock.isVisible()) dock.setUnread(true);
   };
+  /** P-ASKLUCID.2 (ADR-0582): one proposed action as a card. Every string goes in through textContent. The
+   *  detail rows are exactly what Confirm sends (actionDetails), so the user reads what will run. Confirm
+   *  works once; Dismiss removes the card. */
+  const addAction = (a: AskAction): void => {
+    const run = deps.runAction;
+    if (!run) return;
+    const card = el("div", `al-act al-risk-${a.risk}`);
+    const top = el("div", "al-act-top");
+    top.append(el("span", "al-act-kind", ASK_KIND_LABEL[a.kind]), el("span", "al-act-risk", ASK_RISK_LABEL[a.risk]));
+    card.append(top, el("div", "al-act-label", a.label));
+    if (a.why) card.appendChild(el("div", "al-act-why", a.why));
+    const dl = el("dl", "al-act-dl");
+    for (const row of actionDetails(a)) dl.append(el("dt", "", row.label), el("dd", "", row.value));
+    card.appendChild(dl);
+    const btns = el("div", "al-act-btns");
+    const confirm = el("button", "al-act-go", "Confirm");
+    confirm.type = "button";
+    const dismiss = el("button", "al-act-no", "Dismiss");
+    dismiss.type = "button";
+    btns.append(confirm, dismiss);
+    const result = el("div", "al-act-result");
+    result.hidden = true;
+    card.append(btns, result);
+    dismiss.addEventListener("click", () => card.remove());
+    confirm.addEventListener("click", () => {
+      confirm.disabled = true;
+      dismiss.disabled = true;
+      confirm.textContent = "Working";
+      void run(a).catch((): AskActionResult => ({ ok: false, message: "It could not be done: the app did not answer." })).then((r) => {
+        btns.remove();
+        result.hidden = false;
+        result.textContent = r.message;
+        card.classList.add(r.ok ? "done" : "failed");
+        scrollDown();
+      });
+    });
+    log.appendChild(card);
+    scrollDown();
+  };
   const addError = (text: string): void => {
     welcome.remove();
     log.appendChild(el("div", "al-msg al-err", text));
@@ -202,6 +255,9 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
       if (r?.ok && r.reply) {
         turns.push({ role: "lucid", text: r.reply });
         addLucid(r.reply, seenLine(r));
+        for (const a of r.actions ?? []) addAction(a);
+        const dropped = droppedLine(r.actionsDropped ?? 0);
+        if (dropped) log.appendChild(el("div", "al-meta", dropped));
         setState("done");
       } else {
         turns.pop(); // a question that was never answered is not history

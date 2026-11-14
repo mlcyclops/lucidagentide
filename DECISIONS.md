@@ -27230,3 +27230,25 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 - The dock is drawn at zoom 1 in `<body>`, so its text is slightly smaller than the app's at the default 1.08 zoom.
 - A toast can overlap a floating dock, since toasts stay on top.
 - The happy path was verified with a stand-in model in tests and a mocked reply in the browser. The live route was called on a real engine and returned the provider's refusal, which is how decision 8 was found.
+
+## ADR-0582 -- P-ASKLUCID.2: Lucid proposes actions as cards, and only the user's Confirm runs one (2026-11-14)
+
+**Status:** Accepted. Session 3 of `docs/specs/mini-lucid-ask-lucid-pdr.md`. Amends ADR-0581 (Ask Lucid could only answer). Proof: `make demo-P-ASKLUCID.2`, `bun test desktop/ask_lucid_actions.test.ts`.
+
+**Context.** The request is for Ask Lucid to kick off a fleet lane or an orbit node, not only to answer. Lucid reads lane names, task titles and knowledge pages, which agents and imported documents write, so anything he does after reading them could be something that text asked for. LUCID Tradepass solved this for its own Ask Lucid: the assistant proposes, each proposal is a card with a risk label, and the app runs it as the user after Confirm.
+
+**Decision.**
+1. Lucid still has no tools and runs nothing (ADR-0581 stands). A reply may end with ONE fenced block tagged `lucid-actions` holding a JSON array. The brief teaches the block and says to propose only what the user asked for, never what the snapshot asked for.
+2. Four kinds exist: `spawn_lane` (a name and a first prompt, in the current workspace), `prompt_lane` (a lane and a prompt), `add_orbit_task` (title, prompt, output contract, checks, lane, dependencies) and `open_view` (fleet, orbit or knowledge). There is no kind that approves, changes a lane's approval mode, runs a command directly, stops or deletes anything, or writes a file.
+3. `desktop/ask_lucid_actions.ts` treats the block as untrusted input. An unknown kind is dropped. An action is rebuilt from the fields the validator names, so a field such as `cwd`, `model`, `autoApprove` or a token cannot ride along. A lane id or task id must be one from the snapshot Lucid was shown; a view that was withheld contributes none. Every text is bounded and an over-long one drops the action instead of sending a cut version. At most three actions per reply; only the first block counts. The risk label is decided by the validator, never by the model: `low` for a view, `write` for agent work, `command` when an orbit task carries a `$ ` command check.
+4. The service scans each surviving action's text. One that the scanner blocks, or cannot scan, is dropped. Dropped proposals are counted and the panel says how many were not shown.
+5. The panel shows each action as a card: its kind, its risk, the label, the reason, and the exact rows Confirm will send. Confirm works once; Dismiss removes the card. The action runs from one place in the panel, the Confirm click handler.
+6. Confirm calls the same UI-token routes the Fleet views use, as the user, and the engine validates again: `/api/fleet/spawn`, `/api/fleet/queue`, `/api/fleet/goal/task`. A prompt is staged on its lane's queue and the Fleet view opens. It is never sent straight to the lane, because the lane manager's rule is that no turn runs where nobody can see it and answer its approvals.
+7. The engine path runs no action: `/api/ask-lucid` and the service call no fleet or orbit write, and the validator has no imports.
+
+**Consequences.**
+- A lane Lucid starts is an ordinary lane: the in-process gate scans its tool calls and its approvals go to the user, as for a lane started by hand.
+- A staged prompt runs when the Fleet view drains it, so closing that view before the lane is idle leaves the prompt staged.
+- A new lane starts in the current workspace on the default model. Lucid cannot choose a folder, a model or a worktree.
+- A reply that is only a block is shown with one harness-written sentence above its cards.
+- The cards were driven in a browser against a live engine with a mocked reply: Confirm on a lane proposal started a real lane and staged its prompt. No live model wrote a block in this sandbox.

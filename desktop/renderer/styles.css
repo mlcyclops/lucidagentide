@@ -7885,3 +7885,29 @@ body.ald-dragging .ald-head{cursor:grabbing}
   .ald-pill.working,.ald-unread,.al-msg{animation:none}
   .ald-snap,.al-sug{transition:none}
 }
+
+/* ── P-ASKLUCID.2 (ADR-0582): a proposed action as a card. Nothing here runs without the Confirm button.
+   Invariant 11: the top row holds two single-text spans; every other line of text is its own block. */
+.al-act{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;background:var(--bg-2);padding:10px 12px;display:flex;flex-direction:column;gap:6px;animation:alIn var(--t) var(--ease-out)}
+.al-act.al-risk-low{border-left-color:var(--line-strong)}
+.al-act.al-risk-command{border-left-color:var(--red)}
+.al-act-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.al-act-kind{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--txt-3);white-space:nowrap}
+.al-act-risk{font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--txt-2);white-space:nowrap}
+.al-act.al-risk-command .al-act-risk{border-color:rgb(var(--sh-rgb) / .2);background:var(--red-dim);color:var(--red-txt)}
+.al-act-label{font-size:13px;font-weight:650;color:var(--txt);overflow-wrap:anywhere}
+.al-act-why{font-size:12px;line-height:1.45;color:var(--txt-2);overflow-wrap:anywhere}
+.al-act-dl{margin:2px 0 0;display:grid;grid-template-columns:minmax(84px,max-content) minmax(0,1fr);gap:4px 10px;font-size:12px}
+.al-act-dl dt{color:var(--txt-3);white-space:nowrap}
+.al-act-dl dd{margin:0;color:var(--txt-1);font-family:var(--mono);font-size:11.5px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;max-height:132px;overflow-y:auto}
+.al-act-btns{display:flex;gap:8px;margin-top:2px}
+.al-act-go,.al-act-no{height:30px;padding:0 13px;border-radius:8px;font:inherit;font-size:12.5px;font-weight:650;cursor:pointer;white-space:nowrap}
+.al-act-go{border:1px solid rgb(var(--accent-rgb) / .55);background:var(--accent-dim);color:var(--txt)}
+.al-act-go:hover:not(:disabled){border-color:var(--accent-2)}
+.al-act-no{border:1px solid var(--line);background:transparent;color:var(--txt-2)}
+.al-act-no:hover:not(:disabled){border-color:var(--line-strong);color:var(--txt)}
+.al-act-go:disabled,.al-act-no:disabled{opacity:.55;cursor:default}
+.al-act-result{font-size:12px;line-height:1.45;color:var(--txt-2);overflow-wrap:anywhere}
+.al-act.done{border-left-color:var(--accent-2)}
+.al-act.failed .al-act-result{color:var(--red-txt)}
+@media (prefers-reduced-motion: reduce){.al-act{animation:none}}

@@ -9,7 +9,8 @@
 // of context blocks and the question.
 //
 // WHAT LUCID CANNOT DO. It runs on the side completion channel (Backend.complete): no tools, no session, no
-// write. It answers in text. Nothing in this increment lets it act.
+// write. It answers in text. It may PROPOSE actions in that text (ask_lucid_actions.ts, ADR-0582); a proposal
+// is a card the user confirms, and only the user's click runs anything.
 //
 // WHAT IS UNTRUSTED (invariant 5). Lane names, queued prompts, approval summaries, task titles and prompts
 // are written by agents and by the user; knowledge pages come from imported documents; earlier replies in
@@ -20,6 +21,7 @@
 // Pure: no I/O. The route (dev.ts /api/ask-lucid) gathers the data, scans each block and calls the model.
 
 import { fenceUntrusted } from "../harness/prompt/untrusted.ts";
+import { ASK_ACTIONS_BRIEF } from "./ask_lucid_actions.ts"; // P-ASKLUCID.2 (ADR-0582): how to propose an action
 
 /** The longest question accepted. */
 export const ASK_MAX_TEXT = 8000;
@@ -69,7 +71,9 @@ export const ASK_LUCID_SYSTEM = [
   "- Write plain American English. Never use em dashes or en dashes; use commas, colons or periods.",
   "- Be brief and concrete. Name lanes and tasks by the names in the snapshot. When the snapshot does not hold the answer, say that instead of guessing.",
   "- Never ask for or repeat passwords, tokens or keys.",
-  "- When the user wants something done (start a lane, add a task), tell them where in the app to do it. Do not pretend it is done.",
+  "- When the user wants something done (start a lane, prompt a lane, add an orbit task, open a view), propose it as an action. Do not pretend it is done: it happens only if the user presses Confirm.",
+  "",
+  ASK_ACTIONS_BRIEF,
 ].join("\n");
 
 /** PURE: how long ago `at` was, in words, for a lane's last activity. */

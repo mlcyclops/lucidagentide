@@ -6327,10 +6327,12 @@ return Bun.serve({
       // is shown the fleet lanes, the Fleet Orbit and the knowledge graph hits for the question, each scanned
       // and fenced as untrusted data, and answers through the side completion channel: no tools, no session,
       // no write. The lexical knowledge path is used, so a question never triggers an embeddings call.
+      // P-ASKLUCID.2 (ADR-0582): the reply may carry PROPOSED actions. This route runs none of them; the user
+      // confirms a card and the renderer then calls /api/fleet/spawn, /api/fleet/queue or /api/fleet/goal/task.
       if (p === "/api/ask-lucid" && req.method === "POST") {
         const b = await readBody<{ text?: unknown; history?: unknown }>(req);
         const q = parseQuestion(b.text);
-        if (!q.ok) return json({ ok: false, error: q.error, data: { ok: false, error: q.error, seen: { lanes: 0, tasks: 0, hits: 0 }, withheld: [] } });
+        if (!q.ok) return json({ ok: false, error: q.error, data: { ok: false, error: q.error, seen: { lanes: 0, tasks: 0, hits: 0 }, withheld: [], actions: [], actionsDropped: 0 } });
         const reply = await answerAskLucid(q.text, sanitizeHistory(b.history), {
           fleetStatus: () => fleet.status(),
           orbit: () => fleetGoal.snapshot(),

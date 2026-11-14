@@ -230,7 +230,7 @@ describe("answerAskLucid", () => {
   test("the model gets the brief, the question, and all three views fenced; the reply says what was seen", async () => {
     const { d, probe } = deps();
     const r = await answerAskLucid("what are my lanes doing?", [{ role: "user", text: "hi" }, { role: "lucid", text: "hello" }], d);
-    expect(r).toEqual({ ok: true, reply: "Two lanes: scout is working.", model: "claude-haiku-5-5", seen: { lanes: 2, tasks: 1, hits: 1 }, withheld: [] });
+    expect(r).toEqual({ ok: true, reply: "Two lanes: scout is working.", model: "claude-haiku-5-5", seen: { lanes: 2, tasks: 1, hits: 1 }, withheld: [], actions: [], actionsDropped: 0 });
     expect(probe.calls).toBe(1);
     expect(probe.system).toBe(ASK_LUCID_SYSTEM);
     expect(probe.model).toBe("anthropic/claude-haiku-5-5");
@@ -334,7 +334,7 @@ describe("the route and the service cannot act", () => {
 
   test("the service imports only the prompt builder: no fleet, no fs, no process", () => {
     const imports = [...service.matchAll(/\bfrom "([^"]+)";/g)].map((m) => m[1]);
-    expect(imports).toEqual(["./ask_lucid.ts"]);
+    expect(imports).toEqual(["./ask_lucid.ts", "./ask_lucid_actions.ts"]); // both pure: prompt text and validation
     expect(service).not.toContain("require(");
     expect(service).not.toContain("import(");
   });
