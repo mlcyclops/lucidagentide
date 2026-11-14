@@ -8,7 +8,7 @@
 // and derive a title (first user message), model, turn count, and last-modified.
 // New GUI chats write new files here, so they appear on the next poll.
 
-import { constants, copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, copyFileSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { open, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
@@ -681,18 +681,26 @@ export function clearAskLucidSessions(opts: { cwd?: string; root?: string; older
       for (const f of readdirSync(dir)) {
         if (!f.endsWith(".jsonl")) continue;
         const p = join(dir, f);
+        // ONE descriptor for the age check and the read, so the file that is judged is the file that is read
+        // (a stat by path followed by a read by path can be handed a different file in between).
+        let side = false;
+        let fd: number | null = null;
         try {
-          if (statSync(p).mtimeMs > cutoff) continue;
-          let scwd = "", isSide = false, sawUser = false;
-          for (const ln of readFileSync(p, "utf8").split("\n")) {
-            if (!ln) continue;
-            let o: any; try { o = JSON.parse(ln); } catch { continue; }
-            if (o.type === "session") scwd = o.cwd ?? "";
-            else if (o.type === "message" && o.message?.role === "user" && !sawUser) { sawUser = true; isSide = isAskLucidPrompt(firstUserText(o.message)); }
-            if (scwd && sawUser) break;
+          fd = openSync(p, "r");
+          if (fstatSync(fd).mtimeMs <= cutoff) {
+            let scwd = "", isSide = false, sawUser = false;
+            for (const ln of readFileSync(fd, "utf8").split("\n")) {
+              if (!ln) continue;
+              let o: any; try { o = JSON.parse(ln); } catch { continue; }
+              if (o.type === "session") scwd = o.cwd ?? "";
+              else if (o.type === "message" && o.message?.role === "user" && !sawUser) { sawUser = true; isSide = isAskLucidPrompt(firstUserText(o.message)); }
+              if (scwd && sawUser) break;
+            }
+            side = isSide && norm(scwd) === want;
           }
-          if (isSide && norm(scwd) === want) { rmSync(p, { force: true }); cleared++; }
         } catch { /* skip unreadable/locked file */ }
+        finally { if (fd !== null) { try { closeSync(fd); } catch { /* already closed */ } } }
+        if (side) { try { rmSync(p, { force: true }); cleared++; } catch { /* locked: the next sweep takes it */ } }
       }
     } catch { /* skip dir */ }
   }

@@ -230,7 +230,8 @@ describe("the collector and the layering, by their source", () => {
     expect(collector.split("normalizeScreen(").length - 1).toBe(1);
   });
   test("the dock and its pill sit above modals and below the boot cinematic, menus and tooltips", () => {
-    const z = (sel: string): number => Number(new RegExp(`\\n${sel.replace(/[.#]/g, "\\$&")}\\{[^}]*?z-index:(\\d+)`).exec(css)?.[1] ?? Number.NaN);
+    // Found by plain string search, so no selector is ever turned into a pattern.
+    const z = (sel: string): number => { const at = css.indexOf(`\n${sel}{`); const rule = at < 0 ? "" : css.slice(at, css.indexOf("}", at)); return Number(/z-index:(\d+)/.exec(rule)?.[1] ?? Number.NaN); };
     expect(z(".ald")).toBe(250);
     expect(z(".ald-pill")).toBe(250);
     expect(z(".ald")).toBeGreaterThan(z(".modal-ov"));

@@ -128,7 +128,8 @@ console.log("6) the collector");
 console.log("7) the dock is above every popup");
 {
   const css = src("renderer/styles.css");
-  const z = (sel: string): number => Number(new RegExp(`\\n${sel.replace(/[.#]/g, "\\$&")}\\{[^}]*?z-index:(\\d+)`).exec(css)?.[1] ?? Number.NaN);
+  // Found by plain string search, so no selector is ever turned into a pattern.
+  const z = (sel: string): number => { const at = css.indexOf(`\n${sel}{`); const rule = at < 0 ? "" : css.slice(at, css.indexOf("}", at)); return Number(/z-index:(\d+)/.exec(rule)?.[1] ?? Number.NaN); };
   const dock = z(".ald");
   const below = [".share-dock", ".orbit-view", ".fb", ".modal-ov"];
   const above = [".boot-cine", ".ctx-menu", "#tip"];
