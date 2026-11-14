@@ -2,6 +2,7 @@
 // caller, body and gate in the order the Python handler does, so the same request gets the same first refusal.
 
 use crate::meet::{self as m, run, Ctx, R, CAPTIONS_LIMIT_MAX};
+use crate::meet_hub::files;
 use crate::meet_json::{self as pj, obj, Obj};
 use serde_json::Value;
 use std::panic::AssertUnwindSafe;
@@ -95,6 +96,38 @@ fn get_route(path: &str) -> Option<Route> {
             c.relay.version(&c.q("session", ""), &who)
         },
         "/healthz" => |_: &mut Ctx| Ok(obj([("ok", Value::Bool(true))])),
+        // wave3:files
+        "/v1/files/get" => files_get,
+        "/v1/files/list" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.gate(&who, None, &c.q("peer", ""), &c.q("session", ""))?;
+            let q = |name: &str| Some(c.q(name, "")).filter(|v| !v.is_empty());
+            c.relay.hub.files_list(&who, &c.q("scope", ""), q("peer"), q("session"), q("with"), q("channel"), q("room"))
+        },
+        // wave3:meeting-tools
+        "/v1/polls/mine" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.gate(&who, None, &c.q("peer", ""), &c.q("session", ""))?;
+            let q = |name: &str| Some(c.q(name, "")).filter(|v| !v.is_empty());
+            c.relay.hub.tools_polls_mine(&who, &c.q("ids", ""), q("session"), q("peer"))
+        },
+        "/v1/board" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let peer = c.q("peer", "");
+            c.gate(&who, None, &peer, "")?;
+            c.relay.hub.tools_board_view(&peer, &who)
+        },
+        // wave3:guests
+        "/v1/lobby" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let peer = c.q("peer", "");
+            c.gate(&who, None, &peer, "")?;
+            c.relay.hub.guests_lobby_list(&peer, &who)
+        },
+        "/v1/lobby/wait" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.guests_lobby_wait(&c.q("wait", ""), &who, &c.q("room", ""))
+        },
         _ => return None,
     };
     Some(route)
@@ -234,6 +267,51 @@ fn post_route(path: &str) -> Option<Route> {
             let (who, b) = (c.who(false)?, c.body()?);
             c.relay.set_release(&pj::s(&b, "session"), &who, &b)
         },
+        // wave3:files
+        "/v1/files/start" => |c: &mut Ctx| {
+            let (who, b) = conversation_gate(c)?;
+            c.relay.hub.files_start(&who, &pj::s(&b, "scope"), b.get("name"), b.get("size"), b.get("type"), opt(&b, "peer"), opt(&b, "session"), opt(&b, "with"), opt(&b, "channel"))
+        },
+        "/v1/files/chunk" => files_chunk,
+        "/v1/files/finish" => |c: &mut Ctx| {
+            let (who, b) = conversation_gate(c)?;
+            c.relay.hub.files_finish(&who, b.get("upload"), b.get("sha256"), b.get("text"), b.get("reply_to"), b.get("thread"), opt(&b, "peer"), opt(&b, "session"))
+        },
+        "/v1/files/delete" => |c: &mut Ctx| {
+            let (who, b) = conversation_gate(c)?;
+            c.relay.hub.files_delete(&who, b.get("id"), opt(&b, "peer"), opt(&b, "session"))
+        },
+        // wave3:meeting-tools
+        "/v1/polls" => |c: &mut Ctx| {
+            let (who, b) = conversation_gate(c)?;
+            c.relay.hub.tools_poll_create(&who, &pj::s(&b, "scope"), b.get("question"), b.get("options"), b.get("multiple"), b.get("anonymous"), opt(&b, "session"), opt(&b, "peer"), opt(&b, "with"), opt(&b, "channel"))
+        },
+        "/v1/polls/vote" => |c: &mut Ctx| {
+            let (who, b) = conversation_gate(c)?;
+            c.relay.hub.tools_poll_vote(&who, &pj::s(&b, "scope"), b.get("id"), b.get("choices"), opt(&b, "session"), opt(&b, "peer"), opt(&b, "with"), opt(&b, "channel"))
+        },
+        "/v1/polls/close" => |c: &mut Ctx| {
+            let (who, b) = conversation_gate(c)?;
+            c.relay.hub.tools_poll_close(&who, &pj::s(&b, "scope"), b.get("id"), opt(&b, "session"), opt(&b, "peer"), opt(&b, "with"), opt(&b, "channel"))
+        },
+        "/v1/board" => |c: &mut Ctx| {
+            let (who, b, peer) = peer_gate(c)?;
+            c.relay.hub.tools_board(&peer, &who, b.get("op"), b.get("stroke"), b.get("ids"), b.get("locked"))
+        },
+        // wave3:large-calls
+        "/v1/sfu/token" => |c: &mut Ctx| {
+            let (who, _, peer) = peer_gate(c)?;
+            c.relay.hub.sfu_token(&peer, &who)
+        },
+        // wave3:guests
+        "/v1/guest/link" => |c: &mut Ctx| {
+            let (who, b) = conversation_gate(c)?;
+            c.relay.hub.guests_link(&who, b.get("room"), b.get("minutes"), opt(&b, "peer"), opt(&b, "session"))
+        },
+        "/v1/lobby/leave" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.guests_lobby_leave(b.get("wait"), &who, b.get("room"))
+        },
         _ => return None,
     };
     Some(route)
@@ -322,7 +400,7 @@ fn join(c: &mut Ctx) -> R<Obj> {
     c.gate(&who, Some(&given), "", "")?;
     let room = m::room_name(b.get("room"))?;
     let late = m::flag(b.get("late_history"), "late_history")?;
-    let mut joined = c.relay.hub.join(&room, &who, &c.address, late, b.get("client"))?;
+    let mut joined = c.relay.hub.join(&room, &who, &c.address, late, Some(&b))?;
     joined.insert("ice".into(), Value::Object(m::turn_credentials(&c.relay.settings, &c.relay.turn_secret, &who, &c.address)));
     Ok(joined)
 }
@@ -379,6 +457,86 @@ fn opt(b: &Obj, key: &str) -> Option<String> {
     Some(pj::s(b, key)).filter(|v| !v.is_empty())
 }
 
+/// The caller and body of a conversation route (`{session|peer, ...}`), through the gate.
+fn conversation_gate(c: &mut Ctx) -> R<(m::Identity, Obj)> {
+    let (who, b) = (c.who(false)?, c.body()?);
+    c.gate(&who, None, &pj::s(&b, "peer"), &pj::s(&b, "session"))?;
+    Ok((who, b))
+}
+
+// ── wave 3: files kept in conversations ──────────────────────────────────────────────────────────────────────
+
+/// urllib.parse.quote(text, safe=""): every byte of its UTF-8 but letters, digits and `_.-~` as %XX.
+fn quote(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for b in text.bytes() {
+        if b.is_ascii_alphanumeric() || b"_.-~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// `POST /v1/files/chunk?upload=&offset=` with the part's bytes as the body (at most FILES_PART) -> `{upload,
+/// received, expires}`. The relay's one raw-body route: its cap and the upload's checks come before a byte of the
+/// body is read (any refusal before that closes the connection).
+fn files_chunk(c: &mut Ctx) -> R<Obj> {
+    let who = c.who(false)?;
+    let no_length = || Err(m::E::Status(411, "send each part with its length (Content-Length)".into(), true));
+    if c.transfer_encoding.is_some() {
+        return no_length();
+    }
+    let length = match c.content_length.as_deref().map(m::py_int) {
+        Some(Ok(n)) if n >= 0 => n as usize,
+        _ => return no_length(),
+    };
+    if length > files::FILES_PART {
+        return Err(m::E::Status(413, "a part of a file is at most 1 MB".into(), true));
+    }
+    let part = c.relay.hub.files_chunk_begin(&who, &c.q("upload", ""), &c.q("offset", ""), length)?;
+    let data = match c.raw_body(length) {
+        Ok(d) => d,
+        Err(e) => {
+            c.relay.hub.files_chunk_abort(part);
+            return Err(e);
+        }
+    };
+    c.relay.hub.files_chunk_write(part, &data)
+}
+
+/// `GET /v1/files/get?session=|peer=&id=&offset=&length=`: the file's bytes (or that range of them), always as an
+/// attachment of type application/octet-stream, sent by the connection (meet::RawFile).
+fn files_get(c: &mut Ctx) -> R<Obj> {
+    let who = c.who(false)?;
+    let (peer, session) = (c.q("peer", ""), c.q("session", ""));
+    c.gate(&who, None, &peer, &session)?;
+    let some = |v: String| Some(v).filter(|v| !v.is_empty());
+    let (file, fh, offset, count) = c.relay.hub.files_open(&who, &c.q("id", ""), &c.q("offset", ""), &c.q("length", ""), some(peer), some(session))?;
+    let name = pj::text_of(&file, "name");
+    let plain: String = name.chars().map(|ch| if (' '..'\u{7f}').contains(&ch) && ch != '"' && ch != '\\' { ch } else { '_' }).collect();
+    let quoted = quote(&name);
+    let id = pj::text_of(&file, "id");
+    let field = |k: &str| file.get(k).map(pj::py_str).unwrap_or_default();
+    let headers = vec![
+        ("Content-Type", "application/octet-stream".to_string()),
+        ("Content-Length", count.to_string()),
+        ("Content-Disposition", format!("attachment; filename=\"{plain}\"; filename*=UTF-8''{quoted}")),
+        ("X-Content-Type-Options", "nosniff".to_string()),
+        ("Content-Security-Policy", "default-src 'none'; sandbox".to_string()),
+        ("Cache-Control", "no-store".to_string()),
+        ("X-File-Id", id.clone()),
+        ("X-File-Name", quoted),
+        ("X-File-Type", field("type")),
+        ("X-File-Size", field("size")),
+        ("X-File-Sha256", field("sha256")),
+        ("X-File-Offset", offset.to_string()),
+    ];
+    c.raw = Some(m::RawFile { headers, file: fh, offset, count, id, principal: who.principal });
+    Ok(Obj::new())
+}
+
 /// _chat_change: `{peer|session, scope: room|dm, with?, id, text}`: edit or delete a message.
 fn chat_change(c: &mut Ctx, delete: bool) -> R<Obj> {
     let (who, b) = (c.who(false)?, c.body()?);
@@ -395,6 +553,11 @@ fn typing(c: &mut Ctx) -> R<Obj> {
 
 fn stage(c: &mut Ctx) -> R<Obj> {
     let (who, b, peer) = peer_gate(c)?;
+    if let Some(Value::String(action)) = b.get("action") {
+        if ["breakout_", "control_", "lobby_"].iter().any(|p| action.starts_with(p)) {
+            return c.relay.hub.stage_ext(&peer, &who, action, &b);
+        }
+    }
     c.relay.hub.stage(&peer, &who, b.get("action"), b.get("target"), b.get("up"), b.get("emoji"))
 }
 

@@ -28,6 +28,7 @@ mod license;
 mod log;
 mod meet;
 mod meet_console;
+mod meet_guest_port;
 mod meet_hub;
 mod meet_json;
 mod meet_ops;

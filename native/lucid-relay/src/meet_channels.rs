@@ -9,7 +9,7 @@ pub(super) const CHANNEL_KINDS: [&str; 3] = ["public", "private", "group"];
 /// Characters of a channel topic.
 const CHANNEL_TOPIC_MAX: usize = 250;
 /// Messages kept per channel (and only for `channel_days`).
-const CHANNEL_KEEP: usize = 10000;
+pub(super) const CHANNEL_KEEP: usize = 10000;
 /// Messages one channel history request returns.
 const CHANNEL_LIMIT_MAX: i64 = 500;
 /// People in one public or private channel.
@@ -215,11 +215,11 @@ fn channel_event(why: &str, ch: &Obj, by: &str) -> Obj {
 }
 
 impl State {
-    fn channel(&self, cid: &str) -> Option<&Obj> {
+    pub(super) fn channel(&self, cid: &str) -> Option<&Obj> {
         as_obj(self.channels.get(cid))
     }
 
-    fn channel_mut(&mut self, cid: &str) -> &mut Obj {
+    pub(super) fn channel_mut(&mut self, cid: &str) -> &mut Obj {
         obj_mut(&mut self.channels, cid)
     }
 
@@ -255,7 +255,7 @@ impl State {
     }
 
     /// _channel_message: where the message `id` is in a channel.
-    fn channel_index(&self, cid: &str, id: &str) -> R<usize> {
+    pub(super) fn channel_index(&self, cid: &str, id: &str) -> R<usize> {
         self.channel_msgs.get(cid).and_then(|l| l.iter().position(|m| pj::text_of(m, "id") == id)).ok_or_else(|| E::NotFound("that message is no longer kept".into()))
     }
 
@@ -280,7 +280,7 @@ impl State {
 
     /// _last_ts: when the channel's latest kept message was sent (0 when none): a person added to a channel starts
     /// with everything before it read. Messages are kept in time order.
-    fn last_ts(&self, cid: &str) -> f64 {
+    pub(super) fn last_ts(&self, cid: &str) -> f64 {
         self.channel_msgs.get(cid).and_then(|l| l.last()).map(|m| pj::num(m, "ts")).unwrap_or(0.0)
     }
 

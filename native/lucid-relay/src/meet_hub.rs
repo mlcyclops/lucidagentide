@@ -25,6 +25,20 @@ use std::time::Duration;
 mod meetings;
 #[path = "meet_channels.rs"]
 mod channels;
+// Wave 3: each feature slice keeps its state and methods in its own child module (named with the slice's prefix,
+// e.g. `files_`, so no slice shadows another); persisted state lives under `ext[<slice>]` (state.json key `ext`).
+#[path = "meet_files.rs"]
+pub mod files;
+#[path = "meet_tools.rs"]
+mod tools;
+#[path = "meet_breakout.rs"]
+mod breakout;
+#[path = "meet_control.rs"]
+mod control;
+#[path = "meet_sfu.rs"]
+mod sfu;
+#[path = "meet_guests.rs"]
+pub mod guests;
 
 pub const PEER_TIMEOUT: f64 = 40.0;
 pub const SESSION_TIMEOUT: f64 = 40.0;
@@ -412,6 +426,20 @@ pub struct State {
     channel_read: Obj,
     /// relay.json `channel_days` in seconds: channel and group chat message retention.
     channel_s: f64,
+    /// Wave-3 feature slices: slice name -> its persisted state (state.json key `ext`).
+    ext: Obj,
+    /// In memory: unfinished file uploads and where kept files' bytes are.
+    files: files::Files,
+    /// In memory: room -> its whiteboard, until the room is empty.
+    boards: HashMap<String, tools::Board>,
+    /// In memory: main room -> its breakout plan.
+    breakouts: IndexMap<String, breakout::Plan>,
+    /// In memory: room -> its remote-control session, for the whole presentation.
+    control: HashMap<String, control::Session>,
+    /// The media server (large calls) and each stay's media mode.
+    sfu: sfu::Sfu,
+    /// In memory: the lobby, web guests and the guest port's rate limits.
+    guests: guests::Guests,
 }
 
 /// _empty_stage.
@@ -643,9 +671,14 @@ impl State {
         self.statuses.get(principal).filter(|s| s.is_object()).cloned().unwrap_or(Value::Null)
     }
 
-    /// _person: a room peer as join answers, join events and the stage name it ({peer, name, principal, org}).
+    /// _person: a room peer as join answers, join events and the stage name it ({peer, name, principal, org}, plus
+    /// `guest: true` for a web guest).
     fn person(&self, p: &Peer) -> Obj {
-        with(&p.public(), obj([("org", self.org(&p.who.principal))]))
+        let mut out = with(&p.public(), obj([("org", self.org(&p.who.principal))]));
+        if p.who.guest {
+            out.insert("guest".into(), Value::Bool(true));
+        }
+        out
     }
 
     fn person_of(&self, id: &str) -> Obj {
@@ -699,9 +732,22 @@ impl State {
         Value::Object(self.stages.get(room).cloned().unwrap_or_else(empty_stage))
     }
 
+    /// _stage_view_ext: `stage_view` plus the wave-3 parts, each added by its slice only while it is active in this
+    /// room.
+    fn stage_view_ext(&mut self, room: &str) -> Value {
+        let mut view = self.stage_view(room);
+        if let Value::Object(v) = &mut view {
+            self.breakout_stage_view(room, v);
+            self.control_stage_view(room, v);
+            self.guests_stage_view(room, v);
+            self.sfu_stage_view(room, v);
+        }
+        view
+    }
+
     /// _stage_event.
     fn stage_event(&mut self, room: &str, why: &str, by: &str, skip: Option<&str>) {
-        let event = obj([("type", Value::from("stage")), ("room", Value::from(room)), ("stage", self.stage_view(room)), ("why", Value::from(why)), ("by", Value::from(by))]);
+        let event = obj([("type", Value::from("stage")), ("room", Value::from(room)), ("stage", self.stage_view_ext(room)), ("why", Value::from(why)), ("by", Value::from(by))]);
         self.broadcast(room, &event, skip);
     }
 
@@ -806,7 +852,8 @@ impl State {
     }
 
     fn seen(&mut self, who: &Identity) {
-        if who.console {
+        // the console server and web guests are not people
+        if who.console || who.guest {
             return;
         }
         let now = pj::now();
@@ -867,7 +914,7 @@ impl State {
     }
 
     fn announce(&mut self, who: &Identity, before: &PState) {
-        if who.console {
+        if who.console || who.guest {
             return;
         }
         let after = self.pstate(&who.principal);
@@ -927,7 +974,7 @@ impl State {
     pub fn online(&self) -> IndexMap<String, Obj> {
         let mut out: IndexMap<String, Obj> = IndexMap::new();
         let mut add = |who: &Identity, since: f64, room: &str| {
-            if who.console {
+            if who.console || who.guest {
                 return;
             }
             match out.get_mut(&who.principal) {
@@ -1000,7 +1047,7 @@ impl State {
             let organizer = self.organizer_host(room, &id);
             let person = self.person_of(&id);
             let members: Vec<Value> = self.members(room).into_iter().filter(|m| m.get("peer").and_then(Value::as_str) != Some(id.as_str())).collect();
-            let stage = self.stage_view(room);
+            let stage = self.stage_view_ext(room);
             self.push_peer(&id, &obj([("type", Value::from("recording_admitted")), ("members", Value::Array(members)), ("stage", stage)]));
             self.broadcast(room, &with(&obj([("type", Value::from("join"))]), person.clone()), Some(&id));
             if organizer {
@@ -1075,6 +1122,7 @@ impl State {
         self.room_log(&peer.room, &mut line);
         obj_mut(&mut self.left, &peer.who.principal).insert(peer.room.clone(), f(now));
         self.stage_drop(&peer, why, !end_stay, by);
+        self.wave3_left(&peer, why);
         self.touch_device(&peer.who);
         if announce {
             self.announce(&peer.who, &before);
@@ -1093,6 +1141,7 @@ impl State {
         ));
         if end_stay && !self.peers.values().any(|p| p.room == peer.room) {
             self.stages.remove(&peer.room);
+            self.wave3_room_empty(&peer.room);
             if let Some(stay) = self.stays.remove(&peer.room) {
                 if stay.late_history {
                     log_info(&format!("options room={} late_history=off why=empty", peer.room));
@@ -1157,6 +1206,7 @@ impl State {
     }
 
     fn prune(&mut self, now: f64) {
+        self.wave3_prune(now);
         let (hist_cut, mail_cut, invite_cut) = (now - self.history_s, now - self.mail_s, now - INVITE_TTL);
         let keep = |lines: &mut Lines, cut: f64| {
             for v in lines.values_mut() {
@@ -1238,6 +1288,7 @@ impl State {
             ("channels", Value::Object(self.channels.clone())),
             ("channel_messages", lines_value(&self.channel_msgs)),
             ("channel_read", Value::Object(self.channel_read.clone())),
+            ("ext", Value::Object(self.ext.clone())),
         ]));
         pj::dumps(&v)
     }
@@ -1255,6 +1306,105 @@ impl State {
             count += 1;
         }
         count
+    }
+}
+
+// ── wave 3: the hooks every feature slice answers (callers hold the lock) ───────────────────────────────────
+
+impl State {
+    /// _wave3_left: a peer left its room (any reason).
+    fn wave3_left(&mut self, peer: &Peer, why: &str) {
+        self.files_left(peer);
+        self.control_left(peer, why);
+        self.sfu_left(peer, why);
+        self.guests_left(peer, why);
+    }
+
+    /// _wave3_room_empty: the last one left a room.
+    fn wave3_room_empty(&mut self, room: &str) {
+        self.tools_room_empty(room);
+        self.breakout_room_empty(room);
+        self.control_room_empty(room);
+        self.sfu_room_empty(room);
+        self.guests_room_empty(room);
+    }
+
+    /// _wave3_prune: the periodic prune (and the one at load), before the relay's own retention.
+    fn wave3_prune(&mut self, now: f64) {
+        self.files_prune(now);
+        self.tools_prune();
+        self.breakout_prune(now);
+        self.control_prune();
+        self.sfu_prune();
+        self.guests_sweep();
+    }
+
+    /// _wave3_each("may_join"): a slice may refuse a join (before any seat changes). `ext`: the join's body.
+    fn wave3_may_join(&mut self, room: &str, who: &Identity, ext: &Obj) -> R<()> {
+        self.breakout_may_join(room, who)?;
+        m::flag(ext.get("large"), "large")?; // _sfu_may_join: checked before anything changes
+        self.guests_may_join(room, who)
+    }
+
+    /// _wave3_each("stay_created"): the first join into an empty room started a stay.
+    fn wave3_stay_created(&mut self, room: &str, who: &Identity, ext: &Obj) {
+        self.sfu_stay_created(room, who, ext);
+    }
+
+    /// _wave3_cap: the room's people cap.
+    fn wave3_cap(&self, room: &str) -> usize {
+        self.sfu_cap(room)
+    }
+
+    /// _wave3_join_extra: what the slices add to (or replace in) a join answer.
+    fn wave3_join_extra(&mut self, room: &str, peer_id: &str) -> Obj {
+        let mut out = self.breakout_join_extra(room, peer_id);
+        for part in [self.sfu_join_extra(room, peer_id), self.guests_join_extra(room, peer_id)] {
+            for (k, v) in part {
+                out.insert(k, v);
+            }
+        }
+        out
+    }
+}
+
+impl Hub {
+    /// _wave3_configure: the slices' relay.json settings, once at start (Err: the setting the relay cannot use).
+    pub fn wave3_configure(&self, s: &m::Settings) -> Result<(), String> {
+        let mut st = self.st.lock();
+        st.files.configure(s.file_max_mb, s.files_quota_gb);
+        st.sfu_configure(s)?;
+        st.guests_configure(s)
+    }
+
+    /// _wave3_each("tick"), every reap: the media server's check against seats (on its own thread) and the guests'
+    /// expiry and liveness sweep.
+    pub fn wave3_tick(self: &Arc<Self>) {
+        let mut st = self.st.lock();
+        if let Some(sync) = st.sfu_tick(pj::now()) {
+            let hub = self.clone();
+            sfu::spawn("sfu-sync", move || hub.sfu_sync(sync));
+        }
+        if st.guests_on() {
+            st.guests_sweep();
+        }
+        drop(st);
+        self.wake();
+    }
+
+    /// stage_ext: `POST /v1/stage` actions of the wave-3 slices (`breakout_*`, `control_*`, `lobby_*`), each answered
+    /// by its slice.
+    pub fn stage_ext(&self, peer_id: &str, who: &Identity, action: &str, body: &Obj) -> R<Obj> {
+        if action.starts_with("breakout_") {
+            return self.breakout_stage(peer_id, who, action, body);
+        }
+        if action.starts_with("control_") {
+            return self.control_stage(peer_id, who, action, body);
+        }
+        if action.starts_with("lobby_") {
+            return self.guests_stage(peer_id, who, action, body);
+        }
+        bad(format!("action must be one of {}", STAGE_ACTIONS.join(", ")))
     }
 }
 
@@ -1449,6 +1599,13 @@ impl Hub {
             channel_msgs: Lines::new(),
             channel_read: Obj::new(),
             channel_s: channel_days * 86400.0,
+            ext: Obj::new(),
+            files: files::Files::new(state_dir.as_ref().map(|d| d.join("files"))),
+            boards: HashMap::new(),
+            breakouts: IndexMap::new(),
+            control: HashMap::new(),
+            sfu: sfu::Sfu::default(),
+            guests: guests::Guests::new(state_dir.clone()),
         };
         let hub = Hub { st: Mutex::new(st), cond: Condvar::new(), signer, links, state_dir, save_lock: Mutex::new(()), stop: AtomicBool::new(false) };
         if hub.state_dir.is_some() {
@@ -1555,6 +1712,8 @@ impl Hub {
                 Some((k, Value::Object(marks)))
             })
             .collect();
+        // each wave-3 slice validates its own part when it first reads it
+        st.ext = only_objects(raw.get("ext"));
         st.prune(pj::now());
         let (people, convs, rooms) = (st.directory.len(), st.dms.len(), st.rooms.len());
         drop(st);
@@ -1618,6 +1777,7 @@ impl Hub {
                     if pj::mono() - last_reap >= REAP_EVERY {
                         last_reap = pj::mono();
                         hub.reap();
+                        hub.wave3_tick();
                     }
                     if hub.st.lock().dirty {
                         hub.save();
@@ -1677,16 +1837,24 @@ impl Hub {
 
     // ── rooms ────────────────────────────────────────────────────────────────────────────────────────────────
 
-    pub fn join(&self, room: &str, who: &Identity, address: &str, late_history: bool, client: Body) -> R<Obj> {
+    /// join: `ext` is the join request's body (its `client`, and whatever a wave-3 slice reads from it).
+    pub fn join(&self, room: &str, who: &Identity, address: &str, late_history: bool, ext: Option<&Obj>) -> R<Obj> {
         if who.seed {
             return forbidden(m::FINISH_SETUP);
         }
-        let client = m::client(client);
+        let empty = Obj::new();
         let mut st = self.st.lock();
-        let r = self.join_locked(&mut st, room, who, address, late_history, &client);
+        let r = self.join_held(&mut st, room, who, address, late_history, ext.unwrap_or(&empty));
         drop(st);
         self.wake();
-        let (out, peer_id) = r?;
+        r
+    }
+
+    /// join with the lock held (an admitted web guest joins from inside its wait): the seat, then what the wave-3
+    /// slices add to the answer.
+    fn join_held(&self, st: &mut State, room: &str, who: &Identity, address: &str, late_history: bool, ext: &Obj) -> R<Obj> {
+        let client = m::client(ext.get("client"));
+        let (mut out, peer_id) = self.join_locked(st, room, who, address, late_history, &client, ext)?;
         log_info(&format!(
             "join room={room} principal={} peer={peer_id} device={} device_label={} app={} version={} platform={}",
             who.principal,
@@ -1696,14 +1864,20 @@ impl Hub {
             kv_of(client.get("version")),
             kv_of(client.get("platform"))
         ));
+        for (k, v) in st.wave3_join_extra(room, &peer_id) {
+            out.insert(k, v);
+        }
         Ok(out)
     }
 
-    fn join_locked(&self, st: &mut State, room: &str, who: &Identity, address: &str, late_history: bool, client: &Obj) -> R<(Obj, String)> {
+    #[allow(clippy::too_many_arguments)]
+    fn join_locked(&self, st: &mut State, room: &str, who: &Identity, address: &str, late_history: bool, client: &Obj, ext: &Obj) -> R<(Obj, String)> {
         st.check_copy(who, address)?;
+        st.wave3_may_join(room, who, ext)?;
         let mine: Vec<String> = st.peers.values().filter(|p| p.who.principal == who.principal && p.room == room).map(|p| p.peer_id.clone()).collect();
-        if st.peers.values().filter(|p| p.room == room && p.who.principal != who.principal).count() >= PEER_MAX_PER_ROOM {
-            return forbidden(format!("room {room} is full ({PEER_MAX_PER_ROOM} people)"));
+        let cap = st.wave3_cap(room);
+        if st.peers.values().filter(|p| p.room == room && p.who.principal != who.principal).count() >= cap {
+            return forbidden(format!("room {room} is full ({cap} people)"));
         }
         let before = st.pstate(&who.principal);
         // a seat taken over (rejoin, another device) keeps the host role it held
@@ -1771,6 +1945,7 @@ impl Hub {
         let creates = !st.stays.contains_key(room);
         if creates {
             st.stays.insert(room.to_string(), Stay { start: now, seen: IndexMap::new(), late_history });
+            st.wave3_stay_created(room, who, ext);
             if late_history {
                 log_info(&format!("options room={room} principal={} late_history=on why=created", who.principal));
             }
@@ -1800,7 +1975,7 @@ impl Hub {
                 st.stage_event(room, "join", &who.principal, Some(&peer_id));
             }
         }
-        let stage_view = st.stage_view(room);
+        let stage_view = st.stage_view_ext(room);
         let log = st.rooms.get(room).cloned().unwrap_or_default();
         let chats: Vec<&Obj> = log.iter().filter(|l| pj::text_of(l, "kind") == "chat").collect();
         let history: Vec<Value> = chats[chats.len().saturating_sub(CHAT_KEEP)..].iter().map(|l| Value::Object((*l).clone())).collect();
@@ -2387,6 +2562,9 @@ impl Hub {
                         return forbidden(NOT_HOST);
                     }
                     let target = other.clone().expect("a target");
+                    if st.peers[target.as_str()].who.guest {
+                        return forbidden("a guest cannot be a host");
+                    }
                     changed = st.stage_host(&room).as_deref() != Some(target.as_str());
                     st.stage_mut(&room).insert("host".into(), Value::from(target));
                 }
@@ -2433,7 +2611,7 @@ impl Hub {
             if changed {
                 st.stage_event(&room, &action, &who.principal, None);
             }
-            out.insert("stage".into(), st.stage_view(&room));
+            out.insert("stage".into(), st.stage_view_ext(&room));
             Ok((out, room, other_principal))
         })();
         drop(st);
@@ -4167,7 +4345,7 @@ mod tests {
 
     #[test]
     fn state_json_round_trips_in_python_text() {
-        let text = "{\"v\": 2, \"directory\": {\"ann@x\": {\"name\": \"Ann\", \"last_seen\": 1.5}}, \"dms\": {}, \"read\": {}, \"invites\": {}, \"rooms\": {}, \"left\": {}, \"renewals\": {}, \"renewed\": {}, \"enrollments\": {}, \"consumed_seeds\": {}, \"seed_requests\": {}, \"seeded\": {}, \"denied\": {}, \"organizations\": {\"ben@x\": null, \"cy@x\": {\"id\": \"o\", \"label\": \"O\"}}, \"status\": {\"ann@x\": {\"state\": \"busy\", \"text\": \"\"}}, \"receipts\": {\"ann@x\": {\"ben@x\": 2.5}}, \"meetings\": {\"m-abcdefgh23\": {\"id\": \"m-abcdefgh23\", \"room\": \"m-abcdefgh23\", \"title\": \"Weekly\", \"description\": \"\", \"start\": 1700000000.0, \"end\": 1700001800.0, \"recurrence\": \"weekly\", \"tz\": \"Europe/Paris\", \"organizer\": {\"principal\": \"ann@x\", \"name\": \"Ann\"}, \"attendees\": [{\"principal\": \"ben@x\", \"name\": \"Ben\", \"response\": \"none\"}], \"created\": 1.5, \"updated\": 1.5, \"canceled\": null}}, \"channels\": {\"c-01\": {\"id\": \"c-01\", \"kind\": \"public\", \"name\": \"general\", \"topic\": \"\", \"created_by\": \"ann@x\", \"members\": [\"ann@x\"], \"created\": 1.5, \"archived\": null, \"last\": 1.5}}, \"channel_messages\": {\"c-01\": [{\"id\": \"m1\", \"channel\": \"c-01\", \"from\": \"ann@x\", \"from_name\": \"Ann\", \"from_org\": null, \"text\": \"hi\", \"ts\": 1.5, \"reactions\": {}}]}, \"channel_read\": {\"ann@x\": {\"c-01\": 1.5}}}";
+        let text = "{\"v\": 2, \"directory\": {\"ann@x\": {\"name\": \"Ann\", \"last_seen\": 1.5}}, \"dms\": {}, \"read\": {}, \"invites\": {}, \"rooms\": {}, \"left\": {}, \"renewals\": {}, \"renewed\": {}, \"enrollments\": {}, \"consumed_seeds\": {}, \"seed_requests\": {}, \"seeded\": {}, \"denied\": {}, \"organizations\": {\"ben@x\": null, \"cy@x\": {\"id\": \"o\", \"label\": \"O\"}}, \"status\": {\"ann@x\": {\"state\": \"busy\", \"text\": \"\"}}, \"receipts\": {\"ann@x\": {\"ben@x\": 2.5}}, \"meetings\": {\"m-abcdefgh23\": {\"id\": \"m-abcdefgh23\", \"room\": \"m-abcdefgh23\", \"title\": \"Weekly\", \"description\": \"\", \"start\": 1700000000.0, \"end\": 1700001800.0, \"recurrence\": \"weekly\", \"tz\": \"Europe/Paris\", \"organizer\": {\"principal\": \"ann@x\", \"name\": \"Ann\"}, \"attendees\": [{\"principal\": \"ben@x\", \"name\": \"Ben\", \"response\": \"none\"}], \"created\": 1.5, \"updated\": 1.5, \"canceled\": null}}, \"channels\": {\"c-01\": {\"id\": \"c-01\", \"kind\": \"public\", \"name\": \"general\", \"topic\": \"\", \"created_by\": \"ann@x\", \"members\": [\"ann@x\"], \"created\": 1.5, \"archived\": null, \"last\": 1.5}}, \"channel_messages\": {\"c-01\": [{\"id\": \"m1\", \"channel\": \"c-01\", \"from\": \"ann@x\", \"from_name\": \"Ann\", \"from_org\": null, \"text\": \"hi\", \"ts\": 1.5, \"reactions\": {}}]}, \"channel_read\": {\"ann@x\": {\"c-01\": 1.5}}, \"ext\": {\"files\": {\"v\": 1, \"files\": {}}, \"guests\": {\"revoked\": {}, \"blocked\": {}}}}";
         let dir = std::env::temp_dir().join(format!("meet-state-{}", pj::token_hex(4)));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("state.json"), text).unwrap();

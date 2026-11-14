@@ -18,7 +18,7 @@ use parking_lot::{Mutex, RwLock};
 use rustls::ServerConfig;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -151,6 +151,12 @@ pub enum E {
     Bad(String),
     /// UpdateRequired: 426 with its info.
     Update(Obj),
+    /// A refusal with a status of its own (_FilesRefused: 411, 413, 507); `close`: the request body was left unread.
+    Status(u16, String, bool),
+    /// A PermissionError with `info` (_GuestsWait: a join the lobby holds): 403 with the info merged in.
+    Held(String, Obj),
+    /// _GuestsBusy: 429 on the guest port, with Retry-After seconds.
+    Busy(String, u64),
     /// The client went away while its body was read: nobody to answer.
     ClientGone,
     /// Anything else: 500 (logged).
@@ -160,7 +166,7 @@ pub enum E {
 impl E {
     pub fn message(&self) -> String {
         match self {
-            E::Forbidden(m) | E::Conflict(m) | E::NotFound(m) | E::Unavailable(m) | E::Gone(m) | E::Bad(m) | E::Internal(m) => m.clone(),
+            E::Forbidden(m) | E::Conflict(m) | E::NotFound(m) | E::Unavailable(m) | E::Gone(m) | E::Bad(m) | E::Internal(m) | E::Status(_, m, _) | E::Held(m, _) | E::Busy(m, _) => m.clone(),
             E::Update(info) => update_message(info),
             E::ClientGone => String::new(),
         }
@@ -213,11 +219,30 @@ pub struct Settings {
     /// A relay address or email domain never establishes organization ownership. Admins change it at runtime
     /// (/v1/admin/organizations, kept in state.json over this).
     pub organizations: Obj,
+    /// Wave 3, files kept in conversations: the largest file (MB) and every kept file together (GB) in
+    /// state_dir/files.
+    pub file_max_mb: i64,
+    pub files_quota_gb: f64,
+    /// Wave 3, lobby and guests: a second HTTPS port WITHOUT client certificates serving only the guest page (/g/)
+    /// and the guest API (/g/v1/*); 0 = off (checked at start, as relay.json holds it). `guest_public` is the https
+    /// origin guests open; guest_cert/guest_key a publicly trusted certificate for it ("" = the relay's own).
+    pub guest_port: Value,
+    pub guest_public: String,
+    pub guest_cert: String,
+    pub guest_key: String,
+    /// Wave 3, large calls: the LiveKit media server ("" = none), its API key, the file holding its API secret, the
+    /// size from which a scheduled meeting or conversation call uses it, and its cap (checked at start).
+    pub sfu_url: String,
+    pub sfu_api_key: String,
+    pub sfu_secret_file: String,
+    pub sfu_threshold: Value,
+    pub sfu_max: Value,
 }
 
-const SETTINGS_FIELDS: [&str; 28] = [
+const SETTINGS_FIELDS: [&str; 39] = [
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "channel_days", "signer_url", "signer_cert",
-    "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations",
+    "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations", "file_max_mb", "files_quota_gb", "guest_port",
+    "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max",
 ];
 
 /// ORG_FIELD_MAX: characters of an organization id or label.
@@ -266,6 +291,17 @@ impl Default for Settings {
             version_exempt: VERSION_EXEMPT.iter().map(|s| s.to_string()).collect(),
             recording_enabled: true,
             organizations: Obj::new(),
+            file_max_mb: 100,
+            files_quota_gb: 20.0,
+            guest_port: Value::from(0),
+            guest_public: String::new(),
+            guest_cert: String::new(),
+            guest_key: String::new(),
+            sfu_url: String::new(),
+            sfu_api_key: String::new(),
+            sfu_secret_file: String::new(),
+            sfu_threshold: Value::from(9),
+            sfu_max: Value::from(100),
         }
     }
 }
@@ -385,6 +421,30 @@ impl Settings {
             Some(_) => return Err("relay settings: version_exempt must be a list of email addresses".into()),
         }
         recording_settings(raw, &mut s)?;
+        text("guest_public", &mut s.guest_public)?;
+        text("guest_cert", &mut s.guest_cert)?;
+        text("guest_key", &mut s.guest_key)?;
+        text("sfu_url", &mut s.sfu_url)?;
+        text("sfu_api_key", &mut s.sfu_api_key)?;
+        text("sfu_secret_file", &mut s.sfu_secret_file)?;
+        for (k, slot) in [("guest_port", &mut s.guest_port), ("sfu_threshold", &mut s.sfu_threshold), ("sfu_max", &mut s.sfu_max)] {
+            if let Some(v) = raw.get(k) {
+                *slot = v.clone();
+            }
+        }
+        // _files_configure
+        if let Some(v) = raw.get("file_max_mb") {
+            match pj::as_int(Some(v)) {
+                Some(mb) if (1..=4096).contains(&mb) => s.file_max_mb = mb,
+                _ => return Err("relay settings: file_max_mb must be a whole number of megabytes from 1 to 4096".into()),
+            }
+        }
+        if let Some(v) = raw.get("files_quota_gb") {
+            match pj::as_num(Some(v)) {
+                Some(gb) if gb > 0.0 => s.files_quota_gb = gb,
+                _ => return Err("relay settings: files_quota_gb must be a number of gigabytes".into()),
+            }
+        }
         Ok(s)
     }
 }
@@ -402,7 +462,12 @@ pub struct Identity {
     pub seed_token: String,
     pub console: bool,
     pub cert_pem: String,
+    /// A web guest (wave 3): `guest-<16 hex>@guest.invalid`, never in the directory or presence.
+    pub guest: bool,
 }
+
+/// Web guests' principals: `guest-<16 hex>@guest.invalid` only.
+pub const GUEST_DOMAIN: &str = "@guest.invalid";
 
 impl Identity {
     /// A device id of its own (not legacy, not in-process): one session and one seat.
@@ -430,6 +495,10 @@ pub fn identity_from_cert(der: Option<&[u8]>) -> R<Identity> {
     let emails = &cert.names.emails;
     if cn.is_empty() || emails.is_empty() {
         return forbidden("the client certificate has no name or no email");
+    }
+    if emails[0].trim().to_lowercase().ends_with(GUEST_DOMAIN) {
+        // web guests own this domain (wave 3): a certificate may never pose as one
+        return forbidden("addresses ending @guest.invalid belong to web guests");
     }
     let uris = &cert.names.uris;
     let mut who = Identity {
@@ -859,6 +928,7 @@ fn serve(settings: Settings) -> ! {
         st.recording_enabled = settings.recording_enabled;
         st.organizations = settings.organizations.clone();
     }
+    hub.wave3_configure(&settings).unwrap_or_else(|e| die(&e));
     let tls = tls_config(&settings).unwrap_or_else(|e| die(&e));
     let listener = TcpListener::bind((settings.host.as_str(), settings.port)).unwrap_or_else(|e| die(&format!("cannot listen on {}:{}: {e}", settings.host, settings.port)));
     let console = Console::new(&settings, links).unwrap_or_else(|e| die(&e));
@@ -891,6 +961,7 @@ fn serve(settings: Settings) -> ! {
         let _ = LINK_REPORTS.set(Mutex::new(dir.join(LINK_REPORTS_FILE)));
     }
     hub.start();
+    crate::meet_guest_port::start(&settings, hub.clone(), relay.turn_secret.clone()).unwrap_or_else(|e| die(&e));
     relay.start_upkeep();
     log_info(&format!(
         "listening on {}:{} (certificate server: {})",
@@ -936,18 +1007,23 @@ async fn stop_signal() {
 
 // ── HTTP/1.1 over the mutual-TLS connection ──────────────────────────────────────────────────────────────────
 
-type Tls = rustls::StreamOwned<rustls::ServerConnection, TcpStream>;
+pub(crate) type Tls = rustls::StreamOwned<rustls::ServerConnection, TcpStream>;
 
-fn quiet_end(e: &std::io::Error) -> bool {
+/// A client address as the handlers name it (an IPv4-mapped IPv6 address as `::ffff:a.b.c.d`).
+pub(crate) fn address_of(peer: &SocketAddr) -> String {
+    match peer.ip() {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(|v4| format!("::ffff:{v4}")).unwrap_or_else(|| v6.to_string()),
+        v4 => v4.to_string(),
+    }
+}
+
+pub(crate) fn quiet_end(e: &std::io::Error) -> bool {
     use std::io::ErrorKind::*;
     matches!(e.kind(), UnexpectedEof | TimedOut | WouldBlock)
 }
 
 fn serve_conn(relay: Arc<Relay>, mut tcp: TcpStream, peer: SocketAddr) {
-    let address = match peer.ip() {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(|v4| format!("::ffff:{v4}")).unwrap_or_else(|| v6.to_string()),
-        v4 => v4.to_string(),
-    };
+    let address = address_of(&peer);
     let idle = Duration::from_secs_f64(IDLE_TIMEOUT);
     let _ = tcp.set_read_timeout(Some(idle));
     let _ = tcp.set_write_timeout(Some(idle));
@@ -978,26 +1054,32 @@ fn serve_conn(relay: Arc<Relay>, mut tcp: TcpStream, peer: SocketAddr) {
     let _ = tls.flush();
 }
 
-fn reason_phrase(status: u16) -> &'static str {
+pub(crate) fn reason_phrase(status: u16) -> &'static str {
     match status {
         200 => "OK",
+        301 => "Moved Permanently",
         400 => "Bad Request",
         403 => "Forbidden",
         404 => "Not Found",
+        405 => "Method Not Allowed",
         409 => "Conflict",
         410 => "Gone",
+        411 => "Length Required",
+        413 => "Request Entity Too Large",
         414 => "Request-URI Too Long",
         426 => "Upgrade Required",
+        429 => "Too Many Requests",
         431 => "Request Header Fields Too Large",
         500 => "Internal Server Error",
         501 => "Not Implemented",
         505 => "HTTP Version Not Supported",
+        507 => "Insufficient Storage",
         _ => "",
     }
 }
 
 /// email.utils.formatdate(usegmt=True).
-fn http_date() -> String {
+pub(crate) fn http_date() -> String {
     let secs = pj::now().floor() as i64;
     let days = secs.div_euclid(86_400);
     let (y, m, d) = pj::civil(days);
@@ -1021,7 +1103,7 @@ fn write_response(w: &mut impl Write, status: u16, content_type: &str, body: &[u
 }
 
 /// BaseHTTPRequestHandler.send_error's answer (HTML), the connection closing after it.
-fn send_error(w: &mut impl Write, status: u16, message: &str) -> std::io::Result<()> {
+pub(crate) fn send_error(w: &mut impl Write, status: u16, message: &str) -> std::io::Result<()> {
     let body = format!(
         "<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: {status}</p>\n        <p>Message: {message}.</p>\n    </body>\n</html>\n"
     );
@@ -1036,7 +1118,7 @@ fn send_error(w: &mut impl Write, status: u16, message: &str) -> std::io::Result
     w.flush()
 }
 
-fn read_line_limited(r: &mut impl BufRead, limit: usize) -> std::io::Result<(Vec<u8>, bool)> {
+pub(crate) fn read_line_limited(r: &mut impl BufRead, limit: usize) -> std::io::Result<(Vec<u8>, bool)> {
     let mut out = Vec::new();
     loop {
         let buf = r.fill_buf()?;
@@ -1078,7 +1160,7 @@ fn unquote_plus(s: &str) -> String {
 }
 
 /// parse_qs: blank values dropped; the first value of a name wins when read.
-fn parse_query(q: &str) -> Vec<(String, String)> {
+pub(crate) fn parse_query(q: &str) -> Vec<(String, String)> {
     q.split('&')
         .filter_map(|field| {
             let (k, v) = field.split_once('=')?;
@@ -1088,113 +1170,66 @@ fn parse_query(q: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The head of one request as BaseHTTPRequestHandler reads it: its line, method, target, headers (names lower case)
+/// and whether the connection closes after it.
+pub(crate) struct Head {
+    pub requestline: String,
+    pub method: String,
+    pub target: String,
+    pub close: bool,
+    pub headers: Vec<(String, String)>,
+}
+
+impl Head {
+    pub fn header(&self, name: &str) -> Option<String> {
+        self.headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+    }
+
+    /// The path and the query (without a fragment).
+    pub fn path_query(&self) -> (String, String) {
+        match self.target.split_once('?') {
+            Some((p, q)) => (p.to_string(), q.split('#').next().unwrap_or_default().to_string()),
+            None => (self.target.split('#').next().unwrap_or_default().to_string(), String::new()),
+        }
+    }
+}
+
 /// One request and its answer; Ok(false) when the connection closes after it.
 fn one_request(relay: &Arc<Relay>, reader: &mut BufReader<Tls>, address: &str, der: Option<&[u8]>) -> std::io::Result<bool> {
-    let (raw, long) = read_line_limited(reader, 65536)?;
-    if long {
-        send_error(reader.get_mut(), 414, "Request-URI Too Long")?;
+    let Some(head) = read_head(reader)? else { return Ok(false) };
+    if head.method != "GET" && head.method != "POST" {
+        send_error(reader.get_mut(), 501, &format!("Unsupported method ({:?})", head.method))?;
         return Ok(false);
     }
-    if raw.is_empty() {
-        return Ok(false);
-    }
-    let requestline: String = raw.iter().map(|&c| c as char).collect::<String>().trim_end_matches(['\r', '\n']).to_string();
-    let words: Vec<&str> = requestline.split_whitespace().collect();
-    if words.is_empty() {
-        return Ok(false);
-    }
-    let mut close = true;
-    let mut version = "HTTP/0.9";
-    if words.len() >= 3 {
-        version = words[words.len() - 1];
-        let ok = version.strip_prefix("HTTP/").and_then(|v| v.split_once('.')).map(|(a, b)| (a.parse::<u32>(), b.parse::<u32>()));
-        match ok {
-            Some((Ok(major), Ok(minor))) => {
-                if major >= 2 {
-                    send_error(reader.get_mut(), 505, &format!("Invalid HTTP version ({major}.{minor})"))?;
-                    return Ok(false);
-                }
-                if (major, minor) >= (1, 1) {
-                    close = false;
-                }
-            }
-            _ => {
-                send_error(reader.get_mut(), 400, &format!("Bad request version ({version:?})"))?;
-                return Ok(false);
-            }
-        }
-    }
-    if words.len() != 3 {
-        send_error(reader.get_mut(), 400, &format!("Bad request syntax ({requestline:?})"))?;
-        return Ok(false);
-    }
-    let (method, mut target) = (words[0].to_string(), words[1].to_string());
-    if target.starts_with("//") {
-        target = format!("/{}", target.trim_start_matches('/'));
-    }
-    let mut headers: Vec<(String, String)> = Vec::new();
-    loop {
-        let (line, long) = read_line_limited(reader, 65536)?;
-        if long {
-            send_error(reader.get_mut(), 431, "Line too long")?;
-            return Ok(false);
-        }
-        if line.is_empty() {
-            break;
-        }
-        let text = String::from_utf8_lossy(&line).trim_end_matches(['\r', '\n']).to_string();
-        if text.is_empty() {
-            break;
-        }
-        if headers.len() >= 100 {
-            send_error(reader.get_mut(), 431, "Too many headers")?;
-            return Ok(false);
-        }
-        if let Some((k, v)) = text.split_once(':') {
-            headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
-        }
-    }
-    let header = |name: &str| headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone());
-    match header("connection").map(|v| v.to_ascii_lowercase()) {
-        Some(c) if c == "close" => close = true,
-        Some(c) if c == "keep-alive" && version >= "HTTP/1.1" => close = false,
-        _ => {}
-    }
-    if method != "GET" && method != "POST" {
-        send_error(reader.get_mut(), 501, &format!("Unsupported method ({method:?})"))?;
-        return Ok(false);
-    }
-    let (path, query) = match target.split_once('?') {
-        Some((p, q)) => (p.to_string(), q.split('#').next().unwrap_or_default().to_string()),
-        None => (target.split('#').next().unwrap_or_default().to_string(), String::new()),
-    };
+    let (path, query) = head.path_query();
     let mut ctx = Ctx {
         relay,
         address: address.to_string(),
         der,
         path: path.clone(),
         query: parse_query(&query),
-        content_length: header("content-length"),
+        content_length: head.header("content-length"),
+        transfer_encoding: head.header("transfer-encoding").filter(|v| !v.is_empty()),
         reader: &mut *reader,
         body_read: false,
         close: false,
+        raw: None,
     };
-    let answer = crate::meet_routes::dispatch(&mut ctx, &method);
-    let body_read = ctx.body_read;
-    let mut close = close || ctx.close;
-    let unread = ctx.content_length.as_deref().and_then(|l| l.trim().parse::<u64>().ok()).filter(|n| *n > 0 && !body_read);
-    if let Some(n) = unread {
-        // The body was never read (a refusal before it): read it away (up to 1 MiB) so closing does not reset the
-        // connection under the answer, then close.
-        close = true;
-        if n <= 1 << 20 {
-            let _ = std::io::copy(&mut (&mut *reader).take(n), &mut std::io::sink());
-        }
-    }
+    let answer = crate::meet_routes::dispatch(&mut ctx, &head.method);
+    let raw = ctx.raw.take();
+    let (body_read, closing) = (ctx.body_read, ctx.close);
+    let close = drain_unread(reader, &head, body_read) || head.close || closing;
+    let requestline = &head.requestline;
     let (status, payload) = match answer {
         Some(a) => a,
         None => return Ok(false),
     };
+    if let Some(raw) = raw {
+        // the route answered itself (raw bytes)
+        let keep = send_file(reader.get_mut(), raw, &path, der);
+        log_debug(&format!("{address} \"{requestline}\" {status} -"));
+        return Ok(keep && !close);
+    }
     let body = pj::dumps(&Value::Object(payload));
     if let Err(e) = write_response(reader.get_mut(), status, "application/json", body.as_bytes(), "") {
         if is_client_gone(&e) {
@@ -1207,7 +1242,95 @@ fn one_request(relay: &Arc<Relay>, reader: &mut BufReader<Tls>, address: &str, d
     Ok(!close)
 }
 
-fn is_client_gone(e: &std::io::Error) -> bool {
+/// A body never read (a refusal before it) is read away (up to 1 MiB) so closing does not reset the connection under
+/// the answer; true when there was one (the connection then closes after the answer).
+pub(crate) fn drain_unread(reader: &mut BufReader<Tls>, head: &Head, body_read: bool) -> bool {
+    let length = head.header("content-length").and_then(|l| l.trim().parse::<u64>().ok()).filter(|n| *n > 0);
+    let Some(n) = length.filter(|_| !body_read) else { return false };
+    if n <= 1 << 20 {
+        let _ = std::io::copy(&mut (&mut *reader).take(n), &mut std::io::sink());
+    }
+    true
+}
+
+/// read_head: a request's line and headers; None when the connection ends now (nothing came, or the error answer was
+/// sent).
+pub(crate) fn read_head(reader: &mut BufReader<Tls>) -> std::io::Result<Option<Head>> {
+    let (raw, long) = read_line_limited(reader, 65536)?;
+    if long {
+        send_error(reader.get_mut(), 414, "Request-URI Too Long")?;
+        return Ok(None);
+    }
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let requestline: String = raw.iter().map(|&c| c as char).collect::<String>().trim_end_matches(['\r', '\n']).to_string();
+    let words: Vec<&str> = requestline.split_whitespace().collect();
+    if words.is_empty() {
+        return Ok(None);
+    }
+    let mut close = true;
+    let mut version = "HTTP/0.9";
+    if words.len() >= 3 {
+        version = words[words.len() - 1];
+        let ok = version.strip_prefix("HTTP/").and_then(|v| v.split_once('.')).map(|(a, b)| (a.parse::<u32>(), b.parse::<u32>()));
+        match ok {
+            Some((Ok(major), Ok(minor))) => {
+                if major >= 2 {
+                    send_error(reader.get_mut(), 505, &format!("Invalid HTTP version ({major}.{minor})"))?;
+                    return Ok(None);
+                }
+                if (major, minor) >= (1, 1) {
+                    close = false;
+                }
+            }
+            _ => {
+                send_error(reader.get_mut(), 400, &format!("Bad request version ({version:?})"))?;
+                return Ok(None);
+            }
+        }
+    }
+    if words.len() != 3 {
+        send_error(reader.get_mut(), 400, &format!("Bad request syntax ({requestline:?})"))?;
+        return Ok(None);
+    }
+    let (method, mut target) = (words[0].to_string(), words[1].to_string());
+    if target.starts_with("//") {
+        target = format!("/{}", target.trim_start_matches('/'));
+    }
+    let mut headers: Vec<(String, String)> = Vec::new();
+    loop {
+        let (line, long) = read_line_limited(reader, 65536)?;
+        if long {
+            send_error(reader.get_mut(), 431, "Line too long")?;
+            return Ok(None);
+        }
+        if line.is_empty() {
+            break;
+        }
+        let text = String::from_utf8_lossy(&line).trim_end_matches(['\r', '\n']).to_string();
+        if text.is_empty() {
+            break;
+        }
+        if headers.len() >= 100 {
+            send_error(reader.get_mut(), 431, "Too many headers")?;
+            return Ok(None);
+        }
+        if let Some((k, v)) = text.split_once(':') {
+            headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
+        }
+    }
+    let keep_alive_ok = version >= "HTTP/1.1";
+    let mut head = Head { requestline: requestline.clone(), method, target, close, headers };
+    match head.header("connection").map(|v| v.to_ascii_lowercase()) {
+        Some(c) if c == "close" => head.close = true,
+        Some(c) if c == "keep-alive" && keep_alive_ok => head.close = false,
+        _ => {}
+    }
+    Ok(Some(head))
+}
+
+pub(crate) fn is_client_gone(e: &std::io::Error) -> bool {
     use std::io::ErrorKind::*;
     matches!(e.kind(), BrokenPipe | ConnectionReset | ConnectionAborted | UnexpectedEof | TimedOut | WouldBlock)
 }
@@ -1218,6 +1341,63 @@ pub fn gone(path: &str, der: Option<&[u8]>) {
     log_info(&format!("client gone path={path} principal={principal}"));
 }
 
+/// Bytes `GET /v1/files/get` writes to the socket at a time (FILES_SEND).
+const FILE_SEND: usize = 64 * 1024;
+
+/// The answer of a route that sends raw bytes itself (Handler._run with a route returning None): its headers after
+/// the status line, Server and Date, and the part of an open file it sends.
+pub struct RawFile {
+    pub headers: Vec<(&'static str, String)>,
+    pub file: std::fs::File,
+    pub offset: u64,
+    pub count: u64,
+    /// For the log lines: the file's id and who fetched it.
+    pub id: String,
+    pub principal: String,
+}
+
+/// Send a raw answer, FILE_SEND bytes at a time; false when the connection ends after it (a file shorter than
+/// promised, or a failure once the answer has begun: no JSON error can follow).
+fn send_file(w: &mut Tls, mut raw: RawFile, path: &str, der: Option<&[u8]>) -> bool {
+    let mut head = format!("HTTP/1.1 200 {}\r\nServer: {SERVER_VERSION} \r\nDate: {}\r\n", reason_phrase(200), http_date());
+    for (k, v) in &raw.headers {
+        head.push_str(&format!("{k}: {v}\r\n"));
+    }
+    head.push_str("\r\n");
+    let mut whole = true;
+    let sent = (|| -> std::io::Result<()> {
+        w.write_all(head.as_bytes())?;
+        raw.file.seek(SeekFrom::Start(raw.offset))?;
+        let mut buf = vec![0u8; FILE_SEND.min(raw.count as usize)];
+        let mut left = raw.count;
+        while left > 0 {
+            let want = buf.len().min(left as usize);
+            let n = raw.file.read(&mut buf[..want])?;
+            if n == 0 {
+                whole = false; // shorter than promised: end it
+                break;
+            }
+            w.write_all(&buf[..n])?;
+            left -= n as u64;
+        }
+        w.flush()
+    })();
+    match sent {
+        Ok(()) => {
+            log_info(&format!("files_get id={} principal={} offset={} bytes={}", raw.id, raw.principal, raw.offset, raw.count));
+            whole
+        }
+        Err(e) if is_client_gone(&e) => {
+            gone(path, der);
+            false
+        }
+        Err(e) => {
+            log_warn(&format!("files_get id={} failed: {e}", raw.id));
+            false
+        }
+    }
+}
+
 /// One request: the caller's address and certificate, its query and its body (read on demand).
 pub struct Ctx<'a> {
     pub relay: &'a Arc<Relay>,
@@ -1226,9 +1406,13 @@ pub struct Ctx<'a> {
     pub path: String,
     pub query: Vec<(String, String)>,
     pub content_length: Option<String>,
+    /// The Transfer-Encoding header, when the request has a non-empty one.
+    pub transfer_encoding: Option<String>,
     reader: &'a mut BufReader<Tls>,
     pub body_read: bool,
     pub close: bool,
+    /// Set by a route that answers raw bytes itself (its JSON answer is then not sent).
+    pub raw: Option<RawFile>,
 }
 
 impl Ctx<'_> {
@@ -1284,6 +1468,22 @@ impl Ctx<'_> {
         }
     }
 
+    /// `rfile.read(length)`: a raw body of exactly `length` bytes (the caller caps it); ClientGone when it ends early.
+    pub fn raw_body(&mut self, length: usize) -> R<Vec<u8>> {
+        self.body_read = true;
+        let mut raw = vec![0u8; length];
+        let mut got = 0;
+        while got < length {
+            match self.reader.read(&mut raw[got..]) {
+                Ok(0) => return Err(E::ClientGone),
+                Ok(n) => got += n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => return Err(E::ClientGone),
+            }
+        }
+        Ok(raw)
+    }
+
     /// _gate: 426 when the caller's app is older than the minimum for it. The app is the `client` the request
     /// carries (a join), else the one its room `peer` or presence `session` said.
     pub fn gate(&self, who: &Identity, client_given: Option<&Value>, peer: &str, session: &str) -> R<()> {
@@ -1303,7 +1503,7 @@ impl Ctx<'_> {
 }
 
 /// json.JSONDecodeError's text for the common cases (`Expecting value: line 1 column 1 (char 0)`).
-fn json_error(e: &serde_json::Error, text: &str) -> String {
+pub(crate) fn json_error(e: &serde_json::Error, text: &str) -> String {
     let (line, col) = (e.line(), e.column());
     let pos: usize = text.split_inclusive('\n').take(line.saturating_sub(1)).map(|l| l.chars().count()).sum::<usize>() + col.saturating_sub(1);
     let what = if text.trim().is_empty() || matches!(e.classify(), serde_json::error::Category::Eof) { "Expecting value" } else if e.to_string().starts_with("trailing") { "Extra data" } else { "Expecting value" };
@@ -1341,6 +1541,20 @@ pub fn run(ctx: &mut Ctx, result: std::thread::Result<R<Obj>>) -> Option<(u16, O
         Err(E::Conflict(m)) => {
             ctx.close = true;
             (409, err(m))
+        }
+        Err(E::Status(status, m, close)) => {
+            ctx.close |= close;
+            (status, err(m))
+        }
+        Err(E::Held(m, info)) => {
+            ctx.close = true;
+            let mut o = info;
+            o.insert("error".into(), Value::from(m));
+            (403, o)
+        }
+        Err(E::Busy(m, _)) => {
+            ctx.close = true;
+            (429, err(m))
         }
         Err(E::NotFound(m)) => (404, err(m)),
         Err(E::Unavailable(m)) => (501, err(m)),
