@@ -82,5 +82,6 @@ test("the sweep removes old side completions of this workspace only, and never a
 });
 
 test("a missing sessions folder is not an error", () => {
-  expect(clearAskLucidSessions({ cwd: CWD, root: join(tmpdir(), "lucid-no-such-folder-xyz") })).toEqual({ ok: true, cleared: 0 });
+  // Inside a fresh mkdtemp directory, never a fixed name under the shared temp folder.
+  expect(clearAskLucidSessions({ cwd: CWD, root: join(store().root, "no-such-folder") })).toEqual({ ok: true, cleared: 0 });
 });
