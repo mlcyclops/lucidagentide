@@ -27274,3 +27274,28 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 - A new feature gets a note only when someone adds an entry to `WHATS_NEW`. An entry's id must never be renamed, or the note shows again.
 - Verified in a browser against a live engine with the browser clock set: nothing over the first-run gate, the Thanksgiving offer on Nov 25, Wear it applied and pinned the theme, the Ask Lucid note on the next launch with Tell me more opening the fly-out, the theme off on Nov 30, and no suggestion with the setting off.
 - The Ask Lucid input's placeholder was shortened to "Ask Lucid anything": the longer one wrapped in the docked panel (invariant 11).
+
+## ADR-0584 -- P-ASKLUCID.3: Ask Lucid opens above every popup and is shown the screen as scanned, fenced text (2026-11-14)
+
+**Status:** Accepted. Session 1 of `docs/specs/ask-lucid-sight-pdr.md`. Amends ADR-0581 (Lucid saw the fleet, the orbit and the knowledge graph only). Proof: `make demo-P-ASKLUCID.3`, `bun test desktop/ask_lucid_screen.test.ts`.
+
+**Context.** The request is for Ask Lucid to fly out over the Fleet popup and any other popup, and to see the actual UI so a question about something on screen can be answered, including the Preview panel. The dock sat at `z-index: 100`, under every modal (200). The Orbit map covers the title-bar chip that opens Ask Lucid, and closes on Escape from a window-level capture listener, so Escape typed in Ask Lucid would have closed the map underneath. Lucid had no view of the screen at all.
+
+**Decision.**
+1. **Layering.** The dock and its pill move to `z-index: 250`: above the Fleet grid (55), the Orbit map (92), the file browser (111) and every modal (200); below the About card and the boot cinematic (300), context menus (400) and tooltips (1200).
+2. **Ways in.** Besides the title-bar chip: Ctrl/Cmd+Shift+L from anywhere, and an Ask Lucid button in the Fleet grid and Orbit headers (any element marked `data-ask-lucid` opens it).
+3. **Escape.** One capture-phase listener on `window`, registered at boot so it runs before the listeners popups add when they open. Escape typed inside the dock closes the dock and is stopped there, so nothing underneath closes.
+4. **The screen is read as text.** `desktop/renderer/screen_digest.ts` lists the surfaces that are visible right now, overlays first by stacking order and then the app's own regions, with the text each one shows inside the window. Reasons for text over a pixel capture: every byte Lucid reads must be scanned and fenced (invariants 3 and 5) and the scanner reads text; the side completion is text-only; most local models have no vision; text is what Lucid can quote back.
+5. **The Preview panel.** Its page sits in a sandboxed frame, so it is asked through the read-only inspect bridge the agent's `preview_inspect` tool already uses: tab, title, address, headings, visible text and script errors.
+6. **What is never read.** Input, textarea, select and contenteditable content; the Ask Lucid panel itself; toasts and tooltips. The collector has no code path that reads a field's value.
+7. **One normalizer, run twice.** `desktop/ask_lucid_screen.ts` (pure, no imports) rebuilds a digest from named fields, bounds every string (8 surfaces, 1,800 characters each, 7,000 in all with the top surfaces winning) and removes anything shaped like a key, token or password value. The renderer runs it before sending; the engine runs it again on what was posted.
+8. **A fifth view.** The service puts the screen first among the views, scans it and fences it like the others. A screen that fails its scan, or that cannot be scanned, is withheld and the reply says so. The brief tells Lucid the screen is text, that he cannot see colors, images or layout, and that he never sees typed input.
+9. The digest is read at the moment of asking and sent only with that question. Nothing is stored, and no route, event name or schema is added.
+
+**Consequences.**
+- Lucid can answer "what is this dialog asking me" or "what does the preview show" from what is drawn. He cannot answer a question about color, position or an image.
+- The redaction errs toward removing: a hash of 40 or more hex digits and a long mixed-case run with digits are taken out. File paths, kebab-case names and UUIDs stay.
+- The About card covers the dock. A docked Ask Lucid covers the right or bottom edge of a popup underneath it, since popups do not make room for it; floating mode or the pill avoids that.
+- A cross-origin page in the Preview panel reports only what its bridge can read, and a canvas-only page has no text to report.
+- A pixel capture for vision models needs its own ADR: it cannot be scanned by the Unicode scanner.
+- Driven in a browser against a live engine: the dock on top of a modal, the Fleet grid and the Orbit map; Escape closing only the dock in each case; the digest naming the top surface first; the Preview page read with a key in it redacted; the typed question and the path field's value absent from the digest. No live model answered in this sandbox.

@@ -7782,7 +7782,9 @@ body.ald-dragging{user-select:none;-webkit-user-select:none}
 body.ald-dragging iframe{pointer-events:none}
 
 /* the dock window */
-.ald{position:fixed;z-index:100;display:flex;min-width:0;min-height:0;background:var(--bg-1);background-image:var(--emboss);color:var(--txt);outline:none;will-change:transform}
+/* P-ASKLUCID.3 (ADR-0584): above every popup (modals are 200), below the About card and the boot cinematic (300),
+   context menus (400) and tooltips (1200), so Lucid can be asked about whatever is open underneath. */
+.ald{position:fixed;z-index:250;display:flex;min-width:0;min-height:0;background:var(--bg-1);background-image:var(--emboss);color:var(--txt);outline:none;will-change:transform}
 .ald[data-mode="right"]{border-left:1px solid var(--line-strong);box-shadow:-24px 0 48px -30px rgb(var(--sh-rgb) / .75),-1px 0 0 rgb(var(--accent-rgb) / .08)}
 .ald[data-mode="bottom"]{border-top:1px solid var(--line-strong);box-shadow:0 -24px 48px -30px rgb(var(--sh-rgb) / .75)}
 .ald[data-mode="floating"]{border:1px solid var(--line-strong);border-radius:16px;box-shadow:var(--shadow-lg),0 30px 70px -30px rgb(var(--sh-rgb) / .7),0 0 0 1px rgb(var(--accent-rgb) / .14)}
@@ -7829,11 +7831,11 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .ald-rz:hover::after,.ald.resizing .ald-rz::after{opacity:1}
 .ald[data-mode="floating"] .ald-rz-se::after{opacity:.45}
 /* snap preview while dragging a floating dock near the right or bottom edge */
-.ald-snap{position:fixed;z-index:99;pointer-events:none;border:1.5px solid rgb(var(--accent-rgb) / .7);border-radius:12px;margin:6px;
+.ald-snap{position:fixed;z-index:249;pointer-events:none;border:1.5px solid rgb(var(--accent-rgb) / .7);border-radius:12px;margin:6px;
   background:linear-gradient(180deg,rgb(var(--accent-rgb) / .14),rgb(var(--accent-rgb) / .06));box-shadow:inset 0 0 0 1px rgb(var(--tint-rgb) / .05),0 0 44px -6px rgb(var(--accent-rgb) / .45);
   backdrop-filter:blur(2px);transition:left var(--t) var(--ease-out),top var(--t) var(--ease-out),width var(--t) var(--ease-out),height var(--t) var(--ease-out)}
 /* minimized pill on the dock edge */
-.ald-pill{position:fixed;z-index:100;display:inline-flex;align-items:center;gap:8px;height:38px;padding:0 15px 0 11px;border:1px solid rgb(var(--accent-rgb) / .5);border-radius:999px;cursor:pointer;
+.ald-pill{position:fixed;z-index:250;display:inline-flex;align-items:center;gap:8px;height:38px;padding:0 15px 0 11px;border:1px solid rgb(var(--accent-rgb) / .5);border-radius:999px;cursor:pointer;
   background:linear-gradient(180deg,var(--bg-2),var(--bg-1));color:var(--txt);font-size:13px;font-weight:650;box-shadow:var(--shadow-lg),0 0 22px -6px rgb(var(--accent-rgb) / .55);
   transition:border-color var(--t),box-shadow var(--t)}
 .ald-pill:hover{border-color:var(--accent-2);box-shadow:var(--shadow-lg),0 0 28px -4px rgb(var(--accent-rgb) / .7)}

@@ -17,6 +17,7 @@
 // calls nothing that writes; a proposal runs only when the user presses Confirm in the panel.
 
 import {
+  ASK_BLOCK_MAX,
   ASK_LUCID_SYSTEM,
   askLucidUser,
   fleetContext,
@@ -28,6 +29,7 @@ import {
   type AskTurn,
 } from "./ask_lucid.ts";
 import { actionText, knownFrom, parseActions, type AskAction } from "./ask_lucid_actions.ts";
+import { normalizeScreen, screenContext } from "./ask_lucid_screen.ts"; // P-ASKLUCID.3 (ADR-0584)
 
 export interface AskDeps {
   /** The `/api/fleet/status` payload. */
@@ -53,13 +55,23 @@ export interface AskReply {
   /** The model that answered, without its provider prefix. */
   model?: string;
   /** How much Lucid was shown, so the panel can say "saw 3 lanes, 5 tasks, 2 knowledge pages". */
-  seen: { lanes: number; tasks: number; hits: number };
+  seen: AskSeen;
   /** Blocks that did not pass the scan and were kept from the model. */
   withheld: AskBlockName[];
   /** P-ASKLUCID.2 (ADR-0582): what Lucid proposes. Validated, scanned, and never run here. */
   actions: AskAction[];
   /** Proposals that were invalid, over the limit, or failed their scan, and so are not shown. */
   actionsDropped: number;
+}
+
+/** How much of each view Lucid was shown. `screen` counts surfaces (P-ASKLUCID.3). */
+export interface AskSeen { lanes: number; tasks: number; hits: number; screen: number }
+export const NOTHING_SEEN: AskSeen = { lanes: 0, tasks: 0, hits: 0, screen: 0 };
+
+/** What arrives with a question besides its text. */
+export interface AskExtras {
+  /** P-ASKLUCID.3 (ADR-0584): the renderer's reading of the screen. Untrusted: parsed again here. */
+  screen?: unknown;
 }
 
 const UNAVAILABLE = "Lucid could not answer right now. Check that a model provider is connected in Settings, then try again.";
@@ -76,9 +88,18 @@ export function providerErrorStatus(reply: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
-export async function answerAskLucid(question: string, history: readonly AskTurn[], deps: AskDeps): Promise<AskReply> {
-  const seen = { lanes: 0, tasks: 0, hits: 0 };
+export async function answerAskLucid(question: string, history: readonly AskTurn[], deps: AskDeps, extras: AskExtras = {}): Promise<AskReply> {
+  const seen: AskSeen = { ...NOTHING_SEEN };
   const blocks: AskBlock[] = [];
+
+  // P-ASKLUCID.3 (ADR-0584): the screen goes first, because "this" in a question means what is on it. The
+  // posted digest is rebuilt from its named fields (bounded and redacted again), then scanned below like
+  // every other view. No digest (an older renderer, or nothing readable) means no block.
+  if (extras.screen !== undefined && extras.screen !== null) {
+    const s = screenContext(normalizeScreen(extras.screen));
+    seen.screen = s.surfaces;
+    blocks.push({ name: "screen", text: s.text.length > ASK_BLOCK_MAX.screen ? s.text.slice(0, ASK_BLOCK_MAX.screen) : s.text });
+  }
   // The raw views, kept so a proposed action can be checked against the ids Lucid was actually shown.
   let fleetRaw: unknown = null;
   let orbitRaw: unknown = null;
@@ -122,7 +143,8 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
     b.withheld = verdict.reason || "blocked";
     b.text = "";
     withheld.push(b.name);
-    if (b.name === "fleet") seen.lanes = 0;
+    if (b.name === "screen") seen.screen = 0;
+    else if (b.name === "fleet") seen.lanes = 0;
     else if (b.name === "orbit") seen.tasks = 0;
     else if (b.name === "knowledge") seen.hits = 0;
   }

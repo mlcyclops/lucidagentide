@@ -190,7 +190,7 @@ import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalP
 import { lastModel as lastChatModel, resultWindowSetting, setResultWindowSetting } from "./settings_store.ts"; // P-CTX.2b (ADR-0579)
 import { chatModelContextWindow, resolveResultWindow } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 import { parseQuestion, sanitizeHistory } from "./ask_lucid.ts"; // P-ASKLUCID.1 (ADR-0581)
-import { answerAskLucid } from "./ask_lucid_service.ts"; // P-ASKLUCID.1 (ADR-0581)
+import { answerAskLucid, NOTHING_SEEN } from "./ask_lucid_service.ts"; // P-ASKLUCID.1 (ADR-0581)
 import { discoveryHeaders, MAX_DISCOVERY_BYTES, parseDiscoveredModels, providerEnvVar, providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
 import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setSandboxWindowsMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThemeId, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, themeId, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
@@ -6330,9 +6330,9 @@ return Bun.serve({
       // P-ASKLUCID.2 (ADR-0582): the reply may carry PROPOSED actions. This route runs none of them; the user
       // confirms a card and the renderer then calls /api/fleet/spawn, /api/fleet/queue or /api/fleet/goal/task.
       if (p === "/api/ask-lucid" && req.method === "POST") {
-        const b = await readBody<{ text?: unknown; history?: unknown }>(req);
+        const b = await readBody<{ text?: unknown; history?: unknown; screen?: unknown }>(req);
         const q = parseQuestion(b.text);
-        if (!q.ok) return json({ ok: false, error: q.error, data: { ok: false, error: q.error, seen: { lanes: 0, tasks: 0, hits: 0 }, withheld: [], actions: [], actionsDropped: 0 } });
+        if (!q.ok) return json({ ok: false, error: q.error, data: { ok: false, error: q.error, seen: { ...NOTHING_SEEN }, withheld: [], actions: [], actionsDropped: 0 } });
         const reply = await answerAskLucid(q.text, sanitizeHistory(b.history), {
           fleetStatus: () => fleet.status(),
           orbit: () => fleetGoal.snapshot(),
@@ -6342,7 +6342,7 @@ return Bun.serve({
           complete: (system, user, model) => backend.complete(system, user, { model, idleMs: 45_000 }),
           onLockdownBlock: (reason) => emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "ask-lucid-lockdown", reason: reason.slice(0, 200), sessionId: backend.currentSessionId() ?? undefined }),
           now: () => Date.now(),
-        });
+        }, { screen: b.screen });
         return json({ ok: reply.ok, data: reply, ...(reply.error ? { error: reply.error } : {}) });
       }
       // P-AOS.1 (ADR-0452): the standing fleet goal. UI token only (never AGENT_ROUTES): criteria are verified

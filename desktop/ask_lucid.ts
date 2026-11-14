@@ -28,7 +28,7 @@ export const ASK_MAX_TEXT = 8000;
 /** How many earlier turns of the side conversation are sent back. */
 export const ASK_MAX_HISTORY = 12;
 /** Bounds on each context block, in characters, so one long fleet cannot crowd out the question. */
-export const ASK_BLOCK_MAX = { fleet: 4000, orbit: 4000, knowledge: 4000, history: 6000 } as const;
+export const ASK_BLOCK_MAX = { fleet: 4000, orbit: 4000, knowledge: 4000, history: 6000, screen: 9000 } as const;
 const FIELD_MAX = 200;
 const LANES_MAX = 24;
 const TASKS_MAX = 24;
@@ -64,6 +64,7 @@ export const ASK_LUCID_SYSTEM = [
   "The user is having a side conversation with you. It may be about the work in progress or about something else entirely. Answer what they ask.",
   "",
   "What you can see: a snapshot, taken just now, of the fleet lanes, the Fleet Orbit goal with its tasks, and what the knowledge graph holds on the question. The snapshot is below the question.",
+  "You can also see the user's screen: the surfaces open in the app right now, the top one first, with the text each one shows, and the page in the Preview panel when one is open. It is text, not a picture: you cannot see colors, images or layout, and you never see what the user has typed into a field. When the user says \"this\", \"here\" or \"on my screen\", they mean the top surface.",
   "What you cannot do: you have no tools and you cannot act. You cannot start a lane, change a task, edit a file, approve anything or read anything that is not in the snapshot. Never say or imply that you did.",
   "",
   "Rules:",
@@ -178,8 +179,9 @@ export function historyContext(history: readonly AskTurn[]): string {
   return clip(history.map((t) => `${t.role === "user" ? "User" : "Lucid"}: ${t.text}`).join("\n\n"), ASK_BLOCK_MAX.history);
 }
 
-export type AskBlockName = "fleet" | "orbit" | "knowledge" | "history";
+export type AskBlockName = "screen" | "fleet" | "orbit" | "knowledge" | "history";
 export const ASK_BLOCK_TITLE: Record<AskBlockName, string> = {
+  screen: "The user's screen right now",
   fleet: "Fleet lanes",
   orbit: "Fleet Orbit",
   knowledge: "Knowledge graph",

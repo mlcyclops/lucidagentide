@@ -98,6 +98,8 @@ import { localProvidersCardBody, draftFromForm, modelsFieldValue, providerWithDi
 import { parseResultWindowSetting, type ResultSpill } from "../result_window.ts"; // P-CTX.2b (ADR-0579): pure (no Node imports)
 import { resultWindowLine } from "./result_window_view.ts"; // P-CTX.2b (ADR-0579)
 import { createAskLucid, type AskActionResult, type AskLucidHandle } from "./ask_lucid_panel.ts"; // P-ASKLUCID.1 (ADR-0581): the Ask Lucid fly-out
+import { collectScreen } from "./screen_digest.ts"; // P-ASKLUCID.3 (ADR-0584): what is on the screen, for Ask Lucid
+import type { ScreenDigest, ScreenPreview } from "../ask_lucid_screen.ts";
 import type { AskAction } from "../ask_lucid_actions.ts"; // P-ASKLUCID.2 (ADR-0582): what Lucid may propose
 import { holidayOffer, holidayToast, nextNews, noteHolidayAnswer, noteNewsSeen, pickSuggestion, pinExpired, readHolidayMemory, readPin, readSeenNews, setSuggestEnabled, suggestEnabled, suggestToggleHtml, writePin } from "./lucid_suggest.ts"; // P-MINI.2 (ADR-0583): what Lucid may suggest
 import { hydrateVaultDestinations } from "./vault_dest_ui.ts"; import { VAULT_DEST_SEC, VAULT_DEST_SUB, VAULT_DEST_TITLE } from "./vault_dest_card.ts"; // P-VAULT-DEST.1 (ADR-0478): Settings → Vault destinations (Enterprise)
@@ -4988,7 +4990,8 @@ function syncImmersiveWithRole(role: UserRole | null): void {
 let askLucidPanel: AskLucidHandle | null = null;
 function askLucid(): AskLucidHandle {
   askLucidPanel ??= createAskLucid({
-    ask: (text, history) => bridge.askLucid(text, history),
+    ask: (text, history, extras) => bridge.askLucid(text, history, extras),
+    screen: readScreenForLucid,
     markdown: renderMarkdown,
     enhance: enhanceCodeBlocks,
     topBar: ".titlebar",
@@ -4996,6 +4999,30 @@ function askLucid(): AskLucidHandle {
     runAction: runAskAction,
   });
   return askLucidPanel;
+}
+
+/** P-ASKLUCID.3 (ADR-0584): what the user is looking at, for a question in Ask Lucid. The surfaces come from
+ *  the DOM (screen_digest.ts); the Preview panel's page is behind a sandboxed frame, so it is asked through
+ *  the same read-only inspect bridge the agent's preview_inspect tool uses. Bounded and redacted before it
+ *  leaves the renderer, and again on the engine, where it is scanned and fenced. */
+async function readScreenForLucid(): Promise<ScreenDigest | null> {
+  const facts = [
+    `The user's role is ${state.userRole ?? "not chosen yet"}.`,
+    state.streaming ? "The main session is working on a turn right now." : "The main session is idle.",
+  ];
+  let preview: Partial<ScreenPreview> | null = null;
+  const panel = document.getElementById("preview");
+  const path = prevPathByLane[prevLane] ?? "";
+  const frame = panel && !panel.hidden && path ? laneFrame(prevLane) : null;
+  if (frame) {
+    const r = await runInspectOnFrame(frame, `ask-lucid-${Date.now()}`, { what: "summary" }, 1200).catch(() => null);
+    const s = r && typeof r === "object" ? (r as Record<string, unknown>) : null;
+    const tab = prevLane === "yours" ? "Yours" : prevLane === "agent" ? "Agent" : (prevLaneTabs.find((t) => t.id === prevLane)?.label ?? prevLane);
+    preview = s && !s.error
+      ? { tab, title: String(s.title ?? ""), url: path, text: String(s.text ?? ""), headings: Array.isArray(s.headings) ? s.headings.map(String) : [], errors: Array.isArray(s.errors) ? s.errors.map(String) : [] }
+      : { tab, url: path, errors: [String(s?.error ?? "the preview did not answer")] };
+  }
+  try { return collectScreen(document, { facts, preview }); } catch { return null; }
 }
 
 /** P-ASKLUCID.2 (ADR-0582): carry out one action the user just CONFIRMED on a card in Ask Lucid. This is the
@@ -17887,6 +17914,24 @@ function wire(): void {
   // P-AVATAR.1: back into the stage after an Esc exit (chip only visible for the lucid-agent role).
   $("#tbStage")!.addEventListener("click", () => setImmersive(true));
   $("#tbAskLucid")?.addEventListener("click", () => askLucid().toggle()); // P-ASKLUCID.1 (ADR-0581)
+  // P-ASKLUCID.3 (ADR-0584): Ask Lucid opens over any popup. A popup can cover the title-bar chip, so there
+  // are two more ways in: any button marked data-ask-lucid (the Fleet grid and Orbit headers carry one), and
+  // Ctrl/Cmd+Shift+L from anywhere.
+  document.addEventListener("click", (e) => { if ((e.target as Element | null)?.closest?.("[data-ask-lucid]")) askLucid().open(); });
+  // Capture phase on window, registered at boot, so it runs before the listeners popups add when they open
+  // (the Orbit map closes on Escape from a window capture listener). Escape typed inside Ask Lucid closes
+  // Ask Lucid and nothing underneath it.
+  window.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && (e.key === "l" || e.key === "L")) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      askLucid().toggle();
+      return;
+    }
+    if (e.key === "Escape" && !e.altKey && !e.ctrlKey && !e.metaKey && (e.target as Element | null)?.closest?.(".ald")) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      askLucidPanel?.close();
+    }
+  }, true);
   $("#agentTier")!.addEventListener("change", async (event) => {
     if (state.userRole !== "lucid-agent" || state.streaming || agentTierApplying) { syncAgentExtras(); return; }
     const previous = agentTier;

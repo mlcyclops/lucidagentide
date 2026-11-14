@@ -25,7 +25,8 @@ export interface AskReplyView {
   reply?: string;
   error?: string;
   model?: string;
-  seen: { lanes: number; tasks: number; hits: number };
+  /** `screen` counts the surfaces of the screen Lucid was shown (P-ASKLUCID.3, ADR-0584). */
+  seen: { lanes: number; tasks: number; hits: number; screen?: number };
   withheld: string[];
   /** P-ASKLUCID.2 (ADR-0582): what Lucid proposes. Each becomes a card; none runs without Confirm. */
   actions?: AskAction[];
@@ -55,8 +56,9 @@ const plural = (n: number, one: string, many: string): string => `${n} ${n === 1
 
 /** PURE: one line under a reply saying what Lucid was shown, and what was kept from him. */
 export function seenLine(r: Pick<AskReplyView, "seen" | "withheld" | "model">): string {
-  const saw = `Saw ${plural(r.seen.lanes, "lane", "lanes")}, ${plural(r.seen.tasks, "orbit task", "orbit tasks")} and ${plural(r.seen.hits, "knowledge page", "knowledge pages")}.`;
-  const names: Record<string, string> = { fleet: "the fleet lanes", orbit: "the Fleet Orbit", knowledge: "the knowledge graph", history: "the earlier turns" };
+  const screen = (r.seen.screen ?? 0) > 0 ? `your screen (${plural(r.seen.screen ?? 0, "surface", "surfaces")}), ` : "";
+  const saw = `Saw ${screen}${plural(r.seen.lanes, "lane", "lanes")}, ${plural(r.seen.tasks, "orbit task", "orbit tasks")} and ${plural(r.seen.hits, "knowledge page", "knowledge pages")}.`;
+  const names: Record<string, string> = { screen: "your screen", fleet: "the fleet lanes", orbit: "the Fleet Orbit", knowledge: "the knowledge graph", history: "the earlier turns" };
   const kept = r.withheld.map((w) => names[w] ?? w);
   const held = kept.length ? ` Withheld by the security scan: ${kept.join(", ")}.` : "";
   return `${saw}${held}${r.model ? ` Answered by ${r.model}.` : ""}`;
@@ -69,12 +71,17 @@ export function historyToSend(turns: readonly AskTurnView[], max: number = ASK_H
 
 /** PURE: the header's status line for each state. */
 export function stateLine(state: MiniState): string {
-  return state === "working" ? "Reading the fleet, the orbit and the knowledge graph" : state === "error" ? "Something went wrong" : state === "done" ? "Answered" : "A side conversation. He can see your fleet.";
+  return state === "working" ? "Reading your screen, the fleet and the knowledge graph" : state === "error" ? "Something went wrong" : state === "done" ? "Answered" : "A side conversation. He can see your screen and your fleet.";
 }
+
+/** What goes to the engine with a question besides its text and the earlier turns. */
+export interface AskExtrasView { screen?: unknown }
 
 export interface AskLucidDeps {
   /** Ask the engine. Null means the request itself failed. */
-  ask(text: string, history: AskTurnView[]): Promise<AskReplyView | null>;
+  ask(text: string, history: AskTurnView[], extras: AskExtrasView): Promise<AskReplyView | null>;
+  /** P-ASKLUCID.3 (ADR-0584): read what is on the screen right now. Absent or failing = Lucid is not shown it. */
+  screen?(): Promise<unknown>;
   /** The chat's safe markdown renderer. */
   markdown(text: string): string;
   /** Optional: syntax highlight and copy buttons on code blocks, as the chat does. */
@@ -249,7 +256,9 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     setState("working");
     const history = historyToSend(turns);
     turns.push({ role: "user", text });
-    void deps.ask(text, history).catch(() => null).then((r) => {
+    // The screen is read at the moment of asking, so "this" means what the user sees now.
+    const screen = deps.screen ? deps.screen().catch(() => null) : Promise.resolve(null);
+    void screen.then((s) => deps.ask(text, history, s ? { screen: s } : {})).catch(() => null).then((r) => {
       busy = false;
       sendBtn.disabled = false;
       if (r?.ok && r.reply) {

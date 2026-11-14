@@ -705,6 +705,10 @@ demo-P-ASKLUCID.2: ## P-ASKLUCID.2 (ADR-0582): Lucid proposes, the user confirms
 demo-P-MINI.2: ## P-MINI.2 (ADR-0583): Lucid may suggest things - a live holiday theme offered once per occasion with Wear it / Not now / Don't ask again, the pinned theme coming off the day after the holiday ends unless the user picked another by hand, what is new shown newest first and once per feature, at most one suggestion per launch and none during a turn, over a modal or before the first-run tour, and one setting that silences both
 	$(BUN) run desktop/scripts/demo_p_mini_2.ts
 
+.PHONY: demo-P-ASKLUCID.3
+demo-P-ASKLUCID.3: ## P-ASKLUCID.3 (ADR-0584): Ask Lucid sees the screen and opens above every popup - the real service with the real scanner: the screen as the first view with the top surface marked and fenced, the Preview panel's page included, a key on screen redacted in the renderer and again on the engine, a screen with a hidden payload withheld while the other views arrive, a dead scanner withholding it (fail-closed), a collector that reads no field value, and the dock above modals, the Fleet grid and the Orbit map
+	$(BUN) run desktop/scripts/demo_p_asklucid_3.ts
+
 .PHONY: demo-P-LOCAL.1
 demo-P-LOCAL.1: ## P-LOCAL.1 (ADR-0135): Local Providers — declare a self-hosted / custom OpenAI-compatible LLM (Ollama, llama.cpp, vLLM, DGX-over-VPN); validate fail-closed, emit the omp --config overlay (secret from the vault, skipped if absent), persist WITHOUT the secret
 	$(BUN) run desktop/scripts/demo_p_local_1.ts
