@@ -53,7 +53,7 @@ import { showToast } from "./ui.ts";
 import { writeClipboard } from "./ctxmenu.ts"; // a copy that falls back when the browser refuses the Clipboard API
 import {
   approvalButtons, armClick, clockLabel, deployChoices, hostLabel, lanePolicyLabel, latencyLabel, mibLabel, modelCount, onOrbit, REMOTE_STATE_LABEL, REMOTE_TONE,
-  remoteGlance, remoteLanes, remoteTotals, RESUME_TEXT, spokeActions, spokeAlerts, stateLabel, taskButtons, taskEnded, taskModelChoices, VIA_LABEL,
+  remoteGlance, remoteLanes, remoteTotals, RESUME_TEXT, spokeActions, spokeAlerts, stateLabel, TASK_RE, taskButtons, taskEnded, taskModelChoices, VIA_LABEL,
   type DeployChoice, type HubActions, type RecallView, type RemoteAlertItem, type RemoteApprovalView, type RemoteClassification, type RemoteHubView, type RemoteLane,
   type RemoteModelsView, type RemoteSpokeView, type RemoteTaskView, type RemoteTotals,
 } from "./remote_spokes_model.ts";
@@ -680,17 +680,18 @@ type RemoteOp = "submit" | "followup" | "cancel" | "close";
 /** One action on a spoke through the engine, then a fresh hub read so every view shows its effect. The panel's
  *  buttons, the Start-a-task selector and the Fleet grid's remote lanes (P-RS-LANES.1) all go through here.
  *  `error` is null when the spoke accepted it, else the refusal in words (an older spoke's own text included).
- *  `queued` (ADR-0577): the spoke took a follow-up while the task works and gives it after the current step. */
-async function sendAct(node: string, op: RemoteOp, input: { task?: string; text?: string; name?: string; model?: string }): Promise<{ error: string | null; queued: boolean }> {
-  if (!deps) return { error: "The fleet is not ready.", queued: false };
+ *  `queued` (ADR-0577): the spoke took a follow-up while the task works and gives it after the current step.
+ *  `task` (ADR-0578): the id a submit's answer names, so + New agent can put the new agent on the shown board. */
+export async function sendAct(node: string, op: RemoteOp, input: { task?: string; text?: string; name?: string; model?: string }): Promise<{ error: string | null; queued: boolean; task: string | null }> {
+  if (!deps) return { error: "The fleet is not ready.", queued: false, task: null };
   // P-RS-SESSION.1: the spoke journals a prompt as its hash only; remembered here, its session shows the text.
   if ((op === "submit" || op === "followup") && input.text) await rememberPrompt(input.text).catch(() => undefined);
   const r = await deps.remoteSpokeAct(op, { node, ...input }).catch(() => null);
-  if (!r) return { error: "The engine did not answer.", queued: false };
-  if (!r.ok) return { error: r.error, queued: false };
+  if (!r) return { error: "The engine did not answer.", queued: false, task: null };
+  if (!r.ok) return { error: r.error, queued: false, task: null };
   await refreshRemote();
-  const d = r.data;
-  return { error: null, queued: typeof d === "object" && d !== null && "queued" in d && d.queued === true };
+  const d = typeof r.data === "object" && r.data !== null ? (r.data as Record<string, unknown>) : {};
+  return { error: null, queued: d.queued === true, task: typeof d.task === "string" && TASK_RE.test(d.task) ? d.task : null };
 }
 
 const QUEUED_TEXT = "Queued: it reads this after its current step.";

@@ -19,6 +19,10 @@
 //   POST /api/remote-spokes/followup    {node, task, text}       drive
 //   POST /api/remote-spokes/cancel      {node, task}             drive
 //   POST /api/remote-spokes/close       {node, task}             drive
+//   POST /api/remote-spokes/add         {cert}                   + Add a computer (ADR-0578): a connection card or a
+//                                       spoke certificate; the hub plugin checks and adds it
+//   GET  /api/remote-spokes/this-pc     this computer's helper (ADR-0578); GET this-pc/tasks: the work hubs run here
+//   POST /api/remote-spokes/this-pc/{pause,resume,on,off}, this-pc/stop-task {task}, this-pc/stop-all {confirm}
 //
 // Scopes come from the hub's certificate as the plugin reports it, re-read on every action, so a button the
 // renderer still shows after a scope change is refused here. The spokes check them a third time. ADR-0512: every
@@ -38,6 +42,10 @@ import {
   deactivatedLabel, mapHubSnapshot, mapTasks, MODEL_ID_RE, NODE_RE, TASK_RE,
   type RecallEntryView, type RecallView, type RemoteActionView, type RemoteApprovalView, type RemoteApprovalsView, type RemoteHubView, type RemoteStatusView,
 } from "./renderer/remote_spokes_model.ts";
+import {
+  addedNode, mapLocalWork, mapThisPc, parseCard,
+  type AddComputerAnswer, type LocalWorkAnswer, type ThisPcAnswer,
+} from "./renderer/fleet_computers.ts";
 
 export const REMOTE_SPOKES_PLUGIN = "remote-spokes";
 
@@ -232,6 +240,18 @@ const ACTION_BODIES: Record<string, { allowed: Record<string, "string" | "boolea
 /** The longest presence password the hub accepts (add-on presence.ts). */
 const MAX_PASSWORD = 1024;
 
+/** ADR-0578: the This PC controls the engine forwards, and the one body each takes ("none", a task id, or the
+ *  stop-all confirmation). Setup, activate, update and remove are not here: they stay in the Remote Spokes panel. */
+const THIS_PC_OPS: Readonly<Record<string, "none" | "task" | "confirm">> = {
+  "this-pc/pause": "none", "this-pc/resume": "none", "this-pc/on": "none", "this-pc/off": "none",
+  "this-pc/stop-task": "task", "this-pc/stop-all": "confirm",
+};
+
+/** A non-2xx answer from one of ADR-A110's host routes. A plugin older than 0.10.3 does not have them (404). */
+function hostRouteError(r: { status: number; data: unknown }): string {
+  return r.status === 404 ? "This needs Remote Spokes 0.10.3 or later. Update the add-on, then try again." : pluginError(r);
+}
+
 /** The spoke's parked actions through the plugin, scanned; a string is the refusal. */
 async function readApprovals(deps: RemoteSpokesDeps, node: string, label: string): Promise<RemoteApprovalView[] | string> {
   const r = await callPlugin(deps, "GET", `/host/spokes/${node}/approvals`, undefined, ACTION_TIMEOUT_MS);
@@ -271,6 +291,52 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
     const d = asRecord(r.data);
     const head = d?.journalHead;
     const out: RemoteStatusView = { ok: true, journalHead: typeof head === "number" && Number.isSafeInteger(head) && head >= 0 ? head : 0, tasks: mapTasks(d?.tasks) };
+    return reply(out);
+  }
+
+  // P-FLEET-COMPUTERS.1 (ADR-0578): this computer's own helper (add-on ADR-A109; its host routes, ADR-A110). The
+  // person at this computer may always see and stop the work hubs run here. Nothing here approves, answers or denies
+  // an ask, and nothing sets up, activates or removes the helper: those stay in the Remote Spokes panel.
+  if (op === "this-pc" || op === "this-pc/tasks") {
+    if (req.method !== "GET") return new Response("method not allowed", { status: 405 });
+    const r = await callPlugin(deps, "GET", `/host/${op}`, undefined, SUMMARY_TIMEOUT_MS);
+    if (!r.ok) return refuse(r.error);
+    if (r.status !== 200) return refuse(hostRouteError(r));
+    const out: ThisPcAnswer | LocalWorkAnswer = op === "this-pc" ? { ok: true, thisPc: mapThisPc(r.data) } : { ok: true, work: mapLocalWork(r.data) };
+    return reply(out);
+  }
+  const local = THIS_PC_OPS[op];
+  if (local) {
+    if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
+    let body: Record<string, unknown> | undefined;
+    if (local === "task") {
+      const b = await strictBody(req, { task: "string" }, ["task"]);
+      if (!b || !TASK_RE.test(String(b.task))) return refuse("malformed task id");
+      body = { task: b.task };
+    } else if (local === "confirm") {
+      const b = await strictBody(req, { confirm: "string" }, ["confirm"]);
+      if (b?.confirm !== "stop all") return refuse("stopping all work here needs the confirmation \"stop all\"");
+      body = { confirm: "stop all" };
+    }
+    const r = await callPlugin(deps, "POST", `/host/${op}`, body, ACTION_TIMEOUT_MS);
+    if (!r.ok) return refuse(r.error);
+    if (r.status !== 200) return refuse(hostRouteError(r));
+    const out: ThisPcAnswer | LocalWorkAnswer = op === "this-pc/on" || op === "this-pc/off" ? { ok: true, thisPc: mapThisPc(r.data) } : { ok: true, work: mapLocalWork(r.data) };
+    return reply(out);
+  }
+  // ADR-0578: + Add a computer's last step, the panel's Add a spoke. The hub plugin checks the card's certificate (root-
+  // or delegate-signed, not revoked) and adds the computer and its LAN mailbox; this only bounds what is forwarded.
+  if (op === "add") {
+    if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
+    const b = await strictBody(req, { cert: "string" }, ["cert"]);
+    const card = b ? parseCard(String(b.cert)) : null;
+    if (!card) return refuse("malformed request");
+    if (!card.ok) return refuse(card.error);
+    const r = await callPlugin(deps, "POST", "/host/spokes/add", { cert: card.cert }, ACTION_TIMEOUT_MS);
+    if (!r.ok) return refuse(r.error);
+    if (r.status !== 200) return refuse(hostRouteError(r));
+    const node = addedNode(r.data);
+    const out: AddComputerAnswer = node ? { ok: true, node } : { ok: false, error: "The Remote Spokes plugin added nothing it could name; open its panel to check." };
     return reply(out);
   }
 

@@ -303,6 +303,7 @@ export type { NetView };
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
 import type { AosControl, AosSnapshot } from "../aos.ts"; // P-AOS.1 (ADR-0452): the fleet goal (types only, owned there)
 import type { RecallView, RemoteActionView, RemoteApprovalsView, RemoteHubView, RemoteStatusView } from "./remote_spokes_model.ts"; // P-IDE-SPOKES.1 (ADR-0506): owned there
+import type { AddComputerAnswer, LocalWorkAnswer, ThisPcAnswer } from "./fleet_computers.ts"; // P-FLEET-COMPUTERS.1 (ADR-0578): owned there
 export type { AosControl, AosSnapshot };
 /** P-AOS.1: a fleet-goal change: the new snapshot, or the engine's refusal in words. */
 export type FleetGoalReply = { ok: true; data: AosSnapshot } | { ok: false; error: string };
@@ -1242,6 +1243,15 @@ export interface LucidBridge {
   /** submit {node, text, name?, model?}; followup {node, task, text}; cancel and close {node, task}. `model`
    *  (ADR-0511): one the spoke reports, "provider/id"; absent, the spoke engine's default. */
   remoteSpokeAct(op: "submit" | "followup" | "cancel" | "close", input: { node: string; task?: string; text?: string; name?: string; model?: string }): Promise<RemoteActionView | null>;
+  /** P-FLEET-COMPUTERS.1 (ADR-0578): + Add a computer's last step: a pasted connection card (or a spoke certificate)
+   *  to the hub plugin's Add a spoke, which checks it. */
+  addComputer(cert: string): Promise<AddComputerAnswer | null>;
+  /** ADR-0578: this computer's own helper (add-on ThisPc) and the work hubs run here (LocalWork). */
+  thisPc(): Promise<ThisPcAnswer | null>;
+  thisPcWork(): Promise<LocalWorkAnswer | null>;
+  /** ADR-0578: the person at this computer: pause or resume new work, turn helping on or off (answers ThisPc), stop
+   *  one task or all of them (answers LocalWork). Never an approval. */
+  thisPcAct(op: "pause" | "resume" | "on" | "off" | "stop-task" | "stop-all", input?: { task?: string; confirm?: "stop all" }): Promise<ThisPcAnswer | LocalWorkAnswer | null>;
   /** Full auto-mode. laneId omitted = ALL lanes + persisted default for new ones. The server refuses
    *  on=true unless the risk was accepted before or acceptRisk is true (which persists the acceptance). */
   fleetAuto(opts: { laneId?: string; on: boolean; acceptRisk?: boolean }): Promise<{ ok: boolean } | null>;
@@ -2194,6 +2204,10 @@ export const bridge: LucidBridge = {
   remoteSpokeApprovals: (node) => getData(`/api/remote-spokes/approvals?node=${encodeURIComponent(node)}`),
   remoteSpokeDecide: (input) => post("/api/remote-spokes/decide", input),
   remoteSpokeAct: (op, input) => post(`/api/remote-spokes/${op}`, input),
+  addComputer: (cert) => post("/api/remote-spokes/add", { cert }), // P-FLEET-COMPUTERS.1 (ADR-0578)
+  thisPc: () => getData("/api/remote-spokes/this-pc"),
+  thisPcWork: () => getData("/api/remote-spokes/this-pc/tasks"),
+  thisPcAct: (op, input) => post(`/api/remote-spokes/this-pc/${op}`, input ?? {}),
   fleetAuto: (opts) => post("/api/fleet/auto", opts),
   fleetCancel: (laneId) => post("/api/fleet/cancel", { laneId }),
   fleetStop: (laneId) => post("/api/fleet/stop", { laneId }),

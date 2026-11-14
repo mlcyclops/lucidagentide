@@ -18541,6 +18541,12 @@ function wire(): void {
     fleetBoardAgents: bridge.fleetBoardAgents,
     fleetBoardLayout: bridge.fleetBoardLayout,
     fleetBoardsPrune: bridge.fleetBoardsPrune,
+    // P-FLEET-COMPUTERS.1 (ADR-0578): Computers, + Add a computer and this computer's Helping view.
+    addComputer: bridge.addComputer,
+    thisPc: bridge.thisPc,
+    thisPcWork: bridge.thisPcWork,
+    thisPcAct: bridge.thisPcAct,
+    openRemoteAdmin: () => void openRemoteAdmin(),
     fleetSetModel: bridge.fleetSetModel,
     interject: bridge.interject, // P-INTERJECT.2: Steer running turn on staged chips (P-PUSH.PAR1) + the per-lane Check in ask
     stopCall: bridge.stopCall, // P-LIVENESS.1: Stop command on a lane call marked likely stuck

@@ -6021,6 +6021,43 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-spawn-save input{flex:none;accent-color:var(--accent);margin:0}
 .fleet-spawn-save span{min-width:0;line-height:1.4}
 .fleet-spawn-save input:disabled+span{color:var(--txt-4)}
+/* P-FLEET-COMPUTERS.1 (ADR-0578): + Agent's task box and place choices, the Computers drawer, the Helping view. */
+.fleet-spawn-task{resize:vertical;min-height:52px;line-height:1.45}
+.fleet-spawn-local{display:flex;flex-direction:column;gap:5px;min-width:0}
+.fleet-spawn-local[hidden]{display:none}
+.fleet-spawn-where{display:flex;flex-wrap:wrap;gap:6px}
+.fleet-where{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:5px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg-1);color:var(--txt);font:inherit;font-size:11.5px;cursor:pointer}
+.fleet-where small{color:var(--txt-3);font-size:10.5px}
+.fleet-where.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.fleet-where.off{opacity:.55;cursor:not-allowed}
+.modal.fleet-comp-modal,.modal.fleet-help-modal{width:min(600px,94vw);max-width:600px;max-height:86vh;overflow:auto;text-align:left}
+.fleet-comp-modal .modal-desc,.fleet-help-modal .modal-desc{margin:0 0 12px;max-width:none}
+.fleet-comp-row,.fleet-help-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line)}
+.fleet-comp-name,.fleet-help-main{flex:1 1 auto;display:flex;flex-direction:column;min-width:0}
+.fleet-comp-name small,.fleet-help-main small{color:var(--txt-3);font-size:11px;line-height:1.4;word-break:break-word}
+.fleet-comp-room{flex:none;color:var(--txt-3);font-size:12px;white-space:nowrap}
+.fleet-comp-state{flex:none;font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.fleet-comp-state.tone-ok{color:var(--green);border-color:rgb(var(--green-rgb) / .4)}
+.fleet-comp-state.tone-work{color:var(--accent-2);border-color:var(--accent-dim)}
+.fleet-comp-state.tone-warn{color:var(--amber);border-color:rgb(var(--amber-rgb) / .4)}
+.fleet-comp-state.tone-bad{color:var(--red);border-color:rgb(var(--red-rgb) / .4)}
+.fleet-comp-state.tone-off{color:var(--txt-4)}
+.fleet-comp-note{display:block;font-size:12px;line-height:1.5;color:var(--txt-3);margin:8px 0}
+.fleet-comp-add{margin-top:12px}
+.fleet-comp-add summary{cursor:pointer;color:var(--accent-2);font-size:12.5px}
+.fleet-comp-steps{color:var(--txt-2);font-size:12px;line-height:1.55;padding-left:18px;margin:8px 0}
+.fleet-comp-steps li{margin-bottom:4px}
+.fleet-comp-card{width:100%;box-sizing:border-box;font-family:var(--mono);resize:vertical}
+.fleet-comp-why{display:block;font-size:11px;line-height:1.45;color:var(--txt-4);margin:6px 0 0}
+.fleet-help-acts{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px}
+.fleet-help-acts[hidden],.fleet-help-foot[hidden],.fleet-help-past[hidden]{display:none}
+.fleet-help-x.armed{width:auto;padding:0 8px;font-size:11px;color:var(--red)}
+.fleet-help-past{margin-top:10px}
+.fleet-help-past summary{cursor:pointer;color:var(--txt-3);font-size:12px}
+.fleet-help-ended{font-size:11.5px;color:var(--txt-3);padding:4px 0;border-top:1px solid var(--line-soft);word-break:break-word}
+.fleet-help-foot{display:flex;align-items:center;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+.fleet-help-foot span{flex:1 1 auto;font-size:12px;line-height:1.45;color:var(--txt-3)}
+.fleet-help-foot .btn-mini{flex:none;white-space:nowrap}
 /* P-FLEET.WT1: the worktree risk sentence wraps inside the 360px card, so the box sits on its first line.
    The span is the single text child (invariant 11); overflow-wrap keeps a long token from widening the card. */
 .fleet-spawn-wt{align-items:flex-start}

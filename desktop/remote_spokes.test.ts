@@ -387,3 +387,82 @@ describe("ADR-0514: the hub panel opens with a one-time bootstrap secret the plu
     }
   });
 });
+
+// P-FLEET-COMPUTERS.1 (ADR-0578): this computer's own helper and + Add a computer, through the plugin's host routes
+// (add-on ADR-A110). What must hold: only the listed controls are forwarded (never setup, activate or remove); a stop
+// needs its task id and Stop all its confirmation before anything reaches the plugin; only a card or a certificate is
+// forwarded as a new computer; what comes back is validated; an older plugin reads as "update", not as a refusal.
+describe("ADR-0578: this computer and + Add a computer", () => {
+  const CARD = "lucid-spoke-card:eyJub2RlIjoibl9hYmMifQ";
+  const WORK = { paused: false, since: 0, tasks: [{ id: TASK, name: "photos", hub: "workstation", hubNode: HUB, state: "working", stateText: "Working", updatedAt: 5 }], ended: [] };
+  const PC = { supported: true, state: "on", os: "win32", label: "ws-spoke-test", running: true, request: "REQ", card: CARD, checkCode: "X94X4-DTC3C" };
+
+  function pcRig(answers: Record<string, { status?: number; body: unknown }>) {
+    const calls: Call[] = [];
+    const fakeFetch = async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const path = new URL(String(url)).pathname;
+      calls.push({ method: init?.method ?? "GET", path, token: new Headers(init?.headers).get("x-lucid-host-token") ?? undefined, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      const a = answers[path] ?? { status: 404, body: { error: "not found" } };
+      return Response.json(a.body, { status: a.status ?? 200 });
+    };
+    const deps: RemoteSpokesDeps = {
+      endpoint: () => ({ url: "http://127.0.0.1:47555", token: TOKEN }), installed: () => true,
+      scan: (text) => scanAndDecide(tagScanner, text), record: () => {}, fetch: fakeFetch as typeof fetch,
+    };
+    const call = async (method: "GET" | "POST", path: string, body?: unknown) => {
+      const req = new Request(`http://127.0.0.1:3000${path}`, { method, ...(body !== undefined ? { body: JSON.stringify(body), headers: { "content-type": "application/json" } } : {}) });
+      const res = await handleRemoteSpokes(req, new URL(req.url).pathname, deps);
+      const text = await res.text();
+      return { status: res.status, data: res.status === 200 ? JSON.parse(text).data : null };
+    };
+    return { calls, call };
+  }
+
+  test("the view and the work list are read with the host token, validated, and carry nothing the view does not show", async () => {
+    const r = pcRig({ "/host/this-pc": { body: PC }, "/host/this-pc/tasks": { body: WORK }, "/host/this-pc/off": { body: { ...PC, state: "off" } } });
+    expect((await r.call("GET", "/api/remote-spokes/this-pc")).data).toEqual({ ok: true, thisPc: { supported: true, state: "on", label: "ws-spoke-test", running: true } });
+    const w = (await r.call("GET", "/api/remote-spokes/this-pc/tasks")).data;
+    expect(w).toMatchObject({ ok: true, work: { paused: false, tasks: [{ id: TASK, name: "photos", hub: "workstation", state: "working" }], ended: [] } });
+    expect((await r.call("POST", "/api/remote-spokes/this-pc/off", {})).data).toMatchObject({ ok: true, thisPc: { state: "off" } });
+    expect(r.calls.map((c) => [c.method, c.path, c.token])).toEqual([
+      ["GET", "/host/this-pc", TOKEN], ["GET", "/host/this-pc/tasks", TOKEN], ["POST", "/host/this-pc/off", TOKEN],
+    ]);
+  });
+
+  test("Stop one needs a task id and Stop all its confirmation: without them nothing reaches the plugin", async () => {
+    const r = pcRig({ "/host/this-pc/stop-task": { body: WORK }, "/host/this-pc/stop-all": { body: { ...WORK, tasks: [] } } });
+    expect((await r.call("POST", "/api/remote-spokes/this-pc/stop-task", { task: "t_nope" })).data).toEqual({ ok: false, error: "malformed task id" });
+    expect((await r.call("POST", "/api/remote-spokes/this-pc/stop-task", { task: TASK, extra: 1 })).data).toEqual({ ok: false, error: "malformed task id" });
+    expect((await r.call("POST", "/api/remote-spokes/this-pc/stop-all", {})).data).toMatchObject({ ok: false });
+    expect((await r.call("POST", "/api/remote-spokes/this-pc/stop-all", { confirm: "yes" })).data).toMatchObject({ ok: false });
+    expect(r.calls).toEqual([]);
+    expect((await r.call("POST", "/api/remote-spokes/this-pc/stop-task", { task: TASK })).data).toMatchObject({ ok: true });
+    expect((await r.call("POST", "/api/remote-spokes/this-pc/stop-all", { confirm: "stop all" })).data).toMatchObject({ ok: true, work: { tasks: [] } });
+    expect(r.calls.map((c) => [c.path, c.body])).toEqual([["/host/this-pc/stop-task", { task: TASK }], ["/host/this-pc/stop-all", { confirm: "stop all" }]]);
+  });
+
+  test("setup, activate, update and remove are not reachable from the Fleet window", async () => {
+    const r = pcRig({});
+    for (const op of ["setup", "activate", "update", "remove"]) expect((await r.call("POST", `/api/remote-spokes/this-pc/${op}`, { confirm: "remove" })).status).toBe(404);
+    expect(r.calls).toEqual([]);
+  });
+
+  test("a plugin without these routes says to update it; a refusal keeps the plugin's own words", async () => {
+    const old = pcRig({});
+    expect((await old.call("GET", "/api/remote-spokes/this-pc")).data).toEqual({ ok: false, error: "This needs Remote Spokes 0.10.3 or later. Update the add-on, then try again." });
+    const busy = pcRig({ "/host/this-pc/pause": { status: 409, body: { error: "Another This PC job is still running." } } });
+    expect((await busy.call("POST", "/api/remote-spokes/this-pc/pause", {})).data).toEqual({ ok: false, error: "Another This PC job is still running." });
+  });
+
+  test("+ Add a computer forwards only a card or a certificate, and answers the computer it added", async () => {
+    const r = pcRig({ "/host/spokes/add": { body: { node: NODE, mailbox: null } } });
+    expect((await r.call("POST", "/api/remote-spokes/add", { cert: "X94X4-DTC3C" })).data).toMatchObject({ ok: false, error: expect.stringContaining("lucid-spoke-card:") });
+    expect((await r.call("POST", "/api/remote-spokes/add", { cert: CARD, also: true })).data).toEqual({ ok: false, error: "malformed request" });
+    expect((await r.call("GET", "/api/remote-spokes/add")).status).toBe(405);
+    expect(r.calls).toEqual([]);
+    expect((await r.call("POST", "/api/remote-spokes/add", { cert: `  ${CARD}\n` })).data).toEqual({ ok: true, node: NODE });
+    expect(r.calls.map((c) => [c.method, c.path, c.token, c.body])).toEqual([["POST", "/host/spokes/add", TOKEN, { cert: CARD }]]);
+    const refused = pcRig({ "/host/spokes/add": { status: 400, body: { error: "that certificate is not signed by this org's root" } } });
+    expect((await refused.call("POST", "/api/remote-spokes/add", { cert: CARD })).data).toEqual({ ok: false, error: "that certificate is not signed by this org's root" });
+  });
+});

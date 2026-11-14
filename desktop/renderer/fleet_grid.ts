@@ -39,8 +39,11 @@ import { canSteer, laneDrainReady, mainCheckoutCwd, parallelPushNotice, parallel
 import { fleetHome, openFleetOrbit, setFleetHome } from "./fleet_orbit.ts";
 // P-RS-LANES.1 (ADR-0551): remote spoke tasks are lanes here too. orbit_remote builds and answers their cards (the
 // per-spoke panel's own actions, through its one write path); this file only places them and counts them in the pill.
-import { onRemoteChange, onRemoteLaneClick, paintRemoteLanes, refreshRemote, remoteAnsweredAt, remoteCounts, remoteSnapshot } from "./orbit_remote.ts";
-import { remoteLanes, type RemoteSpokeState } from "./remote_spokes_model.ts";
+import { onRemoteChange, onRemoteLaneClick, paintRemoteLanes, refreshRemote, remoteAnsweredAt, remoteCounts, remoteSnapshot, sendAct } from "./orbit_remote.ts";
+import { remoteLanes, taskModelChoices, type RemoteSpokeState } from "./remote_spokes_model.ts";
+// P-FLEET-COMPUTERS.1 (ADR-0578): the Computers drawer, + Add a computer and the Helping view; + Agent's place choices.
+import { helpingBadge, initFleetComputers, onThisPcChange, openComputers, openHelping, refreshThisPc } from "./fleet_computers_ui.ts";
+import { placeChoices } from "./fleet_computers.ts";
 // P-FLEET-BOARDS.1: boards are the ENGINE's (/api/fleet/boards/*); the rules this grid asks of them are pure, in fleet_boards_view.
 import { agentsOn, BOARD_AGENTS_MAX, BOARD_LAYOUTS, BOARD_NAME_MAX, boardHasNeeds, boardLayoutOf, boardNameProblem, BOARDS_MAX, EVERYTHING, findBoard, liveForPrune, needsYou, nextBoardName, nextNeedingYou, type LiveAgent, type NextJump } from "./fleet_boards_view.ts";
 // P-FLEET.L18: named lane groups - pure model; this file owns only chips, dividers and storage.
@@ -76,7 +79,8 @@ import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
 /** The seven lane functions, typed straight off the bridge so the seam can never drift (results are
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
 type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueuePeek" | "fleetQueueTake" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject" | "stopCall" | "repoChoices" | "repoGithub"
-  | "fleetBoards" | "fleetBoardCreate" | "fleetBoardRename" | "fleetBoardRemove" | "fleetBoardMove" | "fleetBoardAgents" | "fleetBoardLayout" | "fleetBoardsPrune">; // P-FLEET-BOARDS.1
+  | "fleetBoards" | "fleetBoardCreate" | "fleetBoardRename" | "fleetBoardRemove" | "fleetBoardMove" | "fleetBoardAgents" | "fleetBoardLayout" | "fleetBoardsPrune" // P-FLEET-BOARDS.1
+  | "addComputer" | "thisPc" | "thisPcWork" | "thisPcAct">; // P-FLEET-COMPUTERS.1 (ADR-0578)
 type FleetResources = FleetStatusView["resources"];
 
 export interface FleetGridDeps extends FleetFns {
@@ -116,6 +120,9 @@ export interface FleetGridDeps extends FleetFns {
   openKnowledge?: (anchor: HTMLElement) => void;
   openSkills?: (anchor: HTMLElement) => void;
   openConnectors?: () => void;
+  /** P-FLEET-COMPUTERS.1 (ADR-0578): open the Remote Spokes panel's window, where + Add a computer's other steps
+   *  happen. Optional like openUrl; absent, the drawer only lists the steps. */
+  openRemoteAdmin?: () => void;
 }
 
 const FLEET_DOCK_KEY = "lucid.fleetDock.v1";
@@ -252,6 +259,8 @@ function moreMenuItems(): PlusItem[] {
   const mode = boardLayoutOf(boards, currentBoard).layout;
   const check = (on: boolean): string => (on ? "\u2713" : "");
   return [
+    // P-FLEET-COMPUTERS.1 (ADR-0578): Computers lives here since P-FLEET.HEAD1 kept the header to the essentials.
+    { id: "computers", label: "Computers", icon: icon("gauge", 15), tip: tipValue("Computers", "This PC and the computers you added, how much room each has, and + Add a computer."), run: () => openComputers() },
     { id: "orbit", label: "Orbit view", icon: icon("share", 15), tip: tipValue("Orbit view", "Back to the map of the hub and its agents. Same agents, same colors: the grid and the orbit are two faces of one fleet."), run: () => openFleetOrbit() },
     ...BOARD_LAYOUTS.map((l): PlusItem => ({ id: `layout-${l.id}`, label: l.id === "free" ? "Free layout" : l.label, icon: icon("layout", 15), kbd: check(l.id === mode), tip: tipValue(l.label, LAYOUT_TIPS[l.id]), run: () => setBoardLayout(l.id) })),
     { id: "byrepo", label: "Group by repo", icon: icon("git", 15), kbd: check(groupByRepo), tip: tipValue("Group by repo", "Section the cards by the codebase each agent works on, in the same colors as the orbit. Your named groups come back when this is off."), run: () => toggleByRepo() },
@@ -288,6 +297,22 @@ const fleetFallback = (vw: number, vh: number): DockShape => {
 export function initFleetGrid(d: FleetGridDeps): void {
   deps = d;
   onRemoteChange(onRemoteSnapshot); // P-RS-LANES.1 (ADR-0551)
+  // P-FLEET-COMPUTERS.1 (ADR-0578): the Computers drawer and this computer's own Helping view.
+  initFleetComputers({
+    addComputer: d.addComputer, thisPc: d.thisPc, thisPcWork: d.thisPcWork, thisPcAct: d.thisPcAct,
+    localRunning: () => [...runs.values()].filter((r) => r.view.status !== "stopped").length,
+    ...(d.openRemoteAdmin ? { openRemoteAdmin: d.openRemoteAdmin } : {}),
+  });
+  onThisPcChange(paintHelpingBtn);
+}
+
+/** ADR-0578: the header's Helping button, only while this computer helps a hub, with how many tasks run here. */
+function paintHelpingBtn(): void {
+  const btn = dock ? ($("[data-fleet-helping]", dock) as HTMLElement | null) : null;
+  if (!btn) return;
+  const b = helpingBadge();
+  btn.hidden = !b.show;
+  btn.innerHTML = `${icon("share", 12)} Helping${b.count ? ` <b>${b.count}</b>` : ""}${b.paused ? " (paused)" : ""}`;
 }
 
 export function toggleFleetGrid(): void {
@@ -314,9 +339,10 @@ export function openFleetGrid(): void {
       <span class="share-dock-title">LUCID Fleet</span>
       <span class="fleet-headroom" id="fleetHeadroom" data-tip="Local headroom|Live CPU and memory. Agents are UNLIMITED - a new one is refused only while a metric stays at or above the tick for 30 seconds straight, so a burst never blocks you."></span>
       <button class="btn-mini fleet-add-btn fleet-next" data-fleet-next hidden data-tip="Next that needs you|Jumps to the next agent waiting for your approval or likely stuck: this board first, then your other boards, then Everything. Press again for the one after."></button>
+      <button class="btn-mini fleet-add-btn" data-fleet-helping hidden data-tip="This computer is helping|What your hub runs on this computer now. You can pause new work, stop one task or all of them, or stop helping."></button>
       <button class="btn-mini fleet-add-btn" data-ask-lucid data-tip="Ask Lucid (Ctrl+Shift+L)|Ask about anything in this panel. He can read what is on your screen and every agent, and he opens on top of this panel.">${icon("spark", 12)} Ask</button>
-      <button class="btn-mini fleet-add-btn" data-fleet-add data-tip="New agent|Start a new local agent in this grid. The Orbit map's + Agent does the same thing.">${icon("plus", 12)} Agent</button>
-      <button class="btn-mini fleet-add-btn fleet-more-btn" data-fleet-more type="button" data-tip="More|Orbit view, layouts, boards, group by repo, the default view and the classic hub">More<span class="fleet-more-chev">${icon("chevron", 11)}</span></button>
+      <button class="btn-mini fleet-add-btn" data-fleet-add data-tip="New agent|Say what it should work on and where it runs: This PC, or a computer you added. The Orbit map's + Agent does the same thing.">${icon("plus", 12)} Agent</button>
+      <button class="btn-mini fleet-add-btn fleet-more-btn" data-fleet-more type="button" data-tip="More|Computers, Orbit view, layouts, boards, group by repo, the default view and the classic hub">More<span class="fleet-more-chev">${icon("chevron", 11)}</span></button>
       <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" data-tip="Minimize (agents keep running)">${UP_ARROW}</button>
       <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" data-tip="Close (agents keep running)">${icon("close", 15)}</button>
     </div>
@@ -346,6 +372,7 @@ export function openFleetGrid(): void {
   dock.addEventListener("pointerdown", onDockPointerDown); // P-FLEET.L9: per-card resize + drag-to-reorder
   dock.addEventListener("dblclick", onDockDblClick); // P-FLEET.FIT1: a card edge = equal shares again; P-FLEET-BOARDS.1: a board tab = rename
   paintTabs();
+  paintHelpingBtn(); // ADR-0578: from the last This PC read; the first poll refreshes it
   wireAutofit();
   // P-FLEET.L13: catch-up buttons + their visibility. Both are DELEGATED on the dock: lane cards are
   // built and destroyed on every poll, so per-card listeners would leak with them (the same reason
@@ -1473,6 +1500,7 @@ async function refresh(): Promise<void> {
   // the local lanes back (refreshRemote is single-flight; onRemoteSnapshot paints what it answers).
   const remoteAsked = Date.now();
   const remoteRead = refreshRemote();
+  void refreshThisPc(); // P-FLEET-COMPUTERS.1: throttled inside (PC_MS)
   if (Date.now() - boardsAt >= BOARDS_MS) void loadBoards(); // P-FLEET-BOARDS.1: not every 2.5s
   let st: FleetStatusView | null = null;
   try { st = await deps.fleetStatus(); } catch { st = null; }
@@ -2808,13 +2836,24 @@ function toggleSpawnForm(): void {
   const pick = spawnModelDefault(options, rememberedSpokeModel(), deps.getMasterModel());
   const all = fleetModelOptions(options.some((o) => o.value === pick) || !pick ? options : [{ value: pick, label: pick }, ...options]);
   const opts = all.map((o) => `<option value="${esc(o.value)}"${o.value === pick ? " selected" : ""}>${esc(o.label)}</option>`).join("");
-  const form = el(`<div class="fleet-card fleet-spawn-card">
+  // P-FLEET-COMPUTERS.1 (ADR-0578): where it runs. Only This PC when this hub added no computer (the form then looks
+  // as it always did); a computer that cannot take an agent now is shown with why, and cannot be picked.
+  const places = placeChoices(remoteSnapshot() ?? { available: false, plugin: "running", reason: "" }, Date.now());
+  const where = places.length < 2 ? "" : `<label class="fleet-spawn-lbl">Where should it run?</label>
+      <div class="fleet-spawn-where" data-spawn-where role="radiogroup" aria-label="Where the new agent runs">${places.map((p) =>
+        `<button type="button" class="fleet-where${p.key === "local" ? " on" : ""}${p.enabled ? "" : " off"}" role="radio" aria-checked="${p.key === "local"}" data-spawn-at="${esc(p.key)}"${p.why ? ` title="${esc(p.why)}"` : ""}>${esc(p.name)}<small>${esc(p.sub)}</small></button>`).join("")}</div>
+      <div class="fleet-spawn-note" data-spawn-where-why hidden></div>`;
+  const form = el(`<div class="fleet-card fleet-spawn-card" data-at="local">
     <div class="fleet-card-head">
       <span class="fleet-led" aria-hidden="true"></span>
       <span class="fleet-lane-name">New agent</span>
       <button class="fleet-card-btn" data-spawn-cancel aria-label="Close the new-agent form" data-tip="Close">${icon("close", 12)}</button>
     </div>
     <div class="fleet-spawn">
+      <label class="fleet-spawn-lbl">What should it work on? <span class="fleet-spawn-opt" data-spawn-task-opt>optional</span></label>
+      <textarea class="fleet-spawn-in fleet-spawn-task" data-spawn-task rows="3" spellcheck="true" aria-label="What the new agent should work on" placeholder="For example: update the listing page photos and check the links"></textarea>
+      ${where}
+      <div class="fleet-spawn-local" data-spawn-local>
       <label class="fleet-spawn-lbl" data-spawn-cwd-lbl>Folder</label>
       <div class="fleet-spawn-row">
         <input class="fleet-spawn-in" data-spawn-cwd type="text" value="${esc(deps.getMasterCwd())}" spellcheck="false" aria-label="The folder this agent works in" />
@@ -2832,12 +2871,13 @@ function toggleSpawnForm(): void {
         <label class="fleet-spawn-save"><input type="checkbox" data-spawn-save checked /><span data-spawn-save-txt>Remember this token for this host</span></label>
       </div>
       <label class="fleet-spawn-save fleet-spawn-wt" data-tip="The worktree is created next to the repo, starts at its last commit (uncommitted edits in this folder are not copied), and is kept when the agent closes."><input type="checkbox" data-spawn-wt /><span>Own worktree: this agent gets a new branch and its own copy of the repo, so it runs beside other agents here. I accept that merging it back can conflict.</span></label>
+      </div>
       <label class="fleet-spawn-lbl">Name <span class="fleet-spawn-opt">optional</span></label>
       <input class="fleet-spawn-in" data-spawn-name type="text" placeholder="agent-${runs.size + 1}" spellcheck="false" aria-label="A name for this agent" />
       <label class="fleet-spawn-lbl">Model</label>
       <select class="fleet-spawn-in" data-spawn-model aria-label="The model this agent runs">${opts}</select>
       <div class="fleet-spawn-err" data-spawn-err hidden></div>
-      <div class="fleet-spawn-acts"><button class="btn-mini ok" data-spawn-go>${icon("bolt", 12)} Spawn</button></div>
+      <div class="fleet-spawn-acts"><button class="btn-mini ok" data-spawn-go>${icon("bolt", 12)} Start</button></div>
     </div>
   </div>`);
   grid.prepend(form);
@@ -2863,7 +2903,41 @@ function toggleSpawnForm(): void {
     const auth = $("[data-spawn-auth]", form) as HTMLElement | null;
     if (signIn && note) { note.textContent = signIn; note.className = "fleet-spawn-note"; if (auth) auth.hidden = true; }
   });
-  cwdIn?.focus();
+  // The local model list, kept so picking This PC again after another computer restores it.
+  form.dataset.localModels = opts;
+  ($("[data-spawn-task]", form) as HTMLTextAreaElement | null)?.focus();
+}
+
+/** ADR-0578: pick where the new agent runs. Another computer hides This PC's folder, repo and worktree fields (the
+ *  agent works in that computer's own folder), offers the models that computer reports, and needs a task to start
+ *  with. A choice that cannot take an agent now only says why. */
+function pickSpawnPlace(form: HTMLElement, btn: HTMLElement): void {
+  const key = btn.dataset.spawnAt ?? "local";
+  const why = $("[data-spawn-where-why]", form) as HTMLElement | null;
+  if (btn.classList.contains("off")) {
+    if (why) { why.hidden = false; why.className = "fleet-spawn-note bad"; why.textContent = btn.title || "That computer cannot take an agent now."; }
+    return;
+  }
+  if (why) why.hidden = true;
+  form.dataset.at = key;
+  for (const b of form.querySelectorAll<HTMLElement>("[data-spawn-at]")) {
+    const on = b === btn;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-checked", String(on));
+  }
+  const local = key === "local";
+  const block = $("[data-spawn-local]", form) as HTMLElement | null;
+  if (block) block.hidden = !local;
+  const opt = $("[data-spawn-task-opt]", form) as HTMLElement | null;
+  if (opt) opt.textContent = local ? "optional" : "needed to start there";
+  const model = $("[data-spawn-model]", form) as HTMLSelectElement | null;
+  if (!model) return;
+  if (local) { model.innerHTML = form.dataset.localModels ?? ""; return; }
+  const snap = remoteSnapshot();
+  const spoke = snap?.available ? snap.spokes.find((s) => s.node === key) : undefined;
+  const def = spoke?.models.default;
+  model.innerHTML = [`<option value="">${esc(def ? `Its default (${def})` : "Its default")}</option>`,
+    ...(spoke ? taskModelChoices(spoke) : []).map((m) => `<option value="${esc(m)}">${esc(m)}</option>`)].join("");
 }
 
 /** A long folder path overflows a 360px card from the left. Scroll to the end so the folder name
@@ -2928,9 +3002,12 @@ function paintRepoHint(form: HTMLElement): void {
 async function submitSpawn(): Promise<void> {
   if (!dock || !deps) return;
   const form = $(".fleet-spawn-card", dock) as HTMLElement | null; if (!form) return;
+  const task = ($("[data-spawn-task]", form) as HTMLTextAreaElement | null)?.value.trim() ?? "";
   const cwd = ($("[data-spawn-cwd]", form) as HTMLInputElement | null)?.value.trim() ?? "";
   const name = ($("[data-spawn-name]", form) as HTMLInputElement | null)?.value.trim() ?? "";
   const model = ($("[data-spawn-model]", form) as HTMLSelectElement | null)?.value ?? "";
+  const at = form.dataset.at ?? "local";
+  if (at !== "local") { await startRemoteAgent(form, at, task, name, model); return; }
   const repoRaw = ($("[data-spawn-repo]", form) as HTMLInputElement | null)?.value.trim() ?? "";
   const patInput = $("[data-spawn-pat]", form) as HTMLInputElement | null;
   const pat = patInput?.value ?? "";
@@ -2945,7 +3022,7 @@ async function submitSpawn(): Promise<void> {
   const goHtml = go?.innerHTML ?? "";
   if (err) err.hidden = true;
   // A clone can take minutes on a big repo, so the button says which phase we are in rather than just dying.
-  if (go) { go.disabled = true; go.innerHTML = remote ? `${icon("git", 12)} Cloning\u2026` : `${icon("bolt", 12)} Spawning\u2026`; }
+  if (go) { go.disabled = true; go.innerHTML = remote ? `${icon("git", 12)} Cloning\u2026` : `${icon("bolt", 12)} Starting\u2026`; }
   // The token is vaulted BEFORE the clone (a slow clone must not be able to lose it) and always under the
   // HOST it was typed for - never a global "git token" any other remote could reach for. Failing to STORE it
   // is a warning, not a stop: the inline copy still authenticates this clone.
@@ -2959,7 +3036,7 @@ async function submitSpawn(): Promise<void> {
   // filesystem call (a OneDrive folder hydrating) or a cold provider backend. Say so, live, instead of
   // spinning mutely - the number-one report was "it just sits there" with the cause invisible.
   const slow = setTimeout(() => {
-    if (go) go.innerHTML = `${icon("bolt", 12)} Still spawning\u2026`;
+    if (go) go.innerHTML = `${icon("bolt", 12)} Still starting\u2026`;
     if (err) { err.hidden = false; err.textContent = "Taking longer than usual. If this folder lives under OneDrive, open it in Explorer once (cloud placeholders can stall the engine while they hydrate); the engine window may name the holdup."; }
   }, 20_000);
   const r = await deps.fleetSpawn({
@@ -2978,12 +3055,35 @@ async function submitSpawn(): Promise<void> {
     const laneId = "lane" in r ? r.lane?.id : undefined;
     if (laneId) addToShownBoard(laneId); // P-FLEET-BOARDS.1: a new agent joins the board it was started on
     await refresh();
+    // ADR-0578: what it should work on is its first prompt, sent through the card like a typed one (so it streams
+    // there, or waits in the card's queue while the agent is still busy starting).
+    const run = laneId ? runs.get(laneId) : undefined;
+    const input = run?.card ? ($("[data-fleet-input]", run.card) as HTMLTextAreaElement | null) : null;
+    if (run && input && task) { input.value = task; sendPrompt(run); }
     return;
   }
   if (go) { go.disabled = false; go.innerHTML = goHtml; }
   // A refusal carries the measured numbers ("system CPU has been at 93% for 34s") or the redacted git
   // failure - show it verbatim, it is the whole point of the guard.
   fail([warn, r?.reason || "The engine refused the agent."].filter(Boolean).join(" "));
+}
+
+/** ADR-0578: + Agent on a computer this hub added. The same submit the Remote spokes view uses (orbit_remote
+ *  sendAct), so the hub certificate's scopes and the computer's own checks apply; the new agent joins the shown
+ *  board as `rs:<node>:<task>` (ADR-0577's key). */
+async function startRemoteAgent(form: HTMLElement, node: string, task: string, name: string, model: string): Promise<void> {
+  const err = $("[data-spawn-err]", form) as HTMLElement | null;
+  const fail = (msg: string): void => { if (err) { err.textContent = msg; err.hidden = false; } };
+  if (!task) { fail("Say what it should work on: an agent on another computer starts with that."); return; }
+  const go = $("[data-spawn-go]", form) as HTMLButtonElement | null;
+  const goHtml = go?.innerHTML ?? "";
+  if (err) err.hidden = true;
+  if (go) { go.disabled = true; go.innerHTML = `${icon("bolt", 12)} Sending\u2026`; }
+  const r = await sendAct(node, "submit", { text: task, ...(name ? { name } : {}), ...(model ? { model } : {}) });
+  if (go) { go.disabled = false; go.innerHTML = goHtml; }
+  if (r.error) { fail(r.error); return; }
+  form.remove(); paintEmpty();
+  if (r.task) addToShownBoard(`rs:${node}:${r.task}`);
 }
 
 // ---------------------------------------------------------------- delegated events
@@ -3083,8 +3183,12 @@ function onClick(ev: Event): void {
     if (grun) openGroupMenu(grun, gc);
     return;
   }
+  if (t.closest("[data-fleet-computers]")) { openComputers(); return; } // P-FLEET-COMPUTERS.1
+  if (t.closest("[data-fleet-helping]")) { openHelping(); return; }
   if (t.closest("[data-fleet-add]")) { toggleSpawnForm(); return; }
   if (t.closest("[data-spawn-go]")) { void submitSpawn(); return; }
+  const at = t.closest<HTMLElement>("[data-spawn-at]");
+  if (at) { const form = at.closest<HTMLElement>(".fleet-spawn-card"); if (form) pickSpawnPlace(form, at); return; }
   if (t.closest("[data-spawn-cancel]")) { toggleSpawnForm(); return; }
   if (t.closest("[data-spawn-browse]")) { void browseSpawnFolder(); return; }
   // P-RS-LANES.1 (ADR-0551): a remote lane's controls are the per-spoke panel's own (orbit_remote.ts).
