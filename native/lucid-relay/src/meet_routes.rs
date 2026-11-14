@@ -2,7 +2,7 @@
 // caller, body and gate in the order the Python handler does, so the same request gets the same first refusal.
 
 use crate::meet::{self as m, run, Ctx, R, CAPTIONS_LIMIT_MAX};
-use crate::meet_hub::{files, E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
+use crate::meet_hub::{bridge, files, E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
 use crate::meet_json::{self as pj, obj, Obj};
 use crate::meet_tls::{crl_path, read_bytes};
 use crate::meet_x509::pem_blocks;
@@ -132,6 +132,26 @@ fn get_route(path: &str) -> Option<Route> {
             let who = c.who(false)?;
             c.relay.hub.guests_lobby_wait(&c.q("wait", ""), &who, &c.q("room", ""))
         },
+        // bridges
+        "/v1/bridge/links" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.gate(&who, None, "", &session)?;
+            c.relay.hub.bridge_links(&session, &who, &c.q("channel", ""))
+        },
+        "/v1/admin/bridge" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.bridge_admin(&c.q("session", ""), &who)
+        },
+        "/v1/admin/bridge/audit" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.bridge_audit(&c.q("session", ""), &who, &c.q("after", "0"), &c.q("limit", "200"))
+        },
+        "/v1/bridge/c/outbox" => |c: &mut Ctx| {
+            let who = connector(c)?;
+            c.relay.hub.bridge_c_outbox(&who, &c.q("after", "0"), &c.q("wait", "0"))
+        },
+        "/v1/bridge/c/file" => bridge_file_get,
         _ => return None,
     };
     Some(route)
@@ -334,6 +354,61 @@ fn post_route(path: &str) -> Option<Route> {
             let (who, b) = (c.who(false)?, c.body()?);
             c.relay.hub.guests_lobby_leave(b.get("wait"), &who, b.get("room"))
         },
+        // bridges: members (a session) and relay admins
+        "/v1/bridge/code" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.bridge_code(&session, &who, b.get("channel"), b.get("platform"))
+        },
+        "/v1/bridge/unlink" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.bridge_unlink(&session, &who, b.get("link"))
+        },
+        "/v1/bridge/call" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.bridge_call(&session, &who, b.get("channel"))
+        },
+        "/v1/admin/bridge" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.bridge_admin_set(&pj::s(&b, "session"), &who, b.get("org"), b.get("policy"))
+        },
+        // bridges: connector certificates only, no session
+        "/v1/bridge/c/hello" => |c: &mut Ctx| {
+            let (who, b) = connector_body(c)?;
+            c.relay.hub.bridge_c_hello(&who, b.get("platform"), b.get("policy"), b.get("version"))
+        },
+        "/v1/bridge/c/claim" => |c: &mut Ctx| {
+            let (who, b) = connector_body(c)?;
+            c.relay.hub.bridge_c_claim(&who, b.get("code"), b.get("platform"), b.get("target"), b.get("by_name"))
+        },
+        "/v1/bridge/c/unlink" => |c: &mut Ctx| {
+            let (who, b) = connector_body(c)?;
+            c.relay.hub.bridge_c_unlink(&who, b.get("link"), b.get("by_name"))
+        },
+        "/v1/bridge/c/ack" => |c: &mut Ctx| {
+            let (who, b) = connector_body(c)?;
+            c.relay.hub.bridge_c_ack(&who, b.get("link"), b.get("seq"), b.get("ok"), b.get("ext"), b.get("reason"), b.get("state"))
+        },
+        "/v1/bridge/c/post" => |c: &mut Ctx| {
+            let (who, b) = connector_body(c)?;
+            c.relay.hub.bridge_c_post(&who, b.get("link"), b.get("user"), b.get("msg"), b.get("text"), b.get("thread"), b.get("reply_to"), b.get("url"), b.get("files"))
+        },
+        "/v1/bridge/c/edit" => |c: &mut Ctx| {
+            let (who, b) = connector_body(c)?;
+            c.relay.hub.bridge_c_edit(&who, b.get("link"), b.get("msg"), b.get("text"))
+        },
+        "/v1/bridge/c/delete" => |c: &mut Ctx| {
+            let (who, b) = connector_body(c)?;
+            c.relay.hub.bridge_c_delete(&who, b.get("link"), b.get("msg"))
+        },
+        "/v1/bridge/c/react" => |c: &mut Ctx| {
+            let (who, b) = connector_body(c)?;
+            c.relay.hub.bridge_c_react(&who, b.get("link"), b.get("msg"), b.get("emoji"), b.get("on"), b.get("user"))
+        },
+        "/v1/bridge/c/call" => |c: &mut Ctx| {
+            let (who, b) = connector_body(c)?;
+            c.relay.hub.bridge_c_call(&who, b.get("link"), b.get("by_name"))
+        },
+        "/v1/bridge/c/file" => bridge_file_post,
         _ => return None,
     };
     Some(route)
@@ -342,6 +417,11 @@ fn post_route(path: &str) -> Option<Route> {
 /// do_GET / do_POST: 404 `unknown path`, else the route's answer through Handler._run. None when the client went
 /// away.
 pub fn dispatch(ctx: &mut Ctx, method: &str) -> Option<(u16, Obj)> {
+    // _bridge_confined: a connector certificate gets 403 on every path outside /v1/bridge/c/* (unknown ones too); the
+    // connection closes with the body left unread
+    if !ctx.path.starts_with(bridge::C_PREFIX) && m::connector_cert(ctx.der) {
+        return run(ctx, Ok(Err(m::E::Forbidden(bridge::ROUTES_ONLY.into()))));
+    }
     let route = if method == "GET" { get_route(&ctx.path) } else { post_route(&ctx.path) };
     let Some(route) = route else {
         return Some((404, obj([("error", Value::from("unknown path"))])));
@@ -557,7 +637,14 @@ fn files_get(c: &mut Ctx) -> R<Obj> {
     c.gate(&who, None, &peer, &session)?;
     let some = |v: String| Some(v).filter(|v| !v.is_empty());
     let (file, fh, offset, count) = c.relay.hub.files_open(&who, &c.q("id", ""), &c.q("offset", ""), &c.q("length", ""), some(peer), some(session))?;
-    let name = pj::text_of(&file, "name");
+    files_send(c, &file, fh, offset, count, who.principal);
+    Ok(Obj::new())
+}
+
+/// _files_send: answer `count` bytes of an open kept file from `offset`, always as an attachment of type
+/// application/octet-stream (`GET /v1/files/get` and the bridge's `GET /v1/bridge/c/file`).
+fn files_send(c: &mut Ctx, file: &Obj, fh: std::fs::File, offset: u64, count: u64, principal: String) {
+    let name = pj::text_of(file, "name");
     let plain: String = name.chars().map(|ch| if (' '..'\u{7f}').contains(&ch) && ch != '"' && ch != '\\' { ch } else { '_' }).collect();
     let quoted = quote(&name);
     let id = pj::text_of(&file, "id");
@@ -576,8 +663,76 @@ fn files_get(c: &mut Ctx) -> R<Obj> {
         ("X-File-Sha256", field("sha256")),
         ("X-File-Offset", offset.to_string()),
     ];
-    c.raw = Some(m::Raw::File(m::RawFile { headers, file: fh, offset, count, id, principal: who.principal }));
+    c.raw = Some(m::Raw::File(m::RawFile { headers, file: fh, offset, count, id, principal }));
+}
+
+// ── bridges: connector routes ────────────────────────────────────────────────────────────────────────────────
+
+/// _bridge_connector: the caller, a connector certificate (403 for anyone else).
+fn connector(c: &Ctx) -> R<m::Identity> {
+    let who = c.who(false)?;
+    if !who.connector {
+        return m::forbidden(bridge::CONNECTORS_ONLY);
+    }
+    Ok(who)
+}
+
+fn connector_body(c: &mut Ctx) -> R<(m::Identity, Obj)> {
+    let who = connector(c)?;
+    Ok((who, c.body()?))
+}
+
+/// `GET /v1/bridge/c/file?link=&id=`: the bytes of a file an op of that link named.
+fn bridge_file_get(c: &mut Ctx) -> R<Obj> {
+    let who = connector(c)?;
+    let (file, fh, count) = c.relay.hub.bridge_c_file_open(&who, &c.q("link", ""), &c.q("id", ""))?;
+    files_send(c, &file, fh, 0, count, who.principal);
     Ok(Obj::new())
+}
+
+/// `POST /v1/bridge/c/file?link=&name=&mime=` with the file's bytes as the body -> `{file}`. The checks (kind, size,
+/// quota) come before a byte is read; the bytes go to the files slice's upload in FILES_PART pieces. Until every byte
+/// is read, any answer closes the connection.
+fn bridge_file_post(c: &mut Ctx) -> R<Obj> {
+    c.close = true;
+    let who = connector(c)?;
+    let no_length = || Err(m::E::Status(411, "send the file with its length (Content-Length)".into(), true));
+    if c.transfer_encoding.is_some() {
+        return no_length();
+    }
+    let length = match c.content_length.as_deref().map(m::py_int) {
+        Some(Ok(n)) if n >= 0 => n as u64,
+        _ => return no_length(),
+    };
+    let relay = c.relay.clone();
+    let hub = &relay.hub;
+    let uid = hub.bridge_c_file_begin(&who, &c.q("link", ""), &c.q("name", ""), &c.q("mime", ""), length)?;
+    let mut offset: u64 = 0;
+    while offset < length {
+        let n = (files::FILES_PART as u64).min(length - offset) as usize;
+        let part = match hub.files_chunk_begin(&who, &uid, &offset.to_string(), n) {
+            Ok(p) => p,
+            Err(e) => {
+                hub.bridge_c_file_drop(&uid);
+                return Err(e);
+            }
+        };
+        let data = match c.raw_body(n) {
+            Ok(d) => d,
+            Err(e) => {
+                hub.files_chunk_abort(part);
+                hub.bridge_c_file_drop(&uid);
+                return Err(e);
+            }
+        };
+        if let Err(e) = hub.files_chunk_write(part, &data) {
+            hub.bridge_c_file_drop(&uid);
+            return Err(e);
+        }
+        offset += n as u64;
+    }
+    c.close = false;
+    hub.bridge_c_file_done(&uid)
 }
 
 /// _chat_change: `{peer|session, scope: room|dm, with?, id, text}`: edit or delete a message.

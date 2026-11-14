@@ -35,6 +35,8 @@ pub const FINISH_SETUP: &str = "finish setting up this device first";
 pub const DEVICE_URI_PREFIX: &str = "urn:lucid-meet:device:";
 pub const SEED_URI_PREFIX: &str = "urn:lucid-meet:enroll:";
 pub const CONSOLE_URI: &str = "urn:lucid-meet:console";
+/// SAN URI of a bridge connector's certificate (contract BR-1): the /v1/bridge/c/* routes only, never a person.
+pub const CONNECTOR_URI: &str = "urn:lucid-meet:connector";
 pub const LEGACY_PREFIX: &str = "legacy-";
 pub const CLIENT_FIELD_MAX: usize = 40;
 pub const GATED_APPS: [&str; 2] = ["hub", "ios"];
@@ -237,12 +239,17 @@ pub struct Settings {
     pub sfu_secret_file: String,
     pub sfu_threshold: Value,
     pub sfu_max: Value,
+    /// Bridges (contract BR-1): each organization's bridge policy {org id: policy} ("_none" for people with no
+    /// organization). A missing org is off. Checked at start (meet_bridge); admins change it at runtime
+    /// (/v1/admin/bridge, kept in state.json over this).
+    pub bridge_policies: Obj,
 }
 
-const SETTINGS_FIELDS: [&str; 39] = [
+const SETTINGS_FIELDS: [&str; 40] = [
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "channel_days", "signer_url", "signer_cert",
     "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations", "file_max_mb", "files_quota_gb", "guest_port",
     "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max",
+    "bridge_policies",
 ];
 
 /// ORG_FIELD_MAX: characters of an organization id or label.
@@ -302,6 +309,7 @@ impl Default for Settings {
             sfu_secret_file: String::new(),
             sfu_threshold: Value::from(9),
             sfu_max: Value::from(100),
+            bridge_policies: Obj::new(),
         }
     }
 }
@@ -432,6 +440,12 @@ impl Settings {
                 *slot = v.clone();
             }
         }
+        // _bridge_configure checks each policy at start
+        match raw.get("bridge_policies") {
+            None => {}
+            Some(Value::Object(o)) => s.bridge_policies = o.clone(),
+            Some(_) => return Err("relay settings: bridge_policies must map organization ids to policies".into()),
+        }
         // _files_configure
         if let Some(v) = raw.get("file_max_mb") {
             match pj::as_int(Some(v)) {
@@ -464,6 +478,9 @@ pub struct Identity {
     pub cert_pem: String,
     /// A web guest (wave 3): `guest-<16 hex>@guest.invalid`, never in the directory or presence.
     pub guest: bool,
+    /// A bridge connector (SAN URI urn:lucid-meet:connector): the /v1/bridge/c/* routes only, no session; never a
+    /// person.
+    pub connector: bool,
 }
 
 /// Web guests' principals: `guest-<16 hex>@guest.invalid` only.
@@ -506,6 +523,7 @@ pub fn identity_from_cert(der: Option<&[u8]>) -> R<Identity> {
         name: pj::clip(cn.trim(), 80),
         serial: cert.serial.clone(),
         console: uris.iter().any(|u| u == CONSOLE_URI),
+        connector: uris.iter().any(|u| u == CONNECTOR_URI),
         ..Default::default()
     };
     let token = uri_value(uris, SEED_URI_PREFIX);
@@ -522,6 +540,12 @@ pub fn identity_from_cert(der: Option<&[u8]>) -> R<Identity> {
         who.device = format!("{LEGACY_PREFIX}{}", pj::clip(&who.serial, 16));
     }
     Ok(who)
+}
+
+/// _bridge_confined's test: the client certificate carries the connector URI (read from the certificate itself, so a
+/// connector is confined even when nothing else about it would be accepted).
+pub fn connector_cert(der: Option<&[u8]>) -> bool {
+    der.and_then(Cert::from_der).map(|c| c.names.uris.iter().any(|u| u == CONNECTOR_URI)).unwrap_or(false)
 }
 
 /// from_internet: a public internet address (ipaddress is_global), an IPv4-mapped address as its IPv4 address.

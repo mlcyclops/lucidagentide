@@ -311,6 +311,13 @@ impl State {
         !self.guests.public.is_empty()
     }
 
+    /// _bridge_guest_url: a guest link to `room` until `expires` with this slice's own tokens (the guest waits in the
+    /// lobby until someone in the call lets them in). Callers check guests_on first.
+    pub(super) fn guests_url(&mut self, room: &str, expires: i64) -> String {
+        let token = self.guests.mint(room, expires);
+        format!("{}/g/#t={token}", self.guests.public)
+    }
+
     /// _guests_configure: guests on when `guest_port` is set (its expiry and liveness sweep runs every reap).
     pub(super) fn guests_configure(&mut self, s: &m::Settings) -> Result<(), String> {
         if !pj::truthy(Some(&s.guest_port)) {

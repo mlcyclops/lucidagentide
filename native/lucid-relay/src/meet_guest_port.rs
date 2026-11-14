@@ -376,8 +376,8 @@ fn route(req: &mut Req, path: &str) -> R<Obj> {
 // ── redaction ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 /// _guests_hide: "" for a string that holds anyone's email address (a guest's own guest.invalid principal is not
-/// one); the string itself otherwise.
-fn hide(text: &str) -> String {
+/// one); the string itself otherwise. The bridge passes every name it puts in an op through it too.
+pub(crate) fn hide(text: &str) -> String {
     if !text.contains('@') {
         return text.to_string();
     }

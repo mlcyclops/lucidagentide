@@ -123,6 +123,9 @@ struct Upload {
     sha: Option<digest::Context>,
     busy: bool,
     expires: f64,
+    /// A bridge connector's upload (POST /v1/bridge/c/file): the link it is for ("" for anyone else's); only a post
+    /// on that link may use it.
+    bridge: String,
 }
 
 /// In memory: the unfinished uploads, the limits (relay.json file_max_mb, files_quota_gb) and the folder of the bytes.
@@ -595,7 +598,9 @@ impl State {
                 self.broadcast(&room, &line, None);
                 line
             }
-            Message::Channel { cid, msg, session, thread } => {
+            Message::Channel { cid, mut msg, session, thread } => {
+                // the bridge: `bridged` on the message before anyone hears it
+                self.bridge_chan_posted(&cid, &mut msg);
                 let msgs = self.channel_msgs.entry(cid.clone()).or_default();
                 msgs.push(msg.clone());
                 if thread {
@@ -624,6 +629,132 @@ impl State {
                 msg
             }
         }
+    }
+}
+
+/// _files_name and _files_type of a connector's upload (`POST /v1/bridge/c/file?name=&mime=`), checked first.
+pub(super) fn files_name_type(name: Body, mime: Body) -> R<(String, String)> {
+    Ok((file_name(name)?, file_type(mime)))
+}
+
+/// The bridge's uses of the files slice (meet_bridge): a connector's upload for one link, kept as a file of the
+/// bridged message that names it, and a kept file a link's op offered, opened for its connector.
+impl State {
+    /// bridge_c_file_begin, after the connector and its link were checked: an upload of `length` bytes into the
+    /// link's conversation, at most `most` bytes (and the relay's file cap: 413) and within the quota (507). Answers
+    /// its id; its parts go through files_chunk_begin and files_chunk_write.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn files_bridge_open(&mut self, who: &Identity, cid: &str, link: &str, name: String, kind: String, length: u64, most: u64) -> R<String> {
+        let now = pj::now();
+        self.files.expire(now);
+        let most = most.min(self.files.max);
+        if length > most {
+            return Err(E::Status(413, format!("files are limited to {} MB", most / MB), true));
+        }
+        if self.files.uploads.values().filter(|u| u.principal == who.principal).count() >= UPLOADS_MAX {
+            return Err(E::Conflict(format!("send the files you uploaded first (at most {UPLOADS_MAX} waiting at once)")));
+        }
+        if self.files_used() + length > self.files.quota {
+            log_warn(&format!("files_full principal={} size={length}", who.principal));
+            return Err(E::Status(507, FULL.into(), true));
+        }
+        let uid = pj::token_hex(16);
+        let path = self.files.path(&uid, true).map_err(io_error)?;
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        opts.open(&path).map_err(io_error)?;
+        let upload = Upload {
+            principal: who.principal.clone(),
+            name,
+            size: length,
+            kind,
+            place: obj([("scope", Value::from("channel")), ("channel", Value::from(cid))]),
+            peer: String::new(),
+            received: 0,
+            sha: Some(digest::Context::new(&digest::SHA256)),
+            busy: false,
+            expires: now + UPLOAD_TTL,
+            bridge: link.to_string(),
+        };
+        self.files.uploads.insert(uid.clone(), upload);
+        Ok(uid)
+    }
+
+    /// bridge_c_file_drop: the bytes never all came.
+    pub(super) fn files_bridge_drop(&mut self, uid: &str) {
+        self.files.drop_upload(uid);
+    }
+
+    /// bridge_c_file_done: `{file: {id, name, size, mime}}` once every byte arrived (for a following post).
+    pub(super) fn files_bridge_done(&self, uid: &str) -> R<Obj> {
+        match self.files.uploads.get(uid) {
+            Some(up) if up.received == up.size => Ok(obj([(
+                "file",
+                Value::Object(obj([("id", Value::from(uid)), ("name", Value::from(up.name.clone())), ("size", Value::from(up.size)), ("mime", Value::from(up.kind.clone()))])),
+            )])),
+            _ => Err(E::NotFound(NO_UPLOAD.into())),
+        }
+    }
+
+    /// bridge_c_post's check of one file id it names: a complete upload of this link (404 otherwise).
+    pub(super) fn files_bridge_ready(&self, fid: &str, link: &str) -> R<()> {
+        let up = if is_id(fid) { self.files.uploads.get(fid) } else { None };
+        let Some(up) = up.filter(|u| u.bridge == link) else { return Err(E::NotFound(NO_UPLOAD.into())) };
+        if up.busy || up.received != up.size {
+            return bad("that file is not complete; send it again");
+        }
+        Ok(())
+    }
+
+    /// _bridge_keep_file: a finished connector upload becomes a kept file of the bridged message `mid` (as
+    /// files_finish keeps one); answers the file as the message names it.
+    pub(super) fn files_bridge_keep(&mut self, fid: &str, mid: &str, ts: f64, cid: &str, uname: &str) -> R<Obj> {
+        let (part, kept) = (self.files.path(fid, true).map_err(io_error)?, self.files.path(fid, false).map_err(io_error)?);
+        fs::rename(&part, &kept).map_err(io_error)?;
+        let Some(up) = self.files.uploads.shift_remove(fid) else { return Err(E::NotFound(NO_UPLOAD.into())) };
+        let sha = up.sha.map(|c| hex(c.finish().as_ref())).unwrap_or_default();
+        let file = obj([
+            ("id", Value::from(fid)),
+            ("name", Value::from(up.name)),
+            ("size", Value::from(up.size)),
+            ("type", Value::from(up.kind)),
+            ("sha256", Value::from(sha)),
+            ("from", Value::from(up.principal)),
+            ("from_name", Value::from(uname)),
+            ("scope", Value::from("channel")),
+            ("ts", f(ts)),
+            ("channel", Value::from(cid)),
+        ]);
+        self.files_store().insert(fid.to_string(), Value::Object(with(&file, obj([("message", Value::from(mid))]))));
+        self.dirty = true;
+        Ok(file)
+    }
+
+    /// bridge_c_file_open's part: `(file, open file, size)` of a kept file of the conversation `cid` (404 otherwise).
+    pub(super) fn files_bridge_open_kept(&mut self, fid: &str, cid: &str) -> R<(Obj, fs::File, u64)> {
+        let meta = self.files_live(fid)?;
+        if pj::text_of(&meta, "channel") != cid {
+            return Err(E::NotFound(GONE.into()));
+        }
+        let path = self.files.path(fid, false).map_err(io_error)?;
+        match fs::File::open(&path) {
+            Ok(fh) => Ok((State::files_view(&meta, ""), fh, size_of(&meta))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.files_purge(fid, None);
+                Err(E::NotFound(GONE.into()))
+            }
+            Err(e) => Err(io_error(e)),
+        }
+    }
+
+    /// The ids of every kept file (the bridge's prune drops offers of files no longer kept).
+    pub(super) fn files_kept_ids(&mut self) -> Vec<String> {
+        self.files_store().keys().cloned().collect()
     }
 }
 
@@ -685,6 +816,7 @@ impl Hub {
             sha: Some(digest::Context::new(&digest::SHA256)),
             busy: false,
             expires: now + UPLOAD_TTL,
+            bridge: String::new(),
         };
         st.files.uploads.insert(uid.clone(), upload);
         drop(st);

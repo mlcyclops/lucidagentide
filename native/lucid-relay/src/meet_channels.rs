@@ -164,27 +164,41 @@ pub(super) fn thread_id(target: &Obj) -> String {
 }
 
 /// _recount: a thread root's `replies`, `last_reply` and `repliers` (the latest REPLIERS_MAX people, newest first)
-/// from its kept replies that are not deleted. A root never replied to has none of them.
+/// from its kept replies that are not deleted. A root never replied to has none of them. A bridged reply (`src`)
+/// counts as its external person, `ext:<platform>:<user id>`, not as the connector; the root's `replier_names` then
+/// names those ids (only the ones in `repliers`; once present it becomes {} rather than going, like `repliers`).
 pub(super) fn recount(msgs: &mut [Obj], root_id: &str) {
     let Some(at) = msgs.iter().position(|m| m.get("id").and_then(Value::as_str) == Some(root_id)) else { return };
     let replies: Vec<&Obj> = msgs.iter().filter(|m| m.get("thread").and_then(Value::as_str) == Some(root_id) && !pj::truthy(m.get("deleted"))).collect();
-    let (count, last, repliers) = if replies.is_empty() {
-        // zero, not absent: a copy elsewhere learns it too
-        (0, Value::Null, Vec::new())
-    } else {
-        let mut repliers: Vec<String> = Vec::new();
-        for m in replies.iter().rev() {
-            let from = str_value(m.get("from"));
-            if !repliers.contains(&from) {
-                repliers.push(from);
+    let mut repliers: Vec<String> = Vec::new();
+    let mut names = Obj::new();
+    for m in replies.iter().rev() {
+        let who = match m.get("src") {
+            Some(Value::Object(src)) => {
+                let who = format!("ext:{}:{}", str_value(src.get("platform")), str_value(src.get("user")));
+                if !repliers.contains(&who) {
+                    names.insert(who.clone(), Value::from(pj::s(src, "name")));
+                }
+                who
             }
-            if repliers.len() == REPLIERS_MAX {
-                break;
-            }
+            _ => str_value(m.get("from")),
+        };
+        if !repliers.contains(&who) {
+            repliers.push(who);
         }
-        (replies.len(), replies[replies.len() - 1].get("ts").cloned().unwrap_or(Value::Null), repliers)
+        if repliers.len() == REPLIERS_MAX {
+            break;
+        }
+    }
+    let (count, last) = match replies.last() {
+        // zero, not absent: a copy elsewhere learns it too
+        None => (0, Value::Null),
+        Some(m) => (replies.len(), m.get("ts").cloned().unwrap_or(Value::Null)),
     };
     let root = &mut msgs[at];
+    if !names.is_empty() || root.contains_key("replier_names") {
+        root.insert("replier_names".into(), Value::Object(names));
+    }
     root.insert("replies".into(), Value::from(count));
     root.insert("last_reply".into(), last);
     root.insert("repliers".into(), Value::Array(repliers.into_iter().map(Value::from).collect()));
@@ -275,7 +289,10 @@ impl State {
                 mentions += 1;
             }
         }
-        with(&self.channel(cid).cloned().unwrap_or_default(), obj([("unread", Value::from(unread)), ("mentions", Value::from(mentions))]))
+        let mut view = with(&self.channel(cid).cloned().unwrap_or_default(), obj([("unread", Value::from(unread)), ("mentions", Value::from(mentions))]));
+        // the bridge adds `links`
+        self.bridge_chan_view(cid, &mut view);
+        view
     }
 
     /// _last_ts: when the channel's latest kept message was sent (0 when none): a person added to a channel starts
@@ -344,6 +361,9 @@ impl State {
         self.dirty = true;
         let event = channel_event(why, self.channel(&cid).expect("the group"), &who.principal);
         self.tell(everyone, &event, None);
+        if why == "updated" {
+            self.bridge_recheck("relay", Some(&cid), None);
+        }
         Ok(cid)
     }
 }
@@ -462,6 +482,7 @@ impl Hub {
                 st.dirty = true;
                 let event = channel_event("joined", st.channel(&cid).expect("the channel"), &who.principal);
                 st.tell(&members, &event, None);
+                st.bridge_recheck("relay", Some(&cid), None);
                 log_info(&format!("channel_join id={cid} principal={}", who.principal));
             }
             Ok(st.channel_view(&cid, &who.principal))
@@ -492,6 +513,7 @@ impl Hub {
             let out = ch.clone();
             st.dirty = true;
             st.tell(&told, &channel_event("left", &out, &who.principal), None);
+            st.bridge_recheck("relay", Some(&cid), None);
             Ok(out)
         })();
         drop(st);
@@ -539,6 +561,7 @@ impl Hub {
                     st.dirty = true;
                     let event = channel_event("invited", st.channel(&cid).expect("the channel"), &who.principal);
                     st.tell(&all, &event, None);
+                    st.bridge_recheck("relay", Some(&cid), None);
                 }
             }
             Ok(st.channel_view(&cid, &who.principal))
@@ -672,6 +695,8 @@ impl Hub {
             if let Some(p) = &link {
                 msg.insert("preview".into(), Value::Object(p.clone()));
             }
+            // the bridge: `bridged` on the message before anyone hears it
+            st.bridge_chan_posted(&cid, &mut msg);
             let msgs = st.channel_msgs.entry(cid.clone()).or_default();
             msgs.push(msg.clone());
             if thread.is_some() {
@@ -837,6 +862,10 @@ impl Hub {
             if pj::truthy(m.get("thread")) {
                 row.insert("thread".into(), m["thread"].clone());
             }
+            if let Some(src @ Value::Object(_)) = m.get("src") {
+                // a bridged message: shown by its real sender
+                row.insert("src".into(), src.clone());
+            }
             hits.push(row);
         };
         let st = self.st.lock();
@@ -908,5 +937,30 @@ mod tests {
         let view = thread_view(&msgs, "x", 0.0, 200).unwrap();
         assert_eq!(view.iter().map(|m| pj::text_of(m, "id")).collect::<Vec<_>>(), ["r", "x", "y"]);
         assert!(thread_view(&msgs, "nope", 0.0, 200).is_err());
+    }
+
+    #[test]
+    fn bridged_repliers_are_external_people() {
+        let o = |v: serde_json::Value| v.as_object().unwrap().clone();
+        let src = |user: &str, name: &str| serde_json::json!({"platform": "slack", "link": "l", "user": user, "name": name, "org": {"id": "o", "label": "O"}, "msg": "1", "url": ""});
+        let mut msgs: Vec<Obj> = vec![
+            o(serde_json::json!({"id": "r", "from": "a@x", "ts": 1.0})),
+            o(serde_json::json!({"id": "m", "from": "a@x", "ts": 2.0, "thread": "r"})),
+            o(serde_json::json!({"id": "p", "from": "bridge@b", "ts": 3.0, "thread": "r", "src": src("U1", "Bob")})),
+            o(serde_json::json!({"id": "q", "from": "bridge@b", "ts": 4.0, "thread": "r", "src": src("U2", "Cy")})),
+            o(serde_json::json!({"id": "s", "from": "bridge@b", "ts": 5.0, "thread": "r", "src": src("U1", "Bob")})),
+        ];
+        recount(&mut msgs, "r");
+        assert_eq!(msgs[0]["repliers"], serde_json::json!(["ext:slack:U1", "ext:slack:U2", "a@x"]));
+        assert_eq!(msgs[0]["replier_names"], serde_json::json!({"ext:slack:U1": "Bob", "ext:slack:U2": "Cy"}));
+        for m in msgs.iter_mut().skip(2) {
+            m.insert("deleted".into(), serde_json::json!(6.0));
+        }
+        recount(&mut msgs, "r");
+        assert_eq!((msgs[0]["repliers"].clone(), msgs[0]["replier_names"].clone()), (serde_json::json!(["a@x"]), serde_json::json!({})));
+        // member-only threads never get replier_names
+        let mut plain = vec![o(serde_json::json!({"id": "r", "from": "a@x", "ts": 1.0})), o(serde_json::json!({"id": "m", "from": "b@x", "ts": 2.0, "thread": "r"}))];
+        recount(&mut plain, "r");
+        assert!(!plain[0].contains_key("replier_names"));
     }
 }

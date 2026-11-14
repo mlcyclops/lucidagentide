@@ -40,6 +40,8 @@ mod sfu;
 pub use sfu::{E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
 #[path = "meet_guests.rs"]
 pub mod guests;
+#[path = "meet_bridge.rs"]
+pub mod bridge;
 
 pub const PEER_TIMEOUT: f64 = 40.0;
 pub const SESSION_TIMEOUT: f64 = 40.0;
@@ -450,6 +452,9 @@ pub struct State {
     sfu: sfu::Sfu,
     /// In memory: the lobby, web guests and the guest port's rate limits.
     guests: guests::Guests,
+    /// In memory: the bridges' relay.json policies, connector rate limits and the audit without a state folder
+    /// (persisted state: ext["bridge"]).
+    bridge: bridge::Bridge,
 }
 
 /// _empty_stage.
@@ -879,8 +884,8 @@ impl State {
     }
 
     fn seen(&mut self, who: &Identity) {
-        // the console server and web guests are not people
-        if who.console || who.guest {
+        // the console server, web guests and bridge connectors are not people
+        if who.console || who.guest || who.connector {
             return;
         }
         let now = pj::now();
@@ -941,7 +946,7 @@ impl State {
     }
 
     fn announce(&mut self, who: &Identity, before: &PState) {
-        if who.console || who.guest {
+        if who.console || who.guest || who.connector {
             return;
         }
         let after = self.pstate(&who.principal);
@@ -997,11 +1002,11 @@ impl State {
         Ok(())
     }
 
-    /// _online: people online by principal; the console server is not a person.
+    /// _online: people online by principal; the console server, web guests and bridge connectors are not people.
     pub fn online(&self) -> IndexMap<String, Obj> {
         let mut out: IndexMap<String, Obj> = IndexMap::new();
         let mut add = |who: &Identity, since: f64, room: &str| {
-            if who.console || who.guest {
+            if who.console || who.guest || who.connector {
                 return;
             }
             match out.get_mut(&who.principal) {
@@ -1364,13 +1369,15 @@ impl State {
         self.control_prune();
         self.sfu_prune();
         self.guests_sweep();
+        self.bridge_prune(now);
     }
 
     /// _wave3_each("may_join"): a slice may refuse a join (before any seat changes). `ext`: the join's body.
     fn wave3_may_join(&mut self, room: &str, who: &Identity, ext: &Obj) -> R<()> {
         self.breakout_may_join(room, who)?;
         self.sfu_may_join(room, who, ext)?;
-        self.guests_may_join(room, who)
+        self.guests_may_join(room, who)?;
+        self.bridge_may_join(who)
     }
 
     /// _wave3_each("stay_created"): the first join into an empty room started a stay.
@@ -1401,7 +1408,8 @@ impl Hub {
         let mut st = self.st.lock();
         st.files.configure(s.file_max_mb, s.files_quota_gb);
         st.sfu_configure(s)?;
-        st.guests_configure(s)
+        st.guests_configure(s)?;
+        st.bridge_configure(s)
     }
 
     /// _wave3_each("tick"), every reap: the media server's check against seats (on its own thread) and the guests'
@@ -1565,6 +1573,36 @@ fn str_value(v: Option<&Value>) -> String {
     pj::py_str(v.unwrap_or(&Value::Null))
 }
 
+/// _tombstone: delete the message at `i` of its conversation in place (callers hold the lock): no text, no reactions,
+/// no quoted text, no pin, no link preview; replies quoting it and its edits lose the words too, and a deleted thread
+/// reply leaves its root's counters. Shared by chat_change and a connector's delete.
+fn tombstone(list: &mut [Obj], i: usize, now: f64) {
+    let id = pj::text_of(&list[i], "id");
+    let target = &mut list[i];
+    target.insert("text".into(), Value::from(""));
+    target.insert("deleted".into(), f(now));
+    target.insert("reactions".into(), Value::Object(Obj::new()));
+    target.shift_remove("pinned");
+    target.shift_remove("preview");
+    if let Some(Value::Object(q)) = target.get_mut("reply_to") {
+        q.insert("text".into(), Value::from(""));
+    }
+    let root = pj::truthy(target.get("thread")).then(|| str_value(target.get("thread")));
+    for msg in list.iter_mut() {
+        if let Some(Value::Object(q)) = msg.get_mut("reply_to") {
+            if q.get("id").and_then(Value::as_str) == Some(id.as_str()) {
+                q.insert("text".into(), Value::from(""));
+            }
+        }
+        if pj::text_of(msg, "kind") == "chat_update" && pj::text_of(msg, "target") == id {
+            msg.insert("text".into(), Value::from(""));
+        }
+    }
+    if let Some(root) = root {
+        channels::recount(list, &root);
+    }
+}
+
 // ── the hub ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 pub struct Hub {
@@ -1633,6 +1671,7 @@ impl Hub {
             control: HashMap::new(),
             sfu: sfu::Sfu::default(),
             guests: guests::Guests::new(state_dir.clone()),
+            bridge: bridge::Bridge::new(state_dir.clone()),
         };
         let hub = Hub { st: Mutex::new(st), cond: Condvar::new(), signer, links, state_dir, save_lock: Mutex::new(()), stop: AtomicBool::new(false) };
         if hub.state_dir.is_some() {
@@ -2353,34 +2392,11 @@ impl Hub {
             let now = pj::now();
             let mut event = obj([("type", Value::from("chat_update")), ("scope", Value::from(scope)), ("id", Value::from(id))]);
             if delete {
-                // a tombstone: no text, no reactions, no pin, no link preview, no quoted words
-                target.insert("text".into(), Value::from(""));
-                target.insert("deleted".into(), f(now));
-                target.insert("reactions".into(), Value::Object(Obj::new()));
-                target.shift_remove("pinned");
-                target.shift_remove("preview");
-                if let Some(Value::Object(q)) = target.get_mut("reply_to") {
-                    q.insert("text".into(), Value::from(""));
-                }
-                let root = pj::truthy(target.get("thread")).then(|| str_value(target.get("thread")));
+                tombstone(list, i, now);
                 event.insert("text".into(), Value::from(""));
                 event.insert("deleted".into(), f(now));
-                // replies quoting it and its edits lose the words too
-                for msg in list.iter_mut() {
-                    if let Some(Value::Object(q)) = msg.get_mut("reply_to") {
-                        if q.get("id").and_then(Value::as_str) == Some(id) {
-                            q.insert("text".into(), Value::from(""));
-                        }
-                    }
-                    if pj::text_of(msg, "kind") == "chat_update" && pj::text_of(msg, "target") == id {
-                        msg.insert("text".into(), Value::from(""));
-                    }
-                }
-                // a deleted thread reply leaves its root's counters
-                if let Some(root) = root {
-                    channels::recount(list, &root);
-                }
             } else {
+                let target = &mut list[i];
                 target.insert("text".into(), Value::from(text.clone()));
                 target.insert("edited".into(), f(now));
                 event.insert("text".into(), Value::from(text.clone()));
@@ -2389,6 +2405,9 @@ impl Hub {
             let out = list[i].clone();
             event.insert("by".into(), Value::from(who.principal.clone()));
             st.dirty = true;
+            if let Conv::Channel(cid) = &c {
+                st.bridge_chan_changed(cid, id, delete);
+            }
             if let Conv::Room { room, .. } = &c {
                 let mut line: Obj = event.iter().filter(|(k, _)| k.as_str() != "type").map(|(k, v)| (k.clone(), v.clone())).collect();
                 line.insert("room".into(), Value::from(room.clone()));
@@ -3024,6 +3043,9 @@ impl Hub {
         if who.seed {
             return forbidden(m::FINISH_SETUP);
         }
+        if who.connector {
+            return forbidden(bridge::ROUTES_ONLY);
+        }
         let client = m::client(Some(&Value::Object(client.clone())));
         let mut st = self.st.lock();
         let r = (|| -> R<(Obj, String)> {
@@ -3394,6 +3416,7 @@ impl Hub {
                 ]);
                 st.tell(&members, &event, None);
                 st.dirty = true;
+                st.bridge_chan_reacted(cid, id, &emoji, who, on);
                 (on, reactions)
             } else {
                 return bad(SCOPE_ERROR);
@@ -3489,6 +3512,7 @@ impl Hub {
             st.dirty = true;
             if st.org(&principal) != before {
                 st.tell_presence(&principal);
+                st.bridge_recheck("relay", None, None);
             }
             Ok((with(&Self::org_list(&st), obj([("ok", Value::Bool(true))])), principal, entry))
         })();
@@ -4378,7 +4402,7 @@ mod tests {
 
     #[test]
     fn state_json_round_trips_in_python_text() {
-        let text = "{\"v\": 2, \"directory\": {\"ann@x\": {\"name\": \"Ann\", \"last_seen\": 1.5}}, \"dms\": {}, \"read\": {}, \"invites\": {}, \"rooms\": {}, \"left\": {}, \"renewals\": {}, \"renewed\": {}, \"enrollments\": {}, \"consumed_seeds\": {}, \"seed_requests\": {}, \"seeded\": {}, \"denied\": {}, \"organizations\": {\"ben@x\": null, \"cy@x\": {\"id\": \"o\", \"label\": \"O\"}}, \"status\": {\"ann@x\": {\"state\": \"busy\", \"text\": \"\"}}, \"receipts\": {\"ann@x\": {\"ben@x\": 2.5}}, \"meetings\": {\"m-abcdefgh23\": {\"id\": \"m-abcdefgh23\", \"room\": \"m-abcdefgh23\", \"title\": \"Weekly\", \"description\": \"\", \"start\": 1700000000.0, \"end\": 1700001800.0, \"recurrence\": \"weekly\", \"tz\": \"Europe/Paris\", \"organizer\": {\"principal\": \"ann@x\", \"name\": \"Ann\"}, \"attendees\": [{\"principal\": \"ben@x\", \"name\": \"Ben\", \"response\": \"none\"}], \"created\": 1.5, \"updated\": 1.5, \"canceled\": null}}, \"channels\": {\"c-01\": {\"id\": \"c-01\", \"kind\": \"public\", \"name\": \"general\", \"topic\": \"\", \"created_by\": \"ann@x\", \"members\": [\"ann@x\"], \"created\": 1.5, \"archived\": null, \"last\": 1.5}}, \"channel_messages\": {\"c-01\": [{\"id\": \"m1\", \"channel\": \"c-01\", \"from\": \"ann@x\", \"from_name\": \"Ann\", \"from_org\": null, \"text\": \"hi\", \"ts\": 1.5, \"reactions\": {}}]}, \"channel_read\": {\"ann@x\": {\"c-01\": 1.5}}, \"ext\": {\"files\": {\"v\": 1, \"files\": {}}, \"guests\": {\"revoked\": {}, \"blocked\": {}}}}";
+        let text = "{\"v\": 2, \"directory\": {\"ann@x\": {\"name\": \"Ann\", \"last_seen\": 1.5}}, \"dms\": {}, \"read\": {}, \"invites\": {}, \"rooms\": {}, \"left\": {}, \"renewals\": {}, \"renewed\": {}, \"enrollments\": {}, \"consumed_seeds\": {}, \"seed_requests\": {}, \"seeded\": {}, \"denied\": {}, \"organizations\": {\"ben@x\": null, \"cy@x\": {\"id\": \"o\", \"label\": \"O\"}}, \"status\": {\"ann@x\": {\"state\": \"busy\", \"text\": \"\"}}, \"receipts\": {\"ann@x\": {\"ben@x\": 2.5}}, \"meetings\": {\"m-abcdefgh23\": {\"id\": \"m-abcdefgh23\", \"room\": \"m-abcdefgh23\", \"title\": \"Weekly\", \"description\": \"\", \"start\": 1700000000.0, \"end\": 1700001800.0, \"recurrence\": \"weekly\", \"tz\": \"Europe/Paris\", \"organizer\": {\"principal\": \"ann@x\", \"name\": \"Ann\"}, \"attendees\": [{\"principal\": \"ben@x\", \"name\": \"Ben\", \"response\": \"none\"}], \"created\": 1.5, \"updated\": 1.5, \"canceled\": null}}, \"channels\": {\"c-01\": {\"id\": \"c-01\", \"kind\": \"public\", \"name\": \"general\", \"topic\": \"\", \"created_by\": \"ann@x\", \"members\": [\"ann@x\"], \"created\": 1.5, \"archived\": null, \"last\": 1.5}}, \"channel_messages\": {\"c-01\": [{\"id\": \"m1\", \"channel\": \"c-01\", \"from\": \"ann@x\", \"from_name\": \"Ann\", \"from_org\": null, \"text\": \"hi\", \"ts\": 1.5, \"reactions\": {}}]}, \"channel_read\": {\"ann@x\": {\"c-01\": 1.5}}, \"ext\": {\"files\": {\"v\": 1, \"files\": {}}, \"guests\": {\"revoked\": {}, \"blocked\": {}}, \"bridge\": {\"v\": 1, \"policies\": {}, \"links\": {}, \"codes\": {}, \"connectors\": {}, \"seq\": 0, \"outbox\": {}, \"map\": {}, \"offered\": {}}}}";
         let dir = std::env::temp_dir().join(format!("meet-state-{}", pj::token_hex(4)));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("state.json"), text).unwrap();
