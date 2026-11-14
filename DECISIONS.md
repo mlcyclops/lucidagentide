@@ -27205,3 +27205,28 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 - A holiday costume is not drawn on the seated figure, because the costumes are cut for the standing frames. He wears it again when he stands.
 - The visit ledger and the preference are per browser profile (localStorage), like the season and status preferences, not per account.
 - A launch that opens on a restored conversation does not count as a new session.
+
+## ADR-0581 -- P-ASKLUCID.1: Ask Lucid, a side conversation in a dock fly-out that can see the fleet, the orbit and the knowledge graph and cannot act (2026-11-14)
+
+**Status:** Accepted. Session 2 of `docs/specs/mini-lucid-ask-lucid-pdr.md`. Proof: `make demo-P-ASKLUCID.1`, `bun test desktop/ask_lucid.test.ts`.
+
+**Context.** The request is a fly-out like the one in LUCID Tradepass, holding a conversation with Lucid that may or may not be about the current work, with a view of every fleet lane, the Fleet Orbit and the knowledge graph. LUCID Agent IDE had right-side drawers that exclude each other and no window that floats, snaps or minimizes. It did have one way to ask a model something outside the chat turn: `Backend.complete`, a one-shot completion on a dedicated connection that holds no tools and never touches the chat session.
+
+**Decision.**
+1. `desktop/renderer/dock.ts` is Tradepass's `ui/js/dock.js` in TypeScript (same owner and license): right, bottom and floating modes, minimize to a pill, drag to snap, keyboard move and resize, placement kept in localStorage. Its geometry helpers are pure and tested.
+2. A docked panel takes space from the body and the status bar, never from the title bar, which keeps the whole window. The app root is drawn at a CSS zoom (1.08 by default), so the dock publishes each reserved length twice: in viewport pixels (`--ask-r`, `--ask-b`) and divided by the zoom (`--ask-r-app`, `--ask-b-app`) for margins inside the root. Toasts move clear of a right dock.
+3. Ask Lucid answers through `Backend.complete`, behind `POST /api/ask-lucid`, which accepts the UI token only. It is not in `AGENT_ROUTES` or the query-token routes, so the agent cannot converse with itself through it. The model is the checker model, resolved through the CUI lockdown clamp; no allowed model is a refusal with a security event.
+4. Lucid is shown three views, gathered server side: the fleet lanes (name, status, model, turns, last activity, a pending approval, queued prompts, calls in flight), the Fleet Orbit goal with its tasks, and up to four knowledge graph hits for the question from the lexical path (no embeddings call). `desktop/ask_lucid.ts` builds the prompt and is pure.
+5. Every view, and the earlier turns of the side conversation, is untrusted data: each enters the prompt inside the untrusted envelope with embedded delimiters neutralized (ADR-0568), under its own heading, after the question. Fields are single lines of bounded length, so a lane name cannot fake a row. The user's question is the only text outside an envelope.
+6. Each view is scanned before it is sent (`ask_lucid_service.ts`). A view the scanner blocks, or cannot scan, is withheld: none of its text reaches the model, the model is told in one line that the view could not be read, and the panel says which views were withheld. The question is still answered from what passed. A view that cannot be read at all (the manager threw) is reported in plain words.
+7. Lucid cannot act. The service imports only the prompt builder, the route calls no write, and the brief says so. Starting a lane or an orbit task from the panel is the next increment, as proposals the user confirms.
+8. The side completion has no error channel: a provider that refuses hands back its error line as the text (seen live as `Bedrock HTTP 403: ...`). A reply that is one short line starting with a one or two word provider name, `HTTP`, a 4xx or 5xx status and a colon is reported as an error with the status and none of the provider's text.
+9. `desktop/renderer/ask_lucid_panel.ts` is the panel: mini Lucid in the header (idle, working, done, error), a log, a composer, starter questions, and one line under each reply saying how many lanes, tasks and pages he saw. Replies render through the chat's own sanitizing markdown renderer under the page's content security policy; the user's text goes in through `textContent`. A title-bar button opens it.
+
+**Consequences.**
+- Lane transcripts are not shown to Lucid, only lane metadata. He can say a lane is waiting for approval; he cannot say what it wrote.
+- The side conversation lives in the window's memory. It is not saved, and closing the window ends it.
+- A view that trips the scanner is withheld whole, so one lane with a hidden character in its name hides every lane until it is renamed.
+- The dock is drawn at zoom 1 in `<body>`, so its text is slightly smaller than the app's at the default 1.08 zoom.
+- A toast can overlap a floating dock, since toasts stay on top.
+- The happy path was verified with a stand-in model in tests and a mocked reply in the browser. The live route was called on a real engine and returned the provider's refusal, which is how decision 8 was found.

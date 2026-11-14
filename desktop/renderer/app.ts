@@ -97,6 +97,7 @@ import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: impo
 import { localProvidersCardBody, draftFromForm, modelsFieldValue, providerWithDiscovered } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135) / P-LOCAL.6: Settings → Local Providers
 import { parseResultWindowSetting, type ResultSpill } from "../result_window.ts"; // P-CTX.2b (ADR-0579): pure (no Node imports)
 import { resultWindowLine } from "./result_window_view.ts"; // P-CTX.2b (ADR-0579)
+import { createAskLucid, type AskLucidHandle } from "./ask_lucid_panel.ts"; // P-ASKLUCID.1 (ADR-0581): the Ask Lucid fly-out
 import { hydrateVaultDestinations } from "./vault_dest_ui.ts"; import { VAULT_DEST_SEC, VAULT_DEST_SUB, VAULT_DEST_TITLE } from "./vault_dest_card.ts"; // P-VAULT-DEST.1 (ADR-0478): Settings → Vault destinations (Enterprise)
 import { acceptAttachment, promptImageBlocks, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "./composer_attachments.ts"; // P-VISION.1 (ADR-0136): pasted images
 import { imageFileName } from "./chat_images.ts"; // P-IMG.1 (ADR-0208): inline render + download of tool images
@@ -443,6 +444,7 @@ function buildShell(): void {
       </div>
       <!-- P-AVATAR.1: back into the stage after an Esc exit; visible only for the lucid-agent role. -->
       <label class="agent-tier-control" id="agentTierControl" hidden title="Regular: Opus/Luna class. Max: the strongest available model for this provider; API billing may apply."><span>Agent</span><select id="agentTier" aria-label="LUCID Agent model tier"><option value="regular">Regular</option><option value="max">Max</option></select></label>
+      <button class="ctool tb-chip tb-ask" id="tbAskLucid" type="button" data-tip="Ask Lucid|A side conversation that does not interrupt your session. Lucid can see your fleet lanes, the Fleet Orbit and the knowledge graph.">${icon("spark", 14)}<span>Ask Lucid</span></button>
       <button class="ctool tb-chip" id="tbStage" hidden data-tip="Enter the stage|Rails away, immersive LUCID Agent view. Esc steps back out.">${icon("spark", 14)}<span>Stage</span></button>
       <div class="win-ctrls">
         <button id="winMin" data-tip="Minimize">${icon("minus", 15)}</button>
@@ -4979,6 +4981,18 @@ function syncImmersiveWithRole(role: UserRole | null): void {
   // P-AVATAR.4: entering the role starts the hands-free flow; leaving restores the user's world.
   if (isAgent) void enterAgentFlow();
   else void exitAgentFlow();
+}
+// P-ASKLUCID.1 (ADR-0581): the Ask Lucid fly-out, built on first use and kept for the life of the window.
+let askLucidPanel: AskLucidHandle | null = null;
+function askLucid(): AskLucidHandle {
+  askLucidPanel ??= createAskLucid({
+    ask: (text, history) => bridge.askLucid(text, history),
+    markdown: renderMarkdown,
+    enhance: enhanceCodeBlocks,
+    topBar: ".titlebar",
+    zoomOf: "#app",
+  });
+  return askLucidPanel;
 }
 let miniRunner: RunnerHandle | null = null;
 // P-MINI.1 (ADR-0580): which kind of runner is mounted, whether a visit is under way, and how many new
@@ -17766,6 +17780,7 @@ function wire(): void {
 
   // P-AVATAR.1: back into the stage after an Esc exit (chip only visible for the lucid-agent role).
   $("#tbStage")!.addEventListener("click", () => setImmersive(true));
+  $("#tbAskLucid")?.addEventListener("click", () => askLucid().toggle()); // P-ASKLUCID.1 (ADR-0581)
   $("#agentTier")!.addEventListener("change", async (event) => {
     if (state.userRole !== "lucid-agent" || state.streaming || agentTierApplying) { syncAgentExtras(); return; }
     const previous = agentTier;
@@ -20383,6 +20398,7 @@ function applyZoom(): void {
   state.zoom = Math.max(0.7, Math.min(1.8, Math.round(state.zoom * 100) / 100));
   bridge.setZoom(state.zoom * ZOOM_BASE);
   const lvl = $("#zoomLvl"); if (lvl) lvl.textContent = `${Math.round(state.zoom * 100)}%`;
+  askLucidPanel?.dock.reflow(); // P-ASKLUCID.1 (ADR-0581): the space a docked Ask Lucid reserves depends on the zoom
   try { localStorage.setItem("lucid.zoom", String(state.zoom)); } catch { /* ignore */ }
 }
 function nudgeZoom(delta: number): void { state.zoom += delta; applyZoom(); }

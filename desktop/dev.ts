@@ -189,6 +189,8 @@ import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailabl
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { lastModel as lastChatModel, resultWindowSetting, setResultWindowSetting } from "./settings_store.ts"; // P-CTX.2b (ADR-0579)
 import { chatModelContextWindow, resolveResultWindow } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
+import { parseQuestion, sanitizeHistory } from "./ask_lucid.ts"; // P-ASKLUCID.1 (ADR-0581)
+import { answerAskLucid } from "./ask_lucid_service.ts"; // P-ASKLUCID.1 (ADR-0581)
 import { discoveryHeaders, MAX_DISCOVERY_BYTES, parseDiscoveredModels, providerEnvVar, providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
 import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setSandboxWindowsMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThemeId, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, themeId, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
@@ -6320,6 +6322,27 @@ return Bun.serve({
         return json({ ok: true, data: { targets: [...live, ...remembered] } });
       }
       if (p === "/api/fleet/status") return json({ ok: true, data: await fleet.status() });
+      // P-ASKLUCID.1 (ADR-0581): one question to Ask Lucid, the side conversation in the fly-out. UI token only
+      // (never AGENT_ROUTES): the agent must not be able to hold a conversation with itself through it. Lucid
+      // is shown the fleet lanes, the Fleet Orbit and the knowledge graph hits for the question, each scanned
+      // and fenced as untrusted data, and answers through the side completion channel: no tools, no session,
+      // no write. The lexical knowledge path is used, so a question never triggers an embeddings call.
+      if (p === "/api/ask-lucid" && req.method === "POST") {
+        const b = await readBody<{ text?: unknown; history?: unknown }>(req);
+        const q = parseQuestion(b.text);
+        if (!q.ok) return json({ ok: false, error: q.error, data: { ok: false, error: q.error, seen: { lanes: 0, tasks: 0, hits: 0 }, withheld: [] } });
+        const reply = await answerAskLucid(q.text, sanitizeHistory(b.history), {
+          fleetStatus: () => fleet.status(),
+          orbit: () => fleetGoal.snapshot(),
+          knowledge: async (query) => (await retrieveKnowledge({ query, mode: "compiled", k: 4, compiled: { store: await kbStore() } })).items,
+          scan: async (text) => { const d = await scanAndDecide(agentScanner(), text); return { block: d.block, reason: d.reason }; },
+          pinModel: () => backend.completionModel(backend.checkerModelInfo().recommended || undefined),
+          complete: (system, user, model) => backend.complete(system, user, { model, idleMs: 45_000 }),
+          onLockdownBlock: (reason) => emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "ask-lucid-lockdown", reason: reason.slice(0, 200), sessionId: backend.currentSessionId() ?? undefined }),
+          now: () => Date.now(),
+        });
+        return json({ ok: reply.ok, data: reply, ...(reply.error ? { error: reply.error } : {}) });
+      }
       // P-AOS.1 (ADR-0452): the standing fleet goal. UI token only (never AGENT_ROUTES): criteria are verified
       // and the goal is paused, resumed or canceled by the human, per AOS-1 section 7.
       if (p === "/api/fleet/goal" && req.method === "GET") return json({ ok: true, data: fleetGoal.snapshot() });
