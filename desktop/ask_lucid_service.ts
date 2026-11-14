@@ -29,6 +29,7 @@ import {
   type AskTurn,
 } from "./ask_lucid.ts";
 import { actionText, knownFrom, parseActions, type AskAction } from "./ask_lucid_actions.ts";
+import { splitFollowups } from "./ask_lucid_followups.ts"; // P-ASKLUCID.5 (ADR-0586)
 import { laneActivityContext, sessionsContext, type BriefMode } from "./ask_lucid_briefing.ts"; // P-ASKLUCID.4 (ADR-0585)
 import { normalizeScreen, screenContext } from "./ask_lucid_screen.ts"; // P-ASKLUCID.3 (ADR-0584)
 
@@ -71,6 +72,8 @@ export interface AskReply {
   actions: AskAction[];
   /** Proposals that were invalid, over the limit, or failed their scan, and so are not shown. */
   actionsDropped: number;
+  /** P-ASKLUCID.5 (ADR-0586): questions Lucid thinks come next. Validated and scanned; shown as chips. */
+  followups?: string[];
 }
 
 /** How much of each view Lucid was shown. `screen` counts surfaces (P-ASKLUCID.3); `activity` counts lanes
@@ -203,6 +206,18 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
   // it is validated against the ids he was shown (a withheld view contributes none) and each surviving
   // action's text is scanned. An action that fails its scan, or whose scan cannot run, is dropped. Nothing
   // is run here: the result is a list for the user's screen.
+  // P-ASKLUCID.5 (ADR-0586): the follow-up questions come off first. Same rule as an action: model output
+  // shaped by untrusted context, so each is validated, then scanned, and one that fails is dropped silently
+  // (a missing chip needs no explanation). They are text the user may choose to send, nothing more.
+  const next = splitFollowups(reply);
+  reply = next.text;
+  const followups: string[] = [];
+  for (const q of next.followups) {
+    let verdict: { block: boolean; reason: string };
+    try { verdict = await deps.scan(q); } catch { verdict = { block: true, reason: "fail-closed: the scan could not run" }; }
+    if (!verdict.block) followups.push(q);
+  }
+
   const parsed = parseActions(reply, knownFrom(fleetRaw, orbitRaw, { fleet: withheld.includes("fleet"), orbit: withheld.includes("orbit") }));
   const actions: AskAction[] = [];
   let actionsDropped = parsed.dropped;
@@ -213,5 +228,5 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
   }
   const text = parsed.text || (actions.length ? "Here is what I can set up. Nothing runs until you confirm it." : "");
   if (!text) return { ok: false, error: UNAVAILABLE, seen, withheld, actions: [], actionsDropped };
-  return { ok: true, reply: text, ...(pin.model ? { model: pin.model.replace(/^[^/]*\//, "") } : {}), seen, withheld, actions, actionsDropped };
+  return { ok: true, reply: text, ...(pin.model ? { model: pin.model.replace(/^[^/]*\//, "") } : {}), seen, withheld, actions, actionsDropped, ...(followups.length ? { followups } : {}) };
 }

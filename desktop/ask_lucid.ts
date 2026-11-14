@@ -22,6 +22,7 @@
 
 import { fenceUntrusted } from "../harness/prompt/untrusted.ts";
 import { ASK_ACTIONS_BRIEF } from "./ask_lucid_actions.ts"; // P-ASKLUCID.2 (ADR-0582): how to propose an action
+import { ASK_FOLLOWUPS_BRIEF } from "./ask_lucid_followups.ts"; // P-ASKLUCID.5 (ADR-0586): the questions the user may want next
 import { ASK_BRIEFING_RULES } from "./ask_lucid_briefing.ts"; // P-ASKLUCID.4 (ADR-0585): how a briefing is laid out
 
 /** The longest question accepted. */
@@ -77,6 +78,8 @@ export const ASK_LUCID_SYSTEM = [
   "- When the user wants something done (start a lane, prompt a lane, add an orbit task, open a view), propose it as an action. Do not pretend it is done: it happens only if the user presses Confirm.",
   "",
   ASK_ACTIONS_BRIEF,
+  "",
+  ASK_FOLLOWUPS_BRIEF,
 ].join("\n");
 
 /** PURE: how long ago `at` was, in words, for a lane's last activity. */

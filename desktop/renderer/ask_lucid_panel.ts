@@ -17,6 +17,7 @@
 import { ASK_KIND_LABEL, ASK_RISK_LABEL, actionDetails, type AskAction } from "../ask_lucid_actions.ts"; // P-ASKLUCID.2 (ADR-0582): pure, no imports
 import { BRIEF_QUESTION } from "../ask_lucid_briefing.ts"; // P-ASKLUCID.4 (ADR-0585): pure, no imports
 import { createDock, type DockHandle } from "./dock.ts";
+import { followMode, followupRecs, noteMiss, noteOwnQuestion, noteUsed, parseMemory, rank, REC_LIMITS, REC_MEMORY_KEY, type Follow, type Rec, type RecMemory, type RecSignals } from "./lucid_recs.ts"; // P-ASKLUCID.5 (ADR-0586)
 import { mountMiniMascot, type MiniMascotHandle, type MiniState } from "./mascot_mini.ts";
 
 export interface AskTurnView { role: "user" | "lucid"; text: string }
@@ -32,6 +33,8 @@ export interface AskReplyView {
   /** P-ASKLUCID.2 (ADR-0582): what Lucid proposes. Each becomes a card; none runs without Confirm. */
   actions?: AskAction[];
   actionsDropped?: number;
+  /** P-ASKLUCID.5 (ADR-0586): questions Lucid thinks come next. Shown as chips. */
+  followups?: string[];
 }
 
 /** What happened when the user confirmed an action. `message` is shown on the card. */
@@ -84,6 +87,16 @@ export interface AskExtrasView { screen?: unknown; /** P-ASKLUCID.4: Brief me wa
 export interface AskLucidDeps {
   /** Ask the engine. Null means the request itself failed. */
   ask(text: string, history: AskTurnView[], extras: AskExtrasView): Promise<AskReplyView | null>;
+  /** P-ASKLUCID.5 (ADR-0586): what is going on right now, for the suggestions. Absent = the fixed questions. */
+  recSignals?(): Promise<RecSignals | null>;
+  /** Where the suggestion memory lives (weights, misses). Null = this window only. */
+  recStore?: { getItem(key: string): string | null; setItem(key: string, value: string): void } | null;
+  /** The surfaces the user was recently on, kept by the app while Lucid follows the screen closely. */
+  recTrail?(): readonly string[];
+  /** Suggestions to fall back on when the contextual ones run dry (P-ASKLUCID.6: features not yet used). */
+  recFallback?(): readonly Rec[];
+  /** Told whenever the follow mode changes, so the app can start or stop watching which surface is open. */
+  onFollow?(mode: Follow): void;
   /** P-ASKLUCID.3 (ADR-0584): read what is on the screen right now. Absent or failing = Lucid is not shown it. */
   screen?(): Promise<unknown>;
   /** The chat's safe markdown renderer. */
@@ -143,16 +156,23 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
   const welcome = el("div", "al-welcome");
   welcome.append(
     el("div", "al-welcome-h", "Ask Lucid"),
-    el("div", "al-welcome-d", "A side conversation that does not interrupt your session. Lucid can see every fleet lane, the Fleet Orbit goal and its tasks, and the knowledge graph. He answers questions. He does not change anything."),
+    el("div", "al-welcome-d", "A side conversation that does not interrupt your session. Lucid can see what is on your screen, every fleet lane and what it last did, your recent sessions, the Fleet Orbit and the knowledge graph. He can propose things, and nothing changes until you confirm it."),
   );
   const sugs = el("div", "al-sugs");
-  for (const s of ASK_SUGGESTIONS) {
-    const b = el("button", "al-sug", s);
-    b.type = "button";
-    b.title = s;
-    b.addEventListener("click", () => send(s));
-    sugs.appendChild(b);
-  }
+  const fillWelcome = (recs: readonly Rec[]): void => {
+    sugs.replaceChildren();
+    const add = (label: string, run: () => void): void => {
+      const b = el("button", "al-sug", label);
+      b.type = "button";
+      b.title = label;
+      b.addEventListener("click", run);
+      sugs.appendChild(b);
+    };
+    // What is going on first, then the fixed questions to fill the grid.
+    for (const r of recs.slice(0, REC_LIMITS.welcome)) add(r.question.length <= 90 ? r.question : r.label, () => useRec(r));
+    for (const s of ASK_SUGGESTIONS) { if (sugs.children.length < REC_LIMITS.welcome) add(s, () => send(s)); }
+  };
+  fillWelcome([]);
   welcome.appendChild(sugs);
   log.appendChild(welcome);
 
@@ -163,6 +183,59 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
   briefBtn.title = "What needs you, what is running, what finished, and what Lucid would do next";
   briefBtn.addEventListener("click", () => send(BRIEF_QUESTION, { brief: true }));
   quick.appendChild(briefBtn);
+
+  // P-ASKLUCID.5 (ADR-0586): suggestions seeded from what is going on. `shown` is the set on screen;
+  // `engaged` turns true when the user uses one or asks anything, and a set that was looked at and left
+  // untouched counts as a miss when the panel hides.
+  let memory: RecMemory = parseMemory(null);
+  let shown: Rec[] = [];
+  let engaged = false;
+  let shownAt = 0;
+  const MISS_AFTER_MS = 4000;
+  const loadMemory = (): void => { try { memory = parseMemory(deps.recStore?.getItem(REC_MEMORY_KEY) ?? null); } catch { memory = parseMemory(null); } };
+  const saveMemory = (next: RecMemory): void => {
+    const before = followMode(memory);
+    memory = next;
+    try { deps.recStore?.setItem(REC_MEMORY_KEY, JSON.stringify(memory)); } catch { /* storage blocked: this window only */ }
+    if (followMode(memory) !== before) deps.onFollow?.(followMode(memory));
+  };
+  const showRecs = (recs: readonly Rec[]): void => {
+    shown = [...recs];
+    engaged = false;
+    shownAt = Date.now();
+    for (const old of [...quick.querySelectorAll(".al-chip-rec, .al-chip-more")]) old.remove();
+    for (const r of shown) {
+      const b = el("button", `al-chip al-chip-rec al-rec-${r.kind}`, r.label);
+      b.type = "button";
+      b.title = r.question;
+      b.addEventListener("click", () => useRec(r));
+      quick.appendChild(b);
+    }
+    if (shown.length > 0) {
+      const more = el("button", "al-chip al-chip-more", "Something else");
+      more.type = "button";
+      more.title = "None of these help. Lucid looks more closely at what is on your screen and tries again.";
+      more.addEventListener("click", () => { saveMemory(noteMiss(memory, shown)); void refreshRecs(); });
+      quick.appendChild(more);
+    }
+    fillWelcome(shown);
+  };
+  async function refreshRecs(): Promise<void> {
+    if (!deps.recSignals) return;
+    const sig = await deps.recSignals().catch(() => null);
+    if (!sig) { showRecs([]); return; }
+    showRecs(rank(sig, memory, { trail: deps.recTrail?.() ?? [], fallback: deps.recFallback?.() ?? [] }));
+  }
+  function useRec(r: Rec): void {
+    if (busy) return;
+    saveMemory(noteUsed(memory, r));
+    send(r.question, {}, true);
+  }
+  /** A set that was on screen long enough to be read and was left untouched is a miss. */
+  const settleShown = (): void => {
+    if (shown.length > 0 && !engaged && Date.now() - shownAt >= MISS_AFTER_MS) saveMemory(noteMiss(memory, shown));
+    engaged = true; // settled: the same set is never counted twice
+  };
 
   const form = el("form", "al-form");
   const input = el("textarea", "al-input");
@@ -184,8 +257,8 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     headerStart: head,
     body: panel,
     pillContent: pillIn,
-    onShow: () => { mini ??= mountMiniMascot(miniHost, { size: "sm" }); mini.setActive(true); setTimeout(() => input.focus(), 60); },
-    onHide: () => mini?.setActive(false),
+    onShow: () => { mini ??= mountMiniMascot(miniHost, { size: "sm" }); mini.setActive(true); setTimeout(() => input.focus(), 60); loadMemory(); deps.onFollow?.(followMode(memory)); void refreshRecs(); },
+    onHide: () => { mini?.setActive(false); settleShown(); },
   });
 
   const setState = (s: MiniState): void => {
@@ -257,9 +330,12 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     scrollDown();
   };
 
-  function send(raw: string, more: AskExtrasView = {}): void {
+  function send(raw: string, more: AskExtrasView = {}, fromRec = false): void {
     const text = raw.trim();
     if (!text || busy) return;
+    // A question the user wrote is not a miss: they knew what to ask.
+    if (!fromRec) saveMemory(noteOwnQuestion(memory));
+    engaged = true;
     dock.open();
     dock.setUnread(false);
     busy = true;
@@ -282,6 +358,8 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
         const dropped = droppedLine(r.actionsDropped ?? 0);
         if (dropped) log.appendChild(el("div", "al-meta", dropped));
         setState("done");
+        // What comes next: the follow-ups Lucid gave, else a fresh reading of what is going on.
+        if (r.followups?.length) showRecs(followupRecs(r.followups)); else void refreshRecs();
       } else {
         turns.pop(); // a question that was never answered is not history
         addError(r?.error ?? "Lucid could not be reached. Check that the app is still running, then try again.");

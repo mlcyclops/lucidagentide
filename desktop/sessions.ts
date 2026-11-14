@@ -14,6 +14,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
 import { EXTRACT_SYSTEM } from "../harness/personal/distiller.ts";
+import { ASK_LUCID_SYSTEM } from "./ask_lucid.ts"; // P-ASKLUCID.5 (ADR-0586): to recognize its throwaway sessions
 import { CARRIED_MARKER } from "./interject_store.ts";
 import { currentWorkspace } from "./workspace.ts";
 
@@ -82,7 +83,7 @@ export interface SessionInfo {
   model: string;
   updatedAt: number;
   turns: number;
-  kind?: "chat" | "kg-ingest"; // P-KG-INGEST.1b: throwaway model-extraction sessions (import + AI-learn)
+  kind?: "chat" | "kg-ingest" | "ask-lucid"; // P-KG-INGEST.1b: throwaway model-extraction sessions (import + AI-learn); P-ASKLUCID.5: Ask Lucid side completions
   /** P-SESS-SEARCH.1: the fleet lane that ran this session (lane-session ledger), set only when listed. */
   spoke?: string;
   /** P-SESS-ARCHIVE.1: the file lives in the archive folder (set only when true). */
@@ -129,6 +130,21 @@ const EXTRACT_SENTINEL = EXTRACT_SYSTEM.slice(0, 52);
 export function isIngestPrompt(rawFirstUser: string): boolean {
   return rawFirstUser.trimStart().startsWith(EXTRACT_SENTINEL);
 }
+// P-ASKLUCID.5 (ADR-0586): Ask Lucid's side completion is another throwaway omp session, and omp persists
+// it like any other. Its only "user message" is Lucid's brief plus the question and the views, so without
+// this it appears in the chat list titled "You are Lucid, the assistant in t...", one row per question,
+// and Lucid's own sessions view would list his earlier answers as the user's work. They are recognized by
+// the stable opening of the brief, kept out of every list, and swept from disk once they are an hour old
+// (the side conversation itself lives in the panel, not in these files).
+const ASK_LUCID_SENTINEL = ASK_LUCID_SYSTEM.slice(0, 52);
+/** True if a session's first user message is an Ask Lucid side completion (a throwaway, not a real chat). */
+export function isAskLucidPrompt(rawFirstUser: string): boolean {
+  return rawFirstUser.trimStart().startsWith(ASK_LUCID_SENTINEL);
+}
+/** PURE: is this row one of the user's own chats (not an extractor or Ask Lucid throwaway)? */
+export function isChatRow(s: { kind?: string }): boolean {
+  return s.kind === undefined || s.kind === "chat";
+}
 /** A meaningful ingest title: the actual text being learned from (the extractor system prompt stripped). */
 export function ingestPreview(rawFirstUser: string): string {
   const s = rawFirstUser.trimStart();
@@ -162,7 +178,7 @@ let indexParses = 0; // test seam: how many files were actually (re)parsed
 function parseSessionText(text: string, f: string): { scwd: string; meta: Omit<SessionInfo, "updatedAt"> | null; text: string } {
   indexParses++;
   let id = "", scwd = "", model = "", title = "", turns = 0;
-  let kind: "chat" | "kg-ingest" = "chat";
+  let kind: "chat" | "kg-ingest" | "ask-lucid" = "chat";
   const said: string[] = [];
   for (const ln of text.split("\n")) {
     if (!ln) continue;
@@ -175,6 +191,7 @@ function parseSessionText(text: string, f: string): { scwd: string; meta: Omit<S
         const raw = firstUserText(o.message);
         // An extractor throwaway -> group it; its title is the snippet it learned from, not the prompt.
         if (isIngestPrompt(raw)) { kind = "kg-ingest"; const t = ingestPreview(raw); if (t.trim()) title = t.trim().slice(0, 64); }
+        else if (isAskLucidPrompt(raw)) { kind = "ask-lucid"; title = "Ask Lucid"; } // P-ASKLUCID.5: a side completion, never listed
         else { const t = typedText(raw); if (t.trim()) title = t.trim().slice(0, 64); }
       }
       if (kind === "chat" && (o.message.role === "user" || o.message.role === "assistant")) {
@@ -250,7 +267,7 @@ function isIndexEntry(v: unknown): v is IndexEntry {
   if (m === null) return true;
   return !!m && typeof m === "object" && "id" in m && typeof m.id === "string" && "title" in m && typeof m.title === "string"
     && "model" in m && typeof m.model === "string" && "turns" in m && typeof m.turns === "number"
-    && (!("kind" in m) || m.kind === undefined || m.kind === "chat" || m.kind === "kg-ingest");
+    && (!("kind" in m) || m.kind === undefined || m.kind === "chat" || m.kind === "kg-ingest" || m.kind === "ask-lucid");
 }
 
 /** Seed the in-memory index from the file, once, the first time its root (or archive) is scanned. Entries
@@ -334,13 +351,13 @@ function findSessionPath(id: string, root: string): string | null {
  *  so hidden spokes never take a slot a chat could have. */
 export async function listSessions(cwd: string = currentWorkspace(), root: string = join(homedir(), ".omp", "agent", "sessions"), filter?: SpokeFilter): Promise<SessionList> {
   const all = (await workspaceSessions(cwd, root)).map((r) => r.row);
-  const chats = spokeView(all.filter((s) => s.kind !== "kg-ingest"), filter);
+  const chats = spokeView(all.filter(isChatRow), filter);
   // Split: real chats (capped) vs the collapsed ingest group, so a big import can't crowd out chats.
   return {
     sessions: chats.rows.slice(0, 40),
     ingest: all.filter((s) => s.kind === "kg-ingest").slice(0, 60),
     ...(filter ? { hiddenSpokes: chats.hidden } : {}),
-    archived: (await archivedRows(cwd, root)).filter((r) => r.row.kind !== "kg-ingest").length,
+    archived: (await archivedRows(cwd, root)).filter((r) => isChatRow(r.row)).length,
   };
 }
 
@@ -376,7 +393,7 @@ export async function searchSessions(query: string, opts: { cwd?: string; root?:
   const named: SessionHit[] = [];
   const said: SessionHit[] = [];
   for (const { row: info, text } of rows) {
-    if (info.kind === "kg-ingest") continue;
+    if (!isChatRow(info)) continue;
     const label = `${info.title}\n${info.model}\n${opts.filter?.spokes.get(info.id) ?? ""}`;
     const inLabel = res.map((re) => re.test(label));
     if (inLabel.every(Boolean)) { named.push(info); continue; }
@@ -421,7 +438,7 @@ async function archivedRows(cwd: string, root: string, refresh = false): Promise
 
 /** The Archived group: this workspace's archived chats, newest first. Re-scans the archive folder (async). */
 export async function archivedSessions(cwd: string = currentWorkspace(), root: string = sessionsRoot()): Promise<SessionInfo[]> {
-  return (await archivedRows(cwd, root, true)).map((r) => r.row).filter((s) => s.kind !== "kg-ingest");
+  return (await archivedRows(cwd, root, true)).map((r) => r.row).filter(isChatRow);
 }
 
 export interface MoveResult { ok: boolean; error?: string }
@@ -644,6 +661,42 @@ export function clearIngestSessions(cwd: string = currentWorkspace(), root: stri
       }
     } catch { /* skip dir */ }
   }
+  return { ok: true, cleared };
+}
+
+/** P-ASKLUCID.5 (ADR-0586): delete this workspace's Ask Lucid throwaway sessions that are at least
+ *  `olderThanMs` old (so one omp is still writing is never touched). The same two guards as
+ *  clearIngestSessions: the file belongs to the workspace AND its first user message is Lucid's brief. A
+ *  real chat is never touched. Returns the count removed. */
+export function clearAskLucidSessions(opts: { cwd?: string; root?: string; olderThanMs?: number; now?: number } = {}): { ok: boolean; cleared: number } {
+  const root = opts.root ?? sessionsRoot();
+  if (!existsSync(root)) return { ok: true, cleared: 0 };
+  const want = norm(opts.cwd ?? currentWorkspace());
+  const cutoff = (opts.now ?? Date.now()) - (opts.olderThanMs ?? 3_600_000);
+  let cleared = 0;
+  for (const d of readdirSync(root)) {
+    const dir = join(root, d);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+      for (const f of readdirSync(dir)) {
+        if (!f.endsWith(".jsonl")) continue;
+        const p = join(dir, f);
+        try {
+          if (statSync(p).mtimeMs > cutoff) continue;
+          let scwd = "", isSide = false, sawUser = false;
+          for (const ln of readFileSync(p, "utf8").split("\n")) {
+            if (!ln) continue;
+            let o: any; try { o = JSON.parse(ln); } catch { continue; }
+            if (o.type === "session") scwd = o.cwd ?? "";
+            else if (o.type === "message" && o.message?.role === "user" && !sawUser) { sawUser = true; isSide = isAskLucidPrompt(firstUserText(o.message)); }
+            if (scwd && sawUser) break;
+          }
+          if (isSide && norm(scwd) === want) { rmSync(p, { force: true }); cleared++; }
+        } catch { /* skip unreadable/locked file */ }
+      }
+    } catch { /* skip dir */ }
+  }
+  if (cleared > 0) allScans.delete(root);
   return { ok: true, cleared };
 }
 

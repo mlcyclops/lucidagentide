@@ -159,3 +159,24 @@ export function collectScreen(doc: Document, opts: CollectOptions = {}): ScreenD
     preview: opts.preview ?? null,
   });
 }
+
+/** The surfaces that are open, top first, WITHOUT their text: cheap enough to call on a timer. Used for the
+ *  suggestions (P-ASKLUCID.5), which need to know where the user is, not what it says. */
+export function surfaceKinds(doc: Document): { kind: string; title: string }[] {
+  const win = doc.defaultView;
+  if (!win) return [];
+  const vw = win.innerWidth;
+  const vh = win.innerHeight;
+  const overlays = [...doc.querySelectorAll(OVERLAYS)]
+    .filter((el) => !el.closest(SKIP) && visible(el, vw, vh) && el.getBoundingClientRect().width > 0)
+    .filter((el, _i, all) => !all.some((other) => other !== el && other.contains(el)))
+    .map((el, order) => ({ el, z: zOf(el), order }))
+    .sort((a, b) => b.z - a.z || b.order - a.order)
+    .map((o) => o.el);
+  const body = doc.querySelector(".body");
+  const base = (body ? [...body.children] : []).filter((el) => visible(el, vw, vh) && el.getBoundingClientRect().width > 0 && !matches(el, SKIP));
+  // Side panels before the chat: a panel the user opened is where they are, the chat is always there.
+  const panels = base.filter((el) => !matches(el, ".rail, #sidebar, .center, #inspector"));
+  const rest = base.filter((el) => !panels.includes(el));
+  return [...overlays, ...panels, ...rest].map((el) => ({ kind: kindOf(el), title: titleOf(el).slice(0, 120) }));
+}

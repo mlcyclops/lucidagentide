@@ -156,7 +156,7 @@ export interface SessionsOptions {
  *  `{ messages: { role, text }[] }` for one session. Both are read structurally. */
 export function sessionsContext(rows: unknown, tailOf: (id: string) => unknown, opts: SessionsOptions): { text: string; sessions: number } {
   const lim = BRIEF_LIMITS[opts.mode ?? "normal"];
-  const list = (Array.isArray(rows) ? rows : []).map(rec).filter((r): r is Record<string, unknown> => r !== null && str(r.id) !== "" && r.kind !== "kg-ingest");
+  const list = (Array.isArray(rows) ? rows : []).map(rec).filter((r): r is Record<string, unknown> => r !== null && str(r.id) !== "" && (r.kind === undefined || r.kind === "chat"));
   if (list.length === 0) return { text: "", sessions: 0 };
   const sorted = [...list].sort((a, b) => (str(b.id) === opts.currentId ? 1 : 0) - (str(a.id) === opts.currentId ? 1 : 0) || num(b.updatedAt) - num(a.updatedAt));
   const out: string[] = [];

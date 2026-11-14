@@ -148,7 +148,7 @@ import { JobScheduler, type LedgerHit } from "./job_scheduler.ts"; // P-SCHED.1 
 import { createJob as createScheduledJob, jobTargetRepo, loadJobs, normalizeJobSpec, saveJobs, updateJob, nextFireAt } from "./scheduled_jobs.ts"; // P-SCHED.1 (aliased: creator_jobs.ts exports a createJob too, and the second import silently replaced the first at runtime)
 import { firesBetween } from "./cron.ts"; // P-SCHED.1
 import { LIVE_HEARTBEAT_MS, otherEnginesSessions, publishLiveSessions, withdrawLiveSessions } from "./live_sessions.ts"; // P-SESS-ARCHIVE.1: sessions other engines hold
-import { archivedSessions, archivePolicy, archiveSession, autoArchive, clearIngestSessions, deleteSession, flushSessionIndex, listSessions, restoreSession, searchSessions, sessionMessages, type ArchiveRun, type SpokeFilter } from "./sessions.ts";
+import { archivedSessions, archivePolicy, archiveSession, autoArchive, clearAskLucidSessions, clearIngestSessions, deleteSession, flushSessionIndex, listSessions, restoreSession, searchSessions, sessionMessages, type ArchiveRun, type SpokeFilter } from "./sessions.ts";
 import { providerAuth, typesafeKeySet, type ProviderAuthSnapshot } from "./auth_status.ts";
 import { parseJudgmentReport } from "../harness/judgment/trace_schema.ts"; // P-JEV.2 (ADR-0377): the loopback boundary for judgment traces
 import { openHubWindow } from "./hub_launch.ts"; // P-TUI.2: the Fleet view's Terminal hub button
@@ -1913,6 +1913,20 @@ let lastArchiveRun: (ArchiveRun & { at: number }) | null = null;
 const AUTO_ARCHIVE_FIRST_MS = 120_000;
 const AUTO_ARCHIVE_EVERY_MS = 6 * 3_600_000;
 let autoArchiveTimer: Timer | null = null;
+/** P-ASKLUCID.5 (ADR-0586): sweep Ask Lucid's throwaway sessions (one per question) once they are an hour
+ *  old: two minutes after start, then every six hours. Unref'd: it never keeps the engine alive. */
+function scheduleAskLucidSweep(): void {
+  const tick = (delay: number): void => {
+    const t = setTimeout(() => {
+      try { const r = clearAskLucidSessions(); if (r.cleared > 0) flushSessionIndex(); }
+      catch (e) { console.error(`[ask-lucid] session sweep failed: ${e instanceof Error ? e.message : String(e)}`); }
+      tick(AUTO_ARCHIVE_EVERY_MS);
+    }, delay);
+    t.unref();
+  };
+  tick(AUTO_ARCHIVE_FIRST_MS);
+}
+
 /** (Re)arm the auto-archive pass: first two minutes after start (or after the rule is saved), then every six
  *  hours, only while the rule is on. Unref'd: it never keeps the engine alive. */
 function scheduleAutoArchive(): void {
@@ -7138,6 +7152,7 @@ process.env.LUCID_KB_RETRIEVE_URL = `http://127.0.0.1:${server.port}/api/kb/retr
 process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/status?t=${AGENT_TOKEN}`;
 startLiveHeartbeat(); // P-SESS-ARCHIVE.1 (ADR-0517): tell other engines which sessions must not be archived
 scheduleAutoArchive(); // P-SESS-ARCHIVE.1: only does anything while the rule is on
+scheduleAskLucidSweep(); // P-ASKLUCID.5 (ADR-0586): Ask Lucid's throwaway sessions do not pile up on disk
 // P-SANDBOX.8: the sandbox_grant_dir tool (omp subprocess) POSTs its user-approved {path,mode,reason}
 // claim here. Same token'd convention as LUCID_FLEET_STATUS_URL; the endpoint applies NOTHING without a
 // fresh matching approval parked by the desktop's grant dialog (fail-closed, defense in depth).

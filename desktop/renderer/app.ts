@@ -98,8 +98,9 @@ import { localProvidersCardBody, draftFromForm, modelsFieldValue, providerWithDi
 import { parseResultWindowSetting, type ResultSpill } from "../result_window.ts"; // P-CTX.2b (ADR-0579): pure (no Node imports)
 import { resultWindowLine } from "./result_window_view.ts"; // P-CTX.2b (ADR-0579)
 import { createAskLucid, type AskActionResult, type AskLucidHandle } from "./ask_lucid_panel.ts"; // P-ASKLUCID.1 (ADR-0581): the Ask Lucid fly-out
-import { collectScreen } from "./screen_digest.ts"; // P-ASKLUCID.3 (ADR-0584): what is on the screen, for Ask Lucid
+import { collectScreen, surfaceKinds } from "./screen_digest.ts"; // P-ASKLUCID.3 (ADR-0584): what is on the screen, for Ask Lucid
 import type { ScreenDigest, ScreenPreview } from "../ask_lucid_screen.ts";
+import { pushTrail, type Follow, type RecSignals } from "./lucid_recs.ts"; // P-ASKLUCID.5 (ADR-0586): suggestions that follow the work
 import type { AskAction } from "../ask_lucid_actions.ts"; // P-ASKLUCID.2 (ADR-0582): what Lucid may propose
 import { holidayOffer, holidayToast, nextNews, noteHolidayAnswer, noteNewsSeen, pickSuggestion, pinExpired, readHolidayMemory, readPin, readSeenNews, setSuggestEnabled, suggestEnabled, suggestToggleHtml, writePin } from "./lucid_suggest.ts"; // P-MINI.2 (ADR-0583): what Lucid may suggest
 import { hydrateVaultDestinations } from "./vault_dest_ui.ts"; import { VAULT_DEST_SEC, VAULT_DEST_SUB, VAULT_DEST_TITLE } from "./vault_dest_card.ts"; // P-VAULT-DEST.1 (ADR-0478): Settings → Vault destinations (Enterprise)
@@ -4992,6 +4993,10 @@ function askLucid(): AskLucidHandle {
   askLucidPanel ??= createAskLucid({
     ask: (text, history, extras) => bridge.askLucid(text, history, extras),
     screen: readScreenForLucid,
+    recSignals: recSignalsForLucid,
+    recStore: miniStore(),
+    recTrail: () => recTrail,
+    onFollow: followScreenForLucid,
     markdown: renderMarkdown,
     enhance: enhanceCodeBlocks,
     topBar: ".titlebar",
@@ -4999,6 +5004,56 @@ function askLucid(): AskLucidHandle {
     runAction: runAskAction,
   });
   return askLucidPanel;
+}
+
+// P-ASKLUCID.5 (ADR-0586): what is going on, for Ask Lucid's suggestions. Everything here is already on the
+// user's screen or in a view Lucid is shown: which surfaces are open, the lanes, the orbit goal, the session
+// in the main chat, and whether the knowledge graph holds anything. No text is read.
+async function recSignalsForLucid(): Promise<RecSignals | null> {
+  const [fleet, goal, kb] = await Promise.all([bridge.fleetStatus().catch(() => null), bridge.fleetGoal().catch(() => null), bridge.kbList().catch(() => null)]);
+  const lanes = (fleet?.lanes ?? []).map((l) => {
+    const r = l as unknown as Record<string, unknown>;
+    const status = typeof r.status === "string" ? r.status : "";
+    return { name: typeof r.name === "string" && r.name ? r.name : "a lane", status, waiting: !!r.pendingApproval || /approval|waiting/i.test(status) };
+  });
+  const g = (goal?.goal ?? null) as unknown as Record<string, unknown> | null;
+  const active = $(".sess.active") as HTMLElement | null;
+  const sid = active?.dataset.sid ?? null;
+  const panel = document.getElementById("preview");
+  const path = prevPathByLane[prevLane] ?? "";
+  let surfaces: { kind: string; title: string }[] = [];
+  try { surfaces = surfaceKinds(document); } catch { surfaces = []; }
+  return {
+    surfaces,
+    previewTitle: panel && !panel.hidden && path ? (path.split(/[\\/]/).pop() ?? path) : null,
+    lanes,
+    orbit: g && typeof g.title === "string" && g.title ? { title: g.title, status: typeof g.status === "string" ? g.status : "", blocked: !!g.blockedReason || g.status === "blocked", tasks: Array.isArray(g.tasks) ? g.tasks.length : 0 } : null,
+    sessionTitle: (sid ? cachedSessionInfo(sid)?.title : null) ?? "",
+    streaming: state.streaming,
+    otherSessions: Math.max(0, document.querySelectorAll("#sidebar .sess").length - (active ? 1 : 0)),
+    knowledge: (kb?.kgs?.length ?? 0) > 0,
+  };
+}
+
+// While Lucid's suggestions are missing (the user passed a set over), the app notes which surface is open
+// every 20 seconds so the next set can speak to where the user actually spends time. Kinds only, never
+// text, kept in memory, and the sampling stops the moment a suggestion is used.
+let recTrail: string[] = [];
+let recSampler: number | null = null;
+const REC_SAMPLE_MS = 20_000;
+function followScreenForLucid(mode: Follow): void {
+  if (mode === "normal") {
+    if (recSampler !== null) { window.clearInterval(recSampler); recSampler = null; }
+    recTrail = [];
+    return;
+  }
+  if (recSampler !== null) return;
+  const sample = (): void => {
+    if (document.hidden) return;
+    try { recTrail = pushTrail(recTrail, surfaceKinds(document)[0]?.kind ?? ""); } catch { /* a sample is optional */ }
+  };
+  sample();
+  recSampler = window.setInterval(sample, REC_SAMPLE_MS);
 }
 
 /** P-ASKLUCID.3 (ADR-0584): what the user is looking at, for a question in Ask Lucid. The surfaces come from

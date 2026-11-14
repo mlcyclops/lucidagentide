@@ -7876,12 +7876,15 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .al-msg.al-lucid > :last-child{margin-bottom:0}
 .al-msg.al-err{align-self:stretch;background:var(--red-dim);border:1px solid rgb(var(--sh-rgb) / .2);color:var(--red-txt)}
 .al-meta{font-size:11px;line-height:1.4;color:var(--txt-4);margin:-4px 2px 0}
-/* P-ASKLUCID.4 (ADR-0585): the quick row above the composer. One line, scrolls sideways, each chip one text child. */
-.al-quick{display:flex;gap:6px;padding:8px 12px;border-top:1px solid var(--line-soft);overflow-x:auto;scrollbar-width:none}
-.al-quick::-webkit-scrollbar{display:none}
-.al-chip{flex:none;max-width:280px;height:28px;padding:0 11px;border:1px solid var(--line);border-radius:999px;background:var(--bg-2);color:var(--txt-1);font:inherit;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;transition:border-color var(--t),background var(--t)}
+/* P-ASKLUCID.4 (ADR-0585): the quick row above the composer. The CHIPS wrap onto a second row when they do not fit
+   (so "Something else" is never off screen); the text inside a chip never wraps. Each chip is one text child. */
+.al-quick{display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px;border-top:1px solid var(--line-soft)}
+.al-chip{flex:none;max-width:100%;height:28px;padding:0 11px;border:1px solid var(--line);border-radius:999px;background:var(--bg-2);color:var(--txt-1);font:inherit;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;transition:border-color var(--t),background var(--t)}
 .al-chip:hover{border-color:var(--accent-2);background:var(--bg-3)}
 .al-chip-brief{border-color:rgb(var(--accent-rgb) / .5);background:var(--accent-dim);color:var(--txt);font-weight:600}
+/* P-ASKLUCID.5 (ADR-0586): suggestions. What needs the user is marked; "Something else" is the quiet one at the end. */
+.al-chip.al-rec-approval,.al-chip.al-rec-failure{border-color:rgb(var(--sh-rgb) / .2);background:var(--red-dim);color:var(--red-txt)}
+.al-chip-more{border-style:dashed;color:var(--txt-3);background:transparent}
 .al-form{display:flex;align-items:flex-end;gap:8px;padding:0 12px 12px}
 .al-input{flex:1;min-width:0;min-height:38px;max-height:160px;resize:none;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--bg-1);color:var(--txt);font:inherit;font-size:13px;line-height:1.4;outline:none}
 .al-input:focus{border-color:var(--accent)}

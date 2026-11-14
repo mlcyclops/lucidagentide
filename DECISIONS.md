@@ -27322,3 +27322,26 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 - Sessions in other workspaces are not listed. A remote spoke's conversation is not read.
 - A lane's in-flight text (the turn still streaming) is not included, only settled turns.
 - The Brief me chip and the posted `brief` flag were driven in a browser against a live engine; the live route answered with the provider's 403 from this sandbox, so no live model wrote a briefing.
+
+## ADR-0586 -- P-ASKLUCID.5: suggestions seeded from the work, a measured miss, and Ask Lucid's throwaway sessions hidden (2026-11-14)
+
+**Status:** Accepted. Session 3 of `docs/specs/ask-lucid-sight-pdr.md`. Amends ADR-0581 (four fixed suggestions; side completions left visible sessions). Proof: `make demo-P-ASKLUCID.5`, `bun test desktop/renderer/lucid_recs.test.ts desktop/sessions_asklucid.test.ts`.
+
+**Context.** The request: recommendations seeded from what is going on, what the user is working on and what the knowledge graph holds; and when the user does not know what to ask, the recommendations failed, so Lucid should follow the user's work and screens more closely. Ask Lucid showed the same four questions whatever was happening. Testing this increment also showed that every Ask Lucid question left a session in the chat list titled with the opening of Lucid's brief, because omp persists the throwaway session a side completion runs in.
+
+**Decision.**
+1. **Computed first.** `desktop/renderer/lucid_recs.ts` (pure) builds suggestions from signals the app already has: a lane waiting for approval, a failed lane, the surface on top of the screen, the Preview page, the orbit goal (blocked or not), working lanes, the session in the main chat, other sessions, and whether the knowledge graph holds anything. Each names the real lane, goal or session. No model call, and no text is read from the screen for this: surface kinds only.
+2. **Ranking.** A base priority per kind (what needs the user first) times a learned weight between 0.4 and 1.6. One suggestion per kind, three in the row, shown as chips above the composer and as the questions in an empty panel.
+3. **A miss is measured.** Pressing **Something else**, or closing the panel after a set was on screen for at least four seconds without using it or asking anything, is a miss: each kind in the set loses 0.1 weight and the set is put aside for the rest of the run. Using a suggestion adds 0.15 to its kind and ends the run. Typing a question is not a miss: it ends the run and moves no weight.
+4. **Following more closely.** After one miss Lucid suggests from every open surface, not only the top one, screen suggestions are weighted up, and the app notes which surface is open every 20 seconds so the surface the user keeps returning to can be offered a walkthrough. Kinds only, in memory, and the sampling stops when a suggestion is used. After three misses in a row the user is treated as lost and the fallback list leads the row (features not yet used, P-ASKLUCID.6).
+5. **Generated second.** A reply may end with one `lucid-next` block of up to three follow-up questions (`desktop/ask_lucid_followups.ts`, pure). Each must be a plain one-line string of 8 to 140 characters; the service scans each and drops one that fails or cannot be scanned. They replace the chips until the next reply. A follow-up is text the user may choose to send, nothing more.
+6. **The memory** (weights, misses, the put-aside ids) is one `localStorage` entry, `lucid.asklucid.recs.v1`.
+7. **Throwaway sessions.** A session whose first user message opens with Lucid's brief is kind `ask-lucid`: it is in no chat list, no ingest group, no search result and no archive count, and Lucid's own sessions view never lists it. A sweep two minutes after engine start and every six hours deletes the ones in the current workspace that are at least an hour old, with the two guards the ingest cleanup uses (the workspace matches and the first message is the brief).
+
+**Consequences.**
+- The chips change with the work. With nothing going on there are none, and the empty panel falls back to the fixed questions.
+- A suggestion the user passed over can return once the run of misses ends, so a lane still waiting an hour later is mentioned again.
+- Weights are per browser profile and are not synced.
+- An Ask Lucid session written before this change keeps its `chat` entry in the session index until its file changes or the index is rebuilt.
+- Other side completions (the checker and similar callers of `backend.complete`) still leave visible sessions. That is not changed here.
+- Driven in a browser against a live engine with a mocked fleet: the row showed the waiting lane, the failed lane and the open panel; Something else replaced all three; a pressed chip asked its question; follow-ups replaced the chips; closing an untouched set counted one miss; a typed question reset it. No live model wrote follow-ups in this sandbox.
