@@ -248,11 +248,20 @@ three lines in PROGRESS.md at the end. Order matters: C can run in parallel with
   session had been shown. A session that was shown suspicious content can no longer write durable
   memory, and the promotion gate takes every source of a derived fact.
 
-### Session 5: ADR-C, P-BENCH.2a, dev set and scorer
+### Session 5: ADR-C, P-BENCH.2a, dev set and scorer (shipped, ADR-0591)
 
 - `harness/bench/devset/` fixtures with reference answers and a scorer (exact match, substring,
   NDCG@10 for ranking); runner that drives a lane with `harness/testing/echo.ts` for hermetic tests.
 - `make demo-P-BENCH.2a`: scores the echo model and one configured local model.
+- As shipped: the demo scores two scripted references and a loopback stand-in for a local endpoint, because
+  no local model is reachable from the build sandbox or CI. To score a real one, on a machine that serves it:
+
+  ```
+  make bench-devset ARGS="--base-url http://localhost:11434/v1 --model <model id> --context <measured tokens> --label 'Gemma 4 E2B' --out e2b.json"
+  ```
+
+  Run it once per model (Gemma 4 E2B, the 26B MoE, Qwen 3.8 28B coder). `--context` is the window measured
+  on the endpoint (ADR-0367), not the advertised one. `--lengths 8000,64000` gives a quick first pass.
 
 ### Session 6: ADR-C, P-BENCH.2b, storage and dashboard
 

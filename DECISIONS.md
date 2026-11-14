@@ -27443,3 +27443,29 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 - The note covers what the result gate labels. Suspicious text the user pastes into chat, or that a local tool reads from a file, is not a labeled source today and is not noted.
 - An existing row in `content_artifacts` with a label outside the four would now block a promotion that cites it.
 - No schema, event name or frozen contract changed: `derivedFrom` is an optional field on a function input, and the note is a new file beside the ledger of ADR-0578.
+
+## ADR-0591 -- P-BENCH.2a: a fixed long-context dev set, scored through a real lane, for local models (2026-11-14)
+
+**Status:** Accepted. Session 5 of `docs/specs/longcapharness-review-pdr.md` (ADR-C there). Builds on ADR-0579 (the window sized to the model) and ADR-0589, ADR-0590 (the artifact tools). Proof: `make demo-P-BENCH.2a`, `bun test harness/bench/devset/devset.test.ts`.
+
+**Context.** LUCID could not say how well a model does on a long input, or whether the artifact tools help a given model, which is the measurement the reviewed paper rests on. The first models to score were named by the owner: Gemma 4 E2B, a 26B MoE, and Qwen 3.8 28B coder. None is reachable from the sandbox this was built in or from CI, so the harness has to be provably right before the first real run.
+
+**Decision.**
+1. **The dev set** (`harness/bench/devset/tasks.ts`, pure): four LUCID-shaped jobs, each the output of a tool. `needle` (one keyed value in a build log, among look-alikes), `count` (failed lines in a test run), `track` (the final value of a setting after ordered changes, some through another key's name), `rank` (which files mention an error most, from a search dump). Each at 8,000, 64,000 and 512,000 characters, in two variants: 24 tasks.
+2. **Generated, not stored.** Haystacks come from fixed seeds. `manifest.json` records each one's hash, question and answer, and a test compares the generator with it. A deliberate change bumps `DEVSET_VERSION` and rewrites the manifest in the same commit; scores are comparable only under the same manifest.
+3. **Answers sit where a model is not shown.** At 64,000 and 512,000 characters every answer is in the middle 30 percent, outside the head and tail omp shows. At 8,000 the whole result is shown at omp's default window.
+4. **Scoring** (`scorer.ts`, pure): a reply is scored on its last `ANSWER:` line, and a reply without one scores 0. Exact tasks are 100 or 0. Ranking is NDCG at 10.
+5. **A real lane is what is scored** (`runner.ts`): each task runs in its own omp session with the data arriving as an MCP tool result, the MCP result gate in the chain, and the artifact tools loaded or not. A task that fails to run, or runs past its time limit, scores 0 and is marked failed.
+6. **Two scripted references bound every real score** (`policies.ts`): a reader that answers as well as possible from what it is shown and never calls an artifact tool, and a tool user that calls the tool that fits the question. They are not models. The reader is the ceiling without the tools; the tool user shows the tools can answer every task.
+7. **A real model is an OpenAI-compatible endpoint**, declared to omp in the shape a Local Provider writes. `desktop/scripts/bench_devset.ts` (`make bench-devset`) takes a base URL, a model id and the model's measured context window, sizes the tool-result window to it as the app does, runs the set without and with the tools, and prints accuracy against input length beside the two references. A key is read from a named environment variable and is never written to a file.
+8. **The endpoint path is verified without a model.** `fake_endpoint.ts` is a loopback server that speaks streamed chat completions with tool calls and answers with a scripted policy. Tests and the demo run the dev set through it, so the first run against a real model is not the first run of the code.
+9. **Which model first.** All three, since a run is one command each. Gemma 4 E2B is the one the plan is about: the claim under test is that code tools make the smallest models usable on long inputs. The 28B coder is the realistic lane model, and the MoE shows whether size alone closes the gap.
+
+**Consequences.**
+- Reference numbers at omp's default window: the reader scores 100, 0, 0 by length and the tool user 100, 100, 100, on about 28,000 characters of tool results per task either way. With a 2 KB window (an 8K-context model) the reader scores 0 even at 8,000 characters and the tool user 100, on about 2,000 characters.
+- The set measures one thing: reaching what the model was not shown. It does not measure reasoning over what it was shown, and a model that scores 100 here is not thereby good at anything else.
+- Each task costs a real model a few requests beyond the visible ones, because omp makes its own small calls in a session.
+- The tool-result window must fit the model. A model declared at 32K tokens and handed omp's default 50 KB window had its conversation compacted mid-task, losing the task prompt, and scored 0 on a task it could answer. The command-line scorer sizes the window to the declared context window (8 KB at 32K tokens), where the same stand-in scored 100 at every length. This is the failure ADR-0579 exists to prevent, seen from the benchmark's side.
+- omp keeps one agent registry per process, so sessions are disposed between tasks and a start-up collision is retried. Tasks run one after another, never in parallel.
+- Results print to the terminal and optionally to a JSON file. Storing them in DuckDB and charting accuracy against length is P-BENCH.2b.
+- No real model has been scored. The three named models are newer than anything this was checked against, so their ids, context windows and tool-calling behaviour are the owner's to supply.

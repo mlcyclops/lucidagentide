@@ -697,6 +697,14 @@ demo-P-CAP.1a: ## P-CAP.1a (ADR-0589): find, lookup, count and slice over a stor
 demo-P-CAP.1b: ## P-CAP.1b (ADR-0590): state tracking, and a derived fact never trusted more than its sources - real omp sessions with the real scanner, gate and tools, and a real DuckDB: artifact_track returning the final state of three variables from 6,000 ordered events in one fenced call; a clean session's memory write reaching the engine labeled untrusted; a session shown a suspicious tool result refused a memory write before any request, both when it read the content and when it derived an answer through the artifact tools; and the promotion gate blocking a fact with one suspicious, quarantined or unknown source among several, with review per source
 	$(BUN) run harness/scripts/demo_pcap1b.ts
 
+.PHONY: demo-P-BENCH.2a
+demo-P-BENCH.2a: ## P-BENCH.2a (ADR-0591): the long-context dev set - 24 generated tasks (needle, count, track, rank at 8,000, 64,000 and 512,000 characters) matching a checked-in manifest, scored through real omp sessions with the real scanner: a reader that answers only from what it is shown is right at 8,000 characters and wrong beyond, a user of the artifact tools is right at every length, the same run works behind an OpenAI-compatible endpoint (a loopback stand-in), and a model with an 8K window needs the tools even at 8,000 characters
+	$(BUN) run harness/scripts/demo_pbench2a.ts
+
+.PHONY: bench-devset
+bench-devset: ## P-BENCH.2a (ADR-0591): score a local model on the long-context dev set. Usage: make bench-devset ARGS="--base-url http://localhost:11434/v1 --model <id> --context <tokens> [--label <name>] [--lengths 8000,64000] [--mode both] [--out results.json]"
+	$(BUN) run desktop/scripts/bench_devset.ts $(ARGS)
+
 .PHONY: demo-P-MINI.1
 demo-P-MINI.1: ## P-MINI.1 (ADR-0580): mini Lucid visits and sits down to type - the seated typing scene (hands alternating, lit keys), his seat on the prompt bar top and never over the prompt, the Developer's first new session of a launch always visited, another role visited at most three times a day and never within thirty minutes, and the Off / Sometimes / Always preference with the LUCID Agent role keeping him
 	$(BUN) run desktop/scripts/demo_p_mini_1.ts
