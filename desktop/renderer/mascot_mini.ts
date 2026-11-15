@@ -17,9 +17,13 @@
 // prompt-bar runner (mascot_runner.ts) can paint the typing scene from it with no DOM of its own.
 // `mountMiniMascot` is the small standalone canvas the Ask Lucid panel header uses: pixel-crisp (whole
 // device pixels per cell), about 24 fps, paused while hidden or in a background tab, and one still frame
-// per state under prefers-reduced-motion.
+// per state under prefers-reduced-motion. P-MINI.3 (ADR-0596): it wears the color theme's palette and a live
+// season's colors, like the prompt-bar runner, and its halo is the palette's accent.
 
-import { KEYBOARD_WHOLE, MASCOT_FRAMES, MASCOT_H, MASCOT_PALETTE, MASCOT_W, VICTORY_MS, keyboardLitKeys, paintRows } from "./mascot.ts";
+import { KEYBOARD_WHOLE, MASCOT_FRAMES, MASCOT_H, MASCOT_W, VICTORY_MS, keyboardLitKeys, paintRows } from "./mascot.ts";
+import { seasonPalette } from "./mascot_season.ts";
+import { themedMascotPalette } from "./mascot_theme.ts";
+import { seasonById } from "./seasons.ts";
 
 export const SCENE_W = MASCOT_W + 4;
 export const SCENE_H = MASCOT_H + 2;
@@ -202,6 +206,14 @@ export function typingRows(elapsedMs: number): string[] {
   return rows;
 }
 
+/** PURE: the halo color, "r, g, b" of the palette's accent G (the brand green when G is not #rrggbb). */
+export function accentRgb(palette: Record<string, string>): string {
+  const m = /^#([0-9a-f]{6})$/i.exec((palette.G ?? "").trim());
+  if (!m) return "65, 255, 139";
+  const n = parseInt(m[1]!, 16);
+  return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
+}
+
 function reducedMotion(): boolean {
   try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; }
 }
@@ -244,14 +256,31 @@ export function mountMiniMascot(host: HTMLElement, opts: { size?: "sm" | "md" } 
     return cell;
   };
 
-  /** Soft brand-green halo behind the figure; its strength carries the breathing. */
+  // P-MINI.3 (ADR-0596): the theme's palette with a live season's colors over it, and the halo's "r, g, b" from
+  // its accent G. Both are re-read only when the theme or the season attribute changes.
+  let base: Record<string, string> | null = null;
+  let seasonAttr: string | undefined;
+  let palette: Record<string, string> = themedMascotPalette();
+  let glowRgb = accentRgb(palette);
+  const readLook = (): void => {
+    const b = themedMascotPalette();
+    const attr = document.documentElement.dataset.season;
+    if (b === base && attr === seasonAttr) return;
+    base = b;
+    seasonAttr = attr;
+    palette = seasonPalette(seasonById(attr)?.id ?? null, b);
+    glowRgb = accentRgb(palette);
+    lastKey = "";
+  };
+
+  /** Soft halo in the accent behind the figure; its strength carries the breathing. */
   const glow = (strength: number): void => {
     if (!ctx) return;
     const w = cv.width;
     const hgt = cv.height;
     const g = ctx.createRadialGradient(w / 2, hgt * 0.62, 2, w / 2, hgt * 0.62, Math.max(w, hgt) * 0.55);
-    g.addColorStop(0, `rgba(65, 255, 139, ${strength.toFixed(3)})`);
-    g.addColorStop(1, "rgba(65, 255, 139, 0)");
+    g.addColorStop(0, `rgba(${glowRgb}, ${strength.toFixed(3)})`);
+    g.addColorStop(1, `rgba(${glowRgb}, 0)`);
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, hgt);
   };
@@ -259,6 +288,7 @@ export function mountMiniMascot(host: HTMLElement, opts: { size?: "sm" | "md" } 
   const paint = (now: number, still: boolean): void => {
     if (!ctx) return;
     const cell = fit();
+    readLook();
     const t = now - since;
     let rows: string[] | undefined;
     let strength: number;
@@ -288,7 +318,7 @@ export function mountMiniMascot(host: HTMLElement, opts: { size?: "sm" | "md" } 
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, cv.width, cv.height);
     glow(strength);
-    paintRows(ctx, rows, cell, 0, 0, MASCOT_PALETTE);
+    paintRows(ctx, rows, cell, 0, 0, palette);
   };
 
   const running = (): boolean => active && visible && !document.hidden && host.isConnected;
@@ -312,6 +342,9 @@ export function mountMiniMascot(host: HTMLElement, opts: { size?: "sm" | "md" } 
     io = new IntersectionObserver((list) => { visible = list.some((e) => e.isIntersecting); kick(); });
     io.observe(host);
   }
+  // A theme or season switch repaints at once, also the one still frame of reduced motion.
+  const themeWatch = typeof MutationObserver === "function" ? new MutationObserver(() => kick()) : null;
+  themeWatch?.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-season"] });
   paint(performance.now(), true);
   kick();
 
@@ -342,6 +375,7 @@ export function mountMiniMascot(host: HTMLElement, opts: { size?: "sm" | "md" } 
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
       io?.disconnect();
+      themeWatch?.disconnect();
       document.removeEventListener("visibilitychange", onVis);
       cv.remove();
     },

@@ -10,6 +10,7 @@ import type { AnimProp, DesignDoc, Ease, Keyframe } from "../../harness/creator/
 import { ANIM_PROPS } from "../../harness/creator/design/types.ts";
 import { cubicBezierEase } from "../../harness/creator/design/anim.ts";
 import { EASE_PRESETS, clampCubic, layerRows, snapToFrame } from "./design_logic.ts";
+import { setTip } from "./ui.ts"; // P-TIP.1 (ADR-0599)
 
 export interface KeyRef { layerId: string; prop: AnimProp; t: number }
 
@@ -113,7 +114,7 @@ export function buildTimeline(host: HTMLElement, h: TimelineHost): void {
     const props: AnimProp[] = l.id === sel ? [...ANIM_PROPS] : tracks.map((t) => t.prop);
     const header = el("div", `dsn-tl-row dsn-tl-layer${l.id === sel ? " on" : ""}`);
     const name = el("span", "dsn-tl-name", l.name);
-    name.title = l.name;
+    setTip(name, l.name);
     name.style.paddingLeft = `${4 + row.depth * 12}px`;
     name.addEventListener("click", () => h.selectLayer(l.id));
     header.appendChild(name);
@@ -129,7 +130,7 @@ export function buildTimeline(host: HTMLElement, h: TimelineHost): void {
         const on = !!selKey && selKey.layerId === l.id && selKey.prop === prop && selKey.t === k.t;
         const d = el("span", `dsn-key${on ? " on" : ""}`);
         d.style.left = pct(k.t, dur);
-        d.title = `${(k.t / 1000).toFixed(3)} s = ${Math.round(k.v * 1000) / 1000}`;
+        setTip(d, `${(k.t / 1000).toFixed(3)} s = ${Math.round(k.v * 1000) / 1000}`);
         d.addEventListener("pointerdown", (e) => {
           e.stopPropagation();
           const ref: KeyRef = { layerId: l.id, prop, t: k.t };

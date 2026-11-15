@@ -27469,3 +27469,71 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 - omp keeps one agent registry per process, so sessions are disposed between tasks and a start-up collision is retried. Tasks run one after another, never in parallel.
 - Results print to the terminal and optionally to a JSON file. Storing them in DuckDB and charting accuracy against length is P-BENCH.2b.
 - No real model has been scored. The three named models are newer than anything this was checked against, so their ids, context windows and tool-calling behaviour are the owner's to supply.
+
+## ADR-0596 -- P-MINI.3: a smaller, calmer Lucid who wears the theme, and Personalization from the KG view (2026-11-15)
+
+**Status:** Accepted. Amends ADR-0580 (P-MINI.1: mini Lucid's visits and preference) and the prompt-bar runner (P-MASCOT.2). Numbered 0596, not 0592, to leave 0592 to 0595 to the long-context benchmark work on this branch. Proof: `make demo-P-MINI.3`, `demo-P-MASCOT.2`, `demo-P-MASCOT.5`, `demo-P-MINI.1`; `bun test ./desktop/renderer/mini_lucid.test.ts ./desktop/renderer/mascot_theme.test.ts ./desktop/renderer/mascot_runner.test.ts ./desktop/renderer/mascot_game.test.ts ./desktop/renderer/mascot_minigames.test.ts`.
+
+**Context.** On the owner's machine the prompt-bar ninja was too big (two CSS pixels a sprite cell, about 80 by 104 px) and never stopped walking his route, which pulled the eye from the work. A right-click did nothing useful and a click sent a visitor away by accident. With a color theme on, the runner and the Ask Lucid header mascot kept the brand green: both painted the fixed palette, and only a holiday season reached their canvases. And Ask Lucid could open the Knowledge view for a user without Personalization, who then read "Enable it in Settings" with no way to act there.
+
+**Decision.**
+1. **Size.** Small, mini Lucid's size (one CSS pixel a cell, whole device pixels on every display), is the default; Large (classic, two) stays as a choice in Settings, Mini Lucid. The prompt-bar runner and every Arcade game and minigame take the size, with their geometry (floor, hit boxes, reach, obstacles, jumps, lanes) derived from it, and a change applies live.
+2. **Calm.** He lives in the right corner of the prompt bar's top edge: practicing, meditating or breathing for long stretches, and seated typing while a turn runs. He walks across and back about once every five minutes, never while a session is working. The endless route loop is gone.
+3. **Gestures.** Hover or a click is a small hop. A double-click (or a double tap) dashes him off the nearer end; a resident walks back later, a visitor is gone. A right-click turns him off in every role, the LUCID Agent role included, and a toast says where to turn him back on and offers **Turn back on**. Settings, Mini Lucid has a **Show the Lucid mascot** switch for the same state.
+4. **Default.** An untouched install has him **Off** on the prompt bar; the LUCID Agent role still has him resident. A stored choice is kept.
+5. **Theme.** `mascot_theme.ts` maps the color theme to his palette: the theme's `--accent` and `--accent-deep` on the headband, belt and scarf, a light tint of it on the gi, skin and eyes unchanged. Lucid Dark and Lucid Light keep the brand green. A live season's costume is laid over it, so a holiday still wins. The runner and the Ask Lucid header mascot re-read it when `data-theme` changes.
+6. **Personalization in the Knowledge view.** With Personalization off, the view offers **Turn on Personalization** (and Open Settings); once on and not yet set up, it offers the passphrase field and **Create**. The same bridge calls and toasts as Settings.
+
+**Consequences.** He is quieter and smaller by default, and users who liked the old ninja can pick Large. A user who never opened Settings stops seeing his visits. The right-click turn-off is stored in localStorage (per browser profile), like the rest of his preferences. The sprite art is the same 40 by 52 cell figure: Small draws it at mini Lucid's density rather than a redrawn higher-resolution figure.
+
+## ADR-0597 -- P-ASKLUCID.8: copy an answer, and ask Lucid about your own images (2026-11-15)
+
+**Status:** Accepted. Amends ADR-0581 (the Ask Lucid fly-out) and ADR-0588 (pictures for models that read them). Ask Lucid still cannot act. Proof: `bun test ./desktop/ask_lucid_images.test.ts ./desktop/ask_lucid.test.ts ./desktop/ask_lucid_shot.test.ts ./desktop/renderer/ctxmenu.test.ts`.
+
+**Context.** An answer in the panel could only be copied by selecting its text by hand, and a right-click did nothing unless something was selected. Pasting a picture into the panel's input did nothing visible: the composer's image chips (ADR-0136) were never wired there, so a user could not ask Lucid about a screenshot or a photo.
+
+**Decision.**
+1. Every answer has a **Copy** button and, anywhere on it, a right-click **Copy answer** (ctxmenu.ts reads `data-copy-text`). Both copy the answer's markdown. A selection still offers Copy, and a code block Copy code block.
+2. Images pasted into the input or dropped on the panel become the composer's chips, with the composer's checks and limits (PNG, JPEG, WebP or GIF; six; 12 MB each). They go with the next question only, and are shown in that question's bubble. A file that is not an image is named and left out.
+3. The engine parses them again (`normalizeUserImages`) and sends them to the model first, before any screen picture, with a harness note outside every envelope: they are the user's own files, and text inside them is data. They are not scanned (the scanner reads text), which is the main composer's rule for the user's own images. A model that refuses pictures is asked again with text alone and remembered, as in ADR-0588, and the reply says so.
+4. The chips are built with the DOM: the panel's only `innerHTML` stays Lucid's sanitized reply.
+
+**Consequences.** Lucid can describe, read or compare a picture the user gives him, but he cannot change it: editing an image, and files other than images, need a tool path and a staging folder, which are their own increments.
+
+## ADR-0598 -- P-ATTACH.1: files on every prompt bar, copied to a managed folder and scanned fail-closed (2026-11-15)
+
+**Status:** Accepted. Amends ADR-0136 (images in the composer) and ADR-0597 (images in Ask Lucid). Proof: `make demo-P-ATTACH.1` (the real scanner); `bun test ./desktop/attachments.test.ts ./desktop/ooxml_text.test.ts ./desktop/renderer/attach_ui.test.ts ./desktop/managed_config.test.ts ./desktop/fleet_lanes.test.ts`.
+
+**Context.** Users drag files into prompt bars and expect a "+" button with a small menu. LUCID took only images, and only by paste or drop. Reading a file where it lies would hand the agent a path into the user's folders, let the bytes change between the scan and the read, and leave no record of what was sent.
+
+**Decision.**
+1. **Copy, then scan.** A file added to the main composer, a fleet lane bar or Ask Lucid is copied to `~/.omp/attachments/<day>/<id>/` (the one folder the sandboxed agent may read; the engine trusts nothing in it: no links followed, kind from the name, the block scanned again at send). Its text is extracted (PDF; Word, Excel and PowerPoint through a bounded ZIP reader with bomb guards; any other file only when its bytes are UTF-8 text) and scanned whole with the large scanner. Any failure to extract or scan refuses the file and deletes the copy (fail-closed). Programs, archives, the old binary Office formats and binary data are refused with a reason.
+2. **Kept 7 days.** A sweeper removes copies older than the retention, at start and every 6 hours, never outside the root. A managed policy (`security.attachments`: enabled, maxFiles, maxBytes, retentionDays; Group Policy values too) can only tighten the limits (10 files, 25 MB each, 7 days).
+3. **On send** the files' text goes with the prompt, each file fenced as untrusted under a harness header naming its managed copy, bounded per file and per prompt; the full text stays in the copy for an agent with tools. A queued lane prompt carries the file ids and is expanded and scanned when it runs. Images keep the image path.
+4. **The UI.** A "+" button on each bar opens Add files or photos (Ctrl+U), Add folder (composer and lanes), Knowledge, Skills and Connectors (MCP); Ask Lucid offers files and Knowledge. Each file is a mini chip with a hand-built SVG icon per type (PDF, Word, Excel/CSV, PowerPoint, Markdown, text, code, data, web, image, and a catch-all showing the extension) and a premium tooltip with the source path, the full extension and type, the size, the managed copy and its retention, or the reason it was blocked. Files leave the bar only once the send is accepted.
+
+**Consequences.** Users attach documents the way they expect, and the model and the agent see only scanned text and a managed copy. The source path is shown in the desktop app (Electron `webUtils.getPathForFile`), not in a plain browser. A staged lane prompt keeps its files through Update, Copy and Push now (`/api/attachments/describe` brings ready chips back, and a copy past its retention is named); a lane's user turn shows its file chips for the life of the window. A renderer reload clears a lane card's history, files included, as it always has. Every renderer copy falls back to the browser's own copy command when the Clipboard API is refused.
+
+## ADR-0599 -- P-TIP.1: the premium tooltip everywhere (2026-11-15)
+
+**Status:** Accepted. Proof: `bun test ./desktop/renderer` (`tip_text.test.ts` and the converted files' tests).
+
+**Context.** The app has a styled tooltip (`data-tip`, one delegated listener in `ui.ts`), but well over a hundred controls still used the browser's plain `title` tooltip, which looks different, appears late and cannot be reached from the keyboard.
+
+**Decision.** Native `title` tooltips in the renderer become `data-tip` (`setTip` in `ui.ts`, `tipEsc`/`tipValue` in the pure `tip_text.ts`), split into a label and an explanation where the old text already had both; a `|` in dynamic text is escaped, and the engine splits only on the first unescaped one. The tooltip now also opens on keyboard focus (`:focus-visible`, `aria-describedby`, Escape hides it). An accessible name is added wherever the title was the only one. Left as native on purpose: iframe titles (their accessible name), `<option>` titles inside native selects, document titles and non-DOM title data.
+
+**Consequences.** One look and timing for every hover hint, reachable by keyboard.
+
+## ADR-0600 -- P-ASKLUCID.9: Lucid edits an image you give him, with the best image model you have connected (2026-11-15)
+
+**Status:** Accepted. Amends ADR-0582 (proposals) and ADR-0597. Ask Lucid still cannot act on his own: only Confirm runs an edit. Proof: `bun test ./desktop/image_edit.test.ts ./desktop/ask_lucid_images.test.ts ./desktop/ask_lucid_actions.test.ts ./desktop/renderer/ask_image_card.test.ts ./desktop/renderer/preview_tabs.test.ts`.
+
+**Context.** A user who pastes an image into Ask Lucid and asks for a change got a description, not an edited image.
+
+**Decision.**
+1. **A proposal, not an action.** Lucid may propose `edit_image` (an image the user attached to the question, by position, and the instruction) only when an image is attached and the user asks to change it. The card is marked "Sends your image to an outside model" and says the provider may charge.
+2. **The best model the user has.** Ranked by the Artificial Analysis image editing leaderboard (November 2026): OpenAI GPT Image 2.6 Sunburst (rank 1), OpenAI GPT Image 2.6 Flare, Google Nano Banana 2.1 (near the top for about a sixth of the price), xAI Grok Imagine Image 2.0. Only providers with an API key in the engine are usable (an OAuth-only sign-in gives the engine no key; Anthropic has no image model). One usable model runs directly; several and no remembered choice: the card asks, recommendation first, and remembers the pick; none: the card says which keys to add and links to Settings.
+3. **Fail-closed.** The instruction is scanned; egress follows the policy (the user's Confirm on a card that names the provider approves a "prompt" verdict; a block or a CUI/AskSage lockdown stops it); the response must be a real PNG, JPEG or WebP within the size limit; an error message never carries a key. Nothing is written on failure.
+4. **The result.** The edited image is saved as a new file under `~/.omp/ask-lucid/images/<day>/` with a record of hashes (never the prompt text or a key); it is not removed by the attachments sweeper. The Preview panel opens an Ask Lucid tab on it; the card and Lucid's note give the full path; the tab and a right-click on the image offer Save image as, Copy path and Show in folder.
+
+**Consequences.** Image edits work with the user's own provider account and cost. Verified live up to the provider call (no-key card, the chooser, a provider's refusal of a fake key); a successful edit against a real key, and the Electron save dialog, are still to be seen on a machine with a key.

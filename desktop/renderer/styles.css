@@ -3022,9 +3022,91 @@ body.lucid-capturing #toasts{visibility:hidden}
 .cx-thumb-img{width:100%;height:100%;object-fit:cover;display:block}
 .cx-thumb-x{position:absolute;top:2px;right:2px;width:17px;height:17px;line-height:15px;text-align:center;border:none;border-radius:50%;background:rgb(var(--sh-rgb) / .62);color:var(--on-fill);font-size:13px;cursor:pointer;padding:0}
 .cx-thumb-x:hover{background:rgb(var(--red-deep-rgb) / .9)}
-.composer-wrap.drag .composer{outline:2px dashed var(--accent);outline-offset:2px}
 .msg-imgs{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 .msg-img{max-width:260px;max-height:260px;border-radius:var(--r-sm);border:1px solid var(--line);display:block}
+
+/* ── P-ATTACH.1 (ADR-0598): file chips, the file-type icons, the "+" menu and the drop highlight ──────── */
+/* The tray: one wrapping row of compact chips above a bar's input. */
+.att-tray{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
+.composer-files{max-width:min(1080px,94vw);margin:0 auto 8px}
+.fleet-files{padding:5px 9px;border-top:1px solid var(--line-soft)}
+.al-files{padding:0 12px 8px}
+/* A chip is a flex row whose ONE text label (the name) ellipsizes; the icon, the size badge and the x are
+   fixed-width siblings (invariant 11). */
+.att-chip{position:relative;display:inline-flex;align-items:center;gap:6px;height:28px;max-width:240px;min-width:0;
+  padding:0 3px 0 7px;border:1px solid var(--line);border-radius:8px;overflow:hidden;
+  background:linear-gradient(180deg,var(--bg-3),var(--bg-2));color:var(--txt-2);font-size:12px;line-height:1;
+  box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .05),0 1px 2px rgb(var(--sh-rgb) / .18);
+  transition:border-color var(--t-fast) var(--ease-out),color var(--t-fast),opacity var(--t),background var(--t)}
+.att-chip:hover{border-color:var(--line-strong);color:var(--txt)}
+.att-ico{flex:none;display:inline-flex;width:16px;height:16px}
+.att-name{flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:550}
+.att-meta{flex:none;white-space:nowrap;font-size:10.5px;color:var(--txt-4);font-variant-numeric:tabular-nums;padding-right:3px}
+.att-x{flex:none;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;
+  border:0;border-radius:5px;background:transparent;color:var(--txt-4);cursor:pointer;transition:color var(--t-fast),background var(--t-fast)}
+.att-x:hover{color:var(--red-txt);background:var(--red-dim)}
+.att-x:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* Staging: a soft sweep along the bottom edge while the engine copies and scans the file. */
+.att-chip[data-state="staging"] .att-name{color:var(--txt-3)}
+.att-prog{position:absolute;left:0;bottom:0;height:2px;width:38%;border-radius:2px;pointer-events:none;
+  background:linear-gradient(90deg,transparent,var(--accent-2),transparent);animation:attSweep 1.15s var(--ease-out) infinite}
+@keyframes attSweep{0%{transform:translateX(-100%)}100%{transform:translateX(270%)}}
+@media (prefers-reduced-motion:reduce){.att-prog{animation:none;width:100%;opacity:.45}}
+.att-chip[data-state="sending"]{opacity:.62}
+.att-chip[data-state="blocked"]{border-color:rgb(var(--red-rgb) / .5);background:var(--red-dim);color:var(--red-txt)}
+.att-chip[data-state="blocked"] .att-meta{color:var(--red-txt);font-weight:650}
+.att-chip[data-state="blocked"] .att-ico{opacity:.55;filter:grayscale(.6)}
+/* The files under a sent prompt (the chat, Ask Lucid): the same chips, no remove. */
+.att-sent{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.att-sent .att-chip{max-width:260px;padding-right:5px}
+/* File-type icons: each kind keeps its hue (--fi-h); the paper and the edge follow the theme. */
+.fi{display:block;flex:none;overflow:visible;--fi-h:#6b7280;--fi-paper:color-mix(in srgb,var(--fi-h) 9%,var(--bg-1))}
+.fi-pdf{--fi-h:#e5484d}
+.fi-word{--fi-h:#2f6fed}
+.fi-sheet{--fi-h:#1f9d55}
+.fi-slides{--fi-h:#e8692e}
+.fi-markdown{--fi-h:#5b6b82}
+.fi-text{--fi-h:#7c8ba1}
+.fi-code{--fi-h:#8b5cf6}
+.fi-data{--fi-h:#0ea5a0}
+.fi-web{--fi-h:#f59e0b}
+.fi-image{--fi-h:#ec4899}
+.fi .fi-page{fill:var(--fi-paper);stroke:color-mix(in srgb,var(--fi-h) 60%,var(--line-strong))}
+.fi .fi-fold{fill:var(--fi-h)}
+.fi .fi-lines{stroke:var(--fi-h)}
+.fi .fi-band{fill:var(--fi-h)}
+/* The "+" buttons and their menu (the shared anchored popover, narrowed). */
+.ct-plus .ic{transition:transform var(--t) var(--ease-out),color var(--t)}
+.ct-plus.on,.fleet-plus.on,.al-plus.on{border-color:var(--accent);color:var(--txt);background:var(--accent-dim)}
+.ct-plus.on .ic{color:var(--accent-2);transform:rotate(45deg)}
+.popover.att-menu-pop{width:236px}
+.att-menu{padding:6px;display:flex;flex-direction:column;gap:2px}
+.att-menu-opt{outline:none}
+.att-menu-opt:focus-visible,.att-menu-opt:focus{background:var(--bg-2);color:var(--txt)}
+.att-menu-ic{flex:none;display:inline-flex;width:15px;color:var(--accent-2)}
+.att-menu-kbd{flex:none;margin-left:auto;font-family:var(--mono);font-size:10px;line-height:1.5;color:var(--txt-3);white-space:nowrap;
+  background:linear-gradient(180deg,var(--bg-3),var(--bg-2));border:1px solid var(--line);border-bottom-width:2px;
+  border-bottom-color:var(--line-strong);border-radius:4px;padding:0 5px}
+/* Ask Lucid's "+" sits left of its input, matching the Ask button's height. */
+.al-plus{flex:none;display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;padding:0;
+  border:1px solid var(--line);border-radius:10px;background:var(--bg-1);color:var(--txt-3);cursor:pointer;
+  transition:border-color var(--t-fast),color var(--t-fast),background var(--t-fast)}
+.al-plus:hover{border-color:var(--line-strong);color:var(--accent-2)}
+/* A lane bar's "+" matches its Send button. */
+.fleet-plus{width:26px;height:26px}
+.fleet-plus:hover{color:var(--accent-2)}
+/* The drop highlight: an accent ring, a soft inner glow and a centered label, over whichever bar is under
+   the dragged files. The zones are positioned (.composer-wrap and .fleet-card already are). */
+.att-drop{position:relative}
+.att-drop::after{content:attr(data-drop-label);position:absolute;inset:4px;z-index:6;pointer-events:none;
+  display:flex;align-items:center;justify-content:center;border-radius:12px;
+  border:2px dashed rgb(var(--accent-rgb) / .7);background:rgb(var(--accent-rgb) / .08);
+  box-shadow:inset 0 0 32px rgb(var(--accent-rgb) / .22);color:var(--txt);font-size:12.5px;font-weight:650;
+  letter-spacing:.02em;white-space:nowrap;backdrop-filter:blur(2px);animation:attDropIn var(--t) var(--ease-out)}
+@keyframes attDropIn{from{opacity:0;transform:scale(.985)}to{opacity:1;transform:none}}
+/* A staged "next turn" prompt's file count. */
+.q-pill .q-files{flex:none;font-size:10px;font-weight:600;color:var(--txt-3);white-space:nowrap;
+  padding:1px 6px;border-radius:999px;background:var(--bg-3);border:1px solid var(--line-soft)}
 .composer-tools{max-width:min(1080px,94vw);margin:9px auto 0;display:flex;flex-wrap:wrap;align-items:center;gap:7px}
 .ctool{-webkit-app-region:no-drag;display:inline-flex;align-items:center;gap:6px;flex:none;white-space:nowrap;
   background:linear-gradient(180deg,var(--bg-3),var(--bg-2));border:1px solid var(--line);
@@ -3984,6 +4066,9 @@ body.preview-open .thread{font-size:.9em}
 .kg-main.side-open .kg-center-btn{right:calc(var(--kgside-w,250px) + 16px)}
 .kg-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--txt-4);font-size:13px;text-align:center;padding:0 36px}
 .kg-empty .ic{opacity:.55}
+/* P-MINI.3 (ADR-0596): the gate's own Personalization steps (buttons and the passphrase field only, no prose). */
+.kg-empty-acts{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px}
+.kg-empty-acts .prov-key{width:240px;max-width:60vw}
 /* P-PERF.4: truncation hint atop a tail-loaded resumed transcript */
 .thread-tail-note{text-align:center;color:var(--txt-4);font-size:11px;padding:6px 0 10px;letter-spacing:.02em}
 /* P-RECOVER.1 (ADR-0385): the recovery notice (progress + result) and the incident Submit dialog */
@@ -7874,6 +7959,16 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .al-msg.al-lucid{align-self:stretch;background:var(--bg-2);border:1px solid var(--line-soft);color:var(--txt-1)}
 .al-msg.al-lucid > :first-child{margin-top:0}
 .al-msg.al-lucid > :last-child{margin-bottom:0}
+/* P-ASKLUCID.8: Copy on every answer; faint until the answer is hovered or the button focused. */
+.al-msg.al-lucid{position:relative}
+.al-msg.al-lucid > .al-copy{display:block;margin:6px 0 0 auto;padding:2px 8px;border-radius:6px;border:1px solid var(--line-soft);background:transparent;color:var(--txt-4);font:inherit;font-size:11px;white-space:nowrap;cursor:pointer;opacity:.55;transition:opacity var(--t),color var(--t)}
+.al-msg.al-lucid:hover > .al-copy,.al-msg.al-lucid > .al-copy:focus-visible{opacity:1;color:var(--txt-2)}
+.al-msg.al-lucid > .al-copy.done{opacity:1;color:var(--accent)}
+/* P-ASKLUCID.8: pasted or dropped images, as the composer's chips, and in the question they went with. */
+.al-thumbs{display:flex;flex-wrap:wrap;gap:8px;padding:0 12px 8px}
+.al-thumbs[hidden]{display:none}
+.al-user-imgs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.al-user-img{width:72px;height:72px;object-fit:cover;border-radius:var(--r-sm);border:1px solid var(--line)}
 .al-msg.al-err{align-self:stretch;background:var(--red-dim);border:1px solid rgb(var(--sh-rgb) / .2);color:var(--red-txt)}
 .al-meta{font-size:11px;line-height:1.4;color:var(--txt-4);margin:-4px 2px 0}
 /* P-ASKLUCID.4 (ADR-0585): the quick row above the composer. The CHIPS wrap onto a second row when they do not fit
@@ -7903,6 +7998,9 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .al-act.al-risk-low{border-left-color:var(--line-strong)}
 .al-act.al-risk-setting{border-left-color:var(--accent-2)}
 .al-act.al-risk-command{border-left-color:var(--red)}
+/* P-ASKLUCID.9: content leaves the machine for an outside model; amber, the egress hue. */
+.al-act.al-risk-external{border-left-color:var(--amber, #f2a53c)}
+.al-act.al-risk-external .al-act-risk{border-color:rgb(242 165 60 / .35);color:var(--amber, #f2a53c)}
 .al-act-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .al-act-kind{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--txt-3);white-space:nowrap}
 .al-act-risk{font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--txt-2);white-space:nowrap}
@@ -7923,3 +8021,28 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .al-act.done{border-left-color:var(--accent-2)}
 .al-act.failed .al-act-result{color:var(--red-txt)}
 @media (prefers-reduced-motion: reduce){.al-act{animation:none}}
+/* P-ASKLUCID.9 (ADR-0600): the Edit image card's model area and its result. Invariant 11: every line of text is
+   its own block (or one inline run that wraps between words); the only flex rows hold a control beside ONE text
+   block. A path breaks only at the <wbr> after each separator. */
+.al-img-model{display:flex;flex-direction:column;gap:6px;padding-top:2px}
+.al-img-note{font-size:12px;line-height:1.45;color:var(--txt-2)}
+.al-img-chosen{font-size:12px;line-height:1.6;color:var(--txt)}
+.al-img-chosen-name{font-weight:600}
+.al-img-chosen .al-img-btn{margin-left:8px}
+.al-img-btn{display:inline-block;height:26px;padding:0 10px;border-radius:7px;border:1px solid var(--line);background:transparent;color:var(--txt-2);font:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;vertical-align:middle}
+.al-img-btn:hover:not(:disabled){border-color:var(--line-strong);color:var(--txt)}
+.al-img-btn:disabled{opacity:.55;cursor:default}
+.al-img-model > .al-img-btn{align-self:flex-start}
+.al-img-opts{display:flex;flex-direction:column;gap:4px}
+.al-img-opt{display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;cursor:pointer}
+.al-img-opt:hover{border-color:var(--line-strong)}
+.al-img-opt:has(.al-img-radio:checked){border-color:rgb(var(--accent-rgb) / .55);background:var(--accent-dim)}
+.al-img-radio{flex:none;margin:2px 0 0;accent-color:var(--accent)}
+.al-img-opt-body{display:block;min-width:0;flex:1 1 auto;font-size:12px;line-height:1.45}
+.al-img-opt-name{color:var(--txt);font-weight:600}
+.al-img-rec{display:inline-block;margin-left:6px;padding:0 6px;border-radius:999px;border:1px solid rgb(var(--accent-rgb) / .55);font-size:10.5px;font-weight:700;color:var(--txt);white-space:nowrap;vertical-align:1px}
+.al-img-opt-why{display:block;color:var(--txt-2)}
+.al-img-result{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+.al-img-path{display:block;font-family:var(--mono);font-size:11.5px;line-height:1.45;color:var(--accent-2);text-decoration:underline;text-underline-offset:2px;overflow-wrap:break-word;word-break:normal;cursor:pointer}
+.al-img-acts{display:flex;flex-wrap:wrap;gap:6px}
+.prev-ask-act{flex:none}

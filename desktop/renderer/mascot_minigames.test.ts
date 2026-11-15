@@ -6,12 +6,15 @@
 
 import { describe, expect, it } from "bun:test";
 import {
-  KATA_POSES, MINI_GAMES, SHURIKEN_DUMMY_PENALTY, SHURIKEN_HIT_POINTS, SHURIKEN_LANES,
+  KATA_POSES, MINI_FLOOR_Y, MINI_GAMES, SHURIKEN_DUMMY_PENALTY, SHURIKEN_HIT_POINTS, SHURIKEN_LANES,
   STACK_PERFECT_BONUS, STACK_PERFECT_GAIN, STACK_START_WIDTH,
   applyKataInput, applyShurikenInput, createKataState, createShurikenState, createStackState,
-  dropStackBlock, kataPayout, shurikenMultiplier, stackSpeed, stepKata, stepShuriken, stepStack,
+  dropStackBlock, kataPayout, miniSpriteRect, miniSpriteScale, setShurikenMascotSize, shurikenGeometry,
+  shurikenMultiplier, stackLedgeWidth, stackSpeed, stepKata, stepShuriken, stepStack,
   type KataPose, type KataState, type ShurikenState, type ShurikenTarget, type StackState,
 } from "./mascot_minigames.ts";
+import { MASCOT_H, MASCOT_W } from "./mascot.ts";
+import type { MascotSize } from "./mini_lucid.ts";
 
 const W = 400;
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -294,5 +297,128 @@ describe("rooftop stack", () => {
     expect(stackSpeed(3, 840)).toBeCloseTo(stackSpeed(3, 420) * 2, 6);
     // Narrow panels are not slowed below the base rate, they would become unplayably sluggish.
     expect(stackSpeed(3, 300)).toBe(stackSpeed(3, 420));
+  });
+});
+
+// ---------------------------------------------------------------------------- ninja sizes
+// P-MINI.3 (ADR-0596): every mini game at both ninja sizes.
+
+const SIZES: readonly MascotSize[] = ["small", "large"];
+
+describe("mini game sprite scale", () => {
+  it("large keeps the classic 2x; small is mini Lucid's 1x", () => {
+    expect(miniSpriteScale("large")).toBe(2);
+    expect(miniSpriteScale("small")).toBe(1);
+  });
+  it("large reproduces the classic shuriken range exactly", () => {
+    expect(shurikenGeometry("large")).toEqual({ launchX: 84, laneY: [84, 112, 140], shotWidth: 10, targetWidth: 22, dummyWidth: 20 });
+  });
+});
+
+for (const size of SIZES) {
+  describe(`mini games at ${size} size`, () => {
+    const scale = miniSpriteScale(size);
+
+    it("every game stands the ninja on the floor, whole and inside the canvas", () => {
+      for (const game of ["shuriken", "kata", "stack"] as const) {
+        for (const width of [260, W, 900]) {
+          const r = miniSpriteRect(game, width, size);
+          expect(r.y + r.h).toBe(MINI_FLOOR_Y);
+          expect(r.w).toBe(MASCOT_W * scale);
+          expect(r.h).toBe(MASCOT_H * scale);
+          expect(r.y).toBeGreaterThanOrEqual(0);
+          expect(r.x).toBeGreaterThanOrEqual(0);
+          expect(r.x + r.w).toBeLessThanOrEqual(width);
+        }
+      }
+      const kata = miniSpriteRect("kata", W, size);
+      expect(Math.abs(kata.x + kata.w / 2 - W / 2)).toBeLessThanOrEqual(1);
+    });
+
+    it("shuriken throws leave his hand: launch just past the sprite, every lane within his height", () => {
+      const g = shurikenGeometry(size);
+      const sprite = miniSpriteRect("shuriken", W, size);
+      expect(g.launchX).toBeGreaterThanOrEqual(sprite.x + sprite.w);
+      expect(g.laneY).toHaveLength(SHURIKEN_LANES);
+      for (const y of g.laneY) {
+        expect(y).toBeGreaterThanOrEqual(sprite.y);
+        expect(y).toBeLessThan(MINI_FLOOR_Y);
+      }
+      // Marks are square, so lanes further apart than a mark is wide never overlap.
+      for (let i = 1; i < g.laneY.length; i++) expect(g.laneY[i]! - g.laneY[i - 1]!).toBeGreaterThan(g.targetWidth);
+    });
+
+    const parked = (lane: number): ShurikenState => {
+      const g = shurikenGeometry(size);
+      const target: ShurikenTarget = { id: 900, kind: "target", lane, x: 200, width: g.targetWidth, speed: 0, hit: false, popMs: 0 };
+      return { ...createShurikenState(W, 5, size), spawnMs: 600000, lane: 1, targets: [target] };
+    };
+
+    it("a throw down the mark's lane hits it and pays", () => {
+      const thrown = applyShurikenInput(parked(1), "throw");
+      expect(thrown.shots[0]!.x).toBe(shurikenGeometry(size).launchX);
+      let s = thrown;
+      for (let t = 0; t < 100 && !s.hits; t++) s = stepShuriken(s, 16);
+      expect(s.hits).toBe(1);
+      expect(s.score).toBe(SHURIKEN_HIT_POINTS);
+      expect(s.misses).toBe(0);
+    });
+
+    it("a throw down the wrong lane sails off as a miss", () => {
+      let s = applyShurikenInput(parked(0), "throw");
+      for (let t = 0; t < 200 && !s.misses; t++) s = stepShuriken(s, 16);
+      expect(s.misses).toBe(1);
+      expect(s.hits).toBe(0);
+      expect(s.targets[0]!.hit).toBe(false);
+    });
+
+    it("spawned marks and dummies take the size's widths", () => {
+      let s = createShurikenState(W, 9, size);
+      for (let t = 0; t < 2000 && new Set(s.targets.map((m) => m.kind)).size < 2; t++) s = stepShuriken(s, 16);
+      const g = shurikenGeometry(size);
+      for (const m of s.targets) expect(m.width).toBe(m.kind === "dummy" ? g.dummyWidth : g.targetWidth);
+      expect(s.targets.length).toBeGreaterThan(0);
+    });
+
+    it("kata: the demonstrated pose clears the round, a wrong one ends it", () => {
+      const start = untilInput(createKataState(W, 21, size));
+      expect(start.size).toBe(size);
+      expect(replay(start, start.sequence).phase).toBe("clear");
+      const wrong = KATA_POSES.find((pose) => pose !== start.sequence[0])!;
+      expect(applyKataInput(start, wrong).phase).toBe("over");
+    });
+
+    it("stack: the ledge stays clear of the tower; a lined-up drop lands and a wide miss ends the run", () => {
+      const narrow = createStackState(260, 4, size);
+      expect(stackLedgeWidth(size)).toBe(38 * scale);
+      expect(stackLedgeWidth(size)).toBeLessThan(narrow.tower[0]!.x);
+      const base = createStackState(W, 4, size);
+      const top = base.tower[0]!;
+      const landed = dropStackBlock({ ...base, blockX: top.x });
+      expect(landed.phase).toBe("playing");
+      expect(landed.height).toBe(1);
+      const missed = dropStackBlock({ ...base, blockX: top.x + top.width + 4 });
+      expect(missed.phase).toBe("over");
+    });
+  });
+}
+
+describe("switching the shuriken ninja size mid-run", () => {
+  it("rescales marks already on the range and keeps the run", () => {
+    const g = shurikenGeometry("large");
+    const large: ShurikenState = {
+      ...createShurikenState(W, 5, "large"), score: 40,
+      targets: [
+        { id: 1, kind: "target", lane: 0, x: 200, width: g.targetWidth, speed: 60, hit: false, popMs: 0 },
+        { id: 2, kind: "dummy", lane: 2, x: 260, width: g.dummyWidth, speed: 60, hit: false, popMs: 0 },
+      ],
+    };
+    expect(setShurikenMascotSize(large, "large")).toBe(large);
+    const small = setShurikenMascotSize(large, "small");
+    const sg = shurikenGeometry("small");
+    expect(small.size).toBe("small");
+    expect(small.score).toBe(40);
+    expect(small.targets.map((m) => m.width)).toEqual([sg.targetWidth, sg.dummyWidth]);
+    expect(small.targets.map((m) => m.x)).toEqual([200, 260]);
   });
 });

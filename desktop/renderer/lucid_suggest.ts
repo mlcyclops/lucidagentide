@@ -156,8 +156,8 @@ export const WHATS_NEW: readonly NewsItem[] = [
   {
     id: "mini-lucid",
     title: "New: mini Lucid drops by",
-    summary: "He visits a new session now and then, and sits down to type while a session is working. Click him and he leaves.",
-    more: "**Mini Lucid.** He walks the prompt bar on a new session now and then, and on the first session of the day for developers. While a session is working he sits and types. He never covers the prompt.\n\nChoose **Off**, **Sometimes** or **Always** in **Settings, Mini Lucid**.",
+    summary: "Turn him on for the prompt bar: he rests in its right corner, practicing or meditating, and types while a session is working.",
+    more: "**Mini Lucid.** He is off on the prompt bar until you turn him on (the LUCID Agent role always has him). He rests in the right corner, practicing or meditating, sits and types while a session is working, and walks across about every five minutes. He never covers the prompt. Double-click him to send him off; right-click to turn him off.\n\nChoose **Off**, **Sometimes** or **Always**, and **Small** or **Large (classic)**, in **Settings, Mini Lucid**.",
   },
   {
     id: "ask-lucid",

@@ -18,6 +18,7 @@ import { LOCAL_AUTH_KINDS, type LocalAuthKind, type LocalModelCompat, type Local
 import type { LpFormInput } from "./local_providers_ui.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 
 /** The self-hosting targets the presets are sized against (see docs/LOCAL-MODELS-UNIFIED-ENDPOINT.md). */
 export type LocalPlatform = "m3-ultra" | "dgx-spark";
@@ -180,7 +181,7 @@ export function localPresetChipsHtml(platform?: LocalPlatform): string {
   const list = platform ? presetsForPlatform(platform) : LOCAL_MODEL_PRESETS;
   const chips = list.map((p) => {
     const tags = [p.params, p.reasoning ? "reasoning" : "", p.vision ? "vision" : "", `${Math.round(p.contextWindow / 1024)}K ctx`].filter(Boolean).join(" \u00b7 ");
-    return `<button type="button" class="lp-preset-chip" data-lp-preset="${esc(p.id)}" title="${esc(p.name)} \u00b7 ${esc(tags)}. ${esc(p.note)}">${esc(p.family)} \u00b7 ${esc(p.name)}</button>`;
+    return `<button type="button" class="lp-preset-chip" data-lp-preset="${esc(p.id)}" data-tip="${esc(tipEsc(p.name))}|${esc(tipEsc(tags))}. ${esc(tipEsc(p.note))}">${esc(p.family)} \u00b7 ${esc(p.name)}</button>`;
   }).join("");
   return `<div class="lp-presets"><div class="lp-presets-lbl">${icon("bolt", 11)} Quick-add a model (click several to serve them behind one endpoint):</div><div class="lp-preset-chips">${chips}</div></div>`;
 }

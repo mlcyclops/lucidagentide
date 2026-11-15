@@ -14,6 +14,7 @@
 
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 import type { VideoEndpointView } from "./creator_video.ts";
 
 type Vec2 = [number, number];
@@ -149,7 +150,7 @@ function inspectHtml(r: CadInspectView): string {
           `<tr><td class="ccad-cell">${esc(s.name)}</td><td class="ccad-num">${esc(fmtN(s.elevation))}</td></tr>`).join("")
       }</tbody></table>`
       : `<p class="cim-hint">No building storeys.</p>`;
-    return `<div class="ccad-meta"><span class="cim-kind">${esc(r.schema)}</span><span class="ccad-proj" title="${esc(r.projectName)}">${esc(r.projectName || "unnamed project")}</span></div>
+    return `<div class="ccad-meta"><span class="cim-kind">${esc(r.schema)}</span><span class="ccad-proj" data-tip="${esc(tipEsc(r.projectName))}">${esc(r.projectName || "unnamed project")}</span></div>
       ${storeys}${countTable("IFC type", r.counts)}`;
   }
   const b = r.bbox;
@@ -192,7 +193,7 @@ export function creatorCadHtml(v: CreatorCadView | null): string {
       ${block ? `<p class="${block.startsWith("Refused") ? "cpl-run-error" : "cpl-gate"}">${icon("shield", 13)}${esc(block)}</p>` : ""}
       <div class="cpl-form-row">
         <button type="button" class="cpl-go" data-ccad-open${block || v.busy ? " disabled" : ""}>${icon("folder", 12)} Open file</button>
-        <span class="ccad-file" title="${esc(v.fileName)}">${esc(v.fileName || "No file inspected")}</span>
+        <span class="ccad-file" data-tip="${esc(tipEsc(v.fileName))}">${esc(v.fileName || "No file inspected")}</span>
       </div>
       <input type="file" hidden accept="${CAD_ACCEPT}" data-ccad-file />
       ${v.busy || v.status ? `<p class="cpl-status${v.busy ? "" : v.statusTone ? ` ${v.statusTone}` : ""}">${esc(v.busy || v.status)}</p>` : ""}

@@ -10,7 +10,7 @@
 //
 // WHY THE VALIDATOR IS STRICT. The block is model output, written after reading lane names, task titles and
 // knowledge pages, all of which an attacker may have shaped. So the block is treated as untrusted input:
-//   - only four kinds exist; anything else is dropped
+//   - only the kinds in ASK_ACTION_KINDS exist; anything else is dropped
 //   - an action is REBUILT from the fields this file names, never passed through, so an unknown field
 //     cannot ride along to a route
 //   - a lane or task id must be one that was in the snapshot Lucid was shown; a made-up id is dropped
@@ -20,35 +20,40 @@
 //
 // Pure, and free of imports: the renderer bundles this file for the cards.
 
-export type AskActionKind = "spawn_lane" | "prompt_lane" | "add_orbit_task" | "open_view" | "set_setting";
-export const ASK_ACTION_KINDS: readonly AskActionKind[] = ["spawn_lane", "prompt_lane", "add_orbit_task", "open_view", "set_setting"];
+export type AskActionKind = "spawn_lane" | "prompt_lane" | "add_orbit_task" | "open_view" | "set_setting" | "edit_image";
+export const ASK_ACTION_KINDS: readonly AskActionKind[] = ["spawn_lane", "prompt_lane", "add_orbit_task", "open_view", "set_setting", "edit_image"];
 // P-ASKLUCID.6 (ADR-0587): settings, preview, skills, local-models and voice joined the first three.
 export const ASK_VIEWS = ["fleet", "orbit", "knowledge", "settings", "preview", "skills", "local-models", "voice"] as const;
 export type AskView = (typeof ASK_VIEWS)[number];
 
 /** low: only changes what is on screen. setting: changes one preference from the closed list. write: starts
- *  or changes agent work. command: also carries a shell command a spoke will run as a check. */
-export type AskRisk = "low" | "setting" | "write" | "command";
+ *  or changes agent work. command: also carries a shell command a spoke will run as a check. external
+ *  (P-ASKLUCID.9, ADR-0600): sends the user's own content to an outside service, which may charge for it. */
+export type AskRisk = "low" | "setting" | "write" | "command" | "external";
 
 export interface SpawnLaneParams { name: string; prompt: string }
 export interface PromptLaneParams { laneId: string; text: string }
 export interface OrbitTaskParams { title: string; prompt: string; outputContract: string; checks: string[]; assignee: string; dependsOn: string[] }
 export interface OpenViewParams { view: AskView }
 export interface SetSettingParams { key: AskSettingKey; value: string }
+/** P-ASKLUCID.9 (ADR-0600): `image` is 1-based among the images the user attached to the question. */
+export interface EditImageParams { image: number; instruction: string }
 
 export type AskAction =
   | { id: string; kind: "spawn_lane"; label: string; why: string; risk: AskRisk; params: SpawnLaneParams }
   | { id: string; kind: "prompt_lane"; label: string; why: string; risk: AskRisk; params: PromptLaneParams }
   | { id: string; kind: "add_orbit_task"; label: string; why: string; risk: AskRisk; params: OrbitTaskParams }
   | { id: string; kind: "open_view"; label: string; why: string; risk: AskRisk; params: OpenViewParams }
-  | { id: string; kind: "set_setting"; label: string; why: string; risk: AskRisk; params: SetSettingParams };
+  | { id: string; kind: "set_setting"; label: string; why: string; risk: AskRisk; params: SetSettingParams }
+  | { id: string; kind: "edit_image"; label: string; why: string; risk: AskRisk; params: EditImageParams };
 
-/** The ids Lucid was actually shown. An action may name only these. */
-export interface KnownIds { laneIds: readonly string[]; taskIds: readonly string[]; hasGoal: boolean }
+/** The ids Lucid was actually shown. An action may name only these. `images` (P-ASKLUCID.9, ADR-0600) is how
+ *  many images the user attached to the question being answered; absent means none, so edit_image is dropped. */
+export interface KnownIds { laneIds: readonly string[]; taskIds: readonly string[]; hasGoal: boolean; images?: number }
 
 export const ACTIONS_FENCE = "lucid-actions";
 export const MAX_ACTIONS = 3;
-export const ACTION_LIMITS = { name: 40, label: 100, why: 240, prompt: 4000, title: 120, contract: 1000, check: 300, checks: 10 } as const;
+export const ACTION_LIMITS = { name: 40, label: 100, why: 240, prompt: 4000, title: 120, contract: 1000, check: 300, checks: 10, instruction: 2000 } as const;
 
 export const ASK_KIND_LABEL: Record<AskActionKind, string> = {
   spawn_lane: "Start a fleet lane",
@@ -56,12 +61,14 @@ export const ASK_KIND_LABEL: Record<AskActionKind, string> = {
   add_orbit_task: "Add a Fleet Orbit task",
   open_view: "Open a view",
   set_setting: "Change a setting",
+  edit_image: "Edit image",
 };
 export const ASK_RISK_LABEL: Record<AskRisk, string> = {
   low: "Only changes what you see",
   setting: "Changes one preference",
   write: "Starts agent work",
   command: "Starts agent work and runs a command",
+  external: "Sends your image to an outside model",
 };
 
 /** PURE: the part of the brief that teaches the block. Appended to the Ask Lucid brief. */
@@ -75,6 +82,7 @@ export const ASK_ACTIONS_BRIEF = [
   '- add_orbit_task {"title": "...", "prompt": "...", "outputContract": "<what the lane must deliver>", "checks": ["<acceptance check>", "$ <command the lane runs as a check>"], "assignee": "<a lane id from the snapshot>", "dependsOn": ["<task ids from the snapshot>"]}: add a task under the open Fleet Orbit goal.',
   '- open_view {"view": "fleet" | "orbit" | "knowledge" | "settings" | "preview" | "skills" | "local-models" | "voice"}: open that view for the user.',
   '- set_setting {"key": "<a setting key from the snapshot>", "value": "<one of the values listed for it>"}: change one preference. Only the keys listed in the snapshot exist. You cannot change anything about approvals, the sandbox, lockdown, providers, keys or MCP servers, and you must say so if asked.',
+  '- edit_image {"image": <1 for the first image the user attached to this question, 2 for the second>, "instruction": "<the change, in the user\'s words>"}: change an image the user attached, with a cloud image model chosen when the user confirms. Propose it only when the user attached an image to this question and asks to change, restyle, fix or extend it. Never propose it to make an image from nothing, and never for an image that was not attached to this question.',
   "Use only lane ids and task ids that appear in the snapshot. If there is no open Fleet Orbit goal, do not propose add_orbit_task; tell the user to set a goal first.",
 ].join("\n");
 
@@ -208,6 +216,19 @@ export function validateAction(raw: unknown, known: KnownIds, index: number): As
     if (value === null) return null;
     return { id, kind, label: label(`Set ${ASK_SETTINGS[key].label} to ${value}`), why, risk: "setting", params: { key, value } };
   }
+  if (kind === "edit_image") {
+    // P-ASKLUCID.9 (ADR-0600): only an image the user attached to this question can be named, by its
+    // position; with none attached the kind cannot appear at all.
+    const image = p.image;
+    const attached = known.images ?? 0;
+    if (typeof image !== "number" || !Number.isInteger(image) || image < 1 || image > attached) return null;
+    const instruction = block(p.instruction, ACTION_LIMITS.instruction);
+    if (!instruction) return null;
+    // Risk "write": the closest level. It is not "low" or "setting" (it sends the user's image to an outside
+    // provider that may charge for it, and saves a new file), and not "command" (no shell runs). "write" is
+    // the level for work that spends model calls and produces something, which is what an edit does.
+    return { id, kind, label: label(`Edit image ${image}`), why, risk: "external", params: { image, instruction } };
+  }
   return null;
 }
 
@@ -254,6 +275,7 @@ export function actionText(a: AskAction): string {
   if (a.kind === "spawn_lane") parts.push(a.params.name, a.params.prompt);
   else if (a.kind === "prompt_lane") parts.push(a.params.text);
   else if (a.kind === "add_orbit_task") parts.push(a.params.title, a.params.prompt, a.params.outputContract, ...a.params.checks);
+  else if (a.kind === "edit_image") parts.push(a.params.instruction);
   return parts.join("\n");
 }
 
@@ -273,5 +295,14 @@ export function actionDetails(a: AskAction): { label: string; value: string }[] 
     ];
   }
   if (a.kind === "set_setting") return [{ label: "Setting", value: ASK_SETTINGS[a.params.key].label }, { label: "New value", value: a.params.value }];
+  if (a.kind === "edit_image") {
+    // P-ASKLUCID.9 (ADR-0600): the last row says what leaves the machine, since the risk label alone does not.
+    return [
+      { label: "Image", value: `Image ${a.params.image} you attached` },
+      { label: "Change", value: a.params.instruction },
+      { label: "Model", value: "Chosen when you confirm" },
+      { label: "Sends", value: "This image and the change go to the image model's provider, which may charge for it" },
+    ];
+  }
   return [{ label: "View", value: a.params.view }];
 }

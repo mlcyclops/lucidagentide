@@ -15,6 +15,7 @@
 
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 import type { SkillCandidateView, SkillInspectView } from "./bridge.ts";
 import type { TrustLabel } from "../../harness/contracts.ts";
 import { readinessChecklist, ROOT_LABEL, ROOT_ORDER, type SkillRoot, trustEnableable } from "../skills_gov.ts";
@@ -45,7 +46,7 @@ const TRUST_TIP: Record<TrustLabel, string> = {
 
 /** The trust pill for a row. */
 function trustPill(trust: TrustLabel): string {
-  return `<span class="skdir-trust ${trust}" title="${esc(TRUST_TIP[trust])}">${trust}</span>`;
+  return `<span class="skdir-trust ${trust}" data-tip="${esc(TRUST_TIP[trust])}">${trust}</span>`;
 }
 
 /** The per-row action buttons. Inspect is always available; re-scan only for on-disk skills; remove
@@ -54,14 +55,14 @@ function rowActions(r: SkillDirRow): string {
   const btns: string[] = [];
   if (r.enableable) {
     btns.push(
-      `<button class="skdir-btn skdir-toggle ${r.enabled ? "on" : "off"}" data-skill-act="toggle" data-skill-key="${esc(r.key)}" data-skill-trust="${r.trust}" title="${r.enabled ? "Disable: stop offering + loading this skill" : "Enable: offer + load this skill"}">${r.enabled ? "On" : "Off"}</button>`,
+      `<button class="skdir-btn skdir-toggle ${r.enabled ? "on" : "off"}" data-skill-act="toggle" data-skill-key="${esc(r.key)}" data-skill-trust="${r.trust}" data-tip="${r.enabled ? "Disable|Stop offering + loading this skill" : "Enable|Offer + load this skill"}">${r.enabled ? "On" : "Off"}</button>`,
     );
   } else {
-    btns.push(`<span class="skdir-locked" title="${esc(TRUST_TIP[r.trust])}">${icon("shield", 12)} locked</span>`);
+    btns.push(`<span class="skdir-locked" data-tip="${esc(TRUST_TIP[r.trust])}">${icon("shield", 12)} locked</span>`);
   }
-  btns.push(`<button class="skdir-btn" data-skill-act="inspect" data-skill-name="${esc(r.name)}" data-skill-root="${r.root}" title="Inspect the skill body + bundled resources (as data)">${icon("eye", 12)}</button>`);
-  if (r.fileBacked) btns.push(`<button class="skdir-btn" data-skill-act="rescan" data-skill-name="${esc(r.name)}" title="Re-scan through the fail-closed security gate">${icon("scan", 12)}</button>`);
-  if (r.removable) btns.push(`<button class="skdir-btn danger" data-skill-act="remove" data-skill-name="${esc(r.name)}" title="Remove this skill (deletes its folder)">${icon("trash", 12)}</button>`);
+  btns.push(`<button class="skdir-btn" data-skill-act="inspect" data-skill-name="${esc(r.name)}" data-skill-root="${r.root}" aria-label="Inspect ${esc(r.name)}" data-tip="Inspect the skill body + bundled resources (as data)">${icon("eye", 12)}</button>`);
+  if (r.fileBacked) btns.push(`<button class="skdir-btn" data-skill-act="rescan" data-skill-name="${esc(r.name)}" aria-label="Re-scan ${esc(r.name)}" data-tip="Re-scan through the fail-closed security gate">${icon("scan", 12)}</button>`);
+  if (r.removable) btns.push(`<button class="skdir-btn danger" data-skill-act="remove" data-skill-name="${esc(r.name)}" aria-label="Remove ${esc(r.name)}" data-tip="Remove this skill (deletes its folder)">${icon("trash", 12)}</button>`);
   return `<div class="skdir-acts">${btns.join("")}</div>`;
 }
 
@@ -75,7 +76,7 @@ function row(r: SkillDirRow): string {
     <div class="skdir-main">
       <div class="skdir-hd"><b class="skdir-name">${esc(r.name)}</b> ${trustPill(r.trust)}
         <code class="skdir-inv">${esc(r.invocation)}</code>
-        <span class="skdir-ready" title="Deployment readiness (advisory)\n${esc(readyTip)}">${readyOk}/${ready.length}</span>${findings}</div>
+        <span class="skdir-ready" data-tip="Deployment readiness (advisory)|${esc(tipEsc(readyTip))}">${readyOk}/${ready.length}</span>${findings}</div>
       <div class="skdir-desc">${esc(r.description || "-")}</div>
     </div>
     ${rowActions(r)}
@@ -146,7 +147,7 @@ export function renderSkillInspect(v: SkillInspectView): string {
 export function renderStudioCandidate(c: SkillCandidateView): string {
   return `<div class="sk-cand" data-cand-name="${esc(c.name)}" data-cand-desc="${esc(c.description)}">
     <div class="sk-cand-hd"><b class="sk-cand-name">${esc(c.name)}</b>
-      <button class="skdir-btn sk-cand-codify" data-sk-codify title="Scan through the security gate + save this skill">${icon("check", 12)} Codify</button></div>
+      <button class="skdir-btn sk-cand-codify" data-sk-codify data-tip="Scan through the security gate + save this skill">${icon("check", 12)} Codify</button></div>
     <div class="sk-cand-desc">${esc(c.description)}</div>
     ${c.rationale ? `<div class="sk-cand-rat">${icon("info", 11)} ${esc(c.rationale)}</div>` : ""}
     <textarea class="sk-cand-body" spellcheck="false">${esc(c.body)}</textarea>

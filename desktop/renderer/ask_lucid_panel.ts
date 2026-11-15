@@ -18,8 +18,14 @@ import { ASK_KIND_LABEL, ASK_RISK_LABEL, actionDetails, type AskAction } from ".
 import { shotSkipLine, type ShotSkip } from "../ask_lucid_shot.ts"; // P-ASKLUCID.7 (ADR-0588): pure, no imports
 import { BRIEF_QUESTION } from "../ask_lucid_briefing.ts"; // P-ASKLUCID.4 (ADR-0585): pure, no imports
 import { createDock, type DockHandle } from "./dock.ts";
+import { copyToClipboard } from "./ctxmenu.ts"; // P-ASKLUCID.8: the answer's Copy button
+import { acceptAttachment, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, type Attachment } from "./composer_attachments.ts"; // P-ASKLUCID.8: the composer's image chips
 import { followMode, followupRecs, noteMiss, noteOwnQuestion, noteUsed, parseMemory, rank, REC_LIMITS, REC_MEMORY_KEY, type Follow, type Rec, type RecMemory, type RecSignals } from "./lucid_recs.ts"; // P-ASKLUCID.5 (ADR-0586)
 import { mountMiniMascot, type MiniMascotHandle, type MiniState } from "./mascot_mini.ts";
+import { bindFileDrop, clipboardFiles, createAttachTray, folderDropNote, isAttachShortcut, mountPlusMenu, pickFiles, plusButtonTip, plusMenuItems, sentFilesEl, syncPlusButton, type AttachBridge, type AttachTray } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598)
+import type { StagedAttachment } from "../attach_kinds.ts";
+import { imageCardState, pathBreakParts, readSavedImageModel, saveImageModel, type ImageCardState, type ImageModelOptionView, type ImageModelsView } from "./ask_image_card.ts"; // P-ASKLUCID.9 (ADR-0600)
+import { tipValue } from "./tip_text.ts"; // P-TIP.1 (ADR-0599): new controls use data-tip
 
 export interface AskTurnView { role: "user" | "lucid"; text: string }
 /** The engine's answer (desktop/ask_lucid_service.ts AskReply). */
@@ -38,10 +44,40 @@ export interface AskReplyView {
   followups?: string[];
   /** P-ASKLUCID.7 (ADR-0588): "sent" when a picture of the screen went with the question, else why not. */
   picture?: string;
+  /** P-ASKLUCID.8: what happened to the images the user attached. */
+  attached?: "sent" | "model-refused";
 }
 
-/** What happened when the user confirmed an action. `message` is shown on the card. */
-export interface AskActionResult { ok: boolean; message: string }
+/** PURE: the note under a reply when the model could not look at the user's images. */
+export function attachedLine(a: AskReplyView["attached"]): string {
+  return a === "model-refused" ? "This model cannot read images, so Lucid answered from your text alone. Pick a model that reads images to ask about a picture." : "";
+}
+
+/** P-ASKLUCID.9 (ADR-0600): an image Ask Lucid edited and saved under ~/.omp/ask-lucid/images. */
+export interface EditedImageView { path: string; mimeType: string; model: string; provider: string }
+
+/** What happened when the user confirmed an action. `message` is shown on the card; `image` (P-ASKLUCID.9) is
+ *  the edited image an edit_image card made. */
+export interface AskActionResult { ok: boolean; message: string; image?: EditedImageView }
+
+/** P-ASKLUCID.9 (ADR-0600): what a confirmed card carries besides the action. `images` are the data URLs the user
+ *  attached to the question the card answers (edit_image names one by position); `modelId` is the image model
+ *  the card settled on. */
+export interface AskActionContext { images?: readonly string[]; modelId?: string }
+
+/** P-ASKLUCID.9: the app's side of the "Edit image" card. Absent = the card says the models cannot be checked. */
+export interface AskImageEditDeps {
+  /** GET /api/image/models. Null = no answer. */
+  models(): Promise<ImageModelsView | null>;
+  /** The remembered model choice (localStorage, see ask_image_card.ts). */
+  store: Pick<Storage, "getItem" | "setItem"> | null;
+  /** Settings, Providers card. */
+  openProviders(): void;
+  /** Show an edited image in the Preview's Ask Lucid tab. */
+  open(path: string): void;
+  /** Reveal it in the OS file manager. Absent = no button (a plain browser). */
+  showInFolder?(path: string): Promise<boolean>;
+}
 
 /** PURE: the note shown when some of what Lucid proposed was not turned into a card. */
 export function droppedLine(n: number): string {
@@ -97,6 +133,10 @@ export interface AskExtrasView {
   unusedFeatures?: string[];
   /** P-ASKLUCID.7 (ADR-0588): a picture of the screen, already scaled and painted over. */
   shot?: unknown;
+  /** P-ASKLUCID.8: images the user pasted or dropped, as data URLs. */
+  images?: string[];
+  /** P-ATTACH.1 (ADR-0598): ids of staged (copied and scanned) files that go with the question. */
+  attachments?: string[];
 }
 
 export interface AskLucidDeps {
@@ -127,7 +167,14 @@ export interface AskLucidDeps {
   /** Selector of the zoomed app root (see DockOptions.zoomOf). */
   zoomOf?: string;
   /** P-ASKLUCID.2 (ADR-0582): carry out one action the user just confirmed. Absent = cards are not offered. */
-  runAction?(action: AskAction): Promise<AskActionResult>;
+  runAction?(action: AskAction, ctx?: AskActionContext): Promise<AskActionResult>;
+  /** P-ASKLUCID.9 (ADR-0600): the image models, the Settings jump and where an edited image opens. */
+  imageEdit?: AskImageEditDeps;
+  /** P-ATTACH.1 (ADR-0598): stage files the user adds (copied, extracted and scanned by the engine). Absent =
+   *  images only, as before. */
+  attach?: AttachBridge;
+  /** P-ATTACH.1: the "+" menu's Knowledge entry, anchored to the button. Absent = no Knowledge row. */
+  openKnowledge?(anchor: HTMLElement): void;
 }
 
 export interface AskLucidHandle {
@@ -183,7 +230,7 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     const add = (label: string, run: () => void): void => {
       const b = el("button", "al-sug", label);
       b.type = "button";
-      b.title = label;
+      b.dataset.tip = tipValue(label); // P-TIP.1 (ADR-0599): premium tooltip, never a native title
       b.addEventListener("click", run);
       sugs.appendChild(b);
     };
@@ -199,7 +246,7 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
   const quick = el("div", "al-quick");
   const briefBtn = el("button", "al-chip al-chip-brief", "Brief me");
   briefBtn.type = "button";
-  briefBtn.title = "What needs you, what is running, what finished, and what Lucid would do next";
+  briefBtn.dataset.tip = "What needs you, what is running, what finished, and what Lucid would do next";
   briefBtn.addEventListener("click", () => send(BRIEF_QUESTION, { brief: true }));
   quick.appendChild(briefBtn);
 
@@ -226,14 +273,14 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     for (const r of shown) {
       const b = el("button", `al-chip al-chip-rec al-rec-${r.kind}`, r.label);
       b.type = "button";
-      b.title = r.question;
+      b.dataset.tip = tipValue(r.question);
       b.addEventListener("click", () => useRec(r));
       quick.appendChild(b);
     }
     if (shown.length > 0) {
       const more = el("button", "al-chip al-chip-more", "Something else");
       more.type = "button";
-      more.title = "None of these help. Lucid looks more closely at what is on your screen and tries again.";
+      more.dataset.tip = "None of these help. Lucid looks more closely at what is on your screen and tries again.";
       more.addEventListener("click", () => { saveMemory(noteMiss(memory, shown)); void refreshRecs(); });
       quick.appendChild(more);
     }
@@ -256,6 +303,65 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     engaged = true; // settled: the same set is never counted twice
   };
 
+  // P-ASKLUCID.8: images pasted or dropped into the panel, shown as the composer's chips above the input and
+  // sent with the next question only. Same checks and limits as the composer (composer_attachments.ts).
+  let attached: Attachment[] = [];
+  let attachSeq = 0;
+  const thumbs = el("div", "al-thumbs");
+  thumbs.hidden = true;
+  // Built with the DOM (the composer's chip classes), so the panel's only innerHTML stays Lucid's sanitized reply.
+  const renderThumbs = (): void => {
+    thumbs.replaceChildren(...attached.map((a) => {
+      const chip = el("div", "cx-thumb");
+      chip.dataset.tip = tipValue(a.name || "pasted image");
+      const img = el("img", "cx-thumb-img");
+      img.alt = "attached image";
+      img.src = a.dataUrl;
+      const x = el("button", "cx-thumb-x", "×");
+      x.type = "button";
+      x.dataset.tip = "Remove image";
+      x.setAttribute("aria-label", "Remove image");
+      x.dataset.attRemove = a.id;
+      chip.append(img, x);
+      return chip;
+    }));
+    thumbs.hidden = attached.length === 0;
+  };
+  thumbs.addEventListener("click", (e) => {
+    const id = (e.target as HTMLElement).closest<HTMLElement>("[data-att-remove]")?.dataset.attRemove;
+    if (!id) return;
+    attached = attached.filter((a) => a.id !== id);
+    renderThumbs();
+  });
+  const attachNote = (text: string): void => { log.appendChild(el("div", "al-meta", text)); scrollDown(); };
+  /** Stage image files as chips (same checks and limits as the composer). */
+  const stageImages = (images: readonly File[]): void => {
+    for (const f of images) {
+      if (f.size > MAX_ATTACHMENT_BYTES) { attachNote(`"${f.name}" was not attached: each image must be under ${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB.`); continue; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const r = acceptAttachment(attached, String(reader.result), `al_${++attachSeq}`, f.name);
+        if (r.ok && r.attachment) { attached = [...attached, r.attachment]; renderThumbs(); }
+        else attachNote(`"${f.name || "The image"}" was not attached: ${r.reason ?? "it could not be read"}.`);
+      };
+      reader.readAsDataURL(f);
+    }
+  };
+  // P-ATTACH.1 (ADR-0598): with the engine's attachment seam every file goes to the file tray, which hands
+  // images back to stageImages; the rest are copied, extracted and scanned before they can go with a question.
+  // Without it, Ask Lucid takes images only.
+  const fileTray: AttachTray | null = deps.attach ? createAttachTray(null, { bridge: deps.attach, onImages: stageImages, imageCount: () => attached.length, notify: attachNote }) : null;
+  const filesHost = el("div", "att-tray al-files");
+  filesHost.hidden = true;
+  fileTray?.mount(filesHost);
+  const stageFiles = (files: readonly File[]): void => {
+    if (fileTray) { void fileTray.add(files); return; }
+    const images = files.filter((f) => f.type.startsWith("image/"));
+    const others = files.length - images.length;
+    if (others > 0) attachNote(`${others === 1 ? "One file was" : `${others} files were`} not attached: Ask Lucid takes images (PNG, JPEG, WebP or GIF) here.`);
+    stageImages(images);
+  };
+
   const form = el("form", "al-form");
   const input = el("textarea", "al-input");
   input.rows = 1;
@@ -263,8 +369,42 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
   input.setAttribute("aria-label", "Ask Lucid");
   const sendBtn = el("button", "al-send", "Ask");
   sendBtn.type = "submit";
-  form.append(input, sendBtn);
-  panel.append(log, quick, form);
+  // P-ATTACH.1: the "+" button, left of the input: Add files or photos, and Knowledge. Hidden unless the
+  // managed policy allows attachments. Its glyph is built with the DOM like the rest of the panel.
+  const plus = el("button", "al-plus");
+  plus.type = "button";
+  plus.hidden = true;
+  plus.setAttribute("aria-label", "Add files and more");
+  plus.setAttribute("data-tip", plusButtonTip(false));
+  const svgNs = "http://www.w3.org/2000/svg";
+  const glyph = document.createElementNS(svgNs, "svg");
+  const glyphAttrs: [string, string][] = [["viewBox", "0 0 24 24"], ["width", "16"], ["height", "16"], ["fill", "none"], ["stroke", "currentColor"], ["stroke-width", "1.8"], ["stroke-linecap", "round"], ["aria-hidden", "true"]];
+  for (const [k, v] of glyphAttrs) glyph.setAttribute(k, v);
+  const glyphPath = document.createElementNS(svgNs, "path");
+  glyphPath.setAttribute("d", "M12 5v14M5 12h14");
+  glyph.appendChild(glyphPath);
+  plus.appendChild(glyph);
+  const pick = (): void => { void pickFiles().then((files) => { input.focus(); stageFiles(files); }); };
+  if (fileTray && deps.attach) {
+    const openKnowledge = deps.openKnowledge;
+    mountPlusMenu(plus, plusMenuItems({ pick, ...(openKnowledge ? { knowledge: (anchor: HTMLElement) => openKnowledge(anchor) } : {}) }));
+    syncPlusButton(plus, deps.attach, input);
+  }
+  form.append(plus, input, sendBtn);
+  panel.append(log, quick, thumbs, filesHost, form);
+  input.addEventListener("paste", (e) => {
+    const files = clipboardFiles(e);
+    if (!files.length) return; // text paste stays the textarea's own
+    e.preventDefault();
+    stageFiles(files);
+  });
+  bindFileDrop(panel, (files, folders) => {
+    const note = folderDropNote(folders, false);
+    if (note) attachNote(note);
+    if (!files.length) return;
+    stageFiles(files);
+    input.focus();
+  }, "Drop files to ask about them");
 
   const pillIn = el("span", "al-pill-in", "Ask Lucid");
 
@@ -289,9 +429,21 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
 
   const scrollDown = (): void => { log.scrollTop = log.scrollHeight; };
 
-  const addUser = (text: string): void => {
+  const addUser = (text: string, images: readonly Attachment[] = [], files: readonly StagedAttachment[] = []): void => {
     welcome.remove();
-    log.appendChild(el("div", "al-msg al-user", text));
+    const m = el("div", "al-msg al-user", text);
+    if (files.length) m.appendChild(sentFilesEl(files)); // P-ATTACH.1 (ADR-0598)
+    if (images.length) {
+      const row = el("div", "al-user-imgs");
+      for (const a of images) {
+        const img = el("img", "al-user-img");
+        img.alt = a.name ?? "attached image";
+        img.src = a.dataUrl;
+        row.appendChild(img);
+      }
+      m.prepend(row);
+    }
+    log.appendChild(m);
     scrollDown();
   };
   const addLucid = (markdown: string, meta?: string): void => {
@@ -299,15 +451,149 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     const m = el("div", "al-msg al-lucid");
     m.innerHTML = deps.markdown(markdown); // the chat's own sanitizing renderer
     deps.enhance?.(m);
+    // P-ASKLUCID.8: the whole answer copies as its markdown, from the button or from a right-click anywhere on
+    // it (ctxmenu.ts reads data-copy-text).
+    m.dataset.copyText = markdown;
+    const copy = el("button", "al-copy", "Copy");
+    copy.type = "button";
+    copy.dataset.tip = "Copy this answer";
+    copy.setAttribute("aria-label", "Copy this answer");
+    copy.addEventListener("click", () => {
+      void copyToClipboard(markdown).then((ok) => {
+        copy.textContent = ok ? "Copied" : "Copy blocked";
+        copy.classList.toggle("done", ok);
+        setTimeout(() => { copy.textContent = "Copy"; copy.classList.remove("done"); }, 1400);
+      });
+    });
+    m.appendChild(copy);
     log.appendChild(m);
     if (meta) log.appendChild(el("div", "al-meta", meta));
     scrollDown();
     if (!dock.isVisible()) dock.setUnread(true);
   };
+  /** P-ASKLUCID.9 (ADR-0600): the "Edit image" card's model area. It reads the usable models once, then shows the
+   *  one Confirm will use, a short chooser (best first, the first recommended), or why Confirm cannot run, with
+   *  the Settings, Providers jump when the fix is a key. Confirm stays disabled until a model is settled. A
+   *  choice made in the chooser is remembered on Confirm; a model used because it was the only one is not, so
+   *  connecting a second key later brings the chooser back. */
+  let pickerSeq = 0;
+  const imageModelPicker = (confirm: HTMLButtonElement): { el: HTMLElement; commit(): string | null; lock(): void } => {
+    const ie = deps.imageEdit;
+    const box = el("div", "al-img-model");
+    const group = `al-img-model-${++pickerSeq}`;
+    let chosen: string | null = null;
+    let picked = false;
+    let locked = false;
+    confirm.disabled = true;
+    box.appendChild(el("div", "al-img-note", "Checking which image models are connected"));
+    const tipped = <T extends HTMLElement>(node: T, title: string, desc?: string): T => {
+      node.setAttribute("data-tip", tipValue(title, desc));
+      return node;
+    };
+    const button = (label: string, title: string, desc: string, onClick: () => void): HTMLButtonElement => {
+      const b = tipped(el("button", "al-img-btn", label), title, desc);
+      b.type = "button";
+      b.addEventListener("click", onClick);
+      return b;
+    };
+    const render = (st: ImageCardState, all: readonly ImageModelOptionView[]): void => {
+      box.replaceChildren();
+      if (st.kind === "none") {
+        chosen = null;
+        confirm.disabled = true;
+        box.appendChild(el("div", "al-img-note", st.line));
+        if (st.settings && ie) box.appendChild(button("Open Settings", "Open Settings", "Go to the Providers card to add an OpenAI, Google Gemini or xAI API key.", () => ie.openProviders()));
+        return;
+      }
+      if (st.kind === "choice") {
+        chosen = st.option.id;
+        confirm.disabled = false;
+        const row = el("div", "al-img-chosen");
+        row.appendChild(tipped(el("span", "al-img-chosen-name", `Uses ${st.option.label}`), st.option.label, st.option.why));
+        if (st.others > 0) row.appendChild(button("Change", "Change the image model", "Pick another connected model for this edit. LUCID remembers your pick.", () => render({ kind: "ask", options: [...all] }, all)));
+        box.appendChild(row);
+        return;
+      }
+      // Several models: the selection starts on the current one (after Change), else the recommendation.
+      const start = st.options.some((o) => o.id === chosen) ? chosen : st.options[0]!.id;
+      chosen = start;
+      picked = true;
+      confirm.disabled = false;
+      const list = el("div", "al-img-opts");
+      list.setAttribute("role", "radiogroup");
+      list.setAttribute("aria-label", "Image model");
+      for (const o of st.options) {
+        const row = tipped(el("label", "al-img-opt"), o.label, o.why);
+        const radio = el("input", "al-img-radio");
+        radio.type = "radio";
+        radio.name = group;
+        radio.value = o.id;
+        radio.checked = o.id === start;
+        radio.addEventListener("change", () => { if (radio.checked) chosen = o.id; });
+        const body = el("span", "al-img-opt-body");
+        body.appendChild(el("span", "al-img-opt-name", o.label));
+        if (o.recommended) {
+          body.appendChild(el("span", "al-img-rec", "Recommended"));
+          body.appendChild(el("span", "al-img-opt-why", o.why));
+        }
+        row.append(radio, body);
+        list.appendChild(row);
+      }
+      box.append(el("div", "al-img-note", "Pick the image model for this edit. LUCID remembers your pick."), list);
+    };
+    void (async () => {
+      const view = ie ? await ie.models().catch(() => null) : null;
+      if (locked) return;
+      render(imageCardState(view, readSavedImageModel(ie?.store ?? null)), view?.options ?? []);
+      scrollDown();
+    })();
+    return {
+      el: box,
+      commit: () => {
+        if (chosen && picked) saveImageModel(ie?.store ?? null, chosen);
+        return chosen;
+      },
+      lock: () => {
+        locked = true;
+        for (const c of box.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button")) c.disabled = true;
+      },
+    };
+  };
+  /** P-ASKLUCID.9: under a finished edit, the saved file's full path (click = open it in the Preview's Ask Lucid
+   *  tab), Copy path, and Show in folder where the shell can. The path breaks only after a separator. */
+  const editedImageRow = (path: string): HTMLElement => {
+    const ie = deps.imageEdit;
+    const wrap = el("div", "al-img-result");
+    const link = el("a", "al-img-path");
+    link.href = "#";
+    for (const part of pathBreakParts(path)) link.append(part, document.createElement("wbr"));
+    link.setAttribute("data-tip", tipValue("Open in Preview", "Show the edited image in the Preview panel's Ask Lucid tab."));
+    link.addEventListener("click", (e) => { e.preventDefault(); ie?.open(path); });
+    const acts = el("div", "al-img-acts");
+    const flash = (b: HTMLButtonElement, text: string, back: string): void => {
+      b.textContent = text;
+      setTimeout(() => { b.textContent = back; }, 1400);
+    };
+    const copy = el("button", "al-img-btn", "Copy path");
+    copy.type = "button";
+    copy.setAttribute("data-tip", tipValue("Copy path", "Copy the edited image's full path."));
+    copy.addEventListener("click", () => { void copyToClipboard(path).then((ok) => flash(copy, ok ? "Copied" : "Copy blocked", "Copy path")); });
+    acts.appendChild(copy);
+    const reveal = ie?.showInFolder;
+    if (reveal) {
+      const show = el("button", "al-img-btn", "Show in folder");
+      show.type = "button";
+      show.setAttribute("data-tip", tipValue("Show in folder", "Open the folder in your file manager with the edited image selected."));
+      show.addEventListener("click", () => { void reveal(path).catch(() => false).then((ok) => { if (!ok) flash(show, "Not found", "Show in folder"); }); });
+      acts.appendChild(show);
+    }
+    wrap.append(link, acts);
+    return wrap;
+  };
   /** P-ASKLUCID.2 (ADR-0582): one proposed action as a card. Every string goes in through textContent. The
    *  detail rows are exactly what Confirm sends (actionDetails), so the user reads what will run. Confirm
    *  works once; Dismiss removes the card. */
-  const addAction = (a: AskAction): void => {
+  const addAction = (a: AskAction, images: readonly string[] = []): void => {
     const run = deps.runAction;
     if (!run) return;
     const card = el("div", `al-act al-risk-${a.risk}`);
@@ -326,16 +612,29 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     btns.append(confirm, dismiss);
     const result = el("div", "al-act-result");
     result.hidden = true;
+    // P-ASKLUCID.9 (ADR-0600): an edit_image card settles which model Confirm uses before Confirm can run.
+    const model = a.kind === "edit_image" ? imageModelPicker(confirm) : null;
+    if (model) card.appendChild(model.el);
     card.append(btns, result);
     dismiss.addEventListener("click", () => card.remove());
     confirm.addEventListener("click", () => {
+      const modelId = model?.commit() ?? undefined;
+      if (model && !modelId) return;
       confirm.disabled = true;
       dismiss.disabled = true;
+      model?.lock();
       confirm.textContent = "Working";
-      void run(a).catch((): AskActionResult => ({ ok: false, message: "It could not be done: the app did not answer." })).then((r) => {
+      void run(a, { images, ...(modelId ? { modelId } : {}) }).catch((): AskActionResult => ({ ok: false, message: "It could not be done: the app did not answer." })).then((r) => {
         btns.remove();
         result.hidden = false;
         result.textContent = r.message;
+        if (r.ok && r.image) {
+          result.appendChild(editedImageRow(r.image.path));
+          // A short note in the conversation too, so the path is there after the card scrolls away.
+          const note = `I saved the edited image to \`${r.image.path}\`. It is open in the Preview panel's Ask Lucid tab.`;
+          turns.push({ role: "lucid", text: note });
+          addLucid(note);
+        }
         card.classList.add(r.ok ? "done" : "failed");
         scrollDown();
       });
@@ -350,8 +649,17 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
   };
 
   function send(raw: string, more: AskExtrasView = {}, fromRec = false): void {
-    const text = raw.trim();
+    // P-ASKLUCID.8: images alone are a question too. P-ATTACH.1 (ADR-0598): so are files.
+    const fileCount = fileTray?.ids().length ?? 0;
+    const text = raw.trim() || (attached.length ? `Look at the attached image${attached.length > 1 ? "s" : ""}.` : fileCount ? `Read the attached file${fileCount > 1 ? "s" : ""}.` : "");
     if (!text || busy) return;
+    if (fileTray?.pending()) { attachNote("Ask again in a moment: the files are still being copied and scanned."); return; }
+    const images = attached;
+    attached = [];
+    renderThumbs();
+    // The files stay on the bar (as sending) until Lucid answers; an unanswered question puts them back.
+    const sentFiles = fileTray?.hold() ?? [];
+    const fileIds = sentFiles.map((a) => a.id);
     // A question the user wrote is not a miss: they knew what to ask.
     if (!fromRec) saveMemory(noteOwnQuestion(memory));
     engaged = true;
@@ -361,7 +669,7 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     sendBtn.disabled = true;
     input.value = "";
     autosize();
-    addUser(text);
+    addUser(text, images, sentFiles);
     setState("working");
     const history = historyToSend(turns);
     turns.push({ role: "user", text });
@@ -370,15 +678,20 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     const extra: Promise<AskExtrasView> = deps.extras ? deps.extras().catch(() => ({})) : Promise.resolve({});
     // P-ASKLUCID.7 (ADR-0588): the picture is taken at the same moment as the text view of the screen.
     const shot = deps.shot ? deps.shot().catch(() => null) : Promise.resolve(null);
-    void Promise.all([screen, extra, shot]).then(([s, x, p]) => deps.ask(text, history, { ...x, ...more, ...(s ? { screen: s } : {}), ...(s && p ? { shot: p } : {}) })).catch(() => null).then((r) => {
+    void Promise.all([screen, extra, shot]).then(([s, x, p]) => deps.ask(text, history, { ...x, ...more, ...(s ? { screen: s } : {}), ...(s && p ? { shot: p } : {}), ...(images.length ? { images: images.map((a) => a.dataUrl) } : {}), ...(fileIds.length ? { attachments: fileIds } : {}) })).catch(() => null).then((r) => {
       busy = false;
       sendBtn.disabled = false;
+      fileTray?.settle(fileIds, !!(r?.ok && r.reply));
       if (r?.ok && r.reply) {
         turns.push({ role: "lucid", text: r.reply });
         addLucid(r.reply, seenLine(r));
-        for (const a of r.actions ?? []) addAction(a);
+        // P-ASKLUCID.9 (ADR-0600): each card keeps the images of the question it answers, for edit_image.
+        const urls = images.map((x) => x.dataUrl);
+        for (const a of r.actions ?? []) addAction(a, urls);
         const noPicture = shotSkipLine(r.picture as ShotSkip | undefined);
         if (noPicture) log.appendChild(el("div", "al-meta", noPicture));
+        const noImages = attachedLine(r.attached);
+        if (noImages) log.appendChild(el("div", "al-meta", noImages));
         const dropped = droppedLine(r.actionsDropped ?? 0);
         if (dropped) log.appendChild(el("div", "al-meta", dropped));
         setState("done");
@@ -386,6 +699,8 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
         if (r.followups?.length) showRecs(followupRecs(r.followups)); else void refreshRecs();
       } else {
         turns.pop(); // a question that was never answered is not history
+        attached = [...images, ...attached].slice(0, MAX_ATTACHMENTS); // the images were not seen: give them back to retry
+        renderThumbs();
         addError(r?.error ?? "Lucid could not be reached. Check that the app is still running, then try again.");
         setState("error");
       }
@@ -398,6 +713,7 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
   };
   input.addEventListener("input", autosize);
   input.addEventListener("keydown", (e) => {
+    if (isAttachShortcut(e)) { e.preventDefault(); if (fileTray && !plus.hidden) pick(); return; } // P-ATTACH.1: Ctrl+U
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(input.value); }
   });
   form.addEventListener("submit", (e) => { e.preventDefault(); send(input.value); });

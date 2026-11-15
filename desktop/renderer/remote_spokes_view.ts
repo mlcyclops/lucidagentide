@@ -22,6 +22,7 @@
 import { $ } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 import {
   closeDeployPanel, closeRemotePanel, onDeployPanelClick, onRemoteChange, onRemoteHubClick, onRemotePanelClick, paintDeployPanel, paintRemotePanel,
   refreshDeployPanel, refreshRemote, refreshRemotePanel, remoteAlertListHtml, remoteCounts, remoteDeployVisible, remoteHubVisible, remoteSnapshot,
@@ -164,7 +165,7 @@ function paint(): void {
 /** One spoke as a row. The node id is NODE_RE-checked by the model; every spoke-written word goes through esc(). */
 function rowHtml(s: RemoteSpokeView, now: number): string {
   const on = detail?.kind === "spoke" && detail.node === s.node;
-  return `<button class="rsv-row rs-${REMOTE_TONE[s.state]}${on ? " on" : ""}" data-rs-open="${esc(s.node)}" title="${esc(s.label)} (${esc(s.node)})">
+  return `<button class="rsv-row rs-${REMOTE_TONE[s.state]}${on ? " on" : ""}" data-rs-open="${esc(s.node)}" data-tip="${esc(tipEsc(s.label))} (${esc(tipEsc(s.node))})">
       <i class="orbit-led"></i>
       <span class="rsv-row-main"><b>${esc(s.label)}</b><small>${esc(remoteGlance(s, now))}</small><small class="rsv-row-model">${esc(s.models.default ?? "model not reported")}</small></span>
     </button>`;

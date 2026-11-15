@@ -80,9 +80,16 @@ describe("thumbnail strip (no data URL interpolated)", () => {
   test("empty for no attachments", () => {
     expect(thumbStripHtml([])).toBe("");
   });
-  test("escapes a hostile filename in the title (no raw markup)", () => {
+  test("escapes a hostile filename in the tooltip (no raw markup)", () => {
     const h = thumbStripHtml([att({ name: '"><img src=x onerror=1>' })]);
     expect(h).not.toContain("<img src=x");
     expect(h).toContain("&lt;img");
+  });
+  // P-TIP.1 (ADR-0599): the premium tooltip, never a native title; a '|' in a file name stays literal.
+  test("names the file in a data-tip, not a native title", () => {
+    const h = thumbStripHtml([att({ name: "a|b.png" })]);
+    expect(h).toContain('data-tip="a\\|b.png"');
+    expect(h).toContain('data-tip="Remove image"');
+    expect(h).not.toContain("title=");
   });
 });

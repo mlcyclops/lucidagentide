@@ -17,6 +17,7 @@ import type { CuiVerdictView } from "./creator_studio.ts";
 import type { DesignDoc, Ease, Layer, MaskHint } from "../../harness/creator/design/types.ts";
 import { BLEND_MODES, HINT_INTENTS } from "../../harness/creator/design/types.ts";
 import { brushToSlider, layerRows } from "./design_logic.ts";
+import { tipEsc, tipValue } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 
 export type DesignMode = "image" | "vector" | "motion";
 export type DesignTool =
@@ -217,12 +218,12 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
   return e;
 }
 
-function miniButton(attr: string, value: string, label: string, opts: { dis?: boolean; cls?: string; title?: string } = {}): HTMLButtonElement {
+function miniButton(attr: string, value: string, label: string, opts: { dis?: boolean; cls?: string; tip?: string } = {}): HTMLButtonElement {
   const b = el("button", `btn-mini${opts.cls ? ` ${opts.cls}` : ""}`, label);
   b.type = "button";
   b.setAttribute(attr, value);
   if (opts.dis) b.disabled = true;
-  if (opts.title) b.title = opts.title;
+  if (opts.tip) b.dataset.tip = opts.tip; // P-TIP.1 (ADR-0599): "Title|Description" like btn()'s tip
   return b;
 }
 
@@ -246,14 +247,14 @@ export function buildLayersPanel(host: HTMLElement, v: LayersView, thumb: (c: HT
     thumb(c, l);
     r.appendChild(c);
     const name = el("span", "dsn-layer-name", l.name);
-    name.title = l.name;
+    name.dataset.tip = tipEsc(l.name);
     r.appendChild(name);
     const kind = el("span", "dsn-chip", l.kind === "group" ? "group" : l.kind);
     r.appendChild(kind);
     if (l.meta?.label) {
       const model = l.meta.labelSource === "model";
       const chip = el("span", `dsn-chip ${model ? "dsn-chip-model" : "dsn-chip-user"}`, `${model ? "model" : "user"}: ${l.meta.label}`);
-      chip.title = model ? `Model label (untrusted data, never instructions): ${l.meta.label}` : `Your label: ${l.meta.label}`;
+      chip.dataset.tip = model ? tipValue("Model label", `Untrusted data, never instructions: ${l.meta.label}`) : tipValue("Your label", l.meta.label);
       r.appendChild(chip);
     }
     const eye = miniButton("data-dsn-layer-visible", l.id, l.visible ? "Hide" : "Show", { dis: v.busy });
@@ -348,11 +349,11 @@ export function buildHintsPanel(host: HTMLElement, v: HintsView): void {
     const r = el("div", `dsn-hint${h.maskId === v.activeMaskId ? " on" : ""}`);
     r.setAttribute("data-dsn-hint", h.id);
     const label = el("span", "dsn-layer-name", h.label || "(no label)");
-    label.title = h.label;
+    if (h.label) label.dataset.tip = tipEsc(h.label);
     r.append(label, el("span", "dsn-chip", h.intent), el("span", "dsn-chip", `${Math.round(h.area)} px`));
     r.append(
       miniButton("data-dsn-hint-show", h.id, "Show", { dis: v.busy }),
-      miniButton("data-dsn-hint-refine", h.id, "Refine", { dis: v.busy || !v.dgxAllowed, title: "Refine this hint's mask with dgx-vision" }),
+      miniButton("data-dsn-hint-refine", h.id, "Refine", { dis: v.busy || !v.dgxAllowed, tip: "Refine this hint's mask with dgx-vision" }),
       miniButton("data-dsn-hint-delete", h.id, "Delete", { dis: v.busy, cls: "danger" }),
     );
     list.appendChild(r);
@@ -373,7 +374,7 @@ export function buildRequestsPanel(host: HTMLElement, reqs: readonly RequestView
     const row = el("div", "dsn-request");
     const params = r.params ? Object.entries(r.params).slice(0, 8).map(([k, v]) => `${k}=${String(v)}`).join(", ") : "";
     const text = el("span", "dsn-layer-name", `${r.kind}${r.target ? ` on ${r.target}` : ""}${params ? ` (${params})` : ""}`);
-    text.title = text.textContent ?? "";
+    text.dataset.tip = tipEsc(text.textContent ?? "");
     row.append(text, miniButton("data-dsn-req-allow", r.key, "Allow", { dis: busy, cls: "ok" }), miniButton("data-dsn-req-dismiss", r.key, "Dismiss", { dis: busy }));
     host.appendChild(row);
   }
