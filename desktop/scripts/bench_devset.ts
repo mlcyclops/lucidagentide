@@ -55,7 +55,7 @@ const windowMode = arg("window") ?? "auto";
 if (!["auto", "omp"].includes(windowMode)) die("--window is auto or omp");
 const timeoutMs = Math.max(10, Number(arg("timeout") ?? 180)) * 1000;
 const keyEnv = arg("api-key-env");
-const apiKey = keyEnv ? (process.env[keyEnv] ?? die(`the environment variable ${keyEnv} is not set`)) : undefined;
+if (keyEnv && !process.env[keyEnv]) die(`the environment variable ${keyEnv} is not set`);
 const maxTokens = Number(arg("max-tokens") ?? 2048);
 
 // The window a lane on this model is given (ADR-0579). At omp's default or above, nothing is overridden.
@@ -68,7 +68,7 @@ const settings = thresholdKb < OMP_DEFAULT_THRESHOLD_KB
 const tasks = buildDevset(lengths);
 const scanner = new ScannerClient();
 scanner.start();
-const target = endpointModel({ label, baseUrl, model: modelId, contextWindow: context, maxTokens, ...(apiKey ? { apiKey } : {}) });
+const target = endpointModel({ label, baseUrl, model: modelId, contextWindow: context, maxTokens, ...(keyEnv ? { apiKeyEnv: keyEnv } : {}) });
 const all: { model: string; tools: boolean; results: TaskResult[] }[] = [];
 
 async function run(model: BenchModel, tools: boolean, live: boolean): Promise<void> {

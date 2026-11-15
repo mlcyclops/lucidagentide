@@ -21,7 +21,10 @@ import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import artifactToolsExtension from "../../omp/artifact_tools_extension.ts";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Type } from "@oh-my-pi/pi-coding-agent/extensibility/legacy-typebox";
+import { cfgToolsXdev } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import { artifactTools } from "../../omp/artifact_tools_extension.ts";
 import { createMcpResultGate } from "../../omp/mcp_result_gate.ts";
 import type { ScannerClient } from "../../security/scanner_client.ts";
 import { createEchoSession } from "../../testing/echo.ts";
@@ -35,7 +38,20 @@ type Session = Awaited<ReturnType<typeof createAgentSession>>["session"];
 export interface SessionSpec {
   customTools: NonNullable<SessionOpts["customTools"]>;
   extensions: NonNullable<SessionOpts["extensions"]>;
+  /** The ONLY tools the model is offered, each as a top-level tool. omp's built-ins (read, bash, eval,
+   *  write and the rest) are left out, so the data reaches the model only through the fetch tool's result
+   *  and, when loaded, the artifact tools: the dev set measures that mechanism and nothing around it. */
+  toolNames: string[];
   settings?: SessionOpts["settings"];
+}
+
+/** The session options that offer a model exactly `spec.toolNames` as top-level tools. omp's
+ *  `restrictToolNames` is not used: a restricted session also drops the extensions it is given, and the
+ *  result gate is one. Device mode (`xd://`) is turned off so no tool hides behind `write`. */
+function restrictTo(spec: SessionSpec): Pick<SessionOpts, "toolNames" | "settings"> {
+  const settings = spec.settings ?? Settings.isolated({});
+  cfgToolsXdev.override(settings, false);
+  return { toolNames: spec.toolNames, settings };
 }
 export interface OpenSession { session: Session; cleanup(): void | Promise<void> }
 
@@ -69,7 +85,7 @@ export function policyModel(label: string, policy: Policy): BenchModel {
         const step = policy(t);
         return "call" in step ? { content: [{ type: "toolCall" as const, name: step.call.name, arguments: step.call.arguments }] } : { content: [step.answer] };
       };
-      const s = await createEchoSession({ handler: handler as never, customTools: spec.customTools, extensions: spec.extensions, ...(spec.settings ? { settings: spec.settings } : {}) });
+      const s = await createEchoSession({ handler: handler as never, customTools: spec.customTools, extensions: spec.extensions, ...restrictTo(spec) });
       return { session: s.session, cleanup: async () => { await disposeSession(s.session); s.cleanup(); } };
     },
   };
@@ -85,8 +101,9 @@ export interface EndpointOptions {
   /** The model's context window in tokens, as measured on the endpoint, not as advertised. */
   contextWindow: number;
   maxTokens?: number;
-  /** A bearer key, when the endpoint wants one. Read from the environment by the caller, never stored. */
-  apiKey?: string;
+  /** The NAME of the environment variable holding a bearer key, when the endpoint wants one. omp resolves
+   *  the name from the environment, the way a Local Provider's key reaches it; the key is never written. */
+  apiKeyEnv?: string;
 }
 
 const PROVIDER = "benchlocal";
@@ -99,7 +116,7 @@ export function endpointModelsYaml(o: EndpointOptions): string {
     `  ${PROVIDER}:`,
     `    baseUrl: ${q(o.baseUrl.trim())}`,
     "    api: openai-completions",
-    ...(o.apiKey ? [] : ["    auth: none"]),
+    o.apiKeyEnv ? `    apiKey: ${q(o.apiKeyEnv)}` : "    auth: none",
     "    models:",
     `      - id: ${q(o.model)}`,
     `        name: ${q(o.label ?? o.model)}`,
@@ -123,11 +140,10 @@ export function endpointModel(o: EndpointOptions): BenchModel {
       try {
         writeFileSync(join(cwd, "models.yml"), endpointModelsYaml(o), "utf8");
         const authStorage = await AuthStorage.create(join(cwd, "auth.db"));
-        if (o.apiKey) authStorage.keys.setRuntime(PROVIDER, o.apiKey);
         const modelRegistry = new ModelRegistry(authStorage, join(cwd, "models.yml"));
         const model = modelRegistry.find(PROVIDER, o.model);
         if (!model) throw new Error(`omp did not accept the model "${o.model}" at ${o.baseUrl}`);
-        const { session } = await createAgentSession({ model, cwd, authStorage, modelRegistry, customTools: spec.customTools, extensions: spec.extensions, ...(spec.settings ? { settings: spec.settings } : {}) });
+        const { session } = await createAgentSession({ model, cwd, authStorage, modelRegistry, customTools: spec.customTools, extensions: spec.extensions, ...restrictTo(spec) });
         return { session, cleanup: async () => { await disposeSession(session); try { authStorage.close(); } catch { /* closing */ } done(); } };
       } catch (e) { done(); throw e; }
     },
@@ -156,6 +172,15 @@ export interface RunOptions {
   timeoutMs?: number;
 }
 
+/** The tools artifact_tools_extension.ts registers, offered to the model when `tools` is on. */
+export const ARTIFACT_TOOLS: string[] = artifactTools(Type).map((t) => t.name);
+
+/** The artifact tools as session custom tools. An extension tool runs as (id, params, signal, onUpdate, ctx)
+ *  and a custom tool as (id, params, onUpdate, ctx, signal); the definitions are the lane's own. */
+function artifactCustomTools(): CustomTool[] {
+  return artifactTools(Type).map((t) => ({ ...t, execute: (id: string, params: unknown, onUpdate: unknown, ctx: unknown, signal: unknown) => t.execute(id, params, signal, onUpdate, ctx) }) as unknown as CustomTool);
+}
+
 const OPEN_ATTEMPTS = 4;
 const REPLACED = /was replaced during session initialization/;
 
@@ -169,8 +194,11 @@ export async function runTask(model: BenchModel, task: DevTask, opts: RunOptions
   let open: OpenSession | null = null;
   try {
     const spec: SessionSpec = {
-      customTools: [fetchTool] as never,
-      extensions: [createMcpResultGate(opts.scanner), ...(opts.tools ? [artifactToolsExtension as never] : [])] as never,
+      // The artifact tools are the same definitions artifact_tools_extension.ts registers in a lane, passed
+      // as the session's own tools: a restricted session drops tools an extension registers.
+      customTools: [fetchTool, ...(opts.tools ? artifactCustomTools() : [])] as never,
+      extensions: [createMcpResultGate(opts.scanner)] as never,
+      toolNames: [FETCH_TOOL, ...(opts.tools ? ARTIFACT_TOOLS : [])],
       ...(opts.settings ? { settings: opts.settings } : {}),
     };
     // omp keeps one agent registry per process. If anything else in the process starts a session while

@@ -99,6 +99,8 @@ export interface EchoSessionOptions {
   extensions?: SessionOpts["extensions"];
   /** omp settings for the session (e.g. `Settings.isolated({ "tools.artifactSpillThreshold": 4 })`). */
   settings?: SessionOpts["settings"];
+  /** Offer the model only these tools (omp's `toolNames`). */
+  toolNames?: SessionOpts["toolNames"];
 }
 
 /**
@@ -132,6 +134,7 @@ export async function createEchoSession(opts: EchoSessionOptions = {}): Promise<
     ...(opts.customTools !== undefined ? { customTools: opts.customTools } : {}),
     ...(opts.extensions !== undefined ? { extensions: opts.extensions } : {}),
     ...(opts.settings !== undefined ? { settings: opts.settings } : {}),
+    ...(opts.toolNames !== undefined ? { toolNames: opts.toolNames } : {}),
   });
 
   return {

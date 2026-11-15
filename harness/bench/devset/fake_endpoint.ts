@@ -35,22 +35,27 @@ export interface FakeEndpoint {
   requests: number;
   /** One line per request: what the model had been shown and what it did. For diagnosing a run. */
   trace: string[];
+  /** The tool names the last chat request offered the model. */
+  offered: string[];
   stop(): void;
 }
 
-/** Start the server on a free loopback port. */
-export function startFakeEndpoint(policy: Policy, model = "fake-local"): FakeEndpoint {
+/** Start the server on a free loopback port. With `bearer`, every request without that key answers 401,
+ *  the way a credentialed vLLM does. */
+export function startFakeEndpoint(policy: Policy, model = "fake-local", bearer?: string): FakeEndpoint {
   let calls = 0;
-  const state = { requests: 0 };
+  const state = { requests: 0, offered: [] as string[] };
   const trace: string[] = [];
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
     async fetch(req) {
+      if (bearer && req.headers.get("authorization") !== `Bearer ${bearer}`) return Response.json({ error: "Unauthorized" }, { status: 401 });
       const url = new URL(req.url);
       if (!url.pathname.endsWith("/chat/completions")) return Response.json({ object: "list", data: [{ id: model, object: "model" }] });
       state.requests += 1;
-      const body = (await req.json().catch(() => ({}))) as { messages?: ChatMessage[] };
+      const body = (await req.json().catch(() => ({}))) as { messages?: ChatMessage[]; tools?: { function?: { name?: string } }[] };
+      state.offered = (body.tools ?? []).map((t) => t.function?.name ?? "");
       const shown = transcriptOf(body.messages ?? []);
       const step = policy(shown);
       const last = shown.results[shown.results.length - 1];
@@ -67,5 +72,5 @@ export function startFakeEndpoint(policy: Policy, model = "fake-local"): FakeEnd
       return new Response(stream, { headers: { "content-type": "text/event-stream" } });
     },
   });
-  return { baseUrl: `http://127.0.0.1:${server.port}/v1`, get requests() { return state.requests; }, trace, stop: () => server.stop(true) };
+  return { baseUrl: `http://127.0.0.1:${server.port}/v1`, get requests() { return state.requests; }, get offered() { return state.offered; }, trace, stop: () => server.stop(true) };
 }

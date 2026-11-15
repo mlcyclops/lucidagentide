@@ -1,0 +1,1201 @@
+{
+  "devset": "1",
+  "model": "Qwen3.8-27B (DGX, thinking off)",
+  "modelId": "qwen3.8-27b",
+  "baseUrl": "http://127.0.0.1:18080/v1",
+  "contextTokens": 262144,
+  "windowKb": 50,
+  "at": "2026-11-15T04:39:35.669Z",
+  "runs": [
+    {
+      "model": "reference reader",
+      "tools": false,
+      "results": [
+        {
+          "id": "needle-8000-a",
+          "family": "needle",
+          "length": 8000,
+          "score": 100,
+          "given": "r6718",
+          "contextChars": 8204,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-8000-b",
+          "family": "needle",
+          "length": 8000,
+          "score": 100,
+          "given": "r9135",
+          "contextChars": 8205,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-8000-a",
+          "family": "count",
+          "length": 8000,
+          "score": 100,
+          "given": "7",
+          "contextChars": 8208,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-8000-b",
+          "family": "count",
+          "length": 8000,
+          "score": 100,
+          "given": "13",
+          "contextChars": 8315,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-8000-a",
+          "family": "track",
+          "length": 8000,
+          "score": 100,
+          "given": "v27016",
+          "contextChars": 8097,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-8000-b",
+          "family": "track",
+          "length": 8000,
+          "score": 100,
+          "given": "v80242",
+          "contextChars": 8148,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-8000-a",
+          "family": "rank",
+          "length": 8000,
+          "score": 100,
+          "given": "src/auth/token.ts, src/auth/session.ts, src/net/retry.ts, src/ui/login.tsx, src/crypto/sign.ts",
+          "contextChars": 8333,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-8000-b",
+          "family": "rank",
+          "length": 8000,
+          "score": 100,
+          "given": "src/crypto/sign.ts, src/net/client.ts, src/auth/token.ts, src/sync/worker.ts, src/parse/config.ts",
+          "contextChars": 8353,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-64000-a",
+          "family": "needle",
+          "length": 64000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41103,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-64000-b",
+          "family": "needle",
+          "length": 64000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41117,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-64000-a",
+          "family": "count",
+          "length": 64000,
+          "score": 0,
+          "given": "0",
+          "contextChars": 27014,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-64000-b",
+          "family": "count",
+          "length": 64000,
+          "score": 0,
+          "given": "0",
+          "contextChars": 27056,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-64000-a",
+          "family": "track",
+          "length": 64000,
+          "score": 0,
+          "given": "v74847",
+          "contextChars": 41115,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-64000-b",
+          "family": "track",
+          "length": 64000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41170,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-64000-a",
+          "family": "rank",
+          "length": 64000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41120,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-64000-b",
+          "family": "rank",
+          "length": 64000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41156,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-512000-a",
+          "family": "needle",
+          "length": 512000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41090,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-512000-b",
+          "family": "needle",
+          "length": 512000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41067,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-512000-a",
+          "family": "count",
+          "length": 512000,
+          "score": 0,
+          "given": "0",
+          "contextChars": 27492,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-512000-b",
+          "family": "count",
+          "length": 512000,
+          "score": 0,
+          "given": "0",
+          "contextChars": 27452,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-512000-a",
+          "family": "track",
+          "length": 512000,
+          "score": 0,
+          "given": "v12151",
+          "contextChars": 41082,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-512000-b",
+          "family": "track",
+          "length": 512000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41122,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-512000-a",
+          "family": "rank",
+          "length": 512000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41131,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-512000-b",
+          "family": "rank",
+          "length": 512000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41111,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        }
+      ]
+    },
+    {
+      "model": "reference tool user",
+      "tools": true,
+      "results": [
+        {
+          "id": "needle-8000-a",
+          "family": "needle",
+          "length": 8000,
+          "score": 100,
+          "given": "r6718",
+          "contextChars": 8204,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-8000-b",
+          "family": "needle",
+          "length": 8000,
+          "score": 100,
+          "given": "r9135",
+          "contextChars": 8205,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-8000-a",
+          "family": "count",
+          "length": 8000,
+          "score": 100,
+          "given": "7",
+          "contextChars": 8208,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-8000-b",
+          "family": "count",
+          "length": 8000,
+          "score": 100,
+          "given": "13",
+          "contextChars": 8315,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-8000-a",
+          "family": "track",
+          "length": 8000,
+          "score": 100,
+          "given": "v27016",
+          "contextChars": 8097,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-8000-b",
+          "family": "track",
+          "length": 8000,
+          "score": 100,
+          "given": "v80242",
+          "contextChars": 8148,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-8000-a",
+          "family": "rank",
+          "length": 8000,
+          "score": 100,
+          "given": "src/auth/token.ts, src/auth/session.ts, src/net/retry.ts, src/ui/login.tsx, src/crypto/sign.ts",
+          "contextChars": 8333,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-8000-b",
+          "family": "rank",
+          "length": 8000,
+          "score": 100,
+          "given": "src/crypto/sign.ts, src/net/client.ts, src/auth/token.ts, src/sync/worker.ts, src/parse/config.ts",
+          "contextChars": 8353,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-64000-a",
+          "family": "needle",
+          "length": 64000,
+          "score": 100,
+          "given": "r6831",
+          "contextChars": 41419,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_lookup"
+          ]
+        },
+        {
+          "id": "needle-64000-b",
+          "family": "needle",
+          "length": 64000,
+          "score": 100,
+          "given": "r6545",
+          "contextChars": 41423,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_lookup"
+          ]
+        },
+        {
+          "id": "count-64000-a",
+          "family": "count",
+          "length": 64000,
+          "score": 100,
+          "given": "7",
+          "contextChars": 27282,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "count-64000-b",
+          "family": "count",
+          "length": 64000,
+          "score": 100,
+          "given": "13",
+          "contextChars": 27326,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "track-64000-a",
+          "family": "track",
+          "length": 64000,
+          "score": 100,
+          "given": "v17162",
+          "contextChars": 41449,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_track"
+          ]
+        },
+        {
+          "id": "track-64000-b",
+          "family": "track",
+          "length": 64000,
+          "score": 100,
+          "given": "v99240",
+          "contextChars": 41483,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_track"
+          ]
+        },
+        {
+          "id": "rank-64000-a",
+          "family": "rank",
+          "length": 64000,
+          "score": 100,
+          "given": "src/auth/token.ts, src/auth/session.ts, src/net/retry.ts, src/ui/login.tsx, src/crypto/sign.ts",
+          "contextChars": 41543,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "rank-64000-b",
+          "family": "rank",
+          "length": 64000,
+          "score": 100,
+          "given": "src/crypto/sign.ts, src/net/client.ts, src/auth/token.ts, src/sync/worker.ts, src/parse/config.ts",
+          "contextChars": 41582,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "needle-512000-a",
+          "family": "needle",
+          "length": 512000,
+          "score": 100,
+          "given": "r6697",
+          "contextChars": 41410,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_lookup"
+          ]
+        },
+        {
+          "id": "needle-512000-b",
+          "family": "needle",
+          "length": 512000,
+          "score": 100,
+          "given": "r3455",
+          "contextChars": 41377,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_lookup"
+          ]
+        },
+        {
+          "id": "count-512000-a",
+          "family": "count",
+          "length": 512000,
+          "score": 100,
+          "given": "7",
+          "contextChars": 27765,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "count-512000-b",
+          "family": "count",
+          "length": 512000,
+          "score": 100,
+          "given": "13",
+          "contextChars": 27727,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "track-512000-a",
+          "family": "track",
+          "length": 512000,
+          "score": 100,
+          "given": "v43376",
+          "contextChars": 41426,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_track"
+          ]
+        },
+        {
+          "id": "track-512000-b",
+          "family": "track",
+          "length": 512000,
+          "score": 100,
+          "given": "v11284",
+          "contextChars": 41443,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_track"
+          ]
+        },
+        {
+          "id": "rank-512000-a",
+          "family": "rank",
+          "length": 512000,
+          "score": 100,
+          "given": "src/auth/token.ts, src/auth/session.ts, src/net/retry.ts, src/ui/login.tsx, src/crypto/sign.ts",
+          "contextChars": 41557,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "rank-512000-b",
+          "family": "rank",
+          "length": 512000,
+          "score": 100,
+          "given": "src/crypto/sign.ts, src/net/client.ts, src/auth/token.ts, src/sync/worker.ts, src/parse/config.ts",
+          "contextChars": 41540,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        }
+      ]
+    },
+    {
+      "model": "Qwen3.8-27B (DGX, thinking off)",
+      "tools": false,
+      "results": [
+        {
+          "id": "needle-8000-a",
+          "family": "needle",
+          "length": 8000,
+          "score": 100,
+          "given": "r6718",
+          "contextChars": 8204,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-8000-b",
+          "family": "needle",
+          "length": 8000,
+          "score": 100,
+          "given": "r9135",
+          "contextChars": 8205,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-8000-a",
+          "family": "count",
+          "length": 8000,
+          "score": 0,
+          "given": null,
+          "contextChars": 8208,
+          "tools": [
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "count-8000-b",
+          "family": "count",
+          "length": 8000,
+          "score": 100,
+          "given": "13",
+          "contextChars": 8315,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-8000-a",
+          "family": "track",
+          "length": 8000,
+          "score": 0,
+          "given": null,
+          "contextChars": 16194,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "track-8000-b",
+          "family": "track",
+          "length": 8000,
+          "score": 0,
+          "given": "v802",
+          "contextChars": 8148,
+          "tools": [
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "rank-8000-a",
+          "family": "rank",
+          "length": 8000,
+          "score": 0,
+          "given": null,
+          "contextChars": 8333,
+          "tools": [
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "rank-8000-b",
+          "family": "rank",
+          "length": 8000,
+          "score": 0,
+          "given": null,
+          "contextChars": 16706,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "needle-64000-a",
+          "family": "needle",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 41103,
+          "tools": [
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "needle-64000-b",
+          "family": "needle",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 82234,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "count-64000-a",
+          "family": "count",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 54047,
+          "tools": [
+            "mcp__bench_fetch",
+            "read",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "count-64000-b",
+          "family": "count",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 54112,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "track-64000-a",
+          "family": "track",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 82230,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "track-64000-b",
+          "family": "track",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 82340,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "rank-64000-a",
+          "family": "rank",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 82259,
+          "tools": [
+            "mcp__bench_fetch",
+            "read",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "rank-64000-b",
+          "family": "rank",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 82331,
+          "tools": [
+            "mcp__bench_fetch",
+            "read",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "needle-512000-a",
+          "family": "needle",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 41090,
+          "tools": [
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "needle-512000-b",
+          "family": "needle",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 82134,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "count-512000-a",
+          "family": "count",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 54984,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "count-512000-b",
+          "family": "count",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 27471,
+          "tools": [
+            "mcp__bench_fetch",
+            "read"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "track-512000-a",
+          "family": "track",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 41082,
+          "tools": [
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "track-512000-b",
+          "family": "track",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 82244,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "rank-512000-a",
+          "family": "rank",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 82262,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "rank-512000-b",
+          "family": "rank",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 82222,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        }
+      ]
+    },
+    {
+      "model": "Qwen3.8-27B (DGX, thinking off)",
+      "tools": true,
+      "results": [
+        {
+          "id": "needle-8000-a",
+          "family": "needle",
+          "length": 8000,
+          "score": 0,
+          "given": null,
+          "contextChars": 8311,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_find"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "needle-8000-b",
+          "family": "needle",
+          "length": 8000,
+          "score": 0,
+          "given": null,
+          "contextChars": 8313,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "count-8000-a",
+          "family": "count",
+          "length": 8000,
+          "score": 0,
+          "given": null,
+          "contextChars": 16416,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "count-8000-b",
+          "family": "count",
+          "length": 8000,
+          "score": 0,
+          "given": null,
+          "contextChars": 8423,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "track-8000-a",
+          "family": "track",
+          "length": 8000,
+          "score": 0,
+          "given": null,
+          "contextChars": 16194,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "track-8000-b",
+          "family": "track",
+          "length": 8000,
+          "score": 0,
+          "given": null,
+          "contextChars": 8148,
+          "tools": [
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "rank-8000-a",
+          "family": "rank",
+          "length": 8000,
+          "score": 0,
+          "given": null,
+          "contextChars": 8441,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "rank-8000-b",
+          "family": "rank",
+          "length": 8000,
+          "score": 0,
+          "given": null,
+          "contextChars": 16814,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "needle-64000-a",
+          "family": "needle",
+          "length": 64000,
+          "score": 100,
+          "given": "r6831",
+          "contextChars": 41432,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_find"
+          ]
+        },
+        {
+          "id": "needle-64000-b",
+          "family": "needle",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 41436,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_find"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "count-64000-a",
+          "family": "count",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 27241,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "count-64000-b",
+          "family": "count",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 27283,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "track-64000-a",
+          "family": "track",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 41115,
+          "tools": [
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "track-64000-b",
+          "family": "track",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 41170,
+          "tools": [
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "rank-64000-a",
+          "family": "rank",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 41430,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "rank-64000-b",
+          "family": "rank",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 41156,
+          "tools": [
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "needle-512000-a",
+          "family": "needle",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 41425,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_find"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "needle-512000-b",
+          "family": "needle",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 41067,
+          "tools": [
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "count-512000-a",
+          "family": "count",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 27764,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "count-512000-b",
+          "family": "count",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 27682,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "track-512000-a",
+          "family": "track",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 41082,
+          "tools": [
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "track-512000-b",
+          "family": "track",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 41445,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_find"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "rank-512000-a",
+          "family": "rank",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 41131,
+          "tools": [
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "rank-512000-b",
+          "family": "rank",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 43429,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count",
+            "artifact_find"
+          ],
+          "error": "no answer within 180 seconds"
+        }
+      ]
+    }
+  ],
+  "lengths": [
+    8000,
+    64000,
+    512000
+  ],
+  "parts": [
+    "qwen3.8-27b-no-tools-8000.json",
+    "qwen3.8-27b-no-tools-64000.json",
+    "qwen3.8-27b-no-tools-512000.json",
+    "qwen3.8-27b-tools-8000.json",
+    "qwen3.8-27b-tools-64000.json",
+    "qwen3.8-27b-tools-512000.json"
+  ]
+}
