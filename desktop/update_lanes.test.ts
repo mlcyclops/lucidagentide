@@ -9,7 +9,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { LaneView } from "./fleet_lanes.ts";
-import { parseUpdateCheck, stopForUpdate, updateCheck, updatePrompt } from "./update_lanes.ts";
+import { decideInstall, parseUpdateCheck, stopForUpdate, updateCheck, updatePrompt } from "./update_lanes.ts";
 
 const lane = (id: string, over: Partial<LaneView> & { stuck?: boolean } = {}): LaneView => ({
   id, name: id, cwd: "C:\\w", model: "m", status: "awaiting-input", createdAt: 1, lastActivityAt: 2, turns: 1, canRetry: false, respawns: 0,
@@ -82,5 +82,90 @@ describe("stopping for the update", () => {
     const r = stopForUpdate(["a", "b", "c", "gone"], [lane("a"), lane("b", { status: "working" }), lane("c", { status: "working", progress: stuckProgress })], (id) => { stopped.push(id); return { ok: true }; });
     expect(r).toEqual({ stopped: ["a", "c"], kept: [{ id: "b", why: "it started working" }, { id: "gone", why: "not running" }] });
     expect(stopped).toEqual(["a", "c"]);
+  });
+});
+
+describe("reading the engine's answer: all or nothing", () => {
+  const good = () => JSON.parse(JSON.stringify(updateCheck([lane("a"), lane("b", { status: "working", heldRuntime: "previous" })])));
+
+  test("one malformed row among valid ones makes the whole answer unreadable (Later only)", () => {
+    for (const bad of [null, "row", 7, [], { id: "x", name: "x", status: "working", group: "working", held: true }, { name: "x", status: "working", group: "working", held: true, blocksInstall: true, lastActivityAt: 1 }, { id: "x", name: "x", status: "working", group: "busy", held: true, blocksInstall: true, lastActivityAt: 1 }]) {
+      const v = good();
+      v.lanes.splice(1, 0, bad);
+      expect({ bad, parsed: parseUpdateCheck(v) }).toEqual({ bad, parsed: null });
+    }
+    expect(updatePrompt("2.6.0", parseUpdateCheck({ lanes: [...good().lanes, null] }) ?? "unavailable").choices.map((c) => c.label)).toEqual(["Later"]);
+  });
+
+  test("held and blocksInstall must be real booleans; a missing or string one is not read as false", () => {
+    for (const [field, value] of [["blocksInstall", "true"], ["blocksInstall", undefined], ["blocksInstall", 1], ["held", "false"], ["held", null], ["lastActivityAt", "2"]] as const) {
+      const v = good();
+      v.lanes[0][field] = value;
+      if (value === undefined) delete v.lanes[0][field];
+      expect({ field, value, parsed: parseUpdateCheck(v) }).toEqual({ field, value, parsed: null });
+    }
+    expect(parseUpdateCheck(good())).toEqual(updateCheck([lane("a"), lane("b", { status: "working", heldRuntime: "previous" })]));
+  });
+});
+
+describe("every install choice reads the lanes one final time", () => {
+  const view = (lanes: LaneView[]) => JSON.parse(JSON.stringify(updateCheck(lanes)));
+  /** The engine as the updater sees it: `answers` are its successive update-check answers. */
+  const engine = (answers: unknown[], pending = 0, commitOk = true) => {
+    const calls: string[] = [];
+    let i = 0;
+    return {
+      calls,
+      deps: {
+        check: async () => { calls.push("check"); return parseUpdateCheck(answers[Math.min(i++, answers.length - 1)]); },
+        stop: async (ids: string[]) => { calls.push(`stop ${ids.join(",")}`); return { stopped: ids }; },
+        commit: async (on: boolean) => { calls.push(`commit ${on}`); return commitOk ? { pending: on ? pending : 0 } : null; },
+      },
+    };
+  };
+  const installChoices = (lanes: LaneView[]) => { const p = updatePrompt("2.6.0", updateCheck(lanes)); return { p, choices: p.choices.filter((c) => c.install) }; };
+
+  test("Restart now, Restart and keep every lane, and Stop and restart each commit, then check, then install", async () => {
+    for (const lanes of [[], [lane("a"), lane("w", { status: "working", heldRuntime: "previous" })]]) {
+      const { p, choices } = installChoices(lanes);
+      expect(choices.length).toBeGreaterThan(0);
+      for (const choice of choices) {
+        const e = engine([view(lanes)]);
+        expect({ label: choice.label, d: await decideInstall(choice, p.stop, e.deps) }).toEqual({ label: choice.label, d: { install: true } });
+        expect({ label: choice.label, calls: e.calls }).toEqual({ label: choice.label, calls: [...(choice.stop ? ["stop a"] : []), "commit true", "check"] });
+      }
+    }
+  });
+
+  test("a lane that started from the install folder while the prompt was open stops every install choice", async () => {
+    const before = [lane("a"), lane("w", { status: "working", heldRuntime: "previous" })];
+    const after = [...before, lane("late", { status: "working", heldRuntime: "install" })];
+    const { p, choices } = installChoices(before);
+    expect(choices.map((c) => c.label)).toEqual(["Stop 1 idle or stuck lane and restart", "Restart and keep every lane"]);
+    for (const choice of choices) {
+      const e = engine([view(after)]);
+      expect(await decideInstall(choice, p.stop, e.deps)).toEqual({ install: false, waits: "\"late\" still runs from the install folder. It is offered again at the next launch." });
+      expect(e.calls.slice(-3)).toEqual(["commit true", "check", "commit false"]);
+    }
+  });
+
+  test("Restart now with no lanes waits when the final check fails, the commit fails, or a lane is starting", async () => {
+    const [restart] = installChoices([]).choices;
+    expect(restart!.label).toBe("Restart now");
+    const unreadable = engine([{ lanes: [{ id: "x", name: "x", status: "working", group: "working", held: true, blocksInstall: "true", lastActivityAt: 1 }] }]);
+    expect(await decideInstall(restart, [], unreadable.deps)).toEqual({ install: false, waits: "LUCID could not check the agent lanes right before installing. It is offered again at the next launch." });
+    expect(unreadable.calls).toEqual(["commit true", "check", "commit false"]);
+    const noCommit = engine([view([])], 0, false);
+    expect(await decideInstall(restart, [], noCommit.deps)).toEqual({ install: false, waits: "LUCID could not keep new agent lanes from starting from the install folder. It is offered again at the next launch." });
+    expect(noCommit.calls).toEqual(["commit true", "commit false"]);
+    const starting = engine([view([])], 1);
+    expect(await decideInstall(restart, [], starting.deps)).toEqual({ install: false, waits: "An agent lane is starting from the install folder. It is offered again at the next launch." });
+    expect(starting.calls).toEqual(["commit true", "commit false"]);
+  });
+
+  test("Later neither checks nor installs", async () => {
+    const e = engine([view([])]);
+    expect(await decideInstall({ label: "Later", stop: false, install: false }, [], e.deps)).toEqual({ install: false, waits: null });
+    expect(e.calls).toEqual([]);
   });
 });

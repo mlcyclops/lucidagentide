@@ -6776,6 +6776,15 @@ return Bun.serve({
         if (r.stopped.length) console.log(`[fleet] stopped for an update: ${r.stopped.join(", ")}`);
         return json({ ok: true, data: r });
       }
+      // The person chose to install (`on: true`): no held lane starts from the install folder from now on, and the
+      // answer counts the starts from it still in progress (the install waits while any is). `on: false` lifts it.
+      if (p === "/api/fleet/commit-install" && req.method === "POST") {
+        const b = await readBody<{ on?: unknown }>(req);
+        const on = b.on === true;
+        const pending = laneHolders ? laneHolders.commitInstall(on) : 0;
+        console.log(`[fleet] update install ${on ? "committed" : "released"} (${pending} start${pending === 1 ? "" : "s"} from the install folder in progress)`);
+        return json({ ok: true, data: { committed: on, pending } });
+      }
       // P-FLEET.L10: DISMISS a lane (stop parks it, this forgets it). Fail-closed on a live turn unless
       // the caller passes `force`, so one click can never destroy work in flight; the UI makes it a
       // two-step gesture instead. The lane's on-disk session log and its ledger line both survive, so a
