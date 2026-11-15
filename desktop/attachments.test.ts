@@ -233,6 +233,26 @@ describe("attachmentsPromptBlock", () => {
     if (!thrown.ok) expect(thrown.error).toContain("fail-closed");
   });
 
+  test("staged text swapped for a link, or grown past the bound, is not read", async () => {
+    await stageText("a.txt", "fine at staging");
+    const textPath = join(root, DAY, "att-1", "text.txt");
+    // A link in place of the staged text: what it points at is never read into the prompt.
+    const secret = join(base, "secret.txt");
+    writeFileSync(secret, "PRIVATE elsewhere");
+    rmSync(textPath);
+    symlinkSync(secret, textPath, "file");
+    const linked = await attachmentsPromptBlock(["att-1"], deps());
+    expect(linked.ok).toBe(false);
+    if (!linked.ok) expect(linked.error).toContain("could not be read");
+    expect(scanned.join("\n")).not.toContain("PRIVATE");
+    // A real file again, but larger than any staged text can be.
+    rmSync(textPath);
+    writeFileSync(textPath, "x".repeat(ATTACH_LIMITS.extractChars * 4 + 1));
+    const grown = await attachmentsPromptBlock(["att-1"], deps());
+    expect(grown.ok).toBe(false);
+    if (!grown.ok) expect(grown.error).toContain("could not be read");
+  });
+
   test("a damaged record, too many files and a disabled policy refuse the send", async () => {
     await stageText("a.txt", "x");
     writeFileSync(join(root, DAY, "att-1", "meta.json"), JSON.stringify({ id: "att-other" }));
