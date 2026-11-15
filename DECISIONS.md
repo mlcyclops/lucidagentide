@@ -27552,3 +27552,17 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 5. `acp_backend.ts` labels a `scan-unavailable` block "security scanner unavailable, blocked fail-closed"; a block with findings keeps "hidden-Unicode content quarantined".
 
 **Consequences.** Fail-closed holds at every step: the call in flight when the sidecar dies, every call during the backoff, and a respawn that cannot start are all blocked. A sidecar killed from outside costs one blocked call and a half-second gap instead of the session. Left as is: on Windows the venv `python.exe` is a launcher, so killing a hung sidecar can orphan its interpreter until it reads EOF on the closed stdin. Installs pick this up from the next release.
+
+## ADR-0603 -- P-TITLEBAR.1: the titlebar fits a narrow window: the model name stays whole and the optional chips fold into More (2026-11-15)
+
+**Status:** Accepted. Proof: `bun test desktop/renderer/titlebar_fit.test.ts`, and the measured widths in the PR (an engine served from this branch, a browser at 1400 to 640 px).
+
+**Context.** A user narrowed the window and the titlebar model badge squeezed "Claude Opus 5.5" onto three lines. Every titlebar chip, the repo chip included, was `flex:none`, so the badge was the only item that could shrink, and with no `white-space:nowrap` it wrapped at word boundaries. A second defect sat under it: the titlebar is a grid item of `#app` with the default `min-width:auto`, so its content widened the page itself. At a 900 px window the document was 1166 px wide and the window controls were off-screen.
+
+**Decision.**
+1. The model badge does not shrink and its name never wraps. The repo chip gives up room first (it shrinks with its existing ellipses to a 7rem minimum, and its branch ellipsizes too). The titlebar gets `min-width:0`, so it never widens the page.
+2. `desktop/renderer/titlebar_fit.ts` folds the bar in a fixed order when it runs out of room: (1) Persona, Skills and Knowledge (or Datasets) fold into one "More" chip, (2) the zoom group hides and the gaps tighten (Ctrl+plus, Ctrl+minus and Ctrl+0 still work), (3) only then may the model name end in an ellipsis; its full name stays in the tooltip. Out of room means no slack left and either an overflow or the repo chip below 240 px. Level 3 needs a real overflow, which happens only once the repo chip is at its minimum.
+3. Each pass starts from everything shown and measures the real layout in one synchronous step, on every bar resize and whenever anything in the bar is shown, hidden or relabeled. The result depends only on the current width and contents, so it cannot flap at a boundary. The pass's own writes are dropped from the observer queue.
+4. More lists only the chips their owners show (a hidden Persona is never listed), labeled as the chip is. A row opens that chip's own dropdown under More: the same function the chip calls, so there is no second behavior. Arrow keys move, Enter or Space choose, Esc or an outside click closes, and `aria-expanded` follows.
+
+**Consequences.** Measured with "Claude Opus 5.5": the name is whole on one line down to 760 px and the window controls stay inside the window at every width tested (1400 to 640 px). The chips fold at about 1100 px and the zoom group hides at about 900 px. Not done: the Electron window's own minimum width is unchanged; a lane card's model select (the Fleet panel) is a separate surface.
