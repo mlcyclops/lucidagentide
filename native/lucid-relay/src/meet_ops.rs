@@ -827,7 +827,7 @@ impl Relay {
     fn pc_pull_policies(&self) -> usize {
         let Some(signer) = &self.hub.signer else { return 0 };
         match signer.call("org_policies", &Obj::new()) {
-            Ok(answer) => self.hub.pc_take_policies(answer.get("policies"), answer.get("signer_policy")),
+            Ok(answer) => self.hub.pc_take_policies(answer.get("policies"), answer.get("signer_policy"), answer.get("cancels"), answer.get("lowerings")),
             Err(e) => {
                 let msg = match e {
                     SignerErr::Down(m) => m,
@@ -912,6 +912,13 @@ impl Relay {
             return m::forbidden(pc::SSO_ROUTES_ONLY);
         }
         pc_own_cert(who, body)?;
+        // ID-1 (1.5): the importer's and the poller's ledger lines name a provider registered to this service
+        let event = pj::text_of(body, "event");
+        if op == "sso_log" && (event == "idp_proposal" || event == "directory_deactivate") {
+            let detail = body.get("detail").and_then(Value::as_object).cloned().unwrap_or_default();
+            let field = |k: &str| detail.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+            self.hub.pc_check_registered(who, &field("org"), &field("provider"), pc::LOG_REFUSED)?;
+        }
         let forwarded: Obj = body.iter().filter(|(k, _)| k.as_str() != "op").map(|(k, v)| (k.clone(), v.clone())).collect();
         let answer = self.pc_call(&op, &forwarded)?;
         log_info(&format!("sso_sign op={op} service={} state={}", who.serial, m::kv_of(answer.get("state"))));
@@ -928,6 +935,114 @@ impl Relay {
         let serials = self.pc_revoked(&answer, &principal);
         log_info(&format!("sso_revoke principal={principal} service={} certificates={}", who.serial, serials.len()));
         Ok(answer)
+    }
+
+    /// `id_chain_pem`: the signer's intermediate (PEM) that issued the caller's certificate; "" when the root issued
+    /// it directly.
+    pub fn pc_chain_pem(&self, who: &Identity) -> String {
+        let Some(leaf) = Cert::from_pem(&who.cert_pem) else { return String::new() };
+        let Some(status) = self.hub.signer.as_ref().and_then(|s| s.snapshot()) else { return String::new() };
+        let Some(root) = self.client_ca() else { return String::new() };
+        for key in ["intermediate_pem", "previous_pem"] {
+            let pem = pj::s(&status, key);
+            if Cert::from_pem(&pem).is_some_and(|inter| inter.issued_directly_by_root(&root) && leaf.issued_by(&inter)) {
+                return pem;
+            }
+        }
+        String::new()
+    }
+
+    /// `POST /v1/sso/c/suspend` and `/v1/sso/c/unsuspend` `{principal, org, provider, at, sso_attestation, cert_pem,
+    /// approval?}` (ID-1 2.11): checked by the hub (registry, domain, attestation), then the signer's `sso_suspend`
+    /// (`lift` for an unsuspend). A suspension takes effect before the signer answers and stays when the signer cannot
+    /// be reached (the service sends it again); a signer refusal undoes it. A lift takes effect only once the signer
+    /// agrees, and never touches a stale status.
+    pub fn pc_sso_suspend(&self, who: &Identity, body: &Obj, lift: bool) -> R<Obj> {
+        pc_own_cert(who, body)?;
+        let (principal, org, provider, at) = self.hub.pc_suspend_check(who, body, lift)?;
+        let mut payload = obj([
+            ("principal", Value::from(principal.clone())),
+            ("org", Value::from(org.clone())),
+            ("provider", Value::from(provider.clone())),
+            ("at", Value::from(at)),
+            ("cert_pem", Value::from(who.cert_pem.clone())),
+            ("lift", Value::Bool(lift)),
+        ]);
+        for key in ["sso_attestation", "approval"] {
+            if let Some(v) = body.get(key).filter(|v| !v.is_null()) {
+                payload.insert(key.into(), v.clone());
+            }
+        }
+        if lift {
+            self.pc_call("sso_suspend", &payload)?;
+            let why = if body.get("sso_attestation").is_some_and(|v| !v.is_null()) { "reactivated" } else { "stopped" };
+            let lifted = self.hub.pc_unsuspend(&principal, why);
+            return Ok(obj([("ok", Value::Bool(true)), ("state", Value::from("lifted")), ("lifted", Value::Bool(lifted))]));
+        }
+        let held = self.hub.pc_is_suspended(&principal);
+        let dropped = self.hub.pc_suspend(who, &principal, &org, &provider, at);
+        match self.pc_call("sso_suspend", &payload) {
+            Ok(_) => {}
+            // still suspended here; the service sends it again
+            Err(e @ E::Unavailable(_)) => return Err(e),
+            Err(e) => {
+                if !held {
+                    self.hub.pc_unsuspend(&principal, "refused by the certificate server");
+                }
+                return Err(e);
+            }
+        }
+        Ok(obj([("ok", Value::Bool(true)), ("state", Value::from("suspended")), ("dropped", Value::from(dropped))]))
+    }
+
+    /// `POST /v1/org/policy/lower {session, lowering, certs_pem}` (an org admin's device; `certs_pem` the two signing
+    /// administrators' device certificates): the signer's `lower_identity_rules`; the signed wire is held as the org's
+    /// pending lowering and served by `GET /v1/org/policy?org=` (ID-1 3.8).
+    pub fn pc_lower_policy(&self, session: &str, who: &Identity, body: &Obj) -> R<Obj> {
+        let lowering = body.get("lowering").cloned().unwrap_or(Value::Null);
+        let org = lowering.get("org").and_then(Value::as_str).unwrap_or_default().to_string();
+        self.hub.pc_check_org_admin(session, who, &org)?;
+        if who.cert_pem.is_empty() {
+            return m::forbidden("sign from one of your devices");
+        }
+        let certs = body.get("certs_pem").and_then(Value::as_array).filter(|c| c.len() == 2 && c.iter().all(|x| x.as_str().is_some_and(|s| !s.is_empty())));
+        let Some(certs) = certs else { return bad(pc::LOWER_TWO) };
+        let request = obj([("lowering", lowering), ("certs_pem", Value::Array(certs.clone()))]);
+        let answer = self.pc_call("lower_identity_rules", &request)?;
+        let v = self.hub.pc_take_lowering(answer.get("wire"))?;
+        log_info(&format!("identity_lowering_signed org={} next_seq={} effective_at={} by={}", v.org, v.next_seq, v.effective_at, who.principal));
+        Ok(obj([
+            ("org", Value::from(v.org)),
+            ("base_seq", Value::from(v.base_seq)),
+            ("next_seq", Value::from(v.next_seq)),
+            ("effective_at", Value::from(v.effective_at)),
+            ("hash", Value::from(v.hash)),
+            ("wire", Value::Object(v.wire)),
+        ]))
+    }
+
+    /// `POST /v1/org/policy/lower/cancel {session, org, base_seq, proof, ts}` (any admin of that org): the signer's
+    /// `cancel_identity_lowering`; the signed cancel drops the held lowering.
+    pub fn pc_cancel_lowering(&self, session: &str, who: &Identity, body: &Obj) -> R<Obj> {
+        let org = body.get("org").and_then(Value::as_str).unwrap_or_default().to_string();
+        self.hub.pc_check_org_admin(session, who, &org)?;
+        if who.cert_pem.is_empty() {
+            return m::forbidden("cancel from one of your devices");
+        }
+        let Some(base_seq) = pj::as_int(body.get("base_seq")).filter(|n| (0..=(1 << 53) - 1).contains(n)) else {
+            return bad("base_seq must be a whole number of seconds");
+        };
+        let request = obj([
+            ("org", Value::from(org)),
+            ("base_seq", Value::from(base_seq)),
+            ("proof", Value::from(pj::s(body, "proof"))),
+            ("ts", proof_ts(body.get("ts"))),
+            ("cert_pem", Value::from(who.cert_pem.clone())),
+        ]);
+        let answer = self.pc_call("cancel_identity_lowering", &request)?;
+        let v = self.hub.pc_take_lowering(answer.get("cancel"))?;
+        log_info(&format!("identity_lowering_canceled org={} base_seq={} by={}", v.org, v.base_seq, who.principal));
+        Ok(obj([("org", Value::from(v.org)), ("base_seq", Value::from(v.base_seq)), ("next_seq", Value::from(v.next_seq)), ("canceled", Value::Bool(true))]))
     }
 
     /// pc_check_signer_crl: hourly, the signer's newest CRL older than 6 hours (fetched again first) gives admins the

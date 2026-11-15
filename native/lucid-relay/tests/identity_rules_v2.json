@@ -1,0 +1,3950 @@
+{
+ "baseline": 8,
+ "cases": [
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "v": 2
+   },
+   "name": "minimal"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "idle_max_minutes": 15,
+    "imported": [
+     {
+      "proposal_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "provider": "okta",
+      "read_at": 1793999900
+     }
+    ],
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "exceptions": [
+      {
+       "device": "urn:lucid-meet:device:4b1e4b1e4b1e4b1e",
+       "id": "9f2c4e1a7b3d5f60",
+       "until": 1794604800
+      }
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "name": "full"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: identity",
+   "identity": [],
+   "name": "not_an_object"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: v",
+   "identity": {},
+   "name": "v_missing"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: v",
+   "identity": {
+    "v": 1
+   },
+   "name": "v_1"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "unknown identity rule: composition",
+   "identity": {
+    "composition": true,
+    "v": 2
+   },
+   "name": "unknown_rule"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "unknown identity rule: passwordless_unlock.rotation",
+   "identity": {
+    "passwordless_unlock": {
+     "rotation": 90
+    },
+    "v": 2
+   },
+   "name": "unknown_nested_rule"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the password minimum cannot be below Lucid's minimum of 8",
+   "identity": {
+    "min_password_length": 7,
+    "v": 2
+   },
+   "name": "password_below_baseline"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "min_password_length": 8,
+    "v": 2
+   },
+   "name": "password_at_baseline"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "min_password_length": 64,
+    "v": 2
+   },
+   "name": "password_64"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: min_password_length",
+   "identity": {
+    "min_password_length": 65,
+    "v": 2
+   },
+   "name": "password_65"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: min_password_length",
+   "identity": {
+    "min_password_length": true,
+    "v": 2
+   },
+   "name": "password_boolean"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: min_password_length",
+   "identity": {
+    "min_password_length": null,
+    "v": 2
+   },
+   "name": "password_null"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: require_phishing_resistant",
+   "identity": {
+    "require_phishing_resistant": "yes",
+    "v": 2
+   },
+   "name": "require_not_boolean"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: session_max_minutes",
+   "identity": {
+    "session_max_minutes": 4,
+    "v": 2
+   },
+   "name": "session_4"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "session_max_minutes": 5,
+    "v": 2
+   },
+   "name": "session_5"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "session_max_minutes": 1440,
+    "v": 2
+   },
+   "name": "session_1440"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: session_max_minutes",
+   "identity": {
+    "session_max_minutes": 1441,
+    "v": 2
+   },
+   "name": "session_1441"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: idle_max_minutes",
+   "identity": {
+    "idle_max_minutes": 0,
+    "v": 2
+   },
+   "name": "idle_0"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "idle_max_minutes": 60,
+    "v": 2
+   },
+   "name": "idle_60"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: idle_max_minutes",
+   "identity": {
+    "idle_max_minutes": 61,
+    "v": 2
+   },
+   "name": "idle_61"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: signin_max_days",
+   "identity": {
+    "signin_max_days": 0,
+    "v": 2
+   },
+   "name": "signin_0"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "signin_max_days": 90,
+    "v": 2
+   },
+   "name": "signin_90"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: signin_max_days",
+   "identity": {
+    "signin_max_days": 91,
+    "v": 2
+   },
+   "name": "signin_91"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: passwordless_unlock.enforce_at",
+   "identity": {
+    "passwordless_unlock": {
+     "required": true
+    },
+    "v": 2
+   },
+   "name": "enforce_at_missing"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: passwordless_unlock.enforce_at",
+   "identity": {
+    "passwordless_unlock": {
+     "enforce_at": 1793999999,
+     "required": true
+    },
+    "v": 2
+   },
+   "name": "enforce_at_before_issued"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "passwordless_unlock": {
+     "enforce_at": 1794000000,
+     "required": true
+    },
+    "v": 2
+   },
+   "name": "enforce_at_issued"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "Acme cannot require a particular kind of authenticator yet; nothing was signed",
+   "identity": {
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2"
+     ],
+     "required": true
+    },
+    "v": 2
+   },
+   "name": "kinds_before_g_kind"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-KIND",
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "v": 2
+   },
+   "name": "kinds_after_g_kind"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "exceptions": [
+      {
+       "device": "urn:lucid-meet:device:4b1e4b1e4b1e4b1e",
+       "id": "9f2c4e1a7b3d5f60",
+       "until": 1795209600
+      }
+     ],
+     "required": true
+    },
+    "v": 2
+   },
+   "name": "exception_until_14_days"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "that computer already had its one unlock exception, or the exception lasts too long; use the two-administrator lowering; nothing was signed",
+   "identity": {
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "exceptions": [
+      {
+       "device": "urn:lucid-meet:device:4b1e4b1e4b1e4b1e",
+       "id": "9f2c4e1a7b3d5f60",
+       "until": 1795209601
+      }
+     ],
+     "required": true
+    },
+    "v": 2
+   },
+   "name": "exception_until_too_late"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: passwordless_unlock.exceptions[0].id",
+   "identity": {
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "exceptions": [
+      {
+       "device": "urn:lucid-meet:device:4b1e4b1e4b1e4b1e",
+       "id": "9F2C4E1A7B3D5F60",
+       "until": 1794604800
+      }
+     ],
+     "required": true
+    },
+    "v": 2
+   },
+   "name": "exception_id_upper_case"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: passwordless_unlock.exceptions[0].device",
+   "identity": {
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "exceptions": [
+      {
+       "device": "laptop-1",
+       "id": "9f2c4e1a7b3d5f60",
+       "until": 1794604800
+      }
+     ],
+     "required": true
+    },
+    "v": 2
+   },
+   "name": "exception_device_not_a_uri"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "exceptions": [
+      {
+       "device": "n_0123456789abcdef0123456789abcdef",
+       "id": "9f2c4e1a7b3d5f60",
+       "until": 1794604800
+      }
+     ],
+     "required": true
+    },
+    "v": 2
+   },
+   "name": "exception_remote_spokes_node"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: passwordless_unlock.exceptions",
+   "identity": {
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "exceptions": [
+      {
+       "device": "urn:lucid-meet:device:4b1e4b1e4b1e4b1e",
+       "id": "b000000000000000",
+       "until": 1794604800
+      },
+      {
+       "device": "urn:lucid-meet:device:5c2f5c2f5c2f5c2f",
+       "id": "a000000000000000",
+       "until": 1794604800
+      }
+     ],
+     "required": true
+    },
+    "v": 2
+   },
+   "name": "exceptions_not_sorted"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: passwordless_unlock.exceptions",
+   "identity": {
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "exceptions": [
+      {
+       "device": "urn:lucid-meet:device:4b1e4b1e4b1e4b1e",
+       "id": "a000000000000000",
+       "until": 1794604800
+      },
+      {
+       "device": "urn:lucid-meet:device:4b1e4b1e4b1e4b1e",
+       "id": "b000000000000000",
+       "until": 1794604800
+      }
+     ],
+     "required": true
+    },
+    "v": 2
+   },
+   "name": "exceptions_same_device"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "that identity provider is not registered for Acme by the root; nothing was signed",
+   "identity": {
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://evil.okta.com"
+     }
+    ],
+    "v": 2
+   },
+   "name": "provider_wrong_issuer"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "that identity provider is not registered for Acme by the root; nothing was signed",
+   "identity": {
+    "providers": [
+     {
+      "id": "ping",
+      "iss": "https://sso.acme.gov"
+     }
+    ],
+    "v": 2
+   },
+   "name": "provider_not_registered"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: providers",
+   "identity": {
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default"
+     },
+     {
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0"
+     }
+    ],
+    "v": 2
+   },
+   "name": "providers_not_sorted"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "Okta cannot prove a phishing-resistant sign-in yet; nothing was signed",
+   "identity": {
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acrs:c1"
+      ]
+     }
+    ],
+    "v": 2
+   },
+   "name": "phr_prefix_wrong_for_kind"
+  },
+  {
+   "context": {
+    "gates": [],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "Okta cannot prove a phishing-resistant sign-in yet; nothing was signed",
+   "identity": {
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr"
+      ]
+     }
+    ],
+    "v": 2
+   },
+   "name": "phr_gate_not_verified"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "id": "google",
+      "iss": "https://accounts.google.com",
+      "kind": "google"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "Google cannot prove a phishing-resistant sign-in yet; nothing was signed",
+   "identity": {
+    "providers": [
+     {
+      "id": "google",
+      "iss": "https://accounts.google.com",
+      "phr_values": [
+       "acr:phr"
+      ]
+     }
+    ],
+    "v": 2
+   },
+   "name": "phr_google_cannot"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:a",
+       "acr:b",
+       "acr:c",
+       "acr:d"
+      ]
+     }
+    ],
+    "v": 2
+   },
+   "name": "phr_4"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: providers[0].phr_values",
+   "identity": {
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:a",
+       "acr:b",
+       "acr:c",
+       "acr:d",
+       "acr:e"
+      ]
+     }
+    ],
+    "v": 2
+   },
+   "name": "phr_5"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcd"
+      ]
+     }
+    ],
+    "v": 2
+   },
+   "name": "phr_128_characters"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: providers[0].phr_values",
+   "identity": {
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcde"
+      ]
+     }
+    ],
+    "v": 2
+   },
+   "name": "phr_129_characters"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: providers[0].phr_values",
+   "identity": {
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "ab"
+      ]
+     }
+    ],
+    "v": 2
+   },
+   "name": "phr_2_characters"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: providers[0].phr_values",
+   "identity": {
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phrh",
+       "acr:phr"
+      ]
+     }
+    ],
+    "v": 2
+   },
+   "name": "phr_not_sorted"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: providers[0].phr_values",
+   "identity": {
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phr"
+      ]
+     }
+    ],
+    "v": 2
+   },
+   "name": "phr_twice"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: providers[0].phr_values",
+   "identity": {
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": "acr:phr,acr:phrh"
+     }
+    ],
+    "v": 2
+   },
+   "name": "phr_joined_string"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "Okta cannot prove a phishing-resistant sign-in yet; nothing was signed",
+   "identity": {
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default"
+     }
+    ],
+    "require_phishing_resistant": true,
+    "v": 2
+   },
+   "name": "require_without_phr_values"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "Microsoft cannot prove a phishing-resistant sign-in yet; nothing was signed",
+   "identity": {
+    "require_phishing_resistant": true,
+    "v": 2
+   },
+   "name": "require_with_absent_providers"
+  },
+  {
+   "context": {
+    "effective": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr"
+      ]
+     }
+    ],
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "require_phishing_resistant": true,
+    "v": 2
+   },
+   "name": "require_stored_effective_set"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-ENTRA-ACRS"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "providers": [
+     {
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "phr_values": [
+       "acrs:c1"
+      ]
+     }
+    ],
+    "v": 2
+   },
+   "name": "entra_acrs"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "id": "logingov",
+      "iss": "https://secure.login.gov/",
+      "kind": "logingov"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: signin_max_days",
+   "identity": {
+    "providers": [
+     {
+      "id": "logingov",
+      "iss": "https://secure.login.gov/"
+     }
+    ],
+    "v": 2
+   },
+   "name": "logingov_without_signin_days"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "id": "logingov",
+      "iss": "https://secure.login.gov/",
+      "kind": "logingov"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: signin_max_days",
+   "identity": {
+    "providers": [
+     {
+      "id": "logingov",
+      "iss": "https://secure.login.gov/"
+     }
+    ],
+    "signin_max_days": 31,
+    "v": 2
+   },
+   "name": "logingov_signin_31"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-LOGINGOV-AAL"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "id": "logingov",
+      "iss": "https://secure.login.gov/",
+      "kind": "logingov"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "providers": [
+     {
+      "id": "logingov",
+      "iss": "https://secure.login.gov/",
+      "phr_values": [
+       "aal:http://idmanagement.gov/ns/assurance/aal/2?phishing_resistant=true"
+      ]
+     }
+    ],
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "name": "logingov_signin_30_aal"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "id": "logingov",
+      "iss": "https://secure.login.gov/",
+      "kind": "logingov"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: signin_max_days",
+   "identity": {
+    "v": 2
+   },
+   "name": "logingov_in_registry_absent_providers"
+  },
+  {
+   "context": {
+    "effective": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default"
+     }
+    ],
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "id": "logingov",
+      "iss": "https://secure.login.gov/",
+      "kind": "logingov"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "v": 2
+   },
+   "name": "logingov_not_in_stored_set"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-AK-AMR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "id": "authentik",
+      "iss": "https://auth.acme.gov/application/o/lucid/",
+      "kind": "authentik"
+     }
+    ]
+   },
+   "expect": "ok",
+   "identity": {
+    "providers": [
+     {
+      "id": "authentik",
+      "iss": "https://auth.acme.gov/application/o/lucid/",
+      "phr_values": [
+       "amr:sc",
+       "amr:user"
+      ]
+     }
+    ],
+    "v": 2
+   },
+   "name": "authentik_amr_user"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-AK-AMR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "id": "authentik",
+      "iss": "https://auth.acme.gov/application/o/lucid/",
+      "kind": "authentik"
+     }
+    ]
+   },
+   "expect": "Authentik cannot prove a phishing-resistant sign-in yet; nothing was signed",
+   "identity": {
+    "providers": [
+     {
+      "id": "authentik",
+      "iss": "https://auth.acme.gov/application/o/lucid/",
+      "phr_values": [
+       "amr:mfa"
+      ]
+     }
+    ],
+    "v": 2
+   },
+   "name": "authentik_amr_mfa"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: imported[0].proposal_sha256",
+   "identity": {
+    "imported": [
+     {
+      "proposal_sha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "provider": "okta",
+      "read_at": 1794000000
+     }
+    ],
+    "v": 2
+   },
+   "name": "imported_bad_hash"
+  },
+  {
+   "context": {
+    "gates": [
+     "G-OKTA-PHR"
+    ],
+    "issued": 1794000000,
+    "label": "Acme",
+    "registry": [
+     {
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0",
+      "kind": "entra"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "kind": "okta"
+     }
+    ]
+   },
+   "expect": "the identity rules are not valid: imported",
+   "identity": {
+    "imported": [
+     {
+      "proposal_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "provider": "okta",
+      "read_at": 1794000000
+     },
+     {
+      "proposal_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "provider": "okta",
+      "read_at": 1793999999
+     }
+    ],
+    "v": 2
+   },
+   "name": "imported_not_sorted"
+  }
+ ],
+ "stronger": [
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": true,
+   "name": "same",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": ""
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": false,
+   "name": "password_lower",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 12,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": "min_password_length"
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": true,
+   "name": "password_higher",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 16,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": ""
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": false,
+   "name": "password_absent_means_baseline",
+   "new": {
+    "idle_max_minutes": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": "min_password_length"
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": false,
+   "name": "phishing_resistant_off",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": false,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": "require_phishing_resistant"
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": false,
+   "name": "session_longer",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 721,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": "session_max_minutes"
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": true,
+   "name": "session_shorter",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 60,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": ""
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": false,
+   "name": "session_removed",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": "session_max_minutes"
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": false,
+   "name": "idle_removed",
+   "new": {
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": "idle_max_minutes"
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": false,
+   "name": "signin_longer",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 31,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": "signin_max_days"
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": true,
+   "name": "limit_added",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": ""
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": false,
+   "name": "unlock_off",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": false
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": "passwordless_unlock.required"
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": false,
+   "name": "enforce_later",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795296000,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": "passwordless_unlock.enforce_at"
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": true,
+   "name": "enforce_earlier",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795123200,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": ""
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": false,
+   "name": "kinds_grow",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv",
+      "windows-hello"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": "passwordless_unlock.kinds"
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": true,
+   "name": "kinds_shrink",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": ""
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": false,
+   "name": "kinds_removed",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": "passwordless_unlock.kinds"
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": false,
+   "name": "provider_added",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": "providers"
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": false,
+   "name": "phr_values_grow",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh",
+       "acr:urn:x"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": "phr_values"
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": true,
+   "name": "phr_values_shrink",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": ""
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": true,
+   "name": "phr_values_set_with_rule_off",
+   "new": {
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "v": 2
+   },
+   "old": {
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default"
+     }
+    ],
+    "v": 2
+   },
+   "reason": ""
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": true,
+   "name": "providers_absent_after_listed",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": ""
+  },
+  {
+   "context": {
+    "effective": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default"
+     }
+    ],
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": false,
+   "name": "absent_list_after_larger_registry",
+   "new": {
+    "providers": [
+     {
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/7f1e2d3c/v2.0"
+     },
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default"
+     }
+    ],
+    "v": 2
+   },
+   "old": {
+    "v": 2
+   },
+   "reason": "providers"
+  },
+  {
+   "context": {
+    "effective": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default"
+     }
+    ],
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": true,
+   "name": "absent_list_means_stored_set",
+   "new": {
+    "v": 2
+   },
+   "old": {
+    "v": 2
+   },
+   "reason": ""
+  },
+  {
+   "context": {
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": false,
+   "name": "identity_removed",
+   "new": null,
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": "min_password_length"
+  },
+  {
+   "context": {
+    "effective": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": []
+     }
+    ],
+    "used_devices": [],
+    "used_ids": []
+   },
+   "expect": true,
+   "name": "identity_first_time",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": null,
+   "reason": ""
+  },
+  {
+   "context": {
+    "used_devices": [
+     "urn:lucid-meet:device:4b1e4b1e4b1e4b1e"
+    ],
+    "used_ids": [
+     "9f2c4e1a7b3d5f60"
+    ]
+   },
+   "expect": true,
+   "name": "exception_kept",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "exceptions": [
+      {
+       "device": "urn:lucid-meet:device:4b1e4b1e4b1e4b1e",
+       "id": "9f2c4e1a7b3d5f60",
+       "until": 1794604800
+      }
+     ],
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "exceptions": [
+      {
+       "device": "urn:lucid-meet:device:4b1e4b1e4b1e4b1e",
+       "id": "9f2c4e1a7b3d5f60",
+       "until": 1794604800
+      }
+     ],
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": ""
+  },
+  {
+   "context": {
+    "used_devices": [
+     "urn:lucid-meet:device:4b1e4b1e4b1e4b1e"
+    ],
+    "used_ids": [
+     "9f2c4e1a7b3d5f60"
+    ]
+   },
+   "expect": true,
+   "name": "exception_removed",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "exceptions": [
+      {
+       "device": "urn:lucid-meet:device:4b1e4b1e4b1e4b1e",
+       "id": "9f2c4e1a7b3d5f60",
+       "until": 1794604800
+      }
+     ],
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": ""
+  },
+  {
+   "context": {
+    "used_devices": [
+     "urn:lucid-meet:device:4b1e4b1e4b1e4b1e"
+    ],
+    "used_ids": [
+     "9f2c4e1a7b3d5f60"
+    ]
+   },
+   "expect": true,
+   "name": "exception_new_device",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "exceptions": [
+      {
+       "device": "urn:lucid-meet:device:5c2f5c2f5c2f5c2f",
+       "id": "a1a1a1a1a1a1a1a1",
+       "until": 1794604800
+      }
+     ],
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": ""
+  },
+  {
+   "context": {
+    "used_devices": [
+     "urn:lucid-meet:device:4b1e4b1e4b1e4b1e"
+    ],
+    "used_ids": [
+     "9f2c4e1a7b3d5f60"
+    ]
+   },
+   "expect": false,
+   "name": "exception_second_for_device",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "exceptions": [
+      {
+       "device": "urn:lucid-meet:device:4b1e4b1e4b1e4b1e",
+       "id": "a1a1a1a1a1a1a1a1",
+       "until": 1794604800
+      }
+     ],
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": "exceptions"
+  },
+  {
+   "context": {
+    "used_devices": [
+     "urn:lucid-meet:device:4b1e4b1e4b1e4b1e"
+    ],
+    "used_ids": [
+     "9f2c4e1a7b3d5f60"
+    ]
+   },
+   "expect": false,
+   "name": "exception_id_replayed",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "exceptions": [
+      {
+       "device": "urn:lucid-meet:device:5c2f5c2f5c2f5c2f",
+       "id": "9f2c4e1a7b3d5f60",
+       "until": 1794604800
+      }
+     ],
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": "exceptions"
+  },
+  {
+   "context": {
+    "used_devices": [
+     "urn:lucid-meet:device:4b1e4b1e4b1e4b1e"
+    ],
+    "used_ids": [
+     "9f2c4e1a7b3d5f60"
+    ]
+   },
+   "expect": false,
+   "name": "exception_extended",
+   "new": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "exceptions": [
+      {
+       "device": "urn:lucid-meet:device:4b1e4b1e4b1e4b1e",
+       "id": "9f2c4e1a7b3d5f60",
+       "until": 1794604801
+      }
+     ],
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "old": {
+    "idle_max_minutes": 15,
+    "min_password_length": 15,
+    "passwordless_unlock": {
+     "enforce_at": 1795209600,
+     "exceptions": [
+      {
+       "device": "urn:lucid-meet:device:4b1e4b1e4b1e4b1e",
+       "id": "9f2c4e1a7b3d5f60",
+       "until": 1794604800
+      }
+     ],
+     "kinds": [
+      "fido2",
+      "piv"
+     ],
+     "required": true
+    },
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default",
+      "phr_values": [
+       "acr:phr",
+       "acr:phrh"
+      ]
+     }
+    ],
+    "require_phishing_resistant": true,
+    "session_max_minutes": 720,
+    "signin_max_days": 30,
+    "v": 2
+   },
+   "reason": "exceptions"
+  }
+ ],
+ "v": 1
+}

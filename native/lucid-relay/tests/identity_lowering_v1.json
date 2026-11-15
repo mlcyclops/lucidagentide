@@ -1,0 +1,1364 @@
+{
+ "base": {
+  "chain": [],
+  "policy": {
+   "domains": [
+    "acme.gov"
+   ],
+   "expires": 1796592000,
+   "identity": {
+    "min_password_length": 15,
+    "providers": [
+     {
+      "id": "okta",
+      "iss": "https://acme.okta.com/oauth2/default"
+     }
+    ],
+    "v": 2
+   },
+   "issued": 1794000000,
+   "label": "Acme",
+   "org": "acme",
+   "seq": 8,
+   "v": 1
+  },
+  "sig": "MEUCIHB5Os8HjMO18RWSFa1FR9JYsPZJs3xNkxjeUckyggYQAiEA7ZHGbMqDT1Pqg6iJtIdipctqTb98Jyskb6DYDxKXsh0="
+ },
+ "cases": [
+  {
+   "in_force": [
+    {
+     "now": 1794086499,
+     "seq": 8
+    },
+    {
+     "now": 1794086500,
+     "seq": 9
+    }
+   ],
+   "name": "valid",
+   "steps": [
+    {
+     "expect": "ok",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794086500,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Contractor laptops without security keys until December 20",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEUCIQDOodFRCPtrRjRkvQPFTMXfp+1KXyXFv8ahUH8EE4X6awIgeMhesa8GBBqty4hEwAIgcSmhW6KoXr++TJ2hf59VnEk="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEUCICidbaDpxVJUIVC8f2d6tdszJiQv/OzHRy4KNFRny1RiAiEAtXewYtAjQtCDUzWpLgGzUmarDKOow56X8cHo/R9QI14="
+     }
+    }
+   ]
+  },
+  {
+   "in_force": [
+    {
+     "now": 1794000110,
+     "seq": 8
+    },
+    {
+     "now": 1794086499,
+     "seq": 8
+    }
+   ],
+   "name": "applied_before_effective_at",
+   "steps": [
+    {
+     "expect": "ok",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794086500,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Contractor laptops without security keys until December 20",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEUCIQDOodFRCPtrRjRkvQPFTMXfp+1KXyXFv8ahUH8EE4X6awIgeMhesa8GBBqty4hEwAIgcSmhW6KoXr++TJ2hf59VnEk="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEUCICidbaDpxVJUIVC8f2d6tdszJiQv/OzHRy4KNFRny1RiAiEAtXewYtAjQtCDUzWpLgGzUmarDKOow56X8cHo/R9QI14="
+     }
+    }
+   ]
+  },
+  {
+   "in_force": [
+    {
+     "now": 1794086500,
+     "seq": 8
+    }
+   ],
+   "name": "reason_stripped",
+   "steps": [
+    {
+     "expect": "the lowering's signature does not verify",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794086500,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEUCIQDOodFRCPtrRjRkvQPFTMXfp+1KXyXFv8ahUH8EE4X6awIgeMhesa8GBBqty4hEwAIgcSmhW6KoXr++TJ2hf59VnEk="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEUCICidbaDpxVJUIVC8f2d6tdszJiQv/OzHRy4KNFRny1RiAiEAtXewYtAjQtCDUzWpLgGzUmarDKOow56X8cHo/R9QI14="
+     }
+    }
+   ]
+  },
+  {
+   "in_force": [
+    {
+     "now": 1794086500,
+     "seq": 8
+    }
+   ],
+   "name": "reason_changed",
+   "steps": [
+    {
+     "expect": "the lowering's signature does not verify",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794086500,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Nothing to see",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEUCIQDOodFRCPtrRjRkvQPFTMXfp+1KXyXFv8ahUH8EE4X6awIgeMhesa8GBBqty4hEwAIgcSmhW6KoXr++TJ2hf59VnEk="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEUCICidbaDpxVJUIVC8f2d6tdszJiQv/OzHRy4KNFRny1RiAiEAtXewYtAjQtCDUzWpLgGzUmarDKOow56X8cHo/R9QI14="
+     }
+    }
+   ]
+  },
+  {
+   "in_force": [
+    {
+     "now": 1794086500,
+     "seq": 8
+    }
+   ],
+   "name": "effective_at_stripped",
+   "steps": [
+    {
+     "expect": "the lowering's signature does not verify",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Contractor laptops without security keys until December 20",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEUCIQDOodFRCPtrRjRkvQPFTMXfp+1KXyXFv8ahUH8EE4X6awIgeMhesa8GBBqty4hEwAIgcSmhW6KoXr++TJ2hf59VnEk="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEUCICidbaDpxVJUIVC8f2d6tdszJiQv/OzHRy4KNFRny1RiAiEAtXewYtAjQtCDUzWpLgGzUmarDKOow56X8cHo/R9QI14="
+     }
+    }
+   ]
+  },
+  {
+   "in_force": [
+    {
+     "now": 1794086500,
+     "seq": 8
+    }
+   ],
+   "name": "effective_at_changed",
+   "steps": [
+    {
+     "expect": "the lowering's signature does not verify",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794172900,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Contractor laptops without security keys until December 20",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEUCIQDOodFRCPtrRjRkvQPFTMXfp+1KXyXFv8ahUH8EE4X6awIgeMhesa8GBBqty4hEwAIgcSmhW6KoXr++TJ2hf59VnEk="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEUCICidbaDpxVJUIVC8f2d6tdszJiQv/OzHRy4KNFRny1RiAiEAtXewYtAjQtCDUzWpLgGzUmarDKOow56X8cHo/R9QI14="
+     }
+    }
+   ]
+  },
+  {
+   "in_force": [
+    {
+     "now": 1794086500,
+     "seq": 8
+    }
+   ],
+   "name": "one_proof",
+   "steps": [
+    {
+     "expect": "This lowering needs two different administrators and at least 24 hours' notice. Nothing was signed.",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794086500,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Contractor laptops without security keys until December 20",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEYCIQDWOdtQQY9g3jZFRnzn5N/NSDHsToLHmYln0sOAZrEKRgIhAPfHEO89F/qVc3eBTqRGOQv6kIc4yS7+vCJbSvXrX0Gj"
+     }
+    }
+   ]
+  },
+  {
+   "in_force": [
+    {
+     "now": 1794086500,
+     "seq": 8
+    }
+   ],
+   "name": "same_principal_twice",
+   "steps": [
+    {
+     "expect": "This lowering needs two different administrators and at least 24 hours' notice. Nothing was signed.",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794086500,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Contractor laptops without security keys until December 20",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        },
+        {
+         "cert_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEUCICOFngzBDP+fIFXVP/Zq2yy1T8cXIWjrwYyCc7YQwsmDAiEA2cddMCXzmhw1OO451nJ/dwPifAGPgmScO092YPmpC1U="
+     }
+    }
+   ]
+  },
+  {
+   "in_force": [
+    {
+     "now": 1794086500,
+     "seq": 8
+    }
+   ],
+   "name": "notice_under_24_hours",
+   "steps": [
+    {
+     "expect": "This lowering needs two different administrators and at least 24 hours' notice. Nothing was signed.",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794086499,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Contractor laptops without security keys until December 20",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEYCIQCDVUkIC0jZm4RAyQ4LKPQyj9iYKNgNNlimDlTJ/k1z0QIhAPRdB3bpAaYHXc0CAUsFFeQl6LlS3pBchjh+ZW3yM5Km"
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEUCIA72gCPiR8wx50eFJURAZ9g0mgnEQWdVzyMB1XGKLCCbAiEAh0wsA7S2mJk8A5IbzCyVhwNZHhBLXEO7CjQCcMactZI="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEUCIQDPOkx4IumfC33a9pQ7Y/f9fa+GL4wIgPwumJEuz1xdogIgNKh61fmAsXWetSl39aivrezcgsOUN93r/lcTwY9WNDU="
+     }
+    }
+   ]
+  },
+  {
+   "in_force": [
+    {
+     "now": 1794086500,
+     "seq": 8
+    }
+   ],
+   "name": "replayed_proof",
+   "steps": [
+    {
+     "expect": "ok",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794086500,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Contractor laptops without security keys until December 20",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEUCIQDOodFRCPtrRjRkvQPFTMXfp+1KXyXFv8ahUH8EE4X6awIgeMhesa8GBBqty4hEwAIgcSmhW6KoXr++TJ2hf59VnEk="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEUCICidbaDpxVJUIVC8f2d6tdszJiQv/OzHRy4KNFRny1RiAiEAtXewYtAjQtCDUzWpLgGzUmarDKOow56X8cHo/R9QI14="
+     }
+    },
+    {
+     "expect": "Two different signed versions of Acme's rules exist. Enforcement of new rules stopped; tell an administrator.",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794086500,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Another reason",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEUCIQDOodFRCPtrRjRkvQPFTMXfp+1KXyXFv8ahUH8EE4X6awIgeMhesa8GBBqty4hEwAIgcSmhW6KoXr++TJ2hf59VnEk="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEYCIQDgijKO+I2aqIwpgJ8fYwWzdZAvo688dgfoLaFqx1LtAAIhAOn9Gx7pjUxxDDK5h+pdBSoxrTuO8HoDUateh3PKCukp"
+     }
+    }
+   ]
+  },
+  {
+   "in_force": [
+    {
+     "now": 1794086499,
+     "seq": 8
+    },
+    {
+     "now": 1794086500,
+     "seq": 9
+    }
+   ],
+   "name": "restart_while_pending",
+   "steps": [
+    {
+     "expect": "ok",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794086500,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Contractor laptops without security keys until December 20",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEUCIQDOodFRCPtrRjRkvQPFTMXfp+1KXyXFv8ahUH8EE4X6awIgeMhesa8GBBqty4hEwAIgcSmhW6KoXr++TJ2hf59VnEk="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEUCICidbaDpxVJUIVC8f2d6tdszJiQv/OzHRy4KNFRny1RiAiEAtXewYtAjQtCDUzWpLgGzUmarDKOow56X8cHo/R9QI14="
+     }
+    },
+    {
+     "now": 1794000110,
+     "restart": true
+    }
+   ]
+  },
+  {
+   "in_force": [
+    {
+     "now": 1794086499,
+     "seq": 8
+    },
+    {
+     "now": 1794086500,
+     "seq": 8
+    }
+   ],
+   "name": "conflicting_pending",
+   "steps": [
+    {
+     "expect": "ok",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794086500,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Contractor laptops without security keys until December 20",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEUCIQDOodFRCPtrRjRkvQPFTMXfp+1KXyXFv8ahUH8EE4X6awIgeMhesa8GBBqty4hEwAIgcSmhW6KoXr++TJ2hf59VnEk="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEUCICidbaDpxVJUIVC8f2d6tdszJiQv/OzHRy4KNFRny1RiAiEAtXewYtAjQtCDUzWpLgGzUmarDKOow56X8cHo/R9QI14="
+     }
+    },
+    {
+     "expect": "Two different signed versions of Acme's rules exist. Enforcement of new rules stopped; tell an administrator.",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794086500,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Another reason",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEUCIQDOodFRCPtrRjRkvQPFTMXfp+1KXyXFv8ahUH8EE4X6awIgeMhesa8GBBqty4hEwAIgcSmhW6KoXr++TJ2hf59VnEk="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEYCIQDgijKO+I2aqIwpgJ8fYwWzdZAvo688dgfoLaFqx1LtAAIhAOn9Gx7pjUxxDDK5h+pdBSoxrTuO8HoDUateh3PKCukp"
+     }
+    }
+   ]
+  },
+  {
+   "in_force": [
+    {
+     "now": 1794086500,
+     "seq": 8
+    }
+   ],
+   "name": "canceled",
+   "steps": [
+    {
+     "expect": "ok",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794086500,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Contractor laptops without security keys until December 20",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEUCIQDOodFRCPtrRjRkvQPFTMXfp+1KXyXFv8ahUH8EE4X6awIgeMhesa8GBBqty4hEwAIgcSmhW6KoXr++TJ2hf59VnEk="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEUCICidbaDpxVJUIVC8f2d6tdszJiQv/OzHRy4KNFRny1RiAiEAtXewYtAjQtCDUzWpLgGzUmarDKOow56X8cHo/R9QI14="
+     }
+    },
+    {
+     "expect": "ok",
+     "now": 1794000110,
+     "wire": {
+      "base_seq": 8,
+      "chain": [],
+      "lowering_sha256": "7d0149765971be2b8d315179d061577631131ffda92b632bc176161fd34125fd",
+      "next_seq": 9,
+      "org": "acme",
+      "sig": "MEUCIHElEtAbvdnzN9oo/BA7qIRmCu/NxsbcVVEQCxUU/9t5AiEAiOKfG3ksGpRXPNzxN6N7Nbdia8YQZE26zn8dBTB3jgE=",
+      "typ": "lucid-identity-lowering-cancel-v1"
+     }
+    },
+    {
+     "expect": "that lowering of Acme's rules was canceled",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794086500,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Contractor laptops without security keys until December 20",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEUCIQDOodFRCPtrRjRkvQPFTMXfp+1KXyXFv8ahUH8EE4X6awIgeMhesa8GBBqty4hEwAIgcSmhW6KoXr++TJ2hf59VnEk="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEUCICidbaDpxVJUIVC8f2d6tdszJiQv/OzHRy4KNFRny1RiAiEAtXewYtAjQtCDUzWpLgGzUmarDKOow56X8cHo/R9QI14="
+     }
+    }
+   ]
+  },
+  {
+   "in_force": [
+    {
+     "now": 1794086500,
+     "seq": 8
+    }
+   ],
+   "name": "wrong_base",
+   "steps": [
+    {
+     "expect": "that lowering is not based on Acme's current policy; nothing was signed",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+       "base_seq": 8,
+       "effective_at": 1794086500,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Contractor laptops without security keys until December 20",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEYCIQDbWAJbWirzggfbKJHFnXl16nnmEs/GNuGC01MkP2PMQQIhAOvh5yGWF68ofT+756GLOJiT3wQpqA7hsz0Nt2NLl+SQ"
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEQCIHTtXNkygcVbpFA6NrNq06egsI8XaboKqR97INhhFmIeAiB8ZKOkDZ7u2hx/765o7wv9nfQ2Lw3eU6p9wCKKc0HVnA=="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEQCIAPCQHbvhbR5F+meEgamsW3LjFLhyTt/03hlM2d4/f8XAiAMuypqo6EWutRxNs0Lhp1GfYWwf+5ng+Xzt51uV7LjGg=="
+     }
+    }
+   ]
+  },
+  {
+   "in_force": [
+    {
+     "now": 1794086500,
+     "seq": 8
+    }
+   ],
+   "name": "next_seq_not_base_plus_one",
+   "steps": [
+    {
+     "expect": "a lowering's next_seq and policy seq must be base_seq + 1",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794086500,
+       "next_seq": 10,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Contractor laptops without security keys until December 20",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEQCIHV6yIkc3uHFquZuzVxM8JGuDFFNmJPz9DoMeKjUVWccAiBmFor9hJAZZTRmhP17GJodi1gtRCmz83eCmzbkWL9/tw=="
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEUCIQCkXJ9ihi3vm1mvpFvFY1cYXJWAoGPXS4fuaV5farPqMAIgZsK1phEEEL/FfUjyIQ85K7l+56JN21ttnH7X/txWBtE="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEUCIEZngw1fpT8bPCGDcBDmSAqtE1CHvye07+orWMXQcd+EAiEAlR8/90uCUfVHKpyjoKQv6vOksmgnNY+8RWSEwBcmw5g="
+     }
+    }
+   ]
+  },
+  {
+   "in_force": [
+    {
+     "now": 1794086500,
+     "seq": 8
+    }
+   ],
+   "name": "dated_in_the_future",
+   "steps": [
+    {
+     "expect": "the lowering is dated in the future",
+     "now": 1793999799,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794086500,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Contractor laptops without security keys until December 20",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEUCIQDOodFRCPtrRjRkvQPFTMXfp+1KXyXFv8ahUH8EE4X6awIgeMhesa8GBBqty4hEwAIgcSmhW6KoXr++TJ2hf59VnEk="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEUCICidbaDpxVJUIVC8f2d6tdszJiQv/OzHRy4KNFRny1RiAiEAtXewYtAjQtCDUzWpLgGzUmarDKOow56X8cHo/R9QI14="
+     }
+    }
+   ]
+  },
+  {
+   "in_force": [
+    {
+     "now": 1794086520,
+     "seq": 10
+    }
+   ],
+   "name": "superseded_by_ordinary_policy",
+   "steps": [
+    {
+     "expect": "ok",
+     "now": 1794000110,
+     "wire": {
+      "chain": [],
+      "lowering": {
+       "base_hash": "4476cf28b5850ca4450857d59bb1d929e1bf14270182f386f3a66ae1309205ee",
+       "base_seq": 8,
+       "effective_at": 1794086500,
+       "next_seq": 9,
+       "org": "acme",
+       "policy": {
+        "domains": [
+         "acme.gov"
+        ],
+        "expires": 1796592100,
+        "identity": {
+         "min_password_length": 12,
+         "providers": [
+          {
+           "id": "okta",
+           "iss": "https://acme.okta.com/oauth2/default"
+          }
+         ],
+         "v": 2
+        },
+        "issued": 1794000100,
+        "label": "Acme",
+        "org": "acme",
+        "seq": 9,
+        "v": 1
+       },
+       "reason": "Contractor laptops without security keys until December 20",
+       "signed_at": 1794000100,
+       "signers": [
+        {
+         "cert_sha256": "1700c60d85d380d059dc397378aff84607094a19ca0523dc5066cac1a415e395",
+         "principal": "ann@acme.gov",
+         "proof": "MEUCIHhtEVyCt8VfdWRkG3EEOsjQ5qBmFEiKYu4CyHcgOi7eAiEA94s1NiIJ+TU0CJaRhInUmkWfCfD+AdiwJNQVuAZNDeM="
+        },
+        {
+         "cert_sha256": "8160b26a57e79bcba0a64dd7c0fcf080b6d685d26df6f50b5d3229ef1a748a61",
+         "principal": "bo@acme.gov",
+         "proof": "MEUCIQDOodFRCPtrRjRkvQPFTMXfp+1KXyXFv8ahUH8EE4X6awIgeMhesa8GBBqty4hEwAIgcSmhW6KoXr++TJ2hf59VnEk="
+        }
+       ],
+       "typ": "lucid-identity-lowering-v1",
+       "v": 1
+      },
+      "sig": "MEUCICidbaDpxVJUIVC8f2d6tdszJiQv/OzHRy4KNFRny1RiAiEAtXewYtAjQtCDUzWpLgGzUmarDKOow56X8cHo/R9QI14="
+     }
+    },
+    {
+     "expect": "ok",
+     "now": 1794086520,
+     "wire": {
+      "chain": [],
+      "policy": {
+       "domains": [
+        "acme.gov"
+       ],
+       "expires": 1796678510,
+       "identity": {
+        "min_password_length": 15,
+        "providers": [
+         {
+          "id": "okta",
+          "iss": "https://acme.okta.com/oauth2/default"
+         }
+        ],
+        "v": 2
+       },
+       "issued": 1794086510,
+       "label": "Acme",
+       "org": "acme",
+       "seq": 10,
+       "v": 1
+      },
+      "sig": "MEYCIQDGzyp++dQ76+WQoaNBAkJsgHMo0wJ++Byfz+4+GQVSSwIhAJNkgdGzmKQC29VZxTJUlRT5oQZK1TWJUPBJOKQgrJxq"
+     }
+    }
+   ]
+  }
+ ],
+ "certs_pem": [
+  "-----BEGIN CERTIFICATE-----\nMIICMzCCAdmgAwIBAgIUAmSS2AkKvlLPuo563+DpOtedhEQwCgYIKoZIzj0EAwIw\nKDEWMBQGA1UEAwwNTHVjaWQgTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjYx\nMTE1MjA1MzU5WhcNMjYxMjE1MjA1ODU5WjBHMREwDwYDVQQDDAhBbm4gQWJsZTEb\nMBkGCSqGSIb3DQEJARYMYW5uQGFjbWUuZ292MRUwEwYDVQQLDAxBZG1pbiBsYXB0\nb3AwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQ+nuyW7YBhyXcme358C8MTEN6/\n0o/NLNRvqkUkvlz8UywJJr/lAVNLg01nZbG5f0MAg3S/YdZnKJn+uBKC2eCTo4HB\nMIG+MAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgOIMB0GA1UdJQQWMBQGCCsG\nAQUFBwMCBggrBgEFBQcDATA/BgNVHREEODA2gQxhbm5AYWNtZS5nb3aGJnVybjps\ndWNpZC1tZWV0OmRldmljZTphMWExYTFhMWExYTFhMWExMB0GA1UdDgQWBBRdrV1E\nPDBrSDhMXkm5HE/79yT/OTAfBgNVHSMEGDAWgBSvnoYtLDb4+dl6SXwE2CWRYX8f\n6TAKBggqhkjOPQQDAgNIADBFAiA6+Jt/da2V2IaJ9R6NBT6cvy2aZ4umTOES8tbu\nrIMSNwIhAPnDG7s6v8PxtvTbLjMQ2WKlhl7rS52rp6xfaZIDIMWG\n-----END CERTIFICATE-----\n",
+  "-----BEGIN CERTIFICATE-----\nMIICMTCCAdagAwIBAgIUb+XQQawiKthfv0heyWty5WGxeeowCgYIKoZIzj0EAwIw\nKDEWMBQGA1UEAwwNTHVjaWQgTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjYx\nMTE1MjA1MzU5WhcNMjYxMjE1MjA1ODU5WjBFMRAwDgYDVQQDDAdCbyBCZWxsMRow\nGAYJKoZIhvcNAQkBFgtib0BhY21lLmdvdjEVMBMGA1UECwwMQWRtaW4gbGFwdG9w\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEL6qG5vVS4PuN6iK9EKElA9o/t53D\nR5j05/+2dPPzYPvWNReRPy+aSRG+SEhlkueBYDlSMSGCPR/Yjht1u6aCc6OBwDCB\nvTAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIDiDAdBgNVHSUEFjAUBggrBgEF\nBQcDAgYIKwYBBQUHAwEwPgYDVR0RBDcwNYELYm9AYWNtZS5nb3aGJnVybjpsdWNp\nZC1tZWV0OmRldmljZTpiMmIyYjJiMmIyYjJiMmIyMB0GA1UdDgQWBBQXAabW9LpY\nbrjqbXMnckg1B2r2UjAfBgNVHSMEGDAWgBSvnoYtLDb4+dl6SXwE2CWRYX8f6TAK\nBggqhkjOPQQDAgNJADBGAiEAhjdf8s5+tqJt64V3IEg6CFpVLFMjC7M9iz+efI4T\n8PgCIQDh9NdDG96zwPXLH8BUb5UUOhIv12ku11+QemglhCbIaQ==\n-----END CERTIFICATE-----\n"
+ ],
+ "root_pem": "-----BEGIN CERTIFICATE-----\nMIIBhjCCASugAwIBAgICEAAwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjUxMTA2MjEyMDAwWhcNMzExMTA1\nMjEyMDAwWjAoMRYwFAYDVQQDDA1MdWNpZCBNZWV0IENBMQ4wDAYDVQQKDAVMdWNp\nZDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABBKjOshMUg4ko2hmZ98REquIIqUE\nXTmXfNJ/VsYYs9Bq5tNnlDGX8pTKxICZmc8I0qXENRyhsYXnW0XG+hZuN8+jRTBD\nMBIGA1UdEwEB/wQIMAYBAf8CAQEwDgYDVR0PAQH/BAQDAgGGMB0GA1UdDgQWBBSv\nnoYtLDb4+dl6SXwE2CWRYX8f6TAKBggqhkjOPQQDAgNJADBGAiEAn4tqns4LUO7g\nU/hHqAWOroq6PAd4rXPdaK5hAtMJbaoCIQD82X+gaAT6TyK+ask6lFA5pDQthiNk\noy8RyfxNOIWp/A==\n-----END CERTIFICATE-----\n",
+ "signer_policy": {
+  "admins": [
+   "ann@acme.gov"
+  ],
+  "auto_enroll_device_origin": true,
+  "auto_renew": true,
+  "enclave": false,
+  "identity_providers": [
+   {
+    "allowed_domains": [
+     "acme.gov"
+    ],
+    "id": "okta",
+    "iss": "https://acme.okta.com/oauth2/default",
+    "kind": "okta",
+    "org": "acme",
+    "sso_serial": "5e1"
+   }
+  ],
+  "issued": "2026-11-05T21:20:00+00:00",
+  "max_devices": 5,
+  "org_admins": {
+   "acme": [
+    "ann@acme.gov",
+    "bo@acme.gov"
+   ]
+  },
+  "org_domains": {
+   "acme": [
+    "acme.gov"
+   ]
+  },
+  "policy_sig": "MEQCIE55s7AyyMmwsthuqwnMGG+vZSn9ghJMt23+IROisndzAiBGNrLdaVrfrvtEW8RY+sW/SBUbvDrzGsI1gaEPH14hHg==",
+  "sso": {},
+  "sso_services": [
+   {
+    "domains": [
+     "acme.gov"
+    ],
+    "orgs": [
+     "acme"
+    ],
+    "serial": "5e1"
+   }
+  ],
+  "v": 3
+ },
+ "v": 1
+}

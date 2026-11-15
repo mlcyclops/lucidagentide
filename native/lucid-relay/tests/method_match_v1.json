@@ -1,0 +1,335 @@
+{
+ "cases": [
+  {
+   "evidence": [
+    "mfa",
+    "pwd"
+   ],
+   "expect": true,
+   "name": "bare_raw",
+   "requirement": "mfa"
+  },
+  {
+   "evidence": [
+    "acr:phr"
+   ],
+   "expect": true,
+   "name": "bare_to_acr",
+   "requirement": "phr"
+  },
+  {
+   "evidence": [
+    "acrs:c1"
+   ],
+   "expect": true,
+   "name": "bare_to_acrs",
+   "requirement": "c1"
+  },
+  {
+   "evidence": [
+    "aal:2"
+   ],
+   "expect": true,
+   "name": "bare_to_aal",
+   "requirement": "2"
+  },
+  {
+   "evidence": [
+    "saml:x"
+   ],
+   "expect": false,
+   "name": "bare_never_saml",
+   "requirement": "x"
+  },
+  {
+   "evidence": [
+    "saml-amr:x"
+   ],
+   "expect": false,
+   "name": "bare_never_saml_amr",
+   "requirement": "x"
+  },
+  {
+   "evidence": [
+    "hwk"
+   ],
+   "expect": true,
+   "name": "amr_prefix_needs_raw",
+   "requirement": "amr:hwk"
+  },
+  {
+   "evidence": [
+    "acr:hwk"
+   ],
+   "expect": false,
+   "name": "amr_prefix_not_acr",
+   "requirement": "amr:hwk"
+  },
+  {
+   "evidence": [
+    "acr:phr"
+   ],
+   "expect": true,
+   "name": "acr_exact",
+   "requirement": "acr:phr"
+  },
+  {
+   "evidence": [
+    "phr"
+   ],
+   "expect": false,
+   "name": "acr_not_raw",
+   "requirement": "acr:phr"
+  },
+  {
+   "evidence": [
+    "acrs:c1"
+   ],
+   "expect": true,
+   "name": "acrs_exact",
+   "requirement": "acrs:c1"
+  },
+  {
+   "evidence": [
+    "acr:c1"
+   ],
+   "expect": false,
+   "name": "acrs_not_acr",
+   "requirement": "acrs:c1"
+  },
+  {
+   "evidence": [
+    "aal:http://idmanagement.gov/ns/assurance/aal/2?phishing_resistant=true"
+   ],
+   "expect": true,
+   "name": "aal_exact",
+   "requirement": "aal:http://idmanagement.gov/ns/assurance/aal/2?phishing_resistant=true"
+  },
+  {
+   "evidence": [
+    "saml:urn:x"
+   ],
+   "expect": true,
+   "name": "saml_exact",
+   "requirement": "saml:urn:x"
+  },
+  {
+   "evidence": [
+    "saml-amr:sc"
+   ],
+   "expect": true,
+   "name": "saml_amr_exact",
+   "requirement": "saml-amr:sc"
+  },
+  {
+   "evidence": [
+    "a",
+    "b"
+   ],
+   "expect": false,
+   "name": "joined_requirement",
+   "requirement": "a,b"
+  },
+  {
+   "evidence": [
+    "a,b"
+   ],
+   "expect": false,
+   "name": "joined_evidence_a",
+   "requirement": "a"
+  },
+  {
+   "evidence": [
+    "a,b"
+   ],
+   "expect": false,
+   "name": "joined_evidence_b",
+   "requirement": "b"
+  },
+  {
+   "evidence": [],
+   "expect": false,
+   "name": "no_evidence",
+   "requirement": "mfa"
+  },
+  {
+   "evidence": [
+    "mfa"
+   ],
+   "expect": false,
+   "name": "case_sensitive",
+   "requirement": "MFA"
+  },
+  {
+   "evidence": [
+    "acr:phr"
+   ],
+   "expect": false,
+   "name": "no_prefix_substring",
+   "requirement": "acr:ph"
+  }
+ ],
+ "evidence": [
+  {
+   "expect": true,
+   "methods": [
+    "acr:phr",
+    "pwd"
+   ],
+   "name": "sorted"
+  },
+  {
+   "expect": true,
+   "methods": [],
+   "name": "empty"
+  },
+  {
+   "expect": false,
+   "methods": [
+    "urn:x"
+   ],
+   "name": "raw_with_colon"
+  },
+  {
+   "expect": true,
+   "methods": [
+    "saml-amr:x"
+   ],
+   "name": "known_prefix"
+  },
+  {
+   "expect": false,
+   "methods": [
+    "acr:"
+   ],
+   "name": "prefix_alone"
+  },
+  {
+   "expect": false,
+   "methods": [
+    "pwd",
+    "acr:phr"
+   ],
+   "name": "not_sorted"
+  },
+  {
+   "expect": false,
+   "methods": [
+    "pwd",
+    "pwd"
+   ],
+   "name": "twice"
+  },
+  {
+   "expect": false,
+   "methods": [
+    ""
+   ],
+   "name": "empty_string"
+  },
+  {
+   "expect": false,
+   "methods": [
+    1
+   ],
+   "name": "not_a_string"
+  },
+  {
+   "expect": false,
+   "methods": "acr:phr,pwd",
+   "name": "joined_string"
+  },
+  {
+   "expect": true,
+   "methods": [
+    "m00",
+    "m01",
+    "m02",
+    "m03",
+    "m04",
+    "m05",
+    "m06",
+    "m07",
+    "m08",
+    "m09",
+    "m10",
+    "m11",
+    "m12",
+    "m13",
+    "m14",
+    "m15",
+    "m16",
+    "m17",
+    "m18",
+    "m19",
+    "m20",
+    "m21",
+    "m22",
+    "m23",
+    "m24",
+    "m25",
+    "m26",
+    "m27",
+    "m28",
+    "m29",
+    "m30",
+    "m31"
+   ],
+   "name": "thirty_two"
+  },
+  {
+   "expect": false,
+   "methods": [
+    "m00",
+    "m01",
+    "m02",
+    "m03",
+    "m04",
+    "m05",
+    "m06",
+    "m07",
+    "m08",
+    "m09",
+    "m10",
+    "m11",
+    "m12",
+    "m13",
+    "m14",
+    "m15",
+    "m16",
+    "m17",
+    "m18",
+    "m19",
+    "m20",
+    "m21",
+    "m22",
+    "m23",
+    "m24",
+    "m25",
+    "m26",
+    "m27",
+    "m28",
+    "m29",
+    "m30",
+    "m31",
+    "m32"
+   ],
+   "name": "thirty_three"
+  },
+  {
+   "expect": true,
+   "methods": [
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   ],
+   "name": "value_256"
+  },
+  {
+   "expect": false,
+   "methods": [
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   ],
+   "name": "value_257"
+  }
+ ],
+ "v": 1
+}

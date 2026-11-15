@@ -107,7 +107,137 @@ const APP_POST: [&str; 15] = [
 ];
 const ARCHIVE_POST: [&str; 5] = ["/v1/chat/devices", "/v1/chat/log", "/v1/apps/c/hello", "/v1/apps/c/ack", "/v1/apps/c/renew"];
 const SSO_GET: [&str; 1] = ["/v1/crl"];
-const SSO_POST: [&str; 5] = ["/v1/sso/c/hello", "/v1/sso/c/sign", "/v1/sso/c/revoke", "/v1/sso/c/org-member", "/v1/sso/c/pending-add"];
+const SSO_POST: [&str; 9] = [
+    "/v1/sso/c/hello", "/v1/sso/c/sign", "/v1/sso/c/revoke", "/v1/sso/c/org-member", "/v1/sso/c/pending-add", "/v1/sso/c/propose", "/v1/sso/c/suspend", "/v1/sso/c/unsuspend",
+    "/v1/sso/c/status",
+];
+
+// ── ID-1 (docs/identity/contract.md sections 1.5, 2.11, 3.5, 3.6, 3.8 and 8) ────────────────────────────────
+
+/// `POST /v1/sso/c/propose`: the whole body.
+pub(crate) const PROPOSAL_BODY_MAX: usize = 64 * 1024;
+/// `POST /v1/sso/c/status`: 500 principals and stale times, with the attestation.
+pub(crate) const STATUS_BODY_MAX: usize = 128 * 1024;
+const PROPOSE_REFUSED: &str = "the sign-in service may only propose rules for providers registered to it";
+pub(crate) const SUSPEND_REFUSED: &str = "the sign-in service may only suspend people of providers registered to it";
+const STATUS_REFUSED: &str = "the sign-in service may only report the status of providers registered to it";
+pub(crate) const LOG_REFUSED: &str = "the sign-in service may only log events of providers registered to it";
+const ATTESTATION_BAD: &str = "that attestation does not verify with this sign-in service's key";
+const PROPOSAL_SIG_BAD: &str = "that proposal's signature does not verify with this sign-in service's key";
+const PROPOSAL_OLDER: &str = "a newer proposal from this identity provider is already here";
+const PROPOSAL_EXPIRED: &str = "that proposal has expired";
+const NO_PROPOSAL: &str = "there is no such proposal";
+const NOT_REGISTERED: &str = "that identity provider is not registered for this organization";
+const ORG_ADMINS_ONLY: &str = "only an administrator of this organization can do that";
+const STALE_LATE: &str = "stale_at must be at most 90 days ahead";
+const LIFT_NEEDS: &str = "lifting a suspension needs the service's attestation or an administrator's approval";
+const LOWER_ROUTE: &str = "an identity lowering or its cancel goes through /v1/org/policy/lower";
+pub(crate) const LOWER_TWO: &str = "certs_pem must be the two administrators' device certificates";
+const LOWERING_GONE: &str = "the certificate server did not return the signed lowering";
+const PROPOSAL_LABEL: &str = "lucid-meet-idp-proposal-v2";
+const SUSPEND_LABEL: &str = "lucid-meet-sso-suspend-v1";
+const UNSUSPEND_LABEL: &str = "lucid-meet-sso-unsuspend-v1";
+const STATUS_LABEL: &str = "lucid-meet-sso-status-v1";
+/// One status batch (2.11).
+const STATUS_MAX: usize = 500;
+/// signin_max_days is at most 90 (3.1), clock skew on top.
+const STALE_AHEAD: i64 = 90 * 86400 + 300;
+/// One audit line per refused principal and event.
+const AUDIT_EVERY: f64 = 600.0;
+const MAX_TIME: i64 = (1 << 53) - 1;
+/// 6.9 `sso_suspended`.
+pub(crate) const SUSPENDED: &str = "Your organization turned off your Lucid account.";
+
+/// The name the stale words give a provider, by its registry `kind` (never a hostname or a caller value).
+fn idp_name(kind: &str) -> &'static str {
+    match kind {
+        "entra" => "Microsoft",
+        "logingov" => "Login.gov",
+        "okta" => "Okta",
+        "google" => "Google",
+        "keycloak" => "Keycloak",
+        "authentik" => "Authentik",
+        "jumpcloud" => "JumpCloud",
+        "ping" => "Ping Identity",
+        _ => "your identity provider",
+    }
+}
+
+/// `_id_when`: `November 15, 2026 at 9:40 AM UTC`.
+fn id_when(ts: i64) -> String {
+    const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    let iso = pj::iso_utc(ts); // 2026-11-15T09:40:00+00:00
+    let num = |a: usize, b: usize| iso.get(a..b).and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+    let (year, month, day, hour, minute) = (num(0, 4), num(5, 7), num(8, 10), num(11, 13), num(14, 16));
+    let h12 = if hour % 12 == 0 { 12 } else { hour % 12 };
+    let half = if hour < 12 { "AM" } else { "PM" };
+    format!("{} {day}, {year} at {h12}:{minute:02} {half} UTC", MONTHS.get(month.wrapping_sub(1)).copied().unwrap_or(""))
+}
+
+/// `_id_time`: whole seconds, 0 to 2^53 - 1.
+fn id_time(v: Option<&Value>, what: &str) -> R<i64> {
+    match pj::as_int(v).filter(|n| (0..=MAX_TIME).contains(n)) {
+        Some(n) => Ok(n),
+        None => bad(format!("{what} must be a whole number of seconds")),
+    }
+}
+
+/// `_id_email`: a principal exactly as attested, a lower-case email.
+fn id_email(v: Option<&Value>) -> R<String> {
+    let s = v.and_then(Value::as_str).unwrap_or_default();
+    let ok = !s.is_empty() && m::principal(v) == s && s.matches('@').count() == 1 && s.split_once('@').is_some_and(|(a, b)| !a.is_empty() && !b.is_empty());
+    if ok {
+        Ok(s.to_string())
+    } else {
+        bad("principal must be a lower-case email")
+    }
+}
+
+/// `meet_org_policy.check_fresh`: `{principal, stale_at}` ordered by principal in UTF-8 bytes, each once, at most
+/// 500; any break refuses the whole batch.
+fn check_fresh(fresh: Option<&Value>) -> R<&Vec<Value>> {
+    let Some(list) = fresh.and_then(Value::as_array) else { return bad("fresh must be a list") };
+    if list.len() > STATUS_MAX {
+        return bad("a status batch holds at most 500 people");
+    }
+    for item in list {
+        let Some(o) = item.as_object() else { return bad("a fresh entry must be an object") };
+        let mut extra: Vec<&String> = o.keys().filter(|k| *k != "principal" && *k != "stale_at").collect();
+        extra.sort();
+        if !extra.is_empty() {
+            return bad(format!("a fresh entry has unknown fields: {}", extra.iter().map(|k| k.as_str()).collect::<Vec<_>>().join(", ")));
+        }
+        let missing: Vec<&str> = ["principal", "stale_at"].into_iter().filter(|k| !o.contains_key(*k)).collect();
+        if !missing.is_empty() {
+            return bad(format!("a fresh entry needs {}", missing.join(", ")));
+        }
+        match o["principal"].as_str() {
+            Some(p) => {
+                op::split_principal(p).map_err(E::Bad)?;
+            }
+            None => return bad(format!("{} is not a lower-case email", pj::py_str(&o["principal"]))),
+        }
+        if !pj::as_int(o.get("stale_at")).is_some_and(|n| (0..=MAX_TIME).contains(&n)) {
+            return bad(format!("stale_at must be a whole number from 0 to {MAX_TIME}"));
+        }
+    }
+    let names: Vec<&[u8]> = list.iter().map(|x| x["principal"].as_str().unwrap_or_default().as_bytes()).collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    sorted.dedup();
+    if sorted.len() != names.len() {
+        return bad("a principal is listed twice; the whole batch is refused");
+    }
+    if names.windows(2).any(|w| w[0] > w[1]) {
+        return bad("the batch is not ordered by principal; the whole batch is refused");
+    }
+    Ok(list)
+}
+/// The relay's capabilities (2.12): `identity-v1` only once G-RUST is verified in this build.
+fn capabilities() -> Value {
+    let on = op::RELAY_GATES.contains(&"G-RUST");
+    Value::Array(if on { vec![Value::from("identity-v1")] } else { Vec::new() })
+}
 /// Person routes that make bridges, refused in an enclave like every /v1/bridge/c/* route.
 pub(crate) const ENCLAVE_BRIDGE_ROUTES: [&str; 2] = ["/v1/bridge/code", "/v1/bridge/dm-code"];
 
@@ -394,6 +524,23 @@ fn sorted_keys(v: &Value) -> Value {
     }
 }
 
+/// `lp(label, canonical_json(value))` (I3).
+fn lp_json(label: &str, value: &Value) -> R<Vec<u8>> {
+    let json = op::canonical_json(value).map_err(E::Bad)?;
+    Ok(op::lp(&[label.as_bytes(), &json]))
+}
+
+/// `_id_signed`: `sig` (base64 DER ECDSA P-256 SHA-256) is the signature of the caller's own certificate key over
+/// `data`.
+fn id_signed(cert_pem: &str, sig: Option<&Value>, data: &[u8]) -> bool {
+    let cert = Cert::from_pem(cert_pem);
+    let raw = pj::b64_strict(&sig.map(pj::py_str).filter(|s| s != "None").unwrap_or_default());
+    match (cert, raw) {
+        (Some(c), Some(s)) => crate::meet_x509::ecdsa_sha256_verified(&c.spki, data, &s),
+        _ => false,
+    }
+}
+
 fn policy_error(e: op::PolicyError) -> E {
     match e {
         op::PolicyError::Refused(m) => E::Forbidden(m),
@@ -411,6 +558,17 @@ fn policy_words(e: &op::PolicyError) -> &str {
 
 /// RelayServer.minimums: per app the version the relay requires now (relay.json and the release).
 pub type Minimums = Arc<dyn Fn() -> Obj + Send + Sync>;
+
+/// A signed lowering or cancel the store took (ID-1 3.8).
+pub struct IdAccepted {
+    pub org: String,
+    pub base_seq: i64,
+    pub next_seq: i64,
+    pub effective_at: i64,
+    /// The lowering's hash (a cancel: the lowering it names).
+    pub hash: String,
+    pub wire: Obj,
+}
 
 /// An admin's answer waiting for the SSO service's next hello.
 #[derive(Default)]
@@ -435,6 +593,12 @@ pub struct Pc {
     sso_out: IndexMap<String, SsoOut>,
     sso_answered: HashMap<(String, String), f64>,
     icons_mem: HashMap<String, Vec<u8>>,
+    /// ID-1: SSO service serial -> read-again asks `[{org, provider}]` for its next hello.
+    id_imports: HashMap<String, Vec<(String, String)>>,
+    /// ID-1: lowering hashes already told as in effect (each once per start).
+    id_applied: HashSet<String>,
+    /// ID-1: (principal, audit event) -> monotonic time it was last logged.
+    id_refused: HashMap<(String, String), f64>,
     state_dir: Option<PathBuf>,
     /// Without a state folder: the hold store's temporary folder.
     tmp: Option<PathBuf>,
@@ -453,6 +617,9 @@ impl Pc {
             sso_out: IndexMap::new(),
             sso_answered: HashMap::new(),
             icons_mem: HashMap::new(),
+            id_imports: HashMap::new(),
+            id_applied: HashSet::new(),
+            id_refused: HashMap::new(),
             state_dir: state_dir.map(Path::to_path_buf),
             tmp: None,
         }
@@ -502,7 +669,7 @@ impl State {
             self.ext.insert("pc".into(), Value::Object(obj([("v", Value::from(1))])));
         }
         let part = self.ext.get_mut("pc").and_then(Value::as_object_mut).expect("ext pc");
-        for (key, list) in [("policies", true), ("holds", true), ("kept", false), ("sso", false), ("adds", true), ("docs", false)] {
+        for (key, list) in [("policies", true), ("holds", true), ("kept", false), ("sso", false), ("adds", true), ("docs", false), ("proposals", false), ("suspended", false), ("stale", false), ("lowerings", false)] {
             let ok = match part.get(key) {
                 Some(Value::Array(_)) => list,
                 Some(Value::Object(_)) => !list,
@@ -562,6 +729,20 @@ impl State {
         None
     }
 
+    /// The root's CRL as PEM ("" when the relay holds none): the SSO hello's `root_crl_pem` (ID-1 section 8).
+    fn pc_root_crl_pem(&self) -> String {
+        let Some(root) = self.pc_root() else { return String::new() };
+        for path in &self.pc.crl_files {
+            for (block, der) in pem_blocks(&read_bytes(path), "X509 CRL") {
+                let Some(crl) = Crl::from_der(&der) else { continue };
+                if crl.issuer == root.subject && crl.signature_valid(&root.spki) {
+                    return String::from_utf8_lossy(&block).trim().to_string() + "\n";
+                }
+            }
+        }
+        String::new()
+    }
+
     /// _pc_verify_args: (root, signer policy, root CRL, previous intermediate serial) for the policy checks.
     fn pc_verify_args(&mut self) -> R<(Cert, Obj, Option<Crl>, String)> {
         let Some(root) = self.pc_root() else { return Err(E::Unavailable(NO_POLICIES.into())) };
@@ -597,7 +778,15 @@ impl State {
                             }
                         }
                         let kept: Vec<Value> = store.by_hash.values().cloned().map(Value::Object).collect();
+                        // ID-1 3.8: then the kept cancels and lowerings, verified again
+                        let doc = self.pc_part().get("lowerings").cloned().unwrap_or(Value::Null);
+                        let store = self.pc.store.as_mut().expect("the store");
+                        for why in store.restore_lowerings(&doc, &root, &signer_policy, crl.as_ref(), &previous, pj::now()) {
+                            log_warn(&format!("identity lowering not restored: {why}"));
+                        }
+                        let lowerings = store.persisted_lowerings();
                         self.pc_part().insert("policies".into(), Value::Array(kept));
+                        self.pc_part().insert("lowerings".into(), lowerings);
                     }
                 }
             }
@@ -615,7 +804,8 @@ impl State {
         let now = pj::now();
         match self.pc_store() {
             None => Vec::new(),
-            Some(store) => store.newest.values().filter(|v| !op::expired(&v.policy, now)).map(|v| v.policy.clone()).collect(),
+            // ID-1 3.8: a held lowering's policy from its effective_at on
+            Some(store) => store.newest.keys().filter_map(|org| store.in_force(org, now)).filter(|p| !op::expired(p, now)).cloned().collect(),
         }
     }
 
@@ -658,7 +848,7 @@ impl State {
             log_warn("the signer's policy is not signed by this relay's root; ignored");
             return Ok(false);
         }
-        if pj::as_num(policy.get("v")) == Some(2.0) && pj::truthy(policy.get("enclave")) != self.pc.enclave {
+        if matches!(pj::as_num(policy.get("v")), Some(v) if v == 2.0 || v == 3.0) && pj::truthy(policy.get("enclave")) != self.pc.enclave {
             // invariant 4: the root's word on the enclave and relay.json must agree
             let words = if self.pc.enclave { ENCLAVE_OFF } else { ENCLAVE_ON };
             if strict {
@@ -690,6 +880,7 @@ impl State {
         }
         let kept: Vec<Value> = store.by_hash.values().cloned().map(Value::Object).collect();
         self.pc_part().insert("policies".into(), Value::Array(kept));
+        self.pc_sync_lowerings();
         self.dirty = true;
         let everyone = self.pc_everyone();
         self.tell(&everyone, &obj([("type", Value::from("org_policy")), ("org", Value::from(v.org.clone())), ("seq", Value::from(v.seq)), ("hash", Value::from(v.hash.clone()))]), None);
@@ -702,7 +893,159 @@ impl State {
     pub(crate) fn pc_hello(&mut self) -> Obj {
         let policies = self.pc_store().map(|s| s.current()).unwrap_or_default();
         let signer_policy = self.pc_part().get("signer_policy").cloned().unwrap_or(Value::Null);
-        obj([("signer_policy", signer_policy), ("org_policies", Value::Array(policies)), ("holds", Value::Bool(self.pc.holds)), ("enclave", Value::Bool(self.pc.enclave))])
+        obj([
+            ("signer_policy", signer_policy),
+            ("org_policies", Value::Array(policies)),
+            ("holds", Value::Bool(self.pc.holds)),
+            ("enclave", Value::Bool(self.pc.enclave)),
+            ("capabilities", capabilities()),
+        ])
+    }
+
+    // ── ID-1: pending lowerings, suspensions and stale status ──
+
+    /// `_id_keep`: `ext["pc"]` follows the store (its policies, and its held lowerings and cancels).
+    fn pc_sync_lowerings(&mut self) {
+        let Some(store) = self.pc.store.as_ref() else { return };
+        let kept: Vec<Value> = store.by_hash.values().cloned().map(Value::Object).collect();
+        let lowerings = store.persisted_lowerings();
+        self.pc_part().insert("policies".into(), Value::Array(kept));
+        self.pc_part().insert("lowerings".into(), lowerings);
+        self.dirty = true;
+    }
+
+    /// `_id_refusal`: the 6.9 words that refuse `principal` now (None when nothing does). An unreadable `stale_at`
+    /// counts as 0, so the person stays paused.
+    pub(crate) fn pc_paused(&mut self, principal: &str, now: f64) -> Option<String> {
+        if self.pc_map("suspended").contains_key(principal) {
+            return Some(SUSPENDED.into());
+        }
+        let row = self.pc_map("stale").get(principal).cloned()?;
+        let row = row.as_object().cloned().unwrap_or_default();
+        let at = pc_int(row.get("stale_at"));
+        if now <= at as f64 {
+            return None;
+        }
+        let terms = self.pc_terms();
+        let kind = terms.provider(&pj::text_of(&row, "org"), &pj::text_of(&row, "provider")).map(|p| p.kind.clone()).unwrap_or_default();
+        let name = idp_name(&kind);
+        Some(format!("Lucid could not confirm your account with {name} since {}. Access paused; it resumes when {name} answers.", id_when(at)))
+    }
+
+    /// `_id_audit`: the 6.9 audit event of a refusal, at most once per principal every 10 minutes.
+    fn pc_id_audit(&mut self, principal: &str, words: &str) {
+        let event = if words == SUSPENDED { "sso_suspended" } else { "sso_status_stale" };
+        let mono = pj::mono();
+        let key = (principal.to_string(), event.to_string());
+        if self.pc.id_refused.get(&key).is_some_and(|t| mono - t < AUDIT_EVERY) {
+            return;
+        }
+        self.pc.id_refused.insert(key, mono);
+        log_info(&format!("audit event={event} principal={principal}"));
+    }
+
+    /// `_id_close`: ends every room seat and presence session of the person `principal`; how many.
+    fn pc_close_principal(&mut self, principal: &str, why: &str) -> usize {
+        let peers: Vec<String> = self.peers.values().filter(|p| p.who.principal == principal && p.who.kind == "person").map(|p| p.peer_id.clone()).collect();
+        let sessions: Vec<String> = self.sessions.values().filter(|s| s.who.principal == principal && s.who.kind == "person").map(|s| s.session_id.clone()).collect();
+        let count = peers.len() + sessions.len();
+        for id in peers {
+            self.drop_peer(&id, why, true, true, "");
+        }
+        for id in sessions {
+            self.end_session(&id, why, true);
+        }
+        count
+    }
+
+    /// `_id_sweep`: a person whose suspension or stale status refuses them loses their open sessions, with no SSO
+    /// service involved (2.11); a held lowering reaching `effective_at` is told once.
+    pub(crate) fn pc_id_sweep(&mut self, now: f64) {
+        if !self.pc_map("suspended").is_empty() || !self.pc_map("stale").is_empty() {
+            let mut live: Vec<String> = self.peers.values().map(|p| p.who.principal.clone()).chain(self.sessions.values().map(|s| s.who.principal.clone())).collect();
+            live.sort();
+            live.dedup();
+            for principal in live {
+                if !self.pc_map("suspended").contains_key(&principal) && !self.pc_map("stale").contains_key(&principal) {
+                    continue;
+                }
+                let Some(words) = self.pc_paused(&principal, now) else { continue };
+                let why = if words == SUSPENDED { "suspended" } else { "stale" };
+                let dropped = self.pc_close_principal(&principal, why);
+                if dropped > 0 {
+                    log_info(&format!("identity_paused principal={principal} why={why} dropped={dropped}"));
+                    self.pc_id_audit(&principal, &words);
+                }
+            }
+        }
+        let due: Vec<(String, i64, i64, String)> = match self.pc.store.as_ref() {
+            None => Vec::new(),
+            Some(store) => store.pending().filter(|(_, v)| now >= v.effective_at as f64 && !self.pc.id_applied.contains(&v.hash)).map(|(o, v)| (o.clone(), v.next_seq, v.effective_at, v.hash.clone())).collect(),
+        };
+        for (org, next_seq, effective_at, hash) in due {
+            self.pc.id_applied.insert(hash);
+            log_info(&format!("identity_lowering org={org} next_seq={next_seq} state=applied"));
+            let everyone = self.pc_everyone();
+            self.tell(&everyone, &obj([("type", Value::from("org_lowering")), ("org", Value::from(org)), ("state", Value::from("applied")), ("next_seq", Value::from(next_seq)), ("effective_at", Value::from(effective_at))]), None);
+        }
+    }
+
+    /// `_id_registered`: the registry entry naming the calling SSO service's certificate for `(org, provider)`; 403
+    /// with `words` otherwise.
+    fn pc_registered(&mut self, who: &Identity, org: &str, provider: &str, words: &str) -> R<op::IdentityProvider> {
+        if who.kind != "sso" {
+            return forbidden(SSO_ONLY);
+        }
+        let terms = self.pc_terms();
+        match terms.provider(org, provider) {
+            Some(p) if who.orgs.iter().any(|o| o == org) && !who.serial.is_empty() && m::serial(&p.sso_serial) == m::serial(&who.serial) => Ok(p.clone()),
+            _ => forbidden(words),
+        }
+    }
+
+    /// `_id_org_admin`: the caller is in `org`'s root-signed `org_admins`.
+    fn pc_org_admin(&mut self, who: &Identity, org: &str) -> R<()> {
+        let terms = self.pc_terms();
+        if !org.is_empty() && terms.org_admins.get(org).is_some_and(|l| l.contains(&who.principal)) {
+            Ok(())
+        } else {
+            forbidden(ORG_ADMINS_ONLY)
+        }
+    }
+
+    /// `_id_accept`: a signed lowering or its cancel through the store's own branch; everyone hears `org_lowering`
+    /// when the held lowering of an org changes. 403 with the store's words for a refusal.
+    fn pc_id_accept(&mut self, wire: Option<&Value>) -> R<IdAccepted> {
+        let wire = wire.cloned().unwrap_or(Value::Null);
+        if !op::is_lowering_wire(&wire) {
+            return bad(LOWERING_GONE);
+        }
+        if self.pc_store().is_none() {
+            return Err(E::Unavailable(NO_POLICIES.into()));
+        }
+        let (root, signer_policy, crl, previous) = self.pc_verify_args()?;
+        let store = self.pc.store.as_mut().expect("the store");
+        let before: Vec<(String, String)> = store.pending().map(|(o, v)| (o.clone(), v.hash.clone())).collect();
+        let now = pj::now();
+        let canceled = wire.get("lowering").is_none();
+        let accepted = if canceled {
+            let c = store.cancel_lowering_at(&wire, &root, &signer_policy, crl.as_ref(), &previous, now).map_err(policy_error)?;
+            IdAccepted { org: c.org, base_seq: c.base_seq, next_seq: c.next_seq, effective_at: 0, hash: c.lowering_sha256, wire: c.wire }
+        } else {
+            let l = store.accept_lowering_at(&wire, &root, &signer_policy, crl.as_ref(), &previous, now).map_err(policy_error)?;
+            IdAccepted { org: l.org, base_seq: l.base_seq, next_seq: l.next_seq, effective_at: l.effective_at, hash: l.hash, wire: l.wire }
+        };
+        let after: Vec<(String, String)> = store.pending().map(|(o, v)| (o.clone(), v.hash.clone())).collect();
+        if after != before {
+            let held_at = store.pending().find(|(o, _)| **o == accepted.org).map(|(_, v)| v.effective_at);
+            self.pc_sync_lowerings();
+            let state = if canceled { "canceled" } else { "pending" };
+            let effective_at = if canceled { 0 } else { held_at.unwrap_or(0) };
+            let everyone = self.pc_everyone();
+            self.tell(&everyone, &obj([("type", Value::from("org_lowering")), ("org", Value::from(accepted.org.clone())), ("state", Value::from(state)), ("next_seq", Value::from(accepted.next_seq)), ("effective_at", Value::from(effective_at))]), None);
+            log_info(&format!("identity_lowering org={} next_seq={} state={state}", accepted.org, accepted.next_seq));
+        }
+        Ok(accepted)
     }
 
     // ── app and archive sessions ──
@@ -1457,6 +1800,27 @@ impl State {
             }
         }
         self.pc_docs_prune(now);
+        // ID-1: proposals past expires_at go (dismissed ones too), and old audit marks
+        let mono = pj::mono();
+        self.pc.id_refused.retain(|_, t| mono - *t < AUDIT_EVERY);
+        let before = self.pc_map("proposals").clone();
+        let mut after = Obj::new();
+        for (org, rows) in &before {
+            let kept: Obj = rows
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter(|(_, r)| r.get("proposal").is_some_and(Value::is_object) && now <= pc_int(r.get("proposal").and_then(|p| p.get("expires_at"))) as f64)
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            if !kept.is_empty() {
+                after.insert(org.clone(), Value::Object(kept));
+            }
+        }
+        if after != before {
+            self.pc_part().insert("proposals".into(), Value::Object(after));
+            self.dirty = true;
+        }
         let channel_s = self.channel_s;
         let adds: Vec<Value> = std::mem::take(self.pc_list("adds"));
         let kept: Vec<Value> = adds
@@ -1482,7 +1846,7 @@ impl Hub {
 
     /// The signer's `org_policies` answer (pulled at every upkeep and after a signing): its root-signed signer policy
     /// and every org's current policy. Answers how many policies were new.
-    pub fn pc_take_policies(&self, wires: Option<&Value>, signer_policy: Option<&Value>) -> usize {
+    pub fn pc_take_policies(&self, wires: Option<&Value>, signer_policy: Option<&Value>, cancels: Option<&Value>, lowerings: Option<&Value>) -> usize {
         let mut st = self.st.lock();
         if let Err(E::Unavailable(_)) = st.pc_set_signer_policy(signer_policy, false) {
             return 0;
@@ -1493,6 +1857,12 @@ impl Hub {
                 Ok((_, true)) => new += 1,
                 Ok(_) => {}
                 Err(e) => log_warn(&format!("org policy from the signer not taken: {}", e.message())),
+            }
+        }
+        // ID-1 3.8: the signer's cancels, then its lowerings
+        for wire in cancels.and_then(Value::as_array).into_iter().flatten().chain(lowerings.and_then(Value::as_array).into_iter().flatten()) {
+            if let Err(e) = st.pc_id_accept(Some(wire)) {
+                log_warn(&format!("identity lowering from the signer not taken: {}", e.message()));
             }
         }
         drop(st);
@@ -1516,6 +1886,9 @@ impl Hub {
         let mut st = self.st.lock();
         let r = (|| -> R<op::Verified> {
             st.check_admin(session, who)?;
+            if signed.is_some_and(op::is_lowering_wire) {
+                return bad(LOWER_ROUTE);
+            }
             if let Some(sp) = signer_policy.filter(|v| !v.is_null()) {
                 if self.signer.is_some() {
                     return bad(SIGNER_POLICY_FROM_SIGNER);
@@ -1541,7 +1914,287 @@ impl Hub {
         let wire = st.pc_store().and_then(|s| if !org.is_empty() { s.get_org(org) } else { s.get_sha256(sha256) }).cloned();
         let Some(wire) = wire else { return Err(E::NotFound(NO_POLICY.into())) };
         let signer_policy = st.pc_part().get("signer_policy").cloned().unwrap_or(Value::Null);
-        Ok(obj([("signed", Value::Object(wire)), ("signer_policy", signer_policy)]))
+        let mut out = obj([("signed", Value::Object(wire)), ("signer_policy", signer_policy)]);
+        // ID-1 3.8: while the relay holds a lowering (by org only)
+        if let Some(low) = (!org.is_empty()).then(|| st.pc_store().and_then(|s| s.pending_lowering(org)).cloned()).flatten() {
+            out.insert("pending_lowering".into(), Value::Object(low));
+        }
+        Ok(out)
+    }
+
+    // ── ID-1 (section 8) ──
+
+    /// Whether `principal` is paused (suspended or stale): the 6.9 words for the route gate.
+    pub fn pc_paused(&self, principal: &str) -> Option<String> {
+        let mut st = self.st.lock();
+        let words = st.pc_paused(principal, pj::now())?;
+        st.pc_id_audit(principal, &words);
+        Some(words)
+    }
+
+    /// Any suspension or status time is held (the route gate reads the caller's name only then).
+    pub fn pc_pausing(&self) -> bool {
+        let mut st = self.st.lock();
+        !st.pc_map("suspended").is_empty() || !st.pc_map("stale").is_empty()
+    }
+
+    /// `id_take_lowering`: a signed lowering or its cancel (from the signer) through the store's own branch.
+    pub fn pc_take_lowering(&self, wire: Option<&Value>) -> R<IdAccepted> {
+        let mut st = self.st.lock();
+        let r = st.pc_id_accept(wire);
+        drop(st);
+        self.wake();
+        r
+    }
+
+    /// `id_check_org_admin`: the caller's live session, and `org` among its root-signed `org_admins`.
+    pub fn pc_check_org_admin(&self, session: &str, who: &Identity, org: &str) -> R<()> {
+        let mut st = self.st.lock();
+        st.session(session, who)?;
+        st.pc_org_admin(who, org)
+    }
+
+    /// `id_check_registered`: the registry names the calling SSO service for `(org, provider)` (403 `words`).
+    pub fn pc_check_registered(&self, who: &Identity, org: &str, provider: &str, words: &str) -> R<()> {
+        self.st.lock().pc_registered(who, org, provider, words).map(|_| ())
+    }
+
+    /// `id_suspend_check`: `(principal, org, provider, at)` of a suspend or unsuspend: the registry names the calling
+    /// service for `(org, provider)`, the principal's root-assigned domain is that org's, and the attestation verifies
+    /// with the caller's key (a lift may carry an admin's `approval` instead, which the signer checks).
+    pub fn pc_suspend_check(&self, who: &Identity, body: &Obj, lift: bool) -> R<(String, String, String, i64)> {
+        let org = pj::text_of(body, "org");
+        let provider = pj::text_of(body, "provider");
+        let principal = {
+            let mut st = self.st.lock();
+            st.pc_registered(who, &org, &provider, SUSPEND_REFUSED)?;
+            let principal = id_email(body.get("principal"))?;
+            if st.pc_sso_domain(who, &principal)? != org {
+                return forbidden(op::DOMAIN_REFUSED);
+            }
+            principal
+        };
+        let at = id_time(body.get("at"), "at")?;
+        let attestation = body.get("sso_attestation").filter(|v| !v.is_null());
+        if attestation.is_none() && lift {
+            if body.get("approval").is_none_or(Value::is_null) {
+                return bad(LIFT_NEEDS);
+            }
+            return Ok((principal, org, provider, at));
+        }
+        let signed = Value::Object(obj([("principal", Value::from(principal.clone())), ("org", Value::from(org.clone())), ("provider", Value::from(provider.clone())), ("at", Value::from(at))]));
+        let data = lp_json(if lift { UNSUSPEND_LABEL } else { SUSPEND_LABEL }, &signed)?;
+        if !id_signed(&who.cert_pem, attestation, &data) {
+            return forbidden(ATTESTATION_BAD);
+        }
+        Ok((principal, org, provider, at))
+    }
+
+    pub fn pc_is_suspended(&self, principal: &str) -> bool {
+        self.st.lock().pc_map("suspended").contains_key(principal)
+    }
+
+    /// `id_suspend`: persist the suspension and close the principal's sessions; how many closed.
+    pub fn pc_suspend(&self, who: &Identity, principal: &str, org: &str, provider: &str, at: i64) -> usize {
+        let mut st = self.st.lock();
+        let row = obj([
+            ("org", Value::from(org)),
+            ("provider", Value::from(provider)),
+            ("at", Value::from(at)),
+            ("ts", Value::from(pj::now() as i64)),
+            ("service", Value::from(m::serial(&who.serial))),
+        ]);
+        st.pc_map("suspended").insert(principal.to_string(), Value::Object(row));
+        st.dirty = true;
+        let dropped = st.pc_close_principal(principal, "suspended");
+        drop(st);
+        self.wake();
+        log_info(&format!("identity_suspended principal={principal} org={org} provider={provider} dropped={dropped}"));
+        dropped
+    }
+
+    /// `id_unsuspend`: lift a suspension (never a stale status); true when one was held.
+    pub fn pc_unsuspend(&self, principal: &str, why: &str) -> bool {
+        let mut st = self.st.lock();
+        let lifted = st.pc_map("suspended").remove(principal).is_some();
+        if lifted {
+            st.dirty = true;
+        }
+        drop(st);
+        if lifted {
+            log_info(&format!("identity_lifted principal={principal} why={why}"));
+        }
+        lifted
+    }
+
+    /// `POST /v1/sso/c/status {org, provider, fresh, sso_attestation}` (2.11): a signed batch of `{principal,
+    /// stale_at}`, sorted by principal, each once, at most 500, refused whole otherwise. Each principal's
+    /// `status_stale_at` is kept; a fresh active status lifts only a stale pause, never a suspension.
+    pub fn pc_sso_status(&self, who: &Identity, body: &Obj) -> R<Obj> {
+        let org = pj::text_of(body, "org");
+        let provider = pj::text_of(body, "provider");
+        self.st.lock().pc_registered(who, &org, &provider, STATUS_REFUSED)?;
+        let fresh = check_fresh(body.get("fresh"))?;
+        let now = pj::now();
+        let mut rows: Vec<(String, i64)> = Vec::with_capacity(fresh.len());
+        for item in fresh {
+            let principal = id_email(item.get("principal"))?;
+            let stale_at = id_time(item.get("stale_at"), "stale_at")?;
+            if stale_at as f64 > now + STALE_AHEAD as f64 {
+                return bad(STALE_LATE);
+            }
+            rows.push((principal, stale_at));
+        }
+        let signed = Value::Object(obj([("org", Value::from(org.clone())), ("provider", Value::from(provider.clone())), ("fresh", Value::Array(fresh.clone()))]));
+        if !id_signed(&who.cert_pem, body.get("sso_attestation"), &lp_json(STATUS_LABEL, &signed)?) {
+            return forbidden(ATTESTATION_BAD);
+        }
+        let mut st = self.st.lock();
+        for (p, _) in &rows {
+            if st.pc_sso_domain(who, p)? != org {
+                return forbidden(op::DOMAIN_REFUSED);
+            }
+        }
+        for (p, at) in &rows {
+            let row = obj([("org", Value::from(org.clone())), ("provider", Value::from(provider.clone())), ("stale_at", Value::from(*at))]);
+            st.pc_map("stale").insert(p.clone(), Value::Object(row));
+        }
+        if !rows.is_empty() {
+            st.dirty = true;
+        }
+        drop(st);
+        log_info(&format!("identity_status org={org} provider={provider} principals={}", rows.len()));
+        Ok(obj([("ok", Value::Bool(true)), ("count", Value::from(rows.len()))]))
+    }
+
+    /// `POST /v1/sso/c/propose {proposal, sig}` (3.5): the service registered for `(org, provider)` posts a signed
+    /// proposal; the newest per `(org, provider)` is kept until `expires_at`.
+    /// `chain_pem`: the signer's intermediate that issued the caller's certificate ("" when the root did).
+    pub fn pc_sso_propose(&self, who: &Identity, proposal: Body, sig: Body, chain_pem: &str) -> R<Obj> {
+        if who.kind != "sso" {
+            return forbidden(SSO_ONLY);
+        }
+        let Some(p) = proposal.and_then(Value::as_object) else { return bad("proposal must be the signed proposal object") };
+        let org = pj::text_of(p, "org");
+        let provider = pj::text_of(p, "provider");
+        self.st.lock().pc_registered(who, &org, &provider, PROPOSE_REFUSED)?;
+        let issued_at = id_time(p.get("issued_at"), "issued_at")?;
+        let expires_at = id_time(p.get("expires_at"), "expires_at")?;
+        id_time(p.get("read_at"), "read_at")?;
+        let data = lp_json(PROPOSAL_LABEL, &Value::Object(p.clone()))?;
+        if !id_signed(&who.cert_pem, sig, &data) {
+            return forbidden(PROPOSAL_SIG_BAD);
+        }
+        let digest = crate::codec::sha256_hex(&data);
+        if pj::now() > expires_at as f64 {
+            return bad(PROPOSAL_EXPIRED);
+        }
+        let mut st = self.st.lock();
+        let rows = st.pc_map("proposals").get(&org).and_then(Value::as_object).cloned().unwrap_or_default();
+        if let Some(cur) = rows.get(&provider).and_then(Value::as_object) {
+            if cur.get("id").and_then(Value::as_str) == Some(digest.as_str()) {
+                return Ok(obj([("ok", Value::Bool(true)), ("id", Value::from(digest)), ("new", Value::Bool(false))]));
+            }
+            if let Some(old) = cur.get("proposal").and_then(Value::as_object) {
+                if pc_int(old.get("issued_at")) > issued_at {
+                    return Err(E::Conflict(PROPOSAL_OLDER.into()));
+                }
+            }
+        }
+        let row = obj([
+            ("id", Value::from(digest.clone())),
+            ("proposal", Value::Object(p.clone())),
+            ("sig", Value::from(sig.map(pj::py_str).unwrap_or_else(|| "None".into()))),
+            ("cert_pem", Value::from(who.cert_pem.clone())),
+            ("chain_pem", Value::from(chain_pem)),
+            ("ts", Value::from(pj::now() as i64)),
+        ]);
+        let mut rows = rows;
+        rows.insert(provider.clone(), Value::Object(row));
+        st.pc_map("proposals").insert(org.clone(), Value::Object(rows));
+        st.dirty = true;
+        let admins: Vec<String> = st.pc_terms().org_admins.get(&org).cloned().unwrap_or_default();
+        st.tell(&admins, &obj([("type", Value::from("org_proposal")), ("org", Value::from(org.clone())), ("provider", Value::from(provider.clone())), ("id", Value::from(digest.clone()))]), None);
+        drop(st);
+        self.wake();
+        log_info(&format!("identity_proposal org={org} provider={provider} id={digest}"));
+        Ok(obj([("ok", Value::Bool(true)), ("id", Value::from(digest)), ("new", Value::Bool(true))]))
+    }
+
+    /// `GET /v1/org/proposals?org=` (that org's `org_admins`): the raw signed proposals and a display view model
+    /// (never signed or trusted; the dashboard verifies the raw objects, 3.6).
+    pub fn pc_proposals_get(&self, session: &str, who: &Identity, org: &str) -> R<Obj> {
+        let mut st = self.st.lock();
+        st.session(session, who)?;
+        st.pc_org_admin(who, org)?;
+        let now = pj::now();
+        let mut rows: Vec<(String, Obj)> = st.pc_map("proposals").get(org).and_then(Value::as_object).into_iter().flatten().filter_map(|(k, v)| v.as_object().map(|o| (k.clone(), o.clone()))).collect();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut out = Vec::new();
+        for (provider, r) in rows {
+            let Some(p) = r.get("proposal").and_then(Value::as_object) else { continue };
+            if pj::truthy(r.get("dismissed")) || now > pc_int(p.get("expires_at")) as f64 {
+                continue;
+            }
+            let field = |k: &str| p.get(k).cloned().unwrap_or(Value::Null);
+            let view = obj([
+                ("provider", Value::from(provider.clone())),
+                ("read_at", field("read_at")),
+                ("expires_at", field("expires_at")),
+                ("base_policy_seq", field("base_policy_seq")),
+                ("proposed", field("proposed")),
+                ("not_imported", field("not_imported")),
+            ]);
+            out.push(Value::Object(obj([
+                ("id", r.get("id").cloned().unwrap_or(Value::Null)),
+                ("provider", Value::from(provider)),
+                ("proposal", Value::Object(p.clone())),
+                ("sig", r.get("sig").cloned().unwrap_or(Value::Null)),
+                ("cert_pem", r.get("cert_pem").cloned().unwrap_or(Value::Null)),
+                ("chain_pem", Value::from(pj::text_of(&r, "chain_pem"))),
+                ("view", Value::Object(view)),
+            ])));
+        }
+        Ok(obj([("org", Value::from(org)), ("proposals", Value::Array(out))]))
+    }
+
+    /// `POST /v1/org/proposals/dismiss {session, org, id}`: "Not now". The same proposal posted again stays
+    /// dismissed; a newer one shows.
+    pub fn pc_proposal_dismiss(&self, session: &str, who: &Identity, org: Body, id: Body) -> R<Obj> {
+        let org = org.and_then(Value::as_str).unwrap_or_default().to_string();
+        let mut st = self.st.lock();
+        st.session(session, who)?;
+        st.pc_org_admin(who, &org)?;
+        let mut rows = st.pc_map("proposals").get(&org).and_then(Value::as_object).cloned().unwrap_or_default();
+        let found = rows.iter().find(|(_, r)| r.as_object().is_some_and(|r| r.get("id").is_some() && r.get("id") == id && !pj::truthy(r.get("dismissed")))).map(|(k, _)| k.clone());
+        let Some(provider) = found else { return Err(E::NotFound(NO_PROPOSAL.into())) };
+        if let Some(Value::Object(r)) = rows.get_mut(&provider) {
+            r.insert("dismissed".into(), Value::Bool(true));
+        }
+        st.pc_map("proposals").insert(org.clone(), Value::Object(rows));
+        st.dirty = true;
+        drop(st);
+        log_info(&format!("identity_proposal_dismissed org={org} provider={provider} by={}", who.principal));
+        Ok(obj([("ok", Value::Bool(true))]))
+    }
+
+    /// `POST /v1/org/proposals/read-again {session, org, provider}`: asks the registered service (`imports` in its
+    /// next `/v1/sso/c/hello`) to read again.
+    pub fn pc_proposal_read_again(&self, session: &str, who: &Identity, org: Body, provider: Body) -> R<Obj> {
+        let org = org.and_then(Value::as_str).unwrap_or_default().to_string();
+        let provider = provider.and_then(Value::as_str).unwrap_or_default().to_string();
+        let mut st = self.st.lock();
+        st.session(session, who)?;
+        st.pc_org_admin(who, &org)?;
+        let Some(entry) = st.pc_terms().provider(&org, &provider).cloned() else { return Err(E::NotFound(NOT_REGISTERED.into())) };
+        let queue = st.pc.id_imports.entry(m::serial(&entry.sso_serial)).or_default();
+        let ask = (org.clone(), provider.clone());
+        if !queue.contains(&ask) {
+            queue.push(ask);
+        }
+        drop(st);
+        log_info(&format!("identity_read_again org={org} provider={provider} by={}", who.principal));
+        Ok(obj([("ok", Value::Bool(true))]))
     }
 
     // ── apps directory ──
@@ -1874,12 +2527,28 @@ impl Hub {
         let now = pj::now();
         let approvals: Obj = out.approvals.into_iter().filter(|(_, (_, at))| now - at < SSO_APPROVAL_TTL).map(|(k, (row, _))| (k, Value::Object(row))).collect();
         let signer_policy = st.pc_part().get("signer_policy").cloned().unwrap_or(Value::Null);
+        // ID-1: the served orgs' newest policies (the importer's base) and the admins' read-again asks for providers
+        // registered to this service (each once)
+        let org_policies: Vec<Value> = st.pc_store().map(|s| s.current()).unwrap_or_default().into_iter().filter(|w| w.get("policy").and_then(|p| p.get("org")).and_then(Value::as_str).is_some_and(|o| who.orgs.iter().any(|x| x == o))).collect();
+        let imports: Vec<Value> = st
+            .pc
+            .id_imports
+            .remove(&m::serial(&who.serial))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(org, provider)| Value::Object(obj([("org", Value::from(org)), ("provider", Value::from(provider))])))
+            .collect();
+        let root_crl_pem = st.pc_root_crl_pem();
         let reply = obj([
             ("enclave", Value::Bool(st.pc.enclave)),
             ("signer_policy", signer_policy),
             ("min_client", Value::Object(min_client)),
             ("approvals", Value::Object(approvals)),
             ("stops", string_list(&out.stops)),
+            ("org_policies", Value::Array(org_policies)),
+            ("root_crl_pem", Value::from(root_crl_pem)),
+            ("imports", Value::Array(imports)),
+            ("capabilities", capabilities()),
         ]);
         drop(st);
         self.wake();
@@ -2105,6 +2774,45 @@ mod tests {
         assert_eq!(service_confined("connector", "POST", "/v1/bridge/c/hello"), "");
         assert_eq!(service_confined("person", "POST", "/v1/anything"), "");
         assert_eq!(service_confined("app", "PUT", "/v1/whoami"), APP_ROUTES_ONLY);
+    }
+
+    #[test]
+    fn the_sso_service_reaches_the_id1_routes_only_by_post() {
+        for path in ["/v1/sso/c/propose", "/v1/sso/c/suspend", "/v1/sso/c/unsuspend", "/v1/sso/c/status"] {
+            assert_eq!(service_confined("sso", "POST", path), "");
+            assert_eq!(service_confined("sso", "GET", path), SSO_ROUTES_ONLY);
+            assert_eq!(service_confined("app", "POST", path), APP_ROUTES_ONLY);
+        }
+        assert_eq!(service_confined("sso", "GET", "/v1/org/proposals"), SSO_ROUTES_ONLY);
+        assert_eq!(service_confined("sso", "POST", "/v1/org/policy/lower"), SSO_ROUTES_ONLY);
+        assert_eq!(capabilities(), json!([]));
+    }
+
+    #[test]
+    fn the_sso_status_vectors_give_the_expected_words() {
+        let doc: Value = serde_json::from_str(include_str!("../tests/sso_status_v1.json")).unwrap();
+        let cases = doc["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let verdict = check_fresh(Some(&case["fresh"])).err().map(|e| e.message()).unwrap_or_else(|| "ok".into());
+            assert_eq!(verdict, case["expect"].as_str().unwrap(), "{}", case["name"]);
+        }
+    }
+
+    #[test]
+    fn the_stale_words_show_utc_and_a_status_batch_is_refused_whole() {
+        // 2026-11-15 09:40:00 UTC and 21:05 UTC
+        assert_eq!(id_when(1_794_735_600), "November 15, 2026 at 9:40 AM UTC");
+        assert_eq!(id_when(1_794_776_700), "November 15, 2026 at 9:05 PM UTC");
+        assert_eq!(id_when(1_794_700_800), "November 15, 2026 at 12:00 AM UTC");
+        assert_eq!((idp_name("okta"), idp_name("saml")), ("Okta", "your identity provider"));
+        let words = |v: Value| check_fresh(Some(&v)).err().map(|e| e.message()).unwrap_or_default();
+        assert_eq!(words(json!([{"principal": "a@acme.gov", "stale_at": 1}, {"principal": "b@acme.gov", "stale_at": 2}])), "");
+        assert_eq!(words(json!([{"principal": "b@acme.gov", "stale_at": 1}, {"principal": "a@acme.gov", "stale_at": 2}])), "the batch is not ordered by principal; the whole batch is refused");
+        assert_eq!(words(json!([{"principal": "a@acme.gov", "stale_at": 1}, {"principal": "a@acme.gov", "stale_at": 2}])), "a principal is listed twice; the whole batch is refused");
+        let many: Vec<Value> = (0..501).map(|i| json!({"principal": format!("p{i:04}@acme.gov"), "stale_at": 1})).collect();
+        assert_eq!(words(Value::Array(many)), "a status batch holds at most 500 people");
+        assert_eq!(words(json!({})), "fresh must be a list");
     }
 
     #[test]
