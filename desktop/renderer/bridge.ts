@@ -137,6 +137,13 @@ export interface AgentTemplateInfo {
   tools: string[];
 }
 import type { LocalModelDef, LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3/.6: self-hosted/custom LLM providers
+import type { ResultWindow, ResultWindowSetting } from "../result_window.ts"; // P-CTX.2b (ADR-0579): pure, types only
+/** P-CTX.2b (ADR-0579): the stored tool-result window choice and what it resolves to for the chat model. */
+export interface ResultWindowView { setting: ResultWindowSetting; model: string; contextTokens: number | null; window: ResultWindow | null }
+import type { AskExtrasView, AskReplyView, AskTurnView } from "./ask_lucid_panel.ts"; // P-ASKLUCID.1 (ADR-0581): types only
+import { pathFileName, type ImageModelsView } from "./ask_image_card.ts"; // P-ASKLUCID.9 (ADR-0600): pure
+/** P-ASKLUCID.9 (ADR-0600): POST /api/image/edit's answer. `path` is the saved file under ~/.omp/ask-lucid/images. */
+export type ImageEditView = { ok: true; path: string; mimeType: string; model: string; provider: string } | { ok: false; error: string };
 import type { NativePickResult } from "../native_dialog.ts"; // P-FS.2 (ADR-0265): backend-opened OS folder dialog
 import type { DeviceStatus } from "../kg_device_unlock.ts"; // P-KGBIO.1 (ADR-0454): Windows Hello / Touch ID unlock
 import type { RestoredTurn } from "../session_steps.ts"; // P-RESUME.1 (ADR-0171): restored agent activity
@@ -318,7 +325,7 @@ export interface LaneView {
   /** Ask kinds the user allowed for the rest of this lane's session ("allow for session"). */
   sessionAllow: string[];
   /** P-FLEET.L3: staged-prompt previews (clamped text + image count), drained FIFO when idle. */
-  queued: { text: string; images: number }[];
+  queued: { text: string; images: number; files?: number }[]; // files: P-ATTACH.1 staged file count
   /** P-FLEET.L8: the MAIN composer is attached to this lane right now (exactly one lane can be). */
   promoted: boolean;
   /** P-HEALTH.1: tool calls awaiting a result - the reason a long-silent lane is `quiet` and not probed. */
@@ -353,6 +360,10 @@ export interface TimelineEntry {
 export interface TimelinePage { entries: TimelineEntry[]; total: number; selfTest: number }
 /** P-FLEET.L3: a pasted image on a lane prompt - the P-VISION.1 shape the master chat uses. */
 export interface LaneImage { data: string; mimeType: string }
+/** P-QUEUE-IMG.1: a staged lane prompt read back whole. P-ATTACH.1 (ADR-0598): with its staged file ids. */
+export interface StagedLanePromptView { text: string; images: LaneImage[]; attachments?: string[] }
+import type { AttachPolicyView, StageResult } from "../attach_kinds.ts"; // P-ATTACH.1 (ADR-0598): types only
+import type { AttachDescribeResult } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598): types only
 /** P-FLEET.L3 (mirrors P-CHAT.1): a write's content, an edit's before/after pair, or a hashline patch. */
 export interface LaneToolCode { path: string; content?: string; oldText?: string; newText?: string; patch?: string }
 export type LaneEvent =
@@ -910,6 +921,18 @@ export interface LucidBridge {
   codeGraphIngest(level: "file" | "symbol"): Promise<CodeGraphView | null>;
   /** P-KG-SYM.1: read / set whether the agent gets the read-only codegraph_query tool (set restarts the backend). */
   codeGraphAgent(): Promise<{ enabled: boolean } | null>;
+  /** P-CTX.2b (ADR-0579): read / store the tool-result window choice (applies at the next agent start). */
+  resultWindow(): Promise<ResultWindowView | null>;
+  setResultWindow(setting: ResultWindowSetting): Promise<ResultWindowView | null>;
+  /** P-ASKLUCID.1 (ADR-0581): one question to Ask Lucid with the recent turns of the side conversation. */
+  askLucid(text: string, history: AskTurnView[], extras?: AskExtrasView): Promise<AskReplyView | null>;
+  /** P-ASKLUCID.9 (ADR-0600): the image models the engine's keys make usable, best first (or why none may be). */
+  imageModels(): Promise<ImageModelsView | null>;
+  /** P-ASKLUCID.9: edit one image the user attached, after they confirmed the card. Null = no answer. */
+  imageEdit(req: { modelId: string; prompt: string; image: { data: string; mimeType: string } }): Promise<ImageEditView | null>;
+  /** P-ASKLUCID.9: save an edited image somewhere the user picks (Electron: the OS dialog, main copies the
+   *  managed file; browser: a download). `{ ok: true }` with no path = the browser took the download. Null = canceled. */
+  saveEditedImageAs(path: string): Promise<{ ok: true; path?: string } | { ok: false; error: string } | null>;
   /** P-AGENT.2b: Agent Builder spec persistence (workspace .omp/agents/). Save validates fail-closed server-side. */
   agentList(): Promise<SpecFileSummary[]>;
   agentLoad(id: string): Promise<AgentSpec | null>;
@@ -1068,8 +1091,10 @@ export interface LucidBridge {
   // the backend maps the closed action set to a validated EventName + whitelists the metadata).
   collabAudit(action: "share_started" | "share_stopped" | "guest_joined" | "guest_left", meta: { transport?: string; access?: string; roomId?: string; guest?: string }): void;
   /** `share` (P-PREVIEW-PWA.3, ADR-0240): roster COUNTS for a renderer-hosted direct-P2P share, so the
-   *  backend can build the trusted agent-awareness preamble (a relay share is computed backend-side). */
-  sendPrompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[], from?: string, share?: { view: number; edit: number }): Promise<void>;
+   *  backend can build the trusted agent-awareness preamble (a relay share is computed backend-side).
+   *  P-ATTACH.1 (ADR-0598): `attachments` are staged file ids (attachmentStage); the engine appends their
+   *  fenced, scanned text to what the model sees, or refuses the send with an error event. */
+  sendPrompt(text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[], from?: string, share?: { view: number; edit: number }, attachments?: string[]): Promise<void>;
   chatStatus(): Promise<TurnStatus | null>;
   attachChat(turnId: string | undefined, onEvent: (e: ChatEvent) => void): Promise<void>;
   detachChat(): void;
@@ -1137,17 +1162,30 @@ export interface LucidBridge {
   /** P-PUSH.PAR1 (ADR-pending): `code: "no-repo"` marks a worktree refusal because the folder is not a git
    *  repo with a commit, so the composer's Push now can fall back to steering the running turn. */
   fleetSpawn(opts: { cwd: string; model?: string; name?: string; repoUrl?: string; pat?: string; sessionId?: string; worktree?: boolean }): Promise<{ ok: boolean; lane?: LaneView; reason?: string; code?: "no-repo"; worktree?: { path: string; branch: string } } | null>;
-  /** P-FLEET.L3: `images` ride as ACP image blocks after the text, exactly like the master chat. */
-  fleetPrompt(laneId: string, text: string, onEvent: (e: LaneEvent) => void, images?: LaneImage[]): Promise<void>;
-  /** P-FLEET.L3: the staged-prompt queue - manager-owned; drain streams the next item like a prompt. */
-  fleetQueueAdd(laneId: string, text: string, images?: LaneImage[]): Promise<{ ok: boolean; queued?: number; reason?: string } | null>;
+  /** P-FLEET.L3: `images` ride as ACP image blocks after the text, exactly like the master chat.
+   *  P-ATTACH.1 (ADR-0598): `attachments` are staged file ids, as for sendPrompt. */
+  fleetPrompt(laneId: string, text: string, onEvent: (e: LaneEvent) => void, images?: LaneImage[], attachments?: string[]): Promise<void>;
+  /** P-FLEET.L3: the staged-prompt queue - manager-owned; drain streams the next item like a prompt.
+   *  P-ATTACH.1: staged file ids stay with the item; their text is built and scanned when it drains. */
+  fleetQueueAdd(laneId: string, text: string, images?: LaneImage[], attachments?: string[]): Promise<{ ok: boolean; queued?: number; reason?: string } | null>;
   /** P-PUSH.PAR1 (ADR-pending): `expect` (the item's full text) makes a late remove fail closed instead of
    *  deleting whichever prompt slid into `index` meanwhile. */
   fleetQueueRemove(laneId: string, index: number, expect?: string): Promise<{ ok: boolean } | null>;
-  /** P-PUSH.PAR1 (ADR-pending): a staged item's full text + its own images, left in the queue. */
-  fleetQueuePeek(laneId: string, index: number): Promise<{ ok: boolean; item?: { text: string; images: LaneImage[] }; reason?: string } | null>;
-  /** P-QUEUE-IMG.1 (ADR-0469): remove a staged item and return its full text + its own images (Update). */
-  fleetQueueTake(laneId: string, index: number): Promise<{ ok: boolean; item?: { text: string; images: LaneImage[] }; reason?: string } | null>;
+  /** P-PUSH.PAR1 (ADR-pending): a staged item's full text + its own images (and file ids), left in the queue. */
+  fleetQueuePeek(laneId: string, index: number): Promise<{ ok: boolean; item?: StagedLanePromptView; reason?: string } | null>;
+  /** P-QUEUE-IMG.1 (ADR-0469): remove a staged item and return its full text + its own images (and file ids). */
+  fleetQueueTake(laneId: string, index: number): Promise<{ ok: boolean; item?: StagedLanePromptView; reason?: string } | null>;
+  /** P-ATTACH.1 (ADR-0598): copy one file into the managed folder, extract and scan its text. Null = no answer. */
+  attachmentStage(f: { name: string; dataBase64: string; mimeType?: string; sourcePath?: string }): Promise<StageResult | null>;
+  /** P-ATTACH.1: drop a staged file (a chip removed before send). */
+  attachmentRemove(id: string): Promise<boolean>;
+  /** P-ATTACH.1 (ADR-0598): already-staged files by id, so a queued lane prompt brought back with Update keeps
+   *  its files without uploading them again. `missing`: ids whose copy expired or never existed. Null = no answer. */
+  attachmentDescribe(ids: string[]): Promise<AttachDescribeResult | null>;
+  /** P-ATTACH.1: the managed attachment policy (on/off, files per message, bytes per file, retention). */
+  attachmentPolicy(): Promise<AttachPolicyView | null>;
+  /** P-ATTACH.1: where a dropped or picked File lives on disk (Electron); null in a plain browser. */
+  pathForFile(file: File): string | null;
   fleetQueueMove(laneId: string, index: number, dir: -1 | 1): Promise<{ ok: boolean } | null>;
   fleetDrain(laneId: string, onEvent: (e: LaneEvent) => void): Promise<void>;
   // P-FLEET.L5: the reviewable timeline (list + open-a-point). Transcript reads are tail-limited.
@@ -1659,8 +1697,12 @@ interface NativeShell {
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
   // P-NETWL.1 (ADR-0106): native file picker + OS-encrypted credential vault (Electron-only).
   pickFile?(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
+  // P-ATTACH.1 (ADR-0598): the on-disk path of a dropped or picked File (webUtils.getPathForFile); "" when none.
+  pathForFile?(file: File): string;
   // P-VAULT-UI.1 (ADR-0475): native save dialog; path, null on cancel, or { error }.
   saveTextFile?(opts: { title?: string; defaultName?: string; filters?: { name: string; extensions: string[] }[]; text: string }): Promise<string | { error: string } | null>;
+  // P-ASKLUCID.9 (ADR-0600): copy an Ask Lucid edited image (main checks it is inside the managed folder).
+  saveEditedImageAs?(path: string): Promise<string | { error: string } | null>;
   credStore?(input: { ref?: string; kind: string; secret: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }): Promise<CredMetaView | { error: string }>;
   credStoreFile?(input: { kind: string; label?: string; expiresAt?: number; rotationIntervalDays?: number }): Promise<CredMetaView | { error: string } | null>;
   credRotate?(input: { ref: string; secret: string; expiresAt?: number }): Promise<CredMetaView | { error: string }>;
@@ -1818,9 +1860,9 @@ function readChat(path: string, body: unknown, onEvent: (e: ChatEvent) => void, 
   }, controller.signal, { reattach: "/api/chat/attach", reattachBody: () => turnId ? { turnId } : { requestId }, onRecovery: (state, message) => onEvent({ type: "connection", state, message }) })
     .finally(() => { if (chatAbort === controller) chatAbort = null; });
 }
-const streamChat = (text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[], from?: string, share?: { view: number; edit: number }) => {
+const streamChat = (text: string, onEvent: (e: ChatEvent) => void, images?: { data: string; mimeType: string }[], from?: string, share?: { view: number; edit: number }, attachments?: string[]) => {
   chatRequestId = crypto.randomUUID();
-  return readChat("/api/chat", { text, requestId: chatRequestId, ...(images?.length ? { images } : {}), ...(from ? { from } : {}), ...(share ? { share } : {}) }, onEvent);
+  return readChat("/api/chat", { text, requestId: chatRequestId, ...(images?.length ? { images } : {}), ...(from ? { from } : {}), ...(share ? { share } : {}), ...(attachments?.length ? { attachments } : {}) }, onEvent);
 };
 
 // P-COLLAB.10: JOIN a shared session. /api/collab/join returns EITHER a JSON error envelope (malformed link /
@@ -1898,6 +1940,35 @@ export const bridge: LucidBridge = {
   codeGraph: (level) => getData(`/api/codegraph?level=${level}`),
   codeGraphIngest: (level) => post("/api/codegraph", { level }),
   codeGraphAgent: () => getData("/api/codegraph/agent"),
+  resultWindow: () => getData("/api/result-window"), // P-CTX.2b (ADR-0579)
+  setResultWindow: (setting) => post("/api/result-window", { setting }),
+  askLucid: (text, history, extras) => post("/api/ask-lucid", { text, history, ...(extras ?? {}) }), // P-ASKLUCID.1 (ADR-0581)
+  imageModels: () => getData("/api/image/models"), // P-ASKLUCID.9 (ADR-0600)
+  imageEdit: (req) => post("/api/image/edit", req), // P-ASKLUCID.9
+  saveEditedImageAs: async (path) => {
+    // P-ASKLUCID.9: Electron copies the managed file in main; a browser downloads the bytes the engine serves
+    // (UI token, same containment) as a file.
+    if (shell?.saveEditedImageAs) {
+      const r = await shell.saveEditedImageAs(path).catch(() => ({ error: "The desktop app did not answer." }));
+      if (r === null) return null;
+      return typeof r === "string" ? { ok: true, path: r } : { ok: false, error: r.error };
+    }
+    try {
+      const res = await fetch(`/api/image/edited?path=${encodeURIComponent(path)}`, { cache: "no-store", headers: authHeaders() });
+      if (!res.ok) return { ok: false, error: (await res.text().catch(() => "")).slice(0, 200) || "The image could not be read." };
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = pathFileName(path);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      return { ok: true };
+    } catch {
+      return { ok: false, error: "The image could not be downloaded." };
+    }
+  },
   agentList: async () => (await getData("/api/agent"))?.specs ?? [], // P-AGENT.2b
   agentLoad: async (id) => (await getData(`/api/agent?id=${encodeURIComponent(id)}`))?.spec ?? null, // P-AGENT.2b
   agentSave: (spec) => post("/api/agent", { spec }), // P-AGENT.2b (server validates fail-closed)
@@ -2039,14 +2110,20 @@ export const bridge: LucidBridge = {
   hubOpen: () => post("/api/hub/open", {}),
   timelineList: (limit = 100, offset = 0, includeSelfTest = false, kind) => getData(`/api/timeline?limit=${limit}&offset=${offset}${includeSelfTest ? "&selfTest=1" : ""}${kind ? `&kind=${kind}` : ""}`), // P-FLEET.L5
   timelineSession: (id, limit = 40) => post("/api/timeline/session", { id, limit }), // P-FLEET.L5
-  fleetPrompt: (laneId, text, onEvent, images) => {
+  fleetPrompt: (laneId, text, onEvent, images, attachments) => {
     // The lane stream carries LaneEvent lines; the reader's own fallback events (token/done) are
     // structurally valid LaneEvents too, so the sink types unify at this one boundary. Named cast per
     // house rule: structurally-compatible tagged unions the reader's ChatEvent signature can't express.
     const sink = onEvent as (e: ChatEvent) => void;
-    return streamNdjson("/api/fleet/prompt", { laneId, text, ...(images?.length ? { images } : {}) }, sink);
+    return streamNdjson("/api/fleet/prompt", { laneId, text, ...(images?.length ? { images } : {}), ...(attachments?.length ? { attachments } : {}) }, sink);
   },
-  fleetQueueAdd: (laneId, text, images) => post("/api/fleet/queue", { laneId, text, ...(images?.length ? { images } : {}) }),
+  fleetQueueAdd: (laneId, text, images, attachments) => post("/api/fleet/queue", { laneId, text, ...(images?.length ? { images } : {}), ...(attachments?.length ? { attachments } : {}) }),
+  // P-ATTACH.1 (ADR-0598): staging, removal and the policy; the path comes from the preload (Electron only).
+  attachmentStage: (f) => post("/api/attachments", f),
+  attachmentRemove: async (id) => (await post("/api/attachments/remove", { id }))?.removed === true,
+  attachmentDescribe: (ids) => post("/api/attachments/describe", { ids }),
+  attachmentPolicy: () => getData("/api/attachments/policy"),
+  pathForFile: (file) => { try { return shell?.pathForFile?.(file) || null; } catch { return null; } },
   fleetQueueRemove: (laneId, index, expect) => post("/api/fleet/queue/remove", { laneId, index, ...(expect !== undefined ? { expect } : {}) }),
   fleetQueuePeek: (laneId, index) => post("/api/fleet/queue/peek", { laneId, index }), // P-PUSH.PAR1
   fleetQueueTake: (laneId, index) => post("/api/fleet/queue/take", { laneId, index }),

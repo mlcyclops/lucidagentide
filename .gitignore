@@ -166,3 +166,8 @@ desktop/mxc/*
 
 # offered add-ons (ADR-0541): signed .lplugin.zip packages + index.json written by tools/build_addons.ts, never committed
 desktop/addons/
+
+# P-BENCH.2a: per-run benchmark parts and logs; the merged results live in bench-results/ and are committed
+bench-results-parts/
+# the Memory panel's lock-free DuckDB summary (obs_mirror.ts), rewritten at runtime
+*.duckdb.mirror.json

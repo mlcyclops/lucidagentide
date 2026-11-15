@@ -6,9 +6,12 @@
 
 import { describe, expect, it } from "bun:test";
 import {
-  applyArcadeInput, arcadeSpeed, createArcadeState, stepArcade,
+  ARCADE_FLOOR_Y, applyArcadeInput, arcadeMetrics, arcadeRunnerBox, arcadeSpeed, arcadeSpriteRect,
+  createArcadeState, setArcadeMascotSize, stepArcade,
   type ArcadeObstacle, type ArcadeState,
 } from "./mascot_game.ts";
+import { MASCOT_H, MASCOT_W } from "./mascot.ts";
+import type { MascotSize } from "./mini_lucid.ts";
 
 const W = 400; // below the 560px 2x threshold, so geometry math reads at 1x
 
@@ -142,8 +145,9 @@ describe("crates are solid ground", () => {
 });
 
 describe("hazards never arrive on top of each other", () => {
-  it("every spawned hazard reaches the runner at least 0.9s after the last one", () => {
-    let s: ArcadeState = { ...createArcadeState(900, 11), hearts: 9999 };
+  for (const size of ["large", "small"] as const) it(`every spawned hazard reaches the ${size} runner at least 0.9s after the last one`, () => {
+    const { scale, motion } = arcadeMetrics(900, size);
+    let s: ArcadeState = { ...createArcadeState(900, 11, size), hearts: 9999 };
     const arrivals: number[] = [];
     const seen = new Set<number>();
     for (let t = 0; t < 12000; t++) {
@@ -154,7 +158,7 @@ describe("hazards never arrive on top of each other", () => {
         seen.add(o.id);
         // Arrival is distance over the kind's own speed: a star covers ground 1.7x faster, which is
         // exactly how one used to land on a ground hazard already in flight.
-        arrivals.push(s.elapsedMs + (o.x - (s.x + 60)) / (arcadeSpeed(s.level) * (o.kind === "star" ? 1.7 : 1)) * 1000);
+        arrivals.push(s.elapsedMs + (o.x - (s.x + 30 * scale)) / (arcadeSpeed(s.level) * motion * (o.kind === "star" ? 1.7 : 1)) * 1000);
       }
     }
     expect(arrivals.length).toBeGreaterThan(40);
@@ -222,5 +226,134 @@ describe("the flycatch bonus round", () => {
     expect(back.bonus).toBeNull();
     expect(back.invulnerableMs).toBeGreaterThan(0);
     expect(back.score).toBe(s.score); // earned catches were already banked at pinch time
+  });
+});
+
+// P-MINI.3 (ADR-0596): the course at both ninja sizes. A wide panel is where they differ (classic paints
+// 2x there, small paints mini Lucid's 1x), so every case runs at WIDE.
+const WIDE = 640;
+const SIZES: readonly MascotSize[] = ["small", "large"];
+
+describe("ninja size metrics", () => {
+  it("large keeps the classic scale and speed; small is half of it on a wide panel", () => {
+    expect(arcadeMetrics(WIDE, "large")).toEqual({ scale: 2, motion: 1 });
+    expect(arcadeMetrics(WIDE, "small")).toEqual({ scale: 1, motion: 0.5 });
+  });
+  it("on a narrow panel both sizes paint one pixel per cell, so small never goes sub-pixel", () => {
+    expect(arcadeMetrics(W, "large")).toEqual({ scale: 1, motion: 1 });
+    expect(arcadeMetrics(W, "small")).toEqual({ scale: 1, motion: 1 });
+  });
+  it("on a narrow panel the two sizes play the identical course", () => {
+    const run = (size: MascotSize) => {
+      let s = createArcadeState(W, 42, size);
+      for (let t = 0; t < 200; t++) {
+        if (t === 10) s = applyArcadeInput(s, "jump", true);
+        s = stepArcade(s, 16);
+      }
+      return { ...s, size: "x" };
+    };
+    expect(run("small")).toEqual(run("large"));
+  });
+});
+
+for (const size of SIZES) {
+  describe(`the course at ${size} size`, () => {
+    const { scale, motion } = arcadeMetrics(WIDE, size);
+    const sized = (kind: ArcadeObstacle["kind"], x: number): ArcadeObstacle => {
+      const o = obstacle(kind, x);
+      return { ...o, width: o.width * scale, height: o.height * scale, bottom: o.bottom * scale };
+    };
+    const base = (): ArcadeState => ({ ...createArcadeState(WIDE, 7, size), spawnMs: 60000 });
+    const box = arcadeRunnerBox(base());
+    const at = (kind: ArcadeObstacle["kind"], x: number, overrides: Partial<ArcadeState> = {}): ArcadeState =>
+      ({ ...base(), obstacles: [sized(kind, x)], ...overrides });
+    const steps = (s: ArcadeState, n: number): ArcadeState => {
+      for (let t = 0; t < n; t++) s = stepArcade(s, 16);
+      return s;
+    };
+
+    it("spawns hazards at the size's scale", () => {
+      let s = createArcadeState(WIDE, 3, size);
+      for (let t = 0; t < 200 && !s.obstacles.length; t++) s = stepArcade(s, 16);
+      const first = s.obstacles[0]!;
+      expect(first.kind).toBe("crate");
+      expect(first.width).toBe(26 * scale);
+      expect(first.height).toBe(16 * scale);
+    });
+    it("the sprite stands on the floor, and on a crate lid, never floating or sunk", () => {
+      const floor = arcadeSpriteRect(base());
+      expect(floor.y + floor.h).toBe(ARCADE_FLOOR_Y);
+      expect(floor.w).toBe(MASCOT_W * scale);
+      expect(floor.h).toBe(MASCOT_H * scale);
+      expect(box.bottom).toBe(0);
+      expect(box.left).toBeGreaterThanOrEqual(floor.x);
+      expect(box.right).toBeLessThanOrEqual(floor.x + floor.w);
+      expect(box.top).toBeLessThanOrEqual(floor.h);
+      const lid = 16 * scale;
+      const onLid = arcadeSpriteRect({ ...base(), jumpY: lid, groundY: lid });
+      expect(onLid.y + onLid.h).toBe(ARCADE_FLOOR_Y - lid);
+    });
+    it("a jump rises about half his height and stays up the same time at either size", () => {
+      let s = applyArcadeInput(base(), "jump", true);
+      let peak = 0;
+      let n = 0;
+      for (; n < 100 && (s.jumpY > 0 || s.velocityY !== 0); n++) {
+        s = stepArcade(s, 16);
+        peak = Math.max(peak, s.jumpY);
+      }
+      expect(peak / (MASCOT_H * scale)).toBeCloseTo(0.535, 1);
+      expect(n).toBeGreaterThanOrEqual(38);
+      expect(n).toBeLessThanOrEqual(42);
+    });
+    it("a clean jump clears the crate and scores it", () => {
+      let s = applyArcadeInput(at("crate", box.right + arcadeSpeed(1) * motion * 0.2), "jump", true);
+      for (let t = 0; t < 300 && !s.clears; t++) s = stepArcade(s, 16);
+      expect(s.hearts).toBe(3);
+      expect(s.score).toBe(20);
+    });
+    it("running into a crate still costs a heart", () => {
+      expect(stepArcade(at("crate", box.left + 2 * scale), 16).hearts).toBe(2);
+    });
+    it("ducking passes under stars and beams; standing into a star is a hit", () => {
+      for (const kind of ["star", "beam"] as const) {
+        expect(stepArcade(applyArcadeInput(at(kind, box.left + 2 * scale), "duck", true), 16).hearts).toBe(3);
+      }
+      expect(stepArcade(at("star", box.left + 2 * scale), 16).hearts).toBe(2);
+    });
+    it("a punch in reach shatters the pot; a kick reaches the farther target", () => {
+      expect(stepArcade(applyArcadeInput(at("pot", box.right + 5 * scale), "punch", true), 16).score).toBe(40);
+      expect(stepArcade(applyArcadeInput(at("target", box.right + 25 * scale), "kick", true), 16).score).toBe(30);
+    });
+    it("a punch out of reach whiffs, and the pot then still hits him", () => {
+      let s = steps(applyArcadeInput(at("pot", box.right + 35 * scale), "punch", true), 15);
+      expect(s.score).toBe(0);
+      expect(s.obstacles[0]!.handled).toBe(false);
+      for (let t = 0; t < 300 && s.hearts === 3; t++) s = stepArcade(s, 16);
+      expect(s.hearts).toBe(2);
+      expect(s.score).toBe(0);
+    });
+  });
+}
+
+describe("switching the ninja size mid-run", () => {
+  it("returns the same state when the size is unchanged", () => {
+    const s = createArcadeState(WIDE, 7, "large");
+    expect(setArcadeMascotSize(s, "large")).toBe(s);
+  });
+  it("a runner standing on a crate lid stays on the rescaled lid, unharmed", () => {
+    const large = createArcadeState(WIDE, 7, "large");
+    const crate = obstacle("crate", large.x + 12);
+    const standing: ArcadeState = {
+      ...large, spawnMs: 60000, jumpY: 32, groundY: 32,
+      obstacles: [{ ...crate, width: crate.width * 2, height: crate.height * 2 }],
+    };
+    expect(stepArcade(standing, 16).jumpY).toBe(32);
+    const small = setArcadeMascotSize(standing, "small");
+    expect(small.size).toBe("small");
+    expect(small.obstacles[0]!.height).toBe(16);
+    const after = stepArcade(small, 16);
+    expect(after.jumpY).toBe(16);
+    expect(after.groundY).toBe(16);
+    expect(after.hearts).toBe(3);
   });
 });

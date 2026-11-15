@@ -9,6 +9,7 @@
 // accepts `(text|image)[]` content (the preview_screenshot tool proves the round-trip).
 
 import { esc } from "./format.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599): the thumbs use the premium tooltip
 // P-IMG.1 (ADR-0208): the strict image-data-URL primitives moved to a shared, server-importable module so
 // dev.ts/acp_backend.ts can reuse them without pulling this DOM-touching file into the server typecheck.
 // Re-exported here so every existing `import { parseImageDataUrl, ... } from "./composer_attachments.ts"`
@@ -48,8 +49,8 @@ export function promptImageBlocks(attachments: Attachment[]): ImageBlock[] {
  *  caller sets `img.src` as a DOM PROPERTY, never interpolating a data URL into an HTML string. */
 export function thumbStripHtml(attachments: Attachment[]): string {
   if (!attachments?.length) return "";
-  return attachments.map((a) => `<div class="cx-thumb" data-att="${esc(a.id)}" title="${esc(a.name || "pasted image")}">
+  return attachments.map((a) => `<div class="cx-thumb" data-att="${esc(a.id)}" data-tip="${esc(tipEsc(a.name || "pasted image"))}">
       <img class="cx-thumb-img" alt="attached image" />
-      <button class="cx-thumb-x" data-att-remove="${esc(a.id)}" title="Remove image" aria-label="Remove image">${esc("×")}</button>
+      <button class="cx-thumb-x" data-att-remove="${esc(a.id)}" data-tip="Remove image" aria-label="Remove image">${esc("×")}</button>
     </div>`).join("");
 }

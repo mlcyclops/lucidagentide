@@ -13,6 +13,7 @@
 import { $, el } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { tipEsc } from "./tip_text.ts";
 import { clampToViewport, loadDockState, saveDockState, snapDecision, type DockShape, type DockState, type DockStorage } from "./share_dock.ts";
 import type { LucidBridge, TimelineEntry, TimelineKind } from "./bridge.ts";
 
@@ -81,8 +82,8 @@ export function openTimelineDock(): void {
       <span class="share-dock-title">Timeline</span>
       <span class="tl-count" id="tlCount" data-tip="Sessions on this machine|Master chats, fleet lane sessions, and import throwaways - every workspace, newest first."></span>
       <button class="tl-junk" id="tlJunk" data-tl-junk hidden></button>
-      <button class="btn-mini" data-tl-refresh title="Re-scan the session history">${icon("refresh", 12)} Refresh</button>
-      <button class="share-dock-btn" data-tl-close aria-label="Close the timeline" title="Close">${icon("close", 15)}</button>
+      <button class="btn-mini" data-tl-refresh data-tip="Re-scan the session history">${icon("refresh", 12)} Refresh</button>
+      <button class="share-dock-btn" data-tl-close aria-label="Close the timeline" data-tip="Close">${icon("close", 15)}</button>
     </div>
     <div class="share-dock-body tl-body">
       <div class="tl-tools">
@@ -221,9 +222,9 @@ function paintJunkChip(): void {
   if (selfTestCount === 0) return;
   chip.classList.toggle("on", showSelfTest);
   chip.textContent = showSelfTest ? `${selfTestCount} self-test shown` : `${selfTestCount} self-test hidden`;
-  chip.title = showSelfTest
-    ? "Throwaway sessions from this repo's own echo and demo scripts are included. Click to hide them."
-    : "Throwaway sessions from this repo's own echo and demo scripts are hidden. Click to show them.";
+  chip.dataset.tip = showSelfTest // P-TIP.1 (ADR-0599): premium tooltip, not a native title
+    ? "Self-test sessions shown|Throwaway sessions from this repo's own echo and demo scripts are included. Click to hide them."
+    : "Self-test sessions hidden|Throwaway sessions from this repo's own echo and demo scripts are hidden. Click to show them.";
 }
 
 /** "Today" / "Yesterday" / a locale date - the day header a row files under. */
@@ -244,15 +245,15 @@ function rowHtml(e: TimelineEntry): string {
   const t = new Date(e.updatedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   const isLane = e.kind === "lane" && !!e.laneName;
   const slot = isLane
-    ? `<span class="tl-ws lane" title="Lane ${esc(e.laneId ?? "")}${e.laneEvents && e.laneEvents > 1 ? ` \u00b7 ${e.laneEvents} spawns` : ""} \u00b7 ${esc(e.cwd)}">${esc(e.laneName ?? "")}</span>`
-    : `<span class="tl-ws" title="${esc(e.cwd || "no folder recorded")}">${esc(e.wsName || "-")}</span>`;
+    ? `<span class="tl-ws lane" data-tip="Lane ${esc(tipEsc(e.laneId ?? ""))}${e.laneEvents && e.laneEvents > 1 ? ` \u00b7 ${e.laneEvents} spawns` : ""} \u00b7 ${esc(tipEsc(e.cwd))}">${esc(e.laneName ?? "")}</span>`
+    : `<span class="tl-ws" data-tip="${esc(tipEsc(e.cwd || "no folder recorded"))}">${esc(e.wsName || "-")}</span>`;
   const junk = e.selfTest ? " self-test" : "";
   const badge = e.selfTest ? "self-test" : KIND_LABEL[e.kind];
   return `<div class="tl-row kind-${e.kind}${junk}${openId === e.sessionId ? " sel" : ""}" data-tl-id="${esc(e.sessionId)}" role="button" tabindex="0" aria-label="Read the transcript of ${esc(e.title)}">
     <span class="tl-time">${t}</span>
     <span class="tl-kind">${badge}</span>
     ${slot}
-    <span class="tl-turns" title="Completed turns">${e.turns}t</span>
+    <span class="tl-turns" data-tip="Completed turns">${e.turns}t</span>
     <span class="tl-title">${esc(e.title)}</span>
     <span class="tl-model">${esc(e.model)}</span>
   </div>`;
@@ -271,7 +272,7 @@ function dayHeadHtml(day: string, rows: TimelineEntry[]): string {
   return `<div class="tl-day">
     <span class="tl-day-label">${esc(day)}</span>
     <span class="tl-day-n">${rows.length}</span>
-    <span class="tl-strip" title="${esc(tip)}">${segs}</span>
+    <span class="tl-strip" data-tip="${esc(tip)}">${segs}</span>
   </div>`;
 }
 

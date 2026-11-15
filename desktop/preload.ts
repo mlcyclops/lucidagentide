@@ -9,7 +9,7 @@
 // (webFrame) and native window controls. In a plain browser, window.lucid is
 // absent and the renderer falls back to CSS zoom.
 
-import { contextBridge, ipcRenderer, webFrame } from "electron";
+import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 import { marketBootConfig } from "./market_config.ts";
 
 // ADR-0223 (completes P-KGMARKET, ADR-0206): expose the marketplace boot config to the renderer's main world so
@@ -26,8 +26,14 @@ contextBridge.exposeInMainWorld("lucid", {
   pickFolder: (opts?: { title?: string; defaultPath?: string; buttonLabel?: string }): Promise<string | null> => ipcRenderer.invoke("lucid:pickFolder", opts ?? {}),
   // P-NETWL.1 (ADR-0106): native FILE picker (auth config / token / PEM / API-key upload).
   pickFile: (opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null> => ipcRenderer.invoke("lucid:pickFile", opts ?? {}),
+  // P-ATTACH.1 (ADR-0598): where a dropped or picked File lives on disk, for the attachment chip's tooltip and
+  // the staged record. Display data only: the engine stages the bytes the renderer read, never this path.
+  pathForFile: (file: File): string => { try { return webUtils.getPathForFile(file); } catch { return ""; } },
   // P-VAULT-UI.1 (ADR-0475): native SAVE dialog for text the renderer holds (the encrypted vault backup).
   saveTextFile: (opts: { title?: string; defaultName?: string; filters?: { name: string; extensions: string[] }[]; text: string }): Promise<string | { error: string } | null> => ipcRenderer.invoke("lucid:saveTextFile", opts),
+  // P-ASKLUCID.9 (ADR-0600): copy an image Ask Lucid edited to a path the user picks. Main refuses any source
+  // outside ~/.omp/ask-lucid/images. Path, null on cancel, or { error }.
+  saveEditedImageAs: (path: string): Promise<string | { error: string } | null> => ipcRenderer.invoke("lucid:saveEditedImageAs", path),
   // P-NETWL.1 (ADR-0106): OS-encrypted credential vault (safeStorage). Store/list/delete only; a plaintext
   // secret never comes back to the renderer (decrypt is main-process-only).
   credStore: (input: { ref?: string; kind: string; secret: string; label?: string }) => ipcRenderer.invoke("lucid:credStore", input),

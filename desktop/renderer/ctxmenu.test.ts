@@ -53,6 +53,9 @@ describe("readonlyMenuItemsFor — the chat / code-block Copy menu (P-COPY.1)", 
   });
   test("no selection, not a code block → EMPTY (a plain right-click keeps its default behavior)", () => {
     expect(readonlyMenuItemsFor({ inCode: false, hasSelection: false })).toEqual([]);
+    // P-ASKLUCID.8: on an answer that copies as a whole, "Copy answer" is offered with or without a selection.
+    expect(readonlyMenuItemsFor({ inCode: false, hasSelection: false, inMessage: true })).toEqual([{ act: "copymsg", label: "Copy answer", kbd: "", enabled: true }]);
+    expect(readonlyMenuItemsFor({ inCode: true, hasSelection: true, inMessage: true }).map((i) => i.act)).toEqual(["copy", "copycode", "copymsg"]);
   });
 });
 

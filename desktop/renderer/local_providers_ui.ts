@@ -19,6 +19,7 @@ import {
   type LocalModelDef,
   type LocalProviderDef,
 } from "../local_providers.ts";
+import { OMP_DEFAULT_THRESHOLD_KB, RESULT_WINDOW_FIXED_KB, type ResultWindow, type ResultWindowSetting } from "../result_window.ts"; // P-CTX.2b (ADR-0579)
 
 // CUI lockdown: the DGX enclave attestation, shown on the add form and on each internal provider's row.
 const ENCLAVE_LABEL = "DGX enclave host, CUI-authorized";
@@ -55,16 +56,16 @@ function providerRow(p: LocalProviderDef, vaultRefs: Set<string>): string {
   const authed = p.authKind !== "none";
   return `<div class="lp-row-wrap" data-lp-id="${esc(p.id)}">
     <div class="lp-row">
-      <label class="set-toggle lp-en" title="Enable / disable"><input type="checkbox" data-lp-toggle ${p.enabled ? "checked" : ""}/><span class="lp-en-box"></span></label>
+      <label class="set-toggle lp-en" data-tip="Enable / disable"><input type="checkbox" data-lp-toggle aria-label="Enable / disable" ${p.enabled ? "checked" : ""}/><span class="lp-en-box"></span></label>
       <div class="lp-meta">
         <div class="lp-name">${esc(p.name)} <span class="lp-pill ${st.tone}">${esc(st.label)}</span></div>
         <div class="lp-sub">${esc(p.baseUrl)} · ${modelSummary(p.models)}</div>
-        ${p.zone === "internal" ? `<label class="lp-ext" title="${esc(ENCLAVE_TIP)}"><input type="checkbox" data-lp-enclave ${p.enclave ? "checked" : ""}/> <span>${esc(ENCLAVE_LABEL)}</span></label>` : ""}
+        ${p.zone === "internal" ? `<label class="lp-ext" data-tip="${esc(ENCLAVE_LABEL)}|${esc(ENCLAVE_TIP)}"><input type="checkbox" data-lp-enclave ${p.enclave ? "checked" : ""}/> <span>${esc(ENCLAVE_LABEL)}</span></label>` : ""}
       </div>
-      <button class="btn-mini" data-lp-test data-url="${esc(p.baseUrl)}" title="Check the endpoint is reachable (no key sent)">Test</button>
-      <button class="btn-mini" data-lp-discover title="Ask this endpoint what it serves and refresh the model list (uses the key from the vault)">Discover</button>
-      ${authed ? `<button class="btn-mini" data-lp-rekey title="Add / update the key in the vault">Key</button>` : ""}
-      <button class="btn-mini danger" data-lp-del title="Remove this provider">${icon("close", 12)}</button>
+      <button class="btn-mini" data-lp-test data-url="${esc(p.baseUrl)}" data-tip="Check the endpoint is reachable (no key sent)">Test</button>
+      <button class="btn-mini" data-lp-discover data-tip="Ask this endpoint what it serves and refresh the model list (uses the key from the vault)">Discover</button>
+      ${authed ? `<button class="btn-mini" data-lp-rekey data-tip="Add / update the key in the vault">Key</button>` : ""}
+      <button class="btn-mini danger" data-lp-del aria-label="Remove this provider" data-tip="Remove this provider">${icon("close", 12)}</button>
     </div>
     ${authed ? `<div class="lp-rekey" hidden>
       <input class="prov-key lp-rekey-input" type="password" placeholder="Paste the key/token → OS-encrypted vault" autocomplete="off" />
@@ -73,20 +74,53 @@ function providerRow(p: LocalProviderDef, vaultRefs: Set<string>): string {
   </div>`;
 }
 
+/** P-CTX.2b (ADR-0579): what the tool-output window control shows. Mirrors bridge.ts ResultWindowView. */
+export interface ResultWindowControlView { setting: ResultWindowSetting; model: string; contextTokens: number | null; window: ResultWindow | null }
+
+/** PURE: one sentence saying what the stored choice does for the current chat model. */
+export function resultWindowSummary(v: ResultWindowControlView): string {
+  const size = v.window ? `${v.window.thresholdKb} KB` : `${OMP_DEFAULT_THRESHOLD_KB} KB (omp's default)`;
+  if (v.setting === "omp") return `Every model gets omp's default of ${OMP_DEFAULT_THRESHOLD_KB} KB.`;
+  if (typeof v.setting === "number") return `Every model gets ${size}.`;
+  if (v.contextTokens === null) return v.model ? `${v.model} is not a local provider model, so it gets ${size}.` : `No local model is selected, so the window is ${size}.`;
+  return `${v.model} has a ${v.contextTokens.toLocaleString("en-US")} token context window, so it gets ${size}.`;
+}
+
+/** PURE: the tool-output window control: a labeled select and a one-paragraph note. The label and the
+ *  option text stay on one line (invariant 11); the note is a `.set-note` block, never a flex row. */
+export function resultWindowControlHtml(v: ResultWindowControlView | null): string {
+  if (!v) return "";
+  const sel = (value: string, on: boolean, label: string) => `<option value="${esc(value)}"${on ? " selected" : ""}>${esc(label)}</option>`;
+  const fixed: number[] = [...RESULT_WINDOW_FIXED_KB];
+  if (typeof v.setting === "number" && !fixed.includes(v.setting)) fixed.push(v.setting); // a size stored by hand still shows as selected
+  fixed.sort((a, b) => a - b);
+  const options = [
+    sel("auto", v.setting === "auto", "Automatic (sized to the model)"),
+    sel("omp", v.setting === "omp", `omp default (${OMP_DEFAULT_THRESHOLD_KB} KB)`),
+    ...fixed.map((kb) => sel(String(kb), v.setting === kb, `${kb} KB (about ${Math.round(kb * 256).toLocaleString("en-US")} tokens)`)),
+  ].join("");
+  return `<div class="lp-window">
+      <label class="lp-window-row"><span class="lp-window-label">Tool output window</span><select class="prov-key lp-window-sel" id="lpResultWindow">${options}</select></label>
+      <div class="set-note">${icon("info", 12)} ${esc(`The most of one tool result the model is shown. The rest is stored as a session artifact the model can read back in pages. ${resultWindowSummary(v)} A change applies after a restart.`)}</div>
+    </div>`;
+}
+
 /** The card body: intro + the list of providers + the add form. `vaultRefs` = the refs currently in the
- *  vault (so a provider shows "key in vault" vs "needs a key"); `isElectron` gates the key/vault affordances. */
-export function localProvidersCardBody(providers: LocalProviderDef[], vaultRefs: Set<string>, isElectron: boolean): string {
+ *  vault (so a provider shows "key in vault" vs "needs a key"); `isElectron` gates the key/vault affordances.
+ *  `windowView` (P-CTX.2b) adds the tool-output window control under the list; null leaves it out. */
+export function localProvidersCardBody(providers: LocalProviderDef[], vaultRefs: Set<string>, isElectron: boolean, windowView: ResultWindowControlView | null = null): string {
   const list = providers.length
     ? `<div class="lp-list">${providers.map((p) => providerRow(p, vaultRefs)).join("")}</div>`
     : `<div class="set-note">${icon("info", 12)} No local providers yet. Add a self-hosted or custom OpenAI-compatible endpoint below.</div>`;
   const authOpts = LOCAL_AUTH_KINDS.filter((k) => k !== "basic").map((k) => `<option value="${k}">${esc(authLabel(k))}</option>`).join(""); // basic not yet supported
   const vaultWarn = isElectron ? "" : `<div class="set-note">${icon("info", 12)} Storing a key needs the LUCID desktop app (the OS-encrypted vault). You can still add an open (no-auth) endpoint here.</div>`;
   const applyBtn = isElectron && providers.some((p) => p.enabled)
-    ? `<div class="lp-apply-row"><button class="btn-mini" data-lp-apply title="Restart LUCID so the agent picks up your local providers">${icon("shield", 12)} Restart to apply</button><span class="lp-apply-note">New or changed providers apply after a restart.</span></div>`
+    ? `<div class="lp-apply-row"><button class="btn-mini" data-lp-apply data-tip="Restart LUCID so the agent picks up your local providers">${icon("shield", 12)} Restart to apply</button><span class="lp-apply-note">New or changed providers apply after a restart.</span></div>`
     : "";
   return `
     <div class="set-note">${icon("info", 12)} Point LUCID at a self-hosted or custom OpenAI-compatible LLM - Ollama, llama.cpp, vLLM, LM Studio, or a box reached over a VPN tunnel (bring the tunnel up in your VPN client first). The endpoint + models live here; the API key goes only into the OS-encrypted vault. Changes apply on the next app restart.</div>
     ${list}
+    ${resultWindowControlHtml(windowView)}
     ${applyBtn}
     ${vaultWarn}
     <div class="lp-add">
@@ -101,10 +135,10 @@ export function localProvidersCardBody(providers: LocalProviderDef[], vaultRefs:
           <input class="prov-key" id="lpKey" type="password" placeholder="API key / token (stored in the vault)" autocomplete="off" />
         </div>
         <label class="lp-ext"><input type="checkbox" id="lpExternal" /> <span>This endpoint is on the public internet (external). Leave off for a LAN / VPN / localhost box.</span></label>
-        <label class="lp-ext" title="${esc(ENCLAVE_TIP)}"><input type="checkbox" id="lpEnclave" /> <span>${esc(ENCLAVE_LABEL)}: allowed under CUI lockdown. Never for an external endpoint.</span></label>
+        <label class="lp-ext" data-tip="${esc(ENCLAVE_LABEL)}|${esc(ENCLAVE_TIP)}"><input type="checkbox" id="lpEnclave" /> <span>${esc(ENCLAVE_LABEL)}: allowed under CUI lockdown. Never for an external endpoint.</span></label>
         <div class="lp-add-actions">
-          <button class="btn-mini" data-lp-test-form title="Check the endpoint is reachable (no key sent)">${icon("shield", 12)} Test connection</button>
-          <button class="btn-mini" data-lp-discover-form title="Ask the endpoint what it serves and fill the model ids from its answer">${icon("bolt", 12)} Discover models</button>
+          <button class="btn-mini" data-lp-test-form data-tip="Check the endpoint is reachable (no key sent)">${icon("shield", 12)} Test connection</button>
+          <button class="btn-mini" data-lp-discover-form data-tip="Ask the endpoint what it serves and fill the model ids from its answer">${icon("bolt", 12)} Discover models</button>
           <button class="btn-mini ok" data-lp-add>${icon("check", 12)} Add provider</button>
         </div>
       </div>

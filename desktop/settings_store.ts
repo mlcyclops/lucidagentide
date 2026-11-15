@@ -33,6 +33,7 @@ import { DEFAULT_RELAY_URL } from "@oh-my-pi/pi-wire"; // P-COLLAB.3: the public
 import { sanitizeModelCompat, validateLocalProvider, type LocalModelDef, type LocalProviderDef } from "./local_providers.ts";
 import { isLocalModel } from "./renderer/model_families.ts"; // cloud-only default: explicit-choice migration
 import { validateCreatorEndpoint, type CreatorEndpointDef } from "./creator_registry.ts"; // CREATOR-0 (ADR-0282)
+import { parseResultWindowSetting, type ResultWindowSetting } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 
 // LUCID_GUI_SETTINGS_FILE is a supported instance-isolation seam. Creator and Fleet builds point it at
 // their own settings file; tests use the same seam for temporary stores. Read per call so environment
@@ -138,6 +139,9 @@ export interface GuiSettings {
   developerMode?: boolean;
   // P-KG-SYM.1: expose the workspace code graph to the agent as a read-only `codegraph_query` tool.
   codeGraphAgent?: boolean;
+  // P-CTX.2b (ADR-0579): the tool-result window. Absent = sized to the chat model ("auto"); "omp" = omp's
+  // 50 KB default; a number = a fixed spill threshold in KB. Read through resultWindowSetting().
+  resultWindow?: "omp" | number;
   // P-MCP.1 (ADR-0020): configured MCP servers, fed into omp's session/new mcpServers. Tokens have the
   // same custody as provider keys: the engine OS vault (ADR-0472), this file only as the 0600 fallback.
   mcpServers?: McpServerEntry[];
@@ -325,6 +329,16 @@ export function setDeveloperMode(enabled: boolean): GuiSettings {
 }
 export function setCodeGraphAgent(enabled: boolean): GuiSettings {
   const s = load(); s.codeGraphAgent = enabled; save(s); return s;
+}
+/** P-CTX.2b (ADR-0579): the stored tool-result window choice. Anything unrecognized reads as "auto". */
+export function resultWindowSetting(): ResultWindowSetting { return parseResultWindowSetting(load().resultWindow); }
+/** Persist the choice. "auto" is stored as absence, so a settings file that never chose stays untouched. */
+export function setResultWindowSetting(v: unknown): ResultWindowSetting {
+  const next = parseResultWindowSetting(v);
+  const s = load();
+  if (next === "auto") delete s.resultWindow; else s.resultWindow = next;
+  save(s);
+  return next;
 }
 
 // P-COLLAB.3 (ADR-0192): the authorized live-collab relay, or null when none is (fail-closed). Self-hosted
@@ -1211,6 +1225,9 @@ export function judgmentOverlayFile(): string { return join(dirname(settingsFile
 /** P-MODEL.8 (ADR-0448): the omp `--config` overlay carrying the heavy model roles (model_roles.ts). Same
  *  directory and isolation seam as the judgment overlay. */
 export function modelRolesOverlayFile(): string { return join(dirname(settingsFile()), "lucid-model-roles.yml"); }
+/** P-CTX.2b (ADR-0579): the omp `--config` overlay carrying the tool-result window (result_window.ts). Same
+ *  directory and isolation seam as the judgment overlay. */
+export function resultWindowOverlayFile(): string { return join(dirname(settingsFile()), "lucid-result-window.yml"); }
 /** ADR-0221: the stored embeddings config (non-secret), or null when semantic search was never set up. */
 export type StoredEmbeddingsConfig = NonNullable<GuiSettings["embeddings"]>;
 export function embeddingsConfig(): StoredEmbeddingsConfig | null { return load().embeddings ?? null; }
