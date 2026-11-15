@@ -127,7 +127,7 @@ import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECA
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { probeRateLimits } from "./ratelimit_probe.ts";
 import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger, type CodeActivity, type UsageLedger } from "../tools/memory_data.ts";
-import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, TURN_ALREADY_RUNNING, type JudgePlan } from "./acp_backend.ts";
+import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, perCallModelView, TURN_ALREADY_RUNNING, type JudgePlan } from "./acp_backend.ts";
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
@@ -187,7 +187,7 @@ import { setDefaultWindowsHide } from "./acp.ts";
 import { HeadedBrowserRevealer } from "./headed_browser_reveal.ts"; // P-BROWSER.5 (ADR-0456): show the headed browser omp's broker spawns hidden
 import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
-import { lastModel as lastChatModel, resultWindowSetting, setResultWindowSetting } from "./settings_store.ts"; // P-CTX.2b (ADR-0579)
+import { lastModel as lastChatModel, resultWindowSetting, setPerCallModelSetting, setResultWindowSetting } from "./settings_store.ts"; // P-CTX.2b (ADR-0579), P-MODEL.11 (ADR-0602)
 import { chatModelContextWindow, resolveResultWindow } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 import { parseQuestion, sanitizeHistory } from "./ask_lucid.ts"; // P-ASKLUCID.1 (ADR-0581)
 import { answerAskLucid, NOTHING_SEEN } from "./ask_lucid_service.ts"; // P-ASKLUCID.1 (ADR-0581)
@@ -3719,6 +3719,21 @@ return Bun.serve({
           return json({ ok: true, data: judgmentView(plan) });
         }
         return json({ ok: true, data: judgmentView(judgePlan()) });
+      }
+      // P-MODEL.11 (ADR-0602): may a subagent call pick its model. GET answers the stored choice, the effective
+      // value after the AskSage-lockdown and org-policy clamps, and which clamp applies. POST persists the choice
+      // and restarts the main omp child when the effective value changes, because the overlay is written at
+      // spawn; fleet lanes take it at their next start.
+      if (p === "/api/per-call-model") {
+        if (req.method === "POST") {
+          const b = await readBody<{ setting?: unknown }>(req);
+          const before = perCallModelView().effective;
+          setPerCallModelSetting(b.setting);
+          const view = perCallModelView();
+          if (view.effective !== before) backend.restart();
+          return json({ ok: true, data: view });
+        }
+        return json({ ok: true, data: perCallModelView() });
       }
       if (p === "/api/judgment/bans/reset" && req.method === "POST") {
         const had = judgePlan().banned.length > 0;
