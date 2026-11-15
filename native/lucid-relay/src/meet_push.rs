@@ -177,7 +177,7 @@ impl State {
                 continue;
             }
             let mark = marks.and_then(|o| pj::as_num(o.get(cid))).unwrap_or(0.0);
-            let fresh = self.channel_msgs.get(cid).into_iter().flatten().filter(|m| pj::num(m, "ts") > mark && pj::text_of(m, "from") != principal && !pj::truthy(m.get("deleted")));
+            let fresh = self.channel_msgs.get(cid).into_iter().flatten().filter(|m| pj::num(m, "ts") > mark && pj::text_of(m, "from") != principal && !pj::truthy(m.get("deleted")) && !pj::truthy(m.get("imported")));
             let count = if level == "all" {
                 fresh.filter(|m| !pj::truthy(m.get("thread")) || pj::truthy(m.get("also_channel"))).count()
             } else {
@@ -299,11 +299,8 @@ impl State {
         let key = if room == format!("dm-{}", &digest[..16]) {
             format!("dm:{from}")
         } else {
-            let channel = self.channels.iter().find(|(cid, ch)| {
-                let rest = cid.strip_prefix("c-").unwrap_or(cid.as_str());
-                let call: String = format!("cv-{rest}").chars().take(40).collect();
-                call == room && channels::members_of(ch.as_object()).iter().any(|m| m == to)
-            });
+            // _bridge_room: a bridged DM's `bdm:<link id>` rings as `cv-bdm-<link id>`
+            let channel = self.channels.iter().find(|(cid, ch)| bridge::room(&cid.trim().to_lowercase()) == room && channels::members_of(ch.as_object()).iter().any(|m| m == to));
             match channel {
                 Some((cid, _)) => format!("channel:{cid}"),
                 None => format!("room:{room}"),

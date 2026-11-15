@@ -221,7 +221,7 @@ impl Files {
     }
 
     /// _files_path: where a file's bytes are: only ever `<folder>/<32 hex>[.part]` (callers pass checked ids).
-    fn path(&mut self, fid: &str, part: bool) -> std::io::Result<PathBuf> {
+    pub(super) fn path(&mut self, fid: &str, part: bool) -> std::io::Result<PathBuf> {
         debug_assert!(is_id(fid));
         Ok(self.folder()?.join(if part { format!("{fid}.part") } else { fid.to_string() }))
     }
@@ -323,11 +323,12 @@ impl State {
     }
 
     /// _files_where: the conversation a new file goes to, checked like a message to it.
-    fn files_where(&self, who: &Identity, scope: &str, peer: Option<&str>, session: Option<&str>, with_: Option<&str>, channel: Option<&str>) -> R<Obj> {
+    fn files_where(&mut self, who: &Identity, scope: &str, peer: Option<&str>, session: Option<&str>, with_: Option<&str>, channel: Option<&str>) -> R<Obj> {
         Ok(match Hub::conversation(self, who, scope, peer, session, with_, channel, true)? {
             Conv::Room { room, .. } => obj([("scope", Value::from("room")), ("room", Value::from(room))]),
             Conv::Dm(other) => {
-                if !self.directory.contains_key(&other) {
+                // PC-1: a person's DM with an app of a current policy (never an archive)
+                if !self.directory.contains_key(&other) && self.pc_dm_peer(who, &other)?.is_none() {
                     return Err(E::NotFound("nobody with that address has used this relay yet".into()));
                 }
                 let mut pair = [who.principal.clone(), other.clone()];
@@ -366,7 +367,8 @@ impl State {
             "dm" => self.mail_s,
             _ => self.channel_s,
         };
-        let fresh = pj::num(meta, "ts") >= now - keep;
+        // PC-1: also within the conversation's signed `files` retention
+        let fresh = pj::num(meta, "ts") >= now - keep && pj::num(meta, "ts") >= now - self.pc_file_keep_s(meta);
         let named = |msg: &Obj| msg.get("files").and_then(Value::as_array).map(|l| l.iter().any(|f| f.get("id").and_then(Value::as_str) == Some(fid))).unwrap_or(false);
         let alive = fresh && self.files_message(meta).map(|msg| !pj::truthy(msg.get("deleted")) && named(&*msg)).unwrap_or(false);
         if !alive {
@@ -386,11 +388,12 @@ impl State {
 
     /// _files_member: members only: the two people of a DM, the members of a channel or group, and the people in the
     /// call (now, or while the file was shared). Others hear 404.
-    fn files_member(&self, who: &Identity, meta: &Obj) -> R<()> {
+    fn files_member(&mut self, who: &Identity, meta: &Obj) -> R<()> {
         match pj::text_of(meta, "scope").as_str() {
             "dm" => {
-                let pair = meta.get("pair").and_then(Value::as_array);
-                if !pair.map(|p| p.iter().any(|x| x.as_str() == Some(who.principal.as_str()))).unwrap_or(false) {
+                let pair: Vec<String> = meta.get("pair").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+                // PC-1: an archive reads the files of a DM its org's policy covers
+                if !pair.contains(&who.principal) && !self.pc_archive_reads(who, &pair) {
                     return Err(E::NotFound(GONE.into()));
                 }
             }
@@ -471,6 +474,10 @@ impl State {
     /// delete) everyone in the conversation hears a `chat_update`.
     fn files_purge(&mut self, fid: &str, by: Option<&Identity>) {
         let meta = self.files_store().shift_remove(fid);
+        if let Some(Value::Object(m)) = &meta {
+            // PC-1: a held conversation keeps the bytes
+            self.pc_hold_file(fid, m);
+        }
         self.files.unlink(fid, false);
         let Some(Value::Object(meta)) = meta else { return };
         self.dirty = true;

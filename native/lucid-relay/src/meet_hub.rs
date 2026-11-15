@@ -50,6 +50,12 @@ pub mod parity;
 // Parity wave B (contract PB-1 section 5): iPhone alert pushes through APNs.
 #[path = "meet_push.rs"]
 pub mod push;
+// Parity wave C (contract PC-1): org policies, app and archive sessions, legal holds, the SSO service, the enclave.
+#[path = "meet_parity_c.rs"]
+pub mod pc;
+// PC-1 section 2: canvases and lists (/v1/docs/*).
+#[path = "meet_pc_docs.rs"]
+mod pc_docs;
 
 pub const PEER_TIMEOUT: f64 = 40.0;
 pub const SESSION_TIMEOUT: f64 = 40.0;
@@ -482,6 +488,11 @@ pub struct State {
     push_tokens: Obj,
     /// In memory: the APNs sender (None: push is off), the thread-id secret and the push rate book.
     pu: push::Push,
+    /// In memory: parity wave C's settings, the verified org policy store, SSO answers and app icons without a state
+    /// folder (persisted state: ext["pc"]).
+    pc: pc::Pc,
+    /// In memory: the canvases' and cursors' rate counters.
+    pc_docs: pc_docs::DocsRate,
 }
 
 /// _empty_stage. `spotlight`: the peer everyone sees large ("" for none); `cohosts`: the co-organizers' principals.
@@ -925,8 +936,8 @@ impl State {
     }
 
     fn seen(&mut self, who: &Identity) {
-        // the console server, web guests and bridge connectors are not people
-        if who.console || who.guest || who.connector {
+        // the console server, web guests, bridge connectors and services (apps, archives, SSO) are not people
+        if who.console || who.guest || who.connector || who.is_service() {
             return;
         }
         let now = pj::now();
@@ -987,7 +998,7 @@ impl State {
     }
 
     fn announce(&mut self, who: &Identity, before: &PState) {
-        if who.console || who.guest || who.connector {
+        if who.console || who.guest || who.connector || who.is_service() {
             return;
         }
         let after = self.pstate(&who.principal);
@@ -1047,7 +1058,7 @@ impl State {
     pub fn online(&self) -> IndexMap<String, Obj> {
         let mut out: IndexMap<String, Obj> = IndexMap::new();
         let mut add = |who: &Identity, since: f64, room: &str| {
-            if who.console || who.guest || who.connector {
+            if who.console || who.guest || who.connector || who.is_service() {
                 return;
             }
             match out.get_mut(&who.principal) {
@@ -1292,9 +1303,27 @@ impl State {
             lines.retain(|_, v| !v.is_empty());
         };
         keep(&mut self.rooms, hist_cut);
-        keep(&mut self.dms, mail_cut);
+        // PC-1: the longest of the members' signed retentions, capped by mail_days and channel_days; a held
+        // conversation's pruned rows go to the hold store
+        for key in self.dms.keys().cloned().collect::<Vec<_>>() {
+            let rows = self.dms.get_mut(&key).map(std::mem::take).unwrap_or_default();
+            let kept = self.pc_prune_rows(rows, now, Some(&key), None);
+            if kept.is_empty() {
+                self.dms.shift_remove(&key);
+            } else if let Some(slot) = self.dms.get_mut(&key) {
+                *slot = kept;
+            }
+        }
         let channel_cut = now - self.channel_s;
-        keep(&mut self.channel_msgs, channel_cut);
+        for cid in self.channel_msgs.keys().cloned().collect::<Vec<_>>() {
+            let rows = self.channel_msgs.get_mut(&cid).map(std::mem::take).unwrap_or_default();
+            let kept = self.pc_prune_rows(rows, now, None, Some(&cid));
+            if kept.is_empty() {
+                self.channel_msgs.shift_remove(&cid);
+            } else if let Some(slot) = self.channel_msgs.get_mut(&cid) {
+                *slot = kept;
+            }
+        }
         // archived longer than the retention, nothing kept
         let msgs = &self.channel_msgs;
         self.channels.retain(|cid, ch| {
@@ -1421,6 +1450,7 @@ impl State {
         self.bridge_prune(now);
         self.ce_prune(now);
         self.pa_prune(now);
+        self.pc_prune(now);
     }
 
     /// _wave3_each("may_join"): a slice may refuse a join (before any seat changes). `ext`: the join's body.
@@ -1558,15 +1588,15 @@ fn load_issued(cert_pem: Option<&Value>, ca_pem: Option<&Value>) -> R<(Cert, Cer
 
 /// _csr_hash: SHA-256 (hex) of a request's DER, from its PEM ("" when none).
 pub fn csr_hash(pem: &str) -> String {
-    for (block, _) in pem_blocks(pem.as_bytes(), "CERTIFICATE REQUEST").into_iter().chain(pem_blocks(pem.as_bytes(), "NEW CERTIFICATE REQUEST")) {
-        let text = String::from_utf8_lossy(&block);
-        let body: String = text.lines().filter(|l| !l.starts_with("-----")).collect::<String>().split_whitespace().collect();
-        return match pj::b64_strict(&body) {
-            Some(der) => crate::codec::sha256_hex(&der),
-            None => String::new(),
-        };
+    let first = pem_blocks(pem.as_bytes(), "CERTIFICATE REQUEST").into_iter()
+        .chain(pem_blocks(pem.as_bytes(), "NEW CERTIFICATE REQUEST")).next();
+    let Some((block, _)) = first else { return String::new() };
+    let text = String::from_utf8_lossy(&block);
+    let body: String = text.lines().filter(|l| !l.starts_with("-----")).collect::<String>().split_whitespace().collect();
+    match pj::b64_strict(&body) {
+        Some(der) => crate::codec::sha256_hex(&der),
+        None => String::new(),
     }
-    String::new()
 }
 
 /// meet_pki.check_code of a request's key: `"123 456"`.
@@ -1734,6 +1764,8 @@ impl Hub {
             pa: parity::Parity::new(state_dir.as_deref()),
             push_tokens: Obj::new(),
             pu: push::Push::new(state_dir.as_deref()),
+            pc: pc::Pc::new(state_dir.as_deref()),
+            pc_docs: pc_docs::DocsRate::default(),
         };
         let hub = Hub { st: Mutex::new(st), cond: Condvar::new(), signer, links, state_dir, save_lock: Mutex::new(()), stop: AtomicBool::new(false) };
         if hub.state_dir.is_some() {
@@ -2444,6 +2476,7 @@ impl Hub {
                         push(&mut s.seq, &mut s.events, &with(event, obj([("with", Value::from(who.principal.clone()))])));
                     }
                 }
+                st.pc_tell_archives(&who.principal, other, event);
             }
         }
     }
@@ -2476,6 +2509,8 @@ impl Hub {
             }
             let now = pj::now();
             let mut event = obj([("type", Value::from("chat_update")), ("scope", Value::from(scope)), ("id", Value::from(id))]);
+            // PC-1: a held conversation keeps the message as it was before the delete
+            let held = if delete { Some(list[i].clone()) } else { None };
             if delete {
                 tombstone(list, i, now);
                 event.insert("text".into(), Value::from(""));
@@ -2488,6 +2523,13 @@ impl Hub {
                 event.insert("edited".into(), f(now));
             }
             let out = list[i].clone();
+            if let Some(target) = held {
+                match &c {
+                    Conv::Channel(cid) => st.pc_hold_deleted(&who.principal, "", Some(cid), &target),
+                    Conv::Dm(other) => st.pc_hold_deleted(&who.principal, other, None, &target),
+                    Conv::Room { .. } => {}
+                }
+            }
             event.insert("by".into(), Value::from(who.principal.clone()));
             st.dirty = true;
             if let Conv::Channel(cid) = &c {
@@ -3179,6 +3221,9 @@ impl Hub {
         if who.connector {
             return forbidden(bridge::ROUTES_ONLY);
         }
+        if who.is_service() {
+            return forbidden(pc::routes_only(&who.kind));
+        }
         let client = m::client(Some(&Value::Object(client.clone())));
         let mut st = self.st.lock();
         let r = (|| -> R<(Obj, String)> {
@@ -3253,6 +3298,7 @@ impl Hub {
                 ("push", Value::Bool(st.pu_on())),
             ]);
             reply.extend(st.ce_hello());
+            reply.extend(st.pc_hello());
             Ok((reply, sid))
         })();
         drop(st);
@@ -4477,7 +4523,7 @@ mod tests {
 
     #[test]
     fn state_json_round_trips_in_python_text() {
-        let text = "{\"v\": 2, \"directory\": {\"ann@x\": {\"name\": \"Ann\", \"last_seen\": 1.5}}, \"dms\": {}, \"read\": {}, \"invites\": {}, \"rooms\": {}, \"left\": {}, \"renewals\": {}, \"renewed\": {}, \"enrollments\": {}, \"consumed_seeds\": {}, \"seed_requests\": {}, \"seeded\": {}, \"denied\": {}, \"organizations\": {\"ben@x\": null, \"cy@x\": {\"id\": \"o\", \"label\": \"O\"}}, \"status\": {\"ann@x\": {\"state\": \"busy\", \"text\": \"\", \"until\": 4102444800000}, \"ben@x\": {\"state\": \"away\", \"text\": \"\"}}, \"receipts\": {\"ann@x\": {\"ben@x\": 2.5}}, \"meetings\": {\"m-abcdefgh23\": {\"id\": \"m-abcdefgh23\", \"room\": \"m-abcdefgh23\", \"title\": \"Weekly\", \"description\": \"\", \"start\": 1700000000.0, \"end\": 1700001800.0, \"recurrence\": \"weekly\", \"tz\": \"Europe/Paris\", \"organizer\": {\"principal\": \"ann@x\", \"name\": \"Ann\"}, \"attendees\": [{\"principal\": \"ben@x\", \"name\": \"Ben\", \"response\": \"none\"}], \"created\": 1.5, \"updated\": 1.5, \"canceled\": null}}, \"channels\": {\"c-01\": {\"id\": \"c-01\", \"kind\": \"public\", \"name\": \"general\", \"topic\": \"\", \"created_by\": \"ann@x\", \"members\": [\"ann@x\"], \"created\": 1.5, \"archived\": null, \"last\": 1.5, \"e2ee\": true, \"bridgeable\": false, \"e2ee_since\": 1500}}, \"channel_messages\": {\"c-01\": [{\"id\": \"m1\", \"channel\": \"c-01\", \"from\": \"ann@x\", \"from_name\": \"Ann\", \"from_org\": null, \"text\": \"hi\", \"ts\": 1.5, \"reactions\": {}}]}, \"channel_read\": {\"ann@x\": {\"c-01\": 1.5}}, \"prefs\": {\"ann@x\": {\"rev\": 2, \"notify\": {\"dm:ben@x\": \"off\"}, \"sections\": [{\"id\": \"s-0123abcd\", \"name\": \"Team\", \"convs\": [\"dm:ben@x\"]}], \"channel_default\": \"mentions\"}}, \"emoji\": {\"party\": {\"name\": \"party\", \"hash\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"type\": \"png\", \"org\": null, \"by\": \"ann@x\", \"ts\": 1500}}, \"attendance\": {\"ops\": [{\"id\": \"0123456789abcdef\", \"start\": 4102444000000, \"end\": 4102444800000, \"people\": [{\"principal\": \"ann@x\", \"name\": \"Ann\", \"org\": null, \"joins\": [[4102444000000, 4102444800000]], \"role\": \"host\"}]}]}, \"push_tokens\": {\"ann@x\": {\"aaaaaaaaaaaaaaaa\": {\"token\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"env\": \"sandbox\", \"ts\": 1700000000000, \"serial\": \"1a\"}}}, \"ext\": {\"files\": {\"v\": 1, \"files\": {}}, \"guests\": {\"revoked\": {}, \"blocked\": {}}, \"bridge\": {\"v\": 1, \"policies\": {}, \"links\": {}, \"codes\": {}, \"connectors\": {}, \"seq\": 0, \"outbox\": {}, \"map\": {}, \"offered\": {}}, \"ce\": {\"v\": 1, \"since\": 1500, \"seq\": 0, \"bundles\": {}, \"wraps\": {}, \"logs\": {}}}}";
+        let text = "{\"v\": 2, \"directory\": {\"ann@x\": {\"name\": \"Ann\", \"last_seen\": 1.5}}, \"dms\": {}, \"read\": {}, \"invites\": {}, \"rooms\": {}, \"left\": {}, \"renewals\": {}, \"renewed\": {}, \"enrollments\": {}, \"consumed_seeds\": {}, \"seed_requests\": {}, \"seeded\": {}, \"denied\": {}, \"organizations\": {\"ben@x\": null, \"cy@x\": {\"id\": \"o\", \"label\": \"O\"}}, \"status\": {\"ann@x\": {\"state\": \"busy\", \"text\": \"\", \"until\": 4102444800000}, \"ben@x\": {\"state\": \"away\", \"text\": \"\"}}, \"receipts\": {\"ann@x\": {\"ben@x\": 2.5}}, \"meetings\": {\"m-abcdefgh23\": {\"id\": \"m-abcdefgh23\", \"room\": \"m-abcdefgh23\", \"title\": \"Weekly\", \"description\": \"\", \"start\": 1700000000.0, \"end\": 1700001800.0, \"recurrence\": \"weekly\", \"tz\": \"Europe/Paris\", \"organizer\": {\"principal\": \"ann@x\", \"name\": \"Ann\"}, \"attendees\": [{\"principal\": \"ben@x\", \"name\": \"Ben\", \"response\": \"none\"}], \"created\": 1.5, \"updated\": 1.5, \"canceled\": null}}, \"channels\": {\"c-01\": {\"id\": \"c-01\", \"kind\": \"public\", \"name\": \"general\", \"topic\": \"\", \"created_by\": \"ann@x\", \"members\": [\"ann@x\"], \"created\": 1.5, \"archived\": null, \"last\": 1.5, \"e2ee\": true, \"bridgeable\": false, \"e2ee_since\": 1500}}, \"channel_messages\": {\"c-01\": [{\"id\": \"m1\", \"channel\": \"c-01\", \"from\": \"ann@x\", \"from_name\": \"Ann\", \"from_org\": null, \"text\": \"hi\", \"ts\": 1.5, \"reactions\": {}}]}, \"channel_read\": {\"ann@x\": {\"c-01\": 1.5}}, \"prefs\": {\"ann@x\": {\"rev\": 2, \"notify\": {\"dm:ben@x\": \"off\"}, \"sections\": [{\"id\": \"s-0123abcd\", \"name\": \"Team\", \"convs\": [\"dm:ben@x\"]}], \"channel_default\": \"mentions\"}}, \"emoji\": {\"party\": {\"name\": \"party\", \"hash\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"type\": \"png\", \"org\": null, \"by\": \"ann@x\", \"ts\": 1500}}, \"attendance\": {\"ops\": [{\"id\": \"0123456789abcdef\", \"start\": 4102444000000, \"end\": 4102444800000, \"people\": [{\"principal\": \"ann@x\", \"name\": \"Ann\", \"org\": null, \"joins\": [[4102444000000, 4102444800000]], \"role\": \"host\"}]}]}, \"push_tokens\": {\"ann@x\": {\"aaaaaaaaaaaaaaaa\": {\"token\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"env\": \"sandbox\", \"ts\": 1700000000000, \"serial\": \"1a\"}}}, \"ext\": {\"files\": {\"v\": 1, \"files\": {}}, \"guests\": {\"revoked\": {}, \"blocked\": {}}, \"bridge\": {\"v\": 1, \"policies\": {}, \"links\": {}, \"codes\": {}, \"connectors\": {}, \"seq\": 0, \"outbox\": {}, \"map\": {}, \"offered\": {}}, \"ce\": {\"v\": 1, \"since\": 1500, \"seq\": 0, \"bundles\": {}, \"wraps\": {}, \"logs\": {}}, \"pc\": {\"v\": 1, \"policies\": [], \"holds\": [], \"kept\": {}, \"sso\": {}, \"adds\": [], \"docs\": {}, \"signer_policy\": null}}}";
         let dir = std::env::temp_dir().join(format!("meet-state-{}", pj::token_hex(4)));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("state.json"), text).unwrap();

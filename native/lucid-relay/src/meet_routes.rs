@@ -2,7 +2,7 @@
 // caller, body and gate in the order the Python handler does, so the same request gets the same first refusal.
 
 use crate::meet::{self as m, run, Ctx, R, CAPTIONS_LIMIT_MAX};
-use crate::meet_hub::{bridge, ce, files, parity, E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
+use crate::meet_hub::{bridge, ce, files, parity, pc, E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
 use crate::meet_json::{self as pj, obj, Obj};
 use crate::meet_tls::{crl_path, read_bytes};
 use crate::meet_x509::pem_blocks;
@@ -185,6 +185,49 @@ fn get_route(path: &str) -> Option<Route> {
             let session = c.q("session", "");
             c.gate(&who, None, "", &session)?;
             c.relay.hub.ce_log_get(&session, &who, &c.q("cid", ""), &c.q("after", "0"), &c.q("limit", "500"))
+        },
+        // parity wave C
+        "/v1/org/policy" => |c: &mut Ctx| {
+            c.who(false)?;
+            c.relay.hub.pc_policy_get(&c.q("org", ""), &c.q("sha256", ""))
+        },
+        "/v1/apps" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.gate(&who, None, "", &session)?;
+            c.relay.hub.pc_apps(&session, &who)
+        },
+        "/v1/apps/icon" => |c: &mut Ctx| {
+            c.who(false)?;
+            let (headers, body) = c.relay.hub.pc_icon_get(&c.q("sha256", ""))?;
+            c.raw = Some(m::Raw::Bytes(headers, body));
+            Ok(Obj::new())
+        },
+        "/v1/apps/c/events" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.pc_apps_events(&c.q("session", ""), &who, &c.q("after", "0"), &c.q("wait", &(pc::EVENTS_WAIT as i64).to_string()))
+        },
+        "/v1/admin/holds" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.pc_holds_list(&c.q("session", ""), &who)
+        },
+        "/v1/sso/asks" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.pc_sso_asks(&c.q("session", ""), &who)
+        },
+        "/v1/docs/history" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.gate(&who, None, "", &session)?;
+            let q = |name: &str| Some(c.q(name, "")).filter(|v| !v.is_empty());
+            c.relay.hub.pc_docs_history(&session, &who, &c.q("scope", ""), q("with"), q("channel"), &c.q("doc", ""), &c.q("after", "0"), &c.q("limit", "500"))
+        },
+        "/v1/docs/list" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.gate(&who, None, "", &session)?;
+            let q = |name: &str| Some(c.q(name, "")).filter(|v| !v.is_empty());
+            c.relay.hub.pc_docs_list(&session, &who, &c.q("scope", ""), q("with"), q("channel"))
         },
         _ => return None,
     };
@@ -419,6 +462,10 @@ fn post_route(path: &str) -> Option<Route> {
             let (who, b, session) = session_gate(c)?;
             c.relay.hub.bridge_code(&session, &who, b.get("channel"), b.get("platform"))
         },
+        "/v1/bridge/dm-code" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.bridge_dm_code(&session, &who, b.get("platform"))
+        },
         "/v1/bridge/unlink" => |c: &mut Ctx| {
             let (who, b, session) = session_gate(c)?;
             c.relay.hub.bridge_unlink(&session, &who, b.get("link"))
@@ -439,6 +486,16 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/bridge/c/claim" => |c: &mut Ctx| {
             let (who, b) = connector_body(c)?;
             c.relay.hub.bridge_c_claim(&who, b.get("code"), b.get("platform"), b.get("target"), b.get("by_name"))
+        },
+        "/v1/bridge/c/claim-dm" => |c: &mut Ctx| {
+            let (who, b) = connector_body(c)?;
+            c.relay.hub.bridge_c_claim_dm(&who, b.get("code"), b.get("platform"), b.get("target"), b.get("by_name"))
+        },
+        "/v1/bridge/c/backfill" => |c: &mut Ctx| {
+            // up to 500 earlier messages: a larger body than the other routes
+            let who = connector(c)?;
+            let b = c.body_max(bridge::BACKFILL_BODY)?;
+            c.relay.hub.bridge_c_backfill(&who, b.get("link"), b.get("messages"))
         },
         "/v1/bridge/c/unlink" => |c: &mut Ctx| {
             let (who, b) = connector_body(c)?;
@@ -487,6 +544,85 @@ fn post_route(path: &str) -> Option<Route> {
             let (who, b, session) = session_gate(c)?;
             c.relay.hub.ce_log_post(&session, &who, b.get("cid"), b.get("entry"))
         },
+        // parity wave C: org policies and the apps directory
+        "/v1/org/policy" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::POLICY_BODY_MAX)?);
+            c.relay.hub.pc_policy_upload(&pj::s(&b, "session"), &who, b.get("signed"), b.get("signer_policy"))
+        },
+        "/v1/org/policy/sign" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::POLICY_BODY_MAX)?);
+            c.relay.pc_sign_policy(&pj::s(&b, "session"), &who, b.get("policy"), b.get("proof"), b.get("ts"))
+        },
+        "/v1/apps/icon" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::ICON_MAX * 2)?);
+            c.relay.hub.pc_icon_put(&pj::s(&b, "session"), &who, b.get("png"))
+        },
+        // app and archive certificates
+        "/v1/apps/c/hello" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.body()?;
+            let minimums = c.relay.minimums(&c.relay.release());
+            c.relay.hub.pc_apps_hello(&who, &c.address, minimums)
+        },
+        "/v1/apps/c/ack" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.pc_apps_ack(&pj::s(&b, "session"), &who, b.get("seq"))
+        },
+        "/v1/apps/c/renew" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.pc_apps_renew(&who, &b)
+        },
+        // legal holds
+        "/v1/admin/holds" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.pc_holds_place(&pj::s(&b, "session"), &who, b.get("on"), b.get("principals"), b.get("cids"), b.get("reason"))
+        },
+        "/v1/admin/holds/release" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.pc_holds_release(&pj::s(&b, "session"), &who, b.get("id"), b.get("reason"))
+        },
+        // the SSO service and its admins
+        "/v1/sso/answer" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.pc_sso_answer(&pj::s(&b, "session"), &who, b.get("id"), b.get("answer"), b.get("proof"), b.get("ts"), b.get("service"))
+        },
+        "/v1/sso/c/hello" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            let minimums = c.relay.minimums(&c.relay.release());
+            c.relay.hub.pc_sso_hello(&who, b.get("asks"), minimums)
+        },
+        "/v1/sso/c/sign" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.pc_sso_sign(&who, &b)
+        },
+        "/v1/sso/c/revoke" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.pc_sso_revoke(&who, &b)
+        },
+        "/v1/sso/c/org-member" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.pc_sso_org_member(&who, b.get("principal"), b.get("org"), b.get("on"))
+        },
+        "/v1/sso/c/pending-add" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.pc_sso_pending_add(&who, b.get("principal"), b.get("cid"), b.get("idp"), b.get("group"))
+        },
+        // canvases and lists
+        "/v1/docs/post" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(ce::BODY_MAX)?);
+            c.gate(&who, None, "", &pj::s(&b, "session"))?;
+            c.relay.hub.pc_docs_post(&who, &pj::s(&b, "scope"), b.get("doc"), b.get("id"), b.get("enc"), b.get("kind"), b.get("body"), opt(&b, "session"), opt(&b, "with"), opt(&b, "channel"))
+        },
+        "/v1/docs/aware" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(ce::BODY_MAX)?);
+            c.gate(&who, None, "", &pj::s(&b, "session"))?;
+            c.relay.hub.pc_docs_aware(&who, &pj::s(&b, "scope"), b.get("doc"), b.get("id"), b.get("enc"), b.get("body"), opt(&b, "session"), opt(&b, "with"), opt(&b, "channel"))
+        },
+        "/v1/docs/delete" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(ce::BODY_MAX)?);
+            c.gate(&who, None, "", &pj::s(&b, "session"))?;
+            c.relay.hub.pc_docs_delete(&who, &pj::s(&b, "scope"), b.get("doc"), b.get("id"), b.get("enc"), opt(&b, "session"), opt(&b, "with"), opt(&b, "channel"))
+        },
         _ => return None,
     };
     Some(route)
@@ -495,10 +631,8 @@ fn post_route(path: &str) -> Option<Route> {
 /// do_GET / do_POST: 404 `unknown path`, else the route's answer through Handler._run. None when the client went
 /// away.
 pub fn dispatch(ctx: &mut Ctx, method: &str) -> Option<(u16, Obj)> {
-    // _bridge_confined: a connector certificate gets 403 on every path outside /v1/bridge/c/* (unknown ones too); the
-    // connection closes with the body left unread
-    if !ctx.path.starts_with(bridge::C_PREFIX) && m::connector_cert(ctx.der) {
-        return run(ctx, Ok(Err(m::E::Forbidden(bridge::ROUTES_ONLY.into()))));
+    if let Some(refused) = confined(ctx, method) {
+        return run(ctx, Ok(Err(refused)));
     }
     let route = if method == "GET" { get_route(&ctx.path) } else { post_route(&ctx.path) };
     let Some(route) = route else {
@@ -506,6 +640,32 @@ pub fn dispatch(ctx: &mut Ctx, method: &str) -> Option<(u16, Obj)> {
     };
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| route(ctx)));
     run(ctx, result)
+}
+
+/// _pcr_confined (PC-1, before any route lookup; the connection closes with the body left unread): a service
+/// certificate outside its allow-list or, with `enclave_networks`, outside them; and in an enclave every bridge route
+/// (the answer says `enclave: true`).
+fn confined(ctx: &Ctx, method: &str) -> Option<m::E> {
+    let uris = m::cert_uris(ctx.der);
+    let (kind, mut words) = match pc::cert_kind(&uris) {
+        Ok((kind, _)) => {
+            let words = pc::service_confined(&kind, method, &ctx.path).to_string();
+            (kind, words)
+        }
+        Err(e) => (String::new(), e.message()),
+    };
+    let s = &ctx.relay.settings;
+    if words.is_empty() && !s.enclave_networks.is_empty() && matches!(kind.as_str(), "app" | "archive" | "sso" | "connector") && !pc::inside(&ctx.address, &s.enclave_networks) {
+        words = pc::ENCLAVE_NETS.to_string();
+    }
+    if words.is_empty() && s.enclave && (ctx.path.starts_with(bridge::C_PREFIX) || (method == "POST" && pc::ENCLAVE_BRIDGE_ROUTES.contains(&ctx.path.as_str()))) {
+        return Some(m::E::Held(pc::ENCLAVE_BRIDGES.into(), obj([("enclave", Value::Bool(true))])));
+    }
+    if words.is_empty() {
+        None
+    } else {
+        Some(m::E::Forbidden(words))
+    }
 }
 
 // ── GET ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -553,6 +713,11 @@ fn dm_history(c: &mut Ctx) -> R<Obj> {
     let who = c.who(false)?;
     let session = c.q("session", "");
     c.gate(&who, None, "", &session)?;
+    let (a, b) = (c.q("a", ""), c.q("b", ""));
+    if !a.is_empty() || !b.is_empty() {
+        // PC-1: an archive reads a DM it covers
+        return c.relay.hub.pc_archive_dm_history(&session, &who, &a, &b, &c.q("after", "0"), &c.q("limit", "200"));
+    }
     let limit = m::py_int(&c.q("limit", "200"))?;
     let thread = Value::from(c.q("thread", ""));
     c.relay.hub.dm_history(&session, &who, &c.q("with", ""), &Value::from(c.q("after", "0")), limit, Some(&thread))

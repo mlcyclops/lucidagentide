@@ -10,7 +10,7 @@
 //   lucid-relay meet --config /etc/lucid-meet/relay.json [--verbose]
 
 use crate::meet_console::{Console, LinkStats, LogRing};
-use crate::meet_hub::Hub;
+use crate::meet_hub::{pc, Hub};
 use crate::meet_json::{self as pj, obj, Obj};
 use crate::meet_tls::{tls_config, RefusalLog, SignerClient};
 use crate::meet_x509::{der_to_pem, Cert};
@@ -260,6 +260,10 @@ pub struct Settings {
     pub push: PushSettings,
     /// A T3/T4 deployment: push may not be on.
     pub enclave: bool,
+    /// Parity wave C: in an enclave, the networks (CIDR) service certificates may connect from and the signer must
+    /// resolve into ([] = not limited); and legal holds (PC-1 section 3), off unless set.
+    pub enclave_networks: Vec<String>,
+    pub legal_holds: bool,
 }
 
 /// relay.json `push`: `{enabled, team_id, key_id, key_file (the .p8, never logged), topic (the app's bundle id),
@@ -280,11 +284,11 @@ impl Default for PushSettings {
     }
 }
 
-const SETTINGS_FIELDS: [&str; 47] = [
+const SETTINGS_FIELDS: [&str; 49] = [
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "channel_days", "signer_url", "signer_cert",
     "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations", "file_max_mb", "files_quota_gb", "guest_port",
     "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max",
-    "bridge_policies", "chat_e2ee", "chat_history_share", "attendance", "attendance_days", "emoji_max", "push", "enclave",
+    "bridge_policies", "chat_e2ee", "chat_history_share", "attendance", "attendance_days", "emoji_max", "push", "enclave", "enclave_networks", "legal_holds",
 ];
 
 /// ORG_FIELD_MAX: characters of an organization id or label.
@@ -352,6 +356,8 @@ impl Default for Settings {
             emoji_max: 500,
             push: PushSettings::default(),
             enclave: false,
+            enclave_networks: Vec::new(),
+            legal_holds: false,
         }
     }
 }
@@ -410,6 +416,13 @@ fn push_settings(raw: &Obj, s: &mut Settings) -> Result<(), String> {
         None => {}
         Some(Value::Bool(b)) => s.enclave = *b,
         Some(_) => return Err("enclave must be true or false".into()),
+    }
+    // parity wave C: enclave_networks (only with enclave) and legal_holds
+    s.enclave_networks = pc::networks(raw.get("enclave_networks"), s.enclave)?;
+    match raw.get("legal_holds") {
+        None => {}
+        Some(Value::Bool(b)) => s.legal_holds = *b,
+        Some(_) => return Err("legal_holds must be true or false".into()),
     }
     if let Some(v) = raw.get("push") {
         let Value::Object(o) = v else { return Err(SHAPE.into()) };
@@ -578,12 +591,21 @@ pub struct Identity {
     /// A bridge connector (SAN URI urn:lucid-meet:connector): the /v1/bridge/c/* routes only, no session; never a
     /// person.
     pub connector: bool,
+    /// Parity wave C: the certificate's kind ("person", "app", "archive", "sso", "connector", "console"), only ever
+    /// from its SAN URIs, and its org URIs (an app or archive has one).
+    pub kind: String,
+    pub orgs: Vec<String>,
 }
 
 /// Web guests' principals: `guest-<16 hex>@guest.invalid` only.
 pub const GUEST_DOMAIN: &str = "@guest.invalid";
 
 impl Identity {
+    /// An app, archive or SSO service: never a person of the directory or presence.
+    pub fn is_service(&self) -> bool {
+        matches!(self.kind.as_str(), "app" | "archive" | "sso")
+    }
+
     /// A device id of its own (not legacy, not in-process): one session and one seat.
     pub fn own_device(&self) -> bool {
         !self.device.is_empty() && !self.device.starts_with(LEGACY_PREFIX)
@@ -606,6 +628,13 @@ pub fn identity_from_cert(der: Option<&[u8]>) -> R<Identity> {
     let cert = Cert::from_der(der).ok_or_else(|| E::Forbidden("the client certificate has no name or no email".into()))?;
     let cn = cert.names.cns().last().cloned().unwrap_or_default();
     let ou = cert.names.ous().first().map(|o| pj::clip(o.trim(), LABEL_MAX)).unwrap_or_default();
+    let uris = &cert.names.uris;
+    let (kind, orgs) = pc::cert_kind(uris)?;
+    if kind == "sso" {
+        // the SSO service has no email or device: it is named by its serial, sso routes only
+        let name = if cn.is_empty() { "Lucid Meet SSO".to_string() } else { cn };
+        return Ok(Identity { principal: format!("sso:{}", cert.serial), name: pj::clip(name.trim(), 80), serial: cert.serial.clone(), kind, orgs, ..Default::default() });
+    }
     let emails = &cert.names.emails;
     if cn.is_empty() || emails.is_empty() {
         return forbidden("the client certificate has no name or no email");
@@ -614,13 +643,19 @@ pub fn identity_from_cert(der: Option<&[u8]>) -> R<Identity> {
         // web guests own this domain (wave 3): a certificate may never pose as one
         return forbidden("addresses ending @guest.invalid belong to web guests");
     }
-    let uris = &cert.names.uris;
+    let principal = emails[0].trim().to_lowercase();
+    let service = if kind == "app" || kind == "archive" { kind.as_str() } else { "" };
+    if pc::service_kind(&principal) != service {
+        return forbidden(pc::APPS_EMAIL);
+    }
     let mut who = Identity {
-        principal: emails[0].trim().to_lowercase(),
+        principal,
         name: pj::clip(cn.trim(), 80),
         serial: cert.serial.clone(),
         console: uris.iter().any(|u| u == CONSOLE_URI),
         connector: uris.iter().any(|u| u == CONNECTOR_URI),
+        kind,
+        orgs,
         ..Default::default()
     };
     let token = uri_value(uris, SEED_URI_PREFIX);
@@ -639,10 +674,10 @@ pub fn identity_from_cert(der: Option<&[u8]>) -> R<Identity> {
     Ok(who)
 }
 
-/// _bridge_confined's test: the client certificate carries the connector URI (read from the certificate itself, so a
-/// connector is confined even when nothing else about it would be accepted).
-pub fn connector_cert(der: Option<&[u8]>) -> bool {
-    der.and_then(Cert::from_der).map(|c| c.names.uris.iter().any(|u| u == CONNECTOR_URI)).unwrap_or(false)
+/// The SAN URIs of the client certificate (read from the certificate itself, so a service is confined even when
+/// nothing else about it would be accepted); none without one.
+pub fn cert_uris(der: Option<&[u8]>) -> Vec<String> {
+    der.and_then(Cert::from_der).map(|c| c.names.uris).unwrap_or_default()
 }
 
 /// from_internet: a public internet address (ipaddress is_global), an IPv4-mapped address as its IPv4 address.
@@ -985,6 +1020,8 @@ pub struct Relay {
     pub turn_secret: Vec<u8>,
     pub last_fetch: Mutex<f64>,
     pub last_check: Mutex<f64>,
+    /// Monotonic: when the signer CRL's age was last checked (PC-1).
+    pub pc_last_crl_check: Mutex<f64>,
 }
 
 fn die(msg: &str) -> ! {
@@ -1024,6 +1061,42 @@ pub fn main(argv: &[String]) -> ! {
     serve(settings)
 }
 
+/// pc_enclave_start: PC-1 invariant 4 at start: in an enclave with `enclave_networks` the signer must resolve only
+/// inside them (the relay does not start otherwise), and one line says what is refused.
+fn pc_enclave_start(s: &Settings) {
+    use std::net::ToSocketAddrs;
+    if !s.enclave {
+        return;
+    }
+    let nets = &s.enclave_networks;
+    if !nets.is_empty() && !s.signer_url.is_empty() {
+        let rest = s.signer_url.split_once("://").map(|(_, r)| r).unwrap_or(&s.signer_url);
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        let authority = authority.rsplit('@').next().unwrap_or_default();
+        let host = match authority.strip_prefix('[') {
+            Some(h) => h.split(']').next().unwrap_or_default(),
+            None => authority.split(':').next().unwrap_or_default(),
+        }
+        .to_lowercase();
+        let mut found: Vec<String> = match (host.as_str(), 0).to_socket_addrs() {
+            Ok(addrs) => addrs.map(|a| a.ip().to_string()).collect(),
+            Err(e) => die(&format!("enclave: the signer {host} cannot be resolved ({e})")),
+        };
+        found.sort();
+        found.dedup();
+        let outside: Vec<String> = found.into_iter().filter(|a| !pc::inside(a, nets)).collect();
+        if !outside.is_empty() {
+            die(&format!("enclave: the signer {host} resolves outside enclave_networks ({})", outside.join(", ")));
+        }
+    }
+    let mut line = String::from("enclave: on; refused: bridges, bridgeable conversations, push");
+    if !nets.is_empty() {
+        line.push_str("; service connections limited to ");
+        line.push_str(&nets.join(", "));
+    }
+    log_info(&line);
+}
+
 fn serve(settings: Settings) -> ! {
     let secret = match std::fs::read(&settings.turn_secret_file) {
         Ok(b) => {
@@ -1035,6 +1108,7 @@ fn serve(settings: Settings) -> ! {
     if secret.len() < 16 {
         die("the TURN secret is missing or shorter than 16 bytes");
     }
+    pc_enclave_start(&settings);
     let signer = if settings.signer_url.is_empty() {
         None
     } else {
@@ -1049,6 +1123,8 @@ fn serve(settings: Settings) -> ! {
         st.recording_enabled = settings.recording_enabled;
         st.organizations = settings.organizations.clone();
     }
+    // before the slices: the bridge reads the enclave
+    hub.pc_configure(&settings);
     hub.wave3_configure(&settings).unwrap_or_else(|e| die(&e));
     hub.push_configure(&settings);
     let tls = tls_config(&settings).unwrap_or_else(|e| die(&e));
@@ -1066,7 +1142,13 @@ fn serve(settings: Settings) -> ! {
         turn_secret: secret,
         last_fetch: Mutex::new(-1e9),
         last_check: Mutex::new(-1e9),
+        pc_last_crl_check: Mutex::new(-1e9),
     });
+    {
+        // the service gate reads the relay's version minimums
+        let weak = Arc::downgrade(&relay);
+        hub.pc_set_minimums(Arc::new(move || weak.upgrade().map(|r| r.minimums(&r.release())).unwrap_or_default()));
+    }
     relay.prepare_bundle();
     if let Some(signer) = &signer {
         let weak = Arc::downgrade(&relay);

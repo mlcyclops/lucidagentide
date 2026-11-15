@@ -67,7 +67,7 @@ fn topic(v: Option<&Value>) -> R<String> {
 }
 
 /// _people: a list of principals (absent: none), lower case, each once.
-fn people(v: Option<&Value>, what: &str, most: usize) -> R<Vec<String>> {
+pub(super) fn people(v: Option<&Value>, what: &str, most: usize) -> R<Vec<String>> {
     let list: Vec<&Value> = match v {
         None | Some(Value::Null) => return Ok(Vec::new()),
         Some(s @ Value::String(_)) => vec![s],
@@ -279,7 +279,8 @@ impl State {
         let mark = as_obj(self.channel_read.get(principal)).and_then(|o| pj::as_num(o.get(cid))).unwrap_or(0.0);
         let (mut unread, mut mentions) = (0, 0);
         for m in self.channel_msgs.get(cid).into_iter().flatten() {
-            if pj::num(m, "ts") <= mark || m.get("from").and_then(Value::as_str) == Some(principal) || pj::truthy(m.get("deleted")) {
+            if pj::num(m, "ts") <= mark || m.get("from").and_then(Value::as_str) == Some(principal) || pj::truthy(m.get("deleted")) || pj::truthy(m.get("imported")) {
+                // imported history (PC-1 L6) counts toward no unread totals
                 continue;
             }
             if !pj::truthy(m.get("thread")) || pj::truthy(m.get("also_channel")) {
@@ -303,7 +304,7 @@ impl State {
     }
 
     /// _mark_read.
-    fn mark_read(&mut self, principals: &[String], cid: &str, ts: f64) {
+    pub(super) fn mark_read(&mut self, principals: &[String], cid: &str, ts: f64) {
         if ts <= 0.0 {
             return;
         }
@@ -316,8 +317,14 @@ impl State {
     }
 
     /// _known: everyone named has used this relay (the caller aside).
-    fn channel_known(&self, people: &[String], who: &Identity) -> R<()> {
-        let missing: Vec<&str> = people.iter().filter(|p| !self.directory.contains_key(p.as_str()) && **p != who.principal).map(String::as_str).collect();
+    fn channel_known(&mut self, people: &[String], who: &Identity) -> R<()> {
+        // PC-1: an app or archive a current org policy names is known too
+        let mut missing: Vec<&str> = Vec::new();
+        for p in people {
+            if !self.directory.contains_key(p.as_str()) && *p != who.principal && !self.pc_policy_service(p) {
+                missing.push(p);
+            }
+        }
         if !missing.is_empty() {
             return Err(E::NotFound(format!("not known on this relay: {}", missing.join(", "))));
         }

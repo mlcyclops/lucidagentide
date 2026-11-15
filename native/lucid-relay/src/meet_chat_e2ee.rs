@@ -30,9 +30,9 @@ const HAS_BASELINE: &str = "this conversation's member list was already recorded
 const LOG_MOVED: &str = "the member list has changed; fetch it and sign the next entry";
 pub(super) const GROUP_OTHER: &str = "a group chat of these people already exists with the other kind of encryption";
 const NO_SHARES: &str = "this relay does not allow sharing message history with another device";
-const NOT_IN: &str = "both people must be in that conversation";
+pub(super) const NOT_IN: &str = "both people must be in that conversation";
 const BUSY: &str = "you joined or left conversations too often; wait a minute";
-const DEVICE_ONLY: &str = "chat keys belong to a device certificate";
+pub(super) const DEVICE_ONLY: &str = "chat keys belong to a device certificate";
 const NOT_ADMIN: &str = "only an admin of this conversation can do that";
 const GONE: &str = "that message is no longer kept";
 /// Every counter, epoch, seq and time (contract section 2).
@@ -80,6 +80,8 @@ const ZERO: &str = "000000000000000000000000000000000000000000000000000000000000
 const ENVELOPE: [&str; 18] = ["v", "d", "sr", "e", "c", "pe", "pc", "k", "r", "s", "t", "q", "a", "ls", "lh", "n", "x", "g"];
 const EVENT_KINDS: [&str; 4] = ["react", "vote", "close", "pin"];
 const ENTRY: [&str; 8] = ["seq", "op", "by", "by_device", "who", "ts", "prev", "sig"];
+/// PC-1: an archive or unarchive entry names the policy it was signed under.
+const ENTRY_POLICY: [&str; 9] = ["seq", "op", "by", "by_device", "who", "ts", "prev", "sig", "policy"];
 const ENTRY_FIRST: [&str; 11] = ["seq", "op", "by", "by_device", "who", "ts", "prev", "sig", "kind", "bridgeable", "admins"];
 const BUNDLE: [&str; 9] = ["principal", "device", "dck", "created", "expires", "serial", "cert", "chain", "sig"];
 const WRAP: [&str; 12] = ["cid", "from", "epoch", "to", "eph", "dck_sha256", "blob", "members", "log_seq", "log_hash", "ts", "sig"];
@@ -124,7 +126,7 @@ fn is_device(s: &str) -> bool {
     hex_of(s, 16, 16)
 }
 
-fn is_mid(s: &str) -> bool {
+pub(super) fn is_mid(s: &str) -> bool {
     hex_of(s, 32, 32)
 }
 
@@ -178,7 +180,7 @@ fn people_of(v: Option<&Value>, what: &str) -> R<Vec<String>> {
     Ok(out)
 }
 
-fn mid_of(v: Option<&Value>, what: &str) -> R<String> {
+pub(super) fn mid_of(v: Option<&Value>, what: &str) -> R<String> {
     matched(v, is_mid, &format!("{what} must be a message id (32 hex)"))
 }
 
@@ -269,10 +271,15 @@ fn entry_bytes(cid: &str, e: &Obj) -> Option<Vec<u8>> {
     let bridgeable: &[u8] = if first && pj::truthy(e.get("bridgeable")) { b"1" } else { b"0" };
     let (n_who, n_admins) = ((who.len() as u64).to_be_bytes(), (admins.len() as u64).to_be_bytes());
     let (by, by_device) = (e.get("by")?.as_str()?, e.get("by_device")?.as_str()?);
+    // PC-1 (CE-1 revision 6): an archive or unarchive entry adds the 32 raw bytes of its policy hash inside the same lp
+    let policy = if pc::POLICY_OPS.contains(&op) { Some(unhex(e.get("policy")?.as_str()?)?) } else { None };
     let mut fields: Vec<&[u8]> = vec![MEMBER, cid.as_bytes(), &seq[..], op.as_bytes(), by.as_bytes(), by_device.as_bytes(), &n_who[..]];
     fields.extend(who.iter().map(|p| p.as_bytes()));
     fields.extend([&ts[..], &prev[..], kind.as_bytes(), bridgeable, &n_admins[..]]);
     fields.extend(admins.iter().map(|p| p.as_bytes()));
+    if let Some(policy) = &policy {
+        fields.push(policy);
+    }
     Some(lp(&fields))
 }
 
@@ -284,7 +291,7 @@ fn entry_hash(cid: &str, e: &Obj) -> Option<String> {
 /// _ce_envelope: a checked envelope (contract section 6): exactly its fields, the caller's device and certificate
 /// serial, `k` one of `kinds`, `r` = `ref_`, the head (`head` None: a direct message or a call, `ls` 0 and `lh` zero;
 /// else `ls` from 1 to `head`), and the sizes. Nothing of the ciphertext or the signature is judged.
-fn envelope(v: Option<&Value>, kinds: &[&str], ref_: &str, who: &Identity, head: Option<usize>) -> R<Obj> {
+pub(super) fn envelope(v: Option<&Value>, kinds: &[&str], ref_: &str, who: &Identity, head: Option<usize>) -> R<Obj> {
     let Some(Value::Object(e)) = v.filter(|v| v.as_object().map(|o| same_keys(o, &ENVELOPE)).unwrap_or(false)) else {
         return bad(format!("enc must be an envelope {{{}}}", ENVELOPE.join(", ")));
     };
@@ -507,12 +514,12 @@ impl State {
         }
     }
 
-    fn ce_part(&mut self, key: &str) -> &mut Obj {
+    pub(super) fn ce_part(&mut self, key: &str) -> &mut Obj {
         obj_mut(self.ce_store(), key)
     }
 
     /// _ce_log: the stored member log of channel `cid` (empty when none).
-    fn ce_log(&mut self, cid: &str) -> &[Value] {
+    pub(super) fn ce_log(&mut self, cid: &str) -> &[Value] {
         self.ce_part("logs").get(cid).and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[])
     }
 
@@ -531,18 +538,35 @@ impl State {
             "room" => (now - history_s) * 1000.0,
             _ => now * 1000.0,
         };
-        self.ce_part("logs").retain(|cid, _| channels.contains(cid));
-        let wraps = self.ce_part("wraps");
-        for rows in wraps.values_mut() {
-            if let Value::Array(rows) = rows {
-                rows.retain(|r| {
-                    let cid = r.get("cid").and_then(Value::as_str).unwrap_or_default();
-                    let (scope, rest) = cid.split_once(':').unwrap_or((cid, ""));
-                    pj::as_num(r.get("rts")).unwrap_or(0.0) >= cut(scope) && (scope != "ch" || channels.contains(rest))
-                });
+        let gone: Vec<String> = self.ce_part("logs").keys().filter(|cid| !channels.contains(*cid)).cloned().collect();
+        for cid in gone {
+            // PC-1: a held conversation's log goes to the hold store
+            let entries: Vec<Obj> = self.ce_part("logs").shift_remove(&cid).and_then(|v| v.as_array().cloned()).unwrap_or_default().into_iter().filter_map(|e| e.as_object().cloned()).collect();
+            self.pc_hold_items(&format!("ch:{cid}"), "log", &entries, None, None);
+        }
+        let pairs = self.pc_dm_pairs();
+        let keys: Vec<String> = self.ce_part("wraps").keys().cloned().collect();
+        for key in keys {
+            let rows: Vec<Value> = self.ce_part("wraps").get(&key).and_then(Value::as_array).cloned().unwrap_or_default();
+            let mut kept: Vec<Value> = Vec::new();
+            for r in rows {
+                let row = r.as_object().cloned().unwrap_or_default();
+                let cid = pj::py_str(row.get("cid").unwrap_or(&Value::Null));
+                let cid = if pj::truthy(row.get("cid")) { cid } else { String::new() };
+                let (scope, rest) = cid.split_once(':').unwrap_or((cid.as_str(), ""));
+                let signed_cut = self.pc_wrap_cut(&row, &pairs, now);
+                if pj::as_num(row.get("rts")).unwrap_or(0.0) >= cut(scope).max(signed_cut) && (scope != "ch" || channels.contains(rest)) {
+                    kept.push(r);
+                } else {
+                    self.pc_hold_items(&cid, "wrap", std::slice::from_ref(&row), Some(&pairs), None);
+                }
+            }
+            if kept.is_empty() {
+                self.ce_part("wraps").shift_remove(&key);
+            } else {
+                self.ce_part("wraps").insert(key, Value::Array(kept));
             }
         }
-        wraps.retain(|_, rows| rows.as_array().map(|r| !r.is_empty()).unwrap_or(false));
         let bundle_cut = (now - BUNDLE_KEEP_S) * 1000.0;
         let bundles = self.ce_part("bundles");
         for devices in bundles.values_mut() {
@@ -579,6 +603,10 @@ impl State {
     pub(super) fn ce_chan_view(&mut self, cid: &str, view: &mut Obj) {
         for (k, v) in self.ce_flags(cid) {
             view.insert(k, v);
+        }
+        // a bridged DM (PC-1 section 5): plaintext, no member log
+        if pj::truthy(self.channel(cid).and_then(|c| c.get("bdm"))) {
+            return;
         }
         let log = self.ce_log(cid);
         let n = log.len();
@@ -663,7 +691,7 @@ impl State {
 
     /// _ce_head: the highest `ls` an envelope may name (None outside channels and group chats); refuses a channel
     /// that is not encrypted or has no member log yet.
-    fn ce_head(&mut self, cid: Option<&str>) -> R<Option<usize>> {
+    pub(super) fn ce_head(&mut self, cid: Option<&str>) -> R<Option<usize>> {
         let Some(cid) = cid else { return Ok(None) };
         if self.ce_bridgeable(cid) {
             return bad(NOT_E2EE);
@@ -700,6 +728,10 @@ impl State {
     /// _ce_bridgeable_ok: a new bridgeable conversation: not under "required", and the creator's organization has an
     /// enabled bridge policy.
     pub(super) fn ce_bridgeable_ok(&mut self, who: &Identity) -> R<()> {
+        // never in an enclave (PC-1, N15)
+        if self.pc_enclave() {
+            return forbidden(pc::ENCLAVE_BRIDGEABLE);
+        }
         if self.ce_required() {
             return Err(E::Conflict(REQUIRED_BRIDGEABLE.into()));
         }
@@ -730,7 +762,14 @@ impl State {
         let (Some(op), Some(Value::Object(e))) = (op, entry) else { return bad(format!("log must be a {} entry", ops.join(" or "))) };
         let op = op.to_string();
         let first = op == "create" || op == "baseline";
-        let keys: &[&str] = if first { &ENTRY_FIRST } else { &ENTRY };
+        let policy_op = pc::POLICY_OPS.contains(&op.as_str());
+        let keys: &[&str] = if first {
+            &ENTRY_FIRST
+        } else if policy_op {
+            &ENTRY_POLICY
+        } else {
+            &ENTRY
+        };
         if !same_keys(e, keys) {
             return bad(format!("a {op} entry is {{{}}}", keys.join(", ")));
         }
@@ -765,6 +804,9 @@ impl State {
             ("prev", Value::from(prev)),
             ("sig", Value::from(sig)),
         ]);
+        if policy_op {
+            out.insert("policy".into(), Value::from(hash_of(e.get("policy"), "policy")?));
+        }
         if last_ts.map(|t| ts < t).unwrap_or(false) {
             return bad("ts must not be before the last entry's");
         }
@@ -787,6 +829,9 @@ impl State {
     pub(super) fn ce_first(&mut self, cid: &str, entry: Option<&Value>, who: &Identity, op: &str, people: &[String], kind: &str, bridgeable: bool) -> R<Obj> {
         if matches!(entry, None | Some(Value::Null)) {
             return Err(E::Conflict(if op == "create" { CREATE_OLD } else { NEEDS_LOG }.into()));
+        }
+        if op == "create" {
+            self.pc_check_add(people, "create")?;
         }
         let gone = !self.channels.contains_key(cid);
         let logs = self.ce_part("logs");
@@ -837,6 +882,10 @@ impl State {
     /// _ce_entry_in: the entry a membership route of `cid` carries (`join`, `leave`, `add`), naming exactly `people`.
     /// An encrypted conversation needs one; a bridgeable one may go without (None).
     pub(super) fn ce_entry_in(&mut self, cid: &str, who: &Identity, entry: Option<&Value>, op: &str, people: &[String]) -> R<Option<Obj>> {
+        // PC-1: an add names apps (in a current policy, every-message) or people, never an archive; no service joins
+        if op == "add" || op == "join" {
+            self.pc_check_add(people, op)?;
+        }
         if matches!(entry, None | Some(Value::Null)) {
             if self.ce_bridgeable(cid) {
                 return Ok(None);
@@ -920,8 +969,13 @@ impl State {
             if named.len() != 1 {
                 return bad("a remove entry names one member");
             }
+            // PC-1: any member removes an app, nobody removes an archive
+            let service = pc::service_kind(&named[0]);
+            if service == "archive" {
+                return forbidden(pc::ARCHIVE_STAYS);
+            }
             let itself = named[0] == who.principal;
-            if !itself && !self.ce_admins(cid).contains(&who.principal) {
+            if !itself && service != "app" && !self.ce_admins(cid).contains(&who.principal) {
                 return forbidden(NOT_ADMIN);
             }
             if itself {
@@ -945,6 +999,9 @@ impl State {
         if !self.ce_admins(cid).contains(&who.principal) {
             return forbidden(NOT_ADMIN);
         }
+        if op == "admin" && named.iter().any(|p| !pc::service_kind(p).is_empty()) {
+            return bad(pc::NO_SERVICE_ADMIN);
+        }
         self.ce_keep(cid, e);
         Ok(())
     }
@@ -952,7 +1009,7 @@ impl State {
     // ── wraps and shares ──
 
     /// _ce_in_conv: both principals are in conversation `cid` by the relay's view (403 otherwise).
-    fn ce_in_conv(&self, cid: &str, a: &str, b: &str) -> R<()> {
+    pub(super) fn ce_in_conv(&self, cid: &str, a: &str, b: &str) -> R<()> {
         let (scope, rest) = cid.split_once(':').unwrap_or((cid, ""));
         let ok = match scope {
             "dm" if a != b => cid == dm_cid(a, b),
@@ -975,7 +1032,7 @@ impl State {
     }
 
     /// _ce_wrap: a checked wrap (or share) from the caller's own device.
-    fn ce_wrap(&self, v: &Value, who: &Identity, share: bool) -> R<Obj> {
+    fn ce_wrap(&mut self, v: &Value, who: &Identity, share: bool) -> R<Obj> {
         let keys: &[&str] = if share { &SHARE } else { &WRAP };
         let mut item = v.as_object().cloned();
         if let Some(o) = item.as_mut().filter(|o| o.contains_key("share")) {
@@ -983,6 +1040,11 @@ impl State {
                 return bad("share must be the same for every item");
             }
             o.shift_remove("share");
+        }
+        // PC-1: a dm: wrap names the org policies it used
+        let mut pols: Option<Value> = None;
+        if let Some(o) = item.as_mut().filter(|o| !share && o.contains_key("pols")) {
+            pols = o.shift_remove("pols");
         }
         let Some(w) = item.filter(|o| same_keys(o, keys)) else {
             return bad(format!("{} is {{{}}}", if share { "a share" } else { "a wrap" }, keys.join(", ")));
@@ -1033,7 +1095,16 @@ impl State {
             out.insert("members".into(), Value::from(hash_of(w.get("members"), "members")?));
             out.insert("log_seq".into(), Value::from(int(w.get("log_seq"), "log_seq", 0)?));
             out.insert("log_hash".into(), Value::from(hash_of(w.get("log_hash"), "log_hash")?));
-            self.ce_in_conv(&cid, &who.principal, &to_principal)?;
+            let mut named: Vec<String> = Vec::new();
+            if let Some(p) = &pols {
+                if !cid.starts_with("dm:") {
+                    return bad("pols is only for direct messages");
+                }
+                named = pc::pols(Some(p))?;
+                out.insert("pols".into(), Value::Array(named.iter().cloned().map(Value::from).collect()));
+            }
+            let to = as_obj(out.get("to")).cloned().unwrap_or_default();
+            self.pc_wrap_in_conv(&cid, &who.principal, &to, &named)?;
         }
         Ok(out)
     }
@@ -1164,10 +1235,13 @@ impl Hub {
         let limit = (m::number(Some(&Value::from(limit)), "limit")?.trunc() as i64).clamp(1, LOG_VIEW as i64) as usize;
         let mut st = self.st.lock();
         st.session(session, who)?;
-        let found = st.ce_channel_of(cid)?;
-        let Some(id) = found.filter(|id| st.channel(id).map(|c| pj::text_of(c, "kind") == "public" || members_of(Some(c)).contains(&who.principal)).unwrap_or(false)) else {
+        let Some(id) = st.ce_channel_of(cid)? else { return Err(E::NotFound(NO_CHANNEL.into())) };
+        let open = st.channel(&id).map(|c| pj::text_of(c, "kind") == "public" || members_of(Some(c)).contains(&who.principal)).unwrap_or(false);
+        // PC-1: a linked (mentions) app reads the member log of a conversation that links it
+        if !open && !st.pc_linked_reader(&id, who) {
             return Err(E::NotFound(NO_CHANNEL.into()));
-        };
+        }
+        st.pc_service_member(&id, who, true)?;
         let mut out = st.ce_flags(&id);
         let log = st.ce_log(&id);
         let rows: Vec<Value> = log.iter().filter(|e| pj::as_int(e.get("seq")).unwrap_or(0) > after).take(limit).cloned().collect();
@@ -1188,7 +1262,18 @@ impl Hub {
             let Some(id) = st.ce_channel_of(&cid)? else { return Err(E::NotFound(NO_CHANNEL.into())) };
             let id = st.member_channel(&id, &who.principal, false)?;
             let op = entry.and_then(Value::as_object).map(|e| pj::text_of(e, "op")).unwrap_or_default();
+            if who.is_service() && op != "leave" {
+                return forbidden(pc::APP_ROUTES_ONLY);
+            }
             match op.as_str() {
+                // PC-1: archive, unarchive, link_app and unlink_app from members, and a service's own leave
+                "archive" | "unarchive" | "link_app" | "unlink_app" | "leave" => {
+                    if st.ce_log_len(&id) == 0 {
+                        return Err(E::Conflict(NO_BASELINE.into()));
+                    }
+                    let e = st.ce_entry(&id, entry, who, &[op.as_str()])?;
+                    st.pc_log_op(&id, who, e)?;
+                }
                 "baseline" => {
                     let ch = st.channel(&id).cloned().unwrap_or_default();
                     let bridgeable = st.ce_bridgeable(&id);
@@ -1206,7 +1291,7 @@ impl Hub {
                     let e = st.ce_entry(&id, entry, who, &[op.as_str()])?;
                     st.ce_log_op(&id, who, e)?;
                 }
-                _ => return bad("log must be a baseline, confirm, remove, admin or unadmin entry"),
+                _ => return bad("log must be a baseline, confirm, remove, admin, unadmin, archive, unarchive, link_app or unlink_app entry"),
             }
             let n = st.ce_log_len(&id);
             Ok((obj([("ok", Value::Bool(true)), ("log_seq", Value::from(n))]), id, op))
@@ -1298,6 +1383,9 @@ impl Hub {
             if !who.own_device() {
                 return forbidden(DEVICE_ONLY);
             }
+            if share && who.is_service() {
+                return Err(E::Conflict(pc::SHARE_PEOPLE.into()));
+            }
             if share && !st.ce.share {
                 return Err(E::Conflict(NO_SHARES.into()));
             }
@@ -1376,9 +1464,13 @@ impl Hub {
                 "dm" => {
                     st.session(p.session.as_deref().unwrap_or_default(), who)?;
                     let other = m::principal(p.to);
-                    let entry = st.directory.get(&other).filter(|_| !other.is_empty());
-                    let Some(entry) = entry else { return Err(E::NotFound("nobody with that address has used this relay yet".into())) };
-                    to_name = entry.as_object().map(|e| pj::s(e, "name")).filter(|n| !n.is_empty()).unwrap_or_else(|| other.clone());
+                    // PC-1: a person's own DM with an app of a current policy; never an archive
+                    let entry = match st.directory.get(&other).filter(|e| pj::truthy(Some(*e))).cloned() {
+                        Some(e) => Some(e.as_object().cloned().unwrap_or_default()),
+                        None => st.pc_dm_peer(who, &other)?,
+                    };
+                    let Some(entry) = entry.filter(|_| !other.is_empty()) else { return Err(E::NotFound("nobody with that address has used this relay yet".into())) };
+                    to_name = Some(pj::s(&entry, "name")).filter(|n| !n.is_empty()).unwrap_or_else(|| other.clone());
                     Conv::Dm(other)
                 }
                 "channel" => {
@@ -1391,7 +1483,12 @@ impl Hub {
                 return Err(E::Conflict(PLAIN.into()));
             }
             let head = st.ce_head(conv_channel(&c))?;
-            let env = envelope(p.enc, &["post"], "", who, head)?;
+            // PC-1: a workflow definition (kind wf) is a message of a DM with an app
+            let kinds: &[&str] = match &c {
+                Conv::Dm(other) if pc::service_kind(other) == "app" => &["post", "wf"],
+                _ => &["post"],
+            };
+            let env = envelope(p.enc, kinds, "", who, head)?;
             let (t, q) = (pj::text_of(&env, "t"), pj::text_of(&env, "q"));
             let a = env.get("a") == Some(&Value::Bool(true));
             if ref_of(p.thread, "thread")? != t || ref_of(p.reply_to, "reply_to")? != q || m::flag(p.also_channel, "also_channel")? != a {
@@ -1495,7 +1592,9 @@ impl Hub {
                         let cut = msgs.len() - DM_KEEP;
                         msgs.drain(..cut);
                     }
-                    st.tell(&[other.clone(), who.principal.clone()], &with(&row, obj([("type", Value::from("dm"))])), me.as_deref());
+                    let told = with(&row, obj([("type", Value::from("dm"))]));
+                    st.tell(&[other.clone(), who.principal.clone()], &told, me.as_deref());
+                    st.pc_tell_archives(&who.principal, other, &told);
                     st.pu_message(None, Some(other.as_str()), &row);
                 }
             }
@@ -1542,6 +1641,8 @@ impl Hub {
             let now = pj::now();
             let ev = add_event(target, &eid, who, env, now)?;
             let mut told = obj([("type", Value::from("chat_event")), ("scope", Value::from(scope)), ("id", Value::from(id)), ("event", Value::Object(ev.clone()))]);
+            // PC-1: a held conversation keeps the message as it was before the delete
+            let held = if delete { Some(list[i].clone()) } else { None };
             if delete {
                 tombstone(list, i, now);
                 let target = &mut list[i];
@@ -1552,6 +1653,13 @@ impl Hub {
                 list[i].insert("edited".into(), f(now));
             }
             let out = list[i].clone();
+            if let Some(target) = held {
+                match &c {
+                    Conv::Channel(cid) => st.pc_hold_deleted(&who.principal, "", Some(cid), &target),
+                    Conv::Dm(other) => st.pc_hold_deleted(&who.principal, other, None, &target),
+                    Conv::Room { .. } => {}
+                }
+            }
             st.dirty = true;
             Self::tell_conversation(&mut st, who, &c, &told);
             Ok((out, true))
@@ -1576,6 +1684,9 @@ impl Hub {
             let head = st.ce_head(conv_channel(&c))?;
             let env = envelope(enc, &EVENT_KINDS, id, who, head)?;
             let k = pj::text_of(&env, "k");
+            if who.is_service() && k != "react" {
+                return forbidden(pc::APP_ROUTES_ONLY);
+            }
             let i = Self::scoped_index(&st, who, &c, id)?;
             let list = Self::conv_list_mut(&mut st, who, &c).expect("the message's conversation");
             let target = &mut list[i];

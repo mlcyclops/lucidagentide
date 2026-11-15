@@ -10,13 +10,29 @@
 // message id -> platform id) and `offered` (link -> the file ids its ops named). Audit rows go to
 // state_dir/bridge-audit.jsonl (the last AUDIT_MEMORY in memory without a state folder). A child module of meet_hub: it
 // shares the one lock.
+//
+// PC-1 section 5 adds Google Chat (`gchat`), bridged DMs (a person's code, `dm: true` in `codes`; claim-dm makes the
+// plaintext conversation `bdm:<link id>` with that person as its only member and a link with `dm` and `peer`),
+// history backfill both ways (imported `post` ops when a link is made; /v1/bridge/c/backfill once, within 10 minutes)
+// and files kept for Google Chat file links (`file_link_hours` after the op). In an enclave every /v1/bridge/c/* route
+// is refused before routing.
 
 use super::*;
 use crate::meet_guest_port::hide;
 
 pub const KINDS: [&str; 6] = ["text", "edits", "deletes", "reactions", "files", "calls"];
-const POLICY_KEYS: [&str; 6] = ["enabled", "send", "receive", "partners", "file_max_mb", "notice"];
-const PLATFORMS: [&str; 2] = ["slack", "teams"];
+// PC-1 section 5 adds dms (bridged DMs), file_links and file_link_hours (Lucid files sent to Google Chat as expiring
+// links, M11), backfill_send and backfill_receive (history, L6)
+const POLICY_KEYS: [&str; 11] = ["enabled", "send", "receive", "partners", "file_max_mb", "notice", "dms", "file_links", "file_link_hours", "backfill_send", "backfill_receive"];
+const FILE_HOURS: i64 = 24;
+const FILE_HOURS_MAX: i64 = 168;
+/// Earlier messages one link copies, either way.
+const BACKFILL_MAX: i64 = 500;
+/// A platform's earlier messages come within this of the link.
+const BACKFILL_WINDOW: f64 = 10.0 * 60.0;
+/// The body of `POST /v1/bridge/c/backfill` (500 messages).
+pub const BACKFILL_BODY: usize = 8 * 1024 * 1024;
+const PLATFORMS: [&str; 3] = ["slack", "teams", "gchat"];
 const TARGET_KINDS: [&str; 3] = ["channel", "chat", "dm"];
 const OPS: [&str; 7] = ["post", "edit", "delete", "react", "call", "notice", "unlinked"];
 const CODE_ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -71,6 +87,14 @@ const GUESTS_OFF: &str = "guests are off on this relay";
 const BUSY: &str = "too many requests from this connector; slow down";
 const GONE: &str = "that message is no longer kept";
 const FILE_GONE: &str = "that file is no longer kept";
+// Bridged DMs (PC-1 section 5, M10, N18): conversation "bdm:<link id>", made only by claim-dm
+const BDM_PREFIX: &str = "bdm:";
+/// Open bridged DM codes per person.
+const BDM_CODES_MAX: usize = 5;
+const DM_ONLY: &str = "a bridged DM needs a direct message with the bot";
+const DM_REQUIRED: &str = "this relay requires end-to-end encryption, so chats with people outside Lucid are off";
+const DM_NO_BACKFILL: &str = "earlier messages are not copied into a bridged direct message";
+const BACKFILL_DONE: &str = "the earlier messages of this link were already copied";
 
 fn noun(kind: &str) -> &'static str {
     match kind {
@@ -84,10 +108,10 @@ fn noun(kind: &str) -> &'static str {
 }
 
 fn platform_name(p: &str) -> &'static str {
-    if p == "slack" {
-        "Slack"
-    } else {
-        "Teams"
+    match p {
+        "slack" => "Slack",
+        "gchat" => "Google Chat",
+        _ => "Teams",
     }
 }
 
@@ -131,6 +155,11 @@ fn off_policy() -> Obj {
         ("partners", Value::Array(Vec::new())),
         ("file_max_mb", Value::from(25)),
         ("notice", Value::from("")),
+        ("dms", Value::Bool(false)),
+        ("file_links", Value::Bool(false)),
+        ("file_link_hours", Value::from(FILE_HOURS)),
+        ("backfill_send", Value::from(0)),
+        ("backfill_receive", Value::from(0)),
     ])
 }
 
@@ -191,16 +220,38 @@ pub(super) fn policy(v: &Value) -> Result<Obj, String> {
     if pj::char_len(&notice) > NOTICE_MAX || !pj::printable(&notice) {
         return Err(format!("notice is at most {NOTICE_MAX} printable characters"));
     }
+    let mut extra: Vec<(&str, Value)> = Vec::new();
+    for key in ["dms", "file_links"] {
+        match p.get(key) {
+            None => extra.push((key, Value::Bool(false))),
+            Some(Value::Bool(b)) => extra.push((key, Value::Bool(*b))),
+            Some(_) => return Err(format!("{key} must be true or false")),
+        }
+    }
+    for (key, low, high, default) in [("file_link_hours", 1, FILE_HOURS_MAX, FILE_HOURS), ("backfill_send", 0, BACKFILL_MAX, 0), ("backfill_receive", 0, BACKFILL_MAX, 0)] {
+        let n = match p.get(key) {
+            None => default,
+            v => match pj::as_int(v) {
+                Some(n) if (low..=high).contains(&n) => n,
+                _ => return Err(format!("{key} must be a whole number from {low} to {high}")),
+            },
+        };
+        extra.push((key, Value::from(n)));
+    }
     let send = kinds(p.get("send"), "send")?;
     let receive = kinds(p.get("receive"), "receive")?;
-    Ok(obj([
+    let mut out = obj([
         ("enabled", Value::Bool(enabled)),
         ("send", strings_value(&send)),
         ("receive", strings_value(&receive)),
         ("partners", strings_value(&partners)),
         ("file_max_mb", Value::from(most)),
         ("notice", Value::from(notice)),
-    ]))
+    ]);
+    for (key, v) in extra {
+        out.insert(key.to_string(), v);
+    }
+    Ok(out)
 }
 
 fn on(p: &Obj) -> bool {
@@ -213,6 +264,16 @@ fn has(p: &Obj, key: &str, item: &str) -> bool {
 
 fn file_mb(p: &Obj) -> i64 {
     pj::as_int(p.get("file_max_mb")).unwrap_or(25)
+}
+
+/// A checked policy's flag (`dms`, `file_links`).
+fn flag(p: &Obj, key: &str) -> bool {
+    p.get(key) == Some(&Value::Bool(true))
+}
+
+/// A checked policy's number (`file_link_hours`, `backfill_send`, `backfill_receive`).
+fn number(p: &Obj, key: &str) -> i64 {
+    pj::as_int(p.get(key)).unwrap_or(0)
 }
 
 /// _bridge_partner: `policy` (of org `own`) lets its content meet org `other`: its own org always, `["*"]` any org,
@@ -247,10 +308,24 @@ struct Eff {
     receive: Vec<String>,
     notice: String,
     file_max_mb: i64,
+    file_links: bool,
+    file_link_hours: i64,
+    backfill_receive: i64,
+    backfill_send: i64,
+}
+
+/// One earlier platform message of `POST /v1/bridge/c/backfill`, checked.
+struct Earlier {
+    uid: String,
+    uname: String,
+    pid: String,
+    text: String,
+    ts: f64,
+    thread: Option<String>,
 }
 
 fn off_eff(reason: String) -> Eff {
-    Eff { enabled: false, reason, send: Vec::new(), receive: Vec::new(), notice: String::new(), file_max_mb: 0 }
+    Eff { enabled: false, reason, send: Vec::new(), receive: Vec::new(), notice: String::new(), file_max_mb: 0, file_links: false, file_link_hours: 0, backfill_receive: 0, backfill_send: 0 }
 }
 
 // ── checks of what a connector sends ─────────────────────────────────────────────────────────────────────────
@@ -279,7 +354,7 @@ fn optional(v: Option<&Value>, what: &str) -> R<Option<String>> {
 fn platform(v: Option<&Value>) -> R<String> {
     match v {
         Some(Value::String(s)) if PLATFORMS.contains(&s.as_str()) => Ok(s.clone()),
-        _ => bad("platform must be slack or teams"),
+        _ => bad("platform must be slack, teams or gchat"),
     }
 }
 
@@ -314,9 +389,14 @@ fn url(v: Option<&Value>) -> String {
     u
 }
 
-/// _bridge_room: a conversation's call room: `cv-` + the channel id without `c-`, at most 40.
-fn room(cid: &str) -> String {
-    pj::clip(&format!("cv-{}", cid.strip_prefix("c-").unwrap_or(cid)), 40)
+/// _bridge_room: a conversation's call room: `cv-` + the channel id without `c-` (a bridged DM's `bdm:` as `bdm-`),
+/// at most 40.
+pub(super) fn room(cid: &str) -> String {
+    let rest = match cid.strip_prefix("c-") {
+        Some(rest) => rest.to_string(),
+        None => cid.replace(':', "-"),
+    };
+    pj::clip(&format!("cv-{rest}"), 40)
 }
 
 fn bad_number(v: Option<&Value>) -> bool {
@@ -338,6 +418,8 @@ fn stored_link(lid: &str, link: &Value) -> bool {
         && target_ok
         && ["send", "receive"].iter().all(|k| l.get(*k).map(Value::is_array).unwrap_or(false))
         && ["reason", "notice", "by", "claimed_by"].iter().all(|k| text(l, k))
+        && ["dm", "file_links", "backfilled"].iter().all(|k| l.get(*k).map(Value::is_boolean).unwrap_or(true))
+        && (!pj::truthy(l.get("dm")) || (l.get("channel").and_then(Value::as_str) == Some(format!("{BDM_PREFIX}{lid}").as_str()) && l.get("peer").map(Value::is_object).unwrap_or(false)))
 }
 
 /// _bridge_store's check: ext["bridge"] made sound (a hand-edited or older state.json loses only the entries that are
@@ -447,10 +529,13 @@ fn member_view(link: &Obj) -> Obj {
     ])
 }
 
-/// _bridge_c_view: a link as its connector sees it: never a member's principal or the channel id.
+/// _bridge_c_view: a link as its connector sees it: never a member's principal or the channel id. PC-1 section 5:
+/// `dm`, `file_links`, `backfill_receive`, and on a bridged DM `peer` (the Lucid person's display name and
+/// organization label only).
 fn c_view(link: &Obj) -> Obj {
     let get = |k: &str| link.get(k).cloned().unwrap_or(Value::Null);
-    obj([
+    let dm = pj::truthy(link.get("dm"));
+    let mut out = obj([
         ("id", get("id")),
         ("platform", get("platform")),
         ("org", get("org")),
@@ -462,7 +547,15 @@ fn c_view(link: &Obj) -> Obj {
         ("send", get("send")),
         ("receive", get("receive")),
         ("notice", get("notice")),
-    ])
+        ("dm", Value::Bool(dm)),
+        ("file_links", Value::Bool(pj::truthy(link.get("file_links")))),
+        ("backfill_receive", Value::from(pj::as_int(link.get("backfill_receive")).unwrap_or(0))),
+    ]);
+    if dm {
+        let peer = as_obj(link.get("peer")).cloned().unwrap_or_default();
+        out.insert("peer".into(), Value::Object(obj([("name", Value::from(pj::s(&peer, "name"))), ("org", Value::from(pj::s(&peer, "org")))])));
+    }
+    out
 }
 
 fn delivery(state: &str, reason: &str, ext: &str) -> Value {
@@ -623,6 +716,12 @@ impl State {
     /// declared policy enabled and naming every member org; `send` (Lucid to the platform) = the member orgs' `send`
     /// and the connector's `receive`, `receive` = the member orgs' `receive` and the connector's `send`. Off: `reason`
     /// says whose policy stopped it.
+    ///
+    /// PC-1 section 5: a bridged DM (`dm`) also needs `dms` in every policy and its person still in it; `file_links`
+    /// only when every policy sets it (never in an enclave), for the lowest `file_link_hours`; `backfill_receive`
+    /// (earlier platform messages Lucid takes) the lowest of the member orgs'; `backfill_send` (earlier Lucid messages
+    /// copied out) the lowest of the member orgs' `backfill_send` and the connector's `backfill_receive`. Both are 0 on
+    /// a bridged DM.
     fn bridge_effective(&mut self, link: &Obj) -> Eff {
         let cid = pj::text_of(link, "channel");
         if self.channel(&cid).is_none() {
@@ -630,15 +729,24 @@ impl State {
         }
         let connector = pj::text_of(link, "connector");
         let Some((coid, clabel)) = self.bridge_org(&connector) else { return off_eff(NO_ORG.into()) };
+        let dm = pj::truthy(link.get("dm"));
         let mut send: Vec<&str> = KINDS.to_vec();
         let mut receive: Vec<&str> = KINDS.to_vec();
         let mut most = FILE_MB_MAX;
         let mut notices: Vec<String> = Vec::new();
+        let (mut file_links, mut hours) = (true, FILE_HOURS_MAX);
+        let (mut back_in, mut back_out) = (BACKFILL_MAX, BACKFILL_MAX);
         let orgs = self.bridge_member_orgs(&cid);
+        if dm && orgs.is_empty() {
+            return off_eff("the Lucid person left this chat".into());
+        }
         for (oid, label) in &orgs {
             let p = self.bridge_policy_of(oid);
             if !on(&p) || !partner(&p, &coid, oid) {
                 return off_eff(cap(&format!("{} does not allow bridging with {clabel}", whose(oid, label))));
+            }
+            if dm && !flag(&p, "dms") {
+                return off_eff(cap(&format!("{} does not allow direct messages with {clabel}", whose(oid, label))));
             }
             send.retain(|k| has(&p, "send", k));
             receive.retain(|k| has(&p, "receive", k));
@@ -647,6 +755,10 @@ impl State {
             if !n.is_empty() && !notices.contains(&n) {
                 notices.push(n);
             }
+            file_links = file_links && flag(&p, "file_links");
+            hours = hours.min(number(&p, "file_link_hours"));
+            back_in = back_in.min(number(&p, "backfill_receive"));
+            back_out = back_out.min(number(&p, "backfill_send"));
         }
         if !self.br_part("connectors").contains_key(&connector) {
             return off_eff(format!("{clabel}'s connector has not said what its policy allows"));
@@ -659,6 +771,9 @@ impl State {
             if !partner(&mine, oid, &coid) {
                 return off_eff(format!("{clabel}'s policy does not allow bridging with {label}"));
             }
+            if dm && !flag(&mine, "dms") {
+                return off_eff(format!("{clabel}'s policy does not allow direct messages with {label}"));
+            }
         }
         send.retain(|k| has(&mine, "receive", k));
         receive.retain(|k| has(&mine, "send", k));
@@ -667,7 +782,22 @@ impl State {
         if !n.is_empty() && !notices.contains(&n) {
             notices.push(n);
         }
-        Eff { enabled: true, reason: String::new(), send: send.into_iter().map(str::to_string).collect(), receive: receive.into_iter().map(str::to_string).collect(), notice: notices.join("\n"), file_max_mb: most }
+        let file_links = file_links && !orgs.is_empty() && flag(&mine, "file_links") && !self.pc_enclave();
+        let hours = hours.min(number(&mine, "file_link_hours"));
+        let back_out = back_out.min(number(&mine, "backfill_receive"));
+        let plain = !dm && !orgs.is_empty();
+        Eff {
+            enabled: true,
+            reason: String::new(),
+            send: send.into_iter().map(str::to_string).collect(),
+            receive: receive.into_iter().map(str::to_string).collect(),
+            notice: notices.join("\n"),
+            file_max_mb: most,
+            file_links,
+            file_link_hours: hours,
+            backfill_receive: if plain { back_in } else { 0 },
+            backfill_send: if plain { back_out } else { 0 },
+        }
     }
 
     /// _bridge_recheck: re-evaluate active links (all, one conversation's or one connector's) after a policy,
@@ -685,7 +815,13 @@ impl State {
                 self.bridge_off(&lid, &eff.reason, by, "", "blocked");
                 continue;
             }
-            let fresh = obj([("send", strings_value(&eff.send)), ("receive", strings_value(&eff.receive)), ("notice", Value::from(eff.notice))]);
+            let fresh = obj([
+                ("send", strings_value(&eff.send)),
+                ("receive", strings_value(&eff.receive)),
+                ("notice", Value::from(eff.notice)),
+                ("file_links", Value::Bool(eff.file_links)),
+                ("backfill_receive", Value::from(eff.backfill_receive)),
+            ]);
             if fresh.iter().any(|(k, v)| link.get(k) != Some(v)) {
                 self.br_link_set(&lid, fresh);
                 self.bridge_tell_link(&lid);
@@ -767,6 +903,13 @@ impl State {
         self.bridge_queue(lid, "unlinked", obj([("reason", Value::from(reason))]), None, "", "");
         self.dirty = true;
         self.bridge_tell_link(lid);
+        // a bridged DM's conversation is archived with it (the chat ended: nothing more goes in)
+        if pj::truthy(link.get("dm")) && self.channel(&cid).is_some_and(|c| !pj::truthy(c.get("archived"))) {
+            self.channel_mut(&cid).insert("archived".into(), f(pj::now()));
+            let ch = self.channel(&cid).cloned().unwrap_or_default();
+            let members = channels::members_of(Some(&ch));
+            self.tell(&members, &obj([("type", Value::from("channel")), ("why", Value::from("archived")), ("channel", Value::Object(ch)), ("by", Value::from(""))]), None);
+        }
         let link = self.br_link(lid).unwrap_or(link);
         self.bridge_audit(Some(&link), "out", "unlink", "", by, org, result, reason);
         log_info(&format!("bridge_off link={lid} channel={cid} reason={}", kv(reason)));
@@ -1178,6 +1321,96 @@ impl State {
         }
     }
 
+    /// _bridge_backfill_out: history from Lucid to the platform when a link is made (PC-1 section 5, L6): the
+    /// conversation's last `most` messages that may cross this link, oldest first, as `post` ops with `imported: true`
+    /// and `ts` (their time, unix seconds), then one `notice`. Never on a bridged DM; system lines, deleted and
+    /// imported messages do not count.
+    fn bridge_backfill_out(&mut self, cid: &str, link: &Obj, most: i64) {
+        if most <= 0 || pj::truthy(link.get("dm")) {
+            return;
+        }
+        let lid = pj::text_of(link, "id");
+        let msgs: Vec<Obj> = self.channel_msgs.get(cid).cloned().unwrap_or_default();
+        let mut picked: Vec<Obj> = Vec::new();
+        for m in msgs.iter().rev() {
+            if picked.len() as i64 >= most {
+                break;
+            }
+            if pj::truthy(m.get("system")) || pj::truthy(m.get("deleted")) || pj::truthy(m.get("imported")) {
+                continue;
+            }
+            let files: Vec<&Obj> = m.get("files").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_object).collect();
+            if !pj::truthy(m.get("text")) && files.is_empty() {
+                continue;
+            }
+            let src = as_obj(m.get("src"));
+            let origin = match src {
+                Some(s) => match self.br_link(&pj::text_of(s, "link")) {
+                    Some(o) => Some(o),
+                    None => continue,
+                },
+                None => None,
+            };
+            let mut kinds: Vec<&str> = Vec::new();
+            if !files.is_empty() {
+                kinds.push("files");
+            }
+            if pj::truthy(m.get("text")) {
+                kinds.push("text");
+            }
+            let size = files.iter().map(|file| pj::num(file, "size").max(0.0) as u64).max().unwrap_or(0);
+            let sender = if src.is_some() { None } else { Some(pj::s(m, "from")) };
+            if !self.bridge_out_reason(cid, link, &kinds, sender.as_deref(), origin.as_ref(), size).is_empty() {
+                continue;
+            }
+            picked.push(m.clone());
+        }
+        if picked.is_empty() {
+            return;
+        }
+        let now = pj::now();
+        for m in picked.iter().rev() {
+            let (by, org) = match as_obj(m.get("src")) {
+                Some(s) => (format!("ext:{}:{}", pj::text_of(s, "platform"), pj::text_of(s, "user")), as_obj(s.get("org")).map(|o| pj::text_of(o, "id")).unwrap_or_default()),
+                None => {
+                    let from = pj::s(m, "from");
+                    let org = self.bridge_org_of(&from).0;
+                    (from, org)
+                }
+            };
+            let mut fields = self.bridge_post_fields(m);
+            fields.insert("imported".into(), Value::Bool(true));
+            fields.insert("ts".into(), Value::from(pj::num(m, "ts") as i64));
+            let file_ids: Vec<String> = fields.get("files").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_object).map(|file| pj::text_of(file, "id")).collect();
+            let thread = Some(pj::s(m, "thread")).filter(|t| !t.is_empty());
+            self.bridge_queue(&lid, "post", fields, thread.as_deref(), &by, &org);
+            let mid = pj::text_of(m, "id");
+            if let Some(row) = self.channel_msgs.get_mut(cid).and_then(|l| l.iter_mut().find(|x| pj::text_of(x, "id") == mid)) {
+                let mut bridged = as_obj(row.get("bridged")).cloned().unwrap_or_default();
+                bridged.insert(lid.clone(), delivery("queued", "", ""));
+                row.insert("bridged".into(), Value::Object(bridged));
+            }
+            let offered = obj_mut(self.br_part("offered"), &lid);
+            for fid in file_ids {
+                offered.insert(fid, f(now));
+            }
+        }
+        let n = picked.len();
+        let text = format!("The last {n} messages from {} were copied here.", self.bridge_title(cid));
+        self.bridge_queue(&lid, "notice", obj([("text", Value::from(text)), ("thread", Value::from(""))]), None, "", "");
+        self.bridge_audit_count(Some(link), "out", "backfill", "text", "relay", "", "sent", "", Some(n));
+    }
+
+    /// _bridge_title: how an op names the conversation.
+    fn bridge_title(&self, cid: &str) -> String {
+        match self.channel(cid) {
+            Some(ch) if pj::truthy(ch.get("bdm")) => "Direct message".to_string(),
+            Some(ch) if !pj::s(ch, "name").is_empty() => format!("#{}", pj::s(ch, "name")),
+            Some(ch) if !pj::s(ch, "topic").is_empty() => pj::s(ch, "topic"),
+            _ => "Group chat".to_string(),
+        }
+    }
+
     /// _bridge_calls: a `call` op (a fresh guest link each) to every active link calls may cross; 409 when one may and
     /// the relay takes no guests. Answers how many.
     #[allow(clippy::too_many_arguments)]
@@ -1199,11 +1432,7 @@ impl State {
         if !allowed.is_empty() && !self.guests_on() {
             return Err(E::Conflict(GUESTS_OFF.into()));
         }
-        let title = match self.channel(cid) {
-            Some(ch) if !pj::s(ch, "name").is_empty() => format!("#{}", pj::s(ch, "name")),
-            Some(ch) if !pj::s(ch, "topic").is_empty() => pj::s(ch, "topic"),
-            _ => "Group chat".to_string(),
-        };
+        let title = self.bridge_title(cid);
         for lid in &allowed {
             let expires = (pj::now() + CALL_MINUTES * 60.0) as i64;
             let link_url = self.guests_url(&room(cid), expires);
@@ -1249,7 +1478,7 @@ impl State {
         let codes = self.br_part("codes").clone();
         let gone: Vec<String> = codes
             .iter()
-            .filter(|(_, r)| r.as_object().map(|r| pj::num(r, "expires") <= now || !self.channels.contains_key(&pj::text_of(r, "channel"))).unwrap_or(true))
+            .filter(|(_, r)| r.as_object().map(|r| pj::num(r, "expires") <= now || (!pj::truthy(r.get("dm")) && !self.channels.contains_key(&pj::text_of(r, "channel")))).unwrap_or(true))
             .map(|(k, _)| k.clone())
             .collect();
         if !gone.is_empty() {
@@ -1310,7 +1539,13 @@ impl State {
     /// appended to state_dir/bridge-audit.jsonl.
     #[allow(clippy::too_many_arguments)]
     fn bridge_audit(&mut self, link: Option<&Obj>, dir: &str, op: &str, kind: &str, by: &str, org: &str, result: &str, reason: &str) {
-        let row = obj([
+        self.bridge_audit_count(link, dir, op, kind, by, org, result, reason, None);
+    }
+
+    /// _bridge_audit with `count` (a history backfill's row ends with it).
+    #[allow(clippy::too_many_arguments)]
+    fn bridge_audit_count(&mut self, link: Option<&Obj>, dir: &str, op: &str, kind: &str, by: &str, org: &str, result: &str, reason: &str, count: Option<usize>) {
+        let mut row = obj([
             ("ts", f((pj::now() * 1000.0).round() / 1000.0)),
             ("link", Value::from(link.map(|l| pj::text_of(l, "id")).unwrap_or_default())),
             ("channel", Value::from(link.map(|l| pj::text_of(l, "channel")).unwrap_or_default())),
@@ -1322,6 +1557,9 @@ impl State {
             ("result", Value::from(result)),
             ("reason", Value::from(reason)),
         ]);
+        if let Some(n) = count {
+            row.insert("count".into(), Value::from(n));
+        }
         let Some(folder) = self.bridge.state_dir.clone() else {
             self.bridge.rows.push_back(row);
             if self.bridge.rows.len() > AUDIT_MEMORY {
@@ -1464,6 +1702,10 @@ impl Hub {
         let r = (|| -> R<(Obj, String)> {
             st.session(session, who)?;
             let cid = st.bridge_member_channel(who, channel, true)?;
+            // a bridged DM (`bdm:`) has its one link and takes no other
+            if st.channel(&cid).is_some_and(|c| pj::truthy(c.get("bdm"))) {
+                return bad(ONLY_CHANNELS);
+            }
             st.ce_linkable(&cid)?;
             let oid = st.bridge_org_of(&who.principal).0;
             if !on(&st.bridge_policy_of(&oid)) {
@@ -1490,6 +1732,47 @@ impl Hub {
         drop(st);
         let (out, cid) = r?;
         log_info(&format!("bridge_code channel={cid} platform={platform} principal={}", who.principal));
+        Ok(out)
+    }
+
+    /// `POST /v1/bridge/dm-code {platform}` -> `{code, expires, org_label}` (PC-1 section 5, N18): a person whose
+    /// org's policy is on with `dms` gets a single-use BR-1 code for 15 minutes (5 open per person) that an outside
+    /// person types as `/lucid dm <code>` in a direct message with `org_label`'s bot. Nothing is made until the code
+    /// is claimed.
+    pub fn bridge_dm_code(&self, session: &str, who: &Identity, platform_v: Body) -> R<Obj> {
+        let platform = platform(platform_v)?;
+        let mut st = self.st.lock();
+        let r = (|| -> R<Obj> {
+            st.pc_refuse_enclave()?;
+            st.session(session, who)?;
+            if pj::s(&st.ce_hello(), "chat_e2ee") == "required" {
+                return Err(E::Conflict(DM_REQUIRED.into()));
+            }
+            let (oid, label) = st.bridge_org_of(&who.principal);
+            let p = st.bridge_policy_of(&oid);
+            if !on(&p) || !flag(&p, "dms") {
+                return forbidden("your organization's policy does not allow direct messages outside Lucid");
+            }
+            let now = pj::now();
+            st.bridge_expire_codes(now);
+            let open = st.br_part("codes").values().filter_map(Value::as_object).filter(|r| pj::truthy(r.get("dm")) && pj::text_of(r, "by") == who.principal).count();
+            if open >= BDM_CODES_MAX {
+                return Err(E::Conflict(format!("you have {BDM_CODES_MAX} open codes; wait for one to expire")));
+            }
+            let mut code = new_code();
+            while st.br_part("codes").contains_key(&code) {
+                code = new_code();
+            }
+            let expires = now + CODE_TTL;
+            let row = obj([("channel", Value::from("")), ("dm", Value::Bool(true)), ("platform", Value::from(platform.clone())), ("by", Value::from(who.principal.clone())), ("expires", f(expires))]);
+            st.br_part("codes").insert(code.clone(), Value::Object(row));
+            st.dirty = true;
+            let org_label = if oid == NONE { String::new() } else { label };
+            Ok(obj([("code", Value::from(code)), ("expires", f(expires)), ("org_label", Value::from(org_label))]))
+        })();
+        drop(st);
+        let out = r?;
+        log_info(&format!("bridge_dm_code platform={platform} principal={}", who.principal));
         Ok(out)
     }
 
@@ -1630,7 +1913,7 @@ impl Hub {
 
     // ── connector routes (connector certificates, no session) ────────────────────────────────────────────────
 
-    /// `POST /v1/bridge/c/hello {platform, policy, version}` -> `{org, relay_orgs, links}`: the connector's declared
+    /// `POST /v1/bridge/c/hello {platform, policy, version}` -> `{org, relay_orgs, links, enclave}`: the connector's declared
     /// policy is kept and its links re-evaluated.
     pub fn bridge_c_hello(&self, who: &Identity, platform_v: Body, policy_v: Body, version: Body) -> R<Obj> {
         let platform = platform(platform_v)?;
@@ -1648,7 +1931,8 @@ impl Hub {
             st.dirty = true;
             st.bridge_recheck(&who.principal, None, Some(&who.principal));
             let links: Vec<Value> = st.br_part("links").values().filter_map(Value::as_object).filter(|l| pj::text_of(l, "connector") == who.principal && pj::text_of(l, "state") == "active").map(|l| Value::Object(c_view(l))).collect();
-            Ok(obj([("org", Value::Object(org)), ("relay_orgs", Value::Array(st.bridge_orgs())), ("links", Value::Array(links))]))
+            // `enclave` is always there (PC-1 invariant 4; an enclave relay refuses this route before it runs)
+            Ok(obj([("org", Value::Object(org)), ("relay_orgs", Value::Array(st.bridge_orgs())), ("links", Value::Array(links)), ("enclave", Value::Bool(st.pc_enclave()))]))
         })();
         drop(st);
         self.wake();
@@ -1672,7 +1956,8 @@ impl Hub {
             let now = pj::now();
             st.bridge_expire_codes(now);
             let row = st.br_part("codes").get(&code).and_then(Value::as_object).cloned();
-            let Some(row) = row.filter(|r| pj::text_of(r, "platform") == platform) else { return Err(E::NotFound(BAD_CODE.into())) };
+            // a bridged DM's code is not a link code here
+            let Some(row) = row.filter(|r| pj::text_of(r, "platform") == platform && !pj::truthy(r.get("dm"))) else { return Err(E::NotFound(BAD_CODE.into())) };
             let cid = pj::text_of(&row, "channel");
             if st.channel(&cid).map(|c| pj::truthy(c.get("archived"))).unwrap_or(true) {
                 return Err(E::NotFound(BAD_CODE.into()));
@@ -1707,6 +1992,10 @@ impl Hub {
                 ("send", Value::Array(Vec::new())),
                 ("receive", Value::Array(Vec::new())),
                 ("notice", Value::from("")),
+                ("dm", Value::Bool(false)),
+                ("file_links", Value::Bool(false)),
+                ("backfill_receive", Value::from(0)),
+                ("backfilled", Value::Bool(false)),
             ]);
             let eff = st.bridge_effective(&link);
             if !eff.enabled {
@@ -1716,12 +2005,15 @@ impl Hub {
             link.insert("send".into(), strings_value(&eff.send));
             link.insert("receive".into(), strings_value(&eff.receive));
             link.insert("notice".into(), Value::from(eff.notice));
+            link.insert("file_links".into(), Value::Bool(eff.file_links));
+            link.insert("backfill_receive".into(), Value::from(eff.backfill_receive));
             st.br_part("codes").shift_remove(&code);
             st.br_part("links").insert(lid.clone(), Value::Object(link.clone()));
             st.dirty = true;
             st.bridge_system(&cid, &format!("Linked to {label} ({}, {olabel}) by {by_name}", platform_name(&platform)), Obj::new());
             st.bridge_tell_link(&lid);
             st.bridge_audit(Some(&link), "in", "link", "", &who.principal, &oid, "sent", "");
+            st.bridge_backfill_out(&cid, &link, eff.backfill_send);
             Ok((c_view(&link), cid))
         })();
         drop(st);
@@ -1731,7 +2023,133 @@ impl Hub {
         Ok(out)
     }
 
-    /// `POST /v1/bridge/c/unlink {link, by_name}`: as the member route, from the platform.
+    /// `POST /v1/bridge/c/claim-dm {code, platform, target, by_name}` -> `{link}` (PC-1 section 5, M10, N18): an
+    /// outside person typed `/lucid dm <code>` in a direct message with this org's bot. 404 for an unknown, used or
+    /// expired code, one for another platform and a link code; 400 unless `target.kind` is `dm`; 403 unless the code
+    /// owner's org policy and this connector's declared policy both have `dms` and name each other. Then the plaintext
+    /// conversation `bdm:<link id>` is made with the code's person as its only member, and linked (`dm: true`,
+    /// `peer`).
+    pub fn bridge_c_claim_dm(&self, who: &Identity, code: Body, platform_v: Body, target_v: Body, by_name: Body) -> R<Obj> {
+        let platform = platform(platform_v)?;
+        let target = target(target_v)?;
+        let by_name = field(by_name, "by_name", NAME_MAX)?;
+        let code = pj::str_or(code).trim().to_uppercase();
+        let mut st = self.st.lock();
+        let r = (|| -> R<(Obj, String, String)> {
+            let org = st.bridge_c_enter(who)?;
+            st.pc_refuse_enclave()?;
+            let (coid, clabel) = (pj::text_of(&org, "id"), pj::text_of(&org, "label"));
+            let now = pj::now();
+            st.bridge_expire_codes(now);
+            let row = st.br_part("codes").get(&code).and_then(Value::as_object).cloned();
+            let Some(row) = row.filter(|r| pj::text_of(r, "platform") == platform && pj::truthy(r.get("dm"))) else { return Err(E::NotFound(BAD_CODE.into())) };
+            if pj::text_of(&target, "kind") != "dm" {
+                return bad(DM_ONLY);
+            }
+            if pj::s(&st.ce_hello(), "chat_e2ee") == "required" {
+                return Err(E::Conflict(DM_REQUIRED.into()));
+            }
+            let declared = st.br_part("connectors").get(&who.principal).and_then(Value::as_object).map(|r| pj::text_of(r, "platform"));
+            if declared.is_some_and(|p| p != platform) {
+                return bad("this connector said hello for another platform");
+            }
+            let owner = pj::text_of(&row, "by");
+            let (oid, olabel) = st.bridge_org_of(&owner);
+            let theirs = st.bridge_policy_of(&oid);
+            let mine = st.bridge_declared(&who.principal);
+            let reason = if !(on(&theirs) && flag(&theirs, "dms") && partner(&theirs, &coid, &oid)) {
+                cap(&format!("{} does not allow direct messages with {clabel}", whose(&oid, &olabel)))
+            } else if !(on(&mine) && flag(&mine, "dms") && partner(&mine, &oid, &coid)) {
+                format!("{clabel}'s policy does not allow direct messages with {olabel}")
+            } else {
+                String::new()
+            };
+            if !reason.is_empty() {
+                st.bridge_audit(None, "in", "claim-dm", "", &who.principal, &coid, "blocked", &reason);
+                return forbidden(reason);
+            }
+            let tid = pj::text_of(&target, "id");
+            let taken = st.br_part("links").values().filter_map(Value::as_object).any(|l| {
+                pj::truthy(l.get("dm")) && pj::text_of(l, "state") == "active" && pj::text_of(l, "connector") == who.principal && as_obj(l.get("target")).map(|t| pj::text_of(t, "id")) == Some(tid.clone())
+            });
+            if taken {
+                return Err(E::Conflict("this direct message is already linked to Lucid".into()));
+            }
+            let lid = pj::token_hex(8);
+            let cid = format!("{BDM_PREFIX}{lid}");
+            let label = platform_name(&platform);
+            let bdm = obj([
+                ("link", Value::from(lid.clone())),
+                ("platform", Value::from(platform.clone())),
+                ("name", Value::from(by_name.clone())),
+                ("org", Value::Object(org.clone())),
+                ("header", Value::from(format!("Not end-to-end encrypted: chat with {by_name} in {label} ({clabel})."))),
+            ]);
+            let ch = obj([
+                ("id", Value::from(cid.clone())),
+                ("kind", Value::from("group")),
+                ("name", Value::from("")),
+                ("topic", Value::from("")),
+                ("created_by", Value::from(owner.clone())),
+                ("members", Value::Array(vec![Value::from(owner.clone())])),
+                ("created", f(now)),
+                ("archived", Value::Null),
+                ("last", f(now)),
+                ("e2ee", Value::Bool(false)),
+                ("bridgeable", Value::Bool(true)),
+                ("e2ee_since", Value::Null),
+                ("bdm", Value::Object(bdm)),
+            ]);
+            let peer = obj([("name", Value::from(st.bridge_name(&owner))), ("org", Value::from(if oid == NONE { String::new() } else { olabel.clone() }))]);
+            let mut link = obj([
+                ("id", Value::from(lid.clone())),
+                ("channel", Value::from(cid.clone())),
+                ("platform", Value::from(platform.clone())),
+                ("connector", Value::from(who.principal.clone())),
+                ("org", Value::Object(org.clone())),
+                ("target", Value::Object(target.clone())),
+                ("state", Value::from("active")),
+                ("reason", Value::from("")),
+                ("by", Value::from(owner.clone())),
+                ("claimed_by", Value::from(by_name.clone())),
+                ("ts", f(now)),
+                ("send", Value::Array(Vec::new())),
+                ("receive", Value::Array(Vec::new())),
+                ("notice", Value::from("")),
+                ("dm", Value::Bool(true)),
+                ("peer", Value::Object(peer)),
+                ("file_links", Value::Bool(false)),
+                ("backfill_receive", Value::from(0)),
+                ("backfilled", Value::Bool(true)),
+            ]);
+            st.channels.insert(cid.clone(), Value::Object(ch.clone()));
+            let eff = st.bridge_effective(&link);
+            if !eff.enabled {
+                st.channels.shift_remove(&cid);
+                st.bridge_audit(None, "in", "claim-dm", "", &who.principal, &coid, "blocked", &eff.reason);
+                return forbidden(eff.reason);
+            }
+            link.insert("send".into(), strings_value(&eff.send));
+            link.insert("receive".into(), strings_value(&eff.receive));
+            link.insert("notice".into(), Value::from(eff.notice));
+            link.insert("file_links".into(), Value::Bool(eff.file_links));
+            st.br_part("codes").shift_remove(&code);
+            st.br_part("links").insert(lid.clone(), Value::Object(link.clone()));
+            st.dirty = true;
+            st.tell(std::slice::from_ref(&owner), &obj([("type", Value::from("channel")), ("why", Value::from("created")), ("channel", Value::Object(ch)), ("by", Value::from(""))]), None);
+            st.bridge_tell_link(&lid);
+            st.bridge_audit(Some(&link), "in", "claim-dm", "", &who.principal, &coid, "sent", "");
+            Ok((obj([("link", Value::Object(c_view(&link)))]), lid, owner))
+        })();
+        drop(st);
+        self.wake();
+        let (out, lid, owner) = r?;
+        log_info(&format!("bridge_dm link={lid} platform={platform} connector={} principal={owner}", who.principal));
+        Ok(out)
+    }
+
+    /// `POST /v1/bridge/c/unlink {link, by_name}`: as the member route, from the platform. A bridged DM shows "Bob
+    /// Brown ended this chat in Google Chat." and ends.
     pub fn bridge_c_unlink(&self, who: &Identity, link: Body, by_name: Body) -> R<Obj> {
         let by_name = field(by_name, "by_name", NAME_MAX)?;
         let mut st = self.st.lock();
@@ -1739,6 +2157,10 @@ impl Hub {
             let org = st.bridge_c_enter(who)?;
             let found = st.bridge_c_link(who, link, false)?;
             let lid = pj::text_of(&found, "id");
+            let cid = pj::text_of(&found, "channel");
+            if pj::truthy(found.get("dm")) && pj::text_of(&found, "state") == "active" && st.channel(&cid).is_some() {
+                st.bridge_system(&cid, &format!("{by_name} ended this chat in {}.", platform_name(&pj::text_of(&found, "platform"))), Obj::new());
+            }
             st.bridge_off(&lid, &format!("Unlinked by {by_name}"), &who.principal, &pj::text_of(&org, "id"), "sent");
             let found = st.br_link(&lid).unwrap_or(found);
             Ok(obj([("link", Value::Object(c_view(&found)))]))
@@ -1821,7 +2243,21 @@ impl Hub {
                 if ok && !ext.is_empty() {
                     st.bridge_remember(&lid, &mid, &ext);
                 }
-                st.bridge_mark(&pj::text_of(&found, "channel"), &mid, &lid, result, why, &ext);
+                // ok with a reason keeps it on the delivery line (PC-1 M11: "Sent to Google Chat as a link anyone with
+                // it can open until <date>.")
+                st.bridge_mark(&pj::text_of(&found, "channel"), &mid, &lid, result, &reason, &ext);
+                if ok {
+                    // file links count from delivery
+                    let now = pj::now();
+                    if let Some(offered) = st.br_part("offered").get_mut(&lid).and_then(Value::as_object_mut).filter(|o| !o.is_empty()) {
+                        for file in op.get("files").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_object) {
+                            let fid = pj::text_of(file, "id");
+                            if offered.contains_key(&fid) {
+                                offered.insert(fid, f(now));
+                            }
+                        }
+                    }
+                }
             }
             if !op_kind_of(&name).is_empty() {
                 let by = Some(pj::s(&op, "_by")).filter(|b| !b.is_empty()).unwrap_or_else(|| "relay".into());
@@ -1949,6 +2385,141 @@ impl Hub {
             log_info(&format!("bridge_post link={lid} chars={} files={n}", pj::char_len(&text)));
         }
         Ok(out)
+    }
+
+    /// `POST /v1/bridge/c/backfill {link, messages: [{user: {id, name}, msg, text, ts, thread}]}` -> `{count}` (PC-1
+    /// section 5, L6): a platform's earlier messages, once per link and within 10 minutes of it being made. 403 over the
+    /// lower of the connector's `backfill_send` and the link's `backfill_receive` (or either 0), 409 for a second call
+    /// or a late one. Each is kept as a bridged message with `src` and `imported: true` at its own time (only times
+    /// before the link was made; a repeat of `(link, msg)` is skipped): no push, no unread, never sent on to other
+    /// links. The conversation hears "The last N messages from <target> were copied here."
+    pub fn bridge_c_backfill(&self, who: &Identity, link: Body, messages: Body) -> R<Obj> {
+        let items = match messages {
+            Some(Value::Array(a)) if a.len() as i64 <= BACKFILL_MAX => a,
+            _ => return bad(format!("messages must be a list of at most {BACKFILL_MAX}")),
+        };
+        let mut rows: Vec<Earlier> = Vec::new();
+        for item in items {
+            let Some(item) = item.as_object() else { return bad("each message must be {user, msg, text, ts, thread}") };
+            let (uid, uname) = user(item.get("user"))?;
+            let ts = match item.get("ts") {
+                Some(Value::Number(n)) => n.as_f64().filter(|t| t.is_finite() && *t > 0.0),
+                _ => None,
+            };
+            let Some(ts) = ts else { return bad("ts must be a time in seconds") };
+            let pid = field(item.get("msg"), "msg", FIELD_MAX)?;
+            let text = m::text(item.get("text"), "messages")?;
+            let thread = optional(item.get("thread"), "thread")?;
+            rows.push(Earlier { uid, uname, pid, text, ts, thread });
+        }
+        let mut st = self.st.lock();
+        let r = (|| -> R<(usize, String)> {
+            let org = st.bridge_c_enter(who)?;
+            let found = st.bridge_c_link(who, link, true)?;
+            let (lid, cid) = (pj::text_of(&found, "id"), pj::text_of(&found, "channel"));
+            if pj::truthy(found.get("dm")) {
+                return forbidden(DM_NO_BACKFILL);
+            }
+            let now = pj::now();
+            let made_ts = pj::num(&found, "ts");
+            if pj::truthy(found.get("backfilled")) || now - made_ts > BACKFILL_WINDOW {
+                return Err(E::Conflict(BACKFILL_DONE.into()));
+            }
+            let platform = pj::text_of(&found, "platform");
+            let by = format!("ext:{platform}:");
+            st.bridge_allow(&found, &cid, "text", &by)?;
+            let eff = st.bridge_effective(&found);
+            let mine = number(&st.bridge_declared(&who.principal), "backfill_send");
+            let (oid, olabel) = (pj::text_of(&org, "id"), pj::text_of(&org, "label"));
+            let mut reason = String::new();
+            if mine <= 0 {
+                reason = format!("{olabel}'s policy does not send earlier messages");
+            } else if eff.backfill_receive <= 0 {
+                reason = "this link does not accept earlier messages".into();
+                for (moid, label) in st.bridge_member_orgs(&cid) {
+                    if number(&st.bridge_policy_of(&moid), "backfill_receive") <= 0 {
+                        reason = cap(&format!("{} does not accept earlier messages", whose(&moid, &label)));
+                        break;
+                    }
+                }
+            } else if rows.len() as i64 > mine.min(eff.backfill_receive) {
+                reason = format!("this link accepts at most {} earlier messages", mine.min(eff.backfill_receive));
+            }
+            if !reason.is_empty() {
+                st.bridge_audit_count(Some(&found), "in", "backfill", "text", &by, &oid, "blocked", &reason, Some(rows.len()));
+                return forbidden(reason);
+            }
+            st.br_link_set(&lid, obj([("backfilled", Value::Bool(true))]));
+            let mut ordered: Vec<&Earlier> = rows.iter().collect();
+            ordered.sort_by(|a, b| a.ts.partial_cmp(&b.ts).unwrap_or(std::cmp::Ordering::Equal));
+            let mut made: Vec<Obj> = Vec::new();
+            let mut roots: Vec<String> = Vec::new();
+            for Earlier { uid, uname, pid, text, ts, thread } in ordered {
+                if *ts >= made_ts || st.bridge_mid(&lid, &cid, Some(pid.as_str())).is_some() {
+                    continue;
+                }
+                let mid = pj::token_hex(8);
+                let src = obj([
+                    ("platform", Value::from(platform.clone())),
+                    ("link", Value::from(lid.clone())),
+                    ("user", Value::from(uid.clone())),
+                    ("name", Value::from(uname.clone())),
+                    ("org", Value::Object(org.clone())),
+                    ("msg", Value::from(pid.clone())),
+                    ("url", Value::from("")),
+                ]);
+                let mut msg = obj([
+                    ("id", Value::from(mid.clone())),
+                    ("channel", Value::from(cid.clone())),
+                    ("from", Value::from(who.principal.clone())),
+                    ("from_name", Value::from(uname.clone())),
+                    ("from_org", Value::Object(org.clone())),
+                    ("text", Value::from(text.clone())),
+                    ("ts", f(*ts)),
+                    ("rts", Value::from((*ts * 1000.0) as i64)),
+                    ("reactions", Value::Object(Obj::new())),
+                    ("imported", Value::Bool(true)),
+                    ("src", Value::Object(src)),
+                ]);
+                if let Some(i) = st.bridge_mid(&lid, &cid, thread.as_deref()) {
+                    let root = channels::thread_id(&st.channel_msgs[&cid][i]);
+                    msg.insert("thread".into(), Value::from(root.clone()));
+                    if !roots.contains(&root) {
+                        roots.push(root);
+                    }
+                }
+                let msgs = st.channel_msgs.entry(cid.clone()).or_default();
+                let at = msgs.iter().position(|x| pj::num(x, "ts") > *ts).unwrap_or(msgs.len());
+                msgs.insert(at, msg.clone());
+                st.bridge_remember(&lid, &mid, pid);
+                made.push(msg);
+            }
+            let msgs = st.channel_msgs.entry(cid.clone()).or_default();
+            for root in &roots {
+                channels::recount(msgs, root);
+            }
+            if msgs.len() > channels::CHANNEL_KEEP {
+                let cut = msgs.len() - channels::CHANNEL_KEEP;
+                msgs.drain(..cut);
+            }
+            st.dirty = true;
+            let members = channels::members_of(st.channel(&cid));
+            for msg in &made {
+                st.tell(&members, &obj([("type", Value::from("channel_message")), ("message", Value::Object(msg.clone()))]), None);
+            }
+            let n = made.len();
+            if n > 0 {
+                let label = as_obj(found.get("target")).map(|t| pj::text_of(t, "label")).unwrap_or_default();
+                st.bridge_system(&cid, &format!("The last {n} messages from {label} were copied here."), Obj::new());
+            }
+            st.bridge_audit_count(Some(&found), "in", "backfill", "text", &by, &oid, "sent", "", Some(n));
+            Ok((n, lid))
+        })();
+        drop(st);
+        self.wake();
+        let (n, lid) = r?;
+        log_info(&format!("bridge_backfill link={lid} count={n}"));
+        Ok(obj([("count", Value::from(n))]))
     }
 
     /// `POST /v1/bridge/c/edit {link, msg, text}` (kind `edits`): only a message that came from this link.
@@ -2147,11 +2718,15 @@ impl Hub {
         st.bridge_c_enter(who)?;
         let found = st.bridge_c_link(who, Some(&Value::from(link)), true)?;
         let (lid, cid) = (pj::text_of(&found, "id"), pj::text_of(&found, "channel"));
-        if !st.bridge_effective(&found).send.iter().any(|k| k == "files") {
+        let eff = st.bridge_effective(&found);
+        if !eff.send.iter().any(|k| k == "files") {
             return forbidden("files do not cross this link");
         }
-        let offered = st.br_part("offered").get(&lid).and_then(Value::as_object).map(|o| o.contains_key(id)).unwrap_or(false);
-        if !offered {
+        // on a link with `file_links` (Google Chat, PC-1 M11) the connector serves the file to whoever holds its link:
+        // the relay answers for `file_link_hours` after the op was delivered
+        let offered = st.br_part("offered").get(&lid).and_then(Value::as_object).and_then(|o| o.get(id)).map(|t| pj::as_num(Some(t)).unwrap_or(0.0));
+        let Some(offered) = offered else { return Err(E::NotFound(FILE_GONE.into())) };
+        if eff.file_links && pj::now() - offered > eff.file_link_hours as f64 * 3600.0 {
             return Err(E::NotFound(FILE_GONE.into()));
         }
         st.files_bridge_open_kept(id, &cid)
@@ -2174,7 +2749,10 @@ mod tests {
     #[test]
     fn policies_are_checked_and_normalized_as_python_does() {
         let p = policy(&json!({"enabled": true, "send": ["files", "text", "files"], "partners": [" orgb ", "orgb"], "notice": "  Kept  for  audit "})).unwrap();
-        assert_eq!(Value::Object(p), json!({"enabled": true, "send": ["text", "files"], "receive": [], "partners": ["orgb"], "file_max_mb": 25, "notice": "Kept for audit"}));
+        assert_eq!(Value::Object(p), json!({"enabled": true, "send": ["text", "files"], "receive": [], "partners": ["orgb"], "file_max_mb": 25, "notice": "Kept for audit", "dms": false, "file_links": false, "file_link_hours": 24, "backfill_send": 0, "backfill_receive": 0}));
+        assert_eq!(policy(&json!({"dms": 1})).unwrap_err(), "dms must be true or false");
+        assert_eq!(policy(&json!({"file_link_hours": 0})).unwrap_err(), "file_link_hours must be a whole number from 1 to 168");
+        assert_eq!(policy(&json!({"backfill_send": 501})).unwrap_err(), "backfill_send must be a whole number from 0 to 500");
         assert_eq!(Value::Object(policy(&json!({})).unwrap()), Value::Object(off_policy()));
         assert_eq!(policy(&json!({"enabled": true, "x": 1, "a": 2})).unwrap_err(), "unknown bridge policy keys: a, x");
         assert_eq!(policy(&json!({"enabled": 1})).unwrap_err(), "enabled must be true or false");
@@ -2256,6 +2834,7 @@ mod tests {
     #[test]
     fn small_checks_follow_python() {
         assert_eq!(room("c-0123456789abcdef"), "cv-0123456789abcdef");
+        assert_eq!(room("bdm:0123456789abcdef"), "cv-bdm-0123456789abcdef");
         assert_eq!(url(Some(&json!("https://x.slack.com/archives/C1/p1"))), "https://x.slack.com/archives/C1/p1");
         assert_eq!(url(Some(&json!("javascript:alert(1)"))), "");
         assert_eq!(url(Some(&json!("https:///nohost"))), "");

@@ -32,6 +32,7 @@ mod meet_guest_port;
 mod meet_hub;
 mod meet_json;
 mod meet_ops;
+mod meet_org_policy;
 mod meet_routes;
 mod meet_tls;
 mod meet_x509;
