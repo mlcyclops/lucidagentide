@@ -1195,13 +1195,13 @@ function paintTabs(): void {
   const sig = JSON.stringify([list.map((b) => [b.id, b.name]), full]);
   if (sig !== tabsSig && renamingBoard === null) {
     tabsSig = sig;
-    const dot = `<i class="fleet-board-dot" data-board-dot title="An agent here needs you" hidden></i>`;
+    const dot = `<i class="fleet-board-dot" data-board-dot data-tip="An agent here needs you" hidden></i>`;
     row.innerHTML = [
       `<button class="fleet-board-tab" role="tab" aria-selected="false" data-board-tab="${EVERYTHING}" data-tip="Everything|Every agent on this computer and on your remote computers. A board shows just the ones you pick.">Everything${dot}</button>`,
-      ...list.map((b) => `<span class="fleet-board-tabwrap" data-board-wrap="${esc(b.id)}"><button class="fleet-board-tab" role="tab" aria-selected="false" data-board-tab="${esc(b.id)}" title="Double-click to rename"><span>${esc(b.name)}</span>${dot}</button><button class="fleet-board-more" data-board-menu="${esc(b.id)}" aria-label="${esc(`Board options: ${b.name}`)}" title="Rename, move or delete this board">${icon("more", 11)}</button></span>`),
+      ...list.map((b) => `<span class="fleet-board-tabwrap" data-board-wrap="${esc(b.id)}"><button class="fleet-board-tab" role="tab" aria-selected="false" data-board-tab="${esc(b.id)}" data-tip="Double-click to rename"><span>${esc(b.name)}</span>${dot}</button><button class="fleet-board-more" data-board-menu="${esc(b.id)}" aria-label="${esc(`Board options: ${b.name}`)}" title="Rename, move or delete this board">${icon("more", 11)}</button></span>`),
       full
-        ? `<button class="fleet-board-add" disabled title="You have ${BOARDS_MAX} boards, the most there can be. Delete one to make another.">${icon("plus", 11)} Board</button>`
-        : `<button class="fleet-board-add" data-board-add title="Make a new board, then add agents to it">${icon("plus", 11)} Board</button>`,
+        ? `<button class="fleet-board-add" disabled data-tip="Board limit reached|You have ${BOARDS_MAX} boards, the most there can be. Delete one to make another.">${icon("plus", 11)} Board</button>`
+        : `<button class="fleet-board-add" data-board-add data-tip="New board|Make a new board, then add agents to it">${icon("plus", 11)} Board</button>`,
     ].join("");
   }
   paintNeeds();
