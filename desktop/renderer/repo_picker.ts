@@ -24,6 +24,7 @@
 import { $ } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 import type { GithubRepoList, LocalRepoChoice, LucidBridge, RemoteRepoChoice } from "./bridge.ts";
 import { providerLabel } from "../git_url.ts";
 
@@ -83,9 +84,9 @@ export function runFind(
 export function repoPickerHtml(): string {
   return `<div class="repo-pick" data-repo-pick>
     <div class="repo-pick-find">
-      <div class="repo-pick-find-h"><span class="repo-pick-find-t">Find repos</span><button type="button" class="btn-mini repo-pick-go" data-repo-go disabled title="Search the checked sources">${icon("search", 11)} Search</button></div>
-      <label class="repo-pick-src" title="Git checkouts in the workspace, recent workspaces and live spokes' folders"><input type="checkbox" data-repo-find="local"><span>On this machine</span></label>
-      <label class="repo-pick-src" title="Your repositories, listed with the GitHub CLI sign-in (or a saved GitHub token)"><input type="checkbox" data-repo-find="github"><span>On GitHub (GitHub CLI)</span></label>
+      <div class="repo-pick-find-h"><span class="repo-pick-find-t">Find repos</span><button type="button" class="btn-mini repo-pick-go" data-repo-go disabled data-tip="Search the checked sources">${icon("search", 11)} Search</button></div>
+      <label class="repo-pick-src" data-tip="Git checkouts in the workspace, recent workspaces and live spokes' folders"><input type="checkbox" data-repo-find="local"><span>On this machine</span></label>
+      <label class="repo-pick-src" data-tip="Your repositories, listed with the GitHub CLI sign-in (or a saved GitHub token)"><input type="checkbox" data-repo-find="github"><span>On GitHub (GitHub CLI)</span></label>
     </div>
     <div class="repo-pick-search" data-repo-search hidden>${icon("search", 12)}<input type="text" data-repo-q spellcheck="false" autocomplete="off" placeholder="Filter repositories" aria-label="Filter repositories"></div>
     <div class="repo-pick-list" data-repo-list role="listbox" aria-label="Repositories" hidden></div>
@@ -97,14 +98,14 @@ function localRow(c: LocalRepoChoice, i: number, on: boolean): string {
     ? `${c.branch ? `<span class="rp-branch">${esc(c.branch)}</span> ` : ""}${icon("arrowRight", 10)} <span class="rp-slug">${esc(c.slug)}</span>`
     : `${c.branch ? `<span class="rp-branch">${esc(c.branch)}</span> ` : ""}<span class="rp-local">${c.isGit ? "local only, no remote" : "not a git repo"}</span>`;
   const title = [c.path, c.isGit ? `Branch: ${c.branch || "detached"}` : "Not a git repository", c.slug ? `Pushes to ${c.provider ? providerLabel(c.provider) : ""} ${c.slug}` : "", c.worktree ? "A git worktree" : ""].filter(Boolean).join("\n");
-  return `<button type="button" class="repo-pick-row${on ? " on" : ""}" data-pick-i="${i}" role="option" aria-selected="${on}" title="${esc(title)}">
+  return `<button type="button" class="repo-pick-row${on ? " on" : ""}" data-pick-i="${i}" role="option" aria-selected="${on}" data-tip="${esc(tipEsc(title))}">
     ${icon(c.isGit ? "git" : "folder", 13)}<span class="rp-main"><span class="rp-top"><span class="rp-name">${esc(c.name)}</span><span class="rp-src">${esc(c.worktree ? "worktree" : SOURCE_LABEL[c.source])}</span></span><span class="rp-sub">${push}</span></span>
   </button>`;
 }
 
 function githubRow(c: RemoteRepoChoice, i: number, on: boolean): string {
   const title = [c.slug, c.description, c.private ? "Private" : "Public", "Picking it clones it, reusing an existing clone in the same folder."].filter(Boolean).join("\n");
-  return `<button type="button" class="repo-pick-row gh${on ? " on" : ""}" data-pick-i="${i}" role="option" aria-selected="${on}" title="${esc(title)}">
+  return `<button type="button" class="repo-pick-row gh${on ? " on" : ""}" data-pick-i="${i}" role="option" aria-selected="${on}" data-tip="${esc(tipEsc(title))}">
     ${icon("download", 13)}<span class="rp-main"><span class="rp-top"><span class="rp-name">${esc(c.slug)}</span><span class="rp-src">${c.private ? "private" : "public"}</span></span><span class="rp-sub">${esc(c.description || "Not on this machine yet: picking it clones it")}</span></span>
   </button>`;
 }
@@ -150,7 +151,7 @@ export function mountRepoPicker(root: HTMLElement, deps: RepoPickerDeps, current
       if (!github) parts.push(`<div class="repo-pick-h">On GitHub</div><div class="repo-pick-empty">Asking GitHub through the GitHub CLI\u2026</div>`);
       else if (github.via === "none") parts.push(`<div class="repo-pick-h">On GitHub</div><div class="repo-pick-empty">Sign in with the GitHub CLI (<code>gh auth login</code>) or save a GitHub token to list your repositories here.</div>`);
       else {
-        parts.push(`<div class="repo-pick-h">On GitHub${github.via === "gh" ? " (GitHub CLI sign-in)" : ""}<button type="button" class="repo-pick-refresh" data-repo-refresh title="Fetch the list again">${icon("refresh", 11)}</button></div>`);
+        parts.push(`<div class="repo-pick-h">On GitHub${github.via === "gh" ? " (GitHub CLI sign-in)" : ""}<button type="button" class="repo-pick-refresh" data-repo-refresh aria-label="Fetch the list again" data-tip="Fetch the list again">${icon("refresh", 11)}</button></div>`);
         if (github.error) parts.push(`<div class="repo-pick-empty bad">${esc(github.error)}</div>`);
         else if (!g.length) parts.push(`<div class="repo-pick-empty">${needle ? "No GitHub match" : "Every GitHub repository you have is already on this machine"}</div>`);
         else g.forEach((c, i) => parts.push(githubRow(c, l.length + i, picked === `gh:${c.slug.toLowerCase()}`)));

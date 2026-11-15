@@ -13,6 +13,7 @@
 
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 
 export const VAULT_DEST_SEC = "vaultDest";
 export const VAULT_DEST_TITLE = "Vault destinations (Enterprise)";
@@ -76,11 +77,11 @@ function destRowHtml(d: DestRow, installed: boolean): string {
   const auto = autoBackupLine(d);
   const failed = d.lastAutoBackup && !d.lastAutoBackup.ok;
   const actions = installed
-    ? `<button class="btn-mini" data-vd-check title="Check sign-in and that the destination is reachable">Test</button>
-       <button class="btn-mini" data-vd-list title="See which LUCID entries the destination holds (names and dates only)">Contents</button>
-       <button class="btn-mini" data-vd-push title="Push every entry in this machine's vault to the destination">Push all now</button>
-       <button class="btn-mini" data-vd-pull title="Bring entries this machine lacks, or holds older copies of, into the vault (newer wins)">Pull to this machine</button>
-       <button class="btn-mini" data-vd-edit title="Edit this destination">Edit</button>`
+    ? `<button class="btn-mini" data-vd-check data-tip="Check sign-in and that the destination is reachable">Test</button>
+       <button class="btn-mini" data-vd-list data-tip="See which LUCID entries the destination holds (names and dates only)">Contents</button>
+       <button class="btn-mini" data-vd-push data-tip="Push every entry in this machine's vault to the destination">Push all now</button>
+       <button class="btn-mini" data-vd-pull data-tip="Bring entries this machine lacks, or holds older copies of, into the vault (newer wins)">Pull to this machine</button>
+       <button class="btn-mini" data-vd-edit data-tip="Edit this destination">Edit</button>`
     : "";
   return `<div class="lp-row-wrap" data-vd-id="${esc(d.id)}">
     <div class="lp-row">
@@ -88,11 +89,11 @@ function destRowHtml(d: DestRow, installed: boolean): string {
         <div class="lp-name"><span class="vd-ttl">${esc(d.name)}</span><span class="lp-pill ok">${esc(KIND_LABEL[d.kind] ?? d.kind)}</span></div>
         <div class="lp-sub">${esc(destSummary(d))}</div>
       </div>
-      <button class="btn-mini danger" data-vd-remove title="Remove this destination from LUCID (nothing is deleted at the destination)">${icon("close", 12)}</button>
+      <button class="btn-mini danger" data-vd-remove aria-label="Remove this destination" data-tip="Remove this destination|Removes it from LUCID only; nothing is deleted at the destination.">${icon("close", 12)}</button>
     </div>
     ${installed ? `<div class="vd-actions">${actions}</div>
     <label class="lp-ext vd-auto"><input type="checkbox" data-vd-auto ${d.autoBackup ? "checked" : ""}/> <span>Auto-backup new secrets to this destination</span></label>` : ""}
-    ${auto ? `<div class="lp-sub vd-last${failed ? " vd-bad" : ""}" title="${esc(auto)}">${esc(auto)}</div>` : ""}
+    ${auto ? `<div class="lp-sub vd-last${failed ? " vd-bad" : ""}" data-tip="${esc(tipEsc(auto))}">${esc(auto)}</div>` : ""}
     <div class="set-note vd-result" data-vd-result hidden><span></span></div>
   </div>`;
 }

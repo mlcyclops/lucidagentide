@@ -27135,3 +27135,420 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 5. The agent firewall's header neutralizes the connection name and stop reason, and the MCP gate's header the server name (left over from ADR-0568).
 
 **Consequences.** `rd /s /q build` and `Remove-Item -Recurse` now always ask, as `rm -rf build` does; remote lanes refuse them outright. A command quoted as an argument is not read as one. Left as designed: a remote agent connection with `permissionPolicy: "allow"` (ADR-0149, a per-connection opt-in for a trusted gateway) answers its own asks without this floor.
+
+## ADR-0578 -- P-CTX.2a: a tool result omp spilled to an artifact is scanned whole, recorded with its trust label, and fenced when read back; the result window is omp's own setting (2026-11-14)
+
+**Status:** Accepted. This is "ADR-A" of `docs/specs/longcapharness-review-pdr.md`, amended after its seam was confirmed against omp 18.18.6 (the numbers 0571 to 0577 are taken on unmerged branches). Amends ADR-0152 (the MCP result gate). Proof: `make demo-P-CTX.2a`, and `bun test harness/omp/mcp_spill_gate.test.ts harness/security/large_scan.test.ts harness/security/spill_provenance.test.ts`.
+
+**Context.** The PDR proposed a LUCID `tool_result` hook that stores a result over a threshold and shows the model a bounded window with a handle, on the premise that tool results reach the model whole. Confirming the seam against the installed omp (the first-task rule of CLAUDE.md) found four things.
+1. omp already does the window. `spillLargeResultToArtifact` (`tools/output-meta.ts`) wraps every tool (built-in, MCP, extension): a result over `tools.artifactSpillThreshold` (default 50 KB) is saved whole as `<artifactsDir>/<n>.<tool>.log`, replaced inline by a head and tail view (20 KB each by default), and named in `details.meta.truncation.artifactId`. The model reads the rest with omp's own `read artifact://<n>:<from>-<to>`. Measured: a 2 MB result from a custom tool reached a `tool_result` hook as 41 KB.
+2. The spill runs before any `tool_result` hook, so the MCP result gate scanned only the inline view. Measured in a real omp session with the real scanner: a 299 KB result from an `mcp__` tool, with a tag-block and zero-width payload at line 3000 of 6000, was labeled `untrusted` and shown. `read artifact://0:2998-3003` then returned the payload with no envelope and no scan, because `read` is a local built-in the gate leaves alone by design. Invariants 3 and 5 both failed for any MCP result over the spill threshold.
+3. omp skips a `tool_result` handler that throws or runs past 30 seconds and passes the result on unchanged. The gate's handler had no catch, so a failure inside it released the result.
+4. The scanner answers in about 1.3 seconds per MB and the client times out at 5 seconds, so one scan request cannot cover more than about 3 MB.
+
+**Decision.**
+1. LUCID adds no windowing code. The window is omp's settings (`tools.artifactSpillThreshold`, `tools.artifactHeadBytes`, `tools.artifactTailBytes`, `tools.artifactTailLines`). Proven here: a 4 KB threshold shows the model 3,769 bytes of a 2 MB result. Setting them from the model's measured context window is P-CTX.2b.
+2. For an MCP result that omp spilled, the gate scans the whole artifact as well as the inline view (`decideSpilled` in `harness/omp/mcp_result_gate.ts`). `scanAndDecideLarge` (`harness/security/large_scan.ts`) scans in chunks of 200,000 characters cut at line boundaries, so no finding is hidden by a cut, and reports offsets in the whole text. Text over 8,000,000 characters is blocked without scanning. A spilled result whose artifact cannot be read is blocked.
+3. A blocked spilled result has its artifact's content replaced by a notice, so the link returns the notice, and is recorded `quarantined`.
+4. A passing spilled result is recorded before its view is released: one JSON line in `<artifactsDir>/lucid-provenance.jsonl` (`harness/security/spill_provenance.ts`) with `artifact_id` (`<session_id>/<n>`), `session_id`, tool, source (`mcp:<server>`), trust label (`untrusted` or `suspicious`, never `trusted`), size and SHA-256. If the record cannot be written the result is withheld and the artifact purged: no provenance record, no content. The ledger is also held in memory for the process.
+5. A local tool result whose input names an external artifact is gated on the way back in (`harness/omp/artifact_reentry.ts`): by `artifact://<n>`, by a file path inside the artifacts directory, or by that directory or an ancestor of it. A quarantined artifact is withheld. Otherwise the page is scanned with the strict policy and wrapped in the untrusted envelope with the artifact's source and label. A ledger that cannot be read makes every artifact it cannot vouch for external. An artifact spilled by a local tool reads back unchanged, as local output does today (the source scope of ADR-0152 stands).
+6. The handler never throws. A failure inside the gate withholds an MCP result, and withholds a local result whose input names an artifact.
+7. Both gates live in the existing `mcp_result_gate.ts` extension, so no spawn argument changes and the fix is active wherever that gate is already loaded (the desktop engine, lanes, `lucid`).
+8. `harness/tools/output_minify_proto.ts` and `output_cmdaware_proto.ts` stay unwired measurement prototypes. They shorten content (ANSI codes, repeated lines), which is a different axis from the window; whether to promote or delete them is decided in P-CTX.2b with the per-model budget.
+
+**Consequences.**
+- An MCP result over 8,000,000 characters is withheld. A spilled MCP result costs one scan of its whole content (about 3 seconds for 2 MB), inside omp's 30 second handler budget.
+- The re-entry match reads the tool call's input. It does not see a relative path, a shell variable that resolves into the artifacts directory, or another session in the same process reading the artifact through omp's cross-session fall-through (a subagent has its own artifacts directory and ledger). Those reads lose the envelope, not the scan: the whole artifact was scanned when it was spilled, which is why that scan, not the match, is the primary control.
+- A quarantined artifact whose purge fails and whose durable record also fails is withheld for the life of the process and readable after a restart.
+- If omp cuts the handler off at 30 seconds it passes the result unchanged. The 8,000,000 character limit keeps a full scan near 10 seconds.
+- No `EventName` is added (a frozen contract); the ledger is a file beside the artifacts, in the pattern of the turn and latency logs, and its ingest into DuckDB is a later increment.
+- Results from external sources other than MCP servers are scoped as ADR-0152 left them.
+- The PDR is amended: its Session 1 is this increment, and Session 2 (P-CTX.2b) becomes "set omp's spill settings from the model's measured window, show stored and shown bytes in the desktop".
+
+## ADR-0579 -- P-CTX.2b: omp's tool-result window is sized to the chat model's context window, with an override and a stored-versus-shown report (2026-11-14)
+
+**Status:** Accepted. Session 2 of `docs/specs/longcapharness-review-pdr.md`, on the seam ADR-0578 confirmed. Proof: `make demo-P-CTX.2b`, `bun test desktop/result_window.test.ts`.
+
+**Context.** omp shows the model at most `tools.artifactSpillThreshold` (default 50 KB, about 12,500 tokens) of any one tool result and saves the rest as a session artifact (ADR-0578). That default suits a cloud model with a 200,000 token window. A local model with an 8,192 or 32,768 token window is filled by one or two tool results, which is the failure the LongCapHarness paper removes by giving each model call a bounded prompt. LUCID knows the context window of a model served by a Local Provider: the one the endpoint reported through Discover (ADR-0367), or the 8,192 token default omp is given for a model that declares none.
+
+**Decision.**
+1. The rule: one tool result may take one sixteenth of the context window. At about 4 bytes per token the spill threshold is `contextWindow / 4` bytes, in half-KB steps, never under 2 KB and never over omp's 50 KB (`desktop/result_window.ts`, pure). That is 2 KB for an 8K model, 8 KB for 32K and 32 KB for 128K. From 204,800 tokens up the rule reaches omp's default and LUCID writes nothing. Head and tail keep omp's proportions (40 percent of the threshold each).
+2. The window is written as an omp `--config` overlay, `lucid-result-window.yml`, at every spawn in `ompConfigArgs()`, beside the judgment and model-roles overlays (`desktop/result_window_overlay.ts`). It is rewritten every spawn, as an empty map when omp's default stands, so a small window never survives a switch to a large model. A failed write rejects the spawn, as the other two overlays do.
+3. Only a model an enabled Local Provider serves gets a sized window. Every other model keeps omp's default.
+4. The user can override it: a stored `resultWindow` setting (`auto` by default, `omp` for omp's default, or a fixed size in KB), read and written through `/api/result-window` behind the UI token, with a control in the Settings Local Providers card.
+5. The desktop reports what omp did: a completed tool call whose result omp cut carries `window` (stored bytes, shown bytes, artifact id) on its `tool-meta` event, read from omp's own `details.meta.truncation`, and the tool chip's drilldown shows it as one line. A failed or withheld result reports none.
+6. `harness/tools/output_minify_proto.ts` and `output_cmdaware_proto.ts`, with their tests and benches, are deleted. They measured ANSI stripping, repeated-line folding and per-command filtering toward a possible LUCID layer; omp ships that as its Shell Minimizer (`shellMinimizer.enabled`, on by default), so a LUCID copy would break invariant 1 for no gain. This closes item 8 of ADR-0578.
+7. A bug found while verifying the control is fixed with it: `hydrateLocalProviders` filled the Local Providers card with its bare body, and `fillSec` swaps `outerHTML`, so the card lost its title and `data-sec` on first load and every later refresh of the list found nothing to fill. The fill now passes the whole card.
+
+**Consequences.**
+- omp reads `--config` at spawn, so a change of model or of the setting inside a running omp process applies at the next spawn (the limit ADR-0448 has).
+- A lane uses the master session's chat model for its window, because `ompConfigArgs()` reads `lastModel()`. A lane on a smaller model than the master gets the master's window.
+- A smaller window means more of a result sits behind the artifact link. The whole artifact of an MCP result is still scanned and recorded (ADR-0578), which the demo runs under a 2 KB window.
+- The tool chip names the artifact id as text. Opening the artifact from the chip is a new read surface over possibly untrusted content and is left for its own increment.
+- The stored-versus-shown line was verified by its pure functions and in the served bundle, not by a live model turn.
+
+## ADR-0580 -- P-MINI.1: mini Lucid visits other roles on a new session and sits down to type while a turn runs (2026-11-14)
+
+**Status:** Accepted. Session 1 of `docs/specs/mini-lucid-ask-lucid-pdr.md`. Proof: `make demo-P-MINI.1`, `bun test desktop/renderer/mini_lucid.test.ts`.
+
+**Context.** The prompt-bar runner (`mascot_runner.ts`) existed only in the LUCID Agent role, and while a turn ran he stood and cycled through kata, shuriken and other activities. LUCID Tradepass took this repo's frames and built a calmer figure for its Ask Lucid panel: seated, typing on a keyboard on his lap. The request is to bring that pose back, to let him visit the other roles on a new session, and to keep him from being a nuisance.
+
+**Decision.**
+1. `desktop/renderer/mascot_mini.ts` holds the seated scene from Tradepass's `ui/js/mascot-mini.js` (same owner and license), ported to TypeScript on this repo's own frames in `mascot.ts`: idle (seated, breathing, an occasional glance up), working (eyes open, hands alternating on lit keys), done and error. `sceneRows(state, t)` is pure. `mountMiniMascot` is the small standalone canvas the Ask Lucid panel will use.
+2. `mountComposerRunner` takes options. `workPose: "typing"` seats him on the bar top at his walking position while a turn runs, in place of the standing activity loop. `dismissOnClick` makes a click send him away once his leap has landed. Every mount now uses the typing pose, the LUCID Agent role included.
+3. `desktop/renderer/mini_lucid.ts` decides when he visits, as pure rules. The LUCID Agent role keeps him as a resident, as before. The Developer role gets him on the first new session of each launch, also when the role is picked at the first-run gate. Any role gets him on one new session in four, never within thirty minutes of the last visit and at most three times a local day. A visitor leaves on a click; a resident is greeted by one.
+4. A Settings card, "Mini Lucid", stores the user's choice in localStorage: Off, Sometimes (the default) or Always. Off also ends a visit in progress. The LUCID Agent role keeps him whatever the choice.
+5. "Agent mode" in the request is read as the `lucid-agent` role and "Dev mode" as the `developer` role, the two role-picker entries that fit. The diagnostics toggle named developer mode is not involved.
+
+**Consequences.**
+- He is clickable only while his silhouette is above the prompt bar, as before: on the lane that crosses the bar itself he is drawn but does not take the pointer, so the prompt is never blocked. A click to dismiss has to wait for him to come up top.
+- A holiday costume is not drawn on the seated figure, because the costumes are cut for the standing frames. He wears it again when he stands.
+- The visit ledger and the preference are per browser profile (localStorage), like the season and status preferences, not per account.
+- A launch that opens on a restored conversation does not count as a new session.
+
+## ADR-0581 -- P-ASKLUCID.1: Ask Lucid, a side conversation in a dock fly-out that can see the fleet, the orbit and the knowledge graph and cannot act (2026-11-14)
+
+**Status:** Accepted. Session 2 of `docs/specs/mini-lucid-ask-lucid-pdr.md`. Proof: `make demo-P-ASKLUCID.1`, `bun test desktop/ask_lucid.test.ts`.
+
+**Context.** The request is a fly-out like the one in LUCID Tradepass, holding a conversation with Lucid that may or may not be about the current work, with a view of every fleet lane, the Fleet Orbit and the knowledge graph. LUCID Agent IDE had right-side drawers that exclude each other and no window that floats, snaps or minimizes. It did have one way to ask a model something outside the chat turn: `Backend.complete`, a one-shot completion on a dedicated connection that holds no tools and never touches the chat session.
+
+**Decision.**
+1. `desktop/renderer/dock.ts` is Tradepass's `ui/js/dock.js` in TypeScript (same owner and license): right, bottom and floating modes, minimize to a pill, drag to snap, keyboard move and resize, placement kept in localStorage. Its geometry helpers are pure and tested.
+2. A docked panel takes space from the body and the status bar, never from the title bar, which keeps the whole window. The app root is drawn at a CSS zoom (1.08 by default), so the dock publishes each reserved length twice: in viewport pixels (`--ask-r`, `--ask-b`) and divided by the zoom (`--ask-r-app`, `--ask-b-app`) for margins inside the root. Toasts move clear of a right dock.
+3. Ask Lucid answers through `Backend.complete`, behind `POST /api/ask-lucid`, which accepts the UI token only. It is not in `AGENT_ROUTES` or the query-token routes, so the agent cannot converse with itself through it. The model is the checker model, resolved through the CUI lockdown clamp; no allowed model is a refusal with a security event.
+4. Lucid is shown three views, gathered server side: the fleet lanes (name, status, model, turns, last activity, a pending approval, queued prompts, calls in flight), the Fleet Orbit goal with its tasks, and up to four knowledge graph hits for the question from the lexical path (no embeddings call). `desktop/ask_lucid.ts` builds the prompt and is pure.
+5. Every view, and the earlier turns of the side conversation, is untrusted data: each enters the prompt inside the untrusted envelope with embedded delimiters neutralized (ADR-0568), under its own heading, after the question. Fields are single lines of bounded length, so a lane name cannot fake a row. The user's question is the only text outside an envelope.
+6. Each view is scanned before it is sent (`ask_lucid_service.ts`). A view the scanner blocks, or cannot scan, is withheld: none of its text reaches the model, the model is told in one line that the view could not be read, and the panel says which views were withheld. The question is still answered from what passed. A view that cannot be read at all (the manager threw) is reported in plain words.
+7. Lucid cannot act. The service imports only the prompt builder, the route calls no write, and the brief says so. Starting a lane or an orbit task from the panel is the next increment, as proposals the user confirms.
+8. The side completion has no error channel: a provider that refuses hands back its error line as the text (seen live as `Bedrock HTTP 403: ...`). A reply that is one short line starting with a one or two word provider name, `HTTP`, a 4xx or 5xx status and a colon is reported as an error with the status and none of the provider's text.
+9. `desktop/renderer/ask_lucid_panel.ts` is the panel: mini Lucid in the header (idle, working, done, error), a log, a composer, starter questions, and one line under each reply saying how many lanes, tasks and pages he saw. Replies render through the chat's own sanitizing markdown renderer under the page's content security policy; the user's text goes in through `textContent`. A title-bar button opens it.
+
+**Consequences.**
+- Lane transcripts are not shown to Lucid, only lane metadata. He can say a lane is waiting for approval; he cannot say what it wrote.
+- The side conversation lives in the window's memory. It is not saved, and closing the window ends it.
+- A view that trips the scanner is withheld whole, so one lane with a hidden character in its name hides every lane until it is renamed.
+- The dock is drawn at zoom 1 in `<body>`, so its text is slightly smaller than the app's at the default 1.08 zoom.
+- A toast can overlap a floating dock, since toasts stay on top.
+- The happy path was verified with a stand-in model in tests and a mocked reply in the browser. The live route was called on a real engine and returned the provider's refusal, which is how decision 8 was found.
+
+## ADR-0582 -- P-ASKLUCID.2: Lucid proposes actions as cards, and only the user's Confirm runs one (2026-11-14)
+
+**Status:** Accepted. Session 3 of `docs/specs/mini-lucid-ask-lucid-pdr.md`. Amends ADR-0581 (Ask Lucid could only answer). Proof: `make demo-P-ASKLUCID.2`, `bun test desktop/ask_lucid_actions.test.ts`.
+
+**Context.** The request is for Ask Lucid to kick off a fleet lane or an orbit node, not only to answer. Lucid reads lane names, task titles and knowledge pages, which agents and imported documents write, so anything he does after reading them could be something that text asked for. LUCID Tradepass solved this for its own Ask Lucid: the assistant proposes, each proposal is a card with a risk label, and the app runs it as the user after Confirm.
+
+**Decision.**
+1. Lucid still has no tools and runs nothing (ADR-0581 stands). A reply may end with ONE fenced block tagged `lucid-actions` holding a JSON array. The brief teaches the block and says to propose only what the user asked for, never what the snapshot asked for.
+2. Four kinds exist: `spawn_lane` (a name and a first prompt, in the current workspace), `prompt_lane` (a lane and a prompt), `add_orbit_task` (title, prompt, output contract, checks, lane, dependencies) and `open_view` (fleet, orbit or knowledge). There is no kind that approves, changes a lane's approval mode, runs a command directly, stops or deletes anything, or writes a file.
+3. `desktop/ask_lucid_actions.ts` treats the block as untrusted input. An unknown kind is dropped. An action is rebuilt from the fields the validator names, so a field such as `cwd`, `model`, `autoApprove` or a token cannot ride along. A lane id or task id must be one from the snapshot Lucid was shown; a view that was withheld contributes none. Every text is bounded and an over-long one drops the action instead of sending a cut version. At most three actions per reply; only the first block counts. The risk label is decided by the validator, never by the model: `low` for a view, `write` for agent work, `command` when an orbit task carries a `$ ` command check.
+4. The service scans each surviving action's text. One that the scanner blocks, or cannot scan, is dropped. Dropped proposals are counted and the panel says how many were not shown.
+5. The panel shows each action as a card: its kind, its risk, the label, the reason, and the exact rows Confirm will send. Confirm works once; Dismiss removes the card. The action runs from one place in the panel, the Confirm click handler.
+6. Confirm calls the same UI-token routes the Fleet views use, as the user, and the engine validates again: `/api/fleet/spawn`, `/api/fleet/queue`, `/api/fleet/goal/task`. A prompt is staged on its lane's queue and the Fleet view opens. It is never sent straight to the lane, because the lane manager's rule is that no turn runs where nobody can see it and answer its approvals.
+7. The engine path runs no action: `/api/ask-lucid` and the service call no fleet or orbit write, and the validator has no imports.
+
+**Consequences.**
+- A lane Lucid starts is an ordinary lane: the in-process gate scans its tool calls and its approvals go to the user, as for a lane started by hand.
+- A staged prompt runs when the Fleet view drains it, so closing that view before the lane is idle leaves the prompt staged.
+- A new lane starts in the current workspace on the default model. Lucid cannot choose a folder, a model or a worktree.
+- A reply that is only a block is shown with one harness-written sentence above its cards.
+- The cards were driven in a browser against a live engine with a mocked reply: Confirm on a lane proposal started a real lane and staged its prompt. No live model wrote a block in this sandbox.
+
+## ADR-0583 -- P-MINI.2: Lucid may suggest a holiday theme and say what is new, at most once per launch (2026-11-14)
+
+**Status:** Accepted. Session 4 of `docs/specs/mini-lucid-ask-lucid-pdr.md`. Builds on ADR-0580 (mini Lucid) and ADR-0581 (Ask Lucid). Proof: `make demo-P-MINI.2`, `bun test desktop/renderer/lucid_suggest.test.ts`.
+
+**Context.** The request is for Lucid to recommend a holiday theme in a quick popup that asks the user, and to explain new features in the Ask Lucid fly-out, without being annoying. The special themes already exist (`desktop/renderer/seasons.ts`) but nothing offers one: a user has to find the picker in Settings. Nothing told a user what an update added.
+
+**Decision.**
+1. `desktop/renderer/lucid_suggest.ts` holds every rule as pure functions over a passed-in store and clock. The renderer only reads state, shows a toast and applies the answer.
+2. The holiday offer. When a season is live, the user is not following the calendar and is not wearing a special theme, Lucid offers it in a toast with three answers. **Wear it** pins the theme and records which season and the last day of its window; the theme comes off by itself on the first launch or new session after that day, and only if the pinned theme is still the one Lucid set. **Not now** asks again the next time that season comes round. **Don't ask again** ends holiday suggestions. An occasion is the season id plus the day its window starts, so each is asked about once. Closing the toast without an answer counts as Not now.
+3. What is new. `WHATS_NEW` is a list in the source, newest last. The newest unseen note is shown in a toast, once, and is marked seen when shown. **Tell me more** opens the Ask Lucid fly-out, where Lucid says a fixed explanation written in the source. No model call is made.
+4. The limits. At most one suggestion per launch. The decision is made 2.5 seconds after a new session opens, and nothing is shown while a turn runs, while a modal, the tour or the command palette is on screen, or before the first-run tour has been seen. A live holiday goes before a note because it expires. A suggestion that was held back is not retried until the next new session.
+5. One setting, **Lucid may suggest things**, in the Mini Lucid card in Settings, on by default, silences both.
+6. Answers live in `localStorage` (`lucid.suggest.enabled`, `.holiday`, `.news`, `.pin`), like the season and mini Lucid preferences. No engine route, event name or schema is added.
+
+**Consequences.**
+- A new install hears one note per launch for its first launches, newest feature first, starting after the tour.
+- The answers are per browser profile and are not synced between machines.
+- A theme Lucid pinned stays on past its window until the app is next opened or a new session starts, because that is when expiry is checked.
+- A new feature gets a note only when someone adds an entry to `WHATS_NEW`. An entry's id must never be renamed, or the note shows again.
+- Verified in a browser against a live engine with the browser clock set: nothing over the first-run gate, the Thanksgiving offer on Nov 25, Wear it applied and pinned the theme, the Ask Lucid note on the next launch with Tell me more opening the fly-out, the theme off on Nov 30, and no suggestion with the setting off.
+- The Ask Lucid input's placeholder was shortened to "Ask Lucid anything": the longer one wrapped in the docked panel (invariant 11).
+
+## ADR-0584 -- P-ASKLUCID.3: Ask Lucid opens above every popup and is shown the screen as scanned, fenced text (2026-11-14)
+
+**Status:** Accepted. Session 1 of `docs/specs/ask-lucid-sight-pdr.md`. Amends ADR-0581 (Lucid saw the fleet, the orbit and the knowledge graph only). Proof: `make demo-P-ASKLUCID.3`, `bun test desktop/ask_lucid_screen.test.ts`.
+
+**Context.** The request is for Ask Lucid to fly out over the Fleet popup and any other popup, and to see the actual UI so a question about something on screen can be answered, including the Preview panel. The dock sat at `z-index: 100`, under every modal (200). The Orbit map covers the title-bar chip that opens Ask Lucid, and closes on Escape from a window-level capture listener, so Escape typed in Ask Lucid would have closed the map underneath. Lucid had no view of the screen at all.
+
+**Decision.**
+1. **Layering.** The dock and its pill move to `z-index: 250`: above the Fleet grid (55), the Orbit map (92), the file browser (111) and every modal (200); below the About card and the boot cinematic (300), context menus (400) and tooltips (1200).
+2. **Ways in.** Besides the title-bar chip: Ctrl/Cmd+Shift+L from anywhere, and an Ask Lucid button in the Fleet grid and Orbit headers (any element marked `data-ask-lucid` opens it).
+3. **Escape.** One capture-phase listener on `window`, registered at boot so it runs before the listeners popups add when they open. Escape typed inside the dock closes the dock and is stopped there, so nothing underneath closes.
+4. **The screen is read as text.** `desktop/renderer/screen_digest.ts` lists the surfaces that are visible right now, overlays first by stacking order and then the app's own regions, with the text each one shows inside the window. Reasons for text over a pixel capture: every byte Lucid reads must be scanned and fenced (invariants 3 and 5) and the scanner reads text; the side completion is text-only; most local models have no vision; text is what Lucid can quote back.
+5. **The Preview panel.** Its page sits in a sandboxed frame, so it is asked through the read-only inspect bridge the agent's `preview_inspect` tool already uses: tab, title, address, headings, visible text and script errors.
+6. **What is never read.** Input, textarea, select and contenteditable content; the Ask Lucid panel itself; toasts and tooltips. The collector has no code path that reads a field's value.
+7. **One normalizer, run twice.** `desktop/ask_lucid_screen.ts` (pure, no imports) rebuilds a digest from named fields, bounds every string (8 surfaces, 1,800 characters each, 7,000 in all with the top surfaces winning) and removes anything shaped like a key, token or password value. The renderer runs it before sending; the engine runs it again on what was posted.
+8. **A fifth view.** The service puts the screen first among the views, scans it and fences it like the others. A screen that fails its scan, or that cannot be scanned, is withheld and the reply says so. The brief tells Lucid the screen is text, that he cannot see colors, images or layout, and that he never sees typed input.
+9. The digest is read at the moment of asking and sent only with that question. Nothing is stored, and no route, event name or schema is added.
+
+**Consequences.**
+- Lucid can answer "what is this dialog asking me" or "what does the preview show" from what is drawn. He cannot answer a question about color, position or an image.
+- The redaction errs toward removing: a hash of 40 or more hex digits and a long mixed-case run with digits are taken out. File paths, kebab-case names and UUIDs stay.
+- The About card covers the dock. A docked Ask Lucid covers the right or bottom edge of a popup underneath it, since popups do not make room for it; floating mode or the pill avoids that.
+- A cross-origin page in the Preview panel reports only what its bridge can read, and a canvas-only page has no text to report.
+- A pixel capture for vision models needs its own ADR: it cannot be scanned by the Unicode scanner.
+- Driven in a browser against a live engine: the dock on top of a modal, the Fleet grid and the Orbit map; Escape closing only the dock in each case; the digest naming the top surface first; the Preview page read with a key in it redacted; the typed question and the path field's value absent from the digest. No live model answered in this sandbox.
+
+## ADR-0585 -- P-ASKLUCID.4: Lucid reads lane conversations and other sessions, and gives a briefing (2026-11-14)
+
+**Status:** Accepted. Session 2 of `docs/specs/ask-lucid-sight-pdr.md`. Amends ADR-0581 (Lucid saw lane names and states, never a conversation, and no session). Proof: `make demo-P-ASKLUCID.4`, `bun test desktop/ask_lucid_briefing.test.ts`.
+
+**Context.** The request is for Lucid to review other sessions, lanes and orbit work and give a briefing. Lucid could say that a lane was working, but not on what, and could not say what a lane had answered or what any other session was about.
+
+**Decision.**
+1. Two more views, built by `desktop/ask_lucid_briefing.ts` (pure, no imports):
+   - **Lane conversations:** for each lane, how many requests it has had, the last request, and the last answer with its tool lines counted and removed. Lanes are ordered by urgency: waiting on the user, failed, working, the rest. A request with no answer yet says so, and a turn that ended in an error names it.
+   - **Sessions:** the sessions in this workspace, spoke sessions included, the open one first and then the most recent, each with its turn count, age and where it lives (the main chat, or the lane that ran it), and the last exchange of the first few. Knowledge-ingest sessions are left out.
+2. Two sizes. An ordinary question gets the short one (3,000 characters of lane conversation across 8 lanes, 2,500 of sessions with 2 last exchanges) so a side question stays cheap. **Brief me** gets the long one (9,000 across 16 lanes, 6,000 with 5 last exchanges). A long answer is cut from the front, because the conclusion is at the end.
+3. Each view is its own block: scanned alone and fenced alone. A poisoned lane conversation is withheld without taking the lane list, the sessions or the orbit with it. A scan that cannot run withholds the view.
+4. The brief gains a briefing order: what needs the user, what is running, what finished, one next step.
+5. A **Brief me** chip sits above the composer and sends one fixed question with `brief: true`.
+6. The route only reads: `fleet.laneTranscript`, `listSessions`, `sessionMessages`. It loads no session, changes no lane and writes no file.
+
+**Consequences.**
+- Lucid can say what a lane was asked, what it answered and whether it is waiting, and what the last exchange in a recent session was. He reads the tail of a conversation, not all of it.
+- Every question now carries the short views, which adds up to about 5,500 characters to a prompt when lanes and sessions exist.
+- Sessions in other workspaces are not listed. A remote spoke's conversation is not read.
+- A lane's in-flight text (the turn still streaming) is not included, only settled turns.
+- The Brief me chip and the posted `brief` flag were driven in a browser against a live engine; the live route answered with the provider's 403 from this sandbox, so no live model wrote a briefing.
+
+## ADR-0586 -- P-ASKLUCID.5: suggestions seeded from the work, a measured miss, and Ask Lucid's throwaway sessions hidden (2026-11-14)
+
+**Status:** Accepted. Session 3 of `docs/specs/ask-lucid-sight-pdr.md`. Amends ADR-0581 (four fixed suggestions; side completions left visible sessions). Proof: `make demo-P-ASKLUCID.5`, `bun test desktop/renderer/lucid_recs.test.ts desktop/sessions_asklucid.test.ts`.
+
+**Context.** The request: recommendations seeded from what is going on, what the user is working on and what the knowledge graph holds; and when the user does not know what to ask, the recommendations failed, so Lucid should follow the user's work and screens more closely. Ask Lucid showed the same four questions whatever was happening. Testing this increment also showed that every Ask Lucid question left a session in the chat list titled with the opening of Lucid's brief, because omp persists the throwaway session a side completion runs in.
+
+**Decision.**
+1. **Computed first.** `desktop/renderer/lucid_recs.ts` (pure) builds suggestions from signals the app already has: a lane waiting for approval, a failed lane, the surface on top of the screen, the Preview page, the orbit goal (blocked or not), working lanes, the session in the main chat, other sessions, and whether the knowledge graph holds anything. Each names the real lane, goal or session. No model call, and no text is read from the screen for this: surface kinds only.
+2. **Ranking.** A base priority per kind (what needs the user first) times a learned weight between 0.4 and 1.6. One suggestion per kind, three in the row, shown as chips above the composer and as the questions in an empty panel.
+3. **A miss is measured.** Pressing **Something else**, or closing the panel after a set was on screen for at least four seconds without using it or asking anything, is a miss: each kind in the set loses 0.1 weight and the set is put aside for the rest of the run. Using a suggestion adds 0.15 to its kind and ends the run. Typing a question is not a miss: it ends the run and moves no weight.
+4. **Following more closely.** After one miss Lucid suggests from every open surface, not only the top one, screen suggestions are weighted up, and the app notes which surface is open every 20 seconds so the surface the user keeps returning to can be offered a walkthrough. Kinds only, in memory, and the sampling stops when a suggestion is used. After three misses in a row the user is treated as lost and the fallback list leads the row (features not yet used, P-ASKLUCID.6).
+5. **Generated second.** A reply may end with one `lucid-next` block of up to three follow-up questions (`desktop/ask_lucid_followups.ts`, pure). Each must be a plain one-line string of 8 to 140 characters; the service scans each and drops one that fails or cannot be scanned. They replace the chips until the next reply. A follow-up is text the user may choose to send, nothing more.
+6. **The memory** (weights, misses, the put-aside ids) is one `localStorage` entry, `lucid.asklucid.recs.v1`.
+7. **Throwaway sessions.** A session whose first user message opens with Lucid's brief is kind `ask-lucid`: it is in no chat list, no ingest group, no search result and no archive count, and Lucid's own sessions view never lists it. A sweep two minutes after engine start and every six hours deletes the ones in the current workspace that are at least an hour old, with the two guards the ingest cleanup uses (the workspace matches and the first message is the brief).
+
+**Consequences.**
+- The chips change with the work. With nothing going on there are none, and the empty panel falls back to the fixed questions.
+- A suggestion the user passed over can return once the run of misses ends, so a lane still waiting an hour later is mentioned again.
+- Weights are per browser profile and are not synced.
+- An Ask Lucid session written before this change keeps its `chat` entry in the session index until its file changes or the index is rebuilt.
+- Other side completions (the checker and similar callers of `backend.complete`) still leave visible sessions. That is not changed here.
+- Driven in a browser against a live engine with a mocked fleet: the row showed the waiting lane, the failed lane and the open panel; Something else replaced all three; a pressed chip asked its question; follow-ups replaced the chips; closing an untouched set counted one miss; a typed question reset it. No live model wrote follow-ups in this sandbox.
+
+## ADR-0587 -- P-ASKLUCID.6: Lucid brings up features the user has not used, and may propose changing seven preferences (2026-11-14)
+
+**Status:** Accepted. Session 4 of `docs/specs/ask-lucid-sight-pdr.md`. Amends ADR-0582 (four action kinds, three views, no settings). Proof: `make demo-P-ASKLUCID.6`, `bun test desktop/ask_lucid_features.test.ts`.
+
+**Context.** The request: there is a lot in LUCID that users do not know about, so when Lucid has no good recommendation he should bring up something the user would benefit from, either a feature to use or something he can configure in the harness for them. Lucid knew nothing about what LUCID offers or what the user had tried, and could change no setting.
+
+**Decision.**
+1. **A catalog.** `desktop/ask_lucid_features.ts` (pure, no imports) lists nine things this build has: fleet lanes, the knowledge graph, the Preview panel, a Fleet Orbit goal, skills, local models, voice input, holiday themes, auto-archive. Each has a one or two sentence pitch and exactly one way in: a view Lucid may propose opening, or a setting he may propose changing.
+2. **Not used** is decided from what the app already knows: a lane, a goal, a knowledge graph or a local provider exists; a setting is on; and a ledger of feature ids proven found (`lucid.features.seen.v1`). The ledger is fed by which panels are open, sampled once a minute and whenever the suggestions are built, panel kinds only, and by a view Lucid opened on Confirm.
+3. **The fallback.** The unused features are the suggestion row's fallback (ADR-0586): they fill it when the work suggests fewer than three things, and one leads it after three misses in a row. A feature chip asks Lucid about that feature in the light of the current work.
+4. **Lucid is told.** Two more views reach him: the unused features, and the settings he may propose changing with their current values. The renderer posts ids, keys and values only; the engine rebuilds both views from the closed lists, so the post cannot add a row or a sentence. The brief tells him to bring up one feature when the snapshot points to no next step or the user seems unsure.
+5. **`set_setting`.** A fifth proposal kind over a closed list of seven keys: `season.follow`, `season.theme`, `theme`, `mini.presence`, `suggest.enabled`, `sessions.autoArchive`, `toolOutput.window`. Each has an exact set of values, or is an id that the app checks against its own theme lists on Confirm. The validator rebuilds the action from the key and the value; an unknown key or an out-of-set value drops it. Its risk label is "Changes one preference".
+6. **What is not in the list, and cannot be added by a model:** approvals and auto-approve, the sandbox, lockdown, providers and keys, MCP servers, attribution, developer mode, anything about the scanner or the gate. The brief says so, and Lucid is told to say so if asked.
+7. **Confirm applies it** through the call Settings itself makes (`setSeasonPref`, `pickTheme`, `writePresence`, `setSuggestEnabled`, the archive-policy route, the result-window route). The service changes nothing.
+8. **Five more views** Lucid may propose opening: settings, preview, skills, local-models, voice.
+
+**Consequences.**
+- A user with nothing going on sees three features they have not tried instead of an empty row, and can ask Lucid to set one up.
+- A feature opened before this ledger existed counts as unused until its panel is seen open again or what it creates exists.
+- Voice input and skills have no cheap signal of use besides their panel, so they can be suggested to someone who uses them from the keyboard.
+- Adding a setting to the list is a code change with a test that fails if its name looks like a security key.
+- Driven in a browser against a live engine with a mocked reply: with nothing going on the row showed features; the request carried seven settings and eight unused feature ids; Confirm on three cards turned on the holiday calendar, turned on auto-archive (read back from the engine) and opened the Preview panel, which then entered the ledger. No live model proposed a setting in this sandbox.
+
+## ADR-0588 -- P-ASKLUCID.7: a picture of the screen goes with a question when it is safe to send and the model can read it (2026-11-14)
+
+**Status:** Accepted. The follow-up ADR-0584 named. Builds on ADR-0096 (the window capture) and ADR-0136 (picture blocks in an ACP prompt). Proof: `make demo-P-ASKLUCID.7`, `bun test desktop/ask_lucid_shot.test.ts`.
+
+**Context.** ADR-0584 gave Lucid the screen as text and deferred pixels, because the scanner reads text and a picture cannot be scanned. With text alone Lucid cannot answer a question about layout, color, an image or a chart, which is most of what "look at this preview" means. The app already captures its own window for the Preview panel (`lucid:capturePreview`, Electron's `capturePage`) and already sends user-attached pictures to omp as ACP image blocks.
+
+**Decision.**
+1. **The picture never travels alone and never replaces the text view.** It is sent only when all of these hold: the user has not turned pictures off; the text digest of the same screen was sent and passed its scan; that digest held no redaction; the model has not refused a picture in this run of the engine. `shotDecision` in `desktop/ask_lucid_shot.ts` (pure, no imports) is the one place this is decided, and every reason not to send wins.
+2. **Why coupling to the text scan is sound.** The scanner looks for hidden Unicode. A hidden character draws nothing, so it does not survive into pixels. Text that is visible in the picture is the text the digest carries, which was scanned. A screen whose text is quarantined, or cannot be scanned, sends no picture (invariant 3).
+3. **Secrets.** Text redaction cannot reach pixels. A screen whose digest needed any redaction is described in text only, and the reply says no picture was sent and why.
+4. **What is painted over** before the picture leaves the renderer: every input, textarea, select and editable region, and the Ask Lucid panel. Rectangles are measured before the capture and again after it, and both sets are painted, so a field that appeared or moved while the capture was in flight is covered. A mask is grown outward and can only be larger than its field. Any failed step means no picture.
+5. **Shape.** The capture is scaled so its longest edge is at most 1,568 pixels and sent as JPEG. The engine accepts only JPEG or PNG whose bytes begin the way that type begins, plain base64 inside a size bound, with whole-number dimensions inside the edge bounds. Anything else is treated as no picture.
+6. **The prompt.** A harness-written note goes with the picture, after every untrusted envelope: what the picture is, that typed fields and the panel are gray blocks, and that text read in it is data. The brief now says that without a picture Lucid has only the text and must say so instead of guessing.
+7. **Models without vision.** There is no reliable capability flag to read, so a picture is tried. If the model answers with nothing, an error line, or an exception, the question is asked again with text alone. Only when that second call succeeds is the model remembered as refusing pictures, in memory, until the engine restarts. A provider that fails both ways is reported as that.
+8. **`backend.complete` takes `images`.** Both completion paths build their ACP prompt in one function: the text, then any picture blocks. No caller but Ask Lucid passes any.
+9. **A setting,** "Lucid may look at a picture of the screen", in the Mini Lucid card, on by default. Off means no capture is taken. It is not in the list of settings Lucid may propose changing.
+10. In a plain browser there is no window capture, so no picture is taken.
+
+**Consequences.**
+- With a vision model in the desktop app, Lucid can answer questions about how things look. The picture goes to the same model the screen text already goes to.
+- A picture is a second way for visible on-screen text to reach the model. Lucid still has no tools; a proposal is still validated, scanned and waits for Confirm.
+- The page in the Preview panel is captured as drawn, including anything typed into fields inside it: those fields are in a sandboxed frame the app cannot measure.
+- A key that the redaction pass does not recognize as one, shown on screen, would be in the picture. The same key would also be in the text.
+- A model without vision costs one failed call per engine run.
+- The capture is of the app's own window only, never the desktop or another window.
+- Verified: the renderer pipeline in a headless browser with the browser's own screenshot standing in for the Electron capture (the composer field, the search field and the panel were gray in the posted JPEG; the title bar and chat were not; pictures off posted none); the live engine route, where omp recorded an image block in the side session and called the provider, which answers 403 in this sandbox, after which the text-only retry ran. Not verified here: the Electron capture itself, and a live vision model reading the picture.
+
+## ADR-0589 -- P-CAP.1a: find, lookup, count and slice run in code over a stored tool result (2026-11-14)
+
+**Status:** Accepted. Session 3 of `docs/specs/longcapharness-review-pdr.md` (ADR-B there). Builds on ADR-0578 (spilled artifacts are scanned, recorded and fenced on re-entry) and ADR-0579 (the window sized to the model). Proof: `make demo-P-CAP.1a`, `bun test harness/tools/artifact_primitives.test.ts harness/omp/artifact_tools_extension.test.ts`.
+
+**Context.** omp keeps a tool result larger than its window as a session artifact and shows the model a head and a tail. To use the middle a model pages through it with `read artifact://N`, which spends the context the window saved, and a small model loses the thread long before the record it wants. The paper reviewed in the PDR (arXiv 2611.10463) found that exact search, keyed lookup, counting and slicing done in code are what let small models work on long inputs, and that those primitives carry across models unchanged.
+
+**Decision.**
+1. Four read-tier tools, registered by `harness/omp/artifact_tools_extension.ts` on the master session and on every lane: `artifact_find` (lines matching a pattern, with context and paging), `artifact_lookup` (up to 20 exact keys in one pass, each as a whole token), `artifact_count` (occurrences and lines, optionally the distinct values) and `artifact_slice` (an exact line range).
+2. The work is in `harness/tools/artifact_primitives.ts`: pure TypeScript with no imports, no model call, no file or network access. The same input gives the same output.
+3. **Bounded output.** At most 40 matches, 5 records per key, 400 lines, and 12,000 characters per result, whatever the artifact's size. A long line is returned as an excerpt around the match. Anything left out is stated with how to get it.
+4. **Record identity.** Every returned line carries its 1-based line number, and a column when the line is long, so a later slice or a citation points at the same record.
+5. **Nothing is never silent.** No match is reported as NOT FOUND, a missing key is named, and a handle the session does not have is an error.
+6. **A pattern is hostile input.** It is bounded at 300 characters and one line. It is literal unless `regex` is set. A regex is applied to the first 4,000 characters of each line, and every call runs under a two second budget that ends in an error, not a partial answer.
+7. **Provenance.** The tool reads the ledger of ADR-0578. A quarantined or purged artifact is refused before a byte of it is read. Every result opens with the artifact's source and trust label.
+8. **The envelope is added by the existing gate, and the tools cannot be used around it.** A handle is accepted only as `artifact://<n>`, which is the string the re-entry gate looks for in a local tool's input. For an artifact from an external source the gate scans the tool's output, wraps it in the untrusted envelope and labels it with the worse of the artifact's label and the scan's, so a derived answer never has a better label than its source. A test holds the handle spelling and the gate's matcher together.
+9. An artifact a local tool wrote is answered unfenced, as `read` answers it today (source scoping, ADR-0152).
+
+**Consequences.**
+- A model reaches a record in the middle of a 512,000 character result with one call and under 1,000 characters of context, where omp's view of that result holds none of it.
+- A regex cannot see past the first 4,000 characters of a line. A literal pattern can.
+- The tools read the whole artifact into memory per call. An artifact is bounded by what a tool returned, and the result gate already withholds an external one over 8,000,000 characters.
+- Lookup's whole-token rule treats letters, digits, underscore and hyphen as part of a token. A key embedded in a longer name is not found, by design.
+- The promotion gate is not changed here: carrying a derived fact's label into memory promotion is P-CAP.1b.
+- No live model ran in this sandbox. The demo shows the mechanism on real omp sessions with a scripted model: the values are absent from the model's view without the tool and present, fenced, with it.
+
+## ADR-0590 -- P-CAP.1b: state tracking in code, and a derived fact is never trusted more than its sources (2026-11-14)
+
+**Status:** Accepted. Session 4 of `docs/specs/longcapharness-review-pdr.md`, completing ADR-B there. Extends correctness keystone 2 (the semantic promotion gate). Proof: `make demo-P-CAP.1b`, `bun test harness/security/trust_propagation.test.ts harness/memory/promotion_gate.test.ts`.
+
+**Context.** Two things were open after ADR-0589. First, the fifth primitive of the reviewed paper: applying ordered events to a state, the job a model does worst by reading. Second, the promise in the PDR that a derived fact can never launder its source. Checking how a derived fact reaches durable memory showed the gap was wider than the new tools. The agent's `memory_retain` writes were always stored as `untrusted`, whatever the session had been shown, and the code said so: the trust gate inside `vetAgentWrite` was "for the day provenance is threaded through per-fact". So a session could be shown a tool result labeled `suspicious`, restate it as a fact in its own words, and have the next session recall it. The promotion gate itself took one source artifact, so a fact computed from several could name a clean one.
+
+**Decision.**
+1. **The rule** (`harness/security/trust_propagation.ts`, `mostSevere`): something derived from several inputs carries the most severe label among them. An input that is not one of the four labels counts as `quarantined`.
+2. **A session remembers what it was shown.** When the result gate lets content through with the label `suspicious` (an MCP result, the view of a spilled one, a page of an external artifact, or an answer from the artifact tools), it writes a note for the session: in memory first, then in `lucid-taint.jsonl` beside the session's artifacts, so it survives a restart and a resume. Writing the note never throws and never changes what the gate returns. Quarantined content is not noted, because it never reaches the model.
+3. **`memory_retain` asks the session.** The label a write carries is the most severe of `untrusted`, every note, and every suspicious unpurged artifact in the spill ledger. If that label needs review, the tool refuses with the reason and the source, before any request is made. A note file or a ledger that cannot be read counts as suspicious. A tool call with no session to ask counts as quarantined.
+4. **The engine applies the same label.** The tool posts it as `sourceTrust`, and `agentRetain` combines it with `untrusted` by severity. A posted label can therefore only make a write stricter; `trusted` is never accepted, and a value outside the closed set is held.
+5. **The promotion gate takes every source.** `promoteFactGated` accepts `derivedFrom`, a list of artifact ids beside `sourceArtifactId`. Each must be found, or the fact is blocked. The fact carries the most severe label. Each source that needs review needs its own approval: one reviewed source never clears another. A stored label outside the closed set now counts as quarantined, where before it passed as unrecognized.
+6. **`artifact_track`**, a fifth read-tier tool: a regex with named groups `key` and `value` applied to the artifact top to bottom, in mode `last` (the value each key was last set to), `sum` or `count`; with `follow`, a value that names another key takes that key's value at that moment. Same bounds, time budget, provenance checks and gate as the other four.
+7. `needsReview` in the propagation module states the two blocked labels for the omp-side tools, which cannot import the promotion gate without loading the database. A test holds it equal to `BLOCKED_TRUST`.
+
+**Consequences.**
+- Taint is per session, not per fact. After suspicious content is shown, that session cannot write durable memory at all, including facts that have nothing to do with the content. That is deliberately coarse: it is the only granularity at which "does not derive from it" can be proven. The model is told to tell the user, who can add the fact in the Knowledge panel, and a new session is clean.
+- There is no approval flow yet that clears a session's note. Until one exists the note is permanent for that session.
+- `memory_retain` now needs the session omp hands a tool. A host that hands none gets a refusal instead of a write.
+- The note covers what the result gate labels. Suspicious text the user pastes into chat, or that a local tool reads from a file, is not a labeled source today and is not noted.
+- An existing row in `content_artifacts` with a label outside the four would now block a promotion that cites it.
+- No schema, event name or frozen contract changed: `derivedFrom` is an optional field on a function input, and the note is a new file beside the ledger of ADR-0578.
+
+## ADR-0591 -- P-BENCH.2a: a fixed long-context dev set, scored through a real lane, for local models (2026-11-14)
+
+**Status:** Accepted. Session 5 of `docs/specs/longcapharness-review-pdr.md` (ADR-C there). Builds on ADR-0579 (the window sized to the model) and ADR-0589, ADR-0590 (the artifact tools). Proof: `make demo-P-BENCH.2a`, `bun test harness/bench/devset/devset.test.ts`.
+
+**Context.** LUCID could not say how well a model does on a long input, or whether the artifact tools help a given model, which is the measurement the reviewed paper rests on. The first models to score were named by the owner: Gemma 4 E2B, a 26B MoE, and Qwen 3.8 28B coder. None is reachable from the sandbox this was built in or from CI, so the harness has to be provably right before the first real run.
+
+**Decision.**
+1. **The dev set** (`harness/bench/devset/tasks.ts`, pure): four LUCID-shaped jobs, each the output of a tool. `needle` (one keyed value in a build log, among look-alikes), `count` (failed lines in a test run), `track` (the final value of a setting after ordered changes, some through another key's name), `rank` (which files mention an error most, from a search dump). Each at 8,000, 64,000 and 512,000 characters, in two variants: 24 tasks.
+2. **Generated, not stored.** Haystacks come from fixed seeds. `manifest.json` records each one's hash, question and answer, and a test compares the generator with it. A deliberate change bumps `DEVSET_VERSION` and rewrites the manifest in the same commit; scores are comparable only under the same manifest.
+3. **Answers sit where a model is not shown.** At 64,000 and 512,000 characters every answer is in the middle 30 percent, outside the head and tail omp shows. At 8,000 the whole result is shown at omp's default window.
+4. **Scoring** (`scorer.ts`, pure): a reply is scored on its last `ANSWER:` line, and a reply without one scores 0. Exact tasks are 100 or 0. Ranking is NDCG at 10.
+5. **A real lane is what is scored** (`runner.ts`): each task runs in its own omp session with the data arriving as an MCP tool result, the MCP result gate in the chain, and the artifact tools loaded or not. A task that fails to run, or runs past its time limit, scores 0 and is marked failed.
+6. **Two scripted references bound every real score** (`policies.ts`): a reader that answers as well as possible from what it is shown and never calls an artifact tool, and a tool user that calls the tool that fits the question. They are not models. The reader is the ceiling without the tools; the tool user shows the tools can answer every task.
+7. **A real model is an OpenAI-compatible endpoint**, declared to omp in the shape a Local Provider writes. `desktop/scripts/bench_devset.ts` (`make bench-devset`) takes a base URL, a model id and the model's measured context window, sizes the tool-result window to it as the app does, runs the set without and with the tools, and prints accuracy against input length beside the two references. A key is read from a named environment variable and is never written to a file.
+8. **The endpoint path is verified without a model.** `fake_endpoint.ts` is a loopback server that speaks streamed chat completions with tool calls and answers with a scripted policy. Tests and the demo run the dev set through it, so the first run against a real model is not the first run of the code.
+9. **Which model first.** All three, since a run is one command each. Gemma 4 E2B is the one the plan is about: the claim under test is that code tools make the smallest models usable on long inputs. The 28B coder is the realistic lane model, and the MoE shows whether size alone closes the gap.
+
+**Consequences.**
+- Reference numbers at omp's default window: the reader scores 100, 0, 0 by length and the tool user 100, 100, 100, on about 28,000 characters of tool results per task either way. With a 2 KB window (an 8K-context model) the reader scores 0 even at 8,000 characters and the tool user 100, on about 2,000 characters.
+- The set measures one thing: reaching what the model was not shown. It does not measure reasoning over what it was shown, and a model that scores 100 here is not thereby good at anything else.
+- Each task costs a real model a few requests beyond the visible ones, because omp makes its own small calls in a session.
+- The tool-result window must fit the model. A model declared at 32K tokens and handed omp's default 50 KB window had its conversation compacted mid-task, losing the task prompt, and scored 0 on a task it could answer. The command-line scorer sizes the window to the declared context window (8 KB at 32K tokens), where the same stand-in scored 100 at every length. This is the failure ADR-0579 exists to prevent, seen from the benchmark's side.
+- omp keeps one agent registry per process, so sessions are disposed between tasks and a start-up collision is retried. Tasks run one after another, never in parallel.
+- Results print to the terminal and optionally to a JSON file. Storing them in DuckDB and charting accuracy against length is P-BENCH.2b.
+- No real model has been scored. The three named models are newer than anything this was checked against, so their ids, context windows and tool-calling behaviour are the owner's to supply.
+
+## ADR-0596 -- P-MINI.3: a smaller, calmer Lucid who wears the theme, and Personalization from the KG view (2026-11-15)
+
+**Status:** Accepted. Amends ADR-0580 (P-MINI.1: mini Lucid's visits and preference) and the prompt-bar runner (P-MASCOT.2). Numbered 0596, not 0592, to leave 0592 to 0595 to the long-context benchmark work on this branch. Proof: `make demo-P-MINI.3`, `demo-P-MASCOT.2`, `demo-P-MASCOT.5`, `demo-P-MINI.1`; `bun test ./desktop/renderer/mini_lucid.test.ts ./desktop/renderer/mascot_theme.test.ts ./desktop/renderer/mascot_runner.test.ts ./desktop/renderer/mascot_game.test.ts ./desktop/renderer/mascot_minigames.test.ts`.
+
+**Context.** On the owner's machine the prompt-bar ninja was too big (two CSS pixels a sprite cell, about 80 by 104 px) and never stopped walking his route, which pulled the eye from the work. A right-click did nothing useful and a click sent a visitor away by accident. With a color theme on, the runner and the Ask Lucid header mascot kept the brand green: both painted the fixed palette, and only a holiday season reached their canvases. And Ask Lucid could open the Knowledge view for a user without Personalization, who then read "Enable it in Settings" with no way to act there.
+
+**Decision.**
+1. **Size.** Small, mini Lucid's size (one CSS pixel a cell, whole device pixels on every display), is the default; Large (classic, two) stays as a choice in Settings, Mini Lucid. The prompt-bar runner and every Arcade game and minigame take the size, with their geometry (floor, hit boxes, reach, obstacles, jumps, lanes) derived from it, and a change applies live.
+2. **Calm.** He lives in the right corner of the prompt bar's top edge: practicing, meditating or breathing for long stretches, and seated typing while a turn runs. He walks across and back about once every five minutes, never while a session is working. The endless route loop is gone.
+3. **Gestures.** Hover or a click is a small hop. A double-click (or a double tap) dashes him off the nearer end; a resident walks back later, a visitor is gone. A right-click turns him off in every role, the LUCID Agent role included, and a toast says where to turn him back on and offers **Turn back on**. Settings, Mini Lucid has a **Show the Lucid mascot** switch for the same state.
+4. **Default.** An untouched install has him **Off** on the prompt bar; the LUCID Agent role still has him resident. A stored choice is kept.
+5. **Theme.** `mascot_theme.ts` maps the color theme to his palette: the theme's `--accent` and `--accent-deep` on the headband, belt and scarf, a light tint of it on the gi, skin and eyes unchanged. Lucid Dark and Lucid Light keep the brand green. A live season's costume is laid over it, so a holiday still wins. The runner and the Ask Lucid header mascot re-read it when `data-theme` changes.
+6. **Personalization in the Knowledge view.** With Personalization off, the view offers **Turn on Personalization** (and Open Settings); once on and not yet set up, it offers the passphrase field and **Create**. The same bridge calls and toasts as Settings.
+
+**Consequences.** He is quieter and smaller by default, and users who liked the old ninja can pick Large. A user who never opened Settings stops seeing his visits. The right-click turn-off is stored in localStorage (per browser profile), like the rest of his preferences. The sprite art is the same 40 by 52 cell figure: Small draws it at mini Lucid's density rather than a redrawn higher-resolution figure.
+
+## ADR-0597 -- P-ASKLUCID.8: copy an answer, and ask Lucid about your own images (2026-11-15)
+
+**Status:** Accepted. Amends ADR-0581 (the Ask Lucid fly-out) and ADR-0588 (pictures for models that read them). Ask Lucid still cannot act. Proof: `bun test ./desktop/ask_lucid_images.test.ts ./desktop/ask_lucid.test.ts ./desktop/ask_lucid_shot.test.ts ./desktop/renderer/ctxmenu.test.ts`.
+
+**Context.** An answer in the panel could only be copied by selecting its text by hand, and a right-click did nothing unless something was selected. Pasting a picture into the panel's input did nothing visible: the composer's image chips (ADR-0136) were never wired there, so a user could not ask Lucid about a screenshot or a photo.
+
+**Decision.**
+1. Every answer has a **Copy** button and, anywhere on it, a right-click **Copy answer** (ctxmenu.ts reads `data-copy-text`). Both copy the answer's markdown. A selection still offers Copy, and a code block Copy code block.
+2. Images pasted into the input or dropped on the panel become the composer's chips, with the composer's checks and limits (PNG, JPEG, WebP or GIF; six; 12 MB each). They go with the next question only, and are shown in that question's bubble. A file that is not an image is named and left out.
+3. The engine parses them again (`normalizeUserImages`) and sends them to the model first, before any screen picture, with a harness note outside every envelope: they are the user's own files, and text inside them is data. They are not scanned (the scanner reads text), which is the main composer's rule for the user's own images. A model that refuses pictures is asked again with text alone and remembered, as in ADR-0588, and the reply says so.
+4. The chips are built with the DOM: the panel's only `innerHTML` stays Lucid's sanitized reply.
+
+**Consequences.** Lucid can describe, read or compare a picture the user gives him, but he cannot change it: editing an image, and files other than images, need a tool path and a staging folder, which are their own increments.
+
+## ADR-0598 -- P-ATTACH.1: files on every prompt bar, copied to a managed folder and scanned fail-closed (2026-11-15)
+
+**Status:** Accepted. Amends ADR-0136 (images in the composer) and ADR-0597 (images in Ask Lucid). Proof: `make demo-P-ATTACH.1` (the real scanner); `bun test ./desktop/attachments.test.ts ./desktop/ooxml_text.test.ts ./desktop/renderer/attach_ui.test.ts ./desktop/managed_config.test.ts ./desktop/fleet_lanes.test.ts`.
+
+**Context.** Users drag files into prompt bars and expect a "+" button with a small menu. LUCID took only images, and only by paste or drop. Reading a file where it lies would hand the agent a path into the user's folders, let the bytes change between the scan and the read, and leave no record of what was sent.
+
+**Decision.**
+1. **Copy, then scan.** A file added to the main composer, a fleet lane bar or Ask Lucid is copied to `~/.omp/attachments/<day>/<id>/` (the one folder the sandboxed agent may read; the engine trusts nothing in it: no links followed, kind from the name, the block scanned again at send). Its text is extracted (PDF; Word, Excel and PowerPoint through a bounded ZIP reader with bomb guards; any other file only when its bytes are UTF-8 text) and scanned whole with the large scanner. Any failure to extract or scan refuses the file and deletes the copy (fail-closed). Programs, archives, the old binary Office formats and binary data are refused with a reason.
+2. **Kept 7 days.** A sweeper removes copies older than the retention, at start and every 6 hours, never outside the root. A managed policy (`security.attachments`: enabled, maxFiles, maxBytes, retentionDays; Group Policy values too) can only tighten the limits (10 files, 25 MB each, 7 days).
+3. **On send** the files' text goes with the prompt, each file fenced as untrusted under a harness header naming its managed copy, bounded per file and per prompt; the full text stays in the copy for an agent with tools. A queued lane prompt carries the file ids and is expanded and scanned when it runs. Images keep the image path.
+4. **The UI.** A "+" button on each bar opens Add files or photos (Ctrl+U), Add folder (composer and lanes), Knowledge, Skills and Connectors (MCP); Ask Lucid offers files and Knowledge. Each file is a mini chip with a hand-built SVG icon per type (PDF, Word, Excel/CSV, PowerPoint, Markdown, text, code, data, web, image, and a catch-all showing the extension) and a premium tooltip with the source path, the full extension and type, the size, the managed copy and its retention, or the reason it was blocked. Files leave the bar only once the send is accepted.
+
+**Consequences.** Users attach documents the way they expect, and the model and the agent see only scanned text and a managed copy. The source path is shown in the desktop app (Electron `webUtils.getPathForFile`), not in a plain browser. A staged lane prompt keeps its files through Update, Copy and Push now (`/api/attachments/describe` brings ready chips back, and a copy past its retention is named); a lane's user turn shows its file chips for the life of the window. A renderer reload clears a lane card's history, files included, as it always has. Every renderer copy falls back to the browser's own copy command when the Clipboard API is refused.
+
+## ADR-0599 -- P-TIP.1: the premium tooltip everywhere (2026-11-15)
+
+**Status:** Accepted. Proof: `bun test ./desktop/renderer` (`tip_text.test.ts` and the converted files' tests).
+
+**Context.** The app has a styled tooltip (`data-tip`, one delegated listener in `ui.ts`), but well over a hundred controls still used the browser's plain `title` tooltip, which looks different, appears late and cannot be reached from the keyboard.
+
+**Decision.** Native `title` tooltips in the renderer become `data-tip` (`setTip` in `ui.ts`, `tipEsc`/`tipValue` in the pure `tip_text.ts`), split into a label and an explanation where the old text already had both; a `|` in dynamic text is escaped, and the engine splits only on the first unescaped one. The tooltip now also opens on keyboard focus (`:focus-visible`, `aria-describedby`, Escape hides it). An accessible name is added wherever the title was the only one. Left as native on purpose: iframe titles (their accessible name), `<option>` titles inside native selects, document titles and non-DOM title data.
+
+**Consequences.** One look and timing for every hover hint, reachable by keyboard.
+
+## ADR-0600 -- P-ASKLUCID.9: Lucid edits an image you give him, with the best image model you have connected (2026-11-15)
+
+**Status:** Accepted. Amends ADR-0582 (proposals) and ADR-0597. Ask Lucid still cannot act on his own: only Confirm runs an edit. Proof: `bun test ./desktop/image_edit.test.ts ./desktop/ask_lucid_images.test.ts ./desktop/ask_lucid_actions.test.ts ./desktop/renderer/ask_image_card.test.ts ./desktop/renderer/preview_tabs.test.ts`.
+
+**Context.** A user who pastes an image into Ask Lucid and asks for a change got a description, not an edited image.
+
+**Decision.**
+1. **A proposal, not an action.** Lucid may propose `edit_image` (an image the user attached to the question, by position, and the instruction) only when an image is attached and the user asks to change it. The card is marked "Sends your image to an outside model" and says the provider may charge.
+2. **The best model the user has.** Ranked by the Artificial Analysis image editing leaderboard (November 2026): OpenAI GPT Image 2.6 Sunburst (rank 1), OpenAI GPT Image 2.6 Flare, Google Nano Banana 2.1 (near the top for about a sixth of the price), xAI Grok Imagine Image 2.0. Only providers with an API key in the engine are usable (an OAuth-only sign-in gives the engine no key; Anthropic has no image model). One usable model runs directly; several and no remembered choice: the card asks, recommendation first, and remembers the pick; none: the card says which keys to add and links to Settings.
+3. **Fail-closed.** The instruction is scanned; egress follows the policy (the user's Confirm on a card that names the provider approves a "prompt" verdict; a block or a CUI/AskSage lockdown stops it); the response must be a real PNG, JPEG or WebP within the size limit; an error message never carries a key. Nothing is written on failure.
+4. **The result.** The edited image is saved as a new file under `~/.omp/ask-lucid/images/<day>/` with a record of hashes (never the prompt text or a key); it is not removed by the attachments sweeper. The Preview panel opens an Ask Lucid tab on it; the card and Lucid's note give the full path; the tab and a right-click on the image offer Save image as, Copy path and Show in folder.
+
+**Consequences.** Image edits work with the user's own provider account and cost. Verified live up to the provider call (no-key card, the chooser, a provider's refusal of a fake key); a successful edit against a real key, and the Electron save dialog, are still to be seen on a machine with a key.
+
+## ADR-0571 -- A dead or hung scanner sidecar is respawned, and a scan-unavailable block says so (P-SCANLIVE.1) (2026-11-13)
+
+**Status:** Accepted. Amends ADR-0002 (the scanner IPC client) and ADR-0019 C (the live block label). Invariant #3 is unchanged. Proof: `bun test ./harness/security/scanner_client.test.ts` (an outside kill blocks, reports the exit, and a later scan respawns a real scanner; `stop()` never respawns; a hung sidecar is killed on timeout and replaced), `./harness/security/gate.failclosed.test.ts`, and `pytest scanner-sidecar/tests/test_server.py`.
+
+**Context.** A field report from a v2.5.3 Windows install: every read, bash, edit, write and eval call was blocked for ten minutes until the user restarted the app. All 11 blocks carried `findings: "scan-unavailable"` and the agent quoted the gate's error, `fail-closed: scan unavailable (scanner not running)`: the Python sidecar had exited about 3h48m into the omp process. `ScannerClient` marked itself dead on exit but kept the dead process, so `start()` returned early and nothing ever spawned another; each omp process holds one client for its life, so only an app restart recovered. The sidecar's stderr was piped and never read and its exit was not logged, so why it died is unknown. The desktop also labeled every gate block "hidden-Unicode content quarantined", so a scanner outage read as a zero-width-character detection, and the content the agent was working on was blamed.
+
+**Decision.**
+1. On exit, `ScannerClient` drops the dead process, closes its stdin, rejects the requests in flight, and records the exit. The next `scan()` after a backoff (500ms, doubling to 30s while it keeps dying, reset by the first good response) spawns a fresh sidecar. A scan inside the backoff rejects with the last exit reason. `stop()` stays terminal.
+2. A scan timeout kills the sidecar, because a hung or overloaded sidecar makes every request queued behind it time out too; the exit path then respawns it.
+3. The client drains the sidecar's stderr (an unread pipe can fill and hang it) and keeps a 2000-character tail. `onExit` reports the reason, the tail and the backoff; the tool gate (`security_extension.ts`) writes it to stderr, which the desktop keeps in `lucid-acp.log`.
+4. `scanner-sidecar/server.py` answers a scanner exception with an error reply for that request instead of ending the loop.
+5. `acp_backend.ts` labels a `scan-unavailable` block "security scanner unavailable, blocked fail-closed"; a block with findings keeps "hidden-Unicode content quarantined".
+
+**Consequences.** Fail-closed holds at every step: the call in flight when the sidecar dies, every call during the backoff, and a respawn that cannot start are all blocked. A sidecar killed from outside costs one blocked call and a half-second gap instead of the session. Left as is: on Windows the venv `python.exe` is a launcher, so killing a hung sidecar can orphan its interpreter until it reads EOF on the closed stdin. Installs pick this up from the next release.

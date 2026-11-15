@@ -74,12 +74,12 @@ function kgSourceBadge(item: KgListItem): string {
  *  so a delegated handler can tell the two apart with no ancestor ambiguity. */
 function kgRow(item: KgListItem): string {
   return `<div class="kgp-row${item.active ? " on" : ""}">
-    <button class="kgp-pick" data-kgpick="${esc(item.kg_id)}" title="Show this knowledge graph">
+    <button class="kgp-pick" data-kgpick="${esc(item.kg_id)}" data-tip="Show this knowledge graph">
       <span class="kgp-name">${esc(item.name)}${item.active ? " ✓" : ""}</span>
-      ${kgSourceBadge(item)}${item.read_only ? `<span class="kgp-ro" title="Read-only pack">${icon("lock", 11)}</span>` : ""}
+      ${kgSourceBadge(item)}${item.read_only ? `<span class="kgp-ro" role="img" aria-label="Read-only pack" data-tip="Read-only pack">${icon("lock", 11)}</span>` : ""}
     </button>
-    <button class="kgp-rowbtn" data-kgexport="${esc(item.kg_id)}" title="Export this KG as a .lkgpack pack" aria-label="Export pack">${icon("download", 12)}</button>
-    <button class="kgp-rowbtn" data-kgrename="${esc(item.kg_id)}" title="Rename this KG" aria-label="Rename">${icon("editor", 12)}</button>
+    <button class="kgp-rowbtn" data-kgexport="${esc(item.kg_id)}" data-tip="Export this KG as a .lkgpack pack" aria-label="Export pack">${icon("download", 12)}</button>
+    <button class="kgp-rowbtn" data-kgrename="${esc(item.kg_id)}" data-tip="Rename this KG" aria-label="Rename">${icon("editor", 12)}</button>
   </div>`;
 }
 
@@ -97,9 +97,9 @@ export function kgPickerHtml(items: KgListItem[], query: string): string {
     <input id="kgPickSearch" class="kgp-search" type="text" placeholder="Filter graphs…" autocomplete="off" spellcheck="false">
     <div id="kgPickList" class="kgp-list">${kgPickerRowsHtml(items, query)}</div>
     <div class="kgp-foot">
-      <button class="kgp-new" data-kgnew title="Create a new, empty knowledge graph">${icon("plus", 12)} New KG</button>
-      <button class="kgp-new" data-kgimport title="Seed a new KG from a ChatGPT/Claude/Gemini export or an Obsidian markdown folder">${icon("market", 12)} Import files</button>
-      <button class="kgp-new" data-kgpackcatalog title="Browse curated Role KG Packs, or import a .lkgpack you own (verified + re-scanned, installed read-only)">${icon("package", 12)} KG Packs</button>
+      <button class="kgp-new" data-kgnew data-tip="Create a new, empty knowledge graph">${icon("plus", 12)} New KG</button>
+      <button class="kgp-new" data-kgimport data-tip="Seed a new KG from a ChatGPT/Claude/Gemini export or an Obsidian markdown folder">${icon("market", 12)} Import files</button>
+      <button class="kgp-new" data-kgpackcatalog data-tip="Browse curated Role KG Packs, or import a .lkgpack you own (verified + re-scanned, installed read-only)">${icon("package", 12)} KG Packs</button>
     </div>
   </div>`;
 }

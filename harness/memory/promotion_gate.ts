@@ -14,11 +14,16 @@
 // blocked until a recorded approval (approve / quarantine_release /
 // promotion_approve) clears them. Fail-closed (invariant #3): if provenance
 // can't be verified (unknown source), block.
+//
+// P-CAP.1b (ADR-0590): a fact DERIVED from several artifacts (`derivedFrom`) is gated on all of them. It
+// carries the most severe label among its sources, and every source that needs review needs its own
+// approval, so a derived fact can never launder a source.
 
 import type { TrustLabel } from "../contracts.ts";
 import type { Db } from "./db.ts";
 import { promoteFact, type PromoteFactInput } from "./memory.ts";
 import type { Telemetry } from "../telemetry/events.ts";
+import { mostSevere } from "../security/trust_propagation.ts"; // P-CAP.1b (ADR-0590): the label of a derived fact
 
 // The trust labels that may NEVER auto-promote into semantic memory (correctness keystone #2).
 // EXPORTED (P-KG.3) so the agent-facing personal-KG write path in harness/personal/agent_kg.ts gates on
@@ -57,39 +62,57 @@ export async function promoteFactGated(
   const tel = opts.telemetry;
   let effectiveTrust: TrustLabel = input.trustLabel;
 
-  if (input.sourceArtifactId) {
-    const art = await db.get("SELECT trust_label FROM content_artifacts WHERE artifact_id=$1", [input.sourceArtifactId]);
+  // P-CAP.1b (ADR-0590): a fact may derive from SEVERAL artifacts (a count over two tool results, a
+  // lookup joined with a document). Every one of them is a source: each must be found, the fact carries
+  // the most severe label among them, and each source that needs review needs its OWN approval. One
+  // reviewed source never clears another.
+  const sources = [...new Set([...(input.sourceArtifactId ? [input.sourceArtifactId] : []), ...(input.derivedFrom ?? [])])];
+  const labels = new Map<string, TrustLabel>();
+  for (const id of sources) {
+    const art = await db.get("SELECT trust_label FROM content_artifacts WHERE artifact_id=$1", [id]);
     if (!art) {
       // fail-closed: a claimed provenance we cannot verify is not trusted.
       tel?.emit("memory_promotion_blocked", {
-        artifact_id: input.sourceArtifactId,
+        artifact_id: id,
         entity: input.entityName,
         reason: "unknown-source",
       });
       return { promoted: false, blocked: true, reason: "fail-closed: source artifact not found (provenance unverifiable)" };
     }
-    effectiveTrust = String(art.trust_label) as TrustLabel;
+    // A stored label that is not one of the four counts as quarantined (invariant 7: the set is closed).
+    labels.set(id, mostSevere([art.trust_label], "trusted"));
   }
+  if (sources.length > 0) effectiveTrust = mostSevere([...labels.values()], "trusted");
 
   if (BLOCKED_TRUST.has(effectiveTrust)) {
-    const approved = input.sourceArtifactId ? await isApproved(db, input.sourceArtifactId) : false;
-    if (!approved) {
+    // With no source at all, the caller's own label is blocked and nothing can approve it.
+    let unapproved: { id: string | undefined; trust: TrustLabel } | null = sources.length === 0 ? { id: undefined, trust: effectiveTrust } : null;
+    for (const id of sources) {
+      const trust = labels.get(id)!;
+      if (!BLOCKED_TRUST.has(trust) || (await isApproved(db, id))) continue;
+      if (unapproved === null || mostSevere([trust], unapproved.trust) !== unapproved.trust) unapproved = { id, trust };
+    }
+    if (unapproved !== null) {
       tel?.emit("memory_promotion_blocked", {
-        artifact_id: input.sourceArtifactId,
+        artifact_id: unapproved.id,
         entity: input.entityName,
-        reason: effectiveTrust,
+        reason: unapproved.trust,
       });
       return {
         promoted: false,
         blocked: true,
-        reason: `blocked: source is ${effectiveTrust} (human review required before promotion)`,
+        reason: sources.length > 1
+          ? `blocked: a source this fact derives from is ${unapproved.trust} (human review required before promotion)`
+          : `blocked: source is ${unapproved.trust} (human review required before promotion)`,
         sourceTrust: effectiveTrust,
       };
     }
   }
 
-  // Allowed: write with the effective (provenance-derived) trust label.
-  const { factId, entityId } = await promoteFact(db, { ...input, trustLabel: effectiveTrust });
+  // Allowed: write with the effective (provenance-derived) trust label. A fact with only derived sources
+  // keeps the first of them as its recorded source, so its lineage is never empty.
+  const { derivedFrom: _derived, ...fact } = input;
+  const { factId, entityId } = await promoteFact(db, { ...fact, trustLabel: effectiveTrust, ...(fact.sourceArtifactId === undefined && sources[0] !== undefined ? { sourceArtifactId: sources[0] } : {}) });
   return {
     promoted: true,
     blocked: false,

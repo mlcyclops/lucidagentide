@@ -5,11 +5,13 @@
 // and the pixel scale can be compared side by side. Delete once the user has looked.
 
 import { MASCOT_H, MASCOT_RUN_FRAMES, MASCOT_THEMES, MASCOT_W, paintFrame } from "../renderer/mascot.ts";
-import { mountComposerRunner, RUNNER_SCALE } from "../renderer/mascot_runner.ts";
+import { mountComposerRunner } from "../renderer/mascot_runner.ts";
+import { MASCOT_CELL_CSS } from "../renderer/mini_lucid.ts";
 
+// P-MINI.3 (ADR-0596): the arcade reference below paints at 2, so the runner is compared at the Large size.
 const wrap = document.querySelector<HTMLElement>(".composer-wrap")!;
-mountComposerRunner(wrap);
-document.querySelector("#scaleOut")!.textContent = `RUNNER_SCALE = ${RUNNER_SCALE}`;
+mountComposerRunner(wrap, undefined, { size: "large" });
+document.querySelector("#scaleOut")!.textContent = `runner cell = ${MASCOT_CELL_CSS.large} CSS px (Large)`;
 
 // The arcade reference: the same frames, painted the way mascot_game.ts paints them (scale 2, floor
 // line, scrolling dashes) so the two walks can be judged against each other.

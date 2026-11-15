@@ -11,6 +11,7 @@
 import { accordion } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 import type { RuntimeFolderView, SandboxControlView, SandboxGrantView, SandboxStateView, SandboxStatusView } from "./bridge.ts";
 
 const BACKEND_LABEL: Record<string, string> = {
@@ -101,7 +102,7 @@ export function addFolderRow(c: SandboxControlView | undefined): string {
 function runtimeFoldersSection(folders: RuntimeFolderView[]): string {
   if (!folders.length) return "";
   const rows = folders
-    .map((f) => `<div class="sbx-grant"><div class="sbx-grant-head"><span class="pill${f.mode === "rw" ? " dismissed" : ""}">${GRANT_MODE_LABEL[f.mode] ?? f.mode}</span><b class="sbx-host" title="${esc(f.path)}">${esc(f.path)}</b></div>
+    .map((f) => `<div class="sbx-grant"><div class="sbx-grant-head"><span class="pill${f.mode === "rw" ? " dismissed" : ""}">${GRANT_MODE_LABEL[f.mode] ?? f.mode}</span><b class="sbx-host" data-tip="${esc(tipEsc(f.path))}">${esc(f.path)}</b></div>
       <div class="sbx-blk-reason">${esc(f.why)}</div></div>`)
     .join("");
   return `<div class="sbx-blocks"><div class="sbx-blocks-hd">${icon("shield", 13)} Always allowed (LUCID's runtime and your organization's policy)</div>${rows}</div>`;

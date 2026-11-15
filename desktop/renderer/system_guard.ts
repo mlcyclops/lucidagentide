@@ -104,7 +104,7 @@ export function resourcePanelHtml(status: SystemStatusView): string {
   return `<div class="sysres-modal" role="dialog" aria-label="System resources">
     <div class="sysres-h">${icon("gauge", 18)}<span>System resources</span>
       <button class="btn-mini" data-sys-refresh>Refresh</button>
-      <button class="mkt-close" data-sys-close title="Close">${icon("close", 14)}</button></div>
+      <button class="mkt-close" data-sys-close aria-label="Close" data-tip="Close">${icon("close", 14)}</button></div>
     <div id="sysresBody">${resourcePanelBodyHtml(status)}</div>
   </div>`;
 }

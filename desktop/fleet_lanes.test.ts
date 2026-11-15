@@ -498,6 +498,40 @@ test("staged lane prompts carry their own images through drain; queueTake return
   expect(live.queueTake("no-such-lane", 0).ok).toBe(false);
 }, TIMEOUT);
 
+// P-ATTACH.1 (ADR-0598): a staged prompt keeps its file ids, not their text. The drain expands them right
+// before the turn (the expander builds and scans the block), and with no expander or a refusal the item is
+// dropped with the reason: it is never sent without its files.
+test("staged lane prompts carry attachment ids; the drain expands them or refuses fail-closed", async () => {
+  live = manager();
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  expect(live.enqueue(id, "", [], ["att-1"]).ok).toBe(true); // files alone are a prompt
+  expect(live.enqueue(id, "read the files", [], ["att-1", "att-2"]).ok).toBe(true);
+  expect(live.enqueue(id, "plain").ok).toBe(true);
+  expect(live.enqueue(id, "with a file", [], ["att-3"]).ok).toBe(true);
+  expect((await live.status()).lanes[0]!.queued.map((q) => q.files ?? 0)).toEqual([1, 2, 0, 1]);
+  expect(live.queuePeek(id, 1).item?.attachments).toEqual(["att-1", "att-2"]);
+  expect(live.queuePeek(id, 2).item?.attachments).toBeUndefined();
+
+  const none: LaneEvent[] = [];
+  await live.drain(id, (e) => none.push(e));
+  expect(none.some((e) => e.type === "error" && /not sent/.test(e.message))).toBe(true);
+  const refused: LaneEvent[] = [];
+  await live.drain(id, (e) => refused.push(e), async () => ({ ok: false, error: "blocked by the scan" }));
+  expect(refused.some((e) => e.type === "error" && e.message.includes("blocked by the scan"))).toBe(true);
+
+  const calls: string[][] = [];
+  const expand = async (text: string, ids: string[]) => { calls.push(ids); return { ok: true as const, text: `${text}\n\nFILE BLOCK ${ids.join(",")}` }; };
+  const plain: LaneEvent[] = [];
+  await live.drain(id, (e) => plain.push(e), expand);
+  expect(calls).toEqual([]); // an item without files never calls the expander
+  const withFile: LaneEvent[] = [];
+  await live.drain(id, (e) => withFile.push(e), expand);
+  expect(calls).toEqual([["att-3"]]);
+  expect(withFile.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("")).toContain("FILE BLOCK att-3");
+  expect((await live.status()).lanes[0]!.queued.length).toBe(0);
+}, TIMEOUT);
+
 // P-PUSH.PAR1 (ADR-pending): Copy and Push now read a staged item WHOLE without removing it, and the remove
 // that follows a slow parallel push is guarded by the item's text, so a drain that shifted the indexes in
 // between can never make it delete a different staged prompt.

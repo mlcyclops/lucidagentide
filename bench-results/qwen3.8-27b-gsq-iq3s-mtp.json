@@ -1,0 +1,1281 @@
+{
+  "devset": "1",
+  "model": "Qwen3.8-27B GSQ-RCO IQ3_S + MTP (llama.cpp, DGX, thinking off)",
+  "modelId": "qwen3.8-27b-gsq-iq3s-mtp",
+  "baseUrl": "http://127.0.0.1:18080/v1",
+  "contextTokens": 262144,
+  "windowKb": 50,
+  "at": "2026-11-15T14:13:50.588Z",
+  "runs": [
+    {
+      "model": "reference reader",
+      "tools": false,
+      "results": [
+        {
+          "id": "needle-8000-a",
+          "family": "needle",
+          "length": 8000,
+          "score": 100,
+          "given": "r6718",
+          "contextChars": 8204,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-8000-b",
+          "family": "needle",
+          "length": 8000,
+          "score": 100,
+          "given": "r9135",
+          "contextChars": 8205,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-64000-a",
+          "family": "needle",
+          "length": 64000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41103,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-64000-b",
+          "family": "needle",
+          "length": 64000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41117,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-512000-a",
+          "family": "needle",
+          "length": 512000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41090,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-512000-b",
+          "family": "needle",
+          "length": 512000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41067,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-8000-a",
+          "family": "count",
+          "length": 8000,
+          "score": 100,
+          "given": "7",
+          "contextChars": 8208,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-8000-b",
+          "family": "count",
+          "length": 8000,
+          "score": 100,
+          "given": "13",
+          "contextChars": 8315,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-64000-a",
+          "family": "count",
+          "length": 64000,
+          "score": 0,
+          "given": "0",
+          "contextChars": 27014,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-64000-b",
+          "family": "count",
+          "length": 64000,
+          "score": 0,
+          "given": "0",
+          "contextChars": 27056,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-512000-a",
+          "family": "count",
+          "length": 512000,
+          "score": 0,
+          "given": "0",
+          "contextChars": 27492,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-512000-b",
+          "family": "count",
+          "length": 512000,
+          "score": 0,
+          "given": "0",
+          "contextChars": 27452,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-8000-a",
+          "family": "track",
+          "length": 8000,
+          "score": 100,
+          "given": "v27016",
+          "contextChars": 8097,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-8000-b",
+          "family": "track",
+          "length": 8000,
+          "score": 100,
+          "given": "v80242",
+          "contextChars": 8148,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-64000-a",
+          "family": "track",
+          "length": 64000,
+          "score": 0,
+          "given": "v74847",
+          "contextChars": 41115,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-64000-b",
+          "family": "track",
+          "length": 64000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41170,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-512000-a",
+          "family": "track",
+          "length": 512000,
+          "score": 0,
+          "given": "v12151",
+          "contextChars": 41082,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-512000-b",
+          "family": "track",
+          "length": 512000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41122,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-8000-a",
+          "family": "rank",
+          "length": 8000,
+          "score": 100,
+          "given": "src/auth/token.ts, src/auth/session.ts, src/net/retry.ts, src/ui/login.tsx, src/crypto/sign.ts",
+          "contextChars": 8333,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-8000-b",
+          "family": "rank",
+          "length": 8000,
+          "score": 100,
+          "given": "src/crypto/sign.ts, src/net/client.ts, src/auth/token.ts, src/sync/worker.ts, src/parse/config.ts",
+          "contextChars": 8353,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-64000-a",
+          "family": "rank",
+          "length": 64000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41120,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-64000-b",
+          "family": "rank",
+          "length": 64000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41156,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-512000-a",
+          "family": "rank",
+          "length": 512000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41131,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-512000-b",
+          "family": "rank",
+          "length": 512000,
+          "score": 0,
+          "given": "unknown",
+          "contextChars": 41111,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        }
+      ]
+    },
+    {
+      "model": "reference tool user",
+      "tools": true,
+      "results": [
+        {
+          "id": "needle-8000-a",
+          "family": "needle",
+          "length": 8000,
+          "score": 100,
+          "given": "r6718",
+          "contextChars": 8204,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-8000-b",
+          "family": "needle",
+          "length": 8000,
+          "score": 100,
+          "given": "r9135",
+          "contextChars": 8205,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-64000-a",
+          "family": "needle",
+          "length": 64000,
+          "score": 100,
+          "given": "r6831",
+          "contextChars": 41419,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_lookup"
+          ]
+        },
+        {
+          "id": "needle-64000-b",
+          "family": "needle",
+          "length": 64000,
+          "score": 100,
+          "given": "r6545",
+          "contextChars": 41423,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_lookup"
+          ]
+        },
+        {
+          "id": "needle-512000-a",
+          "family": "needle",
+          "length": 512000,
+          "score": 100,
+          "given": "r6697",
+          "contextChars": 41410,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_lookup"
+          ]
+        },
+        {
+          "id": "needle-512000-b",
+          "family": "needle",
+          "length": 512000,
+          "score": 100,
+          "given": "r3455",
+          "contextChars": 41377,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_lookup"
+          ]
+        },
+        {
+          "id": "count-8000-a",
+          "family": "count",
+          "length": 8000,
+          "score": 100,
+          "given": "7",
+          "contextChars": 8208,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-8000-b",
+          "family": "count",
+          "length": 8000,
+          "score": 100,
+          "given": "13",
+          "contextChars": 8315,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-64000-a",
+          "family": "count",
+          "length": 64000,
+          "score": 100,
+          "given": "7",
+          "contextChars": 27282,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "count-64000-b",
+          "family": "count",
+          "length": 64000,
+          "score": 100,
+          "given": "13",
+          "contextChars": 27326,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "count-512000-a",
+          "family": "count",
+          "length": 512000,
+          "score": 100,
+          "given": "7",
+          "contextChars": 27765,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "count-512000-b",
+          "family": "count",
+          "length": 512000,
+          "score": 100,
+          "given": "13",
+          "contextChars": 27727,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "track-8000-a",
+          "family": "track",
+          "length": 8000,
+          "score": 100,
+          "given": "v27016",
+          "contextChars": 8097,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-8000-b",
+          "family": "track",
+          "length": 8000,
+          "score": 100,
+          "given": "v80242",
+          "contextChars": 8148,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-64000-a",
+          "family": "track",
+          "length": 64000,
+          "score": 100,
+          "given": "v17162",
+          "contextChars": 41449,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_track"
+          ]
+        },
+        {
+          "id": "track-64000-b",
+          "family": "track",
+          "length": 64000,
+          "score": 100,
+          "given": "v99240",
+          "contextChars": 41483,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_track"
+          ]
+        },
+        {
+          "id": "track-512000-a",
+          "family": "track",
+          "length": 512000,
+          "score": 100,
+          "given": "v43376",
+          "contextChars": 41426,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_track"
+          ]
+        },
+        {
+          "id": "track-512000-b",
+          "family": "track",
+          "length": 512000,
+          "score": 100,
+          "given": "v11284",
+          "contextChars": 41443,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_track"
+          ]
+        },
+        {
+          "id": "rank-8000-a",
+          "family": "rank",
+          "length": 8000,
+          "score": 100,
+          "given": "src/auth/token.ts, src/auth/session.ts, src/net/retry.ts, src/ui/login.tsx, src/crypto/sign.ts",
+          "contextChars": 8333,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-8000-b",
+          "family": "rank",
+          "length": 8000,
+          "score": 100,
+          "given": "src/crypto/sign.ts, src/net/client.ts, src/auth/token.ts, src/sync/worker.ts, src/parse/config.ts",
+          "contextChars": 8353,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-64000-a",
+          "family": "rank",
+          "length": 64000,
+          "score": 100,
+          "given": "src/auth/token.ts, src/auth/session.ts, src/net/retry.ts, src/ui/login.tsx, src/crypto/sign.ts",
+          "contextChars": 41543,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "rank-64000-b",
+          "family": "rank",
+          "length": 64000,
+          "score": 100,
+          "given": "src/crypto/sign.ts, src/net/client.ts, src/auth/token.ts, src/sync/worker.ts, src/parse/config.ts",
+          "contextChars": 41582,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "rank-512000-a",
+          "family": "rank",
+          "length": 512000,
+          "score": 100,
+          "given": "src/auth/token.ts, src/auth/session.ts, src/net/retry.ts, src/ui/login.tsx, src/crypto/sign.ts",
+          "contextChars": 41557,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "rank-512000-b",
+          "family": "rank",
+          "length": 512000,
+          "score": 100,
+          "given": "src/crypto/sign.ts, src/net/client.ts, src/auth/token.ts, src/sync/worker.ts, src/parse/config.ts",
+          "contextChars": 41540,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        }
+      ]
+    },
+    {
+      "model": "Qwen3.8-27B GSQ-RCO IQ3_S + MTP (llama.cpp, DGX, thinking off)",
+      "tools": false,
+      "results": [
+        {
+          "id": "needle-8000-a",
+          "family": "needle",
+          "length": 8000,
+          "score": 100,
+          "given": "r6718",
+          "contextChars": 8204,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-8000-b",
+          "family": "needle",
+          "length": 8000,
+          "score": 100,
+          "given": "r9135",
+          "contextChars": 8205,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-64000-a",
+          "family": "needle",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 205515,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "needle-64000-b",
+          "family": "needle",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 205585,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "needle-512000-a",
+          "family": "needle",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 205450,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "needle-512000-b",
+          "family": "needle",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 205335,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "count-8000-a",
+          "family": "count",
+          "length": 8000,
+          "score": 100,
+          "given": "7",
+          "contextChars": 8208,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-8000-b",
+          "family": "count",
+          "length": 8000,
+          "score": 100,
+          "given": "13",
+          "contextChars": 8315,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-64000-a",
+          "family": "count",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 189098,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "count-64000-b",
+          "family": "count",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 189392,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "count-512000-a",
+          "family": "count",
+          "length": 512000,
+          "score": 0,
+          "given": "0",
+          "contextChars": 137460,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-512000-b",
+          "family": "count",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 192164,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "track-8000-a",
+          "family": "track",
+          "length": 8000,
+          "score": 100,
+          "given": "v27016",
+          "contextChars": 8097,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-8000-b",
+          "family": "track",
+          "length": 8000,
+          "score": 100,
+          "given": "v80242",
+          "contextChars": 8148,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-64000-a",
+          "family": "track",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 205575,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "track-64000-b",
+          "family": "track",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 205850,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "track-512000-a",
+          "family": "track",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 205410,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "track-512000-b",
+          "family": "track",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 205610,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "rank-8000-a",
+          "family": "rank",
+          "length": 8000,
+          "score": 100,
+          "given": "src/auth/token.ts, src/auth/session.ts, src/net/retry.ts, src/ui/login.tsx, src/crypto/sign.ts",
+          "contextChars": 16666,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-8000-b",
+          "family": "rank",
+          "length": 8000,
+          "score": 100,
+          "given": "src/crypto/sign.ts, src/net/client.ts, src/auth/token.ts, src/sync/worker.ts, src/parse/config.ts",
+          "contextChars": 16706,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-64000-a",
+          "family": "rank",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 287840,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "rank-64000-b",
+          "family": "rank",
+          "length": 64000,
+          "score": 0,
+          "given": null,
+          "contextChars": 288092,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "rank-512000-a",
+          "family": "rank",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 287917,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        },
+        {
+          "id": "rank-512000-b",
+          "family": "rank",
+          "length": 512000,
+          "score": 0,
+          "given": null,
+          "contextChars": 287777,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ],
+          "error": "no answer within 180 seconds"
+        }
+      ]
+    },
+    {
+      "model": "Qwen3.8-27B GSQ-RCO IQ3_S + MTP (llama.cpp, DGX, thinking off)",
+      "tools": true,
+      "results": [
+        {
+          "id": "needle-8000-a",
+          "family": "needle",
+          "length": 8000,
+          "score": 100,
+          "given": "r6718",
+          "contextChars": 8204,
+          "tools": [
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "needle-8000-b",
+          "family": "needle",
+          "length": 8000,
+          "score": 100,
+          "given": "r9135",
+          "contextChars": 8420,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count",
+            "artifact_find"
+          ]
+        },
+        {
+          "id": "needle-64000-a",
+          "family": "needle",
+          "length": 64000,
+          "score": 100,
+          "given": "r6831",
+          "contextChars": 41718,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_find"
+          ]
+        },
+        {
+          "id": "needle-64000-b",
+          "family": "needle",
+          "length": 64000,
+          "score": 100,
+          "given": "r6545",
+          "contextChars": 41436,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_find"
+          ]
+        },
+        {
+          "id": "needle-512000-a",
+          "family": "needle",
+          "length": 512000,
+          "score": 100,
+          "given": "r6697",
+          "contextChars": 41425,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_find"
+          ]
+        },
+        {
+          "id": "needle-512000-b",
+          "family": "needle",
+          "length": 512000,
+          "score": 100,
+          "given": "r3455",
+          "contextChars": 41392,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_find"
+          ]
+        },
+        {
+          "id": "count-8000-a",
+          "family": "count",
+          "length": 8000,
+          "score": 100,
+          "given": "7",
+          "contextChars": 16524,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count",
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-8000-b",
+          "family": "count",
+          "length": 8000,
+          "score": 100,
+          "given": "13",
+          "contextChars": 16738,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count",
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "count-64000-a",
+          "family": "count",
+          "length": 64000,
+          "score": 0,
+          "given": "0",
+          "contextChars": 27241,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "count-64000-b",
+          "family": "count",
+          "length": 64000,
+          "score": 100,
+          "given": "13",
+          "contextChars": 28189,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count",
+            "artifact_find"
+          ]
+        },
+        {
+          "id": "count-512000-a",
+          "family": "count",
+          "length": 512000,
+          "score": 100,
+          "given": "7",
+          "contextChars": 28324,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count",
+            "artifact_find"
+          ]
+        },
+        {
+          "id": "count-512000-b",
+          "family": "count",
+          "length": 512000,
+          "score": 100,
+          "given": "13",
+          "contextChars": 30472,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count",
+            "artifact_count",
+            "artifact_slice",
+            "artifact_find"
+          ]
+        },
+        {
+          "id": "track-8000-a",
+          "family": "track",
+          "length": 8000,
+          "score": 100,
+          "given": "v27016",
+          "contextChars": 49442,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "artifact_find",
+            "mcp__bench_fetch",
+            "artifact_find",
+            "mcp__bench_fetch",
+            "artifact_find",
+            "artifact_track",
+            "artifact_find",
+            "mcp__bench_fetch",
+            "artifact_find",
+            "artifact_slice",
+            "mcp__bench_fetch",
+            "artifact_lookup"
+          ]
+        },
+        {
+          "id": "track-8000-b",
+          "family": "track",
+          "length": 8000,
+          "score": 100,
+          "given": "v80242",
+          "contextChars": 24444,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "track-64000-a",
+          "family": "track",
+          "length": 64000,
+          "score": 100,
+          "given": "v17162",
+          "contextChars": 45299,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_find",
+            "artifact_find",
+            "artifact_count",
+            "artifact_count",
+            "artifact_find"
+          ]
+        },
+        {
+          "id": "track-64000-b",
+          "family": "track",
+          "length": 64000,
+          "score": 100,
+          "given": "v99240",
+          "contextChars": 44717,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_find",
+            "artifact_find"
+          ]
+        },
+        {
+          "id": "track-512000-a",
+          "family": "track",
+          "length": 512000,
+          "score": 100,
+          "given": "v43376",
+          "contextChars": 44603,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count",
+            "artifact_track",
+            "artifact_slice",
+            "artifact_find",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "track-512000-b",
+          "family": "track",
+          "length": 512000,
+          "score": 100,
+          "given": "v11284",
+          "contextChars": 51899,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_find",
+            "artifact_track",
+            "artifact_slice",
+            "artifact_count",
+            "artifact_track",
+            "artifact_slice",
+            "artifact_slice",
+            "artifact_find",
+            "artifact_find",
+            "artifact_track",
+            "artifact_find",
+            "artifact_track",
+            "artifact_track",
+            "artifact_track",
+            "artifact_find",
+            "artifact_slice",
+            "artifact_track",
+            "artifact_track",
+            "artifact_count",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "rank-8000-a",
+          "family": "rank",
+          "length": 8000,
+          "score": 100,
+          "given": "src/auth/token.ts, src/auth/session.ts, src/net/retry.ts, src/ui/login.tsx, src/crypto/sign.ts",
+          "contextChars": 24999,
+          "tools": [
+            "mcp__bench_fetch",
+            "mcp__bench_fetch",
+            "mcp__bench_fetch"
+          ]
+        },
+        {
+          "id": "rank-8000-b",
+          "family": "rank",
+          "length": 8000,
+          "score": 100,
+          "given": "src/crypto/sign.ts, src/net/client.ts, src/auth/token.ts, src/sync/worker.ts, src/parse/config.ts",
+          "contextChars": 16922,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count",
+            "mcp__bench_fetch",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "rank-64000-a",
+          "family": "rank",
+          "length": 64000,
+          "score": 100,
+          "given": "src/auth/token.ts, src/auth/session.ts, src/net/retry.ts, src/ui/login.tsx, src/crypto/sign.ts",
+          "contextChars": 43375,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count",
+            "artifact_find"
+          ]
+        },
+        {
+          "id": "rank-64000-b",
+          "family": "rank",
+          "length": 64000,
+          "score": 100,
+          "given": "src/crypto/sign.ts, src/net/client.ts, src/auth/token.ts, src/sync/worker.ts, src/parse/config.ts",
+          "contextChars": 43425,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_find",
+            "artifact_count"
+          ]
+        },
+        {
+          "id": "rank-512000-a",
+          "family": "rank",
+          "length": 512000,
+          "score": 100,
+          "given": "src/auth/token.ts, src/auth/session.ts, src/net/retry.ts, src/ui/login.tsx, src/crypto/sign.ts",
+          "contextChars": 43456,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count",
+            "artifact_find"
+          ]
+        },
+        {
+          "id": "rank-512000-b",
+          "family": "rank",
+          "length": 512000,
+          "score": 100,
+          "given": "src/crypto/sign.ts, src/net/client.ts, src/auth/token.ts, src/sync/worker.ts, src/parse/config.ts",
+          "contextChars": 43540,
+          "tools": [
+            "mcp__bench_fetch",
+            "artifact_count",
+            "artifact_find"
+          ]
+        }
+      ]
+    }
+  ]
+}

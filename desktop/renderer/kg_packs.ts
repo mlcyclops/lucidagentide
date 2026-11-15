@@ -15,6 +15,7 @@
 
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 import type { PackLicensing } from "../../harness/market/entitlement.ts";
 
 /** Where a pack comes from. `first-party` = authored by TechLead 187 LLC; `community` = a future
@@ -129,11 +130,11 @@ function licensingChip(l: PackLicensing): string {
 function packRow(p: KgPack): string {
   return `<div class="mkt-row" data-kgpack-id="${esc(p.id)}">
     <div class="mkt-main">
-      <div class="mkt-name"><span class="mkt-title" title="${esc(p.name)}">${esc(p.name)}</span><div class="mkt-badges">${tierChip(p.tier)}${licensingChip(p.licensing)}<span class="mkt-cat" title="${esc(p.role)}">${esc(p.role)}</span></div></div>
+      <div class="mkt-name"><span class="mkt-title" data-tip="${esc(tipEsc(p.name))}">${esc(p.name)}</span><div class="mkt-badges">${tierChip(p.tier)}${licensingChip(p.licensing)}<span class="mkt-cat" data-tip="${esc(tipEsc(p.role))}">${esc(p.role)}</span></div></div>
       <div class="mkt-desc">${esc(p.desc)}</div>
       <div class="mkt-plan">${icon("bulb", 12)}${esc(p.highlights)} · ${esc(p.author)}</div>
     </div>
-    <button class="mkt-repo" data-kgpack-get="${esc(p.id)}" title="Get this pack">Get pack</button>
+    <button class="mkt-repo" data-kgpack-get="${esc(p.id)}" data-tip="Get this pack">Get pack</button>
   </div>`;
 }
 
@@ -148,10 +149,10 @@ export function kgPackRowsHtml(list: KgPack[], query: string): string {
 export function kgPacksHtml(list: KgPack[], query: string): string {
   return `<div class="mkt-modal" role="dialog" aria-label="Role KG Packs">
     <div class="mkt-h">${icon("package", 18)}<span>Role KG Packs</span>
-      <button class="mkt-close" data-kgpack-close title="Close">${icon("close", 14)}</button></div>
+      <button class="mkt-close" data-kgpack-close aria-label="Close" data-tip="Close">${icon("close", 14)}</button></div>
     <div class="mkt-sub">Curated, role-specific knowledge graphs - instantly seed a new hire from a Position Description. Packs are delivered by the LUCID add-on; "Get pack" opens the product page. Already have a <code>.lkgpack</code>? Import it below - it's verified for origin and re-scanned before anything installs.</div>
     <input id="kgpackSearch" class="mkt-search" type="text" placeholder="Search role packs…" autocomplete="off" spellcheck="false">
     <div id="kgpackList" class="mkt-list">${kgPackRowsHtml(list, query)}</div>
-    <button class="kgp-new kgpack-import" data-kgpack-import title="Import a .lkgpack pack you already have - gated, read-only">${icon("package", 12)} Import a pack you own</button>
+    <button class="kgp-new kgpack-import" data-kgpack-import data-tip="Import a .lkgpack pack you already have - gated, read-only">${icon("package", 12)} Import a pack you own</button>
   </div>`;
 }

@@ -10,6 +10,7 @@
 import { describeCron, firesBetween, parseCron } from "../cron.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 
 export type JobOutcome = "ok" | "error" | "timeout" | "waiting" | "suspended" | "cancelled";
 export interface JobRunView { startedAt: number; endedAt?: number; outcome: JobOutcome; laneId?: string; note?: string }
@@ -78,7 +79,7 @@ export function jobsHoverHtml(data: JobsData, now: number): string {
   const head = Array.from({ length: 7 }, (_, i) => `<div class="jg-h">${i === 0 ? "today" : DOW[new Date(dayStart + i * DAY).getDay()]}</div>`).join("");
   const rows: string[] = [];
   for (let h = 0; h < 24; h++) {
-    rows.push(`<div class="jg-hr">${h % 6 === 0 ? `${String(h).padStart(2, "0")}` : ""}</div>` + Array.from({ length: 7 }, (_, d) => `<div class="jg-c ${cells[d]![h]}"${names[d]![h] ? ` title="${esc(`${DOW[new Date(dayStart + d * DAY).getDay()]} ${String(h).padStart(2, "0")}:00 ${names[d]![h]}`)}"` : ""}></div>`).join(""));
+    rows.push(`<div class="jg-hr">${h % 6 === 0 ? `${String(h).padStart(2, "0")}` : ""}</div>` + Array.from({ length: 7 }, (_, d) => `<div class="jg-c ${cells[d]![h]}"${names[d]![h] ? ` data-tip="${esc(tipEsc(`${DOW[new Date(dayStart + d * DAY).getDay()]} ${String(h).padStart(2, "0")}:00 ${names[d]![h]}`))}"` : ""}></div>`).join(""));
   }
   const next = data.upcoming.filter((f) => f.at >= now - 60_000 && f.at < dayStart + 7 * DAY).slice(0, 5).map((f) => `<div class="jn-row"><span class="jn-when">${esc(`${f.at - dayStart < DAY ? "today" : DOW[new Date(f.at).getDay()]} ${fmtClock(f.at)}`)}</span><span class="jn-repo">${esc(f.repo)}</span><span class="jn-name">${esc(f.name)}</span><span class="jn-lane">${esc(f.lane)}</span></div>`).join("");
   const armed = data.jobs.filter((j) => j.armed && !j.suspended).length;

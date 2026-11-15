@@ -4,6 +4,7 @@
 import { MASCOT_H, MASCOT_RUN_BEAT_MS, MASCOT_RUN_FRAMES, MASCOT_THEMES, MASCOT_W, paintFrame } from './mascot.ts';
 import { MINI_GAMES, type MiniGameHandle } from './mascot_minigames.ts';
 import { ARCADE_GAMES, type ArcadeGameId } from '../arcade_games.ts';
+import { MASCOT_CELL_CSS, type MascotSize } from './mini_lucid.ts';
 
 export type ArcadeAction = 'left' | 'right' | 'duck' | 'jump' | 'punch' | 'kick' | 'aim-up';
 export interface ArcadeDebris { x: number; y: number; vx: number; vy: number; lifeMs: number; color: 'pot' | 'leaf' }
@@ -54,17 +55,19 @@ export interface ArcadeState {
   nextBonusAt: number;
   bonus: ArcadeBonus | null;
   debris: ArcadeDebris[];
+  /** P-MINI.3 (ADR-0596): how big the ninja is drawn. Every course length derives from it via arcadeMetrics. */
+  size: MascotSize;
 }
 
 /** Pure engine: distances are CSS pixels, vertical coordinates rise from the floor. */
-export function createArcadeState(width = 640, seed = 1): ArcadeState {
+export function createArcadeState(width = 640, seed = 1, size: MascotSize = 'small'): ArcadeState {
   return {
     phase: 'playing', width: Math.max(260, Number.isFinite(width) ? width : 640),
     elapsedMs: 0, score: 0, level: 1, hearts: 3, x: 40, jumpY: 0, velocityY: 0, groundY: 0,
     invulnerableMs: 0, attack: null, attackMs: 0, cooldownMs: 0,
     held: { left: false, right: false, duck: false }, obstacles: [],
     spawnMs: 700, seed: seed >>> 0, nextId: 0,
-    mode: 'runner', clears: 0, nextBonusAt: 5, bonus: null, debris: [],
+    mode: 'runner', clears: 0, nextBonusAt: 5, bonus: null, debris: [], size,
   };
 }
 
@@ -92,7 +95,8 @@ export function applyArcadeInput(state: ArcadeState, action: ArcadeAction, press
   if (action === 'jump') {
     // Grounded means standing on whatever is underfoot, floor or crate - not only y === 0.
     const grounded = state.velocityY === 0 && state.jumpY <= (state.groundY ?? 0);
-    return grounded && !state.held.duck ? { ...state, velocityY: 350, jumpY: state.jumpY + 0.01 } : state;
+    const launch = JUMP_SPEED * arcadeMetrics(state.width, state.size).motion;
+    return grounded && !state.held.duck ? { ...state, velocityY: launch, jumpY: state.jumpY + 0.01 } : state;
   }
   if (state.cooldownMs > 0) return state;
   return { ...state, attack: action, attackMs: action === 'kick' ? 330 : 230, cooldownMs: 480 };
@@ -110,6 +114,67 @@ const MIN_ARRIVAL_GAP_S = 0.95;
 
 export function arcadeScale(width: number): number {
   return width >= 560 ? 2 : 1;
+}
+
+/** Launch speed, gravity and walk speed of the classic course, in CSS pixels per second (squared). */
+const JUMP_SPEED = 350;
+const GRAVITY = 1100;
+const WALK_SPEED = 150;
+const DEBRIS_GRAVITY = 550;
+
+export interface ArcadeMetrics {
+  /** CSS pixels per sprite cell. Every hit box, reach, hazard size and duck height is a multiple of it. */
+  scale: number;
+  /** The course's speeds and accelerations relative to the classic course at this width. */
+  motion: number;
+}
+
+/** P-MINI.3 (ADR-0596): ONE derivation for the whole course. Large is the classic arcadeScale(width),
+ *  untouched. Small is MASCOT_CELL_CSS.small relative to large, floored at one CSS pixel per cell so the
+ *  sprite stays crisp on a narrow panel (where classic already paints 1x and the sizes coincide). `motion`
+ *  shrinks run speed, jump launch and gravity by the same ratio, so a small course is the classic course
+ *  in miniature: the same airtime, the same jump-to-body ratio and the same reaction windows. */
+export function arcadeMetrics(width: number, size: MascotSize): ArcadeMetrics {
+  const classic = arcadeScale(width);
+  const scale = Math.max(1, classic * (MASCOT_CELL_CSS[size] ?? MASCOT_CELL_CSS.small) / MASCOT_CELL_CSS.large);
+  return { scale, motion: scale / classic };
+}
+
+/** The runner's hit box: horizontal edges in canvas pixels, vertical extent rising from the floor. */
+export function arcadeRunnerBox(state: ArcadeState): { left: number; right: number; bottom: number; top: number } {
+  const { scale } = arcadeMetrics(state.width, state.size);
+  const grounded = state.velocityY === 0 && state.jumpY <= state.groundY;
+  return {
+    left: state.x + 10 * scale, right: state.x + 30 * scale, bottom: state.jumpY,
+    top: state.jumpY + (state.held.duck && grounded ? 24 : 44) * scale,
+  };
+}
+
+/** Where the painter puts the sprite, in canvas pixels (y grows downward). Its feet rest on ARCADE_FLOOR_Y
+ *  plus the height of whatever is underfoot, so it never floats or sinks at either size. */
+export function arcadeSpriteRect(state: ArcadeState): { x: number; y: number; w: number; h: number; ducking: boolean } {
+  const { scale } = arcadeMetrics(state.width, state.size);
+  const ducking = state.held.duck && state.velocityY === 0 && state.jumpY <= state.groundY;
+  return {
+    x: Math.round(state.x),
+    y: Math.round(ARCADE_FLOOR_Y - MASCOT_H * scale - state.jumpY + (ducking ? 22 * scale : 0)),
+    w: MASCOT_W * scale, h: MASCOT_H * scale, ducking,
+  };
+}
+
+/** P-MINI.3 (ADR-0596): switch the ninja size mid-run. Every vertical length (and the hazards already on
+ *  the course) is rescaled by the one sprite ratio, so the runner stays on the crate or mid-arc he was on
+ *  and keeps playing; nothing restarts. Horizontal positions stay: they are canvas, not sprite, lengths. */
+export function setArcadeMascotSize(state: ArcadeState, size: MascotSize): ArcadeState {
+  if (state.size === size) return state;
+  const ratio = arcadeMetrics(state.width, size).scale / arcadeMetrics(state.width, state.size).scale;
+  if (ratio === 1) return { ...state, size };
+  return {
+    ...state, size,
+    jumpY: state.jumpY * ratio, groundY: state.groundY * ratio, velocityY: state.velocityY * ratio,
+    obstacles: state.obstacles.map(o => ({ ...o, width: o.width * ratio, height: o.height * ratio, bottom: o.bottom * ratio })),
+    debris: [],
+  };
 }
 
 // Mutates only the private copy made by stepArcade, not a caller-owned state.
@@ -136,12 +201,12 @@ function advance(next: ArcadeState, dtMs: number): void {
     }
     return;
   }
-  const scale = arcadeScale(next.width);
+  const { scale, motion } = arcadeMetrics(next.width, next.size);
   for (const chip of next.debris) {
     chip.lifeMs -= dtMs;
     chip.x += chip.vx * dt;
     chip.y += chip.vy * dt;
-    chip.vy -= 550 * dt;
+    chip.vy -= DEBRIS_GRAVITY * motion * dt;
   }
   next.invulnerableMs = Math.max(0, next.invulnerableMs - dtMs);
   next.attackMs = Math.max(0, next.attackMs - dtMs);
@@ -149,14 +214,13 @@ function advance(next: ArcadeState, dtMs: number): void {
   next.spawnMs -= dtMs;
   if (!next.attackMs) next.attack = null;
   next.x = Math.max(8, Math.min(Math.min(next.width * 0.45, next.width - 150),
-    next.x + (Number(next.held.right) - Number(next.held.left)) * 150 * dt));
+    next.x + (Number(next.held.right) - Number(next.held.left)) * WALK_SPEED * motion * dt));
   // Hazards move BEFORE the vertical solve, so the crate a falling runner lands on is the crate that
   // is actually under his feet this substep rather than the one from the previous frame.
-  const speed = arcadeSpeed(next.level);
+  const speed = arcadeSpeed(next.level) * motion;
   const movement = speed * dt;
   for (const obstacle of next.obstacles) obstacle.x -= movement * (obstacle.kind === 'star' ? 1.7 : 1);
-  const left = next.x + 10 * scale;
-  const right = next.x + 30 * scale;
+  const { left, right } = arcadeRunnerBox(next);
   // Crates are solid ground from above. Support counts only crates the feet were already at or above,
   // so walking INTO a crate's side is still a hit and never a free teleport onto its lid.
   const previousBottom = next.jumpY;
@@ -167,8 +231,8 @@ function advance(next: ArcadeState, dtMs: number): void {
     if (previousBottom >= lid - 1 && lid > support) support = lid;
   }
   if (next.jumpY > support || next.velocityY !== 0) {
-    next.jumpY = next.jumpY + next.velocityY * dt - 550 * dt * dt;
-    next.velocityY -= 1100 * dt;
+    next.jumpY = next.jumpY + next.velocityY * dt - GRAVITY * motion / 2 * dt * dt;
+    next.velocityY -= GRAVITY * motion * dt;
     // A descent that crosses the lid lands on it: the crossing test needs no fudge factor, so a fast
     // fall cannot tunnel through and a slow one cannot snap up from below.
     if (next.velocityY <= 0 && next.jumpY <= support && previousBottom >= support) {
@@ -178,9 +242,7 @@ function advance(next: ArcadeState, dtMs: number): void {
     if (next.jumpY <= 0) { next.jumpY = 0; next.velocityY = 0; }
   }
   next.groundY = support;
-  const bottom = next.jumpY;
-  const grounded = next.velocityY === 0 && bottom <= support;
-  const top = bottom + (next.held.duck && grounded ? 24 : 44) * scale;
+  const { bottom, top } = arcadeRunnerBox(next);
   if (next.spawnMs <= 0) {
     // The roll is PREVIEWED, not committed: a deferred hazard keeps its kind and simply launches
     // later. Re-rolling on every deferral would quietly starve the star, which is deferred most
@@ -231,7 +293,7 @@ function advance(next: ArcadeState, dtMs: number): void {
       next.clears++;
       for (let n = 0; n < 10; n++) {
         next.debris.push({ x: obstacle.x + obstacle.width / 2, y: obstacle.height / 2,
-          vx: (n - 4.5) * 28, vy: 110 + n % 4 * 32, lifeMs: 650 + n % 3 * 100,
+          vx: (n - 4.5) * 28 * motion, vy: (110 + n % 4 * 32) * motion, lifeMs: 650 + n % 3 * 100,
           color: obstacle.kind === 'pot' && n % 3 === 0 ? 'leaf' : 'pot' });
       }
       continue;
@@ -297,13 +359,17 @@ export interface AgentArcadeHandle {
   update(agentMode: boolean): void;
   /** Whether the game panel is showing, which is when the Arcade sprite owns the screen. */
   isOpen(): boolean;
+  /** P-MINI.3 (ADR-0596): resize the ninja live, in the course and in whichever mini game is mounted. A
+   *  running round keeps going (setArcadeMascotSize rescales it); nothing restarts. */
+  setMascotSize(size: MascotSize): void;
   dispose(): void;
 }
 
 type ThemeId = keyof typeof MASCOT_THEMES;
 const PUNCH_FRAMES = ['punchA', 'punchB', 'punchC', 'punchD'] as const;
 const KICK_FRAMES = ['kickA', 'kickB', 'kickC', 'kickD'] as const;
-const FLOOR_Y = 172;
+/** The course floor, in canvas pixels from the top. Feet stand here; hazard bottoms rise from it. */
+export const ARCADE_FLOOR_Y = 172;
 const CANVAS_HEIGHT = 180;
 
 /** Pure painter for one hazard, in the same family as drawArcadeBonus: no state, no input, no score.
@@ -311,7 +377,7 @@ const CANVAS_HEIGHT = 180;
 export function paintObstacle(ctx: CanvasRenderingContext2D, obstacle: ArcadeObstacle, palette: Record<string, string>, time: number): void {
   const scale = obstacle.kind === 'beam' ? obstacle.width / 46 : obstacle.kind === 'star' ? obstacle.width / 18 : obstacle.width / 26;
   ctx.save();
-  ctx.translate(Math.round(obstacle.x), Math.round(FLOOR_Y - obstacle.bottom - obstacle.height));
+  ctx.translate(Math.round(obstacle.x), Math.round(ARCADE_FLOOR_Y - obstacle.bottom - obstacle.height));
   ctx.scale(scale, scale);
   if (obstacle.kind === 'pot') {
     ctx.fillStyle = palette.g!;
@@ -494,6 +560,8 @@ export interface ArcadeOptions {
   onLayout?: (open: boolean) => void;
   /** Opens a bundled game in the host's user-owned Preview lane, or full size in the OS browser. */
   onOpenPreviewGame?: (id: ArcadeGameId, where: 'preview' | 'browser') => void;
+  /** P-MINI.3 (ADR-0596): the ninja size every game opens with. Default "small" (mini Lucid's size). */
+  mascotSize?: MascotSize;
 }
 
 /** Local, opt-in diversion. The caller alone decides whether an actual agent run is active. */
@@ -528,7 +596,7 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort,
       <p class="agent-arcade-help">Arrows move · Up / Alt jump · Down duck · Ctrl punch · Down + Ctrl kick. Crate lids are solid: land on one and jump again. Duck bars and stars, smash flower pots. Five clears unlock Flycatch.</p>
       <div class="agent-arcade-alt" hidden></div>
       ${options.onOpenPreviewGame ? `<div class="agent-arcade-preview" role="group" aria-label="Secret games in Preview">
-        <span>Secret games:</span>${Object.entries(ARCADE_GAMES).map(([id, game]) => `<span class="agent-arcade-launch"><button type="button" data-preview-game="${id}" data-where="preview" title="Play ${game.name} in the sandboxed Preview panel">${game.name}</button><button type="button" data-preview-game="${id}" data-where="browser" title="Open ${game.name} full size in your default browser" aria-label="Open ${game.name} in your browser">↗</button></span>`).join('')}
+        <span>Secret games:</span>${Object.entries(ARCADE_GAMES).map(([id, game]) => `<span class="agent-arcade-launch"><button type="button" data-preview-game="${id}" data-where="preview" data-tip="Play ${game.name} in the sandboxed Preview panel">${game.name}</button><button type="button" data-preview-game="${id}" data-where="browser" data-tip="Open ${game.name} full size in your default browser" aria-label="Open ${game.name} in your browser">↗</button></span>`).join('')}
       </div>` : ''}
     </div>`;
   host.appendChild(root);
@@ -554,7 +622,8 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort,
   const events = new AbortController();
   const listenerOptions = { signal: events.signal };
   for (const [id, theme] of Object.entries(MASCOT_THEMES)) chooser.add(new Option(theme.name, id));
-  let state = createArcadeState();
+  let mascotSize: MascotSize = options.mascotSize ?? 'small';
+  let state = createArcadeState(640, 1, mascotSize);
   let theme: ThemeId = 'lucid';
   let eligible = false;
   let disposed = false;
@@ -606,14 +675,14 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort,
     stop();
     if (course) {
       started = false;
-      state = createArcadeState(state.width);
+      state = createArcadeState(state.width, 1, mascotSize);
       lastMode = null; lastScore = -1; lastHearts = -1; lastTotal = -1;
       score.setAttribute('aria-label', 'Arcade score');
       help.textContent = courseHelp;
       resize();
     } else {
       const def = MINI_GAMES.find((g) => g.id === id)!;
-      miniHandle = def.mount(altHost, { start, score, total: totalOutput, cabinet: panel }, miniPort);
+      miniHandle = def.mount(altHost, { start, score, total: totalOutput, cabinet: panel }, miniPort, mascotSize);
       altHost.hidden = false;
     }
     totalOutput.textContent = `Total ${miniPort.total()}`;
@@ -693,18 +762,21 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort,
     ctx.fillRect(0, 163, state.width, 3);
     for (let x = -Math.floor(state.elapsedMs * 0.03) % 24; x < state.width; x += 24) ctx.fillRect(x, 143, 3, 29);
     ctx.fillStyle = palette.g!;
-    ctx.fillRect(0, FLOOR_Y, state.width, 2);
+    ctx.fillRect(0, ARCADE_FLOOR_Y, state.width, 2);
     ctx.fillStyle = palette.D!;
-    for (let x = -Math.floor(state.elapsedMs * 0.055) % 38; x < state.width; x += 38) ctx.fillRect(x, FLOOR_Y + 4, 28, 3);
+    for (let x = -Math.floor(state.elapsedMs * 0.055) % 38; x < state.width; x += 38) ctx.fillRect(x, ARCADE_FLOOR_Y + 4, 28, 3);
     for (const obstacle of state.obstacles) {
       if (obstacle.handled && (obstacle.kind === 'target' || obstacle.kind === 'pot')) continue;
       paintObstacle(ctx, obstacle, palette, state.elapsedMs);
     }
+    const { scale: spriteScale, motion } = arcadeMetrics(state.width, state.size);
+    // Chips shrink with the course (4x3 classic, 2x2 small) so a small pot does not burst into boulders.
+    const chipW = Math.round(4 * motion);
+    const chipH = Math.max(2, Math.round(3 * motion));
     for (const chip of state.debris) {
       ctx.fillStyle = chip.color === 'leaf' ? palette.G! : palette.s!;
-      ctx.fillRect(Math.round(chip.x), Math.round(FLOOR_Y - chip.y), 4, 3);
+      ctx.fillRect(Math.round(chip.x), Math.round(ARCADE_FLOOR_Y - chip.y), chipW, chipH);
     }
-    const spriteScale = arcadeScale(state.width);
     if (!state.invulnerableMs || Math.floor(state.invulnerableMs / 90) % 2 === 0) {
       let frame: string = MASCOT_RUN_FRAMES[Math.floor(state.elapsedMs / MASCOT_RUN_BEAT_MS) % MASCOT_RUN_FRAMES.length]!;
       if (!playing || state.mode === 'flycatch') frame = 'guard';
@@ -715,16 +787,17 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort,
       }
       // Airborne means above whatever is underfoot: standing on a crate lid is running, not falling.
       if (state.jumpY > state.groundY && !state.attack) frame = 'kickA';
-      // Crop the tucked pose, never fractionally scale the original character pixels.
-      const ducking = state.held.duck && state.velocityY === 0 && state.jumpY <= state.groundY;
+      // Crop the tucked pose, never fractionally scale the original character pixels. The crop rises
+      // with whatever is underfoot, so a duck on a crate lid stays visible.
+      const sprite = arcadeSpriteRect(state);
       ctx.save();
-      if (ducking) {
+      if (sprite.ducking) {
         ctx.beginPath();
-        ctx.rect(state.x, FLOOR_Y - 24 * spriteScale, MASCOT_W * spriteScale, 24 * spriteScale);
+        ctx.rect(state.x, ARCADE_FLOOR_Y - 24 * spriteScale - state.jumpY, sprite.w, 24 * spriteScale);
         ctx.clip();
         frame = 'kickA';
       }
-      paintFrame(ctx, frame, spriteScale, Math.round(state.x), Math.round(FLOOR_Y - MASCOT_H * spriteScale - state.jumpY + (ducking ? 22 * spriteScale : 0)), palette);
+      paintFrame(ctx, frame, spriteScale, sprite.x, sprite.y, palette);
       ctx.restore();
     }
     drawArcadeBonus(ctx, state, palette);
@@ -812,7 +885,7 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort,
     if (activeGame !== 'course') { miniHandle?.start(); return; } // the mini game labels Start itself
     if (!context) return;
     if (playing) { pause(); return; }
-    if (!started || state.phase === 'lost') state = createArcadeState(state.width);
+    if (!started || state.phase === 'lost') state = createArcadeState(state.width, 1, mascotSize);
     started = true;
     playing = true;
     lastTime = 0;
@@ -832,7 +905,7 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort,
     reveal.hidden = false;
     reveal.setAttribute('aria-expanded', 'false');
     start.textContent = 'Start';
-    state = createArcadeState(state.width);
+    state = createArcadeState(state.width, 1, mascotSize);
     if (wasOpen) options.onLayout?.(false);
   }
 
@@ -934,6 +1007,13 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort,
       host.hidden = !eligible;
     },
     isOpen() { return !disposed && !panel.hidden; },
+    setMascotSize(size) {
+      if (disposed || size === mascotSize) return;
+      mascotSize = size;
+      state = setArcadeMascotSize(state, size);
+      miniHandle?.setMascotSize(size);
+      paint();
+    },
     dispose() {
       if (disposed) return;
       disposed = true;

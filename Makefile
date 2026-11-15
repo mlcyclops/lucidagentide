@@ -352,7 +352,7 @@ demo-P-MASCOT.1: ## P-MASCOT.1 (ADR-0251 pivot): LUCID the ninja mascot - frame-
 	$(BUN) run desktop/scripts/demo_p_mascot_1.ts
 
 .PHONY: demo-P-MASCOT.2
-demo-P-MASCOT.2: ## P-MASCOT.2: the prompt-bar parkour mini ninja - route order (run/climb/sneak/pause/drop/rest), lane geometry, the silent-drop clip contract, gravity easing, direction alternation
+demo-P-MASCOT.2: ## P-MASCOT.2, P-MINI.3 (ADR-0596): the prompt-bar ninja - home in the bar's right corner at both sizes, calm home activities, a traverse about every five minutes and never during a turn, the double-click dash and the right-click turn-off
 	$(BUN) run desktop/scripts/demo_p_mascot_2.ts
 
 .PHONY: demo-P-MASCOT.4
@@ -680,6 +680,74 @@ demo-P-TOKENS.1: ## P-TOKENS.1 / P-FLEET.L9: the token-spend accounting behind t
 .PHONY: demo-P-MCP-GATE.1
 demo-P-MCP-GATE.1: ## P-MCP-GATE.1 (ADR-0148): in-process MCP tool_result gate — poisoned MCP result withheld, clean result delimited+labeled untrusted, LOCAL tool results untouched (source-scoped), fail-closed
 	$(BUN) run harness/scripts/demo_pmcpgate1.ts
+
+.PHONY: demo-P-CTX.2a
+demo-P-CTX.2a: ## P-CTX.2a (ADR-0578): a tool result omp spilled to an artifact - real omp sessions and the real scanner: a 2 MB MCP result with a payload in the elided middle is withheld and its artifact purged; a clean one is shown as omp's bounded view in the untrusted envelope, recorded in the provenance ledger with hash and trust label, and fenced when a page is read back; omp's 4 KB spill threshold bounds it under 4.5 KB; a local spill is untouched; a dead scanner withholds (fail-closed)
+	$(BUN) run harness/scripts/demo_pctx2a.ts
+
+.PHONY: demo-P-CTX.2b
+demo-P-CTX.2b: ## P-CTX.2b (ADR-0579): omp's tool-result window sized to the chat model - the spawn overlay is written, loaded through omp's own config loader with acp_config.yml, and real omp sessions show an 8K local model under 2 KB and a 32K model under 8 KB of a 2 MB result, large and cloud models keep omp's 50 KB default, the user's override wins, the desktop's stored and shown report matches the real result, and the ADR-0578 gate still withholds a poisoned MCP result under a 2 KB window
+	$(BUN) run desktop/scripts/demo_p_ctx_2b.ts
+
+.PHONY: demo-P-CAP.1a
+demo-P-CAP.1a: ## P-CAP.1a (ADR-0589): find, lookup, count and slice over a stored tool result - real omp sessions with the real scanner, gate and tool extension: a 512,000 character MCP result whose bounded view holds none of eight keyed values, all eight returned by one artifact_lookup call with their line numbers in under 2,000 characters inside the untrusted envelope; count, find and slice on the same artifact; a record with a hidden payload refused; a local tool's artifact answered unfenced; an unknown handle an error
+	$(BUN) run harness/scripts/demo_pcap1a.ts
+
+.PHONY: demo-P-CAP.1b
+demo-P-CAP.1b: ## P-CAP.1b (ADR-0590): state tracking, and a derived fact never trusted more than its sources - real omp sessions with the real scanner, gate and tools, and a real DuckDB: artifact_track returning the final state of three variables from 6,000 ordered events in one fenced call; a clean session's memory write reaching the engine labeled untrusted; a session shown a suspicious tool result refused a memory write before any request, both when it read the content and when it derived an answer through the artifact tools; and the promotion gate blocking a fact with one suspicious, quarantined or unknown source among several, with review per source
+	$(BUN) run harness/scripts/demo_pcap1b.ts
+
+.PHONY: demo-P-BENCH.2a
+demo-P-BENCH.2a: ## P-BENCH.2a (ADR-0591): the long-context dev set - 24 generated tasks (needle, count, track, rank at 8,000, 64,000 and 512,000 characters) matching a checked-in manifest, scored through real omp sessions with the real scanner: a reader that answers only from what it is shown is right at 8,000 characters and wrong beyond, a user of the artifact tools is right at every length, the same run works behind an OpenAI-compatible endpoint (a loopback stand-in), and a model with an 8K window needs the tools even at 8,000 characters
+	$(BUN) run harness/scripts/demo_pbench2a.ts
+
+.PHONY: bench-devset
+bench-devset: ## P-BENCH.2a (ADR-0591): score a local model on the long-context dev set. Usage: make bench-devset ARGS="--base-url http://localhost:11434/v1 --model <id> --context <tokens> [--label <name>] [--lengths 8000,64000] [--mode both] [--out results.json]"
+	$(BUN) run desktop/scripts/bench_devset.ts $(ARGS)
+
+.PHONY: demo-P-MINI.1
+demo-P-MINI.1: ## P-MINI.1 (ADR-0580): mini Lucid visits and sits down to type - the seated typing scene (hands alternating, lit keys), his seat on the prompt bar top and never over the prompt, the Developer's first new session of a launch always visited, another role visited at most three times a day and never within thirty minutes, and the Off / Sometimes / Always preference with the LUCID Agent role keeping him
+	$(BUN) run desktop/scripts/demo_p_mini_1.ts
+
+.PHONY: demo-P-ASKLUCID.1
+demo-P-ASKLUCID.1: ## P-ASKLUCID.1 (ADR-0581): the Ask Lucid fly-out, read-only - the real service with the real scanner and a stand-in model that records its prompt: the fleet lanes, the Fleet Orbit and the knowledge graph each arrive inside the untrusted envelope with the question outside it; a lane name with a hidden payload gets the fleet view quarantined and kept from the model; a name that tries to close the envelope stays inside it; a dead scanner withholds every view (fail-closed); CUI lockdown with no allowed model is refused and audited; a provider error line is an error, not an answer; and the dock's placement, snapping and zoom-corrected reserve
+	$(BUN) run desktop/scripts/demo_p_asklucid_1.ts
+
+.PHONY: demo-P-ASKLUCID.2
+demo-P-ASKLUCID.2: ## P-ASKLUCID.2 (ADR-0582): Lucid proposes, the user confirms - the real service with the real scanner: a valid proposal becomes an action with a risk label and the block leaves the reply; the card's rows are exactly what Confirm sends; an unknown kind, a lane Lucid was not shown and unnamed fields are dropped; a proposed prompt with a hidden payload is dropped by the scanner; a model talked into forty lanes yields three cards; a dead scanner offers none (fail-closed); and the route, service and validator hold no call that runs an action
+	$(BUN) run desktop/scripts/demo_p_asklucid_2.ts
+
+.PHONY: demo-P-MINI.2
+demo-P-MINI.2: ## P-MINI.2 (ADR-0583): Lucid may suggest things - a live holiday theme offered once per occasion with Wear it / Not now / Don't ask again, the pinned theme coming off the day after the holiday ends unless the user picked another by hand, what is new shown newest first and once per feature, at most one suggestion per launch and none during a turn, over a modal or before the first-run tour, and one setting that silences both
+	$(BUN) run desktop/scripts/demo_p_mini_2.ts
+
+.PHONY: demo-P-MINI.3
+demo-P-MINI.3: ## P-MINI.3 (ADR-0596): a smaller, calmer Lucid who wears the theme - off on the prompt bar until turned on (the LUCID Agent role keeps him), a right-click turn-off that beats every role with a way back, Small (mini Lucid's size) by default and Large (classic) kept, the Settings card's rows, and a color theme recoloring him while the Lucid themes keep the brand green
+	$(BUN) run desktop/scripts/demo_p_mini_3.ts
+
+.PHONY: demo-P-ATTACH.1
+demo-P-ATTACH.1: ## P-ATTACH.1 (ADR-0598): files on the prompt bars - the real scanner and a throwaway root: Markdown, CSV, code, an unknown text type and a Word file copied and read; a program, an archive, binary data and hidden Unicode kept out (the blocked copy deleted); a dead scanner blocks (fail-closed); each file fenced as untrusted in the prompt block with its managed copy named; forged ids resolve to nothing; copies swept after seven days
+	$(BUN) run desktop/scripts/demo_p_attach_1.ts
+
+.PHONY: demo-P-ASKLUCID.3
+demo-P-ASKLUCID.3: ## P-ASKLUCID.3 (ADR-0584): Ask Lucid sees the screen and opens above every popup - the real service with the real scanner: the screen as the first view with the top surface marked and fenced, the Preview panel's page included, a key on screen redacted in the renderer and again on the engine, a screen with a hidden payload withheld while the other views arrive, a dead scanner withholding it (fail-closed), a collector that reads no field value, and the dock above modals, the Fleet grid and the Orbit map
+	$(BUN) run desktop/scripts/demo_p_asklucid_3.ts
+
+.PHONY: demo-P-ASKLUCID.4
+demo-P-ASKLUCID.4: ## P-ASKLUCID.4 (ADR-0585): a briefing across lane conversations, sessions and the orbit - the real service with the real scanner: Brief me shows what each lane was last asked and last answered (most urgent lane first, tools counted and not listed) and the recent sessions with their last exchange, each as its own fenced view; an ordinary question gets the short size; a lane conversation with a hidden payload is withheld alone; one that forges the delimiter stays inside the envelope; a dead scanner withholds both (fail-closed); and the route only reads
+	$(BUN) run desktop/scripts/demo_p_asklucid_4.ts
+
+.PHONY: demo-P-ASKLUCID.5
+demo-P-ASKLUCID.5: ## P-ASKLUCID.5 (ADR-0586): suggestions that follow the work - seeded from what is going on with what needs the user first; a miss sets the passed-over set aside and makes Lucid follow the screen (every open surface, the one visited most); three misses in a row bring up a feature; use and taste move the weights inside their bounds; a typed question is not a miss; and follow-up questions from a reply are validated, capped at three and scanned by the real scanner
+	$(BUN) run desktop/scripts/demo_p_asklucid_5.ts
+
+.PHONY: demo-P-ASKLUCID.6
+demo-P-ASKLUCID.6: ## P-ASKLUCID.6 (ADR-0587): features not yet used, and settings Lucid may propose changing - the real service with the real scanner: which features count as used from what exists and which panels have been open; an empty suggestion row filled with features; the unused features and current settings shown to Lucid from closed lists; a set_setting proposal as a card with the setting, the value and its risk; approvals, the sandbox, lockdown, provider keys and MCP servers refused; five proposed changes cut to three and a poisoned one dropped; and a confirm handler that checks theme ids and names nothing on the security path
+	$(BUN) run desktop/scripts/demo_p_asklucid_6.ts
+
+.PHONY: demo-P-ASKLUCID.7
+demo-P-ASKLUCID.7: ## P-ASKLUCID.7 (ADR-0588): a picture of the screen for models that can read one - the real service with the real scanner: the picture beside the scanned screen text with a harness note outside any envelope; no picture when the screen text is withheld, when the scanner is dead, or when the screen shows a key; a model that cannot read pictures asked again with text alone and remembered; a failing provider not mistaken for one; only a real JPEG or PNG of a sane size accepted; masks that always cover their field; and a renderer that paints over typed fields and the panel from two measurements
+	$(BUN) run desktop/scripts/demo_p_asklucid_7.ts
 
 .PHONY: demo-P-LOCAL.1
 demo-P-LOCAL.1: ## P-LOCAL.1 (ADR-0135): Local Providers — declare a self-hosted / custom OpenAI-compatible LLM (Ollama, llama.cpp, vLLM, DGX-over-VPN); validate fail-closed, emit the omp --config overlay (secret from the vault, skipped if absent), persist WITHOUT the secret
