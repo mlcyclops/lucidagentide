@@ -71,26 +71,22 @@ const GIT_READONLY = new Set([
   "cat-file", "remote", "config", "shortlog", "reflog", "tag", "stash", "fetch",
 ]);
 
-// Shell control operators that make a command compound / write-capable → risky and un-pinnable (key=null).
-const COMPOUND = /[|;&]|&&|\|\||\$\(|`|>>|>|<\(/;
-
 // Non-silenceable catastrophic patterns (T4). Each ALWAYS prompts (interactive) / ALWAYS blocks
 // (unattended), regardless of any standing allow or danger mode — mirroring an egress ask-site pin.
+// Two of the set are read from the lexed command rather than its text (#618): rm's flags (rmRecursiveForce) and a
+// pipe into an interpreter (INTERPRETER, on a real pipeline segment, so a `|` inside quotes is text).
 interface Catastrophic { re: RegExp; why: string }
-/** A GNU long option as getopt_long reads it: the whole name or any prefix of at least `min` letters (`--rec` is
- *  `--recursive`), ending where the option word ends. */
-const longOpt = (name: string, min: number): string =>
-  `--(?:${Array.from({ length: name.length - min + 1 }, (_, k) => name.slice(0, name.length - k)).join("|")})(?![\\w-])`;
+const RM_RF = "recursive force-delete (rm -rf)";
+const PIPE_TO_INTERPRETER = "pipes downloaded code into an interpreter";
+/** How many levels of substitution and launcher (`bash -c`, `iex`, ...) the floor reads; deeper always asks. */
+const MAX_NESTING = 5;
+const TOO_DEEP = "nested too deeply to read (more than five levels of substitution or launcher)";
+/** The interpreters a pipe may feed, by bare program name (base() has removed a path, a module such as
+ *  `Microsoft.PowerShell.Utility\`, and `.exe`). PowerShell's `iex` / `Invoke-Expression` runs the text piped into
+ *  it, as `sh` does (`irm <url> | iex`). */
+const INTERPRETER = /^(?:sh|bash|zsh|dash|ksh|python[0-9.]*|node|perl|ruby|iex|invoke-expression)(?!\w)/;
 const ALWAYS_PROMPT: Catastrophic[] = [
   { re: /(^|\s)(sudo|doas)\b/i, why: "runs as root (sudo/doas)" },
-  // rm's `--recursive` and `--force` in any abbreviation getopt_long accepts (no other rm option starts with r or f).
-  {
-    re: new RegExp(`(^|\\s)rm\\b(?=[^|;&]*\\s-)[^|;&]*\\b(?:-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|(?=[^|;&]*\\s(?:${longOpt("recursive", 1)}|-[a-z]*r))(?=[^|;&]*\\s(?:${longOpt("force", 1)}|-[a-z]*f)))`, "i"),
-    why: "recursive force-delete (rm -rf)",
-  },
-  // PowerShell's `iex` / `Invoke-Expression` runs the text piped into it, as `sh` does (`irm <url> | iex`). The
-  // interpreter may be named by path (`| /bin/sh`) or module (`| Microsoft.PowerShell.Utility\Invoke-Expression`).
-  { re: /\|\s*(?:sudo\s+)?(?:[^\s|;&]*[\\/])?(?:sh|bash|zsh|dash|ksh|python[0-9.]*|node|perl|ruby|iex|invoke-expression)(?:\.exe)?\b/i, why: "pipes downloaded code into an interpreter" },
   { re: /(^|\s)dd\b/i, why: "raw disk write (dd)" },
   { re: /(^|\s)mkfs\b/i, why: "formats a filesystem (mkfs)" },
   { re: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/, why: "fork bomb" },
@@ -116,15 +112,17 @@ function launcherPayload(prog: string, rest: string[]): string | null {
     return i >= 0 && i + 1 < rest.length ? rest[i + 1]! : null;
   }
   if (prog === "cmd") {
-    // cmd also takes the command glued to the switch (`/c"del /s /q C:\*"`), and strips one pair of outer quotes.
+    // cmd also takes the command glued to the switch (`/c"del /s /q C:\*"`), strips one pair of outer quotes, and
+    // runs a `( ... )` group around the whole payload as the command inside it (`/c(del /s /q C:\*)`).
     const i = rest.findIndex((t) => /^\/[ck]/i.test(t));
     if (i < 0) return null;
-    return [rest[i]!.slice(2), ...rest.slice(i + 1)].filter(Boolean).join(" ").replace(/^"([\s\S]*)"$/, "$1");
+    return unwrapParens([rest[i]!.slice(2), ...rest.slice(i + 1)].filter(Boolean).join(" ").replace(/^"([\s\S]*)"$/, "$1"), 1);
   }
   if (prog === "iex" || prog === "invoke-expression") {
-    // Its string argument (or -Command's, any abbreviation) is the command it runs.
+    // Its string argument (or -Command's, any abbreviation) is the command it runs, also when the argument is
+    // wrapped in invocation parentheses (`iex ('Remove-Item ...')`; the words arrive with their quotes removed).
     const args = rest.filter((t) => !/^-c(o(m(m(a(n(d)?)?)?)?)?)?$/i.test(t));
-    return args.length ? args.join(" ") : null;
+    return args.length ? unwrapParens(args.join(" ")) : null;
   }
   if (prog === "powershell" || prog === "pwsh") {
     const enc = rest.findIndex((t) => /^-e(c|n(c(o(d(e(d(c(o(m(m(a(n(d)?)?)?)?)?)?)?)?)?)?)?)?)?$/i.test(t));
@@ -136,66 +134,247 @@ function launcherPayload(prog: string, rest: string[]): string | null {
   return null;
 }
 
-/** The commands a shell runs before the line itself: the inside of `$(...)`, `<(...)`, `>(...)` (PowerShell's
- *  `$(...)` too) and of backticks. An unclosed one runs to the end of the text (fail-closed). A backtick escaped
- *  outside single quotes is text; inside a backtick body `` \` `` is a nested substitution, so the body is unescaped
- *  one level (`` \` ``, `\\`, `\$`, as bash does) and its nested ones are found when it is classified in turn.
- *  A backtick inside single quotes still counts (fail-closed). */
-function substitutions(raw: string): string[] {
-  const out: string[] = [];
-  for (let i = 0; i + 1 < raw.length; i++) {
-    if (raw[i + 1] !== "(" || !"$<>".includes(raw[i]!)) continue;
-    let open = 0;
-    let j = i + 1;
-    for (; j < raw.length; j++) {
-      if (raw[j] === "(") open++;
-      else if (raw[j] === ")" && --open === 0) break;
+/** `s` without the balanced parentheses around the whole of it, at most `pairs` of them: `(('x'))` is `'x'`, while
+ *  `(a) + (b)` stays as it is. Linear: every parenthesis is matched once. */
+function unwrapParens(s: string, pairs = Infinity): string {
+  const match = new Map<number, number>();
+  const open: number[] = [];
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "(") open.push(i);
+    else if (s[i] === ")" && open.length) match.set(open.pop()!, i);
+  }
+  let l = 0;
+  let r = s.length - 1;
+  const trim = (): void => {
+    while (l <= r && /\s/.test(s[l]!)) l++;
+    while (r >= l && /\s/.test(s[r]!)) r--;
+  };
+  trim();
+  for (let n = 0; n < pairs && s[l] === "(" && match.get(l) === r; n++) {
+    l++;
+    r--;
+    trim();
+  }
+  return s.slice(l, r + 1);
+}
+
+/** One command of a list or pipeline, as its own text; `piped` when a `|` (or `|&`) feeds it. */
+interface Segment { text: string; piped: boolean }
+/** A command as one pass of the lexer reads it. */
+interface Lexed {
+  /** The top-level commands, split at unquoted `|`, `||`, `|&`, `&&`, `&`, `;` and line breaks. */
+  segments: Segment[];
+  /** Every substitution body at every depth, each once (escape reading only). */
+  subs: string[];
+  /** A list operator, a substitution or an unquoted `>` was seen: the command is not one plain program. */
+  compound: boolean;
+  /** How deep substitutions nest (0 when there are none). */
+  nesting: number;
+}
+/** What stands in for a substitution in the text around it, so each character is classified in one body only. */
+const SUB = "_";
+interface Frame {
+  /** `paren`: `$(`, `<(`, `>(`. `tick`: a live backtick. `quoted`: a `$(...)` or backtick inside single quotes,
+   *  which bash does not run but the floor reads (fail-closed); it ends at its own close or at the closing quote. */
+  kind: "root" | "paren" | "tick" | "quoted";
+  /** The frame's own text so far (a nested substitution is SUB) and where the uncopied rest starts. */
+  parts: string[];
+  from: number;
+  quote: "" | "'" | '"';
+  /** Unquoted plain `(` inside a paren or quoted-paren frame, so `$(f (x))` closes at the last `)`. */
+  depth: number;
+  /** A quoted frame's closer: `)` or a backtick. */
+  close: string;
+}
+
+/**
+ * The single-pass shell lexer of the floor (#618): a stack of open `$(`, `<(`, `>(` and backtick frames, each with
+ * its own quote state, as bash keeps it (a `$(` inside double quotes starts fresh quoting). With `escapes` a
+ * backslash escapes the next character as bash reads it (outside single quotes); without, it is literal, as cmd and
+ * PowerShell read it. A backtick body ends at the first unescaped backtick and is unescaped one level (`` \` ``,
+ * `\\`, `\$`) so a nested one is found when it is classified in turn. Inside single quotes a `$(` or backtick still
+ * opens a body (fail-closed), but that body ends at the closing quote and never takes a backtick outside it. An
+ * unclosed frame runs to the end of the text (fail-closed). Every character is visited once and copied into one
+ * frame's text, so the cost is linear in the input.
+ */
+function lex(text: string, escapes: boolean): Lexed {
+  const subs: string[] = [];
+  const segments: Segment[] = [];
+  let compound = false;
+  let piped = false;
+  let nesting = 0;
+  const frame = (kind: Frame["kind"], from: number, close = ""): Frame => ({ kind, parts: [], from, quote: "", depth: 0, close });
+  const own = (f: Frame, end: number): string => f.parts.join("") + text.slice(f.from, end);
+  const root = frame("root", 0);
+  const stack: Frame[] = [root];
+  const open = (kind: Frame["kind"], at: number, from: number, close = ""): void => {
+    const parent = stack[stack.length - 1]!;
+    parent.parts.push(text.slice(parent.from, at), SUB);
+    stack.push(frame(kind, from, close));
+    nesting = Math.max(nesting, stack.length - 1);
+    compound = true;
+  };
+  const shut = (end: number, next: number): void => {
+    const f = stack.pop()!;
+    stack[stack.length - 1]!.from = next;
+    if (!escapes) return; // only the bash reading's substitutions are classified
+    const body = f.kind === "tick" ? own(f, end).replace(/\\([`\\$])/g, "$1") : own(f, end);
+    if (body.trim()) subs.push(body);
+  };
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    const f = stack[stack.length - 1]!;
+    if (f.kind === "tick") {
+      if (c === "\\" && escapes) i++;
+      else if (c === "`") shut(i, i + 1);
+      continue;
     }
-    out.push(raw.slice(i + 2, j));
+    if (f.kind === "quoted") {
+      if (c === "'") {
+        shut(i, i);
+        stack[stack.length - 1]!.quote = "";
+      } else if (f.close === "`" ? c === "`" : c === ")" && f.depth-- === 0) shut(i, i + 1);
+      else if (c === "(" && f.close === ")") f.depth++;
+      continue;
+    }
+    const subOpen = text[i + 1] === "(" && (c === "$" || c === "<" || c === ">");
+    if (f.quote === "'") {
+      if (c === "'") f.quote = "";
+      else if (c === "`") open("quoted", i, i + 1, "`");
+      else if (subOpen) open("quoted", i, ++i + 1, ")");
+      continue;
+    }
+    if (c === "\\" && escapes) {
+      i++;
+      continue;
+    }
+    if (f.quote === '"') {
+      if (c === '"') f.quote = "";
+      else if (c === "`") open("tick", i, i + 1);
+      else if (c === "$" && subOpen) open("paren", i, ++i + 1);
+      continue;
+    }
+    if (c === "'" || c === '"') f.quote = c;
+    else if (c === "`") open("tick", i, i + 1);
+    else if (subOpen) open("paren", i, ++i + 1);
+    else if (c === ">") compound = true;
+    else if (f.kind === "paren") {
+      if (c === "(") f.depth++;
+      else if (c === ")" && f.depth-- === 0) shut(i, i + 1);
+    } else if (c === "|" || c === "&" || c === ";" || c === "\n" || c === "\r") {
+      compound = true;
+      segments.push({ text: own(root, i), piped });
+      root.parts = [];
+      const pair = text.slice(i, i + 2);
+      piped = pair === "|&" || (c === "|" && pair !== "||");
+      if (pair === "||" || pair === "&&" || pair === "|&") i++;
+      root.from = i + 1;
+    }
   }
-  let single = false;
-  let double = false;
-  for (let i = 0; i < raw.length; i++) {
-    const c = raw[i];
-    if (c === "`") {
-      let j = i + 1;
-      for (; j < raw.length && raw[j] !== "`"; j++) if (raw[j] === "\\") j++;
-      const body = raw.slice(i + 1, j).replace(/\\([`\\$])/g, "$1");
-      if (body) out.push(body);
-      i = j;
-    } else if (single) {
-      if (c === "'") single = false;
-    } else if (c === "\\") i++;
-    else if (c === "'" && !double) single = true;
-    else if (c === '"') double = !double;
+  while (stack.length > 1) shut(text.length, text.length);
+  segments.push({ text: own(root, text.length), piped });
+  return { segments, subs, compound, nesting };
+}
+
+/** The words a shell passes for `seg`, quotes removed, with the offset just past each in `seg`. With `escapes` a
+ *  backslash escapes as bash reads it; without, it is literal, as cmd and PowerShell read it (`C:\Windows`). */
+function shellWords(seg: string, escapes: boolean): { text: string; end: number }[] {
+  const out: { text: string; end: number }[] = [];
+  let word = "";
+  let inWord = false;
+  let quote = "";
+  for (let i = 0; i < seg.length; i++) {
+    const c = seg[i]!;
+    if (quote === "'") {
+      if (c === "'") quote = "";
+      else word += c;
+    } else if (quote === '"') {
+      if (c === '"') quote = "";
+      else if (c === "\\" && escapes && i + 1 < seg.length && '$`"\\\n'.includes(seg[i + 1]!)) word += seg[++i]!;
+      else word += c;
+    } else if (/\s/.test(c)) {
+      if (inWord) out.push({ text: word, end: i });
+      word = "";
+      inWord = false;
+    } else {
+      inWord = true;
+      if (c === "'" || c === '"') quote = c;
+      else if (c === "\\" && escapes && i + 1 < seg.length) word += seg[++i]!;
+      else word += c;
+    }
   }
+  if (inWord) out.push({ text: word, end: seg.length });
   return out;
 }
 
-/** The catastrophic pattern `raw` matches (#616): the raw text first, then each command segment with its program
- *  resolved to a bare name (`/bin/rm`, `env X=1 rm`), then the command a launcher (`bash -c`, `cmd /c`,
- *  `powershell -Command`, `iex`) or a command substitution would run. Only the program position is rewritten, so
- *  a quoted argument (`grep "rm -rf" log`) is not read as a command. */
-function catastrophicIn(raw: string, depth = 0): Catastrophic | null {
-  for (const c of ALWAYS_PROMPT) if (c.re.test(raw)) return c;
-  if (depth > 4) return null;
-  for (const inner of substitutions(raw)) {
-    const hit = catastrophicIn(inner, depth + 1);
+/** True when an `rm` among `words` gets both a recursive and a force flag (#618): from the shell-decoded words, so
+ *  `rm "--rec" "--for" /` counts. A cluster (`-rf`, `-R`, PowerShell's `-Force`) counts each letter; a long option
+ *  counts in any abbreviation getopt_long accepts (`--r` to `--recursive`, `--f` to `--force`; no other rm option
+ *  starts with r or f). Options end at `--`. Options after an operand still count, as getopt_long permutes them. */
+function rmRecursiveForce(words: string[]): boolean {
+  let active = false;
+  let r = false;
+  let f = false;
+  for (const w of words) {
+    if (!active) {
+      if (base(w) === "rm") [active, r, f] = [true, false, false];
+      continue;
+    }
+    if (w === "--") {
+      if (r && f) return true;
+      active = false;
+      continue;
+    }
+    const long = /^--([a-z][a-z-]*)(?:=|$)/i.exec(w)?.[1]?.toLowerCase();
+    if (long) {
+      r ||= "recursive".startsWith(long);
+      f ||= "force".startsWith(long);
+    } else if (/^-[a-z]+$/i.test(w)) {
+      r ||= /r/i.test(w);
+      f ||= /f/i.test(w);
+    }
+  }
+  return active && r && f;
+}
+
+/** The catastrophic reason for `raw` (#616, #618), or null: the raw text first (the patterns of ALWAYS_PROMPT), then
+ *  each substitution the lexer found, then each command segment with its program resolved to a bare name (`/bin/rm`,
+ *  `env X=1 rm`), its rm flags read from its words, a pipe into an interpreter, and the command a launcher (`bash -c`,
+ *  `cmd /c`, `powershell -Command`, `iex`) would run. Only the program position is rewritten, so a quoted argument
+ *  (`grep "rm -rf" log`) is not read as a command. Segments are read twice when the text has a backslash: as bash
+ *  reads it and as cmd and PowerShell read it; either reading that is catastrophic asks. A command nested deeper
+ *  than MAX_NESTING levels (substitutions and launchers counted together) asks without being read (fail-closed). */
+function catastrophicIn(raw: string, depth = 0): string | null {
+  for (const c of ALWAYS_PROMPT) if (c.re.test(raw)) return c.why;
+  const bash = lex(raw, true);
+  if (depth + bash.nesting > MAX_NESTING) return TOO_DEEP;
+  for (const sub of new Set(bash.subs)) {
+    const hit = catastrophicIn(sub, depth + 1);
     if (hit) return hit;
   }
-  for (const seg of raw.split(/\|\||&&|[;&|\r\n]/)) {
-    const spans = tokenSpans(seg);
-    const { prog, at } = argv0At(spans.map((s) => s.text));
-    if (!prog || at < 0) continue;
-    const norm = `${prog}${seg.slice(spans[at]!.end)}`;
-    for (const c of ALWAYS_PROMPT) if (c.re.test(norm)) return c;
-    const payload = launcherPayload(prog, spans.slice(at + 1).map((s) => s.text));
-    if (payload !== null) {
-      const hit = catastrophicIn(payload, depth + 1);
+  const readings: [Segment[], boolean][] = [[bash.segments, true]];
+  if (raw.includes("\\")) readings.push([lex(raw, false).segments, false]);
+  for (const [segments, escapes] of readings) {
+    for (const seg of segments) {
+      const hit = segmentCatastrophe(seg, escapes, depth);
       if (hit) return hit;
     }
   }
   return null;
+}
+
+/** The catastrophic reason for one lexed command segment, or null. */
+function segmentCatastrophe({ text, piped }: Segment, escapes: boolean, depth: number): string | null {
+  const spans = shellWords(text, escapes);
+  const words = spans.map((s) => s.text);
+  if (rmRecursiveForce(words)) return RM_RF;
+  const { prog, at } = argv0At(words);
+  if (!prog || at < 0) return null;
+  if (piped && INTERPRETER.test(prog)) return PIPE_TO_INTERPRETER;
+  const norm = `${prog}${text.slice(spans[at]!.end)}`;
+  for (const c of ALWAYS_PROMPT) if (c.re.test(norm)) return c.why;
+  const payload = launcherPayload(prog, words.slice(at + 1));
+  return payload === null ? null : catastrophicIn(payload, depth + 1);
 }
 
 /** Strip leading `VAR=val` assignments and an `env`/`command`/`nice`/`time` wrapper to find the real argv0. */
@@ -288,11 +467,13 @@ export function classifyCommand(cmd: string): ExecClass {
   const cata = catastrophicIn(raw);
   if (cata) {
     const { prog } = realArgv0(tokenize(raw));
-    return { risk: "risky", tier: "T4", key: prog, alwaysPrompt: true, reason: cata.why };
+    return { risk: "risky", tier: "T4", key: prog, alwaysPrompt: true, reason: cata };
   }
 
-  // 2. Compound / write-capable (pipes, chaining, substitution, redirection) → risky, un-pinnable (T3).
-  if (COMPOUND.test(raw)) return { risk: "risky", tier: "T3", key: null, alwaysPrompt: false, reason: "compound or redirecting command" };
+  // 2. Compound / write-capable (pipes, chaining, substitution, redirection outside quotes, as the lexer reads it in
+  //    either reading of a backslash) → risky, un-pinnable (T3). A quoted `|` is text (#618).
+  if (lex(raw, true).compound || (raw.includes("\\") && lex(raw, false).compound))
+    return { risk: "risky", tier: "T3", key: null, alwaysPrompt: false, reason: "compound or redirecting command" };
 
   const tokens = tokenize(raw);
   const { prog, rest } = realArgv0(tokens);
@@ -330,17 +511,9 @@ export function classifyCommand(cmd: string): ExecClass {
   return { risk: "risky", tier: riskyTier(prog, raw), key: prog, alwaysPrompt: false, reason: `${prog} is not a known read-only command` };
 }
 
-/** Split a command into whitespace-separated tokens, honoring simple single/double quotes. */
+/** Split a command into its words, quotes removed and a backslash literal (a Windows path keeps its separators). */
 function tokenize(cmd: string): string[] {
-  return tokenSpans(cmd).map((s) => s.text);
-}
-/** The tokens of `cmd` with the offset just past each one in the original text. */
-function tokenSpans(cmd: string): { text: string; end: number }[] {
-  const out: { text: string; end: number }[] = [];
-  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(cmd))) out.push({ text: m[1] ?? m[2] ?? m[3] ?? "", end: re.lastIndex });
-  return out;
+  return shellWords(cmd, false).map((s) => s.text);
 }
 
 /** The `eval` tool runs arbitrary code; there's no command string to classify. Always risky, pinnable by
