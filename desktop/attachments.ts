@@ -17,7 +17,7 @@
 // header line per file.
 
 import { createHash, randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { extractPdfText } from "../harness/knowledge/pdf.ts";
 import { fenceUntrusted } from "../harness/prompt/untrusted.ts";
@@ -330,10 +330,18 @@ export async function attachmentsPromptBlock(rawIds: unknown, deps: Pick<AttachD
     const textPath = join(dir, "text.txt");
     let text: string;
     try {
-      if (!realFile(textPath)) throw new Error("missing");
-      // Bytes, not characters: four UTF-8 bytes per character at most.
-      if (lstatSync(textPath).size > ATTACH_LIMITS.extractChars * 4) throw new Error("too large");
-      text = readFileSync(textPath, "utf8");
+      // One descriptor for the checks and the read, so the file cannot change between them (CodeQL
+      // js/file-system-race). The path is also lstat'ed: a link there, or a file that is not the one opened,
+      // is refused, because the agent can write in this folder.
+      const fd = openSync(textPath, "r");
+      try {
+        const st = fstatSync(fd);
+        const link = lstatSync(textPath);
+        if (!st.isFile() || link.isSymbolicLink() || st.ino !== link.ino || st.dev !== link.dev) throw new Error("not the staged file");
+        // Bytes, not characters: four UTF-8 bytes per character at most.
+        if (st.size > ATTACH_LIMITS.extractChars * 4) throw new Error("too large");
+        text = readFileSync(fd, "utf8");
+      } finally { closeSync(fd); }
     } catch { return { ok: false, error: `The text of ${meta.name} could not be read. Remove it and add the file again.` }; }
     if (text.length > ATTACH_LIMITS.extractChars) return { ok: false, error: `The text of ${meta.name} is larger than it was when it was added. Remove it and add the file again.` };
     const room = Math.max(0, Math.min(ATTACH_LIMITS.promptCharsPerFile, budget));
