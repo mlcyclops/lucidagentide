@@ -419,6 +419,8 @@ fn stored_link(lid: &str, link: &Value) -> bool {
         && ["send", "receive"].iter().all(|k| l.get(*k).map(Value::is_array).unwrap_or(false))
         && ["reason", "notice", "by", "claimed_by"].iter().all(|k| text(l, k))
         && ["dm", "file_links", "backfilled"].iter().all(|k| l.get(*k).map(Value::is_boolean).unwrap_or(true))
+        && l.get("mode").map(|m| m.as_str().map(|m| MODES.contains(&m)).unwrap_or(false)).unwrap_or(true)
+        && l.get("gaps").map(|g| g.as_array().map(|g| g.iter().all(|p| p.as_array().map(|p| p.len() == 2 && p.iter().all(|v| gap_int(v).is_some())).unwrap_or(false))).unwrap_or(false)).unwrap_or(true)
         && (!pj::truthy(l.get("dm")) || (l.get("channel").and_then(Value::as_str) == Some(format!("{BDM_PREFIX}{lid}").as_str()) && l.get("peer").map(Value::is_object).unwrap_or(false)))
 }
 
@@ -526,7 +528,79 @@ fn member_view(link: &Obj) -> Obj {
         ("state", link.get("state").cloned().unwrap_or(Value::Null)),
         ("reason", link.get("reason").cloned().unwrap_or(Value::Null)),
         ("notice", link.get("notice").cloned().unwrap_or(Value::Null)),
+        ("mode", Value::from(link_mode(link))),
     ])
+}
+
+/// What crosses from a Google Chat space (PD-1 section 4.5): "mentions" (the default) or "space".
+const MODES: [&str; 2] = ["mentions", "space"];
+const MODE_ERROR: &str = "mode must be mentions or space";
+
+/// A link's `mode` ("mentions" when it has none).
+fn link_mode(link: &Obj) -> &str {
+    link.get("mode").and_then(Value::as_str).filter(|m| MODES.contains(m)).unwrap_or("mentions")
+}
+
+/// The `mode` of `POST /v1/bridge/c/mode`: one of MODES, else 400.
+fn mode_of(value: Body) -> R<&'static str> {
+    let m = value.and_then(Value::as_str).unwrap_or("");
+    MODES.iter().copied().find(|x| *x == m).ok_or_else(|| E::Bad(MODE_ERROR.into()))
+}
+
+const NOTICE_KIND: &str = "unknown notice kind";
+const GAP_ORDER: &str = "a gap needs start before end";
+const GAP_FUTURE: &str = "a gap cannot end in the future";
+const GAP_LONG: &str = "a gap is at most 7 days";
+const GAP_MAX: i128 = 7 * 86_400;
+/// The gaps a link keeps (its last ones), so a repeated notice adds nothing.
+const GAPS_KEEP: usize = 200;
+
+/// A JSON integer (never a bool or a float), as Python's `isinstance(v, int)`.
+fn gap_int(v: &Value) -> Option<i128> {
+    v.as_i64().map(i128::from).or_else(|| v.as_u64().map(i128::from))
+}
+
+/// The checked `(start, end)` of a `gap` notice (PD-1 section 4.5).
+fn gap_of(kind: Body, start: Body, end: Body, now: f64) -> R<(i128, i128)> {
+    if kind.and_then(Value::as_str) != Some("gap") {
+        return Err(E::Bad(NOTICE_KIND.into()));
+    }
+    let (Some(start), Some(end)) = (start.and_then(gap_int), end.and_then(gap_int)) else { return Err(E::Bad(GAP_ORDER.into())) };
+    if start >= end {
+        return Err(E::Bad(GAP_ORDER.into()));
+    }
+    if end as f64 > now + 60.0 {
+        return Err(E::Bad(GAP_FUTURE.into()));
+    }
+    if end - start > GAP_MAX {
+        return Err(E::Bad(GAP_LONG.into()));
+    }
+    Ok((start, end))
+}
+
+/// The gap's system line: "Some messages from Google Chat between 2026-11-15 09:00 UTC and ... UTC may be missing."
+fn gap_line(platform: &str, start: i128, end: i128) -> String {
+    let when = |t: i128| {
+        let t = t as i64;
+        let (y, m, d) = pj::civil(t.div_euclid(86_400));
+        let s = t.rem_euclid(86_400);
+        format!("{y:04}-{m:02}-{d:02} {:02}:{:02}", s / 3600, s / 60 % 60)
+    };
+    let name = match platform {
+        "slack" => "Slack",
+        "teams" => "Microsoft Teams",
+        _ => "Google Chat",
+    };
+    format!("Some messages from {name} between {} UTC and {} UTC may be missing.", when(start), when(end))
+}
+
+/// The system line a mode change posts in the Lucid conversation.
+fn mode_line(mode: &str, space: &str, platform: &str) -> String {
+    if mode == "space" {
+        format!("Every message in {space} on {platform} now crosses, not only messages that mention Lucid.")
+    } else {
+        format!("Only messages that mention Lucid in {space} on {platform} cross now.")
+    }
 }
 
 /// _bridge_c_view: a link as its connector sees it: never a member's principal or the channel id. PC-1 section 5:
@@ -2170,6 +2244,66 @@ impl Hub {
         r
     }
 
+    /// `POST /v1/bridge/c/mode {link, mode, by_name}` -> `{link}` (PD-1 section 4.5): what crosses from the space,
+    /// "mentions" or "space". A change is kept on the link, every member hears `bridge_link` and the conversation a
+    /// system line; the same mode again changes nothing.
+    pub fn bridge_c_mode(&self, who: &Identity, link: Body, mode: Body, by_name: Body) -> R<Obj> {
+        field(by_name, "by_name", NAME_MAX)?;
+        let mode = mode_of(mode)?;
+        let mut st = self.st.lock();
+        let r = (|| -> R<Obj> {
+            let org = st.bridge_c_enter(who)?;
+            let found = st.bridge_c_link(who, link, true)?;
+            let lid = pj::text_of(&found, "id");
+            if link_mode(&found) != mode {
+                let cid = pj::text_of(&found, "channel");
+                st.br_link_set(&lid, obj([("mode", Value::from(mode))]));
+                if st.channel(&cid).is_some() {
+                    let space = as_obj(found.get("target")).map(|t| pj::text_of(t, "label")).unwrap_or_default();
+                    st.bridge_system(&cid, &mode_line(mode, &space, platform_name(&pj::text_of(&found, "platform"))), Obj::new());
+                }
+                st.bridge_tell_link(&lid);
+                st.bridge_audit(Some(&found), "in", "mode", "", &who.principal, &pj::text_of(&org, "id"), "sent", "");
+            }
+            let found = st.br_link(&lid).unwrap_or(found);
+            Ok(obj([("link", Value::Object(c_view(&found)))]))
+        })();
+        drop(st);
+        self.wake();
+        r
+    }
+
+    /// `POST /v1/bridge/c/notice {link, kind, start, end}` -> `{ok, repeat}` (PD-1 section 4.5): a `gap` (integer
+    /// Unix seconds, start before end, at most 7 days, not ending past now + 60 s) becomes a system line. Once per
+    /// `(link, kind, start, end)`: a repeat says so and adds nothing. A link keeps its last GAPS_KEEP gaps.
+    pub fn bridge_c_notice(&self, who: &Identity, link: Body, kind: Body, start: Body, end: Body) -> R<Obj> {
+        let (start, end) = gap_of(kind, start, end, pj::now())?;
+        let mut st = self.st.lock();
+        let r = (|| -> R<bool> {
+            let org = st.bridge_c_enter(who)?;
+            let found = st.bridge_c_link(who, link, true)?;
+            let lid = pj::text_of(&found, "id");
+            let mut gaps: Vec<Value> = found.get("gaps").and_then(Value::as_array).cloned().unwrap_or_default();
+            let seen = gaps.iter().any(|g| g.as_array().map(|p| p.len() == 2 && gap_int(&p[0]) == Some(start) && gap_int(&p[1]) == Some(end)).unwrap_or(false));
+            if seen {
+                return Ok(true);
+            }
+            gaps.push(Value::Array(vec![Value::from(start as i64), Value::from(end as i64)]));
+            let extra = gaps.len().saturating_sub(GAPS_KEEP);
+            gaps.drain(..extra);
+            st.br_link_set(&lid, obj([("gaps", Value::Array(gaps))]));
+            let cid = pj::text_of(&found, "channel");
+            if st.channel(&cid).is_some() {
+                st.bridge_system(&cid, &gap_line(&pj::text_of(&found, "platform"), start, end), Obj::new());
+            }
+            st.bridge_audit(Some(&found), "in", "notice", "gap", &who.principal, &pj::text_of(&org, "id"), "sent", "");
+            Ok(false)
+        })();
+        drop(st);
+        self.wake();
+        Ok(obj([("ok", Value::Bool(true)), ("repeat", Value::Bool(r?))]))
+    }
+
     /// `GET /v1/bridge/c/outbox?after=&wait=` -> `{ops, seq}`: the ops of every link of this connector (an off link's
     /// `unlinked` too), waiting up to `wait` seconds.
     pub fn bridge_c_outbox(&self, who: &Identity, after: &str, wait: &str) -> R<Obj> {
@@ -2737,6 +2871,50 @@ impl Hub {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn mode_accepts_only_mentions_or_space() {
+        assert_eq!(mode_of(Some(&json!("space"))).ok(), Some("space"));
+        assert_eq!(mode_of(Some(&json!("mentions"))).ok(), Some("mentions"));
+        for bad in [json!("Space"), json!(""), json!(1), json!(null), json!(["space"])] {
+            match mode_of(Some(&bad)) {
+                Err(E::Bad(m)) => assert_eq!(m, MODE_ERROR),
+                _ => panic!("{bad} accepted"),
+            }
+        }
+        assert!(matches!(mode_of(None), Err(E::Bad(_))));
+    }
+
+    #[test]
+    fn gap_notices_are_checked_and_worded() {
+        let now = 1_794_700_000.0;
+        let bad = |k: Value, s: Value, e: Value| match gap_of(Some(&k), Some(&s), Some(&e), now) {
+            Err(E::Bad(m)) => m,
+            _ => panic!("accepted"),
+        };
+        let n = now as i64;
+        assert_eq!(bad(json!("outage"), json!(n - 10), json!(n)), NOTICE_KIND);
+        assert_eq!(bad(json!("gap"), json!(true), json!(n)), GAP_ORDER);
+        assert_eq!(bad(json!("gap"), json!(1.5), json!(n)), GAP_ORDER);
+        assert_eq!(bad(json!("gap"), json!(n), json!(n)), GAP_ORDER);
+        assert_eq!(bad(json!("gap"), json!(n), json!(n + 61)), GAP_FUTURE);
+        assert_eq!(bad(json!("gap"), json!(n - 604_801), json!(n)), GAP_LONG);
+        // the longest gap (exactly 7 days) ending at the latest allowed time
+        assert_eq!(gap_of(Some(&json!("gap")), Some(&json!(n - 604_740)), Some(&json!(n + 60)), now).ok(), Some((i128::from(n - 604_740), i128::from(n + 60))));
+        assert_eq!(gap_line("teams", 0, 3_660), "Some messages from Microsoft Teams between 1970-01-01 00:00 UTC and 1970-01-01 01:01 UTC may be missing.");
+        assert!(gap_line("gchat", 0, 60).starts_with("Some messages from Google Chat "));
+    }
+
+    #[test]
+    fn link_mode_defaults_to_mentions_and_shows_in_member_view() {
+        let mut link = json!({"id": "l1", "target": {"label": "Ops", "kind": "channel"}}).as_object().cloned().unwrap();
+        assert_eq!(link_mode(&link), "mentions");
+        assert_eq!(member_view(&link)["mode"], json!("mentions"));
+        link.insert("mode".into(), json!("space"));
+        assert_eq!(member_view(&link)["mode"], json!("space"));
+        assert_eq!(mode_line("space", "Ops", "Google Chat"), "Every message in Ops on Google Chat now crosses, not only messages that mention Lucid.");
+        assert_eq!(mode_line("mentions", "Ops", "Google Chat"), "Only messages that mention Lucid in Ops on Google Chat cross now.");
+    }
 
     fn hub() -> Hub {
         Hub::new(None, &["ann@x".to_string()], 168.0, 30.0, 365.0, None, Arc::new(LinkStats::new()))
