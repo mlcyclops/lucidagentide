@@ -108,6 +108,20 @@ export interface AskExtras {
   shot?: unknown;
   /** P-ASKLUCID.8: images the user pasted or dropped into the panel, as data URLs. Untrusted: parsed here. */
   images?: unknown;
+  /** P-ATTACH.1 (ADR-0598): the files the user attached to THIS question, as the block attachments.ts built
+   *  (each file fenced, the whole block scanned by the route). Its own section right after the question, so
+   *  no view's bound or the history clamp can drop it. */
+  attachedFiles?: string;
+}
+
+/** PURE: the user turn with the attached-files section right after the question (P-ATTACH.1). The question
+ *  part is exactly what askLucidUser writes for a question with no blocks, so the section lands before the
+ *  first view whatever those views are. */
+export function withAttachedFiles(user: string, question: string, attachedFiles: string | undefined): string {
+  if (!attachedFiles?.trim()) return user;
+  const head = askLucidUser(question, []);
+  const section = `## Files the user attached\n${attachedFiles.trim()}`;
+  return user.startsWith(head) ? `${head}\n\n${section}${user.slice(head.length)}` : `${user}\n\n${section}`;
 }
 
 /** P-ASKLUCID.8: the composer's own limits (composer_attachments.ts), so a picture that attaches there attaches
@@ -125,6 +139,19 @@ export function normalizeUserImages(raw: unknown): { data: string; mimeType: str
     if (p && base64Bytes(p.base64) <= ASK_IMAGE_LIMITS.bytes) out.push({ data: p.base64, mimeType: p.mimeType });
   }
   return out;
+}
+
+/** PURE, P-ASKLUCID.9 (ADR-0600): how many of the user's images edit_image may name. The panel resolves
+ *  `image` N against the list it sent, so only the run of images before the first one normalizeUserImages
+ *  would drop counts: past a dropped image, N here and N in the panel would be different pictures. */
+export function editableImageCount(raw: unknown): number {
+  if (!Array.isArray(raw)) return 0;
+  let n = 0;
+  for (const v of raw) {
+    if (n >= ASK_IMAGE_LIMITS.count || normalizeUserImages([v]).length !== 1) break;
+    n++;
+  }
+  return n;
 }
 
 /** The harness line that goes with the user's own images, outside any envelope. */
@@ -266,7 +293,7 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
   let pictureUsed = picture;
   let attachedUsed: AskReply["attached"] = userImages.length ? (userRefusedBefore ? "model-refused" : "sent") : undefined;
   try {
-    reply = (await deps.complete(ASK_LUCID_SYSTEM, askLucidUser(question, blocks, imageNote), pin.model, images)).trim();
+    reply = (await deps.complete(ASK_LUCID_SYSTEM, withAttachedFiles(askLucidUser(question, blocks, imageNote), question, extras.attachedFiles), pin.model, images)).trim();
   } catch {
     reply = "";
     if (images.length === 0) return { ok: false, error: UNAVAILABLE, seen, withheld, actions: [], actionsDropped: 0 };
@@ -275,7 +302,7 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
     // The model may not read pictures. Ask again with the text alone. Only when THAT works is the model
     // remembered as refusing pictures: a provider that is down or mis-keyed fails both ways and is not blamed.
     let again = "";
-    try { again = (await deps.complete(ASK_LUCID_SYSTEM, askLucidUser(question, blocks), pin.model, [])).trim(); } catch { again = ""; }
+    try { again = (await deps.complete(ASK_LUCID_SYSTEM, withAttachedFiles(askLucidUser(question, blocks), question, extras.attachedFiles), pin.model, [])).trim(); } catch { again = ""; }
     if (!failed(again)) { deps.noteVisionRefused?.(pin.model); pictureUsed = picture === "sent" ? "model-refused" : picture; if (sentUser.length) attachedUsed = "model-refused"; reply = again; }
     else if (again) reply = again; // the text-only error is the one worth reporting
   }
@@ -303,7 +330,9 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
     if (!verdict.block) followups.push(q);
   }
 
-  const parsed = parseActions(reply, knownFrom(fleetRaw, orbitRaw, { fleet: withheld.includes("fleet"), orbit: withheld.includes("orbit") }));
+  // P-ASKLUCID.9 (ADR-0600): edit_image may name only an image the user attached to this question.
+  const known = { ...knownFrom(fleetRaw, orbitRaw, { fleet: withheld.includes("fleet"), orbit: withheld.includes("orbit") }), images: editableImageCount(extras.images) };
+  const parsed = parseActions(reply, known);
   const actions: AskAction[] = [];
   let actionsDropped = parsed.dropped;
   for (const a of parsed.actions) {

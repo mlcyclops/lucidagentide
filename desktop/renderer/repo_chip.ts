@@ -13,7 +13,7 @@
 import { $ } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
-import { popover } from "./ui.ts";
+import { popover, setTip } from "./ui.ts";
 import type { LucidBridge, RepoContext, RepoView } from "./bridge.ts";
 import { hostedRepo, pushLabel, pushSlug, repoTooltip } from "../repo_identity.ts";
 import { providerLabel } from "../git_url.ts";
@@ -50,8 +50,7 @@ export function paintRepoChip(node: HTMLElement, ctx: RepoContext | undefined | 
   // The app's premium tooltip (ui.ts initTooltips), never the OS `title` box: a title line naming the repo,
   // then one fact per line (#tip .d is pre-line).
   const tip = repoTooltip(v, ctx);
-  node.removeAttribute("title");
-  node.setAttribute("data-tip", `${tip.title.replaceAll("|", "/")}|${tip.body}`);
+  setTip(node, tip.title, tip.body);
   node.setAttribute("data-tip-icon", "git");
   node.hidden = false;
 }

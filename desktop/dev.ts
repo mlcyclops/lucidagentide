@@ -155,7 +155,7 @@ import { openHubWindow } from "./hub_launch.ts"; // P-TUI.2: the Fleet view's Te
 import { createLaneWorktree, removeLaneWorktree } from "./lane_worktree.ts"; // P-FLEET.WT1: a lane in its own git worktree
 import { cloneRepo, CLONE_ROOT, hostTokenForUrl, removeRecentWorkspace, setWorkspace, workspaceInfo } from "./workspace.ts";
 import { ghToken, githubRepoChoices, localRepoChoices, observeToolCall, peekRepoContext, repoContext, type RepoChoiceSource } from "./repo_probe.ts"; // P-REPO.1 (ADR-0406)
-import { egressAllowAllManaged, egressDecision, egressPosture } from "./egress_policy.ts"; // P-PREVIEW.3b + P-NETWL.5
+import { egressAllowAllManaged, egressDecision, egressDecisionDetailed, egressPosture } from "./egress_policy.ts"; // P-PREVIEW.3b + P-NETWL.5; P-ASKLUCID.9: image edits
 import { loadWhitelist, removeEntry, saveWhitelist, setPosture, upsertEntry, type WhitelistEntry } from "./network_whitelist.ts"; // P-NETWL.2/.5: whitelist CRUD + posture
 import { probePreviewFile, readPreviewFile, toFsPath } from "./preview_file.ts";
 import { getState as trainerState, submitAnswer as trainerAnswer, getGames as trainerGames, setRole as trainerSetRole, useDemoPack as trainerUseDemoPack } from "./trainer_session.ts"; // P-TRAINER.7/.8 (ADR-0255) // P-PREVIEW.4: read a local file's content for the preview
@@ -191,6 +191,13 @@ import { lastModel as lastChatModel, resultWindowSetting, setResultWindowSetting
 import { chatModelContextWindow, resolveResultWindow } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 import { parseQuestion, sanitizeHistory } from "./ask_lucid.ts"; // P-ASKLUCID.1 (ADR-0581)
 import { answerAskLucid, NOTHING_SEEN } from "./ask_lucid_service.ts"; // P-ASKLUCID.1 (ADR-0581)
+import { ATTACH_DISABLED, attachmentsPromptBlock, parseAttachmentIds, removeStagedAttachment, stageAttachment, sweepAttachments, withAttachmentBlock, withAttachmentReference, type AttachDeps } from "./attachments.ts"; // P-ATTACH.1 (ADR-0598)
+import { managedAttachmentPolicy } from "./managed_config.ts"; // P-ATTACH.1 (ADR-0598)
+import { scanAndDecideLarge } from "../harness/security/large_scan.ts"; // P-ATTACH.1: a whole file's text, chunked
+import { IMAGE_EDIT_LIMITS, availableImageModels, editImage, saveEditedImage } from "./image_edit.ts"; // P-ASKLUCID.9 (ADR-0600)
+import { askLucidDataRoot, askLucidImagesDir, imageEgressVerdict, imageModelOptions, insideDir, saveAsSource, type SaveAsSource } from "./ask_lucid_images.ts"; // P-ASKLUCID.9
+import { mkdir as mkdirAsync, rm as rmAsync, writeFile as writeFileAsync } from "node:fs/promises"; // P-ASKLUCID.9: saveEditedImage's fs
+import { realpathSync } from "node:fs"; // P-ASKLUCID.9: Save image as / download containment
 import { discoveryHeaders, MAX_DISCOVERY_BYTES, parseDiscoveredModels, providerEnvVar, providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
 import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setSandboxWindowsMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThemeId, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, themeId, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
@@ -1924,6 +1931,78 @@ function scheduleAskLucidSweep(): void {
     const t = setTimeout(() => {
       try { const r = clearAskLucidSessions(); if (r.cleared > 0) flushSessionIndex(); }
       catch (e) { console.error(`[ask-lucid] session sweep failed: ${e instanceof Error ? e.message : String(e)}`); }
+      tick(AUTO_ARCHIVE_EVERY_MS);
+    }, delay);
+    t.unref();
+  };
+  tick(AUTO_ARCHIVE_FIRST_MS);
+}
+
+// P-ATTACH.1 (ADR-0598): files added to a prompt bar are staged under ~/.omp/attachments, NOT under
+// LUCID_DATA_ROOT (userData): the contained agent's only read-write grant is ~/.omp (sandbox_exec.ts
+// appContainerRuntimeGrants), and the staged copy is there so an agent with file tools can read all of it.
+// Because the agent can also write there, attachments.ts never trusts the folder: it refuses links and
+// scans the prompt block again at send.
+const ATTACH_ROOT = join(homedir(), ".omp", "attachments");
+
+/** P-ATTACH.1: staging and prompt-block deps, read per request so a policy change applies at once. */
+function attachDeps(): AttachDeps {
+  return {
+    root: ATTACH_ROOT,
+    scan: async (text) => { const d = await scanAndDecideLarge(agentScanner(), text); return { block: d.block, reason: d.reason }; },
+    policy: managedAttachmentPolicy(),
+    audit: ({ name, reason }) => emitSecurityEvent({ category: "scanner", type: "scanner_block", decision: "block", severity: "high", tool: "attachment", reason: `${name}: ${reason}`.slice(0, 200), sessionId: backend.currentSessionId() ?? undefined }),
+  };
+}
+
+// P-ASKLUCID.9 (ADR-0600): the images Ask Lucid edits for the user are saved under ~/.omp/ask-lucid/images, the
+// same ~/.omp managed root as the attachments (the contained agent can read it) but outside ~/.omp/attachments,
+// so the retention sweep never removes them: they are the user's results.
+const ASK_IMAGES_DIR = askLucidImagesDir(homedir());
+
+/** P-ASKLUCID.9: the egress check editImage runs before each request leaves (the provider call, and xAI's result
+ *  link). CUI lockdown and the org ceiling block; otherwise the user's Confirm on the card is the approval. A
+ *  block is audited with the existing egress_decision event. Fail-closed: a policy read that throws blocks. */
+function imageEditEgress(url: string): { allow: boolean; reason?: string } {
+  let v: { allow: boolean; reason?: string };
+  try {
+    const managed = managedAsksageOnly();
+    const locked = asksageOnly() || managed;
+    v = imageEgressVerdict({
+      host: httpHost(url),
+      verdict: egressDecisionDetailed(url, { project: currentWorkspace() }).verdict,
+      locked,
+      exempt: locked && lockdownEgressExempt(url, enclaveHostSet(listLocalProviders(), managed)),
+      managed: managedConfig().config?.security?.egress ?? null,
+    });
+  } catch {
+    v = { allow: false, reason: "The network policy could not be read." };
+  }
+  if (!v.allow) emitSecurityEvent({ category: "egress", type: "egress_decision", decision: "block", severity: "high", tool: "ask-lucid-image-edit", reason: `${httpHost(url) ?? "(invalid URL)"}: ${v.reason ?? "blocked"}`.slice(0, 200), sessionId: backend.currentSessionId() ?? undefined });
+  return v;
+}
+
+/** P-ASKLUCID.9: an edited image the user asked to download, checked like Save image as (inside the folder,
+ *  links resolved, an image file). */
+function editedImageSource(requested: unknown): SaveAsSource {
+  return saveAsSource(ASK_IMAGES_DIR, requested, { realpath: (p) => realpathSync.native(p), isFile: (p) => statSync(p).isFile() });
+}
+
+/** P-ATTACH.1: the prompt with the block for the staged ids in a send body; a refusal blocks the send.
+ *  No ids = the prompt unchanged (attachments off or not, a send without files always goes). */
+async function promptWithAttachments(prompt: string, rawIds: unknown): Promise<{ ok: true; text: string; block: string; textPaths: string[] } | { ok: false; error: string }> {
+  if (!parseAttachmentIds(rawIds).length) return { ok: true, text: prompt, block: "", textPaths: [] };
+  const r = await attachmentsPromptBlock(rawIds, attachDeps());
+  return r.ok ? { ok: true, text: withAttachmentBlock(prompt, r.text), block: r.text, textPaths: r.textPaths } : r;
+}
+
+/** P-ATTACH.1: delete staged copies past the policy's retention: two minutes after start, then every six
+ *  hours (scheduleAskLucidSweep's cadence). Unref'd: it never keeps the engine alive. */
+function scheduleAttachmentSweep(): void {
+  const tick = (delay: number): void => {
+    const t = setTimeout(() => {
+      try { sweepAttachments(ATTACH_ROOT, { now: Date.now(), retentionDays: managedAttachmentPolicy().retentionDays }); }
+      catch (e) { console.error(`[attachments] retention sweep failed: ${e instanceof Error ? e.message : String(e)}`); }
       tick(AUTO_ARCHIVE_EVERY_MS);
     }, delay);
     t.unref();
@@ -4204,7 +4283,13 @@ return Bun.serve({
           if (r.bytes) {
             if (r.kind === "image") {
               const data = Buffer.from(r.bytes).toString("base64");
-              const image = `<!doctype html><html><head><meta charset="utf-8"><title>Preview image</title><style>html,body{margin:0;min-height:100%;background:#fff}img{display:block;max-width:100%;height:auto}</style></head><body><img alt="Preview image" src="data:${r.mime};base64,${data}"></body></html>`;
+              // P-ASKLUCID.9 (ADR-0600): an image Ask Lucid edited asks the host for its own right-click menu (Save
+              // image as, Copy path, Show in folder). The frame is opaque-origin, so the host cannot see the click;
+              // the message is only a request, and the host acts only for its Ask Lucid tab's frame.
+              const askMenu = insideDir(ASK_IMAGES_DIR, toFsPath(target))
+                ? `<script>addEventListener('contextmenu',function(e){e.preventDefault();try{parent.postMessage({__lucid:'preview-image-menu',x:e.clientX,y:e.clientY},'*')}catch(_){}},true)</script>`
+                : "";
+              const image = `<!doctype html><html><head><meta charset="utf-8"><title>Preview image</title><style>html,body{margin:0;min-height:100%;background:#fff}img{display:block;max-width:100%;height:auto}</style></head><body><img alt="Preview image" src="data:${r.mime};base64,${data}">${askMenu}</body></html>`;
               return new Response(injectPreviewZoom(image), { headers });
             }
             return new Response(r.bytes, { headers: { ...headers, "content-type": r.mime } });
@@ -6340,6 +6425,88 @@ return Bun.serve({
         return json({ ok: true, data: { targets: [...live, ...remembered] } });
       }
       if (p === "/api/fleet/status") return json({ ok: true, data: await fleet.status() });
+      // P-ATTACH.1 (ADR-0598): stage one file a prompt bar received (copy, extract, scan fail-closed), drop one,
+      // and read the policy. UI token only (never AGENT_ROUTES): the agent must not be able to stage text into
+      // the user's next message.
+      if (p === "/api/attachments/policy" && req.method === "GET") return json({ ok: true, data: managedAttachmentPolicy() });
+      if (p === "/api/attachments" && req.method === "POST") {
+        const policy = managedAttachmentPolicy();
+        if (!policy.enabled) return json({ ok: false, error: ATTACH_DISABLED, data: { ok: false, error: ATTACH_DISABLED } });
+        // Base64 is 4 characters per 3 bytes; the JSON around it is small. Checked before anything is decoded.
+        const maxB64 = Math.ceil(policy.bytes / 3) * 4;
+        const read = await readJsonCapped(req, maxB64 + 64 * 1024);
+        if (!read.ok) return json({ ok: false, error: read.error, data: { ok: false, error: read.error } });
+        const b = read.body && typeof read.body === "object" && !Array.isArray(read.body) ? read.body as Record<string, unknown> : {};
+        const name = typeof b.name === "string" ? b.name : "";
+        let b64 = typeof b.dataBase64 === "string" ? b.dataBase64 : "";
+        if (b64.startsWith("data:")) b64 = b64.slice(b64.indexOf(",") + 1);
+        const refuse = (error: string) => json({ ok: false, error, data: { ok: false, error } });
+        if (!name) return refuse("Send { name, dataBase64 }.");
+        if (b64.length > maxB64 + 4) return refuse(`That file is over the ${Math.round(policy.bytes / (1024 * 1024))} MB limit for one file.`);
+        if (!/^[A-Za-z0-9+/]*={0,2}$/.test(b64) || b64.length % 4 === 1) return refuse("That file's data was not valid base64.");
+        const r = await stageAttachment({
+          name,
+          data: Buffer.from(b64, "base64"),
+          ...(typeof b.mimeType === "string" ? { mimeType: b.mimeType } : {}),
+          ...(typeof b.sourcePath === "string" ? { sourcePath: b.sourcePath } : {}),
+        }, { ...attachDeps(), policy });
+        return json({ ok: r.ok, data: r, ...(r.ok ? {} : { error: r.error }) });
+      }
+      if (p === "/api/attachments/remove" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        return json({ ok: true, data: { removed: typeof b.id === "string" && removeStagedAttachment(ATTACH_ROOT, b.id) } });
+      }
+      // P-ASKLUCID.9 (ADR-0600): Ask Lucid's image edits. UI token only (never AGENT_ROUTES): an edit runs only after
+      // the user confirmed a card that names the model, so the agent must never be able to send an image to a cloud
+      // model, or read the edited files back through the engine.
+      if (p === "/api/image/models" && req.method === "GET") {
+        // Under CUI lockdown no cloud image model may be reached: the card says why instead of listing them.
+        if (asksageOnly() || managedAsksageOnly()) return json({ ok: true, data: { options: [], blocked: "CUI lockdown is on, so images cannot be sent to a cloud image model." } });
+        return json({ ok: true, data: { options: imageModelOptions(availableImageModels(process.env)) } });
+      }
+      if (p === "/api/image/edit" && req.method === "POST") {
+        const refuse = (error: string) => json({ ok: false, error, data: { ok: false, error } });
+        // Base64 is 4 characters per 3 bytes; the JSON around it is small. Checked before anything is decoded.
+        const read = await readJsonCapped(req, Math.ceil(IMAGE_EDIT_LIMITS.inputBytes / 3) * 4 + 64 * 1024);
+        if (!read.ok) return refuse(read.error);
+        const b = read.body && typeof read.body === "object" && !Array.isArray(read.body) ? read.body as Record<string, unknown> : {};
+        const img = b.image && typeof b.image === "object" && !Array.isArray(b.image) ? b.image as Record<string, unknown> : null;
+        const modelId = typeof b.modelId === "string" ? b.modelId : "";
+        const prompt = typeof b.prompt === "string" ? b.prompt.trim() : "";
+        const data = typeof img?.data === "string" ? img.data : "";
+        const mimeType = typeof img?.mimeType === "string" ? img.mimeType : "";
+        if (!modelId || !prompt || !data || !mimeType) return refuse("Send { modelId, prompt, image: { data, mimeType } }.");
+        // The change leaves the machine: scanned like every other text that does (fail-closed).
+        let scan: { block: boolean; reason: string };
+        try { const d = await scanAndDecide(agentScanner(), prompt); scan = { block: d.block, reason: d.reason }; } catch { scan = { block: true, reason: "fail-closed: the scan could not run" }; }
+        if (scan.block) {
+          emitSecurityEvent({ category: "scanner", type: "scanner_block", decision: "block", severity: "high", tool: "ask-lucid-image-edit", reason: (scan.reason || "blocked").slice(0, 200), sessionId: backend.currentSessionId() ?? undefined });
+          return refuse(`The change was blocked by the security scan: ${scan.reason || "blocked"}`.slice(0, 400));
+        }
+        const edited = await editImage({ modelId, prompt, image: { data, mimeType } }, {
+          env: process.env,
+          fetch: (u, init) => fetch(u, init),
+          egress: async (u) => imageEditEgress(u),
+        });
+        if (!edited.ok) return refuse(edited.error);
+        const saved = await saveEditedImage(edited, { prompt }, {
+          root: askLucidDataRoot(homedir()),
+          now: () => Date.now(),
+          id: () => `${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`,
+          fs: { mkdir: mkdirAsync, writeFile: writeFileAsync, rm: rmAsync },
+        });
+        if (!saved.ok) return refuse(saved.error);
+        return json({ ok: true, data: { ok: true, path: saved.path, mimeType: edited.mimeType, model: edited.model, provider: edited.provider } });
+      }
+      // P-ASKLUCID.9: the bytes of one edited image, for the browser build's "Save image as" download. Same
+      // containment as the desktop app's copy (inside ~/.omp/ask-lucid/images, links resolved, an image file).
+      if (p === "/api/image/edited" && req.method === "GET") {
+        const src = editedImageSource(url.searchParams.get("path"));
+        if (!src.ok) return new Response(src.error, { status: 404, headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
+        const ext = src.name.split(".").pop()?.toLowerCase();
+        const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+        return new Response(readFileSync(src.path), { headers: { "content-type": mime, "cache-control": "no-store", "x-content-type-options": "nosniff", "content-disposition": `attachment; filename="${src.name.replace(/[^A-Za-z0-9._-]/g, "_")}"` } });
+      }
       // P-ASKLUCID.1 (ADR-0581): one question to Ask Lucid, the side conversation in the fly-out. UI token only
       // (never AGENT_ROUTES): the agent must not be able to hold a conversation with itself through it. Lucid
       // is shown the fleet lanes, the Fleet Orbit and the knowledge graph hits for the question, each scanned
@@ -6348,9 +6515,12 @@ return Bun.serve({
       // P-ASKLUCID.2 (ADR-0582): the reply may carry PROPOSED actions. This route runs none of them; the user
       // confirms a card and the renderer then calls /api/fleet/spawn, /api/fleet/queue or /api/fleet/goal/task.
       if (p === "/api/ask-lucid" && req.method === "POST") {
-        const b = await readBody<{ text?: unknown; history?: unknown; screen?: unknown; brief?: unknown; settings?: unknown; unusedFeatures?: unknown; shot?: unknown; images?: unknown }>(req);
+        const b = await readBody<{ text?: unknown; history?: unknown; screen?: unknown; brief?: unknown; settings?: unknown; unusedFeatures?: unknown; shot?: unknown; images?: unknown; attachments?: unknown }>(req);
         const q = parseQuestion(b.text);
         if (!q.ok) return json({ ok: false, error: q.error, data: { ok: false, error: q.error, seen: { ...NOTHING_SEEN }, withheld: [], actions: [], actionsDropped: 0 } });
+        // P-ATTACH.1 (ADR-0598): the attached files' block, built and scanned now; a refusal refuses the question.
+        const files = await promptWithAttachments("", b.attachments);
+        if (!files.ok) return json({ ok: false, error: files.error, data: { ok: false, error: files.error, seen: { ...NOTHING_SEEN }, withheld: [], actions: [], actionsDropped: 0 } });
         const reply = await answerAskLucid(q.text, sanitizeHistory(b.history), {
           fleetStatus: () => fleet.status(),
           orbit: () => fleetGoal.snapshot(),
@@ -6368,7 +6538,7 @@ return Bun.serve({
           sessionTail: (id) => sessionMessages(id, 8),
           currentSessionId: () => backend.currentSessionId(),
           now: () => Date.now(),
-        }, { screen: b.screen, brief: b.brief === true, settings: b.settings, unusedFeatures: b.unusedFeatures, shot: b.shot, images: b.images }); // P-ASKLUCID.8: the user's pasted images
+        }, { screen: b.screen, brief: b.brief === true, settings: b.settings, unusedFeatures: b.unusedFeatures, shot: b.shot, images: b.images, ...(files.block ? { attachedFiles: files.block } : {}) }); // P-ASKLUCID.8: the user's pasted images; P-ATTACH.1: files
         return json({ ok: reply.ok, data: reply, ...(reply.error ? { error: reply.error } : {}) });
       }
       // P-AOS.1 (ADR-0452): the standing fleet goal. UI token only (never AGENT_ROUTES): criteria are verified
@@ -6442,16 +6612,21 @@ return Bun.serve({
       // P-FLEET.L3: lane prompts carry P-VISION.1 image blocks like /api/chat (defensively filtered,
       // capped at 6). The same filter guards the queue and its drain below.
       if (p === "/api/fleet/prompt" && req.method === "POST") {
-        const b = await readBody<{ laneId?: unknown; text?: unknown; images?: unknown }>(req);
+        const b = await readBody<{ laneId?: unknown; text?: unknown; images?: unknown; attachments?: unknown }>(req);
         const laneId = String(b.laneId ?? "");
-        const text = String(b.text ?? "");
-        return ndjsonStream("fleet", (emit) => fleet.prompt(laneId, text, emit, laneImages(b.images)));
+        // P-ATTACH.1 (ADR-0598): the staged files' block rides after the text; a refusal is the stream's error.
+        const withFiles = await promptWithAttachments(String(b.text ?? ""), b.attachments);
+        if (!withFiles.ok) { const error = withFiles.error; return ndjsonStream("fleet", async (emit) => { emit({ type: "error", message: error }); }); }
+        return ndjsonStream("fleet", (emit) => fleet.prompt(laneId, withFiles.text, emit, laneImages(b.images)));
       }
       // P-FLEET.L3: the staged-prompt queue - manager-owned (survives dock close), drained FIFO by the
       // renderer when the lane goes idle, so every drained turn streams into a visible card.
+      // P-ATTACH.1 (ADR-0598): staged file ids are kept with the item and expanded (and scanned) at drain.
       if (p === "/api/fleet/queue" && req.method === "POST") {
-        const b = await readBody<{ laneId?: unknown; text?: unknown; images?: unknown }>(req);
-        return json({ ok: true, data: fleet.enqueue(String(b.laneId ?? ""), String(b.text ?? ""), laneImages(b.images)) });
+        const b = await readBody<{ laneId?: unknown; text?: unknown; images?: unknown; attachments?: unknown }>(req);
+        const ids = parseAttachmentIds(b.attachments);
+        if (ids.length && !managedAttachmentPolicy().enabled) return json({ ok: true, data: { ok: false, reason: ATTACH_DISABLED } });
+        return json({ ok: true, data: fleet.enqueue(String(b.laneId ?? ""), String(b.text ?? ""), laneImages(b.images), ids) });
       }
       if (p === "/api/fleet/queue/remove" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown; index?: unknown; expect?: unknown }>(req);
@@ -6475,7 +6650,7 @@ return Bun.serve({
       if (p === "/api/fleet/drain" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown }>(req);
         const laneId = String(b.laneId ?? "");
-        return ndjsonStream("fleet", (emit) => fleet.drain(laneId, emit));
+        return ndjsonStream("fleet", (emit) => fleet.drain(laneId, emit, promptWithAttachments)); // P-ATTACH.1: files built at run time
       }
       // P-FLEET.L4 (ADR-0274): retry streams the re-sent last turn exactly like /api/fleet/prompt;
       // respawn revives an error/stopped lane IN PLACE (same id, memory carried) and returns its view.
@@ -6749,8 +6924,15 @@ return Bun.serve({
         }, req.signal);
       }
       if (p === "/api/chat" && req.method === "POST") {
-        const { text, images, from, share, requestId } = await readBody<{ text?: unknown; images?: unknown; from?: unknown; share?: unknown; requestId?: unknown }>(req);
+        const { text, images, from, share, requestId, attachments } = await readBody<{ text?: unknown; images?: unknown; from?: unknown; share?: unknown; requestId?: unknown; attachments?: unknown }>(req);
         if (requestId !== undefined && typeof requestId !== "string") return Response.json({ ok: false, error: "requestId must be a string" }, { status: 400 });
+        // P-ATTACH.1 (ADR-0598): the staged files' block, built and scanned now. It goes to the MODEL after the
+        // typed text; the clean prompt below stays what guests are mirrored and what the turn records.
+        const files = await promptWithAttachments("", attachments);
+        if (!files.ok) {
+          const error = files.error;
+          return ndjsonStream("chat", async (emit) => { emit({ type: "error", message: error }); emit({ type: "done" }); }, req.signal);
+        }
         // P-VISION.1 (ADR-0136): pasted-image content blocks ride alongside the text (defensively filtered).
         const imgs = Array.isArray(images)
           ? images.filter((im): im is { data: string; mimeType: string } => !!im && typeof (im as { data?: unknown }).data === "string" && typeof (im as { mimeType?: unknown }).mimeType === "string").slice(0, 6)
@@ -6773,7 +6955,8 @@ return Bun.serve({
         }
         const counts = collabManager.active ? accessCounts(collabManager.status().participants) : bodyShare;
         const awareness = buildShareAwareness(counts);
-        const modelPrompt = awareness ? `${awareness}\n\n${prompt}` : prompt;
+        const withFiles = withAttachmentBlock(prompt, files.block); // P-ATTACH.1
+        const modelPrompt = awareness ? `${awareness}\n\n${withFiles}` : withFiles;
         // P-REATTACH.1 + P-INTERJECT.1: a prompt that arrives while the master turn is RUNNING is an
         // INTERJECTION, not a superseding turn. The old path called backend.prompt() unconditionally,
         // which silently stole the running turn's listener and raced a second session/prompt onto the
@@ -6800,7 +6983,8 @@ return Bun.serve({
         };
         const activeTurn = backend.turnStatus();
         if (activeTurn?.running) {
-          const noteText = prompt.trim();
+          // P-ATTACH.1: an interjection is capped at a few thousand characters, so it names the files' text by path.
+          const noteText = withAttachmentReference(prompt, files.textPaths).trim();
           return ndjsonStream("chat-interject", async (emit, connectionAbort) => {
             const attachment = backend.attachTurn(emit, activeTurn.turnId, connectionAbort);
             if (!attachment.attached || !attachment.running) { attachment.detach(); await runPrompt(emit, connectionAbort); return; }
@@ -7160,6 +7344,7 @@ process.env.LUCID_FLEET_STATUS_URL = `http://127.0.0.1:${server.port}/api/fleet/
 startLiveHeartbeat(); // P-SESS-ARCHIVE.1 (ADR-0517): tell other engines which sessions must not be archived
 scheduleAutoArchive(); // P-SESS-ARCHIVE.1: only does anything while the rule is on
 scheduleAskLucidSweep(); // P-ASKLUCID.5 (ADR-0586): Ask Lucid's throwaway sessions do not pile up on disk
+scheduleAttachmentSweep(); // P-ATTACH.1 (ADR-0598): staged attachment copies are kept for the policy's retention only
 // P-SANDBOX.8: the sandbox_grant_dir tool (omp subprocess) POSTs its user-approved {path,mode,reason}
 // claim here. Same token'd convention as LUCID_FLEET_STATUS_URL; the endpoint applies NOTHING without a
 // fresh matching approval parked by the desktop's grant dialog (fail-closed, defense in depth).

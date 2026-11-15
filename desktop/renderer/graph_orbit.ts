@@ -22,6 +22,7 @@
 import type { GraphNode, PersonalGraphData } from "./bridge.ts";
 import { type GraphHandle, TRUST_COLOR, kindColor, kindLabel } from "./graph.ts";
 import { lineage, orbitLayout, type OrbitLayout } from "./kg_orbit_layout.ts";
+import { tipEsc } from "./tip_text.ts";
 
 export interface OrbitView { yaw: number; pitch: number; zoom: number }
 export interface OrbitPerfOpts {
@@ -72,9 +73,10 @@ export function mountOrbitGraph(host: HTMLElement, data: PersonalGraphData, onSe
   const dirBtns: Record<LineageDir, HTMLButtonElement> = {
     up: mk("button", "", "Upstream"), down: mk("button", "", "Downstream"), both: mk("button", "on", "Both"),
   };
-  dirBtns.up.title = "What this depends on, transitively";
-  dirBtns.down.title = "What depends on this, transitively (blast radius)";
-  dirBtns.both.title = "Upstream and downstream";
+  // P-TIP.1 (ADR-0599): premium tooltips (ui.ts initTooltips), not native titles.
+  dirBtns.up.dataset.tip = "What this depends on, transitively";
+  dirBtns.down.dataset.tip = "What depends on this, transitively (blast radius)";
+  dirBtns.both.dataset.tip = "Upstream and downstream";
   for (const d of ["up", "down", "both"] as const) { dirBtns[d].type = "button"; dirBtns[d].dataset.dir = d; dirSeg.append(dirBtns[d]); }
   const hudCount = mk("div", "orb-hud-count");
   const upSec = mk("div", "orb-sec"), downSec = mk("div", "orb-sec");
@@ -155,7 +157,7 @@ export function mountOrbitGraph(host: HTMLElement, data: PersonalGraphData, onSe
       const row = mk("button", "orb-row"); row.type = "button"; row.dataset.idx = String(i);
       const dot = mk("i", "orb-dot"); dot.style.background = colorOf(i);
       row.append(dot, mk("span", "orb-row-txt", nodes[i]!.name));
-      row.title = nodes[i]!.id;
+      row.dataset.tip = tipEsc(nodes[i]!.id);
       sec.append(row);
     }
     if (sorted.length > MAX_ROWS) sec.append(mk("div", "orb-more", `+${sorted.length - MAX_ROWS} more`));
@@ -165,7 +167,7 @@ export function mountOrbitGraph(host: HTMLElement, data: PersonalGraphData, onSe
     if (selIdx < 0) { hud.hidden = true; return; }
     hud.hidden = false;
     const n = nodes[selIdx]!;
-    hudName.textContent = n.name; hudName.title = n.id;
+    hudName.textContent = n.name; hudName.dataset.tip = tipEsc(n.id);
     for (const d of ["up", "down", "both"] as const) dirBtns[d].classList.toggle("on", d === dir);
     const up = mk("span", "orb-up", `${upList.length} upstream`), down = mk("span", "orb-down", `${downList.length} downstream`);
     hudCount.replaceChildren(up, document.createTextNode(" \u00b7 "), down, document.createTextNode(` \u00b7 layer ${L.points[selIdx]!.layer}`));
@@ -181,7 +183,7 @@ export function mountOrbitGraph(host: HTMLElement, data: PersonalGraphData, onSe
     for (const k of L.kinds) {
       const chip = mk("button", "orb-chip"); chip.type = "button"; chip.dataset.kind = k.kind;
       chip.classList.toggle("off", hiddenKinds.has(k.kind));
-      chip.title = hiddenKinds.has(k.kind) ? "Show this kind" : "Hide this kind";
+      chip.dataset.tip = hiddenKinds.has(k.kind) ? "Show this kind" : "Hide this kind";
       const dot = mk("i", "orb-dot"); dot.style.background = lens === "trust" ? "#8a90a0" : kindColor(k.kind);
       chip.append(dot, mk("span", "orb-chip-txt", `${kindLabel(k.kind)} ${k.count}`));
       legend.append(chip);

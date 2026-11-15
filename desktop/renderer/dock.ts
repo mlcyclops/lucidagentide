@@ -149,7 +149,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, attrs: R
 }
 
 function toolBtn(label: string, paths: readonly string[], cls = ""): HTMLButtonElement {
-  const b = el("button", `ald-tool ${cls}`.trim(), { type: "button", "aria-label": label, title: label });
+  const b = el("button", `ald-tool ${cls}`.trim(), { type: "button", "aria-label": label, "data-tip": label }); // P-TIP.1 (ADR-0599)
   b.appendChild(svgIcon(paths));
   return b;
 }

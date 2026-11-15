@@ -38,6 +38,8 @@
 
 import { $ } from "./dom.ts";
 import { esc } from "./format.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
+import { setTip } from "./ui.ts";
 import { icon } from "./icons.ts";
 import type { LucidBridge } from "./bridge.ts";
 import type { OrbitSlot } from "./orbit_layout.ts";
@@ -212,7 +214,7 @@ function paintRemoteNode(card: HTMLElement, s: RemoteSpokeView): void {
   }
   setText(card, ".orbit-model", s.models.default ?? "model not reported");
   const host = hostLabel(s.host);
-  card.title = `${s.label} (remote spoke ${s.node})\n${stateLabel(s, now)}\n${latencyLabel(s.latencyMs)}${s.via ? ` over ${VIA_LABEL[s.via]}` : ""}${host ? `\n${host}` : ""}${s.error ? `\n${s.error}` : ""}`;
+  setTip(card, `${s.label} (remote spoke ${s.node})`, `${stateLabel(s, now)}\n${latencyLabel(s.latencyMs)}${s.via ? ` over ${VIA_LABEL[s.via]}` : ""}${host ? `\n${host}` : ""}${s.error ? `\n${s.error}` : ""}`);
 }
 
 /** ADR-0508: whether the orbit offers "Start a remote task": the hub may drive and has at least one spoke.
@@ -269,7 +271,7 @@ export function remoteHubSectionHtml(): string {
     waiting ? `${waiting} waiting on you` : "",
     alerts ? `${alerts} ${alerts === 1 ? "alert" : "alerts"}` : "",
   ].filter(Boolean).join(" \u00b7 ");
-  return `<div class="orbit-hubrow rs-hubrow" title="${esc(hub.node)}">
+  return `<div class="orbit-hubrow rs-hubrow" data-tip="${esc(tipEsc(hub.node))}">
       <span class="orbit-ghost-id"><b>${esc(hub.label)}</b><small>${esc(summary)}</small></span>
       ${remoteDeployVisible() ? `<button class="btn-mini orbit-btn" data-rs-deploy data-tip="Start a task on a remote spoke|Pick a spoke by how fast it answers, its models and its free lanes, then start a task there.">${icon("bolt", 12)} Start a task</button>` : ""}
       <button class="btn-mini orbit-btn" data-rs-view data-tip="Remote spokes|Every remote spoke and its alerts, in their own view, with a button for the hub's admin panel. Also on the left rail.">${icon("link", 12)} Open</button>
@@ -337,7 +339,7 @@ function modelGroup(title: string, ids: readonly string[], def: string | null, k
     const name = document.createElement("span");
     name.className = "rs-model-id";
     name.textContent = id;
-    name.title = id;
+    setTip(name, id);
     li.append(name);
     if (id === def) {
       const chip = document.createElement("span");
@@ -791,7 +793,7 @@ function paintLaneCard(entry: LaneCard, lane: RemoteLane, a: HubActions, now: nu
   const sig = JSON.stringify([s.label, s.state, s.silentSince, lane.state, t, a]);
   if (sig !== entry.sig) {
     entry.sig = sig;
-    card.title = `${s.label} (${s.node})`;
+    setTip(card, `${s.label} (${s.node})`);
     setText(card, "[data-rs-lane-spoke]", s.label);
     setText(card, "[data-rs-lane-state]", lane.state === s.state ? stateLabel(s, now) : REMOTE_STATE_LABEL[lane.state]);
     setText(card, "[data-rs-lane-task]", t ? t.name : "Waiting on you, no open task listed");
@@ -962,7 +964,7 @@ function choiceHtml(c: DeployChoice, checked: boolean, now: number): string {
     expiry,
   ].join("");
   const checkedAt = s.checkedAt ? `checked ${new Date(s.checkedAt).toLocaleTimeString()}` : "not checked yet";
-  return `<label class="rs-choice rs-${REMOTE_TONE[s.state]}${c.eligible ? "" : " off"}" title="${esc(s.label)} (${esc(s.node)})">
+  return `<label class="rs-choice rs-${REMOTE_TONE[s.state]}${c.eligible ? "" : " off"}" data-tip="${esc(tipEsc(s.label))} (${esc(tipEsc(s.node))})">
       <input type="radio" name="rs-deploy" value="${esc(s.node)}"${checked ? " checked" : ""}${c.eligible ? "" : " disabled"}>
       <i class="orbit-led"></i>
       <span class="rs-choice-main">

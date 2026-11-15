@@ -596,7 +596,7 @@ export function mountAgentArcade(host: HTMLElement, scorePort?: ArcadeScorePort,
       <p class="agent-arcade-help">Arrows move · Up / Alt jump · Down duck · Ctrl punch · Down + Ctrl kick. Crate lids are solid: land on one and jump again. Duck bars and stars, smash flower pots. Five clears unlock Flycatch.</p>
       <div class="agent-arcade-alt" hidden></div>
       ${options.onOpenPreviewGame ? `<div class="agent-arcade-preview" role="group" aria-label="Secret games in Preview">
-        <span>Secret games:</span>${Object.entries(ARCADE_GAMES).map(([id, game]) => `<span class="agent-arcade-launch"><button type="button" data-preview-game="${id}" data-where="preview" title="Play ${game.name} in the sandboxed Preview panel">${game.name}</button><button type="button" data-preview-game="${id}" data-where="browser" title="Open ${game.name} full size in your default browser" aria-label="Open ${game.name} in your browser">↗</button></span>`).join('')}
+        <span>Secret games:</span>${Object.entries(ARCADE_GAMES).map(([id, game]) => `<span class="agent-arcade-launch"><button type="button" data-preview-game="${id}" data-where="preview" data-tip="Play ${game.name} in the sandboxed Preview panel">${game.name}</button><button type="button" data-preview-game="${id}" data-where="browser" data-tip="Open ${game.name} full size in your default browser" aria-label="Open ${game.name} in your browser">↗</button></span>`).join('')}
       </div>` : ''}
     </div>`;
   host.appendChild(root);

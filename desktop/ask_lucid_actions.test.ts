@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // desktop/ask_lucid_actions.test.ts - P-ASKLUCID.2 (ADR-0582): what Lucid may propose. The block in a reply
-// is untrusted input: only four kinds exist, an action is rebuilt from named fields, ids must be ones Lucid
+// is untrusted input: only the listed kinds exist, an action is rebuilt from named fields, ids must be ones Lucid
 // was shown, every text is bounded and scanned, and nothing in the engine path runs an action.
 
 import { describe, expect, test } from "bun:test";
@@ -118,6 +118,24 @@ describe("validateAction", () => {
     }
   });
 
+  test("edit_image (P-ASKLUCID.9) names an image the user attached, by position, and is marked as sending content out", () => {
+    const two: KnownIds = { ...KNOWN, images: 2 };
+    const edit = { kind: "edit_image", why: "You asked for a sunset sky.", params: { image: 2, instruction: "Make the sky a sunset.\nKeep the people as they are." } };
+    expect(validateAction(edit, two, 0)).toEqual({ id: "a1", kind: "edit_image", label: "Edit image 2", why: edit.why, risk: "external", params: { image: 2, instruction: edit.params.instruction } });
+    // A bad index is dropped: beyond the count, zero, negative, fractional, a string, or no images at all.
+    for (const image of [3, 0, -1, 1.5, "1", null, undefined]) expect(validateAction({ ...edit, params: { ...edit.params, image } }, two, 0)).toBeNull();
+    expect(validateAction({ ...edit, params: { ...edit.params, image: 1 } }, KNOWN, 0)).toBeNull(); // known context without `images`
+    expect(validateAction({ ...edit, params: { ...edit.params, image: 1 } }, { ...KNOWN, images: 0 }, 0)).toBeNull();
+    // The instruction is bounded: over the limit drops the action, empty drops it, at the limit passes.
+    expect(validateAction({ ...edit, params: { image: 1, instruction: "x".repeat(ACTION_LIMITS.instruction + 1) } }, two, 0)).toBeNull();
+    expect(validateAction({ ...edit, params: { image: 1, instruction: "   " } }, two, 0)).toBeNull();
+    expect(validateAction({ ...edit, params: { image: 1, instruction: "x".repeat(ACTION_LIMITS.instruction) } }, two, 0)).not.toBeNull();
+    // Rebuilt: no model, key, path or quality can ride along from the block.
+    const a = validateAction({ ...edit, risk: "low", params: { ...edit.params, model: "gpt-evil", path: "/etc/passwd", quality: "max", apiKey: "sk-x" } }, two, 0)!;
+    expect(Object.keys(a.params).sort()).toEqual(["image", "instruction"]);
+    expect(a.risk).toBe("external"); // the model cannot lower the risk it is shown with
+  });
+
   test("control characters cannot hide in a prompt, and newlines in it are kept", () => {
     const a = validateAction({ kind: "prompt_lane", params: { laneId: "lane-1", text: `line one\nline two${String.fromCodePoint(7)}${String.fromCodePoint(0x2028)}end` } }, KNOWN, 0)!;
     expect(a.kind === "prompt_lane" && a.params.text).toBe("line one\nline two end");
@@ -184,6 +202,22 @@ describe("what the card shows is what is sent", () => {
   test("actionText carries every string an action would send, for the scanner", () => {
     const t = actionText(validateAction(task, KNOWN, 0)!);
     for (const s of ["Add the suite task", "It gates the beta.", "Run the suite", "Run make test and fix what fails.", "A green make test run.", "$ make test"]) expect(t).toContain(s);
+  });
+
+  test("edit_image shows the image, the change and when the model is chosen, and its instruction is scanned", () => {
+    const a = validateAction({ kind: "edit_image", label: "Sunset sky", why: "You asked.", params: { image: 1, instruction: "Make the sky a sunset." } }, { ...KNOWN, images: 1 }, 0)!;
+    const rows = Object.fromEntries(actionDetails(a).map((r) => [r.label, r.value]));
+    expect(rows).toMatchObject({ Image: "Image 1 you attached", Change: "Make the sky a sunset.", Model: "Chosen when you confirm" });
+    expect(rows.Sends).toContain("may charge");
+    for (const s of ["Sunset sky", "You asked.", "Make the sky a sunset."]) expect(actionText(a)).toContain(s);
+    expect(ASK_KIND_LABEL.edit_image).toBe("Edit image");
+  });
+
+  test("the kinds are exactly these, and the brief teaches edit_image only for an attached image", () => {
+    expect([...ASK_ACTION_KINDS]).toEqual(["spawn_lane", "prompt_lane", "add_orbit_task", "open_view", "set_setting", "edit_image"]);
+    expect(ASK_LUCID_SYSTEM).toContain("- edit_image {");
+    expect(ASK_LUCID_SYSTEM).toContain("Propose it only when the user attached an image to this question and asks to change, restyle, fix or extend it.");
+    expect(ASK_LUCID_SYSTEM).toContain("Never propose it to make an image from nothing");
   });
 
   test("every kind and risk has a label, and the dropped note counts", () => {
@@ -300,8 +334,10 @@ describe("only the user's click runs an action", () => {
   });
 
   test("in the panel an action runs from exactly one place: the Confirm button's click", () => {
-    expect(panel.split("run(a)").length - 1).toBe(1);
-    const at = panel.indexOf("run(a)");
+    // P-ASKLUCID.9: the call now carries the card's context (the attached images, the chosen model).
+    const calls = [...panel.matchAll(/\brun\(a[,)]/g)];
+    expect(calls).toHaveLength(1);
+    const at = calls[0]!.index!;
     const before = panel.slice(Math.max(0, at - 400), at);
     expect(before).toContain('confirm.addEventListener("click"');
     expect(panel).not.toContain("confirm.click()"); // never clicked by code

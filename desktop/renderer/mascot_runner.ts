@@ -484,7 +484,7 @@ export function mountComposerRunner(wrap: HTMLElement, getState: () => MascotInp
   // the ninja invisible. The class only carries appearance and the focus ring.
   hit.style.cssText = "position:absolute;padding:0;border:0;background:transparent";
   hit.setAttribute("aria-label", HIT_LABEL);
-  hit.title = HIT_LABEL;
+  hit.dataset.tip = HIT_LABEL; // P-TIP.1 (ADR-0599): premium tooltip, not a native title
   wrap.append(cv, hit);
   const ctx = cv.getContext("2d");
   const mirroredFrames: Record<string, string[]> = Object.fromEntries(Object.entries(MASCOT_FRAMES).map(([id, frame]) => [id, mirrorFrame(frame)]));

@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   LANE_TAB_CAP, PREVIEW_KIND_ICON, isAutoPreviewPath, isPreviewablePath, laneTabId, previewKindLabel, previewPathKind,
-  removeLaneTab, upsertLaneTab, type PreviewTab,
+  removeLaneTab, upsertLaneTab, type PreviewTab, ASK_LUCID_TAB_ID, upsertAskLucidTab,
 } from "./preview_tabs.ts";
 import { PREVIEW_KIND_EXT } from "../preview_resolve.ts";
 
@@ -15,6 +15,23 @@ const lane = (n: number): PreviewTab[] => {
   for (let i = 1; i <= n; i++) tabs = upsertLaneTab(tabs, `L${i}`, `Lane ${i}`, `C:/work/app${i}.html`);
   return tabs;
 };
+
+describe("upsertAskLucidTab (P-ASKLUCID.9)", () => {
+  test("adds one Ask Lucid tab, then points it at a newer image in place", () => {
+    const one = upsertAskLucidTab(lane(2), "C:/h/.omp/ask-lucid/images/d/a.png");
+    expect(one[2]).toEqual({ id: ASK_LUCID_TAB_ID, label: "Ask Lucid", path: "C:/h/.omp/ask-lucid/images/d/a.png", kind: "asklucid" });
+    const two = upsertAskLucidTab(one, "C:/h/.omp/ask-lucid/images/d/b.png");
+    expect(two.filter((t) => t.id === ASK_LUCID_TAB_ID)).toHaveLength(1);
+    expect(two[2]?.path).toBe("C:/h/.omp/ask-lucid/images/d/b.png");
+    expect(one[2]?.path).toBe("C:/h/.omp/ask-lucid/images/d/a.png"); // the input is never mutated
+  });
+  test("the lane cap never evicts it", () => {
+    let tabs = upsertAskLucidTab([], "C:/x.png");
+    for (let i = 1; i <= LANE_TAB_CAP + 3; i++) tabs = upsertLaneTab(tabs, `L${i}`, `Lane ${i}`, `C:/work/app${i}.html`);
+    expect(tabs.some((t) => t.id === ASK_LUCID_TAB_ID)).toBe(true);
+    expect(tabs.filter((t) => t.kind === "lane")).toHaveLength(LANE_TAB_CAP);
+  });
+});
 
 describe("upsertLaneTab", () => {
   test("adds a lane tab with the lane:<id> id, kind lane, and the lane name as label", () => {

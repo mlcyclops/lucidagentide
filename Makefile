@@ -725,6 +725,10 @@ demo-P-MINI.2: ## P-MINI.2 (ADR-0583): Lucid may suggest things - a live holiday
 demo-P-MINI.3: ## P-MINI.3 (ADR-0596): a smaller, calmer Lucid who wears the theme - off on the prompt bar until turned on (the LUCID Agent role keeps him), a right-click turn-off that beats every role with a way back, Small (mini Lucid's size) by default and Large (classic) kept, the Settings card's rows, and a color theme recoloring him while the Lucid themes keep the brand green
 	$(BUN) run desktop/scripts/demo_p_mini_3.ts
 
+.PHONY: demo-P-ATTACH.1
+demo-P-ATTACH.1: ## P-ATTACH.1 (ADR-0598): files on the prompt bars - the real scanner and a throwaway root: Markdown, CSV, code, an unknown text type and a Word file copied and read; a program, an archive, binary data and hidden Unicode kept out (the blocked copy deleted); a dead scanner blocks (fail-closed); each file fenced as untrusted in the prompt block with its managed copy named; forged ids resolve to nothing; copies swept after seven days
+	$(BUN) run desktop/scripts/demo_p_attach_1.ts
+
 .PHONY: demo-P-ASKLUCID.3
 demo-P-ASKLUCID.3: ## P-ASKLUCID.3 (ADR-0584): Ask Lucid sees the screen and opens above every popup - the real service with the real scanner: the screen as the first view with the top surface marked and fenced, the Preview panel's page included, a key on screen redacted in the renderer and again on the engine, a screen with a hidden payload withheld while the other views arrive, a dead scanner withholding it (fail-closed), a collector that reads no field value, and the dock above modals, the Fleet grid and the Orbit map
 	$(BUN) run desktop/scripts/demo_p_asklucid_3.ts

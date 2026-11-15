@@ -18,6 +18,7 @@ import { aosLiveness, goalProgress, humanSeconds, isTerminalGoal, isTerminalTask
 import type { AosControl, AosSnapshot, FleetGoalReply, LucidBridge } from "./bridge.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 
 export interface OrbitGoalDeps {
   fleetGoal: LucidBridge["fleetGoal"];
@@ -113,9 +114,9 @@ export function goalPanelHtml(now: number, closeBtn: string): string {
   const p = goalProgress(snap);
   const terminal = isTerminalGoal(g.status);
   const paused = snap.heartbeat.status === "paused";
-  const crit = g.criteria.map((c) => `<label class="orbit-goal-crit${c.met ? " met" : ""}" title="${esc(c.text)}"><input type="checkbox" data-goal-crit="${esc(c.id)}"${c.met ? " checked" : ""}${terminal ? " disabled" : ""}><span>${esc(c.text)}</span></label>`).join("");
+  const crit = g.criteria.map((c) => `<label class="orbit-goal-crit${c.met ? " met" : ""}" data-tip="${esc(tipEsc(c.text))}"><input type="checkbox" data-goal-crit="${esc(c.id)}"${c.met ? " checked" : ""}${terminal ? " disabled" : ""}><span>${esc(c.text)}</span></label>`).join("");
   const roster = snap.agents.length
-    ? snap.agents.map((a) => `<div class="orbit-goal-agent" data-agent="${a.status}" title="${esc(a.name)}"><i></i><b>${esc(a.name)}</b><small>${AGENT_WORD[a.status]}</small></div>`).join("")
+    ? snap.agents.map((a) => `<div class="orbit-goal-agent" data-agent="${a.status}" data-tip="${esc(tipEsc(a.name))}"><i></i><b>${esc(a.name)}</b><small>${AGENT_WORD[a.status]}</small></div>`).join("")
     : `<div class="orbit-ghosts-empty">No spokes yet. Spokes you spawn work toward this goal.</div>`;
   const controls = terminal
     ? `<button class="btn-mini orbit-btn" data-goal-control="dismiss">${icon("close", 12)} Dismiss</button>`
@@ -124,7 +125,7 @@ export function goalPanelHtml(now: number, closeBtn: string): string {
         : `<button class="btn-mini orbit-btn" data-goal-control="pause">${icon("minus", 12)} Pause</button>`}
        <button class="btn-mini orbit-btn orbit-deny" data-goal-control="cancel" data-tip="Cancel the goal|Ends it for good (AOS-1 terminal state). Spokes keep running; only the goal stops.">${icon("stopBadge", 12)} Cancel goal</button>`;
   return `${head}${beat}
-    <div class="orbit-goal-title" data-goal-status="${g.status}"><b title="${esc(g.title)}">${esc(g.title)}</b><span class="orbit-goal-pill">${esc(paused && !terminal ? "paused" : g.status)}</span></div>
+    <div class="orbit-goal-title" data-goal-status="${g.status}"><b data-tip="${esc(tipEsc(g.title))}">${esc(g.title)}</b><span class="orbit-goal-pill">${esc(paused && !terminal ? "paused" : g.status)}</span></div>
     ${g.blockedReason ? `<p class="orbit-goal-why">Blocked, ${esc(g.blockedReason)}. Tick the criteria that are done, or cancel and set a new goal with a larger budget.</p>` : ""}
     <div class="orbit-goal-bar" style="--goal-pct:${p.pct}"><i></i></div>
     <div class="orbit-goal-sub">${p.met} of ${p.total} criteria met</div>
@@ -209,7 +210,7 @@ function taskRowHtml(t: AosTask): string {
   const result = t.result ? `<details class="orbit-task-result"><summary>Result</summary><p>${esc(t.result)}</p></details>` : "";
   const cancel = isTerminalTask(t.status) ? "" : `<button class="orbit-ghost-x" data-task-cancel="${esc(t.id)}" data-tip="Cancel task|Stops dispatching it. A turn already running finishes; its outcome is ignored.">${icon("close", 11)}</button>`;
   return `<div class="orbit-task" data-task-status="${t.status}">
-      <div class="orbit-task-head"><i></i><b title="${esc(t.title)}">${esc(t.id)} ${esc(t.title)}</b><span class="orbit-task-chip">${esc(laneName(t.assignee))}</span><span class="orbit-task-chip">${t.attempts}/${t.maxAttempts}</span>${cancel}</div>
+      <div class="orbit-task-head"><i></i><b data-tip="${esc(tipEsc(t.title))}">${esc(t.id)} ${esc(t.title)}</b><span class="orbit-task-chip">${esc(laneName(t.assignee))}</span><span class="orbit-task-chip">${t.attempts}/${t.maxAttempts}</span>${cancel}</div>
       <div class="orbit-task-sub">${esc(phase)}${t.dependsOn.length ? ` \u00b7 after ${esc(t.dependsOn.join(", "))}` : ""}</div>
       ${failure}<div class="orbit-task-checks">${checks}</div>${result}
     </div>`;
@@ -231,7 +232,7 @@ export function taskFormHtml(): string {
     ? lanes.map((a) => `<option value="${esc(a.laneId)}">${esc(a.name)}</option>`).join("")
     : `<option value="">spawn a spoke first</option>`;
   const deps = g.tasks.filter((t) => t.status !== "failed" && t.status !== "cancelled")
-    .map((t) => `<label class="orbit-task-dep" title="${esc(t.title)}"><input type="checkbox" data-task-dep value="${esc(t.id)}"><span>${esc(t.id)} ${esc(t.title)}</span></label>`).join("");
+    .map((t) => `<label class="orbit-task-dep" data-tip="${esc(tipEsc(t.title))}"><input type="checkbox" data-task-dep value="${esc(t.id)}"><span>${esc(t.id)} ${esc(t.title)}</span></label>`).join("");
   return `<details class="orbit-spawn-more orbit-task-new">
       <summary>Add a task</summary>
       <label class="orbit-spawn-l">task<input type="text" data-task-title maxlength="200" placeholder="a short name for the work"></label>

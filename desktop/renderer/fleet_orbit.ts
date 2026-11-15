@@ -18,7 +18,8 @@ import { $, el } from "./dom.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts"; // P-FLEET.L18: the on-orbit form clones too
 import { ageStr, esc } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
-import { popover, showToast } from "./ui.ts";
+import { popover, setTip, showToast } from "./ui.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 import { openRepoDetails, paintRepoChip } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): repo + push target per spoke
 import { githubPickNote, mountRepoPicker, repoPickerHtml } from "./repo_picker.ts"; // P-REPO.1: pick a repo instead of typing a URL
 import type { ApprovalScope, FleetStatusView, LaneView, LucidBridge, TimelineEntry } from "./bridge.ts";
@@ -424,7 +425,7 @@ function paintHubsPanel(): void {
   const note = hubList.length < 2
     ? `<div class="orbit-ghosts-empty">Every running local spoke belongs to this hub. A new session starts its own hub; spokes started there stay with it and show up here.</div>`
     : "";
-  box.innerHTML = head + remote + hubList.map((h, i) => `<div class="orbit-hubrow${h.current ? " current" : ""}" data-hub-i="${i}" title="${esc(h.sessionId)}">
+  box.innerHTML = head + remote + hubList.map((h, i) => `<div class="orbit-hubrow${h.current ? " current" : ""}" data-hub-i="${i}" data-tip="${esc(tipEsc(h.sessionId))}">
       <span class="orbit-ghost-id"><b>${esc(hubTitle(h.sessionId))}</b><small>${h.lanes.length} ${h.lanes.length === 1 ? "spoke" : "spokes"}${h.waiting ? ` \u00b7 ${h.waiting} waiting on you` : ""}</small></span>
       ${h.current
         ? `<i class="spoke-sw-here">this hub</i>`
@@ -449,7 +450,7 @@ function ghostRow(g: GhostSpoke, i: number, list: GhostList): string {
         ? `<button class="orbit-ghost-x" data-ghost-unarchive data-tip="Unarchive|Back to the main list.">${icon("archive", 12)}</button>`
         : `<button class="orbit-ghost-x" data-ghost-archive data-tip="Archive|Tucks this spoke into the archived section. Reversible; a future run also resurfaces it.">${icon("archive", 12)}</button>`}
       ${HIDE_BTN}`;
-  return `<div class="orbit-ghost${list === "a" ? "" : " archived"}" data-ghost-i="${i}" data-ghost-list="${list}" title="${esc(g.cwd)}\n${esc(g.model)}">
+  return `<div class="orbit-ghost${list === "a" ? "" : " archived"}" data-ghost-i="${i}" data-ghost-list="${list}" data-tip="${esc(tipEsc(g.cwd))}\n${esc(tipEsc(g.model))}">
       <i class="orbit-ghost-dot"></i>
       <span class="orbit-ghost-id"><b>${esc(g.name)}</b><small>${esc(folderTail(g.cwd))} \u00b7 ${g.turns} ${g.turns === 1 ? "turn" : "turns"} \u00b7 ${ageStr(g.lastAt)}</small><small class="orbit-ghost-err" data-ghost-err></small></span>
       ${actions}
@@ -574,7 +575,7 @@ function paintSpawnPanel(): void {
   const models = fleetModelOptions(!pick || offered.some((o) => o.value === pick) ? offered : [{ value: pick, label: pick }, ...offered]);
   box.innerHTML = `<div class="orbit-panel-h">${icon("plus", 14)}<b>New spoke</b><button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button></div>
     <label class="orbit-spawn-l"><span data-spawnp-cwd-lbl>folder</span><span class="orbit-spawn-row"><input type="text" data-spawnp-cwd value="${esc(deps.getMasterCwd())}" placeholder="the folder this spoke works in">
-      <button class="btn-mini orbit-btn" data-spawnp-browse title="Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button></span></label>
+      <button class="btn-mini orbit-btn" data-spawnp-browse data-tip="Browse|Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button></span></label>
     ${repoPickerHtml()}
     <small class="orbit-spawn-note" data-spawnp-repo-note hidden></small>
     <details class="orbit-spawn-more">
@@ -585,7 +586,7 @@ function paintSpawnPanel(): void {
       <input type="password" data-spawnp-pat autocomplete="off" spellcheck="false" placeholder="Personal access token (private repos)">
       <label class="orbit-spawn-save"><input type="checkbox" data-spawnp-save checked><span data-spawnp-save-txt>Remember this token for this host</span></label>
     </div>
-    <label class="orbit-spawn-save orbit-spawn-wt" title="The worktree is created next to the repo, starts at its last commit (uncommitted edits in this folder are not copied), and is kept when the spoke closes."><input type="checkbox" data-spawnp-wt><span>Own worktree: this spoke gets a new branch and its own copy of the repo, so it runs beside other agents here. I accept that merging it back can conflict.</span></label>
+    <label class="orbit-spawn-save orbit-spawn-wt" data-tip="Own worktree|The worktree is created next to the repo, starts at its last commit (uncommitted edits in this folder are not copied), and is kept when the spoke closes."><input type="checkbox" data-spawnp-wt><span>Own worktree: this spoke gets a new branch and its own copy of the repo, so it runs beside other agents here. I accept that merging it back can conflict.</span></label>
     <label class="orbit-spawn-l">name <i>optional</i><input type="text" data-spawnp-name placeholder="what this spoke is for (defaults to the folder name)" maxlength="64"></label>
     <label class="orbit-spawn-l">model<select data-spawnp-model>${models.map((m) => `<option value="${esc(m.value)}"${m.value === pick ? " selected" : ""}>${esc(m.label)}</option>`).join("") || `<option value="">master's model</option>`}</select></label>
     <div class="orbit-spawn-row"><button class="btn-mini orbit-btn orbit-spawn-go" data-spawnp-go>${icon("bolt", 13)} Create spoke</button></div>
@@ -647,7 +648,7 @@ function paintOrbitRepoHint(): void {
 /** Same as the grid form: a long folder path must show its ending inside the panel. */
 function revealOrbitPathEnd(input: HTMLInputElement | null): void {
   if (!input) return;
-  input.title = input.value;
+  setTip(input, input.value);
   const show = (): void => {
     const end = input.value.length;
     try { input.setSelectionRange(end, end); } catch { /* detached, or a type that has no selection */ }
@@ -1080,7 +1081,7 @@ function paintHub(): void {
   const sess = $("[data-orbit-hub-sess]", view!) as HTMLElement;
   const hub = lastStatus?.hub ?? null;
   const title = hub ? hubTitle(hub) : "new session";
-  if (sess.textContent !== title) { sess.textContent = title; sess.title = hub ?? ""; }
+  if (sess.textContent !== title) { sess.textContent = title; setTip(sess, hub ?? ""); }
   const here = $("[data-orbit-hub-here]", view!) as HTMLElement;
   const target = deps?.getTarget();
   const onLane = !!target && isLaneTarget(target);
@@ -1172,7 +1173,7 @@ function paintNode(card: HTMLElement, lane: LaneView): void {
   const keep = card.classList.contains("orbit-enter") ? " orbit-enter" : "";
   if (card.getAttribute("class") !== cls + keep) card.setAttribute("class", cls + keep);
   setText(card, ".orbit-name", lane.name);
-  card.title = `${lane.name}\n${lane.cwd}\n${lane.model}${doubt && lane.progress ? `\n\n${lane.progress.liveness.label}\n${lane.progress.liveness.detail}` : ""}`;
+  setTip(card, lane.name, `${lane.cwd}\n${lane.model}${doubt && lane.progress ? `\n\n${lane.progress.liveness.label}\n${lane.progress.liveness.detail}` : ""}`);
   setText(card, ".orbit-glance", spokeGlance(lane, statusEta())); // P-PROGRESS.3: the percent is opt-in
   setText(card, ".orbit-model", lane.model);
   // P-HUB-PICK.1 (ADR-0516): every spoke names its codebase (hosted repo, git folder, or plain folder) in
@@ -1306,7 +1307,7 @@ export function renderSpokeBanner(target: ComposerTarget): void {
   }
   const name = $(".spoke-name", banner) as HTMLElement;
   if (name.textContent !== target.name) name.textContent = target.name;
-  banner.title = `${target.name}\n${target.cwd}\n${target.model}`;
+  setTip(banner, target.name, `${target.cwd}\n${target.model}`);
   // The banner runs its OWN status poll (grid cadence) so the security chip reacts to an approval ask
   // even when neither the orbit nor the grid is open.
   if (bannerTimer == null) bannerTimer = window.setInterval(() => void bannerRefresh(), POLL_MS);
