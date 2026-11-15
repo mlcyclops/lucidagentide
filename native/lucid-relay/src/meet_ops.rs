@@ -4,7 +4,7 @@
 // (releases.json), the version gate and update links for the download server (meet_downloads.mint).
 
 use crate::meet::{self as m, bad, kv, log_error, log_info, log_warn, Identity, Relay, E, R};
-use crate::meet_hub::SIGNER_DOWN;
+use crate::meet_hub::{pc, SIGNER_DOWN};
 use crate::meet_json::{self as pj, obj, Obj};
 use crate::meet_tls::{crl_parts, crl_path, read_bytes, tls_config, write_atomic, SignerErr};
 use crate::meet_x509::{pem_blocks, Cert, Crl};
@@ -400,6 +400,7 @@ impl Relay {
                 if now - *relay.last_check.lock() >= CHECK_EVERY {
                     relay.check_expiry();
                 }
+                relay.pc_upkeep();
                 relay.refusals.flush();
             }));
             if r.is_err() {
@@ -548,6 +549,8 @@ impl Relay {
         }
         let dropped = self.hub.drop_serials(&serials);
         self.store_root_crl(answer.get("root_crl_pem"));
+        // PC-1: devices fetch the CRL on a crl event
+        self.hub.pc_tell_crl();
         log_info(&format!(
             "revoked principal={principal} device={} by={} certificates={} dropped={dropped}",
             if device.is_empty() { "*" } else { &device },
@@ -789,6 +792,168 @@ impl Relay {
         }
         log_info(&format!("CA certificate re-issued by the signer taken (valid until {})", pj::iso_date(new.not_after)));
         true
+    }
+}
+
+// ── parity wave C: org policies, service renewals and the SSO service, via the signer ───────────────────────
+
+fn proof_ts(v: Option<&Value>) -> Value {
+    pj::as_num(v).map(|x| Value::from(x.trunc() as i64)).unwrap_or(Value::Null)
+}
+
+/// _pc_own_cert: the SSO service forwards only its own certificate.
+fn pc_own_cert(who: &Identity, body: &Obj) -> R<()> {
+    if who.kind != "sso" {
+        return m::forbidden(pc::SSO_ONLY);
+    }
+    let bare = |s: &str| s.split_whitespace().collect::<String>();
+    if bare(&pj::s(body, "cert_pem")) != bare(&who.cert_pem) {
+        return m::forbidden(pc::NOT_YOURS);
+    }
+    Ok(())
+}
+
+impl Relay {
+    /// pc_upkeep: every upkeep tick, the signer's org policies; hourly, its CRL's age.
+    pub fn pc_upkeep(&self) {
+        self.pc_pull_policies();
+        if pj::mono() - *self.pc_last_crl_check.lock() >= pc::CRL_CHECK_EVERY {
+            self.pc_check_signer_crl();
+        }
+    }
+
+    /// pc_pull_policies: the signer's `org_policies` (its signer policy and every org's current policy) into the hub's
+    /// store; how many were new. A signer without the op is quiet.
+    fn pc_pull_policies(&self) -> usize {
+        let Some(signer) = &self.hub.signer else { return 0 };
+        match signer.call("org_policies", &Obj::new()) {
+            Ok(answer) => self.hub.pc_take_policies(answer.get("policies"), answer.get("signer_policy")),
+            Err(e) => {
+                let msg = match e {
+                    SignerErr::Down(m) => m,
+                    SignerErr::Refused(e) => e.message(),
+                };
+                m::log_debug(&format!("org policies not pulled: {msg}"));
+                0
+            }
+        }
+    }
+
+    fn pc_call(&self, op: &str, body: &Obj) -> R<Obj> {
+        let Some(signer) = &self.hub.signer else { return Err(E::Unavailable(NO_SIGNER.into())) };
+        signer.call(op, body).map_err(|e| match e {
+            SignerErr::Down(_) => E::Unavailable(SIGNER_DOWN.into()),
+            SignerErr::Refused(e) => e,
+        })
+    }
+
+    /// _pc_revoked: serials a signer answer revoked (archive off, an SSO deactivation): denied at once, its CRL into
+    /// the bundle, live sessions dropped, devices told `crl`.
+    fn pc_revoked(&self, answer: &Obj, principal: &str) -> Vec<String> {
+        let rows: Vec<Obj> = answer.get("revoked").and_then(Value::as_array).map(|a| a.iter().filter_map(|r| r.as_object().cloned()).collect()).unwrap_or_default();
+        if rows.is_empty() {
+            return Vec::new();
+        }
+        let serials = self.hub.deny(&rows, principal, "");
+        if pj::truthy(answer.get("crl_pem")) {
+            self.store_signer_crls(pj::s(answer, "crl_pem").as_bytes(), true);
+        }
+        self.hub.drop_serials(&serials);
+        self.store_root_crl(answer.get("root_crl_pem"));
+        self.hub.pc_tell_crl();
+        serials
+    }
+
+    /// `POST /v1/org/policy/sign {policy, proof, ts}`: an org admin's device asks the signer (`sign_org_policy` with
+    /// the caller's certificate); the signed policy is stored and answered `{org, seq, hash, signed}`.
+    pub fn pc_sign_policy(&self, session: &str, who: &Identity, policy: Option<&Value>, proof: Option<&Value>, ts: Option<&Value>) -> R<Obj> {
+        self.hub.check_session(session, who)?;
+        if who.cert_pem.is_empty() {
+            return m::forbidden("sign from one of your devices");
+        }
+        let body = obj([
+            ("policy", policy.cloned().unwrap_or(Value::Null)),
+            ("proof", Value::from(pj::str_or(proof))),
+            ("ts", proof_ts(ts)),
+            ("cert_pem", Value::from(who.cert_pem.clone())),
+        ]);
+        let answer = self.pc_call("sign_org_policy", &body)?;
+        self.pc_revoked(&answer, "");
+        let out = self.hub.pc_take_signed(answer.get("signed"))?;
+        log_info(&format!("org_policy_signed org={} seq={} by={}", pj::s(&out, "org"), pj::as_int(out.get("seq")).unwrap_or(0), who.principal));
+        Ok(out)
+    }
+
+    /// `POST /v1/apps/c/renew {csr_pem, proof, ts}`: the signer's `sign_service_renewal` with the caller's
+    /// certificate; its answer passes through.
+    pub fn pc_apps_renew(&self, who: &Identity, body: &Obj) -> R<Obj> {
+        if (who.kind != "app" && who.kind != "archive") || who.cert_pem.is_empty() {
+            return m::forbidden(pc::APPS_ONLY);
+        }
+        let request = obj([
+            ("cert_pem", Value::from(who.cert_pem.clone())),
+            ("csr_pem", body.get("csr_pem").cloned().unwrap_or(Value::Null)),
+            ("proof", Value::from(pj::s(body, "proof"))),
+            ("ts", proof_ts(body.get("ts"))),
+        ]);
+        let answer = self.pc_call("sign_service_renewal", &request)?;
+        log_info(&format!("apps_renew principal={} kind={} state={}", who.principal, who.kind, m::kv_of(answer.get("state"))));
+        Ok(answer)
+    }
+
+    /// `POST /v1/sso/c/sign {op, ...}`: `sign_sso_enrollment`, `sso_bind` or `sso_log`, forwarded to the signer with
+    /// the service's own certificate.
+    pub fn pc_sso_sign(&self, who: &Identity, body: &Obj) -> R<Obj> {
+        if who.kind != "sso" {
+            return m::forbidden(pc::SSO_ONLY);
+        }
+        let op = pj::text_of(body, "op");
+        if !body.get("op").map(Value::is_string).unwrap_or(false) || !pc::SSO_OPS.contains(&op.as_str()) {
+            return m::forbidden(pc::SSO_ROUTES_ONLY);
+        }
+        pc_own_cert(who, body)?;
+        let forwarded: Obj = body.iter().filter(|(k, _)| k.as_str() != "op").map(|(k, v)| (k.clone(), v.clone())).collect();
+        let answer = self.pc_call(&op, &forwarded)?;
+        log_info(&format!("sso_sign op={op} service={} state={}", who.serial, m::kv_of(answer.get("state"))));
+        Ok(answer)
+    }
+
+    /// `POST /v1/sso/c/revoke {principal, at, sso_attestation, cert_pem, approval?, batch?}`: the signer's `revoke`;
+    /// what it revoked is applied as an admin's revoke is, and devices hear `crl`.
+    pub fn pc_sso_revoke(&self, who: &Identity, body: &Obj) -> R<Obj> {
+        pc_own_cert(who, body)?;
+        let payload: Obj = ["principal", "at", "sso_attestation", "cert_pem", "approval", "batch"].iter().filter_map(|k| body.get(*k).filter(|v| !v.is_null()).map(|v| (k.to_string(), v.clone()))).collect();
+        let answer = self.pc_call("revoke", &payload)?;
+        let principal = m::principal(body.get("principal"));
+        let serials = self.pc_revoked(&answer, &principal);
+        log_info(&format!("sso_revoke principal={principal} service={} certificates={}", who.serial, serials.len()));
+        Ok(answer)
+    }
+
+    /// pc_check_signer_crl: hourly, the signer's newest CRL older than 6 hours (fetched again first) gives admins the
+    /// `signer_down` alert with SIGNER_CRL_OLD (and it goes once fresh).
+    fn pc_check_signer_crl(&self) {
+        *self.pc_last_crl_check.lock() = pj::mono();
+        let Some((_, signer_part)) = crl_parts(&self.settings) else { return };
+        if self.hub.signer.is_none() {
+            return;
+        }
+        let newest = || pem_blocks(&read_bytes(&signer_part), "X509 CRL").iter().filter_map(|(_, der)| Crl::from_der(der)).map(|c| c.this_update).max();
+        let stale = |when: Option<i64>| when.map(|w| pj::now() - w as f64 > pc::SIGNER_CRL_AGE).unwrap_or(false);
+        let mut when = newest();
+        if stale(when) {
+            self.fetch_signer_crl();
+            when = newest();
+        }
+        let old = self.hub.alerts();
+        let mut alerts: Vec<Obj> = old.iter().filter(|a| pj::s(a, "error") != pc::SIGNER_CRL_OLD).cloned().collect();
+        if stale(when) {
+            log_warn(&format!("the certificate server has not issued a revocation list since {}", pj::iso_utc(when.unwrap_or(0))));
+            alerts.push(obj([("type", Value::from("signer_down")), ("error", Value::from(pc::SIGNER_CRL_OLD))]));
+        }
+        if alerts != old {
+            self.hub.set_alerts(alerts);
+        }
     }
 }
 

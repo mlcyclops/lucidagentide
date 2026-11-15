@@ -12,6 +12,7 @@ const OID_EXT_REQ: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x0
 const OID_SAN: &[u8] = &[0x55, 0x1d, 0x11];
 const OID_SKI: &[u8] = &[0x55, 0x1d, 0x0e];
 const OID_AKI: &[u8] = &[0x55, 0x1d, 0x23];
+const OID_BC: &[u8] = &[0x55, 0x1d, 0x13];
 const OID_EC_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
 const OID_P256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
 const OID_P384: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x22];
@@ -197,6 +198,22 @@ impl Signed {
     }
 }
 
+/// True when the EC key in `spki` (DER) made `sig` (DER ECDSA) over `data` with SHA-256
+/// (`public_key().verify(sig, data, ec.ECDSA(hashes.SHA256()))`).
+pub fn ecdsa_sha256_verified(spki: &[u8], data: &[u8], sig: &[u8]) -> bool {
+    use aws_lc_rs::signature::{self as s, UnparsedPublicKey};
+    let Some((kind, param, key)) = spki_parts(spki) else { return false };
+    if kind != OID_EC_KEY {
+        return false;
+    }
+    let alg: &'static s::EcdsaVerificationAlgorithm = match param.as_slice() {
+        OID_P256 => &s::ECDSA_P256_SHA256_ASN1,
+        OID_P384 => &s::ECDSA_P384_SHA256_ASN1,
+        _ => return false,
+    };
+    UnparsedPublicKey::new(alg, &key).verify(data, sig).is_ok()
+}
+
 /// A certificate.
 #[derive(Clone, Debug)]
 pub struct Cert {
@@ -209,6 +226,8 @@ pub struct Cert {
     pub spki: Vec<u8>,
     pub ski: Option<Vec<u8>>,
     pub aki: Option<Vec<u8>>,
+    /// BasicConstraints `ca` (false without the extension).
+    pub ca: bool,
     pub signed: Signed,
 }
 
@@ -230,7 +249,7 @@ impl Cert {
         }
         let mut names = Names::default();
         parse_name(subject.value, &mut names.subject)?;
-        let (mut ski, mut aki) = (None, None);
+        let (mut ski, mut aki, mut ca) = (None, None, false);
         for rest in parts {
             if rest.tag != 0xa3 {
                 continue;
@@ -247,6 +266,9 @@ impl Cert {
                 } else if oid == OID_AKI {
                     let (seq, _) = item(value)?;
                     aki = items(seq.value)?.into_iter().find(|i| i.tag == 0x80).map(|i| i.value.to_vec());
+                } else if oid == OID_BC {
+                    let (seq, _) = item(value)?;
+                    ca = items(seq.value)?.first().is_some_and(|b| b.tag == 0x01 && b.value.iter().any(|&x| x != 0));
                 }
             }
         }
@@ -260,6 +282,7 @@ impl Cert {
             spki: spki.raw.to_vec(),
             ski,
             aki,
+            ca,
             signed,
         })
     }
