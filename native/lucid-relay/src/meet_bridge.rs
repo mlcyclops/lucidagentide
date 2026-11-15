@@ -1937,7 +1937,8 @@ impl Hub {
             st.channel_mut(&cid).insert("last".into(), f(now));
             st.dirty = true;
             let members = channels::members_of(st.channel(&cid));
-            st.tell(&members, &obj([("type", Value::from("channel_message")), ("message", Value::Object(msg))]), None);
+            st.tell(&members, &obj([("type", Value::from("channel_message")), ("message", Value::Object(msg.clone()))]), None);
+            st.pu_message(Some(cid.as_str()), None, &msg);
             st.bridge_audit(Some(&found), "in", "post", if unique.is_empty() { "text" } else { "files" }, &by, &oid, "sent", "");
             Ok((obj([("id", Value::from(mid)), ("ts", f(now)), ("repeat", Value::Bool(false))]), lid, unique.len()))
         })();

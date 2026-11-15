@@ -29,7 +29,9 @@ chrono-tz = { version = "0.10", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 gethostname = "0.5"
 http-body-util = "0.1"
-hyper = { version = "1", features = ["server", "client", "http1"] }
+# http2: the Meet relay's APNs sender (contract PB-1 section 5; Apple takes HTTP/2 only). hyper's own feature, through
+# the `h2` crate: framing only, TLS and every primitive stay on rustls and AWS-LC.
+hyper = { version = "1", features = ["server", "client", "http1", "http2"] }
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "aws-lc-rs", "webpki-roots", "tls12", "logging"] }
 hyper-util = { version = "0.1", features = ["tokio", "client-legacy", "http1"] }
 indexmap = "2"

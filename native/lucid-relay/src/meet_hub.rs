@@ -47,6 +47,9 @@ pub mod ce;
 // Parity wave A (contract PA-1): prefs, status `until`, forwarded messages, co-organizers, attendance, custom emoji.
 #[path = "meet_parity.rs"]
 pub mod parity;
+// Parity wave B (contract PB-1 section 5): iPhone alert pushes through APNs.
+#[path = "meet_push.rs"]
+pub mod push;
 
 pub const PEER_TIMEOUT: f64 = 40.0;
 pub const SESSION_TIMEOUT: f64 = 40.0;
@@ -475,6 +478,10 @@ pub struct State {
     emoji: Obj,
     /// In memory: parity wave A's settings and the emoji images without a state folder.
     pa: parity::Parity,
+    /// principal -> {device: {token, env, ts, serial}}: the iPhone devices registered for alert pushes.
+    push_tokens: Obj,
+    /// In memory: the APNs sender (None: push is off), the thread-id secret and the push rate book.
+    pu: push::Push,
 }
 
 /// _empty_stage. `spotlight`: the peer everyone sees large ("" for none); `cohosts`: the co-organizers' principals.
@@ -1361,6 +1368,7 @@ impl State {
             ("prefs", Value::Object(self.prefs.clone())),
             ("emoji", Value::Object(self.emoji.clone())),
             ("attendance", Value::Object(self.attendance.clone())),
+            ("push_tokens", Value::Object(self.push_tokens.clone())),
             ("ext", Value::Object(self.ext.clone())),
         ]));
         pj::dumps(&v)
@@ -1724,6 +1732,8 @@ impl Hub {
             attendance: Obj::new(),
             emoji: Obj::new(),
             pa: parity::Parity::new(state_dir.as_deref()),
+            push_tokens: Obj::new(),
+            pu: push::Push::new(state_dir.as_deref()),
         };
         let hub = Hub { st: Mutex::new(st), cond: Condvar::new(), signer, links, state_dir, save_lock: Mutex::new(()), stop: AtomicBool::new(false) };
         if hub.state_dir.is_some() {
@@ -1840,6 +1850,7 @@ impl Hub {
         // each wave-3 slice validates its own part when it first reads it
         st.ext = only_objects(raw.get("ext"));
         st.pa_load(&raw);
+        st.pu_load(&raw);
         st.prune(pj::now());
         let (people, convs, rooms) = (st.directory.len(), st.dms.len(), st.rooms.len());
         drop(st);
@@ -3239,6 +3250,7 @@ impl Hub {
                 ("renewed", renewed),
                 ("unread", Value::Object(st.unread(&who.principal))),
                 ("attendance", Value::Bool(st.pa_attendance_on())),
+                ("push", Value::Bool(st.pu_on())),
             ]);
             reply.extend(st.ce_hello());
             Ok((reply, sid))
@@ -3655,6 +3667,7 @@ impl Hub {
             pending.push(inv.clone());
             st.invites.insert(t.clone(), pending);
             st.tell(std::slice::from_ref(t), &with(&inv, obj([("type", Value::from("invite"))])), None);
+            st.pu_invite(&who.principal, t, &room);
             out.push(Value::Object(inv));
         }
         st.dirty = true;
@@ -3729,7 +3742,7 @@ impl Hub {
         !s.is_empty() && self.st.lock().denied.contains_key(&s)
     }
 
-    /// drop_serials: end every peer and session whose certificate serial is listed.
+    /// drop_serials: end every peer and session whose certificate serial is listed (their push registrations go too).
     pub fn drop_serials(&self, serials: &[String]) -> i64 {
         let wanted: HashSet<String> = serials.iter().map(|s| m::serial(s)).filter(|s| !s.is_empty()).collect();
         if wanted.is_empty() {
@@ -3737,6 +3750,7 @@ impl Hub {
         }
         let mut st = self.st.lock();
         let n = st.drop_matching(&wanted);
+        st.pu_drop_serials(&wanted);
         drop(st);
         self.wake();
         n
@@ -4463,7 +4477,7 @@ mod tests {
 
     #[test]
     fn state_json_round_trips_in_python_text() {
-        let text = "{\"v\": 2, \"directory\": {\"ann@x\": {\"name\": \"Ann\", \"last_seen\": 1.5}}, \"dms\": {}, \"read\": {}, \"invites\": {}, \"rooms\": {}, \"left\": {}, \"renewals\": {}, \"renewed\": {}, \"enrollments\": {}, \"consumed_seeds\": {}, \"seed_requests\": {}, \"seeded\": {}, \"denied\": {}, \"organizations\": {\"ben@x\": null, \"cy@x\": {\"id\": \"o\", \"label\": \"O\"}}, \"status\": {\"ann@x\": {\"state\": \"busy\", \"text\": \"\", \"until\": 4102444800000}, \"ben@x\": {\"state\": \"away\", \"text\": \"\"}}, \"receipts\": {\"ann@x\": {\"ben@x\": 2.5}}, \"meetings\": {\"m-abcdefgh23\": {\"id\": \"m-abcdefgh23\", \"room\": \"m-abcdefgh23\", \"title\": \"Weekly\", \"description\": \"\", \"start\": 1700000000.0, \"end\": 1700001800.0, \"recurrence\": \"weekly\", \"tz\": \"Europe/Paris\", \"organizer\": {\"principal\": \"ann@x\", \"name\": \"Ann\"}, \"attendees\": [{\"principal\": \"ben@x\", \"name\": \"Ben\", \"response\": \"none\"}], \"created\": 1.5, \"updated\": 1.5, \"canceled\": null}}, \"channels\": {\"c-01\": {\"id\": \"c-01\", \"kind\": \"public\", \"name\": \"general\", \"topic\": \"\", \"created_by\": \"ann@x\", \"members\": [\"ann@x\"], \"created\": 1.5, \"archived\": null, \"last\": 1.5, \"e2ee\": true, \"bridgeable\": false, \"e2ee_since\": 1500}}, \"channel_messages\": {\"c-01\": [{\"id\": \"m1\", \"channel\": \"c-01\", \"from\": \"ann@x\", \"from_name\": \"Ann\", \"from_org\": null, \"text\": \"hi\", \"ts\": 1.5, \"reactions\": {}}]}, \"channel_read\": {\"ann@x\": {\"c-01\": 1.5}}, \"prefs\": {\"ann@x\": {\"rev\": 2, \"notify\": {\"dm:ben@x\": \"off\"}, \"sections\": [{\"id\": \"s-0123abcd\", \"name\": \"Team\", \"convs\": [\"dm:ben@x\"]}], \"channel_default\": \"mentions\"}}, \"emoji\": {\"party\": {\"name\": \"party\", \"hash\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"type\": \"png\", \"org\": null, \"by\": \"ann@x\", \"ts\": 1500}}, \"attendance\": {\"ops\": [{\"id\": \"0123456789abcdef\", \"start\": 4102444000000, \"end\": 4102444800000, \"people\": [{\"principal\": \"ann@x\", \"name\": \"Ann\", \"org\": null, \"joins\": [[4102444000000, 4102444800000]], \"role\": \"host\"}]}]}, \"ext\": {\"files\": {\"v\": 1, \"files\": {}}, \"guests\": {\"revoked\": {}, \"blocked\": {}}, \"bridge\": {\"v\": 1, \"policies\": {}, \"links\": {}, \"codes\": {}, \"connectors\": {}, \"seq\": 0, \"outbox\": {}, \"map\": {}, \"offered\": {}}, \"ce\": {\"v\": 1, \"since\": 1500, \"seq\": 0, \"bundles\": {}, \"wraps\": {}, \"logs\": {}}}}";
+        let text = "{\"v\": 2, \"directory\": {\"ann@x\": {\"name\": \"Ann\", \"last_seen\": 1.5}}, \"dms\": {}, \"read\": {}, \"invites\": {}, \"rooms\": {}, \"left\": {}, \"renewals\": {}, \"renewed\": {}, \"enrollments\": {}, \"consumed_seeds\": {}, \"seed_requests\": {}, \"seeded\": {}, \"denied\": {}, \"organizations\": {\"ben@x\": null, \"cy@x\": {\"id\": \"o\", \"label\": \"O\"}}, \"status\": {\"ann@x\": {\"state\": \"busy\", \"text\": \"\", \"until\": 4102444800000}, \"ben@x\": {\"state\": \"away\", \"text\": \"\"}}, \"receipts\": {\"ann@x\": {\"ben@x\": 2.5}}, \"meetings\": {\"m-abcdefgh23\": {\"id\": \"m-abcdefgh23\", \"room\": \"m-abcdefgh23\", \"title\": \"Weekly\", \"description\": \"\", \"start\": 1700000000.0, \"end\": 1700001800.0, \"recurrence\": \"weekly\", \"tz\": \"Europe/Paris\", \"organizer\": {\"principal\": \"ann@x\", \"name\": \"Ann\"}, \"attendees\": [{\"principal\": \"ben@x\", \"name\": \"Ben\", \"response\": \"none\"}], \"created\": 1.5, \"updated\": 1.5, \"canceled\": null}}, \"channels\": {\"c-01\": {\"id\": \"c-01\", \"kind\": \"public\", \"name\": \"general\", \"topic\": \"\", \"created_by\": \"ann@x\", \"members\": [\"ann@x\"], \"created\": 1.5, \"archived\": null, \"last\": 1.5, \"e2ee\": true, \"bridgeable\": false, \"e2ee_since\": 1500}}, \"channel_messages\": {\"c-01\": [{\"id\": \"m1\", \"channel\": \"c-01\", \"from\": \"ann@x\", \"from_name\": \"Ann\", \"from_org\": null, \"text\": \"hi\", \"ts\": 1.5, \"reactions\": {}}]}, \"channel_read\": {\"ann@x\": {\"c-01\": 1.5}}, \"prefs\": {\"ann@x\": {\"rev\": 2, \"notify\": {\"dm:ben@x\": \"off\"}, \"sections\": [{\"id\": \"s-0123abcd\", \"name\": \"Team\", \"convs\": [\"dm:ben@x\"]}], \"channel_default\": \"mentions\"}}, \"emoji\": {\"party\": {\"name\": \"party\", \"hash\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"type\": \"png\", \"org\": null, \"by\": \"ann@x\", \"ts\": 1500}}, \"attendance\": {\"ops\": [{\"id\": \"0123456789abcdef\", \"start\": 4102444000000, \"end\": 4102444800000, \"people\": [{\"principal\": \"ann@x\", \"name\": \"Ann\", \"org\": null, \"joins\": [[4102444000000, 4102444800000]], \"role\": \"host\"}]}]}, \"push_tokens\": {\"ann@x\": {\"aaaaaaaaaaaaaaaa\": {\"token\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"env\": \"sandbox\", \"ts\": 1700000000000, \"serial\": \"1a\"}}}, \"ext\": {\"files\": {\"v\": 1, \"files\": {}}, \"guests\": {\"revoked\": {}, \"blocked\": {}}, \"bridge\": {\"v\": 1, \"policies\": {}, \"links\": {}, \"codes\": {}, \"connectors\": {}, \"seq\": 0, \"outbox\": {}, \"map\": {}, \"offered\": {}}, \"ce\": {\"v\": 1, \"since\": 1500, \"seq\": 0, \"bundles\": {}, \"wraps\": {}, \"logs\": {}}}}";
         let dir = std::env::temp_dir().join(format!("meet-state-{}", pj::token_hex(4)));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("state.json"), text).unwrap();

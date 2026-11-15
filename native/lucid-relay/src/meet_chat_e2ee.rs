@@ -1483,6 +1483,7 @@ impl Hub {
                     st.channel_mut(cid).insert("last".into(), f(now));
                     let members = members_of(st.channel(cid));
                     st.tell(&members, &obj([("type", Value::from("channel_message")), ("message", Value::Object(row.clone()))]), me.as_deref());
+                    st.pu_message(Some(cid.as_str()), None, &row);
                 }
                 Conv::Dm(other) => {
                     let msgs = st.dms.entry(conv(&who.principal, other)).or_default();
@@ -1495,6 +1496,7 @@ impl Hub {
                         msgs.drain(..cut);
                     }
                     st.tell(&[other.clone(), who.principal.clone()], &with(&row, obj([("type", Value::from("dm"))])), me.as_deref());
+                    st.pu_message(None, Some(other.as_str()), &row);
                 }
             }
             st.dirty = true;

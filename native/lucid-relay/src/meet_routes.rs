@@ -287,6 +287,16 @@ fn post_route(path: &str) -> Option<Route> {
             let (who, b, session) = session_gate(c)?;
             c.relay.hub.emoji_delete(&session, &who, b.get("name"))
         },
+        // parity wave B: iPhone push (bound to the calling device; no session needed)
+        "/v1/push/register" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.push_register(&who, b.get("token"), b.get("env"))
+        },
+        "/v1/push/unregister" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.body()?;
+            c.relay.hub.push_unregister(&who)
+        },
         "/v1/recording" => recording,
         "/v1/recording/policy" => recording_policy,
         "/v1/recording/consent" => recording_consent,
@@ -344,7 +354,7 @@ fn post_route(path: &str) -> Option<Route> {
         // wave3:files
         "/v1/files/start" => |c: &mut Ctx| {
             let (who, b) = conversation_gate(c)?;
-            c.relay.hub.files_start(&who, &pj::s(&b, "scope"), b.get("name"), b.get("size"), b.get("type"), opt(&b, "peer"), opt(&b, "session"), opt(&b, "with"), opt(&b, "channel"), b.get("e2ee"))
+            c.relay.hub.files_start(&who, &pj::s(&b, "scope"), b.get("name"), b.get("size"), b.get("type"), opt(&b, "peer"), opt(&b, "session"), opt(&b, "with"), opt(&b, "channel"), b.get("e2ee"), b.get("clip"))
         },
         "/v1/files/chunk" => files_chunk,
         "/v1/files/finish" => |c: &mut Ctx| {

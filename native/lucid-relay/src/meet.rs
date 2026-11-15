@@ -256,13 +256,35 @@ pub struct Settings {
     pub attendance_days: i64,
     /// PA-1 section 11: the most custom emoji the relay keeps.
     pub emoji_max: i64,
+    /// Parity wave B (contract PB-1 section 5): iPhone alert pushes through APNs, off by default.
+    pub push: PushSettings,
+    /// A T3/T4 deployment: push may not be on.
+    pub enclave: bool,
 }
 
-const SETTINGS_FIELDS: [&str; 45] = [
+/// relay.json `push`: `{enabled, team_id, key_id, key_file (the .p8, never logged), topic (the app's bundle id),
+/// sandbox}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PushSettings {
+    pub enabled: bool,
+    pub team_id: String,
+    pub key_id: String,
+    pub key_file: String,
+    pub topic: String,
+    pub sandbox: bool,
+}
+
+impl Default for PushSettings {
+    fn default() -> PushSettings {
+        PushSettings { enabled: false, team_id: String::new(), key_id: String::new(), key_file: String::new(), topic: String::new(), sandbox: true }
+    }
+}
+
+const SETTINGS_FIELDS: [&str; 47] = [
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "channel_days", "signer_url", "signer_cert",
     "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations", "file_max_mb", "files_quota_gb", "guest_port",
     "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max",
-    "bridge_policies", "chat_e2ee", "chat_history_share", "attendance", "attendance_days", "emoji_max",
+    "bridge_policies", "chat_e2ee", "chat_history_share", "attendance", "attendance_days", "emoji_max", "push", "enclave",
 ];
 
 /// ORG_FIELD_MAX: characters of an organization id or label.
@@ -328,6 +350,8 @@ impl Default for Settings {
             attendance: true,
             attendance_days: 30,
             emoji_max: 500,
+            push: PushSettings::default(),
+            enclave: false,
         }
     }
 }
@@ -373,6 +397,40 @@ fn parity_settings(raw: &Obj, s: &mut Settings) -> Result<(), String> {
                 _ => return Err(format!("{key} must be a whole number (0 or more)")),
             }
         }
+    }
+    Ok(())
+}
+
+/// Parity wave B settings (contract PB-1 section 5): `enclave` (true or false) and `push` (only its six keys, the
+/// switches true or false and the rest text; on, it needs team_id, key_id, key_file and topic). Push never runs on
+/// an enclave relay (ADR-0174: never for T3/T4).
+fn push_settings(raw: &Obj, s: &mut Settings) -> Result<(), String> {
+    const SHAPE: &str = "push must be {enabled, team_id, key_id, key_file, topic, sandbox}";
+    match raw.get("enclave") {
+        None => {}
+        Some(Value::Bool(b)) => s.enclave = *b,
+        Some(_) => return Err("enclave must be true or false".into()),
+    }
+    if let Some(v) = raw.get("push") {
+        let Value::Object(o) = v else { return Err(SHAPE.into()) };
+        let p = &mut s.push;
+        for (k, v) in o {
+            match (k.as_str(), v) {
+                ("enabled", Value::Bool(b)) => p.enabled = *b,
+                ("sandbox", Value::Bool(b)) => p.sandbox = *b,
+                ("team_id", Value::String(t)) => p.team_id = t.clone(),
+                ("key_id", Value::String(t)) => p.key_id = t.clone(),
+                ("key_file", Value::String(t)) => p.key_file = t.clone(),
+                ("topic", Value::String(t)) => p.topic = t.clone(),
+                _ => return Err(SHAPE.into()),
+            }
+        }
+        if p.enabled && [&p.team_id, &p.key_id, &p.key_file, &p.topic].iter().any(|t| t.is_empty()) {
+            return Err("push needs team_id, key_id, key_file and topic".into());
+        }
+    }
+    if s.push.enabled && s.enclave {
+        return Err("push cannot be enabled when enclave is true".into());
     }
     Ok(())
 }
@@ -497,6 +555,7 @@ impl Settings {
             }
         }
         parity_settings(raw, &mut s)?;
+        push_settings(raw, &mut s)?;
         Ok(s)
     }
 }
@@ -991,6 +1050,7 @@ fn serve(settings: Settings) -> ! {
         st.organizations = settings.organizations.clone();
     }
     hub.wave3_configure(&settings).unwrap_or_else(|e| die(&e));
+    hub.push_configure(&settings);
     let tls = tls_config(&settings).unwrap_or_else(|e| die(&e));
     let listener = TcpListener::bind((settings.host.as_str(), settings.port)).unwrap_or_else(|e| die(&format!("cannot listen on {}:{}: {e}", settings.host, settings.port)));
     let console = Console::new(&settings, links).unwrap_or_else(|e| die(&e));
@@ -1731,6 +1791,35 @@ mod tests {
             assert_eq!(check(json!({"attendance_days": wrong})).unwrap_err(), "attendance_days must be a whole number (0 or more)");
             assert_eq!(check(json!({"emoji_max": wrong})).unwrap_err(), "emoji_max must be a whole number (0 or more)");
         }
+    }
+
+    #[test]
+    fn push_settings_are_checked_as_python_does() {
+        let check = |v: Value| {
+            let mut s = Settings::default();
+            push_settings(v.as_object().unwrap(), &mut s).map(|_| s)
+        };
+        let s = check(json!({})).unwrap();
+        assert_eq!((s.push.clone(), s.enclave), (PushSettings::default(), false));
+        assert!(s.push.sandbox && !s.push.enabled);
+        let on = json!({"enabled": true, "team_id": "T", "key_id": "K", "key_file": "/k.p8", "topic": "com.x", "sandbox": false});
+        let s = check(json!({"push": on})).unwrap();
+        assert_eq!(s.push, PushSettings { enabled: true, team_id: "T".into(), key_id: "K".into(), key_file: "/k.p8".into(), topic: "com.x".into(), sandbox: false });
+        // off with nothing else set, or partly set, is fine
+        assert!(check(json!({"push": {"enabled": false}, "enclave": true})).is_ok());
+        assert!(check(json!({"push": {"topic": "com.x"}})).is_ok());
+        for wrong in [json!([]), json!(null), json!({"enabled": 1}), json!({"sandbox": "yes"}), json!({"topic": 1}), json!({"key_file": null}), json!({"url": "x"})] {
+            assert_eq!(check(json!({"push": wrong})).unwrap_err(), "push must be {enabled, team_id, key_id, key_file, topic, sandbox}");
+        }
+        for missing in ["team_id", "key_id", "key_file", "topic"] {
+            let mut p = on.clone();
+            p[missing] = json!("");
+            assert_eq!(check(json!({"push": p})).unwrap_err(), "push needs team_id, key_id, key_file and topic");
+        }
+        for wrong in [json!(1), json!("true"), Value::Null] {
+            assert_eq!(check(json!({"enclave": wrong})).unwrap_err(), "enclave must be true or false");
+        }
+        assert_eq!(check(json!({"push": on, "enclave": true})).unwrap_err(), "push cannot be enabled when enclave is true");
     }
 
     #[test]

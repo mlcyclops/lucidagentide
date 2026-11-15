@@ -75,6 +75,46 @@ fn file_size(v: Body) -> R<u64> {
     }
 }
 
+/// Parity wave B (contract PB-1 section 1): a voice or video clip's longest duration (ms) and transcript.
+const CLIP_AUDIO_MS: i64 = 5 * 60 * 1000;
+const CLIP_VIDEO_MS: i64 = 3 * 60 * 1000;
+const CLIP_WAVE_BYTES: usize = 64;
+const CLIP_TX_MAX: usize = 4000;
+const BAD_CLIP: &str = "clip must be {k, d, w, tx}";
+
+/// _files_clip: a plain file's `clip` `{k: "a"|"v", d: duration ms, w: base64 of 64 peak levels, tx?: transcript}`
+/// (None when absent or null). Kept as given: k, d, w, then tx only when present.
+fn clip(v: Body) -> R<Option<Obj>> {
+    let o = match v {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Object(o)) => o,
+        Some(_) => return bad(BAD_CLIP),
+    };
+    if o.keys().any(|k| !["k", "d", "w", "tx"].contains(&k.as_str())) {
+        return bad(BAD_CLIP);
+    }
+    let most = match o.get("k").and_then(Value::as_str) {
+        Some("a") => CLIP_AUDIO_MS,
+        Some("v") => CLIP_VIDEO_MS,
+        _ => return bad(BAD_CLIP),
+    };
+    let d_ok = pj::as_int(o.get("d")).map(|d| (1..=most).contains(&d)).unwrap_or(false);
+    let w_ok = o.get("w").and_then(Value::as_str).and_then(pj::b64_strict).map(|w| w.len() == CLIP_WAVE_BYTES).unwrap_or(false);
+    let tx_ok = match o.get("tx") {
+        None => true,
+        Some(Value::String(t)) => pj::char_len(t) <= CLIP_TX_MAX,
+        Some(_) => false,
+    };
+    if !(d_ok && w_ok && tx_ok) {
+        return bad(BAD_CLIP);
+    }
+    let mut out = obj([("k", o["k"].clone()), ("d", o["d"].clone()), ("w", o["w"].clone())]);
+    if let Some(tx) = o.get("tx") {
+        out.insert("tx".into(), tx.clone());
+    }
+    Ok(Some(out))
+}
+
 fn bad_number(v: Option<&Value>) -> bool {
     pj::as_num(v).map(|x| x < 0.0).unwrap_or(true)
 }
@@ -132,6 +172,8 @@ struct Upload {
     bridge: String,
     /// The ciphertext of an end-to-end encrypted conversation's file (kept until the encrypted message naming it).
     e2ee: bool,
+    /// A plain voice or video clip's `clip` (contract PB-1 section 1), copied into the file at finish.
+    clip: Option<Obj>,
 }
 
 /// In memory: the unfinished uploads, the limits (relay.json file_max_mb, files_quota_gb) and the folder of the bytes.
@@ -391,6 +433,9 @@ impl State {
         } else {
             out.insert(scope.clone(), meta.get(&scope).cloned().unwrap_or(Value::Null));
         }
+        if let Some(c) = meta.get("clip") {
+            out.insert("clip".into(), c.clone());
+        }
         out
     }
 
@@ -601,6 +646,7 @@ impl State {
                 self.channel_mut(&cid).insert("last".into(), msg.get("ts").cloned().unwrap_or(Value::Null));
                 let members = channels::members_of(self.channel(&cid));
                 self.tell(&members, &obj([("type", Value::from("channel_message")), ("message", Value::Object(msg.clone()))]), Some(session.as_str()));
+                self.pu_message(Some(cid.as_str()), None, &msg);
                 msg
             }
         }
@@ -696,6 +742,7 @@ impl State {
             expires: now + UPLOAD_TTL,
             bridge: link.to_string(),
             e2ee: false,
+            clip: None,
         };
         self.files.uploads.insert(uid.clone(), upload);
         Ok(uid)
@@ -793,14 +840,20 @@ impl Hub {
     /// `POST /v1/files/start`: open an upload to a conversation the caller may write to. 413 over the size cap, 507
     /// over the relay's quota. `e2ee: true` (an end-to-end encrypted conversation needs it, one that is not refuses
     /// it): the ciphertext, kept as `encrypted.bin` of type application/octet-stream whatever name and type say.
+    /// `clip` (a plain voice or video clip, contract PB-1 section 1) rides on the file; an encrypted file carries its
+    /// clip inside the encrypted message, so `clip` with `e2ee` is refused.
     #[allow(clippy::too_many_arguments)]
-    pub fn files_start(&self, who: &Identity, scope: &str, name: Body, size: Body, kind: Body, peer: Option<String>, session: Option<String>, with_: Option<String>, channel: Option<String>, e2ee: Body) -> R<Obj> {
+    pub fn files_start(&self, who: &Identity, scope: &str, name: Body, size: Body, kind: Body, peer: Option<String>, session: Option<String>, with_: Option<String>, channel: Option<String>, e2ee: Body, clip_v: Body) -> R<Obj> {
         let e2ee = m::flag(e2ee, "e2ee")?;
         let (sealed_name, sealed_kind) = (Value::from("encrypted.bin"), Value::from("application/octet-stream"));
         let (name, kind) = if e2ee { (Some(&sealed_name), Some(&sealed_kind)) } else { (name, kind) };
         let name = file_name(name)?;
         let size = file_size(size)?;
         let kind = file_type(kind);
+        let clip = clip(clip_v)?;
+        if e2ee && clip.is_some() {
+            return Err(E::Conflict(ce::PLAIN.into()));
+        }
         let mut st = self.st.lock();
         let now = pj::now();
         st.files.expire(now);
@@ -839,6 +892,7 @@ impl Hub {
             expires: now + UPLOAD_TTL,
             bridge: String::new(),
             e2ee,
+            clip,
         };
         st.files.uploads.insert(uid.clone(), upload);
         drop(st);
@@ -945,6 +999,9 @@ impl Hub {
                 ("from_name", Value::from(who.name.clone())),
                 ("scope", place.get("scope").cloned().unwrap_or(Value::Null)),
             ]);
+            if let Some(c) = &up.clip {
+                file.insert("clip".into(), Value::Object(c.clone()));
+            }
             if up.e2ee {
                 // an encrypted file: kept until the encrypted message naming it (`files`, ce_post)
                 if !text.is_empty() || reply_to.is_some() || thread.is_some() {
@@ -1139,6 +1196,71 @@ mod tests {
     }
 
     #[test]
+    fn a_clip_is_checked_and_kept_as_given() {
+        let w = pj::b64(&[7u8; 64]);
+        assert_eq!(clip(None).unwrap(), None);
+        assert_eq!(clip(Some(&Value::Null)).unwrap(), None);
+        let kept = clip(Some(&json!({"tx": "hi", "w": w, "d": 300000, "k": "a"}))).unwrap().unwrap();
+        assert_eq!(kept.keys().collect::<Vec<_>>(), ["k", "d", "w", "tx"]);
+        let kept = clip(Some(&json!({"k": "v", "d": 180000, "w": w, "tx": ""}))).unwrap().unwrap();
+        assert_eq!(kept["tx"], json!(""));
+        assert_eq!(clip(Some(&json!({"k": "a", "d": 1, "w": w}))).unwrap().unwrap().keys().collect::<Vec<_>>(), ["k", "d", "w"]);
+        let long = "x".repeat(4001);
+        for wrong in [
+            json!([]),
+            json!("a"),
+            json!({"k": "x", "d": 1, "w": w}),
+            json!({"d": 1, "w": w}),
+            json!({"k": "a", "d": 0, "w": w}),
+            json!({"k": "a", "d": 300001, "w": w}),
+            json!({"k": "v", "d": 180001, "w": w}),
+            json!({"k": "a", "d": 1.0, "w": w}),
+            json!({"k": "a", "d": true, "w": w}),
+            json!({"k": "a", "d": 1}),
+            json!({"k": "a", "d": 1, "w": pj::b64(&[7u8; 63])}),
+            json!({"k": "a", "d": 1, "w": "not base64!"}),
+            json!({"k": "a", "d": 1, "w": w.trim_end_matches('=')}),
+            json!({"k": "a", "d": 1, "w": w, "tx": null}),
+            json!({"k": "a", "d": 1, "w": w, "tx": long}),
+            json!({"k": "a", "d": 1, "w": w, "x": 1}),
+        ] {
+            assert_eq!(clip(Some(&wrong)).unwrap_err().message(), "clip must be {k, d, w, tx}", "{wrong}");
+        }
+    }
+
+    #[test]
+    fn a_plain_clip_rides_on_its_file_and_message() {
+        let dir = std::env::temp_dir().join(format!("meet-files-{}", pj::token_hex(4)));
+        let h = Hub::new(Some(dir.clone()), &[], 168.0, 30.0, 365.0, None, Arc::new(LinkStats::new()));
+        let (ann, ben) = (who("ann@x", "aaaaaaaaaaaaaaaa"), who("ben@x", "bbbbbbbbbbbbbbbb"));
+        let a = h.join("ops", &ann, "", false, None).unwrap()["peer"].as_str().unwrap().to_string();
+        let b = h.join("ops", &ben, "", false, None).unwrap()["peer"].as_str().unwrap().to_string();
+        // plain call chat (and files) only while a web guest is in the call
+        h.st.lock().peers.get_mut(&b).unwrap().who.guest = true;
+        let c = json!({"k": "a", "d": 4200, "w": pj::b64(&[9u8; 64]), "tx": "hello"});
+        let data = b"clip bytes";
+        let sealed = h.files_start(&ann, "room", Some(&json!("c.webm")), Some(&json!(data.len())), Some(&json!("audio/webm")), Some(a.clone()), None, None, None, Some(&json!(true)), Some(&c));
+        assert!(matches!(sealed, Err(E::Conflict(m)) if m == ce::PLAIN));
+        let bad_clip = h.files_start(&ann, "room", Some(&json!("c.webm")), Some(&json!(data.len())), None, Some(a.clone()), None, None, None, None, Some(&json!({"k": "a"})));
+        assert_eq!(bad_clip.unwrap_err().message(), "clip must be {k, d, w, tx}");
+        let up = h.files_start(&ann, "room", Some(&json!("c.webm")), Some(&json!(data.len())), Some(&json!("audio/webm")), Some(a.clone()), None, None, None, None, Some(&c)).unwrap();
+        let uid = up["upload"].as_str().unwrap().to_string();
+        let part = h.files_chunk_begin(&ann, &uid, "0", data.len()).unwrap();
+        h.files_chunk_write(part, data).unwrap();
+        let sha = crate::codec::sha256_hex(data);
+        let line = h.files_finish(&ann, Some(&json!(uid)), Some(&json!(sha)), None, None, None, Some(a.clone()), None).unwrap();
+        let file = line["files"][0].as_object().unwrap();
+        assert_eq!(file.keys().collect::<Vec<_>>(), ["id", "name", "size", "type", "sha256", "from", "from_name", "scope", "clip", "ts", "room"]);
+        assert_eq!(file["clip"], c);
+        // the record's view: clip last
+        let meta = h.st.lock().files_meta(&uid).unwrap();
+        let view = State::files_view(&meta, "ann@x");
+        assert_eq!(view.keys().last().map(String::as_str), Some("clip"));
+        assert_eq!(view["clip"], c);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn a_dm_file_goes_up_in_parts_comes_back_and_goes_with_a_delete() {
         let dir = std::env::temp_dir().join(format!("meet-files-{}", pj::token_hex(4)));
         let h = Hub::new(Some(dir.clone()), &[], 168.0, 30.0, 365.0, None, Arc::new(LinkStats::new()));
@@ -1147,9 +1269,9 @@ mod tests {
         let b = h.hello(&ben, "", &Obj::new()).unwrap()["session"].as_str().unwrap().to_string();
         let data = b"hello, file";
         // every direct message is encrypted: a plain file is refused, the ciphertext is kept as encrypted.bin
-        let plain = h.files_start(&ann, "dm", Some(&json!("n.txt")), Some(&json!(data.len())), None, None, Some(a.clone()), Some("ben@x".into()), None, None);
+        let plain = h.files_start(&ann, "dm", Some(&json!("n.txt")), Some(&json!(data.len())), None, None, Some(a.clone()), Some("ben@x".into()), None, None, None);
         assert!(matches!(plain, Err(E::Conflict(m)) if m == ce::PLAIN));
-        let up = h.files_start(&ann, "dm", Some(&json!("n.txt")), Some(&json!(data.len())), None, None, Some(a.clone()), Some("ben@x".into()), None, Some(&json!(true))).unwrap();
+        let up = h.files_start(&ann, "dm", Some(&json!("n.txt")), Some(&json!(data.len())), None, None, Some(a.clone()), Some("ben@x".into()), None, Some(&json!(true)), None).unwrap();
         let uid = up["upload"].as_str().unwrap().to_string();
         let part = h.files_chunk_begin(&ann, &uid, "0", 5).unwrap();
         assert!(matches!(h.files_chunk_begin(&ann, &uid, "0", 5), Err(E::Conflict(_))));

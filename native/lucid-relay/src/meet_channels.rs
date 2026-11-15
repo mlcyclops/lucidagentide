@@ -768,6 +768,7 @@ impl Hub {
             st.channel_mut(&cid).insert("last".into(), f(now));
             st.dirty = true;
             st.tell(&members, &obj([("type", Value::from("channel_message")), ("message", Value::Object(msg.clone()))]), Some(session));
+            st.pu_message(Some(cid.as_str()), None, &msg);
             Ok(msg)
         })();
         drop(st);
@@ -913,15 +914,23 @@ impl Hub {
             if pj::truthy(m.get("deleted")) || m.contains_key("enc") {
                 return;
             }
-            let have = words(&text);
-            if !wanted_words.iter().all(|w| have.contains(w)) {
-                return;
-            }
+            let holds = |t: &str| {
+                let have = words(t);
+                wanted_words.iter().all(|w| have.contains(w))
+            };
+            // else the transcript of one of its voice or video clips (parity wave B), the excerpt then from it
+            let source = if holds(&text) {
+                text.as_str()
+            } else {
+                let mut clips = m.get("files").and_then(Value::as_array).into_iter().flatten().filter_map(|f| f.get("clip")?.get("tx")?.as_str());
+                let Some(tx) = clips.find(|tx| holds(tx)) else { return };
+                tx
+            };
             row.insert("id".into(), m.get("id").cloned().unwrap_or(Value::Null));
             row.insert("from".into(), m.get("from").cloned().unwrap_or(Value::Null));
             row.insert("from_name".into(), m.get("from_name").cloned().unwrap_or(Value::Null));
             row.insert("ts".into(), m.get("ts").cloned().unwrap_or(Value::Null));
-            row.insert("excerpt".into(), Value::from(excerpt(&text, &wanted_words[0])));
+            row.insert("excerpt".into(), Value::from(excerpt(source, &wanted_words[0])));
             if pj::truthy(m.get("thread")) {
                 row.insert("thread".into(), m["thread"].clone());
             }
@@ -970,6 +979,33 @@ mod tests {
         let got = excerpt(&long, "needle");
         assert!(got.starts_with("...") && got.ends_with("...") && got.contains("needle"));
         assert_eq!(got.chars().count(), EXCERPT_MAX + 6);
+    }
+
+    #[test]
+    fn search_finds_a_clip_by_its_transcript() {
+        use serde_json::json;
+        let h = Hub::new(None, &[], 168.0, 30.0, 365.0, None, Arc::new(LinkStats::new()));
+        let ann = Identity { principal: "ann@x".into(), name: "Ann".into(), device: "aaaaaaaaaaaaaaaa".into(), ..Default::default() };
+        let s = h.hello(&ann, "", &Obj::new()).unwrap()["session"].as_str().unwrap().to_string();
+        {
+            let o = |v: serde_json::Value| v.as_object().unwrap().clone();
+            let mut st = h.st.lock();
+            st.channels.insert("c-01".into(), json!({"id": "c-01", "kind": "public", "name": "general", "members": ["ann@x"]}));
+            st.channel_msgs.insert(
+                "c-01".into(),
+                vec![
+                    o(json!({"id": "m1", "from": "ann@x", "from_name": "Ann", "text": "", "ts": 1.0, "files": [{"id": "f", "clip": {"k": "a", "d": 1000, "w": "", "tx": "the quarterly budget review"}}]})),
+                    o(json!({"id": "m2", "from": "ann@x", "from_name": "Ann", "text": "budget", "ts": 2.0})),
+                ],
+            );
+        }
+        let found = h.search(&s, &ann, "Quarterly budget", "50").unwrap();
+        let hits = found["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!((hits[0]["id"].clone(), hits[0]["excerpt"].clone()), (json!("m1"), json!("the quarterly budget review")));
+        // the text when it holds every word, else a transcript: newest first
+        let both = h.search(&s, &ann, "budget", "50").unwrap();
+        assert_eq!(both["hits"].as_array().unwrap().iter().map(|r| r["id"].clone()).collect::<Vec<_>>(), [json!("m2"), json!("m1")]);
     }
 
     #[test]
