@@ -99,6 +99,7 @@ import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: impo
 import { localProvidersCardBody, draftFromForm, modelsFieldValue, providerWithDiscovered } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135) / P-LOCAL.6: Settings → Local Providers
 import { parseResultWindowSetting, type ResultSpill } from "../result_window.ts"; // P-CTX.2b (ADR-0579): pure (no Node imports)
 import { resultWindowLine } from "./result_window_view.ts"; // P-CTX.2b (ADR-0579)
+import { installTitlebarFit } from "./titlebar_fit.ts"; // P-TITLEBAR.1 (ADR-0603)
 import type { PerCallModelSetting, PerCallModelView } from "../per_call_model.ts"; // P-MODEL.11 (ADR-0602): types only
 import { createAskLucid, type AskActionContext, type AskActionResult, type AskExtrasView, type AskLucidHandle } from "./ask_lucid_panel.ts"; // P-ASKLUCID.1 (ADR-0581): the Ask Lucid fly-out
 import { bindFileDrop, clipboardFiles, createAttachTray, folderDropNote, isAttachShortcut, mountPlusMenu, pickFiles, plusButtonTip, plusMenuItems, sentFilesEl, syncPlusButton, type AttachTray } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598): files on the prompt bars
@@ -445,6 +446,8 @@ function buildShell(): void {
       <button class="ctool tb-chip" id="ctSkill" data-tip="Skills|Built-in skills, /task delegation, and project skills" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
       <!-- ADR-0219: AskSage RAG Datasets picker (next to Skills). Short name shown; full name on hover. -->
       <button class="ctool tb-chip" id="ctDataset" data-tip="Datasets|AskSage RAG datasets that ground answers. Short name shown; full name on hover." hidden>${icon("folder", 14)}<span id="ctDatasetName">Datasets</span>${icon("chevron", 11)}</button>
+      <!-- P-TITLEBAR.1 (ADR-0603): when the window is too narrow, Persona / Skills / Knowledge fold in here. -->
+      <button class="ctool tb-chip" id="tbMore" type="button" hidden aria-haspopup="menu" aria-expanded="false" data-tip="More|Persona, Skills and Knowledge, folded here while the window is narrow">${icon("more", 14)}<span>More</span>${icon("chevron", 11)}</button>
       <!-- ADR-0219: per-session CUI vs Search mode (only shown under AskSage lockdown). -->
       <div class="mode-toggle" id="modeToggle" role="group" aria-label="Session mode" hidden data-tip="CUI vs Search mode|In CUI mode there is NO web search (spillage risk). To search the web, open another chat session and switch it to Search - never run search in a CUI thread." data-tip-side="bottom">
         <button class="mode-seg" data-mode="cui" type="button">${icon("shield", 12)} CUI</button>
@@ -16498,6 +16501,31 @@ function slashKeydown(e: KeyboardEvent): boolean {
   if (e.key === "Escape") { e.preventDefault(); closeSlashAC(); return true; }
   return false;
 }
+// P-TITLEBAR.1 (ADR-0603): the titlebar chips that fold into More, each opening its own dropdown as its chip does.
+const TB_FOLD: { id: string; icon: string; open: (anchor: HTMLElement) => void }[] = [
+  { id: "ctPersona", icon: "user", open: (a) => void openPersonaDropdown(a) },
+  { id: "ctSkill", icon: "bolt", open: (a) => openSkillDropdown(a) },
+  { id: "ctDataset", icon: "folder", open: (a) => void openDatasetDropdown(a) },
+];
+/** The More menu: one row per folded chip that applies (its owner has not hidden it), labeled as the chip is.
+ *  Choosing a row opens that chip's dropdown under More. Arrow keys move, Enter or Space choose, Esc closes. */
+function openTitlebarMore(more: HTMLElement): void {
+  cfgClose?.();
+  const items = TB_FOLD.filter((f) => !($(`#${f.id}`) as HTMLElement | null)?.hidden);
+  const rows = items.map((f) => `<div class="cfg-opt" role="menuitem" tabindex="0" data-tbfold="${f.id}"><span class="tick">${icon(f.icon, 13)}</span><span class="nm">${esc(($(`#${f.id}`)?.textContent ?? "").trim())}</span></div>`).join("");
+  const { node, close } = popover(more, `<div class="cfg-sec" role="menu" aria-label="More titlebar controls"><div class="cfg-list">${rows}</div></div>`, () => { cfgClose = null; more.setAttribute("aria-expanded", "false"); });
+  cfgClose = close;
+  more.setAttribute("aria-expanded", "true");
+  const pick = (row: HTMLElement): void => { const f = items.find((x) => x.id === row.dataset.tbfold); close(); f?.open(more); };
+  node.addEventListener("click", (e) => { const row = (e.target as HTMLElement).closest("[data-tbfold]") as HTMLElement | null; if (row) pick(row); });
+  node.addEventListener("keydown", (e) => {
+    const list = [...node.querySelectorAll<HTMLElement>("[data-tbfold]")];
+    const at = list.indexOf(document.activeElement as HTMLElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); list[(at + (e.key === "ArrowDown" ? 1 : list.length - 1)) % list.length]?.focus(); }
+    else if ((e.key === "Enter" || e.key === " ") && at >= 0) { e.preventDefault(); pick(list[at]!); }
+  });
+  node.querySelector<HTMLElement>("[data-tbfold]")?.focus();
+}
 function openSkillDropdown(anchor: HTMLElement): void {
   cfgClose?.();
   const active = state.activeSkill?.command;
@@ -18421,6 +18449,12 @@ function wire(): void {
   $("#ctPersona")!.addEventListener("click", () => openPersonaDropdown($("#ctPersona")!));
   $("#ctSkill")!.addEventListener("click", () => openSkillDropdown($("#ctSkill")!));
   $("#ctDataset")!.addEventListener("click", () => void openDatasetDropdown($("#ctDataset")!)); // ADR-0219
+  // P-TITLEBAR.1 (ADR-0603): the model name stays whole; the optional chips fold into More when the bar is full.
+  $("#tbMore")!.addEventListener("click", () => openTitlebarMore($("#tbMore")!));
+  installTitlebarFit({
+    bar: $(".titlebar")!, foldable: TB_FOLD.map((f) => $(`#${f.id}`)!), more: $("#tbMore")!, zoom: $(".titlebar .zoom"),
+    keep: $("#modelName")!, shrinkFirst: $("#tbRepo"), shrinkFloorPx: 240, spacer: $(".titlebar .tb-spacer"),
+  });
   $("#modeToggle")!.addEventListener("click", (e) => { // ADR-0219: CUI/Search segmented toggle
     const seg = (e.target as HTMLElement).closest(".mode-seg") as HTMLElement | null;
     if (seg?.dataset.mode) void applySessionMode(seg.dataset.mode as "cui" | "search");
