@@ -20,6 +20,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
+import { ATTACH_LIMITS, type AttachPolicyView } from "./attach_kinds.ts"; // P-ATTACH.1 (ADR-0598)
 
 export interface ManagedAttribution {
   /** Require a corporate email (no workstation-only attribution; implies skip is disabled). */
@@ -108,12 +109,26 @@ export interface ManagedCryptoPolicy {
   requireFips?: boolean;
 }
 
+/** P-ATTACH.1 (ADR-0598): files users add to the prompt bars. Each number is a ceiling clamped to
+ *  ATTACH_LIMITS (a policy can only tighten); `enabled: false` turns attachments off. Absent = on, at the
+ *  built-in limits. */
+export interface ManagedAttachmentsPolicy {
+  enabled?: boolean;
+  /** Files per message (images included). */
+  maxFiles?: number;
+  /** Bytes per file. */
+  maxBytes?: number;
+  /** Days a staged copy is kept before the sweeper deletes it. */
+  retentionDays?: number;
+}
+
 export interface ManagedSecurity {
   exec?: ManagedExecPolicy;
   egress?: ManagedEgressPolicy;
   loop?: ManagedLoopPolicy;
   sandbox?: ManagedSandboxPolicy;
   crypto?: ManagedCryptoPolicy;
+  attachments?: ManagedAttachmentsPolicy;
 }
 
 /** SIEM/audit sink configuration, consumed by ADR-0069 (P-ENT.2). Schema only here; the dispatcher +
@@ -349,6 +364,13 @@ function dwordTrue(v?: string): boolean {
   const n = v ? parseInt(v.trim(), 16) : 0;
   return Number.isFinite(n) && n !== 0;
 }
+
+/** A REG_DWORD's number ("0x19" -> 25); absent or unparsable = undefined. */
+function dwordNum(v?: string): number | undefined {
+  if (!v || !/^\s*0x[0-9a-f]+\s*$/i.test(v)) return undefined;
+  return parseInt(v.trim(), 16);
+}
+
 /** Split a list value: REG_MULTI_SZ (reg.exe prints `\0` between entries) or a CSV REG_SZ. */
 function regList(v?: string): string[] | undefined {
   if (v == null) return undefined;
@@ -408,7 +430,15 @@ export function parseRegistryPolicy(regOutput: string): ManagedConfig | null {
   const crypto: ManagedCryptoPolicy = { ...(cfg.security?.crypto ?? {}) };
   const cryptoFips = bool("CryptoRequireFips"); if (cryptoFips !== undefined) crypto.requireFips = cryptoFips;
 
+  // P-ATTACH.1 (ADR-0598): prompt-bar file attachments (DWORDs; managedAttachmentPolicy clamps them).
+  const attachments: ManagedAttachmentsPolicy = { ...(cfg.security?.attachments ?? {}) };
+  const atOn = bool("AttachmentsEnabled"); if (atOn !== undefined) attachments.enabled = atOn;
+  const atFiles = dwordNum(vals.get("AttachmentsMaxFiles")); if (atFiles !== undefined) attachments.maxFiles = atFiles;
+  const atBytes = dwordNum(vals.get("AttachmentsMaxBytes")); if (atBytes !== undefined) attachments.maxBytes = atBytes;
+  const atDays = dwordNum(vals.get("AttachmentsRetentionDays")); if (atDays !== undefined) attachments.retentionDays = atDays;
+
   const security: ManagedSecurity = { ...(cfg.security ?? {}) };
+  if (Object.keys(attachments).length) security.attachments = attachments;
   if (Object.keys(crypto).length) security.crypto = crypto;
   if (Object.keys(sandbox).length) security.sandbox = sandbox;
   if (Object.keys(exec).length) security.exec = exec;
@@ -466,7 +496,7 @@ export function mergeManaged(base: ManagedConfig | null, over: ManagedConfig | n
   const merged: ManagedConfig = { ...base, ...over };
   if (base.security || over.security) {
     const sec: ManagedSecurity = { ...(base.security ?? {}), ...(over.security ?? {}) };
-    for (const k of ["exec", "egress", "loop", "sandbox", "crypto"] as const) {
+    for (const k of ["exec", "egress", "loop", "sandbox", "crypto", "attachments"] as const) {
       const b = base.security?.[k]; const o = over.security?.[k];
       if (b || o) (sec as Record<string, unknown>)[k] = { ...(b ?? {}), ...(o ?? {}) };
     }
@@ -535,6 +565,22 @@ export function managedRequireFips(mc: ManagedConfig | null = managedConfig().co
  *  === false (which only removes the user's Off). Pure when given `mc`. */
 export function managedSandboxLocksOn(mc: ManagedConfig | null = managedConfig().config): boolean {
   return managedRequireIsolation(mc) || mc?.security?.sandbox?.allowUserOff === false;
+}
+
+/** P-ATTACH.1 (ADR-0598): the effective attachment policy. Each number is floored to an integer and clamped to
+ *  [1, ATTACH_LIMITS], so a policy can only tighten (a value below 1 is the tightest, 1); a missing or
+ *  non-numeric value keeps the built-in limit. Only a literal `enabled: false` turns attachments off. Pure
+ *  when given `mc`. */
+export function managedAttachmentPolicy(mc: ManagedConfig | null = managedConfig().config): AttachPolicyView {
+  const a = mc?.security?.attachments;
+  const clamp = (v: unknown, ceiling: number): number =>
+    typeof v === "number" && Number.isFinite(v) ? Math.max(1, Math.min(Math.floor(v), ceiling)) : ceiling;
+  return {
+    enabled: a?.enabled !== false,
+    files: clamp(a?.maxFiles, ATTACH_LIMITS.files),
+    bytes: clamp(a?.maxBytes, ATTACH_LIMITS.bytes),
+    retentionDays: clamp(a?.retentionDays, ATTACH_LIMITS.retentionDays),
+  };
 }
 
 /** P-SANDBOX.14: may users (and the agent) add sandbox folders of their own? Pure when given `mc`. */

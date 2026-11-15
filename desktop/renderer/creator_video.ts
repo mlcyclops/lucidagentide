@@ -15,6 +15,7 @@
 
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 import { creatorJobsHtml, type CuiVerdictView, type JobView } from "./creator_studio.ts";
 
 export interface AvatarTemplateView { path: string; name: string; sizeBytes: number }
@@ -173,11 +174,11 @@ export function openfilmLookHtml(look: OpenfilmLookVerdictView | null, jobId: st
   const para = (cls: string, ic: string, text: string) => `<p class="${cls}">${ic ? icon(ic, 13) : ""}${esc(text)}</p>`;
   const verdict = look.ok ? "Look passed" : "Look found errors";
   const sheets = look.sheets.map((id) =>
-    `<img class="cvd-video" data-cvd-sheet="${esc(id)}" alt="${esc(`OpenFilm contact sheet ${id}`)}" title="${esc(id)}" />`).join("");
+    `<img class="cvd-video" data-cvd-sheet="${esc(id)}" alt="${esc(`OpenFilm contact sheet ${id}`)}" data-tip="${esc(tipEsc(id))}" />`).join("");
   return `<div class="cpl-run${look.ok ? " ok" : " bad"}">
     <div class="cpl-run-row">
-      <span class="cpl-run-verdict" title="${esc(look.head)}">${esc(look.head ? `${verdict}: ${look.head}` : verdict)}</span>
-      <span class="cpl-run-job" title="${esc(jobId)}">${esc(jobId)}</span>
+      <span class="cpl-run-verdict" data-tip="${esc(tipEsc(look.head))}">${esc(look.head ? `${verdict}: ${look.head}` : verdict)}</span>
+      <span class="cpl-run-job" data-tip="${esc(tipEsc(jobId))}">${esc(jobId)}</span>
     </div>
     ${look.errors.map((e) => para("cpl-run-error", "alertBadge", e)).join("")}
     ${look.warnings.map((w) => para("cpl-gate", "alertBadge", w)).join("")}

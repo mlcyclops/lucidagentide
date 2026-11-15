@@ -17,6 +17,7 @@ import type { SecretRequestView } from "../secret_intake_view.ts"; // P-SECRET-I
 import type { TurnSnapshot } from "../turn_recovery.ts";
 import type { ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure progress + liveness view
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1: the same-file write wait view
+import type { ResultSpill } from "../result_window.ts"; // P-CTX.2b (ADR-0579): pure, types only
 export type { TurnStatus, TurnSnapshot } from "../turn_recovery.ts";
 export type { ProgressView, Liveness, LivenessState, TurnEstimate, OpenStep } from "../turn_progress.ts";
 export type { WaitView } from "../write_claims.ts";
@@ -49,7 +50,8 @@ export type ChatEvent =
   // P-EVAL.4 (ADR-0318): the real tool name (and later its pass/fail) for a call already streamed as
   // `tool`, self-reported from inside omp where the hook API does have it. Display + report metadata.
   // P-PROGRESS.1: `elapsedMs` rides the settling report (ok defined), so the step can show how long it took.
-  | { type: "tool-meta"; id: string; name: string; ok?: boolean; elapsedMs?: number }
+  // P-CTX.2b (ADR-0579): `window` reports stored and shown bytes when omp cut the result for the model.
+  | { type: "tool-meta"; id: string; name: string; ok?: boolean; elapsedMs?: number; window?: ResultSpill }
   // P-PROGRESS.1: the worker's progress view, every PROGRESS_TICK_MS while a turn runs (and once on every
   // tool call settle). Goes through onEvent directly, like `slow`: telling the user never counts as activity.
   | { type: "progress"; progress: ProgressView }

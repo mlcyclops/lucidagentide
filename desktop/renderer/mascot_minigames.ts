@@ -7,12 +7,15 @@
 
 import { MASCOT_H, MASCOT_THEMES, MASCOT_W, paintFrame } from './mascot.ts';
 import type { ArcadeScorePort } from './mascot_game.ts';
+import { MASCOT_CELL_CSS, type MascotSize } from './mini_lucid.ts';
 
 export interface MiniGameHandle {
   /** Toggle Start/Pause/Resume, or restart a finished run. */
   start(): void;
   /** Pause and release input; keeps the last frame painted. */
   stop(): void;
+  /** P-MINI.3 (ADR-0596): resize the ninja live. The run keeps going; nothing restarts. */
+  setMascotSize(size: MascotSize): void;
   /** Tear down listeners, rAF and DOM. Idempotent. */
   dispose(): void;
 }
@@ -29,15 +32,30 @@ export interface MiniGameDef {
   id: 'shuriken' | 'kata' | 'stack';
   name: string;
   blurb: string;
-  mount(host: HTMLElement, toolbar: MiniGameToolbar, scorePort?: ArcadeScorePort): MiniGameHandle;
+  /** `size` is the ninja size the game opens with (default "small"). */
+  mount(host: HTMLElement, toolbar: MiniGameToolbar, scorePort?: ArcadeScorePort, size?: MascotSize): MiniGameHandle;
 }
 
 const CANVAS_HEIGHT = 180;
-const FLOOR_Y = 172;
-const SPRITE_SCALE = 2;
-const SPRITE_W = MASCOT_W * SPRITE_SCALE;
-const SPRITE_H = MASCOT_H * SPRITE_SCALE;
+/** The floor every mini game stands the ninja on, in canvas pixels from the top. */
+export const MINI_FLOOR_Y = 172;
 const MIN_WIDTH = 260;
+
+/** P-MINI.3 (ADR-0596): CSS pixels per sprite cell. Large is the classic 2; small is mini Lucid's 1. Every
+ *  sprite-relative length in these games is a multiple of this one value. */
+export function miniSpriteScale(size: MascotSize): number {
+  return MASCOT_CELL_CSS[size] ?? MASCOT_CELL_CSS.small;
+}
+
+/** Where each game paints its ninja, in canvas pixels: feet on MINI_FLOOR_Y at either size. */
+export function miniSpriteRect(game: MiniGameDef['id'], width: number, size: MascotSize): { x: number; y: number; w: number; h: number } {
+  const scale = miniSpriteScale(size);
+  const w = MASCOT_W * scale;
+  const h = MASCOT_H * scale;
+  const x = game === 'shuriken' ? 2 : game === 'kata' ? Math.round(clampWidth(width) / 2 - w / 2) : 0;
+  return { x, y: MINI_FLOOR_Y - h, w, h };
+}
+
 /** Longest slice fed to an engine in one call, and the fixed substep inside it. Identical to the
  *  arcade: a stalled tab must not tunnel a shuriken straight through a target. */
 const MAX_SLICE_MS = 100;
@@ -92,6 +110,8 @@ export interface ShurikenState {
   flashMs: number;
   seed: number;
   nextId: number;
+  /** P-MINI.3 (ADR-0596): the ninja size; launch point, lanes, marks and shots all derive from it. */
+  size: MascotSize;
 }
 
 export const SHURIKEN_LANES = 3;
@@ -99,23 +119,54 @@ export const SHURIKEN_RUN_MS = 60000;
 export const SHURIKEN_HIT_POINTS = 10;
 export const SHURIKEN_DUMMY_PENALTY = 1;
 export const SHURIKEN_MAX_MULTIPLIER = 5;
-const SHURIKEN_LAUNCH_X = 84;
 const SHURIKEN_SHOT_SPEED = 330;
-const SHURIKEN_SHOT_WIDTH = 10;
 const SHURIKEN_COOLDOWN_MS = 200;
-const SHURIKEN_LANE_Y = [84, 112, 140] as const;
+
+export interface ShurikenGeometry {
+  /** Where a throw leaves the hand: just past the sprite's right edge. */
+  launchX: number;
+  /** Lane centers, top to bottom, all inside the standing sprite's height so every throw is from the hand. */
+  laneY: readonly number[];
+  shotWidth: number;
+  targetWidth: number;
+  dummyWidth: number;
+}
+
+/** P-MINI.3 (ADR-0596): the whole range in sprite cells, times the one sprite scale. Large reproduces the
+ *  classic numbers exactly (launch 84, lanes 84/112/140, shot 10, mark 22, dummy 20). Speeds stay in canvas
+ *  pixels: the range is the panel's width, not the ninja's, and a hit depends only on sharing a lane, so a
+ *  smaller ninja and smaller marks are exactly as hittable. */
+export function shurikenGeometry(size: MascotSize): ShurikenGeometry {
+  const s = miniSpriteScale(size);
+  return {
+    launchX: 4 + MASCOT_W * s,
+    laneY: [MINI_FLOOR_Y - 44 * s, MINI_FLOOR_Y - 30 * s, MINI_FLOOR_Y - 16 * s],
+    shotWidth: 5 * s, targetWidth: 11 * s, dummyWidth: 10 * s,
+  };
+}
 
 /** Payout multiplier for the next hit, given the consecutive hits already banked. */
 export function shurikenMultiplier(combo: number): number {
   return Math.min(SHURIKEN_MAX_MULTIPLIER, 1 + Math.max(0, Math.floor(combo)));
 }
 
-export function createShurikenState(width = 640, seed = 1): ShurikenState {
+export function createShurikenState(width = 640, seed = 1, size: MascotSize = 'small'): ShurikenState {
   return {
     phase: 'playing', width: clampWidth(width), elapsedMs: 0, remainingMs: SHURIKEN_RUN_MS,
     lane: 1, score: 0, combo: 0, bestCombo: 0, hits: 0, misses: 0, strikes: 0,
     targets: [], shots: [], spawnMs: 500, cooldownMs: 0, throwMs: 0, flashMs: 0,
-    seed: seed >>> 0, nextId: 0,
+    seed: seed >>> 0, nextId: 0, size,
+  };
+}
+
+/** P-MINI.3 (ADR-0596): a live size switch. Marks already on the range take the new size in place; shots
+ *  read their width from the state, and lanes are drawn from it, so the run simply carries on. */
+export function setShurikenMascotSize(state: ShurikenState, size: MascotSize): ShurikenState {
+  if (state.size === size) return state;
+  const g = shurikenGeometry(size);
+  return {
+    ...state, size,
+    targets: state.targets.map(t => ({ ...t, width: t.kind === 'dummy' ? g.dummyWidth : g.targetWidth })),
   };
 }
 
@@ -133,7 +184,7 @@ export function applyShurikenInput(state: ShurikenState, action: ShurikenAction)
     cooldownMs: SHURIKEN_COOLDOWN_MS,
     throwMs: 170,
     nextId: state.nextId + 1,
-    shots: [...state.shots, { id: state.nextId, lane: state.lane, x: SHURIKEN_LAUNCH_X, spent: false }],
+    shots: [...state.shots, { id: state.nextId, lane: state.lane, x: shurikenGeometry(state.size).launchX, spent: false }],
   };
 }
 
@@ -152,11 +203,12 @@ function advanceShuriken(next: ShurikenState, dtMs: number): void {
   for (const shot of next.shots) {
     if (!shot.spent) shot.x += SHURIKEN_SHOT_SPEED * dt;
   }
+  const geometry = shurikenGeometry(next.size);
   for (const shot of next.shots) {
     if (shot.spent) continue;
     for (const target of next.targets) {
       if (target.hit || target.lane !== shot.lane) continue;
-      if (shot.x + SHURIKEN_SHOT_WIDTH < target.x || shot.x > target.x + target.width) continue;
+      if (shot.x + geometry.shotWidth < target.x || shot.x > target.x + target.width) continue;
       shot.spent = true;
       target.hit = true;
       target.popMs = 220;
@@ -187,7 +239,7 @@ function advanceShuriken(next: ShurikenState, dtMs: number): void {
     const kind = (rolled >>> 5) % 4 === 0 ? 'dummy' : 'target';
     next.targets.push({
       id: next.nextId++, kind, lane: rolled % SHURIKEN_LANES, x: next.width + 18,
-      width: kind === 'dummy' ? 20 : 22, speed: 58 + ((rolled >>> 9) % 5) * 16,
+      width: kind === 'dummy' ? geometry.dummyWidth : geometry.targetWidth, speed: 58 + ((rolled >>> 9) % 5) * 16,
       hit: false, popMs: 0,
     });
     next.spawnMs += 560 + (rolled >>> 13) % 460;
@@ -235,6 +287,8 @@ export interface KataState {
   elapsedMs: number;
   seed: number;
   width: number;
+  /** P-MINI.3 (ADR-0596): the ninja size. Only the painter reads it: a pose is judged, never measured. */
+  size: MascotSize;
 }
 
 export const KATA_BEAT_MS = 520;
@@ -253,12 +307,12 @@ export function kataPayout(length: number): number {
   return n * (n + 1) * 5;
 }
 
-export function createKataState(width = 640, seed = 1): KataState {
+export function createKataState(width = 640, seed = 1, size: MascotSize = 'small'): KataState {
   const first = rollPose(seed >>> 0);
   return {
     phase: 'demo', round: 1, sequence: [first.pose], cursor: 0, beatMs: KATA_BEAT_MS,
     score: 0, lastPose: null, wrongPose: null, flashMs: 0, elapsedMs: 0,
-    seed: first.seed, width: clampWidth(width),
+    seed: first.seed, width: clampWidth(width), size,
   };
 }
 
@@ -339,6 +393,9 @@ export interface StackState {
   flashMs: number;
   elapsedMs: number;
   seed: number;
+  /** P-MINI.3 (ADR-0596): the size of the watcher on the ledge. The crates are the tower's own geometry,
+   *  sized to the panel and not to him, so the tower plays the same at either size. */
+  size: MascotSize;
 }
 
 export const STACK_START_WIDTH = 96;
@@ -354,14 +411,20 @@ export function stackSpeed(height: number, width = 640): number {
   return Math.min(340, 92 + Math.max(0, height) * 13) * Math.max(1, clampWidth(width) / 420);
 }
 
-export function createStackState(width = 640, seed = 1): StackState {
+export function createStackState(width = 640, seed = 1, size: MascotSize = 'small'): StackState {
   const canvas = clampWidth(width);
   const baseX = Math.round((canvas - STACK_START_WIDTH) / 2);
   return {
     phase: 'playing', width: canvas, tower: [{ x: baseX, width: STACK_START_WIDTH }],
     height: 0, score: 0, perfects: 0, blockX: 0, blockWidth: STACK_START_WIDTH, direction: 1,
-    lastTrim: 0, perfectMs: 0, flashMs: 0, elapsedMs: 0, seed: seed >>> 0,
+    lastTrim: 0, perfectMs: 0, flashMs: 0, elapsedMs: 0, seed: seed >>> 0, size,
   };
+}
+
+/** The watcher's ledge scales with him (76 classic), so a small ninja is not lost on a slab built for the
+ *  big one, and at either size it ends well short of the narrowest tower's foundation. */
+export function stackLedgeWidth(size: MascotSize): number {
+  return 38 * miniSpriteScale(size);
 }
 
 /** Edge triggered drop. Overhang is trimmed away for good; a centered drop inside STACK_PERFECT_PX
@@ -440,6 +503,39 @@ function hudText(ctx: CanvasRenderingContext2D, palette: Palette, text: string, 
   ctx.fillText(text, Math.round(x), y);
 }
 
+/** The small-size mark (11 px) or straw dummy (10 px wide), the classic art at half size in whole pixels. */
+function paintSmallMark(ctx: CanvasRenderingContext2D, palette: Palette, target: ShurikenTarget, x: number, y: number): void {
+  if (target.kind === 'dummy') {
+    ctx.fillStyle = palette.s!;
+    ctx.fillRect(x + 2, y - 7, 6, 14);
+    ctx.fillStyle = palette.S!;
+    ctx.fillRect(x + 3, y - 6, 2, 12);
+    ctx.fillStyle = palette.k!;
+    ctx.fillRect(x + 1, y - 5, 8, 2);
+    ctx.fillRect(x + 1, y + 3, 8, 2);
+    ctx.fillStyle = palette.L!;
+    ctx.fillRect(x + 4, y + 7, 2, 3);
+    return;
+  }
+  if (target.hit) {
+    ctx.fillStyle = palette.G!;
+    const burst = Math.max(1, Math.round(target.popMs / 52));
+    ctx.fillRect(x + 5 - burst, y, burst * 2 + 1, 1);
+    ctx.fillRect(x + 5, y - burst, 1, burst * 2 + 1);
+    return;
+  }
+  ctx.fillStyle = palette.k!;
+  ctx.fillRect(x, y - 5, 11, 11);
+  ctx.fillStyle = palette.M!;
+  ctx.fillRect(x + 1, y - 4, 9, 9);
+  ctx.fillStyle = palette.W!;
+  ctx.fillRect(x + 2, y - 3, 7, 7);
+  ctx.fillStyle = palette.k!;
+  ctx.fillRect(x + 3, y - 2, 5, 5);
+  ctx.fillStyle = palette.G!;
+  ctx.fillRect(x + 4, y - 1, 3, 3);
+}
+
 export function paintShurikenRange(ctx: CanvasRenderingContext2D, state: ShurikenState, palette: Palette, playing: boolean): void {
   const width = state.width;
   fillBackdrop(ctx, width, palette);
@@ -447,16 +543,25 @@ export function paintShurikenRange(ctx: CanvasRenderingContext2D, state: Shurike
   for (let x = 0; x < width; x += 56) ctx.fillRect(x + 4, 26, 48, CANVAS_HEIGHT - 44);
   ctx.fillStyle = palette.K!;
   for (let x = 0; x < width; x += 56) ctx.fillRect(x + 4, 26, 48, 4);
+  const s = miniSpriteScale(state.size);
+  const { launchX, laneY } = shurikenGeometry(state.size);
+  // The classic art is hand-placed for scale 2; small gets its own half-size art rather than a
+  // fractional scale, which would blur every edge (P-MINI.3 (ADR-0596)).
+  const big = s >= 2;
   for (let lane = 0; lane < SHURIKEN_LANES; lane++) {
-    const y = SHURIKEN_LANE_Y[lane]!;
+    const y = laneY[lane]!;
     ctx.fillStyle = lane === state.lane ? palette.g! : palette.L!;
-    ctx.fillRect(SHURIKEN_LAUNCH_X - 6, y + 15, width - SHURIKEN_LAUNCH_X + 6, 2);
+    ctx.fillRect(launchX - 3 * s, y + Math.round(7.5 * s), width - launchX + 3 * s, s);
   }
   ctx.fillStyle = palette.g!;
-  ctx.fillRect(0, FLOOR_Y, width, 2);
+  ctx.fillRect(0, MINI_FLOOR_Y, width, 2);
   for (const target of state.targets) {
     const x = Math.round(target.x);
-    const y = SHURIKEN_LANE_Y[target.lane] ?? SHURIKEN_LANE_Y[1]!;
+    const y = laneY[target.lane] ?? laneY[1]!;
+    if (!big) {
+      paintSmallMark(ctx, palette, target, x, y);
+      continue;
+    }
     if (target.kind === 'dummy') {
       ctx.fillStyle = palette.s!;
       ctx.fillRect(x + 4, y - 14, 12, 28);
@@ -493,9 +598,20 @@ export function paintShurikenRange(ctx: CanvasRenderingContext2D, state: Shurike
   ctx.fillStyle = palette.M!;
   for (const shot of state.shots) {
     const x = Math.round(shot.x);
-    const y = SHURIKEN_LANE_Y[shot.lane] ?? SHURIKEN_LANE_Y[1]!;
+    const y = laneY[shot.lane] ?? laneY[1]!;
     const spin = Math.floor(state.elapsedMs / 45) % 2 === 0;
-    if (spin) {
+    if (!big) {
+      // A five-pixel star: upright cross, then a block with the hub hole.
+      if (spin) {
+        ctx.fillRect(x, y, 5, 1);
+        ctx.fillRect(x + 2, y - 2, 1, 5);
+      } else {
+        ctx.fillRect(x + 1, y - 1, 3, 3);
+        ctx.fillStyle = palette.k!;
+        ctx.fillRect(x + 2, y, 1, 1);
+        ctx.fillStyle = palette.M!;
+      }
+    } else if (spin) {
       ctx.fillRect(x, y - 2, 10, 4);
       ctx.fillRect(x + 3, y - 5, 4, 10);
     } else {
@@ -506,11 +622,17 @@ export function paintShurikenRange(ctx: CanvasRenderingContext2D, state: Shurike
     }
   }
   const frame = state.throwMs > 90 ? 'punchB' : state.throwMs > 0 ? 'punchD' : playing ? 'guard' : 'idleA';
-  paintFrame(ctx, frame, SPRITE_SCALE, 2, FLOOR_Y - SPRITE_H, palette);
+  const sprite = miniSpriteRect('shuriken', width, state.size);
+  paintFrame(ctx, frame, s, sprite.x, sprite.y, palette);
   ctx.fillStyle = palette.G!;
-  const aimY = SHURIKEN_LANE_Y[state.lane]!;
-  ctx.fillRect(SHURIKEN_LAUNCH_X - 8, aimY - 1, 6, 3);
-  ctx.fillRect(SHURIKEN_LAUNCH_X - 4, aimY - 4, 3, 9);
+  const aimY = laneY[state.lane]!;
+  if (big) {
+    ctx.fillRect(launchX - 8, aimY - 1, 6, 3);
+    ctx.fillRect(launchX - 4, aimY - 4, 3, 9);
+  } else {
+    ctx.fillRect(launchX - 4, aimY, 3, 1);
+    ctx.fillRect(launchX - 3, aimY - 2, 1, 5);
+  }
   hudText(ctx, palette, `${Math.ceil(state.remainingMs / 1000)}s`, 6, 18);
   hudText(ctx, palette, `Run ${state.score}`, Math.round(width / 2), 18, 'center');
   hudText(ctx, palette, `x${shurikenMultiplier(state.combo)}`, width - 6, 18, 'right');
@@ -531,7 +653,7 @@ export function paintKataFloor(ctx: CanvasRenderingContext2D, state: KataState, 
   ctx.fillStyle = palette.K!;
   for (let x = 0; x < width; x += 48) ctx.fillRect(x + 2, 44, 44, CANVAS_HEIGHT - 50);
   ctx.fillStyle = palette.g!;
-  ctx.fillRect(0, FLOOR_Y, width, 2);
+  ctx.fillRect(0, MINI_FLOOR_Y, width, 2);
   // Progress pips: one square per pose, never wrapping prose.
   const count = state.sequence.length;
   const pitch = 10;
@@ -548,7 +670,8 @@ export function paintKataFloor(ctx: CanvasRenderingContext2D, state: KataState, 
   }
   const pose = state.phase === 'demo' && showing ? state.sequence[state.cursor] ?? null : state.lastPose;
   const frame = state.phase === 'over' ? 'land' : pose ? KATA_FRAMES[pose] : 'guard';
-  paintFrame(ctx, frame, SPRITE_SCALE, Math.round(width / 2 - SPRITE_W / 2), FLOOR_Y - SPRITE_H, palette);
+  const sprite = miniSpriteRect('kata', width, state.size);
+  paintFrame(ctx, frame, miniSpriteScale(state.size), sprite.x, sprite.y, palette);
   if (state.flashMs > 0) {
     ctx.fillStyle = state.phase === 'over' ? palette.s! : palette.G!;
     ctx.fillRect(0, 26, width, 2);
@@ -570,13 +693,15 @@ export function paintStackTower(ctx: CanvasRenderingContext2D, state: StackState
     ctx.fillRect(x, y, 2, 2);
   }
   // The ledge and its watcher are fixed furniture on the left, so the camera lift never moves them.
+  const ledge = stackLedgeWidth(state.size);
   ctx.fillStyle = palette.K!;
-  ctx.fillRect(0, FLOOR_Y, 76, CANVAS_HEIGHT - FLOOR_Y);
+  ctx.fillRect(0, MINI_FLOOR_Y, ledge, CANVAS_HEIGHT - MINI_FLOOR_Y);
   ctx.fillStyle = palette.L!;
-  ctx.fillRect(0, FLOOR_Y - 2, 76, 2);
-  paintFrame(ctx, playing ? 'guard' : 'idleA', SPRITE_SCALE, 0, FLOOR_Y - SPRITE_H, palette);
+  ctx.fillRect(0, MINI_FLOOR_Y - 2, ledge, 2);
+  const sprite = miniSpriteRect('stack', width, state.size);
+  paintFrame(ctx, playing ? 'guard' : 'idleA', miniSpriteScale(state.size), sprite.x, sprite.y, palette);
   const lift = Math.max(0, state.tower.length * STACK_BLOCK_HEIGHT - 108);
-  const rowY = (index: number): number => FLOOR_Y - (index + 1) * STACK_BLOCK_HEIGHT + lift;
+  const rowY = (index: number): number => MINI_FLOOR_Y - (index + 1) * STACK_BLOCK_HEIGHT + lift;
   for (let i = 0; i < state.tower.length; i++) {
     const block = state.tower[i]!;
     const y = rowY(i);
@@ -614,7 +739,7 @@ export function paintStackTower(ctx: CanvasRenderingContext2D, state: StackState
     ctx.fillStyle = palette.G!;
     ctx.fillRect(0, rowY(state.tower.length - 1) - 2, width, 1);
   }
-  hudText(ctx, palette, `Height ${state.height}`, 82, 18);
+  hudText(ctx, palette, `Height ${state.height}`, ledge + 6, 18);
   hudText(ctx, palette, `Run ${state.score}`, Math.round(width / 2) + 30, 18, 'center');
   hudText(ctx, palette, `${Math.round(state.blockWidth)}px`, width - 6, 18, 'right');
   if (state.phase === 'over') {
@@ -638,8 +763,10 @@ interface MiniGameSpec<S> {
   readyText: string;
   buttons: readonly MiniButton[];
   keyAction(event: KeyboardEvent): string | null;
-  create(width: number, seed: number): S;
+  create(width: number, seed: number, size: MascotSize): S;
   resize(state: S, width: number): S;
+  /** P-MINI.3 (ADR-0596): the live size switch, applied to a run in progress without restarting it. */
+  withSize(state: S, size: MascotSize): S;
   step(state: S, elapsedMs: number): S;
   input(state: S, action: string): S;
   paint(ctx: CanvasRenderingContext2D, state: S, palette: Palette, playing: boolean): void;
@@ -651,7 +778,7 @@ interface MiniGameSpec<S> {
 
 let runCounter = 0;
 
-function mountMiniGame<S>(host: HTMLElement, toolbar: MiniGameToolbar, scorePort: ArcadeScorePort | undefined, spec: MiniGameSpec<S>): MiniGameHandle {
+function mountMiniGame<S>(host: HTMLElement, toolbar: MiniGameToolbar, scorePort: ArcadeScorePort | undefined, spec: MiniGameSpec<S>, initialSize: MascotSize = 'small'): MiniGameHandle {
   const root = document.createElement('section');
   root.className = `mini-game mini-game-${spec.id}`;
   root.setAttribute('aria-label', spec.name);
@@ -675,7 +802,8 @@ function mountMiniGame<S>(host: HTMLElement, toolbar: MiniGameToolbar, scorePort
   const palette = MASCOT_THEMES.lucid.palette;
 
   let width = MIN_WIDTH;
-  let state = spec.create(width, 1);
+  let size = initialSize;
+  let state = spec.create(width, 1, size);
   let playing = false;
   let started = false;
   let disposed = false;
@@ -773,7 +901,7 @@ function mountMiniGame<S>(host: HTMLElement, toolbar: MiniGameToolbar, scorePort
     if (disposed || !context || document.hidden) return;
     halt();
     width = measure();
-    state = spec.create(width, (Math.imul(Date.now() >>> 0, 2246822519) + ++runCounter) >>> 0);
+    state = spec.create(width, (Math.imul(Date.now() >>> 0, 2246822519) + ++runCounter) >>> 0, size);
     started = true;
     awarded = false;
     playing = true;
@@ -843,6 +971,12 @@ function mountMiniGame<S>(host: HTMLElement, toolbar: MiniGameToolbar, scorePort
       if (disposed || !playing) return;
       pause();
     },
+    setMascotSize(next) {
+      if (disposed || next === size) return;
+      size = next;
+      state = spec.withSize(state, size);
+      paint();
+    },
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -879,6 +1013,7 @@ const SHURIKEN_SPEC: MiniGameSpec<ShurikenState> = {
   },
   create: createShurikenState,
   resize: (state, width) => ({ ...state, width: clampWidth(width) }),
+  withSize: setShurikenMascotSize,
   step: stepShuriken,
   input: (state, action) => applyShurikenInput(state, action as ShurikenAction),
   paint: paintShurikenRange,
@@ -911,6 +1046,7 @@ const KATA_SPEC: MiniGameSpec<KataState> = {
   },
   create: createKataState,
   resize: (state, width) => ({ ...state, width: clampWidth(width) }),
+  withSize: (state, size) => (state.size === size ? state : { ...state, size }),
   step: stepKata,
   input: (state, action) => (KATA_POSES.includes(action as KataPose) ? applyKataInput(state, action as KataPose) : state),
   paint: paintKataFloor,
@@ -938,6 +1074,7 @@ const STACK_SPEC: MiniGameSpec<StackState> = {
     const next = clampWidth(width);
     return { ...state, width: next, blockX: Math.max(0, Math.min(next - state.blockWidth, state.blockX)) };
   },
+  withSize: (state, size) => (state.size === size ? state : { ...state, size }),
   step: stepStack,
   input: (state, action) => (action === 'drop' ? dropStackBlock(state) : state),
   paint: paintStackTower,
@@ -950,14 +1087,14 @@ const STACK_SPEC: MiniGameSpec<StackState> = {
 export const MINI_GAMES: readonly MiniGameDef[] = [
   {
     id: SHURIKEN_SPEC.id, name: SHURIKEN_SPEC.name, blurb: SHURIKEN_SPEC.blurb,
-    mount: (host, toolbar, scorePort) => mountMiniGame(host, toolbar, scorePort, SHURIKEN_SPEC),
+    mount: (host, toolbar, scorePort, size) => mountMiniGame(host, toolbar, scorePort, SHURIKEN_SPEC, size),
   },
   {
     id: KATA_SPEC.id, name: KATA_SPEC.name, blurb: KATA_SPEC.blurb,
-    mount: (host, toolbar, scorePort) => mountMiniGame(host, toolbar, scorePort, KATA_SPEC),
+    mount: (host, toolbar, scorePort, size) => mountMiniGame(host, toolbar, scorePort, KATA_SPEC, size),
   },
   {
     id: STACK_SPEC.id, name: STACK_SPEC.name, blurb: STACK_SPEC.blurb,
-    mount: (host, toolbar, scorePort) => mountMiniGame(host, toolbar, scorePort, STACK_SPEC),
+    mount: (host, toolbar, scorePort, size) => mountMiniGame(host, toolbar, scorePort, STACK_SPEC, size),
   },
 ];

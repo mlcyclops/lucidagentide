@@ -13,10 +13,11 @@
 import { $ } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
-import { popover } from "./ui.ts";
+import { popover, setTip } from "./ui.ts";
 import type { LucidBridge, RepoContext, RepoView } from "./bridge.ts";
 import { hostedRepo, pushLabel, pushSlug, repoTooltip } from "../repo_identity.ts";
 import { providerLabel } from "../git_url.ts";
+import { writeClipboard } from "./ctxmenu.ts"; // a copy that falls back when the browser refuses the Clipboard API
 
 /** How much a chip says. `full`: repo, branch, push target. `compact`: repo and branch (tight spots that
  *  already name the push target elsewhere, or the hub). `push`: branch and push target only, for cards
@@ -50,8 +51,7 @@ export function paintRepoChip(node: HTMLElement, ctx: RepoContext | undefined | 
   // The app's premium tooltip (ui.ts initTooltips), never the OS `title` box: a title line naming the repo,
   // then one fact per line (#tip .d is pre-line).
   const tip = repoTooltip(v, ctx);
-  node.removeAttribute("title");
-  node.setAttribute("data-tip", `${tip.title.replaceAll("|", "/")}|${tip.body}`);
+  setTip(node, tip.title, tip.body);
   node.setAttribute("data-tip-icon", "git");
   node.hidden = false;
 }
@@ -84,7 +84,7 @@ export function openRepoDetails(anchor: HTMLElement, ctx: RepoContext, subject: 
     const open = t?.closest<HTMLElement>("[data-rc-open]");
     if (open?.dataset.rcOpen) { openUrl(open.dataset.rcOpen); p.close(); return; }
     const copy = t?.closest<HTMLElement>("[data-rc-copy]");
-    if (copy?.dataset.rcCopy) { void navigator.clipboard.writeText(copy.dataset.rcCopy).catch(() => { /* clipboard denied: the path is on screen */ }); p.close(); }
+    if (copy?.dataset.rcCopy) { void writeClipboard(copy.dataset.rcCopy).catch(() => { /* clipboard denied: the path is on screen */ }); p.close(); }
   });
 }
 

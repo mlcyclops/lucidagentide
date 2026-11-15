@@ -119,20 +119,21 @@ describe("personalStatsHtml", () => {
     expect(html).toContain("&quot;alert(1)&quot;");
   });
 
-  test("a hostile name cannot break out of the title attribute either", () => {
+  test("a hostile name cannot break out of the tooltip attribute either", () => {
     const html = personalStatsHtml(personalStatTiles(input({
       kgs: [{ kg_id: "x", name: `" onmouseover="steal()`, read_only: false, active: false }],
     })));
     expect(html).not.toContain(`" onmouseover=`);
   });
 
-  test("every tile carries a title, so a name too long for a narrow tile is recoverable (invariant 11)", () => {
+  test("every tile carries a tooltip, so a name too long for a narrow tile is recoverable (invariant 11)", () => {
     const html = personalStatsHtml(personalStatTiles(input({
       kgs: [{ kg_id: "x", name: "Predictive Logistics for Contested Environments", read_only: true, active: false }],
     })));
-    const titles = html.match(/title="/g) ?? [];
-    expect(titles).toHaveLength(3); // personal, work, the KG
-    expect(html).toContain(`title="Predictive Logistics for Contested Environments (read only)"`);
+    const tips = html.match(/data-tip="/g) ?? [];
+    expect(tips).toHaveLength(3); // personal, work, the KG
+    expect(html).toContain(`data-tip="Predictive Logistics for Contested Environments (read only)"`);
+    expect(html).not.toContain(` title="`); // P-TIP.1 (ADR-0599): the premium tooltip, never the OS one
   });
 
   test("the tile count is exposed so the layout can be asserted from the served bytes", () => {

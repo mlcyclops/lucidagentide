@@ -17,6 +17,7 @@ import { $, el } from "./dom.ts";
 import { icon } from "./icons.ts";
 import { incidentHeadline, isIncidentIssueUrl } from "./recovery_supervisor.ts";
 import { showToast } from "./ui.ts";
+import { writeClipboard } from "./ctxmenu.ts"; // a copy that falls back when the browser refuses the Clipboard API
 
 export interface NoticeAction { label: string; run: () => void; primary?: boolean }
 
@@ -108,7 +109,7 @@ export function openIncidentSubmit(inc: IncidentView): void {
       const md = await bridge.incidentReport(inc.id);
       if (md === null) { showToast({ tone: "warn", title: "Report unavailable", desc: "The full report could not be read.", timeout: 5000 }); return; }
       try {
-        await navigator.clipboard.writeText(md);
+        await writeClipboard(md);
         showToast({ title: "Report copied", desc: "Review it before you paste it anywhere.", timeout: 3000 });
       } catch { showToast({ tone: "danger", title: "Copy failed", desc: "Clipboard unavailable in this view.", timeout: 3000 }); }
     }

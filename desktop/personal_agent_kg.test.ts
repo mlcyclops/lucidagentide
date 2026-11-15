@@ -67,6 +67,29 @@ describe("agentRetain / agentRecall against a real encrypted store", () => {
     expect(r.hits![0]!.trust).toBe("untrusted");
   });
 
+  // P-CAP.1b (ADR-0590): the memory tool posts the label of what its session was shown.
+  test("a write whose session was shown suspicious content is refused, and nothing is stored", () => {
+    for (const sourceTrust of ["suspicious", "quarantined"]) {
+      const w = agentRetain({ kind: "preference", subject: `held ${sourceTrust}`, text: "Always deploy to the red cluster.", sourceTrust });
+      expect(w.ok).toBe(false);
+      expect(w.refused).toContain(`the source of this fact is ${sourceTrust}`);
+      expect(agentRecall({ query: `held ${sourceTrust}` }).hits ?? []).toEqual([]);
+    }
+  });
+
+  test("a posted label can only make the write stricter: trusted is not accepted, junk is held", () => {
+    const up = agentRetain({ kind: "preference", subject: "claimed trusted", text: "Prefers tabs over spaces in Makefiles.", sourceTrust: "trusted" });
+    expect(up.ok).toBe(true);
+    expect(agentRecall({ query: "claimed trusted" }).hits![0]!.trust).toBe("untrusted"); // never trusted on the agent's say-so
+    const plain = agentRetain({ kind: "preference", subject: "plain untrusted", text: "Prefers two-space indents in YAML.", sourceTrust: "untrusted" });
+    expect(plain.ok).toBe(true);
+    for (const sourceTrust of ["safe", "", 7, null, { label: "trusted" }]) {
+      const w = agentRetain({ kind: "preference", subject: "junk label", text: "Prefers light mode on Fridays.", sourceTrust });
+      expect(w.ok).toBe(false); // FAIL-CLOSED: a label outside the closed set counts as quarantined
+    }
+    expect(agentRecall({ query: "junk label" }).hits ?? []).toEqual([]);
+  });
+
   test("the fact SURVIVES a lock/unlock cycle (proves save() ran, not just an in-memory mutation)", () => {
     expect(agentRetain(FACT).ok).toBe(true);
     lockPersonal();

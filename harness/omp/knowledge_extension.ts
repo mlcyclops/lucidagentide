@@ -56,6 +56,8 @@ import {
 } from "../personal/agent_kg.ts";
 import { engineFetch } from "./engine_channel.ts"; // LH-03 (ADR-0544): a held lane's call is MACed and its answer proven
 import { neutralizeDelimiters } from "../prompt/untrusted.ts";
+import { spillAccessFromContext } from "../security/spill_provenance.ts"; // P-CAP.1b (ADR-0590): the session a tool runs in
+import { needsReview, sessionSourceTrust, taintFor, type SourceTrust } from "../security/trust_propagation.ts";
 
 /** Shape the /api/kb/retrieve response into the tool's text result. PURE + exported for tests.
  *  - no URL (desktop not running / older omp) → a clear "unavailable" message.
@@ -187,6 +189,15 @@ function parseKinds(raw: unknown): string[] | undefined {
   return out.length ? out : undefined;
 }
 
+/** P-CAP.1b (ADR-0590): the trust label a memory write from this session carries, from the session omp
+ *  hands the tool. FAIL-CLOSED: with no session to ask, provenance cannot be verified, and the answer is
+ *  quarantined. Exported for tests. */
+export function retainSourceTrust(ctx: unknown): SourceTrust {
+  const access = spillAccessFromContext(ctx);
+  if (access === null) return { trust: "quarantined", sources: ["a session whose record is not available"] };
+  return sessionSourceTrust(taintFor(access.artifactsDir, access.sessionId), access.ledger);
+}
+
 export default function knowledgeExtension(pi: any): void {
   try {
     if (!pi || typeof pi.registerTool !== "function") return; // older omp / no custom-tool support → no-op
@@ -299,7 +310,7 @@ export default function knowledgeExtension(pi: any): void {
         confidence: T.Optional(T.Number({ description: "0 to 1: how sure you are the user meant this durably. Default 1." })),
         entity: T.Optional(T.String({ description: "An existing entity id to attach this fact to. Omit unless memory_recall gave you one." })),
       }),
-      async execute(_id: string, params: unknown) {
+      async execute(_id: string, params: unknown, _signal?: unknown, _onUpdate?: unknown, ctx?: unknown) {
         const text = (t: string) => ({ content: [{ type: "text", text: t }] });
         const p = (typeof params === "object" && params !== null ? params : {}) as Record<string, unknown>;
         const kind = typeof p.kind === "string" ? p.kind.trim() : "";
@@ -310,9 +321,20 @@ export default function knowledgeExtension(pi: any): void {
         if (!kind || !subject || !statement) {
           return text("Not stored: `kind`, `subject` and `text` are all required, and none may be blank.");
         }
+        // P-CAP.1b (ADR-0590): a fact this session writes derives from what the session was shown. If that
+        // includes content labeled suspicious, the fact is held for human review, like any promotion from a
+        // suspicious source (keystone 2). A session whose record cannot be read is treated the same way.
+        const src = retainSourceTrust(ctx);
+        if (needsReview(src.trust)) {
+          const from = src.sources.length ? ` (${src.sources.slice(0, 3).join(", ")})` : "";
+          return text(`Not stored: this session was shown content labeled ${src.trust}${from}, and a fact written after that may derive from it. ` +
+            "Such a fact can never be promoted into durable memory without human review. Nothing was written. " +
+            "Tell the user what you wanted to remember; they can add it themselves in the Knowledge panel.");
+        }
         const url = process.env.LUCID_KG_RETAIN_URL;
         if (!url) return text(formatRetainResult(null, false));
-        const write: Record<string, unknown> = { kind, subject, text: statement };
+        // `sourceTrust` rides along so the engine applies the same label. It can only make the engine stricter.
+        const write: Record<string, unknown> = { kind, subject, text: statement, sourceTrust: src.trust };
         if (typeof p.confidence === "number" && Number.isFinite(p.confidence)) write.confidence = p.confidence;
         const entity = typeof p.entity === "string" ? p.entity.trim() : "";
         if (entity) write.entity = entity;
