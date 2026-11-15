@@ -34,6 +34,7 @@ import { sanitizeModelCompat, validateLocalProvider, type LocalModelDef, type Lo
 import { isLocalModel } from "./renderer/model_families.ts"; // cloud-only default: explicit-choice migration
 import { validateCreatorEndpoint, type CreatorEndpointDef } from "./creator_registry.ts"; // CREATOR-0 (ADR-0282)
 import { parseResultWindowSetting, type ResultWindowSetting } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
+import { parsePerCallModelSetting, type PerCallModelSetting } from "./per_call_model.ts"; // P-MODEL.11 (ADR-0602)
 
 // LUCID_GUI_SETTINGS_FILE is a supported instance-isolation seam. Creator and Fleet builds point it at
 // their own settings file; tests use the same seam for temporary stores. Read per call so environment
@@ -142,6 +143,9 @@ export interface GuiSettings {
   // P-CTX.2b (ADR-0579): the tool-result window. Absent = sized to the chat model ("auto"); "omp" = omp's
   // 50 KB default; a number = a fixed spill threshold in KB. Read through resultWindowSetting().
   resultWindow?: "omp" | number;
+  // P-MODEL.11 (ADR-0602): may a subagent call pick its model (omp `task.perCallModel`). Absent = "off".
+  // Read through perCallModelSetting().
+  perCallModel?: "eval" | "on";
   // P-MCP.1 (ADR-0020): configured MCP servers, fed into omp's session/new mcpServers. Tokens have the
   // same custody as provider keys: the engine OS vault (ADR-0472), this file only as the 0600 fallback.
   mcpServers?: McpServerEntry[];
@@ -337,6 +341,16 @@ export function setResultWindowSetting(v: unknown): ResultWindowSetting {
   const next = parseResultWindowSetting(v);
   const s = load();
   if (next === "auto") delete s.resultWindow; else s.resultWindow = next;
+  save(s);
+  return next;
+}
+/** P-MODEL.11 (ADR-0602): the stored per-call model choice. Anything unrecognized reads as "off". */
+export function perCallModelSetting(): PerCallModelSetting { return parsePerCallModelSetting(load().perCallModel); }
+/** Persist the choice. "off" is stored as absence. */
+export function setPerCallModelSetting(v: unknown): PerCallModelSetting {
+  const next = parsePerCallModelSetting(v);
+  const s = load();
+  if (next === "off") delete s.perCallModel; else s.perCallModel = next;
   save(s);
   return next;
 }
@@ -1228,6 +1242,9 @@ export function modelRolesOverlayFile(): string { return join(dirname(settingsFi
 /** P-CTX.2b (ADR-0579): the omp `--config` overlay carrying the tool-result window (result_window.ts). Same
  *  directory and isolation seam as the judgment overlay. */
 export function resultWindowOverlayFile(): string { return join(dirname(settingsFile()), "lucid-result-window.yml"); }
+/** P-MODEL.11 (ADR-0602): the omp `--config` overlay carrying `task.perCallModel` (per_call_model.ts). Same
+ *  directory and isolation seam as the judgment overlay. */
+export function perCallModelOverlayFile(): string { return join(dirname(settingsFile()), "lucid-per-call-model.yml"); }
 /** ADR-0221: the stored embeddings config (non-secret), or null when semantic search was never set up. */
 export type StoredEmbeddingsConfig = NonNullable<GuiSettings["embeddings"]>;
 export function embeddingsConfig(): StoredEmbeddingsConfig | null { return load().embeddings ?? null; }
