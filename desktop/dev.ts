@@ -459,7 +459,7 @@ function whisperDeps(): WhisperRuntimeDeps {
     },
   };
 }
-import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedSandboxFoldersLocked, managedSandboxLocksOn, skipAllowed } from "./managed_config.ts";
+import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedSandboxFoldersLocked, managedSandboxLocksOn, modelAllowed, skipAllowed } from "./managed_config.ts";
 import { mxcHostPrepSteps, planModeChange, refuseGrantPath, refuseUserFolderAdd, runtimeFolderView, sandboxControlView, type ModeRequest, type RuntimeFolderView, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
 import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, gitExe, loopbackExempted, parseOmpShellPath, prependPathOverlay, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12/.13
 import { runningEgressProxyUrl } from "../harness/runs/egress_proxy.ts";
@@ -6486,7 +6486,7 @@ return Bun.serve({
       if (p === "/api/image/models" && req.method === "GET") {
         // Under CUI lockdown no cloud image model may be reached: the card says why instead of listing them.
         if (asksageOnly() || managedAsksageOnly()) return json({ ok: true, data: { options: [], blocked: "CUI lockdown is on, so images cannot be sent to a cloud image model." } });
-        return json({ ok: true, data: { options: imageModelOptions(availableImageModels(process.env)) } });
+        return json({ ok: true, data: { options: imageModelOptions(availableImageModels(process.env, (ref) => modelAllowed(ref))) } });
       }
       if (p === "/api/image/edit" && req.method === "POST") {
         const refuse = (error: string) => json({ ok: false, error, data: { ok: false, error } });
@@ -6511,6 +6511,7 @@ return Bun.serve({
           env: process.env,
           fetch: (u, init) => fetch(u, init),
           egress: async (u) => imageEditEgress(u),
+          allowed: (ref) => modelAllowed(ref), // the org's model policy covers image models too
         });
         if (!edited.ok) return refuse(edited.error);
         const saved = await saveEditedImage(edited, { prompt }, {
