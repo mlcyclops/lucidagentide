@@ -6,8 +6,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  addAgents, BOARDS_FILE, type Boards, type BoardsResult, createBoard, dropAgents, emptyBoards, MAX_BOARD_AGENTS, MAX_BOARDS,
-  moveBoard, openBoards, parseBoards, pruneBoards, removeBoard, renameBoard, setLayout,
+  addAgents, BOARDS_FILE, BOARDS_UNREADABLE, type Boards, type BoardsResult, createBoard, dropAgents, emptyBoards, MAX_BOARD_AGENTS, MAX_BOARDS,
+  moveBoard, openBoards, parseAgentsBody, parseBoards, parsePruneBody, pruneBoards, removeBoard, renameBoard, setLayout,
 } from "./fleet_boards.ts";
 
 const dirs: string[] = [];
@@ -200,12 +200,43 @@ test("store: a missing file reads as the default, an update is saved and read ba
   expect(JSON.parse(readFileSync(join(dir, BOARDS_FILE), "utf8"))).toEqual(back);
 });
 
-test("store: a corrupt file reads as the default and the next update replaces it", () => {
+test("store: a corrupt file is never overwritten; every update is refused and its bytes stay on disk", () => {
   const dir = mkdtempSync(join(tmpdir(), "lucid-boards-"));
   dirs.push(dir);
-  writeFileSync(join(dir, BOARDS_FILE), "{ not json");
-  const store = openBoards(dir);
-  expect(store.read()).toEqual(emptyBoards());
-  ok(store.update((s) => createBoard(s, "Fresh")));
-  expect(store.read().boards.map((b) => b.name)).toEqual(["Fresh"]);
+  const path = join(dir, BOARDS_FILE);
+  for (const bad of ["{ not json", "", "[]", '{"v":2,"boards":[{"id":"b1"}]}']) {
+    writeFileSync(path, bad);
+    const store = openBoards(dir);
+    expect(store.read()).toEqual(emptyBoards());
+    const r = store.update((s) => createBoard(s, "Fresh"));
+    expect(r).toEqual({ ok: false, error: BOARDS_UNREADABLE });
+    expect(refused(store.update((s) => ({ ok: true, data: pruneBoards(s, []) })))).toBe(BOARDS_UNREADABLE);
+    expect(readFileSync(path, "utf8")).toBe(bad);
+  }
+  expect(BOARDS_UNREADABLE).toContain("could not be read, so no change was saved");
+});
+
+test("agents body: validated in full; any bad id, list or key refuses the whole request", () => {
+  expect(parseAgentsBody({ id: "b1", add: ["lane-2"], drop: ["lane-1"] })).toEqual({ ok: true, value: { id: "b1", add: ["lane-2"], drop: ["lane-1"] } });
+  expect(parseAgentsBody({ id: "b1", add: ["rs:n:t"] })).toEqual({ ok: true, value: { id: "b1", add: ["rs:n:t"], drop: [] } });
+  expect(parseAgentsBody(null)).toEqual({ ok: false, error: "The request must be an object." });
+  expect(parseAgentsBody({ add: ["lane-2"] })).toEqual({ ok: false, error: "id must be a board id." });
+  expect(parseAgentsBody({ id: "all", add: ["lane-2"] })).toEqual({ ok: false, error: "id must be a board id." });
+  // a swap whose adds are malformed is refused whole: its drops are not applied either
+  expect(parseAgentsBody({ id: "b1", drop: ["lane-1"], add: ["lane-2", 7] })).toEqual({ ok: false, error: "add holds something that is not an agent key." });
+  expect(parseAgentsBody({ id: "b1", drop: ["lane-1", ""], add: ["lane-2"] })).toEqual({ ok: false, error: "drop holds something that is not an agent key." });
+  expect(parseAgentsBody({ id: "b1", add: "lane-2" })).toEqual({ ok: false, error: "add must be a list of agent keys." });
+  expect(parseAgentsBody({ id: "b1", drop: { 0: "lane-1" } })).toEqual({ ok: false, error: "drop must be a list of agent keys." });
+  expect(parseAgentsBody({ id: "b1", add: ["bad\nkey"] })).toEqual({ ok: false, error: "add holds something that is not an agent key." });
+  expect(parseAgentsBody({ id: "b1", add: Array.from({ length: MAX_BOARD_AGENTS + 1 }, (_, i) => `l${i}`) })).toEqual({ ok: false, error: `add can hold ${MAX_BOARD_AGENTS} agents at most.` });
+});
+
+test("prune body: live must be a list of agent keys; missing or malformed is refused, never read as none live", () => {
+  expect(parsePruneBody({ live: ["lane-1", "rs:n:t"] })).toEqual({ ok: true, value: { live: ["lane-1", "rs:n:t"] } });
+  expect(parsePruneBody({ live: [] })).toEqual({ ok: true, value: { live: [] } });
+  expect(parsePruneBody({})).toEqual({ ok: false, error: "live must be a list of agent keys." });
+  expect(parsePruneBody({ live: "lane-1" })).toEqual({ ok: false, error: "live must be a list of agent keys." });
+  expect(parsePruneBody({ live: ["lane-1", null] })).toEqual({ ok: false, error: "live holds something that is not an agent key." });
+  expect(parsePruneBody({ live: [""] })).toEqual({ ok: false, error: "live holds something that is not an agent key." });
+  expect(parsePruneBody([])).toEqual({ ok: false, error: "The request must be an object." });
 });

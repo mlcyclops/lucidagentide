@@ -1198,7 +1198,7 @@ function paintTabs(): void {
     const dot = `<i class="fleet-board-dot" data-board-dot data-tip="An agent here needs you" hidden></i>`;
     row.innerHTML = [
       `<button class="fleet-board-tab" role="tab" aria-selected="false" data-board-tab="${EVERYTHING}" data-tip="Everything|Every agent on this computer and on your remote computers. A board shows just the ones you pick.">Everything${dot}</button>`,
-      ...list.map((b) => `<span class="fleet-board-tabwrap" data-board-wrap="${esc(b.id)}"><button class="fleet-board-tab" role="tab" aria-selected="false" data-board-tab="${esc(b.id)}" data-tip="Double-click to rename"><span>${esc(b.name)}</span>${dot}</button><button class="fleet-board-more" data-board-menu="${esc(b.id)}" aria-label="${esc(`Board options: ${b.name}`)}" title="Rename, move or delete this board">${icon("more", 11)}</button></span>`),
+      ...list.map((b) => `<span class="fleet-board-tabwrap" data-board-wrap="${esc(b.id)}"><button class="fleet-board-tab" role="tab" aria-selected="false" data-board-tab="${esc(b.id)}" data-tip="Double-click to rename"><span>${esc(b.name)}</span>${dot}</button><button class="fleet-board-more" data-board-menu="${esc(b.id)}" aria-label="${esc(`Board options: ${b.name}`)}" data-tip="Board options|Rename, move or delete this board">${icon("more", 11)}</button></span>`),
       full
         ? `<button class="fleet-board-add" disabled data-tip="Board limit reached|You have ${BOARDS_MAX} boards, the most there can be. Delete one to make another.">${icon("plus", 11)} Board</button>`
         : `<button class="fleet-board-add" data-board-add data-tip="New board|Make a new board, then add agents to it">${icon("plus", 11)} Board</button>`,
@@ -1402,11 +1402,10 @@ function pruneBoards(local: readonly string[]): void {
   if (!deps || !boards) return;
   prunedAt = Date.now();
   const snap = remoteSnapshot();
-  const answering = new Set<string>();
-  for (const s of snap?.available ? snap.spokes : []) if (ANSWERING[s.state]) answering.add(s.node);
+  const spokes = (snap?.available ? snap.spokes : []).map((s) => ({ node: s.node, answering: ANSWERING[s.state], tasksRead: s.tasksRead }));
   const onBoards = boards.boards.flatMap((b) => (b.focus === undefined ? b.agents : [...b.agents, b.focus]));
   if (boards.everything.focus !== undefined) onBoards.push(boards.everything.focus);
-  const live = liveForPrune(local, snap?.available ? remoteLanes(snap.spokes).map((l) => l.key) : null, answering, onBoards);
+  const live = liveForPrune(local, snap?.available ? remoteLanes(snap.spokes).map((l) => l.key) : null, spokes, onBoards);
   const keep = new Set(live);
   if (onBoards.every((k) => keep.has(k))) return;
   void deps.fleetBoardsPrune(live).then((b) => { if (b) setBoards(b); }, () => undefined);

@@ -123,18 +123,24 @@ export function nextNeedingYou(view: BoardsView | null, currentBoardId: string, 
   return { key: pick.key, board: shownHere ? cur : pick.board, anchor };
 }
 
+/** One remote computer as pruning sees it: whether it is answering, and whether its task list was read in full. */
+export interface PruneSpoke { node: string; answering: boolean; tasksRead: boolean }
+
 /**
  * The `live` list for `/api/fleet/boards/prune`. The engine drops every board key not in it, so a remote agent
  * this machine cannot SEE right now must be kept: every remote key on a board is kept when the remote lanes were
  * not read (`remoteKeys` null), and otherwise when its computer is not answering (offline, silent, checking or
- * deactivated: its tasks may come back). Only a remote agent on an answering computer that no longer lists it is
- * dropped. Local lanes are taken as given (call this only after a successful local status read).
+ * deactivated: its tasks may come back), or when its task list was not read in full (an answering computer whose
+ * status read was refused lists no tasks, which says nothing about them). Only a remote agent on an answering
+ * computer whose task list was read and no longer lists it is dropped. Local lanes are taken as given (call this
+ * only after a successful local status read).
  */
-export function liveForPrune(localIds: readonly string[], remoteKeys: readonly string[] | null, answeringNodes: ReadonlySet<string>, onBoards: readonly string[]): string[] {
+export function liveForPrune(localIds: readonly string[], remoteKeys: readonly string[] | null, spokes: readonly PruneSpoke[], onBoards: readonly string[]): string[] {
   const out = new Set<string>([...localIds, ...(remoteKeys ?? [])]);
+  const settled = new Set(spokes.filter((s) => s.answering && s.tasksRead).map((s) => s.node));
   for (const k of onBoards) {
     if (out.has(k) || !k.startsWith("rs:")) continue;
-    if (remoteKeys === null || !answeringNodes.has(k.split(":")[1] ?? "")) out.add(k);
+    if (remoteKeys === null || !settled.has(k.split(":")[1] ?? "")) out.add(k);
   }
   return [...out];
 }

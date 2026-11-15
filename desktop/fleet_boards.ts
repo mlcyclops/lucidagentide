@@ -144,6 +144,41 @@ export function pruneBoards(s: Boards, live: readonly string[]): Boards {
   };
 }
 
+export type BodyResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
+/** An optional list of agent keys: absent is empty; anything else must be an array of valid keys, all of them. */
+function keyList(v: unknown, field: string): BodyResult<string[]> {
+  if (v === undefined) return { ok: true, value: [] };
+  if (!Array.isArray(v)) return { ok: false, error: `${field} must be a list of agent keys.` };
+  if (v.length > MAX_BOARD_AGENTS) return { ok: false, error: `${field} can hold ${MAX_BOARD_AGENTS} agents at most.` };
+  if (!v.every(isAgentKey)) return { ok: false, error: `${field} holds something that is not an agent key.` };
+  return { ok: true, value: v };
+}
+
+/** The body of `/api/fleet/boards/agents`, checked in full before the store is touched: a board id, and `add` and
+ *  `drop` lists whose every entry is an agent key. Any failure refuses the whole request, so a swap never commits
+ *  its drops without its adds. */
+export function parseAgentsBody(body: unknown): BodyResult<{ id: string; add: string[]; drop: string[] }> {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return { ok: false, error: "The request must be an object." };
+  const b = body as { id?: unknown; add?: unknown; drop?: unknown };
+  if (typeof b.id !== "string" || !BOARD_ID.test(b.id)) return { ok: false, error: "id must be a board id." };
+  const add = keyList(b.add, "add");
+  if (!add.ok) return add;
+  const drop = keyList(b.drop, "drop");
+  if (!drop.ok) return drop;
+  return { ok: true, value: { id: b.id, add: add.value, drop: drop.value } };
+}
+
+/** The body of `/api/fleet/boards/prune`: `live` must be present and an array of agent keys, every one of them.
+ *  Pruning drops every key not in `live`, so a missing or malformed list is refused, never read as "none live". */
+export function parsePruneBody(body: unknown): BodyResult<{ live: string[] }> {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return { ok: false, error: "The request must be an object." };
+  const b = body as { live?: unknown };
+  if (!Array.isArray(b.live)) return { ok: false, error: "live must be a list of agent keys." };
+  if (!b.live.every(isAgentKey)) return { ok: false, error: "live holds something that is not an agent key." };
+  return { ok: true, value: { live: b.live } };
+}
+
 /** The stored file's shape before any field is trusted: every field is checked with typeof where it is read. */
 interface StoredBoards { v?: unknown; next?: unknown; boards?: unknown; everything?: unknown }
 interface StoredBoard { id?: unknown; name?: unknown; agents?: unknown; layout?: unknown; focus?: unknown }
@@ -185,27 +220,38 @@ export function parseBoards(input: unknown): Boards {
 }
 
 export interface BoardsStore {
-  /** The stored boards; a missing or invalid file reads as the empty default. */
+  /** The stored boards; a missing file, or one that cannot be understood, reads as the empty default. */
   read(): Boards;
   /** Read, apply `fn`, and save when it succeeds and changed something. Synchronous end to end, so two
-   *  updates in this engine never interleave; two engines on one data root: the last writer wins. */
+   *  updates in this engine never interleave; two engines on one data root: the last writer wins. A file that
+   *  exists but is not valid JSON or not a v1 store is never overwritten: the update is refused with
+   *  BOARDS_UNREADABLE and the file stays as it is on disk. */
   update(fn: (s: Boards) => BoardsResult): BoardsResult;
 }
 
+/** The refusal when the stored file exists but cannot be understood; the file is left untouched. */
+export const BOARDS_UNREADABLE = `Your boards file (${BOARDS_FILE}) could not be read, so no change was saved. It was left as it is; fix or move it, then try again.`;
+
 export function openBoards(dir: string): BoardsStore {
   const path = join(dir, BOARDS_FILE);
-  const read = (): Boards => {
+  /** The stored boards, or null when the file exists but is not valid JSON or not a v1 store. Only ENOENT is an
+   *  empty store; any other read failure throws, so nothing is ever written over a file we could not read. */
+  const load = (): Boards | null => {
     let text: string;
     try { text = withRetry(() => readFileSync(path, "utf8")); } catch (e) {
       if (errCode(e) === "ENOENT") return emptyBoards();
-      throw e; // a file we could not read must not be overwritten with the default
+      throw e;
     }
-    try { return parseBoards(JSON.parse(text)); } catch { return emptyBoards(); }
+    let raw: unknown;
+    try { raw = JSON.parse(text); } catch { return null; }
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw) || (raw as StoredBoards).v !== 1) return null;
+    return parseBoards(raw);
   };
   return {
-    read,
+    read: () => load() ?? emptyBoards(),
     update(fn) {
-      const before = read();
+      const before = load();
+      if (!before) return { ok: false, error: BOARDS_UNREADABLE };
       const r = fn(before);
       if (!r.ok) return r;
       const body = JSON.stringify(r.data, null, 2);

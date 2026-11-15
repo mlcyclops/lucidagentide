@@ -144,7 +144,7 @@ import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, fa
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: shared combo parse, so a typo fails fast at the route
 import { isBrowserAction, isBrowserPageShape } from "./browser_snapshot.ts"; // P-JEV.4 (ADR-0379): the policy's act/snapshot shapes
 import { FleetGoal } from "./fleet_goal.ts"; // P-AOS.1 (ADR-0452): the standing fleet goal + the AOS-1 heartbeat
-import { addAgents, createBoard, dropAgents, moveBoard, openBoards, pruneBoards, removeBoard, renameBoard, setLayout } from "./fleet_boards.ts"; // P-FLEET-BOARDS.1 (ADR-0601): the Fleet window's boards
+import { addAgents, createBoard, dropAgents, moveBoard, openBoards, parseAgentsBody, parsePruneBody, pruneBoards, removeBoard, renameBoard, setLayout } from "./fleet_boards.ts"; // P-FLEET-BOARDS.1 (ADR-0601): the Fleet window's boards
 import { appendLaneLedger, isTimelineKind, laneSessionNames, listTimeline, readLaneLedger } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline; P-SCHED.1 reads it to recover a job's lane; P-SESS-SEARCH.1 tags spoke sessions
 import { JobScheduler, type LedgerHit } from "./job_scheduler.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs
 import { createJob as createScheduledJob, jobTargetRepo, loadJobs, normalizeJobSpec, saveJobs, updateJob, nextFireAt } from "./scheduled_jobs.ts"; // P-SCHED.1 (aliased: creator_jobs.ts exports a createJob too, and the second import silently replaced the first at runtime)
@@ -6615,10 +6615,10 @@ return Bun.serve({
       }
       // Drops apply before adds, so a swap near the 200-agent cap fits.
       if (p === "/api/fleet/boards/agents" && req.method === "POST") {
-        const b = await readBody<{ id?: unknown; add?: unknown; drop?: unknown }>(req);
-        const id = String(b.id ?? "");
-        const add = Array.isArray(b.add) ? b.add.filter((x): x is string => typeof x === "string") : [];
-        const drop = Array.isArray(b.drop) ? b.drop.filter((x): x is string => typeof x === "string") : [];
+        // Validated in full first: a bad id, list or key refuses the whole request before the store is read.
+        const b = parseAgentsBody(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        const { id, add, drop } = b.value;
         return json(fleetBoards.update((s) => {
           const dropped = dropAgents(s, id, drop);
           return dropped.ok ? addAgents(dropped.data, id, add) : dropped;
@@ -6629,8 +6629,10 @@ return Bun.serve({
         return json(fleetBoards.update((s) => setLayout(s, String(b.id ?? ""), typeof b.layout === "string" ? b.layout : "", typeof b.focus === "string" ? b.focus : undefined)));
       }
       if (p === "/api/fleet/boards/prune" && req.method === "POST") {
-        const b = await readBody<{ live?: unknown }>(req);
-        const live = Array.isArray(b.live) ? b.live.filter((x): x is string => typeof x === "string") : [];
+        // A missing or malformed `live` is refused with no write: pruning against it would empty every board.
+        const b = parsePruneBody(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        const { live } = b.value;
         return json(fleetBoards.update((s) => ({ ok: true, data: pruneBoards(s, live) })));
       }
       // P-TUI.2: open `lucid hub` in a new terminal window, attached to THIS engine. UI token only (never in

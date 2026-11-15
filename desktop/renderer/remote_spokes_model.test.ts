@@ -28,7 +28,7 @@ describe("mapSpokeRow: one spoke as the orbit shows it", () => {
   test("label, lanes, model and tasks come from the spoke's own capabilities and status", () => {
     const v = mapSpokeRow({ node: NODE, label: "azure-eastus", checkedAt: 5, reachable: true, caps, tasks: [task({ state: "working", updatedAt: 200 }), task({ id: "t_fedcba9876543210", name: "old", updatedAt: 50 })] });
     expect(v).toEqual({
-      node: NODE, label: "azure-eastus", state: "busy", lanes: { live: 1, max: 2, free: 1 }, checkedAt: 5, ...UNKNOWN,
+      node: NODE, label: "azure-eastus", state: "busy", lanes: { live: 1, max: 2, free: 1 }, tasksRead: true, checkedAt: 5, ...UNKNOWN,
       models: { default: "azure-openai/gpt-5.1", local: [], frontier: [] },
       tasks: [
         { id: "t_0123456789abcdef", name: "triage", state: "working", turns: 3, updatedAt: 200 },
@@ -49,7 +49,7 @@ describe("mapSpokeRow: one spoke as the orbit shows it", () => {
     expect(at([task()], false)).toBe("offline");
     expect(at([task()], null)).toBe("checking");
     // Reachable, but its status read was refused (no tasks at all): an error, never a quiet "idle".
-    expect(mapSpokeRow({ node: NODE, label: "x", reachable: true, error: "this hub's certificate does not carry the recall scope" })).toMatchObject({ state: "error", error: "this hub's certificate does not carry the recall scope", tasks: [], lanes: null });
+    expect(mapSpokeRow({ node: NODE, label: "x", reachable: true, error: "this hub's certificate does not carry the recall scope" })).toMatchObject({ state: "error", error: "this hub's certificate does not carry the recall scope", tasks: [], tasksRead: false, lanes: null });
   });
 
   test("the closed-lane fields from the spoke's close op survive: review branch, restart interruption", () => {
@@ -149,7 +149,7 @@ describe("ADR-0508: answer time, route, certificate and models", () => {
 describe("ADR-0508: the Start-a-task selector's rows", () => {
   const drive = hubActions(["recall", "drive"]);
   const spoke = (label: string, over: Partial<RemoteSpokeView> = {}): RemoteSpokeView => ({
-    node: NODE, label, state: "idle", lanes: { live: 0, max: 2, free: 2 }, tasks: [], checkedAt: 1, ...UNKNOWN, models: { default: null, local: [], frontier: [] }, ...over,
+    node: NODE, label, state: "idle", lanes: { live: 0, max: 2, free: 2 }, tasks: [], tasksRead: true, checkedAt: 1, ...UNKNOWN, models: { default: null, local: [], frontier: [] }, ...over,
   });
   const spokes = [
     spoke("slow", { latencyMs: 3000 }),
@@ -318,7 +318,7 @@ describe("mapHubSnapshot: the hub, its scopes and every spoke", () => {
     expect(v).toEqual({
       available: true, hub: { node: HUB, label: "workstation", scopes: ["recall", "drive"], presence: null, presenceUnlocked: false },
       actions: { recall: true, drive: true, approve: false, deny: true },
-      spokes: [{ node: NODE, label: "vm-218", state: "idle", lanes: null, tasks: [], checkedAt: null, ...UNKNOWN, models: { default: null, local: [], frontier: [] } }],
+      spokes: [{ node: NODE, label: "vm-218", state: "idle", lanes: null, tasks: [], tasksRead: true, checkedAt: null, ...UNKNOWN, models: { default: null, local: [], frontier: [] } }],
     });
   });
 

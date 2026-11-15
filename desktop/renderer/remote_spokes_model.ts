@@ -97,6 +97,8 @@ export interface RemoteSpokeView {
   /** From `capabilities`; null when the spoke did not answer it. */
   lanes: { live: number; max: number; free: number } | null;
   tasks: RemoteTaskView[];
+  /** True when the row carried a task list; false when it did not (`tasks` is then an empty stand-in, not "none"). */
+  tasksRead: boolean;
   checkedAt: number | null;
   /** ADR-0508: the round trip of the hub's last `capabilities` request, including the spoke's mailbox poll. */
   latencyMs: number | null;
@@ -313,6 +315,7 @@ export function mapSpokeRow(raw: unknown): RemoteSpokeView | null {
     state: spokeState(reachable, tasks, silentSince, deactivated !== null),
     lanes: max !== null && live !== null && free !== null ? { live, max, free } : null,
     tasks: (tasks ?? []).sort((a, b) => b.updatedAt - a.updatedAt),
+    tasksRead: tasks !== null,
     checkedAt: count(r.checkedAt),
     latencyMs: count(r.latencyMs),
     via: viaKind === "lan" || viaKind === "relay" ? viaKind : null,

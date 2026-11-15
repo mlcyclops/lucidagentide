@@ -12,6 +12,9 @@ import {
   agentsOn, boardHasNeeds, boardLayoutOf, boardNameProblem, EVERYTHING, liveForPrune, needsYou, nextBoardName, nextNeedingYou,
   type LiveAgent, type NextJump,
 } from "./fleet_boards_view.ts";
+import { mapSpokeRow } from "./remote_spokes_model.ts";
+
+const NODE = `n_${"1".repeat(32)}`;
 
 const board = (id: string, name: string, agents: string[]): BoardView => ({ id, name, agents, layout: "side" });
 const view = (...boards: BoardView[]): BoardsView => ({ v: 1, next: boards.length + 1, boards, everything: { layout: "side" } });
@@ -140,16 +143,30 @@ describe("liveForPrune", () => {
   const onBoards = ["l1", "gone", "rs:n1:t1", "rs:n1:t2", "rs:n2:t3"];
 
   it("drops a gone local agent and a remote one its answering computer no longer lists", () => {
-    const live = liveForPrune(["l1"], ["rs:n1:t1"], new Set(["n1"]), onBoards);
+    const live = liveForPrune(["l1"], ["rs:n1:t1"], [{ node: "n1", answering: true, tasksRead: true }], onBoards);
     expect(live.sort()).toEqual(["l1", "rs:n1:t1", "rs:n2:t3"]);
   });
 
   it("keeps every remote agent on a board when the remote lanes were not read", () => {
-    expect(liveForPrune(["l1"], null, new Set(), onBoards).sort()).toEqual(["l1", "rs:n1:t1", "rs:n1:t2", "rs:n2:t3"]);
+    expect(liveForPrune(["l1"], null, [], onBoards).sort()).toEqual(["l1", "rs:n1:t1", "rs:n1:t2", "rs:n2:t3"]);
   });
 
   it("keeps a remote agent whose computer is not answering", () => {
-    expect(liveForPrune([], [], new Set(), ["rs:n1:t1"])).toEqual(["rs:n1:t1"]);
+    expect(liveForPrune([], [], [], ["rs:n1:t1"])).toEqual(["rs:n1:t1"]);
+    expect(liveForPrune([], [], [{ node: "n1", answering: false, tasksRead: true }], ["rs:n1:t1"])).toEqual(["rs:n1:t1"]);
+  });
+
+  it("keeps every member of an answering computer whose task list could not be read", () => {
+    // An error spoke (status read refused) answers but lists no tasks; that says nothing about its agents.
+    const live = liveForPrune([], [], [{ node: "n1", answering: true, tasksRead: false }, { node: "n2", answering: true, tasksRead: true }], onBoards);
+    expect(live.sort()).toEqual(["rs:n1:t1", "rs:n1:t2"]);
+  });
+
+  it("an unreadable task list from a real spoke row keeps its members", () => {
+    const row = mapSpokeRow({ node: NODE, label: "x", reachable: true, error: "refused" })!;
+    expect([row.state, row.tasksRead]).toEqual(["error", false]);
+    const key = `rs:${NODE}:t_0123456789abcdef`;
+    expect(liveForPrune([], [], [{ node: row.node, answering: true, tasksRead: row.tasksRead }], [key])).toEqual([key]);
   });
 });
 
