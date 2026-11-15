@@ -19,7 +19,7 @@
 import { previewAutoSurfaces, previewKindOf, type PreviewKind } from "../preview_resolve.ts"; // P-PREVIEW.12: the ONE kind table
 export type { PreviewKind };
 
-export interface PreviewTab { id: string; label: string; path: string; kind: "yours" | "agent" | "lane" | "plugin" }
+export interface PreviewTab { id: string; label: string; path: string; kind: "yours" | "agent" | "lane" | "plugin" | "asklucid" }
 
 /** At most this many DYNAMIC lane tabs; past it the oldest lane tab is evicted. */
 export const LANE_TAB_CAP = 8;
@@ -56,6 +56,18 @@ export function upsertPluginTab(tabs: PreviewTab[], pluginId: string, name: stri
   return tabs.some((t) => t.id === id)
     ? tabs.map((t) => (t.id === id ? { ...t, label: name, path: url } : t))
     : [...tabs, { id, label: name, path: url, kind: "plugin" }];
+}
+
+/** P-ASKLUCID.9 (ADR-0600): the ONE tab Ask Lucid's edited images open in (never collides with a lane or a
+ *  plugin, whose ids carry a "lane:" or "plugin:" prefix). */
+export const ASK_LUCID_TAB_ID = "asklucid";
+
+/** P-ASKLUCID.9: add the Ask Lucid tab, or point it at a newer edited image in place. Not a lane tab: the lane
+ *  cap never evicts it. Returns a NEW array. */
+export function upsertAskLucidTab(tabs: PreviewTab[], path: string): PreviewTab[] {
+  return tabs.some((t) => t.id === ASK_LUCID_TAB_ID)
+    ? tabs.map((t) => (t.id === ASK_LUCID_TAB_ID ? { ...t, path } : t))
+    : [...tabs, { id: ASK_LUCID_TAB_ID, label: "Ask Lucid", path, kind: "asklucid" }];
 }
 
 /** Drop a lane's tab (no-op when absent). Returns a NEW array. */

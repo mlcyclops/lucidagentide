@@ -333,3 +333,48 @@ describe("requireFips is the OR of every policy source (no source can turn it of
     expect(managedRequireFipsBy().some((s) => s.includes("machine policy file"))).toBe(true);
   });
 });
+
+// ── P-ATTACH.1 (ADR-0598): prompt-bar file attachments; the policy can only tighten ──────────────────
+import { ATTACH_LIMITS } from "./attach_kinds.ts";
+import { managedAttachmentPolicy } from "./managed_config.ts";
+
+describe("managedAttachmentPolicy (P-ATTACH.1)", () => {
+  const BUILT_IN = { enabled: true, files: ATTACH_LIMITS.files, bytes: ATTACH_LIMITS.bytes, retentionDays: ATTACH_LIMITS.retentionDays };
+
+  test("unmanaged or empty: on, at the built-in limits", () => {
+    expect(managedAttachmentPolicy(null)).toEqual(BUILT_IN);
+    expect(managedAttachmentPolicy({ security: { attachments: {} } })).toEqual(BUILT_IN);
+  });
+
+  test("lower values tighten; higher values are clamped to the built-in ceiling", () => {
+    expect(managedAttachmentPolicy({ security: { attachments: { maxFiles: 3, maxBytes: 1024, retentionDays: 2 } } }))
+      .toEqual({ enabled: true, files: 3, bytes: 1024, retentionDays: 2 });
+    expect(managedAttachmentPolicy({ security: { attachments: { maxFiles: 500, maxBytes: 10 ** 12, retentionDays: 365 } } })).toEqual(BUILT_IN);
+  });
+
+  test("fractions floor, values below 1 are the tightest (1), garbage keeps the built-in limit", () => {
+    const garbage = JSON.parse(`{"maxFiles": "lots", "maxBytes": null, "retentionDays": 2.9}`);
+    expect(managedAttachmentPolicy({ security: { attachments: garbage } })).toEqual({ ...BUILT_IN, retentionDays: 2 });
+    expect(managedAttachmentPolicy({ security: { attachments: { maxFiles: 0, maxBytes: -5 } } })).toEqual({ ...BUILT_IN, files: 1, bytes: 1 });
+  });
+
+  test("only a literal false turns attachments off", () => {
+    expect(managedAttachmentPolicy({ security: { attachments: { enabled: false } } }).enabled).toBe(false);
+    expect(managedAttachmentPolicy({ security: { attachments: { enabled: true } } }).enabled).toBe(true);
+  });
+
+  test("the GPO channel maps the Attachments DWORDs; merge keeps the registry's other knobs", () => {
+    const out = [
+      "HKEY_LOCAL_MACHINE\\Software\\Policies\\LucidAgentIDE",
+      "    AttachmentsEnabled    REG_DWORD    0x0",
+      "    AttachmentsMaxFiles    REG_DWORD    0x4",
+      "    AttachmentsMaxBytes    REG_DWORD    0x100000",
+      "    AttachmentsRetentionDays    REG_DWORD    0x3",
+    ].join("\r\n");
+    const reg = parseRegistryPolicy(out)!;
+    expect(reg.security?.attachments).toEqual({ enabled: false, maxFiles: 4, maxBytes: 1_048_576, retentionDays: 3 });
+    const merged = mergeManaged(reg, { security: { attachments: { maxFiles: 2 } } });
+    expect(merged?.security?.attachments).toEqual({ enabled: false, maxFiles: 2, maxBytes: 1_048_576, retentionDays: 3 });
+    expect(managedAttachmentPolicy(merged)).toEqual({ enabled: false, files: 2, bytes: 1_048_576, retentionDays: 3 });
+  });
+});

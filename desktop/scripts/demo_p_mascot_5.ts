@@ -4,16 +4,18 @@
 // desktop/scripts/demo_p_mascot_5.ts - P-MASCOT.5: arcade-parity prompt-bar runner + the game cabinet.
 //
 // Proves with no DOM:
-//  (1) the prompt-bar runner paints at the arcade's sprite scale, so it is the SAME character;
-//  (2) the no-slip stride contract: during the run some sole holds its world position every beat
-//      (the reported "does not have the same walk" bug is exactly this failing);
+//  (1) the prompt-bar runner's Large size paints at the arcade's sprite scale, so it is the SAME character
+//      (Small, the default since P-MINI.3 (ADR-0596), is one CSS pixel a cell);
+//  (2) the no-slip stride contract: during his walk along the bar some sole holds its world position every
+//      beat, at both sizes (the reported "does not have the same walk" bug is exactly this failing);
 //  (3) the mini-game registry carries three playable, deterministic, scoring engines.
 //
 // Run: bun run desktop/scripts/demo_p_mascot_5.ts
 
-import { MASCOT_FRAMES, MASCOT_H, MASCOT_RUN_BEAT_MS, MASCOT_RUN_SWEEP_CELLS, MASCOT_W } from "../renderer/mascot.ts";
+import { MASCOT_FRAMES, MASCOT_H, MASCOT_RUN_BEAT_MS, MASCOT_RUN_SWEEP_CELLS, MASCOT_W, mirrorFrame } from "../renderer/mascot.ts";
 import { arcadeScale } from "../renderer/mascot_game.ts";
-import { RUNNER_SCALE, runnerAt, type RunnerLayout } from "../renderer/mascot_runner.ts";
+import { runnerCellPx, runnerHeadroom, runnerPlan, traverseAt } from "../renderer/mascot_runner.ts";
+import { MASCOT_CELL_CSS, MASCOT_SIZES } from "../renderer/mini_lucid.ts";
 import {
   KATA_POSES, MINI_GAMES,
   applyKataInput, applyShurikenInput, createKataState, createShurikenState, createStackState,
@@ -25,14 +27,16 @@ const ok = (msg: string): void => console.log(`   ${msg} \u2713`);
 
 console.log("== P-MASCOT.5 - arcade-parity runner + the game cabinet ==");
 
-// (1) sprite-scale parity with the arcade (a wide panel paints the ninja at scale 2).
-if (RUNNER_SCALE !== arcadeScale(1000)) fail(`runner scale ${RUNNER_SCALE} != arcade scale ${arcadeScale(1000)}`);
-ok(`the prompt-bar ninja and the arcade ninja share one pixel scale (${RUNNER_SCALE})`);
+// (1) P-MINI.3 (ADR-0596): the user's size sets the prompt-bar ninja's cell; Large is the scale a wide Arcade
+// panel classically paints him at, Small is mini Lucid's one CSS pixel a cell.
+if (runnerCellPx("large", 1) !== arcadeScale(1000)) fail(`Large runner cell ${runnerCellPx("large", 1)} != arcade scale ${arcadeScale(1000)}`);
+if (runnerCellPx("small", 1) !== MASCOT_CELL_CSS.small) fail("Small must be one CSS pixel a cell");
+ok(`the prompt-bar ninja paints ${runnerCellPx("small", 1)} px a cell at Small and ${runnerCellPx("large", 1)} at Large (the arcade's wide-panel scale)`);
 
-// (2) no-slip stride: on every run beat, one sole holds the same world x it held on the last beat.
-const L: RunnerLayout = { width: 900, barTop: MASCOT_H * RUNNER_SCALE + 10, barBottom: 300, height: 300, scale: RUNNER_SCALE };
-const soles = (frameId: string): number[] => {
-  const bottom = MASCOT_FRAMES[frameId]![MASCOT_H - 1]!;
+// (2) no-slip stride on his walk along the bar: on every beat, one sole holds the same world x it held on the
+// last beat. He walks left from home (mirrored frames), so the soles are read off the frames as painted.
+const soles = (frame: readonly string[]): number[] => {
+  const bottom = frame[MASCOT_H - 1]!;
   const centers: number[] = [];
   for (let x = 0; x < MASCOT_W; x++) {
     if (bottom[x] === ".") continue;
@@ -43,17 +47,23 @@ const soles = (frameId: string): number[] => {
   }
   return centers;
 };
-for (let beat = 1; beat < 8; beat++) {
-  const world = (t: number): number[] => {
-    const p = runnerAt(t, L);
-    if (p.phase !== "run") fail("sampled outside the run phase");
-    return soles(p.frame).map((c) => p.x + c * RUNNER_SCALE);
-  };
-  const before = world((beat - 1) * MASCOT_RUN_BEAT_MS + 1);
-  const after = world(beat * MASCOT_RUN_BEAT_MS + 1);
-  if (!before.some((a) => after.some((b) => Math.abs(a - b) < 1))) fail(`the planted foot skates on beat ${beat}`);
+for (const size of MASCOT_SIZES) {
+  const scale = runnerCellPx(size, 1);
+  const room = runnerHeadroom(MASCOT_CELL_CSS[size]);
+  const plan = runnerPlan({ width: 900, barTop: room, height: room + 100, scale });
+  for (let beat = 1; beat < 8; beat++) {
+    const world = (t: number): number[] => {
+      const p = traverseAt(t, plan);
+      if (t >= plan.walkMs || !p.frame.startsWith("run")) fail("sampled outside the walk");
+      const f = MASCOT_FRAMES[p.frame]!;
+      return soles(p.mirrored ? mirrorFrame(f) : f).map((c) => p.x + c * scale);
+    };
+    const before = world((beat - 1) * MASCOT_RUN_BEAT_MS + 1);
+    const after = world(beat * MASCOT_RUN_BEAT_MS + 1);
+    if (!before.some((a) => after.some((b) => Math.abs(a - b) < 1))) fail(`the planted foot skates on beat ${beat} at ${size}`);
+  }
 }
-ok(`no-slip stride: a planted sole holds its ground on all 8 beats (${MASCOT_RUN_SWEEP_CELLS} cells/beat)`);
+ok(`no-slip stride: a planted sole holds its ground on all 8 beats at both sizes (${MASCOT_RUN_SWEEP_CELLS} cells/beat)`);
 
 // (3) the cabinet registry: three games, stable ids, one-line labels.
 if (MINI_GAMES.map((g) => g.id).join(",") !== "shuriken,kata,stack") fail("registry ids drifted");

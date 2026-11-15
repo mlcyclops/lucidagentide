@@ -22,6 +22,7 @@
 // Pure builders only: no DOM, no bridge. app.ts owns the fetches and the two-pass render.
 
 import { esc } from "./format.ts";
+import { tipEsc } from "./tip_text.ts";
 
 /** One stat tile. `value` is already display-ready (a number or a dash), so the renderer makes no decisions. */
 export interface StatTile {
@@ -82,12 +83,12 @@ export function personalStatTiles(i: PersonalStatsInput): StatTile[] {
 }
 
 /** The tile strip. Every label is `esc`'d (KG names are user-authored: invariant 5, content is data) and
- *  carries `title` so a name too long for a narrow tile is recoverable on hover rather than lost. */
+ *  carries a `data-tip` (P-TIP.1) so a name too long for a narrow tile is recoverable on hover rather than lost. */
 export function personalStatsHtml(tiles: StatTile[]): string {
   const cells = tiles.map((t) => {
     const label = esc(t.label);
     const note = t.note ? `<i>${esc(t.note)}</i>` : "";
-    return `<div class="psc" data-stat="${esc(t.id)}" title="${label}${t.note ? ` (${esc(t.note)})` : ""}">`
+    return `<div class="psc" data-stat="${esc(t.id)}" data-tip="${esc(tipEsc(t.label))}${t.note ? ` (${esc(tipEsc(t.note))})` : ""}">`
       + `<b class="psc-${t.tone}">${esc(t.value)}</b><span>${label}</span>${note}</div>`;
   }).join("");
   return `<div class="pscope-counts" data-stat-count="${tiles.length}">${cells}</div>`;

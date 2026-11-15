@@ -35,7 +35,7 @@ import { buildAgentManifest } from "../../harness/creator/design/agent_view.ts";
 import { layerStateAt } from "../../harness/creator/design/anim.ts";
 import { cleanText } from "../../harness/creator/design/util.ts";
 import { bridge } from "./bridge.ts";
-import { showToast } from "./ui.ts";
+import { setTip, showToast } from "./ui.ts";
 import { svgTextToNode } from "./svg_sanitize.ts";
 import {
   isUpscaleResult, isVectorize, isVisionJobStart, isVisionMask, isVisionSegment, parseDecompose, parseLabels,
@@ -152,7 +152,7 @@ function paintBar(): void {
     docSize: d ? `${d.width} x ${d.height}` : "no document", historyMb: Math.round(history.bytes() / 1048576),
   });
   const name = q("[data-dsn-docname]");
-  if (name) { name.textContent = d ? d.name : "No document"; name.title = d ? d.name : ""; }
+  if (name) { name.textContent = d ? d.name : "No document"; setTip(name, d ? d.name : ""); }
   setStatus(st.status, st.tone);
 }
 

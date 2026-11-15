@@ -46,8 +46,10 @@ import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, type OmpResolution, resolveOmpBin, resolveOmpBinAsync } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
 import { gatePath, gateRefusal, repoAsset, resolvedRepo } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
-import { asksageOnly, attribution, checkerModel, chosenModel, localProviderPrefixes, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, modelRolesOverlayFile, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
+import { asksageOnly, attribution, checkerModel, chosenModel, localProviderPrefixes, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, modelRolesOverlayFile, resultWindowOverlayFile, resultWindowSetting, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
 import { heavyRoleModel, writeModelRolesOverlay } from "./model_roles.ts"; // P-MODEL.8 (ADR-0448)
+import { chatModelContextWindow, resolveResultWindow, spillFromRawOutput, type ResultSpill } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
+import { writeResultWindowOverlay } from "./result_window_overlay.ts";
 import { judgeChain, resolveJudgmentProvider, writeJudgmentOverlay, type ResolvedJudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374) + P-JEV.5 (ADR-0416)
 import { bannedJudges, judgeBanEnv } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416): local judges that failed more than once
 import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
@@ -190,6 +192,12 @@ const CODEGRAPH_EXT = repoAsset("harness", "omp", "codegraph_extension.ts");
 // knowledge base (Obsidian/folders/chat history → compiled KB). Always added when present (self-describing when
 // empty); the non-AskSage RAG path, independent of the gov gateway.
 const KNOWLEDGE_EXT = repoAsset("harness", "omp", "knowledge_extension.ts");
+// P-CAP.1a (ADR-0589): registers the read-tier artifact_find / artifact_lookup / artifact_count /
+// artifact_slice tools, so a model searches a stored tool result in code instead of paging it into its
+// context. Loaded on the master AND on every lane (a small local lane model is who needs it most). It
+// registers tools only, no hooks; the MCP result gate in the same chain scans and fences what the tools
+// return for an external artifact. Only added when the file exists.
+const ARTIFACT_TOOLS_EXT = repoAsset("harness", "omp", "artifact_tools_extension.ts");
 // P-INTERJECT.1: delivers mid-turn operator interjections into tool results (loopback drain of the
 // dev server's interject store). Loaded on the master AND lane argv, AFTER the security/MCP gates so
 // its tool_result hook sees already-wrapped content and appends OUTSIDE the untrusted envelope.
@@ -278,7 +286,13 @@ function ompConfigArgs(): string[] {
   // Rewritten every spawn (an empty map when it does not apply) so a stale role never survives a switch.
   const roles = modelRolesOverlayFile();
   writeModelRolesOverlay(roles, heavyRoleModel({ chatModel: lastModel(), locked: asksageOnly() || managedAsksageOnly(), allowed: modelAllowed }));
-  return [...args, "--config", overlay, "--config", roles];
+  // P-CTX.2b (ADR-0579): omp's tool-result window, sized to the chat model's context window when a Local
+  // Provider serves it. Rewritten every spawn (an empty map when omp's 50 KB default stands) so a small
+  // window never survives a switch to a large model. A write failure throws and the spawn rejects, named,
+  // like the two overlays above: a window the user chose must not silently fall back to 50 KB.
+  const windowFile = resultWindowOverlayFile();
+  writeResultWindowOverlay(windowFile, resolveResultWindow(resultWindowSetting(), chatModelContextWindow(lastModel(), listLocalProviders())));
+  return [...args, "--config", overlay, "--config", roles, "--config", windowFile];
 }
 
 /** P-JEV.5 (ADR-0416): everything the judge chain is built from, read live: the stored choice under the
@@ -403,9 +417,10 @@ export function fleetLaneArgv(): { cmd: string; args: string[] } {
   if (!GATE) throw new Error(gateRefusal());
   const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : [];
   const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
+  const artifactToolArgs = existsSync(ARTIFACT_TOOLS_EXT) ? ["-e", ARTIFACT_TOOLS_EXT] : []; // P-CAP.1a (ADR-0589)
   const ownArgs = [...(existsSync(CHECKIN_EXT) ? ["-e", CHECKIN_EXT] : []), ...(existsSync(COMMIT_GATE_EXT) ? ["-e", COMMIT_GATE_EXT] : [])]; // P-OWN.1
   const redactArgs = existsSync(VAULT_REDACT_EXT) ? ["-e", VAULT_REDACT_EXT] : []; // last: see VAULT_REDACT_EXT
-  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, "-e", AZURE_ENTRA, ...interjectArgs, ...ownArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
+  const argv = [ompBin(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, "-e", AZURE_ENTRA, ...artifactToolArgs, ...interjectArgs, ...ownArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", `${DELEGATION_POLICY}\n\n${BUILD_POLICY}`];
   return { cmd: argv[0]!, args: argv.slice(1) };
 }
 
@@ -455,7 +470,14 @@ function errText(e: unknown): string {
 }
 
 /** Options for one utility completion. `signal` lets a batch caller (chat-history import) stop mid-flight. */
-export type CompleteOpts = { idleMs?: number; model?: string; signal?: AbortSignal };
+/** `images` (P-ASKLUCID.7, ADR-0588): picture blocks that ride after the text, the same ACP shape a
+ *  user-attached image uses (P-VISION.1). Absent or empty is a text-only completion, as before. */
+export type CompleteOpts = { idleMs?: number; model?: string; signal?: AbortSignal; images?: readonly { data: string; mimeType: string }[] };
+/** The ACP prompt for a side completion: the text, then any pictures. */
+function completionPrompt(system: string, user: string, opts: CompleteOpts): { type: "text" | "image"; text?: string; data?: string; mimeType?: string }[] {
+  const images = (opts.images ?? []).filter((im) => !!im?.data && !!im?.mimeType).map((im) => ({ type: "image" as const, data: im.data, mimeType: im.mimeType }));
+  return [{ type: "text" as const, text: `${system}\n\n${user}` }, ...images];
+}
 
 /** The resolved omp spawn: the command (omp itself, or a sandbox wrapper around it), its args, the env
  *  overlay for this child only, and whether the command is the Windows AppContainer helper (P-BROWSER.4). */
@@ -503,7 +525,8 @@ export type ChatEvent =
   // P-EVAL.4 (ADR-0318): the tool_meta extension reported the real name (and later the pass/fail) for a
   // call already streamed as `tool`. Display + report metadata only, never a gate.
   // P-PROGRESS.1: the engine's own settle report adds `elapsedMs`.
-  | { type: "tool-meta"; id: string; name: string; ok?: boolean; elapsedMs?: number }
+  // P-CTX.2b (ADR-0579): `window` says how much of the result the model was shown when omp cut it.
+  | { type: "tool-meta"; id: string; name: string; ok?: boolean; elapsedMs?: number; window?: ResultSpill }
   // P-PROGRESS.1: the turn's progress view (every PROGRESS_TICK_MS and on each settled call) and the
   // same-folder wait. Both go through onEvent directly, never the activity sink, like `slow`.
   | { type: "progress"; progress: ProgressView }
@@ -1058,6 +1081,7 @@ class Backend {
         const sandboxGrantArgs = existsSync(SANDBOX_GRANT_EXT) ? ["-e", SANDBOX_GRANT_EXT] : []; // P-SANDBOX.8: sandbox_grant_dir
         const mcpGateArgs = existsSync(MCP_RESULT_GATE) ? ["-e", MCP_RESULT_GATE] : []; // P-MCP-GATE.1
         const knowledgeArgs = existsSync(KNOWLEDGE_EXT) ? ["-e", KNOWLEDGE_EXT] : []; // ADR-0220: knowledge_search (non-AskSage RAG)
+        const artifactToolArgs = existsSync(ARTIFACT_TOOLS_EXT) ? ["-e", ARTIFACT_TOOLS_EXT] : []; // P-CAP.1a (ADR-0589): search a stored result in code
         const interjectArgs = existsSync(INTERJECT_EXT) ? ["-e", INTERJECT_EXT] : []; // P-INTERJECT.1: after the gates, see comment at INTERJECT_EXT
         const browserArgs = existsSync(BROWSER_EXT) ? ["-e", BROWSER_EXT] : []; // P-BROWSER.1: master-only, see BROWSER_EXT
         const secretArgs = existsSync(SECRET_INTAKE_EXT) ? ["-e", SECRET_INTAKE_EXT] : []; // P-SECRET-INTAKE.1: master-only, see SECRET_INTAKE_EXT
@@ -1083,7 +1107,7 @@ class Backend {
         // user sees the refusal in chat and `this.starting` is cleared for a retry after a repair.
         if (!GATE) throw new Error(gateRefusal());
         // P-BOOTPERF.1 (ADR-pending): probe omp off the event loop; the engine keeps serving meanwhile.
-        const ompArgv = [await ompBinAsync(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, "-e", AZURE_ENTRA, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...secretArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...img2threejsArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
+        const ompArgv = [await ompBinAsync(), "acp", "-e", GATE, ...mcpGateArgs, "-e", ASKSAGE, "-e", AZURE_ENTRA, ...previewArgs, ...codegraphArgs, ...knowledgeArgs, ...artifactToolArgs, ...agentBuilderArgs, ...slashCmdArgs, ...fleetArgs, ...sandboxGrantArgs, ...interjectArgs, ...ownArgs, ...browserArgs, ...secretArgs, ...designArgs, ...driftArgs, ...openfilmArgs, ...img2threejsArgs, ...toolMetaArgs, ...judgmentArgs, ...STREAM_BEAT_ARGS, ...redactArgs, ...ompConfigArgs(), "--append-system-prompt", appendedPolicy];
         const spawnPlan = await this.resolveSandboxPlan(ompArgv);
         // P-INTERJECT.1: the master session drains operator notes addressed to "master".
         // P-SANDBOX.16 (ADR-0397): a git the host never put on PATH (MinGit, scoop, GitHub Desktop's copy)
@@ -1231,7 +1255,10 @@ class Backend {
                 const realName = this.toolNames.get(settleId);
                 this.stepsDone++;
                 this.durations.addTool(realName ?? String(u.kind ?? "tool"), elapsedMs);
-                this.emit({ type: "tool-meta", id: settleId, name: realName ?? String(u.kind ?? "tool"), ok: u.status === "completed", elapsedMs });
+                // P-CTX.2b (ADR-0579): a completed call whose result omp cut reports stored and shown bytes.
+                // A failed or withheld result reports none: nothing of it was shown.
+                const spill = u.status === "completed" ? spillFromRawOutput((u as { rawOutput?: unknown }).rawOutput) : null;
+                this.emit({ type: "tool-meta", id: settleId, name: realName ?? String(u.kind ?? "tool"), ok: u.status === "completed", elapsedMs, ...(spill ? { window: spill } : {}) });
                 this.progressTick?.();
               }
               if (u.status === "failed" || u.status === "rejected") { this.emit({ type: "block", tool: String(u.kind ?? "tool"), reason: toolFailureReason(u).reason, command: toolFailureCommand(u) || undefined, detail: toolFailureDetail(u) || undefined, severity: "low", findings: "", quarantined: false }); break; }
@@ -1399,8 +1426,12 @@ class Backend {
             if (m) {
               // The authoritative security-gate block. Persist it GUI-side (the gate's own omp
               // child can't co-write the DB) so it reaches the Security panel + is reviewable.
-              const rec = recordBlock({ tool: m[1]!, severity: m[2]!, findings: m[3]!, reason: "hidden-Unicode content quarantined", sessionId: this.sessionId ?? undefined });
-              this.emit({ type: "block", tool: m[1]!, reason: "hidden-Unicode content quarantined", severity: m[2]!, findings: m[3]!, id: rec.id, quarantined: true });
+              // P-SCANLIVE.1 (ADR-0571): `scan-unavailable` means NOTHING was found; the scanner could not
+              // answer and the gate failed closed. Labeling that "hidden-Unicode" sent a user hunting for
+              // invisible characters in content that had none.
+              const reason = m[3] === "scan-unavailable" ? "security scanner unavailable, blocked fail-closed" : "hidden-Unicode content quarantined";
+              const rec = recordBlock({ tool: m[1]!, severity: m[2]!, findings: m[3]!, reason, sessionId: this.sessionId ?? undefined });
+              this.emit({ type: "block", tool: m[1]!, reason, severity: m[2]!, findings: m[3]!, id: rec.id, quarantined: true });
             }
           }
         };
@@ -3032,7 +3063,7 @@ class Backend {
       onStall = stall.reject;
       stall.promise.catch(() => {}); // the race below handles it; keep it from surfacing as unhandled
       await Promise.race([
-        acp.request("session/prompt", { sessionId: sid, prompt: [{ type: "text", text: `${system}\n\n${user}` }] }, { signal }),
+        acp.request("session/prompt", { sessionId: sid, prompt: completionPrompt(system, user, opts) }, { signal }),
         stall.promise,
       ]);
       return text;
@@ -3077,7 +3108,7 @@ class Backend {
       onStall = stall.reject;
       stall.promise.catch(() => {}); // the race below handles it; keep it from surfacing as unhandled
       await Promise.race([
-        this.acp!.request("session/prompt", { sessionId: sid, prompt: [{ type: "text", text: `${system}\n\n${user}` }] }, { signal }),
+        this.acp!.request("session/prompt", { sessionId: sid, prompt: completionPrompt(system, user, opts) }, { signal }),
         stall.promise,
       ]);
       return text;

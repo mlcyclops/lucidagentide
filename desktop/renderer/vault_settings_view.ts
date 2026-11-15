@@ -11,6 +11,7 @@
 
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 
 /** The metadata /api/vault/list returns per entry (mirror of desktop/engine_vault.ts VaultEntryMeta). */
 export interface VaultMetaView {
@@ -107,9 +108,9 @@ function row(m: VaultMetaView): string {
   const last4 = m.last4 ? `<span class="abadge set" data-tip="Last 4|Only the last four characters are ever shown.">\u2022\u2022\u2022\u2022${esc(m.last4)}</span>` : "";
   const dates = `Added ${esc(shortDate(m.addedAt))} \u00b7 Updated ${esc(shortDate(m.updatedAt))}`;
   return `<div class="prov vault-row" data-vault-ref="${ref}">
-      <div class="prov-h"><span class="prov-name vault-name" title="${label}">${label}</span>
+      <div class="prov-h"><span class="prov-name vault-name" data-tip="${esc(tipEsc(m.label || m.ref))}">${label}</span>
         <span class="prov-status"><span class="abadge ok">${esc(kindLabel(m.kind))}</span>${last4}<span class="abadge set">${esc(sourceLabel(m.source))}</span></span></div>
-      <div class="vault-line vault-ref" title="${ref}">${ref}</div>
+      <div class="vault-line vault-ref" data-tip="${esc(tipEsc(m.ref))}">${ref}</div>
       <div class="vault-line">${esc(whereUsed(m))}</div>
       <div class="vault-line">${dates}</div>
       <div class="prov-row">

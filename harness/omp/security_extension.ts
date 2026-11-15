@@ -30,7 +30,14 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const DB_PATH = join(HERE, "..", "..", "agent_obs.duckdb");
 const LIVE_RUN = "omp-live";
 
-const scanner = new ScannerClient();
+// P-SCANLIVE.1 (ADR-0571): a sidecar that dies is respawned by the next tool call's scan; until then
+// calls fail closed. The exit is written to stderr (the desktop keeps it in lucid-acp.log), because the
+// scanner's own exit code and stderr are otherwise the only record of WHY it died.
+const scanner = new ScannerClient({
+  onExit: (e) => writeStderrNotice(
+    `\n🛡️  [LucidAgentIDE] scanner sidecar exited (${e.reason}); tool calls fail closed until the first scan after ${e.restartInMs}ms restarts it${e.stderrTail ? `. stderr: ${e.stderrTail.slice(-500).replace(/\s*\n\s*/g, " | ")}` : ""}\n`,
+  ),
+});
 scanner.start();
 
 // The gate scans the model's OWN tool args (the bash command it wrote, the file content it

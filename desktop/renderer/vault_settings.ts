@@ -14,6 +14,7 @@ import { authHeaders } from "./bridge.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
 import { popover, showToast } from "./ui.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 import { parseVaultList, passphraseStrength, VAULT_SEC, vaultSectionHtml } from "./vault_settings_view.ts";
 
 /** Larger than any real backup; the engine enforces its own cap too. */
@@ -98,7 +99,7 @@ function openRotate(anchor: HTMLElement, ref: string): void {
   if (!ref) return;
   const inner = `<div class="cfg-sec wl-quick">
     <div class="cfg-lbl">${icon("refresh", 13)} Rotate secret</div>
-    <div class="vault-line" title="${esc(ref)}">${esc(ref)}</div>
+    <div class="vault-line" data-tip="${esc(tipEsc(ref))}">${esc(ref)}</div>
     <div class="prov-row"><input class="prov-key" data-q="secret" type="password" autocomplete="off" placeholder="Paste the new value" /></div>
     <div class="prov-row"><button class="btn-mini ok" data-q="rotate">${icon("check", 12)} Rotate</button></div>
     <div class="set-note">${icon("shield", 12)} Replaced in place under the same reference. If the vault cannot store it, the old value stays (fail-closed).</div>

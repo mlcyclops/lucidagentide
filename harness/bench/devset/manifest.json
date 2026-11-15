@@ -1,0 +1,173 @@
+{
+  "version": "1",
+  "tasks": [
+    {
+      "id": "needle-8000-a",
+      "chars": 8114,
+      "sha256": "bbdd9b6b544aefaaf775f608965be55f8d2c2866b5a3121389b7a7688d5bb5f8",
+      "question": "In the build log, what revision was the deploy token for service search-indexer rotated to? Answer with the revision only, for example r1234.",
+      "answer": "r6718"
+    },
+    {
+      "id": "needle-8000-b",
+      "chars": 8115,
+      "sha256": "a143343336c70fa1b7270a39f6a93a7f67b2e0a35cf6e4691ffb8670ea457301",
+      "question": "In the build log, what revision was the deploy token for service asset-cdn rotated to? Answer with the revision only, for example r1234.",
+      "answer": "r9135"
+    },
+    {
+      "id": "needle-64000-a",
+      "chars": 64091,
+      "sha256": "51dc632516a1b5d5f21c817ad5f2d65bd6f27350fbe947684bc852d9b47cce2e",
+      "question": "In the build log, what revision was the deploy token for service search-indexer rotated to? Answer with the revision only, for example r1234.",
+      "answer": "r6831"
+    },
+    {
+      "id": "needle-64000-b",
+      "chars": 64117,
+      "sha256": "9033f3b4f4477c95b76138dd5c645c0f4dbe6e686d836706b1dd4c2b26dc54d7",
+      "question": "In the build log, what revision was the deploy token for service asset-cdn rotated to? Answer with the revision only, for example r1234.",
+      "answer": "r6545"
+    },
+    {
+      "id": "needle-512000-a",
+      "chars": 512095,
+      "sha256": "d1f002027aac9b65aaa72121020155e5ee10a520cfccafe07461a9e0e7847f98",
+      "question": "In the build log, what revision was the deploy token for service search-indexer rotated to? Answer with the revision only, for example r1234.",
+      "answer": "r6697"
+    },
+    {
+      "id": "needle-512000-b",
+      "chars": 512086,
+      "sha256": "e224ae9b5c27028b1bcb9f2a18b78c19517ff67bbbbf1fd20c53202244fdba4c",
+      "question": "In the build log, what revision was the deploy token for service asset-cdn rotated to? Answer with the revision only, for example r1234.",
+      "answer": "r3455"
+    },
+    {
+      "id": "count-8000-a",
+      "chars": 8118,
+      "sha256": "0bc732cea41efbe281c1079f63fc79314bca69c48137893ea6101914b1bb77ae",
+      "question": "In the test run, how many lines start with FAIL? Answer with the number only.",
+      "answer": "7"
+    },
+    {
+      "id": "count-8000-b",
+      "chars": 8225,
+      "sha256": "11a6469ab065175655dc18febe06678f90e2c317b3858623fc5ed61a1753b400",
+      "question": "In the test run, how many lines start with FAIL? Answer with the number only.",
+      "answer": "13"
+    },
+    {
+      "id": "count-64000-a",
+      "chars": 64127,
+      "sha256": "cdb1a7d4ea3170118cf3c0c9b9299a9d1eda84c035757303e02de37d06cd2d2e",
+      "question": "In the test run, how many lines start with FAIL? Answer with the number only.",
+      "answer": "7"
+    },
+    {
+      "id": "count-64000-b",
+      "chars": 64222,
+      "sha256": "9094b191b8e52fc068d46c73efe250df97b43d5cbe1014ee05e32074efa78514",
+      "question": "In the test run, how many lines start with FAIL? Answer with the number only.",
+      "answer": "13"
+    },
+    {
+      "id": "count-512000-a",
+      "chars": 512123,
+      "sha256": "e854e951a9a07be10531fb0578371d30e743f06b4813802884a5cc907924673e",
+      "question": "In the test run, how many lines start with FAIL? Answer with the number only.",
+      "answer": "7"
+    },
+    {
+      "id": "count-512000-b",
+      "chars": 512221,
+      "sha256": "dca59c1b86a24b48822de2b04554d48e68a7b17ec0eb9bcbbf8d4a030f190686",
+      "question": "In the test run, how many lines start with FAIL? Answer with the number only.",
+      "answer": "13"
+    },
+    {
+      "id": "track-8000-a",
+      "chars": 8007,
+      "sha256": "693404196c94d6bbaa3e9c62eabceb9a105c205e163aa6988c48d8ca82929982",
+      "question": "The log lists configuration changes in order. A change of the form \"set a = b\", where b is the name of another key, gives a the value b holds at that moment. After every change is applied, what is the value of timeout? Answer with the value only, for example v12345.",
+      "answer": "v27016"
+    },
+    {
+      "id": "track-8000-b",
+      "chars": 8058,
+      "sha256": "def6de5a626a43230cb7ccf0090ee451cceb10121077fb556507302ec028c67b",
+      "question": "The log lists configuration changes in order. A change of the form \"set a = b\", where b is the name of another key, gives a the value b holds at that moment. After every change is applied, what is the value of mirror? Answer with the value only, for example v12345.",
+      "answer": "v80242"
+    },
+    {
+      "id": "track-64000-a",
+      "chars": 64027,
+      "sha256": "0a024a4512c997778c373ecb841cbf8fb1c80f84c8cf7054ed1fa33b1eca4f48",
+      "question": "The log lists configuration changes in order. A change of the form \"set a = b\", where b is the name of another key, gives a the value b holds at that moment. After every change is applied, what is the value of timeout? Answer with the value only, for example v12345.",
+      "answer": "v17162"
+    },
+    {
+      "id": "track-64000-b",
+      "chars": 64000,
+      "sha256": "ba0f15c347d26c052c5ec9653238042ecc2ecacaf8792b7e040267d9a5c4c3b6",
+      "question": "The log lists configuration changes in order. A change of the form \"set a = b\", where b is the name of another key, gives a the value b holds at that moment. After every change is applied, what is the value of mirror? Answer with the value only, for example v12345.",
+      "answer": "v99240"
+    },
+    {
+      "id": "track-512000-a",
+      "chars": 511771,
+      "sha256": "143b1b392e3e57372596d148588b47d1493f190fcb6ffc165d222d2ccfae0798",
+      "question": "The log lists configuration changes in order. A change of the form \"set a = b\", where b is the name of another key, gives a the value b holds at that moment. After every change is applied, what is the value of timeout? Answer with the value only, for example v12345.",
+      "answer": "v43376"
+    },
+    {
+      "id": "track-512000-b",
+      "chars": 512030,
+      "sha256": "ae724adea0477308a55c74f747efe272c6bccb6fbde455810f0d213d19fc045a",
+      "question": "The log lists configuration changes in order. A change of the form \"set a = b\", where b is the name of another key, gives a the value b holds at that moment. After every change is applied, what is the value of mirror? Answer with the value only, for example v12345.",
+      "answer": "v11284"
+    },
+    {
+      "id": "rank-8000-a",
+      "chars": 8243,
+      "sha256": "000c3ea7dd664b5a8a06b41d5007c40695c1b882eb1992417b26c87591b245e8",
+      "question": "The search results list one match per line as path:line: text. Which files mention E_TOKEN_EXPIRED most often? Rank them, most mentions first. Answer with up to five paths separated by commas.",
+      "answer": "src/auth/token.ts, src/auth/session.ts, src/net/retry.ts, src/ui/login.tsx, src/crypto/sign.ts"
+    },
+    {
+      "id": "rank-8000-b",
+      "chars": 8263,
+      "sha256": "358a82e759a5646b87edd7306dc1f077ad6b7b35bb3eb02b45cf81bc6e781dd9",
+      "question": "The search results list one match per line as path:line: text. Which files mention E_BAD_SIGNATURE most often? Rank them, most mentions first. Answer with up to five paths separated by commas.",
+      "answer": "src/crypto/sign.ts, src/net/client.ts, src/auth/token.ts, src/sync/worker.ts, src/parse/config.ts"
+    },
+    {
+      "id": "rank-64000-a",
+      "chars": 64244,
+      "sha256": "836098af4f52174e57c805db95dcedff44955facc716180fc983de85f72e1312",
+      "question": "The search results list one match per line as path:line: text. Which files mention E_TOKEN_EXPIRED most often? Rank them, most mentions first. Answer with up to five paths separated by commas.",
+      "answer": "src/auth/token.ts, src/auth/session.ts, src/net/retry.ts, src/ui/login.tsx, src/crypto/sign.ts"
+    },
+    {
+      "id": "rank-64000-b",
+      "chars": 64275,
+      "sha256": "df9c2863695c5e993c7486817cbec40fe0136c83753cc142946dae1618cba58f",
+      "question": "The search results list one match per line as path:line: text. Which files mention E_BAD_SIGNATURE most often? Rank them, most mentions first. Answer with up to five paths separated by commas.",
+      "answer": "src/crypto/sign.ts, src/net/client.ts, src/auth/token.ts, src/sync/worker.ts, src/parse/config.ts"
+    },
+    {
+      "id": "rank-512000-a",
+      "chars": 512251,
+      "sha256": "80bfc04563d2dcf41e5b5f46ec4f42ed2cdc33d7ae4037f948dc6ce540ba7148",
+      "question": "The search results list one match per line as path:line: text. Which files mention E_TOKEN_EXPIRED most often? Rank them, most mentions first. Answer with up to five paths separated by commas.",
+      "answer": "src/auth/token.ts, src/auth/session.ts, src/net/retry.ts, src/ui/login.tsx, src/crypto/sign.ts"
+    },
+    {
+      "id": "rank-512000-b",
+      "chars": 512213,
+      "sha256": "1881b8bc6d801809ef962ceafe29a0e8e3905d511679d53407c5b43929281144",
+      "question": "The search results list one match per line as path:line: text. Which files mention E_BAD_SIGNATURE most often? Rank them, most mentions first. Answer with up to five paths separated by commas.",
+      "answer": "src/crypto/sign.ts, src/net/client.ts, src/auth/token.ts, src/sync/worker.ts, src/parse/config.ts"
+    }
+  ]
+}

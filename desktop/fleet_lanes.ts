@@ -100,7 +100,7 @@ export interface LaneView {
   hubSessionId: string | null;
   /** P-FLEET.L3: staged prompts waiting for the lane to go idle. Previews only - clamped text + image
    *  count; the full payloads live in the manager, drained FIFO one turn at a time. */
-  queued: { text: string; images: number }[];
+  queued: { text: string; images: number; files?: number }[]; // files: P-ATTACH.1 staged file count
   /** P-FLEET.L8: the MAIN composer is attached to this lane right now. Exactly one lane can hold this,
    *  so the grid renders one promoted card and the composer shows one badge. The lane keeps running
    *  regardless: promotion moves the renderer's prompt target, not the ACP session. */
@@ -128,6 +128,14 @@ export interface LaneView {
 
 /** P-FLEET.L3: a pasted image riding a lane prompt - the P-VISION.1 shape the master chat uses. */
 export interface LaneImage { data: string; mimeType: string }
+
+/** P-FLEET.L3: one staged lane prompt with its own images. P-ATTACH.1 (ADR-0598): and the ids of its staged
+ *  files, kept as ids so the files' text is built (and scanned again) when the item runs, not when it was
+ *  staged, and Copy / Update hand back the prompt the user typed. */
+export interface StagedLanePrompt { text: string; images: LaneImage[]; attachments?: string[] }
+
+/** P-ATTACH.1: turns a staged prompt's text plus its file ids into the text that is sent, or refuses it. */
+export type LaneAttachmentExpander = (text: string, ids: string[]) => Promise<{ ok: true; text: string } | { ok: false; error: string }>;
 
 /** P-FLEET.L3 (mirrors P-CHAT.1): the code a write/edit tool call authored, pulled from its rawInput at
  *  call time - a write's whole `content`, or an edit's joined `oldText`/`newText` pair (rendered as a
@@ -432,7 +440,7 @@ interface Lane {
   resumeContext: string | null;
   respawns: number;
   /** P-FLEET.L3: staged prompts, drained FIFO when the lane goes idle. One turn at a time stands. */
-  queue: { text: string; images: LaneImage[] }[];
+  queue: StagedLanePrompt[];
   // -- P-PROGRESS.1 progress state ------------------------------------------------------------------
   /** Epoch ms the current turn started; null when idle. */
   turnStartedAt: number | null;
@@ -881,13 +889,13 @@ export class FleetLaneManager {
 
   /** Stage a prompt for when the lane goes idle. Staging onto an error lane is fine - the drain recovers
    *  it. The cap mirrors P-FLEET.1's job queue: past it, refuse loudly rather than buffer unbounded. */
-  enqueue(laneId: string, text: string, images: LaneImage[] = []): { ok: boolean; queued?: number; reason?: string } {
+  enqueue(laneId: string, text: string, images: LaneImage[] = [], attachments: string[] = []): { ok: boolean; queued?: number; reason?: string } {
     const lane = this.#lanes.get(laneId);
     if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
     const t = text.trim();
-    if (!t && !images.length) return { ok: false, reason: "nothing to stage" };
+    if (!t && !images.length && !attachments.length) return { ok: false, reason: "nothing to stage" };
     if (lane.queue.length >= QUEUE_MAX) return { ok: false, reason: `queue is full (${QUEUE_MAX}) - let the lane drain first` };
-    lane.queue.push({ text: t, images });
+    lane.queue.push({ text: t, images, ...(attachments.length ? { attachments: attachments.slice() } : {}) });
     return { ok: true, queued: lane.queue.length };
   }
 
@@ -908,23 +916,23 @@ export class FleetLaneManager {
   /** P-PUSH.PAR1 (ADR-pending): read a staged item's FULL text and its own images WITHOUT removing it. Copy
    *  and Push now on a lane chip need the whole prompt (the status view clips it at 140 chars), and Push now
    *  keeps the item staged until the parallel lane accepted it. Out-of-range is a refusal. */
-  queuePeek(laneId: string, index: number): { ok: boolean; item?: { text: string; images: LaneImage[] }; reason?: string } {
+  queuePeek(laneId: string, index: number): { ok: boolean; item?: StagedLanePrompt; reason?: string } {
     const lane = this.#lanes.get(laneId);
     if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
     if (!Number.isInteger(index) || index < 0 || index >= lane.queue.length) return { ok: false, reason: "that staged prompt already ran or was removed" };
     const item = lane.queue[index]!;
-    return { ok: true, item: { text: item.text, images: item.images.slice() } };
+    return { ok: true, item: { text: item.text, images: item.images.slice(), ...(item.attachments ? { attachments: item.attachments.slice() } : {}) } };
   }
 
   /** P-QUEUE-IMG.1 (ADR-0469): Update on a staged chip. Removes the item and hands back its FULL text and
    *  its own images (the status view only carries a clipped preview and a count), so the card composer can
    *  load exactly what was staged for editing. Out-of-range is a refusal, never a different item. */
-  queueTake(laneId: string, index: number): { ok: boolean; item?: { text: string; images: LaneImage[] }; reason?: string } {
+  queueTake(laneId: string, index: number): { ok: boolean; item?: StagedLanePrompt; reason?: string } {
     const lane = this.#lanes.get(laneId);
     if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
     if (!Number.isInteger(index) || index < 0 || index >= lane.queue.length) return { ok: false, reason: "that staged prompt already ran or was removed" };
     const [item] = lane.queue.splice(index, 1);
-    return { ok: true, item: { text: item!.text, images: item!.images.slice() } };
+    return { ok: true, item: { text: item!.text, images: item!.images.slice(), ...(item!.attachments ? { attachments: item!.attachments.slice() } : {}) } };
   }
 
   /** Move a staged prompt one slot up (-1) or down (+1). Out-of-range is a quiet no-op. */
@@ -940,14 +948,23 @@ export class FleetLaneManager {
 
   /** Pop and run the next staged prompt, streaming into `sink`. The RENDERER triggers this when it sees
    *  the lane idle with a queue - the manager never runs a turn nobody can watch, because approvals need
-   *  a human and a card to glow in. Busy or empty is a quiet, explained refusal. */
-  async drain(laneId: string, sink: (e: LaneEvent) => void): Promise<void> {
+   *  a human and a card to glow in. Busy or empty is a quiet, explained refusal.
+   *  P-ATTACH.1 (ADR-0598): an item with staged files runs only through `expand`, which builds and scans
+   *  their text now; no expander, or a refusal, drops the item with the reason (fail-closed: never sent
+   *  without the files, never retried in a loop). */
+  async drain(laneId: string, sink: (e: LaneEvent) => void, expand?: LaneAttachmentExpander): Promise<void> {
     const lane = this.#lanes.get(laneId);
     if (!lane) { sink({ type: "error", message: `unknown lane "${laneId}"` }); return; }
     if (lane.busy) { sink({ type: "error", message: "lane is busy - the queue drains when the turn ends" }); return; }
     const next = lane.queue.shift();
     if (!next) { sink({ type: "error", message: "queue is empty" }); return; }
-    await this.prompt(laneId, next.text, sink, next.images);
+    let text = next.text;
+    if (next.attachments?.length) {
+      const r = expand ? await expand(next.text, next.attachments) : { ok: false as const, error: "the attached files could not be read" };
+      if (!r.ok) { sink({ type: "error", message: `The staged prompt was not sent: ${r.error}` }); return; }
+      text = r.text;
+    }
+    await this.prompt(laneId, text, sink, next.images);
   }
 
   /** Explicit revive: works on error AND stopped lanes (the button, not the automatic path). */
@@ -1851,7 +1868,7 @@ export class FleetLaneManager {
       respawns: lane.respawns,
       sessionId: lane.sessionId,
       hubSessionId: lane.hubSessionId,
-      queued: lane.queue.map((q) => ({ text: q.text.length > 140 ? `${q.text.slice(0, 140)}\u2026` : q.text, images: q.images.length })),
+      queued: lane.queue.map((q) => ({ text: q.text.length > 140 ? `${q.text.slice(0, 140)}\u2026` : q.text, images: q.images.length, ...(q.attachments?.length ? { files: q.attachments.length } : {}) })),
       autoApprove: lane.autoApprove,
       sessionAllow: [...lane.sessionAllow],
       promoted: lane.promoted,

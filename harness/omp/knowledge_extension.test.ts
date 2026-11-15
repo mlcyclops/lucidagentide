@@ -252,7 +252,10 @@ describe("P-KG.3 registration", () => {
     delete process.env.LUCID_KG_RETAIN_URL;
     try {
       const m = mockPi(); knowledgeExtension(m.pi);
-      const out = txt(await m.byName("memory_retain")!.execute("id", { kind: "preference", subject: "s", text: "t" }));
+      // P-CAP.1b (ADR-0590): the tool asks the session what it was shown, so it is handed one.
+      const ctx = { sessionManager: { getSessionId: () => "kx-clean-session", getArtifactsDir: () => null, getArtifactPath: async () => null } };
+      const run = m.byName("memory_retain")!.execute as unknown as (...a: unknown[]) => Promise<unknown>;
+      const out = txt(await run("id", { kind: "preference", subject: "s", text: "t" }, undefined, undefined, ctx));
       expect(out).toMatch(/Nothing was stored/);
     } finally { if (prev !== undefined) process.env.LUCID_KG_RETAIN_URL = prev; }
   });

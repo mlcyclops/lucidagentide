@@ -16,6 +16,7 @@ import { CUI_STORE_VERSION, PersonalStore, type PersonalGraph, type PersonalScop
 // P-KG.3: the PURE decision layer for the agent's KG read/write tools (lock / trust / compartment /
 // shape gates + ranking). Kept out of this file so it is testable without crypto, fs, or HTTP.
 import { LOCKED_READ_REASON, LOCKED_WRITE_REASON, searchGraph, vetAgentWrite, type KgHit, type KgQuery } from "../harness/personal/agent_kg.ts";
+import { mostSevere } from "../harness/security/trust_propagation.ts"; // P-CAP.1b (ADR-0590): a memory write is never trusted more than its session's sources
 import { load, personalAuditPath, personalCuiArchiveDir, personalCuiStorePath, personalProtectorsPath, personalStorePath, personalVaultDir, setPersonalization, setPersonalScope } from "./settings_store.ts";
 // ADR-0454: the main store's Lucid Vault Protector Spec v1 file (password + Windows Hello / Touch ID protectors)
 import { createProtectors, ProtectorError, readProtectors, rewrapPassword, unlockWithPassword, writeProtectors, type ProtectorDoc } from "../harness/personal/protectors.ts";
@@ -614,7 +615,11 @@ export function agentRetain(input: unknown): AgentRetainResult {
   const view = (s.personalScope ?? "personal") as ScopeView;
   const scope = agentWriteScope(view);
   const target = s.personalizationEnabled ? storeForScope(view) : null;
-  const verdict = vetAgentWrite(input, { trust: "untrusted", unlocked: !!target, scope });
+  // P-CAP.1b (ADR-0590): the memory tool posts the label of what its session was shown (`sourceTrust`).
+  // It is combined with `untrusted` by severity, so a posted label can only make this stricter: a caller
+  // cannot post its way to `trusted`, and a label that is not one of the four counts as quarantined.
+  const posted = typeof input === "object" && input !== null && "sourceTrust" in input ? [(input as { sourceTrust?: unknown }).sourceTrust] : [];
+  const verdict = vetAgentWrite(input, { trust: mostSevere(posted, "untrusted"), unlocked: !!target, scope });
   if (!verdict.ok) return { ok: false, ...(target ? {} : { locked: true }), refused: verdict.reason };
   if (!target) return { ok: false, locked: true, refused: LOCKED_WRITE_REASON }; // unreachable; keeps the narrowing honest
   const w = verdict.write;

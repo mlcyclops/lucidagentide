@@ -28,6 +28,7 @@
 
 import { esc } from "./format.ts";
 import { icon, iconBody } from "./icons.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 import {
   BLACK_ARROW, FREE_PLUGINS, PLUGIN_LICENSE_NAME, PLUGIN_LICENSE_URL, PLUGIN_PRICE_LABEL, PREMIUM_PLUGINS,
   addonActionLabel, cardActionLabel, decideAddonAction, decideCardAction, fmtDownloads, matchesQuery, parseCageOrUei, parseTierPref, provenanceChip,
@@ -126,7 +127,7 @@ export function freeCardHtml(p: FreePlugin, addon?: { action: AddonAction; note:
   else {
     const dl = fmtDownloads(p.downloads);
     const action = p.repo
-      ? `<button type="button" class="plg-act" data-kind="visit" data-plg-repo="${esc(p.repo)}" title="${esc(p.repo)}">View project${icon("arrowRight", 13)}</button>`
+      ? `<button type="button" class="plg-act" data-kind="visit" data-plg-repo="${esc(p.repo)}" data-tip="${esc(tipEsc(p.repo))}">View project${icon("arrowRight", 13)}</button>`
       : `<span class="plg-act plg-act-static" data-kind="built-in">${icon("check", 13)}In LUCID now</span>`;
     foot = `<div class="plg-foot"><span class="plg-meta">${dl ? `${icon("download", 12)}${esc(dl)} Obsidian downloads` : "Free"}</span>${action}</div>`;
   }

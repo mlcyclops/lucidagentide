@@ -17,6 +17,7 @@
 
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 import type { MeetingRow, MeetingDetail, TodoRow, UpcomingEvent } from "../meetings_hub.ts";
 
 /** Everything the list pane paints. Mirrors MeetingsView plus the renderer-owned search text. */
@@ -98,7 +99,7 @@ export function detailTodos(meeting: MeetingDetail, openTodos: TodoRow[] | null)
 /** A link to the Hub dashboard, or nothing when the engine refused the configured origin. */
 function hubLink(url: string | null, label: string, title: string): string {
   if (!url) return "";
-  return `<a class="btn-mini" href="${esc(url)}" target="_blank" rel="noreferrer" title="${esc(title)}">${label}</a>`;
+  return `<a class="btn-mini" href="${esc(url)}" target="_blank" rel="noreferrer" data-tip="${esc(tipEsc(title))}">${label}</a>`;
 }
 
 function rowHtml(r: MeetingRow, selected: boolean): string {
@@ -106,7 +107,7 @@ function rowHtml(r: MeetingRow, selected: boolean): string {
   const dur = r.duration ? `<span class="meet-chip">${esc(r.duration)}</span>` : "";
   const video = r.hasVideo ? `<span class="meet-chip">${icon("eye", 10)} video</span>` : "";
   return `<button type="button" class="meet-row${selected ? " on" : ""}" data-meet-open="${esc(r.filename)}"
-      title="${esc(r.title)}">
+      data-tip="${esc(tipEsc(r.title))}">
     <span class="meet-row-title">${esc(r.title)}</span>
     <span class="meet-row-meta">
       <span class="meet-chip">${esc(r.date.slice(0, 10) || r.date)}</span>
@@ -229,12 +230,12 @@ export function meetingDetailHtml(meeting: MeetingDetail | null, openTodos: Todo
 function todoHtml(t: DetailTodo): string {
   // An item whose status could not be read is neither checked nor actionable: a static line with a
   // "?" mark, so a partial Hub failure never reads as work already finished.
-  if (t.status === "unknown") return `<div class="meet-todo unknown" title="Status unknown: the Hub's open action items could not be read"><span class="meet-todo-mark">?</span><span class="meet-todo-text">${esc(t.text)}</span></div>`;
+  if (t.status === "unknown") return `<div class="meet-todo unknown" data-tip="Status unknown|The Hub's open action items could not be read"><span class="meet-todo-mark">?</span><span class="meet-todo-text">${esc(t.text)}</span></div>`;
   // An already-done item has no open-ledger id, so there is nothing to toggle: it renders as a
   // static line rather than a button that would silently do nothing.
   if (t.status === "done" || !t.id) return `<div class="meet-todo done"><span class="meet-todo-mark">${icon("check", 12)}</span><span class="meet-todo-text">${esc(t.text)}</span></div>`;
   return `<button type="button" class="meet-todo" data-meet-todo="${esc(t.id)}" aria-pressed="false"
-      title="Mark done in the Meeting Hub">
+      data-tip="Mark done in the Meeting Hub">
     <span class="meet-todo-mark"></span><span class="meet-todo-text">${esc(t.text)}</span>
   </button>`;
 }

@@ -22,7 +22,8 @@ import { mountSecretIntake, showSecretRequest } from "./secret_intake.ts"; // P-
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { externalHttpUrl } from "../navigation_policy.ts";
 import type { MascotInputs } from "./mascot.ts"; // One session-reactive sprite: composer or Arcade.
-import { mountComposerRunner, type RunnerHandle } from "./mascot_runner.ts"; // P-MASCOT.2: the prompt-bar parkour mini
+import { mountComposerRunner, type RunnerHandle } from "./mascot_runner.ts"; // P-MASCOT.2, P-MINI.3 (ADR-0596): the prompt-bar ninja in the bar's right corner
+import { miniLucidCardHtml, miniMount, noteVisit, parseMascotSize, parsePresence, readLedger, readMascotHidden, readMascotSize, readPresence, shouldVisit, writeMascotHidden, writeMascotSize, writePresence, type MiniMount } from "./mini_lucid.ts"; // P-MINI.1 (ADR-0580): visits and the preference; P-MINI.3 (ADR-0596): size and the right-click turn-off
 import { mountAgentArcade, type AgentArcadeHandle } from "./mascot_game.ts";
 import { ARCADE_GAMES, type ArcadeGameId } from "../arcade_games.ts";
 import { nextGap, readinessChecklist, resolveAgentTierModel, restoreModel, type AgentModelTier, type AgentPrior, type ReadyItem } from "./agent_flow.ts"; // P-AVATAR.4: the enter flow
@@ -33,13 +34,15 @@ import { aiLocHasData } from "../ailoc_view.ts";
 import { GUIDE_FILES } from "../guides_manifest.ts"; // P-GUIDE.2: provider id -> bundled advisor guide
 import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from "../preview_resolve.ts";
 import { PREVIEW_ZOOM_MAX, PREVIEW_ZOOM_MIN, PreviewWheelSteps, stepPreviewZoom } from "./preview_zoom.ts"; // whole-10% Preview zoom steps
-import { PREVIEW_KIND_ICON, isAutoPreviewPath, laneTabId, pluginTabId, previewKindLabel, previewPathKind, removeLaneTab, upsertLaneTab, upsertPluginTab, type PreviewTab } from "./preview_tabs.ts";
+import { ASK_LUCID_TAB_ID, PREVIEW_KIND_ICON, isAutoPreviewPath, laneTabId, pluginTabId, previewKindLabel, previewPathKind, removeLaneTab, upsertAskLucidTab, upsertLaneTab, upsertPluginTab, type PreviewTab } from "./preview_tabs.ts";
+import { imageForAction } from "./ask_image_card.ts"; // P-ASKLUCID.9 (ADR-0600): the image an Edit image card names
+import { tipEsc, tipValue } from "./tip_text.ts"; // P-TIP.1 (ADR-0599): data-tip values for new controls
 import { roleIcon } from "./role_icons.ts";
 import { budgetWindowState, providerBudgetRows, providerForModel, providerHasApiKey, providerKeywords } from "./budget_gate.ts";
 import { cachedSessions, cachedShareSnapshot, cachedSkills, cachedTranscript, cachedWorkspace, setCachedSessions, setCachedShareSnapshot, setCachedSkills, setCachedTranscript, setCachedWorkspace, transcriptSig } from "./swr_cache.ts";
 import { $, $$, accordion, el, fmtNum, gauge, spark, table, type Col } from "./dom.ts";
 import { freshFindings, splitReviewed } from "./sec_review.ts"; // P-SECACK.1 (ADR-0170): reviewed rows leave the active view
-import { bindItemMenu, copyToClipboard, installTextContextMenu, openCtxMenu, type CtxMenuEntry } from "./ctxmenu.ts"; // P-SECACK.1 (ADR-0170): right-click clipboard menu; P-PUSH.PAR1: the staged chip's item menu
+import { bindItemMenu, copyToClipboard, installTextContextMenu, openCtxMenu, writeClipboard, type CtxMenuEntry } from "./ctxmenu.ts"; // P-SECACK.1 (ADR-0170): right-click clipboard menu; P-PUSH.PAR1: the staged chip's item menu
 import { restoredTurnHtml } from "./steps_restore.ts"; // P-RESUME.1 (ADR-0171): resumed thinking/tool history
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
@@ -94,12 +97,26 @@ import type { MeetingTodoView } from "./bridge.ts";
 import { agentBuilderPanelHtml, specToGraphData, nodeEditorHtml, saveErrors, newCanvasSpec, runPanelHtml, secretsPanelHtml, agentInterviewPrompt, toolChipsHtml, trustBannerHtml, runApprovalHtml, runsPanelHtml, traceDetailHtml, schedulePanelHtml, historyPanelHtml, templatesPanelHtml } from "./agent_builder.ts"; // P-AGENT.2b/.4-live/.8/.9/.11a/.13/.14/.17
 import type { TrustLabel } from "../../harness/contracts.ts"; // P-AGENT.9: imported-agent trust banner
 import { localProvidersCardBody, draftFromForm, modelsFieldValue, providerWithDiscovered } from "./local_providers_ui.ts"; // P-LOCAL.3 (ADR-0135) / P-LOCAL.6: Settings → Local Providers
+import { parseResultWindowSetting, type ResultSpill } from "../result_window.ts"; // P-CTX.2b (ADR-0579): pure (no Node imports)
+import { resultWindowLine } from "./result_window_view.ts"; // P-CTX.2b (ADR-0579)
+import { createAskLucid, type AskActionContext, type AskActionResult, type AskExtrasView, type AskLucidHandle } from "./ask_lucid_panel.ts"; // P-ASKLUCID.1 (ADR-0581): the Ask Lucid fly-out
+import { bindFileDrop, clipboardFiles, createAttachTray, folderDropNote, isAttachShortcut, mountPlusMenu, pickFiles, plusButtonTip, plusMenuItems, sentFilesEl, syncPlusButton, type AttachTray } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598): files on the prompt bars
+import type { StagedAttachment } from "../attach_kinds.ts";
+import { collectScreen, surfaceKinds } from "./screen_digest.ts";
+import { captureScreen, pictureEnabled, pictureToggleHtml, setPictureEnabled } from "./screen_shot.ts"; // P-ASKLUCID.7 (ADR-0588): a picture of the screen
+import type { ScreenShot } from "../ask_lucid_shot.ts"; // P-ASKLUCID.3 (ADR-0584): what is on the screen, for Ask Lucid
+import type { ScreenDigest, ScreenPreview } from "../ask_lucid_screen.ts";
+import { addSeen, featureQuestion, featuresFromSurfaces, FEATURES_SEEN_KEY, parseSeen, unusedFeatures, type AskFeature } from "../ask_lucid_features.ts"; // P-ASKLUCID.6 (ADR-0587): features not yet used
+import { ASK_SETTINGS, type AskSettingKey } from "../ask_lucid_actions.ts"; // P-ASKLUCID.6: the settings Lucid may propose changing
+import { pushTrail, type Follow, type Rec, type RecSignals } from "./lucid_recs.ts"; // P-ASKLUCID.5 (ADR-0586): suggestions that follow the work
+import type { AskAction } from "../ask_lucid_actions.ts"; // P-ASKLUCID.2 (ADR-0582): what Lucid may propose
+import { holidayOffer, holidayToast, nextNews, noteHolidayAnswer, noteNewsSeen, pickSuggestion, pinExpired, readHolidayMemory, readPin, readSeenNews, setSuggestEnabled, suggestEnabled, suggestToggleHtml, writePin } from "./lucid_suggest.ts"; // P-MINI.2 (ADR-0583): what Lucid may suggest
 import { hydrateVaultDestinations } from "./vault_dest_ui.ts"; import { VAULT_DEST_SEC, VAULT_DEST_SUB, VAULT_DEST_TITLE } from "./vault_dest_card.ts"; // P-VAULT-DEST.1 (ADR-0478): Settings → Vault destinations (Enterprise)
 import { acceptAttachment, promptImageBlocks, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "./composer_attachments.ts"; // P-VISION.1 (ADR-0136): pasted images
 import { imageFileName } from "./chat_images.ts"; // P-IMG.1 (ADR-0208): inline render + download of tool images
 import type { AgentSpec, NodeKind } from "../../harness/agent/spec.ts"; // P-AGENT.2b
 import { expandCommandBody, expandInlineCommands, slashTokenBeforeCaret, type UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1/.2: user "/" commands, body-wide
-import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, showToast } from "./ui.ts";
+import { type Action, type ToastAction, attachRichTip, createPalette, initTooltips, popover, setTip, showToast } from "./ui.ts";
 import { cadenceToCron, jobRowHtml, jobsHoverHtml, jobsSheetHtml, jobsTile, nextThree, type CadenceKind, type JobsData } from "./jobs_view.ts"; // P-SCHED.2 (ADR-0443)
 import { describeCron } from "../cron.ts"; // P-SCHED.1: the same cron math the engine runs
 import { exportActionPlan } from "./kg_export.ts";
@@ -117,7 +134,7 @@ import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOpti
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
 import { closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, pushToNewLane, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
-import { closeFleetOrbit, fleetHome, initFleetOrbit, noteSpokeAsk, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
+import { closeFleetOrbit, fleetHome, initFleetOrbit, noteSpokeAsk, openFleetOrbit, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
 import { hideRemoteView, initRemoteView, isRemoteViewOpen, REMOTE_SPOKES_PLUGIN, remoteViewHtml, showRemoteView, type RemoteViewTarget } from "./remote_spokes_view.ts"; // P-RS-VIEW.1 (ADR-0539)
 import { launchRemoteAdmin } from "./remote_admin_launch.ts"; // P-RS-WINDOW.1 (ADR-0543)
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
@@ -439,7 +456,8 @@ function buildShell(): void {
         <button id="zoomIn" data-tip="Zoom in|${modSymbol("+")}">${icon("plus", 13)}</button>
       </div>
       <!-- P-AVATAR.1: back into the stage after an Esc exit; visible only for the lucid-agent role. -->
-      <label class="agent-tier-control" id="agentTierControl" hidden title="Regular: Opus/Luna class. Max: the strongest available model for this provider; API billing may apply."><span>Agent</span><select id="agentTier" aria-label="LUCID Agent model tier"><option value="regular">Regular</option><option value="max">Max</option></select></label>
+      <label class="agent-tier-control" id="agentTierControl" hidden data-tip="Regular: Opus/Luna class. Max: the strongest available model for this provider; API billing may apply."><span>Agent</span><select id="agentTier" aria-label="LUCID Agent model tier"><option value="regular">Regular</option><option value="max">Max</option></select></label>
+      <button class="ctool tb-chip tb-ask" id="tbAskLucid" type="button" data-tip="Ask Lucid|A side conversation that does not interrupt your session. Lucid can see your fleet lanes, the Fleet Orbit and the knowledge graph.">${icon("spark", 14)}<span>Ask Lucid</span></button>
       <button class="ctool tb-chip" id="tbStage" hidden data-tip="Enter the stage|Rails away, immersive LUCID Agent view. Esc steps back out.">${icon("spark", 14)}<span>Stage</span></button>
       <div class="win-ctrls">
         <button id="winMin" data-tip="Minimize">${icon("minus", 15)}</button>
@@ -516,6 +534,9 @@ function buildShell(): void {
           <!-- P-VISION.1 (ADR-0136): thumbnails of pasted/dropped images, just above the prompt bar; sent
                with the next message only when the user hits Enter/Send. -->
           <div class="composer-thumbs" id="composerThumbs" hidden></div>
+          <!-- P-ATTACH.1 (ADR-0598): file chips. Each file is copied, extracted and scanned by the engine
+               before its chip turns ready; images keep the thumbnail strip above. -->
+          <div class="att-tray composer-files" id="composerFiles" hidden></div>
           <div class="composer-row">
             <div class="composer">
               <textarea id="input" rows="1" spellcheck="true" placeholder="Ask the agent…  every tool call is scanned before it runs"></textarea>
@@ -525,6 +546,9 @@ function buildShell(): void {
           <div class="composer-tools" id="composerTools">
             <!-- Persona + Skills moved to the titlebar (next to the model picker); the composer keeps only the
                  mic so it never squishes when a right-edge surface (KG / IDE / Agent Builder) narrows the center. -->
+            <!-- P-ATTACH.1 (ADR-0598): add files, photos or a folder, plus Knowledge, Skills and Connectors.
+                 Hidden while the managed policy turns attachments off. -->
+            <button class="ctool ctool-icon ct-plus" id="ctPlus" type="button" hidden aria-label="Add files and more" data-tip="${esc(plusButtonTip(true))}">${icon("plus", 15)}</button>
             <button class="ctool ctool-icon" id="ctMic" data-tip="Dictate \u00b7 ${modCombo("D")}|Click (or ${modCombo("D")}) for hands-free dictation - your words land as you pause, and it stops on a longer silence. Click again to stop early. (Settings \u2192 Voice sets the engine.)">${icon("mic", 15)}</button>
             <!-- P-STT.4: live mic waveform - scrolling level history (newest at the right) + elapsed clock,
                  shown only while dictation runs so the user SEES the mic hearing them. -->
@@ -694,13 +718,16 @@ function buildShell(): void {
             <input id="prevPath" class="prev-pathin" type="text" placeholder="Open a local file… (path or file://)" spellcheck="false" autocomplete="off" />
             <button class="btn-mini" id="prevOpen" data-tip="Open|Load the path in the field into this preview tab.">${icon("download", 13)} Open</button>
             <button class="btn-mini prev-reveal" id="prevReveal" hidden data-tip="Show in folder|Open the containing folder in your file manager with this file selected.">${icon("folder", 13)}</button>
+            <!-- P-ASKLUCID.9 (ADR-0600): on the Ask Lucid tab only, beside Show in folder. -->
+            <button class="btn-mini prev-ask-act" id="prevSaveAs" hidden data-tip="Save image as|Save a copy of the edited image wherever you choose. The browser build downloads it.">${icon("download", 13)}<span class="bl">Save as</span></button>
+            <button class="btn-mini prev-ask-act" id="prevCopyPath" hidden data-tip="Copy path|Copy the edited image's full path.">${icon("copy", 13)}</button>
           </div>
-          <div class="preview-zoom" id="prevZoomControls" role="group" aria-label="Preview content zoom" title="Zoom the preview. Ctrl/Meta+wheel zooms local content; for PDFs, remote pages and nested frames, wheel over these controls.">
+          <div class="preview-zoom" id="prevZoomControls" role="group" aria-label="Preview content zoom" data-tip="Zoom the preview. Ctrl/Meta+wheel zooms local content; for PDFs, remote pages and nested frames, wheel over these controls.">
             <button type="button" class="btn-mini" id="prevZoomOut" aria-label="Zoom Preview out">-</button>
             <button type="button" class="btn-mini" id="prevZoomReset" aria-label="Reset Preview zoom to 100 percent">100%</button>
             <button type="button" class="btn-mini" id="prevZoomIn" aria-label="Zoom Preview in">+</button>
           </div>
-          <button type="button" class="btn-mini" id="prevPan" aria-pressed="false" aria-controls="prevViewport" title="Grab and drag the zoomed Yours preview. Escape returns to page interaction; arrow keys also pan.">${icon("move", 13)}<span class="bl">Pan</span></button>
+          <button type="button" class="btn-mini" id="prevPan" aria-pressed="false" aria-controls="prevViewport" data-tip="Grab and drag the zoomed Yours preview. Escape returns to page interaction; arrow keys also pan.">${icon("move", 13)}<span class="bl">Pan</span></button>
         </div>
         <div class="preview-body" id="prevBody">
           <!-- P-PREVIEW.6a (ADR-0153): a live "reviewing / testing" pill shown while the agent looks at the preview. -->
@@ -1010,7 +1037,7 @@ function seedThread(): void {
     <div class="h">Ask the agent anything</div>
     <div class="d">Secure prompting and code generation</div></div>`;
 }
-function addMessage(role: "user" | "assistant", text: string, attachments?: Attachment[]): HTMLElement {
+function addMessage(role: "user" | "assistant", text: string, attachments?: Attachment[], files?: readonly StagedAttachment[]): HTMLElement {
   $("#chatHint")?.remove();
   // Copy + Save .md on BOTH roles (copy your own prompts too).
   // P-VOICE.1 (ADR-0115): read-aloud (TTS) only on the assistant's replies.
@@ -1037,10 +1064,20 @@ function addMessage(role: "user" | "assistant", text: string, attachments?: Atta
     }
     textEl.appendChild(row);
   }
+  // P-ATTACH.1 (ADR-0598): the files that went with the prompt, as chips with the same tooltip.
+  if (files?.length) textEl.appendChild(sentFilesEl(files));
   $("#thread")!.appendChild(node);
   scrollChat();
   return node;
 }
+
+// ── P-ATTACH.1 (ADR-0598): composer file attachments ─────────────────────────────────────────────
+/** The composer's file tray (created at boot, after the markup exists). */
+let composerTray: AttachTray | null = null;
+/** Files that moved into a staged "next turn" prompt; they come back to the composer with it. */
+const queuedFiles = new WeakMap<QueuedItem, StagedAttachment[]>();
+/** Files left on a composer target while the composer drives another (like parkedAttachments for images). */
+const parkedFiles = new Map<string, StagedAttachment[]>();
 
 // ── P-VISION.1 (ADR-0136): composer image attachments ────────────────────────────────────────────
 let attSeq = 0;
@@ -1179,7 +1216,7 @@ function enhanceCodeBlocks(container: HTMLElement): void {
     pre.style.position = "relative";
     const langCls = [...code.classList].find((c) => c.startsWith("language-"));
     const lang = langCls ? langCls.slice("language-".length) : "";
-    pre.appendChild(el(`<button class="code-copy-btn" type="button" data-code-copy title="Copy code" aria-label="Copy code">${icon("copy", 12)}</button>`));
+    pre.appendChild(el(`<button class="code-copy-btn" type="button" data-code-copy data-tip="Copy code" aria-label="Copy code">${icon("copy", 12)}</button>`));
     pre.appendChild(el(`<button class="code-ide-btn" type="button" data-ide-open data-lang="${esc(lang)}">${icon("layout", 12)} View in IDE</button>`));
   });
 }
@@ -1190,7 +1227,7 @@ async function copyCodeBlock(btn: HTMLElement): Promise<void> {
   const text = btn.closest("pre")?.querySelector("code")?.textContent ?? "";
   if (!text) return;
   try {
-    await navigator.clipboard.writeText(text);
+    await writeClipboard(text);
     btn.classList.add("ok"); btn.innerHTML = icon("check", 12);
     setTimeout(() => { btn.classList.remove("ok"); btn.innerHTML = icon("copy", 12); }, 1200);
   } catch { showToast({ tone: "danger", title: "Copy failed", desc: "Clipboard unavailable in this view. Use right-click → Copy code block.", timeout: 3000 }); }
@@ -1436,7 +1473,8 @@ type ToolCode = { path: string; content?: string; oldText?: string; newText?: st
 // onto this call for the chip label and the engineering report. `kind` preserves the coarse ACP class even
 // after the label upgrades, so the report can group by real name and still report the class.
 // P-PROGRESS.1: `input`/`intent` fill the drilldown of a code-less call; `elapsedMs` arrives with the settle.
-interface ChipData { code?: ToolCode; detail: string; id?: string; kind?: string; input?: string; intent?: string; elapsedMs?: number; }
+// P-CTX.2b (ADR-0579): `window` arrives with the settle when omp cut the result the model was shown.
+interface ChipData { code?: ToolCode; detail: string; id?: string; kind?: string; input?: string; intent?: string; elapsedMs?: number; window?: ResultSpill; }
 
 /** Fill an expandable step's panel with the tool's code — a write's content (syntax-highlighted via the
  *  vendored Monaco), an edit's hashline `patch` (colored +/− lines), or an old→new pair as a line diff.
@@ -1594,7 +1632,7 @@ function createThoughts(): ThoughtsWin {
     const ran = now - r.at;
     const eta = shownEta(etaPhrase(estimateFromSamples(ran, toolLengths.toolSamples(r.s.name), 2)), statusEta());
     r.stateEl.textContent = eta ? `${humanMs(ran)} \u00b7 ${eta}` : humanMs(ran);
-    r.stateEl.title = eta ? `running for ${humanMs(ran)}; ${eta}` : `running for ${humanMs(ran)}`;
+    setTip(r.stateEl, eta ? `running for ${humanMs(ran)}; ${eta}` : `running for ${humanMs(ran)}`);
   };
   // Where a settled (or never-settling) call goes, and why it was folded when it was.
   const place = (r: StepRow, ok: boolean | undefined, elapsedMs: number | undefined) => {
@@ -1645,7 +1683,7 @@ function createThoughts(): ThoughtsWin {
       dEl.textContent = doing;
       doingEl.textContent = doing;
       nameEl.textContent = `Tool: ${name}`;
-      stateEl.title = s.id ? "running" : "";
+      setTip(stateEl, s.id ? "running" : "");
       if (s.input) { argsEl.textContent = s.input; argsEl.removeAttribute("hidden"); }
       btn.addEventListener("click", () => {
         const opening = codeEl.hasAttribute("hidden");
@@ -1685,7 +1723,7 @@ function createThoughts(): ThoughtsWin {
       r.stateEl.dataset.state = ok ? "done" : "failed";
       const took = elapsedMs !== undefined && elapsedMs >= 0 ? humanMs(elapsedMs) : "";
       r.stateEl.textContent = took;
-      r.stateEl.title = ok ? (took ? `done in ${took}` : "done") : (took ? `failed after ${took}` : "failed");
+      setTip(r.stateEl, ok ? (took ? `done in ${took}` : "done") : (took ? `failed after ${took}` : "failed"));
       r.row.classList.toggle("failed", !ok);
       if (ok && elapsedMs !== undefined && elapsedMs >= 0) toolLengths.addTool(r.s.name, elapsedMs);
       // P-PROGRESS.2: a quick, failed, repeated or empty call folds (a shown row that then failed moves into
@@ -1715,7 +1753,7 @@ function createThoughts(): ThoughtsWin {
       for (const r of rows.values()) {
         window.clearTimeout(r.timer);
         if (r.stateEl.dataset.state !== "open") continue;
-        r.stateEl.dataset.state = "unknown"; r.stateEl.textContent = ""; r.stateEl.title = "no result report";
+        r.stateEl.dataset.state = "unknown"; r.stateEl.textContent = ""; setTip(r.stateEl, "no result report");
         if (!r.placed) place(r, undefined, Date.now() - r.at);
       }
     },
@@ -1802,10 +1840,10 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onA
     }
     const copyBtn = $(".perm-copy", win) as HTMLElement | null;
     copyBtn?.addEventListener("click", async () => {
-      try { await navigator.clipboard.writeText(url); copyBtn.innerHTML = icon("check", 12); setTimeout(() => { copyBtn.innerHTML = icon("copy", 12); }, 1200); } catch { /* clipboard blocked */ }
+      try { await writeClipboard(url); copyBtn.innerHTML = icon("check", 12); setTimeout(() => { copyBtn.innerHTML = icon("copy", 12); }, 1200); } catch { /* clipboard blocked */ }
     });
     ($("[data-radar]", win) as HTMLElement | null)?.addEventListener("click", async () => {
-      try { await navigator.clipboard.writeText(url); } catch { /* ignore */ }
+      try { await writeClipboard(url); } catch { /* ignore */ }
       window.open("https://radar.cloudflare.com/scan", "_blank", "noopener");
       showToast({ title: "URL copied · Radar opened", desc: "Paste the URL into Cloudflare Radar to vet the site before allowing.", actions: [{ label: "OK" }], timeout: 4000 });
     });
@@ -1830,7 +1868,7 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onA
     </div>`);
     const copyBtn = $(".perm-copy", win) as HTMLElement | null;
     copyBtn?.addEventListener("click", async () => {
-      try { await navigator.clipboard.writeText(cmd); copyBtn.innerHTML = icon("check", 12); setTimeout(() => { copyBtn.innerHTML = icon("copy", 12); }, 1200); } catch { /* clipboard blocked */ }
+      try { await writeClipboard(cmd); copyBtn.innerHTML = icon("check", 12); setTimeout(() => { copyBtn.innerHTML = icon("copy", 12); }, 1200); } catch { /* clipboard blocked */ }
     });
     // TLDR: one-shot plain-language explanation from a cheap keyed model, shown inline. Cached per card.
     const tldrBtn = $(".perm-tldr", win) as HTMLButtonElement | null;
@@ -1972,6 +2010,8 @@ function createChipRow(chip: ToolChip, data: ChipData): HTMLElement {
       const head = el(`<div class="tinline-head"><div class="tinline-doing"></div><div class="tinline-tool"></div></div>`);
       ($(".tinline-doing", head) as HTMLElement).textContent = describeTool({ name: chip.k, kind: data.kind, title: data.detail, intent: data.intent, input: data.input, path: data.code?.path }).doing;
       ($(".tinline-tool", head) as HTMLElement).textContent = `Tool: ${chip.k}${data.elapsedMs !== undefined ? ` · ${chip.failed ? "failed after" : "took"} ${humanMs(data.elapsedMs)}` : ""}`;
+      // P-CTX.2b (ADR-0579): how much of the result the model was shown, and where the rest is stored.
+      if (data.window) { const win = el(`<div class="tinline-window"></div>`); win.textContent = resultWindowLine(data.window); head.appendChild(win); }
       panel.appendChild(head);
       if (hasCode && data.code) void renderToolCode(panel, data.code);
       else { panel.dataset.filled = "1"; const pre = el(`<pre class="tinline-detail"></pre>`); pre.textContent = data.input || data.detail || "(no details)"; panel.appendChild(pre); }
@@ -2202,7 +2242,7 @@ function renderNoResponseNotice(container: HTMLElement, model: string, stopReaso
   const { sameFamily, otherProvider } = recommendFallbacks(model, opts);
   const showOther = otherProvider && (!sameFamily || otherProvider.value !== sameFamily.value);
   const switchBtn = (m: { value: string; name: string }, note: string) =>
-    `<button class="btn-mini ok" data-noresp-switch="${esc(m.value)}" title="Switch the model and re-send your last message">${icon("refresh", 12)} ${esc(m.name)} &amp; retry<span class="noresp-note">${esc(note)}</span></button>`;
+    `<button class="btn-mini ok" data-noresp-switch="${esc(m.value)}" data-tip="Switch the model and re-send your last message">${icon("refresh", 12)} ${esc(m.name)} &amp; retry<span class="noresp-note">${esc(note)}</span></button>`;
   const recs = [
     sameFamily ? switchBtn(sameFamily, "lower model, same family") : "",
     showOther ? switchBtn(otherProvider!, "another provider") : "",
@@ -2227,7 +2267,7 @@ function renderNoResponseNotice(container: HTMLElement, model: string, stopReaso
     ${recs ? `<div class="noresp-actions">${recs}</div>` : ""}
     <div class="noresp-actions"><button class="btn-mini" data-noresp-pick>${icon("sliders", 12)} Pick another model…</button></div>
     <div class="noresp-b noresp-restart${hint.strong ? " strong" : ""}" data-noresp-restart-hint>${esc(hint.text)}</div>
-    <div class="noresp-actions"><button class="btn-mini" data-noresp-refresh title="Restart the engine so it re-reads your providers and the model list (your chat is kept)">${icon("refresh", 12)} Refresh providers</button></div>
+    <div class="noresp-actions"><button class="btn-mini" data-noresp-refresh data-tip="Restart the engine so it re-reads your providers and the model list (your chat is kept)">${icon("refresh", 12)} Refresh providers</button></div>
   </div>`;
   (container.querySelector("[data-noresp-refresh]") as HTMLButtonElement | null)?.addEventListener("click", async (ev) => {
     const btn = ev.currentTarget as HTMLButtonElement;
@@ -2259,7 +2299,7 @@ let judgeBackend: JudgmentView["effective"] | null = null;
 /** Render the stand-by card into `container` for a turn that failed (or, with `held`, was never sent) on
  *  the network. The resend reuses the composer path (same as the switch-and-retry buttons), and only
  *  fires when the composer is free: text the user is typing is never overwritten. */
-function showNetStandby(container: HTMLElement, cause: Exclude<FailureCause, "model">, failed: { model: string; stopReason?: string; reason?: string }, held?: { prompt: string; nodes: HTMLElement[]; atts: Attachment[] }): void {
+function showNetStandby(container: HTMLElement, cause: Exclude<FailureCause, "model">, failed: { model: string; stopReason?: string; reason?: string }, held?: { prompt: string; nodes: HTMLElement[]; atts: Attachment[]; files: StagedAttachment[] }): void {
   const prompt = held?.prompt ?? state.lastPrompt ?? "";
   // A held prompt never reached the engine, so it starts a fresh budget whatever the last outage spent.
   const attempts = !held && netResend?.prompt === prompt ? netResend.attempts : 0;
@@ -2269,7 +2309,7 @@ function showNetStandby(container: HTMLElement, cause: Exclude<FailureCause, "mo
       const ta = $("#input") as HTMLTextAreaElement | null;
       if (!prompt || !ta || ta.value.trim() || state.streaming || turnInFlight() || agentTierApplying) return false;
       netResend = { prompt, attempts: attempts + 1 };
-      if (held) { for (const n of held.nodes) n.remove(); state.attachments = held.atts; renderComposerThumbs(); }
+      if (held) { for (const n of held.nodes) n.remove(); state.attachments = held.atts; renderComposerThumbs(); composerTray?.restore(held.files); }
       ta.value = prompt; autosize(ta); setSendEnabled(); void send();
       return true;
     },
@@ -2508,11 +2548,14 @@ async function send(): Promise<void> {
   if (agentTierApplying) { showToast({ title: "Confirming model change", desc: "Wait a moment for the engine to confirm the model before sending.", timeout: 2500 }); return; }
   const ta = $("#input") as HTMLTextAreaElement;
   const text = ta.value.trim();
-  if (text || state.attachments.length) stopHoldsQueue = false; // the user sent again: the staged queue resumes after this turn
+  // P-ATTACH.1 (ADR-0598): staged files ride like images; one still being scanned holds the send.
+  const fileCount = composerTray?.ids().length ?? 0;
+  if (text || state.attachments.length || fileCount) stopHoldsQueue = false; // the user sent again: the staged queue resumes after this turn
   // P-VISION.1 (ADR-0136): capture any staged image attachments for this turn.
   const atts = state.attachments.slice();
   const images = promptImageBlocks(atts);
-  if (!text && images.length === 0) return;
+  if (!text && images.length === 0 && fileCount === 0) return;
+  if (composerTray?.pending()) { showToast({ tone: "warn", title: "Files are still being scanned", desc: "Send again in a moment: a file goes with a prompt only after LUCID has copied and scanned it.", timeout: 4000 }); return; }
   if (recoveryChecking) { showToast({ tone: "warn", title: "Checking connection", desc: "Wait for the status check, or reconnect before sending.", timeout: 4000 }); return; }
   // P-FLEET.L8: a lane runs its OWN omp child, so the master composer's "/" expansion is meaningless to it
   // - an expanded body would reach a session that never registered the command. targetCaps says so, and
@@ -2547,7 +2590,7 @@ async function send(): Promise<void> {
       const uc = state.userCommands.find((c) => c.name === name);
       if (uc) void activateUserCommandSkill(uc);
     }
-    if (!inline.text && images.length === 0) {
+    if (!inline.text && images.length === 0 && fileCount === 0) {
       // the prompt was ONLY skill tokens — skills are active for the next turn; nothing to send now
       if (inline.skillNames.length) { ta.value = ""; autosize(ta); setSendEnabled(); return; }
     }
@@ -2569,10 +2612,11 @@ async function send(): Promise<void> {
   if (!isLaneTarget(state.composerTarget) && effectiveState(ns.view, ns.browserOnline) === "offline") {
     ta.value = ""; autosize(ta);
     state.attachments = []; renderComposerThumbs();
-    const userNode = addMessage("user", text, atts);
+    const heldFiles = composerTray?.take() ?? []; // P-ATTACH.1: held with the prompt, back on resend
+    const userNode = addMessage("user", text, atts, heldFiles);
     const waitNode = addMessage("assistant", "");
     jumpToEnd();
-    showNetStandby($(".text", waitNode) as HTMLElement, "network", { model: state.model }, { prompt: text, nodes: [userNode, waitNode], atts });
+    showNetStandby($(".text", waitNode) as HTMLElement, "network", { model: state.model }, { prompt: text, nodes: [userNode, waitNode], atts, files: heldFiles });
     return;
   }
   // First message of the app session: auto-collapse the sessions panel (Claude-Code style) so the
@@ -2582,7 +2626,14 @@ async function send(): Promise<void> {
   state.lastPrompt = text; // remembered so an Approve & retry can re-send it
   ta.value = ""; autosize(ta);
   state.attachments = []; renderComposerThumbs(); // clear the thumb strip on send (also refreshes send-enabled)
-  addMessage("user", text, atts);
+  // P-ATTACH.1 (ADR-0598): the files stay on the bar (as sending) until the engine takes the turn: its first
+  // snapshot, or a lane event that is not an error. A refused or failed send puts them back, ready.
+  const sentFiles = composerTray?.hold() ?? [];
+  const fileIds = sentFiles.map((a) => a.id);
+  let filesSettled = false;
+  const settleFiles = (accepted: boolean): void => { if (!filesSettled) { filesSettled = true; composerTray?.settle(fileIds, accepted); } };
+  const withFiles = fileIds.length ? fileIds : undefined;
+  addMessage("user", text, atts, sentFiles);
   jumpToEnd(); // P-SCROLL.1: a prompt you just sent is always in view, and its reply follows
   const turnFrom = nextTurnFrom; nextTurnFrom = null;
   p2pTeeUserTurn(sendText, turnFrom ?? undefined);
@@ -2599,9 +2650,10 @@ async function send(): Promise<void> {
   let laneRan = false;
   try { await renderChatTurn(text, (onEvent) => lane
     // P-FLEET.L19: pasted images ride the lane prompt as ACP image blocks (the lane's P-FLEET.L3 wire).
-    ? bridge.fleetPrompt(lane.laneId, sendText, (e: LaneEvent) => { if (e.type !== "error") laneRan = true; (onEvent as (e: LaneEvent) => void)(e); }, images.map((b) => ({ data: b.data, mimeType: b.mimeType })))
-    : bridge.sendPrompt(sendText, onEvent, images, turnFrom ?? undefined, p2pShare), { laneId: lane?.laneId }); }
+    ? bridge.fleetPrompt(lane.laneId, sendText, (e: LaneEvent) => { if (e.type !== "error") { laneRan = true; settleFiles(true); } (onEvent as (e: LaneEvent) => void)(e); }, images.map((b) => ({ data: b.data, mimeType: b.mimeType })), withFiles)
+    : bridge.sendPrompt(sendText, (e: ChatEvent) => { if (e.type === "turn-snapshot") settleFiles(true); onEvent(e); }, images, turnFrom ?? undefined, p2pShare, withFiles), { laneId: lane?.laneId }); }
   finally {
+    settleFiles(false);
     const release = (): void => { if (ownedGen === laneOwnedGen) laneOwnedTail = false; };
     if (lane) { if (laneRan) window.setTimeout(release, 5000); else release(); }
   }
@@ -3039,6 +3091,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
         if (!coarse || COARSE_KINDS[m.chip.k.toLowerCase()]) m.chip.k = name;
         if (e.ok === false) m.chip.failed = true;
         if (e.elapsedMs !== undefined) m.data.elapsedMs = e.elapsedMs;
+        if (e.window) m.data.window = e.window; // P-CTX.2b (ADR-0579)
       }
       thoughts?.relabel(e.id, e.name);
       if (e.ok !== undefined) thoughts?.settle(e.id, e.ok, e.elapsedMs);
@@ -3258,7 +3311,7 @@ function setSendEnabled(): void {
     btn.innerHTML = icon("square", 16);
     btn.setAttribute("data-tip", "Stop|Interrupt the reply + tool calls");
   } else {
-    btn.disabled = recoveryChecking || agentTierApplying || (!ta.value.trim() && state.attachments.length === 0);
+    btn.disabled = recoveryChecking || agentTierApplying || (!ta.value.trim() && state.attachments.length === 0 && !composerTray?.ids().length);
     btn.classList.remove("stop");
     btn.innerHTML = icon("send", 18);
     btn.setAttribute("data-tip", recoveryChecking ? "Checking connection|Sending is paused until session status is confirmed" : "Send|Enter");
@@ -3286,6 +3339,9 @@ function renderQueued(): void {
   stack.innerHTML = state.queuedItems.map((q, i) => {
     const n = q.atts?.length ?? 0;
     const imgs = n ? `<span class="q-imgs" data-tip="${n} image${n === 1 ? "" : "s"} ride with this prompt|Click one to copy it into the composer">${q.atts!.map((_, j) => `<button class="q-thumb" type="button" data-q-img="${i}:${j}" aria-label="Copy image ${j + 1} into the composer"><img class="q-thumb-img" alt="" /></button>`).join("")}</span>` : "";
+    // P-ATTACH.1 (ADR-0598): the item's own files, counted (Update brings them back as chips).
+    const nf = queuedFiles.get(q)?.length ?? 0;
+    const files = nf ? `<span class="q-files" data-tip="${nf} file${nf === 1 ? "" : "s"} ride with this prompt|Copied and scanned when they were added. Update brings them back to the composer.">${nf} file${nf === 1 ? "" : "s"}</span>` : "";
     // P-PUSH.PAR1: an item already starting its parallel lane cannot be pushed or sent again until that settles.
     const push = q.mode !== "hold" ? ""
       : pushingItems.has(q) ? `<button class="q-push q-push-off" data-q-push="${i}" aria-disabled="true" data-tip="Pushing|A new lane on its own worktree is starting for this prompt">Pushing\u2026</button>`
@@ -3294,7 +3350,7 @@ function renderQueued(): void {
     const edit = q.mode === "hold" ? `<button class="q-push q-edit" data-q-edit="${i}" data-tip="Update|Pull this prompt and its images back into the composer to edit">Update</button>` : "";
     return `<div class="q-pill" data-q-row="${i}" data-tip="${q.mode === "hold" ? (stopHoldsQueue ? "Held because you pressed Stop - it waits until you send" : "Sends automatically when the current turn ends") : "Already pushed into the running turn - kept as a record"}|Right-click or long-press to copy it">
       <span class="q-label">${q.mode === "hold" ? "next turn" : "mid-turn"}</span>
-      ${imgs}
+      ${imgs}${files}
       <span class="q-text" data-q-i="${i}"></span>
       ${edit}${push}
       <button class="q-cancel" data-q-x="${i}" data-tip="Remove staged prompt">${icon("close", 12)}</button>
@@ -3302,7 +3358,7 @@ function renderQueued(): void {
   }).join("");
   // Prompt text and image data are user content: set as DOM properties, never interpolated into HTML.
   state.queuedItems.forEach((q, i) => {
-    const t = $(`.q-text[data-q-i="${i}"]`, stack!) as HTMLElement | null; if (t) { t.textContent = q.text; t.title = q.text; }
+    const t = $(`.q-text[data-q-i="${i}"]`, stack!) as HTMLElement | null; if (t) { t.textContent = q.text; setTip(t, q.text); }
     (q.atts ?? []).forEach((a, j) => { const img = $(`[data-q-img="${i}:${j}"] .q-thumb-img`, stack!) as HTMLImageElement | null; if (img) img.src = a.dataUrl; });
   });
   $$("[data-q-x]", stack).forEach((b) => b.addEventListener("click", () => {
@@ -3329,7 +3385,8 @@ function renderQueued(): void {
     const i = Number((b as HTMLElement).dataset.qPush);
     const item = state.queuedItems[i]; if (!item || pushingItems.has(item)) return;
     const src = pushSource();
-    const route = pushNowRoute({ running: turnInFlight(), cwd: src.cwd, images: item.atts?.length ?? 0 });
+    // P-ATTACH.1: files, like images, cannot ride a mid-turn steer.
+    const route = pushNowRoute({ running: turnInFlight(), cwd: src.cwd, images: (item.atts?.length ?? 0) + (queuedFiles.get(item)?.length ?? 0) });
     if (route.kind === "parallel") { void pushStagedToLane(item, src); return; }
     if (route.kind === "stage") { showToast({ tone: "warn", title: route.title, desc: route.desc, timeout: 8000 }); return; }
     state.queuedItems = state.queuedItems.filter((_, n) => n !== i);
@@ -3364,11 +3421,13 @@ async function pushStagedToLane(item: QueuedItem, src: PushSource): Promise<void
   pushingItems.add(item); renderQueued();
   try {
     const images = promptImageBlocks(item.atts ?? []).map((b) => ({ data: b.data, mimeType: b.mimeType }));
+    const files = (queuedFiles.get(item) ?? []).map((a) => a.id); // P-ATTACH.1 (ADR-0598)
     const r = await pushToNewLane(src, item.text, images, {
       announce: (lane) => {
         const n = parallelPushNotice(src, lane, { busy: true });
         showToast({ tone: "info", title: n.title, desc: n.desc, timeout: 7000 });
       },
+      ...(files.length ? { attachments: files } : {}),
     });
     if (r.ok) {
       state.queuedItems = state.queuedItems.filter((q) => q !== item);
@@ -3378,7 +3437,7 @@ async function pushStagedToLane(item: QueuedItem, src: PushSource): Promise<void
       return;
     }
     const running = turnInFlight();
-    const plan = parallelPushRefusal(r, { canSteer: running, images: images.length });
+    const plan = parallelPushRefusal(r, { canSteer: running, images: images.length + files.length });
     const at = state.queuedItems.indexOf(item);
     if (plan.kind === "steer" && at >= 0) {
       state.queuedItems = state.queuedItems.filter((q) => q !== item);
@@ -3431,7 +3490,7 @@ async function copyQueued(item: QueuedItem, remove: boolean): Promise<void> {
  *  path that would load a staged prompt into the composer refuses rather than overwrite or merge into it. */
 function composerHasDraft(): boolean {
   const ta = $("#input") as HTMLTextAreaElement | null;
-  return !ta || !!ta.value.trim() || state.attachments.length > 0;
+  return !ta || !!ta.value.trim() || state.attachments.length > 0 || (composerTray?.count() ?? 0) > 0; // P-ATTACH.1: files are a draft too
 }
 
 /** P-QUEUE-IMG.1 (ADR-0469): put a staged item's text AND its own images into the composer (the caller has
@@ -3441,6 +3500,8 @@ function loadComposer(item: QueuedItem): void {
   ta.value = item.text; autosize(ta);
   state.attachments = (item.atts ?? []).slice();
   renderComposerThumbs(); // also refreshes send-enabled
+  composerTray?.restore(queuedFiles.get(item) ?? []); // P-ATTACH.1 (ADR-0598): its own files come back with it
+  queuedFiles.delete(item);
 }
 
 /** P-QUEUE-IMG.1 (ADR-0469): Update re-stages at the old slot - just ahead of the item that followed the
@@ -3451,7 +3512,7 @@ let restageBefore: QueuedItem | null = null;
  *  and images go back into the composer, removable, with room to paste more. A draft is never touched. */
 function editStagedPrompt(i: number): void {
   const ta = $("#input") as HTMLTextAreaElement | null; if (!ta) return;
-  const r = editQueued(state.queuedItems, i, { text: ta.value, atts: state.attachments.length });
+  const r = editQueued(state.queuedItems, i, { text: ta.value, atts: state.attachments.length + (composerTray?.count() ?? 0) });
   if (!r.ok) {
     if (r.code === "draft") showToast({ tone: "warn", title: "Composer has a draft", desc: "Update never overwrites what you are writing. Send, stage or clear the composer, then press Update.", timeout: 5000 });
     return;
@@ -3532,7 +3593,7 @@ async function pushMidTurn(text: string, at = state.queuedItems.length): Promise
 function addNoteChip(text: string): void {
   const chip = addEvent(`<div class="evt note-chip">${icon("send", 14)}<span class="note-chip-txt"></span><button class="note-chip-x" data-tip="Dismiss this note">${icon("close", 12)}</button></div>`);
   const t = $(".note-chip-txt", chip) as HTMLElement | null;
-  if (t) { t.textContent = text; t.title = text; }
+  if (t) { t.textContent = text; setTip(t, text); }
   $(".note-chip-x", chip)?.addEventListener("click", () => chip.remove());
 }
 
@@ -3594,6 +3655,11 @@ function swapAttachments(from: ComposerTarget, to: ComposerTarget): void {
   state.attachments = parkedAttachments.get(spotKey(to)) ?? [];
   parkedAttachments.delete(spotKey(to));
   renderComposerThumbs();
+  // P-ATTACH.1 (ADR-0598): staged files belong to their target the same way.
+  const files = composerTray?.take() ?? [];
+  if (files.length) parkedFiles.set(spotKey(from), files);
+  composerTray?.restore(parkedFiles.get(spotKey(to)) ?? []);
+  parkedFiles.delete(spotKey(to));
 }
 function msgBoxes(): MsgBox[] {
   const c = $("#chat");
@@ -3853,7 +3919,7 @@ function onLaneWatchEvent(e: LaneEvent): void {
 function laneToolChip(label: string): HTMLElement {
   const chip = el(`<div class="evt note-chip">${icon("send", 14)}<span class="note-chip-txt"></span></div>`);
   const txt = $(".note-chip-txt", chip) as HTMLElement;
-  txt.textContent = label; txt.title = label;
+  txt.textContent = label; setTip(txt, label);
   return chip;
 }
 
@@ -3927,7 +3993,7 @@ function renderComposerTarget(): void {
     ($(".composer-row", wrap) ?? wrap.firstElementChild)?.before(bar);
     ($(".composer-target-back", bar) as HTMLElement).addEventListener("click", () => demoteLane());
   }
-  bar.title = badge.title;
+  setTip(bar, badge.title);
   ($(".composer-target-label", bar) as HTMLElement).textContent = badge.label;
   ($(".composer-target-back", bar) as HTMLElement).textContent = badge.back;
   applyTargetCaps();
@@ -3955,7 +4021,7 @@ function openQueueChooser(text: string): void {
       <button class="btn-mini" data-qc-push data-tip="Interject now - the agent reads it at its next tool boundary">Push mid-turn</button>
       <button class="q-cancel" data-qc-x aria-label="Cancel" data-tip="Put the text back in the composer">${icon("close", 12)}</button>
     </div>`);
-  const t = $(".qc-text", ch) as HTMLElement; t.textContent = text; t.title = text;
+  const t = $(".qc-text", ch) as HTMLElement; t.textContent = text; setTip(t, text);
   row.before(ch);
   const resend = () => { const ta = $("#input") as HTMLTextAreaElement; ta.value = text; autosize(ta); setSendEnabled(); void send(); };
   ($("[data-qc-hold]", ch) as HTMLElement).addEventListener("click", () => {
@@ -3964,14 +4030,20 @@ function openQueueChooser(text: string): void {
     // P-QUEUE-IMG.1 (ADR-0469): the images in the composer move INTO this item and leave the composer, so
     // they run with this prompt and never ride whatever is sent next. An Update re-stage keeps its slot.
     const r = addQueued(state.queuedItems, text, "hold", { atts: state.attachments, before: restageBefore });
-    if (r.ok) { state.queuedItems = r.items; restageBefore = null; state.attachments = []; renderComposerThumbs(); renderQueued(); }
+    if (r.ok) {
+      // P-ATTACH.1 (ADR-0598): the composer's files move into the item with its images.
+      const item = r.items.find((q) => !state.queuedItems.includes(q));
+      const files = item ? composerTray?.take() ?? [] : [];
+      if (item && files.length) queuedFiles.set(item, files);
+      state.queuedItems = r.items; restageBefore = null; state.attachments = []; renderComposerThumbs(); renderQueued();
+    }
     else showToast({ tone: "warn", title: "Not staged", desc: `${r.reason ?? "refused"}.`, timeout: 5000 });
   });
   ($("[data-qc-push]", ch) as HTMLElement).addEventListener("click", () => {
     // P-QUEUE-IMG.1: a mid-turn push is text only. With images in the composer it would leave them behind
     // for the next prompt, so the chooser stays open and says so instead.
-    if (turnInFlight() && state.attachments.length) {
-      showToast({ tone: "warn", title: "Push mid-turn is text only", desc: "A push cannot carry images. Queue it for the next turn to send them together, or remove the images to push the text.", timeout: 6000 });
+    if (turnInFlight() && (state.attachments.length || composerTray?.count())) {
+      showToast({ tone: "warn", title: "Push mid-turn is text only", desc: "A push cannot carry images or files. Queue it for the next turn to send them together, or remove them to push the text.", timeout: 6000 });
       return;
     }
     closeQueueChooser();
@@ -4015,7 +4087,7 @@ function openCheckinCard(): void {
     const elapsed = $("[data-ck-elapsed]", card) as HTMLElement | null;
     if (elapsed) elapsed.textContent = state.streaming ? `Elapsed: ${fmtClock(Date.now() - started)}` : "The turn has ended.";
     const ph = $("[data-ck-phase]", card) as HTMLElement | null;
-    if (ph) { ph.textContent = `${liveTurn.phase ? `Now: ${liveTurn.phase}` : "Now: warming up"}${liveTurn.alive ? ` (${liveTurn.alive})` : ""}`; ph.title = liveTurn.phase; }
+    if (ph) { ph.textContent = `${liveTurn.phase ? `Now: ${liveTurn.phase}` : "Now: warming up"}${liveTurn.alive ? ` (${liveTurn.alive})` : ""}`; setTip(ph, liveTurn.phase); }
     const pend = $("[data-ck-pending]", card) as HTMLElement | null;
     if (pend) {
       if (!liveTurn.pending.length) pend.innerHTML = `<div class="ck-sub">No slow tool calls reported yet.</div>`;
@@ -4024,7 +4096,7 @@ function openCheckinCard(): void {
         pend.innerHTML = `<div class="ck-sub">Waiting on:</div>` + liveTurn.pending.map((_, i) => `<div class="ck-call" data-ck-call="${i}"></div>`).join("");
         liveTurn.pending.forEach((p, i) => {
           const row = $(`[data-ck-call="${i}"]`, pend) as HTMLElement | null;
-          if (row) { const line = `${p.label} · ${fmtClock(p.elapsedMs + age)}`; row.textContent = line; row.title = line; }
+          if (row) { const line = `${p.label} · ${fmtClock(p.elapsedMs + age)}`; row.textContent = line; setTip(row, line); }
         });
       }
     }
@@ -4423,7 +4495,7 @@ function provCard(p: ProviderAuth): string {
       ? `<select class="prov-key" data-env="${esc(f.env)}">${f.options.map((o) => `<option value="${esc(o.value)}"${o.value === f.value ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`
       : `<input type="${f.secret ? "password" : "text"}" class="prov-key" data-env="${esc(f.env)}" placeholder="${fill}"${val} />`;
     return `<div class="prov-row prov-field">
-        <label class="prov-field-label" title="${esc(f.env)}">${esc(f.label)}</label>
+        <label class="prov-field-label" data-tip="${esc(tipEsc(f.env))}">${esc(f.label)}</label>
         ${control}
         <button class="btn-mini ok" data-savekey="${esc(f.env)}">${icon("check", 12)} Save</button>
         ${f.set ? `<button class="btn-mini" data-clearkey="${esc(f.env)}">Clear</button>` : ""}
@@ -4455,11 +4527,11 @@ function accountsBlock(p: ProviderAuth): string {
       ? `Disconnect this account from omp: remove "${a.name}"?`
       : `Remove "${a.name}" and its saved key?`;
     return `<div class="acct-row${a.active ? " active" : ""}">
-      <button class="acct-switch" type="button" data-acct-switch="${esc(a.id)}" data-acct-prov="${esc(p.id)}" title="${a.active ? "Active: omp is using this account" : "Switch to this account"}"><span class="acct-dot${a.active ? " on" : ""}"></span></button>
+      <button class="acct-switch" type="button" data-acct-switch="${esc(a.id)}" data-acct-prov="${esc(p.id)}" aria-label="${a.active ? "Active: omp is using this account" : "Switch to this account"}" data-tip="${a.active ? "Active|omp is using this account" : "Switch to this account"}"><span class="acct-dot${a.active ? " on" : ""}"></span></button>
       <span class="acct-name">${esc(a.name)}${suffix ? `<i class="acct-suffix"> \u00b7 ${esc(suffix)}</i>` : ""}</span>
       ${a.parked ? `<span class="abadge none">parked</span>` : ""}
-      <button class="btn-mini acct-ico" type="button" data-acct-rename="${esc(a.id)}" data-acct-prov="${esc(p.id)}" data-acct-name="${esc(a.name)}" title="Rename this account">${icon("pen", 12)}</button>
-      ${a.removable ? `<button class="btn-mini danger acct-ico" type="button" data-acct-remove="${esc(a.id)}" data-acct-prov="${esc(p.id)}" data-acct-confirm="${esc(removeConfirm)}" title="Remove this account">${icon("trash", 12)}</button>` : ""}
+      <button class="btn-mini acct-ico" type="button" data-acct-rename="${esc(a.id)}" data-acct-prov="${esc(p.id)}" data-acct-name="${esc(a.name)}" aria-label="Rename this account" data-tip="Rename this account">${icon("pen", 12)}</button>
+      ${a.removable ? `<button class="btn-mini danger acct-ico" type="button" data-acct-remove="${esc(a.id)}" data-acct-prov="${esc(p.id)}" data-acct-confirm="${esc(removeConfirm)}" aria-label="Remove this account" data-tip="Remove this account">${icon("trash", 12)}</button>` : ""}
     </div>`;
   }).join("");
   const addRow = p.env
@@ -4859,12 +4931,40 @@ function openSettingsToLocalProviders(): void {
   }, 140);
 }
 
+// P-ASKLUCID.9 (ADR-0600): jump Settings to the Providers card (from the Edit image card when no image model is
+// connected), scrolled and flashed like the jumps above.
+function openSettingsToProviders(): void {
+  SET_OPEN.add("providers");
+  openSettings();
+  setTimeout(() => {
+    const sec = $('[data-sec="providers"]') as HTMLElement | null;
+    sec?.classList.add("open");
+    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
+    sec?.classList.add("set-flash");
+    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
+  }, 140);
+}
+
 // P-STT.4: jump Settings to the Voice card (from the dictation-failure toast) so the fix is one click away.
 function openSettingsToVoice(): void {
   SET_OPEN.add("voice");
   openSettings();
   setTimeout(() => {
     const sec = $('[data-sec="voice"]') as HTMLElement | null;
+    sec?.classList.add("open");
+    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
+    sec?.classList.add("set-flash");
+    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
+  }, 140);
+}
+
+// P-ATTACH.1 (ADR-0598): the "+" menu's Connectors (MCP) entry lands on the MCP connectors card, opened,
+// scrolled and flashed like the jumps above.
+function openSettingsToMcp(): void {
+  SET_OPEN.add("mcp");
+  openSettings();
+  setTimeout(() => {
+    const sec = $('[data-sec="mcp"]') as HTMLElement | null;
     sec?.classList.add("open");
     sec?.scrollIntoView({ behavior: "smooth", block: "start" });
     sec?.classList.add("set-flash");
@@ -4967,18 +5067,436 @@ function syncImmersiveWithRole(role: UserRole | null): void {
   setImmersive(isAgent);
   syncAgentExtras();
   // The runner owns the mascot until Arcade opens, in either stage or parked layout.
-  if (isAgent && !miniRunner) {
-    const wrap = document.querySelector(".composer-wrap") as HTMLElement | null;
-    if (wrap) {
-      miniRunner = mountComposerRunner(wrap, composerMascotInputs);
-      miniRunner.setSuspended(agentArcade?.isOpen() ?? false);
-    }
-  } else if (!isAgent && miniRunner) { miniRunner.dispose(); miniRunner = null; }
+  noteRoleForMini();
+  syncMiniLucid();
   // P-AVATAR.4: entering the role starts the hands-free flow; leaving restores the user's world.
   if (isAgent) void enterAgentFlow();
   else void exitAgentFlow();
 }
+// P-ASKLUCID.1 (ADR-0581): the Ask Lucid fly-out, built on first use and kept for the life of the window.
+let askLucidPanel: AskLucidHandle | null = null;
+function askLucid(): AskLucidHandle {
+  askLucidPanel ??= createAskLucid({
+    ask: (text, history, extras) => bridge.askLucid(text, history, extras),
+    screen: readScreenForLucid,
+    shot: shotForLucid,
+    recSignals: recSignalsForLucid,
+    recStore: miniStore(),
+    recTrail: () => recTrail,
+    recFallback: featureRecsForLucid,
+    extras: extrasForLucid,
+    onFollow: followScreenForLucid,
+    markdown: renderMarkdown,
+    enhance: enhanceCodeBlocks,
+    topBar: ".titlebar",
+    zoomOf: "#app",
+    runAction: runAskAction,
+    // P-ASKLUCID.9 (ADR-0600): the Edit image card's models (remembered choice in localStorage), the Providers
+    // jump, and where an edited image opens.
+    imageEdit: {
+      models: () => bridge.imageModels(),
+      store: miniStore(),
+      openProviders: openSettingsToProviders,
+      open: showAskLucidImage,
+      ...(bridge.canShowInFolder() ? { showInFolder: (path: string) => bridge.showInFolder(path) } : {}),
+    },
+    attach: bridge, // P-ATTACH.1 (ADR-0598): files staged, copied and scanned like the composer's
+    openKnowledge: (anchor) => openKnowledgeMenu(anchor),
+  });
+  return askLucidPanel;
+}
+
+// ── P-ASKLUCID.6 (ADR-0587): features not yet used, and the settings Lucid may propose changing ──────
+// What the last look at the fleet, the orbit and the knowledge graph found (set by recSignalsForLucid), so
+// "has this user used it" needs no request of its own.
+let lastFleetLanes = 0;
+let lastOrbitGoal = false;
+let lastKnowledge = false;
+let lastAutoArchive = false;
+const FEATURE_SAMPLE_MS = 60_000;
+
+function readSeenFeatures(): string[] {
+  try { return parseSeen(miniStore()?.getItem(FEATURES_SEEN_KEY) ?? null); } catch { return []; }
+}
+function markFeaturesSeen(ids: readonly string[]): void {
+  const r = addSeen(readSeenFeatures(), ids);
+  if (!r.changed) return;
+  try { miniStore()?.setItem(FEATURES_SEEN_KEY, JSON.stringify(r.seen)); } catch { /* storage blocked: known for this window only */ }
+}
+/** Note which panels are open, once a minute: a panel the user has had open is a feature they found. Panel
+ *  kinds only, never their content. */
+function noteSurfacesSeen(): void {
+  if (document.hidden) return;
+  try { markFeaturesSeen(featuresFromSurfaces(surfaceKinds(document).map((s) => s.kind))); } catch { /* a sample is optional */ }
+}
+function unusedFeaturesForLucid(): AskFeature[] {
+  const prefs = seasonPrefs();
+  return unusedFeatures({
+    seen: readSeenFeatures(), lanes: lastFleetLanes, orbitGoal: lastOrbitGoal, knowledge: lastKnowledge,
+    seasonOn: prefs.auto || !!prefs.pick, autoArchive: lastAutoArchive, localModels: (state.localProviders ?? []).length > 0,
+  });
+}
+/** The suggestions Ask Lucid falls back on when nothing in the work suggests one: a feature not yet used. */
+function featureRecsForLucid(): Rec[] {
+  return unusedFeaturesForLucid().map((f) => ({ id: `feature:${f.id}`, kind: "feature", label: `Try: ${f.title}`, question: featureQuestion(f) }));
+}
+/** What goes to the engine with every question besides the screen: the current value of each setting Lucid
+ *  may propose changing, and the ids of the features this user has not used. The engine keeps only known
+ *  keys, accepted values and catalog ids. */
+async function extrasForLucid(): Promise<AskExtrasView> {
+  const [arch, win] = await Promise.all([bridge.archivePolicy().catch(() => null), bridge.resultWindow().catch(() => null)]);
+  lastAutoArchive = !!arch?.policy.auto;
+  const prefs = seasonPrefs();
+  const settings: Record<string, string> = {
+    "season.follow": prefs.auto ? "on" : "off",
+    "season.theme": prefs.pick || "none",
+    "theme": themePref() || "default",
+    "mini.presence": readPresence(miniStore()),
+    "suggest.enabled": suggestEnabled(miniStore()) ? "on" : "off",
+    "sessions.autoArchive": lastAutoArchive ? "on" : "off",
+  };
+  if (win && (win.setting === "auto" || typeof win.setting === "number")) settings["toolOutput.window"] = String(win.setting);
+  return { settings, unusedFeatures: unusedFeaturesForLucid().map((f) => f.id) };
+}
+/** Apply ONE setting the user just confirmed on a card. Each branch is the call Settings itself makes. A
+ *  theme or holiday theme id is checked against the app's own list here, because the engine only checks its
+ *  shape. */
+async function applyAskSetting(key: AskSettingKey, value: string): Promise<AskActionResult> {
+  const label = ASK_SETTINGS[key].label;
+  const done: AskActionResult = { ok: true, message: `${label} is now ${value}. You can change it back in Settings.` };
+  const refused = (why: string): AskActionResult => ({ ok: false, message: why });
+  if (key === "season.follow") { setSeasonPref(SEASON_AUTO_KEY, value === "on" ? "1" : ""); return done; }
+  if (key === "season.theme") {
+    if (value !== "none" && !seasonById(value)) return refused(`There is no holiday theme called "${value}".`);
+    setSeasonPref(SEASON_PICK_KEY, value === "none" ? "" : value);
+    return done;
+  }
+  if (key === "theme") {
+    if (value !== "default" && value !== SYSTEM_THEME_ID && !THEMES.some((t) => t.id === value)) return refused(`There is no theme called "${value}".`);
+    await pickTheme(value === "default" ? "" : value);
+    return done;
+  }
+  if (key === "mini.presence") {
+    writePresence(miniStore(), parsePresence(value));
+    if (value !== "sometimes") miniVisiting = false;
+    syncMiniLucid();
+    if (state.settingsOpen) fillSec("miniLucid", secMiniLucid());
+    return done;
+  }
+  if (key === "suggest.enabled") {
+    setSuggestEnabled(miniStore(), value === "on");
+    if (state.settingsOpen) fillSec("miniLucid", secMiniLucid());
+    return done;
+  }
+  if (key === "sessions.autoArchive") {
+    const cur = await bridge.archivePolicy().catch(() => null);
+    if (!cur) return refused("The archive rule could not be read.");
+    const next = await bridge.archivePolicy({ ...cur.policy, auto: value === "on" }).catch(() => null);
+    if (!next) return refused("The archive rule could not be saved.");
+    lastAutoArchive = next.policy.auto;
+    return done;
+  }
+  const saved = await bridge.setResultWindow(value === "auto" ? "auto" : Number(value)).catch(() => null);
+  return saved ? done : refused("The tool output window could not be saved.");
+}
+
+// P-ASKLUCID.5 (ADR-0586): what is going on, for Ask Lucid's suggestions. Everything here is already on the
+// user's screen or in a view Lucid is shown: which surfaces are open, the lanes, the orbit goal, the session
+// in the main chat, and whether the knowledge graph holds anything. No text is read.
+async function recSignalsForLucid(): Promise<RecSignals | null> {
+  const [fleet, goal, kb] = await Promise.all([bridge.fleetStatus().catch(() => null), bridge.fleetGoal().catch(() => null), bridge.kbList().catch(() => null)]);
+  const lanes = (fleet?.lanes ?? []).map((l) => {
+    const r = l as unknown as Record<string, unknown>;
+    const status = typeof r.status === "string" ? r.status : "";
+    return { name: typeof r.name === "string" && r.name ? r.name : "a lane", status, waiting: !!r.pendingApproval || /approval|waiting/i.test(status) };
+  });
+  const g = (goal?.goal ?? null) as unknown as Record<string, unknown> | null;
+  const active = $(".sess.active") as HTMLElement | null;
+  const sid = active?.dataset.sid ?? null;
+  const panel = document.getElementById("preview");
+  const path = prevPathByLane[prevLane] ?? "";
+  let surfaces: { kind: string; title: string }[] = [];
+  try { surfaces = surfaceKinds(document); } catch { surfaces = []; }
+  // P-ASKLUCID.6 (ADR-0587): remembered for "which features has this user not used".
+  lastFleetLanes = lanes.length;
+  lastOrbitGoal = !!(g && typeof g.title === "string" && g.title);
+  lastKnowledge = (kb?.kgs?.length ?? 0) > 0;
+  markFeaturesSeen(featuresFromSurfaces(surfaces.map((s) => s.kind)));
+  return {
+    surfaces,
+    previewTitle: panel && !panel.hidden && path ? (path.split(/[\\/]/).pop() ?? path) : null,
+    lanes,
+    orbit: g && typeof g.title === "string" && g.title ? { title: g.title, status: typeof g.status === "string" ? g.status : "", blocked: !!g.blockedReason || g.status === "blocked", tasks: Array.isArray(g.tasks) ? g.tasks.length : 0 } : null,
+    sessionTitle: (sid ? cachedSessionInfo(sid)?.title : null) ?? "",
+    streaming: state.streaming,
+    otherSessions: Math.max(0, document.querySelectorAll("#sidebar .sess").length - (active ? 1 : 0)),
+    knowledge: (kb?.kgs?.length ?? 0) > 0,
+  };
+}
+
+// While Lucid's suggestions are missing (the user passed a set over), the app notes which surface is open
+// every 20 seconds so the next set can speak to where the user actually spends time. Kinds only, never
+// text, kept in memory, and the sampling stops the moment a suggestion is used.
+let recTrail: string[] = [];
+let recSampler: number | null = null;
+const REC_SAMPLE_MS = 20_000;
+function followScreenForLucid(mode: Follow): void {
+  if (mode === "normal") {
+    if (recSampler !== null) { window.clearInterval(recSampler); recSampler = null; }
+    recTrail = [];
+    return;
+  }
+  if (recSampler !== null) return;
+  const sample = (): void => {
+    if (document.hidden) return;
+    try { recTrail = pushTrail(recTrail, surfaceKinds(document)[0]?.kind ?? ""); } catch { /* a sample is optional */ }
+  };
+  sample();
+  recSampler = window.setInterval(sample, REC_SAMPLE_MS);
+}
+
+/** P-ASKLUCID.7 (ADR-0588): a picture of the window for a question in Ask Lucid, or null. It is the same
+ *  capture the Preview panel uses (Electron only; a plain browser has none). Typed fields and the Ask Lucid
+ *  panel are painted over inside captureScreen before anything is returned. The engine decides whether the
+ *  picture may go: only beside a screen text view that passed its scan and showed nothing key-shaped. */
+async function shotForLucid(): Promise<ScreenShot | null> {
+  if (!pictureEnabled(miniStore())) return null;
+  return captureScreen(document, (rect) => bridge.capturePreview(rect));
+}
+
+/** P-ASKLUCID.3 (ADR-0584): what the user is looking at, for a question in Ask Lucid. The surfaces come from
+ *  the DOM (screen_digest.ts); the Preview panel's page is behind a sandboxed frame, so it is asked through
+ *  the same read-only inspect bridge the agent's preview_inspect tool uses. Bounded and redacted before it
+ *  leaves the renderer, and again on the engine, where it is scanned and fenced. */
+async function readScreenForLucid(): Promise<ScreenDigest | null> {
+  const facts = [
+    `The user's role is ${state.userRole ?? "not chosen yet"}.`,
+    state.streaming ? "The main session is working on a turn right now." : "The main session is idle.",
+  ];
+  let preview: Partial<ScreenPreview> | null = null;
+  const panel = document.getElementById("preview");
+  const path = prevPathByLane[prevLane] ?? "";
+  const frame = panel && !panel.hidden && path ? laneFrame(prevLane) : null;
+  if (frame) {
+    const r = await runInspectOnFrame(frame, `ask-lucid-${Date.now()}`, { what: "summary" }, 1200).catch(() => null);
+    const s = r && typeof r === "object" ? (r as Record<string, unknown>) : null;
+    const tab = prevLane === "yours" ? "Yours" : prevLane === "agent" ? "Agent" : (prevLaneTabs.find((t) => t.id === prevLane)?.label ?? prevLane);
+    preview = s && !s.error
+      ? { tab, title: String(s.title ?? ""), url: path, text: String(s.text ?? ""), headings: Array.isArray(s.headings) ? s.headings.map(String) : [], errors: Array.isArray(s.errors) ? s.errors.map(String) : [] }
+      : { tab, url: path, errors: [String(s?.error ?? "the preview did not answer")] };
+  }
+  try { return collectScreen(document, { facts, preview }); } catch { return null; }
+}
+
+/** P-ASKLUCID.2 (ADR-0582): carry out one action the user just CONFIRMED on a card in Ask Lucid. This is the
+ *  only place a proposal becomes a call, and each call is the one the Fleet views already make, with the UI
+ *  token, as the user. A prompt is STAGED on its lane (the lane queue), never run blind: the Fleet view
+ *  opens so the lane's card is on screen, where it runs when the lane is idle and where any approval it
+ *  needs can be answered. The engine validates every call again. */
+async function runAskAction(a: AskAction, ctx?: AskActionContext): Promise<AskActionResult> {
+  const failed = (what: string, why: string | undefined): AskActionResult => ({ ok: false, message: `${what}: ${why || "the engine did not answer"}.` });
+  if (a.kind === "open_view") {
+    const v = a.params.view;
+    if (v === "fleet") openFleetGrid();
+    else if (v === "orbit") openFleetOrbit();
+    else if (v === "knowledge") openKnowledge();
+    else if (v === "settings") openSettings();
+    else if (v === "preview") openPreview();
+    else if (v === "skills") openSkills();
+    else if (v === "local-models") openSettingsToLocalProviders();
+    else openSettingsToVoice();
+    // P-ASKLUCID.6 (ADR-0587): a view Lucid opened for the user is a feature they have now found.
+    markFeaturesSeen(v === "orbit" ? ["fleet"] : [v]);
+    return { ok: true, message: `Opened the ${v} view.` };
+  }
+  // P-ASKLUCID.6 (ADR-0587): one preference from the closed list, applied the way Settings applies it.
+  if (a.kind === "set_setting") return applyAskSetting(a.params.key, a.params.value);
+  if (a.kind === "spawn_lane") {
+    const cwd = state.workspace?.current ?? "";
+    if (!cwd) return { ok: false, message: "There is no workspace folder open to start a lane in." };
+    const r = await bridge.fleetSpawn({ cwd, name: a.params.name }).catch(() => null);
+    if (!r?.ok || !r.lane) return failed("The lane could not start", r?.reason);
+    const q = await bridge.fleetQueueAdd(r.lane.id, a.params.prompt).catch(() => null);
+    openFleetGrid();
+    if (!q?.ok) return failed(`Lane "${r.lane.name}" started, but its first prompt could not be staged`, q?.reason);
+    return { ok: true, message: `Started lane "${r.lane.name}" and staged its first prompt. The Fleet view is open: the prompt runs there.` };
+  }
+  if (a.kind === "prompt_lane") {
+    const q = await bridge.fleetQueueAdd(a.params.laneId, a.params.text).catch(() => null);
+    if (!q?.ok) return failed("The prompt could not be staged", q?.reason);
+    openFleetGrid();
+    return { ok: true, message: `Staged on lane ${a.params.laneId}. The Fleet view is open: it runs there when the lane is idle.` };
+  }
+  // P-ASKLUCID.9 (ADR-0600): the user confirmed an Edit image card that named the model. The engine scans the
+  // change, checks egress, edits and saves under ~/.omp/ask-lucid/images; the result opens in the Preview's Ask
+  // Lucid tab and the card shows its path.
+  if (a.kind === "edit_image") {
+    const modelId = ctx?.modelId;
+    if (!modelId) return { ok: false, message: "No image model was chosen for this edit." };
+    const img = imageForAction(ctx?.images, a.params.image);
+    if (!img.ok) return { ok: false, message: img.error };
+    const r = await bridge.imageEdit({ modelId, prompt: a.params.instruction, image: { data: img.data, mimeType: img.mimeType } }).catch(() => null);
+    if (!r) return { ok: false, message: "The image could not be edited: the engine did not answer." };
+    if (!r.ok) return { ok: false, message: r.error };
+    showAskLucidImage(r.path);
+    const provider = ({ openai: "OpenAI", google: "Google", xai: "xAI" } as Record<string, string>)[r.provider] ?? r.provider;
+    return { ok: true, message: `Edited with ${provider} (${r.model}). Saved to:`, image: { path: r.path, mimeType: r.mimeType, model: r.model, provider: r.provider } };
+  }
+  const t = await bridge.fleetTaskAdd(a.params).catch(() => null);
+  if (!t?.ok) return failed("The task could not be added", t && !t.ok ? t.error : undefined);
+  return { ok: true, message: `Added "${a.params.title}" to the Fleet Orbit goal, assigned to lane ${a.params.assignee}.` };
+}
 let miniRunner: RunnerHandle | null = null;
+// P-MINI.1 (ADR-0580): which kind of runner is mounted, whether a visit is under way, and how many new
+// sessions this launch has seen (the Developer's first one always gets a visit).
+let miniKind: MiniMount["kind"] = "none";
+let miniVisiting = false;
+let miniNewSessions = 0;
+function miniStore(): Storage | null { try { return localStorage; } catch { return null; } }
+
+/** P-MINI.1 (ADR-0580): mount, swap or remove the prompt-bar runner so it matches the role, the user's
+ *  preference and the visit state. A resident (the LUCID Agent role, or "Always") is greeted by a click; a
+ *  visitor leaves on one. Everyone sits down and types while a turn runs. */
+function syncMiniLucid(): void {
+  const store = miniStore();
+  const want = miniMount(state.userRole, readPresence(store), miniVisiting, readMascotHidden(store)).kind;
+  if (want === miniKind && (want === "none") === (miniRunner === null)) {
+    miniRunner?.setSuspended(agentArcade?.isOpen() ?? false);
+    return;
+  }
+  miniRunner?.dispose();
+  miniRunner = null;
+  miniKind = want;
+  if (want === "none") return;
+  const wrap = document.querySelector(".composer-wrap") as HTMLElement | null;
+  if (!wrap) { miniKind = "none"; return; }
+  // P-MINI.3 (ADR-0596): a double-click dashes him off (a visitor for good, a resident walks back later);
+  // a right-click turns him off everywhere, with a toast that can undo it.
+  miniRunner = mountComposerRunner(wrap, composerMascotInputs, {
+    workPose: "typing",
+    size: readMascotSize(store),
+    visitor: want === "visitor",
+    onDismiss: () => { miniVisiting = false; syncMiniLucid(); },
+    onTurnOff: turnMascotOff,
+  });
+  miniRunner.setSuspended(agentArcade?.isOpen() ?? false);
+}
+
+/** P-MINI.3 (ADR-0596): a right-click on him. He is gone at once, in every role, until turned back on;
+ *  the toast says where, and its button undoes an accidental click. */
+function turnMascotOff(): void {
+  writeMascotHidden(miniStore(), true);
+  miniVisiting = false;
+  syncMiniLucid();
+  fillSec("miniLucid", secMiniLucid());
+  showToast({
+    tone: "info",
+    title: "Lucid mascot turned off",
+    desc: "He stays off until you turn him back on in Settings, Mini Lucid.",
+    actions: [{ label: "Turn back on", kind: "ok", run: () => setMascotShown(true) }, { label: "OK" }],
+    timeout: 9000,
+  });
+}
+function setMascotShown(shown: boolean): void {
+  writeMascotHidden(miniStore(), !shown);
+  syncMiniLucid();
+  fillSec("miniLucid", secMiniLucid());
+}
+
+/** P-MINI.1 (ADR-0580): the role just became known or changed. The Developer's first new session of a
+ *  launch always gets a visit, and on a first run the role is picked AFTER that session is already on screen
+ *  (the role gate), so the rule is applied here too while the chat is still empty. */
+function noteRoleForMini(): void {
+  if (miniVisiting || state.userRole !== "developer" || miniNewSessions > 1 || !document.getElementById("chatHint")) return;
+  const now = Date.now();
+  const store = miniStore();
+  if (!shouldVisit({ role: "developer", presence: readPresence(store), newSessionNumber: 1, ledger: readLedger(store, now), now, rand: 1 })) return;
+  miniVisiting = true;
+  noteVisit(store, now);
+}
+
+/** P-MINI.1 (ADR-0580): a new session began (the first paint of a launch, or New chat). Decide whether mini
+ *  Lucid visits it. A visit that is already under way simply carries on. */
+function noteNewSessionForMini(): void {
+  miniNewSessions += 1;
+  if (!miniVisiting) {
+    const now = Date.now();
+    const store = miniStore();
+    if (shouldVisit({ role: state.userRole, presence: readPresence(store), newSessionNumber: miniNewSessions, ledger: readLedger(store, now), now, rand: Math.random() })) {
+      miniVisiting = true;
+      noteVisit(store, now);
+    }
+  }
+  syncMiniLucid();
+  // P-MINI.2 (ADR-0583): a new session is also the one moment Lucid may suggest something. Wait until the
+  // session has settled on screen, then decide.
+  setTimeout(maybeSuggest, SUGGEST_DELAY_MS);
+}
+
+// ── P-MINI.2 (ADR-0583): Lucid's suggestions ─────────────────────────────────────────────────────────
+// At most one per launch, decided by lucid_suggest.ts: a holiday theme while one is live, else the newest
+// what's-new note. Shown as a toast that leaves by itself, never during a turn or over a modal.
+const SUGGEST_DELAY_MS = 2500;
+const SUGGEST_TOAST_MS = 20_000;
+let suggestionsShown = 0;
+
+/** Take off a holiday theme Lucid pinned once its occasion is over. If the user has since pinned another
+ *  season by hand, Lucid's note about his own pin is simply forgotten. */
+function expireSuggestedTheme(): void {
+  const store = miniStore();
+  const pin = readPin(store);
+  if (!pin) return;
+  const pinnedNow = seasonPrefs().pick;
+  if (pinExpired(pin, pinnedNow, new Date())) { writePin(store, null); setSeasonPref(SEASON_PICK_KEY, ""); }
+  else if (pinnedNow !== pin.id) writePin(store, null);
+}
+
+function maybeSuggest(): void {
+  expireSuggestedTheme();
+  const store = miniStore();
+  const prefs = seasonPrefs();
+  const enabled = suggestEnabled(store);
+  const s = pickSuggestion({
+    enabled,
+    shownThisLaunch: suggestionsShown,
+    streaming: state.streaming,
+    overlayOpen: !!document.querySelector(".modal-ov, .coach-card, .palette.show, .goal-scrim"),
+    tourSeen: state.tourSeen,
+    holiday: holidayOffer({ now: new Date(), enabled, memory: readHolidayMemory(store), followsCalendar: prefs.auto, pinned: prefs.pick }),
+    news: nextNews(readSeenNews(store)),
+  });
+  if (!s) return;
+  suggestionsShown += 1;
+  if (s.kind === "holiday") {
+    const offer = s.offer;
+    // Asked the moment it is shown: closing the popup without an answer means "not now", never "ask again".
+    noteHolidayAnswer(store, offer, "later");
+    const words = holidayToast(offer);
+    showToast({
+      ...words,
+      tone: "info",
+      timeout: SUGGEST_TOAST_MS,
+      actions: [
+        { label: "Wear it", kind: "ok", run: () => { noteHolidayAnswer(store, offer, "wear"); writePin(store, { id: offer.season.id, until: offer.until }); setSeasonPref(SEASON_PICK_KEY, offer.season.id); } },
+        { label: "Not now" },
+        { label: "Don't ask again", run: () => { noteHolidayAnswer(store, offer, "never"); } },
+      ],
+    });
+    return;
+  }
+  const item = s.item;
+  noteNewsSeen(store, item.id); // shown once, whatever the user does with it
+  showToast({
+    title: item.title,
+    desc: item.summary,
+    tone: "info",
+    timeout: SUGGEST_TOAST_MS,
+    actions: [
+      { label: "Tell me more", kind: "ok", run: () => askLucid().say(item.more) },
+      { label: "Got it" },
+    ],
+  });
+}
 let agentArcade: AgentArcadeHandle | null = null;
 let agentTier: AgentModelTier = (() => { try { return localStorage.getItem("lucid.agent-tier") === "max" ? "max" : "regular"; } catch { return "regular"; } })();
 let agentTierApplying = false;
@@ -4993,6 +5511,7 @@ function syncAgentExtras(): void {
   if (active && !agentArcade) {
     const host = $("#agentArcadeHost");
     if (host) agentArcade = mountAgentArcade(host, arcadeScorePort, {
+      mascotSize: readMascotSize(miniStore()), // P-MINI.3 (ADR-0596)
       onLayout: (open) => { miniRunner?.setSuspended(open); syncArcadeGap(); },
       onOpenPreviewGame: (id, where) => void openArcadeGame(id, where),
     });
@@ -5306,7 +5825,7 @@ function secProviders(auth: import("./bridge.ts").AuthStatus | null): string {
   // "Sign out of all providers" — ALWAYS available (not gated on a visible active login) so it can also clear
   // ORPHANED OAuth logins that have no card here: a broker id with no descriptor (e.g. google-antigravity) or
   // a key-only provider that still holds an oauth row. The reliable full reset, e.g. after a reinstall.
-  const signoutAll = `<div class="prov-signout"><button class="btn-mini danger" data-oauth-logout-all title="Delete EVERY saved OAuth login - all providers, including stale or orphaned ones. Your API keys are kept. Use this to fully reset provider logins (e.g. after reinstalling).">${icon("trash", 12)} Sign out of all providers</button></div>`;
+  const signoutAll = `<div class="prov-signout"><button class="btn-mini danger" data-oauth-logout-all data-tip="Delete EVERY saved OAuth login - all providers, including stale or orphaned ones. Your API keys are kept. Use this to fully reset provider logins (e.g. after reinstalling).">${icon("trash", 12)} Sign out of all providers</button></div>`;
   // P-PROV.2: a prominent jump to the dedicated Provider Hub (every provider omp offers, with logos, in one
   // discoverable popup) so providers aren't buried in this collapsed card.
   const hubBtn = `<div class="prov-hubopen"><button class="btn-mini ok" id="openProvHub">${icon("expand", 12)} Open the Provider Hub</button><span class="set-note">All providers in one place - native logos, OAuth or API key, open-weight &amp; regional behind an acknowledgment.</span></div>`;
@@ -5514,8 +6033,8 @@ function whisperCardHtml(s: WhisperStatusView): string {
   const mb = (t: WhisperTierView): string => `${Math.round(t.diskMB ?? t.approxMB)} MB`;
   const installedRows = s.tiers.filter((t) => t.installed).map((t) => {
     const inUse = s.running && s.activeTier === t.tier;
-    const legacy = t.offered ? "" : `<span class="abadge warn" title="Slow and unstable through the local whisper server - no longer offered. Remove it to reclaim disk.">not offered</span>`;
-    const act = inUse ? `<span class="abadge ok">${icon("check", 11)} in use</span>` : `<button class="btn-mini danger" data-whisper-remove="${esc(t.tier)}" title="Delete ${mb(t)} of model weights from disk">${icon("close", 12)} Remove</button>`;
+    const legacy = t.offered ? "" : `<span class="abadge warn" data-tip="Slow and unstable through the local whisper server - no longer offered. Remove it to reclaim disk.">not offered</span>`;
+    const act = inUse ? `<span class="abadge ok">${icon("check", 11)} in use</span>` : `<button class="btn-mini danger" data-whisper-remove="${esc(t.tier)}" data-tip="Delete ${mb(t)} of model weights from disk">${icon("close", 12)} Remove</button>`;
     return `<div class="whisper-model"><span class="whisper-model-name">${esc(t.label)}</span><span class="abadge set">${mb(t)}</span>${legacy}${act}</div>`;
   }).join("");
   const installedList = installedRows ? `<div class="whisper-models"><div class="whisper-models-h">Installed models</div>${installedRows}</div>` : "";
@@ -5904,6 +6423,16 @@ function secWorkingStatus(): string {
   return setCard("workingStatus", "Working status", "one line · details · estimate", inner, true);
 }
 
+// ── P-MINI.1 (ADR-0580): Settings -> Mini Lucid ──────────────────────────────────────────────────────
+// How much of the prompt-bar mascot the user wants outside the LUCID Agent role. Rendered from
+// localStorage (mini_lucid.ts), no fetch.
+function secMiniLucid(): string {
+  // P-MINI.2 (ADR-0583): the one switch for Lucid's suggestions sits with him.
+  // P-MINI.3 (ADR-0596): the show switch (a right-click turns him off) and the size live here too.
+  const store = miniStore();
+  return setCard("miniLucid", "Mini Lucid", "show · off · sometimes · always · size · suggestions · sight", `${miniLucidCardHtml(readPresence(store), esc, icon("info", 12), readMascotSize(store), readMascotHidden(store))}\n    ${suggestToggleHtml(suggestEnabled(store))}\n    ${pictureToggleHtml(pictureEnabled(store))}`, true);
+}
+
 // ── P-THEME.1: Settings -> Theme ────────────────────────────────────────────────────────────────────
 // A tile grid of every registered theme, plus a synthetic "Match system" tile that CLEARS the stored
 // choice (data-theme="") rather than selecting a theme, so "follow the OS" stays a real state and not a
@@ -6257,7 +6786,7 @@ function settingsShell(): string {
     setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
     setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
     `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - ONLY when the gov gateway is configured (filled in hydrateSettings)
-    setSkel("localProviders", "Local Providers", "self-hosted · Ollama · vLLM · VPN", true), // P-LOCAL.3 (ADR-0135); auto-collapsed
+    setSkel("localProviders", LP_CARD_TITLE, LP_CARD_SUB, true), // P-LOCAL.3 (ADR-0135); auto-collapsed
     setSkel("embeddings", "Semantic search", "knowledge RAG · your own embeddings", true), // ADR-0221; auto-collapsed
     `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
     setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
@@ -6274,6 +6803,7 @@ function settingsShell(): string {
     secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
     secChatScroll(), // P-SCROLL.1 (ADR-0405): where a spoke switch lands (rendered from localStorage)
     secWorkingStatus(), // P-PROGRESS.3 (ADR-0412): quiet footer by default; opt-in detail and estimate
+    secMiniLucid(), // P-MINI.1 (ADR-0580): the prompt-bar mascot outside the LUCID Agent role
     secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
     setSkel("developer", "Developer", "logs · diagnostics", true),
     `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
@@ -6411,15 +6941,30 @@ async function fillPersonalKgCounts(p: PersonalStatus | null, generation: number
 }
 
 // ── P-LOCAL.3 (ADR-0135): Settings → Local Providers ─────────────────────────────────────────────
+const LP_CARD_TITLE = "Local Providers";
+const LP_CARD_SUB = "self-hosted · Ollama · vLLM · VPN";
 /** Re-render the Local Providers card from the current list + which credential refs are in the vault. */
 async function hydrateLocalProviders(): Promise<void> {
-  const [providers, creds] = await Promise.all([
+  const [providers, creds, windowView] = await Promise.all([
     bridge.localProvidersList().catch(() => [] as import("../local_providers.ts").LocalProviderDef[]),
     bridge.credList().catch(() => [] as import("./bridge.ts").CredMetaView[]),
+    bridge.resultWindow().catch(() => null), // P-CTX.2b (ADR-0579): the tool-output window choice
   ]);
   state.localProviders = providers ?? [];
   const vaultRefs = new Set((creds ?? []).map((c) => c.ref));
-  fillSec("localProviders", localProvidersCardBody(state.localProviders, vaultRefs, bridge.isElectron));
+  // The fill must be the WHOLE card. fillSec swaps the element's outerHTML, so passing the bare body (as
+  // this did before ADR-0579) dropped the card's title and its data-sec, and every later refresh of the
+  // list found nothing to fill.
+  fillSec("localProviders", setCard("localProviders", LP_CARD_TITLE, LP_CARD_SUB, localProvidersCardBody(state.localProviders, vaultRefs, bridge.isElectron, windowView), true));
+  // P-CTX.2b: the select is rebuilt with the card, so its listener is attached here each time.
+  document.getElementById("lpResultWindow")?.addEventListener("change", (ev) => {
+    const raw = (ev.target as HTMLSelectElement).value;
+    const setting = parseResultWindowSetting(raw === "auto" || raw === "omp" ? raw : Number(raw));
+    void bridge.setResultWindow(setting).catch(() => null).then((saved) => {
+      showToast(saved ? { title: "Tool output window saved", desc: "It applies the next time LUCID starts.", timeout: 3200 } : { tone: "warn", title: "Couldn't save", desc: "The tool output window was not changed.", timeout: 4000 });
+      void hydrateLocalProviders();
+    });
+  });
   // P-LOCAL.4: a preset picked in the Provider Hub is applied here, once the add form actually exists.
   if (pendingLocalPreset) { const id = pendingLocalPreset; pendingLocalPreset = null; applyLocalPreset(id); }
 }
@@ -9348,14 +9893,14 @@ function openPreview(opts?: { reveal?: PrevLane }): void {
   startPreviewInspectRelay(); // P-PREVIEW.6b: serve the agent's preview_inspect queries while the panel is open
   // Screenshot capture is an Electron-only seam; disable the button in a plain browser.
   const shot = $("#prevShot") as HTMLButtonElement | null;
-  if (shot && !bridge.isElectron) { shot.disabled = true; shot.title = "Screenshots are available in the desktop app"; }
+  if (shot && !bridge.isElectron) { shot.disabled = true; setTip(shot, "Screenshots are available in the desktop app"); }
 }
 // P-PREVIEW.14: keep the tab-row path field honest.
 //   value  - the path itself.
-//   title  - the FULL path, set only when the field actually truncates, so hovering reveals the part you
-//            cannot see. An absolute Windows path overflows even a generous field, which is the whole
-//            reason the field moved off the crowded toolbar. When the panel is closed the field has no
-//            layout (clientWidth 0), so the title is set unconditionally in that case rather than
+//   tip    - the FULL path (P-TIP.1 premium tooltip), set only when the field actually truncates, so hovering
+//            reveals the part you cannot see. An absolute Windows path overflows even a generous field, which
+//            is the whole reason the field moved off the crowded toolbar. When the panel is closed the field has
+//            no layout (clientWidth 0), so the tip is set unconditionally in that case rather than
 //            measured wrongly and left empty.
 //   reveal - the "show in folder" button exists only when there IS a local file AND the native shell can
 //            select it. A remote URL has no containing folder, and a browser build has no file manager,
@@ -9365,11 +9910,14 @@ function syncPrevPathField(path: string): void {
   if (input) {
     input.value = path;
     const laidOut = input.clientWidth > 0;
-    input.title = path && (!laidOut || input.scrollWidth > input.clientWidth) ? path : "";
+    setTip(input, path && (!laidOut || input.scrollWidth > input.clientWidth) ? path : "");
   }
   const rev = $("#prevReveal") as HTMLButtonElement | null;
   const local = !!path && !/^https?:\/\//i.test(path.trim());
   if (rev) rev.hidden = !local || !bridge.canShowInFolder();
+  // P-ASKLUCID.9 (ADR-0600): Save as and Copy path belong to the Ask Lucid tab's edited image.
+  const askTab = prevLane === ASK_LUCID_TAB_ID && local;
+  for (const id of ["#prevSaveAs", "#prevCopyPath"]) { const b = $(id) as HTMLButtonElement | null; if (b) b.hidden = !askTab; }
   // P-PREVIEW.21: the pop-out. Present only where the native shell can open a file (Electron), and only
   // for a local file; a remote page has no file to hand over and belongs to the egress gate.
   const ext = $("#prevExternal") as HTMLButtonElement | null;
@@ -9428,7 +9976,7 @@ function openArcadeMenu(anchor: HTMLElement): void {
   closeArcadeMenu?.();
   const browser = bridge.canRevealPath();
   const rows = Object.entries(ARCADE_GAMES).map(([id, game]) =>
-    `<div class="pgame-row"><button class="pdev-opt" data-arcade="${id}" data-where="preview"><span>${game.name}</span></button>${browser ? `<button class="pdev-opt pgame-ext" data-arcade="${id}" data-where="browser" title="Open ${game.name} full size in your default browser">${icon("link", 13)}<span>Browser</span></button>` : ""}</div>`).join("");
+    `<div class="pgame-row"><button class="pdev-opt" data-arcade="${id}" data-where="preview"><span>${game.name}</span></button>${browser ? `<button class="pdev-opt pgame-ext" data-arcade="${id}" data-where="browser" data-tip="Open ${game.name} full size in your default browser">${icon("link", 13)}<span>Browser</span></button>` : ""}</div>`).join("");
   const pop = el(`<div class="markup-pop prev-devpop prev-gamepop" role="group" aria-label="Preview games">${rows}</div>`);
   document.body.appendChild(pop);
   const rect = anchor.getBoundingClientRect();
@@ -9650,7 +10198,7 @@ let prevLane: PrevLane = "yours";
 /** The dynamic lane tabs' iframes, keyed by tab id - created on demand, removed with their tab. */
 const laneTabFrames = new Map<string, HTMLIFrameElement>();
 const laneFrame = (l: PrevLane = prevLane): HTMLIFrameElement | null =>
-  l.startsWith("lane:") || l.startsWith("plugin:") ? (laneTabFrames.get(l) ?? null) : $(l === "agent" ? "#prevFrameA" : "#prevFrame") as HTMLIFrameElement | null;
+  l.startsWith("lane:") || l.startsWith("plugin:") || l === ASK_LUCID_TAB_ID ? (laneTabFrames.get(l) ?? null) : $(l === "agent" ? "#prevFrameA" : "#prevFrame") as HTMLIFrameElement | null; // P-ASKLUCID.9: the Ask Lucid tab has its own frame too
 const prevPathByLane: Record<string, string> = { yours: "", agent: "" };
 const prevKindByLane: Record<string, string> = { yours: "", agent: "" };
 const prevZoomByLane = new Map<PrevLane, number>();
@@ -9965,15 +10513,24 @@ function renderPrevTabs(): void {
   // kind. Invariant 11: the icon is `flex: none` and the label is the row's ONE text child, kept on a
   // single nowrap-ellipsis line.
   const lanes = prevLaneTabs.map((t) => {
+    // P-ASKLUCID.9 (ADR-0600): the Ask Lucid tab holds the last image Ask Lucid edited (premium tooltips).
+    if (t.kind === "asklucid") {
+      return `<button type="button" class="prev-tab prev-tab-lane${act(t.id)}" data-lane="${esc(t.id)}" data-tip="${esc(tipValue("Ask Lucid", `The image Ask Lucid edited: ${t.path}. Right-click it to save it somewhere else.`))}">` +
+        icon(PREVIEW_KIND_ICON.image, 10, "prev-tab-kind") +
+        `<span class="prev-tab-lbl">${esc(t.label)}</span>` +
+        `<span class="prev-tab-x" data-close="${esc(t.id)}" data-tip="${esc(tipValue("Close this tab", "The edited image stays saved on disk."))}">${icon("close", 10)}</span>` +
+        `</button>`;
+    }
     // P-PLUGINS.1 (ADR-0462): a plugin tab holds a running app at a loopback URL, not a file of some kind.
     const plugin = t.kind === "plugin";
     const kind = plugin ? null : previewPathKind(t.path);
     const kindIcon = plugin ? icon("plugins", 10, "prev-tab-kind") : kind ? icon(PREVIEW_KIND_ICON[kind], 10, "prev-tab-kind") : "";
     const tip = plugin ? `${t.label} plugin at ${t.path}` : kind ? `${t.path} (${previewKindLabel(kind)})` : t.path;
-    return `<button type="button" class="prev-tab prev-tab-lane${act(t.id)}" data-lane="${esc(t.id)}" title="${esc(tip)}">` +
+    return `<button type="button" class="prev-tab prev-tab-lane${act(t.id)}" data-lane="${esc(t.id)}" data-tip="${esc(tipEsc(tip))}">` +
       kindIcon +
       `<span class="prev-tab-lbl">${esc(t.label)}</span>` +
-      `<span class="prev-tab-x" data-close="${esc(t.id)}" title="${plugin ? "Close this tab and stop the plugin" : "Close this lane's preview tab"}">${icon("close", 10)}</span>` +
+      // P-TIP.1 (ADR-0599): aria-label keeps the name the native title used to give the close glyph.
+      `<span class="prev-tab-x" data-close="${esc(t.id)}" aria-label="${plugin ? "Close this tab and stop the plugin" : "Close this lane's preview tab"}" data-tip="${plugin ? "Close this tab and stop the plugin" : "Close this lane's preview tab"}">${icon("close", 10)}</span>` +
       `</button>`;
   }).join("");
   strip.innerHTML =
@@ -10012,7 +10569,8 @@ function closeLaneTab(tabId: string): void {
   if (tabId.startsWith("plugin:")) { // P-PLUGINS.1 (ADR-0462): closing a plugin's tab stops the plugin
     prevLaneTabs = prevLaneTabs.filter((t) => t.id !== tabId);
     void bridge.pluginsStop(tabId.slice("plugin:".length)).catch(() => null);
-  } else prevLaneTabs = removeLaneTab(prevLaneTabs, tabId.startsWith("lane:") ? tabId.slice(5) : tabId);
+  } else if (tabId === ASK_LUCID_TAB_ID) prevLaneTabs = prevLaneTabs.filter((t) => t.id !== tabId); // P-ASKLUCID.9: the file stays on disk
+  else prevLaneTabs = removeLaneTab(prevLaneTabs, tabId.startsWith("lane:") ? tabId.slice(5) : tabId);
   dropLaneTabFrame(tabId);
   if (prevLane === tabId) switchPrevLane(prevPathByLane.yours ? "yours" : (prevPathByLane.agent ? "agent" : "yours"));
   renderPrevTabs();
@@ -10033,6 +10591,55 @@ export function previewShowLaneFile(laneId: string, laneName: string, path: stri
   const dot = $("#railPreviewDot") as HTMLElement | null; if (dot) dot.hidden = false; // cleared when a lane tab is viewed
   if (!previewOpen) openPreview({ reveal: id }); // closed → auto-open ON the lane tab; open → focus nothing
 }
+/** P-ASKLUCID.9 (ADR-0600): show an image Ask Lucid edited in the Preview's own "Ask Lucid" tab: the lane-tab
+ *  pattern (its own iframe, loaded through the normal serve route), opened and focused because the user just
+ *  confirmed the edit and is waiting for it. A newer edit replaces the tab's image in place. */
+function showAskLucidImage(path: string): void {
+  if (!path) return;
+  prevLaneTabs = upsertAskLucidTab(prevLaneTabs, path);
+  renderPrevTabs();
+  ensureLaneTabFrame(ASK_LUCID_TAB_ID);
+  laneTabFrames.get(ASK_LUCID_TAB_ID)?.setAttribute("title", "The image Ask Lucid edited");
+  loadPreview(path, ASK_LUCID_TAB_ID);
+  if (!previewOpen) openPreview({ reveal: ASK_LUCID_TAB_ID });
+  else switchPrevLane(ASK_LUCID_TAB_ID);
+}
+/** P-ASKLUCID.9: Save image as for the Ask Lucid tab's image (Electron: the OS dialog and a copy main makes,
+ *  only from the managed folder; browser: a download). */
+async function saveAskLucidImageAs(): Promise<void> {
+  const path = (prevPathByLane[ASK_LUCID_TAB_ID] ?? "").trim();
+  if (!path) return;
+  const r = await bridge.saveEditedImageAs(path).catch(() => ({ ok: false as const, error: "The app did not answer." }));
+  if (r === null) return; // canceled
+  if (!r.ok) { showToast({ tone: "warn", title: "Couldn't save the image", desc: r.error, timeout: 5000 }); return; }
+  showToast({ title: "Image saved", desc: r.path ? r.path : "Your browser is downloading it.", timeout: 3600 });
+}
+async function copyAskLucidImagePath(): Promise<void> {
+  const path = (prevPathByLane[ASK_LUCID_TAB_ID] ?? "").trim();
+  if (!path) return;
+  const ok = await copyToClipboard(path);
+  showToast({ tone: ok ? "ok" : "warn", title: ok ? "Path copied" : "Copy blocked", desc: path, timeout: 2600 });
+}
+function showAskLucidImageInFolder(): void {
+  const path = (prevPathByLane[ASK_LUCID_TAB_ID] ?? "").trim();
+  if (path) void revealInFileManager(path);
+}
+/** P-ASKLUCID.9: the served image document forwards a right-click (the frame is opaque-origin, so the host cannot
+ *  see it). Honored only from the Ask Lucid tab's own frame while that tab is showing; the message carries a
+ *  position, never an action. */
+window.addEventListener("message", (ev) => {
+  const frame = laneTabFrames.get(ASK_LUCID_TAB_ID);
+  const d = ev.data as { __lucid?: unknown; x?: unknown; y?: unknown } | null;
+  if (!previewOpen || prevLane !== ASK_LUCID_TAB_ID || !frame || frame.hidden || ev.source !== frame.contentWindow || !d || d.__lucid !== "preview-image-menu") return;
+  const rect = frame.getBoundingClientRect();
+  const at = (v: unknown, max: number): number => (typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(v, max)) : 0);
+  const entries: CtxMenuEntry[] = [
+    { label: "Save image as...", run: () => void saveAskLucidImageAs() },
+    { label: "Copy path", run: () => void copyAskLucidImagePath() },
+    ...(bridge.canShowInFolder() ? [{ label: "Show in folder", run: showAskLucidImageInFolder }] : []),
+  ];
+  openCtxMenu(rect.left + at(d.x, rect.width), rect.top + at(d.y, rect.height), entries, { returnFocus: frame });
+});
 /** P-PREVIEW.3a-shot: after the preview paints, cache a PNG of it desktop-side so the agent's
  *  `preview_screenshot` tool can fetch what it built. Electron-only (capturePage); a silent no-op in a
  *  plain browser or when the frame has no size. Never throws — a failed cache just means no shot this turn. */
@@ -11136,7 +11743,7 @@ async function browserPillTick(): Promise<void> {
     const label = el.querySelector(".bp-label") as HTMLElement | null;
     if (label) {
       label.textContent = `Agent browser - ${s.title || s.url || "loading"}`;
-      label.title = s.url || "";
+      setTip(label, s.url || "");
     }
     const grew = bpLastShots >= 0 && s.shots > bpLastShots;
     bpLastShots = s.shots;
@@ -11188,7 +11795,7 @@ function renderToolImages(images: { dataUrl: string; mimeType: string }[], title
     img.src = im.dataUrl; // DOM PROPERTY — never string-interpolated
     img.alt = "generated image"; img.loading = "lazy"; img.className = "tool-img";
     img.style.cssText = "max-width:360px;max-height:360px;border-radius:8px;cursor:zoom-in;object-fit:contain;background:#111";
-    img.title = "Open in the preview panel for markup";
+    setTip(img, "Open in the preview panel for markup");
     img.addEventListener("click", () => void sendImageToPreview(im.dataUrl));
     fig.appendChild(img);
     const bar = document.createElement("div");
@@ -11260,6 +11867,37 @@ async function openResourcePanelLive(): Promise<void> {
   if (!status) { showToast({ title: "System resources", desc: "Couldn't read a system profile on this platform.", actions: [{ label: "OK" }], timeout: 3200 }); return; }
   openResourcePanel(status);
 }
+/** P-MINI.3 (ADR-0596): the KG view's own Personalization steps: turn it on, then create the passphrase.
+ *  The same bridge calls and toasts as Settings' #personalToggle and #personalSetup; the view re-renders to the
+ *  next step, and Settings (if open) follows through hydratePersonal. */
+function bindKgPersonalGate(canvas: HTMLElement): void {
+  $("#kgPersonalSettings", canvas)?.addEventListener("click", () => openPersonalizationSettings());
+  $("#kgPersonalOn", canvas)?.addEventListener("click", async (e) => {
+    (e.currentTarget as HTMLButtonElement).disabled = true;
+    const r = await bridge.personalEnable(true).catch(() => null);
+    if (r === null) showToast({ tone: "warn", title: "Couldn't turn on Personalization", desc: "Try again, or turn it on in Settings, Personalization.", actions: [{ label: "OK" }], timeout: 4000 });
+    else showToast({ title: "Personalization on", desc: "Create a passphrase to start your encrypted graph.", actions: [{ label: "OK" }], timeout: 2800 });
+    void hydratePersonal();
+    void renderKnowledge();
+  });
+  const pass = $("#kgPersonalPass", canvas) as HTMLInputElement | null;
+  const create = $("#kgPersonalCreate", canvas) as HTMLButtonElement | null;
+  const submit = async (): Promise<void> => {
+    if (!pass || !create || create.disabled) return;
+    create.disabled = true;
+    const r = await bridge.personalSetup(pass.value).catch(() => null);
+    if (r?.ok) {
+      showToast({ title: "Store created", desc: "Your encrypted personalization store is ready.", actions: [{ label: "OK" }], timeout: 2600 });
+      void hydratePersonal();
+      void renderKnowledge();
+      return;
+    }
+    create.disabled = false;
+    showToast({ tone: "warn", title: "Couldn't create store", desc: r?.error ?? "Try again.", meta: "passphrase is never stored or sent anywhere", actions: [{ label: "OK" }], timeout: 5000 });
+  };
+  create?.addEventListener("click", () => void submit());
+  pass?.addEventListener("keydown", (e) => { if (e.key === "Enter") void submit(); });
+}
 async function renderKnowledge(): Promise<void> {
   if (!kgOpen) return;
   const generation = ++kgRenderGeneration;
@@ -11280,16 +11918,26 @@ async function renderKnowledge(): Promise<void> {
   if (!kgOpen || generation !== kgRenderGeneration) return;
   if (scopeLbl) scopeLbl.removeAttribute("title");
   if (scopeLbl) scopeLbl.textContent = status?.scope ? `· ${status.scope}` : "";
-  const gate = (msg: string) => { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>${msg}</div></div>`; (side as HTMLElement).hidden = true; side.innerHTML = ""; showKgCenter(false); syncKgSideOpen(); };
-  if (!status?.enabled) return gate("Personalization is off. Enable it in Settings to build a knowledge graph.");
+  const gate = (msg: string, acts = "") => { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>${msg}</div>${acts}</div>`; (side as HTMLElement).hidden = true; side.innerHTML = ""; showKgCenter(false); syncKgSideOpen(); };
+  // P-MINI.3 (ADR-0596): a user who lands here without Personalization (Ask Lucid can open this view) turns it
+  // on and creates the passphrase right here, instead of being sent to find it in Settings.
+  if (!status?.enabled) {
+    gate("Personalization is off. Your knowledge graph is built from it: a private graph of your preferences and decisions, encrypted on this device. Nothing is learned until you turn it on, and you can turn it off any time.",
+      `<div class="kg-empty-acts"><button class="btn-mini ok" id="kgPersonalOn">${icon("shield", 12)} Turn on Personalization</button><button class="btn-mini" id="kgPersonalSettings">Open Settings</button></div>`);
+    bindKgPersonalGate(canvas as HTMLElement);
+    return;
+  }
   if (!status.unlocked) {
-    // Configured-but-locked → unlock right here (no trip to Settings). Not yet set up → Settings.
+    // Configured-but-locked → unlock right here (no trip to Settings). Not yet set up → create it right here.
     if (status.configured) {
       const device = await bridge.kgDeviceStatus();
       if (!kgOpen || generation !== kgRenderGeneration) return;
       return renderKgLocked(canvas as HTMLElement, device);
     }
-    return gate("Personalization isn't set up yet. Create a passphrase in Settings to start your private graph.");
+    gate("Personalization is on. Create a passphrase to start your private graph. It protects your data and <b>cannot be recovered</b> if lost.",
+      `<div class="kg-empty-acts"><input id="kgPersonalPass" class="prov-key" type="password" placeholder="New passphrase (min 8 chars)" autocomplete="new-password" aria-label="New passphrase" /><button class="btn-mini ok" id="kgPersonalCreate">${icon("shield", 12)} Create</button></div>`);
+    bindKgPersonalGate(canvas as HTMLElement);
+    return;
   }
   // P-SYSRES.1 (ADR-0182): hard-pause the CPU-heavy graph build while the machine is starved. Checked
   // BEFORE the decrypt so pausing skips that cost too. Fail-open: no profile evidence never blocks.
@@ -11388,7 +12036,7 @@ async function renderKbGraph(): Promise<void> {
   kbGraphData = g;
   if (scopeLbl) {
     scopeLbl.textContent = g ? `· ${g.totalPages} pages · ${g.totalLinks} links · preview ${g.pages.length} nodes / ${g.links.length} links` : "";
-    scopeLbl.setAttribute("title", "Lightweight preview: at most 100 nodes and 200 links. All pages remain available to the agent; Find a node searches this preview.");
+    setTip(scopeLbl as HTMLElement, "Lightweight preview", "At most 100 nodes and 200 links. All pages remain available to the agent; Find a node searches this preview.");
   }
   if (!g) { canvas.innerHTML = `<div class="kg-empty">${icon("report", 30)}<div>Couldn't load the graph preview. Your imported pack is still installed. Reopen this view to retry.</div></div>`; return; }
   if (!g.pages.length) { canvas.innerHTML = `<div class="kg-empty">${icon("report", 30)}<div>This knowledge graph is empty. Import a document to add pages.</div></div>`; return; }
@@ -11670,7 +12318,7 @@ function showExportToast(title: string, desc: string, dest: string | undefined):
   showToast({ title, desc, meta: plan.persist ? `→ ${dest}` : undefined, actions, timeout: plan.persist ? 0 : 7000 });
 }
 async function copyExportPath(dest: string): Promise<void> {
-  try { await navigator.clipboard.writeText(dest); showToast({ title: "Path copied", desc: dest, timeout: 2400 }); }
+  try { await writeClipboard(dest); showToast({ title: "Path copied", desc: dest, timeout: 2400 }); }
   catch { showToast({ tone: "warn", title: "Couldn't copy the path", desc: dest, actions: [{ label: "OK" }], timeout: 4000 }); }
 }
 
@@ -11699,7 +12347,7 @@ function workspaceSection(ws: WorkspaceInfo): string {
     <div class="set-sub ws-gitpat-note">${gitPatSaved
       ? `${icon("check", 11)} A token is saved in the OS-encrypted vault - used only to clone private repos, never sent to the agent.`
       : `Optional. A GitHub/GitLab personal access token for private-repo clones. Stored in the OS-encrypted vault; never sent to the agent.`}</div>
-    ${ws.recent.length ? `<div class="ws-recent">${ws.recent.map((r) => `<span class="ws-recent-item" title="${esc(r.path)}"><button class="ws-recent-open" data-ws="${esc(r.path)}">${icon(r.isGit ? "git" : "folder", 12)}<span class="ws-recent-name">${esc(r.name)}</span></button><button class="ws-recent-rm" data-ws-remove="${esc(r.path)}" title="Remove from recents" aria-label="Remove ${esc(r.name)} from recents">${icon("close", 10)}</button></span>`).join("")}</div>` : ""}
+    ${ws.recent.length ? `<div class="ws-recent">${ws.recent.map((r) => `<span class="ws-recent-item" data-tip="${esc(tipEsc(r.path))}"><button class="ws-recent-open" data-ws="${esc(r.path)}">${icon(r.isGit ? "git" : "folder", 12)}<span class="ws-recent-name">${esc(r.name)}</span></button><button class="ws-recent-rm" data-ws-remove="${esc(r.path)}" data-tip="Remove from recents" aria-label="Remove ${esc(r.name)} from recents">${icon("close", 10)}</button></span>`).join("")}</div>` : ""}
   `, true);
 }
 // ADR-0216: persist a git PAT into the OS-encrypted vault (ref "git_pat"). Kept in `sessionGitPat` too so it
@@ -12614,7 +13262,7 @@ function aiLocBody(a: import("./bridge.ts").AiLocSummary): string {
     a.rows.slice(0, 12).map((r) => {
       const base = r.repo.split(/[\\/]/).filter(Boolean).pop() || r.repo;
       const who = r.identitySource === "workstation" ? `${esc(r.identity)} ⌂` : esc(r.identity);
-      return `<tr><td title="${esc(r.repo)}">${esc(base)}</td><td>${esc(modelLabel(r.model))}</td><td title="${r.identitySource === "workstation" ? "workstation fallback" : "corporate email"}">${who}</td><td class="num" style="text-align:right"><span style="color:var(--green)">+${fmtNum(r.added)}</span> <span style="color:var(--red)">−${fmtNum(r.removed)}</span></td></tr>`;
+      return `<tr><td data-tip="${esc(tipEsc(r.repo))}">${esc(base)}</td><td>${esc(modelLabel(r.model))}</td><td data-tip="${r.identitySource === "workstation" ? "workstation fallback" : "corporate email"}">${who}</td><td class="num" style="text-align:right"><span style="color:var(--green)">+${fmtNum(r.added)}</span> <span style="color:var(--red)">−${fmtNum(r.removed)}</span></td></tr>`;
     }).join("")
   }</tbody></table>` : "";
   return summary + modelTbl + repoTbl;
@@ -14934,7 +15582,7 @@ function reportFilename(title: string): string {
   return `${(title || "report").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "report"}.md`;
 }
 async function copyMarkdown(md: string): Promise<void> {
-  try { await navigator.clipboard.writeText(md); showToast({ title: "Copied", desc: "Report markdown is on your clipboard.", timeout: 1600 }); }
+  try { await writeClipboard(md); showToast({ title: "Copied", desc: "Report markdown is on your clipboard.", timeout: 1600 }); }
   catch { showToast({ tone: "danger", title: "Copy failed", desc: "Clipboard unavailable in this view.", timeout: 2400 }); }
 }
 function downloadMarkdown(md: string, filename: string): void {
@@ -14996,7 +15644,7 @@ function buildScoreChart(rows: ChartRow[]): HTMLElement {
   return el(`<div class="rchart">${rows.map((r, i) => {
     const pct = Math.max(2.5, Math.round((Math.abs(r.num) / max) * 100));
     return `<div class="rchart-row" style="--c:${scoreColor(r.label, i)}">
-      <span class="rchart-lbl" title="${esc(r.label)}">${esc(r.label)}</span>
+      <span class="rchart-lbl" data-tip="${esc(tipEsc(r.label))}">${esc(r.label)}</span>
       <span class="rchart-track"><i class="rchart-fill" style="width:${pct}%"></i></span>
       <b class="rchart-val">${esc(r.val)}</b></div>`;
   }).join("")}</div>`);
@@ -15616,13 +16264,13 @@ async function renderAutomations(ov: HTMLElement, close: () => void): Promise<vo
     c.kind === "daily" ? `daily at ${c.hhmm}` : c.everyMin % 60 === 0 ? `every ${c.everyMin / 60}h` : `every ${c.everyMin}m`;
   sec.innerHTML = `<div class="goal-lbl">${icon("clock", 12)} Scheduled automations</div>` + list.map((a) => `
     <div class="goal-auto ${a.enabled ? "on" : ""}" data-id="${esc(a.id)}">
-      <button class="ga-toggle" title="${a.enabled ? "Disable" : "Enable"}" aria-pressed="${a.enabled}"></button>
+      <button class="ga-toggle" aria-label="${a.enabled ? "Disable" : "Enable"}" data-tip="${a.enabled ? "Disable" : "Enable"}" aria-pressed="${a.enabled}"></button>
       <div class="ga-body">
         <div class="ga-goal">${esc(a.goal.slice(0, 80))}</div>
         <div class="ga-meta">${icon("refresh", 10)} ${esc(cadLabel(a.cadence))}${a.lastResult ? ` · last: ${esc(a.lastResult.slice(0, 60))}` : " · not run yet"}</div>
       </div>
-      <button class="ga-run" title="Run now">${icon("bolt", 12)}</button>
-      <button class="ga-del" title="Delete">${icon("trash", 12)}</button>
+      <button class="ga-run" aria-label="Run now" data-tip="Run now">${icon("bolt", 12)}</button>
+      <button class="ga-del" aria-label="Delete" data-tip="Delete">${icon("trash", 12)}</button>
     </div>`).join("");
   sec.querySelectorAll(".goal-auto").forEach((row) => {
     const id = (row as HTMLElement).dataset.id!;
@@ -16359,9 +17007,9 @@ function openSharePanel(): void {
       <span class="share-dock-grip">${icon("share", 14)}</span>
       <span class="share-dock-title">Session Share</span>
       <span class="share-dock-updating" id="shareUpdating" hidden>${icon("refresh", 11)} updating\u2026</span>
-      <button class="share-dock-count" data-dock-people aria-haspopup="true" aria-expanded="false" title="Connected participants"><span class="sd-live-dot"></span><span id="shareDockCount">0</span></button>
-      <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" title="Minimize">${SHARE_UP_ARROW}</button>
-      <button class="share-dock-btn" data-share-close aria-label="Close" title="Close">${icon("close", 15)}</button>
+      <button class="share-dock-count" data-dock-people aria-haspopup="true" aria-expanded="false" data-tip="Connected participants"><span class="sd-live-dot"></span><span id="shareDockCount">0</span></button>
+      <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" data-tip="Minimize">${SHARE_UP_ARROW}</button>
+      <button class="share-dock-btn" data-share-close aria-label="Close" data-tip="Close">${icon("close", 15)}</button>
     </div>
     <div class="share-dock-people" id="shareDockPeople" hidden></div>
     <div id="shareBody" class="share-body share-dock-body"><div class="share-loading">${icon("refresh", 14)} Loading\u2026</div></div>
@@ -16436,7 +17084,7 @@ function openSharePanel(): void {
   const minimize = () => {
     dockState.minimized = true; persist(); ov.hidden = true; togglePeople(false);
     if (!pill) {
-      pill = el(`<button id="shareDockPill" class="share-dock-pill" title="Session Share" aria-label="Restore Session Share"><span class="sd-live-dot"></span><span class="sd-pill-n">0</span>${SHARE_UP_ARROW}</button>`);
+      pill = el(`<button id="shareDockPill" class="share-dock-pill" data-tip="Session Share" aria-label="Restore Session Share"><span class="sd-live-dot"></span><span class="sd-pill-n">0</span>${SHARE_UP_ARROW}</button>`);
       pill.addEventListener("click", restore);
       sharePillEl = pill; mountSharePill(); // P-REMOTE.11: dock into the status bar, not document.body
     }
@@ -16602,7 +17250,7 @@ function openSharePanel(): void {
       return;
     }
     const copy = t.closest("[data-copy]") as HTMLElement | null;
-    if (copy) { const v = copy.dataset.copy ?? ""; try { await navigator.clipboard.writeText(v); showToast({ title: `${copy.dataset.copyWhat ?? "Copied"} copied`, desc: copy.dataset.copyDesc ?? "Paste it to your guest.", timeout: 1800 }); } catch { showToast({ tone: "warn", title: "Couldn't copy", desc: "Copy it from the field instead." }); } return; }
+    if (copy) { const v = copy.dataset.copy ?? ""; try { await writeClipboard(v); showToast({ title: `${copy.dataset.copyWhat ?? "Copied"} copied`, desc: copy.dataset.copyDesc ?? "Paste it to your guest.", timeout: 1800 }); } catch { showToast({ tone: "warn", title: "Couldn't copy", desc: "Copy it from the field instead." }); } return; }
     if (t.closest("[data-share-start]")) {
       const startBtn = t.closest("[data-share-start]") as HTMLButtonElement;
       if (startBtn.disabled) return; // guard against a double-click while the handshake is mid-flight
@@ -16731,8 +17379,8 @@ function openJoinPanel(): void {
       <span class="share-dock-grip">${icon("eye", 14)}</span>
       <span class="share-dock-title" id="joinDockTitle">Join a shared session</span>
       <span class="sd-live-dot" id="joinDockDot"></span>
-      <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" title="Minimize (keeps watching)">${SHARE_UP_ARROW}</button>
-      <button class="share-dock-btn" data-join-close aria-label="Close and leave" title="Close (leaves the session)">${icon("close", 15)}</button>
+      <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" data-tip="Minimize (keeps watching)">${SHARE_UP_ARROW}</button>
+      <button class="share-dock-btn" data-join-close aria-label="Close and leave" data-tip="Close (leaves the session)">${icon("close", 15)}</button>
     </div>
     <div id="joinBody" class="join-body share-dock-body"></div>
     <div class="share-dock-rz e" data-dock-rz="e" aria-hidden="true"></div>
@@ -16756,7 +17404,7 @@ function openJoinPanel(): void {
   const minimize = () => {
     dockState.minimized = true; persist(); ov.hidden = true;
     if (!pill) {
-      pill = el(`<button id="joinDockPill" class="share-dock-pill" title="Watching a shared session" aria-label="Restore the watched session">${icon("eye", 12)}<span class="sd-live-dot${joined ? " on" : ""}"></span>${SHARE_UP_ARROW}</button>`);
+      pill = el(`<button id="joinDockPill" class="share-dock-pill" data-tip="Watching a shared session" aria-label="Restore the watched session">${icon("eye", 12)}<span class="sd-live-dot${joined ? " on" : ""}"></span>${SHARE_UP_ARROW}</button>`);
       pill.addEventListener("click", restore);
       joinPillEl = pill; mountJoinPill(); // lives in the status bar, beside the share pill
     }
@@ -17178,6 +17826,8 @@ function wire(): void {
       if (!ok) showToast({ tone: "warn", title: "Couldn't open the folder", desc: "Revealing a file needs the desktop app's file manager access.", timeout: 3000 });
     }).catch(() => { /* best-effort: the preview itself is unaffected */ });
   });
+  $("#prevSaveAs")?.addEventListener("click", () => void saveAskLucidImageAs()); // P-ASKLUCID.9 (ADR-0600)
+  $("#prevCopyPath")?.addEventListener("click", () => void copyAskLucidImagePath()); // P-ASKLUCID.9
   // P-PREVIEW.8: the Yours / Agent tab strip.
   $("#prevTabs")?.addEventListener("click", (e) => {
     const closeId = ((e.target as HTMLElement).closest(".prev-tab-x") as HTMLElement | null)?.dataset.close;
@@ -17235,7 +17885,7 @@ function wire(): void {
       ? kgHits.map((h, i) => {
         const dot = kgEngine === "orbit" ? kindColor(h.kind) : KIND_COLOR[kindLabel(h.kind)] ?? "#888";
         const sub = kgCodeMode ? h.id : kindLabel(h.kind); // code nodes show their path; personal / KB ids are opaque
-        return `<button type="button" class="kg-res${i === kgHitAt ? " on" : ""}" role="option" aria-selected="${i === kgHitAt}" data-kg-res="${i}" title="${esc(h.id)}">`
+        return `<button type="button" class="kg-res${i === kgHitAt ? " on" : ""}" role="option" aria-selected="${i === kgHitAt}" data-kg-res="${i}" data-tip="${esc(tipEsc(h.id))}">`
           + `<i class="kg-res-dot" style="background:${dot}"></i><span class="kg-res-txt"><span class="kg-res-name">${esc(h.name)}</span><span class="kg-res-path">${esc(sub)}</span></span></button>`;
       }).join("")
       : `<div class="kg-res-none">No matching nodes</div>`;
@@ -17680,7 +18330,7 @@ function wire(): void {
     if (!md) { showToast({ tone: "warn", title: "Nothing to copy yet", desc: "Wait for the reply to finish.", actions: [{ label: "OK" }], timeout: 2000 }); return; }
     if (copyBtn) {
       try {
-        await navigator.clipboard.writeText(md);
+        await writeClipboard(md);
         copyBtn.classList.add("ok"); copyBtn.innerHTML = icon("check", 13);
         setTimeout(() => { copyBtn.classList.remove("ok"); copyBtn.innerHTML = icon("copy", 13); }, 1200);
       } catch { showToast({ tone: "danger", title: "Copy failed", desc: "Clipboard unavailable in this view.", actions: [{ label: "OK" }], timeout: 2800 }); }
@@ -17704,6 +18354,26 @@ function wire(): void {
 
   // P-AVATAR.1: back into the stage after an Esc exit (chip only visible for the lucid-agent role).
   $("#tbStage")!.addEventListener("click", () => setImmersive(true));
+  $("#tbAskLucid")?.addEventListener("click", () => askLucid().toggle()); // P-ASKLUCID.1 (ADR-0581)
+  window.setInterval(noteSurfacesSeen, FEATURE_SAMPLE_MS); // P-ASKLUCID.6 (ADR-0587): which panels the user has found
+  // P-ASKLUCID.3 (ADR-0584): Ask Lucid opens over any popup. A popup can cover the title-bar chip, so there
+  // are two more ways in: any button marked data-ask-lucid (the Fleet grid and Orbit headers carry one), and
+  // Ctrl/Cmd+Shift+L from anywhere.
+  document.addEventListener("click", (e) => { if ((e.target as Element | null)?.closest?.("[data-ask-lucid]")) askLucid().open(); });
+  // Capture phase on window, registered at boot, so it runs before the listeners popups add when they open
+  // (the Orbit map closes on Escape from a window capture listener). Escape typed inside Ask Lucid closes
+  // Ask Lucid and nothing underneath it.
+  window.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && (e.key === "l" || e.key === "L")) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      askLucid().toggle();
+      return;
+    }
+    if (e.key === "Escape" && !e.altKey && !e.ctrlKey && !e.metaKey && (e.target as Element | null)?.closest?.(".ald")) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      askLucidPanel?.close();
+    }
+  }, true);
   $("#agentTier")!.addEventListener("change", async (event) => {
     if (state.userRole !== "lucid-agent" || state.streaming || agentTierApplying) { syncAgentExtras(); return; }
     const previous = agentTier;
@@ -17786,6 +18456,12 @@ function wire(): void {
     repoChoices: bridge.repoChoices, // P-REPO.1 (ADR-0406): the New lane form picks a repo instead of typing
     repoGithub: bridge.repoGithub,
     openUrl: (url) => void openAuthUrl(url),
+    // P-ATTACH.1 (ADR-0598): the lane bars' files and "+" menu (Knowledge, Skills and Connectors open the
+    // same surfaces as the main composer's).
+    attach: bridge,
+    openKnowledge: (anchor) => openKnowledgeMenu(anchor),
+    openSkills: (anchor) => openSkillDropdown(anchor),
+    openConnectors: openSettingsToMcp,
     previewLaneFile: (laneId, laneName, path) => previewShowLaneFile(laneId, laneName, path), // P-PREVIEW.10: a lane's previewable write gets its own Preview tab
     getMasterModel: () => state.model || state.config.find((c) => c.id === "model")?.currentValue || "",
     // The SAME curated list the composer picker offers (Bedrock/Vertex behind a saved key, gov and China
@@ -17978,6 +18654,29 @@ function wire(): void {
     // P-PROGRESS.3: running HUDs, rows and lane cards repaint on their own one-second tick, so nothing else to do.
     if (t0.id === "statusDetail") { setStatusDetail((t0 as HTMLSelectElement).value === "full" ? "full" : "line"); return; }
     if (t0.id === "statusEta") { setStatusEta((t0 as HTMLInputElement).checked); return; }
+    // P-MINI.2 (ADR-0583): "Lucid may suggest things".
+    if (t0.id === "lucidSuggest") { setSuggestEnabled(miniStore(), (t0 as HTMLInputElement).checked); return; }
+    if (t0.id === "lucidPicture") { setPictureEnabled(miniStore(), (t0 as HTMLInputElement).checked); return; } // P-ASKLUCID.7 (ADR-0588)
+    // P-MINI.1 (ADR-0580): the Mini Lucid preference. Turning him off also ends a visit in progress.
+    if ((t0 as HTMLInputElement).name === "miniPresence") {
+      const next = parsePresence((t0 as HTMLInputElement).value);
+      writePresence(miniStore(), next);
+      if (next !== "sometimes") miniVisiting = false;
+      syncMiniLucid();
+      fillSec("miniLucid", secMiniLucid());
+      return;
+    }
+    // P-MINI.3 (ADR-0596): the show switch and the size. A size change applies live on the prompt bar and
+    // in the Arcade.
+    if (t0.id === "mascotShown") { setMascotShown((t0 as HTMLInputElement).checked); return; }
+    if ((t0 as HTMLInputElement).name === "mascotSize") {
+      const size = parseMascotSize((t0 as HTMLInputElement).value);
+      writeMascotSize(miniStore(), size);
+      miniRunner?.setSize(size);
+      agentArcade?.setMascotSize(size);
+      fillSec("miniLucid", secMiniLucid());
+      return;
+    }
     if (t0.id === "statusRing") { setStatusRing((t0 as HTMLInputElement).checked); return; }
     if (t0.id === "bgFile") {
       const f = (t0 as HTMLInputElement).files?.[0]; if (!f) return;
@@ -18817,18 +19516,41 @@ function wire(): void {
   // composer
   const ta = $("#input") as HTMLTextAreaElement;
   ta.addEventListener("input", () => { autosize(ta); setSendEnabled(); updateSlashAC(); });
+  // P-ATTACH.1 (ADR-0598): the composer's file tray. Images it is handed go to the thumbnail strip
+  // (P-VISION.1); every other file is copied, extracted and scanned by the engine before it can be sent.
+  composerTray = createAttachTray($("#composerFiles"), {
+    bridge,
+    onImages: (files) => { stageImageFiles(files); },
+    imageCount: () => state.attachments.length,
+    notify: (text) => showToast({ tone: "info", title: "Folder added", desc: text, timeout: 7000 }),
+    onChange: setSendEnabled,
+  });
+  const pickIntoComposer = (folder: boolean): void => { void pickFiles({ folder }).then((files) => { ta.focus(); return composerTray?.add(files, { folder }); }); };
+  const plusBtn = $("#ctPlus") as HTMLElement | null;
+  if (plusBtn) {
+    mountPlusMenu(plusBtn, plusMenuItems({
+      pick: pickIntoComposer,
+      folder: true,
+      knowledge: (anchor) => openKnowledgeMenu(anchor),
+      skills: (anchor) => openSkillDropdown(anchor),
+      connectors: openSettingsToMcp,
+    }));
+    syncPlusButton(plusBtn, bridge, ta);
+  }
   ta.addEventListener("keydown", (e) => {
     if (slashKeydown(e)) return; // the "/" autocomplete consumed it (nav / Tab / Enter / Esc)
+    if (isAttachShortcut(e)) { e.preventDefault(); if (plusBtn && !plusBtn.hidden) pickIntoComposer(false); return; } // P-ATTACH.1: Ctrl+U
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
   ta.addEventListener("blur", () => window.setTimeout(closeSlashAC, 120)); // dismiss when focus leaves (after a click lands)
-  // P-VISION.1 (ADR-0136): paste a snipping-tool / desktop screenshot straight into the prompt bar. Image
-  // clipboard items are staged as thumbnails (NOT auto-sent); text paste passes through untouched.
+  // P-VISION.1 (ADR-0136): paste a snipping-tool / desktop screenshot straight into the prompt bar; it is
+  // staged as a thumbnail (NOT auto-sent). P-ATTACH.1: a pasted file goes to the tray, which routes images
+  // back to the thumbnails. A text paste passes through untouched.
   ta.addEventListener("paste", (e) => {
-    const items = (e as ClipboardEvent).clipboardData?.items;
-    const files: File[] = [];
-    for (const it of Array.from(items ?? [])) if (it.kind === "file" && it.type.startsWith("image/")) { const f = it.getAsFile(); if (f) files.push(f); }
-    if (files.length && stageImageFiles(files)) e.preventDefault(); // consumed as images; don't also paste junk text
+    const files = clipboardFiles(e as ClipboardEvent);
+    if (!files.length) return;
+    e.preventDefault(); // consumed as files; don't also paste junk text
+    void composerTray?.add(files);
   });
   // P-SECACK.1 (ADR-0170): right-click Cut/Copy/Paste/Select-all on the prompt bar and every other
   // text field - Electron ships no native context menu, so mouse-only clipboard flows were impossible.
@@ -18842,14 +19564,12 @@ function wire(): void {
     const btn = (e.target as HTMLElement).closest?.("[data-code-copy]") as HTMLElement | null;
     if (btn) void copyCodeBlock(btn);
   });
-  // Drag-and-drop image files onto the composer.
+  // Drag-and-drop files onto the composer (P-ATTACH.1: any file; images still become thumbnails).
   const cw = $(".composer-wrap") as HTMLElement | null;
-  cw?.addEventListener("dragover", (e) => { if ((e as DragEvent).dataTransfer?.types?.includes("Files")) { e.preventDefault(); cw.classList.add("drag"); } });
-  cw?.addEventListener("dragleave", (e) => { if (e.target === cw) cw.classList.remove("drag"); });
-  cw?.addEventListener("drop", (e) => {
-    cw.classList.remove("drag");
-    const files = (e as DragEvent).dataTransfer?.files;
-    if (files?.length && stageImageFiles(files)) e.preventDefault();
+  if (cw) bindFileDrop(cw, (files, folders) => {
+    const note = folderDropNote(folders);
+    if (note) showToast({ tone: "info", title: "Folder not added", desc: note, timeout: 6000 });
+    if (files.length) void composerTray?.add(files);
   });
   // Remove a staged thumbnail.
   $("#composerThumbs")?.addEventListener("click", (e) => {
@@ -19022,6 +19742,7 @@ function newSession(force = false): void {
     setRecoveryChecking(false); setSendEnabled(); void loadSessionMode();
   });
   renderStatus(); $("#input")?.focus();
+  noteNewSessionForMini(); // P-MINI.1 (ADR-0580): mini Lucid may drop by on a new session
 }
 
 /** P-PREVIEW.19 (ADR-0339): drop the AGENT preview lane at a session boundary, and leave YOURS alone.
@@ -19300,7 +20021,7 @@ async function openAuthUrl(url: string): Promise<boolean> {
 function authUrlActions(url: string): { label: string; kind?: "ok" | "danger"; run: () => void }[] {
   return [
     { label: "Open sign-in page", kind: "ok", run: () => void openAuthUrl(url) },
-    { label: "Copy URL", run: () => { void navigator.clipboard.writeText(url).catch(() => {}); } },
+    { label: "Copy URL", run: () => { void writeClipboard(url).catch(() => {}); } },
   ];
 }
 
@@ -19573,7 +20294,7 @@ function familyListHTML(models: { value: string; name: string }[], sel: string, 
   // Pending rows obey the query too: searching "glm" MUST surface a pending GLM (that is the exact
   // reported confusion), while searching "claude" must not show unrelated local noise.
   const pending = filterModels(pendingLocalModels(state.localProviders ?? [], models), q);
-  const pendingRows = pending.map((p) => `<div class="cfg-local-pending" title="${esc(p.value)}">
+  const pendingRows = pending.map((p) => `<div class="cfg-local-pending" data-tip="${esc(tipEsc(p.value))}">
       ${icon("clock", 12)}<span><b>${esc(p.name)}</b> loads after a restart</span>
       <button class="btn-mini" type="button" data-lp-apply>Restart now</button>
     </div>`).join("");
@@ -19889,7 +20610,7 @@ async function startProviderOauth(oauthId: string, cardEl: HTMLElement | null, r
       box.innerHTML = `${icon("command", 12)} <b>Enter this code on ${esc(showCode.page)}:</b>
         <div class="oauth-showcode"><code class="oauth-code">${esc(r.code ?? "code not shown yet")}</code>${r.code ? `<button class="btn-mini" data-copy-code="${esc(r.code)}">${icon("copy", 11)} Copy code</button>` : ""}${r.url ? `<button class="btn-mini" data-open-url="${esc(r.url)}">${icon("expand", 11)} Open sign-in page</button>` : ""}</div>
         <span>${r.code ? "The page opened in your browser; sign in to your ChatGPT account and type the code. This card updates on its own once the credential lands." : "The helper has not printed the code yet. Click Connect with a device code again in a moment; if it never appears, use Connect via OAuth."}</span>`;
-      box.querySelector("[data-copy-code]")?.addEventListener("click", () => { void navigator.clipboard.writeText(r.code ?? "").then(() => showToast({ title: "Code copied", desc: "Paste it on the device page.", timeout: 1800 })); });
+      box.querySelector("[data-copy-code]")?.addEventListener("click", () => { void writeClipboard(r.code ?? "").then(() => showToast({ title: "Code copied", desc: "Paste it on the device page.", timeout: 1800 })); });
       box.querySelector("[data-open-url]")?.addEventListener("click", () => { if (r.url) void openAuthUrl(r.url); });
     }
     showToast({
@@ -20312,6 +21033,7 @@ function applyZoom(): void {
   state.zoom = Math.max(0.7, Math.min(1.8, Math.round(state.zoom * 100) / 100));
   bridge.setZoom(state.zoom * ZOOM_BASE);
   const lvl = $("#zoomLvl"); if (lvl) lvl.textContent = `${Math.round(state.zoom * 100)}%`;
+  askLucidPanel?.dock.reflow(); // P-ASKLUCID.1 (ADR-0581): the space a docked Ask Lucid reserves depends on the zoom
   try { localStorage.setItem("lucid.zoom", String(state.zoom)); } catch { /* ignore */ }
 }
 function nudgeZoom(delta: number): void { state.zoom += delta; applyZoom(); }
@@ -20495,6 +21217,9 @@ void bridge.getSettings().then((s) => { // your saved name → the "You" label o
   }
   if (state.userRole) applyRoleDefault(state.userRole); // returning user lands on their role's surface
   syncImmersiveWithRole(state.userRole); // P-AVATAR.1: a returning lucid-agent boots straight onto the stage
+  // P-MINI.1 (ADR-0580): a launch that opens on an empty chat counts as a new session; one that is already
+  // showing a restored conversation does not.
+  if (document.getElementById("chatHint")) noteNewSessionForMini(); else syncMiniLucid();
   syncSeasonBackdrop(); // P-SEASON.1: "Behind every chat" users get the backdrop in every role
   // P-AVATAR.6: the lucid-agent role gets a hero opening over the ~6-9s session warm - REAL signals
   // only, min beat + hard cap in boot_cinematic.ts, Esc/Skip always, reduced-motion = static card.
