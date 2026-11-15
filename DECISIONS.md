@@ -27227,11 +27227,11 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 
 **Consequences.** A new spoke (Remote Spokes add-on) queues up to 8 notes per task and gives them as one follow-up turn when the current turn ends; `cancel` and `close` drop the queue. An older spoke still refuses a note while the task works ("task is still working; one turn at a time"), and the IDE shows that text as is. Local lane Stop is unchanged.
 
-## ADR-0577 -- P-FLEET-BOARDS.1: boards live in the engine (2026-11-13)
+## ADR-0601 -- P-FLEET-BOARDS.1: boards live in the engine (2026-11-13)
 
-**Status:** Accepted. Implements phase 2 of ADR-0575 (engine-owned boards, layout presets and Next). Proof: `bun test desktop/fleet_boards.test.ts` and the typecheck.
+**Status:** Accepted. Implements phase 2 of ADR-0576 (engine-owned boards, layout presets and Next). Proof: `bun test desktop/fleet_boards.test.ts` and the typecheck.
 
-**Context.** The Fleet grid kept its layout (order and card sizes) and its groups in the renderer's localStorage, so another window of the same engine saw none of it, and nothing outside the renderer (Herd's terminal, in phase 4) could read it. ADR-0575 gives boards to the engine: a board is a named set of agents with a layout, and the Fleet window is one client of it.
+**Context.** The Fleet grid kept its layout (order and card sizes) and its groups in the renderer's localStorage, so another window of the same engine saw none of it, and nothing outside the renderer (Herd's terminal, in phase 4) could read it. ADR-0576 gives boards to the engine: a board is a named set of agents with a layout, and the Fleet window is one client of it.
 
 **Decision.**
 1. **Model** (`desktop/fleet_boards.ts`): `Boards { v: 1, next, boards, everything }`, each `Board { id, name, agents, layout, focus? }`. An agent key is a local lane id, or `rs:<node>:<task>` for an agent on another computer, and one agent may sit on several boards. **Everything** (id `all`) is virtual: every live agent, so only its layout and focus are stored. Layouts are `side`, `grid4`, `focus` and `free`. Ids are `b<n>` from `next`, which only climbs, so a removed board's id never returns. Names are 1 to 40 printable characters, trimmed and unique ignoring case; at most 24 boards and 200 agents per board. A focus must be on its board (any agent for Everything), else it is dropped. Every operation is pure and answers the new Boards or the refusal in plain words.

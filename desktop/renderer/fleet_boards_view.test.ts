@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/fleet_boards_view.test.ts - P-FLEET-BOARDS.1 (ADR-0577): the pure board rules behind the Fleet window.
+// desktop/renderer/fleet_boards_view.test.ts - P-FLEET-BOARDS.1 (ADR-0601): the pure board rules behind the Fleet window.
 // Pinned: the "needs you" rule (an idle agent is NOT urgent), which agents a board shows and in what order,
 // the Next walk (current board first, every agent visited, a hand switch restarts the round), the tab dot,
 // the prune guard that never drops a remote agent this machine cannot see, and the board name rules.

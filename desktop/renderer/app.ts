@@ -17780,7 +17780,7 @@ function wire(): void {
     fleetCancel: bridge.fleetCancel,
     fleetStop: bridge.fleetStop,
     fleetRemove: bridge.fleetRemove, // P-FLEET.L10: dismiss a stopped lane so its card leaves the grid
-    // P-FLEET-BOARDS.1 (ADR-0577): boards live in the engine.
+    // P-FLEET-BOARDS.1 (ADR-0601): boards live in the engine.
     fleetBoards: bridge.fleetBoards,
     fleetBoardCreate: bridge.fleetBoardCreate,
     fleetBoardRename: bridge.fleetBoardRename,

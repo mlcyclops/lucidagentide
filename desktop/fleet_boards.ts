@@ -3,7 +3,7 @@
 
 // desktop/fleet_boards.ts
 //
-// P-FLEET-BOARDS.1 (ADR-0577, phase 2 of ADR-0575): the Fleet window's boards, owned by the engine. A board
+// P-FLEET-BOARDS.1 (ADR-0601, phase 2 of ADR-0576): the Fleet window's boards, owned by the engine. A board
 // is a named set of agents with a layout. An agent key is a local lane id, or `rs:<node>:<task>` for an
 // agent on another computer, and one agent may sit on several boards. "Everything" (id `all`) is virtual:
 // every live agent, so only its layout and focus are stored. Every operation is pure and returns a new

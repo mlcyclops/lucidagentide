@@ -29,7 +29,7 @@ export interface CardSize { w: number; h: number }
 export interface FitWeight { fw: number; fh: number }
 /** `fit` is OPTIONAL on purpose: a layout saved before P-FLEET.FIT1 has none and loads with equal shares. Only a
  *  non-empty `fit` is ever written, so a default layout still serializes to exactly the pre-FIT1 bytes.
- *  P-FLEET-BOARDS.1 (ADR-0577): WHICH layout a board shows (side by side, grid of four, focus one, free) is the engine's, stored per
+ *  P-FLEET-BOARDS.1 (ADR-0601): WHICH layout a board shows (side by side, grid of four, focus one, free) is the engine's, stored per
  *  board; this file keeps only the geometry the user made: card order, the Free sizes and the side-by-side
  *  shares. A pre-boards payload's `autofit:false` is dropped on load. */
 export interface LaneLayout { order: string[]; size: Record<string, CardSize>; fit?: Record<string, FitWeight> }
@@ -526,7 +526,7 @@ export function sharesOf(sizes: readonly number[]): number[] {
   return sizes.map((v) => clampWeight((Math.max(0, num(v, 0)) * k) / total));
 }
 
-// ------------------------------------------------------------------ P-FLEET-BOARDS.1 (ADR-0577): the board layout presets
+// ------------------------------------------------------------------ P-FLEET-BOARDS.1 (ADR-0601): the board layout presets
 //
 // Side by side is autofitPlan above and Free is the per-card `size`. The two below are fixed shapes: they keep
 // no shares and no sizes, so they need nothing persisted beyond the board's choice (and its focused agent).

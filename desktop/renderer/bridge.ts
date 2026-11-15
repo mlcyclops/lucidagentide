@@ -297,7 +297,7 @@ import type { RecallView, RemoteActionView, RemoteApprovalsView, RemoteHubView, 
 export type { AosControl, AosSnapshot };
 /** P-AOS.1: a fleet-goal change: the new snapshot, or the engine's refusal in words. */
 export type FleetGoalReply = { ok: true; data: AosSnapshot } | { ok: false; error: string };
-// P-FLEET-BOARDS.1 (ADR-0577): the engine's boards (types only, owned by desktop/fleet_boards.ts).
+// P-FLEET-BOARDS.1 (ADR-0601): the engine's boards (types only, owned by desktop/fleet_boards.ts).
 import type { Board as BoardView, BoardLayout, Boards as BoardsView } from "../fleet_boards.ts";
 export type { BoardLayout, BoardView, BoardsView };
 export type { ProgressView, WaitView };
@@ -1127,7 +1127,7 @@ export interface LucidBridge {
   fleetTaskAdd(input: { title: string; prompt: string; outputContract: string; checks: string[]; assignee: string; dependsOn: string[] }): Promise<FleetGoalReply | null>;
   fleetTaskCheck(taskId: string, checkId: string, passed: boolean): Promise<FleetGoalReply | null>;
   fleetTaskCancel(taskId: string): Promise<FleetGoalReply | null>;
-  /** P-FLEET-BOARDS.1 (ADR-0577): the engine's boards. Every change resolves to the whole new Boards, or null
+  /** P-FLEET-BOARDS.1 (ADR-0601): the engine's boards. Every change resolves to the whole new Boards, or null
    *  when the engine refused it or could not be reached. Agent keys: a lane id, or `rs:<node>:<task>`. */
   fleetBoards(): Promise<BoardsView | null>;
   fleetBoardCreate(name: string): Promise<BoardsView | null>;
@@ -2055,7 +2055,7 @@ export const bridge: LucidBridge = {
   fleetTaskAdd: (input) => post("/api/fleet/goal/task", input), // P-AOS.2 (ADR-0453)
   fleetTaskCheck: (taskId, checkId, passed) => post("/api/fleet/goal/task/check", { taskId, checkId, passed }),
   fleetTaskCancel: (taskId) => post("/api/fleet/goal/task/cancel", { taskId }),
-  fleetBoards: () => getData("/api/fleet/boards"), // P-FLEET-BOARDS.1 (ADR-0577)
+  fleetBoards: () => getData("/api/fleet/boards"), // P-FLEET-BOARDS.1 (ADR-0601)
   fleetBoardCreate: (name) => post("/api/fleet/boards/create", { name }),
   fleetBoardRename: (id, name) => post("/api/fleet/boards/rename", { id, name }),
   fleetBoardRemove: (id) => post("/api/fleet/boards/remove", { id }),

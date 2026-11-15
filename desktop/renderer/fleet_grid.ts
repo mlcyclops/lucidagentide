@@ -19,7 +19,7 @@
 //     a hover naming the lanes. It is re-adopted after every status-bar repaint and only repainted when the
 //     markup actually changes, which is what stops it flickering while a lane works.
 //
-// P-FLEET-BOARDS.1 (ADR-0577, phase 2 of ADR-0575) adds BOARDS, owned by the engine: a tab row (Everything,
+// P-FLEET-BOARDS.1 (ADR-0601, phase 2 of ADR-0576) adds BOARDS, owned by the engine: a tab row (Everything,
 // each board, + Board) picks which agents the grid shows (the rest are hidden, never destroyed), each board
 // keeps a layout preset (Side by side, Grid of four, Focus one, Free), and "Next that needs you" walks the
 // agents waiting on the user across boards.
@@ -37,7 +37,7 @@ import { canSteer, laneDrainReady, mainCheckoutCwd, parallelPushNotice, parallel
 import { fleetHome, openFleetOrbit, setFleetHome } from "./fleet_orbit.ts";
 // P-RS-LANES.1 (ADR-0551): remote spoke tasks are lanes here too. orbit_remote builds and answers their cards (the
 // per-spoke panel's own actions, through its one write path); this file only places them and counts them in the pill.
-import { onRemoteChange, onRemoteLaneClick, paintRemoteLanes, refreshRemote, remoteCounts, remoteSnapshot } from "./orbit_remote.ts";
+import { onRemoteChange, onRemoteLaneClick, paintRemoteLanes, refreshRemote, remoteAnsweredAt, remoteCounts, remoteSnapshot } from "./orbit_remote.ts";
 import { remoteLanes, type RemoteSpokeState } from "./remote_spokes_model.ts";
 // P-FLEET-BOARDS.1: boards are the ENGINE's (/api/fleet/boards/*); the rules this grid asks of them are pure, in fleet_boards_view.
 import { agentsOn, BOARD_AGENTS_MAX, BOARD_LAYOUTS, BOARD_NAME_MAX, boardHasNeeds, boardLayoutOf, boardNameProblem, BOARDS_MAX, EVERYTHING, findBoard, liveForPrune, needsYou, nextBoardName, nextNeedingYou, type LiveAgent, type NextJump } from "./fleet_boards_view.ts";
@@ -1409,7 +1409,8 @@ async function refresh(): Promise<void> {
   if (!deps) return;
   // P-RS-LANES.1 (ADR-0551): the remote hub on the same beat, apart from the lane poll so a slow plugin never holds
   // the local lanes back (refreshRemote is single-flight; onRemoteSnapshot paints what it answers).
-  void refreshRemote();
+  const remoteAsked = Date.now();
+  const remoteRead = refreshRemote();
   if (Date.now() - boardsAt >= BOARDS_MS) void loadBoards(); // P-FLEET-BOARDS.1: not every 2.5s
   let st: FleetStatusView | null = null;
   try { st = await deps.fleetStatus(); } catch { st = null; }
@@ -1454,7 +1455,12 @@ async function refresh(): Promise<void> {
   paintPill();
   paintNeeds();
   // P-FLEET-BOARDS.1: only after a local status that answered, so a failed read can never empty the boards.
-  if (boards && Date.now() - prunedAt >= PRUNE_MS) pruneBoards(st.lanes.map((l) => l.id));
+  // and only on a hub answer from THIS poll: a failed read keeps the previous snapshot, which can miss a remote task
+  // assigned since and so prune a membership that is still valid.
+  if (boards && Date.now() - prunedAt >= PRUNE_MS) {
+    const local = st.lanes.map((l) => l.id);
+    void remoteRead.then(() => { if (remoteAnsweredAt() >= remoteAsked) pruneBoards(local); });
+  }
 }
 
 

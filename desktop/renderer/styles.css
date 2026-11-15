@@ -5710,7 +5710,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
    against the 10px gap it adds, so a full tile row never wraps while a card is being dragged across it. */
 .fleet-grid.autofit .fleet-drop-slot{flex:0 0 4px;margin-right:-14px;align-self:stretch;min-height:0;border:0;border-radius:2px;
   background:var(--accent)}
-/* P-FLEET-BOARDS.1 (ADR-0577): the header's Layout control (it replaced the Autofit toggle). One text child, nowrap (invariant 11). */
+/* P-FLEET-BOARDS.1 (ADR-0601): the header's Layout control (it replaced the Autofit toggle). One text child, nowrap (invariant 11). */
 .fleet-fit-btn span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fleet-out-empty{display:flex;align-items:center;min-width:0;color:var(--txt-4);font-size:11px}
 .fleet-out-empty span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -7515,7 +7515,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .orbit-pin.on,.fleet-pin.on{color:var(--amber-txt,var(--amber));border-color:rgb(var(--amber-rgb) / .5)}
 .orbit-pin.on .ic,.fleet-pin.on .ic{fill:currentColor}
 
-/* ── P-FLEET-BOARDS.1 (ADR-0577): boards, layout presets and Next that needs you ───────────────────────────────────────── */
+/* ── P-FLEET-BOARDS.1 (ADR-0601): boards, layout presets and Next that needs you ───────────────────────────────────────── */
 /* The tab row under the dock header: Everything, each board (its name, a dot when an agent on it needs you,
    and its small menu), + Board. Scrolls sideways rather than wrap; every label is nowrap+ellipsis. */
 .fleet-boards{flex:none;display:flex;align-items:center;gap:4px;min-width:0;padding:5px 8px;border-bottom:1px solid var(--line-soft);

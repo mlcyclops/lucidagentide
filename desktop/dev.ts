@@ -144,7 +144,7 @@ import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, fa
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: shared combo parse, so a typo fails fast at the route
 import { isBrowserAction, isBrowserPageShape } from "./browser_snapshot.ts"; // P-JEV.4 (ADR-0379): the policy's act/snapshot shapes
 import { FleetGoal } from "./fleet_goal.ts"; // P-AOS.1 (ADR-0452): the standing fleet goal + the AOS-1 heartbeat
-import { addAgents, createBoard, dropAgents, moveBoard, openBoards, pruneBoards, removeBoard, renameBoard, setLayout } from "./fleet_boards.ts"; // P-FLEET-BOARDS.1 (ADR-0577): the Fleet window's boards
+import { addAgents, createBoard, dropAgents, moveBoard, openBoards, pruneBoards, removeBoard, renameBoard, setLayout } from "./fleet_boards.ts"; // P-FLEET-BOARDS.1 (ADR-0601): the Fleet window's boards
 import { appendLaneLedger, isTimelineKind, laneSessionNames, listTimeline, readLaneLedger } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline; P-SCHED.1 reads it to recover a job's lane; P-SESS-SEARCH.1 tags spoke sessions
 import { JobScheduler, type LedgerHit } from "./job_scheduler.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs
 import { createJob as createScheduledJob, jobTargetRepo, loadJobs, normalizeJobSpec, saveJobs, updateJob, nextFireAt } from "./scheduled_jobs.ts"; // P-SCHED.1 (aliased: creator_jobs.ts exports a createJob too, and the second import silently replaced the first at runtime)
@@ -1825,7 +1825,7 @@ const fleet: FleetLaneManager = new FleetLaneManager({
 // P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
 // /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
 fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
-// P-FLEET-BOARDS.1 (ADR-0577): boards live in the engine, in fleet-boards.json under the data root, so every
+// P-FLEET-BOARDS.1 (ADR-0601): boards live in the engine, in fleet-boards.json under the data root, so every
 // window of this engine shows the same boards.
 const fleetBoards = openBoards(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"));
 // P-AOS.1 (ADR-0452): the AOS-1 orchestrator state. Its heartbeat is this engine's own pulse: an orbit that
@@ -6337,7 +6337,7 @@ return Bun.serve({
         const b = await readBody<{ taskId?: unknown }>(req);
         return json({ ok: true, data: fleetGoal.cancelTask(b.taskId) });
       }
-      // P-FLEET-BOARDS.1 (ADR-0577): the Fleet window's boards. UI token only (never AGENT_ROUTES). Each change
+      // P-FLEET-BOARDS.1 (ADR-0601): the Fleet window's boards. UI token only (never AGENT_ROUTES). Each change
       // answers the whole Boards, or the refusal in plain words; removing a board never stops its agents.
       if (p === "/api/fleet/boards" && req.method === "GET") return json({ ok: true, data: fleetBoards.read() });
       if (p === "/api/fleet/boards/create" && req.method === "POST") {

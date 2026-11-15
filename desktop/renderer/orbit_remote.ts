@@ -94,6 +94,7 @@ export function refreshRemote(): Promise<void> {
   inflight = d.remoteSpokes().catch(() => null).then((s) => {
     if (!s) return;
     snap = s;
+    snapAt = Date.now();
     for (const fn of listeners) fn();
   }).finally(() => { inflight = null; });
   return inflight;
@@ -110,6 +111,11 @@ export function orbitRemoteList(): RemoteSpokeView[] {
 
 /** P-RS-VIEW.1: the hub view as last read, for the Remote spokes view's header and notices. */
 export function remoteSnapshot(): RemoteHubView | null { return snap; }
+
+/** When the hub last ANSWERED (0: never). A failed read keeps the previous snapshot, so a caller that must act on
+ *  current state (P-FLEET-BOARDS.1 pruning) checks that the answer is newer than its own request. */
+let snapAt = 0;
+export function remoteAnsweredAt(): number { return snapAt; }
 
 // ------------------------------------------------------------------------------ alerts (ADR-0509)
 

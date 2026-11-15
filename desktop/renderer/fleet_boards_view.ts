@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/fleet_boards_view.ts - P-FLEET-BOARDS.1 (ADR-0577, phase 2 of ADR-0575): the PURE rules behind the Fleet window's boards.
+// desktop/renderer/fleet_boards_view.ts - P-FLEET-BOARDS.1 (ADR-0601, phase 2 of ADR-0576): the PURE rules behind the Fleet window's boards.
 // The engine owns the boards (desktop/fleet_boards.ts, /api/fleet/boards/*); this file only answers the
 // questions the grid asks of them: which agents a board shows, which agents need the user, where "Next that
 // needs you" goes, which tabs carry a dot, and which remote keys are safe to prune. DOM-free and IO-free, so
