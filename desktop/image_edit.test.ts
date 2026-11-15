@@ -31,6 +31,7 @@ const b64 = (u: Uint8Array): string => Buffer.from(u).toString("base64");
 const sha = (d: Uint8Array | string): string => createHash("sha256").update(d).digest("hex");
 
 const KEYS = { OPENAI_API_KEY: "sk-live-OPENAI0123456789", GEMINI_API_KEY: "AIzaGEMINI0123456789abcdefgh", XAI_API_KEY: "xai-XAI0123456789" };
+const ALL = (): boolean => true;
 const IMG = { data: b64(PNG), mimeType: "image/png" };
 
 interface Call { url: string; init: RequestInit }
@@ -48,6 +49,7 @@ function harness(replies: Array<Response | ((call: Call) => Promise<Response>)>,
       return typeof r === "function" ? r(call) : r;
     },
     egress: async (url) => { egressed.push(url); return { allow: true }; },
+    allowed: () => true,
     ...over,
   };
   return { deps, calls, egressed };
@@ -67,20 +69,20 @@ describe("the catalog", () => {
   });
 
   test("a model is available only when its key is present and not blank", () => {
-    expect(availableImageModels({}).length).toBe(0);
-    expect(availableImageModels({ OPENAI_API_KEY: "sk-a" }).map((m) => m.id)).toEqual(["gpt-image-2.6-sunburst", "gpt-image-2.6-flare"]);
-    expect(availableImageModels({ GEMINI_API_KEY: "   ", XAI_API_KEY: "" }).length).toBe(0);
-    expect(availableImageModels({ XAI_API_KEY: "xai-a", GEMINI_API_KEY: "g" }).map((m) => m.id)).toEqual(["gemini-nano-banana-2.1", "grok-imagine-image-2.0"]);
-    expect(availableImageModels(KEYS).map((m) => m.id)).toEqual(IMAGE_EDIT_MODELS.map((m) => m.id));
-    expect(availableImageModels({ ANTHROPIC_API_KEY: "sk-ant" }).length).toBe(0);
+    expect(availableImageModels({}, ALL).length).toBe(0);
+    expect(availableImageModels({ OPENAI_API_KEY: "sk-a" }, ALL).map((m) => m.id)).toEqual(["gpt-image-2.6-sunburst", "gpt-image-2.6-flare"]);
+    expect(availableImageModels({ GEMINI_API_KEY: "   ", XAI_API_KEY: "" }, ALL).length).toBe(0);
+    expect(availableImageModels({ XAI_API_KEY: "xai-a", GEMINI_API_KEY: "g" }, ALL).map((m) => m.id)).toEqual(["gemini-nano-banana-2.1", "grok-imagine-image-2.0"]);
+    expect(availableImageModels(KEYS, ALL).map((m) => m.id)).toEqual(IMAGE_EDIT_MODELS.map((m) => m.id));
+    expect(availableImageModels({ ANTHROPIC_API_KEY: "sk-ant" }, ALL).length).toBe(0);
   });
 
   test("pick: one available, a saved one, ask with the recommendation first, or none", () => {
     expect(pickImageModel([])).toEqual({ kind: "none" });
     expect(pickImageModel([], "gpt-image-2.6-sunburst")).toEqual({ kind: "none" });
-    const xai = availableImageModels({ XAI_API_KEY: "x" });
+    const xai = availableImageModels({ XAI_API_KEY: "x" }, ALL);
     expect(pickImageModel(xai)).toEqual({ kind: "choice", model: xai[0]! });
-    const all = availableImageModels(KEYS);
+    const all = availableImageModels(KEYS, ALL);
     expect(pickImageModel(all, "gemini-nano-banana-2.1")).toEqual({ kind: "choice", model: all[2]! });
     const ask = pickImageModel(all);
     expect(ask.kind === "ask" && ask.options.map((m) => m.id)).toEqual(all.map((m) => m.id));
@@ -388,5 +390,23 @@ describe("saveEditedImage", () => {
     const clash = memFs({ image: "EEXIST" });
     expect((await saveEditedImage(OUT, { prompt: "p" }, { root: ROOT, now: () => NOW, id: () => "a", fs: clash.fs })).ok).toBe(false);
     expect(clash.removed).toEqual([]);
+  });
+});
+
+describe("the org's model policy", () => {
+  test("a model the policy forbids is not offered, and is refused before anything leaves even when named", async () => {
+    const noOpenAI = (ref: string) => !ref.startsWith("openai/");
+    expect(availableImageModels(KEYS, noOpenAI).map((m) => m.provider)).not.toContain("openai");
+    const h = harness([], { allowed: noOpenAI });
+    const r = await editImage({ modelId: "gpt-image-2.6-sunburst", prompt: "p", image: IMG }, h.deps);
+    expect(r).toMatchObject({ ok: false, error: expect.stringContaining("model policy") });
+    expect(h.egressed).toEqual([]);
+    expect(h.calls).toEqual([]);
+  });
+
+  test("a policy check that throws refuses (fail-closed)", async () => {
+    const h = harness([], { allowed: () => { throw new Error("policy unreadable"); } });
+    expect(await editImage({ modelId: "gemini-nano-banana-2.1", prompt: "p", image: IMG }, h.deps)).toMatchObject({ ok: false });
+    expect(h.calls).toEqual([]);
   });
 });
