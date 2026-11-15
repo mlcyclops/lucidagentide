@@ -782,4 +782,11 @@
 //            drive formats always reach a human, the lane floor sees the request-level tool name, and a patch in an
 //            edit's input is not read as a command (#616, ADR-0570). PRERELEASE: never marked Latest; the Homebrew
 //            cask and stable installs stay on 2.5.3.
-export const APP_VERSION = "2.5.4-beta.4";
+// v2.5.4-beta.5 = 2.5.4-beta.4 plus: a dead or hung scanner sidecar is respawned and a scan-unavailable block is
+//            labeled honestly (#623, ADR-0571); mini Lucid, Ask Lucid copy and images, files on the prompt bars,
+//            premium tooltips and Ask Lucid image edits (#625, ADR-0596..0600), image edits now also under the
+//            org's model policy; a packaged boot's data root (#619); lucid-relay parity wave C (#626);
+//            subagent per-call model choice as a LUCID setting (#628, ADR-0602); the titlebar fits a narrow
+//            window (#629, ADR-0603). PRERELEASE: never marked Latest; the Homebrew cask and stable installs
+//            stay on 2.5.3.
+export const APP_VERSION = "2.5.4-beta.5";

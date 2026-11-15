@@ -81,8 +81,13 @@ function keyFor(env: ImageEnv, m: ImageEditModel): string {
 }
 
 /** PURE: the models whose provider key is present in the engine env, best first. */
-export function availableImageModels(env: ImageEnv): ImageEditModel[] {
-  return IMAGE_EDIT_MODELS.filter((m) => keyFor(env, m) !== "");
+/** The `provider/model` id the org's model policy judges (managed allow and deny lists, and any distro policy
+ *  behind modelAllowed), as for chat models. */
+export const imageModelRef = (m: ImageEditModel): string => `${m.provider}/${m.id}`;
+
+/** The models the user can edit with: a key is connected AND the org's model policy allows the model. */
+export function availableImageModels(env: ImageEnv, allowed: (modelRef: string) => boolean): ImageEditModel[] {
+  return IMAGE_EDIT_MODELS.filter((m) => keyFor(env, m) !== "" && allowed(imageModelRef(m)));
 }
 
 export type ImageModelPick =
@@ -118,6 +123,9 @@ export interface ImageEditDeps {
   fetch: ImageFetch;
   /** The engine's egress verdict for one URL (egress policy plus the CUI lockdown rules). */
   egress: (url: string) => Promise<{ allow: boolean; reason?: string }>;
+  /** The org's model policy for a `provider/model` id (modelAllowed). A model it forbids is refused even when the
+   *  client names it directly. */
+  allowed: (modelRef: string) => boolean;
   timeoutMs?: number;
 }
 
@@ -295,6 +303,9 @@ export async function editImage(req: ImageEditRequest, deps: ImageEditDeps): Pro
   const model = IMAGE_EDIT_MODELS.find((m) => m.id === req?.modelId);
   if (!model) return { ok: false, error: "That image model is not one LUCID knows." };
   const name = IMAGE_PROVIDER_NAME[model.provider];
+  let permitted = false;
+  try { permitted = deps.allowed(imageModelRef(model)); } catch { permitted = false; }
+  if (!permitted) return { ok: false, error: `Your organization's model policy does not allow ${model.label}.` };
   const key = keyFor(deps.env, model);
   if (!key) return { ok: false, error: `No ${name} API key is connected, so ${model.label} cannot be used. Add the key in Settings.` };
 
