@@ -23,17 +23,22 @@ fips = ["rustls/fips", "aws-lc-rs/fips"]
 [dependencies]
 aws-lc-rs = "1"
 bytes = "1"
+# Scheduled meetings (Meet relay): recurring meetings repeat at the same wall-clock time in the organizer's IANA zone.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = { version = "0.10", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 gethostname = "0.5"
 http-body-util = "0.1"
-hyper = { version = "1", features = ["server", "client", "http1"] }
+# http2: the Meet relay's APNs sender (contract PB-1 section 5; Apple takes HTTP/2 only). hyper's own feature, through
+# the `h2` crate: framing only, TLS and every primitive stay on rustls and AWS-LC.
+hyper = { version = "1", features = ["server", "client", "http1", "http2"] }
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "aws-lc-rs", "webpki-roots", "tls12", "logging"] }
 hyper-util = { version = "0.1", features = ["tokio", "client-legacy", "http1"] }
 indexmap = "2"
 parking_lot = "0.12"
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12", "logging"] }
 rustls-pemfile = "2"
-serde_json = { version = "1", features = ["preserve_order"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "io-util", "sync"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "tls12", "logging"] }
 tokio-tungstenite = { version = "0.26", default-features = false, features = ["handshake"] }

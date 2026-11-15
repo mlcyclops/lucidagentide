@@ -155,7 +155,7 @@ function ensurePanel(): HTMLElement {
     <div class="ide-head">
       <span class="ide-ic">${icon("folder", 14)}</span>
       <span class="ide-title" id="ideTitle">Code</span>
-      <span class="ide-dot" id="ideDot" title="Unsaved changes" hidden>●</span>
+      <span class="ide-dot" id="ideDot" role="img" aria-label="Unsaved changes" data-tip="Unsaved changes" hidden>●</span>
       <span class="ide-lang" id="ideLang"></span>
       <span class="ide-tools">
         <button class="ide-tb" id="ideEdit" type="button" data-tip="Edit this file">${icon("sliders", 13)} Edit</button>

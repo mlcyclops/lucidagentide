@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/lane_runtime.ts - P-HOLDER.2 (ADR-0573): held lanes run from a copy of the runtime, one per app version,
+// desktop/lane_runtime.ts - P-HOLDER.2 (ADR-0574): held lanes run from a copy of the runtime, one per app version,
 // outside the install folder.
 //
 // A held lane (lane_holder.ts) outlives the IDE on purpose. Its processes (lucid-holder, omp, bun, the Python the

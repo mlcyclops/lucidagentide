@@ -1,0 +1,458 @@
+{
+ "cases": [
+  {
+   "expect": "ok",
+   "name": "root_signed",
+   "policy_hash": "9141dea19197c5baa91799515a61e8cd83cfbb54c25fcae3c1a8142373322a01",
+   "signed": {
+    "chain": [],
+    "policy": {
+     "admins": [
+      "it@acme.com"
+     ],
+     "archive": {
+      "device": "e5e5e5e5e5e5e5e5",
+      "host": "archive.acme.internal",
+      "principal": "archive@apps.acme.com",
+      "since": 1794000000
+     },
+     "domains": [
+      "acme.com"
+     ],
+     "expires": 1796592000,
+     "issued": 1794000000,
+     "label": "Acme",
+     "org": "acme",
+     "retention": {
+      "canvas": 0,
+      "channel": 730,
+      "dm": 365,
+      "files": 365,
+      "group": 365
+     },
+     "seq": 7,
+     "v": 1
+    },
+    "sig": "MEYCIQC3befEbGZPzYu6qkuIdGAZIjM4u9mY3PCcgLPyTV7Y1AIhALEPQImywGWTUiHa3N2jHihQ46yxF5U99v/2Psr8DrE7"
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQCHk83DInF/o5QEL5IF1UXgMfKxxmtrbS/6fDoCQYCmyQIgRnIrecy12S7LBWvKbMvrbYW/XDbcRRZ1KIYDJpAQINs=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "ok",
+   "name": "intermediate_signed",
+   "policy_hash": "9141dea19197c5baa91799515a61e8cd83cfbb54c25fcae3c1a8142373322a01",
+   "signed": {
+    "chain": [
+     "-----BEGIN CERTIFICATE-----\nMIIBlTCCATqgAwIBAgICIAEwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjYxMTA1MjEyMDAwWhcNMjcwMjA0\nMjEyMDAwWjA1MSMwIQYDVQQDDBpMdWNpZCBNZWV0IFNpZ25pbmcgQ0EgODE5MzEO\nMAwGA1UECgwFTHVjaWQwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAR51dvqfZqv\n1Ysvazj2dNehkGixL+aAcKWocZF+UUn+HHyq4eDyz7jtEO5SNQZbn8oK4AZwfqwg\nc4O80TpjwE1Lo0cwRTASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIB\nhjAfBgNVHSMEGDAWgBQsmbjOYfZ6BjkwpfMMpYoNy2iaezAKBggqhkjOPQQDAgNJ\nADBGAiEA961H6lHTkR6XO1s5RiUehxvkyoeFz20U6n2I2Zuuq20CIQCqIh9fqOXh\nY7PvBlm9Smc0OGnT9Ak4KEQH30H5PNgDOQ==\n-----END CERTIFICATE-----\n"
+    ],
+    "policy": {
+     "admins": [
+      "it@acme.com"
+     ],
+     "archive": {
+      "device": "e5e5e5e5e5e5e5e5",
+      "host": "archive.acme.internal",
+      "principal": "archive@apps.acme.com",
+      "since": 1794000000
+     },
+     "domains": [
+      "acme.com"
+     ],
+     "expires": 1796592000,
+     "issued": 1794000000,
+     "label": "Acme",
+     "org": "acme",
+     "retention": {
+      "canvas": 0,
+      "channel": 730,
+      "dm": 365,
+      "files": 365,
+      "group": 365
+     },
+     "seq": 7,
+     "v": 1
+    },
+    "sig": "MEQCIFDSaD6XIQ/k5a5FhHOB9MQFHh9l0o1iBGgviobW1yHZAiBPD7EK5EKKZoWxCIum0QxdRfLWK/cUQ8aXqGTj/XWfJg=="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "intermediate_serial": "2001",
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQC5FDo9efvccDgogjm6vTZ/i4rDRYpXnIs3Z25xJZ/7LQIgO6qgP5ZJAlWdTBxAcGjnlIMwW4IOgKdTWMLlKqCtLes=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "an end-entity certificate never signs a policy",
+   "name": "person_certificate_signed",
+   "signed": {
+    "chain": [
+     "-----BEGIN CERTIFICATE-----\nMIIBnTCCAUOgAwIBAgICMAAwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjYxMTA1MjEyMDAwWhcNMjYxMjA2\nMjEyMDAwWjATMREwDwYDVQQDDAhBbm4gQWJsZTBZMBMGByqGSM49AgEGCCqGSM49\nAwEHA0IABINWu2cc/40rLvK6O3pA0UNQ7tjavo1hvCvPxS5de/jOZxMPUqx7H9UI\nb20eINvQf7UWT83SEwdkcYXUkCoktxyjcjBwMAwGA1UdEwEB/wQCMAAwPwYDVR0R\nBDgwNoEMYW5uQGFjbWUuY29thiZ1cm46bHVjaWQtbWVldDpkZXZpY2U6YTFhMWEx\nYTFhMWExYTFhMTAfBgNVHSMEGDAWgBQsmbjOYfZ6BjkwpfMMpYoNy2iaezAKBggq\nhkjOPQQDAgNIADBFAiEA+paTOpAYTtDLxu68tO/ZuKp7w4EgPrZ/y9em/EQ0oeAC\nIA8G0lfuKhDzDcP90vLQ7yIfsx2Ns6g0yZjqd4JtzLTs\n-----END CERTIFICATE-----\n"
+    ],
+    "policy": {
+     "admins": [
+      "it@acme.com"
+     ],
+     "archive": {
+      "device": "e5e5e5e5e5e5e5e5",
+      "host": "archive.acme.internal",
+      "principal": "archive@apps.acme.com",
+      "since": 1794000000
+     },
+     "domains": [
+      "acme.com"
+     ],
+     "expires": 1796592000,
+     "issued": 1794000000,
+     "label": "Acme",
+     "org": "acme",
+     "retention": {
+      "canvas": 0,
+      "channel": 730,
+      "dm": 365,
+      "files": 365,
+      "group": 365
+     },
+     "seq": 7,
+     "v": 1
+    },
+    "sig": "MEYCIQCItw4jBkdXnHhLbUI/y11r0Y9+pbRhS73miNM8F2hulwIhAPOTkFCSucES/cvvm7LnL7REz98/WyX7g6K7YwCj0hBd"
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "intermediate_serial": "3000",
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIA+x7CnfxiyOSMEplzfKL4paXYrEQzQH1/IY3+bo7VH4AiEA55v8oLav2AeK7rSj8DhjNcjTje5PdsYVWld+UJ8o8p0=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "the policy's signing certificate was not valid when it was issued",
+   "name": "expired_intermediate",
+   "signed": {
+    "chain": [
+     "-----BEGIN CERTIFICATE-----\nMIIBlDCCATqgAwIBAgICIAIwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjYwNzI5MjEyMDAwWhcNMjYxMDI3\nMjEyMDAwWjA1MSMwIQYDVQQDDBpMdWNpZCBNZWV0IFNpZ25pbmcgQ0EgODE5NDEO\nMAwGA1UECgwFTHVjaWQwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQLNTz8oM5j\nD+jgcA2HfZPOPLuSHdIT/CP8bVoJfGQHPC+ltvU9SjVNzrpzpQaxEURiTrn9YHzD\n3VeiYVScYzudo0cwRTASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIB\nhjAfBgNVHSMEGDAWgBQsmbjOYfZ6BjkwpfMMpYoNy2iaezAKBggqhkjOPQQDAgNI\nADBFAiEA5fSSzjJ5WstSV8HFwYDoNgi6DjHwIj6cyE2aboh4fAwCICn9qPCttw2r\nt8w04cloWDR6gRWSsnuIlT+Nh0WXZLml\n-----END CERTIFICATE-----\n"
+    ],
+    "policy": {
+     "admins": [
+      "it@acme.com"
+     ],
+     "archive": {
+      "device": "e5e5e5e5e5e5e5e5",
+      "host": "archive.acme.internal",
+      "principal": "archive@apps.acme.com",
+      "since": 1794000000
+     },
+     "domains": [
+      "acme.com"
+     ],
+     "expires": 1796592000,
+     "issued": 1794000000,
+     "label": "Acme",
+     "org": "acme",
+     "retention": {
+      "canvas": 0,
+      "channel": 730,
+      "dm": 365,
+      "files": 365,
+      "group": 365
+     },
+     "seq": 7,
+     "v": 1
+    },
+    "sig": "MEYCIQDicA9C+P3PsaFff5tDPaCLh/vd6ye9f0ICAhr5tmSmNAIhAPrP+LhWOjQeeirx49MEmwXJMJcOTqyHtdZlMQK0h7yx"
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "intermediate_serial": "2002",
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDqlCYQto5NsNiS2V108iLYNO2cOTvFxw4RulSCdoyneAIgfZqwLvdpkMyNLpBf5FNAni6We5sh8T364qap0yRAvgY=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "the policy's signing certificate was revoked",
+   "name": "revoked_intermediate",
+   "signed": {
+    "chain": [
+     "-----BEGIN CERTIFICATE-----\nMIIBlDCCATqgAwIBAgICIAMwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjYxMTA1MjEyMDAwWhcNMjcwMjA0\nMjEyMDAwWjA1MSMwIQYDVQQDDBpMdWNpZCBNZWV0IFNpZ25pbmcgQ0EgODE5NTEO\nMAwGA1UECgwFTHVjaWQwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQugYhf3Vdh\nbqCmt1mgx9w/a7y6a7zOFwS3c7f0GceNv0AATnN+5UXaCG7oF2utgOoi4OATdpGX\n7sM67gnGJmA3o0cwRTASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIB\nhjAfBgNVHSMEGDAWgBQsmbjOYfZ6BjkwpfMMpYoNy2iaezAKBggqhkjOPQQDAgNI\nADBFAiEA4/vXXOl3bEDsNmG1ODhUrNgRdP6cOwd95tf4VRxLNjsCIBGxd1QgLEwj\nXsTD4aepGu+LFuJKd+n69T3i2m+5umPh\n-----END CERTIFICATE-----\n"
+    ],
+    "policy": {
+     "admins": [
+      "it@acme.com"
+     ],
+     "archive": {
+      "device": "e5e5e5e5e5e5e5e5",
+      "host": "archive.acme.internal",
+      "principal": "archive@apps.acme.com",
+      "since": 1794000000
+     },
+     "domains": [
+      "acme.com"
+     ],
+     "expires": 1796592000,
+     "issued": 1794000000,
+     "label": "Acme",
+     "org": "acme",
+     "retention": {
+      "canvas": 0,
+      "channel": 730,
+      "dm": 365,
+      "files": 365,
+      "group": 365
+     },
+     "seq": 7,
+     "v": 1
+    },
+    "sig": "MEQCIBhtHu39QkVQ4XHhl0ROPDC6Gm/YiqNt5DR7PnCemQEGAiBhamT6vWrOfLgm7m7BjniZahJohsrRWmjqVJadecGQFg=="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "intermediate_serial": "2003",
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEQCIEYnlkgAxcz+UPYpw+C21o4g6vopd88G834oVINOgr3wAiAaPZCy1WY50USfpwLJqF5rX7VTLlLnvJhKyybKLmunww==",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "that domain is not assigned to this organization",
+   "name": "domain_outside_org_domains",
+   "signed": {
+    "chain": [],
+    "policy": {
+     "admins": [
+      "it@acme.com"
+     ],
+     "archive": {
+      "device": "e5e5e5e5e5e5e5e5",
+      "host": "archive.acme.internal",
+      "principal": "archive@apps.acme.com",
+      "since": 1794000000
+     },
+     "domains": [
+      "acme.com",
+      "gmail.com"
+     ],
+     "expires": 1796592000,
+     "issued": 1794000000,
+     "label": "Acme",
+     "org": "acme",
+     "retention": {
+      "canvas": 0,
+      "channel": 730,
+      "dm": 365,
+      "files": 365,
+      "group": 365
+     },
+     "seq": 7,
+     "v": 1
+    },
+    "sig": "MEUCIQCMnm3XvIRWMP6rnkqFylDV8oySMi4QKXgo3CJ2df3szAIgMVPoYPedcvA5DqNZBL7pCxpC51tMFzpKudcXRssDK0I="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDjiS4NrhPR7/ugHkS4dIb/2gctEHOJBtTVKs9HHrStCgIgEmCnCnwYM4T6UMEdHsUaRjbRxMAXyP0dCMvOQqrSpjA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "the policy's signature does not verify",
+   "name": "edited_after_signing",
+   "signed": {
+    "chain": [],
+    "policy": {
+     "admins": [
+      "it@acme.com",
+      "eve@acme.com"
+     ],
+     "archive": {
+      "device": "e5e5e5e5e5e5e5e5",
+      "host": "archive.acme.internal",
+      "principal": "archive@apps.acme.com",
+      "since": 1794000000
+     },
+     "domains": [
+      "acme.com"
+     ],
+     "expires": 1796592000,
+     "issued": 1794000000,
+     "label": "Acme",
+     "org": "acme",
+     "retention": {
+      "canvas": 0,
+      "channel": 730,
+      "dm": 365,
+      "files": 365,
+      "group": 365
+     },
+     "seq": 7,
+     "v": 1
+    },
+    "sig": "MEUCIA9860Vnm72Od9X+ochIjs4FfL9mZELw/+BPoQox0AcUAiEAy1ib3PEo/fQ3rHGqYiiPQQ1s/Ef1D0tkvxpo+F4A5r0="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIGCmvVyMWQYWbiaPsLXQgbsMidDnkFglY5ovSZm7anYGAiEAzQOzmsWEZiAjKgEKLjkj5U5r+C0HLpKLQMwk+woQf1Q=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  }
+ ],
+ "now": 1794000300,
+ "root_crl_pem": "-----BEGIN X509 CRL-----\nMIHHMG4CAQEwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQgTWVldCBDQTEO\nMAwGA1UECgwFTHVjaWQXDTI2MTEwNjIxMTkwMFoXDTI3MDMwNjIxMjAwMFowFTAT\nAgIgAxcNMjYxMTA2MjExOTAwWjAKBggqhkjOPQQDAgNJADBGAiEAgq6b5wAcyqfN\nK9uglc7+9P8hovHasCZISrqi/XsgpfQCIQC4M6H+2wSVCVOwrPOs6YrvljfXGjza\nBsphQnu+mDJz2Q==\n-----END X509 CRL-----\n",
+ "root_pem": "-----BEGIN CERTIFICATE-----\nMIIBhTCCASugAwIBAgICEAAwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjUxMTA2MjEyMDAwWhcNMzExMTA1\nMjEyMDAwWjAoMRYwFAYDVQQDDA1MdWNpZCBNZWV0IENBMQ4wDAYDVQQKDAVMdWNp\nZDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABGMkqH/88L9Z3F88fmGvKqieIMRP\nPqBF8GYcSq6epqvxFmYcPY+YRhEasgicBDkb3E0L2hZYEby42xWqfwtfSaGjRTBD\nMBIGA1UdEwEB/wQIMAYBAf8CAQEwDgYDVR0PAQH/BAQDAgGGMB0GA1UdDgQWBBQs\nmbjOYfZ6BjkwpfMMpYoNy2iaezAKBggqhkjOPQQDAgNIADBFAiAW8YKxFvYAYHRk\nyfxCEqyXSGOIZ7A3LQr4Gj2dVksmugIhAPn9JZM9kdfBPye732O3Xu8H6JqVU3/N\neW4mBL9pmwa7\n-----END CERTIFICATE-----\n",
+ "v": 1
+}

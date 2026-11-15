@@ -72,6 +72,9 @@ export interface PromoteFactInput {
   trustLabel: TrustLabel;
   sourceArtifactId?: string;
   sourceArchiveChunkId?: string;
+  /** P-CAP.1b (ADR-0590): every artifact this fact was derived from, besides `sourceArtifactId`. Read by
+   *  promoteFactGated, which gates on all of them; the ungated promoteFact ignores it. */
+  derivedFrom?: string[];
 }
 
 /** Upsert the entity by name (returns its id), creating it on first use. */

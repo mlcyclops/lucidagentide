@@ -27,10 +27,12 @@
 import { $, el } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
-import { popover, showToast } from "./ui.ts"; // P-FLEET.L18: the per-card group menu; P-PUSH.PAR1: the parallel-push notice
+import { popover, setTip, showToast } from "./ui.ts"; // P-FLEET.L18: the per-card group menu; P-PUSH.PAR1: the parallel-push notice; P-TIP.1: setTip
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599): premium tooltips, never a native title
+import { adoptStagedIds, bindFileDrop, clipboardFiles, createAttachTray, folderDropNote, isAttachShortcut, missingFilesNote, mountPlusMenu, pickFiles, plusButtonTip, plusMenuItems, sentFileMeta, sentMetaEl, syncPlusButton, type AttachBridge, type AttachTray, type SentFileMeta } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598): files on the lane bars
 // P-PUSH.PAR1 (ADR-pending): staged chips get the shared right-click / long-press menu, and Push now runs the
 // prompt in a new worktree lane (the decision rules are pure, in queue_model).
-import { bindItemMenu, copyToClipboard, openCtxMenu, type CtxMenuEntry } from "./ctxmenu.ts";
+import { bindItemMenu, copyToClipboard, openCtxMenu, writeClipboard, type CtxMenuEntry } from "./ctxmenu.ts";
 import { canSteer, laneDrainReady, mainCheckoutCwd, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pushLaneName, type PushSource } from "./queue_model.ts";
 // P-FLEET.L18: the grid and the orbit are two faces of one fleet - the grid links back to the map and
 // shares the "which view does the Fleet button open" pin. Acyclic: fleet_orbit never imports the grid.
@@ -107,6 +109,13 @@ export interface FleetGridDeps extends FleetFns {
   demoteLane?: (laneId: string) => void;
   /** P-REPO.1 (ADR-0406): open a repo's web page from its details card (OS browser in the desktop app). */
   openUrl?: (url: string) => void;
+  /** P-ATTACH.1 (ADR-0598): stage files added to a lane bar (copied, extracted and scanned by the engine).
+   *  Absent = the lane bars take pasted images only, as before. */
+  attach?: AttachBridge;
+  /** P-ATTACH.1: the "+" menu's Knowledge, Skills and Connectors rows open the app's own surfaces. */
+  openKnowledge?: (anchor: HTMLElement) => void;
+  openSkills?: (anchor: HTMLElement) => void;
+  openConnectors?: () => void;
 }
 
 const FLEET_DOCK_KEY = "lucid.fleetDock.v1";
@@ -114,13 +123,17 @@ const FLEET_LAYOUT_KEY = "lucid.fleetLayout.v1";
 const POLL_MS = 2500;
 const UP_ARROW = `<svg class="sd-up" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M12 8l-6 7h12z" fill="currentColor"/></svg>`;
 
+/** P-ATTACH.1 (ADR-0598): a lane turn plus the display data of the files that went with it (never paths or
+ *  text). Kept in the lane's own run state, so a card rebuilt on reopen shows the same chips. */
+type GridTurn = LaneTurnRow & { files?: SentFileMeta[] };
+
 /** Per-lane render state: the LATEST server view + the locally accumulated stream transcript. Kept in the
  *  module (not the DOM) so a close/reopen of the panel repaints the full history.
  *  P-FLEET.L7: the turn/tool records ARE lane_transcript's rows, ids and all, so a repaint patches the DOM
  *  by id instead of rebuilding it and the clipboard text needs no second shape to convert into. */
 interface LaneRun {
   view: LaneView;
-  turns: LaneTurnRow[];
+  turns: GridTurn[];
   pending: string;
   pendingThinking: string;
   pendingTools: LaneToolRow[];
@@ -129,6 +142,9 @@ interface LaneRun {
   card: HTMLElement | null;
   /** P-FLEET.L3: images pasted into THIS lane's composer, waiting to ride the next send/stage. */
   attached: LaneImage[];
+  /** P-ATTACH.1 (ADR-0598): files added to THIS lane's bar. Lives with the run, so a card rebuilt on reopen
+   *  shows the same chips. Null until the first card is built (or when deps.attach is absent). */
+  files: AttachTray | null;
   /** P-FLEET.L7: one monotone counter per lane behind every minted id. Never reset while the lane lives,
    *  so a DOM node keyed on an id stays that turn's node for the life of the card. */
   seq: number;
@@ -151,7 +167,7 @@ interface LaneRun {
 function newRun(view: LaneView): LaneRun {
   return {
     view, turns: [], pending: "", pendingThinking: "", pendingTools: [],
-    streaming: false, collapsed: false, card: null, attached: [],
+    streaming: false, collapsed: false, card: null, attached: [], files: null,
     seq: 0, meter: newMeter(Date.now()), follow: null,
     progress: null, progressAt: 0, waiting: null,
   };
@@ -277,9 +293,10 @@ export function openFleetGrid(): void {
       <button class="btn-mini fleet-add-btn fleet-pin" data-fleet-pin data-tip="Default view|Make the GRID what the Fleet button opens. The orbit header has the same pin."></button>
       <button class="btn-mini fleet-add-btn" data-fleet-hub data-tip="Open in terminal (classic hub)|Opens the classic hub in a new terminal window: your agents and their boards as panes (Fleet, Security, Sessions, Audit, Usage and a live agent), linked to this app. You can also type lucid hub in any terminal.">${icon("terminal", 12)} Classic hub</button>
       <button class="btn-mini fleet-add-btn fleet-fit-btn" data-fleet-layout aria-haspopup="menu" data-tip="Layout|How the agents on this board share the panel. Side by side: they fill it, drag an edge to resize, double-click an edge for equal sizes. Grid of four: two by two. Focus one: one agent large, the rest in a strip; click a strip card to bring it up. Free: you size each card.">${icon("layout", 12)}<span data-fleet-layout-name>Side by side</span></button>
-      <button class="btn-mini fleet-add-btn" data-fleet-add title="Start a new agent on this computer">${icon("plus", 12)} Agent</button>
-      <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" title="Minimize (spokes keep running)">${UP_ARROW}</button>
-      <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" title="Close (spokes keep running)">${icon("close", 15)}</button>
+      <button class="btn-mini fleet-add-btn" data-ask-lucid data-tip="Ask Lucid (Ctrl+Shift+L)|Ask about anything in this panel. He can read what is on your screen and every spoke, and he opens on top of this panel.">${icon("spark", 12)} Ask</button>
+      <button class="btn-mini fleet-add-btn" data-fleet-add data-tip="Start a new agent on this computer">${icon("plus", 12)} Agent</button>
+      <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" data-tip="Minimize (spokes keep running)">${UP_ARROW}</button>
+      <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" data-tip="Close (spokes keep running)">${icon("close", 15)}</button>
     </div>
     <div class="fleet-boards" data-fleet-boards role="tablist" aria-label="Boards"></div>
     <div class="share-dock-body fleet-body"><div class="fleet-grid" id="fleetGrid"></div></div>
@@ -734,7 +751,7 @@ function applyOrder(grid: HTMLElement): void {
     lastGroupSig = rsig;
     for (const d of grid.querySelectorAll(":scope > .fleet-group-head")) d.remove(); // never the Remote section's head
     for (const s of repoSecs) {
-      grid.append(el(`<div class="fleet-group-head fleet-repo-head" style="--repo-hue:${s.repo.hue}" title="${esc(s.repo.key)}">
+      grid.append(el(`<div class="fleet-group-head fleet-repo-head" style="--repo-hue:${s.repo.hue}" data-tip="${esc(tipEsc(s.repo.key))}">
         <span class="spoke-repo-tag">${esc(s.repo.name)}</span><span>${s.ids.length}</span>
       </div>`));
       for (const id of s.ids) {
@@ -1065,15 +1082,16 @@ function paintPill(): void {
   ].filter(Boolean).join(", ");
   const box = $("[data-fleet-pips]", pill) as HTMLElement | null;
   if (box) {
-    const remotePip = remoteAttn ? `<span class="fleet-pip rs-${remote.waiting ? "approval" : "stuck"}" title="${esc(remoteLine)}"><i aria-hidden="true"></i><b>${remoteAttn}</b></span>` : "";
+    const remotePip = remoteAttn ? `<span class="fleet-pip rs-${remote.waiting ? "approval" : "stuck"}" data-tip="${esc(tipEsc(remoteLine))}"><i aria-hidden="true"></i><b>${remoteAttn}</b></span>` : "";
     const html = (roll.counts
-      .map((c, i) => `<span class="fleet-pip lane-${c.status}" title="${esc(roll.lines[i] ?? "")}"><i aria-hidden="true"></i><b>${c.count}</b></span>`)
-      .join("") + remotePip) || `<span class="fleet-pip lane-idle" title="No spokes running"><i aria-hidden="true"></i><b>0</b></span>`;
+      .map((c, i) => `<span class="fleet-pip lane-${c.status}" data-tip="${esc(tipEsc(roll.lines[i] ?? ""))}"><i aria-hidden="true"></i><b>${c.count}</b></span>`)
+      .join("") + remotePip) || `<span class="fleet-pip lane-idle" data-tip="No spokes running"><i aria-hidden="true"></i><b>0</b></span>`;
     if (box.innerHTML !== html) box.innerHTML = html;
   }
   const lines = remoteLine ? [...roll.lines, remoteLine] : roll.lines;
-  const tip = lines.length ? lines.join(" \u00b7 ") : "no spokes running";
-  pill.title = `LUCID Fleet - ${tip}. Click to reopen; spokes keep running either way.`;
+  const tip = lines.length ? lines.join(" \u00b7 ") : "No spokes running";
+  // P-TIP.1 (ADR-0599): the pill's name as the tip title, the roll-up as its body.
+  setTip(pill, "LUCID Fleet", `${tip}. Click to reopen; spokes keep running either way.`);
   pill.classList.toggle("live", roll.busy);
   pill.classList.toggle("attn", roll.attention || remoteAttn > 0);
 }
@@ -1432,7 +1450,7 @@ async function refresh(): Promise<void> {
     // polls only fills the gap; the poll's absence of either clears it).
     run.progress = lane.progress ?? null; run.progressAt = Date.now();
     run.waiting = lane.waiting ?? null;
-    if (grid && !run.card) { run.card = buildCard(run); grid.append(run.card); paintOutput(run); }
+    if (grid && !run.card) { run.card = buildCard(run); grid.append(run.card); wireLaneAttach(run); paintOutput(run); paintAttach(run); }
     paintFrame(run);
     maybeDrain(run); // P-FLEET.L3: an idle lane with staged prompts runs the next one, streamed visibly
     // P-FLEET.L11: while the MAIN COMPOSER drives this lane, the card owns no stream, so before this the
@@ -1477,11 +1495,11 @@ function paintHeadroom(hr: HTMLElement, res: FleetResources, laneCount: number):
     const over = held >= res.sustainMs;
     const c = over ? "var(--red)" : p >= line ? "var(--amber)" : "var(--green)";
     const hot = p >= line
-      ? `<span class="fleet-hr-hot${over ? " over" : ""}" title="${lbl} has held ${line}%+ for ${Math.round(held / 1000)}s. New spokes are refused at ${sustainS}s.">${Math.round(held / 1000)}s/${sustainS}s</span>`
+      ? `<span class="fleet-hr-hot${over ? " over" : ""}" data-tip="${lbl} has held ${line}%+ for ${Math.round(held / 1000)}s. New spokes are refused at ${sustainS}s.">${Math.round(held / 1000)}s/${sustainS}s</span>`
       : "";
     return `${head}<span class="fleet-hr-bar" style="--wm:${line}%"><span class="fleet-hr-fill" style="width:${p}%;background:${c}"></span></span><span class="fleet-hr-val">${p}%</span>${hot}`;
   };
-  const lanes = `<span class="fleet-hr-lanes" title="Spokes running. There is no cap: a spoke is refused only while CPU or memory stays at or above ${line}% for ${sustainS}s straight, so a burst never blocks you.">${laneCount} spoke${laneCount === 1 ? "" : "s"}</span>`;
+  const lanes = `<span class="fleet-hr-lanes" data-tip="Spokes running|There is no cap: a spoke is refused only while CPU or memory stays at or above ${line}% for ${sustainS}s straight, so a burst never blocks you.">${laneCount} spoke${laneCount === 1 ? "" : "s"}</span>`;
   hr.innerHTML = bar("CPU", res.cpuPct, res.cpuHotMs) + bar("MEM", res.memPct, res.memHotMs) + lanes;
 }
 
@@ -1513,7 +1531,7 @@ const baseName = (p: string): string => p.replace(/[\\/]+$/, "").split(/[\\/]/).
 function buildCard(run: LaneRun): HTMLElement {
   return el(`<div class="fleet-card" data-lane="${esc(run.view.id)}">
     <div class="fleet-card-head">
-      <span class="fleet-grip" data-fleet-grip title="Drag to reorder this spoke" aria-hidden="true"></span>
+      <span class="fleet-grip" data-fleet-grip data-tip="Drag to reorder this spoke" aria-hidden="true"></span>
       <span class="fleet-led" aria-hidden="true"></span>
       <span class="fleet-lane-name" data-fleet-name data-tip="Open in composer|Click the header to drive this spoke from the full composer - the same takeover as clicking its spoke in the orbit. Drag the grip to reorder."></span>
       <span class="fleet-cwd-chip spoke-repo-tag" data-fleet-cwd></span>
@@ -1523,13 +1541,13 @@ function buildCard(run: LaneRun): HTMLElement {
       <span class="fleet-quiet" data-fleet-quiet hidden></span>
       <span class="hud-ring lane-ring" data-lane-ring hidden data-tip="Progress|Working."><svg viewBox="0 0 22 22" width="15" height="15" aria-hidden="true"><circle class="hud-ring-track" cx="11" cy="11" r="8"/><circle class="hud-ring-arc" pathLength="100" cx="11" cy="11" r="8"/></svg></span>
       <select class="fleet-model" data-fleet-model aria-label="Spoke model"></select>
-      <button class="fleet-card-btn fleet-promote" data-fleet-promote aria-label="Drive this spoke from the main composer" title="Promote: point the main composer at this spoke" hidden>${icon("arrowRight", 12)}</button>
+      <button class="fleet-card-btn fleet-promote" data-fleet-promote aria-label="Drive this spoke from the main composer" data-tip="Promote|Point the main composer at this spoke" hidden>${icon("arrowRight", 12)}</button>
       ${CARD_BOARDS_BTN}
-      <button class="fleet-card-btn fleet-copy" data-fleet-copy aria-label="Copy this spoke's transcript" title="Copy the whole transcript as plain text">${icon("copy", 12)}</button>
-      <button class="fleet-card-btn fleet-auto-btn" data-fleet-auto aria-label="Toggle full auto-mode" title="Full auto-mode: approve every ask automatically">${icon("bolt", 12)}</button>
-      <button class="fleet-card-btn" data-fleet-checkin aria-label="Check in on this spoke" title="Check in: status, turns, last activity, queue depth">${icon("eye", 12)}</button>
-      <button class="fleet-card-btn" data-fleet-collapse aria-label="Collapse the spoke card" title="Collapse (keeps the header)">${icon("minus", 12)}</button>
-      <button class="fleet-card-btn fleet-dismiss" data-fleet-stop aria-label="Stop this spoke" title="Stop the spoke">${icon("close", 12)}</button>
+      <button class="fleet-card-btn fleet-copy" data-fleet-copy aria-label="Copy this spoke's transcript" data-tip="Copy the whole transcript as plain text">${icon("copy", 12)}</button>
+      <button class="fleet-card-btn fleet-auto-btn" data-fleet-auto aria-label="Toggle full auto-mode" data-tip="Full auto-mode|Approve every ask automatically">${icon("bolt", 12)}</button>
+      <button class="fleet-card-btn" data-fleet-checkin aria-label="Check in on this spoke" data-tip="Check in|Status, turns, last activity, queue depth">${icon("eye", 12)}</button>
+      <button class="fleet-card-btn" data-fleet-collapse aria-label="Collapse the spoke card" data-tip="Collapse (keeps the header)">${icon("minus", 12)}</button>
+      <button class="fleet-card-btn fleet-dismiss" data-fleet-stop aria-label="Stop this spoke" data-tip="Stop the spoke">${icon("close", 12)}</button>
     </div>
     <button class="repo-chip fleet-repo" data-fleet-repo type="button" hidden aria-label="This spoke's repository and push target"></button>
     <div class="fleet-card-main">
@@ -1547,14 +1565,14 @@ function buildCard(run: LaneRun): HTMLElement {
              its content, which is exactly how they used to vanish mid-transcript. The wrapper is the
              position:relative anchor, so they stay pinned over the bottom-right of the viewport until the
              reader is within the lane's own at-the-bottom threshold. -->
-        <button class="fleet-jump fleet-jump-page" data-lane-jump="page" type="button" aria-label="Scroll down one page" title="Down one page">${icon("chevronDown", 13)}</button>
-        <button class="fleet-jump fleet-jump-end" data-lane-jump="end" type="button" aria-label="Scroll to the newest line" title="Jump to the end">${icon("chevronsDown", 13)}</button>
+        <button class="fleet-jump fleet-jump-page" data-lane-jump="page" type="button" aria-label="Scroll down one page" data-tip="Down one page">${icon("chevronDown", 13)}</button>
+        <button class="fleet-jump fleet-jump-end" data-lane-jump="end" type="button" aria-label="Scroll to the newest line" data-tip="Jump to the end">${icon("chevronsDown", 13)}</button>
       </div>
       <div class="fleet-approve" data-fleet-approve hidden>
         <span class="fleet-approve-txt" data-fleet-approve-txt></span>
         <span class="fleet-approve-acts">
           <button class="btn-mini ok" data-fleet-allow>${icon("check", 11)} Allow</button>
-          <button class="btn-mini ok" data-fleet-allow-session title="Approve this ask and every same-kind ask for the rest of this spoke's session">${icon("check", 11)} Session</button>
+          <button class="btn-mini ok" data-fleet-allow-session data-tip="Approve this ask and every same-kind ask for the rest of this spoke's session">${icon("check", 11)} Session</button>
           <button class="btn-mini danger" data-fleet-deny>${icon("close", 11)} Deny</button>
         </span>
       </div>
@@ -1568,14 +1586,17 @@ function buildCard(run: LaneRun): HTMLElement {
       <div class="lane-progress" data-lane-progress hidden>
         <div class="lane-bar"><div class="lane-fill"></div></div>
         <div class="lane-progress-line" data-lane-est></div>
-        <div class="lane-alive-row"><span class="lane-alive" data-lane-alive data-state="idle"></span><span class="lane-signal" data-lane-signal></span><button class="btn-mini lane-stopcall" data-lane-stopcall hidden title="Ends only the processes this tool call started. The agent is told why and continues.">Stop command</button><button class="btn-mini lane-restart" data-fleet-respawn data-lane-restart hidden>Restart this lane</button></div>
+        <div class="lane-alive-row"><span class="lane-alive" data-lane-alive data-state="idle"></span><span class="lane-signal" data-lane-signal></span><button class="btn-mini lane-stopcall" data-lane-stopcall hidden data-tip="Ends only the processes this tool call started. The agent is told why and continues.">Stop command</button><button class="btn-mini lane-restart" data-fleet-respawn data-lane-restart hidden>Restart this lane</button></div>
         <div class="lane-wait" data-lane-wait hidden></div>
       </div>
       <div class="fleet-queue" data-fleet-queue hidden></div>
       <div class="fleet-attach" data-fleet-attach hidden></div>
+      <!-- P-ATTACH.1 (ADR-0598): this lane's file chips, and the "+" menu at the start of its bar. -->
+      <div class="att-tray fleet-files" data-fleet-files hidden></div>
       <div class="fleet-compose">
+        <button class="fleet-card-btn fleet-plus" data-fleet-plus type="button" hidden aria-label="Add files and more" data-tip="${esc(plusButtonTip(true))}">${icon("plus", 13)}</button>
         <textarea class="fleet-input" rows="1" data-fleet-input placeholder="Prompt this spoke\u2026" spellcheck="false"></textarea>
-        <button class="fleet-card-btn fleet-send" data-fleet-send aria-label="Send to this spoke" title="Send">${icon("send", 13)}</button>
+        <button class="fleet-card-btn fleet-send" data-fleet-send aria-label="Send to this spoke" data-tip="Send">${icon("send", 13)}</button>
         <button class="btn-mini danger fleet-cancel" data-fleet-cancel hidden>${icon("close", 11)} Cancel</button>
       </div>
     </div>
@@ -1638,7 +1659,7 @@ function paintProgress(run: LaneRun): void {
     alive.hidden = !full && !urgent && !flat; // quiet: the pill appears only for a dead process, a likely-stuck call, or a call gone flat
     alive.dataset.state = w ? "waiting" : flat ? "flat" : p.liveness.state;
     alive.textContent = w ? "waiting for a file" : p.liveness.label;
-    alive.title = w ? "Another worker's running turn is editing this file; the write goes through when it ends." : p.liveness.detail;
+    setTip(alive, w ? "Another worker's running turn is editing this file; the write goes through when it ends." : p.liveness.detail);
     signal.textContent = running && !w ? (aged.lastSignalMs < STREAMING_MS ? "signal just now" : `last signal ${humanMs(aged.lastSignalMs)} ago`) : "";
     // P-LIVENESS.1 (ADR-0418): a call marked likely stuck offers its two ways out; LUCID takes neither.
     restart.hidden = !urgent;
@@ -1646,13 +1667,13 @@ function paintProgress(run: LaneRun): void {
     if (stopCall.hidden && !stopCall.disabled) stopCall.textContent = "Stop command";
   } else {
     est.textContent = ""; bar.classList.remove("indeterminate"); fill.style.width = "0%";
-    alive.hidden = !full; alive.dataset.state = "waiting"; alive.textContent = "waiting for a file"; alive.title = "";
+    alive.hidden = !full; alive.dataset.state = "waiting"; alive.textContent = "waiting for a file"; setTip(alive, "");
     signal.textContent = ""; restart.hidden = true; stopCall.hidden = true;
   }
   wait.hidden = !w;
   if (w) {
     const line = `Waiting for ${w.on.name} to finish with ${w.file}`;
-    wait.textContent = line; wait.title = line;
+    wait.textContent = line; setTip(wait, line);
   }
 }
 
@@ -1683,9 +1704,8 @@ function paintFrame(run: LaneRun): void {
         ? "Pull the main composer back off this spoke"
         : "Drive this spoke from the main composer";
       promote.setAttribute("aria-label", label);
-      promote.title = v.promoted
-        ? "The main composer is typing into this spoke. Click to pull it back to the master agent; the spoke keeps running either way."
-        : "Promote: point the main composer at this spoke, even mid-turn. This card stays fully usable.";
+      if (v.promoted) setTip(promote, "The main composer is typing into this spoke. Click to pull it back to the master agent; the spoke keeps running either way.");
+      else setTip(promote, "Promote", "Point the main composer at this spoke, even mid-turn. This card stays fully usable.");
     }
   }
   // P-FLEET.L10: the close button RELABELS with lane state, because the same glyph doing two different
@@ -1698,15 +1718,17 @@ function paintFrame(run: LaneRun): void {
       dismiss.dataset.gone = gone;
       const label = gone === "1" ? "Dismiss this spoke" : "Stop this spoke";
       dismiss.setAttribute("aria-label", label);
-      dismiss.title = gone === "1"
-        ? "Dismiss: remove this card from the grid. The spoke's session history stays on disk and stays reviewable in the Timeline."
-        : "Stop the spoke. The card stays so you can read it, and Respawn revives it in place. Click again once stopped to dismiss it.";
+      if (gone === "1") setTip(dismiss, "Dismiss", "Remove this card from the grid. The spoke's session history stays on disk and stays reviewable in the Timeline.");
+      else setTip(dismiss, "Stop the spoke. The card stays so you can read it, and Respawn revives it in place. Click again once stopped to dismiss it.");
     }
   }
   const name = $("[data-fleet-name]", card) as HTMLElement | null;
   if (name) {
     name.textContent = v.name || v.id;
-    name.title = `${v.name || v.id} \u00b7 ${v.status} \u00b7 ${v.turns} turns${v.respawns ? ` \u00b7 respawned ${v.respawns}\u00d7, memory carried` : ""}`;
+    // P-TIP.1 (ADR-0599): one premium tip carries both the old native title (name and state) and the
+    // header's "open in composer" explanation, which the native title used to hide.
+    setTip(name, `${v.name || v.id} \u00b7 ${v.status} \u00b7 ${v.turns} turns${v.respawns ? ` \u00b7 respawned ${v.respawns}\u00d7, memory carried` : ""}`,
+      "Click the header to drive this spoke from the full composer - the same takeover as clicking its spoke in the orbit. Drag the grip to reorder.");
   }
   const cwd = $("[data-fleet-cwd]", card) as HTMLElement | null;
   // P-HUB-PICK.1 (ADR-0516): the codebase, not just the folder, in the same color as on the orbit and in
@@ -1714,7 +1736,7 @@ function paintFrame(run: LaneRun): void {
   if (cwd) {
     const sr = spokeRepo(v);
     if (cwd.textContent !== sr.name) cwd.textContent = sr.name;
-    cwd.title = v.cwd;
+    setTip(cwd, v.cwd);
     if (card.style.getPropertyValue("--repo-hue") !== String(sr.hue)) card.style.setProperty("--repo-hue", String(sr.hue));
   }
   // P-REPO.1 (ADR-0406): the repo this lane works in and where its commits go. Hidden until probed.
@@ -1738,7 +1760,7 @@ function paintFrame(run: LaneRun): void {
     if (badge.pct !== null) {
       usage.dataset.tone = badge.tone;
       usage.textContent = `ctx ${badge.pct}%`;
-      usage.title = `${badge.label} - ${fmtTokens(run.meter.ctxTokens)} of ${fmtTokens(run.meter.ctxSize)} tokens, ${fmtUsd(run.meter.costUsd)} so far. Measured by this spoke, not estimated.`;
+      setTip(usage, badge.label, `${fmtTokens(run.meter.ctxTokens)} of ${fmtTokens(run.meter.ctxSize)} tokens, ${fmtUsd(run.meter.costUsd)} so far. Measured by this spoke, not estimated.`);
     }
   }
   // P-HEALTH.1: the harness probed or recovered this lane BY ITSELF - the user must see that a silent lane
@@ -1750,9 +1772,9 @@ function paintFrame(run: LaneRun): void {
     if (h) {
       health.dataset.healthAction = h.action;
       health.textContent = h.action === "probe" ? "probed" : "recovered";
-      health.title = h.action === "probe"
+      setTip(health, h.action === "probe"
         ? `The harness asked this spoke for a status because it went quiet: ${h.reason}`
-        : `The harness canceled and resumed this spoke in place: ${h.reason}`;
+        : `The harness canceled and resumed this spoke in place: ${h.reason}`);
     }
   }
   paintProgress(run); // P-PROGRESS.1
@@ -1767,18 +1789,17 @@ function paintFrame(run: LaneRun): void {
       const secs = Math.round(quietMs / 1000);
       const open = v.openCalls > 0 ? ` ${v.openCalls} tool call${v.openCalls === 1 ? "" : "s"} are still out, which is why the harness is waiting rather than probing.` : "";
       quiet.textContent = m >= 1 ? `quiet ${m}m` : `quiet ${secs}s`;
-      quiet.title = `Nothing has streamed for ${secs}s. Long turns run to completion (no spoke clock) - Cancel is yours whenever you want it.${open}`;
+      setTip(quiet, `Nothing has streamed for ${secs}s. Long turns run to completion (no spoke clock) - Cancel is yours whenever you want it.${open}`);
     }
   }
   const sel = $("[data-fleet-model]", card) as HTMLSelectElement | null;
   if (sel && document.activeElement !== sel) fillModelSelect(sel, v.model);
-  // Full auto-mode: the bolt is lit while ON; the title carries the state so hover always explains it.
+  // Full auto-mode: the bolt is lit while ON; the tip carries the state so hover always explains it.
   const auto = $("[data-fleet-auto]", card) as HTMLButtonElement | null;
   if (auto) {
     auto.classList.toggle("auto-on", v.autoApprove);
-    auto.title = v.autoApprove
-      ? "Full auto-mode is ON - every ask is approved automatically. Click to turn it off."
-      : "Full auto-mode: approve every ask automatically";
+    if (v.autoApprove) setTip(auto, "Full auto-mode is ON", "Every ask is approved automatically. Click to turn it off.");
+    else setTip(auto, "Full auto-mode", "Approve every ask automatically");
   }
   const main = $(".fleet-card-main", card) as HTMLElement | null;
   if (main) main.hidden = run.collapsed;
@@ -1786,7 +1807,7 @@ function paintFrame(run: LaneRun): void {
   if (ap) {
     ap.hidden = v.status !== "needs-approval";
     const txt = $("[data-fleet-approve-txt]", card) as HTMLElement | null;
-    if (txt) { const s = v.pendingApproval?.summary ?? "The spoke asks to run a gated action."; txt.textContent = s; txt.title = v.pendingApproval?.kind ? `${s} (${v.pendingApproval.kind})` : s; }
+    if (txt) { const s = v.pendingApproval?.summary ?? "The spoke asks to run a gated action."; txt.textContent = s; setTip(txt, v.pendingApproval?.kind ? `${s} (${v.pendingApproval.kind})` : s); }
   }
   // P-FLEET.L4: error is a state, not a grave. Retry re-sends the last prompt (error lanes with one);
   // Respawn revives in place. A user-STOPPED lane gets Respawn only - stopping was a decision.
@@ -1799,7 +1820,7 @@ function paintFrame(run: LaneRun): void {
       const msg = v.status === "error"
         ? "The spoke failed. Retry re-sends the last prompt; either way its memory is carried."
         : "Spoke stopped. Respawn revives it in place with its memory.";
-      if (txt) { txt.textContent = msg; txt.title = msg; }
+      if (txt) { txt.textContent = msg; setTip(txt, msg); }
       const retry = $("[data-fleet-retry]", card) as HTMLButtonElement | null;
       if (retry) retry.hidden = v.status !== "error" || !v.canRetry;
     }
@@ -1822,9 +1843,9 @@ function paintFrame(run: LaneRun): void {
     }
     const pushing = pushingLanes.has(v.id);
     const html = v.queued
-      .map((item, i) => `<span class="fleet-q-chip" data-q-row="${i}" title="Right-click or long-press to copy"><b>${i + 1}</b><span class="fleet-q-txt" title="${esc(item.text)}">${esc(item.text)}</span>${item.images ? `<span class="fleet-q-img" title="${item.images} image${item.images === 1 ? "" : "s"} ride with this prompt">${item.images} img</span>` : ""}<button class="fleet-q-btn fleet-q-edit" data-q-edit="${i}" title="Update - pull this prompt and its images back into the composer to edit" aria-label="Update staged prompt ${i + 1}">Update</button>${pushing
-        ? `<button class="fleet-q-btn fleet-q-push" data-q-go="${i}" aria-disabled="true" title="Pushing - a new lane on its own worktree is starting for a prompt from this lane" aria-label="Push in progress">Pushing\u2026</button>`
-        : `<button class="fleet-q-btn fleet-q-push" data-q-go="${i}" title="Push now - run this in parallel in a new lane on its own worktree while this lane keeps working" aria-label="Push staged prompt ${i + 1} to a new parallel lane on its own worktree">Push now</button>`}<button class="fleet-q-btn" data-q-up="${i}" title="Run earlier" aria-label="Move staged prompt ${i + 1} up" ${i === 0 ? "disabled" : ""}>\u2191</button><button class="fleet-q-btn" data-q-dn="${i}" title="Run later" aria-label="Move staged prompt ${i + 1} down" ${i === v.queued.length - 1 ? "disabled" : ""}>\u2193</button><button class="fleet-q-btn" data-q-x="${i}" title="Remove" aria-label="Remove staged prompt ${i + 1}">\u00d7</button></span>`)
+      .map((item, i) => `<span class="fleet-q-chip" data-q-row="${i}" data-tip="Right-click or long-press to copy"><b>${i + 1}</b><span class="fleet-q-txt" data-tip="${esc(tipEsc(item.text))}">${esc(item.text)}</span>${item.images ? `<span class="fleet-q-img" data-tip="${item.images} image${item.images === 1 ? "" : "s"} ride with this prompt">${item.images} img</span>` : ""}${item.files ? `<span class="fleet-q-img fleet-q-files" data-tip="${item.files} file${item.files === 1 ? "" : "s"} ride with this prompt">${item.files} file${item.files === 1 ? "" : "s"}</span>` : ""}<button class="fleet-q-btn fleet-q-edit" data-q-edit="${i}" data-tip="Update|Pull this prompt, its images and its files back into the composer to edit" aria-label="Update staged prompt ${i + 1}">Update</button>${pushing
+        ? `<button class="fleet-q-btn fleet-q-push" data-q-go="${i}" aria-disabled="true" data-tip="Pushing|A new lane on its own worktree is starting for a prompt from this lane" aria-label="Push in progress">Pushing\u2026</button>`
+        : `<button class="fleet-q-btn fleet-q-push" data-q-go="${i}" data-tip="Push now|Run this in parallel in a new lane on its own worktree while this lane keeps working" aria-label="Push staged prompt ${i + 1} to a new parallel lane on its own worktree">Push now</button>`}<button class="fleet-q-btn" data-q-up="${i}" data-tip="Run earlier" aria-label="Move staged prompt ${i + 1} up" ${i === 0 ? "disabled" : ""}>\u2191</button><button class="fleet-q-btn" data-q-dn="${i}" data-tip="Run later" aria-label="Move staged prompt ${i + 1} down" ${i === v.queued.length - 1 ? "disabled" : ""}>\u2193</button><button class="fleet-q-btn" data-q-x="${i}" data-tip="Remove" aria-label="Remove staged prompt ${i + 1}">\u00d7</button></span>`)
       .join("");
     // Compared with the HTML last WRITTEN, never `q.innerHTML`: the browser re-serializes (`disabled` reads
     // back as `disabled=""`), so that comparison never matched and rebuilt the chips on every paint.
@@ -1838,7 +1859,8 @@ function paintFrame(run: LaneRun): void {
     // thought is exactly what the user wants to do while a compact card streams.
     const staging = run.streaming || v.status === "working" || v.status === "needs-approval";
     send.disabled = v.status === "stopped";
-    send.title = staging ? "Stage for later - runs in order when this spoke goes idle" : "Send";
+    if (staging) setTip(send, "Stage for later", "Runs in order when this spoke goes idle");
+    else setTip(send, "Send");
     send.classList.toggle("staging", staging);
   }
   const input = $("[data-fleet-input]", card) as HTMLTextAreaElement | null;
@@ -1857,7 +1879,7 @@ function fillModelSelect(sel: HTMLSelectElement, current: string): void {
     sel.innerHTML = all.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
   }
   sel.value = current || (all[0]?.value ?? "");
-  sel.title = all.find((o) => o.value === sel.value)?.label ?? current;
+  setTip(sel, all.find((o) => o.value === sel.value)?.label ?? current);
 }
 
 // ---------------------------------------------------------------- output stream
@@ -1921,11 +1943,11 @@ function chipRow(t: LaneToolRow): HTMLElement {
   if (stateEl && t.status) {
     const took = t.elapsedMs !== undefined ? humanMs(t.elapsedMs) : "";
     stateEl.textContent = t.status === "open" ? "" : took;
-    stateEl.title = t.status === "open" ? "running" : t.status === "done" ? (took ? `done in ${took}` : "done") : (took ? `failed after ${took}` : "failed");
+    setTip(stateEl, t.status === "open" ? "running" : t.status === "done" ? (took ? `done in ${took}` : "done") : (took ? `failed after ${took}` : "failed"));
   }
   const path = $(".fleet-diff-path", btn) as HTMLElement | null;
-  if (path && t.code?.path) { path.textContent = baseName(t.code.path); path.title = t.code.path; }
-  btn.title = t.code?.path ? `${c.k}: ${t.code.path}` : c.detail || c.k;
+  if (path && t.code?.path) { path.textContent = baseName(t.code.path); setTip(path, t.code.path); }
+  if (t.code?.path) setTip(btn, c.k, t.code.path); else setTip(btn, c.detail || c.k);
   const body = c.hasBody ? chipBody(t) : null;
   if (body) row.append(body);
   // The open flag lives on the ROW, not in the DOM: the live block repaints per token and a settled turn is
@@ -1939,14 +1961,16 @@ function chipRow(t: LaneToolRow): HTMLElement {
 }
 
 /** A SETTLED turn. Built once per turn id, then left alone forever - the whole point of the increment. */
-function buildTurn(t: LaneTurnRow): HTMLElement {
+function buildTurn(t: GridTurn): HTMLElement {
   const wrap = el(`<div data-lane-turn="${esc(t.id)}"></div>`);
   if (t.role === "user") {
     const line = el(`<div class="fleet-turn-user"></div>`);
     for (const src of t.images ?? []) line.append(el(`<img class="fleet-thumb" src="${esc(src)}" alt="pasted image" />`));
     line.append(document.createTextNode(t.text));
-    line.title = t.text;
+    setTip(line, t.text);
     wrap.append(line);
+    // P-ATTACH.1 (ADR-0598): the files that went with this turn, read-only, like the main composer's message.
+    if (t.files?.length) wrap.append(sentMetaEl(t.files));
   } else {
     const thinking = (t.thinking ?? "").trim();
     if (thinking) { const th = el(`<div class="fleet-think"></div>`); th.textContent = thinking; wrap.append(th); }
@@ -1956,12 +1980,12 @@ function buildTurn(t: LaneTurnRow): HTMLElement {
     if (t.error) {
       const err = el(`<div class="fleet-errline">${icon("info", 11)}<span></span></div>`);
       const s = $("span", err) as HTMLElement;
-      s.textContent = t.error; s.title = t.error;
+      s.textContent = t.error; setTip(s, t.error);
       wrap.append(err);
     }
   }
   // Absolutely positioned, so it is last in the DOM and still top-right of the turn it copies.
-  wrap.append(el(`<button class="fleet-turn-copy" type="button" data-fleet-turn-copy="${esc(t.id)}" title="Copy this turn as plain text" aria-label="Copy this turn as plain text">${icon("copy", 11)}</button>`));
+  wrap.append(el(`<button class="fleet-turn-copy" type="button" data-fleet-turn-copy="${esc(t.id)}" data-tip="Copy this turn as plain text" aria-label="Copy this turn as plain text">${icon("copy", 11)}</button>`));
   return wrap;
 }
 
@@ -1976,7 +2000,7 @@ function setLaneNote(run: LaneRun, text: string): void {
   ($("[data-lane-note]", out) as HTMLElement | null)?.remove();
   const note = el(`<div class="fleet-errline" data-lane-note>${icon("info", 11)}<span></span></div>`);
   const s = $("span", note) as HTMLElement;
-  s.textContent = text; s.title = text;
+  s.textContent = text; setTip(s, text);
   out.append(note);
   out.scrollTop = out.scrollHeight;
   window.setTimeout(() => note.remove(), 6000);
@@ -2171,7 +2195,7 @@ function onLaneEvent(id: string, e: LaneEvent): void {
  *  straight out of lane_transcript - the clipboard text is never rebuilt from the DOM. */
 async function copyOut(btn: HTMLElement, text: string): Promise<void> {
   if (!text) return;
-  try { await navigator.clipboard.writeText(text); } catch { return; } // no clipboard permission: stay silent
+  try { await writeClipboard(text); } catch { return; } // no clipboard permission: stay silent
   btn.classList.add("copied");
   window.setTimeout(() => btn.classList.remove("copied"), 900);
 }
@@ -2184,40 +2208,55 @@ function sendPrompt(run: LaneRun): void {
   const input = run.card ? ($("[data-fleet-input]", run.card) as HTMLTextAreaElement | null) : null;
   const text = input?.value.trim() ?? "";
   const images = run.attached.slice();
-  if (!text && !images.length) return;
+  // P-ATTACH.1 (ADR-0598): staged files ride either path (a staged prompt carries its ids). They stay on
+  // the bar, as sending, until the engine takes the prompt; a refused or failed send puts them back.
+  const tray = run.files;
+  if (!text && !images.length && !tray?.ids().length) return;
+  if (tray?.pending()) { setLaneNote(run, "Files are still being copied and scanned. Send again in a moment."); return; }
+  const held = tray?.hold() ?? [];
+  const fileIds = held.map((a) => a.id);
+  const withFiles = fileIds.length ? fileIds : undefined;
+  let filesSettled = false;
+  const settleFiles = (accepted: boolean): void => { if (!filesSettled) { filesSettled = true; tray?.settle(fileIds, accepted); } };
   const id = run.view.id;
   if (run.streaming || run.view.status === "working" || run.view.status === "needs-approval") {
-    void deps.fleetQueueAdd(id, text, images).then((r) => {
+    void deps.fleetQueueAdd(id, text, images, withFiles).catch(() => null).then((r) => {
+      settleFiles(!!r?.ok);
       if (!r?.ok) { onLaneEvent(id, { type: "error", message: r?.reason ?? "could not stage the prompt" }); return; }
       if (input) { input.value = ""; input.style.height = ""; }
       run.attached = [];
-      run.view.queued = [...run.view.queued, { text: text.length > 140 ? `${text.slice(0, 140)}\u2026` : text, images: images.length }];
+      run.view.queued = [...run.view.queued, { text: text.length > 140 ? `${text.slice(0, 140)}\u2026` : text, images: images.length, ...(fileIds.length ? { files: fileIds.length } : {}) }];
       paintFrame(run); paintAttach(run);
     });
     return;
   }
   if (input) { input.value = ""; input.style.height = ""; }
   run.attached = [];
-  run.turns.push({ id: nextId(run, "t"), role: "user", text, tools: [], ...(images.length ? { images: images.map((im) => `data:${im.mimeType};base64,${im.data}`) } : {}) });
+  run.turns.push({
+    id: nextId(run, "t"), role: "user", text, tools: [],
+    ...(images.length ? { images: images.map((im) => `data:${im.mimeType};base64,${im.data}`) } : {}),
+    ...(held.length ? { files: sentFileMeta(held) } : {}), // P-ATTACH.1 (ADR-0598): chips under the turn
+  });
   run.pending = ""; run.pendingThinking = ""; run.pendingTools = [];
   run.streaming = true;
   run.view.status = "working"; // optimistic; the stream's status events correct it
   paintFrame(run); paintOutput(run); paintAttach(run); paintPill();
-  void deps.fleetPrompt(id, text, (e) => onLaneEvent(id, e), images)
+  void deps.fleetPrompt(id, text, (e) => { if (e.type !== "error") settleFiles(true); onLaneEvent(id, e); }, images, withFiles)
     .catch((err: unknown) => onLaneEvent(id, { type: "error", message: err instanceof Error ? err.message : String(err) }))
-    .finally(() => { run.streaming = false; foldPending(run); paintFrame(run); paintOutput(run); paintPill(); maybeDrain(run); });
+    .finally(() => { settleFiles(false); run.streaming = false; foldPending(run); paintFrame(run); paintOutput(run); paintPill(); maybeDrain(run); });
 }
 
 /** P-QUEUE-IMG.1 (ADR-0469): Update on a staged chip. The manager hands back the item's FULL text and its
  *  own images (the poll only carries a clipped preview and a count) and they load into this card's
  *  composer: the image strip shows them removable, paste adds more, and Send/Stage uses the edited prompt
- *  (a re-stage appends; the manager queue has no item ids to anchor a slot to). A draft in the card
+ *  (a re-stage appends; the manager queue has no item ids to anchor a slot to). P-ATTACH.1 (ADR-0598): its
+ *  staged files come back as ready chips (restoreLaneFiles), never uploaded again. A draft in the card
  *  composer, text or images, is never overwritten: the Update is refused with a note. */
 function editStaged(run: LaneRun, i: number): void {
   if (!deps) return;
   const input = run.card ? ($("[data-fleet-input]", run.card) as HTMLTextAreaElement | null) : null;
   if (!input) return;
-  if (input.value.trim() || run.attached.length) { setLaneNote(run, "Update never overwrites a draft. Send, stage or clear this lane's composer, then press Update."); return; }
+  if (input.value.trim() || run.attached.length || run.files?.count()) { setLaneNote(run, "Update never overwrites a draft. Send, stage or clear this lane's composer, then press Update."); return; }
   if (!run.view.queued[i]) return;
   const id = run.view.id;
   run.view.queued = run.view.queued.filter((_, n) => n !== i); // optimistic; the poll is truth
@@ -2225,17 +2264,19 @@ function editStaged(run: LaneRun, i: number): void {
   void deps.fleetQueueTake(id, i).then((r) => {
     if (!r?.ok || !r.item) { void refresh(); setLaneNote(run, `Not updated: ${r?.reason ?? "the engine did not answer"}.`); return; }
     const item = r.item;
+    const fileIds = item.attachments ?? [];
     // Typed or pasted into while the take was in flight: the item is already out of the manager queue, so
-    // it goes back on the end of it rather than over the new draft.
-    if (input.value.trim() || run.attached.length) {
-      void deps?.fleetQueueAdd(id, item.text, item.images).then((a) => {
+    // it goes back on the end of it rather than over the new draft (its file ids with it, P-ATTACH.1).
+    if (input.value.trim() || run.attached.length || run.files?.count()) {
+      void deps?.fleetQueueAdd(id, item.text, item.images, fileIds.length ? fileIds : undefined).then(async (a) => {
         void refresh();
         if (a?.ok) { setLaneNote(run, "Your composer got a draft first, so the staged prompt went back on the end of the queue."); return; }
         // Could not re-stage either: the composer is the only place left, so it is added after the draft.
         input.value = [input.value.trim(), item.text].filter(Boolean).join("\n\n");
         run.attached = [...run.attached, ...item.images].slice(0, 6);
         paintAttach(run);
-        setLaneNote(run, `Could not re-stage it (${a?.reason ?? "no answer"}), so it was added after your draft in the composer.`);
+        const lost = (await restoreLaneFiles(run, fileIds)).note;
+        setLaneNote(run, `Could not re-stage it (${a?.reason ?? "no answer"}), so it was added after your draft in the composer.${lost ? ` ${lost}` : ""}`);
       });
       return;
     }
@@ -2245,7 +2286,19 @@ function editStaged(run: LaneRun, i: number): void {
     run.attached = item.images.slice();
     paintAttach(run);
     input.focus();
+    // P-ATTACH.1 (ADR-0598): the prompt's files come back as ready chips, without uploading them again.
+    void restoreLaneFiles(run, fileIds).then(({ note }) => { if (note) setLaneNote(run, note); });
   }).catch(() => { void refresh(); });
+}
+
+/** P-ATTACH.1 (ADR-0598): a queued prompt's staged files back on this lane's bar (attach_ui.adoptStagedIds).
+ *  Resolves with how many came back ready and the note for those that did not (null when none). */
+async function restoreLaneFiles(run: LaneRun, ids: readonly string[]): Promise<{ ready: number; note: string | null }> {
+  if (!ids.length) return { ready: 0, note: null };
+  const bridge = deps?.attach;
+  if (!run.files || !bridge) return { ready: 0, note: missingFilesNote(ids.length) };
+  const r = await adoptStagedIds(run.files, bridge, ids);
+  return { ready: r.ready, note: r.note };
 }
 
 // ── P-PUSH.PAR1 (ADR-pending): the staged chip's item menu, and Push now as a parallel worktree lane ──────
@@ -2266,7 +2319,8 @@ function openStagedMenu(run: LaneRun, i: number, x: number, y: number, row: HTML
     { label: "Copy prompt", run: () => void copyStaged(run, i, false) },
     { label: "Copy and remove", run: () => void copyStaged(run, i, true) },
   ];
-  if (canSteer({ hold: true, running: busy, images: item.images })) entries.push({ label: "Steer running turn", run: () => void steerStaged(run, i) });
+  // P-ATTACH.1 (ADR-0598): a steer note is text only, so files keep it off the menu like images do.
+  if (canSteer({ hold: true, running: busy, images: item.images + (item.files ?? 0) })) entries.push({ label: "Steer running turn", run: () => void steerStaged(run, i) });
   const focused = row.contains(document.activeElement) ? (document.activeElement as HTMLElement) : (row.querySelector("button") as HTMLElement | null);
   openCtxMenu(x, y, entries, { returnFocus: focused, className: "ctx-menu-stage" });
 }
@@ -2281,12 +2335,21 @@ async function copyStaged(run: LaneRun, i: number, remove: boolean): Promise<voi
   const r = await deps.fleetQueuePeek(id, i).catch(() => null);
   if (!r?.ok || !r.item) { void refresh(); setLaneNote(run, `Not copied: ${r?.reason ?? "the engine did not answer"}.`); return; }
   const imgs = r.item.images.length;
+  const fileIds = r.item.attachments ?? [];
   if (!(await copyToClipboard(r.item.text))) { setLaneNote(run, "Not copied: the clipboard refused. The prompt stays staged."); return; }
-  if (!remove) { setLaneNote(run, imgs ? "Copied the prompt text. Its images stay with the staged prompt." : "Copied. Paste it into any prompt bar."); return; }
+  if (!remove) {
+    const stay = imgs && fileIds.length ? "images and files" : imgs ? "images" : fileIds.length ? "files" : "";
+    setLaneNote(run, stay ? `Copied the prompt text. Its ${stay} stay with the staged prompt.` : "Copied. Paste it into any prompt bar.");
+    return;
+  }
   const gone = await deps.fleetQueueRemove(id, i, r.item.text).catch(() => null);
   void refresh();
   if (!gone?.ok) { setLaneNote(run, "Copied. It had already left the queue (it ran or was removed)."); return; }
-  setLaneNote(run, `Copied and removed. Paste it into a prompt bar to edit or keep it${imgs ? `; its ${imgs} image${imgs === 1 ? " was" : "s were"} removed with it` : ""}.`);
+  // P-ATTACH.1 (ADR-0598): the text goes to the clipboard; the files are not text, so they come back to this
+  // lane's bar as ready chips instead of leaving with the removed prompt.
+  const back = await restoreLaneFiles(run, fileIds);
+  const filesNote = back.ready > 0 ? ` Its ${back.ready} file${back.ready === 1 ? " is" : "s are"} on this lane's bar.` : "";
+  setLaneNote(run, `Copied and removed. Paste it into a prompt bar to edit or keep it${imgs ? `; its ${imgs} image${imgs === 1 ? " was" : "s were"} removed with it` : ""}.${filesNote}${back.note ? ` ${back.note}` : ""}`);
 }
 
 /** Steer running turn: the OLD Push now, kept so no capability is lost. The full text goes into this lane's
@@ -2297,6 +2360,7 @@ async function steerStaged(run: LaneRun, i: number): Promise<void> {
   const r = await deps.fleetQueuePeek(id, i).catch(() => null);
   if (!r?.ok || !r.item) { void refresh(); setLaneNote(run, `Not steered: ${r?.reason ?? "the engine did not answer"}.`); return; }
   if (r.item.images.length) { setLaneNote(run, "Steer is text only. This prompt carries images, so it stays staged; Push now runs it with them in a parallel lane."); return; }
+  if (r.item.attachments?.length) { setLaneNote(run, "Steer is text only. This prompt carries files, so it stays staged; Push now runs it with them in a parallel lane."); return; }
   const text = r.item.text;
   run.view.queued = run.view.queued.filter((_, n) => n !== i); // optimistic; the poll is truth
   paintFrame(run);
@@ -2323,6 +2387,8 @@ async function pushStagedParallel(run: LaneRun, i: number): Promise<void> {
     const src: PushSource = { kind: "lane", name: run.view.name, cwd: run.view.cwd, model: run.view.model };
     const busy = run.streaming || run.view.status === "working" || run.view.status === "needs-approval";
     const r = await pushToNewLane(src, item.text, item.images, {
+      // P-ATTACH.1 (ADR-0598): the staged files run with the prompt in the new lane.
+      ...(item.attachments?.length ? { attachments: item.attachments } : {}),
       announce: (lane) => {
         const n = parallelPushNotice(src, lane, { busy });
         setLaneNote(run, n.desc);
@@ -2358,7 +2424,7 @@ export type ParallelPushResult = { ok: true; laneId: string; name: string; branc
  *  the turn like any other. Resolves ok only once the new lane ACCEPTED the prompt (its first stream event
  *  is not an error); a lane that started but refused the prompt is a refusal, and the lane stays visible.
  *  Used by the lane chips here and by the main composer's chips (app.ts). */
-export async function pushToNewLane(src: PushSource, text: string, images: LaneImage[], opts: { announce: (lane: string) => void }): Promise<ParallelPushResult> {
+export async function pushToNewLane(src: PushSource, text: string, images: LaneImage[], opts: { announce: (lane: string) => void; /** P-ATTACH.1 (ADR-0598): staged file ids */ attachments?: string[] }): Promise<ParallelPushResult> {
   if (!deps) return { ok: false, reason: "the fleet is not ready yet" };
   const d = deps;
   const st = await d.fleetStatus().catch(() => null);
@@ -2385,7 +2451,7 @@ export async function pushToNewLane(src: PushSource, text: string, images: LaneI
   const refused = await new Promise<string | null>((resolve) => {
     let settled = false;
     const settle = (why: string | null): void => { if (!settled) { settled = true; resolve(why); } };
-    void d.fleetPrompt(lane.id, full, (e) => { settle(e.type === "error" ? e.message : null); onLaneEvent(lane.id, e); }, images)
+    void d.fleetPrompt(lane.id, full, (e) => { settle(e.type === "error" ? e.message : null); onLaneEvent(lane.id, e); }, images, opts.attachments)
       .catch((err: unknown) => {
         const m = err instanceof Error ? err.message : String(err);
         settle(m);
@@ -2409,7 +2475,9 @@ function maybeDrain(run: LaneRun): void {
   const id = run.view.id;
   const next = run.view.queued[0]!;
   run.view.queued = run.view.queued.slice(1);
-  run.turns.push({ id: nextId(run, "t"), role: "user", text: next.text + (next.images ? ` [${next.images} image${next.images === 1 ? "" : "s"}]` : ""), tools: [] });
+  // The poll carries only counts, so a drained turn names its images and files by number (P-ATTACH.1).
+  const extras = [next.images ? `${next.images} image${next.images === 1 ? "" : "s"}` : "", next.files ? `${next.files} file${next.files === 1 ? "" : "s"}` : ""].filter(Boolean);
+  run.turns.push({ id: nextId(run, "t"), role: "user", text: next.text + (extras.length ? ` [${extras.join(", ")}]` : ""), tools: [] });
   run.pending = ""; run.pendingThinking = ""; run.pendingTools = [];
   run.streaming = true;
   run.view.status = "working";
@@ -2459,8 +2527,61 @@ function paintAttach(run: LaneRun): void {
   const strip = $("[data-fleet-attach]", card) as HTMLElement | null; if (!strip) return;
   strip.hidden = run.attached.length === 0;
   strip.innerHTML = run.attached
-    .map((im, i) => `<span class="fleet-attach-item"><img class="fleet-thumb" src="data:${im.mimeType};base64,${im.data}" alt="pasted image ${i + 1}" /><button class="fleet-attach-x" data-attach-x="${i}" title="Remove this image" aria-label="Remove pasted image ${i + 1}">${icon("close", 9)}</button></span>`)
+    .map((im, i) => `<span class="fleet-attach-item"><img class="fleet-thumb" src="data:${im.mimeType};base64,${im.data}" alt="pasted image ${i + 1}" /><button class="fleet-attach-x" data-attach-x="${i}" data-tip="Remove this image" aria-label="Remove pasted image ${i + 1}">${icon("close", 9)}</button></span>`)
     .join("");
+}
+
+/** P-FLEET.L3: read images into the lane's strip, cleared on send/stage. Cap 6, like /api/chat. Pasted
+ *  images come here, and (P-ATTACH.1) the images among dropped or picked files. */
+function addLaneImages(run: LaneRun, files: readonly File[]): void {
+  for (const file of files) {
+    if (run.attached.length >= 6) break;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result ?? "");
+      const comma = url.indexOf(",");
+      if (comma < 0 || run.attached.length >= 6) return;
+      run.attached.push({ mimeType: file.type, data: url.slice(comma + 1) });
+      paintAttach(run);
+    };
+    reader.readAsDataURL(file);
+  }
+}
+
+/** P-ATTACH.1 (ADR-0598): a lane card's file tray, "+" menu and drop zone. The tray lives on the run (made
+ *  with the first card), so a card rebuilt on reopen mounts the same chips. */
+function wireLaneAttach(run: LaneRun): void {
+  const card = run.card;
+  const d = deps;
+  if (!card || !d?.attach) return;
+  const bridge = d.attach;
+  run.files ??= createAttachTray(null, { bridge, onImages: (files) => addLaneImages(run, files), imageCount: () => run.attached.length, notify: (text) => setLaneNote(run, text) });
+  run.files.mount($("[data-fleet-files]", card) as HTMLElement | null);
+  const plus = $("[data-fleet-plus]", card) as HTMLElement | null;
+  if (plus) {
+    mountPlusMenu(plus, plusMenuItems({
+      pick: (folder) => pickIntoLane(run, folder),
+      folder: true,
+      ...(d.openKnowledge ? { knowledge: d.openKnowledge } : {}),
+      ...(d.openSkills ? { skills: d.openSkills } : {}),
+      ...(d.openConnectors ? { connectors: d.openConnectors } : {}),
+    }));
+    syncPlusButton(plus, bridge, $("[data-fleet-input]", card) as HTMLElement | null);
+  }
+  bindFileDrop(card, (files, folders) => {
+    const note = folderDropNote(folders);
+    if (note) setLaneNote(run, note);
+    if (files.length) void run.files?.add(files);
+  });
+}
+
+/** P-ATTACH.1: the OS picker (files, or a folder) into this lane's bar; focus goes back to its input. */
+function pickIntoLane(run: LaneRun, folder: boolean): void {
+  void pickFiles({ folder }).then((files) => {
+    const input = run.card ? ($("[data-fleet-input]", run.card) as HTMLTextAreaElement | null) : null;
+    input?.focus();
+    return run.files?.add(files, { folder });
+  });
 }
 
 /** Retry the last turn: streams like sendPrompt but pushes NO new user turn - the transcript already
@@ -2604,13 +2725,13 @@ function toggleSpawnForm(): void {
     <div class="fleet-card-head">
       <span class="fleet-led" aria-hidden="true"></span>
       <span class="fleet-lane-name">New lane</span>
-      <button class="fleet-card-btn" data-spawn-cancel aria-label="Close the new-spoke form" title="Close">${icon("close", 12)}</button>
+      <button class="fleet-card-btn" data-spawn-cancel aria-label="Close the new-spoke form" data-tip="Close">${icon("close", 12)}</button>
     </div>
     <div class="fleet-spawn">
       <label class="fleet-spawn-lbl" data-spawn-cwd-lbl>Folder</label>
       <div class="fleet-spawn-row">
         <input class="fleet-spawn-in" data-spawn-cwd type="text" value="${esc(deps.getMasterCwd())}" spellcheck="false" aria-label="The folder this spoke works in" />
-        <button class="btn-mini fleet-browse" data-spawn-browse title="Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button>
+        <button class="btn-mini fleet-browse" data-spawn-browse data-tip="Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button>
       </div>
       ${repoPickerHtml()}
       <div class="fleet-spawn-note" data-spawn-repo-note hidden></div>
@@ -2623,7 +2744,7 @@ function toggleSpawnForm(): void {
         <input class="fleet-spawn-in" data-spawn-pat type="password" autocomplete="off" spellcheck="false" aria-label="Personal access token for this repository host" placeholder="Personal access token (private repos)" />
         <label class="fleet-spawn-save"><input type="checkbox" data-spawn-save checked /><span data-spawn-save-txt>Remember this token for this host</span></label>
       </div>
-      <label class="fleet-spawn-save fleet-spawn-wt" title="The worktree is created next to the repo, starts at its last commit (uncommitted edits in this folder are not copied), and is kept when the spoke closes."><input type="checkbox" data-spawn-wt /><span>Own worktree: this lane gets a new branch and its own copy of the repo, so it runs beside other agents here. I accept that merging it back can conflict.</span></label>
+      <label class="fleet-spawn-save fleet-spawn-wt" data-tip="The worktree is created next to the repo, starts at its last commit (uncommitted edits in this folder are not copied), and is kept when the spoke closes."><input type="checkbox" data-spawn-wt /><span>Own worktree: this lane gets a new branch and its own copy of the repo, so it runs beside other agents here. I accept that merging it back can conflict.</span></label>
       <label class="fleet-spawn-lbl">Name <span class="fleet-spawn-opt">optional</span></label>
       <input class="fleet-spawn-in" data-spawn-name type="text" placeholder="spoke-${runs.size + 1}" spellcheck="false" aria-label="A name for this spoke" />
       <label class="fleet-spawn-lbl">Model</label>
@@ -2663,7 +2784,7 @@ function toggleSpawnForm(): void {
  *  0 until the input has a width. */
 function revealPathEnd(input: HTMLInputElement | null): void {
   if (!input) return;
-  input.title = input.value;
+  setTip(input, input.value);
   const show = (): void => {
     const end = input.value.length;
     try { input.setSelectionRange(end, end); } catch { /* detached, or a type that has no selection */ }
@@ -3045,6 +3166,15 @@ function onChange(ev: Event): void {
 
 function onDockKey(ev: KeyboardEvent): void {
   const t = ev.target as HTMLElement;
+  // P-ATTACH.1 (ADR-0598): Ctrl+U on a lane bar opens the file picker for that lane.
+  if (isAttachShortcut(ev) && t instanceof HTMLTextAreaElement && t.matches("[data-fleet-input]")) {
+    ev.preventDefault();
+    const card = t.closest(".fleet-card[data-lane]") as HTMLElement | null;
+    const run = card ? runs.get(card.dataset.lane ?? "") : null;
+    const plus = card ? ($("[data-fleet-plus]", card) as HTMLElement | null) : null;
+    if (run?.files && plus && !plus.hidden) pickIntoLane(run, false);
+    return;
+  }
   if (ev.key !== "Enter") return;
   if (!ev.shiftKey && t instanceof HTMLTextAreaElement && t.matches("[data-fleet-input]")) {
     ev.preventDefault();
@@ -3057,7 +3187,7 @@ function onDockKey(ev: KeyboardEvent): void {
 }
 
 /** P-FLEET.L3: paste an image into a lane composer - the master chat's paste-to-thumbnail, per card.
- *  Text pastes fall through untouched; only image clipboard items are captured. Cap 6, like /api/chat. */
+ *  Text pastes fall through untouched; only clipboard files are captured. */
 function onPaste(ev: Event): void {
   const e = ev as ClipboardEvent;
   const t = e.target as HTMLElement;
@@ -3065,24 +3195,14 @@ function onPaste(ev: Event): void {
   const card = t.closest(".fleet-card[data-lane]") as HTMLElement | null;
   const run = card ? runs.get(card.dataset.lane ?? "") : null;
   if (!run) return;
-  const items = [...(e.clipboardData?.items ?? [])].filter((it) => it.kind === "file" && it.type.startsWith("image/"));
-  if (!items.length) return;
+  // P-ATTACH.1 (ADR-0598): with the attachment seam every pasted file goes to the lane's tray, which hands
+  // images back to the strip; without it only images are taken.
+  const files = clipboardFiles(e);
+  const take = run.files ? files : files.filter((f) => f.type.startsWith("image/"));
+  if (!take.length) return;
   e.preventDefault();
-  for (const it of items) {
-    if (run.attached.length >= 6) break;
-    const file = it.getAsFile();
-    if (!file) continue;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const url = String(reader.result ?? "");
-      const comma = url.indexOf(",");
-      if (comma < 0) return;
-      if (run.attached.length >= 6) return;
-      run.attached.push({ mimeType: file.type, data: url.slice(comma + 1) });
-      paintAttach(run);
-    };
-    reader.readAsDataURL(file);
-  }
+  if (run.files) void run.files.add(take);
+  else addLaneImages(run, take);
 }
 
 function onInput(ev: Event): void {

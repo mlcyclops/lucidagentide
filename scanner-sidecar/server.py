@@ -42,7 +42,12 @@ def _handle(line: str) -> dict:
     if not isinstance(text, str):
         return {"id": req_id, "error": "missing-or-invalid-text"}
 
-    findings = inspect_text(text)
+    # P-SCANLIVE.1 (ADR-0571): an exception inside the scanner answers THIS request with an error
+    # (the TS gate blocks it) instead of ending the loop and taking every later scan down with it.
+    try:
+        findings = inspect_text(text)
+    except Exception as exc:  # noqa: BLE001 - any scanner failure is an error reply, never a crash
+        return {"id": req_id, "error": f"scan-failed: {type(exc).__name__}: {exc}"}
     return {"id": req_id, "findings": findings, "scanner_version": SCANNER_VERSION}
 
 

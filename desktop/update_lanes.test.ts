@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-HOLDER.2 (ADR-0573): the lanes an IDE update meets. What must hold, as the person updating sees it:
+// P-HOLDER.2 (ADR-0574): the lanes an IDE update meets. What must hold, as the person updating sees it:
 //   - stuck and idle lanes are offered for stopping; a working one never is, and the prompt says what happens to it;
 //   - a lane that runs from the install folder never gets an install over it: a working one leaves only "Later",
 //     an idle or stuck one only the "Stop ... and restart" path;
@@ -41,7 +41,15 @@ describe("the update prompt", () => {
 
   test("no lanes: Restart now or Later", () => {
     expect(prompt([]).choices.map((c) => c.label)).toEqual(["Restart now", "Later"]);
-    expect(updatePrompt("2.6.0", null).choices.map((c) => c.install)).toEqual([true, false]);
+    expect(updatePrompt("2.6.0", null).choices.map((c) => c.install)).toEqual([true, false]); // no fleet to ask
+  });
+
+  test("lanes that could not be read: only Later (fail-closed; a held lane may still run from the install folder)", () => {
+    const p = updatePrompt("2.6.0", "unavailable");
+    expect(p.choices.map((c) => c.label)).toEqual(["Later"]);
+    expect(p.choices.some((c) => c.install)).toBe(false);
+    expect(p.stop).toEqual([]);
+    expect(p.detail).toContain("could not check");
   });
 
   test("idle and stuck are offered for stopping; working ones are named and keep running", () => {

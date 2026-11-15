@@ -21,6 +21,7 @@
 
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 
 // ── model ────────────────────────────────────────────────────────────────────
 
@@ -660,7 +661,7 @@ export function markupBarHtml(v: MarkupPaneView): string {
   const status = v.busy || v.status;
   return `<div class="cmk-bar-row">
       <button type="button" class="btn-mini ok" data-cmk-open${v.busy ? " disabled" : ""}>${icon("folder", 12)} Open PDF</button>
-      <span class="cmk-file" title="${esc(v.fileName)}">${esc(v.fileName || "No PDF open")}</span>
+      <span class="cmk-file" data-tip="${esc(tipEsc(v.fileName))}">${esc(v.fileName || "No PDF open")}</span>
       ${v.dirty ? `<span class="cmk-dirty">unsaved</span>` : ""}
       <span class="cmk-count">${esc(`${v.markupCount} markup${v.markupCount === 1 ? "" : "s"}`)}</span>
     </div>

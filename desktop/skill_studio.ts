@@ -198,7 +198,7 @@ export async function gatherWorkDigest(window: StudioWindow, workspace: string =
 
   const sessions: WorkDigestInput["sessions"] = [];
   try {
-    for (const s of (await listSessions(workspace)).sessions.filter((x) => x.kind !== "kg-ingest" && x.updatedAt >= cutoff).slice(0, 8)) {
+    for (const s of (await listSessions(workspace)).sessions.filter((x) => (x.kind ?? "chat") === "chat" && x.updatedAt >= cutoff).slice(0, 8)) {
       let userExcerpts: string[] = [];
       try {
         userExcerpts = sessionMessages(s.id, 40).messages.filter((m) => m.role === "user" && m.text.trim()).map((m) => m.text).slice(-6);

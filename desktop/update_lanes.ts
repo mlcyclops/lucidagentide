@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/update_lanes.ts - P-HOLDER.2 (ADR-0573): the lanes an IDE update meets, sorted the way the update prompt
+// desktop/update_lanes.ts - P-HOLDER.2 (ADR-0574): the lanes an IDE update meets, sorted the way the update prompt
 // offers them.
 //
 //   stuck    the stall detector flags the lane (displayStatus "likely-stuck": a tool call flat for minutes)
@@ -62,9 +62,13 @@ export interface UpdateChoice { label: string; stop: boolean; install: boolean }
 
 /** The update prompt for `c` (updater.ts shows it). `stop`: the idle and stuck lanes "Stop..." stops. A lane that
  *  runs from the install folder keeps the installer from replacing its files: while a WORKING one runs there is no
- *  restart button at all, and an idle or stuck one is installable only once stopped. The last choice is "Later". */
-export function updatePrompt(version: string, c: UpdateCheck | null): { detail: string; choices: UpdateChoice[]; stop: string[] } {
+ *  restart button at all, and an idle or stuck one is installable only once stopped. The last choice is "Later".
+ *  `"unavailable"`: the lanes could not be read, so only "Later" is offered. */
+export function updatePrompt(version: string, c: UpdateCheck | null | "unavailable"): { detail: string; choices: UpdateChoice[]; stop: string[] } {
   const later: UpdateChoice = { label: "Later", stop: false, install: false };
+  // The engine was asked and did not answer (a timeout, a crash). A held lane may still run from the install folder,
+  // so not knowing is not "no lanes": the update waits (fail-closed). `null` means there is no fleet to ask at all.
+  if (c === "unavailable") return { detail: `LUCID could not check which agent lanes are running, so ${version} waits rather than install over a lane that may still be using these files. It is offered again at the next launch, or quit LUCID and start it again to install it now.`, choices: [later], stop: [] };
   const lanes = c?.lanes ?? [];
   if (!lanes.length) return { detail: "Restart to apply the update. Your session and credentials are kept.", choices: [{ label: "Restart now", stop: false, install: true }, later], stop: [] };
   const stuck = lanes.filter((l) => l.group === "stuck"), idle = lanes.filter((l) => l.group === "idle"), working = lanes.filter((l) => l.group === "working");

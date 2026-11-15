@@ -107,7 +107,7 @@ function openDialog(view: SecretRequestView): void {
           ${multiline
             ? `<textarea class="prov-key secret-input secret-masked" rows="4" autocomplete="off" spellcheck="false" aria-label="Secret value"></textarea>`
             : `<input class="prov-key secret-input" type="password" autocomplete="off" spellcheck="false" aria-label="Secret value" />`}
-          <button class="btn-mini secret-eye" type="button" aria-pressed="false" title="Show or hide what you pasted">${icon("eye", 14)}</button>
+          <button class="btn-mini secret-eye" type="button" aria-pressed="false" aria-label="Show or hide what you pasted" data-tip="Show or hide what you pasted">${icon("eye", 14)}</button>
         </div>
         <p class="set-note secret-help"></p>
         <div class="modal-err secret-err" hidden></div>

@@ -13,6 +13,7 @@
 // fail-closed on save (a browser is untrusted).
 
 import { esc } from "./format.ts";
+import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599): premium tooltips, not native titles
 import type { PersonalGraphData } from "./bridge.ts";
 import {
   validateSpec,
@@ -265,11 +266,11 @@ export function toolChipsHtml(spec: AgentSpec, mcpTools: McpCatalogTool[] = []):
         .map((t) => {
           const uses = inUse.get(t) ?? 0;
           const badge = uses
-            ? `<span class="ab-chip-uses" title="Used by ${uses} step${uses > 1 ? "s" : ""}; removing blocks the call and flags the step">${uses} step${uses > 1 ? "s" : ""}</span>`
+            ? `<span class="ab-chip-uses" data-tip="Used by ${uses} step${uses > 1 ? "s" : ""}|Removing it blocks the call and flags the step">${uses} step${uses > 1 ? "s" : ""}</span>`
             : "";
           const mcp = mcpByName.get(t);
           const title = mcp ? `${mcp.desc} (third-party MCP tool from "${mcp.server}")` : t.startsWith("mcp__") ? "Third-party MCP tool" : TOOL_DESC[t];
-          return `<li class="ab-chip" data-tool="${esc(t)}"><span class="ab-chip-name"${title ? ` title="${esc(title)}"` : ""}>${esc(t)}</span>${badge}<button class="ab-chip-rm" data-rm-tool="${esc(t)}" data-tip="Remove ${esc(t)}: the agent will be BLOCKED from calling it">×</button></li>`;
+          return `<li class="ab-chip" data-tool="${esc(t)}"><span class="ab-chip-name"${title ? ` data-tip="${esc(tipEsc(title))}"` : ""}>${esc(t)}</span>${badge}<button class="ab-chip-rm" data-rm-tool="${esc(t)}" data-tip="Remove ${esc(t)}: the agent will be BLOCKED from calling it">×</button></li>`;
         })
         .join("")
     : `<li class="ab-chip ab-chip-empty">No tools allow-listed. This agent cannot call any tools.</li>`;

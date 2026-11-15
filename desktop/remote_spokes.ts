@@ -8,7 +8,7 @@
 // renderer never sees that token and never talks to the plugin. Every /api/remote-spokes/* route lands here:
 //
 //   GET  /api/remote-spokes             the hub, its scopes and every spoke (orbit, hub picker)
-//   POST /api/remote-spokes/recall      {node, task?, since?}    recall scope; since (P-RS-SESSION.1, ADR-0572): only
+//   POST /api/remote-spokes/recall      {node, task?, since?}    recall scope; since (P-RS-SESSION.1, ADR-0573): only
 //                                       entries after that journal seq, so an open session reads only what is new
 //   GET  /api/remote-spokes/status      ?node=                   recall scope; the spoke's own task list, read now
 //   GET  /api/remote-spokes/approvals   ?node=                   recall scope
@@ -257,7 +257,7 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
     return reply(out);
   }
 
-  // P-RS-SESSION.1 (ADR-0572): the spoke's own task list now, for an open session's live status. Task names and
+  // P-RS-SESSION.1 (ADR-0573): the spoke's own task list now, for an open session's live status. Task names and
   // states pass the same validation as the hub snapshot's rows (mapTasks); nothing else a spoke wrote is returned.
   if (op === "status") {
     if (req.method !== "GET") return new Response("method not allowed", { status: 405 });

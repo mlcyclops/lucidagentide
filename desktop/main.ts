@@ -13,12 +13,13 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, safeStorage, screen, shell } from "electron";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { connect, createServer } from "node:net";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
 import { parseUpdateCheck } from "./update_lanes.ts";
+import { askLucidImagesDir, saveAsSource } from "./ask_lucid_images.ts"; // P-ASKLUCID.9 (ADR-0600): Save image as
 import { ensureRuntimes, findBun, needsBootstrap, ompResolution } from "./runtime.ts";
 import { ompUnavailableReport } from "./omp_bin.ts"; // P-OMP-BOOT.1 (ADR-0357): the one-shot loud boot report
 import { createSplash, setSplashStatus } from "./splash.ts";
@@ -797,6 +798,27 @@ ipcMain.handle("lucid:saveTextFile", async (e, opts: unknown) => {
   });
   if (r.canceled || !r.filePath) return null;
   try { writeFileSync(r.filePath, o.text, { encoding: "utf8", mode: 0o600 }); return r.filePath; } catch (err) { return { error: (err instanceof Error ? err.message : String(err)).slice(0, 200) }; }
+});
+
+// P-ASKLUCID.9 (ADR-0600): "Save image as..." for an image Ask Lucid edited. The renderer names a source; main
+// copies it ONLY when it is a PNG, JPEG or WebP really inside ~/.omp/ask-lucid/images (links resolved: the agent
+// can write under ~/.omp), to a path the user picks in the OS dialog. Returns the path, null on cancel, or { error }.
+ipcMain.handle("lucid:saveEditedImageAs", async (e, source: unknown) => {
+  const src = saveAsSource(askLucidImagesDir(homedir()), source, {
+    realpath: (p) => realpathSync.native(p),
+    isFile: (p) => statSync(p).isFile(),
+  });
+  if (!src.ok) return { error: src.error };
+  const w = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+  const ext = src.name.split(".").pop()?.toLowerCase() ?? "png";
+  const r = await dialog.showSaveDialog(w!, {
+    title: "Save image as",
+    defaultPath: join(app.getPath("pictures"), src.name),
+    filters: [{ name: ext === "png" ? "PNG image" : ext === "webp" ? "WebP image" : "JPEG image", extensions: [ext] }],
+  });
+  if (r.canceled || !r.filePath) return null;
+  if (resolve(r.filePath) === src.path) return r.filePath; // saving over itself: already there
+  try { copyFileSync(src.path, r.filePath); return r.filePath; } catch (err) { return { error: (err instanceof Error ? err.message : String(err)).slice(0, 200) }; }
 });
 
 // P-NETWL.1 (ADR-0106): the legacy safeStorage credential vault (cred_vault.ts), main-only because Electron's
@@ -1649,7 +1671,7 @@ app.whenReady().then(async () => {
     }
     dialog.showErrorBox(report.title, detail);
   }
-  // Packaged-only; checks GitHub Releases, prompts on download. P-HOLDER.2 (ADR-0573): the prompt names the lanes
+  // Packaged-only; checks GitHub Releases, prompts on download. P-HOLDER.2 (ADR-0574): the prompt names the lanes
   // that run and offers to stop the idle and stuck ones first.
   initAutoUpdate(() => win, {
     check: async () => parseUpdateCheck(await engineData(await fetch(`http://127.0.0.1:${PORT}/api/fleet/update-check`, { headers: { "x-lucid-token": MAIN_TOKEN }, signal: AbortSignal.timeout(5000) }).catch(() => null))),

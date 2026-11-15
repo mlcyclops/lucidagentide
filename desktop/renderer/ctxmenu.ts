@@ -30,9 +30,11 @@ export function menuItemsFor(s: CtxTargetState): CtxItem[] {
 // P-COPY.1 (ADR-0203): a READ-ONLY copy menu for non-editable content - selected chat text and code blocks.
 // Electron ships no default menu, so a right-click here previously did nothing; now it offers Copy (of the
 // selection) and, inside a code fence, "Copy code block" (the whole snippet, no manual selecting).
-export type ReadonlyAct = "copy" | "copycode";
+export type ReadonlyAct = "copy" | "copycode" | "copymsg";
 export interface ReadonlyCtxItem { act: ReadonlyAct; label: string; kbd: string; enabled: boolean }
-export interface ReadonlyCtxState { inCode: boolean; hasSelection: boolean }
+/** `inMessage`: the pointer is on a whole answer that can be copied as one (an element with data-copy-text:
+ *  an Ask Lucid answer, P-ASKLUCID.8). */
+export interface ReadonlyCtxState { inCode: boolean; hasSelection: boolean; inMessage?: boolean }
 
 /** Which read-only entries to show. Returns [] when there's nothing to copy, so an ordinary right-click (no
  *  selection, not a code block) keeps its default behavior instead of popping a useless menu. */
@@ -40,6 +42,7 @@ export function readonlyMenuItemsFor(s: ReadonlyCtxState): ReadonlyCtxItem[] {
   const items: ReadonlyCtxItem[] = [];
   if (s.hasSelection) items.push({ act: "copy", label: "Copy", kbd: "Ctrl+C", enabled: true });
   if (s.inCode) items.push({ act: "copycode", label: "Copy code block", kbd: "", enabled: true });
+  if (s.inMessage) items.push({ act: "copymsg", label: "Copy answer", kbd: "", enabled: true });
   return items;
 }
 
@@ -99,10 +102,10 @@ async function runAction(act: CtxAction, field: Field, deps: CtxMenuDeps): Promi
   const selected = field.value.slice(Math.min(start, end), Math.max(start, end));
   switch (act) {
     case "copy":
-      try { await navigator.clipboard.writeText(selected); } catch { /* nothing sensitive lost */ }
+      try { await writeClipboard(selected); } catch { /* nothing sensitive lost */ }
       break;
     case "cut": {
-      try { await navigator.clipboard.writeText(selected); } catch { break; } // no copy → don't destroy the text
+      try { await writeClipboard(selected); } catch { break; } // no copy → don't destroy the text
       const cut = spliceText(field.value, start, end, "");
       field.value = cut.value;
       field.setSelectionRange(cut.caret, cut.caret);
@@ -146,7 +149,43 @@ async function copyText(text: string, deps: CtxMenuDeps): Promise<void> {
  *  browser without permission; Electron always grants), so the caller can say so instead of claiming
  *  "Copied". */
 export async function copyToClipboard(text: string): Promise<boolean> {
-  try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* refused or absent: try the legacy path */ }
+  return copyViaSelection(text);
+}
+
+/** `navigator.clipboard.writeText` with the legacy fallback: resolves when either path copied, rejects when
+ *  both were refused. Every renderer copy goes through here, so a browser that blocks the async API still
+ *  copies. */
+export async function writeClipboard(text: string): Promise<void> {
+  if (!(await copyToClipboard(text))) throw new Error("The clipboard refused the copy.");
+}
+
+/** The legacy copy: select the text in an off-screen textarea and run the browser's own copy command. A browser
+ *  that refuses the async Clipboard API (a site permission set to Block, a managed Chrome policy, a page that
+ *  is not focused) usually still allows this inside the user's click, which is where every caller runs.
+ *  Focus and the user's selection are put back afterwards. */
+function copyViaSelection(text: string): boolean {
+  if (typeof document === "undefined" || !document.body) return false;
+  const active = document.activeElement as HTMLElement | null;
+  const sel = typeof window.getSelection === "function" ? window.getSelection() : null;
+  const ranges = sel ? Array.from({ length: sel.rangeCount }, (_, i) => sel.getRangeAt(i)) : [];
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.setAttribute("aria-hidden", "true");
+  ta.style.cssText = "position:fixed;top:0;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none";
+  document.body.appendChild(ta);
+  let ok = false;
+  try {
+    ta.focus({ preventScroll: true });
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    ok = document.execCommand("copy");
+  } catch { ok = false; }
+  ta.remove();
+  try { active?.focus?.({ preventScroll: true }); } catch { /* focus could not be restored */ }
+  if (sel) { sel.removeAllRanges(); for (const r of ranges) sel.addRange(r); }
+  return ok;
 }
 
 interface MenuEntry { label: string; kbd: string; enabled: boolean; run: () => void }
@@ -316,12 +355,13 @@ export function installTextContextMenu(deps: CtxMenuDeps = {}): void {
     const pre = target?.closest?.("pre") as HTMLElement | null;
     const inCode = !!(pre && pre.querySelector("code"));
     const selection = (typeof window.getSelection === "function" ? window.getSelection()?.toString() : "") ?? "";
-    const items = readonlyMenuItemsFor({ inCode, hasSelection: !!selection.trim() });
+    const message = (target?.closest?.("[data-copy-text]") as HTMLElement | null)?.dataset.copyText ?? "";
+    const items = readonlyMenuItemsFor({ inCode, hasSelection: !!selection.trim(), inMessage: !!message.trim() });
     if (!items.length) return; // nothing to copy → keep the default behavior
     e.preventDefault();
     spawnMenu(e.clientX, e.clientY, items.map((it) => ({
       label: it.label, kbd: it.kbd, enabled: it.enabled,
-      run: () => { void copyText(it.act === "copycode" ? (pre?.querySelector("code")?.textContent ?? "") : selection, deps); },
+      run: () => { void copyText(it.act === "copycode" ? (pre?.querySelector("code")?.textContent ?? "") : it.act === "copymsg" ? message : selection, deps); },
     })));
   });
 }

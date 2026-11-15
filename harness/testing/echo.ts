@@ -90,10 +90,17 @@ export interface EchoSessionOptions {
   /** Script the model with explicit responses (e.g. a tool call then text)
    *  instead of the default echo handler. */
   responses?: MockModelOptions["responses"];
+  /** Drive the model with a function of what it has seen so far (P-BENCH.2a): a scripted policy that
+   *  reacts to tool results, where `responses` is a fixed list. Ignored when `responses` is given. */
+  handler?: MockModelOptions["handler"];
   /** Custom tools to register on the session. */
   customTools?: SessionOpts["customTools"];
   /** Extensions (incl. tool_call hooks) to register on the session. */
   extensions?: SessionOpts["extensions"];
+  /** omp settings for the session (e.g. `Settings.isolated({ "tools.artifactSpillThreshold": 4 })`). */
+  settings?: SessionOpts["settings"];
+  /** Offer the model only these tools (omp's `toolNames`). */
+  toolNames?: SessionOpts["toolNames"];
 }
 
 /**
@@ -106,7 +113,9 @@ export async function createEchoSession(opts: EchoSessionOptions = {}): Promise<
   ensureMockApi();
   const model = opts.responses
     ? createMockModel({ id: "echo-model", provider: ECHO_PROVIDER, responses: opts.responses })
-    : createEchoModel(opts.prefix ?? "echo: ");
+    : opts.handler
+      ? createMockModel({ id: "echo-model", provider: ECHO_PROVIDER, handler: opts.handler })
+      : createEchoModel(opts.prefix ?? "echo: ");
   const cwd = mkdtempSync(join(tmpdir(), "omp-echo-"));
 
   const authStorage = await AuthStorage.create(join(cwd, "auth.db"));
@@ -124,6 +133,8 @@ export async function createEchoSession(opts: EchoSessionOptions = {}): Promise<
     ...(opts.systemPrompt !== undefined ? { systemPrompt: opts.systemPrompt } : {}),
     ...(opts.customTools !== undefined ? { customTools: opts.customTools } : {}),
     ...(opts.extensions !== undefined ? { extensions: opts.extensions } : {}),
+    ...(opts.settings !== undefined ? { settings: opts.settings } : {}),
+    ...(opts.toolNames !== undefined ? { toolNames: opts.toolNames } : {}),
   });
 
   return {

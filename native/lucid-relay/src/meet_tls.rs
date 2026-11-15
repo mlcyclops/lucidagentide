@@ -219,6 +219,21 @@ pub fn tls_config(s: &Settings) -> Result<Arc<ServerConfig>, String> {
     Ok(Arc::new(cfg))
 }
 
+/// guest_tls_context: the guest port's server TLS: the guest certificate (else the relay's own), TLS 1.2 or later,
+/// and NO client certificate asked for.
+pub fn guest_tls_config(s: &Settings) -> Result<Arc<ServerConfig>, String> {
+    let provider = Arc::new(crate::server::provider());
+    let cert = if s.guest_cert.is_empty() { &s.cert } else { &s.guest_cert };
+    let key = if s.guest_key.is_empty() { &s.key } else { &s.guest_key };
+    let cfg = ServerConfig::builder_with_provider(provider)
+        .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
+        .map_err(|e| e.to_string())?
+        .with_no_client_auth()
+        .with_single_cert(load_certs(cert, "certificate")?, load_key(key)?)
+        .map_err(|e| format!("the guest certificate and key do not fit: {e}"))?;
+    Ok(Arc::new(cfg))
+}
+
 // ── RefusalLog ───────────────────────────────────────────────────────────────────────────────────────────────
 
 struct Refusals {
@@ -316,26 +331,8 @@ pub struct Response {
 /// Err is the Python exception class name of the failure, or the message `check` gave.
 #[allow(clippy::too_many_arguments)]
 pub fn https_request(cfg: &Arc<ClientConfig>, host: &str, port: u16, timeout: f64, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>, check: &dyn Fn(&[u8]) -> Result<(), String>) -> Result<Response, Result<String, String>> {
-    let t = Duration::from_secs_f64(timeout);
     let io = |e: std::io::Error| -> Result<String, String> { Err(error_class(&e).to_string()) };
-    let addrs: Vec<_> = (host, port).to_socket_addrs().map_err(|_| Err("gaierror".to_string()))?.collect();
-    let mut tcp = None;
-    let mut last = None;
-    for a in addrs {
-        match TcpStream::connect_timeout(&a, t) {
-            Ok(s) => {
-                tcp = Some(s);
-                break;
-            }
-            Err(e) => last = Some(e),
-        }
-    }
-    let mut tcp = match tcp {
-        Some(s) => s,
-        None => return Err(Err(last.map(|e| error_class(&e)).unwrap_or("gaierror").to_string())),
-    };
-    let _ = tcp.set_read_timeout(Some(t));
-    let _ = tcp.set_write_timeout(Some(t));
+    let mut tcp = connect(host, port, timeout)?;
     let name = ServerName::try_from(host.to_string()).map_err(|_| Err("SSLError".to_string()))?;
     let mut conn = rustls::ClientConnection::new(cfg.clone(), name).map_err(|_| Err("SSLError".to_string()))?;
     while conn.is_handshaking() {
@@ -343,7 +340,36 @@ pub fn https_request(cfg: &Arc<ClientConfig>, host: &str, port: u16, timeout: f6
     }
     let peer = conn.peer_certificates().and_then(|c| c.first()).map(|c| c.to_vec()).unwrap_or_default();
     check(&peer).map_err(Ok)?;
-    let mut stream = rustls::StreamOwned::new(conn, tcp);
+    exchange(rustls::StreamOwned::new(conn, tcp), host, port, method, path, headers, body)
+}
+
+/// One plain HTTP request on a fresh connection (a service on this machine); Err as https_request's.
+pub fn http_request(host: &str, port: u16, timeout: f64, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>) -> Result<Response, Result<String, String>> {
+    let tcp = connect(host, port, timeout)?;
+    exchange(tcp, host, port, method, path, headers, body)
+}
+
+/// A TCP connection to the first address of `host` that answers, read and write bounded by `timeout`.
+fn connect(host: &str, port: u16, timeout: f64) -> Result<TcpStream, Result<String, String>> {
+    let t = Duration::from_secs_f64(timeout);
+    let addrs: Vec<_> = (host, port).to_socket_addrs().map_err(|_| Err("gaierror".to_string()))?.collect();
+    let mut last = None;
+    for a in addrs {
+        match TcpStream::connect_timeout(&a, t) {
+            Ok(tcp) => {
+                let _ = tcp.set_read_timeout(Some(t));
+                let _ = tcp.set_write_timeout(Some(t));
+                return Ok(tcp);
+            }
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(Err(last.map(|e| error_class(&e)).unwrap_or("gaierror").to_string()))
+}
+
+/// One request on an open stream and its whole answer (Content-Length, chunked, or up to the close).
+fn exchange<S: Read + Write>(mut stream: S, host: &str, port: u16, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>) -> Result<Response, Result<String, String>> {
+    let io = |e: std::io::Error| -> Result<String, String> { Err(error_class(&e).to_string()) };
     let mut head = format!("{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept-Encoding: identity\r\n");
     for (k, v) in headers {
         head.push_str(&format!("{k}: {v}\r\n"));

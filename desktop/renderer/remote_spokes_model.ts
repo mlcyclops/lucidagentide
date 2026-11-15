@@ -416,7 +416,7 @@ export function remoteTotals(list: readonly RemoteSpokeView[], alerts: number): 
 export interface RemoteLane { key: string; spoke: RemoteSpokeView; task: RemoteTaskView | null; state: RemoteSpokeState }
 
 /** A task whose lane is gone: closed by a hub, or stopped when the spoke's engine restarted or lost it. Nothing more
- *  runs in it; it holds no lane and offers only its session and recall (ADR-0574: the panel's Past tasks). */
+ *  runs in it; it holds no lane and offers only its session and recall (ADR-0575: the panel's Past tasks). */
 export function taskEnded(t: RemoteTaskView): boolean {
   return t.state === "closed" || t.state === "stopped";
 }
@@ -585,7 +585,7 @@ export function deployChoices(spokes: readonly RemoteSpokeView[], a: HubActions)
  *  a task whose turn a restart cut off offers Resume, a follow-up with RESUME_TEXT; a new turn clears the mark. */
 export function taskButtons(t: RemoteTaskView, a: HubActions): { recall: boolean; followup: boolean; cancel: boolean; close: boolean; resume: boolean } {
   const live = !taskEnded(t);
-  // ADR-0576: the reply box is always on for an open task; a new spoke queues a note sent while the task works.
+  // ADR-0577: the reply box is always on for an open task; a new spoke queues a note sent while the task works.
   const turnOver = a.drive && (t.state === "idle" || t.state === "error");
   return {
     recall: a.recall,
@@ -630,7 +630,7 @@ export type RecallView =
   | { ok: true; node: string; label: string; task?: string; entries: RecallEntryView[]; quarantined: number; omitted: number; context: string }
   | { ok: false; error: string };
 
-/** P-RS-SESSION.1 (ADR-0572): a spoke's own `status` answer, read directly (not the hub's 15 s summary). */
+/** P-RS-SESSION.1 (ADR-0573): a spoke's own `status` answer, read directly (not the hub's 15 s summary). */
 export type RemoteStatusView = { ok: true; journalHead: number; tasks: RemoteTaskView[] } | { ok: false; error: string };
 
 /** P-RS-SESSION.1: one row of a remote task's session screen, built from its scanned journal. `prompt`: a prompt the

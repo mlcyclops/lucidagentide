@@ -8,19 +8,40 @@ import { $, el } from "./dom.ts";
 import { icon } from "./icons.ts";
 import { esc } from "./format.ts";
 import { placePopover } from "./popover_place.ts"; // P-VOICE.2 (ADR-0247): flip + height-cap math, testable
+import { parseTip, tipValue } from "./tip_text.ts"; // P-TIP.1 (ADR-0599): the data-tip text format
 
 // ───────────────────────── tooltip ─────────────────────────
 // Markup: data-tip="Title|Description"  (Title optional)  data-tip-icon="shield"
+// A literal '|' inside either part is written "\|" (tip_text.ts); setTip() does that for you.
+
+/** P-TIP.1 (ADR-0599): give `el` the premium tooltip instead of a native `title`. With no `desc` the
+ *  text is a one-line tip; empty text removes the tip. */
+export function setTip(el: HTMLElement, title: string, desc?: string, side?: "top" | "bottom" | "right"): void {
+  el.removeAttribute("title");
+  const v = tipValue(title, desc);
+  if (v) el.setAttribute("data-tip", v); else el.removeAttribute("data-tip");
+  if (side) el.setAttribute("data-tip-side", side);
+}
+
 export function initTooltips(): void {
   const tip = $("#tip")!;
+  tip.setAttribute("role", "tooltip"); // P-TIP.1: a focused trigger points at it via aria-describedby
   let timer: number | undefined;
   let cur: HTMLElement | null = null;
+  let focused: HTMLElement | null = null; // the trigger whose tip a keyboard focus opened, if any
+  let described: HTMLElement | null = null; // the trigger we gave aria-describedby="tip", if any
+
+  const hide = () => {
+    clearTimeout(timer);
+    tip.classList.remove("show");
+    cur = null;
+    focused = null;
+    if (described) { described.removeAttribute("aria-describedby"); described = null; }
+  };
 
   const place = (target: HTMLElement) => {
-    const raw = target.getAttribute("data-tip") || "";
-    const [a, b] = raw.split("|");
-    const title = b !== undefined ? a : "";
-    const desc = b !== undefined ? b : a;
+    const { title, desc } = parseTip(target.getAttribute("data-tip") || "");
+    if (!title && !desc) return;
     const ico = target.getAttribute("data-tip-icon");
     tip.innerHTML =
       (title ? `<div class="tt">${ico ? icon(ico, 14) : ""}<span>${esc(title)}</span></div>` : "") +
@@ -55,12 +76,37 @@ export function initTooltips(): void {
   });
   document.addEventListener("mouseout", (e) => {
     const t = (e.target as HTMLElement).closest("[data-tip]");
-    if (t && t === cur) { cur = null; clearTimeout(timer); tip.classList.remove("show"); }
+    if (t && t === cur) hide();
   });
-  window.addEventListener("scroll", () => { tip.classList.remove("show"); cur = null; }, true);
+  // P-TIP.1 (ADR-0599): keyboard users get the same tip. It shows at once on a keyboard focus
+  // (:focus-visible, so a mouse click that focuses a button does not pop it) and is announced as the
+  // trigger's description; blur or Escape hides it.
+  document.addEventListener("focusin", (e) => {
+    const target = e.target as HTMLElement;
+    const t = target.closest?.("[data-tip]") as HTMLElement | null;
+    if (!t) return;
+    let visible = false;
+    try { visible = target.matches(":focus-visible"); } catch { /* engine without :focus-visible: stay quiet */ }
+    if (!visible) return;
+    hide();
+    cur = t;
+    focused = t;
+    place(t);
+    if (!t.hasAttribute("aria-describedby")) { t.setAttribute("aria-describedby", "tip"); described = t; }
+  });
+  document.addEventListener("focusout", (e) => {
+    const t = (e.target as HTMLElement).closest?.("[data-tip]");
+    if (t && t === cur) hide();
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && tip.classList.contains("show")) hide(); }, true);
+  // Focusing a row in a scrolled list scrolls it into view: a keyboard tip follows its trigger instead of
+  // vanishing; a hover tip hides as before.
+  window.addEventListener("scroll", () => {
+    if (cur && cur === focused && cur.contains(document.activeElement)) place(cur); else hide();
+  }, true);
   // A click means the user has moved on from reading the hint: a menu or panel is about to open under
   // the pointer, and a tooltip lingering beside (or behind) it reads as a stray card.
-  document.addEventListener("pointerdown", () => { clearTimeout(timer); tip.classList.remove("show"); cur = null; }, true);
+  document.addEventListener("pointerdown", hide, true);
 }
 
 // ───────────────────────── rich (hoverable) tooltip ─────────────────────────
