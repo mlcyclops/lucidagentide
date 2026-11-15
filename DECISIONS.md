@@ -27142,6 +27142,12 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 3. `iex` and `Invoke-Expression` are launchers (their string, or `-Command`'s), and a pipe into either is "pipes downloaded code into an interpreter", as a pipe into `sh` is.
 4. cmd's `/c` or `/k` may carry the command glued to it; one pair of outer quotes is stripped, as cmd does.
 Still outside the pattern floor: other recursive deleters (`find / -delete` stays T3 through the dangerous-flag table), `diskpart` scripts, and an interpreter's own code (`python -c "shutil.rmtree('/')"`). Proof: the new rows in the catastrophic and risky corpora of `exec_policy.test.ts`.
+
+**Addendum (2026-11-15, review of #618).** Three more forms of the same families ran with no human: an interpreter named by module or path after a pipe (`irm <url> | Microsoft.PowerShell.Utility\Invoke-Expression`, `curl <url> | /bin/sh`), a backtick nested inside a backtick (``echo `echo \`rm -rf /\`` ``), and rm's long flags abbreviated (`rm --rec --for /`).
+1. The pipe pattern accepts a path or module prefix and an `.exe` suffix before the interpreter's name.
+2. Backticks are read as bash reads them: a backslash outside single quotes escapes the next character (an escaped backtick there is text), and a body is unescaped one level (`` \` ``, `\\`, `\$`) before it is classified, so a nested substitution is found. A backtick inside single quotes still asks (fail-closed, as item 2 above).
+3. The `rm` pattern reads every prefix getopt_long accepts for `--recursive` and `--force` (`--r`, `--rec`, `--f`, `--for`); one of them alone keeps T3.
+Proof: the new rows in the catastrophic and risky corpora of `exec_policy.test.ts` (each of the catastrophic ones ran unasked before the change).
 ## ADR-0578 -- P-CTX.2a: a tool result omp spilled to an artifact is scanned whole, recorded with its trust label, and fenced when read back; the result window is omp's own setting (2026-11-14)
 
 **Status:** Accepted. This is "ADR-A" of `docs/specs/longcapharness-review-pdr.md`, amended after its seam was confirmed against omp 18.18.6 (the numbers 0571 to 0577 are taken on unmerged branches). Amends ADR-0152 (the MCP result gate). Proof: `make demo-P-CTX.2a`, and `bun test harness/omp/mcp_spill_gate.test.ts harness/security/large_scan.test.ts harness/security/spill_provenance.test.ts`.

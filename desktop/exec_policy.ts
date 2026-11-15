@@ -77,11 +77,20 @@ const COMPOUND = /[|;&]|&&|\|\||\$\(|`|>>|>|<\(/;
 // Non-silenceable catastrophic patterns (T4). Each ALWAYS prompts (interactive) / ALWAYS blocks
 // (unattended), regardless of any standing allow or danger mode — mirroring an egress ask-site pin.
 interface Catastrophic { re: RegExp; why: string }
+/** A GNU long option as getopt_long reads it: the whole name or any prefix of at least `min` letters (`--rec` is
+ *  `--recursive`), ending where the option word ends. */
+const longOpt = (name: string, min: number): string =>
+  `--(?:${Array.from({ length: name.length - min + 1 }, (_, k) => name.slice(0, name.length - k)).join("|")})(?![\\w-])`;
 const ALWAYS_PROMPT: Catastrophic[] = [
   { re: /(^|\s)(sudo|doas)\b/i, why: "runs as root (sudo/doas)" },
-  { re: /(^|\s)rm\b(?=[^|;&]*\s-)[^|;&]*\b(?:-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|(?=[^|;&]*\s(?:--recursive|-[a-z]*r))(?=[^|;&]*\s(?:--force|-[a-z]*f)))/i, why: "recursive force-delete (rm -rf)" },
-  // PowerShell's `iex` / `Invoke-Expression` runs the text piped into it, as `sh` does (`irm <url> | iex`).
-  { re: /\|\s*(?:sudo\s+)?(?:sh|bash|zsh|dash|ksh|python[0-9.]*|node|perl|ruby|iex|invoke-expression)\b/i, why: "pipes downloaded code into an interpreter" },
+  // rm's `--recursive` and `--force` in any abbreviation getopt_long accepts (no other rm option starts with r or f).
+  {
+    re: new RegExp(`(^|\\s)rm\\b(?=[^|;&]*\\s-)[^|;&]*\\b(?:-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|(?=[^|;&]*\\s(?:${longOpt("recursive", 1)}|-[a-z]*r))(?=[^|;&]*\\s(?:${longOpt("force", 1)}|-[a-z]*f)))`, "i"),
+    why: "recursive force-delete (rm -rf)",
+  },
+  // PowerShell's `iex` / `Invoke-Expression` runs the text piped into it, as `sh` does (`irm <url> | iex`). The
+  // interpreter may be named by path (`| /bin/sh`) or module (`| Microsoft.PowerShell.Utility\Invoke-Expression`).
+  { re: /\|\s*(?:sudo\s+)?(?:[^\s|;&]*[\\/])?(?:sh|bash|zsh|dash|ksh|python[0-9.]*|node|perl|ruby|iex|invoke-expression)(?:\.exe)?\b/i, why: "pipes downloaded code into an interpreter" },
   { re: /(^|\s)dd\b/i, why: "raw disk write (dd)" },
   { re: /(^|\s)mkfs\b/i, why: "formats a filesystem (mkfs)" },
   { re: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/, why: "fork bomb" },
@@ -128,7 +137,10 @@ function launcherPayload(prog: string, rest: string[]): string | null {
 }
 
 /** The commands a shell runs before the line itself: the inside of `$(...)`, `<(...)`, `>(...)` (PowerShell's
- *  `$(...)` too) and of backticks. An unclosed one runs to the end of the text (fail-closed). */
+ *  `$(...)` too) and of backticks. An unclosed one runs to the end of the text (fail-closed). A backtick escaped
+ *  outside single quotes is text; inside a backtick body `` \` `` is a nested substitution, so the body is unescaped
+ *  one level (`` \` ``, `\\`, `\$`, as bash does) and its nested ones are found when it is classified in turn.
+ *  A backtick inside single quotes still counts (fail-closed). */
 function substitutions(raw: string): string[] {
   const out: string[] = [];
   for (let i = 0; i + 1 < raw.length; i++) {
@@ -141,7 +153,22 @@ function substitutions(raw: string): string[] {
     }
     out.push(raw.slice(i + 2, j));
   }
-  for (const m of raw.matchAll(/`([^`]*)`?/g)) if (m[1]) out.push(m[1]);
+  let single = false;
+  let double = false;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (c === "`") {
+      let j = i + 1;
+      for (; j < raw.length && raw[j] !== "`"; j++) if (raw[j] === "\\") j++;
+      const body = raw.slice(i + 1, j).replace(/\\([`\\$])/g, "$1");
+      if (body) out.push(body);
+      i = j;
+    } else if (single) {
+      if (c === "'") single = false;
+    } else if (c === "\\") i++;
+    else if (c === "'" && !double) single = true;
+    else if (c === '"') double = !double;
+  }
   return out;
 }
 
