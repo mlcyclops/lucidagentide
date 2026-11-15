@@ -334,7 +334,7 @@ describe("the route and the service cannot act", () => {
 
   test("the service imports only the prompt builder: no fleet, no fs, no process", () => {
     const imports = [...service.matchAll(/\bfrom "([^"]+)";/g)].map((m) => m[1]);
-    expect(imports).toEqual(["./ask_lucid.ts", "./ask_lucid_actions.ts", "./ask_lucid_features.ts", "./ask_lucid_followups.ts", "./ask_lucid_briefing.ts", "./ask_lucid_screen.ts", "./ask_lucid_shot.ts"]); // all pure: prompt text, validation, the feature catalog, follow-ups, the briefing views, the screen digest, the picture rules
+    expect(imports).toEqual(["./ask_lucid.ts", "./ask_lucid_actions.ts", "./ask_lucid_features.ts", "./ask_lucid_followups.ts", "./ask_lucid_briefing.ts", "./ask_lucid_screen.ts", "./ask_lucid_shot.ts", "./renderer/image_data_url.ts"]); // all pure: prompt text, validation, the feature catalog, follow-ups, the briefing views, the screen digest, the picture rules, the image data URL checks (P-ASKLUCID.8)
     expect(service).not.toContain("require(");
     expect(service).not.toContain("import(");
   });
@@ -449,6 +449,6 @@ describe("the panel's pure helpers (renderer/ask_lucid_panel.ts)", () => {
     const src = readFileSync(join(import.meta.dir, "renderer", "ask_lucid_panel.ts"), "utf8");
     expect(src.split(".innerHTML").length - 1).toBe(1);
     expect(src).toContain("m.innerHTML = deps.markdown(markdown);");
-    expect(src).toContain('log.appendChild(el("div", "al-msg al-user", text));');
+    expect(src).toContain('const m = el("div", "al-msg al-user", text);');
   });
 });

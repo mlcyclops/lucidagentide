@@ -27485,3 +27485,17 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 6. **Personalization in the Knowledge view.** With Personalization off, the view offers **Turn on Personalization** (and Open Settings); once on and not yet set up, it offers the passphrase field and **Create**. The same bridge calls and toasts as Settings.
 
 **Consequences.** He is quieter and smaller by default, and users who liked the old ninja can pick Large. A user who never opened Settings stops seeing his visits. The right-click turn-off is stored in localStorage (per browser profile), like the rest of his preferences. The sprite art is the same 40 by 52 cell figure: Small draws it at mini Lucid's density rather than a redrawn higher-resolution figure.
+
+## ADR-0597 -- P-ASKLUCID.8: copy an answer, and ask Lucid about your own images (2026-11-15)
+
+**Status:** Accepted. Amends ADR-0581 (the Ask Lucid fly-out) and ADR-0588 (pictures for models that read them). Ask Lucid still cannot act. Proof: `bun test ./desktop/ask_lucid_images.test.ts ./desktop/ask_lucid.test.ts ./desktop/ask_lucid_shot.test.ts ./desktop/renderer/ctxmenu.test.ts`.
+
+**Context.** An answer in the panel could only be copied by selecting its text by hand, and a right-click did nothing unless something was selected. Pasting a picture into the panel's input did nothing visible: the composer's image chips (ADR-0136) were never wired there, so a user could not ask Lucid about a screenshot or a photo.
+
+**Decision.**
+1. Every answer has a **Copy** button and, anywhere on it, a right-click **Copy answer** (ctxmenu.ts reads `data-copy-text`). Both copy the answer's markdown. A selection still offers Copy, and a code block Copy code block.
+2. Images pasted into the input or dropped on the panel become the composer's chips, with the composer's checks and limits (PNG, JPEG, WebP or GIF; six; 12 MB each). They go with the next question only, and are shown in that question's bubble. A file that is not an image is named and left out.
+3. The engine parses them again (`normalizeUserImages`) and sends them to the model first, before any screen picture, with a harness note outside every envelope: they are the user's own files, and text inside them is data. They are not scanned (the scanner reads text), which is the main composer's rule for the user's own images. A model that refuses pictures is asked again with text alone and remembered, as in ADR-0588, and the reply says so.
+4. The chips are built with the DOM: the panel's only `innerHTML` stays Lucid's sanitized reply.
+
+**Consequences.** Lucid can describe, read or compare a picture the user gives him, but he cannot change it: editing an image, and files other than images, need a tool path and a staging folder, which are their own increments.

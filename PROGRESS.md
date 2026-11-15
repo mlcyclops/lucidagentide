@@ -6237,3 +6237,8 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-15):** the prompt-bar ninja and the Arcade at Small (mini Lucid's size, the default) or Large (classic); he rests in the bar's right corner practicing, meditating or typing and walks across about every five minutes; double-click dashes him off, right-click turns him off everywhere with a Turn back on toast; Off by default outside the LUCID Agent role; his colors follow the color theme (runner and Ask Lucid header); the Knowledge view turns on Personalization and creates the passphrase in place.
 - **stubbed:** the figure is the same 40 by 52 cell art at mini Lucid's density, not a redrawn higher-resolution sprite. His preferences stay in localStorage, per browser profile.
 - **next:** a tester runs both sizes on a 1x and a 2x display and every Arcade game at Small, then this rebases onto the benchmark commits and joins PR #625.
+
+## P-ASKLUCID.8 (ADR-0597): copy an answer, and ask Lucid about your own images
+- **shipped (2026-11-15):** a Copy button and a right-click Copy answer on every Ask Lucid answer; images pasted or dropped into the panel become the composer's chips and go to the model first, parsed again on the engine, with a refusal from a model that cannot read pictures handled as ADR-0588 does.
+- **stubbed:** Lucid cannot edit an image or read a document yet; a non-image file dropped on the panel is named and left out.
+- **next:** the attachments increment (a "+" menu and a scanned, managed staging folder for files on all three prompt bars), then image editing through a confirmed action that opens the result in the Preview panel.

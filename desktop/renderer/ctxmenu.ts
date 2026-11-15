@@ -30,9 +30,11 @@ export function menuItemsFor(s: CtxTargetState): CtxItem[] {
 // P-COPY.1 (ADR-0203): a READ-ONLY copy menu for non-editable content - selected chat text and code blocks.
 // Electron ships no default menu, so a right-click here previously did nothing; now it offers Copy (of the
 // selection) and, inside a code fence, "Copy code block" (the whole snippet, no manual selecting).
-export type ReadonlyAct = "copy" | "copycode";
+export type ReadonlyAct = "copy" | "copycode" | "copymsg";
 export interface ReadonlyCtxItem { act: ReadonlyAct; label: string; kbd: string; enabled: boolean }
-export interface ReadonlyCtxState { inCode: boolean; hasSelection: boolean }
+/** `inMessage`: the pointer is on a whole answer that can be copied as one (an element with data-copy-text:
+ *  an Ask Lucid answer, P-ASKLUCID.8). */
+export interface ReadonlyCtxState { inCode: boolean; hasSelection: boolean; inMessage?: boolean }
 
 /** Which read-only entries to show. Returns [] when there's nothing to copy, so an ordinary right-click (no
  *  selection, not a code block) keeps its default behavior instead of popping a useless menu. */
@@ -40,6 +42,7 @@ export function readonlyMenuItemsFor(s: ReadonlyCtxState): ReadonlyCtxItem[] {
   const items: ReadonlyCtxItem[] = [];
   if (s.hasSelection) items.push({ act: "copy", label: "Copy", kbd: "Ctrl+C", enabled: true });
   if (s.inCode) items.push({ act: "copycode", label: "Copy code block", kbd: "", enabled: true });
+  if (s.inMessage) items.push({ act: "copymsg", label: "Copy answer", kbd: "", enabled: true });
   return items;
 }
 
@@ -316,12 +319,13 @@ export function installTextContextMenu(deps: CtxMenuDeps = {}): void {
     const pre = target?.closest?.("pre") as HTMLElement | null;
     const inCode = !!(pre && pre.querySelector("code"));
     const selection = (typeof window.getSelection === "function" ? window.getSelection()?.toString() : "") ?? "";
-    const items = readonlyMenuItemsFor({ inCode, hasSelection: !!selection.trim() });
+    const message = (target?.closest?.("[data-copy-text]") as HTMLElement | null)?.dataset.copyText ?? "";
+    const items = readonlyMenuItemsFor({ inCode, hasSelection: !!selection.trim(), inMessage: !!message.trim() });
     if (!items.length) return; // nothing to copy → keep the default behavior
     e.preventDefault();
     spawnMenu(e.clientX, e.clientY, items.map((it) => ({
       label: it.label, kbd: it.kbd, enabled: it.enabled,
-      run: () => { void copyText(it.act === "copycode" ? (pre?.querySelector("code")?.textContent ?? "") : selection, deps); },
+      run: () => { void copyText(it.act === "copycode" ? (pre?.querySelector("code")?.textContent ?? "") : it.act === "copymsg" ? message : selection, deps); },
     })));
   });
 }

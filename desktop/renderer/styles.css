@@ -7877,6 +7877,17 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .al-msg.al-lucid{align-self:stretch;background:var(--bg-2);border:1px solid var(--line-soft);color:var(--txt-1)}
 .al-msg.al-lucid > :first-child{margin-top:0}
 .al-msg.al-lucid > :last-child{margin-bottom:0}
+/* P-ASKLUCID.8: Copy on every answer; faint until the answer is hovered or the button focused. */
+.al-msg.al-lucid{position:relative}
+.al-msg.al-lucid > .al-copy{display:block;margin:6px 0 0 auto;padding:2px 8px;border-radius:6px;border:1px solid var(--line-soft);background:transparent;color:var(--txt-4);font:inherit;font-size:11px;white-space:nowrap;cursor:pointer;opacity:.55;transition:opacity var(--t),color var(--t)}
+.al-msg.al-lucid:hover > .al-copy,.al-msg.al-lucid > .al-copy:focus-visible{opacity:1;color:var(--txt-2)}
+.al-msg.al-lucid > .al-copy.done{opacity:1;color:var(--accent)}
+/* P-ASKLUCID.8: pasted or dropped images, as the composer's chips, and in the question they went with. */
+.al-thumbs{display:flex;flex-wrap:wrap;gap:8px;padding:0 12px 8px}
+.al-thumbs[hidden]{display:none}
+.al-user-imgs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.al-user-img{width:72px;height:72px;object-fit:cover;border-radius:var(--r-sm);border:1px solid var(--line)}
+.al-panel.al-drop{outline:2px dashed rgb(var(--accent-rgb) / .55);outline-offset:-6px}
 .al-msg.al-err{align-self:stretch;background:var(--red-dim);border:1px solid rgb(var(--sh-rgb) / .2);color:var(--red-txt)}
 .al-meta{font-size:11px;line-height:1.4;color:var(--txt-4);margin:-4px 2px 0}
 /* P-ASKLUCID.4 (ADR-0585): the quick row above the composer. The CHIPS wrap onto a second row when they do not fit

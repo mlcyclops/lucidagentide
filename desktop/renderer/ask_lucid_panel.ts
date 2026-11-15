@@ -18,6 +18,8 @@ import { ASK_KIND_LABEL, ASK_RISK_LABEL, actionDetails, type AskAction } from ".
 import { shotSkipLine, type ShotSkip } from "../ask_lucid_shot.ts"; // P-ASKLUCID.7 (ADR-0588): pure, no imports
 import { BRIEF_QUESTION } from "../ask_lucid_briefing.ts"; // P-ASKLUCID.4 (ADR-0585): pure, no imports
 import { createDock, type DockHandle } from "./dock.ts";
+import { copyToClipboard } from "./ctxmenu.ts"; // P-ASKLUCID.8: the answer's Copy button
+import { acceptAttachment, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, type Attachment } from "./composer_attachments.ts"; // P-ASKLUCID.8: the composer's image chips
 import { followMode, followupRecs, noteMiss, noteOwnQuestion, noteUsed, parseMemory, rank, REC_LIMITS, REC_MEMORY_KEY, type Follow, type Rec, type RecMemory, type RecSignals } from "./lucid_recs.ts"; // P-ASKLUCID.5 (ADR-0586)
 import { mountMiniMascot, type MiniMascotHandle, type MiniState } from "./mascot_mini.ts";
 
@@ -38,6 +40,13 @@ export interface AskReplyView {
   followups?: string[];
   /** P-ASKLUCID.7 (ADR-0588): "sent" when a picture of the screen went with the question, else why not. */
   picture?: string;
+  /** P-ASKLUCID.8: what happened to the images the user attached. */
+  attached?: "sent" | "model-refused";
+}
+
+/** PURE: the note under a reply when the model could not look at the user's images. */
+export function attachedLine(a: AskReplyView["attached"]): string {
+  return a === "model-refused" ? "This model cannot read images, so Lucid answered from your text alone. Pick a model that reads images to ask about a picture." : "";
 }
 
 /** What happened when the user confirmed an action. `message` is shown on the card. */
@@ -97,6 +106,8 @@ export interface AskExtrasView {
   unusedFeatures?: string[];
   /** P-ASKLUCID.7 (ADR-0588): a picture of the screen, already scaled and painted over. */
   shot?: unknown;
+  /** P-ASKLUCID.8: images the user pasted or dropped, as data URLs. */
+  images?: string[];
 }
 
 export interface AskLucidDeps {
@@ -256,6 +267,55 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     engaged = true; // settled: the same set is never counted twice
   };
 
+  // P-ASKLUCID.8: images pasted or dropped into the panel, shown as the composer's chips above the input and
+  // sent with the next question only. Same checks and limits as the composer (composer_attachments.ts).
+  let attached: Attachment[] = [];
+  let attachSeq = 0;
+  const thumbs = el("div", "al-thumbs");
+  thumbs.hidden = true;
+  // Built with the DOM (the composer's chip classes), so the panel's only innerHTML stays Lucid's sanitized reply.
+  const renderThumbs = (): void => {
+    thumbs.replaceChildren(...attached.map((a) => {
+      const chip = el("div", "cx-thumb");
+      chip.title = a.name || "pasted image";
+      const img = el("img", "cx-thumb-img");
+      img.alt = "attached image";
+      img.src = a.dataUrl;
+      const x = el("button", "cx-thumb-x", "×");
+      x.type = "button";
+      x.title = "Remove image";
+      x.setAttribute("aria-label", "Remove image");
+      x.dataset.attRemove = a.id;
+      chip.append(img, x);
+      return chip;
+    }));
+    thumbs.hidden = attached.length === 0;
+  };
+  thumbs.addEventListener("click", (e) => {
+    const id = (e.target as HTMLElement).closest<HTMLElement>("[data-att-remove]")?.dataset.attRemove;
+    if (!id) return;
+    attached = attached.filter((a) => a.id !== id);
+    renderThumbs();
+  });
+  const attachNote = (text: string): void => { log.appendChild(el("div", "al-meta", text)); scrollDown(); };
+  /** Stage image files; returns how many were images. Anything else is named and left out. */
+  const stageFiles = (files: readonly File[]): number => {
+    const images = files.filter((f) => f.type.startsWith("image/"));
+    const others = files.length - images.length;
+    if (others > 0) attachNote(`${others === 1 ? "One file was" : `${others} files were`} not attached: Ask Lucid takes images (PNG, JPEG, WebP or GIF) for now.`);
+    for (const f of images) {
+      if (f.size > MAX_ATTACHMENT_BYTES) { attachNote(`"${f.name}" was not attached: each image must be under ${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB.`); continue; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const r = acceptAttachment(attached, String(reader.result), `al_${++attachSeq}`, f.name);
+        if (r.ok && r.attachment) { attached = [...attached, r.attachment]; renderThumbs(); }
+        else attachNote(`"${f.name || "The image"}" was not attached: ${r.reason ?? "it could not be read"}.`);
+      };
+      reader.readAsDataURL(f);
+    }
+    return images.length;
+  };
+
   const form = el("form", "al-form");
   const input = el("textarea", "al-input");
   input.rows = 1;
@@ -264,7 +324,25 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
   const sendBtn = el("button", "al-send", "Ask");
   sendBtn.type = "submit";
   form.append(input, sendBtn);
-  panel.append(log, quick, form);
+  panel.append(log, quick, thumbs, form);
+  input.addEventListener("paste", (e) => {
+    const files = [...(e.clipboardData?.items ?? [])].filter((i) => i.kind === "file").map((i) => i.getAsFile()).filter((f): f is File => !!f);
+    if (files.length && stageFiles(files) > 0) e.preventDefault(); // text paste stays the textarea's own
+  });
+  panel.addEventListener("dragover", (e) => {
+    if (!e.dataTransfer?.types.includes("Files")) return;
+    e.preventDefault();
+    panel.classList.add("al-drop");
+  });
+  panel.addEventListener("dragleave", (e) => { if (!panel.contains(e.relatedTarget as Node | null)) panel.classList.remove("al-drop"); });
+  panel.addEventListener("drop", (e) => {
+    panel.classList.remove("al-drop");
+    const files = [...(e.dataTransfer?.files ?? [])];
+    if (!files.length) return;
+    e.preventDefault();
+    stageFiles(files);
+    input.focus();
+  });
 
   const pillIn = el("span", "al-pill-in", "Ask Lucid");
 
@@ -289,9 +367,20 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
 
   const scrollDown = (): void => { log.scrollTop = log.scrollHeight; };
 
-  const addUser = (text: string): void => {
+  const addUser = (text: string, images: readonly Attachment[] = []): void => {
     welcome.remove();
-    log.appendChild(el("div", "al-msg al-user", text));
+    const m = el("div", "al-msg al-user", text);
+    if (images.length) {
+      const row = el("div", "al-user-imgs");
+      for (const a of images) {
+        const img = el("img", "al-user-img");
+        img.alt = a.name ?? "attached image";
+        img.src = a.dataUrl;
+        row.appendChild(img);
+      }
+      m.prepend(row);
+    }
+    log.appendChild(m);
     scrollDown();
   };
   const addLucid = (markdown: string, meta?: string): void => {
@@ -299,6 +388,21 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     const m = el("div", "al-msg al-lucid");
     m.innerHTML = deps.markdown(markdown); // the chat's own sanitizing renderer
     deps.enhance?.(m);
+    // P-ASKLUCID.8: the whole answer copies as its markdown, from the button or from a right-click anywhere on
+    // it (ctxmenu.ts reads data-copy-text).
+    m.dataset.copyText = markdown;
+    const copy = el("button", "al-copy", "Copy");
+    copy.type = "button";
+    copy.title = "Copy this answer";
+    copy.setAttribute("aria-label", "Copy this answer");
+    copy.addEventListener("click", () => {
+      void copyToClipboard(markdown).then((ok) => {
+        copy.textContent = ok ? "Copied" : "Copy blocked";
+        copy.classList.toggle("done", ok);
+        setTimeout(() => { copy.textContent = "Copy"; copy.classList.remove("done"); }, 1400);
+      });
+    });
+    m.appendChild(copy);
     log.appendChild(m);
     if (meta) log.appendChild(el("div", "al-meta", meta));
     scrollDown();
@@ -350,8 +454,12 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
   };
 
   function send(raw: string, more: AskExtrasView = {}, fromRec = false): void {
-    const text = raw.trim();
+    // P-ASKLUCID.8: images alone are a question too.
+    const text = raw.trim() || (attached.length ? `Look at the attached image${attached.length > 1 ? "s" : ""}.` : "");
     if (!text || busy) return;
+    const images = attached;
+    attached = [];
+    renderThumbs();
     // A question the user wrote is not a miss: they knew what to ask.
     if (!fromRec) saveMemory(noteOwnQuestion(memory));
     engaged = true;
@@ -361,7 +469,7 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     sendBtn.disabled = true;
     input.value = "";
     autosize();
-    addUser(text);
+    addUser(text, images);
     setState("working");
     const history = historyToSend(turns);
     turns.push({ role: "user", text });
@@ -370,7 +478,7 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     const extra: Promise<AskExtrasView> = deps.extras ? deps.extras().catch(() => ({})) : Promise.resolve({});
     // P-ASKLUCID.7 (ADR-0588): the picture is taken at the same moment as the text view of the screen.
     const shot = deps.shot ? deps.shot().catch(() => null) : Promise.resolve(null);
-    void Promise.all([screen, extra, shot]).then(([s, x, p]) => deps.ask(text, history, { ...x, ...more, ...(s ? { screen: s } : {}), ...(s && p ? { shot: p } : {}) })).catch(() => null).then((r) => {
+    void Promise.all([screen, extra, shot]).then(([s, x, p]) => deps.ask(text, history, { ...x, ...more, ...(s ? { screen: s } : {}), ...(s && p ? { shot: p } : {}), ...(images.length ? { images: images.map((a) => a.dataUrl) } : {}) })).catch(() => null).then((r) => {
       busy = false;
       sendBtn.disabled = false;
       if (r?.ok && r.reply) {
@@ -379,6 +487,8 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
         for (const a of r.actions ?? []) addAction(a);
         const noPicture = shotSkipLine(r.picture as ShotSkip | undefined);
         if (noPicture) log.appendChild(el("div", "al-meta", noPicture));
+        const noImages = attachedLine(r.attached);
+        if (noImages) log.appendChild(el("div", "al-meta", noImages));
         const dropped = droppedLine(r.actionsDropped ?? 0);
         if (dropped) log.appendChild(el("div", "al-meta", dropped));
         setState("done");
@@ -386,6 +496,8 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
         if (r.followups?.length) showRecs(followupRecs(r.followups)); else void refreshRecs();
       } else {
         turns.pop(); // a question that was never answered is not history
+        attached = [...images, ...attached].slice(0, MAX_ATTACHMENTS); // the images were not seen: give them back to retry
+        renderThumbs();
         addError(r?.error ?? "Lucid could not be reached. Check that the app is still running, then try again.");
         setState("error");
       }
