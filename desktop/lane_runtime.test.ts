@@ -11,6 +11,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { HolderPool } from "./lane_holder.ts";
 import { installResources, LaneRuntime } from "./lane_runtime.ts";
 
 const made: string[] = [];
@@ -117,5 +118,34 @@ describe("one copy per build, and cleanup", () => {
     // Once no record names it, it goes; the current copy never does.
     expect(second.cleanup(new Set())).toEqual([first.key]);
     expect(readdirSync(join(data, "lane-runtime"))).toEqual([second.key]);
+  });
+
+  test("one holder record that cannot be read: that pass deletes nothing, not even the live lane's copy", async () => {
+    const { resources, data } = install();
+    const first = runtime(resources, data);
+    await first.prepare();
+    writeFileSync(join(resources, "runtimes", "bun.exe"), "a newer bun, another size");
+    const second = runtime(resources, data);
+    await second.prepare();
+    mkdirSync(join(data, "lane-runtime", "old-1234567890"));
+    const pool = new HolderPool(join(data, "lane-holders"), "lucid-holder-unused", second);
+    // A live lane on the first build, its record as the pool writes it.
+    const holderId = "live-1a2b";
+    const endpoint = process.platform === "win32" ? `\\\\.\\pipe\\lucid-holder-${holderId}-${"0".repeat(32)}` : join(pool.dir, `${holderId}.sock`);
+    writeFileSync(join(pool.dir, "live.lane.json"), JSON.stringify({ v: 1, laneId: "live", holderId, endpoint, token: "t".repeat(64), runtime: first.key }));
+    // Another lane's record, cut off mid-write: whatever copy it named is unknown.
+    writeFileSync(join(pool.dir, "other.lane.json"), `{"v":1,"laneId":"other","runtime":"${first.key}`);
+    const before = readdirSync(join(data, "lane-runtime")).sort();
+
+    expect(pool.all().map((r) => r.laneId)).toEqual(["live"]);
+    expect(pool.runtimesInUse()).toBeNull();
+    expect(pool.cleanupRuntimes()).toBeNull();
+    expect(readdirSync(join(data, "lane-runtime")).sort()).toEqual(before);
+
+    // Once every record reads, the pass runs: the live lane's copy and the current one stay.
+    rmSync(join(pool.dir, "other.lane.json"));
+    expect(pool.runtimesInUse()).toEqual(new Set([first.key]));
+    expect(pool.cleanupRuntimes()).toEqual(["old-1234567890"]);
+    expect(readdirSync(join(data, "lane-runtime")).sort()).toEqual([first.key, second.key].sort());
   });
 });

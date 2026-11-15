@@ -1681,6 +1681,12 @@ app.whenReady().then(async () => {
       }).catch(() => null));
       return d && Array.isArray(d.stopped) ? { stopped: d.stopped.filter((x): x is string => typeof x === "string") } : null;
     },
+    commit: async (on) => {
+      const d = await engineData(await fetch(`http://127.0.0.1:${PORT}/api/fleet/commit-install`, {
+        method: "POST", headers: { "x-lucid-token": MAIN_TOKEN, "content-type": "application/json" }, body: JSON.stringify({ on }), signal: AbortSignal.timeout(5000),
+      }).catch(() => null));
+      return d && d.committed === on && typeof d.pending === "number" ? { pending: d.pending } : null;
+    },
   });
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });

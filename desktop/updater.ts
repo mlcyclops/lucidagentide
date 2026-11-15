@@ -21,14 +21,7 @@
 import { app, BrowserWindow, dialog } from "electron";
 import { autoUpdater } from "electron-updater";
 import { updatePolicy } from "./managed_config.ts";
-import { laneNames, updatePrompt, type UpdateCheck } from "./update_lanes.ts";
-
-/** P-HOLDER.2 (ADR-0574): the engine's view of the lanes an update meets, and its stop of the ones the person chose
- *  (only those still idle or stuck). Null when the engine did not answer (the prompt then says nothing of lanes). */
-export interface UpdateLaneDeps {
-  check(): Promise<UpdateCheck | null>;
-  stop(laneIds: string[]): Promise<{ stopped: string[] } | null>;
-}
+import { decideInstall, updatePrompt, type UpdateLaneDeps } from "./update_lanes.ts";
 
 export function initAutoUpdate(getWindow: () => BrowserWindow | null, lanes?: UpdateLaneDeps): void {
   if (!app.isPackaged) return; // dev: no feed, would throw on missing config
@@ -63,21 +56,12 @@ export function initAutoUpdate(getWindow: () => BrowserWindow | null, lanes?: Up
       message: `LucidAgentIDE ${info.version} is ready to install.`,
       detail: p.detail,
     });
-    const choice = p.choices[response];
-    if (!choice?.install) return;
-    if (choice.stop && lanes) {
-      await lanes.stop(p.stop).catch(() => null);
-      // Look again: a lane that started working meanwhile was kept, and one from the install folder blocks the install.
-      const again = await lanes.check().catch(() => null);
-      if (!again) {
-        // The lanes could not be read after the stop: do not install over what may still be running.
-        await dialog.showMessageBox(win ?? undefined!, { type: "warning", buttons: ["OK"], title: "Update waits", message: "The update did not install.", detail: "LUCID could not check the agent lanes after stopping them. It is offered again at the next launch." });
-        return;
-      }
-      if (again.lanes.some((l) => l.blocksInstall)) {
-        await dialog.showMessageBox(win ?? undefined!, { type: "warning", buttons: ["OK"], title: "Update waits", message: "The update did not install.", detail: `${laneNames(again.lanes.filter((l) => l.blocksInstall))} still ${again.blocking === 1 ? "runs" : "run"} from the install folder. It is offered again at the next launch.` });
-        return;
-      }
+    // Every install choice reads the lanes one final time (a lane may have started while the prompt was open), with
+    // new held lanes kept off the install folder from then on; any doubt, and the update waits.
+    const d = await decideInstall(p.choices[response], p.stop, lanes);
+    if (!d.install) {
+      if (d.waits) await dialog.showMessageBox(win ?? undefined!, { type: "warning", buttons: ["OK"], title: "Update waits", message: "The update did not install.", detail: d.waits });
+      return;
     }
     setImmediate(() => autoUpdater.quitAndInstall());
   });

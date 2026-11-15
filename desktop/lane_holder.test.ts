@@ -354,6 +354,23 @@ describe.skipIf(!BIN)("P-HOLDER.1: lanes under lucid-holder", () => {
   }, TIMEOUT);
 });
 
+describe("P-HOLDER.2: once an update install is committed, no held lane starts from the install folder", () => {
+  test("a launch that would run from the install folder is refused until the commit is lifted", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "lucid-commit-"));
+    try {
+      // No runtime copy: every launch of this pool would run from the install folder.
+      const pool = new HolderPool(join(dir, "lane-holders"), join(dir, "no-such-holder.exe"));
+      expect(pool.commitInstall(true)).toBe(0);
+      await expect(pool.launch("late", "agent", [], dir, {})).rejects.toThrow('lane "late" did not start: an update is installing, and this engine has no lane runtime copy (a source checkout, or LUCID_LANE_RUNTIME=install), so it would run from the install folder');
+      expect(pool.commitInstall(false)).toBe(0);
+      // Lifted: the launch is tried again (this holder binary does not exist, so it fails later, at the spawn).
+      await expect(pool.launch("late", "agent", [], dir, {})).rejects.toThrow("lane holder did not start");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("LH-07: the last-resort kill signals only the processes the holder reported", () => {
   const id = { pid: 400, childPid: 500, start: "s-400", childStart: "s-500" };
   /** What was signalled, and whether the holder counts as gone (its record may go). `exists`: the live pids. */

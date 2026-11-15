@@ -92,19 +92,53 @@ export function updatePrompt(version: string, c: UpdateCheck | null | "unavailab
 
 const GROUPS: readonly UpdateLaneGroup[] = ["working", "idle", "stuck"];
 
-/** The engine's `update-check` answer as the IDE's main process reads it, or null when it is not one. */
+/** The engine's `update-check` answer as the IDE's main process reads it, or null when it is not one. All or nothing:
+ *  one row (or one required field) this parser cannot read makes the whole answer unreadable, so the prompt offers
+ *  only "Later". Skipping the row, or reading a missing `blocksInstall` as false, could install over a lane that
+ *  still runs from the install folder. */
 export function parseUpdateCheck(v: unknown): UpdateCheck | null {
   if (!v || typeof v !== "object" || !("lanes" in v) || !Array.isArray(v.lanes)) return null;
   const lanes: UpdateLane[] = [];
   for (const raw of v.lanes) {
-    if (!raw || typeof raw !== "object") continue;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
     const l: Record<string, unknown> = { ...raw };
     const group = GROUPS.find((g) => g === l.group);
-    if (typeof l.id !== "string" || typeof l.name !== "string" || typeof l.status !== "string" || !group) continue;
-    lanes.push({ id: l.id, name: l.name.slice(0, 80), status: l.status as LaneView["status"], group, held: l.held === true, blocksInstall: l.blocksInstall === true, lastActivityAt: typeof l.lastActivityAt === "number" ? l.lastActivityAt : 0 });
+    if (typeof l.id !== "string" || typeof l.name !== "string" || typeof l.status !== "string" || !group) return null;
+    if (typeof l.held !== "boolean" || typeof l.blocksInstall !== "boolean") return null;
+    if (typeof l.lastActivityAt !== "number" || !Number.isFinite(l.lastActivityAt)) return null;
+    lanes.push({ id: l.id, name: l.name.slice(0, 80), status: l.status as LaneView["status"], group, held: l.held, blocksInstall: l.blocksInstall, lastActivityAt: l.lastActivityAt });
   }
   const n = (g: UpdateLaneGroup) => lanes.filter((l) => l.group === g).length;
   return { lanes, working: n("working"), idle: n("idle"), stuck: n("stuck"), blocking: lanes.filter((l) => l.blocksInstall).length };
+}
+
+/** P-HOLDER.2 (ADR-0574): the engine's view of the lanes an update meets, its stop of the ones the person chose (only
+ *  those still idle or stuck), and its install commit (`on: true`: no held lane starts from the install folder from
+ *  now on; `pending` counts such starts still in progress; `on: false` lifts it). Null when the engine did not answer. */
+export interface UpdateLaneDeps {
+  check(): Promise<UpdateCheck | null>;
+  stop(laneIds: string[]): Promise<{ stopped: string[] } | null>;
+  commit(on: boolean): Promise<{ pending: number } | null>;
+}
+
+/** What follows a click in the update prompt: install, or the reason the update waits ("Update waits" dialog), or
+ *  nothing (`waits: null`, "Later"). Every install choice ends here: the install is committed (no new held lane starts
+ *  from the install folder), the chosen lanes are stopped, and the lanes are read one final time. It installs only
+ *  when that read succeeds and no lane runs, or is starting, from the install folder; otherwise the commit is lifted.
+ *  `lanes` undefined: there is no fleet to ask. */
+export async function decideInstall(choice: UpdateChoice | undefined, stopIds: readonly string[], lanes: UpdateLaneDeps | undefined): Promise<{ install: true } | { install: false; waits: string | null }> {
+  if (!choice?.install) return { install: false, waits: null };
+  if (!lanes) return { install: true };
+  const refuse = async (waits: string) => { await lanes.commit(false).catch(() => null); return { install: false as const, waits }; };
+  if (choice.stop && stopIds.length) await lanes.stop([...stopIds]).catch(() => null);
+  const committed = await lanes.commit(true).catch(() => null);
+  if (!committed) return refuse("LUCID could not keep new agent lanes from starting from the install folder. It is offered again at the next launch.");
+  if (committed.pending > 0) return refuse(`${committed.pending === 1 ? "An agent lane is" : `${committed.pending} agent lanes are`} starting from the install folder. It is offered again at the next launch.`);
+  const last = await lanes.check().catch(() => null);
+  if (!last) return refuse("LUCID could not check the agent lanes right before installing. It is offered again at the next launch.");
+  const blocking = last.lanes.filter((l) => l.blocksInstall);
+  if (blocking.length) return refuse(`${laneNames(blocking)} still ${blocking.length === 1 ? "runs" : "run"} from the install folder. It is offered again at the next launch.`);
+  return { install: true };
 }
 
 /** Stop the lanes in `ids` that are idle or stuck NOW (one that started working since the prompt was shown is kept,
