@@ -363,6 +363,7 @@ export interface LaneImage { data: string; mimeType: string }
 /** P-QUEUE-IMG.1: a staged lane prompt read back whole. P-ATTACH.1 (ADR-0598): with its staged file ids. */
 export interface StagedLanePromptView { text: string; images: LaneImage[]; attachments?: string[] }
 import type { AttachPolicyView, StageResult } from "../attach_kinds.ts"; // P-ATTACH.1 (ADR-0598): types only
+import type { AttachDescribeResult } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598): types only
 /** P-FLEET.L3 (mirrors P-CHAT.1): a write's content, an edit's before/after pair, or a hashline patch. */
 export interface LaneToolCode { path: string; content?: string; oldText?: string; newText?: string; patch?: string }
 export type LaneEvent =
@@ -1178,6 +1179,9 @@ export interface LucidBridge {
   attachmentStage(f: { name: string; dataBase64: string; mimeType?: string; sourcePath?: string }): Promise<StageResult | null>;
   /** P-ATTACH.1: drop a staged file (a chip removed before send). */
   attachmentRemove(id: string): Promise<boolean>;
+  /** P-ATTACH.1 (ADR-0598): already-staged files by id, so a queued lane prompt brought back with Update keeps
+   *  its files without uploading them again. `missing`: ids whose copy expired or never existed. Null = no answer. */
+  attachmentDescribe(ids: string[]): Promise<AttachDescribeResult | null>;
   /** P-ATTACH.1: the managed attachment policy (on/off, files per message, bytes per file, retention). */
   attachmentPolicy(): Promise<AttachPolicyView | null>;
   /** P-ATTACH.1: where a dropped or picked File lives on disk (Electron); null in a plain browser. */
@@ -2117,6 +2121,7 @@ export const bridge: LucidBridge = {
   // P-ATTACH.1 (ADR-0598): staging, removal and the policy; the path comes from the preload (Electron only).
   attachmentStage: (f) => post("/api/attachments", f),
   attachmentRemove: async (id) => (await post("/api/attachments/remove", { id }))?.removed === true,
+  attachmentDescribe: (ids) => post("/api/attachments/describe", { ids }),
   attachmentPolicy: () => getData("/api/attachments/policy"),
   pathForFile: (file) => { try { return shell?.pathForFile?.(file) || null; } catch { return null; } },
   fleetQueueRemove: (laneId, index, expect) => post("/api/fleet/queue/remove", { laneId, index, ...(expect !== undefined ? { expect } : {}) }),

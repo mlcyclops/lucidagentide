@@ -22,11 +22,16 @@ import { popover } from "./ui.ts";
 
 // ───────────────────────── the engine seam ─────────────────────────
 
-/** The four bridge calls this module needs (desktop/renderer/bridge.ts implements them). Injected, so the
+/** P-ATTACH.1 (ADR-0598): POST /api/attachments/describe. `missing` = ids whose copy is gone. */
+export interface AttachDescribeResult { ok: boolean; attachments?: StagedAttachment[]; missing?: string[]; error?: string }
+
+/** The bridge calls this module needs (desktop/renderer/bridge.ts implements them). Injected, so the
  *  tray logic is tested with a fake. */
 export interface AttachBridge {
   attachmentStage(f: { name: string; dataBase64: string; mimeType?: string; sourcePath?: string }): Promise<StageResult | null>;
   attachmentRemove(id: string): Promise<boolean>;
+  /** Already-staged files by id (a queued prompt brought back). Null = no answer. */
+  attachmentDescribe(ids: string[]): Promise<AttachDescribeResult | null>;
   attachmentPolicy(): Promise<AttachPolicyView | null>;
   pathForFile(file: File): string | null;
 }
@@ -140,11 +145,10 @@ const plural = (n: number, one: string, many: string): string => `${n.toLocaleSt
 /** PURE: the chip's premium tooltip (a data-tip value): the full file name as the title, then one line each
  *  for where it came from, its type, its size, the managed copy, and its text or why it was blocked. */
 export function chipTip(v: ChipView, retentionDays: number = ATTACH_LIMITS.retentionDays): string {
-  const lines = [
-    `Source: ${v.sourcePath || "Not available in the browser"}`,
-    `Type: ${v.ext ? `.${v.ext} (${v.label})` : v.label}`,
-    `Size: ${formatBytes(v.bytes)}`,
-  ];
+  const lines: string[] = [];
+  // A sent chip without a source (a lane turn keeps no paths) has nothing to say about where it came from.
+  if (v.sourcePath || v.state !== "sent") lines.push(`Source: ${v.sourcePath || "Not available in the browser"}`);
+  lines.push(`Type: ${v.ext ? `.${v.ext} (${v.label})` : v.label}`, `Size: ${formatBytes(v.bytes)}`);
   if (v.stagedPath) lines.push(`Copy: ${v.stagedPath} (kept ${plural(retentionDays, "day", "days")})`);
   if (v.state === "blocked") lines.push(`Blocked: ${v.reason || "It could not be attached."}`);
   else if (v.state === "staging") lines.push("Copying and scanning");
@@ -227,6 +231,10 @@ export interface TrayModel {
   take(): StagedAttachment[];
   /** Put staged files back on the bar as ready. */
   restore(list: readonly StagedAttachment[]): void;
+  /** P-ATTACH.1 (ADR-0598): bring files the engine already staged (a queued prompt pulled back with Update)
+   *  onto the bar without uploading them again. Unlike `restore`, the policy and the per-message limit
+   *  apply: a file past the limit, over the size limit, or with attachments off lands as a blocked chip. */
+  adopt(list: readonly StagedAttachment[]): Promise<{ adopted: number; refused: number }>;
   /** Forget everything on the bar. Copies stay until their retention ends: an agent may still be reading. */
   clear(): void;
   policy(): Promise<EffectivePolicy>;
@@ -350,6 +358,26 @@ export function createTrayModel(deps: TrayDeps): TrayModel {
       for (const a of back) list.push({ ...viewOfStaged(a), key: `f${++seq}`, state: "ready", staged: a });
       changed();
     },
+    async adopt(staged) {
+      const pol = await attachPolicy(deps.bridge);
+      const have = new Set(list.map((i) => i.staged?.id).filter(Boolean));
+      let adopted = 0;
+      let refused = 0;
+      for (const a of staged) {
+        if (have.has(a.id)) continue;
+        have.add(a.id);
+        // Fail-closed: an unreachable engine reads as off, so nothing is adopted that the policy may forbid.
+        const why = !pol.enabled ? OFF_REASON
+          : a.bytes > pol.bytes ? `It is larger than the ${formatBytes(pol.bytes)} limit per file.`
+          : used() >= pol.files ? `Up to ${pol.files} files per message, images included.`
+          : null;
+        if (why) { list.push({ ...viewOfStaged(a, "blocked"), key: `f${++seq}`, state: "blocked", reason: why }); refused++; continue; }
+        list.push({ ...viewOfStaged(a), key: `f${++seq}`, state: "ready", staged: a });
+        adopted++;
+      }
+      if (adopted || refused) changed();
+      return { adopted, refused };
+    },
     clear() {
       for (const i of list) if (i.state === "staging") dropped.add(i.key);
       if (!list.length) return;
@@ -445,6 +473,64 @@ export function sentFilesEl(list: readonly StagedAttachment[]): HTMLElement {
   row.className = "att-sent";
   for (const a of list) row.appendChild(attachChipEl(viewOfStaged(a, "sent")));
   return row;
+}
+
+/** P-ATTACH.1 (ADR-0598): what a lane remembers about a file that went with a user turn: display data only,
+ *  never a path or the file's text. */
+export interface SentFileMeta { name: string; ext: string; kind: AttachKind; bytes: number }
+
+/** PURE: the display data of sent files, for a lane's own turn record. */
+export function sentFileMeta(list: readonly StagedAttachment[]): SentFileMeta[] {
+  return list.map((a) => ({ name: a.name, ext: a.ext, kind: a.kind, bytes: a.bytes }));
+}
+
+/** PURE: a remembered sent file as a chip view. The label comes from the name, like the engine's. */
+export function viewOfSentMeta(m: SentFileMeta): ChipView {
+  return { name: m.name, ext: m.ext, kind: m.kind, label: attachKindOf(m.name).label, bytes: m.bytes, state: "sent" };
+}
+
+/** Read-only chips for files remembered on a lane turn (the same look as sentFilesEl). */
+export function sentMetaEl(list: readonly SentFileMeta[]): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "att-sent";
+  for (const m of list) row.appendChild(attachChipEl(viewOfSentMeta(m)));
+  return row;
+}
+
+/** PURE: the note for files of a queued prompt whose copies are gone (expired or removed). */
+export function missingFilesNote(n: number): string | null {
+  if (n <= 0) return null;
+  return n === 1
+    ? "1 attached file is no longer available; add it again."
+    : `${n.toLocaleString("en-US")} attached files are no longer available; add them again.`;
+}
+
+/** What adoptStagedIds did: `ready` chips added, `refused` added as blocked (limits or policy), `missing`
+ *  ids with no copy left, and the note to show for the missing ones (null when none). */
+export interface AdoptIdsResult { ready: number; refused: number; missing: number; note: string | null }
+
+/** P-ATTACH.1 (ADR-0598): put the files of a queued prompt (staged ids) back on a bar without uploading them
+ *  again. The engine says which still exist; the tray applies the limits. An engine that does not answer
+ *  brings nothing back (fail-closed) and every id counts as unavailable. */
+export async function adoptStagedIds(
+  tray: Pick<TrayModel, "adopt">,
+  bridge: Pick<AttachBridge, "attachmentDescribe">,
+  ids: readonly string[],
+): Promise<AdoptIdsResult> {
+  if (!ids.length) return { ready: 0, refused: 0, missing: 0, note: null };
+  let r: AttachDescribeResult | null;
+  try { r = await bridge.attachmentDescribe([...ids]); } catch { r = null; }
+  if (!r?.ok) {
+    const files = plural(ids.length, "attached file was", "attached files were");
+    const why = r?.error || "LUCID's engine did not answer.";
+    return { ready: 0, refused: 0, missing: ids.length, note: `${why} ${files} not brought back; add ${ids.length === 1 ? "it" : "them"} again.` };
+  }
+  // Only ids this prompt carried: an answer naming anything else is ignored.
+  const want = new Set(ids);
+  const found = (r.attachments ?? []).filter((a) => want.has(a.id));
+  const missing = ids.length - found.length;
+  const { adopted, refused } = await tray.adopt(found);
+  return { ready: adopted, refused, missing, note: missingFilesNote(missing) };
 }
 
 // ───────────────────────── the "+" menu ─────────────────────────

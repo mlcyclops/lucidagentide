@@ -24,7 +24,7 @@ import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
 import { popover, setTip, showToast } from "./ui.ts"; // P-FLEET.L18: the per-card group menu; P-PUSH.PAR1: the parallel-push notice; P-TIP.1: setTip
 import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599): premium tooltips, never a native title
-import { bindFileDrop, clipboardFiles, createAttachTray, folderDropNote, isAttachShortcut, mountPlusMenu, pickFiles, plusButtonTip, plusMenuItems, syncPlusButton, type AttachBridge, type AttachTray } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598): files on the lane bars
+import { adoptStagedIds, bindFileDrop, clipboardFiles, createAttachTray, folderDropNote, isAttachShortcut, missingFilesNote, mountPlusMenu, pickFiles, plusButtonTip, plusMenuItems, sentFileMeta, sentMetaEl, syncPlusButton, type AttachBridge, type AttachTray, type SentFileMeta } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598): files on the lane bars
 // P-PUSH.PAR1 (ADR-pending): staged chips get the shared right-click / long-press menu, and Push now runs the
 // prompt in a new worktree lane (the decision rules are pure, in queue_model).
 import { bindItemMenu, copyToClipboard, openCtxMenu, writeClipboard, type CtxMenuEntry } from "./ctxmenu.ts";
@@ -113,13 +113,17 @@ const FLEET_LAYOUT_KEY = "lucid.fleetLayout.v1";
 const POLL_MS = 2500;
 const UP_ARROW = `<svg class="sd-up" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M12 8l-6 7h12z" fill="currentColor"/></svg>`;
 
+/** P-ATTACH.1 (ADR-0598): a lane turn plus the display data of the files that went with it (never paths or
+ *  text). Kept in the lane's own run state, so a card rebuilt on reopen shows the same chips. */
+type GridTurn = LaneTurnRow & { files?: SentFileMeta[] };
+
 /** Per-lane render state: the LATEST server view + the locally accumulated stream transcript. Kept in the
  *  module (not the DOM) so a close/reopen of the panel repaints the full history.
  *  P-FLEET.L7: the turn/tool records ARE lane_transcript's rows, ids and all, so a repaint patches the DOM
  *  by id instead of rebuilding it and the clipboard text needs no second shape to convert into. */
 interface LaneRun {
   view: LaneView;
-  turns: LaneTurnRow[];
+  turns: GridTurn[];
   pending: string;
   pendingThinking: string;
   pendingTools: LaneToolRow[];
@@ -1357,7 +1361,7 @@ function paintFrame(run: LaneRun): void {
     }
     const pushing = pushingLanes.has(v.id);
     const html = v.queued
-      .map((item, i) => `<span class="fleet-q-chip" data-q-row="${i}" data-tip="Right-click or long-press to copy"><b>${i + 1}</b><span class="fleet-q-txt" data-tip="${esc(tipEsc(item.text))}">${esc(item.text)}</span>${item.images ? `<span class="fleet-q-img" data-tip="${item.images} image${item.images === 1 ? "" : "s"} ride with this prompt">${item.images} img</span>` : ""}<button class="fleet-q-btn fleet-q-edit" data-q-edit="${i}" data-tip="Update|Pull this prompt and its images back into the composer to edit" aria-label="Update staged prompt ${i + 1}">Update</button>${pushing
+      .map((item, i) => `<span class="fleet-q-chip" data-q-row="${i}" data-tip="Right-click or long-press to copy"><b>${i + 1}</b><span class="fleet-q-txt" data-tip="${esc(tipEsc(item.text))}">${esc(item.text)}</span>${item.images ? `<span class="fleet-q-img" data-tip="${item.images} image${item.images === 1 ? "" : "s"} ride with this prompt">${item.images} img</span>` : ""}${item.files ? `<span class="fleet-q-img fleet-q-files" data-tip="${item.files} file${item.files === 1 ? "" : "s"} ride with this prompt">${item.files} file${item.files === 1 ? "" : "s"}</span>` : ""}<button class="fleet-q-btn fleet-q-edit" data-q-edit="${i}" data-tip="Update|Pull this prompt, its images and its files back into the composer to edit" aria-label="Update staged prompt ${i + 1}">Update</button>${pushing
         ? `<button class="fleet-q-btn fleet-q-push" data-q-go="${i}" aria-disabled="true" data-tip="Pushing|A new lane on its own worktree is starting for a prompt from this lane" aria-label="Push in progress">Pushing\u2026</button>`
         : `<button class="fleet-q-btn fleet-q-push" data-q-go="${i}" data-tip="Push now|Run this in parallel in a new lane on its own worktree while this lane keeps working" aria-label="Push staged prompt ${i + 1} to a new parallel lane on its own worktree">Push now</button>`}<button class="fleet-q-btn" data-q-up="${i}" data-tip="Run earlier" aria-label="Move staged prompt ${i + 1} up" ${i === 0 ? "disabled" : ""}>\u2191</button><button class="fleet-q-btn" data-q-dn="${i}" data-tip="Run later" aria-label="Move staged prompt ${i + 1} down" ${i === v.queued.length - 1 ? "disabled" : ""}>\u2193</button><button class="fleet-q-btn" data-q-x="${i}" data-tip="Remove" aria-label="Remove staged prompt ${i + 1}">\u00d7</button></span>`)
       .join("");
@@ -1475,7 +1479,7 @@ function chipRow(t: LaneToolRow): HTMLElement {
 }
 
 /** A SETTLED turn. Built once per turn id, then left alone forever - the whole point of the increment. */
-function buildTurn(t: LaneTurnRow): HTMLElement {
+function buildTurn(t: GridTurn): HTMLElement {
   const wrap = el(`<div data-lane-turn="${esc(t.id)}"></div>`);
   if (t.role === "user") {
     const line = el(`<div class="fleet-turn-user"></div>`);
@@ -1483,6 +1487,8 @@ function buildTurn(t: LaneTurnRow): HTMLElement {
     line.append(document.createTextNode(t.text));
     setTip(line, t.text);
     wrap.append(line);
+    // P-ATTACH.1 (ADR-0598): the files that went with this turn, read-only, like the main composer's message.
+    if (t.files?.length) wrap.append(sentMetaEl(t.files));
   } else {
     const thinking = (t.thinking ?? "").trim();
     if (thinking) { const th = el(`<div class="fleet-think"></div>`); th.textContent = thinking; wrap.append(th); }
@@ -1725,7 +1731,8 @@ function sendPrompt(run: LaneRun): void {
   const tray = run.files;
   if (!text && !images.length && !tray?.ids().length) return;
   if (tray?.pending()) { setLaneNote(run, "Files are still being copied and scanned. Send again in a moment."); return; }
-  const fileIds = (tray?.hold() ?? []).map((a) => a.id);
+  const held = tray?.hold() ?? [];
+  const fileIds = held.map((a) => a.id);
   const withFiles = fileIds.length ? fileIds : undefined;
   let filesSettled = false;
   const settleFiles = (accepted: boolean): void => { if (!filesSettled) { filesSettled = true; tray?.settle(fileIds, accepted); } };
@@ -1736,14 +1743,18 @@ function sendPrompt(run: LaneRun): void {
       if (!r?.ok) { onLaneEvent(id, { type: "error", message: r?.reason ?? "could not stage the prompt" }); return; }
       if (input) { input.value = ""; input.style.height = ""; }
       run.attached = [];
-      run.view.queued = [...run.view.queued, { text: text.length > 140 ? `${text.slice(0, 140)}\u2026` : text, images: images.length }];
+      run.view.queued = [...run.view.queued, { text: text.length > 140 ? `${text.slice(0, 140)}\u2026` : text, images: images.length, ...(fileIds.length ? { files: fileIds.length } : {}) }];
       paintFrame(run); paintAttach(run);
     });
     return;
   }
   if (input) { input.value = ""; input.style.height = ""; }
   run.attached = [];
-  run.turns.push({ id: nextId(run, "t"), role: "user", text, tools: [], ...(images.length ? { images: images.map((im) => `data:${im.mimeType};base64,${im.data}`) } : {}) });
+  run.turns.push({
+    id: nextId(run, "t"), role: "user", text, tools: [],
+    ...(images.length ? { images: images.map((im) => `data:${im.mimeType};base64,${im.data}`) } : {}),
+    ...(held.length ? { files: sentFileMeta(held) } : {}), // P-ATTACH.1 (ADR-0598): chips under the turn
+  });
   run.pending = ""; run.pendingThinking = ""; run.pendingTools = [];
   run.streaming = true;
   run.view.status = "working"; // optimistic; the stream's status events correct it
@@ -1756,7 +1767,8 @@ function sendPrompt(run: LaneRun): void {
 /** P-QUEUE-IMG.1 (ADR-0469): Update on a staged chip. The manager hands back the item's FULL text and its
  *  own images (the poll only carries a clipped preview and a count) and they load into this card's
  *  composer: the image strip shows them removable, paste adds more, and Send/Stage uses the edited prompt
- *  (a re-stage appends; the manager queue has no item ids to anchor a slot to). A draft in the card
+ *  (a re-stage appends; the manager queue has no item ids to anchor a slot to). P-ATTACH.1 (ADR-0598): its
+ *  staged files come back as ready chips (restoreLaneFiles), never uploaded again. A draft in the card
  *  composer, text or images, is never overwritten: the Update is refused with a note. */
 function editStaged(run: LaneRun, i: number): void {
   if (!deps) return;
@@ -1770,17 +1782,19 @@ function editStaged(run: LaneRun, i: number): void {
   void deps.fleetQueueTake(id, i).then((r) => {
     if (!r?.ok || !r.item) { void refresh(); setLaneNote(run, `Not updated: ${r?.reason ?? "the engine did not answer"}.`); return; }
     const item = r.item;
+    const fileIds = item.attachments ?? [];
     // Typed or pasted into while the take was in flight: the item is already out of the manager queue, so
-    // it goes back on the end of it rather than over the new draft.
+    // it goes back on the end of it rather than over the new draft (its file ids with it, P-ATTACH.1).
     if (input.value.trim() || run.attached.length || run.files?.count()) {
-      void deps?.fleetQueueAdd(id, item.text, item.images).then((a) => {
+      void deps?.fleetQueueAdd(id, item.text, item.images, fileIds.length ? fileIds : undefined).then(async (a) => {
         void refresh();
         if (a?.ok) { setLaneNote(run, "Your composer got a draft first, so the staged prompt went back on the end of the queue."); return; }
         // Could not re-stage either: the composer is the only place left, so it is added after the draft.
         input.value = [input.value.trim(), item.text].filter(Boolean).join("\n\n");
         run.attached = [...run.attached, ...item.images].slice(0, 6);
         paintAttach(run);
-        setLaneNote(run, `Could not re-stage it (${a?.reason ?? "no answer"}), so it was added after your draft in the composer.`);
+        const lost = (await restoreLaneFiles(run, fileIds)).note;
+        setLaneNote(run, `Could not re-stage it (${a?.reason ?? "no answer"}), so it was added after your draft in the composer.${lost ? ` ${lost}` : ""}`);
       });
       return;
     }
@@ -1790,7 +1804,19 @@ function editStaged(run: LaneRun, i: number): void {
     run.attached = item.images.slice();
     paintAttach(run);
     input.focus();
+    // P-ATTACH.1 (ADR-0598): the prompt's files come back as ready chips, without uploading them again.
+    void restoreLaneFiles(run, fileIds).then(({ note }) => { if (note) setLaneNote(run, note); });
   }).catch(() => { void refresh(); });
+}
+
+/** P-ATTACH.1 (ADR-0598): a queued prompt's staged files back on this lane's bar (attach_ui.adoptStagedIds).
+ *  Resolves with how many came back ready and the note for those that did not (null when none). */
+async function restoreLaneFiles(run: LaneRun, ids: readonly string[]): Promise<{ ready: number; note: string | null }> {
+  if (!ids.length) return { ready: 0, note: null };
+  const bridge = deps?.attach;
+  if (!run.files || !bridge) return { ready: 0, note: missingFilesNote(ids.length) };
+  const r = await adoptStagedIds(run.files, bridge, ids);
+  return { ready: r.ready, note: r.note };
 }
 
 // ── P-PUSH.PAR1 (ADR-pending): the staged chip's item menu, and Push now as a parallel worktree lane ──────
@@ -1811,7 +1837,8 @@ function openStagedMenu(run: LaneRun, i: number, x: number, y: number, row: HTML
     { label: "Copy prompt", run: () => void copyStaged(run, i, false) },
     { label: "Copy and remove", run: () => void copyStaged(run, i, true) },
   ];
-  if (canSteer({ hold: true, running: busy, images: item.images })) entries.push({ label: "Steer running turn", run: () => void steerStaged(run, i) });
+  // P-ATTACH.1 (ADR-0598): a steer note is text only, so files keep it off the menu like images do.
+  if (canSteer({ hold: true, running: busy, images: item.images + (item.files ?? 0) })) entries.push({ label: "Steer running turn", run: () => void steerStaged(run, i) });
   const focused = row.contains(document.activeElement) ? (document.activeElement as HTMLElement) : (row.querySelector("button") as HTMLElement | null);
   openCtxMenu(x, y, entries, { returnFocus: focused, className: "ctx-menu-stage" });
 }
@@ -1826,12 +1853,21 @@ async function copyStaged(run: LaneRun, i: number, remove: boolean): Promise<voi
   const r = await deps.fleetQueuePeek(id, i).catch(() => null);
   if (!r?.ok || !r.item) { void refresh(); setLaneNote(run, `Not copied: ${r?.reason ?? "the engine did not answer"}.`); return; }
   const imgs = r.item.images.length;
+  const fileIds = r.item.attachments ?? [];
   if (!(await copyToClipboard(r.item.text))) { setLaneNote(run, "Not copied: the clipboard refused. The prompt stays staged."); return; }
-  if (!remove) { setLaneNote(run, imgs ? "Copied the prompt text. Its images stay with the staged prompt." : "Copied. Paste it into any prompt bar."); return; }
+  if (!remove) {
+    const stay = imgs && fileIds.length ? "images and files" : imgs ? "images" : fileIds.length ? "files" : "";
+    setLaneNote(run, stay ? `Copied the prompt text. Its ${stay} stay with the staged prompt.` : "Copied. Paste it into any prompt bar.");
+    return;
+  }
   const gone = await deps.fleetQueueRemove(id, i, r.item.text).catch(() => null);
   void refresh();
   if (!gone?.ok) { setLaneNote(run, "Copied. It had already left the queue (it ran or was removed)."); return; }
-  setLaneNote(run, `Copied and removed. Paste it into a prompt bar to edit or keep it${imgs ? `; its ${imgs} image${imgs === 1 ? " was" : "s were"} removed with it` : ""}.`);
+  // P-ATTACH.1 (ADR-0598): the text goes to the clipboard; the files are not text, so they come back to this
+  // lane's bar as ready chips instead of leaving with the removed prompt.
+  const back = await restoreLaneFiles(run, fileIds);
+  const filesNote = back.ready > 0 ? ` Its ${back.ready} file${back.ready === 1 ? " is" : "s are"} on this lane's bar.` : "";
+  setLaneNote(run, `Copied and removed. Paste it into a prompt bar to edit or keep it${imgs ? `; its ${imgs} image${imgs === 1 ? " was" : "s were"} removed with it` : ""}.${filesNote}${back.note ? ` ${back.note}` : ""}`);
 }
 
 /** Steer running turn: the OLD Push now, kept so no capability is lost. The full text goes into this lane's
@@ -1842,6 +1878,7 @@ async function steerStaged(run: LaneRun, i: number): Promise<void> {
   const r = await deps.fleetQueuePeek(id, i).catch(() => null);
   if (!r?.ok || !r.item) { void refresh(); setLaneNote(run, `Not steered: ${r?.reason ?? "the engine did not answer"}.`); return; }
   if (r.item.images.length) { setLaneNote(run, "Steer is text only. This prompt carries images, so it stays staged; Push now runs it with them in a parallel lane."); return; }
+  if (r.item.attachments?.length) { setLaneNote(run, "Steer is text only. This prompt carries files, so it stays staged; Push now runs it with them in a parallel lane."); return; }
   const text = r.item.text;
   run.view.queued = run.view.queued.filter((_, n) => n !== i); // optimistic; the poll is truth
   paintFrame(run);
@@ -1868,6 +1905,8 @@ async function pushStagedParallel(run: LaneRun, i: number): Promise<void> {
     const src: PushSource = { kind: "lane", name: run.view.name, cwd: run.view.cwd, model: run.view.model };
     const busy = run.streaming || run.view.status === "working" || run.view.status === "needs-approval";
     const r = await pushToNewLane(src, item.text, item.images, {
+      // P-ATTACH.1 (ADR-0598): the staged files run with the prompt in the new lane.
+      ...(item.attachments?.length ? { attachments: item.attachments } : {}),
       announce: (lane) => {
         const n = parallelPushNotice(src, lane, { busy });
         setLaneNote(run, n.desc);
@@ -1953,7 +1992,9 @@ function maybeDrain(run: LaneRun): void {
   const id = run.view.id;
   const next = run.view.queued[0]!;
   run.view.queued = run.view.queued.slice(1);
-  run.turns.push({ id: nextId(run, "t"), role: "user", text: next.text + (next.images ? ` [${next.images} image${next.images === 1 ? "" : "s"}]` : ""), tools: [] });
+  // The poll carries only counts, so a drained turn names its images and files by number (P-ATTACH.1).
+  const extras = [next.images ? `${next.images} image${next.images === 1 ? "" : "s"}` : "", next.files ? `${next.files} file${next.files === 1 ? "" : "s"}` : ""].filter(Boolean);
+  run.turns.push({ id: nextId(run, "t"), role: "user", text: next.text + (extras.length ? ` [${extras.join(", ")}]` : ""), tools: [] });
   run.pending = ""; run.pendingThinking = ""; run.pendingTools = [];
   run.streaming = true;
   run.view.status = "working";

@@ -266,9 +266,32 @@ function readMeta(dir: string, id: string): AttachMeta | null {
   return {
     id, name, ext: attachExt(name), kind: info.kind, label: info.label,
     bytes: m.bytes, sha256: typeof m.sha256 === "string" ? m.sha256 : "",
+    ...(typeof m.sourcePath === "string" && m.sourcePath.trim() ? { sourcePath: m.sourcePath.trim().slice(0, 1024) } : {}),
     createdAt: typeof m.createdAt === "string" ? m.createdAt : "", chars: m.chars,
     ...(typeof m.pages === "number" && Number.isInteger(m.pages) && m.pages >= 0 ? { pages: m.pages } : {}),
   };
+}
+
+/** P-ATTACH.1 (ADR-0598): the staged files of `rawIds` that still exist, as staging reported them, so a lane
+ *  prompt brought back from the queue gets its files back as chips without uploading them again. Kind and label
+ *  come from the name (readMeta); a folder or copy that is a link, an unknown, forged or expired id, or a damaged
+ *  record is listed in `missing` instead. */
+export function describeStaged(root: string, rawIds: unknown): { attachments: StagedAttachment[]; missing: string[] } {
+  const attachments: StagedAttachment[] = [];
+  const missing: string[] = [];
+  for (const id of parseAttachmentIds(rawIds)) {
+    const dir = findStaged(root, id);
+    const meta = dir ? readMeta(dir, id) : null;
+    const stagedPath = dir && meta ? join(dir, storedFileName(meta.name)) : "";
+    if (!dir || !meta || !realFile(stagedPath)) { missing.push(id); continue; }
+    attachments.push({
+      id, name: meta.name, ext: meta.ext, kind: meta.kind, label: meta.label, bytes: meta.bytes,
+      ...(meta.sourcePath ? { sourcePath: meta.sourcePath } : {}),
+      stagedPath, chars: meta.chars, truncated: meta.chars > ATTACH_LIMITS.promptCharsPerFile,
+      ...(meta.pages !== undefined ? { pages: meta.pages } : {}),
+    });
+  }
+  return { attachments, missing };
 }
 
 /** PURE: `s` cut to at most `n` UTF-16 units, never between the halves of a surrogate pair. */

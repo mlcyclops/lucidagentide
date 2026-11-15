@@ -14,7 +14,7 @@ import { askLucidUser } from "./ask_lucid.ts";
 import { withAttachedFiles } from "./ask_lucid_service.ts";
 import { ATTACH_LIMITS, type AttachPolicyView } from "./attach_kinds.ts";
 import {
-  ATTACH_DISABLED, attachmentsPromptBlock, clipChars, findStaged, parseAttachmentIds, removeStagedAttachment, sanitizeAttachName,
+  ATTACH_DISABLED, attachmentsPromptBlock, clipChars, describeStaged, findStaged, parseAttachmentIds, removeStagedAttachment, sanitizeAttachName,
   stageAttachment, storedFileName, sweepAttachments, withAttachmentBlock, withAttachmentReference, type AttachDeps, type AttachScanVerdict,
 } from "./attachments.ts";
 
@@ -253,6 +253,53 @@ describe("attachmentsPromptBlock", () => {
     expect(findStaged(root, "..")).toBeNull();
     expect(removeStagedAttachment(root, "att-1")).toBe(true);
     expect(removeStagedAttachment(root, "att-1")).toBe(false);
+  });
+});
+
+describe("describeStaged (P-ATTACH.1: a queued prompt's files brought back)", () => {
+  test("a staged file comes back as staging reported it; an expired or unknown id is missing", async () => {
+    const r = await stageAttachment({ name: "notes.md", data: enc("# Notes\nhello"), sourcePath: "C:\\Users\\me\\notes.md" }, deps());
+    if (!r.ok) throw new Error(r.error);
+    await stageText("gone.txt", "bye");
+    removeStagedAttachment(root, "att-2"); // expired: the sweeper took it
+    const d = describeStaged(root, ["att-1", "att-2", "att-404"]);
+    expect(d.attachments).toEqual([r.attachment]);
+    expect(d.missing).toEqual(["att-2", "att-404"]);
+  });
+
+  test("forged ids are dropped before the disk is touched; kind and label come from the name", async () => {
+    await stageText("a.ts", "const a = 1;");
+    // The agent rewrote the record to pose as an image (skipped) with a label of its own.
+    const metaPath = join(root, DAY, "att-1", "meta.json");
+    writeFileSync(metaPath, JSON.stringify({ ...JSON.parse(readFileSync(metaPath, "utf8")), kind: "image", label: "Trusted" }));
+    const d = describeStaged(root, ["../att-1", "att-1/..", "ATT-1", 7, "att-1", "att-1"]);
+    expect(d.attachments.map((a) => [a.id, a.kind, a.label])).toEqual([["att-1", "code", "TypeScript source"]]);
+    expect(d.missing).toEqual([]);
+    expect(describeStaged(root, "att-1")).toEqual({ attachments: [], missing: [] });
+  });
+
+  test("a damaged record or a missing copy is missing, not trusted", async () => {
+    await stageText("a.txt", "x");
+    await stageText("b.txt", "y");
+    writeFileSync(join(root, DAY, "att-1", "meta.json"), JSON.stringify({ id: "att-other" }));
+    rmSync(join(root, DAY, "att-2", "b.txt"));
+    expect(describeStaged(root, ["att-1", "att-2"])).toEqual({ attachments: [], missing: ["att-1", "att-2"] });
+  });
+
+  test("a link is never followed: a planted id folder, day folder or root", async () => {
+    const outside = join(base, "outside");
+    const fakeDir = join(outside, "att-9");
+    mkdirSync(fakeDir, { recursive: true });
+    writeFileSync(join(fakeDir, "x.txt"), "x");
+    writeFileSync(join(fakeDir, "meta.json"), JSON.stringify({ id: "att-9", name: "x.txt", bytes: 1, chars: 1 }));
+    mkdirSync(join(root, DAY), { recursive: true });
+    symlinkSync(fakeDir, join(root, DAY, "att-9"), "junction");
+    symlinkSync(outside, join(root, "2026-11-14"), "junction");
+    expect(describeStaged(root, ["att-9"])).toEqual({ attachments: [], missing: ["att-9"] });
+
+    const linkedRoot = join(base, "linked");
+    symlinkSync(join(base, "outside"), linkedRoot, "junction");
+    expect(describeStaged(linkedRoot, ["att-9"]).missing).toEqual(["att-9"]);
   });
 });
 

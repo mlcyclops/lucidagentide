@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { ATTACH_EXT, ATTACH_LIMITS, type AttachPolicyView, type StagedAttachment, type StageResult } from "../attach_kinds.ts";
-import { chipTip, createTrayModel, effectivePolicy, fileIconSvg, ICON_KINDS, isAttachShortcut, isHiddenPath, isRoutedImage, viewOfName, viewOfStaged, type AttachBridge } from "./attach_ui.ts";
+import { adoptStagedIds, chipTip, createTrayModel, effectivePolicy, fileIconSvg, ICON_KINDS, isAttachShortcut, isHiddenPath, isRoutedImage, missingFilesNote, sentFileMeta, viewOfName, viewOfSentMeta, viewOfStaged, type AttachBridge, type AttachDescribeResult } from "./attach_ui.ts";
 import { parseTip } from "./tip_text.ts";
 
 const ON: AttachPolicyView = { enabled: true, files: 10, bytes: 25 * 1024 * 1024, retentionDays: 7 };
@@ -15,17 +15,19 @@ function staged(name: string, id: string): StagedAttachment {
   return { id, name, ext: name.split(".").pop() ?? "", kind: "markdown", label: "Markdown document", bytes: 5, stagedPath: `C:\\LUCID\\attachments\\${id}\\${name}`, chars: 5, truncated: false };
 }
 
-function fake(opts: { policy?: AttachPolicyView | null; stage?: (name: string) => StageResult | null | Promise<StageResult | null> } = {}) {
+function fake(opts: { policy?: AttachPolicyView | null; stage?: (name: string) => StageResult | null | Promise<StageResult | null>; describe?: (ids: string[]) => AttachDescribeResult | null } = {}) {
   const stagedNames: string[] = [];
   const removed: string[] = [];
+  const described: string[][] = [];
   let n = 0;
   const bridge: AttachBridge = {
     attachmentPolicy: async () => (opts.policy === undefined ? ON : opts.policy),
     attachmentStage: async (f) => { stagedNames.push(f.name); return opts.stage ? opts.stage(f.name) : { ok: true, attachment: staged(f.name, `a${++n}`) }; },
     attachmentRemove: async (id) => { removed.push(id); return true; },
+    attachmentDescribe: async (ids) => { described.push(ids); return opts.describe ? opts.describe(ids) : null; },
     pathForFile: () => null,
   };
-  return { bridge, stagedNames, removed };
+  return { bridge, stagedNames, removed, described };
 }
 
 const file = (name: string, body = "hello", type = ""): File => new File([body], name, { type });
@@ -230,6 +232,82 @@ describe("tray", () => {
     tray.restore(taken);
     tray.restore(taken); // twice is once
     expect(tray.ids()).toEqual(["a.md"]);
+  });
+});
+
+describe("adopting already-staged files (P-ATTACH.1: Update on a queued lane prompt)", () => {
+  test("adopt puts staged files back as ready without uploading them, and applies the limits", async () => {
+    const f = fake({ policy: { ...ON, files: 3, bytes: 100 } });
+    const tray = createTrayModel({ bridge: f.bridge, onImages: () => {}, imageCount: () => 1, readBase64 });
+    const big = { ...staged("big.md", "b"), bytes: 101 };
+    const r = await tray.adopt([staged("a.md", "a"), big, staged("c.md", "c"), staged("d.md", "d"), staged("a.md", "a")]);
+    expect(r).toEqual({ adopted: 2, refused: 2 });
+    expect(f.stagedNames).toEqual([]); // nothing was uploaded again
+    expect(tray.ids()).toEqual(["a", "c"]);
+    expect(tray.items().map((i) => [i.name, i.state])).toEqual([["a.md", "ready"], ["big.md", "blocked"], ["c.md", "ready"], ["d.md", "blocked"]]);
+    expect(tray.items().find((i) => i.name === "big.md")?.reason).toContain("larger than the 100 B limit");
+    expect(tray.items().find((i) => i.name === "d.md")?.reason).toBe("Up to 3 files per message, images included.");
+    expect(await tray.adopt([staged("a.md", "a")])).toEqual({ adopted: 0, refused: 0 }); // already on the bar
+    tray.remove(tray.items().find((i) => i.name === "d.md")!.key);
+    expect(f.removed).toEqual([]); // dismissing a blocked chip never deletes the engine's copy
+  });
+
+  test("adopt with attachments off or an unreachable engine adopts nothing (fail-closed)", async () => {
+    for (const policy of [{ ...ON, enabled: false }, null]) {
+      const tray = createTrayModel({ bridge: fake({ policy }).bridge, onImages: () => {}, readBase64 });
+      expect(await tray.adopt([staged("a.md", "a")])).toEqual({ adopted: 0, refused: 1 });
+      expect(tray.ids()).toEqual([]);
+    }
+  });
+
+  test("the Update path: existing files come back as chips, expired ones get one note", async () => {
+    const f = fake({ describe: (ids) => ({ ok: true, attachments: ids.filter((id) => id !== "gone1" && id !== "gone2").map((id) => staged(`${id}.md`, id)), missing: ["gone1", "gone2"] }) });
+    const tray = createTrayModel({ bridge: f.bridge, onImages: () => {}, readBase64 });
+    const r = await adoptStagedIds(tray, f.bridge, ["a", "gone1", "b", "gone2"]);
+    expect(f.described).toEqual([["a", "gone1", "b", "gone2"]]);
+    expect(r).toEqual({ ready: 2, refused: 0, missing: 2, note: "2 attached files are no longer available; add them again." });
+    expect(tray.ids()).toEqual(["a", "b"]);
+    expect(f.stagedNames).toEqual([]);
+  });
+
+  test("the Update path ignores files the prompt did not carry, and an engine that does not answer brings none back", async () => {
+    const extra = fake({ describe: () => ({ ok: true, attachments: [staged("a.md", "a"), staged("x.md", "x")], missing: [] }) });
+    const t1 = createTrayModel({ bridge: extra.bridge, onImages: () => {}, readBase64 });
+    expect((await adoptStagedIds(t1, extra.bridge, ["a"])).ready).toBe(1);
+    expect(t1.ids()).toEqual(["a"]);
+
+    const silent = fake();
+    const t2 = createTrayModel({ bridge: silent.bridge, onImages: () => {}, readBase64 });
+    const r = await adoptStagedIds(t2, silent.bridge, ["a"]);
+    expect(r).toEqual({ ready: 0, refused: 0, missing: 1, note: "LUCID's engine did not answer. 1 attached file was not brought back; add it again." });
+    expect(t2.items()).toEqual([]);
+
+    const none = await adoptStagedIds(t2, silent.bridge, []);
+    expect(none.note).toBeNull();
+    expect(silent.described).toEqual([["a"]]); // no ids, no call
+  });
+
+  test("missingFilesNote", () => {
+    expect(missingFilesNote(0)).toBeNull();
+    expect(missingFilesNote(1)).toBe("1 attached file is no longer available; add it again.");
+    expect(missingFilesNote(3)).toBe("3 attached files are no longer available; add them again.");
+  });
+});
+
+describe("files on a lane's user turn (P-ATTACH.1)", () => {
+  test("the turn keeps display data only: no paths, no text", () => {
+    const a = { ...staged("plan.md", "a1"), sourcePath: "C:\\Users\\me\\plan.md", chars: 900 };
+    const meta = sentFileMeta([a]);
+    expect(meta).toEqual([{ name: "plan.md", ext: "md", kind: "markdown", bytes: 5 }]);
+    expect(JSON.stringify(meta)).not.toContain("C:\\");
+  });
+
+  test("its chip is read-only and its tooltip names type and size, without a source line", () => {
+    const v = viewOfSentMeta({ name: "plan.md", ext: "md", kind: "markdown", bytes: 2048 });
+    expect(v.state).toBe("sent");
+    const t = parseTip(chipTip(v));
+    expect(t.title).toBe("plan.md");
+    expect(t.desc).toBe("Type: .md (Markdown document)\nSize: 2.0 KB");
   });
 });
 

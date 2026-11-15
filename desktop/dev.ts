@@ -191,7 +191,7 @@ import { lastModel as lastChatModel, resultWindowSetting, setResultWindowSetting
 import { chatModelContextWindow, resolveResultWindow } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 import { parseQuestion, sanitizeHistory } from "./ask_lucid.ts"; // P-ASKLUCID.1 (ADR-0581)
 import { answerAskLucid, NOTHING_SEEN } from "./ask_lucid_service.ts"; // P-ASKLUCID.1 (ADR-0581)
-import { ATTACH_DISABLED, attachmentsPromptBlock, parseAttachmentIds, removeStagedAttachment, stageAttachment, sweepAttachments, withAttachmentBlock, withAttachmentReference, type AttachDeps } from "./attachments.ts"; // P-ATTACH.1 (ADR-0598)
+import { ATTACH_DISABLED, attachmentsPromptBlock, describeStaged, parseAttachmentIds, removeStagedAttachment, stageAttachment, sweepAttachments, withAttachmentBlock, withAttachmentReference, type AttachDeps } from "./attachments.ts"; // P-ATTACH.1 (ADR-0598)
 import { managedAttachmentPolicy } from "./managed_config.ts"; // P-ATTACH.1 (ADR-0598)
 import { scanAndDecideLarge } from "../harness/security/large_scan.ts"; // P-ATTACH.1: a whole file's text, chunked
 import { IMAGE_EDIT_LIMITS, availableImageModels, editImage, saveEditedImage } from "./image_edit.ts"; // P-ASKLUCID.9 (ADR-0600)
@@ -6455,6 +6455,15 @@ return Bun.serve({
       if (p === "/api/attachments/remove" && req.method === "POST") {
         const b = await readBody<{ id?: unknown }>(req);
         return json({ ok: true, data: { removed: typeof b.id === "string" && removeStagedAttachment(ATTACH_ROOT, b.id) } });
+      }
+      // P-ATTACH.1 (ADR-0598): the staged files a queued lane prompt carried, so Update brings them back as chips
+      // without uploading them again. Expired or unknown ids come back in `missing`.
+      if (p === "/api/attachments/describe" && req.method === "POST") {
+        const policy = managedAttachmentPolicy();
+        if (!policy.enabled) return json({ ok: false, error: ATTACH_DISABLED, data: { ok: false, error: ATTACH_DISABLED } });
+        const b = await readBody<{ ids?: unknown }>(req);
+        const ids = parseAttachmentIds(b.ids).slice(0, 100);
+        return json({ ok: true, data: { ok: true, ...describeStaged(ATTACH_ROOT, ids) } });
       }
       // P-ASKLUCID.9 (ADR-0600): Ask Lucid's image edits. UI token only (never AGENT_ROUTES): an edit runs only after
       // the user confirmed a card that names the model, so the agent must never be able to send an image to a cloud
