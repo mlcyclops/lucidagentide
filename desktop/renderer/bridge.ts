@@ -138,6 +138,7 @@ export interface AgentTemplateInfo {
 }
 import type { LocalModelDef, LocalProviderDef } from "../local_providers.ts"; // P-LOCAL.3/.6: self-hosted/custom LLM providers
 import type { ResultWindow, ResultWindowSetting } from "../result_window.ts"; // P-CTX.2b (ADR-0579): pure, types only
+import type { PerCallModelSetting, PerCallModelView } from "../per_call_model.ts"; // P-MODEL.11 (ADR-0602): types only
 /** P-CTX.2b (ADR-0579): the stored tool-result window choice and what it resolves to for the chat model. */
 export interface ResultWindowView { setting: ResultWindowSetting; model: string; contextTokens: number | null; window: ResultWindow | null }
 import type { AskExtrasView, AskReplyView, AskTurnView } from "./ask_lucid_panel.ts"; // P-ASKLUCID.1 (ADR-0581): types only
@@ -999,6 +1000,9 @@ export interface LucidBridge {
   setJudgment(mode: JudgmentView["stored"]): Promise<JudgmentView | null>;
   /** P-JEV.5 (ADR-0416): forget every local-judge failure; the engine restarts the child when a ban was live. */
   judgmentResetBans(): Promise<JudgmentView | null>;
+  /** P-MODEL.11 (ADR-0602): may a subagent call pick its model; stored vs effective after the clamps. */
+  perCallModel(): Promise<PerCallModelView | null>;
+  setPerCallModel(setting: PerCallModelSetting): Promise<PerCallModelView | null>;
   // P-ACCT.1 (ADR-0375): named multi-account per provider. Every mutation returns the refreshed
   // snapshot (providerId -> accounts) so the UI repaints from the server's truth, never a client guess.
   accounts(): Promise<AccountsSnapshot | null>;
@@ -2012,6 +2016,8 @@ export const bridge: LucidBridge = {
   judgment: () => getData("/api/judgment"), // P-JEV.1 (ADR-0374)
   setJudgment: (mode) => post("/api/judgment", { mode }), // P-JEV.1: server clamps + restarts omp when the pin changes
   judgmentResetBans: () => post("/api/judgment/bans/reset", {}), // P-JEV.5
+  perCallModel: () => getData("/api/per-call-model"), // P-MODEL.11 (ADR-0602)
+  setPerCallModel: (setting) => post("/api/per-call-model", { setting }), // P-MODEL.11: server clamps + restarts omp when it changes
   // P-ACCT.1 (ADR-0375): named provider accounts. Mutations answer with the refreshed snapshot.
   accounts: () => getData("/api/accounts"),
   accountAdd: (providerId, name, key) => post("/api/accounts/add", { providerId, name, key }),

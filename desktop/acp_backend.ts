@@ -46,10 +46,11 @@ import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, type OmpResolution, resolveOmpBin, resolveOmpBinAsync } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
 import { gatePath, gateRefusal, repoAsset, resolvedRepo } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
-import { asksageOnly, attribution, checkerModel, chosenModel, localProviderPrefixes, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, modelRolesOverlayFile, resultWindowOverlayFile, resultWindowSetting, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
+import { asksageOnly, attribution, checkerModel, chosenModel, localProviderPrefixes, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, modelRolesOverlayFile, perCallModelOverlayFile, perCallModelSetting, resultWindowOverlayFile, resultWindowSetting, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
 import { heavyRoleModel, writeModelRolesOverlay } from "./model_roles.ts"; // P-MODEL.8 (ADR-0448)
 import { chatModelContextWindow, resolveResultWindow, spillFromRawOutput, type ResultSpill } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 import { writeResultWindowOverlay } from "./result_window_overlay.ts";
+import { resolvePerCallModel, writePerCallModelOverlay, type PerCallModelView } from "./per_call_model.ts"; // P-MODEL.11 (ADR-0602)
 import { judgeChain, resolveJudgmentProvider, writeJudgmentOverlay, type ResolvedJudgmentProvider } from "./judgment_policy.ts"; // P-JEV.1 (ADR-0374) + P-JEV.5 (ADR-0416)
 import { bannedJudges, judgeBanEnv } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416): local judges that failed more than once
 import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
@@ -292,7 +293,18 @@ function ompConfigArgs(): string[] {
   // like the two overlays above: a window the user chose must not silently fall back to 50 KB.
   const windowFile = resultWindowOverlayFile();
   writeResultWindowOverlay(windowFile, resolveResultWindow(resultWindowSetting(), chatModelContextWindow(lastModel(), listLocalProviders())));
-  return [...args, "--config", overlay, "--config", roles, "--config", windowFile];
+  // P-MODEL.11 (ADR-0602): may a subagent call pick its model. omp reads `task.perCallModel` only from operator
+  // layers, so this overlay is the one place it can be turned on; the value is always written (off included) so a
+  // global config.yml cannot reopen what lockdown or org policy closed. A write failure throws, like the others.
+  const perCallFile = perCallModelOverlayFile();
+  writePerCallModelOverlay(perCallFile, perCallModelView().effective);
+  return [...args, "--config", overlay, "--config", roles, "--config", windowFile, "--config", perCallFile];
+}
+
+/** P-MODEL.11 (ADR-0602): the stored per-call model choice under the LIVE lock and managed model policy. One
+ *  place, so the spawn overlay and the Settings card say the same thing. */
+export function perCallModelView(): PerCallModelView {
+  return resolvePerCallModel(perCallModelSetting(), { asksageLocked: asksageOnly() || managedAsksageOnly(), models: managedConfig().config?.models });
 }
 
 /** P-JEV.5 (ADR-0416): everything the judge chain is built from, read live: the stored choice under the

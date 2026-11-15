@@ -27552,3 +27552,17 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 5. `acp_backend.ts` labels a `scan-unavailable` block "security scanner unavailable, blocked fail-closed"; a block with findings keeps "hidden-Unicode content quarantined".
 
 **Consequences.** Fail-closed holds at every step: the call in flight when the sidecar dies, every call during the backoff, and a respawn that cannot start are all blocked. A sidecar killed from outside costs one blocked call and a half-second gap instead of the session. Left as is: on Windows the venv `python.exe` is a launcher, so killing a hung sidecar can orphan its interpreter until it reads EOF on the closed stdin. Installs pick this up from the next release.
+
+## ADR-0602 -- P-MODEL.11: subagent per-call model choice is a user setting LUCID writes at spawn (2026-11-15)
+
+**Status:** Accepted. Proof: `make demo-P-MODEL.11` (`desktop/scripts/demo_p_model_11.ts`) and `bun test desktop/per_call_model.test.ts`.
+
+**Context.** omp 18.18 lets a subagent call name its own model (a `model` on each `task` item, and in eval's `agent()` / `workpool()`), gated by `task.perCallModel` (`off`, `eval`, `on`; default `off`). omp reads that setting for this purpose only from the operator's layers: the global `config.yml`, `--config` overlays and runtime flags (`Settings.grantAuthority()`), never a project layer, because repository files are writable by the agent. LUCID's static overlay (`harness/omp/acp_config.yml`) did not set it and no LUCID control wrote it, so every session and lane ran with it off. Agents reported "per-call model choice is off" and worked around it with project agent files; the user had no switch for it, and the agent could not turn it on (correctly: an agent must not grant itself models).
+
+**Decision.**
+1. A LUCID setting, Settings > Subagents > "Subagents may pick their model": Off (default), Only in eval agents, On. Stored in the GUI settings file (`perCallModel`, absent = off).
+2. `ompConfigArgs()` writes `lucid-per-call-model.yml` at every omp spawn (main, utility and every fleet lane) and passes it with `--config`, after the other LUCID overlays. The value is always written, `off` included, so a `task.perCallModel: on` in the user's global `config.yml` cannot reopen what LUCID or a clamp closed. A write failure throws and the spawn is refused, named, like the other overlays.
+3. Clamps, owned by the engine (`resolvePerCallModel`, `desktop/per_call_model.ts`): AskSage lockdown (user or managed) forces off, and so does ANY managed model restriction (`models.allowed`, `models.denied`, `models.lock`, `models.asksageOnly`). The managed lists are id substrings, which omp's exact-id `task.perCallModelAllow` cannot express, so the setting is turned off rather than risk a subagent reaching a model the policy forbids. The stored choice is kept and shown, so lifting a clamp restores it.
+4. Changing the setting restarts the main omp child when the effective value changes (as the Judgment backend does). Fleet lanes take it at their next start.
+
+**Consequences.** With On, the agent may pick a model per subagent from the models omp can already route to (omp's own approval rules: no globs, roles or partial ids). The agent still cannot enable it; only the user can, through LUCID. Org policy can never be widened by this setting. Not done: mapping a managed allow-list onto omp's `task.perCallModelAllow` (would need expanding substrings against the live model catalog); a per-lane override.
