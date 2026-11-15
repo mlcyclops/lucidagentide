@@ -100,6 +100,7 @@ import { localProvidersCardBody, draftFromForm, modelsFieldValue, providerWithDi
 import { parseResultWindowSetting, type ResultSpill } from "../result_window.ts"; // P-CTX.2b (ADR-0579): pure (no Node imports)
 import { resultWindowLine } from "./result_window_view.ts"; // P-CTX.2b (ADR-0579)
 import { installTitlebarFit } from "./titlebar_fit.ts"; // P-TITLEBAR.1 (ADR-0603)
+import type { PerCallModelSetting, PerCallModelView } from "../per_call_model.ts"; // P-MODEL.11 (ADR-0602): types only
 import { createAskLucid, type AskActionContext, type AskActionResult, type AskExtrasView, type AskLucidHandle } from "./ask_lucid_panel.ts"; // P-ASKLUCID.1 (ADR-0581): the Ask Lucid fly-out
 import { bindFileDrop, clipboardFiles, createAttachTray, folderDropNote, isAttachShortcut, mountPlusMenu, pickFiles, plusButtonTip, plusMenuItems, sentFilesEl, syncPlusButton, type AttachTray } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598): files on the prompt bars
 import type { StagedAttachment } from "../attach_kinds.ts";
@@ -6006,6 +6007,31 @@ function secJudgment(auth: AuthStatus | null, j: JudgmentView | null): string {
     ${banBlock}`;
   return setCard("judgment", "Judgment", "None by default \u00b7 Jev \u00b7 your models", body, true);
 }
+// P-MODEL.11 (ADR-0602): the Subagents card. omp lets a subagent call name its own model only when the operator
+// turns `task.perCallModel` on, and never from a repository setting, so the agent cannot enable it and this card is
+// the one place that does. The SERVER owns the clamps: AskSage lockdown and any managed model restriction keep it
+// off (the select is disabled with the reason), and the stored choice is shown so lifting the clamp restores it.
+const PER_CALL_SUB = "Per-call model choice";
+function secSubagents(v: PerCallModelView | null): string {
+  const stored = v?.stored ?? "off";
+  const sel = (x: PerCallModelSetting) => (stored === x ? " selected" : "");
+  const clampNote = v?.clamp === "asksage-lockdown"
+    ? `<div class="set-note danger" id="perCallModelClamp">${icon("shield", 12)} <b>AskSage lockdown is on:</b> subagents use the models LUCID gives them. Your saved choice (<b>${esc(stored)}</b>) is kept and takes effect again when lockdown is turned off.</div>`
+    : v?.clamp === "org-model-policy"
+      ? `<div class="set-note danger" id="perCallModelClamp">${icon("shield", 12)} <b>Your organization limits which models can be used,</b> so subagents cannot pick their own. Your saved choice (<b>${esc(stored)}</b>) is kept.</div>`
+      : "";
+  const locked = v?.clamp != null;
+  const body = `<div class="set-note">${icon("info", 12)} When the agent starts a <b>subagent</b> (a helper that takes one slice of the work), it normally runs on the model its role is set to. Turn this on to let the agent pick the model for each subagent it starts, for example a fast model for a quick search and a strong one for a hard review. It can only pick models you already have set up. The agent cannot turn this on itself.</div>
+    <div class="voice-row"><label class="voice-lbl" for="perCallModel">Subagents may pick their model</label>
+      <select id="perCallModel" class="prov-key" data-percall-set="mode"${locked ? " disabled" : ""} data-tip="Per-call model choice|Off: subagents use their role's model. Only in eval agents: the agent may choose a model in eval agent() and workpool() calls only. On: also for every subagent it starts with the task tool. Takes effect for the main session now and for each lane at its next start.">
+        <option value="off"${sel("off")}>Off - subagents use their role's model (default)</option>
+        <option value="eval"${sel("eval")}>Only in eval agents</option>
+        <option value="on"${sel("on")}>On - the agent picks per subagent</option>
+      </select></div>
+    ${clampNote}
+    <div class="set-note" id="perCallModelEffective">${icon("check", 12)} <span>omp is told <b>${esc(v?.effective ?? "off")}</b>${locked ? " (clamped)" : ""}.</span></div>`;
+  return setCard("subagents", "Subagents", PER_CALL_SUB, body, true);
+}
 // P-STT.2b: the no-code "Local Whisper" block inside the Voice card - hardware readout + a capable-tier
 // picker + one Install & start button (downloads the model if needed, spawns whisper.cpp, points STT at it).
 function whisperCardHtml(s: WhisperStatusView): string {
@@ -6802,6 +6828,7 @@ function settingsShell(): string {
     setSkel("others", "More providers", "", true),
     setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
     setSkel("judgment", "Judgment", "None by default \u00b7 Jev \u00b7 your models", true), // P-JEV.1 (ADR-0374) + P-JEV.5
+    setSkel("subagents", "Subagents", PER_CALL_SUB, true), // P-MODEL.11 (ADR-0602)
     secTheme(), // P-THEME.1: light mode + color themes (rendered from theme.ts + localStorage, no fetch wait)
     secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
     secChatScroll(), // P-SCROLL.1 (ADR-0405): where a spoke switch lands (rendered from localStorage)
@@ -6838,6 +6865,7 @@ function hydrateSettings(): void {
     // P-VOICE.1 (ADR-0115): the Voice card needs auth (ElevenLabs key state) + the voice settings, then loads voices.
     void bridge.voiceSettings().then((vset) => { fillSec("voice", secVoice(a, vset)); void loadVoices(); void hydrateWhisper(); void hydrateVoiceEndpoints(); });
     void bridge.judgment().then((j) => { if (j) judgeBackend = j.effective; fillSec("judgment", secJudgment(a, j)); }); // P-JEV.1: key state + the clamped mode
+    void bridge.perCallModel().catch(() => null).then((v) => fillSec("subagents", secSubagents(v))); // P-MODEL.11 (ADR-0602)
     renderStatus(); // a just-added/removed key flips the OAuth-vs-key budget-pill gate
   });
   fillSec("sovereignty", secSovereignty()); // P-IDE.1c: only renders a card when China-origin models exist
@@ -18763,6 +18791,15 @@ function wire(): void {
       judgeBackend = next.effective;
       fillSec("judgment", secJudgment(state.auth, next));
       showToast({ title: `Judgment backend: ${next.effective}`, desc: next.clamped ? "Saved, but AskSage lockdown pins judgments to the chat model until it is turned off." : next.chain.length ? "omp restarts with it; the next turn uses it." : "No judge model: the chat model answers the one pick omp cannot skip.", timeout: 4000 });
+      return;
+    }
+    // P-MODEL.11 (ADR-0602): per-call model choice. The server persists, clamps, and restarts omp when the
+    // effective value changes; repaint from its answer so "omp is told X" is never a client guess.
+    if (t0.matches("[data-percall-set]")) {
+      const next = await bridge.setPerCallModel((t0 as HTMLSelectElement).value as PerCallModelSetting).catch(() => null);
+      if (!next) { showToast({ tone: "warn", title: "Couldn't save per-call model choice", desc: "The engine didn't answer; the previous setting stands.", timeout: 4000 }); return; }
+      fillSec("subagents", secSubagents(next));
+      showToast({ title: `Per-call model choice: ${next.effective}`, desc: next.clamp ? "Saved, but it stays off while the limit above applies." : "The agent restarts with it; lanes take it at their next start.", timeout: 4000 });
       return;
     }
     const vs = t0.closest("[data-voice-set]") as HTMLInputElement | HTMLSelectElement | null;
