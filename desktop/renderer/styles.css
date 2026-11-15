@@ -3984,6 +3984,9 @@ body.preview-open .thread{font-size:.9em}
 .kg-main.side-open .kg-center-btn{right:calc(var(--kgside-w,250px) + 16px)}
 .kg-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--txt-4);font-size:13px;text-align:center;padding:0 36px}
 .kg-empty .ic{opacity:.55}
+/* P-MINI.3 (ADR-0596): the gate's own Personalization steps (buttons and the passphrase field only, no prose). */
+.kg-empty-acts{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px}
+.kg-empty-acts .prov-key{width:240px;max-width:60vw}
 /* P-PERF.4: truncation hint atop a tail-loaded resumed transcript */
 .thread-tail-note{text-align:center;color:var(--txt-4);font-size:11px;padding:6px 0 10px;letter-spacing:.02em}
 /* P-RECOVER.1 (ADR-0385): the recovery notice (progress + result) and the incident Submit dialog */

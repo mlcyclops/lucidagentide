@@ -352,7 +352,7 @@ demo-P-MASCOT.1: ## P-MASCOT.1 (ADR-0251 pivot): LUCID the ninja mascot - frame-
 	$(BUN) run desktop/scripts/demo_p_mascot_1.ts
 
 .PHONY: demo-P-MASCOT.2
-demo-P-MASCOT.2: ## P-MASCOT.2: the prompt-bar parkour mini ninja - route order (run/climb/sneak/pause/drop/rest), lane geometry, the silent-drop clip contract, gravity easing, direction alternation
+demo-P-MASCOT.2: ## P-MASCOT.2, P-MINI.3 (ADR-0596): the prompt-bar ninja - home in the bar's right corner at both sizes, calm home activities, a traverse about every five minutes and never during a turn, the double-click dash and the right-click turn-off
 	$(BUN) run desktop/scripts/demo_p_mascot_2.ts
 
 .PHONY: demo-P-MASCOT.4
@@ -720,6 +720,10 @@ demo-P-ASKLUCID.2: ## P-ASKLUCID.2 (ADR-0582): Lucid proposes, the user confirms
 .PHONY: demo-P-MINI.2
 demo-P-MINI.2: ## P-MINI.2 (ADR-0583): Lucid may suggest things - a live holiday theme offered once per occasion with Wear it / Not now / Don't ask again, the pinned theme coming off the day after the holiday ends unless the user picked another by hand, what is new shown newest first and once per feature, at most one suggestion per launch and none during a turn, over a modal or before the first-run tour, and one setting that silences both
 	$(BUN) run desktop/scripts/demo_p_mini_2.ts
+
+.PHONY: demo-P-MINI.3
+demo-P-MINI.3: ## P-MINI.3 (ADR-0596): a smaller, calmer Lucid who wears the theme - off on the prompt bar until turned on (the LUCID Agent role keeps him), a right-click turn-off that beats every role with a way back, Small (mini Lucid's size) by default and Large (classic) kept, the Settings card's rows, and a color theme recoloring him while the Lucid themes keep the brand green
+	$(BUN) run desktop/scripts/demo_p_mini_3.ts
 
 .PHONY: demo-P-ASKLUCID.3
 demo-P-ASKLUCID.3: ## P-ASKLUCID.3 (ADR-0584): Ask Lucid sees the screen and opens above every popup - the real service with the real scanner: the screen as the first view with the top surface marked and fenced, the Preview panel's page included, a key on screen redacted in the renderer and again on the engine, a screen with a hidden payload withheld while the other views arrive, a dead scanner withholding it (fail-closed), a collector that reads no field value, and the dock above modals, the Fleet grid and the Orbit map

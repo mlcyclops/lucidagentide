@@ -22,8 +22,8 @@ import { mountSecretIntake, showSecretRequest } from "./secret_intake.ts"; // P-
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { externalHttpUrl } from "../navigation_policy.ts";
 import type { MascotInputs } from "./mascot.ts"; // One session-reactive sprite: composer or Arcade.
-import { mountComposerRunner, type RunnerHandle } from "./mascot_runner.ts"; // P-MASCOT.2: the prompt-bar parkour mini
-import { miniLucidCardHtml, miniMount, noteVisit, parsePresence, readLedger, readPresence, shouldVisit, writePresence, type MiniMount } from "./mini_lucid.ts"; // P-MINI.1 (ADR-0580): visits and the preference
+import { mountComposerRunner, type RunnerHandle } from "./mascot_runner.ts"; // P-MASCOT.2, P-MINI.3 (ADR-0596): the prompt-bar ninja in the bar's right corner
+import { miniLucidCardHtml, miniMount, noteVisit, parseMascotSize, parsePresence, readLedger, readMascotHidden, readMascotSize, readPresence, shouldVisit, writeMascotHidden, writeMascotSize, writePresence, type MiniMount } from "./mini_lucid.ts"; // P-MINI.1 (ADR-0580): visits and the preference; P-MINI.3 (ADR-0596): size and the right-click turn-off
 import { mountAgentArcade, type AgentArcadeHandle } from "./mascot_game.ts";
 import { ARCADE_GAMES, type ArcadeGameId } from "../arcade_games.ts";
 import { nextGap, readinessChecklist, resolveAgentTierModel, restoreModel, type AgentModelTier, type AgentPrior, type ReadyItem } from "./agent_flow.ts"; // P-AVATAR.4: the enter flow
@@ -5250,7 +5250,8 @@ function miniStore(): Storage | null { try { return localStorage; } catch { retu
  *  preference and the visit state. A resident (the LUCID Agent role, or "Always") is greeted by a click; a
  *  visitor leaves on one. Everyone sits down and types while a turn runs. */
 function syncMiniLucid(): void {
-  const want = miniMount(state.userRole, readPresence(miniStore()), miniVisiting).kind;
+  const store = miniStore();
+  const want = miniMount(state.userRole, readPresence(store), miniVisiting, readMascotHidden(store)).kind;
   if (want === miniKind && (want === "none") === (miniRunner === null)) {
     miniRunner?.setSuspended(agentArcade?.isOpen() ?? false);
     return;
@@ -5261,10 +5262,37 @@ function syncMiniLucid(): void {
   if (want === "none") return;
   const wrap = document.querySelector(".composer-wrap") as HTMLElement | null;
   if (!wrap) { miniKind = "none"; return; }
-  miniRunner = mountComposerRunner(wrap, composerMascotInputs, want === "visitor"
-    ? { workPose: "typing", dismissOnClick: true, onDismiss: () => { miniVisiting = false; syncMiniLucid(); } }
-    : { workPose: "typing" });
+  // P-MINI.3 (ADR-0596): a double-click dashes him off (a visitor for good, a resident walks back later);
+  // a right-click turns him off everywhere, with a toast that can undo it.
+  miniRunner = mountComposerRunner(wrap, composerMascotInputs, {
+    workPose: "typing",
+    size: readMascotSize(store),
+    visitor: want === "visitor",
+    onDismiss: () => { miniVisiting = false; syncMiniLucid(); },
+    onTurnOff: turnMascotOff,
+  });
   miniRunner.setSuspended(agentArcade?.isOpen() ?? false);
+}
+
+/** P-MINI.3 (ADR-0596): a right-click on him. He is gone at once, in every role, until turned back on;
+ *  the toast says where, and its button undoes an accidental click. */
+function turnMascotOff(): void {
+  writeMascotHidden(miniStore(), true);
+  miniVisiting = false;
+  syncMiniLucid();
+  fillSec("miniLucid", secMiniLucid());
+  showToast({
+    tone: "info",
+    title: "Lucid mascot turned off",
+    desc: "He stays off until you turn him back on in Settings, Mini Lucid.",
+    actions: [{ label: "Turn back on", kind: "ok", run: () => setMascotShown(true) }, { label: "OK" }],
+    timeout: 9000,
+  });
+}
+function setMascotShown(shown: boolean): void {
+  writeMascotHidden(miniStore(), !shown);
+  syncMiniLucid();
+  fillSec("miniLucid", secMiniLucid());
 }
 
 /** P-MINI.1 (ADR-0580): the role just became known or changed. The Developer's first new session of a
@@ -5375,6 +5403,7 @@ function syncAgentExtras(): void {
   if (active && !agentArcade) {
     const host = $("#agentArcadeHost");
     if (host) agentArcade = mountAgentArcade(host, arcadeScorePort, {
+      mascotSize: readMascotSize(miniStore()), // P-MINI.3 (ADR-0596)
       onLayout: (open) => { miniRunner?.setSuspended(open); syncArcadeGap(); },
       onOpenPreviewGame: (id, where) => void openArcadeGame(id, where),
     });
@@ -6291,7 +6320,9 @@ function secWorkingStatus(): string {
 // localStorage (mini_lucid.ts), no fetch.
 function secMiniLucid(): string {
   // P-MINI.2 (ADR-0583): the one switch for Lucid's suggestions sits with him.
-  return setCard("miniLucid", "Mini Lucid", "off · sometimes · always · suggestions · sight", `${miniLucidCardHtml(readPresence(miniStore()), esc, icon("info", 12))}\n    ${suggestToggleHtml(suggestEnabled(miniStore()))}\n    ${pictureToggleHtml(pictureEnabled(miniStore()))}`, true);
+  // P-MINI.3 (ADR-0596): the show switch (a right-click turns him off) and the size live here too.
+  const store = miniStore();
+  return setCard("miniLucid", "Mini Lucid", "show · off · sometimes · always · size · suggestions · sight", `${miniLucidCardHtml(readPresence(store), esc, icon("info", 12), readMascotSize(store), readMascotHidden(store))}\n    ${suggestToggleHtml(suggestEnabled(store))}\n    ${pictureToggleHtml(pictureEnabled(store))}`, true);
 }
 
 // ── P-THEME.1: Settings -> Theme ────────────────────────────────────────────────────────────────────
@@ -11666,6 +11697,37 @@ async function openResourcePanelLive(): Promise<void> {
   if (!status) { showToast({ title: "System resources", desc: "Couldn't read a system profile on this platform.", actions: [{ label: "OK" }], timeout: 3200 }); return; }
   openResourcePanel(status);
 }
+/** P-MINI.3 (ADR-0596): the KG view's own Personalization steps: turn it on, then create the passphrase.
+ *  The same bridge calls and toasts as Settings' #personalToggle and #personalSetup; the view re-renders to the
+ *  next step, and Settings (if open) follows through hydratePersonal. */
+function bindKgPersonalGate(canvas: HTMLElement): void {
+  $("#kgPersonalSettings", canvas)?.addEventListener("click", () => openPersonalizationSettings());
+  $("#kgPersonalOn", canvas)?.addEventListener("click", async (e) => {
+    (e.currentTarget as HTMLButtonElement).disabled = true;
+    const r = await bridge.personalEnable(true).catch(() => null);
+    if (r === null) showToast({ tone: "warn", title: "Couldn't turn on Personalization", desc: "Try again, or turn it on in Settings, Personalization.", actions: [{ label: "OK" }], timeout: 4000 });
+    else showToast({ title: "Personalization on", desc: "Create a passphrase to start your encrypted graph.", actions: [{ label: "OK" }], timeout: 2800 });
+    void hydratePersonal();
+    void renderKnowledge();
+  });
+  const pass = $("#kgPersonalPass", canvas) as HTMLInputElement | null;
+  const create = $("#kgPersonalCreate", canvas) as HTMLButtonElement | null;
+  const submit = async (): Promise<void> => {
+    if (!pass || !create || create.disabled) return;
+    create.disabled = true;
+    const r = await bridge.personalSetup(pass.value).catch(() => null);
+    if (r?.ok) {
+      showToast({ title: "Store created", desc: "Your encrypted personalization store is ready.", actions: [{ label: "OK" }], timeout: 2600 });
+      void hydratePersonal();
+      void renderKnowledge();
+      return;
+    }
+    create.disabled = false;
+    showToast({ tone: "warn", title: "Couldn't create store", desc: r?.error ?? "Try again.", meta: "passphrase is never stored or sent anywhere", actions: [{ label: "OK" }], timeout: 5000 });
+  };
+  create?.addEventListener("click", () => void submit());
+  pass?.addEventListener("keydown", (e) => { if (e.key === "Enter") void submit(); });
+}
 async function renderKnowledge(): Promise<void> {
   if (!kgOpen) return;
   const generation = ++kgRenderGeneration;
@@ -11686,16 +11748,26 @@ async function renderKnowledge(): Promise<void> {
   if (!kgOpen || generation !== kgRenderGeneration) return;
   if (scopeLbl) scopeLbl.removeAttribute("title");
   if (scopeLbl) scopeLbl.textContent = status?.scope ? `· ${status.scope}` : "";
-  const gate = (msg: string) => { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>${msg}</div></div>`; (side as HTMLElement).hidden = true; side.innerHTML = ""; showKgCenter(false); syncKgSideOpen(); };
-  if (!status?.enabled) return gate("Personalization is off. Enable it in Settings to build a knowledge graph.");
+  const gate = (msg: string, acts = "") => { canvas.innerHTML = `<div class="kg-empty">${icon("graph", 30)}<div>${msg}</div>${acts}</div>`; (side as HTMLElement).hidden = true; side.innerHTML = ""; showKgCenter(false); syncKgSideOpen(); };
+  // P-MINI.3 (ADR-0596): a user who lands here without Personalization (Ask Lucid can open this view) turns it
+  // on and creates the passphrase right here, instead of being sent to find it in Settings.
+  if (!status?.enabled) {
+    gate("Personalization is off. Your knowledge graph is built from it: a private graph of your preferences and decisions, encrypted on this device. Nothing is learned until you turn it on, and you can turn it off any time.",
+      `<div class="kg-empty-acts"><button class="btn-mini ok" id="kgPersonalOn">${icon("shield", 12)} Turn on Personalization</button><button class="btn-mini" id="kgPersonalSettings">Open Settings</button></div>`);
+    bindKgPersonalGate(canvas as HTMLElement);
+    return;
+  }
   if (!status.unlocked) {
-    // Configured-but-locked → unlock right here (no trip to Settings). Not yet set up → Settings.
+    // Configured-but-locked → unlock right here (no trip to Settings). Not yet set up → create it right here.
     if (status.configured) {
       const device = await bridge.kgDeviceStatus();
       if (!kgOpen || generation !== kgRenderGeneration) return;
       return renderKgLocked(canvas as HTMLElement, device);
     }
-    return gate("Personalization isn't set up yet. Create a passphrase in Settings to start your private graph.");
+    gate("Personalization is on. Create a passphrase to start your private graph. It protects your data and <b>cannot be recovered</b> if lost.",
+      `<div class="kg-empty-acts"><input id="kgPersonalPass" class="prov-key" type="password" placeholder="New passphrase (min 8 chars)" autocomplete="new-password" aria-label="New passphrase" /><button class="btn-mini ok" id="kgPersonalCreate">${icon("shield", 12)} Create</button></div>`);
+    bindKgPersonalGate(canvas as HTMLElement);
+    return;
   }
   // P-SYSRES.1 (ADR-0182): hard-pause the CPU-heavy graph build while the machine is starved. Checked
   // BEFORE the decrypt so pausing skips that cost too. Fail-open: no profile evidence never blocks.
@@ -18395,6 +18467,17 @@ function wire(): void {
       writePresence(miniStore(), next);
       if (next !== "sometimes") miniVisiting = false;
       syncMiniLucid();
+      fillSec("miniLucid", secMiniLucid());
+      return;
+    }
+    // P-MINI.3 (ADR-0596): the show switch and the size. A size change applies live on the prompt bar and
+    // in the Arcade.
+    if (t0.id === "mascotShown") { setMascotShown((t0 as HTMLInputElement).checked); return; }
+    if ((t0 as HTMLInputElement).name === "mascotSize") {
+      const size = parseMascotSize((t0 as HTMLInputElement).value);
+      writeMascotSize(miniStore(), size);
+      miniRunner?.setSize(size);
+      agentArcade?.setMascotSize(size);
       fillSec("miniLucid", secMiniLucid());
       return;
     }

@@ -5,12 +5,13 @@
 // runner's typing position (mascot_runner.ts) and the rules for when he visits (mini_lucid.ts).
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { KEYBOARD_WHOLE, MASCOT_FRAMES, MASCOT_PALETTE } from "./mascot.ts";
 import { MINI_STATES, SCENE_H, SCENE_W, TYPING_BEAT_MS, limbCells, sceneRows, seatedRows, typingRows } from "./mascot_mini.ts";
-import { RUNNER_HEADROOM, typingBox, type RunnerLayout } from "./mascot_runner.ts";
+import { runnerHeadroom, typingBox, type RunnerLayout } from "./mascot_runner.ts";
 import {
+  MASCOT_CELL_CSS,
+  MASCOT_SIZES,
+  MASCOT_SIZE_KEY,
   MINI_PRESENCES,
   MINI_PRESENCE_KEY,
   MINI_VISITS_KEY,
@@ -22,10 +23,15 @@ import {
   miniMount,
   noteVisit,
   parseLedger,
+  parseMascotSize,
   parsePresence,
   readLedger,
+  readMascotHidden,
+  readMascotSize,
   readPresence,
   shouldVisit,
+  writeMascotHidden,
+  writeMascotSize,
   writePresence,
   type MiniStore,
   type VisitInput,
@@ -128,7 +134,8 @@ describe("the seated scene (mascot_mini.ts)", () => {
 });
 
 describe("the runner's typing position (mascot_runner.ts)", () => {
-  const layout = (width: number): RunnerLayout => ({ width, barTop: RUNNER_HEADROOM * 2, barBottom: RUNNER_HEADROOM * 2 + 100, height: RUNNER_HEADROOM * 2 + 100, scale: 4 });
+  const sky = runnerHeadroom(MASCOT_CELL_CSS.large) * 2;
+  const layout = (width: number): RunnerLayout => ({ width, barTop: sky, height: sky + 100, scale: 4 });
 
   test("he sits on the bar top, at the walker's x", () => {
     const l = layout(1600);
@@ -222,16 +229,39 @@ describe("when he visits (mini_lucid.ts)", () => {
     expect(noteVisit(null, NOON).count).toBe(1);
   });
 
-  test("the preference defaults to Sometimes, round-trips, and anything unknown reads as Sometimes", () => {
+  test("P-MINI.3: the preference defaults to Off, round-trips, and anything unknown reads as Off", () => {
     const store = memStore();
-    expect(readPresence(store)).toBe("sometimes");
-    writePresence(store, "off");
-    expect(store.data[MINI_PRESENCE_KEY]).toBe("off");
     expect(readPresence(store)).toBe("off");
+    writePresence(store, "sometimes");
+    expect(store.data[MINI_PRESENCE_KEY]).toBe("sometimes");
+    expect(readPresence(store)).toBe("sometimes");
     expect(parsePresence("always")).toBe("always");
-    expect(parsePresence("ALWAYS")).toBe("sometimes");
-    expect(parsePresence(undefined)).toBe("sometimes");
-    expect(readPresence(null)).toBe("sometimes");
+    expect(parsePresence("ALWAYS")).toBe("off");
+    expect(parsePresence(undefined)).toBe("off");
+    expect(readPresence(null)).toBe("off");
+  });
+
+  test("P-MINI.3: the size defaults to Small, round-trips, and anything unknown reads as Small", () => {
+    const store = memStore();
+    expect(readMascotSize(store)).toBe("small");
+    writeMascotSize(store, "large");
+    expect(store.data[MASCOT_SIZE_KEY]).toBe("large");
+    expect(readMascotSize(store)).toBe("large");
+    expect(parseMascotSize("LARGE")).toBe("small");
+    expect(readMascotSize(null)).toBe("small");
+    expect(MASCOT_CELL_CSS.large).toBe(2 * MASCOT_CELL_CSS.small);
+  });
+
+  test("P-MINI.3: a right-click's turn-off persists until turned back on; a blocked store reads as shown", () => {
+    const store = memStore();
+    expect(readMascotHidden(store)).toBe(false);
+    writeMascotHidden(store, true);
+    expect(readMascotHidden(store)).toBe(true);
+    writeMascotHidden(store, false);
+    expect(readMascotHidden(store)).toBe(false);
+    const blocked: MiniStore = { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } };
+    expect(readMascotHidden(blocked)).toBe(false);
+    expect(() => writeMascotHidden(blocked, true)).not.toThrow();
   });
 
   test("miniMount: who is on the prompt bar", () => {
@@ -241,37 +271,24 @@ describe("when he visits (mini_lucid.ts)", () => {
     expect(miniMount("developer", "sometimes", false)).toEqual({ kind: "none" });
     expect(miniMount("developer", "off", true)).toEqual({ kind: "none" }); // Off ends a visit
     expect(miniMount(null, "sometimes", true)).toEqual({ kind: "visitor" });
+    // P-MINI.3: turned off by a right-click beats every role and preference, the Agent role included.
+    expect(miniMount("lucid-agent", "always", false, true)).toEqual({ kind: "none" });
+    expect(miniMount("developer", "always", false, true)).toEqual({ kind: "none" });
+    expect(miniMount("developer", "sometimes", true, true)).toEqual({ kind: "none" });
   });
 
-  test("the Settings card: three radio rows with the stored one checked, each row's text one span", () => {
+  test("the Settings card: the show switch, the presence and size choices with the stored ones checked, each row's text one span", () => {
     const esc = (s: string): string => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;");
-    const h = miniLucidCardHtml("off", esc, "<i></i>");
+    const h = miniLucidCardHtml("off", esc, "<i></i>", "large", false);
     for (const p of MINI_PRESENCES) expect(h).toContain(`name="miniPresence" value="${p}"`);
-    expect(h).toContain('value="off" checked');
-    expect(h.split(" checked").length - 1).toBe(1);
+    for (const z of MASCOT_SIZES) expect(h).toContain(`name="mascotSize" value="${z}"`);
+    expect(h).toContain('name="miniPresence" value="off" checked');
+    expect(h).toContain('name="mascotSize" value="large" checked');
+    expect(h).toContain('id="mascotShown" checked');
+    expect(h.split(" checked").length - 1).toBe(3);
+    expect(miniLucidCardHtml("off", esc, "", "small", true)).not.toContain('id="mascotShown" checked');
     // Invariant 11: a set-toggle label holds its input and ONE span, never loose text beside inline tags.
-    expect(h.match(/<label class="set-toggle"><input [^>]*\/>\s*<span>.*?<\/span><\/label>/gs)?.length).toBe(3);
+    expect(h.match(/<label class="set-toggle"><input [^>]*\/>\s*<span>.*?<\/span><\/label>/gs)?.length).toBe(1 + MINI_PRESENCES.length + MASCOT_SIZES.length);
     expect(h).toContain('<div class="set-note">');
-  });
-});
-
-describe("the wiring in app.ts and mascot_runner.ts", () => {
-  const app = readFileSync(join(import.meta.dir, "app.ts"), "utf8");
-  const runner = readFileSync(join(import.meta.dir, "mascot_runner.ts"), "utf8");
-
-  test("every mount goes through syncMiniLucid, seated typing on, and only a visitor leaves on a click", () => {
-    expect(app.split("mountComposerRunner(").length - 1).toBe(1); // one mount site
-    expect(app).toContain('{ workPose: "typing", dismissOnClick: true, onDismiss:');
-    expect(app).toContain(': { workPose: "typing" });');
-  });
-
-  test("New chat and a launch on an empty chat are the two places a visit is decided", () => {
-    expect(app.split("noteNewSessionForMini();").length - 1).toBe(2);
-    expect(app).toContain('if (document.getElementById("chatHint")) noteNewSessionForMini(); else syncMiniLucid();');
-  });
-
-  test("the runner's canvas never takes the pointer, and typing holds one still frame under reduced motion", () => {
-    expect(runner).toContain("pointer-events:none");
-    expect(runner).toContain("const elapsed = still ? 0 : now - typingSince;");
   });
 });

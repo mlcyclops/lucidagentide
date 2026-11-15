@@ -9,8 +9,9 @@
 //   - Developer role: the first new session of each app launch. A click sends him away.
 //   - Any role: now and then on a new session (one in four), never twice within thirty minutes and at most
 //     three times a day, so he stays a pleasant surprise. A click sends him away.
-// The user's preference wins over all of it: Off (never, outside the Agent role), Sometimes (the rules
-// above, the default), Always (every session, like the Agent role).
+// The user's preference wins over all of it: Off (never, outside the Agent role; the default since P-MINI.3,
+// ADR-0596), Sometimes (the rules above), Always (every session, like the Agent role). A right-click on him
+// turns him off everywhere until turned back on, and the size is Small (mini Lucid's) or Large (classic).
 //
 // Pure: no DOM. Storage is passed in, so the policy and the bookkeeping are unit-tested.
 
@@ -24,7 +25,7 @@ export const MINI_PRESENCE_LABEL: Record<MiniPresence, string> = {
 };
 export const MINI_PRESENCE_DESC: Record<MiniPresence, string> = {
   off: "He stays away, except in the LUCID Agent role where he lives.",
-  sometimes: "He drops by on a new session now and then. Click him and he leaves.",
+  sometimes: "He drops by on a new session now and then. Double-click him and he leaves.",
   always: "He is on the prompt bar in every session.",
 };
 
@@ -41,11 +42,45 @@ export const VISITS_PER_DAY = 3;
 /** The slice of Storage this module uses, so tests pass a plain object. */
 export interface MiniStore { getItem(key: string): string | null; setItem(key: string, value: string): void }
 
+/** P-MINI.3 (ADR-0596): an untouched install has him OFF on the prompt bar; the LUCID Agent role still has
+ *  him resident. A stored choice is kept. */
 export function parsePresence(v: unknown): MiniPresence {
-  return v === "off" || v === "always" ? v : "sometimes";
+  return v === "sometimes" || v === "always" ? v : "off";
 }
 export function readPresence(store: MiniStore | null): MiniPresence {
-  try { return parsePresence(store?.getItem(MINI_PRESENCE_KEY)); } catch { return "sometimes"; }
+  try { return parsePresence(store?.getItem(MINI_PRESENCE_KEY)); } catch { return "off"; }
+}
+
+/** P-MINI.3 (ADR-0596): how big the prompt-bar ninja and the Arcade ninja are drawn. "small" is mini Lucid's
+ *  size (one CSS pixel per sprite cell, crisp on every display), the default; "large" is the classic two. */
+export type MascotSize = "small" | "large";
+export const MASCOT_SIZES: readonly MascotSize[] = ["small", "large"];
+export const MASCOT_SIZE_KEY = "lucid.mascot.size";
+/** CSS pixels per sprite cell for each size. */
+export const MASCOT_CELL_CSS: Record<MascotSize, number> = { small: 1, large: 2 };
+export const MASCOT_SIZE_LABEL: Record<MascotSize, string> = { small: "Small", large: "Large (classic)" };
+export const MASCOT_SIZE_DESC: Record<MascotSize, string> = {
+  small: "Mini Lucid's size, on the prompt bar and in the Arcade.",
+  large: "The original, twice as big.",
+};
+export function parseMascotSize(v: unknown): MascotSize {
+  return v === "large" ? "large" : "small";
+}
+export function readMascotSize(store: MiniStore | null): MascotSize {
+  try { return parseMascotSize(store?.getItem(MASCOT_SIZE_KEY)); } catch { return "small"; }
+}
+export function writeMascotSize(store: MiniStore | null, s: MascotSize): void {
+  try { store?.setItem(MASCOT_SIZE_KEY, s); } catch { /* storage blocked: the choice lasts for this window only */ }
+}
+
+/** P-MINI.3 (ADR-0596): a right-click on him turns him off everywhere, the LUCID Agent role included, until
+ *  the user turns him back on (the toast's button or Settings). */
+export const MASCOT_HIDDEN_KEY = "lucid.mascot.hidden";
+export function readMascotHidden(store: MiniStore | null): boolean {
+  try { return store?.getItem(MASCOT_HIDDEN_KEY) === "1"; } catch { return false; }
+}
+export function writeMascotHidden(store: MiniStore | null, hidden: boolean): void {
+  try { store?.setItem(MASCOT_HIDDEN_KEY, hidden ? "1" : "0"); } catch { /* storage blocked: this window only */ }
 }
 export function writePresence(store: MiniStore | null, p: MiniPresence): void {
   try { store?.setItem(MINI_PRESENCE_KEY, p); } catch { /* storage blocked: the choice lasts for this window only */ }
@@ -117,8 +152,10 @@ export type MiniMount =
   /** A visit: he stays until clicked, then leaves. */
   | { kind: "visitor" };
 
-/** PURE: the mount for the current role, preference and visit state. */
-export function miniMount(role: string | null, presence: MiniPresence, visiting: boolean): MiniMount {
+/** PURE: the mount for the current role, preference and visit state. `hidden` (a right-click turned him off)
+ *  beats everything, the LUCID Agent role included. */
+export function miniMount(role: string | null, presence: MiniPresence, visiting: boolean, hidden = false): MiniMount {
+  if (hidden) return { kind: "none" };
   if (role === "lucid-agent") return { kind: "resident" };
   if (presence === "always") return { kind: "resident" };
   if (presence === "sometimes" && visiting) return { kind: "visitor" };
@@ -127,10 +164,18 @@ export function miniMount(role: string | null, presence: MiniPresence, visiting:
 
 /** PURE: the Settings card body: one radio row per choice, in the Settings `set-toggle` shape (the row's
  *  text is ONE span, so the flex label never splits a sentence, invariant 11), and a note. */
-export function miniLucidCardHtml(presence: MiniPresence, esc: (s: string) => string, infoIcon: string): string {
+export function miniLucidCardHtml(presence: MiniPresence, esc: (s: string) => string, infoIcon: string, size: MascotSize = "small", hidden = false): string {
   const row = (p: MiniPresence): string =>
     `<label class="set-toggle"><input type="radio" name="miniPresence" value="${p}"${p === presence ? " checked" : ""}/>
       <span><b>${esc(MINI_PRESENCE_LABEL[p])}</b> - ${esc(MINI_PRESENCE_DESC[p])}</span></label>`;
-  return `${MINI_PRESENCES.map(row).join("\n    ")}
-    <div class="set-note">${infoIcon} ${esc("While a session is working he sits and types. He never covers the prompt, and he holds still when your system asks for reduced motion.")}</div>`;
+  const sizeRow = (s: MascotSize): string =>
+    `<label class="set-toggle"><input type="radio" name="mascotSize" value="${s}"${s === size ? " checked" : ""}/>
+      <span><b>${esc(MASCOT_SIZE_LABEL[s])}</b> - ${esc(MASCOT_SIZE_DESC[s])}</span></label>`;
+  return `<label class="set-toggle"><input type="checkbox" id="mascotShown"${hidden ? "" : " checked"}/>
+      <span><b>${esc("Show the Lucid mascot")}</b> - ${esc("Off after a right-click on him, in every role. Turn it back on here.")}</span></label>
+    <div class="pscope-lbl">${esc("On the prompt bar")}</div>
+    ${MINI_PRESENCES.map(row).join("\n    ")}
+    <div class="pscope-lbl">${esc("Size")}</div>
+    ${MASCOT_SIZES.map(sizeRow).join("\n    ")}
+    <div class="set-note">${infoIcon} ${esc("Most of the time he rests in the right corner of the prompt bar, practicing or meditating, and types while a session works. About every five minutes he walks across. Double-click him to send him off, right-click to turn him off. He never covers the prompt, and he holds still when your system asks for reduced motion.")}</div>`;
 }
