@@ -364,7 +364,7 @@ describe("scope gating: the IDE offers only what the hub certificate allows", ()
     expect(taskButtons({ ...t("idle"), interrupted: 5 }, a(["recall"])).resume).toBe(false);
   });
 
-  test("drive: ADR-0576 follow-up on any open task (queued while it works), cancel while it runs, close while it holds a lane", () => {
+  test("drive: ADR-0577 follow-up on any open task (queued while it works), cancel while it runs, close while it holds a lane", () => {
     const d = a(["recall", "drive"]);
     expect(taskButtons(t("idle"), d)).toEqual({ recall: true, followup: true, cancel: false, close: true, resume: false });
     expect(taskButtons(t("error"), d).followup).toBe(true);
@@ -541,7 +541,7 @@ describe("P-RS-LANES.1 (ADR-0551): one count for every view, and the Fleet grid'
   });
 });
 
-describe("P-RS-SESSION.1 (ADR-0572): a remote task's session rows from its scanned journal", () => {
+describe("P-RS-SESSION.1 (ADR-0573): a remote task's session rows from its scanned journal", () => {
   const e = (seq: number, kind: string, data: unknown, trust: RecallEntryView["trust"] = "untrusted"): RecallEntryView =>
     ({ seq, ts: 1000 + seq, task: "t_0123456789abcdef", kind, trust, text: kind === "task.turn" ? String(data) : JSON.stringify(data) });
 

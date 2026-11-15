@@ -17605,7 +17605,7 @@ async function showReleaseCleanupNotice(): Promise<void> {
     actions: [...(r.removed.length ? [{ label: "Open Installed", kind: "ok" as const, run: () => openPluginsDrawer("installed") }] : []), { label: "OK" }],
   });
 }
-/** P-HOLDER.2 (ADR-0573): once after start, remind that lanes which kept running across an update still run the
+/** P-HOLDER.2 (ADR-0574): once after start, remind that lanes which kept running across an update still run the
  *  previous version (they pick this one up when started again). Read after the engine has reattached its lanes. */
 async function showPreviousVersionLanes(): Promise<void> {
   const wait = Promise.withResolvers<void>();
@@ -18033,7 +18033,7 @@ function wire(): void {
   $("#prevPlugins")?.addEventListener("click", (e) => pluginsFlyout.toggle(e.currentTarget as HTMLElement)); // P-PLUGINS.1
   window.addEventListener("focus", () => pluginsFlyout.onWindowFocus()); // P-PLUGINS.1: finish a checkout done in the browser
   void showReleaseCleanupNotice(); // ADR-0542
-  void showPreviousVersionLanes(); // P-HOLDER.2 (ADR-0573)
+  void showPreviousVersionLanes(); // P-HOLDER.2 (ADR-0574)
   // CREATOR-0 (ADR-0282): the Creator Studio rail entry + its whole delegated surface.
   $("#railStudio")?.addEventListener("click", () => openCreatorStudio());
   $("#studioClose")?.addEventListener("click", () => closeCreatorStudio());

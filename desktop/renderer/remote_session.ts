@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/remote_session.ts - P-RS-SESSION.1 (ADR-0572): a remote task's session screen, the way a local lane
+// desktop/renderer/remote_session.ts - P-RS-SESSION.1 (ADR-0573): a remote task's session screen, the way a local lane
 // shows its own: the prompts, the model's turns, state changes and parked actions, kept live with no Refresh button.
 //
 // The spoke journals every turn, state change and parked action; this reads that journal through the engine's
@@ -19,6 +19,7 @@
 
 import type { LucidBridge } from "./bridge.ts";
 import { sessionRows, type RecallEntryView, type RemoteTaskView, type SessionRow } from "./remote_spokes_model.ts";
+import { tipValue } from "./tip_text.ts";
 
 export interface RemoteSessionDeps {
   remoteSpokeRecall: LucidBridge["remoteSpokeRecall"];
@@ -188,7 +189,7 @@ function paint(s: Session, host: HTMLElement, fresh: boolean): void {
 function rowNode(r: SessionRow): HTMLElement {
   const n = document.createElement("div");
   n.dataset.rsRow = String(r.seq);
-  n.title = r.ts ? new Date(r.ts).toLocaleString() : "";
+  if (r.ts) n.dataset.tip = tipValue(new Date(r.ts).toLocaleString()); // P-TIP.1 (ADR-0599): the premium tooltip
   if (r.kind === "prompt") {
     n.className = "fleet-turn-user rs-sess-prompt";
     n.textContent = r.text ?? `Prompt sent (${r.chars} characters; sent from another window, so only its size is known here)`;

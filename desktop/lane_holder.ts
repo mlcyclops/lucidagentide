@@ -401,7 +401,7 @@ export interface HeldLaneRecord {
   /** The turn in flight: its session/prompt id, the offset at which it was sent, what the user said, when, and
    *  the agent's requests already answered in it (a replay must not answer them twice). */
   inFlight: { requestId: number; offset: number; text: string; at: number; answered: (number | string)[] } | null;
-  /** P-HOLDER.2 (ADR-0573): the lane runtime copy this lane's processes run from (its key), or null (or absent, a
+  /** P-HOLDER.2 (ADR-0574): the lane runtime copy this lane's processes run from (its key), or null (or absent, a
    *  record from before it) when they run from the install folder. A copy a record names is never deleted. */
   runtime?: string | null;
 }
@@ -414,7 +414,7 @@ export class HolderPool {
   /** LH-03: the channel keys of the held lanes this engine runs (launched here or reattached). */
   readonly channels = new LaneChannels();
 
-  /** `runtime` (P-HOLDER.2, ADR-0573): the versioned copy held lanes run from, null to run them from where the
+  /** `runtime` (P-HOLDER.2, ADR-0574): the versioned copy held lanes run from, null to run them from where the
    *  engine found them (a source checkout, LUCID_LANE_RUNTIME=install, tests). */
   constructor(readonly dir: string, readonly binary: string, readonly runtime: LaneRuntime | null = null) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -446,7 +446,7 @@ export class HolderPool {
     if (!HOLDER_ID_RE.test(holderId)) throw new Error(`lane id "${laneId}" cannot name a holder`);
     const token = randomBytes(32).toString("hex");
     const channel = mintChannelKey();
-    // P-HOLDER.2 (ADR-0573): the holder and everything its agent runs come from the runtime copy when there is one,
+    // P-HOLDER.2 (ADR-0574): the holder and everything its agent runs come from the runtime copy when there is one,
     // so an update can replace the install folder while this lane lives on. No copy: the install folder, as before.
     const copy = this.runtime ? await this.runtime.prepare() : null;
     const holder = copy ? this.runtime!.holderIn(copy) : null;

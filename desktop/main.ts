@@ -1671,7 +1671,7 @@ app.whenReady().then(async () => {
     }
     dialog.showErrorBox(report.title, detail);
   }
-  // Packaged-only; checks GitHub Releases, prompts on download. P-HOLDER.2 (ADR-0573): the prompt names the lanes
+  // Packaged-only; checks GitHub Releases, prompts on download. P-HOLDER.2 (ADR-0574): the prompt names the lanes
   // that run and offers to stop the idle and stuck ones first.
   initAutoUpdate(() => win, {
     check: async () => parseUpdateCheck(await engineData(await fetch(`http://127.0.0.1:${PORT}/api/fleet/update-check`, { headers: { "x-lucid-token": MAIN_TOKEN }, signal: AbortSignal.timeout(5000) }).catch(() => null))),

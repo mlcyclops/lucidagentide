@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-HOLDER.2 (ADR-0573): held lanes run from a per-version copy of the runtime, so an update can replace the install
+// P-HOLDER.2 (ADR-0574): held lanes run from a per-version copy of the runtime, so an update can replace the install
 // folder while they live on. What must hold:
 //   - only a packaged layout has a copy; the copy carries what a lane runs and none of the IDE's big binaries;
 //   - a held lane's command, arguments and path variables point at the copy, but only to what the copy has;

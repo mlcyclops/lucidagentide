@@ -73,7 +73,7 @@ export interface LaneView {
   lastActivityAt: number;
   /** Completed prompt turns. */
   turns: number;
-  /** P-HOLDER.2 (ADR-0573): where a held lane's processes run from: `current` (this version's runtime copy),
+  /** P-HOLDER.2 (ADR-0574): where a held lane's processes run from: `current` (this version's runtime copy),
    *  `previous` (an earlier version's copy: it keeps running across an update and picks up this one when started
    *  again), `install` (the install folder: an update cannot replace those files while it runs). Absent when the
    *  lane is this engine's own child (it ends with the engine). */

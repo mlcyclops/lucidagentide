@@ -132,7 +132,7 @@ import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
 import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
 import { HolderPool } from "./lane_holder.ts"; // P-HOLDER.1 (ADR-0534): lanes outlive the engine
-import { stopForUpdate, updateCheck } from "./update_lanes.ts"; // P-HOLDER.2 (ADR-0573): the lanes an update meets
+import { stopForUpdate, updateCheck } from "./update_lanes.ts"; // P-HOLDER.2 (ADR-0574): the lanes an update meets
 import { answerChannel, CHANNEL_ROUTES, channelAdmits } from "./lane_channel.ts"; // LH-03 (ADR-0544): a held lane's channel
 import { displayStatus } from "./collab/fleet_status.ts"; // P-STUCK-SHOW.3 (ADR-0521): phone guests see likely-stuck spokes too
 import { sessionLive, withLiveState, type SessionLiveSpoke } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
@@ -6705,7 +6705,7 @@ return Bun.serve({
         const b = await readBody<{ laneId?: unknown }>(req);
         return json({ ok: true, data: fleet.stop(String(b.laneId ?? "")) });
       }
-      // P-HOLDER.2 (ADR-0573): before an update installs, the IDE asks which lanes run (stuck, idle, working, and
+      // P-HOLDER.2 (ADR-0574): before an update installs, the IDE asks which lanes run (stuck, idle, working, and
       // which run from the install folder), and stops only the ones the person chose that are still idle or stuck.
       if (p === "/api/fleet/update-check" && req.method === "GET") return json({ ok: true, data: updateCheck((await fleet.status()).lanes) });
       if (p === "/api/fleet/stop-for-update" && req.method === "POST") {

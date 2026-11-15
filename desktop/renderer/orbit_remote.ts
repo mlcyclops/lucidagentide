@@ -28,7 +28,7 @@
 // sendDecide. Every count of the remote hub (badges, the Fleet pill, the hub summary, the Remote spokes view) is
 // remoteCounts, which is remote_spokes_model.ts remoteTotals.
 //
-// P-RS-SESSION.1 (ADR-0572): the per-spoke panel opens on a Session (the busiest task's, or the task row clicked) and
+// P-RS-SESSION.1 (ADR-0573): the per-spoke panel opens on a Session (the busiest task's, or the task row clicked) and
 // each Fleet lane card shows its task's session too, kept live by remote_session.ts like a local lane's output.
 //
 // Untrusted text rule: everything a spoke wrote reaches the DOM through textContent or esc(), never as markup.
@@ -36,7 +36,7 @@
 // leaves this panel is "Copy for a prompt", which copies the engine's delimited UNTRUSTED_CONTENT envelope.
 // Buttons appear only for what the hub certificate's scopes allow; the engine re-checks every action anyway.
 // Approve and Resume keep the plugin panel's two-click rule (armClick); Stop asks once, like a local lane's Stop
-// (ADR-0576), and then sends `close`. On a `password` hub (ADR-0507 amendment) the
+// (ADR-0577), and then sends `close`. On a `password` hub (ADR-0507 amendment) the
 // first Approve click opens a password field instead, and the second signs with what was typed; the field is
 // emptied at once and the password goes only into that one decide request.
 
@@ -450,10 +450,10 @@ function enterSends(field: HTMLTextAreaElement | null, go: HTMLElement | null): 
  *  answer to the same clicks (taskOpClick). Resume and Close are armed (two clicks). */
 const RESUME_BTN = `<button class="btn-mini orbit-btn rs-resume" data-rs-resume data-tip="Resume|Sends one follow-up asking the task to continue and to check what was already done first. Click twice. Nothing re-runs on its own.">${icon("restore", 12)} Resume</button>`;
 const CANCEL_BTN = `<button class="btn-mini orbit-btn" data-rs-cancel>${icon("close", 12)} Cancel</button>`;
-/** ADR-0576: Stop, as on a local lane, with one confirm (taskOpClick). It still sends `close`. */
+/** ADR-0577: Stop, as on a local lane, with one confirm (taskOpClick). It still sends `close`. */
 const STOP_BTN = `<button class="btn-mini orbit-btn" data-rs-stop data-tip="Stop|Stops this agent on its computer. What it did so far is kept under Past tasks.">${icon("close", 12)} Stop</button>`;
 
-/** ADR-0576: the reply box is always there for an open task; while it works, a note waits for its next step. */
+/** ADR-0577: the reply box is always there for an open task; while it works, a note waits for its next step. */
 const FOLLOW_IDLE = "Reply: what the agent should do next. Enter sends, Shift+Enter starts a new line.";
 const FOLLOW_BUSY = "It is working. Your note waits for its next step. Enter sends, Shift+Enter starts a new line.";
 
@@ -471,7 +471,7 @@ export function refreshRemotePanel(box: HTMLElement): void {
   const parkedKey = s && a?.recall ? s.tasks.filter((t) => t.state === "awaiting_approval").map((t) => t.id).sort().join(",") : "";
   if (!parkedKey) panel.asksRead = "";
   else if (parkedKey !== panel.asksRead && $("[data-rs-approvals-out]", box)) { panel.asksRead = parkedKey; void loadApprovals(box); }
-  // P-RS-SESSION.1 (ADR-0572): the chosen task's session, kept live by remote_session.ts. With none chosen: a task
+  // P-RS-SESSION.1 (ADR-0573): the chosen task's session, kept live by remote_session.ts. With none chosen: a task
   // that works or waits on you, else the newest open one, else the newest.
   const sessHost = $("[data-rs-session]", box) as HTMLElement | null;
   if (s && a?.recall && sessHost) {
@@ -526,7 +526,7 @@ export function refreshRemotePanel(box: HTMLElement): void {
     : `This hub's certificate allows: ${may || "nothing"}. Actions it does not allow are not offered.`);
   const host = $("[data-rs-tasks]", box) as HTMLElement;
   if (s.tasks.length === 0) { host.innerHTML = `<div class="orbit-ghosts-empty">No tasks on this spoke yet.</div>`; return; }
-  // P-RS-PAST.1 (ADR-0574): open tasks are the list; closed and stopped ones (their lane is gone, nothing more runs)
+  // P-RS-PAST.1 (ADR-0575): open tasks are the list; closed and stopped ones (their lane is gone, nothing more runs)
   // fold into Past tasks, newest first, still a click away from their session and recall. A repaint keeps the fold
   // as the user left it. Rows keep their index into s.tasks, which the click handler reads.
   const row = (t: RemoteTaskView, i: number): string => {
@@ -616,7 +616,7 @@ export function onRemotePanelClick(t: HTMLElement, box: HTMLElement): boolean {
 
 /** A task's Cancel, Resume and Stop, for the per-spoke panel and the Fleet grid's remote lanes alike. ADR-0509:
  *  Resume is the human's call, armed like Approve; the second click sends RESUME_TEXT as a follow-up. Stop asks
- *  once (ADR-0576) and then sends `close`. `computer` is the spoke's label, for the question. Every write goes to
+ *  once (ADR-0577) and then sends `close`. `computer` is the spoke's label, for the question. Every write goes to
  *  `send` (act or laneAct, both through sendAct). True when the click was one of them. */
 function taskOpClick(t: HTMLElement, task: RemoteTaskView, computer: string, armed: Record<string, number>, send: (op: RemoteOp, input: { task: string; text?: string }) => void): boolean {
   if (t.closest("[data-rs-cancel]")) { send("cancel", { task: task.id }); return true; }
@@ -674,7 +674,7 @@ type RemoteOp = "submit" | "followup" | "cancel" | "close";
 /** One action on a spoke through the engine, then a fresh hub read so every view shows its effect. The panel's
  *  buttons, the Start-a-task selector and the Fleet grid's remote lanes (P-RS-LANES.1) all go through here.
  *  `error` is null when the spoke accepted it, else the refusal in words (an older spoke's own text included).
- *  `queued` (ADR-0576): the spoke took a follow-up while the task works and gives it after the current step. */
+ *  `queued` (ADR-0577): the spoke took a follow-up while the task works and gives it after the current step. */
 async function sendAct(node: string, op: RemoteOp, input: { task?: string; text?: string; name?: string; model?: string }): Promise<{ error: string | null; queued: boolean }> {
   if (!deps) return { error: "The fleet is not ready.", queued: false };
   // P-RS-SESSION.1: the spoke journals a prompt as its hash only; remembered here, its session shows the text.
@@ -709,6 +709,8 @@ async function loadApprovals(box: HTMLElement): Promise<void> {
   if (!out) return;
   const list = await readApprovals(out, node, null, () => panel?.node === node, "Nothing is waiting on this spoke.");
   if (list && panel) panel.approvals = list;
+  // A read that failed is not "read": clear the marker so the next poll asks again instead of waiting for Check.
+  else if (!list && panel?.node === node) panel.asksRead = "";
 }
 
 /** Read a spoke's parked actions into `out` as approvalCards (only `task`'s when one is named) and return them in
@@ -828,7 +830,7 @@ function buildLaneCard(lane: RemoteLane): LaneCard {
       <span class="orbit-remote-tag">${icon("link", 10)} remote</span>
       <span class="rs-state" data-rs-lane-state></span>
       <button class="btn-mini orbit-btn rs-lane-open" data-rs-lane-open data-tip="Open|This spoke's own panel in the Remote spokes view: every task, parked actions, models and recall.">${icon("arrowRight", 12)} Open</button>
-      <button class="fleet-card-btn fleet-dismiss" data-rs-stop aria-label="Stop this agent" title="Stop this agent. What it did so far is kept under Past tasks." hidden>${icon("close", 12)}</button>
+      <button class="fleet-card-btn fleet-dismiss" data-rs-stop aria-label="Stop this agent" data-tip="Stop this agent|What it did so far is kept under Past tasks." hidden>${icon("close", 12)}</button>
     </div>
     <div class="fleet-card-main rs-lane-main">
       <div class="rs-lane-task"><b data-rs-lane-task></b><small data-rs-lane-meta></small></div>
@@ -871,7 +873,7 @@ function paintLaneCard(entry: LaneCard, lane: RemoteLane, a: HubActions, now: nu
     for (const k of Object.keys(entry.armed)) if (!k.startsWith("approve:")) delete entry.armed[k];
     const acts = $("[data-rs-lane-acts]", card);
     if (acts) acts.innerHTML = b ? `${b.resume ? RESUME_BTN : ""}${b.cancel ? CANCEL_BTN : ""}` : "";
-    // ADR-0576: Stop sits in the header, where a local lane's Stop is.
+    // ADR-0577: Stop sits in the header, where a local lane's Stop is.
     const stop = $("[data-rs-stop]", card) as HTMLElement | null;
     if (stop) stop.hidden = !b?.close;
     const follow = $("[data-rs-lane-follow]", card);
@@ -882,7 +884,7 @@ function paintLaneCard(entry: LaneCard, lane: RemoteLane, a: HubActions, now: nu
     if (asks) asks.hidden = !parked;
   }
   if (parked && !entry.asksRead) { entry.asksRead = true; void loadLaneAsks(entry); }
-  // P-RS-SESSION.1 (ADR-0572): the task's session in the card, live like a local lane's output.
+  // P-RS-SESSION.1 (ADR-0573): the task's session in the card, live like a local lane's output.
   const sess = $("[data-rs-lane-session]", card) as HTMLElement | null;
   if (sess) {
     sess.hidden = !(t && a.recall);
@@ -895,6 +897,7 @@ async function loadLaneAsks(entry: LaneCard): Promise<void> {
   if (!out) return;
   const list = await readApprovals(out, entry.node, entry.task, () => entry.card.isConnected, entry.task ? "Nothing is waiting on this task now." : "Nothing is waiting on this spoke now.");
   if (list) entry.approvals = list;
+  else entry.asksRead = false; // failed: the next poll asks again
 }
 
 async function laneAct(entry: LaneCard, op: RemoteOp, input: { task: string; text?: string }, done?: () => void): Promise<void> {

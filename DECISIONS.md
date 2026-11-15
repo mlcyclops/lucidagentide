@@ -27136,7 +27136,7 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 
 **Consequences.** `rd /s /q build` and `Remove-Item -Recurse` now always ask, as `rm -rf build` does; remote lanes refuse them outright. A command quoted as an argument is not read as one. Left as designed: a remote agent connection with `permissionPolicy: "allow"` (ADR-0149, a per-connection opt-in for a trusted gateway) answers its own asks without this floor.
 
-## ADR-0571 -- P-RS-APPROVE-UX: an unlocked password hub approves without retyping, and a parked spoke shows its parked actions on its own (2026-11-13)
+## ADR-0572 -- P-RS-APPROVE-UX: an unlocked password hub approves without retyping, and a parked spoke shows its parked actions on its own (2026-11-13)
 
 **Status:** Accepted. Amends ADR-0507 (its password amendment) and ADR-0551. Pairs with Remote Spokes plugin ADR-A105. Proof: `bun test desktop/renderer/remote_spokes_model.test.ts desktop/remote_spokes.test.ts`; desktop typecheck.
 
@@ -27150,7 +27150,7 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 
 **Consequences.** While the hub is unlocked, anyone at the IDE can approve without the password; the window and its lock live in the plugin (ADR-A105). Approvals are read once per new park, not per poll.
 
-## ADR-0572 -- P-RS-SESSION.1: a remote task shows a live session screen, like a local lane's, with no Refresh (2026-11-13)
+## ADR-0573 -- P-RS-SESSION.1: a remote task shows a live session screen, like a local lane's, with no Refresh (2026-11-13)
 
 **Status:** Accepted. Amends ADR-0506 and ADR-0551. Pairs with Remote Spokes plugin ADR-A106. Proof: `bun test desktop/remote_spokes.test.ts desktop/renderer/remote_spokes_model.test.ts`.
 
@@ -27166,7 +27166,7 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 
 **Consequences.** No Refresh or Check is needed to follow a remote task. A watched working task costs a status read every 3 s (each journaled by the spoke as an audit entry under no task) and one recall per change (journaled under the task, left out of the session). Tool calls are not in the journal, so a remote session shows the model's words and the state, not tool chips. The Whole journal recall stays for the full record.
 
-## ADR-0573 -- P-HOLDER.2: held lanes run from a per-version copy of the runtime, and an update asks about the lanes first (2026-11-13)
+## ADR-0574 -- P-HOLDER.2: held lanes run from a per-version copy of the runtime, and an update asks about the lanes first (2026-11-13)
 
 **Status:** Accepted. Amends ADR-0534 (lane holders) and the updater (ADR-A009 channels unchanged). Proof: `bun test desktop/lane_runtime.test.ts desktop/update_lanes.test.ts desktop/lane_holder.test.ts desktop/fleet_lanes.test.ts desktop/controller/lane_lifecycle.test.ts`; a live run on Windows with the packaged binaries (below).
 
@@ -27184,9 +27184,9 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 
 **Consequences.** Each app version costs one copy on disk while a lane uses it, and the first held lane after an update waits for the copy if the background one has not finished. Lanes held before this change still run from the install folder; the prompt names them, and the first update after this change is the last that has to wait for them. Lanes keep running the version they started on until they are started again.
 
-## ADR-0574 -- P-RS-PAST.1: a spoke's finished tasks fold under Past tasks (2026-11-13)
+## ADR-0575 -- P-RS-PAST.1: a spoke's finished tasks fold under Past tasks (2026-11-13)
 
-**Status:** Accepted. Amends ADR-0509 (the per-spoke panel's task list) and ADR-0572 (which task the Session section picks).
+**Status:** Accepted. Amends ADR-0509 (the per-spoke panel's task list) and ADR-0573 (which task the Session section picks).
 
 **Context.** A spoke keeps every task it ever ran in its `status` answer, and the per-spoke panel listed all of them. On the workstation hub, spoke-01 showed 27 rows: 2 open, 8 closed and 17 `stopped` (their lanes ended when the spoke's engine restarted). Stopped rows offer no Close, so they could never be tidied, and the Session section ranked a stopped task like an idle one when picking which task to show.
 
@@ -27197,7 +27197,7 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 
 **Consequences.** Nothing is deleted. The spoke still sends every task in each `status` answer, so the answer grows with the spoke's history. Trimming that is the add-on's call (a retention window for ended tasks), and recall reads the journal by task id either way.
 
-## ADR-0575 -- P-FLEET-UX: the Fleet window is the front door for everyone, the engine owns boards, and Herd is the terminal face (2026-11-13)
+## ADR-0576 -- P-FLEET-UX: the Fleet window is the front door for everyone, the engine owns boards, and Herd is the terminal face (2026-11-13)
 
 **Status:** Accepted (owner, 2026-11-13: "1) A, 2) Ok"). Amends ADR-0489 to ADR-0497 and ADR-0541 (where Herd's spaces live). Relates to issue #610. Proposal and mockup: `deliverables/herd-gui-2026-11/` in the workspace.
 
@@ -27211,9 +27211,9 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 
 **Consequences.** Phases: (1) plain-language setup and errors, a one-confirm Stop and an always-on reply box on remote cards; (2) engine-owned boards, layout presets and Next; (3) New agent, Computers and pairing by check code, plus the spoke's own view; (4) Herd reads the engine's boards; (5) the spoke's ended-task retention. The Remote Spokes add-on carries the spoke-side pieces (queued follow-up, a local view and stop, pairing by code, retention).
 
-## ADR-0576 -- P-FLEET-UX.1: plain-language Herd setup, one-confirm Stop and an always-on reply box on remote agents (2026-11-13)
+## ADR-0577 -- P-FLEET-UX.1: plain-language Herd setup, one-confirm Stop and an always-on reply box on remote agents (2026-11-13)
 
-**Status:** Accepted. Implements phase 1 of ADR-0575. Amends ADR-0541 (the Herd card), ADR-0509 (task buttons) and ADR-0551 (remote lane cards). Proof: `bun test desktop/renderer/remote_spokes_model.test.ts plugins/herd` and the typecheck.
+**Status:** Accepted. Implements phase 1 of ADR-0576. Amends ADR-0541 (the Herd card), ADR-0509 (task buttons) and ADR-0551 (remote lane cards). Proof: `bun test desktop/renderer/remote_spokes_model.test.ts plugins/herd` and the typecheck.
 
 **Context.** A non-technical user met Herd as "A Herdr-style terminal fleet: a hub server...", a disabled "Not in this build" with no reason or way forward, and, with the IDE closed, an error that told them to run the very command that had just failed. On remote agents, Stop was an archive icon that needed two clicks, unlike a local lane's ✕, and the reply box vanished whenever the agent was working.
 

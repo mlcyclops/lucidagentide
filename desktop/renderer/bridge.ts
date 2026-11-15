@@ -312,7 +312,7 @@ export type ApprovalScope = "once" | "session";
 export interface LaneView {
   id: string; name: string; cwd: string; model: string; status: LaneStatus;
   createdAt: number; lastActivityAt: number; turns: number;
-  /** P-HOLDER.2 (ADR-0573): a held lane runs from this version's runtime copy, an earlier version's, or the install
+  /** P-HOLDER.2 (ADR-0574): a held lane runs from this version's runtime copy, an earlier version's, or the install
    *  folder; absent for a lane that is the engine's own child. */
   heldRuntime?: "current" | "previous" | "install";
   /** P-FLEET.L4: Retry is offered only when a last prompt exists; respawns counts in-place revivals. */
@@ -1205,7 +1205,7 @@ export interface LucidBridge {
    *  Recall and parked actions come back scanned; recalled text is shown as text and enters a prompt only as the
    *  delimited `context`. Every action is re-gated by the hub certificate's scopes engine-side. */
   remoteSpokes(): Promise<RemoteHubView | null>;
-  /** `since` (P-RS-SESSION.1, ADR-0572): only the entries after that journal seq. */
+  /** `since` (P-RS-SESSION.1, ADR-0573): only the entries after that journal seq. */
   remoteSpokeRecall(node: string, task?: string, since?: number): Promise<RecallView | null>;
   /** P-RS-SESSION.1: the spoke's own task list, read now (not the hub's 15 s summary). */
   remoteSpokeStatus(node: string): Promise<RemoteStatusView | null>;
