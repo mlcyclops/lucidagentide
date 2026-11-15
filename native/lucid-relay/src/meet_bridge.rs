@@ -547,6 +547,17 @@ fn mode_of(value: Body) -> R<&'static str> {
     MODES.iter().copied().find(|x| *x == m).ok_or_else(|| E::Bad(MODE_ERROR.into()))
 }
 
+const MODE_PLATFORM: &str = "space mode is only for a Google Chat link";
+
+/// `mode` for a link on `platform`: "space" only on Google Chat, where a space carries messages that do not mention
+/// Lucid; elsewhere every message already reaches the connector by mention, so "space" is refused (400).
+fn mode_for(platform: &str, mode: &'static str) -> R<&'static str> {
+    if mode == "space" && platform != "gchat" {
+        return Err(E::Bad(MODE_PLATFORM.into()));
+    }
+    Ok(mode)
+}
+
 const NOTICE_KIND: &str = "unknown notice kind";
 const GAP_ORDER: &str = "a gap needs start before end";
 const GAP_FUTURE: &str = "a gap cannot end in the future";
@@ -2245,7 +2256,7 @@ impl Hub {
     }
 
     /// `POST /v1/bridge/c/mode {link, mode, by_name}` -> `{link}` (PD-1 section 4.5): what crosses from the space,
-    /// "mentions" or "space". A change is kept on the link, every member hears `bridge_link` and the conversation a
+    /// "mentions" or "space" ("space" only on a Google Chat link, else 400). A change is kept on the link, every member hears `bridge_link` and the conversation a
     /// system line; the same mode again changes nothing.
     pub fn bridge_c_mode(&self, who: &Identity, link: Body, mode: Body, by_name: Body) -> R<Obj> {
         field(by_name, "by_name", NAME_MAX)?;
@@ -2254,6 +2265,7 @@ impl Hub {
         let r = (|| -> R<Obj> {
             let org = st.bridge_c_enter(who)?;
             let found = st.bridge_c_link(who, link, true)?;
+            let mode = mode_for(&pj::text_of(&found, "platform"), mode)?;
             let lid = pj::text_of(&found, "id");
             if link_mode(&found) != mode {
                 let cid = pj::text_of(&found, "channel");
@@ -2883,6 +2895,18 @@ mod tests {
             }
         }
         assert!(matches!(mode_of(None), Err(E::Bad(_))));
+    }
+
+    #[test]
+    fn space_mode_is_only_for_google_chat() {
+        assert_eq!(mode_for("gchat", "space").ok(), Some("space"));
+        for p in ["slack", "teams", ""] {
+            match mode_for(p, "space") {
+                Err(E::Bad(m)) => assert_eq!(m, MODE_PLATFORM),
+                _ => panic!("space accepted on {p}"),
+            }
+            assert_eq!(mode_for(p, "mentions").ok(), Some("mentions"));
+        }
     }
 
     #[test]
