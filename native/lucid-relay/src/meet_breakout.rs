@@ -204,7 +204,7 @@ impl State {
     /// _breakout_hosts: host powers over the breakout rooms of `main`: a relay admin, the person who planned them, or
     /// the person who hosts the main room now (from any device).
     fn breakout_hosts(&self, planner: Option<&str>, main: &str, who: &Identity) -> bool {
-        if self.admins.contains(&who.principal) || planner == Some(who.principal.as_str()) {
+        if self.admins.contains(&who.principal) || planner == Some(who.principal.as_str()) || (!who.guest && self.pa_is_cohost(main, &who.principal)) {
             return true;
         }
         self.stage_host(main).and_then(|h| self.peers.get(&h)).map(|p| p.who.principal == who.principal).unwrap_or(false)

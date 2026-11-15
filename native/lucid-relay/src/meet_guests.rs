@@ -385,14 +385,14 @@ impl State {
             .collect()
     }
 
-    /// _guests_sees_lobby: the room's host or a relay admin in it (never a guest, never while waiting for recording
-    /// consent).
+    /// _guests_sees_lobby: the room's host, a co-organizer or a relay admin in it (never a guest, never while waiting
+    /// for recording consent).
     fn guests_sees_lobby(&self, peer_id: &str) -> bool {
         let Some(p) = self.peers.get(peer_id) else { return false };
         if p.who.guest || p.admission_pending {
             return false;
         }
-        self.stage_host(&p.room).as_deref() == Some(peer_id) || self.admins.contains(&p.who.principal)
+        self.pa_hosts(&p.room, peer_id) || self.admins.contains(&p.who.principal)
     }
 
     fn guests_host_view(&mut self, room: &str) -> Value {
@@ -718,7 +718,7 @@ impl Hub {
             if p.room != room {
                 return forbidden("you are not in that call");
             }
-            if st.stage_mut(&room).get("host").and_then(Value::as_str) != Some(peer.as_str()) && !st.admins.contains(&who.principal) {
+            if !st.pa_hosts(&room, peer) && !st.admins.contains(&who.principal) {
                 return forbidden(NOT_HOST);
             }
         } else if let Some(session) = &session {
@@ -813,7 +813,7 @@ impl Hub {
                 return forbidden(ADMISSION_FIRST);
             }
             let room = st.peers[peer_id].room.clone();
-            if who.guest || (st.stage_mut(&room).get("host").and_then(Value::as_str) != Some(peer_id) && !st.admins.contains(&who.principal)) {
+            if who.guest || (!st.pa_hosts(&room, peer_id) && !st.admins.contains(&who.principal)) {
                 return forbidden(NOT_HOST);
             }
             st.guests_sweep();

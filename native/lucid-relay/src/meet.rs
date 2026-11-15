@@ -143,6 +143,8 @@ pub enum E {
     Forbidden(String),
     /// Conflict: 409 (the connection closes).
     Conflict(String),
+    /// A Conflict with `info` (a stale prefs `rev`): 409 with the info merged in after `error`.
+    ConflictInfo(String, Obj),
     /// NotFound: 404.
     NotFound(String),
     /// Unavailable: 501.
@@ -168,7 +170,7 @@ pub enum E {
 impl E {
     pub fn message(&self) -> String {
         match self {
-            E::Forbidden(m) | E::Conflict(m) | E::NotFound(m) | E::Unavailable(m) | E::Gone(m) | E::Bad(m) | E::Internal(m) | E::Status(_, m, _) | E::Held(m, _) | E::Busy(m, _) => m.clone(),
+            E::Forbidden(m) | E::Conflict(m) | E::NotFound(m) | E::Unavailable(m) | E::Gone(m) | E::Bad(m) | E::Internal(m) | E::Status(_, m, _) | E::Held(m, _) | E::ConflictInfo(m, _) | E::Busy(m, _) => m.clone(),
             E::Update(info) => update_message(info),
             E::ClientGone => String::new(),
         }
@@ -248,13 +250,19 @@ pub struct Settings {
     /// device of the same person. Kept as relay.json holds them; meet_chat_e2ee checks them at start.
     pub chat_e2ee: Value,
     pub chat_history_share: Value,
+    /// Parity wave A (contract PA-1 section 10): whether calls keep an attendance list for their organizers, and for
+    /// how many days (0 keeps none).
+    pub attendance: bool,
+    pub attendance_days: i64,
+    /// PA-1 section 11: the most custom emoji the relay keeps.
+    pub emoji_max: i64,
 }
 
-const SETTINGS_FIELDS: [&str; 42] = [
+const SETTINGS_FIELDS: [&str; 45] = [
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "channel_days", "signer_url", "signer_cert",
     "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations", "file_max_mb", "files_quota_gb", "guest_port",
     "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max",
-    "bridge_policies", "chat_e2ee", "chat_history_share",
+    "bridge_policies", "chat_e2ee", "chat_history_share", "attendance", "attendance_days", "emoji_max",
 ];
 
 /// ORG_FIELD_MAX: characters of an organization id or label.
@@ -317,6 +325,9 @@ impl Default for Settings {
             bridge_policies: Obj::new(),
             chat_e2ee: Value::from("default"),
             chat_history_share: Value::Bool(true),
+            attendance: true,
+            attendance_days: 30,
+            emoji_max: 500,
         }
     }
 }
@@ -344,6 +355,25 @@ fn recording_settings(raw: &Obj, s: &mut Settings) -> Result<(), String> {
         org_entry(principal, owner).map_err(|e| e.message())?;
     }
     s.organizations = orgs.clone();
+    Ok(())
+}
+
+/// Parity wave A settings: `attendance` (true or false), `attendance_days` and `emoji_max` (whole numbers, 0 or
+/// more).
+fn parity_settings(raw: &Obj, s: &mut Settings) -> Result<(), String> {
+    match raw.get("attendance") {
+        None => {}
+        Some(Value::Bool(b)) => s.attendance = *b,
+        Some(_) => return Err("attendance must be true or false".into()),
+    }
+    for (key, slot) in [("attendance_days", &mut s.attendance_days), ("emoji_max", &mut s.emoji_max)] {
+        if let Some(v) = raw.get(key) {
+            match pj::as_int(Some(v)) {
+                Some(n) if n >= 0 => *slot = n,
+                _ => return Err(format!("{key} must be a whole number (0 or more)")),
+            }
+        }
+    }
     Ok(())
 }
 
@@ -466,6 +496,7 @@ impl Settings {
                 _ => return Err("relay settings: files_quota_gb must be a number of gigabytes".into()),
             }
         }
+        parity_settings(raw, &mut s)?;
         Ok(s)
     }
 }
@@ -1607,6 +1638,12 @@ pub fn run(ctx: &mut Ctx, result: std::thread::Result<R<Obj>>) -> Option<(u16, O
             ctx.close = true;
             (409, err(m))
         }
+        Err(E::ConflictInfo(m, info)) => {
+            ctx.close = true;
+            let mut o = err(m);
+            o.extend(info);
+            (409, o)
+        }
         Err(E::Status(status, m, close)) => {
             ctx.close |= close;
             (status, err(m))
@@ -1674,6 +1711,25 @@ mod tests {
         let long = "x".repeat(201);
         for owner in [json!({"Ann@x": {"id": "o", "label": "O"}}), json!({"": {"id": "o", "label": "O"}}), json!({"ann@x": {"id": "o"}}), json!({"ann@x": {"id": "o", "label": "O", "x": "y"}}), json!({"ann@x": {"id": " ", "label": "O"}}), json!({"ann@x": {"id": 1, "label": "O"}}), json!({"ann@x": {"id": long, "label": "O"}}), json!({"ann@x": "org"})] {
             assert_eq!(check(json!({"organizations": owner})).unwrap_err(), "organization membership needs principal, id and label");
+        }
+    }
+
+    #[test]
+    fn parity_settings_are_checked_as_python_does() {
+        let check = |v: Value| {
+            let mut s = Settings::default();
+            parity_settings(v.as_object().unwrap(), &mut s).map(|_| s)
+        };
+        let s = check(json!({})).unwrap();
+        assert_eq!((s.attendance, s.attendance_days, s.emoji_max), (true, 30, 500));
+        let s = check(json!({"attendance": false, "attendance_days": 0, "emoji_max": 20})).unwrap();
+        assert_eq!((s.attendance, s.attendance_days, s.emoji_max), (false, 0, 20));
+        for wrong in [json!({"attendance": 1}), json!({"attendance": null})] {
+            assert_eq!(check(wrong).unwrap_err(), "attendance must be true or false");
+        }
+        for wrong in [json!(-1), json!(1.5), json!(true), json!("30"), Value::Null] {
+            assert_eq!(check(json!({"attendance_days": wrong})).unwrap_err(), "attendance_days must be a whole number (0 or more)");
+            assert_eq!(check(json!({"emoji_max": wrong})).unwrap_err(), "emoji_max must be a whole number (0 or more)");
         }
     }
 

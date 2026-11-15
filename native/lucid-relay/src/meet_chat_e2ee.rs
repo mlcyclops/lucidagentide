@@ -84,7 +84,8 @@ const ENTRY_FIRST: [&str; 11] = ["seq", "op", "by", "by_device", "who", "ts", "p
 const BUNDLE: [&str; 9] = ["principal", "device", "dck", "created", "expires", "serial", "cert", "chain", "sig"];
 const WRAP: [&str; 12] = ["cid", "from", "epoch", "to", "eph", "dck_sha256", "blob", "members", "log_seq", "log_hash", "ts", "sig"];
 const SHARE: [&str; 10] = ["cid", "orig", "from", "epoch", "to", "eph", "dck_sha256", "blob", "ts", "sig"];
-const PLAIN_FIELDS: [&str; 4] = ["text", "mentions", "preview", "poll"];
+/// `fwd` too: a forwarded encrypted message carries its origin inside the payload (`fw`, CE-1 revision 4).
+const PLAIN_FIELDS: [&str; 5] = ["text", "mentions", "preview", "poll", "fwd"];
 
 /// In memory: the settings and each person's recent channel joins and leaves (monotonic times).
 pub struct Ce {
@@ -1132,9 +1133,13 @@ impl Hub {
             let late = stay.late_history;
             if newer {
                 stay.chat_catchup = Some(v.clone());
+            }
+            let attendance = Value::Bool(st.pa_attendance_on());
+            if newer {
                 let event = obj([
                     ("type", Value::from("room_options")),
                     ("late_history", Value::Bool(late)),
+                    ("attendance", attendance.clone()),
                     ("catchup", Value::Object(v.clone())),
                     ("by", Value::from(who.name.clone())),
                     ("principal", Value::from(who.principal.clone())),
@@ -1143,7 +1148,7 @@ impl Hub {
                 st.broadcast(&room, &event, None);
                 log_info(&format!("options room={room} principal={} catchup={}", who.principal, if *on { "on" } else { "off" }));
             }
-            let mut options = obj([("late_history", Value::Bool(late))]);
+            let mut options = obj([("late_history", Value::Bool(late)), ("attendance", attendance)]);
             st.ce_options(&room, &mut options);
             Ok(obj([("ok", Value::Bool(true)), ("options", Value::Object(options))]))
         })();

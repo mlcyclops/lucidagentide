@@ -246,7 +246,7 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Resu
             close = true;
             (403, err(msg))
         }
-        Err(E::Conflict(msg)) => (409, err(msg)),
+        Err(E::Conflict(msg)) | Err(E::ConflictInfo(msg, _)) => (409, err(msg)),
         Err(E::NotFound(msg)) => (404, err(msg)),
         Err(E::Unavailable(msg)) => (501, err(msg)),
         Err(E::Gone(msg)) => (410, err(msg)),

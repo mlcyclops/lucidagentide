@@ -547,7 +547,7 @@ impl Hub {
         let mut st = self.st.lock();
         let r = (|| -> R<(Obj, String)> {
             let room = st.tools_seat(peer_id, who)?;
-            let host = st.stage_host(&room).as_deref() == Some(peer_id);
+            let host = st.pa_hosts(&room, peer_id);
             let presenter = st.stages.get(&room).and_then(|s| s.get("presenter")).and_then(|p| p.get("peer")).and_then(Value::as_str) == Some(peer_id);
             let existed = st.boards.contains_key(&room);
             let was_locked = st.boards.get(&room).map(|b| b.locked).unwrap_or(false);

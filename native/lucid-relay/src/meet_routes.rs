@@ -2,7 +2,7 @@
 // caller, body and gate in the order the Python handler does, so the same request gets the same first refusal.
 
 use crate::meet::{self as m, run, Ctx, R, CAPTIONS_LIMIT_MAX};
-use crate::meet_hub::{bridge, ce, files, E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
+use crate::meet_hub::{bridge, ce, files, parity, E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
 use crate::meet_json::{self as pj, obj, Obj};
 use crate::meet_tls::{crl_path, read_bytes};
 use crate::meet_x509::pem_blocks;
@@ -55,6 +55,21 @@ fn get_route(path: &str) -> Option<Route> {
         },
         "/v1/room/history" => room_history,
         "/v1/room/captions" => room_captions,
+        // parity wave A
+        "/v1/prefs" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.gate(&who, None, "", &session)?;
+            c.relay.hub.prefs_get(&session, &who)
+        },
+        "/v1/attendance" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.gate(&who, None, "", &session)?;
+            c.relay.hub.attendance(&session, &who, &c.q("room", ""))
+        },
+        "/v1/emoji" => emoji_list,
+        "/v1/emoji/file" => emoji_file,
         "/v1/admin/renewals" => |c: &mut Ctx| {
             let who = c.who(false)?;
             c.relay.hub.admin_renewals(&c.q("session", ""), &who)
@@ -230,7 +245,7 @@ fn post_route(path: &str) -> Option<Route> {
             if b.contains_key("enc") {
                 return c.relay.hub.ce_post(&who, "channel", post(&b, Some(session), None));
             }
-            c.relay.hub.channel_post(&session, &who, b.get("id"), b.get("text"), b.get("reply_to"), b.get("mentions"), b.get("thread"), b.get("also_channel"), b.get("preview"))
+            c.relay.hub.channel_post(&session, &who, b.get("id"), b.get("text"), b.get("reply_to"), b.get("mentions"), b.get("thread"), b.get("also_channel"), b.get("preview"), b.get("fwd"))
         },
         "/v1/channels/read" => |c: &mut Ctx| {
             let (who, b, session) = session_gate(c)?;
@@ -243,11 +258,11 @@ fn post_route(path: &str) -> Option<Route> {
         },
         "/v1/meetings" => |c: &mut Ctx| {
             let (who, b, session) = session_gate(c)?;
-            c.relay.hub.meeting_create(&session, &who, b.get("title"), b.get("start"), b.get("end"), b.get("attendees"), b.get("description"), b.get("recurrence"), b.get("tz"))
+            c.relay.hub.meeting_create(&session, &who, b.get("title"), b.get("start"), b.get("end"), b.get("attendees"), b.get("description"), b.get("recurrence"), b.get("tz"), b.get("cohosts"))
         },
         "/v1/meetings/update" => |c: &mut Ctx| {
             let (who, b, session) = session_gate(c)?;
-            let changes: Obj = ["title", "start", "end", "attendees", "description", "recurrence", "tz"].iter().filter_map(|k| b.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
+            let changes: Obj = ["title", "start", "end", "attendees", "description", "recurrence", "tz", "cohosts"].iter().filter_map(|k| b.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
             c.relay.hub.meeting_update(&session, &who, b.get("id"), &changes)
         },
         "/v1/meetings/cancel" => |c: &mut Ctx| {
@@ -259,6 +274,19 @@ fn post_route(path: &str) -> Option<Route> {
             c.relay.hub.meeting_rsvp(&session, &who, b.get("id"), b.get("response"))
         },
         "/v1/invite" => invite,
+        // parity wave A
+        "/v1/prefs" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate_max(c, parity::PREFS_BODY_MAX)?;
+            c.relay.hub.prefs_set(&session, &who, &b)
+        },
+        "/v1/emoji" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate_max(c, parity::EMOJI_BODY_MAX)?;
+            c.relay.hub.emoji_add(&session, &who, b.get("name"), b.get("image"))
+        },
+        "/v1/emoji/delete" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.emoji_delete(&session, &who, b.get("name"))
+        },
         "/v1/recording" => recording,
         "/v1/recording/policy" => recording_policy,
         "/v1/recording/consent" => recording_consent,
@@ -598,7 +626,7 @@ fn chat(c: &mut Ctx) -> R<Obj> {
         return c.relay.hub.ce_post(&who, "room", post(&b, None, opt(&b, "peer")));
     }
     let text = m::text(b.get("text"), "messages")?;
-    c.relay.hub.say(&peer, &who, &text, b.get("reply_to"), b.get("mentions"))
+    c.relay.hub.say(&peer, &who, &text, b.get("reply_to"), b.get("mentions"), b.get("fwd"))
 }
 
 /// The encrypted message a route's body carries (ce_post).
@@ -730,6 +758,29 @@ fn files_send(c: &mut Ctx, file: &Obj, fh: std::fs::File, offset: u64, count: u6
     c.raw = Some(m::Raw::File(m::RawFile { headers, file: fh, offset, count, id, principal }));
 }
 
+// ── parity wave A: custom emoji ──────────────────────────────────────────────────────────────────────────────
+
+/// `GET /v1/emoji?session=`: every custom emoji, as a JSON list `[{name, hash, org, by, ts}]`.
+fn emoji_list(c: &mut Ctx) -> R<Obj> {
+    let who = c.who(false)?;
+    let session = c.q("session", "");
+    c.gate(&who, None, "", &session)?;
+    let rows = c.relay.hub.emoji_list(&session, &who)?;
+    let body = pj::dumps(&Value::Array(rows)).into_bytes();
+    let headers = vec![("Content-Type", "application/json".to_string()), ("Cache-Control", "no-store".to_string()), ("Content-Length", body.len().to_string())];
+    c.raw = Some(m::Raw::Bytes(headers, body));
+    Ok(Obj::new())
+}
+
+/// `GET /v1/emoji/file?hash=`: a custom emoji's image (public content, cached for good).
+fn emoji_file(c: &mut Ctx) -> R<Obj> {
+    let who = c.who(false)?;
+    c.gate(&who, None, "", "")?;
+    let (headers, body) = c.relay.hub.emoji_file(&c.q("hash", ""))?;
+    c.raw = Some(m::Raw::Bytes(headers, body));
+    Ok(Obj::new())
+}
+
 // ── bridges: connector routes ────────────────────────────────────────────────────────────────────────────────
 
 /// _bridge_connector: the caller, a connector certificate (403 for anyone else).
@@ -831,7 +882,7 @@ fn stage(c: &mut Ctx) -> R<Obj> {
 
 fn status(c: &mut Ctx) -> R<Obj> {
     let (who, b, session) = session_gate(c)?;
-    c.relay.hub.set_status(&session, &who, b.get("state"), b.get("text"))
+    c.relay.hub.set_status(&session, &who, b.get("state"), b.get("text"), b.get("until"))
 }
 
 fn caption(c: &mut Ctx) -> R<Obj> {

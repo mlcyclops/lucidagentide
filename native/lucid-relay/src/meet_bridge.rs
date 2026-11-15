@@ -1037,12 +1037,20 @@ impl State {
                 Value::Object(obj([("id", get("id")), ("name", get("name")), ("size", get("size")), ("mime", get("type"))]))
             })
             .collect();
+        // a forwarded message (PA-1 section 1) crosses as text starting "Forwarded from <name>:"
+        let text = match msg.get("fwd") {
+            Some(Value::Object(origin)) => {
+                let name = hide(&pj::s(origin, "name"));
+                format!("Forwarded from {}:\n{}", if name.is_empty() { "someone" } else { name.as_str() }, pj::s(msg, "text"))
+            }
+            _ => pj::s(msg, "text"),
+        };
         obj([
             ("msg", msg.get("id").cloned().unwrap_or(Value::Null)),
             ("from_name", Value::from(hide(&from_name))),
             ("from_org", Value::Object(obj([("label", Value::from(label))]))),
             ("from_platform", Value::from(src.map(|s| pj::text_of(s, "platform")).unwrap_or_else(|| "lucid".into()))),
-            ("text", Value::from(pj::s(msg, "text"))),
+            ("text", Value::from(text)),
             ("thread", Value::from("")),
             ("reply_to", Value::from(reply)),
             ("mentions", Value::Array(mentions)),

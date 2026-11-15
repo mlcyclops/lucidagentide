@@ -124,7 +124,7 @@ impl Hub {
             if expire_grant(st.stage_mut(&room), now) {
                 st.stage_event(&room, "expire", "", None);
             }
-            let host = st.stage_host(&room).as_deref() == Some(me.as_str()) || st.admins.contains(&who.principal);
+            let host = st.pa_hosts(&room, &me) || st.admins.contains(&who.principal);
             let mut other: Option<String> = None;
             if let Some(t) = target.filter(|t| !t.is_null() && t.as_str() != Some("")) {
                 let id = pj::py_str(t);

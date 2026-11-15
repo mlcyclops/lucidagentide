@@ -698,15 +698,17 @@ impl Hub {
 
     /// channel_post (`POST /v1/channels/post`): a message to a channel or group chat. `thread` (a message of it) makes
     /// it a thread reply, kept out of the main conversation unless `also_channel`; `mentions` keeps only members;
-    /// `preview` is the sender's Hub's link preview. Every member's sessions hear `channel_message`.
+    /// `preview` is the sender's Hub's link preview; `fwd` a forwarded message's origin. Every member's sessions hear
+    /// `channel_message`.
     #[allow(clippy::too_many_arguments)]
-    pub fn channel_post(&self, session: &str, who: &Identity, cid: Body, text: Body, reply_to: Body, mentioned: Body, thread: Body, also_channel: Body, link: Body) -> R<Obj> {
+    pub fn channel_post(&self, session: &str, who: &Identity, cid: Body, text: Body, reply_to: Body, mentioned: Body, thread: Body, also_channel: Body, link: Body, fwd: Body) -> R<Obj> {
         let text = m::text(text, "messages")?;
         let reply_to = message_id(reply_to, "reply_to")?;
         let thread = message_id(thread, "thread")?;
         let mentioned = mentions(mentioned)?;
         let also = m::flag(also_channel, "also_channel")?;
         let link = link_preview(link)?;
+        let fwd = parity::fwd(fwd)?;
         if also && thread.is_none() {
             return bad("also_channel is only for a thread reply");
         }
@@ -748,6 +750,9 @@ impl Hub {
             }
             if let Some(p) = &link {
                 msg.insert("preview".into(), Value::Object(p.clone()));
+            }
+            if let Some(origin) = &fwd {
+                msg.insert("fwd".into(), Value::Object(origin.clone()));
             }
             // the bridge: `bridged` on the message before anyone hears it
             st.bridge_chan_posted(&cid, &mut msg);

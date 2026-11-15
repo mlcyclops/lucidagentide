@@ -136,6 +136,26 @@ fn attendees(v: Option<&Value>) -> R<Vec<String>> {
     Ok(out)
 }
 
+/// _meeting_cohosts: the principals the organizer names co-organizers of the meeting's calls, lower case, each once.
+fn cohosts(v: Option<&Value>) -> R<Vec<String>> {
+    let list = match v {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(a)) if a.iter().all(Value::is_string) => a,
+        _ => return bad("cohosts must be a list of people"),
+    };
+    let mut out: Vec<String> = Vec::new();
+    for p in list {
+        let p = p.as_str().unwrap_or_default().trim().to_lowercase();
+        if !p.is_empty() && !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    if out.len() > parity::COHOSTS_MAX {
+        return bad(parity::MEETING_COHOSTS_FULL);
+    }
+    Ok(out)
+}
+
 /// _stored_meeting: a meeting from state.json has the shape the routes rely on.
 pub(super) fn stored_meeting(mid: &str, meeting: &Value) -> bool {
     let Some(m) = meeting.as_object() else { return false };
@@ -254,6 +274,7 @@ impl State {
             ("tz", m.get("tz").cloned().unwrap_or_else(|| Value::from(""))),
             ("organizer", Value::Object(self.meeting_person(&pj::text_of(&organizer, "principal"), &pj::s(&organizer, "name")))),
             ("attendees", Value::Array(attendees)),
+            ("cohosts", m.get("cohosts").filter(|c| c.is_array()).cloned().unwrap_or_else(|| Value::Array(Vec::new()))),
             ("created", m.get("created").cloned().unwrap_or_else(|| Value::from(0))),
             ("updated", m.get("updated").cloned().unwrap_or_else(|| Value::from(0))),
             ("canceled", m.get("canceled").cloned().unwrap_or(Value::Null)),
@@ -311,9 +332,10 @@ impl State {
 
 impl Hub {
     /// meeting_create (`POST /v1/meetings`): schedule a meeting in a new room; every attendee (who must be in the
-    /// directory) and the organizer's other sessions hear `meeting` `invite`.
+    /// directory) and the organizer's other sessions hear `meeting` `invite`. `cohosts` (people in the directory)
+    /// become co-organizers of its calls when they join.
     #[allow(clippy::too_many_arguments)]
-    pub fn meeting_create(&self, session: &str, who: &Identity, title: Body, start: Body, end: Body, attendees_v: Body, description: Body, recurrence_v: Body, tz: Body) -> R<Obj> {
+    pub fn meeting_create(&self, session: &str, who: &Identity, title: Body, start: Body, end: Body, attendees_v: Body, description: Body, recurrence_v: Body, tz: Body, cohosts_v: Body) -> R<Obj> {
         let title = meeting_title(title)?;
         let (start, end) = (meeting_time(start, "start")?, meeting_time(end, "end")?);
         meeting_span(start, end)?;
@@ -321,11 +343,14 @@ impl Hub {
         let recurrence = recurrence(recurrence_v)?;
         let tz = time_zone(tz)?;
         let people = attendees(attendees_v)?;
+        let chosen = cohosts(cohosts_v)?;
         let mut st = self.st.lock();
         let r = (|| -> R<(Obj, String, usize)> {
             st.session(session, who)?;
             let people: Vec<String> = people.into_iter().filter(|p| *p != who.principal).collect();
             st.meeting_known(&people)?;
+            let chosen: Vec<String> = chosen.into_iter().filter(|p| *p != who.principal).collect();
+            st.meeting_known(&chosen)?;
             let mut room = meeting_room();
             while st.meetings.contains_key(&room) || st.rooms.contains_key(&room) {
                 room = meeting_room();
@@ -346,6 +371,7 @@ impl Hub {
                 ("tz", Value::from(tz.clone())),
                 ("organizer", Value::Object(obj([("principal", Value::from(who.principal.clone())), ("name", Value::from(who.name.clone()))]))),
                 ("attendees", Value::Array(listed)),
+                ("cohosts", Value::Array(chosen.into_iter().map(Value::from).collect())),
                 ("created", f(now)),
                 ("updated", f(now)),
                 ("canceled", Value::Null),
@@ -374,6 +400,7 @@ impl Hub {
         let recurrence = given("recurrence").map(|v| recurrence(Some(v))).transpose()?;
         let tz = given("tz").map(|v| time_zone(Some(v))).transpose()?;
         let people = given("attendees").map(|v| attendees(Some(v))).transpose()?;
+        let chosen = given("cohosts").map(|v| cohosts(Some(v))).transpose()?;
         let mut st = self.st.lock();
         let r = (|| -> R<(Obj, String, usize, usize, usize, bool)> {
             st.session(session, who)?;
@@ -397,6 +424,11 @@ impl Hub {
                 }
                 None => None,
             };
+            if let Some(list) = chosen {
+                let list: Vec<String> = list.into_iter().filter(|p| *p != who.principal).collect();
+                st.meeting_known(&list)?;
+                m.insert("cohosts".into(), Value::Array(list.into_iter().map(Value::from).collect()));
+            }
             let retime = (new_start, new_end) != (old_start, old_end)
                 || recurrence.as_ref().map(|r| *r != pj::text_of(&m, "recurrence")).unwrap_or(false)
                 || tz.as_ref().map(|t| *t != pj::text_of(&m, "tz")).unwrap_or(false);
