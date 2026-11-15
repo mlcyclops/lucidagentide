@@ -60,7 +60,7 @@ impl Cbor {
     }
 }
 
-fn cbor_item(d: &[u8], pos: usize, depth: usize) -> Result<(Cbor, usize), String> {
+pub(crate) fn cbor_item(d: &[u8], pos: usize, depth: usize) -> Result<(Cbor, usize), String> {
     if depth > CBOR_DEPTH {
         return Err("nested too deeply".into());
     }

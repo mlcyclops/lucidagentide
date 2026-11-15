@@ -1,0 +1,89 @@
+{
+ "v": 1,
+ "file": "rs-rules-lowering-v1.json",
+ "now": 1794780082,
+ "root_pub": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEbF1ESqvbdbdrRIhWP_w__khwA9UGAGtJDYA8-E8kld41GvyWX-pcqZ82bp62BuaIWTT2MCw16n5Yzzl4S-Tv_A",
+ "org_name": "Acme",
+ "gates": {
+  "G-ENGINE": "verified",
+  "G-PRES-PIV": "verified",
+  "G-PRES-FIDO2": "verified",
+  "G-OKTA-PHR": "verified"
+ },
+ "cases": [
+  {
+   "name": "end to end across effective_at with the root offline",
+   "steps": [
+    {
+     "bundle": {
+      "crl": "eyJpYXQiOjE3OTQ3ODAwMjIsImlkcF9tYXBfc2hhMjU2IjoiMTJlOWFlMmQzZDI4N2I0ZmYzZDg0YTIyM2IzNDU2Yzc0MDkxNGQ3M2ZjZTRhYzkyY2E0YzhmYWFiYmVjM2Y2YSIsImlkcF9tYXBfdmVyc2lvbiI6MSwibmV4dFVwZGF0ZSI6MTc5NTM4NDgyMiwib3JnX3J1bGVzX3BlbmRpbmdfZWZmZWN0aXZlX2F0IjoxNzk0ODY2NDgyLCJvcmdfcnVsZXNfcGVuZGluZ19leHAiOjE3OTUyMTIwODIsIm9yZ19ydWxlc19wZW5kaW5nX3NoYTI1NiI6Ijc3YmMyZjE0OGI5ODQ0ZjIxNmFmYmFhZmRkMmZlZjhhMGI3NDVmOGVjMmFkMGZmNjMyYjA1ODc5OGVhNjMwNWMiLCJvcmdfcnVsZXNfcGVuZGluZ192ZXJzaW9uIjoyLCJvcmdfcnVsZXNfc2hhMjU2IjoiZmRhMjE0NDBmMDFhMzQ0NWEwZGFhOGUyMTgyMTRiNmRiZTgxMGZjOWEyYzEzOWE5ZTE3OTI3NGYxYjYwNmZmNSIsIm9yZ19ydWxlc192ZXJzaW9uIjoxLCJyb290Ijoibl9mYmZlMjA1OWViMTM5ZGE2ZGI0MWRlZjk5OTEwMjRjMCIsInNlcmlhbHMiOltdLCJ0eXAiOiJsdWNpZC1jcmwiLCJ2IjoxLCJ2ZXJzaW9uIjoyfQ.MEUCIH72JS82eJxXwMsKz120-GLGqflWoRA44sPszfhATbYEAiEAjf-hCyoCGE1Bi5x1V4eI7K1OiOCQLx8sEcN0N996GaU",
+      "idpMap": "eyJmaWRvMl9hYWd1aWRzIjpbXSwiZmlkbzJfcm9vdHMiOltdLCJpYXQiOjE3OTQ3NzY0ODIsInBpdl9pc3N1ZXJzIjpbXSwicGl2X3BvbGljeV9vaWRzIjpbXSwicHJvdmlkZXJzIjpbeyJncm91cHMiOnsiMDBnMWEyYjNjNCI6eyJjbGVhcmFuY2VzIjpbInByaXZhdGUiXSwic2NvcGVzIjpbImFwcHJvdmUiLCJkcml2ZSIsInJlY2FsbCJdfX0sImlkIjoib2t0YSIsImlzcyI6Imh0dHBzOi8vYWNtZS5va3RhLmNvbS9vYXV0aDIvZGVmYXVsdCIsImtpbmQiOiJva3RhIiwib3V0YWdlX21pbnV0ZXMiOjMwLCJwb2xsX21pbnV0ZXMiOjE1LCJzZXJ2aWNlIjoiTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFZEJnUU8zeXREb21mRGZQSVVXYzR5S1gxcXNnOE9IWG83eDBLa1ZNNmxOZWF1dGFZbXJldTZvX1R1bjNmdkhydVlPYWpSalZKamExdTNWd1FNMVNmV1EifV0sInJvb3QiOiJuX2ZiZmUyMDU5ZWIxMzlkYTZkYjQxZGVmOTk5MTAyNGMwIiwidHlwIjoibHVjaWQtaWRwLW1hcCIsInYiOjIsInZlcnNpb24iOjF9.MEQCIAMdBWw5CScYtNS-GEyUJcKmzAcsvMBN4_hzDSkbCYimAiAQi5TbN0u6Z4tItNiL1bJVZF6F-8lX1G-L_0JLpHFJBw",
+      "orgRules": "eyJleHAiOjE3OTczNzIwODIsImZlYXR1cmVzIjpbImNlcnQtaWRwLXYxIl0sImlhdCI6MTc5NDc3NjQ4Miwicm9vdCI6Im5fZmJmZTIwNTllYjEzOWRhNmRiNDFkZWY5OTkxMDI0YzAiLCJydWxlcyI6eyJwcm92aWRlcnMiOlt7ImlkIjoib2t0YSIsImlzcyI6Imh0dHBzOi8vYWNtZS5va3RhLmNvbS9vYXV0aDIvZGVmYXVsdCIsInBocl92YWx1ZXMiOlsiYWNyOnBociJdfV0sInJlcXVpcmVfcGhpc2hpbmdfcmVzaXN0YW50Ijp0cnVlLCJzaWduaW5fbWF4X2RheXMiOjMwLCJ2IjoyfSwidHlwIjoibHVjaWQtb3JnLXJ1bGVzIiwidiI6MiwidmVyc2lvbiI6MX0.MEUCIBrNnQJVks16oxs96R7Oo7kNTiR0ruzCbs0_qsCaYeCfAiEAluzNFTQgSiXeA4GmI1Hn-zWdAYZcySSnZa9wrvr-Omg",
+      "rulesLowering": "eyJiYXNlX3J1bGVzX3NoYTI1NiI6ImZkYTIxNDQwZjAxYTM0NDVhMGRhYThlMjE4MjE0YjZkYmU4MTBmYzlhMmMxMzlhOWUxNzkyNzRmMWI2MDZmZjUiLCJiYXNlX3J1bGVzX3ZlcnNpb24iOjEsImVmZmVjdGl2ZV9hdCI6MTc5NDg2NjQ4MiwiZXhwIjoxNzk1MjEyMDgyLCJmZWF0dXJlcyI6WyJjZXJ0LWlkcC12MSJdLCJuZXh0X3J1bGVzX3ZlcnNpb24iOjIsInJlYXNvbiI6IkNvbnRyYWN0b3IgbGFwdG9wcyB3aXRob3V0IHNlY3VyaXR5IGtleXMgdW50aWwgRGVjZW1iZXIgMjAiLCJyb290Ijoibl9mYmZlMjA1OWViMTM5ZGE2ZGI0MWRlZjk5OTEwMjRjMCIsInJ1bGVzIjp7InByb3ZpZGVycyI6W3siaWQiOiJva3RhIiwiaXNzIjoiaHR0cHM6Ly9hY21lLm9rdGEuY29tL29hdXRoMi9kZWZhdWx0IiwicGhyX3ZhbHVlcyI6WyJhY3I6cGhyIl19XSwicmVxdWlyZV9waGlzaGluZ19yZXNpc3RhbnQiOnRydWUsInNpZ25pbl9tYXhfZGF5cyI6OTAsInYiOjJ9LCJzaWduZWRfYXQiOjE3OTQ3ODAwODIsInNpZ25lcnMiOlt7ImNlcnRfc2hhMjU2IjoiOTQ2MmQ1YzVhZjAzNjNmNTBhOTgwZDI2MGViZTQ5NzQzZTMwMDgyNjg0M2NhNjYwOWFjZDYwMTA1NTkxMjNmOCIsInByaW5jaXBhbCI6Im5fZTBhYmQ0YTBlODdhNWVkZjU2NDg2MmJkMDAzZGM0OTQiLCJwcm9vZiI6Ik1FVUNJQmxlMGR0Qmt2TVB2WkxqY0hHWWF5TjVpelJFM25YcHNQbU1RUEJaMEpUWEFpRUF3dml5TXlabnZiTjlGVDhidWVwOVo2UWttdzZud05xVEVZZC1PQ3pWTW9VIn0seyJjZXJ0X3NoYTI1NiI6ImZiZmUyMDU5ZWIxMzlkYTZkYjQxZGVmOTk5MTAyNGMwM2U1NTMzODUzYWZlNzRiMmRiZDkzNmJiMzExMTFhZjkiLCJwcmluY2lwYWwiOiJuX2ZiZmUyMDU5ZWIxMzlkYTZkYjQxZGVmOTk5MTAyNGMwIiwicHJvb2YiOiJNRVlDSVFDWFRlSGRZb1oxOFhEOUJ4d1BpMkJaV3k5LUNPOU5EaHk0U2x5YXJOb3EyQUloQU5JMWFXMDcwY1YwbHZwSmE3MnJua211UXBXbl8yWUtPRGlwWlJLeXVJV1IifV0sInR5cCI6Imx1Y2lkLXJzLXJ1bGVzLWxvd2VyaW5nLXYxIiwidiI6MX0.MEUCIQClEKh3fzPGohwPxoj02tWKbaD83xA_39LklWHF6oPpxQIgKnZQmgaQtduypxfHa8DR2cX_OokhuFgUusjhrEcra5E"
+     },
+     "expect": {
+      "ok": true
+     }
+    }
+   ],
+   "checks": [
+    {
+     "now": 1794866481,
+     "expect": {
+      "ok": true,
+      "carrier": "ordinary",
+      "version": 1
+     }
+    },
+    {
+     "now": 1794866482,
+     "expect": {
+      "ok": true,
+      "carrier": "lowering",
+      "version": 2
+     }
+    },
+    {
+     "now": 1795212081,
+     "expect": {
+      "ok": true,
+      "carrier": "lowering",
+      "version": 2
+     }
+    },
+    {
+     "now": 1795212082,
+     "expect": {
+      "ok": false,
+      "event": "rs_lowering_expired",
+      "words": "Acme's lowered rules expired on 2026-11-20; ask the root holder to sign new rules"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true
+   }
+  },
+  {
+   "name": "a wire the CRL does not anchor",
+   "steps": [
+    {
+     "bundle": {
+      "crl": "eyJpYXQiOjE3OTQ3NzY0ODIsImlkcF9tYXBfc2hhMjU2IjoiMTJlOWFlMmQzZDI4N2I0ZmYzZDg0YTIyM2IzNDU2Yzc0MDkxNGQ3M2ZjZTRhYzkyY2E0YzhmYWFiYmVjM2Y2YSIsImlkcF9tYXBfdmVyc2lvbiI6MSwibmV4dFVwZGF0ZSI6MTc5NTM4NDg4Miwib3JnX3J1bGVzX3BlbmRpbmdfZWZmZWN0aXZlX2F0IjowLCJvcmdfcnVsZXNfcGVuZGluZ19leHAiOjAsIm9yZ19ydWxlc19wZW5kaW5nX3NoYTI1NiI6IiIsIm9yZ19ydWxlc19wZW5kaW5nX3ZlcnNpb24iOjAsIm9yZ19ydWxlc19zaGEyNTYiOiJmZGEyMTQ0MGYwMWEzNDQ1YTBkYWE4ZTIxODIxNGI2ZGJlODEwZmM5YTJjMTM5YTllMTc5Mjc0ZjFiNjA2ZmY1Iiwib3JnX3J1bGVzX3ZlcnNpb24iOjEsInJvb3QiOiJuX2ZiZmUyMDU5ZWIxMzlkYTZkYjQxZGVmOTk5MTAyNGMwIiwic2VyaWFscyI6W10sInR5cCI6Imx1Y2lkLWNybCIsInYiOjEsInZlcnNpb24iOjF9.MEUCIDOSeV2lFvquZfP7I7kp_7edO9fhaXdgMNETbenJl74MAiEAnf_xZci6Kn-WCcDyidnhxVxfw1DEcrJmCoSyOX643oU",
+      "idpMap": "eyJmaWRvMl9hYWd1aWRzIjpbXSwiZmlkbzJfcm9vdHMiOltdLCJpYXQiOjE3OTQ3NzY0ODIsInBpdl9pc3N1ZXJzIjpbXSwicGl2X3BvbGljeV9vaWRzIjpbXSwicHJvdmlkZXJzIjpbeyJncm91cHMiOnsiMDBnMWEyYjNjNCI6eyJjbGVhcmFuY2VzIjpbInByaXZhdGUiXSwic2NvcGVzIjpbImFwcHJvdmUiLCJkcml2ZSIsInJlY2FsbCJdfX0sImlkIjoib2t0YSIsImlzcyI6Imh0dHBzOi8vYWNtZS5va3RhLmNvbS9vYXV0aDIvZGVmYXVsdCIsImtpbmQiOiJva3RhIiwib3V0YWdlX21pbnV0ZXMiOjMwLCJwb2xsX21pbnV0ZXMiOjE1LCJzZXJ2aWNlIjoiTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFZEJnUU8zeXREb21mRGZQSVVXYzR5S1gxcXNnOE9IWG83eDBLa1ZNNmxOZWF1dGFZbXJldTZvX1R1bjNmdkhydVlPYWpSalZKamExdTNWd1FNMVNmV1EifV0sInJvb3QiOiJuX2ZiZmUyMDU5ZWIxMzlkYTZkYjQxZGVmOTk5MTAyNGMwIiwidHlwIjoibHVjaWQtaWRwLW1hcCIsInYiOjIsInZlcnNpb24iOjF9.MEQCIAMdBWw5CScYtNS-GEyUJcKmzAcsvMBN4_hzDSkbCYimAiAQi5TbN0u6Z4tItNiL1bJVZF6F-8lX1G-L_0JLpHFJBw",
+      "orgRules": "eyJleHAiOjE3OTczNzIwODIsImZlYXR1cmVzIjpbImNlcnQtaWRwLXYxIl0sImlhdCI6MTc5NDc3NjQ4Miwicm9vdCI6Im5fZmJmZTIwNTllYjEzOWRhNmRiNDFkZWY5OTkxMDI0YzAiLCJydWxlcyI6eyJwcm92aWRlcnMiOlt7ImlkIjoib2t0YSIsImlzcyI6Imh0dHBzOi8vYWNtZS5va3RhLmNvbS9vYXV0aDIvZGVmYXVsdCIsInBocl92YWx1ZXMiOlsiYWNyOnBociJdfV0sInJlcXVpcmVfcGhpc2hpbmdfcmVzaXN0YW50Ijp0cnVlLCJzaWduaW5fbWF4X2RheXMiOjMwLCJ2IjoyfSwidHlwIjoibHVjaWQtb3JnLXJ1bGVzIiwidiI6MiwidmVyc2lvbiI6MX0.MEUCIBrNnQJVks16oxs96R7Oo7kNTiR0ruzCbs0_qsCaYeCfAiEAluzNFTQgSiXeA4GmI1Hn-zWdAYZcySSnZa9wrvr-Omg"
+     },
+     "expect": {
+      "ok": true
+     }
+    }
+   ],
+   "wire": "eyJiYXNlX3J1bGVzX3NoYTI1NiI6ImZkYTIxNDQwZjAxYTM0NDVhMGRhYThlMjE4MjE0YjZkYmU4MTBmYzlhMmMxMzlhOWUxNzkyNzRmMWI2MDZmZjUiLCJiYXNlX3J1bGVzX3ZlcnNpb24iOjEsImVmZmVjdGl2ZV9hdCI6MTc5NDg2NjQ4MiwiZXhwIjoxNzk1MjEyMDgyLCJmZWF0dXJlcyI6WyJjZXJ0LWlkcC12MSJdLCJuZXh0X3J1bGVzX3ZlcnNpb24iOjIsInJlYXNvbiI6IkNvbnRyYWN0b3IgbGFwdG9wcyB3aXRob3V0IHNlY3VyaXR5IGtleXMgdW50aWwgRGVjZW1iZXIgMjAiLCJyb290Ijoibl9mYmZlMjA1OWViMTM5ZGE2ZGI0MWRlZjk5OTEwMjRjMCIsInJ1bGVzIjp7InByb3ZpZGVycyI6W3siaWQiOiJva3RhIiwiaXNzIjoiaHR0cHM6Ly9hY21lLm9rdGEuY29tL29hdXRoMi9kZWZhdWx0IiwicGhyX3ZhbHVlcyI6WyJhY3I6cGhyIl19XSwicmVxdWlyZV9waGlzaGluZ19yZXNpc3RhbnQiOnRydWUsInNpZ25pbl9tYXhfZGF5cyI6OTAsInYiOjJ9LCJzaWduZWRfYXQiOjE3OTQ3ODAwODIsInNpZ25lcnMiOlt7ImNlcnRfc2hhMjU2IjoiOTQ2MmQ1YzVhZjAzNjNmNTBhOTgwZDI2MGViZTQ5NzQzZTMwMDgyNjg0M2NhNjYwOWFjZDYwMTA1NTkxMjNmOCIsInByaW5jaXBhbCI6Im5fZTBhYmQ0YTBlODdhNWVkZjU2NDg2MmJkMDAzZGM0OTQiLCJwcm9vZiI6Ik1FVUNJQmxlMGR0Qmt2TVB2WkxqY0hHWWF5TjVpelJFM25YcHNQbU1RUEJaMEpUWEFpRUF3dml5TXlabnZiTjlGVDhidWVwOVo2UWttdzZud05xVEVZZC1PQ3pWTW9VIn0seyJjZXJ0X3NoYTI1NiI6ImZiZmUyMDU5ZWIxMzlkYTZkYjQxZGVmOTk5MTAyNGMwM2U1NTMzODUzYWZlNzRiMmRiZDkzNmJiMzExMTFhZjkiLCJwcmluY2lwYWwiOiJuX2ZiZmUyMDU5ZWIxMzlkYTZkYjQxZGVmOTk5MTAyNGMwIiwicHJvb2YiOiJNRVlDSVFDWFRlSGRZb1oxOFhEOUJ4d1BpMkJaV3k5LUNPOU5EaHk0U2x5YXJOb3EyQUloQU5JMWFXMDcwY1YwbHZwSmE3MnJua211UXBXbl8yWUtPRGlwWlJLeXVJV1IifV0sInR5cCI6Imx1Y2lkLXJzLXJ1bGVzLWxvd2VyaW5nLXYxIiwidiI6MX0.MEUCIQClEKh3fzPGohwPxoj02tWKbaD83xA_39LklWHF6oPpxQIgKnZQmgaQtduypxfHa8DR2cX_OokhuFgUusjhrEcra5E",
+   "expect": {
+    "ok": false,
+    "event": "rs_lowering_unanchored",
+    "words": "Acme's lowered rules are not named by the current revocation list; the earlier rules still apply"
+   }
+  }
+ ]
+}

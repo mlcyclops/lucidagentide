@@ -289,7 +289,8 @@ pub fn parse_envelope(v: Option<&Value>) -> Option<(&Map<String, Value>, String,
     let to = str_of(o.get("to")).filter(|s| is_node_id(s))?;
     let id = str_of(o.get("id")).filter(|s| crate::identity::is_serial(s))?;
     safe_int(o.get("ts"))?;
-    let cert = str_of(o.get("cert"))?;
+    // A renewed sign-in leaf is up to LEAF_TOKEN_MAX characters (contract 5.5, carriers row 4); open() judges it.
+    let cert = str_of(o.get("cert")).filter(|c| crate::codec::utf16_len(c) <= LEAF_TOKEN_MAX)?;
     let b64u_char = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'-';
     let (a, b) = cert.split_once('.')?;
     if a.is_empty() || b.is_empty() || !a.bytes().all(b64u_char) || !b.bytes().all(b64u_char) {
@@ -341,13 +342,18 @@ impl State {
                     bundle.insert(key.into(), Value::from(v));
                 }
             }
-            let accepted = if bundle.len() > 1 {
-                match parse_bundle(Some(&Value::Object(bundle))) {
-                    Some(b) => trust.accept_bundle(&b),
-                    None => Err("malformed bundle".to_owned()),
-                }
-            } else {
-                trust.accept_crl(&text)
+            // Items that no longer apply leave every IdP-bound certificate refused until the next bundle, and the start
+            // goes on with the CRL alone.
+            let whole = (bundle.len() > 1).then(|| match parse_bundle(Some(&Value::Object(bundle))) {
+                Some(b) => trust.accept_bundle(&b).map_err(|r| r.reason),
+                None => Err("malformed bundle".to_owned()),
+            });
+            if let Some(Err(reason)) = &whole {
+                logger.security("crl.stored-items-refused", &Fields::new().with("reason", reason), Level::Warn);
+            }
+            let accepted = match whole {
+                Some(Ok(changed)) => Ok(changed),
+                _ => trust.accept_crl(&text),
             };
             if let Err(reason) = accepted {
                 // Fail closed: never start without the revocations we had.
@@ -1096,7 +1102,7 @@ impl State {
             ("/v1/crl", "POST") => {
                 let parsed = body();
                 let Some(b) = parse_bundle(parsed.as_ref()) else { return Ok(refuse(&logger, 400, "malformed", "crl.malformed", &who)) };
-                let accepted = if b.items.is_empty() { self.trust.accept_crl(&b.crl) } else { self.trust.accept_bundle(&b) };
+                let accepted = if b.items.is_empty() { self.trust.accept_crl(&b.crl) } else { self.trust.accept_bundle(&b).map_err(|r| r.reason) };
                 match accepted {
                     Err(reason) => refuse(&logger, 409, &reason, "crl.refused", &who),
                     Ok(changed) => {
@@ -1493,20 +1499,27 @@ mod tests {
     /// A request signed by `key`: (status, answer).
     #[allow(clippy::too_many_arguments)]
     fn call(st: &mut State, key: &SigningKey, auth: Auth, method: &str, path: &str, body: &str, t: i64, nonce: u32) -> (u16, Value) {
+        let (status, text) = call_at(st, AUDIENCE, key, auth, method, path, body, t, nonce);
+        (status, parse_json(&text).unwrap_or(Value::Null))
+    }
+
+    /// `call` for this audience; the answer's text as sent.
+    #[allow(clippy::too_many_arguments)]
+    fn call_at(st: &mut State, audience: &str, key: &SigningKey, auth: Auth, method: &str, path: &str, body: &str, t: i64, nonce: u32) -> (u16, String) {
         let nonce = format!("{nonce:032x}");
         let ts = js_number_string(t as f64);
         let body_hash = sha256_hex(body.as_bytes());
         let a = match auth {
             Auth::Legacy(cert) => {
-                let line = format!("lucid-relay-auth/v2\n{AUDIENCE}\n{method}\n{path}\n{ts}\n{nonce}\n{body_hash}");
+                let line = format!("lucid-relay-auth/v2\n{audience}\n{method}\n{path}\n{ts}\n{nonce}\n{body_hash}");
                 let sig: Signature = key.sign(line.as_bytes());
                 json!({ "cert": cert, "ts": t, "nonce": nonce, "sig": b64u(sig.to_der().as_bytes()) })
             }
             Auth::Hash(sha, label) => {
                 let line = if label == "v3" {
-                    format!("lucid-relay-auth/v3\n{AUDIENCE}\n{method}\n{path}\n{ts}\n{nonce}\n{body_hash}\n{sha}")
+                    format!("lucid-relay-auth/v3\n{audience}\n{method}\n{path}\n{ts}\n{nonce}\n{body_hash}\n{sha}")
                 } else {
-                    format!("lucid-relay-auth/v2\n{AUDIENCE}\n{method}\n{path}\n{ts}\n{nonce}\n{body_hash}")
+                    format!("lucid-relay-auth/v2\n{audience}\n{method}\n{path}\n{ts}\n{nonce}\n{body_hash}")
                 };
                 let sig: Signature = key.sign(line.as_bytes());
                 json!({ "cert_sha256": sha, "ts": t, "nonce": nonce, "sig": b64u(sig.to_der().as_bytes()) })
@@ -1518,7 +1531,7 @@ mod tests {
         let pathname = path.split('?').next().unwrap_or(path);
         let r = Request { method, pathname, path, authorization: &authorization, seat: None, dialed: &d, body, where_: &where_ };
         let reply = st.serve(&r, t, true).unwrap();
-        (reply.status, parse_json(&reply.body).unwrap_or(Value::Null))
+        (reply.status, reply.body)
     }
 
     fn register(st: &mut State, key: &SigningKey, cert: &str, t: i64, nonce: u32) -> u16 {
@@ -1730,5 +1743,149 @@ mod tests {
         assert_eq!(junk(&mut st, &parses, t + 1000), 401);
         assert!(!st.nonces.contains_key("stale"));
         assert_eq!(st.swept_at, Some(t + 1000));
+    }
+
+    // ── The add-on's relay vectors (scripts/relay-idp-vectors.ts): node-cert-v1.json and inbox-batch-v1.json ─────
+
+    /// The release gates the add-on's vectors were made with.
+    const VECTOR_GATES: [&str; 4] = ["G-ENGINE", "G-PRES-PIV", "G-PRES-FIDO2", "G-OKTA-PHR"];
+
+    fn vector_file(name: &str) -> Value {
+        let path = format!("{}/tests/{name}", env!("CARGO_MANIFEST_DIR"));
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}; copy it from the add-on's remote-spoke/test/vectors/"));
+        parse_json(&text).unwrap_or_else(|| panic!("{path} is JSON"))
+    }
+
+    fn pem_root(pem: &str) -> crate::der::P256Key {
+        crate::der::p256_from_spki(&crate::der::pem_blocks(pem, "PUBLIC KEY").remove(0)).expect("a P-256 root")
+    }
+
+    fn vector_state(root: crate::der::P256Key, owner: Option<String>, cert_store_bytes: i64) -> State {
+        let opts = Options {
+            root,
+            owner,
+            license: None,
+            crl_file: None,
+            store: None,
+            seen_file: None,
+            directory_file: None,
+            users_file: None,
+            store_bytes: STORE_BYTES,
+            sender_bytes: SENDER_BYTES,
+            cert_store_bytes,
+            cert_dir: None,
+            console: None,
+        };
+        let mut st = State::new(opts, Arc::new(Logger::capture("relay", Box::new(|_, _| {})))).expect("the relay starts");
+        st.trust.set_gates(&VECTOR_GATES);
+        st
+    }
+
+    #[test]
+    fn node_certificate_vectors_get_the_same_answers() {
+        let v = vector_file("node-cert-v1.json");
+        let owner = v["owner"].as_str().unwrap().to_owned();
+        assert_eq!(v["audience"].as_str(), Some(format!("lan:{owner}").as_str()));
+        let limits = &v["limits"];
+        assert_eq!(limits["registerBodyBytes"].as_u64(), Some(REGISTER_BODY_BYTES as u64));
+        assert_eq!(limits["certsPerNode"].as_u64(), Some(CERTS_PER_NODE as u64));
+        assert_eq!(limits["certStoreBytes"].as_i64(), Some(CERT_STORE_BYTES));
+        assert_eq!(limits["certStoreMinBytes"].as_i64(), Some(CERT_STORE_MIN_BYTES));
+        for c in v["cases"].as_array().unwrap() {
+            let name = c["name"].as_str().unwrap();
+            let mut st = vector_state(pem_root(c["root"]["pem"].as_str().unwrap()), Some(owner.clone()), CERT_STORE_BYTES);
+            // `testFloor`: a budget below the 16 MiB floor, so eviction shows with a few certificates (set directly,
+            // never through the shared floor other tests read).
+            if let Some(cap) = c["certStoreBytes"].as_i64() {
+                assert!(c["testFloor"] == true, "{name}");
+                st.cert_cap = cap;
+            }
+            assert_eq!(st.trust.root_id, c["root"]["id"].as_str().unwrap(), "{name}");
+            let b = parse_bundle(Some(&c["bundle"])).expect("a well-formed bundle");
+            st.trust.accept_bundle(&b).unwrap_or_else(|r| panic!("{name}: the bundle was refused: {}", r.reason));
+            for (i, s) in c["steps"].as_array().unwrap().iter().enumerate() {
+                let (method, path) = (s["method"].as_str().unwrap(), s["path"].as_str().unwrap());
+                let body = s["body"].as_str().unwrap_or("");
+                let d = Dialed { host: "relay.example.com".into(), hostname: "relay.example.com".into(), port: 443 };
+                let where_ = Fields::new();
+                let r = Request { method, pathname: path, path, authorization: s["authorization"].as_str().unwrap(), seat: None, dialed: &d, body, where_: &where_ };
+                let reply = st.serve(&r, s["at"].as_i64().unwrap(), true).unwrap();
+                assert_eq!(reply.status, s["expect"]["status"].as_u64().unwrap() as u16, "{name}, step {}: {}", i + 1, reply.body);
+                if let Some(want) = s["expect"].get("json") {
+                    assert_eq!(&parse_json(&reply.body).unwrap_or(Value::Null), want, "{name}, step {}", i + 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn inbox_batch_vectors_get_the_same_replies() {
+        use p256::pkcs8::DecodePrivateKey;
+        let v = vector_file("inbox-batch-v1.json");
+        let limits = &v["limits"];
+        assert_eq!(limits["bodyBytes"].as_u64(), Some(BODY_BYTES as u64));
+        assert_eq!(limits["inboxBatch"].as_u64(), Some(INBOX_BATCH as u64));
+        let root = pem_root(v["root"]["pem"].as_str().unwrap());
+        let key = |who: &str| SigningKey::from_pkcs8_pem(v[who]["privatePem"].as_str().unwrap()).expect("a P-256 key");
+        let (hub, spoke) = (key("sender"), key("recipient"));
+        let (hub_cert, spoke_cert) = (v["sender"]["cert"].as_str().unwrap(), v["recipient"]["cert"].as_str().unwrap());
+        let base = v["envelope"]["base"].as_object().unwrap();
+        let leaf_sized = v["envelope"]["leafSized"].as_str().unwrap();
+        let envelope = |id: &str, cert: &str, ct: usize| {
+            let mut e = base.clone();
+            e.insert("id".into(), Value::from(id));
+            e.insert("cert".into(), Value::from(cert));
+            e.insert("ct".into(), Value::from("A".repeat(ct)));
+            stringify(&Value::Object(e))
+        };
+        let t = v["now"].as_i64().unwrap() * 1000;
+        let mut nonce = 0u32;
+        let mut next = || {
+            nonce += 1;
+            nonce
+        };
+        for c in v["cases"].as_array().unwrap() {
+            let name = c["name"].as_str().unwrap();
+            let mut st = vector_state(root.clone(), None, CERT_STORE_BYTES);
+            assert_eq!(call_at(&mut st, AUDIENCE, &spoke, Auth::Legacy(spoke_cert), "GET", "/v1/inbox", "", t, next()).0, 200, "{name}: the spoke's first poll");
+            let queue = c["queue"].as_array().unwrap();
+            let ids: Vec<&str> = queue.iter().map(|q| q["id"].as_str().unwrap()).collect();
+            for q in queue {
+                let cert = if q["cert"] == "leaf" { leaf_sized } else { hub_cert };
+                let body = envelope(q["id"].as_str().unwrap(), cert, q["ctChars"].as_u64().unwrap() as usize);
+                let (status, text) = call_at(&mut st, AUDIENCE, &hub, Auth::Legacy(hub_cert), "POST", "/v1/send", &body, t, next());
+                assert_eq!(status, 200, "{name}: send answered {text}");
+            }
+            let (mut replies, mut sizes) = (Vec::new(), Vec::new());
+            loop {
+                let (status, text) = call_at(&mut st, AUDIENCE, &spoke, Auth::Legacy(spoke_cert), "GET", "/v1/inbox", "", t, next());
+                assert_eq!(status, 200, "{name}");
+                assert!(text.len() <= BODY_BYTES, "{name}: a reply of {} bytes", text.len());
+                let reply = parse_json(&text).unwrap();
+                let got: Vec<&str> = reply["messages"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
+                let indices: Vec<usize> = got.iter().map(|id| ids.iter().position(|x| x == id).unwrap()).collect();
+                let more = reply["more"] == true;
+                replies.push(json!({ "indices": indices, "more": more }));
+                sizes.push(text.len());
+                let ack = stringify(&json!({ "ids": got }));
+                assert_eq!(call_at(&mut st, AUDIENCE, &spoke, Auth::Legacy(spoke_cert), "POST", "/v1/ack", &ack, t, next()).0, 200, "{name}: ack");
+                if !more || replies.len() > queue.len() {
+                    break;
+                }
+            }
+            assert_eq!(Value::Array(replies), c["expect"]["replies"], "{name}");
+            let want: Vec<usize> = c["replyBytes"].as_array().unwrap().iter().map(|b| b.as_u64().unwrap() as usize).collect();
+            assert_eq!(sizes, want, "{name}: reply bytes");
+        }
+        // env.cert: 65,536 characters is taken, one more is refused (a LAN mailbox, the spoke its owner).
+        let owner = v["recipient"]["node"].as_str().unwrap().to_owned();
+        let mut st = vector_state(root, Some(owner.clone()), CERT_STORE_BYTES);
+        for (i, k) in v["certLimit"]["cases"].as_array().unwrap().iter().enumerate() {
+            let n = k["certChars"].as_u64().unwrap() as usize;
+            let body = envelope(&format!("{:032x}", i + 1), &format!("{}.B", "A".repeat(n - 2)), 24);
+            let (status, text) = call_at(&mut st, &format!("lan:{owner}"), &hub, Auth::Legacy(hub_cert), "POST", "/v1/send", &body, t, next());
+            assert_eq!(u64::from(status), k["status"].as_u64().unwrap(), "{n} characters");
+            assert_eq!(parse_json(&text).unwrap(), k["json"], "{n} characters");
+        }
     }
 }

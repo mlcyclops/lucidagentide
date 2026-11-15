@@ -758,36 +758,7 @@ pub fn check_identity(
     gates: Option<&[&str]>,
     stored: Option<&[IrProvider]>,
 ) -> Result<(), PolicyError> {
-    if !identity.is_object() {
-        return Err(invalid("identity"));
-    }
-    let o = rule_obj(identity, IDENTITY_KEYS, &["v"], "")?;
-    id_int(&o["v"], "v", 2, 2)?;
-    if let Some(v) = o.get("min_password_length") {
-        let floor = pj::as_int(Some(v)).filter(|n| *n <= 64).ok_or_else(|| invalid("min_password_length"))?;
-        if floor < PASSWORD_BASELINE {
-            return Err(PolicyError::Refused(format!("the password minimum cannot be below Lucid's minimum of {PASSWORD_BASELINE}")));
-        }
-    }
-    let require_phr = match o.get("require_phishing_resistant") {
-        None => false,
-        Some(v) => id_bool(v, "require_phishing_resistant")?,
-    };
-    for (key, low, high) in [("session_max_minutes", 5, 1440), ("idle_max_minutes", 1, 60), ("signin_max_days", 1, 90)] {
-        if let Some(v) = o.get(key) {
-            id_int(v, key, low, high)?;
-        }
-    }
-    if let Some(u) = o.get("passwordless_unlock") {
-        check_unlock(u, issued, label, gates)?;
-    }
-    let listed = match o.get("providers") {
-        None => None,
-        Some(v) => Some(check_rule_providers(v)?),
-    };
-    if let Some(v) = o.get("imported") {
-        check_imported(v)?;
-    }
+    let (o, listed, require_phr) = identity_parts(identity, PASSWORD_BASELINE, label, issued, gates)?;
     let registry = terms.providers_of(org);
     let by_id = |id: &String| registry.iter().find(|e| e.id == *id).copied();
     for (id, iss, _) in listed.iter().flatten() {
@@ -820,6 +791,51 @@ pub fn check_identity(
         return Err(invalid("signin_max_days"));
     }
     Ok(())
+}
+
+/// ID-1 3.1, shape only: an IR-1 object a device reads from a carrier the root already checked, with no provider
+/// registry and no gates (orgrules.ts `identityProblem` with `gates: null` and no registry). `baseline`: the
+/// product's password baseline (Remote Spokes: 12). `issued`: the carrier's signing time.
+pub fn identity_shape(identity: &Value, baseline: i64, issued: i64) -> Result<(), PolicyError> {
+    identity_parts(identity, baseline, "this organization", issued, None).map(|_| ())
+}
+
+/// The IR-1 object, its listed providers and `require_phishing_resistant`.
+type IdentityParts<'a> = (&'a Obj, Option<Vec<IrProvider>>, bool);
+
+/// The registry-free part of `check_identity`.
+fn identity_parts<'a>(identity: &'a Value, baseline: i64, label: &str, issued: i64, gates: Option<&[&str]>) -> Result<IdentityParts<'a>, PolicyError> {
+    if !identity.is_object() {
+        return Err(invalid("identity"));
+    }
+    let o = rule_obj(identity, IDENTITY_KEYS, &["v"], "")?;
+    id_int(&o["v"], "v", 2, 2)?;
+    if let Some(v) = o.get("min_password_length") {
+        let floor = pj::as_int(Some(v)).filter(|n| *n <= 64).ok_or_else(|| invalid("min_password_length"))?;
+        if floor < baseline {
+            return Err(PolicyError::Refused(format!("the password minimum cannot be below Lucid's minimum of {baseline}")));
+        }
+    }
+    let require_phr = match o.get("require_phishing_resistant") {
+        None => false,
+        Some(v) => id_bool(v, "require_phishing_resistant")?,
+    };
+    for (key, low, high) in [("session_max_minutes", 5, 1440), ("idle_max_minutes", 1, 60), ("signin_max_days", 1, 90)] {
+        if let Some(v) = o.get(key) {
+            id_int(v, key, low, high)?;
+        }
+    }
+    if let Some(u) = o.get("passwordless_unlock") {
+        check_unlock(u, issued, label, gates)?;
+    }
+    let listed = match o.get("providers") {
+        None => None,
+        Some(v) => Some(check_rule_providers(v)?),
+    };
+    if let Some(v) = o.get("imported") {
+        check_imported(v)?;
+    }
+    Ok((o, listed, require_phr))
 }
 
 /// `_check_unlock`: IR-1 `passwordless_unlock`. Without `gates` (a device or the relay checking a policy the

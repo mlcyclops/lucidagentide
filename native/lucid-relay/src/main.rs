@@ -25,6 +25,9 @@ mod console_webauthn;
 mod der;
 mod http_client;
 mod identity;
+mod idp;
+#[cfg(test)]
+mod idp_vectors;
 mod license;
 mod log;
 mod meet;
@@ -37,11 +40,13 @@ mod meet_org_policy;
 mod meet_routes;
 mod meet_tls;
 mod meet_x509;
+mod presence;
 mod relay;
 mod server;
 mod store;
 #[cfg(test)]
 mod vectors;
+mod x509;
 
 use crate::codec::{js_is_integer, js_number, js_trim_start};
 use crate::license::{license_token_of, LICENSE_USERS_FILE};
