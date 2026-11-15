@@ -397,10 +397,12 @@ fn leaf_problem(d: &Delegation, c: &NodeCert) -> Option<String> {
     }
 }
 
-/// A verified certificate and its public key.
+/// A verified certificate and its public key. `valid_until` (seconds): until when a cache may reuse this verdict
+/// (ID-1 5.5 "Cache"); the caller still checks the certificate's own `exp` on every use.
 pub struct CertOk {
     pub cert: NodeCert,
     pub key: P256Key,
+    pub valid_until: i64,
 }
 
 /// The CRL fields the store keeps.
@@ -409,19 +411,97 @@ struct HeldCrl {
     next_update: Option<i64>,
 }
 
+/// A CRL that passed every check, ready to be held.
+struct CheckedCrl {
+    held: HeldCrl,
+    body: String,
+    serials: Vec<String>,
+}
+
+// ── ID-1 5.4 and 5.5 (identity.ts): the CRL bundle and the relay header limits ───────────────────────────────
+
+/// The legacy relay `Authorization` form carries the certificate itself; longer ones register (5.5).
+pub const LEGACY_HEADER_CERT_MAX: usize = 8_192;
+/// A certificate token at most (a renewed sign-in leaf, TOKEN_LIMITS.leaf).
+pub const LEAF_TOKEN_MAX: usize = 65_536;
+/// A CRL bundle (5.4): 8,192 + 59,392 + 38,912 + 38,912 + 200 bytes of keys and punctuation.
+pub const MAX_BUNDLE_BYTES: usize = 145_608;
+/// How long past its nextUpdate a CRL still counts as fresh.
+pub const CRL_GRACE_SEC: i64 = 3 * 86_400;
+/// The bundle items beside the CRL (identity.ts BUNDLE_FILES): body key and state-directory file.
+pub const BUNDLE_ITEMS: [(&str, &str); 3] = [("idpMap", "idp-map"), ("orgRules", "org-rules"), ("rulesLowering", "rules-lowering")];
+
+/// A bundle body (identity.ts parseBundle): exact keys, string items, at most MAX_BUNDLE_BYTES as JSON. The pre-ID-1
+/// `{crl}` is a bundle. `items` holds the present items in BUNDLE_ITEMS order.
+pub struct Bundle {
+    pub crl: String,
+    pub items: Vec<(&'static str, String)>,
+}
+
+pub fn parse_bundle(v: Option<&Value>) -> Option<Bundle> {
+    let o = v?.as_object()?;
+    const KEYS: [&str; 4] = ["crl", "idpMap", "orgRules", "rulesLowering"];
+    if !exact_keys(o, &KEYS, &["crl"]) || !o.values().all(Value::is_string) || crate::codec::stringify(v?).len() > MAX_BUNDLE_BYTES {
+        return None;
+    }
+    let items = BUNDLE_ITEMS.iter().filter_map(|(k, _)| str_of(o.get(*k)).map(|s| (*k, s.to_owned()))).collect();
+    Some(Bundle { crl: str_of(o.get("crl"))?.to_owned(), items })
+}
+
+/// Decision 34 and the relay's legacy header (5.5): is this a renewed (`idp-renew`) leaf? Read without verifying.
+pub fn is_renewed_leaf(token: &str) -> bool {
+    peek_compact(token).is_some_and(|p| str_of(p.get("typ")) == Some("lucid-node-cert") && p.contains_key("renewal"))
+}
+
 /// The root public key and the newest CRL seen.
+///
+/// ID-1: this build holds no CRL-anchored items (identity map, org rules, rules lowering). As identity.ts without gate
+/// G-ENGINE (G-RUST is off until the Rust port is verified, contract 2.12), a CRL carrying the anchor fields is
+/// malformed, a bundle carrying items is refused, and a certificate carrying `idp` or `renewal` is malformed.
 pub struct TrustStore {
     root: P256Key,
     pub root_id: String,
     crl: Option<HeldCrl>,
     crl_token: Option<String>,
+    /// The held CRL's payload part: an equal version with another body is the two-versions alarm (5.4).
+    crl_body: Option<String>,
     revoked: HashSet<String>,
 }
 
 impl TrustStore {
     pub fn new(root: P256Key) -> TrustStore {
         let root_id = node_id_of(&p256_spki_der(&root));
-        TrustStore { root, root_id, crl: None, crl_token: None, revoked: HashSet::new() }
+        TrustStore { root, root_id, crl: None, crl_token: None, crl_body: None, revoked: HashSet::new() }
+    }
+
+    /// The held CRL's nextUpdate (seconds), or None for none held or a legacy CRL without one.
+    pub fn crl_next_update(&self) -> Option<i64> {
+        self.crl.as_ref().and_then(|c| c.next_update)
+    }
+
+    /// The held CRL and the held items it anchors (none in this build): what GET /v1/crl answers, or None.
+    pub fn bundle(&self) -> Option<Value> {
+        let crl = self.crl_token.as_deref()?;
+        let mut o = Map::new();
+        o.insert("crl".into(), Value::from(crl));
+        Some(Value::Object(o))
+    }
+
+    /// The key a relay caches a verdict under (5.5 "Cache"): the CRL version, the anchored rules carriers and map
+    /// (none held in this build).
+    pub fn cache_key(&self) -> String {
+        format!("{}::", self.crl_version())
+    }
+
+    /// ID-1 5.4: a whole bundle, all or nothing: the CRL first (newer or equal), then the items against its anchors.
+    /// Nothing held changes on a refusal.
+    pub fn accept_bundle(&mut self, b: &Bundle) -> Result<bool, String> {
+        let checked = self.check_crl(&b.crl)?;
+        // Without anchors (this build reads none) a bundle carries nothing but its CRL.
+        if !b.items.is_empty() {
+            return Err("the bundle carries items its revocation list does not name".into());
+        }
+        Ok(self.hold_crl(&b.crl, checked))
     }
 
     pub fn root_key(&self) -> &P256Key {
@@ -448,6 +528,23 @@ impl TrustStore {
     /// Take a CRL only if the root signed it and it is NEWER than the one held; once a held list carries a
     /// nextUpdate, a newer one without it is refused. Ok(changed) or Err(reason).
     pub fn accept_crl(&mut self, token: &str) -> Result<bool, String> {
+        let checked = self.check_crl(token)?;
+        Ok(self.hold_crl(token, checked))
+    }
+
+    /// Hold a CRL check_crl passed (None: the one held already); Ok(changed).
+    fn hold_crl(&mut self, token: &str, checked: Option<CheckedCrl>) -> bool {
+        let Some(c) = checked else { return false };
+        self.crl = Some(c.held);
+        self.crl_token = Some(token.to_owned());
+        self.crl_body = Some(c.body);
+        self.revoked = c.serials.into_iter().collect();
+        true
+    }
+
+    /// Every acceptCrl check without holding anything: Ok(None) for the CRL held already. ID-1 5.4: an equal version
+    /// with another body is the two-versions alarm and the held one stays.
+    fn check_crl(&self, token: &str) -> Result<Option<CheckedCrl>, String> {
         let tv = Value::String(token.to_owned());
         let Some(p) = open_compact(Some(&tv), &self.root, 8192) else { return Err("CRL is not signed by this root".into()) };
         let malformed = || Err("malformed CRL".to_string());
@@ -471,16 +568,17 @@ impl TrustStore {
         if version < held {
             return Err(format!("CRL version {version} is older than {held}"));
         }
+        let body = token.split('.').next().unwrap_or("").to_owned();
         if version == held {
-            return Ok(false);
+            if self.crl_body.as_deref().is_none_or(|b| b == body) {
+                return Ok(None);
+            }
+            return Err(format!("two different revocation lists carry version {version}; the one held stays. Tell the root holder."));
         }
         if next_update.is_none() && self.crl.as_ref().is_some_and(|c| c.next_update.is_some()) {
             return Err(format!("CRL version {version} has no nextUpdate, and this node already holds one that expires"));
         }
-        self.crl = Some(HeldCrl { version, next_update });
-        self.crl_token = Some(token.to_owned());
-        self.revoked = serials.into_iter().collect();
-        Ok(true)
+        Ok(Some(CheckedCrl { held: HeldCrl { version, next_update }, body, serials }))
     }
 
     fn verify_delegation(&self, token: Option<&Value>, now: i64) -> Result<(Delegation, P256Key), String> {
@@ -597,7 +695,9 @@ impl TrustStore {
                 return Err(format!("certificate is outside its delegation: {outside}"));
             }
         }
-        Ok(CertOk { cert, key })
+        // The cache bound (5.5 "Cache"): the leaf's own end and the CRL's staleness.
+        let valid_until = self.crl_next_update().map_or(cert.exp, |n| cert.exp.min(n + CRL_GRACE_SEC));
+        Ok(CertOk { cert, key, valid_until })
     }
 }
 

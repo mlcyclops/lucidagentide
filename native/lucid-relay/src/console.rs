@@ -1538,7 +1538,7 @@ mod tests {
     use crate::codec::js_number_string;
     use crate::der::p256_spki_der;
     use crate::identity::{node_id_of, user_id_of};
-    use crate::relay::{Options, Request, State, SENDER_BYTES, STORE_BYTES};
+    use crate::relay::{Options, Request, State, CERT_STORE_BYTES, SENDER_BYTES, STORE_BYTES};
     use p256::ecdsa::signature::Signer;
     use p256::ecdsa::{Signature, SigningKey};
 
@@ -1584,6 +1584,8 @@ mod tests {
             users_file: None,
             store_bytes: STORE_BYTES,
             sender_bytes: SENDER_BYTES,
+            cert_store_bytes: CERT_STORE_BYTES,
+            cert_dir: None,
             console,
         };
         State::new(opts, logger).unwrap()

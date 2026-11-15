@@ -7,7 +7,7 @@ use crate::codec::{js_number, now_ms, utf8_lossy};
 use crate::console::{ConsoleReply, ConsoleRequest, MARKER_HEADER};
 use crate::license::SEAT_HEADER;
 use crate::log::{Fields, Logger};
-use crate::relay::{json_reply, refuse, Dialed, HostCheck, Reply, Request, State, BODY_BYTES};
+use crate::relay::{json_reply, refuse, Dialed, HostCheck, Reply, Request, State, BODY_BYTES, REGISTER_BODY_BYTES, REGISTER_PATH};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
@@ -196,8 +196,10 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
     }
     // The body limit holds while the body streams in (RS-RELAY-02): a declared length over it is refused unread, and
     // a chunked body is read frame by frame and cut at the limit, never buffered whole.
+    // A registration has its own, smaller limit (ID-1 contract 5.5): one certificate and its wrapper.
+    let cap = if pathname == REGISTER_PATH && method == "POST" { REGISTER_BODY_BYTES } else { BODY_BYTES };
     let declared = parts.headers.get(CONTENT_LENGTH).and_then(|v| v.to_str().ok()).map(js_number).unwrap_or(0.0);
-    let mut over = if declared > BODY_BYTES as f64 { declared as usize } else { 0 };
+    let mut over = if declared > cap as f64 { declared as usize } else { 0 };
     let mut text = String::new();
     if over == 0 && method != "GET" {
         let mut body = body;
@@ -221,7 +223,7 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
                 Some(Ok(frame)) => {
                     if let Ok(data) = frame.into_data() {
                         size += data.len();
-                        if size > BODY_BYTES {
+                        if size > cap {
                             over = size;
                             break;
                         }
@@ -235,7 +237,7 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
         }
     }
     if over > 0 {
-        let f = where_.clone().with("bytes", over).with("capBytes", BODY_BYTES);
+        let f = where_.clone().with("bytes", over).with("capBytes", cap);
         let mut r = refuse(&relay.logger, 413, "too large", "request.too-large", &f);
         r.close = true; // the rest of a cut body is never read: the connection goes with it
         return to_response(r);
@@ -428,7 +430,7 @@ mod tests {
     }
 
     use crate::log::Logger;
-    use crate::relay::{Options, SENDER_BYTES, STORE_BYTES};
+    use crate::relay::{Options, CERT_STORE_BYTES, SENDER_BYTES, STORE_BYTES};
     use std::time::Instant;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -446,6 +448,8 @@ mod tests {
             users_file: None,
             store_bytes: STORE_BYTES,
             sender_bytes: SENDER_BYTES,
+            cert_store_bytes: CERT_STORE_BYTES,
+            cert_dir: None,
             console: None,
         };
         let state = State::new(opts, logger.clone()).unwrap();
