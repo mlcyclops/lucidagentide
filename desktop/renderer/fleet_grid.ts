@@ -27,7 +27,7 @@ import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599): premium tooltips,
 import { bindFileDrop, clipboardFiles, createAttachTray, folderDropNote, isAttachShortcut, mountPlusMenu, pickFiles, plusButtonTip, plusMenuItems, syncPlusButton, type AttachBridge, type AttachTray } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598): files on the lane bars
 // P-PUSH.PAR1 (ADR-pending): staged chips get the shared right-click / long-press menu, and Push now runs the
 // prompt in a new worktree lane (the decision rules are pure, in queue_model).
-import { bindItemMenu, copyToClipboard, openCtxMenu, type CtxMenuEntry } from "./ctxmenu.ts";
+import { bindItemMenu, copyToClipboard, openCtxMenu, writeClipboard, type CtxMenuEntry } from "./ctxmenu.ts";
 import { canSteer, laneDrainReady, mainCheckoutCwd, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pushLaneName, type PushSource } from "./queue_model.ts";
 // P-FLEET.L18: the grid and the orbit are two faces of one fleet - the grid links back to the map and
 // shares the "which view does the Fleet button open" pin. Acyclic: fleet_orbit never imports the grid.
@@ -1707,7 +1707,7 @@ function onLaneEvent(id: string, e: LaneEvent): void {
  *  straight out of lane_transcript - the clipboard text is never rebuilt from the DOM. */
 async function copyOut(btn: HTMLElement, text: string): Promise<void> {
   if (!text) return;
-  try { await navigator.clipboard.writeText(text); } catch { return; } // no clipboard permission: stay silent
+  try { await writeClipboard(text); } catch { return; } // no clipboard permission: stay silent
   btn.classList.add("copied");
   window.setTimeout(() => btn.classList.remove("copied"), 900);
 }

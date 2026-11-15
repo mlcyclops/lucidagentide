@@ -42,7 +42,7 @@ import { budgetWindowState, providerBudgetRows, providerForModel, providerHasApi
 import { cachedSessions, cachedShareSnapshot, cachedSkills, cachedTranscript, cachedWorkspace, setCachedSessions, setCachedShareSnapshot, setCachedSkills, setCachedTranscript, setCachedWorkspace, transcriptSig } from "./swr_cache.ts";
 import { $, $$, accordion, el, fmtNum, gauge, spark, table, type Col } from "./dom.ts";
 import { freshFindings, splitReviewed } from "./sec_review.ts"; // P-SECACK.1 (ADR-0170): reviewed rows leave the active view
-import { bindItemMenu, copyToClipboard, installTextContextMenu, openCtxMenu, type CtxMenuEntry } from "./ctxmenu.ts"; // P-SECACK.1 (ADR-0170): right-click clipboard menu; P-PUSH.PAR1: the staged chip's item menu
+import { bindItemMenu, copyToClipboard, installTextContextMenu, openCtxMenu, writeClipboard, type CtxMenuEntry } from "./ctxmenu.ts"; // P-SECACK.1 (ADR-0170): right-click clipboard menu; P-PUSH.PAR1: the staged chip's item menu
 import { restoredTurnHtml } from "./steps_restore.ts"; // P-RESUME.1 (ADR-0171): resumed thinking/tool history
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
@@ -1227,7 +1227,7 @@ async function copyCodeBlock(btn: HTMLElement): Promise<void> {
   const text = btn.closest("pre")?.querySelector("code")?.textContent ?? "";
   if (!text) return;
   try {
-    await navigator.clipboard.writeText(text);
+    await writeClipboard(text);
     btn.classList.add("ok"); btn.innerHTML = icon("check", 12);
     setTimeout(() => { btn.classList.remove("ok"); btn.innerHTML = icon("copy", 12); }, 1200);
   } catch { showToast({ tone: "danger", title: "Copy failed", desc: "Clipboard unavailable in this view. Use right-click → Copy code block.", timeout: 3000 }); }
@@ -1840,10 +1840,10 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onA
     }
     const copyBtn = $(".perm-copy", win) as HTMLElement | null;
     copyBtn?.addEventListener("click", async () => {
-      try { await navigator.clipboard.writeText(url); copyBtn.innerHTML = icon("check", 12); setTimeout(() => { copyBtn.innerHTML = icon("copy", 12); }, 1200); } catch { /* clipboard blocked */ }
+      try { await writeClipboard(url); copyBtn.innerHTML = icon("check", 12); setTimeout(() => { copyBtn.innerHTML = icon("copy", 12); }, 1200); } catch { /* clipboard blocked */ }
     });
     ($("[data-radar]", win) as HTMLElement | null)?.addEventListener("click", async () => {
-      try { await navigator.clipboard.writeText(url); } catch { /* ignore */ }
+      try { await writeClipboard(url); } catch { /* ignore */ }
       window.open("https://radar.cloudflare.com/scan", "_blank", "noopener");
       showToast({ title: "URL copied · Radar opened", desc: "Paste the URL into Cloudflare Radar to vet the site before allowing.", actions: [{ label: "OK" }], timeout: 4000 });
     });
@@ -1868,7 +1868,7 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onA
     </div>`);
     const copyBtn = $(".perm-copy", win) as HTMLElement | null;
     copyBtn?.addEventListener("click", async () => {
-      try { await navigator.clipboard.writeText(cmd); copyBtn.innerHTML = icon("check", 12); setTimeout(() => { copyBtn.innerHTML = icon("copy", 12); }, 1200); } catch { /* clipboard blocked */ }
+      try { await writeClipboard(cmd); copyBtn.innerHTML = icon("check", 12); setTimeout(() => { copyBtn.innerHTML = icon("copy", 12); }, 1200); } catch { /* clipboard blocked */ }
     });
     // TLDR: one-shot plain-language explanation from a cheap keyed model, shown inline. Cached per card.
     const tldrBtn = $(".perm-tldr", win) as HTMLButtonElement | null;
@@ -12318,7 +12318,7 @@ function showExportToast(title: string, desc: string, dest: string | undefined):
   showToast({ title, desc, meta: plan.persist ? `→ ${dest}` : undefined, actions, timeout: plan.persist ? 0 : 7000 });
 }
 async function copyExportPath(dest: string): Promise<void> {
-  try { await navigator.clipboard.writeText(dest); showToast({ title: "Path copied", desc: dest, timeout: 2400 }); }
+  try { await writeClipboard(dest); showToast({ title: "Path copied", desc: dest, timeout: 2400 }); }
   catch { showToast({ tone: "warn", title: "Couldn't copy the path", desc: dest, actions: [{ label: "OK" }], timeout: 4000 }); }
 }
 
@@ -15582,7 +15582,7 @@ function reportFilename(title: string): string {
   return `${(title || "report").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "report"}.md`;
 }
 async function copyMarkdown(md: string): Promise<void> {
-  try { await navigator.clipboard.writeText(md); showToast({ title: "Copied", desc: "Report markdown is on your clipboard.", timeout: 1600 }); }
+  try { await writeClipboard(md); showToast({ title: "Copied", desc: "Report markdown is on your clipboard.", timeout: 1600 }); }
   catch { showToast({ tone: "danger", title: "Copy failed", desc: "Clipboard unavailable in this view.", timeout: 2400 }); }
 }
 function downloadMarkdown(md: string, filename: string): void {
@@ -17250,7 +17250,7 @@ function openSharePanel(): void {
       return;
     }
     const copy = t.closest("[data-copy]") as HTMLElement | null;
-    if (copy) { const v = copy.dataset.copy ?? ""; try { await navigator.clipboard.writeText(v); showToast({ title: `${copy.dataset.copyWhat ?? "Copied"} copied`, desc: copy.dataset.copyDesc ?? "Paste it to your guest.", timeout: 1800 }); } catch { showToast({ tone: "warn", title: "Couldn't copy", desc: "Copy it from the field instead." }); } return; }
+    if (copy) { const v = copy.dataset.copy ?? ""; try { await writeClipboard(v); showToast({ title: `${copy.dataset.copyWhat ?? "Copied"} copied`, desc: copy.dataset.copyDesc ?? "Paste it to your guest.", timeout: 1800 }); } catch { showToast({ tone: "warn", title: "Couldn't copy", desc: "Copy it from the field instead." }); } return; }
     if (t.closest("[data-share-start]")) {
       const startBtn = t.closest("[data-share-start]") as HTMLButtonElement;
       if (startBtn.disabled) return; // guard against a double-click while the handshake is mid-flight
@@ -18313,7 +18313,7 @@ function wire(): void {
     if (!md) { showToast({ tone: "warn", title: "Nothing to copy yet", desc: "Wait for the reply to finish.", actions: [{ label: "OK" }], timeout: 2000 }); return; }
     if (copyBtn) {
       try {
-        await navigator.clipboard.writeText(md);
+        await writeClipboard(md);
         copyBtn.classList.add("ok"); copyBtn.innerHTML = icon("check", 13);
         setTimeout(() => { copyBtn.classList.remove("ok"); copyBtn.innerHTML = icon("copy", 13); }, 1200);
       } catch { showToast({ tone: "danger", title: "Copy failed", desc: "Clipboard unavailable in this view.", actions: [{ label: "OK" }], timeout: 2800 }); }
@@ -20003,7 +20003,7 @@ async function openAuthUrl(url: string): Promise<boolean> {
 function authUrlActions(url: string): { label: string; kind?: "ok" | "danger"; run: () => void }[] {
   return [
     { label: "Open sign-in page", kind: "ok", run: () => void openAuthUrl(url) },
-    { label: "Copy URL", run: () => { void navigator.clipboard.writeText(url).catch(() => {}); } },
+    { label: "Copy URL", run: () => { void writeClipboard(url).catch(() => {}); } },
   ];
 }
 
@@ -20592,7 +20592,7 @@ async function startProviderOauth(oauthId: string, cardEl: HTMLElement | null, r
       box.innerHTML = `${icon("command", 12)} <b>Enter this code on ${esc(showCode.page)}:</b>
         <div class="oauth-showcode"><code class="oauth-code">${esc(r.code ?? "code not shown yet")}</code>${r.code ? `<button class="btn-mini" data-copy-code="${esc(r.code)}">${icon("copy", 11)} Copy code</button>` : ""}${r.url ? `<button class="btn-mini" data-open-url="${esc(r.url)}">${icon("expand", 11)} Open sign-in page</button>` : ""}</div>
         <span>${r.code ? "The page opened in your browser; sign in to your ChatGPT account and type the code. This card updates on its own once the credential lands." : "The helper has not printed the code yet. Click Connect with a device code again in a moment; if it never appears, use Connect via OAuth."}</span>`;
-      box.querySelector("[data-copy-code]")?.addEventListener("click", () => { void navigator.clipboard.writeText(r.code ?? "").then(() => showToast({ title: "Code copied", desc: "Paste it on the device page.", timeout: 1800 })); });
+      box.querySelector("[data-copy-code]")?.addEventListener("click", () => { void writeClipboard(r.code ?? "").then(() => showToast({ title: "Code copied", desc: "Paste it on the device page.", timeout: 1800 })); });
       box.querySelector("[data-open-url]")?.addEventListener("click", () => { if (r.url) void openAuthUrl(r.url); });
     }
     showToast({

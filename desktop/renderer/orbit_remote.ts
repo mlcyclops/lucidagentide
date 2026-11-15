@@ -44,6 +44,7 @@ import { icon } from "./icons.ts";
 import type { LucidBridge } from "./bridge.ts";
 import type { OrbitSlot } from "./orbit_layout.ts";
 import type { OrbitSpoke } from "./orbit_canvas.ts";
+import { writeClipboard } from "./ctxmenu.ts"; // a copy that falls back when the browser refuses the Clipboard API
 import {
   approvalButtons, armClick, clockLabel, deployChoices, hostLabel, lanePolicyLabel, latencyLabel, mibLabel, modelCount, onOrbit, REMOTE_STATE_LABEL, REMOTE_TONE,
   remoteGlance, remoteLanes, remoteTotals, RESUME_TEXT, spokeActions, spokeAlerts, stateLabel, taskButtons, taskModelChoices, VIA_LABEL,
@@ -548,7 +549,7 @@ export function onRemotePanelClick(t: HTMLElement, box: HTMLElement): boolean {
   if (t.closest("[data-rs-recall-all]")) { void runRecall(box, undefined); return true; }
   if (t.closest("[data-rs-copy]")) {
     const ctx = panel.recall?.context ?? "";
-    if (ctx) void navigator.clipboard.writeText(ctx).then(() => showErr(box, "Copied, delimited as untrusted content.", true), () => showErr(box, "The clipboard refused the copy."));
+    if (ctx) void writeClipboard(ctx).then(() => showErr(box, "Copied, delimited as untrusted content.", true), () => showErr(box, "The clipboard refused the copy."));
     return true;
   }
   const card = t.closest<HTMLElement>("[data-rs-ask-i]");

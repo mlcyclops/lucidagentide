@@ -102,10 +102,10 @@ async function runAction(act: CtxAction, field: Field, deps: CtxMenuDeps): Promi
   const selected = field.value.slice(Math.min(start, end), Math.max(start, end));
   switch (act) {
     case "copy":
-      try { await navigator.clipboard.writeText(selected); } catch { /* nothing sensitive lost */ }
+      try { await writeClipboard(selected); } catch { /* nothing sensitive lost */ }
       break;
     case "cut": {
-      try { await navigator.clipboard.writeText(selected); } catch { break; } // no copy → don't destroy the text
+      try { await writeClipboard(selected); } catch { break; } // no copy → don't destroy the text
       const cut = spliceText(field.value, start, end, "");
       field.value = cut.value;
       field.setSelectionRange(cut.caret, cut.caret);
@@ -149,7 +149,43 @@ async function copyText(text: string, deps: CtxMenuDeps): Promise<void> {
  *  browser without permission; Electron always grants), so the caller can say so instead of claiming
  *  "Copied". */
 export async function copyToClipboard(text: string): Promise<boolean> {
-  try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* refused or absent: try the legacy path */ }
+  return copyViaSelection(text);
+}
+
+/** `navigator.clipboard.writeText` with the legacy fallback: resolves when either path copied, rejects when
+ *  both were refused. Every renderer copy goes through here, so a browser that blocks the async API still
+ *  copies. */
+export async function writeClipboard(text: string): Promise<void> {
+  if (!(await copyToClipboard(text))) throw new Error("The clipboard refused the copy.");
+}
+
+/** The legacy copy: select the text in an off-screen textarea and run the browser's own copy command. A browser
+ *  that refuses the async Clipboard API (a site permission set to Block, a managed Chrome policy, a page that
+ *  is not focused) usually still allows this inside the user's click, which is where every caller runs.
+ *  Focus and the user's selection are put back afterwards. */
+function copyViaSelection(text: string): boolean {
+  if (typeof document === "undefined" || !document.body) return false;
+  const active = document.activeElement as HTMLElement | null;
+  const sel = typeof window.getSelection === "function" ? window.getSelection() : null;
+  const ranges = sel ? Array.from({ length: sel.rangeCount }, (_, i) => sel.getRangeAt(i)) : [];
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.setAttribute("aria-hidden", "true");
+  ta.style.cssText = "position:fixed;top:0;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none";
+  document.body.appendChild(ta);
+  let ok = false;
+  try {
+    ta.focus({ preventScroll: true });
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    ok = document.execCommand("copy");
+  } catch { ok = false; }
+  ta.remove();
+  try { active?.focus?.({ preventScroll: true }); } catch { /* focus could not be restored */ }
+  if (sel) { sel.removeAllRanges(); for (const r of ranges) sel.addRange(r); }
+  return ok;
 }
 
 interface MenuEntry { label: string; kbd: string; enabled: boolean; run: () => void }
