@@ -1854,7 +1854,7 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onA
   } else if (e.exec) {
     // P-EXEC.1 (ADR-0066): the agent wants to run a shell/eval command. Docked above the composer like
     // egress. Show the command, the program key + why it's risky, and the per-command choices. A
-    // catastrophic command (rm -rf, sudo, pipe-to-shell, …) is styled as high-risk and offers no
+    // catastrophic command (rm -rf, pipe-to-shell, dd, …) is styled as high-risk and offers no
     // "always allow" - only once / this-turn / block.
     const cmd = e.detail ?? "";
     const exCls = (k?: string) => k === "reject" ? "eg-block" : k === "danger" ? "eg-danger" : "eg-allow";
@@ -15138,9 +15138,9 @@ function openGoalForm(): void {
         </div>
         <div class="goal-ckr-why" id="goalCkrWhy"></div>
         <details class="goal-dial" id="goalDial">
-          <summary>${icon("shield", 13)} Speed vs risk <span class="goal-opt">per-command auto-run ceiling for this unattended run</span> ${goalInfoDot("Speed ↔ risk dial|The loop runs with no human to ask, so you set a STANDING posture per command type: how risky a command may be before it auto-runs. Slide left (green) for the safest, most-blocking run; right (red) to let more through. Anything past the dial is BLOCKED and logged in the After-Action Report. Catastrophic commands (rm -rf, sudo, pipe-to-shell…) ALWAYS block, whatever the dial.")}</summary>
+          <summary>${icon("shield", 13)} Speed vs risk <span class="goal-opt">per-command auto-run ceiling for this unattended run</span> ${goalInfoDot("Speed ↔ risk dial|The loop runs with no human to ask, so you set a STANDING posture per command type: how risky a command may be before it auto-runs. Slide left (green) for the safest, most-blocking run; right (red) to let more through. Anything past the dial is BLOCKED and logged in the After-Action Report. Catastrophic commands (rm -rf, pipe-to-shell, dd…) ALWAYS block, whatever the dial.")}</summary>
           <div class="goal-dial-grid" id="goalDialGrid"></div>
-          <div class="goal-dial-foot">${icon("info", 11)} Catastrophic commands (rm -rf, sudo, pipe-to-shell…) always block. Default is the safest (T0) posture.</div>
+          <div class="goal-dial-foot">${icon("info", 11)} Catastrophic commands (rm -rf, pipe-to-shell, dd…) always block. Default is the safest (T0) posture.</div>
         </details>
       </section>
       <section class="goal-step" data-step="5">

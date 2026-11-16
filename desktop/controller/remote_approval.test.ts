@@ -198,7 +198,7 @@ describe("the tier policy decides a remote lane's asks in the engine", () => {
     expect(classifyAsk({ kind: "execute", rawInput: { command: "bun test" } }, w)).toMatchObject({ tier: "T3", action: "remote" });
     expect(classifyAsk({ kind: "execute", rawInput: { command: "ls | grep a" } }, w).action).toBe("remote");
     expect(classifyAsk({ kind: "execute", rawInput: { command: "chmod 777 x" } }, w).action).toBe("block");
-    expect(classifyAsk({ kind: "execute", rawInput: { command: "sudo ls" } }, w)).toMatchObject({ tier: "T4", action: "block" });
+    expect(classifyAsk({ kind: "execute", rawInput: { command: "sudo ls" } }, w)).toMatchObject({ tier: "T3", action: "block" });
     expect(classifyAsk({ kind: "execute", rawInput: { command: "git push" } }, w).action).toBe("remote");
     expect(classifyAsk({ kind: "execute", title: "no command" }, w).action).toBe("block");
     expect(classifyAsk({ kind: "delete", rawInput: { path: "/w/a" } }, w).action).toBe("block");

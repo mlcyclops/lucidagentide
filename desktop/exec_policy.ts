@@ -5,7 +5,7 @@
 //
 // P-EXEC.1 (ADR-0066): per-action approval for the agent's exec tools (bash + eval) — defense in depth
 // ON TOP OF the in-process scanner. The scanner catches MALFORMED/hidden content; it does NOT catch a
-// perfectly well-formed destructive command (`rm -rf`, `curl … | sh`, `dd`, `sudo`, `git reset --hard`).
+// perfectly well-formed destructive command (`rm -rf`, `curl … | sh`, `dd`, `git reset --hard`).
 // Those are exactly the actions a security/provenance product must put a human in front of.
 //
 // Mirrors egress_policy.ts (a pure verdict + pure apply + thin persistence + fail-closed), adding a risk
@@ -18,8 +18,9 @@
 //   deny          → block, no persistence.
 //
 // Fail-closed: anything unparseable / compound-ambiguous / simply unknown is classified RISKY; a
-// non-silenceable catastrophic ALWAYS_PROMPT set (sudo, rm -rf, pipe-to-shell, dd/mkfs, fork bomb,
-// git reset --hard / clean -f / push --force) prompts regardless of ANY standing allow or danger mode.
+// non-silenceable catastrophic set (rm -rf, pipe-to-shell, dd/mkfs, fork bomb, git reset --hard / clean -f /
+// push --force, also when run through sudo, a launcher or ssh) prompts regardless of ANY standing allow or danger
+// mode. sudo alone is not in it (ADR-0604): it is T3, so it still asks wherever a T3 command asks.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -83,10 +84,25 @@ const MAX_NESTING = 5;
 const TOO_DEEP = "nested too deeply to read (more than five levels of substitution or launcher)";
 /** The interpreters a pipe may feed, by bare program name (base() has removed a path, a module such as
  *  `Microsoft.PowerShell.Utility\`, and `.exe`). PowerShell's `iex` / `Invoke-Expression` runs the text piped into
- *  it, as `sh` does (`irm <url> | iex`). */
-const INTERPRETER = /^(?:sh|bash|zsh|dash|ksh|python[0-9.]*|node|perl|ruby|iex|invoke-expression)(?!\w)/;
+ *  it, as `sh` does (`irm <url> | iex`), and so does `su` without `-c`. */
+const INTERPRETER = /^(?:sh|bash|zsh|dash|ksh|su|python[0-9.]*|node|perl|ruby|iex|invoke-expression)(?!\w)/;
+/** ADR-0604: the option that hands an interpreter its program on the command line, by interpreter. With it, or with
+ *  a script file, what the pipe feeds is data (`node a.ts | node -e "<parse>"`), not code to run. `iex` and
+ *  `Invoke-Expression` have none: the piped text is always the command. */
+const PROGRAM_OPTION: [RegExp, RegExp][] = [
+  [/^(?:sh|bash|zsh|dash|ksh|su)$/, /^-[a-z]*c[a-z]*$|^--command(?:=|$)/i],
+  [/^python/, /^-[bBdEhiIOPqsSuvVx]*[cm]/],
+  [/^node$/, /^(?:-[ep]{1,2}|--eval|--print)(?:=|$)/],
+  [/^perl$/, /^-[A-Za-z0-9]*[eE]/],
+  [/^ruby$/, /^-[A-Za-z]*e/],
+];
+/** A first operand that names the program to run. Any other operand may be an option's value
+ *  (`python -W ignore`), so it leaves the program on stdin (fail-closed). */
+const SCRIPT_FILE = /\.(?:py|pyw|js|mjs|cjs|ts|mts|cts|sh|bash|zsh|pl|pm|rb)$/i;
 const ALWAYS_PROMPT: Catastrophic[] = [
-  { re: /(^|\s)(sudo|doas)\b/i, why: "runs as root (sudo/doas)" },
+  // ADR-0604: `sudo` / `doas` are not here. Raising privilege destroys nothing by itself, and the text pattern that
+  // stood here asked for every `ssh host 'set -e; sudo systemctl status x'`. The command sudo runs is read like any
+  // other (segmentCatastrophe), so `sudo rm -rf /`, `sudo dd ...` and `x | sudo bash` still always ask.
   { re: /(^|\s)dd\b/i, why: "raw disk write (dd)" },
   { re: /(^|\s)mkfs\b/i, why: "formats a filesystem (mkfs)" },
   { re: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/, why: "fork bomb" },
@@ -103,14 +119,22 @@ const ALWAYS_PROMPT: Catastrophic[] = [
   { re: /(^|\s)(format-volume|clear-disk)\b/i, why: "formats or wipes a disk" },
 ];
 
-/** The launchers whose argument is itself a command (#616): a shell's `-c`, cmd's `/c` or `/k`, PowerShell's
- *  `-Command` (any abbreviation) or `-EncodedCommand`, `iex` / `Invoke-Expression`. Returns the command they
- *  would run, or null. */
+/** The launchers whose argument is itself a command (#616): a shell's `-c`, `su -c`, the remote command of `ssh`,
+ *  cmd's `/c` or `/k`, PowerShell's `-Command` (any abbreviation) or `-EncodedCommand`, `iex` / `Invoke-Expression`.
+ *  Returns the command they would run, or null. */
 function launcherPayload(prog: string, rest: string[]): string | null {
   if (/^(sh|bash|zsh|dash|ksh|fish)$/.test(prog)) {
     const i = rest.findIndex((t) => /^-[a-z]*c[a-z]*$/i.test(t));
     return i >= 0 && i + 1 < rest.length ? rest[i + 1]! : null;
   }
+  // ADR-0604: `su -c <command>` (or `--command`) runs its command as a shell's `-c` does.
+  if (prog === "su") {
+    const glued = rest.find((t) => t.startsWith("--command="));
+    if (glued) return glued.slice("--command=".length);
+    const i = rest.findIndex((t) => /^-[a-z]*c[a-z]*$|^--command$/i.test(t));
+    return i >= 0 && i + 1 < rest.length ? rest[i + 1]! : null;
+  }
+  if (prog === "ssh") return sshRemoteCommand(rest);
   if (prog === "cmd") {
     // cmd also takes the command glued to the switch (`/c"del /s /q C:\*"`), strips one pair of outer quotes, and
     // runs a `( ... )` group around the whole payload as the command inside it (`/c(del /s /q C:\*)`).
@@ -132,6 +156,63 @@ function launcherPayload(prog: string, rest: string[]): string | null {
     return rest.join(" ");
   }
   return null;
+}
+
+/** ssh's option letters that take a value, glued (`-p22`, `-oBatchMode=yes`) or as the next word. */
+const SSH_VALUE_OPTIONS = "BbcDEeFIiJLlmOopQRSWw";
+/** ADR-0604: the command `ssh [options] destination [command ...]` runs on the remote host, or null when there is
+ *  none (an interactive login, `-N`). ssh joins the words after the destination with spaces and hands them to the
+ *  remote shell, so the joined words are exactly the command the remote host runs. */
+function sshRemoteCommand(rest: string[]): string | null {
+  let i = 0;
+  for (; i < rest.length; i++) {
+    const w = rest[i]!;
+    if (w === "--") {
+      i++;
+      break;
+    }
+    if (!w.startsWith("-") || w === "-") break;
+    for (let j = 1; j < w.length; j++) {
+      if (!SSH_VALUE_OPTIONS.includes(w[j]!)) continue;
+      if (j === w.length - 1) i++; // the value is the next word
+      break;
+    }
+  }
+  return i + 1 < rest.length ? rest.slice(i + 1).join(" ") : null;
+}
+
+/** sudo's and doas's options that take a value as the next word, alone or ending a cluster (`-u root`, `-Eu root`). */
+const SUDO_VALUE_OPTION = /^-[A-Za-z]*[CDgprtTuUR]$|^--(?:user|group|prompt|close-from|chdir|role|type|other-user|command-timeout|chroot|host)$/;
+/** ADR-0604: the index in `words` of the command `sudo` / `doas` runs, its options from `from` on, or -1 when there is
+ *  none (`sudo -v`, `sudo -i`). */
+function privilegedCommandAt(words: string[], from: number): number {
+  for (let i = from; i < words.length; i++) {
+    const w = words[i]!;
+    if (w === "--") return i + 1 < words.length ? i + 1 : -1;
+    if (!w.startsWith("-") || w === "-") return i;
+    if (SUDO_VALUE_OPTION.test(w)) i++;
+  }
+  return -1;
+}
+
+/** ADR-0604: true when `prog` (an INTERPRETER) takes the program it runs from stdin, given its `args`: no option that
+ *  names the program on the command line, and no script file as the first operand. `-` is stdin. */
+function readsProgramFromStdin(prog: string, args: string[]): boolean {
+  const option = PROGRAM_OPTION.find(([p]) => p.test(prog))?.[1];
+  if (!option) return true;
+  let ended = false;
+  for (const a of args) {
+    if (!ended && a === "--") {
+      ended = true;
+      continue;
+    }
+    if (!ended && a.startsWith("-") && a !== "-") {
+      if (option.test(a)) return false;
+      continue;
+    }
+    return !SCRIPT_FILE.test(a);
+  }
+  return true;
 }
 
 /** `s` without the balanced parentheses around the whole of it, at most `pairs` of them: `(('x'))` is `'x'`, while
@@ -343,8 +424,10 @@ function rmRecursiveForce(words: string[]): boolean {
  *  `cmd /c`, `powershell -Command`, `iex`) would run. Only the program position is rewritten, so a quoted argument
  *  (`grep "rm -rf" log`) is not read as a command. Segments are read twice when the text has a backslash: as bash
  *  reads it and as cmd and PowerShell read it; either reading that is catastrophic asks. A command nested deeper
- *  than MAX_NESTING levels (substitutions and launchers counted together) asks without being read (fail-closed). */
-function catastrophicIn(raw: string, depth = 0): string | null {
+ *  than MAX_NESTING levels (substitutions and launchers counted together) asks without being read (fail-closed).
+ *  `stdin` is true when a pipe feeds the launcher that runs `raw` (ADR-0604): every command in it may read that pipe,
+ *  so each is read as piped (fail-closed). */
+function catastrophicIn(raw: string, depth = 0, stdin = false): string | null {
   for (const c of ALWAYS_PROMPT) if (c.re.test(raw)) return c.why;
   const bash = lex(raw, true);
   if (depth + bash.nesting > MAX_NESTING) return TOO_DEEP;
@@ -356,25 +439,34 @@ function catastrophicIn(raw: string, depth = 0): string | null {
   if (raw.includes("\\")) readings.push([lex(raw, false).segments, false]);
   for (const [segments, escapes] of readings) {
     for (const seg of segments) {
-      const hit = segmentCatastrophe(seg, escapes, depth);
+      const hit = segmentCatastrophe(stdin ? { text: seg.text, piped: true } : seg, escapes, depth);
       if (hit) return hit;
     }
   }
   return null;
 }
 
-/** The catastrophic reason for one lexed command segment, or null. */
+/** The catastrophic reason for one lexed command segment, or null. A pipe into an interpreter counts only when the
+ *  interpreter takes its program from that pipe (ADR-0604). `sudo` / `doas` are read through: the command they run is
+ *  read as this segment, still fed by its pipe. */
 function segmentCatastrophe({ text, piped }: Segment, escapes: boolean, depth: number): string | null {
   const spans = shellWords(text, escapes);
   const words = spans.map((s) => s.text);
   if (rmRecursiveForce(words)) return RM_RF;
   const { prog, at } = argv0At(words);
   if (!prog || at < 0) return null;
-  if (piped && INTERPRETER.test(prog)) return PIPE_TO_INTERPRETER;
+  if (prog === "sudo" || prog === "doas") {
+    const k = privilegedCommandAt(words, at + 1);
+    // No command: `sudo -s` / `sudo -i` fed by a pipe run what it carries as root (fail-closed for the rest).
+    if (k < 0) return piped ? PIPE_TO_INTERPRETER : null;
+    if (depth + 1 > MAX_NESTING) return TOO_DEEP;
+    return segmentCatastrophe({ text: text.slice(spans[k - 1]!.end), piped }, escapes, depth + 1);
+  }
+  if (piped && INTERPRETER.test(prog) && readsProgramFromStdin(prog, words.slice(at + 1))) return PIPE_TO_INTERPRETER;
   const norm = `${prog}${text.slice(spans[at]!.end)}`;
   for (const c of ALWAYS_PROMPT) if (c.re.test(norm)) return c.why;
   const payload = launcherPayload(prog, words.slice(at + 1));
-  return payload === null ? null : catastrophicIn(payload, depth + 1);
+  return payload === null ? null : catastrophicIn(payload, depth + 1, piped);
 }
 
 /** Strip leading `VAR=val` assignments and an `env`/`command`/`nice`/`time` wrapper to find the real argv0. */
@@ -407,6 +499,9 @@ const DESTRUCTIVE = new Set([
   // base() already lowercases argv0 and strips `.exe`, so DEL / Del / Remove-Item / remove-item all land
   // on these lowercase entries (issue #449, the "fix first" gap).
   "del", "erase", "rd", "remove-item", "ri",
+  // ADR-0604: raising privilege left the catastrophic set but keeps the top risky tier: it asks wherever a T3 command
+  // asks, the loop dial treats it as destructive, and a remote lane still refuses it outright.
+  "sudo", "doas", "su",
 ]);
 /** P-CTRL-REMOTE.1 (ADR-0531): a remote lane refuses KNOWN destructive programs outright but lets a human decide
  *  on an unknown one (also T3 here, fail-closed), so the two must be told apart. */
