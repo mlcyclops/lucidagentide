@@ -83,6 +83,8 @@ const CALL_REACT_EVERY: f64 = 0.5;
 const STAGE_ACTIONS: [&str; 13] = ["present", "stop", "request", "cancel", "grant", "deny", "hand", "make_host", "mute", "remove", "react", "spotlight", "cohost"];
 const NOT_HOST: &str = "only the host can do that";
 const SAVE_EVERY: f64 = 2.0;
+/// NT-1: the ring timer and the delayed pushes run this often (seconds).
+const NT_TICK: f64 = 1.0;
 const REAP_EVERY: f64 = 5.0;
 const PRUNE_EVERY: f64 = 3600.0;
 const STATE_FILE: &str = "state.json";
@@ -484,9 +486,11 @@ pub struct State {
     emoji: Obj,
     /// In memory: parity wave A's settings and the emoji images without a state folder.
     pa: parity::Parity,
-    /// principal -> {device: {token, env, ts, serial}}: the iPhone devices registered for alert pushes.
+    /// principal -> {device: {token, env, ts, serial, seal, sk, seal_prev, sk_prev, voip, callkit}}: the iPhone devices
+    /// registered for pushes (NT-1 section 3.2; the seal keys are guarded like push.secret).
     push_tokens: Obj,
-    /// In memory: the APNs sender (None: push is off), the thread-id secret and the push rate book.
+    /// In memory: the APNs sender (None: push is off), the thread-id secret, the push rate books, the ring buckets and
+    /// the NT-1 timers.
     pu: push::Push,
     /// In memory: parity wave C's settings, the verified org policy store, SSO answers and app icons without a state
     /// folder (persisted state: ext["pc"]).
@@ -1227,6 +1231,8 @@ impl State {
             peer.tally.summary(pj::mono())
         ));
         if end_stay && !self.peers.values().any(|p| p.room == peer.room) {
+            // NT-1 section 3.5: the inviter left and nobody is in the room: their open invitations to it are cancelled
+            self.nt_left(&peer.who.principal, &peer.room);
             self.stages.remove(&peer.room);
             self.pa_attend_end(&peer.room);
             self.wave3_room_empty(&peer.room);
@@ -1932,24 +1938,30 @@ impl Hub {
         }
     }
 
-    /// Background upkeep: reap every REAP_EVERY s, save at most every SAVE_EVERY s when something changed.
+    /// Background upkeep: the NT-1 ring timer and delayed pushes every NT_TICK s (at most 1 s late), reap every
+    /// REAP_EVERY s, save at most every SAVE_EVERY s when something changed.
     pub fn start(self: &Arc<Self>) {
         let hub = self.clone();
         let _ = std::thread::Builder::new().name("relay-upkeep".into()).spawn(move || {
             let mut last_reap = pj::mono();
+            let mut last_save = pj::mono();
             loop {
-                std::thread::sleep(Duration::from_secs_f64(SAVE_EVERY));
+                std::thread::sleep(Duration::from_secs_f64(NT_TICK));
                 if hub.stop.load(Ordering::Relaxed) {
                     return;
                 }
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    hub.push_tick();
                     if pj::mono() - last_reap >= REAP_EVERY {
                         last_reap = pj::mono();
                         hub.reap();
                         hub.wave3_tick();
                     }
-                    if hub.st.lock().dirty {
-                        hub.save();
+                    if pj::mono() - last_save >= SAVE_EVERY {
+                        last_save = pj::mono();
+                        if hub.st.lock().dirty {
+                            hub.save();
+                        }
                     }
                 }));
                 if r.is_err() {
@@ -2182,12 +2194,8 @@ impl Hub {
             ("ts", f(pj::now())),
         ]);
         st.room_log(room, &mut line);
-        if let Some(pending) = st.invites.get_mut(&who.principal) {
-            pending.retain(|i| pj::text_of(i, "room") != room);
-            if pending.is_empty() {
-                st.invites.shift_remove(&who.principal);
-            }
-        }
+        // NT-1 section 3.5: the person's invitations to this room are answered (they stay, settled, joinable)
+        st.nt_joined(who, room);
         st.announce(who, &before);
         let mut out_missed = obj([("since", since.unwrap_or(Value::Null)), ("lines", Value::Array(missed))]);
         if late_join {
@@ -3297,6 +3305,8 @@ impl Hub {
                 ("attendance", Value::Bool(st.pa_attendance_on())),
                 ("push", Value::Bool(st.pu_on())),
             ]);
+            // NT-1: push_voip, notify_previews and the invitations settled in the last 2 hours
+            reply.extend(st.nt_hello(&who.principal));
             reply.extend(st.ce_hello());
             reply.extend(st.pc_hello());
             Ok((reply, sid))
@@ -3325,6 +3335,8 @@ impl Hub {
             s.last_seen = pj::mono();
             s.waiters += 1;
         }
+        // NT-1 section 3.6: live for push while the latest poll started less than 15 s ago
+        st.nt_polled(session);
         let pending = |q: &VecDeque<Obj>| -> Vec<Value> { q.iter().filter(|e| seq_of(e) > after).map(|e| Value::Object(e.clone())).collect() };
         let out = loop {
             let found = match st.sessions.get(session) {
@@ -3408,6 +3420,8 @@ impl Hub {
         if ts > pj::as_num(marks.get(&with_)).unwrap_or(0.0) {
             marks.insert(with_.clone(), f(ts));
             st.dirty = true;
+            // NT-1: the reader's other sessions clear that conversation's notifications
+            st.tell(std::slice::from_ref(&who.principal), &obj([("type", Value::from("read")), ("conv", Value::from(format!("dm:{with_}")))]), Some(session));
         }
         let seen = obj_mut(&mut st.receipts, &who.principal);
         let mut told: Option<Value> = None;
@@ -3685,7 +3699,7 @@ impl Hub {
         if !missing.is_empty() {
             return Err(E::NotFound(format!("not known on this relay: {}", missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "))));
         }
-        let now = pj::now();
+        let now = st.nt_now();
         if let Some(crossed) = Self::crossed_call(&st, &who.principal, &targets, &room, now) {
             let into = crossed.get("room").cloned().unwrap_or(Value::Null);
             let merged = obj([
@@ -3698,23 +3712,33 @@ impl Hub {
             log_info(&format!("invite merged from={} to={} room={room} into={}", who.principal, targets[0], pj::py_str(&into)));
             return Ok(merged);
         }
+        // NT-1 section 3.5: each invite's kind (call or live), whether it rings (the ring bucket of section 3.7) and the
+        // ring left (`ring_ms_left`, the full 45 s now) for the invitee's event and the inviter's answer
         let mut out = Vec::new();
         for t in &targets {
+            let id = pj::token_hex(8);
+            let (kind, others) = st.nt_kind(&who.principal, t, &room, now);
+            let ring = st.nt_ring(&who.principal, t, &room, &id);
             let inv = obj([
-                ("id", Value::from(pj::token_hex(8))),
+                ("id", Value::from(id)),
                 ("from", Value::from(who.principal.clone())),
                 ("from_name", Value::from(who.name.clone())),
                 ("to", Value::from(t.clone())),
                 ("room", Value::from(room.clone())),
                 ("ts", f(now)),
                 ("host", host.clone().map(Value::Object).unwrap_or(Value::Null)),
+                ("kind", Value::from(kind)),
+                ("ring", Value::Bool(ring)),
             ]);
             let mut pending: Vec<Obj> = st.invites.get(t).cloned().unwrap_or_default().into_iter().filter(|i| !(pj::text_of(i, "room") == room && pj::text_of(i, "from") == who.principal)).collect();
             pending.push(inv.clone());
             st.invites.insert(t.clone(), pending);
-            st.tell(std::slice::from_ref(t), &with(&inv, obj([("type", Value::from("invite"))])), None);
-            st.pu_invite(&who.principal, t, &room);
-            out.push(Value::Object(inv));
+            let shown = with(&inv, obj([("ring_ms_left", Value::from((push::RING_SECONDS * 1000.0) as i64))]));
+            st.tell(std::slice::from_ref(t), &with(&shown, obj([("type", Value::from("invite"))])), None);
+            if ring {
+                st.nt_call(&inv, others);
+            }
+            out.push(Value::Object(shown));
         }
         st.dirty = true;
         drop(st);
@@ -4523,7 +4547,7 @@ mod tests {
 
     #[test]
     fn state_json_round_trips_in_python_text() {
-        let text = "{\"v\": 2, \"directory\": {\"ann@x\": {\"name\": \"Ann\", \"last_seen\": 1.5}}, \"dms\": {}, \"read\": {}, \"invites\": {}, \"rooms\": {}, \"left\": {}, \"renewals\": {}, \"renewed\": {}, \"enrollments\": {}, \"consumed_seeds\": {}, \"seed_requests\": {}, \"seeded\": {}, \"denied\": {}, \"organizations\": {\"ben@x\": null, \"cy@x\": {\"id\": \"o\", \"label\": \"O\"}}, \"status\": {\"ann@x\": {\"state\": \"busy\", \"text\": \"\", \"until\": 4102444800000}, \"ben@x\": {\"state\": \"away\", \"text\": \"\"}}, \"receipts\": {\"ann@x\": {\"ben@x\": 2.5}}, \"meetings\": {\"m-abcdefgh23\": {\"id\": \"m-abcdefgh23\", \"room\": \"m-abcdefgh23\", \"title\": \"Weekly\", \"description\": \"\", \"start\": 1700000000.0, \"end\": 1700001800.0, \"recurrence\": \"weekly\", \"tz\": \"Europe/Paris\", \"organizer\": {\"principal\": \"ann@x\", \"name\": \"Ann\"}, \"attendees\": [{\"principal\": \"ben@x\", \"name\": \"Ben\", \"response\": \"none\"}], \"created\": 1.5, \"updated\": 1.5, \"canceled\": null}}, \"channels\": {\"c-01\": {\"id\": \"c-01\", \"kind\": \"public\", \"name\": \"general\", \"topic\": \"\", \"created_by\": \"ann@x\", \"members\": [\"ann@x\"], \"created\": 1.5, \"archived\": null, \"last\": 1.5, \"e2ee\": true, \"bridgeable\": false, \"e2ee_since\": 1500}}, \"channel_messages\": {\"c-01\": [{\"id\": \"m1\", \"channel\": \"c-01\", \"from\": \"ann@x\", \"from_name\": \"Ann\", \"from_org\": null, \"text\": \"hi\", \"ts\": 1.5, \"reactions\": {}}]}, \"channel_read\": {\"ann@x\": {\"c-01\": 1.5}}, \"prefs\": {\"ann@x\": {\"rev\": 2, \"notify\": {\"dm:ben@x\": \"off\"}, \"sections\": [{\"id\": \"s-0123abcd\", \"name\": \"Team\", \"convs\": [\"dm:ben@x\"]}], \"channel_default\": \"mentions\"}}, \"emoji\": {\"party\": {\"name\": \"party\", \"hash\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"type\": \"png\", \"org\": null, \"by\": \"ann@x\", \"ts\": 1500}}, \"attendance\": {\"ops\": [{\"id\": \"0123456789abcdef\", \"start\": 4102444000000, \"end\": 4102444800000, \"people\": [{\"principal\": \"ann@x\", \"name\": \"Ann\", \"org\": null, \"joins\": [[4102444000000, 4102444800000]], \"role\": \"host\"}]}]}, \"push_tokens\": {\"ann@x\": {\"aaaaaaaaaaaaaaaa\": {\"token\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"env\": \"sandbox\", \"ts\": 1700000000000, \"serial\": \"1a\"}}}, \"ext\": {\"files\": {\"v\": 1, \"files\": {}}, \"guests\": {\"revoked\": {}, \"blocked\": {}}, \"bridge\": {\"v\": 1, \"policies\": {}, \"links\": {}, \"codes\": {}, \"connectors\": {}, \"seq\": 0, \"outbox\": {}, \"map\": {}, \"offered\": {}}, \"ce\": {\"v\": 1, \"since\": 1500, \"seq\": 0, \"bundles\": {}, \"wraps\": {}, \"logs\": {}}, \"pc\": {\"v\": 1, \"policies\": [], \"holds\": [], \"kept\": {}, \"sso\": {}, \"adds\": [], \"docs\": {}, \"signer_policy\": null}}}";
+        let text = "{\"v\": 2, \"directory\": {\"ann@x\": {\"name\": \"Ann\", \"last_seen\": 1.5}}, \"dms\": {}, \"read\": {}, \"invites\": {}, \"rooms\": {}, \"left\": {}, \"renewals\": {}, \"renewed\": {}, \"enrollments\": {}, \"consumed_seeds\": {}, \"seed_requests\": {}, \"seeded\": {}, \"denied\": {}, \"organizations\": {\"ben@x\": null, \"cy@x\": {\"id\": \"o\", \"label\": \"O\"}}, \"status\": {\"ann@x\": {\"state\": \"busy\", \"text\": \"\", \"until\": 4102444800000}, \"ben@x\": {\"state\": \"away\", \"text\": \"\"}}, \"receipts\": {\"ann@x\": {\"ben@x\": 2.5}}, \"meetings\": {\"m-abcdefgh23\": {\"id\": \"m-abcdefgh23\", \"room\": \"m-abcdefgh23\", \"title\": \"Weekly\", \"description\": \"\", \"start\": 1700000000.0, \"end\": 1700001800.0, \"recurrence\": \"weekly\", \"tz\": \"Europe/Paris\", \"organizer\": {\"principal\": \"ann@x\", \"name\": \"Ann\"}, \"attendees\": [{\"principal\": \"ben@x\", \"name\": \"Ben\", \"response\": \"none\"}], \"created\": 1.5, \"updated\": 1.5, \"canceled\": null}}, \"channels\": {\"c-01\": {\"id\": \"c-01\", \"kind\": \"public\", \"name\": \"general\", \"topic\": \"\", \"created_by\": \"ann@x\", \"members\": [\"ann@x\"], \"created\": 1.5, \"archived\": null, \"last\": 1.5, \"e2ee\": true, \"bridgeable\": false, \"e2ee_since\": 1500}}, \"channel_messages\": {\"c-01\": [{\"id\": \"m1\", \"channel\": \"c-01\", \"from\": \"ann@x\", \"from_name\": \"Ann\", \"from_org\": null, \"text\": \"hi\", \"ts\": 1.5, \"reactions\": {}}]}, \"channel_read\": {\"ann@x\": {\"c-01\": 1.5}}, \"prefs\": {\"ann@x\": {\"rev\": 2, \"notify\": {\"dm:ben@x\": \"off\"}, \"sections\": [{\"id\": \"s-0123abcd\", \"name\": \"Team\", \"convs\": [\"dm:ben@x\"]}], \"channel_default\": \"mentions\"}}, \"emoji\": {\"party\": {\"name\": \"party\", \"hash\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"type\": \"png\", \"org\": null, \"by\": \"ann@x\", \"ts\": 1500}}, \"attendance\": {\"ops\": [{\"id\": \"0123456789abcdef\", \"start\": 4102444000000, \"end\": 4102444800000, \"people\": [{\"principal\": \"ann@x\", \"name\": \"Ann\", \"org\": null, \"joins\": [[4102444000000, 4102444800000]], \"role\": \"host\"}]}]}, \"push_tokens\": {\"ann@x\": {\"aaaaaaaaaaaaaaaa\": {\"token\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"env\": \"sandbox\", \"ts\": 1700000000000, \"serial\": \"1a\", \"seal\": \"BI2v5YHwWUGbhOdhiQ3+w8TpAkRe9LcJA7pzR9JxIttNKHIyizRAXX5o3tD/EcIKYpNmh5Ct9aJ6I8UdyL9fGrc=\", \"sk\": \"d197f269\", \"seal_prev\": \"\", \"sk_prev\": \"\", \"voip\": \"\", \"callkit\": true}}}, \"ext\": {\"files\": {\"v\": 1, \"files\": {}}, \"guests\": {\"revoked\": {}, \"blocked\": {}}, \"bridge\": {\"v\": 1, \"policies\": {}, \"links\": {}, \"codes\": {}, \"connectors\": {}, \"seq\": 0, \"outbox\": {}, \"map\": {}, \"offered\": {}}, \"ce\": {\"v\": 1, \"since\": 1500, \"seq\": 0, \"bundles\": {}, \"wraps\": {}, \"logs\": {}}, \"pc\": {\"v\": 1, \"policies\": [], \"holds\": [], \"kept\": {}, \"sso\": {}, \"adds\": [], \"docs\": {}, \"signer_policy\": null}}}";
         let dir = std::env::temp_dir().join(format!("meet-state-{}", pj::token_hex(4)));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("state.json"), text).unwrap();

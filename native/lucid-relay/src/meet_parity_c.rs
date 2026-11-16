@@ -2078,11 +2078,13 @@ impl Hub {
         r
     }
 
-    /// Every session hears `crl`: fetch the revocation list now.
-    pub fn pc_tell_crl(&self) {
+    /// Every session hears `crl`: fetch the revocation list now. NT-1 section 3.4: each registered iPhone that is
+    /// not live for push gets one background push about it (`this_update`: the new CRL's thisUpdate, seconds).
+    pub fn pc_tell_crl(&self, this_update: i64) {
         let mut st = self.st.lock();
         let everyone = st.pc_everyone();
         st.tell(&everyone, &obj([("type", Value::from("crl"))]), None);
+        st.nt_crl(this_update);
         drop(st);
         self.wake();
     }

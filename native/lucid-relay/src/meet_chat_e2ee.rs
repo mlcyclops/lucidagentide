@@ -1435,6 +1435,8 @@ impl Hub {
         if !who.own_device() {
             return forbidden(DEVICE_ONLY);
         }
+        // NT-1 section 3.4: the push wrap rider names only epochs above what this device fetched
+        st.nt_keys_fetched(&who.principal, &who.device, after);
         let key = format!("{}|{}", who.principal, who.device);
         let out: Vec<Value> = st.ce_part("wraps").get(&key).and_then(Value::as_array).into_iter().flatten().filter(|r| pj::as_int(r.get("seq")).unwrap_or(0) > after).take(limit).cloned().collect();
         let next = out.last().and_then(|r| pj::as_int(r.get("seq"))).unwrap_or(after);

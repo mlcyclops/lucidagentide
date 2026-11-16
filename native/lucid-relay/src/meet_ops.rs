@@ -36,6 +36,12 @@ fn down_or(e: SignerErr) -> E {
     }
 }
 
+/// NT-1 section 3.4: the thisUpdate (seconds) of the newest CRL in a signer answer's `crl_pem`, else now: the id of
+/// the background `crl` push.
+fn crl_issued(answer: &Obj) -> i64 {
+    pem_blocks(pj::s(answer, "crl_pem").as_bytes(), "X509 CRL").iter().filter_map(|(_, der)| Crl::from_der(der)).map(|c| c.this_update).max().unwrap_or(pj::now() as i64)
+}
+
 /// meet_downloads.NAME_RE: a file in the download folder, no folder.
 fn file_name_ok(name: &str) -> bool {
     let b = name.as_bytes();
@@ -550,7 +556,7 @@ impl Relay {
         let dropped = self.hub.drop_serials(&serials);
         self.store_root_crl(answer.get("root_crl_pem"));
         // PC-1: devices fetch the CRL on a crl event
-        self.hub.pc_tell_crl();
+        self.hub.pc_tell_crl(crl_issued(&answer));
         log_info(&format!(
             "revoked principal={principal} device={} by={} certificates={} dropped={dropped}",
             if device.is_empty() { "*" } else { &device },
@@ -860,7 +866,7 @@ impl Relay {
         }
         self.hub.drop_serials(&serials);
         self.store_root_crl(answer.get("root_crl_pem"));
-        self.hub.pc_tell_crl();
+        self.hub.pc_tell_crl(crl_issued(answer));
         serials
     }
 
@@ -871,6 +877,8 @@ impl Relay {
         if who.cert_pem.is_empty() {
             return m::forbidden("sign from one of your devices");
         }
+        // NT-1 section 3.9: `notify` waits until every Hub and iPhone runs the NT-1 release
+        crate::meet_org_policy::notify_gate(policy, &self.minimums(&self.release())).map_err(E::Conflict)?;
         let body = obj([
             ("policy", policy.cloned().unwrap_or(Value::Null)),
             ("proof", Value::from(pj::str_or(proof))),

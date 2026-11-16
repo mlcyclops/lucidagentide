@@ -34,8 +34,10 @@ const EXTERNAL_ARCHIVES: &[&str] = &["allow", "refuse"];
 const APPS_PREFIX: &str = "apps.";
 const TOP_KEYS: &[&str] = &[
     "v", "org", "label", "domains", "seq", "issued", "expires", "admins", "archive", "archive_reviewers", "apps",
-    "workflows", "external_archives", "external_apps", "retention",
+    "workflows", "external_archives", "external_apps", "retention", "notify",
 ];
+/// NT-1 section 3.9: the only `notify` the policy may carry.
+const NOTIFY_SHAPE: &str = "notify must be {\"previews\": \"off\"}";
 const REQUIRED: &[&str] = &["v", "org", "label", "domains", "seq", "issued", "expires"];
 const ARCHIVE_KEYS: &[&str] = &["principal", "device", "host", "since"];
 const APP_KEYS: &[&str] =
@@ -607,6 +609,32 @@ pub fn check_policy(policy: &Value, terms: &SignerTerms) -> Result<(), PolicyErr
             int(days, &format!("retention.{kind}"), if kind == "canvas" { 0 } else { 1 }, RETENTION_MAX)?;
         }
     }
+    if let Some(n) = p.get("notify") {
+        let ok = n.as_object().is_some_and(|o| o.len() == 1 && o.get("previews").and_then(Value::as_str) == Some("off"));
+        if !ok {
+            return Err(bad(NOTIFY_SHAPE));
+        }
+    }
+    Ok(())
+}
+
+/// NT-1 section 3.9: the policy turns message previews off for the people it covers.
+pub fn previews_off(policy: &Obj) -> bool {
+    policy.get("notify").and_then(|n| n.get("previews")).and_then(Value::as_str) == Some("off")
+}
+
+/// NT-1 section 3.9: the Hub and iPhone releases that accept `notify` (older devices refuse unknown keys).
+const NOTIFY_CLIENTS: [(&str, &str); 2] = [("hub", "0.97.0"), ("ios", "0.97.0")];
+pub const NOTIFY_TOO_SOON: &str = "Message previews can be turned off by policy once every Hub and iPhone runs 0.97.0 or later";
+
+/// notify_gate: a policy with `notify` is signed only once the relay's minimums (`min_client` and the release's) reach
+/// the NT-1 release of both the Hub and the iPhone.
+pub fn notify_gate(policy: Option<&Value>, minimums: &Obj) -> Result<(), String> {
+    let wants = policy.and_then(Value::as_object).is_some_and(|p| p.contains_key("notify"));
+    let ready = NOTIFY_CLIENTS.iter().all(|(app, least)| minimums.get(*app).map(|v| crate::meet::version_key(&pj::py_str(v)) >= crate::meet::version_key(least)).unwrap_or(false));
+    if wants && !ready {
+        return Err(NOTIFY_TOO_SOON.into());
+    }
     Ok(())
 }
 
@@ -994,5 +1022,22 @@ mod tests {
         assert_eq!(check(json!({"label": ""})), "label must be printable text of at most 64 characters");
         assert_eq!(check(json!({"expires": 1794000000})), "expires must be after issued, at most 90 days later");
         assert_eq!(check(json!({"retention": {"canvas": -1}})), "retention.canvas must be a whole number from 0 to 3650");
+        // NT-1 section 3.9: notify is {"previews": "off"} and nothing else
+        assert_eq!(check(json!({"notify": {"previews": "off"}})), "");
+        for refused in [json!({"previews": "on"}), json!({}), json!({"previews": "off", "x": 1}), json!("off"), json!({"previews": true})] {
+            assert_eq!(check(json!({ "notify": refused })), "notify must be {\"previews\": \"off\"}");
+        }
+        let mut off = base.clone();
+        assert!(!previews_off(&off));
+        off.insert("notify".into(), json!({"previews": "off"}));
+        assert!(previews_off(&off));
+        // signing one waits for the NT-1 Hub and iPhone releases in the relay's minimums
+        let mins = |v: Value| v.as_object().unwrap().clone();
+        let with_notify = Value::Object(off.clone());
+        assert_eq!(notify_gate(Some(&with_notify), &mins(json!({"hub": "0.97.0", "ios": "0.97.1"}))), Ok(()));
+        for early in [json!({}), json!({"hub": "0.97.0"}), json!({"hub": "0.96.9", "ios": "0.97.0"}), json!({"hub": "0.97", "ios": "0.9.70"})] {
+            assert_eq!(notify_gate(Some(&with_notify), &mins(early)).unwrap_err(), NOTIFY_TOO_SOON);
+        }
+        assert_eq!(notify_gate(Some(&Value::Object(base.clone())), &Obj::new()), Ok(()));
     }
 }

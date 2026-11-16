@@ -2,7 +2,7 @@
 // caller, body and gate in the order the Python handler does, so the same request gets the same first refusal.
 
 use crate::meet::{self as m, run, Ctx, R, CAPTIONS_LIMIT_MAX};
-use crate::meet_hub::{bridge, ce, files, parity, pc, E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
+use crate::meet_hub::{bridge, ce, files, parity, pc, push, E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
 use crate::meet_json::{self as pj, obj, Obj};
 use crate::meet_tls::{crl_path, read_bytes};
 use crate::meet_x509::pem_blocks;
@@ -21,6 +21,11 @@ fn get_route(path: &str) -> Option<Route> {
         "/v1/whoami" => whoami,
         "/v1/events" => events,
         "/v1/inbox" => inbox,
+        // NT-1 section 4.3: the iPhone's background read-mark fetch (own device, no session)
+        "/v1/notify/reads" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.notify_reads(&who)
+        },
         "/v1/dm/history" => dm_history,
         "/v1/channels" => |c: &mut Ctx| {
             let who = c.who(false)?;
@@ -317,6 +322,13 @@ fn post_route(path: &str) -> Option<Route> {
             c.relay.hub.meeting_rsvp(&session, &who, b.get("id"), b.get("response"))
         },
         "/v1/invite" => invite,
+        // NT-1 section 3.5: the caller's own device declines one of their invitations
+        "/v1/invite/settle" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.nt_own_device(&who)?;
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.invite_settle(&session, &who, b.get("id"), b.get("how"))
+        },
         // parity wave A
         "/v1/prefs" => |c: &mut Ctx| {
             let (who, b, session) = session_gate_max(c, parity::PREFS_BODY_MAX)?;
@@ -330,10 +342,10 @@ fn post_route(path: &str) -> Option<Route> {
             let (who, b, session) = session_gate(c)?;
             c.relay.hub.emoji_delete(&session, &who, b.get("name"))
         },
-        // parity wave B: iPhone push (bound to the calling device; no session needed)
+        // parity wave B and NT-1 section 3.2: iPhone push (bound to the calling device; no session needed)
         "/v1/push/register" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
-            c.relay.hub.push_register(&who, b.get("token"), b.get("env"))
+            c.relay.hub.push_register(&who, &b)
         },
         "/v1/push/unregister" => |c: &mut Ctx| {
             let who = c.who(false)?;
@@ -714,7 +726,9 @@ fn inbox(c: &mut Ctx) -> R<Obj> {
     let session = c.q("session", "");
     c.gate(&who, None, "", &session)?;
     let after = m::py_int(&c.q("after", "0"))?;
-    c.relay.hub.inbox(&session, &who, after, m::POLL_WAIT)
+    // NT-1 section 3.6: `wait` 1 to 25 seconds (the iPhone polls with 10)
+    let wait = push::inbox_wait(&c.q("wait", "25"))?;
+    c.relay.hub.inbox(&session, &who, after, wait)
 }
 
 fn dm_history(c: &mut Ctx) -> R<Obj> {
