@@ -312,8 +312,7 @@ export function openFleetGrid(): void {
     <div class="share-dock-head" data-dock-drag>
       <span class="share-dock-grip">${icon("bolt", 14)}</span>
       <span class="share-dock-title">LUCID Fleet</span>
-      <button class="fleet-board-chip" data-fleet-boards-toggle type="button" hidden aria-expanded="false" data-tip="Boards|Show the board tabs. The shown board is named here; a dot means a lane on another board needs you."><span class="fleet-board-chip-name" data-board-chip-name>Everything</span><i class="fleet-board-dot" data-board-chip-dot hidden></i><span class="fleet-more-chev">${icon("chevron", 10)}</span></button>
-      <span class="fleet-headroom" id="fleetHeadroom" data-tip="Local headroom|Live CPU and memory. Spokes are UNLIMITED - a new one is refused only while a metric stays at or above the tick for 30 seconds straight, so a burst never blocks you."></span>
+      <span class="fleet-headroom" id="fleetHeadroom" data-tip="Local headroom|Live CPU and memory. Lanes are UNLIMITED - a new one is refused only while a metric stays at or above the tick for 30 seconds straight, so a burst never blocks you."></span>
       <button class="btn-mini fleet-add-btn fleet-next" data-fleet-next hidden data-tip="Next that needs you|Jumps to the next agent waiting for your approval or likely stuck: this board first, then your other boards, then Everything. Press again for the one after."></button>
       <button class="btn-mini fleet-add-btn" data-ask-lucid data-tip="Ask Lucid (Ctrl+Shift+L)|Ask about anything in this panel. He can read what is on your screen and every spoke, and he opens on top of this panel.">${icon("spark", 12)} Ask</button>
       <button class="btn-mini fleet-add-btn" data-fleet-add data-tip="New lane|Spawn a new local lane in this grid. The Orbit map calls the same thing + Spoke.">${icon("plus", 12)} Lane</button>
@@ -322,6 +321,7 @@ export function openFleetGrid(): void {
       <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" data-tip="Close (spokes keep running)">${icon("close", 15)}</button>
     </div>
     <div class="fleet-boards" data-fleet-boards role="tablist" aria-label="Boards"></div>
+    <button class="fleet-boards-handle" data-fleet-boards-toggle type="button" hidden aria-expanded="false" aria-label="Show boards"><span class="fleet-boards-handle-chev">${icon("chevron", 9)}</span><i class="fleet-board-dot" data-board-handle-dot hidden></i></button>
     <div class="share-dock-body fleet-body"><div class="fleet-grid" id="fleetGrid"></div></div>
     <div class="share-dock-rz n" data-dock-rz="n" aria-hidden="true"></div>
     <div class="share-dock-rz s" data-dock-rz="s" aria-hidden="true"></div>
@@ -1195,12 +1195,12 @@ function paintTabs(): void {
   const row = dock ? $("[data-fleet-boards]", dock) : null;
   if (!row) return;
   const list = boards?.boards ?? [];
-  // P-FLEET.HEAD1 (ADR-0612): boards are for people who arrange many lanes. With none, neither the header chip nor
-  // the tab row shows (More > New board makes the first). With some, the chip names the shown board and the row
-  // stays collapsed until the chip slides it open.
-  const chip = $("[data-fleet-boards-toggle]", dock!);
+  // P-FLEET.HEAD1 (ADR-0612): boards are for people who arrange many lanes. With none, neither the handle nor the
+  // tab row shows (More > New board makes the first). With some, a thin handle under the header (a small arrow)
+  // slides the row open; shut, the row takes no height.
+  const handle = $("[data-fleet-boards-toggle]", dock!);
   const none = list.length === 0;
-  if (chip && chip.hidden !== none) chip.hidden = none;
+  if (handle && handle.hidden !== none) handle.hidden = none;
   paintBoardsOpen(!none && storage().get(FLEET_BOARDS_OPEN_KEY) === "1");
   const full = list.length >= BOARDS_MAX;
   const sig = JSON.stringify([list.map((b) => [b.id, b.name]), full]);
@@ -1218,19 +1218,24 @@ function paintTabs(): void {
   paintNeeds();
 }
 
-/** P-FLEET.HEAD1 (ADR-0612): slide the board tab row open or shut. Shut, it takes no height; the header chip
- *  still names the shown board, so nothing is lost by keeping it shut. */
+/** P-FLEET.HEAD1 (ADR-0612): slide the board tab row open or shut. Shut, it takes no height and the handle under the
+ *  header is all that shows (its tooltip names the shown board, its dot says another board needs you). */
 function paintBoardsOpen(open: boolean): void {
   const row = dock ? $("[data-fleet-boards]", dock) : null;
-  const chip = dock ? $("[data-fleet-boards-toggle]", dock) : null;
+  const handle = dock ? $("[data-fleet-boards-toggle]", dock) : null;
   if (row && row.classList.contains("open") !== open) { row.classList.toggle("open", open); row.setAttribute("aria-hidden", String(!open)); row.inert = !open; }
-  if (chip && chip.getAttribute("aria-expanded") !== String(open)) { chip.setAttribute("aria-expanded", String(open)); chip.classList.toggle("on", open); }
+  if (handle && handle.getAttribute("aria-expanded") !== String(open)) {
+    handle.setAttribute("aria-expanded", String(open));
+    handle.setAttribute("aria-label", open ? "Hide boards" : "Show boards");
+    handle.classList.toggle("on", open);
+  }
 }
 
 function toggleBoardsOpen(): void {
   const open = storage().get(FLEET_BOARDS_OPEN_KEY) !== "1";
   storage().set(FLEET_BOARDS_OPEN_KEY, open ? "1" : "0");
   paintBoardsOpen(open);
+  paintNeeds();
 }
 
 /** "Next that needs you (N)" (shown only when N > 0), the current tab, and each tab's dot. */
@@ -1259,12 +1264,15 @@ function paintNeeds(): void {
     const dot = $("[data-board-dot]", tab);
     if (dot && dot.hidden === needs) dot.hidden = !needs;
   }
-  // P-FLEET.HEAD1: the collapsed row's stand-in names the shown board and dots when another tab would.
-  const name = $("[data-board-chip-name]", dock);
-  const label = findBoard(boards, cur)?.name ?? "Everything";
-  if (name && name.textContent !== label) name.textContent = label;
-  const chipDot = $("[data-board-chip-dot]", dock);
-  if (chipDot && chipDot.hidden === elsewhere) chipDot.hidden = !elsewhere;
+  // P-FLEET.HEAD1: the handle's tooltip names the shown board; its dot shows when another board needs you.
+  const handle = $("[data-fleet-boards-toggle]", dock);
+  if (handle) {
+    const open = handle.getAttribute("aria-expanded") === "true";
+    const tip = `${open ? "Hide boards" : "Show boards"}|Showing ${findBoard(boards, cur)?.name ?? "Everything"}.${elsewhere ? " A lane on another board needs you." : ""}`;
+    if (handle.dataset.tip !== tip) handle.dataset.tip = tip;
+    const dot = $("[data-board-handle-dot]", handle);
+    if (dot && dot.hidden === elsewhere) dot.hidden = !elsewhere;
+  }
 }
 
 /** Rename a board inline: its tab becomes a text field. Enter or leaving the field saves, Escape keeps the old
@@ -1535,7 +1543,7 @@ function paintHeadroom(hr: HTMLElement, res: FleetResources, laneCount: number):
       : "";
     return `${head}<span class="fleet-hr-bar" style="--wm:${line}%"><span class="fleet-hr-fill" style="width:${p}%;background:${c}"></span></span><span class="fleet-hr-val">${p}%</span>${hot}`;
   };
-  const lanes = `<span class="fleet-hr-lanes" data-tip="Spokes running|There is no cap: a spoke is refused only while CPU or memory stays at or above ${line}% for ${sustainS}s straight, so a burst never blocks you.">${laneCount} spoke${laneCount === 1 ? "" : "s"}</span>`;
+  const lanes = `<span class="fleet-hr-lanes" data-tip="Lanes running|There is no cap: a new lane is refused only while CPU or memory stays at or above ${line}% for ${sustainS}s straight, so a burst never blocks you.">${laneCount} lane${laneCount === 1 ? "" : "s"}</span>`;
   hr.innerHTML = bar("CPU", res.cpuPct, res.cpuHotMs) + bar("MEM", res.memPct, res.memHotMs) + lanes;
 }
 
