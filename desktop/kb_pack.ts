@@ -22,7 +22,7 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync
 import { basename, dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { DEFAULT_POLICY, type GateDecision, scanAndDecide } from "../harness/security/gate.ts";
-import { ScannerClient, sidecarDir } from "../harness/security/scanner_client.ts";
+import { ScannerClient, resolveSidecarDir } from "../harness/security/scanner_client.ts";
 import { resolvedRepo } from "./repo_root.ts";
 import { KbGraphStore } from "../harness/kb/store.ts";
 import {
@@ -168,7 +168,8 @@ export function logPackAttempt(entry: {
   startedAt?: number;
 }): string {
   const path = packLogPath();
-  const sidecar = sidecarDir();
+  const resolved = resolveSidecarDir();
+  const sidecar = resolved.dir;
   const line = {
     at: new Date().toISOString(),
     ms: entry.startedAt ? Date.now() - entry.startedAt : undefined,
@@ -192,6 +193,9 @@ export function logPackAttempt(entry: {
       scannerPython: process.env.SCANNER_PYTHON,
       scannerPythonExists: process.env.SCANNER_PYTHON ? existsSync(process.env.SCANNER_PYTHON) : false,
       scannerDirFromEnv: !!(process.env.LUCID_SCANNER_DIR ?? "").trim(),
+      // ADR-0604: which candidate won (`env` or `probe`) and why the other lost.
+      scannerDirSource: resolved.source,
+      scannerDirNote: resolved.note || undefined,
       repoRoot: resolvedRepo().root,
       repoProven: resolvedRepo().proven,
     },
