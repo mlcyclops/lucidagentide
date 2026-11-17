@@ -27579,3 +27579,13 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 4. Changing the setting restarts the main omp child when the effective value changes (as the Judgment backend does). Fleet lanes take it at their next start.
 
 **Consequences.** With On, the agent may pick a model per subagent from the models omp can already route to (omp's own approval rules: no globs, roles or partial ids). The agent still cannot enable it; only the user can, through LUCID. Org policy can never be widened by this setting. Not done: mapping a managed allow-list onto omp's `task.perCallModelAllow` (would need expanding substrings against the live model catalog); a per-lane override.
+
+## ADR-0607 -- P-LOCAL.5b: the GLM preset advertises reasoning effort (2026-11-17)
+
+**Status:** Accepted. Fixes #607. Carries out the correction ADR-0550 item 6 names as its own increment.
+
+**Context.** The GLM-5.3-Flash preset (P-LOCAL.5) set `supportsReasoningEffort: false`, and its test and demo asserted it with the comment that vLLM rejects the parameter. ADR-0367 measured the live head accepting `reasoning_effort: "medium"` (HTTP 200, a 419 character trace) but left the value false as a conservative choice, and ADR-0550 item 6 records that the box's current vLLM accepts reasoning effort, so the false value is stale.
+
+**Decision.** The preset's compat becomes `{ thinkingFormat: "qwen-chat-template", reasoningContentField: "reasoning", supportsReasoningEffort: true }`. The unit test and `make demo-P-LOCAL.5` now assert true, with the stale "vLLM rejects it" wording removed. The sanitizer and store round-trip tests in `desktop/local_providers.test.ts` keep `false` as input, because they test that a valid boolean survives, not what the preset says.
+
+**Consequences.** omp now sends a reasoning effort to GLM on a self-hosted vLLM box, so the user's thinking level reaches the model. The evidence is ADR-0367's raw vLLM measurement and ADR-0550 item 6; omp's own emission path to the live box was not exercised here and needs one live check by the operator. If a future vLLM rejects the field, a user can override the provider's compat; the preset is only a seed.
