@@ -6271,3 +6271,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-17):** `LUCID_SCANNER_DIR` wins only when it holds `server.py`; otherwise the probed repo sidecar is used and the ignored override is noted. With no usable directory `ScannerClient` spawns nothing and every scan fails closed with the directories named in the reason and the `onExit` notice. The pack import log records which source won. Fixes #631.
 - **stubbed:** a stale override that still holds an old `server.py` wins (a deliberate pin and a leftover look the same); `lucid check` shows the reason only when the scan fails.
 - **next:** cut a release containing this and confirm on an install with a leftover user-level `LUCID_SCANNER_DIR` that tool calls run.
+## The GLM preset advertises reasoning effort (P-LOCAL.5b, ADR-0607)
+- **shipped (2026-11-17):** the GLM-5.3-Flash preset sets `supportsReasoningEffort: true` (ADR-0550 item 6: the box's vLLM accepts it); the unit test and `make demo-P-LOCAL.5` assert true and drop the stale "vLLM rejects it" comment. The demo's save round-trip check now compares against the preset's own context window (it still expected 131072 after the preset moved to 524288, so `make demo-P-LOCAL.5` was red on master).
+- **stubbed:** nothing; omp's emission of reasoning_effort to the live box was not exercised (no box access).
+- **next:** the operator sends one GLM turn with a thinking level set through LUCID and confirms vLLM answers 200 with a trace.
