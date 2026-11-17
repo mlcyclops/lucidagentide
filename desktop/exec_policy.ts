@@ -440,17 +440,31 @@ export function execCommand(toolCall: unknown, toolName: string = askToolName(to
   return null;
 }
 
-/** #612: the floor that no standing scope crosses, for an ask answered WITHOUT a human (Fleet full auto-mode, a
- *  lane's session grant). It is the floor execVerdict keeps under danger mode and allow-turn: a catastrophic
+/** #612: the floor a lane's session grant does not cross (Fleet FULL auto-mode keeps only its managed-deny part since
+ *  P-FLEET.AUTO2, ADR-0611: execManagedDeny). It is the floor execVerdict keeps under danger mode and allow-turn: a catastrophic
  *  command (ALWAYS_PROMPT) or a managed-denylisted program. Returns why the ask must reach a human, or null when
  *  it is not an exec ask or may run unasked. `requestTools` are the request-level tool names (#616). Pure apart
  *  from `store`. */
 export function execFloor(toolCall: unknown, store: ExecStore, ...requestTools: unknown[]): string | null {
+  const cls = classifyExecAsk(toolCall, requestTools);
+  if (!cls) return null;
+  return execVerdict({ ...store, dangerMode: true }, cls, { turnAllowed: true }) === "allow" ? null : cls.reason;
+}
+
+/** P-FLEET.AUTO2 (ADR-0611): the part of the floor Fleet FULL auto-mode still keeps: a program the organization's
+ *  managed policy denies (`denyPrograms`, ADR-0068). The user's own switch never widens what the org forbids.
+ *  Catastrophic patterns are the user's call in auto-mode; a session grant keeps the whole floor (execFloor). */
+export function execManagedDeny(toolCall: unknown, store: ExecStore, ...requestTools: unknown[]): string | null {
+  const cls = classifyExecAsk(toolCall, requestTools);
+  return cls?.key && (store.denyPrograms ?? []).includes(cls.key) ? `${cls.key} is denied by your organization's policy` : null;
+}
+
+/** The class of an exec permission ask, or null when the ask is not an exec ask. */
+function classifyExecAsk(toolCall: unknown, requestTools: readonly unknown[]): ExecClass | null {
   const name = askToolName(toolCall, ...requestTools);
   const cmd = execCommand(toolCall, name);
   if (cmd === null && !EXEC_TOOLS.test(name)) return null;
-  const cls = /\beval\b/.test(name) ? classifyEval() : classifyCommand(cmd ?? name);
-  return execVerdict({ ...store, dangerMode: true }, cls, { turnAllowed: true }) === "allow" ? null : cls.reason;
+  return /\beval\b/.test(name) ? classifyEval() : classifyCommand(cmd ?? name);
 }
 
 /** P-EXEC.2 (ADR-0110): omp (≥16.1) delivers its per-tool "Approve/Deny" approval — and plan-mode
